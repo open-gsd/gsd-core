@@ -256,6 +256,7 @@ Set via `workflow.*` namespace in config.json (e.g., `"workflow": { "research": 
 | `workflow.node_repair` | boolean | `true` | `true`, `false` | Attempt automatic repair of failed plan nodes |
 | `workflow.node_repair_budget` | number | `2` | Any positive integer | Max repair retries per failed node |
 | `workflow.ai_integration_phase` | boolean | `true` | `true`, `false` | Run /gsd:ai-integration-phase before planning AI system phases |
+| `workflow.api_coverage_gate` | boolean | `true` | `true`, `false` | Require an explicit API-coverage decision (full-by-default, opt-out-not-opt-in) before a phase that integrates an external API/SDK/service can seal. At plan:pre prompts a COVERAGE.md matrix; at verify:pre a blocking gate fails the seal unless the matrix exists with every non-integrated capability an explicit, reasoned opt-out (#1562) |
 | `workflow.ui_phase` | boolean | `true` | `true`, `false` | Generate UI-SPEC.md for frontend phases |
 | `workflow.ui_safety_gate` | boolean | `true` | `true`, `false` | Require safety gate approval for UI changes |
 | `workflow.text_mode` | boolean | `false` | `true`, `false` | Use plain-text numbered lists instead of AskUserQuestion menus |
@@ -266,13 +267,18 @@ Set via `workflow.*` namespace in config.json (e.g., `"workflow": { "research": 
 | `workflow.subagent_timeout` | number | `300000` | Any positive integer (ms) | Timeout for parallel subagent tasks (default: 5 minutes) |
 | `workflow.test_command` | string\|null | `null` | Any shell command | Regression/test gate command run by verify-phase, execute-phase, audit-fix, and post-merge-gate. Unset → GSD auto-detects (Makefile / package.json / Cargo.toml / go.mod / pyproject.toml). |
 | `workflow.build_command` | string\|null | `null` | Any shell command | Build gate command run by the post-merge gate. Unset → build step auto-detected/skipped. |
+| `workflow.mvp_mode` | boolean | `false` | `true`, `false` | Persist the MVP-mode flag in config so every phase defaults to MVP framing without requiring `--mvp` on the CLI. Resolved via the chain: `--mvp` CLI flag → ROADMAP.md `**Mode:** mvp` field → this config value → `false`. When `true`, the planner, executor, verifier, and discovery surfaces (progress, stats, graphify) all treat the phase as an MVP vertical slice (UI → API → DB) of one user-visible capability. |
+| `workflow.context_guard_mode` | string | `"warn"` | `"auto"`, `"warn"`, `"off"` | Context exhaustion guard mode for `execute-phase`. Before each wave, the orchestrator self-assesses context pressure using degradation signals from `context-budget.md`. `"warn"` (default): emit a warning and recommend `/gsd:pause-work` when POOR tier is detected. `"auto"`: automatically invoke `/gsd:pause-work` before the next wave when POOR tier is detected. `"off"`: disable the guard. The guard is heuristic — no programmatic context-% API exists. |
+| `workflow.plan_chunked` | boolean | `false` | `true`, `false` | Enable chunked planning mode. When `true`, the plan-phase orchestrator splits the single long-lived planner Task into a short outline Task followed by N short per-plan Tasks (~3–5 min each). Each plan is committed individually for crash resilience. Particularly useful on Windows where long-lived Tasks may hang on stdio. Also activated by the `--chunked` flag. |
+| `workflow.specless_probe_fallback` | boolean | `true` | `true`, `false` | Gate the SPEC-less probe fallback in `plan-phase`. When `true` (default), a phase that did not supply a `## Edge Coverage` / `## Prohibitions` SPEC section (header absent or present-but-empty) runs the existing probe protocol — the deterministic `edge-probe.cjs` for edges and an in-planner LLM recall pass for prohibitions — and authors the resulting predicates into PLAN.md `must_haves` (section-level precedence: a SPEC-supplied section is never re-run or overwritten). When `false`, the fallback is skipped but the skip is recorded: plan-phase emits a visible "probe fallback disabled" marker, never a silent skip. |
+| `workflow.code_review_command` | string\|null | `null` | Any shell command | External code-review command integrated into `/gsd:ship`. The diff is piped to the command via stdin; the command must output JSON with a `verdict` field (`"APPROVED"` or `"REVISE"`). Non-zero exit or `"REVISE"` verdict blocks the ship workflow. When unset, the built-in review flow runs. Example: `my-review-tool --review`. |
 | `workflow.inline_plan_threshold` | number | `2` | `0`–`10` | Plans with ≤N tasks execute inline instead of spawning a subagent |
 | `workflow.code_review` | boolean | `true` | `true`, `false` | Enable built-in code review step in the ship workflow |
 | `workflow.code_review_depth` | string | `"standard"` | `"light"`, `"standard"`, `"deep"` | Depth level for code review analysis in the ship workflow |
 | `workflow._auto_chain_active` | boolean | `false` | `true`, `false` | Internal: tracks whether autonomous chaining is active |
 | `workflow.security_enforcement` | boolean | `true` | `true`, `false` | Enable threat-model-anchored security verification via `/gsd:secure-phase`. When `false`, security checks are skipped entirely |
-| `workflow.security_asvs_level` | number | `1` | `1`, `2`, `3` | OWASP ASVS verification level. Level 1 = opportunistic, Level 2 = standard, Level 3 = comprehensive |
-| `workflow.security_block_on` | string | `"high"` | `"high"`, `"medium"`, `"low"` | Minimum severity that blocks phase advancement |
+| `workflow.security_asvs_level` | number | `1` | `1`, `2`, `3` | OWASP ASVS verification level. Level 1 = opportunistic, Level 2 = standard, Level 3 = comprehensive. Scales both planner threat-disposition rigor (which threats must be mitigated vs. accepted) and auditor verification depth (grep-level → boundary-placement check → full data-flow trace). See `gsd-core/references/security-asvs-levels.md`. |
+| `workflow.security_block_on` | string | `"high"` | `"critical"`, `"high"`, `"medium"`, `"low"`, `"none"` | Minimum threat severity that blocks phase advancement. The auditor counts only open threats at or above this severity toward the blocking gate (SECURITY.md `threats_open`); `none` disables severity blocking. |
 | `workflow.post_planning_gaps` | boolean | `true` | `true`, `false` | Post-planning gap report (#2493). After plans are generated, scans REQUIREMENTS.md and CONTEXT.md `<decisions>` against all PLAN.md files and emits a unified `Source \| Item \| Status` table. Non-blocking. Set to `false` to skip Step 13e of plan-phase. _Alias:_ `post_planning_gaps` is the flat-key form used in `CONFIG_DEFAULTS`; `workflow.post_planning_gaps` is the canonical namespaced form. |
 
 ### Ship Fields
@@ -313,7 +319,7 @@ Set via `features.*` namespace (e.g., `"features": { "thinking_partner": true }`
 | Key | Type | Default | Allowed Values | Description |
 |-----|------|---------|----------------|-------------|
 | `features.thinking_partner` | boolean | `false` | `true`, `false` | Enable conditional extended thinking at workflow decision points (used by discuss-phase and plan-phase for architectural tradeoff analysis) |
-| `features.global_learnings` | boolean | `false` | `true`, `false` | Enable injection of global learnings from `~/.gsd/learnings/` into agent prompts |
+| `features.global_learnings` | boolean | `false` | `true`, `false` | Enable injection of global learnings from `~/.gsd/knowledge/` into agent prompts |
 
 ### Hook Fields
 

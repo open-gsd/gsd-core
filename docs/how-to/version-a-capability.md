@@ -28,6 +28,8 @@ Set the version in your manifest before every release:
 }
 ```
 
+> **First-party capabilities are versioned automatically.** The native capabilities shipped inside GSD (`capabilities/<id>/capability.json`) are stamped in lockstep with the GSD package version at release time by `scripts/sync-manifest-versions.cjs` — their `version` always equals the GSD version, so per-capability semver and `compatVersions` only carry independent signal for **third-party** capabilities. As an author of a third-party capability, you own your own version line; the lockstep rule does not apply to you.
+
 ### Decide when to raise `engines.gsd`
 
 The `engines.gsd` range expresses which GSD host versions your capability is compatible with. GSD enforces this as a hard gate at install time and again at load time.
@@ -42,19 +44,19 @@ When you do raise the lower bound:
 
 ### Maintain `compatVersions`
 
-`compatVersions` is a capability-version → minimum-GSD-version table that lets GSD offer older consumers a downgrade instead of a hard block:
+`compatVersions` is a capability-version → GSD-version-**range** table that lets GSD offer older consumers a downgrade instead of a hard block. Each value is a semver range (the same grammar as `engines.gsd`), evaluated against the running GSD version:
 
 ```jsonc
 {
   "version": "2.0.0",
   "engines": { "gsd": ">=1.7.0 <3.0.0" },
   "compatVersions": {
-    "1.2.0": "1.6.0"
+    "1.2.0": ">=1.6.0 <1.7.0"
   }
 }
 ```
 
-This entry tells GSD: "version 1.2.0 of this capability requires at least GSD 1.6.0." When a consumer's GSD is older than 1.7.0, GSD uses `compatVersions` to offer them version 1.2.0 instead of failing outright.
+This entry tells GSD: "version 1.2.0 of this capability is compatible with GSD versions `>=1.6.0 <1.7.0`." When a consumer's GSD is older than the current `engines.gsd` floor (1.7.0), GSD consults `compatVersions`, picks the **newest** capability version whose range the host satisfies, and offers that instead of failing outright.
 
 Add a new entry **only when you change `engines.gsd`** — that is the only moment an older GSD version and a specific capability version become correlated. A `compatVersions` entry is not meaningful for a capability distributed as a bare tarball URL (a tarball exposes a single version and cannot be auto-selected from a table); it is only actionable for sources that enumerate versions: git tags, a registry, or npm.
 
@@ -78,7 +80,7 @@ npm version 1.2.0
 npm publish
 ```
 
-**New tarball.** Upload the new archive at a URL and communicate the URL to consumers. GSD cannot auto-detect updates for tarball sources — consumers must run `gsd capability update <id> <new-url>` manually after you announce the new URL. If you anticipate frequent updates, consider switching to a git or npm source.
+**New tarball.** Upload the new archive at a URL and communicate the URL to consumers. GSD cannot auto-detect updates for tarball sources, and `gsd capability update` only ever re-resolves the URL **already recorded** in the ledger — it takes no new-URL argument. To move a tarball install to a new URL, the consumer **re-installs from the new URL** (`gsd capability install <new-url> …`), which overwrites the recorded source. If you anticipate frequent updates, consider switching to a git or npm source so `gsd capability update <id>` can pick up new versions automatically.
 
 ---
 
@@ -97,11 +99,11 @@ GSD contacts the source of each installed capability and reports which ones have
 | Source | Auto-detectable? |
 |---|---|
 | Git (tags / manifest) | Yes — GSD fetches available tags. |
-| Registry | Yes — GSD queries the catalogue. |
 | npm | Yes — GSD checks `dist-tags`. |
-| Tarball URL | **No** — a tarball exposes one version; updates must be applied manually when the author announces a new URL. |
+| Tarball URL | **No** — a tarball exposes one version; updates must be applied manually by re-installing from a new URL. |
+| Registry (`<name>@<registry>`) | **Not yet** — the registry source kind is reserved but unimplemented today; `outdated` reports `status: unknown` for it and `update` cannot re-resolve it. |
 
-If a capability is installed from a tarball and the author publishes a new version at a different URL, you will need to run `gsd capability update <id> <new-url>` yourself once the author communicates the new address.
+If a capability is installed from a tarball and the author publishes a new version at a different URL, `gsd capability update <id>` will not help — it only re-resolves the URL already recorded at install time, and takes no new-URL argument. Once the author communicates the new address, **re-install from it** with `gsd capability install <new-url> …`; that overwrites the recorded source with the new version.
 
 ### Apply an update
 
@@ -121,11 +123,13 @@ Updates are **atomic**: GSD fully fetches and validates the new version before s
 
 ### Consent when the executable surface changes
 
-If the new version adds or removes hooks, MCP server entries, or command modules compared to the version you have installed, GSD will pause and present a summary of the changes before proceeding. You must confirm explicitly; declining leaves the current version in place.
+The CLI is **non-interactive** — it never stops to ask a question. If the new version adds or removes hooks, MCP server entries, or command modules compared to the version you have installed, `gsd capability update <id>` **aborts** rather than swapping: it prints the disclosed surface change and instructs you to re-run with `--yes`, leaving the current version fully in place. Re-running with `--yes` grants consent for the new surface and completes the swap:
 
-This re-prompt applies even if you previously consented to auto-update. The consent mechanism is scoped to the declared executable surface of a specific version, so a changed surface is always a fresh decision.
+```bash
+gsd capability update <id> --yes
+```
 
-Auto-update is **off by default** for third-party capabilities. If you enable it, the re-prompt on executable-surface change still applies.
+This re-consent is required every time the surface changes, scoped to the declared executable surface of a specific version, so a changed surface is always a fresh `--yes`. (A version whose executable surface is unchanged updates without `--yes`.)
 
 ### When `engines.gsd` no longer matches
 
@@ -137,5 +141,5 @@ If the new version of a capability requires a GSD version newer than what you ha
 
 - [How to remove or disable a capability](remove-a-capability.md)
 - [Develop a Capability for GSD 1.5+](develop-a-capability.md)
-- [Capability manifest reference](../reference/capability-matrix.md)
+- [Capability manifest reference](../reference/capability-manifest.md)
 - [Turn a capability off (and keep it off)](turn-a-capability-off.md)

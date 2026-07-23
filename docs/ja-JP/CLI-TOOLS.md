@@ -1,6 +1,6 @@
 # GSD CLI ツールリファレンス
 
-> `gsd-tools` CLI（`get-shit-done/bin/gsd-tools.cjs`）のリファレンスです。スラッシュコマンドとユーザーフローについては [コマンドリファレンス](COMMANDS.md) を参照してください。[docs インデックス](README.md) に戻る。
+> `gsd-tools` CLI（`gsd-core/bin/gsd-tools.cjs`）のリファレンスです。スラッシュコマンドとユーザーフローについては [コマンドリファレンス](COMMANDS.md) を参照してください。[docs インデックス](README.md) に戻る。
 
 ---
 
@@ -11,8 +11,8 @@
 
 |                    |                                                                                                                                                                                                        |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **配置パス**       | `get-shit-done/bin/gsd-tools.cjs`                                                                                                                                                                      |
-| **実装**           | `get-shit-done/bin/lib/` 配下の 20 個のドメインモジュール（ディレクトリが正式）                                                                                                                        |
+| **配置パス**       | `gsd-core/bin/gsd-tools.cjs`                                                                                                                                                                      |
+| **実装**           | `gsd-core/bin/lib/` 配下の 20 個のドメインモジュール（ディレクトリが正式）                                                                                                                        |
 | **ステータス**     | オーケストレーション・ワークフロー・自動化処理のための主要ランタイムコマンドサーフェス。 |
 
 
@@ -288,13 +288,14 @@ node gsd-tools.cjs scaffold phase-dir --phase N --name "phase name"
 
 ## Init コマンド（複合コンテキスト読み込み）
 
-特定のワークフローに必要なすべてのコンテキストを一度に読み込みます。プロジェクト情報、設定、状態、ワークフロー固有のデータを含む JSON を返します。
+特定のワークフローに必要なすべてのコンテキストを一度に読み込みます。プロジェクト情報、設定、状態、ワークフロー固有のデータを含む JSON を返します。`init onboard [--fast] [--text]` は `/gsd-onboard` 用に、brownfield シグナル、計画ドキュメント候補、コードベースマップの完全性、fast マップの準備状況、テキストモードルーティング、部分的な planning 状態、オンボーディングサマリー状態を返します。
 
 ```bash
 node gsd-tools.cjs init execute-phase <phase>
 node gsd-tools.cjs init plan-phase <phase>
 node gsd-tools.cjs init new-project
 node gsd-tools.cjs init new-milestone
+node gsd-tools.cjs init onboard [--fast] [--text]
 node gsd-tools.cjs init quick <description>
 node gsd-tools.cjs init resume
 node gsd-tools.cjs init verify-work <phase>
@@ -322,7 +323,7 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
 ```bash
 # マイルストーンをアーカイブ
-node gsd-tools.cjs milestone complete <version> [--name <name>] [--archive-phases]
+node gsd-tools.cjs milestone complete <version> [--name <name>] [--no-archive-phases]
 
 # 要件を完了としてマーク
 node gsd-tools.cjs requirements mark-complete <ids>
@@ -487,7 +488,7 @@ node gsd-tools.cjs config-set review.models.claude   ""   # クリア — セッ
 
 ## シークレット処理
 
-`/gsd-settings` で設定された API キー（`brave_search`、`firecrawl`、`exa_search`）は `.planning/config.json` に平文で書き込まれますが、`config-set` / `config-get` のすべての出力、確認テーブル、インタラクティブプロンプトでは（`****<last-4>` として）マスクされます。マスキングの実装は `get-shit-done/bin/lib/secrets.cjs` を参照してください。`config.json` ファイル自体がセキュリティ境界です — ファイルシステムのパーミッションで保護し、git には含めないようにしてください（`.planning/` はデフォルトで gitignore されます）。
+`/gsd-settings` で設定された API キー（`brave_search`、`firecrawl`、`exa_search`）は `.planning/config.json` に平文で書き込まれますが、`config-set` / `config-get` のすべての出力、確認テーブル、インタラクティブプロンプトでは（`****<last-4>` として）マスクされます。マスキングの実装は `gsd-core/bin/lib/secrets.cjs` を参照してください。`config.json` ファイル自体がセキュリティ境界です — ファイルシステムのパーミッションで保護し、git には含めないようにしてください（`.planning/` はデフォルトで gitignore されます）。
 
 ---
 

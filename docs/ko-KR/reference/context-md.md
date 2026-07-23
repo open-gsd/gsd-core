@@ -14,7 +14,7 @@
 
 예: `.planning/phases/03-post-feed/03-CONTEXT.md`.
 
-이 파일은 `get-shit-done/workflows/discuss-phase.md`의 `write_context`(또는 PRD / ADR 인제스트 익스프레스 경로)에 의해 생성됩니다. 일반적인 운영 중에는 절대로 수동으로 편집하지 않습니다 — discuss-phase 워크플로가 이 파일을 기록하고 다운스트림 에이전트는 이를 봉인된 진실의 원천으로 읽습니다.
+이 파일은 `gsd-core/workflows/discuss-phase.md`의 `write_context`(또는 PRD / ADR 인제스트 익스프레스 경로)에 의해 생성됩니다. 일반적인 운영 중에는 절대로 수동으로 편집하지 않습니다 — discuss-phase 워크플로가 이 파일을 기록하고 다운스트림 에이전트는 이를 봉인된 진실의 원천으로 읽습니다.
 
 ---
 

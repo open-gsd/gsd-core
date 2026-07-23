@@ -21,13 +21,13 @@ const path = require('path');
 describe('plan-phase chain flag preservation (#1620)', () => {
   const planPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-phase.md');
   const discussPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'discuss-phase.md');
-  // After #2551, discuss-phase chain logic moved to modes/chain.md.
+  // After the discuss-phase/modes split (#717), discuss-phase chain logic moved to modes/chain.md.
   const discussChainPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'discuss-phase', 'modes', 'chain.md');
   const readDiscuss = () => {
     // Fail loudly if either source is missing — silent filtering would let a
     // regression that deletes modes/chain.md pass this whole suite.
     assert.ok(fs.existsSync(discussPath), `discuss-phase.md missing: ${discussPath}`);
-    assert.ok(fs.existsSync(discussChainPath), `discuss-phase/modes/chain.md missing after #2551 split: ${discussChainPath}`);
+    assert.ok(fs.existsSync(discussChainPath), `discuss-phase/modes/chain.md missing after discuss-phase/modes split: ${discussChainPath}`);
     return [discussPath, discussChainPath].map(p => fs.readFileSync(p, 'utf8')).join('\n');
   };
 
@@ -61,7 +61,7 @@ describe('plan-phase chain flag preservation (#1620)', () => {
     );
     assert.ok(
       discussContent.includes(guardPattern),
-      'discuss-phase (or discuss-phase/modes/chain.md after #2551 split) should use the dual-flag guard pattern'
+      'discuss-phase (or discuss-phase/modes/chain.md after the discuss-phase/modes split) should use the dual-flag guard pattern'
     );
   });
 
@@ -82,3 +82,79 @@ describe('plan-phase chain flag preservation (#1620)', () => {
     );
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2388-plan-phase-no-branch-rename.test.cjs — consolidation epic #1969 (B4 #1973)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2388-plan-phase-no-branch-rename (consolidation epic #1969 B4 #1973)", () => {
+// allow-test-rule: source-text-is-the-product (see #2388)
+// Workflow .md / agent .md / command .md / reference .md files — their text
+// IS what the runtime loads. Testing text content tests the deployed contract.
+// Per CONTRIBUTING.md exception matrix.
+
+/**
+ * Regression test for #2388: plan-phase silently renames feature branch
+ * when phase slug has changed since the branch was created.
+ *
+ * Fix: plan-phase.md must include an explicit instruction not to create,
+ * rename, or switch git branches during the planning workflow.
+ */
+
+'use strict';
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+const PLAN_PHASE_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-phase.md');
+
+describe('bug-2388: plan-phase must not rename or create git branches', () => {
+  test('plan-phase.md exists', () => {
+    assert.ok(fs.existsSync(PLAN_PHASE_PATH), 'plan-phase.md should exist');
+  });
+
+  test('plan-phase.md contains explicit no-branch-rename instruction', () => {
+    const content = fs.readFileSync(PLAN_PHASE_PATH, 'utf-8');
+    // Must say "do not" and mention branch in the context of phase slug/rename
+    const hasBranchGuard = (
+      /do not.{0,80}branch/i.test(content) ||
+      /branch.{0,80}do not/i.test(content) ||
+      /NEVER.{0,80}branch/i.test(content) ||
+      /branch.{0,80}NEVER/i.test(content)
+    );
+    assert.ok(
+      hasBranchGuard,
+      'plan-phase.md must include an explicit instruction not to create or rename git branches'
+    );
+  });
+
+  test('plan-phase.md mentions phase rename does not affect branch name', () => {
+    const content = fs.readFileSync(PLAN_PHASE_PATH, 'utf-8');
+    // Should explain that a phase rename in ROADMAP.md is plan-level, not git-level
+    const hasPlanLevelExplanation = (
+      content.includes('phase rename') ||
+      content.includes('phase_slug') ||
+      content.includes('branch identity') ||
+      content.includes('branch name')
+    );
+    assert.ok(
+      hasPlanLevelExplanation,
+      'plan-phase.md should clarify that phase slug changes do not change the git branch'
+    );
+  });
+
+  test('plan-phase.md does not contain git checkout -b instruction', () => {
+    const content = fs.readFileSync(PLAN_PHASE_PATH, 'utf-8');
+    // The workflow should not instruct the LLM to run git checkout -b
+    assert.ok(
+      !content.includes('git checkout -b'),
+      'plan-phase.md must not instruct LLM to create a new branch via git checkout -b'
+    );
+  });
+});
+  });
+}

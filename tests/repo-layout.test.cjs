@@ -20,22 +20,36 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 
-test('repo-layout: root AGENTS.md is absent — no ad-hoc AI instruction file committed alongside CONTEXT.md', () => {
-  const agentsMdPath = path.join(ROOT, 'AGENTS.md');
+test('repo-layout: root AGENTS.md is not git-tracked — no ad-hoc AI instruction file committed alongside CONTEXT.md', () => {
+  // The installer legitimately writes AGENTS.md to process.cwd() when
+  // `gsd install copilot` runs inside a repo checkout (issue #786). The file
+  // may exist on disk — that's expected after a local install. What must NOT
+  // happen is committing it to git, where editors and AI tools would silently
+  // pick up the installer-generated stub instead of CONTEXT.md.
+  let tracked;
+  try {
+    execFileSync('git', ['ls-files', '--error-unmatch', 'AGENTS.md'], {
+      cwd: ROOT, encoding: 'utf8', stdio: 'pipe',
+    });
+    tracked = true;
+  } catch {
+    tracked = false;
+  }
   assert.equal(
-    fs.existsSync(agentsMdPath),
+    tracked,
     false,
     [
-      'root AGENTS.md must not be committed.',
+      'root AGENTS.md must not be git-tracked.',
       'This file is written by `gsd install copilot` (bin/install.js, local Copilot path, issue #786)',
-      'when the installer runs inside a repo checkout.',
+      'when the installer runs inside a repo checkout — its presence on disk is fine,',
+      'but it must never be committed.',
       'The repository source of truth for architecture and contributor guidance is',
       'CONTEXT.md and docs/adr/ — not an installer-generated instruction stub.',
-      'Run `gsd uninstall copilot` to remove the artefact, then verify it is gitignored',
-      'before re-running the install in this checkout.',
+      'Run `git rm --cached AGENTS.md` to untrack it if accidentally staged.',
     ].join(' '),
   );
 });
@@ -105,3 +119,75 @@ test('repo-layout: installer writes AGENTS.md only for local Copilot scope (not 
     'AGENTS.md in the working directory on every Copilot install, including repo-root runs.',
   );
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/enh-191-retire-sdk-package.test.cjs — consolidation epic #1969 (B5 #1974)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:enh-191-retire-sdk-package (consolidation epic #1969 B5 #1974)", () => {
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+const ROOT = path.resolve(__dirname, '..');
+const PKG_PATH = path.join(ROOT, 'package.json');
+const INSTALL_PATH = path.join(ROOT, 'bin', 'install.js');
+const ACTIVE_GUIDANCE_PATHS = [
+  'docs/contributing/bootstrap.md',
+];
+
+function readPackageJson() {
+  return JSON.parse(fs.readFileSync(PKG_PATH, 'utf8'));
+}
+
+test('enhancement #191: sdk package artifacts are removed from repository layout', () => {
+  const sdkDir = path.join(ROOT, 'sdk');
+  const shimPath = path.join(ROOT, 'bin', 'gsd-sdk.js');
+
+  assert.equal(fs.existsSync(sdkDir), false, 'sdk/ directory must be deleted');
+  assert.equal(fs.existsSync(shimPath), false, 'bin/gsd-sdk.js must be deleted');
+});
+
+test('enhancement #191: published package no longer exposes gsd-sdk artifacts', () => {
+  const pkg = readPackageJson();
+
+  assert.equal(Object.prototype.hasOwnProperty.call(pkg.bin || {}, 'gsd-sdk'), false,
+    'package.json bin must not expose gsd-sdk');
+  assert.equal(pkg.bin && pkg.bin['gsd-tools'], 'gsd-core/bin/gsd-tools.cjs',
+    'package.json bin.gsd-tools must point to gsd-core/bin/gsd-tools.cjs');
+
+  const publishedFiles = Array.isArray(pkg.files) ? pkg.files : [];
+  const hasSdkPublishedPaths = publishedFiles.some((entry) => String(entry).startsWith('sdk'));
+  assert.equal(hasSdkPublishedPaths, false,
+    'package.json files must not include sdk artifacts');
+});
+
+test('enhancement #191: installer does not maintain gsd-sdk shim compatibility path', () => {
+  const installJs = fs.readFileSync(INSTALL_PATH, 'utf8');
+
+  assert.equal(/\b--sdk\b/.test(installJs), false,
+    'bin/install.js must not expose --sdk flag');
+  assert.equal(/\b--no-sdk\b/.test(installJs), false,
+    'bin/install.js must not expose --no-sdk flag');
+  assert.equal(/installSdkIfNeeded\(\{/.test(installJs), false,
+    'bin/install.js must not run installSdkIfNeeded during installation');
+});
+
+test('enhancement #191: active contributor guidance does not reference retired SDK build steps', () => {
+  for (const relPath of ACTIVE_GUIDANCE_PATHS) {
+    const body = fs.readFileSync(path.join(ROOT, relPath), 'utf8');
+
+    assert.equal(
+      /\bbuild:sdk\b|\bcd sdk\b|\bsdk\/dist\b|\bsdk\/src\b/.test(body),
+      false,
+      `${relPath} must not direct contributors or agents to use the retired SDK package workflow`,
+    );
+  }
+});
+  });
+}

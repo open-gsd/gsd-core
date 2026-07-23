@@ -8,6 +8,8 @@
  * This module does not read the filesystem directly.
  */
 
+import { posixNormalize } from './shell-command-projection.cjs';
+
 // ─── ORM Patterns ───────────────────────────────────────────────────────────
 
 export interface SchemaPattern {
@@ -82,7 +84,7 @@ export function detectSchemaFiles(files: string[]): DetectSchemaFilesResult {
   const matches: string[] = [];
   const orms = new Set<string>();
   for (const rawFile of files) {
-    const file = rawFile.replace(/\\/g, '/');
+    const file = posixNormalize(rawFile);
     for (const { pattern, orm } of SCHEMA_PATTERNS) {
       if (pattern.test(file)) {
         matches.push(rawFile);

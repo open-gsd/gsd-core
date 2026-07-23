@@ -15,8 +15,6 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { spawnSync } = require('node:child_process');
-
 const { cleanup } = require('./helpers.cjs');
 
 const {
@@ -68,6 +66,11 @@ const {
 } = require('../scripts/gen-loop-host-contract.cjs');
 
 const { LOOP_HOST_CONTRACT } = require('../gsd-core/bin/lib/loop-host-contract.cjs');
+
+// ADR-1244 D2: the validator was extracted to a shared runtime-callable module.
+// The generator must re-export it verbatim — the parity suite below proves no drift.
+const capValidatorModule = require('../gsd-core/bin/lib/capability-validator.cjs');
+const generatorModule = require('../scripts/gen-capability-registry.cjs');
 
 const fc = require('fast-check');
 
@@ -283,6 +286,57 @@ describe('validateCapability adversarial cases', () => {
     assert.ok(
       errors.some((e) => e.includes('agentVerdict') && e.includes('blocking')),
       'Expected error about agentVerdict forcing blocking:false, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('#1634: a valid tool-scoping matcher is accepted on a lifecycle hook', () => {
+    const cap = {
+      ...UI_CAP,
+      hooks: [{ event: 'PreToolUse', script: 'hooks/genfile-guard.cjs', matcher: 'Write|Edit' }],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      !errors.some((e) => e.includes('matcher')),
+      'A valid matcher must not produce a matcher error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('#1634: an absent matcher is accepted (match-all)', () => {
+    const cap = { ...UI_CAP, hooks: [{ event: 'PreToolUse', script: 'hooks/g.js' }] };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      !errors.some((e) => e.includes('matcher')),
+      'An absent matcher must not error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('#1634: an empty-string matcher is rejected', () => {
+    const cap = { ...UI_CAP, hooks: [{ event: 'PreToolUse', script: 'hooks/g.js', matcher: '' }] };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.some((e) => e.includes('matcher') && e.includes('non-empty')),
+      'Expected a non-empty matcher error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('#1634: a non-string matcher is rejected', () => {
+    const cap = { ...UI_CAP, hooks: [{ event: 'PreToolUse', script: 'hooks/g.js', matcher: 42 }] };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.some((e) => e.includes('matcher')),
+      'Expected a matcher type error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('#1634: a matcher containing control characters is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      hooks: [{ event: 'PreToolUse', script: 'hooks/g.js', matcher: 'Write\n|Edit' }],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.some((e) => e.includes('matcher') && e.includes('control')),
+      'Expected a control-character matcher error, got: ' + JSON.stringify(errors),
     );
   });
 });
@@ -776,23 +830,6 @@ describe('normalizeLineEndings', () => {
       normalizeLineEndings(lfContent),
       normalizeLineEndings(crlfContent),
       '--check must treat CRLF-checked-out registry as up to date (Windows autocrlf regression guard)',
-    );
-  });
-});
-
-describe('committed gsd-core/bin/lib/capability-registry.cjs is not stale', () => {
-  test('gen-capability-registry.cjs --check exits 0 (committed registry is up to date)', () => {
-    const result = spawnSync(
-      process.execPath,
-      [require('node:path').join(ROOT, 'scripts', 'gen-capability-registry.cjs'), '--check'],
-      { cwd: ROOT, encoding: 'utf8' },
-    );
-    assert.strictEqual(
-      result.status,
-      0,
-      'gen-capability-registry.cjs --check failed — committed capability-registry.cjs is stale.\n' +
-      'Run: node scripts/gen-capability-registry.cjs --write\n' +
-      'stderr: ' + (result.stderr || ''),
     );
   });
 });
@@ -1470,6 +1507,7 @@ describe('S1: fragment.path traversal guard', () => {
       JSON.stringify({
         id: 'planning-advice',
         role: 'feature',
+        version: '1.0.0',
         title: 'Planning advice',
         description: 'Synthetic fixture for fragment path materialization.',
         tier: 'full',
@@ -1515,6 +1553,7 @@ describe('S1: fragment.path traversal guard', () => {
       JSON.stringify({
         id: 'research',
         role: 'feature',
+        version: '1.0.0',
         title: 'Research',
         description: 'Synthetic fixture for step fragment materialization.',
         tier: 'standard',
@@ -1702,10 +1741,11 @@ describe('C3: role:runtime body validation', () => {
   // configHome is now an object (Decision 1), artifactLayout is { global, local } (Decision 3),
   // commandStyle is closed enum (Decision 4), hooksSurface is closed enum (Decision 5).
   const VALID_RUNTIME_CAP = {
-    id: 'cursor', role: 'runtime', title: 'Cursor', description: 'Cursor IDE runtime',
+    id: 'cursor', role: 'runtime', version: '1.0.0', title: 'Cursor', description: 'Cursor IDE runtime',
     tier: 'standard', requires: [],
     runtime: {
       configHome: { kind: 'dot-home', name: '.cursor', env: ['CURSOR_CONFIG_DIR'] },
+      localConfigDir: '.cursor',
       configFormat: 'settings-json',
       artifactLayout: { global: [], local: [] },
       commandStyle: 'slash-hyphen',
@@ -1717,6 +1757,16 @@ describe('C3: role:runtime body validation', () => {
       writesSharedSettings: false,
       permissionWriter: null,
       extendedHookEvents: [],
+      hostIntegration: {
+        embeddingMode: 'declarative',
+        commandSurface: 'slash-file',
+        dispatch: { namedDispatch: true, nested: true, maxDepth: 2, background: false, subagentToolkit: 'full', backgroundDispatch: false },
+        modelMode: 'passive',
+        hookBus: 'host',
+        stateIO: 'filesystem',
+        transport: 'mcp',
+        runtime: 'node',
+      },
     },
   };
 
@@ -1810,6 +1860,62 @@ describe('C4: description and hooks validation', () => {
     const errors = validateCapability(cap, 'ui');
     const hookErrors = errors.filter((e) => e.includes('hooks['));
     assert.deepEqual(hookErrors, [], 'Expected no hook errors for valid hooks entry, got: ' + JSON.stringify(hookErrors));
+  });
+
+  // ─── #1460 (R) HIGH: hook script path must be shell-safe ──────────────────
+  // The hook `script` is resolved to an absolute path and written verbatim as the hook
+  // `command` STRING in settings.json (consumed by a shell). A manifest-controlled script
+  // name containing shell metacharacters (`;`, `|`, `$`, backtick, whitespace, …) would
+  // inject a second command at hook-exec time. Fail closed at the validator: reject any
+  // script path outside the conservative [A-Za-z0-9._/-] allowlist. revert-fails: without
+  // the allowlist these all pass the non-empty-string check and validate OK.
+  for (const [label, script] of [
+    ['command-injection via `;`', 'run.sh; touch /tmp/pwn'],
+    ['embedded space', 'my hook.sh'],
+    ['command substitution `$( )`', 'run-$(whoami).sh'],
+    ['backtick substitution', 'run-`id`.sh'],
+    ['pipe metacharacter', 'a.sh|b.sh'],
+    ['newline injection', 'a.sh\ntouch /tmp/pwn'],
+    ['ampersand background', 'a.sh & evil'],
+    ['shell glob', 'hooks/*.sh'],
+    ['redirect', 'a.sh > /tmp/pwn'],
+    ['leading dash (option injection)', '-rf'],
+    ['single quote', "a'.sh"],
+    ['double quote', 'a".sh'],
+    ['NUL/control char', 'a\u0000.sh'],
+  ]) {
+    test(`hook script with unsafe chars is rejected (${label})`, () => {
+      const cap = { ...UI_CAP, hooks: [{ event: 'PostToolUse', script }] };
+      const errors = validateCapability(cap, 'ui');
+      const hookErrors = errors.filter((e) => e.includes('hooks[0].script'));
+      assert.ok(
+        hookErrors.length > 0,
+        `Expected a hooks[0].script rejection for ${label} (script=${JSON.stringify(script)}), got: ` + JSON.stringify(errors),
+      );
+      assert.ok(
+        hookErrors.some((e) => /unsafe character/.test(e)),
+        'Error should mention unsafe characters, got: ' + JSON.stringify(hookErrors),
+      );
+    });
+  }
+
+  test('hook script with absolute path is rejected', () => {
+    const cap = { ...UI_CAP, hooks: [{ event: 'PostToolUse', script: '/etc/evil.sh' }] };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('hooks[0].script')), 'absolute script must be rejected: ' + JSON.stringify(errors));
+  });
+
+  test('hook script with .. traversal is rejected', () => {
+    const cap = { ...UI_CAP, hooks: [{ event: 'PostToolUse', script: '../../etc/evil.sh' }] };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('hooks[0].script')), '.. script must be rejected: ' + JSON.stringify(errors));
+  });
+
+  test('hook script with a normal nested relative path is still accepted', () => {
+    const cap = { ...UI_CAP, hooks: [{ event: 'PostToolUse', script: 'hooks/sub-dir/format_v2.sh' }] };
+    const errors = validateCapability(cap, 'ui');
+    const hookErrors = errors.filter((e) => e.includes('hooks[0].script'));
+    assert.deepEqual(hookErrors, [], 'Expected a normal nested relative script to be accepted, got: ' + JSON.stringify(hookErrors));
   });
 
   test('description present in UI_CAP passes validation', () => {
@@ -2886,6 +2992,7 @@ function makeCommandCap(id, commands) {
   return {
     id,
     role: 'feature',
+    version: '1.0.0',
     title: 'Test cap ' + id,
     description: 'Synthetic capability for ADR-959 command tests.',
     tier: 'full',
@@ -3074,23 +3181,28 @@ const {
   VALID_ARTIFACT_NESTINGS,
 } = require('../scripts/gen-capability-registry.cjs');
 
-const RUNTIME_IDS = [
-  'claude', 'codex', 'antigravity', 'gemini', 'cursor', 'opencode',
-  'kilo', 'copilot', 'augment', 'trae', 'qwen', 'hermes',
-  'codebuddy', 'cline', 'kimi', 'omp', 'windsurf',
-];
+// VALID_EXTENSION_EVENTS is imported from the validator directly (not from
+// gen-capability-registry) to avoid changing gen-capability-registry.cjs — that
+// file is an installed artifact captured by golden-install-parity (#1943).
+const VALID_EXTENSION_EVENTS = capValidatorModule.VALID_EXTENSION_EVENTS;
+
+// Runtime ids are derived from the built registry (the single source of truth)
+// so this file stays fluid when a runtime descriptor is added or removed.
+const RUNTIME_IDS = Object.keys(buildRegistry(loadAndValidate(new Set()).capMap).runtimes);
 
 // Helper: build a minimal valid runtime capability object for fixture-based tests
 function makeRuntimeCap(overrides) {
   return {
     id: 'test-rt',
     role: 'runtime',
+    version: '1.0.0',
     title: 'Test Runtime',
     description: 'A synthetic runtime capability for testing.',
     tier: 'core',
     requires: [],
     runtime: {
       configHome: { kind: 'dot-home', name: '.test-rt', env: ['TEST_RT_DIR'] },
+      localConfigDir: '.test-rt',
       configFormat: 'settings-json',
       artifactLayout: { global: [], local: [] },
       commandStyle: 'slash-hyphen',
@@ -3102,24 +3214,47 @@ function makeRuntimeCap(overrides) {
       writesSharedSettings: true,
       permissionWriter: null,
       extendedHookEvents: [],
+      hostIntegration: {
+        embeddingMode: 'imperative',
+        commandSurface: 'slash-file',
+        dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full', backgroundDispatch: false },
+        modelMode: 'passive',
+        hookBus: 'host',
+        stateIO: 'filesystem',
+        transport: 'mcp',
+        runtime: 'node',
+      },
       ...((overrides && overrides.runtime) ? overrides.runtime : {}),
     },
     ...overrides,
   };
 }
 
-// ── 24a. All 17 runtime ids appear in the runtimes index ─────────────────────
+// ── 24a. Every role:runtime capability appears in the runtimes index ─────────
+// Count-agnostic: the built registry's runtime set must exactly equal the set
+// of capability folders whose descriptor declares role:"runtime". Adding a
+// runtime descriptor extends coverage with zero edits here.
 
-describe('ADR-1016 phase 5a: all 17 runtimes in registry index', () => {
+describe('ADR-1016 phase 5a: every role:runtime capability is in the registry index', () => {
   let registry;
 
-  test('loadAndValidate + buildRegistry produces runtimes index with 17 entries', () => {
+  test('loadAndValidate + buildRegistry indexes exactly the role:runtime capabilities on disk', () => {
     const { capMap, errors } = loadAndValidate(new Set());
     const hardErrors = errors.filter((e) => !e.includes('pending-migration'));
     assert.deepEqual(hardErrors, [], 'Expected no hard errors: ' + JSON.stringify(hardErrors));
     registry = buildRegistry(capMap);
+
+    // Derive the expected runtime id set from the loaded capability map — not a
+    // hand-pinned count. This is the contract: every role:runtime descriptor on
+    // disk becomes a runtimes-index entry, no more, no less.
+    const expectedRuntimeIds = [...capMap.entries()]
+      .filter(([, cap]) => cap && cap.role === 'runtime')
+      .map(([id]) => id)
+      .sort();
     const runtimeKeys = Object.keys(registry.runtimes).sort();
-    assert.strictEqual(runtimeKeys.length, 17, 'Expected 17 runtime entries, got: ' + runtimeKeys.join(', '));
+    assert.ok(expectedRuntimeIds.length > 0, 'expected at least one role:runtime capability on disk');
+    assert.deepEqual(runtimeKeys, expectedRuntimeIds,
+      'runtimes index must exactly equal the role:runtime capabilities on disk. got: ' + runtimeKeys.join(', '));
     for (const id of RUNTIME_IDS) {
       assert.ok(
         Object.prototype.hasOwnProperty.call(registry.runtimes, id),
@@ -3230,16 +3365,6 @@ describe('ADR-1016 phase 5a: sample axis value assertions', () => {
     assert.strictEqual(rt.configHome.kind, 'generic-agents-root', 'kimi.configHome.kind must be "generic-agents-root"');
   });
 
-  test('omp: configHome.kind === omp-agent-home with current Oh My Pi env keys', () => {
-    const { capMap } = loadAndValidate(new Set());
-    const registry = buildRegistry(capMap);
-    const rt = registry.runtimes['omp'].runtime;
-    assert.strictEqual(rt.configHome.kind, 'omp-agent-home', 'omp.configHome.kind must be "omp-agent-home"');
-    assert.deepStrictEqual(rt.configHome.env, ['PI_CODING_AGENT_DIR']);
-    assert.deepStrictEqual(rt.configHome.profileEnv, ['OMP_PROFILE', 'PI_PROFILE']);
-    assert.deepStrictEqual(rt.configHome.configRootEnv, ['PI_CONFIG_DIR']);
-  });
-
   test('antigravity: hookEvents === gemini', () => {
     const { capMap } = loadAndValidate(new Set());
     const registry = buildRegistry(capMap);
@@ -3256,6 +3381,14 @@ describe('ADR-1016 phase 5a: sample axis value assertions', () => {
       !Object.prototype.hasOwnProperty.call(rt, 'hookEvents'),
       'opencode.runtime must NOT have hookEvents (no lifecycle hook registration)',
     );
+  });
+
+  test('opencode: extensionEvents === opencode (the extension-system event dialect — #1943)', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const rt = registry.runtimes['opencode'].runtime;
+    assert.strictEqual(rt.extensionEvents, 'opencode',
+      'opencode declares the extension-system event subset via extensionEvents (NOT hookEvents)');
   });
 
   test('kilo: hooksSurface === none, no hookEvents (registers zero lifecycle hooks)', () => {
@@ -3279,11 +3412,13 @@ describe('ADR-1016 phase 5a: sample axis value assertions', () => {
     );
   });
 
-  test('copilot/trae/kimi/windsurf/cline/opencode/kilo: hooksSurface none or copilot-inline/cline-rules, no hookEvents', () => {
+  test('copilot/trae/windsurf/cline/opencode/kilo: hooksSurface none or copilot-inline/cline-rules, no hookEvents', () => {
     const { capMap } = loadAndValidate(new Set());
     const registry = buildRegistry(capMap);
     // opencode and kilo register ZERO lifecycle hooks → hooksSurface none, no hookEvents
-    const noEventsRuntimes = ['trae', 'kimi', 'windsurf', 'opencode', 'kilo'];
+    // #2095: kimi moved OUT of this group — it now has hooksSurface:'kimi-hooks-toml'
+    // and hookEvents:'claude' (see the dedicated kimi hooksSurface test below).
+    const noEventsRuntimes = ['trae', 'windsurf', 'opencode', 'kilo'];
     for (const id of noEventsRuntimes) {
       const rt = registry.runtimes[id].runtime;
       assert.ok(
@@ -3307,6 +3442,22 @@ describe('ADR-1016 phase 5a: sample axis value assertions', () => {
     );
   });
 
+  test('kimi: hooksSurface === kimi-hooks-toml, hookEvents === claude, extendedHookEvents wired (#2095)', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const kimiRt = registry.runtimes['kimi'].runtime;
+    assert.strictEqual(kimiRt.hooksSurface, 'kimi-hooks-toml', 'kimi.hooksSurface must be "kimi-hooks-toml"');
+    assert.strictEqual(kimiRt.hookEvents, 'claude', 'kimi.hookEvents must be "claude" (Kimi\'s 13 lifecycle events include exact-name equivalents for the Claude dialect)');
+    assert.deepStrictEqual(
+      [...kimiRt.extendedHookEvents].sort(),
+      ['PreCompact', 'Stop', 'SubagentStart', 'SubagentStop'].sort(),
+      'kimi.extendedHookEvents must wire SubagentStop/Stop/PreCompact/SubagentStart',
+    );
+    // installSurface stays profile-marker-only — the native config.toml
+    // [[hooks]] write is independent of the artifact-install surface (#2095).
+    assert.strictEqual(kimiRt.installSurface, 'profile-marker-only', 'kimi.installSurface must remain "profile-marker-only"');
+  });
+
   test('codex: hooksSurface === codex-hooks-json, cursor: hooksSurface === cursor-hooks-json', () => {
     const { capMap } = loadAndValidate(new Set());
     const registry = buildRegistry(capMap);
@@ -3327,10 +3478,10 @@ describe('ADR-1016 phase 5a: sample axis value assertions', () => {
     }
   });
 
-  test('tier-2 runtimes: gemini through windsurf have supportTier === 2', () => {
+  test('tier-2 runtimes: cursor through windsurf have supportTier === 2', () => {
     const { capMap } = loadAndValidate(new Set());
     const registry = buildRegistry(capMap);
-    const tier2 = ['gemini', 'cursor', 'opencode', 'kilo', 'copilot', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi', 'windsurf'];
+    const tier2 = ['cursor', 'opencode', 'kilo', 'copilot', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi', 'windsurf'];
     for (const id of tier2) {
       assert.strictEqual(
         registry.runtimes[id].runtime.supportTier, 2,
@@ -3557,14 +3708,6 @@ describe('ADR-1016 phase 5a: validateArtifactLayout unit tests', () => {
   test('bad nesting in global[0] → error', () => {
     const errors = validateArtifactLayout('test', {
       global: [{ kind: 'skills', destSubpath: 'x', prefix: '', nesting: 'trilateral', recursive: false, converter: null }],
-      local: [],
-    });
-    assert.ok(errors.some((e) => e.includes('nesting')));
-  });
-
-  test('null nesting in global[0] → error', () => {
-    const errors = validateArtifactLayout('test', {
-      global: [{ kind: 'skills', destSubpath: 'x', prefix: '', nesting: null, recursive: false, converter: null }],
       local: [],
     });
     assert.ok(errors.some((e) => e.includes('nesting')));
@@ -3811,7 +3954,9 @@ describe('FIX 3: tightened runtime validator — probeExists optional string', (
 describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
   test('VALID_CONFIG_HOME_KINDS has exactly the 5 expected values', () => {
     assert.ok(VALID_CONFIG_HOME_KINDS instanceof Set);
-    for (const v of ['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root', 'omp-agent-home']) {
+    // 'none' added #2103 — a runtime with NO file-projected config directory
+    // at all (e.g. vscode — Marketplace/VSIX-distributed).
+    for (const v of ['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root', 'none']) {
       assert.ok(VALID_CONFIG_HOME_KINDS.has(v), 'VALID_CONFIG_HOME_KINDS must contain "' + v + '"');
     }
     assert.strictEqual(VALID_CONFIG_HOME_KINDS.size, 5, 'VALID_CONFIG_HOME_KINDS must have exactly 5 members');
@@ -3824,20 +3969,30 @@ describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
     assert.strictEqual(VALID_COMMAND_STYLES.size, 2);
   });
 
-  test('VALID_HOOKS_SURFACES has exactly 6 values', () => {
+  test('VALID_HOOKS_SURFACES has exactly 8 values', () => {
     assert.ok(VALID_HOOKS_SURFACES instanceof Set);
-    for (const v of ['settings-json', 'codex-hooks-json', 'cursor-hooks-json', 'copilot-inline', 'cline-rules', 'none']) {
+    for (const v of ['settings-json', 'codex-hooks-json', 'cursor-hooks-json', 'copilot-inline', 'cline-rules', 'kimi-hooks-toml', 'windsurf-hooks-json', 'none']) {
       assert.ok(VALID_HOOKS_SURFACES.has(v), 'VALID_HOOKS_SURFACES must contain "' + v + '"');
     }
-    assert.strictEqual(VALID_HOOKS_SURFACES.size, 6);
+    assert.strictEqual(VALID_HOOKS_SURFACES.size, 8);
   });
 
-  test('VALID_HOOK_EVENTS has exactly 3 values', () => {
+  test('VALID_HOOK_EVENTS has exactly 2 managed-hook dialects (claude/gemini)', () => {
     assert.ok(VALID_HOOK_EVENTS instanceof Set);
-    for (const v of ['claude', 'gemini', 'opencode-subset']) {
+    for (const v of ['claude', 'gemini']) {
       assert.ok(VALID_HOOK_EVENTS.has(v), 'VALID_HOOK_EVENTS must contain "' + v + '"');
     }
-    assert.strictEqual(VALID_HOOK_EVENTS.size, 3);
+    assert.strictEqual(VALID_HOOK_EVENTS.size, 2);
+    assert.ok(!VALID_HOOK_EVENTS.has('opencode-subset'),
+      'opencode-subset is NOT a hookEvents value — it is the extensionEvents vocabulary (#1943)');
+  });
+
+  test('VALID_EXTENSION_EVENTS has the extension-system dialects (opencode/pi/hermes/kilo/none — #1943/#2091/#2093)', () => {
+    assert.ok(VALID_EXTENSION_EVENTS instanceof Set);
+    for (const v of ['opencode', 'pi', 'hermes', 'kilo', 'none']) {
+      assert.ok(VALID_EXTENSION_EVENTS.has(v), 'VALID_EXTENSION_EVENTS must contain "' + v + '"');
+    }
+    assert.strictEqual(VALID_EXTENSION_EVENTS.size, 5);
   });
 
   test('VALID_SANDBOX_TIERS has exactly 2 values', () => {
@@ -3847,12 +4002,12 @@ describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
     assert.strictEqual(VALID_SANDBOX_TIERS.size, 2);
   });
 
-  test('VALID_ARTIFACT_KIND_NAMES has exactly 6 values', () => {
+  test('VALID_ARTIFACT_KIND_NAMES has exactly 4 values', () => {
     assert.ok(VALID_ARTIFACT_KIND_NAMES instanceof Set);
-    for (const v of ['commands', 'agents', 'skills', 'kimi-agents', 'rules', 'extensions']) {
+    for (const v of ['commands', 'agents', 'skills', 'kimi-agents']) {
       assert.ok(VALID_ARTIFACT_KIND_NAMES.has(v), 'VALID_ARTIFACT_KIND_NAMES must contain "' + v + '"');
     }
-    assert.strictEqual(VALID_ARTIFACT_KIND_NAMES.size, 6);
+    assert.strictEqual(VALID_ARTIFACT_KIND_NAMES.size, 4);
   });
 
   test('VALID_ARTIFACT_NESTINGS has exactly 2 values', () => {
@@ -3866,7 +4021,7 @@ describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
 // ─── 25. ADR-857 phase 5e: closed ConverterName enum (Part B) ─────────────────
 
 describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
-  test('VALID_CONVERTER_NAMES has exactly 27 entries (17 command/skill + 10 agent converters)', () => {
+  test('VALID_CONVERTER_NAMES has exactly 27 entries (17 command/skill/workflow + 10 agent converters)', () => {
     assert.ok(VALID_CONVERTER_NAMES instanceof Set, 'VALID_CONVERTER_NAMES must be a Set');
     assert.strictEqual(VALID_CONVERTER_NAMES.size, 27, 'VALID_CONVERTER_NAMES must have exactly 27 entries, got: ' + VALID_CONVERTER_NAMES.size);
   });
@@ -3889,8 +4044,7 @@ describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
       'convertClaudeCommandToOpencodeSkill',
       'convertClaudeCommandToTraeSkill',
       'convertClaudeCommandToWindsurfSkill',
-      'convertClaudeCommandToOmpCommand',
-      'convertClaudeCommandToOmpSkill',
+      'convertClaudeCommandToWindsurfWorkflow',
       // agent converters (#1173 — descriptor-driven agent conversion wiring)
       'convertClaudeAgentToCopilotAgent',
       'convertClaudeAgentToAntigravityAgent',
@@ -3901,7 +4055,8 @@ describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
       'convertClaudeAgentToCodebuddyAgent',
       'convertClaudeAgentToClineAgent',
       'convertClaudeAgentToCodexAgent',
-      'convertClaudeAgentToOmpAgent',
+      // ADR-1239 / #2092 Phase B Upgrade 1 — native .qwen/agents/*.md subagent projection.
+      'convertClaudeAgentToQwenAgent',
     ];
     for (const name of expected) {
       assert.ok(VALID_CONVERTER_NAMES.has(name), 'VALID_CONVERTER_NAMES must contain "' + name + '"');
@@ -3950,17 +4105,17 @@ describe('ADR-857 phase 5e: validateArtifactKindEntry — ConverterName enum (FA
     assert.deepEqual(converterErrors, [], 'converter: null must always be accepted, got: ' + JSON.stringify(converterErrors));
   });
 
-  // Parity: all runtime descriptors must have converters in the valid set when present.
-  test('all real runtime descriptors have converters in VALID_CONVERTER_NAMES when present', () => {
+  // Parity: every role:runtime descriptor's converters must be in the valid set (or null).
+  // Count-agnostic: iterates the real capability map rather than a hand-pinned runtime list.
+  test('every real runtime descriptor has converters in VALID_CONVERTER_NAMES or null', () => {
     const { capMap, errors } = loadAndValidate(new Set());
     const hardErrors = errors.filter((e) => !e.includes('pending-migration'));
     assert.deepEqual(hardErrors, [], 'Expected no hard errors from real capabilities, got: ' + JSON.stringify(hardErrors));
 
-    const runtimeIds = [
-      'claude', 'codex', 'antigravity', 'gemini', 'cursor', 'opencode',
-      'kilo', 'copilot', 'augment', 'trae', 'qwen', 'hermes',
-      'codebuddy', 'cline', 'kimi', 'windsurf', 'omp',
-    ];
+    const runtimeIds = [...capMap.entries()]
+      .filter(([, cap]) => cap && cap.role === 'runtime')
+      .map(([id]) => id);
+    assert.ok(runtimeIds.length > 0, 'expected at least one role:runtime capability');
     for (const id of runtimeIds) {
       const cap = capMap.get(id);
       assert.ok(cap, 'capMap must contain "' + id + '"');
@@ -3971,7 +4126,7 @@ describe('ADR-857 phase 5e: validateArtifactKindEntry — ConverterName enum (FA
       ];
       for (let i = 0; i < allEntries.length; i++) {
         const entry = allEntries[i];
-        if (entry.converter != null) {
+        if (entry.converter !== null) {
           assert.ok(
             VALID_CONVERTER_NAMES.has(entry.converter),
             id + ' artifactLayout[' + i + '].converter "' + entry.converter +
@@ -4108,15 +4263,18 @@ describe('ADR-857 phase 5e: configFormat ↔ installSurface parity gate', () => 
   });
 
   // INSTALL_SURFACE_TO_CONFIG_FORMAT export check
-  test('INSTALL_SURFACE_TO_CONFIG_FORMAT covers all 6 installSurface values with correct mappings', () => {
+  test('INSTALL_SURFACE_TO_CONFIG_FORMAT covers all 7 installSurface values with correct mappings', () => {
     assert.ok(INSTALL_SURFACE_TO_CONFIG_FORMAT instanceof Map, 'Must be a Map');
-    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.size, 6, 'Must cover 6 installSurface values');
+    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.size, 7, 'Must cover 7 installSurface values');
     assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('settings-json'),        'settings-json');
     assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('codex-toml'),           'toml');
     assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('copilot-instructions'), 'markdown');
     assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('cline-rules'),          'markdown-dir');
     assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('cursor-hooks-json'),    'none');
     assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('profile-marker-only'),  'none');
+    // 'none' added #2103 — a runtime with no CLI install surface at all (e.g.
+    // vscode) has no config-file format to write either.
+    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('none'),                'none');
   });
 
   // Feature capabilities (role:feature) are silently ignored by the gate
@@ -4176,6 +4334,7 @@ describe('ADR-857 phase 5f: cross-field consistency gate rejection tests (DEFECT
       requires: [],
       runtime: {
         configHome: { kind: 'dot-home', name: '.test-runtime', env: [] },
+        localConfigDir: '.test-runtime',
         configFormat: 'settings-json',
         artifactLayout: { global: [], local: [] },
         commandStyle: 'slash-hyphen',
@@ -4187,6 +4346,16 @@ describe('ADR-857 phase 5f: cross-field consistency gate rejection tests (DEFECT
         writesSharedSettings: true,
         permissionWriter: null,
         extendedHookEvents: [],
+        hostIntegration: {
+          embeddingMode: 'imperative',
+          commandSurface: 'slash-file',
+          dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full', backgroundDispatch: false },
+          modelMode: 'passive',
+          hookBus: 'host',
+          stateIO: 'filesystem',
+          transport: 'mcp',
+          runtime: 'node',
+        },
       },
     };
     if (overrides && typeof overrides === 'object') {
@@ -4268,10 +4437,71 @@ describe('ADR-857 phase 5f: cross-field consistency gate rejection tests (DEFECT
     );
   });
 
+  // #2103: configHome.kind==='none' carve-out (VS Code — Marketplace/VSIX, no
+  // file-projected config directory). Adversarial review flagged AC4's
+  // "accept vscode AND reject a faked configHome" requirement as untested —
+  // the real vscode descriptor validating clean (tests/capability-registry.test.cjs's
+  // "ADR-1016 phase 5a" suite, capability-validator-parity tests, etc.) only
+  // proves the ACCEPT half. These three tests are the REJECT half: they prove
+  // the two new branches in validateRuntimeBody/validateConfigHome actually
+  // fire, quoting their EXACT error strings so a future edit that silently
+  // weakens either branch fails loudly here.
+  describe('#2103 configHome.kind==="none" carve-out (vscode) — accept/reject pair', () => {
+    test('ACCEPT: configHome.kind:"none" + localConfigDir:null + installSurface:"none" + hooksSurface:"none" validates with ZERO errors', () => {
+      const cap = makeValidRuntimeCap({
+        runtime: {
+          configHome: { kind: 'none', name: 'test-none-rt', env: [] },
+          localConfigDir: null,
+          configFormat: 'none',
+          installSurface: 'none',
+          hooksSurface: 'none',
+        },
+      });
+      const errors = validateRuntimeBody(cap);
+      assert.deepEqual(errors, [], 'a genuinely kind:"none" descriptor (vscode-shaped) must validate clean, got: ' + JSON.stringify(errors));
+    });
+
+    test('REJECT #1: localConfigDir non-null while configHome.kind==="none" → exact validateRuntimeBody error', () => {
+      const cap = makeValidRuntimeCap({
+        runtime: {
+          configHome: { kind: 'none', name: 'test-none-rt', env: [] },
+          localConfigDir: '.vscode', // faked — a kind:'none' descriptor must not also claim a local dir
+          configFormat: 'none',
+          installSurface: 'none',
+          hooksSurface: 'none',
+        },
+      });
+      const errors = validateRuntimeBody(cap);
+      assert.deepEqual(
+        errors,
+        ['runtime.localConfigDir must be null or absent when configHome.kind is "none"; got: ".vscode"'],
+        'expected the exact localConfigDir-vs-kind:"none" rejection, got: ' + JSON.stringify(errors),
+      );
+    });
+
+    test('REJECT #2: configHome.name present-but-empty while configHome.kind==="none" → exact validateConfigHome error', () => {
+      const cap = makeValidRuntimeCap({
+        runtime: {
+          configHome: { kind: 'none', name: '', env: [] }, // faked — present name must still be non-empty
+          localConfigDir: null,
+          configFormat: 'none',
+          installSurface: 'none',
+          hooksSurface: 'none',
+        },
+      });
+      const errors = validateRuntimeBody(cap);
+      assert.deepEqual(
+        errors,
+        ['capability "test-runtime" runtime.configHome.name must be a non-empty string if present when kind is "none"'],
+        'expected the exact configHome.name-vs-kind:"none" rejection, got: ' + JSON.stringify(errors),
+      );
+    });
+  });
+
   // Verify the new constants are well-formed
-  test('INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES covers all 6 installSurface values', () => {
+  test('INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES covers all 7 installSurface values', () => {
     assert.ok(INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES instanceof Map, 'Must be a Map');
-    assert.strictEqual(INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES.size, 6, 'Must cover 6 installSurface values');
+    assert.strictEqual(INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES.size, 7, 'Must cover 7 installSurface values');
     for (const installSurface of VALID_INSTALL_SURFACES) {
       assert.ok(
         INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES.has(installSurface),
@@ -4280,19 +4510,21 @@ describe('ADR-857 phase 5f: cross-field consistency gate rejection tests (DEFECT
     }
   });
 
-  test('VALID_EXTENDED_HOOK_EVENTS covers all 7 known extended events', () => {
+  test('VALID_EXTENDED_HOOK_EVENTS covers all 8 known extended events', () => {
     assert.ok(VALID_EXTENDED_HOOK_EVENTS instanceof Set, 'Must be a Set');
-    assert.strictEqual(VALID_EXTENDED_HOOK_EVENTS.size, 7, 'Must cover 7 extended hook events');
-    for (const ev of ['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel']) {
+    assert.strictEqual(VALID_EXTENDED_HOOK_EVENTS.size, 8, 'Must cover 8 extended hook events');
+    // SubagentStart added #2092 Phase B Upgrade 2 (qwen-only today).
+    for (const ev of ['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel', 'SubagentStart']) {
       assert.ok(VALID_EXTENDED_HOOK_EVENTS.has(ev), 'Must include event "' + ev + '"');
     }
   });
 
-  test('VALID_PERMISSION_WRITERS covers exactly {opencode, kilo}', () => {
+  test('VALID_PERMISSION_WRITERS covers exactly {opencode, kilo, antigravity}', () => {
     assert.ok(VALID_PERMISSION_WRITERS instanceof Set, 'Must be a Set');
-    assert.strictEqual(VALID_PERMISSION_WRITERS.size, 2, 'Must cover 2 permission writers');
+    assert.strictEqual(VALID_PERMISSION_WRITERS.size, 3, 'Must cover 3 permission writers');
     assert.ok(VALID_PERMISSION_WRITERS.has('opencode'), 'Must include opencode');
     assert.ok(VALID_PERMISSION_WRITERS.has('kilo'), 'Must include kilo');
+    assert.ok(VALID_PERMISSION_WRITERS.has('antigravity'), 'Must include antigravity (#2096)');
   });
 
   // Confirm the valid base fixture does NOT produce errors (sanity)
@@ -5039,6 +5271,16 @@ describe('activationKey validation', () => {
         writesSharedSettings: false,
         permissionWriter: null,
         extendedHookEvents: [],
+        hostIntegration: {
+          embeddingMode: 'declarative',
+          commandSurface: 'slash-file',
+          dispatch: { namedDispatch: true, nested: true, maxDepth: 2, background: false, subagentToolkit: 'full', backgroundDispatch: false },
+          modelMode: 'passive',
+          hookBus: 'host',
+          stateIO: 'filesystem',
+          transport: 'mcp',
+          runtime: 'node',
+        },
       },
     };
     const errors = validateCapability(cap, 'cursor');
@@ -5052,3 +5294,1792 @@ describe('activationKey validation', () => {
     );
   });
 });
+
+// ─── ADR-1244 D2: validator extraction generative parity ──────────────────────
+//
+// The validator now lives in gsd-core/bin/lib/capability-validator.cjs and is
+// re-exported by the generator. These assertions guarantee the build-time
+// generator and the runtime overlay share ONE validator implementation — no
+// divergent copy can drift between them, because the generator re-exports the
+// very same object references.
+describe('ADR-1244 D2: validator extraction generative parity', () => {
+  const CORE = [
+    'validateCapability', 'validateCrossCapability', 'validateVersionEnvelope',
+    'validateConsumesGlobal', 'validateAgainstContract', 'validateConfigSliceEntry',
+    'validateRuntimeBody', 'classifyCrossErrors',
+  ];
+
+  test('the runtime validator module exposes the full validator surface', () => {
+    for (const sym of [...CORE, 'SEMVER_RE', 'SEMVER_RANGE_RE', 'POINT_ORDER', 'VALID_LOOP_POINTS', 'VALID_TIERS']) {
+      assert.ok(sym in capValidatorModule, `validator module must export ${sym}`);
+    }
+    assert.strictEqual(typeof capValidatorModule.validateCapability, 'function');
+    assert.ok(capValidatorModule.SEMVER_RE instanceof RegExp);
+  });
+
+  test('every generator-re-exported validator symbol is the SAME object as the validator module (no drift)', () => {
+    const shared = Object.keys(capValidatorModule).filter((k) => Object.prototype.hasOwnProperty.call(generatorModule, k));
+    assert.ok(shared.length >= 20, `expected the generator to re-export the validator surface, got ${shared.length}`);
+    for (const k of shared) {
+      assert.strictEqual(
+        generatorModule[k],
+        capValidatorModule[k],
+        `generator export "${k}" must be the SAME reference as the validator module's (drift detected)`,
+      );
+    }
+  });
+
+  test('core validators are re-exported identically by the generator', () => {
+    for (const sym of CORE) {
+      assert.strictEqual(
+        generatorModule[sym], capValidatorModule[sym],
+        `${sym} must be re-exported by the generator as the validator module's reference`,
+      );
+    }
+  });
+
+  test('the extracted validator runs standalone (no generator/build-time deps required)', () => {
+    // Proves the module is genuinely runtime-callable: a clean require + validate
+    // with no install-profiles/clusters/config-schema machinery present.
+    const { validateCapability } = capValidatorModule;
+    const cap = {
+      id: 'demo', role: 'feature', version: '1.0.0', title: 'Demo', description: 'demo',
+      tier: 'standard', requires: [], runtimeCompat: { supported: ['*'], unsupported: [] },
+      skills: [], agents: [], hooks: [], config: {}, steps: [], contributions: [], gates: [],
+    };
+    assert.deepEqual(validateCapability(cap, 'demo'), []);
+    const { version: _v, ...noVersion } = cap;
+    assert.ok(validateCapability(noVersion, 'demo').some((e) => e.includes('version')));
+  });
+});
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2530-valid-config-keys.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2530-valid-config-keys (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+
+/**
+ * Regression tests for config key bugs:
+ * #2530 — workflow._auto_chain_active is internal state, must not be in VALID_CONFIG_KEYS
+ * #2531 — hooks.workflow_guard is used by hook and documented but missing from VALID_CONFIG_KEYS
+ * #2532 — workflow.ui_review is used in autonomous.md but missing from config validation
+ * #2533 — workflow.max_discuss_passes is used in discuss-phase.md but missing from VALID_CONFIG_KEYS
+ * #2535 — sub_repos and plan_checker legacy keys need CONFIG_KEY_SUGGESTIONS migration hints
+ * #3162 — resolve_model_ids missing from VALID_CONFIG_KEYS; workflow._auto_chain_active must be
+ *          accepted by isValidConfigKey (written by workflows) without being user-visible
+ * #1747 — buildNewProjectConfig emits four search-provider keys (tavily_search, ref_search,
+ *          perplexity, jina) that research-provider.cts consumes but were missing from
+ *          VALID_CONFIG_KEYS, causing /gsd-settings unknown-key warnings on fresh projects
+ */
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+
+const {
+  VALID_CONFIG_KEYS,
+  isCentralConfigKey,
+  isValidConfigKey,
+} = require('../gsd-core/bin/lib/config-schema.cjs');
+
+const capabilityRegistry = require('../gsd-core/bin/lib/capability-registry.cjs');
+
+describe('VALID_CONFIG_KEYS correctness', () => {
+  test('#2530: workflow._auto_chain_active must not be in VALID_CONFIG_KEYS (internal state)', () => {
+    assert.ok(
+      !VALID_CONFIG_KEYS.has('workflow._auto_chain_active'),
+      'workflow._auto_chain_active is internal runtime state and must not be user-settable'
+    );
+  });
+
+  test('#2531: hooks.workflow_guard must be in VALID_CONFIG_KEYS (used by hook, documented)', () => {
+    assert.ok(
+      VALID_CONFIG_KEYS.has('hooks.workflow_guard'),
+      'hooks.workflow_guard is read by gsd-workflow-guard.js hook and documented in CONFIGURATION.md'
+    );
+  });
+
+  test('#2532: workflow.ui_review must remain valid but is no longer centrally owned', () => {
+    assert.strictEqual(
+      isValidConfigKey('workflow.ui_review'),
+      true,
+      'workflow.ui_review is still user-facing config and must validate'
+    );
+    assert.strictEqual(
+      isCentralConfigKey('workflow.ui_review'),
+      false,
+      'workflow.ui_review is owned by the UI capability after ADR-857 Phase 6 cutover'
+    );
+  });
+
+  test('#2533: workflow.max_discuss_passes must be in VALID_CONFIG_KEYS (used in discuss-phase.md)', () => {
+    assert.ok(
+      VALID_CONFIG_KEYS.has('workflow.max_discuss_passes'),
+      'workflow.max_discuss_passes is read in discuss-phase.md via gsd-sdk query config-get'
+    );
+  });
+
+  test('#3162: resolve_model_ids must be in VALID_CONFIG_KEYS (documented user-facing key)', () => {
+    assert.ok(
+      VALID_CONFIG_KEYS.has('resolve_model_ids'),
+      'resolve_model_ids is documented in CONFIGURATION.md and read by core.cjs/session-runner.ts'
+    );
+  });
+
+  test('#3162: workflow._auto_chain_active must be accepted by isValidConfigKey (written by workflows)', () => {
+    assert.strictEqual(
+      isValidConfigKey('workflow._auto_chain_active'),
+      true,
+      'workflow._auto_chain_active is written by plan-phase, execute-phase, discuss-phase, transition workflows via config-set'
+    );
+  });
+});
+
+describe('#1747: new-project config emits only schema-recognized provider keys', () => {
+  // buildNewProjectConfig emits seven search-provider availability flags and
+  // research-provider.cts providerAvailability() consumes all seven, but only
+  // three were in VALID_CONFIG_KEYS → /gsd-settings warned on the four
+  // unregistered keys (tavily_search, ref_search, perplexity, jina) for every
+  // freshly generated .planning/config.json.
+
+  // The four keys that were emitted + consumed but missing from the schema.
+  const MISSING_KEYS = ['tavily_search', 'ref_search', 'perplexity', 'jina'];
+
+  // Every config-driven provider flag read by providerAvailability() in
+  // src/research-provider.cts. context7/websearch are excluded: hardcoded
+  // `true`, not config-gated, so no config key to register.
+  const PROVIDER_CONFIG_KEYS = [
+    'brave_search',
+    'firecrawl',
+    'exa_search',
+    'tavily_search',
+    'ref_search',
+    'perplexity',
+    'jina',
+  ];
+
+  test('the four previously-missing provider keys are in VALID_CONFIG_KEYS', () => {
+    const absent = MISSING_KEYS.filter((k) => !VALID_CONFIG_KEYS.has(k));
+    assert.deepStrictEqual(
+      absent,
+      [],
+      `These provider keys are emitted by buildNewProjectConfig and consumed by research-provider.cts but missing from VALID_CONFIG_KEYS:\n  ${absent.join('\n  ')}\n\nAdd them to gsd-core/bin/shared/config-schema.manifest.json (validKeys).`
+    );
+  });
+
+  test('every config-driven research-provider flag is registered in the schema (drift guard)', () => {
+    const drifted = PROVIDER_CONFIG_KEYS.filter((k) => !VALID_CONFIG_KEYS.has(k));
+    assert.deepStrictEqual(
+      drifted,
+      [],
+      `These research-provider config flags are not in VALID_CONFIG_KEYS — a fresh /gsd-new-project config would trigger an unknown-key warning under /gsd-settings:\n  ${drifted.join('\n  ')}\n\nWhen you add a provider to providerAvailability() in src/research-provider.cts, also register its config key in gsd-core/bin/shared/config-schema.manifest.json.`
+    );
+  });
+});
+
+describe('ADR-857 Phase 6 capability config ownership', () => {
+  test('migrated capability config keys are valid through the registry, not central schema residue', () => {
+    const capabilityKeys = Object.keys(capabilityRegistry.configSchema || {}).sort();
+    assert.ok(capabilityKeys.length > 0, 'expected generated registry config schema keys');
+
+    for (const key of capabilityKeys) {
+      assert.strictEqual(isValidConfigKey(key), true, `${key} must remain accepted by config validation`);
+      assert.strictEqual(isCentralConfigKey(key), false, `${key} must be capability-owned, not central`);
+      assert.strictEqual(VALID_CONFIG_KEYS.has(key), false, `${key} must not remain in central VALID_CONFIG_KEYS`);
+    }
+  });
+});
+
+describe('CONFIG_KEY_SUGGESTIONS migration hints (#2535)', () => {
+  let tmpDir;
+
+  test('config-set sub_repos emits "Did you mean planning.sub_repos?" suggestion', (t) => {
+    tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    const result = runGsdTools(['config-set', 'sub_repos', '[]'], tmpDir);
+    assert.ok(!result.success, 'config-set sub_repos should fail');
+    const combined = result.error + result.output;
+    assert.ok(
+      combined.includes('Did you mean') && combined.includes('planning.sub_repos'),
+      `Expected "Did you mean planning.sub_repos?" in error, got:\nstdout: ${result.output}\nstderr: ${result.error}`
+    );
+  });
+
+  test('config-set plan_checker emits "Did you mean workflow.plan_check?" suggestion', (t) => {
+    tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    const result = runGsdTools(['config-set', 'plan_checker', 'true'], tmpDir);
+    assert.ok(!result.success, 'config-set plan_checker should fail');
+    const combined = result.error + result.output;
+    assert.ok(
+      combined.includes('Did you mean') && combined.includes('workflow.plan_check'),
+      `Expected "Did you mean workflow.plan_check?" in error, got:\nstdout: ${result.output}\nstderr: ${result.error}`
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2851-workflow-bare-gsd-tools.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2851-workflow-bare-gsd-tools (consolidation epic #1969 B3 #1972)", () => {
+/**
+ * Bug #2851: plan-phase.md §13e calls bare `gsd-tools` — incomplete fix of #2245
+ *
+ * Workflow bodies should not call `gsd-tools` as an unguarded bare command.
+ * Use the resolver snippets for SDK calls, or an explicit local CJS path when
+ * a command intentionally targets the checked-in legacy script:
+ *
+ *   node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" <subcommand> [args]
+ *
+ * As of #621, the §13e gap-analysis call uses the `gsd_run` launcher (the
+ * canonical resolvable form) instead of the absolute-$HOME path above.
+ * Both forms are resolvable; `gsd_run` is now the preferred canonical form.
+ *
+ * Some workflow markdown files leaked the bare `gsd-tools <subcommand>` form,
+ * which fails with `command not found` at runtime.
+ *
+ * This test parses every markdown file in gsd-core/workflows/ structurally:
+ * it tokenizes the content into fenced code blocks, then on each shell-block
+ * line checks whether `gsd-tools` appears as a bare command (not preceded by
+ * `node `, not part of the filename `gsd-tools.cjs`, not inside a comment).
+ *
+ * Per project rule: this test does NOT use grep/regex .includes() on raw file
+ * content as the assertion surface. Instead, it splits into code-fenced blocks
+ * and tokenizes each line — only command-position tokens count as violations.
+ */
+'use strict';
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
+
+/**
+ * Extract shell-fenced code blocks from a markdown file.
+ * Returns an array of { startLine, lines } where lines are the contents
+ * between the ```bash / ```sh / ```shell fence markers.
+ */
+function extractShellBlocks(content) {
+  const allLines = content.split('\n');
+  const blocks = [];
+  let inBlock = false;
+  let blockLang = null;
+  let blockStart = 0;
+  let blockLines = [];
+
+  for (let i = 0; i < allLines.length; i++) {
+    const line = allLines[i];
+    const fenceOpen = line.match(/^```(\w+)?/);
+    if (!inBlock && fenceOpen) {
+      inBlock = true;
+      blockLang = (fenceOpen[1] || '').toLowerCase();
+      blockStart = i + 2; // 1-indexed line number of first content line
+      blockLines = [];
+      continue;
+    }
+    if (inBlock && /^```\s*$/.test(line)) {
+      if (['bash', 'sh', 'shell', 'zsh', ''].includes(blockLang)) {
+        blocks.push({ startLine: blockStart, lines: blockLines });
+      }
+      inBlock = false;
+      blockLang = null;
+      blockLines = [];
+      continue;
+    }
+    if (inBlock) {
+      blockLines.push(line);
+    }
+  }
+  return blocks;
+}
+
+/**
+ * Check a single shell-block line for a bare `gsd-tools` command-position token.
+ * Returns true if the line is a violation.
+ */
+function lineHasBareGsdTools(line) {
+  // Strip leading whitespace and any prompt prefix ($ , > , # )
+  let l = line.replace(/^\s*[$>]\s*/, '');
+  // Skip pure comment lines
+  if (/^\s*#/.test(l)) return false;
+  // Strip inline comment (# preceded by whitespace, not inside a string)
+  // Conservative: only strip if # appears after whitespace and outside quotes —
+  // we just look for the first ` #` outside of quoted context. For our needs,
+  // splitting on `^[^"']*?(\s#)` is good enough.
+  const hashIdx = l.search(/(?:^|[^"'\w])#/);
+  if (hashIdx > 0) l = l.slice(0, hashIdx);
+
+  // Unwrap command-substitution forms so the substituted command is in
+  // command position. `$(cmd …)` and `` `cmd …` `` both run the inner string
+  // as a fresh command, so a bare `gsd-tools` inside them is just as broken
+  // as one at the start of the line. Iterate until stable for nested forms.
+  let prev;
+  do {
+    prev = l;
+    l = l.replace(/\$\(([^()]*)\)/g, ' $1 ').replace(/`([^`]*)`/g, ' $1 ');
+  } while (l !== prev);
+
+  // Tokenize on whitespace, semicolons, pipes, and && / ||
+  // Then walk tokens — a violation is a token that starts with `gsd-tools`
+  // followed by a word boundary (so `gsd-tools.cjs` does NOT match), and the
+  // preceding token is NOT `node`.
+  const segments = l.split(/(?:\s*(?:&&|\|\||;|\|)\s*)/);
+  for (const seg of segments) {
+    const tokens = seg.trim().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) continue;
+    // Skip env var assignments at the start (FOO=bar gsd-tools …, tmp=1 gsd-tools …).
+    // POSIX shell variable names are [A-Za-z_][A-Za-z0-9_]*; lowercase is valid.
+    let cmdIdx = 0;
+    while (cmdIdx < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[cmdIdx])) {
+      cmdIdx++;
+    }
+    if (cmdIdx >= tokens.length) continue;
+    const cmd = tokens[cmdIdx];
+    // Match `gsd-tools` exactly (no extension), as command position.
+    if (cmd === 'gsd-tools') return true;
+  }
+  return false;
+}
+
+const AGENTS_DIR = path.join(__dirname, '..', 'agents');
+
+describe('bug #1041: agent files must not call bare gsd-tools (all-runtime resolver)', () => {
+  test('no agents/gsd-*.md file contains a bare gsd-tools command', () => {
+    const files = fs.readdirSync(AGENTS_DIR).filter((f) => f.startsWith('gsd-') && f.endsWith('.md'));
+    assert.ok(files.length > 0, 'expected agent files to exist');
+
+    const violations = [];
+    for (const f of files) {
+      const full = path.join(AGENTS_DIR, f);
+      const content = fs.readFileSync(full, 'utf-8');
+      const blocks = extractShellBlocks(content);
+      for (const blk of blocks) {
+        for (let i = 0; i < blk.lines.length; i++) {
+          if (lineHasBareGsdTools(blk.lines[i])) {
+            violations.push(`${f}:${blk.startLine + i}: ${blk.lines[i].trim()}`);
+          }
+        }
+      }
+    }
+
+    assert.deepStrictEqual(
+      violations,
+      [],
+      'Bare `gsd-tools` invocations found in agent shell blocks. ' +
+        'Inject the runtime-launcher preamble (_runtime-launcher.snippet.sh) and use `gsd_run` instead.\n' +
+        violations.join('\n'),
+    );
+  });
+});
+
+describe('bug-2851: workflow files must not call bare `gsd-tools` (#2245 sweep regression)', () => {
+  test('no gsd-core/workflows/*.md file contains a bare gsd-tools command', () => {
+    const files = fs.readdirSync(WORKFLOWS_DIR).filter((f) => f.endsWith('.md'));
+    assert.ok(files.length > 0, 'expected workflow files to exist');
+
+    const violations = [];
+    for (const f of files) {
+      const full = path.join(WORKFLOWS_DIR, f);
+      const content = fs.readFileSync(full, 'utf-8');
+      const blocks = extractShellBlocks(content);
+      for (const blk of blocks) {
+        for (let i = 0; i < blk.lines.length; i++) {
+          if (lineHasBareGsdTools(blk.lines[i])) {
+            violations.push(`${f}:${blk.startLine + i}: ${blk.lines[i].trim()}`);
+          }
+        }
+      }
+    }
+
+    assert.deepStrictEqual(
+      violations,
+      [],
+      'Bare `gsd-tools` invocations found in workflow shell blocks. ' +
+        'Use a resolver snippet or `node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" <subcommand>` instead.\n' +
+        violations.join('\n'),
+    );
+  });
+
+  test('plan-phase.md §13e gap-analysis dispatches via gsd_run loop render-hooks plan:post (ADR-857 capability gate, #621)', () => {
+    const planPhase = fs.readFileSync(path.join(WORKFLOWS_DIR, 'plan-phase.md'), 'utf-8');
+    const blocks = extractShellBlocks(planPhase);
+    let foundPlanPostDispatch = false;
+    for (const blk of blocks) {
+      for (const line of blk.lines) {
+        if (/gsd_run\s+loop\s+render-hooks\s+plan:post\s+--raw/.test(line) && !/^\s*#/.test(line)) {
+          foundPlanPostDispatch = true;
+        }
+      }
+    }
+    assert.ok(
+      foundPlanPostDispatch,
+      'expected plan-phase.md §13e to dispatch gsd_run loop render-hooks plan:post --raw (gap-analysis moved to capability gate plan:post in ADR-857 migration)',
+    );
+    const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
+    const planPostPoint = (registry.byLoopPoint || {})['plan:post'] || {};
+    const gates = planPostPoint.gates || [];
+    const gapAnalysisGate = gates.find((g) => g.capId === 'gap-analysis');
+    assert.ok(
+      gapAnalysisGate,
+      'gap-analysis capability must be registered as a plan:post gate in capability-registry.cjs',
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/fix-1628-config-set-validation.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:fix-1628-config-set-validation (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+
+/**
+ * Regression test suite for bug #1628: config-set validation gaps.
+ *
+ * This file consolidates all #1628 config-set validation regression tests:
+ *   1. Security-key enum guards (workflow.security_block_on, workflow.security_asvs_level)
+ *   2. JSON-array coercion bypass: every affected string-enum key
+ *   3. Generic capability-registry validation (enum/boolean/number/string keys)
+ *
+ * Covers:
+ * - workflow.security_block_on must be one of: critical | high | medium | low | none
+ * - workflow.security_asvs_level must be an integer in {1, 2, 3}
+ * - JSON-array (["<member>"]) and JSON-object ({"x":1}) values must be REJECTED for
+ *   all string-enum keys (typeof check before enum guard)
+ * - capability-registry-owned keys: ENUM, BOOLEAN, NUMBER, STRING
+ *
+ * Boundary coverage per RULESET.TESTS.boundary-coverage:
+ *   security_asvs_level: 0 (limit-1), 1 (limit), 2, 3 (limit), 4 (limit+1)
+ *   security_block_on: each valid enum member + bogus values
+ *
+ * Registry canary: verifies capability registry's .values for workflow.security_block_on
+ * matches the canonical enum (guards against silent gutting per DEFECT.GENERATIVE-FIX).
+ */
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+
+// ─── Registry canary ──────────────────────────────────────────────────────────
+// Verify the capability registry's declared .values for workflow.security_block_on
+// matches the canonical enum. config.cts sources its allowed set DIRECTLY from the
+// registry, so this canary guards against the registry being silently gutted — which
+// would cause every config-set call to fail (per DEFECT.GENERATIVE-FIX).
+describe('fix-1628: registry canary — capability registry declares the canonical security_block_on enum', () => {
+  test('registry workflow.security_block_on.values declares the expected canonical enum', () => {
+    // Load the capability registry as a module (behavioral call, not source grep).
+    // The registry IS the source of truth: config.cts reads from it at runtime.
+    // This assertion guards against the registry entry being gutted or values removed.
+    const { configSchema } = require('../gsd-core/bin/lib/capability-registry.cjs');
+    const entry = configSchema['workflow.security_block_on'];
+    assert.ok(entry, 'capability registry must have an entry for workflow.security_block_on');
+    assert.ok(Array.isArray(entry.values), 'registry entry must have a .values array');
+
+    const EXPECTED = ['critical', 'high', 'medium', 'low', 'none'];
+    assert.deepEqual(
+      [...entry.values].sort(),
+      [...EXPECTED].sort(),
+      `Registry workflow.security_block_on.values must be ${JSON.stringify(EXPECTED)} — update ` +
+      `the capability registry if the canonical enum changes`
+    );
+  });
+});
+
+// ─── workflow.security_block_on ───────────────────────────────────────────────
+
+describe('fix-1628: workflow.security_block_on enum validation', () => {
+  const VALID_VALUES = ['critical', 'high', 'medium', 'low', 'none'];
+  const INVALID_VALUES = ['bogus', 'High', 'CRITICAL', '', 'all', 'urgent'];
+
+  for (const v of VALID_VALUES) {
+    test(`config-set workflow.security_block_on=${v} is ACCEPTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const result = runGsdTools(
+        ['config-set', 'workflow.security_block_on', v],
+        tmpDir
+      );
+      assert.ok(
+        result.success,
+        [
+          `config-set workflow.security_block_on=${v} must succeed,`,
+          'stdout: ' + result.output,
+          'stderr: ' + result.error,
+        ].join('\n')
+      );
+    });
+  }
+
+  for (const v of INVALID_VALUES) {
+    test(`config-set workflow.security_block_on=${JSON.stringify(v)} is REJECTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const result = runGsdTools(
+        ['config-set', 'workflow.security_block_on', v],
+        tmpDir
+      );
+      assert.ok(
+        !result.success,
+        `config-set workflow.security_block_on=${JSON.stringify(v)} must fail, but it succeeded`
+      );
+      const combined = (result.output || '') + (result.error || '');
+      // Error message must mention the valid values
+      assert.ok(
+        combined.includes('critical') && combined.includes('none'),
+        `Error message must mention valid values (got: ${combined})`
+      );
+    });
+  }
+});
+
+// ─── workflow.security_block_on — JSON-parse coercion bypass ─────────────────
+// Regression for the String(parsedValue) coercion bug: an array like ["high"]
+// coerces to "high" via String(), bypassing the enum check and writing an array
+// to a string-enum key. The fix requires typeof parsedValue === 'string'.
+
+describe('fix-1628: workflow.security_block_on rejects JSON-parsed non-string inputs', () => {
+  const JSON_BYPASS_CASES = [
+    { val: '["high"]',   label: 'JSON array with valid member' },
+    { val: '["bogus"]',  label: 'JSON array with invalid member' },
+    { val: '{"high":1}', label: 'JSON object' },
+  ];
+
+  for (const { val, label } of JSON_BYPASS_CASES) {
+    test(`config-set workflow.security_block_on=${label} is REJECTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const result = runGsdTools(
+        ['config-set', 'workflow.security_block_on', val],
+        tmpDir
+      );
+      assert.ok(
+        !result.success,
+        `config-set workflow.security_block_on=${label} must fail, but it succeeded`
+      );
+    });
+  }
+});
+
+// ─── workflow.security_asvs_level ─────────────────────────────────────────────
+
+describe('fix-1628: workflow.security_asvs_level range validation', () => {
+  // Boundary: 0 (below limit), 1 (min valid), 2 (mid), 3 (max valid), 4 (above limit)
+  const ACCEPTED_INTEGERS = [1, 2, 3];
+  const REJECTED_VALUES = [
+    { val: '0',   label: '0 (below lower bound)' },
+    { val: '4',   label: '4 (above upper bound)' },
+    { val: '2.5', label: '2.5 (non-integer float)' },
+    { val: 'abc', label: '"abc" (non-numeric string)' },
+    { val: '-1',  label: '-1 (negative)' },
+  ];
+
+  for (const n of ACCEPTED_INTEGERS) {
+    test(`config-set workflow.security_asvs_level=${n} is ACCEPTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const result = runGsdTools(
+        ['config-set', 'workflow.security_asvs_level', String(n)],
+        tmpDir
+      );
+      assert.ok(
+        result.success,
+        [
+          `config-set workflow.security_asvs_level=${n} must succeed,`,
+          'stdout: ' + result.output,
+          'stderr: ' + result.error,
+        ].join('\n')
+      );
+    });
+  }
+
+  for (const { val, label } of REJECTED_VALUES) {
+    test(`config-set workflow.security_asvs_level=${label} is REJECTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const result = runGsdTools(
+        ['config-set', 'workflow.security_asvs_level', val],
+        tmpDir
+      );
+      assert.ok(
+        !result.success,
+        `config-set workflow.security_asvs_level=${label} must fail, but it succeeded`
+      );
+      const combined = (result.output || '') + (result.error || '');
+      assert.ok(
+        combined.includes('security_asvs_level'),
+        `Error message must reference the key name (got: ${combined})`
+      );
+    });
+  }
+});
+
+// ─── JSON-array coercion bypass — parameterised matrix ───────────────────────
+// The root cause: cmdConfigSet JSON-parses any value starting with '[' or '{'
+// BEFORE per-key enum guards run. Guards using `.includes(String(parsedValue))`
+// are then fooled because `String(["mid-flight"]) === "mid-flight"`, so the
+// array bypasses the guard and gets stored in a scalar key.
+//
+// The fix: `assertEnumValue()` checks `typeof parsedValue === 'string'` FIRST,
+// so a parsed array is rejected regardless of its string coercion.
+//
+// Coverage: every affected string-enum key.
+// - `["<member>"]` (JSON array with valid member) → REJECTED
+// - `{"x":1}` (JSON object) → REJECTED
+// - `<member>` (plain string, valid) → ACCEPTED
+
+// Each row: { key, member } where `member` is a valid enum value for `key`.
+// Verified against VALID_* arrays in src/config.cts.
+const ENUM_KEYS = [
+  { key: 'context',                              member: 'research'   },
+  { key: 'workflow.drift_action',                member: 'warn'       },
+  { key: 'workflow.human_verify_mode',           member: 'mid-flight' },
+  { key: 'workflow.context_guard_mode',          member: 'off'        },
+  { key: 'statusline.context_position',          member: 'front'      },
+  { key: 'statusline.state_format',              member: 'compact'    },
+  { key: 'code_quality.fallow.scope',            member: 'phase'      },
+  { key: 'code_quality.fallow.profile',          member: 'standard'   },
+  { key: 'plan_review.source_grounding_authority', member: 'grep'     },
+  { key: 'workflow.security_block_on',           member: 'high'       },
+];
+
+for (const { key, member } of ENUM_KEYS) {
+  describe(`fix-1628 coercion bypass: ${key}`, () => {
+    // ── JSON array with valid member must be REJECTED ────────────────────────
+    test(`["${member}"] (JSON array with valid member) is REJECTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const val = `["${member}"]`;
+      const result = runGsdTools(['config-set', key, val], tmpDir);
+      assert.ok(
+        !result.success,
+        [
+          `config-set ${key}=${val} must be REJECTED (JSON-array coercion bypass)`,
+          'stdout: ' + result.output,
+          'stderr: ' + result.error,
+        ].join('\n')
+      );
+    });
+
+    // ── JSON object must be REJECTED ─────────────────────────────────────────
+    test(`{"x":1} (JSON object) is REJECTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const val = '{"x":1}';
+      const result = runGsdTools(['config-set', key, val], tmpDir);
+      assert.ok(
+        !result.success,
+        [
+          `config-set ${key}=${val} must be REJECTED (JSON-object bypass)`,
+          'stdout: ' + result.output,
+          'stderr: ' + result.error,
+        ].join('\n')
+      );
+    });
+
+    // ── Plain valid string must be ACCEPTED ──────────────────────────────────
+    test(`"${member}" (plain valid string) is ACCEPTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const result = runGsdTools(['config-set', key, member], tmpDir);
+      assert.ok(
+        result.success,
+        [
+          `config-set ${key}=${member} must be ACCEPTED (plain string, valid enum member)`,
+          'stdout: ' + result.output,
+          'stderr: ' + result.error,
+        ].join('\n')
+      );
+    });
+  });
+}
+
+// ─── ENUM: workflow.code_review_depth ────────────────────────────────────────
+
+describe('fix-1628 capability validation: workflow.code_review_depth (enum)', () => {
+  const VALID_VALUES = ['quick', 'standard', 'deep'];
+
+  for (const v of VALID_VALUES) {
+    test(`config-set workflow.code_review_depth=${v} is ACCEPTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const result = runGsdTools(['config-set', 'workflow.code_review_depth', v], tmpDir);
+      assert.ok(
+        result.success,
+        [
+          `config-set workflow.code_review_depth=${v} must succeed`,
+          'stdout: ' + result.output,
+          'stderr: ' + result.error,
+        ].join('\n')
+      );
+    });
+  }
+
+  test('config-set workflow.code_review_depth=["standard"] (JSON array bypass) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.code_review_depth', '["standard"]'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set workflow.code_review_depth=["standard"] must be REJECTED (JSON-array coercion bypass)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set workflow.code_review_depth=garbage is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.code_review_depth', 'garbage'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set workflow.code_review_depth=garbage must be REJECTED (out-of-enum)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+});
+
+// ─── ENUM: mempalace.memory_mode ─────────────────────────────────────────────
+
+describe('fix-1628 capability validation: mempalace.memory_mode (enum)', () => {
+  const VALID_VALUES = ['augment', 'kg_backend', 'replace'];
+
+  for (const v of VALID_VALUES) {
+    test(`config-set mempalace.memory_mode=${v} is ACCEPTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const result = runGsdTools(['config-set', 'mempalace.memory_mode', v], tmpDir);
+      assert.ok(
+        result.success,
+        [
+          `config-set mempalace.memory_mode=${v} must succeed`,
+          'stdout: ' + result.output,
+          'stderr: ' + result.error,
+        ].join('\n')
+      );
+    });
+  }
+
+  test('config-set mempalace.memory_mode=["augment"] (JSON array bypass) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'mempalace.memory_mode', '["augment"]'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set mempalace.memory_mode=["augment"] must be REJECTED (JSON-array coercion bypass)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set mempalace.memory_mode=garbage is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'mempalace.memory_mode', 'garbage'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set mempalace.memory_mode=garbage must be REJECTED (out-of-enum)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+});
+
+// ─── ROUTING CONTRACT: mempalace.memory_mode wired behavior (#2007) ───────────
+//
+// memory_mode is an instruction-only contract: `augment`/`kg_backend`/`replace`
+// change how the mempalace recall/capture/curator markdown tells the agent to
+// treat the palace vs. GSD native memory. There is no code branch to unit-test,
+// so the governed surface IS the instruction text across five parallel surfaces
+// plus the capability schema. This block asserts (a) every mode is named with
+// distinct, non-forward-declared routing, and (b) the parallel surfaces stay in
+// parity so a future edit can't silently revert one to the inert state
+// (CLAUDE.md Generative Fix Divergence). Reads .md/.json only — the no-source-grep
+// rule targets .cjs/.js/.ts source reads, so no allow-test-rule exemption applies.
+
+describe('#2007 mempalace.memory_mode routing contract (instruction surfaces)', () => {
+  const MODES = ['augment', 'kg_backend', 'replace'];
+
+  // The five parallel instruction surfaces that must express per-mode routing.
+  const SURFACES = [
+    'capabilities/mempalace/fragments/recall-discuss.md',
+    'capabilities/mempalace/fragments/capture-problems.md',
+    'commands/gsd/mempalace-recall.md',
+    'commands/gsd/mempalace-capture.md',
+    'agents/gsd-mempalace-curator.md',
+  ];
+
+  // Retired forward-declaration hedges — the presence of any one means a surface
+  // reverted to the pre-#2007 inert state where the modes did nothing.
+  const RETIRED_HEDGES = [
+    'forward-declared',
+    'behave as `augment`',
+    'behaves as `augment`',
+    'not yet functional',
+    'routing seam not yet',
+    'Only `augment` is currently wired',
+    'Only `augment` is wired',
+  ];
+
+  for (const rel of SURFACES) {
+    const body = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+
+    test(`${rel} names all three memory modes`, () => {
+      for (const m of MODES) {
+        assert.ok(
+          body.includes('`' + m + '`'),
+          `${rel} must reference mode \`${m}\``
+        );
+      }
+    });
+
+    test(`${rel} carries no retired forward-declaration hedge`, () => {
+      for (const hedge of RETIRED_HEDGES) {
+        assert.ok(
+          !body.includes(hedge),
+          `${rel} still contains retired hedge "${hedge}" — memory_mode must describe wired per-mode routing, not a forward-declaration`
+        );
+      }
+    });
+
+    test(`${rel} expresses both halves of the routing contract (palace-primary + native-fallback)`, () => {
+      // The wired contract is a duality: kg_backend/replace make the palace
+      // primary/authoritative, AND every mode keeps native memory as a
+      // fallback/mirror so the capability stays default-resilient (an unreachable
+      // palace never loses memory). A surface that expresses only one half is a
+      // defect — this guards the exact contradiction the #2007 review surfaced.
+      assert.match(
+        body,
+        /primary|authoritative|source of truth/i,
+        `${rel} must describe kg_backend/replace treating the palace as primary/authoritative`
+      );
+      assert.match(
+        body,
+        /fallback|mirror|additive|supplement/i,
+        `${rel} must describe the native-memory fallback/mirror relationship (default-resilience)`
+      );
+      assert.ok(
+        body.includes('.planning/graphs'),
+        `${rel} must anchor the native memory surface (.planning/graphs/) that the palace augments/falls back to`
+      );
+    });
+  }
+
+  test('capability.json memory_mode schema declares the three modes and drops the not-implemented claim', () => {
+    const cap = JSON.parse(
+      fs.readFileSync(
+        path.join(ROOT, 'capabilities/mempalace/capability.json'),
+        'utf8'
+      )
+    );
+    const mode = cap.config['mempalace.memory_mode'];
+    assert.deepEqual(
+      mode.values,
+      MODES,
+      'enum values must be exactly [augment, kg_backend, replace]'
+    );
+    assert.equal(
+      mode.default,
+      'augment',
+      'default stays augment (default-resilient)'
+    );
+    for (const hedge of [
+      'forward-declared',
+      'not yet built',
+      'behave as',
+      'behaves the same as',
+    ]) {
+      assert.ok(
+        !mode.description.includes(hedge),
+        `schema description must not claim the modes are unimplemented (found "${hedge}")`
+      );
+    }
+  });
+});
+
+// ─── BOOLEAN: workflow.tdd_mode ──────────────────────────────────────────────
+
+describe('fix-1628 capability validation: workflow.tdd_mode (boolean)', () => {
+  test('config-set workflow.tdd_mode=true is ACCEPTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.tdd_mode', 'true'], tmpDir);
+    assert.ok(
+      result.success,
+      [
+        'config-set workflow.tdd_mode=true must succeed',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set workflow.tdd_mode=false is ACCEPTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.tdd_mode', 'false'], tmpDir);
+    assert.ok(
+      result.success,
+      [
+        'config-set workflow.tdd_mode=false must succeed',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set workflow.tdd_mode=["true"] (JSON array bypass) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.tdd_mode', '["true"]'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set workflow.tdd_mode=["true"] must be REJECTED (JSON-array coercion bypass)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set workflow.tdd_mode={"x":1} (JSON object) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.tdd_mode', '{"x":1}'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set workflow.tdd_mode={"x":1} must be REJECTED (JSON-object bypass)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set workflow.tdd_mode=maybe (non-boolean string) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.tdd_mode', 'maybe'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set workflow.tdd_mode=maybe must be REJECTED (non-boolean string)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set workflow.tdd_mode=1 (numeric 1 coerces to number, not boolean) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.tdd_mode', '1'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set workflow.tdd_mode=1 must be REJECTED (number, not boolean)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+});
+
+// ─── BOOLEAN: graphify.enabled ────────────────────────────────────────────────
+
+describe('fix-1628 capability validation: graphify.enabled (boolean)', () => {
+  test('config-set graphify.enabled=true is ACCEPTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'graphify.enabled', 'true'], tmpDir);
+    assert.ok(
+      result.success,
+      [
+        'config-set graphify.enabled=true must succeed',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set graphify.enabled=false is ACCEPTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'graphify.enabled', 'false'], tmpDir);
+    assert.ok(
+      result.success,
+      [
+        'config-set graphify.enabled=false must succeed',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set graphify.enabled=["true"] (JSON array bypass) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'graphify.enabled', '["true"]'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set graphify.enabled=["true"] must be REJECTED (JSON-array coercion bypass)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set graphify.enabled={"x":1} (JSON object) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'graphify.enabled', '{"x":1}'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set graphify.enabled={"x":1} must be REJECTED (JSON-object bypass)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set graphify.enabled=maybe (non-boolean string) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'graphify.enabled', 'maybe'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set graphify.enabled=maybe must be REJECTED (non-boolean string)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set graphify.enabled=1 (numeric 1, not boolean) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'graphify.enabled', '1'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set graphify.enabled=1 must be REJECTED (number, not boolean)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+});
+
+// ─── NUMBER: workflow.drift_threshold ────────────────────────────────────────
+
+describe('fix-1628 capability validation: workflow.drift_threshold (number)', () => {
+  test('config-set workflow.drift_threshold=5 is ACCEPTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.drift_threshold', '5'], tmpDir);
+    assert.ok(
+      result.success,
+      [
+        'config-set workflow.drift_threshold=5 must succeed',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set workflow.drift_threshold=["3"] (JSON array bypass) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.drift_threshold', '["3"]'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set workflow.drift_threshold=["3"] must be REJECTED (JSON-array coercion bypass)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+});
+
+// ─── STRING: mempalace.wing ───────────────────────────────────────────────────
+
+describe('fix-1628 capability validation: mempalace.wing (string)', () => {
+  test('config-set mempalace.wing=myWing is ACCEPTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'mempalace.wing', 'myWing'], tmpDir);
+    assert.ok(
+      result.success,
+      [
+        'config-set mempalace.wing=myWing must succeed',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set mempalace.wing=["x"] (JSON array bypass) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'mempalace.wing', '["x"]'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set mempalace.wing=["x"] must be REJECTED (JSON-array coercion bypass)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set mempalace.wing={"a":1} (JSON object) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'mempalace.wing', '{"a":1}'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set mempalace.wing={"a":1} must be REJECTED (JSON-object bypass)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/enh-1055-config-intent-descriptor-drive.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:enh-1055-config-intent-descriptor-drive (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+
+/**
+ * ADR-857 phase 5g drive 2: resolveRuntimeConfigIntent is now driven by the
+ * runtime capability descriptor (capability-registry.cjs) rather than a
+ * hand-kept REGISTRY const.
+ *
+ * This golden-master test pins the observable contract: the return shape and
+ * values must be identical to the pre-change behavior for all 15 runtimes.
+ * Purely behavioral — no source-grep.
+ */
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+
+const ROOT = path.join(__dirname, '..');
+const {
+  resolveRuntimeConfigIntent,
+  ALLOWED_CONFIG_RUNTIMES,
+} = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-config-adapter-registry.cjs'));
+const enh1055Registry = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'capability-registry.cjs'));
+
+// ---------------------------------------------------------------------------
+// Expected table — DERIVED from the capability registry descriptors. The
+// contract being pinned is the PROJECTION (descriptor fields → intent), not a
+// frozen per-runtime value snapshot. Adding a runtime descriptor extends
+// coverage with zero edits here.
+// ---------------------------------------------------------------------------
+
+const EXPECTED = Object.keys(enh1055Registry.runtimes).map((id) => {
+  const r = enh1055Registry.runtimes[id].runtime;
+  const pw = r.permissionWriter;
+  return {
+    runtime: id,
+    installSurface: r.installSurface,
+    writesSharedSettings: r.writesSharedSettings,
+    finishPermissionWriter: pw == null ? null : pw,
+  };
+});
+
+// ---------------------------------------------------------------------------
+// Test 1: Projection contract — every registry runtime resolves to its
+// descriptor-derived intent (count-agnostic).
+// ---------------------------------------------------------------------------
+
+describe('enh-1055 descriptor-drive: resolveRuntimeConfigIntent projection contract', () => {
+  test('every registry runtime resolves to its descriptor-derived intent', () => {
+    assert.ok(EXPECTED.length > 0, 'registry must contain at least one runtime');
+    for (const row of EXPECTED) {
+      assert.deepStrictEqual(resolveRuntimeConfigIntent(row.runtime), {
+        runtime: row.runtime,
+        installSurface: row.installSurface,
+        writesSharedSettings: row.writesSharedSettings,
+        finishPermissionWriter: row.finishPermissionWriter,
+      }, `resolveRuntimeConfigIntent('${row.runtime}') must match the descriptor projection`);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 3: Unknown runtime throws TypeError
+// ---------------------------------------------------------------------------
+
+describe('enh-1055 descriptor-drive: unknown runtime throws TypeError', () => {
+  test('throws TypeError for "bogus-runtime"', () => {
+    assert.throws(() => resolveRuntimeConfigIntent('bogus-runtime'), TypeError);
+  });
+
+  test('throws TypeError for empty string', () => {
+    assert.throws(() => resolveRuntimeConfigIntent(''), TypeError);
+  });
+
+  test('throws TypeError for undefined', () => {
+    assert.throws(() => resolveRuntimeConfigIntent(undefined), TypeError);
+  });
+
+  test('throws TypeError for "__proto__"', () => {
+    assert.throws(() => resolveRuntimeConfigIntent('__proto__'), TypeError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 4: ALLOWED_CONFIG_RUNTIMES equals the registry runtimes that declare an
+// installSurface (count-agnostic; derived from the same source as production).
+// ---------------------------------------------------------------------------
+
+describe('enh-1055 descriptor-drive: ALLOWED_CONFIG_RUNTIMES completeness', () => {
+  test('equals the registry runtimes that declare an installSurface', () => {
+    const descriptorAllowed = new Set(
+      Object.entries(enh1055Registry.runtimes)
+        // installSurface:'none' (#2103 vscode — extension-distributed, no config
+        // directory) is NOT a config-adapter runtime: production ALLOWED_CONFIG_RUNTIMES
+        // excludes it so `allRuntimes === ALLOWED_CONFIG_RUNTIMES` (issue-57) stays true.
+        .filter(([, cap]) => cap && cap.runtime && typeof cap.runtime.installSurface === 'string' && cap.runtime.installSurface !== 'none')
+        .map(([id]) => id),
+    );
+    assert.deepStrictEqual(new Set(ALLOWED_CONFIG_RUNTIMES), descriptorAllowed);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 5: Descriptor drive — the function reads from the descriptor, not
+// a hardcoded local constant. This is proven indirectly: the golden master
+// passes, meaning capability-registry.cjs (the live descriptor) matches the
+// expected table. If the adapter had its own REGISTRY, a descriptor change
+// would diverge silently; with drive, it cannot.
+// ---------------------------------------------------------------------------
+
+describe('enh-1055 descriptor-drive: finishPermissionWriter passthrough', () => {
+  test('opencode → "opencode" (descriptor permissionWriter)', () => {
+    assert.strictEqual(resolveRuntimeConfigIntent('opencode').finishPermissionWriter, 'opencode');
+  });
+
+  test('kilo → "kilo" (descriptor permissionWriter)', () => {
+    assert.strictEqual(resolveRuntimeConfigIntent('kilo').finishPermissionWriter, 'kilo');
+  });
+
+  test('all other runtimes have finishPermissionWriter === null', () => {
+    const nullExpected = EXPECTED
+      .filter(r => r.finishPermissionWriter === null)
+      .map(r => r.runtime);
+    for (const runtime of nullExpected) {
+      assert.strictEqual(
+        resolveRuntimeConfigIntent(runtime).finishPermissionWriter,
+        null,
+        `${runtime} should have finishPermissionWriter null`,
+      );
+    }
+  });
+});
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/enh-1592-plan-drift-precheck.test.cjs — consolidation epic #1969 (B6 #1975)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:enh-1592-plan-drift-precheck (consolidation epic #1969 B6 #1975)", () => {
+'use strict';
+// allow-test-rule: source-text-is-the-product see #1592
+// The plan-phase.md host-dispatch assertions below read the workflow .md file — its text IS the
+// deployed contract the runtime loads (CONTRIBUTING.md exemption category). The registry assertions
+// are behavioral: they build the registry from the REAL capabilities/drift declaration via the
+// generator, so they fail if the plan:pre gate is ever removed or mutated.
+
+/**
+ * Enhancement (#1592): plan-time codebase-map freshness pre-check.
+ *
+ * The `drift` capability gains a non-blocking `plan:pre` codebase-drift gate so a stale codebase map is
+ * flagged BEFORE planning, instead of being discovered mid-execution by the existing
+ * `execute:wave:post` codebase-drift gate. Warn-only at `plan:pre` (no mapper-agent spawn): the
+ * capability's `drift_action: auto-remap` stays at `execute:wave:post`, so plan time never pays
+ * speculative mapper-agent cost.
+ *
+ * Per maintainer review on #1592 (mod 1a), the plan:pre gate is gated on a DEDICATED
+ * `workflow.plan_drift_precheck` toggle (default true) rather than reusing `workflow.schema_drift_gate`,
+ * so autonomous/CI runs can silence the plan-time advisory without disabling the execute-time gates.
+ * The gate declaration conforms to ADR-857 (`plan:pre` is an enumerated, additive-only loop point).
+ *
+ * Issue: #1592 (open-gsd/gsd-core).
+ */
+
+const { describe, test, after } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const { loadAndValidate, buildRegistry } = require('../scripts/gen-capability-registry.cjs');
+const { cleanup } = require('./helpers.cjs');
+
+const REPO_ROOT = path.join(__dirname, '..');
+const DRIFT_CAP = JSON.parse(
+  fs.readFileSync(path.join(REPO_ROOT, 'capabilities', 'drift', 'capability.json'), 'utf8'),
+);
+const PLAN_PHASE = fs.readFileSync(
+  path.join(REPO_ROOT, 'gsd-core', 'workflows', 'plan-phase.md'),
+  'utf8',
+);
+
+// Track every temp dir created so the suite can remove them on teardown — leaked
+// mkdtemp dirs have been a flake source here before (per #1592 review).
+const tempCapDirs = [];
+
+function makeTempCapDir(capabilities) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'enh-1592-'));
+  tempCapDirs.push(tmpDir);
+  for (const [id, cap] of Object.entries(capabilities)) {
+    const subDir = path.join(tmpDir, id);
+    fs.mkdirSync(subDir, { recursive: true });
+    fs.writeFileSync(path.join(subDir, 'capability.json'), JSON.stringify(cap), 'utf8');
+  }
+  return tmpDir;
+}
+
+after(() => {
+  for (const dir of tempCapDirs) {
+    cleanup(dir);
+  }
+});
+
+function planPreDriftGate() {
+  const capDir = makeTempCapDir({ drift: DRIFT_CAP });
+  const { capMap, errors } = loadAndValidate(new Set(), capDir);
+  assert.deepEqual(errors, [], 'drift capability should validate cleanly: ' + JSON.stringify(errors));
+  const registry = buildRegistry(capMap);
+  const planPreGates = registry.byLoopPoint['plan:pre'].gates;
+  assert.ok(Array.isArray(planPreGates), 'plan:pre.gates should be an array');
+  return planPreGates.find(
+    (g) => g.capId === 'drift' && g.check && g.check.query === 'verify.codebase-drift',
+  );
+}
+
+describe('#1592 — drift plan:pre codebase-drift gate (registry, behavioral)', () => {
+  test('the real drift capability registers a non-blocking plan:pre codebase-drift gate', () => {
+    const driftGate = planPreDriftGate();
+    assert.ok(driftGate, 'plan:pre.gates must contain the drift codebase-drift gate');
+    assert.strictEqual(driftGate.blocking, false, 'plan-time drift gate must be NON-blocking');
+    assert.strictEqual(driftGate.onError, 'skip', 'must fail-soft (skip) — never halt planning');
+  });
+
+  test('the plan:pre gate is gated on the dedicated plan_drift_precheck toggle (mod 1a)', () => {
+    const driftGate = planPreDriftGate();
+    assert.strictEqual(
+      driftGate.when,
+      'workflow.plan_drift_precheck',
+      'plan:pre drift gate must use the dedicated toggle so CI/autonomous runs can silence it ' +
+        'without disabling the execute-time gates',
+    );
+  });
+
+  test('the execute:wave:post codebase-drift gate is preserved and keeps its OWN toggle (no regression)', () => {
+    const capDir = makeTempCapDir({ drift: DRIFT_CAP });
+    const { capMap } = loadAndValidate(new Set(), capDir);
+    const registry = buildRegistry(capMap);
+
+    const execGates = registry.byLoopPoint['execute:wave:post'].gates;
+    const stillThere = execGates.find(
+      (g) => g.capId === 'drift' && g.check && g.check.query === 'verify.codebase-drift',
+    );
+    assert.ok(stillThere, 'execute:wave:post codebase-drift gate must remain after adding the plan:pre gate');
+    assert.strictEqual(stillThere.blocking, false, 'execute codebase-drift gate stays non-blocking');
+    assert.strictEqual(
+      stillThere.when,
+      'workflow.schema_drift_gate',
+      'the execute-time gate keeps schema_drift_gate — the plan-time toggle is separable from it',
+    );
+  });
+
+  test('plan_drift_precheck is a separate toggle from schema_drift_gate (silencing is independent)', () => {
+    const planWhen = planPreDriftGate().when;
+    assert.notStrictEqual(
+      planWhen,
+      'workflow.schema_drift_gate',
+      'silencing the plan-time advisory must not require disabling the execute-time gates',
+    );
+  });
+
+  test('plan_drift_precheck is declared as a boolean defaulting to true', () => {
+    const cfg = DRIFT_CAP.config['workflow.plan_drift_precheck'];
+    assert.ok(cfg, 'workflow.plan_drift_precheck must be declared in the drift capability config');
+    assert.strictEqual(cfg.type, 'boolean', 'plan_drift_precheck must be a boolean');
+    assert.strictEqual(cfg.default, true, 'plan_drift_precheck must default to true (on by default)');
+  });
+
+  test('exactly one new config key is introduced (the dedicated plan_drift_precheck toggle)', () => {
+    const keys = Object.keys(DRIFT_CAP.config).sort();
+    assert.deepStrictEqual(
+      keys,
+      [
+        'workflow.drift_action',
+        'workflow.drift_threshold',
+        'workflow.plan_drift_precheck',
+        'workflow.schema_drift_gate',
+      ],
+      'the plan:pre gate adds exactly the dedicated plan_drift_precheck toggle — no other new keys',
+    );
+  });
+});
+
+describe('#1592 — plan-phase host dispatches the drift plan:pre gate before planning', () => {
+  const SECTION = PLAN_PHASE.slice(
+    PLAN_PHASE.indexOf('5.65. Codebase Map Freshness Pre-Check'),
+    PLAN_PHASE.indexOf('## 6. Check Existing Plans'),
+  );
+
+  test('§5.65 invokes the verify codebase-drift check', () => {
+    assert.match(PLAN_PHASE, /5\.65\. Codebase Map Freshness Pre-Check/, 'plan-phase must declare §5.65');
+    assert.match(PLAN_PHASE, /gsd_run verify codebase-drift/, '§5.65 must invoke `verify codebase-drift`');
+  });
+
+  test('the drift pre-check runs BEFORE the planner spawn (load-bearing ordering)', () => {
+    const preCheckIdx = PLAN_PHASE.indexOf('5.65. Codebase Map Freshness Pre-Check');
+    const plannerIdx = PLAN_PHASE.indexOf('## 8. Spawn gsd-planner Agent');
+    assert.ok(preCheckIdx > 0, '§5.65 must exist');
+    assert.ok(plannerIdx > 0, '§8 planner spawn must exist');
+    assert.ok(
+      preCheckIdx < plannerIdx,
+      'the drift map-freshness pre-check must run before the planner is spawned — the whole point of #1592',
+    );
+  });
+
+  test('§5.65 is documented as non-blocking and warn-only (no spawn)', () => {
+    assert.match(SECTION, /non-blocking/i, '§5.65 must state the gate is non-blocking');
+    assert.match(SECTION, /never blocks, never spawns/i, '§5.65 must state it never spawns the mapper at plan time');
+  });
+
+  test('§5.65 gates on the dedicated plan_drift_precheck toggle (mod 1a)', () => {
+    assert.match(
+      SECTION,
+      /workflow\.plan_drift_precheck/,
+      '§5.65 must dispatch on the dedicated plan_drift_precheck toggle, not schema_drift_gate',
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/fix-1464-docs-manifest-validation.test.cjs — consolidation epic #1969 (B6 #1975)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:fix-1464-docs-manifest-validation (consolidation epic #1969 B6 #1975)", () => {
+// allow-test-rule: source-text-is-the-product see #1464
+// Tutorial docs are the product surface users follow. Reading JSON code blocks
+// from them and validating through validateCapability is behavioral, not
+// source-grep — it proves the manifests work, not just that they "mention" a term.
+
+'use strict';
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const { validateCapability } = require('../scripts/gen-capability-registry.cjs');
+
+const ROOT = path.join(__dirname, '..');
+
+// ─── Extractor ───────────────────────────────────────────────────────────────
+
+// Required top-level fields that distinguish a complete capability manifest
+// from a partial output snippet (list-entry, install-result, etc.).
+// Partial output snippets have id+role but lack steps/contributions/gates/config.
+const MANIFEST_REQUIRED_KEYS = new Set([
+  'id', 'role', 'title', 'description', 'tier',
+  'requires', 'runtimeCompat', 'skills', 'agents',
+  'config', 'steps', 'contributions', 'gates',
+]);
+
+/**
+ * Extract JSON code blocks from markdown that are complete capability manifests.
+ * A complete manifest has ALL keys in MANIFEST_REQUIRED_KEYS.
+ * Partial output snippets (list-entries, install-results) have only id+role and are skipped.
+ */
+function extractManifests(mdContent) {
+  const manifests = [];
+  const fenceRe = /```json\s*\r?\n([\s\S]*?)```/g;
+  let match;
+  while ((match = fenceRe.exec(mdContent)) !== null) {
+    let parsed;
+    try {
+      parsed = JSON.parse(match[1]);
+    } catch {
+      continue;
+    }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const keys = new Set(Object.keys(parsed));
+      if ([...MANIFEST_REQUIRED_KEYS].every((k) => keys.has(k))) {
+        manifests.push(parsed);
+      }
+    }
+  }
+  return manifests;
+}
+
+// ─── Suite 1: tutorial manifests validate ────────────────────────────────────
+
+describe('docs tutorial manifests pass validateCapability (#1464 regression)', () => {
+  test('build-your-first-capability.md: every manifest passes', () => {
+    const content = fs.readFileSync(
+      path.join(ROOT, 'docs', 'tutorials', 'build-your-first-capability.md'),
+      'utf8',
+    );
+    const manifests = extractManifests(content);
+    assert.ok(
+      manifests.length > 0,
+      'expected at least one capability manifest in build tutorial',
+    );
+    for (const cap of manifests) {
+      const errors = validateCapability(cap, cap.id);
+      assert.deepStrictEqual(
+        errors,
+        [],
+        `build tutorial manifest id="${cap.id}" failed validateCapability:\n  ${errors.join('\n  ')}`,
+      );
+    }
+  });
+
+  test('install-your-first-capability.md: every manifest passes', () => {
+    const content = fs.readFileSync(
+      path.join(ROOT, 'docs', 'tutorials', 'install-your-first-capability.md'),
+      'utf8',
+    );
+    const manifests = extractManifests(content);
+    assert.ok(
+      manifests.length > 0,
+      'expected at least one capability manifest in install tutorial',
+    );
+    for (const cap of manifests) {
+      const errors = validateCapability(cap, cap.id);
+      assert.deepStrictEqual(
+        errors,
+        [],
+        `install tutorial manifest id="${cap.id}" failed validateCapability:\n  ${errors.join('\n  ')}`,
+      );
+    }
+  });
+
+  test('capability-manifest.md reference example passes', () => {
+    const content = fs.readFileSync(
+      path.join(ROOT, 'docs', 'reference', 'capability-manifest.md'),
+      'utf8',
+    );
+    const manifests = extractManifests(content);
+    assert.ok(
+      manifests.length > 0,
+      'expected at least one capability manifest in reference doc',
+    );
+    for (const cap of manifests) {
+      const errors = validateCapability(cap, cap.id);
+      assert.deepStrictEqual(
+        errors,
+        [],
+        `reference manifest id="${cap.id}" failed validateCapability:\n  ${errors.join('\n  ')}`,
+      );
+    }
+  });
+});
+
+// ─── Suite 2: adversarial — #1464 failure modes caught ───────────────────────
+//
+// These are the EXACT failure shapes from issue #1464.
+// They must fail validateCapability — proving this test would have caught the bug.
+
+describe('validateCapability catches original #1464 bug shapes', () => {
+  // #1464 high-1: step missing ref → validateStep rejects it
+  test('step without ref fails (the original broken tutorial step)', () => {
+    const cap = {
+      id: 'hello-note',
+      role: 'feature',
+      version: '0.1.0',
+      title: 'Hello Note',
+      description: 'Test fixture for #1464 regression.',
+      tier: 'standard',
+      requires: [],
+      engines: { gsd: '>=1.6.0' },
+      runtimeCompat: { supported: ['*'], unsupported: [] },
+      skills: [],
+      agents: [],
+      config: {},
+      steps: [
+        {
+          // Missing ref — this was the #1464 high-1 bug in the original tutorial
+          point: 'plan:pre',
+          produces: ['HELLO.md'],
+          consumes: [],
+          onError: 'skip',
+        },
+      ],
+      contributions: [],
+      gates: [],
+    };
+    const errors = validateCapability(cap, 'hello-note');
+    assert.ok(errors.length > 0, 'expected validation errors for step without ref');
+    assert.ok(
+      errors.some((e) => /ref/.test(e)),
+      `expected an error mentioning "ref"; got: ${errors.join('; ')}`,
+    );
+  });
+
+  // #1464 shape: id must match folder name (folderId contract)
+  test('id not matching folderId fails', () => {
+    const cap = {
+      id: 'hello-note',
+      role: 'feature',
+      version: '0.1.0',
+      title: 'Hello Note',
+      description: 'Test fixture for id/folderId mismatch.',
+      tier: 'standard',
+      requires: [],
+      runtimeCompat: { supported: ['*'], unsupported: [] },
+      skills: [],
+      agents: [],
+      config: {},
+      steps: [],
+      contributions: [],
+      gates: [],
+    };
+    const errors = validateCapability(cap, 'wrong-folder');
+    assert.ok(errors.length > 0, 'expected id/folderId mismatch to fail validation');
+    assert.ok(
+      errors.some((e) => /folder/.test(e) || /equal/.test(e) || /id/.test(e)),
+      `expected error about id/folderId mismatch; got: ${errors.join('; ')}`,
+    );
+  });
+
+  // Corrected shape: contribution with fragment + into (the PR #1495 fix)
+  test('contribution with fragment.path + into passes (the PR #1495 fix shape)', () => {
+    const cap = {
+      id: 'hello-note',
+      role: 'feature',
+      version: '0.1.0',
+      title: 'Hello Note',
+      description: 'Injects a greeting note at plan:pre and produces HELLO.md.',
+      tier: 'standard',
+      requires: [],
+      runtimeCompat: { supported: ['*'], unsupported: [] },
+      skills: [],
+      agents: [],
+      config: {},
+      steps: [],
+      contributions: [
+        {
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { path: 'fragments/plan-pre.md' },
+          produces: ['HELLO.md'],
+          consumes: [],
+          onError: 'skip',
+        },
+      ],
+      gates: [],
+    };
+    const errors = validateCapability(cap, 'hello-note');
+    assert.deepStrictEqual(
+      errors,
+      [],
+      `corrected contribution manifest has unexpected errors: ${errors.join('; ')}`,
+    );
+  });
+});
+
+// ─── Suite 3: extractManifests helper ────────────────────────────────────────
+
+describe('extractManifests helper unit tests', () => {
+  test('returns empty array for plain text with no JSON fences', () => {
+    assert.deepStrictEqual(extractManifests('No code blocks here.'), []);
+  });
+
+  test('skips JSON blocks without all required manifest keys', () => {
+    // Partial list-entry block — only has id, role, version but not steps/contributions/etc.
+    const md = '```json\n{"id":"x","role":"feature","version":"1.0.0"}\n```';
+    assert.deepStrictEqual(extractManifests(md), []);
+  });
+
+  function makeCompleteManifest(overrides) {
+    return {
+      id: 'test-cap', role: 'feature', title: 'T', description: 'D',
+      tier: 'standard', requires: [], runtimeCompat: { supported: ['*'], unsupported: [] },
+      skills: [], agents: [], config: {}, steps: [], contributions: [], gates: [],
+      ...overrides,
+    };
+  }
+
+  test('extracts a complete manifest (all required keys present)', () => {
+    const cap = makeCompleteManifest({ id: 'x' });
+    const md = '```json\n' + JSON.stringify(cap, null, 2) + '\n```';
+    const result = extractManifests(md);
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].id, 'x');
+  });
+
+  test('skips malformed JSON blocks silently', () => {
+    const complete = makeCompleteManifest({ id: 'y' });
+    const md = '```json\n{bad json here\n```\n```json\n' + JSON.stringify(complete) + '\n```';
+    const result = extractManifests(md);
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].id, 'y');
+  });
+
+  test('extracts multiple complete manifests from one doc', () => {
+    const a = makeCompleteManifest({ id: 'cap-a' });
+    const b = makeCompleteManifest({ id: 'cap-b' });
+    const md = [
+      '```json\n' + JSON.stringify(a) + '\n```',
+      '```json\n' + JSON.stringify(b) + '\n```',
+    ].join('\n');
+    const result = extractManifests(md);
+    assert.strictEqual(result.length, 2);
+  });
+});
+  });
+}

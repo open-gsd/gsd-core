@@ -7,7 +7,8 @@ One-liner refresher for returning users. Output ONLY the `<reference>` content b
 
 ```text
 /gsd:new-project           Initialize a project (greenfield)
-/gsd:map-codebase          Map an existing codebase (brownfield)
+/gsd:onboard               Onboard an existing codebase (brownfield)
+/gsd:map-codebase          Refresh/map codebase intelligence
 /gsd:plan-phase <N>        Create a phase plan
 /gsd:execute-phase <N>     Execute a phase
 /gsd:progress              Where am I, what's next

@@ -1,16 +1,23 @@
 {
   "id": "cline",
   "role": "runtime",
+  "version": "1.8.0",
   "title": "Cline",
   "description": "Cline (VS Code extension) — global-only nested-skill layout; cline-rules hook surface (.clinerules); no hook events emitted; tier-2 support.",
   "tier": "core",
   "requires": [],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
   "runtime": {
     "configHome": {
       "kind": "dot-home",
       "name": ".cline",
-      "env": ["CLINE_CONFIG_DIR"]
+      "env": [
+        "CLINE_CONFIG_DIR"
+      ]
     },
+    "localConfigDir": ".cline",
     "configFormat": "markdown-dir",
     "artifactLayout": {
       "global": [
@@ -32,6 +39,32 @@
     "installSurface": "cline-rules",
     "writesSharedSettings": false,
     "permissionWriter": null,
-    "extendedHookEvents": []
+    "extendedHookEvents": [],
+    "hostIntegration": {
+      "embeddingMode": "imperative",
+      "commandSurface": "slash-file",
+      "dispatch": {
+        "namedDispatch": true,
+        "nested": false,
+        "maxDepth": 1,
+        "background": true,
+        "subagentToolkit": "read-only",
+        "backgroundDispatch": false
+      },
+      "modelMode": "active",
+      "hookBus": "host",
+      "stateIO": "filesystem",
+      "transport": "mcp",
+      "runtime": "node",
+      "effortSurface": "undocumented"
+    },
+    "hostBehaviors": {
+      "reapplyCommand": "/gsd-update --reapply",
+      "frontmatterDialect": "cline",
+      "skipSharedHooksInstall": true,
+      "localTargetIsProjectRoot": true,
+      "clineRulesSurface": true,
+      "localCommandsViaRules": true
+    }
   }
 }

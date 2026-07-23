@@ -31,7 +31,7 @@
         ]
       },
       {
-        "matcher": "Read",
+        "matcher": "Read|WebFetch|WebSearch",
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/gsd-read-injection-scanner.js\"", "timeout": 5 }
         ]

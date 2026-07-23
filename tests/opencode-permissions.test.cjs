@@ -21,6 +21,7 @@ const path = require('node:path');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { configureOpencodePermissions } = require('../bin/install.js');
+const { PACKAGE_NAME } = require('../gsd-core/bin/lib/package-identity.cjs');
 
 const installSrc = fs.readFileSync(path.join(__dirname, '..', 'bin', 'install.js'), 'utf8');
 
@@ -76,6 +77,34 @@ describe('configureOpencodePermissions', () => {
 
     assert.strictEqual(config.permission.read[gsdPath], 'allow');
     assert.strictEqual(config.permission.external_directory[gsdPath], 'allow');
+  });
+
+  test('registers the companion MCP server (mcp.gsd) for object configs (#1682)', () => {
+    const configPath = path.join(configDir, 'opencode.json');
+    fs.writeFileSync(configPath, JSON.stringify({ permission: {} }, null, 2) + '\n');
+    process.env.OPENCODE_CONFIG_DIR = configDir;
+
+    configureOpencodePermissions(true, configDir);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    assert.deepEqual(config.mcp.gsd, {
+      type: 'local',
+      command: ['npx', '-y', '-p', PACKAGE_NAME, 'gsd-mcp-server'],
+      enabled: true,
+    });
+  });
+
+  test('does not clobber a user-defined mcp.gsd entry (#1682)', () => {
+    const configPath = path.join(configDir, 'opencode.json');
+    const userMcp = { type: 'local', command: ['node', '/custom/server.js'], enabled: false };
+    fs.writeFileSync(configPath, JSON.stringify({ permission: {}, mcp: { gsd: userMcp } }, null, 2) + '\n');
+    process.env.OPENCODE_CONFIG_DIR = configDir;
+
+    configureOpencodePermissions(true, configDir);
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    // User's own mcp.gsd is preserved untouched (Hyrum's Law — non-clobbering).
+    assert.deepEqual(config.mcp.gsd, userMcp);
   });
 
   test('finishInstall passes the actual config dir to OpenCode permissions', () => {

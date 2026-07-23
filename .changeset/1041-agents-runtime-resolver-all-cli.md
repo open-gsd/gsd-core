@@ -1,5 +1,0 @@
----
-type: Fixed
-pr: 1045
----
-**Agent SDK/state/commit steps now resolve `gsd-tools` on shim-only installs for every runtime** — source `agents/*.md` (`gsd-planner`, `gsd-executor`, `gsd-verifier`, `gsd-plan-checker`, …) invoked bare `gsd-tools …`, which fails with `command not found` on shim-only installs where the binary is only reachable as `<runtime-home>/gsd-core/bin/gsd-tools.cjs` and is not on `PATH`. The agent then silently skipped init/state/validate/commit ceremony. #725 fixed only Codex's conversion layer; the source agents were never migrated, so the bug persisted on Claude Code and every other runtime that consumes the source agents directly. All 12 `gsd-tools`-calling agents now carry the canonical multi-runtime `gsd_run` resolver (the same preamble the workflow launchers use — covering claude/codex/cursor/gemini/copilot/windsurf/augment/trae/qwen/cline/opencode/kilo/hermes/antigravity homes), `gsd-phase-researcher`'s stale claude-only resolver is upgraded to the canonical one, and the launcher-parity + bare-call regression guards are extended to `agents/` so no runtime can silently regress. (#1041)

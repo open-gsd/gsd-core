@@ -161,7 +161,13 @@ describe('ci-test-scope.cjs', () => {
       `expected product_changed=true for bin/gsd, got: ${JSON.stringify(result)}`);
     assert.strictEqual(result.full_matrix, true);
     assert.ok(result.targeted_tests.includes('tests/install.test.cjs'));
-    assert.ok(result.targeted_tests.includes('tests/release-tarball-smoke.install.test.cjs'));
+    // release-tarball-smoke.install.test.cjs is intentionally EXCLUDED from the
+    // scoped/targeted lane (SCOPED_LANE_EXCLUDE in ci-test-scope.cjs): it is a
+    // 3–6 min npm-pack + global-install integration test that runs via its own
+    // install-smoke.yml workflow, not here — running it in the scoped lane too is
+    // redundant and overran the per-chunk Windows timeout (epic #1969).
+    assert.ok(!result.targeted_tests.includes('tests/release-tarball-smoke.install.test.cjs'),
+      `release-tarball-smoke.install.test.cjs must not be in the scoped targeted lane; got: ${JSON.stringify(result.targeted_tests)}`);
   });
 
   test('missing required CLI values fail with usage', () => {
@@ -285,12 +291,12 @@ describe('ci-test-scope superset invariant (#494, narrowed)', () => {
   // so OS-specific breakage in the changed test (the #482 class) is still
   // exercised pre-merge. Ubuntu 22/24 coverage comes via targeted_tests.
   test('A1: a changed test file joins the windows scoped lane without full_matrix', () => {
-    const result = scopeFor(['tests/bug-1974-context-exhaustion-record.test.cjs']);
+    const result = scopeFor(['tests/perf-317-context-monitor-fs.test.cjs']);
     assert.strictEqual(result.full_matrix, false,
       `expected full_matrix=false for a tests/**-only change, got: ${JSON.stringify(result)}`);
-    assert.ok(result.targeted_tests.includes('tests/bug-1974-context-exhaustion-record.test.cjs'),
+    assert.ok(result.targeted_tests.includes('tests/perf-317-context-monitor-fs.test.cjs'),
       `expected the changed test in targeted_tests, got: ${JSON.stringify(result.targeted_tests)}`);
-    assert.ok(result.windows_tests.includes('tests/bug-1974-context-exhaustion-record.test.cjs'),
+    assert.ok(result.windows_tests.includes('tests/perf-317-context-monitor-fs.test.cjs'),
       `expected the changed test in windows_tests, got: ${JSON.stringify(result.windows_tests)}`);
   });
 
@@ -431,7 +437,7 @@ describe('test.yml changes job contract (#837)', () => {
   test('changes job checkout step sets fetch-depth: 0 (required for three-dot diff merge-base)', () => {
     const workflowPath = path.join(WORKFLOWS_DIR, 'test.yml');
     const text = fs.readFileSync(workflowPath, 'utf8');
-    const lines = text.split('\n');
+    const lines = text.split(/\r?\n/);
 
     // Locate the `changes:` job (two-space-indented top-level job key).
     const jobStart = lines.findIndex(l => /^ {2}changes:\s*$/.test(l));
@@ -486,7 +492,7 @@ describe('test-full shard matrix parity (#1212)', () => {
     const n = distinctShards.length;
 
     // Distinct shard values must be exactly 1..n (1-based, contiguous) so the
-    // runner's round-robin selection covers every file with no gaps/overlaps.
+    // runner's cost-balanced shard selection covers every file with no gaps/overlaps.
     assert.deepStrictEqual(
       distinctShards,
       Array.from({ length: n }, (_, i) => i + 1),
@@ -531,6 +537,62 @@ describe('test-full shard matrix parity (#1212)', () => {
     );
   });
 
+  // #2472: every job of a run must merge ONE base commit. Each job runs the
+  // rebase-check step independently, minutes apart across the matrix, so
+  // merging the moving branch ref lets jobs see different trees when the base
+  // advances mid-run. The sharded lane makes jobs agree on a PARTITION, and
+  // disagreement there places a file in two shards or none — silently, because
+  // each job stays internally consistent and CI stays green.
+  describe('#2472 base-commit pin', () => {
+    const { resolveBaseRefs } = require('../scripts/ci-rebase-check.cjs');
+    const SHA = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
+
+    test('every rebase-check step pins CI_REBASE_BASE_SHA', () => {
+      const doc = yaml.load(fs.readFileSync(path.join(WORKFLOWS_DIR, 'test.yml'), 'utf8'));
+      const steps = Object.values(doc.jobs)
+        .flatMap(j => j.steps || [])
+        .filter(s => typeof s.run === 'string' && s.run.includes('ci-rebase-check.cjs'));
+      assert.ok(steps.length > 0, 'expected at least one rebase-check step');
+      for (const s of steps) {
+        assert.ok(
+          s.env && typeof s.env.CI_REBASE_BASE_SHA === 'string' && s.env.CI_REBASE_BASE_SHA.includes('base.sha'),
+          'each rebase-check step must pin CI_REBASE_BASE_SHA to the PR base sha; '
+          + 'an unpinned job can merge a different tree than its siblings',
+        );
+      }
+    });
+
+    test('a full 40-hex sha pins both fetch and merge to that commit', () => {
+      const r = resolveBaseRefs({ GITHUB_BASE_REF: 'next', CI_REBASE_BASE_SHA: SHA }, 'main');
+      assert.strictEqual(r.fetchRef, SHA);
+      assert.strictEqual(r.mergeRef, SHA, 'fetch and merge must target the same pinned commit');
+      assert.strictEqual(r.pinned, true);
+    });
+
+    test('no pin falls back to the branch ref (push / workflow_dispatch)', () => {
+      const r = resolveBaseRefs({ GITHUB_BASE_REF: 'next' }, 'main');
+      assert.strictEqual(r.fetchRef, 'next');
+      assert.strictEqual(r.mergeRef, 'origin/next');
+      assert.strictEqual(r.pinned, false);
+    });
+
+    // A non-sha value must never reach `git fetch` as a refspec.
+    for (const [label, value] of [
+      ['short sha', 'abc123'],
+      ['uppercase sha', 'A'.repeat(40)],
+      ['argument injection', 'next --upload-pack=evil'],
+      ['ref expression', 'next^{commit}'],
+      ['empty', ''],
+    ]) {
+      test(`rejects ${label} and falls back to the branch ref`, () => {
+        const r = resolveBaseRefs({ GITHUB_BASE_REF: 'next', CI_REBASE_BASE_SHA: value }, 'main');
+        assert.strictEqual(r.pinned, false, `"${value}" must not be accepted as a pin`);
+        assert.strictEqual(r.fetchRef, 'next');
+        assert.strictEqual(r.mergeRef, 'origin/next');
+      });
+    }
+  });
+
   test('required-tests fan-in still needs test-full and keeps the protected name', () => {
     // Hyrum's Law: branch protection requires a status check literally named
     // "Required tests". Renaming it (or dropping test-full from its needs)
@@ -543,6 +605,105 @@ describe('test-full shard matrix parity (#1212)', () => {
     assert.ok(
       Array.isArray(fanIn.needs) && fanIn.needs.includes('test-full'),
       'required-tests must `needs: test-full` so all shard legs aggregate into the gate',
+    );
+  });
+});
+
+describe('golden-install-parity selection (#1691 drift guard)', () => {
+  // Regression: a src/*.cts-only edit recompiles bin/lib/*.cjs (changing installed
+  // hashes), but the scoped CI lane was not re-running golden-install-parity —
+  // causing golden fixtures to silently drift (#1691 milestone/roadmap cts change).
+  // Both the 'TS runtime sources' and 'installer and package layout' rules must now
+  // select tests/golden-install-parity.test.cjs.
+
+  test('src/*.cts change selects golden-install-parity (TS runtime sources rule)', () => {
+    const result = scopeFor(['src/milestone.cts']);
+    assert.strictEqual(result.code_changed, true,
+      `expected code_changed=true for src/ change, got: ${JSON.stringify(result)}`);
+    assert.ok(
+      result.targeted_tests.includes('tests/golden-install-parity.test.cjs'),
+      `expected golden-install-parity in targeted_tests for src/*.cts change, got: ${JSON.stringify(result.targeted_tests)}`,
+    );
+  });
+
+  test('bin/install.js change selects golden-install-parity (installer and package layout rule)', () => {
+    const result = scopeFor(['bin/install.js']);
+    assert.strictEqual(result.code_changed, true,
+      `expected code_changed=true for bin/ change, got: ${JSON.stringify(result)}`);
+    assert.ok(
+      result.targeted_tests.includes('tests/golden-install-parity.test.cjs'),
+      `expected golden-install-parity in targeted_tests for bin/install.js change, got: ${JSON.stringify(result.targeted_tests)}`,
+    );
+  });
+});
+
+describe('shipped install content (golden-parity drift guard, #2267)', () => {
+  // #2266 regression: hooks/gsd-statusline.js changed installed output but no
+  // RULES entry selected golden-install-parity, so stale golden fixtures merged
+  // to `next` undetected. The installer emits hooks/*, commands/*, agents/*,
+  // skills/*, gsd-core/workflows/*, gsd-core/templates/*, gsd-core/references/*,
+  // gsd-core/bin/shared/*.json, and a handful of shipped scripts/* files — every
+  // one of those paths must additionally select golden-install-parity AND the
+  // install-tree snapshot (union semantics: this rule ADDS to whatever
+  // content-specific rule already matched the path).
+  // One path per prefix the rule handles — every installed-source dir the
+  // installer emits. gsd-core/contexts/ is the regression for the review miss
+  // (a real shipped dir that the initial enumeration omitted).
+  const SHIPPED_PATHS = [
+    'hooks/gsd-statusline.js', // exact #2266 regression
+    'gsd-core/workflows/plan-phase.md',
+    'gsd-core/templates/config.json',
+    'gsd-core/references/ui-brand.md',
+    'gsd-core/contexts/dev.md', // regression: initially omitted from the rule
+    'agents/gsd-planner.md',
+    'commands/gsd/mempalace-capture.md',
+    'skills/gsd-explore/SKILL.md',
+    'gsd-core/bin/shared/model-catalog.json',
+    'scripts/changeset/lint.cjs',
+    'scripts/lib/cli-exit.cjs',
+    'scripts/fix-slash-commands.cjs',            // exact-match allowlist entry
+    'scripts/gen-capability-registry.cjs',       // exact-match allowlist entry
+    'scripts/gen-loop-host-contract.cjs',        // exact-match allowlist entry
+  ];
+
+  for (const file of SHIPPED_PATHS) {
+    test(`${file} selects golden-install-parity + golden-install-tree`, () => {
+      const result = scopeFor([file]);
+      assert.strictEqual(result.code_changed, true,
+        `expected code_changed=true for ${file}, got: ${JSON.stringify(result)}`);
+      assert.ok(
+        result.targeted_tests.includes('tests/golden-install-parity.test.cjs'),
+        `expected golden-install-parity in targeted_tests for ${file}, got: ${JSON.stringify(result.targeted_tests)}`,
+      );
+      assert.ok(
+        result.targeted_tests.includes('tests/golden-install-tree.test.cjs'),
+        `expected golden-install-tree in targeted_tests for ${file}, got: ${JSON.stringify(result.targeted_tests)}`,
+      );
+    });
+  }
+
+  test('docs/ change does NOT select golden-install-parity (negative case)', () => {
+    const result = scopeFor(['docs/usage.md']);
+    assert.strictEqual(result.code_changed, false,
+      `expected code_changed=false for docs-only change, got: ${JSON.stringify(result)}`);
+    assert.ok(
+      !result.targeted_tests.includes('tests/golden-install-parity.test.cjs'),
+      `docs-only change must NOT select golden-install-parity, got: ${JSON.stringify(result.targeted_tests)}`,
+    );
+  });
+
+  test('non-shipped scripts/ file does NOT select golden-install-tree (allowlist is exact)', () => {
+    // The rule allowlists only 3 named scripts + scripts/changeset|lib/. A
+    // sibling script that is code but NOT installed verbatim must NOT pull in
+    // the install-tree snapshot — proving this is not a blanket 'scripts/'
+    // prefix that would re-run the golden on every script edit. Assert on
+    // golden-install-TREE (the rule's dedicated test), not parity: many scripts/
+    // paths legitimately select parity via the installer rule's
+    // path.includes('install') substring.
+    const result = scopeFor(['scripts/build-hooks.js']);
+    assert.ok(
+      !result.targeted_tests.includes('tests/golden-install-tree.test.cjs'),
+      `non-shipped script must NOT select golden-install-tree, got: ${JSON.stringify(result.targeted_tests)}`,
     );
   });
 });
@@ -601,3 +762,262 @@ describe('code_changed=false implies clean output invariant', () => {
     }
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-641-files-from-suite-token.test.cjs — consolidation epic #1969 (B6 #1975)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-641-files-from-suite-token (consolidation epic #1969 B6 #1975)", () => {
+// Regression test for issue #641:
+// `--files-from` with a bare suite token (e.g. "unit") crashes with
+// "requested test file(s) not found: unit" instead of expanding the token
+// to the matching suite's files.
+//
+// The bug: selectExplicitFiles() checked `available.has('unit')` against the
+// set of *.test.cjs filenames. 'unit' is not a filename, so it landed in
+// `missing` and caused exit 2. The fix teaches selectExplicitFiles() to
+// delegate bare SUITES members to selectFiles() before the path-existence
+// check.
+'use strict';
+
+const { describe, test, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const { spawnSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+const { createTempDir, cleanup } = require('./helpers.cjs');
+
+const HARNESS = path.join(__dirname, '..', 'scripts', 'run-tests.cjs');
+
+const PASS_BODY = `'use strict';
+const { test } = require('node:test');
+test('noop', () => {});
+`;
+
+function seed(dir, names) {
+  for (const name of names) {
+    fs.writeFileSync(path.join(dir, name), PASS_BODY, 'utf8');
+  }
+}
+
+function runHarness(testDir, args = [], extraEnv = {}) {
+  const env = { ...process.env, GSD_TEST_DIR: testDir, ...extraEnv };
+  delete env.NODE_TEST_CONTEXT;
+  return spawnSync(process.execPath, [HARNESS, ...args], {
+    cwd: path.join(__dirname, '..'),
+    env,
+    encoding: 'utf8',
+  });
+}
+
+describe('bug #641 — --files-from with bare suite token', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-641-suite-token-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('--files-from with bare "unit" token expands to unit suite, does not exit 2', () => {
+    // Seed a mix: one unit file, one security file.
+    seed(tmpDir, ['a.test.cjs', 'b.security.test.cjs']);
+    const listPath = path.join(tmpDir, 'ci-selected-tests.txt');
+    fs.writeFileSync(listPath, 'unit\n', 'utf8');
+
+    const r = runHarness(tmpDir, ['--files-from', listPath]);
+
+    // Must NOT exit 2 with the "not found" error.
+    assert.notStrictEqual(
+      r.status,
+      2,
+      `Expected exit 0 or 1, got 2.\nstderr: ${r.stderr}\nstdout: ${r.stdout}`,
+    );
+    assert.doesNotMatch(
+      r.stderr,
+      /requested test file\(s\) not found: unit/,
+      `Must not emit "not found: unit".\nstderr: ${r.stderr}`,
+    );
+    // The unit suite file (a.test.cjs) must appear in the run.
+    assert.ok(
+      r.stderr.includes('a.test.cjs'),
+      `Expected a.test.cjs (unit suite) to be selected.\nstderr: ${r.stderr}`,
+    );
+    // The security suite file must NOT be included (unit token = unit only).
+    assert.ok(
+      !r.stderr.includes('b.security.test.cjs'),
+      `Expected b.security.test.cjs (security suite) to be excluded.\nstderr: ${r.stderr}`,
+    );
+  });
+
+  test('--files-from with bare "unit" token exits 0 (tests run successfully)', () => {
+    seed(tmpDir, ['a.test.cjs']);
+    const listPath = path.join(tmpDir, 'ci-selected-tests.txt');
+    fs.writeFileSync(listPath, 'unit\n', 'utf8');
+
+    const r = runHarness(tmpDir, ['--files-from', listPath]);
+
+    assert.strictEqual(
+      r.status,
+      0,
+      `Expected exit 0.\nstderr: ${r.stderr}\nstdout: ${r.stdout}`,
+    );
+  });
+
+  test('--files with bare "unit" token also resolves correctly', () => {
+    seed(tmpDir, ['a.test.cjs', 'b.security.test.cjs']);
+    const r = runHarness(tmpDir, ['--files', 'unit']);
+
+    assert.notStrictEqual(
+      r.status,
+      2,
+      `Expected exit 0, got 2.\nstderr: ${r.stderr}`,
+    );
+    assert.doesNotMatch(r.stderr, /requested test file\(s\) not found: unit/);
+    assert.ok(r.stderr.includes('a.test.cjs'), `a.test.cjs must be selected.\nstderr: ${r.stderr}`);
+    assert.ok(!r.stderr.includes('b.security.test.cjs'), `security file must not be selected.\nstderr: ${r.stderr}`);
+  });
+
+  test('mixed: suite token "unit" alongside an explicit file resolves both', () => {
+    seed(tmpDir, ['a.test.cjs', 'b.test.cjs', 'c.security.test.cjs']);
+    const listPath = path.join(tmpDir, 'ci-selected-tests.txt');
+    // 'unit' expands to [a.test.cjs, b.test.cjs]; b.test.cjs is explicit too.
+    fs.writeFileSync(listPath, 'unit\nb.test.cjs\n', 'utf8');
+
+    const r = runHarness(tmpDir, ['--files-from', listPath]);
+
+    assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+    // Both unit files present; security not.
+    assert.ok(r.stderr.includes('a.test.cjs'), `a.test.cjs must be selected.\nstderr: ${r.stderr}`);
+    assert.ok(r.stderr.includes('b.test.cjs'), `b.test.cjs must be selected.\nstderr: ${r.stderr}`);
+    assert.ok(!r.stderr.includes('c.security.test.cjs'), `c.security.test.cjs must be excluded.\nstderr: ${r.stderr}`);
+  });
+
+  test('#408 fallback: ci-test-scope "unit" sentinel does not crash run-tests', () => {
+    // This test simulates the end-to-end #408 fallback path:
+    // ci-test-scope produces "unit" (the fallback sentinel for "code changed
+    // but no rule matched any test"), ci-prepare-test-scope writes it verbatim,
+    // and run-tests must resolve it rather than crash.
+    seed(tmpDir, ['a.test.cjs', 'b.security.test.cjs']);
+    // Simulate what ci-prepare-test-scope writes: "unit\n"
+    const listPath = path.join(tmpDir, '.ci-selected-tests.txt');
+    fs.writeFileSync(listPath, 'unit\n', 'utf8');
+
+    const r = runHarness(tmpDir, ['--files-from', listPath]);
+
+    assert.strictEqual(
+      r.status,
+      0,
+      `#408 fallback: expected exit 0 but got ${r.status}.\nstderr: ${r.stderr}`,
+    );
+    assert.doesNotMatch(r.stderr, /not found: unit/);
+    assert.ok(r.stderr.includes('a.test.cjs'), `unit test must run.\nstderr: ${r.stderr}`);
+  });
+});
+
+// Regression test for issue #1329:
+// ci-prepare-test-scope's empty-detection FALLBACK hardcoded an explicit file
+// list that included tests/core.test.cjs — a file deleted in #1291. Every
+// scoped lane (scope=targeted|windows) that hit the fallback wrote the stale
+// path into .ci-selected-tests.txt and crashed run-tests with
+// "requested test file(s) not found: core.test.cjs". The fix: existence-filter
+// the fallback at write time, fall back to the 'unit' suite sentinel when
+// nothing survives, and guard the FALLBACK constant against disk reality.
+describe('bug #1329 — ci-prepare-test-scope fallback never emits a deleted file', () => {
+  const { FALLBACK, FALLBACK_SENTINEL, SUITE_SENTINELS, resolveSelection } =
+    require('../scripts/ci-prepare-test-scope.cjs');
+  const REPO_ROOT = path.join(__dirname, '..');
+
+  // Generative parity guard (DEFECT.GENERATIVE-FIX): the FALLBACK constant and
+  // the test files on disk are two surfaces that must stay in sync. This fails
+  // the instant a refactor deletes a file still named in FALLBACK — which is
+  // precisely what #1291 did and CI did not catch.
+  test('every FALLBACK entry resolves on disk or is a known suite sentinel', () => {
+    for (const entry of FALLBACK) {
+      const isSentinel = SUITE_SENTINELS.includes(entry);
+      const exists = fs.existsSync(path.join(REPO_ROOT, entry));
+      assert.ok(
+        isSentinel || exists,
+        `FALLBACK entry "${entry}" is neither an existing test file nor a suite sentinel — stale reference will crash scoped CI lanes (see #1329).`,
+      );
+    }
+  });
+
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-1329-fallback-');
+    fs.mkdirSync(path.join(tmpDir, 'tests'), { recursive: true });
+  });
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('empty detection drops a non-existent fallback entry instead of emitting it', () => {
+    // Create all but the last FALLBACK file under a controlled root, simulating
+    // a since-deleted test (the #1329 mechanism), independent of which files
+    // FALLBACK happens to name today.
+    const present = FALLBACK.slice(0, -1);
+    const absent = FALLBACK[FALLBACK.length - 1];
+    for (const f of present) {
+      fs.writeFileSync(path.join(tmpDir, f), PASS_BODY, 'utf8');
+    }
+
+    const lines = resolveSelection({ scope: 'targeted', targeted: '', windows: '', root: tmpDir });
+
+    assert.ok(!lines.includes(absent), `absent file "${absent}" must be filtered out, got: ${lines.join(', ')}`);
+    for (const f of present) {
+      assert.ok(lines.includes(f), `present file "${f}" must survive, got: ${lines.join(', ')}`);
+    }
+  });
+
+  test('empty detection with no surviving fallback files falls back to the unit sentinel', () => {
+    // tmpDir/tests exists but contains none of the FALLBACK files.
+    const lines = resolveSelection({ scope: 'windows', targeted: '', windows: '', root: tmpDir });
+    assert.deepStrictEqual(lines, [FALLBACK_SENTINEL]);
+  });
+
+  test('detected list passes through verbatim — files and suite sentinels preserved, not existence-filtered', () => {
+    // The detected list is already filtered by affected-tests-lib and may carry
+    // a suite sentinel; ci-prepare-test-scope must not touch it.
+    const lines = resolveSelection({
+      scope: 'targeted',
+      targeted: 'tests/does-not-exist.test.cjs unit',
+      windows: '',
+      root: tmpDir,
+    });
+    assert.deepStrictEqual(lines, ['tests/does-not-exist.test.cjs', 'unit']);
+  });
+
+  test('end-to-end: the real script writes a fallback list whose every entry resolves', () => {
+    // Run the real script (subprocess) with empty detection inside an isolated
+    // root that holds the FALLBACK files, then verify every line it wrote into
+    // .ci-selected-tests.txt resolves — the exact scoped-lane path that crashed
+    // in #1329. Hermetic: the temp root is removed by afterEach's cleanup().
+    for (const f of FALLBACK) {
+      fs.writeFileSync(path.join(tmpDir, f), PASS_BODY, 'utf8');
+    }
+    const prep = spawnSync(
+      process.execPath,
+      [path.join(REPO_ROOT, 'scripts', 'ci-prepare-test-scope.cjs')],
+      { cwd: tmpDir, env: { ...process.env, TEST_SCOPE: 'targeted', TARGETED_TESTS: '', WINDOWS_TESTS: '' }, encoding: 'utf8' },
+    );
+    assert.strictEqual(prep.status, 0, `prepare step failed: ${prep.stderr}`);
+
+    const selected = fs.readFileSync(path.join(tmpDir, '.ci-selected-tests.txt'), 'utf8');
+    for (const line of selected.split(/\r?\n/).filter(Boolean)) {
+      const isSentinel = SUITE_SENTINELS.includes(line);
+      assert.ok(
+        isSentinel || fs.existsSync(path.join(tmpDir, line)),
+        `selected entry "${line}" does not resolve — would crash run-tests (#1329)`,
+      );
+    }
+    assert.doesNotMatch(selected, /core\.test\.cjs/, 'deleted core.test.cjs must never be selected');
+  });
+});
+  });
+}

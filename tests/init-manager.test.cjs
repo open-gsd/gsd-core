@@ -55,6 +55,13 @@ function scaffoldPhase(tmpDir, num, opts = {}) {
   return dir;
 }
 
+function writePassedVerification(phaseDir, padded) {
+  fs.writeFileSync(
+    path.join(phaseDir, `${padded}-VERIFICATION.md`),
+    ['---', 'status: passed', '---', '', '# Verification', ''].join('\n')
+  );
+}
+
 describe('init manager', () => {
   let tmpDir;
 
@@ -110,8 +117,8 @@ describe('init manager', () => {
       { number: '5', name: 'Not Started' },
     ]);
 
-    // Phase 1: complete (plans + matching summaries)
-    scaffoldPhase(tmpDir, 1, { slug: 'complete-phase', context: true, plans: 2, summaries: 2 });
+    // Phase 1: complete (plans + matching summaries + passed verification)
+    writePassedVerification(scaffoldPhase(tmpDir, 1, { slug: 'complete-phase', context: true, plans: 2, summaries: 2 }), '01');
     // Phase 2: planned (plans, no summaries)
     scaffoldPhase(tmpDir, 2, { slug: 'planned-phase', context: true, plans: 3 });
     // Phase 3: discussed (context only)
@@ -158,7 +165,7 @@ describe('init manager', () => {
       { number: '1', name: 'Foundation', complete: true },
       { number: '2', name: 'Depends on 1', depends_on: 'Phase 1' },
     ]);
-    scaffoldPhase(tmpDir, 1, { slug: 'foundation', plans: 1, summaries: 1 });
+    writePassedVerification(scaffoldPhase(tmpDir, 1, { slug: 'foundation', plans: 1, summaries: 1 }), '01');
 
     const result = runGsdTools('init manager', tmpDir);
     const output = JSON.parse(result.output);
@@ -240,7 +247,7 @@ describe('init manager', () => {
       { number: '5', name: 'Polish' },
     ]);
 
-    scaffoldPhase(tmpDir, 1, { slug: 'foundation', plans: 1, summaries: 1 });
+    writePassedVerification(scaffoldPhase(tmpDir, 1, { slug: 'foundation', plans: 1, summaries: 1 }), '01');
     scaffoldPhase(tmpDir, 2, { slug: 'api-layer', context: true, plans: 2 }); // planned
     scaffoldPhase(tmpDir, 3, { slug: 'auth', context: true }); // discussed
 
@@ -269,7 +276,7 @@ describe('init manager', () => {
       { number: '4', name: 'Ready to Discuss' },
     ]);
 
-    scaffoldPhase(tmpDir, 1, { slug: 'complete', plans: 1, summaries: 1 });
+    writePassedVerification(scaffoldPhase(tmpDir, 1, { slug: 'complete', plans: 1, summaries: 1 }), '01');
     scaffoldPhase(tmpDir, 2, { slug: 'ready-to-execute', context: true, plans: 2 });
     scaffoldPhase(tmpDir, 3, { slug: 'ready-to-plan', context: true });
 
@@ -306,14 +313,101 @@ describe('init manager', () => {
       { number: '1', name: 'Done', complete: true },
       { number: '2', name: 'Also Done', complete: true },
     ]);
-    scaffoldPhase(tmpDir, 1, { slug: 'done', plans: 1, summaries: 1 });
-    scaffoldPhase(tmpDir, 2, { slug: 'also-done', plans: 1, summaries: 1 });
+    writePassedVerification(scaffoldPhase(tmpDir, 1, { slug: 'done', plans: 1, summaries: 1 }), '01');
+    writePassedVerification(scaffoldPhase(tmpDir, 2, { slug: 'also-done', plans: 1, summaries: 1 }), '02');
 
     const result = runGsdTools('init manager', tmpDir);
     const output = JSON.parse(result.output);
 
     assert.strictEqual(output.all_complete, true);
     assert.strictEqual(output.recommended_actions.length, 0);
+  });
+
+  test('implementation-complete phase without passed verification is not all_complete', () => {
+    writeState(tmpDir);
+    writeRoadmap(tmpDir, [
+      { number: '1', name: 'Implemented', complete: true },
+    ]);
+    scaffoldPhase(tmpDir, 1, { slug: 'implemented', plans: 1, summaries: 1 });
+
+    const result = runGsdTools('init manager', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.all_complete, false);
+    assert.strictEqual(output.completed_count, 0);
+    assert.strictEqual(output.phases[0].disk_status, 'executed');
+    assert.strictEqual(output.phases[0].implementation_complete, true);
+    assert.strictEqual(output.phases[0].verification_status, 'missing');
+    assert.strictEqual(output.phases[0].verification_passed, false);
+    assert.strictEqual(output.recommended_actions[0].action, 'verify');
+    assert.match(output.recommended_actions[0].command, /execute-phase 1/);
+  });
+
+  test('stale passed verification is not projected as complete', () => {
+    writeState(tmpDir);
+    writeRoadmap(tmpDir, [
+      { number: '1', name: 'Implemented', complete: true },
+    ]);
+    const phaseDir = scaffoldPhase(tmpDir, 1, { slug: 'implemented', plans: 1, summaries: 1 });
+    writePassedVerification(phaseDir, '01');
+    const verificationPath = path.join(phaseDir, '01-VERIFICATION.md');
+    const summaryPath = path.join(phaseDir, '01-01-SUMMARY.md');
+    const older = new Date('2025-01-01T00:00:00.000Z');
+    const newer = new Date('2025-01-01T00:01:00.000Z');
+    fs.utimesSync(verificationPath, older, older);
+    fs.utimesSync(summaryPath, newer, newer);
+
+    const result = runGsdTools('init manager', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.all_complete, false);
+    assert.strictEqual(output.completed_count, 0);
+    assert.strictEqual(output.phases[0].disk_status, 'executed');
+    assert.strictEqual(output.phases[0].implementation_complete, true);
+    assert.strictEqual(output.phases[0].verification_status, 'stale');
+    assert.strictEqual(output.phases[0].verification_passed, false);
+    assert.strictEqual(output.phases[0].phase_complete, false);
+    assert.strictEqual(output.recommended_actions[0].action, 'verify');
+    assert.match(output.recommended_actions[0].reason, /verification stale/);
+    assert.match(output.recommended_actions[0].command, /verify-work 1/);
+  });
+
+  test('checked unpadded roadmap token does not satisfy padded unverified dependency', () => {
+    writeState(tmpDir);
+    const roadmap = [
+      '# Roadmap',
+      '',
+      '## Progress',
+      '',
+      '- [x] **Phase 1: Foundation**',
+      '- [ ] **Phase 02: Followup**',
+      '',
+      '### Phase 01: Foundation',
+      '',
+      '**Goal:** Build foundation',
+      '',
+      '### Phase 02: Followup',
+      '',
+      '**Goal:** Build followup',
+      '**Depends on:** Phase 1',
+      '',
+    ].join('\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), roadmap);
+    scaffoldPhase(tmpDir, 1, { slug: 'foundation', plans: 1, summaries: 1 });
+
+    const result = runGsdTools('init manager', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    const phase1 = output.phases.find(p => p.number === '01');
+    const phase2 = output.phases.find(p => p.number === '02');
+
+    assert.ok(phase1, 'Phase 01 should be in the output');
+    assert.strictEqual(phase1.phase_complete, false, 'Phase 01 is unverified and must not be complete');
+    assert.ok(phase2, 'Phase 02 should be in the output');
+    assert.strictEqual(phase2.deps_satisfied, false, 'Phase 02 dependency must wait for canonical Phase 01 verification');
   });
 
   test('WAITING.json detected when present', () => {
@@ -564,9 +658,9 @@ describe('init manager', () => {
     ]);
 
     // Scaffold completed phases on disk
-    scaffoldPhase(tmpDir, 1, { slug: 'setup', plans: 2, summaries: 2 });
-    scaffoldPhase(tmpDir, 2, { slug: 'core', plans: 1, summaries: 1 });
-    scaffoldPhase(tmpDir, 3, { slug: 'polish', plans: 1, summaries: 1 });
+    writePassedVerification(scaffoldPhase(tmpDir, 1, { slug: 'setup', plans: 2, summaries: 2 }), '01');
+    writePassedVerification(scaffoldPhase(tmpDir, 2, { slug: 'core', plans: 1, summaries: 1 }), '02');
+    writePassedVerification(scaffoldPhase(tmpDir, 3, { slug: 'polish', plans: 1, summaries: 1 }), '03');
 
     const result = runGsdTools('init manager', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
@@ -584,8 +678,8 @@ describe('init manager', () => {
       { number: '999.1', name: 'Backlog idea' },
     ]);
 
-    scaffoldPhase(tmpDir, 1, { slug: 'setup', plans: 1, summaries: 1 });
-    scaffoldPhase(tmpDir, 2, { slug: 'core', plans: 1, summaries: 1 });
+    writePassedVerification(scaffoldPhase(tmpDir, 1, { slug: 'setup', plans: 1, summaries: 1 }), '01');
+    writePassedVerification(scaffoldPhase(tmpDir, 2, { slug: 'core', plans: 1, summaries: 1 }), '02');
     // Phase 3 has no directory — should trigger discuss recommendation
 
     const result = runGsdTools('init manager', tmpDir);
@@ -711,3 +805,343 @@ describe('init manager — cross-milestone dependency satisfaction (#2267)', () 
     );
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3584-runtime-slash-emitters.test.cjs — consolidation epic #1969 (B2 #1971)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3584-runtime-slash-emitters (consolidation epic #1969 B2 #1971)", () => {
+/**
+ * Regression tests for bug #3584 — runtime emitters use the slash formatter.
+ *
+ * These tests exercise the actual runtime command handlers via `runGsdTools`
+ * and assert on the structured payloads they emit/persist. They prove that
+ * the high-impact emitters identified in the issue (`init.cjs` recommended
+ * actions, `phase.cjs` ROADMAP persistence, `verify.cjs` remediation hints,
+ * `milestone.cjs` Operator-Next-Steps persistence, `validate-command-router`
+ * fracture recommendations) no longer emit the unroutable `/gsd:<cmd>` colon
+ * form for skills-based runtimes.
+ */
+
+'use strict';
+
+const { describe, test, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+const {
+  runGsdTools,
+  createTempProject,
+  createTempDir,
+  cleanup,
+} = require('./helpers.cjs');
+
+// Helper: assert no string field anywhere in `value` (recursive) contains '/gsd:'.
+function assertNoColonForm(value, label) {
+  const stack = [{ v: value, p: label }];
+  while (stack.length > 0) {
+    const { v, p } = stack.pop();
+    if (typeof v === 'string') {
+      assert.ok(
+        !v.includes('/gsd:'),
+        `${p}: must not contain deprecated /gsd: form, got ${JSON.stringify(v)}`,
+      );
+    } else if (Array.isArray(v)) {
+      v.forEach((item, i) => stack.push({ v: item, p: `${p}[${i}]` }));
+    } else if (v && typeof v === 'object') {
+      for (const key of Object.keys(v)) {
+        stack.push({ v: v[key], p: `${p}.${key}` });
+      }
+    }
+  }
+}
+
+// Helper: collect every `command` string under a recommendedActions-style array.
+function collectCommandFields(value) {
+  const out = [];
+  const stack = [value];
+  while (stack.length > 0) {
+    const v = stack.pop();
+    if (Array.isArray(v)) {
+      for (const item of v) stack.push(item);
+    } else if (v && typeof v === 'object') {
+      if (typeof v.command === 'string') out.push(v.command);
+      for (const key of Object.keys(v)) stack.push(v[key]);
+    }
+  }
+  return out;
+}
+
+describe('bug-3584: init manager recommendedActions emit hyphen form', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    // Minimal ROADMAP + STATE so init manager will run.
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## Milestone v1',
+        '',
+        '### Phase 1: Foundation',
+        '**Goal:** scaffold',
+        '**Plans:** 1 plan',
+        '',
+      ].join('\n'),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      '# State\n\nCurrent Phase: 1\n',
+    );
+  });
+
+  afterEach(() => cleanup(tmpDir));
+
+  test('skills runtime (claude) emits /gsd-<cmd> in recommended_actions[].command', () => {
+    // Plan-but-not-executed: directory exists with a PLAN.md → execute is recommended.
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+
+    const result = runGsdTools('init manager', tmpDir, { GSD_RUNTIME: 'claude' });
+    assert.ok(result.success, `init manager failed: ${result.error || result.output}`);
+
+    const payload = JSON.parse(result.output);
+    const commands = collectCommandFields(payload.recommended_actions || []);
+    assert.ok(commands.length > 0, 'recommended_actions should produce at least one command');
+
+    for (const cmd of commands) {
+      assert.ok(
+        cmd.startsWith('/gsd-'),
+        `recommended_actions command must start with /gsd- for skills-based runtimes, got ${cmd}`,
+      );
+      assert.ok(
+        !cmd.includes('/gsd:'),
+        `recommended_actions command must not contain /gsd: colon form, got ${cmd}`,
+      );
+    }
+    assertNoColonForm(payload, 'init.manager payload');
+  });
+
+  test('codex runtime emits $gsd-<cmd> in recommended_actions[].command', () => {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+
+    const result = runGsdTools('init manager', tmpDir, { GSD_RUNTIME: 'codex' });
+    assert.ok(result.success, `init manager (codex) failed: ${result.error || result.output}`);
+
+    const payload = JSON.parse(result.output);
+    const commands = collectCommandFields(payload.recommended_actions || []);
+    assert.ok(commands.length > 0);
+
+    for (const cmd of commands) {
+      assert.ok(
+        cmd.startsWith('$gsd-'),
+        `codex recommended_actions command must use $gsd- shell-var form, got ${cmd}`,
+      );
+    }
+  });
+
+  test('codex alias runtime emits $gsd-<cmd> in recommended_actions[].command', () => {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+
+    const result = runGsdTools('init manager', tmpDir, { GSD_RUNTIME: 'codex-app' });
+    assert.ok(result.success, `init manager (codex-app) failed: ${result.error || result.output}`);
+
+    const payload = JSON.parse(result.output);
+    const commands = collectCommandFields(payload.recommended_actions || []);
+    assert.ok(commands.length > 0);
+
+    for (const cmd of commands) {
+      assert.ok(
+        cmd.startsWith('$gsd-'),
+        `codex alias recommended_actions command must use $gsd- shell-var form, got ${cmd}`,
+      );
+    }
+  });
+});
+
+describe('bug-3584: phase add persists hyphen form into ROADMAP.md', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n## Milestone v1\n\n',
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      '# State\n',
+    );
+  });
+
+  afterEach(() => cleanup(tmpDir));
+
+  test('phase add persists hyphen-form slash command in roadmap get-phase payload', () => {
+    // 1. Add a phase — the system under test persists the phase entry into ROADMAP.md.
+    const addResult = runGsdTools(
+      ['phase', 'add', 'Test new feature'],
+      tmpDir,
+      { GSD_RUNTIME: 'claude' },
+    );
+    assert.ok(addResult.success, `phase add failed: ${addResult.error || addResult.output}`);
+    const addPayload = JSON.parse(addResult.output);
+    assert.ok(addPayload.phase_number, 'phase add must return phase_number');
+
+    // 2. Read the persisted section back via the structured roadmap-get-phase
+    //    contract (NOT via readFileSync; the `section` field on the JSON payload
+    //    is the runtime's typed projection of the on-disk ROADMAP content).
+    const getResult = runGsdTools(
+      ['roadmap', 'get-phase', String(addPayload.phase_number)],
+      tmpDir,
+      { GSD_RUNTIME: 'claude' },
+    );
+    assert.ok(getResult.success, `roadmap get-phase failed: ${getResult.error || getResult.output}`);
+    const getPayload = JSON.parse(getResult.output);
+    assert.ok(getPayload.found, 'roadmap get-phase must find the newly-added phase');
+    assert.ok(typeof getPayload.section === 'string', 'roadmap get-phase must return a section field');
+
+    // 3. The persisted phase section must use the routable hyphen form.
+    assert.ok(
+      !getPayload.section.includes('/gsd:plan-phase'),
+      `persisted phase section must not contain /gsd:plan-phase, got: ${getPayload.section}`,
+    );
+    assert.ok(
+      getPayload.section.includes('/gsd-plan-phase'),
+      `persisted phase section must contain /gsd-plan-phase, got: ${getPayload.section}`,
+    );
+  });
+});
+
+describe('bug-3584: validate health emits hyphen form in fix hints', () => {
+  test('validate health on a broken project returns hyphen-form fix strings', (t) => {
+    const tmpDir = createTempDir();
+    t.after(() => cleanup(tmpDir));
+    // No .planning directory → E001 fires with a `fix:` string that contains
+    // the slash-command form.
+
+    const result = runGsdTools(
+      ['validate', 'health'],
+      tmpDir,
+      { GSD_RUNTIME: 'claude' },
+    );
+    // validate health exits non-zero on broken projects but still emits JSON to stdout.
+    const stdout = result.output;
+    let payload;
+    try {
+      payload = JSON.parse(stdout);
+    } catch (e) {
+      throw new Error(`validate health did not emit parseable JSON: ${stdout.slice(0, 400)}`);
+    }
+
+    const allIssues = []
+      .concat(payload.errors || [])
+      .concat(payload.warnings || [])
+      .concat(payload.info || []);
+
+    assert.ok(allIssues.length > 0, 'validate health on a bare tmpdir should report at least one issue');
+
+    const fixesWithSlash = allIssues
+      .map((i) => i.fix)
+      .filter((f) => typeof f === 'string' && /gsd[-:]/.test(f));
+    assert.ok(
+      fixesWithSlash.length > 0,
+      'at least one fix hint should reference a /gsd- slash command',
+    );
+
+    for (const fix of fixesWithSlash) {
+      assert.ok(
+        !fix.includes('/gsd:'),
+        `validate health fix hint must not contain /gsd: colon form, got ${JSON.stringify(fix)}`,
+      );
+    }
+    assertNoColonForm(payload, 'validate health payload');
+  });
+});
+
+describe('bug-3584: validate context recommendation uses hyphen form', () => {
+  test('warning/critical recommendations emit /gsd-thread', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    // Critical band: 75% utilization. validate context emits JSON only with --json.
+    const result = runGsdTools(
+      ['validate', 'context', '--tokens-used', '75000', '--context-window', '100000', '--json'],
+      tmpDir,
+      { GSD_RUNTIME: 'claude' },
+    );
+    assert.ok(result.success, `validate context failed: ${result.error || result.output}`);
+
+    const payload = JSON.parse(result.output);
+    assert.ok(payload.recommendation, 'critical utilization should produce a recommendation');
+    assert.ok(
+      !payload.recommendation.includes('/gsd:'),
+      `recommendation must not contain /gsd:, got ${JSON.stringify(payload.recommendation)}`,
+    );
+    assert.ok(
+      payload.recommendation.includes('/gsd-thread'),
+      `recommendation must reference /gsd-thread, got ${JSON.stringify(payload.recommendation)}`,
+    );
+  });
+});
+
+describe('bug-3584: validate health uses formatter for codex runtime too', () => {
+  test('validate health under codex emits $gsd-<cmd> in fix strings (positive assertion)', (t) => {
+    const tmpDir = createTempDir();
+    t.after(() => cleanup(tmpDir));
+
+    const result = runGsdTools(
+      ['validate', 'health'],
+      tmpDir,
+      { GSD_RUNTIME: 'codex' },
+    );
+    let payload;
+    try {
+      payload = JSON.parse(result.output);
+    } catch (e) {
+      throw new Error(`validate health (codex) did not emit JSON: ${result.output.slice(0, 400)}`);
+    }
+
+    const allIssues = []
+      .concat(payload.errors || [])
+      .concat(payload.warnings || [])
+      .concat(payload.info || []);
+
+    // Collect fixes that mention any gsd slash-command form so we can lock
+    // both the absence of legacy forms AND the presence of the codex shape.
+    const fixesWithGsdRef = allIssues
+      .map((i) => i.fix)
+      .filter((f) => typeof f === 'string' && /(?:\$|\/)gsd[-:]/.test(f));
+
+    assert.ok(
+      fixesWithGsdRef.length > 0,
+      'validate health on a bare tmpdir must produce at least one fix hint referencing a gsd command',
+    );
+
+    for (const fix of fixesWithGsdRef) {
+      assert.ok(
+        fix.includes('$gsd-'),
+        `codex validate health fix must use shell-var $gsd- form, got ${JSON.stringify(fix)}`,
+      );
+      assert.ok(
+        !fix.includes('/gsd:'),
+        `codex validate health fix must not contain /gsd: colon form, got ${JSON.stringify(fix)}`,
+      );
+      assert.ok(
+        !fix.includes('/gsd-'),
+        `codex validate health fix must not contain /gsd- (skills) form, got ${JSON.stringify(fix)}`,
+      );
+    }
+  });
+});
+  });
+}

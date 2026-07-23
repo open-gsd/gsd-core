@@ -1,6 +1,6 @@
 # ADR-1235: Migrate agent conversion to the descriptor-driven install path
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-06-14
 - **Issue:** #1235
 - **Builds on:** [ADR-3660](3660-runtime-artifact-layout-module.md) (runtime artifact layout), [ADR-457](457-generated-cjs-single-source.md) (the `src/*.cts` build-at-publish tree the converters live in), [ADR-1016](1016-runtime-capability-descriptor.md) (runtime capability descriptor)
@@ -10,7 +10,7 @@
 
 Agent installation is the last major artifact class in `install()` that does **not** flow through the descriptor-driven path established by ADR-3660 (`installRuntimeArtifacts` → `_copyStaged`, with each runtime's artifacts declared in the capability registry's `artifactLayout`). Skills and kimi-agents already flow through it. The claude-**local** `agents` kind is *declared* in the descriptor (raw-copy, `converter: null`), but production `install()` still produces claude-local agent output via the inline loop — the skills-runtime gate routes Claude through `installRuntimeArtifacts` only when `isGlobal` (`bin/install.js` ~9822/9829), and claude-local commands/agents go through the back-compat copy path. So agents for **every** runtime (claude included) are, in practice, converted and written by a **separate inline loop** in `bin/install.js` (currently lines ~10102–10249).
 
-This was surfaced while attempting #1173: #1227 added the `convertedAgentsKind` plumbing to the layout module, but it is **inert in production** — no runtime descriptor declares an `agents` kind with a non-null `converter`, so `dispatchKindEntry` always routes to the raw-copy `agentsKind`. The plumbing is exercised only by `tests/feat-1173-agent-converters-descriptor.test.cjs` against a synthetic registry.
+This was surfaced while attempting #1173: #1227 added the `convertedAgentsKind` plumbing to the layout module, but it is **inert in production** — no runtime descriptor declares an `agents` kind with a non-null `converter`, so `dispatchKindEntry` always routes to the raw-copy `agentsKind`. The plumbing is exercised only by `tests/runtime-converters.test.cjs` (folds former `feat-1173-agent-converters-descriptor`, consolidation epic #1969) against a synthetic registry.
 
 A naive cutover (point descriptors at the extracted converters, delete the inline loop) **regresses installs for every runtime**, because the inline loop performs cross-cutting and runtime-specific pipeline steps that the descriptor agents path does not replicate, and because the extracted converters' signature cannot receive the context those steps require. Two of those behaviors have no converter function at all today. Because the migration touches install correctness across ~15 runtimes in the most-edited install module, the cutover strategy and the parity-test contract are architectural decisions worth recording before code.
 
@@ -79,6 +79,14 @@ Cross-cutting steps (a, b, c) are applied by the descriptor pipeline for the app
 4. **No-converter runtimes** (qwen, hermes) — add real `convertClaudeAgentTo{Qwen,Hermes}Agent` converters capturing today's branding swaps, then cut over.
 5. **Codex** — fold the `.toml` sidecar into the descriptor (or declare it an explicit companion artifact); the `.md` + `.toml` must both reach parity.
 6. **Delete the inline loop** once every runtime is green; remove the now-dead `isKimi`/minimal special-casing that referenced it.
+
+### Cutover progress (#1575)
+
+- **Step 0 (parity harness):** shipped in `tests/issue-1575-agent-descriptor-parity.test.cjs`. Asserts `applySurface` output is byte-identical to `installRuntimeArtifacts` for all descriptor-driven runtimes. Covers stale-cleanup convergence (pre-existing legacy `.agent.md` pruned correctly).
+- **Step 1 (trivial converters):** cursor, windsurf, augment, trae, codebuddy — install-path cutover complete (PR #1438); surface-path parity shipped (#1575: `applySurface` now builds `agentCtx` and passes it to `kind.stage()` for agents, applying path-rewrite + attribution + converter + normalize).
+- **Step 2 (scope-aware):** copilot and antigravity — cutover complete (#1575: declared `agents` kind in `capability.json`, added to `_DESCRIPTOR_AGENTS_RUNTIMES`, copilot `.agent.md` rename handled in both `_copyStaged` and `_syncGsdDir`).
+- **Cline:** deferred — rules-only local branch + local/global complication not handled by the descriptor-driven path.
+- **Remaining:** steps 3–6 (config-reading, no-converter, codex, inline-loop deletion).
 
 ## Risks / trade-offs
 

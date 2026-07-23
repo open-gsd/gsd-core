@@ -97,6 +97,19 @@ Checklist of frequent bug patterns to scan before forming hypotheses. Ordered by
 3. **Each checked pattern is a hypothesis candidate** — verify or eliminate with evidence
 4. **If no pattern matches**, proceed to open-ended investigation
 
+### Pattern categories → bug taxonomy (Phase 1.75)
+
+The categories here feed bug-class classification (see `debugger-bug-taxonomy.md`):
+
+| Pattern category | Typical bug_class |
+|---|---|
+| Null / Undefined, Off-by-One, State, Import, Type, Regex, Error Handling, Scope | Bohrbug (deterministic) |
+| Async / Timing (intermittent, leaked timer, init order) | Heisenbug / Concurrency |
+| Environment / Config (works-here-not-there) | Heisenbug / Mandelbug (or config-as-root-cause) |
+| Data Shape / API Contract | Bohrbug (or Mandelbug if volume-dependent) |
+
+The taxonomy routes the investigation technique (SBFL + bisect for Bohrbugs; record-replay/stability for Heisenbugs; atomicity/order/deadlock checklist for Concurrency).
+
 ### Symptom-to-Category Quick Map
 
 | Symptom | Check First |

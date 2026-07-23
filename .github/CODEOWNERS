@@ -1,4 +1,4 @@
 # CODEOWNERS is advisory only — the main-protection ruleset does not require
 # CODEOWNERS approval (required_approving_review_count: 0).
-# All paths: active reviewer pool as of 2026-05.
-*  @trek-e @Solvely-Colin @jeremymcs
+# All paths: active reviewer pool as of 2026-06.
+*  @trek-e @Solvely-Colin @jeremymcs @davesienkowski

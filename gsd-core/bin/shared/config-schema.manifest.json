@@ -10,6 +10,10 @@
     "brave_search",
     "firecrawl",
     "exa_search",
+    "tavily_search",
+    "ref_search",
+    "perplexity",
+    "jina",
     "workflow.plan_check",
     "workflow.verifier",
     "workflow.auto_advance",
@@ -28,6 +32,7 @@
     "workflow.plan_bounce_script",
     "workflow.plan_bounce_passes",
     "workflow.plan_chunked",
+    "workflow.specless_probe_fallback",
     "workflow.plan_review_convergence",
     "code_quality.fallow.enabled",
     "code_quality.fallow.scope",
@@ -53,8 +58,11 @@
     "workflow.cross_ai_command",
     "workflow.cross_ai_timeout",
     "workflow.subagent_timeout",
+    "workflow.test_gate_timeout",
     "workflow.test_command",
     "workflow.build_command",
+    "workflow.mvp_mode",
+    "workflow.context_guard_mode",
     "executor.stall_detect_interval_minutes",
     "executor.stall_threshold_minutes",
     "workflow.inline_plan_threshold",
@@ -63,6 +71,9 @@
     "workflow.context_coverage_gate",
     "statusline.show_last_command",
     "statusline.context_position",
+    "statusline.show_context_tokens",
+    "statusline.state_format",
+    "statusline.show_git",
     "workflow.max_discuss_passes",
     "features.thinking_partner",
     "context",
@@ -78,6 +89,7 @@
     "context_window",
     "graphify.build_timeout",
     "graphify.auto_update",
+    "graphify.graph_path",
     "claude_md_path",
     "claude_md_assembly.mode",
     "runtime",
@@ -91,7 +103,10 @@
     "model_policy.high",
     "model_policy.medium",
     "model_policy.low",
-    "agent_skills_security.trusted_global_roots"
+    "agent_skills_security.trusted_global_roots",
+    "capabilities.strict_known_registries",
+    "capabilities.auto_update",
+    "security.injection_blocking"
   ],
   "runtimeStateKeys": [
     "workflow._auto_chain_active"
@@ -134,8 +149,8 @@
     },
     {
       "topLevel": "dynamic_routing",
-      "source": "^dynamic_routing\\.(enabled|escalate_on_failure|max_escalations|tier_models\\.(light|standard|heavy))$",
-      "description": "dynamic_routing.<enabled|escalate_on_failure|max_escalations|tier_models.<light|standard|heavy>>"
+      "source": "^dynamic_routing\\.(enabled|escalate_on_failure|max_escalations|provider_escalation|tier_models\\.(light|standard|heavy))$",
+      "description": "dynamic_routing.<enabled|escalate_on_failure|max_escalations|provider_escalation|tier_models.<light|standard|heavy>>"
     },
     {
       "topLevel": "model_overrides",
@@ -166,6 +181,11 @@
       "topLevel": "review",
       "source": "^review\\.max_prompt_tokens_per_reviewer\\.[a-zA-Z0-9_-]+$",
       "description": "review.max_prompt_tokens_per_reviewer.<reviewer-slug>"
+    },
+    {
+      "topLevel": "review",
+      "source": "^review\\.reviewer_instances\\.[a-zA-Z0-9_-]+\\.(cli|model|agent)$",
+      "description": "review.reviewer_instances.<instance-name>.<cli|model|agent> (#1517)"
     },
     {
       "topLevel": "model_policy",

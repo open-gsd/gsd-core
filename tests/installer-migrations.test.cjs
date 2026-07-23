@@ -17,6 +17,7 @@ const {
   writeInstallState,
 } = require('../gsd-core/bin/lib/installer-migrations.cjs');
 const firstTimeBaselineMigration = require('../gsd-core/bin/lib/installer-migrations/000-first-time-baseline.cjs');
+const opencodeBaselineCommandsDirMigration = require('../gsd-core/bin/lib/installer-migrations/005-opencode-baseline-commands-dir.cjs');
 
 function createTempInstall() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-installer-migrations-'));
@@ -310,6 +311,194 @@ test('records known generated agent artifacts so profile cleanup can remove them
     assert.equal(fs.readFileSync(path.join(configDir, 'agents/gsd-executor.md'), 'utf8'), 'old generated agent\n');
     assert.equal(fs.readFileSync(path.join(configDir, 'agents/gsd-executor.toml'), 'utf8'), 'old generated agent config\n');
     assert.equal(fs.readFileSync(path.join(configDir, 'agents/gsd-local-experiment.md'), 'utf8'), 'user experiment\n');
+  } finally {
+    cleanup(configDir);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Migration 005: OpenCode commands/ (plural) baseline scan (#2329 follow-up)
+//
+// 000-first-time-baseline.cts's RUNTIME_SURFACES.opencode is a shipped,
+// immutable body that still only names the legacy singular `command/`
+// directory (see docs/installer-migrations.md#state-files). These tests
+// pin migration 005's widened scan of the plural `commands/` surface.
+// ---------------------------------------------------------------------------
+
+test('baselines pre-existing OpenCode commands/ files: managed, unknown, and stale-GSD-looking', () => {
+  const configDir = createTempInstall();
+  try {
+    writeFile(configDir, 'commands/gsd-plan-phase.md', 'managed command\n');
+    writeFile(configDir, 'commands/my-custom-command.md', 'user command\n');
+    writeFile(configDir, 'commands/gsd-retired-command.md', 'stale gsd-looking file, not in manifest\n');
+    writeManifest(configDir, {
+      'commands/gsd-plan-phase.md': sha256('managed command\n'),
+    });
+
+    const result = runInstallerMigrations({
+      configDir,
+      runtime: 'opencode',
+      scope: 'global',
+      migrations: [opencodeBaselineCommandsDirMigration],
+      baselineScan: true,
+      now: () => '2026-07-17T00:00:00.000Z',
+    });
+
+    assert.deepEqual(
+      result.plan.actions.map((action) => ({
+        type: action.type,
+        relPath: action.relPath,
+        classification: action.classification,
+      })),
+      [
+        {
+          type: 'record-baseline',
+          relPath: 'commands/gsd-plan-phase.md',
+          classification: 'managed-pristine',
+        },
+        {
+          type: 'baseline-preserve-user',
+          relPath: 'commands/my-custom-command.md',
+          classification: 'unknown',
+        },
+        {
+          type: 'prompt-user',
+          relPath: 'commands/gsd-retired-command.md',
+          classification: 'stale-gsd-looking',
+        },
+      ]
+    );
+    // The stale-GSD-looking file blocks the plan (needs explicit user choice),
+    // so nothing was applied and no install state was written yet.
+    assert.deepEqual(result.appliedMigrationIds, []);
+    assert.equal(fs.existsSync(path.join(configDir, INSTALL_STATE_NAME)), false);
+    // Every file on disk is untouched — baseline-preserve-user/record-baseline/
+    // prompt-user are all non-mutating classification actions.
+    assert.equal(fs.readFileSync(path.join(configDir, 'commands/gsd-plan-phase.md'), 'utf8'), 'managed command\n');
+    assert.equal(fs.readFileSync(path.join(configDir, 'commands/my-custom-command.md'), 'utf8'), 'user command\n');
+    assert.equal(fs.readFileSync(path.join(configDir, 'commands/gsd-retired-command.md'), 'utf8'), 'stale gsd-looking file, not in manifest\n');
+  } finally {
+    cleanup(configDir);
+  }
+});
+
+test('OpenCode commands/ baseline is idempotent — a second run does not re-plan already-applied files', () => {
+  const configDir = createTempInstall();
+  try {
+    writeFile(configDir, 'commands/gsd-plan-phase.md', 'managed command\n');
+    writeFile(configDir, 'commands/my-custom-command.md', 'user command\n');
+    writeManifest(configDir, {
+      'commands/gsd-plan-phase.md': sha256('managed command\n'),
+    });
+
+    const first = runInstallerMigrations({
+      configDir,
+      runtime: 'opencode',
+      scope: 'global',
+      migrations: [opencodeBaselineCommandsDirMigration],
+      baselineScan: true,
+      now: () => '2026-07-17T00:00:01.000Z',
+    });
+    assert.deepEqual(first.appliedMigrationIds, ['2026-07-17-opencode-baseline-commands-dir']);
+    assert.deepEqual(readInstallState(configDir).appliedMigrations.map((entry) => entry.id), [
+      '2026-07-17-opencode-baseline-commands-dir',
+    ]);
+
+    // Second run: the migration id is now applied, so it must never re-run,
+    // regardless of what baselineScan is passed.
+    const second = runInstallerMigrations({
+      configDir,
+      runtime: 'opencode',
+      scope: 'global',
+      migrations: [opencodeBaselineCommandsDirMigration],
+      baselineScan: true,
+      now: () => '2026-07-17T00:00:02.000Z',
+    });
+    assert.deepEqual(second.appliedMigrationIds, []);
+    assert.deepEqual(second.plan.actions, []);
+    assert.deepEqual(readInstallState(configDir).appliedMigrations.map((entry) => entry.id), [
+      '2026-07-17-opencode-baseline-commands-dir',
+    ]);
+    // Files remain untouched across both runs.
+    assert.equal(fs.readFileSync(path.join(configDir, 'commands/gsd-plan-phase.md'), 'utf8'), 'managed command\n');
+    assert.equal(fs.readFileSync(path.join(configDir, 'commands/my-custom-command.md'), 'utf8'), 'user command\n');
+  } finally {
+    cleanup(configDir);
+  }
+});
+
+test('OpenCode commands/ baseline migration is scoped to opencode and never plans for Kilo', () => {
+  const configDir = createTempInstall();
+  try {
+    // Kilo's descriptor keeps the singular `command/` dir; a `commands/` (plural)
+    // directory here would be unrelated to Kilo's install surface. This proves the
+    // migration's `runtimes: ['opencode']` scoping keeps Kilo installs untouched.
+    writeFile(configDir, 'commands/gsd-plan-phase.md', 'managed command\n');
+    writeFile(configDir, 'command/gsd-plan-phase.md', 'kilo managed command\n');
+    writeManifest(configDir, {
+      'commands/gsd-plan-phase.md': sha256('managed command\n'),
+      'command/gsd-plan-phase.md': sha256('kilo managed command\n'),
+    });
+
+    const result = runInstallerMigrations({
+      configDir,
+      runtime: 'kilo',
+      scope: 'global',
+      migrations: [opencodeBaselineCommandsDirMigration],
+      baselineScan: true,
+      now: () => '2026-07-17T00:00:03.000Z',
+    });
+
+    // migrationMatchesContext filters this migration out entirely for kilo
+    // (runtimes: ['opencode']) before plan() is ever invoked: it is not
+    // "pending", produces zero actions, is never applied, and no install-state
+    // file is written for this run at all.
+    assert.deepEqual(result.plan.actions, []);
+    assert.deepEqual(result.appliedMigrationIds, []);
+    assert.equal(fs.existsSync(path.join(configDir, INSTALL_STATE_NAME)), false);
+    assert.equal(fs.readFileSync(path.join(configDir, 'commands/gsd-plan-phase.md'), 'utf8'), 'managed command\n');
+    assert.equal(fs.readFileSync(path.join(configDir, 'command/gsd-plan-phase.md'), 'utf8'), 'kilo managed command\n');
+  } finally {
+    cleanup(configDir);
+  }
+});
+
+test('regression (#2329 follow-up): pre-existing unmanifested commands/gsd-*.md is no longer silently destroyed', () => {
+  const configDir = createTempInstall();
+  try {
+    // Simulates a pre-existing, non-GSD file sitting under OpenCode's commands/
+    // directory before GSD's first-ever migration-tracked run against this
+    // configDir (no manifest, no install state yet).
+    writeFile(configDir, 'commands/gsd-retired-plan.md', 'pre-existing file, not GSD-written\n');
+
+    // Full default migration set (all shipped migrations, including 000 AND 005),
+    // matching production: bin/install.js calls runInstallerMigrations with no
+    // explicit `migrations` override.
+    const result = runInstallerMigrations({
+      configDir,
+      runtime: 'opencode',
+      scope: 'global',
+      baselineScan: true,
+      now: () => '2026-07-17T00:00:04.000Z',
+    });
+
+    // Before this fix, RUNTIME_SURFACES.opencode omitted `commands/`, so this file
+    // was invisible to every migration and ordinary materialization would delete it
+    // unconditionally with a clean exit. Now it is caught and blocks the install
+    // pending an explicit user choice — the same protection the legacy `command/`
+    // surface already had.
+    assert.deepEqual(result.appliedMigrationIds, []);
+    assert.ok(Array.isArray(result.blocked) && result.blocked.length > 0, 'expected a blocked prompt-user action');
+    const blockedForFile = result.blocked.find((action) => action.relPath === 'commands/gsd-retired-plan.md');
+    assert.ok(blockedForFile, 'expected commands/gsd-retired-plan.md to be blocked pending user choice');
+    assert.equal(blockedForFile.type, 'prompt-user');
+    assert.equal(blockedForFile.migrationId, '2026-07-17-opencode-baseline-commands-dir');
+    // The file itself was never touched — migrations only classify, they do not
+    // mutate disk.
+    assert.equal(
+      fs.readFileSync(path.join(configDir, 'commands/gsd-retired-plan.md'), 'utf8'),
+      'pre-existing file, not GSD-written\n'
+    );
   } finally {
     cleanup(configDir);
   }
@@ -1468,6 +1657,22 @@ test('shipped installer-migration checksums are locked to a committed baseline (
     // Migration 004: prune stale gsd-pristine/get-shit-done/ snapshots (#934) // gsd-allow-legacy-name
     '2026-06-09-prune-stale-pristine-get-shit-done': // gsd-allow-legacy-name
       'sha256:6555dd044659276fbc204e81793cd92c5315d54e7316bcdd82d2c98d15a7e9e8',
+    // Migration 005 (NEW, added here per this test's own sanctioned "adding a new
+    // migration" case — not a shipped-body edit): baseline OpenCode's commands/
+    // (plural) directory during the first-time scan. #2329 moved OpenCode command
+    // materialization from legacy command/ to commands/, but 000's RUNTIME_SURFACES
+    // is a shipped, immutable body that still only names command/, so this
+    // fix-forward migration widens the scanned surface without touching 000.
+    '2026-07-17-opencode-baseline-commands-dir':
+      'sha256:0f6080b5f9b75fb5adbe9664a71152e23a5336813453b0a77e4df6fd483ad38e',
+    // Migration 006 (NEW, added here per this test's own sanctioned "adding a new
+    // migration" case — not a shipped-body edit): retire pi's stale
+    // extensions/gsd.cjs. #2470 renamed the installed extension to
+    // extensions/gsd.js because pi's isExtensionFile() auto-discovery accepts
+    // only .ts/.js and silently skips everything else; without this migration the
+    // old path drops out of the manifest and uninstall can never remove it.
+    '2026-07-20-pi-extension-cjs-to-js':
+      'sha256:185fa926ae24d83cbdd95c31a9ad2cc8d123e176ad543669b3b0ed75e6ca6f4a',
   };
 
   const { DEFAULT_MIGRATIONS_DIR, migrationChecksum: computeChecksum } = require('../gsd-core/bin/lib/installer-migrations.cjs');
@@ -1578,3 +1783,1028 @@ test('reconciles a drifted applied-migration checksum into install state on appl
     cleanup(configDir);
   }
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3357-codex-legacy-hooks-json-migration.test.cjs — consolidation epic #1969 (B5 #1974)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3357-codex-legacy-hooks-json-migration (consolidation epic #1969 B5 #1974)", () => {
+/**
+ * Regression test for bug #3357.
+ *
+ * Older Codex installs carried legacy GSD SessionStart commands in hooks.json.
+ * Current install keeps the managed SessionStart hook in hooks.json (single
+ * representation per layer) and strips stale managed entries before writing
+ * exactly one canonical managed command.
+ *
+ * Bug #1348 (addendum): reconcileCodexHooksJsonEvent must always write the
+ * canonical nested { "hooks": { "<Event>": [...] } } shape — never top-level
+ * event keys — mirroring reconcileCursorHooksJson.
+ */
+
+'use strict';
+
+process.env.GSD_TEST_MODE = '1';
+
+const { describe, test, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+
+const installModule = require('../bin/install.js');
+const { readInstallState } = require('../gsd-core/bin/lib/installer-migrations.cjs');
+const { install, parseTomlToObject, reconcileCodexHooksJsonEvent } = installModule;
+const { createTempDir, cleanup } = require('./helpers.cjs');
+const HOOKS_DIST = path.join(__dirname, '..', 'hooks', 'dist');
+const BUILD_HOOKS_SCRIPT = path.join(__dirname, '..', 'scripts', 'build-hooks.js');
+
+function withCodexHome(codexHome, fn) {
+  const previousCodexHome = process.env.CODEX_HOME;
+  // #2088 (ADR-1239 upgrade 3): Codex skills now install to $HOME/.agents/skills
+  // (os.homedir()-relative, independent of CODEX_HOME). Sandbox HOME (and
+  // USERPROFILE) to codexHome so in-process installs never write to the
+  // developer/CI machine's real home directory.
+  const previousHome = process.env.HOME;
+  const previousUserProfile = process.env.USERPROFILE;
+  process.env.CODEX_HOME = codexHome;
+  process.env.HOME = codexHome;
+  process.env.USERPROFILE = codexHome;
+  try {
+    return fn();
+  } finally {
+    if (previousCodexHome == null) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
+    if (previousHome == null) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    if (previousUserProfile == null) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = previousUserProfile;
+  }
+}
+
+function legacyGsdHook(codexHome) {
+  return {
+    hooks: [{
+      type: 'command',
+      command: `node "${path.join(codexHome, 'hooks', 'gsd-check-update.js')}"`,
+    }],
+  };
+}
+
+function userHook() {
+  return {
+    hooks: [{
+      type: 'command',
+      command: 'node "/Users/example/bin/user-hook.js"',
+    }],
+  };
+}
+
+function tomlGsdHookCount(codexHome) {
+  const parsed = parseTomlToObject(fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8'));
+  const sessionStart = parsed.hooks?.SessionStart ?? [];
+  return sessionStart
+    .flatMap((entry) => Array.isArray(entry.hooks) ? entry.hooks : [])
+    .filter((hook) => typeof hook.command === 'string' && hook.command.includes('gsd-check-update'))
+    .length;
+}
+
+describe('#3357 — Codex install removes legacy GSD hooks.json entries', { concurrency: false }, () => {
+  let tmpRoot;
+  let codexHome;
+
+  beforeEach(() => {
+    if (!fs.existsSync(HOOKS_DIST) || fs.readdirSync(HOOKS_DIST).length === 0) {
+      execFileSync(process.execPath, [BUILD_HOOKS_SCRIPT], { stdio: 'pipe' });
+    }
+    tmpRoot = createTempDir('gsd-3357-');
+    codexHome = path.join(tmpRoot, '.codex');
+    fs.mkdirSync(codexHome, { recursive: true });
+  });
+
+  afterEach(() => {
+    delete installModule.__codexSchemaValidator;
+    cleanup(tmpRoot);
+  });
+
+  test('rewrites hooks.json to one managed SessionStart hook when file only had legacy managed entry', () => {
+    fs.writeFileSync(
+      path.join(codexHome, 'hooks.json'),
+      JSON.stringify({ SessionStart: [legacyGsdHook(codexHome)] }, null, 2),
+    );
+
+    withCodexHome(codexHome, () => install(true, 'codex'));
+
+    // #1348: output must be nested { hooks: { SessionStart: [...] } }, not top-level
+    const hooksJson = JSON.parse(fs.readFileSync(path.join(codexHome, 'hooks.json'), 'utf8'));
+    assert.ok(
+      hooksJson.hooks && typeof hooksJson.hooks === 'object' && !Array.isArray(hooksJson.hooks),
+      'hooks.json must use nested { hooks: { ... } } shape (bug #1348)',
+    );
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(hooksJson, 'SessionStart'),
+      'hooks.json must NOT have a top-level SessionStart key (bug #1348)',
+    );
+    const commands = hooksJson.hooks.SessionStart.flatMap((entry) => entry.hooks).map((hook) => hook.command);
+    const managed = commands.filter((cmd) => typeof cmd === 'string' && cmd.includes('gsd-check-update'));
+    assert.equal(managed.length, 1);
+    assert.equal(tomlGsdHookCount(codexHome), 0);
+  });
+
+  test('preserves user hooks.json entries while removing the legacy GSD hook', () => {
+    const userOwnedSameBasenameHook = {
+      hooks: [{
+        type: 'command',
+        command: 'node "/Users/example/bin/gsd-check-update.js"',
+      }],
+    };
+    fs.writeFileSync(
+      path.join(codexHome, 'hooks.json'),
+      JSON.stringify({ SessionStart: [legacyGsdHook(codexHome), userHook(), userOwnedSameBasenameHook] }, null, 2),
+    );
+
+    withCodexHome(codexHome, () => install(true, 'codex'));
+
+    // #1348: output must be nested { hooks: { SessionStart: [...] } }, not top-level
+    const hooksJson = JSON.parse(fs.readFileSync(path.join(codexHome, 'hooks.json'), 'utf8'));
+    assert.ok(
+      hooksJson.hooks && typeof hooksJson.hooks === 'object' && !Array.isArray(hooksJson.hooks),
+      'hooks.json must use nested { hooks: { ... } } shape (bug #1348)',
+    );
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(hooksJson, 'SessionStart'),
+      'hooks.json must NOT have a top-level SessionStart key (bug #1348)',
+    );
+    const commands = hooksJson.hooks.SessionStart.flatMap((entry) => entry.hooks).map((hook) => hook.command);
+    const managed = commands.filter((cmd) => typeof cmd === 'string' && cmd.includes('gsd-check-update'));
+    assert.equal(commands.includes('node "/Users/example/bin/user-hook.js"'), true);
+    assert.equal(commands.includes('node "/Users/example/bin/gsd-check-update.js"'), true);
+    assert.equal(managed.length, 2);
+    assert.equal(tomlGsdHookCount(codexHome), 0);
+  });
+
+  test('restores migrated hooks.json and install state when later Codex validation fails', () => {
+    const before = JSON.stringify({ SessionStart: [legacyGsdHook(codexHome)] }, null, 2);
+    fs.writeFileSync(path.join(codexHome, 'hooks.json'), before);
+
+    installModule.__codexSchemaValidator = () => ({
+      ok: false,
+      reason: 'forced migration rollback test',
+    });
+
+    assert.throws(
+      () => withCodexHome(codexHome, () => install(true, 'codex')),
+      /forced migration rollback test/
+    );
+
+    assert.equal(fs.readFileSync(path.join(codexHome, 'hooks.json'), 'utf8'), before);
+    assert.equal(
+      readInstallState(codexHome).appliedMigrations.some((entry) => entry.id === '2026-05-11-codex-legacy-hooks-json'),
+      false
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1348 — reconcileCodexHooksJsonEvent must always write canonical nested shape
+// ---------------------------------------------------------------------------
+
+describe('#1348 — reconcileCodexHooksJsonEvent canonical nested shape', { concurrency: false }, () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-1348-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // (a) Fresh/absent hooks.json: register → { "hooks": { "SessionStart": [...] } }
+  test('(a) fresh/absent hooks.json writes nested { hooks: { SessionStart: [...] } } shape', () => {
+    const hooksJsonPath = path.join(tmpDir, 'hooks.json');
+    const FAKE_CMD = `"/usr/local/bin/node" "${path.join(tmpDir, 'hooks', 'gsd-check-update.js').replace(/\\/g, '/')}"`;
+    assert.ok(!fs.existsSync(hooksJsonPath), 'precondition: hooks.json must not exist');
+
+    reconcileCodexHooksJsonEvent(tmpDir, 'SessionStart', { managedCommand: FAKE_CMD });
+
+    assert.ok(fs.existsSync(hooksJsonPath), 'hooks.json must be created');
+    const hooksJson = JSON.parse(fs.readFileSync(hooksJsonPath, 'utf8'));
+
+    assert.ok(
+      hooksJson.hooks && typeof hooksJson.hooks === 'object' && !Array.isArray(hooksJson.hooks),
+      `Expected nested { hooks: { ... } } shape; got: ${JSON.stringify(hooksJson)}`,
+    );
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(hooksJson, 'SessionStart'),
+      `hooks.json must NOT have a top-level SessionStart key; got: ${JSON.stringify(hooksJson)}`,
+    );
+    assert.ok(
+      Array.isArray(hooksJson.hooks.SessionStart) && hooksJson.hooks.SessionStart.length > 0,
+      `Expected hooks.hooks.SessionStart to be a non-empty array; got: ${JSON.stringify(hooksJson)}`,
+    );
+  });
+
+  // (b) Legacy migration: seed top-level { "SessionStart": [<user>] }, register →
+  //   nested hooks.SessionStart contains BOTH migrated user entry AND managed entry
+  test('(b) legacy top-level shape: user entries migrate into hooks.SessionStart alongside managed entry', () => {
+    const FAKE_CMD = `"/usr/local/bin/node" "${path.join(tmpDir, 'hooks', 'gsd-check-update.js').replace(/\\/g, '/')}"`;
+    const userEntry = { hooks: [{ type: 'command', command: 'node "/Users/alice/my-hook.js"' }] };
+    fs.writeFileSync(
+      path.join(tmpDir, 'hooks.json'),
+      JSON.stringify({ SessionStart: [userEntry] }, null, 2),
+    );
+
+    reconcileCodexHooksJsonEvent(tmpDir, 'SessionStart', { managedCommand: FAKE_CMD });
+
+    const hooksJson = JSON.parse(fs.readFileSync(path.join(tmpDir, 'hooks.json'), 'utf8'));
+
+    // Canonical nested shape
+    assert.ok(
+      hooksJson.hooks && typeof hooksJson.hooks === 'object' && !Array.isArray(hooksJson.hooks),
+      `Expected nested { hooks: { ... } } shape; got: ${JSON.stringify(hooksJson)}`,
+    );
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(hooksJson, 'SessionStart'),
+      `hooks.json must NOT have a top-level SessionStart key; got: ${JSON.stringify(hooksJson)}`,
+    );
+
+    // User entry was migrated under hooks.SessionStart (not dropped)
+    const allCommands = hooksJson.hooks.SessionStart
+      .flatMap((e) => Array.isArray(e.hooks) ? e.hooks : [])
+      .map((h) => h.command);
+    assert.ok(
+      allCommands.includes('node "/Users/alice/my-hook.js"'),
+      `User entry must be preserved under hooks.SessionStart; commands: ${JSON.stringify(allCommands)}`,
+    );
+
+    // Managed entry is also present
+    const managedCount = allCommands.filter((c) => typeof c === 'string' && c.includes('gsd-check-update')).length;
+    assert.equal(managedCount, 1, 'Exactly one managed entry must be present under hooks.SessionStart');
+  });
+
+  // (c-i) Dedup: re-registering the same managed command does not duplicate it
+  test('(c-i) re-registering managed command produces exactly one managed entry', () => {
+    const FAKE_CMD = `"/usr/local/bin/node" "${path.join(tmpDir, 'hooks', 'gsd-check-update.js').replace(/\\/g, '/')}"`;
+    reconcileCodexHooksJsonEvent(tmpDir, 'SessionStart', { managedCommand: FAKE_CMD });
+    reconcileCodexHooksJsonEvent(tmpDir, 'SessionStart', { managedCommand: FAKE_CMD });
+
+    const hooksJson = JSON.parse(fs.readFileSync(path.join(tmpDir, 'hooks.json'), 'utf8'));
+    const allCommands = hooksJson.hooks.SessionStart
+      .flatMap((e) => Array.isArray(e.hooks) ? e.hooks : [])
+      .map((h) => h.command);
+    const managedCount = allCommands.filter((c) => typeof c === 'string' && c.includes('gsd-check-update')).length;
+    assert.equal(managedCount, 1, 'Re-register must yield exactly one managed entry');
+  });
+
+  // (c-ii) Removal: user entries remain under hooks, managed entry is gone
+  test('(c-ii) removing managed hook leaves user entry under hooks.SessionStart', () => {
+    const FAKE_CMD = `"/usr/local/bin/node" "${path.join(tmpDir, 'hooks', 'gsd-check-update.js').replace(/\\/g, '/')}"`;
+    const userEntry = { hooks: [{ type: 'command', command: 'node "/Users/alice/my-hook.js"' }] };
+    // Seed already-nested file with both user + managed
+    reconcileCodexHooksJsonEvent(tmpDir, 'SessionStart', { managedCommand: FAKE_CMD });
+    // Now manually seed a user entry into the existing nested file
+    const seeded = JSON.parse(fs.readFileSync(path.join(tmpDir, 'hooks.json'), 'utf8'));
+    seeded.hooks.SessionStart = [userEntry, ...seeded.hooks.SessionStart];
+    fs.writeFileSync(path.join(tmpDir, 'hooks.json'), JSON.stringify(seeded, null, 2));
+
+    // Remove managed
+    reconcileCodexHooksJsonEvent(tmpDir, 'SessionStart', { managedCommand: null });
+
+    const hooksJson = JSON.parse(fs.readFileSync(path.join(tmpDir, 'hooks.json'), 'utf8'));
+    // User entry must still be under hooks.SessionStart
+    const allCommands = hooksJson.hooks.SessionStart
+      .flatMap((e) => Array.isArray(e.hooks) ? e.hooks : [])
+      .map((h) => h.command);
+    assert.ok(
+      allCommands.includes('node "/Users/alice/my-hook.js"'),
+      `User entry must remain after managed removal; commands: ${JSON.stringify(allCommands)}`,
+    );
+    // No managed entry
+    const managedCount = allCommands.filter((c) => typeof c === 'string' && c.includes('gsd-check-update')).length;
+    assert.equal(managedCount, 0, 'No managed entry must remain after removal');
+  });
+
+  // (c-iii) Removal from absent file does NOT materialize { "hooks": {} }
+  test('(c-iii) removing from absent hooks.json does not write a spurious empty { "hooks": {} }', () => {
+    const hooksJsonPath = path.join(tmpDir, 'hooks.json');
+    assert.ok(!fs.existsSync(hooksJsonPath), 'precondition: hooks.json must not exist');
+
+    reconcileCodexHooksJsonEvent(tmpDir, 'SessionStart', { managedCommand: null });
+
+    assert.ok(
+      !fs.existsSync(hooksJsonPath),
+      'hooks.json must NOT be created when removing from absent file (no spurious { "hooks": {} })',
+    );
+  });
+
+  // (d) Mixed nested + top-level shape: { "hooks": { "PreToolUse": [...] }, "SessionStart": [...] }
+  // The stray top-level event array must be lifted into hooks and merged; no top-level key survives.
+  test('(d) mixed nested + top-level shape: stray top-level event array is lifted and merged', () => {
+    const FAKE_CMD = `"/usr/local/bin/node" "${path.join(tmpDir, 'hooks', 'gsd-check-update.js').replace(/\\/g, '/')}"`;
+    const existingNestedEntry = { hooks: [{ type: 'command', command: 'node "/Users/alice/pre-tool.js"' }] };
+    const userTopLevelEntry = { hooks: [{ type: 'command', command: 'node "/Users/alice/session-start.js"' }] };
+
+    // Seed a mixed-shape file: nested PreToolUse AND top-level SessionStart
+    fs.writeFileSync(
+      path.join(tmpDir, 'hooks.json'),
+      JSON.stringify(
+        {
+          hooks: { PreToolUse: [existingNestedEntry] },
+          SessionStart: [userTopLevelEntry],
+        },
+        null,
+        2,
+      ),
+    );
+
+    reconcileCodexHooksJsonEvent(tmpDir, 'SessionStart', { managedCommand: FAKE_CMD });
+
+    const hooksJson = JSON.parse(fs.readFileSync(path.join(tmpDir, 'hooks.json'), 'utf8'));
+
+    // No stray top-level SessionStart key
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(hooksJson, 'SessionStart'),
+      `hooks.json must NOT have a top-level SessionStart key; got: ${JSON.stringify(hooksJson)}`,
+    );
+
+    // hooks.SessionStart contains the migrated user entry AND exactly one managed entry
+    assert.ok(
+      Array.isArray(hooksJson.hooks.SessionStart),
+      `hooks.hooks.SessionStart must be an array; got: ${JSON.stringify(hooksJson)}`,
+    );
+    const sessionCommands = hooksJson.hooks.SessionStart
+      .flatMap((e) => Array.isArray(e.hooks) ? e.hooks : [])
+      .map((h) => h.command);
+    assert.ok(
+      sessionCommands.includes('node "/Users/alice/session-start.js"'),
+      `Migrated user entry must be present in hooks.SessionStart; commands: ${JSON.stringify(sessionCommands)}; full: ${JSON.stringify(hooksJson)}`,
+    );
+    const managedCount = sessionCommands.filter((c) => typeof c === 'string' && c.includes('gsd-check-update')).length;
+    assert.equal(managedCount, 1, `Exactly one managed entry must be present in hooks.SessionStart; commands: ${JSON.stringify(sessionCommands)}`);
+
+    // hooks.PreToolUse is untouched
+    assert.ok(
+      Array.isArray(hooksJson.hooks.PreToolUse) && hooksJson.hooks.PreToolUse.length === 1,
+      `hooks.hooks.PreToolUse must be preserved with one entry; got: ${JSON.stringify(hooksJson.hooks.PreToolUse)}`,
+    );
+    const preToolCommands = hooksJson.hooks.PreToolUse
+      .flatMap((e) => Array.isArray(e.hooks) ? e.hooks : [])
+      .map((h) => h.command);
+    assert.ok(
+      preToolCommands.includes('node "/Users/alice/pre-tool.js"'),
+      `Existing nested PreToolUse entry must be preserved; commands: ${JSON.stringify(preToolCommands)}`,
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3670-cursor-local-install-migration-lock.test.cjs — consolidation epic #1969 (B5 #1974)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3670-cursor-local-install-migration-lock (consolidation epic #1969 B5 #1974)", () => {
+/**
+ * Regression tests for issue #3670: --cursor --local install self-deadlocks
+ * on gsd-install-migration.lock.
+ *
+ * Root cause: On Windows, `fs.rmSync(lockPath, { force: true })` in the lock
+ * release closure silently swallows EPERM errors that NTFS returns when a
+ * recently-closed file descriptor's handle has not yet been fully released by
+ * the OS. The lock file is left on disk. The next `runInstallerMigrations`
+ * call in the same install() invocation hits EEXIST, spins for
+ * DEFAULT_LOCK_TIMEOUT_MS (30 s), then throws "installer migration lock is
+ * held". There is also no stale-PID reclamation: if the lock names the
+ * current process's PID, the helper should reclaim rather than spin.
+ *
+ * Windows wall-clock deadlock repro depends on Docker matrix Windows runners.
+ * These tests reproduce the failure modes via mock-injected fs faults on any
+ * platform (macOS/Linux/Windows). They fail deterministically WITHOUT the fix
+ * and pass WITH it.
+ *
+ * Test plan:
+ *   T1 (same-process re-entry / stale-PID reclamation — primary regression)
+ *      Pre-seed the lock file with {pid: process.pid, ...}. Verify that a
+ *      runInstallerMigrations call reclaims the lock and succeeds rather than
+ *      spinning 30 s and throwing.
+ *
+ *   T2 (dead-PID reclamation — cross-invocation stale lock)
+ *      Pre-seed the lock file with a PID known to be dead. Verify that acquire
+ *      reclaims rather than throws.
+ *
+ *   T3 (silent rmSync swallow / Windows EPERM simulation)
+ *      Inject a fault that makes fs.rmSync throw EPERM for the lock file only
+ *      (simulating Windows NTFS delete-pending). Verify that the lock file IS
+ *      removed by an alternative path (or that the error propagates) — i.e.
+ *      verify that the fix does not silently leave the lock on disk.
+ *
+ *   T4 (counter-test: normal single acquire/release round-trip still works)
+ *      No pre-seeded lock. One runInstallerMigrations call. Must succeed and
+ *      leave no lock file behind.
+ *
+ *   T5 (counter-test: genuinely-held live lock still surfaces an error)
+ *      Pre-seed lock with a live PID (process.pid) AND simulate a lock that
+ *      has been "truly acquired" (fd still open). With lockTimeoutMs: 0 and a
+ *      truly un-reclaimable lock, must still throw with a useful message naming
+ *      the holder PID. (This guards against over-reclamation.)
+ *
+ * @see https://github.com/open-gsd/gsd-core/issues/3670
+ */
+
+'use strict';
+
+const { test, mock } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const {
+  INSTALL_MIGRATION_LOCK_NAME,
+  runInstallerMigrations,
+} = require('../gsd-core/bin/lib/installer-migrations.cjs');
+const { cleanup } = require('./helpers.cjs');
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function createTempDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3670-'));
+}
+
+function lockPath(dir) {
+  return path.join(dir, INSTALL_MIGRATION_LOCK_NAME);
+}
+
+function writeLockFile(dir, pid, acquiredAt) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    lockPath(dir),
+    JSON.stringify({ pid, acquiredAt: acquiredAt || new Date().toISOString() }) + '\n',
+    'utf8'
+  );
+}
+
+/**
+ * Find a PID that is guaranteed to be dead on this host.
+ * We probe a set of high candidate PIDs (far outside the running set) and
+ * pick the first one for which process.kill(pid, 0) throws ESRCH.
+ * Falls back to 99999 if the probe loop exhausts (extremely unlikely).
+ */
+function findDeadPid() {
+  // Avoid process.pid ± small numbers — those could be live siblings.
+  for (let candidate = 600000; candidate < 700000; candidate += 1000) {
+    try {
+      process.kill(candidate, 0);
+      // Still alive (or permission denied but exists) — try next
+    } catch (err) {
+      if (err.code === 'ESRCH') return candidate;
+    }
+  }
+  return 99999; // fallback: extremely unlikely to be a live PID
+}
+
+// ---------------------------------------------------------------------------
+// T1: Same-process re-entry — stale lock with current process.pid reclaimed
+// ---------------------------------------------------------------------------
+test('T1: reclaims stale lock that names the current process PID (same-process re-entry)', (t) => {
+  const configDir = createTempDir();
+  t.after(() => cleanup(configDir));
+
+  // Pre-seed lock file with the CURRENT process's PID — exactly what happens
+  // on Windows when rmSync swallows EPERM after the first runInstallerMigrations
+  // call releases (or fails to release) the lock.
+  writeLockFile(configDir, process.pid);
+
+  // Without the fix: this would spin for lockTimeoutMs then throw.
+  // With the fix: detects own PID → reclaims → succeeds.
+  // lockTimeoutMs: 200 (fail fast so the test doesn't hang for 30 s without fix)
+  const result = runInstallerMigrations({
+    configDir,
+    migrations: [],
+    lockTimeoutMs: 200,
+  });
+
+  assert.ok(result, 'runInstallerMigrations must return a result object');
+  // Lock file must be removed after the call completes.
+  assert.equal(
+    fs.existsSync(lockPath(configDir)),
+    false,
+    'lock file must not remain on disk after successful runInstallerMigrations'
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T2: Dead-PID reclamation — cross-invocation stale lock
+// ---------------------------------------------------------------------------
+test('T2: reclaims stale lock whose PID is no longer alive', (t) => {
+  const configDir = createTempDir();
+  t.after(() => cleanup(configDir));
+
+  const deadPid = findDeadPid();
+  writeLockFile(configDir, deadPid);
+
+  const result = runInstallerMigrations({
+    configDir,
+    migrations: [],
+    lockTimeoutMs: 200,
+  });
+
+  assert.ok(result, 'runInstallerMigrations must return a result object');
+  assert.equal(
+    fs.existsSync(lockPath(configDir)),
+    false,
+    'lock file must not remain on disk after stale-PID reclamation'
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T3: Windows EPERM simulation — unlinkSync failure surfaces (not silently swallowed)
+// ---------------------------------------------------------------------------
+test('T3: lock release does not silently leave lock file on disk when unlink fails (Windows EPERM simulation)', (t) => {
+  const configDir = createTempDir();
+  const originalUnlinkSync = fs.unlinkSync;
+
+  t.after(() => {
+    fs.unlinkSync = originalUnlinkSync;
+    cleanup(configDir);
+  });
+
+  // The fix uses fs.unlinkSync (not fs.rmSync with { force: true }) in the
+  // release closure. Inject EPERM on the lock file to simulate the Windows
+  // NTFS condition where the recently-closed handle has not been fully
+  // released by the OS.
+  //
+  // The fix's contract: EPERM must NOT be silently swallowed.
+  // Either (a) the error propagates as a releaseError, or (b) some alternative
+  // deletion path succeeds. Silent-swallow (no error + file still exists) is
+  // the failure condition we guard against.
+  let unlinkCallCount = 0;
+  fs.unlinkSync = function faultInjectUnlinkSync(targetPath) {
+    const isLock = path.basename(String(targetPath)) === INSTALL_MIGRATION_LOCK_NAME;
+    if (isLock) {
+      unlinkCallCount++;
+      // Simulate Windows EPERM (file handle not fully released by OS)
+      const err = Object.assign(
+        new Error('EPERM: operation not permitted, unlink ' + targetPath),
+        { code: 'EPERM' }
+      );
+      throw err;
+    }
+    return originalUnlinkSync.call(fs, targetPath);
+  };
+
+  // With the fix: unlinkSync throws EPERM → releaseError is thrown by the
+  // release closure → runInstallerMigrations throws releaseError.
+  // With the buggy code (rmSync + force:true): EPERM was swallowed silently,
+  // no error thrown, lock file left on disk.
+  //
+  // Assert: if the call succeeds (no throw), the lock file must be gone.
+  // If the call throws, the error message must reference the lock.
+  let threw = false;
+  let thrownError = null;
+  try {
+    runInstallerMigrations({
+      configDir,
+      migrations: [],
+      lockTimeoutMs: 500,
+    });
+  } catch (err) {
+    threw = true;
+    thrownError = err;
+  }
+
+  if (threw) {
+    // Acceptable: error surfaced. Verify it's lock-related (not a bug elsewhere).
+    assert.match(
+      thrownError.message,
+      /lock/i,
+      'thrown error must reference the lock file'
+    );
+  } else {
+    // If no error was thrown, the lock file must have been removed by some
+    // alternative path (not left silently on disk).
+    assert.equal(
+      fs.existsSync(lockPath(configDir)),
+      false,
+      'if unlinkSync EPERM is encountered but no error thrown, lock file must still be removed'
+    );
+  }
+
+  // Sanity: the fault injection was actually triggered.
+  assert.ok(unlinkCallCount > 0, 'unlinkSync must have been called for the lock file at least once');
+});
+
+// ---------------------------------------------------------------------------
+// T4: Counter-test — normal single acquire/release round-trip still works
+// ---------------------------------------------------------------------------
+test('T4: normal (non-recursive) runInstallerMigrations acquires and releases lock correctly', (t) => {
+  const configDir = createTempDir();
+  t.after(() => cleanup(configDir));
+
+  // No pre-seeded lock. Standard happy path.
+  const result = runInstallerMigrations({
+    configDir,
+    migrations: [],
+  });
+
+  assert.ok(result, 'runInstallerMigrations must return a result');
+  assert.equal(
+    fs.existsSync(lockPath(configDir)),
+    false,
+    'lock file must be cleaned up after normal completion'
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T5: Counter-test — unreclaimable live lock must surface a bounded error
+// ---------------------------------------------------------------------------
+// This test guards against over-reclamation: if the reclaim-unlink fails
+// (e.g. Windows EPERM on a live open handle), the fix must NOT spin
+// indefinitely — it must fall through to the timeout path and throw.
+//
+// Conditions forced by this test:
+//   1. Lock file contains the CURRENT process.pid (triggers isSameProcess branch).
+//   2. fs.unlinkSync is mocked to throw EPERM for the lock file (reclaim fails).
+//   3. lockTimeoutMs: 200 — timeout must fire within a short wall-clock window.
+//
+// Expected outcome: throws with /installer migration lock is held/ within
+// ~200ms. SUCCESS (no throw) is NOT acceptable here — that would mean the fix
+// over-reclaimed a lock that it couldn't actually remove.
+test('T5: unreclaimable same-PID lock throws bounded error (reclaim-unlink failure falls through to timeout)', (t) => {
+  const configDir = createTempDir();
+  const originalUnlinkSync = fs.unlinkSync;
+
+  t.after(() => {
+    mock.restoreAll();
+    fs.unlinkSync = originalUnlinkSync;
+    cleanup(configDir);
+  });
+
+  // Pre-seed lock file with the CURRENT process's PID.
+  // This triggers the isSameProcess reclamation path inside acquireInstallerMigrationLock.
+  writeLockFile(configDir, process.pid);
+
+  // Mock unlinkSync to throw EPERM for the lock file only.
+  // This simulates Windows NTFS refusing to delete a file with an open handle.
+  // With the fix: reclaim-unlink fails → reclaimed=false → falls through to
+  //   the timeout check → throws "installer migration lock is held" after ≤200ms.
+  // Without the fix (original code): unlink throws but continue runs anyway →
+  //   spins indefinitely, never reaches the timeout check → deadlock.
+  mock.method(fs, 'unlinkSync', function faultInjectUnlinkSync(targetPath) {
+    const isLock = path.basename(String(targetPath)) === INSTALL_MIGRATION_LOCK_NAME;
+    if (isLock) {
+      const err = Object.assign(
+        new Error('EPERM: operation not permitted, unlink ' + targetPath),
+        { code: 'EPERM' }
+      );
+      throw err;
+    }
+    return originalUnlinkSync.call(fs, targetPath);
+  });
+
+  assert.throws(
+    () => runInstallerMigrations({
+      configDir,
+      migrations: [],
+      lockTimeoutMs: 200,
+    }),
+    (err) => {
+      assert.match(err.message, /installer migration lock is held/, 'error must name the held lock');
+      return true;
+    },
+    'must throw "installer migration lock is held" when reclaim-unlink fails — not spin indefinitely'
+  );
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/installer-migrations/001-legacy-orphan-files.test.cjs — consolidation epic #1969 (B5 #1974)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:installer-migrations/001-legacy-orphan-files (consolidation epic #1969 B5 #1974)", () => {
+'use strict';
+
+/**
+ * Characterization tests for the 001-legacy-orphan-files installer migration.
+ * Locks the migration metadata shape and plan() logic (managed-pristine and
+ * managed-modified classification paths; unmanaged artifacts are skipped).
+ */
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+
+const migration = require('../gsd-core/bin/lib/installer-migrations/001-legacy-orphan-files.cjs');
+
+describe('migration metadata', () => {
+  test('exports a single migration object with required fields', () => {
+    assert.equal(typeof migration, 'object');
+    assert.equal(migration.id, '2026-05-11-legacy-orphan-files');
+    assert.equal(typeof migration.title, 'string');
+    assert.equal(typeof migration.description, 'string');
+    assert.equal(migration.introducedIn, '1.50.0');
+    assert.ok(Array.isArray(migration.scopes));
+    assert.ok(migration.scopes.includes('global'));
+    assert.ok(migration.scopes.includes('local'));
+    assert.strictEqual(migration.destructive, true);
+    assert.equal(typeof migration.plan, 'function');
+  });
+});
+
+describe('migration.plan()', () => {
+  function makeClassifier(classification) {
+    return { classifyArtifact: () => ({ classification }) };
+  }
+
+  test('returns remove-managed action for managed-pristine artifact', () => {
+    const actions = migration.plan(makeClassifier('managed-pristine'));
+    assert.equal(actions.length, 2); // two files in LEGACY_ORPHAN_FILES
+    for (const action of actions) {
+      assert.equal(action.type, 'remove-managed');
+      assert.equal(typeof action.relPath, 'string');
+      assert.equal(typeof action.reason, 'string');
+      assert.equal(typeof action.ownershipEvidence, 'string');
+    }
+  });
+
+  test('returns backup-and-remove action for managed-modified artifact', () => {
+    const actions = migration.plan(makeClassifier('managed-modified'));
+    assert.equal(actions.length, 2);
+    for (const action of actions) {
+      assert.equal(action.type, 'backup-and-remove');
+    }
+  });
+
+  test('returns no actions for unmanaged artifact', () => {
+    const actions = migration.plan(makeClassifier('unmanaged'));
+    assert.deepStrictEqual(actions, []);
+  });
+
+  test('relPaths match the two legacy orphan hook files', () => {
+    const actions = migration.plan(makeClassifier('managed-pristine'));
+    const relPaths = actions.map((a) => a.relPath).sort();
+    assert.deepStrictEqual(relPaths, [
+      'hooks/gsd-notify.sh',
+      'hooks/statusline.js',
+    ]);
+  });
+
+  test('plan handles mixed classifications per file', () => {
+    let callCount = 0;
+    const ctx = {
+      classifyArtifact: (_relPath) => {
+        callCount++;
+        // first call: managed-pristine; second call: unmanaged
+        return { classification: callCount === 1 ? 'managed-pristine' : 'unmanaged' };
+      },
+    };
+    const actions = migration.plan(ctx);
+    assert.equal(actions.length, 1);
+    assert.equal(actions[0].type, 'remove-managed');
+  });
+});
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Symlinked managed path: backup must never dereference (#2470 security review)
+// ---------------------------------------------------------------------------
+//
+// `fs.copyFileSync` follows symlinks. Before this hardening, a managed path
+// replaced by a link would have had the LINK TARGET's bytes copied into the
+// journal's backup tree — e.g. a `gsd.cjs` symlinked at a private key would
+// land that key's contents under gsd-migration-journal/. Nothing GSD installs
+// is ever a symlink, so the faithful snapshot is the link itself.
+
+{
+  const { describe, test } = require('node:test');
+  describe('symlinked managed path is snapshotted as a link, never dereferenced', () => {
+  const piExtensionMigration = require('../gsd-core/bin/lib/installer-migrations/006-pi-extension-cjs-to-js.cjs');
+  const SECRET = 'TOP-SECRET-PRIVATE-KEY-MATERIAL\n';
+
+  test('backup-and-remove on a symlinked managed file copies the link, not the referent', (t) => {
+    const configDir = createTempInstall();
+    const secretDir = createTempInstall();
+    try {
+      const secretPath = path.join(secretDir, 'id_rsa');
+      fs.writeFileSync(secretPath, SECRET, 'utf8');
+
+      const linkPath = path.join(configDir, 'extensions', 'gsd.cjs');
+      fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+      try {
+        fs.symlinkSync(secretPath, linkPath);
+      } catch {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+
+      // Manifest records the path as managed with a hash that cannot match the
+      // referent -> classification 'managed-modified' -> backup-and-remove.
+      writeManifest(configDir, { 'extensions/gsd.cjs': sha256('the original extension\n') });
+
+      const result = runInstallerMigrations({
+        configDir,
+        runtime: 'pi',
+        scope: 'global',
+        migrations: [piExtensionMigration],
+        now: () => '2026-07-20T00:00:00.000Z',
+      });
+
+      const backupAction = result.plan.actions.find((a) => a.type === 'backup-and-remove');
+      assert.ok(backupAction, 'expected a backup-and-remove action for the modified managed file');
+
+      // The referent is untouched and still holds its content.
+      assert.ok(fs.existsSync(secretPath), 'symlink target must survive');
+      assert.equal(fs.readFileSync(secretPath, 'utf8'), SECRET, 'symlink target content must be unchanged');
+
+      // The link itself is gone from the install tree.
+      assert.equal(
+        fs.lstatSync(linkPath, { throwIfNoEntry: false }),
+        undefined,
+        'the symlink at the managed path must be removed',
+      );
+
+      // Nothing anywhere under configDir may contain the referent's bytes.
+      const leaked = [];
+      const walk = (dir) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isSymbolicLink()) continue; // a link is fine; its content is not copied
+          if (entry.isDirectory()) { walk(full); continue; }
+          let body;
+          try { body = fs.readFileSync(full, 'utf8'); } catch { continue; }
+          if (body.includes('TOP-SECRET')) leaked.push(path.relative(configDir, full));
+        }
+      };
+      walk(configDir);
+      assert.deepEqual(leaked, [], `symlink referent content leaked into: ${leaked.join(', ')}`);
+    } finally {
+      cleanup(configDir);
+      cleanup(secretDir);
+    }
+  });
+
+  test('a regular managed file is still backed up by content (no behavior change)', (t) => {
+    const configDir = createTempInstall();
+    t.after(() => cleanup(configDir));
+
+    writeFile(configDir, 'extensions/gsd.cjs', 'locally patched extension\n');
+    writeManifest(configDir, { 'extensions/gsd.cjs': sha256('the original extension\n') });
+
+    const result = runInstallerMigrations({
+      configDir,
+      runtime: 'pi',
+      scope: 'global',
+      migrations: [piExtensionMigration],
+      now: () => '2026-07-20T00:00:00.000Z',
+    });
+
+    const backupAction = result.plan.actions.find((a) => a.type === 'backup-and-remove');
+    assert.ok(backupAction, 'expected backup-and-remove for the locally patched file');
+
+    // The PLAN carries backupRelPath: null — the concrete backup location is
+    // chosen during apply and recorded in the journal, so read it from there.
+    const journal = JSON.parse(fs.readFileSync(path.join(configDir, result.journalRelPath), 'utf8'));
+    const journalled = journal.actions.find((a) => a.backupRelPath);
+    assert.ok(journalled, 'apply must record the backup path in the journal for the user');
+    const backupPath = path.join(configDir, journalled.backupRelPath);
+    assert.equal(
+      fs.readFileSync(backupPath, 'utf8'),
+      'locally patched extension\n',
+      'a real file must still be backed up by content so the user can recover it',
+    );
+    assert.ok(!fs.existsSync(path.join(configDir, 'extensions', 'gsd.cjs')));
+  });
+
+  // In-flight failure recovery: when a later step of the SAME apply() attempt
+  // throws, the catch block replays the rollback snapshots it already took.
+  // Those snapshots are themselves symlinks, so a raw copy there dereferences
+  // and writes the referent's bytes back to the LIVE install path — worse than
+  // the journal-tree leak, because it is user-visible at a predictable path.
+  //
+  // The failure is injected by monkeypatching fs.rmSync (restored in finally)
+  // rather than by chmod/permission tricks: deterministic, root- and
+  // OS-independent. The delete of the managed path is allowed to SUCCEED and
+  // then throws once, modelling a later step failing after the delete. That
+  // ordering is load-bearing: if the live path still existed, the pre-fix
+  // copyFileSync would hit a same-file collision and throw instead of leaking,
+  // and this test would pass against the very bug it exists to catch.
+  test('apply failure after a symlinked snapshot does not leak the referent into the live tree', (t) => {
+    const configDir = createTempInstall();
+    const secretDir = createTempInstall();
+    const realRmSync = fs.rmSync;
+    try {
+      const secretPath = path.join(secretDir, 'id_rsa');
+      fs.writeFileSync(secretPath, SECRET, 'utf8');
+
+      const linkPath = path.join(configDir, 'extensions', 'gsd.cjs');
+      fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+      try {
+        fs.symlinkSync(secretPath, linkPath);
+      } catch {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      writeManifest(configDir, { 'extensions/gsd.cjs': sha256('the original extension\n') });
+
+      let fired = false;
+      fs.rmSync = function patched(target, options) {
+        const result = realRmSync.call(fs, target, options);
+        if (!fired && path.resolve(String(target)) === path.resolve(linkPath)) {
+          fired = true;
+          throw new Error('injected post-delete failure');
+        }
+        return result;
+      };
+
+      assert.throws(() => runInstallerMigrations({
+        configDir,
+        runtime: 'pi',
+        scope: 'global',
+        migrations: [piExtensionMigration],
+        now: () => '2026-07-20T00:00:00.000Z',
+      }), /injected post-delete failure/, 'the injected failure must propagate, not be swallowed');
+
+      fs.rmSync = realRmSync;
+
+      // The referent is untouched...
+      assert.ok(fs.existsSync(secretPath));
+      assert.equal(fs.readFileSync(secretPath, 'utf8'), SECRET);
+
+      // ...the managed path is restored as a LINK, not a dereferenced copy...
+      const restored = fs.lstatSync(linkPath, { throwIfNoEntry: false });
+      assert.ok(restored, 'failure recovery must restore the managed path');
+      assert.ok(
+        restored.isSymbolicLink(),
+        'restored path must be a symlink — a regular file here means the referent was dereferenced into the live tree',
+      );
+
+      // ...and its bytes appear nowhere under the install tree.
+      const leaked = [];
+      const walk = (dir) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isSymbolicLink()) continue;
+          if (entry.isDirectory()) { walk(full); continue; }
+          let body;
+          try { body = fs.readFileSync(full, 'utf8'); } catch { continue; }
+          if (body.includes('TOP-SECRET')) leaked.push(path.relative(configDir, full));
+        }
+      };
+      walk(configDir);
+      assert.deepEqual(leaked, [], `referent content leaked into: ${leaked.join(', ')}`);
+    } finally {
+      fs.rmSync = realRmSync;
+      cleanup(configDir);
+      cleanup(secretDir);
+    }
+  });
+
+  test('rollback() restores a symlinked managed path as a link, not a dereferenced copy', (t) => {
+    const configDir = createTempInstall();
+    const secretDir = createTempInstall();
+    try {
+      const targetPath = path.join(secretDir, 'id_rsa');
+      fs.writeFileSync(targetPath, SECRET, 'utf8');
+
+      const linkPath = path.join(configDir, 'extensions', 'gsd.cjs');
+      fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+      try {
+        fs.symlinkSync(targetPath, linkPath);
+      } catch {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      writeManifest(configDir, { 'extensions/gsd.cjs': sha256('the original extension\n') });
+
+      const result = runInstallerMigrations({
+        configDir,
+        runtime: 'pi',
+        scope: 'global',
+        migrations: [piExtensionMigration],
+        now: () => '2026-07-20T00:00:00.000Z',
+      });
+      assert.equal(fs.lstatSync(linkPath, { throwIfNoEntry: false }), undefined, 'link removed by apply');
+
+      result.rollback();
+
+      const restored = fs.lstatSync(linkPath, { throwIfNoEntry: false });
+      assert.ok(restored, 'rollback must restore the managed path');
+      assert.ok(restored.isSymbolicLink(), 'restored path must be a symlink, not a dereferenced copy');
+      assert.equal(fs.readlinkSync(linkPath), targetPath, 'restored link must point at the original target');
+      assert.equal(fs.readFileSync(targetPath, 'utf8'), SECRET, 'target content must be untouched throughout');
+    } finally {
+      cleanup(configDir);
+      cleanup(secretDir);
+    }
+  });
+});
+}

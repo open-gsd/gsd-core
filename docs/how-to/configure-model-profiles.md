@@ -61,6 +61,8 @@ Valid values: `opus`, `sonnet`, `haiku`, `inherit`, or any fully-qualified model
 npx @opengsd/gsd-core@latest --codex --global   # or --opencode, --kilo, etc.
 ```
 
+GSD will also warn you if you forget: workflow entry commands (`gsd init plan-phase`, `gsd init execute-phase`, etc.) detect when `.planning/config.json` or `~/.gsd/defaults.json` is newer than your installed agent files and print a one-line stderr reminder naming the changed file and the re-install command. The check is read-only and runs only on `codex` and `opencode`; Claude Code resolves models at spawn time and is unaffected. (#1688)
+
 ---
 
 ## Per-phase-type models (`models`)
@@ -88,8 +90,9 @@ Phase types and their agents:
 | `planning` | `gsd-planner`, `gsd-roadmapper`, `gsd-pattern-mapper` |
 | `research` | `gsd-phase-researcher`, `gsd-project-researcher`, `gsd-research-synthesizer`, `gsd-codebase-mapper`, `gsd-ui-researcher` |
 | `execution` | `gsd-executor`, `gsd-debugger`, `gsd-doc-writer` |
-| `verification` | `gsd-verifier`, `gsd-plan-checker`, `gsd-integration-checker`, `gsd-nyquist-auditor`, `gsd-ui-checker`, `gsd-ui-auditor`, `gsd-doc-verifier` |
-| `discuss`, `completion` | Reserved — no subagent today; accepted by schema for forward compatibility |
+| `verification` | `gsd-verifier`, `gsd-plan-checker`, `gsd-integration-checker`, `gsd-nyquist-auditor`, `gsd-ui-checker`, `gsd-ui-auditor`, `gsd-doc-verifier`, `gsd-code-reviewer` |
+| `discuss` | `gsd-assumptions-analyzer` |
+| `completion` | Reserved — no subagent today; accepted by schema for forward compatibility |
 
 The `models` block accepts tier aliases only (`opus`, `sonnet`, `haiku`, `inherit`). For a fully-qualified model ID, use `model_overrides` per agent instead.
 
@@ -149,11 +152,40 @@ Every attempt uses `tier_models[default_tier]` regardless of outcome — useful 
 
 `dynamic_routing` is **disabled by default**. Omitting the block or setting `enabled: false` preserves static resolution.
 
+### Keep going when a provider throttles you
+
+The tier ladder above escalates within one provider. When the provider itself is the thing
+that ran out of quota, a heavier tier on the same account is still throttled. Add
+`provider_escalation` — an ordered list of fallback model IDs — to keep the phase moving
+instead of stopping for a manual restart:
+
+```json
+{
+  "dynamic_routing": {
+    "enabled": true,
+    "tier_models": { "light": "haiku", "standard": "sonnet", "heavy": "opus" },
+    "provider_escalation": ["gpt-5", "nvidia/llama-3.3"],
+    "max_escalations": 2
+  }
+}
+```
+
+When an executor dies on a rate limit, GSD classifies the error body, switches to the next
+model in the list, logs the swap (`sonnet → gpt-5`), and waits out any `Retry-After` the
+provider sent. The walk is capped at `min(max_escalations, provider_escalation.length)`.
+Once the list is spent, GSD names every model it tried and hands you the normal recovery
+prompt — it never silently retries the exhausted one.
+
+This is most useful on providers without a guaranteed SLA (Nvidia NIM, OpenRouter, and
+other third-party OpenCode models), where a throttle mid-phase is routine. It only fires on
+quota / rate-limit failures; other failures keep the tier ladder. Leaving
+`provider_escalation` unset preserves the manual wait-for-reset behaviour exactly.
+
 ---
 
 ## Using GSD on non-Anthropic runtimes
 
-If you installed GSD for Codex, OpenCode, Gemini CLI, or Kilo, the installer already set `resolve_model_ids: "omit"` in your config. This tells GSD to skip Anthropic model ID resolution and let the runtime choose its own default model. No manual setup is needed for the basic case.
+If you installed GSD for Codex, OpenCode, Antigravity CLI, or Kilo, the installer already set `resolve_model_ids: "omit"` in your config. This tells GSD to skip Anthropic model ID resolution and let the runtime choose its own default model. No manual setup is needed for the basic case.
 
 **If you want tiered models on Codex:**
 

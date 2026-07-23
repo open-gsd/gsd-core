@@ -27,8 +27,15 @@
 import graphify = require('./graphify.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
+// Phase 2 (#1646): route through the Hub per ADR-959 §III(B) line 75.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import commandRoutingHub = require('./command-routing-hub.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import cjsCommandRouterAdapter = require('./cjs-command-router-adapter.cjs');
 
 const { output, ERROR_REASON } = io;
+const { makeInvalidArgs } = commandRoutingHub;
+const { routeHubCommandFamily } = cjsCommandRouterAdapter;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -52,42 +59,58 @@ interface RouteGraphifyCommandOptions {
 // ─── Implementation ───────────────────────────────────────────────────────────
 
 function routeGraphifyCommand({ args, cwd, raw, error, _graphify }: RouteGraphifyCommandOptions): void {
-  const subcommand = args[1];
   const g: GraphifyModule = _graphify ?? graphify;
 
-  if (subcommand === 'query') {
-    const term = args[2];
-    if (!term) {
-      error('Usage: gsd-tools graphify query <term>', ERROR_REASON.USAGE);
-      return;
-    }
-    const budgetIdx = args.indexOf('--budget');
-    let budget: number | null = null;
-    if (budgetIdx !== -1) {
-      const rawBudget = args[budgetIdx + 1];
-      if (rawBudget === undefined || Number.isNaN(parseInt(rawBudget, 10))) {
-        error('Usage: gsd-tools graphify query <term> [--budget <N>]', ERROR_REASON.USAGE);
-        return;
-      }
-      budget = parseInt(rawBudget, 10);
-    }
-    output(g.graphifyQuery(cwd, term, { budget }), raw);
-  } else if (subcommand === 'status') {
-    output(g.graphifyStatus(cwd), raw);
-  } else if (subcommand === 'diff') {
-    output(g.graphifyDiff(cwd), raw);
-  } else if (subcommand === 'build') {
-    if (args[2] === 'snapshot') {
-      output(g.writeSnapshot(cwd), raw);
-    } else {
-      output(g.graphifyBuild(cwd), raw);
-    }
-  } else {
-    error(
-      'Unknown graphify subcommand. Available: build, query, status, diff',
-      ERROR_REASON.SDK_UNKNOWN_COMMAND,
-    );
-  }
+  // Phase 2 (#1646): routes through the Command Routing Hub per ADR-959 §III(B)
+  // line 75. Validation handlers return `makeInvalidArgs(...)` Results (Q2=C,
+  // Q4=ii); the Hub → adapter translation preserves ERROR_REASON granularity
+  // via the exitReason field (Phase 1, #1644). Success handlers keep direct
+  // `output()` calls (audit's formatAuditReport quirk sets this precedent).
+  // The unknown-subcommand path is owned by the Hub's manifest check; the
+  // adapter passes SDK_UNKNOWN_COMMAND for UnknownCommand Results.
+  routeHubCommandFamily({
+    family: 'graphify',
+    args,
+    // Alphabetical order produces a stable, byte-identical `Available:` list
+    // in the unknown-subcommand message (matches the pre-conversion text).
+    subcommands: ['build', 'diff', 'query', 'status'],
+    handlers: {
+      query: () => {
+        const term = args[2];
+        if (!term) {
+          return makeInvalidArgs('term', 'Usage: gsd-tools graphify query <term>', ERROR_REASON.USAGE);
+        }
+        const budgetIdx = args.indexOf('--budget');
+        let budget: number | null = null;
+        if (budgetIdx !== -1) {
+          const rawBudget = args[budgetIdx + 1];
+          if (rawBudget === undefined || Number.isNaN(parseInt(rawBudget, 10))) {
+            return makeInvalidArgs(
+              '--budget',
+              'Usage: gsd-tools graphify query <term> [--budget <N>]',
+              ERROR_REASON.USAGE,
+            );
+          }
+          budget = parseInt(rawBudget, 10);
+        }
+        output(g.graphifyQuery(cwd, term, { budget }), raw);
+      },
+      status: () => output(g.graphifyStatus(cwd), raw),
+      diff: () => output(g.graphifyDiff(cwd), raw),
+      build: () => {
+        if (args[2] === 'snapshot') {
+          output(g.writeSnapshot(cwd), raw);
+        } else {
+          output(g.graphifyBuild(cwd), raw);
+        }
+      },
+    },
+    unknownMessage: (subcommand: string, available: string[]) =>
+      `Unknown graphify subcommand. Available: ${available.join(', ')}`,
+    error,
+    cwd,
+    raw,
+  });
 }
 
 export = {

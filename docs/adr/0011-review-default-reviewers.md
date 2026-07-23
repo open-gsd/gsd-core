@@ -1,9 +1,27 @@
 # `review.default_reviewers` config key scopes the no-flag `/gsd-review` fan-out
 
-- **Status:** Proposed
+- **Status:** Accepted — ratified 2026-07-17 (originally Proposed 2026-05-13); see "Ratification" below
 - **Date:** 2026-05-13
 
 We propose adding a `review.default_reviewers` key to `.planning/config.json` that scopes the no-flag default of `/gsd-review` to a user-chosen subset of detected CLI reviewers. Today the no-flag branch of `workflows/review.md` (line 52) invokes **all available** CLIs, which for multi-CLI users plus local model servers (ollama, lm-studio, llama.cpp) means probing up to ~10 backends per review, paying timeout costs on servers that aren't running and burning tokens on reviewers the user doesn't want for routine work (`#3079`). The only workaround today is patching `workflows/review.md` in place; that patch is wiped on every `/gsd-update` and requires `/gsd-update --reapply` to restore, with no machine-readable record of intent. The proposed key sits inside the existing `review.*` namespace (alongside `review.models.<cli>` and `review.*_host`), follows GSD's **absent = enabled** config philosophy, and is implementable as a one-line config read plus an intersection on the detected reviewer set.
+
+## Ratification (2026-07-17): Proposed → Accepted
+
+Ratified by explicit maintainer directive; the Status field had sat stale at "Proposed" for roughly 65 days after the decision actually shipped.
+
+**Evidence the decision shipped:**
+
+- Landing commit `245d5f66a` ("feat: add review.default_reviewers config for /gsd-review defaults (#3464)", 2026-05-13) added the schema, resolution logic, workflow wiring, docs, and three test files in one change.
+- `src/review-reviewer-selection.cts` (329 lines) exports `KNOWN_REVIEWER_SLUGS` (line 51) and `normalizeConfiguredDefaultReviewers` (line 105), implementing the ADR's precedence order (explicit flags > `--all` > `review.default_reviewers` > all detected).
+- `src/config.cts:878` handles `kp === 'review.default_reviewers'` for `config-get`/`config-set`, running values through `normalizeConfiguredDefaultReviewers` and surfacing schema errors.
+- `gsd-core/workflows/review.md` (no-flag branch, ~lines 55-70) intersects detected reviewers with `review.default_reviewers` exactly as specified, including unknown-slug warnings and undetected-slug info notes.
+- `docs/CONFIGURATION.md:219-225` documents the key, type, default, and precedence; `docs/COMMANDS.md:1451-1461` documents usage with a `gsd config-set` example.
+- Four test files are present and current: `tests/review-default-reviewers-config.test.cjs`, `tests/review-default-reviewers-resolution.test.cjs`, `tests/review-default-reviewers-workflow.test.cjs`, `tests/review-reviewer-instances.test.cjs`.
+- `.changeset/archived/daring-badgers-munch.md` (type: Added, pr: 3464) is archived, confirming release tooling already processed it.
+
+Governance state: the owning issue (`#3079`, referenced above) and its landing PR (`#3464`) both 404 against the current `open-gsd/gsd-core` tracker — their numbering belongs to a predecessor repo whose issue space predates this repo's 2026-05 range (which topped out near `#540`), consistent with known predecessor-repo numbering rather than a fabricated reference. No in-tracker close event is directly checkable; the shipped-code evidence above substitutes for it.
+
+**Known gaps at ratification:** two of the ADR's own non-blocking open questions remain genuinely unresolved — Q-2 (`--no-default` flag) and Q-3 (`review.profiles.*` namespace) — exactly as the ADR itself scoped them as future/non-blocking, so this is expected rather than a regression.
 
 ## Decision
 

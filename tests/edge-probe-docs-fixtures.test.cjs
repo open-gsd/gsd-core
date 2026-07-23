@@ -24,7 +24,7 @@ const specTemplatePath = path.join(__dirname, '..', 'gsd-core', 'templates', 'sp
 // The \n? before the closing fence allows blocks whose closing fence has no preceding newline
 // (fixes the silent-skip bug where a trailing-fence-with-no-newline was not matched).
 function taggedJsonBlocks(md) {
-  const re = /```json edge-probe:([^\n]+)\n([\s\S]*?)\n?```/g;
+  const re = /```json edge-probe:([^\r\n]+)\r?\n([\s\S]*?)\r?\n?```/g;
   const out = {};
   let m;
   while ((m = re.exec(md))) out[m[1].trim()] = m[2];

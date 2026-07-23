@@ -228,6 +228,33 @@ node scripts/release-notes/format-github-release-notes.cjs \
 Omit `--apply` to print the reformatted body to stdout for review without
 publishing.
 
+### PR title convention (enforced at open time)
+
+Because the changelog is built from PR titles, your **PR title** must follow:
+
+```
+type(#<issue>): short summary
+```
+
+- **Start with the type** — `feat`, `fix`, or any other conventional type
+  (`chore`, `docs`, `refactor`, …). No leading tags or prefixes: a title like
+  `[security] fix(config): …` defeats the `^fix` bucket anchor and silently
+  files the entry under the wrong changelog section.
+- **Put the linked issue ref in the scope** — `(#<digits>)`. This is what
+  renders as a link to the issue in the changelog line. `fix(core): …` buckets
+  correctly but produces a changelog entry with **no issue link**.
+- A breaking-change marker is fine: `feat(#42)!: …`.
+
+Examples: `fix(#1542): roadmap rollback`, `feat(#39): milestone-prefixed phase IDs`,
+`enhance(#1549): add PR-title validator`.
+
+**CI enforcement:** `pr-title-validator.yml` checks the title on open/edit and
+fails with the required format if it doesn't conform. It reuses the same matcher
+the changelog classifier uses (`scripts/release-notes/conventional-title.cjs`), so a title
+that passes the check is guaranteed to bucket and link correctly. Fix a flagged
+title by editing it in place — the check re-runs on edit, no need to recreate
+the PR.
+
 ## Documentation Updates — Update the Relevant Docs
 
 If your PR adds, changes, deprecates, or removes user-visible behavior, you **must** update the relevant documentation in `docs/`. CI will fail any PR whose changeset fragment is typed `Added`, `Changed`, `Deprecated`, or `Removed` without also modifying at least one file under `docs/` ([#3213](https://github.com/open-gsd/gsd-core/issues/3213)).
@@ -473,6 +500,14 @@ Required cases where relevant:
 - Scalars where arrays are expected, and objects where strings are expected
 
 Property-style parser tests are encouraged for high-risk parsers. They must be deterministic: pin the seed, bound the iteration count, and print replay data on failure.
+
+##### Fixture provenance (#2371)
+
+**A gate's fixtures may not be derived from the gate's own writer, grammar, or docstring examples. A negative fixture must come from a source that does not know the gate exists.**
+
+This is stricter than the adversarial-input rule above and exists because of it: `tests/fixtures/adversarial/` covers hostile input, but a fixture written by the parser's own author — even a deliberately "realistic" one — is still drawn from the author's mental model of the format. It can only ever confirm what the author already believed, never surface what they didn't anticipate. A property-test generator has the same failure mode one level up: seeding the generator from the writer/render function that produces the same format makes the document shape a constant, so the property can never explore a document the writer wouldn't produce (see the document-shaped vs. writer-seeded property tests in `tests/api-coverage.test.cjs` for a worked example — the writer-seeded one cannot fail against a decoy table; the document-shaped one can).
+
+For a gate whose fixtures come from real user reports, put them under `tests/fixtures/representative/<gate>/` with a `MANIFEST.json` labeling each fixture's source issue and expected gate verdict, and drive them through the gate's real CLI entrypoint (gate-verdict altitude), not the parser function in isolation — see `tests/fixtures/representative/README.md` and `tests/representative-corpus.test.cjs`. If the gate is not yet fixed, do not mark the assertion `{ todo: true }` and do not skip it: this repo's test-runner (`gsd-test` / `gsd-test-runner`) has no concept of node:test's `todo` option — its JSONL result parser only recognizes `kind: "pass" | "fail"`, so a thrown todo-marked test is still counted as a real failure and blocks the push gate. Instead record BOTH the correct target verdict (`expected*`) and the exact current observed verdict (`currentBuggyOutput`) in the manifest, and assert against `currentBuggyOutput` — an honest, non-vacuous characterization of today's known-broken behavior that passes today and breaks loudly the moment the real fix changes the observed output, forcing the assertion to be flipped to `expected*`.
 
 #### Filesystem writes and installers
 
@@ -790,6 +825,7 @@ The following checks run on every PR in addition to the test suite:
 | Job | What it checks | How to pass |
 |-----|----------------|-------------|
 | `Lint — ESLint` | No source-grep tests (see above), via the `local/no-source-grep` rule | Replace with `runGsdTools()` behavioral tests, or add `// allow-test-rule: <reason>` |
+| `Lint — cross-platform portability` | Windows-portability defects in tests, via `local/no-path-literal-in-assert` (more rules land per [ADR-1703](docs/adr/1703-portability-enforcement-architecture.md)) — e.g. a path-returning call asserted against a hardcoded `/`-literal | Normalize the actual: `String(pathFn(...)).replace(/\\/g, '/')`, or structure platform-specific code behind a `process.platform !== 'win32'` guard. **No `eslint-disable`** — see [cross-platform-portability-rules.md](docs/contributing/cross-platform-portability-rules.md) |
 
 Run locally before pushing: `npm run lint` (or `npx eslint .`)
 
@@ -834,7 +870,7 @@ Defensive normalization at trust boundaries must validate both the value's type 
 
 - **CommonJS** (`.cjs`) — the project uses `require()`, not ESM `import`
 - **No external dependencies in core** — `gsd-tools.cjs` and all lib files use only Node.js built-ins
-- **Conventional commits** — `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `ci:`
+- **Conventional commits** — `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `ci:`. The full grammar is `<type>(<scope>): <subject>` (enforced by `hooks/gsd-validate-commit.sh`; subject ≤72 chars, lowercase, imperative mood, no trailing period). When the work resolves a tracked issue, put the issue number in the scope: `fix(#1520): randomize mktemp temp paths on BSD/macOS`. The same convention applies to PR titles — release notes are grouped by the title's type prefix (`feat` → Feature, `fix` → Fix, everything else → Enhancement).
 
 ## File Structure
 
@@ -847,7 +883,7 @@ gsd-core/
                           pattern: workflows/<name>/modes/*.md +
                           workflows/<name>/templates/*. Parent dispatches
                           to mode files. See workflows/discuss-phase/ as
-                          the canonical example (#2551). New modes for
+                          the canonical example (the discuss-phase/modes split, #717). New modes for
                           discuss-phase land in
                           workflows/discuss-phase/modes/<mode>.md.
                           Per-file sizes are pinned by a committed baseline

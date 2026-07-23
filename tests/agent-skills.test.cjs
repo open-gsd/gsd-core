@@ -211,6 +211,14 @@ describe('agent-skills command', () => {
     const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
     assert.ok(r.success, 'Command should succeed even with missing skill paths');
     assert.strictEqual(r.ir.block, '', 'block must be empty when all skill paths are missing');
+    // The --json IR carries a warnings[] field (#1374): a skipped path must not
+    // be dropped silently. Assert it names the missing path so this test guards
+    // the silent-drop regression, not merely the empty block.
+    assert.ok(Array.isArray(r.ir.warnings), 'IR must include a warnings array');
+    assert.ok(
+      r.ir.warnings.some((w) => w.includes('skills/nonexistent')),
+      `warnings must name the skipped path, got: ${JSON.stringify(r.ir.warnings)}`,
+    );
   });
 
   test('validates path safety — rejects traversal attempts', () => {
@@ -226,11 +234,146 @@ describe('agent-skills command', () => {
 
   test('returns typed empty IR when no agent type argument provided', () => {
     const r = runAgentSkillsJson(['agent-skills'], tmpDir);
-    // With --json and no agent type, the command outputs the empty-string IR
     assert.ok(r.success, 'Command should succeed');
-    // Output is JSON, either empty string or empty object
-    const parsed = JSON.parse(r.success ? JSON.stringify(r.ir) : '""');
-    assert.ok(parsed === '' || (typeof parsed === 'object'), 'Should return empty or empty-agent IR');
+    // With --json and no agent type, cmdAgentSkills calls output('', raw, ''),
+    // so the IR is the JSON-encoded empty string "" which parses to ''. Pin that
+    // exact contract: the old assertion (=== '' || typeof === 'object') passed
+    // even for a null IR because typeof null === 'object', so it guarded nothing.
+    assert.strictEqual(r.ir, '', 'empty IR must be the empty string when no agent type is provided');
+  });
+});
+
+// ─── empty-resolution diagnostics (silent-drop visibility) ────────────────────
+//
+// When an agent is CONFIGURED with skill paths but every path fails to resolve
+// (missing SKILL.md, unsafe path, invalid global name), buildAgentSkillsBlock
+// previously returned '' with only per-path stderr warnings and no aggregate
+// signal — so `query agent-skills --json` reported skills_count > 0 with an
+// empty block and no indication the configured skills were dropped.
+//
+// Fix: emit an aggregate stderr WARNING when configured paths all resolve to
+// zero skills, and surface every skip reason in a `warnings[]` field on the
+// --json IR.
+describe('agent-skills empty-resolution diagnostics', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('configured agent whose only skill is missing → warnings[] names the path and the aggregate drop', () => {
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-phase-researcher': ['references/other-skill'] },
+    });
+
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-phase-researcher'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '', 'block must be empty when the only configured skill is missing');
+    assert.strictEqual(r.ir.skills_count, 1, 'skills_count still reflects the configured path count');
+    assert.ok(Array.isArray(r.ir.warnings), 'IR must include a warnings array');
+    assert.ok(r.ir.warnings.length >= 1, `warnings must be non-empty, got: ${JSON.stringify(r.ir.warnings)}`);
+    assert.ok(
+      r.ir.warnings.some((w) => w.includes('references/other-skill')),
+      `warnings must name the skipped path, got: ${JSON.stringify(r.ir.warnings)}`,
+    );
+    assert.ok(
+      r.ir.warnings.some((w) => /none resolved to a valid skill/.test(w)),
+      `warnings must include the aggregate empty-resolution diagnostic, got: ${JSON.stringify(r.ir.warnings)}`,
+    );
+  });
+
+  test('configured agent with all skills missing → aggregate WARNING on stderr naming the agent', () => {
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-planner': ['references/a', 'references/b'] },
+    });
+
+    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-planner'], tmpDir, {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+    });
+    assert.ok(r.success, `Command failed (exit ${r.exitCode}): ${r.stderr}`);
+    assert.ok(
+      r.stderr.includes('[agent-skills] WARNING') &&
+        r.stderr.includes('gsd-planner') &&
+        r.stderr.includes('none resolved to a valid skill'),
+      `stderr must carry the aggregate empty-resolution warning naming the agent, got: ${r.stderr}`,
+    );
+    const ir = JSON.parse(r.stdout);
+    assert.strictEqual(ir.block, '');
+    assert.ok(ir.warnings.length >= 2, `warnings must list both skipped paths, got: ${JSON.stringify(ir.warnings)}`);
+  });
+
+  test('partial resolution: one valid + one missing → block present, NO aggregate warning, skipped path still listed', () => {
+    const skillDir = path.join(tmpDir, 'skills', 'present');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# present\n');
+
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': ['skills/present', 'skills/absent'] },
+    });
+
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok(r.ir.block.includes('skills/present/SKILL.md'), 'block must include the resolvable skill');
+    assert.strictEqual(r.ir.skills_count, 2, 'skills_count reflects both configured paths');
+    assert.ok(Array.isArray(r.ir.warnings), 'IR must include a warnings array');
+    assert.ok(
+      r.ir.warnings.some((w) => w.includes('skills/absent')),
+      `warnings must list the one skipped path, got: ${JSON.stringify(r.ir.warnings)}`,
+    );
+    assert.ok(
+      !r.ir.warnings.some((w) => /none resolved to a valid skill/.test(w)),
+      `aggregate empty-resolution warning must NOT fire when at least one skill resolved, got: ${JSON.stringify(r.ir.warnings)}`,
+    );
+  });
+
+  test('all skills resolve → warnings[] is empty', () => {
+    const skillDir = path.join(tmpDir, 'skills', 'only');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# only\n');
+
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': ['skills/only'] },
+    });
+
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok(r.ir.block.includes('skills/only/SKILL.md'), 'block must include the resolved skill');
+    assert.ok(Array.isArray(r.ir.warnings), 'IR must include a warnings array');
+    assert.strictEqual(r.ir.warnings.length, 0, `warnings must be empty when all skills resolve, got: ${JSON.stringify(r.ir.warnings)}`);
+  });
+
+  test('unconfigured agent → warnings[] empty (no skills configured is not a drop)', () => {
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': ['skills/whatever'] },
+    });
+
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-planner'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '');
+    assert.ok(Array.isArray(r.ir.warnings), 'IR must include a warnings array');
+    assert.strictEqual(r.ir.warnings.length, 0, 'an agent with no configured skills is not a drop — warnings must be empty');
+  });
+
+  test('malformed (non-array, non-string) configured value → flagged in warnings[], not a silent drop', () => {
+    // A hand-edited config.json could carry a scalar instead of an array.
+    // cmdAgentSkills still counts it as a configured path, so it must be surfaced.
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': 42 },
+    });
+
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '', 'block must be empty for a malformed value');
+    assert.ok(Array.isArray(r.ir.warnings), 'IR must include a warnings array');
+    assert.ok(
+      r.ir.warnings.some((w) => /malformed agent_skills value/.test(w)),
+      `malformed scalar config must be flagged in warnings[], got: ${JSON.stringify(r.ir.warnings)}`,
+    );
   });
 });
 
@@ -1278,5 +1421,326 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
       [],
       `These agents declare "Skill" but are NOT in KNOWN_SKILL_AGENTS:\n${unexpectedSkill.join('\n')}\nIf this is intentional, add the agent to KNOWN_SKILL_AGENTS with a comment.`
     );
+  });
+});
+
+// ─── Resolution Provenance diagnostics (#1415 / #1366) ────────────────────────
+//
+// Verifies that cmdAgentSkills uses findProjectRoot (cwd-drift anchor) and
+// loadConfigResolved (provenance-aware config loading), and that the --json IR
+// includes the new fields: configured, reason, source, degraded.
+
+describe('agent-skills — Resolution Provenance (#1415)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('--json IR includes configured, reason, source, degraded fields', () => {
+    // Minimal smoke: just the field presence
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok('configured' in r.ir, 'IR must include "configured" field');
+    assert.ok('reason' in r.ir, 'IR must include "reason" field');
+    assert.ok('source' in r.ir, 'IR must include "source" field');
+    assert.ok('degraded' in r.ir, 'IR must include "degraded" field');
+  });
+
+  test('not_configured: agent not in map → configured:false, reason:not_configured, no stderr warning', () => {
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': ['skills/foo'] },
+    });
+    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-planner'], tmpDir, {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+    });
+    assert.ok(r.success, `Command failed: ${r.stderr}`);
+    const ir = JSON.parse(r.stdout);
+    assert.strictEqual(ir.configured, false);
+    assert.strictEqual(ir.reason, 'not_configured');
+    // No warning on stderr for not_configured
+    assert.ok(
+      !r.stderr.includes('WARNING'),
+      `Should NOT emit WARNING for not_configured agent, got stderr: ${r.stderr}`,
+    );
+  });
+
+  test('configured_empty: agent_skills[X]=[] → configured:true, reason:configured_empty, stderr WARNING, skills_count:0', () => {
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': [] },
+    });
+    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-executor'], tmpDir, {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+    });
+    assert.ok(r.success, `Command failed: ${r.stderr}`);
+    const ir = JSON.parse(r.stdout);
+    assert.strictEqual(ir.configured, true);
+    assert.strictEqual(ir.reason, 'configured_empty');
+    assert.strictEqual(ir.skills_count, 0);
+    assert.strictEqual(ir.block, '');
+    assert.ok(
+      r.stderr.includes('WARNING') || r.stderr.toLowerCase().includes('warning'),
+      `Should emit WARNING for configured_empty, got stderr: ${r.stderr}`,
+    );
+  });
+
+  test('configured_unresolved: configured path that does not exist → reason:configured_unresolved, stderr WARNING', () => {
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': ['skills/nonexistent-1415'] },
+    });
+    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-executor'], tmpDir, {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+    });
+    assert.ok(r.success, `Command failed: ${r.stderr}`);
+    const ir = JSON.parse(r.stdout);
+    assert.strictEqual(ir.configured, true);
+    assert.strictEqual(ir.reason, 'configured_unresolved');
+    assert.strictEqual(ir.block, '');
+    assert.ok(
+      r.stderr.includes('WARNING') || r.stderr.toLowerCase().includes('warning'),
+      `Should emit WARNING for configured_unresolved, got stderr: ${r.stderr}`,
+    );
+  });
+
+  test('resolved: valid configured path → configured:true, reason:resolved, block non-empty', () => {
+    const skillDir = path.join(tmpDir, 'skills', 'my-skill-1415');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# My Skill\n');
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': ['skills/my-skill-1415'] },
+    });
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.configured, true);
+    assert.strictEqual(r.ir.reason, 'resolved');
+    assert.ok(r.ir.block.includes('<agent_skills>'), 'block must be non-empty for resolved');
+  });
+
+  test('cwd-drift: invoking from descendant subdir resolves config from project root', () => {
+    const skillDir = path.join(tmpDir, 'skills', 'drift-skill');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Drift Skill\n');
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': ['skills/drift-skill'] },
+    });
+    // Invoke from a descendant subdirectory
+    const deepDir = path.join(tmpDir, 'src', 'feature');
+    fs.mkdirSync(deepDir, { recursive: true });
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], deepDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.configured, true);
+    assert.strictEqual(r.ir.reason, 'resolved');
+    assert.ok(r.ir.block.includes('<agent_skills>'), `block must be non-empty for drift test, got: ${r.ir.block}`);
+  });
+
+  test('source field matches config provenance (root when config.json present)', () => {
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': [] },
+    });
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.source, 'root');
+    assert.strictEqual(r.ir.degraded, false);
+  });
+
+  test('Fix 3: agent_skills[X]="" (empty string) → configured_empty, skills_count:0, stderr WARNING', () => {
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': '' },
+    });
+    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-executor'], tmpDir, {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+    });
+    assert.ok(r.success, `Command failed: ${r.stderr}`);
+    const ir = JSON.parse(r.stdout);
+    assert.strictEqual(ir.configured, true, 'should be configured');
+    assert.strictEqual(ir.reason, 'configured_empty',
+      `empty string must yield configured_empty, got: ${ir.reason}`);
+    assert.strictEqual(ir.skills_count, 0, 'skills_count must be 0 for empty string');
+    assert.strictEqual(ir.block, '', 'block must be empty');
+    assert.ok(
+      r.stderr.includes('WARNING') || r.stderr.toLowerCase().includes('warning'),
+      `Should emit WARNING for empty-string configured_empty, got stderr: ${r.stderr}`,
+    );
+  });
+
+  // ─── Resolution Convention P3 (#1416) ────────────────────────────────────────
+  // The --json IR gains an additive `value: { block, skills_count }` field
+  // (Resolution<AgentSkillsValue> envelope). All existing flat fields are retained
+  // for back-compat. RED: value field absent before build; GREEN: after build:lib.
+
+  test('P3 (#1416): --json IR includes value.block and value.skills_count matching flat fields (back-compat)', () => {
+    const skillDir = path.join(tmpDir, 'skills', 'p3-skill');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# P3 Skill\n');
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': ['skills/p3-skill'] },
+    });
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+
+    // value field must exist and be an object
+    assert.ok(r.ir.value !== undefined && r.ir.value !== null, 'ir.value must be present (Resolution<AgentSkillsValue>)');
+    assert.strictEqual(typeof r.ir.value, 'object', 'ir.value must be an object');
+
+    // value.block must match flat block
+    assert.strictEqual(r.ir.value.block, r.ir.block, 'value.block must match flat block field');
+    assert.ok(r.ir.value.block.includes('<agent_skills>'), 'value.block must contain <agent_skills>');
+
+    // value.skills_count must match flat skills_count
+    assert.strictEqual(r.ir.value.skills_count, r.ir.skills_count, 'value.skills_count must match flat skills_count field');
+    assert.strictEqual(r.ir.value.skills_count, 1, 'value.skills_count must be 1 for one configured path');
+
+    // All existing flat fields must still be present (back-compat)
+    assert.strictEqual(typeof r.ir.agent_type, 'string', 'flat agent_type must still be present');
+    assert.strictEqual(typeof r.ir.block, 'string', 'flat block must still be present');
+    assert.strictEqual(typeof r.ir.skills_count, 'number', 'flat skills_count must still be present');
+    assert.ok(Array.isArray(r.ir.warnings), 'flat warnings must still be present');
+    assert.strictEqual(typeof r.ir.configured, 'boolean', 'flat configured must still be present');
+    assert.strictEqual(typeof r.ir.reason, 'string', 'flat reason must still be present');
+    assert.ok('source' in r.ir, 'flat source must still be present');
+    assert.ok('degraded' in r.ir, 'flat degraded must still be present');
+  });
+
+  test('P3 (#1416): value.block and value.skills_count are consistent when unconfigured', () => {
+    // No config → not_configured; value must still be present with empty block and 0 count
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok(r.ir.value !== undefined, 'ir.value must be present even when unconfigured');
+    assert.strictEqual(r.ir.value.block, r.ir.block, 'value.block must match flat block (empty)');
+    assert.strictEqual(r.ir.value.skills_count, r.ir.skills_count, 'value.skills_count must match flat skills_count (0)');
+    assert.strictEqual(r.ir.value.block, '', 'value.block must be empty when unconfigured');
+    assert.strictEqual(r.ir.value.skills_count, 0, 'value.skills_count must be 0 when unconfigured');
+  });
+});
+
+describe('#1400 regression: plain agent-skills output survives pipe/file stdout', () => {
+  // The plain (non---json) path previously did process.stdout.write(block)
+  // immediately followed by process.exit(0). When stdout is a pipe or file
+  // (how workflows consume it via `$(gsd_run query agent-skills <type>)`)
+  // rather than a TTY, process.exit() tears the process down before Node
+  // flushes the async stdout buffer — on Windows that reliably truncates the
+  // write to 0 bytes, so every ${AGENT_SKILLS_*} substitution expands empty.
+  // The fix routes the plain path through the same synchronous-flush output()
+  // helper the --json branch uses. These tests capture stdout via a real file
+  // descriptor (not a TTY) and assert the block arrives intact.
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    const skillDir = path.join(tmpDir, 'skills', 'test-skill');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Test Skill\n');
+    writeConfig(tmpDir, {
+      agent_skills: {
+        'gsd-executor': ['skills/test-skill'],
+      },
+    });
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // Run the plain path with stdout redirected to a real file descriptor
+  // (the truncation-prone case), then read the file back.
+  function runPlainToFile(agentType) {
+    const outPath = path.join(tmpDir, 'agent-skills.out');
+    const fd = fs.openSync(outPath, 'w');
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [TOOLS_PATH, 'query', 'agent-skills', agentType],
+        {
+          cwd: tmpDir,
+          env: { ...process.env, ...TEST_ENV_BASE, HOME: tmpDir, USERPROFILE: tmpDir },
+          stdio: ['ignore', fd, 'pipe'],
+        },
+      );
+      return { status: result.status, contents: fs.readFileSync(outPath, 'utf-8') };
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+
+  test('writes the full block to a redirected file (non-empty, not truncated)', () => {
+    const { status, contents } = runPlainToFile('gsd-executor');
+    assert.strictEqual(status, 0, 'command must exit 0');
+    assert.ok(contents.length > 0, 'redirected file must not be empty (exit-before-flush truncation)');
+    assert.ok(contents.includes('<agent_skills>'), `file must contain opening tag, got: ${JSON.stringify(contents)}`);
+    assert.ok(contents.includes('</agent_skills>'), 'file must contain closing tag');
+    assert.ok(contents.includes('skills/test-skill/SKILL.md'), 'file must contain the configured skill path');
+  });
+
+  test('plain file output equals the --json .block content byte-for-byte', () => {
+    const { contents } = runPlainToFile('gsd-executor');
+    const jsonResult = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir, {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+    });
+    assert.ok(jsonResult.success, `--json command failed: ${jsonResult.error}`);
+    assert.strictEqual(
+      contents,
+      jsonResult.ir.block,
+      'plain stdout block must match the --json .block exactly',
+    );
+    assert.ok(contents.length > 0, 'block must be non-empty for a configured agent');
+  });
+
+  // RULESET.TESTS.boundary-coverage — at/over the OS pipe-buffer limit.
+  // The earlier tests use a ~95-byte block; this one drives a payload well past
+  // the ~64 KB pipe buffer through a pipe. The pre-fix `process.stdout.write +
+  // process.exit(0)` emitted only the first ~64 KB before the process tore down;
+  // writeAllSync's offset loop instead writes every byte synchronously, however
+  // the OS chooses to chunk a write that large. (This is an integration check on
+  // the boundary, not a forced-partial-write unit test — depending on the host,
+  // a single writeSync may still drain the whole buffer.)
+  test('writes a >64 KB block through a pipe without truncation (pipe-buffer boundary)', () => {
+    const PIPE_BUFFER = 64 * 1024;
+    // Each resolved skill adds one `- @<path>/SKILL.md` line. Keep each path
+    // component short (Windows MAX_PATH safety) and use many skills to clear the
+    // pipe buffer comfortably (~80 KB).
+    const filler = 'p'.repeat(60);
+    const skillPaths = [];
+    for (let i = 0; i < 900; i++) {
+      const rel = path.join('skills', `skill-${String(i).padStart(4, '0')}-${filler}`);
+      fs.mkdirSync(path.join(tmpDir, rel), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, rel, 'SKILL.md'), '# s\n');
+      skillPaths.push(rel.split(path.sep).join('/')); // POSIX form for config
+    }
+    writeConfig(tmpDir, { agent_skills: { 'gsd-executor': skillPaths } });
+
+    // stdout to a pipe (the truncation-prone case the bug is about), captured
+    // by spawnSync — proves writeAllSync drained every byte before exit.
+    const result = spawnSync(
+      process.execPath,
+      [TOOLS_PATH, 'query', 'agent-skills', 'gsd-executor'],
+      {
+        cwd: tmpDir,
+        encoding: 'utf-8',
+        maxBuffer: 8 * 1024 * 1024,
+        env: { ...process.env, ...TEST_ENV_BASE, HOME: tmpDir, USERPROFILE: tmpDir },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    const out = result.stdout || '';
+    assert.strictEqual(result.status, 0, `command must exit 0; stderr=${result.stderr}`);
+    assert.ok(
+      Buffer.byteLength(out, 'utf-8') > PIPE_BUFFER,
+      `block must exceed the ${PIPE_BUFFER}-byte pipe buffer to exercise partial writes (got ${Buffer.byteLength(out, 'utf-8')} bytes)`,
+    );
+    // No head/tail truncation, and both the first and last configured skills
+    // present — a partial-write bug would drop the tail (or everything).
+    assert.ok(out.trim().startsWith('<agent_skills>'), 'block must start with the opening tag');
+    assert.ok(out.trim().endsWith('</agent_skills>'), 'block must end with the closing tag (no tail truncation)');
+    assert.ok(out.includes(`- @${skillPaths[0]}/SKILL.md`), 'first skill ref must be present');
+    assert.ok(out.includes(`- @${skillPaths[skillPaths.length - 1]}/SKILL.md`), 'last skill ref must be present');
   });
 });

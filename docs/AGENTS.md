@@ -215,7 +215,8 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 - Fresh 200K context window per plan
 - Follows XML task instructions precisely
 - Atomic git commit per completed task
-- Handles checkpoint types: auto, human-verify, decision, human-action
+- Handles task types: auto, tracer, checkpoint (human-verify, decision, human-action)
+- Tracer feedback gate: after a `tracer` slice, verifies it end-to-end before expansion tasks — autonomous runs halt on failure; interactive runs emit a human-verify checkpoint
 - Reports deviations from plan in SUMMARY.md
 - Invokes node repair on verification failure
 
@@ -276,6 +277,9 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 | **Model (balanced)** | Sonnet |
 | **Color** | Cyan |
 | **Produces** | BLOCK/FLAG/PASS verdict |
+
+**Key behaviors:**
+- **Adversarial stance / "The Auditor" (#1578):** applies explicit BLOCK/FLAG/PASS tiers and an anti-capitulation rule that resists author-framing pressure while still allowing self-correction when the prior dimension application was mistaken. Persona effects are strongest on Sonnet-class reasoning and unvalidated on budget/Haiku-class routing; the criteria and evidence remain authoritative.
 
 ---
 
@@ -396,6 +400,13 @@ runs its default whole-repo scan.
 - Tracks hypotheses, evidence, and eliminated theories
 - State persists across context resets
 - Requires human verification before marking resolved
+- Runs a multi-signal fix-acceptance guardrail (mutation check, no-op/deletion detector, adjacent tests, revert-and-reconfirm) before accepting a fix; degrades gracefully when Stryker or a test suite is absent
+- Ranks suspect code by Ochiai suspiciousness from test pass/fail coverage (spectrum-based fault localization) before forming hypotheses; skips cleanly when no coverage exists
+- Branches root-cause analysis across ≥2 Ishikawa categories and applies an AND-gate check before committing root_cause (guards against 5-Whys single-cause bias); root_cause may hold a set when the AND-gate fires
+- Classifies each failure as Bohrbug / Heisenbug-Mandelbug / Concurrency at Phase 1.75 and routes the investigation technique accordingly (routes Bohrbugs to SBFL+bisect, Heisenbugs to record-replay/stability with SBFL skipped, Concurrency to the atomicity/order/deadlock checklist)
+- Hardens regression tests via PBT shrinking (minimized counterexample as the seed), explicit oracle classification (specified/derived/metamorphic/implicit), and boundary neighbors around the fixed equivalence class
+- Emits a blameless-postmortem Prevention block at resolution (branching 5-Whys, why-wasn't-this-caught, a concrete recurrence guard) and records `why_not_caught` + `recurrence_guard` in the knowledge base so the same bug class is prevented, not just fixed
+- Recalls prior resolved sessions semantically via MemPalace at Phase 0 (top-k meaning-similar), catching same-root-cause/different-wording cases keyword overlap misses; falls back to keyword matching when MemPalace is absent
 - Appends to persistent knowledge base on resolution
 - Consults knowledge base on new sessions
 
@@ -476,10 +487,10 @@ Communication style, decision patterns, debugging approach, UX preferences, vend
 |----------|-------|
 | **Spawned by** | `/gsd-secure-phase` |
 | **Parallelism** | Single instance |
-| **Tools** | Read, Write, Edit, Bash, Glob, Grep |
+| **Tools** | Read, Bash, Glob, Grep |
 | **Model (balanced)** | Sonnet |
 | **Color** | Red |
-| **Produces** | `{phase}-SECURITY.md` |
+| **Produces** | Structured verdict (SECURED / OPEN_THREATS / ESCALATE) — orchestrator writes `{phase}-SECURITY.md` (#2119) |
 
 **Key behaviors:**
 - Verifies each threat by its declared disposition (mitigate / accept / transfer)
@@ -711,6 +722,7 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 **Key behaviors:**
 - Single-doc scope — never synthesizes or resolves conflicts (that is the synthesizer's job)
 - Heuristic-first classification; returns UNKNOWN when the doc lacks type signals rather than guessing
+- **Extraction discipline (#1578):** few-shot input→output exemplars plus a terminal schema restatement; marks a field absent rather than fabricating a value when the doc lacks the signal.
 
 ---
 
@@ -730,6 +742,7 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 **Key behaviors:**
 - Hard-blocks on LOCKED-vs-LOCKED ADR contradictions instead of silently picking a winner
 - Follows the `references/doc-conflict-engine.md` contract so `/gsd-import` and `/gsd-ingest-docs` produce consistent conflict reports
+- **Extraction discipline (#1578):** few-shot exemplars plus a terminal schema restatement and a mark-absent (no-fabrication) rule for missing fields.
 
 ---
 

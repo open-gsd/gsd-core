@@ -27,11 +27,37 @@ const INSTALL_JS = path.join(__dirname, '..', 'bin', 'install.js');
 // include both files so structural invariants are verified against the correct source.
 const HOOKS_SURFACE_SRC = path.join(__dirname, '..', 'src', 'runtime-hooks-surface.cts');
 
-// Hooks whose registration lives in runtime-hooks-surface module, not install.js.
-// These are excluded from the install.js source-scan and validated behaviorally.
+// Hooks whose registration is NOT a literal buildHookCommand(..., '<name>', ...)
+// call in install.js/runtime-hooks-surface.cts, so the source-scan below cannot
+// find them there. These are excluded from that scan and validated/documented
+// elsewhere.
 const MODULE_OWNED_HOOKS = new Set([
+  // Cursor lifecycle hooks — registered by writeCursorHooksJson via the
+  // descriptor-driven CURSOR_EVENT_SCRIPT_MAP indirection
+  // (src/host-integration-adapters/imperative-hook-bus.cts), never a literal
+  // buildHookCommand(..., '<hook-name>', ...) call this source-scan can match.
+  // Validated behaviorally in the describe block below.
   'gsd-cursor-session-start.js',
   'gsd-cursor-post-tool.js',
+  'gsd-cursor-pre-tool.js',
+  'gsd-cursor-stop.js',
+  'gsd-cursor-subagent-start.js',
+  'gsd-cursor-subagent-stop.js',
+  // Windsurf/Cascade blocking hooks — registered by writeWindsurfHooksJson via the
+  // WINDSURF_EVENT_SCRIPT_MAP indirection (src/runtime-hooks-surface.cts), never a
+  // literal buildHookCommand(..., '<hook-name>', ...) call this source-scan matches.
+  // Validated behaviorally by tests/windsurf-hooks-bridge.test.cjs.
+  'gsd-windsurf-pre-write.js',
+  'gsd-windsurf-pre-command.js',
+  // gsd-check-update-worker.js is an implementation detail of gsd-check-update.js
+  // (spawned internally via child_process.spawn), never itself registered as a
+  // hook entry point.
+  'gsd-check-update-worker.js',
+  // gsd-ensure-canonical-path.js (#997) is registered ONLY in the
+  // marketplace-plugin manifest (hooks/hooks.json's SessionStart entry), not
+  // via install.js's classic-installer settings.json path — the plugin
+  // install mode never runs bin/install.js at all.
+  'gsd-ensure-canonical-path.js',
 ]);
 
 // ADR-857 phase 5f-1b: settings-json hook registration moved to runtime-hooks-surface.cts.

@@ -246,6 +246,7 @@ describe('plan:pre all-off — empty resolution', () => {
     tmpDir = makeProject({
       workflow: {
         ai_integration_phase: false,
+        api_coverage_gate: false,
         tdd_mode: false,
         security_enforcement: false,
         ui_phase: false,
@@ -253,6 +254,8 @@ describe('plan:pre all-off — empty resolution', () => {
         research: false,
         pattern_mapper: false,
         schema_push_detection: false,
+        plan_drift_precheck: false,
+        assumption_delta: false,
       },
       intel: { enabled: false },
     });

@@ -5,6 +5,7 @@ const os = require('os');
 const fs = require('fs');
 const { execFileSync } = require('child_process');
 const { runMain, ExitError } = require('../lib/cli-exit.cjs');
+const { classifyBucket } = require('./conventional-title.cjs');
 
 /**
  * Classify a What's-Changed bullet line into 'Feature', 'Fix', or 'Enhancement'.
@@ -19,9 +20,9 @@ function classifyTitle(bulletLine) {
   const byIdx = withoutMarker.indexOf(' by @');
   const title = (byIdx !== -1 ? withoutMarker.slice(0, byIdx) : withoutMarker).trim();
 
-  if (/^feat(?:ure)?\s*(?:\(|!|:)/i.test(title)) return 'Feature';
-  if (/^fix\s*(?:\(|!|:)/i.test(title)) return 'Fix';
-  return 'Enhancement';
+  // Delegate to the shared matcher so the gate and the changelog can never
+  // disagree on bucketing (#1549 — single source of truth).
+  return classifyBucket(title);
 }
 
 /**

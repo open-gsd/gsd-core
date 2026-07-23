@@ -1,6 +1,6 @@
 # File Operation Engine Module owns safe runtime/config file mutations
 
-- **Status:** Superseded by ADR-0009 (Shell Command Projection Module expansion, Phases 3–4, `#3467`–`#3468`)
+- **Status:** Superseded by [ADR-0009](0009-shell-command-projection-module.md) (Shell Command Projection Module expansion, Phases 3–4, `#3467`–`#3468`)
 - **Date:** 2026-05-12
 - **Superseded:** 2026-05-13
 

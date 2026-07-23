@@ -27,7 +27,8 @@ const { escapeRegex } = phaseId;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningPaths, planningDir, findContextMdIn } = planningWorkspace;
-import { parseDecisions } from './decisions.cjs';
+import { parseDecisions, extractDecisions } from './decisions.cjs';
+import { iterateBullets } from './markdown-sectionizer.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -81,18 +82,26 @@ function parseRequirements(reqMd: unknown): ReqItem[] {
 
   // Prefix-agnostic ID format: REQ-01, TST-01, BACK-07, INSP-04, etc.
   const ID_PATTERN = '[A-Z][A-Z0-9]*-[A-Za-z0-9_-]+';
+  const idRe = new RegExp(`^(${ID_PATTERN})$`);
 
-  const checkboxRe = new RegExp(`^\\s*-\\s*\\[[x ]\\]\\s*\\*\\*(${ID_PATTERN})\\*\\*\\s*(.*)$`, 'gm');
-  let cm = checkboxRe.exec(reqMd);
-  while (cm !== null) {
-    const id = cm[1];
+  // Checkbox-bullet path: migrate to seam's iterateBullets (checkbox markers).
+  // The **ID** is extracted from the bullet text caller-side — the seam provides
+  // the raw text; we parse the bold-ID prefix from it here.
+  const boldIdRe = new RegExp(`^\\*\\*(${ID_PATTERN})\\*\\*\\s*(.*)$`);
+  for (const bullet of iterateBullets(reqMd)) {
+    if (bullet.marker !== 'checkbox-unchecked' && bullet.marker !== 'checkbox-checked') continue;
+    const m = boldIdRe.exec(bullet.text);
+    if (!m) continue;
+    const id = m[1];
+    if (!idRe.test(id)) continue;
     if (!seen.has(id)) {
       seen.add(id);
-      out.push({ id, text: (cm[2] || '').trim() });
+      out.push({ id, text: (m[2] || '').trim() });
     }
-    cm = checkboxRe.exec(reqMd);
   }
 
+  // Pipe-table-row path and separator-row skip stay caller-side
+  // (table parsing is out of seam scope per ADR-1372 T3 spec).
   const tableFirstCellRe = new RegExp(`^\\s*\\|\\s*(${ID_PATTERN})\\s*\\|`);
   const separatorRowRe = /^\s*\|[\s:|-]+\|\s*$/;
   const lines = reqMd.split(/\r?\n/);
@@ -171,12 +180,74 @@ function readGate(cwd: string): boolean {
 }
 
 /**
+ * Same-prefix ascending numeric range, e.g. `SEL-01..SEL-03`. Both sides must
+ * share an identical prefix and a numeric suffix. Captures are:
+ *   1 low prefix, 2 low digits, 3 high prefix (compared to group 1 for equality), 4 high digits.
+ */
+const PHASE_REQ_RANGE_RE = /^(.+-)(\d+)\.\.(.+-)(\d+)$/;
+
+/**
+ * Maximum number of IDs a single range token may expand to. A range whose span
+ * exceeds this cap stays literal (fail-closed) rather than expanding, guarding
+ * against pathological input like `X-1..X-100000` ballooning the comparison set.
+ */
+const MAX_PHASE_REQ_RANGE = 1000;
+
+/**
+ * Expand a single `--phase-req-ids` token in place. If it is a valid ascending
+ * same-prefix numeric range (`<PREFIX>-NN..<PREFIX>-MM`, identical prefix both
+ * sides, numeric NN ≤ MM), return the individual IDs `<PREFIX>-NN … <PREFIX>-MM`
+ * preserving the bounds' zero-pad width. Anything that does NOT cleanly match a
+ * valid range stays literal (fail-closed) — returned as a single-element array.
+ *
+ * The two numeric bounds must share the same digit width; a range with
+ * differing widths (e.g. `SEL-9..SEL-11`) is ambiguous (padding to the wider
+ * width could invent IDs like `SEL-09` that never appear unpadded in
+ * REQUIREMENTS) and is left literal. A range spanning more than
+ * MAX_PHASE_REQ_RANGE IDs also stays literal.
+ */
+function expandPhaseReqIdToken(token: string): string[] {
+  const m = PHASE_REQ_RANGE_RE.exec(token);
+  if (!m) return [token];
+  const [, prefixLow, lowDigits, prefixHigh, highDigits] = m;
+  // Fail closed unless the prefixes are identical.
+  if (prefixLow !== prefixHigh) return [token];
+  // Fail closed unless the bounds share an identical digit width. Differing
+  // widths are ambiguous: padding to the wider width could invent IDs that
+  // never appear unpadded in REQUIREMENTS.
+  if (lowDigits.length !== highDigits.length) return [token];
+  const low = Number(lowDigits);
+  const high = Number(highDigits);
+  // Fail closed on descending ranges (NN > MM). NN == MM is a valid single-element range.
+  if (!Number.isFinite(low) || !Number.isFinite(high) || low > high) return [token];
+  // Fail closed (DoS guard) on ranges spanning more than the cap.
+  if (high - low + 1 > MAX_PHASE_REQ_RANGE) return [token];
+  // Preserve the bounds' (shared) zero-pad width.
+  const width = lowDigits.length;
+  const out: string[] = [];
+  for (let n = low; n <= high; n++) {
+    out.push(`${prefixLow}${String(n).padStart(width, '0')}`);
+  }
+  return out;
+}
+
+/**
  * Normalize a raw `--phase-req-ids` argument into the scoping signal used by
  * runGapAnalysis (#447). Mirrors §13's null/TBD skip semantics.
  *
- *   undefined           → flag absent: compare the whole REQUIREMENTS.md (back-compat)
- *   null | '' | TBD     → no requirements mapped to this phase: skip the comparison
- *   "REQ-01,REQ-02"     → restrict the comparison to these IDs
+ *   undefined                  → flag absent: compare the whole REQUIREMENTS.md (back-compat)
+ *   null | '' | TBD            → no requirements mapped to this phase: skip the comparison
+ *   "REQ-01,REQ-02"            → restrict the comparison to these IDs
+ *   "SEL-01..SEL-03"           → range form: expands in place to SEL-01, SEL-02, SEL-03 (#1269)
+ *
+ * Range form (#1269): a list element of the shape `<PREFIX>-NN..<PREFIX>-MM`
+ * (identical prefix both sides, identical bound digit width, ascending numeric
+ * NN ≤ MM) is expanded in place to the individual IDs, preserving the bounds'
+ * zero-pad width; mixed lists expand in input order. Any element that does not
+ * cleanly match a valid ascending same-prefix numeric range (mismatched
+ * prefix, differing bound width, descending, non-numeric, missing bound, or
+ * spanning more than MAX_PHASE_REQ_RANGE IDs) stays literal — no partial
+ * expansion, no guessing.
  *
  * Tolerates JSON-array-ish input (`["REQ-01","REQ-02"]`) since callers may pass
  * the roadmap value through verbatim.
@@ -190,7 +261,9 @@ function normalizePhaseReqIds(rawVal: unknown): string[] | null | undefined {
   // Tolerate comma-, space-, or newline-separated lists (callers may pass the
   // roadmap value verbatim, whose serialization is not guaranteed).
   const ids = v.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
-  return ids.length === 0 ? null : ids;
+  // Expand range tokens (#1269) per-token AFTER the split, preserving input order.
+  const expanded = ids.flatMap(expandPhaseReqIdToken);
+  return expanded.length === 0 ? null : expanded;
 }
 
 function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOptions = {}): GapResult {
@@ -235,7 +308,10 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
   const ctxFile = findContextMdIn(phaseDirFiles);
   const ctxPath = ctxFile ? path.join(absPhaseDir, ctxFile) : null;
   const ctxMd = ctxPath ? fs.readFileSync(ctxPath, 'utf-8') : '';
-  const dItems: DecisionItem[] = parseDecisions(ctxMd).map(d => ({ ...d, source: 'CONTEXT.md' }));
+
+  // Use extractDecisions so gap-checker can distinguish could-not-parse from none-present.
+  const ctxExtraction = extractDecisions(ctxMd);
+  const dItems: DecisionItem[] = ctxExtraction.decisions.map(d => ({ ...d, source: 'CONTEXT.md' }));
 
   const items: Item[] = [...reqItems, ...dItems];
 
@@ -250,7 +326,58 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
     }
   } catch { /* unreadable */ }
 
-  if (items.length === 0) {
+  // FIX D (#1365): surface decision could-not-parse independently of whether
+  // requirements items exist. Without this, a could-not-parse on decisions is
+  // silently masked whenever REQUIREMENTS.md has ≥1 item — the mismatch must
+  // appear in the report regardless of the requirements row count.
+  if (ctxExtraction.outcome === 'could-not-parse') {
+    const mismatchMsg = '## Post-Planning Gap Analysis\n\nextracted 0 of N — possible format mismatch in CONTEXT.md decisions block.\n';
+    // If there are also requirement items, include them in the return with the
+    // mismatch summary appended, so the caller still sees requirement coverage.
+    // #2334 HIGH 1: gate on `ghostReqIds.length > 0` too — identical defect to
+    // the one fixed at #2316-6b (~34 lines below, at the `items.length === 0`
+    // early return): a phase whose EVERY cited REQ-ID is unregistered has
+    // `items.length === 0` (all its requirement items were filtered out at
+    // ~line 297) but still has real ghost rows to report. Without this guard,
+    // a single malformed `<decisions>` line in CONTEXT.md made an all-ghost
+    // phase's ghost rows silently vanish (this could-not-parse branch fell
+    // through to the bare `mismatchMsg`-only return below, dropping ghost
+    // rows that the general path further down correctly surfaces).
+    if (items.length > 0 || ghostReqIds.length > 0) {
+      const rows = sortRows([
+        ...detectCoverage(items, planText),
+        ...ghostReqIds.map(id => ({ source: 'REQUIREMENTS.md', item: id, status: 'Missing from REQUIREMENTS.md' })),
+      ]);
+      const covered = rows.filter(r => r.status === 'Covered').length;
+      const uncovered = rows.length - covered;
+      const coverageSummary = uncovered === 0
+        ? `✓ All ${rows.length} items covered by plans`
+        : `⚠ ${uncovered} of ${rows.length} items not covered by any plan`;
+      return {
+        enabled: true,
+        rows,
+        table: formatGapTable(rows) + '\n' + coverageSummary + '\n\n' + mismatchMsg,
+        summary: coverageSummary + '; extracted 0 of N — possible format mismatch',
+        counts: { total: rows.length, covered, uncovered },
+      };
+    }
+    return {
+      enabled: true,
+      rows: [],
+      table: mismatchMsg,
+      summary: 'extracted 0 of N — possible format mismatch',
+      counts: { total: 0, covered: 0, uncovered: 0 },
+    };
+  }
+
+  // #1365: if no items at all, surface a clean no-check message.
+  // #2316-6b: this must NOT fire when `ghostReqIds` is non-empty — a phase
+  // whose EVERY cited REQ-ID is unregistered has `items.length === 0` (all
+  // its requirement items were filtered out at ~line 297) but still has real
+  // ghost rows to report below. Without this guard, an all-orphan phase
+  // reported LESS than a partially-orphan one (which falls through to the
+  // general path further down and correctly surfaces its ghost rows).
+  if (items.length === 0 && ghostReqIds.length === 0) {
     return {
       enabled: true,
       rows: [],

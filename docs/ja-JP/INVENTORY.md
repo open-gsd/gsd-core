@@ -78,6 +78,7 @@
 | コマンド | 役割 | ソース |
 |----------|------|--------|
 | `/gsd-new-project` | 深いコンテキスト収集と PROJECT.md で新しいプロジェクトを初期化。 | [commands/gsd/new-project.md](../../commands/gsd/new-project.md) |
+| `/gsd-onboard` | 既存コードベースをマッピング、ドキュメント取り込み、プロジェクト設定、onboarding summary へ案内。 | [commands/gsd/onboard.md](../../commands/gsd/onboard.md) |
 | `/gsd-workspace` | GSD ワークスペースを管理 — 独立したワークスペース環境を作成（`--new`）、一覧表示（`--list`）、削除（`--remove`）。 | [commands/gsd/workspace.md](../../commands/gsd/workspace.md) |
 | `/gsd-discuss-phase` | 計画前にアダプティブな質問でフェーズコンテキストを収集。 | [commands/gsd/discuss-phase.md](../../commands/gsd/discuss-phase.md) |
 | `/gsd-mvp-phase` | フェーズを垂直 MVP スライスとして計画 — ユーザーストーリー、SPIDR 分割、その後 plan-phase。 | [commands/gsd/mvp-phase.md](../../commands/gsd/mvp-phase.md) |
@@ -168,7 +169,7 @@
 
 ## ワークフロー (88 shipped)
 
-完全な一覧は `get-shit-done/workflows/*.md` を参照してください。ワークフローはコマンドが内部で参照する薄いオーケストレーターです。ほとんどはエンドユーザーが直接読むものではありません。以下の行は各ワークフローファイルをその役割（`<purpose>` ブロックから導出）と、該当する場合はそれを呼び出すコマンドにマッピングします。
+完全な一覧は `gsd-core/workflows/*.md` を参照してください。ワークフローはコマンドが内部で参照する薄いオーケストレーターです。ほとんどはエンドユーザーが直接読むものではありません。以下の行は各ワークフローファイルをその役割（`<purpose>` ブロックから導出）と、該当する場合はそれを呼び出すコマンドにマッピングします。
 
 | ワークフロー | 役割 | 呼び出し元 |
 |-------------|------|-----------|
@@ -218,6 +219,7 @@
 | `milestone-summary.md` | マイルストーンサマリー合成 — マイルストーンアーティファクトからオンボーディングとレビューアーティファクトを作成。 | `/gsd-milestone-summary` |
 | `new-milestone.md` | 新しいマイルストーンサイクルを開始 — プロジェクトコンテキストを読み込み、目標を収集して PROJECT.md/STATE.md を更新。 | `/gsd-new-milestone` |
 | `new-project.md` | 統合新プロジェクトフロー — 質問、調査（任意）、要件、ロードマップ。 | `/gsd-new-project` |
+| `onboard.md` | Brownfield onboarding orchestration — コードベースをマップし、docs を取り込み、planning を初期化し、次のステップを要約。 | `/gsd-onboard` |
 | `new-workspace.md` | リポジトリのワークツリー/クローンと独立した `.planning/` を持つ独立したワークスペースを作成。 | `/gsd-workspace --new` |
 | `next.md` | 現在のプロジェクト状態を検出して次の論理的なステップに自動的に進む。 | `/gsd-progress --next` |
 | `node-repair.md` | タスク検証が失敗した場合の自律修復オペレーター。`execute-plan` から呼び出し。 | `execute-plan.md` (recovery) |
@@ -266,7 +268,7 @@
 
 ## リファレンス (62 shipped)
 
-完全な一覧は `get-shit-done/references/*.md` を参照してください。リファレンスはワークフローとエージェントが `@-reference` として参照する共有ナレッジドキュメントです。以下のグループ分けは [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md#references-get-shit-donereferencesmd) に対応します — コア、ワークフロー、思考モデルクラスター、モジュラープランナー分解。
+完全な一覧は `gsd-core/references/*.md` を参照してください。リファレンスはワークフローとエージェントが `@-reference` として参照する共有ナレッジドキュメントです。以下のグループ分けは [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md#references-gsd-corereferencesmd) に対応します — コア、ワークフロー、思考モデルクラスター、モジュラープランナー分解。
 
 ### コアリファレンス
 
@@ -298,7 +300,7 @@
 | `continuation-format.md` | セッション継続/再開フォーマット。 |
 | `domain-probes.md` | discuss-phase 向けのドメイン固有のプロービング質問。 |
 | `gate-prompts.md` | ゲート/チェックポイントのプロンプトテンプレート。 |
-| `scout-codebase.md` | discuss-phase スカウトステップ向けのフェーズタイプ→コードベースマップ選択テーブル（#2551 で抽出）。 |
+| `scout-codebase.md` | discuss-phase スカウトステップ向けのフェーズタイプ→コードベースマップ選択テーブル（discuss-phase/modes プログレッシブディスクロージャー分割により抽出、#717）。 |
 | `revision-loop.md` | プラン修正の反復パターン。 |
 | `universal-anti-patterns.md` | 検出して避けるべきユニバーサルアンチパターン。 |
 | `worktree-path-safety.md` | ワークツリーガードスイート: HEAD アサーション、cwd ドリフトセンチネル（ステップ 0a、#3097）、絶対パスガード（ステップ 0b、#3099）— `<execution_context>` 経由でエグゼキュータースポーンプロンプトに読み込まれる。 |
@@ -361,13 +363,13 @@
 | `user-story-template.md` | MVP 計画向けのユーザーストーリーフォーマット — "As a / I want to / So that" の構造化フィールド。 |
 | `spidr-splitting.md` | MVP モードで大きなユーザーストーリーを処理するための SPIDR 分割ルール。 |
 
-> **サブディレクトリ:** `get-shit-done/references/few-shot-examples/` には、特定のエージェントから参照される追加のフューショット例（`plan-checker.md`、`verifier.md`）が含まれます。これらは 62 のトップレベルリファレンスにはカウントされません。
+> **サブディレクトリ:** `gsd-core/references/few-shot-examples/` には、特定のエージェントから参照される追加のフューショット例（`plan-checker.md`、`verifier.md`）が含まれます。これらは 62 のトップレベルリファレンスにはカウントされません。
 
 ---
 
 ## CLI モジュール (81 shipped)
 
-完全な一覧: `get-shit-done/bin/lib/*.cjs`。
+完全な一覧: `gsd-core/bin/lib/*.cjs`。
 
 | モジュール | 責務 |
 |-----------|------|
@@ -441,7 +443,7 @@
 | `task-command-router.cjs` | `gsd-tools task` 向けの薄い CJS サブコマンドルーターアダプター |
 | `template.cjs` | 変数置換によるテンプレート選択と穴埋め |
 | `uat.cjs` | UAT ファイル解析、検証負債追跡、audit-uat サポート |
-| `ui-safety-gate.cjs` | シェルフリーのワード境界 UI トークン検出器（#3706、#3718）。フェーズセクションテキストを標準入力から読み込み、0（UI 発見）または 1（UI なし）で終了。GSD インストーラーが `$RUNTIME_DIR` に配布するために `get-shit-done/bin/lib/` にもデプロイ（#448） |
+| `ui-safety-gate.cjs` | シェルフリーのワード境界 UI トークン検出器（#3706、#3718）。フェーズセクションテキストを標準入力から読み込み、0（UI 発見）または 1（UI なし）で終了。GSD インストーラーが `$RUNTIME_DIR` に配布するために `gsd-core/bin/lib/` にもデプロイ（#448） |
 | `update-context.cjs` | `/gsd:update` 向けの純粋なインストールコンテキストリゾルバー — ランタイム/スコープ/設定ディレクトリ/バージョン検出（LOCAL/GLOBAL/UNKNOWN）。update.md bash からポート。`gsd-tools update-context` を支える（#498） |
 | `validate-command-router.cjs` | `gsd-tools validate` 向けの薄い CJS サブコマンドルーターアダプター |
 | `validate.cjs` | 純粋なフェーズバリアント正規化ヘルパー（`phaseVariants`、`buildRoadmapPhaseVariants`、`buildNotStartedPhaseVariants`）。`verify.cjs` の W006/W007 チェックで使用。I/O なし、非同期なし |

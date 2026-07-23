@@ -53,12 +53,28 @@ jobs:
         # Ensure the base branch tip is available for the git diff below.
         # fetch-depth: 0 above gets all history, but the remote ref name must exist.
         # For workflow_dispatch (no base_ref) we fall back to `next`.
-        run: git fetch origin ${{ github.base_ref || 'next' }} --depth=1
+        #
+        # Do NOT pass --depth here (#2452): a shallow re-fetch truncates the
+        # freshly-fetched `next` history to a single commit, so the three-dot
+        # `origin/next...HEAD` diff in scripts/mutation-matrix.cjs can no longer
+        # compute a merge base and dies with `fatal: ... no merge base`. That
+        # only happens when the branch is BEHIND the base — an up-to-date branch
+        # incidentally passes because its merge base IS the fetched tip — which
+        # made the gate fail exactly on the PRs that most needed it, while the
+        # `mutate` shards never ran at all.
+        #
+        # BASE_NAME goes through `env:` rather than being interpolated straight
+        # into the shell, matching changeset-required.yml / docs-required.yml.
+        run: git fetch origin "${BASE_NAME}"
+        env:
+          BASE_NAME: ${{ github.base_ref || 'next' }}
 
       - name: Compute mutation matrix
         id: matrix
+        env:
+          BASE_NAME: ${{ github.base_ref || 'next' }}
         run: |
-          BASE_REF="origin/${{ github.base_ref || 'next' }}"
+          BASE_REF="origin/${BASE_NAME}"
           # Run the matrix script; capture the JSON output.
           JSON=$(node scripts/mutation-matrix.cjs --base "${BASE_REF}")
 

@@ -21,6 +21,7 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('./helpers/fast-check-setup.cjs');
+const yaml = require('js-yaml');
 
 const {
   extractFrontmatter,
@@ -259,6 +260,35 @@ describe('frontmatter: prohibitions parse ↔ splice bijection (#644)', () => {
         const after = parseMustHavesBlock(spliced, 'prohibitions');
         assert.deepEqual(after, before,
           'prohibitions must survive a splice/re-parse round-trip unchanged');
+      })
+    );
+  });
+});
+
+// #1779 — reconstructFrontmatter must emit YAML that a STRICT parser accepts and
+// that preserves string values. The bijective contract is
+//   ∀ s: yaml.load(reconstructFrontmatter({ k: s })).k === s
+// over the documented safe-input subset. Two classes are out of scope and
+// excluded here, not silently passed:
+//   - lone UTF-16 surrogates (lossy through UTF-8 encoding) — filtered via
+//     fc.pre(s.isWellFormed());
+//   - numeric/boolean/null-looking BARE strings (e.g. "42", "true", "-5") that a
+//     YAML loader resolves to a non-string type — a separate pre-existing bug
+//     class (valid YAML, wrong type), so we assert equality only when the value
+//     loads back AS a string. An escaping defect (invalid YAML) still fails
+//     loudly because yaml.load() throws.
+describe('frontmatter: reconstructFrontmatter strict-YAML property (#1779)', () => {
+  test('property: every string value serializes to valid YAML and string-round-trips', () => {
+    fc.assert(
+      fc.property(fc.string({ maxLength: 200 }), (s) => {
+        fc.pre(s.isWellFormed());
+        // Throws → reconstructFrontmatter emitted invalid YAML → property fails
+        // (fast-check shrinks + prints the replay seed automatically).
+        const loaded = yaml.load(reconstructFrontmatter({ k: s }));
+        if (typeof loaded.k === 'string') {
+          assert.equal(loaded.k, s,
+            `value did not round-trip through strict YAML: ${JSON.stringify(s)}`);
+        }
       })
     );
   });

@@ -16,7 +16,11 @@ const os = require('node:os');
 
 const {
   installRuntimeArtifacts,
-} = require('../bin/install.js');
+} = require('../gsd-core/bin/lib/install-engine.cjs');
+
+const {
+  resolveRuntimeArtifactLayout,
+} = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
 
 const { cleanup } = require('./helpers.cjs');
 
@@ -33,14 +37,12 @@ const { COMMANDS_GSD, ROUTER_STEMS, routerChildren } = require('./helpers/nested
 
 const NEST = [
   // Claude reverted to flat (#924: nested layout breaks Skill-tool discovery on Claude Code).
-  // Only the 6 runtimes below keep the nested layout.
+  // Only the 5 runtimes below keep the nested layout.
   { runtime: 'cline',       scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
   { runtime: 'qwen',        scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
   { runtime: 'hermes',      scope: 'global', skillsSub: 'skills/gsd', prefix: 'gsd-' }, // #947: restored canonical prefix
   { runtime: 'augment',     scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
   { runtime: 'trae',        scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
-  { runtime: 'antigravity', scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
-  { runtime: 'omp',         scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
 ];
 
 const FLAT = [
@@ -50,10 +52,10 @@ const FLAT = [
   { runtime: 'cursor',    scope: 'global', skillsSub: 'skills' },
   { runtime: 'codex',     scope: 'global', skillsSub: 'skills' },
   { runtime: 'copilot',   scope: 'global', skillsSub: 'skills' },
-  { runtime: 'windsurf',  scope: 'global', skillsSub: 'skills' },
   { runtime: 'codebuddy', scope: 'global', skillsSub: 'skills' },
   { runtime: 'opencode',  scope: 'global', skillsSub: 'skills' },
   { runtime: 'kilo',      scope: 'global', skillsSub: 'skills' },
+  { runtime: 'antigravity', scope: 'global', skillsSub: 'skills' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -61,13 +63,52 @@ const FLAT = [
 // ---------------------------------------------------------------------------
 
 /**
+ * Codex resolves its skills-kind destination via os.homedir() + a 'skills'-kind
+ * 'home: ".agents"' layout override (ADR-1239 EoS upgrade 3, #2088), NOT
+ * tmpDir/skills. Sandbox HOME/USERPROFILE to tmpDir for the duration of the
+ * synchronous callback so codex's resolved skills dir becomes
+ * tmpDir/.agents/skills instead of the developer's real ~/.agents/skills.
+ */
+function withSandboxedHome(tmpDir, fn) {
+  const savedHome = process.env.HOME;
+  const savedUserProfile = process.env.USERPROFILE;
+  process.env.HOME = tmpDir;
+  process.env.USERPROFILE = tmpDir;
+  try {
+    return fn();
+  } finally {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = savedUserProfile;
+  }
+}
+
+/**
  * Create a fresh temp dir, run installRuntimeArtifacts into it, and return
- * the tmpDir path. Caller must cleanup in finally.
+ * the tmpDir path. Caller must cleanup in finally. HOME is sandboxed to
+ * tmpDir for the install call so codex never writes to the real ~/.agents/skills.
  */
 function runInstall(runtime, scope, resolved) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `gsd-nest-test-${runtime}-`));
-  installRuntimeArtifacts(runtime, tmpDir, scope, resolved);
+  withSandboxedHome(tmpDir, () => installRuntimeArtifacts(runtime, tmpDir, scope, resolved));
   return tmpDir;
+}
+
+/**
+ * Resolve the skills-kind destination directory for a runtime, honoring the
+ * skills-kind 'home' override (codex only — resolves under tmpDir/.agents
+ * once HOME is sandboxed). All other runtimes have no 'home' override, so
+ * this falls back to tmpDir/<destSubpath>, matching the static skillsSub
+ * tables above.
+ */
+function resolveSkillsDir(runtime, tmpDir, scope) {
+  return withSandboxedHome(tmpDir, () => {
+    const layout = resolveRuntimeArtifactLayout(runtime, tmpDir, scope);
+    const skillsKind = layout.kinds.find((k) => k.kind === 'skills');
+    assert.ok(skillsKind, `${runtime} must have skills kind`);
+    return path.join(skillsKind.home || tmpDir, skillsKind.destSubpath);
+  });
 }
 
 // Resolve the full profile once (shared by all installs)
@@ -269,7 +310,7 @@ describe('claude: total top-level gsd- entries >= 60 (flat layout, #924)', () =>
 // FLAT runtimes: concrete skills stay top-level, no nesting
 // ---------------------------------------------------------------------------
 
-for (const { runtime, scope, skillsSub } of FLAT) {
+for (const { runtime, scope } of FLAT) {
   describe(`${runtime} (flat layout)`, () => {
     let tmpDir;
 
@@ -284,7 +325,7 @@ for (const { runtime, scope, skillsSub } of FLAT) {
     });
 
     test(`${runtime}: stays flat — concrete skills remain top-level, no nesting`, () => {
-      const skillsDir = path.join(tmpDir, skillsSub);
+      const skillsDir = resolveSkillsDir(runtime, tmpDir, scope);
       assert.ok(fs.existsSync(skillsDir), `skillsDir must exist: ${skillsDir}`);
 
       const topLevel = fs.readdirSync(skillsDir);

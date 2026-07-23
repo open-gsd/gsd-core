@@ -45,7 +45,7 @@ If `core` is too small, pick a wider profile instead. Pass it with `--profile=<n
 | Profile | What you get | Approx. description tokens |
 |---------|--------------|--------------------------|
 | `core` | The eight core-loop skills above. No agents. | ~130 desc tokens |
-| `standard` | Everything in `core` plus common management skills — `review`, `config`, `progress`, `resume-work`, `pause-work`, `workspace` — and the sub-agents those skills need. | ~700 desc tokens |
+| `standard` | Everything in `core` plus brownfield onboarding (`onboard`), common management skills — `review`, `config`, `progress`, `resume-work`, `pause-work`, `workspace` — and the sub-agents those skills need. | ~700 desc tokens |
 | `full` | Every skill and every sub-agent. This is the default when you pass no profile flag. | ~1,200 desc tokens |
 
 ```bash

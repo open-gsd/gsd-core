@@ -23,6 +23,8 @@ The `.planning/` directory is GSD Core's shared memory for a project. Every work
 │   ├── architecture.md
 │   ├── stack.md
 │   └── ...
+├── onboarding/                         # Brownfield onboarding summary (optional)
+│   └── SUMMARY.md
 ├── intel/                              # Queryable symbol index (optional, intel.enabled)
 │   └── API-SURFACE.md
 └── phases/
@@ -48,7 +50,7 @@ The `.planning/` directory is GSD Core's shared memory for a project. Every work
 | | |
 |---|---|
 | **Purpose** | Canonical project identity: what it is, who it is for, core value, requirements, constraints, and key decisions. Updated throughout the project lifecycle as the product evolves. |
-| **Produced by** | `/gsd-new-project` (initial creation); updated by `/gsd-complete-milestone` as decisions are validated. |
+| **Produced by** | `/gsd-new-project` (initial creation, including `/gsd-onboard` handoff); updated by `/gsd-complete-milestone` as decisions are validated. |
 | **Consumed by** | All planning workflows; `gsd-phase-researcher`, `gsd-planner` (context); `discuss-phase` (prior decisions); `gsd-plan-checker` (project constraints). |
 
 Includes an optional `## Business Context` section (Customer, Revenue model, Success metric, Strategy notes) for monetized or customer-facing projects — four one-line fields that connect business outcomes to requirement prioritization. It is deleted for internal tools, experiments, or meta workspaces, and reviewed at each milestone by `/gsd-complete-milestone` when present.
@@ -58,7 +60,7 @@ Includes an optional `## Business Context` section (Customer, Revenue model, Suc
 | | |
 |---|---|
 | **Purpose** | Milestone and phase listing with goals, requirement IDs, success criteria, and canonical references per phase. The single source of truth for what the project is building and in what order. |
-| **Produced by** | `/gsd-new-project` (initial creation); updated by `/gsd-phase --insert` and `/gsd-complete-milestone`. |
+| **Produced by** | `/gsd-new-project` (initial creation, including `/gsd-onboard` handoff); updated by `/gsd-phase --insert` and `/gsd-complete-milestone`. |
 | **Consumed by** | `/gsd-discuss-phase`, `/gsd-plan-phase`, `/gsd-execute-phase`; all orchestration commands that need phase information; `gsd-planner`, `gsd-plan-checker`, `gsd-phase-researcher`. |
 
 ### `REQUIREMENTS.md`
@@ -66,7 +68,7 @@ Includes an optional `## Business Context` section (Customer, Revenue model, Suc
 | | |
 |---|---|
 | **Purpose** | Numbered, checkable acceptance criteria for the project. Each requirement carries an ID (e.g., `AUTH-01`) that maps to roadmap phases. Marks requirements complete as phases are executed. |
-| **Produced by** | `/gsd-new-project` (initial creation); requirements marked complete by `execute-phase`. |
+| **Produced by** | `/gsd-new-project` (initial creation, including `/gsd-onboard` handoff); requirements marked complete by `execute-phase`. |
 | **Consumed by** | `gsd-planner` (plans must address all phase requirement IDs); `gsd-plan-checker` Dimension 1 (requirement coverage); `discuss-phase` (prior requirements). |
 
 ### `STATE.md`
@@ -74,7 +76,7 @@ Includes an optional `## Business Context` section (Customer, Revenue model, Suc
 | | |
 |---|---|
 | **Purpose** | Living position tracker — current phase and plan, progress metrics, accumulated decisions, session continuity notes. Read at the start of every workflow run. Updated after every significant action. |
-| **Produced by** | `/gsd-new-project` (initial creation); updated continuously by all phase workflows, `/gsd-pause-work`, `/gsd-resume-work`. |
+| **Produced by** | `/gsd-new-project` (initial creation, including `/gsd-onboard` handoff); updated continuously by all phase workflows, `/gsd-pause-work`, `/gsd-resume-work`. |
 | **Consumed by** | All orchestration workflows; `/gsd-progress`; ad-hoc task execution via `/gsd-quick`; `gsd-planner` and `gsd-phase-researcher` (project decisions). |
 
 See [STATE.md schema](state-md.md) for the full field reference.
@@ -88,6 +90,14 @@ See [STATE.md schema](state-md.md) for the full field reference.
 | **Consumed by** | Every workflow and subagent — read at init time via `gsd-tools query config-get`. |
 
 See [CONFIGURATION](../CONFIGURATION.md) for the complete schema.
+
+### `onboarding/SUMMARY.md` (optional)
+
+| | |
+|---|---|
+| **Purpose** | Brownfield onboarding index that records artifact status, whether codebase mapping is complete, and the next recommended GSD command after first-time setup. |
+| **Produced by** | `/gsd-onboard` after `PROJECT.md`, `REQUIREMENTS.md`, `ROADMAP.md`, and `STATE.md` all exist. |
+| **Consumed by** | Humans reviewing first-time setup; future `/gsd-onboard` runs when confirming existing onboarding state. |
 
 ### `MILESTONES.md` (optional)
 

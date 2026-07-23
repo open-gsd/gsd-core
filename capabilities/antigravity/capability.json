@@ -1,18 +1,30 @@
 {
   "id": "antigravity",
   "role": "runtime",
+  "version": "1.8.0",
   "title": "Antigravity",
-  "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; nested skill layout; tier-1 support.",
+  "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; flat skill layout; tier-1 support.",
   "tier": "core",
   "requires": [],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
   "runtime": {
     "configHome": {
       "kind": "dot-home-nested",
       "name": "antigravity",
       "parent": ".gemini",
-      "env": ["ANTIGRAVITY_CONFIG_DIR"],
-      "probe": ["antigravity", "antigravity-ide", "antigravity-cli"]
+      "env": [
+        "ANTIGRAVITY_CONFIG_DIR"
+      ],
+      "probe": [
+        "antigravity",
+        "antigravity-ide",
+        "antigravity-cli"
+      ],
+      "probeExists": "gsd-core/VERSION"
     },
+    "localConfigDir": ".agents",
     "configFormat": "settings-json",
     "artifactLayout": {
       "global": [
@@ -20,9 +32,17 @@
           "kind": "skills",
           "destSubpath": "skills",
           "prefix": "gsd-",
-          "nesting": "nested",
+          "nesting": "flat",
           "recursive": false,
           "converter": "convertClaudeCommandToAntigravitySkill"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToAntigravityAgent"
         }
       ],
       "local": [
@@ -30,9 +50,17 @@
           "kind": "skills",
           "destSubpath": "skills",
           "prefix": "gsd-",
-          "nesting": "nested",
+          "nesting": "flat",
           "recursive": false,
           "converter": "convertClaudeCommandToAntigravitySkill"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToAntigravityAgent"
         }
       ]
     },
@@ -43,7 +71,32 @@
     "supportTier": 1,
     "installSurface": "settings-json",
     "writesSharedSettings": true,
-    "permissionWriter": null,
-    "extendedHookEvents": []
+    "permissionWriter": "antigravity",
+    "extendedHookEvents": [],
+    "hostIntegration": {
+      "embeddingMode": "declarative",
+      "commandSurface": "slash-file",
+      "dispatch": {
+        "namedDispatch": "undocumented",
+        "nested": "undocumented",
+        "maxDepth": "undocumented",
+        "background": true,
+        "subagentToolkit": "full",
+        "backgroundDispatch": "undocumented"
+      },
+      "modelMode": "passive",
+      "hookBus": "host",
+      "stateIO": "filesystem",
+      "transport": "mcp",
+      "runtime": "go",
+      "effortSurface": "undocumented"
+    },
+    "hostBehaviors": {
+      "reviewerCli": true,
+      "projectInstructionFile": "GEMINI.md",
+      "noPathRewrite": true,
+      "hookPathStyle": "raw",
+      "globalDirResolver": "antigravity"
+    }
   }
 }

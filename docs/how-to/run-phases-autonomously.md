@@ -161,6 +161,13 @@ If autonomous mode stops — whether you chose "Stop autonomous mode" from the b
 
 GSD skips already-complete phases automatically, so it is safe to re-run from an earlier phase number if you are not sure where the run stopped.
 
+If a prior run recorded a `Deferred Verification` entry in `STATE.md`, later `/gsd-autonomous` reruns skip that phase instead of re-entering the same deferral prompt. Resume deferred work with the exact command shown in the table:
+
+```bash
+/gsd:verify-work 4          # for verification_deferred_human
+/gsd:plan-phase 6 --gaps   # for verification_deferred_gaps
+```
+
 ---
 
 ## Related

@@ -51,6 +51,25 @@ Inicializa um novo projeto com coleta aprofundada de contexto.
 
 ---
 
+### `/gsd-onboard`
+
+Guia o onboarding inicial de um código existente no GSD. O comando verifica o estado do repositório, encaminha com segurança por mapeamento da base de código, ingestão opcional de documentos, inicialização do projeto e cria um onboarding summary quando o planejamento existe.
+
+| Flag | Descrição |
+|------|-----------|
+| `--fast` | Prefere o handoff leve `/gsd-map-codebase --fast`; um mapa completo ainda é necessário antes de `/gsd-new-project` |
+| `--text` | Usa gates numerados em texto puro em vez de menus TUI |
+
+**Pré-requisitos:** Repositório existente ou documentos de planejamento. Para projetos greenfield vazios, use `/gsd-new-project`.
+**Produz:** `.planning/codebase/` via map-codebase, `.planning/` via new-project ou ingest-docs, e `.planning/onboarding/SUMMARY.md` após a configuração do projeto.
+
+```bash
+/gsd-onboard           # Onboarding brownfield guiado
+/gsd-onboard --fast    # Usa primeiro o mapa leve e depois completa o mapa antes do setup do projeto
+```
+
+---
+
 ### `/gsd-workspace`
 
 Gerencia workspaces do GSD — cria, lista ou remove ambientes de workspace isolados com cópias de repositório e diretórios `.planning/` independentes.
@@ -591,7 +610,7 @@ Exibe os comandos GSD no nível solicitado. O padrão cabe em uma tela; `--full`
 /gsd-help --brief <topic>           # Consulta resumida com escopo — assinatura + resumo em uma linha
 ```
 
-Consulte `get-shit-done/workflows/help/modes/topic.md` para a tabela completa de aliases. Tópicos desconhecidos exibem a lista reconhecida.
+Consulte `gsd-core/workflows/help/modes/topic.md` para a tabela completa de aliases. Tópicos desconhecidos exibem a lista reconhecida.
 
 ---
 
@@ -1514,7 +1533,7 @@ Um portão de lint impõe o orçamento:
 npm run lint:descriptions
 ```
 
-A verificação também é executada como parte de `npm test` via `tests/enh-2789-description-budget.test.cjs`.
+A verificação também é executada como parte de `npm test` via `tests/skill-frontmatter-contract.test.cjs`.
 
 ---
 

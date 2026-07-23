@@ -76,6 +76,18 @@ export interface CheckDescriptor {
    * prove fail-first; ABSENT for node-test → the default prover fails closed (never attestation).
    */
   violationFixture?: string;
+  /**
+   * Author-supplied path to a KNOWN-CLEAN control subject (#1346; MANDATORY for the node-test kind as
+   * of #1906). The prover runs the check against it as a CAUSATION CONTROL and requires it to stay
+   * GREEN — proof that the RED on `violationFixture` was caused by the subject's CONTENT, not merely by
+   * `GSD_PROHIB_SUBJECT` being set. A deceptive content-independent check reds on the clean subject too
+   * → control fails → not proven. For the `node-test` kind this is now REQUIRED: ABSENT → the node-test
+   * is UN-PROVABLE (fail-closed), never accepted under the weaker violation-only proof (#1906 supersedes
+   * #1346's opt-in; ADR-1606 Decision 4). A supplied-but-missing path fails closed. The field stays
+   * optional at the type level because the `lint-rule` kind needs no analog (its subject IS the linted
+   * file — no `GSD_PROHIB_SUBJECT` indirection, so the "reds because the env var is set" gap can't exist).
+   */
+  cleanFixture?: string;
 }
 
 /**
@@ -90,8 +102,9 @@ export interface CheckDescriptor {
  *   - `null`/`undefined`/non-object input -> `null`.
  *   - `check_kind` ABSENT -> `null` (no descriptor -> producer locates nothing -> fail-closed).
  *   - `check_kind` present -> `{ kind: check_kind, target: check_target }`, adding `rule: check_rule`
- *     ONLY when `check_rule` is a non-empty string, and `violationFixture: check_violation_fixture`
- *     ONLY when that scalar is a non-empty string (#1346 — composes #1278 locate with #1279 proof).
+ *     ONLY when `check_rule` is a non-empty string, `violationFixture: check_violation_fixture`
+ *     ONLY when that scalar is a non-empty string (composes #1278 locate with #1279 proof), and
+ *     `cleanFixture: check_clean_fixture` ONLY when that scalar is non-empty (#1346 causation control).
  *   - `failFirst` is NEVER sourced from the projection — it stays a verify-time caller attestation
  *     (#1279 machine-proves it; out of scope here). The returned descriptor carries no `failFirst`.
  *   - The adapter does NOT strictly validate kind/target/rule: it faithfully reconstructs whatever
@@ -128,6 +141,12 @@ export function descriptorFromProjection(
   // hard-gates (fail-closed; green requires a fixture), never fabricated.
   const fixture = scalar(projected.check_violation_fixture);
   if (fixture.trim().length > 0) descriptor.violationFixture = fixture;
+  // `cleanFixture` (#1346) rides BOTH kinds — reconstruct it from `check_clean_fixture` so the
+  // causation control runs end-to-end: when present the prover also requires the check to stay GREEN
+  // against this known-clean subject (proving the violation RED is content-dependent). Absent/blank ->
+  // no control (the documented residual remains; backward-compatible with the #1314 compose path).
+  const clean = scalar(projected.check_clean_fixture);
+  if (clean.trim().length > 0) descriptor.cleanFixture = clean;
   return descriptor;
 }
 
@@ -438,6 +457,31 @@ function posTimeout(timeoutMs: number | undefined, def: number): number {
   return typeof timeoutMs === 'number' && timeoutMs > 0 ? timeoutMs : def;
 }
 
+/**
+ * Spawn the negative `node --test` against a single subject (set via the `GSD_PROHIB_SUBJECT`
+ * convention, #1279) and return its TAP output. Reuses the bounded-subprocess machinery
+ * (`process.execPath`, arg arrays → no shell, `childEnv`, bounded `timeout`/`maxBuffer`) and NEVER
+ * throws — a RED run exits non-zero, so the partial TAP (with the `# fail` summary) is recovered from
+ * the thrown error's `stdout`. The prover calls this once per subject: the KNOWN-BAD violation fixture
+ * (expect RED) and, for the #1346 causation control, the KNOWN-CLEAN control subject (expect GREEN).
+ */
+function runNodeTestWithSubject(check: CheckDescriptor, cwd: string, subject: string, timeoutMs?: number): string {
+  try {
+    return execFileSync(process.execPath, buildNodeTestArgs(check), {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      env: { ...childEnv(), GSD_PROHIB_SUBJECT: subject },
+      timeout: posTimeout(timeoutMs, NODE_TEST_TIMEOUT_MS),
+      maxBuffer: CHECK_MAX_BUFFER,
+    });
+  } catch (e) {
+    const stdout = e && typeof e === 'object' && 'stdout' in e ? (e as { stdout?: unknown }).stdout : '';
+    return typeof stdout === 'string' ? stdout : '';
+  }
+}
+
 function defaultRunCheck(check: CheckDescriptor, cwd: string, timeoutMs?: number): CheckRunResult {
   try {
     if (check.kind === 'node-test') {
@@ -554,34 +598,33 @@ function defaultProveFailFirst(check: CheckDescriptor, cwd: string, timeoutMs?: 
       // a setup crash, not from the prohibition firing. Requiring the fixture to exist before spawning
       // closes the realistic typo/stale-path case (#1279 review, Major 1).
       //
-      // KNOWN RESIDUAL (documented, fail-open direction, tracked follow-up #1346): existence is
-      // necessary but not sufficient — a deliberately deceptive negative test that reds merely BECAUSE
-      // `GSD_PROHIB_SUBJECT` is set (rather than because the subject's CONTENT violates the must-NOT)
-      // is still accepted. Proving "the red was CAUSED BY the violation" cannot be done generically for
-      // an arbitrary author-supplied test, so it is recorded as a constraint, not silently implied-solved.
+      // CAUSATION (#1346; MANDATORY as of #1906): existence + a non-vacuous red is necessary but not
+      // sufficient — a deceptive negative test that reds merely BECAUSE `GSD_PROHIB_SUBJECT` is set
+      // (rather than because the subject's CONTENT violates the must-NOT) would otherwise be accepted.
+      // The `cleanFixture` control below proves content-dependence (red on bad AND green on clean) and is
+      // now REQUIRED for the node-test kind: absent it, the check is un-provable (fail-closed), not
+      // accepted under the weaker violation-only proof (#1906 supersedes #1346's opt-in; ADR-1606 D4).
       // Resolve the fixture against `cwd` (NOT the verify process's cwd): the spawned test reads
       // `GSD_PROHIB_SUBJECT` and resolves a relative subject against `cwd`, so the existence check must
       // use the SAME base or it could pass here yet ENOENT in the child (re-opening the fail-open hole).
       if (!fixture || !fs.existsSync(path.resolve(cwd, fixture))) return { provenFailFirst: false };
-      let out = '';
-      try {
-        out = execFileSync(process.execPath, buildNodeTestArgs(check), {
-          cwd,
-          encoding: 'utf-8',
-          stdio: ['ignore', 'pipe', 'pipe'],
-          windowsHide: true,
-          // CONVENTION (#1279): the negative test reads its subject-under-test from this env var.
-          env: { ...childEnv(), GSD_PROHIB_SUBJECT: fixture },
-          timeout: posTimeout(timeoutMs, NODE_TEST_TIMEOUT_MS),
-          maxBuffer: CHECK_MAX_BUFFER,
-        });
-      } catch (e) {
-        // A negative test that goes RED exits non-zero; the partial TAP (with the `# fail` summary)
-        // is on stdout. Parse what we have: a real failure here is the PROOF the test is fail-first.
-        const stdout = e && typeof e === 'object' && 'stdout' in e ? (e as { stdout?: unknown }).stdout : '';
-        out = typeof stdout === 'string' ? stdout : '';
-      }
-      return { provenFailFirst: isNonVacuousNodeTestRed(out, check.target), method: 'violation-fixture' };
+      // Run the negative test against the KNOWN-BAD subject and require a NON-VACUOUS red.
+      const redOut = runNodeTestWithSubject(check, cwd, fixture, timeoutMs);
+      if (!isNonVacuousNodeTestRed(redOut, check.target)) return { provenFailFirst: false, method: 'violation-fixture' };
+      // #1906 CAUSATION CONTROL (MANDATORY for node-test — supersedes #1346's opt-in, ADR-1606 D4): the
+      // clean control subject is REQUIRED. Run the SAME test against it and require it to stay GREEN,
+      // proving the red above was caused by the subject's CONTENT — a deceptive test that reds merely
+      // because GSD_PROHIB_SUBJECT is SET reds here too → not content-dependent → not proven. ABSENT →
+      // the control cannot run → un-provable → fail-closed (NOT accepted under the weaker violation-only
+      // proof). This is the one behavior change vs #1346: absent `cleanFixture` was previously proven.
+      const clean = check.cleanFixture;
+      if (!clean) return { provenFailFirst: false, method: 'violation-fixture' };
+      // A supplied-but-missing/typo'd control path can't run the control → fail-closed, symmetric
+      // with the violation-fixture existence guard (resolve against the SAME `cwd` as the child).
+      if (!fs.existsSync(path.resolve(cwd, clean))) return { provenFailFirst: false, method: 'violation-fixture' };
+      const cleanOut = runNodeTestWithSubject(check, cwd, clean, timeoutMs);
+      if (!isNonVacuousNodeTestPass(cleanOut, check.target)) return { provenFailFirst: false, method: 'violation-fixture' };
+      return { provenFailFirst: true, method: 'violation-fixture' };
     }
     // Unknown kind — defensive; the LOCATE guard already rejects it.
     return { provenFailFirst: false };

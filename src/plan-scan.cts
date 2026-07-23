@@ -7,16 +7,71 @@
  * from the prior hand-written .cjs; only types are added.
  */
 
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import coreUtils = require('./core-utils.cjs');
+const { countMatchedSummaries } = coreUtils;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import frontmatterMod = require('./frontmatter.cjs');
+const { extractFrontmatter } = frontmatterMod;
 
 // Excluded derivative files
 const PLAN_OUTLINE_RE = /-OUTLINE\.md$/i;
 const PLAN_PRE_BOUNCE_RE = /\.pre-bounce\.md$/i;
+const PLAN_REVIEW_RE = /-PLAN-REVIEW\.md$/i;
+
+// #2349: a plan's frontmatter always sits at byte 0 and closes well before the
+// body, so only a bounded prefix is ever needed to read the `status` marker.
+// Capping the read keeps scanPhasePlans — which loops over every phase directory
+// on hot paths (state sync/validate, roadmap progress) — from slurping a
+// pathologically large committed plan file into memory just to inspect one key.
+const PLAN_FRONTMATTER_READ_CAP = 64 * 1024;
+
+/**
+ * #2349: a plan whose frontmatter declares `status: superseded` was deliberately
+ * reassigned or never executed — its work moved to a later plan, so it can never
+ * gain a matching `*-SUMMARY.md`. Like a retired phase (#1514, one level up), such
+ * a plan must be excluded from BOTH the plan and summary counts; otherwise a phase
+ * with a deliberately-unexecuted plan reads `completed: false` forever, pinning the
+ * milestone below 100%. Reading only the frontmatter `status` key is the same seam
+ * verify.cts / phase.cts already use for plan metadata; a plan without the marker is
+ * counted exactly as before.
+ *
+ * This is the only path in scanPhasePlans that opens file *contents* (the rest is
+ * filename matching), so it is hardened accordingly: `statSync().isFile()` rejects
+ * anything that is not a regular file — a directory, socket, or a symlink resolving
+ * to a device such as `/dev/zero` (a git-committable DoS vector; cf. #2378/#2383) —
+ * BEFORE any open, and the read is bounded to a fixed prefix. Fail-safe throughout:
+ * a non-regular or unreadable plan is treated as a normal (counted) plan, never
+ * silently dropped.
+ */
+function isPlanSuperseded(planFullPath: string): boolean {
+  let content: string;
+  try {
+    const st = statSync(planFullPath); // follows symlinks → resolves to the target's real type
+    if (!st.isFile()) return false;
+    const length = Math.min(st.size, PLAN_FRONTMATTER_READ_CAP);
+    if (length === 0) return false;
+    const fd = openSync(planFullPath, 'r');
+    try {
+      const buf = Buffer.allocUnsafe(length);
+      const bytesRead = readSync(fd, buf, 0, length, 0);
+      content = buf.toString('utf8', 0, bytesRead);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+  const status = extractFrontmatter(content)['status'];
+  return typeof status === 'string' && status.trim().toLowerCase() === 'superseded';
+}
 
 function isRootPlanFile(fileName: string): boolean {
   if (PLAN_OUTLINE_RE.test(fileName)) return false;
   if (PLAN_PRE_BOUNCE_RE.test(fileName)) return false;
+  if (PLAN_REVIEW_RE.test(fileName)) return false;
   if (fileName.endsWith('-PLAN.md') || fileName === 'PLAN.md') return true;
   // A summary is never a plan. Reject summaries before the loose /PLAN/i
   // fallback so legacy `<N>-PLAN-<NN>-SUMMARY.md` names (which contain the
@@ -73,21 +128,42 @@ function scanPhasePlans(phaseDir: string): PhaseScanResult {
   if (existsSync(nestedDir)) {
     try {
       const nestedFiles = readdirSync(nestedDir);
-      nestedPlanFiles = nestedFiles.filter(isNestedPlanFile);
-      nestedSummaryFiles = nestedFiles.filter(isNestedSummaryFile);
+      nestedPlanFiles = nestedFiles.filter(isNestedPlanFile).map((file) => `plans/${file}`);
+      nestedSummaryFiles = nestedFiles.filter(isNestedSummaryFile).map((file) => `plans/${file}`);
       hasNestedPlans = nestedPlanFiles.length > 0;
     } catch { /* ignore unreadable nested layout */ }
   }
 
-  const planFiles = rootPlanFiles.concat(nestedPlanFiles);
+  const allPlanFiles = rootPlanFiles.concat(nestedPlanFiles);
+  // #2349: drop plans explicitly marked `status: superseded` from the plan set
+  // BEFORE counting, so they inflate neither the denominator (planCount) nor,
+  // via countMatchedSummaries below, the numerator (summaryCount). Plans without
+  // the marker are untouched, so behaviour is byte-for-behaviour identical for
+  // every existing phase — only a phase carrying the new marker changes.
+  const supersededPlanFiles = allPlanFiles.filter((f) => isPlanSuperseded(join(phaseDir, f)));
+  const planFiles = supersededPlanFiles.length === 0
+    ? allPlanFiles
+    : allPlanFiles.filter((f) => !supersededPlanFiles.includes(f));
   const summaryFiles = rootSummaryFiles.concat(nestedSummaryFiles);
   const planCount = planFiles.length;
-  const summaryCount = summaryFiles.length;
+  // Count only summaries that are the PLAN→SUMMARY partner of an existing plan
+  // (#1988): stray non-plan summaries (e.g. 30-FIX-CR02-SUMMARY.md,
+  // 30-GAPCLOSURE-SUMMARY.md) must not inflate summary_count or flip a phase to
+  // Complete when plans are still missing summaries. summaryFiles (the array)
+  // still holds every summary on disk for callers that read/list them.
+  const summaryCount = countMatchedSummaries(planFiles, summaryFiles);
 
   return {
     planCount,
     summaryCount,
-    completed: planCount > 0 && summaryCount >= planCount,
+    // #2349: gate completion on whether the phase had ANY plans on disk
+    // (allPlanFiles), NOT on the post-exclusion planCount. A phase whose plans
+    // were ALL marked superseded has planCount 0, but it is NOT an unplanned
+    // empty phase — there is simply no remaining work, so it must read complete
+    // (0 >= 0) rather than being pinned below 100% forever, which is the very
+    // failure this fix removes. A genuinely empty phase (no plans authored)
+    // still has allPlanFiles.length 0 and stays not-completed, exactly as before.
+    completed: allPlanFiles.length > 0 && summaryCount >= planCount,
     hasNestedPlans,
     planFiles,
     summaryFiles,

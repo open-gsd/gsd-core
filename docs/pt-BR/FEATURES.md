@@ -14,7 +14,7 @@ Para catálogo completo e detalhamento exaustivo, consulte [FEATURES.md em ingl�
 - **Commits atômicos por tarefa** para rastreabilidade e rollback
 - **Verificação pós-execução** com foco em objetivos da fase
 - **UAT guiado** via `/gsd-verify-work`
-- **Suporte brownfield** com `/gsd-map-codebase`
+- **Suporte brownfield** com `/gsd-onboard` e `/gsd-map-codebase`
 - **Workstreams** para trilhas paralelas sem colisão de estado
 - **Backlog, seeds e threads** para memória de médio/longo prazo
 
@@ -68,7 +68,7 @@ Para catálogo completo e detalhamento exaustivo, consulte [FEATURES.md em ingl�
 |--------|----------|
 | Projeto novo | `/gsd-new-project` -> `/gsd-discuss-phase` -> `/gsd-plan-phase` -> `/gsd-execute-phase` |
 | Correção rápida | `/gsd-quick` |
-| Código existente | `/gsd-map-codebase` -> `/gsd-new-project` |
+| Código existente | `/gsd-onboard` -> handoffs para `/gsd-map-codebase`, `/gsd-ingest-docs`, `/gsd-new-project` |
 | Fechamento de release | `/gsd-audit-milestone` -> `/gsd-complete-milestone` |
 
 ---

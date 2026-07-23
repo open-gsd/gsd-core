@@ -1,6 +1,6 @@
 # GSD CLI 工具参考
 
-> `gsd-tools` CLI（`get-shit-done/bin/gsd-tools.cjs`）参考文档。斜杠命令与用户流程请参见[命令参考](COMMANDS.md)。返回[文档索引](README.md)。
+> `gsd-tools` CLI（`gsd-core/bin/gsd-tools.cjs`）参考文档。斜杠命令与用户流程请参见[命令参考](COMMANDS.md)。返回[文档索引](README.md)。
 
 ---
 
@@ -11,8 +11,8 @@
 
 |                    |                                                                                                                                                                                                        |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **发布路径**   | `get-shit-done/bin/gsd-tools.cjs`                                                                                                                                                                      |
-| **实现**       | `get-shit-done/bin/lib/` 下的 20 个领域模块（以该目录为准）                                                                                                                                              |
+| **发布路径**   | `gsd-core/bin/gsd-tools.cjs`                                                                                                                                                                      |
+| **实现**       | `gsd-core/bin/lib/` 下的 20 个领域模块（以该目录为准）                                                                                                                                              |
 | **状态**       | 编排、工作流和自动化的主要运行时命令接口。 |
 
 
@@ -288,13 +288,14 @@ node gsd-tools.cjs scaffold phase-dir --phase N --name "phase name"
 
 ## Init 命令（复合上下文加载）
 
-通过单次调用加载特定工作流所需的所有上下文。返回包含项目信息、配置、状态和工作流专属数据的 JSON。
+通过单次调用加载特定工作流所需的所有上下文。返回包含项目信息、配置、状态和工作流专属数据的 JSON。`init onboard [--fast] [--text]` 会为 `/gsd-onboard` 返回 brownfield 信号、planning 文档候选、代码库映射完整性、fast 映射就绪状态、文本模式路由、部分 planning 状态和 onboarding summary 状态。
 
 ```bash
 node gsd-tools.cjs init execute-phase <phase>
 node gsd-tools.cjs init plan-phase <phase>
 node gsd-tools.cjs init new-project
 node gsd-tools.cjs init new-milestone
+node gsd-tools.cjs init onboard [--fast] [--text]
 node gsd-tools.cjs init quick <description>
 node gsd-tools.cjs init resume
 node gsd-tools.cjs init verify-work <phase>
@@ -322,7 +323,7 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
 ```bash
 # 归档里程碑
-node gsd-tools.cjs milestone complete <version> [--name <name>] [--archive-phases]
+node gsd-tools.cjs milestone complete <version> [--name <name>] [--no-archive-phases]
 
 # 将需求标记为完成
 node gsd-tools.cjs requirements mark-complete <ids>
@@ -487,7 +488,7 @@ Slug 将针对 `[a-zA-Z0-9_-]+` 进行验证；空或包含路径的 slug 将被
 
 ## 密钥处理
 
-通过 `/gsd-settings` 配置的 API 密钥（`brave_search`、`firecrawl`、`exa_search`）以明文形式写入 `.planning/config.json`，但在所有 `config-set` / `config-get` 输出、确认表格和交互式提示中均会被遮蔽（`****<last-4>`）。遮蔽实现请参见 `get-shit-done/bin/lib/secrets.cjs`。`config.json` 文件本身是安全边界——请通过文件系统权限保护它，并将其排除在 git 之外（`.planning/` 默认已被 gitignore）。
+通过 `/gsd-settings` 配置的 API 密钥（`brave_search`、`firecrawl`、`exa_search`）以明文形式写入 `.planning/config.json`，但在所有 `config-set` / `config-get` 输出、确认表格和交互式提示中均会被遮蔽（`****<last-4>`）。遮蔽实现请参见 `gsd-core/bin/lib/secrets.cjs`。`config.json` 文件本身是安全边界——请通过文件系统权限保护它，并将其排除在 git 之外（`.planning/` 默认已被 gitignore）。
 
 ---
 

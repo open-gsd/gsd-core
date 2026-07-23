@@ -13,11 +13,6 @@
     "kilo",
     "kilo-cli"
   ],
-  "gemini": [
-    "gemini",
-    "gemini-cli",
-    "gemini-code"
-  ],
   "codex": [
     "codex",
     "codex-app",
@@ -67,6 +62,11 @@
   ],
   "kimi": [
     "kimi"
+  ],
+  "kimi-code": [
+    "kimi-code",
+    "kimicode",
+    "kimi_code"
   ],
   "codebuddy": [
     "codebuddy",

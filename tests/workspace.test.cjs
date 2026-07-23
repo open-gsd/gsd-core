@@ -214,6 +214,51 @@ describe('init remove-workspace', () => {
     assert.strictEqual(data.strategy, 'clone');
     assert.strictEqual(data.has_dirty_repos, false);
   });
+
+  // #2402: cmdInitRemoveWorkspace didn't route through withProjectRoot, so
+  // remove-workspace.md never received response_language (nor project_root/
+  // agents_installed). Mirrors the established `init manager` response_language
+  // coverage pattern (tests/init-manager.test.cjs).
+  describe('response_language wiring (#2402)', () => {
+    function writeWorkspace(base, name) {
+      const ws = path.join(base, 'gsd-workspaces', name);
+      fs.mkdirSync(ws, { recursive: true });
+      fs.writeFileSync(path.join(ws, 'WORKSPACE.md'), [
+        `# Workspace: ${name}`,
+        '',
+        'Created: 2026-03-20',
+        'Strategy: clone',
+        '',
+        '## Member Repos',
+        '',
+        '| Repo | Source | Branch | Strategy |',
+        '|------|--------|--------|----------|',
+      ].join('\n'));
+    }
+
+    test('output includes response_language when configured', () => {
+      writeWorkspace(tmpDir, 'test-ws');
+      fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'config.json'),
+        JSON.stringify({ response_language: 'Japanese' })
+      );
+
+      const result = runGsdTools('init remove-workspace test-ws', tmpDir, { HOME: tmpDir });
+      assert.ok(result.success, `init failed: ${result.error}`);
+      const data = JSON.parse(result.output);
+      assert.strictEqual(data.response_language, 'Japanese');
+    });
+
+    test('output omits response_language when not configured', () => {
+      writeWorkspace(tmpDir, 'test-ws');
+
+      const result = runGsdTools('init remove-workspace test-ws', tmpDir, { HOME: tmpDir });
+      assert.ok(result.success, `init failed: ${result.error}`);
+      const data = JSON.parse(result.output);
+      assert.strictEqual(data.response_language, undefined);
+    });
+  });
 });
 
 // ─── Integration: worktree creation and removal ─────────────────────────────
@@ -331,7 +376,7 @@ describe('workspace command files', () => {
     const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
     assert.ok(fmMatch, `${path.basename(filePath)} must start with a YAML frontmatter block`);
     const fm = {};
-    for (const rawLine of fmMatch[1].split('\n')) {
+    for (const rawLine of fmMatch[1].split(/\r?\n/)) {
       // Explicit \r strip: split('\n') on CRLF content leaves a trailing
       // \r on every line, which the value regex pulls into `kv[2]` and trim
       // is enough for most values — but be defensive so future keys with
@@ -358,7 +403,7 @@ describe('workspace command files', () => {
       .map((m) => m[1]);
     const targets = [];
     for (const blk of blocks) {
-      for (const line of blk.split('\n')) {
+      for (const line of blk.split(/\r?\n/)) {
         const t = line.trim();
         if (!t.startsWith('@')) continue;
         // Normalize away the home-prefix and the `.claude/gsd-core/` root

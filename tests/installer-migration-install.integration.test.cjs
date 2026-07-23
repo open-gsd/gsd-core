@@ -35,12 +35,38 @@ const RUNTIME_INSTALL_CONTRACTS = {
   gemini: { surface: 'commands-gsd', settings: true, packageJson: true },
   hermes: { surface: 'hermes-skills', settings: true, packageJson: true },
   kimi: { surface: 'kimi-skills-agents', settings: false, packageJson: false },
+  // #2454: Kimi Code (Node CLI) has NO custom named subagents (per official
+  // docs), so its install surface is skills-only (flat-skills), NOT
+  // kimi-skills-agents. The kimi-agents YAML layout is Python kimi-cli only.
+  'kimi-code': { surface: 'flat-skills', settings: false, packageJson: false },
+  // #2305: Kilo's native plugin spawns the staged guard hooks, so it receives
+  // the shared hooks bundle + the CommonJS package.json marker, like OpenCode.
+  // (#1821 excluded Kilo on the false premise that it had no plugin surface.)
   kilo: { surface: 'flat-command', settings: false, packageJson: true },
-  omp: { surface: 'omp', settings: false, packageJson: false },
-  opencode: { surface: 'flat-command', settings: true, packageJson: true },
+  // #2329: OpenCode discovers commands from the PLURAL `commands/` dir — the
+  // singular `command/` (still correct for Kilo) made all /gsd-* commands
+  // invisible to OpenCode. commandDirName overrides the flat-command default.
+  opencode: { surface: 'flat-command', settings: true, packageJson: true, commandDirName: 'commands' },
+  // #2102 Stage 1/2: pi is a PLUGIN-ONLY install (hostBehaviors.pluginOnlyInstall)
+  // for commands/agents/skills — NO commands/, agents/, or skills/ dir. pi's
+  // /gsd command is registered programmatically by the native extension
+  // (extensions/gsd.cjs) and dispatches via a bounded subprocess to
+  // gsd-tools.cjs; it has no host-read markdown surface. Stage 2 (adversarial-
+  // review fix): pi's native extension DOES spawn the shared hooks/*.js bundle
+  // as bounded subprocesses (session_start/before_agent_start/session_before_
+  // compact bridges) and its /gsd tokenizer requires hooks/lib/git-cmd.js, so
+  // `hostBehaviors.skipSharedHooksInstall` was removed — pi now receives
+  // hooks/ + hooks/lib/ + the {"type":"commonjs"} package.json marker, exactly
+  // like OpenCode and (since #2305) Kilo — architecturally identical:
+  // hooksSurface:'none' + a native plugin that spawns the staged hooks — NOT
+  // like ZCode (no plugin surface, where the same hooks are dead weight).
+  pi: { surface: 'plugin-only', settings: false, packageJson: true },
   qwen: { surface: 'flat-skills', settings: true, packageJson: true },
   trae: { surface: 'flat-skills', settings: false, packageJson: false },
-  windsurf: { surface: 'flat-skills', settings: false, packageJson: false },
+  windsurf: { surface: 'global-artifacts-noop', settings: false, packageJson: false },
+  // #1821: ZCode (hooksSurface:none, no plugin surface) no longer receives the
+  // dead hook scripts or the CommonJS package.json marker.
+  zcode: { surface: 'flat-skills', settings: false, packageJson: false },
 };
 
 function sha256(content) {
@@ -75,6 +101,19 @@ function withEnv(key, value, fn) {
     if (previous == null) delete process.env[key];
     else process.env[key] = previous;
   }
+}
+
+// #2088: Codex CLI skills install to `$HOME/.agents/skills` (resolved via
+// os.homedir()), not `$CODEX_HOME/skills`. In-process codex installs must
+// sandbox HOME (and USERPROFILE, for Windows os.homedir() resolution) to the
+// test's codexHome dir, or skills get materialized into the real developer
+// home directory. withEnv saves/restores a single key, so nesting is safe.
+function withCodexEnv(codexHome, fn) {
+  return withEnv('CODEX_HOME', codexHome, () =>
+    withEnv('HOME', codexHome, () =>
+      withEnv('USERPROFILE', codexHome, fn)
+    )
+  );
 }
 
 function captureConsole(fn) {
@@ -212,11 +251,20 @@ function assertFreshInstallContract(runtime, targetDir) {
   }
 
   if (contract.surface === 'flat-skills') {
-    // Pre-#3562: codex was special-cased to expect zero gsd-* skill dirs
-    // (assumption: Codex auto-discovers from workflows). That assumption
-    // does not hold for Codex CLI 0.130.0 — fresh installs now materialize
-    // the same flat-skills surface as the other runtimes.
-    assertHasGsdDirectory(targetDir, 'skills');
+    if (runtime === 'codex') {
+      // #2088: Codex CLI skills install to the canonical `$HOME/.agents/skills`
+      // root (resolved via os.homedir()), NOT `<config-dir>/skills`. Here
+      // runInstallerCli sandboxes HOME to <dirname(targetDir)>/home, so assert
+      // the skill dir under that sandboxed home instead of under targetDir.
+      const codexSandboxHome = path.join(path.dirname(targetDir), 'home');
+      assertHasGsdDirectory(path.join(codexSandboxHome, '.agents'), 'skills');
+    } else {
+      // Pre-#3562: codex was special-cased to expect zero gsd-* skill dirs
+      // (assumption: Codex auto-discovers from workflows). That assumption
+      // does not hold for Codex CLI 0.130.0 — fresh installs now materialize
+      // the same flat-skills surface as the other runtimes.
+      assertHasGsdDirectory(targetDir, 'skills');
+    }
   } else if (contract.surface === 'hermes-skills') {
     // Hermes layout uses prefix: '' — skill dirs have bare stem names (no gsd- prefix).
     // Assert that the category dir contains at least one skill dir with SKILL.md.
@@ -232,24 +280,63 @@ function assertFreshInstallContract(runtime, targetDir) {
       'Hermes should install the nested GSD category description'
     );
   } else if (contract.surface === 'flat-command') {
+    // #2329: dir name is per-runtime (opencode='commands', kilo stays 'command').
+    const commandDirName = contract.commandDirName || 'command';
     assert.ok(
-      listDirNames(targetDir, 'command').some((name) => name.startsWith('gsd-') && name.endsWith('.md')),
-      `${runtime} should install flattened command markdown files`
+      listDirNames(targetDir, commandDirName).some((name) => name.startsWith('gsd-') && name.endsWith('.md')),
+      `${runtime} should install flattened command markdown files in ${commandDirName}/`
+    );
+  } else if (contract.surface === 'plugin-only') {
+    // #2102 Stage 1/2: pi — PLUGIN-ONLY install for commands/agents/skills
+    // (hostBehaviors.pluginOnlyInstall). pi's /gsd command is registered
+    // programmatically by the native extension and dispatches via a bounded
+    // subprocess to gsd-tools.cjs — pi has no host-read markdown surface, so
+    // NO commands/, agents/, or skills/ dir is written. The extension DOES
+    // spawn the shared hooks/*.js bundle as bounded subprocesses (Stage 2
+    // adversarial-review fix — hooksSurface:'none' no longer implies
+    // skipSharedHooksInstall for pi, mirroring OpenCode), so hooks/ + the
+    // git-cmd.js tokenizer helper ARE part of the artifact surface now.
+    // #2470: the dest filename comes from pi's descriptor, and must satisfy
+    // pi's isExtensionFile() auto-discovery filter (.ts/.js only) — otherwise
+    // the file installs but pi never loads it and /gsd never registers.
+    const piNativePlugin = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '..', 'capabilities', 'pi', 'capability.json'), 'utf8')
+    ).runtime.hostBehaviors.nativePlugin;
+    assert.ok(
+      piNativePlugin.file.endsWith('.ts') || piNativePlugin.file.endsWith('.js'),
+      `${runtime}'s extension "${piNativePlugin.file}" must end in .ts or .js for pi to discover it (#2470)`
+    );
+    assert.ok(
+      fs.existsSync(path.join(targetDir, piNativePlugin.dir, piNativePlugin.file)),
+      `${runtime} should install the native extension file at ${piNativePlugin.dir}/${piNativePlugin.file}`
+    );
+    assert.ok(
+      fs.existsSync(path.join(targetDir, 'hooks', 'gsd-ensure-canonical-path.js')),
+      `${runtime} should install the shared hooks/ bundle (spawned by the native extension's event bridges)`
+    );
+    assert.ok(
+      fs.existsSync(path.join(targetDir, 'hooks', 'lib', 'git-cmd.js')),
+      `${runtime} should install hooks/lib/git-cmd.js (the /gsd command tokenizer)`
+    );
+    assert.equal(
+      fs.existsSync(path.join(targetDir, 'commands')),
+      false,
+      `${runtime} should NOT install a commands/ dir (plugin-only, no host-read markdown surface)`
+    );
+    assert.equal(
+      fs.existsSync(path.join(targetDir, 'agents')),
+      false,
+      `${runtime} should NOT install an agents/ dir (plugin-only, no named-dispatch toolkit)`
+    );
+    assert.equal(
+      fs.existsSync(path.join(targetDir, 'skills')),
+      false,
+      `${runtime} should NOT install a skills/ dir (plugin-only)`
     );
   } else if (contract.surface === 'commands-gsd') {
     assert.ok(
       listDirNames(targetDir, path.join('commands', 'gsd')).length > 0,
       `${runtime} should install commands/gsd entries`
-    );
-  } else if (contract.surface === 'omp') {
-    assert.ok(
-      listDirNames(targetDir, 'commands').some((name) => name.startsWith('gsd-') && name.endsWith('.md')),
-      'omp should install flattened command markdown files'
-    );
-    assertHasGsdDirectory(targetDir, 'skills');
-    assert.ok(
-      listDirNames(targetDir, 'rules').some((name) => (name.endsWith('.md') || name.endsWith('.mdc'))),
-      'omp should install mapped rule markdown files'
     );
   } else if (contract.surface === 'kimi-skills-agents') {
     assertHasGsdDirectory(targetDir, 'skills');
@@ -272,9 +359,20 @@ function assertFreshInstallContract(runtime, targetDir) {
       /GSD workflows live in `gsd-core\/workflows\/`/,
       'Cline should install .clinerules/gsd.md guidance'
     );
+  } else if (contract.surface === 'global-artifacts-noop') {
+    assert.equal(
+      fs.existsSync(path.join(targetDir, 'skills')),
+      false,
+      `${runtime} should not install unsupported global skills artifacts`
+    );
+    assert.equal(
+      fs.existsSync(path.join(targetDir, 'workflows')),
+      false,
+      `${runtime} should not install unsupported global workflow artifacts`
+    );
   }
 
-  if (contract.surface !== 'kimi-skills-agents') {
+  if (contract.surface !== 'kimi-skills-agents' && contract.surface !== 'global-artifacts-noop' && contract.surface !== 'plugin-only') {
     assert.ok(
       listDirNames(targetDir, 'agents').some((name) => name.startsWith('gsd-')),
       `${runtime} full install should install agents`
@@ -330,7 +428,7 @@ describe('installer migration install integration', { concurrency: false }, () =
     });
 
     const { output } = captureConsole(() =>
-      withEnv('CODEX_HOME', codexHome, () => install(true, 'codex'))
+      withCodexEnv(codexHome, () => install(true, 'codex'))
     );
 
     const plainOutput = stripAnsi(output);
@@ -348,13 +446,17 @@ describe('installer migration install integration', { concurrency: false }, () =
 
     assert.throws(
       () => captureConsole(() =>
-        withEnv('CODEX_HOME', codexHome, () => install(true, 'codex'))
+        withCodexEnv(codexHome, () => install(true, 'codex'))
       ),
       /installer migration blocked/
     );
 
     assert.equal(fs.readFileSync(path.join(codexHome, 'hooks/gsd-retired-hook.txt'), 'utf8'), 'old gsd hook\n');
     assert.equal(fs.existsSync(path.join(codexHome, 'skills')), false);
+    // #2088: with HOME sandboxed to codexHome via withCodexEnv, Codex's
+    // canonical skill root ($HOME/.agents/skills) resolves under codexHome
+    // too — assert nothing was materialized there when the install is blocked.
+    assert.equal(fs.existsSync(path.join(codexHome, '.agents', 'skills')), false);
     assert.equal(fs.existsSync(path.join(codexHome, 'gsd-core', 'VERSION')), false);
   });
 
@@ -426,7 +528,7 @@ describe('installer migration install integration', { concurrency: false }, () =
     assert.throws(
       () => captureConsole(() =>
         withEnv('CLAUDE_CONFIG_DIR', claudeHome, () =>
-          withEnv('CODEX_HOME', codexHome, () =>
+          withCodexEnv(codexHome, () =>
             withWriteFailure(path.join(codexHome, 'gsd-core', 'VERSION'), () =>
               installModule.installAllRuntimes(['claude', 'codex'], true, false)
             )

@@ -37,7 +37,7 @@ const LIVENESS_PHRASE = 'runs in a subagent';
 // But NOT:
 //   "◆ Planner wrote N plan(s)..."   → not matched (no "spawn" word)
 //   "◆ Research phase enabled"       → not matched (no "spawn" word)
-const SPAWN_BANNER_RE = /◆[^\n]*\bspawning?\b/i;
+const SPAWN_BANNER_RE = /◆[^\r\n]*\bspawning?\b/i;
 
 function findMdFiles(dir) {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -60,7 +60,7 @@ describe('spawn-liveness-banner', () => {
 
     for (const filePath of mdFiles) {
       const content = fs.readFileSync(filePath, 'utf-8');
-      const lines = content.split('\n');
+      const lines = content.split(/\r?\n/);
       const rel = path.relative(WORKFLOWS_DIR, filePath);
 
       for (let i = 0; i < lines.length; i++) {

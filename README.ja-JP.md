@@ -47,13 +47,14 @@ npx @opengsd/gsd-core@latest
 
 別のランタイムをお使いの場合や Node.js がない場合は [ランタイムへのインストール](docs/ja-JP/how-to/install-on-your-runtime.md) を参照してください。
 
-インストール後、最初のプロジェクトを開始します。
+インストール後、新規プロジェクトを開始するか、既存リポジトリをオンボーディングします。
 
 ```bash
-/gsd-new-project
+/gsd-new-project   # グリーンフィールドプロジェクト
+/gsd-onboard       # 既存コードベース
 ```
 
-初めての方は [はじめてのプロジェクト](docs/ja-JP/tutorials/your-first-project.md) で、インストールから最初のフェーズ出荷までのガイド付きチュートリアルをご覧ください。
+初めての方は [はじめてのプロジェクト](docs/ja-JP/tutorials/your-first-project.md) で、インストールから最初のフェーズ出荷までのガイド付きチュートリアルをご覧ください。既存リポジトリの場合は [既存コードベースのオンボーディング](docs/ja-JP/tutorials/onboarding-an-existing-codebase.md) を参照してください。
 
 ---
 

@@ -13,6 +13,20 @@ Display the complete GSD Core command reference. Output ONLY the reference conte
 2. `/gsd:plan-phase 1` - Create detailed plan for first phase
 3. `/gsd:execute-phase 1` - Execute the phase
 
+Not sure where to start? `/gsd:next` reads your project state and routes you to the right next action.
+
+### Smart Entry
+
+**`/gsd:next`**
+The state-aware front door. Detects your current situation and presents a short menu of the right next actions.
+
+- Reads `.planning/STATE.md`, git state, and verification signals via `gsd-tools smart-entry`
+- Classifies your situation (no-project, paused, blocked, planning, executing, needs-verify, idle, complete, …)
+- Shows a situation-appropriate menu with one recommended action, then dispatches
+- Launcher/router only — it never does the work itself; falls back to `/gsd:progress` if detection is unavailable
+
+Usage: `/gsd:next`
+
 ## Staying Updated
 
 GSD evolves fast. Update periodically:
@@ -48,6 +62,16 @@ Creates all `.planning/` artifacts:
 
 Usage: `/gsd:new-project`
 
+**`/gsd:onboard [--fast] [--text]`**
+Guide first-time onboarding for an existing codebase.
+
+- Detects brownfield code, existing planning docs, and partial `.planning/` state
+- Routes through `/gsd:map-codebase`, `/gsd:ingest-docs`, and `/gsd:new-project` in the safe order
+- Creates `.planning/onboarding/SUMMARY.md` after project setup
+- Idempotent: confirms existing artifacts and does not overwrite planning silently
+
+Usage: `/gsd:onboard`
+
 **`/gsd:map-codebase [--fast] [--focus <area>] [--query <term>]`**
 Map an existing codebase for brownfield projects.
 
@@ -58,7 +82,7 @@ Map an existing codebase for brownfield projects.
 - Analyzes codebase with parallel Explore agents
 - Creates `.planning/codebase/` with 7 focused documents
 - Covers stack, architecture, structure, conventions, testing, integrations, concerns
-- Use before `/gsd:new-project` on existing codebases
+- Usually reached through `/gsd:onboard` for first-time existing-codebase setup; run directly to refresh or focus a map
 
 Usage: `/gsd:map-codebase`
 
@@ -81,7 +105,7 @@ Usage: `/gsd:discuss-phase 2`
 Usage: `/gsd:discuss-phase 2 --batch`
 Usage: `/gsd:discuss-phase 2 --batch=3`
 
-**`/gsd:plan-phase <number> [--research] [--skip-research] [--research-phase <N>] [--view] [--gaps] [--skip-verify] [--prd <file>] [--ingest <path-or-glob>] [--ingest-format <auto|nygard|madr|narrative>] [--reviews] [--text] [--tdd] [--mvp]`**
+**`/gsd:plan-phase <number> [--research] [--skip-research] [--research-phase <N>] [--view] [--gaps] [--skip-verify] [--prd <file>] [--ingest <path-or-glob>] [--ingest-format <auto|nygard|madr|narrative>] [--reviews] [--text] [--tdd] [--mvp] [--no-tracer] [--no-reversibility-gates]`**
 Create detailed execution plan for a specific phase.
 
 - `--skip-research` — bypass the research subagent
@@ -92,7 +116,9 @@ Create detailed execution plan for a specific phase.
 - `--ingest <path-or-glob>` — pre-ingest external ADRs/PRDs/SPECs before planning (see *PRD Express Path* below)
 - `--ingest-format <auto|nygard|madr|narrative>` — hint the ADR ingester's parser when `--ingest` is set; defaults to `auto`
 - `--tdd` — plan in test-driven order (tests before code)
-- `--mvp` — vertical-slice MVP planning mode (see also `/gsd:mvp-phase`)
+- `--mvp` — MVP enrichment (user story + Walking Skeleton) on top of the default tracer-first ordering (see also `/gsd:mvp-phase`)
+- `--no-tracer` — opt out of the default tracer-first slice and plan horizontal layers (legacy default)
+- `--no-reversibility-gates` — suppress the `checkpoint:decision` a `one-way`-door decision normally earns, for intentionally-unattended runs (ratings are still recorded)
 
 - Generates `.planning/phases/XX-phase-name/XX-YY-PLAN.md`
 - Breaks phase into concrete, actionable tasks
@@ -225,11 +251,13 @@ Start a new milestone through unified flow.
 - Requirements definition with scoping
 - Roadmap creation with phase breakdown
 - Optional `--reset-phase-numbers` flag restarts numbering at Phase 1 and archives old phase dirs first for safety
+- Optional `--ws <name>` flag scopes the milestone to a workstream and skips the shared `PROJECT.md` write
 
 Mirrors `/gsd:new-project` flow for brownfield projects (existing PROJECT.md).
 
 Usage: `/gsd:new-milestone "v2.0 Features"`
 Usage: `/gsd:new-milestone --reset-phase-numbers "v2.0 Features"`
+Usage: `/gsd:new-milestone --ws search "v2.0 Search"`
 
 **`/gsd:complete-milestone <version>`**
 Archive completed milestone and prepare for next version.
@@ -393,6 +421,16 @@ List pending todos and select one to work on.
 
 Usage: `/gsd:capture --list`
 Usage: `/gsd:capture --list api`
+
+**`/gsd:capture --list-seeds [status]`**
+List and audit captured seeds (read-only).
+
+- Lists all seeds with ID, status, scope, trigger, and title
+- Optional status filter (e.g., `/gsd:capture --list-seeds dormant`)
+- Does not modify any seed — enrich with `/gsd:capture --seed --enrich SEED-NNN`
+
+Usage: `/gsd:capture --list-seeds`
+Usage: `/gsd:capture --list-seeds dormant`
 
 ### User Acceptance Testing
 
@@ -663,7 +701,7 @@ These six skills exist primarily for the model to perform two-stage hierarchical
 ├── milestones/
 │   ├── v1.0-ROADMAP.md       # Archived roadmap snapshot
 │   ├── v1.0-REQUIREMENTS.md  # Archived requirements
-│   └── v1.0-phases/          # Archived phase dirs (via /gsd:cleanup or --archive-phases)
+│   └── v1.0-phases/          # Archived phase dirs (via /gsd:cleanup or milestone complete, which archives by default)
 │       ├── 01-foundation/
 │       └── 02-core-features/
 ├── codebase/             # Codebase map (brownfield projects)

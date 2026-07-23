@@ -171,6 +171,14 @@ export const STATE_COMMAND_ALIASES: CommandAlias[] = [
     "mutation": true
   },
   {
+    "canonical": "state.rebuild",
+    "aliases": [
+      "state rebuild"
+    ],
+    "subcommand": "rebuild",
+    "mutation": true
+  },
+  {
     "canonical": "state.milestone-switch",
     "aliases": [
       "state milestone-switch"
@@ -286,6 +294,14 @@ export const INIT_COMMAND_ALIASES: CommandAlias[] = [
       "init new-milestone"
     ],
     "subcommand": "new-milestone",
+    "mutation": false
+  },
+  {
+    "canonical": "init.onboard",
+    "aliases": [
+      "init onboard"
+    ],
+    "subcommand": "onboard",
     "mutation": false
   },
   {
@@ -458,6 +474,14 @@ export const PHASE_COMMAND_ALIASES: CommandAlias[] = [
     ],
     "subcommand": "scaffold",
     "mutation": true
+  },
+  {
+    "canonical": "phase.list-plans",
+    "aliases": [
+      "phase list-plans"
+    ],
+    "subcommand": "list-plans",
+    "mutation": false
   }
 ];
 
@@ -723,6 +747,20 @@ export const NON_FAMILY_COMMAND_ALIASES: NonFamilyCommandAlias[] = [
     "mutation": true
   },
   {
+    "canonical": "requirements.ready-ids",
+    "aliases": [
+      "requirements ready-ids"
+    ],
+    "mutation": false
+  },
+  {
+    "canonical": "requirements.revert-phase",
+    "aliases": [
+      "requirements revert-phase"
+    ],
+    "mutation": true
+  },
+  {
     "canonical": "stats.json",
     "aliases": [
       "stats json"
@@ -826,3 +864,14 @@ export const PHASE_SUBCOMMANDS: string[] = PHASE_COMMAND_ALIASES.map((entry) => 
 export const PHASES_SUBCOMMANDS: string[] = PHASES_COMMAND_ALIASES.map((entry) => entry.subcommand);
 export const VALIDATE_SUBCOMMANDS: string[] = VALIDATE_COMMAND_ALIASES.map((entry) => entry.subcommand);
 export const ROADMAP_SUBCOMMANDS: string[] = ROADMAP_COMMAND_ALIASES.map((entry) => entry.subcommand);
+
+export const EVAL_COMMAND_ALIASES: CommandAlias[] = [
+  {
+    "canonical": "eval.score",
+    "aliases": ["eval score"],
+    "subcommand": "score",
+    "mutation": false
+  }
+];
+
+export const EVAL_SUBCOMMANDS: string[] = EVAL_COMMAND_ALIASES.map((entry) => entry.subcommand);

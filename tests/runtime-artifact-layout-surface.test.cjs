@@ -30,7 +30,8 @@ function tmpDir(prefix) {
 function createFixtureRuntime() {
   const base = createTempDir('gsd-surface-apply-');
   const runtimeConfigDir = base;
-  const commandsDir = path.join(runtimeConfigDir, 'commands', 'gsd');
+  // #1367: claude local uses flat commands/ (not commands/gsd/) — commandsDir is commands/.
+  const commandsDir = path.join(runtimeConfigDir, 'commands');
   const agentsDir = path.join(runtimeConfigDir, 'agents');
   fs.mkdirSync(commandsDir, { recursive: true });
   fs.mkdirSync(agentsDir, { recursive: true });
@@ -68,6 +69,7 @@ describe('runtime aliases', () => {
 
 describe('applySurface', () => {
   test('core profile: only core skills appear in commandsDir', (t) => {
+    // #1367: claude local uses flat gsd-<stem>.md files at commands/ (not commands/gsd/<stem>.md).
     const { base, runtimeConfigDir, commandsDir } = createFixtureRuntime();
     t.after(() => cleanup(base));
     writeActiveProfile(runtimeConfigDir, 'core');
@@ -81,11 +83,14 @@ describe('applySurface', () => {
     const layout = resolveRuntimeArtifactLayout('claude', runtimeConfigDir, 'local');
     const resolved = applySurface(runtimeConfigDir, layout, manifest, CLUSTERS);
 
-    const files = fs.readdirSync(commandsDir).filter(f => f.endsWith('.md'));
+    // After #1367: files are gsd-<stem>.md (not bare stem.md). Strip the gsd- prefix
+    // to check against the REAL_COMMANDS_DIR (which still uses bare names).
+    const files = fs.readdirSync(commandsDir).filter(f => f.startsWith('gsd-') && f.endsWith('.md'));
     for (const file of files) {
-      assert.ok(fs.existsSync(path.join(REAL_COMMANDS_DIR, file)), `unexpected file: ${file}`);
+      const bareName = file.slice('gsd-'.length); // gsd-help.md → help.md
+      assert.ok(fs.existsSync(path.join(REAL_COMMANDS_DIR, bareName)), `unexpected file: ${file} (no source: ${bareName})`);
     }
-    const expectedCore = [...resolved.skills].map(stem => `${stem}.md`).sort();
+    const expectedCore = [...resolved.skills].map(stem => `gsd-${stem}.md`).sort();
     assert.deepStrictEqual(
       [...files].sort(),
       expectedCore,
@@ -107,7 +112,8 @@ describe('applySurface', () => {
     const layout = resolveRuntimeArtifactLayout('claude', runtimeConfigDir, 'local');
     applySurface(runtimeConfigDir, layout, manifest, CLUSTERS);
 
-    const afterStandard = new Set(fs.readdirSync(commandsDir).filter(f => f.endsWith('.md')));
+    // #1367: files are gsd-<stem>.md in flat commands/
+    const afterStandard = new Set(fs.readdirSync(commandsDir).filter(f => f.startsWith('gsd-') && f.endsWith('.md')));
 
     writeSurface(runtimeConfigDir, {
       baseProfile: 'core',
@@ -117,11 +123,11 @@ describe('applySurface', () => {
     });
     const resolvedCore = applySurface(runtimeConfigDir, layout, manifest, CLUSTERS);
 
-    const afterCore = new Set(fs.readdirSync(commandsDir).filter(f => f.endsWith('.md')));
+    const afterCore = new Set(fs.readdirSync(commandsDir).filter(f => f.startsWith('gsd-') && f.endsWith('.md')));
 
     assert.ok(afterCore.size <= afterStandard.size, 'core should have fewer or equal files than standard');
 
-    const expectedCore = [...resolvedCore.skills].map(stem => `${stem}.md`).sort();
+    const expectedCore = [...resolvedCore.skills].map(stem => `gsd-${stem}.md`).sort();
     assert.deepStrictEqual(
       [...afterCore].sort(),
       expectedCore,
@@ -129,8 +135,9 @@ describe('applySurface', () => {
     );
 
     for (const file of afterCore) {
+      const bareName = file.slice('gsd-'.length);
       assert.ok(
-        fs.existsSync(path.join(REAL_COMMANDS_DIR, file)),
+        fs.existsSync(path.join(REAL_COMMANDS_DIR, bareName)),
         `file in commandsDir not a real skill: ${file}`
       );
     }
@@ -170,13 +177,14 @@ describe('applySurface', () => {
     const layout = resolveRuntimeArtifactLayout('claude', runtimeConfigDir, 'local');
     applySurface(runtimeConfigDir, layout, manifest, CLUSTERS);
 
+    // #1367: flat gsd-<stem>.md files at commands/ (not commands/gsd/<stem>.md)
     assert.ok(
-      fs.existsSync(path.join(commandsDir, 'help.md')),
-      'help.md should be copied from install source'
+      fs.existsSync(path.join(commandsDir, 'gsd-help.md')),
+      'gsd-help.md should be copied from install source (#1367: flat hyphen layout)'
     );
     assert.ok(
-      fs.existsSync(path.join(commandsDir, 'new-project.md')),
-      'new-project.md should be copied from install source'
+      fs.existsSync(path.join(commandsDir, 'gsd-new-project.md')),
+      'gsd-new-project.md should be copied from install source (#1367: flat hyphen layout)'
     );
   });
 
@@ -240,11 +248,12 @@ describe('applySurface', () => {
     const layout = resolveRuntimeArtifactLayout('claude', runtimeConfigDir, 'local');
     applySurface(runtimeConfigDir, layout, manifest, CLUSTERS);
 
-    const commandsDir = path.join(runtimeConfigDir, 'commands', 'gsd');
-    assert.ok(fs.existsSync(commandsDir), 'commands/gsd dir should be created even if initially absent');
-    const files = fs.readdirSync(commandsDir).filter(f => f.endsWith('.md'));
-    assert.ok(files.length > 0, 'commands/gsd should contain staged skill files');
-    assert.ok(files.includes('help.md'), 'help.md should be present after applySurface on missing dest');
+    // #1367: claude local uses flat commands/ (not commands/gsd/)
+    const commandsDir = path.join(runtimeConfigDir, 'commands');
+    assert.ok(fs.existsSync(commandsDir), 'commands/ dir should be created even if initially absent');
+    const files = fs.readdirSync(commandsDir).filter(f => f.startsWith('gsd-') && f.endsWith('.md'));
+    assert.ok(files.length > 0, 'commands/ should contain staged skill files (gsd-*.md)');
+    assert.ok(files.includes('gsd-help.md'), 'gsd-help.md should be present after applySurface on missing dest');
   });
 
   test('Hermes profile shrink: stale GSD skill dirs are removed; user skills preserved', (t) => {
@@ -348,8 +357,8 @@ describe('applySurface', () => {
   // (matching installRuntimeArtifacts/_copyStaged behaviour) and must NOT prune
   // user-created command files that install would preserve.
   //
-  // Affected runtimes have a FLAT command dir (opencode `command/`, cursor
-  // `commands/`, augment `commands/`, kilo `command/`) with kind.prefix='gsd-'.
+  // Affected runtimes have a FLAT command dir (opencode `commands/` — #2329,
+  // cursor `commands/`, augment `commands/`, kilo `command/`) with kind.prefix='gsd-'.
   // _copyStaged names files `gsd-<stem>.md` but the buggy _syncGsdDir copies
   // them as `<stem>.md` (unprefixed) and also deletes ALL .md files not in the
   // staged set, including user files.
@@ -365,7 +374,7 @@ describe('applySurface', () => {
       explicitRemoves: [],
     });
 
-    // Determine the command dest dir for opencode: commandsKind destSubpath='command'
+    // Determine the command dest dir for opencode: commandsKind destSubpath='commands' (#2329)
     const layout = resolveRuntimeArtifactLayout('opencode', configDir, 'global');
     const commandsKind = layout.kinds.find(k => k.kind === 'commands');
     assert.ok(commandsKind, 'opencode layout must have a commands kind');
@@ -416,9 +425,8 @@ describe('applySurface', () => {
   // against future drift between _syncGsdDir (surface) and _copyStaged (install)
   // command-naming logic.
   //
-  // Matrix: opencode/kilo = flat command/ + prefix gsd-;
-  //         cursor/augment = flat commands/ + prefix gsd-;
-  //         gemini = namespaced commands/gsd/ (no file prefix — dir is namespace).
+  // Matrix: opencode/cursor/augment = flat commands/ + prefix gsd- (#2329: opencode
+  //         moved from singular command/ to commands/); kilo = flat command/ + prefix gsd-.
   // For each runtime we: run install into installDir, run applySurface into
   // surfaceDir (same 'standard' profile both sides), then compare sorted .md
   // filename sets in the commands dest dir. On a fresh dir (no superseded files)
@@ -432,7 +440,7 @@ describe('applySurface', () => {
     // the same skill set so any filename difference is purely a naming bug.
     const resolvedProfile = resolveProfile({ modes: ['standard'], manifest });
 
-    const PARITY_RUNTIMES = ['opencode', 'cursor', 'augment', 'kilo', 'gemini'];
+    const PARITY_RUNTIMES = ['opencode', 'cursor', 'augment', 'kilo'];
 
     for (const runtime of PARITY_RUNTIMES) {
       // Create two independent temp dirs — one for install, one for surface.
@@ -1085,6 +1093,61 @@ describe('listSurface', () => {
       assert.deepStrictEqual(result.disabled, [...result.disabled].sort());
     } finally {
       cleanup(dir);
+    }
+  });
+});
+
+// ─── #1615: applySurface must rewrite commands kind (Windsurf workflows) ─────
+// Adversarial review of PR #1622 found that applySurface only rewrites 'skills'
+// kinds, skipping 'commands'. Windsurf's capability now stages workflow files
+// as kind='commands'; without the rewrite, /gsd-surface would write workflow
+// bodies containing raw @~/.claude/... references that don't exist on a
+// Windsurf install. The same gap affected any runtime with commands kinds.
+describe('applySurface — commands kind path rewrite (#1615 adversarial review)', () => {
+  test('windsurf workflow bodies are rewritten to install target (no raw ~/.claude/)', (t) => {
+    const base = createTempDir('gsd-surface-cmds-windsurf-');
+    t.after(() => cleanup(base));
+    const runtimeConfigDir = base;
+
+    // Stage the canonical command body the workflow delegates to.
+    const canonicalDir = path.join(runtimeConfigDir, 'gsd-core', 'commands', 'gsd');
+    fs.mkdirSync(canonicalDir, { recursive: true });
+    fs.writeFileSync(path.join(canonicalDir, 'help.md'),
+      '---\nname: help\ndescription: Show help\n---\n\nHelp body\n');
+
+    const manifest = loadSkillsManifest(REAL_COMMANDS_DIR);
+    const layout = resolveRuntimeArtifactLayout('windsurf', runtimeConfigDir, 'local');
+
+    // Sanity: layout must have a commands kind (workflows) — pre-condition
+    // introduced by PR #1622; if a future refactor removes it, this test
+    // would silently pass without exercising the rewrite path.
+    const commandsKind = layout.kinds.find((k) => k.kind === 'commands');
+    assert.ok(commandsKind, 'pre-condition: windsurf layout has a commands kind');
+
+    applySurface(runtimeConfigDir, layout, manifest, CLUSTERS);
+
+    // Workflow files should be written to <configDir>/workflows/gsd-*.md
+    const workflowsDir = path.join(runtimeConfigDir, 'workflows');
+    const workflowFiles = fs.existsSync(workflowsDir)
+      ? fs.readdirSync(workflowsDir).filter((f) => f.startsWith('gsd-') && f.endsWith('.md'))
+      : [];
+    assert.ok(workflowFiles.length > 0,
+      `expected at least one gsd-*.md workflow under ${workflowsDir}; got [${workflowFiles.join(', ')}]`);
+
+    // Every workflow body must reference the install target, NOT the raw
+    // ~/.claude/ path. This is the regression: pre-fix, the commands kind
+    // was skipped and raw @~/.claude/... survived into the synced file.
+    for (const fileName of workflowFiles) {
+      const workflowPath = path.join(workflowsDir, fileName);
+      const content = fs.readFileSync(workflowPath, 'utf8');
+      assert.ok(
+        !content.includes('~/.claude/'),
+        `${fileName} must not contain raw ~/.claude/ after applySurface rewrite (got: ${content.slice(0, 200)})`,
+      );
+      assert.ok(
+        !content.includes('$HOME/.claude/'),
+        `${fileName} must not contain raw $HOME/.claude/ after applySurface rewrite`,
+      );
     }
   });
 });

@@ -29,14 +29,14 @@ Every workflow that spawns agents or reads significant content must follow these
 
 ## Context Degradation Tiers
 
-Monitor context usage and adjust behavior accordingly:
+Monitor context usage and adjust behavior accordingly. The `workflow.context_guard_mode` config key (values: `auto`, `warn`, `off`; default `warn`) controls how `execute-phase.md` responds when the guard fires at a wave boundary.
 
-| Tier | Usage | Behavior |
-|------|-------|----------|
-| PEAK | 0-30% | Full operations. Read bodies, spawn multiple agents, inline results. |
-| GOOD | 30-50% | Normal operations. Prefer frontmatter reads, delegate aggressively. |
-| DEGRADING | 50-70% | Economize. Frontmatter-only reads, minimal inlining, warn user about budget. |
-| POOR | 70%+ | Emergency mode. Checkpoint progress immediately. No new reads unless critical. |
+| Tier | Usage | Behavior | Trigger Action (execute-phase) |
+|------|-------|----------|-------------------------------|
+| PEAK | 0-30% | Full operations. Read bodies, spawn multiple agents, inline results. | None |
+| GOOD | 30-50% | Normal operations. Prefer frontmatter reads, delegate aggressively. | None |
+| DEGRADING | 50-70% | Economize. Frontmatter-only reads, minimal inlining, warn user about budget. | Emit warning, continue |
+| POOR | 70%+ | Emergency mode. Checkpoint progress immediately. No new reads unless critical. | `warn`: emit warning + recommend `/gsd:pause-work`. `auto`: invoke pause-work before next wave. `off`: proceed anyway. |
 
 ## Context Degradation Warning Signs
 

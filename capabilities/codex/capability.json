@@ -1,16 +1,23 @@
 {
   "id": "codex",
   "role": "runtime",
+  "version": "1.8.0",
   "title": "OpenAI Codex CLI",
   "description": "OpenAI Codex CLI — shell-var command style; per-agent sandbox tiers; config.toml + hooks.json hook surface; tier-1 support.",
   "tier": "core",
   "requires": [],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
   "runtime": {
     "configHome": {
       "kind": "dot-home",
       "name": ".codex",
-      "env": ["CODEX_HOME"]
+      "env": [
+        "CODEX_HOME"
+      ]
     },
+    "localConfigDir": ".codex",
     "configFormat": "toml",
     "artifactLayout": {
       "global": [
@@ -20,7 +27,8 @@
           "prefix": "gsd-",
           "nesting": "flat",
           "recursive": false,
-          "converter": "convertClaudeCommandToCodexSkill"
+          "converter": "convertClaudeCommandToCodexSkill",
+          "home": ".agents"
         }
       ],
       "local": [
@@ -30,7 +38,8 @@
           "prefix": "gsd-",
           "nesting": "flat",
           "recursive": false,
-          "converter": "convertClaudeCommandToCodexSkill"
+          "converter": "convertClaudeCommandToCodexSkill",
+          "home": ".agents"
         }
       ]
     },
@@ -42,6 +51,36 @@
     "installSurface": "codex-toml",
     "writesSharedSettings": false,
     "permissionWriter": null,
-    "extendedHookEvents": []
+    "extendedHookEvents": [
+      "SubagentStop",
+      "Stop",
+      "PreCompact"
+    ],
+    "hostIntegration": {
+      "embeddingMode": "declarative",
+      "commandSurface": "slash-file",
+      "dispatch": {
+        "namedDispatch": true,
+        "nested": true,
+        "maxDepth": 1,
+        "background": true,
+        "subagentToolkit": "full",
+        "backgroundDispatch": true
+      },
+      "modelMode": "passive",
+      "hookBus": "host",
+      "stateIO": "filesystem",
+      "transport": "mcp",
+      "runtime": "node",
+      "effortSurface": "argv"
+    },
+    "hostBehaviors": {
+      "reapplyCommand": "$gsd-update --reapply",
+      "tomlConfigInstall": true,
+      "cleanupSkillSidecars": true,
+      "agentTomlFiles": true,
+      "frontmatterDialect": "codex",
+      "reviewerCli": true
+    }
   }
 }

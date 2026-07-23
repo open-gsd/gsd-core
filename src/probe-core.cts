@@ -97,15 +97,41 @@ function errMessage(e: unknown): string {
 }
 
 /**
+ * Structural guard for ONE item of the report `items[]` — enforces the `Item` contract (#1907).
+ * `analyzeCoverage` always emits fully-populated, category/status-validated Items, so this never
+ * rejects legitimate output; it catches an adapter that bypasses the merge and hands back per-item
+ * garbage (e.g. `items:[{}]`) inside a well-shaped envelope — which the container-only guard let
+ * sail through as green output despite the fail-closed docstring below.
+ */
+function isValidItem(item: unknown): item is Item {
+  if (item == null || typeof item !== 'object') return false;
+  const i = item as {
+    requirement_id?: unknown; category?: unknown; status?: unknown;
+    verification?: unknown; resolution?: unknown; reason?: unknown; probe?: unknown;
+  };
+  if (typeof i.requirement_id !== 'string' || !i.requirement_id.trim()) return false;
+  if (typeof i.category !== 'string' || !i.category.trim()) return false;
+  if (!VALID_STATUS.includes(i.status as Status)) return false;
+  if (typeof i.probe !== 'string') return false;
+  // The three nullable fields must be a string or null — never some other type.
+  if (i.verification !== null && typeof i.verification !== 'string') return false;
+  if (i.resolution !== null && typeof i.resolution !== 'string') return false;
+  if (i.reason !== null && typeof i.reason !== 'string') return false;
+  return true;
+}
+
+/**
  * Structural guard for the report an adapter's `analyze` returns. The scaffold types `analyze`
  * loosely (it runs over JSON-parsed input the adapter `as`-casts), so a future adapter (#644)
  * that forgets to validate inside its closure could hand back a malformed object. Rather than
- * stringify garbage as green output, `runProbeCli` checks the report shape and fails closed.
+ * stringify garbage as green output, `runProbeCli` checks the report shape — container AND every
+ * item — and fails closed.
  */
 function isValidReport(report: unknown): report is CoverageReport {
   if (report == null || typeof report !== 'object') return false;
   const r = report as { items?: unknown; coverage?: unknown };
   if (!Array.isArray(r.items)) return false;
+  if (!r.items.every(isValidItem)) return false;
   const c = r.coverage as
     | { applicable?: unknown; resolved?: unknown; unresolved?: unknown; byVerification?: unknown }
     | undefined;
@@ -303,6 +329,11 @@ export interface Prohibition {
   // against to MACHINE-PROVE fail-first. Projected only alongside a well-formed descriptor; absent ->
   // the producer hard-gates (green requires a fixture). Mirrors `CheckDescriptor.violationFixture`.
   check_violation_fixture?: string;
+  // Optional 5th flat scalar (#1346): the path to a KNOWN-CLEAN control subject the prover ALSO runs
+  // the check against, requiring it to stay GREEN — proving the violation RED is caused by the
+  // subject's CONTENT, not merely by GSD_PROHIB_SUBJECT being set. Projected only alongside a
+  // well-formed descriptor; absent -> no control (documented residual). Mirrors `CheckDescriptor.cleanFixture`.
+  check_clean_fixture?: string;
 }
 
 /**
@@ -386,6 +417,13 @@ export function projectProhibitions(
       // inside this well-formed-descriptor branch.
       if (typeof p.check_violation_fixture === 'string' && p.check_violation_fixture.trim() !== '') {
         entry.check_violation_fixture = String(p.check_violation_fixture);
+      }
+      // `check_clean_fixture` (#1346) rides BOTH kinds — the KNOWN-CLEAN control subject the prover
+      // requires to stay GREEN (content-dependence proof). Emit ONLY a non-empty fixture (blank ->
+      // absent so no control runs; the documented residual remains). Like the violation fixture it is
+      // meaningless without the descriptor, so it lives inside this well-formed-descriptor branch.
+      if (typeof p.check_clean_fixture === 'string' && p.check_clean_fixture.trim() !== '') {
+        entry.check_clean_fixture = String(p.check_clean_fixture);
       }
     }
     out.push(entry);
@@ -474,6 +512,149 @@ export function dispositionForProhibition(
     tier,
     reason:
       'judgment-tier prohibition routes to judgment review — never a silent green (ADR-550 D4)',
+  };
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * Honest verifier (#1154) — the truth-axis abstention disposition.
+ *
+ * The verify-time MIRROR of the prohibition judgment-tier (ADR-550 D4), applied to the edge
+ * `backstop` truth tier (D7a). The edge probe already CLASSIFIES a non-inferable check as
+ * `verification: 'backstop'` and plan-phase lifts it into `must_haves.truths`. This gives that tier
+ * the same abstain-and-flag disposition D4 gave prohibitions: a `backstop` truth the verifier cannot
+ * confirm with explicit evidence disposes UNVERIFIED+flagged → `human_needed` (reason
+ * `insufficient_spec`), NEVER a silent green. An inferable (explicit/plain) truth never abstains (the
+ * over-abstention guard, AC#3). Exogenous, not endogenous: the trigger is the external `backstop`
+ * tag, not the verifier's self-judgment (ADR-550 Lineage / N17 — confidence-gating cannot reach a
+ * blind spot the model does not perceive).
+ * ───────────────────────────────────────────────────────────────────────────── */
+
+/** The truth verification tier — the SAME orthogonal axis the edge adapter uses (ADR-550 D7a). */
+export type TruthVerification = 'explicit' | 'backstop';
+
+/**
+ * A `must_haves.truths` item is EITHER a plain string (an inferable truth — today's shape and the
+ * overwhelmingly common case) OR a flat-scalar object carrying the non-inferable marker. Object form
+ * is additive and default-absent (Hyrum's Law): a reader that only ever sees strings behaves
+ * byte-identically. New readers MUST normalize via `truthStatement`/`truthVerification`.
+ */
+export type TruthItem = string | { statement: string; verification?: TruthVerification | null };
+
+/** Extract a truth's statement text from either the string or the object form (the Hyrum normalizer). */
+export function truthStatement(truth: unknown): string {
+  if (typeof truth === 'string') return truth;
+  if (truth != null && typeof truth === 'object') {
+    const s = (truth as { statement?: unknown }).statement;
+    if (typeof s === 'string') return s;
+  }
+  return '';
+}
+
+/**
+ * Extract a truth's verification tier, or `null` when it carries none (a plain string, or an object
+ * with no/garbled marker). Failing toward `null` is the Postel-safe direction: an unrecognized marker
+ * grades NORMALLY (never a spurious abstention — the over-abstention guard, AC#3).
+ *
+ * The marker is NOT only machine-emitted: `must_haves` markers can be authored BY HAND (#1820's
+ * spec-optional predicate rail), and the frontmatter continuation-KV parser preserves stray
+ * surrounding whitespace/quotes on a hand-authored value. So we normalize before comparison
+ * (Postel: be liberal in what you accept) — `'backstop '`, `' backstop'`, `'"backstop"'` all
+ * recognize as the tier. Without this, a hand-authored non-inferable `backstop` truth with a stray
+ * trailing space silently grades green instead of abstaining — the exact #1154 false-pass (#1905).
+ * An unrecoverably-corrupted marker (e.g. an embedded quote) stays unrecognized → null → graded
+ * normally (AC#3): we cannot know its intent, and abstaining on it would be a spurious abstention.
+ */
+export function truthVerification(truth: unknown): TruthVerification | null {
+  if (truth == null || typeof truth !== 'object') return null;
+  const raw = (truth as { verification?: unknown }).verification;
+  const v = typeof raw === 'string' ? raw.trim().replace(/^["']|["']$/g, '').trim() : raw;
+  return v === 'explicit' || v === 'backstop' ? v : null;
+}
+
+/**
+ * Conservative serializer (Postel: "send well-formed, minimal data") for projecting truths into a
+ * `must_haves.truths` block — the truth-axis analogue of `projectProhibitions`. A `backstop` truth is
+ * emitted as a flat-scalar object `{ statement, verification: 'backstop' }` (ADR-550 #1278: flat
+ * scalars round-trip the existing `parseMustHavesBlock`; a nested object would mangle it). Every other
+ * truth collapses to a bare statement string — only the non-inferable tier needs a structured marker,
+ * so an `explicit`/inferable truth never carries one (no spurious markers). Empty statements are dropped.
+ */
+export function projectTruths(
+  items: unknown,
+): Array<string | { statement: string; verification: 'backstop' }> {
+  if (!Array.isArray(items)) return [];
+  const out: Array<string | { statement: string; verification: 'backstop' }> = [];
+  for (const item of items) {
+    const statement = truthStatement(item);
+    if (!statement) continue;
+    if (truthVerification(item) === 'backstop') {
+      out.push({ statement, verification: 'backstop' });
+    } else {
+      out.push(statement);
+    }
+  }
+  return out;
+}
+
+/**
+ * The structured verify-time disposition of a single truth. Same shape as `ProhibitionDisposition`
+ * (status the verifier reads + `flagged` for SUMMARY surfacing + `tier` echo + human-readable
+ * `reason`), but `reason` carries the STABLE token `insufficient_spec` on abstention so the
+ * `human_needed` outcome is distinguishable from an ordinary manual-UAT `human_needed` (review
+ * condition-1 caveat).
+ */
+export interface TruthDisposition {
+  status: 'green' | 'unverified';
+  flagged: boolean;
+  tier: TruthVerification | null;
+  reason: string;
+}
+
+/** Optional context: evidence that a `backstop` truth IS confirmable (a passing wired held-out/PBT test, or a directly-observed behavior). */
+export interface TruthDispositionContext {
+  evidence?: unknown[];
+}
+
+/** The stable, distinguishable verdict-reason token for an abstained non-inferable truth (review condition 1). */
+export const INSUFFICIENT_SPEC = 'insufficient_spec';
+
+/**
+ * Deterministic verify-time disposition for a single truth (ADR-550 D4 truth-axis mirror, #1154).
+ * PURE — no LLM judgment (ADR-550 D5); the LLM verifier's only job is to decide whether `evidence`
+ * exists, this helper owns the routing once that is known.
+ *
+ *   - A `backstop` (non-inferable) truth with NO explicit evidence → `{ unverified, flagged }`,
+ *     reason `insufficient_spec`. NEVER green — the verify-time companion to D4's never-silent-pass.
+ *   - A `backstop` truth WITH explicit evidence (a passing wired held-out/property test) → `green`.
+ *     Abstention is for the *unconfirmable*, not for every non-inferable check.
+ *   - Any non-`backstop` truth (explicit, or a plain inferable string) → `green`, never flagged.
+ *     This is the over-abstention guard (AC#3): abstention fires ONLY on the exogenous backstop tag.
+ */
+export function dispositionForUnverifiableTruth(
+  truth: unknown,
+  context: TruthDispositionContext = {},
+): TruthDisposition {
+  const tier = truthVerification(truth);
+  // Over-abstention guard (AC#3): only a backstop (non-inferable) truth is ever a candidate to abstain.
+  if (tier !== 'backstop') {
+    return {
+      status: 'green',
+      flagged: false,
+      tier,
+      reason: 'inferable truth — verified normally (no abstention; ADR-550 D4 over-abstention guard)',
+    };
+  }
+  const evidence = Array.isArray(context.evidence) ? context.evidence : [];
+  if (evidence.length === 0) {
+    // ABSTAIN: a non-inferable truth the verifier cannot confirm with explicit evidence. Routes to
+    // human_needed with the distinguishable insufficient_spec reason — never a silent pass (ADR-550 D4).
+    return { status: 'unverified', flagged: true, tier, reason: INSUFFICIENT_SPEC };
+  }
+  return {
+    status: 'green',
+    flagged: false,
+    tier,
+    reason: 'backstop truth confirmed by explicit evidence (a passing wired held-out/property test or directly-observed behavior)',
   };
 }
 

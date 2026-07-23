@@ -45,7 +45,22 @@ process.stdin.on("end", () => {
 });
 ' 2>/dev/null || printf '\n')
 TOOL_NAME=$(printf '%s\n' "$TOOL_INFO" | sed -n '1p')
-COMMAND=$(printf '%s\n' "$TOOL_INFO" | sed -n '2p')
+# Capture the FULL command (line 2 through EOF). Agent runtimes routinely emit
+# HEAD-advancing commits as multi-line scripts (`cd /path` then `git add` then
+# `git commit …`); reading only line 2 (`sed -n '2p'`) missed a `git commit`
+# that was not on the first command line and silently no-op'd the rebuild
+# (#1772). Line 2..EOF preserves embedded newlines; the `case` glob below
+# matches the substring anywhere in the multi-line string.
+COMMAND=$(printf '%s\n' "$TOOL_INFO" | sed -n '2,$p')
+
+# #2304: Kimi CLI registers this hook with matcher 'Shell' and forwards its
+# own tool vocabulary (tool_name 'Shell', possibly module-qualified as
+# kimi_cli.tools.shell:Shell). kimi-cli's Shell.Params names its field
+# `command` (src/kimi_cli/tools/shell/__init__.py), same as Claude's Bash,
+# so only the tool name needs normalization — the shell counterpart of the
+# KIMI_TOOL_NAMES map inlined in the JS guards.
+TOOL_NAME="${TOOL_NAME##*:}"
+if [ "$TOOL_NAME" = "Shell" ]; then TOOL_NAME="Bash"; fi
 
 [ "$TOOL_NAME" = "Bash" ] || exit 0
 

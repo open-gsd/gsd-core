@@ -108,6 +108,27 @@ jobs:
           NEXT_CODE=$(git diff --name-only "$BASE" origin/next -- . ':(exclude)CHANGELOG.md' ':(exclude).changeset' | sort)
           DROPPED=$(comm -23 <(printf '%s\n' "$MAIN_CODE") <(printf '%s\n' "$NEXT_CODE") | grep -v '^$' || true)
 
+          # The version-bearing manifests diverge every release by design (next
+          # runs a -dev version). A drop whose main-vs-base diff touches ONLY
+          # "version" lines is just the release stamp, not a straight-to-main
+          # fix — parking on it is what lets the back-merge sit and go stale, so
+          # filter those out. A substantive change still parks: it leaves
+          # non-"version" lines (deps in package.json; resolved/integrity in the
+          # lockfile when a dependency actually changes).
+          VERSION_STAMP_MANIFESTS='package.json package-lock.json .claude-plugin/plugin.json .claude-plugin/marketplace.json'
+          DROPPED=$(printf '%s\n' "$DROPPED" | while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            case " $VERSION_STAMP_MANIFESTS " in
+              *" $f "*)
+                changed=$(git diff "$BASE" origin/main -- "$f" | grep -E '^[+-]' | grep -vE '^[+-]{3} ' || true)
+                if [ -z "$(printf '%s\n' "$changed" | grep -vE '^[+-][[:space:]]*"version":' || true)" ]; then
+                  continue
+                fi
+                ;;
+            esac
+            printf '%s\n' "$f"
+          done | grep -v '^$' || true)
+
           git commit -m "chore: back-merge main into next (${SHORT_SHA})"
           git push --force origin "$BR"
 
@@ -120,8 +141,32 @@ jobs:
             echo "dropped_oneline=" >> "$GITHUB_OUTPUT"
           fi
 
+      # The version bump below fires the `version` npm lifecycle hook, which runs
+      # gen-capability-registry.cjs. That validator lazily require()s the built
+      # gsd-core/bin/lib/capability-ledger.cjs (a build:lib output, gitignored);
+      # when it is absent the bounded fragment reader falls back to a fail-closed
+      # stub and every capability fragment reports "could not be read", failing
+      # the sync. Build the ledger first so fragments materialize.
+      #
+      # BLAST-RADIUS CONTAINMENT (#2504): version-sync is best-effort and MUST
+      # NOT be able to abort the job. The job's load-bearing purpose is to open
+      # and admin-merge the back-merge PR so `main` becomes an ancestor of
+      # `next` — the invariant that keeps the next `release → main` merge clean.
+      # Historically a failure here (missing build:lib after a workflow-copy
+      # regression, or any `npm version` lifecycle hiccup) skipped "Open PR" and
+      # left `main` diverged, breaking the following release. `continue-on-error`
+      # on both steps below keeps the ancestry PR unconditional: a sync failure
+      # is surfaced (the step shows red) but only costs a stale `next` version,
+      # which is trivially re-synced — never a broken back-merge. Do not remove;
+      # a required-steps test (release-backmerge-invariants.test.cjs) enforces it.
+      - name: Install dependencies and build (required by the version-sync hook)
+        if: steps.check.outputs.next_exists == 'true'
+        continue-on-error: true
+        run: npm ci --silent && npm run build:lib
+
       - name: Sync next's version to main's released version
         if: steps.check.outputs.next_exists == 'true'
+        continue-on-error: true
         run: |
           set -euo pipefail
           VERSION=$(git show origin/main:package.json | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8')).version")

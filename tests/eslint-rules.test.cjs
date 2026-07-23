@@ -8,6 +8,7 @@
  *   - local/no-magic-sleep-in-tests
  *   - local/no-elapsed-assertion
  *   - local/no-raw-rmsync-in-tests
+ *   - local/no-adhoc-markdown-parsing
  */
 
 const { test, describe } = require('node:test');
@@ -19,6 +20,7 @@ const noMagicSleepInTests = require('../eslint-rules/no-magic-sleep-in-tests.cjs
 const noElapsedAssertion = require('../eslint-rules/no-elapsed-assertion.cjs');
 const noRawRmsyncInTests = require('../eslint-rules/no-raw-rmsync-in-tests.cjs');
 const noTautologicalAssert = require('../eslint-rules/no-tautological-assert.cjs');
+const noAdhocMarkdownParsing = require('../eslint-rules/no-adhoc-markdown-parsing.cjs');
 
 const ruleTester = new RuleTester({
   languageOptions: {
@@ -806,6 +808,488 @@ describe('no-tautological-assert rule', () => {
             assert.deepStrictEqual(got, expected);
           `,
           filename: 'tests/foo.test.cjs',
+        },
+      ],
+      invalid: [],
+    });
+  });
+});
+
+// ─── no-adhoc-markdown-parsing ───────────────────────────────────────────────
+
+describe('no-adhoc-markdown-parsing rule', () => {
+  test('rule module exports a create function', () => {
+    assert.strictEqual(typeof noAdhocMarkdownParsing.create, 'function');
+  });
+
+  // ── POSITIVE cases: flag fence-block-strip and section-collect ────────────
+
+  test('invalid: fence-block-strip regex with triple-backtick and multiline body', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [],
+      invalid: [
+        {
+          // /```[\s\S]*?```/ — triple-backtick + [\s\S] body → flagged as fenceRegex
+          code: String.raw`const stripFences = /` + '```' + String.raw`[\s\S]*?` + '```' + '/;',
+          filename: 'src/some-module.cts',
+          errors: [{ messageId: 'fenceRegex' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: fence-block-strip regex with triple-tilde and multiline body', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [],
+      invalid: [
+        {
+          // /~~~[\s\S]*?~~~/ — triple-tilde + [\s\S] body → flagged as fenceRegex
+          code: String.raw`const stripTildes = /~~~[\s\S]*?~~~/;`,
+          filename: 'src/some-module.cts',
+          errors: [{ messageId: 'fenceRegex' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: section-collect regex with heading capture, multiline body, heading lookahead', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [],
+      invalid: [
+        {
+          // /(##\s*X\n)([\s\S]*?)(?=\n##|$)/ — the classic section-collect fingerprint
+          code: String.raw`const pat = /(##\s*X\n)([\s\S]*?)(?=\n##|$)/;`,
+          filename: 'src/some-module.cts',
+          errors: [{ messageId: 'sectionCollect' }],
+        },
+      ],
+    });
+  });
+
+  // ── NEGATIVE cases: single-line fence tests and heading matches NOT flagged ─
+
+  test('valid: bare single-line fence-opener /^```/ is NOT flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: 'const fenceRegex = /^' + '```' + '/;',
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: /^\\s*(?:```|~~~)/ fence-line test is NOT flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: String.raw`const isFenceLine = /^\s*(?:` + '```' + String.raw`|~~~)/;`,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: /^#\\s+/ single-line title-find is NOT flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: String.raw`const titleRe = /^#\s+/;`,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: /^###\\s+(.+?)\\s*$/ single-line heading-category match is NOT flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: String.raw`const headingRe = /^###\s+(.+?)\s*$/;`,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: /^(#{1,6})\\s+(.*)/ single-line heading match is NOT flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: String.raw`const headingM = line.match(/^(#{1,6})\s+(.*)/);`,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: seam usage (no regex, just an import reference) is NOT flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: `
+            const { collectSection } = require('./markdown-sectionizer');
+            const result = collectSection(content, 'Introduction');
+          `,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: annotated fence-block-strip with allow-adhoc-markdown is NOT flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          // Trailing annotation on the same line suppresses the finding
+          code:
+            'const stripFences = /```' +
+            String.raw`[\s\S]*?` +
+            '`' +
+            '``/; // allow-adhoc-markdown: pre-seam write path; pending migration #1372',
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: rule is inert outside src/*.cts files', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          // Same fence-block-strip regex in a test file → rule does not apply
+          code: String.raw`const stripFences = /~~~[\s\S]*?~~~/;`,
+          filename: 'tests/some.test.cjs',
+        },
+        {
+          // Same regex in a scripts file → rule does not apply
+          code: String.raw`const p = /(##\s*X\n)([\s\S]*?)(?=\n##|$)/;`,
+          filename: 'scripts/helper.cjs',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  // ── TABLE-REGEX (ADR-2143 §7) ──────────────────────────────────────────────
+
+  test('invalid: table-row/cell regex with escaped pipe and negated-pipe cell class', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [],
+      invalid: [
+        {
+          // /\|[^|]*\|/ — the classic hand-rolled table-row/cell scan fingerprint
+          code: String.raw`const rowRe = /\|[^|]*\|/;`,
+          filename: 'src/some-module.cts',
+          errors: [{ messageId: 'tableRegex' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: table-cell regex with escaped-pipe class variant [^\\|]', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [],
+      invalid: [
+        {
+          code: String.raw`const cellRe = /\|\s*([^\|]+)\s*\|/;`,
+          filename: 'src/some-module.cts',
+          errors: [{ messageId: 'tableRegex' }],
+        },
+      ],
+    });
+  });
+
+  test('valid: parseMarkdownTable() seam call is NOT flagged (no regex literal)', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: `
+            const { parseMarkdownTable } = require('./markdown-table');
+            const result = parseMarkdownTable(sectionText);
+          `,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: escaped pipe alone (no negated-pipe cell class) is NOT flagged', () => {
+    // A bare delimiter probe like /^\|/ or /\|\|/ has an escaped pipe but no
+    // [^|] cell-capture class — not a table-row/cell scan, so it must stay
+    // conservative and not fire.
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: String.raw`const isPipeDelim = /^\|/;`,
+          filename: 'src/some-module.cts',
+        },
+        {
+          code: String.raw`const orDelim = /a\|b/;`,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: annotated table-regex with allow-adhoc-markdown is NOT flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: String.raw`const rowRe = /\|[^|]*\|/; // allow-adhoc-markdown: not a table scan, protocol-marker probe`,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: table-regex in a non-src/*.cts file is not flagged (rule is inert there)', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: String.raw`const rowRe = /\|[^|]*\|/;`,
+          filename: 'scripts/helper.cjs',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  // ── TABLE-REGEX via new RegExp(<Literal-string | TemplateLiteral>) (#2143 Phase 4) ─
+
+  test('invalid: new RegExp(<string literal>) matching the table fingerprint', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [],
+      invalid: [
+        {
+          // new RegExp('\|[^|]*\|') — doubled backslashes cook to a literal \|
+          code: String.raw`const rowRe = new RegExp('\\|[^|]*\\|');`,
+          filename: 'src/some-module.cts',
+          errors: [{ messageId: 'tableRegex' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: new RegExp(<template literal>) whose STATIC quasis match the table fingerprint (dynamic segment ignored)', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [],
+      invalid: [
+        {
+          // new RegExp(`^(\|\s*${phase}\.?\s[^|]*(?:\|[^\n]*))$`) — the exact
+          // roadmap.cts/phase.cts tableRowPattern shape, dynamic ${phase} in the middle.
+          code: 'const tableRowPattern = new RegExp(`^(\\\\|\\\\s*${phase}\\\\.?\\\\s[^|]*(?:\\\\|[^\\\\n]*))$`, \'im\');',
+          filename: 'src/some-module.cts',
+          errors: [{ messageId: 'tableRegex' }],
+        },
+      ],
+    });
+  });
+
+  test('valid: new RegExp(`## Phase ${x}`) — dynamic heading pattern, static quasis are not table/section (non-table)', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: 'const headingRe = new RegExp(`## Phase ${x}`, \'i\');',
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: new RegExp(someIdentifier) — pattern built elsewhere and referenced by variable is out of scope for this check', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: `
+            const pattern = buildRowPattern();
+            const rowRe = new RegExp(pattern, 'im');
+          `,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  // ── new RegExp(identifier) resolved via resolveVariableInit scope walk (#2245 recall-hole fix) ─
+
+  test('invalid: new RegExp(identifier) resolves a const-declared identifier whose pattern matches the table fingerprint', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [],
+      invalid: [
+        {
+          // const tablePattern = '\|[^|]*\|' (doubled backslashes cook to a literal \|),
+          // then new RegExp(tablePattern) — the pattern is built one hop away via a
+          // const-declared identifier instead of inline, which used to escape the
+          // fingerprint check entirely (the recall hole this fix closes).
+          code: String.raw`
+            const tablePattern = '\\|[^|]*\\|';
+            const rowRe = new RegExp(tablePattern);
+          `,
+          filename: 'src/some-module.cts',
+          errors: [{ messageId: 'tableRegex' }],
+        },
+      ],
+    });
+  });
+
+  test('valid: new RegExp(identifier) resolves a const-declared identifier whose pattern is NOT table-shaped', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: `
+            const headingPattern = '## Phase';
+            const headingRe = new RegExp(headingPattern);
+          `,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: new RegExp(identifier) does NOT resolve a function-parameter identifier (documented boundary)', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: String.raw`
+            function buildRowRegex(tablePattern) {
+              return new RegExp(tablePattern);
+            }
+          `,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: annotated new RegExp(...) table-regex with allow-adhoc-markdown is NOT flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: String.raw`const rowRe = new RegExp('\\|[^|]*\\|'); // allow-adhoc-markdown: protocol-marker probe, not a table scan`,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: new RegExp(...) table-regex in a non-src/*.cts file is not flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: String.raw`const rowRe = new RegExp('\\|[^|]*\\|');`,
+          filename: 'scripts/helper.cjs',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  // ── ADHOC-REPLACE-MUTATION: .replace() on a roadmap/state receiver (#2143 Phase 4) ─
+
+  test('invalid: roadmapContent.replace(<inline table-fingerprint literal>, ...) trips both the CallExpression and Literal detectors', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [],
+      invalid: [
+        {
+          code: String.raw`roadmapContent.replace(/\|[^|]*\|/, 'x');`,
+          filename: 'src/some-module.cts',
+          // CallExpression is the outer/enter-first node; its Literal argument
+          // (visited next, on descent) is a second, independent finding.
+          errors: [{ messageId: 'adhocReplaceMutation' }, { messageId: 'tableRegex' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: stateContent.replace(<variable holding a table-fingerprint regex>, ...) resolves the variable via scope', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [],
+      invalid: [
+        {
+          code: String.raw`
+            const rowRe = /\|[^|]*\|/;
+            stateContent.replace(rowRe, 'x');
+          `,
+          filename: 'src/some-module.cts',
+          errors: [{ messageId: 'tableRegex' }, { messageId: 'adhocReplaceMutation' }],
+        },
+      ],
+    });
+  });
+
+  test('valid: withSection(...) call is NOT a .replace() and is never flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: `
+            const { withSection } = require('./markdown-sectionizer');
+            const result = withSection(content, 'x', (body) => body);
+          `,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: foo.replace(/x/, "y") — neither the receiver name nor the pattern match, not flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: `foo.replace(/x/, 'y');`,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: state.replace(/x/, "y") — matching receiver name but non-matching pattern, not flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: `state.replace(/x/, 'y');`,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: allow-adhoc-markdown suppresses an inline ad-hoc .replace() mutation', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: String.raw`roadmapContent.replace(/\|[^|]*\|/, 'x'); // allow-adhoc-markdown: pre-seam write path`,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: .replace() ad-hoc mutation in a non-src/*.cts file is not flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: String.raw`roadmapContent.replace(/\|[^|]*\|/, 'x');`,
+          filename: 'scripts/helper.cjs',
         },
       ],
       invalid: [],

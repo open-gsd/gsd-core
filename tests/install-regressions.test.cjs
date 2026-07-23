@@ -37,7 +37,12 @@ try {
   else process.env.GSD_TEST_MODE = savedTestMode;
 }
 
-const { install, installRuntimeArtifacts, uninstallRuntimeArtifacts, mergeClaudePermissions, GSD_CLAUDE_ALLOW_PERMISSIONS, GSD_CLAUDE_DENY_PERMISSIONS, rewriteLegacyManagedNodeHookCommands, resolveNodeRunner } = installExports || {};
+const { install, mergeClaudePermissions, GSD_CLAUDE_ALLOW_PERMISSIONS, GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS, GSD_CLAUDE_DENY_PERMISSIONS, rewriteLegacyManagedNodeHookCommands, resolveNodeRunner } = installExports || {};
+
+const {
+  installRuntimeArtifacts,
+  uninstallRuntimeArtifacts,
+} = require('../gsd-core/bin/lib/install-engine.cjs');
 
 const INSTALL_SCRIPT = path.join(__dirname, '..', 'bin', 'install.js');
 const HOOKS_SRC = path.join(__dirname, '..', 'hooks');
@@ -389,22 +394,26 @@ describe('mergeClaudePermissions (#768): fresh settings object', () => {
       'permissions.allow must contain Bash(npx gsd-core *)');
   });
 
-  test('includes planning path entries in allow', () => {
+  test('includes planning path entries in allow (#2278: Edit, not Write)', () => {
     const settings = {};
     mergeClaudePermissions(settings);
     assert.ok(settings.permissions.allow.includes('Read(.planning/*)'),
       'permissions.allow must contain Read(.planning/*)');
-    assert.ok(settings.permissions.allow.includes('Write(.planning/*)'),
-      'permissions.allow must contain Write(.planning/*)');
+    assert.ok(settings.permissions.allow.includes('Edit(.planning/*)'),
+      'permissions.allow must contain Edit(.planning/*)');
+    assert.ok(!settings.permissions.allow.includes('Write(.planning/*)'),
+      'permissions.allow must NOT contain the unmatched Write(.planning/*) form (#2278)');
   });
 
-  test('includes STATE.md entries in allow', () => {
+  test('includes STATE.md entries in allow (#2278: Edit, not Write)', () => {
     const settings = {};
     mergeClaudePermissions(settings);
     assert.ok(settings.permissions.allow.includes('Read(STATE.md)'),
       'permissions.allow must contain Read(STATE.md)');
-    assert.ok(settings.permissions.allow.includes('Write(STATE.md)'),
-      'permissions.allow must contain Write(STATE.md)');
+    assert.ok(settings.permissions.allow.includes('Edit(STATE.md)'),
+      'permissions.allow must contain Edit(STATE.md)');
+    assert.ok(!settings.permissions.allow.includes('Write(STATE.md)'),
+      'permissions.allow must NOT contain the unmatched Write(STATE.md) form (#2278)');
   });
 
   test('includes .env denial entries in deny', () => {
@@ -491,6 +500,115 @@ describe('mergeClaudePermissions (#768): non-destructive merge', () => {
   });
 });
 
+// ─── #2278 — Claude Code has no standalone `Write` permission gate; the
+// pre-populated allow-rules must use `Edit(pattern)`, and a merge against an
+// existing install must retire the stale unmatched `Write(...)` forms.
+describe('mergeClaudePermissions (#2278): legacy Write(...) → Edit(...) migration', () => {
+  test('GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS is exported and lists the stale Write(...) forms', () => {
+    assert.ok(Array.isArray(GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS),
+      'GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS must be an array');
+    assert.deepStrictEqual(
+      [...GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS].sort(),
+      ['Write(.planning/*)', 'Write(STATE.md)'].sort(),
+      'GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS must contain exactly the retired Write(...) forms'
+    );
+  });
+
+  test('fresh/empty settings: allow ends with Edit(...) forms, never Write(...)', () => {
+    const settings = {};
+    mergeClaudePermissions(settings);
+    assert.ok(settings.permissions.allow.includes('Edit(.planning/*)'),
+      'fresh merge must add Edit(.planning/*)');
+    assert.ok(settings.permissions.allow.includes('Edit(STATE.md)'),
+      'fresh merge must add Edit(STATE.md)');
+    assert.ok(!settings.permissions.allow.includes('Write(.planning/*)'),
+      'fresh merge must never add Write(.planning/*)');
+    assert.ok(!settings.permissions.allow.includes('Write(STATE.md)'),
+      'fresh merge must never add Write(STATE.md)');
+  });
+
+  test('existing install with legacy Write(...) entries: migrated to Edit(...), user entries untouched', () => {
+    const settings = {
+      permissions: {
+        allow: ['Write(.planning/*)', 'Write(STATE.md)', 'Bash(git *)'],
+        deny: ['WebSearch'],
+      },
+    };
+    mergeClaudePermissions(settings);
+
+    // Stale legacy forms must be gone.
+    assert.ok(!settings.permissions.allow.includes('Write(.planning/*)'),
+      'legacy Write(.planning/*) must be removed by merge');
+    assert.ok(!settings.permissions.allow.includes('Write(STATE.md)'),
+      'legacy Write(STATE.md) must be removed by merge');
+
+    // Replaced by the working Edit(...) forms.
+    assert.ok(settings.permissions.allow.includes('Edit(.planning/*)'),
+      'Edit(.planning/*) must be present after migration');
+    assert.ok(settings.permissions.allow.includes('Edit(STATE.md)'),
+      'Edit(STATE.md) must be present after migration');
+
+    // Unrelated user-added entries must survive untouched.
+    assert.ok(settings.permissions.allow.includes('Bash(git *)'),
+      'unrelated user allow entry must survive migration');
+    assert.ok(settings.permissions.deny.includes('WebSearch'),
+      'unrelated user deny entry must survive migration');
+  });
+
+  test('mixed state: settings.allow containing BOTH legacy and current forms simultaneously collapses to exactly one Edit(...) each', () => {
+    const settings = {
+      permissions: {
+        allow: ['Write(.planning/*)', 'Edit(.planning/*)', 'Write(STATE.md)', 'Edit(STATE.md)', 'Bash(git *)'],
+        deny: [],
+      },
+    };
+    mergeClaudePermissions(settings);
+
+    // Legacy forms must be gone.
+    assert.ok(!settings.permissions.allow.includes('Write(.planning/*)'),
+      'legacy Write(.planning/*) must be removed even when Edit(.planning/*) was already present');
+    assert.ok(!settings.permissions.allow.includes('Write(STATE.md)'),
+      'legacy Write(STATE.md) must be removed even when Edit(STATE.md) was already present');
+
+    // Current forms must appear exactly once (no duplicate from the pre-existing entry).
+    assert.strictEqual(
+      settings.permissions.allow.filter((e) => e === 'Edit(.planning/*)').length,
+      1,
+      'Edit(.planning/*) must appear exactly once, not duplicated'
+    );
+    assert.strictEqual(
+      settings.permissions.allow.filter((e) => e === 'Edit(STATE.md)').length,
+      1,
+      'Edit(STATE.md) must appear exactly once, not duplicated'
+    );
+
+    // Unrelated user entry must survive.
+    assert.ok(settings.permissions.allow.includes('Bash(git *)'),
+      'unrelated user allow entry must survive the mixed-state migration');
+  });
+
+  test('idempotent: repeated merge produces no dupes and never re-adds legacy entries', () => {
+    const settings = {
+      permissions: {
+        allow: ['Write(.planning/*)', 'Write(STATE.md)'],
+        deny: [],
+      },
+    };
+    mergeClaudePermissions(settings);
+    mergeClaudePermissions(settings);
+    mergeClaudePermissions(settings);
+
+    for (const entry of GSD_CLAUDE_ALLOW_PERMISSIONS) {
+      const count = settings.permissions.allow.filter((e) => e === entry).length;
+      assert.strictEqual(count, 1, `allow entry "${entry}" must appear exactly once after repeated merges`);
+    }
+    for (const legacy of GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS) {
+      assert.ok(!settings.permissions.allow.includes(legacy),
+        `legacy entry "${legacy}" must never reappear after repeated merges`);
+    }
+  });
+});
+
 describe('mergeClaudePermissions (#768): end-to-end install writes permissions to settings.json', () => {
   test('--claude --global install writes GSD allow/deny entries to settings.json', (t) => {
     const root = createTempDir('gsd-claude-perm-install-');
@@ -522,13 +640,13 @@ describe('mergeClaudePermissions (#768): end-to-end install writes permissions t
       'settings.json permissions.deny must include Read(.env)');
   });
 
-  test('non-claude runtime (gemini) does NOT write GSD allow/deny permissions to settings.json', (t) => {
-    const root = createTempDir('gsd-gemini-perm-install-');
+  test('non-claude runtime (antigravity) does NOT write GSD allow/deny permissions to settings.json', (t) => {
+    const root = createTempDir('gsd-antigravity-perm-install-');
     t.after(() => cleanup(root));
 
     const result = spawnSync(
       process.execPath,
-      [INSTALL_SCRIPT, '--gemini', '--global', '--config-dir', root],
+      [INSTALL_SCRIPT, '--antigravity', '--global', '--config-dir', root],
       { encoding: 'utf8', env: { ...process.env, HOME: root, USERPROFILE: root } },
     );
 
@@ -541,7 +659,7 @@ describe('mergeClaudePermissions (#768): end-to-end install writes permissions t
       const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
       const allow = settings.permissions?.allow ?? [];
       assert.ok(!allow.includes('Bash(npx gsd-core *)'),
-        'Gemini settings.json must NOT include Bash(npx gsd-core *) in permissions.allow');
+        'Antigravity settings.json must NOT include Bash(npx gsd-core *) in permissions.allow');
     }
   });
 
@@ -629,6 +747,56 @@ describe('mergeClaudePermissions (#768): end-to-end install writes permissions t
       'user Bash(git *) allow entry must survive uninstall');
     assert.ok(deny.includes('WebSearch'),
       'user WebSearch deny entry must survive uninstall');
+  });
+
+  test('#2278: uninstall removes GSD entries in both legacy Write(...) and current Edit(...) form', (t) => {
+    const root = createTempDir('gsd-claude-perm-uninstall-legacy-');
+    t.after(() => cleanup(root));
+
+    const spawnOpts = {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: root, USERPROFILE: root },
+    };
+
+    // Install first (writes the current Edit(...) forms).
+    const r1 = spawnSync(
+      process.execPath,
+      [INSTALL_SCRIPT, '--claude', '--global', '--config-dir', root],
+      spawnOpts,
+    );
+    assert.strictEqual(r1.status, 0, `install failed: ${r1.stderr}`);
+
+    // Simulate a pre-fix install that still carries the stale Write(...)
+    // forms alongside the current Edit(...) forms and a user entry.
+    const settingsPath = path.join(root, 'settings.json');
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    settings.permissions.allow.push('Write(.planning/*)', 'Write(STATE.md)', 'Bash(git *)');
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+
+    // Uninstall
+    const r2 = spawnSync(
+      process.execPath,
+      [INSTALL_SCRIPT, '--claude', '--global', '--config-dir', root, '--uninstall'],
+      spawnOpts,
+    );
+    assert.strictEqual(r2.status, 0, `uninstall failed: ${r2.stderr}`);
+
+    const afterUninstall = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    const allow = afterUninstall.permissions?.allow ?? [];
+
+    // Both legacy and current GSD-owned forms must be removed.
+    assert.ok(!allow.includes('Write(.planning/*)'),
+      'legacy Write(.planning/*) entry must be removed by uninstall');
+    assert.ok(!allow.includes('Write(STATE.md)'),
+      'legacy Write(STATE.md) entry must be removed by uninstall');
+    assert.ok(!allow.includes('Edit(.planning/*)'),
+      'current Edit(.planning/*) entry must be removed by uninstall');
+    assert.ok(!allow.includes('Edit(STATE.md)'),
+      'current Edit(STATE.md) entry must be removed by uninstall');
+
+    // User entry must survive.
+    assert.ok(allow.includes('Bash(git *)'),
+      'user Bash(git *) allow entry must survive uninstall');
   });
 });
 
@@ -870,3 +1038,291 @@ describe('#1004 regression: installer does not duplicate managed hooks when regi
     );
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-1924-preserve-user-artifacts.test.cjs — consolidation epic #1969 (B1 #1970)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-1924-preserve-user-artifacts (consolidation epic #1969 B1 #1970)", () => {
+// allow-test-rule: source-text-is-the-product (see #1924)
+// Workflow .md / agent .md / command .md / reference .md files — their text
+// IS what the runtime loads. Testing text content tests the deployed contract.
+// Per CONTRIBUTING.md exception matrix.
+
+/**
+ * Regression tests for bug #1924: gsd-update silently deletes user-generated files
+ *
+ * Running the installer (gsd-update / re-install) must not delete:
+ *   - gsd-core/USER-PROFILE.md  (created by /gsd-profile-user)
+ *   - commands/gsd/dev-preferences.md  (created by /gsd-profile-user)
+ *
+ * Root cause:
+ *   1. copyWithPathReplacement() calls fs.rmSync(destDir, {recursive:true}) before
+ *      copying — no preserve allowlist. This wipes USER-PROFILE.md.
+ *   2. ~line 5211 explicitly rmSync's commands/gsd/ during global install legacy
+ *      cleanup — no preserve. This wipes dev-preferences.md.
+ *
+ * Fix requirement:
+ *   - install() must preserve USER-PROFILE.md across the gsd-core/ wipe
+ *   - install() must preserve dev-preferences.md across the commands/gsd/ wipe
+ *
+ * Closes: #1924
+ */
+
+'use strict';
+
+const { describe, test, beforeEach, afterEach, before } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { execFileSync } = require('child_process');
+
+const INSTALL_SCRIPT = path.join(__dirname, '..', 'bin', 'install.js');
+const BUILD_SCRIPT = path.join(__dirname, '..', 'scripts', 'build-hooks.js');
+
+// ─── Ensure hooks/dist/ is populated before any install test ─────────────────
+
+before(() => {
+  execFileSync(process.execPath, [BUILD_SCRIPT], {
+    encoding: 'utf-8',
+    stdio: 'pipe',
+  });
+});
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function createTempDir(prefix) {
+  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function cleanup(dir) {
+  // eslint-disable-next-line local/no-raw-rmsync-in-tests -- local cleanup() helper wrapping rmSync; cannot use imported cleanup() without naming collision
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+}
+
+/**
+ * Run the installer with CLAUDE_CONFIG_DIR redirected to a temp directory.
+ * Explicitly removes GSD_TEST_MODE so the subprocess actually runs the installer
+ * (not just the export block). Uses --yes to suppress interactive prompts.
+ */
+function runInstaller(configDir) {
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: configDir };
+  delete env.GSD_TEST_MODE;
+  // --no-sdk: this test covers user-artifact preservation only; skip SDK
+  // build (covered by install-smoke.yml) to keep the test deterministic.
+  execFileSync(process.execPath, [INSTALL_SCRIPT, '--claude', '--global', '--yes', '--no-sdk'], {
+    encoding: 'utf-8',
+    stdio: 'pipe',
+    env,
+  });
+}
+
+// ─── Test 1: USER-PROFILE.md is preserved across re-install ─────────────────
+
+describe('#1924: USER-PROFILE.md preserved across re-install (global Claude)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-1924-userprofile-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('USER-PROFILE.md exists after initial install + user creation', () => {
+    runInstaller(tmpDir);
+
+    // Simulate /gsd-profile-user creating USER-PROFILE.md inside gsd-core/
+    const profilePath = path.join(tmpDir, 'gsd-core', 'USER-PROFILE.md');
+    fs.writeFileSync(profilePath, '# My Profile\n\nCustom user content.\n');
+
+    assert.ok(
+      fs.existsSync(profilePath),
+      'USER-PROFILE.md should exist after being created by /gsd-profile-user'
+    );
+  });
+
+  test('USER-PROFILE.md is preserved after re-install', () => {
+    // First install
+    runInstaller(tmpDir);
+
+    // User runs /gsd-profile-user, creating USER-PROFILE.md
+    const profilePath = path.join(tmpDir, 'gsd-core', 'USER-PROFILE.md');
+    const originalContent = '# My Profile\n\nThis is my custom user profile content.\n';
+    fs.writeFileSync(profilePath, originalContent);
+
+    // Re-run installer (simulating gsd-update)
+    runInstaller(tmpDir);
+
+    assert.ok(
+      fs.existsSync(profilePath),
+      'USER-PROFILE.md must survive re-install — gsd-update must not delete user-generated profiles'
+    );
+
+    const afterContent = fs.readFileSync(profilePath, 'utf8');
+    assert.strictEqual(
+      afterContent,
+      originalContent,
+      'USER-PROFILE.md content must be identical after re-install'
+    );
+  });
+
+  test('USER-PROFILE.md is preserved even when gsd-core/ is wiped and recreated', () => {
+    runInstaller(tmpDir);
+
+    const gsdDir = path.join(tmpDir, 'gsd-core');
+    const profilePath = path.join(gsdDir, 'USER-PROFILE.md');
+
+    // Confirm gsd-core/ was created by install
+    assert.ok(fs.existsSync(gsdDir), 'gsd-core/ must exist after install');
+
+    // Write profile
+    fs.writeFileSync(profilePath, '# Profile\n\nMy coding style preferences.\n');
+
+    // Re-install
+    runInstaller(tmpDir);
+
+    // gsd-core/ must still exist AND profile must be intact
+    assert.ok(fs.existsSync(gsdDir), 'gsd-core/ must still exist after re-install');
+    assert.ok(
+      fs.existsSync(profilePath),
+      'USER-PROFILE.md must still exist after gsd-core/ was wiped and recreated'
+    );
+  });
+});
+
+// ─── Test 2: dev-preferences.md is preserved across re-install ───────────────
+
+describe('#1924: dev-preferences.md preserved across re-install (global Claude)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-1924-devprefs-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('dev-preferences.md is preserved when commands/gsd/ is cleaned up during re-install', () => {
+    // First install (creates skills/ structure for global Claude)
+    runInstaller(tmpDir);
+
+    // User runs /gsd-profile-user — it creates dev-preferences.md in commands/gsd/
+    const commandsGsdDir = path.join(tmpDir, 'commands', 'gsd');
+    fs.mkdirSync(commandsGsdDir, { recursive: true });
+    const devPrefsPath = path.join(commandsGsdDir, 'dev-preferences.md');
+    const originalContent = '# Dev Preferences\n\nI prefer TDD. I like short functions.\n';
+    fs.writeFileSync(devPrefsPath, originalContent);
+
+    // Re-run installer (simulating gsd-update).
+    // In the layout-driven path (B2), legacy commands/gsd/ is removed and
+    // dev-preferences.md is migrated to skills/gsd-dev-preferences/SKILL.md (#2973).
+    runInstaller(tmpDir);
+
+    // Content is migrated to the new canonical skills location (#2973).
+    // The old commands/gsd/ path is cleaned up; the skill file carries the content.
+    const devPrefSkillPath = path.join(tmpDir, 'skills', 'gsd-dev-preferences', 'SKILL.md');
+    assert.ok(
+      fs.existsSync(devPrefSkillPath),
+      'dev-preferences.md must be migrated to skills/gsd-dev-preferences/SKILL.md — gsd-update legacy cleanup must not silently drop user-generated content'
+    );
+
+    const afterContent = fs.readFileSync(devPrefSkillPath, 'utf8');
+    assert.strictEqual(
+      afterContent,
+      originalContent,
+      'migrated dev-preferences content must be identical to the original'
+    );
+  });
+
+  test('legacy non-user GSD commands are still cleaned up during re-install', () => {
+    // First install
+    runInstaller(tmpDir);
+
+    // Simulate a legacy GSD command file being left in commands/gsd/
+    const commandsGsdDir = path.join(tmpDir, 'commands', 'gsd');
+    fs.mkdirSync(commandsGsdDir, { recursive: true });
+    const legacyFile = path.join(commandsGsdDir, 'next.md');
+    fs.writeFileSync(legacyFile, '---\nname: gsd:next\n---\n\nLegacy content.');
+
+    // But dev-preferences.md is also there (user-generated)
+    const devPrefsContent = '# Dev Preferences\n\nMy preferences.\n';
+    const devPrefsPath = path.join(commandsGsdDir, 'dev-preferences.md');
+    fs.writeFileSync(devPrefsPath, devPrefsContent);
+
+    // Re-install
+    runInstaller(tmpDir);
+
+    // In the layout-driven path (B2), commands/gsd/ is fully removed but
+    // dev-preferences.md content is migrated to the new canonical skill location.
+    const devPrefSkillPath = path.join(tmpDir, 'skills', 'gsd-dev-preferences', 'SKILL.md');
+    assert.ok(
+      fs.existsSync(devPrefSkillPath),
+      'dev-preferences.md content must be migrated to skills/gsd-dev-preferences/SKILL.md'
+    );
+
+    // The legacy GSD command (next.md) is NOT user-generated, must be removed
+    // (it would exist only as a skill now in skills/gsd-next/SKILL.md)
+    assert.ok(
+      !fs.existsSync(legacyFile),
+      'legacy GSD command next.md in commands/gsd/ must be removed during cleanup'
+    );
+  });
+});
+
+// ─── Test 3: profile-user.md backup path is outside gsd-core/ ───────────
+
+describe('#1924: profile-user.md backup path must be outside gsd-core/', () => {
+  test('profile-user.md backup uses ~/.claude/USER-PROFILE.backup.md not ~/.claude/gsd-core/USER-PROFILE.backup.md', () => {
+    const workflowPath = path.join(
+      __dirname, '..', 'gsd-core', 'workflows', 'profile-user.md'
+    );
+    const content = fs.readFileSync(workflowPath, 'utf8');
+
+    // The backup must NOT be inside gsd-core/ because that directory is wiped on update
+    assert.ok(
+      !content.includes('gsd-core/USER-PROFILE.backup.md'),
+      'backup path must NOT be inside gsd-core/ — that directory is wiped on gsd-update'
+    );
+
+    // The backup should be at ~/.claude/USER-PROFILE.backup.md (outside gsd-core/)
+    assert.ok(
+      content.includes('USER-PROFILE.backup.md') &&
+      !content.includes('/gsd-core/USER-PROFILE.backup.md'),
+      'backup path must be outside gsd-core/ (e.g. ~/.claude/USER-PROFILE.backup.md)'
+    );
+  });
+});
+
+// ─── Test 4: preserveUserArtifacts helper exported from install.js ────────────
+
+describe('#1924: preserveUserArtifacts helper exists in install.js', () => {
+  test('install.js exports preserveUserArtifacts function', () => {
+    // Set GSD_TEST_MODE so require() reaches the module.exports block
+    const origMode = process.env.GSD_TEST_MODE;
+    process.env.GSD_TEST_MODE = '1';
+    let mod;
+    try {
+      mod = require(INSTALL_SCRIPT);
+    } finally {
+      if (origMode === undefined) {
+        delete process.env.GSD_TEST_MODE;
+      } else {
+        process.env.GSD_TEST_MODE = origMode;
+      }
+    }
+
+    assert.strictEqual(
+      typeof mod.preserveUserArtifacts,
+      'function',
+      'install.js must export preserveUserArtifacts helper for testability'
+    );
+  });
+});
+  });
+}

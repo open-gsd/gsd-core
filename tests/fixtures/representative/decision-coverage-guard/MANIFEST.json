@@ -1,0 +1,12 @@
+{
+  "gate": "check.decision-coverage-plan",
+  "sourceIssue": "#2347",
+  "fixtures": [
+    {
+      "file": "d5-prefix-context.md",
+      "expectedReason": "could-not-parse",
+      "expectedPassed": false,
+      "note": "A <decisions> block using the D5-01 ID-prefix shape from #2347's own reproduction ('- **D5-01:** some decision'), repeated twice so 'populated but 0 extracted' is unambiguous. The original report used 23 real decisions under a project-specific D5- prefix convention; this fixture preserves the exact grammar mismatch, not the count. FIXED by #2347: the guard's evidence test no longer reuses the parser's D- grammar — a bold ID-shaped lead-in bullet (any prefix) is now evidence, so this populated block correctly fails loud (could-not-parse). currentBuggyOutput removed and the assertion graduated to expected* per this corpus's contract."
+    }
+  ]
+}

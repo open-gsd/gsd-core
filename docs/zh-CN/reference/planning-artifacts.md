@@ -23,6 +23,8 @@
 │   ├── architecture.md
 │   ├── stack.md
 │   └── ...
+├── onboarding/                         # Brownfield onboarding 摘要（可选）
+│   └── SUMMARY.md
 ├── intel/                              # 可查询的符号索引（可选，intel.enabled）
 │   └── API-SURFACE.md
 └── phases/
@@ -48,7 +50,7 @@
 | | |
 |---|---|
 | **用途** | 规范的项目标识：项目内容、目标用户、核心价值、需求、约束和关键决策。随项目演进持续更新。 |
-| **生成者** | `/gsd-new-project`（初始创建）；由 `/gsd-complete-milestone` 在决策验证后更新。 |
+| **生成者** | `/gsd-new-project`（初始创建，包含 `/gsd-onboard` 交接）；由 `/gsd-complete-milestone` 在决策验证后更新。 |
 | **消费者** | 所有规划工作流；`gsd-phase-researcher`、`gsd-planner`（上下文）；`discuss-phase`（历史决策）；`gsd-plan-checker`（项目约束）。 |
 
 ### `ROADMAP.md`
@@ -56,7 +58,7 @@
 | | |
 |---|---|
 | **用途** | 里程碑与阶段列表，含目标、需求 ID、成功标准以及每个阶段的规范参考。是项目构建内容和顺序的唯一可信来源。 |
-| **生成者** | `/gsd-new-project`（初始创建）；由 `/gsd-phase --insert` 和 `/gsd-complete-milestone` 更新。 |
+| **生成者** | `/gsd-new-project`（初始创建，包含 `/gsd-onboard` 交接）；由 `/gsd-phase --insert` 和 `/gsd-complete-milestone` 更新。 |
 | **消费者** | `/gsd-discuss-phase`、`/gsd-plan-phase`、`/gsd-execute-phase`；所有需要阶段信息的编排命令；`gsd-planner`、`gsd-plan-checker`、`gsd-phase-researcher`。 |
 
 ### `REQUIREMENTS.md`
@@ -64,7 +66,7 @@
 | | |
 |---|---|
 | **用途** | 编号化、可勾选的项目验收标准。每条需求带有 ID（如 `AUTH-01`），映射到路线图阶段。随着阶段执行，逐步标记需求为已完成。 |
-| **生成者** | `/gsd-new-project`（初始创建）；需求由 `execute-phase` 标记为已完成。 |
+| **生成者** | `/gsd-new-project`（初始创建，包含 `/gsd-onboard` 交接）；需求由 `execute-phase` 标记为已完成。 |
 | **消费者** | `gsd-planner`（计划必须覆盖所有阶段需求 ID）；`gsd-plan-checker` 维度 1（需求覆盖）；`discuss-phase`（历史需求）。 |
 
 ### `STATE.md`
@@ -72,7 +74,7 @@
 | | |
 |---|---|
 | **用途** | 实时进度跟踪器——当前阶段与计划、进度指标、积累的决策、会话连续性说明。每次工作流运行时首先读取，每次重要操作后更新。 |
-| **生成者** | `/gsd-new-project`（初始创建）；由所有阶段工作流、`/gsd-pause-work`、`/gsd-resume-work` 持续更新。 |
+| **生成者** | `/gsd-new-project`（初始创建，包含 `/gsd-onboard` 交接）；由所有阶段工作流、`/gsd-pause-work`、`/gsd-resume-work` 持续更新。 |
 | **消费者** | 所有编排工作流；`/gsd-progress`；通过 `/gsd-quick` 执行的临时任务；`gsd-planner` 和 `gsd-phase-researcher`（项目决策）。 |
 
 完整字段参考请参见 [STATE.md 模式](state-md.md)。
@@ -86,6 +88,14 @@
 | **消费者** | 每个工作流和子代理——在初始化时通过 `gsd-tools query config-get` 读取。 |
 
 完整模式请参见 [CONFIGURATION](../CONFIGURATION.md)。
+
+### `onboarding/SUMMARY.md`（可选）
+
+| | |
+|---|---|
+| **用途** | Brownfield onboarding 索引，记录产物状态、代码库映射是否完整，以及初次设置后的下一个推荐 GSD 命令。 |
+| **生成者** | `/gsd-onboard`，在 `PROJECT.md`、`REQUIREMENTS.md`、`ROADMAP.md` 和 `STATE.md` 全部存在后生成。 |
+| **消费者** | 审查初次设置的人；以后确认现有 onboarding 状态的 `/gsd-onboard` 运行。 |
 
 ### `MILESTONES.md`（可选）
 

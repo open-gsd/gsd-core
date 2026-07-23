@@ -44,6 +44,7 @@ interface PhaseSearchResult {
   has_verification: boolean;
   has_reviews: boolean;
   archived?: string;
+  ambiguous_matches?: string[];
 }
 
 interface ArchivedPhaseDir {
@@ -58,8 +59,31 @@ interface ArchivedPhaseDir {
 function searchPhaseInDir(baseDir: string, relBase: string, normalized: string): PhaseSearchResult | null {
   try {
     const dirs = readSubdirectories(baseDir, true);
-    const match = dirs.find(d => phaseTokenMatches(d, normalized));
-    if (!match) return null;
+    const matches = dirs.filter(d => phaseTokenMatches(d, normalized));
+    if (matches.length === 0) return null;
+
+    // #2237: fail loud when multiple directories match the same bare phase
+    // number — this happens when unrelated projects share a .planning/phases/
+    // tree. Silently taking the first match risks cross-project file writes.
+    if (matches.length > 1) {
+      return {
+        found: false,
+        directory: '',
+        phase_number: normalized,
+        phase_name: null,
+        phase_slug: null,
+        plans: [],
+        summaries: [],
+        incomplete_plans: [],
+        has_research: false,
+        has_context: false,
+        has_verification: false,
+        has_reviews: false,
+        ambiguous_matches: matches,
+      };
+    }
+
+    const match = matches[0];
 
     const phaseToken = extractPhaseToken(match);
     const phaseNumber = phaseToken || normalized;

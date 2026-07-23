@@ -285,6 +285,12 @@ function cmdDocsInit(cwd: string, raw: boolean): void {
   const agentStatus = checkAgentsInstalled();
   result['agents_installed'] = agentStatus.agents_installed;
   result['missing_agents'] = agentStatus.missing_agents;
+  // #2402: withProjectRoot injects response_language when set; cmdDocsInit predates
+  // that helper and never picked it up, so docs-update's orchestrator-owned prompts
+  // silently stayed English even with response_language configured.
+  if (config.response_language) {
+    result['response_language'] = config.response_language;
+  }
   output(result, raw, undefined);
 }
 

@@ -27,6 +27,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import {
+  CURSOR_HOOK_EVENTS,
+  CURSOR_EVENT_SCRIPT_MAP,
+  resolveManagedHookEvents,
+  resolveHookScripts,
+  buildHookBusEntries,
+} from './host-integration-adapters/imperative-hook-bus.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import shellCmdProjection = require('./shell-command-projection.cjs');
 const {
@@ -37,14 +44,16 @@ const {
   projectPortableHookBaseDir,
   projectCodexHookTomlCommand,
   shellHookOmitsBashRunner,
+  escapeTomlDoubleQuotedString,
 } = shellCmdProjection as {
   isManagedHookBasename: (scriptPath: string, opts?: { surface?: string }) => boolean;
   isManagedHookCommand: (cmd: string | null | undefined, opts?: { surface?: string; includeLegacyAliases?: boolean; configDir?: string }) => boolean;
   projectLegacySettingsHookCommand: (opts: { absoluteRunner: string; scriptPath: string; scriptToken: string; runtime: string; platform: string }) => string | null;
-  projectManagedHookCommand: (opts: { absoluteRunner: string; scriptPath: string; runtime: string; platform: string }) => string | null;
+  projectManagedHookCommand: (opts: { absoluteRunner: string; scriptPath: string; runtime: string; platform: string; hookShell?: string }) => string | null;
   projectPortableHookBaseDir: (opts: { configDir: string; homeDir: string }) => string;
   projectCodexHookTomlCommand: (opts: { absoluteRunner: string; scriptPath: string; platform: string }) => string;
   shellHookOmitsBashRunner: (opts: { platform: string; runtime: string; isShellHook: boolean }) => boolean;
+  escapeTomlDoubleQuotedString: (value: unknown) => string;
 };
 
 // ---------------------------------------------------------------------------
@@ -75,18 +84,88 @@ const GSD_COPILOT_SESSION_HOOK_PWSH =
   `{ '{"additionalContext":"${GSD_COPILOT_SESSION_MSG_PRESENT}"}' } ` +
   `else { '{"additionalContext":"${GSD_COPILOT_SESSION_MSG_ABSENT}"}' }`;
 
+// #2099 UPGRADE 1: multi-event hook bus. Each additional event is a static,
+// deterministic advisory (no branching/no-op-style, matching sessionStart's
+// tone) so the emitted hooks/gsd-session.json stays golden-trackable — no
+// node-runner invocation, no filesystem probing beyond what sessionStart
+// already does.
+const GSD_COPILOT_PRE_TOOL_MSG =
+  'GSD: confirm this tool use is in scope for the active phase before proceeding.';
+const GSD_COPILOT_PRE_TOOL_HOOK_BASH =
+  `printf '%s' '{"additionalContext":"${GSD_COPILOT_PRE_TOOL_MSG}"}'`;
+const GSD_COPILOT_PRE_TOOL_HOOK_PWSH =
+  `'{"additionalContext":"${GSD_COPILOT_PRE_TOOL_MSG}"}'`;
+
+const GSD_COPILOT_POST_TOOL_MSG =
+  'GSD: review the tool result against the active phase before continuing.';
+const GSD_COPILOT_POST_TOOL_HOOK_BASH =
+  `printf '%s' '{"additionalContext":"${GSD_COPILOT_POST_TOOL_MSG}"}'`;
+const GSD_COPILOT_POST_TOOL_HOOK_PWSH =
+  `'{"additionalContext":"${GSD_COPILOT_POST_TOOL_MSG}"}'`;
+
+const GSD_COPILOT_PROMPT_SUBMIT_MSG =
+  'GSD: check this request against .planning/STATE.md scope before acting.';
+const GSD_COPILOT_PROMPT_SUBMIT_HOOK_BASH =
+  `printf '%s' '{"additionalContext":"${GSD_COPILOT_PROMPT_SUBMIT_MSG}"}'`;
+const GSD_COPILOT_PROMPT_SUBMIT_HOOK_PWSH =
+  `'{"additionalContext":"${GSD_COPILOT_PROMPT_SUBMIT_MSG}"}'`;
+
+const GSD_COPILOT_SESSION_END_MSG =
+  'GSD: update .planning/STATE.md with the session outcome before ending.';
+const GSD_COPILOT_SESSION_END_HOOK_BASH =
+  `printf '%s' '{"additionalContext":"${GSD_COPILOT_SESSION_END_MSG}"}'`;
+const GSD_COPILOT_SESSION_END_HOOK_PWSH =
+  `'{"additionalContext":"${GSD_COPILOT_SESSION_END_MSG}"}'`;
+
 // ---------------------------------------------------------------------------
 // Cursor hook constants
 // ---------------------------------------------------------------------------
 const GSD_CURSOR_SESSION_HOOK_SCRIPT = 'gsd-cursor-session-start.js';
 const GSD_CURSOR_POST_TOOL_HOOK_SCRIPT = 'gsd-cursor-post-tool.js';
+const GSD_CURSOR_PRE_TOOL_HOOK_SCRIPT = 'gsd-cursor-pre-tool.js';
+const GSD_CURSOR_STOP_HOOK_SCRIPT = 'gsd-cursor-stop.js';
+const GSD_CURSOR_SUBAGENT_START_HOOK_SCRIPT = 'gsd-cursor-subagent-start.js';
+const GSD_CURSOR_SUBAGENT_STOP_HOOK_SCRIPT = 'gsd-cursor-subagent-stop.js';
 const GSD_CURSOR_HOOK_MARKER = 'gsd-managed';
+
+// The full set of Cursor hook events GSD manages — sourced from the adapter
+// (src/host-integration-adapters/imperative-hook-bus.cts) so the vocabulary
+// stays closed and first-party. Used by reconcileCursorHooksJson (the
+// reconciliation scope is always the full set). The install path
+// (writeCursorHooksJson) resolves a descriptor-driven subset via
+// resolveManagedHookEvents(opts.managedHookEvents).
+const CURSOR_MANAGED_EVENTS = CURSOR_HOOK_EVENTS;
 
 // ---------------------------------------------------------------------------
 // Cline / AGENTS.md constants
 // ---------------------------------------------------------------------------
 const GSD_AGENTS_MD_MARKER = '<!-- GSD Configuration — managed by gsd-core installer -->';
 const GSD_AGENTS_MD_CLOSE_MARKER = '<!-- End GSD Configuration -->';
+
+// ---------------------------------------------------------------------------
+// Descriptor-driven runtime title lookup (ADR-1239 / #2092)
+// ---------------------------------------------------------------------------
+
+/**
+ * Console-log label for a runtime, sourced from the capability registry's
+ * `title` field (capabilities/<runtime>/capability.json). Folded from a
+ * hardcoded `runtime === 'qwen' ? 'Qwen Code' : runtime === 'claude' ?
+ * 'Claude Code' : runtime` ternary — cosmetic (log text) only, but resolves
+ * to the same 'Qwen Code' / 'Claude Code' values for those two runtimes.
+ * Falls back to the raw runtime id if the registry can't be loaded or the
+ * runtime has no title.
+ */
+function _capabilityTitle(runtime: string): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const reg = require('./capability-registry.cjs') as {
+      runtimes?: Record<string, { title?: string } | undefined>;
+    };
+    return reg?.runtimes?.[runtime]?.title || runtime;
+  } catch {
+    return runtime;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // atomicWriteFileSync — shared canonical implementation.
@@ -110,7 +189,7 @@ function atomicWriteFileSync(target: string, data: string, options: fs.WriteFile
   __atomicWrittenTmps.add(tmp);
   try {
     fs.writeFileSync(tmp, data, options);
-    fs.renameSync(tmp, target);
+    shellCmdProjection.retryRenameSync(tmp, target);
     // Successful rename: the tmp path no longer exists, but leave it in the
     // Set so _cleanTmpFiles can recognise it as installer-owned if it somehow
     // lingers (e.g. a rename succeeded but left a stale entry on some FS).
@@ -231,7 +310,7 @@ function normalizeNodePath(execPath: string, opts?: NodeNormOpts): string {
   const env = (opts && opts.env) || process.env;
   const existsSync = (opts && opts.existsSync) || fs.existsSync;
 
-  const normalizedForMatch = execPath.replace(/\\/g, '/');
+  const normalizedForMatch = shellCmdProjection.posixNormalize(execPath);
   if (/\/fnm_multishells\/[0-9]+_[0-9]+\/node(\.exe)?$/i.test(normalizedForMatch)) {
     const candidates: string[] = [];
     if (env.FNM_DIR) {
@@ -247,11 +326,53 @@ function normalizeNodePath(execPath: string, opts?: NodeNormOpts): string {
     return execPath;
   }
 
-  if (/^\/usr\/local\/Cellar\/node(@\d+)?\/[^/]+\/bin\/node(\.exe)?$/.test(execPath)) {
-    return '/usr/local/bin/node';
+  // Homebrew (macOS Intel /usr/local, Apple Silicon /opt/homebrew, Linuxbrew
+  // /home/linuxbrew/.linuxbrew, and any custom HOMEBREW_PREFIX) pins node at
+  // <prefix>/Cellar/node(<@ver>)?/<ver>/bin/node, then deletes prior versions on
+  // `brew upgrade node`. Rewrite to the stable <prefix>/bin/node symlink, which
+  // survives the upgrade. Derive <prefix> from the path itself (more reliable
+  // than HOMEBREW_PREFIX env — the path IS the install location) so every layout
+  // is covered by one branch instead of one per known prefix (#2185).
+  const homebrewMatch = normalizedForMatch.match(
+    /^(.+)\/Cellar\/node(@\d+)?\/[^/]+\/bin\/node(\.exe)?$/i,
+  );
+  if (homebrewMatch) {
+    return `${homebrewMatch[1]}/bin/node${homebrewMatch[3] || ''}`;
   }
-  if (/^\/opt\/homebrew\/Cellar\/node(@\d+)?\/[^/]+\/bin\/node(\.exe)?$/.test(execPath)) {
-    return '/opt/homebrew/bin/node';
+
+  // mise pins a concrete node version at <data>/installs/node/<ver>/bin/node
+  // (Windows: <data>/installs/node/<ver>/node.exe). Node realpaths
+  // process.execPath to that versioned path, and `mise up` prunes old versions,
+  // so a baked hook command 404s after any node bump — the same ephemeral-path
+  // failure #977 fixed for fnm. The stable alias is the sibling shim
+  // (<data>/shims/node), which always resolves to the active version, like the
+  // Homebrew symlink survives `brew upgrade node`. Derive <data> from execPath
+  // so a custom MISE_DATA_DIR layout still works, and only rewrite when the shim
+  // exists — otherwise fall back to the raw execPath unchanged.
+  const miseMatch = normalizedForMatch.match(
+    /^(.*)\/installs\/node\/[^/]+\/(?:bin\/)?node(\.exe)?$/,
+  );
+  if (miseMatch) {
+    const shim = `${miseMatch[1]}/shims/node${miseMatch[2] || ''}`;
+    if (existsSync(shim)) return shim;
+  }
+
+  // volta pins a concrete node image at <VOLTA_HOME>/tools/image/node/<ver>/bin/node
+  // (Windows: <VOLTA_HOME>/tools/image/node/<ver>/node.exe — volta's own layout
+  // puts node.exe at the image root, no bin/). `volta uninstall node@<ver>` prunes
+  // that image, so a baked hook command 404s — the same ephemeral-path failure
+  // #977 fixed for fnm and #1619 for mise. The stable alias is the shim
+  // <VOLTA_HOME>/bin/node, a symlink to volta-shim that always resolves to the
+  // active pin. Derive <VOLTA_HOME> from execPath rather than the env so a custom
+  // VOLTA_HOME and the Windows %LOCALAPPDATA%\Volta default both work (#2185's
+  // reasoning), and only rewrite when the shim exists — otherwise fall back to
+  // the raw execPath unchanged.
+  const voltaMatch = normalizedForMatch.match(
+    /^(.*)\/tools\/image\/node\/[^/]+\/(?:bin\/)?node(\.exe)?$/,
+  );
+  if (voltaMatch) {
+    const shim = `${voltaMatch[1]}/bin/node${voltaMatch[2] || ''}`;
+    if (existsSync(shim)) return shim;
   }
   return execPath;
 }
@@ -260,7 +381,7 @@ function resolveNodeRunner(opts?: NodeNormOpts): string | null {
   const execPath = typeof process.execPath === 'string' ? process.execPath : '';
   if (!execPath) return null;
   const stablePath = normalizeNodePath(execPath, opts);
-  return JSON.stringify(stablePath.replace(/\\/g, '/'));
+  return JSON.stringify(shellCmdProjection.posixNormalize(stablePath));
 }
 
 interface BashRunnerOpts {
@@ -286,7 +407,7 @@ function resolveBashRunner(opts?: BashRunnerOpts): string | null {
 
   for (const candidate of candidates) {
     if (candidate && exists(candidate)) {
-      return JSON.stringify(candidate.replace(/\\/g, '/'));
+      return JSON.stringify(shellCmdProjection.posixNormalize(candidate));
     }
   }
   return null;
@@ -346,7 +467,7 @@ function rewriteLegacyManagedNodeHookCommands(settings: Settings, absoluteRunner
           scriptPath = m[2] || m[3] || m[4] || '';
         } else {
           _runnerToken = m[1];
-          const runnerPath = (m[2] || m[3] || m[4] || '').replace(/\\/g, '/');
+          const runnerPath = shellCmdProjection.posixNormalize(m[2] || m[3] || m[4] || '');
           const stableRunner = normalizeNodePath(runnerPath);
           if (stableRunner === runnerPath && platform !== 'win32') continue;
           scriptToken = m[5];
@@ -482,7 +603,24 @@ function reconcileCodexHooksJsonEvent(targetDir: string, eventName: string, opts
 
   const usesNestedHooksObject =
     parsed['hooks'] && typeof parsed['hooks'] === 'object' && !Array.isArray(parsed['hooks']);
-  const hookTable = usesNestedHooksObject ? (parsed['hooks'] as Record<string, unknown>) : parsed;
+  // #1348: canonicalize every write to the nested { hooks: { <Event>: [...] } }
+  // shape. Lift ANY top-level event array (legacy, empty, OR mixed nested+top-level)
+  // into the nested table — merging when the same event exists in both — so
+  // user/legacy entries are preserved under `hooks` and no stray top-level event
+  // key survives (Codex deny_unknown_fields rejects them). Mirrors reconcileCursorHooksJson.
+  const hookTable: Record<string, unknown> = usesNestedHooksObject
+    ? (parsed['hooks'] as Record<string, unknown>)
+    : {};
+  for (const key of Object.keys(parsed)) {
+    if (key === 'hooks') continue;
+    if (Array.isArray(parsed[key])) {
+      const lifted = parsed[key] as unknown[];
+      const existing = Array.isArray(hookTable[key]) ? (hookTable[key] as unknown[]) : [];
+      hookTable[key] = [...lifted, ...existing];
+      delete parsed[key];
+    }
+  }
+  parsed['hooks'] = hookTable;
   const eventEntries = Array.isArray(hookTable[eventName]) ? (hookTable[eventName] as unknown[]) : [];
 
   let removedLegacy = false;
@@ -524,7 +662,11 @@ function reconcileCodexHooksJsonEvent(targetDir: string, eventName: string, opts
   } else {
     delete hookTable[eventName];
   }
-  if (usesNestedHooksObject) parsed['hooks'] = hookTable;
+
+  // Avoid writing an empty `{ "hooks": {} }` artifact (e.g. removal on an absent
+  // file): collapse an empty hook table back to `{}` so the existing
+  // shouldWrite/no-write-on-empty behavior is preserved.
+  if (Object.keys(hookTable).length === 0) delete parsed['hooks'];
 
   const nextContent = `${JSON.stringify(parsed, null, 2)}\n`;
   const changed = currentContent !== nextContent;
@@ -570,10 +712,10 @@ function buildCodexHookWindowsShimIR(scriptAbsPath: string, absoluteRunnerToken:
   } catch {
     interpreter = absoluteRunnerToken;
   }
-  const targetAbs = scriptAbsPath.replace(/\\/g, '/');
+  const targetAbs = shellCmdProjection.posixNormalize(scriptAbsPath);
   const scriptQuoted = JSON.stringify(targetAbs);
   const cmdPath = scriptAbsPath.replace(/\.js$/, '.cmd');
-  const hookCommand = JSON.stringify(cmdPath.replace(/\\/g, '/'));
+  const hookCommand = JSON.stringify(shellCmdProjection.posixNormalize(cmdPath));
   const runnerQuoted = JSON.stringify(interpreter);
   return {
     invocation: { interpreter, target: scriptAbsPath },
@@ -602,7 +744,7 @@ function ensureCodexHooksJsonSessionStart(targetDir: string, opts: EnsureCodexSe
   const hooksJsonPath = path.join(targetDir, 'hooks.json');
   if (!absoluteRunner) return { changed: false, wrote: false, path: hooksJsonPath };
 
-  const scriptPath = path.resolve(targetDir, 'hooks', 'gsd-check-update.js').replace(/\\/g, '/');
+  const scriptPath = shellCmdProjection.posixNormalize(path.resolve(targetDir, 'hooks', 'gsd-check-update.js'));
   const cmdShimPath = scriptPath.replace(/\.js$/, '.cmd');
 
   let managedCommand: string | undefined;
@@ -633,7 +775,7 @@ function ensureCodexHooksJsonSessionStart(targetDir: string, opts: EnsureCodexSe
   if (!managedCommand) return { changed: false, wrote: false, path: hooksJsonPath };
 
   const commandWindows = platform === 'win32'
-    ? JSON.stringify(cmdShimPath.replace(/\\/g, '/'))
+    ? JSON.stringify(shellCmdProjection.posixNormalize(cmdShimPath))
     : undefined;
 
   return reconcileCodexHooksJsonSessionStart(targetDir, { managedCommand, commandWindows });
@@ -654,7 +796,7 @@ function ensureCodexHooksJsonEvent(targetDir: string, eventName: string, opts: E
   const hooksJsonPath = path.join(targetDir, 'hooks.json');
   if (!absoluteRunner) return { changed: false, wrote: false, path: hooksJsonPath };
 
-  const scriptPath = path.resolve(targetDir, 'hooks', 'gsd-context-monitor.js').replace(/\\/g, '/');
+  const scriptPath = shellCmdProjection.posixNormalize(path.resolve(targetDir, 'hooks', 'gsd-context-monitor.js'));
 
   let managedCommand: string | undefined;
   if (platform === 'win32') {
@@ -704,6 +846,7 @@ interface BuildHookCommandOpts {
   portableHooks?: boolean;
   platform?: string;
   runtime?: string;
+  hookShell?: string;
   env?: NodeJS.ProcessEnv;
   existsSync?: (p: string) => boolean;
 }
@@ -712,6 +855,7 @@ function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookC
   if (!opts) opts = {};
   const platform = opts.platform || process.platform;
   const runtime = opts.runtime || 'generic';
+  const hookShell = opts.hookShell;
   const isShellHook = hookName.endsWith('.sh');
 
   if (shellHookOmitsBashRunner({ platform, runtime, isShellHook })) {
@@ -722,7 +866,7 @@ function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookC
       });
       return JSON.stringify(`${portableBaseDir}/hooks/${hookName}`);
     }
-    return JSON.stringify(configDir.replace(/\\/g, '/') + '/hooks/' + hookName);
+    return JSON.stringify(shellCmdProjection.posixNormalize(configDir) + '/hooks/' + hookName);
   }
 
   const nodeRunner = resolveNodeRunner();
@@ -739,15 +883,17 @@ function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookC
       scriptPath: `${portableBaseDir}/hooks/${hookName}`,
       runtime: opts.runtime || 'generic',
       platform,
+      hookShell,
     });
   }
 
-  const hooksPath = configDir.replace(/\\/g, '/') + '/hooks/' + hookName;
+  const hooksPath = shellCmdProjection.posixNormalize(configDir) + '/hooks/' + hookName;
   return projectManagedHookCommand({
     absoluteRunner: runner,
     scriptPath: hooksPath,
     runtime,
     platform,
+    hookShell,
   });
 }
 
@@ -903,7 +1049,7 @@ function writeClineArtifacts(targetDir: string, isGlobalInstall: boolean): strin
 function buildCursorHookEntry(scriptPath: string): Record<string, unknown> {
   return {
     type: 'command',
-    command: scriptPath.replace(/\\/g, '/'),
+    command: shellCmdProjection.posixNormalize(scriptPath),
     [GSD_CURSOR_HOOK_MARKER]: true,
   };
 }
@@ -938,9 +1084,8 @@ function reconcileCursorHooksJson(hooksJsonPath: string, managedEntries: CursorM
   const hasNestedHooksObject =
     parsed['hooks'] && typeof parsed['hooks'] === 'object' && !Array.isArray(parsed['hooks']);
   if (!hasNestedHooksObject) {
-    const eventKeys = ['sessionStart', 'postToolUse'];
     const lifted: Record<string, unknown> = {};
-    for (const k of eventKeys) {
+    for (const k of CURSOR_MANAGED_EVENTS) {
       if (Array.isArray(parsed[k])) {
         lifted[k] = parsed[k];
         delete parsed[k];
@@ -951,10 +1096,9 @@ function reconcileCursorHooksJson(hooksJsonPath: string, managedEntries: CursorM
   if (!parsed['version']) parsed['version'] = 1;
   const hookTable = parsed['hooks'] as Record<string, unknown>;
 
-  const MANAGED_EVENTS = ['sessionStart', 'postToolUse'];
   const entries = managedEntries || {};
 
-  for (const event of MANAGED_EVENTS) {
+  for (const event of CURSOR_MANAGED_EVENTS) {
     const existing = Array.isArray(hookTable[event]) ? (hookTable[event] as unknown[]) : [];
     const userOwned = existing.filter((e) => !isManagedCursorHookEntry(e));
     const newEntry = entries[event] || null;
@@ -982,6 +1126,7 @@ function reconcileCursorHooksJson(hooksJsonPath: string, managedEntries: CursorM
 interface WriteCursorHooksJsonOpts {
   absoluteRunner?: string | null;
   platform?: string;
+  managedHookEvents?: readonly string[];
 }
 
 function writeCursorHooksJson(targetDir: string, src: string, opts?: WriteCursorHooksJsonOpts): { hooksJsonPath: string; changed: boolean } {
@@ -989,7 +1134,11 @@ function writeCursorHooksJson(targetDir: string, src: string, opts?: WriteCursor
   const hooksDir = path.join(targetDir, 'hooks');
   fs.mkdirSync(hooksDir, { recursive: true });
 
-  const hookScripts = [GSD_CURSOR_SESSION_HOOK_SCRIPT, GSD_CURSOR_POST_TOOL_HOOK_SCRIPT];
+  // Descriptor-driven event resolution (#2089): the managed event set comes
+  // from the host descriptor's hostBehaviors.managedHookEvents via the pure
+  // adapter (resolveManagedHookEvents), NOT a hardcoded constant.
+  const events = resolveManagedHookEvents(opts.managedHookEvents);
+  const hookScripts = resolveHookScripts(events);
   const srcHooksDir = path.join(src, 'hooks');
   const installedScripts = new Set<string>();
   for (const script of hookScripts) {
@@ -1005,28 +1154,16 @@ function writeCursorHooksJson(targetDir: string, src: string, opts?: WriteCursor
   }
 
   const hookOpts: BuildHookCommandOpts = { runtime: 'cursor', platform: opts.platform || process.platform };
-  const sessionStartCmd = installedScripts.has('gsd-cursor-session-start.js')
-    ? buildHookCommand(targetDir, 'gsd-cursor-session-start.js', hookOpts)
-    : null;
-  const postToolCmd = installedScripts.has('gsd-cursor-post-tool.js')
-    ? buildHookCommand(targetDir, 'gsd-cursor-post-tool.js', hookOpts)
-    : null;
-
-  const managedEntries: CursorManagedEntries = {};
-  if (sessionStartCmd) {
-    managedEntries['sessionStart'] = {
-      type: 'command',
-      command: sessionStartCmd,
-      [GSD_CURSOR_HOOK_MARKER]: true,
-    };
+  const commands: Record<string, string | null> = {};
+  for (const ev of events) {
+    const script = CURSOR_EVENT_SCRIPT_MAP[ev];
+    if (script && installedScripts.has(script)) {
+      commands[ev] = buildHookCommand(targetDir, script, hookOpts);
+    } else {
+      commands[ev] = null;
+    }
   }
-  if (postToolCmd) {
-    managedEntries['postToolUse'] = {
-      type: 'command',
-      command: postToolCmd,
-      [GSD_CURSOR_HOOK_MARKER]: true,
-    };
-  }
+  const managedEntries = buildHookBusEntries(events, commands) as CursorManagedEntries;
 
   const hooksJsonPath = path.join(targetDir, 'hooks.json');
   const result = reconcileCursorHooksJson(hooksJsonPath, managedEntries);
@@ -1037,6 +1174,215 @@ function removeCursorHooksJson(targetDir: string): { changed: boolean } {
   const hooksJsonPath = path.join(targetDir, 'hooks.json');
   if (!fs.existsSync(hooksJsonPath)) return { changed: false };
   const result = reconcileCursorHooksJson(hooksJsonPath, null);
+  if (result.changed) {
+    try {
+      const contentRaw = fs.readFileSync(hooksJsonPath, 'utf8');
+      const parsed = JSON.parse(contentRaw) as Record<string, unknown>;
+      const hookTable = (parsed['hooks'] && typeof parsed['hooks'] === 'object' && !Array.isArray(parsed['hooks']))
+        ? (parsed['hooks'] as Record<string, unknown>)
+        : {};
+      const hasAnyEvents = Object.keys(hookTable).some(
+        (k) => Array.isArray(hookTable[k]) && (hookTable[k] as unknown[]).length > 0,
+      );
+      if (!hasAnyEvents) {
+        fs.unlinkSync(hooksJsonPath);
+        return { changed: true };
+      }
+    } catch { /* best-effort: leave the file */ }
+  }
+  return { changed: result.changed };
+}
+
+// ---------------------------------------------------------------------------
+// Windsurf/Cascade hook functions (ADR-1239 / #2100 Stage 2 — HOOK-BRIDGE)
+//
+// Cascade (Windsurf's agent) hooks.json format is DISTINCT from Cursor's:
+//   { "hooks": { "<event>": [ { "command": "<shell cmd>", ... } ] } }
+// Each entry carries a bare `command` STRING (a shell command line) — not
+// Cursor's `{ type: 'command', command: <cmd> }` wrapper — and there is no
+// top-level `version` field. Docs (reference): https://docs.windsurf.com/llms-full.txt ,
+// https://docs.devin.ai/desktop/cascade/hooks
+//
+// Cascade blocks via EXIT CODE 2 (+ a stderr reason), not Cursor's stdout-JSON
+// `{ block: true, reason }` form — so the two hook scripts installed here
+// (hooks/gsd-windsurf-pre-write.js, hooks/gsd-windsurf-pre-command.js) speak a
+// different protocol than the Cursor scripts, even though the surrounding
+// install/reconcile infra mirrors writeCursorHooksJson/removeCursorHooksJson.
+//
+// Only 2 of GSD's 6 Cursor-parity hook events have a Cascade counterpart with
+// BLOCKING semantics: pre_write_code and pre_run_command. Cascade has no
+// context-injection channel (no `additional_context`-style advisory
+// response), so the 4 advisory events GSD registers on Cursor (sessionStart,
+// postToolUse, stop, subagentStart/subagentStop) are deliberately NOT ported.
+// ---------------------------------------------------------------------------
+
+const GSD_WINDSURF_PRE_WRITE_HOOK_SCRIPT = 'gsd-windsurf-pre-write.js';
+const GSD_WINDSURF_PRE_COMMAND_HOOK_SCRIPT = 'gsd-windsurf-pre-command.js';
+const GSD_WINDSURF_HOOK_MARKER = 'gsd-managed';
+
+/** The 2 Cascade hook events GSD wires with blocking (exit-code-2) guards. */
+const WINDSURF_HOOK_EVENTS = Object.freeze(['pre_write_code', 'pre_run_command'] as const);
+
+/** Event → hook-script mapping (mirrors CURSOR_EVENT_SCRIPT_MAP's convention). */
+const WINDSURF_EVENT_SCRIPT_MAP: Readonly<Record<string, string>> = Object.freeze({
+  pre_write_code: GSD_WINDSURF_PRE_WRITE_HOOK_SCRIPT,
+  pre_run_command: GSD_WINDSURF_PRE_COMMAND_HOOK_SCRIPT,
+});
+
+/** All GSD-managed Windsurf hook scripts (used by uninstall cleanup). */
+const GSD_WINDSURF_HOOK_SCRIPTS = [
+  GSD_WINDSURF_PRE_WRITE_HOOK_SCRIPT,
+  GSD_WINDSURF_PRE_COMMAND_HOOK_SCRIPT,
+];
+
+/**
+ * Build a single Cascade hooks.json managed entry. Cascade's entry shape has
+ * no `type` field (unlike Cursor's `{ type: 'command', command }`) — just a
+ * bare `command` shell string plus the GSD marker.
+ */
+function buildWindsurfHookEntry(command: string): Record<string, unknown> {
+  return {
+    command,
+    [GSD_WINDSURF_HOOK_MARKER]: true,
+  };
+}
+
+function isManagedWindsurfHookEntry(entry: unknown): boolean {
+  return Boolean(entry && typeof entry === 'object' && (entry as Record<string, unknown>)[GSD_WINDSURF_HOOK_MARKER]);
+}
+
+interface WindsurfManagedEntries {
+  pre_write_code?: Record<string, unknown> | null;
+  pre_run_command?: Record<string, unknown> | null;
+  [event: string]: Record<string, unknown> | null | undefined;
+}
+
+/**
+ * Reconcile GSD's managed Cascade hook entries into `<targetDir>/hooks.json`,
+ * preserving any user-owned entries. Mirrors reconcileCursorHooksJson's
+ * merge/no-write-when-unchanged semantics, adapted to Cascade's flatter
+ * `{ hooks: { <event>: [...] } }` shape (no `version` field, no legacy
+ * top-level-array lift — Cascade's hooks.json is a brand-new surface with no
+ * prior shape to migrate from).
+ */
+function reconcileWindsurfHooksJson(hooksJsonPath: string, managedEntries: WindsurfManagedEntries | null): ReconcileResult {
+  let parsed: Record<string, unknown> = {};
+  let currentContent: string | null = null;
+
+  if (fs.existsSync(hooksJsonPath)) {
+    const raw = fs.readFileSync(hooksJsonPath, 'utf8');
+    currentContent = raw;
+    if (raw.trim()) {
+      try {
+        parsed = JSON.parse(raw) as Record<string, unknown>;
+      } catch (err) {
+        throw new Error(`Windsurf hooks.json parse failed: ${err && (err as Error).message ? (err as Error).message : String(err)}`);
+      }
+    }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) parsed = {};
+
+  const hasNestedHooksObject =
+    parsed['hooks'] && typeof parsed['hooks'] === 'object' && !Array.isArray(parsed['hooks']);
+  if (!hasNestedHooksObject) parsed['hooks'] = {};
+  const hookTable = parsed['hooks'] as Record<string, unknown>;
+
+  const entries = managedEntries || {};
+
+  for (const event of WINDSURF_HOOK_EVENTS) {
+    const existing = Array.isArray(hookTable[event]) ? (hookTable[event] as unknown[]) : [];
+    const userOwned = existing.filter((e) => !isManagedWindsurfHookEntry(e));
+    const newEntry = entries[event] || null;
+    if (newEntry) {
+      hookTable[event] = [...userOwned, newEntry];
+    } else if (userOwned.length > 0) {
+      hookTable[event] = userOwned;
+    } else {
+      delete hookTable[event];
+    }
+  }
+
+  // Avoid writing an empty `{ "hooks": {} }` artifact.
+  if (Object.keys(hookTable).length === 0) delete parsed['hooks'];
+
+  const nextContent = `${JSON.stringify(parsed, null, 2)}\n`;
+  const changed = currentContent !== nextContent;
+  const shouldWrite = changed && (currentContent !== null || Object.keys(parsed).length > 0);
+  if (shouldWrite) {
+    atomicWriteFileSync(hooksJsonPath, nextContent, 'utf8');
+  }
+
+  return { changed: changed, wrote: shouldWrite, path: hooksJsonPath };
+}
+
+interface WriteWindsurfHooksJsonOpts {
+  platform?: string;
+}
+
+/**
+ * Write GSD-managed Cascade lifecycle hooks into `<targetDir>/hooks.json`.
+ * Both managed hook scripts (gsd-windsurf-pre-write.js,
+ * gsd-windsurf-pre-command.js) are copied from the GSD hooks/ source to
+ * `<targetDir>/hooks/` first, so the hooks.json entries never reference a
+ * script that wasn't installed. Mirrors writeCursorHooksJson's structure;
+ * `buildHookCommand` is runtime-agnostic (it already returns a plain shell
+ * command string), so it is reused as-is with `runtime: 'windsurf'` — only
+ * the hooks.json ENTRY shape (buildWindsurfHookEntry) and the reconcile
+ * function differ from Cursor's.
+ *
+ * @param targetDir - The Windsurf config dir (global: ~/.codeium/windsurf; local: .windsurf)
+ * @param src       - The GSD install source root (for copying hook scripts)
+ * @param opts      - `{ platform? }`
+ * @returns `{ hooksJsonPath, changed }`
+ */
+function writeWindsurfHooksJson(targetDir: string, src: string, opts?: WriteWindsurfHooksJsonOpts): { hooksJsonPath: string; changed: boolean } {
+  opts = opts || {};
+  const hooksDir = path.join(targetDir, 'hooks');
+  fs.mkdirSync(hooksDir, { recursive: true });
+
+  const srcHooksDir = path.join(src, 'hooks');
+  const installedScripts = new Set<string>();
+  for (const script of GSD_WINDSURF_HOOK_SCRIPTS) {
+    const srcPath = path.join(srcHooksDir, script);
+    const destPath = path.join(hooksDir, script);
+    if (fs.existsSync(srcPath)) {
+      let content = fs.readFileSync(srcPath, 'utf8');
+      content = content.replace(/gsd:/gi, 'gsd-');
+      fs.writeFileSync(destPath, content);
+      try { fs.chmodSync(destPath, 0o755); } catch { /* Windows: ignore chmod */ }
+      installedScripts.add(script);
+    }
+  }
+
+  const hookOpts: BuildHookCommandOpts = { runtime: 'windsurf', platform: opts.platform || process.platform };
+  const commands: Record<string, string | null> = {};
+  for (const ev of WINDSURF_HOOK_EVENTS) {
+    const script = WINDSURF_EVENT_SCRIPT_MAP[ev];
+    commands[ev] = (script && installedScripts.has(script)) ? buildHookCommand(targetDir, script, hookOpts) : null;
+  }
+
+  const managedEntries: WindsurfManagedEntries = {};
+  for (const ev of WINDSURF_HOOK_EVENTS) {
+    const cmd = commands[ev];
+    if (cmd) managedEntries[ev] = buildWindsurfHookEntry(cmd);
+  }
+
+  const hooksJsonPath = path.join(targetDir, 'hooks.json');
+  const result = reconcileWindsurfHooksJson(hooksJsonPath, managedEntries);
+  return { hooksJsonPath, changed: result.changed };
+}
+
+/**
+ * Remove all GSD-managed Cascade hook entries from hooks.json. User-owned
+ * entries are preserved. If the file becomes empty, it is removed.
+ *
+ * @param targetDir - The Windsurf config dir
+ * @returns `{ changed }`
+ */
+function removeWindsurfHooksJson(targetDir: string): { changed: boolean } {
+  const hooksJsonPath = path.join(targetDir, 'hooks.json');
+  if (!fs.existsSync(hooksJsonPath)) return { changed: false };
+  const result = reconcileWindsurfHooksJson(hooksJsonPath, null);
   if (result.changed) {
     try {
       const contentRaw = fs.readFileSync(hooksJsonPath, 'utf8');
@@ -1072,6 +1418,41 @@ function buildCopilotHookConfig(): Record<string, unknown> {
           timeoutSec: 10,
         },
       ],
+      // #2099 UPGRADE 1: multi-event hook bus — preToolUse (worktree/read-safety
+      // advisory), postToolUse (context-monitor advisory), userPromptSubmitted
+      // (prompt-guard advisory), sessionEnd (session-finalize advisory).
+      preToolUse: [
+        {
+          type: 'command',
+          bash: GSD_COPILOT_PRE_TOOL_HOOK_BASH,
+          powershell: GSD_COPILOT_PRE_TOOL_HOOK_PWSH,
+          timeoutSec: 10,
+        },
+      ],
+      postToolUse: [
+        {
+          type: 'command',
+          bash: GSD_COPILOT_POST_TOOL_HOOK_BASH,
+          powershell: GSD_COPILOT_POST_TOOL_HOOK_PWSH,
+          timeoutSec: 10,
+        },
+      ],
+      userPromptSubmitted: [
+        {
+          type: 'command',
+          bash: GSD_COPILOT_PROMPT_SUBMIT_HOOK_BASH,
+          powershell: GSD_COPILOT_PROMPT_SUBMIT_HOOK_PWSH,
+          timeoutSec: 10,
+        },
+      ],
+      sessionEnd: [
+        {
+          type: 'command',
+          bash: GSD_COPILOT_SESSION_END_HOOK_BASH,
+          powershell: GSD_COPILOT_SESSION_END_HOOK_PWSH,
+          timeoutSec: 10,
+        },
+      ],
     },
   };
 }
@@ -1089,7 +1470,7 @@ function writeCopilotHookConfig(targetDir: string): string {
 //
 // MUTATES `settings` by reference — registers all GSD-managed hook entries
 // into settings.hooks.* for runtimes that use a settings.json hook surface
-// (Claude Code, Gemini, Antigravity, Qwen Code, and others).
+// (Claude Code, Antigravity, Qwen Code, and others).
 // Skipped entirely for runtimes whose hooksSurface descriptor field is 'none'
 // (opencode and kilo, which have their own hook surface).
 //
@@ -1100,7 +1481,7 @@ function writeCopilotHookConfig(targetDir: string): string {
 //
 // @param settings  - The settings object already read from disk. Mutated in place.
 // @param opts      - Closure values the block read from install()'s scope.
-//   runtime                   - runtime ID string (e.g. 'claude', 'gemini', 'qwen')
+//   runtime                   - runtime ID string (e.g. 'claude', 'antigravity', 'qwen')
 //   hooksSurface              - descriptor hooksSurface field ('settings-json'|'none'|…); if !== 'none', hooks are written
 //   isGlobal                  - true for global installs
 //   targetDir                 - absolute path to the runtime config dir
@@ -1172,7 +1553,13 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
   // register settings.json hooks; runtimes with hooksSurface === 'none'
   // (opencode, kilo) are skipped. Equivalence: hooksSurface !== 'none' iff
   // the old !isOpencode && !isKilo check.
-  if (hooksSurface !== 'none') {
+  // #2095: kimi's hooksSurface is 'kimi-hooks-toml' — it registers hooks into
+  // its own native config.toml via writeKimiHooksToml, not settings.json (kimi
+  // never writes settings.json at all: writesSharedSettings stays false). This
+  // guard must also skip kimi's surface so applySettingsJsonHooks doesn't log
+  // misleading "Configured ..." console messages for a settings object that
+  // finishInstall() will never persist for kimi.
+  if (hooksSurface !== 'none' && hooksSurface !== 'kimi-hooks-toml') {
     if (!settings.hooks) {
       settings.hooks = {};
     }
@@ -1252,7 +1639,7 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
     // Configure PreToolUse hook for prompt injection detection
     // ADR-857 phase 5f-2: drive dialect from opts.hookEvents (registry descriptor).
     // hookEvents='gemini' → BeforeTool; all others → PreToolUse.
-    // Equivalence: hookEvents='gemini' iff runtime∈{gemini,antigravity} (same as old check).
+    // Equivalence: hookEvents='gemini' iff runtime===antigravity (same as old check).
     const preToolEvent = hookEvents === 'gemini' ? 'BeforeTool' : 'PreToolUse';
     if (!settings.hooks[preToolEvent]) {
       settings.hooks[preToolEvent] = [];
@@ -1500,12 +1887,18 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
       console.warn(`  ${yellow}⚠${reset}  Skipped phase boundary hook — Bash executable path unavailable (#3393)`);
     }
 
-    // ── Extended hook events: SubagentStop / Stop / PreCompact (#788 + #770) ──
-    // Claude Code (since #770) and Qwen Code (since #788) both support these
-    // three lifecycle events.  Wire gsd-context-monitor so agents get context-
-    // headroom warnings at subagent completion, model stop, and pre-compaction
-    // (the most critical moment to surface headroom info).
+    // ── Extended hook events: SubagentStop / Stop / PreCompact / SubagentStart
+    //    (#788 + #770 + #2092) ────────────────────────────────────────────────
+    // Claude Code (since #770) and Qwen Code (since #788) both support the
+    // SubagentStop / Stop / PreCompact lifecycle events. Qwen Code additionally
+    // supports SubagentStart (#2092 Phase B, Upgrade 2). Wire gsd-context-
+    // monitor so agents get context-headroom warnings at subagent start,
+    // subagent completion, model stop, and pre-compaction (the most critical
+    // moment to surface headroom info).
     //
+    //   SubagentStart — subagent lifecycle start (context headroom tracking;
+    //                   qwen-only today — no other runtime declares it in
+    //                   extendedHookEvents)
     //   SubagentStop  — subagent lifecycle completion (context headroom tracking)
     //   Stop          — model stop / final-response moment (context headroom)
     //   PreCompact    — fires before conversation compaction (most critical
@@ -1515,11 +1908,15 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
     // user prompt text, not a tool invocation, so gsd-prompt-guard (which
     // exits unless tool_name is Write/Edit) would be a silent no-op.  A
     // dedicated handler for UserPromptSubmit is deferred to a follow-on issue.
-    // SubagentStop, Stop, PreCompact — route through the context monitor.
-    // Guard is now descriptor-driven: only events present in extendedEvents are wired.
+    // SubagentStart, SubagentStop, Stop, PreCompact — route through the context monitor.
+    // Guard is descriptor-driven: only events present in extendedEvents are wired,
+    // so this loop is a no-op for every runtime that doesn't list SubagentStart.
     {
-      const runtimeLabel = runtime === 'qwen' ? 'Qwen Code' : runtime === 'claude' ? 'Claude Code' : runtime;
-      for (const event of ['SubagentStop', 'Stop', 'PreCompact']) {
+      // Descriptor-driven (ADR-1239 / #2092): folded from a hardcoded
+      // `runtime === 'qwen' ? ... : ...` ternary into a capability-title
+      // lookup (see _capabilityTitle above).
+      const runtimeLabel = _capabilityTitle(runtime);
+      for (const event of ['SubagentStop', 'Stop', 'PreCompact', 'SubagentStart']) {
         if (!extendedEvents.includes(event)) continue;
         if (!settings.hooks[event]) {
           settings.hooks[event] = [];
@@ -1543,11 +1940,16 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
         }
       }
     }
-    // ── end SubagentStop / Stop / PreCompact events ────────────────────────────
+    // ── end SubagentStop / Stop / PreCompact / SubagentStart events ────────────
 
-    // ── Gemini-only extended hook events (#776) ───────────────────────────────
-    // Gemini CLI exposes several hook events beyond BeforeTool/AfterTool that
-    // gsd previously did not register.  Three high-value events are added here:
+    // ── Extended hook events (#776; Gemini runtime removed #1928) ──────────────
+    // The Gemini-3-backend dialect exposes several hook events beyond
+    // BeforeTool/AfterTool. These were added for the now-removed Gemini CLI
+    // runtime (#776). No currently supported runtime declares them —
+    // Antigravity's descriptor carries `extendedHookEvents: []` — so this loop
+    // is an inert, descriptor-driven seam: it no-ops for every present runtime
+    // and re-activates automatically if a future runtime declares any of them.
+    // Three high-value events would be wired here:
     //
     //   BeforeAgent  — fires after user submits a prompt, before the agent
     //                  plans.  Wire gsd-context-monitor for context headroom
@@ -1568,16 +1970,16 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
     // gsd hook use case at this time; deferred to a follow-on issue.
     //
     // Guard is now descriptor-driven: only events present in extendedEvents are wired.
-    for (const geminiEvent of ['BeforeAgent', 'AfterAgent', 'BeforeModel']) {
-      if (!extendedEvents.includes(geminiEvent)) continue;
-      if (!Array.isArray(settings.hooks[geminiEvent])) {
-        settings.hooks[geminiEvent] = [];
+    for (const extendedEvent of ['BeforeAgent', 'AfterAgent', 'BeforeModel']) {
+      if (!extendedEvents.includes(extendedEvent)) continue;
+      if (!Array.isArray(settings.hooks[extendedEvent])) {
+        settings.hooks[extendedEvent] = [];
       }
-      const alreadyHasContextMonitor = settings.hooks[geminiEvent].some((entry: HookGroup) =>
+      const alreadyHasContextMonitor = settings.hooks[extendedEvent].some((entry: HookGroup) =>
         entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-context-monitor'))
       );
       if (!alreadyHasContextMonitor && fs.existsSync(contextMonitorFile) && contextMonitorCommand) {
-        settings.hooks[geminiEvent].push({
+        settings.hooks[extendedEvent].push({
           hooks: [
             {
               type: 'command',
@@ -1586,12 +1988,12 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
             }
           ]
         });
-        console.log(`  ${green}✓${reset} Configured ${geminiEvent} context monitor hook (Gemini)`);
+        console.log(`  ${green}✓${reset} Configured ${extendedEvent} context monitor hook`);
       } else if (!alreadyHasContextMonitor && !fs.existsSync(contextMonitorFile)) {
-        console.warn(`  ${yellow}⚠${reset}  Skipped ${geminiEvent} hook — gsd-context-monitor.js not found at target`);
+        console.warn(`  ${yellow}⚠${reset}  Skipped ${extendedEvent} hook — gsd-context-monitor.js not found at target`);
       }
     }
-    // ── end Gemini-only extended hook events ──────────────────────────────────
+    // ── end Antigravity-only extended hook events ──────────────────────────────
 
     // ── FileChanged hook: hot-reload gsd config on .planning/config.json edits ─
     // Claude Code fires FileChanged when a watched file changes on disk.  Wire
@@ -1635,6 +2037,215 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
   /* eslint-enable @typescript-eslint/no-unsafe-member-access,
                    @typescript-eslint/no-unsafe-call,
                    @typescript-eslint/no-unsafe-assignment */
+}
+
+// ---------------------------------------------------------------------------
+// Kimi hooks.toml (#2095 EoS/kimi Upgrade 1 — native hook bus)
+//
+// Kimi CLI reads lifecycle hooks from a flat `[[hooks]]` array in its own
+// config.toml (moonshotai.github.io/kimi-cli/en/customization/hooks.html),
+// not from settings.json. Unlike every other hooksSurface writer above, this
+// file lives OUTSIDE the runtime's GSD configDir: kimi's configDir is the
+// generic Agent-Skills root (~/.config/agents by default), while config.toml
+// is a sibling at ~/.kimi (KIMI_SHARE_DIR override), resolved by
+// resolveKimiHooksTomlDir in runtime-homes.cts. Callers resolve that path and
+// pass it in explicitly — this module never reaches into runtime-homes.cjs
+// itself, keeping the same configDir/targetDir-passed-in shape every other
+// writer in this file uses.
+//
+// GSD-owned [[hooks]] entries are wrapped in marker comments so a reinstall
+// can find-and-replace only GSD's own block, leaving any user-authored
+// [[hooks]] entries elsewhere in the file untouched — mirrors the marker
+// approach stripStaleGsdHookBlocks uses for Codex's config.toml, simplified
+// to plain string slicing since this block is a flat, self-contained span
+// (no nested per-key structural TOML parsing is needed).
+// ---------------------------------------------------------------------------
+
+const KIMI_HOOKS_TOML_MARKER_BEGIN = '# GSD Hooks BEGIN — managed by GSD, do not edit between these markers';
+const KIMI_HOOKS_TOML_MARKER_END = '# GSD Hooks END';
+
+interface KimiHookEntrySpec {
+  event: string;
+  command: string | null;
+  matcher?: string;
+  timeout?: number;
+}
+
+function buildKimiHookEntryToml(spec: KimiHookEntrySpec): string | null {
+  if (!spec.command) return null;
+  const lines = ['[[hooks]]', `event = "${spec.event}"`];
+  if (spec.matcher) {
+    lines.push(`matcher = "${escapeTomlDoubleQuotedString(spec.matcher)}"`);
+  }
+  lines.push(`command = "${escapeTomlDoubleQuotedString(spec.command)}"`);
+  if (typeof spec.timeout === 'number') {
+    lines.push(`timeout = ${spec.timeout}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Build the full marker-delimited GSD [[hooks]] block for kimi's config.toml,
+ * or null when no GSD hook resolved to a usable command (hooks/ missing, or
+ * the node/bash runner could not be resolved — mirrors the #1754/#3002
+ * defensive guards applySettingsJsonHooks applies per-hook above).
+ *
+ * Event -> hook mapping mirrors applySettingsJsonHooks' settings.json wiring
+ * 1:1 by GSD hook script (update check, session-state, phase-boundary,
+ * graphify, context monitor, prompt/read/workflow/worktree guards, commit
+ * validation). Kimi's 13 lifecycle events include exact-name equivalents for
+ * every Claude-dialect event GSD currently wires (SessionStart, PreToolUse,
+ * PostToolUse, Stop, PreCompact, SubagentStart, SubagentStop) — see
+ * moonshotai.github.io/kimi-cli/en/customization/hooks.html.
+ *
+ * Matcher translation (best-effort — Kimi's tool-name vocabulary is
+ * confirmed distinct from Claude's by the upstream hooks doc's own examples):
+ *   Bash -> Shell, Write -> WriteFile, Edit/MultiEdit -> StrReplaceFile.
+ * Read -> ReadFile follows the same WriteFile/StrReplaceFile naming
+ * convention but is not independently doc-confirmed. Claude's Agent|Task
+ * (subagent-dispatch) matcher segment has no confirmed Kimi tool name and is
+ * dropped rather than guessed — gsd-context-monitor's PostToolUse entry runs
+ * unmatched (all tools) instead, which only widens when it fires, it never
+ * narrows incorrectly.
+ */
+function buildKimiHooksTomlBlock(targetDir: string, opts: { hookOpts: BuildHookCommandOpts }): string | null {
+  const { hookOpts } = opts;
+  const cmd = (hookName: string): string | null => {
+    if (!fs.existsSync(path.join(targetDir, 'hooks', hookName))) return null;
+    return buildHookCommand(targetDir, hookName, hookOpts);
+  };
+
+  const specs: KimiHookEntrySpec[] = [
+    // SessionStart — unmatched (session-level; no tool_name to filter on).
+    { event: 'SessionStart', command: cmd('gsd-check-update.js') },
+    { event: 'SessionStart', command: cmd('gsd-session-state.sh') },
+
+    // PreToolUse
+    { event: 'PreToolUse', command: cmd('gsd-prompt-guard.js'), matcher: 'WriteFile|StrReplaceFile', timeout: 5 },
+    { event: 'PreToolUse', command: cmd('gsd-read-guard.js'), matcher: 'WriteFile|StrReplaceFile', timeout: 5 },
+    { event: 'PreToolUse', command: cmd('gsd-worktree-path-guard.js'), matcher: 'WriteFile|StrReplaceFile', timeout: 5 },
+    { event: 'PreToolUse', command: cmd('gsd-workflow-guard.js'), matcher: 'Shell|WriteFile|StrReplaceFile', timeout: 5 },
+    { event: 'PreToolUse', command: cmd('gsd-validate-commit.sh'), matcher: 'Shell', timeout: 5 },
+
+    // PostToolUse
+    { event: 'PostToolUse', command: cmd('gsd-context-monitor.js'), timeout: 10 },
+    { event: 'PostToolUse', command: cmd('gsd-phase-boundary.sh'), matcher: 'WriteFile|StrReplaceFile', timeout: 5 },
+    { event: 'PostToolUse', command: cmd('gsd-read-injection-scanner.js'), matcher: 'ReadFile', timeout: 5 },
+    { event: 'PostToolUse', command: cmd('gsd-graphify-update.sh'), matcher: 'Shell', timeout: 5 },
+
+    // Extended lifecycle events — context-headroom tracking (unmatched).
+    { event: 'Stop', command: cmd('gsd-context-monitor.js'), timeout: 10 },
+    { event: 'PreCompact', command: cmd('gsd-context-monitor.js'), timeout: 10 },
+    { event: 'SubagentStart', command: cmd('gsd-context-monitor.js'), timeout: 10 },
+    { event: 'SubagentStop', command: cmd('gsd-context-monitor.js'), timeout: 10 },
+  ];
+
+  const entries = specs
+    .map(buildKimiHookEntryToml)
+    .filter((entry): entry is string => entry !== null);
+  if (entries.length === 0) return null;
+  return [KIMI_HOOKS_TOML_MARKER_BEGIN, '', entries.join('\n\n'), '', KIMI_HOOKS_TOML_MARKER_END].join('\n');
+}
+
+/**
+ * Strip a previously-written GSD [[hooks]] block from kimi's config.toml
+ * content. Pure string function (no fs access) so install, uninstall, and
+ * tests share one strip implementation. Returns null when stripping leaves
+ * nothing but whitespace (the file was GSD-only), so the caller can unlink
+ * it instead of writing an empty file.
+ */
+function stripKimiHooksTomlBlock(content: string): string | null {
+  const beginIdx = content.indexOf(KIMI_HOOKS_TOML_MARKER_BEGIN);
+  if (beginIdx === -1) {
+    return content.trim() === '' ? null : content;
+  }
+  const endMarkerIdx = content.indexOf(KIMI_HOOKS_TOML_MARKER_END, beginIdx);
+  if (endMarkerIdx === -1) {
+    // Malformed marker pair — BEGIN present but no END after it (missing END,
+    // or an END that only appears earlier in the file, before BEGIN). Never
+    // fall back to content.length here: that would slice to EOF and destroy
+    // every user section that follows. Leave the content untouched instead;
+    // a subsequent writeKimiHooksToml call will append a fresh, well-formed
+    // block rather than silently deleting user data.
+    return content;
+  }
+  const endIdx = endMarkerIdx + KIMI_HOOKS_TOML_MARKER_END.length;
+
+  // Swallow blank lines immediately surrounding the block so repeated
+  // strip+rewrite cycles never accumulate blank lines.
+  let sliceStart = beginIdx;
+  while (sliceStart > 0 && (content[sliceStart - 1] === '\n' || content[sliceStart - 1] === '\r')) sliceStart -= 1;
+  let sliceEnd = endIdx;
+  while (sliceEnd < content.length && (content[sliceEnd] === '\n' || content[sliceEnd] === '\r')) sliceEnd += 1;
+
+  const before = content.slice(0, sliceStart);
+  const after = content.slice(sliceEnd);
+  // Blank-line swallowing above consumes every newline flanking the block,
+  // including the one required to keep the surrounding user sections on
+  // separate lines. If the block sat BETWEEN two user sections (content
+  // survives on both sides), concatenating `before` + `after` directly would
+  // glue the last line of the earlier section onto the first line of the
+  // later one. Reinsert a blank-line separator in that case; when only one
+  // side has content (block at file start or EOF), no separator is needed —
+  // that matches the pre-existing idempotent behavior for those shapes.
+  const result = before.trim() !== '' && after.trim() !== ''
+    ? `${before}\n\n${after}`
+    : before + after;
+  return result.trim() === '' ? null : result;
+}
+
+/**
+ * Idempotently (re)write kimi's GSD-owned [[hooks]] block into its native
+ * config.toml at `configPath` (resolved by the caller via
+ * resolveKimiHooksTomlDir). No-ops (`{changed:false}`) when the computed
+ * block is byte-identical to what's already on disk, so reinstalls don't
+ * touch the file's mtime for no reason.
+ */
+function writeKimiHooksToml(
+  configPath: string,
+  targetDir: string,
+  opts: { hookOpts: BuildHookCommandOpts },
+): { changed: boolean; path: string; entryCount: number } {
+  const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
+  const stripped = stripKimiHooksTomlBlock(existing) ?? '';
+  const block = buildKimiHooksTomlBlock(targetDir, opts);
+  const entryCount = block ? (block.match(/\[\[hooks\]\]/g) || []).length : 0;
+
+  if (!block) {
+    if (stripped === existing) return { changed: false, path: configPath, entryCount: 0 };
+    if (stripped.trim() === '') {
+      if (fs.existsSync(configPath)) fs.unlinkSync(configPath);
+    } else {
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      atomicWriteFileSync(configPath, stripped, 'utf8');
+    }
+    return { changed: true, path: configPath, entryCount: 0 };
+  }
+
+  const separator = stripped.trim() === '' ? '' : (stripped.endsWith('\n') ? '\n' : '\n\n');
+  const next = stripped.trim() === '' ? `${block}\n` : `${stripped}${separator}${block}\n`;
+  if (next === existing) return { changed: false, path: configPath, entryCount };
+
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  atomicWriteFileSync(configPath, next, 'utf8');
+  return { changed: true, path: configPath, entryCount };
+}
+
+/**
+ * Uninstall-time counterpart to writeKimiHooksToml: strips the GSD block and
+ * deletes the file if nothing but GSD's own block was ever in it.
+ */
+function removeKimiHooksToml(configPath: string): { changed: boolean } {
+  if (!fs.existsSync(configPath)) return { changed: false };
+  const existing = fs.readFileSync(configPath, 'utf8');
+  const stripped = stripKimiHooksTomlBlock(existing);
+  if (stripped === existing) return { changed: false };
+  if (stripped === null || stripped.trim() === '') {
+    fs.unlinkSync(configPath);
+  } else {
+    atomicWriteFileSync(configPath, stripped, 'utf8');
+  }
+  return { changed: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -1686,7 +2297,24 @@ export = {
   removeCursorHooksJson,
   GSD_CURSOR_SESSION_HOOK_SCRIPT,
   GSD_CURSOR_POST_TOOL_HOOK_SCRIPT,
+  GSD_CURSOR_PRE_TOOL_HOOK_SCRIPT,
+  GSD_CURSOR_STOP_HOOK_SCRIPT,
+  GSD_CURSOR_SUBAGENT_START_HOOK_SCRIPT,
+  GSD_CURSOR_SUBAGENT_STOP_HOOK_SCRIPT,
   GSD_CURSOR_HOOK_MARKER,
+
+  // Windsurf/Cascade
+  buildWindsurfHookEntry,
+  isManagedWindsurfHookEntry,
+  reconcileWindsurfHooksJson,
+  writeWindsurfHooksJson,
+  removeWindsurfHooksJson,
+  WINDSURF_HOOK_EVENTS,
+  WINDSURF_EVENT_SCRIPT_MAP,
+  GSD_WINDSURF_PRE_WRITE_HOOK_SCRIPT,
+  GSD_WINDSURF_PRE_COMMAND_HOOK_SCRIPT,
+  GSD_WINDSURF_HOOK_SCRIPTS,
+  GSD_WINDSURF_HOOK_MARKER,
 
   // Copilot
   buildCopilotHookConfig,
@@ -1705,6 +2333,14 @@ export = {
   // Codex TOML
   buildCodexHookBlock,
   rewriteLegacyCodexHookBlock,
+
+  // Kimi hooks.toml
+  buildKimiHooksTomlBlock,
+  stripKimiHooksTomlBlock,
+  writeKimiHooksToml,
+  removeKimiHooksToml,
+  KIMI_HOOKS_TOML_MARKER_BEGIN,
+  KIMI_HOOKS_TOML_MARKER_END,
 
   // Shared
   buildHookCommand,

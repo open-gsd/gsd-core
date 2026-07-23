@@ -1,6 +1,7 @@
 # Shell Command Projection Module owns runtime-aware OS command rendering
 
 - **Status:** Accepted
+- **Supersedes:** [ADR-0010](0010-file-operation-engine-module.md) (File Operation Engine Module) — absorbed into this seam's Phases 3–4 (`#3467`–`#3468`), 2026-05-13
 - **Date:** 2026-05-12
 
 We propose introducing a Shell Command Projection Module that owns projection from typed command intent to concrete shell/runtime-specific command text. GSD currently hand-builds hook commands, PATH repair commands, shim scripts, and other serialized OS-facing command strings across installer call sites. That drift has repeatedly produced cross-shell regressions (`#2376`, `#2979`, `#3002`, `#3011`, `#3181`, `#3393`, `#3413`). The proposed seam concentrates quoting, path-style, and runtime-wrapper policy in one module while keeping real subprocess execution on array-arg/non-shell paths.
@@ -52,11 +53,11 @@ These call sites should migrate behind the Shell Command Projection Module:
 
 ### Tests expected to move with the seam
 
-- `tests/bug-2979-hook-absolute-node.test.cjs`
+- `tests/install.test.cjs` (folds former `bug-2979-hook-absolute-node`, consolidation epic #1969)
 - `tests/sh-hook-paths.test.cjs`
 - `tests/bug-3011-sdk-path-diagnostic.test.cjs`
-- `tests/bug-3017-codex-hook-absolute-node.test.cjs`
-- `tests/bug-2376-opencode-windows-home-path.test.cjs`
+- `tests/codex-config.test.cjs` (folds former `bug-3017-codex-hook-absolute-node`, consolidation epic #1969)
+- `tests/path-replacement.test.cjs` (folds former `bug-2376-opencode-windows-home-path`, consolidation epic #1969)
 - `tests/bug-3020-install-shell-path-probe.test.cjs`
 - `tests/bug-3359-stale-gsd-sdk-path-version.test.cjs`
 

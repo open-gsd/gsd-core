@@ -17,14 +17,17 @@
  *   runtime-artifact-layout-install-profiles.test.cjs — install-profiles seam
  */
 
-const { test, describe } = require('node:test');
+const { test, describe, beforeEach, afterEach, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const { resolveRuntimeArtifactLayout } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
+const { resolveRuntimeArtifactLayout, findInstallSourceRoot } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
 const installProfiles = require('../gsd-core/bin/lib/install-profiles.cjs');
-const { cleanup } = require('./helpers.cjs');
+const { install } = require('../bin/install.js');
+const { createTempDir, cleanup } = require('./helpers.cjs');
+
+const REPO_ROOT = path.join(__dirname, '..');
 
 const FAKE_DIR = '/tmp/fake-config-dir';
 
@@ -37,7 +40,7 @@ describe('resolveRuntimeArtifactLayout — claude local', () => {
     assert.strictEqual(layout.configDir, FAKE_DIR);
     assert.strictEqual(layout.kinds.length, 2);
     assert.strictEqual(layout.kinds[0].kind, 'commands');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'commands/gsd');
+    assert.strictEqual(layout.kinds[0].destSubpath, 'commands'); // #1367: flat gsd-<cmd>.md layout
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
     assert.strictEqual(layout.kinds[1].kind, 'agents');
@@ -61,11 +64,11 @@ describe('resolveRuntimeArtifactLayout — claude global', () => {
 });
 
 describe('resolveRuntimeArtifactLayout — cursor', () => {
-  test('returns correct layout for cursor — skills + commands kinds (#785)', () => {
+  test('returns correct layout for cursor — skills + commands + agents kinds (#785, ADR-1235)', () => {
     const layout = resolveRuntimeArtifactLayout('cursor', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'cursor');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 2);
+    assert.strictEqual(layout.kinds.length, 3);
 
     const skillsKind = layout.kinds.find(k => k.kind === 'skills');
     assert.ok(skillsKind, 'must have a skills kind');
@@ -78,19 +81,12 @@ describe('resolveRuntimeArtifactLayout — cursor', () => {
     assert.strictEqual(commandsKind.destSubpath, 'commands');
     assert.strictEqual(commandsKind.prefix, 'gsd-');
     assert.strictEqual(typeof commandsKind.stage, 'function');
-  });
-});
 
-describe('resolveRuntimeArtifactLayout — gemini', () => {
-  test('returns correct layout for gemini', () => {
-    const layout = resolveRuntimeArtifactLayout('gemini', FAKE_DIR);
-    assert.strictEqual(layout.runtime, 'gemini');
-    assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'commands');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'commands/gsd');
-    assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
-    assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    const agentsKind = layout.kinds.find(k => k.kind === 'agents');
+    assert.ok(agentsKind, 'must have an agents kind (ADR-1235 §1 descriptor cutover)');
+    assert.strictEqual(agentsKind.destSubpath, 'agents');
+    assert.strictEqual(agentsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof agentsKind.stage, 'function');
   });
 });
 
@@ -105,6 +101,24 @@ describe('resolveRuntimeArtifactLayout — codex', () => {
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
   });
+
+  test('#2429: codex local scope does not set $HOME/.agents skills home override', () => {
+    const layout = resolveRuntimeArtifactLayout('codex', FAKE_DIR, 'local');
+    const skills = layout.kinds.find(k => k.kind === 'skills');
+    assert.ok(skills, 'codex local must have a skills kind');
+    assert.strictEqual(skills.home, undefined,
+      'codex local skills must NOT have a home override (would redirect to $HOME/.agents instead of project-local)');
+  });
+
+  test('#2429: codex global scope DOES set $HOME/.agents skills home override', () => {
+    const layout = resolveRuntimeArtifactLayout('codex', FAKE_DIR, 'global');
+    const skills = layout.kinds.find(k => k.kind === 'skills');
+    assert.ok(skills, 'codex global must have a skills kind');
+    assert.ok(typeof skills.home === 'string' && skills.home.length > 0,
+      'codex global skills MUST have a home override ($HOME/.agents)');
+    assert.ok(skills.home.includes('.agents'),
+      'codex global skills home should point to .agents directory');
+  });
 });
 
 describe('resolveRuntimeArtifactLayout — copilot', () => {
@@ -112,11 +126,16 @@ describe('resolveRuntimeArtifactLayout — copilot', () => {
     const layout = resolveRuntimeArtifactLayout('copilot', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'copilot');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
+    // #1575: agents kind added (copilot cutover)
+    assert.strictEqual(layout.kinds.length, 2);
     assert.strictEqual(layout.kinds[0].kind, 'skills');
     assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    assert.strictEqual(layout.kinds[1].kind, 'agents');
+    assert.strictEqual(layout.kinds[1].destSubpath, 'agents');
+    assert.strictEqual(layout.kinds[1].prefix, 'gsd-');
+    assert.strictEqual(typeof layout.kinds[1].stage, 'function');
   });
 });
 
@@ -125,69 +144,119 @@ describe('resolveRuntimeArtifactLayout — antigravity', () => {
     const layout = resolveRuntimeArtifactLayout('antigravity', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'antigravity');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'skills');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
-    assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
-    assert.strictEqual(typeof layout.kinds[0].stage, 'function');
-  });
-});
-
-describe('resolveRuntimeArtifactLayout — windsurf', () => {
-  test('returns correct layout for windsurf', () => {
-    const layout = resolveRuntimeArtifactLayout('windsurf', FAKE_DIR);
-    assert.strictEqual(layout.runtime, 'windsurf');
-    assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'skills');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
-    assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
-    assert.strictEqual(typeof layout.kinds[0].stage, 'function');
-  });
-});
-
-describe('resolveRuntimeArtifactLayout — augment', () => {
-  test('returns correct layout for augment (commands + skills)', () => {
-    const layout = resolveRuntimeArtifactLayout('augment', FAKE_DIR);
-    assert.strictEqual(layout.runtime, 'augment');
-    assert.strictEqual(layout.configDir, FAKE_DIR);
+    // #1575: agents kind added (antigravity cutover)
     assert.strictEqual(layout.kinds.length, 2);
-    // commands kind first
-    assert.strictEqual(layout.kinds[0].kind, 'commands');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'commands');
+    assert.strictEqual(layout.kinds[0].kind, 'skills');
+    assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
-    // skills kind second
-    assert.strictEqual(layout.kinds[1].kind, 'skills');
-    assert.strictEqual(layout.kinds[1].destSubpath, 'skills');
+    assert.strictEqual(layout.kinds[1].kind, 'agents');
+    assert.strictEqual(layout.kinds[1].destSubpath, 'agents');
     assert.strictEqual(layout.kinds[1].prefix, 'gsd-');
     assert.strictEqual(typeof layout.kinds[1].stage, 'function');
   });
 });
 
+describe('resolveRuntimeArtifactLayout — windsurf', () => {
+  test('returns local workflow + agents layout for windsurf (ADR-1235)', () => {
+    const layout = resolveRuntimeArtifactLayout('windsurf', FAKE_DIR, 'local');
+    assert.strictEqual(layout.runtime, 'windsurf');
+    assert.strictEqual(layout.configDir, FAKE_DIR);
+    assert.strictEqual(layout.kinds.length, 2);
+
+    const commandsKind = layout.kinds.find(k => k.kind === 'commands');
+    assert.ok(commandsKind, 'must have a commands/workflows kind');
+    assert.strictEqual(commandsKind.destSubpath, 'workflows');
+    assert.strictEqual(commandsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof commandsKind.stage, 'function');
+
+    const agentsKind = layout.kinds.find(k => k.kind === 'agents');
+    assert.ok(agentsKind, 'must have an agents kind (ADR-1235 §1 descriptor cutover)');
+    assert.strictEqual(agentsKind.destSubpath, 'agents');
+    assert.strictEqual(agentsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof agentsKind.stage, 'function');
+  });
+
+  test('returns agents-only global layout for windsurf (ADR-1235)', () => {
+    const layout = resolveRuntimeArtifactLayout('windsurf', FAKE_DIR, 'global');
+    assert.strictEqual(layout.runtime, 'windsurf');
+    assert.strictEqual(layout.configDir, FAKE_DIR);
+    assert.strictEqual(layout.kinds.length, 1);
+
+    const agentsKind = layout.kinds.find(k => k.kind === 'agents');
+    assert.ok(agentsKind, 'global windsurf must have agents kind (ADR-1235 §1)');
+    assert.strictEqual(agentsKind.destSubpath, 'agents');
+    assert.strictEqual(agentsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof agentsKind.stage, 'function');
+  });
+});
+
+describe('resolveRuntimeArtifactLayout — augment', () => {
+  test('returns correct layout for augment (commands + skills + agents — ADR-1235)', () => {
+    const layout = resolveRuntimeArtifactLayout('augment', FAKE_DIR);
+    assert.strictEqual(layout.runtime, 'augment');
+    assert.strictEqual(layout.configDir, FAKE_DIR);
+    assert.strictEqual(layout.kinds.length, 3);
+
+    const commandsKind = layout.kinds.find(k => k.kind === 'commands');
+    assert.ok(commandsKind, 'must have a commands kind');
+    assert.strictEqual(commandsKind.destSubpath, 'commands');
+    assert.strictEqual(commandsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof commandsKind.stage, 'function');
+
+    const skillsKind = layout.kinds.find(k => k.kind === 'skills');
+    assert.ok(skillsKind, 'must have a skills kind');
+    assert.strictEqual(skillsKind.destSubpath, 'skills');
+    assert.strictEqual(skillsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof skillsKind.stage, 'function');
+
+    const agentsKind = layout.kinds.find(k => k.kind === 'agents');
+    assert.ok(agentsKind, 'must have an agents kind (ADR-1235 §1 descriptor cutover)');
+    assert.strictEqual(agentsKind.destSubpath, 'agents');
+    assert.strictEqual(agentsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof agentsKind.stage, 'function');
+  });
+});
+
 describe('resolveRuntimeArtifactLayout — trae', () => {
-  test('returns correct layout for trae', () => {
+  test('returns correct layout for trae (skills + agents — ADR-1235)', () => {
     const layout = resolveRuntimeArtifactLayout('trae', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'trae');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'skills');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
-    assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
-    assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    assert.strictEqual(layout.kinds.length, 2);
+
+    const skillsKind = layout.kinds.find(k => k.kind === 'skills');
+    assert.ok(skillsKind, 'must have a skills kind');
+    assert.strictEqual(skillsKind.destSubpath, 'skills');
+    assert.strictEqual(skillsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof skillsKind.stage, 'function');
+
+    const agentsKind = layout.kinds.find(k => k.kind === 'agents');
+    assert.ok(agentsKind, 'must have an agents kind (ADR-1235 §1 descriptor cutover)');
+    assert.strictEqual(agentsKind.destSubpath, 'agents');
+    assert.strictEqual(agentsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof agentsKind.stage, 'function');
   });
 });
 
 describe('resolveRuntimeArtifactLayout — qwen', () => {
-  test('returns correct layout for qwen', () => {
+  test('returns correct layout for qwen (skills + agents — #2092 Phase B Upgrade 1)', () => {
     const layout = resolveRuntimeArtifactLayout('qwen', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'qwen');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'skills');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
-    assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
-    assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    assert.strictEqual(layout.kinds.length, 2);
+
+    const skillsKind = layout.kinds.find(k => k.kind === 'skills');
+    assert.ok(skillsKind, 'must have a skills kind');
+    assert.strictEqual(skillsKind.destSubpath, 'skills');
+    assert.strictEqual(skillsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof skillsKind.stage, 'function');
+
+    const agentsKind = layout.kinds.find(k => k.kind === 'agents');
+    assert.ok(agentsKind, 'must have an agents kind (#2092 Phase B Upgrade 1 — native .qwen/agents/*.md subagent projection)');
+    assert.strictEqual(agentsKind.destSubpath, 'agents');
+    assert.strictEqual(agentsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof agentsKind.stage, 'function');
   });
 });
 
@@ -227,33 +296,29 @@ describe('resolveRuntimeArtifactLayout — hermes', () => {
 });
 
 describe('resolveRuntimeArtifactLayout — codebuddy', () => {
-  test('returns correct layout for codebuddy (commands + skills — #789)', () => {
+  test('returns correct layout for codebuddy (commands + skills + agents — #789, ADR-1235)', () => {
     const layout = resolveRuntimeArtifactLayout('codebuddy', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'codebuddy');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 2);
-    // commands kind first
-    assert.strictEqual(layout.kinds[0].kind, 'commands');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'commands');
-    assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
-    assert.strictEqual(typeof layout.kinds[0].stage, 'function');
-    // skills kind second
-    assert.strictEqual(layout.kinds[1].kind, 'skills');
-    assert.strictEqual(layout.kinds[1].destSubpath, 'skills');
-    assert.strictEqual(layout.kinds[1].prefix, 'gsd-');
-    assert.strictEqual(typeof layout.kinds[1].stage, 'function');
-  });
-});
+    assert.strictEqual(layout.kinds.length, 3);
 
-describe('resolveRuntimeArtifactLayout — omp', () => {
-  test('returns OMP commands, skills, agents, rules, and extensions layout', () => {
-    const layout = resolveRuntimeArtifactLayout('omp', FAKE_DIR);
-    assert.strictEqual(layout.runtime, 'omp');
-    assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.deepStrictEqual(layout.kinds.map(k => k.kind), ['commands', 'skills', 'agents', 'rules', 'extensions']);
-    assert.deepStrictEqual(layout.kinds.map(k => k.destSubpath), ['commands', 'skills', 'agents', 'rules', 'extensions']);
-    assert.ok(layout.kinds.every(k => k.prefix === 'gsd-'));
-    assert.ok(layout.kinds.every(k => typeof k.stage === 'function'));
+    const commandsKind = layout.kinds.find(k => k.kind === 'commands');
+    assert.ok(commandsKind, 'must have a commands kind');
+    assert.strictEqual(commandsKind.destSubpath, 'commands');
+    assert.strictEqual(commandsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof commandsKind.stage, 'function');
+
+    const skillsKind = layout.kinds.find(k => k.kind === 'skills');
+    assert.ok(skillsKind, 'must have a skills kind');
+    assert.strictEqual(skillsKind.destSubpath, 'skills');
+    assert.strictEqual(skillsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof skillsKind.stage, 'function');
+
+    const agentsKind = layout.kinds.find(k => k.kind === 'agents');
+    assert.ok(agentsKind, 'must have an agents kind (ADR-1235 §1 descriptor cutover)');
+    assert.strictEqual(agentsKind.destSubpath, 'agents');
+    assert.strictEqual(agentsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof agentsKind.stage, 'function');
   });
 });
 
@@ -286,7 +351,9 @@ describe('resolveRuntimeArtifactLayout — opencode', () => {
 
     const commands = layout.kinds.find((k) => k.kind === 'commands');
     assert.ok(commands, 'should have a commands kind');
-    assert.strictEqual(commands.destSubpath, 'command');
+    // #2329: OpenCode discovers commands from the PLURAL `commands/` dir — the
+    // singular `command/` made all /gsd-* commands invisible to OpenCode.
+    assert.strictEqual(commands.destSubpath, 'commands');
     assert.strictEqual(commands.prefix, 'gsd-');
     assert.strictEqual(typeof commands.stage, 'function');
 
@@ -328,12 +395,6 @@ describe('resolveRuntimeArtifactLayout edge-cases', () => {
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-'); // #947: bare-stem prefix='' reversed
   });
 
-  test('gemini has one commands kind', () => {
-    const layout = resolveRuntimeArtifactLayout('gemini', '/tmp/x');
-    assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'commands');
-  });
-
   test('claude local has both commands and agents kinds', () => {
     const layout = resolveRuntimeArtifactLayout('claude', '/tmp/x', 'local');
     const kindNames = layout.kinds.map(k => k.kind);
@@ -352,11 +413,6 @@ describe('resolveRuntimeArtifactLayout edge-cases', () => {
     const layout = resolveRuntimeArtifactLayout('claude', '/tmp/x', 'global');
     assert.strictEqual(layout.kinds.length, 1);
     assert.strictEqual(layout.kinds[0].kind, 'skills');
-  });
-
-  test('omp has commands, skills, agents, rules, and extensions kinds', () => {
-    const layout = resolveRuntimeArtifactLayout('omp', '/tmp/x');
-    assert.deepStrictEqual(layout.kinds.map(k => k.kind), ['commands', 'skills', 'agents', 'rules', 'extensions']);
   });
 
   test('unknown runtime grok throws TypeError containing runtime name', () => {
@@ -406,22 +462,6 @@ const CORE_AGENTS = new Set(['gsd-planner']);
 const PROFILE_CORE = { skills: CORE_SKILLS, agents: CORE_AGENTS };
 const PROFILE_FULL = { skills: '*', agents: new Set() };
 const FAKE_STAGE_DIR = '/tmp/fake-config-dir-stage';
-
-describe('stage — commands kind (gemini)', () => {
-  test('stage returns a directory containing only the selected skill .md files', () => {
-    const layout = resolveRuntimeArtifactLayout('gemini', FAKE_STAGE_DIR);
-    const commandsKind = layout.kinds.find(k => k.kind === 'commands');
-    assert.ok(commandsKind, 'should have a commands kind');
-
-    const stagedDir = commandsKind.stage(PROFILE_CORE);
-    const entries = fs.readdirSync(stagedDir).filter(f => f.endsWith('.md'));
-    for (const entry of entries) {
-      const stem = entry.slice(0, -3);
-      assert.ok(CORE_SKILLS.has(stem), `unexpected skill staged: ${stem}`);
-    }
-    assert.ok(entries.length >= 1, 'at least one skill file should be staged');
-  });
-});
 
 describe('stage — agents kind (claude local)', () => {
   test('stage returns a valid directory for the agents kind', () => {
@@ -639,23 +679,260 @@ describe('stage — cursor commands kind (#785)', () => {
   });
 });
 
-describe('stage — omp commands, agents, rules, and extensions kinds', () => {
-  test('omp stages converted command, agent, explicit rule markdown, and extension directory', () => {
-    const layout = resolveRuntimeArtifactLayout('omp', FAKE_STAGE_DIR);
-    const commandsKind = layout.kinds.find(k => k.kind === 'commands');
-    const agentsKind = layout.kinds.find(k => k.kind === 'agents');
-    const rulesKind = layout.kinds.find(k => k.kind === 'rules');
-    const extensionsKind = layout.kinds.find(k => k.kind === 'extensions');
+// ─── #1477: .gsd-source marker provisioning ───────────────────────────────────
+//
+// Regression for #1477: the Claude Code global skills layout ships
+// gsd-core/{bin,contexts,references,templates,workflows} but no commands/gsd
+// source tree, and _runLegacyUninstallCleanup removes any commands/gsd/ for that
+// scope. At runtime findInstallSourceRoot's walk-up from gsd-core/bin/lib had
+// nothing to find and /gsd-surface threw for every subcommand (list/status
+// included); the marker reader added in #1476 never fired because nothing wrote
+// the marker.
+//
+// Fix: bin/install.js writes <configDir>/.gsd-source pointing at a resolvable
+// commands/gsd, and findInstallSourceRoot prefers that marker over its walk-up.
+//
+// (The original #1477 also covered a deployed-install MODULE_NOT_FOUND from the
+// surface path's relative require('../../../bin/install.js'); ADR-1508 / #1511
+// removed that getInstallExports relay entirely — surface.cjs now calls the
+// shipped runtime-artifact-conversion sibling directly — so that half no longer
+// applies and is covered by the #1511 relocation suite.)
 
-    const commandStage = commandsKind.stage(PROFILE_CORE);
-    const agentStage = agentsKind.stage(PROFILE_CORE);
-    const ruleStage = rulesKind.stage(PROFILE_CORE);
-    const extensionStage = extensionsKind.stage(PROFILE_CORE);
+describe('#1477 .gsd-source marker provisioning', () => {
+  let tmpRoot;
+  let savedHome;
+  let savedUserProfile;
+  let savedExplicitConfigDir;
+  let savedTestMode;
 
-    assert.ok(fs.existsSync(path.join(commandStage, 'help.md')));
-    assert.ok(fs.existsSync(path.join(agentStage, 'gsd-planner.md')));
-    assert.ok(fs.existsSync(path.join(ruleStage, 'planning-artifacts.md')));
-    assert.ok(fs.existsSync(path.join(extensionStage, 'gsd-core', 'index.js')));
-    assert.ok(fs.existsSync(path.join(extensionStage, 'gsd-core', 'package.json')));
+  function silenceConsole(fn) {
+    const orig = { log: console.log, warn: console.warn, error: console.error };
+    console.log = () => {};
+    console.warn = () => {};
+    console.error = () => {};
+    try {
+      return fn();
+    } finally {
+      console.log = orig.log;
+      console.warn = orig.warn;
+      console.error = orig.error;
+    }
+  }
+
+  // Guard against process.exit killing the runner mid-install.
+  function runInstall(isGlobal, runtime) {
+    const origExit = process.exit;
+    let exitCalled = false;
+    process.exit = (code) => {
+      exitCalled = true;
+      throw new Error(`process.exit(${code}) during install — should not happen`);
+    };
+    try {
+      return silenceConsole(() => install(isGlobal, runtime));
+    } catch (e) {
+      if (exitCalled) assert.fail(`install() called process.exit — unexpected: ${e.message}`);
+      throw e;
+    } finally {
+      process.exit = origExit;
+    }
+  }
+
+  beforeEach(() => {
+    tmpRoot = createTempDir('gsd-1477-');
+    savedHome = process.env.HOME;
+    // os.homedir() reads USERPROFILE on win32, HOME elsewhere; redirect both so
+    // install() targets the fixture regardless of platform.
+    savedUserProfile = process.env.USERPROFILE;
+    process.env.HOME = tmpRoot;
+    process.env.USERPROFILE = tmpRoot;
+    savedExplicitConfigDir = process.env.GSD_EXPLICIT_CONFIG_DIR;
+    delete process.env.GSD_EXPLICIT_CONFIG_DIR;
+    savedTestMode = process.env.GSD_TEST_MODE;
+    process.env.GSD_TEST_MODE = '1';
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = savedUserProfile;
+    if (savedExplicitConfigDir === undefined) delete process.env.GSD_EXPLICIT_CONFIG_DIR;
+    else process.env.GSD_EXPLICIT_CONFIG_DIR = savedExplicitConfigDir;
+    if (savedTestMode === undefined) delete process.env.GSD_TEST_MODE;
+    else process.env.GSD_TEST_MODE = savedTestMode;
+    cleanup(tmpRoot);
+  });
+
+  // ── Failure 1: the installer provisions a valid marker ──────────────────────
+  test('global claude install writes a .gsd-source marker pointing at a real commands/gsd', () => {
+    const claudeDir = path.join(tmpRoot, '.claude');
+    fs.mkdirSync(claudeDir, { recursive: true });
+
+    runInstall(true /* isGlobal */, 'claude');
+
+    const markerPath = path.join(claudeDir, '.gsd-source');
+    assert.ok(fs.existsSync(markerPath), `.gsd-source marker must be written at ${markerPath}`);
+
+    const markerSrc = fs.readFileSync(markerPath, 'utf8').trim();
+    assert.ok(path.isAbsolute(markerSrc), `marker must contain an absolute path, got: ${markerSrc}`);
+    assert.ok(fs.existsSync(markerSrc), `marker target must exist on disk: ${markerSrc}`);
+    assert.equal(path.basename(markerSrc), 'gsd', 'marker must point at a commands/gsd directory');
+    assert.equal(path.basename(path.dirname(markerSrc)), 'commands');
+  });
+
+  // ── Guard: marker is scoped to claude-global ONLY (#1477 PR-scope) ───────────
+  // Locks the `runtime === 'claude' && isGlobal` write guard. Every other layout
+  // (non-claude runtimes, and claude *local*) ships a commands/gsd source tree, so
+  // findInstallSourceRoot's walk-up already resolves and the marker must not appear.
+  function findGsdSourceMarkers(root) {
+    const found = [];
+    const walk = (dir) => {
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+      for (const e of entries) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (e.name === '.gsd-source') found.push(full);
+      }
+    };
+    walk(root);
+    return found;
+  }
+
+  test('non-claude global install writes no .gsd-source marker (locks runtime === claude)', () => {
+    runInstall(true /* isGlobal */, 'cursor');
+    assert.deepEqual(
+      findGsdSourceMarkers(tmpRoot), [],
+      'a non-claude runtime must not provision the claude-global marker',
+    );
+  });
+
+  test('claude local install writes no .gsd-source marker (locks isGlobal)', () => {
+    // Local installs target process.cwd()/.claude — chdir into the fixture so the
+    // install is contained within tmpRoot rather than polluting the repo.
+    const savedCwd = process.cwd();
+    process.chdir(tmpRoot);
+    try {
+      runInstall(false /* isGlobal */, 'claude');
+    } finally {
+      process.chdir(savedCwd);
+    }
+    assert.deepEqual(
+      findGsdSourceMarkers(tmpRoot), [],
+      'a claude local install must not provision the marker — local ships commands/gsd',
+    );
+  });
+
+  // ── Writer fault-injection: marker write failure is non-fatal + warns ────────
+  // CONTRIBUTING.md filesystem-write QA matrix: prove the marker-writer catch
+  // branch (bin/install.js) is reachable. A failed write (e.g. read-only target)
+  // must not abort the install, and — because walk-up also fails on this layout —
+  // must surface a diagnostic so the broken /gsd-surface is traceable.
+  test('marker write failure does not abort install and warns (locks the writer catch)', () => {
+    const claudeDir = path.join(tmpRoot, '.claude');
+    fs.mkdirSync(claudeDir, { recursive: true });
+
+    const markerPath = path.join(claudeDir, '.gsd-source');
+    const realWriteFileSync = fs.writeFileSync;
+    // Fault-inject ONLY the marker write; every other install write proceeds.
+    mock.method(fs, 'writeFileSync', (file, ...rest) => {
+      if (path.resolve(String(file)) === path.resolve(markerPath)) {
+        throw new Error('EACCES: read-only target (injected)');
+      }
+      return realWriteFileSync(file, ...rest);
+    });
+
+    // Capture console.warn around the install (runInstall's silenceConsole would
+    // otherwise swallow it); still guard process.exit.
+    const warnings = [];
+    const origExit = process.exit;
+    const origWarn = console.warn;
+    const origLog = console.log;
+    process.exit = (code) => { throw new Error(`process.exit(${code}) during install`); };
+    console.warn = (msg) => { warnings.push(String(msg)); };
+    console.log = () => {};
+    try {
+      assert.doesNotThrow(() => install(true /* isGlobal */, 'claude'),
+        'a marker write failure must be non-fatal — install proceeds via the catch');
+    } finally {
+      process.exit = origExit;
+      console.warn = origWarn;
+      console.log = origLog;
+      mock.restoreAll();
+    }
+
+    assert.ok(!fs.existsSync(markerPath), 'the injected fault must leave no marker on disk');
+    assert.ok(
+      warnings.some((w) => /\.gsd-source marker/.test(w)),
+      `the writer catch must warn for diagnosability; got: ${JSON.stringify(warnings)}`,
+    );
+  });
+
+  // ── Failure 1 end-to-end: resolution succeeds FROM the deployed tree ─────────
+  // The deployed module's __dirname is <claudeDir>/gsd-core/bin/lib, which has no
+  // commands/gsd ancestor (global skills layout). Only the marker rescues it.
+  test('deployed global layout resolves the source root via the marker', () => {
+    const claudeDir = path.join(tmpRoot, '.claude');
+    fs.mkdirSync(claudeDir, { recursive: true });
+    runInstall(true /* isGlobal */, 'claude');
+
+    // Sanity: the global layout genuinely ships no commands/gsd source tree.
+    assert.ok(
+      !fs.existsSync(path.join(claudeDir, 'commands', 'gsd')),
+      'precondition: global claude install must not ship commands/gsd',
+    );
+
+    const deployedLayoutPath = path.join(claudeDir, 'gsd-core', 'bin', 'lib', 'runtime-artifact-layout.cjs');
+    assert.ok(fs.existsSync(deployedLayoutPath), 'deployed runtime-artifact-layout.cjs must exist');
+    delete require.cache[deployedLayoutPath];
+    const deployed = require(deployedLayoutPath);
+
+    // Negative proof that the bug condition exists: WITHOUT consulting the marker
+    // (no configDir argument), walk-up from the deployed tree has nothing to find.
+    assert.throws(
+      () => deployed.findInstallSourceRoot(),
+      /could not locate commands\/gsd/,
+      'deployed walk-up must fail without the marker — this is the regression condition',
+    );
+
+    // With the marker (configDir provided), list/status resolution succeeds.
+    let resolved;
+    assert.doesNotThrow(() => {
+      resolved = deployed.findInstallSourceRoot(claudeDir);
+    }, 'findInstallSourceRoot must resolve via the .gsd-source marker');
+    assert.equal(path.basename(resolved), 'gsd');
+    assert.ok(fs.existsSync(resolved));
+  });
+
+  // ── Adversarial marker-reader cases (no full install needed) ─────────────────
+  describe('findInstallSourceRoot marker handling', () => {
+    let cfgDir;
+    beforeEach(() => { cfgDir = createTempDir('gsd-1477-marker-'); });
+    afterEach(() => { cleanup(cfgDir); });
+
+    test('marker pointing at a valid commands/gsd takes precedence over walk-up', () => {
+      const fakeSrc = path.join(cfgDir, 'pkg', 'commands', 'gsd');
+      fs.mkdirSync(fakeSrc, { recursive: true });
+      fs.writeFileSync(path.join(cfgDir, '.gsd-source'), fakeSrc + '\n', 'utf8');
+
+      const resolved = findInstallSourceRoot(cfgDir);
+      assert.equal(path.resolve(resolved), path.resolve(fakeSrc),
+        'marker target must win over the repo walk-up');
+    });
+
+    test('marker pointing at a non-existent path is ignored (falls through to walk-up)', () => {
+      const ghost = path.join(cfgDir, 'does', 'not', 'exist', 'commands', 'gsd');
+      fs.writeFileSync(path.join(cfgDir, '.gsd-source'), ghost + '\n', 'utf8');
+
+      const resolved = findInstallSourceRoot(cfgDir);
+      assert.notEqual(path.resolve(resolved), path.resolve(ghost));
+      assert.equal(path.resolve(resolved), path.resolve(REPO_ROOT, 'commands', 'gsd'));
+    });
+
+    test('empty / whitespace-only marker is ignored', () => {
+      fs.writeFileSync(path.join(cfgDir, '.gsd-source'), '   \n', 'utf8');
+      const resolved = findInstallSourceRoot(cfgDir);
+      assert.equal(path.resolve(resolved), path.resolve(REPO_ROOT, 'commands', 'gsd'));
+    });
   });
 });

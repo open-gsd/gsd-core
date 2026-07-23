@@ -31,14 +31,13 @@ execute → verify → review → ship loop using existing GSD primitives.
 
 ---
 
-## Slash-command forms (hyphen vs colon)
+## Slash-command form
 
-GSD ships **the same set of skills** to every supported runtime, but two slash-form spellings are in play:
+GSD ships **the same set of skills** to every supported runtime, using the hyphen slash-form spelling:
 
 - **Hyphen form** — `/gsd-command-name` — used by Claude Code, Copilot, OpenCode, Kilo, Cursor, Windsurf, Augment, Antigravity, and Trae.
-- **Colon form** — `/gsd:command-name` — used by **Gemini CLI only**. Gemini namespaces every plugin's commands under the plugin id, so the install path rewrites every body-text reference and command file to the colon form during `--gemini` install.
 
-You don't need to choose — the installer writes the correct form into the command directory of each runtime you target. When following a walkthrough on a Gemini terminal, replace the hyphen after `gsd` with a colon as you read each slash command.
+The installer writes this form into the command directory of each runtime you target.
 
 ## Namespace routing primer (`gsd-ns-*`, v1.40+)
 
@@ -48,7 +47,7 @@ GSD ships six **namespace router bundles** (`gsd-ns-workflow`, `gsd-ns-project`,
 
 Each router's body contains a routing table. When the model receives a request, it reads the router, identifies the relevant sub-skill by name, then opens `skills/<name>/SKILL.md` via a file-path `Read`. The concrete skill is fully available — it is not invocable by bare name through the Skill tool's top-level listing, but is reachable through the router.
 
-The nested layout applies only to runtimes with confirmed non-recursive skill loaders: **Claude (global), Cline, Qwen, Hermes, Augment, Trae, Antigravity**. Recursive or unconfirmed loaders (Cursor, Codex, Copilot, Windsurf, CodeBuddy, OpenCode, Kilo) retain the flat layout unchanged.
+The nested layout applies only to runtimes with confirmed non-recursive skill loaders: **Cline, Qwen, Hermes, Augment, Trae**. Claude's loader is also non-recursive, but #924 reverted it flat because the Skill tool hard-errors on unknown names rather than re-routing via the router. Antigravity's loader is also non-recursive, but #1614 moved it flat because `agy` scans only `skills/<name>/SKILL.md` — nested sub-skills were unreachable. Other recursive or unconfirmed loaders (Cursor, Codex, Copilot, Windsurf, CodeBuddy, OpenCode, Kilo) retain the flat layout unchanged.
 
 | Namespace | Router bundle | Routes to |
 |-----------|--------------|-----------|
@@ -80,7 +79,7 @@ The core GSD loop is: **discuss → plan → execute → verify → ship**, repe
 
 See [Your first project](tutorials/your-first-project.md).
 
-For onboarding an existing codebase before starting a new milestone, see [Onboarding an existing codebase](tutorials/onboarding-an-existing-codebase.md).
+For onboarding an existing codebase before starting a new milestone, run `/gsd-onboard` or see [Onboarding an existing codebase](tutorials/onboarding-an-existing-codebase.md).
 
 **Relevant flags at a glance:**
 
@@ -232,7 +231,7 @@ See [docs/workflow-discuss-mode.md](workflow-discuss-mode.md) for the full discu
 
 The discuss-phase captures implementation decisions in CONTEXT.md under a `<decisions>` block as numbered bullets (`- **D-01:** …`). Two gates ensure those decisions survive into plans and shipped code.
 
-**Plan-phase translation gate (blocking).** After planning, GSD refuses to mark the phase planned until every trackable decision appears in at least one plan's `must_haves`, `truths`, or body.
+**Plan-phase translation gate (blocking).** After planning, GSD refuses to mark the phase planned until every trackable decision appears in at least one plan's scanned surfaces: front-matter `must_haves`/`truths`/`objective`, a `## must_haves`/`truths`/`tasks`/`objective` heading, or an `<objective>`/`<tasks>`/`<task>`/`<action>`/`<read_first>`/`<behavior>`/`<verify>`/`<acceptance_criteria>`/`<done>` tag body.
 
 **Verify-phase validation gate (non-blocking).** During verification, GSD searches plans, SUMMARY.md, modified files, and recent commit messages for each trackable decision. Misses are logged to VERIFICATION.md as a warning section; verification status is unchanged.
 
@@ -333,6 +332,15 @@ Seeds are forward-looking ideas with trigger conditions. Unlike backlog items, s
 ```
 
 `/gsd-new-milestone` scans all seeds and presents matches. **Storage:** `.planning/seeds/SEED-NNN-slug.md`
+
+Once you've parked a few, audit them on demand instead of waiting for the next milestone to surface them:
+
+```bash
+/gsd-capture --list-seeds            # Review every parked seed
+/gsd-capture --list-seeds dormant    # Narrow to one status
+```
+
+This is read-only — it renders an audit table (ID, status, scope, trigger, title) and a per-status summary, and never modifies a seed. Filter by `dormant`, `active`, or `triggered` when you only want to see seeds in one state.
 
 ### Persistent Context Threads
 
@@ -453,6 +461,19 @@ The review step slots in after execution and before UAT:
 
 ---
 
+## Coverage-Aware UAT Routing
+
+Historically, `/gsd-verify-work` turned every `## Accomplishments` bullet in a SUMMARY into a manual checkpoint — even deliverables already covered one-to-one by a passing unit test. With a green test suite you were still asked to re-confirm things the tests had already proven, every phase.
+
+GSD now lets the executor record, at authoring time, *how each deliverable was verified*. When a SUMMARY.md carries a `coverage:` frontmatter block (see [the `coverage:` block reference](COMMANDS.md#summary-coverage-block)), `/gsd-verify-work` routes deterministically:
+
+- **Auto-passed** — a deliverable marked `human_judgment: false` whose `verification` list is non-empty and entirely `pass` is recorded as passed (`source: automated`) and never prompted.
+- **Presented** — everything else is shown to you for sign-off: anything flagged `human_judgment: true` (visual adequacy, multi-device behaviour, subjective quality), anything with no verification, anything not fully passing, and any malformed entry.
+
+The asymmetry is deliberate. The worst outcome is auto-passing something broken that UAT existed to catch, so auto-pass is the narrow, fully-proven case and *uncertainty always routes back to you*. Flipping the flag alone cannot skip a prompt — a passing test reference is also required. SUMMARYs without a `coverage:` block behave exactly as before (prose-based checkpoints), so nothing changes for existing or un-migrated phases.
+
+---
+
 ## Command And Configuration Reference
 
 - **Command Reference:** see [`docs/COMMANDS.md`](COMMANDS.md) for every stable command's flags, subcommands, and examples.
@@ -515,10 +536,12 @@ claude --dangerously-skip-permissions
 ### Existing Codebase
 
 ```bash
-/gsd-map-codebase           # Analyse what exists (parallel agents)
-/gsd-new-project            # Questions focus on what you're ADDING
+/gsd-onboard                # Safely map, ingest docs, and initialize planning
+# Follow the printed top-level handoff commands, then rerun /gsd-onboard
 # (normal phase workflow from here)
 ```
+
+`/gsd-onboard` routes through `/gsd-map-codebase`, `/gsd-ingest-docs`, and `/gsd-new-project` without nesting interactive workflows or overwriting existing planning files silently.
 
 **Post-execute drift detection (#2003).** After every `/gsd-execute-phase`, GSD checks whether the phase introduced enough structural change to make `.planning/codebase/STRUCTURE.md` stale. Flip the behavior with:
 
@@ -710,7 +733,7 @@ Each disabled server removes its schema from every subsequent turn. Trimming MCP
 
 For the full audit, harness reference, and the composition note with `model_profile`, see [MCP Tool Schema Cost](../gsd-core/references/context-budget.md#mcp-tool-schema-cost-harness-concern) in the bundled `context-budget.md` reference.
 
-### Using Non-Claude Runtimes (Codex, OpenCode, Gemini CLI, Kilo)
+### Using Non-Claude Runtimes (Codex, OpenCode, Antigravity CLI, Kilo)
 
 > **Codex CLI minimum supported version: `0.130.0`** (issue [#3562](https://github.com/open-gsd/gsd-core/issues/3562)).
 
@@ -754,7 +777,6 @@ See [Runtime-Aware Profiles](CONFIGURATION.md#runtime-aware-profiles-2517).
 
 When generating artifacts, the installer adapts GSD commands to each runtime's native command schema:
 
-- **Gemini CLI** — generated TOML commands use Gemini's `{{args}}` placeholder (translated from Claude's `$ARGUMENTS`) so typed arguments interpolate into the prompt, and `/gsd:progress` injects live project state via a fixed `!{cat .planning/STATE.md 2>/dev/null}` shell block (no interpolated input, so no injection risk; Gemini shows its standard confirmation dialog).
 - **Qwen Code** — main-loop skills carry Qwen's numeric `priority` field so the most-used workflows (e.g. `new-project`, `plan-phase`, `execute-phase`) sort first in the `/skills` list; utility skills are left unset. Higher values sort earlier; the field affects only the `/skills` list order.
 
 See [How to install GSD Core on your runtime](how-to/install-on-your-runtime.md) for the full per-runtime details.
@@ -795,43 +817,6 @@ GSD installs four surfaces for CodeBuddy: `/gsd-*` slash commands in `~/.codebud
 npx @opengsd/gsd-core --qwen --global
 ```
 
-### Installing as a Gemini CLI extension (#775)
-
-GSD ships a `gemini-extension.json` extension manifest at the repository root, so
-Gemini CLI users can install, update, and remove GSD through Gemini's own
-extension lifecycle — and have it show up in `gemini extensions list`:
-
-```bash
-# Install (Gemini clones the repo and copies the extension)
-gemini extensions install https://github.com/open-gsd/gsd-core
-
-# Update to the latest released manifest version
-gemini extensions update gsd-core
-
-# Remove
-gemini extensions uninstall gsd-core
-```
-
-For local development against a checkout, symlink it instead of copying:
-
-```bash
-gemini extensions link /path/to/gsd-core
-```
-
-**What the extension delivers today:** it loads GSD's operating context
-(`GEMINI.md`) into every Gemini session in the project, and gives you the
-discoverable install/update/remove lifecycle above. The `/gsd:*` slash commands,
-agents, and hooks are still installed via the dedicated installer:
-
-```bash
-npx @opengsd/gsd-core --gemini --global
-```
-
-The two paths are complementary and additive — installing the extension does not
-change or replace the `npx gsd-core --gemini` install, and either can be used on
-its own. (Slash-command/agent/hook projection into the extension package itself
-is a planned follow-up.)
-
 ### Installing for Prerelease Editions
 
 Set the runtime's `*_CONFIG_DIR` env var to the prerelease directory before running the installer:
@@ -845,7 +830,6 @@ WINDSURF_CONFIG_DIR=~/.codeium/windsurf-next npx @opengsd/gsd-core@latest --wind
 | Runtime | Stable default | Override env var |
 |---|---|---|
 | Claude Code | `~/.claude` | `CLAUDE_CONFIG_DIR` |
-| Gemini CLI | `~/.gemini` | `GEMINI_CONFIG_DIR` |
 | OpenCode | `XDG_CONFIG_HOME/opencode` | `OPENCODE_CONFIG_DIR` |
 | Codex | (per Codex CLI) | `--config-dir` flag |
 | Copilot | `~/.copilot` | `COPILOT_CONFIG_DIR` (or `COPILOT_HOME`) |
@@ -902,9 +886,9 @@ Since v1.3.1, the installer pre-populates `~/.claude/settings.json` (or
     "allow": [
       "Bash(npx gsd-core *)",
       "Read(.planning/*)",
-      "Write(.planning/*)",
+      "Edit(.planning/*)",
       "Read(STATE.md)",
-      "Write(STATE.md)"
+      "Edit(STATE.md)"
     ],
     "deny": [
       "Read(.env)",
@@ -1004,7 +988,8 @@ To disable parallel execution entirely: `/gsd-settings` → set `parallelization
     themes/
       default.css         # Shared CSS variables for all sketches
     MANIFEST.md           # Index of all sketches with winners
-  codebase/               # Brownfield codebase mapping (from /gsd-map-codebase)
+  codebase/               # Brownfield codebase mapping (from /gsd-map-codebase or /gsd-onboard)
+  onboarding/             # Brownfield onboarding summary (from /gsd-onboard)
   phases/
     XX-phase-name/
       XX-YY-PLAN.md       # Atomic execution plans
@@ -1025,3 +1010,4 @@ To disable parallel execution entirely: `/gsd-settings` → set `parallelization
 - [Commands](COMMANDS.md)
 - [Configuration](CONFIGURATION.md)
 - [The phase loop](explanation/the-phase-loop.md)
+- [Community Capability Registry & EoS Registry](registries/README.md) — discover third-party Capabilities and EoS host integrations

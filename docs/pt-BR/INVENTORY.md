@@ -78,6 +78,7 @@ Esses seis roteadores são entradas apenas descritivas que o modelo seleciona pr
 | Comando | Função | Fonte |
 |---------|--------|-------|
 | `/gsd-new-project` | Inicializa um novo projeto com coleta profunda de contexto e PROJECT.md. | [commands/gsd/new-project.md](../../commands/gsd/new-project.md) |
+| `/gsd-onboard` | Guia código existente por mapeamento, ingestão de docs, configuração de projeto e onboarding summary. | [commands/gsd/onboard.md](../../commands/gsd/onboard.md) |
 | `/gsd-workspace` | Gerencia workspaces GSD — criar (`--new`), listar (`--list`) ou remover (`--remove`) ambientes de workspace isolados. | [commands/gsd/workspace.md](../../commands/gsd/workspace.md) |
 | `/gsd-discuss-phase` | Coleta contexto da fase por meio de perguntas adaptativas antes do planejamento. | [commands/gsd/discuss-phase.md](../../commands/gsd/discuss-phase.md) |
 | `/gsd-mvp-phase` | Planeja uma fase como uma fatia vertical de MVP — história de usuário, divisão SPIDR, depois plan-phase. | [commands/gsd/mvp-phase.md](../../commands/gsd/mvp-phase.md) |
@@ -168,7 +169,7 @@ Esses seis roteadores são entradas apenas descritivas que o modelo seleciona pr
 
 ## Workflows (88 entregues)
 
-Registro completo em `get-shit-done/workflows/*.md`. Workflows são orquestradores enxutos que os comandos referenciam internamente; a maioria não é lida diretamente pelos usuários finais. As linhas abaixo mapeiam cada arquivo de workflow para sua função (derivada do bloco `<purpose>`) e, quando aplicável, para o comando que o invoca.
+Registro completo em `gsd-core/workflows/*.md`. Workflows são orquestradores enxutos que os comandos referenciam internamente; a maioria não é lida diretamente pelos usuários finais. As linhas abaixo mapeiam cada arquivo de workflow para sua função (derivada do bloco `<purpose>`) e, quando aplicável, para o comando que o invoca.
 
 | Workflow | Função | Invocado por |
 |----------|--------|--------------|
@@ -218,6 +219,7 @@ Registro completo em `get-shit-done/workflows/*.md`. Workflows são orquestrador
 | `milestone-summary.md` | Síntese do resumo do milestone — artefato de onboarding e revisão a partir dos artefatos do milestone. | `/gsd-milestone-summary` |
 | `new-milestone.md` | Inicia um novo ciclo de milestone — carregar contexto do projeto, coletar objetivos, atualizar PROJECT.md/STATE.md. | `/gsd-new-milestone` |
 | `new-project.md` | Fluxo unificado de novo projeto — questionamento, pesquisa (opcional), requisitos, roadmap. | `/gsd-new-project` |
+| `onboard.md` | Orquestração de onboarding brownfield — mapear código, ingerir docs, inicializar planning e resumir próximo passo. | `/gsd-onboard` |
 | `new-workspace.md` | Cria um workspace isolado com worktrees/clones do repositório e um `.planning/` independente. | `/gsd-workspace --new` |
 | `next.md` | Detecta o estado atual do projeto e avança automaticamente para o próximo passo lógico. | `/gsd-progress --next` |
 | `node-repair.md` | Operador de reparo autônomo para verificação de tarefa com falha; invocado por `execute-plan`. | `execute-plan.md` (recuperação) |
@@ -266,7 +268,7 @@ Registro completo em `get-shit-done/workflows/*.md`. Workflows são orquestrador
 
 ## Referências (62 entregues)
 
-Registro completo em `get-shit-done/references/*.md`. Referências são documentos de conhecimento compartilhado que workflows e agentes `@-reference`. Os agrupamentos abaixo correspondem a [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#references-get-shit-donereferencesmd) — clusters principais, de workflow, de modelo de raciocínio e a decomposição modular do planejador.
+Registro completo em `gsd-core/references/*.md`. Referências são documentos de conhecimento compartilhado que workflows e agentes `@-reference`. Os agrupamentos abaixo correspondem a [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#references-gsd-corereferencesmd) — clusters principais, de workflow, de modelo de raciocínio e a decomposição modular do planejador.
 
 ### Referências Principais
 
@@ -298,7 +300,7 @@ Registro completo em `get-shit-done/references/*.md`. Referências são document
 | `continuation-format.md` | Formato de continuação/retomada de sessão. |
 | `domain-probes.md` | Perguntas de sondagem específicas de domínio para a discuss-phase. |
 | `gate-prompts.md` | Templates de prompt de portão/checkpoint. |
-| `scout-codebase.md` | Tabela de seleção de tipo de fase → mapa de base de código para a etapa de scout da discuss-phase (extraída via #2551). |
+| `scout-codebase.md` | Tabela de seleção de tipo de fase → mapa de base de código para a etapa de scout da discuss-phase (extraída via a divisão progressiva discuss-phase/modes, #717). |
 | `revision-loop.md` | Padrões de iteração de revisão de plano. |
 | `universal-anti-patterns.md` | Antipadrões universais a detectar e evitar. |
 | `worktree-path-safety.md` | Suite de guarda do worktree: asserção de HEAD, sentinela de drift de cwd (etapa 0a, #3097) e guarda de caminho absoluto (etapa 0b, #3099) — carregados nos prompts de spawn do executor via `<execution_context>`. |
@@ -361,13 +363,13 @@ O agente `gsd-planner` é decomposto em um agente principal mais módulos de ref
 | `user-story-template.md` | Formato de história de usuário para planejamento MVP — campos estruturados "Como / Quero / Para que". |
 | `spidr-splitting.md` | Regras de decomposição de divisão SPIDR para lidar com histórias de usuário grandes no modo MVP. |
 
-> **Subdiretório:** `get-shit-done/references/few-shot-examples/` contém exemplos adicionais de few-shot (`plan-checker.md`, `verifier.md`) que são referenciados por agentes específicos. Estes não são contados nas 62 referências de nível superior.
+> **Subdiretório:** `gsd-core/references/few-shot-examples/` contém exemplos adicionais de few-shot (`plan-checker.md`, `verifier.md`) que são referenciados por agentes específicos. Estes não são contados nas 62 referências de nível superior.
 
 ---
 
 ## Módulos de CLI (81 entregues)
 
-Listagem completa: `get-shit-done/bin/lib/*.cjs`.
+Listagem completa: `gsd-core/bin/lib/*.cjs`.
 
 | Módulo | Responsabilidade |
 |--------|-----------------|
@@ -441,7 +443,7 @@ Listagem completa: `get-shit-done/bin/lib/*.cjs`.
 | `task-command-router.cjs` | Adaptador de roteador de subcomando CJS fino para `gsd-tools task` |
 | `template.cjs` | Seleção e preenchimento de template com substituição de variáveis |
 | `uat.cjs` | Análise de arquivo UAT, rastreamento de dívida de verificação, suporte audit-uat |
-| `ui-safety-gate.cjs` | Detector de token de UI de limite de palavra sem shell (#3706, #3718); lê texto de seção de fase do stdin, sai com 0 (UI encontrada) ou 1 (sem UI); também implantado em `get-shit-done/bin/lib/` para que o instalador GSD o entregue em `$RUNTIME_DIR` (#448) |
+| `ui-safety-gate.cjs` | Detector de token de UI de limite de palavra sem shell (#3706, #3718); lê texto de seção de fase do stdin, sai com 0 (UI encontrada) ou 1 (sem UI); também implantado em `gsd-core/bin/lib/` para que o instalador GSD o entregue em `$RUNTIME_DIR` (#448) |
 | `update-context.cjs` | Resolvedor de contexto de instalação puro para `/gsd:update` — detecção de runtime/escopo/config-dir/versão (LOCAL/GLOBAL/UNKNOWN) portada do bash de update.md; sustenta `gsd-tools update-context` (#498) |
 | `validate-command-router.cjs` | Adaptador de roteador de subcomando CJS fino para `gsd-tools validate` |
 | `validate.cjs` | Auxiliares de normalização de variante de fase puros (`phaseVariants`, `buildRoadmapPhaseVariants`, `buildNotStartedPhaseVariants`) usados por `verify.cjs` para verificações W006/W007; sem I/O, sem async |

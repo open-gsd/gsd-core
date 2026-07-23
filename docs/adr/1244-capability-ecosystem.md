@@ -1,9 +1,30 @@
 # ADR-1244 — Capability Ecosystem: third-party authoring, versioned manifests, and URL import/upgrade/remove
 
-- **Status:** Proposed
+- **Status:** Accepted — ratified 2026-07-17 (originally Proposed 2026-06-14); see "Ratification" below
 - **Date:** 2026-06-14
 
 > **Relationship to other ADRs.** This ADR **amends and extends ADR-857 Decisions 7 and 8** — it does not reverse them. ADR-857 D7 deferred third-party code-loading "to its own ADR"; D8 deferred third-party CLI support "to an external loader + trust/validation gate, no rework because runtimes are already descriptors." This *is* that ADR, and it *delivers* that gate. It builds on **ADR-894** (capability declaration format), **ADR-1016** (runtime capability descriptor), and **ADR-58** (InstallPlan seam). Tracked by [#1244](https://github.com/open-gsd/gsd-core/issues/1244). Target release: **1.6.0**.
+
+---
+
+## Ratification (2026-07-17): Proposed → Accepted
+
+Ratified by explicit maintainer directive; the Status field sat at Proposed for 33 days after the owning issue and all six phase sub-issues had already closed as shipped.
+
+**Evidence the decision shipped:**
+
+- Issue #1244 and all six phase sub-issues (#1430–#1435, Phase 1 through Phase 6) are CLOSED / `stateReason: COMPLETED`.
+- **D1** (versioned manifest): `capabilities/*/capability.json` carry `version` + `engines` (confirmed in `ai-integration`, `antigravity`, `claude-orchestration`).
+- **D2** (runtime overlay): `src/capability-loader.cts:486` exports `loadRegistry({ includeInstalled })`.
+- **D3** (source resolver): `src/capability-source.cts:1080` exports `resolveCapabilitySource`, backed by the four adapters `resolveLocal` (861), `resolveGit` (892), `resolveNpm` (944), `resolveTarball` (1017).
+- **D4** (ledger): `src/capability-ledger.cts` (42.4K) exists with `tests/capability-ledger.test.cjs` (111.0K) covering it.
+- **D5** (trust model): `src/capability-trust.cts` and `src/capability-consent.cts` exist; `strictKnownRegistries` is threaded through `src/capability-lifecycle.cts` at lines 171, 881, 956, and 1079, each backed by `tests/capability-trust.test.cjs` and `tests/capability-consent.test.cjs`.
+- **D6** (upgrade/compat): `src/capability-lifecycle.cts:1078` implements `upgradeCapability` under the documented atomic stage-then-swap (comment header at line 1056); `compatVersions` downgrade handling is present at lines 126, 920, and 1111.
+- **D9** (capability matrix): `docs/reference/capability-matrix.md` (9.4K) exists and is generated from the registry.
+
+Governance: owning issue #1244, `stateReason: COMPLETED`, closed 2026-07-07.
+
+**Known gaps at ratification:** the D8 cross-reference promised back into ADR-857 ("D7 and D8... extended by ADR-1244") was never written — `docs/adr/857-capability-system.md` has no mention of ADR-1244. And epic #1900 (ADR-1244 edge hardening: MCP arg/cwd confinement, tarball/registry SSRF denylist, duplicated injection patterns) remains OPEN with all three of its filed children (#1901, #1902, #1903) closed `NOT_PLANNED` — the epic's own text scopes this as post-ship hardening on an already fail-closed pipeline, not a reversal of any D1–D9 decision, but the hardening itself is not yet scheduled.
 
 ---
 
@@ -83,7 +104,7 @@ A per-runtime install manifest, e.g. `~/.claude/.gsd-capabilities.json`, recordi
     "source": "https://github.com/org/cap.git#sha:…",
     "integrity": "sha512-…",
     "files": ["skills/…", "agents/…"],          // owned files written
-    "sharedEdits": [{ "file": "settings.json", "path": "hooks.PostToolUse[…]" }]
+    "sharedEdits": [{ "file": "settings.json", "marker": "<id>" }]
   }
 }
 ```
@@ -100,12 +121,13 @@ Third-party capabilities may ship the **same artifacts** first-party ships (full
 Hard rules (MUST):
 
 1. **Install never executes capability code.** Staging is copy-only; no `postinstall`-equivalent. (npm `--ignore-scripts` lesson.)
-2. **Executable surfaces are disclosed and consented at install.** `hooks`, `mcpServers`, and command modules activate on the *next tool call* — there is no "first use" gate for a hook — so consent must be at install, naming every executable surface. Declining aborts cleanly.
+2. **Executable surfaces are disclosed and consented at install.** `hooks`, `mcpServers`, and command modules activate on the *next tool call* — there is no "first use" gate for a hook — so consent must be at install, naming every executable surface. The disclosure includes each MCP server's **`env` and `cwd`** (#1459), because an environment variable (e.g. `NODE_OPTIONS=--require evil.js`) can change *what* a command does without touching the command or argv; the disclosure signature folds env/cwd in as stable sorted JSON so any add/change forces re-consent. Declining aborts cleanly.
 3. **Integrity is verified before extraction** when an `integrity`/SHA is available; mismatch aborts. (npm registry-signature lesson.)
 4. **Auto-update is OFF by default** for third-party; enabling it still **re-prompts when the executable set changes** between versions. (VS Code stolen-PAT + silent-auto-update lesson.)
 5. **Modules are `require()`'d only from the capability's own install root** — parent-directory traversal in declared paths is rejected.
 6. **`gsd-*` (and `gsd-core-*`, `anthropic-*`) ids/prefixes are reserved** — third-party cannot impersonate first-party.
 7. **`strictKnownRegistries`** (managed/project config) can lock installs to an allowlist; `[]` means no external installs.
+8. **The consent signal for a project-scope capability is a user-owned consent store, NOT the in-repo ledger** (#1459). The store lives at `${GSD_HOME||homedir()}/.gsd/consent.json` — outside any repository — keyed by `(realpath(projectRoot), id)` and bound to the bundle integrity + disclosure signature. Before activating a project-scope overlay (its declarative loop surfaces **and** its command dispatch) the loader requires a matching record on **this machine**; without it the capability is discovered-but-inactive. This **retracts the prior limitation** that a project-scope ledger living inside the repository was itself the consent — a forged/cloned project ledger could otherwise activate executable + declarative surfaces with no user decision. Global-scope installs (under the user's own home) need no per-project record. `gsd capability trust list`/`revoke` audit and revoke project consents.
 
 Stated honestly: **there is no sandbox.** Node-level sandboxing is impractical and would defeat full parity. Consent + integrity + reversibility are the barrier. (Obsidian's honest acknowledgment.) **Rationale:** a one-time trust prompt does not make running arbitrary code safe; separating *artifact parity* from *trust posture* is what makes full parity defensible.
 

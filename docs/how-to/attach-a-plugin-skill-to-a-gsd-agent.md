@@ -2,7 +2,7 @@
 
 Use this guide when you have a Claude Code plugin that ships a skill and you want GSD agents to load it automatically at spawn time. The `global:<plugin>:<skill>` entry form makes GSD emit a Skill-tool load directive so the agent picks up the plugin skill alongside any project-local or personal global skills.
 
-**This feature works on the Claude runtime only.** On other runtimes (Codex, Gemini, Cursor, etc.) the entry is skipped with a warning. Plan accordingly if your team uses multiple runtimes.
+**This feature works on the Claude runtime only.** On other runtimes (Codex, Antigravity, Cursor, etc.) the entry is skipped with a warning. Plan accordingly if your team uses multiple runtimes.
 
 ---
 

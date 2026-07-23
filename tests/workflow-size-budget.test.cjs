@@ -102,7 +102,7 @@ const DEFAULT_CAP = 40960;  // 40 KiB
 const NEW_FILE_CAP = 32768; // 32 KiB
 
 // Top-level orchestrators that own end-to-end multi-phase rubrics.
-// Grandfathered at current sizes — see PR #2551 for the progressive-disclosure
+// Grandfathered at current sizes — see the discuss-phase/modes split (#717) for the progressive-disclosure
 // pattern that future shrinks should follow. Byte counts noted for reference.
 const XL_WORKFLOWS = new Set([
   'execute-phase',  // 92880 bytes (grew in #381 CLAUDE_ENV_FILE persist clause)
@@ -124,6 +124,7 @@ const LARGE_WORKFLOWS = new Set([
   'update',                // 20766
   'quick',                 // 45710
   'code-review',           // 28726
+  'review',                // multi-reviewer orchestration; outgrew DEFAULT (was at the 40960 ceiling) when the OpenCode reviewer gained JSON reconstruction + a diagnosable empty-output stub (#1936)
 ]);
 
 // Single source of truth for BOTH enumeration and measurement (#1074; finishes
@@ -210,8 +211,8 @@ describe('SIZE: per-file workflow baseline (issue #1074)', () => {
   });
 });
 
-describe('SIZE: discuss-phase progressive disclosure (issue #2551)', () => {
-  // Issue #2551 targets discuss-phase.md as a thin dispatcher, separate from
+describe('SIZE: discuss-phase progressive disclosure (#717 byte budget)', () => {
+  // The discuss-phase progressive-disclosure split (#717) targets discuss-phase.md as a thin dispatcher, separate from
   // the per-tier grandfathered budgets above. Originally expressed as <500
   // lines; re-based to bytes for #717 (500 lines ≈ 28 KB at these files'
   // density; set to 30 KB to preserve the thin-dispatcher intent with modest
@@ -221,12 +222,12 @@ describe('SIZE: discuss-phase progressive disclosure (issue #2551)', () => {
   // Target raised from 30000 to 32000 in #891 (launcher shim expansion added 17 runtime home arms,
   // adding ~960 bytes to the preamble; the thin-dispatcher intent is preserved — actual=30935).
   const DISCUSS_PHASE_TARGET = 32000;
-  test(`discuss-phase.md is under ${DISCUSS_PHASE_TARGET} bytes (issue #2551 target)`, () => {
+  test(`discuss-phase.md is under ${DISCUSS_PHASE_TARGET} bytes (#717 byte budget)`, () => {
     const filePath = path.join(WORKFLOWS_DIR, 'discuss-phase.md');
     const bytes = byteCount(filePath);
     assert.ok(
       bytes < DISCUSS_PHASE_TARGET,
-      `discuss-phase.md is ${bytes} bytes — must be under ${DISCUSS_PHASE_TARGET} per #2551. ` +
+      `discuss-phase.md is ${bytes} bytes — must be under ${DISCUSS_PHASE_TARGET} per #717. ` +
       `Per-mode logic belongs in workflows/discuss-phase/modes/<mode>.md, ` +
       `templates in workflows/discuss-phase/templates/.`
     );

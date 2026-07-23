@@ -77,7 +77,7 @@ paused_at: null
 
 ### Valores de status
 
-`normalizeStateStatus()` em `get-shit-done/bin/lib/state-document.cjs` mapeia o texto bruto do corpo para estes valores canônicos:
+`normalizeStateStatus()` em `gsd-core/bin/lib/state-document.cjs` mapeia o texto bruto do corpo para estes valores canônicos:
 
 | Valor canônico | Texto correspondente (sem diferenciação de maiúsculas/minúsculas) |
 |---|---|
@@ -111,7 +111,7 @@ Quando um comando do orquestrador está em andamento, a convenção (issue #2833
 | **3. Milestone completo** | `percent` é `100` OU `completed_phases == total_phases` | `v2.0 [██████████] 100% · milestone complete` |
 | **4. Fallback padrão** | Nenhuma das anteriores corresponde | `v1.9 Code Quality · executing · ph 1/5` (formato existente) |
 
-**Prioridade de cena:** quando `active_phase` e `next_action` estão populados, a Cena 1 prevalece — um orquestrador está em andamento, portanto uma "próxima recomendação" seria enganosa. Essa prioridade é imposta pela ordem de verificação em `formatGsdState()` e coberta pelo conjunto `"scene priority"` em `tests/enh-2833-phase-lifecycle-statusline.test.cjs`.
+**Prioridade de cena:** quando `active_phase` e `next_action` estão populados, a Cena 1 prevalece — um orquestrador está em andamento, portanto uma "próxima recomendação" seria enganosa. Essa prioridade é imposta pela ordem de verificação em `formatGsdState()` e coberta pelo conjunto `"scene priority"` em `tests/gsd-statusline.test.cjs`.
 
 A barra de progresso (`[██░░░░░░░░] 20%`) é anexada ao segmento do milestone somente quando `progress.percent` está presente no frontmatter; ausente significa sem barra.
 
@@ -119,7 +119,7 @@ A barra de progresso (`[██░░░░░░░░] 20%`) é anexada ao segm
 
 ## Restrições de análise do frontmatter
 
-O hook de linha de status usa análise baseada em regex (sem biblioteca YAML completa), portanto as seguintes restrições se aplicam. Elas são testadas em `tests/enh-2833-phase-lifecycle-statusline.test.cjs`.
+O hook de linha de status usa análise baseada em regex (sem biblioteca YAML completa), portanto as seguintes restrições se aplicam. Elas são testadas em `tests/gsd-statusline.test.cjs`.
 
 1. **O frontmatter deve começar no primeiro caractere do arquivo.** Qualquer coisa — incluindo comentários — acima do `---` de abertura invalida a correspondência. A linha `---` de abertura deve ser exatamente isso, sem espaços no final.
 
@@ -133,7 +133,7 @@ Se uma mudança futura substituir o analisador de regex por uma biblioteca YAML 
 
 ## Seções do corpo Markdown
 
-O corpo (tudo após o `---` de fechamento) segue o template em `get-shit-done/templates/state.md`. As seções padrão são:
+O corpo (tudo após o `---` de fechamento) segue o template em `gsd-core/templates/state.md`. As seções padrão são:
 
 ### Referência do Projeto
 
@@ -153,7 +153,7 @@ Onde o projeto está agora:
 | `Last activity:` | Data ISO (`YYYY-MM-DD`) quando escrito por handler; prosa narrativa quando elaborado pelo executor |
 | `Progress:` | Barra visual, ex.: `[████░░░░░░] 40%` |
 
-Os campos `Status:` e `Last activity:` nesta seção são atualizados pelos handlers do GSD quando o valor existente é um padrão de template conhecido (invariante de Knuth: valores elaborados pelo executor são preservados). A lista completa de padrões de handler conhecidos está em `KNOWN_TEMPLATE_DEFAULTS` dentro de `get-shit-done/bin/lib/state-document.cjs`.
+Os campos `Status:` e `Last activity:` nesta seção são atualizados pelos handlers do GSD quando o valor existente é um padrão de template conhecido (invariante de Knuth: valores elaborados pelo executor são preservados). A lista completa de padrões de handler conhecidos está em `KNOWN_TEMPLATE_DEFAULTS` dentro de `gsd-core/bin/lib/state-document.cjs`.
 
 ### Métricas de Desempenho
 
@@ -189,7 +189,7 @@ Os campos de ciclo de vida de fase (`active_phase`, `next_action`, `next_phases`
 - Adicionar qualquer campo de ciclo de vida é opt-in — o renderizador degrada graciosamente quando os campos estão ausentes.
 - A barra de progresso é opt-in mesmo quando o bloco `progress` existe: somente `progress.percent` ativa a barra; `total_phases` e `completed_phases` sozinhos não ativam.
 
-O conjunto de testes `formatGsdState #2833 backward compatibility` em `tests/enh-2833-phase-lifecycle-statusline.test.cjs` garante essa promessa; qualquer mudança que quebre a renderização legada do `STATE.md` fará o conjunto falhar.
+O conjunto de testes `formatGsdState #2833 backward compatibility` em `tests/gsd-statusline.test.cjs` garante essa promessa; qualquer mudança que quebre a renderização legada do `STATE.md` fará o conjunto falhar.
 
 ---
 

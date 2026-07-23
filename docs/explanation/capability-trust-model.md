@@ -3,8 +3,8 @@
 > **Explanation** — This document describes *why* GSD draws its trust
 > boundaries where it does, and *what the trade-offs are*. It is not a
 > step-by-step guide to installing capabilities; for that, see the how-to
-> guides for [importing a capability](../how-to/) and
-> [version management](../how-to/). For the decision record, see
+> guides for [importing a capability](../how-to/import-a-capability-from-a-url.md) and
+> [version management](../how-to/version-a-capability.md). For the decision record, see
 > [ADR-1244 D5](../adr/1244-capability-ecosystem.md#d5--trust-model-artifact-parity-is-full-trust-posture-is-tiered).
 > For the capability field reference, see the
 > [capability matrix](../reference/capability-matrix.md).
@@ -149,9 +149,18 @@ consent window is install, not first use.
 
 GSD presents a pre-install summary that names every executable surface the
 capability declares (hooks, MCP servers, command modules), their kinds (`step`,
-`contribution`, `gate`), and the loop extension points they register into.
-Declining aborts the install cleanly. Accepting records the consent in the
-ledger.
+`contribution`, `gate`), and the loop extension points they register into. For
+each MCP server the summary also shows the `env` it would be spawned with (each
+key and its — truncated — value) and the `cwd` it would run in, because an
+environment variable can change *what* a command does (for example
+`NODE_OPTIONS=--require /tmp/evil.js`) without touching the command or its
+arguments. Declining aborts the install cleanly. Accepting records the consent
+in the user-owned consent store (see "The project-scope trust boundary"), bound
+to the bundle's integrity and a *disclosure signature* over the executable set
+(hooks, command modules, and each MCP server's command, argv, env, and cwd). The
+signature is a stable, key-order-independent encoding, so any later add or change
+to a surface — including an env or cwd change — deactivates the capability until
+the user re-consents, while a harmless key reorder does not.
 
 For non-executable surfaces (skills, agents, workflow files), the disclosure
 note explains what they do but consent is lighter — they do not execute code.
@@ -171,6 +180,15 @@ whatever is at this URL today."
 What it does not defend against: a malicious capability where the author
 themselves publishes a bad bundle. The SHA is honest about what you are
 installing; it says nothing about whether what you are installing is safe.
+
+It also pins **only the top-level bundle**, not an `npm`-sourced capability's
+resolved dependency graph. `--ignore-scripts` and copy-only staging stop
+install-time execution, but when a command module is later `require()`'d, Node
+resolves and runs its transitive dependencies — which the bundle SHA does not
+cover (the Wiz / VS Code lesson). For the `npm` source kind, a green integrity
+check means "the package tarball is the one you pinned," not "every line of code
+that will run is the code you reviewed." Authors who want a stronger guarantee
+should vendor their dependencies or ship a lockfile.
 
 ### Auto-update off by default, re-consent on executable-set change
 
@@ -200,13 +218,68 @@ rejected at the conformance gate. This prevents impersonation: a malicious
 actor cannot publish a capability called `gsd-security` and exploit a user's
 implicit trust in the GSD namespace.
 
-### `strictKnownRegistries` for managed environments
+### `capabilities.strict_known_registries` for managed environments
 
 Teams or enterprises that want to constrain which capability sources are
-permissible can set `strictKnownRegistries` in managed or project config to an
-explicit allowlist of URLs or registry names. Setting it to `[]` blocks all
-external installs. This gives an administrator a policy lever that operates
-before the user even sees a consent prompt.
+permissible set `capabilities.strict_known_registries` in config. Its semantics:
+
+- **unset / `null`** *(default)* — permissive: external installs (git / npm /
+  tarball) are allowed, each still passing the consent + integrity gate. Local
+  filesystem installs are always allowed.
+- **`[]`** *(explicit empty array)* — lockdown: **all external installs are
+  blocked**; local-only.
+- **non-empty list** — a **host-based** allowlist: only sources whose host
+  matches an entry (exact host or a subdomain of it — `github.com` matches
+  `api.github.com` but never `evilgithub.com`; the literal token `npm` permits
+  the npm source kind). A malformed (non-array) value **fails closed**.
+
+This gives an administrator a policy lever that operates before the user even
+sees a consent prompt. The default is permissive-with-consent (not Obsidian-style
+restricted-by-default), because the epic deliberately chose decentralised import
+with the consent prompt as the default barrier and lockdown one config key away.
+
+### Command dispatch: where third-party code runs (1.6.0)
+
+A capability may declare a **command family** (`commands: [{ family, module,
+router }]`); `gsd-tools <family>` dispatches it by `require()`-ing the router.
+This is the one place a third-party capability's own code executes, so it is
+gated twice. **Consent:** a third-party family is dispatchable only if the
+capability is *active* under the activation gate below — for a project-scoped
+capability that means a **user consent record on this machine**, not merely a
+ledger entry. A bundle merely present on disk (or a project ledger that marks it
+committed) but with no on-this-machine consent record is **not** activated at
+all: no declarative surfaces, no command dispatch. **Confinement:** the router
+module loads only from the capability's own install root (bare-`.cjs` basename,
+`realpath`-confined, rejecting `..` traversal and symlink escape); a first-party
+command can never be shadowed by a third-party one.
+
+#### The project-scope trust boundary
+
+Capabilities install **globally** (`$GSD_HOME/.gsd/capabilities/`) or
+**project-scoped** (`<projectRoot>/.gsd/capabilities/`). The authoritative
+consent signal is **not** the in-repo ledger but a **user-owned consent store**
+that lives **outside any repository**, at
+`${GSD_HOME||homedir()}/.gsd/consent.json`. Each project-scope consent record is
+keyed by `(realpath(projectRoot), capability id)` and binds the bundle's
+`integrity` and its disclosure signature; GSD writes one only when *you* install
+or upgrade that project-scoped capability through the lifecycle on this machine,
+and removes it when you uninstall.
+
+Before activating a project-scoped overlay — for **both** its declarative loop
+surfaces (steps, gates, contributions, federated config) **and** its command
+dispatch — the loader requires a matching record in this store. With no match the
+capability is *discovered but inactive*: it shows up in `gsd capability list`
+with `status: inactive` and a reason, but contributes nothing and runs nothing.
+
+This closes the previous bypass: a repo you check out could ship a capability
+bundle *and* a project ledger that marked it committed, and that alone used to
+activate it. Now a forged or cloned project ledger activates **nothing** until
+you consent on this machine — and because the consent binds the integrity and
+the disclosure signature, tampering with the bundle (including changing an MCP
+server's `env` or `cwd`) deactivates it until you re-consent. A **global**
+install (under your own home) is trusted without a per-project record, as before.
+You can audit and revoke project consents with `gsd capability trust list` and
+`gsd capability trust revoke <id>`.
 
 ---
 

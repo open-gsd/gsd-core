@@ -3,7 +3,7 @@
 /**
  * Equivalence proof for ADR-857 phase 5d: descriptor-driven resolveRuntimeArtifactLayout.
  *
- * For every runtime in the 16-entry capability registry × {global, local} scopes,
+ * For every runtime in the 15-entry capability registry × {global, local} scopes,
  * this test asserts that:
  *   1. kind.kind, kind.destSubpath, kind.prefix are byte-identical to the STEP-0
  *      golden captured from the old switch() before any edits.
@@ -11,11 +11,11 @@
  *   3. layout.runtime === runtime, layout.configDir === configDir, layout.scope === scope.
  *
  * SCOPE-FALL-THROUGH NOTE:
- *   The old switch() had no scope branches for 13 runtimes (cursor, gemini, codex,
+ *   The old switch() had no scope branches for 12 runtimes (cursor, codex,
  *   copilot, antigravity, windsurf, augment, trae, qwen, hermes, codebuddy, opencode,
  *   kilo), meaning scope='local' returned the same kinds as scope='global'. The 5a
  *   descriptors incorrectly set local:[] for those runtimes, causing 31 local-install
- *   test regressions. The 5b backfill sets local == global for these 13, restoring
+ *   test regressions. The 5b backfill sets local == global for these 12, restoring
  *   the old switch's scope-agnostic behaviour.
  *
  *   For runtimes that had explicit scope branches in the old switch
@@ -44,6 +44,8 @@ const FAKE_DIR = '/tmp/fake-config-dir-dd';
 // ── STEP-0 golden (captured from switch BEFORE edits) ────────────────────────
 // Format: { kind, destSubpath, prefix } for each entry in kinds[].
 // 'function' means we assert typeof kind.stage === 'function'.
+// ADR-1235 step 1 (#1763): cursor, windsurf, augment, trae, codebuddy each gained
+// an `agents` kind (appended last). Goldens consciously updated post-cutover.
 
 const GOLDEN = {
   // ── claude ──────────────────────────────────────────────────────────────────
@@ -51,29 +53,23 @@ const GOLDEN = {
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
   ],
   'claude/local': [
-    { kind: 'commands', destSubpath: 'commands/gsd', prefix: 'gsd-' },
-    { kind: 'agents',   destSubpath: 'agents',       prefix: 'gsd-' },
+    { kind: 'commands', destSubpath: 'commands', prefix: 'gsd-' }, // #1367: flat gsd-<cmd>.md
+    { kind: 'agents',   destSubpath: 'agents',   prefix: 'gsd-' },
   ],
 
   // ── cursor ───────────────────────────────────────────────────────────────────
   // Old switch: BOTH scopes returned [skills, commands] (no scope branch).
   // 5b backfill: local == global.
+  // ADR-1235 step 1 (#1763): agents kind added.
   'cursor/global': [
     { kind: 'skills',   destSubpath: 'skills',   prefix: 'gsd-' },
     { kind: 'commands', destSubpath: 'commands',  prefix: 'gsd-' },
+    { kind: 'agents',   destSubpath: 'agents',   prefix: 'gsd-' },
   ],
   'cursor/local': [
     { kind: 'skills',   destSubpath: 'skills',   prefix: 'gsd-' },
     { kind: 'commands', destSubpath: 'commands',  prefix: 'gsd-' },
-  ],
-
-  // ── gemini ───────────────────────────────────────────────────────────────────
-  // Old switch: no scope branch → local == global. 5b backfill restores this.
-  'gemini/global': [
-    { kind: 'commands', destSubpath: 'commands/gsd', prefix: 'gsd-' },
-  ],
-  'gemini/local': [
-    { kind: 'commands', destSubpath: 'commands/gsd', prefix: 'gsd-' },
+    { kind: 'agents',   destSubpath: 'agents',   prefix: 'gsd-' },
   ],
 
   // ── codex ────────────────────────────────────────────────────────────────────
@@ -87,58 +83,75 @@ const GOLDEN = {
 
   // ── copilot ──────────────────────────────────────────────────────────────────
   // Old switch: no scope branch → local == global. 5b backfill restores this.
+  // #1575: agents kind added (copilot cutover — .agent.md rename handled by _copyStaged).
   'copilot/global': [
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
   'copilot/local': [
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
 
   // ── antigravity ──────────────────────────────────────────────────────────────
   // Old switch: no scope branch → local == global. 5b backfill restores this.
+  // #1575: agents kind added (antigravity cutover — scope-aware converter).
   'antigravity/global': [
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
   'antigravity/local': [
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
 
   // ── windsurf ─────────────────────────────────────────────────────────────────
-  // Old switch: no scope branch → local == global. 5b backfill restores this.
+  // ADR-1235 step 1 (#1763): agents kind added to both scopes.
   'windsurf/global': [
-    { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
   'windsurf/local': [
-    { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'commands', destSubpath: 'workflows', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
 
   // ── augment ──────────────────────────────────────────────────────────────────
   // Old switch: no scope branch → local == global. 5b backfill restores this.
+  // ADR-1235 step 1 (#1763): agents kind added.
   'augment/global': [
     { kind: 'commands', destSubpath: 'commands', prefix: 'gsd-' },
     { kind: 'skills',   destSubpath: 'skills',   prefix: 'gsd-' },
+    { kind: 'agents',   destSubpath: 'agents',   prefix: 'gsd-' },
   ],
   'augment/local': [
     { kind: 'commands', destSubpath: 'commands', prefix: 'gsd-' },
     { kind: 'skills',   destSubpath: 'skills',   prefix: 'gsd-' },
+    { kind: 'agents',   destSubpath: 'agents',   prefix: 'gsd-' },
   ],
 
   // ── trae ─────────────────────────────────────────────────────────────────────
   // Old switch: no scope branch → local == global. 5b backfill restores this.
+  // ADR-1235 step 1 (#1763): agents kind added.
   'trae/global': [
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
   'trae/local': [
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
 
   // ── qwen ─────────────────────────────────────────────────────────────────────
   // Old switch: no scope branch → local == global. 5b backfill restores this.
+  // ADR-1239 / #2092 Phase B Upgrade 1: agents kind added (native
+  // .qwen/agents/*.md subagent projection).
   'qwen/global': [
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
   'qwen/local': [
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
 
   // ── hermes ───────────────────────────────────────────────────────────────────
@@ -152,13 +165,16 @@ const GOLDEN = {
 
   // ── codebuddy ────────────────────────────────────────────────────────────────
   // Old switch: no scope branch → local == global. 5b backfill restores this.
+  // ADR-1235 step 1 (#1763): agents kind added.
   'codebuddy/global': [
     { kind: 'commands', destSubpath: 'commands', prefix: 'gsd-' },
     { kind: 'skills',   destSubpath: 'skills',   prefix: 'gsd-' },
+    { kind: 'agents',   destSubpath: 'agents',   prefix: 'gsd-' },
   ],
   'codebuddy/local': [
     { kind: 'commands', destSubpath: 'commands', prefix: 'gsd-' },
     { kind: 'skills',   destSubpath: 'skills',   prefix: 'gsd-' },
+    { kind: 'agents',   destSubpath: 'agents',   prefix: 'gsd-' },
   ],
 
   // ── cline ────────────────────────────────────────────────────────────────────
@@ -178,13 +194,17 @@ const GOLDEN = {
 
   // ── opencode ─────────────────────────────────────────────────────────────────
   // Old switch: no scope branch → local == global. 5b backfill restores this.
+  // #2329: destSubpath corrected from singular 'command' to plural 'commands' —
+  // OpenCode discovers slash commands from commands/ (plural); the singular
+  // command/ dir GSD previously wrote to is not scanned by OpenCode 1.17.13,
+  // so none of the ~71 /gsd-* commands ever appeared in the OpenCode TUI.
   'opencode/global': [
-    { kind: 'commands', destSubpath: 'command', prefix: 'gsd-' },
-    { kind: 'skills',   destSubpath: 'skills',  prefix: 'gsd-' },
+    { kind: 'commands', destSubpath: 'commands', prefix: 'gsd-' },
+    { kind: 'skills',   destSubpath: 'skills',   prefix: 'gsd-' },
   ],
   'opencode/local': [
-    { kind: 'commands', destSubpath: 'command', prefix: 'gsd-' },
-    { kind: 'skills',   destSubpath: 'skills',  prefix: 'gsd-' },
+    { kind: 'commands', destSubpath: 'commands', prefix: 'gsd-' },
+    { kind: 'skills',   destSubpath: 'skills',   prefix: 'gsd-' },
   ],
 
   // ── kilo ─────────────────────────────────────────────────────────────────────
@@ -202,7 +222,7 @@ const GOLDEN = {
 // ── Parametrized tests ────────────────────────────────────────────────────────
 
 const RUNTIMES = [
-  'claude', 'cursor', 'gemini', 'codex', 'copilot',
+  'claude', 'cursor', 'codex', 'copilot',
   'antigravity', 'windsurf', 'augment', 'trae', 'qwen',
   'hermes', 'codebuddy', 'cline', 'kimi', 'opencode', 'kilo',
 ];
@@ -363,13 +383,15 @@ describe('resolveRuntimeArtifactLayout — scope defaults to global (descriptor-
 // ── Non-vacuous check: verify at least one multi-kind runtime ─────────────────
 
 describe('resolveRuntimeArtifactLayout — multi-kind runtimes non-vacuous (descriptor-driven)', () => {
-  test('augment global returns 2 kinds (commands + skills)', () => {
+  test('augment global returns 3 kinds (commands + skills + agents)', () => {
     const layout = resolveRuntimeArtifactLayout('augment', FAKE_DIR, 'global');
-    assert.strictEqual(layout.kinds.length, 2);
+    assert.strictEqual(layout.kinds.length, 3);
     assert.strictEqual(layout.kinds[0].kind, 'commands');
     assert.strictEqual(layout.kinds[1].kind, 'skills');
+    assert.strictEqual(layout.kinds[2].kind, 'agents');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
     assert.strictEqual(typeof layout.kinds[1].stage, 'function');
+    assert.strictEqual(typeof layout.kinds[2].stage, 'function');
   });
 
   test('kimi global returns skills then kimi-agents', () => {
@@ -381,10 +403,11 @@ describe('resolveRuntimeArtifactLayout — multi-kind runtimes non-vacuous (desc
     assert.strictEqual(layout.kinds[1].prefix, 'gsd');
   });
 
-  test('codebuddy global returns commands then skills', () => {
+  test('codebuddy global returns commands then skills then agents', () => {
     const layout = resolveRuntimeArtifactLayout('codebuddy', FAKE_DIR, 'global');
-    assert.strictEqual(layout.kinds.length, 2);
+    assert.strictEqual(layout.kinds.length, 3);
     assert.strictEqual(layout.kinds[0].kind, 'commands');
     assert.strictEqual(layout.kinds[1].kind, 'skills');
+    assert.strictEqual(layout.kinds[2].kind, 'agents');
   });
 });

@@ -18,9 +18,18 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
         with:
+          # Intentionally shallow — see tests/policy-lint-shallow-checkout.test.cjs.
+          # Depth 50 covers >99% of PRs; a deeper merge base fails CLOSED with a
+          # loud lint error, which is the accepted trade.
           fetch-depth: 50
       - name: Fetch base ref for diff
-        run: git fetch --depth=50 origin "${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+        # The BASE REF itself must not be shallow (#2452): scripts/changeset/lint.cjs
+        # diffs with the three-dot form `origin/<base>...HEAD`, which needs a merge
+        # base. Truncating the base's ancestry makes git abort with
+        # `fatal: ...: no merge base` instead of reporting a real verdict.
+        # The shallow *checkout* above is the deliberate cost control; the shallow
+        # *base fetch* was not — it only shrank the window further.
+        run: git fetch origin "${BASE_REF}:refs/remotes/origin/${BASE_REF}"
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5.0.0

@@ -16,6 +16,12 @@ import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
 const { extractFrontmatter } = frontmatter;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import markdownSectionizer = require('./markdown-sectionizer.cjs');
+const { stripFencedCode } = markdownSectionizer;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import verification = require('./verification.cjs');
+const { readVerificationStatus } = verification;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -49,10 +55,8 @@ const BLOCKING_UAT_FM_STATUSES = new Set([
 // UAT file frontmatter `result` values that indicate failure
 const BLOCKING_UAT_FM_RESULTS = new Set(['pending', 'blocked', 'failed']);
 
-// VERIFICATION file frontmatter `status` values that indicate passing
-const PASSING_VERIFICATION_STATUSES = new Set([
-  'complete', 'verified', 'passed', 'human_passed',
-]);
+// Canonical VERIFICATION frontmatter `status` value that indicates passing.
+const PASSING_VERIFICATION_STATUSES = new Set(['passed']);
 
 // VERIFICATION file frontmatter `status` values that explicitly block
 const BLOCKING_VERIFICATION_FM_STATUSES = new Set([
@@ -82,8 +86,8 @@ function stripFalsePositiveContexts(content: string): string {
   // Step (b): remove HTML comments anywhere; unterminated comment swallows to EOF
   stripped = stripped.replace(/<!--[\s\S]*?(?:-->|$)/g, '');
 
-  // Step (c): remove fenced code blocks via CommonMark-style state machine (handles CRLF + indented fences)
-  stripped = _stripFencedBlocks(stripped).text;
+  // Step (c): remove fenced code blocks via the canonical seam (ADR-1372 T5)
+  stripped = stripFencedCode(stripped).text;
 
   // Step (d): remove blockquote lines
   stripped = stripped
@@ -92,61 +96,6 @@ function stripFalsePositiveContexts(content: string): string {
     .join('\n');
 
   return stripped;
-}
-
-interface FenceState {
-  char: '`' | '~';
-  len: number;
-}
-
-interface StripFencedResult {
-  text: string;
-  unterminatedFence: boolean;
-}
-
-/**
- * CommonMark-style fenced-code-block stripper.
- * Tracks the opening delimiter char and length so that a ~~~ line inside a
- * ``` fence is correctly treated as fence content, not a closing delimiter.
- *
- * Opening rule: first delimiter line with char+len sets openFence.
- * Closing rule: delimiter line with SAME char, run length >= openFence.len,
- *   and NO trailing non-whitespace text closes the fence.
- * All delimiter and content lines are dropped; non-fence lines are kept.
- * Returns the kept text plus unterminatedFence:true if EOF inside a fence.
- */
-function _stripFencedBlocks(content: string): StripFencedResult {
-  const lines = content.split('\n');
-  const kept: string[] = [];
-  let openFence: FenceState | null = null;
-  const delimRe = /^(\s*)(`{3,}|~{3,})(.*)$/;
-
-  for (const rawLine of lines) {
-    // Tolerate CRLF: strip trailing \r for matching, but we work on split-by-\n lines
-    // (the outer caller joined by \n already; we just handle a stray \r in the last char)
-    const line = rawLine.replace(/\r$/, '');
-    const m = delimRe.exec(line);
-    if (m) {
-      const char = m[2][0] as '`' | '~';
-      const len = m[2].length;
-      const trailing = m[3];
-      if (openFence === null) {
-        // Opening delimiter — drop this line and record the fence
-        openFence = { char, len };
-      } else if (char === openFence.char && len >= openFence.len && /^\s*$/.test(trailing)) {
-        // Closing delimiter (same char, sufficient length, no trailing text) — drop and close
-        openFence = null;
-      }
-      // else: mismatched delimiter inside fence (e.g. ~~~ inside ```) — drop as content
-      continue; // delimiter lines are always dropped
-    }
-    if (openFence === null) {
-      kept.push(rawLine);
-    }
-    // Lines inside fence are dropped
-  }
-
-  return { text: kept.join('\n'), unterminatedFence: openFence !== null };
 }
 
 /**
@@ -170,8 +119,8 @@ function analyzeMarkdown(raw: string): { unterminatedFence: boolean; unterminate
     i = close + 3;
   }
 
-  // Fence state machine gives the accurate unterminated-fence signal.
-  const { unterminatedFence } = _stripFencedBlocks(raw);
+  // Fence state machine gives the accurate unterminated-fence signal (seam, ADR-1372 T5).
+  const { unterminatedFence } = stripFencedCode(raw);
 
   return { unterminatedFence, unterminatedComment };
 }
@@ -361,8 +310,13 @@ function evaluateUatPassed(
   }
 
   // ── Policy: requireVerification ───────────────────────────────────────────
-  if (requireVerification && !hasPassingVerification) {
-    blockers.push('policy: verification required but no passing *-VERIFICATION.md found');
+  if (requireVerification) {
+    const verificationStatus = readVerificationStatus(phaseFullDir).status;
+    if (verificationStatus === 'stale') {
+      blockers.push('policy: verification status=stale');
+    } else if (verificationStatus !== 'passed' || !hasPassingVerification) {
+      blockers.push('policy: verification required but no passing *-VERIFICATION.md found');
+    }
   }
 
   // ── Determine no_uat_artifacts and passed ─────────────────────────────────

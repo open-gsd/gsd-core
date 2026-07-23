@@ -93,6 +93,17 @@ node gsd-tools.cjs state-snapshot
 
 Returns JSON with: current position, phase, plan, status, decisions, blockers, metrics, last activity.
 
+### Smart Entry
+
+Read-only situation classifier used by `/gsd:next`.
+
+```bash
+node gsd-tools.cjs smart-entry          # Human summary + recommended route
+node gsd-tools.cjs smart-entry --json   # Machine-readable result for workflows
+```
+
+The JSON result contains `situation`, `recommended`, `summary`, `signals`, and ordered `actions[]`. Detection reads `.planning/STATE.md`, `ROADMAP.md`, latest verification/summary artifacts, and git status; it does not write files or dispatch commands.
+
 ---
 
 ## Phase Commands
@@ -203,6 +214,84 @@ node gsd-tools.cjs capability set ui --off --config-dir ~/.claude
 # Keep the capability on, gate one hook off
 node gsd-tools.cjs capability set code-review --gate workflow.code_review=false
 ```
+
+---
+
+## Teams Status
+
+### `query teams-status`
+
+```bash
+node gsd-tools.cjs query teams-status [--active]
+```
+
+Read-only detector for claude-code's experimental agent-teams feature (issue #1355). Resolves the runtime via the canonical `GSD_RUNTIME` → `config.runtime` → `'claude'` precedence, then checks `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`.
+
+**Default (no flags):** prints a JSON object and exits 0:
+
+```json
+{
+  "active": false,
+  "runtime": "claude",
+  "env_present": false,
+  "source": "off: flag absent"
+}
+```
+
+Fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `active` | boolean | `true` only when `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` is strictly truthy (`"1"` or `"true"`, case-insensitive) **and** the resolved runtime is `"claude"` |
+| `runtime` | string | The resolved runtime name (e.g. `"claude"`, `"codex"`) |
+| `env_present` | boolean | `true` when the env flag is set to a strictly-truthy value |
+| `source` | string | One of: `"on: env"`, `"off: flag absent"`, `"off: non-claude"` |
+
+**`--active` flag:** exits 0 if `active` is true, exits 1 otherwise. Prints nothing. Useful in bash conditionals:
+
+```bash
+if gsd_run query teams-status --active >/dev/null 2>&1; then
+  echo "agent-teams is on"
+fi
+```
+
+This command is strictly read-only — no config writes, no disk mutation.
+
+---
+
+### `query eval.score`
+
+```bash
+node gsd-tools.cjs query eval.score --covered <N> --total <N> --infra <tooling>,<dataset>,<cicd>,<guardrails>,<tracing>
+```
+
+Deterministic scorer for eval-auditor results. Computes coverage, infrastructure, and overall scores from audited inputs. Called by `gsd-eval-auditor` in its `calculate_scores` step — agents must not recompute these values by hand.
+
+**Inputs:**
+
+| Flag | Type | Description |
+|---|---|---|
+| `--covered` | integer | Number of eval dimensions scored COVERED |
+| `--total` | integer | Total planned eval dimensions |
+| `--infra` | string | Comma-separated list of 5 infra component statuses (order: tooling, dataset, cicd, guardrails, tracing); each value is `ok`, `partial`, or `missing` |
+
+**Output JSON:**
+
+| Field | Type | Description |
+|---|---|---|
+| `coverage_score` | number | `covered / total × 100` |
+| `infra_score` | number | `(sum of component weights) / 5 × 100` (`ok`=1, `partial`=0.5, `missing`=0) |
+| `overall_score` | number | `(coverage_score × 0.6) + (infra_score × 0.4)` |
+| `verdict` | string | `PRODUCTION READY` (80–100) / `NEEDS WORK` (60–<80) / `SIGNIFICANT GAPS` (40–<60) / `NOT IMPLEMENTED` (0–<40) |
+
+**Example:**
+
+```bash
+node gsd-tools.cjs query eval.score --covered 3 --total 5 --infra ok,partial,missing,ok,ok
+# → {"coverage_score":60,"infra_score":70,"overall_score":64,"verdict":"NEEDS WORK"}
+```
+
+This command is strictly read-only — no config writes, no disk mutation.
 
 ---
 
@@ -332,13 +421,14 @@ node gsd-tools.cjs scaffold phase-dir --phase N --name "phase name"
 
 ## Init Commands (Compound Context Loading)
 
-Load all context needed for a specific workflow in one call. Returns JSON with project info, config, state, and workflow-specific data.
+Load all context needed for a specific workflow in one call. Returns JSON with project info, config, state, and workflow-specific data. `init onboard [--fast] [--text]` reports brownfield signals, planning-doc candidates, codebase-map completeness, fast-map readiness, text-mode routing, partial planning state, and onboarding summary status for `/gsd-onboard`.
 
 ```bash
 node gsd-tools.cjs init execute-phase <phase>
 node gsd-tools.cjs init plan-phase <phase>
 node gsd-tools.cjs init new-project
 node gsd-tools.cjs init new-milestone
+node gsd-tools.cjs init onboard [--fast] [--text]
 node gsd-tools.cjs init quick <description>
 node gsd-tools.cjs init resume
 node gsd-tools.cjs init verify-work <phase>
@@ -366,7 +456,7 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
 ```bash
 # Archive milestone
-node gsd-tools.cjs milestone complete <version> [--name <name>] [--archive-phases]
+node gsd-tools.cjs milestone complete <version> [--name <name>] [--no-archive-phases]
 
 # Mark requirements as complete
 node gsd-tools.cjs requirements mark-complete <ids>
@@ -383,11 +473,26 @@ Emit the skill block for a given agent type.
 # Emit raw XML skill block (default — safe for shell expansion)
 node gsd-tools.cjs agent-skills <agent-type>
 
-# Emit typed JSON surface (#455) — { agent_type, block, skills_count }
+# Emit typed JSON surface (#455) — { agent_type, block, skills_count, warnings, configured, reason, source, degraded }
 node gsd-tools.cjs agent-skills <agent-type> --json
 ```
 
 The `--json` flag returns a typed IR object suitable for structured consumption and test assertions, while the default (no flag) preserves the raw XML output that workflow shell expansions rely on.
+
+**`--json` field reference** (as of #1415, Resolution Provenance P2):
+
+| Field | Type | Description |
+|---|---|---|
+| `agent_type` | `string` | The agent type that was queried. |
+| `block` | `string` | The `<agent_skills>` XML block, or `""` when empty. |
+| `skills_count` | `number` | Number of skill paths configured for this agent type. |
+| `warnings` | `string[]` | Per-path warnings for skills that were skipped (missing `SKILL.md`, unsafe path, etc.). Empty when all configured paths resolved. |
+| `configured` | `boolean` | `true` when the agent type appears in `agent_skills` in the config; `false` when the key is absent entirely. |
+| `reason` | `string` | Resolution reason: `"resolved"` (block non-empty), `"not_configured"` (agent not in `agent_skills` — silent), `"configured_empty"` (configured but paths list is empty — emits stderr WARNING), `"configured_unresolved"` (configured with paths but all failed to resolve — emits stderr WARNING). |
+| `source` | `string` | Config provenance: `"root"` (`.planning/config.json`), `"workstream"` (workstream-scoped config), `"global-defaults"` (`~/.gsd/defaults.json`), `"builtin-defaults"` (no project config). |
+| `degraded` | `boolean` | `true` when a workstream was requested but its config.json was absent and the command fell back to root config; `false` otherwise. |
+
+The command anchors to the project root via `findProjectRoot` before loading config, so invoking it from a descendant subdirectory resolves the same config as the project root.
 
 ---
 
@@ -420,8 +525,14 @@ node gsd-tools.cjs current-timestamp [full|date|filename]
 # Count and list pending todos
 node gsd-tools.cjs list-todos [area]
 
+# List captured seeds (optionally filter by status: dormant|active|triggered)
+node gsd-tools.cjs list-seeds [status]
+
 # Check file/directory existence
 node gsd-tools.cjs verify-path-exists <path>
+
+# Append a row to STATE.md's "Quick Tasks Completed" table (schema-backed; #2133)
+node gsd-tools.cjs quick-tasks-append --task "<description>"
 
 # Aggregate all SUMMARY.md data
 node gsd-tools.cjs history-digest
@@ -488,6 +599,20 @@ node gsd-tools.cjs worktree set-baseref
 | `no-head` | `false` | Not in a git repo (no `HEAD`) |
 
 **`worktree set-baseref`** applies a no-clobber write of `worktree.baseRef:"head"` to `.claude/settings.local.json`. If the file already contains an explicit `baseRef` value other than `"head"`, the existing value is preserved and `skipped:"explicit-other"` is returned. Malformed JSON causes an error rather than a silent overwrite. Both fresh installs and upgrades of GSD Core run this automatically when `workflow.use_worktrees` is enabled (the default); the command is also available for manual use — for example, to apply the setting when worktrees were toggled on after installation, or to re-apply it after a settings change.
+
+### Wave-manifest recording
+
+The execute-phase orchestrator records each spawned executor's worktree identity into a wave cleanup manifest so the matching `cleanup-wave` reader can later merge and remove exactly those worktrees.
+
+```bash
+# Append a validated per-agent entry to the wave cleanup manifest.
+# Returns JSON: { ok, reason, entry, manifest_path } (exit 0), or
+#   { ok:false, reason, hint } with a non-zero exit on a rejected entry.
+node gsd-tools.cjs worktree record-agent \
+  --manifest <path> --agent-id <id> --path <worktree> --branch <branch> --base <sha>
+```
+
+**`worktree record-agent`** appends one `{agent_id, worktree_path, branch, expected_base}` entry to an already-initialized manifest, validating every field **at write time using the same rules the `cleanup-wave` reader enforces** — `--branch` must match the disposable `^(worktree-)?agent-[A-Za-z0-9._/-]+$` namespace (accepts both `agent-<id>` and legacy `worktree-agent-<id>`), and `--path`/`--branch`/`--base` must be non-empty. `--agent-id` is required (write-strict), even though the reader treats it as optional. A missing or garbled field — or a duplicate `(worktree_path, branch)` the reader would dedup away — fails loudly with a recovery hint and a non-zero exit **without** writing, instead of appending an under-populated or silently-dropped entry. Whitespace-only `--path`/`--base` are rejected (values are trimmed). The on-disk manifest shape is unchanged (the reader re-derives `allowed_bases`); the orchestrator still initializes the empty `{orchestrator_root, worktrees: []}` shell inline before any agent is recorded.
 
 ---
 

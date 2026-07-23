@@ -269,7 +269,7 @@ function parseFrontmatterField(content, field) {
  * against the Hunk Verification Table without raw substring matching.
  */
 function parsePipeTable(content, expectedHeaderTokens) {
-  const lines = content.split('\n');
+  const lines = content.split(/\r?\n/);
   for (let i = 0; i < lines.length - 1; i++) {
     const headerLine = lines[i].trim();
     const sepLine = (lines[i + 1] || '').trim();
@@ -332,7 +332,7 @@ describe('reapply-patches workflow contract (#1469)', () => {
     ].map((m) => m[1]);
     assert.ok(blocks.length > 0, 'update.md must define at least one <execution_context> block');
     const includes = blocks
-      .flatMap((blk) => blk.split('\n'))
+      .flatMap((blk) => blk.split(/\r?\n/))
       .map((l) => l.trim())
       .filter((l) => l.startsWith('@'))
       .map((l) => l.replace(/^@/, ''));
@@ -381,7 +381,7 @@ describe('reapply-patches gated hunk verification (#1999)', () => {
     // assert it both names the table and defines an explicit gate
     // condition tied to the `verified` column.
     const content = fs.readFileSync(workflowPath, 'utf8');
-    const step5Match = content.match(/^##\s+Step 5[^\n]*\n([\s\S]*?)(?=^##\s|Z)/m);
+    const step5Match = content.match(/^##\s+Step 5[^\r\n]*\r?\n([\s\S]*?)(?=^##\s|Z)/m);
     assert.ok(step5Match, 'reapply-patches workflow must contain a "## Step 5" section');
     const step5 = step5Match[1];
     assert.ok(
@@ -405,7 +405,7 @@ describe('reapply-patches gated hunk verification (#1999)', () => {
   test('Step 5 also halts when the Hunk Verification Table is absent (Step 4 produced nothing)', () => {
     // Independent gate: missing-table is a separate halt path from any-no-row.
     const content = fs.readFileSync(workflowPath, 'utf8');
-    const step5Match = content.match(/^##\s+Step 5[^\n]*\n([\s\S]*?)(?=^##\s|Z)/m);
+    const step5Match = content.match(/^##\s+Step 5[^\r\n]*\r?\n([\s\S]*?)(?=^##\s|Z)/m);
     assert.ok(step5Match, 'Step 5 section must exist');
     const step5 = step5Match[1];
     const handlesAbsent = /(table is absent|table is missing|missing.*table|absent.*table)/i.test(step5);
@@ -415,3 +415,324 @@ describe('reapply-patches gated hunk verification (#1999)', () => {
     );
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2424-reapply-patches-baseline-detection.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2424-reapply-patches-baseline-detection (consolidation epic #1969 B3 #1972)", () => {
+/**
+ * Bug #2424: reapply-patches pristine-baseline detection uses first-add commit
+ *
+ * The three-way merge baseline detection previously used `git log --diff-filter=A`
+ * which returns the commit that FIRST added the file. On repos that have been
+ * through multiple GSD update cycles, this returns a stale, many-versions-old
+ * baseline — not the version immediately prior to the current update.
+ *
+ * Fix: Option A must prefer `pristine_hashes` from backup-meta.json to locate
+ * the correct baseline commit by SHA-256 matching, with a fallback to the
+ * first-add heuristic only when no pristine hash is recorded.
+ *
+ * #2790: reapply-patches.md (which contained the inline Option A / Option B workflow)
+ * was consolidated into update.md as the --reapply flag. The behavioral contract
+ * (pristine_hashes preference, fallback to first-add) is maintained in the
+ * update.md workflow's --reapply path. These tests now verify the consolidation.
+ */
+
+// allow-test-rule: source-text-is-the-product (see #2424)
+// gsd-core/workflows/update.md is the installed runtime workflow —
+// its text IS the deployed behavioral contract.
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+// #2790: reapply-patches.md (command with inline workflow) was deleted.
+// The --reapply functionality is now in update.md.
+const UPDATE_MD = path.join(__dirname, '..', 'commands', 'gsd', 'update.md');
+
+/**
+ * Parse a field from YAML frontmatter between --- markers.
+ * Returns null if the frontmatter or field is absent.
+ */
+function parseFrontmatterField(content, field) {
+  const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!fmMatch) return null;
+  const fm = fmMatch[1];
+  const quoted = fm.match(new RegExp(`^${field}:\\s+"((?:[^"\\\\]|\\\\.)*)"\\s*$`, 'm'));
+  if (quoted) return quoted[1];
+  const plain = fm.match(new RegExp(`^${field}:\\s+(.+)$`, 'm'));
+  if (plain) return plain[1].trim();
+  return null;
+}
+
+describe('reapply-patches pristine baseline detection (#2424)', () => {
+  test('reapply-patches.md command is deleted (absorbed into update.md --reapply, #2790)', () => {
+    const oldPath = path.join(__dirname, '..', 'commands', 'gsd', 'reapply-patches.md');
+    assert.ok(!fs.existsSync(oldPath), 'reapply-patches.md should be absent (absorbed into update.md --reapply)');
+  });
+
+  test('update.md argument-hint declares --reapply as consolidated entry point', () => {
+    const content = fs.readFileSync(UPDATE_MD, 'utf-8');
+    const argHint = parseFrontmatterField(content, 'argument-hint');
+    assert.ok(
+      argHint && argHint.includes('--reapply'),
+      `update.md argument-hint must declare --reapply flag; got: ${argHint || '(none)'}`
+    );
+  });
+
+  test('update.md workflow references backup-meta.json for pristine-hash baseline', () => {
+    // #2790: The behavioral contract (pristine_hashes from backup-meta.json as primary
+    // baseline source) is implemented in the update.md workflow (gsd-core/workflows/update.md),
+    // not the command file. The command delegates via --reapply flag.
+    // Verify the underlying workflow has this content.
+    const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'update.md');
+    const workflowContent = fs.readFileSync(workflowPath, 'utf-8');
+    assert.ok(
+      workflowContent.includes('backup-meta.json'),
+      'gsd-core/workflows/update.md must reference backup-meta.json (pristine_hashes baseline source)'
+    );
+  });
+
+  test('update.md exists as consolidated entry point', () => {
+    assert.ok(fs.existsSync(UPDATE_MD), 'update.md must exist as consolidated entry point');
+  });
+
+  test('update.md argument-hint declares full consolidated flag surface (--sync | --reapply)', () => {
+    // Validates that both flags absorbed from the deleted micro-skills are declared
+    // in the command contract, not just --reapply alone.
+    const content = fs.readFileSync(UPDATE_MD, 'utf-8');
+    const argHint = parseFrontmatterField(content, 'argument-hint');
+    assert.ok(
+      argHint && argHint.includes('--sync') && argHint.includes('--reapply'),
+      `update.md argument-hint must declare both --sync and --reapply; got: ${argHint || '(none)'}`
+    );
+  });
+});
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3516-reapply-patches-gsd-update-filter.test.cjs — consolidation epic #1969 (B4 #1973)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3516-reapply-patches-gsd-update-filter (consolidation epic #1969 B4 #1973)", () => {
+// allow-test-rule: source-text-is-the-product (see #3516)
+// gsd-core/workflows/reapply-patches.md is the installed runtime workflow —
+// its text IS the deployed behavioral contract for the --reapply flag.
+
+'use strict';
+
+/**
+ * Bug #3516: reapply-patches.md git-enhanced two-way merge filter misses
+ * commits authored by the renamed `/gsd-update` flow.
+ *
+ * The `grep -v` alternation on line 231 only included the legacy `gsd:update`
+ * marker. After the slash-command rename `/gsd:update` → `/gsd-update`, commits
+ * authored by the current flow fall through the filter and are misclassified as
+ * user customizations, prompting spurious merge conflicts during `--reapply`.
+ *
+ * Fix: add `gsd-update` arm to the alternation so both the legacy and current
+ * commit-message prefixes are excluded. `GSD update` and `gsd-install`
+ * exclusions are preserved.
+ *
+ * Per the repo's source-text-is-the-product exception: the workflow file's text
+ * IS the deployed behavioral contract. Structural assertion against the parsed
+ * shell command string is the correct test form here.
+ */
+
+const { describe, test, before } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const WORKFLOW_PATH = path.join(
+  __dirname,
+  '..',
+  'gsd-core',
+  'workflows',
+  'reapply-patches.md',
+);
+
+/**
+ * Extract the git log filter command from the workflow.
+ *
+ * Looks for the `grep -v "..."` shell snippet inside the Git-enhanced two-way
+ * merge section and returns the alternation string between the quotes.
+ * Returns null if the snippet is absent (signals a structural regression).
+ */
+function extractFilterAlternation(content) {
+  // Match the grep -v "..." line in the bash block
+  const match = content.match(/grep\s+-v\s+"([^"]+)"/);
+  if (!match) return null;
+  return match[1];
+}
+
+/**
+ * Parse the alternation string (pipe-delimited) into individual arms.
+ * Handles escaped pipes produced by shell regex syntax (`\|`).
+ */
+function parseAlternationArms(alternation) {
+  // Shell grep alternation uses \| (escaped pipe); split on that
+  return alternation.split(/\\\|/).map((arm) => arm.trim());
+}
+
+describe('Bug #3516: git-enhanced two-way merge filter includes gsd-update arm', () => {
+  let content;
+  let alternation;
+  let arms;
+
+  before(() => {
+    content = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    alternation = extractFilterAlternation(content);
+    arms = alternation ? parseAlternationArms(alternation) : [];
+  });
+
+  test('workflow file exists', () => {
+    assert.ok(
+      fs.existsSync(WORKFLOW_PATH),
+      'gsd-core/workflows/reapply-patches.md must exist',
+    );
+  });
+
+  test('git-enhanced two-way merge section contains a grep -v filter', () => {
+    assert.ok(
+      alternation !== null,
+      'reapply-patches.md must contain a `grep -v "..."` filter in the git-enhanced two-way merge section',
+    );
+  });
+
+  test('filter excludes legacy gsd:update commits (back-compat)', () => {
+    assert.ok(
+      arms.some((arm) => arm === 'gsd:update'),
+      `filter must include 'gsd:update' arm for back-compat; got arms: ${JSON.stringify(arms)}`,
+    );
+  });
+
+  test('filter excludes renamed gsd-update commits (primary fix)', () => {
+    assert.ok(
+      arms.some((arm) => arm === 'gsd-update'),
+      `filter must include 'gsd-update' arm (renamed flow); got arms: ${JSON.stringify(arms)}`,
+    );
+  });
+
+  test('filter excludes GSD update commits (no regression)', () => {
+    assert.ok(
+      arms.some((arm) => arm === 'GSD update'),
+      `filter must include 'GSD update' arm; got arms: ${JSON.stringify(arms)}`,
+    );
+  });
+
+  test('filter excludes gsd-install commits (no regression)', () => {
+    assert.ok(
+      arms.some((arm) => arm === 'gsd-install'),
+      `filter must include 'gsd-install' arm; got arms: ${JSON.stringify(arms)}`,
+    );
+  });
+
+  test('all four expected exclusion patterns are present in the filter', () => {
+    const required = ['gsd:update', 'gsd-update', 'GSD update', 'gsd-install'];
+    const missing = required.filter((p) => !arms.some((arm) => arm === p));
+    assert.deepEqual(
+      missing,
+      [],
+      `filter is missing required exclusion patterns: ${JSON.stringify(missing)}; got arms: ${JSON.stringify(arms)}`,
+    );
+  });
+});
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2994-verify-reapply-patches-installed-path.test.cjs — consolidation epic #1969 (B5 #1974)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2994-verify-reapply-patches-installed-path (consolidation epic #1969 B5 #1974)", () => {
+'use strict';
+
+process.env.GSD_TEST_MODE = '1';
+
+/**
+ * Bug #2994: scripts/verify-reapply-patches.cjs ships in tarball but is
+ * not installed at ${GSD_HOME}/scripts/.
+ *
+ * Root cause: bin/install.js copies the gsd-core/ source tree to
+ * ${configDir}/gsd-core/ but does NOT copy the top-level scripts/
+ * directory. The verifier script lived under scripts/ so /gsd-reapply-patches
+ * Step 5 hit `Cannot find module …/scripts/verify-reapply-patches.cjs`.
+ *
+ * Fix: move the script to gsd-core/bin/verify-reapply-patches.cjs
+ * (which IS installed) and update reapply-patches.md to point there.
+ *
+ * This test enforces the structural invariant that prevents regression.
+ */
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const ROOT = path.join(__dirname, '..');
+const RUNTIME_SCRIPT_PATH = path.join(ROOT, 'gsd-core', 'bin', 'verify-reapply-patches.cjs');
+const STALE_SCRIPT_PATH = path.join(ROOT, 'scripts', 'verify-reapply-patches.cjs');
+const REAPPLY_WORKFLOW = path.join(ROOT, 'gsd-core', 'workflows', 'reapply-patches.md');
+
+describe('Bug #2994: verify-reapply-patches.cjs lives at the runtime-installed path', () => {
+  test('the script exists under gsd-core/bin/ (installed by copyWithPathReplacement)', () => {
+    assert.equal(fs.existsSync(RUNTIME_SCRIPT_PATH), true,
+      `Expected verifier script at ${RUNTIME_SCRIPT_PATH} -- installer copies gsd-core/ recursively`);
+  });
+
+  test('the script does NOT live at the legacy scripts/ path (not installed)', () => {
+    assert.equal(fs.existsSync(STALE_SCRIPT_PATH), false,
+      `scripts/ is not copied by installer; verifier must be under gsd-core/bin/ instead`);
+  });
+
+  test('the script is requireable (loads without throwing)', () => {
+    const mod = require(RUNTIME_SCRIPT_PATH);
+    assert.equal(typeof mod.REASON, 'object');
+    assert.notEqual(mod.REASON, null);
+  });
+});
+
+// Parse reapply-patches.md to extract every `node "${GSD_HOME}/...cjs"`
+// invocation as structured records. Assertions go against the parsed
+// records, not against the markdown text.
+function extractScriptInvocations(markdown) {
+  const invocations = [];
+  const re = /node\s+"\$\{GSD_HOME\}\/([^"]+\.cjs)"/g;
+  let match;
+  while ((match = re.exec(markdown)) !== null) {
+    invocations.push({ relPath: match[1] });
+  }
+  return invocations;
+}
+
+describe('Bug #2994: reapply-patches workflow references the runtime-installed path', () => {
+  test('every node ${GSD_HOME}/... invocation in reapply-patches.md uses an installed runtime path', () => {
+    const md = fs.readFileSync(REAPPLY_WORKFLOW, 'utf-8');
+    const invocations = extractScriptInvocations(md);
+    assert.ok(invocations.length > 0, 'sanity: expected at least one node ${GSD_HOME}/... invocation in reapply-patches.md');
+
+    const violations = invocations.filter(inv => !inv.relPath.startsWith('gsd-core/'));
+    assert.deepEqual(violations, [], `invocations under non-installed paths: ${JSON.stringify(violations)}`);
+  });
+
+  test('reapply-patches.md references the verifier at gsd-core/bin/verify-reapply-patches.cjs', () => {
+    const md = fs.readFileSync(REAPPLY_WORKFLOW, 'utf-8');
+    const invocations = extractScriptInvocations(md);
+    const verifierInvocations = invocations.filter(inv => inv.relPath.endsWith('verify-reapply-patches.cjs'));
+    assert.deepEqual(
+      verifierInvocations.map(i => i.relPath),
+      ['gsd-core/bin/verify-reapply-patches.cjs'],
+      'workflow must call the runtime-installed verifier path exactly once',
+    );
+  });
+});
+  });
+}

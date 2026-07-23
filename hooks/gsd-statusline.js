@@ -6,8 +6,12 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+// Namespace (not destructured) so tests can inject spawn failures by
+// monkeypatching childProcess.execFileSync.
+const childProcess = require('child_process');
 const { isSemverNewer } = require('../gsd-core/bin/lib/semver-compare.cjs');
 const { PACKAGE_NAME, updateCacheFileName } = require('../gsd-core/bin/lib/package-identity.cjs');
+const { normalizeStateStatus } = require('../gsd-core/bin/lib/state-document.cjs');
 
 // --- Config + last-command readers ------------------------------------------
 
@@ -286,6 +290,201 @@ function formatGsdState(s) {
   return parts.join(' · ');
 }
 
+// --- Context token count (opt-in) ---------------------------------------------
+
+/**
+ * Format a token count compactly: 156342 → '156k', 1234567 → '1.2M'.
+ */
+function formatTokens(tokens) {
+  // Promote to the M branch when k-rounding would reach 1000 (999,500-999,999
+  // must render "1.0M", never "1000k").
+  if (tokens >= 1000000 || Math.round(tokens / 1000) >= 1000) {
+    return (tokens / 1000000).toFixed(1) + 'M';
+  }
+  if (tokens >= 1000) return Math.round(tokens / 1000) + 'k';
+  return String(tokens);
+}
+
+/**
+ * Pure function: build the token-count suffix for the context meter from the
+ * hook input's context_window.current_usage block. Sums input, cache-creation,
+ * cache-read, and output tokens (the same total Claude Code's /context shows).
+ * Returns ' (156k)' or '' when usage is absent/empty.
+ */
+function contextTokenSuffix(currentUsage) {
+  if (!currentUsage || typeof currentUsage !== 'object') return '';
+  const total = (Number(currentUsage.input_tokens) || 0) +
+    (Number(currentUsage.cache_creation_input_tokens) || 0) +
+    (Number(currentUsage.cache_read_input_tokens) || 0) +
+    (Number(currentUsage.output_tokens) || 0);
+  return total > 0 ? ` (${formatTokens(total)})` : '';
+}
+
+// --- Compact state format (opt-in) ---------------------------------------------
+
+/**
+ * Collapse GSD's free-text status (often a multi-sentence narrative) to a
+ * single keyword, built on the canonical normalizer (#2162 approval
+ * condition): normalizeStateStatus() in state-document.cjs owns the status
+ * vocabulary (discussing / planning / executing / verifying / completed /
+ * paused) so the two can't drift. "paused" — the canonical stuck state — is
+ * uppercased to PAUSED, the one state worth shouting about. Statuses the
+ * normalizer passes through unrecognized fall back to their first word,
+ * capped at 16 chars so a rogue STATE.md can't blow up the line.
+ * Returns null for empty input.
+ */
+const CANONICAL_STATUSES = ['discussing', 'planning', 'executing', 'verifying', 'completed', 'paused'];
+
+function shortGsdStatus(status) {
+  if (!status) return null;
+  const norm = normalizeStateStatus(status, null);
+  if (CANONICAL_STATUSES.includes(norm)) {
+    return norm === 'paused' ? 'PAUSED' : norm;
+  }
+  // Unrecognized free text passes through normalizeStateStatus verbatim —
+  // fall back to the first word, capped.
+  const first = String(norm).trim().split(/[\s\u2014\u2013-]+/)[0] || '';
+  return first ? first.slice(0, 16) : null;
+}
+
+/**
+ * Compact alternative to formatGsdState, selected via
+ * `statusline.state_format: "compact"`:
+ *
+ *   "v1.12 · P7/12 · executing"     (phase active)
+ *   "v2.0 · P4.5 · BLOCKED"         (no total known)
+ *   "v2.0 · complete"               (milestone done)
+ *   "v2.0 · next execute-phase 4.5" (idle with a queued action)
+ *
+ * Drops the milestone name and progress bar — the biggest width costs in the
+ * default format — and collapses narrative statuses via shortGsdStatus().
+ * The default "full" format is untouched.
+ */
+function formatGsdStateCompact(s) {
+  const parts = [];
+
+  if (s.milestone) parts.push(s.milestone);
+
+  const phaseId = s.activePhase || s.phaseNum;
+  if (phaseId) {
+    parts.push(s.phaseTotal ? `P${phaseId}/${s.phaseTotal}` : `P${phaseId}`);
+  }
+
+  // Scene exclusivity mirrors formatGsdState's if/else chain: an in-flight
+  // phase (Scene 1, gated on activePhase ONLY — the legacy phaseNum shape
+  // still completes) wins over milestone-complete (Scene 3), even if a
+  // non-atomic STATE.md edit leaves percent=100 alongside a lifecycle phase.
+  const done = !s.activePhase && (Number(s.percent) === 100 ||
+    (s.completedPhases && s.totalPhases && s.completedPhases === s.totalPhases));
+
+  if (done) {
+    parts.push('complete');
+  } else {
+    const st = shortGsdStatus(s.status);
+    if (st) {
+      parts.push(st);
+    } else if (!phaseId && s.nextAction) {
+      const phasesStr = (s.nextPhases && s.nextPhases.length > 0) ? s.nextPhases.join('/') : '';
+      parts.push(`next ${s.nextAction}${phasesStr ? ' ' + phasesStr : ''}`);
+    }
+  }
+
+  return parts.join(' \u00b7 ');
+}
+
+// --- Model name --------------------------------------------------------------
+
+/**
+ * Collapse the verbose " (… context)" model-name suffix Claude Code sends for
+ * long-context sessions (e.g. "Sonnet 4.5 (1M context)") to a compact badge
+ * (" (1M)"). The signal is preserved; the width isn't. Tolerant by design
+ * (issue #2160 approval condition): any trailing parenthesized token ending
+ * in "context" is collapsed — a future "(500K context)" becomes "(500K)"
+ * rather than silently no-opping. The token's own casing is preserved.
+ * Any other display name passes through unchanged.
+ */
+function compactModelName(name) {
+  if (typeof name !== 'string') return name;
+  return name.replace(/\s*\(([^)]+?)\s+(?:context|ctx)\)$/i, ' ($1)');
+}
+
+// --- Git segment (opt-in) ------------------------------------------------------
+//
+// Opt-in via `statusline.show_git: true` in .planning/config.json. Renders the
+// current branch plus compact work-state markers after the directory segment:
+//   " │ main+2~1?3↑1"  (staged / unstaged / untracked / ahead / behind)
+//   " │ main✓"         (clean, in sync)
+// One `git status --porcelain=v2 --branch` spawn per render — no shell, args
+// are a fixed array, and the workspace dir is passed via -C. Fails silently
+// (segment absent) outside a repo, without git, or on timeout.
+
+const GIT_STATUS_TIMEOUT_MS = 1500;
+
+/**
+ * Run `git status --porcelain=v2 --branch` in dir.
+ * Returns raw stdout, or null when git is missing, dir isn't a repo, or the
+ * call times out. Never throws.
+ */
+function readGitStatus(dir) {
+  try {
+    // 8 MiB maxBuffer (default 1 MiB) headroom for repos with very many changed
+    // or untracked files; overflow still degrades safely to segment-absent via
+    // the catch below.
+    return childProcess.execFileSync('git', ['-C', dir, 'status', '--porcelain=v2', '--branch'],
+      { encoding: 'utf8', timeout: GIT_STATUS_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Pure function: parse `git status --porcelain=v2 --branch` output.
+ *
+ * Returns { branch, ahead, behind, staged, unstaged, untracked } or null when
+ * the text carries no branch header (not a repo / unparseable). Detached HEAD
+ * reports branch "(detached)" — porcelain v2's literal spelling, shown as-is.
+ * Unmerged (conflict) entries count as unstaged: they're pending work either way.
+ */
+function parseGitStatus(text) {
+  if (typeof text !== 'string') return null;
+  const info = { branch: null, ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0 };
+  for (const line of text.split('\n')) {
+    if (line.startsWith('# branch.head ')) {
+      info.branch = line.slice('# branch.head '.length).trim() || null;
+    } else if (line.startsWith('# branch.ab ')) {
+      const m = line.match(/\+(\d+) -(\d+)/);
+      if (m) { info.ahead = parseInt(m[1], 10); info.behind = parseInt(m[2], 10); }
+    } else if (line.startsWith('1 ') || line.startsWith('2 ')) {
+      // Changed / renamed entries: XY pair at cols 2-3, '.' = unmodified side
+      const xy = line.slice(2, 4);
+      if (xy[0] !== '.') info.staged++;
+      if (xy[1] !== '.') info.unstaged++;
+    } else if (line.startsWith('u ')) {
+      info.unstaged++;
+    } else if (line.startsWith('? ')) {
+      info.untracked++;
+    }
+  }
+  return info.branch ? info : null;
+}
+
+/**
+ * Pure function: format parsed git info into the statusline segment, divider
+ * included (mirrors lastCmdSuffix). Branch is dimmed to match the directory
+ * segment; markers keep their own colors. Returns '' when info is absent.
+ */
+function buildGitSegment(info) {
+  if (!info || !info.branch) return '';
+  const markers = [];
+  if (info.staged) markers.push(`\x1b[32m+${info.staged}\x1b[0m`);
+  if (info.unstaged) markers.push(`\x1b[33m~${info.unstaged}\x1b[0m`);
+  if (info.untracked) markers.push(`\x1b[31m?${info.untracked}\x1b[0m`);
+  if (info.ahead) markers.push(`\x1b[32m↑${info.ahead}\x1b[0m`);
+  if (info.behind) markers.push(`\x1b[31m↓${info.behind}\x1b[0m`);
+  const state = markers.length ? markers.join('') : '\x1b[32m✓\x1b[0m';
+  return ` │ \x1b[2m${info.branch}\x1b[0m${state}`;
+}
+
 // --- stdin ------------------------------------------------------------------
 
 function runStatusline() {
@@ -299,10 +498,15 @@ function runStatusline() {
   clearTimeout(stdinTimeout);
   try {
     const data = JSON.parse(input);
-    const model = data.model?.display_name || 'Claude';
+    const model = compactModelName(data.model?.display_name || 'Claude');
     const dir = data.workspace?.current_dir || process.cwd();
     const session = data.session_id || '';
     const remaining = data.context_window?.remaining_percentage;
+
+    // Read .planning config once — used by the context meter (token suffix)
+    // and the last-command/position block below. Fail-soft to {}.
+    let cfg = {};
+    try { cfg = readGsdConfig(dir); } catch (e) {}
 
     // Context window display (shows USED percentage scaled to usable context)
     // Claude Code reserves a buffer for autocompact. By default this is ~16.5%
@@ -349,15 +553,21 @@ function runStatusline() {
       const filled = Math.floor(used / 10);
       const bar = '█'.repeat(filled) + '░'.repeat(10 - filled);
 
+      // Opt-in absolute token count after the percentage (statusline.show_context_tokens)
+      let tokenSuffix = '';
+      if (getConfigValue(cfg, 'statusline.show_context_tokens') === true) {
+        tokenSuffix = contextTokenSuffix(data.context_window?.current_usage);
+      }
+
       // Color based on usable context thresholds
       if (used < 50) {
-        ctx = ` \x1b[32m${bar} ${used}%\x1b[0m`;
+        ctx = ` \x1b[32m${bar} ${used}%${tokenSuffix}\x1b[0m`;
       } else if (used < 65) {
-        ctx = ` \x1b[33m${bar} ${used}%\x1b[0m`;
+        ctx = ` \x1b[33m${bar} ${used}%${tokenSuffix}\x1b[0m`;
       } else if (used < 80) {
-        ctx = ` \x1b[38;5;208m${bar} ${used}%\x1b[0m`;
+        ctx = ` \x1b[38;5;208m${bar} ${used}%${tokenSuffix}\x1b[0m`;
       } else {
-        ctx = ` \x1b[5;31m💀 ${bar} ${used}%\x1b[0m`;
+        ctx = ` \x1b[5;31m💀 ${bar} ${used}%${tokenSuffix}\x1b[0m`;
       }
     }
 
@@ -392,8 +602,9 @@ function runStatusline() {
       }
     }
 
-    // GSD state (milestone · status · phase) — shown when no todo task
-    const gsdStateStr = task ? '' : formatGsdState(readGsdState(dir) || {});
+    // GSD state (milestone · status · phase) — shown when no todo task.
+    // Format resolved below once config is read (statusline.state_format).
+    let gsdStateStr = '';
 
     // GSD update available?
     // Read only the per-package shared cache file (#607). The legacy
@@ -421,8 +632,9 @@ function runStatusline() {
     // Failure here must never break the statusline — wrap the entire lookup.
     let lastCmdSuffix = '';
     let position = 'end';
+    let stateFormat = 'full';
+    let gitSuffix = '';
     try {
-      const cfg = readGsdConfig(dir);
       if (getConfigValue(cfg, 'statusline.show_last_command') === true) {
         const transcriptPath = data.transcript_path;
         const lastCmd = readLastSlashCommand(transcriptPath);
@@ -432,8 +644,17 @@ function runStatusline() {
       }
       const cfgPos = getConfigValue(cfg, 'statusline.context_position');
       if (cfgPos != null) position = cfgPos;
+      if (getConfigValue(cfg, 'statusline.state_format') === 'compact') stateFormat = 'compact';
+      if (getConfigValue(cfg, 'statusline.show_git') === true) {
+        gitSuffix = buildGitSegment(parseGitStatus(readGitStatus(dir)));
+      }
     } catch (e) {
-      // Never break the statusline on config/transcript errors
+      // Never break the statusline on config/transcript/git errors
+    }
+
+    if (!task) {
+      const state = readGsdState(dir) || {};
+      gsdStateStr = stateFormat === 'compact' ? formatGsdStateCompact(state) : formatGsdState(state);
     }
 
     // Output
@@ -444,7 +665,7 @@ function runStatusline() {
         ? `\x1b[2m${gsdStateStr}\x1b[0m`
         : null;
 
-    process.stdout.write(composeStatusline({ gsdUpdate, model, ctx, middle, dirname, lastCmdSuffix, position }));
+    process.stdout.write(composeStatusline({ gsdUpdate, model, ctx, middle, dirname, lastCmdSuffix, gitSuffix, position }));
   } catch (e) {
     // Silent fail - don't break statusline on parse errors
   }
@@ -463,6 +684,7 @@ function runStatusline() {
  * @param {string|null} [opts.middle=null]  - middle segment (todo task or GSD state), null = absent
  * @param {string} opts.dirname             - project directory basename (dim styling applied here)
  * @param {string} [opts.lastCmdSuffix='']  - last-command suffix, e.g. ' │ last: /foo'
+ * @param {string} [opts.gitSuffix='']      - git branch/status segment, e.g. ' │ main✓' (after dirname)
  * @param {'end'|'front'} [opts.position='end']
  *   - 'end'   (default): ctx appended after dirname — preserved byte-for-byte
  *   - 'front': ctx immediately after model name so the meter stays visible in narrow terminals
@@ -478,6 +700,7 @@ function composeStatusline({
   middle = null,
   dirname,
   lastCmdSuffix = '',
+  gitSuffix = '',
   position = 'end',
 } = {}) {
   const modelSeg = `\x1b[2m${model}\x1b[0m`;
@@ -486,12 +709,12 @@ function composeStatusline({
   const pos = position === 'front' ? 'front' : 'end';
 
   if (pos === 'front') {
-    if (middle) return `${gsdUpdate}${modelSeg}${ctx} │ ${middle} │ ${dirSeg}${lastCmdSuffix}`;
-    return `${gsdUpdate}${modelSeg}${ctx} │ ${dirSeg}${lastCmdSuffix}`;
+    if (middle) return `${gsdUpdate}${modelSeg}${ctx} │ ${middle} │ ${dirSeg}${gitSuffix}${lastCmdSuffix}`;
+    return `${gsdUpdate}${modelSeg}${ctx} │ ${dirSeg}${gitSuffix}${lastCmdSuffix}`;
   }
   // 'end' — preserved byte-for-byte relative to original inline templates
-  if (middle) return `${gsdUpdate}${modelSeg} │ ${middle} │ ${dirSeg}${ctx}${lastCmdSuffix}`;
-  return `${gsdUpdate}${modelSeg} │ ${dirSeg}${ctx}${lastCmdSuffix}`;
+  if (middle) return `${gsdUpdate}${modelSeg} │ ${middle} │ ${dirSeg}${gitSuffix}${ctx}${lastCmdSuffix}`;
+  return `${gsdUpdate}${modelSeg} │ ${dirSeg}${gitSuffix}${ctx}${lastCmdSuffix}`;
 }
 
 function isInstalledAheadOfLatest(installed, latest) {
@@ -531,6 +754,11 @@ module.exports = {
   composeStatusline,
   isInstalledAheadOfLatest,
   evaluateUpdateCache,
+  formatTokens,
+  contextTokenSuffix,
+  shortGsdStatus, formatGsdStateCompact,
+  compactModelName,
+  readGitStatus, parseGitStatus, buildGitSegment,
 };
 
 /**
@@ -538,12 +766,14 @@ module.exports = {
  * testing without feeding stdin. Returns the rendered string.
  */
 function renderStatusline(data) {
-  const model = data.model?.display_name || 'Claude';
+  const model = compactModelName(data.model?.display_name || 'Claude');
   const dir = data.workspace?.current_dir || process.cwd();
   const dirname = path.basename(dir);
 
   let lastCmdSuffix = '';
   let position = 'end';
+  let stateFormat = 'full';
+  let gitSuffix = '';
   try {
     const cfg = readGsdConfig(dir);
     if (getConfigValue(cfg, 'statusline.show_last_command') === true) {
@@ -554,11 +784,16 @@ function renderStatusline(data) {
     }
     const cfgPos = getConfigValue(cfg, 'statusline.context_position');
     if (cfgPos != null) position = cfgPos;
+    if (getConfigValue(cfg, 'statusline.state_format') === 'compact') stateFormat = 'compact';
+    if (getConfigValue(cfg, 'statusline.show_git') === true) {
+      gitSuffix = buildGitSegment(parseGitStatus(readGitStatus(dir)));
+    }
   } catch (e) { /* swallow */ }
 
-  const gsdStateStr = formatGsdState(readGsdState(dir) || {});
+  const state = readGsdState(dir) || {};
+  const gsdStateStr = stateFormat === 'compact' ? formatGsdStateCompact(state) : formatGsdState(state);
   const middle = gsdStateStr ? `\x1b[2m${gsdStateStr}\x1b[0m` : null;
-  return composeStatusline({ model, ctx: '', middle, dirname, lastCmdSuffix, position });
+  return composeStatusline({ model, ctx: '', middle, dirname, lastCmdSuffix, gitSuffix, position });
 }
 
 module.exports.renderStatusline = renderStatusline;

@@ -1,16 +1,23 @@
 {
   "id": "cursor",
   "role": "runtime",
+  "version": "1.8.0",
   "title": "Cursor",
   "description": "Cursor IDE — skills + converted commands artifact layout; hooks.json surface; Claude hook event dialect; recursive skill loader (flat nesting); tier-2 support.",
   "tier": "core",
   "requires": [],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
   "runtime": {
     "configHome": {
       "kind": "dot-home",
       "name": ".cursor",
-      "env": ["CURSOR_CONFIG_DIR"]
+      "env": [
+        "CURSOR_CONFIG_DIR"
+      ]
     },
+    "localConfigDir": ".cursor",
     "configFormat": "none",
     "artifactLayout": {
       "global": [
@@ -29,6 +36,14 @@
           "nesting": "flat",
           "recursive": false,
           "converter": "convertClaudeCommandToCursorCommand"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToCursorAgent"
         }
       ],
       "local": [
@@ -47,6 +62,14 @@
           "nesting": "flat",
           "recursive": false,
           "converter": "convertClaudeCommandToCursorCommand"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToCursorAgent"
         }
       ]
     },
@@ -58,6 +81,42 @@
     "installSurface": "cursor-hooks-json",
     "writesSharedSettings": false,
     "permissionWriter": null,
-    "extendedHookEvents": []
+    "extendedHookEvents": [],
+    "hostIntegration": {
+      "embeddingMode": "imperative",
+      "commandSurface": "slash-file",
+      "dispatch": {
+        "namedDispatch": true,
+        "nested": true,
+        "maxDepth": 2,
+        "background": true,
+        "subagentToolkit": "full",
+        "backgroundDispatch": true
+      },
+      "modelMode": "passive",
+      "hookBus": "host",
+      "stateIO": "filesystem",
+      "transport": "mcp",
+      "runtime": "node",
+      "effortSurface": "undocumented"
+    },
+    "hostBehaviors": {
+      "reapplyCommand": "gsd-update --reapply (mention the skill name)",
+      "frontmatterDialect": "cursor",
+      "hooksJsonSurface": true,
+      "skipSharedHooksInstall": true,
+      "reportCommandsDir": true,
+      "skipUpdateBannerCommand": true,
+      "skipSettingsUi": true,
+      "managedHookEvents": [
+        "sessionStart",
+        "postToolUse",
+        "preToolUse",
+        "stop",
+        "subagentStart",
+        "subagentStop"
+      ],
+      "reviewerCli": true
+    }
   }
 }

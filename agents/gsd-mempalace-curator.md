@@ -22,7 +22,7 @@ If `mempalace.enabled !== true`, do nothing and report `MemPalace disabled — c
 ## Wing / mode / transport
 
 - **Wing:** `mempalace.wing` if non-empty, else `project_code`, else the repo directory name. Every call you make is scoped to this one wing.
-- **Mode:** only `augment` is currently wired — KG writes are an additive mirror of `.planning/graphs/`. `kg_backend`/`replace` are forward-declared and behave as `augment` today.
+- **Mode** (`mempalace.memory_mode`): under `augment`, KG writes are an additive mirror of `.planning/graphs/`. Under `kg_backend`/`replace`, the palace KG is the authoritative fact store — still mirror every fact here as the primary target; GSD's normal graphify keeps `.planning/graphs/` current, so an unreachable palace never loses history.
 - **Transport:** prefer the `mempalace_*` MCP tools interactively; fall back to the `mempalace` CLI in headless/cron runs. If neither is reachable, report unavailability and stop — do not error.
 
 ## Tasks (each independently best-effort)

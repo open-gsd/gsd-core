@@ -47,7 +47,7 @@ function makeManifest() {
 function readJsonl(filePath) {
   const raw = fs.readFileSync(filePath, 'utf8').trim();
   if (!raw) return [];
-  return raw.split('\n').map(line => JSON.parse(line));
+  return raw.split(/\r?\n/).map(line => JSON.parse(line));
 }
 
 // ─── Shared state for the test group ─────────────────────────────────────────

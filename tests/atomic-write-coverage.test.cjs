@@ -32,7 +32,7 @@ const libDir = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'lib');
  */
 function findBareWrites(filePath) {
   const content = fs.readFileSync(filePath, 'utf-8');
-  const lines = content.split('\n');
+  const lines = content.split(/\r?\n/);
   const hits = [];
   for (let i = 0; i < lines.length; i++) {
     if (/\bfs\.writeFileSync\s*\(/.test(lines[i])) {

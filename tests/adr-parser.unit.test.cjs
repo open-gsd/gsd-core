@@ -620,10 +620,10 @@ describe('parseAdrMarkdown: risks section', () => {
     assert.deepEqual(out.consequences_positive, []);
   });
 
-  test('"Trade-offs" heading normalized to "trade offs" does NOT match synonym "trade-offs" (unreachable synonym)', () => {
+  test('"Trade-offs" maps to consequences_negative (M7: both sides normalized, synonym now reachable)', () => {
     const out = parseAdrMarkdown('## Trade-offs\n- Increased latency.');
-    assert.deepEqual(out.consequences_negative, []);
-    assert.ok(out.unmapped_headers.includes('Trade-offs'));
+    assert.deepEqual(out.consequences_negative, ['Increased latency.']);
+    assert.ok(!out.unmapped_headers.includes('Trade-offs'));
   });
 
   test('"Drawbacks" maps to consequences_negative', () => {
@@ -712,12 +712,12 @@ describe('parseAdrMarkdown: success_criteria section', () => {
     assert.deepEqual(out.consequences_positive, ['Better DX.']);
   });
 
-  test('"How We\'ll Know" normalized to "how well know" does NOT match synonym "how we\'ll know" (unreachable synonym)', () => {
-    // The apostrophe in "we'll" is stripped by normalizeAdrHeader, yielding "how well know".
-    // The synonym "how we'll know" is stored with apostrophe — can't match.
+  test('"How We\'ll Know" maps to consequences_positive (M7: synonym normalized on both sides, now reachable)', () => {
+    // The apostrophe in "we'll" is stripped by normalizeAdrHeader on BOTH the header and the
+    // synonym, so both yield "how well know" and now match (success_criteria → consequences_positive).
     const out = parseAdrMarkdown("## How We'll Know\n- Sales increase.");
-    assert.deepEqual(out.consequences_positive, []);
-    assert.ok(out.unmapped_headers.includes("How We'll Know"));
+    assert.deepEqual(out.consequences_positive, ['Sales increase.']);
+    assert.ok(!out.unmapped_headers.includes("How We'll Know"));
   });
 
   test('"Compliance" maps to consequences_positive', () => {
@@ -967,12 +967,10 @@ describe('parseAdrMarkdown: key_files section', () => {
 // parseAdrMarkdown — out_of_scope section
 // ─────────────────────────────────────────────────────────────────────────────
 describe('parseAdrMarkdown: out_of_scope section', () => {
-  test('"Non-goals" heading normalized to "non goals" does NOT match synonym "non-goals" (unreachable synonym)', () => {
-    // "Non-goals" normalizes to "non goals"; CANONICAL_HEADERS stores "non-goals" (with hyphen).
-    // classifyHeader does exact equality — these can't match, so it goes to unmapped_headers.
+  test('"Non-goals" maps to out_of_scope (M7: both sides normalized to "non goals", now reachable)', () => {
     const out = parseAdrMarkdown('## Non-goals\n- Not this.');
-    assert.deepEqual(out.out_of_scope, []);
-    assert.ok(out.unmapped_headers.includes('Non-goals'));
+    assert.deepEqual(out.out_of_scope, ['Not this.']);
+    assert.ok(!out.unmapped_headers.includes('Non-goals'));
   });
 
   test('"Excluded" maps to out_of_scope', () => {
@@ -995,10 +993,10 @@ describe('parseAdrMarkdown: out_of_scope section', () => {
     assert.deepEqual(out.out_of_scope, ['Billing system.']);
   });
 
-  test('"Anti-goals" heading normalized to "anti goals" does NOT match synonym "anti-goals" (unreachable synonym)', () => {
+  test('"Anti-goals" maps to out_of_scope (M7: both sides normalized to "anti goals", now reachable)', () => {
     const out = parseAdrMarkdown('## Anti-goals\n- Gold plating.');
-    assert.deepEqual(out.out_of_scope, []);
-    assert.ok(out.unmapped_headers.includes('Anti-goals'));
+    assert.deepEqual(out.out_of_scope, ['Gold plating.']);
+    assert.ok(!out.unmapped_headers.includes('Anti-goals'));
   });
 
   test('out_of_scope is empty when no section', () => {
@@ -1026,12 +1024,10 @@ describe('parseAdrMarkdown: deferred section', () => {
     assert.deepEqual(out.deferred, ['Optimize later.']);
   });
 
-  test('"Follow-up" heading normalized to "follow up" does NOT match synonym "follow-up" (unreachable synonym)', () => {
-    // Synonym "follow-up" has a hyphen which normalizeAdrHeader converts to a space.
-    // Since classifyHeader does exact string comparison with raw synonyms, this can't match.
+  test('"Follow-up" maps to deferred (M7: both sides normalized to "follow up", now reachable)', () => {
     const out = parseAdrMarkdown('## Follow-up\n- Monitor metrics.');
-    assert.deepEqual(out.deferred, []);
-    assert.ok(out.unmapped_headers.includes('Follow-up'));
+    assert.deepEqual(out.deferred, ['Monitor metrics.']);
+    assert.ok(!out.unmapped_headers.includes('Follow-up'));
   });
 
   test('"Next Steps" maps to deferred', () => {
@@ -1074,10 +1070,10 @@ describe('parseAdrMarkdown: dependencies section', () => {
     assert.deepEqual(out.dependencies, ['Team capacity.']);
   });
 
-  test('"Cross-cuts" heading normalized to "cross cuts" does NOT match synonym "cross-cuts" (unreachable synonym)', () => {
+  test('"Cross-cuts" maps to dependencies (M7: both sides normalized to "cross cuts", now reachable)', () => {
     const out = parseAdrMarkdown('## Cross-cuts\n- Security layer.');
-    assert.deepEqual(out.dependencies, []);
-    assert.ok(out.unmapped_headers.includes('Cross-cuts'));
+    assert.deepEqual(out.dependencies, ['Security layer.']);
+    assert.ok(!out.unmapped_headers.includes('Cross-cuts'));
   });
 
   test('"Related ADRs" maps to dependencies', () => {
@@ -1144,10 +1140,11 @@ describe('parseAdrMarkdown: update section', () => {
     assert.deepEqual(out.updates[0].entries, ['Ship v2.']);
   });
 
-  test('"Post-grilling" heading normalized to "post grilling" does NOT match synonym "post-grilling" (unreachable synonym)', () => {
+  test('"Post-grilling" maps to updates (M7: both sides normalized to "post grilling", now reachable)', () => {
     const out = parseAdrMarkdown('## Post-grilling\n- Revised after review.');
-    assert.equal(out.updates.length, 0);
-    assert.ok(out.unmapped_headers.includes('Post-grilling'));
+    assert.equal(out.updates.length, 1);
+    assert.deepEqual(out.updates[0].entries, ['Revised after review.']);
+    assert.ok(!out.unmapped_headers.includes('Post-grilling'));
   });
 
   test('"Addendum" maps to updates', () => {
@@ -1205,6 +1202,59 @@ describe('parseAdrMarkdown: consequences canonical section', () => {
   test('"Result" maps to consequences', () => {
     const out = parseAdrMarkdown('## Result\n- drawback: extra cost');
     assert.deepEqual(out.consequences_negative, ['drawback: extra cost']);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// classifyHeader — cross-bucket synonym collision (audit M7)
+// 'trade-offs' must resolve to risks (consequences_negative), not considered_options.
+// CANONICAL_HEADERS once listed 'trade-offs' under BOTH buckets; classifyHeader is
+// first-match-wins over Object.entries and considered_options is declared first, so
+// '## Trade-offs' always misclassified as options and the risks entry was dead code.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('parseAdrMarkdown: punctuated synonyms are reachable (M7)', () => {
+  // Root cause: classifyHeader receives a normalized header but historically compared it
+  // against RAW synonyms; normalizeAdrHeader collapses [\s:._-]+ → space and strips [^\w\s],
+  // so any synonym with a hyphen/apostrophe was dead and its section went unmapped. The fix
+  // normalizes both sides, making the whole class reachable while the table stays readable.
+  test('"## Trade-offs" lands in consequences_negative (risks), not options_considered', () => {
+    const out = parseAdrMarkdown('## Trade-offs\n- adds a per-acquire syscall\n- larger lock body');
+    assert.deepEqual(out.consequences_negative, ['adds a per-acquire syscall', 'larger lock body']);
+    assert.deepEqual(out.options_considered, []);
+  });
+
+  test('all formerly-dead punctuated headers now classify to their bucket', () => {
+    assert.deepEqual(parseAdrMarkdown('## Non-Goals\n- x').out_of_scope, ['x']);
+    assert.deepEqual(parseAdrMarkdown('## Anti-Goals\n- x').out_of_scope, ['x']);
+    assert.deepEqual(parseAdrMarkdown("## Won't Do\n- x").out_of_scope, ['x']);
+    assert.deepEqual(parseAdrMarkdown('## Follow-up\n- x').deferred, ['x']);
+    assert.deepEqual(parseAdrMarkdown('## Cross-cuts\n- x').dependencies, ['x']);
+    assert.deepEqual(parseAdrMarkdown("## How We'll Know\n- x").consequences_positive, ['x']);
+    assert.equal(parseAdrMarkdown('## Post-grilling\n- 2026-01-01: note').updates[0].heading, 'Post-grilling');
+  });
+
+  test("'trade-offs' lives only in risks (de-duped from considered_options to avoid a cross-bucket collision)", () => {
+    assert.ok(!CANONICAL_HEADERS.considered_options.includes('trade-offs'));
+    assert.ok(CANONICAL_HEADERS.risks.includes('trade-offs'));
+  });
+
+  // Reachability invariant — guards the whole class against regression: every synonym in
+  // CANONICAL_HEADERS must classify (a header written as that synonym is never unmapped),
+  // and no two synonyms may normalize into different buckets (cross-bucket collision).
+  test('invariant: every CANONICAL_HEADERS synonym is reachable and collision-free', () => {
+    const byNormalized = new Map();
+    for (const [bucket, synonyms] of Object.entries(CANONICAL_HEADERS)) {
+      for (const syn of synonyms) {
+        const out = parseAdrMarkdown(`## ${syn}\n- z`);
+        assert.ok(!out.unmapped_headers.includes(syn), `synonym "${syn}" (bucket ${bucket}) is unreachable`);
+        const n = syn.toLowerCase().replace(/[\s:._-]+/g, ' ').replace(/[^\w\s]/g, '').trim();
+        if (byNormalized.has(n)) {
+          assert.equal(byNormalized.get(n), bucket, `normalized synonym "${n}" collides across buckets (${byNormalized.get(n)} vs ${bucket})`);
+        } else {
+          byNormalized.set(n, bucket);
+        }
+      }
+    }
   });
 });
 
@@ -1322,6 +1372,22 @@ describe('splitEntries (via parseAdrMarkdown decisions)', () => {
     const out = parseAdrMarkdown('## Decision\n   \n- Real entry.\n  ');
     assert.deepEqual(out.decisions, ['Real entry.']);
   });
+
+  // Regression guard for ADR-1372 T2: iterateBullets folded indented non-bullet
+  // lines into the preceding bullet — the flat splitEntries must keep them.
+  test('indented non-bullet line (4-space) kept verbatim as its own entry', () => {
+    const md = '## Decision\n- Bullet entry\n    indented non-bullet line\n- Another bullet';
+    const out = parseAdrMarkdown(md);
+    assert.deepEqual(out.decisions, ['Bullet entry', 'indented non-bullet line', 'Another bullet']);
+  });
+
+  // Regression guard for ADR-1372 T2: iterateBullets stripped numbered markers
+  // ("1. Foo" → "Foo") — the flat splitEntries only strips [-*+], not numbers.
+  test('numbered list item kept verbatim (not stripped to bare text)', () => {
+    const md = '## Decision\n1. First\n2. Second';
+    const out = parseAdrMarkdown(md);
+    assert.deepEqual(out.decisions, ['1. First', '2. Second']);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1399,5 +1465,117 @@ describe('parseAdrMarkdown: full document integration', () => {
     // The H1 heading "ADR-0001: Switch to PostgreSQL" is treated as a section heading;
     // it normalizes to a non-canonical string → goes into unmapped_headers.
     assert.deepEqual(out.unmapped_headers, ['ADR-0001: Switch to PostgreSQL']);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Targeted mutation-killing tests (T2 adapter seam)
+// Each test is annotated with the mutant it kills.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('targeted: pushUnique intra-values deduplication', () => {
+  // Kills: `seen.add(value)` removal mutant — without it, values-internal dups pass through.
+  test('duplicate entries within the same section body are deduplicated', () => {
+    const md = '## Decision\n- Same entry.\n- Same entry.\n- Different entry.';
+    const out = parseAdrMarkdown(md);
+    assert.deepEqual(out.decisions, ['Same entry.', 'Different entry.']);
+  });
+});
+
+describe('targeted: parseSections body-split round-trip', () => {
+  // Kills: body split/join mutations — each body line must be its own array element.
+  // The adapter does sec.body.split('\n'); parseAdrMarkdown does section.body.join('\n').
+  // A mutant replacing '\n' with ' ' in either call would break this.
+  test('multi-line goal body has each line preserved with internal newlines in prose', () => {
+    const md = '## Context\nLine one.\nLine two.\nLine three.';
+    const out = parseAdrMarkdown(md);
+    // prose = section.body.join('\n').trim() — must include all three lines separated by \n
+    assert.ok(out.context.includes('Line one.'), `context missing line one: ${out.context}`);
+    assert.ok(out.context.includes('Line two.'), `context missing line two: ${out.context}`);
+    assert.ok(out.context.includes('Line three.'), `context missing line three: ${out.context}`);
+    assert.ok(out.context.includes('\n'), 'context must retain internal newlines');
+  });
+
+  test('multi-line decision body produces one entry per non-blank line', () => {
+    // entries = splitEntries(section.body.join('\n')) — join must be '\n' not ' '
+    const md = '## Decision\n- Alpha.\n- Beta.\n- Gamma.';
+    const out = parseAdrMarkdown(md);
+    assert.deepEqual(out.decisions, ['Alpha.', 'Beta.', 'Gamma.']);
+  });
+});
+
+describe('targeted: parseStatusFromSections uses first entry only', () => {
+  // Kills: mutants that remove [0] indexing or change `splitEntries(...)[0]` to return all.
+  test('only the first non-blank line of the status body determines status', () => {
+    // Second line "rejected" must NOT influence the result.
+    const md = '# ADR\n\n## Status\naccepted\nrejected\n';
+    const out = parseAdrMarkdown(md);
+    assert.equal(out.status, 'accepted');
+  });
+});
+
+describe('targeted: classifyHeader exact-match vs prefix-match boundary', () => {
+  // Kills: mutants that remove the trailing space from startsWith check, or remove
+  // the equality check.
+
+  // Case 1: exact match — heading IS the synonym (no trailing content)
+  test('heading exactly equal to synonym matches (equality branch)', () => {
+    const out = parseAdrMarkdown('## Status\naccepted\n');
+    assert.equal(out.status, 'accepted');
+  });
+
+  // Case 2: prefix match — heading starts with synonym + space + more text
+  test('heading starting with synonym + space matches (prefix branch)', () => {
+    // "status of the adr" → starts with "status " → classified as status
+    const out = parseAdrMarkdown('## Status of the ADR\naccepted\n');
+    assert.equal(out.status, 'accepted');
+  });
+
+  // Case 3: heading IS synonym but no trailing space should NOT match via startsWith
+  // (it matches via equality instead) — this verifies the equality check fires
+  test('heading that exactly equals a synonym is classified without trailing space', () => {
+    // "context" equals the synonym exactly — must be classified as goal
+    const out = parseAdrMarkdown('## Context\nExact match context.');
+    assert.equal(out.context.trim(), 'Exact match context.');
+  });
+
+  // Case 4: heading with wrong suffix (synonym+letter, no space) must NOT match prefix
+  test('heading that is synonym + letter (no space) does NOT match prefix', () => {
+    // "statuses" → normalizes to "statuses", not "status " prefix — unclassified
+    const out = parseAdrMarkdown('## Statuses\naccepted\n');
+    assert.ok(out.unmapped_headers.includes('Statuses'));
+    // status should fall back to 'accepted' default (no status section found)
+    assert.equal(out.status, 'accepted');
+  });
+});
+
+describe('targeted: goal section prose vs entries distinction', () => {
+  // The goal/context case uses `prose` (joined + trimmed multi-line text), not `entries`
+  // (bullet-stripped list). Killing the `prose` variable or swapping it for `entries`
+  // would strip bullet markers from context text.
+  test('goal section body with bullet markers is preserved verbatim in context (prose, not entries)', () => {
+    // If parser used entries instead of prose, "- with a dash" would become "with a dash".
+    const md = '## Context\nThis is context.\n- with a dash item.\nMore prose.';
+    const out = parseAdrMarkdown(md);
+    assert.ok(out.context.includes('- with a dash item.'),
+      `context should preserve bullet markers in prose: ${out.context}`);
+  });
+});
+
+describe('targeted: normalizeAdrHeader non-word char removal', () => {
+  // Kills: regex mutation in the [^\w\s] replacement — e.g. inverting the class
+  // or changing the replacement target.
+  test('parentheses in heading are stripped by non-word removal', () => {
+    // "Context (v2)" normalizes to "context v2" — still matches "context" via prefix "context "
+    const out = parseAdrMarkdown('## Context (v2)\nSome context here.');
+    assert.equal(out.context.trim(), 'Some context here.');
+  });
+
+  test('non-word chars adjacent to word chars are stripped without inserting a space', () => {
+    // "Context/Background" → [^\w\s] removes '/' → "contextbackground" (no space)
+    // So it does NOT classify as goal (exact "contextbackground" ≠ any synonym).
+    const out = parseAdrMarkdown('## Context/Background\nSlash context.');
+    // Does not classify as goal — goes to unmapped_headers
+    assert.ok(out.unmapped_headers.includes('Context/Background'));
+    assert.equal(out.context, '');
   });
 });

@@ -1,4 +1,4 @@
-# ADR-0175: Harden release-workflow version validation — reject leading zeros and pre-check npm
+# ADR-218: Harden release-workflow version validation — reject leading zeros and pre-check npm
 
 - **Status:** Accepted (2026-05-24)
 - **Date:** 2026-05-24

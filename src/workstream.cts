@@ -14,6 +14,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { realClock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
 const { output, error } = io;
@@ -23,7 +24,7 @@ const { toPosixPath, generateSlugInternal } = coreUtils;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParser = require('./roadmap-parser.cjs');
 const { getMilestoneInfo } = roadmapParser;
-import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
+import { platformWriteSync, platformEnsureDir, retryRenameSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningRoot, setActiveWorkstream, getActiveWorkstream } = planningWorkspace;
@@ -92,13 +93,13 @@ function migrateToWorkstreams(cwd: string, workstreamName: string): MigrateResul
       const src = path.join(baseDir, item.name);
       if (fs.existsSync(src)) {
         const dest = path.join(wsDir, item.name);
-        fs.renameSync(src, dest);
+        retryRenameSync(src, dest);
         filesMoved.push(item.name);
       }
     }
   } catch (err) {
     for (const name of filesMoved) {
-      try { fs.renameSync(path.join(wsDir, name), path.join(baseDir, name)); } catch { /* ignore */ }
+      try { retryRenameSync(path.join(wsDir, name), path.join(baseDir, name)); } catch { /* ignore */ }
     }
     try { fs.rmSync(wsDir, { recursive: true }); } catch { /* ignore */ }
     try { fs.rmdirSync(path.join(baseDir, 'workstreams')); } catch { /* ignore */ }
@@ -177,7 +178,7 @@ function cmdWorkstreamCreate(cwd: string, name: string | null | undefined, optio
   platformEnsureDir(wsDir);
   platformEnsureDir(path.join(wsDir, 'phases'));
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.localToday();
   const stateContent = [
     '---',
     `workstream: ${slug}`,
@@ -297,7 +298,7 @@ function cmdWorkstreamComplete(cwd: string, name: string | null | undefined, opt
   if (active === name) setActiveWorkstream(cwd, null as unknown as string);
 
   const archiveDir = path.join(root, 'milestones');
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.localToday();
   let archivePath = path.join(archiveDir, `ws-${name}-${today}`);
   let suffix = 1;
   while (fs.existsSync(archivePath)) {
@@ -310,12 +311,12 @@ function cmdWorkstreamComplete(cwd: string, name: string | null | undefined, opt
   try {
     const entries = fs.readdirSync(wsDir, { withFileTypes: true });
     for (const entry of entries) {
-      fs.renameSync(path.join(wsDir, entry.name), path.join(archivePath, entry.name));
+      retryRenameSync(path.join(wsDir, entry.name), path.join(archivePath, entry.name));
       filesMoved.push(entry.name);
     }
   } catch (err) {
     for (const fname of filesMoved) {
-      try { fs.renameSync(path.join(archivePath, fname), path.join(wsDir, fname)); } catch { /* ignore */ }
+      try { retryRenameSync(path.join(archivePath, fname), path.join(wsDir, fname)); } catch { /* ignore */ }
     }
     try { fs.rmSync(archivePath, { recursive: true }); } catch { /* ignore */ }
     if (active === name) setActiveWorkstream(cwd, name!);

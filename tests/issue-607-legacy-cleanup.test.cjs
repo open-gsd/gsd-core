@@ -204,20 +204,117 @@ describe('issue-607 legacy-cleanup: planLegacyCleanup', () => {
     assert.deepEqual(paths, sorted, 'plan must be sorted by path');
   });
 
-  // ── only content-references-old-package and legacy-shared-cache reasons ────
+  // ── only known reasons ─────────────────────────────────────────────────────
 
-  test('plan entries only ever have reason content-references-old-package or legacy-shared-cache', () => {
+  test('plan entries only ever have known reasons', () => {
     writeFile(path.join(configDir, 'hooks', 'gsd-worker.js'), '// ' + OLD_PACKAGE_SIGNAL);
     const cachePath = path.join(homeDir, '.cache', 'gsd', 'gsd-update-check.json');
     writeFile(cachePath, '{}');
+    // Stale skill file (#1453)
+    const staleSkillPath = path.join(configDir, 'skills', 'gsd-docs-update', 'SKILL.md');
+    writeFile(staleSkillPath, '@$HOME/.codex/' + 'get-shit-done' + '/workflows/docs-update.md\n'); // gsd-allow-legacy-name
     // User custom hook — should NOT appear
     writeFile(path.join(configDir, 'hooks', 'gsd-my-custom.js'), '// user hook, clean');
 
     const plan = planLegacyCleanup([configDir], { homeDir });
-    const validReasons = new Set(['content-references-old-package', 'legacy-shared-cache']);
+    const validReasons = new Set(['content-references-old-package', 'legacy-shared-cache', 'stale-get-shit-done-path']); // gsd-allow-legacy-name
     for (const entry of plan) {
       assert.ok(validReasons.has(entry.reason), `unexpected reason: ${entry.reason}`);
     }
+  });
+
+  // ── #1453 stale skill path in ~/.agents/skills/gsd-* ──────────────────────
+
+  test('#1453: flags a SKILL.md whose content contains a get-shit-done path reference with reason stale-get-shit-done-path', () => { // gsd-allow-legacy-name
+    // Simulate a stale ~/.agents/skills/gsd-docs-update/SKILL.md left by an
+    // older GSD install that embedded the pre-rename runtime path.
+    const staleSkillFile = path.join(configDir, 'skills', 'gsd-docs-update', 'SKILL.md');
+    writeFile(
+      staleSkillFile,
+      '---\nname: gsd-docs-update\n---\n' +
+      '@$HOME/.codex/' + 'get-shit-done' + '/workflows/docs-update.md\n' // gsd-allow-legacy-name
+    );
+
+    const plan = planLegacyCleanup([configDir], { homeDir });
+
+    const entry = plan.find((p) => p.path === staleSkillFile);
+    assert.ok(entry, 'expected stale SKILL.md to appear in plan');
+    assert.equal(entry.reason, 'stale-get-shit-done-path'); // gsd-allow-legacy-name
+  });
+
+  test('#1453: does NOT flag a SKILL.md whose content contains the new gsd-core path', () => {
+    // A freshly installed SKILL.md references the new runtime directory name.
+    const freshSkillFile = path.join(configDir, 'skills', 'gsd-docs-update', 'SKILL.md');
+    writeFile(
+      freshSkillFile,
+      '---\nname: gsd-docs-update\n---\n' +
+      '@$HOME/.codex/gsd-core/workflows/docs-update.md\n'
+    );
+
+    const plan = planLegacyCleanup([configDir], { homeDir });
+
+    const entry = plan.find((p) => p.path === freshSkillFile);
+    assert.equal(entry, undefined, 'fresh SKILL.md (gsd-core path) must NOT appear in plan');
+  });
+
+  test('#1453: does NOT flag SKILL.md files under user-owned (non-gsd-*) skill directories', () => {
+    // A user-authored skill dir with a custom name must never be touched.
+    const userSkillFile = path.join(configDir, 'skills', 'my-custom-skill', 'SKILL.md');
+    writeFile(
+      userSkillFile,
+      '---\nname: my-custom-skill\n---\n' +
+      'This skill uses ' + 'get-shit-done' + ' concepts.\n' // gsd-allow-legacy-name
+    );
+
+    const plan = planLegacyCleanup([configDir], { homeDir });
+
+    const entry = plan.find((p) => p.path === userSkillFile);
+    assert.equal(entry, undefined, 'user-owned (non-gsd-*) SKILL.md must NOT appear in plan');
+  });
+
+  test('#1453: flags SKILL.md with stale path but preserves SKILL.md in the same dir without stale path', () => {
+    // Two skill dirs: one stale (get-shit-done ref), one fresh (gsd-core ref). // gsd-allow-legacy-name
+    const staleSkill = path.join(configDir, 'skills', 'gsd-docs-update', 'SKILL.md');
+    const freshSkill = path.join(configDir, 'skills', 'gsd-help', 'SKILL.md');
+    writeFile(staleSkill, '@$HOME/.codex/' + 'get-shit-done' + '/workflows/docs-update.md\n'); // gsd-allow-legacy-name
+    writeFile(freshSkill, '@$HOME/.codex/gsd-core/workflows/help.md\n');
+
+    const plan = planLegacyCleanup([configDir], { homeDir });
+
+    const staleEntry = plan.find((p) => p.path === staleSkill);
+    const freshEntry = plan.find((p) => p.path === freshSkill);
+
+    assert.ok(staleEntry, 'stale SKILL.md must appear in plan');
+    assert.equal(staleEntry.reason, 'stale-get-shit-done-path'); // gsd-allow-legacy-name
+    assert.equal(freshEntry, undefined, 'fresh SKILL.md must NOT appear in plan');
+  });
+
+  test('#1453: regression — after upgrade to gsd-core 1.5.0, stale ~/.agents/skills/gsd-docs-update/SKILL.md is removed', () => {
+    // Simulate the exact scenario from issue #1453:
+    // ~/.agents/skills/gsd-docs-update/SKILL.md references the old get-shit-done runtime. // gsd-allow-legacy-name
+    // The upgrade installs correctly to ~/.codex/skills/ but leaves the stale
+    // ~/.agents/skills/ copy which Codex can still discover.
+    const agentsDir   = path.join(homeDir, '.agents');
+    const staleSkill  = path.join(agentsDir, 'skills', 'gsd-docs-update', 'SKILL.md');
+    writeFile(
+      staleSkill,
+      '---\nname: gsd-docs-update\n---\n' +
+      '@$HOME/.Codex/' + 'get-shit-done' + '/workflows/docs-update.md\n' // gsd-allow-legacy-name
+    );
+
+    // planLegacyCleanup receives ~/.agents as one of the configDirs (as _LEGACY_SCAN_SUBDIR_NAMES
+    // includes '.agents' — the antigravity local form). The plan should flag the stale skill.
+    const plan = planLegacyCleanup([agentsDir], { homeDir });
+
+    const entry = plan.find((p) => p.path === staleSkill);
+    assert.ok(entry, 'stale ~/.agents/skills/gsd-docs-update/SKILL.md must appear in plan');
+    assert.equal(entry.reason, 'stale-get-shit-done-path'); // gsd-allow-legacy-name
+
+    // Applying the plan removes the stale file
+    const result = applyLegacyCleanup(plan);
+    assert.ok(result.removed.includes(staleSkill), 'stale SKILL.md must appear in removed[]');
+    assert.equal(result.errors.length, 0, 'no errors expected');
+    assert.equal(require('node:fs').existsSync(staleSkill), false, 'stale SKILL.md must be deleted on disk');
   });
 });
 

@@ -153,10 +153,35 @@ false-positive block on a legitimate planning write would be more disruptive
 than a missed injection in a secondary scan layer.
 
 **Runtime hook: `gsd-read-injection-scanner.js`.** This hook fires on the
-output of every Read tool call. It scans the *content that was just read* for
-injected instructions in untrusted content — catching cases where an attacker
-has embedded instructions in a file that GSD is about to incorporate into an
-agent's context.
+output of every Read, WebFetch, and WebSearch tool call. It scans the *content
+that was just read or fetched* for injected instructions in untrusted content —
+catching cases where an attacker has embedded instructions in a file or remote
+resource that GSD is about to incorporate into an agent's context. The 10
+research and doc-ingest agents additionally carry a shared `<security_context>`
+data/instruction boundary (defined in
+`gsd-core/references/untrusted-input-boundary.md`): `gsd-project-researcher`,
+`gsd-phase-researcher`, `gsd-ui-researcher`, `gsd-assumptions-analyzer`,
+`gsd-advisor-researcher`, `gsd-doc-classifier`, `gsd-doc-synthesizer`,
+`gsd-research-synthesizer`, `gsd-ai-researcher`, and `gsd-domain-researcher`.
+Any content fetched or read by those agents is treated as data, never as
+instructions, regardless of what the content claims to be.
+
+**Opt-in blocking (`security.injection_blocking`).** By default all injection
+detections are advisory-only (logged, not blocked). Setting
+`security.injection_blocking = true` in `.planning/config.json` (a registered
+config key — `gsd config-set security.injection_blocking true`) upgrades
+HIGH-confidence detections to **blocking**. Be precise about what this does: the
+scanner is a **PostToolUse** hook, so it runs *after* the Read/WebFetch/WebSearch
+has already executed and the fetched content is already in the model's transcript.
+Blocking does **not** retroactively redact that content — it emits
+`decision: "block"`, which halts the agent's next step and feeds the detection back
+as the reason, so the agent is stopped from acting further on the flagged result
+instead of silently continuing. LOW detections remain advisory under this setting.
+This flag is opt-in; the default (advisory-only) is preserved to avoid breaking
+existing workflows. The prompt-level boundary above (treat fetched text as data,
+never instructions) is the layer that keeps an injection from being *followed* even
+while it sits in context; the hook is a coarse pattern pre-filter and circuit-breaker,
+not a redactor.
 
 **CI scanner.** `prompt-injection-scan.security.test.cjs` scans all agent, workflow,
 and command files for embedded injection vectors as part of the test suite.
@@ -167,11 +192,14 @@ instruction.
 ### Read Injection Scanner vs Prompt Guard
 
 The two hooks cover complementary surfaces. `gsd-prompt-guard.js` watches
-*writes to planning artifacts* — it catches injection being planted. 
-`gsd-read-injection-scanner.js` watches *reads of any file* — it catches
+*writes to planning artifacts* — it catches injection being planted.
+`gsd-read-injection-scanner.js` watches *reads and remote fetches* — it catches
 injection being ingested from external content (a dependency's README, a
-third-party config file, a user-provided document). Together they bracket
-the ingest → store → re-read lifecycle.
+third-party config file, a user-provided document, or any URL fetched via
+WebFetch or WebSearch). The in-prompt `<security_context>` boundary in research
+agents provides an additional containment layer: even if an injected string
+reaches an agent, it is structurally separated from the instruction region.
+Together these controls bracket the ingest → store → re-read lifecycle.
 
 ---
 
@@ -228,10 +256,14 @@ not hard-stopping on a detection.
 
 **What the prompt injection defences do not eliminate:** A sufficiently
 creative injection that does not match known patterns, or an injection that
-arrives through a channel the hooks do not cover (for example, content injected
-into a dependency's published README that is read by a subagent browsing
-documentation). Defence in depth means each layer makes the attack harder,
-not that any single layer makes it impossible.
+arrives through a channel the hooks do not cover. The previously uncovered
+channel of content injected into a dependency's published README and read by a
+subagent browsing documentation is now scanned at ingress by
+`gsd-read-injection-scanner.js` (which covers WebFetch and WebSearch output)
+and structurally isolated in-prompt by the `<security_context>` boundary in
+research agents — but novel jailbreaks and low-signal injections may still pass
+undetected. Defence in depth means each layer makes the attack harder, not that
+any single layer makes it impossible.
 
 **Reporting vulnerabilities.** Report via private GitHub security advisory at
 `https://github.com/open-gsd/gsd-core/security/advisories/new`. Do not open

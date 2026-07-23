@@ -473,8 +473,8 @@ claude --dangerously-skip-permissions
 ### 现有代码库
 
 ```bash
-/gsd-map-codebase           # Analyse what exists (parallel agents)
-/gsd-new-project            # Questions focus on what you're ADDING
+/gsd-onboard                # Safely map, ingest docs, and initialize planning
+# Follow printed handoff commands, then rerun /gsd-onboard
 # (normal phase workflow from here)
 ```
 
@@ -561,14 +561,14 @@ claude --dangerously-skip-permissions
 
 ### 程序化 CLI（`gsd-tools query` 与 `gsd-tools.cjs`）
 
-对于自动化，优先使用带有已注册子命令的 **`gsd-tools query`**（参见 [CLI-TOOLS.md — SDK 和程序化访问](CLI-TOOLS.md#sdk-and-programmatic-access) 及 QUERY-HANDLERS.md）。旧版 `node $HOME/.claude/get-shit-done/bin/gsd-tools.cjs` CLI 仍受支持。
+对于自动化，优先使用带有已注册子命令的 **`gsd-tools query`**（参见 [CLI-TOOLS.md — SDK 和程序化访问](CLI-TOOLS.md#sdk-and-programmatic-access) 及 QUERY-HANDLERS.md）。旧版 `node $HOME/.claude/gsd-core/bin/gsd-tools.cjs` CLI 仍受支持。
 
 ### STATE.md 不同步
 
 ```bash
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state validate          # Detect drift
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state sync --verify     # Preview changes
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state sync              # Reconstruct STATE.md
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state validate          # Detect drift
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state sync --verify     # Preview changes
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state sync              # Reconstruct STATE.md
 ```
 
 ### 命令在"Spawning..."后似乎冻结
@@ -666,7 +666,7 @@ GSD 子 Agent 在单独的上下文窗口中运行——其工作在进行中对
 
 每个被禁用的服务器都会从后续每次交互中移除其模式。精简 MCP **与** `model_profile` 调整形成叠加效果——两个杠杆是累加的，MCP 节省效果立即体现在编排器生成的每个子 Agent 上。
 
-完整审计、运行时参考及与 `model_profile` 的组合说明，请参阅捆绑的 `context-budget.md` 参考中的 [MCP 工具模式成本](../../get-shit-done/references/context-budget.md#mcp-tool-schema-cost-harness-concern)。
+完整审计、运行时参考及与 `model_profile` 的组合说明，请参阅捆绑的 `context-budget.md` 参考中的 [MCP 工具模式成本](../../gsd-core/references/context-budget.md#mcp-tool-schema-cost-harness-concern)。
 
 ### 使用非 Claude 运行时（Codex、OpenCode、Gemini CLI、Kilo）
 
@@ -863,7 +863,8 @@ All subagent/executor commits MUST use `--no-verify`.
     themes/
       default.css         # Shared CSS variables for all sketches
     MANIFEST.md           # Index of all sketches with winners
-  codebase/               # Brownfield codebase mapping (from /gsd-map-codebase)
+  codebase/               # Brownfield codebase mapping (from /gsd-map-codebase or /gsd-onboard)
+  onboarding/             # Brownfield onboarding summary (from /gsd-onboard)
   phases/
     XX-phase-name/
       XX-YY-PLAN.md       # Atomic execution plans

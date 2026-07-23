@@ -1,10 +1,35 @@
-# ADR-894: Capability declaration format + registry generation [Proposed]
+# ADR-894: Capability declaration format + registry generation [Accepted]
 
-- **Status:** Proposed
+- **Status:** Accepted — ratified 2026-07-17 (originally Proposed 2026-06-08); see "Ratification" below
 - **Date:** 2026-06-08 (amended same day across two design grillings — see "Grilling amendments")
 - **Issue:** #894
-- **Parent:** ADR-857 (Capability system) — resolves its Open question #1
+- **Parent:** [ADR-857](857-capability-system.md) (Capability system) — resolves its Open question #1
 - **Phase:** ADR-857 rollout phase 3a (design-only)
+- **Subsumed by:** [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) (GSD as an Embeddable Orchestration Engine) — read it first; see the amendment below
+
+## Amendment (2026-07-16): subsumed by ADR-1239 (EoS); status is stale
+
+[ADR-1239](1239-gsd-embeddable-orchestration-engine.md) — **GSD as an Embeddable Orchestration Engine** (EoS), Accepted — subsumes this ADR as an adapter. The capability declaration format remains the vocabulary a descriptor is written in; EoS is the frame that decides how a host loads the engine at all.
+
+**Read [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) first.**
+
+Recorded because ADR-1239 declared this subsumption while this file recorded nothing.
+
+## Ratification (2026-07-17): Proposed → Accepted
+
+Ratified by explicit maintainer directive after independent re-verification of the evidence below; the `Proposed` label had been stale for roughly 39 days (2026-06-08 → 2026-07-17) after the format it specifies had already shipped.
+
+**Evidence the decision shipped:**
+
+- Owning issue [#894](https://github.com/open-gsd/gsd-core/issues/894) and parent epic [#857](https://github.com/open-gsd/gsd-core/issues/857) are both CLOSED / COMPLETED.
+- `scripts/gen-capability-registry.cjs` (886 lines) implements the §4 generator: reads every `capabilities/<id>/capability.json`, validates each via `capability-validator.cjs`, and enforces the one-owner / acyclic / tier-monotone / config-exclusivity / unique-producer invariants.
+- `gsd-core/bin/lib/capability-validator.cjs` (2,346 lines) validates the §2 schema, including the gate `check` discriminator — exactly one of `query` / `predicate` / `agentVerdict` (around lines 1566–1573).
+- 37 real `capabilities/<id>/capability.json` files exist on disk; `capabilities/ui/capability.json` matches the ADR's worked UI example (`tier`/`requires`/`skills`/`agents`/`steps`/`gates`) near-verbatim, plus additive fields (`version`, `engines`, `runtimeCompat`) not in the original text.
+- `capabilities/codex/capability.json` has concrete `role: "runtime"` enums filled in — `commandStyle: "shell-var"`, `hooksSurface: "codex-hooks-json"`, `sandboxTier: "codex-agent-sandbox"` — resolving the ADR's own "deferred to phase 5" open question.
+- `scripts/gen-loop-host-contract.cjs` (18,992 bytes) parses the `<!-- gsd:loop-host … -->` comment markers out of the five step workflows (confirmed at `gsd-core/workflows/plan-phase.md:1`) into the generated host contract.
+- `gsd-core/bin/lib/capability-registry.cjs` (235,826 bytes, generated) contains `byLoopPoint` (line 3033), `configKeys` (line 3578), and `requiresClosure()` (line 5779) — the role-partitioned §5 shape.
+
+**Governance state:** owning issue #894 CLOSED/COMPLETED (closed 2026-06-08); parent epic #857 CLOSED/COMPLETED (closed 2026-06-14).
 
 ## Context
 
@@ -48,7 +73,7 @@ Schema-validated JSON. Common envelope + role-typed body (`role: feature | runti
 | Field | Type | Notes |
 |---|---|---|
 | `skills` / `agents` | string[] | owned stems — exactly one owner each across all capabilities |
-| `hooks` | `{event, script}[]` | lifecycle hooks |
+| `hooks` | `{event, script, matcher?}[]` | lifecycle hooks; optional `matcher` is a settings.json tool-scoping pattern (exact tool name, pipe-separated list, wildcard, or regex, e.g. `Write|Edit`); absent = match-all (see *#1634 amendment* below) |
 | `config` | object | federated config-key schema slice |
 | `steps` / `contributions` / `gates` | arrays | loop hooks (below) |
 
@@ -203,6 +228,8 @@ This ADR was stress-tested in two rounds before merge; the format changed materi
 4. **Gate `check`** = query / declarative-predicate / agentVerdict; agentVerdict forced advisory; only deterministic checks may block.
 5. **Hook activation `when`** — declarative config-level gating; deeper context applicability self-gates in the skill (no phase-context vocabulary).
 6. **`byLoopPoint` ordering materialized** in the registry; resolver filters active + renders. Same-capability hooks must degrade gracefully when an entry step self-gates.
+
+**Amendment — #1634 (lifecycle hook `matcher`):** the `role: "feature"` `hooks[]` entry gained an optional `matcher` field. `matcher` is a settings.json tool-scoping pattern — exact tool name, pipe-separated list, wildcard, or regex (e.g. `Write|Edit`). The capability install path projects a declared `matcher` onto the emitted settings.json hook entry (an entry-level sibling of `hooks`, exactly matching the runtime's native shape); **absent means match-all** — the field is omitted, so the shipped capabilities' wiring is byte-for-byte unchanged. This closes #1634, where a tool-scoped `PreToolUse`/`PostToolUse` hook otherwise fired on every tool (a fail-closed guard could block the whole session). `matcher` is a settings.json-family concept; per-runtime matcher projection (ADR-857 D8, runtimes-as-descriptors) is deliberately left as a separate concern rather than baking a raw Claude regex into every runtime's projection. The validator gates `matcher` to a non-empty string with no control characters.
 
 ## Consequences
 

@@ -28,7 +28,7 @@ describe('commands/gsd/autonomous.md allowed-tools', () => {
 
     // Parse the allowed-tools list items (lines starting with "  - ")
     const toolLines = frontmatter
-      .split('\n')
+      .split(/\r?\n/)
       .filter((line) => /^\s+-\s+/.test(line))
       .map((line) => line.replace(/^\s+-\s+/, '').trim());
 

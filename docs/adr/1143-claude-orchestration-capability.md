@@ -7,6 +7,14 @@
 - **Blocked by:** [#857](https://github.com/open-gsd/gsd-core/issues/857) being **released** (Proposed → Accepted + capability infrastructure shipped). Not actionable until then.
 - **Relates to:** [#853](https://github.com/open-gsd/gsd-core/issues/853) (Claude Code backgrounded agents cannot nest subagents), existing BETA skill `gsd-ultraplan-phase`
 
+## Why this is still `Proposed` (audited 2026-07-17)
+
+Confirmed shipped, on-tree: the capability is real and registered, not vaporware. `capabilities/claude-orchestration/capability.json` exists with detection + emission (`detectWorkflowBackend` / `emitWorkflowScript`) in `src/claude-orchestration.cts` (compiled to `gsd-core/bin/lib/claude-orchestration.cjs`), federated config (`claude_orchestration.enabled` / `execution_backend` / `min_agent_sdk_version`), and 1,552 lines of tests across `tests/claude-orchestration.test.cjs`, `tests/claude-orchestration-command-router.test.cjs`, and `tests/fix-2285-claude-orchestration-wiring.test.cjs`. The previously-fatal wiring bug, #2285 ("claude-orchestration capability (#1143) registered as active but never wired into execute-phase orchestrator prompt"), is closed COMPLETED (2026-07-15) — one day before this audit — and the owning feature issue #1143 is also closed COMPLETED.
+
+**The blocker.** The ADR sets its own bar for ratification in its own Amendment (above): "flipping to Accepted follows maintainer sign-off on the E2E behaviour once exercised on Claude Code with the Workflow tool present." No such exercise is recorded anywhere in issues, PRs, or tests. Every test in the three files above operates at the contract or CLI-subprocess layer — asserting the *shape* of an emitted script or the return value of `resolve-wave-dispatch` — none constructs or executes an actual Workflow-tool run (`grep -rn "Workflow(" tests/claude-orchestration*.test.cjs tests/fix-2285-*.test.cjs` returns no hits). Two further gaps sit inside the ADR's own Decision section: (1) Decision §1's claimed net effect — "wave parallelism, the plan-checker, and the verifier are restored" — is narrower than what shipped: `capability.json`'s own description says "the plan-checker and verifier remain inline until separately wired — this capability delivers the parallel-execution backend, not those gates"; (2) Decision §3's fold-in of the `gsd-ultraplan-phase` skill into the capability's `skills[]` has not happened — `capability.json` still shows `"skills": []`, and no follow-up issue for the migration the Amendment promises exists (searched via `gh issue list --search`, no result).
+
+**Unblock condition.** Ratify once: (a) a real Claude Code session with the Workflow tool present and `claude_orchestration.enabled=true` drives an `execute-phase` wave through the Workflow backend, and the result is recorded (issue comment, PR, or a test that actually builds/executes a `Workflow` script rather than asserting emitted-script shape) — that is the maintainer sign-off the ADR itself asks for; and (b) the Decision section's "plan-checker and verifier restored" language is reconciled with the shipped scope (either corrected to match, or backed by a tracked issue for the deferred wiring `capability.json` already discloses). The `skills[]` migration (item 3) is lower priority since it is openly disclosed as deferred rather than silently dropped, but should carry a tracked issue number before ratification so it doesn't quietly vanish.
+
 ## Context
 
 Claude Code ships two orchestration primitives GSD does not yet treat as first-class:
@@ -86,3 +94,39 @@ These existing multi-model features (`execute-phase` `cross_ai_delegation`, the 
 - **Neutral:** no effect on non-Claude runtimes by construction; no behavior change until explicitly enabled.
 
 > **Governance note:** This ADR is a *draft design* accompanying feature request #1143. Per CONTRIBUTING, it is PR'd only after the issue receives `approved-feature`, and the capability is implemented only after #857 is released.
+
+## Amendment (2026-07-06): BETA v1 implementation landed
+
+#857 is **released** (CLOSED); the capability infrastructure is live. The BETA v1
+of this capability has shipped as `capabilities/claude-orchestration/` with the
+scope agreed in the Decision, refined to the lowest-risk first slice:
+
+- **Detection + emission** live as pure, fail-closed functions in
+  `gsd-core/bin/lib/claude-orchestration.cjs` (source `src/claude-orchestration.cts`):
+  `detectWorkflowBackend` (gate ladder: enabled → Claude runtime →
+  execution_backend ≠ inline → host dispatch nested+background → valid Agent SDK
+  → SDK ≥ `claude_orchestration.min_agent_sdk_version`, default `0.3.149`) and
+  `emitWorkflowScript` (waves → `parallel()` stage barriers, plans →
+  `agent({ agentType: 'gsd-executor', isolation: 'worktree' })`, `files_modified`
+  overlap → separate sequential stages, `resumeFromRunId` wired to the phase run
+  id, shared `budget(tokens)` pool). All interpolated values are validated as
+  script-safe identifiers or JSON-quoted (review Finding 1).
+- **Loop registration** is at the two **wired** points the loop host contract
+  actually renders: `execute:wave:post into:executor` (Workflow-backend guidance)
+  and `plan:post into:planner` (ultraplan ownership declaration). `execute:wave:pre`
+  and `execute:pre` are declared in the contract but **not wired** today, so the
+  capability registers at `wave:post` (the constraint `external-job` also documents).
+- **Config** is federated (`claude_orchestration.enabled` default false /
+  `activationKey`, `execution_backend` enum `auto|workflow|inline` default `auto`,
+  `min_agent_sdk_version`); the keys live only in the registry, so uninstall
+  removes them cleanly.
+- **ultraplan ownership** is declared in the manifest (`plan:post` contribution);
+  full install-profile migration of the `gsd-ultraplan-phase` skill into the
+  capability's `skills[]` is deferred to a follow-up (it triggers the CLUSTERS /
+  profile membership gate and is a heavier, install-machinery change).
+
+Status remains **Proposed** — the BETA is default-off and the end-to-end Workflow
+execution path (actual orchestration via the Workflow tool inside Claude Code) is
+not verifiable outside that runtime. The capability is structurally complete and
+tested at the contract level; flipping to Accepted follows maintainer sign-off on
+the E2E behaviour once exercised on Claude Code with the Workflow tool present.

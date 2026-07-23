@@ -44,15 +44,15 @@ claude --dangerously-skip-permissions
 
 ---
 
-## 第 3 步 — 映射代码库
+## 第 3 步 — 开始 brownfield onboarding
 
-在创建项目之前，先让 GSD Core 了解已有的内容。这是使棕地规划准确的关键步骤。
+在创建项目之前，让 GSD Core 检查仓库状态并告诉您安全的下一个顶层命令。这一步可避免跳过代码库上下文或覆盖现有 planning 文件。
 
 ```text
-/gsd-map-codebase
+/gsd-onboard
 ```
 
-GSD Core 会派生四个并行映射子代理（您将看到"Spawning 4 parallel codebase mapper agents…"——这需要 1–5 分钟；请勿中断）。每个代理专注于不同的关注点：
+如果 onboarding 报告缺少代码库映射，请选择推荐选项并运行打印出的 `/gsd-map-codebase` 交接命令，然后重新运行 `/gsd-onboard`。`/gsd-onboard --fast` 只适合轻量首次通过；在 `/gsd-new-project` 前仍需要完整映射。`/gsd-map-codebase` 会派生四个并行映射子代理（您将看到"Spawning 4 parallel codebase mapper agents…"——这需要 1–5 分钟；请勿中断）。每个代理专注于不同的关注点：
 
 | 代理 | 关注点 |
 |-------|-------|
@@ -84,7 +84,7 @@ Created .planning/codebase/:
 
 ---
 
-## 第 4 步 — 清除上下文并创建项目
+## 第 4 步 — 重新运行 onboarding 并初始化项目
 
 清除会话窗口：
 
@@ -92,11 +92,13 @@ Created .planning/codebase/:
 /clear
 ```
 
-现在创建项目。由于 GSD Core 在上一步中发现了现有代码，它已经知道这是一个棕地项目。当您运行 `/gsd-new-project` 时，问题将聚焦于您所*新增*的内容，而非重新描述已有的内容：
+现在再次运行 `/gsd-onboard`。如果 GSD Core 检测到 ADR、PRD、spec、RFC 或根级需求文档，请先接受推荐的 `/gsd-ingest-docs` 交接，然后再运行 `/gsd-onboard`。上下文准备好后，onboarding 会打印项目初始化交接命令：
 
 ```text
 /gsd-new-project
 ```
+
+由于 GSD Core 在上一步中发现了现有代码，`/gsd-new-project` 知道这是一个棕地项目。问题将聚焦于您所*新增*的内容，而非重新描述已有的内容：
 
 GSD Core 会询问您想构建什么。请用您正在添加的功能来回答，而不是描述整个代码库：
 
@@ -124,6 +126,8 @@ Proposed Roadmap
 
 批准路线图。
 
+项目设置完成后，再运行一次 `/gsd-onboard`。现在 `PROJECT.md`、`REQUIREMENTS.md`、`ROADMAP.md` 和 `STATE.md` 都已存在，onboarding 会创建或确认 `.planning/onboarding/SUMMARY.md`。
+
 **在 `.planning/` 中创建的内容：**
 
 ```text
@@ -133,7 +137,8 @@ Proposed Roadmap
   ROADMAP.md          ← Phase 1, status: pending
   STATE.md            ← session memory
   config.json         ← workflow settings
-  codebase/           ← the seven map files from Step 3
+  onboarding/SUMMARY.md ← onboarding 状态和下一个命令
+  codebase/           ← 第 3 步生成的七个映射文件
 ```
 
 注意 `.planning/codebase/` 已经从第 3 步存在。GSD Core 在编写 `PROJECT.md` 时读取了这些文件，这就是为什么它无需您描述即可填充已验证的需求。
@@ -212,6 +217,7 @@ Proposed Roadmap
 
 ## 您学到了什么
 
+- `/gsd-onboard` 如何安全编排 brownfield 设置，不嵌套交互式命令，也不覆盖现有 planning 文件。
 - `/gsd-map-codebase` 如何运行四个并行代理，在 `.planning/codebase/` 中生成 `STACK.md`、`ARCHITECTURE.md`、`CONVENTIONS.md`、`CONCERNS.md`、`STRUCTURE.md`、`TESTING.md` 和 `INTEGRATIONS.md`。
 - 在棕地仓库中运行 `/gsd-new-project` 如何将问题聚焦于您所*新增*的内容，并从现有代码中填充已验证的需求。
 - 代码库映射如何塑造 `/gsd-discuss-phase` 中的每个问题——文件路径、模式和规范均来自您的实际代码。

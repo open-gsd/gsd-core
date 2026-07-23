@@ -1,6 +1,6 @@
 # GSD CLI 도구 참조
 
-> `gsd-tools` CLI(`get-shit-done/bin/gsd-tools.cjs`)에 대한 참조입니다. 슬래시 명령 및 사용자 흐름은 [명령 참조](COMMANDS.md)를 확인하세요. [문서 인덱스](README.md)로 돌아가기.
+> `gsd-tools` CLI(`gsd-core/bin/gsd-tools.cjs`)에 대한 참조입니다. 슬래시 명령 및 사용자 흐름은 [명령 참조](COMMANDS.md)를 확인하세요. [문서 인덱스](README.md)로 돌아가기.
 
 ---
 
@@ -11,8 +11,8 @@
 
 |                    |                                                                                                                                                                                                        |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **배포 경로**   | `get-shit-done/bin/gsd-tools.cjs`                                                                                                                                                                      |
-| **구현**        | `get-shit-done/bin/lib/` 아래 20개의 도메인 모듈 (해당 디렉토리가 기준)                                                                                                                                 |
+| **배포 경로**   | `gsd-core/bin/gsd-tools.cjs`                                                                                                                                                                      |
+| **구현**        | `gsd-core/bin/lib/` 아래 20개의 도메인 모듈 (해당 디렉토리가 기준)                                                                                                                                 |
 | **상태**         | 오케스트레이션, 워크플로우, 자동화를 위한 주요 런타임 명령 인터페이스. |
 
 
@@ -288,13 +288,14 @@ node gsd-tools.cjs scaffold phase-dir --phase N --name "phase name"
 
 ## Init 명령 (복합 컨텍스트 로딩)
 
-하나의 호출로 특정 워크플로우에 필요한 모든 컨텍스트를 로드합니다. 프로젝트 정보, 설정, 상태, 워크플로우별 데이터가 포함된 JSON을 반환합니다.
+하나의 호출로 특정 워크플로우에 필요한 모든 컨텍스트를 로드합니다. 프로젝트 정보, 설정, 상태, 워크플로우별 데이터가 포함된 JSON을 반환합니다. `init onboard [--fast] [--text]`는 `/gsd-onboard`를 위해 brownfield 신호, 계획 문서 후보, 코드베이스 맵 완성도, fast 맵 준비 상태, 텍스트 모드 라우팅, 부분 planning 상태, 온보딩 요약 상태를 반환합니다.
 
 ```bash
 node gsd-tools.cjs init execute-phase <phase>
 node gsd-tools.cjs init plan-phase <phase>
 node gsd-tools.cjs init new-project
 node gsd-tools.cjs init new-milestone
+node gsd-tools.cjs init onboard [--fast] [--text]
 node gsd-tools.cjs init quick <description>
 node gsd-tools.cjs init resume
 node gsd-tools.cjs init verify-work <phase>
@@ -322,7 +323,7 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
 ```bash
 # 마일스톤 아카이브
-node gsd-tools.cjs milestone complete <version> [--name <name>] [--archive-phases]
+node gsd-tools.cjs milestone complete <version> [--name <name>] [--no-archive-phases]
 
 # 요구사항을 완료로 표시
 node gsd-tools.cjs requirements mark-complete <ids>
@@ -487,7 +488,7 @@ node gsd-tools.cjs config-set review.models.claude   ""   # clear — fall back 
 
 ## 시크릿 처리
 
-`/gsd-settings`(`brave_search`, `firecrawl`, `exa_search`)를 통해 설정된 API 키는 `.planning/config.json`에 일반 텍스트로 기록되지만 모든 `config-set` / `config-get` 출력, 확인 테이블, 대화형 프롬프트에서 마스킹(`****<last-4>`)됩니다. 마스킹 구현은 `get-shit-done/bin/lib/secrets.cjs`를 참조하세요. `config.json` 파일 자체가 보안 경계입니다 — 파일시스템 권한으로 보호하고 git에서 제외하세요(`.planning/`는 기본적으로 gitignore됩니다).
+`/gsd-settings`(`brave_search`, `firecrawl`, `exa_search`)를 통해 설정된 API 키는 `.planning/config.json`에 일반 텍스트로 기록되지만 모든 `config-set` / `config-get` 출력, 확인 테이블, 대화형 프롬프트에서 마스킹(`****<last-4>`)됩니다. 마스킹 구현은 `gsd-core/bin/lib/secrets.cjs`를 참조하세요. `config.json` 파일 자체가 보안 경계입니다 — 파일시스템 권한으로 보호하고 git에서 제외하세요(`.planning/`는 기본적으로 gitignore됩니다).
 
 ---
 

@@ -42,7 +42,7 @@ GSD Core 是一个**元提示框架**，位于用户与 AI 编码 Agent（Claude
                       │
 ┌─────────────────────▼────────────────────────────────┐
 │              WORKFLOW LAYER                           │
-│   get-shit-done/workflows/*.md — Orchestration logic  │
+│   gsd-core/workflows/*.md — Orchestration logic  │
 │   (Reads references, spawns agents, manages state)    │
 └──────┬──────────────┬─────────────────┬──────────────┘
        │              │                 │
@@ -75,7 +75,7 @@ GSD Core 是一个**元提示框架**，位于用户与 AI 编码 Agent（Claude
 
 ### 2. 轻量级编排器
 
-工作流文件（`get-shit-done/workflows/*.md`）不承担繁重工作。它们：
+工作流文件（`gsd-core/workflows/*.md`）不承担繁重工作。它们：
 
 - 通过 `gsd-tools.cjs init <workflow>` 加载上下文
 - 以聚焦的提示词派生专用 Agent
@@ -130,7 +130,7 @@ GSD Core 是一个**元提示框架**，位于用户与 AI 编码 Agent（Claude
 
 急于列举技能是每轮两种反复出现的 token 开销之一。另一种是 `.claude/settings.json` 中每个已启用 MCP 服务器注入的 MCP 工具 schema。重型 MCP 服务器（browser/playwright、Mac-tools、Windows-tools）每轮各自可消耗 20k+ token——通常远超 `model_profile` 调优所节省的量。该开关位于 Claude Code 框架中（`.claude/settings.json` 中的 `enabledMcpjsonServers` / `disabledMcpjsonServers`），**不属于** GSD 的关注范围。两阶段路由层（#2792）和严格的 MCP 启用管理是每轮最大的成本杠杆。请参阅 [`docs/USER-GUIDE.md`](USER-GUIDE.md) 和 `references/context-budget.md` 了解审计清单。
 
-### 工作流（`get-shit-done/workflows/*.md`）
+### 工作流（`gsd-core/workflows/*.md`）
 
 命令所引用的编排逻辑，包含逐步流程：
 
@@ -144,7 +144,7 @@ GSD Core 是一个**元提示框架**，位于用户与 AI 编码 Agent（Claude
 
 #### 工作流的渐进式披露
 
-工作流文件在每次调用对应的 `/gsd-*` 命令时会被完整加载到 Claude 的上下文中。为控制该成本，`tests/workflow-size-budget.test.cjs` 强制执行的工作流大小预算与 #2361 中的 Agent 预算保持一致：
+工作流文件在每次调用对应的 `/gsd-*` 命令时会被完整加载到 Claude 的上下文中。为控制该成本，`tests/workflow-size-budget.test.cjs` 强制执行的工作流大小预算与 Agent 大小预算惯例保持一致：
 
 | 层级      | 每文件行数限制 |
 |-----------|--------------------|
@@ -152,7 +152,7 @@ GSD Core 是一个**元提示框架**，位于用户与 AI 编码 Agent（Claude
 | `LARGE`   | 1500 — 多步骤规划器和大型功能工作流 |
 | `DEFAULT` | 1000 — 聚焦于单一目的的工作流（目标层级） |
 
-根据 issue #2551，`workflows/discuss-phase.md` 须严格遵守 <500 行上限。当工作流超出其层级时，应将各模式的主体提取到 `workflows/<workflow>/modes/<mode>.md`，将模板提取到 `workflows/<workflow>/templates/`，将共享知识提取到 `get-shit-done/references/`。父文件成为轻量级调度器，仅读取当前调用所需的模式和模板文件。
+根据 discuss-phase 字节预算（#717；discuss-phase/modes 分割使其保持在 ≈32000 字节），`workflows/discuss-phase.md` 须严格遵守更严格的上限。当工作流超出其层级时，应将各模式的主体提取到 `workflows/<workflow>/modes/<mode>.md`，将模板提取到 `workflows/<workflow>/templates/`，将共享知识提取到 `gsd-core/references/`。父文件成为轻量级调度器，仅读取当前调用所需的模式和模板文件。
 
 `workflows/discuss-phase/` 是该模式的典型示例——父文件负责调度，`modes/` 存放各标志的行为（`power.md`、`all.md`、`auto.md`、`chain.md`、`text.md`、`batch.md`、`analyze.md`、`default.md`、`advisor.md`），`templates/` 存放 CONTEXT.md、DISCUSSION-LOG.md 以及仅在写入对应输出文件时才读取的 checkpoint.json schema。
 
@@ -167,7 +167,7 @@ GSD Core 是一个**元提示框架**，位于用户与 AI 编码 Agent（Claude
 
 **Agent 总数：** 33
 
-### 参考文档（`get-shit-done/references/*.md`）
+### 参考文档（`gsd-core/references/*.md`）
 
 工作流和 Agent 通过 `@-reference` 引用的共享知识文档（请参阅 [`docs/INVENTORY.md`](INVENTORY.md#references-41-shipped) 获取权威数量及完整列表）：
 
@@ -221,7 +221,7 @@ GSD Core 是一个**元提示框架**，位于用户与 AI 编码 Agent（Claude
 - `planner-reviews.md` — 跨 AI 审查集成（从 `/gsd-review` 读取 REVIEWS.md）
 - `planner-revision.md` — 用于迭代细化的计划修订模式
 
-### 模板（`get-shit-done/templates/`）
+### 模板（`gsd-core/templates/`）
 
 所有规划产物的 Markdown 模板。由 `gsd-tools.cjs template fill` / `phase.scaffold`（以及顶级 `scaffold`）使用，以创建预结构化文件：
 - `project.md`、`requirements.md`、`roadmap.md`、`state.md` — 核心项目文件
@@ -253,13 +253,13 @@ GSD Core 是一个**元提示框架**，位于用户与 AI 编码 Agent（Claude
 
 请参阅 [`docs/INVENTORY.md`](INVENTORY.md#hooks-11-shipped) 获取权威的 11 个 hook 列表。
 
-### 命令路由中枢（`get-shit-done/bin/lib/command-routing-hub.cjs`）
+### 命令路由中枢（`gsd-core/bin/lib/command-routing-hub.cjs`）
 
 CJS 命令族路由器通过 `CommandRoutingHub` 进行调度。中枢拥有不抛出异常的纯结果契约（`hub.dispatch()` 捕获内部异常并返回 `{ ok: false, kind, ...typedPayload }`）以及封闭的运行时错误分类（`UnknownCommand`、`InvalidArgs`、`HandlerRefusal`、`HandlerFailure`）。路由器适配器保持为轻量级 CLI 转换器——它们构建中枢、调用 `dispatch`，然后将结果映射到 `output()`/`error()` 调用。运行时为单路径（无双运行时模式选择）。参见 `docs/adr/0174-retire-gsd-sdk-package-boundary.md`。
 
-### CLI 工具（`get-shit-done/bin/`）
+### CLI 工具（`gsd-core/bin/`）
 
-Node.js CLI 工具（`gsd-tools.cjs`），其领域模块分布在 `get-shit-done/bin/lib/` 中（请参阅 [`docs/INVENTORY.md`](INVENTORY.md#cli-modules-33-shipped) 获取权威列表）：
+Node.js CLI 工具（`gsd-tools.cjs`），其领域模块分布在 `gsd-core/bin/lib/` 中（请参阅 [`docs/INVENTORY.md`](INVENTORY.md#cli-modules-33-shipped) 获取权威列表）：
 
 
 | 模块                   | 职责                                                                                                |
@@ -466,7 +466,7 @@ UI-SPEC.md (per phase) ───────────────────
 ~/.claude/                          # Claude Code (global install)
 ├── skills/gsd-*/SKILL.md           # Global skills (authoritative roster: docs/INVENTORY.md)
 ├── commands/gsd/*.md               # Local Claude installs use slash commands instead of global skills
-├── get-shit-done/
+├── gsd-core/
 │   ├── bin/gsd-tools.cjs           # CLI utility
 │   ├── bin/lib/*.cjs               # Domain modules (authoritative roster: docs/INVENTORY.md)
 │   ├── workflows/*.md              # Workflow definitions (authoritative roster: docs/INVENTORY.md)
@@ -512,7 +512,8 @@ UI-SPEC.md (per phase) ───────────────────
 │   ├── FEATURES.md
 │   ├── ARCHITECTURE.md
 │   └── PITFALLS.md
-├── codebase/               # Brownfield mapping (from /gsd-map-codebase)
+├── codebase/               # Brownfield mapping (from /gsd-map-codebase or /gsd-onboard)
+├── onboarding/             # Brownfield onboarding summary (from /gsd-onboard)
 │   ├── STACK.md            # YAML frontmatter carries `last_mapped_commit`
 │   ├── ARCHITECTURE.md     # for the post-execute drift gate (#2003)
 │   ├── CONVENTIONS.md

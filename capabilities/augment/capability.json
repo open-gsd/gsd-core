@@ -1,16 +1,23 @@
 {
   "id": "augment",
   "role": "runtime",
+  "version": "1.8.0",
   "title": "Augment Code",
   "description": "Augment Code CLI — commands + nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
   "tier": "core",
   "requires": [],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
   "runtime": {
     "configHome": {
       "kind": "dot-home",
       "name": ".augment",
-      "env": ["AUGMENT_CONFIG_DIR"]
+      "env": [
+        "AUGMENT_CONFIG_DIR"
+      ]
     },
+    "localConfigDir": ".augment",
     "configFormat": "settings-json",
     "artifactLayout": {
       "global": [
@@ -29,6 +36,14 @@
           "nesting": "nested",
           "recursive": false,
           "converter": "convertClaudeCommandToAugmentSkill"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToAugmentAgent"
         }
       ],
       "local": [
@@ -47,6 +62,14 @@
           "nesting": "nested",
           "recursive": false,
           "converter": "convertClaudeCommandToAugmentSkill"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToAugmentAgent"
         }
       ]
     },
@@ -58,6 +81,28 @@
     "installSurface": "settings-json",
     "writesSharedSettings": true,
     "permissionWriter": null,
-    "extendedHookEvents": []
+    "extendedHookEvents": [],
+    "hostBehaviors": {
+      "commandBodyConverter": "convertClaudeToAugmentMarkdown",
+      "mcpCompanion": "settings-json"
+    },
+    "hostIntegration": {
+      "embeddingMode": "declarative",
+      "commandSurface": "slash-file",
+      "dispatch": {
+        "namedDispatch": true,
+        "nested": "undocumented",
+        "maxDepth": "undocumented",
+        "background": true,
+        "subagentToolkit": "full",
+        "backgroundDispatch": "undocumented"
+      },
+      "modelMode": "passive",
+      "hookBus": "host",
+      "stateIO": "filesystem",
+      "transport": "mcp",
+      "runtime": "node",
+      "effortSurface": "undocumented"
+    }
   }
 }

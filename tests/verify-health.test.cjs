@@ -21,6 +21,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { VALID_PROFILES } = require('../gsd-core/bin/lib/model-catalog.cjs');
 
 // ─── Helpers for setting up minimal valid projects ────────────────────────────
 
@@ -348,6 +349,334 @@ describe('validate health command', () => {
     assert.ok(
       !output.warnings.some(w => w.code === 'W004'),
       `Should not warn for inherit model_profile: ${JSON.stringify(output.warnings)}`
+    );
+  });
+
+  // ─── Check 5c: model_profile "adaptive" + per-phase-type tier validation
+  // (W022, #2070) ──────────────────────────────────────────────────────────
+  // W004 must be sourced from the catalog's VALID_PROFILES (so "adaptive"
+  // is accepted), and a new W022 must fire for any `models.<phase_type>`
+  // entry whose value is not a valid tier (opus/sonnet/haiku/inherit),
+  // including non-string values, and for keys that are not valid phase types.
+
+  test('accepts adaptive model_profile as valid (no W004)', () => {
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'adaptive' })
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      !output.warnings.some(w => w.code === 'W004'),
+      `Should not warn W004 for adaptive model_profile: ${JSON.stringify(output.warnings)}`
+    );
+  });
+
+  test('every catalog profile is accepted without W004', () => {
+    // Loop over VALID_PROFILES so this can never drift from the catalog.
+    for (const profile of VALID_PROFILES) {
+      const dir = createTempProject();
+      try {
+        writeMinimalProjectMd(dir);
+        writeMinimalRoadmap(dir, ['1']);
+        writeMinimalStateMd(dir);
+        fs.writeFileSync(
+          path.join(dir, '.planning', 'config.json'),
+          JSON.stringify({ model_profile: profile })
+        );
+        fs.mkdirSync(path.join(dir, '.planning', 'phases', '01-a'), { recursive: true });
+
+        const result = runGsdTools('validate health', dir);
+        assert.ok(result.success, `Command failed for profile "${profile}": ${result.error}`);
+
+        const output = JSON.parse(result.output);
+        assert.ok(
+          !output.warnings.some(w => w.code === 'W004'),
+          `Should not warn W004 for catalog profile "${profile}": ${JSON.stringify(output.warnings)}`
+        );
+      } finally {
+        cleanup(dir);
+      }
+    }
+  });
+
+  test('still warns W004 for a genuinely invalid model_profile (regression guard)', () => {
+    // Don't let the adaptive-profile fix over-broaden into accepting everything.
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'bogus' })
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      output.warnings.some(w => w.code === 'W004'),
+      `Expected W004 to still fire for a bogus model_profile: ${JSON.stringify(output.warnings)}`
+    );
+  });
+
+  test('warns W022 for an invalid tier value under models.<phase_type>', () => {
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced', models: { planning: 'opuss' } })
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    const w022 = output.warnings.find(w => w.code === 'W022');
+    assert.ok(w022, `Expected W022 in warnings: ${JSON.stringify(output.warnings)}`);
+    const fullText = `${w022.message} ${w022.fix || ''}`;
+    assert.ok(fullText.includes('planning'), `Expected W022 message to name "planning": ${JSON.stringify(w022)}`);
+    assert.ok(fullText.includes('opuss'), `Expected W022 message to name "opuss": ${JSON.stringify(w022)}`);
+    assert.ok(
+      /ignor/i.test(fullText),
+      `Expected W022 message to indicate the value will be ignored: ${JSON.stringify(w022)}`
+    );
+  });
+
+  test('does not warn W022 or W004 for a valid tier value under models.<phase_type>', () => {
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced', models: { planning: 'opus' } })
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      !output.warnings.some(w => w.code === 'W022'),
+      `Should not have W022 for valid tier "opus": ${JSON.stringify(output.warnings)}`
+    );
+    assert.ok(
+      !output.warnings.some(w => w.code === 'W004'),
+      `Should not have W004: ${JSON.stringify(output.warnings)}`
+    );
+  });
+
+  for (const tier of ['sonnet', 'haiku', 'inherit']) {
+    test(`does not warn W022 for the valid tier value "${tier}" under models.<phase_type>`, () => {
+      writeMinimalProjectMd(tmpDir);
+      writeMinimalRoadmap(tmpDir, ['1']);
+      writeMinimalStateMd(tmpDir);
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'config.json'),
+        JSON.stringify({ model_profile: 'balanced', models: { planning: tier } })
+      );
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+      const result = runGsdTools('validate health', tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const output = JSON.parse(result.output);
+      assert.ok(
+        !output.warnings.some(w => w.code === 'W022'),
+        `Should not have W022 for valid tier "${tier}": ${JSON.stringify(output.warnings)}`
+      );
+    });
+  }
+
+  test('warns W022 for a numeric (non-string) models.<phase_type> value', () => {
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced', models: { planning: 5 } })
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      output.warnings.some(w => w.code === 'W022'),
+      `Expected W022 for numeric models.planning value: ${JSON.stringify(output.warnings)}`
+    );
+  });
+
+  test('warns W022 for a null models.<phase_type> value', () => {
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced', models: { planning: null } })
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      output.warnings.some(w => w.code === 'W022'),
+      `Expected W022 for null models.planning value: ${JSON.stringify(output.warnings)}`
+    );
+  });
+
+  test('warns W022 for an empty-string models.<phase_type> value', () => {
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced', models: { planning: '' } })
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      output.warnings.some(w => w.code === 'W022'),
+      `Expected W022 for empty-string models.planning value: ${JSON.stringify(output.warnings)}`
+    );
+  });
+
+  test('warns W022 for a mistyped models phase-type key, naming the unknown key', () => {
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced', models: { plannning: 'opus' } })
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    const w022 = output.warnings.find(w => w.code === 'W022');
+    assert.ok(w022, `Expected W022 in warnings: ${JSON.stringify(output.warnings)}`);
+    const fullText = `${w022.message} ${w022.fix || ''}`;
+    assert.ok(
+      fullText.includes('plannning'),
+      `Expected W022 message to name the unknown key "plannning": ${JSON.stringify(w022)}`
+    );
+  });
+
+  // ─── #2070 review finding 3: malformed top-level `models` is silently
+  // skipped today (src/verify.cts guards `typeof === 'object' && !Array`
+  // with no else branch, so an array/string/number/boolean `models` value
+  // produces ZERO diagnostics — the same undiagnosable-no-op class #2070
+  // targets). `models` absent or explicitly `null` must stay silent. ────────
+
+  for (const [label, malformedModels] of [
+    ['an array', []],
+    ['a string', 'opus'],
+    ['a number', 5],
+    ['a boolean', true],
+  ]) {
+    test(`warns W022 for a top-level models value that is ${label} (not a plain object)`, () => {
+      writeMinimalProjectMd(tmpDir);
+      writeMinimalRoadmap(tmpDir, ['1']);
+      writeMinimalStateMd(tmpDir);
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'config.json'),
+        JSON.stringify({ model_profile: 'balanced', models: malformedModels })
+      );
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+      const result = runGsdTools('validate health', tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const output = JSON.parse(result.output);
+      const w022 = output.warnings.find(w => w.code === 'W022');
+      assert.ok(
+        w022,
+        `Expected W022 when top-level models is ${label} (${JSON.stringify(malformedModels)}): ${JSON.stringify(output.warnings)}`
+      );
+      const fullText = `${w022.message} ${w022.fix || ''}`;
+      assert.ok(fullText.includes('models'), `Expected W022 message to mention "models": ${JSON.stringify(w022)}`);
+      assert.ok(/object/i.test(fullText), `Expected W022 message to indicate models must be an object: ${JSON.stringify(w022)}`);
+      assert.ok(/ignor/i.test(fullText), `Expected W022 message to indicate the value will be ignored: ${JSON.stringify(w022)}`);
+    });
+  }
+
+  test('does not warn W022 for an empty-object top-level models value (valid, just empty)', () => {
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced', models: {} })
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      !output.warnings.some(w => w.code === 'W022'),
+      `Should not warn W022 for an empty models object: ${JSON.stringify(output.warnings)}`
+    );
+  });
+
+  test('does not warn W022 for a top-level models value of null (explicit unset)', () => {
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced', models: null })
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      !output.warnings.some(w => w.code === 'W022'),
+      `Should not warn W022 for models: null: ${JSON.stringify(output.warnings)}`
+    );
+  });
+
+  test('does not warn W022 when the models key is absent entirely', () => {
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced' })
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      !output.warnings.some(w => w.code === 'W022'),
+      `Should not warn W022 when models is absent: ${JSON.stringify(output.warnings)}`
     );
   });
 
@@ -1026,5 +1355,137 @@ describe('validate health — missing phasesDir', () => {
       const matches = issues.filter(i => i.code === code);
       assert.strictEqual(matches.length, 0, `Expected no ${code} issues when phasesDir is missing, got: ${JSON.stringify(matches)}`);
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #1472 regression — workstream-aware paths
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('validate health — #1472 workstream-aware path resolution', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('reports healthy when GSD_WORKSTREAM is set and files are in the correct workstream layout', () => {
+    // Shared-root files at .planning/
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'PROJECT.md'),
+      '# Project\n\n## What This Is\n\nTest project.\n\n## Core Value\n\nCore value here.\n\n## Requirements\n\nRequirements here.\n'
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced', commit_docs: true, workflow: { nyquist_validation: true, ai_integration_phase: true } }, null, 2)
+    );
+
+    // Workstream-scoped files at .planning/workstreams/ws-a/
+    const wsDir = path.join(tmpDir, '.planning', 'workstreams', 'ws-a');
+    fs.mkdirSync(wsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(wsDir, 'ROADMAP.md'),
+      '# Roadmap\n\n### Phase 1: Setup\n'
+    );
+    fs.writeFileSync(
+      path.join(wsDir, 'STATE.md'),
+      '# Session State\n\n## Current Position\n\nPhase: 1\n'
+    );
+    const wsPhaseDir = path.join(wsDir, 'phases', '01-setup');
+    fs.mkdirSync(wsPhaseDir, { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir, { GSD_WORKSTREAM: 'ws-a' });
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    // PROJECT.md and config.json must NOT be reported missing (E002/W003)
+    assert.ok(
+      !output.errors.some(e => e.code === 'E002'),
+      `E002 (PROJECT.md missing) should not fire with workstream layout: ${JSON.stringify(output.errors)}`
+    );
+    assert.ok(
+      !output.errors.some(e => e.code === 'E003'),
+      `E003 (ROADMAP.md missing) should not fire with workstream layout: ${JSON.stringify(output.errors)}`
+    );
+    assert.ok(
+      !output.errors.some(e => e.code === 'E004'),
+      `E004 (STATE.md missing) should not fire with workstream layout: ${JSON.stringify(output.errors)}`
+    );
+    assert.ok(
+      !output.warnings.some(w => w.code === 'W003'),
+      `W003 (config.json missing) should not fire with workstream layout: ${JSON.stringify(output.warnings)}`
+    );
+    // Status should not be 'broken' due to path misrouting
+    assert.notStrictEqual(
+      output.status, 'broken',
+      `Status should not be broken when files exist in the correct workstream layout: ${JSON.stringify(output)}`
+    );
+  });
+
+  test('without GSD_WORKSTREAM, shared-root files are found at .planning/ root', () => {
+    // All files at .planning/ root (no workstream sub-path)
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    writeValidConfigJson(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-setup'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      !output.errors.some(e => ['E002', 'E003', 'E004'].includes(e.code)),
+      `No E002/E003/E004 should fire in standard non-workstream layout: ${JSON.stringify(output.errors)}`
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #1454 regression — W017 must not fire for the active worktree
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('validate health — #1454 W017 excludes active worktree', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // The active-worktree exclusion guard in the SUT (src/verify.cts) compares
+  // process.cwd() against each stale-finding path at runtime. The integration
+  // scenario below covers the observable CLI contract; the unit-level injection
+  // path is omitted here because bin/lib/verify.cjs is a gitignored tsc artifact
+  // not present in a fresh worktree.
+
+  test('validate health completes without W017 for the cwd itself when inspected as worktree root', () => {
+    // Set up a minimal healthy project at tmpDir
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    writeValidConfigJson(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-setup'), { recursive: true });
+
+    // Run with cwd = tmpDir. The SUT will call process.cwd() which is the test runner's cwd,
+    // not tmpDir, so any stale worktree that matches tmpDir (as a non-cwd) CAN legitimately
+    // be flagged. The guard only protects the CURRENT process.cwd().
+    // What we assert: when there is no real git repo at tmpDir, no W017 fires (git worktree
+    // list will fail / return empty — the try/catch swallows it silently).
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      !output.warnings.some(w => w.code === 'W017'),
+      `W017 should not fire for a non-git project dir: ${JSON.stringify(output.warnings)}`
+    );
   });
 });

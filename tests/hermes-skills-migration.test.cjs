@@ -21,8 +21,9 @@ const fs = require('fs');
 
 const {
   convertClaudeCommandToClaudeSkill,
-  installRuntimeArtifacts,
 } = require('../bin/install.js');
+
+const { installRuntimeArtifacts } = require('../gsd-core/bin/lib/install-engine.cjs');
 const { parseFrontmatter, cleanup } = require('./helpers.cjs');
 const pkg = require('../package.json');
 
@@ -176,7 +177,7 @@ describe('Hermes Agent: installRuntimeArtifacts', () => {
     assert.ok(fm.description && fm.description.length > 0, 'description present and non-empty');
     assert.strictEqual(fm.version, pkg.version,
       `Hermes SKILL.md must declare version (got ${JSON.stringify(fm.version)})`);
-    assert.ok(/^allowed-tools:\s*\n(?:\s+-\s+\S+\n?)+/m.test(content),
+    assert.ok(/^allowed-tools:\s*\r?\n(?:\s+-\s+\S+\r?\n?)+/m.test(content),
       'allowed-tools rendered as YAML block list');
     assert.ok(content.includes('<objective>'), 'body content preserved');
   });
@@ -316,7 +317,7 @@ describe('Hermes Agent: SKILL.md format validation', () => {
     assert.strictEqual(fm.version, pkg.version, 'version matches package.json');
     assert.strictEqual(fm.agent, 'gsd-code-reviewer', 'agent preserved');
     assert.strictEqual(fm['argument-hint'], '[PR number or branch]', 'argument-hint preserved and unquoted');
-    assert.ok(/^allowed-tools:\s*\n(?:\s+-\s+\S+\n?)+/m.test(result),
+    assert.ok(/^allowed-tools:\s*\r?\n(?:\s+-\s+\S+\r?\n?)+/m.test(result),
       'allowed-tools rendered as YAML block list');
   });
 
@@ -334,5 +335,63 @@ describe('Hermes Agent: SKILL.md format validation', () => {
     const fm = parseFrontmatter(result);
     assert.strictEqual(fm.version, undefined, 'no version key for non-hermes skills');
     assert.strictEqual(fm.name, 'gsd-plan');
+  });
+});
+
+// ─── #1383 regression: version lookup must not require a runtime-root package.json ──
+// The extracted conversion module sits in the gsd-tools loader chain, so its old
+// top-level `require('../../../package.json')` crashed EVERY gsd-tools command on
+// Codex — whose runtime root has no package.json — with
+// `Cannot find module '../../../package.json'`. The Hermes `version:` field (the
+// require's only consumer) must instead be sourced from the installed
+// gsd-core/VERSION, lazily and defensively, so the module loads everywhere and
+// the emitted version is a real semver, never `undefined`.
+describe('#1383 regression: gsd-tools version lookup without a runtime-root package.json', () => {
+  // Require the EXTRACTED module that the gsd-tools chain loads (not install.js's
+  // in-process copy), to assert the crash path itself is gone.
+  const conversion = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+
+  let tmp;
+  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1383-')); });
+  afterEach(() => { cleanup(tmp); });
+
+  // Build a fake install layout <tmp>/gsd-core/bin/lib and return that libDir.
+  // `version` writes <tmp>/gsd-core/VERSION; `rootPkg` writes <tmp>/package.json.
+  function layout({ version, rootPkg } = {}) {
+    const libDir = path.join(tmp, 'gsd-core', 'bin', 'lib');
+    fs.mkdirSync(libDir, { recursive: true });
+    if (version !== undefined) fs.writeFileSync(path.join(tmp, 'gsd-core', 'VERSION'), version);
+    if (rootPkg !== undefined) fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify(rootPkg));
+    return libDir;
+  }
+
+  test('reads gsd-core/VERSION when the runtime root has no package.json (Codex layout)', () => {
+    const libDir = layout({ version: '9.9.9\n' }); // deliberately NO root package.json
+    assert.ok(!fs.existsSync(path.join(tmp, 'package.json')),
+      'precondition: Codex layout has no runtime-root package.json');
+    let v;
+    assert.doesNotThrow(() => { v = conversion.resolveVersionFrom(libDir); },
+      'version lookup must not throw on a layout without a runtime-root package.json');
+    assert.strictEqual(v, '9.9.9', 'version is read (trimmed) from the installed VERSION file');
+  });
+
+  test('falls back to the runtime-root package.json when no VERSION file exists (source/npm layout)', () => {
+    const libDir = layout({ rootPkg: { version: '1.2.3' } }); // no VERSION file
+    assert.strictEqual(conversion.resolveVersionFrom(libDir), '1.2.3',
+      'source/npm tree has a real package.json three dirs up');
+  });
+
+  test('degrades to "" (never throws, never emits undefined) when neither source exists', () => {
+    const libDir = layout({}); // neither VERSION nor package.json
+    let v;
+    assert.doesNotThrow(() => { v = conversion.resolveVersionFrom(libDir); });
+    assert.strictEqual(v, '', 'no source -> empty string, so the caller omits the version field');
+  });
+
+  test('rejects a non-semver VERSION file rather than emitting it verbatim', () => {
+    const libDir = layout({ version: 'not-a-version\n' }); // malformed, no package.json fallback
+    let v;
+    assert.doesNotThrow(() => { v = conversion.resolveVersionFrom(libDir); });
+    assert.strictEqual(v, '', 'garbled VERSION is rejected, so the caller omits the field');
   });
 });

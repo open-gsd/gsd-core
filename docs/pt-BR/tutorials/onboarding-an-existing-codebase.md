@@ -44,15 +44,15 @@ claude --dangerously-skip-permissions
 
 ---
 
-## Passo 3 — Mapear a base de código
+## Passo 3 — Iniciar o onboarding brownfield
 
-Antes de criar um projeto, deixe o GSD Core aprender o que já existe. Este é o passo que torna o planejamento brownfield preciso.
+Antes de criar um projeto, deixe o GSD Core inspecionar o estado do repositório e indicar o próximo comando de nível superior seguro. Este passo evita pular contexto de código ou sobrescrever arquivos de planning existentes.
 
 ```text
-/gsd-map-codebase
+/gsd-onboard
 ```
 
-O GSD Core cria quatro sub-agentes mapeadores paralelos (você verá "Spawning 4 parallel codebase mapper agents…" — isso leva de 1 a 5 minutos; não interrompa). Cada agente foca em uma preocupação diferente:
+Se o onboarding informar que o mapa da base de código está ausente, escolha a opção recomendada e execute o handoff `/gsd-map-codebase` impresso antes de rodar `/gsd-onboard` novamente. `/gsd-onboard --fast` serve para uma primeira passada leve, mas um mapa completo ainda é necessário antes de `/gsd-new-project`. O `/gsd-map-codebase` cria quatro sub-agentes mapeadores paralelos (você verá "Spawning 4 parallel codebase mapper agents…" — isso leva de 1 a 5 minutos; não interrompa). Cada agente foca em uma preocupação diferente:
 
 | Agente | Foco |
 |--------|------|
@@ -84,7 +84,7 @@ Abra `.planning/codebase/CONCERNS.md`. Este é o arquivo mais útil para ler ant
 
 ---
 
-## Passo 4 — Limpar o contexto e criar o projeto
+## Passo 4 — Reexecutar o onboarding e inicializar o projeto
 
 Limpe a janela de sessão:
 
@@ -92,11 +92,13 @@ Limpe a janela de sessão:
 /clear
 ```
 
-Agora crie o projeto. Como o GSD Core encontrou código existente no passo anterior, já sabe que se trata de um projeto brownfield. Quando você executa `/gsd-new-project`, as perguntas focam no que você está *adicionando*, e não em reconstruir o que já existe:
+Agora execute `/gsd-onboard` novamente. Se o GSD Core detectar ADRs, PRDs, specs, RFCs ou requisitos de nível raiz, aceite o handoff recomendado para `/gsd-ingest-docs` primeiro e depois rode `/gsd-onboard` de novo. Quando o contexto estiver pronto, o onboarding imprimirá o handoff de inicialização:
 
 ```text
 /gsd-new-project
 ```
+
+Como o GSD Core encontrou código existente no passo anterior, `/gsd-new-project` sabe que é um projeto brownfield. As perguntas focam no que você está *adicionando*, não em reconstruir o que já existe:
 
 O GSD Core pergunta o que você quer construir. Responda com o recurso que está adicionando, e não com uma descrição de toda a base de código:
 
@@ -124,6 +126,8 @@ Proposed Roadmap
 
 Aprove o roteiro.
 
+Execute `/gsd-onboard` mais uma vez depois que a configuração do projeto terminar. Agora que `PROJECT.md`, `REQUIREMENTS.md`, `ROADMAP.md` e `STATE.md` existem, o onboarding cria ou confirma `.planning/onboarding/SUMMARY.md`.
+
 **O que é criado em `.planning/`:**
 
 ```text
@@ -133,6 +137,7 @@ Aprove o roteiro.
   ROADMAP.md          ← Fase 1, status: pending
   STATE.md            ← memória de sessão
   config.json         ← configurações do fluxo de trabalho
+  onboarding/SUMMARY.md ← status do onboarding e próximo comando
   codebase/           ← os sete arquivos de mapa do Passo 3
 ```
 
@@ -212,6 +217,7 @@ Para cada recurso futuro, execute `/gsd-map-codebase` novamente sempre que a est
 
 ## O que você aprendeu
 
+- Como `/gsd-onboard` sequencia com segurança o setup brownfield sem aninhar comandos interativos ou sobrescrever planning existente.
 - Como `/gsd-map-codebase` executa quatro agentes paralelos para produzir `STACK.md`, `ARCHITECTURE.md`, `CONVENTIONS.md`, `CONCERNS.md`, `STRUCTURE.md`, `TESTING.md` e `INTEGRATIONS.md` em `.planning/codebase/`.
 - Como `/gsd-new-project` em um repositório brownfield concentra as perguntas no que você está *adicionando* e preenche os requisitos Validated a partir do código existente.
 - Como o mapa da base de código orienta cada pergunta em `/gsd-discuss-phase` — caminhos de arquivos, padrões e convenções vêm do seu código real.

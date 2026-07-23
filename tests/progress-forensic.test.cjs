@@ -160,18 +160,32 @@ describe('#1107: progress routing consults verification.status before reporting 
       workflow.includes('verification_status'),
       'progress workflow must track a verification_status value for routing'
     );
+    assert.ok(
+      workflow.includes('stale verification'),
+      'progress workflow must document that verification.status projects stale verification'
+    );
   });
 
   test('routing table has gaps_found and human_needed rows BEFORE the generic complete row', () => {
     const workflow = readWorkflow();
+    const missingIdx = workflow.indexOf('verification_status = missing');
+    const unknownIdx = workflow.indexOf('verification_status = unknown');
+    const staleIdx = workflow.indexOf('verification_status = stale');
     const gapsIdx = workflow.indexOf('verification_status = gaps_found');
     const humanIdx = workflow.indexOf('verification_status = human_needed');
-    const completeIdx = workflow.indexOf('Phase complete (verification passed');
+    const completeIdx = workflow.indexOf('Phase complete (verification passed)');
+    assert.ok(missingIdx > -1, 'routing table must have a missing verification row');
+    assert.ok(unknownIdx > -1, 'routing table must have an unknown verification row');
+    assert.ok(staleIdx > -1, 'routing table must have a stale verification row');
     assert.ok(gapsIdx > -1, 'routing table must have a gaps_found row');
     assert.ok(humanIdx > -1, 'routing table must have a human_needed row');
     assert.ok(completeIdx > -1, 'routing table must keep a generic complete row');
     assert.ok(
-      gapsIdx < completeIdx && humanIdx < completeIdx,
+      missingIdx < completeIdx &&
+        unknownIdx < completeIdx &&
+        staleIdx < completeIdx &&
+        gapsIdx < completeIdx &&
+        humanIdx < completeIdx,
       'verification rows must precede the generic "summaries = plans" complete row (first-match-wins)'
     );
   });
@@ -204,11 +218,232 @@ describe('#1107: progress routing consults verification.status before reporting 
     );
   });
 
-  test('missing/passed verification still routes as complete (no false blocker)', () => {
+  test('stale verification routes to verify-work (Route V.stale)', () => {
+    const workflow = readWorkflow();
+    assert.ok(workflow.includes('**Route V.stale:'), 'must define a Route V.stale section');
+    const route = workflow.slice(
+      workflow.indexOf('**Route V.stale:'),
+      workflow.indexOf('**Route V.gaps:')
+    );
+    assert.ok(
+      route.includes('verify-work'),
+      'Route V.stale must route to /gsd:verify-work {phase}'
+    );
+  });
+
+  test('missing and unknown verification do not route as complete', () => {
     const workflow = readWorkflow();
     assert.ok(
-      workflow.includes('Phase complete (verification passed, missing, or n/a)'),
-      'the generic complete row must still cover passed/missing/unknown so unverified phases are not falsely blocked'
+      workflow.includes('Phase complete (verification passed)'),
+      'the generic complete row must only cover passed verification'
+    );
+    assert.ok(!workflow.includes('verification passed, missing, or n/a'),
+      'missing or unknown verification must not be documented as complete');
+  });
+});
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3418-progress-flag-routing.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3418-progress-flag-routing (consolidation epic #1969 B3 #1972)", () => {
+// allow-test-rule: source-text-is-the-product (see #3418)
+// The command markdown is loaded directly by runtime prompt assembly.
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+describe('#3418: /gsd-progress flag routing prompt contract', () => {
+  test('progress command surfaces raw arguments on a dedicated line before routing parse', () => {
+    const command = fs.readFileSync(
+      path.join(__dirname, '..', 'commands', 'gsd', 'progress.md'),
+      'utf8'
+    );
+
+    assert.ok(
+      command.includes('Arguments provided: "$ARGUMENTS"'),
+      'progress.md must surface $ARGUMENTS on a dedicated line for stable flag parsing'
+    );
+  });
+
+  test('progress command must not inline-substitute $ARGUMENTS into parse instruction text', () => {
+    const command = fs.readFileSync(
+      path.join(__dirname, '..', 'commands', 'gsd', 'progress.md'),
+      'utf8'
+    );
+
+    assert.ok(
+      !command.includes('Parse the first token of $ARGUMENTS:'),
+      'progress.md must keep parse instructions independent from argument interpolation'
     );
   });
 });
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2912-progress-context-authority.test.cjs — consolidation epic #1969 (B4 #1973)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2912-progress-context-authority (consolidation epic #1969 B4 #1973)", () => {
+/**
+ * Tests for issue #2912 — /gsd-progress can use stale CLAUDE.md project block
+ * instead of GSD tracking files as authoritative source.
+ *
+ * Fix: the `report` step in gsd-core/workflows/progress.md must contain
+ * an explicit "context authority" directive establishing PROJECT.md, STATE.md,
+ * and ROADMAP.md as the authoritative sources for the progress report, and
+ * forbidding the use of CLAUDE.md `## Project` blocks as a source for any
+ * report field.
+ *
+ * These tests parse the workflow markdown structurally (locate the
+ * <step name="report"> ... </step> block, then locate the blockquote-style
+ * directive inside it). They do NOT use `.includes()` over the whole file.
+ */
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+const WORKFLOW_PATH = path.join(
+  __dirname,
+  '..',
+  'gsd-core',
+  'workflows',
+  'progress.md'
+);
+
+/** Extract the body of a <step name="..."> ... </step> block by parsing tags. */
+function extractStep(workflow, stepName) {
+  const openTag = `<step name="${stepName}">`;
+  const start = workflow.indexOf(openTag);
+  if (start === -1) return null;
+  const bodyStart = start + openTag.length;
+  // Find the matching </step> — workflow steps in this file do not nest.
+  const end = workflow.indexOf('</step>', bodyStart);
+  if (end === -1) return null;
+  return workflow.slice(bodyStart, end);
+}
+
+/**
+ * Extract contiguous markdown blockquote blocks from a chunk of markdown.
+ * A blockquote is a run of consecutive lines starting with '>' (after any
+ * leading whitespace). Returns the joined text of each blockquote with the
+ * leading '>' markers stripped.
+ */
+function extractBlockquotes(md) {
+  const lines = md.split(/\r?\n/);
+  const blocks = [];
+  let current = null;
+  for (const line of lines) {
+    const m = line.match(/^\s*>\s?(.*)$/);
+    if (m) {
+      if (current === null) current = [];
+      current.push(m[1]);
+    } else {
+      if (current !== null) {
+        blocks.push(current.join('\n'));
+        current = null;
+      }
+    }
+  }
+  if (current !== null) blocks.push(current.join('\n'));
+  return blocks;
+}
+
+describe('#2912: progress report step has explicit context-authority directive', () => {
+  test('progress.md workflow file exists and is readable', () => {
+    const stat = fs.statSync(WORKFLOW_PATH);
+    assert.ok(stat.isFile(), 'workflow file should exist');
+  });
+
+  test('progress.md has a <step name="report"> section', () => {
+    const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    const reportStep = extractStep(workflow, 'report');
+    assert.ok(reportStep, 'workflow should contain a report step');
+    assert.ok(reportStep.length > 0, 'report step body should not be empty');
+  });
+
+  test('report step contains a blockquote directive about context authority', () => {
+    const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    const reportStep = extractStep(workflow, 'report');
+    assert.ok(reportStep, 'report step must be present');
+
+    const blockquotes = extractBlockquotes(reportStep);
+    assert.ok(
+      blockquotes.length > 0,
+      'report step should contain at least one blockquote (the context-authority directive)'
+    );
+
+    const authorityBlock = blockquotes.find((b) => /context\s+authority/i.test(b));
+    assert.ok(
+      authorityBlock,
+      'report step should contain a blockquote whose text includes "Context authority"'
+    );
+  });
+
+  test('context-authority directive names PROJECT.md, STATE.md, and ROADMAP.md as authoritative', () => {
+    const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    const reportStep = extractStep(workflow, 'report');
+    assert.ok(reportStep, 'report step must exist');
+    const blockquotes = extractBlockquotes(reportStep);
+    const authorityBlock = blockquotes.find((b) => /context\s+authority/i.test(b));
+    assert.ok(authorityBlock, 'authority blockquote must exist');
+
+    assert.match(
+      authorityBlock,
+      /PROJECT\.md/,
+      'directive should name PROJECT.md as authoritative'
+    );
+    assert.match(
+      authorityBlock,
+      /STATE\.md/,
+      'directive should name STATE.md as authoritative'
+    );
+    assert.match(
+      authorityBlock,
+      /ROADMAP\.md/,
+      'directive should name ROADMAP.md as authoritative'
+    );
+    assert.match(
+      authorityBlock,
+      /authoritative/i,
+      'directive should describe these files as authoritative'
+    );
+  });
+
+  test('context-authority directive forbids using CLAUDE.md project block as a source', () => {
+    const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    const reportStep = extractStep(workflow, 'report');
+    assert.ok(reportStep, 'report step must exist');
+    const blockquotes = extractBlockquotes(reportStep);
+    const authorityBlock = blockquotes.find((b) => /context\s+authority/i.test(b));
+    assert.ok(authorityBlock, 'authority blockquote must exist');
+
+    assert.match(
+      authorityBlock,
+      /CLAUDE\.md/,
+      'directive should explicitly mention CLAUDE.md'
+    );
+    // Must explicitly forbid CLAUDE.md as a source — look for a NOT/do not directive
+    // co-located with the CLAUDE.md mention.
+    assert.match(
+      authorityBlock,
+      /(do\s+NOT|do\s+not|must\s+NOT|must\s+not|never)/i,
+      'directive should contain an explicit prohibition (do NOT / must not / never)'
+    );
+    assert.match(
+      authorityBlock,
+      /## Project/,
+      'directive should call out the CLAUDE.md "## Project" block specifically'
+    );
+  });
+});
+  });
+}

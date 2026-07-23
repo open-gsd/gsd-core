@@ -44,8 +44,15 @@ import io = require('./io.cjs');
 import coreUtils = require('./core-utils.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import path = require('path');
+// Phase 2 (#1646): route through the Hub per ADR-959 §III(B) line 75.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import commandRoutingHub = require('./command-routing-hub.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import cjsCommandRouterAdapter = require('./cjs-command-router-adapter.cjs');
 
 const { ERROR_REASON } = io;
+const { makeInvalidArgs } = commandRoutingHub;
+const { routeHubCommandFamily } = cjsCommandRouterAdapter;
 // Default CoreModule implementation assembled from leaf modules.
 // _core seam overrides this entirely for test injection.
 const _defaultCore = { output: io.output, timeAgo: coreUtils.timeAgo };
@@ -87,62 +94,81 @@ function routeIntelCommand({ args, cwd, raw, error, _intel, _core }: RouteIntelC
   // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
   const intel: IntelModule = _intel ?? require('./intel.cjs');
   const c: CoreModule = _core ?? _defaultCore;
-  const subcommand = args[1];
 
-  if (subcommand === 'query') {
-    const term = args[2];
-    if (!term) {
-      error('Usage: gsd-tools intel query <term>', ERROR_REASON.USAGE);
-      return;
-    }
-    const planningDir = path.join(cwd, '.planning');
-    c.output(intel.intelQuery(term, planningDir), raw);
-  } else if (subcommand === 'status') {
-    const planningDir = path.join(cwd, '.planning');
-    const status = intel.intelStatus(planningDir);
-    if (!raw && status.files) {
-      for (const file of Object.values(status.files)) {
-        if (file.updated_at) {
-          file.updated_at = c.timeAgo(new Date(file.updated_at));
+  // Phase 2 (#1646): routes through the Command Routing Hub per ADR-959 §III(B)
+  // line 75. Validation handlers return `makeInvalidArgs(...)` Results; the
+  // Hub → adapter translation preserves ERROR_REASON granularity via the
+  // exitReason field (Phase 1, #1644). Success handlers keep direct `c.output()`
+  // calls. The timeAgo mutation in non-raw `status` is preserved. Lazy require
+  // of intel.cjs inside the function is preserved (loads only when dispatched).
+  routeHubCommandFamily({
+    family: 'intel',
+    args,
+    // Alphabetical for stable unknownMessage text; the integration test asserts
+    // inclusion of all 9 subcommands, not order.
+    subcommands: ['api-surface', 'diff', 'extract-exports', 'patch-meta', 'query', 'snapshot', 'status', 'update', 'validate'],
+    handlers: {
+      query: () => {
+        const term = args[2];
+        if (!term) {
+          return makeInvalidArgs('term', 'Usage: gsd-tools intel query <term>', ERROR_REASON.USAGE);
         }
-      }
-    }
-    c.output(status, raw);
-  } else if (subcommand === 'diff') {
-    const planningDir = path.join(cwd, '.planning');
-    c.output(intel.intelDiff(planningDir), raw);
-  } else if (subcommand === 'snapshot') {
-    const planningDir = path.join(cwd, '.planning');
-    c.output(intel.intelSnapshot(planningDir), raw);
-  } else if (subcommand === 'patch-meta') {
-    const filePath = args[2];
-    if (!filePath) {
-      error('Usage: gsd-tools intel patch-meta <file-path>', ERROR_REASON.USAGE);
-      return;
-    }
-    c.output(intel.intelPatchMeta(path.resolve(cwd, filePath)), raw);
-  } else if (subcommand === 'validate') {
-    const planningDir = path.join(cwd, '.planning');
-    c.output(intel.intelValidate(planningDir), raw);
-  } else if (subcommand === 'extract-exports') {
-    const filePath = args[2];
-    if (!filePath) {
-      error('Usage: gsd-tools intel extract-exports <file-path>', ERROR_REASON.USAGE);
-      return;
-    }
-    c.output(intel.intelExtractExports(path.resolve(cwd, filePath)), raw);
-  } else if (subcommand === 'update') {
-    const planningDir = path.join(cwd, '.planning');
-    c.output(intel.intelUpdate(planningDir), raw);
-  } else if (subcommand === 'api-surface') {
-    const planningDir = path.join(cwd, '.planning');
-    c.output(intel.intelApiSurface(planningDir), raw);
-  } else {
-    error(
-      'Unknown intel subcommand. Available: query, status, update, diff, snapshot, patch-meta, validate, extract-exports, api-surface',
-      ERROR_REASON.SDK_UNKNOWN_COMMAND,
-    );
-  }
+        const planningDir = path.join(cwd, '.planning');
+        c.output(intel.intelQuery(term, planningDir), raw);
+      },
+      status: () => {
+        const planningDir = path.join(cwd, '.planning');
+        const status = intel.intelStatus(planningDir);
+        if (!raw && status.files) {
+          for (const file of Object.values(status.files)) {
+            if (file.updated_at) {
+              file.updated_at = c.timeAgo(new Date(file.updated_at));
+            }
+          }
+        }
+        c.output(status, raw);
+      },
+      diff: () => {
+        const planningDir = path.join(cwd, '.planning');
+        c.output(intel.intelDiff(planningDir), raw);
+      },
+      snapshot: () => {
+        const planningDir = path.join(cwd, '.planning');
+        c.output(intel.intelSnapshot(planningDir), raw);
+      },
+      'patch-meta': () => {
+        const filePath = args[2];
+        if (!filePath) {
+          return makeInvalidArgs('file-path', 'Usage: gsd-tools intel patch-meta <file-path>', ERROR_REASON.USAGE);
+        }
+        c.output(intel.intelPatchMeta(path.resolve(cwd, filePath)), raw);
+      },
+      validate: () => {
+        const planningDir = path.join(cwd, '.planning');
+        c.output(intel.intelValidate(planningDir), raw);
+      },
+      'extract-exports': () => {
+        const filePath = args[2];
+        if (!filePath) {
+          return makeInvalidArgs('file-path', 'Usage: gsd-tools intel extract-exports <file-path>', ERROR_REASON.USAGE);
+        }
+        c.output(intel.intelExtractExports(path.resolve(cwd, filePath)), raw);
+      },
+      update: () => {
+        const planningDir = path.join(cwd, '.planning');
+        c.output(intel.intelUpdate(planningDir), raw);
+      },
+      'api-surface': () => {
+        const planningDir = path.join(cwd, '.planning');
+        c.output(intel.intelApiSurface(planningDir), raw);
+      },
+    },
+    unknownMessage: (subcommand: string, available: string[]) =>
+      `Unknown intel subcommand. Available: ${available.join(', ')}`,
+    error,
+    cwd,
+    raw,
+  });
 }
 
 export = {

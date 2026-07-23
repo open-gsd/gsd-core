@@ -78,6 +78,7 @@
 | 命令 | 角色 | 源文件 |
 |------|------|--------|
 | `/gsd-new-project` | 通过深度上下文收集和 PROJECT.md 初始化新项目。 | [commands/gsd/new-project.md](../../commands/gsd/new-project.md) |
+| `/gsd-onboard` | 引导现有代码库完成映射、文档摄取、项目设置和 onboarding summary。 | [commands/gsd/onboard.md](../../commands/gsd/onboard.md) |
 | `/gsd-workspace` | 管理 GSD 工作区 — 创建（`--new`）、列出（`--list`）或移除（`--remove`）隔离的工作区环境。 | [commands/gsd/workspace.md](../../commands/gsd/workspace.md) |
 | `/gsd-discuss-phase` | 在规划前通过自适应提问收集阶段上下文。 | [commands/gsd/discuss-phase.md](../../commands/gsd/discuss-phase.md) |
 | `/gsd-mvp-phase` | 将阶段规划为垂直 MVP 切片 — 用户故事、SPIDR 拆分，然后进行阶段规划。 | [commands/gsd/mvp-phase.md](../../commands/gsd/mvp-phase.md) |
@@ -168,7 +169,7 @@
 
 ## 工作流 (88 shipped)
 
-完整清单位于 `get-shit-done/workflows/*.md`。工作流是命令在内部引用的轻量编排器；大多数不由最终用户直接阅读。以下行将每个工作流文件映射到其角色（来源于 `<purpose>` 块），以及在适用情况下映射到调用它的命令。
+完整清单位于 `gsd-core/workflows/*.md`。工作流是命令在内部引用的轻量编排器；大多数不由最终用户直接阅读。以下行将每个工作流文件映射到其角色（来源于 `<purpose>` 块），以及在适用情况下映射到调用它的命令。
 
 | 工作流 | 角色 | 调用者 |
 |--------|------|--------|
@@ -218,6 +219,7 @@
 | `milestone-summary.md` | 里程碑摘要综合 — 从里程碑产物生成的入职和审查产物。 | `/gsd-milestone-summary` |
 | `new-milestone.md` | 启动新里程碑周期 — 加载项目上下文、收集目标、更新 PROJECT.md/STATE.md。 | `/gsd-new-milestone` |
 | `new-project.md` | 统一的新项目流程 — 提问、研究（可选）、需求、路线图。 | `/gsd-new-project` |
+| `onboard.md` | Brownfield 接入编排 — 映射代码库、摄取文档、初始化规划并总结下一步。 | `/gsd-onboard` |
 | `new-workspace.md` | 创建带有仓库 worktree/克隆和独立 `.planning/` 的隔离工作区。 | `/gsd-workspace --new` |
 | `next.md` | 检测当前项目状态并自动推进到下一个逻辑步骤。 | `/gsd-progress --next` |
 | `node-repair.md` | 用于失败任务验证的自主修复算子；由 `execute-plan` 调用。 | `execute-plan.md`（恢复） |
@@ -266,7 +268,7 @@
 
 ## 参考资料 (62 shipped)
 
-完整清单位于 `get-shit-done/references/*.md`。参考资料是工作流和代理 `@-reference` 的共享知识文档。以下分组与 [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#references-get-shit-donereferencesmd) 一致 — 核心、工作流、思维模型集群和模块化规划器分解。
+完整清单位于 `gsd-core/references/*.md`。参考资料是工作流和代理 `@-reference` 的共享知识文档。以下分组与 [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#references-gsd-corereferencesmd) 一致 — 核心、工作流、思维模型集群和模块化规划器分解。
 
 ### 核心参考资料
 
@@ -298,7 +300,7 @@
 | `continuation-format.md` | 会话续传/恢复格式。 |
 | `domain-probes.md` | discuss-phase 的领域特定探究问题。 |
 | `gate-prompts.md` | 关卡/检查点提示模板。 |
-| `scout-codebase.md` | discuss-phase 侦察步骤的阶段类型→代码库映射选择表（通过 #2551 提取）。 |
+| `scout-codebase.md` | discuss-phase 侦察步骤的阶段类型→代码库映射选择表（通过 discuss-phase/modes 渐进式披露分割提取，#717）。 |
 | `revision-loop.md` | 计划修订迭代模式。 |
 | `universal-anti-patterns.md` | 需要检测和避免的通用反模式。 |
 | `worktree-path-safety.md` | Worktree 守卫套件：HEAD 断言、cwd 漂移哨兵（步骤 0a，#3097）和绝对路径守卫（步骤 0b，#3099）— 通过 `<execution_context>` 加载到执行器生成提示中。 |
@@ -361,13 +363,13 @@
 | `user-story-template.md` | MVP 规划的用户故事格式 — "作为 / 我想要 / 以便" 结构化字段。 |
 | `spidr-splitting.md` | 用于在 MVP 模式下处理大型用户故事的 SPIDR 拆分分解规则。 |
 
-> **子目录：** `get-shit-done/references/few-shot-examples/` 包含额外的少样本示例（`plan-checker.md`、`verifier.md`），这些示例从特定代理中引用。它们不计入 62 个顶级参考资料。
+> **子目录：** `gsd-core/references/few-shot-examples/` 包含额外的少样本示例（`plan-checker.md`、`verifier.md`），这些示例从特定代理中引用。它们不计入 62 个顶级参考资料。
 
 ---
 
 ## CLI 模块 (81 shipped)
 
-完整清单：`get-shit-done/bin/lib/*.cjs`。
+完整清单：`gsd-core/bin/lib/*.cjs`。
 
 | 模块 | 职责 |
 |------|------|
@@ -441,7 +443,7 @@
 | `task-command-router.cjs` | `gsd-tools task` 的轻量 CJS 子命令路由适配器 |
 | `template.cjs` | 带变量替换的模板选择和填充 |
 | `uat.cjs` | UAT 文件解析、验证债务跟踪、audit-uat 支持 |
-| `ui-safety-gate.cjs` | 无 shell 的词边界 UI 令牌检测器（#3706，#3718）；从 stdin 读取阶段章节文本，退出 0（找到 UI）或 1（未找到 UI）；也部署到 `get-shit-done/bin/lib/`，以便 GSD 安装程序将其传送到 `$RUNTIME_DIR`（#448） |
+| `ui-safety-gate.cjs` | 无 shell 的词边界 UI 令牌检测器（#3706，#3718）；从 stdin 读取阶段章节文本，退出 0（找到 UI）或 1（未找到 UI）；也部署到 `gsd-core/bin/lib/`，以便 GSD 安装程序将其传送到 `$RUNTIME_DIR`（#448） |
 | `update-context.cjs` | `/gsd:update` 的纯安装上下文解析器 — 从 update.md bash 移植的运行时/范围/配置目录/版本检测（LOCAL/GLOBAL/UNKNOWN）；支持 `gsd-tools update-context`（#498） |
 | `validate-command-router.cjs` | `gsd-tools validate` 的轻量 CJS 子命令路由适配器 |
 | `validate.cjs` | 纯阶段变体规范化帮助器（`phaseVariants`、`buildRoadmapPhaseVariants`、`buildNotStartedPhaseVariants`），被 `verify.cjs` 用于 W006/W007 检查；无 I/O，无异步 |

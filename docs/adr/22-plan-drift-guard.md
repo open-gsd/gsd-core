@@ -1,8 +1,22 @@
 # Plan-vs-codebase drift guard: defaults and symbol-resolver seam
 
-- **Status:** Proposed
+- **Status:** Accepted — ratified 2026-07-17 (originally Proposed 2026-05-29); see "Ratification" below
 - **Date:** 2026-05-29
 - **Issue:** open-gsd/gsd-core#22
+
+## Ratification (2026-07-17): Proposed → Accepted
+
+Ratified by explicit maintainer directive; the Status field sat at Proposed for roughly 14 months against a decision that in fact shipped and closed within a day of the ADR being written (issue closed 2026-05-30, one day after the 2026-05-29 ADR date).
+
+**Evidence the decision shipped**
+- `src/plan-drift-guard.cts` implements the ADR's authority ladder and severity table as a pure decision module: `AUTHORITY_RUNGS` (grep=0…scip=4), `getEffectiveAuthority()` (auto-upgrades `grep`→`intel` when `intel.enabled`), and `classifyDriftSeverity()` producing the exact table (VERIFIED→none, MISSING@rung<3→needs-acknowledgement, MISSING@rung>=3→HIGH/hardBlock, AMBIGUOUS→MEDIUM, UNCHECKABLE→INFO); compiled to `gsd-core/bin/lib/plan-drift-guard.cjs` (gitignored generated artifact, `.gitignore:101`).
+- `gsd-core/bin/shared/config-defaults.manifest.json:94-97` sets `plan_review.source_grounding` default `true` and `plan_review.source_grounding_authority` default `'grep'` — the default-on verification pass from Part 1 point 1.
+- `capabilities/intel/capability.json` keeps `intel.enabled` default `false` and wires its `plan:pre` step (`intel api-surface`) with `onError: "skip"` — `intel.enabled` stays opt-in and the injection never blocks, per Part 1 points 2-3.
+- `gsd-core/workflows/plan-review-convergence.md`'s "Source-grounding pass" section (~lines 184-208) implements the four-valued resolver contract (VERIFIED/MISSING/AMBIGUOUS/UNCHECKABLE), excludes plan-declared "Artifacts this phase produces," delegates severity to the `drift-guard` CLI seam rather than inline reviewer reasoning, and appends a "Verification coverage" block to REVIEWS.md.
+- `gsd-core/workflows/plan-phase.md` §7.9 ("Regenerate API-SURFACE.md (intel gate)") regenerates the surface only when the intel step hook is active and injects it into the planner prompt labeled "HINT ONLY... MAY BE INCOMPLETE... Never treat the surface as exhaustive" — matching Part 1 point 2 verbatim.
+- `gsd-core/workflows/settings.md` and `gsd-core/workflows/new-project.md` surface `plan_review.source_grounding` as a "Drift Guard" toggle/setup question; `docs/CONFIGURATION.md` documents both config keys, explicitly marking authority rungs 2-4 (treesitter/lsp/scip) as reserved with no effect in the current release.
+
+Governance: owning issue open-gsd/gsd-core#22 — CLOSED, stateReason COMPLETED, closed 2026-05-30T21:08:13Z, labeled `enhancement` + `approved-feature`.
 
 ## Context
 

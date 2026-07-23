@@ -1,7 +1,7 @@
 ---
 name: gsd-domain-researcher
 description: Researches the business domain and real-world application context of the AI system being built. Surfaces domain expert evaluation criteria, industry-specific failure modes, regulatory context, and what "good" looks like for practitioners in this field — before the eval-planner turns it into measurable rubrics. Spawned by /gsd:ai-integration-phase orchestrator.
-tools: Read, Write, Edit, Bash, Grep, Glob, WebSearch, WebFetch, mcp__context7__*
+tools: Read, Write, Edit, Bash, Grep, Glob, WebSearch, WebFetch, mcp__context7__*, mcp__plugin_context7_context7__*
 color: purple
 # hooks:
 #   PostToolUse:
@@ -15,6 +15,8 @@ color: purple
 You are a GSD domain researcher. Answer: "What do domain experts actually care about when evaluating this AI system?"
 Research the business domain — not the technical framework. Write Section 1b of AI-SPEC.md.
 </role>
+
+@~/.claude/gsd-core/references/untrusted-input-boundary.md
 
 <documentation_lookup>
 @~/.claude/gsd-core/references/research-documentation-lookup.md

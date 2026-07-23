@@ -4,6 +4,39 @@
 - **Date:** 2026-05-28
 - **Tracking issue:** [#443](https://github.com/open-gsd/get-shit-done-redux/issues/443)
 
+## Why this is still `Proposed` (audited 2026-07-17)
+
+The audit confirmed the cross-provider resolver/renderer/CLI machinery genuinely shipped: `resolveEffortInternal`, `resolveEffortForTier`, `renderEffortForRuntime`, `RUNTIMES_WITH_FAST_MODE`, and `cmdResolveExecution` (`src/model-resolver.cts:534,654`; `src/commands.cts`) implement the cascade and clamping exactly as Decision items 1–3, 5, and 6 describe, and static install-time propagation is real and end-to-end tested — `tests/install-runtime-artifacts.test.cjs`'s `describe('#443 Claude install: effort: injected into frontmatter')` runs the actual `install()` function and reads the resulting agent `.md` files off disk, confirming `gsd-planner` gets `effort: xhigh`, `gsd-codebase-mapper` gets `effort: low`, and `gsd-executor` gets `effort: high`. That test predates the QA audit below (landed 2026-05-29 in the original `#443` PR, commit `5ca646f01`), so the "resolver-only, nothing reaches the runtime" framing of the original flavor-text problem this ADR set out to fix is fixed for the static path.
+
+**The blocker.** Decision item 1's cascade names an "(1) orchestrator invocation override" as the *highest*-precedence layer, and Decision item 6 adds a dynamic escalation path ("effort steps up the ladder on a failed attempt"). Both exist only as CLI-callable resolver code — `resolveEffortInternal`'s invocation-override step (`src/model-resolver.cts:535`) and `resolveEffortForTier`'s attempt-based escalation (`src/model-resolver.cts:654`) — exercised solely by unit/CLI tests. Nothing in the shipped orchestration actually calls them: a search across every file in `gsd-core/workflows/*.md` and `agents/*.md` for `resolve-execution` or `CLAUDE_CODE_EFFORT_LEVEL` returns zero hits; the only workflow-level mentions of "effort" are documentation of the config keys in `settings-advanced.md`'s confirmation table. The only propagation channel actually wired into a real GSD flow is the static one (config → `install()` → frontmatter, baked once at install time) — the ADR's own decided design promises more than that, and the more-than-static-baking part has no consumer. Separately, the repo's own dated QA test-architecture audit (`docs/issueevidence/1192-adr-test-audit-2026-06-13.md`, produced under issue #1192, closed COMPLETED) rated ADR-443 "partial ... **end-to-end effort propagation untested**" and named it in its action plan ("Strengthen ... ADR-443 end-to-end effort propagation," line 220); that action item was never converted into a tracked follow-up issue, and no commit since 2026-06-13 addresses it. That audit's blanket "untested" framing overstates the gap — the static path is tested — but the underlying signal (a decided mechanism with no live caller) is real and independently confirmed here.
+
+**Unblock condition.** Either (a) wire the orchestrator-invocation-override and attempt-based-escalation paths into an actual GSD workflow or agent dispatch (so `resolveEffortForTier`'s escalation and `resolveEffortInternal`'s invocation-override step have a real caller outside `src/commands.cts`'s CLI surface and tests), and add a test exercising that live path the way `tests/install-runtime-artifacts.test.cjs` exercises the static one; or (b) if the ADR's intended scope is in fact limited to static install-time propagation, amend Decision items 1 and 6 to say so explicitly and close out audit issue #1192's action-plan item 18 with a note pointing at the shipped install-wiring tests. Either is a maintainer call this file records but does not make.
+
+## Amendment (2026-07-21): path (a) chosen; audit corrected (#2481)
+
+**The maintainer call above has been made: path (a).** Raised by #2475 — reviewer CLIs invoked as subprocesses by the review workflow silently inherit whatever reasoning effort sits in the user's own global CLI config, because no shipped orchestration resolves effort at invocation time. That is this ADR's blocker surfacing as a user-visible defect, not a new problem.
+
+**Two deferrals recorded above are closed by this change — resolved, not re-tracked:**
+
+1. **Audit issue #1192's action-plan item 18** ("Strengthen … ADR-443 end-to-end effort propagation") — which the blocker text notes *"was never converted into a tracked follow-up issue"* — is **satisfied by this change**, which supplies the end-to-end propagation and the live-path tests it asked for. It is closed out, not converted into another follow-up.
+2. **The choice between (a) and (b)** — which this file previously recorded without making — is resolved as **(a)**. Scope is *not* limited to static install-time propagation. Choosing the path is not the same as completing it; see the status table below for what remains.
+
+**How path (a) is being satisfied.** The consumer is defined through the Host-Integration Interface rather than by hard-coding per-CLI effort syntax into a workflow: [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) gains an `effortSurface` axis declaring how each host accepts reasoning effort (`argv` | `none`), so a universal effort value resolved by this ADR's cascade is rendered per host through the negotiated descriptor. `EFFORT_RENDERING` (`src/model-catalog.cts`) — whose `channel` vocabulary is `frontmatter` | `api`, both install-time — collapses into that descriptor data rather than growing a parallel per-runtime table. Its callers today are exactly the two channels this ADR already ships: the static install-time renderer (`bin/install.js`, via `src/install-effort-resolver.cts`) and the manual `query resolve-execution` / effort-sync CLI surface (`src/commands.cts`). No workflow or agent dispatch calls it — which is the blocker restated in terms of the renderer rather than the resolver.
+
+**What this change actually delivers — and what it does not.** Path (a) names *two* mechanisms needing a live caller. This change delivers neither of them; it delivers a third thing the blocker did not anticipate, and the audit of the other two turns out to have been stale.
+
+| Path (a) mechanism | Status |
+|---|---|
+| Decision item 1 — `resolveEffortInternal`'s **invocation-override** step (`--effort`) | **Still no live caller.** No workflow, reference, or agent passes `--effort` to `resolve-execution`. This change does not add one. |
+| Decision item 6 — `resolveEffortForTier`'s **attempt-based escalation** | **Already satisfied — by #2296, not by this change.** `gsd-core/references/execute-phase-quota-recovery.md` calls `resolve-execution gsd-executor --attempt "${QUOTA_ATTEMPT:-1}" --failure-class quota-exceeded`, and that reference is `@`-included into `gsd-core/workflows/execute-phase.md`, so it executes as part of the live workflow. |
+| **New here:** the resolved effort **cascade** reaches a spawned host as an invocation argument | Delivered. `gsd-core/workflows/review.md` calls `resolve-execution … --host <id>` per reviewer and appends the rendered argument, gated by the host's negotiated `effortSurface`. |
+
+**The blocker's grep was stale in two ways.** It searched only `gsd-core/workflows/*.md` and `agents/*.md`; `references/*.md` is `@`-included into workflows and is therefore just as live — that is where #2296's escalation caller sits. And the blocker text was written 2026-07-17, three days before #2296 landed (`455ad49ae`, 2026-07-20), so its "zero hits" finding was correct on the day and has since been overtaken.
+
+**This ADR therefore remains `Proposed`.** Decision item 6's condition is met (by #2296); Decision item 1's is not. The corpus rule for ratifying a stale `Proposed` requires the decided mechanism to demonstrably exist in the tree, and the invocation-override step still has no caller outside the CLI surface and tests. Status flips when item 1 gains a live caller and a test exercises that path through a workflow rather than through `gsd-tools` directly.
+
+**Boundary.** #2313 owns the static/install-time effort channel for Codex (`model_reasoning_effort` in generated `~/.codex/agents/<agent>.toml`, plus a sync path) and explicitly places orchestrator effort-override drift outside its scope. That is the static channel this ADR already ships; the work above is the invocation-time channel it does not.
+
 ## Context
 
 ### Effort control and fast mode in Claude Opus 4.8
@@ -86,7 +119,7 @@ Common core: `low`, `medium`, `high`, `xhigh`.
 
 - Tracking issue: #443
 - Prior art (inert reasoning_effort): #2517; `tests/issue-2517-runtime-aware-profiles.test.cjs`
-- dynamic_routing escalation: #3024; `tests/feat-3024-dynamic-routing.test.cjs`
+- dynamic_routing escalation: #3024; `tests/model-profiles.test.cjs` (folds former `feat-3024-dynamic-routing`, consolidation epic #1969)
 - phase-type tiers: #3023
 - Anthropic effort API: `output_config.effort` (`low`/`medium`/`high`/`xhigh`/`max`); fast mode: `speed` (`standard`/`fast`)
 - Claude Code effort: `/effort`, `--effort`, `CLAUDE_CODE_EFFORT_LEVEL`, `effortLevel` setting, subagent `effort` frontmatter (anthropics/claude-code #31536, completed); fast mode: `/fast` (interactive only)

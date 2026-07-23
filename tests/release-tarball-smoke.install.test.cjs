@@ -13,13 +13,41 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { cleanup, createTempDir, runNpm, isolatedNpmEnv } = require('./helpers.cjs');
-const { SMOKE, runSmoke } = require('../scripts/release-tarball-smoke.cjs');
+const { SMOKE, runSmoke, CHILD_TIMEOUT_MS } = require('../scripts/release-tarball-smoke.cjs');
 
 const smokeMsg = (label, result) =>
   `${label}: code=${result.code} details=${JSON.stringify(result.details)}`;
 
 const PKG_PATH = path.join(__dirname, '..', 'package.json');
 const pkg = JSON.parse(fs.readFileSync(PKG_PATH, 'utf-8'));
+
+// ─── runSmoke install timeout must clear a slow-host cold install (#2335) ────
+// Regression: runSmoke()'s internal `npm install -g` used CHILD_TIMEOUT_MS,
+// which was 120 s on non-Windows while before()'s pack+install used 600 s. A
+// cold-cache install of the 1499-file tarball takes 3–6 min on a slow bench, so
+// the per-test installs (B/C/D/E) fired SIGTERM at 120 s and returned a spurious
+// INSTALL_FAILED (`spawnSync npm ETIMEDOUT`, empty stdout/stderr) on cartographer
+// while passing on faster holodeck — a host-dependent false failure, not a flake.
+// The ceiling is now a single exported constant shared by both surfaces; this
+// pins it at/above the documented 600 s slow-host floor on EVERY platform, so a
+// reintroduced 120 s (or a Windows-only 600 s) fails here instead of on a bench.
+describe('release-tarball-smoke: install timeout ceiling', () => {
+  test('CHILD_TIMEOUT_MS clears the 600 s slow-host cold-install floor', () => {
+    assert.ok(
+      Number.isInteger(CHILD_TIMEOUT_MS) && CHILD_TIMEOUT_MS >= 600_000,
+      `CHILD_TIMEOUT_MS must be >= 600000ms for cartographer-class hosts; got ${CHILD_TIMEOUT_MS}`,
+    );
+  });
+
+  test('the ceiling is platform-uniform — no host slower than the CI matrix is left under-provisioned', () => {
+    // The slow-host reality (cold disk, constrained CPU) is not OS-specific, so
+    // the constant must not be gated behind `process.platform`. A single numeric
+    // constant satisfies this by construction; this guards against a future
+    // reintroduction of a per-platform ternary that under-provisions Linux/macOS.
+    assert.equal(typeof CHILD_TIMEOUT_MS, 'number');
+    assert.ok(CHILD_TIMEOUT_MS >= 600_000);
+  });
+});
 
 describe('release-tarball-smoke', () => {
   // Shared fixture state: pack the tarball once, install it once, reuse for all tests.
@@ -38,9 +66,11 @@ describe('release-tarball-smoke', () => {
     // npm pack + npm install -g on a large tarball (1499 files, ~10 MB) can take
     // 3–6 minutes on slow Docker hosts (cold disk, constrained CPU). The runNpm
     // default timeout of 180 s is sufficient on fast machines but insufficient on
-    // cartographer-class hosts. 600 s (10 min) gives a safe ceiling without
-    // masking genuine hangs.
-    const SLOW_HOST_TIMEOUT = 600_000;
+    // cartographer-class hosts. Share the smoke script's CHILD_TIMEOUT_MS ceiling
+    // so before() (pack+install) and runSmoke()'s per-test installs cannot diverge
+    // — divergence was the #2335-run defect: before() had 600 s, runSmoke had 120 s
+    // on Linux, so the per-test installs alone timed out on cartographer.
+    const SLOW_HOST_TIMEOUT = CHILD_TIMEOUT_MS;
 
     const packOutput = runNpm(
       ['pack', '--pack-destination', packDir],
@@ -178,3 +208,257 @@ describe('release-tarball-smoke', () => {
     );
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-131-release-tarball-smoke-explicit-home.test.cjs — consolidation epic #1969 (B6 #1975)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-131-release-tarball-smoke-explicit-home (consolidation epic #1969 B6 #1975)", () => {
+// allow-test-rule: integration-test-input (see #131)
+// Regression test for #131: runNpm() must not fail when HOME points at an
+// unwritable directory. The before() hook in release-tarball-smoke.install.test.cjs
+// calls runNpm(['pack', ...]) and runNpm(['install', '-g', ...]) — if those inherit
+// an unwritable HOME from the environment (common in constrained Docker hosts),
+// the entire hook fails and all 6 subtests are cancelled.
+//
+// Fix: runNpm() must inject an explicit HOME, npm_config_cache, and
+// npm_config_userconfig that point into a temp directory it owns, so that npm
+// never reads from or writes to the caller's HOME.
+//
+// Test 3 (added in the second fix pass) verifies that isolatedNpmEnv() — the
+// companion export that lets runSmoke() apply the same isolation — also redirects
+// HOME away from the caller's HOME. Without this, subtests A-F of
+// release-tarball-smoke.install.test.cjs still fail because runSmoke() calls
+// spawnSync('npm', ...) internally and was not covered by the runNpm() fix.
+
+'use strict';
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+
+// The helpers under test.
+const { isolatedNpmEnv, cleanup } = require('./helpers.cjs');
+
+// Resolve a filesystem path to its canonical (symlink-free) form even if the
+// leaf does not exist yet (e.g. ~/.npm before npm has written its cache).
+// Walks up to the nearest existing ancestor, resolves that, then re-appends
+// the trailing segments. This handles macOS /var → /private/var symlinks for
+// paths created under os.tmpdir() where the leaf directory may not exist yet.
+function safeRealpath(p) {
+  try {
+    return fs.realpathSync(p);
+  } catch (_) {
+    // Leaf does not exist — resolve the nearest existing ancestor then
+    // reconstruct the original suffix so the result is still canonical.
+    const segments = [];
+    let cur = p;
+    for (;;) {
+      const parent = path.dirname(cur);
+      if (parent === cur) {
+        // Reached filesystem root — return original path unchanged.
+        return p;
+      }
+      segments.unshift(path.basename(cur));
+      cur = parent;
+      try {
+        return path.join(fs.realpathSync(cur), ...segments);
+      } catch (__) {
+        // Keep walking up.
+      }
+    }
+  }
+}
+
+describe('bug-131: runNpm isolates HOME from the caller environment', () => {
+  // ── Test 1 — runNpm works with an unwritable HOME ────────────────────────
+  // Spawn a child Node process that sets HOME to a chmod-0500 directory, then
+  // invokes runNpm(['--version']). Without the fix, npm tries to read/write
+  // HOME/.npmrc and HOME/.npm, fails with EACCES, and runNpm throws.
+  // With the fix, runNpm injects its own isolated HOME and npm succeeds.
+  test('runNpm succeeds even when process HOME is unwritable', () => {
+    // Create an unwritable dir to serve as a poisoned HOME.
+    const poisonedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-bug131-poison-'));
+    try {
+      fs.chmodSync(poisonedHome, 0o500); // r-x only — not writable
+
+      // We exercise the real runNpm() path by running a tiny inline Node script
+      // that requires helpers.cjs and calls runNpm(['--version']) with HOME set
+      // to the unwritable dir. The script exits 0 on success, non-zero on throw.
+      const script = `
+        process.env.HOME = ${JSON.stringify(poisonedHome)};
+        process.env.USERPROFILE = ${JSON.stringify(poisonedHome)};
+        const { runNpm } = require(${JSON.stringify(path.join(__dirname, 'helpers.cjs'))});
+        try {
+          const out = runNpm(['--version']);
+          if (!out || out.trim() === '') process.exit(2); // vacuous success guard
+          process.stdout.write(out);
+          process.exit(0);
+        } catch (e) {
+          process.stderr.write(e.message + '\\n');
+          process.exit(1);
+        }
+      `;
+
+      let stdout = '';
+      let stderr = '';
+      let exitCode = 0;
+      try {
+        stdout = execFileSync(process.execPath, ['-e', script], {
+          encoding: 'utf-8',
+          timeout: 30_000,
+        });
+      } catch (err) {
+        stdout = err.stdout || '';
+        stderr = err.stderr || '';
+        exitCode = err.status ?? 1;
+      }
+
+      assert.equal(
+        exitCode,
+        0,
+        `runNpm should succeed with an unwritable HOME but exited ${exitCode}. stderr: ${stderr}`,
+      );
+      // npm --version returns something like "10.x.y"
+      assert.match(
+        stdout.trim(),
+        /^\d+\.\d+/,
+        `expected semver output from npm --version, got: ${stdout}`,
+      );
+    } finally {
+      // Restore write permission before cleanup so the directory can be deleted.
+      try { fs.chmodSync(poisonedHome, 0o700); } catch (_) { /* best-effort */ }
+      cleanup(poisonedHome);
+    }
+  });
+
+  // ── Test 2 — runNpm does not leak a caller-supplied HOME into npm ────────
+  // Even if the caller exports HOME=/some/real/path, the injected HOME must be
+  // a different (temp) path so npm writes never touch the caller's $HOME.
+  test('runNpm injects a HOME distinct from process.env.HOME', () => {
+    // Capture what HOME runNpm actually passes to npm by asking npm to print
+    // the value it sees for the $HOME env var. We do this via `npm config get
+    // cache` which reveals the cache path — if it's under process.env.HOME,
+    // the fix is absent; if it's under a tmp dir, the fix is present.
+
+    const script = `
+      const { runNpm } = require(${JSON.stringify(path.join(__dirname, 'helpers.cjs'))});
+      try {
+        // npm config get cache prints the effective cache directory.
+        const out = runNpm(['config', 'get', 'cache']);
+        process.stdout.write(out.trim());
+        process.exit(0);
+      } catch (e) {
+        process.stderr.write(e.message + '\\n');
+        process.exit(1);
+      }
+    `;
+
+    let stdout = '';
+    let stderr = '';
+    let exitCode = 0;
+    try {
+      stdout = execFileSync(process.execPath, ['-e', script], {
+        encoding: 'utf-8',
+        timeout: 30_000,
+      });
+    } catch (err) {
+      stdout = err.stdout || '';
+      stderr = err.stderr || '';
+      exitCode = err.status ?? 1;
+    }
+
+    assert.equal(
+      exitCode,
+      0,
+      `runNpm config get cache failed with exit ${exitCode}. stderr: ${stderr}`,
+    );
+
+    const effectiveCacheDir = stdout.trim();
+
+    // The effective npm cache must NOT be inside the calling process's HOME.
+    // If it is, the fix was not applied and the Docker regression can still occur.
+    const callerHome = os.homedir();
+    assert.ok(
+      !effectiveCacheDir.startsWith(callerHome),
+      `npm cache dir ${effectiveCacheDir} is still under caller HOME ${callerHome} — fix not applied`,
+    );
+
+    // It must be somewhere under the system tmp dir, confirming isolation.
+    // Use safeRealpath on both sides so that macOS /var→/private/var symlinks
+    // do not cause a false mismatch when os.tmpdir() and the resolved cache
+    // path differ only in symlink expansion. The cache sub-directory (.npm) may
+    // not exist yet; safeRealpath walks up to the nearest existing ancestor.
+    const sysTmp = safeRealpath(os.tmpdir());
+    const realCacheDir = safeRealpath(effectiveCacheDir);
+    assert.ok(
+      realCacheDir.startsWith(sysTmp),
+      `npm cache dir ${realCacheDir} should be under tmpdir ${sysTmp}`,
+    );
+  });
+
+  // ── Test 3 — isolatedNpmEnv() redirects HOME away from the caller's HOME ──
+  // runSmoke() calls spawnSync('npm', ...) with npmEnv from isolatedNpmEnv().
+  // If isolatedNpmEnv() didn't redirect HOME, subtests A-F would still fail on
+  // Docker hosts with an unwritable HOME (the original bug #131 root cause,
+  // manifesting via the sibling runSmoke() path). (#131)
+  test('isolatedNpmEnv() HOME is distinct from the caller HOME and lives under tmpdir', () => {
+    const env = isolatedNpmEnv();
+
+    // Must expose a HOME key.
+    assert.ok(
+      typeof env.HOME === 'string' && env.HOME.length > 0,
+      'isolatedNpmEnv() must set HOME',
+    );
+
+    // Must not be the caller's HOME.
+    const callerHome = os.homedir();
+    assert.notEqual(
+      env.HOME,
+      callerHome,
+      `isolatedNpmEnv() HOME must differ from caller HOME ${callerHome}`,
+    );
+
+    // Must live under the system tmpdir, confirming it is an isolated temp directory.
+    // Use safeRealpath on both sides so that macOS /var→/private/var symlinks
+    // do not cause a false mismatch.
+    const sysTmp = safeRealpath(os.tmpdir());
+    const realHome = safeRealpath(env.HOME);
+    assert.ok(
+      realHome.startsWith(sysTmp),
+      `isolatedNpmEnv() HOME ${realHome} should be under tmpdir ${sysTmp}`,
+    );
+
+    // npm_config_cache and npm_config_userconfig must also be set and under the isolated HOME.
+    assert.ok(
+      typeof env.npm_config_cache === 'string' && env.npm_config_cache.startsWith(env.HOME),
+      `npm_config_cache ${env.npm_config_cache} should be under isolated HOME ${env.HOME}`,
+    );
+    assert.ok(
+      typeof env.npm_config_userconfig === 'string' && env.npm_config_userconfig.startsWith(env.HOME),
+      `npm_config_userconfig ${env.npm_config_userconfig} should be under isolated HOME ${env.HOME}`,
+    );
+    assert.equal(
+      env.npm_config_loglevel,
+      'error',
+      'isolatedNpmEnv() should suppress npm notice/warn chatter in test gates',
+    );
+    assert.equal(
+      env.npm_config_update_notifier,
+      'false',
+      'isolatedNpmEnv() should disable npm update-notifier notices in test gates',
+    );
+    assert.equal(
+      env.NO_UPDATE_NOTIFIER,
+      '1',
+      'isolatedNpmEnv() should disable npm update-notifier notices for npm versions that honor NO_UPDATE_NOTIFIER',
+    );
+  });
+});
+  });
+}

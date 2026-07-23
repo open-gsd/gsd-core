@@ -77,7 +77,7 @@ paused_at: null
 
 ### ステータス値
 
-`get-shit-done/bin/lib/state-document.cjs` の `normalizeStateStatus()` が本文の生テキストを以下の正規値にマッピングします：
+`gsd-core/bin/lib/state-document.cjs` の `normalizeStateStatus()` が本文の生テキストを以下の正規値にマッピングします：
 
 | 正規値 | マッチするテキスト（大文字小文字不問） |
 |---|---|
@@ -111,7 +111,7 @@ paused_at: null
 | **3. マイルストーン完了** | `percent` が `100` または `completed_phases == total_phases` | `v2.0 [██████████] 100% · milestone complete` |
 | **4. デフォルトフォールバック** | 上記のいずれにも該当しない | `v1.9 Code Quality · executing · ph 1/5`（既存フォーマット） |
 
-**シーン優先度:** `active_phase` と `next_action` が両方設定されている場合、シーン1が優先されます — オーケストレーターが実行中であるため「次の推奨」は誤解を招くためです。この優先度は `formatGsdState()` のチェック順序によって強制され、`tests/enh-2833-phase-lifecycle-statusline.test.cjs` の `"scene priority"` スイートでカバーされています。
+**シーン優先度:** `active_phase` と `next_action` が両方設定されている場合、シーン1が優先されます — オーケストレーターが実行中であるため「次の推奨」は誤解を招くためです。この優先度は `formatGsdState()` のチェック順序によって強制され、`tests/gsd-statusline.test.cjs` の `"scene priority"` スイートでカバーされています。
 
 進捗バー（`[██░░░░░░░░] 20%`）はフロントマターに `progress.percent` が存在する場合のみマイルストーンセグメントに追加されます。不在の場合はバーは表示されません。
 
@@ -119,7 +119,7 @@ paused_at: null
 
 ## フロントマターパースの制約
 
-ステータスラインフックは正規表現ベースのパース（完全な YAML ライブラリを使用しない）を使用するため、以下の制約が適用されます。これらは `tests/enh-2833-phase-lifecycle-statusline.test.cjs` でテストされています。
+ステータスラインフックは正規表現ベースのパース（完全な YAML ライブラリを使用しない）を使用するため、以下の制約が適用されます。これらは `tests/gsd-statusline.test.cjs` でテストされています。
 
 1. **フロントマターはファイルの先頭文字から始まる必要があります。** コメントを含む何かが開始 `---` の前にあると、マッチが無効になります。開始 `---` 行は末尾のスペースなしで正確にそれだけである必要があります。
 
@@ -133,7 +133,7 @@ paused_at: null
 
 ## Markdown 本文セクション
 
-本文（末尾の `---` 以降のすべて）は `get-shit-done/templates/state.md` のテンプレートに従います。標準セクションは以下の通りです：
+本文（末尾の `---` 以降のすべて）は `gsd-core/templates/state.md` のテンプレートに従います。標準セクションは以下の通りです：
 
 ### Project Reference
 
@@ -153,7 +153,7 @@ paused_at: null
 | `Last activity:` | ハンドラー書き込み時は ISO 日付（`YYYY-MM-DD`）; エグゼキューター作成時はナラティブ文章 |
 | `Progress:` | ビジュアルバー。例: `[████░░░░░░] 40%` |
 
-このセクションの `Status:` および `Last activity:` フィールドは、既存の値が既知のテンプレートデフォルト値の場合に GSD ハンドラーによって更新されます（クヌース不変式: エグゼキューター作成値は保存されます）。既知のハンドラーデフォルト値の完全なリストは `get-shit-done/bin/lib/state-document.cjs` の `KNOWN_TEMPLATE_DEFAULTS` に記載されています。
+このセクションの `Status:` および `Last activity:` フィールドは、既存の値が既知のテンプレートデフォルト値の場合に GSD ハンドラーによって更新されます（クヌース不変式: エグゼキューター作成値は保存されます）。既知のハンドラーデフォルト値の完全なリストは `gsd-core/bin/lib/state-document.cjs` の `KNOWN_TEMPLATE_DEFAULTS` に記載されています。
 
 ### Performance Metrics
 
@@ -189,7 +189,7 @@ paused_at: null
 - ライフサイクルフィールドの追加はオプトインです — フィールドが不在の場合レンダラーはグレースフルに縮退します。
 - 進捗バーは `progress` ブロックが存在する場合でもオプトインです: バーをトリガーするのは `progress.percent` のみで、`total_phases` と `completed_phases` だけではトリガーされません。
 
-`tests/enh-2833-phase-lifecycle-statusline.test.cjs` の `formatGsdState #2833 backward compatibility` テストスイートがこの保証を固定しています。レガシー `STATE.md` 描画を壊す変更があればスイートが失敗します。
+`tests/gsd-statusline.test.cjs` の `formatGsdState #2833 backward compatibility` テストスイートがこの保証を固定しています。レガシー `STATE.md` 描画を壊す変更があればスイートが失敗します。
 
 ---
 

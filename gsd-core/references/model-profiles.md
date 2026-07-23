@@ -45,10 +45,10 @@ Model profiles control which Claude model each GSD agent uses. This allows balan
 | Phase type | Agents |
 |---|---|
 | `planning` | gsd-planner, gsd-roadmapper, gsd-pattern-mapper |
-| `discuss` | (reserved — no subagent today) |
+| `discuss` | `gsd-assumptions-analyzer` |
 | `research` | gsd-phase-researcher, gsd-project-researcher, gsd-research-synthesizer, gsd-codebase-mapper, gsd-ui-researcher |
 | `execution` | gsd-executor, gsd-debugger, gsd-doc-writer |
-| `verification` | gsd-verifier, gsd-plan-checker, gsd-integration-checker, gsd-nyquist-auditor, gsd-ui-checker, gsd-ui-auditor, gsd-doc-verifier |
+| `verification` | gsd-verifier, gsd-plan-checker, gsd-integration-checker, gsd-nyquist-auditor, gsd-ui-checker, gsd-ui-auditor, gsd-doc-verifier, gsd-code-reviewer |
 | `completion` | (reserved — no subagent today) |
 
 ### Resolution precedence (highest to lowest)
@@ -132,6 +132,33 @@ If you're using Claude Code with OpenRouter, a local model, or any non-Anthropic
 ```
 
 Without `inherit`, GSD's default `balanced` profile spawns specific Anthropic models (`opus`, `sonnet`, `haiku`) for each agent type, which can result in additional API costs through your non-Anthropic provider.
+
+## Advisor Tool (Claude Code)
+
+Claude Code (v2.1.98+) can pair the session's executor model with a stronger **advisor** model that it consults mid-generation for strategy and course-correction (Anthropic's [advisor tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool)). This is a host-runtime feature, not a GSD setting — GSD selects each agent's *executor* model through the profile/tier system above; Claude Code supplies the advisor.
+
+Set it once at the session level with `/advisor <model>` (or the `advisorModel` setting / `--advisor` flag). **Subagents inherit the session advisor automatically**, so every GSD subagent an orchestrator spawns gets the same advisor with no per-agent configuration. It composes cleanly with GSD's tiering: the profile keeps executors cheap where the work is mechanical, and the advisor adds a stronger reviewer inline on the turns that benefit.
+
+### Candidate pairings
+
+Per Anthropic's advisor-tool docs the advisor must be at least as capable as the executor. Candidate pairings by profile — evaluate on your own workload; the quality/cost characterizations below are Anthropic-reported, not GSD guarantees:
+
+| Profile | Typical executors | Candidate advisor | Rationale (per Anthropic docs) |
+|---|---|---|---|
+| `budget` | Haiku / Sonnet | Fable 5 or Opus | A step up in intelligence over Haiku alone, at lower cost than switching the executor to a larger model |
+| `balanced` | Sonnet | Fable 5 or Opus | A quality lift at similar or lower total cost than Sonnet-solo on complex tasks |
+| `quality` / `adaptive` | Opus (planning), Sonnet | Fable 5 or Opus | Marginal on turns already at top capability; most valuable on the Sonnet-executor agents |
+
+Fable 5 is a valid advisor for Haiku 4.5, Sonnet 4.6/5, and Opus 4.8 executors, so it pairs with any tier a profile assigns.
+
+### When it's worth enabling
+
+- **Worth it:** long, multi-step agent loops where the plan matters but most turns are mechanical — e.g. `execute-phase` and `debug`. Anthropic's docs note advisor prompt-caching pays off at roughly three or more advisor calls, which these long loops make.
+- **Skip it:** short, one-shot agents (mappers, quick audits, single-file checks) — there is little to plan, and the advisor adds cost without a commensurate quality gain.
+
+### Constraint: session-level only (today)
+
+The advisor is a single session-wide setting inherited by all subagents; there is **no per-agent advisor selection**, so GSD cannot vary the advisor by role the way it varies the executor model (e.g. "no advisor on the Haiku mapper, a Fable 5 advisor on the Sonnet executor"). Per-agent advisor control is tracked upstream at [anthropics/claude-code#73072](https://github.com/anthropics/claude-code/issues/73072); until it lands, pick one session advisor that fits the most valuable agents in your run.
 
 ## Dynamic Routing with Failure-Tier Escalation (#3024)
 

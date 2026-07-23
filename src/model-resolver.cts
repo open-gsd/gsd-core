@@ -10,11 +10,13 @@
  * epic #1267; callers import resolvers from model-resolver.cjs directly.
  *
  * Dependencies (leaf modules only):
- *   - node:fs / node:path (stdlib, not currently needed — included for future use)
+ *   - node:fs / node:path (read the per-install .gsd-runtime marker + project config for the #2297 omit gate)
+ *   - ./runtime-name-policy.cjs (resolveRuntimeNameFromCandidates — canonicalize the active runtime)
+ *   - ./planning-workspace.cjs  (planningDir — workstream/project-aware project-config path)
  *   - ./config-loader.cjs    (loadConfig)
  *   - ./configuration.cjs    (CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS)
  *   - ./model-profiles.cjs   (MODEL_PROFILES, AGENT_TO_PHASE_TYPE, AGENT_DEFAULT_TIERS, VALID_AGENT_TIERS, nextTier)
- *   - ./model-catalog.cjs    (MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS)
+ *   - ./model-catalog.cjs    (MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS, VALID_TIERS)
  */
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -28,7 +30,99 @@ import { CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS } from './configuration.cj
 import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES, AGENT_TO_PHASE_TYPE, AGENT_DEFAULT_TIERS, VALID_AGENT_TIERS, nextTier } = modelProfiles;
 
-import { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS } from './model-catalog.cjs';
+import { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS, VALID_TIERS } from './model-catalog.cjs';
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { resolveRuntimeNameFromCandidates } from './runtime-name-policy.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningWorkspaceMod = require('./planning-workspace.cjs');
+const { planningDir } = planningWorkspaceMod;
+
+// ─── #2297: per-install runtime identity for the resolve_model_ids:"omit" gate ─
+//
+// The installer writes `resolve_model_ids:"omit"` into the SHARED
+// ~/.gsd/defaults.json for every runtime that lacks native model aliases (#1156).
+// Because that file is machine-wide, a non-Claude install would otherwise poison
+// a Claude no-project resolution into returning '' — silently defeating Claude's
+// adaptive tier aliases. The "omit" must therefore apply only when a runtime that
+// genuinely lacks native aliases is the one resolving.
+//
+// In a no-project session there is no `.planning/config.json` (so config.runtime
+// is null) and GSD_RUNTIME is not exported by gsd-core, so the only reliable
+// current-runtime signal is the per-install marker the installer co-locates next
+// to VERSION at <install>/gsd-core/.gsd-runtime (this file's dir is
+// <install>/gsd-core/bin/lib). Precedence for the gate: project config.runtime →
+// GSD_RUNTIME env (manual/CI override + test seam) → install marker → 'claude'.
+//
+// `claude` is currently the ONLY runtime with nativeModelAliases:true; a
+// registry-parity test guards this set so a future alias-capable runtime fails
+// loudly here instead of silently omitting.
+const RUNTIMES_WITH_NATIVE_ALIASES: ReadonlySet<string> = new Set(['claude']);
+
+let _installMarkerCache: string | null | undefined;
+function readInstallRuntimeMarker(): string | null {
+  if (_installMarkerCache !== undefined) return _installMarkerCache;
+  try {
+    const markerPath = path.join(__dirname, '..', '..', '.gsd-runtime');
+    const raw = fs.readFileSync(markerPath, 'utf8').trim();
+    _installMarkerCache = raw || null;
+  } catch {
+    // No marker: dev/source tree, or an install predating #2297. Fall through to
+    // the 'claude' default (keeps tier aliases — never worse than the bug).
+    _installMarkerCache = null;
+  }
+  return _installMarkerCache;
+}
+
+// Test seams for the install-marker rung (the dev/source tree has no marker, so
+// the file read always bottoms out at 'claude' — these let tests exercise the
+// third precedence rung and reset the module-level cache between cases).
+function _setInstallRuntimeMarkerForTests(value: string | null): void {
+  _installMarkerCache = value;
+}
+function _resetInstallRuntimeMarkerCacheForTests(): void {
+  _installMarkerCache = undefined;
+}
+
+// The runtime whose install is actually resolving, canonicalized so an alias or
+// case variant (e.g. "claude-code"/"Claude") cannot defeat the native-alias
+// check below (#2297 review). Precedence mirrors resolveRuntime()
+// (runtime-slash.cts): GSD_RUNTIME env → project config.runtime → per-install
+// .gsd-runtime marker → 'claude'.
+function resolveActiveRuntime(config: Record<string, unknown>): string {
+  return resolveRuntimeNameFromCandidates(
+    process.env['GSD_RUNTIME'],
+    config['runtime'],
+    readInstallRuntimeMarker(),
+  ) || 'claude';
+}
+
+// Did the PROJECT's own config (root `.planning/config.json` or the active
+// workstream/project override) explicitly set resolve_model_ids to "omit"?
+// Project config takes precedence over the shared ~/.gsd/defaults.json (#2297
+// out-of-scope guard + #2517 finding #4): an explicit project "omit" is honored
+// regardless of runtime, whereas an "omit" that came only from the global
+// defaults is ignored by native-alias runtimes. Workstream/project-scope aware
+// via planningDir (mirrors loadConfig's precedence: workstream value wins over
+// root); a plain read avoids loadConfig's normalization side effects.
+function projectExplicitlySetsOmit(cwd: string): boolean {
+  const wsDir = planningDir(cwd);
+  const rootDir = path.join(cwd, '.planning');
+  const layers = wsDir === rootDir ? [rootDir] : [wsDir, rootDir]; // workstream > root
+  for (const dir of layers) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')) as Record<string, unknown>;
+      const value = parsed?.['resolve_model_ids'];
+      // First layer that sets the key wins (matches loadConfig's deep-merge
+      // precedence). A layer that omits the key falls through to the next.
+      if (value !== undefined) return value === 'omit';
+    } catch {
+      // Absent/unreadable layer — try the next.
+    }
+  }
+  return false;
+}
 
 // ─── Model alias resolution ───────────────────────────────────────────────────
 
@@ -105,6 +199,66 @@ function _resetModelPolicyWarningCacheForTests(): void {
   _modelPolicyUnmappableWarned.clear();
 }
 
+// Dedupe stderr warnings for unmappable model_overrides Claude IDs (#2041).
+const _modelOverrideUnmappableWarned = new Set<string>();
+function warnModelOverrideUnmappable(agentType: string, overrideValue: string): void {
+  const key = `${agentType}::${overrideValue}`;
+  if (_modelOverrideUnmappableWarned.has(key)) return;
+  _modelOverrideUnmappableWarned.add(key);
+  // Cap emission length so an oversized or secret-shaped value cannot leak in
+  // full to stderr/logs (#2041 security review). MUST go to stderr — resolve-
+  // model's JSON result is parsed from stdout.
+  const safe = overrideValue.length > 64 ? overrideValue.slice(0, 64) + '…' : overrideValue;
+  process.stderr.write(
+    `gsd: warning — model_overrides value "${safe}" for ${agentType} ` +
+    `has no Claude agent alias; falling through to tier resolution.\n`,
+  );
+}
+
+// Test-only: reset the model_overrides warn-dedupe cache between cases (#2041).
+function _resetModelOverrideWarningCacheForTests(): void {
+  _modelOverrideUnmappableWarned.clear();
+}
+
+/**
+ * #2041 — Map a `model_overrides` value to its Claude Agent-tool alias on the
+ * claude runtime, mirroring the `model_policy` path (#1144). Claude Code's
+ * Agent tool `model` parameter documents only tier aliases (opus/sonnet/haiku/
+ * fable); a full Claude model ID returned verbatim is silently dropped by the
+ * spawner. Returns the value to return verbatim, or null to signal "fall
+ * through to normal tier/dynamic-routing resolution" (used when a Claude full
+ * ID has no alias — matches model_policy's warn-and-fall-through). Non-Claude
+ * runtimes and non-Claude values always pass through verbatim.
+ *
+ * Hardening (code+security review): a `typeof` guard preserves the pre-fix
+ * no-crash behavior if a malformed config surfaces a non-string value, and an
+ * `Object.hasOwn` lookup defeats `__proto__`/`constructor` lookups on the plain
+ * object literal so those reserved keys cannot return a truthy non-string.
+ */
+function mapClaudeOverrideForRuntime(
+  override: string,
+  configRuntime: string | null | undefined,
+  agentType: string,
+): string | null {
+  // Defensive: model_overrides is typed Record<string,string> but a malformed
+  // config could surface a non-string; pass through verbatim (preserving the
+  // pre-fix no-crash behaviour) and let the downstream Agent tool reject it.
+  if (typeof override !== 'string') return override;
+  const onClaude = !configRuntime || configRuntime === 'claude';
+  if (!onClaude) return override;
+  // Object.hasOwn guards against __proto__/constructor returning a truthy
+  // non-string from the plain object literal (#2041 security review).
+  if (Object.hasOwn(CLAUDE_POLICY_ID_TO_ALIAS, override)) {
+    return CLAUDE_POLICY_ID_TO_ALIAS[override];
+  }
+  if (CLAUDE_AGENT_ALIASES.has(override)) return override;
+  if (override.startsWith('claude-')) {
+    warnModelOverrideUnmappable(agentType, override);
+    return null;
+  }
+  return override;
+}
+
 /**
  * #49 — Provider-neutral model policy preset resolution.
  */
@@ -159,11 +313,15 @@ function resolveModelPolicy(policy: Record<string, unknown> | null | undefined, 
 function resolveModelInternal(cwd: string, agentType: string): string {
   const config = loadConfig(cwd);
 
-  // 1. Per-agent override
+  // 1. Per-agent override (#2041: map Claude full IDs → Agent-tool aliases on
+  // the claude runtime, mirroring the model_policy path #1144; non-Claude
+  // runtimes and non-Claude values pass through verbatim).
   const modelOverrides = config['model_overrides'] as Record<string, string> | null | undefined;
   const override = modelOverrides?.[agentType];
   if (override) {
-    return override;
+    const mapped = mapClaudeOverrideForRuntime(override, config['runtime'] as string | null | undefined, agentType);
+    if (mapped !== null) return mapped;
+    // Unmappable Claude ID — fall through to tier resolution (matches model_policy).
   }
 
   // 2. Compute the tier
@@ -175,7 +333,6 @@ function resolveModelInternal(cwd: string, agentType: string): string {
   const phaseTypeTier = (phaseType && configModels && typeof configModels === 'object')
     ? configModels[phaseType]
     : undefined;
-  const VALID_TIERS = new Set(['opus', 'sonnet', 'haiku', 'inherit']);
   const tier = (phaseTypeTier && VALID_TIERS.has(phaseTypeTier))
     ? phaseTypeTier
     : (profile === 'inherit'
@@ -213,8 +370,18 @@ function resolveModelInternal(cwd: string, agentType: string): string {
     if (entry?.model) return entry.model;
   }
 
-  // 4. resolve_model_ids: "omit"
-  if (config['resolve_model_ids'] === 'omit') {
+  // 4. resolve_model_ids: "omit" — runtime-aware (#2297). Honor "omit" when the
+  // PROJECT explicitly set it (user intent — project config wins, #2517 finding
+  // #4) OR when the active runtime genuinely lacks native model aliases. Only a
+  // native-alias runtime (Claude) ignores an "omit" that came solely from the
+  // SHARED ~/.gsd/defaults.json — the #2297 poisoning fix — and falls through to
+  // its tier aliases below. Active runtime: GSD_RUNTIME → config.runtime → the
+  // per-install .gsd-runtime marker → 'claude' (canonicalized).
+  // NOTE: a non-Claude runtime that HAS a populated runtime-tier map already
+  // returned its own model id at step 3 above, before this gate — for those the
+  // explicit-project-omit honoring here is moot (step 3 wins, by #2517 design).
+  if (config['resolve_model_ids'] === 'omit'
+      && (projectExplicitlySetsOmit(cwd) || !RUNTIMES_WITH_NATIVE_ALIASES.has(resolveActiveRuntime(config)))) {
     return '';
   }
 
@@ -228,7 +395,11 @@ function resolveModelInternal(cwd: string, agentType: string): string {
   if (tier === 'inherit') return 'inherit';
   const alias = tier;
 
-  if (config['resolve_model_ids']) {
+  // Only the explicit `true` opt-in materializes full model IDs (#1569). Guard
+  // against the loose-truthy check catching a "omit" that a native-alias runtime
+  // ignored above (#2297): "omit" must fall through to the tier ALIAS here, not
+  // be materialized into a full ID Claude's Agent tool cannot spawn.
+  if (config['resolve_model_ids'] === true) {
     return (MODEL_ALIAS_MAP as Record<string, string>)[alias!] || alias!;
   }
 
@@ -287,7 +458,11 @@ function resolveModelForTier(cwd: string, agentType: string, attempt?: number): 
 
   const modelOverrides = config['model_overrides'] as Record<string, string> | null | undefined;
   const override = modelOverrides?.[agentType];
-  if (override) return override;
+  if (override) {
+    const mapped = mapClaudeOverrideForRuntime(override, config['runtime'] as string | null | undefined, agentType);
+    if (mapped !== null) return mapped;
+    // Unmappable Claude ID — fall through to dynamic_routing / model_policy resolution.
+  }
 
   if (config['model_policy'] && config['runtime'] && config['runtime'] !== 'claude') {
     return resolveModelInternal(cwd, agentType);
@@ -328,6 +503,101 @@ function resolveModelForTier(cwd: string, agentType: string, attempt?: number): 
     return resolveModelInternal(cwd, agentType);
   }
   return alias;
+}
+
+/**
+ * #2296 — Outcome of consulting the provider-escalation ladder for one attempt.
+ *
+ * `from`/`to` describe the PROVIDER ladder only; they are equal whenever the
+ * ladder was not consulted or had nothing to offer.
+ */
+interface ProviderEscalationResult {
+  from: string;
+  to: string;
+  escalated: boolean;
+  exhausted: boolean;
+  attempted: string[];
+  index: number;
+}
+
+/**
+ * Keep only usable model ids: non-empty strings. A malformed config can put
+ * anything in here (nulls, numbers, blank strings), and a blank model id would
+ * resolve to an unusable agent invocation rather than failing visibly. Invalid
+ * entries are dropped and the surviving order is preserved, so the ladder stays
+ * predictable (ADR 227 — validate shape, not just type).
+ */
+function sanitizeProviderEscalation(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+}
+
+/**
+ * #2296 — Resolve the model for one attempt of the PROVIDER escalation ladder.
+ *
+ * The tier ladder (`resolveModelForTier`) escalates within one provider's
+ * `tier_models`, which does not help when that provider is the thing that is
+ * throttled. This walks `dynamic_routing.provider_escalation` instead: an
+ * ordered list of alternative model ids, capped by
+ * `min(max_escalations, list length)`.
+ *
+ * `applicable` is the caller's policy decision (only a quota-exceeded
+ * classification should consult this ladder). It is a parameter rather than a
+ * class check here so this module keeps depending only on leaf modules, per
+ * CONTEXT.md's Model Resolution module contract.
+ *
+ * Attempt 0 — and every non-applicable call — stays on the source model.
+ * `exhausted` reports that the ladder is spent so the caller can fail loudly
+ * naming every model it tried.
+ */
+function resolveProviderEscalation(
+  cwd: string,
+  agentType: string,
+  attempt: number | undefined,
+  applicable: boolean,
+): ProviderEscalationResult {
+  // The model that would be used with no provider escalation at all.
+  const from = resolveModelForTier(cwd, agentType, 0);
+  const stay = (exhausted = false): ProviderEscalationResult => ({
+    from,
+    to: from,
+    escalated: false,
+    exhausted,
+    attempted: [from],
+    index: 0,
+  });
+
+  if (!applicable) return stay();
+
+  const config = loadConfig(cwd);
+  const dr = config['dynamic_routing'] as Record<string, unknown> | null | undefined;
+  if (!dr || typeof dr !== 'object' || dr['enabled'] !== true) return stay();
+  if (dr['escalate_on_failure'] === false) return stay();
+
+  const list = sanitizeProviderEscalation(dr['provider_escalation']);
+  if (list.length === 0) return stay();
+
+  // Same default and same validity rule as the tier ladder above — a negative or
+  // non-integer max_escalations is invalid config, not a request for zero.
+  const maxEscalations = Number.isInteger(dr['max_escalations']) && (dr['max_escalations'] as number) >= 0
+    ? (dr['max_escalations'] as number)
+    : 1;
+  const cap = Math.min(maxEscalations, list.length);
+  // An explicit cap of 0 means the ladder exists but is spent before it starts.
+  if (cap === 0) return stay(true);
+
+  const attemptN = Number.isInteger(attempt) && (attempt as number) > 0 ? (attempt as number) : 0;
+  if (attemptN === 0) return stay();
+
+  const index = Math.min(attemptN, cap);
+  return {
+    from,
+    to: list[index - 1],
+    escalated: true,
+    exhausted: attemptN > cap,
+    attempted: [from, ...list.slice(0, index)],
+    index,
+  };
 }
 
 // ─── #443 — Unified effort + fast_mode resolvers ─────────────────────────────
@@ -505,13 +775,18 @@ function resolveEffortForTier(cwd: string, agentType: string, attempt?: number):
 
 export = {
   resolveTierEntry,
+  CLAUDE_AGENT_ALIASES,
   resolveModelPolicy,
   resolveModelInternal,
   _resetModelPolicyWarningCacheForTests,
+  _resetModelOverrideWarningCacheForTests,
+  _setInstallRuntimeMarkerForTests,
+  _resetInstallRuntimeMarkerCacheForTests,
   VALID_GRANULARITIES,
   resolveGranularityInternal,
   assertValidGranularityOverride,
   resolveModelForTier,
+  resolveProviderEscalation,
   VALID_EFFORTS,
   EFFORT_SET,
   nextEffort,

@@ -4,6 +4,7 @@
 
 const { execFileSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { createFixture } = require('./fixtures/index.cjs');
 
@@ -130,6 +131,7 @@ function cleanup(tmpDir) {
   if (typeof tmpDir !== 'string' || tmpDir.length === 0) return;
   const target = path.resolve(tmpDir);
   const cwd = path.resolve(process.cwd());
+  const tmpRoot = path.resolve(os.tmpdir());
   if (cwd === target || cwd.startsWith(`${target}${path.sep}`)) {
     // Windows cannot remove a directory that is the current working directory.
     process.chdir(path.dirname(target));
@@ -139,7 +141,17 @@ function cleanup(tmpDir) {
   // teardown runs. On POSIX the retry loop is a no-op (rmSync succeeds first try).
   // Budget: 20 × 250ms = 5s total — Windows Defender's deferred scan can hold
   // newly-written files for several seconds on cold runners.
-  fs.rmSync(target, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  try {
+    fs.rmSync(target, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  } catch (error) {
+    // After retries, Windows can still briefly hold temp dirs open after a timed-out
+    // child exits. Ignore that teardown-only flake for temp roots, but rethrow everything else.
+    const isTmpPath = target === tmpRoot || target.startsWith(`${tmpRoot}${path.sep}`);
+    const isTransientWinErr = process.platform === 'win32'
+      && isTmpPath
+      && ['EBUSY', 'ENOTEMPTY', 'EPERM'].includes(error && error.code);
+    if (!isTransientWinErr) throw error;
+  }
 }
 
 /**
@@ -267,6 +279,30 @@ function captureConsole(fn) {
  */
 function toPosixPath(p) {
   return p == null ? p : p.split(path.sep).join('/');
+}
+
+/**
+ * Build the expected absolute, POSIX-normalized `.planning/...` path for a
+ * given fixture root — the shape #2376's init/state path-field output now
+ * emits (anchored on process.cwd() / --cwd) instead of the historical
+ * relative literal.
+ *
+ * Centralizes the identical inline `absPlanningPath` helper previously
+ * duplicated across tests/quick-research.test.cjs, tests/init.test.cjs,
+ * tests/onboard-command.test.cjs, and tests/roadmap-parser.test.cjs.
+ *
+ * Callers MUST pass a realpath'd fixture root (e.g.
+ * `fs.realpathSync(createTempProject())`) so the expected value matches
+ * what a spawned child process actually resolves via `process.cwd()` — on
+ * macOS `os.tmpdir()` is a symlink (`/var/...` -> `/private/var/...`) that
+ * the child's cwd resolves through but a bare `mkdtempSync()` does not.
+ *
+ * @param {string} base - fixture root (should be realpath'd by the caller).
+ * @param {...string} segments - path segments under `.planning/`.
+ * @returns {string} POSIX-normalized absolute path.
+ */
+function absPlanningPath(base, ...segments) {
+  return toPosixPath(path.join(base, '.planning', ...segments));
 }
 
 /**
@@ -411,35 +447,7 @@ function resetRuntimeWarningCaches() {
   const modelResolver = require('../gsd-core/bin/lib/model-resolver.cjs');
   configLoader._resetRuntimeWarningCacheForTests();
   modelResolver._resetModelPolicyWarningCacheForTests();
+  modelResolver._resetModelOverrideWarningCacheForTests();
 }
 
-function cleanLauncherEnv(overrides = {}) {
-  const env = { ...process.env, ...overrides };
-  for (const key of [
-    'CODEX_HOME',
-    'CODEX_CONFIG_DIR',
-    'CURSOR_CONFIG_DIR',
-    'HERMES_HOME',
-    'GEMINI_CONFIG_DIR',
-    'COPILOT_CONFIG_DIR',
-    'WINDSURF_CONFIG_DIR',
-    'AUGMENT_CONFIG_DIR',
-    'TRAE_CONFIG_DIR',
-    'QWEN_CONFIG_DIR',
-    'CODEBUDDY_CONFIG_DIR',
-    'CLINE_CONFIG_DIR',
-    'GROK_AGENTS_HOME',
-    'ANTIGRAVITY_CONFIG_DIR',
-    'OPENCODE_CONFIG_DIR',
-    'KILO_CONFIG_DIR',
-    'PI_CODING_AGENT_DIR',
-    'PI_CONFIG_DIR',
-    'OMP_PROFILE',
-    'PI_PROFILE',
-  ]) {
-    delete env[key];
-  }
-  return env;
-}
-
-module.exports = { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, cleanLauncherEnv, TOOLS_PATH };
+module.exports = { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, TOOLS_PATH };

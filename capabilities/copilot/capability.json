@@ -1,16 +1,24 @@
 {
   "id": "copilot",
   "role": "runtime",
+  "version": "1.8.0",
   "title": "GitHub Copilot",
   "description": "GitHub Copilot (VS Code) — markdown config format; copilot-inline hook surface; no hook events emitted; flat skill nesting (unconfirmed recursive loader); tier-2 support.",
   "tier": "core",
   "requires": [],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
   "runtime": {
     "configHome": {
       "kind": "dot-home",
       "name": ".copilot",
-      "env": ["COPILOT_CONFIG_DIR", "COPILOT_HOME"]
+      "env": [
+        "COPILOT_CONFIG_DIR",
+        "COPILOT_HOME"
+      ]
     },
+    "localConfigDir": ".github",
     "configFormat": "markdown",
     "artifactLayout": {
       "global": [
@@ -21,6 +29,14 @@
           "nesting": "flat",
           "recursive": false,
           "converter": "convertClaudeCommandToCopilotSkill"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToCopilotAgent"
         }
       ],
       "local": [
@@ -31,6 +47,14 @@
           "nesting": "flat",
           "recursive": false,
           "converter": "convertClaudeCommandToCopilotSkill"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToCopilotAgent"
         }
       ]
     },
@@ -41,6 +65,30 @@
     "installSurface": "copilot-instructions",
     "writesSharedSettings": false,
     "permissionWriter": null,
-    "extendedHookEvents": []
+    "extendedHookEvents": [],
+    "hostIntegration": {
+      "embeddingMode": "declarative",
+      "commandSurface": "slash-file",
+      "dispatch": {
+        "namedDispatch": true,
+        "nested": false,
+        "maxDepth": 1,
+        "background": true,
+        "subagentToolkit": "full",
+        "backgroundDispatch": false
+      },
+      "modelMode": "passive",
+      "hookBus": "host",
+      "stateIO": "filesystem",
+      "transport": "mcp",
+      "runtime": "undocumented",
+      "effortSurface": "undocumented"
+    },
+    "hostBehaviors": {
+      "reapplyCommand": "/gsd-update --reapply",
+      "agentFileExtension": ".agent.md",
+      "skipSharedHooksInstall": true,
+      "noPathRewrite": true
+    }
   }
 }
