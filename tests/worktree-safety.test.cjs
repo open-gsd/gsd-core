@@ -2725,10 +2725,10 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
 
     const fragmentSource = fs.readFileSync(WORKTREE_BRANCH_CHECK_FRAGMENT, 'utf8');
     const branchCheck = fragmentSource.indexOf('HEAD_REF=$(git symbolic-ref --quiet HEAD || echo');
-    const namespaceCheck = fragmentSource.indexOf('^worktree-agent-');
+    const namespaceCheck = fragmentSource.indexOf('(worktree-)?agent-');
 
     assert.ok(branchCheck > 0, 'canonical fragment must assert HEAD before any work');
-    assert.ok(namespaceCheck > branchCheck, 'canonical fragment must require disposable worktree-agent branch');
+    assert.ok(namespaceCheck > branchCheck, 'canonical fragment must require disposable agent/worktree-agent branch');
     // #48: verify-only — the destructive self-recovery is gone; the fragment fails closed instead.
     assert.ok(!fragmentSource.includes('git reset --hard {EXPECTED_BASE}'), 'canonical fragment must not self-recover via reset --hard — orchestrator owns recovery (#48)');
     assert.ok(fragmentSource.includes('exit 42'), 'canonical fragment must fail closed with exit 42 on base mismatch (#48)');
