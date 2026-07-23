@@ -1019,7 +1019,7 @@ Configure per-step flags that `/gsd-manager` appends to each dispatched command.
 |---------|------|---------|-------------|
 | `manager.flags.discuss` | string | (none) | Flags appended to discuss-phase commands (e.g., `"--auto"`) |
 | `manager.flags.plan` | string | (none) | Flags appended to plan-phase commands (e.g., `"--skip-research"`) |
-| `manager.flags.execute` | string | (none) | Flags appended to execute-phase commands (e.g., `"--validate"`) |
+| `manager.flags.execute` | string | (none) | Flags appended to execute-phase commands (e.g., `"--cross-ai"`) |
 
 **Example:**
 
@@ -1029,7 +1029,7 @@ Configure per-step flags that `/gsd-manager` appends to each dispatched command.
     "flags": {
       "discuss": "--auto",
       "plan": "--skip-research",
-      "execute": "--validate"
+      "execute": "--cross-ai"
     }
   }
 }
