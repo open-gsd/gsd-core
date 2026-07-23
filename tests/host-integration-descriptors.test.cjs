@@ -39,7 +39,7 @@ const RUNTIME_IDS = Object.keys(registry.runtimes);
 
 // Contract-pinned profile split (derived from .host-cli-final.json):
 // programmatic-cli: claude, cline, cursor, hermes, kilo, kimi, kimi-code, opencode, pi, qwen, trae (11)
-// declarative-cli:  antigravity, augment, codebuddy, codex, copilot, windsurf, zcode (7)
+// declarative-cli:  antigravity, augment, codebuddy, codex, copilot, windsurf, zcode, qoder (8)
 // ide: vscode (1) — #2103, the first installed ide-profile host.
 const EXPECTED_PROFILES = {
   claude:      'programmatic-cli',
@@ -58,6 +58,7 @@ const EXPECTED_PROFILES = {
   codebuddy:   'declarative-cli',
   codex:       'declarative-cli',
   copilot:     'declarative-cli',
+  qoder:       'declarative-cli',
   windsurf:    'declarative-cli',
   zcode:       'declarative-cli',
   vscode:      'ide',
@@ -276,6 +277,10 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     claude:      true,
     cline:       true,
     codebuddy:   true,
+    // #860: Qoder CLI subagent system supports background dispatch
+    // (docs.qoder.com/en/cli/subagent) → dispatch.background/backgroundDispatch
+    // both true → NOT force-flattened (mirrors #2087 OpenCode / #2095 Kimi).
+    qoder:       false,
     codex:       false,
     copilot:     true,
     cursor:      false,
