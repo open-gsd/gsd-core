@@ -544,6 +544,29 @@ function convertClaudeCommandToKimiSkill(content, skillName, _runtime = null, cm
   return `---\nname: ${kimiSkillName}\ndescription: ${yamlQuote(toSingleLine(description))}\n---\nInvoke this Kimi skill with \`/skill:${kimiSkillName}\`.\n\n${normalizedBody}`;
 }
 
+/**
+ * Convert a Claude command-markdown source into a Kimi Code Agent Skill.
+ *
+ * Kimi Code (Moonshot's Node CLI) uses the standard Agent Skills format —
+ * a directory containing SKILL.md with frontmatter (name/description) and
+ * body — auto-discovered from `~/.kimi-code/skills/` (per Kimi Code docs:
+ * "Agent Skills is an open format for adding specialized knowledge and
+ * workflows to AI agents"). The invocation prefix is `/skill:<name>`,
+ * identical to Python kimi-cli.
+ *
+ * Today the output is byte-identical to `convertClaudeCommandToKimiSkill`
+ * (the Python kimi-cli converter) because both products consume the same
+ * Agent Skills format + `/skill:` invocation. The distinct function name
+ * lets a future divergence land cleanly if Kimi Code's skill format evolves
+ * independently of Python kimi-cli.
+ *
+ * Registered as `convertClaudeCommandToKimiCodeSkill` in the capabilities/
+ * kimi-code/capability.json `artifactLayout` `converter` field (#2454 PR 2).
+ */
+function convertClaudeCommandToKimiCodeSkill(content, skillName, _runtime = null, cmdNames = null) {
+  return convertClaudeCommandToKimiSkill(content, skillName, _runtime, cmdNames);
+}
+
 const KIMI_CANONICAL_GSD_AGENT_RE = /^gsd-[a-z0-9-]+$/;
 
 function parseKimiAgentSource(source) {
@@ -2854,6 +2877,7 @@ export = {
   convertClaudeCommandToAntigravitySkill,
   convertClaudeCommandToClaudeSkill,
   convertClaudeCommandToKimiSkill,
+  convertClaudeCommandToKimiCodeSkill,
   buildKimiAgentArtifacts,
   convertClaudeToCursorMarkdown,
   convertClaudeCommandToCursorSkill,

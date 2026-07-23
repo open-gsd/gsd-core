@@ -568,6 +568,78 @@ describe('auto-update', () => {
     });
   });
 
+  // #2304 — Kimi tool vocabulary engages the hook: Kimi CLI registers this
+  // hook with matcher 'Shell' and forwards tool_name 'Shell' (possibly
+  // module-qualified). kimi-cli's Shell.Params names its field `command`
+  // (src/kimi_cli/tools/shell/__init__.py), same as Claude's Bash, so only
+  // the tool name needs normalization. Pre-fix, the Gate 1 `== "Bash"` check
+  // never matched on Kimi and the auto-rebuild was silently dormant.
+  describe('hook — Kimi tool vocabulary (#2304)',
+    { skip: isWindows ? 'POSIX-only: harness spawns bash to invoke the .sh hook under test' : false },
+    () => {
+    test('dispatches on Kimi tool_name Shell (all gates pass)', async (t) => {
+      const tmpDir = createTempGitRepo({
+        config: { graphify: { enabled: true, auto_update: true } },
+      });
+      t.after(() => cleanupHookRepo(tmpDir));
+      const mockBin = makeMockGraphifyBin(tmpDir);
+      const r = runHook(
+        tmpDir,
+        { tool_name: 'Shell', tool_input: { command: 'git commit -m x' } },
+        { pathPrepend: mockBin },
+      );
+      assert.strictEqual(r.status, 0, 'hook must return 0');
+      const statusPath = path.join(tmpDir, '.planning/graphs/.last-build-status.json');
+      assert.ok(
+        fs.existsSync(statusPath),
+        'Kimi Shell must pass Gate 1 and dispatch — pre-fix the hook was silently dormant on Kimi (#2304)',
+      );
+      const done = await waitForBuildStatus(statusPath, new Set(['ok', 'failed']));
+      assert.ok(done && (done.status === 'ok' || done.status === 'failed'),
+        'detached rebuild must reach a terminal status before the test returns');
+    });
+
+    test('dispatches on module-qualified kimi_cli.tools.shell:Shell', async (t) => {
+      const tmpDir = createTempGitRepo({
+        config: { graphify: { enabled: true, auto_update: true } },
+      });
+      t.after(() => cleanupHookRepo(tmpDir));
+      const mockBin = makeMockGraphifyBin(tmpDir);
+      const r = runHook(
+        tmpDir,
+        { tool_name: 'kimi_cli.tools.shell:Shell', tool_input: { command: 'git commit -m x' } },
+        { pathPrepend: mockBin },
+      );
+      assert.strictEqual(r.status, 0);
+      const statusPath = path.join(tmpDir, '.planning/graphs/.last-build-status.json');
+      assert.ok(fs.existsSync(statusPath),
+        'module-qualified Kimi tool name must be recognized after prefix strip');
+      const done = await waitForBuildStatus(statusPath, new Set(['ok', 'failed']));
+      assert.ok(done && (done.status === 'ok' || done.status === 'failed'),
+        'detached rebuild must reach a terminal status before the test returns');
+    });
+
+    test('negative control: Kimi WriteFile does NOT dispatch', (t) => {
+      const tmpDir = createTempGitRepo({
+        config: { graphify: { enabled: true, auto_update: true } },
+      });
+      t.after(() => cleanupHookRepo(tmpDir));
+      const mockBin = makeMockGraphifyBin(tmpDir);
+      const r = runHook(
+        tmpDir,
+        // A command-shaped payload under a non-Shell Kimi tool: the name
+        // normalization must not widen Gate 1 beyond Shell→Bash.
+        { tool_name: 'kimi_cli.tools.file:WriteFile', tool_input: { command: 'git commit -m x' } },
+        { pathPrepend: mockBin },
+      );
+      assert.strictEqual(r.status, 0);
+      assert.ok(
+        !fs.existsSync(path.join(tmpDir, '.planning/graphs/.last-build-status.json')),
+        'non-Shell Kimi tools must still bail at Gate 1',
+      );
+    });
+  });
+
   describe('hook — HEAD-advancing command matchers',
     { skip: isWindows ? 'POSIX-only: harness spawns bash to invoke the .sh hook under test' : false },
     () => {

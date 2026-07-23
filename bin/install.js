@@ -627,7 +627,7 @@ if (hasMinimal && _profileArgRaw) {
 
 function selectRuntimesFromArgs(runtimeArgs) {
   if (runtimeArgs.includes('--all')) {
-    return ['claude', 'kimi', 'kilo', 'opencode', 'pi', 'codex', 'copilot', 'antigravity', 'cursor', 'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'zcode'];
+    return ['claude', 'kimi', 'kimi-code', 'kilo', 'opencode', 'pi', 'codex', 'copilot', 'antigravity', 'cursor', 'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'zcode'];
   }
   if (runtimeArgs.includes('--both')) {
     return ['claude', 'opencode'];
@@ -648,6 +648,7 @@ function selectRuntimesFromArgs(runtimeArgs) {
   if (runtimeArgs.includes('--qwen')) selected.push('qwen');
   if (runtimeArgs.includes('--hermes')) selected.push('hermes');
   if (runtimeArgs.includes('--kimi')) selected.push('kimi');
+  if (runtimeArgs.includes('--kimi-code')) selected.push('kimi-code');
   if (runtimeArgs.includes('--codebuddy')) selected.push('codebuddy');
   if (runtimeArgs.includes('--cline')) selected.push('cline');
   if (runtimeArgs.includes('--zcode')) selected.push('zcode');
@@ -656,6 +657,62 @@ function selectRuntimesFromArgs(runtimeArgs) {
 
 // Runtime selection - can be set by flags or interactive prompt
 let selectedRuntimes = selectRuntimesFromArgs(args);
+
+// #2505 Phase 5: Kimi variant disambiguation (#2513). Kimi CLI (Python, ~/.kimi/)
+// and Kimi Code (Node, ~/.kimi-code/) are two distinct Moonshot products that
+// share the "kimi" brand. Probe for each product's config.toml and warn when
+// the selected runtime doesn't match the detected install — catches the common
+// "ran --kimi --global but actually on Kimi Code" mistake that produced inert
+// YAMLs and empty agent-skills before the Phase 1 descriptor split.
+function disambiguateKimiVariant(runtimes) {
+  const home = os.homedir();
+  const hasKimiCli = fs.existsSync(path.join(home, '.kimi', 'config.toml'));
+  const hasKimiCode = fs.existsSync(path.join(home, '.kimi-code', 'config.toml'));
+  const notices = [];
+  if (runtimes.includes('kimi') && hasKimiCode && !hasKimiCli) {
+    notices.push({
+      kind: 'wrong-variant',
+      selected: 'kimi',
+      detected: 'kimi-code',
+      message: `Detected ~/.kimi-code/config.toml (Kimi Code, Node CLI) but not ~/.kimi/config.toml (Kimi CLI, Python). You selected --kimi but appear to be on Kimi Code. Re-run with --kimi-code for a working install. (Kimi CLI = Python kimi-cli with named subagents; Kimi Code = Node CLI with coder/explore/plan built-ins only.)`,
+    });
+  }
+  if (runtimes.includes('kimi-code') && hasKimiCli && !hasKimiCode) {
+    notices.push({
+      kind: 'wrong-variant',
+      selected: 'kimi-code',
+      detected: 'kimi',
+      message: `Detected ~/.kimi/config.toml (Kimi CLI, Python) but not ~/.kimi-code/config.toml (Kimi Code, Node CLI). You selected --kimi-code but appear to be on Kimi CLI. Re-run with --kimi for a working install.`,
+    });
+  }
+  // Distinct-entry descriptions when either Kimi variant is selected.
+  if (runtimes.includes('kimi')) {
+    notices.push({
+      kind: 'description',
+      runtime: 'kimi',
+      message: 'Kimi CLI (Python kimi-cli): named subagents via YAML, config at ~/.kimi/, hooks via ~/.kimi/config.toml [[hooks]].',
+    });
+  }
+  if (runtimes.includes('kimi-code')) {
+    notices.push({
+      kind: 'description',
+      runtime: 'kimi-code',
+      message: 'Kimi Code (Node CLI): three built-in subagents (coder/explore/plan), Agent Skills at ~/.kimi-code/skills/, config at ~/.kimi-code/.',
+    });
+  }
+  return notices;
+}
+
+if (selectedRuntimes.includes('kimi') || selectedRuntimes.includes('kimi-code')) {
+  const kimiNotices = disambiguateKimiVariant(selectedRuntimes);
+  for (const notice of kimiNotices) {
+    if (notice.kind === 'wrong-variant') {
+      console.error(`${yellow}⚠ Kimi variant mismatch (${notice.selected} → ${notice.detected}).${reset} ${notice.message}`);
+    } else if (notice.kind === 'description') {
+      console.log(`${dim}  ${notice.runtime}: ${notice.message}${reset}`);
+    }
+  }
+}
 
 // #1928: Google sunset Gemini CLI on 2026-06-18; Antigravity CLI is its
 // official successor. `--gemini` is no longer a valid runtime selector —
@@ -12390,16 +12447,17 @@ const runtimeMap = {
   '8': 'cursor',
   '9': 'hermes',
   '10': 'kimi',
-  '11': 'kilo',
-  '12': 'opencode',
-  '13': 'pi',
-  '14': 'qwen',
-  '15': 'trae',
-  '16': 'windsurf',
-  '17': 'zcode'
+  '11': 'kimi-code',
+  '12': 'kilo',
+  '13': 'opencode',
+  '14': 'pi',
+  '15': 'qwen',
+  '16': 'trae',
+  '17': 'windsurf',
+  '18': 'zcode'
 };
-const allRuntimes = ['claude', 'antigravity', 'augment', 'cline', 'codebuddy', 'codex', 'copilot', 'cursor', 'hermes', 'kimi', 'kilo', 'opencode', 'pi', 'qwen', 'trae', 'windsurf', 'zcode'];
-const ALL_RUNTIMES_OPTION = '18';
+const allRuntimes = ['claude', 'antigravity', 'augment', 'cline', 'codebuddy', 'codex', 'copilot', 'cursor', 'hermes', 'kimi', 'kimi-code', 'kilo', 'opencode', 'pi', 'qwen', 'trae', 'windsurf', 'zcode'];
+const ALL_RUNTIMES_OPTION = '19';
 
 /**
  * Build the runtime-selection prompt text shown by the interactive installer.
@@ -12417,14 +12475,15 @@ function buildRuntimePromptText() {
   ${cyan}8${reset}) Cursor       ${dim}(~/.cursor)${reset}
   ${cyan}9${reset}) Hermes Agent ${dim}(~/.hermes)${reset}
   ${cyan}10${reset}) Kimi         ${dim}(~/.config/agents, then ~/.agents if existing)${reset}
-  ${cyan}11${reset}) Kilo         ${dim}(~/.config/kilo)${reset}
-  ${cyan}12${reset}) OpenCode     ${dim}(~/.config/opencode)${reset}
-  ${cyan}13${reset}) pi           ${dim}(~/.pi/agent)${reset}
-  ${cyan}14${reset}) Qwen Code    ${dim}(~/.qwen)${reset}
-  ${cyan}15${reset}) Trae         ${dim}(~/.trae)${reset}
-  ${cyan}16${reset}) Windsurf     ${dim}(~/.codeium/windsurf)${reset}
-  ${cyan}17${reset}) ZCode        ${dim}(~/.zcode)${reset}
-  ${cyan}18${reset}) All
+  ${cyan}11${reset}) Kimi Code    ${dim}(~/.kimi-code)${reset}
+  ${cyan}12${reset}) Kilo         ${dim}(~/.config/kilo)${reset}
+  ${cyan}13${reset}) OpenCode     ${dim}(~/.config/opencode)${reset}
+  ${cyan}14${reset}) pi           ${dim}(~/.pi/agent)${reset}
+  ${cyan}15${reset}) Qwen Code    ${dim}(~/.qwen)${reset}
+  ${cyan}16${reset}) Trae         ${dim}(~/.trae)${reset}
+  ${cyan}17${reset}) Windsurf     ${dim}(~/.codeium/windsurf)${reset}
+  ${cyan}18${reset}) ZCode        ${dim}(~/.zcode)${reset}
+  ${cyan}19${reset}) All
 
   ${dim}Select multiple: 1,2,6 or 1 2 6${reset}
 `;
@@ -12435,7 +12494,7 @@ function buildRuntimePromptText() {
  * Pure function — exported so tests can verify split/dedupe/fallback behavior.
  *  - Accepts comma- and/or whitespace-separated choices
  *  - Deduplicates while preserving order
- *  - Maps option 16 ("All") to every runtime
+ *  - Maps option 19 ("All") to every runtime
  *  - Falls back to ['claude'] when nothing valid is selected
  */
 function parseRuntimeInput(answer) {

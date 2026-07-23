@@ -657,25 +657,38 @@ export function parseCoverageMatrix(text: unknown): CoverageParseResult {
     return out;
   }
 
-  // (2) markdown table — collect table rows whose decision column parses.
+  // (2) markdown table — collect rows from coverage matrix tables only (#2366).
+  // Track whether we are inside a recognized coverage matrix (after a header
+  // row, before a non-pipe line ends the table). This prevents summary tables
+  // elsewhere in the file from being parsed as data (#2366 bug 1) and allows
+  // multi-section matrices with repeated headers (#2366 bug 2).
   const lines = src.split('\n');
-  let sawHeader = false;
+  let inMatrix = false;
   for (const line of lines) {
     const trimmed = line.trim();
-    if (!trimmed.startsWith('|')) continue;
+    if (!trimmed.startsWith('|')) {
+      inMatrix = false;
+      continue;
+    }
     const cells = trimmed.slice(1, trimmed.endsWith('|') ? -1 : trimmed.length).split('|');
     if (cells.length < 2) continue;
     const cleaned = cells.map((c) => c.trim());
     // skip separator rows (|---|---|); require ≥3 dashes so a literal "-" cell
     // is not mistaken for a separator.
     if (cleaned.every((c) => /^:?-{3,}:?$/.test(c))) continue;
-    const decisionCell = (cleaned[1] || '').toUpperCase();
-    // header detection
-    if (!sawHeader && cleaned[0].toLowerCase() === 'capability') {
-      sawHeader = true;
-      out.format = 'table';
+    // Strip markdown emphasis (**, *, __, _, `) from the decision cell before
+    // comparison so **OPT-OUT** parses correctly (#2366 bug 3).
+    const decisionCell = (cleaned[1] || '').replace(/[*_`]/g, '').trim().toUpperCase();
+    // header detection — recognized by 'capability' in column 0; allows multiple
+    // headers for multi-section matrices (#2366 bug 2).
+    if (cleaned[0].toLowerCase() === 'capability') {
+      inMatrix = true;
+      if (out.format === 'none') out.format = 'table';
       continue;
     }
+    // Only parse data rows from inside a recognized coverage matrix table.
+    // A pipe-table outside the matrix (e.g., a summary table) is ignored (#2366 bug 1).
+    if (!inMatrix) continue;
     if (!VALID_DECISIONS.has(decisionCell as CoverageDecision)) {
       // A row that otherwise looks like data (≥3 cells, non-empty capability)
       // but carries a malformed decision is a real error, not a row to skip

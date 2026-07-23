@@ -2258,12 +2258,43 @@ function cmdAgentSkills(
   const projectRoot = findProjectRoot(cwd);
   const { config, source, degraded } = loadConfigResolved(projectRoot);
   const diagnostics = { warnings: [] as string[] };
-  const block = buildAgentSkillsBlock(
+  let block = buildAgentSkillsBlock(
     config,
     agentType,
     projectRoot,
     diagnostics,
   );
+
+  // #2454: Agent prompt fallback for AGENTS-native runtimes where named
+  // subagents are NOT dispatchable (kimi-code, kimi, opencode, kilo, etc.).
+  // On these runtimes, workflows inject ${AGENT_SKILLS_*} into the dispatch
+  // prompt of a built-in subagent (coder/explore/plan). If no
+  // model_profile_overrides or agent_skills config entry exists, the block
+  // is empty — but the agent's prompt CONTENT is installed on disk at the
+  // runtime's agents directory. Read it as a fallback so the persona survives
+  // the dispatch even without explicit config opt-in.
+  //
+  // GATED to non-claude runtimes: Claude Code supports named subagent dispatch
+  // and its ${AGENT_SKILLS_*} contract is a skills-injection path, not a
+  // persona fallback. Triggering the fallback for claude would change the
+  // documented "unconfigured → empty block" contract that agent-skills tests
+  // pin.
+  if (!block) {
+    const runtime = (config && (config['runtime'] as string)) || process.env['GSD_RUNTIME'] || 'claude';
+    if (runtime !== 'claude') {
+      const agentCheck = checkAgentsInstalled(runtime) as unknown as { agents_dir?: string } | null;
+      const agentsDir = agentCheck?.agents_dir;
+      if (typeof agentsDir === 'string' && agentsDir.length > 0) {
+        const agentFile = path.join(agentsDir, `${agentType}.md`);
+        try {
+          const content = platformReadSync(agentFile);
+          if (content && content.length > 0) {
+            block = content;
+          }
+        } catch { /* agent file not found — fall through to empty block */ }
+      }
+    }
+  }
 
   // Compute configured + reason for diagnostic output.
   const agentSkillsMap = (config && config['agent_skills'] && typeof config['agent_skills'] === 'object')

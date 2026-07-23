@@ -17,8 +17,12 @@ fi
 
 INPUT=$(cat)
 
-# Extract file_path from JSON using Node (handles escaping correctly)
-FILE=$(echo "$INPUT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{process.stdout.write(JSON.parse(d).tool_input?.file_path||'')}catch{}})" 2>/dev/null)
+# Extract file_path from JSON using Node (handles escaping correctly).
+# #2304: Kimi CLI registers this hook with matcher 'WriteFile|StrReplaceFile'
+# and its file tools name the field `path`, not `file_path` (kimi-cli
+# src/kimi_cli/tools/file/write.py + replace.py) — fall back to tool_input.path
+# when file_path is absent, mirroring normalizeKimiPayload in the JS guards.
+FILE=$(echo "$INPUT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const i=JSON.parse(d).tool_input||{};process.stdout.write(i.file_path||(typeof i.path==='string'?i.path:'')||'')}catch{}})" 2>/dev/null)
 
 # Emit a structured JSON envelope (#2974). additionalContext carries the
 # user-visible reminder text; the typed `planning_modified` boolean and

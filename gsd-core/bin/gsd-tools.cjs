@@ -610,6 +610,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     let fastModeOverride;
     let attempt;
     let failureClass;
+    let host;
     const positionals = [];
     // #2296: the valid classes come from the classifier's own frozen enum, so
     // this validator can never drift from what `agent classify-failure` emits.
@@ -675,6 +676,13 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
         i++;
         continue;
       }
+      if (a === '--host') {
+        const val = execArgs[i + 1];
+        if (val === undefined || val.startsWith('--')) error('Missing value for --host', ERROR_REASON.USAGE);
+        host = val;
+        i++;
+        continue;
+      }
       if (a === '--raw') continue;
       if (a.startsWith('-')) error(`Unknown flag for resolve-execution: ${a}`, ERROR_REASON.USAGE);
       positionals.push(a);
@@ -687,6 +695,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       fastModeOverride,
       attempt,
       failureClass,
+      host,
     });
   }
 
@@ -1176,6 +1185,45 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // Fail-closed on any error: inline is always safe.
             process.stdout.write('true');
           }
+  }
+
+  function routeResolveDispatchType({ args, cwd, raw, error }) {
+    // #2508 Phase 4 Option A: resolve a requested GSD subagent name to the
+           // type an Agent() call should use on the current runtime. On
+           // named-dispatch runtimes (Claude, OpenCode, …) the name is returned
+           // unchanged; on built-in-only runtimes (kimi-code) it maps to the
+           // closest built-in (coder/explore/plan) by role-suffix heuristic.
+           // The persona rides ${AGENT_SKILLS_*} (Phase 3 / #2510) regardless.
+           //
+           // Output:
+           //   --raw (default) → prints the resolved type (e.g. "gsd-planner" or "plan")
+           //   --json          → prints { runtime, requested, resolved, dispatch }
+           try {
+             const requestedIdx = args.indexOf('--requested');
+             const requested = requestedIdx !== -1 ? args[requestedIdx + 1] : '';
+             const { resolveRuntime } = require('./lib/runtime-slash.cjs');
+             const runtimeId = resolveRuntime(cwd);
+             const registry = require('./lib/capability-registry.cjs');
+             const runtimeEntry = registry.runtimes != null
+               ? registry.runtimes[runtimeId]
+               : null;
+             const dispatch = runtimeEntry?.runtime?.hostIntegration?.dispatch ?? null;
+             const hostIntegration = require('./lib/host-integration.cjs');
+             const resolved = hostIntegration.resolveDispatchType(requested, dispatch);
+             const jsonIdx = args.indexOf('--json');
+             if (jsonIdx !== -1) {
+               output({ runtime: runtimeId, requested, resolved, dispatch }, raw);
+             } else {
+               process.stdout.write(String(resolved));
+             }
+           } catch {
+             // Fail-closed: on any error, echo the requested name unchanged
+             // (named-dispatch is the GSD default; degrading to it preserves
+             // behavior for every runtime already in the field).
+             const requestedIdx = args.indexOf('--requested');
+             const requested = requestedIdx !== -1 ? args[requestedIdx + 1] : '';
+             process.stdout.write(String(requested));
+           }
   }
 
   function routeAgentSkills({ args, cwd, raw, error }) {
@@ -2071,6 +2119,7 @@ const HOST_COMMAND_ROUTERS = {
     'quick-tasks-append': routeQuickTasksAppend,
     'normalize-test-command': routeNormalizeTestCommand,
     'dispatch-should-flatten': routeDispatchShouldFlatten,
+    'resolve-dispatch-type': routeResolveDispatchType,
     'agent-skills': routeAgentSkills,
     'skill-manifest': routeSkillManifest,
     'history-digest': routeHistoryDigest,

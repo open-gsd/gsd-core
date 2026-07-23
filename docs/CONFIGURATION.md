@@ -1342,6 +1342,36 @@ The model-catalog's `reasoning_effort` per-tier hint is a legacy field kept for 
 
 Valid effort values: `minimal`, `low`, `medium`, `high`, `xhigh`, `max`.
 
+#### Where effort actually reaches — added in v1.8.0
+
+Effort resolved from the cascade above reaches a runtime through one of two channels.
+
+**Install-time.** The value is baked into the artifacts the installer generates — the
+`effort:` frontmatter key on a Claude subagent, `model_reasoning_effort` in a generated
+Codex `.toml`. This is fixed at install and changes only on reinstall or sync.
+
+**Invocation-time.** When GSD spawns another CLI as a subprocess — the cross-AI reviewers
+in `/gsd:review` — the effort is appended to that CLI's own command line. Whether a host
+can receive effort this way is a declared capability (`effortSurface`, ADR-1239), not an
+assumption:
+
+| Reviewer CLI | Receives effort as |
+|---|---|
+| `claude` | `--effort <level>` |
+| `opencode` | `--variant <level>` |
+| `codex` | `-c model_reasoning_effort=<level>` |
+
+A host whose documentation states no reasoning setting is left **untouched** — no flag is
+guessed, and GSD never writes into your own CLI's config file to set one. Levels a given
+CLI does not accept are clamped to its nearest supported value (`minimal` → `low` for
+Claude, `max` → `xhigh` for Codex), so a cross-provider value never produces an invalid
+argument.
+
+Before this, a review run inherited whatever effort happened to be configured in your
+personal CLI config, which is why the same project could produce very different review
+times on two machines. Setting `effort.default` (or an agent/tier override) now controls
+review runs too.
+
 ---
 
 ### Fast Mode (`fast_mode`) — added in v1.42

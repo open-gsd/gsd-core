@@ -182,7 +182,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "go"
+        "runtime": "go",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reviewerCli": true,
@@ -379,7 +380,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       }
     }
   },
@@ -509,7 +511,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "argv"
       },
       "hostBehaviors": {
         "attributionSource": "settings-json-commit",
@@ -679,7 +682,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
@@ -856,7 +860,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reportCommandsDir": true
@@ -936,7 +941,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "argv"
       },
       "hostBehaviors": {
         "reapplyCommand": "$gsd-update --reapply",
@@ -1031,7 +1037,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "undocumented"
+        "runtime": "undocumented",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
@@ -1140,7 +1147,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "gsd-update --reapply (mention the skill name)",
@@ -1490,7 +1498,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "python"
+        "runtime": "python",
+        "effortSurface": "undocumented"
       }
     }
   },
@@ -1636,7 +1645,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "bun"
+        "runtime": "bun",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
@@ -1729,7 +1739,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "python"
+        "runtime": "python",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "/skill:gsd-update --reapply",
@@ -1738,6 +1749,91 @@ const capabilities = {
         "agentManifestStyle": "kimi-nested",
         "doneBannerStyle": "kimi-agent-file",
         "skipSharedHooksInstall": true
+      }
+    }
+  },
+  "kimi-code": {
+    "id": "kimi-code",
+    "role": "runtime",
+    "version": "1.8.0",
+    "title": "Kimi Code CLI",
+    "description": "Kimi Code CLI (Moonshot AI, Node) — Agent Skills auto-discovered at ~/.kimi-code/skills; global AGENTS.md at ~/.kimi-code/AGENTS.md; native config.toml + [[hooks]] bus; three built-in subagents (coder/explore/plan), NO custom named subagents; background dispatch; tier-2 support. Distinct from Python kimi-cli (the 'kimi' capability) per ADR-1239 EoS — Kimi Code cannot dispatch named subagents so the kimi-agents YAML layout does NOT apply; persona injection rides the existing ${AGENT_SKILLS_*} workflow fallback. Install-layout, agent-install-check, and install-time decision (kimi vs kimi-code) land in follow-up PRs; this descriptor is the EoS foundation.",
+    "tier": "core",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.7.0"
+    },
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".kimi-code",
+        "env": [
+          "KIMI_CODE_HOME"
+        ],
+        "probe": [
+          "~/.kimi-code"
+        ],
+        "probeExists": "config.toml"
+      },
+      "localConfigDir": ".kimi-code",
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToKimiCodeSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "kimi-hooks-toml",
+      "hookEvents": "claude",
+      "sandboxTier": "none",
+      "supportTier": 2,
+      "installSurface": "profile-marker-only",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": [
+        "SubagentStop",
+        "Stop",
+        "PreCompact",
+        "SubagentStart"
+      ],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": false,
+          "nested": false,
+          "maxDepth": 1,
+          "background": true,
+          "subagentToolkit": "built-in-only",
+          "backgroundDispatch": true,
+          "builtInSubagents": [
+            "coder",
+            "explore",
+            "plan"
+          ]
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "/skill:gsd-update --reapply",
+        "localInstallDeferred": true,
+        "verificationStyle": "kimi-code",
+        "agentManifestStyle": "none",
+        "doneBannerStyle": "kimi-code",
+        "skipSharedHooksInstall": true,
+        "namedSubagentsSupported": false
       }
     }
   },
@@ -2050,7 +2146,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "bun"
+        "runtime": "bun",
+        "effortSurface": "argv"
       },
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
@@ -2173,7 +2270,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "session-log-append",
         "transport": "native-extension",
-        "runtime": "bun"
+        "runtime": "bun",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "nativePlugin": {
@@ -2350,7 +2448,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "skillPriorityFrontmatter": true,
@@ -2699,7 +2798,8 @@ const capabilities = {
         "hookBus": "engine",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "skipSharedHooksInstall": true,
@@ -2849,7 +2949,8 @@ const capabilities = {
         "hookBus": "engine",
         "stateIO": "sandboxed-storage",
         "transport": "mcp",
-        "runtime": "sandboxed-web"
+        "runtime": "sandboxed-web",
+        "effortSurface": "undocumented"
       }
     }
   },
@@ -2928,7 +3029,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "undocumented"
+        "runtime": "undocumented",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "skipSharedHooksInstall": true,
@@ -3036,7 +3138,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "electron"
+        "runtime": "electron",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "skipSharedHooksInstall": true
@@ -4062,7 +4165,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "go"
+        "runtime": "go",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reviewerCli": true,
@@ -4176,7 +4280,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       }
     }
   },
@@ -4260,7 +4365,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "argv"
       },
       "hostBehaviors": {
         "attributionSource": "settings-json-commit",
@@ -4342,7 +4448,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
@@ -4458,7 +4565,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reportCommandsDir": true
@@ -4538,7 +4646,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "argv"
       },
       "hostBehaviors": {
         "reapplyCommand": "$gsd-update --reapply",
@@ -4633,7 +4742,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "undocumented"
+        "runtime": "undocumented",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
@@ -4742,7 +4852,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "gsd-update --reapply (mention the skill name)",
@@ -4849,7 +4960,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "python"
+        "runtime": "python",
+        "effortSurface": "undocumented"
       }
     }
   },
@@ -4943,7 +5055,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "bun"
+        "runtime": "bun",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
@@ -5036,7 +5149,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "python"
+        "runtime": "python",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "/skill:gsd-update --reapply",
@@ -5045,6 +5159,91 @@ const runtimes = {
         "agentManifestStyle": "kimi-nested",
         "doneBannerStyle": "kimi-agent-file",
         "skipSharedHooksInstall": true
+      }
+    }
+  },
+  "kimi-code": {
+    "id": "kimi-code",
+    "role": "runtime",
+    "version": "1.8.0",
+    "title": "Kimi Code CLI",
+    "description": "Kimi Code CLI (Moonshot AI, Node) — Agent Skills auto-discovered at ~/.kimi-code/skills; global AGENTS.md at ~/.kimi-code/AGENTS.md; native config.toml + [[hooks]] bus; three built-in subagents (coder/explore/plan), NO custom named subagents; background dispatch; tier-2 support. Distinct from Python kimi-cli (the 'kimi' capability) per ADR-1239 EoS — Kimi Code cannot dispatch named subagents so the kimi-agents YAML layout does NOT apply; persona injection rides the existing ${AGENT_SKILLS_*} workflow fallback. Install-layout, agent-install-check, and install-time decision (kimi vs kimi-code) land in follow-up PRs; this descriptor is the EoS foundation.",
+    "tier": "core",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.7.0"
+    },
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".kimi-code",
+        "env": [
+          "KIMI_CODE_HOME"
+        ],
+        "probe": [
+          "~/.kimi-code"
+        ],
+        "probeExists": "config.toml"
+      },
+      "localConfigDir": ".kimi-code",
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToKimiCodeSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "kimi-hooks-toml",
+      "hookEvents": "claude",
+      "sandboxTier": "none",
+      "supportTier": 2,
+      "installSurface": "profile-marker-only",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": [
+        "SubagentStop",
+        "Stop",
+        "PreCompact",
+        "SubagentStart"
+      ],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": false,
+          "nested": false,
+          "maxDepth": 1,
+          "background": true,
+          "subagentToolkit": "built-in-only",
+          "backgroundDispatch": true,
+          "builtInSubagents": [
+            "coder",
+            "explore",
+            "plan"
+          ]
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "/skill:gsd-update --reapply",
+        "localInstallDeferred": true,
+        "verificationStyle": "kimi-code",
+        "agentManifestStyle": "none",
+        "doneBannerStyle": "kimi-code",
+        "skipSharedHooksInstall": true,
+        "namedSubagentsSupported": false
       }
     }
   },
@@ -5133,7 +5332,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "bun"
+        "runtime": "bun",
+        "effortSurface": "argv"
       },
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
@@ -5202,7 +5402,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "session-log-append",
         "transport": "native-extension",
-        "runtime": "bun"
+        "runtime": "bun",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "nativePlugin": {
@@ -5302,7 +5503,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "skillPriorityFrontmatter": true,
@@ -5401,7 +5603,8 @@ const runtimes = {
         "hookBus": "engine",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "skipSharedHooksInstall": true,
@@ -5456,7 +5659,8 @@ const runtimes = {
         "hookBus": "engine",
         "stateIO": "sandboxed-storage",
         "transport": "mcp",
-        "runtime": "sandboxed-web"
+        "runtime": "sandboxed-web",
+        "effortSurface": "undocumented"
       }
     }
   },
@@ -5535,7 +5739,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "undocumented"
+        "runtime": "undocumented",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "skipSharedHooksInstall": true,
@@ -5643,7 +5848,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "electron"
+        "runtime": "electron",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "skipSharedHooksInstall": true
@@ -5823,6 +6029,7 @@ const _requiresGraph = {
   "intel": [],
   "kilo": [],
   "kimi": [],
+  "kimi-code": [],
   "mempalace": [],
   "nyquist": [],
   "opencode": [],

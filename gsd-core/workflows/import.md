@@ -18,7 +18,6 @@ RESPONSE_LANGUAGE=$(gsd_run query config-get response_language --default "" 2>/d
 
 **If `response_language` is set:** All user-facing questions, prompts, and explanations in this workflow MUST be presented in `{response_language}`. Technical terms, code, file paths, and subagent prompts stay in English — only user-facing output is translated.
 
-
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  GSD ► IMPORT
@@ -204,6 +203,10 @@ Write the PLAN.md file to the target directory.
 Delegate validation to gsd-plan-checker:
 
 Print: "Delegating to gsd-plan-checker (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)"
+
+<!-- #2508 runtime-aware-dispatch -->
+
+> **Runtime-aware dispatch (#2508 Phase 4).** GSD workflows dispatch specialized subagents by role. Before dispatching on a built-in-only runtime (kimi-code — three built-ins only), resolve the role to a built-in via `gsd_run query resolve-dispatch-type --requested <role> --raw`. On named-dispatch runtimes (Claude/OpenCode/…) the role is returned unchanged; on kimi-code it maps to `coder`/`explore`/`plan` by role-suffix. The persona rides `${AGENT_SKILLS_<ROLE>}` (Phase 3) regardless. See @gsd-core/references/runtime-aware-dispatch.md.
 
 ```
 Agent({

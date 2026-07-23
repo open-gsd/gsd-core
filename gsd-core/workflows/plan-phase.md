@@ -716,7 +716,6 @@ after `$SPEC_FILE` (Step 7), before the gsd-planner spawn (Step 8).
 disabled or no requirement IDs; §A deterministic edge probe → `$COVERAGE` when `EDGE_ABSENT`; §B
 prohibition recall in the planner). Pass `$COVERAGE` and `$SPECLESS_FALLBACK_DISABLED` into Step 8.
 
-
 ## 8. Spawn gsd-planner Agent
 
 Display banner:
