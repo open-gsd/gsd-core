@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 # Step: regression_gate_run
 
 Run the resolved prior-phase test command one-shot, bounded by a timeout, so a

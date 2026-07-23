@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 <purpose>
 One-page newcomer-oriented tour of GSD Core. Output ONLY the `<reference>` content below. No additions.
 </purpose>

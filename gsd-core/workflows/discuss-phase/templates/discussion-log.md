@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 # DISCUSSION-LOG.md template — for discuss-phase git_commit step
 
 > **Lazy-loaded.** Read this file only inside the `git_commit` step of

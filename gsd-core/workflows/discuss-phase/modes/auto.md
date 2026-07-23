@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 # --auto mode — fully autonomous discuss-phase
 
 > **Lazy-loaded.** Read this file from `workflows/discuss-phase.md` when

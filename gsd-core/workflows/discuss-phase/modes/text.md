@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 # --text mode — plain-text overlay (no AskUserQuestion)
 
 > **Lazy-loaded overlay.** Read this file from `workflows/discuss-phase.md`

@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 # --power mode — bulk question generation, async answering
 
 > **Lazy-loaded.** Read this file from `workflows/discuss-phase.md` when
