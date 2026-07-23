@@ -150,7 +150,8 @@ Handle return:
 git add {test_files}
 git commit -m "test(phase-${PHASE}): add Nyquist validation tests"
 
-gsd_run query commit "docs(phase-${PHASE}): add/update validation strategy"
+gsd_run query commit "docs(phase-${PHASE}): add/update validation strategy" \
+  --files "${PHASE_DIR}/${PADDED_PHASE}-VALIDATION.md"
 ```
 
 ## 8. Results + Routing
