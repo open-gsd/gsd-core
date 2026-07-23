@@ -549,3 +549,100 @@ describe('#2427 — roadmap-grounded completion + tightened status regex', () =>
       `legacy fallback must still reject completion when current_phase < total_phases. Got: ${result.situation}`);
   });
 });
+
+describe('smart-entry: stale_activity honors the template\'s "date — description" shape (#2547)', () => {
+  afterEach(removeAll);
+
+  // A fixed "now" far enough past 2026-06-08 that any real date there is well
+  // beyond IDLE_STALE_MS (72h). Injected so the test is deterministic and does
+  // not depend on the wall clock.
+  const FIXED_NOW = () => Date.parse('2026-08-01T00:00:00Z');
+
+  // gsd-core's own STATE.md carries last_activity as "YYYY-MM-DD — <description>"
+  // (templates/state.md prescribes `Last activity: [YYYY-MM-DD] — [What happened]`
+  // for the body; the frontmatter mirrors it). Before the fix, parseActivityTimestamp
+  // ran Date.parse on the whole string → NaN → staleActivity failed OPEN to false,
+  // so the ONLY idle/staleness detector never fired on any project whose
+  // last_activity retained its description.
+
+  test('frontmatter last_activity with " — description" suffix is detected stale', () => {
+    const stateMd = [
+      '---',
+      'gsd_state_version: 1.0',
+      'status: executing',
+      'last_activity: 2026-06-08 — Milestone 2 executed autonomously (all passed)',
+      'progress:',
+      '  total_phases: 5',
+      '  percent: 40',
+      '---',
+      '',
+      '# Project State',
+      '',
+      'Phase: 3',
+      '',
+      '**Status:** executing',
+      '',
+    ].join('\n');
+    const dir = track(makeProject({ state: stateMd, roadmap: true }));
+    const signals = detectSignals(dir, FIXED_NOW);
+    assert.equal(
+      signals.stale_activity,
+      true,
+      'a 54-day-old last_activity carrying a description must read stale, not fail open to false',
+    );
+  });
+
+  test('body "Last activity: <date> — <desc>" fallback is detected stale', () => {
+    const stateMd = [
+      '# Project State',
+      '',
+      '## Current Position',
+      '',
+      'Phase: 1 of 1 (X)',
+      'Status: In progress',
+      'Last activity: 2026-06-08 — started the widget',
+      '',
+    ].join('\n');
+    const dir = track(makeProject({ state: stateMd, roadmap: true }));
+    const signals = detectSignals(dir, FIXED_NOW);
+    assert.equal(signals.stale_activity, true, 'body-field fallback must also parse the leading date');
+  });
+
+  test('bare ISO date (control) still reads stale', () => {
+    const stateMd = [
+      '---',
+      'status: executing',
+      'last_activity: 2026-06-08',
+      '---',
+      '',
+      '# Project State',
+      '',
+      'Phase: 1',
+      '',
+    ].join('\n');
+    const dir = track(makeProject({ state: stateMd, roadmap: true }));
+    const signals = detectSignals(dir, FIXED_NOW);
+    assert.equal(signals.stale_activity, true, 'bare-date parsing must be unchanged');
+  });
+
+  test('recent activity with a description is NOT stale (no false positive)', () => {
+    const stateMd = [
+      '---',
+      'status: executing',
+      'last_activity: 2026-07-31 — shipped a thing',
+      '---',
+      '',
+      '# Project State',
+      '',
+      'Phase: 1',
+      '',
+    ].join('\n');
+    const dir = track(makeProject({ state: stateMd, roadmap: true }));
+    const signals = detectSignals(dir, FIXED_NOW);
+    assert.equal(
+      signals.stale_activity,
+      false,
+      'a next-day activity with a description must NOT be flagged stale',
+    );
+  });
+});

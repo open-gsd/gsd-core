@@ -169,11 +169,29 @@ function phaseTokenFromDirName(name: string): string | null {
 /**
  * Parse a `last_activity` value that may be an ISO date or a free-form string
  * into an epoch-ms timestamp. Returns null when unparseable.
+ *
+ * #2547: `last_activity` routinely carries a trailing " — <description>" — the
+ * shape `templates/state.md` itself prescribes (`Last activity: [YYYY-MM-DD] —
+ * [What happened]`), which gsd-core's own STATE.md mirrors into frontmatter.
+ * `Date.parse` on the whole string returns NaN, and because `staleActivity`
+ * treats null as "not stale" (fails open), the ONLY idle/staleness detector
+ * never fired on any project whose last_activity retained its description.
+ * Be liberal in what we accept (Postel): try the whole string first, then fall
+ * back to the leading ISO date/time token, so the description suffix — whatever
+ * separator (em dash or hyphen) it uses — no longer silently blinds the detector.
  */
 function parseActivityTimestamp(raw: string | null): number | null {
   if (!raw) return null;
-  const ms = Date.parse(raw);
-  return Number.isNaN(ms) ? null : ms;
+  const direct = Date.parse(raw);
+  if (!Number.isNaN(direct)) return direct;
+  const leading = raw
+    .trim()
+    .match(/^(\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)/);
+  if (leading) {
+    const ms = Date.parse(leading[1]);
+    return Number.isNaN(ms) ? null : ms;
+  }
+  return null;
 }
 
 interface GitSignals {
