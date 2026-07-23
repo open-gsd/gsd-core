@@ -162,7 +162,8 @@ Do NOT emit next-phase routing. Stop here.
 ## 7. Commit
 
 ```bash
-gsd_run query commit "docs(phase-${PHASE}): add/update security threat verification"
+gsd_run query commit "docs(phase-${PHASE}): add/update security threat verification" \
+  --files "${PHASE_DIR}/${PADDED_PHASE}-SECURITY.md"
 ```
 
 ## 8. Results + Routing
