@@ -3952,14 +3952,16 @@ describe('FIX 3: tightened runtime validator — probeExists optional string', (
 // ── 24e. Closed-vocab set exports are correct ─────────────────────────────────
 
 describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
-  test('VALID_CONFIG_HOME_KINDS has exactly the 5 expected values', () => {
+  test('VALID_CONFIG_HOME_KINDS has exactly the 6 expected values', () => {
     assert.ok(VALID_CONFIG_HOME_KINDS instanceof Set);
     // 'none' added #2103 — a runtime with NO file-projected config directory
     // at all (e.g. vscode — Marketplace/VSIX-distributed).
-    for (const v of ['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root', 'none']) {
+    // 'omp-agent-home' added with the omp runtime — ~/.omp/agent home with
+    // profile/env-var resolution.
+    for (const v of ['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root', 'none', 'omp-agent-home']) {
       assert.ok(VALID_CONFIG_HOME_KINDS.has(v), 'VALID_CONFIG_HOME_KINDS must contain "' + v + '"');
     }
-    assert.strictEqual(VALID_CONFIG_HOME_KINDS.size, 5, 'VALID_CONFIG_HOME_KINDS must have exactly 5 members');
+    assert.strictEqual(VALID_CONFIG_HOME_KINDS.size, 6, 'VALID_CONFIG_HOME_KINDS must have exactly 6 members');
   });
 
   test('VALID_COMMAND_STYLES has exactly 2 values', () => {
@@ -4002,12 +4004,12 @@ describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
     assert.strictEqual(VALID_SANDBOX_TIERS.size, 2);
   });
 
-  test('VALID_ARTIFACT_KIND_NAMES has exactly 4 values', () => {
+  test('VALID_ARTIFACT_KIND_NAMES has exactly 6 values', () => {
     assert.ok(VALID_ARTIFACT_KIND_NAMES instanceof Set);
-    for (const v of ['commands', 'agents', 'skills', 'kimi-agents']) {
+    for (const v of ['commands', 'agents', 'skills', 'kimi-agents', 'rules', 'extensions']) {
       assert.ok(VALID_ARTIFACT_KIND_NAMES.has(v), 'VALID_ARTIFACT_KIND_NAMES must contain "' + v + '"');
     }
-    assert.strictEqual(VALID_ARTIFACT_KIND_NAMES.size, 4);
+    assert.strictEqual(VALID_ARTIFACT_KIND_NAMES.size, 6);
   });
 
   test('VALID_ARTIFACT_NESTINGS has exactly 2 values', () => {
@@ -4021,9 +4023,9 @@ describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
 // ─── 25. ADR-857 phase 5e: closed ConverterName enum (Part B) ─────────────────
 
 describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
-  test('VALID_CONVERTER_NAMES has exactly 27 entries (17 command/skill/workflow + 10 agent converters)', () => {
+  test('VALID_CONVERTER_NAMES has exactly 30 entries (19 command/skill/workflow + 11 agent converters)', () => {
     assert.ok(VALID_CONVERTER_NAMES instanceof Set, 'VALID_CONVERTER_NAMES must be a Set');
-    assert.strictEqual(VALID_CONVERTER_NAMES.size, 27, 'VALID_CONVERTER_NAMES must have exactly 27 entries, got: ' + VALID_CONVERTER_NAMES.size);
+    assert.strictEqual(VALID_CONVERTER_NAMES.size, 30, 'VALID_CONVERTER_NAMES must have exactly 30 entries, got: ' + VALID_CONVERTER_NAMES.size);
   });
 
   test('VALID_CONVERTER_NAMES contains all expected converter names', () => {
@@ -4042,6 +4044,8 @@ describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
       'convertClaudeCommandToKiloSkill',
       'convertClaudeCommandToKimiSkill',
       'convertClaudeCommandToOpencodeSkill',
+      'convertClaudeCommandToOmpCommand',
+      'convertClaudeCommandToOmpSkill',
       'convertClaudeCommandToTraeSkill',
       'convertClaudeCommandToWindsurfSkill',
       'convertClaudeCommandToWindsurfWorkflow',
@@ -4057,6 +4061,8 @@ describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
       'convertClaudeAgentToCodexAgent',
       // ADR-1239 / #2092 Phase B Upgrade 1 — native .qwen/agents/*.md subagent projection.
       'convertClaudeAgentToQwenAgent',
+      // omp runtime — agent conversion with model overrides.
+      'convertClaudeAgentToOmpAgent',
     ];
     for (const name of expected) {
       assert.ok(VALID_CONVERTER_NAMES.has(name), 'VALID_CONVERTER_NAMES must contain "' + name + '"');

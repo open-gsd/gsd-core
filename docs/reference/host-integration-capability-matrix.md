@@ -691,6 +691,36 @@ EoS migration status (#2102 Stage 2, ADR-1239): Stage 1's "in-process `gsd-core`
 
 **Adversarial-review correction (#2102 Stage 2, post-review):** the event bridges above and the `/gsd` tokenizer's `hooks/lib/git-cmd.js` require were DEAD in a real install — Stage 1's `hostBehaviors.skipSharedHooksInstall:true` meant pi shipped NO `hooks/` directory at all, so `runHook('gsd-ensure-canonical-path.js', ...)` etc. always hit the "hook file absent → silent no-op" branch, and the tokenizer always fell back to plain whitespace-splitting. The tests masked this because they run against the dev tree, where `hooks/` genuinely exists. **Fix:** `capabilities/pi/capability.json` no longer sets `skipSharedHooksInstall` — pi is architecturally identical to OpenCode here (`hooksSurface: "none"` + a native extension that spawns the staged hooks), not to Kilo/ZCode (`hooksSurface: "none"` with NO plugin surface, where the same hooks genuinely are dead weight). pi now installs `hooks/` + `hooks/lib/` (27 entries: the same `INSTALLED_HOOK_FILES` set OpenCode gets) alongside `extensions/gsd.js`, verified end-to-end via a real `node bin/install.js --pi --global`/`--local` — `resolveEngineRoot`'s walk-up from the installed extension's own directory finds `ENGINE_ROOT/hooks/{gsd-ensure-canonical-path.js,gsd-workflow-guard.js,gsd-context-monitor.js,lib/git-cmd.js}`, and each bridge/`runHook` call exits 0 against the real installed files. `hooksSurface: "none"` + `configFormat: "none"` + `writesSharedSettings: false` are unaffected — no settings/hooks.json/config.toml is written for pi; the extension spawns hooks by absolute path, not via a config-file hook bus. `tests/fixtures/golden-install-parity/pi.json` grew from 292 → 320 entries (the 28 new `hooks/`/`hooks/lib/` files); `commands/`, `agents/`, `skills/` remain absent (`pluginOnlyInstall` is untouched — it only gates the declarative-markdown surfaces, not hooks). `tests/install-minimal-hooks.test.cjs`'s #1821 suite moved pi from the Kilo/ZCode (no-hooks) group into the OpenCode (ships-hooks) group accordingly.
 
+## omp
+> Oh My Pi (OMP) is a Declarative-CLI host: GSD integrates through projected files
+> (commands, nested skills, agents, rules, extensions) plus a native extension for
+> status/guards/update banners. The install surface is `profile-marker-only` with
+> `hostBehaviors.skipSharedHooksInstall: true` (no shared hooks directory).
+> The native extension uses the pi event dialect (`extensionEvents: "pi"`).
+> Profile resolution via `OMP_PROFILE`/`PI_PROFILE` env vars; home override via
+> `PI_CODING_AGENT_DIR`. See `capabilities/omp/capability.json`.
+>
+> **Sourcing note:** OMP's host-integration axes are grounded in the OMP harness's
+> actual Task/hub behavior. Axes that could not be sourced from OMP's own docs are
+> set to `"undocumented"` (fail-closed) per the matrix convention.
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| `embeddingMode` | `declarative` | GSD projects files (commands/skills/agents/rules/extensions); the native extension is supplementary | GSD install writes markdown files to `~/.omp/agent/` |
+| `commandSurface` | `slash-file` | OMP discovers slash commands from markdown files in `commands/` | `artifactLayout.global[0]` kind=commands, destSubpath=commands |
+| `dispatch.namedDispatch` | `true` | OMP supports named subagent dispatch via hub | OMP Task tool spawns named agents |
+| `dispatch.nested` | `undocumented` | OMP docs do not state nesting depth limits | — |
+| `dispatch.maxDepth` | `undocumented` | OMP docs do not state max nesting depth | — |
+| `dispatch.background` | `true` | OMP runs background subagents via hub background jobs | `hub` background job API |
+| `dispatch.backgroundDispatch` | `true` | Background-dispatched agents can spawn further named agents | `hub` Task tool |
+| `dispatch.subagentToolkit` | `full` | Subagents have full tool surface (Read/Write/Bash/Grep/etc.) | OMP tool inventory |
+| `modelMode` | `passive` | Model selection is config-only; extensions cannot programmatically request models | Agent frontmatter `model:` field |
+| `hookBus` | `host` | The OMP host fires lifecycle events to the extension | `extensionEvents: "pi"` |
+| `stateIO` | `filesystem` | Full local filesystem access | `~/.omp/agent/` directory structure |
+| `transport` | `native-extension` | OMP loads extensions via its native extension package | `extensions/gsd-core/index.js` |
+| `runtime` | `bun` | OMP runs on the Bun runtime | OMP harness uses Bun |
+| `effortSurface` | `undocumented` | OMP does not take effort via argv; GSD emits `effort:` frontmatter converter-side | — |
+
 ## vscode
 
 > VS Code is the IDE-profile reference host: a Marketplace/VSIX-distributed extension, NOT

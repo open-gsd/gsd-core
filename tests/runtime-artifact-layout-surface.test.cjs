@@ -346,8 +346,8 @@ describe('applySurface', () => {
 
     assert.ok(fs.existsSync(path.join(base, 'commands', 'gsd-help.md')));
     assert.ok(!fs.existsSync(path.join(base, 'commands', 'help.md')), 'OMP commands must not be staged unprefixed');
-    assert.ok(fs.existsSync(path.join(base, 'rules', 'planning-artifacts.md')));
-    assert.ok(!fs.existsSync(path.join(base, 'rules', 'gsd-planning-artifacts.md')), 'OMP rules must keep source filenames');
+    assert.ok(fs.existsSync(path.join(base, 'rules', 'gsd-planning-artifacts.md')), 'OMP rules install with the gsd- prefix');
+    assert.ok(!fs.existsSync(path.join(base, 'rules', 'planning-artifacts.md')), 'OMP rules must not be staged unprefixed');
     assert.ok(fs.existsSync(path.join(base, 'extensions', 'gsd-core', 'index.js')));
     assert.ok(!fs.existsSync(path.join(base, 'extensions', 'gsd-core', 'stale.js')), 'stale GSD extension files must be removed before sync');
     assert.ok(fs.existsSync(path.join(userExtensionDir, 'index.js')), 'non-GSD OMP extension dir must be preserved');

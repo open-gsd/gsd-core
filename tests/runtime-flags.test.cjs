@@ -14,7 +14,7 @@ const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
 const EXPECTED_FLAGS = [
   'isOpencode', 'isKilo', 'isCodex', 'isCopilot', 'isAntigravity',
   'isCursor', 'isWindsurf', 'isAugment', 'isTrae', 'isQwen', 'isHermes',
-  'isCodebuddy', 'isCline', 'isKimi', 'isKimiCode', 'isZcode', 'isPi',
+  'isCodebuddy', 'isCline', 'isKimi', 'isKimiCode', 'isZcode', 'isPi', 'isOmp',
 ];
 
 // #2103: registry runtimes that are NEVER CLI-installed via bin/install.js
@@ -51,12 +51,12 @@ test('runtimeFlags: claude / unknown / empty → all flags false (fail-closed)',
   }
 });
 
-test('runtimeFlags: all 17 flags present + boolean + the object is frozen', () => {
+test('runtimeFlags: all 18 flags present + boolean + the object is frozen', () => {
   const flags = runtimeFlags('opencode');
   for (const f of EXPECTED_FLAGS) {
     assert.strictEqual(typeof flags[f], 'boolean', `${f} must be boolean`);
   }
-  assert.deepStrictEqual(Object.keys(flags).sort(), [...EXPECTED_FLAGS].sort(), 'exactly the 17 flags');
+  assert.deepStrictEqual(Object.keys(flags).sort(), [...EXPECTED_FLAGS].sort(), 'exactly the 18 flags');
   assert.ok(Object.isFrozen(flags), 'flags object must be frozen');
 });
 
@@ -87,5 +87,5 @@ test('#2103: vscode is registered but intentionally excluded from runtimeFlags (
     assert.strictEqual(flags[f], false, `runtime 'vscode': ${f} must be false (no isVscode flag exists)`);
   }
   assert.deepStrictEqual(Object.keys(flags).sort(), [...EXPECTED_FLAGS].sort(),
-    'runtimeFlags(\'vscode\') must NOT introduce a new isVscode key — still exactly the 17 flags');
+    'runtimeFlags(\'vscode\') must NOT introduce a new isVscode key — still exactly the 18 flags');
 });

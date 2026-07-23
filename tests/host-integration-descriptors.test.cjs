@@ -50,6 +50,7 @@ const EXPECTED_PROFILES = {
   kimi:        'programmatic-cli',
   'kimi-code': 'programmatic-cli',
   opencode:    'programmatic-cli',
+  omp:         'declarative-cli',
   pi:          'programmatic-cli',
   qwen:        'programmatic-cli',
   trae:        'programmatic-cli',
@@ -292,8 +293,11 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     'kimi-code': false,
     // #2087: OpenCode background subagents (v1.15 param, v1.17 default-on) →
     // dispatch.background/backgroundDispatch true → NOT force-flattened.
-    opencode:    false,
-    // #2102: pi's dispatch.background/backgroundDispatch are both false
+  opencode:    false,
+  // OMP: dispatch.background/backgroundDispatch both true (hub background jobs)
+  // → NOT force-flattened.
+  omp:         false,
+  // #2102: pi's dispatch.background/backgroundDispatch are both false
     // (undocumented background-subagent primitive) → force-flattened.
     pi:          true,
     qwen:        true,

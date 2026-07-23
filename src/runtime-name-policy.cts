@@ -243,6 +243,7 @@ const RUNTIME_LABELS: Readonly<Record<string, string>> = {
   cline: 'Cline',
   zcode: 'ZCode',
   pi: 'pi',
+  omp: 'Oh My Pi',
   // #2103: vscode is a registered (role:runtime) capability for validator +
   // host-integration coverage, even though it is never CLI-installed (no
   // --vscode flag — see NON_INSTALLABLE_RUNTIMES in tests/runtime-flags.test.cjs).
@@ -303,6 +304,7 @@ const GLOBAL_CONFIG_HOME_FRAGMENTS: Readonly<Record<string, string>> = {
   // no-probe dot-home-nested case (src/runtime-homes.cts). Two-segment
   // path.join args, same shape as opencode/kilo/kimi above.
   pi:        "'.pi', 'agent'",
+  omp:       "'.omp', 'agent'",
 };
 
 /**
@@ -331,7 +333,7 @@ export function getGlobalConfigHomeFragment(runtime: string): string {
 // folds the shared-hooks-install skip).
 const RUNTIME_FLAG_IDS = Object.freeze([
   'opencode', 'kilo', 'codex', 'copilot', 'antigravity', 'cursor',
-  'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi', 'kimi-code', 'zcode', 'pi',
+  'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi', 'kimi-code', 'zcode', 'pi', 'omp',
 ] as const);
 
 /**

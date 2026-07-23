@@ -46,6 +46,7 @@ const _require: NodeRequire = require;
 
 type ArtifactKindName = 'commands' | 'agents' | 'skills';
 type KimiArtifactKindName = ArtifactKindName | 'kimi-agents';
+type OmpArtifactKindName = KimiArtifactKindName | 'rules' | 'extensions';
 
 // Mirrors the (unexported) ResolvedProfile in install-profiles.cts.
 // Must stay in sync if that shape changes.
@@ -82,7 +83,7 @@ interface AgentCtx {
 }
 
 interface ArtifactKind {
-  kind: KimiArtifactKindName;
+  kind: OmpArtifactKindName;
   destSubpath: string;
   prefix: string;
   /** For agents kind with a converter, accepts an optional AgentCtx as the second
@@ -317,6 +318,44 @@ function kimiAgentsKind(destSubpath: string, prefix: string, configDir: string):
   };
 }
 
+function rulesKind(destSubpath: string, prefix: string, configDir: string): ArtifactKind {
+  return {
+    kind: 'rules',
+    destSubpath,
+    prefix,
+    stage: () => {
+      const rulesDir = path.resolve(findInstallSourceRoot(configDir), '..', '..', 'gsd-core', 'omp', 'rules');
+      if (!fs.existsSync(rulesDir)) throw new Error(`resolveRuntimeArtifactLayout: missing OMP rules source directory: ${rulesDir}`);
+      const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-rules-'));
+      installProfiles.STAGED_DIRS.add(dest);
+      for (const entry of fs.readdirSync(rulesDir, { withFileTypes: true })) {
+        if (!entry.isFile() || (!entry.name.endsWith('.md') && !entry.name.endsWith('.mdc'))) continue;
+        fs.copyFileSync(path.join(rulesDir, entry.name), path.join(dest, entry.name));
+      }
+      return dest;
+    },
+  };
+}
+
+function extensionsKind(destSubpath: string, prefix: string, configDir: string): ArtifactKind {
+  return {
+    kind: 'extensions',
+    destSubpath,
+    prefix,
+    stage: () => {
+      const extensionsDir = path.resolve(findInstallSourceRoot(configDir), '..', '..', 'gsd-core', 'omp', 'extensions');
+      if (!fs.existsSync(extensionsDir)) throw new Error(`resolveRuntimeArtifactLayout: missing OMP extensions source directory: ${extensionsDir}`);
+      const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-extensions-'));
+      installProfiles.STAGED_DIRS.add(dest);
+      for (const entry of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name.startsWith('.') || !entry.name.startsWith(prefix)) continue;
+        fs.cpSync(path.join(extensionsDir, entry.name), path.join(dest, entry.name), { recursive: true });
+      }
+      return dest;
+    },
+  };
+}
+
 /**
  * Build a skills kind descriptor.
  *
@@ -513,6 +552,14 @@ function dispatchKindEntry(entry: ArtifactKindDescriptor, runtime: string, confi
 
     case 'kimi-agents':
       result = kimiAgentsKind(destSubpath, prefix, configDir);
+      break;
+
+    case 'rules':
+      result = rulesKind(destSubpath, prefix, configDir);
+      break;
+
+    case 'extensions':
+      result = extensionsKind(destSubpath, prefix, configDir);
       break;
 
     default:

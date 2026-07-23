@@ -586,6 +586,34 @@ function _syncGsdDir(stagedDir: string, destDir: string, kind: ArtifactKind | st
     // Prune GSD-owned dirs that are no longer in the staged set.
     // pruneSkillDirs() is the single point of truth for this logic.
     pruneSkillDirs(destDir, stagedDirs, kindPrefix, manifest);
+  } else if (kindName === 'extensions') {
+    // Extensions kind (omp): staged entries are directories named
+    // ${prefix}<name> (e.g. gsd-core/). Mirror install (_removeGsdEntries +
+    // the recursive extensions branch of _copyStaged in install-engine.cts):
+    // replace every GSD-owned (prefixed) dir wholesale so stale files inside
+    // it cannot survive a re-sync, and preserve non-prefixed user dirs.
+    const stagedDirs = new Set<string>(
+      fs.readdirSync(stagedDir).filter(entry => {
+        return fs.statSync(path.join(stagedDir, entry)).isDirectory();
+      })
+    );
+    if (kindPrefix) {
+      for (const entry of fs.readdirSync(destDir)) {
+        if (!fs.statSync(path.join(destDir, entry)).isDirectory()) continue;
+        if (!entry.startsWith(kindPrefix)) continue; // user-owned, preserve
+        if (stagedDirs.has(entry)) continue; // refreshed wholesale below
+        try {
+          fs.rmSync(path.join(destDir, entry), { recursive: true, force: true });
+        } catch { /* ignore */ }
+      }
+    }
+    for (const dirName of stagedDirs) {
+      const destSubDir = path.join(destDir, dirName);
+      try {
+        fs.rmSync(destSubDir, { recursive: true, force: true });
+      } catch { /* ignore */ }
+      fs.cpSync(path.join(stagedDir, dirName), destSubDir, { recursive: true });
+    }
   } else {
     // commands / agents kind: mirror installRuntimeArtifacts (_copyStaged /
     // _removeGsdEntries in bin/install.js) so surface produces the SAME files as a

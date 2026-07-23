@@ -2064,10 +2064,14 @@ const capabilities = {
   "omp": {
     "id": "omp",
     "role": "runtime",
+    "version": "1.8.0",
     "title": "Oh My Pi",
     "description": "Oh My Pi native runtime for GSD commands, nested skills, agents, rules, and extensions.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.7.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "omp-agent-home",
@@ -2082,6 +2086,7 @@ const capabilities = {
           "PI_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".omp",
       "configFormat": "none",
       "artifactLayout": {
         "global": [
@@ -2171,12 +2176,36 @@ const capabilities = {
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
+      "extensionEvents": "pi",
       "sandboxTier": "none",
       "supportTier": 2,
       "installSurface": "profile-marker-only",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": "undocumented",
+          "maxDepth": "undocumented",
+          "background": true,
+          "backgroundDispatch": true,
+          "subagentToolkit": "full"
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "native-extension",
+        "runtime": "bun",
+        "effortSurface": "undocumented"
+      },
+      "hostBehaviors": {
+        "skipSharedHooksInstall": true,
+        "frontmatterDialect": "omp",
+        "readinessSummary": true
+      }
     }
   },
   "opencode": {
@@ -5368,10 +5397,14 @@ const runtimes = {
   "omp": {
     "id": "omp",
     "role": "runtime",
+    "version": "1.8.0",
     "title": "Oh My Pi",
     "description": "Oh My Pi native runtime for GSD commands, nested skills, agents, rules, and extensions.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.7.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "omp-agent-home",
@@ -5386,6 +5419,7 @@ const runtimes = {
           "PI_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".omp",
       "configFormat": "none",
       "artifactLayout": {
         "global": [
@@ -5475,12 +5509,36 @@ const runtimes = {
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
+      "extensionEvents": "pi",
       "sandboxTier": "none",
       "supportTier": 2,
       "installSurface": "profile-marker-only",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": "undocumented",
+          "maxDepth": "undocumented",
+          "background": true,
+          "backgroundDispatch": true,
+          "subagentToolkit": "full"
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "native-extension",
+        "runtime": "bun",
+        "effortSurface": "undocumented"
+      },
+      "hostBehaviors": {
+        "skipSharedHooksInstall": true,
+        "frontmatterDialect": "omp",
+        "readinessSummary": true
+      }
     }
   },
   "opencode": {

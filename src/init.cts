@@ -229,7 +229,7 @@ function getLatestCompletedMilestone(cwd: string): { version: string; name: stri
   const content = platformReadSync(milestonesPath);
   if (content === null) return null;
 
-  const match = content.match(/^##\s+(v[\d.]+)\s+(.+?)\s+\(Shipped:/m);
+  const match = content.match(/^##\s+(v\S+)\s+(.+?)\s+\(Shipped:/m);
   if (!match) return null;
   return {
     version: match[1],
@@ -728,7 +728,7 @@ function cmdInitNewMilestone(cwd: string, raw: boolean): void {
       const isDirInMilestone = getMilestonePhaseFilter(cwd);
       phaseDirCount = fs
         .readdirSync(phasesDir, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory() && isDirInMilestone(entry.name))
+        .filter((entry) => entry.isDirectory() && !/^999(?:\.|$)/.test(stripProjectCodePrefix(entry.name)) && isDirInMilestone(entry.name))
         .length;
     }
   } catch {
@@ -750,11 +750,9 @@ function cmdInitNewMilestone(cwd: string, raw: boolean): void {
     latest_completed_milestone: latestCompleted?.version || null,
     latest_completed_milestone_name: latestCompleted?.name || null,
     phase_dir_count: phaseDirCount,
-    // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
+    // Relative to cwd for portability across tmp dirs in tests and display.
     phase_archive_path: latestCompleted
-      ? toPosixPath(
-          path.join(planningRoot(cwd), 'milestones', `${latestCompleted.version}-phases`),
-        )
+      ? path.relative(cwd, path.join(planningRoot(cwd), 'milestones', `${latestCompleted.version}-phases`)).split(path.sep).join('/')
       : null,
 
     project_exists: pathExistsInternal(cwd, '.planning/PROJECT.md'),

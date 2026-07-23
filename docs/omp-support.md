@@ -13,7 +13,7 @@ Local installs write to `.omp/` in the current workspace:
 - `.omp/commands/gsd-*.md`
 - `.omp/skills/gsd-*/SKILL.md`
 - `.omp/agents/gsd-*.md`
-- `.omp/rules/*.md` / `.omp/rules/*.mdc` for explicit safe rule mappings only
+- `.omp/rules/gsd-*.md` / `.omp/rules/gsd-*.mdc` for explicit safe rule mappings only
 - `.omp/extensions/gsd-core/` for executable GSD guardrails and status behavior
 
 Global installs write to Oh My Pi's agent home: `PI_CODING_AGENT_DIR` when set, otherwise `$PI_CONFIG_DIR/agent` or `~/.omp/agent`. Named OMP profiles (`OMP_PROFILE`, then `PI_PROFILE`) install under `$PI_CONFIG_DIR/profiles/<profile>/agent`:

@@ -65,6 +65,7 @@ const RUNTIME_META = {
   'kimi-code':  { localDir: '.kimi-code',        globalSuffix: '.kimi-code' },
   kilo:         { localDir: '.kilo',             globalSuffix: path.join('.config', 'kilo') },
   opencode:     { localDir: '.opencode',         globalSuffix: path.join('.config', 'opencode') },
+  omp:          { localDir: '.omp',               globalSuffix: path.join('.omp', 'agent') },
   pi:           { localDir: '.pi',               globalSuffix: path.join('.pi', 'agent') },
   qwen:         { localDir: '.qwen',             globalSuffix: '.qwen' },
   trae:         { localDir: '.trae',             globalSuffix: '.trae' },

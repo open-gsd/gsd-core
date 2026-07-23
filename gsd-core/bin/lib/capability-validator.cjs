@@ -700,13 +700,17 @@ const VALID_CONVERTER_NAMES = new Set([
   'convertClaudeAgentToCodexAgent',
   // ADR-1239 / #2092 Phase B Upgrade 1 — native .qwen/agents/*.md subagent projection.
   'convertClaudeAgentToQwenAgent',
+  // OMP converters — commands, skills, agents
+  'convertClaudeCommandToOmpCommand',
+  'convertClaudeCommandToOmpSkill',
+  'convertClaudeAgentToOmpAgent',
 ]);
 
 // C3: Validate role:runtime body
 const VALID_CONFIG_FORMATS = new Set(['settings-json', 'toml', 'markdown', 'markdown-dir', 'none']);
 // 'none' added #2103 — Marketplace/VSIX-distributed hosts (e.g. VS Code) with
 // no file-projected config directory at all.
-const VALID_CONFIG_HOME_KINDS = new Set(['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root', 'none']);
+const VALID_CONFIG_HOME_KINDS = new Set(['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root', 'omp-agent-home', 'none']);
 const VALID_COMMAND_STYLES = new Set(['slash-hyphen', 'shell-var']);
 const VALID_HOOKS_SURFACES = new Set(['settings-json', 'codex-hooks-json', 'cursor-hooks-json', 'copilot-inline', 'cline-rules', 'kimi-hooks-toml', 'windsurf-hooks-json', 'none']);
 const VALID_HOOK_EVENTS = new Set(['claude', 'gemini']);
@@ -716,7 +720,7 @@ const VALID_HOOK_EVENTS = new Set(['claude', 'gemini']);
 // host exposes no extension surface (engine owns the bus, e.g. VS Code).
 const VALID_EXTENSION_EVENTS = new Set(['opencode', 'pi', 'hermes', 'kilo', 'none']);
 const VALID_SANDBOX_TIERS = new Set(['none', 'codex-agent-sandbox']);
-const VALID_ARTIFACT_KIND_NAMES = new Set(['commands', 'agents', 'skills', 'kimi-agents']);
+const VALID_ARTIFACT_KIND_NAMES = new Set(['commands', 'agents', 'skills', 'kimi-agents', 'rules', 'extensions']);
 const VALID_ARTIFACT_NESTINGS = new Set(['flat', 'nested']);
 const FEATURE_FIELDS_FORBIDDEN_ON_RUNTIME = ['skills', 'agents', 'steps', 'contributions', 'gates', 'hooks', 'activationKey'];
 // 'none' added #2103 — Marketplace/VSIX-distributed hosts (e.g. VS Code) that
@@ -794,12 +798,44 @@ function validateConfigHome(capId, ch) {
   // below, not a new validation mechanism). If present it must still be a
   // non-empty string (e.g. vscode's configHome.name stays a descriptive
   // "vscode" string even though it is never used to build a path).
-  if (ch.kind !== 'none') {
+  if (ch.kind !== 'none' && ch.kind !== 'omp-agent-home') {
     if (typeof ch.name !== 'string' || ch.name.length === 0) {
       errors.push(ctx + '.name must be a non-empty string');
     }
   } else if (ch.name !== undefined && (typeof ch.name !== 'string' || ch.name.length === 0)) {
     errors.push(ctx + '.name must be a non-empty string if present when kind is "none"');
+  }
+
+  // omp-agent-home: profileEnv and configRootEnv are optional string arrays.
+  // env must be a non-empty array (the home directory override).
+  if (ch.kind === 'omp-agent-home') {
+    if (ch.env !== undefined) {
+      if (!Array.isArray(ch.env) || ch.env.length === 0) {
+        errors.push(ctx + '.env must be a non-empty array of strings when kind is "omp-agent-home"');
+      }
+    }
+    if (ch.profileEnv !== undefined) {
+      if (!Array.isArray(ch.profileEnv)) {
+        errors.push(ctx + '.profileEnv must be an array of strings if present');
+      } else {
+        for (let i = 0; i < ch.profileEnv.length; i++) {
+          if (typeof ch.profileEnv[i] !== 'string') {
+            errors.push(ctx + '.profileEnv[' + i + '] must be a string');
+          }
+        }
+      }
+    }
+    if (ch.configRootEnv !== undefined) {
+      if (!Array.isArray(ch.configRootEnv)) {
+        errors.push(ctx + '.configRootEnv must be an array of strings if present');
+      } else {
+        for (let i = 0; i < ch.configRootEnv.length; i++) {
+          if (typeof ch.configRootEnv[i] !== 'string') {
+            errors.push(ctx + '.configRootEnv[' + i + '] must be a string');
+          }
+        }
+      }
+    }
   }
 
   // parent — required when kind == dot-home-nested

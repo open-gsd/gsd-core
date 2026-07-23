@@ -627,7 +627,7 @@ if (hasMinimal && _profileArgRaw) {
 
 function selectRuntimesFromArgs(runtimeArgs) {
   if (runtimeArgs.includes('--all')) {
-    return ['claude', 'kimi', 'kimi-code', 'kilo', 'opencode', 'pi', 'codex', 'copilot', 'antigravity', 'cursor', 'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'zcode'];
+    return ['claude', 'kimi', 'kimi-code', 'kilo', 'opencode', 'omp', 'pi', 'codex', 'copilot', 'antigravity', 'cursor', 'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'zcode'];
   }
   if (runtimeArgs.includes('--both')) {
     return ['claude', 'opencode'];
@@ -638,6 +638,7 @@ function selectRuntimesFromArgs(runtimeArgs) {
   if (runtimeArgs.includes('--opencode')) selected.push('opencode');
   if (runtimeArgs.includes('--pi')) selected.push('pi');
   if (runtimeArgs.includes('--kilo')) selected.push('kilo');
+  if (runtimeArgs.includes('--omp')) selected.push('omp');
   if (runtimeArgs.includes('--codex')) selected.push('codex');
   if (runtimeArgs.includes('--copilot')) selected.push('copilot');
   if (runtimeArgs.includes('--antigravity')) selected.push('antigravity');
@@ -946,6 +947,7 @@ const applyRuntimeContentRewritesForCommandsInPlace = runtimeArtifactConversion.
 const convertClaudeToAugmentMarkdown = runtimeArtifactConversion.convertClaudeToAugmentMarkdown;
 const convertClaudeCommandToAugmentSkill = runtimeArtifactConversion.convertClaudeCommandToAugmentSkill;
 const convertClaudeAgentToAugmentAgent = runtimeArtifactConversion.convertClaudeAgentToAugmentAgent;
+const convertClaudeAgentToOmpAgent = runtimeArtifactConversion.convertClaudeAgentToOmpAgent;
 
 function rewriteLegacyManagedNodeHookCommands(settings, absoluteRunner, opts) {
   return hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, absoluteRunner, opts);
@@ -7752,6 +7754,16 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
         content = content.replace(/\$HOME\/\.hermes\//g, pathPrefix);
         content = content.replace(/\.\/\.hermes\//g, `./${dirName}/`);
       }
+      // OMP payload rewrite: AskUserQuestion → Ask (the OMP runtime's tool name).
+      // Applied here (not in _applyRuntimeRewrites, which is not invoked for
+      // gsd-core payload Markdown — see comment below).
+      if (_hostBehaviors(runtime).frontmatterDialect === 'omp') {
+        content = content.replace(/AskUserQuestion/g, 'Ask');
+        content = content.replace(/\.claude\//g, `${dirName}/`);
+        if (isGlobal) {
+          content = content.replace(new RegExp(`\\./${dirName}/`, 'g'), pathPrefix);
+        }
+      }
       content = processAttribution(content, getCommitAttribution(runtime));
 
       // #1521: stamp the workflow runtime-resolution block so every non-Claude
@@ -9439,6 +9451,40 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
       }
     }
   }
+  // Generic commands tracking: any runtime that installs gsd-*.md commands
+  // via the descriptor layout (e.g. omp) without a localInstallStyle or
+  // flatCommandDir flag. Track all gsd-*.md files in the commands/ dir.
+  if (fs.existsSync(flatCommandsDir)) {
+    for (const file of fs.readdirSync(flatCommandsDir)) {
+      if (file.startsWith('gsd-') && file.endsWith('.md')) {
+        const key = 'commands/' + file;
+        if (!(key in manifest.files)) {
+          manifest.files[key] = fileHash(path.join(flatCommandsDir, file));
+        }
+      }
+    }
+  }
+  // Rules tracking: flat gsd-*.md files in the rules/ dir (omp rules kind).
+  const rulesDir = path.join(configDir, 'rules');
+  if (fs.existsSync(rulesDir)) {
+    for (const file of fs.readdirSync(rulesDir)) {
+      if (file.startsWith('gsd-') && (file.endsWith('.md') || file.endsWith('.mdc'))) {
+        manifest.files['rules/' + file] = fileHash(path.join(rulesDir, file));
+      }
+    }
+  }
+  // Extensions tracking: gsd- prefixed directories in the extensions/ dir (omp extensions kind).
+  const extensionsDir = path.join(configDir, 'extensions');
+  if (fs.existsSync(extensionsDir)) {
+    for (const entry of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
+      if (entry.isDirectory() && entry.name.startsWith('gsd-')) {
+        const extHashes = generateManifest(path.join(extensionsDir, entry.name));
+        for (const [rel, hash] of Object.entries(extHashes)) {
+          manifest.files['extensions/' + entry.name + '/' + rel] = hash;
+        }
+      }
+    }
+  }
   if (_hostBehaviors(runtime).flatCommandDir && fs.existsSync(opencodeCommandDir)) {
     // #2329: derive the manifest key prefix from the SAME descriptor value used
     // to compute opencodeCommandDir above, instead of a separately-hardcoded
@@ -9648,6 +9694,49 @@ function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathP
         }
         continue;
       }
+      // OMP pristine materialization: commands/rules/extensions have source
+      // layouts that differ from the install layout (commands/gsd/*.md →
+      // commands/gsd-*.md; gsd-core/omp/rules/*.md → rules/gsd-*.md;
+      // gsd-core/omp/extensions/ → extensions/gsd-*/). Stage them with the
+      // same converters/rewrites the install pipeline uses.
+      if (_hostBehaviors(runtime).frontmatterDialect === 'omp') {
+        if (top === 'commands') {
+          for (const relPath of safeModified) {
+            const m = /^commands\/gsd-([^/]+)\.md$/.exec(relPath);
+            if (!m) continue;
+            const srcFile = path.join(packageSrc, 'commands', 'gsd', `${m[1]}.md`);
+            if (!fs.existsSync(srcFile)) continue;
+            let content = fs.readFileSync(srcFile, 'utf8');
+            content = runtimeArtifactConversion.convertClaudeCommandToOmpCommand(content, `gsd-${m[1]}`);
+            content = _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal, getCommitAttribution(runtime));
+            const stagedFile = path.join(stageRoot, relPath);
+            fs.mkdirSync(path.dirname(stagedFile), { recursive: true });
+            fs.writeFileSync(stagedFile, content);
+          }
+          continue;
+        }
+        if (top === 'rules') {
+          for (const relPath of safeModified) {
+            const m = /^rules\/gsd-([^/]+\.md)$/.exec(relPath);
+            if (!m) continue;
+            const srcFile = path.join(packageSrc, 'gsd-core', 'omp', 'rules', `${m[1]}`);
+            if (!fs.existsSync(srcFile)) continue;
+            let content = _applyRuntimeRewrites(fs.readFileSync(srcFile, 'utf8'), runtime, pathPrefix, isGlobal, getCommitAttribution(runtime));
+            const stagedFile = path.join(stageRoot, relPath);
+            fs.mkdirSync(path.dirname(stagedFile), { recursive: true });
+            fs.writeFileSync(stagedFile, content);
+          }
+          continue;
+        }
+        if (top === 'extensions') {
+          const srcDir = path.join(packageSrc, 'gsd-core', 'omp', 'extensions');
+          const stageDir = path.join(stageRoot, top);
+          if (fs.existsSync(srcDir)) {
+            copyWithPathReplacement(srcDir, stageDir, pathPrefix, runtime, false, isGlobal, stageRoot);
+          }
+          continue;
+        }
+      }
       const srcDir = path.join(packageSrc, top);
       const stageDir = path.join(stageRoot, top);
       if (!fs.existsSync(srcDir)) continue;
@@ -9685,8 +9774,6 @@ function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathP
  */
 function saveLocalPatches(configDir, pristineCtx) {
   const manifestPath = path.join(configDir, MANIFEST_NAME);
-  if (!fs.existsSync(manifestPath)) return [];
-
   let manifest;
   try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { return []; }
 
@@ -10931,6 +11018,11 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
           content = content.replace(/CLAUDE\.md/g, _b['CLAUDE.md']);
           content = content.replace(/\bClaude Code\b/g, _b['Claude Code']);
           content = content.replace(/\.claude\//g, _b['.claude/']);
+        } else if (_hostBehaviors(runtime).frontmatterDialect === 'omp') {
+          const _ompAgentName = entry.name.replace(/\.md$/, '');
+          const _ompModelOverrides = readGsdEffectiveModelOverrides(targetDir);
+          const _ompModelOverride = _ompModelOverrides?.[_ompAgentName] || null;
+          content = convertClaudeAgentToOmpAgent(content, _ompModelOverride);
         }
         // #443 — Inject `effort:` into the Claude .md frontmatter ONLY.
         // OpenCode/Qwen/Hermes also produce .md files but break on
@@ -11753,6 +11845,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     }
 
     persistActiveProfileMarker();
+    if (_hostBehaviors(runtime).readinessSummary === true) { printOmpReadinessSummary(targetDir, process.cwd()); }
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
 
@@ -11783,6 +11876,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     writeCopilotHookConfig(targetDir);
     console.log(`  ${green}✓${reset} Configured Copilot lifecycle hook (sessionStart)`);
     persistActiveProfileMarker();
+    if (_hostBehaviors(runtime).readinessSummary === true) { printOmpReadinessSummary(targetDir, process.cwd()); }
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
 
@@ -11806,6 +11900,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // The re-run is retained for parity with the settings.json install path.
     writeManifest(targetDir, runtime, { mode: _effectiveInstallMode, scope: isGlobal ? 'global' : 'local' });
     persistActiveProfileMarker();
+    if (_hostBehaviors(runtime).readinessSummary === true) { printOmpReadinessSummary(targetDir, process.cwd()); }
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
 
@@ -11880,6 +11975,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     }
 
     persistActiveProfileMarker();
+    if (_hostBehaviors(runtime).readinessSummary === true) { printOmpReadinessSummary(targetDir, process.cwd()); }
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
 
@@ -11892,6 +11988,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // writeManifest() call, so a second pass is needed to hash-track them.
     writeManifest(targetDir, runtime, { mode: _effectiveInstallMode, scope: isGlobal ? 'global' : 'local' });
     persistActiveProfileMarker();
+    if (_hostBehaviors(runtime).readinessSummary === true) { printOmpReadinessSummary(targetDir, process.cwd()); }
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
 
@@ -12179,8 +12276,84 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
 }
 
 /**
- * Apply statusline config, then print completion message
+ * Detect the GSD workspace state for readiness reporting.
+ * Returns { state, nextAction } describing what the user should do next.
  */
+function detectGsdWorkspaceState(workspaceRoot = process.cwd()) {
+  const specsDir = path.join(workspaceRoot, 'specs');
+  if (fs.existsSync(path.join(workspaceRoot, '.planning'))) {
+    return { state: 'planning-workspace', nextAction: '/gsd-plan-phase' };
+  }
+  if (fs.existsSync(specsDir)) {
+    for (const entry of fs.readdirSync(specsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const specDir = path.join(specsDir, entry.name);
+      if (fs.existsSync(path.join(specDir, 'tasks.md'))) {
+        return { state: 'tasks-ready', nextAction: '/speckit.implement' };
+      }
+      if (fs.existsSync(path.join(specDir, 'plan.md'))) {
+        return { state: 'plan-ready', nextAction: '/speckit.tasks' };
+      }
+      if (fs.existsSync(path.join(specDir, 'spec.md'))) {
+        return { state: 'spec-ready', nextAction: '/speckit.plan' };
+      }
+    }
+  }
+  return { state: 'fresh', nextAction: '/gsd-new-project' };
+}
+
+function countOmpArtifacts(targetDir, subdir, predicate) {
+  const dir = path.join(targetDir, subdir);
+  if (!fs.existsSync(dir)) return 0;
+  return fs.readdirSync(dir, { withFileTypes: true }).filter(predicate).length;
+}
+
+function countOmpSkillFiles(targetDir) {
+  const skillsDir = path.join(targetDir, 'skills');
+  if (!fs.existsSync(skillsDir)) return 0;
+  let count = 0;
+  function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile() && entry.name === 'SKILL.md') {
+        count += 1;
+      }
+    }
+  }
+  walk(skillsDir);
+  return count;
+}
+
+function getOmpReadinessSummary(targetDir, workspaceRoot = process.cwd()) {
+  const state = detectGsdWorkspaceState(workspaceRoot);
+  return {
+    targetDir,
+    artifactKinds: ['commands', 'skills', 'agents', 'rules', 'extensions'],
+    counts: {
+      commands: countOmpArtifacts(targetDir, 'commands', e => e.isFile() && e.name.startsWith('gsd-') && e.name.endsWith('.md')),
+      skills: countOmpSkillFiles(targetDir),
+      agents: countOmpArtifacts(targetDir, 'agents', e => e.isFile() && e.name.startsWith('gsd-') && e.name.endsWith('.md')),
+      rules: countOmpArtifacts(targetDir, 'rules', e => e.isFile() && (e.name.endsWith('.md') || e.name.endsWith('.mdc'))),
+      extensions: countOmpArtifacts(targetDir, 'extensions', e => e.isDirectory() && e.name.startsWith('gsd-')),
+    },
+    state,
+    degradedCapabilities: [],
+  };
+}
+
+function printOmpReadinessSummary(targetDir, workspaceRoot = process.cwd()) {
+  const summary = getOmpReadinessSummary(targetDir, workspaceRoot);
+  const relTarget = targetDir.replace(os.homedir(), '~').replace(workspaceRoot, '.');
+  console.log(`  ${green}✓${reset} OMP readiness: target=${relTarget}`);
+  console.log(`  ${dim}↳${reset} OMP artifacts: commands=${summary.counts.commands}, skills=${summary.counts.skills}, agents=${summary.counts.agents}, rules=${summary.counts.rules}, extensions=${summary.counts.extensions}`);
+  console.log(`  ${dim}↳${reset} Existing GSD state: ${summary.state.state}; next action: ${summary.state.nextAction}`);
+  for (const warning of summary.degradedCapabilities) {
+    console.log(`  ${yellow}⚠${reset} ${warning}`);
+  }
+}
+
 function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallStatusline, runtime = DEFAULT_RUNTIME, isGlobal = true, configDir = null, bannerOpts = {}) {
   // #2093: isKilo dropped — the Kilo permissions-writer call below is gated
   // on plan.finishPermissionWriter === 'kilo' (descriptor-driven), not this flag.
@@ -12449,15 +12622,16 @@ const runtimeMap = {
   '10': 'kimi',
   '11': 'kimi-code',
   '12': 'kilo',
-  '13': 'opencode',
-  '14': 'pi',
-  '15': 'qwen',
-  '16': 'trae',
-  '17': 'windsurf',
-  '18': 'zcode'
+  '13': 'omp',
+  '14': 'opencode',
+  '15': 'pi',
+  '16': 'qwen',
+  '17': 'trae',
+  '18': 'windsurf',
+  '19': 'zcode'
 };
-const allRuntimes = ['claude', 'antigravity', 'augment', 'cline', 'codebuddy', 'codex', 'copilot', 'cursor', 'hermes', 'kimi', 'kimi-code', 'kilo', 'opencode', 'pi', 'qwen', 'trae', 'windsurf', 'zcode'];
-const ALL_RUNTIMES_OPTION = '19';
+const allRuntimes = ['claude', 'antigravity', 'augment', 'cline', 'codebuddy', 'codex', 'copilot', 'cursor', 'hermes', 'kimi', 'kimi-code', 'kilo', 'omp', 'opencode', 'pi', 'qwen', 'trae', 'windsurf', 'zcode'];
+const ALL_RUNTIMES_OPTION = '20';
 
 /**
  * Build the runtime-selection prompt text shown by the interactive installer.
@@ -12477,13 +12651,14 @@ function buildRuntimePromptText() {
   ${cyan}10${reset}) Kimi         ${dim}(~/.config/agents, then ~/.agents if existing)${reset}
   ${cyan}11${reset}) Kimi Code    ${dim}(~/.kimi-code)${reset}
   ${cyan}12${reset}) Kilo         ${dim}(~/.config/kilo)${reset}
-  ${cyan}13${reset}) OpenCode     ${dim}(~/.config/opencode)${reset}
-  ${cyan}14${reset}) pi           ${dim}(~/.pi/agent)${reset}
-  ${cyan}15${reset}) Qwen Code    ${dim}(~/.qwen)${reset}
-  ${cyan}16${reset}) Trae         ${dim}(~/.trae)${reset}
-  ${cyan}17${reset}) Windsurf     ${dim}(~/.codeium/windsurf)${reset}
-  ${cyan}18${reset}) ZCode        ${dim}(~/.zcode)${reset}
-  ${cyan}19${reset}) All
+  ${cyan}13${reset}) Oh My Pi    ${dim}(~/.omp/agent)${reset}
+  ${cyan}14${reset}) OpenCode     ${dim}(~/.config/opencode)${reset}
+  ${cyan}15${reset}) pi           ${dim}(~/.pi/agent)${reset}
+  ${cyan}16${reset}) Qwen Code    ${dim}(~/.qwen)${reset}
+  ${cyan}17${reset}) Trae         ${dim}(~/.trae)${reset}
+  ${cyan}18${reset}) Windsurf     ${dim}(~/.codeium/windsurf)${reset}
+  ${cyan}19${reset}) ZCode        ${dim}(~/.zcode)${reset}
+  ${cyan}20${reset}) All
 
   ${dim}Select multiple: 1,2,6 or 1 2 6${reset}
 `;
@@ -12494,7 +12669,7 @@ function buildRuntimePromptText() {
  * Pure function — exported so tests can verify split/dedupe/fallback behavior.
  *  - Accepts comma- and/or whitespace-separated choices
  *  - Deduplicates while preserving order
- *  - Maps option 19 ("All") to every runtime
+ *  - Maps option 20 ("All") to every runtime
  *  - Falls back to ['claude'] when nothing valid is selected
  */
 function parseRuntimeInput(answer) {
@@ -13154,6 +13329,9 @@ function installAllRuntimes(runtimes, isGlobal, isInteractive) {
             result.configDir,
             { shouldInstallBanner: !!shouldInstallBanner, bannerCommand: result.updateBannerCommand }
           );
+          if (_hostBehaviors(result.runtime).readinessSummary === true && result.configDir) {
+            printOmpReadinessSummary(result.configDir, process.cwd());
+          }
         }
       };
 
@@ -13414,6 +13592,12 @@ module.exports = {
     processAttribution,
     applyRuntimeContentRewritesForCommandsInPlace,
     _copyStaged,
+    getDirName,
+    getGlobalConfigDir,
+    getConfigDirFromHome,
+    detectGsdWorkspaceState,
+    getOmpReadinessSummary,
+    printOmpReadinessSummary,
     copyWithPathReplacement,
   };
 

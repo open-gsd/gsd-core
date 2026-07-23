@@ -1994,7 +1994,7 @@ describe('cmdInitNewMilestone', () => {
     assert.strictEqual(output.latest_completed_milestone, 'v1.2');
     assert.strictEqual(output.latest_completed_milestone_name, 'Search Refresh');
     assert.strictEqual(output.phase_dir_count, 2);
-    assert.strictEqual(output.phase_archive_path, absPlanningPath(tmpDir, 'milestones', 'v1.2-phases'));
+    assert.strictEqual(output.phase_archive_path, '.planning/milestones/v1.2-phases');
   });
 
   test('reset flow metadata is null-safe when no milestones file exists', () => {

@@ -60,6 +60,7 @@ const ALL_ENV_KEYS = [
   'WINDSURF_CONFIG_DIR', 'AUGMENT_CONFIG_DIR', 'TRAE_CONFIG_DIR', 'QWEN_CONFIG_DIR',
   'HERMES_HOME', 'CODEBUDDY_CONFIG_DIR', 'CLINE_CONFIG_DIR', 'KIMI_CONFIG_DIR',
   'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG', 'KILO_CONFIG_DIR', 'KILO_CONFIG',
+  'PI_CODING_AGENT_DIR', 'OMP_PROFILE', 'PI_PROFILE', 'PI_CONFIG_DIR',
   'XDG_CONFIG_HOME',
 ];
 
@@ -102,6 +103,7 @@ const GOLDEN_DEFAULTS = {
   opencode:    path.join(HOME, '.config', 'opencode'),
   kilo:        path.join(HOME, '.config', 'kilo'),
   zcode:       path.join(HOME, '.zcode'),
+  omp:         path.join(HOME, '.omp', 'agent'),
 };
 
 // ── GOLDEN DEFAULTS ────────────────────────────────────────────────────────────
@@ -938,6 +940,7 @@ describe('bug #3126: runtime-homes getGlobalConfigDir — defaults', () => {
     ['cline',       path.join(os.homedir(), '.cline')],
     ['opencode',    path.join(os.homedir(), '.config', 'opencode')],
     ['kilo',        path.join(os.homedir(), '.config', 'kilo')],
+    ['omp',         path.join(os.homedir(), '.omp', 'agent')],
   ];
   for (const [runtime, expected] of defaults) {
     test(`${runtime} default configDir`, () => {
@@ -948,8 +951,10 @@ describe('bug #3126: runtime-homes getGlobalConfigDir — defaults', () => {
         const ch = r.runtime?.configHome;
         if (!ch) return [];
         const envs = Array.isArray(ch.env) ? ch.env : [];
+        const profileEnvs = Array.isArray(ch.profileEnv) ? ch.profileEnv : [];
+        const configRootEnvs = Array.isArray(ch.configRootEnv) ? ch.configRootEnv : [];
         const skillsEnvs = ch.skillsHome && Array.isArray(ch.skillsHome.env) ? ch.skillsHome.env : [];
-        return [...envs, ...skillsEnvs];
+        return [...envs, ...profileEnvs, ...configRootEnvs, ...skillsEnvs];
       });
       const envKeys = [...new Set([..._regEnvKeys3126, 'GROK_AGENTS_HOME', 'XDG_CONFIG_HOME'])];
       const saved = {};

@@ -386,6 +386,9 @@ function migrateLegacyDevPreferencesToSkill(targetDir: string, saved: Map<string
  *     which case write as `${stem}.md` (directory IS the namespace).
  *   - agents: write as-is (files already carry their own `gsd-` prefix).
  * For kimi-agents kind: recursively copy generated YAML/prompt files.
+ * For extensions kind: recursively copy each staged extension directory.
+ * For rules kind: falls through to the default flat .md branch (applies the
+ *   kind prefix, e.g. planning-artifacts.md → gsd-planning-artifacts.md).
  */
 function _copyStaged(stagedDir: string, destDir: string, kind: any, configDir: string, runtime?: string): void {
   // Defense-in-depth: verify destDir is within the install root even if the
@@ -434,6 +437,14 @@ function _copyStaged(stagedDir: string, destDir: string, kind: any, configDir: s
 
   if (kind.kind === 'kimi-agents') {
     fs.cpSync(stagedDir, destDir, { recursive: true });
+    return;
+  }
+
+  if (kind.kind === 'extensions') {
+    for (const entry of fs.readdirSync(stagedDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      fs.cpSync(path.join(stagedDir, entry.name), path.join(destDir, entry.name), { recursive: true });
+    }
     return;
   }
 

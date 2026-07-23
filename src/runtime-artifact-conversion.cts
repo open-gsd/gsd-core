@@ -1349,6 +1349,104 @@ function convertClaudeCommandToCodebuddyCommand(content, commandName) {
   return lines.join('\n');
 }
 
+// ── OMP converters ──────────────────────────────────────────────────────────
+
+function convertSlashCommandsToOmpMentions(content) {
+  return content
+    .replace(/\/gsd:([a-z0-9-]+)/gi, (_, commandName) => `/gsd-${commandName}`)
+    .replace(/\bgsd:([a-z0-9-]+)/gi, (_, commandName) => `gsd-${commandName}`);
+}
+
+function convertClaudeToOmpMarkdown(markdown) {
+  let converted = convertSlashCommandsToOmpMentions(markdown);
+  converted = converted.replace(/\bAskUserQuestion\b/g, 'Ask');
+  converted = converted.replace(/\$ARGUMENTS\b/g, '{{GSD_ARGS}}');
+  converted = converted.replace(/`\.\/CLAUDE\.md`/g, '`AGENTS.md`');
+  converted = converted.replace(/~\/\.claude\//g, '.omp/');
+  converted = converted.replace(/\$HOME\/\.claude\//g, '.omp/');
+  converted = converted.replace(/\$env:USERPROFILE\/\.claude\//g, '.omp/');
+  converted = converted.replace(/\$env:USERPROFILE\\\.claude\\/g, '.omp/');
+  converted = converted.replace(/~\/\.claude\b/g, '.omp');
+  converted = converted.replace(/\$HOME\/\.claude\b/g, '.omp');
+  converted = converted.replace(/\$env:USERPROFILE\/\.claude\b/g, '.omp');
+  converted = converted.replace(/\$env:USERPROFILE\\\.claude\b/g, '.omp');
+  converted = converted.replace(/\.\/CLAUDE\.md/g, 'AGENTS.md');
+  converted = converted.replace(/`CLAUDE\.md`/g, '`AGENTS.md`');
+  converted = converted.replace(/\bCLAUDE\.md\b/g, 'AGENTS.md');
+  converted = converted.replace(/\.claude\/skills\//g, '.omp/skills/');
+  converted = converted.replace(/\.\/\.claude\//g, './.omp/');
+  converted = converted.replace(/\.claude\//g, '.omp/');
+  converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
+  converted = converted.replace(/- \*\*classifyHandoffIfNeeded false failure:\*\*[^\n]*\n/g, '');
+  converted = converted.replace(/\bClaude Code\b/g, 'OMP');
+  return converted;
+}
+
+const OMP_MODEL_ROLES = new Set(['default', 'smol', 'slow', 'vision', 'plan', 'designer', 'commit', 'task']);
+
+function normalizeOmpModelOverride(modelOverride) {
+  if (typeof modelOverride !== 'string') return '';
+  const trimmed = modelOverride.trim();
+  if (!trimmed) return '';
+  const colon = trimmed.indexOf(':');
+  const head = colon === -1 ? trimmed : trimmed.slice(0, colon);
+  if (OMP_MODEL_ROLES.has(head)) return `pi/${trimmed}`;
+  return trimmed;
+}
+
+function convertClaudeCommandToOmpCommand(content, commandName) {
+  const converted = convertClaudeToOmpMarkdown(content);
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  if (!frontmatter) return converted;
+
+  const description = extractFrontmatterField(frontmatter, 'description') || `Run GSD workflow ${commandName}.`;
+  const argumentHint = extractFrontmatterField(frontmatter, 'argument-hint');
+  const effort = extractFrontmatterField(frontmatter, 'effort');
+
+  let fm = `---\nname: ${yamlIdentifier(commandName)}\ndescription: ${yamlQuote(toSingleLine(description))}\n`;
+  if (argumentHint) fm += `argument-hint: ${yamlQuote(argumentHint)}\n`;
+  if (effort) fm += `effort: ${normalizeClaudeSkillEffort(effort)}\n`;
+  fm += '---';
+  return `${fm}\n${body}`;
+}
+
+function convertClaudeCommandToOmpSkill(content, skillName) {
+  const converted = convertClaudeToOmpMarkdown(content);
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  if (!frontmatter) return converted;
+
+  const description = extractFrontmatterField(frontmatter, 'description') || `Run GSD workflow ${skillName}.`;
+  const argumentHint = extractFrontmatterField(frontmatter, 'argument-hint');
+  const effort = extractFrontmatterField(frontmatter, 'effort');
+
+  let fm = `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(toSingleLine(description))}\n`;
+  if (argumentHint) fm += `argument-hint: ${yamlQuote(argumentHint)}\n`;
+  if (effort) fm += `effort: ${normalizeClaudeSkillEffort(effort)}\n`;
+  fm += '---';
+  return `${fm}\n${body}`;
+}
+
+// The 2nd positional is the per-agent model override (string|null) threaded by
+// the install.js agents loop; the descriptor-driven convertedAgentsKind path
+// invokes (content, isGlobal) — a boolean normalizes to '' (no model line).
+function convertClaudeAgentToOmpAgent(content, modelOverride = null) {
+  const converted = convertClaudeToOmpMarkdown(content);
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  if (!frontmatter) return converted;
+
+  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
+  const description = extractFrontmatterField(frontmatter, 'description') || '';
+  const toolsRaw = extractFrontmatterField(frontmatter, 'tools') || '';
+  const tools = toolsRaw.split(',').map((tool) => tool.trim()).filter(Boolean);
+
+  let fm = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n`;
+  const normalizedModelOverride = normalizeOmpModelOverride(modelOverride);
+  if (normalizedModelOverride) fm += `model: ${yamlQuote(normalizedModelOverride)}\n`;
+  if (tools.length > 0) fm += `tools: ${tools.join(', ')}\n`;
+  fm += '---';
+  return `${fm}\n${body}`;
+}
+
 // ── Cline converters ────────────────────────────────────────────────────────
 
 function convertClaudeToCliineMarkdown(content) {
@@ -2525,6 +2623,27 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false, a
       content = processAttribution(content, attribution);
       break;
 
+    case 'omp':
+      content = content.replace(/~\/\.claude\//g, pathPrefix);
+      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
+      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
+      content = content.replace(/~\/\.claude\b/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
+      content = content.replace(/\.\/\.claude\b/g, `./${dirName}`);
+      content = content.replace(/~\/\.omp\/agent\//g, pathPrefix);
+      content = content.replace(/\$HOME\/\.omp\/agent\//g, pathPrefix);
+      // Global-scope only (fork's rewriteRuntimeDir gate — passed as isGlobal):
+      // redirect .omp/ self-references to the resolved global agent home.
+      if (isGlobal) {
+        content = content.replace(/\.\/\.omp\//g, pathPrefix);
+        content = content.replace(/(?<![A-Za-z0-9_.\-/~$])\.omp\//g, pathPrefix);
+        content = content.replace(/\.\/\.omp\b/g, normalizedPathPrefix);
+        content = content.replace(/(?<![A-Za-z0-9_.\-/~$])\.omp\b/g, normalizedPathPrefix);
+      }
+      content = content.replace(/\bAskUserQuestion\b/g, 'Ask');
+      content = processAttribution(content, attribution);
+      break;
+
     case 'codebuddy':
       content = content.replace(/~\/\.claude\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
@@ -2892,6 +3011,10 @@ export = {
   convertClaudeToCodebuddyMarkdown,
   convertClaudeCommandToCodebuddySkill,
   convertClaudeCommandToCodebuddyCommand,
+  convertSlashCommandsToOmpMentions,
+  convertClaudeToOmpMarkdown,
+  convertClaudeCommandToOmpCommand,
+  convertClaudeCommandToOmpSkill,
   convertClaudeToCliineMarkdown,
   convertClaudeCommandToClineSkill,
   convertSlashCommandsToCodexSkillMentions,
@@ -2925,6 +3048,8 @@ export = {
   convertClaudeAgentToCodebuddyAgent,
   convertClaudeAgentToClineAgent,
   convertClaudeAgentToCodexAgent,
+  convertClaudeAgentToOmpAgent,
+  normalizeOmpModelOverride,
   // ADR-1239 / #2092 Phase B Upgrade 1: native .qwen/agents/*.md subagent
   // projection — registered by name so convertedAgentsKind's
   // conversionExports[converterName] dispatch (runtime-artifact-layout.cts)

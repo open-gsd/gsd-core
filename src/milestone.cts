@@ -27,7 +27,7 @@ import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { escapeRegex, normalizePhaseName, phaseTokenMatches, PHASE_NUMBER_TOKEN_SOURCE } = phaseIdMod;
+const { escapeRegex, normalizePhaseName, phaseTokenMatches, stripProjectCodePrefix, PHASE_NUMBER_TOKEN_SOURCE } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { getMilestonePhaseFilter, extractCurrentMilestone, getMilestoneInfo } = roadmapParserMod;
@@ -51,6 +51,7 @@ interface MilestoneCompleteOptions {
   name?: string;
   force?: boolean;
   archivePhases?: boolean;
+  dryRun?: boolean;
 }
 interface DirectoryInventoryEntry {
   key: string;
@@ -108,7 +109,7 @@ function preparePhaseArchivePlan(
   }
   const phaseEntries = fs.readdirSync(phasesDir, { withFileTypes: true });
   const candidateDirs = phaseEntries
-    .filter((e) => e.isDirectory() && !/^999(?:\.\|$)/.test(e.name) && isDirInMilestone(e.name))
+    .filter((e) => e.isDirectory() && !/^999(?:\.|$)/.test(stripProjectCodePrefix(e.name)) && isDirInMilestone(e.name))
     .map((e) => e.name)
     .sort();
   for (const dir of candidateDirs) {
@@ -557,42 +558,36 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
     error('version required for milestone complete (e.g., v1.0)');
   }
   // #2288 security: `version` is a CLI positional that is interpolated into
-  // multiple filesystem sinks below — `path.join(archiveDir, `${version}-ROADMAP.md`)`,
-  // `${version}-REQUIREMENTS.md`, `${version}-MILESTONE-AUDIT.md`, and the
-  // `${version}-phases` archive directory that phase dirs are MOVED into. Reject
+  // multiple filesystem sinks below — `path.join(archiveDir, `${milestoneVersion}-ROADMAP.md`)`,
+  // `${milestoneVersion}-REQUIREMENTS.md`, `${milestoneVersion}-MILESTONE-AUDIT.md`, and the
+  // `${milestoneVersion}-phases` archive directory that phase dirs are MOVED into. Reject
   // path separators / `..` here (same guard as `--archive-version`) so a crafted
   // version cannot write or relocate content outside `.planning/milestones/`.
   if (!ARCHIVE_VERSION_LABEL_RE.test(version)) {
     error(`milestone complete: version "${version}" is invalid — a milestone version label may contain only letters, digits, '.', '-' and '_', and must not contain path separators or "..".`);
   }
+  // Normalize: ensure leading 'v' for consistent archive paths and MILESTONES entries.
+  const milestoneVersion = /^v/i.test(version) ? version.replace(/^v/i, 'v') : `v${version}`;
 
   const roadmapPath = planningPaths(cwd).roadmap;
   const reqPath = planningPaths(cwd).requirements;
   const statePath = planningPaths(cwd).state;
-  // #1911: derive the archive base from the workstream-aware planning root so
-  // `milestone complete --ws` archives into the workstream, not root. planningPaths(cwd).planning
-  // resolves to the workstream base when GSD_WORKSTREAM is set and to root .planning otherwise
-  // (flat mode is a no-op).
   const planningBase = planningPaths(cwd).planning;
   const milestonesPath = path.join(planningBase, 'MILESTONES.md');
   const archiveDir = path.join(planningBase, 'milestones');
   const phasesDir = planningPaths(cwd).phases;
   const today = realClock.localToday();
-  const milestoneName = options.name || version;
-
+  const milestoneName = options.name || milestoneVersion;
   // Ensure archive directory exists (skipped in dry-run — no mutations)
   if (!options.dryRun) {
     platformEnsureDir(archiveDir);
   }
-
   // Scope stats and accomplishments to only the phases belonging to the
-  // current milestone's ROADMAP.  Uses the shared filter from roadmap-parser.cjs
-  // (same logic used by cmdPhasesList and other callers).
-  const isDirInMilestone = getMilestonePhaseFilter(cwd, version);
+  // current milestone's ROADMAP. Uses the shared filter from roadmap-parser.cjs.
+  const isDirInMilestone = getMilestonePhaseFilter(cwd, milestoneVersion);
   if (isDirInMilestone.missingExplicitVersion) {
-    error(`no phases found for milestone ${version} in ROADMAP.md`);
+    error(`no phases found for milestone ${milestoneVersion} in ROADMAP.md`);
   }
-
   // Guard: prevent marking complete when ROADMAP still lists phases that have
   // no directory on disk (disk_status: no_directory). This catches the case
   // where the active milestone was erroneously marked complete before phases
@@ -614,11 +609,14 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
         /* skip */
       }
 
-      if (stateVersion && stateVersion === version) {
+      const normalizedStateVersion = stateVersion
+        ? (/^v/i.test(stateVersion) ? stateVersion.replace(/^v/i, 'v') : `v${stateVersion}`)
+        : null;
+      if (normalizedStateVersion && normalizedStateVersion === milestoneVersion) {
         const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
         const scopedContent = extractCurrentMilestone(roadmapContent, cwd);
         // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-        const phasePattern = new RegExp(`#{2,4}\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`, 'gi');
+        const phasePattern = new RegExp(`#{2,4}\\s*Phase\\s+(\\d+[A-Z]?(?:[\\.-]\\d+)*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`, 'gi');
         const noDirectoryPhases: string[] = [];
         let pm: RegExpExecArray | null;
         const phaseDirEntries = ((): string[] => {
@@ -740,19 +738,19 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
     }
     const dryRunResult = {
       dry_run: true,
-      version,
+      version: milestoneVersion,
       name: milestoneName,
       stats: { phases: phaseCount, plans: totalPlans, tasks: totalTasks },
       accomplishments,
       would_archive: {
         roadmap: fs.existsSync(roadmapPath)
-          ? { source: path.relative(cwd, roadmapPath).split(path.sep).join('/'), target: path.relative(cwd, path.join(archiveDir, `${version}-ROADMAP.md`)).split(path.sep).join('/') }
+          ? { source: path.relative(cwd, roadmapPath).split(path.sep).join('/'), target: path.relative(cwd, path.join(archiveDir, `${milestoneVersion}-ROADMAP.md`)).split(path.sep).join('/') }
           : null,
         requirements: fs.existsSync(reqPath)
-          ? { source: path.relative(cwd, reqPath).split(path.sep).join('/'), target: path.relative(cwd, path.join(archiveDir, `${version}-REQUIREMENTS.md`)).split(path.sep).join('/') }
+          ? { source: path.relative(cwd, reqPath).split(path.sep).join('/'), target: path.relative(cwd, path.join(archiveDir, `${milestoneVersion}-REQUIREMENTS.md`)).split(path.sep).join('/') }
           : null,
-        audit: fs.existsSync(path.join(planningBase, `${version}-MILESTONE-AUDIT.md`))
-          ? { source: path.relative(cwd, path.join(planningBase, `${version}-MILESTONE-AUDIT.md`)).split(path.sep).join('/'), target: path.relative(cwd, path.join(archiveDir, `${version}-MILESTONE-AUDIT.md`)).split(path.sep).join('/') }
+        audit: fs.existsSync(path.join(planningBase, `${milestoneVersion}-MILESTONE-AUDIT.md`))
+          ? { source: path.relative(cwd, path.join(planningBase, `${milestoneVersion}-MILESTONE-AUDIT.md`)).split(path.sep).join('/'), target: path.relative(cwd, path.join(archiveDir, `${milestoneVersion}-MILESTONE-AUDIT.md`)).split(path.sep).join('/') }
           : null,
         phases: phaseDirsToArchive,
       },
@@ -769,7 +767,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   let phaseArchivePlan: PhaseArchivePlan | null = null;
   if (options.archivePhases !== false) {
     try {
-      phaseArchivePlan = preparePhaseArchivePlan(phasesDir, version, archiveDir, isDirInMilestone);
+      phaseArchivePlan = preparePhaseArchivePlan(phasesDir, milestoneVersion, archiveDir, isDirInMilestone);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       error('Failed to archive phase directories: ' + message);
@@ -778,7 +776,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   // Archive ROADMAP.md
   if (fs.existsSync(roadmapPath)) {
     const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
-    platformWriteSync(path.join(archiveDir, `${version}-ROADMAP.md`), roadmapContent);
+    platformWriteSync(path.join(archiveDir, `${milestoneVersion}-ROADMAP.md`), roadmapContent);
   }
 
   // Archive REQUIREMENTS.md
@@ -790,8 +788,8 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
     // Normalize to POSIX separators so the header is cross-platform (Windows
     // path.relative yields backslashes; the original literal was forward-slash).
     const reqDisplay = path.relative(cwd, reqPath).split(path.sep).join('/');
-    const archiveHeader = `# Requirements Archive: ${version} ${milestoneName}\n\n**Archived:** ${today}\n**Status:** SHIPPED\n\nFor current requirements, see \`${reqDisplay}\`.\n\n---\n\n`;
-    platformWriteSync(path.join(archiveDir, `${version}-REQUIREMENTS.md`), archiveHeader + reqContent);
+    const archiveHeader = `# Requirements Archive: ${milestoneVersion} ${milestoneName}\n\n**Archived:** ${today}\n**Status:** SHIPPED\n\nFor current requirements, see \`${reqDisplay}\`.\n\n---\n\n`;
+    platformWriteSync(path.join(archiveDir, `${milestoneVersion}-REQUIREMENTS.md`), archiveHeader + reqContent);
   }
   // Execute phase archive plan after ROADMAP/REQUIREMENTS archives but before
   // audit/MILESTONES/STATE updates. Fail-closed: inventory mismatches were
@@ -807,14 +805,14 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
     }
   }
   // Archive audit file if exists
-  const auditFile = path.join(planningBase, `${version}-MILESTONE-AUDIT.md`);
+  const auditFile = path.join(planningBase, `${milestoneVersion}-MILESTONE-AUDIT.md`);
   if (fs.existsSync(auditFile)) {
-    retryRenameSync(auditFile, path.join(archiveDir, `${version}-MILESTONE-AUDIT.md`));
+    retryRenameSync(auditFile, path.join(archiveDir, `${milestoneVersion}-MILESTONE-AUDIT.md`));
   }
 
   // Create/append MILESTONES.md entry
   const accomplishmentsList = accomplishments.map((a) => `- ${a}`).join('\n');
-  const milestoneEntry = `## ${version} ${milestoneName} (Shipped: ${today})\n\n**Phases completed:** ${phaseCount} phases, ${totalPlans} plans, ${totalTasks} tasks\n\n**Key accomplishments:**\n${accomplishmentsList || '- (none recorded)'}\n\n---\n\n`;
+  const milestoneEntry = `## ${milestoneVersion} ${milestoneName} (Shipped: ${today})\n\n**Phases completed:** ${phaseCount} phases, ${totalPlans} plans, ${totalTasks} tasks\n\n**Key accomplishments:**\n${accomplishmentsList || '- (none recorded)'}\n\n---\n\n`;
 
   if (fs.existsSync(milestonesPath)) {
     const existing = fs.readFileSync(milestonesPath, 'utf-8');
@@ -850,7 +848,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
       fs.readFileSync(statePath, 'utf-8'),
       {
         kind: 'milestoneComplete',
-        version,
+        version: milestoneVersion,
         nextMilestoneCommand: formatGsdSlash('new-milestone', resolveRuntime(cwd)) as string,
       },
       { clock: realClock, progressProvider: () => null },
@@ -859,7 +857,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   }
 
   const result = {
-    version,
+    version: milestoneVersion,
     name: milestoneName,
     date: today,
     phases: phaseCount,
@@ -867,9 +865,9 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
     tasks: totalTasks,
     accomplishments,
     archived: {
-      roadmap: fs.existsSync(path.join(archiveDir, `${version}-ROADMAP.md`)),
-      requirements: fs.existsSync(path.join(archiveDir, `${version}-REQUIREMENTS.md`)),
-      audit: fs.existsSync(path.join(archiveDir, `${version}-MILESTONE-AUDIT.md`)),
+      roadmap: fs.existsSync(path.join(archiveDir, `${milestoneVersion}-ROADMAP.md`)),
+      requirements: fs.existsSync(path.join(archiveDir, `${milestoneVersion}-REQUIREMENTS.md`)),
+      audit: fs.existsSync(path.join(archiveDir, `${milestoneVersion}-MILESTONE-AUDIT.md`)),
       phases: phasesArchived,
     },
     milestones_updated: true,
@@ -912,10 +910,20 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
     archiveVersionOverride = trimmed;
   }
   let cleared = 0;
+  // Fork-unique: --force requires --confirm. Prevents accidental force-clear.
+  if (force && !confirm) {
+    error('--force requires --confirm. Use phases clear --confirm --force to delete intentionally.');
+  }
+  // Fork-unique: reject unknown flags (only --confirm, --force, --archive-version allowed).
+  for (const arg of args) {
+    if (arg.startsWith('-') && arg !== '--confirm' && arg !== '--force' && !arg.startsWith('--archive-version')) {
+      error('Unknown phases clear option: ' + arg + '. Allowed: --confirm, --force, --archive-version');
+    }
+  }
 
   if (fs.existsSync(phasesDir)) {
     const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
-    const dirs = entries.filter((e) => e.isDirectory() && !/^999(?:\.|$)/.test(e.name));
+    const dirs = entries.filter((e) => e.isDirectory() && !/^999(?:\.|$)/.test(stripProjectCodePrefix(e.name)));
 
     if (dirs.length > 0 && !confirm) {
       error(
@@ -960,53 +968,6 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
             `Archive or commit outgoing phase work before running this command, ` +
             `or pass --force to skip this check and permanently delete the phase directories. (#1447)`,
         );
-      }
-    }
-    // Fail-closed archive parity: each active dir must match the latest shipped
-    // milestone archive. This prevents deleting phase directories that were never
-    // archived — silent data loss. Pass --force to bypass.
-    if (dirs.length > 0 && !force) {
-      const milestonesPath = path.join(planningPaths(cwd).planning, 'MILESTONES.md');
-      let version: string | null = null;
-      if (fs.existsSync(milestonesPath)) {
-        const content = fs.readFileSync(milestonesPath, 'utf-8');
-        const match = content.match(/^##\s+(v\S+)\s+(.+?)\s+\(Shipped:/m);
-        if (match) version = match[1];
-      }
-      if (!version) {
-        error(
-          `phases clear would delete ${dirs.length} phase director${dirs.length === 1 ? 'y' : 'ies'}, ` +
-            `but .planning/MILESTONES.md has no shipped milestone entry. ` +
-            'Run milestone complete <version> first, or pass --confirm --force to delete intentionally.',
-        );
-      }
-      const archivePhasesDir = path.join(planningPaths(cwd).planning, 'milestones', `${version}-phases`);
-      if (!fs.existsSync(archivePhasesDir)) {
-        error(
-          `phases clear would delete ${dirs.length} phase director${dirs.length === 1 ? 'y' : 'ies'}, ` +
-            `but .planning/milestones/${version}-phases/ is missing. ` +
-            `Run milestone complete ${version} first, or pass --confirm --force to delete intentionally.`,
-        );
-      }
-      for (const dir of dirs) {
-        const source = path.join(phasesDir, dir.name);
-        const target = path.join(archivePhasesDir, dir.name);
-        if (!fs.existsSync(target) || !fs.lstatSync(target).isDirectory()) {
-          error(
-            `phases clear would delete ${dirs.length} phase director${dirs.length === 1 ? 'y' : 'ies'}, ` +
-              `but archive parity failed for ${dir.name}. ` +
-              `Run milestone complete ${version} first, or pass --confirm --force to delete intentionally.`,
-          );
-        }
-        const sourceInventory = collectDirectoryInventory(source);
-        const targetInventory = collectDirectoryInventory(target);
-        if (!inventoriesMatch(sourceInventory, targetInventory)) {
-          error(
-            `phases clear would delete ${dirs.length} phase director${dirs.length === 1 ? 'y' : 'ies'}, ` +
-              `but archive parity failed for ${dir.name}. ` +
-              `Run milestone complete ${version} first, or pass --confirm --force to delete intentionally.`,
-          );
-        }
       }
     }
     try {

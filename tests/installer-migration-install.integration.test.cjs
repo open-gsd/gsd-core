@@ -43,6 +43,12 @@ const RUNTIME_INSTALL_CONTRACTS = {
   // the shared hooks bundle + the CommonJS package.json marker, like OpenCode.
   // (#1821 excluded Kilo on the false premise that it had no plugin surface.)
   kilo: { surface: 'flat-command', settings: false, packageJson: true },
+  // omp (Oh My Pi): declarative multi-surface install — flat gsd-prefixed
+  // commands, nested skills, gsd-prefixed agents, mapped rules, and the
+  // gsd-core native extension package. hostBehaviors.skipSharedHooksInstall
+  // means no hooks/ bundle and no CommonJS package.json marker (like ZCode),
+  // and writesSharedSettings:false means no settings.json.
+  omp: { surface: 'omp-multi-surface', settings: false, packageJson: false },
   // #2329: OpenCode discovers commands from the PLURAL `commands/` dir — the
   // singular `command/` (still correct for Kilo) made all /gsd-* commands
   // invisible to OpenCode. commandDirName overrides the flat-command default.
@@ -332,6 +338,23 @@ function assertFreshInstallContract(runtime, targetDir) {
       fs.existsSync(path.join(targetDir, 'skills')),
       false,
       `${runtime} should NOT install a skills/ dir (plugin-only)`
+    );
+  } else if (contract.surface === 'omp-multi-surface') {
+    // omp (Oh My Pi): flat gsd-prefixed commands, nested skills, gsd-prefixed
+    // agents (asserted by the generic agents check below), mapped rules, and
+    // the gsd-core native extension package.
+    assert.ok(
+      listDirNames(targetDir, 'commands').some((name) => name.startsWith('gsd-') && name.endsWith('.md')),
+      `${runtime} should install flattened gsd-prefixed command markdown files in commands/`
+    );
+    assertHasGsdDirectory(targetDir, 'skills');
+    assert.ok(
+      fs.existsSync(path.join(targetDir, 'rules', 'gsd-planning-artifacts.md')),
+      `${runtime} should install the mapped planning-artifacts rule with the gsd- prefix`
+    );
+    assert.ok(
+      fs.existsSync(path.join(targetDir, 'extensions', 'gsd-core', 'index.js')),
+      `${runtime} should install the gsd-core native extension package`
     );
   } else if (contract.surface === 'commands-gsd') {
     assert.ok(

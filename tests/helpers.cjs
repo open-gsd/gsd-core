@@ -450,4 +450,33 @@ function resetRuntimeWarningCaches() {
   modelResolver._resetModelOverrideWarningCacheForTests();
 }
 
-module.exports = { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, TOOLS_PATH };
+function cleanLauncherEnv(overrides = {}) {
+  const env = { ...process.env, ...overrides };
+  for (const key of [
+    'CODEX_HOME',
+    'CODEX_CONFIG_DIR',
+    'CURSOR_CONFIG_DIR',
+    'HERMES_HOME',
+    'GEMINI_CONFIG_DIR',
+    'COPILOT_CONFIG_DIR',
+    'WINDSURF_CONFIG_DIR',
+    'AUGMENT_CONFIG_DIR',
+    'TRAE_CONFIG_DIR',
+    'QWEN_CONFIG_DIR',
+    'CODEBUDDY_CONFIG_DIR',
+    'CLINE_CONFIG_DIR',
+    'GROK_AGENTS_HOME',
+    'ANTIGRAVITY_CONFIG_DIR',
+    'OPENCODE_CONFIG_DIR',
+    'KILO_CONFIG_DIR',
+    'PI_CODING_AGENT_DIR',
+    'PI_CONFIG_DIR',
+    'OMP_PROFILE',
+    'PI_PROFILE',
+  ]) {
+    delete env[key];
+  }
+  return env;
+}
+
+module.exports = { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, cleanLauncherEnv, TOOLS_PATH };

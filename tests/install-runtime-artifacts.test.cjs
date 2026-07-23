@@ -382,7 +382,7 @@ describe('installRuntimeArtifacts — omp multi-surface layout', () => {
     assert.ok(!fs.existsSync(path.join(configDir, 'skills', 'gsd-plan-phase', 'SKILL.md')), 'plan-phase must be nested, not top-level');
     assert.ok(fs.existsSync(path.join(configDir, 'skills', 'gsd-ns-workflow', 'skills', 'plan-phase', 'SKILL.md')), 'plan-phase must be nested under ns-workflow');
     assert.ok(fs.existsSync(path.join(configDir, 'agents', 'gsd-planner.md')));
-    assert.ok(fs.existsSync(path.join(configDir, 'rules', 'planning-artifacts.md')));
+    assert.ok(fs.existsSync(path.join(configDir, 'rules', 'gsd-planning-artifacts.md')), 'rules install with the gsd- prefix');
     assert.ok(fs.existsSync(path.join(configDir, 'extensions', 'gsd-core', 'index.js')));
     assert.ok(fs.existsSync(path.join(configDir, 'extensions', 'gsd-core', 'package.json')));
     assert.ok(fs.existsSync(path.join(configDir, 'extensions', 'gsd-core', 'update-worker.js')));
@@ -840,8 +840,15 @@ describe('uninstallRuntimeArtifacts — removes gsd-owned entries, preserves for
           fs.writeFileSync(path.join(destDir, 'user-agent.yaml'), 'version: 1\n');
           fs.writeFileSync(path.join(destDir, 'subagents', 'user-agent.yaml'), 'version: 1\n');
         } else if (kind.kind === 'rules') {
-          fs.writeFileSync(path.join(destDir, 'planning-artifacts.md'), '# planning\n');
+          fs.writeFileSync(path.join(destDir, `${kind.prefix}planning-artifacts.md`), '# planning\n');
           fs.writeFileSync(path.join(destDir, 'user-custom.md'), '# user\n');
+        } else if (kind.kind === 'extensions') {
+          const extDir = path.join(destDir, `${kind.prefix}core`);
+          fs.mkdirSync(extDir, { recursive: true });
+          fs.writeFileSync(path.join(extDir, 'index.js'), '// ext\n');
+          const foreignExtDir = path.join(destDir, 'user-ext');
+          fs.mkdirSync(foreignExtDir, { recursive: true });
+          fs.writeFileSync(path.join(foreignExtDir, 'index.js'), '// user\n');
         } else {
           writeCommandEntry(destDir, kind.prefix, 'help');
           writeCommandEntry(destDir, kind.prefix, 'phase');
@@ -865,8 +872,11 @@ describe('uninstallRuntimeArtifacts — removes gsd-owned entries, preserves for
           assert.ok(fs.existsSync(path.join(destDir, 'user-agent.yaml')));
           assert.ok(fs.existsSync(path.join(destDir, 'subagents', 'user-agent.yaml')));
         } else if (kind.kind === 'rules') {
-          assert.ok(!fs.existsSync(path.join(destDir, 'planning-artifacts.md')));
+          assert.ok(!fs.existsSync(path.join(destDir, `${kind.prefix}planning-artifacts.md`)));
           assert.ok(fs.existsSync(path.join(destDir, 'user-custom.md')));
+        } else if (kind.kind === 'extensions') {
+          assert.ok(!fs.existsSync(path.join(destDir, `${kind.prefix}core`)), 'gsd-owned extension dir must be removed recursively');
+          assert.ok(fs.existsSync(path.join(destDir, 'user-ext', 'index.js')), 'foreign extension dir must be preserved');
         } else {
           assert.ok(!fs.existsSync(path.join(destDir, `${kind.prefix}help.md`)));
           assert.ok(!fs.existsSync(path.join(destDir, `${kind.prefix}phase.md`)));
