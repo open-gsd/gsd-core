@@ -4055,12 +4055,12 @@ describe('execute-phase.md dispatch wires USE_WORKTREES_FOR_PLAN (#2772)', () =>
     assert.ok(fs.existsSync(gatePath), `expected ${gatePath} to exist`);
   });
 
-  test('Worktree-mode dispatch gate reads USE_WORKTREES_FOR_PLAN, not USE_WORKTREES', () => {
+  test('Worktree-mode dispatch gate reads both USE_WORKTREES and USE_WORKTREES_FOR_PLAN (#2474)', () => {
     const md = fs.readFileSync(workflowPath, 'utf-8');
     assert.match(
       md,
-      /\*\*Worktree mode\*\*\s*\(`USE_WORKTREES_FOR_PLAN`/,
-      'Worktree-mode header must gate on USE_WORKTREES_FOR_PLAN per-plan'
+      /\*\*Worktree mode\*\*.*`USE_WORKTREES`.*`USE_WORKTREES_FOR_PLAN`/,
+      'Worktree-mode header must gate on both USE_WORKTREES and USE_WORKTREES_FOR_PLAN (#2474)'
     );
   });
 
