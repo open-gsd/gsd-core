@@ -1990,6 +1990,7 @@ Test suite that scans all agent, workflow, and command files for embedded inject
 **Requirements:**
 - REQ-LANG-01: System MUST respect `response_language` setting across all phases and agents
 - REQ-LANG-02: Setting MUST propagate to all spawned agents for consistent language output
+- REQ-LANG-03: Every workflow MUST carry response-language coverage — either its own inline directive or the shared `@`-referenced directive (`gsd-core/references/response-language-directive.md`); enforced in CI by `scripts/lint-response-language-coverage.cjs` (#2529)
 
 **Config:**
 | Setting | Type | Default | Description |

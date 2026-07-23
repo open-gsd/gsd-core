@@ -103,7 +103,7 @@
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
     "lint:fix": "eslint . --fix",
     "lint:table-schema-drift": "node scripts/lint-table-schema-drift.cjs",
-    "lint:ci": "npm run lint && npm run lint:skill-deps && npm run lint:generated-sync && node scripts/lint-test-file-count.cjs && node scripts/lint-command-contract.cjs && node scripts/lint-pr-check-project-dir.cjs && npm run lint:legacy-name && node scripts/lint-regression-test-names.cjs && node scripts/lint-allow-test-rule-refs.cjs && node scripts/lint-resolution-provenance.cjs && node scripts/lint-portable-timeout.cjs && node scripts/validate-registry.cjs && node scripts/lint-table-schema-drift.cjs",
+    "lint:ci": "npm run lint && npm run lint:skill-deps && npm run lint:generated-sync && node scripts/lint-test-file-count.cjs && node scripts/lint-command-contract.cjs && node scripts/lint-pr-check-project-dir.cjs && npm run lint:legacy-name && node scripts/lint-regression-test-names.cjs && node scripts/lint-allow-test-rule-refs.cjs && node scripts/lint-resolution-provenance.cjs && node scripts/lint-portable-timeout.cjs && node scripts/validate-registry.cjs && node scripts/lint-table-schema-drift.cjs && node scripts/lint-response-language-coverage.cjs",
     "lint:allow-test-rule-refs": "node scripts/lint-allow-test-rule-refs.cjs",
     "lint:regression-names": "node scripts/lint-regression-test-names.cjs",
     "lint:descriptions": "node scripts/lint-descriptions.cjs",
@@ -130,7 +130,8 @@
     "test:coverage:unit": "c8 --check-coverage --lines 70 --branches 60 --reporter text --include 'gsd-core/bin/lib/*.cjs' --exclude 'tests/**' --all node scripts/run-tests.cjs --suite unit && c8 check-coverage --per-file --lines 0 --functions 0 --statements 0 --branches 70 --include 'gsd-core/bin/lib/state.cjs' --include 'gsd-core/bin/lib/phase.cjs' --include 'gsd-core/bin/lib/verify.cjs' --include 'gsd-core/bin/lib/init.cjs' --exclude 'tests/**'",
     "test:coverage:all": "npm run test:coverage",
     "test:mutation": "stryker run",
-    "test:mutation:since": "stryker run --incremental --since origin/next"
+    "test:mutation:since": "stryker run --incremental --since origin/next",
+    "lint:response-language": "node scripts/lint-response-language-coverage.cjs"
   },
   "allowScripts": {
     "fallow@2.70.0": true
