@@ -437,6 +437,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `clusters.cjs` | Skill cluster definitions for the runtime surface module (ADR-0011 Phase 2) |
 | `code-review-flags.cjs` | Typed flag parser for `/gsd:code-review`; exports `parseCodeReviewFlags(argv)` (→ `{ fix, all, auto, depth, files }`) and `resolveCodeReviewWorkflow(flags)` (→ `'code-review.md' \| 'code-review-fix.md'`); canonical dispatch seam for `--fix`/`--all`/`--auto` routing |
 | `command-aliases.cjs` | Alias/subcommand metadata for manifest-backed family routers |
+| `commonjs-marker.cjs` | Ownership-guarded `{"type":"commonjs"}` marker used to pin GSD's staged `.js` scripts to CommonJS; exports `classifyMarker` (absent/gsd-owned/foreign, fail-closed), `ensureCommonJsMarker`, and `removeCommonJsMarker` so install and uninstall share one predicate and never touch a user-authored `package.json` (#2544) |
 | `command-arg-projection.cjs` | Typed flag and positional argument projection helpers shared across command-family routers |
 | `command-roster.cjs` | Read-only discovery of canonical `commands/gsd/*.md` command stems for runtime artifact conversion and namespace rewrites |
 | `command-routing-hub.cjs` | Pure-result dispatch hub that centralizes mode decision (SDK vs CJS), error taxonomy, and no-throw contract for all command-family routers (#3788) |

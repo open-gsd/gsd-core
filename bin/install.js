@@ -46,6 +46,11 @@ const {
 const { resolveInstallPlan } = require('../gsd-core/bin/lib/runtime-config-adapter-registry.cjs');
 const { createImperativeAdapter } = require('../gsd-core/bin/lib/adapter-imperative.cjs');
 const runtimeArtifactConversion = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+// #2544: the CommonJS marker's single source of truth. classifyMarker() backs
+// BOTH ensureCommonJsMarker() (install) and removeCommonJsMarker() (uninstall),
+// so the write side can no longer clobber a package.json the remove side would
+// correctly refuse to delete.
+const { ensureCommonJsMarker, removeCommonJsMarker } = require('../gsd-core/bin/lib/commonjs-marker.cjs');
 // Canonical set of hook files shipped to users. Imported here so writeManifest()
 // records exactly the same set that build-hooks.js copies to hooks/dist/, making
 // the manifest and the installed hooks/ dir structurally identical. Avoids the
@@ -8168,23 +8173,24 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
         }
       }
 
+      // #2544: the marker now lives inside kimi's hooks/ dir — remove it
+      // before the emptiness check below, or the dir would never prune.
+      if (removeCommonJsMarker(kimiHooksDir)) {
+        removedCount++;
+        console.log(`  ${green}✓${reset} Removed GSD package.json from ${kimiHooksDir}`);
+      }
+
       try {
         if (fs.readdirSync(kimiHooksDir).length === 0) fs.rmdirSync(kimiHooksDir);
       } catch (_) { /* not empty — leave it */ }
     }
 
-    const kimiPkgJsonPath = path.join(kimiHooksRoot, 'package.json');
-    if (fs.existsSync(kimiPkgJsonPath)) {
-      try {
-        const content = fs.readFileSync(kimiPkgJsonPath, 'utf8').trim();
-        if (content === '{"type":"commonjs"}') {
-          fs.unlinkSync(kimiPkgJsonPath);
-          removedCount++;
-          console.log(`  ${green}✓${reset} Removed GSD package.json from ${kimiHooksRoot}`);
-        }
-      } catch (e) {
-        // Ignore read errors
-      }
+    // Retire the pre-#2544 marker at kimi's root (~/.kimi), where the bundle
+    // used to write it. Exact content match — a user's own package.json in
+    // kimi's native config home is never touched.
+    if (removeCommonJsMarker(kimiHooksRoot)) {
+      removedCount++;
+      console.log(`  ${green}✓${reset} Removed GSD package.json from ${kimiHooksRoot} (pre-#2544 marker)`);
     }
   }
 
@@ -8491,6 +8497,14 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
         console.log(`  ${green}✓${reset} Removed ${removedLibFiles} hooks/lib/ helper(s)`);
       }
     }
+
+    // #2544: retire the CommonJS marker the install path stages into hooks/.
+    // hooks/ is shared space and is deliberately never rmdir'd here, so the
+    // marker must be removed explicitly or it would be left behind.
+    if (removeCommonJsMarker(hooksDir)) {
+      removedCount++;
+      console.log(`  ${green}✓${reset} Removed GSD hooks/package.json`);
+    }
   }
 
   // 4z. Remove the native plugin adapter (#1914, extended to Kilo by #2093).
@@ -8508,8 +8522,19 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
         removedCount++;
         console.log(`  ${green}✓${reset} Removed native plugin adapter (${runtime})`);
       } catch (_) { /* best-effort */ }
-      try { fs.rmdirSync(pluginsDir); } catch (_) { /* not empty — user plugins present */ }
     }
+    // #2544: the adapter's CommonJS marker sits beside it. Cleaned up OUTSIDE
+    // the adapter-exists guard above — a partial install (or a hand-deleted
+    // adapter) would otherwise strand GSD's marker forever and keep the dir
+    // from ever pruning. Conditioned on the adapter being GONE, though: if the
+    // unlink above failed, pulling the marker out from under a still-present
+    // CommonJS adapter would leave it unloadable. The exact content match
+    // still leaves any user-authored package.json in place.
+    if (!fs.existsSync(pluginPath) && removeCommonJsMarker(pluginsDir)) {
+      removedCount++;
+      console.log(`  ${green}✓${reset} Removed GSD package.json from ${_np.dir}/`);
+    }
+    try { fs.rmdirSync(pluginsDir); } catch (_) { /* not empty — user plugins present */ }
   }
 
   // 4a. Remove scripts/changeset/ and scripts/lib/ (#935)
@@ -8568,19 +8593,14 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   }
 
   // 5. Remove GSD package.json (CommonJS mode marker)
-  const pkgJsonPath = path.join(targetDir, 'package.json');
-  if (fs.existsSync(pkgJsonPath)) {
-    try {
-      const content = fs.readFileSync(pkgJsonPath, 'utf8').trim();
-      // Only remove if it's our minimal CommonJS marker
-      if (content === '{"type":"commonjs"}') {
-        fs.unlinkSync(pkgJsonPath);
-        removedCount++;
-        console.log(`  ${green}✓${reset} Removed GSD package.json`);
-      }
-    } catch (e) {
-      // Ignore read errors
-    }
+  // Since #2544 the marker is staged into hooks/ (and the nativePlugin dir,
+  // handled at 4z above) rather than at targetDir. The targetDir removal is
+  // retained to retire the marker written by pre-#2544 installs — same exact
+  // content match as before, so a user-authored package.json is still never
+  // touched.
+  if (removeCommonJsMarker(targetDir)) {
+    removedCount++;
+    console.log(`  ${green}✓${reset} Removed GSD package.json (pre-#2544 config-root marker)`);
   }
 
   // 6. Clean up settings.json (remove GSD hooks and statusline)
@@ -11029,14 +11049,16 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // a safe no-op when the dir is already present.
     fs.mkdirSync(destRootDir, { recursive: true });
 
-    // Write package.json to force CommonJS mode for GSD scripts
-    // Prevents "require is not defined" errors when project has "type": "module"
-    // Node.js walks up looking for package.json - this stops inheritance from project
-    const pkgJsonDest = path.join(destRootDir, 'package.json');
-    fs.writeFileSync(pkgJsonDest, '{"type":"commonjs"}\n');
-    console.log(`  ${green}✓${reset} Wrote package.json (CommonJS mode)`);
+    // #2544: the CommonJS marker is NOT written here (destRootDir is the
+    // runtime's shared config root — user-writable territory on OpenCode and
+    // Kilo, where it is the documented place to declare local-plugin npm
+    // dependencies). It is written into hooks/ below, the directory GSD
+    // creates and fills with its own .js scripts, once that directory exists.
 
     let hooksOk = true;
+    // #2544: true once GSD has actually written into destRootDir/hooks/, which
+    // is what licenses the CommonJS marker below.
+    let stagedHooks = false;
 
     // Copy hooks from dist/ (bundled with dependencies)
     // Template paths for the target runtime (replaces '.claude' with correct config dir)
@@ -11045,6 +11067,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       const hooksDest = path.join(destRootDir, 'hooks');
       fs.mkdirSync(hooksDest, { recursive: true });
       const hookEntries = fs.readdirSync(hooksSrc);
+      if (hookEntries.some((e) => fs.statSync(path.join(hooksSrc, e)).isFile())) stagedHooks = true;
       const configDirReplacement = getConfigDirFromHome(runtime, isGlobal);
       for (const entry of hookEntries) {
         const srcFile = path.join(hooksSrc, entry);
@@ -11139,7 +11162,33 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       const hooksLibDest = path.join(destRootDir, 'hooks', 'lib');
       fs.mkdirSync(hooksLibDest, { recursive: true });
       copyLibDir(hooksLibSrc, hooksLibDest, GSD_HOOK_LIB_FILES);
+      if (GSD_HOOK_LIB_FILES.some((f) => fs.existsSync(path.join(hooksLibDest, f)))) stagedHooks = true;
       console.log(`  ${green}✓${reset} Installed hooks/lib/ helpers (git-cmd, graphify-rebuild, ...)`);
+    }
+
+    // #2544: pin the staged hook scripts to CommonJS from inside hooks/ — the
+    // directory GSD just created and filled — instead of from destRootDir.
+    // Scoping the marker to GSD's own directory keeps `require` working in
+    // hooks/*.js and hooks/lib/*.js under any ambient "type": "module", while
+    // leaving the shared config root untouched.
+    //
+    // Gated on `stagedHooks`, NOT on the directory merely existing: hooks/ is
+    // shared space, so an existence check would drop a GSD marker into a
+    // hooks/ directory the user created and GSD never wrote to — the same
+    // write-into-someone-else's-territory this issue is about. And never
+    // written over a package.json GSD does not own.
+    const hooksMarkerDir = path.join(destRootDir, 'hooks');
+    if (stagedHooks) {
+      switch (ensureCommonJsMarker(hooksMarkerDir)) {
+        case 'written':
+          console.log(`  ${green}✓${reset} Wrote hooks/package.json (CommonJS mode)`);
+          break;
+        case 'preserved-foreign':
+          console.warn(`  ${yellow}⚠${reset}  Left existing hooks/package.json untouched (not GSD's marker) — GSD hooks may not resolve as CommonJS`);
+          break;
+        default:
+          break;
+      }
     }
 
     return hooksOk;

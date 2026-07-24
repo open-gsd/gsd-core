@@ -340,6 +340,7 @@
       "command-roster.cjs",
       "command-routing-hub.cjs",
       "commands.cjs",
+      "commonjs-marker.cjs",
       "config-loader.cjs",
       "config-schema.cjs",
       "config-types.cjs",

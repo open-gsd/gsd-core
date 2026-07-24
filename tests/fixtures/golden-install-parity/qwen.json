@@ -352,7 +352,7 @@
   "hooks/lib/git-cmd.js": "268ba15992ca0b23",
   "hooks/lib/gsd-graphify-rebuild.sh": "66af89601074d2a9",
   "hooks/managed-hooks-registry.cjs": "08741ed76f1d8970",
-  "package.json": "dbf8353f77358bc1",
+  "hooks/package.json": "dbf8353f77358bc1",
   "scripts/changeset/README.md": "86ff89331dfd94b2",
   "scripts/changeset/cli.cjs": "68f92a344b199271",
   "scripts/changeset/github-release-notes.cjs": "795677f0c009b132",

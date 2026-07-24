@@ -351,7 +351,7 @@
   "hooks/lib/git-cmd.js",
   "hooks/lib/gsd-graphify-rebuild.sh",
   "hooks/managed-hooks-registry.cjs",
-  "package.json",
+  "hooks/package.json",
   "scripts/changeset/README.md",
   "scripts/changeset/cli.cjs",
   "scripts/changeset/github-release-notes.cjs",
