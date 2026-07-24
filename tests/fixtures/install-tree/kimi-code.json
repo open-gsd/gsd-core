@@ -28,7 +28,7 @@
   ".kimi/hooks/lib/git-cmd.js",
   ".kimi/hooks/lib/gsd-graphify-rebuild.sh",
   ".kimi/hooks/managed-hooks-registry.cjs",
-  ".kimi/package.json",
+  ".kimi/hooks/package.json",
   "agents/gsd-advisor-researcher.md",
   "agents/gsd-ai-researcher.md",
   "agents/gsd-assumptions-analyzer.md",

@@ -28,7 +28,7 @@
   ".kimi/hooks/lib/git-cmd.js": "268ba15992ca0b23",
   ".kimi/hooks/lib/gsd-graphify-rebuild.sh": "66af89601074d2a9",
   ".kimi/hooks/managed-hooks-registry.cjs": "08ec2585a3f8f132",
-  ".kimi/package.json": "dbf8353f77358bc1",
+  ".kimi/hooks/package.json": "dbf8353f77358bc1",
   "agents/gsd.md": "60fee7782ae4f2c6",
   "agents/gsd.yaml": "b5f16c9fcf92cbff",
   "agents/subagents/gsd-advisor-researcher.md": "81bdc6cbd8fcde40",
