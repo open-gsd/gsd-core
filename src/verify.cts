@@ -1935,22 +1935,12 @@ function cmdValidateHealth(
           continue;
         }
 
-        if (finding['kind'] === 'stale') {
-          // Do not flag the active session's worktree — removing it would be harmful.
-          const worktreePath = finding['path'] as string;
-          const activeCwd = process.cwd();
-          const normalizedWorktree = path.resolve(worktreePath);
-          const normalizedCwd = path.resolve(activeCwd);
-          // Skip if the worktree IS the cwd or is an ancestor of it.
-          const isActiveWorktree =
-            normalizedCwd === normalizedWorktree ||
-            normalizedCwd.startsWith(normalizedWorktree + path.sep);
-          if (isActiveWorktree) continue;
+        if (finding['kind'] === 'locked_initializing_residue') {
           addIssue(
             'warning',
             'W017',
-            `Stale git worktree: ${worktreePath} (last modified ${finding['ageMinutes'] as number} minutes ago)`,
-            `Run: git worktree remove ${worktreePath} --force`,
+            `Locked initializing git worktree metadata residue: ${finding['path'] as string} (path no longer exists on disk)`,
+            `Recovery: git worktree unlock ${finding['path'] as string} && git worktree prune`,
           );
         }
       }

@@ -376,7 +376,7 @@ describe('listLinkedWorktreePaths', () => {
 // ─── inspectWorktreeHealth ────────────────────────────────────────────────────
 
 describe('inspectWorktreeHealth', () => {
-  test('reports orphan and stale findings', () => {
+  test('does not classify an old registered worktree as stale', () => {
     const health = inspectWorktreeHealth(
       '/repo/main',
       { staleAfterMs: 60 * 60 * 1000, nowMs: 2 * 60 * 60 * 1000 },
@@ -404,9 +404,42 @@ describe('inspectWorktreeHealth', () => {
       }
     );
     assert.strictEqual(health.ok, true);
+    assert.deepStrictEqual(health.findings, [{ kind: 'orphan', path: '/repo/wt-orphan' }]);
+  });
+
+  test('reports a missing unlocked worktree as an orphan', () => {
+    const health = inspectWorktreeHealth('/repo/main', {}, {
+      execGit: () => ({
+        exitCode: 0,
+        stdout: ['worktree /repo/main', 'HEAD aaa', '', 'worktree /repo/wt-orphan', 'HEAD bbb', ''].join('\n'),
+        stderr: '',
+      }),
+      existsSync: p => p !== '/repo/wt-orphan',
+    });
+    assert.strictEqual(health.ok, true);
+    assert.deepStrictEqual(health.findings, [{ kind: 'orphan', path: '/repo/wt-orphan' }]);
+  });
+
+  test('reports missing locked initializing metadata as recoverable residue', () => {
+    const health = inspectWorktreeHealth('/repo/main', {}, {
+      execGit: () => ({
+        exitCode: 0,
+        stdout: [
+          'worktree /repo/main',
+          'HEAD aaa',
+          '',
+          'worktree /repo/wt-initializing',
+          'HEAD ddd',
+          'locked initializing',
+          '',
+        ].join('\n'),
+        stderr: '',
+      }),
+      existsSync: p => p !== '/repo/wt-initializing',
+    });
+    assert.strictEqual(health.ok, true);
     assert.deepStrictEqual(health.findings, [
-      { kind: 'orphan', path: '/repo/wt-orphan' },
-      { kind: 'stale', path: '/repo/wt-stale', ageMinutes: 120 },
+      { kind: 'locked_initializing_residue', path: '/repo/wt-initializing' },
     ]);
   });
 

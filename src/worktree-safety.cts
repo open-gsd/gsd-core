@@ -54,6 +54,7 @@ interface WorktreeBranchEntry {
 interface WorktreeEntry {
   path: string;
   branch: string | null;
+  lockReason?: string;
 }
 
 function parseWorktreePorcelain(porcelain: string): WorktreeBranchEntry[] {
@@ -74,7 +75,9 @@ function parseWorktreeEntries(porcelain: string): WorktreeEntry[] {
     if (!worktreePath) continue;
     const branchLine = lines.find((l) => l.startsWith('branch refs/heads/'));
     const branch = branchLine ? branchLine.slice('branch refs/heads/'.length).trim() : null;
-    entries.push({ path: worktreePath, branch });
+    const lockedLine = lines.find((l) => l.startsWith('locked'));
+    const lockReason = lockedLine ? lockedLine.slice('locked'.length).trim() : '';
+    entries.push(lockReason ? { path: worktreePath, branch, lockReason } : { path: worktreePath, branch });
   }
   return entries;
 }
@@ -299,9 +302,8 @@ function listLinkedWorktreePaths(repoRoot: string, deps: WorktreeDeps = {}): Lin
 }
 
 interface WorktreeFinding {
-  kind: 'orphan' | 'stale';
+  kind: 'orphan' | 'locked_initializing_residue';
   path: string;
-  ageMinutes?: number;
 }
 
 interface HealthResult {
@@ -324,18 +326,13 @@ function inspectWorktreeHealth(repoRoot: string, options: { staleAfterMs?: numbe
   for (const entry of inventory.entries) {
     if (!entry.exists) {
       findings.push({
-        kind: 'orphan',
+        kind: entry.lockReason === 'initializing' ? 'locked_initializing_residue' : 'orphan',
         path: entry.path,
       });
       continue;
     }
-    if (entry.isStale) {
-      findings.push({
-        kind: 'stale',
-        path: entry.path,
-        ageMinutes: entry.ageMinutes ?? undefined,
-      });
-    }
+    // Git has registered this existing worktree. Its directory mtime is not a
+    // liveness signal: an idle but valid worktree can be older than an hour.
   }
 
   return {
@@ -350,6 +347,7 @@ interface InventoryEntry {
   exists: boolean;
   isStale: boolean;
   ageMinutes: number | null;
+  lockReason?: string;
 }
 
 interface InventoryResult {
@@ -363,7 +361,7 @@ function snapshotWorktreeInventory(repoRoot: string, options: { staleAfterMs?: n
   const statSync = deps.statSync || fs.statSync;
   const staleAfterMs = options.staleAfterMs ?? (60 * 60 * 1000);
   const nowMs = options.nowMs ?? Date.now();
-  const listed = listLinkedWorktreePaths(repoRoot, { execGit: deps.execGit || execGitDefault });
+  const listed = readWorktreeList(repoRoot, { execGit: deps.execGit || execGitDefault });
   if (!listed.ok) {
     return {
       ok: false,
@@ -373,18 +371,22 @@ function snapshotWorktreeInventory(repoRoot: string, options: { staleAfterMs?: n
   }
 
   const entries: InventoryEntry[] = [];
-  for (const worktreePath of listed.paths) {
+  // git worktree list always reports the primary worktree first.
+  for (const worktree of listed.entries.slice(1)) {
+    const worktreePath = worktree.path;
     let exists = false;
     let isStale = false;
     let ageMinutes: number | null = null;
 
     if (!existsSync(worktreePath)) {
-      entries.push({
+      const entry: InventoryEntry = {
         path: worktreePath,
         exists,
         isStale,
         ageMinutes,
-      });
+      };
+      if (worktree.lockReason) entry.lockReason = worktree.lockReason;
+      entries.push(entry);
       continue;
     }
 
@@ -399,12 +401,14 @@ function snapshotWorktreeInventory(repoRoot: string, options: { staleAfterMs?: n
     } catch {
       // Keep historical behavior: stat failures are ignored.
     }
-    entries.push({
+    const entry: InventoryEntry = {
       path: worktreePath,
       exists,
       isStale,
       ageMinutes,
-    });
+    };
+    if (worktree.lockReason) entry.lockReason = worktree.lockReason;
+    entries.push(entry);
   }
 
   return {
