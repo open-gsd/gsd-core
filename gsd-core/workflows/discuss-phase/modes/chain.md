@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 # --chain mode — interactive discuss, then auto-advance
 
 > **Lazy-loaded.** Read this file from `workflows/discuss-phase.md` when

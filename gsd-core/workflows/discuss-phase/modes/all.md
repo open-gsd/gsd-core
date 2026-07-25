@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 # --all mode — auto-select ALL gray areas, discuss interactively
 
 > **Lazy-loaded.** Read this file from `workflows/discuss-phase.md` when

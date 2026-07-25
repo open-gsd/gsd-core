@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 # --batch mode — grouped question batches
 
 > **Lazy-loaded overlay.** Read this file from `workflows/discuss-phase.md`

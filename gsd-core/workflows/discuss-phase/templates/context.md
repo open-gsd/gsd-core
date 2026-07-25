@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 # CONTEXT.md template — for discuss-phase write_context step
 
 > **Lazy-loaded.** Read this file only inside the `write_context` step of

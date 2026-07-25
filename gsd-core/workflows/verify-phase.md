@@ -1,5 +1,7 @@
 @~/.claude/gsd-core/references/response-language-directive.md
 
+Executed by a verification subagent spawned from execute-phase.md.
+
 <purpose>
 Verify phase goal achievement through goal-backward analysis. Check that the codebase delivers what the phase promised, not just that tasks completed.
 
@@ -263,9 +265,7 @@ Static checks (grep, file existence, wiring) catch structural gaps but miss runt
 failures. This step runs actual tests and project commands to verify the phase goal
 is behaviorally achieved.
 
-This follows Anthropic's harness engineering principle: separating generation from
-evaluation, with the evaluator interacting with the running system rather than
-inspecting static artifacts.
+Evaluate runtime behavior beyond static artifacts.
 
 **Step 1: Run test suite**
 

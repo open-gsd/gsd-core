@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 <purpose>
 One-liner refresher for returning users. Output ONLY the `<reference>` content below. No additions.
 </purpose>

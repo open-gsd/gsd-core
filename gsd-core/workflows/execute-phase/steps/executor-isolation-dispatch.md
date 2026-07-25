@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 # Executor isolation dispatch (ADR-1239 / #2584 Phase 3)
 
 Read and follow this fragment from `execute-phase.md` step 3 when dispatching a wave.

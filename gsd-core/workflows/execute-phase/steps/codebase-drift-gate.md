@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 # Step: codebase_drift_gate
 
 Post-execution structural drift detection (#2003). Runs after the last wave
