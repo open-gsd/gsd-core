@@ -259,10 +259,12 @@ describe('commit --files: pathspec honors declared scope (#2112)', () => {
 });
 
 describe('workflow call sites declare --files (#2269)', () => {
-  // Anchoring the command at line start keeps prose mentions (mid-sentence
-  // backtick references in plan-phase.md, quick.md, etc.) out of scope while
-  // covering all three invocation forms in use: gsd_run, gsd-tools,
-  // gsd-tools.cjs.
+  // The scan runs two tiers. Tier 1 anchors the command at line start, which
+  // keeps bare prose mentions (mid-sentence backtick references in
+  // plan-phase.md, quick.md, etc.) out of scope while covering all three
+  // invocation forms in use: gsd_run, gsd-tools, gsd-tools.cjs. Tier 2
+  // (MIDLINE_INVOCATION_RE below) catches argument-bearing invocations
+  // embedded mid-sentence, which tier 1 is structurally blind to.
   //
   // `query` is OPTIONAL. gsd-tools.cjs treats it as a meta-prefix and shifts
   // it off (bin/gsd-tools.cjs, "Accept `query` as a meta-prefix"), so
@@ -289,6 +291,34 @@ describe('workflow call sites declare --files (#2269)', () => {
       if (quotesBefore % 2 === 0) return true; // outside double quotes
     }
     return false;
+  };
+
+  // Mid-prose argument-bearing invocations: the line-start anchor above
+  // deliberately keeps bare backtick mentions ("the `gsd_run query commit`
+  // step") out of scope, but a fully argument-bearing invocation embedded
+  // mid-sentence is executable instruction, not prose — new-milestone.md,
+  // new-project.md, and plan-phase.md each carry one live. The discriminator
+  // is the quoted commit message: `commit "` right after the command token is
+  // the executable shape; a bare mention never carries it.
+  const MIDLINE_INVOCATION_RE = /\bgsd(_run|-tools(\.cjs)?)\b[^`]*?\b(query\s+)?commit\s+"/g;
+
+  // Candidate invocation substrings for one logical line. A line-start
+  // invocation stays a whole-line candidate (the original scan semantics);
+  // otherwise every mid-line executable invocation yields the substring from
+  // its token to the end of its enclosing backtick span (or line end), so
+  // hasScopedFiles's quote-parity walk sees the invocation itself and not
+  // surrounding prose quotes.
+  const invocationCandidates = (line) => {
+    if (INVOCATION_RE.test(line)) return [line];
+    const candidates = [];
+    const re = new RegExp(MIDLINE_INVOCATION_RE.source, 'g');
+    let m;
+    while ((m = re.exec(line)) !== null) {
+      const rest = line.slice(m.index);
+      const tick = rest.indexOf('`');
+      candidates.push(tick === -1 ? rest : rest.slice(0, tick));
+    }
+    return candidates;
   };
 
   test('scanner quote-parity handles synthetic edge-case lines', () => {
@@ -364,6 +394,61 @@ describe('workflow call sites declare --files (#2269)', () => {
       INVOCATION_RE.test('gsd_run query config-new-project \'{"commit_docs":true}\''),
       false,
       'a config payload mentioning commit_docs is not a commit invocation',
+    );
+  });
+
+  test('mid-prose argument-bearing invocations enter the candidate set', () => {
+    // Literal shapes of the three live sites the anchored tier is blind to:
+    // new-milestone.md / new-project.md (identical instruction) and
+    // plan-phase.md. All three are scoped today — the point is that they are
+    // SCANNED, so trimming their --files clause fails the sweep instead of
+    // silently reintroducing #2269.
+    const live = [
+      'then commit ALL research artifacts the synthesizer owns with `gsd-tools query commit "docs: complete project research" --files .planning/research/` unless they are already committed.',
+      '6. Commit with `gsd-tools.cjs query commit "docs(${padded_phase}): generate context from ADR ingest" --files "${phase_dir}/${padded_phase}-CONTEXT.md"` and set `context_content`; continue to step 5.',
+    ];
+    for (const line of live) {
+      const cands = invocationCandidates(line);
+      assert.strictEqual(cands.length, 1, `must yield one candidate: ${line}`);
+      assert.ok(hasScopedFiles(cands[0]), `live site is scoped today: ${line}`);
+    }
+
+    // Trimming the --files clause off the embedded invocation must surface
+    // it as unscoped — the regression class the anchored tier cannot see.
+    const trimmed =
+      'then commit the artifacts with `gsd-tools query commit "docs: complete project research"` unless already committed.';
+    const trimmedCands = invocationCandidates(trimmed);
+    assert.strictEqual(trimmedCands.length, 1, 'trimmed invocation must stay in the candidate set');
+    assert.strictEqual(
+      hasScopedFiles(trimmedCands[0]), false,
+      'trimmed invocation must be flagged as unscoped',
+    );
+
+    // Bare mentions stay out of scope: no quoted message, not an executable
+    // shape — the anchored tier's deliberate exclusion survives the widening.
+    assert.deepEqual(
+      invocationCandidates('the `gsd_run query commit` step then records the artifact'),
+      [],
+      'a bare prose mention must yield no candidates',
+    );
+
+    // Prose quotes BEFORE the invocation must not blind the parity walk —
+    // the candidate substring starts at the invocation token, not column 0.
+    const quotedProse =
+      'the "research summary" is committed via `gsd_run query commit "docs: x" --files .planning/S.md` at the end.';
+    const quotedCands = invocationCandidates(quotedProse);
+    assert.strictEqual(quotedCands.length, 1);
+    assert.ok(
+      hasScopedFiles(quotedCands[0]),
+      'scoped mid-line invocation must not be false-flagged by prose quotes before it',
+    );
+
+    // The config-payload negative from the anchored tier holds mid-line too:
+    // commit_docs is a JSON key, not a commit invocation.
+    assert.deepEqual(
+      invocationCandidates('set via `gsd_run query config-new-project \'{"commit_docs":true}\'` in step 2'),
+      [],
+      'a config payload mentioning commit_docs must yield no candidates',
     );
   });
 
@@ -444,8 +529,10 @@ describe('workflow call sites declare --files (#2269)', () => {
         // false-flag them.
         const logical = raw.replace(/\\\r?\n/g, ' ');
         for (const line of logical.split(/\r?\n/)) {
-          if (INVOCATION_RE.test(line) && !hasScopedFiles(line)) {
-            offenders.push(`${root}/${file}: ${line.trim()}`);
+          for (const inv of invocationCandidates(line)) {
+            if (!hasScopedFiles(inv)) {
+              offenders.push(`${root}/${file}: ${inv.trim()}`);
+            }
           }
         }
       }
