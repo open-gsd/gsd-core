@@ -1,4 +1,4 @@
-@~/.claude/gsd-core/references/response-language-directive.md
+Apply response_language to all user-facing prose; preserve code, paths, and identifiers.
 
 # Advisor mode — research-backed comparison tables
 

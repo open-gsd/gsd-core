@@ -1,4 +1,4 @@
-@~/.claude/gsd-core/references/response-language-directive.md
+Apply response_language to all user-facing prose; preserve code, paths, and identifiers.
 
 # DISCUSSION-LOG.md template — for discuss-phase git_commit step
 

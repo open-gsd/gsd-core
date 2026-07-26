@@ -1,4 +1,4 @@
-@~/.claude/gsd-core/references/response-language-directive.md
+Apply response_language to all user-facing prose; preserve code, paths, and identifiers.
 
 # Executor isolation dispatch (ADR-1239 / #2584 Phase 3)
 
@@ -159,4 +159,3 @@ The executor never touches `STATE.md`/`ROADMAP.md`, and that guard needs no new 
 Merge-back, validation, and cleanup are the **existing** gauntlet, unchanged: the serialized `worktree.cleanup-wave` merge loop that stops the wave and retains the worktree on conflict, and manifest-only cleanup (never glob-inferred). Because the manifest shape is identical, the orchestrator path reuses it verbatim.
 
 > **Declared-scope conformance (#2596):** ADR-1239 specifies that *both* isolation adapters route their merge through a check that each plan branch's committed diff stayed inside its declared `files_modified` scope. That check does not exist yet for either adapter (it is tracked as #2596). When it lands it must be wired into this path **and** the harness path together.
-

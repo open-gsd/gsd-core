@@ -13,10 +13,8 @@
  *     that already carried one before #2529, plus workflow-specific extracts
  *     like `references/execute-phase-response-language.md`).
  *
- * The check is intentionally a substring test, mirroring the shape of the
- * failure it guards against: the historical gap was files with ZERO mention
- * of `response_language` at all (44 of 91 at the time of #2529) — those ran
- * fully in English regardless of configuration.
+ * A bare config-field mention is not coverage: the same line must direct how
+ * user-facing output is rendered, or the workflow must load a known directive.
  *
  * Exit 0 if every workflow is covered; exit 1 with a per-file listing if not.
  */
@@ -28,7 +26,21 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const WORKFLOWS_DIR = path.join(ROOT, 'gsd-core', 'workflows');
-const SHARED_REF = 'references/response-language-directive.md';
+const DIRECTIVE_REFS = [
+  'references/response-language-directive.md',
+  'references/execute-phase-response-language.md',
+];
+// verify-phase.md is not entered directly: execute-phase.md injects the exact
+// response-language contract into the gsd-verifier dispatch prompt. Pin both
+// ends so deleting or weakening that dispatch makes the lint fail closed.
+const PARENT_INJECTED_WORKFLOWS = new Map([
+  ['verify-phase.md', {
+    parent: 'execute-phase.md',
+    directive: 'Use response_language {response_language} for all user-facing prose; preserve code and paths.',
+  }],
+]);
+const DIRECTIVE_ACTION_RE = /\b(?:apply|present|render|respond|translate|use|write|must|should)\b/i;
+const USER_OUTPUT_RE = /\b(?:explanations?|language|narration|output|prompts?|prose|questions?|templates?|user-facing)\b/i;
 
 function findMarkdownFilesRecursive(dir) {
   const files = [];
@@ -40,31 +52,55 @@ function findMarkdownFilesRecursive(dir) {
   return files.sort();
 }
 
+function hasResponseLanguageCoverage(content) {
+  if (DIRECTIVE_REFS.some((ref) => content.includes(ref))) return true;
+
+  return content.split(/\r?\n/).some((line) =>
+    /\bresponse_language\b/i.test(line) &&
+    DIRECTIVE_ACTION_RE.test(line) &&
+    USER_OUTPUT_RE.test(line)
+  );
+}
+
 function findViolations(workflowsDir) {
   return findMarkdownFilesRecursive(workflowsDir).filter((file) => {
+    const relative = path.relative(workflowsDir, file).replaceAll(path.sep, '/');
+    const injection = PARENT_INJECTED_WORKFLOWS.get(relative);
+    if (injection) {
+      const parentPath = path.join(workflowsDir, injection.parent);
+      if (
+        fs.existsSync(parentPath) &&
+        fs.readFileSync(parentPath, 'utf8').includes(injection.directive)
+      ) return false;
+    }
     const content = fs.readFileSync(file, 'utf8');
-    return !content.includes(SHARED_REF) && !content.includes('response_language');
+    return !hasResponseLanguageCoverage(content);
   });
 }
 
-function main() {
-  const files = findMarkdownFilesRecursive(WORKFLOWS_DIR);
-  const violations = findViolations(WORKFLOWS_DIR);
+function main(workflowsDir = WORKFLOWS_DIR, io = console) {
+  const files = findMarkdownFilesRecursive(workflowsDir);
+  const violations = findViolations(workflowsDir);
 
   if (violations.length > 0) {
-    console.error(
+    io.error(
       `lint-response-language-coverage: ${violations.length} workflow(s) have no response-language coverage (#2529).\n` +
-      `Each workflow must either @-reference the shared directive (@~/.claude/gsd-core/${SHARED_REF})\n` +
-      `or carry its own inline \`response_language\` directive:\n\n` +
-      violations.map((file) => `  - gsd-core/workflows/${path.relative(WORKFLOWS_DIR, file).replaceAll(path.sep, '/')}`).join('\n'),
+      `Each workflow must either @-reference a recognized response-language directive\n` +
+      `or carry its own inline \`response_language\` directive (unless its parent injects one):\n\n` +
+      violations.map((file) => `  - ${path.relative(workflowsDir, file).replaceAll(path.sep, '/')}`).join('\n'),
     );
-    process.exitCode = 1;
-    return;
+    return 1;
   }
 
-  console.log(`lint-response-language-coverage: OK (${files.length} workflows covered)`);
+  io.log(`lint-response-language-coverage: OK (${files.length} workflows covered)`);
+  return 0;
 }
 
-if (require.main === module) main();
+if (require.main === module) process.exitCode = main();
 
-module.exports = { findMarkdownFilesRecursive, findViolations };
+module.exports = {
+  findMarkdownFilesRecursive,
+  findViolations,
+  hasResponseLanguageCoverage,
+  main,
+};

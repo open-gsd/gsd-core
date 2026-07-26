@@ -1,4 +1,4 @@
-@~/.claude/gsd-core/references/response-language-directive.md
+Apply response_language to all user-facing prose; preserve code, paths, and identifiers.
 
 # --analyze mode — trade-off tables before each question
 
