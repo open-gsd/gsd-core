@@ -1,6 +1,3 @@
-// allow-test-rule: source-text-is-the-product (see #2269) — the conformance
-// scan below reads gsd-core/workflows/*.md and regex-matches invocation lines;
-// the workflow source text IS the product under test.
 /**
  * Regression test for #2112: gsd-tools commit --files commits the entire
  * index, not the declared paths.
