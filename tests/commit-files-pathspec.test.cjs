@@ -283,8 +283,18 @@ describe('workflow call sites declare --files (#2269)', () => {
   // --files must be a real argument OUTSIDE the quoted commit message (a
   // message like "docs: explain --files usage" must not count), and must
   // carry a value — a trailing bare flag still selects the unscoped default.
+  //
+  // "A value" means what the RUNTIME means by it, not merely "a non-space
+  // character". routeCommit (gsd-core/bin/gsd-tools.cjs) collects the scope as
+  //   args.slice(filesIndex + 1).filter(a => !a.startsWith('--'))
+  // so every `--`-prefixed token after --files is discarded. `--files --amend`
+  // therefore yields files=[] and lands on the SAME unscoped default branch as
+  // a trailing bare --files — the #2269 defect verbatim. A `\S` test scores it
+  // scoped (`-` is \S), so the lookahead below mirrors the runtime's own
+  // predicate. Single-dash tokens are deliberately still values: the runtime
+  // filters on '--', so `--files -weird.md` really is scoped.
   const hasScopedFiles = (line) => {
-    const re = /--files\s+\S/g;
+    const re = /--files\s+(?!--)\S/g;
     let m;
     while ((m = re.exec(line)) !== null) {
       const quotesBefore = line.slice(0, m.index).split('"').length - 1;
@@ -332,6 +342,16 @@ describe('workflow call sites declare --files (#2269)', () => {
       // A trailing bare flag carries no value and still selects the
       // unscoped default path.
       'gsd_run query commit "docs: plan" --files',
+      // --files followed by ANOTHER FLAG is the same unscoped default, because
+      // routeCommit filters `--`-prefixed tokens out of the scope list:
+      // args.slice(filesIndex + 1).filter(a => !a.startsWith('--')) === [].
+      // Two live sites are one token-deletion from this shape —
+      // gsd-core/references/git-planning-commit.md and
+      // gsd-core/workflows/execute-plan.md both run
+      // `... commit "" --files .planning/codebase/*.md --amend`, so dropping
+      // the glob (exactly the #2269 forgot-the-scope class) lands here.
+      'gsd_run query commit "docs: plan" --files --amend',
+      'gsd_run query commit "docs: plan" --files --no-verify',
     ];
     for (const line of bare) {
       assert.ok(INVOCATION_RE.test(line), `should match invocation: ${line}`);
@@ -348,6 +368,14 @@ describe('workflow call sites declare --files (#2269)', () => {
       // scanner to the genuine scope that follows (quote parity is even
       // again after the closing quote).
       'gsd_run query commit "docs: explain --files usage" --files .planning/PLAN.md',
+      // The negative control for the two --amend rows above: a real value
+      // FOLLOWED by a flag is still scoped, and both live sites have this
+      // shape today. Without this row the fix could over-correct to "any
+      // --files near a flag is unscoped" and nothing would fail.
+      'gsd_run query commit "" --files .planning/codebase/*.md --amend',
+      // The runtime filters on '--', not '-', so a single-dash token IS a
+      // value and the scanner must agree.
+      'gsd_run query commit "docs: plan" --files -weird-name.md',
     ];
     for (const line of scoped) {
       assert.ok(INVOCATION_RE.test(line), `should match invocation: ${line}`);
@@ -462,9 +490,21 @@ describe('workflow call sites declare --files (#2269)', () => {
     // message would flip parity, which is a shell-quoting bug in the workflow
     // line, not a scanner bug, and is out of this property's domain.
     const msg = fc.string({ maxLength: 60 }).filter((s) => !s.includes('"'));
+    // A path a shell would pass through as a VALUE. The `--` exclusion is not
+    // cosmetic: routeCommit drops every `--`-prefixed token after --files, so
+    // such a token is not a path at all and the invocation is unscoped — which
+    // is the flagUnscoped property below, not this one. Without the exclusion
+    // this generator reaches that input space roughly once per 7,700 draws
+    // (measured: 26 hits in 200,000), i.e. ~1 CI run in 77 at fast-check's
+    // default 100 runs — a property that fails rarely and looks like a flake.
     const arg = fc
       .string({ minLength: 1, maxLength: 30 })
-      .filter((s) => !/["\s]/.test(s));
+      .filter((s) => !/["\s]/.test(s) && !s.startsWith('--'));
+    // The complement: a `--`-prefixed token, which the runtime discards.
+    const flagArg = fc
+      .string({ minLength: 1, maxLength: 20 })
+      .filter((s) => !/["\s]/.test(s))
+      .map((s) => `--${s}`);
 
     test('a --files mentioned only inside the quoted message is never a scope', () => {
       fc.assert(
@@ -485,6 +525,22 @@ describe('workflow call sites declare --files (#2269)', () => {
           assert.strictEqual(
             hasScopedFiles(line), true,
             `unquoted --files must count as scope: ${line}`,
+          );
+        }),
+      );
+    });
+
+    test('a --files whose next token is a flag is never a scope', () => {
+      // The scanner must agree with routeCommit for EVERY flag spelling, not
+      // just the --amend instance found in review: args.slice(i+1).filter(a =>
+      // !a.startsWith('--')) discards them all, leaving files=[] and the
+      // unscoped default. This is the property the old `\S` predicate failed.
+      fc.assert(
+        fc.property(msg, flagArg, (message, flag) => {
+          const line = `gsd_run query commit "${message}" --files ${flag}`;
+          assert.strictEqual(
+            hasScopedFiles(line), false,
+            `--files followed by a flag must not count as scope: ${line}`,
           );
         }),
       );
@@ -578,9 +634,19 @@ describe('workflow call sites declare --files (#2269)', () => {
         'secure-phase.md step 7 commit invocation not found — did the workflow drop or rename its SECURITY.md commit?',
       );
       const filesArg = /--files\s+"([^"]+)"/.exec(commitLine);
+      // Two different failures, two different messages. This test derives the
+      // scope from the workflow's own quoted --files value, so an UNQUOTED
+      // value breaks the derivation without being the #2269 regression — and
+      // reporting it as "no longer declares --files" sends the reader to look
+      // for a missing flag that is right there.
+      assert.ok(
+        /--files\s+(?!--)\S/.test(commitLine),
+        'secure-phase.md step 7 no longer declares --files — the #2269 regression this test guards:\n' + commitLine,
+      );
       assert.ok(
         filesArg,
-        'secure-phase.md step 7 no longer declares --files — the #2269 regression this test guards:\n' + commitLine,
+        'secure-phase.md step 7 declares --files with an UNQUOTED value; this test derives its scope '
+          + 'from the quoted form. Not a #2269 regression — update the derivation below:\n' + commitLine,
       );
       // Instantiate the workflow line's shell variables with concrete values.
       const artifact = filesArg[1]
