@@ -312,14 +312,33 @@ describe('workflow call sites declare --files (#2269)', () => {
   // the executable shape; a bare mention never carries it.
   const MIDLINE_INVOCATION_RE = /\bgsd(_run|-tools(\.cjs)?)\b[^`]*?\b(query\s+)?commit\s+"/g;
 
+  // A line-start invocation is split at shell command separators before it is
+  // scored, so a later invocation's --files cannot vouch for an earlier
+  // unscoped one on the same line:
+  //   gsd_run query commit "a" && gsd_run query commit "b" --files x.md
+  //   gsd_run query commit "a" ;  gsd-tools query phase-list --files y.md
+  // Whole-line scoring accepts both (one match anywhere satisfies the line) —
+  // the same "one hit vouches for the whole candidate" shape as the --files
+  // value bug above. The separator must be followed by a binary token, so a
+  // binary inside a command substitution — `commit "$(gsd-tools query x)"
+  // --files y.md` — is NOT a new invocation and does not split.
+  const INVOCATION_SEPARATOR_RE = /(?:&&|\|\||[;|])\s*(?=gsd(?:_run|-tools(?:\.cjs)?)\b)/;
+  const COMMIT_INVOCATION_RE = /\bgsd(_run|-tools(\.cjs)?)\b.*\b(query\s+)?commit\b/;
+
   // Candidate invocation substrings for one logical line. A line-start
-  // invocation stays a whole-line candidate (the original scan semantics);
-  // otherwise every mid-line executable invocation yields the substring from
-  // its token to the end of its enclosing backtick span (or line end), so
-  // hasScopedFiles's quote-parity walk sees the invocation itself and not
-  // surrounding prose quotes.
+  // invocation yields one candidate per separator-delimited invocation (the
+  // original whole-line semantics when there is only one); otherwise every
+  // mid-line executable invocation yields the substring from its token to the
+  // end of its enclosing backtick span (or line end), so hasScopedFiles's
+  // quote-parity walk sees the invocation itself and not surrounding prose
+  // quotes.
   const invocationCandidates = (line) => {
-    if (INVOCATION_RE.test(line)) return [line];
+    if (INVOCATION_RE.test(line)) {
+      const parts = line.split(INVOCATION_SEPARATOR_RE);
+      if (parts.length === 1) return [line];
+      const segments = parts.filter((p) => COMMIT_INVOCATION_RE.test(p));
+      return segments.length ? segments : [line];
+    }
     const candidates = [];
     const re = new RegExp(MIDLINE_INVOCATION_RE.source, 'g');
     let m;
@@ -423,6 +442,42 @@ describe('workflow call sites declare --files (#2269)', () => {
       false,
       'a config payload mentioning commit_docs is not a commit invocation',
     );
+  });
+
+  test('a later --files on the same line cannot vouch for an earlier invocation', () => {
+    // Whole-line scoring is satisfied by ONE match anywhere on the line, so a
+    // second, scoped invocation masked an earlier unscoped one. No live line
+    // has this shape today; it is the same "one hit vouches for the whole
+    // candidate" class as the --files-value bug, so it is pinned rather than
+    // left to be rediscovered.
+    const masked = [
+      'gsd_run query commit "a" && gsd_run query commit "b" --files x.md',
+      'gsd_run query commit "a" ; gsd-tools query phase-list --files y.md',
+    ];
+    for (const line of masked) {
+      const cands = invocationCandidates(line);
+      assert.ok(
+        cands.some((c) => !hasScopedFiles(c)),
+        `the unscoped invocation must surface as its own candidate: ${line}`,
+      );
+    }
+
+    // Both invocations scoped => nothing to flag.
+    assert.strictEqual(
+      invocationCandidates('gsd_run query commit "a" --files a.md && gsd_run query commit "b" --files x.md')
+        .every((c) => hasScopedFiles(c)),
+      true,
+      'two scoped invocations on one line must both read as scoped',
+    );
+
+    // A binary inside a command substitution is NOT a second invocation: the
+    // separator requirement is what keeps this from becoming a false offender.
+    const substitution = 'gsd_run query commit "$(gsd-tools query phase-list)" --files a.md';
+    assert.deepEqual(
+      invocationCandidates(substitution), [substitution],
+      'a command substitution must not split the invocation',
+    );
+    assert.ok(hasScopedFiles(invocationCandidates(substitution)[0]));
   });
 
   test('mid-prose argument-bearing invocations enter the candidate set', () => {
