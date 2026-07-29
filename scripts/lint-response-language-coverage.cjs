@@ -30,6 +30,38 @@ const DIRECTIVE_REFS = [
   'references/response-language-directive.md',
   'references/execute-phase-response-language.md',
 ];
+const INLINE_RESPONSE_LANGUAGE_DIRECTIVE =
+  'Apply response_language to all user-facing prose; preserve code, paths, and identifiers.';
+// These lazy-loaded modes/steps/templates cannot rely on an eager @-reference.
+// Pin their shared wording (plus settings-advanced's former bare field mention)
+// so a partial typo or rewording cannot silently split the contract.
+const EXACT_INLINE_DIRECTIVE_WORKFLOWS = new Set([
+  'discuss-phase/modes/advisor.md',
+  'discuss-phase/modes/all.md',
+  'discuss-phase/modes/analyze.md',
+  'discuss-phase/modes/auto.md',
+  'discuss-phase/modes/batch.md',
+  'discuss-phase/modes/chain.md',
+  'discuss-phase/modes/default.md',
+  'discuss-phase/modes/power.md',
+  'discuss-phase/modes/text.md',
+  'discuss-phase/templates/context.md',
+  'discuss-phase/templates/discussion-log.md',
+  'execute-phase/steps/codebase-drift-gate.md',
+  'execute-phase/steps/executor-isolation-dispatch.md',
+  'execute-phase/steps/per-plan-worktree-gate.md',
+  'execute-phase/steps/post-merge-gate.md',
+  'execute-phase/steps/regression-gate.md',
+  'execute-phase/steps/worktree-recovery-policy.md',
+  'help/modes/brief.md',
+  'help/modes/default.md',
+  'help/modes/full.md',
+  'help/modes/topic.md',
+  'plan-phase/steps/closed-phase-gate.md',
+  'plan-phase/steps/prd-express-path.md',
+  'plan-phase/steps/windows-troubleshooting.md',
+  'settings-advanced.md',
+]);
 // verify-phase.md is not entered directly: execute-phase.md injects the exact
 // response-language contract into the gsd-verifier dispatch prompt. Pin both
 // ends so deleting or weakening that dispatch makes the lint fail closed.
@@ -65,6 +97,10 @@ function hasResponseLanguageCoverage(content) {
 function findViolations(workflowsDir) {
   return findMarkdownFilesRecursive(workflowsDir).filter((file) => {
     const relative = path.relative(workflowsDir, file).replaceAll(path.sep, '/');
+    const content = fs.readFileSync(file, 'utf8');
+    if (EXACT_INLINE_DIRECTIVE_WORKFLOWS.has(relative)) {
+      return !content.split(/\r?\n/).includes(INLINE_RESPONSE_LANGUAGE_DIRECTIVE);
+    }
     const injection = PARENT_INJECTED_WORKFLOWS.get(relative);
     if (injection) {
       const parentPath = path.join(workflowsDir, injection.parent);
@@ -73,7 +109,6 @@ function findViolations(workflowsDir) {
         fs.readFileSync(parentPath, 'utf8').includes(injection.directive)
       ) return false;
     }
-    const content = fs.readFileSync(file, 'utf8');
     return !hasResponseLanguageCoverage(content);
   });
 }
@@ -99,6 +134,8 @@ function main(workflowsDir = WORKFLOWS_DIR, io = console) {
 if (require.main === module) process.exitCode = main();
 
 module.exports = {
+  EXACT_INLINE_DIRECTIVE_WORKFLOWS,
+  INLINE_RESPONSE_LANGUAGE_DIRECTIVE,
   findMarkdownFilesRecursive,
   findViolations,
   hasResponseLanguageCoverage,

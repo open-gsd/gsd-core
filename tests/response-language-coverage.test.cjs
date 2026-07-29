@@ -8,6 +8,8 @@ const path = require('node:path');
 const { cleanup } = require('./helpers.cjs');
 
 const {
+  EXACT_INLINE_DIRECTIVE_WORKFLOWS,
+  INLINE_RESPONSE_LANGUAGE_DIRECTIVE,
   findMarkdownFilesRecursive,
   findViolations,
   hasResponseLanguageCoverage,
@@ -86,6 +88,26 @@ describe('response-language workflow coverage lint (#2529)', () => {
       findViolations(root).map((file) => path.basename(file)),
       ['execute-phase.md', 'ordinary.md', 'verify-phase.md'],
     );
+  });
+
+  test('pins every shared inline directive site to one exact canonical line', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-response-language-parity-'));
+    tempDirs.push(root);
+    for (const relative of EXACT_INLINE_DIRECTIVE_WORKFLOWS) {
+      const file = path.join(root, relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, `${INLINE_RESPONSE_LANGUAGE_DIRECTIVE}\n`);
+    }
+
+    assert.strictEqual(EXACT_INLINE_DIRECTIVE_WORKFLOWS.size, 25);
+    assert.deepStrictEqual(findViolations(root), []);
+
+    const drifted = path.join(root, 'discuss-phase', 'modes', 'advisor.md');
+    fs.writeFileSync(
+      drifted,
+      'Apply response_language to all user-facing prose; preserve code and paths.\n',
+    );
+    assert.deepStrictEqual(findViolations(root), [drifted]);
   });
 
   test('rejects a bare config mention and accepts an actionable inline directive', () => {
