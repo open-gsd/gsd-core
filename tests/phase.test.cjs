@@ -7542,6 +7542,274 @@ describe('bug #3537: phase verbs accept padded ids against un-padded ROADMAP pro
 
 
 // ────────────────────────────────────────────────────────────────────────
+// Regression: bug #2853 — roadmap.update-plan-progress deletes hand-written
+// annotations after the plan count. The count-bump regex's trailing `[^\n]+`
+// swallowed the whole line and the replacement wrote back only the regenerated
+// count, truncating any human prose after it.
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2853-plan-progress-annotation-preservation", () => {
+'use strict';
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const { execFileSync } = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
+
+const gsdTools2853 = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+
+function run2853(args, cwd) {
+  try {
+    return {
+      stdout: execFileSync('node', [gsdTools2853, ...args], {
+        cwd, timeout: 15000, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
+      }),
+      ok: true,
+    };
+  } catch (e) {
+    return {
+      stdout: (e.stdout && e.stdout.toString()) || '',
+      stderr: (e.stderr && e.stderr.toString()) || '',
+      ok: false, code: e.status,
+    };
+  }
+}
+
+/**
+ * Build a phase-10 fixture with one plan + matching summary + verification
+ * `passed`, so the phase is "complete" for update-plan-progress. The ROADMAP
+ * `Plans` summary line is supplied verbatim so each test pins a specific shape.
+ */
+function setupFixture2853(tmpDir, plansSummaryLine, opts = {}) {
+  const { incomplete = false, eol = '\n' } = opts;
+  const planningDir = path.join(tmpDir, '.planning');
+  const phaseDir = path.join(planningDir, 'phases', 'CK-10-test-phase');
+  fs.mkdirSync(phaseDir, { recursive: true });
+
+  fs.writeFileSync(path.join(planningDir, 'config.json'), JSON.stringify({ project_code: 'CK' }));
+  fs.writeFileSync(
+    path.join(planningDir, 'STATE.md'),
+    `---\ncurrent_phase: 10\nstatus: executing\n---\n# State\n`
+  );
+
+  fs.writeFileSync(
+    path.join(phaseDir, '10-01-PLAN.md'),
+    `---\nphase: 10\nplan: 1\nwave: 1\n---\n# Plan 1\n`
+  );
+  fs.writeFileSync(
+    path.join(phaseDir, '10-01-SUMMARY.md'),
+    '---\nstatus: complete\n---\n# Summary\nDone.\n'
+  );
+  fs.writeFileSync(
+    path.join(phaseDir, '10-VERIFICATION.md'),
+    incomplete
+      ? '---\nstatus: pending\n---\n# Verification\nPending.\n'
+      : '---\nstatus: passed\nscore: "1/1"\n---\n# Verification\nPassed.\n'
+  );
+
+  const roadmap = [
+    '# Roadmap',
+    '',
+    '## v1.0 Milestone',
+    '',
+    '- [ ] **Phase 10: Test Phase**',
+    '',
+    '## Progress',
+    '',
+    '| Phase | Plans | Status | Completed |',
+    '|-------|-------|--------|-----------|',
+    '| 10 Test Phase | 0/1 | Planned | - |',
+    '',
+    '### Phase 10: Test Phase',
+    '',
+    '**Goal:** reproduce',
+    plansSummaryLine,
+    '',
+    'Plans:',
+    '- [ ] 10-01-PLAN.md',
+    '',
+  ].join('\n') + '\n';
+
+  fs.writeFileSync(path.join(planningDir, 'ROADMAP.md'), roadmap.replace(/\n/g, eol));
+
+  return { planningDir, roadmapPath: path.join(planningDir, 'ROADMAP.md') };
+}
+
+describe('bug #2853: update-plan-progress preserves hand-written annotations', () => {
+  test('row 1 — bold colon-outside form: annotation after count survives a complete bump', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2853-r1-'));
+    try {
+      const annotation = '(11-16 are gap closure from VERIFICATION)';
+      const { roadmapPath } = setupFixture2853(
+        tmp,
+        `**Plans**: 0/1 plans executed ${annotation}`
+      );
+      run2853(['roadmap', 'update-plan-progress', '10'], tmp);
+
+      const result = fs.readFileSync(roadmapPath, 'utf-8');
+      const line = result.split(/\r?\n/).find((l) => l.includes('**Plans**'));
+      assert.ok(line, 'Plans summary line must exist');
+      assert.ok(
+        line.includes(annotation),
+        `annotation must survive; got: ${line}`
+      );
+      assert.match(line, /1\/1 plans complete/, 'count must still bump to complete');
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('row 2 — **Plans:** colon-inside-bold form: annotation survives', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2853-r2-'));
+    try {
+      const annotation = '(gap closure wave)';
+      const { roadmapPath } = setupFixture2853(
+        tmp,
+        `**Plans:** 0/1 plans executed ${annotation}`
+      );
+      run2853(['roadmap', 'update-plan-progress', '10'], tmp);
+      const line = fs.readFileSync(roadmapPath, 'utf-8').split(/\r?\n/).find((l) => l.includes('**Plans:**'));
+      assert.ok(line && line.includes(annotation), `annotation must survive; got: ${line}`);
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('row 3 — plain Plans: header form: annotation survives', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2853-r3-'));
+    try {
+      const annotation = '(see verification notes)';
+      const { roadmapPath } = setupFixture2853(tmp, `Plans: 0/1 plans executed ${annotation}`);
+      run2853(['roadmap', 'update-plan-progress', '10'], tmp);
+      const result = fs.readFileSync(roadmapPath, 'utf-8');
+      const line = result.split(/\r?\n/).find((l) => /^Plans:/.test(l));
+      assert.ok(line && line.includes(annotation), `annotation must survive; got: ${line}`);
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('row 4 — no trailing text: count updates with no whitespace regression', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2853-r4-'));
+    try {
+      const { roadmapPath } = setupFixture2853(tmp, '**Plans:** 0/1 plans executed');
+      run2853(['roadmap', 'update-plan-progress', '10'], tmp);
+      const line = fs.readFileSync(roadmapPath, 'utf-8').split(/\r?\n/).find((l) => l.includes('**Plans:**'));
+      assert.ok(line, 'Plans line must exist');
+      // Exact line: count bumped, no stray trailing space or duplicated text.
+      assert.equal(line, '**Plans:** 1/1 plans complete');
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('row 5 — bare template form `N plans` (no slash) still gets count inserted', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2853-r5-'));
+    try {
+      const { roadmapPath } = setupFixture2853(tmp, '**Plans:** 0 plans');
+      run2853(['roadmap', 'update-plan-progress', '10'], tmp);
+      const line = fs.readFileSync(roadmapPath, 'utf-8').split(/\r?\n/).find((l) => l.includes('**Plans:**'));
+      assert.ok(line, 'Plans line must exist');
+      assert.match(line, /1\/1 plans complete/, 'bare form must still receive the canonical count');
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('row 6 — executed (non-complete) path: annotation survives', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2853-r6-'));
+    try {
+      const annotation = '(half-done, gap closure pending)';
+      const { roadmapPath } = setupFixture2853(
+        tmp,
+        `**Plans:** 0/1 plans executed ${annotation}`,
+        { incomplete: true }
+      );
+      run2853(['roadmap', 'update-plan-progress', '10'], tmp);
+      const line = fs.readFileSync(roadmapPath, 'utf-8').split(/\r?\n/).find((l) => l.includes('**Plans:**'));
+      assert.ok(line, 'Plans line must exist');
+      assert.ok(line.includes(annotation), `annotation must survive on executed path; got: ${line}`);
+      assert.match(line, /1\/1 plans executed/, 'count must reflect executed (not complete) path');
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('row 7 — CRLF input: annotation text preserved (line-ending normalization is pre-existing)', () => {
+    // The verb has always normalized ROADMAP.md line endings on its read-modify-write
+    // (a pre-existing trait, not #2853's concern). What #2853 guarantees is that the
+    // annotation TEXT survives the count bump on whatever line ending the verb emits.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2853-r7-'));
+    try {
+      const annotation = '(CRLF note)';
+      const { roadmapPath } = setupFixture2853(
+        tmp,
+        `**Plans:** 0/1 plans executed ${annotation}`,
+        { eol: '\r\n' }
+      );
+      run2853(['roadmap', 'update-plan-progress', '10'], tmp);
+      const result = fs.readFileSync(roadmapPath, 'utf-8');
+      const plansLine = result.split(/\r?\n/).find((l) => l.includes('**Plans:**'));
+      assert.ok(plansLine, 'Plans summary line must exist');
+      assert.ok(
+        plansLine.includes(annotation),
+        `annotation text must survive on a CRLF-origin file; got: ${plansLine}`
+      );
+      assert.match(plansLine, /1\/1 plans complete/, 'count must still bump');
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('row 8 — idempotent re-run does not drop annotation', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2853-r8-'));
+    try {
+      const annotation = '(idempotent check)';
+      const { roadmapPath } = setupFixture2853(
+        tmp,
+        `**Plans:** 0/1 plans executed ${annotation}`
+      );
+      run2853(['roadmap', 'update-plan-progress', '10'], tmp);
+      run2853(['roadmap', 'update-plan-progress', '10'], tmp);
+      const line = fs.readFileSync(roadmapPath, 'utf-8').split(/\r?\n/).find((l) => l.includes('**Plans:**'));
+      assert.ok(line && line.includes(annotation), `annotation must survive a no-op re-run; got: ${line}`);
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('row 9 — fresh-template placeholder is replaced, not glued to the new count', () => {
+    // The canonical template ships `**Plans**: [Number of plans, e.g., "3 plans" or "TBD"]`.
+    // A count bump must NOT preserve that bracketed guidance verbatim glued after the
+    // count (pre-#2853 produced a clean `N/N plans complete`). The count replaces the
+    // placeholder because there is no real count token for $2 to anchor a trailing-text
+    // preservation to.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2853-r9-'));
+    try {
+      const placeholder = '[Number of plans, e.g., "3 plans" or "TBD"]';
+      const { roadmapPath } = setupFixture2853(tmp, `**Plans**: ${placeholder}`);
+      run2853(['roadmap', 'update-plan-progress', '10'], tmp);
+      const line = fs.readFileSync(roadmapPath, 'utf-8').split(/\r?\n/).find((l) => l.includes('**Plans**'));
+      assert.ok(line, 'Plans line must exist');
+      assert.equal(
+        line,
+        '**Plans**: 1/1 plans complete',
+        `placeholder must be replaced cleanly, not glued; got: ${line}`
+      );
+    } finally {
+      cleanup(tmp);
+    }
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
 // Folded from tests/bug-2268-parallel-discuss.test.cjs — consolidation epic #1969 (B2 #1971)
 // ────────────────────────────────────────────────────────────────────────
 {
