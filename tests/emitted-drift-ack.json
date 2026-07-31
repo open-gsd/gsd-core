@@ -104,7 +104,7 @@
       "reason": "#2529: the workflow gains the shared response-language directive as a single @-reference line — a uniform +63 bytes, byte-identical in each of the 43 workflows that take the reference. Prose only: no step, gate, tool invocation, or subagent dispatch shape changed."
     },
     "review.md": {
-      "reason": "#2529: review.md takes the same shared response-language @-reference line as the other 42 referencing workflows (+63 bytes). This entry deliberately re-arms the acknowledgment inherited from the base, which covers a different and already-merged ripple — the #2797 / ADR-2782 D9 comment-only growth of the per-lane prompt-budget guards. That growth is spent; this one is new, unrelated, and prose-only. No lane, gate, or invocation shape changed."
+      "reason": "#2529: the workflow gains the shared response-language directive as a single @-reference line — a uniform +63 bytes, byte-identical in each of the 43 workflows that take the reference. Prose only: no step, gate, tool invocation, or subagent dispatch shape changed."
     },
     "scan.md": {
       "reason": "#2529: the workflow gains the shared response-language directive as a single @-reference line — a uniform +63 bytes, byte-identical in each of the 43 workflows that take the reference. Prose only: no step, gate, tool invocation, or subagent dispatch shape changed."
