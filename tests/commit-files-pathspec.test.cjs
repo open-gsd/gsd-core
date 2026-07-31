@@ -277,27 +277,96 @@ describe('workflow call sites declare --files (#2269)', () => {
   // that call site out of coverage while the total match count stays at 86 —
   // a silent coverage loss that no count check would surface.
   const INVOCATION_RE = /^\s*gsd(_run|-tools(\.cjs)?)\b.*\b(query\s+)?commit\b/;
-  // --files must be a real argument OUTSIDE the quoted commit message (a
-  // message like "docs: explain --files usage" must not count), and must
-  // carry a value — a trailing bare flag still selects the unscoped default.
+
+  // The scan's verdict must agree with the RUNTIME, and the runtime never sees
+  // the line — it sees argv, after the shell has already tokenized it
+  // (routeCommit, gsd-core/bin/gsd-tools.cjs):
   //
-  // "A value" means what the RUNTIME means by it, not merely "a non-space
-  // character". routeCommit (gsd-core/bin/gsd-tools.cjs) collects the scope as
-  //   args.slice(filesIndex + 1).filter(a => !a.startsWith('--'))
-  // so every `--`-prefixed token after --files is discarded. `--files --amend`
-  // therefore yields files=[] and lands on the SAME unscoped default branch as
-  // a trailing bare --files — the #2269 defect verbatim. A `\S` test scores it
-  // scoped (`-` is \S), so the lookahead below mirrors the runtime's own
-  // predicate. Single-dash tokens are deliberately still values: the runtime
-  // filters on '--', so `--files -weird.md` really is scoped.
-  const hasScopedFiles = (line) => {
-    const re = /--files\s+(?!--)\S/g;
-    let m;
-    while ((m = re.exec(line)) !== null) {
-      const quotesBefore = line.slice(0, m.index).split('"').length - 1;
-      if (quotesBefore % 2 === 0) return true; // outside double quotes
+  //   const filesIndex = args.indexOf('--files');
+  //   const files = filesIndex !== -1
+  //     ? args.slice(filesIndex + 1).filter(a => !a.startsWith('--'))
+  //     : [];
+  //
+  // files.length === 0 lands on the unscoped default branch that IS #2269.
+  //
+  // Every predicate that approximates that over raw line text has a reachable
+  // disagreement, and each one found so far was fixed by widening the
+  // approximation, which only moved the disagreement. So the scan stops
+  // approximating: it tokenizes the line the way a shell would and then runs
+  // the runtime's own predicate over the tokens. Two prior special cases fall
+  // out for free rather than being encoded — `--files=x` is UNSCOPED (indexOf
+  // needs the exact token) and `--files -weird.md` is SCOPED (the runtime
+  // filters on '--', not '-').
+  const GSD_BINARY_RE = /^(?:.*\/)?gsd(?:_run|-tools(?:\.cjs)?)$/;
+  const COMMIT_TOKENS = new Set(['commit', 'commit-to-subrepo']);
+
+  // Shell-like word splitting. Honours BOTH quote characters (the previous
+  // parity walk counted only `"`, so a single-quoted message was transparent
+  // to it in both directions), backslash escapes, and unquoted control
+  // operators — which become their own tokens, so an operator glued to its
+  // neighbour (`"a"&&gsd_run`) still separates. Quoted operators and quoted
+  // whitespace stay literal, which is what keeps a command substitution inside
+  // a message ("$(gsd-tools query phase-list)") from reading as a second
+  // invocation, with no separator lookahead needed.
+  //
+  // Never throws, and an unterminated quote simply runs to end of input: these
+  // inputs are substrings sliced out of prose, so a torn quote is expected
+  // rather than exceptional. Tokens carry offsets so callers can slice the
+  // ORIGINAL text and report a real excerpt instead of a re-joined echo.
+  //
+  // Operators are marked STRUCTURALLY (`op: true`), never re-identified by
+  // comparing a token's text against the operator set. That distinction is the
+  // whole point of tokenizing: `commit '|' --files a.md` produces a token
+  // whose VALUE is `|` and which is ordinary message text, and a consumer that
+  // matched on value would split there and score a scoped invocation as
+  // unscoped — the identify-structure-by-text mistake this rewrite exists to
+  // remove, reintroduced one layer up. (Caught by the delimiter-generating
+  // property below, on its first run.)
+  const tokenize = (str) => {
+    const tokens = [];
+    let cur = '';
+    let started = false;
+    let start = 0;
+    let quote = null;
+    const begin = (i) => {
+      if (!started) { started = true; start = i; }
+    };
+    const flush = (end) => {
+      if (started) tokens.push({ value: cur, start, end });
+      cur = '';
+      started = false;
+    };
+    for (let i = 0; i < str.length; i += 1) {
+      const ch = str[i];
+      if (quote) {
+        if (ch === '\\' && quote === '"' && i + 1 < str.length) { cur += str[i + 1]; i += 1; continue; }
+        if (ch === quote) { quote = null; continue; }
+        cur += ch;
+        continue;
+      }
+      if (ch === '\\' && i + 1 < str.length) { begin(i); cur += str[i + 1]; i += 1; continue; }
+      if (ch === '"' || ch === "'") { begin(i); quote = ch; continue; }
+      if (/\s/.test(ch)) { flush(i); continue; }
+      const pair = str.slice(i, i + 2);
+      if (pair === '&&' || pair === '||') { flush(i); tokens.push({ value: pair, start: i, end: i + 2, op: true }); i += 1; continue; }
+      if (ch === ';' || ch === '|') { flush(i); tokens.push({ value: ch, start: i, end: i + 1, op: true }); continue; }
+      begin(i);
+      cur += ch;
     }
-    return false;
+    flush(str.length);
+    return tokens;
+  };
+
+  // routeCommit's predicate, verbatim, over one invocation's tokens. Stops at
+  // the first control operator so that a later command's --files can never
+  // vouch for this one even when the caller passes an unsegmented line.
+  const hasScopedFiles = (line) => {
+    const all = tokenize(line);
+    const cut = all.findIndex((t) => t.op);
+    const tokens = (cut === -1 ? all : all.slice(0, cut)).map((t) => t.value);
+    const filesIndex = tokens.indexOf('--files');
+    if (filesIndex === -1) return false;
+    return tokens.slice(filesIndex + 1).some((t) => !t.startsWith('--'));
   };
 
   // Mid-prose argument-bearing invocations: the line-start anchor above
@@ -307,45 +376,64 @@ describe('workflow call sites declare --files (#2269)', () => {
   // new-project.md, and plan-phase.md each carry one live. The discriminator
   // is the quoted commit message: `commit "` right after the command token is
   // the executable shape; a bare mention never carries it.
-  const MIDLINE_INVOCATION_RE = /\bgsd(_run|-tools(\.cjs)?)\b[^`]*?\b(query\s+)?commit\s+"/g;
+  // The message delimiter is `'` or `"`. Hardcoding `"` here was the same
+  // one-quoting-dialect assumption the parity walk made: a single-quoted
+  // mid-prose invocation was invisible to the scan entirely, so trimming its
+  // --files clause reintroduced #2269 with nothing to fail.
+  const MIDLINE_INVOCATION_RE = /\bgsd(_run|-tools(\.cjs)?)\b[^`]*?\b(query\s+)?commit\s+['"]/g;
 
-  // A line-start invocation is split at shell command separators before it is
-  // scored, so a later invocation's --files cannot vouch for an earlier
-  // unscoped one on the same line:
+  // An invocation is split at shell control operators before it is scored, so
+  // a later command's --files cannot vouch for an earlier unscoped one:
   //   gsd_run query commit "a" && gsd_run query commit "b" --files x.md
   //   gsd_run query commit "a" ;  gsd-tools query phase-list --files y.md
-  // Whole-line scoring accepts both (one match anywhere satisfies the line) —
-  // the same "one hit vouches for the whole candidate" shape as the --files
-  // value bug above. The separator must be followed by a binary token, so a
-  // binary inside a command substitution — `commit "$(gsd-tools query x)"
-  // --files y.md` — is NOT a new invocation and does not split.
-  const INVOCATION_SEPARATOR_RE = /(?:&&|\|\||[;|])\s*(?=gsd(?:_run|-tools(?:\.cjs)?)\b)/;
-  const COMMIT_INVOCATION_RE = /\bgsd(_run|-tools(\.cjs)?)\b.*\b(query\s+)?commit\b/;
+  //   gsd_run query commit "a" && echo done --files unused.md
+  // The third is why the separator is no longer required to be FOLLOWED by a
+  // gsd binary: that lookahead left any non-gsd command's arguments fused to
+  // the invocation, and `--files` belonging to `echo` scored the commit as
+  // scoped. Splitting on every operator and then keeping only the segments
+  // that are themselves gsd commit invocations covers all three, and the
+  // command-substitution negative control (`commit "$(gsd-tools query x)"
+  // --files y.md`) is handled by the tokenizer instead — the operator is
+  // inside quotes, so it is never a separator to begin with.
+  const isCommitInvocation = (tokens) => tokens.length > 0
+    && GSD_BINARY_RE.test(tokens[0].value)
+    && tokens.some((t) => COMMIT_TOKENS.has(t.value));
+
+  const segmentInvocations = (str) => {
+    const groups = [];
+    let cur = [];
+    for (const t of tokenize(str)) {
+      if (t.op) { groups.push(cur); cur = []; } else { cur.push(t); }
+    }
+    groups.push(cur);
+    // No operator: the whole string is the one invocation, returned verbatim.
+    if (groups.length === 1) return [str];
+    const hits = groups.filter(isCommitInvocation);
+    // Operators present but no segment is a commit invocation — fall back to
+    // the whole string rather than silently dropping the line from the scan.
+    if (!hits.length) return [str];
+    return hits.map((g) => str.slice(g[0].start, g[g.length - 1].end));
+  };
 
   // Candidate invocation substrings for one logical line. A line-start
-  // invocation yields one candidate per separator-delimited invocation (the
-  // original whole-line semantics when there is only one); otherwise every
+  // invocation yields one candidate per operator-delimited gsd commit
+  // invocation (the whole line when there is only one); otherwise every
   // mid-line executable invocation yields the substring from its token to the
-  // end of its enclosing backtick span (or line end), so hasScopedFiles's
-  // quote-parity walk sees the invocation itself and not surrounding prose
-  // quotes.
+  // end of its enclosing backtick span (or line end), so the tokenizer sees
+  // the invocation itself and not surrounding prose quotes.
   const invocationCandidates = (line) => {
-    if (INVOCATION_RE.test(line)) {
-      const parts = line.split(INVOCATION_SEPARATOR_RE);
-      if (parts.length === 1) return [line];
-      const segments = parts.filter((p) => COMMIT_INVOCATION_RE.test(p));
-      return segments.length ? segments : [line];
-    }
+    if (INVOCATION_RE.test(line)) return segmentInvocations(line);
     const candidates = [];
     const re = new RegExp(MIDLINE_INVOCATION_RE.source, 'g');
     let m;
     while ((m = re.exec(line)) !== null) {
       const rest = line.slice(m.index);
       const tick = rest.indexOf('`');
-      candidates.push(tick === -1 ? rest : rest.slice(0, tick));
+      candidates.push(...segmentInvocations(tick === -1 ? rest : rest.slice(0, tick)));
     }
     return candidates;
   };
+
 
   test('scanner quote-parity handles synthetic edge-case lines', () => {
     // The scan's correctness rests on hasScopedFiles's quote-parity walk,
@@ -441,6 +529,96 @@ describe('workflow call sites declare --files (#2269)', () => {
     );
   });
 
+  test('the scanner agrees with the runtime on every quoting dialect', () => {
+    // These three shapes were each scored WRONG by the line-text heuristic
+    // that preceded tokenization, and each was reachable in live content.
+    // They are pinned as literals because they are the exact inputs that
+    // proved the approximation could not be patched into correctness.
+    const unscoped = [
+      // 1. An unrelated command's --files vouched for the commit. At runtime
+      //    `--files` never reaches gsd-tools argv at all — it is echo's
+      //    argument — so cmdCommit takes the blanket-.planning/ default. This
+      //    is #2269 verbatim, and the old separator lookahead could not see
+      //    it because the far side of `&&` is not a gsd binary.
+      'gsd_run query commit "docs: update ROADMAP.md" && echo done --files unused.md',
+      // 2. Same root cause with no shell chaining at all: the message is
+      //    SINGLE-quoted, so a parity walk that counts only `"` reads the
+      //    --files inside it as a real argument. The double-quoted twin was
+      //    always caught, which is what made the hole so easy to miss.
+      "gsd_run query commit 'docs: explain --files usage'",
+    ];
+    for (const line of unscoped) {
+      assert.ok(INVOCATION_RE.test(line), `should match invocation: ${line}`);
+      const cands = invocationCandidates(line);
+      assert.ok(
+        cands.some((c) => !hasScopedFiles(c)),
+        `must surface as unscoped: ${line}`,
+      );
+    }
+
+    // 3. The mirror-image failure, and the reason a `'`-aware parity COUNTER
+    //    would have been the wrong fix: a double quote living inside a
+    //    single-quoted message is ordinary text, but it flips a parity walk
+    //    and takes a genuinely scoped invocation out of scope — a false
+    //    NEGATIVE introduced by the fix for a false negative.
+    const scopedDespiteQuotes = "gsd_run query commit 'prints a \" sometimes' --files .planning/PLAN.md";
+    assert.ok(INVOCATION_RE.test(scopedDespiteQuotes));
+    assert.ok(
+      invocationCandidates(scopedDespiteQuotes).every((c) => hasScopedFiles(c)),
+      `a " inside a '-quoted message must not take the invocation out of scope: ${scopedDespiteQuotes}`,
+    );
+
+    // The single-quoted spellings of the shapes already pinned for `"`, so the
+    // two dialects cannot drift apart again.
+    assert.strictEqual(hasScopedFiles("gsd_run query commit 'docs: plan' --files"), false);
+    assert.strictEqual(hasScopedFiles("gsd_run query commit 'docs: plan' --files --amend"), false);
+    assert.strictEqual(hasScopedFiles("gsd_run query commit 'docs: plan' --files .planning/PLAN.md"), true);
+    // Unquoted messages reach the same cmdCommit and must behave identically.
+    assert.strictEqual(hasScopedFiles('gsd_run query commit plan --files'), false);
+    assert.strictEqual(hasScopedFiles('gsd_run query commit plan --files .planning/PLAN.md'), true);
+
+    // --files=x stays UNSCOPED without a special case: routeCommit does
+    // args.indexOf('--files'), which the fused token cannot satisfy.
+    assert.strictEqual(hasScopedFiles('gsd_run query commit "docs: plan" --files=.planning/PLAN.md'), false);
+    // And a flag BEFORE a real value is still scoped, because the runtime
+    // filters the whole tail rather than inspecting only the next token.
+    assert.strictEqual(hasScopedFiles('gsd_run query commit "docs: plan" --files --amend .planning/PLAN.md'), true);
+
+    // An operator glued to its neighbour still separates.
+    assert.ok(
+      invocationCandidates('gsd_run query commit "a"&&gsd_run query commit "b" --files x.md')
+        .some((c) => !hasScopedFiles(c)),
+      'an unspaced && must still split the invocation',
+    );
+
+    // A QUOTED operator is message text, not structure. Both the candidate
+    // split and the scope predicate must key on how the token was PARSED, not
+    // on what it spells — re-deriving "is this an operator" from the token's
+    // value reintroduces the identify-structure-by-text mistake one layer up,
+    // and turns each of these scoped invocations into a false offender.
+    // The message is EXACTLY an operator in the first four: that is the case a
+    // value-based check actually mis-reads, and it is the shape fast-check
+    // shrank to on this predicate's first run. A message that merely CONTAINS
+    // an operator (the last three) tokenizes to one token whose value is the
+    // whole string, so it never matches the operator set by equality and is
+    // not a control for this — keep both, but do not mistake the second group
+    // for coverage of the first.
+    for (const line of [
+      'gsd_run query commit "|" --files .planning/PLAN.md',
+      "gsd_run query commit '|' --files .planning/PLAN.md",
+      'gsd_run query commit "&&" --files .planning/PLAN.md',
+      'gsd_run query commit ";" --files .planning/PLAN.md',
+      'gsd_run query commit "docs: a | b" --files .planning/PLAN.md',
+      "gsd_run query commit 'docs: a | b' --files .planning/PLAN.md",
+      'gsd_run query commit "docs: x && y" --files .planning/PLAN.md',
+    ]) {
+      const cands = invocationCandidates(line);
+      assert.strictEqual(cands.length, 1, `a quoted operator must not split the invocation: ${line}`);
+      assert.ok(hasScopedFiles(cands[0]), `a quoted operator must not defeat the scope: ${line}`);
+    }
+  });
+
+
   test('a later --files on the same line cannot vouch for an earlier invocation', () => {
     // Whole-line scoring is satisfied by ONE match anywhere on the line, so a
     // second, scoped invocation masked an earlier unscoped one. No live line
@@ -530,6 +708,25 @@ describe('workflow call sites declare --files (#2269)', () => {
       [],
       'a config payload mentioning commit_docs must yield no candidates',
     );
+
+    // A SINGLE-quoted mid-prose invocation is the same executable shape. The
+    // mid-line tier keyed on `commit "` only, so this one was invisible to the
+    // scan entirely — not merely mis-scored — and trimming its --files clause
+    // reintroduced #2269 with nothing to fail.
+    const singleQuoted =
+      "commit the artifacts with `gsd-tools query commit 'docs: complete research' --files .planning/research/` at the end.";
+    const sqCands = invocationCandidates(singleQuoted);
+    assert.strictEqual(sqCands.length, 1, `single-quoted mid-prose invocation must be scanned: ${singleQuoted}`);
+    assert.ok(hasScopedFiles(sqCands[0]), 'and must read as scoped');
+
+    const sqTrimmed =
+      "commit the artifacts with `gsd-tools query commit 'docs: complete research'` at the end.";
+    const sqTrimmedCands = invocationCandidates(sqTrimmed);
+    assert.strictEqual(sqTrimmedCands.length, 1, 'the trimmed single-quoted form must stay in the candidate set');
+    assert.strictEqual(
+      hasScopedFiles(sqTrimmedCands[0]), false,
+      'the trimmed single-quoted form must be flagged as unscoped',
+    );
   });
 
   // The scan's verdict rests entirely on hasScopedFiles's quote-parity walk,
@@ -537,64 +734,127 @@ describe('workflow call sites declare --files (#2269)', () => {
   // exercises only a handful of shapes, so pin the invariant by property:
   // a `--files` occurring ONLY inside the quoted commit message never counts,
   // and appending a real one outside the quotes always does.
-  describe('property: quote-parity is what decides scope', () => {
-    // Message bodies with no double quote of their own — a `"` inside the
-    // message would flip parity, which is a shell-quoting bug in the workflow
-    // line, not a scanner bug, and is out of this property's domain.
-    const msg = fc.string({ maxLength: 60 }).filter((s) => !s.includes('"'));
-    // A path a shell would pass through as a VALUE. The `--` exclusion is not
+  describe('property: tokenization is what decides scope', () => {
+    // THE DELIMITER IS PART OF THE DOMAIN. Every property here used to build
+    // its line from a hardcoded `"` template, so no number of runs could ever
+    // generate a single-quoted or unquoted invocation — the properties pinned
+    // one quoting dialect while reading as though they pinned the predicate,
+    // and that is precisely what let a single-quoted false negative through.
+    // Draw the delimiter, and the shape that got through is inside the
+    // generator's domain rather than outside it.
+    const delimiter = fc.constantFrom('"', "'");
+    // The unquoted spelling too — `commit msg --files x` reaches the same
+    // cmdCommit, and it was outside every generator's domain before.
+    const anyDelimiter = fc.constantFrom('"', "'", '');
+    // A token the shell passes through VERBATIM — no quote, no whitespace, and
+    // no control operator. The operator exclusion is load-bearing rather than
+    // tidiness: an unconstrained generator can draw `&&` or `|` as a "path",
+    // and the scanner is then RIGHT to read it as a separator while a
+    // token-list oracle reads it as a value. That disagreement is a defect in
+    // the generator's domain, not in the predicate, and it would surface as a
+    // rare seed-dependent red — the same flake class the `--` exclusion below
+    // was added for.
+    const SAFE = 'abcXYZ019._/@:,+=~*-';
+    const safeToken = fc
+      .string({ minLength: 1, maxLength: 24 })
+      .map((s) => s.replace(/[^A-Za-z0-9._/@:,+=~*-]/g, () => SAFE[0]))
+      .filter((s) => s.length > 0);
+    // A message body compatible with the delimiter wrapping it. Inside quotes
+    // it may now contain the OTHER quote character — `commit "docs: don't
+    // break"` is a legitimate line the old parity walk mis-scored — but never
+    // a backslash, which is an escape on both sides of the comparison.
+    const messageFor = (d) => (d === ''
+      ? fc.oneof(fc.constant(''), safeToken)
+      : fc.string({ maxLength: 60 }).map((s) => s.split(d).join('').split('\\').join('')));
+    // A path the shell passes through as a VALUE. The `--` exclusion is not
     // cosmetic: routeCommit drops every `--`-prefixed token after --files, so
     // such a token is not a path at all and the invocation is unscoped — which
-    // is the flagUnscoped property below, not this one. Without the exclusion
-    // this generator reaches that input space roughly once per 7,700 draws
+    // is the flag property below, not this one. Without the exclusion this
+    // generator reaches that input space roughly once per 7,700 draws
     // (measured: 26 hits in 200,000), i.e. ~1 CI run in 77 at fast-check's
     // default 100 runs — a property that fails rarely and looks like a flake.
-    const arg = fc
-      .string({ minLength: 1, maxLength: 30 })
-      .filter((s) => !/["\s]/.test(s) && !s.startsWith('--'));
+    const arg = safeToken.filter((s) => !s.startsWith('--'));
     // The complement: a `--`-prefixed token, which the runtime discards.
-    const flagArg = fc
-      .string({ minLength: 1, maxLength: 20 })
-      .filter((s) => !/["\s]/.test(s))
-      .map((s) => `--${s}`);
+    const flagArg = safeToken.map((s) => `--${s}`);
 
     test('a --files mentioned only inside the quoted message is never a scope', () => {
+      // Only the quoted delimiters appear here: an unquoted message cannot
+      // contain a space, so "--files inside the message" is not a shape a bare
+      // invocation can express. It is covered by the two properties below.
       fc.assert(
-        fc.property(msg, msg, (before, after) => {
-          const line = `gsd_run query commit "${before} --files ${after}"`;
-          assert.strictEqual(
-            hasScopedFiles(line), false,
-            `quoted --files must not count as scope: ${line}`,
-          );
-        }),
+        fc.property(
+          delimiter.chain((d) => fc.tuple(fc.constant(d), messageFor(d), messageFor(d))),
+          ([d, a, b]) => {
+            const line = `gsd_run query commit ${d}${a} --files ${b}${d}`;
+            assert.strictEqual(
+              hasScopedFiles(line), false,
+              `a --files inside the message must not count as scope: ${line}`,
+            );
+          },
+        ),
       );
     });
 
-    test('a real --files outside the quotes always counts, whatever the message says', () => {
+    test('a real --files outside the message always counts, whatever the message says', () => {
       fc.assert(
-        fc.property(msg, arg, (message, filePath) => {
-          const line = `gsd_run query commit "${message}" --files ${filePath}`;
-          assert.strictEqual(
-            hasScopedFiles(line), true,
-            `unquoted --files must count as scope: ${line}`,
-          );
-        }),
+        fc.property(
+          anyDelimiter.chain((d) => fc.tuple(fc.constant(d), messageFor(d), arg)),
+          ([d, message, filePath]) => {
+            const line = `gsd_run query commit ${d}${message}${d} --files ${filePath}`;
+            assert.strictEqual(
+              hasScopedFiles(line), true,
+              `a --files outside the message must count as scope: ${line}`,
+            );
+          },
+        ),
       );
     });
 
-    test('a --files whose next token is a flag is never a scope', () => {
+    test('a --files with no non-flag token after it is never a scope', () => {
       // The scanner must agree with routeCommit for EVERY flag spelling, not
       // just the --amend instance found in review: args.slice(i+1).filter(a =>
       // !a.startsWith('--')) discards them all, leaving files=[] and the
-      // unscoped default. This is the property the old `\S` predicate failed.
+      // unscoped default.
       fc.assert(
-        fc.property(msg, flagArg, (message, flag) => {
-          const line = `gsd_run query commit "${message}" --files ${flag}`;
-          assert.strictEqual(
-            hasScopedFiles(line), false,
-            `--files followed by a flag must not count as scope: ${line}`,
-          );
-        }),
+        fc.property(
+          anyDelimiter.chain((d) => fc.tuple(fc.constant(d), messageFor(d), flagArg)),
+          ([d, message, flag]) => {
+            const line = `gsd_run query commit ${d}${message}${d} --files ${flag}`;
+            assert.strictEqual(
+              hasScopedFiles(line), false,
+              `--files followed only by a flag must not count as scope: ${line}`,
+            );
+          },
+        ),
+      );
+    });
+
+    test('the scanner agrees with routeCommit on the tokens, for any delimiter', () => {
+      // The properties above assert against hand-derived expectations. This
+      // one asserts against the RUNTIME's own predicate, re-implemented from
+      // routeCommit over the same tokens — so a future divergence fails here
+      // even if nobody thought to write a case for its shape.
+      const runtimeScoped = (tokens) => {
+        const i = tokens.indexOf('--files');
+        return i !== -1 && tokens.slice(i + 1).some((t) => !t.startsWith('--'));
+      };
+      fc.assert(
+        fc.property(
+          anyDelimiter.chain((d) => fc.tuple(
+            fc.constant(d),
+            messageFor(d),
+            fc.array(fc.oneof(arg, flagArg, fc.constant('--files')), { maxLength: 4 }),
+          )),
+          ([d, message, tail]) => {
+            const line = `gsd_run query commit ${d}${message}${d} ${tail.join(' ')}`;
+            // The argv the shell would hand routeCommit for that same line.
+            const argv = ['commit', message, ...tail];
+            assert.strictEqual(
+              hasScopedFiles(line), runtimeScoped(argv),
+              `scanner and routeCommit must agree: ${line}`,
+            );
+          },
+        ),
       );
     });
 
@@ -651,6 +911,7 @@ describe('workflow call sites declare --files (#2269)', () => {
       'workflow query commit invocations without --files (unscoped commits sweep the index):\n' +
         offenders.join('\n'),
     );
+
   });
 
   describe('behavioral', () => {
@@ -692,7 +953,11 @@ describe('workflow call sites declare --files (#2269)', () => {
       // reporting it as "no longer declares --files" sends the reader to look
       // for a missing flag that is right there.
       assert.ok(
-        /--files\s+(?!--)\S/.test(commitLine),
+        // The scan's predicate, not a second copy of it. A duplicated
+        // approximation here would drift out of agreement with the scanner
+        // silently — this line carried the old `\S` heuristic and would have
+        // kept scoring `--files --amend` as scoped after the scanner stopped.
+        hasScopedFiles(commitLine),
         'secure-phase.md step 7 no longer declares --files — the #2269 regression this test guards:\n' + commitLine,
       );
       assert.ok(
