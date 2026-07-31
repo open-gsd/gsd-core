@@ -274,8 +274,11 @@ describe('workflow call sites declare --files (#2269)', () => {
   // be tightened to `(\s+query)?\s+commit`: invocations may carry flags before
   // the command (gsd-core/workflows/onboard.md is
   // `gsd_run --cwd "$ONBOARDING_ROOT" query commit ...`). Dropping `.*` swaps
-  // that call site out of coverage while the total match count stays at 86 —
-  // a silent coverage loss that no count check would surface.
+  // that call site out of coverage WITHOUT changing the offender count, since
+  // the site is scoped either way — a silent coverage loss that no count check
+  // would surface. (Deliberately stated as a property rather than an absolute
+  // match count: an earlier revision of this comment pinned a census figure,
+  // which then drifted three times and was stale by the time it was read.)
   const INVOCATION_RE = /^\s*gsd(_run|-tools(\.cjs)?)\b.*\b(query\s+)?commit\b/;
 
   // The scan's verdict must agree with the RUNTIME, and the runtime never sees
@@ -434,6 +437,19 @@ describe('workflow call sites declare --files (#2269)', () => {
     return candidates;
   };
 
+  // An invocation inside an HTML comment is not executable, and a guard that
+  // flags it is hostile to documenting the very bug it protects against —
+  // `<!-- WRONG: gsd_run query commit "docs: x" (missing --files!) -->` is a
+  // plausible thing to write precisely BECAUSE this issue exists. Comment
+  // spans are stripped before scanning, preserving newlines so the surrounding
+  // lines keep their identity and a multi-line comment cannot fuse the text on
+  // either side of it into one logical line.
+  //
+  // Defined HERE, beside the other scan primitives, rather than inside the
+  // scan test: the test below asserts on this exact symbol, so the assertion
+  // and the scan cannot drift apart. A private copy in each place passes its
+  // own test while the scan does something else.
+  const stripHtmlComments = (text) => text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, ''));
 
   test('scanner quote-parity handles synthetic edge-case lines', () => {
     // The scan's correctness rests on hasScopedFiles's quote-parity walk,
@@ -618,6 +634,26 @@ describe('workflow call sites declare --files (#2269)', () => {
     }
   });
 
+  test('an invocation inside an HTML comment is not executable content', () => {
+    // The scan must not be hostile to documenting the bug it guards. This is
+    // the shape the scan's own strip step exists for; asserted on the helper
+    // so it holds independently of which roots are scanned.
+    const strip = stripHtmlComments;
+    const commented = '<!-- WRONG: gsd_run query commit "docs: message" (missing --files!) -->';
+    assert.strictEqual(strip(commented).trim(), '', 'the commented invocation must be stripped');
+
+    // A multi-line comment must not fuse the lines on either side of it.
+    const around = 'before\n<!-- gsd_run query commit "x"\nstill inside -->\nafter';
+    const lines = strip(around).split('\n');
+    assert.strictEqual(lines.length, 4, 'newlines must survive the strip');
+    assert.strictEqual(lines[0], 'before');
+    assert.strictEqual(lines[3], 'after');
+
+    // A real invocation on the same line as a comment still scans.
+    const mixed = '<!-- note --> gsd_run query commit "docs: x"';
+    const cands = invocationCandidates(strip(mixed).trim());
+    assert.ok(cands.length === 1 && !hasScopedFiles(cands[0]), 'a live invocation beside a comment must still be scanned');
+  });
 
   test('a later --files on the same line cannot vouch for an earlier invocation', () => {
     // Whole-line scoring is satisfied by ONE match anywhere on the line, so a
@@ -902,7 +938,7 @@ describe('workflow call sites declare --files (#2269)', () => {
         .readdirSync(rootDir, { recursive: true })
         .filter((f) => f.endsWith('.md'));
       for (const file of mdFiles) {
-        const raw = fs.readFileSync(path.join(rootDir, file), 'utf-8');
+        const raw = stripHtmlComments(fs.readFileSync(path.join(rootDir, file), 'utf-8'));
         // Join backslash-continued lines first: several invocations pass
         // --files on a continuation line (docs-update.md, code-review.md,
         // gsd-code-fixer.md), and a per-physical-line scan would
