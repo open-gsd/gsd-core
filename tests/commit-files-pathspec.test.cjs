@@ -876,14 +876,26 @@ describe('workflow call sites declare --files (#2269)', () => {
     // across every directory that carries live invocations, not just
     // gsd-core/workflows/: agents/, commands/, skills/, and
     // gsd-core/references/ invoke the same seam.
+    //
+    // docs/ is in the list because the claim above has to be TRUE, not
+    // aspirational. It was not: docs/zh-CN/references/ carries 7 live
+    // invocations — the Chinese mirrors of three gsd-core/references/ files
+    // that ARE scanned. Those mirrors are exactly where an unscoped example
+    // survives unnoticed, since the locales already drift per-locale
+    // (ja-JP/ko-KR/pt-BR have no references/ subtree at all). New files under
+    // an existing root are picked up automatically by the recursive walk, so
+    // the gap was only ever at the ROOT level — which is why it needed a root
+    // rather than a rule.
     const scanRoots = [
       'gsd-core/workflows',
       'gsd-core/references',
       'agents',
       'commands',
       'skills',
+      'docs',
     ];
     const offenders = [];
+    const scanned = [];
     for (const root of scanRoots) {
       const rootDir = path.join(__dirname, '..', root);
       const mdFiles = fs
@@ -898,6 +910,7 @@ describe('workflow call sites declare --files (#2269)', () => {
         const logical = raw.replace(/\\\r?\n/g, ' ');
         for (const line of logical.split(/\r?\n/)) {
           for (const inv of invocationCandidates(line)) {
+            scanned.push(`${root}/${file}`);
             if (!hasScopedFiles(inv)) {
               offenders.push(`${root}/${file}: ${inv.trim()}`);
             }
@@ -912,6 +925,22 @@ describe('workflow call sites declare --files (#2269)', () => {
         offenders.join('\n'),
     );
 
+    // A zero is only evidence if the scan actually reached the content. The
+    // docs/ root was added because docs/zh-CN/references/ carries live
+    // invocations; since they are all scoped, dropping the root again would
+    // NOT move the offender count and the coverage loss would be silent.
+    // Assert reach as a property rather than a census figure — a hardcoded
+    // count is the drift this file has already been bitten by twice.
+    assert.ok(
+      scanned.some((s) => s.startsWith('docs/')),
+      'the docs/ root must contribute scanned invocations — the localized mirrors of '
+        + 'gsd-core/references/ are exactly where an unscoped example survives unnoticed',
+    );
+    assert.ok(
+      scanned.length > 0 && scanRoots.every((root) => root === 'commands' || scanned.some((s) => s.startsWith(root))),
+      'every scan root except commands/ must contribute at least one invocation, or the root is dead weight:\n'
+        + scanRoots.join(', '),
+    );
   });
 
   describe('behavioral', () => {
