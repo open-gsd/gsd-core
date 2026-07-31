@@ -16,7 +16,9 @@
  * A bare config-field mention is not coverage: the same line must direct how
  * user-facing output is rendered, or the workflow must load a known directive.
  *
- * Exit 0 if every workflow is covered; exit 1 with a per-file listing if not.
+ * Exit 0 only when workflows were actually found AND every one of them is
+ * covered; exit 1 with a per-file listing if not. "No violations" alone is not
+ * a pass: a run that inspected nothing has established nothing.
  */
 
 'use strict';
@@ -114,7 +116,33 @@ function findViolations(workflowsDir) {
 }
 
 function main(workflowsDir = WORKFLOWS_DIR, io = console) {
-  const files = findMarkdownFilesRecursive(workflowsDir);
+  // The catalog is discovered, not declared, so an unreadable or empty
+  // directory yields an empty violation list — indistinguishable from full
+  // coverage if the only success condition is `violations.length === 0`. Both
+  // discovery failures below are therefore lint failures in their own right:
+  // a stripped install tree, a `__dirname`-relative path typo, or an
+  // unfollowed symlink must not be able to report OK while coverage silently
+  // regresses to the pre-#2529 state.
+  let files;
+  try {
+    files = findMarkdownFilesRecursive(workflowsDir);
+  } catch (error) {
+    if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+    io.error(
+      `lint-response-language-coverage: cannot read the workflow directory ${workflowsDir} (${error.code}).\n` +
+      `Coverage cannot be established, so this is a failure and not a pass (#2529).`,
+    );
+    return 1;
+  }
+
+  if (files.length === 0) {
+    io.error(
+      `lint-response-language-coverage: no workflow files found under ${workflowsDir}.\n` +
+      `A run that inspected zero workflows cannot establish coverage (#2529).`,
+    );
+    return 1;
+  }
+
   const violations = findViolations(workflowsDir);
 
   if (violations.length > 0) {
@@ -136,6 +164,8 @@ if (require.main === module) process.exitCode = main();
 module.exports = {
   EXACT_INLINE_DIRECTIVE_WORKFLOWS,
   INLINE_RESPONSE_LANGUAGE_DIRECTIVE,
+  PARENT_INJECTED_WORKFLOWS,
+  WORKFLOWS_DIR,
   findMarkdownFilesRecursive,
   findViolations,
   hasResponseLanguageCoverage,

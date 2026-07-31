@@ -10,6 +10,8 @@ const { cleanup } = require('./helpers.cjs');
 const {
   EXACT_INLINE_DIRECTIVE_WORKFLOWS,
   INLINE_RESPONSE_LANGUAGE_DIRECTIVE,
+  PARENT_INJECTED_WORKFLOWS,
+  WORKFLOWS_DIR,
   findMarkdownFilesRecursive,
   findViolations,
   hasResponseLanguageCoverage,
@@ -152,5 +154,59 @@ describe('response-language workflow coverage lint (#2529)', () => {
     assert.deepStrictEqual(logs, [
       'lint-response-language-coverage: OK (1 workflows covered)',
     ]);
+  });
+
+  test('main fails instead of passing vacuously when discovery finds no workflow', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-response-language-empty-'));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, 'not-a-workflow'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'not-a-workflow', 'notes.txt'), 'not Markdown');
+    const errors = [];
+    const logs = [];
+
+    assert.strictEqual(main(root, {
+      error: (message) => errors.push(message),
+      log: (message) => logs.push(message),
+    }), 1);
+    assert.deepStrictEqual(logs, []);
+    assert.match(errors[0], /no workflow files found/);
+  });
+
+  test('main fails closed on an unreadable workflow directory rather than throwing', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-response-language-absent-'));
+    tempDirs.push(root);
+    fs.writeFileSync(path.join(root, 'file-not-dir.md'), 'Apply response_language to all prose.\n');
+    const errors = [];
+    const logs = [];
+    const io = {
+      error: (message) => errors.push(message),
+      log: (message) => logs.push(message),
+    };
+
+    assert.strictEqual(main(path.join(root, 'does-not-exist'), io), 1);
+    assert.match(errors[0], /cannot read the workflow directory/);
+    assert.match(errors[0], /ENOENT/);
+
+    assert.strictEqual(main(path.join(root, 'file-not-dir.md'), io), 1);
+    assert.match(errors[1], /cannot read the workflow directory/);
+    assert.deepStrictEqual(logs, []);
+  });
+
+  test('every pinned workflow path is live in the real catalog', () => {
+    // The pinned sets are enforced by exact path. A rename that leaves a stale
+    // entry behind does not fail the lint — the moved file quietly falls back
+    // to the loose coverage check, so the exact-line pin stops being enforced
+    // without anything going red. Assert the pins still resolve.
+    const discovered = new Set(
+      findMarkdownFilesRecursive(WORKFLOWS_DIR)
+        .map((file) => path.relative(WORKFLOWS_DIR, file).replaceAll(path.sep, '/')),
+    );
+    const pinned = [
+      ...EXACT_INLINE_DIRECTIVE_WORKFLOWS,
+      ...PARENT_INJECTED_WORKFLOWS.keys(),
+      ...[...PARENT_INJECTED_WORKFLOWS.values()].map((injection) => injection.parent),
+    ].sort();
+
+    assert.deepStrictEqual(pinned.filter((relative) => !discovered.has(relative)), []);
   });
 });
