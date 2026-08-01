@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "paths": {
+    "execute-plan.md": "#2649: Pattern A (single-plan interactive dispatch) gained the same pre-dispatch worktree.base-check gate the wave path (executor-isolation-dispatch.md) and quick.md already run — the triage found Pattern A had the identical missing-gate gap. Growth is the base-check instruction in the Pattern A description (consult shouldDegrade, auto-degrade to sequential on true, keep the verify-only guard as backstop) + the #2649 rationale."
+  }
+}
