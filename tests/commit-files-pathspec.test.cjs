@@ -1058,6 +1058,11 @@ describe('workflow call sites declare --files (#2269)', () => {
         .readdirSync(rootDir, { recursive: true })
         .filter((f) => f.endsWith('.md'));
       for (const file of mdFiles) {
+        // readdirSync returns platform-separated relative paths; normalize
+        // unconditionally (repo convention) so the diagnostic strings — and
+        // the startsWith() reach assertions below — read identically on
+        // Windows. Join with the RAW entry; report with the normalized one.
+        const normalized = String(file).split(path.sep).join('/');
         const raw = stripHtmlComments(fs.readFileSync(path.join(rootDir, file), 'utf-8'));
         // Join backslash-continued lines first: several invocations pass
         // --files on a continuation line (docs-update.md, code-review.md,
@@ -1066,9 +1071,9 @@ describe('workflow call sites declare --files (#2269)', () => {
         const logical = raw.replace(/\\\r?\n/g, ' ');
         for (const line of logical.split(/\r?\n/)) {
           for (const inv of invocationCandidates(line)) {
-            scanned.push(`${root}/${file}`);
+            scanned.push(`${root}/${normalized}`);
             if (!hasScopedFiles(inv)) {
-              offenders.push(`${root}/${file}: ${inv.trim()}`);
+              offenders.push(`${root}/${normalized}: ${inv.trim()}`);
             }
           }
         }
