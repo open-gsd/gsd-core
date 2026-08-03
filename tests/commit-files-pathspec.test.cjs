@@ -1060,8 +1060,8 @@ describe('workflow call sites declare --files (#2269)', () => {
         + 'gsd-core/references/ are exactly where an unscoped example survives unnoticed',
     );
     assert.ok(
-      scanned.length > 0 && scanRoots.every((root) => root === 'commands' || scanned.some((s) => s.startsWith(root))),
-      'every scan root except commands/ must contribute at least one invocation, or the root is dead weight:\n'
+      scanned.length > 0 && scanRoots.every((root) => scanned.some((s) => s.startsWith(root))),
+      'every scan root must contribute at least one invocation, or the root is dead weight:\n'
         + scanRoots.join(', '),
     );
   });
