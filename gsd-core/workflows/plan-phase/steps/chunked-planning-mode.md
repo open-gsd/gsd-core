@@ -1,3 +1,5 @@
+Apply response_language to all user-facing prose; preserve code, paths, and identifiers.
+
 ## 8.5. Chunked Planning Mode
 
 **Skip if `CHUNKED_MODE` is `false`.**

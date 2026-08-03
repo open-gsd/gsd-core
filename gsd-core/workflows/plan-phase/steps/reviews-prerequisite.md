@@ -1,3 +1,5 @@
+Apply response_language to all user-facing prose; preserve code, paths, and identifiers.
+
 ## 2.5. Validate `--reviews` Prerequisite
 
 **Skip if:** No `--reviews` flag.

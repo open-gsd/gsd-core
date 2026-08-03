@@ -101,7 +101,7 @@ describe('response-language workflow coverage lint (#2529)', () => {
       fs.writeFileSync(file, `${INLINE_RESPONSE_LANGUAGE_DIRECTIVE}\n`);
     }
 
-    assert.strictEqual(EXACT_INLINE_DIRECTIVE_WORKFLOWS.size, 25);
+    assert.strictEqual(EXACT_INLINE_DIRECTIVE_WORKFLOWS.size, 35);
     assert.deepStrictEqual(findViolations(root), []);
 
     const drifted = path.join(root, 'discuss-phase', 'modes', 'advisor.md');

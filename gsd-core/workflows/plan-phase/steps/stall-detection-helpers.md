@@ -1,3 +1,5 @@
+Apply response_language to all user-facing prose; preserve code, paths, and identifiers.
+
 # Bounded Stall-Detection Helpers (#2650)
 
 Every planner/plan-checker spawn in `plan-phase.md` dispatches with
