@@ -685,6 +685,10 @@ describe('workflow call sites declare --files (#2269)', () => {
       hasScopedFiles('gsd_run query commit "docs: plan" --files x\\ y.md'), true,
       'an escaped space inside the value keeps it one token — still a value',
     );
+    assert.strictEqual(
+      hasScopedFiles('gsd_run query commit docs:\\ plan --files'), false,
+      'an escaped space outside quotes must not manufacture a scope: the bare --files is still valueless',
+    );
 
     // --files=x stays UNSCOPED without a special case: routeCommit does
     // args.indexOf('--files'), which the fused token cannot satisfy.
