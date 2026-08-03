@@ -609,9 +609,7 @@ function cmdInitExecutePhase(
       directory: null,
       phase_number: roadmapPhase['phase_number'],
       phase_name: phaseName,
-      phase_slug: phaseName
-        ? phaseName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-        : null,
+      phase_slug: generateSlugInternal(phaseName),
       plans: [],
       summaries: [],
       incomplete_plans: [],
@@ -671,7 +669,13 @@ function cmdInitExecutePhase(
               .replace('{milestone}', milestone['version'] as string)
               .replace(
                 '{slug}',
-                generateSlugInternal(milestone['name'] as string) || 'milestone',
+                // A generic 'milestone' stand-in makes two different unrenderable
+                // milestone names produce the same branch; refuse instead (#2848).
+                // Logical OR, because the generator returns an empty string for
+                // input with no slug-safe characters, not only a missing value —
+                // a nullish check alone lets that case through.
+                generateSlugInternal(milestone['name'] as string)
+                  || error(`milestone name has no slug-safe characters: ${JSON.stringify(milestone['name'])}`),
               )
           : null,
 
@@ -747,9 +751,7 @@ function cmdInitPlanPhase(
       directory: null,
       phase_number: roadmapPhase['phase_number'],
       phase_name: phaseName,
-      phase_slug: phaseName
-        ? phaseName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-        : null,
+      phase_slug: generateSlugInternal(phaseName),
       plans: [],
       summaries: [],
       incomplete_plans: [],
@@ -772,13 +774,18 @@ function cmdInitPlanPhase(
   let expectedPhaseDirPlan: string | null = null;
   if (!phaseDirPlan && phaseNumberPlan && phaseNamePlan) {
     const paddedNum = normalizePhaseName(phaseNumberPlan);
-    const slug = (generateSlugInternal(phaseNamePlan) || '').substring(0, 60);
-    if (slug) {
-      const prefix = rawProjectCodePlan ? `${rawProjectCodePlan}-` : '';
-      const dirName = `${prefix}${paddedNum}-${slug}`;
-      // #2376: absolute — see comment on phase_dir below.
-      expectedPhaseDirPlan = toPosixPath(path.join(planningPaths(cwd).phases, dirName));
+    // Single truncation point: the limit is an argument to the canonical
+    // generator, never a second `.substring` on its result (#2848). A name
+    // with no slug-safe content stops here loudly instead of silently
+    // leaving the expected phase directory unresolved.
+    const slug = generateSlugInternal(phaseNamePlan);
+    if (!slug) {
+      error(`phase name has no slug-safe characters: ${JSON.stringify(phaseNamePlan)}`);
     }
+    const prefix = rawProjectCodePlan ? `${rawProjectCodePlan}-` : '';
+    const dirName = `${prefix}${paddedNum}-${slug}`;
+    // #2376: absolute — see comment on phase_dir below.
+    expectedPhaseDirPlan = toPosixPath(path.join(planningPaths(cwd).phases, dirName));
   }
 
   const granularityOverride = options['granularity'] as string | undefined;
@@ -1046,7 +1053,12 @@ function cmdInitQuick(
 ): void {
   const config = loadConfig(cwd);
   const now = new Date();
-  const slug = description ? generateSlugInternal(description)?.substring(0, 40) : null;
+  // The quick-init limit is 40, not 60 — passed as an argument so the slug is
+  // cut once, against one limit, inside the canonical generator (#2848).
+  const slug = description ? generateSlugInternal(description, 40) : null;
+  if (description && !slug) {
+    error(`description has no slug-safe characters: ${JSON.stringify(description)}`);
+  }
 
   const yy = String(now.getFullYear()).slice(-2);
   const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -1196,9 +1208,7 @@ function cmdInitVerifyWork(cwd: string, phase: string, raw: boolean): void {
         directory: null,
         phase_number: roadmapPhase['phase_number'],
         phase_name: phaseName,
-        phase_slug: phaseName
-          ? phaseName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-          : null,
+        phase_slug: generateSlugInternal(phaseName),
         plans: [],
         summaries: [],
         incomplete_plans: [],
@@ -1285,9 +1295,7 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
         directory: null,
         phase_number: roadmapPhase['phase_number'],
         phase_name: phaseName,
-        phase_slug: phaseName
-          ? phaseName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-          : null,
+        phase_slug: generateSlugInternal(phaseName),
         plans: [],
         summaries: [],
         incomplete_plans: [],
@@ -1307,9 +1315,7 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
         directory: null,
         phase_number: roadmapPhase['phase_number'],
         phase_name: phaseName,
-        phase_slug: phaseName
-          ? phaseName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-          : null,
+        phase_slug: generateSlugInternal(phaseName),
         plans: [],
         summaries: [],
         incomplete_plans: [],
@@ -1327,13 +1333,18 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
   let expectedPhaseDir: string | null = null;
   if (!phaseDir && phaseNumber && phaseName) {
     const paddedNum = normalizePhaseName(phaseNumber);
-    const slug = (generateSlugInternal(phaseName) || '').substring(0, 60);
-    if (slug) {
-      const prefix = rawProjectCode ? `${rawProjectCode}-` : '';
-      const dirName = `${prefix}${paddedNum}-${slug}`;
-      // #2376: absolute — see comment on phase_dir below.
-      expectedPhaseDir = toPosixPath(path.join(planningPaths(cwd).phases, dirName));
+    // Single truncation point: the limit is an argument to the canonical
+    // generator, never a second `.substring` on its result (#2848). A name
+    // with no slug-safe content stops here loudly instead of silently
+    // leaving the expected phase directory unresolved.
+    const slug = generateSlugInternal(phaseName);
+    if (!slug) {
+      error(`phase name has no slug-safe characters: ${JSON.stringify(phaseName)}`);
     }
+    const prefix = rawProjectCode ? `${rawProjectCode}-` : '';
+    const dirName = `${prefix}${paddedNum}-${slug}`;
+    // #2376: absolute — see comment on phase_dir below.
+    expectedPhaseDir = toPosixPath(path.join(planningPaths(cwd).phases, dirName));
   }
 
   const result: Record<string, unknown> = {
@@ -2130,7 +2141,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
       const status = 'not_started';
       const phaseInfo: Record<string, unknown> = {
         number: num,
-        name: name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''),
+        name: generateSlugInternal(name),
         directory: null,
         status,
         plan_count: 0,

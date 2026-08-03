@@ -158,7 +158,15 @@ function cmdWorkstreamCreate(cwd: string, name: string | null | undefined, optio
       } else {
         try {
           const milestone = getMilestoneInfo(cwd);
-          existingWsName = generateSlugInternal(milestone.name) || 'default';
+          // 'default' stays the answer for "there is no milestone to name this
+          // after" (the catch below), but NOT for "the milestone has a name we
+          // could not render" — that would file the work under a directory
+          // unrelated to it, silently (#2848).
+          // Logical OR, because the generator returns an empty string for
+          // input with no slug-safe characters, not only a missing value —
+          // a nullish check alone lets that case through.
+          existingWsName = generateSlugInternal(milestone.name)
+            || error(`milestone name has no slug-safe characters: ${JSON.stringify(milestone.name)}`);
         } catch {
           existingWsName = 'default';
         }

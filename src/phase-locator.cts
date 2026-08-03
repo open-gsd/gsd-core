@@ -23,7 +23,7 @@ import phaseIdModule = require('./phase-id.cjs');
 const { normalizePhaseName, phaseTokenMatches, extractPhaseToken } = phaseIdModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsModule = require('./core-utils.cjs');
-const { readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath } = coreUtilsModule;
+const { readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath, generateSlugInternal } = coreUtilsModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspace;
@@ -149,7 +149,13 @@ function searchPhaseInDir(baseDir: string, relBase: string, normalized: string):
       directory: toPosixPath(path.join(relBase, match)),
       phase_number: phaseNumber,
       phase_name: phaseName,
-      phase_slug: phaseName ? phaseName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') : null,
+      // Can be `''` when phaseName has no slug-safe characters — the
+      // generator's contract returns the empty string for that case, not
+      // `null` (`null` only means the input itself was falsy). A caller that
+      // concatenates this into a path segment without checking for `''` gets
+      // a nameless directory; every writer of phase_slug already guards
+      // against that separately (#2848).
+      phase_slug: generateSlugInternal(phaseName),
       plans,
       summaries,
       incomplete_plans: incompletePlans,
