@@ -665,6 +665,27 @@ describe('workflow call sites declare --files (#2269)', () => {
     assert.strictEqual(hasScopedFiles('gsd_run query commit plan --files'), false);
     assert.strictEqual(hasScopedFiles('gsd_run query commit plan --files .planning/PLAN.md'), true);
 
+    // The tokenizer's two backslash-escape branches, hand-pinned — an escaped
+    // quote inside a double-quoted message must not close it (so a --files
+    // beyond it is inside or outside the message exactly as the shell says),
+    // and an escaped space outside quotes joins the word instead of splitting.
+    assert.strictEqual(
+      hasScopedFiles('gsd_run query commit "he said \\"hi\\"" --files x.md'), true,
+      'an escaped quote must not close the message: the --files after it is real',
+    );
+    assert.strictEqual(
+      hasScopedFiles('gsd_run query commit "he said \\"hi --files x.md\\""'), false,
+      'an escaped quote must not close the message: the --files after it is still message text',
+    );
+    assert.strictEqual(
+      hasScopedFiles('gsd_run query commit docs:\\ plan --files x.md'), true,
+      'an escaped space outside quotes joins the word, and the --files after it is real',
+    );
+    assert.strictEqual(
+      hasScopedFiles('gsd_run query commit "docs: plan" --files x\\ y.md'), true,
+      'an escaped space inside the value keeps it one token — still a value',
+    );
+
     // --files=x stays UNSCOPED without a special case: routeCommit does
     // args.indexOf('--files'), which the fused token cannot satisfy.
     assert.strictEqual(hasScopedFiles('gsd_run query commit "docs: plan" --files=.planning/PLAN.md'), false);
@@ -884,11 +905,23 @@ describe('workflow call sites declare --files (#2269)', () => {
       .filter((s) => s.length > 0);
     // A message body compatible with the delimiter wrapping it. Inside quotes
     // it may now contain the OTHER quote character — `commit "docs: don't
-    // break"` is a legitimate line the old parity walk mis-scored — but never
-    // a backslash, which is an escape on both sides of the comparison.
-    const messageFor = (d) => (d === ''
-      ? fc.oneof(fc.constant(''), safeToken)
-      : fc.string({ maxLength: 60 }).map((s) => s.split(d).join('').split('\\').join('')));
+    // break"` is a legitimate line the old parity walk mis-scored.
+    //
+    // Double-quoted messages may also contain `"` and `\` themselves: embedFor
+    // escapes them on the way into the LINE while the property keeps the RAW
+    // string as the argv the shell would deliver, so the tokenizer's
+    // backslash-escape branch sits inside the generator's domain instead of
+    // being stripped out of it (round-10 finding: both escape branches were
+    // untested because every generator dropped every backslash). Single-quoted
+    // messages still exclude their own delimiter and backslashes — the shell
+    // has NO escape inside '…', so there is no escaped spelling to generate —
+    // and newlines are stripped everywhere because the scan is line-based.
+    const embedFor = (d, s) => (d === '"' ? s.replace(/[\\"]/g, (c) => `\\${c}`) : s);
+    const messageFor = (d) => {
+      if (d === '') return fc.oneof(fc.constant(''), safeToken);
+      if (d === '"') return fc.string({ maxLength: 60 }).map((s) => s.replace(/[\r\n]/g, ''));
+      return fc.string({ maxLength: 60 }).map((s) => s.replace(/[\r\n]/g, '').split(d).join('').split('\\').join(''));
+    };
     // A path the shell passes through as a VALUE. The `--` exclusion is not
     // cosmetic: routeCommit drops every `--`-prefixed token after --files, so
     // such a token is not a path at all and the invocation is unscoped — which
@@ -908,7 +941,7 @@ describe('workflow call sites declare --files (#2269)', () => {
         fc.property(
           delimiter.chain((d) => fc.tuple(fc.constant(d), messageFor(d), messageFor(d))),
           ([d, a, b]) => {
-            const line = `gsd_run query commit ${d}${a} --files ${b}${d}`;
+            const line = `gsd_run query commit ${d}${embedFor(d, `${a} --files ${b}`)}${d}`;
             assert.strictEqual(
               hasScopedFiles(line), false,
               `a --files inside the message must not count as scope: ${line}`,
@@ -923,7 +956,7 @@ describe('workflow call sites declare --files (#2269)', () => {
         fc.property(
           anyDelimiter.chain((d) => fc.tuple(fc.constant(d), messageFor(d), arg)),
           ([d, message, filePath]) => {
-            const line = `gsd_run query commit ${d}${message}${d} --files ${filePath}`;
+            const line = `gsd_run query commit ${d}${embedFor(d, message)}${d} --files ${filePath}`;
             assert.strictEqual(
               hasScopedFiles(line), true,
               `a --files outside the message must count as scope: ${line}`,
@@ -942,7 +975,7 @@ describe('workflow call sites declare --files (#2269)', () => {
         fc.property(
           anyDelimiter.chain((d) => fc.tuple(fc.constant(d), messageFor(d), flagArg)),
           ([d, message, flag]) => {
-            const line = `gsd_run query commit ${d}${message}${d} --files ${flag}`;
+            const line = `gsd_run query commit ${d}${embedFor(d, message)}${d} --files ${flag}`;
             assert.strictEqual(
               hasScopedFiles(line), false,
               `--files followed only by a flag must not count as scope: ${line}`,
@@ -969,7 +1002,7 @@ describe('workflow call sites declare --files (#2269)', () => {
             fc.array(fc.oneof(arg, flagArg, fc.constant('--files')), { maxLength: 4 }),
           )),
           ([d, message, tail]) => {
-            const line = `gsd_run query commit ${d}${message}${d} ${tail.join(' ')}`;
+            const line = `gsd_run query commit ${d}${embedFor(d, message)}${d} ${tail.join(' ')}`;
             // The argv the shell would hand routeCommit for that same line.
             const argv = ['commit', message, ...tail];
             assert.strictEqual(
