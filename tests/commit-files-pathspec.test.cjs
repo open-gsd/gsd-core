@@ -312,6 +312,22 @@ describe('workflow call sites declare --files (#2269)', () => {
   // a message ("$(gsd-tools query phase-list)") from reading as a second
   // invocation, with no separator lookahead needed.
   //
+  // Beyond the operators, the shell consumes THREE more things before argv
+  // exists, and each one previously leaked into the token list as a value —
+  // so `--files >/dev/null 2>&1 || true` (a live tail shape in
+  // gsd-core/references/execute-phase-requirement-revert.md) scored as scoped
+  // while the runtime saw files=[] and took the blanket-.planning/ default:
+  //   - a single `&` is a control operator like `;` (`&&` is checked first);
+  //   - an unquoted `#` at the START of a word begins a comment and ends the
+  //     command (mid-word `#` stays literal, as in the shell);
+  //   - redirections (`> x`, `>> x`, `2>&1`, `< x`, with or without a space
+  //     before the target) are consumed as `redir: true` tokens, along with a
+  //     glued all-digit IO number, and consumers exclude them from argv.
+  // Variable tokens ($VAR / ${VAR}) stay ordinary values DELIBERATELY: whether
+  // one expands to something is unknowable statically, and the three original
+  // #2269 fix sites all pass `--files "${PHASE_DIR}/…"` — flagging `$`-tokens
+  // would false-flag every one of them.
+  //
   // Never throws, and an unterminated quote simply runs to end of input: these
   // inputs are substrings sliced out of prose, so a torn quote is expected
   // rather than exceptional. Tokens carry offsets so callers can slice the
@@ -350,9 +366,26 @@ describe('workflow call sites declare --files (#2269)', () => {
       if (ch === '\\' && i + 1 < str.length) { begin(i); cur += str[i + 1]; i += 1; continue; }
       if (ch === '"' || ch === "'") { begin(i); quote = ch; continue; }
       if (/\s/.test(ch)) { flush(i); continue; }
+      // An unquoted # at the start of a word ends the command line — the rest
+      // is comment and never reaches argv. Mid-word (`PR#42`) it is literal.
+      if (ch === '#' && !started) { flush(i); break; }
+      // Redirections: the operator and its target are consumed by the shell,
+      // not passed as arguments. A glued all-digit word is an IO number
+      // (`2>&1`) and belongs to the redirection, not to argv.
+      if (ch === '>' || ch === '<') {
+        if (started && /^[0-9]+$/.test(cur)) { cur = ''; started = false; } else { flush(i); }
+        let j = i + 1;
+        if (str[j] === ch) j += 1;                                   // >> / <<
+        if (str[j] === '&') j += 1;                                  // >& (2>&1)
+        while (j < str.length && /[ \t]/.test(str[j])) j += 1;       // gap before target
+        while (j < str.length && !/[\s;|&<>]/.test(str[j])) j += 1;  // the target word
+        tokens.push({ value: str.slice(i, j), start: i, end: j, redir: true });
+        i = j - 1;
+        continue;
+      }
       const pair = str.slice(i, i + 2);
       if (pair === '&&' || pair === '||') { flush(i); tokens.push({ value: pair, start: i, end: i + 2, op: true }); i += 1; continue; }
-      if (ch === ';' || ch === '|') { flush(i); tokens.push({ value: ch, start: i, end: i + 1, op: true }); continue; }
+      if (ch === ';' || ch === '|' || ch === '&') { flush(i); tokens.push({ value: ch, start: i, end: i + 1, op: true }); continue; }
       begin(i);
       cur += ch;
     }
@@ -362,11 +395,13 @@ describe('workflow call sites declare --files (#2269)', () => {
 
   // routeCommit's predicate, verbatim, over one invocation's tokens. Stops at
   // the first control operator so that a later command's --files can never
-  // vouch for this one even when the caller passes an unsegmented line.
+  // vouch for this one even when the caller passes an unsegmented line, and
+  // drops redirection tokens — they are consumed by the shell, so a `--files`
+  // whose only successors are redirections has no value at runtime.
   const hasScopedFiles = (line) => {
     const all = tokenize(line);
     const cut = all.findIndex((t) => t.op);
-    const tokens = (cut === -1 ? all : all.slice(0, cut)).map((t) => t.value);
+    const tokens = (cut === -1 ? all : all.slice(0, cut)).filter((t) => !t.redir).map((t) => t.value);
     const filesIndex = tokens.indexOf('--files');
     if (filesIndex === -1) return false;
     return tokens.slice(filesIndex + 1).some((t) => !t.startsWith('--'));
@@ -472,6 +507,22 @@ describe('workflow call sites declare --files (#2269)', () => {
       // the glob (exactly the #2269 forgot-the-scope class) lands here.
       'gsd_run query commit "docs: plan" --files --amend',
       'gsd_run query commit "docs: plan" --files --no-verify',
+      // The shell consumes redirections before argv exists, so a --files whose
+      // only successors are redirections reaches routeCommit with files=[].
+      // The first row is one token-deletion from a live site
+      // (execute-phase-requirement-revert.md ends `--files
+      // .planning/REQUIREMENTS.md >/dev/null 2>&1 || true`) — dropping the
+      // value lands exactly here, and the scanner must not let `>/dev/null`
+      // vouch as a value.
+      'gsd_run query commit "docs: revert" --files >/dev/null 2>&1 || true',
+      'gsd_run query commit "docs: plan" --files > out.md',
+      'gsd_run query commit "docs: plan" --files 2>&1',
+      // An unquoted # begins a comment: everything after it, --files included,
+      // never reaches argv.
+      'gsd_run query commit "docs: plan" # --files a.md',
+      // A single & is a control operator (&& with one character deleted): the
+      // --files on its far side belongs to echo, not to the commit.
+      'gsd_run query commit "docs: plan" & echo --files a.md',
     ];
     for (const line of bare) {
       assert.ok(INVOCATION_RE.test(line), `should match invocation: ${line}`);
@@ -496,6 +547,14 @@ describe('workflow call sites declare --files (#2269)', () => {
       // The runtime filters on '--', not '-', so a single-dash token IS a
       // value and the scanner must agree.
       'gsd_run query commit "docs: plan" --files -weird-name.md',
+      // The live redirect-tail shape, value present: the redirections after
+      // the value are consumed by the shell and must not hide the real scope.
+      'gsd_run query commit "docs(phase-{X}): revert premature Complete requirements after gaps found" --files .planning/REQUIREMENTS.md >/dev/null 2>&1 || true',
+      // A # INSIDE a quoted message is literal text, not a comment — ship.md
+      // commits with `PR #${PR_NUMBER}` in the message today.
+      'gsd_run query commit "docs: ship phase 4 — PR #42 [ci skip]" --files .planning/STATE.md',
+      // Mid-word # is literal too, as in the shell.
+      'gsd_run query commit docs:PR#42 --files .planning/STATE.md',
     ];
     for (const line of scoped) {
       assert.ok(INVOCATION_RE.test(line), `should match invocation: ${line}`);
