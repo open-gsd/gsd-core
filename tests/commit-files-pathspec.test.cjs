@@ -447,9 +447,22 @@ describe('workflow call sites declare --files (#2269)', () => {
     // No operator: the whole string is the one invocation, returned verbatim.
     if (groups.length === 1) return [str];
     const hits = groups.filter(isCommitInvocation);
-    // Operators present but no segment is a commit invocation — fall back to
-    // the whole string rather than silently dropping the line from the scan.
-    if (!hits.length) return [str];
+    // Operators present but no segment is itself a gsd commit invocation.
+    // Two different situations land here, and the old blanket [str] fallback
+    // collapsed them: a line whose `commit` belongs to ANOTHER command
+    // (`gsd_run query state && git commit -m "x"`, `gsd_run query state |
+    // grep commit`) is not ours to scan and was reported as a false offender
+    // carrying the wrong message; a segment that carries the gsd binary and a
+    // commit token but fails the tokens[0] test (an env-var prefix, a
+    // wrapper) is still plausibly an invocation, and dropping it would be a
+    // silent coverage loss. Keep the fallback only for the second class.
+    if (!hits.length) {
+      const containsInvocation = (g) => {
+        const bi = g.findIndex((t) => !t.redir && GSD_BINARY_RE.test(t.value));
+        return bi !== -1 && g.slice(bi + 1).some((t) => !t.redir && COMMIT_TOKENS.has(t.value));
+      };
+      return groups.some(containsInvocation) ? [str] : [];
+    }
     return hits.map((g) => str.slice(g[0].start, g[g.length - 1].end));
   };
 
@@ -748,6 +761,21 @@ describe('workflow call sites declare --files (#2269)', () => {
       'a command substitution must not split the invocation',
     );
     assert.ok(hasScopedFiles(invocationCandidates(substitution)[0]));
+
+    // The inverse false-offender class: a line whose `commit` belongs to
+    // ANOTHER command entirely. The anchor's loose `.*` matches these lines
+    // (deliberately — see its comment), and the old no-hit fallback then
+    // scored the whole line, flagging a legitimate chain as an unscoped
+    // commit. Neither command below invokes cmdCommit, so the line must
+    // contribute NO candidates rather than a red with the wrong message.
+    assert.deepEqual(
+      invocationCandidates('gsd_run query state && git commit -m "x"'), [],
+      'a git commit on the far side of && is not a gsd invocation',
+    );
+    assert.deepEqual(
+      invocationCandidates('gsd_run query state | grep commit'), [],
+      'a grep for the word commit is not a gsd invocation',
+    );
   });
 
   test('mid-prose argument-bearing invocations enter the candidate set', () => {
