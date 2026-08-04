@@ -2801,60 +2801,126 @@ function cmdStateValidate(cwd: string, raw: boolean): void {
   const warnings: string[] = [];
   const drift: Record<string, unknown> = {};
 
-  const status = stateExtractField(content, 'Status') || '';
-  const currentPhase = stateExtractField(content, 'Current Phase');
-  const totalPlansRaw = stateExtractField(content, 'Total Plans in Phase');
+  const fm = extractFrontmatter(content, statePath) as Record<string, unknown>;
+  const body = stripFrontmatter(content);
+  const fmScalar = (key: string): string | null => {
+    const value = fm[key];
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'string') return value.trim() || null;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    return null;
+  };
+
+  const frontmatterRaw = fmScalar('current_phase');
+  const legacyRaw = stateExtractField(body, 'Current Phase');
+  const currentPositionScope = matchCurrentPositionSection(body) ?? body;
+  const currentPositionRaw = stateExtractField(currentPositionScope, 'Phase');
+  const phaseSources = {
+    frontmatter: parseProsePhaseField(frontmatterRaw).phase,
+    legacy_current_phase: parseProsePhaseField(legacyRaw).phase,
+    current_position_phase: parseProsePhaseField(currentPositionRaw).phase,
+  };
+  const currentPhase = phaseSources.frontmatter
+    ?? phaseSources.legacy_current_phase
+    ?? phaseSources.current_position_phase;
+
+  if (currentPhase === null) {
+    warnings.push(
+      'Cannot validate phase drift: STATE.md has no usable current_phase, Current Phase, or Current Position Phase value',
+    );
+    drift['phase_reference'] = {
+      reason: 'unresolved',
+      selected: null,
+      sources: phaseSources,
+    };
+    output({ valid: false, warnings, drift }, raw, undefined);
+    return;
+  }
+
+  const selectedPhaseKey = phaseKeyFromToken(currentPhase);
+  const hasPhaseConflict = Object.values(phaseSources).some(
+    source => source !== null && phaseKeyFromToken(source) !== selectedPhaseKey,
+  );
+  if (hasPhaseConflict) {
+    warnings.push(
+      `Phase reference conflict: validating authoritative phase ${currentPhase}; align STATE.md phase sources`,
+    );
+    drift['phase_reference'] = {
+      reason: 'conflict',
+      selected: currentPhase,
+      sources: phaseSources,
+    };
+  }
+
+  const status = fmScalar('status') ?? stateExtractField(body, 'Status') ?? '';
+  const totalPlansRaw = stateExtractField(body, 'Total Plans in Phase');
   const totalPlansInPhase = totalPlansRaw ? parseInt(totalPlansRaw, 10) : null;
 
   const phasesDir = planningPaths(cwd).phases;
 
-  // Scan disk for current phase
-  if (currentPhase && fs.existsSync(phasesDir)) {
-    const normalized = currentPhase.replace(/\s+of\s+\d+.*/, '').trim();
-    try {
-      const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
-      const phaseDir = entries.find(e => e.isDirectory() && e.name.startsWith(normalized.replace(/^0+/, '').padStart(2, '0')));
-      if (phaseDir) {
-        const phaseDirPath = path.join(phasesDir, phaseDir.name);
-        const { planCount: diskPlans, summaryCount: diskSummaries } = scanPhasePlans(phaseDirPath);
+  if (!fs.existsSync(phasesDir)) {
+    warnings.push(`Cannot validate phase drift: phases directory is missing for phase ${currentPhase}`);
+    drift['phase_directory'] = { reason: 'missing_root', selected: currentPhase };
+    output({ valid: false, warnings, drift }, raw, undefined);
+    return;
+  }
 
-        // Check plan count mismatch
-        if (totalPlansInPhase !== null && diskPlans !== totalPlansInPhase) {
-          warnings.push(`Plan count mismatch: STATE.md says ${totalPlansInPhase} plans, disk has ${diskPlans}`);
-          drift['plan_count'] = { state: totalPlansInPhase, disk: diskPlans };
-        }
+  let phaseDirName: string;
+  try {
+    const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
+    const phaseDir = entries.find(
+      entry => entry.isDirectory() && phaseKeyFromDir(entry.name) === selectedPhaseKey,
+    );
+    if (!phaseDir) {
+      warnings.push(`Cannot validate phase drift: no phase directory matches phase ${currentPhase}`);
+      drift['phase_directory'] = { reason: 'not_found', selected: currentPhase };
+      output({ valid: false, warnings, drift }, raw, undefined);
+      return;
+    }
+    phaseDirName = phaseDir.name;
+  } catch {
+    warnings.push(`Cannot validate phase drift: phases directory is unreadable for phase ${currentPhase}`);
+    drift['phase_directory'] = { reason: 'unreadable', selected: currentPhase };
+    output({ valid: false, warnings, drift }, raw, undefined);
+    return;
+  }
 
-        // Check for VERIFICATION.md
-        const files = fs.readdirSync(phaseDirPath);
-        const verificationFiles = files.filter(f => f.includes('VERIFICATION') && f.endsWith('.md'));
-        for (const vf of verificationFiles) {
-          try {
-            const vContent = fs.readFileSync(path.join(phaseDirPath, vf), 'utf-8');
-            if (/status:\s*passed/i.test(vContent) && /executing/i.test(status)) {
-              warnings.push(`Status drift: STATE.md says "${status}" but ${vf} shows verification passed — phase may be complete`);
-              drift['verification_status'] = { state_status: status, verification: 'passed' };
-            }
-          } catch { /* best-effort (#2245 audit): cmdStateValidate is a diagnostic
-             * warnings scan across N VERIFICATION.md files — one unreadable file
-             * (permission/race) must not abort the scan of the rest; it's simply
-             * excluded from drift detection. */ }
-        }
+  const phaseDirPath = path.join(phasesDir, phaseDirName);
+  try {
+    const { planCount: diskPlans, summaryCount: diskSummaries } = scanPhasePlans(phaseDirPath);
 
-        // Check if all plans have summaries but status still says executing
-        if (diskPlans > 0 && diskSummaries >= diskPlans && /executing/i.test(status)) {
-          // Only warn if no verification exists (if verification passed, the above warning covers it)
-          if (verificationFiles.length === 0) {
-            warnings.push(`All ${diskPlans} plans have summaries but status is still "${status}" — phase may be ready for verification`);
-          }
+    // Check plan count mismatch
+    if (totalPlansInPhase !== null && diskPlans !== totalPlansInPhase) {
+      warnings.push(`Plan count mismatch: STATE.md says ${totalPlansInPhase} plans, disk has ${diskPlans}`);
+      drift['plan_count'] = { state: totalPlansInPhase, disk: diskPlans };
+    }
+
+    // Check for VERIFICATION.md
+    const files = fs.readdirSync(phaseDirPath);
+    const verificationFiles = files.filter(f => f.includes('VERIFICATION') && f.endsWith('.md'));
+    for (const vf of verificationFiles) {
+      try {
+        const vContent = fs.readFileSync(path.join(phaseDirPath, vf), 'utf-8');
+        if (/status:\s*passed/i.test(vContent) && /executing/i.test(status)) {
+          warnings.push(`Status drift: STATE.md says "${status}" but ${vf} shows verification passed — phase may be complete`);
+          drift['verification_status'] = { state_status: status, verification: 'passed' };
         }
+      } catch { /* best-effort (#2245 audit): cmdStateValidate is a diagnostic
+         * warnings scan across N VERIFICATION.md files — one unreadable file
+         * (permission/race) must not abort the scan of the rest; it's simply
+         * excluded from drift detection. */ }
+    }
+
+    // Check if all plans have summaries but status still says executing
+    if (diskPlans > 0 && diskSummaries >= diskPlans && /executing/i.test(status)) {
+      // Only warn if no verification exists (if verification passed, the above warning covers it)
+      if (verificationFiles.length === 0) {
+        warnings.push(`All ${diskPlans} plans have summaries but status is still "${status}" — phase may be ready for verification`);
       }
-    } catch { /* best-effort (#2245 audit): cmdStateValidate is a read-only
-       * diagnostic scan of the current phase's directory (readdirSync +
-       * scanPhasePlans). A disk-scan failure here means drift detection for
-       * this phase is skipped for this run, degrading to "no warnings from
-       * that scan" rather than crashing the validate command — the same
-       * degrade-on-scan-failure pattern buildStateFrontmatter's own disk scan
-       * already uses. */ }
+    }
+  } catch {
+    warnings.push(`Cannot validate phase drift: phase directory is unreadable for phase ${currentPhase}`);
+    drift['phase_directory'] = { reason: 'unreadable', selected: currentPhase };
   }
 
   const valid = warnings.length === 0;
