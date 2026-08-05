@@ -16,6 +16,12 @@
  * A bare config-field mention is not coverage: the same line must direct how
  * user-facing output is rendered, or the workflow must load a known directive.
  *
+ * A workflow FRAGMENT (`<workflow>/<modes|steps|templates>/<name>.md`, the shape
+ * the #1671 fragment epic extracts) additionally passes when its parent workflow
+ * names that exact fragment path and is itself covered — see
+ * `inheritsParentCoverage`, which proves the inheritance per file instead of
+ * granting it to a directory.
+ *
  * Exit 0 only when workflows were actually found AND every one of them is
  * covered; exit 1 with a per-file listing if not. "No violations" alone is not
  * a pass: a run that inspected nothing has established nothing.
@@ -83,6 +89,12 @@ const PARENT_INJECTED_WORKFLOWS = new Map([
     directive: 'Use response_language {response_language} for all user-facing prose; preserve code and paths.',
   }],
 ]);
+// Fragment directories produced by the workflow-fragment epic (#1671). A file
+// under one of these is a SECTION of its parent workflow, never an entry point:
+// the only way in is the `read and execute gsd-core/workflows/<path>` stub the
+// parent emits, which fires with the parent — and therefore the parent's
+// response-language directive — already loaded.
+const FRAGMENT_DIRS = new Set(['modes', 'steps', 'templates']);
 const DIRECTIVE_ACTION_RE = /\b(?:apply|present|render|respond|translate|use|write|must|should)\b/i;
 const USER_OUTPUT_RE = /\b(?:explanations?|language|narration|output|prompts?|prose|questions?|templates?|user-facing)\b/i;
 
@@ -106,6 +118,27 @@ function hasResponseLanguageCoverage(content) {
   );
 }
 
+/**
+ * A fragment inherits its parent workflow's coverage, but only when the
+ * inheritance is PROVEN per file rather than assumed from the directory:
+ *   1. the path is `<workflow>/<fragment-dir>/<name>.md`,
+ *   2. `<workflow>.md` exists and names this exact fragment path — i.e. the
+ *      parent really is the way in, and
+ *   3. the parent is itself covered.
+ * A fragment nobody references, or one hanging off an uncovered parent, stays a
+ * violation. Without this the lint reds on every new fragment the #1671 epic
+ * extracts, even though the extraction moved prose that was already covered.
+ */
+function inheritsParentCoverage(workflowsDir, relative) {
+  const segments = relative.split('/');
+  if (segments.length !== 3 || !FRAGMENT_DIRS.has(segments[1])) return false;
+  const parentPath = path.join(workflowsDir, `${segments[0]}.md`);
+  if (!fs.existsSync(parentPath)) return false;
+  const parent = fs.readFileSync(parentPath, 'utf8');
+  if (!parent.includes(`gsd-core/workflows/${relative}`)) return false;
+  return hasResponseLanguageCoverage(parent);
+}
+
 function findViolations(workflowsDir) {
   return findMarkdownFilesRecursive(workflowsDir).filter((file) => {
     const relative = path.relative(workflowsDir, file).replaceAll(path.sep, '/');
@@ -121,7 +154,8 @@ function findViolations(workflowsDir) {
         fs.readFileSync(parentPath, 'utf8').includes(injection.directive)
       ) return false;
     }
-    return !hasResponseLanguageCoverage(content);
+    if (hasResponseLanguageCoverage(content)) return false;
+    return !inheritsParentCoverage(workflowsDir, relative);
   });
 }
 
@@ -179,5 +213,6 @@ module.exports = {
   findMarkdownFilesRecursive,
   findViolations,
   hasResponseLanguageCoverage,
+  inheritsParentCoverage,
   main,
 };

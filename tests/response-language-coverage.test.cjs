@@ -15,6 +15,7 @@ const {
   findMarkdownFilesRecursive,
   findViolations,
   hasResponseLanguageCoverage,
+  inheritsParentCoverage,
   main,
 } = require('../scripts/lint-response-language-coverage.cjs');
 
@@ -110,6 +111,70 @@ describe('response-language workflow coverage lint (#2529)', () => {
       'Apply response_language to all user-facing prose; preserve code and paths.\n',
     );
     assert.deepStrictEqual(findViolations(root), [drifted]);
+  });
+
+  // #1671 keeps extracting workflow prose into fragments. A fragment carries no
+  // directive of its own, so without inheritance every extraction reds this lint
+  // for prose that was already covered where it used to live.
+  function fragmentFixture({ parentCovered = true, parentNamesFragment = true } = {}) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-response-language-fragment-'));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, 'autonomous', 'steps'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'autonomous.md'),
+      [
+        parentCovered
+          ? '@~/.claude/gsd-core/references/response-language-directive.md'
+          : '# No directive here',
+        parentNamesFragment
+          ? 'read and execute `gsd-core/workflows/autonomous/steps/converge-banner.md`'
+          : 'read and execute `gsd-core/workflows/autonomous/steps/something-else.md`',
+      ].join('\n') + '\n',
+    );
+    fs.writeFileSync(
+      path.join(root, 'autonomous', 'steps', 'converge-banner.md'),
+      'Display: `Planning: convergence enabled`\n',
+    );
+    return root;
+  }
+
+  test('a fragment inherits coverage from the parent that names it', () => {
+    const root = fragmentFixture();
+
+    assert.strictEqual(
+      inheritsParentCoverage(root, 'autonomous/steps/converge-banner.md'),
+      true,
+    );
+    assert.deepStrictEqual(findViolations(root), []);
+  });
+
+  test('inheritance is refused when the parent is uncovered or does not name the fragment', () => {
+    const uncoveredParent = fragmentFixture({ parentCovered: false });
+    assert.deepStrictEqual(
+      findViolations(uncoveredParent).map((file) => path.relative(uncoveredParent, file).replaceAll(path.sep, '/')),
+      ['autonomous.md', 'autonomous/steps/converge-banner.md'],
+    );
+
+    const unreferenced = fragmentFixture({ parentNamesFragment: false });
+    assert.deepStrictEqual(
+      findViolations(unreferenced).map((file) => path.relative(unreferenced, file).replaceAll(path.sep, '/')),
+      ['autonomous/steps/converge-banner.md'],
+    );
+  });
+
+  test('inheritance reaches fragment directories only, never a nested workflow tree', () => {
+    const root = fragmentFixture();
+    // Depth and directory name are both load-bearing: a two-segment path has no
+    // parent workflow, and a directory outside the fragment set is not a section.
+    assert.strictEqual(inheritsParentCoverage(root, 'autonomous.md'), false);
+    assert.strictEqual(
+      inheritsParentCoverage(root, 'autonomous/steps/nested/converge-banner.md'),
+      false,
+    );
+    assert.strictEqual(
+      inheritsParentCoverage(root, 'autonomous/references/converge-banner.md'),
+      false,
+    );
   });
 
   test('rejects a bare config mention and accepts an actionable inline directive', () => {
