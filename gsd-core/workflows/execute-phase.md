@@ -1299,7 +1299,6 @@ Phase requirement IDs: {phase_req_ids}
 Check must_haves against actual codebase.
 Cross-reference requirement IDs from PLAN frontmatter against REQUIREMENTS.md — every ID MUST be accounted for.
 Create VERIFICATION.md.
-Use response_language {response_language} for all user-facing prose; preserve code and paths.
 
 <files_to_read>
 Read these files before verification:

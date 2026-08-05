@@ -80,12 +80,17 @@ const EXACT_INLINE_DIRECTIVE_WORKFLOWS = new Set([
   'plan-phase/steps/windows-troubleshooting.md',
   'settings-advanced.md',
 ]);
-// verify-phase.md is not entered directly: execute-phase.md injects the exact
-// response-language contract into the gsd-verifier dispatch prompt. Pin both
-// ends so deleting or weakening that dispatch makes the lint fail closed.
+// verify-phase.md is not entered directly: execute-phase.md's verify_phase_goal
+// step injects the exact response-language contract into the gsd-verifier
+// dispatch prompt. The contract text is pinned in the reference execute-phase.md
+// eagerly @-references rather than inline in the workflow, because that workflow
+// has 2 bytes of headroom under the ADR-857 pre-phase-6 ceiling — the same reason
+// the rest of that reference exists. `parent` is therefore resolved relative to
+// the workflows directory and may point outside it. Pin both ends so deleting or
+// weakening the injected line makes the lint fail closed.
 const PARENT_INJECTED_WORKFLOWS = new Map([
   ['verify-phase.md', {
-    parent: 'execute-phase.md',
+    parent: '../references/execute-phase-response-language.md',
     directive: 'Use response_language {response_language} for all user-facing prose; preserve code and paths.',
   }],
 ]);

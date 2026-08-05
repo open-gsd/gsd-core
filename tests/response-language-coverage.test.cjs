@@ -72,11 +72,18 @@ describe('response-language workflow coverage lint (#2529)', () => {
   });
 
   test('accepts verify-phase only through its documented parent-injected contract', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-response-language-parent-'));
-    tempDirs.push(root);
-    fs.writeFileSync(path.join(root, 'verify-phase.md'), '# Loaded by execute-phase\n');
+    // The injection is pinned OUTSIDE the workflows tree — execute-phase.md has no
+    // byte headroom for it — so the fixture mirrors the real layout: a workflows
+    // dir with a sibling references dir holding the pinned line.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-response-language-parent-'));
+    tempDirs.push(home);
+    const root = path.join(home, 'workflows');
+    const injectionPath = path.join(home, 'references', 'execute-phase-response-language.md');
+    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(path.dirname(injectionPath), { recursive: true });
+    fs.writeFileSync(path.join(root, 'verify-phase.md'), '# Spawned by execute-phase\n');
     fs.writeFileSync(
-      path.join(root, 'execute-phase.md'),
+      injectionPath,
       'Use response_language {response_language} for all user-facing prose; preserve code and paths.\n',
     );
     fs.writeFileSync(path.join(root, 'ordinary.md'), '# No directive\n');
@@ -86,10 +93,10 @@ describe('response-language workflow coverage lint (#2529)', () => {
       ['ordinary.md'],
     );
 
-    fs.writeFileSync(path.join(root, 'execute-phase.md'), '# Injection removed\n');
+    fs.writeFileSync(injectionPath, '# Injection removed\n');
     assert.deepStrictEqual(
       findViolations(root).map((file) => path.basename(file)),
-      ['execute-phase.md', 'ordinary.md', 'verify-phase.md'],
+      ['ordinary.md', 'verify-phase.md'],
     );
   });
 
@@ -269,9 +276,24 @@ describe('response-language workflow coverage lint (#2529)', () => {
     const pinned = [
       ...EXACT_INLINE_DIRECTIVE_WORKFLOWS,
       ...PARENT_INJECTED_WORKFLOWS.keys(),
-      ...[...PARENT_INJECTED_WORKFLOWS.values()].map((injection) => injection.parent),
     ].sort();
 
     assert.deepStrictEqual(pinned.filter((relative) => !discovered.has(relative)), []);
+
+    // An injection parent may sit outside the workflows tree (the verify-phase
+    // contract is pinned in a reference, for byte-ceiling reasons), so it is
+    // resolved on disk rather than looked up in the catalog — but a stale one
+    // silently drops the pin just the same, so it is asserted here too.
+    for (const [workflow, injection] of PARENT_INJECTED_WORKFLOWS) {
+      const parentPath = path.join(WORKFLOWS_DIR, injection.parent);
+      assert.ok(
+        fs.existsSync(parentPath),
+        `injection parent for ${workflow} is stale: ${injection.parent}`,
+      );
+      assert.ok(
+        fs.readFileSync(parentPath, 'utf8').includes(injection.directive),
+        `injection parent for ${workflow} no longer carries the pinned directive`,
+      );
+    }
   });
 });
