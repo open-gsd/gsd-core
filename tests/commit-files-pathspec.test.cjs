@@ -256,30 +256,51 @@ describe('commit --files: pathspec honors declared scope (#2112)', () => {
 });
 
 describe('workflow call sites declare --files (#2269)', () => {
-  // The scan runs two tiers. Tier 1 anchors the command at line start, which
-  // keeps bare prose mentions (mid-sentence backtick references in
-  // plan-phase.md, quick.md, etc.) out of scope while covering all three
-  // invocation forms in use: gsd_run, gsd-tools, gsd-tools.cjs. Tier 2
-  // (MIDLINE_INVOCATION_RE below) catches argument-bearing invocations
-  // embedded mid-sentence, which tier 1 is structurally blind to.
+  // WHAT COUNTS AS AN INVOCATION — the question this scan kept answering by
+  // proxy, and kept getting wrong in both directions at once.
   //
-  // `query` is OPTIONAL. gsd-tools.cjs treats it as a meta-prefix and shifts
-  // it off (bin/gsd-tools.cjs, "Accept `query` as a meta-prefix"), so
-  // `gsd_run commit "msg"` and `gsd_run query commit "msg"` reach the identical
-  // cmdCommit. Requiring the token left the query-less spelling — already live
-  // at gsd-core/workflows/ingest-docs.md — outside the scan entirely, so a
-  // future bare `gsd_run commit` would reintroduce #2269 uncaught.
+  // The scan used to run two regex tiers: one anchoring the command at line
+  // start, one requiring a quoted commit message mid-line. Both were guesses
+  // at "is this text executable", and both failed. The anchor flagged a fenced
+  // block that deliberately SHOWS the unscoped form — a false positive against
+  // content correct as written. The quoted-message tier could not see an
+  // UNQUOTED invocation (`gsd_run query commit fixup` reaches the identical
+  // cmdCommit), so trimming its --files clause reintroduced #2269 with nothing
+  // to fail. Widening either proxy only moved the disagreement, which is the
+  // same lesson hasScopedFiles already learned when it stopped approximating
+  // the shell and started tokenizing it.
   //
-  // The `.*` between the binary and the command is load-bearing and must NOT
-  // be tightened to `(\s+query)?\s+commit`: invocations may carry flags before
-  // the command (gsd-core/workflows/onboard.md is
-  // `gsd_run --cwd "$ONBOARDING_ROOT" query commit ...`). Dropping `.*` swaps
-  // that call site out of coverage WITHOUT changing the offender count, since
-  // the site is scoped either way — a silent coverage loss that no count check
-  // would surface. (Deliberately stated as a property rather than an absolute
-  // match count: an earlier revision of this comment pinned a census figure,
-  // which then drifted three times and was stale by the time it was read.)
-  const INVOCATION_RE = /^\s*gsd(_run|-tools(\.cjs)?)\b.*\b(query\s+)?commit\b/;
+  // Markdown context was the obvious replacement and is REFUSED, on
+  // measurement. Keying on fences means parsing them: fence character, opening
+  // run length, nesting, tilde fences, four-space indented blocks, unclosed
+  // markers. Every bug in that parser is a SILENT FALSE NEGATIVE — a live
+  // invocation that stops being scanned with no signal at all — which is the
+  // one failure this file cannot afford. (Exempting fenced content outright is
+  // refused for a blunter reason: 96 of the 99 live invocations sit inside
+  // fences, so the scan would go blind to every site #2269 was filed about.
+  // Against the pre-fix tree it flags 3 offenders, and 0 with fences exempt.)
+  //
+  // So the discriminator is the COMMAND SHAPE, not the markup around it:
+  //
+  //     <binary> [ query | -flag [value] ]* <commit-token> <at least one arg>
+  //
+  // That middle clause is what separates a command from a SENTENCE containing
+  // the same two words. `Update STATE.md using gsd-tools.cjs query (or legacy
+  // gsd-tools) commit mutations:` carries the binary and a commit token, and
+  // `(or` is neither the query meta-prefix nor a flag — so it is prose, and no
+  // markup had to be parsed to know that. The trailing-argument clause is what
+  // separates an invocation from a bare MENTION (`the `gsd_run query commit`
+  // step`), which carries no argument at all.
+  //
+  // Each line is scanned WHOLE, and each of its inline code spans is scanned
+  // too, and the results are UNIONED. Scanning the whole line reaches every
+  // executable shape regardless of markup — line-start, `cd … && gsd_run …`,
+  // `if …; then gsd_run …; fi`, four-space indented, fenced, prompt-prefixed.
+  // Scanning spans separately reaches the one case the whole-line pass cannot,
+  // because a backtick glues to the token and stops the binary from matching:
+  // an invocation written inline in prose. The union is additive by
+  // construction, so a mis-parsed span can only ever ADD a false positive an
+  // author can see — it can never hide an invocation.
 
   // The scan's verdict must agree with the RUNTIME, and the runtime never sees
   // the line — it sees argv, after the shell has already tokenized it
@@ -407,35 +428,49 @@ describe('workflow call sites declare --files (#2269)', () => {
     return tokens.slice(filesIndex + 1).some((t) => !t.startsWith('--'));
   };
 
-  // Mid-prose argument-bearing invocations: the line-start anchor above
-  // deliberately keeps bare backtick mentions ("the `gsd_run query commit`
-  // step") out of scope, but a fully argument-bearing invocation embedded
-  // mid-sentence is executable instruction, not prose — new-milestone.md,
-  // new-project.md, and plan-phase.md each carry one live. The discriminator
-  // is the quoted commit message: `commit "` right after the command token is
-  // the executable shape; a bare mention never carries it.
-  // The message delimiter is `'` or `"`. Hardcoding `"` here was the same
-  // one-quoting-dialect assumption the parity walk made: a single-quoted
-  // mid-prose invocation was invisible to the scan entirely, so trimming its
-  // --files clause reintroduced #2269 with nothing to fail.
-  const MIDLINE_INVOCATION_RE = /\bgsd(_run|-tools(\.cjs)?)\b[^`]*?\b(query\s+)?commit\s+['"]/g;
+  // Usage-synopsis notation is documentation OF the CLI, never a call TO it:
+  // `<message>` is a metavariable and `[--files f1 f2]` an optional group, and
+  // neither is a shell word — the runtime's exact-token `indexOf('--files')`
+  // can never match a bracketed `[--files`. A bracketed optional FLAG is the
+  // notation's unambiguous marker, and the discrimination is measured rather
+  // than assumed: across the six scan roots, 24 real invocations carry
+  // brackets inside their quoted MESSAGE ("docs: capture todo - [title]") —
+  // one of them as its --files VALUE (`--files [handoff-path]`) — and not one
+  // brackets a flag, while all 5 synopsis lines (docs/*/CLI-TOOLS.md and its
+  // localized mirrors) do. Keying on "contains a bracket" would drop all 24.
+  const SYNOPSIS_TOKEN_RE = /^\[--/;
 
-  // An invocation is split at shell control operators before it is scored, so
-  // a later command's --files cannot vouch for an earlier unscoped one:
-  //   gsd_run query commit "a" && gsd_run query commit "b" --files x.md
-  //   gsd_run query commit "a" ;  gsd-tools query phase-list --files y.md
-  //   gsd_run query commit "a" && echo done --files unused.md
-  // The third is why the separator is no longer required to be FOLLOWED by a
-  // gsd binary: that lookahead left any non-gsd command's arguments fused to
-  // the invocation, and `--files` belonging to `echo` scored the commit as
-  // scoped. Splitting on every operator and then keeping only the segments
-  // that are themselves gsd commit invocations covers all three, and the
-  // command-substitution negative control (`commit "$(gsd-tools query x)"
-  // --files y.md`) is handled by the tokenizer instead — the operator is
-  // inside quotes, so it is never a separator to begin with.
-  const isCommitInvocation = (tokens) => tokens.length > 0
-    && GSD_BINARY_RE.test(tokens[0].value)
-    && tokens.some((t) => COMMIT_TOKENS.has(t.value));
+  // The command shape from the header, over one operator-delimited segment.
+  const isCommitInvocation = (tokens) => {
+    if (tokens.some((t) => SYNOPSIS_TOKEN_RE.test(t.value))) return false;
+    // The binary may sit anywhere in the segment: an env-var prefix
+    // (`FOO=1 gsd_run …`), a `then`/`else` keyword, a shell prompt (`$ `), or
+    // an interpreter (`node gsd-tools.cjs …`, live in docs/CLI-TOOLS.md) all
+    // precede it, and all are still the command being run.
+    const bi = tokens.findIndex((t) => !t.redir && GSD_BINARY_RE.test(t.value));
+    if (bi === -1) return false;
+    // Between the binary and the command, only the optional `query` meta-prefix
+    // and flags-with-values may intervene. `gsd_run --cwd "$ROOT" query commit`
+    // is live in onboard.md; a bare word here means this is a sentence.
+    let i = bi + 1;
+    while (i < tokens.length) {
+      const t = tokens[i];
+      if (t.op || t.redir) return false;
+      if (COMMIT_TOKENS.has(t.value)) break;
+      if (t.value === 'query') { i += 1; continue; }
+      if (t.value.startsWith('-')) {
+        i += 1;
+        const v = tokens[i];
+        if (v && !v.op && !v.redir && !v.value.startsWith('-') && !COMMIT_TOKENS.has(v.value)) i += 1;
+        continue;
+      }
+      return false;
+    }
+    if (i >= tokens.length) return false;
+    // At least one argument. A mention carries none, and this is the whole of
+    // the mention/invocation distinction the line-start anchor used to guess at.
+    return tokens.slice(i + 1).some((t) => !t.op && !t.redir);
+  };
 
   const segmentInvocations = (str) => {
     const groups = [];
@@ -444,45 +479,65 @@ describe('workflow call sites declare --files (#2269)', () => {
       if (t.op) { groups.push(cur); cur = []; } else { cur.push(t); }
     }
     groups.push(cur);
-    // No operator: the whole string is the one invocation, returned verbatim.
-    if (groups.length === 1) return [str];
-    const hits = groups.filter(isCommitInvocation);
-    // Operators present but no segment is itself a gsd commit invocation.
-    // Two different situations land here, and the old blanket [str] fallback
-    // collapsed them: a line whose `commit` belongs to ANOTHER command
-    // (`gsd_run query state && git commit -m "x"`, `gsd_run query state |
-    // grep commit`) is not ours to scan and was reported as a false offender
-    // carrying the wrong message; a segment that carries the gsd binary and a
-    // commit token but fails the tokens[0] test (an env-var prefix, a
-    // wrapper) is still plausibly an invocation, and dropping it would be a
-    // silent coverage loss. Keep the fallback only for the second class.
-    if (!hits.length) {
-      const containsInvocation = (g) => {
-        const bi = g.findIndex((t) => !t.redir && GSD_BINARY_RE.test(t.value));
-        return bi !== -1 && g.slice(bi + 1).some((t) => !t.redir && COMMIT_TOKENS.has(t.value));
-      };
-      return groups.some(containsInvocation) ? [str] : [];
-    }
-    return hits.map((g) => str.slice(g[0].start, g[g.length - 1].end));
+    // Every segment is ruled by the same predicate, and the two `[str]`
+    // fallbacks this function used to carry are gone with the tokens[0] test
+    // that made them necessary. `[str]` was the same "one hit vouches for the
+    // whole line" shape the earlier rounds spent three passes removing: it
+    // re-fused a foreign command's arguments onto the invocation.
+    return groups
+      .filter(isCommitInvocation)
+      .map((g) => str.slice(g[0].start, g[g.length - 1].end));
   };
 
-  // Candidate invocation substrings for one logical line. A line-start
-  // invocation yields one candidate per operator-delimited gsd commit
-  // invocation (the whole line when there is only one); otherwise every
-  // mid-line executable invocation yields the substring from its token to the
-  // end of its enclosing backtick span (or line end), so the tokenizer sees
-  // the invocation itself and not surrounding prose quotes.
-  const invocationCandidates = (line) => {
-    if (INVOCATION_RE.test(line)) return segmentInvocations(line);
-    const candidates = [];
-    const re = new RegExp(MIDLINE_INVOCATION_RE.source, 'g');
+  // Inline code spans, CommonMark-style: a run of N backticks opens and the
+  // next run of exactly N closes. A BACKSLASH-ESCAPED backtick is literal text
+  // and must not delimit — treating it as a delimiter invents a span that is
+  // not there. This pass exists only to reach invocations whose backticks glue
+  // to the binary token; because the results are unioned with the whole-line
+  // pass, an error here can only add a candidate, never drop one.
+  const codeSpans = (line) => {
+    const spans = [];
+    const runs = [];
+    const re = /(\\*)(`+)/g;
     let m;
     while ((m = re.exec(line)) !== null) {
-      const rest = line.slice(m.index);
-      const tick = rest.indexOf('`');
-      candidates.push(...segmentInvocations(tick === -1 ? rest : rest.slice(0, tick)));
+      if (m[1].length % 2 === 1) continue;
+      runs.push({ at: m.index + m[1].length, len: m[2].length });
+    }
+    for (let a = 0; a < runs.length; a += 1) {
+      for (let b = a + 1; b < runs.length; b += 1) {
+        if (runs[b].len === runs[a].len) {
+          spans.push(line.slice(runs[a].at + runs[a].len, runs[b].at));
+          a = b;
+          break;
+        }
+      }
+    }
+    return spans;
+  };
+
+  // Candidates for one logical line: the whole line, unioned with each of its
+  // inline code spans. See the header for why the union rather than a choice.
+  const invocationCandidates = (line) => {
+    const candidates = segmentInvocations(line);
+    for (const span of codeSpans(line)) {
+      for (const c of segmentInvocations(span)) if (!candidates.includes(c)) candidates.push(c);
     }
     return candidates;
+  };
+
+  // The whole-document walk, defined HERE beside the other primitives for the
+  // reason stripHtmlComments is: the scan below and the tests both call this
+  // exact symbol, so an assertion cannot pass against a private copy while the
+  // scan does something else. Backslash-continued lines are joined first —
+  // several invocations pass --files on a continuation line (docs-update.md,
+  // code-review.md, gsd-code-fixer.md) and a per-physical-line walk would
+  // false-flag them.
+  const documentCandidates = (text) => {
+    const logical = stripHtmlComments(text).replace(/\\\r?\n/g, ' ');
+    const found = [];
+    for (const line of logical.split(/\r?\n/)) found.push(...invocationCandidates(line));
+    return found;
   };
 
   // An invocation inside an HTML comment is not executable, and a guard that
@@ -538,7 +593,7 @@ describe('workflow call sites declare --files (#2269)', () => {
       'gsd_run query commit "docs: plan" & echo --files a.md',
     ];
     for (const line of bare) {
-      assert.ok(INVOCATION_RE.test(line), `should match invocation: ${line}`);
+      assert.ok(invocationCandidates(line).length > 0, `should be an invocation: ${line}`);
       assert.strictEqual(
         hasScopedFiles(line), false,
         `must be flagged as unscoped: ${line}`,
@@ -570,7 +625,7 @@ describe('workflow call sites declare --files (#2269)', () => {
       'gsd_run query commit docs:PR#42 --files .planning/STATE.md',
     ];
     for (const line of scoped) {
-      assert.ok(INVOCATION_RE.test(line), `should match invocation: ${line}`);
+      assert.ok(invocationCandidates(line).length > 0, `should be an invocation: ${line}`);
       assert.strictEqual(
         hasScopedFiles(line), true,
         `must be recognized as scoped: ${line}`,
@@ -580,39 +635,39 @@ describe('workflow call sites declare --files (#2269)', () => {
     // The query-less spelling reaches the same cmdCommit and must be in
     // scope, scoped or not. ingest-docs.md uses this form live.
     assert.ok(
-      INVOCATION_RE.test('gsd_run commit "docs: ingest" --files .planning/PROJECT.md'),
-      'query-less invocation must match (query is an optional meta-prefix)',
+      invocationCandidates('gsd_run commit "docs: ingest" --files .planning/PROJECT.md').length === 1,
+      'query-less invocation must be scanned (query is an optional meta-prefix)',
     );
     assert.strictEqual(
       hasScopedFiles('gsd_run commit "docs: ingest"'), false,
       'a bare query-less invocation must be flagged as unscoped',
     );
     assert.ok(
-      INVOCATION_RE.test('gsd_run commit "docs: ingest"'),
-      'a bare query-less invocation must still match the anchor',
+      invocationCandidates('gsd_run commit "docs: ingest"').length === 1,
+      'a bare query-less invocation must still be scanned',
     );
 
     // Flags may precede the command. onboard.md is a live instance; a regex
     // that anchors `commit` directly after the binary drops it silently.
     assert.ok(
-      INVOCATION_RE.test('gsd_run --cwd "$ROOT" query commit "docs: x" --files .planning/S.md'),
+      invocationCandidates('gsd_run --cwd "$ROOT" query commit "docs: x" --files .planning/S.md').length === 1,
       'invocation with a flag before the command must stay in scope',
     );
 
     // Prose mention mid-sentence: the line-start anchor keeps it out of
     // the scan entirely.
-    assert.strictEqual(
-      INVOCATION_RE.test('the `gsd_run query commit` step then records the artifact'),
-      false,
-      'prose mention must not match the invocation anchor',
+    assert.deepEqual(
+      invocationCandidates('the `gsd_run query commit` step then records the artifact'),
+      [],
+      'a prose mention bears no argument and is not an invocation',
     );
 
     // Widening `query` to optional must not pull in unrelated commands that
     // merely mention the word: `commit_docs` is a JSON key in new-project.md's
     // config-new-project payload, and the \b...\b anchors must exclude it.
-    assert.strictEqual(
-      INVOCATION_RE.test('gsd_run query config-new-project \'{"commit_docs":true}\''),
-      false,
+    assert.deepEqual(
+      invocationCandidates('gsd_run query config-new-project \'{"commit_docs":true}\''),
+      [],
       'a config payload mentioning commit_docs is not a commit invocation',
     );
   });
@@ -636,7 +691,7 @@ describe('workflow call sites declare --files (#2269)', () => {
       "gsd_run query commit 'docs: explain --files usage'",
     ];
     for (const line of unscoped) {
-      assert.ok(INVOCATION_RE.test(line), `should match invocation: ${line}`);
+      assert.ok(invocationCandidates(line).length > 0, `should be an invocation: ${line}`);
       const cands = invocationCandidates(line);
       assert.ok(
         cands.some((c) => !hasScopedFiles(c)),
@@ -650,7 +705,7 @@ describe('workflow call sites declare --files (#2269)', () => {
     //    and takes a genuinely scoped invocation out of scope — a false
     //    NEGATIVE introduced by the fix for a false negative.
     const scopedDespiteQuotes = "gsd_run query commit 'prints a \" sometimes' --files .planning/PLAN.md";
-    assert.ok(INVOCATION_RE.test(scopedDespiteQuotes));
+    assert.ok(invocationCandidates(scopedDespiteQuotes).length === 1);
     assert.ok(
       invocationCandidates(scopedDespiteQuotes).every((c) => hasScopedFiles(c)),
       `a " inside a '-quoted message must not take the invocation out of scope: ${scopedDespiteQuotes}`,
@@ -877,6 +932,136 @@ describe('workflow call sites declare --files (#2269)', () => {
     );
   });
 
+  test('the command shape, not the quoting, is what makes an invocation', () => {
+    // The quoted-message discriminator failed in the direction that matters:
+    // an UNQUOTED invocation reaches the identical cmdCommit (a single-word
+    // message needs no quotes) and entered no candidate set at all. Not
+    // mis-scored — invisible. Both spellings are now scanned identically.
+    for (const [line, want] of [
+      ['Then run `gsd_run query commit fixup --files .planning/STATE.md` to record it.', true],
+      ['Then run `gsd_run query commit fixup` to record it.', false],
+      ['Then run gsd_run query commit fixup to record it.', false],
+      ['gsd_run query commit fixup --files .planning/STATE.md', true],
+    ]) {
+      const cands = invocationCandidates(line);
+      assert.strictEqual(cands.length, 1, `must be scanned: ${line}`);
+      assert.strictEqual(hasScopedFiles(cands[0]), want, `scope verdict must be ${want}: ${line}`);
+    }
+
+    // The complement, and the reason the middle clause of the command shape
+    // exists: a SENTENCE can carry the binary and a commit token and still be
+    // prose. Both lines below are real bare-prose shapes from the scan roots
+    // with one word swapped to `commit`. What rejects them is not markup — it
+    // is that `(or` is neither the `query` meta-prefix nor a flag, so the
+    // command never reaches its command token.
+    for (const prose of [
+      'Update STATE.md using gsd-tools.cjs query (or legacy gsd-tools) commit mutations:',
+      '- [ ] Artifacts generated sequentially via gsd-tools.cjs query (or gsd-tools.cjs) commit steps',
+    ]) {
+      assert.deepEqual(
+        invocationCandidates(prose), [],
+        `a sentence carrying both words is not an invocation: ${prose}`,
+      );
+    }
+
+    // And a mention delimited by backticks is rejected by the trailing-argument
+    // clause: the span ends at the closing backtick, so the sentence after it
+    // can never supply arguments.
+    assert.deepEqual(
+      invocationCandidates('the `gsd_run query commit` step then records the artifact'), [],
+      'a delimited mention bears no argument',
+    );
+
+    // NAMED RESIDUAL, pinned so it is visible rather than discovered. An
+    // UNDELIMITED prose mention that runs straight from the command into the
+    // sentence does read as argument-bearing, and is flagged:
+    assert.strictEqual(
+      invocationCandidates('see gsd_run query commit for the scoping rules').length, 1,
+      'an undelimited prose mention is indistinguishable from an invocation with arguments',
+    );
+    // Nothing distinguishes those two without guessing at English, so the scan
+    // does not try. The exposure is bounded and measured: the six roots carry
+    // 93 bare-prose mentions of the binary today and 0 of them carry a commit
+    // token, the repo's own convention is to write a command reference in
+    // backticks (which this scan then handles correctly), and the failure is a
+    // visible red an author resolves by adding those backticks. That is the
+    // safe polarity — the alternative is guessing, and a
+    // wrong guess here is a silent false negative.
+  });
+
+  test('an invocation is found by its command shape, whatever markup surrounds it', () => {
+    // These are the shapes a markup-context model kept losing, each of them
+    // executable and each of them #2269 when unscoped. None starts the line
+    // with the binary, so a line-start anchor rejects all of them; none carries
+    // backticks, so an inline-code-span rule finds nothing. They are pinned
+    // together because they failed together, for one reason: the scan was
+    // asking about the markup instead of the command.
+    const scoped = 'if [ -f x ]; then gsd_run query commit "docs: m" --files a.md; fi';
+    const scopedCands = invocationCandidates(scoped);
+    assert.strictEqual(scopedCands.length, 1, `a conditional invocation must be scanned: ${scoped}`);
+    assert.ok(hasScopedFiles(scopedCands[0]), 'and reads as scoped');
+
+    for (const line of [
+      'if [ -f x ]; then gsd_run query commit "docs: m"; fi',
+      'cd "$ROOT" && gsd_run query commit "docs: m"',
+      '  && gsd_run query commit "docs: m"',
+      '    $ gsd_run query commit "docs: m"',
+      '    cd /x && gsd_run query commit "docs: m"',
+    ]) {
+      const cands = invocationCandidates(line);
+      assert.strictEqual(cands.length, 1, `must yield one candidate: ${line}`);
+      assert.strictEqual(hasScopedFiles(cands[0]), false, `must be flagged as unscoped: ${line}`);
+    }
+  });
+
+  test('an interpreter prefix is still the line being the command', () => {
+    // `node gsd-tools.cjs commit …` executes exactly as `gsd-tools.cjs
+    // commit …` does, but it was invisible to BOTH tiers: tier 1 required the
+    // binary to be the first word, and tier 2 requires backticks it does not
+    // carry inside a fence. An unscoped one was therefore uncatchable.
+    const scoped = 'node gsd-tools.cjs commit "docs: x" --files .planning/STATE.md';
+    assert.ok(invocationCandidates(scoped).length === 1, 'an interpreter-prefixed invocation must be scanned');
+    const scopedCands = invocationCandidates(scoped);
+    assert.strictEqual(scopedCands.length, 1);
+    assert.ok(hasScopedFiles(scopedCands[0]), 'and must read as scoped');
+
+    const bare = 'node gsd-tools.cjs commit "docs: x"';
+    const bareCands = invocationCandidates(bare);
+    assert.strictEqual(bareCands.length, 1, 'the unscoped interpreter-prefixed form must be a candidate');
+    assert.strictEqual(hasScopedFiles(bareCands[0]), false, 'and must be flagged — this is #2269');
+  });
+
+  test('usage-synopsis notation documents the CLI and is not a call to it', () => {
+    // Live in docs/CLI-TOOLS.md and its four localized mirrors. Widening tier
+    // 1 to admit the interpreter prefix brought these into the candidate set,
+    // where they scored as UNSCOPED offenders — `[--files` is not the exact
+    // token routeCommit's indexOf looks for, and `<message>` is eaten as a
+    // redirection. Both readings are right about the text and wrong about
+    // what it IS: a synopsis is documentation, and flagging it would redden
+    // CI on content that is correct as written.
+    const synopsis = 'node gsd-tools.cjs commit <message> [--files f1 f2] [--amend] [--no-verify] [--respect-staged]';
+    assert.deepEqual(
+      invocationCandidates(synopsis), [],
+      'a usage synopsis must not enter the candidate set',
+    );
+
+    // The discrimination is the bracketed FLAG, never "contains a bracket":
+    // 24 live invocations carry brackets inside their quoted message, and a
+    // bracket-anywhere rule would drop every one of them from the scan.
+    const bracketedMessage = 'gsd_run query commit "docs: capture todo - [title]" --files .planning/todos/x.md';
+    const bmCands = invocationCandidates(bracketedMessage);
+    assert.strictEqual(bmCands.length, 1, 'brackets inside the MESSAGE must not exempt a real invocation');
+    assert.ok(hasScopedFiles(bmCands[0]), 'and it is scoped');
+
+    // A bracketed metavariable as the --files VALUE is a real invocation too
+    // (pause-work.md carries `--files [handoff-path]` live) — only a bracketed
+    // FLAG marks synopsis notation.
+    const metavarValue = 'gsd_run query commit "wip: [context-name] paused" --files [handoff-path]';
+    const mvCands = invocationCandidates(metavarValue);
+    assert.strictEqual(mvCands.length, 1, 'a metavariable VALUE must not exempt a real invocation');
+    assert.ok(hasScopedFiles(mvCands[0]), 'a bracketed value is still a value');
+  });
+
   // The scan's verdict rests entirely on hasScopedFiles's quote-parity walk,
   // which is parser-shaped logic over adversarial text. Live workflow content
   // exercises only a handful of shapes, so pin the invariant by property:
@@ -1067,18 +1252,11 @@ describe('workflow call sites declare --files (#2269)', () => {
         // the startsWith() reach assertions below — read identically on
         // Windows. Join with the RAW entry; report with the normalized one.
         const normalized = String(file).split(path.sep).join('/');
-        const raw = stripHtmlComments(fs.readFileSync(path.join(rootDir, file), 'utf-8'));
-        // Join backslash-continued lines first: several invocations pass
-        // --files on a continuation line (docs-update.md, code-review.md,
-        // gsd-code-fixer.md), and a per-physical-line scan would
-        // false-flag them.
-        const logical = raw.replace(/\\\r?\n/g, ' ');
-        for (const line of logical.split(/\r?\n/)) {
-          for (const inv of invocationCandidates(line)) {
-            scanned.push(`${root}/${normalized}`);
-            if (!hasScopedFiles(inv)) {
-              offenders.push(`${root}/${normalized}: ${inv.trim()}`);
-            }
+        const text = fs.readFileSync(path.join(rootDir, file), 'utf-8');
+        for (const inv of documentCandidates(text)) {
+          scanned.push(`${root}/${normalized}`);
+          if (!hasScopedFiles(inv)) {
+            offenders.push(`${root}/${normalized}: ${inv.trim()}`);
           }
         }
       }
@@ -1135,7 +1313,7 @@ describe('workflow call sites declare --files (#2269)', () => {
       const commitLine = workflowRaw
         .replace(/\\\r?\n/g, ' ')
         .split(/\r?\n/)
-        .find((l) => INVOCATION_RE.test(l) && l.includes('SECURITY.md'));
+        .find((l) => invocationCandidates(l).length > 0 && l.includes('SECURITY.md'));
       assert.ok(
         commitLine,
         'secure-phase.md step 7 commit invocation not found — did the workflow drop or rename its SECURITY.md commit?',
