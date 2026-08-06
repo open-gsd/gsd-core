@@ -520,18 +520,27 @@ describe('workflow call sites declare --files (#2269)', () => {
   // two cannot disagree about where the command ends: an unquoted `#` at word
   // start begins a comment, and a `#` inside quotes or mid-word is literal
   // (ship.md commits with `PR #${PR_NUMBER}` in the message).
+  // It tracks WORD START the way tokenize does, not "preceded by whitespace".
+  // Those differ, and the difference is exploitable: in `commit docs:\ # x` the
+  // backslash escapes the space, so the shell keeps `docs: #` as ONE word and
+  // `#` is literal — while a preceded-by-whitespace test reads it as a comment.
+  // The scan would then exempt a line the runtime still executes unscoped.
   const commentPortion = (line) => {
     let quote = null;
+    let started = false;
     for (let i = 0; i < line.length; i += 1) {
       const ch = line[i];
       if (quote) {
-        if (ch === '\\' && quote === '"') { i += 1; continue; }
+        if (ch === '\\' && quote === '"' && i + 1 < line.length) { i += 1; continue; }
         if (ch === quote) quote = null;
         continue;
       }
-      if (ch === '\\') { i += 1; continue; }
-      if (ch === '"' || ch === "'") { quote = ch; continue; }
-      if (ch === '#' && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(i);
+      if (ch === '\\' && i + 1 < line.length) { started = true; i += 1; continue; }
+      if (ch === '"' || ch === "'") { started = true; quote = ch; continue; }
+      if (/\s/.test(ch)) { started = false; continue; }
+      if (ch === '#' && !started) return line.slice(i);
+      if (ch === '>' || ch === '<' || ch === ';' || ch === '|' || ch === '&') { started = false; continue; }
+      started = true;
     }
     return '';
   };
@@ -547,7 +556,17 @@ describe('workflow call sites declare --files (#2269)', () => {
   // false-negative escape hatch is the one thing this file must not ship, and
   // an exemption keyed to attacker-controlled-looking text is precisely that.
   const SCAN_IGNORE_RE = /gsd-scan-ignore:\s*\S/;
-  const isDeclared = (line) => SCAN_IGNORE_RE.test(commentPortion(line));
+  // Two independent conditions, and the second is the structural one: the
+  // marker must be in comment position AND must not survive tokenization as an
+  // ARGUMENT. tokenize() drops everything from a real comment onward, so a
+  // genuine declaration leaves no token carrying the token; anything that does
+  // reached argv, which means the runtime would have executed it. That makes
+  // "authored argument text can declare the line exempt" impossible by
+  // construction rather than by getting commentPortion's edges exactly right —
+  // and commentPortion has edges (redirection targets, escaped separators)
+  // where mirroring the tokenizer perfectly is fiddly and a miss is silent.
+  const isDeclared = (line) => SCAN_IGNORE_RE.test(commentPortion(line))
+    && !tokenize(line).some((t) => /gsd-scan-ignore:/.test(t.value));
 
   // Candidates for one logical line: the whole line, unioned with each of its
   // inline code spans. See the header for why the union rather than a choice.
@@ -899,6 +918,50 @@ describe('workflow call sites declare --files (#2269)', () => {
     assert.strictEqual(commentPortion('gsd_run query commit "PR #42 [ci skip]"'), '');
     assert.strictEqual(commentPortion('gsd_run query commit docs:PR#42 --files a.md'), '');
 
+    // THE ESCAPED-SEPARATOR BYPASS. A backslash escapes the space, so the shell
+    // keeps `docs: #` as ONE word and the `#` is literal — the command runs,
+    // unscoped. A "preceded by whitespace" test reads the same bytes as a
+    // comment and exempts the line, which is the guard being disarmed by text
+    // the author controls. Word-start tracking is what closes it, and the
+    // token cross-check below is what makes the closure structural.
+    const escaped = 'gsd_run query commit docs:\\ # gsd-scan-ignore: reason';
+    assert.strictEqual(
+      commentPortion(escaped), '',
+      'an escaped separator leaves the # mid-word, so there is no comment',
+    );
+    const escCands = invocationCandidates(escaped);
+    assert.strictEqual(escCands.length, 1, 'the escaped-separator line must still be scanned');
+    assert.strictEqual(hasScopedFiles(escCands[0]), false, 'and is still flagged as unscoped');
+
+    // The structural half, stated as its own assertion: a marker that survives
+    // tokenization is an ARGUMENT, which means it reached argv and the runtime
+    // executed it. Such a line is never a declaration, whatever commentPortion
+    // makes of it.
+    assert.ok(
+      tokenize(escaped).some((t) => /gsd-scan-ignore:/.test(t.value)),
+      'the bypass attempt leaves the marker in an argv token, which is what disqualifies it',
+    );
+    assert.ok(
+      !tokenize('gsd_run query commit "docs: x" # gsd-scan-ignore: demo')
+        .some((t) => /gsd-scan-ignore:/.test(t.value)),
+      'a genuine declaration is dropped by tokenize with the rest of the comment',
+    );
+
+    // The case the token cross-check exists for on its own: a REDIRECTION
+    // swallows the `#` and its text into a redir token, so the shell passes it
+    // to the redirect target and never treats it as a comment — while
+    // commentPortion, reading raw text, does see one. Only the cross-check
+    // separates them, so the line stays scanned.
+    const redirected = 'gsd_run query commit x > #gsd-scan-ignore: y';
+    assert.ok(
+      SCAN_IGNORE_RE.test(commentPortion(redirected)),
+      'precondition: raw-text reading of this line does look like a declaration',
+    );
+    assert.strictEqual(
+      invocationCandidates(redirected).length, 1,
+      'a marker consumed by a redirection is not a declaration — the line stays scanned',
+    );
+
     // The marker never reaches argv: tokenize() ends the command at an
     // unquoted `#`, so a declared line is inert at runtime as well as here.
     assert.strictEqual(
@@ -1127,6 +1190,16 @@ describe('workflow call sites declare --files (#2269)', () => {
       assert.strictEqual(cands.length, 1, `must yield one candidate: ${line}`);
       assert.strictEqual(hasScopedFiles(cands[0]), false, `must be flagged as unscoped: ${line}`);
     }
+
+    // Nested fences of differing widths, over a whole document. A walk that
+    // toggled on every fence marker without tracking the opening run length
+    // inverted its own state here and stopped scanning the rest of the file —
+    // silently. Scanning by command shape has no state to invert, and this
+    // pins that it does not regress into having one.
+    const nested = ['````markdown', '```bash', 'cd "$ROOT" && gsd_run query commit "docs: m"', '```', '````'].join('\n');
+    const nestedCands = documentCandidates(nested);
+    assert.strictEqual(nestedCands.length, 1, 'an invocation inside nested fences of differing widths must be scanned');
+    assert.strictEqual(hasScopedFiles(nestedCands[0]), false, 'and flagged as unscoped');
   });
 
   test('an interpreter prefix is still the line being the command', () => {
