@@ -300,7 +300,7 @@ describe('workflow call sites declare --files (#2269)', () => {
   // because a backtick glues to the token and stops the binary from matching:
   // an invocation written inline in prose. The union is additive by
   // construction, so a mis-parsed span can only ever ADD a false positive an
-  // author can see — it can never hide an invocation.
+  // author can see and declare — it can never hide an invocation.
 
   // The scan's verdict must agree with the RUNTIME, and the runtime never sees
   // the line — it sees argv, after the shell has already tokenized it
@@ -516,9 +516,43 @@ describe('workflow call sites declare --files (#2269)', () => {
     return spans;
   };
 
+  // The comment portion of a line — the same rule tokenize() applies, so the
+  // two cannot disagree about where the command ends: an unquoted `#` at word
+  // start begins a comment, and a `#` inside quotes or mid-word is literal
+  // (ship.md commits with `PR #${PR_NUMBER}` in the message).
+  const commentPortion = (line) => {
+    let quote = null;
+    for (let i = 0; i < line.length; i += 1) {
+      const ch = line[i];
+      if (quote) {
+        if (ch === '\\' && quote === '"') { i += 1; continue; }
+        if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === '\\') { i += 1; continue; }
+      if (ch === '"' || ch === "'") { quote = ch; continue; }
+      if (ch === '#' && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(i);
+    }
+    return '';
+  };
+
+  // The explicit opt-out for content that shows the defect ON PURPOSE. A
+  // wrong-example is otherwise indistinguishable from a regression — which is
+  // exactly why no property of the surrounding markup can stand in for the
+  // author's intent — so the author declares it, with a reason.
+  //
+  // IT IS ONLY A MARKER IN COMMENT POSITION. Matching the token anywhere on
+  // the line let a commit MESSAGE carry it — `commit "docs: explain
+  // gsd-scan-ignore: semantics"` — and silently exempt a real offender. A
+  // false-negative escape hatch is the one thing this file must not ship, and
+  // an exemption keyed to attacker-controlled-looking text is precisely that.
+  const SCAN_IGNORE_RE = /gsd-scan-ignore:\s*\S/;
+  const isDeclared = (line) => SCAN_IGNORE_RE.test(commentPortion(line));
+
   // Candidates for one logical line: the whole line, unioned with each of its
   // inline code spans. See the header for why the union rather than a choice.
   const invocationCandidates = (line) => {
+    if (isDeclared(line)) return [];
     const candidates = segmentInvocations(line);
     for (const span of codeSpans(line)) {
       for (const c of segmentInvocations(span)) if (!candidates.includes(c)) candidates.push(c);
@@ -807,6 +841,72 @@ describe('workflow call sites declare --files (#2269)', () => {
     assert.ok(cands.length === 1 && !hasScopedFiles(cands[0]), 'a live invocation beside a comment must still be scanned');
   });
 
+  test('a deliberate wrong-example is declared, not inferred from its fence', () => {
+    // The HTML-comment escape above only covers examples written as comments.
+    // The same teaching example inside a fenced block — the natural place to
+    // put it — scored as an offender, and the "fix" a contributor would then
+    // apply is to mangle the example until the linter stops complaining.
+    //
+    // The fence itself cannot be the signal, and that is the whole argument:
+    // 96 of the 99 live invocations sit INSIDE fences, so exempting fenced
+    // content blinds the scan to every site #2269 was actually filed about.
+    // Measured against the pre-fix tree (200daa456^), the scan flags exactly
+    // the 3 known offenders — and 0 of them with fences exempted. So intent
+    // is DECLARED instead, with a reason, on the invocation's own line.
+    const declared = 'gsd_run query commit "docs: message"   # gsd-scan-ignore: #2269 counter-example';
+    assert.deepEqual(
+      invocationCandidates(declared), [],
+      'a declared counter-example must not be scored',
+    );
+
+    // Undeclared, the identical line stays an offender — it is byte-for-byte
+    // what a real regression looks like, so silence here would be the false
+    // confidence the guard exists to prevent.
+    const undeclared = 'gsd_run query commit "docs: message"';
+    const cands = invocationCandidates(undeclared);
+    assert.strictEqual(cands.length, 1, 'an undeclared wrong-example is indistinguishable from a regression');
+    assert.strictEqual(hasScopedFiles(cands[0]), false, 'and must be flagged');
+
+    // The marker requires a REASON. A bare token is not a declaration, and
+    // accepting one would make the escape a silent opt-out for any line.
+    assert.strictEqual(
+      invocationCandidates('gsd_run query commit "docs: x"   # gsd-scan-ignore:').length, 1,
+      'a marker with no reason must not exempt the line',
+    );
+
+    // AND IT IS ONLY A MARKER IN COMMENT POSITION. An exemption that fires on
+    // the token appearing ANYWHERE on the line is a false-negative escape
+    // hatch: the commit MESSAGE is ordinary text an author controls, so a line
+    // that merely writes about this marker would silently stop being scanned.
+    // That is strictly worse than the false positive the marker exists to fix
+    // — a guard that can be talked out of firing by its own documentation.
+    const inMessage = 'gsd_run query commit "docs: explain gsd-scan-ignore: semantics"';
+    const imCands = invocationCandidates(inMessage);
+    assert.strictEqual(imCands.length, 1, 'marker text inside the message must not exempt the line');
+    assert.strictEqual(hasScopedFiles(imCands[0]), false, 'and the real offender is still flagged');
+
+    // Same for a quoted --files value that happens to contain the token.
+    assert.strictEqual(
+      invocationCandidates('gsd_run query commit "docs: x" --files "notes/gsd-scan-ignore: draft.md"').length,
+      1,
+      'marker text inside an argument must not exempt the line',
+    );
+
+    // commentPortion is the seam, and it agrees with tokenize about where the
+    // command ends — a `#` inside quotes or mid-word is literal (ship.md
+    // commits with `PR #${PR_NUMBER}` in the message today).
+    assert.strictEqual(commentPortion('gsd_run query commit "PR #42" # real'), '# real');
+    assert.strictEqual(commentPortion('gsd_run query commit "PR #42 [ci skip]"'), '');
+    assert.strictEqual(commentPortion('gsd_run query commit docs:PR#42 --files a.md'), '');
+
+    // The marker never reaches argv: tokenize() ends the command at an
+    // unquoted `#`, so a declared line is inert at runtime as well as here.
+    assert.strictEqual(
+      hasScopedFiles('gsd_run query commit "docs: x" --files a.md   # gsd-scan-ignore: demo'), true,
+      'the marker is a shell comment and must not disturb scope detection',
+    );
+  });
+
   test('a later --files on the same line cannot vouch for an earlier invocation', () => {
     // Whole-line scoring is satisfied by ONE match anywhere on the line, so a
     // second, scoped invocation masked an earlier unscoped one. No live line
@@ -984,8 +1084,8 @@ describe('workflow call sites declare --files (#2269)', () => {
     // 93 bare-prose mentions of the binary today and 0 of them carry a commit
     // token, the repo's own convention is to write a command reference in
     // backticks (which this scan then handles correctly), and the failure is a
-    // visible red an author resolves by adding those backticks. That is the
-    // safe polarity — the alternative is guessing, and a
+    // visible red an author resolves by adding those backticks or declaring
+    // the line. That is the safe polarity — the alternative is guessing, and a
     // wrong guess here is a silent false negative.
   });
 
