@@ -28,10 +28,24 @@ const {
   // #2121: roadmapPhaseLookupSources now lives in phase-id.cjs (single owner of
   // the lookup-source ordering); imported here rather than defined locally.
   roadmapPhaseLookupSources,
+  phaseHeadingPrefixSrcFor,
+  PHASE_HEADING_BASELINE,
+  // #612: the disk-side milestone filter resolves bracket directories through
+  // the owner's gated helpers rather than spelling the grammar a second time.
+  isSentinelPhaseId,
+  phaseTokenMatches,
+  // #2761 B1: the version-less bracket milestone boundary (computeSectionEnd /
+  // preambleCutoff, below) is built from this single-owner source rather than a
+  // re-typed `[A-Z][A-Z0-9_]*\.\d+` literal.
+  BRACKET_ID_SRC,
+  // #2761 B1 (round-2 fix): fold-before-identity for the SAME-MILESTONE
+  // continuation check in isBracketMilestoneBoundary, below — the branch's own
+  // convention (matches bracketQualifiedKey/isSentinelPhaseId).
+  foldBracketId,
 } = phaseIdModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
-const { planningDir } = planningWorkspace;
+const { planningDir, resolvePhaseIdConvention } = planningWorkspace;
 import { platformReadSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import unusableInputMod = require('./unusable-input.cjs');
@@ -96,6 +110,151 @@ function isMilestoneShippedInRoadmap(content: string, version: string): boolean 
   return false;
 }
 
+// #2761 B1: matches a bracket MILESTONE heading's intro (`[GSD.02]`) at the
+// START of a heading's text, capturing the bracket id in group 1. Shared by
+// isBracketMilestoneBoundary below — the ONE recognizer for "is this heading
+// bracket-shaped", so computeSectionEnd and the preambleCutoff scan cannot
+// independently drift on what counts as bracket-shaped (the drift that
+// produced Blocker 3 in the round-2 review).
+const BRACKET_HEADING_INTRO_RE = new RegExp(`^\\[(${BRACKET_ID_SRC})\\]`, 'i');
+
+// #2761 B2 (round-2 fix, Blocker 2): ADR-612 Decision 1's own discriminator
+// (docs/adr/612-bracket-phase-id-convention.md:56) — "a phase heading is a
+// bracket followed by a digit-then-colon (`[GSD.02] 05:`); a milestone
+// heading is a bracket followed by a name" — is CONTENT, not heading level.
+// The prior `h.level <= 2` level cap broke on a level-3 bracket milestone
+// heading (`### [GSD.02] Foundation`): its own level-3 phase children
+// (`#### [GSD.02] 01: One`) never reached this check at all (excluded
+// upstream by the `h.level > level` sibling-depth filter), but a level-3
+// SIBLING milestone heading (`### [GSD.03] Later`) was ALSO excluded by the
+// level cap, so the section ran to EOF instead of stopping there — trek-e's
+// original #612 defect, reopened on any milestone heading below level 2.
+//
+// Built by interpolating phase-id.cts's single-owner
+// phaseHeadingPrefixSrcFor (the SAME intro grammar getMilestonePhaseFilter's
+// heading counter and extractRetiredPhaseNumbers already compile) plus the
+// digit + optional-tag + colon tail every phase-heading counter in this file
+// already spells (mirrors the `([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:`
+// shape at :nnn below) — not a re-typed grammar. Covers the dotted sub-phase
+// heading form too (`[GSD.02] 05.03:`) via the same `[\w][\w.-]*` token,
+// which admits an embedded `.`.
+const BRACKET_PHASE_TAIL_RE = new RegExp(
+  `^${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.ANY_BRACKET, 'bracket', false)}[\\w][\\w.-]*(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:`,
+  'i',
+);
+
+/**
+ * #2761 B1/B2 (round-2 fixes): is `headingText` (hashes STRIPPED — the
+ * `tokenizeHeadings` `HeadingToken.text` shape, and the shape the
+ * preambleCutoff scan below is made to match) a BRACKET MILESTONE boundary —
+ * as opposed to (a) a bracket PHASE heading (at any level, including the
+ * dotted sub-phase form), which must never terminate a milestone's own
+ * section, or (b) a heading that names the SAME milestone already selected,
+ * which is a CONTINUATION of the current milestone's own section (a
+ * version-less split like `## [GSD.02] Foundation (Phase Details)`), not the
+ * boundary to a DIFFERENT one?
+ *
+ * `level` is the CANDIDATE heading's own depth (`h.level`), capped at 3 — a
+ * depth-SANITY ceiling, not a phase/milestone discriminator (that job is
+ * BRACKET_PHASE_TAIL_RE, below). The cap mirrors the bracket-fallback
+ * selector's own `#{1,3}` ceiling (this file's SELECTION branch above) and
+ * `isMilestoneBounded`'s (`state.cts`) — a bracket-shaped heading deeper than
+ * either of those will ever select as a CURRENT milestone is outside the
+ * shape this function needs to discriminate at all.
+ *
+ * `selectedBracketId` is the SELECTED milestone's own bracket id, already
+ * case-folded by the caller — `null` when scoping is not bracket-gated, the
+ * selected heading is not itself bracket-shaped, or (preambleCutoff) the
+ * same-milestone check does not apply at this call site (see its own comment
+ * there) — in which case the same-milestone check below simply never fires.
+ */
+function isBracketMilestoneBoundary(headingText: string, level: number, selectedBracketId: string | null): boolean {
+  if (level > 3) return false;
+  const introMatch = BRACKET_HEADING_INTRO_RE.exec(headingText);
+  if (!introMatch) return false;
+  // #2761 B2: a bracket PHASE heading (`[GSD.02] 05:`, or the dotted
+  // sub-phase form `[GSD.02] 05.03:`) is never a milestone boundary,
+  // regardless of level.
+  if (BRACKET_PHASE_TAIL_RE.test(headingText)) return false;
+  // #2761 B1: fold-before-identity — this branch's own convention
+  // (bracketQualifiedKey / isSentinelPhaseId apply the same rule).
+  if (selectedBracketId && foldBracketId(introMatch[1]) === selectedBracketId) return false;
+  return true;
+}
+
+/**
+ * #2761 B1 (round-3 fix, Blocker 1 case D; hardened post-round-3; round-4
+ * fix: requires a same-id PHASE child, not merely a same-id child): does
+ * `headings[index]`'s SUBTREE — every heading strictly deeper than it, up to
+ * (not including) the next heading at or above its own level — contain a
+ * bracket-shaped, PHASE-TAIL-shaped heading with the SAME id as
+ * `headings[index]`'s own?
+ *
+ * Used ONLY at the preambleCutoff scan below, to distinguish a genuine prior
+ * or later SIBLING MILESTONE — whose own subtree contains a real PHASE
+ * heading carrying ITS bracket id (`## [GSD.01] Setup` / `### [GSD.01] 01: …`)
+ * — from an unrelated bracket-shaped PROSE heading sitting above the current
+ * milestone's own content. `isBracketMilestoneBoundary` alone cannot make
+ * this distinction, and neither can same-id-ness alone: round-4's case F1
+ * is `## [ADR.612] Heading convention` followed by its OWN sub-heading
+ * `### [ADR.612] Examples` — same id as the candidate, but a MILESTONE-shaped
+ * heading (a name, no digit-then-colon), not a phase. Same-id-ness alone
+ * satisfied the rule the round-3 hardening shipped, re-opening exactly the
+ * case that hardening was meant to close — the requirement was never "does
+ * this heading have EVIDENCE bearing its own id", it was "does this heading
+ * have PHASE CHILDREN of its own", the property that actually distinguishes
+ * a genuine sibling milestone from a bracket-shaped id namespace that merely
+ * happens to nest headings under itself. `BRACKET_PHASE_TAIL_RE` is the
+ * single-owner phase-vs-milestone discriminator `isBracketMilestoneBoundary`
+ * already uses for the SAME distinction one level up — reused here, not
+ * re-derived.
+ *
+ * SCANS THE WHOLE SUBTREE, not just the immediate next heading — an earlier
+ * version checked only `headings[index + 1]` and returned `false` the moment
+ * that ONE heading wasn't a same-id match, even if it wasn't bracket-shaped
+ * at all. A genuine prior milestone whose section opens with a non-bracket
+ * subsection before its first phase (`## [GSD.01] Setup` / `### Notes` /
+ * `### [GSD.01] 01: Old`) was therefore wrongly rejected as a boundary by
+ * that version, leaking the ENTIRE prior-milestone section — including its
+ * real bracket phase heading — into the preamble unstripped. Confirmed
+ * observable, not merely theoretical: `GSD.01-01-old`'s directory was
+ * wrongly admitted into the CURRENT milestone's filter via the leaked
+ * heading's qualified key, inflating a 2/1/50% truth to 3/2/67% (rv2-amend1
+ * fixture).
+ *
+ * A candidate whose ENTIRE subtree closes (next same-or-shallower heading,
+ * or EOF) with no same-id PHASE hit at all — including a genuinely childless
+ * heading, or one whose same-id children are all MILESTONE-shaped rather
+ * than phase-shaped (F1) — degrades to `false`, NOT a boundary. This is
+ * deliberately the OVER-inclusive direction: the heading's own text (and any
+ * non-matching subtree content) stays in the preamble. See the docstring
+ * correction at the call site below (round-4 Minor 1) for what that
+ * over-inclusive degrade can and cannot leak.
+ *
+ * `headings` is the SAME `currentMilestoneHeadings` token list the caller
+ * iterates; `index` is the candidate's own position in it.
+ */
+function bracketHeadingHasMatchingChild(headings: HeadingToken[], index: number): boolean {
+  const candidate = headings[index];
+  const ownMatch = BRACKET_HEADING_INTRO_RE.exec(candidate.text);
+  if (!ownMatch) return false;
+  const ownId = foldBracketId(ownMatch[1]);
+  for (let i = index + 1; i < headings.length; i++) {
+    const next = headings[i];
+    if (next.level <= candidate.level) return false;
+    const childMatch = BRACKET_HEADING_INTRO_RE.exec(next.text);
+    // #2761 round-4: a same-id child is not enough — it must also be a PHASE
+    // (BRACKET_PHASE_TAIL_RE), or an unrelated PROSE heading whose own
+    // sub-heading merely happens to share its bracket id (F1: [ADR.612]
+    // Heading convention / [ADR.612] Examples) satisfies this rule.
+    if (childMatch && foldBracketId(childMatch[1]) === ownId && BRACKET_PHASE_TAIL_RE.test(next.text)) return true;
+    // Not a same-id PHASE match — keep scanning DEEPER into the subtree
+    // instead of giving up on this one heading; only a same-or-shallower
+    // heading (above) actually closes the subtree.
+  }
+  return false;
+}
+
 /**
  * Extract the current milestone section from ROADMAP.md by positive lookup.
  *
@@ -140,7 +299,93 @@ function extractCurrentMilestone(content: string, cwd?: string, ws?: string | nu
     `<summary[^>]*>([^<]*${escapedVersion}[^<]*)<\\/summary>`,
     'i'
   );
-  const headingMatches = [...content.matchAll(sectionPattern)];
+  let headingMatches = [...content.matchAll(sectionPattern)];
+
+  // #612: the ADR-canonical bracket milestone heading is `## [GSD.02] Foundation`
+  // — a NAME, no version — so it contains no `v2.0` for the version-string scope
+  // above to find. Scoping then failed, `milestoneBounded` went false, and
+  // total_phases silently fell back to the on-disk directory count: the exact
+  // symptom the bracket read path exists to remove, for the exact heading form
+  // the ADR specifies.
+  //
+  // GATED, so a non-bracket repo cannot start scoping on a bracket heading it
+  // never wrote. READING-B parity: the bracket's milestone integer is the
+  // milestone, matched against the `vN` of STATE's milestone string.
+  //
+  // GUARDED, for the same reason getRoadmapPhaseInternal and getMilestoneInfo
+  // carry their #2245 / ADR-227 notes: `resolvePhaseIdConvention` reaches
+  // `planningDir`, which throws a plain Error for a `GSD_PROJECT`/`GSD_WORKSTREAM`
+  // segment containing `/`, `\` or `..`. At base the only planningDir call in
+  // this function is inside the STATE-read try above, so the function returned
+  // normally on such an environment; hoisting an unguarded one here let that
+  // escape and broke the never-throws invariant those two siblings are hardened
+  // for. Not reachable through the CLI — GSD_WORKSTREAM is rejected up front by
+  // the workstream-name policy and GSD_PROJECT throws identically at base — but
+  // it is reachable by any in-process embedder calling this module directly.
+  // On failure the convention is simply unknown, which takes the pre-existing
+  // non-bracket path: the same safe degrade as a repo with no config.
+  //
+  // #2761 B3 (self-caught, round-2 verification): resolved UNCONDITIONALLY —
+  // NOT gated on `headingMatches.length === 0` — because this convention also
+  // feeds `computeSectionEnd`'s and `preambleCutoff`'s boundary detection
+  // further down, which must engage on an opted-in bracket repo regardless of
+  // which branch selected the current heading. The round-1 fix coupled two
+  // different concerns under one gate: SELECTION's own bracket fallback
+  // (immediately below — correctly still gated on `headingMatches.length ===
+  // 0`, UNCHANGED) and boundary detection, which accidentally inherited
+  // SELECTION's gate instead of having its own. On a roadmap where the CURRENT
+  // milestone heading is itself version-bearing but a sibling (PRIOR or LATER)
+  // is not, the version-string match above already succeeds —
+  // `headingMatches.length !== 0` — so under the old single gate
+  // `bracketScopeConvention` was never resolved and the version-less sibling
+  // leaked in exactly like the original #612 defect. The extra
+  // `resolvePhaseIdConvention` call this now costs on every call (previously
+  // only paid when the version-string match found nothing) is deliberate: a
+  // non-bracket repo still resolves to something other than `'bracket'` (or
+  // `null` on a poisoned env, caught below), so `bracketMilestoneHeadingRe`
+  // stays `null` and every downstream branch is byte-identical to today.
+  let bracketScopeConvention: string | null = null;
+  try {
+    bracketScopeConvention = resolvePhaseIdConvention(cwd);
+  } catch { /* unresolvable convention → treat as not-configured (base behaviour) */ }
+  if (headingMatches.length === 0 && bracketScopeConvention === 'bracket') {
+    const vMatch = version.match(/^v(\d+)/i);
+    const milestoneInt = vMatch ? parseInt(vMatch[1], 10) : NaN;
+    if (Number.isSafeInteger(milestoneInt)) {
+      // The CANONICAL spelling only (pad2), not `0*N`: an unpadded `[GSD.2]`
+      // scoped a milestone that no phase heading could then resolve into, so
+      // roadmapPhaseCount stayed 0 and total_phases fell back to the directory
+      // count — the very symptom this scoping fix removes.
+      const canonical = String(milestoneInt).padStart(2, '0');
+      // #612 round-4 (Major 1, F9's selection half): tokenizeHeadings, not a
+      // raw content.matchAll — a FENCED example heading sharing the current
+      // project's own bracket id (ADR-612's own authoring docs illustrate
+      // exactly this shape) could otherwise be SELECTED as the current
+      // milestone, landing `sectionStart` inside a fence. This is the ONE
+      // place this whole round-4 fix touches SELECTION — semantics are
+      // otherwise unchanged: same pattern, same first-match-wins by document
+      // order, only the candidate set is now fence-aware (a heading inside a
+      // fence was never a real heading to begin with). Reconstructs a
+      // match-shaped array ([fullLine, fullLine], with `.index`) so every
+      // downstream consumer of `headingMatches` (computeSectionEnd, the
+      // version-token lookup) sees the exact shape the raw-regex path always
+      // produced. `h.offset` is `tokenizeHeadings`' LINE-START offset, not
+      // necessarily the `#` character itself — a ≤3-space-indented heading
+      // has both — so the `content[h.offset] === '#'` filter above discards
+      // any token the line-start-anchored raw `^#{1,3}\s+\[...` would never
+      // have matched. For every survivor, `h.offset` IS the `#` character,
+      // so `content.slice(h.offset, lineEnd)` is byte-identical to what
+      // `[^\n]*` would have captured at `content.match().index`.
+      const bracketMilestoneHeadingRe = new RegExp(`^\\[[A-Z][A-Z0-9_]*\\.${canonical}\\]`, 'i');
+      headingMatches = tokenizeHeadings(content)
+        .filter((h) => h.level <= 3 && content[h.offset] === '#' && bracketMilestoneHeadingRe.test(h.text))
+        .map((h) => {
+          const lineEnd = content.indexOf('\n', h.offset);
+          const fullLine = content.slice(h.offset, lineEnd === -1 ? content.length : lineEnd);
+          return Object.assign([fullLine, fullLine], { index: h.offset }) as RegExpExecArray;
+        });
+    }
+  }
 
   if (headingMatches.length === 0) {
     const summaryMatch = content.match(summaryPattern);
@@ -175,20 +420,60 @@ function extractCurrentMilestone(content: string, cwd?: string, ws?: string | nu
 
   const sectionStart = selected.index;
 
+  // #2761 B1 (round-2 fix): the SELECTED milestone's own bracket id, case-
+  // folded, so isBracketMilestoneBoundary can recognise a heading that merely
+  // CONTINUES the current milestone's own section (a version-less split like
+  // `## [GSD.02] Foundation (Phase Details)`) instead of treating it as the
+  // boundary to a DIFFERENT milestone — the Blocker 1 defect: the version-
+  // string re-append at `detailsMatch` below only searches `allMatches` (the
+  // VERSION-string matches), so a version-less continuation heading was cut
+  // out by the boundary below and never re-appended. `selected[0]` is the
+  // FULL matched heading line (hashes included) on BOTH selection paths above
+  // (the version-string `sectionPattern` match and the bracket-fallback
+  // match), so this one extraction covers both; `null` on a non-bracket
+  // heading or a non-bracket convention, in which case the same-milestone
+  // check below simply never fires.
+  const bracketBoundaryActive = bracketScopeConvention === 'bracket';
+  const selectedBracketMatch = bracketBoundaryActive
+    ? selected[0].match(new RegExp(`^#{1,3}\\s+\\[(${BRACKET_ID_SRC})\\]`, 'i'))
+    : null;
+  const selectedBracketId = selectedBracketMatch ? foldBracketId(selectedBracketMatch[1]) : null;
+
+  // #2761 B1: the ADR-canonical bracket milestone heading (`## [GSD.02]
+  // Foundation`) carries no `vN.N` and no status emoji, so neither
+  // `computeSectionEnd` below nor the `preambleCutoff` scan further down
+  // recognised it as a milestone boundary — every LATER milestone swept into
+  // `computeSectionEnd`'s scope, and every PRIOR milestone landed in
+  // `preambleCutoff`'s preamble. Under the bracket scope branch, a heading
+  // isBracketMilestoneBoundary recognises is ALSO a valid boundary.
+  // `bracketScopeConvention` (see its own comment above, #2761 B3) resolves
+  // independently of which branch selected the current heading, so this
+  // engages on ANY opted-in bracket repo — a non-bracket convention (or an
+  // unresolvable one) leaves `bracketBoundaryActive` false and takes the exact
+  // pre-existing code path, byte-identically.
+
+  // #2761 B3: tokenized ONCE and shared by computeSectionEnd and the
+  // preambleCutoff bracket scan below (previously each re-tokenized the whole
+  // document independently, and the preambleCutoff scan didn't tokenize at
+  // all — see that scan's own comment for why that was the Blocker 3 defect).
+  const currentMilestoneHeadings = tokenizeHeadings(content);
+
   const computeSectionEnd = (headingText: string, headingStart: number): number => {
     const level = (headingText.match(/^(#{1,3})\s/) ?? ['', '#'])[1].length;
     const afterHeading = headingStart + headingText.length;
-    // Use tokenizeHeadings (fence-aware, offsets into original content) to find
-    // the next stop boundary without re-implementing fence detection. T4 seam migration.
-    const headings = tokenizeHeadings(content);
-    for (const h of headings) {
+    // Fence-aware, offsets into original content — finds the next stop
+    // boundary without re-implementing fence detection. T4 seam migration.
+    for (const h of currentMilestoneHeadings) {
       if (h.offset <= headingStart) continue;
       if (h.offset < afterHeading) continue;
       if (h.level > level) continue;
       // Mirrors old stopPattern: level-bounded, not a Phase heading, milestone marker
       if (/^Phase\s+\S/i.test(h.text)) continue;
-      if (!/v\d+\.\d+|✅|📋|🚧/i.test(h.text)) continue;
-      return h.offset;
+      if (/v\d+\.\d+|✅|📋|🚧/i.test(h.text)) return h.offset;
+      if (bracketBoundaryActive && isBracketMilestoneBoundary(h.text, h.level, selectedBracketId)) {
+        return h.offset;
+      }
+      continue;
     }
     return content.length;
   };
@@ -196,9 +481,128 @@ function extractCurrentMilestone(content: string, cwd?: string, ws?: string | nu
   const sectionEnd = computeSectionEnd(selected[0], sectionStart);
 
   const anyMilestonePattern = /^#{1,3}\s+(?!Phase\s+\S)(?:.*v\d+\.\d+|✅|📋|🚧)/im;
-  const firstMilestoneMatch = content.match(anyMilestonePattern);
-  const preambleCutoff = firstMilestoneMatch
-    ? firstMilestoneMatch.index!
+  let earliestMilestoneIndex: number | null;
+  if (!bracketBoundaryActive) {
+    // #2761 B3: the LEGACY (non-bracket-shaped) path stays a raw
+    // `content.match` — byte-identical to before this fix, including its
+    // fence-blindness. That hazard is real (a fenced `## Milestone v9.0`
+    // example in the preamble reads identically wrong at base, round-1, and
+    // HEAD — repro12's LEGACY control) but is PRE-EXISTING and shared with
+    // the ORIGINAL (pre-#612) code path, not introduced by this branch —
+    // fixing it is explicitly out of scope (round-2 review's own
+    // minimal-fix note).
+    const versionMilestoneMatch = content.match(anyMilestonePattern);
+    earliestMilestoneIndex = versionMilestoneMatch ? versionMilestoneMatch.index! : null;
+  } else {
+    // #2761 Major 1 (round-3 fix): on the BRACKET branch, derive the
+    // version/emoji half of "earliest milestone-shaped heading" from the
+    // SAME fence-aware `currentMilestoneHeadings` token list too, instead of
+    // the raw `content.match` above. Round-2 (ff6bf0a8) fixed the BRACKET
+    // half's fence-blindness but left THIS half a raw regex even on this
+    // branch: a fenced VERSION-BEARING example heading in a bracket repo's
+    // preamble (`` ```markdown\n## Milestone v9.0: Example\n``` ``, ADR-612's
+    // own docs illustrate the LEGACY heading shape exactly this way) was
+    // still textually the earliest match for the raw regex, winning the old
+    // min() and un-suppressing a wrong persisted 75% that base correctly
+    // suppressed (rv-attack3c fixture C1) — B3 fixed only the half of the
+    // asymmetry it introduced, not this pre-existing half once it also
+    // started reaching the bracket branch. The predicate below (`h.text`
+    // against the same `/^Phase\s+\S/i` / `/v\d+\.\d+|✅|📋|🚧/i` pair
+    // `computeSectionEnd` already uses) never sees a fenced heading at all,
+    // because tokenizeHeadings never produces a token for one.
+    //
+    // Hardened post-round-3: the raw `content.match(anyMilestonePattern)`
+    // this replaced was anchored `^#{1,3}\s+…` — a level cap the token loop
+    // dropped entirely. A level-4+ version-bearing heading in the preamble
+    // (`#### v2.0 notes`) would win this scan where the raw pattern on the
+    // legacy path ignores it outright, cutting the preamble at a heading
+    // neither the selector nor `isMilestoneBounded` would ever treat as a
+    // milestone marker. Mirrors the depth-sanity cap
+    // `isBracketMilestoneBoundary` already applies to the bracket half.
+    earliestMilestoneIndex = null;
+    for (const h of currentMilestoneHeadings) {
+      if (h.level > 3) continue;
+      if (/^Phase\s+\S/i.test(h.text)) continue;
+      if (/v\d+\.\d+|✅|📋|🚧/i.test(h.text)) { earliestMilestoneIndex = h.offset; break; }
+    }
+  }
+  if (bracketBoundaryActive) {
+    // #2761 B3: scans the SAME fence-aware `currentMilestoneHeadings` token
+    // list computeSectionEnd consumes, instead of a raw `content.matchAll` —
+    // closes the asymmetry between the two halves of one boundary semantic.
+    // Before this fix, a fenced markdown example containing a bracket
+    // heading (ADR-612's own docs do exactly this) was textually the
+    // earliest `#{1,3} [CODE.MM]` match, so `preambleCutoff` landed INSIDE
+    // the fence, `preamble` ended with an unclosed opener, and
+    // `getMilestonePhaseFilter`'s tokenizeHeadings(scope) call then saw an
+    // unbalanced fence and swallowed every real heading, degrading to a
+    // pass-all filter (repro11). tokenizeHeadings already strips fenced
+    // lines before a heading candidate is ever produced, so a heading INSIDE
+    // a fence is never a candidate here at all.
+    //
+    // `h.text` is ALREADY hash-stripped and trimmed (HeadingToken's own
+    // shape) — isBracketMilestoneBoundary is built to consume exactly that,
+    // so no `^#{1,3}\s+` re-derivation is needed (that spelling would not
+    // match `h.text` — it still carries the hashes in a raw regex match).
+    for (let i = 0; i < currentMilestoneHeadings.length; i++) {
+      const h = currentMilestoneHeadings[i];
+      let isBoundary: boolean;
+      if (h.offset === sectionStart) {
+        // #2761 B1 (round-3 fix): the SELECTED heading's own occurrence is
+        // ALWAYS a correct earliest answer to "where does milestone content
+        // begin" — bypass BOTH the same-milestone check inside
+        // isBracketMilestoneBoundary (which would otherwise reject this
+        // heading against ITSELF, since `selectedBracketId` is its own id)
+        // and the same-id-child rule below (which would reject a genuinely
+        // childless CURRENT milestone, e.g. one with no phases populated
+        // yet). Without this, a same-milestone heading EARLIER than the
+        // selected one (a version-less checklist/overview split, or the
+        // version-bearing heading landing on the LATER half of such a
+        // split — Blocker 1 round-3 cases A/B) would incorrectly win via the
+        // OLD `null`-everywhere behaviour, or (with the same-milestone
+        // check alone reinstated) the selected heading would incorrectly
+        // reject itself and fall through to a stray, unrelated LATER
+        // heading.
+        isBoundary = true;
+      } else if (isBracketMilestoneBoundary(h.text, h.level, selectedBracketId)) {
+        // #2761 B1 (round-3 fix, Blocker 1 case D): bracket-shaped, not
+        // phase-tail-shaped, and not the SAME id as the selected milestone
+        // is not enough — an unrelated bracket-shaped PROSE heading
+        // (`## [ADR.612] Heading convention used by this roadmap`) reads as
+        // a genuine boundary by those rules alone. Require its own next
+        // DEEPER heading to carry ITS bracket id too — the property every
+        // genuine sibling MILESTONE has (its own phase children) and no
+        // unrelated prose heading does.
+        //
+        // #2761 round-4 Minor 1 (docstring correction — no code change): a
+        // heading rejected here (no same-id PHASE child — see
+        // bracketHeadingHasMatchingChild's own comment) leaves its WHOLE
+        // SUBTREE in the preamble, not merely its own inert heading text.
+        // That subtree can still contain a DIFFERENT-id bracket PHASE
+        // heading, which DOES form a qualified key and CAN admit a foreign
+        // directory (F7: `## [GSD.01] Setup` / `### [GSD.07] 01: Foreign` —
+        // no same-id child, so `[GSD.01] Setup` is not a boundary, and
+        // `GSD.07-01-foreign`'s directory is admitted into the CURRENT
+        // milestone's filter, reading 3/2/67%). This is NOT a regression —
+        // base, round-1 and HEAD all read 3/2/67% on F7 (base via its own
+        // pass-all degrade) — and it remains the declared OVER-inclusive,
+        // never under-inclusive, safe direction; it is a narrower and more
+        // honest claim than "contributes nothing to any phase count", which
+        // is true of the candidate's OWN text but not of what its subtree
+        // can carry.
+        isBoundary = bracketHeadingHasMatchingChild(currentMilestoneHeadings, i);
+      } else {
+        isBoundary = false;
+      }
+      if (!isBoundary) continue;
+      if (earliestMilestoneIndex === null || h.offset < earliestMilestoneIndex) {
+        earliestMilestoneIndex = h.offset;
+      }
+      break;
+    }
+  }
+  const preambleCutoff = earliestMilestoneIndex !== null
+    ? earliestMilestoneIndex
     : firstMatch.index;
   const beforeMilestones = content.slice(0, preambleCutoff);
   const currentSection = content.slice(sectionStart, sectionEnd);
@@ -626,6 +1030,23 @@ type MilestonePhaseFilter = ((dirName: string) => boolean) & {
  */
 function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, phaseIdConvention?: string | null, ws?: string | null): MilestonePhaseFilter {
   const milestonePhaseNums = new Set<string>();
+  // #612: the milestone-QUALIFIED form (`{CODE}.{MM}-{PP}`) of each in-scope
+  // bracket heading, kept in its OWN set — deliberately not in
+  // milestonePhaseNums. A qualified id ALWAYS contains a hyphen, so putting one
+  // there would flip `roadmapUsesHyphenedIds` below on EVERY bracket repo, which
+  // swaps `numericRe` to the continuation-segment variant and silently moves the
+  // LEGACY dir path. Separate set; `phaseCount` is unchanged.
+  //
+  // Stated exactly, because the narrower claim is the true one: this keeps
+  // QUALIFIED IDS out of that flag's input, not hyphens in general. A heading
+  // whose TOKEN carries its own hyphen (`### [GSD.02] Phase 02-01:`) still flips
+  // it through milestonePhaseNums — as it also does at base, which matches that
+  // spelling through the un-widened intro. See the token-hyphen guard below.
+  const milestoneQualifiedIds = new Set<string>();
+  // Hoisted out of the try so the DIR side can select the same grammar the
+  // HEADING side selected. The two halves of this one filter reading different
+  // conventions is exactly the defect the bracket branch below closes.
+  let headingConvention: string | null | undefined;
   let missingExplicitVersion = false;
   let versionScoped = false;
   let versionSectionFound = false;
@@ -696,12 +1117,65 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
     // Use tokenizeHeadings (fence-aware) instead of stripFencedLines + regex.
     // T4 seam migration: phase headings inside fences are excluded automatically.
     // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-    const phaseHeadingPattern = /^(?:\[[^\]]{1,200}\]\s*)?Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:/i;
+    // #612: the 14th selected read. This scan feeds the DISK-side milestone
+    // filter, and on a bracket ROADMAP it collected nothing — so the filter
+    // degraded to pass-all and buildStateFrontmatter counted every other
+    // milestone's directories, making the bracket convention strictly worse than
+    // the M-NN one it supersedes on the property that matters most here: totals
+    // must track the ROADMAP, not the disk. Resolved lazily; `phaseIdConvention`
+    // is honoured when the caller already has it.
+    headingConvention = phaseIdConvention === undefined
+      ? resolvePhaseIdConvention(cwd)
+      : phaseIdConvention;
+    // #612: `capturing` puts the bracket id in group 1, so the token moves to
+    // group 1+bg — the same offset idiom the two sibling counters spell
+    // (validate.cts:218, state.cts:1752). A non-bracket convention ignores
+    // `capturing` inside phaseHeadingPrefixSrcFor and compiles the base source
+    // with zero added groups, so bg is 0 and every index below is unmoved.
+    // The bracket id is what makes the DIR side able to scope: READING-B puts
+    // the milestone in the bracket, so the token alone (`01`) cannot tell this
+    // milestone's phase 01 from the previous milestone's.
+    const capturing = headingConvention === 'bracket';
+    const bg = capturing ? 1 : 0;
+    const phaseHeadingPattern = new RegExp(
+      `^${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.ANY_BRACKET, headingConvention, capturing)}([\\w][\\w.-]*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:`,
+      'i',
+    );
     for (const h of tokenizeHeadings(roadmap)) {
       if (h.level < 2 || h.level > 4) continue;
       const pm = phaseHeadingPattern.exec(h.text);
+      if (!pm) continue;
+      const bracketId = bg ? pm[1] : undefined;
+      const token = pm[1 + bg];
+      // #612 READING-B: a bracket heading carries its sentinel in the BRACKET,
+      // so `### [GSD.999] 01:` is an icebox item even though its token is `01`.
+      // Composed with — not substituted for — the legacy token rule, exactly as
+      // buildStateFrontmatter and cmdStateSync compose it, so this filter's
+      // phaseCount cannot disagree with the counters it is scoping for.
+      if (bracketId && isSentinelPhaseId(`${bracketId}-${token}`, 'bracket')) continue;
       // Exclude 999.x backlog phases from milestone phase set. Mirrors init.cts filter.
-      if (pm && !/^999\b/.test(pm[1])) milestonePhaseNums.add(pm[1]);
+      if (/^999\b/.test(token)) continue;
+      milestonePhaseNums.add(token);
+      // #612: a QUALIFIED key is formed only for a token that is itself a bracket
+      // phase token. `${bracketId}-${token}` is a string SPLICE, so a
+      // mid-migration heading carrying an M-NN label — `### [GSD.02] Phase 02-01:`
+      // — spliced to `GSD.02-02-01`, which BRACKET_QUALIFIED_KEY_RE reads as
+      // milestone 02 / phase 02: the trailing `-01` is silently truncated, both
+      // such headings collapse to the one key `GSD.2-2`, and the heading then
+      // claimed `GSD.02-02-two` — the directory it does NOT name — while
+      // rejecting `GSD.02-01-one`, the one it does. Skipping the key leaves the
+      // heading to the unqualified legacy path below, which is byte-identical to
+      // base on this shape.
+      //
+      // The token still enters milestonePhaseNums, exactly as it does at base, so
+      // `roadmapUsesHyphenedIds` below still flips for this shape. That is
+      // deliberate, and it is what keeps the shape base-equivalent: base matches
+      // `[GSD.02] Phase 02-01:` through the un-widened `(?:\[…\]\s*)?Phase\s+`
+      // alternative and puts the same hyphenated token into the same set. The
+      // isolation described where milestoneQualifiedIds is declared is therefore
+      // narrower than it reads — it keeps QUALIFIED IDS out of that flag's input,
+      // not hyphens in general.
+      if (bracketId && !token.includes('-')) milestoneQualifiedIds.add(`${bracketId}-${token}`);
     }
     // #2199: also count bullet/checkbox phase entries (`- [ ] **Phase N — name**`)
     // so a bullet-house-style ROADMAP populates the milestone phase set instead of
@@ -761,6 +1235,27 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
     : /^0*(\d+[A-Za-z]?(?:\.\d+)*)/;
 
   function isDirInMilestone(dirName: string): boolean {
+    // #612: the DIR side of this filter, selected by the same convention the
+    // heading side selected. Without it the heading scan's new bracket reach was
+    // half a fix: `milestonePhaseNums` became non-empty, so the pass-all degrade
+    // stopped firing, but no bracket directory could satisfy the three legacy
+    // checks below (numericRe fails on `GSD.02-05-five`, the custom-id match
+    // captures the project code `GSD`, and stripProjectCodePrefix does not strip
+    // a dotted prefix) — so EVERY bracket directory was rejected and
+    // completed_phases / total_plans / completed_plans / percent collapsed to 0
+    // while `state sync` went on writing a percent off the unfiltered disk.
+    //
+    // Matching is delegated to phaseTokenMatches against the milestone-QUALIFIED
+    // id, not the bare token: READING-B puts the milestone in the bracket, so
+    // `GSD.01-01-old-one` and `GSD.02-01-one` share the token `01` and only the
+    // qualified key separates them. That is the scoping this filter exists to do.
+    // ADDITIVE: on a miss we fall through to the three legacy checks, so a
+    // bracket repo carrying legacy-shaped directories reads exactly as before.
+    if (headingConvention === 'bracket') {
+      for (const qualified of milestoneQualifiedIds) {
+        if (phaseTokenMatches(dirName, qualified, 'bracket')) return true;
+      }
+    }
     const m2 = dirName.match(numericRe);
     if (m2 && normalized.has(normalizePhaseIdSegments(m2[1]).toLowerCase())) return true;
     const customMatch = dirName.match(/^([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)/);
@@ -791,6 +1286,24 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
  * back to whole-content mutation (the prior behaviour).
  *
  * NOTE: keep the region logic here in sync with extractCurrentMilestone.
+ *
+ * #2761 (round-2 review, Minor 3 — latent, currently harmless): this function
+ * did NOT receive the bracket boundary fixes above (B1's same-milestone
+ * exclusion, B2's content discriminator, or the bracket-fallback SELECTION
+ * branch itself — this function returns null outright when the version-string
+ * match finds nothing, unlike extractCurrentMilestone's bracket fallback).
+ * `extractCurrentMilestone` can therefore now scope a bracket ROADMAP this
+ * function still calls unscoped. Probed and confirmed harmless TODAY: this
+ * function's single consumer (`mutateMilestonePhase`, src/phase.cts) falls
+ * back to whole-content mutation when it returns null, and every mutation
+ * inside that caller is still `Phase`-labelled-only (not bracket-widened) per
+ * the changeset's own "READ-path opt-in until the migrator and write path
+ * land" — so a bracket ROADMAP's checkbox/heading patterns never match inside
+ * that fallback and nothing is mutated cross-milestone. The moment the write
+ * path is widened (PR-3+), this divergence becomes live: the whole-content
+ * fallback would become a cross-milestone writer, which is exactly what this
+ * NOTE has always existed to prevent. Bracket-widen this function in lockstep
+ * with the write path landing, not before.
  */
 function currentMilestoneRawRanges(
   content: string,
