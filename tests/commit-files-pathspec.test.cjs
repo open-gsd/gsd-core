@@ -1072,6 +1072,21 @@ describe('workflow call sites declare --files (#2269)', () => {
       'a delimited mention bears no argument',
     );
 
+    // A BACKSLASH-ESCAPED backtick is literal text, not a delimiter. Treating
+    // it as one invents a code span that the rendered document does not have,
+    // and the invented span then reads as an unscoped invocation — a false
+    // offender against prose that merely displays a backtick.
+    assert.deepEqual(
+      invocationCandidates('text \\`gsd_run query commit fixup\\` more'), [],
+      'escaped backticks are literal and must not open a span',
+    );
+    // The unescaped twin is a real span and is scanned, so the assertion above
+    // pins the escape rather than the absence of span handling.
+    assert.strictEqual(
+      invocationCandidates('text `gsd_run query commit fixup` more').length, 1,
+      'the unescaped form is a real code span and is scanned',
+    );
+
     // NAMED RESIDUAL, pinned so it is visible rather than discovered. An
     // UNDELIMITED prose mention that runs straight from the command into the
     // sentence does read as argument-bearing, and is flagged:
