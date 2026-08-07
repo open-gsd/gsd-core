@@ -439,10 +439,19 @@ describe('workflow call sites declare --files (#2269)', () => {
   // brackets a flag, while all 5 synopsis lines (docs/*/CLI-TOOLS.md and its
   // localized mirrors) do. Keying on "contains a bracket" would drop all 24.
   const SYNOPSIS_TOKEN_RE = /^\[--/;
+  // An unquoted `<message>` metavariable, as the TOKENIZER leaves it. `<` is a
+  // redirection character, so the shell — and therefore tokenize() — reads
+  // `commit <message> [--files f1 f2]` as a redirection whose target is
+  // `message`, not as a word. That mangling is not a defect to work around: it
+  // is precisely why a synopsis is not a call, and it makes the notation
+  // identifiable without a second parse. A metavariable inside a QUOTED message
+  // (`commit "docs: add <Widget> support"`) stays one ordinary token and is
+  // untouched by this — which is the false negative a raw-text match would have
+  // introduced.
+  const METAVAR_REDIR_RE = /^<[A-Za-z]/;
 
   // The command shape from the header, over one operator-delimited segment.
   const isCommitInvocation = (tokens) => {
-    if (tokens.some((t) => SYNOPSIS_TOKEN_RE.test(t.value))) return false;
     // The binary may sit anywhere in the segment: an env-var prefix
     // (`FOO=1 gsd_run …`), a `then`/`else` keyword, a shell prompt (`$ `), or
     // an interpreter (`node gsd-tools.cjs …`, live in docs/CLI-TOOLS.md) all
@@ -467,6 +476,30 @@ describe('workflow call sites declare --files (#2269)', () => {
       return false;
     }
     if (i >= tokens.length) return false;
+    // NOTATION IS DECIDED BY THE FIRST ARGUMENT, and this is the position where
+    // that question is answerable — `i` is the command token, so the next token
+    // is where a call puts its MESSAGE and a synopsis puts its metavariable.
+    //
+    // Testing "does any token on the line look like notation" instead was wrong
+    // in both directions, and both were reachable:
+    //
+    //   See [--files](#anchor) then run gsd_run query commit "docs: x"
+    //       ^ notation belonging to no command at all — an ordinary markdown
+    //         link, and docs/ is a scan root — silently disqualified the real
+    //         invocation after it.
+    //   gsd_run query commit "docs: x" [--amend]
+    //                                  ^ a real, executable, unscoped call.
+    //         `[--amend]` is a literal word to the shell, so this line RUNS and
+    //         sweeps the index, and the guard was silent on exactly the defect
+    //         it exists to catch.
+    //
+    // Positionally there is no ambiguity: a synopsis documents a call it does
+    // not make, so its first argument is always a placeholder — `<message>`
+    // (which reaches us as a redirection; see METAVAR_REDIR_RE) or a bracketed
+    // optional group. A real call's first argument is its commit message.
+    const firstArg = tokens.slice(i + 1).find((t) => !t.op);
+    if (firstArg && ((firstArg.redir && METAVAR_REDIR_RE.test(firstArg.value))
+      || SYNOPSIS_TOKEN_RE.test(firstArg.value))) return false;
     // At least one argument. A mention carries none, and this is the whole of
     // the mention/invocation distinction the line-start anchor used to guess at.
     return tokens.slice(i + 1).some((t) => !t.op && !t.redir);
@@ -1365,6 +1398,40 @@ describe('workflow call sites declare --files (#2269)', () => {
     const mvCands = invocationCandidates(metavarValue);
     assert.strictEqual(mvCands.length, 1, 'a metavariable VALUE must not exempt a real invocation');
     assert.ok(hasScopedFiles(mvCands[0]), 'a bracketed value is still a value');
+
+    // AND THE TEST IS POSITIONAL — the FIRST argument, not "anywhere on the
+    // line". Scanning every token for notation was wrong in both directions.
+    //
+    // Direction 1: notation belonging to no command at all disqualified the
+    // real invocation that followed it. An ordinary markdown link does this,
+    // and docs/ is a scan root.
+    const linkThenCall = 'See [--files](#anchor) then run gsd_run query commit "docs: x"';
+    const ltCands = invocationCandidates(linkThenCall);
+    assert.strictEqual(ltCands.length, 1, 'notation before the binary belongs to no command');
+    assert.strictEqual(hasScopedFiles(ltCands[0]), false, 'and the real invocation is still flagged');
+
+    // Direction 2 — the dangerous one. `[--amend]` is a literal word to the
+    // shell, so this line RUNS, reaches routeCommit with files=[], and sweeps
+    // the index: #2269 verbatim. It scored 0 candidates.
+    const callWithBracketedFlag = 'gsd_run query commit "docs: x" [--amend]';
+    const cbCands = invocationCandidates(callWithBracketedFlag);
+    assert.strictEqual(cbCands.length, 1, 'a real call carrying a bracketed token is still a call');
+    assert.strictEqual(hasScopedFiles(cbCands[0]), false, 'and it is unscoped — this is the #2269 shape');
+
+    // A synopsis whose placeholder is a bracketed GROUP rather than an angle
+    // metavariable is still notation: its first argument is the group.
+    assert.deepEqual(
+      invocationCandidates('gsd-tools.cjs commit [--files f1 f2] [--amend]'), [],
+      'a leading bracketed optional group is notation, not a call',
+    );
+
+    // The false negative the raw-text reading of a metavariable would have
+    // introduced: inside a QUOTED message, `<Widget>` is ordinary text — one
+    // token, no redirection — and the invocation is real.
+    const quotedMetavar = 'gsd_run query commit "docs: add <Widget> support"';
+    const qmCands = invocationCandidates(quotedMetavar);
+    assert.strictEqual(qmCands.length, 1, 'a metavariable inside the message is message text');
+    assert.strictEqual(hasScopedFiles(qmCands[0]), false, 'and the invocation is still flagged');
   });
 
   // The scan's verdict rests entirely on hasScopedFiles's quote-parity walk,
