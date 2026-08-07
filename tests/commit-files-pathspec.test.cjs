@@ -765,6 +765,36 @@ describe('workflow call sites declare --files (#2269)', () => {
     + 'See CONTRIBUTING.md -> "Every commit invocation in shipped content must '
     + 'declare --files".';
 
+  // ONE DOCUMENT, CLASSIFIED — the exact function the repo walk below applies
+  // to every file, defined here for the same reason the other primitives are:
+  // an assertion that re-implements the classification passes against its own
+  // copy while the scan does something else. Factored out after a reversion
+  // control caught the gap: neutering the WIRING between the walkers and the
+  // scan's result lists was SILENT, because every test drove the walkers
+  // directly and nothing exercised the assembly. A synthetic corpus drives
+  // this symbol below, so that path is now covered.
+  const scanDocument = (label, text) => {
+    const scanned = [];
+    const offenders = [];
+    const untracked = [];
+    for (const inv of documentCandidates(text)) {
+      scanned.push(label);
+      if (!hasScopedFiles(inv)) offenders.push(`${label}: ${inv.trim()}`);
+    }
+    for (const decl of documentUntrackedDeclarations(text)) untracked.push(`${label}: ${decl}`);
+    return { scanned, offenders, untracked };
+  };
+
+  // Which tracked files carry a live invocation that NO scan root covers.
+  // Also factored out for the reversion-control reason above: the repo is
+  // clean, so the real assertion can only ever observe an empty list, and
+  // emptying it deliberately was silent. Driving this symbol with a synthetic
+  // file list is the only way the check can fail on demand.
+  const uncoveredFiles = (files, roots, excluded, read) => files
+    .filter((f) => !roots.some((root) => f === root || f.startsWith(`${root}/`)))
+    .filter((f) => !excluded.has(f))
+    .filter((f) => documentCandidates(read(f)).length > 0);
+
   // The same walk, for declarations that tried and failed to carry a tracking
   // reference. Separate from documentCandidates because such a line is NOT an
   // offender — its author already explained it — and reporting it as one is the
@@ -1193,13 +1223,64 @@ describe('workflow call sites declare --files (#2269)', () => {
     );
   });
 
+  test('the scan assembles its verdicts from the walkers it claims to use', () => {
+    // WRITTEN IN RESPONSE TO A SILENT REVERSION CONTROL. Every other test here
+    // drives the walkers directly, so the WIRING between them and the scan's
+    // result lists was covered by nothing: replacing the untracked-declaration
+    // source with an empty list, and emptying the uncovered-file list, both
+    // left the suite green. The real corpus cannot catch either — it is clean,
+    // so the assertions can only ever observe an empty result — which is
+    // exactly why a synthetic corpus is the only thing that can fail on demand.
+    const doc = [
+      'A scoped call: `gsd_run query commit "docs: a" --files .planning/A.md`',
+      'gsd_run query commit "docs: b"',
+      'gsd_run query commit "docs: c"   # gsd-scan-ignore: no issue here',
+    ].join('\n');
+    const result = scanDocument('fixtures/demo.md', doc);
+    assert.strictEqual(result.scanned.length, 3, 'every invocation is counted as scanned');
+    assert.deepEqual(
+      result.offenders,
+      ['fixtures/demo.md: gsd_run query commit "docs: b"',
+        // The excerpt stops at the `#`: tokenize ends the command there, so the
+        // reported slice is the part that actually reaches argv.
+        'fixtures/demo.md: gsd_run query commit "docs: c"'],
+      'the unscoped invocations reach the offender list, with their label',
+    );
+    assert.deepEqual(
+      result.untracked,
+      ['fixtures/demo.md: gsd_run query commit "docs: c"   # gsd-scan-ignore: no issue here'],
+      'and the untracked declaration reaches its own list',
+    );
+
+    // The uncovered-file walk, likewise driven with a synthetic file list.
+    const corpus = {
+      'gsd-core/workflows/a.md': 'gsd_run query commit "docs: a" --files x.md',
+      'docs/b.md': 'gsd_run query commit "docs: b" --files x.md',
+      'sdk/c.md': 'gsd_run query commit "docs: c" --files x.md',
+      'sdk/prose.md': 'no invocation here at all',
+      'CHANGELOG.md': 'gsd_run query commit "docs: shipped" --files x.md',
+    };
+    assert.deepEqual(
+      uncoveredFiles(Object.keys(corpus), ['gsd-core/workflows', 'docs'],
+        new Map([['CHANGELOG.md', 'generated']]), (f) => corpus[f]),
+      ['sdk/c.md'],
+      'a candidate-bearing file under no scan root is uncovered; an excluded or '
+        + 'invocation-free one is not',
+    );
+  });
+
   test('the failure message names every remedy, and the convention is documented', () => {
     // A guard whose message names only the bug teaches the wrong fix for its
     // other two causes. These assertions exist because a failure message is
     // unreachable on the passing path — nothing else would notice a remedy
     // being edited out of it.
-    assert.match(OFFENDER_HELP, /--files/, 'the real regression needs its own remedy named');
-    assert.match(OFFENDER_HELP, /backtick/i, 'a prose mention needs the backtick remedy named');
+    // Matched on the REMEDY, not on its vocabulary. `/backtick/i` looked like a
+    // check and was not one: the word also appears in the clause explaining why
+    // a backticked mention is skipped, so deleting the instruction left the
+    // assertion satisfied. A reversion control caught it — the shape of an
+    // assertion that passes for a reason unrelated to the thing it names.
+    assert.match(OFFENDER_HELP, /add --files/, 'the real regression needs its own remedy named');
+    assert.match(OFFENDER_HELP, /wrap it in backticks/, 'a prose mention needs the backtick remedy named');
     assert.match(OFFENDER_HELP, /gsd-scan-ignore:/, 'a wrong-example needs the declaration named');
     assert.match(OFFENDER_HELP, /#NNN|https:\/\//, 'and the tracking-reference requirement');
     assert.match(OFFENDER_HELP, /CONTRIBUTING\.md/, 'and where the convention is written down');
@@ -1852,15 +1933,10 @@ describe('workflow call sites declare --files (#2269)', () => {
         // Windows. Join with the RAW entry; report with the normalized one.
         const normalized = String(file).split(path.sep).join('/');
         const text = fs.readFileSync(path.join(rootDir, file), 'utf-8');
-        for (const inv of documentCandidates(text)) {
-          scanned.push(`${root}/${normalized}`);
-          if (!hasScopedFiles(inv)) {
-            offenders.push(`${root}/${normalized}: ${inv.trim()}`);
-          }
-        }
-        for (const decl of documentUntrackedDeclarations(text)) {
-          untracked.push(`${root}/${normalized}: ${decl}`);
-        }
+        const result = scanDocument(`${root}/${normalized}`, text);
+        scanned.push(...result.scanned);
+        offenders.push(...result.offenders);
+        untracked.push(...result.untracked);
       }
     }
     // ASSERTED FIRST, deliberately. An untracked declaration is also an
@@ -1928,10 +2004,10 @@ describe('workflow call sites declare --files (#2269)', () => {
     const NOT_INSTRUCTION = new Map([
       ['CHANGELOG.md', 'generated from .changeset/ fragments; a historical record, not instruction'],
     ]);
-    const strays = trackedMd
-      .filter((f) => !scanRoots.some((root) => f === root || f.startsWith(`${root}/`)))
-      .filter((f) => !NOT_INSTRUCTION.has(f))
-      .filter((f) => documentCandidates(fs.readFileSync(path.join(repoRoot, f), 'utf-8')).length > 0);
+    const strays = uncoveredFiles(
+      trackedMd, scanRoots, NOT_INSTRUCTION,
+      (f) => fs.readFileSync(path.join(repoRoot, f), 'utf-8'),
+    );
     assert.deepEqual(
       strays, [],
       'these tracked .md files carry live commit invocations that NO scan root covers, so #2269 '
