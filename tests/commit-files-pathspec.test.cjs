@@ -814,7 +814,7 @@ describe('workflow call sites declare --files (#2269)', () => {
     + '  3. A deliberate wrong-example          -> declare it on the\n'
     + '     invocation\'s own line, in shell-comment position:\n'
     + '       # gsd-scan-ignore: #NNN <why this example shows the bad form>\n'
-    + '     The reason must name a tracking issue or an https:// URL.\n'
+    + '     The reason must name a tracking issue or an http(s):// URL.\n'
     + 'See CONTRIBUTING.md -> "Every commit invocation in shipped content must '
     + 'declare --files".';
 
@@ -2061,7 +2061,7 @@ describe('workflow call sites declare --files (#2269)', () => {
       untracked,
       [],
       'gsd-scan-ignore: declarations without a tracking reference. Add a #NNN issue '
-        + 'number or an https:// URL to the reason, per ADR-456:\n'
+        + 'number or an http(s):// URL to the reason, per ADR-456:\n'
         + untracked.join('\n'),
     );
     // THE MESSAGE NAMES ITS OWN REMEDIES — all three of them, because this

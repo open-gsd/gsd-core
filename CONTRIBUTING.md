@@ -1026,7 +1026,7 @@ gsd_run query commit "docs: message"   # gsd-scan-ignore: #2269 counter-example 
 That block is a live example of itself: the invocation above really is unscoped, and it
 is the declaration — not the fence around it — that keeps the scan quiet.
 
-The reason **must** name a tracking issue (`#NNN`) or an `https://` URL, exactly as
+The reason **must** name a tracking issue (`#NNN`) or an `http(s)://` URL, exactly as
 [ADR-456](docs/adr/456-test-rigor-architecture.md) requires of the sibling
 `allow-test-rule:` marker — an exemption with no ledger never gets revisited. A marker
 with a free-text reason is reported as a malformed declaration rather than as an unscoped
