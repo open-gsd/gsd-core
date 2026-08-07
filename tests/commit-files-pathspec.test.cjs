@@ -324,6 +324,28 @@ describe('workflow call sites declare --files (#2269)', () => {
   const GSD_BINARY_RE = /^(?:.*\/)?gsd(?:_run|-tools(?:\.cjs)?)$/;
   const COMMIT_TOKENS = new Set(['commit', 'commit-to-subrepo']);
 
+  // A SUBSHELL OPENER GLUES TO THE BINARY. `(` is not a tokenizer
+  // metacharacter here — subshell grouping changes no argv, so it was never
+  // modelled — which leaves `(gsd_run` as one token that the anchor could not
+  // match. `(gsd_run query commit "docs: x")` is executable and scored zero
+  // candidates: a silent false negative, the one class this file cannot afford.
+  //
+  // BACKTICKS ARE DELIBERATELY NOT STRIPPED HERE, and the reason is the same
+  // runtime fidelity the rest of the file is built on: to a SHELL a backtick is
+  // never part of a binary name, so `` `gsd_run `` is not a command — a
+  // backticked invocation is reached by the code-span pass, which extracts the
+  // command from inside the delimiters, and that is the correct route. Stripping
+  // them in the anchor made the whole-line pass find the same invocation a
+  // second time, absorbing the surrounding sentence as arguments, and doubled
+  // the census for every backticked site in the tree.
+  //
+  // TRAILING punctuation is not stripped either: a sentence ending
+  // `… gsd_run query commit.` would then read as a command whose arguments are
+  // the rest of the paragraph — a false POSITIVE against ordinary prose, and
+  // exactly the hostility the declaration marker exists to undo.
+  const BINARY_LEAD_MARKUP_RE = /^\(+/;
+  const isGsdBinary = (value) => GSD_BINARY_RE.test(value.replace(BINARY_LEAD_MARKUP_RE, ''));
+
   // Shell-like word splitting. Honours BOTH quote characters (the previous
   // parity walk counted only `"`, so a single-quoted message was transparent
   // to it in both directions), backslash escapes, and unquoted control
@@ -456,7 +478,7 @@ describe('workflow call sites declare --files (#2269)', () => {
     // (`FOO=1 gsd_run …`), a `then`/`else` keyword, a shell prompt (`$ `), or
     // an interpreter (`node gsd-tools.cjs …`, live in docs/CLI-TOOLS.md) all
     // precede it, and all are still the command being run.
-    const bi = tokens.findIndex((t) => !t.redir && GSD_BINARY_RE.test(t.value));
+    const bi = tokens.findIndex((t) => !t.redir && isGsdBinary(t.value));
     if (bi === -1) return false;
     // Between the binary and the command, only the optional `query` meta-prefix
     // and flags-with-values may intervene. `gsd_run --cwd "$ROOT" query commit`
@@ -534,8 +556,16 @@ describe('workflow call sites declare --files (#2269)', () => {
     const re = /(\\*)(`+)/g;
     let m;
     while ((m = re.exec(line)) !== null) {
-      if (m[1].length % 2 === 1) continue;
-      runs.push({ at: m.index + m[1].length, len: m[2].length });
+      // An ODD backslash count escapes exactly ONE backtick — the first. The
+      // rest of the run is still a delimiter, and skipping the whole run drops
+      // it: ``text \`` + `` `cmd`` `` + ` end` lost its opening run entirely.
+      // The comment above claimed this rule; the code implemented "skip the
+      // run". Harmless in practice, since the span pass is additive — but a
+      // comment that overstates its code is how the next reader is misled.
+      const escaped = m[1].length % 2 === 1;
+      const len = escaped ? m[2].length - 1 : m[2].length;
+      if (len === 0) continue;
+      runs.push({ at: m.index + m[1].length + (escaped ? 1 : 0), len });
     }
     for (let a = 0; a < runs.length; a += 1) {
       for (let b = a + 1; b < runs.length; b += 1) {
@@ -623,14 +653,44 @@ describe('workflow call sites declare --files (#2269)', () => {
   const isUntrackedDeclaration = (line) => inCommentPosition(line, SCAN_IGNORE_LOOSE_RE)
     && !inCommentPosition(line, SCAN_IGNORE_RE);
 
+  // A shell invoked with -c runs its next argument AS A COMMAND, so the
+  // invocation lives inside a quoted token and no amount of markup-stripping
+  // reaches it: `bash -c "gsd_run query commit fixup"` scored zero candidates
+  // while being perfectly executable. The recursion is keyed on the INVOKER,
+  // not on "a quoted token that parses as an invocation" — that wider rule
+  // would flag a commit MESSAGE quoting a command, a false positive against
+  // ordinary documentation. Here the outer command is bash, so a gsd commit
+  // message can never reach it.
+  const SHELL_INVOKER_RE = /^(?:.*\/)?(?:ba|da|k|z)?sh$/;
+  const shellDashCPayloads = (str) => {
+    const payloads = [];
+    let group = [];
+    const drain = () => {
+      if (!group.length) { return; }
+      const gi = group.findIndex((t) => !t.redir && SHELL_INVOKER_RE.test(t.value));
+      if (gi !== -1) {
+        const ci = group.findIndex((t, k) => k > gi && !t.redir && t.value === '-c');
+        const payload = ci !== -1 ? group.slice(ci + 1).find((t) => !t.redir) : undefined;
+        if (payload) payloads.push(payload.value);
+      }
+      group = [];
+    };
+    for (const t of tokenize(str)) {
+      if (t.op) { drain(); } else { group.push(t); }
+    }
+    drain();
+    return payloads;
+  };
+
   // Candidates for one logical line: the whole line, unioned with each of its
-  // inline code spans. See the header for why the union rather than a choice.
+  // inline code spans and each shell -c payload. See the header for why the
+  // union rather than a choice.
   const invocationCandidates = (line) => {
     if (isDeclared(line)) return [];
     const candidates = segmentInvocations(line);
-    for (const span of codeSpans(line)) {
-      for (const c of segmentInvocations(span)) if (!candidates.includes(c)) candidates.push(c);
-    }
+    const add = (c) => { if (!candidates.includes(c)) candidates.push(c); };
+    for (const span of codeSpans(line)) segmentInvocations(span).forEach(add);
+    for (const payload of shellDashCPayloads(line)) segmentInvocations(payload).forEach(add);
     return candidates;
   };
 
@@ -1285,6 +1345,30 @@ describe('workflow call sites declare --files (#2269)', () => {
       'a delimited mention bears no argument',
     );
 
+    // A SUBSHELL OPENER glues to the binary — `(` changes no argv, so it is not
+    // a tokenizer metacharacter, which left `(gsd_run` as one unmatchable token.
+    const subshell = invocationCandidates('(gsd_run query commit "docs: x")');
+    assert.strictEqual(subshell.length, 1, 'a subshell-wrapped invocation is still an invocation');
+    assert.strictEqual(hasScopedFiles(subshell[0]), false, 'and it is unscoped');
+
+    // A SHELL INVOKED WITH -c runs its next argument as a command, so the
+    // invocation lives inside a quoted token that no markup rule reaches.
+    const dashC = invocationCandidates('bash -c "gsd_run query commit fixup"');
+    assert.strictEqual(dashC.length, 1, 'a shell -c payload is a command, not a string');
+    assert.strictEqual(hasScopedFiles(dashC[0]), false, 'and it is unscoped');
+    assert.strictEqual(
+      invocationCandidates('sh -c "gsd_run query commit fixup --files a.md"').length, 1,
+      'the invoker set is not bash-only',
+    );
+
+    // The recursion is keyed on the INVOKER, never on "a quoted token that
+    // parses as a command". The wider rule would flag a commit MESSAGE that
+    // quotes an invocation — ordinary documentation, and a false positive.
+    const quotingMessage = 'gsd_run query commit "docs: run gsd_run query commit fixup first" --files a.md';
+    const qmCands = invocationCandidates(quotingMessage);
+    assert.strictEqual(qmCands.length, 1, 'a message quoting a command is one invocation, not two');
+    assert.ok(hasScopedFiles(qmCands[0]), 'and the real one is scoped');
+
     // A BACKSLASH-ESCAPED backtick is literal text, not a delimiter. Treating
     // it as one invents a code span that the rendered document does not have,
     // and the invented span then reads as an unscoped invocation — a false
@@ -1292,6 +1376,26 @@ describe('workflow call sites declare --files (#2269)', () => {
     assert.deepEqual(
       invocationCandidates('text \\`gsd_run query commit fixup\\` more'), [],
       'escaped backticks are literal and must not open a span',
+    );
+
+    // AN ODD BACKSLASH ESCAPES EXACTLY ONE BACKTICK — the first of the run.
+    // The code used to skip the WHOLE run, which is a stricter rule than the
+    // one its comment states, and it dropped the remaining delimiter: below,
+    // the escape consumes one of the two backticks and the survivor opens a
+    // real span that pairs with the closing one. Previously: no span at all.
+    assert.deepEqual(
+      codeSpans('text \\``gsd_run query commit fixup --files a.md` end'),
+      ['gsd_run query commit fixup --files a.md'],
+      'an escaped first backtick leaves the rest of the run as a delimiter',
+    );
+
+    // The reviewer's shape for the same defect stays at zero candidates, and
+    // that is now CORRECT rather than incidental: the surviving opener is a
+    // 1-run and the closer is a 2-run, and CommonMark pairs a run only with a
+    // run of equal length. Pinned so the distinction is not re-litigated.
+    assert.deepEqual(
+      codeSpans('text \\``gsd_run query commit fixup`` end'), [],
+      'a 1-run opener does not pair with a 2-run closer',
     );
     // The unescaped twin is a real span and is scanned, so the assertion above
     // pins the escape rather than the absence of span handling.
