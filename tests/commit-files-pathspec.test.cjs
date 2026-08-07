@@ -555,7 +555,24 @@ describe('workflow call sites declare --files (#2269)', () => {
   // gsd-scan-ignore: semantics"` — and silently exempt a real offender. A
   // false-negative escape hatch is the one thing this file must not ship, and
   // an exemption keyed to attacker-controlled-looking text is precisely that.
-  const SCAN_IGNORE_RE = /gsd-scan-ignore:\s*\S/;
+  // AND IT MUST CARRY A TRACKING ISSUE. An exemption whose reason is free text
+  // has no expiry and no ledger — the `permanent-allow-test-rule` shape
+  // RULESET.TESTS.delete-bad-tests names. The repo already answered this for
+  // its sibling convention: ADR-456 requires `#NNN` (or an https:// URL) on
+  // every `allow-test-rule:` reason, and scripts/lint-allow-test-rule-refs.cjs
+  // enforces it. That lint walks tests/ only, so it cannot see a marker living
+  // in a .md file; rather than teach a second token to a script whose whole
+  // contract is the ESLint comment form, this scan enforces the same rule over
+  // its own roots — it already runs in CI on every shard.
+  //
+  // TWO patterns, because a rejected declaration must not fail as a MYSTERY.
+  // Requiring #NNN in the accepting pattern alone would leave a marker-that-
+  // forgot-its-issue simply un-exempt, and the author would be told their
+  // commit is unscoped — a true statement about a line they had already
+  // explained, which is exactly the mangle-until-it-shuts-up loop the marker
+  // exists to prevent. LOOSE detects the ATTEMPT; STRICT accepts it.
+  const SCAN_IGNORE_LOOSE_RE = /gsd-scan-ignore:\s*\S/;
+  const SCAN_IGNORE_RE = /gsd-scan-ignore:\s*(#\d+|https?:\/\/\S)/;
   // Two independent conditions, and the second is the structural one: the
   // marker must be in comment position AND must not survive tokenization as an
   // ARGUMENT. tokenize() drops everything from a real comment onward, so a
@@ -565,8 +582,13 @@ describe('workflow call sites declare --files (#2269)', () => {
   // construction rather than by getting commentPortion's edges exactly right —
   // and commentPortion has edges (redirection targets, escaped separators)
   // where mirroring the tokenizer perfectly is fiddly and a miss is silent.
-  const isDeclared = (line) => SCAN_IGNORE_RE.test(commentPortion(line))
+  const inCommentPosition = (line, re) => re.test(commentPortion(line))
     && !tokenize(line).some((t) => /gsd-scan-ignore:/.test(t.value));
+  const isDeclared = (line) => inCommentPosition(line, SCAN_IGNORE_RE);
+  // An ATTEMPTED declaration that carries no tracking reference. Reported on
+  // its own terms rather than silently failing to exempt: see SCAN_IGNORE_RE.
+  const isUntrackedDeclaration = (line) => inCommentPosition(line, SCAN_IGNORE_LOOSE_RE)
+    && !inCommentPosition(line, SCAN_IGNORE_RE);
 
   // Candidates for one logical line: the whole line, unioned with each of its
   // inline code spans. See the header for why the union rather than a choice.
@@ -590,6 +612,19 @@ describe('workflow call sites declare --files (#2269)', () => {
     const logical = stripHtmlComments(text).replace(/\\\r?\n/g, ' ');
     const found = [];
     for (const line of logical.split(/\r?\n/)) found.push(...invocationCandidates(line));
+    return found;
+  };
+
+  // The same walk, for declarations that tried and failed to carry a tracking
+  // reference. Separate from documentCandidates because such a line is NOT an
+  // offender — its author already explained it — and reporting it as one is the
+  // failure mode SCAN_IGNORE_RE's comment describes.
+  const documentUntrackedDeclarations = (text) => {
+    const logical = stripHtmlComments(text).replace(/\\\r?\n/g, ' ');
+    const found = [];
+    for (const line of logical.split(/\r?\n/)) {
+      if (isUntrackedDeclaration(line)) found.push(line.trim());
+    }
     return found;
   };
 
@@ -893,6 +928,40 @@ describe('workflow call sites declare --files (#2269)', () => {
       'a marker with no reason must not exempt the line',
     );
 
+    // AND THE REASON MUST NAME A TRACKING ISSUE. Free text gives the exemption
+    // no expiry and no ledger, which is the permanent-allow-test-rule shape;
+    // ADR-456 already settled this for the sibling `allow-test-rule:` marker.
+    const untracked = 'gsd_run query commit "docs: message"   # gsd-scan-ignore: just a note';
+    assert.strictEqual(
+      invocationCandidates(untracked).length, 1,
+      'a declaration with no #NNN must not exempt the line',
+    );
+    // …and it is reported AS a malformed declaration, not as a mystery
+    // unscoped commit. The author already explained this line; telling them it
+    // is unscoped sends them to re-read a flag that was never the problem.
+    assert.deepEqual(
+      documentUntrackedDeclarations(untracked), [untracked],
+      'an untracked declaration must be reported on its own terms',
+    );
+    assert.deepEqual(
+      documentUntrackedDeclarations(declared), [],
+      'a compliant declaration is not a defect',
+    );
+    // An https:// URL is the other form ADR-456 accepts.
+    assert.deepEqual(
+      invocationCandidates(
+        'gsd_run query commit "docs: message"   # gsd-scan-ignore: https://example.invalid/adr',
+      ),
+      [],
+      'a URL reference is a tracking reference',
+    );
+    // The bypass class the token cross-check covers applies here too: a
+    // reference living in an ARGUMENT reached argv, so it declares nothing.
+    assert.strictEqual(
+      invocationCandidates('gsd_run query commit "docs: gsd-scan-ignore: #2269"').length, 1,
+      'a tracking reference inside the message must not exempt the line',
+    );
+
     // AND IT IS ONLY A MARKER IN COMMENT POSITION. An exemption that fires on
     // the token appearing ANYWHERE on the line is a false-negative escape
     // hatch: the commit MESSAGE is ordinary text an author controls, so a line
@@ -952,7 +1021,11 @@ describe('workflow call sites declare --files (#2269)', () => {
     // to the redirect target and never treats it as a comment — while
     // commentPortion, reading raw text, does see one. Only the cross-check
     // separates them, so the line stays scanned.
-    const redirected = 'gsd_run query commit x > #gsd-scan-ignore: y';
+    // The reason carries a tracking reference so the precondition below tests
+    // the CROSS-CHECK rather than the reference requirement — otherwise this
+    // fixture would fail for the uninteresting reason and stop covering the
+    // redirection case at all.
+    const redirected = 'gsd_run query commit x > #gsd-scan-ignore: #2269 y';
     assert.ok(
       SCAN_IGNORE_RE.test(commentPortion(redirected)),
       'precondition: raw-text reading of this line does look like a declaration',
@@ -1429,6 +1502,7 @@ describe('workflow call sites declare --files (#2269)', () => {
     ];
     const offenders = [];
     const scanned = [];
+    const untracked = [];
     for (const root of scanRoots) {
       const rootDir = path.join(__dirname, '..', root);
       const mdFiles = fs
@@ -1447,8 +1521,23 @@ describe('workflow call sites declare --files (#2269)', () => {
             offenders.push(`${root}/${normalized}: ${inv.trim()}`);
           }
         }
+        for (const decl of documentUntrackedDeclarations(text)) {
+          untracked.push(`${root}/${normalized}: ${decl}`);
+        }
       }
     }
+    // ASSERTED FIRST, deliberately. An untracked declaration is also an
+    // offender (it does not exempt), so leaving it to the assertion below
+    // would report "your commit is unscoped" to an author who had already
+    // explained the line — sending them to look for a flag that was never the
+    // problem. The specific diagnosis must win the race.
+    assert.deepEqual(
+      untracked,
+      [],
+      'gsd-scan-ignore: declarations without a tracking reference. Add a #NNN issue '
+        + 'number or an https:// URL to the reason, per ADR-456:\n'
+        + untracked.join('\n'),
+    );
     assert.deepEqual(
       offenders,
       [],
