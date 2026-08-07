@@ -615,6 +615,28 @@ describe('workflow call sites declare --files (#2269)', () => {
     return found;
   };
 
+  // The offender message, hoisted OUT of the assertion so it can be pinned. A
+  // failure message only exists on the failing path, so nothing would notice a
+  // remedy being dropped from it — and the remedies are the whole point: this
+  // guard has three distinct causes and only one of them is the bug. A
+  // contributor whose ordinary English sentence reddens CI, told only that a
+  // commit is unscoped, will mangle the sentence until the guard shuts up,
+  // which is exactly what the declaration marker was invented to prevent. The
+  // repo states this standard for its sibling gate one section over in
+  // CONTRIBUTING.md: "The failure output names its own remedy".
+  const OFFENDER_HELP = 'query commit invocations that reach the runtime without a --files '
+    + 'scope (an unscoped commit sweeps the whole .planning/ index — #2269).\n\n'
+    + 'Three causes, three remedies — check which one you have:\n'
+    + '  1. A real invocation missing its scope -> add --files <artifact>.\n'
+    + '  2. A prose MENTION of the command      -> wrap it in backticks; a\n'
+    + '     backticked mention carrying no arguments is not scanned.\n'
+    + '  3. A deliberate wrong-example          -> declare it on the\n'
+    + '     invocation\'s own line, in shell-comment position:\n'
+    + '       # gsd-scan-ignore: #NNN <why this example shows the bad form>\n'
+    + '     The reason must name a tracking issue or an https:// URL.\n'
+    + 'See CONTRIBUTING.md -> "Every commit invocation in shipped content must '
+    + 'declare --files".';
+
   // The same walk, for declarations that tried and failed to carry a tracking
   // reference. Separate from documentCandidates because such a line is NOT an
   // offender — its author already explained it — and reporting it as one is the
@@ -1040,6 +1062,28 @@ describe('workflow call sites declare --files (#2269)', () => {
     assert.strictEqual(
       hasScopedFiles('gsd_run query commit "docs: x" --files a.md   # gsd-scan-ignore: demo'), true,
       'the marker is a shell comment and must not disturb scope detection',
+    );
+  });
+
+  test('the failure message names every remedy, and the convention is documented', () => {
+    // A guard whose message names only the bug teaches the wrong fix for its
+    // other two causes. These assertions exist because a failure message is
+    // unreachable on the passing path — nothing else would notice a remedy
+    // being edited out of it.
+    assert.match(OFFENDER_HELP, /--files/, 'the real regression needs its own remedy named');
+    assert.match(OFFENDER_HELP, /backtick/i, 'a prose mention needs the backtick remedy named');
+    assert.match(OFFENDER_HELP, /gsd-scan-ignore:/, 'a wrong-example needs the declaration named');
+    assert.match(OFFENDER_HELP, /#NNN|https:\/\//, 'and the tracking-reference requirement');
+    assert.match(OFFENDER_HELP, /CONTRIBUTING\.md/, 'and where the convention is written down');
+
+    // The marker lives in .md files across six roots, so it cannot be
+    // documented only in this test's comments — a contributor hitting it is
+    // not reading tests/. Pinned so the section cannot be dropped silently
+    // while the message keeps pointing at it.
+    const contributing = fs.readFileSync(path.join(__dirname, '..', 'CONTRIBUTING.md'), 'utf-8');
+    assert.match(
+      contributing, /gsd-scan-ignore:/,
+      'CONTRIBUTING.md must document the declaration marker — the failure message points there',
     );
   });
 
@@ -1538,11 +1582,17 @@ describe('workflow call sites declare --files (#2269)', () => {
         + 'number or an https:// URL to the reason, per ADR-456:\n'
         + untracked.join('\n'),
     );
+    // THE MESSAGE NAMES ITS OWN REMEDIES — all three of them, because this
+    // guard has three distinct failure causes and only one of them is the bug.
+    // A contributor whose ordinary English sentence reddens CI, told only that
+    // a commit is unscoped, will mangle the sentence until the guard shuts up:
+    // exactly the outcome the declaration marker was invented to prevent. The
+    // repo already states this standard for its sibling gate one section over
+    // in CONTRIBUTING.md — "the failure output names its own remedy".
     assert.deepEqual(
       offenders,
       [],
-      'workflow query commit invocations without --files (unscoped commits sweep the index):\n' +
-        offenders.join('\n'),
+      OFFENDER_HELP + '\n\n' + offenders.join('\n'),
     );
 
     // A zero is only evidence if the scan actually reached the content. The
