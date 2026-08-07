@@ -1766,21 +1766,55 @@ describe('workflow call sites declare --files (#2269)', () => {
       OFFENDER_HELP + '\n\n' + offenders.join('\n'),
     );
 
-    // A zero is only evidence if the scan actually reached the content. The
-    // docs/ root was added because docs/zh-CN/references/ carries live
-    // invocations; since they are all scoped, dropping the root again would
-    // NOT move the offender count and the coverage loss would be silent.
-    // Assert reach as a property rather than a census figure — a hardcoded
-    // count is the drift this file has already been bitten by twice.
-    assert.ok(
-      scanned.some((s) => s.startsWith('docs/')),
-      'the docs/ root must contribute scanned invocations — the localized mirrors of '
-        + 'gsd-core/references/ are exactly where an unscoped example survives unnoticed',
-    );
-    assert.ok(
-      scanned.length > 0 && scanRoots.every((root) => scanned.some((s) => s.startsWith(root))),
-      'every scan root must contribute at least one invocation, or the root is dead weight:\n'
-        + scanRoots.join(', '),
+    // A zero is only evidence if the scan reached the content — but the
+    // question "did it reach everything?" is about the REPO, not about each
+    // root, and asking it per-root was both too weak and too strong.
+    //
+    // Too strong: `commands/` contributes exactly one invocation and `skills/`
+    // one, so an unrelated PR retiring review-backlog or re-syncing the Chinese
+    // mirrors turned this red with a failure that had nothing to do with #2269.
+    // A root is allowed to legitimately go to zero.
+    //
+    // Too weak: it could only ever confirm the roots already listed. The gap it
+    // was standing in for — a directory that acquires invocations and is not a
+    // root — is invisible to it, and that is the gap this file has actually
+    // been bitten by twice (agents/ in one round, docs/zh-CN/ in the next).
+    //
+    // So assert the property directly, over every tracked .md in the repo: if
+    // it carries a live invocation, the scan must have covered it. Dropping any
+    // root now fails here, which is the coverage guarantee the per-root check
+    // was approximating; and a NEW directory acquiring one fails here too,
+    // which nothing previously caught.
+    const repoRoot = path.join(__dirname, '..');
+    // FAIL CLOSED, via the seam. gitOrThrow throws on any non-clean exit, which
+    // is the polarity this check needs: an unreadable file list is an UNKNOWN
+    // coverage set, not an empty one, and treating a failed enumeration as "no
+    // strays" is the shape that reports clean because the check never ran.
+    // Routed through tests/helpers/git-fixture.cjs rather than a bare spawn per
+    // #3144 — local/no-unbounded-spawn fails an unbounded spawnSync in tests,
+    // and this file's allowlist entry was retired when that migration landed.
+    const trackedMd = gitOrThrow(['ls-files', '-z', '--', '*.md'], {
+      cwd: repoRoot, timeoutMs: GIT_TIMEOUT_MS,
+    }).split('\0').filter(Boolean);
+    assert.ok(trackedMd.length > 0, 'git ls-files reported no .md files at all — the walk is broken');
+
+    // Generated files are excluded WITH THEIR REASON, and the reason is that a
+    // contributor cannot act on the failure: CHANGELOG.md is rebuilt from
+    // .changeset/ fragments, so a marker added to it would not survive the next
+    // release. Its single live invocation is scoped today, and it is a record of
+    // commands that shipped rather than an instruction to run one.
+    const NOT_INSTRUCTION = new Map([
+      ['CHANGELOG.md', 'generated from .changeset/ fragments; a historical record, not instruction'],
+    ]);
+    const strays = trackedMd
+      .filter((f) => !scanRoots.some((root) => f === root || f.startsWith(`${root}/`)))
+      .filter((f) => !NOT_INSTRUCTION.has(f))
+      .filter((f) => documentCandidates(fs.readFileSync(path.join(repoRoot, f), 'utf-8')).length > 0);
+    assert.deepEqual(
+      strays, [],
+      'these tracked .md files carry live commit invocations that NO scan root covers, so #2269 '
+        + 'could regress in them undetected. Add the directory to scanRoots, or add the file to '
+        + 'NOT_INSTRUCTION with the reason it is not executable instruction:\n' + strays.join('\n'),
     );
   });
 
@@ -1850,7 +1884,7 @@ describe('workflow call sites declare --files (#2269)', () => {
 
       // Unrelated staged work a parallel agent / editor left behind.
       fs.writeFileSync(path.join(tmpDir, 'unrelated.txt'), 'in flight\n');
-      execSync('git add unrelated.txt', { cwd: tmpDir, stdio: 'pipe' });
+      gitOrThrow(['add', 'unrelated.txt'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
       // And an unstaged .planning/ stray the blanket `git add .planning/`
       // used to pull in (the vector a caller cannot defend against).
       fs.writeFileSync(path.join(tmpDir, '.planning', 'scratch.md'), 'stray\n');
@@ -1865,9 +1899,9 @@ describe('workflow call sites declare --files (#2269)', () => {
         tmpDir,
       );
 
-      const files = execSync('git diff HEAD~1 HEAD --name-only', {
+      const files = gitOrThrow(['diff', 'HEAD~1', 'HEAD', '--name-only'], {
         cwd: tmpDir,
-        encoding: 'utf-8',
+        timeoutMs: GIT_TIMEOUT_MS,
       })
         .trim()
         .split('\n');
@@ -1877,9 +1911,9 @@ describe('workflow call sites declare --files (#2269)', () => {
         'the scoped workflow commit must contain only its own artifact, got:\n' + files.join('\n'),
       );
 
-      const statusOutput = execSync('git status --porcelain', {
+      const statusOutput = gitOrThrow(['status', '--porcelain'], {
         cwd: tmpDir,
-        encoding: 'utf-8',
+        timeoutMs: GIT_TIMEOUT_MS,
       });
       assert.ok(
         statusOutput.includes('unrelated.txt'),
