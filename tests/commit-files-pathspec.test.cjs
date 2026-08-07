@@ -707,7 +707,21 @@ describe('workflow call sites declare --files (#2269)', () => {
       // env assignment, a shell keyword, or a list/prompt marker may precede the
       // command name. Those are not commands; `echo` is, which is exactly the
       // line the search-anywhere version got wrong.
-      const NON_COMMAND_PREFIX = new Set(['then', 'else', 'do', '$', '-', '*', '&&', '||']);
+      // Shell keywords, prompt/list markers, and the command MODIFIERS that
+      // pass straight through to the command after them. The modifiers are the
+      // mirror of the invoker-set gap: omitting them is a false negative in the
+      // same direction, since `time bash -c "…"` really does run the payload.
+      //
+      // RESIDUAL, named rather than half-solved: a modifier that takes its OWN
+      // flags (`sudo -u alice bash -c …`) still stops the search, because
+      // skipping arbitrary flag/value pairs here would mean modelling each
+      // modifier's option grammar. No live instance exists in the six roots;
+      // the failure is a missed candidate, and the declaration marker is not
+      // involved either way.
+      const NON_COMMAND_PREFIX = new Set([
+        'then', 'else', 'do', '$', '-', '*', '&&', '||',
+        'time', 'exec', 'nohup', 'env', 'command',
+      ]);
       const skippable = (t) => t.redir
         || /^[A-Za-z_][A-Za-z0-9_]*=/.test(t.value)
         || NON_COMMAND_PREFIX.has(t.value);
@@ -1545,10 +1559,25 @@ describe('workflow call sites declare --files (#2269)', () => {
       '$ bash -c "gsd_run query commit fixup"',
       'FOO=1 bash -c "gsd_run query commit fixup"',
       '(sh -c "gsd_run query commit fixup")',
+      // Command modifiers pass straight through to what follows them.
+      'time bash -c "gsd_run query commit fixup"',
+      'exec sh -c "gsd_run query commit fixup"',
+      'nohup bash -c "gsd_run query commit fixup"',
+      'env FOO=1 bash -c "gsd_run query commit fixup"',
     ]) {
       assert.strictEqual(
         invocationCandidates(prefixed).length, 1,
-        `a keyword, prompt, env assignment or subshell may precede the invoker: ${prefixed}`,
+        `a keyword, prompt, env assignment, modifier or subshell may precede the invoker: ${prefixed}`,
+      );
+    }
+
+    // The invoker set is EXACT, not a guess — enumerated rather than sampled.
+    // `ssh` is the near-miss worth pinning: admitting it would treat a remote
+    // command as a local shell running the payload.
+    for (const notAShell of ['ssh', 'cash', 'josh', 'publish', 'wish', 'rsh']) {
+      assert.deepEqual(
+        invocationCandidates(`${notAShell} -c "gsd_run query commit fixup"`), [],
+        `not a shell, must not recurse into its argument: ${notAShell}`,
       );
     }
 
