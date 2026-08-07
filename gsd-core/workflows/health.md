@@ -81,6 +81,18 @@ Parse JSON output:
 - `info[]`: Informational notes
 - `repairable_count`: Number of auto-fixable issues
 - `repairs_performed[]`: Actions taken if --repair was used
+
+**Isolation/worktrees compatibility check (#2486):** the SDK is runtime-neutral, so this check runs here, using the same negotiation the execution-workflow guards use. It catches a config that carries an explicit `workflow.use_worktrees: true` on a runtime whose declared `dispatch.isolation` is `none` (e.g. inherited from a worktree-capable install sharing the repo) — a value `/gsd:execute-phase` and `/gsd:quick` fail closed on. The gate is the **declared capability, not the runtime name** (#2584), and the resolver fail-closes unknown/undeclared/`undocumented` values to `none`. Use `inspect-dispatch-isolation`, the **side-effect-free** inspection verb — never `dispatch-isolation`, whose #3045 contract records the resolved decision to the executor-dispatch sentinel as an unconditional side effect; a read-only diagnostic must not be able to stamp a sentinel the isolation guards then enforce against real dispatches:
+
+```bash
+ISOLATION=$(gsd_run query inspect-dispatch-isolation --raw 2>/dev/null || echo "none")
+USE_WORKTREES=$(gsd_run query config-get workflow.use_worktrees --raw 2>/dev/null || echo "true")
+if [ "$ISOLATION" = "none" ] && [ "$USE_WORKTREES" != "false" ]; then
+  echo "W024: config.json sets workflow.use_worktrees to a non-false value, but this runtime declares no executor-isolation primitive (dispatch.isolation: none) — /gsd:execute-phase and /gsd:quick will fail closed. Fix: run /gsd:settings and answer No to Worktrees, or remove the key from .planning/config.json so the runtime default (false) applies."
+fi
+```
+
+If the check prints, append it to the Warnings section of the report as `[W024]` with the printed fix, include it in the displayed warning count, and report `Status: DEGRADED` if `validate.health` returned `healthy` (a config the execution workflows fail closed on is not a healthy planning state). It is not auto-repairable: an explicit `true` may be intentional for a worktree-capable install sharing the same `.planning/config.json`, so the remedy is the user's call (#2486).
 </step>
 
 <step name="format_output">
@@ -186,7 +198,10 @@ Report final status.
 | W009 | warning | Phase has Validation Architecture in RESEARCH.md but no VALIDATION.md | No |
 | W018 | warning | MILESTONES.md missing entry for archived milestone snapshot | Yes (`--backfill`) |
 | W019 | warning | Unrecognized .planning/ root file — not a canonical GSD artifact | No |
+| W024 | warning | config.json: workflow.use_worktrees enabled on a runtime whose dispatch.isolation is none (#2486) | No |
 | I001 | info | Plan without SUMMARY (may be in progress) | No |
+
+Note: the `W0NN` warning-code namespace is owned by `src/verify.cts` (`validate.health`), which also emits codes this table does not list (`W010`–`W017`, `W020`–`W023` as of #2486). Before assigning a new code here, grep `src/verify.cts` for the next free number — the table alone under-represents the live namespace.
 
 </error_codes>
 
