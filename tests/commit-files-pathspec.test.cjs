@@ -627,7 +627,7 @@ describe('workflow call sites declare --files (#2269)', () => {
   // has no expiry and no ledger — the `permanent-allow-test-rule` shape
   // RULESET.TESTS.delete-bad-tests names. The repo already answered this for
   // its sibling convention: ADR-456 requires `#NNN` (or an https:// URL) on
-  // every `allow-test-rule:` reason, and scripts/lint-allow-test-rule-refs.cjs
+  // every `allow-test-rule` reason (see #2269), and lint-allow-test-rule-refs
   // enforces it. That lint walks tests/ only, so it cannot see a marker living
   // in a .md file; rather than teach a second token to a script whose whole
   // contract is the ESLint comment form, this scan enforces the same rule over
@@ -1110,7 +1110,7 @@ describe('workflow call sites declare --files (#2269)', () => {
 
     // AND THE REASON MUST NAME A TRACKING ISSUE. Free text gives the exemption
     // no expiry and no ledger, which is the permanent-allow-test-rule shape;
-    // ADR-456 already settled this for the sibling `allow-test-rule:` marker.
+    // ADR-456 already settled this for the sibling `allow-test-rule` marker.
     const untracked = 'gsd_run query commit "docs: message"   # gsd-scan-ignore: just a note';
     assert.strictEqual(
       invocationCandidates(untracked).length, 1,
