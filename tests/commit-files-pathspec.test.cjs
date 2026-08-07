@@ -343,8 +343,13 @@ describe('workflow call sites declare --files (#2269)', () => {
   // `… gsd_run query commit.` would then read as a command whose arguments are
   // the rest of the paragraph — a false POSITIVE against ordinary prose, and
   // exactly the hostility the declaration marker exists to undo.
+  // Applied to EVERY command-name test, not just the gsd one: `(` glues to
+  // whatever binary follows it, so `(sh -c "gsd_run commit a"` hid the invoker
+  // from the -c pass exactly as `(gsd_run …` hid the binary from the anchor.
+  // One strip, one helper — a second copy is how the two drift apart.
   const BINARY_LEAD_MARKUP_RE = /^\(+/;
-  const isGsdBinary = (value) => GSD_BINARY_RE.test(value.replace(BINARY_LEAD_MARKUP_RE, ''));
+  const bareCommandName = (value) => value.replace(BINARY_LEAD_MARKUP_RE, '');
+  const isGsdBinary = (value) => GSD_BINARY_RE.test(bareCommandName(value));
 
   // Shell-like word splitting. Honours BOTH quote characters (the previous
   // parity walk counted only `"`, so a single-quoted message was transparent
@@ -667,7 +672,7 @@ describe('workflow call sites declare --files (#2269)', () => {
     let group = [];
     const drain = () => {
       if (!group.length) { return; }
-      const gi = group.findIndex((t) => !t.redir && SHELL_INVOKER_RE.test(t.value));
+      const gi = group.findIndex((t) => !t.redir && SHELL_INVOKER_RE.test(bareCommandName(t.value)));
       if (gi !== -1) {
         const ci = group.findIndex((t, k) => k > gi && !t.redir && t.value === '-c');
         const payload = ci !== -1 ? group.slice(ci + 1).find((t) => !t.redir) : undefined;
@@ -685,12 +690,42 @@ describe('workflow call sites declare --files (#2269)', () => {
   // Candidates for one logical line: the whole line, unioned with each of its
   // inline code spans and each shell -c payload. See the header for why the
   // union rather than a choice.
+  // A MARKDOWN BLOCKQUOTE MARKER IS THE ONE PIECE OF MARKUP THE TOKENIZER
+  // CANNOT IGNORE, because `>` is also a redirection: `> gsd_run query commit
+  // "docs: x"` reads as a redirection whose target is the binary, so the binary
+  // sits inside a redir token and the command is never found. Every other
+  // markup form the header promises immunity to survives tokenization as
+  // ordinary text; this one is consumed by it.
+  //
+  // Whitespace after the marker is required. `>out.md` with no space is a
+  // redirection, and treating it as a quote would strip a real one; all 34
+  // blockquoted lines in the six roots that invoke this binary today use the
+  // spaced form. Nested markers (`> > x`) are stripped together.
+  //
+  // Additive, like the other passes: the raw line is still scanned, so this can
+  // only ever ADD a candidate. Found by the recognition property below on its
+  // first run — no live commit invocation sits in a blockquote today, which is
+  // the point, since a guard's value is the shape nobody has written yet.
+  const BLOCKQUOTE_RE = /^\s*(?:>\s+)+/;
+  // THE PASSES COMPOSE, so they are applied to every VIEW of the line rather
+  // than bolted on beside each other. The first cut ran the blockquote strip
+  // through segmentInvocations only, which left `> sh -c "gsd_run commit a"`
+  // invisible: the raw view hides the invoker inside the redirection the `>`
+  // opens, and the stripped view never reached the -c pass. Found by the
+  // recognition property once the wrapper axis was added — a composition of two
+  // shapes, neither of which fails alone, which is the class hand-written
+  // examples are worst at.
   const invocationCandidates = (line) => {
     if (isDeclared(line)) return [];
-    const candidates = segmentInvocations(line);
+    const candidates = [];
     const add = (c) => { if (!candidates.includes(c)) candidates.push(c); };
-    for (const span of codeSpans(line)) segmentInvocations(span).forEach(add);
-    for (const payload of shellDashCPayloads(line)) segmentInvocations(payload).forEach(add);
+    const views = [line];
+    if (BLOCKQUOTE_RE.test(line)) views.push(line.replace(BLOCKQUOTE_RE, ''));
+    for (const view of views) {
+      segmentInvocations(view).forEach(add);
+      for (const span of codeSpans(view)) segmentInvocations(span).forEach(add);
+      for (const payload of shellDashCPayloads(view)) segmentInvocations(payload).forEach(add);
+    }
     return candidates;
   };
 
@@ -1684,6 +1719,93 @@ describe('workflow call sites declare --files (#2269)', () => {
         fc.property(fc.string({ maxLength: 200 }), (line) => {
           assert.strictEqual(typeof hasScopedFiles(line), 'boolean');
         }),
+      );
+    });
+
+    // EVERY PROPERTY ABOVE AIMS AT hasScopedFiles — the half backed by a
+    // runtime oracle, and the half that has been stable for rounds. Every
+    // defect found since is in the OTHER half: whether a line is an invocation
+    // at all (isCommitInvocation, segmentInvocations, codeSpans, the synopsis
+    // and binary-anchor rules), which was pinned only by hand-written examples.
+    // That asymmetry is the problem, because a miss there is a SILENT FALSE
+    // NEGATIVE — an invocation that stops being scanned with no signal — where
+    // a miss in the scope predicate at least has an oracle watching it.
+    //
+    // So generate the CONTEXT instead of the arguments. The recognition rule is
+    // "an invocation is found by its command shape, whatever markup surrounds
+    // it", and that is a statement about a domain the generator can cover:
+    // subshells, interpreters, env prefixes, shell keywords, prompts,
+    // indentation, chaining, and code spans. Each of these was a hand-pinned
+    // example, several of them added only after a reviewer found the gap.
+    const context = fc.constantFrom(
+      '', '    ', '$ ', 'then ', 'FOO=1 ', 'node ', '(',
+      'cd "$ROOT" && ', 'if [ -f x ]; then ', '- ', '> ',
+    );
+    const binary = fc.constantFrom('gsd_run', 'gsd-tools', 'gsd-tools.cjs', './bin/gsd-tools.cjs');
+    const preCommand = fc.constantFrom('', 'query ', '--cwd "$ROOT" ', '--cwd "$ROOT" query ');
+    const commandToken = fc.constantFrom('commit', 'commit-to-subrepo');
+    // A message that always produces a token: with no delimiter an empty body
+    // emits no word at all, and the argv the oracle is built from would then
+    // disagree with the line for a reason that is not about recognition.
+    const bodyFor = (d) => (d === '' ? safeToken : messageFor(d));
+
+    // A second axis: the command may be WRAPPED rather than prefixed. Drawn
+    // only with the unquoted body — a `-c` payload is itself quoted, so
+    // generating a quoted message inside it would need a nested-quoting domain,
+    // and a wrong generator domain is this file's most repeated own-goal (it
+    // has produced a seed-dependent red twice). Constraining the body is what
+    // makes the axis safe to add rather than a third instance of that.
+    const wrapper = fc.constantFrom('', 'bash -c', 'sh -c');
+    test('a real invocation is recognized whatever surrounds it', () => {
+      fc.assert(
+        fc.property(
+          anyDelimiter.chain((d) => fc.tuple(
+            fc.constant(d), context, binary, preCommand, commandToken, bodyFor(d),
+            fc.array(fc.oneof(arg, flagArg, fc.constant('--files')), { maxLength: 3 }),
+            d === '' ? wrapper : fc.constant(''),
+          )),
+          ([d, ctx, bin, pre, cmd, body, tail, wrap]) => {
+            const command = `${bin} ${pre}${cmd} ${d}${embedFor(d, body)}${d}`
+              + (tail.length ? ` ${tail.join(' ')}` : '');
+            const line = wrap ? `${ctx}${wrap} "${command}"` : `${ctx}${command}`;
+            const cands = invocationCandidates(line);
+            assert.ok(
+              cands.length > 0,
+              `an executable invocation must be recognized: ${line}`,
+            );
+            // …and recognizing it is only useful if the verdict survives the
+            // slicing. The candidate the scan will score must agree with the
+            // argv the shell would have delivered.
+            const runtimeScoped = (tokens) => {
+              const i = tokens.indexOf('--files');
+              return i !== -1 && tokens.slice(i + 1).some((t) => !t.startsWith('--'));
+            };
+            const argv = [cmd, body, ...tail];
+            assert.ok(
+              cands.some((c) => hasScopedFiles(c) === runtimeScoped(argv)),
+              `no candidate agrees with routeCommit: ${line}`,
+            );
+          },
+        ),
+      );
+    });
+
+    test('a mention carrying no argument is never an invocation', () => {
+      // The complement, and the reason the trailing-argument clause exists. If
+      // recognition widens far enough to swallow this, the guard becomes
+      // hostile to ordinary prose — the failure mode the declaration marker was
+      // invented to undo — so the property is pinned in this direction too.
+      fc.assert(
+        fc.property(
+          fc.tuple(context, binary, preCommand, commandToken),
+          ([ctx, bin, pre, cmd]) => {
+            const line = `${ctx}\`${bin} ${pre}${cmd}\` in prose`;
+            assert.deepEqual(
+              invocationCandidates(line), [],
+              `a delimited mention bears no argument: ${line}`,
+            );
+          },
+        ),
       );
     });
   });
