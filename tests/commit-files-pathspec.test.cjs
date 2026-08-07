@@ -626,21 +626,35 @@ describe('workflow call sites declare --files (#2269)', () => {
   // AND IT MUST CARRY A TRACKING ISSUE. An exemption whose reason is free text
   // has no expiry and no ledger — the `permanent-allow-test-rule` shape
   // RULESET.TESTS.delete-bad-tests names. The repo already answered this for
-  // its sibling convention: ADR-456 requires `#NNN` (or an https:// URL) on
-  // every `allow-test-rule` reason (see #2269), and lint-allow-test-rule-refs
-  // enforces it. That lint walks tests/ only, so it cannot see a marker living
-  // in a .md file; rather than teach a second token to a script whose whole
-  // contract is the ESLint comment form, this scan enforces the same rule over
-  // its own roots — it already runs in CI on every shard.
+  // its sibling convention under ADR-456 (see #2269), enforced by
+  // scripts/lint-allow-test-rule-refs. That lint walks tests/ only, so it
+  // cannot see a marker living in a .md file; rather than teach a second token
+  // to a script whose whole contract is the ESLint comment form, this scan
+  // enforces the same rule over its own roots — it already runs in CI on every
+  // shard.
   //
-  // TWO patterns, because a rejected declaration must not fail as a MYSTERY.
-  // Requiring #NNN in the accepting pattern alone would leave a marker-that-
-  // forgot-its-issue simply un-exempt, and the author would be told their
-  // commit is unscoped — a true statement about a line they had already
-  // explained, which is exactly the mangle-until-it-shuts-up loop the marker
-  // exists to prevent. LOOSE detects the ATTEMPT; STRICT accepts it.
-  const SCAN_IGNORE_LOOSE_RE = /gsd-scan-ignore:\s*\S/;
-  const SCAN_IGNORE_RE = /gsd-scan-ignore:\s*(#\d+|https?:\/\/\S)/;
+  // THE PREDICATE IS THAT LINT'S, MIRRORED RATHER THAN RESTATED. Its
+  // ISSUE_REF_RE is `/#\d+|https?:\/\//` — `http://` counts, and `#\d+` has no
+  // trailing boundary. A hand-written near-copy drifts from it in exactly those
+  // details, and a contributor who satisfies one marker and not the other has
+  // been given two conventions wearing one name. (Both details were found by
+  // review against prose here that claimed HTTPS-only. The regex was right and
+  // the sentence describing it was not, which is its own lesson.)
+  const ISSUE_REF_RE = /#\d+|https?:\/\//;
+  //
+  // The reason is EXTRACTED, not pattern-matched in one shot, so that a marker
+  // with no reason at all is still recognized as an ATTEMPT. A rejected
+  // declaration must not fail as a MYSTERY: left un-exempt and nothing more,
+  // its author is told their commit is unscoped — a true statement about a line
+  // they had already explained, which is the mangle-until-it-shuts-up loop the
+  // marker exists to prevent. `# gsd-scan-ignore:` with an empty reason is the
+  // likeliest way to get this wrong and so is the case that most needs the
+  // specific diagnosis; a `\S`-requiring pattern silently drops it.
+  const SCAN_IGNORE_REASON_RE = /gsd-scan-ignore:(.*)$/;
+  const declarationReason = (portion) => {
+    const m = SCAN_IGNORE_REASON_RE.exec(portion);
+    return m === null ? null : m[1];
+  };
   // Two independent conditions, and the second is the structural one: the
   // marker must be in comment position AND must not survive tokenization as an
   // ARGUMENT. tokenize() drops everything from a real comment onward, so a
@@ -650,13 +664,23 @@ describe('workflow call sites declare --files (#2269)', () => {
   // construction rather than by getting commentPortion's edges exactly right —
   // and commentPortion has edges (redirection targets, escaped separators)
   // where mirroring the tokenizer perfectly is fiddly and a miss is silent.
-  const inCommentPosition = (line, re) => re.test(commentPortion(line))
-    && !tokenize(line).some((t) => /gsd-scan-ignore:/.test(t.value));
-  const isDeclared = (line) => inCommentPosition(line, SCAN_IGNORE_RE);
-  // An ATTEMPTED declaration that carries no tracking reference. Reported on
-  // its own terms rather than silently failing to exempt: see SCAN_IGNORE_RE.
-  const isUntrackedDeclaration = (line) => inCommentPosition(line, SCAN_IGNORE_LOOSE_RE)
-    && !inCommentPosition(line, SCAN_IGNORE_RE);
+  // The marker's reason, but only when the marker is in COMMENT position and
+  // survives neither as an argv token. Returns null when there is no attempt.
+  const declaredReasonFor = (line) => {
+    if (tokenize(line).some((t) => /gsd-scan-ignore:/.test(t.value))) return null;
+    return declarationReason(commentPortion(line));
+  };
+  const isDeclared = (line) => {
+    const reason = declaredReasonFor(line);
+    return reason !== null && ISSUE_REF_RE.test(reason);
+  };
+  // An ATTEMPTED declaration that carries no tracking reference — including one
+  // with no reason at all. Reported on its own terms rather than silently
+  // failing to exempt: see the extraction note above.
+  const isUntrackedDeclaration = (line) => {
+    const reason = declaredReasonFor(line);
+    return reason !== null && !ISSUE_REF_RE.test(reason);
+  };
 
   // A shell invoked with -c runs its next argument AS A COMMAND, so the
   // invocation lives inside a quoted token and no amount of markup-stripping
@@ -666,14 +690,29 @@ describe('workflow call sites declare --files (#2269)', () => {
   // would flag a commit MESSAGE quoting a command, a false positive against
   // ordinary documentation. Here the outer command is bash, so a gsd commit
   // message can never reach it.
-  const SHELL_INVOKER_RE = /^(?:.*\/)?(?:ba|da|k|z)?sh$/;
+  // The invoker set, widened past the four spellings the first cut guessed at.
+  // `ash`, `csh`, `tcsh`, `fish` and `yash` all take -c and all run what
+  // follows; leaving them out is a silent false negative in a function whose
+  // entire job is reaching a command the tokenizer cannot see.
+  const SHELL_INVOKER_RE = /^(?:.*\/)?(?:ba|da|k|z|a|c|tc|fi|ya)?sh$/;
   const shellDashCPayloads = (str) => {
     const payloads = [];
     let group = [];
     const drain = () => {
       if (!group.length) { return; }
-      const gi = group.findIndex((t) => !t.redir && SHELL_INVOKER_RE.test(bareCommandName(t.value)));
-      if (gi !== -1) {
+      // THE INVOKER MUST BE THE COMMAND, not merely present in the segment.
+      // Searching anywhere made `echo bash -c "gsd_run query commit fixup"` a
+      // candidate — `echo` prints the string, it does not run it — which is a
+      // false positive against prose that merely quotes a command line. Only an
+      // env assignment, a shell keyword, or a list/prompt marker may precede the
+      // command name. Those are not commands; `echo` is, which is exactly the
+      // line the search-anywhere version got wrong.
+      const NON_COMMAND_PREFIX = new Set(['then', 'else', 'do', '$', '-', '*', '&&', '||']);
+      const skippable = (t) => t.redir
+        || /^[A-Za-z_][A-Za-z0-9_]*=/.test(t.value)
+        || NON_COMMAND_PREFIX.has(t.value);
+      const gi = group.findIndex((t) => !skippable(t));
+      if (gi !== -1 && SHELL_INVOKER_RE.test(bareCommandName(group[gi].value))) {
         const ci = group.findIndex((t, k) => k > gi && !t.redir && t.value === '-c');
         const payload = ci !== -1 ? group.slice(ci + 1).find((t) => !t.redir) : undefined;
         if (payload) payloads.push(payload.value);
@@ -1127,13 +1166,27 @@ describe('workflow call sites declare --files (#2269)', () => {
       documentUntrackedDeclarations(declared), [],
       'a compliant declaration is not a defect',
     );
-    // An https:// URL is the other form ADR-456 accepts.
+    // A URL is the other form, and the predicate MIRRORS the repo's own
+    // ISSUE_REF_RE rather than approximating it — `http://` counts there, so it
+    // counts here. A near-copy that accepted only https would hand a
+    // contributor two conventions wearing one name.
+    for (const ref of ['https://example.invalid/adr', 'http://example.invalid/adr']) {
+      assert.deepEqual(
+        invocationCandidates(`gsd_run query commit "docs: message"   # gsd-scan-ignore: ${ref}`),
+        [],
+        `a URL reference is a tracking reference: ${ref}`,
+      );
+    }
+
+    // A marker with NO reason at all is the likeliest way to get this wrong, so
+    // it is the case that most needs the specific diagnosis. It still does not
+    // exempt — but it is reported as a malformed declaration, not as a mystery
+    // unscoped commit.
+    const bare = 'gsd_run query commit "docs: x"   # gsd-scan-ignore:';
+    assert.strictEqual(invocationCandidates(bare).length, 1, 'a bare marker exempts nothing');
     assert.deepEqual(
-      invocationCandidates(
-        'gsd_run query commit "docs: message"   # gsd-scan-ignore: https://example.invalid/adr',
-      ),
-      [],
-      'a URL reference is a tracking reference',
+      documentUntrackedDeclarations(bare), [bare],
+      'and an empty reason is an ATTEMPT, which is what earns the specific message',
     );
     // The bypass class the token cross-check covers applies here too: a
     // reference living in an ARGUMENT reached argv, so it declares nothing.
@@ -1206,8 +1259,9 @@ describe('workflow call sites declare --files (#2269)', () => {
     // fixture would fail for the uninteresting reason and stop covering the
     // redirection case at all.
     const redirected = 'gsd_run query commit x > #gsd-scan-ignore: #2269 y';
+    const redirectedReason = declarationReason(commentPortion(redirected));
     assert.ok(
-      SCAN_IGNORE_RE.test(commentPortion(redirected)),
+      redirectedReason !== null && ISSUE_REF_RE.test(redirectedReason),
       'precondition: raw-text reading of this line does look like a declaration',
     );
     assert.strictEqual(
@@ -1472,10 +1526,31 @@ describe('workflow call sites declare --files (#2269)', () => {
     const dashC = invocationCandidates('bash -c "gsd_run query commit fixup"');
     assert.strictEqual(dashC.length, 1, 'a shell -c payload is a command, not a string');
     assert.strictEqual(hasScopedFiles(dashC[0]), false, 'and it is unscoped');
-    assert.strictEqual(
-      invocationCandidates('sh -c "gsd_run query commit fixup --files a.md"').length, 1,
-      'the invoker set is not bash-only',
+    for (const invoker of ['sh', 'ash', 'dash', 'ksh', 'zsh', 'csh', 'tcsh', 'fish', 'yash']) {
+      assert.strictEqual(
+        invocationCandidates(`${invoker} -c "gsd_run query commit fixup --files a.md"`).length, 1,
+        `the invoker set must not be a guess at four spellings: ${invoker}`,
+      );
+    }
+
+    // THE INVOKER MUST BE THE COMMAND. Searching the segment for a shell name
+    // anywhere made a line that merely PRINTS a command line a candidate.
+    assert.deepEqual(
+      invocationCandidates('echo bash -c "gsd_run query commit fixup"'), [],
+      'echo prints the string, it does not run it',
     );
+    // …while the things that may legitimately precede a command still may.
+    for (const prefixed of [
+      'then sh -c "gsd_run query commit fixup"',
+      '$ bash -c "gsd_run query commit fixup"',
+      'FOO=1 bash -c "gsd_run query commit fixup"',
+      '(sh -c "gsd_run query commit fixup")',
+    ]) {
+      assert.strictEqual(
+        invocationCandidates(prefixed).length, 1,
+        `a keyword, prompt, env assignment or subshell may precede the invoker: ${prefixed}`,
+      );
+    }
 
     // The recursion is keyed on the INVOKER, never on "a quoted token that
     // parses as a command". The wider rule would flag a commit MESSAGE that
@@ -1837,14 +1912,23 @@ describe('workflow call sites declare --files (#2269)', () => {
     // has produced a seed-dependent red twice). Constraining the body is what
     // makes the axis safe to add rather than a third instance of that.
     const wrapper = fc.constantFrom('', 'bash -c', 'sh -c');
+    // `node ` is an interpreter prefix for the BINARY, and `node bash -c "…"`
+    // is not an executable line at all — node takes a script path and `bash`
+    // is not one, so nothing runs the payload. Excluding the combination is a
+    // generator-domain correction, not a narrowing of the property: an
+    // unexecutable line is outside what "a real invocation" means, and leaving
+    // it in would have the property demand recognition of a non-command.
+    const contextFor = (wrap) => (wrap
+      ? context.filter((c) => c !== 'node ')
+      : context);
     test('a real invocation is recognized whatever surrounds it', () => {
       fc.assert(
         fc.property(
-          anyDelimiter.chain((d) => fc.tuple(
-            fc.constant(d), context, binary, preCommand, commandToken, bodyFor(d),
+          anyDelimiter.chain((d) => (d === '' ? wrapper : fc.constant('')).chain((wrap) => fc.tuple(
+            fc.constant(d), contextFor(wrap), binary, preCommand, commandToken, bodyFor(d),
             fc.array(fc.oneof(arg, flagArg, fc.constant('--files')), { maxLength: 3 }),
-            d === '' ? wrapper : fc.constant(''),
-          )),
+            fc.constant(wrap),
+          ))),
           ([d, ctx, bin, pre, cmd, body, tail, wrap]) => {
             const command = `${bin} ${pre}${cmd} ${d}${embedFor(d, body)}${d}`
               + (tail.length ? ` ${tail.join(' ')}` : '');
