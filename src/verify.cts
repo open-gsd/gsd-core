@@ -1595,6 +1595,11 @@ function cmdValidateHealth(
   const warnings: IssueEntry[] = [];
   const info: IssueEntry[] = [];
   const repairs: string[] = [];
+  // #2540 M1: sandbox findings are surfaced as a typed array on the health
+  // result (mirroring `validate agents`), not only folded into W010 prose —
+  // CONTRIBUTING's typed-surface rule forbids consumers re-deriving them
+  // from the warning string.
+  let healthSandboxViolations: ReturnType<typeof checkAgentsInstalled>['sandbox_violations'] = [];
 
   const addIssue = (
     severity: 'error' | 'warning' | 'info',
@@ -1904,7 +1909,13 @@ function cmdValidateHealth(
   }
 
   try {
-    const agentStatus = checkAgentsInstalled(_slashRuntime, cwd);
+    // #2540 round 8: pass NO runtime so checkAgentsInstalled applies its own
+    // persisted-default resolution (GSD_RUNTIME > config > ~/.gsd/defaults.json
+    // > 'claude'). Pre-resolving with the narrower resolveRuntime here
+    // short-circuited the defaults.json tier and made the codex sandbox gate
+    // unreachable on the issue's own repro.
+    const agentStatus = checkAgentsInstalled(undefined, cwd);
+    healthSandboxViolations = agentStatus.sandbox_violations;
     if (!agentStatus.agents_installed) {
       if ((agentStatus.installed_agents).length === 0) {
         addIssue(
@@ -1913,27 +1924,57 @@ function cmdValidateHealth(
           `No GSD agents found in ${agentStatus.agents_dir} — Task(subagent_type="gsd-*") will fall back to general-purpose`,
           `Run the GSD installer: npx ${PACKAGE_NAME}@latest`,
         );
-      } else if ((agentStatus.incomplete_agents).length > 0 && (agentStatus.missing_agents).length === 0) {
-        addIssue(
-          'warning',
-          'W010',
-          `Incomplete agent installs (missing generated file): ${(agentStatus.incomplete_agents).join(', ')} — affected workflows may fall back to general-purpose`,
-          `Re-run the GSD installer to complete the install: npx ${PACKAGE_NAME}@latest`,
-        );
-      } else if ((agentStatus.incomplete_agents).length > 0) {
-        addIssue(
-          'warning',
-          'W010',
-          `Missing ${(agentStatus.missing_agents).length} GSD agents: ${(agentStatus.missing_agents).join(', ')}; incomplete agent installs (missing generated file): ${(agentStatus.incomplete_agents).join(', ')} — affected workflows will fall back to general-purpose`,
-          `Run the GSD installer: npx ${PACKAGE_NAME}@latest`,
-        );
       } else {
-        addIssue(
-          'warning',
-          'W010',
-          `Missing ${(agentStatus.missing_agents).length} GSD agents: ${(agentStatus.missing_agents).join(', ')} — affected workflows will fall back to general-purpose`,
-          `Run the GSD installer: npx ${PACKAGE_NAME}@latest`,
-        );
+        // #2540 review round 2 — sandbox violations used to be their own
+        // exclusive branch guarded by `missing_agents.length === 0`, so one
+        // missing agent hid every sandbox violation from the report. The
+        // clause is additive instead: whichever presence message applies, any
+        // sandbox findings are appended rather than dropped.
+        const violations = agentStatus.sandbox_violations;
+        // Both drift directions are reported, and they are NOT the same
+        // problem: a weaker sandbox breaks the agent, a stronger one grants
+        // privilege the contract no longer asks for (#2540 direction 3). A
+        // single "weaker than" summary would misdescribe half of them.
+        const weaker = violations.filter((v) => v.direction !== 'over-privileged');
+        const stronger = violations.filter((v) => v.direction === 'over-privileged');
+        const sandboxSummary = [
+          weaker.length > 0
+            ? `sandbox weaker than declared tool contract: ${weaker.map((v) => v.agent).join(', ')} (cannot write their declared outputs)`
+            : '',
+          stronger.length > 0
+            ? `sandbox grants write beyond the declared tool contract: ${stronger.map((v) => v.agent).join(', ')} (stale config — the contract declares no write tool)`
+            : '',
+        ]
+          .filter(Boolean)
+          .join('; ');
+        const sandboxClause = sandboxSummary ? `; agent ${sandboxSummary}` : '';
+        const regenerateFix = `Re-run the GSD installer to regenerate agent configs: npx ${PACKAGE_NAME}@latest`;
+
+        if ((agentStatus.incomplete_agents).length > 0 && (agentStatus.missing_agents).length === 0) {
+          addIssue(
+            'warning',
+            'W010',
+            `Incomplete agent installs (missing generated file): ${(agentStatus.incomplete_agents).join(', ')} — affected workflows may fall back to general-purpose${sandboxClause}`,
+            `Re-run the GSD installer to complete the install: npx ${PACKAGE_NAME}@latest`,
+          );
+        } else if ((agentStatus.incomplete_agents).length > 0) {
+          addIssue(
+            'warning',
+            'W010',
+            `Missing ${(agentStatus.missing_agents).length} GSD agents: ${(agentStatus.missing_agents).join(', ')}; incomplete agent installs (missing generated file): ${(agentStatus.incomplete_agents).join(', ')} — affected workflows will fall back to general-purpose${sandboxClause}`,
+            `Run the GSD installer: npx ${PACKAGE_NAME}@latest`,
+          );
+        } else if ((agentStatus.missing_agents).length === 0) {
+          // Every file present; the only finding is the sandbox mismatch.
+          addIssue('warning', 'W010', `Agent ${sandboxSummary}`, regenerateFix);
+        } else {
+          addIssue(
+            'warning',
+            'W010',
+            `Missing ${(agentStatus.missing_agents).length} GSD agents: ${(agentStatus.missing_agents).join(', ')} — affected workflows will fall back to general-purpose${sandboxClause}`,
+            `Run the GSD installer: npx ${PACKAGE_NAME}@latest`,
+          );
+        }
       }
     }
   } catch {
@@ -2451,6 +2492,7 @@ function cmdValidateHealth(
     errors,
     warnings,
     info,
+    sandbox_violations: healthSandboxViolations,
     repairable_count: repairableCount,
     repairs_performed: repairActions.length > 0 ? repairActions : undefined,
   };
@@ -2459,7 +2501,11 @@ function cmdValidateHealth(
 }
 
 function cmdValidateAgents(cwd: string, raw: boolean): void {
-  const agentStatus = checkAgentsInstalled(resolveRuntime(cwd), cwd);
+  // #2540 round 8: pass NO runtime — see the cmdValidateHealth call site. This
+  // is the `validate agents` entry the issue's repro runs; pre-resolving with
+  // resolveRuntime returned 'claude' on a defaults.json-only Codex install and
+  // the sandbox gate never opened.
+  const agentStatus = checkAgentsInstalled(undefined, cwd);
   const expected = Object.keys(MODEL_PROFILES);
 
   output(
@@ -2469,6 +2515,10 @@ function cmdValidateAgents(cwd: string, raw: boolean): void {
       installed: agentStatus.installed_agents,
       missing: agentStatus.missing_agents,
       incomplete: agentStatus.incomplete_agents,
+      // #2540 — a false `agents_found` may come solely from a sandbox/tool-
+      // contract mismatch; without this field the JSON showed missing:[] and
+      // incomplete:[] with no explanation for the failure.
+      sandbox_violations: agentStatus.sandbox_violations,
       expected,
     },
     raw,

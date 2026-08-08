@@ -25,6 +25,7 @@ import runtimeNamePolicy = require('./runtime-name-policy.cjs');
 const { getDirName } = runtimeNamePolicy;
 import capabilityRegistry = require('./capability-registry.cjs');
 import { posixNormalize } from './shell-command-projection.cjs';
+import toolsContract = require('./agent-tools-contract.cjs');
 
 // #1383: resolve GSD's version WITHOUT a top-level
 // `require('../../../package.json')`. That require ran at module load on every
@@ -895,6 +896,11 @@ function yamlIdentifier(value) {
 }
 
 function extractFrontmatterAndBody(content) {
+  // #2540 review — a UTF-8 BOM before the opening `---` made the envelope
+  // undetectable, so a BOM'd agent silently skipped conversion AND derived a
+  // read-only sandbox with no contract, defeating the semantic validator the
+  // same way. Strip it: a BOM is never meaningful content in these files.
+  content = content.replace(/^\uFEFF/, '');
   if (!content.startsWith('---')) {
     return { frontmatter: null, body: content };
   }
@@ -1768,6 +1774,10 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
   let inAllowedTools = false;
   let inSkippedArray = false;
   const allowedTools = [];
+  // Read once through the shared agent-tools-contract seam (#2540 review) so
+  // this converter cannot disagree with the other `tools:` consumers about a
+  // given shape. Agents strip the field, so this only feeds the command path.
+  const contractTools = toolsContract.parseToolsContract(frontmatter);
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -1783,7 +1793,7 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
       continue;
     }
 
-    // Detect inline tools: field (comma-separated string)
+    // Detect the tools: field (read via contractTools, above)
     if (trimmed.startsWith('tools:')) {
       if (isAgent) {
         // Agents: strip tools entirely (not supported in OpenCode agent frontmatter)
@@ -1792,9 +1802,7 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
       }
       const toolsValue = trimmed.substring(6).trim();
       if (toolsValue) {
-        // Parse comma-separated tools
-        const tools = toolsValue.split(',').map(t => t.trim()).filter(t => t);
-        allowedTools.push(...tools);
+        allowedTools.push(...contractTools);
       }
       continue;
     }
@@ -1937,6 +1945,11 @@ function convertClaudeToKiloFrontmatter(content, { isAgent = false, modelOverrid
   let inSkippedArray = false;
   const allowedTools = [];
   const agentTools = [];
+  // The `tools:` contract is read once through the shared agent-tools-contract
+  // seam (#2540 review) rather than re-parsed by the line loop below, so the
+  // inline, block-list and bracketed-flow shapes cannot diverge between this
+  // converter and the sandbox derivation / semantic validator.
+  const contractTools = toolsContract.parseToolsContract(frontmatter);
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -1952,9 +1965,10 @@ function convertClaudeToKiloFrontmatter(content, { isAgent = false, modelOverrid
       continue;
     }
 
+    // Block-list continuation lines are consumed, not parsed: the contract
+    // itself came from the shared seam once, above (#2540 review).
     if (isAgent && inAgentTools) {
       if (trimmed.startsWith('- ')) {
-        agentTools.push(trimmed.substring(2).trim());
         continue;
       }
       if (trimmed && !trimmed.startsWith('-')) {
@@ -1962,23 +1976,19 @@ function convertClaudeToKiloFrontmatter(content, { isAgent = false, modelOverrid
       }
     }
 
-    // Detect inline tools: field (comma-separated string)
+    // Detect the tools: field. Both shapes (inline comma-separated and block
+    // list) are read by contractTools through the agent-tools-contract seam.
     if (trimmed.startsWith('tools:')) {
+      const toolsValue = trimmed.substring(6).trim();
       if (isAgent) {
-        const toolsValue = trimmed.substring(6).trim();
-        if (toolsValue) {
-          const tools = toolsValue.split(',').map(t => t.trim()).filter(t => t);
-          agentTools.push(...tools);
-        } else {
+        agentTools.push(...contractTools);
+        if (!toolsValue) {
           inAgentTools = true;
         }
         continue;
       }
-      const toolsValue = trimmed.substring(6).trim();
       if (toolsValue) {
-        // Parse comma-separated tools
-        const tools = toolsValue.split(',').map(t => t.trim()).filter(t => t);
-        allowedTools.push(...tools);
+        allowedTools.push(...contractTools);
       }
       continue;
     }
@@ -2185,10 +2195,12 @@ function convertClaudeAgentToCopilotAgent(content, isGlobal = false) {
   const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
   const description = extractFrontmatterField(frontmatter, 'description') || '';
   const color = extractFrontmatterField(frontmatter, 'color');
-  const toolsRaw = extractFrontmatterField(frontmatter, 'tools') || '';
-
-  // CONV-04 + CONV-05: Map tools, deduplicate, format as JSON array
-  const claudeTools = toolsRaw.split(',').map(t => t.trim()).filter(Boolean);
+  // CONV-04 + CONV-05: Map tools, deduplicate, format as JSON array.
+  // Parsed through the shared agent-tools-contract seam (#2540) — the former
+  // single-line `tools:` regex plus a naive split(',') collapsed a block-list
+  // contract into the single literal "- Read", so convertCopilotToolName fell
+  // through to its lowercase default and every other tool was silently dropped.
+  const claudeTools = toolsContract.parseToolsContract(frontmatter);
   const mappedTools = claudeTools.map(t => convertCopilotToolName(t));
   const uniqueTools = [...new Set(mappedTools)];
   const toolsArray = uniqueTools.length > 0
@@ -2217,10 +2229,10 @@ function convertClaudeAgentToAntigravityAgent(content, isGlobal = false) {
   const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
   const description = extractFrontmatterField(frontmatter, 'description') || '';
   const color = extractFrontmatterField(frontmatter, 'color');
-  const toolsRaw = extractFrontmatterField(frontmatter, 'tools') || '';
-
-  // Map tools to Gemini equivalents (reuse existing convertGeminiToolName)
-  const claudeTools = toolsRaw.split(',').map(t => t.trim()).filter(Boolean);
+  // Map tools to Gemini equivalents (reuse existing convertGeminiToolName).
+  // Parsed through the shared agent-tools-contract seam (#2540) — same
+  // block-list defect as the Copilot converter above.
+  const claudeTools = toolsContract.parseToolsContract(frontmatter);
   const mappedTools = claudeTools.map(t => convertGeminiToolName(t)).filter(Boolean);
 
   // #2876: quote description for the same reason as the skill variant.
@@ -2411,7 +2423,11 @@ function convertClaudeAgentToCodexAgent(content) {
 
   const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
   const description = extractFrontmatterField(frontmatter, 'description') || '';
-  const tools = extractFrontmatterField(frontmatter, 'tools') || '';
+  // #2540 review — parse through the shared tools-contract seam so block-list
+  // `tools:` frontmatter embeds the FULL contract (the single-line field
+  // extractor reduced it to "- <first item>", permanently corrupting the
+  // contract that the sandbox validator later reads from this header).
+  const tools = toolsContract.parseToolsContract(frontmatter).join(', ');
 
   const roleHeader = `<codex_agent_role>
 role: ${name}

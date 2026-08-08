@@ -305,10 +305,14 @@ function getLatestCompletedMilestone(cwd: string): { version: string; name: stri
 
 function withProjectRoot(cwd: string, result: Record<string, unknown>): Record<string, unknown> {
   result['project_root'] = cwd;
-  const activeRuntime = resolveRuntime(cwd);
-  const agentStatus = checkAgentsInstalled(activeRuntime, cwd);
+  // #2540 round 8: pass NO runtime so checkAgentsInstalled applies its own
+  // persisted-default resolution (…> ~/.gsd/defaults.json > 'claude') instead
+  // of the narrower resolveRuntime pre-resolution that made the codex sandbox
+  // gate unreachable on a defaults.json-only Codex install.
+  const agentStatus = checkAgentsInstalled(undefined, cwd);
   result['agents_installed'] = agentStatus.agents_installed;
   result['missing_agents'] = agentStatus.missing_agents;
+  result['sandbox_violations'] = agentStatus.sandbox_violations; // #2540
   result['agents_dir'] = agentStatus.agents_dir;
   result['agent_runtime'] = agentStatus.agent_runtime;
   const config = loadConfig(cwd);

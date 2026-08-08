@@ -27,7 +27,6 @@ const { pathExistsInternal, toPosixPath } = coreUtils;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import agentInstallCheck = require('./agent-install-check.cjs');
 const { checkAgentsInstalled } = agentInstallCheck;
-import { resolveRuntime } from './runtime-slash.cjs';
 import { platformReadSync } from './shell-command-projection.cjs';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -283,9 +282,11 @@ function cmdDocsInit(cwd: string, raw: boolean): void {
   };
   // Inject project_root and agent installation status (mirrors withProjectRoot in init.cjs)
   result['project_root'] = cwd;
-  const agentStatus = checkAgentsInstalled(resolveRuntime(cwd), cwd);
+  // #2540 round 8: no pre-resolved runtime — see withProjectRoot in init.cts.
+  const agentStatus = checkAgentsInstalled(undefined, cwd);
   result['agents_installed'] = agentStatus.agents_installed;
   result['missing_agents'] = agentStatus.missing_agents;
+  result['sandbox_violations'] = agentStatus.sandbox_violations; // #2540
   // #2402: withProjectRoot injects response_language when set; cmdDocsInit predates
   // that helper and never picked it up, so docs-update's orchestrator-owned prompts
   // silently stayed English even with response_language configured.

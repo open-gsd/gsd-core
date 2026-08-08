@@ -194,8 +194,17 @@ describe('validate health: agent installation check W010 (#1371)', () => {
 
   test('health check reports healthy when agents are installed (repo layout)', () => {
     // In the repo, agents/ exists as a sibling of gsd-core/, so the
-    // health check should find them via the gsd-tools.cjs path resolution
-    const result = runGsdTools('validate health --raw', tmpDir);
+    // health check should find them via the gsd-tools.cjs path resolution.
+    // #2540 round 8: health now honors a runtime persisted to
+    // ~/.gsd/defaults.json, so sandbox HOME — otherwise a developer machine
+    // whose real defaults.json names another runtime would (correctly!) check
+    // that runtime's agents dir and fail this claude-layout expectation.
+    const isolatedHome = path.join(tmpDir, 'isolated-home');
+    fs.mkdirSync(isolatedHome, { recursive: true });
+    const result = runGsdTools('validate health --raw', tmpDir, {
+      HOME: isolatedHome,
+      USERPROFILE: isolatedHome,
+    });
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -691,5 +700,198 @@ describe('bug #1058: validate agents detects manifest-backed .md/.toml pair drif
       true,
       `Expected agents_found=true when all .md files are present and no manifest; got ${output.agents_found}`,
     );
+  });
+});
+
+// ─── #2540 regression: validate agents surfaces sandbox violations ───────────
+
+describe('#2540 regression: validate agents --raw exposes sandbox_violations', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('a Write-tool role with a read-only TOML is reported with detail, not just a bare false', () => {
+    const agentsDir = path.join(tmpDir, 'agents');
+    fs.mkdirSync(agentsDir, { recursive: true });
+    for (const name of EXPECTED_AGENTS) {
+      fs.writeFileSync(
+        path.join(agentsDir, `${name}.md`),
+        `---\nname: ${name}\ndescription: Test agent\ntools: Read, Bash\n---\nAgent content.\n`
+      );
+    }
+    const target = EXPECTED_AGENTS[0];
+    // Codex-shaped pair: converted .md with the contract in the role header,
+    // and a generated TOML whose sandbox is weaker than the contract requires.
+    fs.writeFileSync(
+      path.join(agentsDir, `${target}.md`),
+      `---\nname: "${target}"\ndescription: "Test agent"\n---\n\n<codex_agent_role>\nrole: ${target}\ntools: Read, Write, Edit\npurpose: Test agent\n</codex_agent_role>\n\nAgent content.\n`
+    );
+    fs.writeFileSync(
+      path.join(agentsDir, `${target}.toml`),
+      `name = "${target}"\ndescription = "Test agent"\nsandbox_mode = "read-only"\n`
+    );
+
+    const result = runGsdTools('validate agents --raw', tmpDir, {
+      GSD_AGENTS_DIR: agentsDir,
+      // The semantic check is codex-scoped (#2566 review) — the fixture pair
+      // above is Codex's artifact shape, so the runtime must say so.
+      GSD_RUNTIME: 'codex',
+    });
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.agents_found, false,
+      'agents_found must be false on a sandbox/contract violation');
+    assert.deepStrictEqual(output.missing, [], 'violation is not a missing agent');
+    assert.ok(Array.isArray(output.sandbox_violations),
+      'sandbox_violations must be present in the JSON so a false agents_found is explainable');
+    assert.strictEqual(output.sandbox_violations.length, 1);
+    assert.strictEqual(output.sandbox_violations[0].agent, target);
+    assert.strictEqual(output.sandbox_violations[0].sandbox_mode, 'read-only');
+  });
+
+  test('#2540 round 8 BLOCKER: the PRODUCTION call shape fires with NO GSD_RUNTIME — defaults.json alone must open the gate', () => {
+    // Every prior CLI test injected GSD_RUNTIME=codex, which is precisely the
+    // condition #2540 says is ABSENT. This test drives the real `validate
+    // agents` entry (cmdValidateAgents → checkAgentsInstalled) the issue's
+    // repro runs: no GSD_RUNTIME (explicitly neutralized — the TEST_ENV_BASE
+    // empty-string convention), no project-level runtime, only the installer's
+    // persisted ~/.gsd/defaults.json saying codex. Before the round-8 fix,
+    // cmdValidateAgents pre-resolved the runtime with resolveRuntime (which
+    // never reads defaults.json), got 'claude', and the callee's
+    // persisted-default fallback was unreachable — this test fails on that
+    // revision with sandbox_violations = [].
+    const homeDir = path.join(tmpDir, 'sandbox-home');
+    fs.mkdirSync(path.join(homeDir, '.gsd'), { recursive: true });
+    fs.writeFileSync(
+      path.join(homeDir, '.gsd', 'defaults.json'),
+      JSON.stringify({ runtime: 'codex' }, null, 2) + '\n'
+    );
+
+    const agentsDir = path.join(tmpDir, 'agents');
+    fs.mkdirSync(agentsDir, { recursive: true });
+    for (const name of EXPECTED_AGENTS) {
+      fs.writeFileSync(
+        path.join(agentsDir, `${name}.md`),
+        `---\nname: ${name}\ndescription: Test agent\ntools: Read, Bash\n---\nAgent content.\n`
+      );
+    }
+    const target = EXPECTED_AGENTS[0];
+    fs.writeFileSync(
+      path.join(agentsDir, `${target}.md`),
+      `---\nname: "${target}"\ndescription: "Test agent"\n---\n\n<codex_agent_role>\nrole: ${target}\ntools: Read, Write, Edit\npurpose: Test agent\n</codex_agent_role>\n\nAgent content.\n`
+    );
+    fs.writeFileSync(
+      path.join(agentsDir, `${target}.toml`),
+      `name = "${target}"\ndescription = "Test agent"\nsandbox_mode = "read-only"\n`
+    );
+
+    const result = runGsdTools('validate agents --raw', tmpDir, {
+      GSD_AGENTS_DIR: agentsDir,
+      GSD_RUNTIME: '',
+      HOME: homeDir,
+      USERPROFILE: homeDir,
+    });
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.sandbox_violations.length, 1,
+      "the sandbox gate must open on #2540's own repro: no env runtime, no project runtime, defaults.json = codex");
+    assert.strictEqual(output.sandbox_violations[0].agent, target);
+    assert.strictEqual(output.agents_found, false);
+  });
+
+  test('#2540 round 8 discrimination: same production shape with NO persisted runtime stays inert', () => {
+    // Same fixture, same neutralized env — only defaults.json lacks a runtime.
+    // If this also reported a violation, the test above would prove nothing
+    // about where the runtime came from.
+    const homeDir = path.join(tmpDir, 'sandbox-home');
+    fs.mkdirSync(path.join(homeDir, '.gsd'), { recursive: true });
+    fs.writeFileSync(
+      path.join(homeDir, '.gsd', 'defaults.json'),
+      JSON.stringify({ resolve_model_ids: 'omit' }, null, 2) + '\n'
+    );
+
+    const agentsDir = path.join(tmpDir, 'agents');
+    fs.mkdirSync(agentsDir, { recursive: true });
+    for (const name of EXPECTED_AGENTS) {
+      fs.writeFileSync(
+        path.join(agentsDir, `${name}.md`),
+        `---\nname: ${name}\ndescription: Test agent\ntools: Read, Bash\n---\nAgent content.\n`
+      );
+    }
+    const target = EXPECTED_AGENTS[0];
+    fs.writeFileSync(
+      path.join(agentsDir, `${target}.md`),
+      `---\nname: "${target}"\ndescription: "Test agent"\n---\n\n<codex_agent_role>\nrole: ${target}\ntools: Read, Write, Edit\npurpose: Test agent\n</codex_agent_role>\n\nAgent content.\n`
+    );
+    fs.writeFileSync(
+      path.join(agentsDir, `${target}.toml`),
+      `name = "${target}"\ndescription = "Test agent"\nsandbox_mode = "read-only"\n`
+    );
+
+    const result = runGsdTools('validate agents --raw', tmpDir, {
+      GSD_AGENTS_DIR: agentsDir,
+      GSD_RUNTIME: '',
+      HOME: homeDir,
+      USERPROFILE: homeDir,
+    });
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.deepStrictEqual(output.sandbox_violations, [],
+      'nothing resolves codex, so the codex-scoped sandbox check must not run');
+  });
+
+  test('#2540 review: a sandbox violation still surfaces in W010 when another agent is MISSING', () => {
+    // The sandbox clause used to live in a branch guarded by
+    // `missing_agents.length === 0`, so a single missing agent hid every
+    // sandbox violation from the health report. Both must be reported.
+    const agentsDir = path.join(tmpDir, 'agents');
+    fs.mkdirSync(agentsDir, { recursive: true });
+    const violating = EXPECTED_AGENTS[0];
+    const absent = EXPECTED_AGENTS[1];
+    for (const name of EXPECTED_AGENTS) {
+      if (name === absent) continue; // deliberately not written → missing
+      fs.writeFileSync(
+        path.join(agentsDir, `${name}.md`),
+        `---\nname: ${name}\ndescription: Test agent\ntools: Read, Bash\n---\nAgent content.\n`
+      );
+    }
+    fs.writeFileSync(
+      path.join(agentsDir, `${violating}.md`),
+      `---\nname: "${violating}"\ndescription: "Test agent"\n---\n\n<codex_agent_role>\nrole: ${violating}\ntools: Read, Write, Edit\npurpose: Test agent\n</codex_agent_role>\n\nAgent content.\n`
+    );
+    fs.writeFileSync(
+      path.join(agentsDir, `${violating}.toml`),
+      `name = "${violating}"\ndescription = "Test agent"\nsandbox_mode = "read-only"\n`
+    );
+
+    const result = runGsdTools('validate health --raw', tmpDir, {
+      GSD_AGENTS_DIR: agentsDir,
+      GSD_RUNTIME: 'codex',
+    });
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    const w010 = (output.warnings || []).find((w) => w.code === 'W010');
+    assert.ok(w010, 'W010 must be raised when an agent is missing');
+    assert.match(w010.message, new RegExp(absent), 'the missing agent must be named');
+    // #2540 M1: the sandbox finding is asserted on health's TYPED surface, not
+    // re-derived from the warning prose — CONTRIBUTING's typed-surface rule.
+    // The typed array also makes the round-2 hiding bug structurally
+    // impossible: it is populated before any presence branching.
+    assert.ok(Array.isArray(output.sandbox_violations),
+      'validate health must expose sandbox_violations as a typed array');
+    assert.strictEqual(output.sandbox_violations.length, 1,
+      'the sandbox violation must not be hidden by the missing agent');
+    assert.strictEqual(output.sandbox_violations[0].agent, violating);
+    assert.strictEqual(output.sandbox_violations[0].sandbox_mode, 'read-only');
   });
 });

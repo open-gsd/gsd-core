@@ -271,6 +271,70 @@ describe('convertClaudeToKiloFrontmatter output parity: bin/install.js vs runtim
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DEFECT.GENERATIVE-FIX output-parity guard (#2540): the OpenCode and Kilo
+// frontmatter converters are ALSO defined twice (bin/install.js + the compiled
+// runtime-artifact-conversion.cjs), and #2540 edited BOTH copies to route the
+// `tools:` contract through the shared agent-tools-contract seam. The #2093
+// guard above pins Kilo on one synthetic sample only; this one pins BOTH
+// converters over every REAL agent in agents/ — including the repo's two
+// block-list contracts (gsd-nyquist-auditor, gsd-security-auditor), the shape
+// whose divergence #2540 fixed — plus the three synthetic tools: spellings.
+// If a future edit lands in one copy only, this fails naming the agent.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('#2540 output parity over real agents: bin/install.js vs runtime-artifact-conversion.cjs', () => {
+  const nodeFs = require('node:fs');
+  const nodePath = require('node:path');
+  const conversionModule = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+  const agentsSrcDir = nodePath.join(__dirname, '..', 'agents');
+  const realAgents = nodeFs.readdirSync(agentsSrcDir).filter((f) => f.endsWith('.md'));
+
+  const TOOLS_SHAPES = [
+    ['inline', 'tools: Read, Write'],
+    ['block-list', 'tools:\n  - Read\n  - Write'],
+    ['flow', 'tools: [Read, Write]'],
+  ];
+
+  test('convertClaudeToOpencodeFrontmatter agrees on every real agent', () => {
+    assert.ok(realAgents.length > 0, 'precondition: agents/ has agent sources');
+    for (const file of realAgents) {
+      const content = nodeFs.readFileSync(nodePath.join(agentsSrcDir, file), "utf8");
+      assert.equal(
+        convertClaudeToOpencodeFrontmatter(content, { isAgent: true }),
+        conversionModule.convertClaudeToOpencodeFrontmatter(content, { isAgent: true }),
+        `${file}: the two live OpenCode converter copies diverged`,
+      );
+    }
+  });
+
+  test('convertClaudeToKiloFrontmatter agrees on every real agent', () => {
+    for (const file of realAgents) {
+      const content = nodeFs.readFileSync(nodePath.join(agentsSrcDir, file), "utf8");
+      assert.equal(
+        convertClaudeToKiloFrontmatter(content, { isAgent: true }),
+        conversionModule.convertClaudeToKiloFrontmatter(content, { isAgent: true }),
+        `${file}: the two live Kilo converter copies diverged`,
+      );
+    }
+  });
+
+  test('both converters agree on every synthetic tools: spelling', () => {
+    for (const [label, toolsBlock] of TOOLS_SHAPES) {
+      const md = `---\nname: probe-agent\ndescription: Parity probe\n${toolsBlock}\n---\n\n<role>Probe.</role>`;
+      assert.equal(
+        convertClaudeToOpencodeFrontmatter(md, { isAgent: true }),
+        conversionModule.convertClaudeToOpencodeFrontmatter(md, { isAgent: true }),
+        `OpenCode copies diverged on the ${label} tools: shape`,
+      );
+      assert.equal(
+        convertClaudeToKiloFrontmatter(md, { isAgent: true }),
+        conversionModule.convertClaudeToKiloFrontmatter(md, { isAgent: true }),
+        `Kilo copies diverged on the ${label} tools: shape`,
+      );
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // DEFECT.GENERATIVE-FIX output-parity guard: convertClaudeCommandToTraeSkill is
 // defined TWICE — once in bin/install.js (dead for the live skills-install
 // path; kept for this file's own module-level export/test surface) and once in
@@ -402,6 +466,78 @@ tools: Read, Write, Bash, Skill, WebFetch, SlashCommand
     assert.ok(toolsLine.includes('web_fetch'), 'maps WebFetch -> web_fetch');
     assert.ok(!/\bskill\b/.test(toolsLine), 'no invalid skill tool in Antigravity frontmatter');
     assert.ok(!/\bslashcommand\b/.test(toolsLine), 'no invalid slashcommand tool in Antigravity frontmatter');
+  });
+
+  test('#2540 regression: a block-list tools: contract keeps every tool (Antigravity)', () => {
+    // Same defect as the Copilot converter: the single-line `tools:` regex plus
+    // split(',') collapsed the whole block list to the one literal "- Read",
+    // convertGeminiToolName did not recognise it, and every other tool was
+    // silently dropped. Both converters now parse through the shared
+    // agent-tools-contract seam. Shape taken from agents/gsd-nyquist-auditor.md.
+    const input = `---
+name: gsd-nyquist-auditor
+description: Fills Nyquist validation gaps
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Glob
+  - Grep
+  - Skill
+---
+
+<role>Audit.</role>`;
+
+    const result = convertClaudeAgentToAntigravityAgent(input);
+    const toolsLine = result.split('\n').find(l => l.startsWith('tools:')) || '';
+
+    for (const [claudeTool, geminiTool] of [
+      ['Read', 'read_file'], ['Write', 'write_file'], ['Edit', 'replace'],
+      ['Bash', 'run_shell_command'], ['Glob', 'glob'], ['Grep', 'search_file_content'],
+    ]) {
+      assert.ok(toolsLine.includes(geminiTool), `block-list ${claudeTool} must map to ${geminiTool}`);
+    }
+    assert.ok(!toolsLine.includes('- read'), 'the block-list marker must never reach the emitted contract');
+    // Skill stays excluded — the #1394 behaviour above is unchanged by this fix.
+    assert.ok(!/\bskill\b/.test(toolsLine), 'Skill remains excluded on the Gemini backend');
+  });
+
+  test('#2540 regression: every tools: shape yields the same Kilo permission block', () => {
+    // The OpenCode and Kilo converters were the last `tools:` consumers still
+    // running their own line-oriented parse (#2540 review). Kilo's agent path
+    // did `trimmed.substring(6).split(',')`, which on the bracketed flow form
+    // produced the literal names "[Read" and "Write]" — neither maps to a Kilo
+    // permission, so an agent declaring `tools: [Read, Write]` emitted a block
+    // with read AND edit set to `deny`. Verified against the pre-fix build:
+    // flow -> "read: deny | edit: deny"; all three shapes now agree.
+    //
+    // This asserts the invariant the seam exists to guarantee — the DECLARED
+    // CONTRACT, not its YAML spelling, decides the emitted permissions — so it
+    // fails again if any converter re-grows a private parser.
+    const agent = (toolsBlock) => `---
+name: probe-agent
+description: Shape-equivalence probe
+${toolsBlock}
+---
+
+<role>Probe.</role>`;
+
+    const permissions = (md) => convertClaudeToKiloFrontmatter(md, { isAgent: true })
+      .split('\n')
+      .filter((l) => /^ {2}(read|edit):/.test(l))
+      .join(' | ');
+
+    const inline = permissions(agent('tools: Read, Write'));
+    const block = permissions(agent('tools:\n  - Read\n  - Write'));
+    const flow = permissions(agent('tools: [Read, Write]'));
+
+    // Pin the value, not just the agreement: three identically-wrong blocks
+    // would satisfy an equality-only assertion.
+    assert.match(inline, /read: allow/, 'inline form must allow read');
+    assert.match(inline, /edit: allow/, 'inline form must allow edit (Write)');
+    assert.strictEqual(block, inline, 'block-list form must match the inline form');
+    assert.strictEqual(flow, inline, 'bracketed flow form must match the inline form');
   });
 });
 

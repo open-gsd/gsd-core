@@ -249,6 +249,30 @@ You are a GSD plan executor.
     assert.ok(result.includes('<role>'), 'body content preserved');
   });
 
+  test('#2540 review: block-list tools frontmatter embeds the FULL contract in the role header', () => {
+    // The single-line field extractor reduced a YAML block list to
+    // "- <first item>", permanently corrupting the contract in the installed
+    // .md — which is exactly what the sandbox validator later reads.
+    const input = `---
+name: gsd-block-list
+description: Block-list contract agent
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+---
+
+body`;
+
+    const result = convertClaudeAgentToCodexAgent(input);
+    assert.ok(
+      result.includes('tools: Read, Write, Edit, Bash'),
+      'role header must carry every declared tool, normalized to the inline form'
+    );
+    assert.ok(!/tools: -/.test(result), 'no malformed "- <tool>" remnant in the role header');
+  });
+
   test('converts slash commands in body', () => {
     const input = `---
 name: gsd-test
@@ -474,9 +498,28 @@ tools: Read, Grep, Glob
     assert.ok(result.includes('description = "GSD agent gsd-unknown"'), 'falls back to synthetic description');
   });
 
-  test('defaults unknown agents to read-only', () => {
-    const result = generateCodexAgentToml('gsd-unknown', sampleAgent);
-    assert.ok(result.includes('sandbox_mode = "read-only"'), 'defaults to read-only');
+  test('unmapped agents derive sandbox from the tool contract (#2540)', () => {
+    // Pre-#2540 behavior blanket-defaulted every unmapped agent to read-only,
+    // silently downgrading write-capable roles added after the map's 11 entries.
+    // sampleAgent declares Write/Edit, so an unmapped name must now get
+    // workspace-write; a contract without file-mutating tools stays read-only.
+    const writeResult = generateCodexAgentToml('gsd-unknown', sampleAgent);
+    assert.ok(
+      writeResult.includes('sandbox_mode = "workspace-write"'),
+      'unmapped agent with Write/Edit tools derives workspace-write'
+    );
+    const readOnlyAgent = `---\nname: gsd-lookup\ndescription: Reads things\ntools: Read, Grep, Glob\n---\n\n<role>You look things up.</role>`;
+    const readResult = generateCodexAgentToml('gsd-lookup', readOnlyAgent);
+    assert.ok(
+      readResult.includes('sandbox_mode = "read-only"'),
+      'unmapped agent without file-mutating tools stays read-only'
+    );
+    const emptyToolsAgent = `---\nname: gsd-empty\ndescription: No tools declared\n---\n\n<role>Contract gap.</role>`;
+    const emptyResult = generateCodexAgentToml('gsd-empty', emptyToolsAgent);
+    assert.ok(
+      emptyResult.includes('sandbox_mode = "read-only"'),
+      'absent tools contract stays read-only (empty-contract gap is out of #2540 scope)'
+    );
   });
 
   // ─── #2256: model_overrides support ───────────────────────────────────────
@@ -803,27 +846,222 @@ describe('installCodexConfig sandboxTier threading seam', () => {
 // ─── CODEX_AGENT_SANDBOX mapping ────────────────────────────────────────────────
 
 describe('CODEX_AGENT_SANDBOX', () => {
-  test('has all 11 agents mapped', () => {
-    const agentNames = Object.keys(CODEX_AGENT_SANDBOX);
-    assert.strictEqual(agentNames.length, 11, 'has 11 agents');
-  });
+  // #2540: the former "has all 11 agents mapped" count assertion codified the
+  // bug — the map is a subset by design (ADR-1016), and unmapped roles now
+  // derive their sandbox from the tool contract. What must hold instead is a
+  // contract-derived invariant over EVERY repo agent, mapped or not.
+  //
+  // #2540 review: the oracle below parses the frontmatter with js-yaml — a
+  // real YAML parser wholly independent of the production regexes — so a
+  // parsing defect shared with the code under test (the original bug: the
+  // single-line `tools:` regex reduced block lists to "- <first item>" in
+  // BOTH the oracle and the deriver, passing vacuously) cannot recur.
+  const yaml = require('js-yaml');
+  const agentsDir = path.join(__dirname, '..', 'agents');
+  const agentFiles = fs.readdirSync(agentsDir).filter((f) => f.endsWith('.md'));
+  const WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
+  const declaredTools = (content) => {
+    const fm = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---/.exec(content)?.[1] ?? '';
+    const t = (yaml.load(fm) ?? {}).tools;
+    if (Array.isArray(t)) return t.map((x) => String(x).trim());
+    if (typeof t === 'string') return t.split(',').map((x) => x.trim()).filter(Boolean);
+    return [];
+  };
+  const requiresWrite = (content) =>
+    declaredTools(content).some((t) => WRITE_TOOLS.has(t));
 
-  test('workspace-write agents have write tools', () => {
-    const writeAgents = [
-      'gsd-executor', 'gsd-planner', 'gsd-phase-researcher',
-      'gsd-project-researcher', 'gsd-research-synthesizer', 'gsd-verifier',
-      'gsd-codebase-mapper', 'gsd-roadmapper', 'gsd-debugger',
-    ];
-    for (const name of writeAgents) {
-      assert.strictEqual(CODEX_AGENT_SANDBOX[name], 'workspace-write', `${name} is workspace-write`);
+  // The single expectation used by both the parity loop and the guard test
+  // below, so the guard exercises the production path rather than a copy of
+  // its formula. Strict equality is deliberate: the sandbox must follow the
+  // declared contract in BOTH directions. If a role ever legitimately needs
+  // write access without declaring Write/Edit/NotebookEdit (e.g. a Bash-only
+  // generator), declare the tool in its contract so the need is visible —
+  // do not relax this to a one-sided check, which is what made the original
+  // assertion vacuous (#2540 review).
+  const assertMapMatchesContract = (name, mode, content) => {
+    const expected = requiresWrite(content) ? 'workspace-write' : 'read-only';
+    assert.strictEqual(
+      mode,
+      expected,
+      `${name}: map says "${mode}" but contract tools "${declaredTools(content).join(', ')}" require "${expected}"`
+    );
+  };
+
+  test('#2540: every repo agent whose contract declares Write/Edit gets a workspace-write TOML', () => {
+    assert.ok(agentFiles.length > 0, 'repo agents/ directory must not be empty');
+    for (const file of agentFiles) {
+      const name = file.replace(/\.md$/, '');
+      const content = fs.readFileSync(path.join(agentsDir, file), 'utf8');
+      const toml = generateCodexAgentToml(name, content);
+      const expected = requiresWrite(content) ? 'workspace-write' : 'read-only';
+      assert.ok(
+        toml.includes(`sandbox_mode = "${expected}"`),
+        `${name}: contract tools "${declaredTools(content).join(', ')}" require sandbox_mode "${expected}"`
+      );
     }
   });
 
-  test('read-only agents have no write tools', () => {
-    const readOnlyAgents = ['gsd-plan-checker', 'gsd-integration-checker'];
-    for (const name of readOnlyAgents) {
-      assert.strictEqual(CODEX_AGENT_SANDBOX[name], 'read-only', `${name} is read-only`);
+  test('#2540 review: a UTF-8 BOM before the frontmatter cannot silently downgrade the sandbox', () => {
+    // Codex-review finding on the first round of this fix: production, the
+    // yaml oracle, and the parity test all detected the frontmatter envelope
+    // with a literal leading `---`, so a BOM'd Write-declaring agent derived
+    // read-only while every test still passed — the vacuous-pass class in a
+    // different guise. The envelope now strips the BOM; pin it through the
+    // real emit path.
+    const bomAgent = '\uFEFF---\nname: gsd-bom-agent\ndescription: BOM agent\ntools:\n  - Read\n  - Write\n---\n\nbody';
+    assert.ok(
+      generateCodexAgentToml('gsd-bom-agent', bomAgent).includes('sandbox_mode = "workspace-write"'),
+      'BOM before the frontmatter must not hide the Write contract'
+    );
+    const converted = convertClaudeAgentToCodexAgent(bomAgent);
+    assert.ok(
+      converted.includes('tools: Read, Write'),
+      'BOM before the frontmatter must not skip role-header conversion'
+    );
+  });
+
+  test('#2540 review: inline YAML comments do not corrupt tool names (js-yaml parity)', () => {
+    const { parseToolsContract } = require(path.join(
+      __dirname, '..', 'gsd-core', 'bin', 'lib', 'agent-tools-contract.cjs'
+    ));
+    assert.deepStrictEqual(
+      parseToolsContract('tools:\n  - Write # produces the report\n  - Read'),
+      ['Write', 'Read'],
+      'unquoted block item: trailing comment stripped'
+    );
+    assert.deepStrictEqual(
+      parseToolsContract('tools: Read, Write # patch files'),
+      ['Read', 'Write'],
+      'inline form: trailing comment stripped from the last item'
+    );
+    assert.deepStrictEqual(
+      parseToolsContract('tools:\n  - "Write # literal"'),
+      ['Write # literal'],
+      'quoted item keeps a # verbatim (it is data, not a comment)'
+    );
+    assert.deepStrictEqual(
+      parseToolsContract('tools:\n  - "Write" # comment after quotes'),
+      ['Write'],
+      'comment AFTER a quoted item is stripped and the quotes removed'
+    );
+    assert.deepStrictEqual(
+      parseToolsContract('tools: [Read, Write] # flow with comment'),
+      ['Read', 'Write'],
+      'bracketed flow with a trailing comment still normalizes'
+    );
+    assert.deepStrictEqual(
+      parseToolsContract('tools:\n  # why these tools\n  - Read\n  - Write'),
+      ['Read', 'Write'],
+      'a comment line inside a block sequence must not truncate the contract'
+    );
+  });
+
+  test('#2540 review: the contract seam exports exactly its two public functions', () => {
+    // Pins the public surface: WRITE_TOOLS was exported with zero consumers
+    // (every caller destructures only the two functions, and this file
+    // declares its own copy for oracle independence). Without this, the dead
+    // export could silently return.
+    const seam = require(path.join(
+      __dirname, '..', 'gsd-core', 'bin', 'lib', 'agent-tools-contract.cjs'
+    ));
+    assert.deepStrictEqual(
+      Object.keys(seam).sort(),
+      ['parseToolsContract', 'toolsRequireWrite'],
+      'agent-tools-contract must export exactly its two public functions'
+    );
+  });
+
+  test('#2540 review: block-list contract agents derive correctly (issue example #8)', () => {
+    // gsd-nyquist-auditor declares tools as a multi-line YAML block list and
+    // needs Write/Edit — the exact agent the fix's first iteration left
+    // read-only. Pinned by name, oracle-free, so the class stays covered even
+    // if the repo later loses all block-list agents to a reformat.
+    const nyquist = fs.readFileSync(path.join(agentsDir, 'gsd-nyquist-auditor.md'), 'utf8');
+    assert.ok(
+      generateCodexAgentToml('gsd-nyquist-auditor', nyquist).includes('sandbox_mode = "workspace-write"'),
+      'gsd-nyquist-auditor (block-list Write/Edit contract) must get a workspace-write TOML'
+    );
+    const security = fs.readFileSync(path.join(agentsDir, 'gsd-security-auditor.md'), 'utf8');
+    assert.ok(
+      generateCodexAgentToml('gsd-security-auditor', security).includes('sandbox_mode = "read-only"'),
+      'gsd-security-auditor (block-list read-only contract) must stay read-only'
+    );
+  });
+
+  test('#2540 review: production contract parser agrees with the independent YAML oracle for every repo agent', () => {
+    // The shared parsing seam (agent-tools-contract.cjs) is what the deriver,
+    // the Codex converter, and the semantic validator all consume — pin it
+    // against js-yaml over every REAL agents/*.md so a future frontmatter
+    // shape the seam mishandles fails here instead of shipping.
+    const { parseToolsContract } = require(path.join(
+      __dirname, '..', 'gsd-core', 'bin', 'lib', 'agent-tools-contract.cjs'
+    ));
+    for (const file of agentFiles) {
+      const content = fs.readFileSync(path.join(agentsDir, file), 'utf8');
+      const envelope = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---/.exec(content);
+      // Fail-loud envelope guard: production (matching the host runtime's own
+      // frontmatter convention) requires the `---` fence at the start of the
+      // file, tolerating only a BOM. Any other invisible prefix (blank line,
+      // zero-width space, NBSP, \u2026) would make BOTH production and the oracle
+      // silently see "no contract" \u2014 a write-capable agent would derive
+      // read-only with every test green. Assert the envelope is detectable
+      // for every real agent so that corruption fails HERE, loudly.
+      assert.ok(envelope, `${file}: frontmatter envelope must be detectable (no stray prefix before the --- fence)`);
+      const fm = envelope[1] ?? '';
+      const parsed = parseToolsContract(fm);
+      assert.ok(parsed.length > 0, `${file}: every GSD agent declares a tools contract \u2014 none parsed`);
+      assert.deepStrictEqual(
+        parsed,
+        declaredTools(content),
+        `${file}: production tools-contract parse must match the js-yaml oracle`
+      );
     }
+  });
+
+  test('#2540: explicit map entries never contradict the agent tool contract', () => {
+    // The map keeps precedence over the contract-derived fallback, so a stale
+    // entry could silently reintroduce the downgrade. Pin map/contract parity.
+    //
+    // Review round 2: the previous form computed the expectation as
+    // `requiresWrite(content) ? 'workspace-write' : mode` — for a read-only
+    // contract that collapsed to assert(mode, mode) and could never fail,
+    // exactly where over-privilege would matter. The expectation is now
+    // derived solely from the contract, so the assertion discriminates in
+    // BOTH directions: a map that under-privileges a write contract, and a
+    // map that grants workspace-write to an agent declaring no write tools.
+    let checked = 0;
+    for (const [name, mode] of Object.entries(CODEX_AGENT_SANDBOX)) {
+      const file = path.join(agentsDir, `${name}.md`);
+      if (!fs.existsSync(file)) continue; // map may reference retired agents
+      const content = fs.readFileSync(file, 'utf8');
+      assertMapMatchesContract(name, mode, content);
+      checked++;
+    }
+    // A `continue`-heavy loop that silently checks nothing would restore the
+    // vacuous pass by a different route.
+    assert.ok(checked > 0, 'no map entry was actually checked against a contract');
+  });
+
+  test('#2540 review: the map/contract parity check can actually fail', () => {
+    // Guards the invariant above against regressing to a tautology by calling
+    // the SAME helper the loop calls (not a re-implementation of its formula,
+    // which would drift from the production path) with a deliberately
+    // contradictory map entry, in both directions.
+    const readOnly = fs.readFileSync(path.join(agentsDir, 'gsd-plan-checker.md'), 'utf8');
+    assert.strictEqual(requiresWrite(readOnly), false, 'fixture must declare no write tools');
+    assert.throws(
+      () => assertMapMatchesContract('gsd-plan-checker', 'workspace-write', readOnly),
+      /workspace-write/,
+      'an OVER-privileged map entry must fail parity, not pass silently'
+    );
+
+    const writeCapable = fs.readFileSync(path.join(agentsDir, 'gsd-executor.md'), 'utf8');
+    assert.strictEqual(requiresWrite(writeCapable), true, 'fixture must declare write tools');
+    assert.throws(
+      () => assertMapMatchesContract('gsd-executor', 'read-only', writeCapable),
+      /read-only/,
+      'an UNDER-privileged map entry must fail parity'
+    );
   });
 });
 
@@ -8933,3 +9171,105 @@ describe('bug-2866: stripStaleGsdHookBlocks handles end-of-file without trailing
 });
   });
 }
+
+// ---------------------------------------------------------------------------
+// #2540 review — property tests for the tools-contract parser.
+//
+// The oracle test above compares parseToolsContract against js-yaml over every
+// real agents/*.md. That is a strong regression guard but example-based: 34
+// fixed files reach only the shapes those files happen to use. This parser now
+// decides whether an agent is generated with a write-capable Codex sandbox, so
+// the security-relevant invariant — "a write tool anywhere in any shape is
+// detected" — is worth exploring across generated input.
+// ---------------------------------------------------------------------------
+describe('#2540 parseToolsContract — properties', () => {
+  const { parseToolsContract, toolsRequireWrite } = require(path.join(
+    __dirname, '..', 'gsd-core', 'bin', 'lib', 'agent-tools-contract.cjs',
+  ));
+
+  const WRITE = ['Write', 'Edit', 'NotebookEdit'];
+  const READ = ['Read', 'Glob', 'Grep', 'Bash', 'WebFetch', 'mcp__context7__query-docs'];
+  const anyTool = fc.constantFrom(...WRITE, ...READ);
+  // Non-empty, duplicate-free list so round-trip equality is well defined.
+  const toolList = fc
+    .uniqueArray(anyTool, { minLength: 1, maxLength: 8 })
+    .filter(a => a.length > 0);
+
+  // The three real YAML shapes the parser must treat identically.
+  const renderers = {
+    inline: tools => `---\nname: x\ntools: ${tools.join(', ')}\n---\nbody`,
+    block: tools => `---\nname: x\ntools:\n${tools.map(t => `  - ${t}`).join('\n')}\n---\nbody`,
+    flow: tools => `---\nname: x\ntools: [${tools.join(', ')}]\n---\nbody`,
+  };
+
+  for (const [shape, render] of Object.entries(renderers)) {
+    test(`round-trips every generated list in the ${shape} shape`, () => {
+      fc.assert(
+        fc.property(toolList, tools => {
+          assert.deepEqual(parseToolsContract(render(tools)), tools);
+        }),
+        { numRuns: 200 },
+      );
+    });
+
+    test(`detects a write tool in the ${shape} shape regardless of position`, () => {
+      fc.assert(
+        fc.property(
+          fc.uniqueArray(fc.constantFrom(...READ), { minLength: 0, maxLength: 5 }),
+          fc.constantFrom(...WRITE),
+          fc.nat(),
+          (reads, writeTool, at) => {
+            const tools = [...reads];
+            tools.splice(at % (tools.length + 1), 0, writeTool);
+            assert.equal(
+              toolsRequireWrite(parseToolsContract(render(tools))), true,
+              `${shape}: write tool ${writeTool} at index ${at % tools.length} must force workspace-write`,
+            );
+          },
+        ),
+        { numRuns: 200 },
+      );
+    });
+
+    test(`a read-only contract never claims write in the ${shape} shape`, () => {
+      fc.assert(
+        fc.property(
+          fc.uniqueArray(fc.constantFrom(...READ), { minLength: 1, maxLength: 6 }),
+          reads => {
+            assert.equal(toolsRequireWrite(parseToolsContract(render(reads))), false);
+          },
+        ),
+        { numRuns: 200 },
+      );
+    });
+  }
+
+  test('a trailing YAML comment never changes the parsed contract', () => {
+    fc.assert(
+      fc.property(toolList, fc.string(), (tools, comment) => {
+        const clean = comment.replace(/[\r\n]/g, ' ');
+        const withComment = `---\nname: x\ntools: ${tools.join(', ')}  # ${clean}\n---\nbody`;
+        assert.deepEqual(parseToolsContract(withComment), tools);
+      }),
+      { numRuns: 200 },
+    );
+  });
+
+  test('never throws and always returns string[] on arbitrary input', () => {
+    fc.assert(
+      fc.property(fc.string(), src => {
+        const out = parseToolsContract(src);
+        assert.ok(Array.isArray(out), 'must return an array');
+        assert.ok(out.every(t => typeof t === 'string'), 'entries must be strings');
+      }),
+      { numRuns: 300 },
+    );
+  });
+
+  test('fail-closed: no contract yields no write requirement', () => {
+    for (const src of ['', '---\nname: x\n---\nbody', 'no frontmatter at all']) {
+      assert.deepEqual(parseToolsContract(src), []);
+      assert.equal(toolsRequireWrite(parseToolsContract(src)), false);
+    }
+  });
+});
