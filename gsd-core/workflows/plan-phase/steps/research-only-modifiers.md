@@ -1,3 +1,5 @@
+Apply response_language to all user-facing prose; preserve code, paths, and identifiers.
+
 ### 5.0. Research-Only Modifiers (`--view`, `--research`)
 
 **Skip if:** `RESEARCH_ONLY` is `false`.

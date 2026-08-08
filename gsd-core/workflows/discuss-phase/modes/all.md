@@ -1,3 +1,5 @@
+Apply response_language to all user-facing prose; preserve code, paths, and identifiers.
+
 # --all mode — auto-select ALL gray areas, discuss interactively
 
 > **Lazy-loaded.** Read this file from `workflows/discuss-phase.md` when

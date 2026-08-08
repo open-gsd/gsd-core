@@ -1,3 +1,5 @@
+Apply response_language to all user-facing prose; preserve code, paths, and identifiers.
+
 # --power mode — bulk question generation, async answering
 
 > **Lazy-loaded.** Read this file from `workflows/discuss-phase.md` when

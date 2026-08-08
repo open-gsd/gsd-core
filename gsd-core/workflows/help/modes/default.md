@@ -1,3 +1,5 @@
+Apply response_language to all user-facing prose; preserve code, paths, and identifiers.
+
 <purpose>
 One-page newcomer-oriented tour of GSD Core. Output ONLY the `<reference>` content below. No additions.
 </purpose>

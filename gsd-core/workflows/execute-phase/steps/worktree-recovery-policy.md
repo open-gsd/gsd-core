@@ -1,3 +1,5 @@
+Apply response_language to all user-facing prose; preserve code, paths, and identifiers.
+
 # Worktree Recovery Policy
 
 ## ORCHESTRATOR FAIL-CLOSED RULE (#48)

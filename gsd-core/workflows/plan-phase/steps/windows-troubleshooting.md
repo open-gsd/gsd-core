@@ -1,3 +1,5 @@
+Apply response_language to all user-facing prose; preserve code, paths, and identifiers.
+
 # Windows Troubleshooting
 
 **Windows users:** If plan-phase freezes during agent spawning (common on Windows due to

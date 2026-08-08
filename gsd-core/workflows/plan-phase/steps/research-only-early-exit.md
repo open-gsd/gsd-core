@@ -1,3 +1,5 @@
+Apply response_language to all user-facing prose; preserve code, paths, and identifiers.
+
 ### Research-Only Early Exit (`--research-phase`)
 
 **Skip if:** `RESEARCH_ONLY` is `false` (the default).

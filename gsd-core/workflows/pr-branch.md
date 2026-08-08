@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 <purpose>
 Create a clean branch for pull requests by filtering out transient .planning/ commits.
 The PR branch contains only code changes and structural planning state — reviewers

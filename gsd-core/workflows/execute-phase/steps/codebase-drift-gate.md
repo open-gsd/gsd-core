@@ -1,3 +1,5 @@
+Apply response_language to all user-facing prose; preserve code, paths, and identifiers.
+
 # Step: codebase_drift_gate
 
 Post-execution structural drift detection (#2003). Runs after the last wave

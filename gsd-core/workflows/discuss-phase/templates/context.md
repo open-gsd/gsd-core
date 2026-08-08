@@ -1,3 +1,5 @@
+Apply response_language to all user-facing prose; preserve code, paths, and identifiers.
+
 # CONTEXT.md template — for discuss-phase write_context step
 
 > **Lazy-loaded.** Read this file only inside the `write_context` step of

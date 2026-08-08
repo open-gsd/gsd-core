@@ -1,3 +1,5 @@
+Apply response_language to all user-facing prose; preserve code, paths, and identifiers.
+
 # --batch mode — grouped question batches
 
 > **Lazy-loaded overlay.** Read this file from `workflows/discuss-phase.md`
