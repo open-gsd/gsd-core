@@ -1428,6 +1428,39 @@ function parseProseLastActivityField(value: string | null): { date: string | nul
   };
 }
 
+function resolveStatePhase(
+  fmScalar: (key: string) => string | null,
+  body: string
+): {
+  phase: string | null;
+  name: string | null;
+  sources: {
+    frontmatter: string | null;
+    legacy_current_phase: string | null;
+    current_position_phase: string | null;
+  };
+} {
+  const currentPositionScope = matchCurrentPositionSection(body) ?? body;
+  const frontmatterRaw = fmScalar('current_phase');
+  const legacyRaw = stateExtractField(currentPositionScope, 'Current Phase');
+  const currentPositionRaw = stateExtractField(currentPositionScope, 'Phase');
+
+  const sources = {
+    frontmatter: parseProsePhaseField(frontmatterRaw).phase,
+    legacy_current_phase: parseProsePhaseField(legacyRaw).phase,
+    current_position_phase: parseProsePhaseField(currentPositionRaw).phase,
+  };
+
+  const prosePhase = parseProsePhaseField(currentPositionRaw);
+  const phase = sources.frontmatter ?? sources.legacy_current_phase ?? sources.current_position_phase;
+
+  const frontmatterName = fmScalar('current_phase_name');
+  const legacyName = stateExtractField(currentPositionScope, 'Current Phase Name');
+  const name = frontmatterName ?? legacyName ?? prosePhase.name;
+
+  return { phase, name, sources };
+}
+
 function cmdStateSnapshot(cwd: string, raw: boolean): void {
   const statePath = planningPaths(cwd).state;
 
@@ -1467,9 +1500,9 @@ function cmdStateSnapshot(cwd: string, raw: boolean): void {
   // full-body search only when no ## Current Position section exists, so files
   // with no section heading keep their current behaviour.
   const currentPositionScope = matchCurrentPositionSection(body) ?? body;
-  const prosePhase = parseProsePhaseField(stateExtractField(currentPositionScope, 'Phase'));
-  const currentPhase = fmScalar('current_phase') ?? stateExtractField(body, 'Current Phase') ?? prosePhase.phase;
-  const currentPhaseName = fmScalar('current_phase_name') ?? stateExtractField(body, 'Current Phase Name') ?? prosePhase.name;
+  const resolvedPhase = resolveStatePhase(fmScalar, body);
+  const currentPhase = resolvedPhase.phase;
+  const currentPhaseName = resolvedPhase.name;
   const totalPhasesRaw = fmScalar('total_phases') ?? stateExtractField(body, 'Total Phases');
   const currentPlan = fmScalar('current_plan') ?? stateExtractField(body, 'Current Plan');
   const totalPlansRaw = fmScalar('total_plans_in_phase') ?? stateExtractField(body, 'Total Plans in Phase');
@@ -2816,18 +2849,9 @@ function cmdStateValidate(cwd: string, raw: boolean): void {
     return null;
   };
 
-  const frontmatterRaw = fmScalar('current_phase');
-  const legacyRaw = stateExtractField(body, 'Current Phase');
-  const currentPositionScope = matchCurrentPositionSection(body) ?? body;
-  const currentPositionRaw = stateExtractField(currentPositionScope, 'Phase');
-  const phaseSources = {
-    frontmatter: parseProsePhaseField(frontmatterRaw).phase,
-    legacy_current_phase: parseProsePhaseField(legacyRaw).phase,
-    current_position_phase: parseProsePhaseField(currentPositionRaw).phase,
-  };
-  const currentPhase = phaseSources.frontmatter
-    ?? phaseSources.legacy_current_phase
-    ?? phaseSources.current_position_phase;
+  const resolvedPhase = resolveStatePhase(fmScalar, body);
+  const phaseSources = resolvedPhase.sources;
+  const currentPhase = resolvedPhase.phase;
 
   if (currentPhase === null) {
     warnings.push(
