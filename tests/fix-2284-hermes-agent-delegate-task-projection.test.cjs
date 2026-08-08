@@ -126,6 +126,44 @@ describe('#2284 convertClaudeToHermesMarkdown / projectNamedDispatchToStructural
     assert.ok(!/\bmodel=/.test(out), 'no model= parameter forwarded anywhere in the projected call');
   });
 
+  test('projects the LIVE execute-phase.md "Model resolution:" prose — guards modelResolutionRe against drift (#2683 M4)', () => {
+    // modelResolutionRe (bin/install.js) is a verbatim transcription of the
+    // "**Model resolution:**" paragraph in gsd-core/workflows/execute-phase.md,
+    // model-name examples and all. If that prose changes (e.g. a future opus
+    // bump) without the regex being updated in lockstep, `converted.replace()`
+    // silently no-ops and the Hermes install ships Claude-shaped `Agent()` /
+    // `model=` model-resolution prose verbatim. Drive the REAL prose (not a
+    // fixture) through the projection so drift fails CI here.
+    const executePhase = fs.readFileSync(
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md'),
+      'utf8',
+    );
+    const modelLine = executePhase.split(/\r?\n/).find((l) => l.startsWith('**Model resolution:**'));
+    assert.ok(modelLine, 'execute-phase.md must carry a "**Model resolution:**" paragraph — the regex source of truth');
+    // The prose still has the Claude-shaped inherit/Agent() shape modelResolutionRe targets.
+    assert.match(
+      modelLine,
+      /omit the `model=` parameter from all `Agent\(\)` calls/,
+      'the transcribed prose shape changed — update modelResolutionRe in bin/install.js to match execute-phase.md',
+    );
+
+    const out = convertClaudeToHermesMarkdown(modelLine, { runtime: 'hermes' });
+
+    // The projection must have FIRED — the regex matched the live prose.
+    assert.match(
+      out,
+      /`delegate_task` has no per-call model-selection parameter/,
+      'modelResolutionRe did not match the live execute-phase.md prose — the regex and the workflow have ' +
+        'drifted, so the Hermes install silently leaks Claude-shaped model-resolution prose (#2683 M4).',
+    );
+    // The Claude-shaped original (Agent() + its claude-*-5 model examples) must be gone, not shipped verbatim.
+    assert.doesNotMatch(out, /Agent\(\)/, 'no Claude Agent() mention survives the model-resolution rewrite');
+    assert.ok(
+      !out.includes('claude-opus-5') && !out.includes('claude-sonnet-5'),
+      'the Claude-shaped model-name examples must be replaced by the delegate_task statement, not shipped to Hermes',
+    );
+  });
+
   test('the "Agent tool IS available" assertion becomes an accurate delegate_task statement', () => {
     const out = convertClaudeToHermesMarkdown(FIXTURE_ASSERTION_AND_CALL, { runtime: 'hermes' });
     assert.ok(!/Agent tool IS available/.test(out), 'false Claude-shaped assertion removed');

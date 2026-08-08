@@ -17,6 +17,38 @@ const CONFIG_DOC = fs.readFileSync(path.join(ROOT, 'docs', 'CONFIGURATION.md'), 
 const catalogPath = path.join(ROOT, 'gsd-core', 'bin', 'shared', 'model-catalog.json');
 const CATALOG_RAW = fs.readFileSync(catalogPath, 'utf8');
 
+// The ID this PR (#2683) supersedes on the claude opus tier. It must survive
+// only in the providerPresets `medium` rung, never in a runtime-defaults row.
+const SUPERSEDED_OPUS_ID = 'claude-opus-4-8';
+
+// Pull the single markdown row whose first backtick-wrapped cell is `${runtime}`
+// from the runtime-defaults table, located by its `anchor` heading (the doc has
+// other `| `claude` |`-shaped rows, e.g. the effort table). Anchored at line
+// start so a `anthropic/claude-...` model cell can never be mistaken for a
+// runtime cell.
+function runtimeRow(doc, anchor, runtime) {
+  const start = doc.indexOf(anchor);
+  if (start < 0) return null;
+  const region = doc.slice(start);
+  const re = new RegExp('^\\|\\s*`' + runtime + '`\\s*\\|.*$', 'm');
+  const m = region.match(re);
+  return m ? m[0] : null;
+}
+
+// Backtick-wrapped tokens in row order: [runtime, opus, sonnet, haiku, ...effort].
+function backtickCells(row) {
+  return [...row.matchAll(/`([^`]+)`/g)].map(x => x[1]);
+}
+
+// Pull the three tier cells (opus|sonnet|haiku, in that column order) from the
+// providerPresets budget-tier table for a given (provider, budget) row.
+function budgetRowCells(doc, provider, budget) {
+  const re = new RegExp('^\\|\\s*' + provider + '\\s*\\|\\s*' + budget + '\\s*\\|(.+)$', 'm');
+  const m = doc.match(re);
+  if (!m) return null;
+  return m[1].split('|').map(s => s.trim()).filter(Boolean);
+}
+
 describe('model catalog runtime defaults parity (#3229)', () => {
   test('known runtimes include hermes and match catalog keys', () => {
     assert.ok(KNOWN_RUNTIMES.has('hermes'));
@@ -28,31 +60,62 @@ describe('model catalog runtime defaults parity (#3229)', () => {
     assert.deepStrictEqual([...allRuntimes].sort(), [...KNOWN_RUNTIMES].sort());
   });
 
-  test('settings-advanced runtime defaults table matches catalog for concrete runtimes', () => {
-    for (const [runtime, tiers] of Object.entries(catalog.runtimeTierDefaults)) {
-      if (!tiers.opus) continue; // Group B runtimes intentionally have no built-ins
-      assert.ok(SETTINGS_ADVANCED.includes(`| \`${runtime}\``), `settings-advanced.md missing ${runtime} row`);
-      for (const alias of ['opus', 'sonnet', 'haiku']) {
-        const entry = tiers[alias];
-        assert.ok(entry?.model, `${runtime}.${alias} missing model in catalog`);
+  // Row-exact, not whole-file substring: the earlier `includes(model)` guard
+  // passed as long as an ID appeared ANYWHERE in the doc, so it could not catch
+  // a half-swept table or a stale ID left in the wrong runtime's row.
+  const RUNTIME_TABLES = [
+    ['settings-advanced.md', SETTINGS_ADVANCED, 'Built-in tier defaults by runtime:'],
+    ['CONFIGURATION.md', CONFIG_DOC, 'Built-in tier maps:'],
+  ];
+  for (const [docName, DOC, anchor] of RUNTIME_TABLES) {
+    test(`${docName} runtime defaults table row-matches catalog exactly`, () => {
+      for (const [runtime, tiers] of Object.entries(catalog.runtimeTierDefaults)) {
+        if (!tiers.opus) continue; // Group B runtimes intentionally have no built-ins
+        const row = runtimeRow(DOC, anchor, runtime);
+        assert.ok(row, `${docName} missing ${runtime} row`);
+        const cells = backtickCells(row);
+        assert.equal(cells[0], runtime, `${docName} ${runtime} row: first cell must be the runtime name`);
+        const aliases = ['opus', 'sonnet', 'haiku'];
+        aliases.forEach((alias, i) => {
+          const entry = tiers[alias];
+          assert.ok(entry?.model, `${runtime}.${alias} missing model in catalog`);
+          assert.equal(
+            cells[i + 1],
+            entry.model,
+            `${docName} ${runtime}.${alias} cell must equal catalog (${entry.model})`,
+          );
+        });
         assert.ok(
-          SETTINGS_ADVANCED.includes(`\`${entry.model}\``),
-          `settings-advanced.md missing ${runtime}.${alias} model ${entry.model}`,
+          !row.includes(SUPERSEDED_OPUS_ID),
+          `${docName} ${runtime} row must not carry the superseded ${SUPERSEDED_OPUS_ID}`,
         );
       }
-    }
-  });
+    });
+  }
 
-  test('CONFIGURATION runtime defaults table matches catalog for concrete runtimes', () => {
-    for (const [runtime, tiers] of Object.entries(catalog.runtimeTierDefaults)) {
-      if (!tiers.opus) continue;
-      assert.ok(CONFIG_DOC.includes(`| \`${runtime}\``), `CONFIGURATION.md missing ${runtime} row`);
-      for (const alias of ['opus', 'sonnet', 'haiku']) {
-        const entry = tiers[alias];
-        assert.ok(
-          CONFIG_DOC.includes(`\`${entry.model}\``),
-          `CONFIGURATION.md missing ${runtime}.${alias} model ${entry.model}`,
-        );
+  // The guard that would have caught M2: every providerPresets cell (each
+  // provider x budget x tier) must equal the budget-tier table in
+  // settings-advanced.md. Table columns high|medium|low map to tiers
+  // opus|sonnet|haiku in that order.
+  test('providerPresets budget-tier table in settings-advanced matches catalog exactly (#2683)', () => {
+    const tierByColumn = ['opus', 'sonnet', 'haiku'];
+    for (const [provider, tierMap] of Object.entries(catalog.providerPresets)) {
+      // Skip fully-null providers (e.g. `generic`) — no concrete row to check.
+      const hasConcrete = Object.values(tierMap)
+        .some(byBudget => Object.values(byBudget).some(v => v && v.model));
+      if (!hasConcrete) continue;
+      for (const budget of ['high', 'medium', 'low']) {
+        const cells = budgetRowCells(SETTINGS_ADVANCED, provider, budget);
+        assert.ok(cells, `settings-advanced.md missing "${provider} | ${budget}" budget row`);
+        assert.equal(cells.length, 3, `"${provider} | ${budget}" row must have 3 tier cells, got ${cells.length}`);
+        tierByColumn.forEach((tier, i) => {
+          const expected = tierMap[tier][budget].model;
+          assert.equal(
+            cells[i],
+            expected,
+            `"${provider} | ${budget}" ${tier} cell (column ${i + 1}) must equal catalog (${expected})`,
+          );
+        });
       }
     }
   });

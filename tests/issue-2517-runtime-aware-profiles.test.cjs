@@ -96,7 +96,7 @@ describe('issue #2517: backwards compat — no runtime key set', () => {
 
   test('resolve_model_ids:true still maps alias -> full Claude ID with no runtime', () => {
     writeConfig(tmpDir, { model_profile: 'balanced', resolve_model_ids: true });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'claude-opus-4-8');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'claude-opus-5');
   });
 
   test('resolve_model_ids:"omit" still returns "" with no runtime', () => {
@@ -150,7 +150,7 @@ describe('issue #2517: runtime "claude" is a no-op for resolution (finding #4)',
       model_profile: 'quality',
       resolve_model_ids: true,
     });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'claude-opus-4-8');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'claude-opus-5');
   });
 
   test('effort is first-class on Claude (emits output_config.effort)', () => {
@@ -637,7 +637,7 @@ describe('issue #2517: RUNTIME_PROFILE_MAP single source of truth (finding #16)'
     const codexOpus = RUNTIME_PROFILE_MAP.codex?.opus;
     assert.deepStrictEqual(codexOpus, { model: 'gpt-5.6-sol', reasoning_effort: 'xhigh' });
     const claudeOpus = RUNTIME_PROFILE_MAP.claude?.opus;
-    assert.deepStrictEqual(claudeOpus, { model: 'claude-opus-4-8' });
+    assert.deepStrictEqual(claudeOpus, { model: 'claude-opus-5' });
   });
 });
 
@@ -680,9 +680,9 @@ describe('issue #2612: runtime "opencode" — OpenCode tier resolution', () => {
   beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
-  test('opus tier -> anthropic/claude-opus-4-8', () => {
+  test('opus tier -> anthropic/claude-opus-5', () => {
     writeConfig(tmpDir, { runtime: 'opencode', model_profile: 'quality' });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'anthropic/claude-opus-4-8');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'anthropic/claude-opus-5');
   });
 
   test('sonnet tier -> anthropic/claude-sonnet-5', () => {
@@ -710,9 +710,9 @@ describe('issue #2093: runtime "kilo" — Kilo tier resolution', () => {
   beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
-  test('opus tier -> anthropic/claude-opus-4-8', () => {
+  test('opus tier -> anthropic/claude-opus-5', () => {
     writeConfig(tmpDir, { runtime: 'kilo', model_profile: 'quality' });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'anthropic/claude-opus-4-8');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'anthropic/claude-opus-5');
   });
 
   test('sonnet tier -> anthropic/claude-sonnet-5', () => {
@@ -738,9 +738,9 @@ describe('issue #2612: runtime "copilot" — Copilot tier resolution', () => {
   beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
-  test('opus tier -> claude-opus-4-8', () => {
+  test('opus tier -> claude-opus-5', () => {
     writeConfig(tmpDir, { runtime: 'copilot', model_profile: 'quality' });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'claude-opus-4-8');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'claude-opus-5');
   });
 
   test('sonnet tier -> claude-sonnet-5', () => {
@@ -836,7 +836,7 @@ describe('issue #2612: partial override merge for new Group A runtimes', () => {
       },
     });
     // gsd-planner balanced -> opus -> built-in default
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'anthropic/claude-opus-4-8');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'anthropic/claude-opus-5');
     // gsd-roadmapper balanced -> sonnet -> overridden
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-roadmapper'), 'anthropic/claude-sonnet-4-7');
     // gsd-codebase-mapper balanced -> haiku -> built-in default (haiku not overridden)
@@ -867,7 +867,7 @@ describe('issue #2612: partial override merge for new Group A runtimes', () => {
       },
     });
     // gsd-planner balanced -> opus -> built-in default
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'anthropic/claude-opus-4-8');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'anthropic/claude-opus-5');
     // gsd-roadmapper balanced -> sonnet -> overridden
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-roadmapper'), 'anthropic/claude-sonnet-4-7');
     // gsd-codebase-mapper balanced -> haiku -> built-in default (haiku not overridden)

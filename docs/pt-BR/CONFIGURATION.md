@@ -1126,7 +1126,7 @@ A intenção é a mesma que os níveis de perfil do Claude -- use um modelo mais
 | Valor | Comportamento | Use Quando |
 |-------|----------|----------|
 | `false` (padrão) | Retorna aliases Claude (`opus`, `sonnet`, `haiku`) | Claude Code com API Anthropic nativa |
-| `true` | Mapeia aliases para IDs completos de modelo Claude (`claude-opus-4-8`) | Claude Code com API que requer IDs completos |
+| `true` | Mapeia aliases para IDs completos de modelo Claude (`claude-opus-5`) | Claude Code com API que requer IDs completos |
 | `"omit"` | Retorna string vazia (runtime escolhe seu padrão) | Runtimes não-Claude (Codex, OpenCode, Gemini CLI, Kilo) |
 
 ### Perfis com Reconhecimento de Runtime (#2517)
@@ -1139,14 +1139,16 @@ A saída JSON de `resolve-model` inclui `reasoning_effort` quando o nível de ru
 
 | Runtime | `opus` | `sonnet` | `haiku` | reasoning_effort |
 |---------|--------|----------|---------|------------------|
-| `claude` | `claude-opus-4-8` | `claude-sonnet-5` | `claude-haiku-4-5` | (não usado) |
+| `claude` | `claude-opus-5` | `claude-sonnet-5` | `claude-haiku-4-5` | (não usado) |
 | `codex` | `gpt-5.6-sol` | `gpt-5.6-terra` | `gpt-5.6-luna` | `xhigh` / `medium` / `medium` |
 | `gemini` | `gemini-3-pro` | `gemini-3-flash` | `gemini-2.5-flash-lite` | (não usado) |
 | `qwen` | `qwen3-max-2026-01-23` | `qwen3-coder-plus` | `qwen3-coder-next` | (não usado) |
-| `opencode` | `anthropic/claude-opus-4-8` | `anthropic/claude-sonnet-5` | `anthropic/claude-haiku-4-5` | (não usado) |
-| `copilot` | `claude-opus-4-8` | `claude-sonnet-5` | `claude-haiku-4-5` | (não usado) |
-| `hermes` | `anthropic/claude-opus-4-8` | `anthropic/claude-sonnet-5` | `anthropic/claude-haiku-4-5` | (não usado) |
-| Grupo B (`kilo`, `cline`, `cursor`, `windsurf`, `augment`, `trae`, `codebuddy`, `antigravity`) | (sem padrão integrado — seu runtime trata da seleção de modelo) | | | |
+| `opencode` | `anthropic/claude-opus-5` | `anthropic/claude-sonnet-5` | `anthropic/claude-haiku-4-5` | (não usado) |
+| `copilot` | `claude-opus-5` | `claude-sonnet-5` | `claude-haiku-4-5` | (não usado) |
+| `hermes` | `anthropic/claude-opus-5` | `anthropic/claude-sonnet-5` | `anthropic/claude-haiku-4-5` | (não usado) |
+| `kilo` | `anthropic/claude-opus-5` | `anthropic/claude-sonnet-5` | `anthropic/claude-haiku-4-5` | (não usado) |
+| `pi` | `claude-opus-5` | `claude-sonnet-5` | `claude-haiku-4-5` | (não usado) |
+| Grupo B (`cline`, `cursor`, `windsurf`, `augment`, `trae`, `codebuddy`, `antigravity`) | (sem padrão integrado — seu runtime trata da seleção de modelo) | | | |
 
 **Exemplo Codex** — uma configuração, modelos em nível, sem bloco grande de `model_overrides`:
 

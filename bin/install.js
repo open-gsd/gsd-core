@@ -3740,7 +3740,7 @@ function projectNamedDispatchToStructuralDelegate(content, dispatch, toolConfig)
   //    examples (not live call sites) — only rewritten when the target
   //    primitive has no per-call model parameter at all.
   if (!toolConfig.supportsPerCallModel) {
-    const modelResolutionRe = /\*\*Model resolution:\*\* If `executor_model` is `"inherit"`, omit the `model=` parameter from all `Agent\(\)` calls — do NOT pass `model="inherit"` to Agent\. Omitting the `model=` parameter causes [^.]+\. Only set `model=` when `executor_model` is an explicit model name \(e\.g\., `"claude-sonnet-5"`, `"claude-opus-4-8"`\)\./;
+    const modelResolutionRe = /\*\*Model resolution:\*\* If `executor_model` is `"inherit"`, omit the `model=` parameter from all `Agent\(\)` calls — do NOT pass `model="inherit"` to Agent\. Omitting the `model=` parameter causes [^.]+\. Only set `model=` when `executor_model` is an explicit model name \(e\.g\., `"claude-sonnet-5"`, `"claude-opus-5"`\)\./;
     converted = converted.replace(
       modelResolutionRe,
       `**Model resolution:** \`${toolName}\` has no per-call model-selection parameter — every dispatched role ` +

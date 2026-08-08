@@ -298,10 +298,10 @@ describe('#2297: resolve_model_ids:true still materializes full Claude model ids
   beforeEach(() => { isolateHome(); projDir = null; });
   afterEach(() => { rmDir(projDir); restoreHome(); });
 
-  test('resolve_model_ids:true + balanced profile -> full materialized claude-opus-4-8 id', () => {
+  test('resolve_model_ids:true + balanced profile -> full materialized claude-opus-5 id', () => {
     projDir = mkProjWithConfig({ resolve_model_ids: true, model_profile: 'balanced' });
 
-    assert.strictEqual(resolveModelInternal(projDir, 'gsd-planner'), 'claude-opus-4-8');
+    assert.strictEqual(resolveModelInternal(projDir, 'gsd-planner'), 'claude-opus-5');
   });
 });
 

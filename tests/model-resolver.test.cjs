@@ -3015,7 +3015,7 @@ describe('#443 injectEffortFrontmatter: newline-agnostic YAML frontmatter inject
  *       "budget": "high",
  *       "runtime_tiers": {
  *         "opencode": {
- *           "opus": { "model": "anthropic/claude-opus-4-8" }
+ *           "opus": { "model": "anthropic/claude-opus-5" }
  *         }
  *       }
  *     }
@@ -3127,15 +3127,15 @@ describe('#49 resolveModelPolicy Sub-path B: provider presets', () => {
     const result = resolveModelPolicy(policy, 'opus');
     assert.ok(typeof result === 'string' && result.length > 0,
       `expected a non-empty model ID string, got: ${JSON.stringify(result)}`);
-    assert.strictEqual(result, 'claude-opus-4-8',
-      `expected anthropic opus/high to resolve to claude-opus-4-8, got: ${result}`);
+    assert.strictEqual(result, 'claude-opus-5',
+      `expected anthropic opus/high to resolve to claude-opus-5, got: ${result}`);
   });
 
-  test('known provider "anthropic" + tier "sonnet" + budget "high" preserves Opus 4.8 routing', () => {
+  test('known provider "anthropic" + tier "sonnet" + budget "high" preserves opus-tier routing', () => {
     const policy = { provider: 'anthropic', budget: 'high' };
     const result = resolveModelPolicy(policy, 'sonnet');
-    assert.strictEqual(result, 'claude-opus-4-8',
-      `expected anthropic sonnet/high to resolve to claude-opus-4-8, got: ${result}`);
+    assert.strictEqual(result, 'claude-opus-5',
+      `expected anthropic sonnet/high to resolve to claude-opus-5, got: ${result}`);
   });
 
   test('known provider "anthropic-fable" + tier "opus" + budget "high" resolves to Claude Fable 5', () => {
@@ -3314,8 +3314,8 @@ describe('#49 resolveModelInternal: model_policy in the resolution chain', () =>
       'model_policy must fire before model_profile_overrides and win');
     assert.ok(typeof result === 'string' && result.length > 0,
       'must return a non-empty model ID');
-    assert.strictEqual(result, 'claude-opus-4-8',
-      'expected anthropic preset opus/high to resolve to claude-opus-4-8');
+    assert.strictEqual(result, 'claude-opus-5',
+      'expected anthropic preset opus/high to resolve to claude-opus-5');
   });
 
   test('model_policy with provider:"anthropic" + budget:"high" + runtime:"opencode" resolves to preset model', () => {
@@ -3330,8 +3330,8 @@ describe('#49 resolveModelInternal: model_policy in the resolution chain', () =>
     const result = resolveModelInternal(projectDir, 'gsd-planner');
     assert.ok(typeof result === 'string' && result.length > 0,
       'expected a non-empty model ID');
-    assert.strictEqual(result, 'claude-opus-4-8',
-      'anthropic/opus/high must resolve to claude-opus-4-8');
+    assert.strictEqual(result, 'claude-opus-5',
+      'anthropic/opus/high must resolve to claude-opus-5');
   });
 
   test('model_policy with provider:"anthropic-fable" + budget:"high" resolves to Fable preset model', () => {
@@ -3434,10 +3434,10 @@ describe('#49 resolveModelInternal: model_policy in the resolution chain', () =>
       model_policy: {
         provider: 'anthropic',
         budget: 'high',
-        runtime_tiers: { claude: { opus: { model: 'claude-opus-4-8' } } },
+        runtime_tiers: { claude: { opus: { model: 'claude-opus-5' } } },
       },
     });
-    // gsd-planner -> opus tier; runtime_tiers.claude.opus = claude-opus-4-8 ->
+    // gsd-planner -> opus tier; runtime_tiers.claude.opus = claude-opus-5 ->
     // reverse of MODEL_ALIAS_MAP -> "opus" (exercises the non-fable reverse-map path)
     assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'opus');
   });
@@ -3831,10 +3831,10 @@ describe('#2041 model_overrides: Claude full ID → alias on claude runtime', ()
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-executor'), 'sonnet');
   });
 
-  test('model_overrides claude-opus-4-8 → "opus" on runtime:claude', () => {
+  test('model_overrides claude-opus-5 → "opus" on runtime:claude', () => {
     writeConfig(tmpDir, {
       runtime: 'claude',
-      model_overrides: { 'gsd-planner': 'claude-opus-4-8' },
+      model_overrides: { 'gsd-planner': 'claude-opus-5' },
     });
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'opus');
   });
@@ -3920,6 +3920,55 @@ describe('#2041 model_overrides: Claude full ID → alias on claude runtime', ()
     const warnings = writes.filter((w) => w.includes('model_overrides') && w.includes('claude-opus-4-5'));
     assert.strictEqual(warnings.length, 1,
       `expected exactly one override warning, got ${warnings.length}: ${JSON.stringify(writes)}`);
+  });
+
+  // ─── #2683: claude-opus-4-8 became UNMAPPABLE (disclosed breaking change) ───
+  //
+  // The catalog's claude runtime opus tier advanced from claude-opus-4-8 to
+  // claude-opus-5. MODEL_ALIAS_MAP is built from runtimeTierDefaults.claude and
+  // CLAUDE_POLICY_ID_TO_ALIAS is its reverse, so "claude-opus-4-8" left the
+  // alias table. A user still pinning that ID in model_overrides used to get the
+  // "opus" alias back; it now takes mapClaudeOverrideForRuntime's
+  // `override.startsWith('claude-')` branch → warnModelOverrideUnmappable() →
+  // return null → fall through to tier resolution.
+  //
+  // The AC5 cases above use claude-opus-4-5, which was ALREADY unmappable before
+  // #2683, so none of them can witness this change. This case must:
+  //   (a) pick an agent whose balanced tier is NOT opus — gsd-executor → sonnet —
+  //       so the returned value alone discriminates, and
+  //   (b) assert the warning fires, which is the half that a same-tier agent
+  //       would hide.
+  // Against the pre-#2683 catalog both assertions fail: resolveModelInternal
+  // returns 'opus' via the direct alias hit, and no warning is emitted at all.
+  test('#2683 model_overrides claude-opus-4-8 no longer maps to "opus" — warns and falls through on runtime:claude', (t) => {
+    resetRuntimeWarningCaches();
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      model_profile: 'balanced',
+      model_overrides: { 'gsd-executor': 'claude-opus-4-8' },
+    });
+    const writes = [];
+    const original = process.stderr.write.bind(process.stderr);
+    // t.after (Pattern 2, CONTRIBUTING.md) restores stderr even if an assertion
+    // below throws — no try/finally in the test body.
+    t.after(() => { process.stderr.write = original; });
+    process.stderr.write = (chunk) => { writes.push(String(chunk)); return true; };
+    const resolved = resolveModelInternal(tmpDir, 'gsd-executor');
+    // gsd-executor balanced → sonnet tier. Pre-#2683 this returned 'opus'.
+    // This typed value is the primary discriminator; the stderr assertion below
+    // is the only way to witness the SECOND half (that the warning fired).
+    assert.strictEqual(resolved, 'sonnet',
+      `claude-opus-4-8 must fall through to gsd-executor's balanced tier alias, got: ${resolved}`);
+    // No typed surface exists for this warning: warnModelOverrideUnmappable()
+    // returns void and writes to stderr by deliberate design (#2041/#1133 — the
+    // resolve-model JSON result is parsed from stdout, so the warning MUST stay
+    // on stderr). Matching the captured stderr is therefore the legitimate object
+    // of the test; adding a structured warning-capture API is production-code
+    // scope, out of bounds for this catalog bump. Mirrors the pre-existing
+    // dedupe test above.
+    const warnings = writes.filter((w) => w.includes('model_overrides') && w.includes('claude-opus-4-8'));
+    assert.strictEqual(warnings.length, 1,
+      `expected exactly one unmappable-override warning for claude-opus-4-8, got ${warnings.length}: ${JSON.stringify(writes)}`);
   });
 
   // AC6: resolveModelForTier (escalation / --attempt path) maps the same way

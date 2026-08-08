@@ -1095,7 +1095,7 @@ minimal < low < medium < high < xhigh < max
 | 值 | 行为 | 使用场景 |
 |-------|----------|----------|
 | `false`（默认） | 返回 Claude 别名（`opus`、`sonnet`、`haiku`） | 使用原生 Anthropic API 的 Claude Code |
-| `true` | 将别名映射到完整 Claude 模型 ID（`claude-opus-4-8`） | 使用需要完整 ID 的 API 的 Claude Code |
+| `true` | 将别名映射到完整 Claude 模型 ID（`claude-opus-5`） | 使用需要完整 ID 的 API 的 Claude Code |
 | `"omit"` | 返回空字符串（运行时选择其默认值） | 非 Claude 运行时（Codex、OpenCode、Gemini CLI、Kilo） |
 
 ### 运行时感知配置文件（#2517）
@@ -1108,14 +1108,16 @@ minimal < low < medium < high < xhigh < max
 
 | 运行时 | `opus` | `sonnet` | `haiku` | reasoning_effort |
 |---------|--------|----------|---------|------------------|
-| `claude` | `claude-opus-4-8` | `claude-sonnet-5` | `claude-haiku-4-5` | （不使用） |
+| `claude` | `claude-opus-5` | `claude-sonnet-5` | `claude-haiku-4-5` | （不使用） |
 | `codex` | `gpt-5.6-sol` | `gpt-5.6-terra` | `gpt-5.6-luna` | `xhigh` / `medium` / `medium` |
 | `gemini` | `gemini-3-pro` | `gemini-3-flash` | `gemini-2.5-flash-lite` | （不使用） |
 | `qwen` | `qwen3-max-2026-01-23` | `qwen3-coder-plus` | `qwen3-coder-next` | （不使用） |
-| `opencode` | `anthropic/claude-opus-4-8` | `anthropic/claude-sonnet-5` | `anthropic/claude-haiku-4-5` | （不使用） |
-| `copilot` | `claude-opus-4-8` | `claude-sonnet-5` | `claude-haiku-4-5` | （不使用） |
-| `hermes` | `anthropic/claude-opus-4-8` | `anthropic/claude-sonnet-5` | `anthropic/claude-haiku-4-5` | （不使用） |
-| B 组（`kilo`、`cline`、`cursor`、`windsurf`、`augment`、`trae`、`codebuddy`、`antigravity`） | （无内置默认——您的运行时处理模型选择） | | | |
+| `opencode` | `anthropic/claude-opus-5` | `anthropic/claude-sonnet-5` | `anthropic/claude-haiku-4-5` | （不使用） |
+| `copilot` | `claude-opus-5` | `claude-sonnet-5` | `claude-haiku-4-5` | （不使用） |
+| `hermes` | `anthropic/claude-opus-5` | `anthropic/claude-sonnet-5` | `anthropic/claude-haiku-4-5` | （不使用） |
+| `kilo` | `anthropic/claude-opus-5` | `anthropic/claude-sonnet-5` | `anthropic/claude-haiku-4-5` | （不使用） |
+| `pi` | `claude-opus-5` | `claude-sonnet-5` | `claude-haiku-4-5` | （不使用） |
+| B 组（`cline`、`cursor`、`windsurf`、`augment`、`trae`、`codebuddy`、`antigravity`） | （无内置默认——您的运行时处理模型选择） | | | |
 
 **Codex 示例** — 单个配置，分层模型，无大型 `model_overrides` 块：
 

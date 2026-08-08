@@ -331,7 +331,7 @@ GSD が非 Claude ランタイム向けにインストールされると、イ�
 | 値 | 動作 | 使用場面 |
 |----|------|---------|
 | `false`（デフォルト） | Claude エイリアス（`opus`、`sonnet`、`haiku`）を返す | Claude Code + ネイティブ Anthropic API |
-| `true` | エイリアスを完全な Claude モデル ID（`claude-opus-4-8`）にマッピング | 完全な ID が必要な API を使用する Claude Code |
+| `true` | エイリアスを完全な Claude モデル ID（`claude-opus-5`）にマッピング | 完全な ID が必要な API を使用する Claude Code |
 | `"omit"` | 空文字列を返す（ランタイムがデフォルトを選択） | 非 Claude ランタイム（Codex、OpenCode、Gemini CLI、Kilo） |
 
 ### プロファイルの設計思想
