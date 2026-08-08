@@ -29,9 +29,9 @@ Additionally, ADR-1671's `WHEN_VOCABULARY` is **closed**: every growth from 14 t
 
 ## Decision
 
-1. **The applicability atom is a resolved boolean, `state:runtime-evidence-eligible` — never the raw flag.** The probe policy is tri-state (`adaptive` | `force` | `off`); `when=` takes exactly one operator-free atom. Gating on `flag:--runtime-probes` would exclude the protocol section from every *default* invocation, because `adaptive` carries no flag — silently disabling the feature's primary mode. The fact is folded once in `cmdInitDebug`, following the `state:chunked-mode` precedent that a compound resolves in the FACT, never in the grammar.
+1. **The applicability atom is a resolved boolean, `state:runtime-evidence-eligible` — never the raw flag.** `when=` takes exactly one operator-free atom, but policy precedence is explicit flag → **valid saved session policy** → default. A resumed session (`continue <slug>`) that already persisted `policy: adaptive` passes no flag on the resume invocation, so a flag-keyed atom evaluates `false` on exactly the sessions already running the protocol — ADR-1671's silent-exclusion failure arriving through a different door. Only a resolved boolean can see the saved policy. The fact is folded once in `cmdInitDebug` as `policy !== 'off'`, following the `state:chunked-mode` precedent that a compound resolves in the FACT, never in the grammar.
 
-2. **The session gains an immutable `goal` and an optional `Runtime Evidence` section at `schema_version: 1`.** Legacy sessions are read without migration-only rewrites: an absent `goal` means `find_and_fix`; an absent Runtime Evidence section means `adaptive` + `not_used`. A `find_root_cause_only` session never offers or applies a fix and never edits tracked source.
+2. **The session gains an immutable `goal` and an optional `Runtime Evidence` section at `schema_version: 1`.** Legacy sessions are read without migration-only rewrites: an absent `goal` means `find_and_fix`; an absent Runtime Evidence section means `off` + `not_used`. A `find_root_cause_only` session never offers or applies a fix and never edits tracked source.
 
 3. **Every agent-authored source edit is ledgered before it is made, and cleanup is fail-closed.** Paired non-nested markers carrying exact `gsd-debug-probe:start|end <slug> <probe-id>` payloads, plus a pre-edit SHA-256 over the complete raw UTF-8 block including both marker lines and the file's existing line-ending form. Cleanup removes only a complete balanced block whose bytes still match its saved hash; anything else is `cleanup_failed`, and edits outside the owned block are preserved.
 
@@ -43,11 +43,15 @@ Additionally, ADR-1671's `WHEN_VOCABULARY` is **closed**: every growth from 14 t
 
 7. **Nothing is added that must be operated.** No daemon, collector, server, telemetry, network transport, external dependency, hosted service, SDK, or shared application-runtime trace.
 
+8. **The shipped default is `off`; probes are opt-in per invocation.** `--runtime-probes` selects `adaptive`; no flag and `--no-runtime-probes` both select `off`. The `force` policy is retired as unreachable and redundant — once probes are opt-in, "the user asked for probes" and "consider probes where safe" are the same intent, and a policy whose meaning is *bypass the adaptive safety reasoning* should not exist. Every safety precondition still applies to `adaptive`.
+
+   This follows the shipped `workflow` defaults, which split cleanly by kind: verification **gates** default on (`research`, `plan_check`, `verifier`, `nyquist_validation`, `security_enforcement`), agent **autonomy** defaults off (`auto_advance`, `research_before_questions`, `plan_bounce`, `cross_ai_execution`). Installing temporary probes into tracked source without a second confirmation is autonomy, not a gate; `cross_ai_execution: false` is its closest analogue. Defaulting it on would make it the only capability in that block that edits the user's source unasked. #3128's own Alternative 3 offered the choice — *"maintainers can choose a stricter default during approval if desired"* — and it is taken here.
+
 ### Options considered
 
 - **Keep GSD passive-only.** Rejected: static evidence often cannot separate falsifiable hypotheses, so the debugger guesses or delegates instrumentation to the human.
 - **Always install source probes.** Rejected: observer effects, concurrency semantics, dirty worktrees, privacy, and cleanup risk make always-on instrumentation unsafe.
-- **Opt-in probes only (`off` by default).** Safer, and it removes the atom-shape problem entirely by making the flag the fact. Rejected as the default because it discards the adaptive improvement for ordinary deterministic bugs — but it remains one config flip away, and Decision 1 keeps `off` fully supported.
+- **Adaptive by default.** #3128's proposed posture, and rejected: it would let the debugger edit tracked source on an ordinary invocation nobody opted into, against a config block whose autonomy settings are uniformly off. See Decision 8.
 - **Gate on `flag:--runtime-probes`.** Rejected — see Decision 1. It is the ADR-1671:125 silent-exclusion bug reintroduced through the front door.
 - **Put the protocol body in `gsd-core/references/` and `@`-include it.** Rejected on its own terms: an eager include relocates bytes without reducing loaded context, so the size gate passes while the thing it protects gets worse. A reference read *on demand* at activation time remains correct and is used for the deep protocol detail.
 - **Adopt or vendor `millionco/debug-agent`.** Rejected: its package, installation, runtime and logging contracts add an external dependency and do not fit GSD's self-contained, generated multi-runtime prompt architecture. Concepts are adapted; no code is copied.
@@ -63,7 +67,7 @@ Additionally, ADR-1671's `WHEN_VOCABULARY` is **closed**: every growth from 14 t
 |---|---|
 | Grammar | `src/workflow-fragments.cts` — one atom, no operator, no negation, no nesting |
 | Predicate | `src/section-manifest.cts` — `WHEN_PREDICATES['state:runtime-evidence-eligible'] = (facts) => facts.runtimeEvidenceEligible === true`, plus the `InvocationFacts` field |
-| Fact | `src/init.cts` — `cmdInitDebug` folds explicit flag → valid saved session policy → `adaptive` legacy/fail-safe default, then emits `runtime_evidence_eligible = (policy !== 'off')` |
+| Fact | `src/init.cts` — `cmdInitDebug` folds explicit flag → valid saved session policy → `off` default, then emits `runtime_evidence_eligible = (policy !== 'off')` |
 | Flags | `src/init-command-router.cts` — the `debug:` route's `parseNamedArgs` boolean list gains `runtime-probes` and `no-runtime-probes`; conflicting flags fail closed |
 
 A coordinated-change guard in `src/section-manifest.cts` throws at module load in **both** directions, so a half-edit cannot ship. `gsd-core/workflows/section-manifest.json` is regenerated by `scripts/gen-section-manifest.cjs --write` and verified by `--check` in `lint:ci`.
@@ -74,8 +78,8 @@ A coordinated-change guard in `src/section-manifest.cts` throws at module load i
 
 Issue #3128 is the authority for the literal field list. The invariants this ADR locks:
 
-- **Additive and optional.** Absent section ⇒ `adaptive` + `not_used`. Absent `goal` ⇒ `find_and_fix`. No migration-only rewrites of files already on disk in user projects.
-- **Effective policy precedence** is explicit override → valid saved policy → `adaptive`. An invalid saved value stays on disk for inspection while dispatch fails safe to `adaptive`.
+- **Additive and optional.** Absent section ⇒ `off` + `not_used`. Absent `goal` ⇒ `find_and_fix`. No migration-only rewrites of files already on disk in user projects.
+- **Effective policy precedence** is explicit override → valid saved policy → `off`. An invalid saved value stays on disk for inspection while dispatch fails safe to `off` — the fail-safe direction is now the same as the default, so an unreadable policy can never widen behavior.
 - **An override changes only `policy`.** It never resets `state`, `mode`, probes, artifacts, `active_run`, or cleanup data. Switching to `off` still reconciles and cleans an existing non-clean ledger.
 - **Run IDs are allocated write-ahead and never reused.** Read `next_run_seq: N`, persist `active_run.run_id: run-N` with its phase, exact reproduction reference and start time, advance to `N+1`, *then* execute. An interrupted run with no attributable result is appended as `inconclusive` and cleared before another ID is allocated.
 - **Durable state carries only sanitized facts** — counts, hashes, enums, verdicts, references. Raw stdout/stderr, application logs, request/environment data, secrets, credentials, PII and arbitrary runtime values are never persisted or promoted.
@@ -139,7 +143,7 @@ Crossing a tier cap means extracting to `references/`, never a `+N` bump.
 ## Open questions
 
 1. **Does the maintainer permit the contributor's pre-existing prototype to be used as reference?** #3128 discloses a near-complete uncommitted fork-first implementation and makes continuation conditional on an explicit answer. Unanswered as of this ADR; it blocks the contributor, not the design.
-2. **Should `adaptive` or `off` be the shipped default?** This ADR chooses `adaptive` per the approved scope. Decision 1's resolved-boolean atom makes flipping the default a one-line change in fact resolution rather than a grammar change, so the question stays cheap to revisit.
+2. ~~**Should `adaptive` or `off` be the shipped default?**~~ **Resolved: `off`** — see Decision 8. Decided by the maintainer on #3128 after this ADR first merged; recorded here rather than left as an open question, because it is the point an implementer reads first.
 3. **How much of the protocol can the two debug agents carry** before extraction is forced, given they have no lazy-load path? Answerable only against the real diff, and it is a per-PR review gate either way.
 
 ## Related
