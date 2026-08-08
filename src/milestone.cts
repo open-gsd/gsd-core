@@ -29,7 +29,15 @@ import phaseIdMod = require('./phase-id.cjs');
 const { escapeRegex, normalizePhaseName, phaseTokenMatches, PHASE_NUMBER_TOKEN_SOURCE } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
-const { getMilestonePhaseFilter, extractCurrentMilestone, getMilestoneInfo } = roadmapParserMod;
+const {
+  getMilestonePhaseFilter,
+  extractCurrentMilestone,
+  getMilestoneInfo,
+  sliceMilestoneWindow,
+} = roadmapParserMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningScopeMod = require('./planning-scope.cjs');
+const { SCOPE } = planningScopeMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsMod = require('./core-utils.cjs');
 const { extractOneLinerFromBody, countMatchedSummaries } = coreUtilsMod;
@@ -520,17 +528,39 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   const today = realClock.localToday();
   const milestoneName = options.name || version;
 
-  // Ensure archive directory exists (skipped in dry-run — no mutations)
-  if (!options.dryRun) {
-    platformEnsureDir(archiveDir);
-  }
-
   // Scope stats and accomplishments to only the phases belonging to the
   // current milestone's ROADMAP.  Uses the shared filter from roadmap-parser.cjs
   // (same logic used by cmdPhasesList and other callers).
+  // #3184 review finding: this scope computation + refusal MUST run BEFORE
+  // `platformEnsureDir(archiveDir)` below — a refused run (scope not COMPLETE,
+  // no --force) must be a true no-op on disk, and creating the archive
+  // directory first left an empty directory behind even on refusal.
   const isDirInMilestone = getMilestonePhaseFilter(cwd, version);
   if (isDirInMilestone.missingExplicitVersion) {
     error(`no phases found for milestone ${version} in ROADMAP.md`);
+  }
+  // #3184/#3166: `milestone complete` is the ONE-WAY-DOOR consumer of the
+  // milestone window (ROADMAP/REQUIREMENTS archived, phase directories
+  // MOVED). #3166 is specifically the TRUNCATED case: the milestone's
+  // heading IS found but its section closes before the phase region, and the
+  // phase filter degrades to pass-all (see getMilestonePhaseFilter above) —
+  // silently archiving every phase directory on disk. UNREADABLE (no
+  // ROADMAP.md at all) and UNSCOPED (no section for this version) are
+  // pre-existing, legitimately-handled states — `missingExplicitVersion`
+  // above already errors where that matters, and a missing ROADMAP.md has
+  // its own documented graceful path — so only TRUNCATED is refused here.
+  // The read-path consumers keep the pass-all degrade for every scope
+  // (ADR-3180 Decision 3's Rejected section: deny-all there would trade one
+  // silent wrong answer for another); this write path refuses on TRUNCATED
+  // alone, positioned before `platformEnsureDir` so a refusal stays a no-op
+  // on disk.
+  if (isDirInMilestone.scope === SCOPE.TRUNCATED && !options.force) {
+    error(
+      `Cannot mark milestone complete: the ROADMAP window for "${version}" is truncated ` +
+        `(the milestone heading was found but its section ends before reaching any phase ` +
+        `entries, even though the ROADMAP has phase entries elsewhere), so phase scoping ` +
+        `cannot be trusted for this destructive operation. Re-run with --force to override.`,
+    );
   }
 
   // Guard: prevent marking complete when ROADMAP still lists phases that have
@@ -587,7 +617,21 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
       }
 
       const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
-      const scopedContent = extractCurrentMilestone(roadmapContent, cwd);
+      // #3184/#2946: scope the unstarted-phase guard to the same `version`
+      // window `getMilestonePhaseFilter` used above, NOT to
+      // extractCurrentMilestone's own STATE.md-derived window — those two
+      // can disagree (that disagreement is exactly what the WARNING above
+      // detects), and scoping this guard to the wrong window under-detects
+      // unstarted phases on the destructive completion path. Calls the same
+      // sliceMilestoneWindow owner getMilestonePhaseFilter's versionOverride
+      // branch calls (a prior pass here re-composed locate+select+section-end
+      // locally, which review caught as a second, disagreeing derivation of
+      // the same window — ADR-3180 Decision 4(c)); falls back to
+      // extractCurrentMilestone's whole-document result only for the
+      // free-form (no versioned milestones anywhere) shape, where both
+      // windows converge to the same value regardless of which version drove
+      // the lookup.
+      const scopedContent = sliceMilestoneWindow(roadmapContent, version) ?? extractCurrentMilestone(roadmapContent, cwd);
       // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
       const phasePattern = new RegExp(`#{2,4}\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`, 'gi');
       const noDirectoryPhases: string[] = [];
@@ -736,6 +780,14 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
     output(dryRunResult, raw);
     return;
   }
+
+  // Ensure archive directory exists. Deliberately placed AFTER the dry-run
+  // early return and every refusal/guard above (missingExplicitVersion, the
+  // scope refusal, the unstarted-phase guard) — #3184 review finding: this
+  // used to run before those checks, so a refused run still left an empty
+  // archive directory behind. Reaching this point means the run is
+  // committed to mutating.
+  platformEnsureDir(archiveDir);
 
   // Archive ROADMAP.md
   if (fs.existsSync(roadmapPath)) {
