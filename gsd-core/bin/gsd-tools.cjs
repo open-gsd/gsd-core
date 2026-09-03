@@ -2247,6 +2247,50 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     }
   }
 
+  /**
+   * #4222 — re-derive the #683 worktree base-check degrade in-process, the
+   * same way `projectWorktreesOptedOut` re-derives the #3737 opt-out: the
+   * one evaluation `worktree base-check` (a sibling subcommand of this file)
+   * performs, reached through the shared `evaluateWorktreeBaseDegradeForCwd`
+   * so the resolver and the CLI subcommand can never disagree on the fork
+   * base. True only when the evaluation ran and said `shouldDegrade`; a
+   * mode this check does not apply to (`none`), an unbuilt runtime lib, or
+   * any thrown error degrades to false — "no degrade re-derived", which
+   * leaves the workflow's own shell-computed `--force-isolation none` as the
+   * record exactly as before this fix. Never throws.
+   */
+  function baseCheckDegrades(cwd, isolationMode) {
+    try {
+      // #4630 child 1 — the base-check subset is READ FROM THE OWNER, not
+      // re-stated here. Required inside this existing `try`, beside
+      // worktree-base-ref.cjs, so an unbuilt runtime lib takes the same
+      // warn-and-`false` fallback the evaluation itself does; there is
+      // deliberately no catch-side literal, which would be a fresh copy of
+      // the very thing the seam removes.
+      const { isBaseCheckIsolationMode } = require('./lib/dispatch-isolation.cjs');
+      if (!isBaseCheckIsolationMode(isolationMode)) return false;
+      const { evaluateWorktreeBaseDegradeForCwd } = require('./lib/worktree-base-ref.cjs');
+      const evaluation = evaluateWorktreeBaseDegradeForCwd(cwd, isolationMode);
+      // #4734 landed after #4232 closed and flipped the verified
+      // no-git-repository case from `shouldDegrade: false` to `true`. That is
+      // right for the GUARD — a non-git root can never host a harness worktree,
+      // and #4734's own fallback already allows the flag-less dispatch there —
+      // but it is not a BASE CHECK: there is no HEAD to compare against a fork
+      // base, so the resolver has re-derived nothing. Recording it here would
+      // make the resolver the second owner of #4734's decision and would flip
+      // the recorded isolation of every non-git project root. Left to the
+      // guard. `headAbsenceVerified === true` is git's definitive "no
+      // repository" answer (exit 128) and is set by no other outcome; the
+      // indeterminate `head-unresolvable` degrade is deliberately NOT caught
+      // here, because failing closed on an indeterminate answer is #3050's
+      // rule and still applies.
+      if (evaluation.headAbsenceVerified === true) return false;
+      return evaluation.shouldDegrade === true;
+    } catch {
+      return false;
+    }
+  }
+
   function routeDispatchIsolation({ args, cwd, raw, error }) {
     // #2584 Phase 3 (#2627): typed query exposing the negotiated
     // `dispatch.isolation` to the execute-phase wave scheduler, so the
@@ -2339,6 +2383,41 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       exec = null;
     }
 
+    // #4222: the #683 worktree base-check degrade is re-derived HERE for the
+    // RECORDED decision, the way #3737 re-derives the opt-out above. Pre-fix
+    // the degrade was decided only in workflow shell, after this resolve;
+    // the shell recorded it with `--force-isolation none`, and any later
+    // plain re-query (the orchestrator's own `--json` harnessFlag read, a
+    // subagent's gsd_run traffic, a wave transition) re-persisted the host
+    // capability over it — the guard then denied the sequential dispatch
+    // the degrade had mandated. Now every write goes through the same
+    // in-process evaluation the shell's `worktree base-check` runs, so a
+    // plain re-query re-derives `none` instead of overwriting it, and a
+    // fresh run on a repo whose HEAD matches its fork base still records the
+    // natural capability (nothing is sticky: the evaluation reads live git
+    // state on every call).
+    //
+    // Applied to the sentinel ONLY, deliberately NOT to stdout. The
+    // resolver's stdout is the host CAPABILITY the workflow's decision tree
+    // branches on, and every dispatch site fails closed on an unguarded
+    // `none` from it ("this runtime declares no executor-isolation
+    // primitive", exit 1 — executor-isolation-dispatch.md). Returning
+    // `none` here would turn every diverged-HEAD run into that FATAL. The
+    // shell keeps computing its own base-check for the same reasons it did
+    // before (the user-visible divergence message, `USE_WORKTREES`
+    // co-movement, the fail-closed guard's own inputs); what changes is that
+    // the persisted decision the guard reads no longer depends on the shell
+    // re-recording faster than the next plain call. Applied AFTER
+    // --force-isolation, mirroring #3737: the degrade wins over a force,
+    // because the harness would fork the worktree from the diverged base
+    // regardless of what the caller asked for.
+    let recordedIsolation = isolation;
+    let recordedHarnessFlag = harnessFlag;
+    if (recordedIsolation !== 'none' && baseCheckDegrades(cwd, recordedIsolation)) {
+      recordedIsolation = 'none';
+      recordedHarnessFlag = null;
+    }
+
     // #4561: a PLAIN query holds a fresh, in-scope `none` record instead of
     // overwriting it. Three dispatch sites compute a degrade the resolver
     // structurally cannot re-derive — which host tool the caller dispatches
@@ -2380,15 +2459,22 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // "fresh and well-formed" here is byte-for-byte what the guard will
     // honour at dispatch time — a second definition would let the two drift.
     const forcedApplied = Boolean(forcedIsolation && DISPATCH_ISOLATION_VOCABULARY.has(forcedIsolation));
-    const heldDegrade = !forcedApplied && isolation !== 'none'
+    const heldDegrade = !forcedApplied && recordedIsolation !== 'none'
       ? heldDegradeRecord(cwd, { phase: phaseArg, plan: planArg })
       : null;
 
+    // #4630 child 1 — ORDER CONTRACT for the two mechanisms above, which
+    // arrived as separate PRs (#4232 for the re-derivation, #4620 for the
+    // hold). The #4222 re-derivation computes `recordedIsolation` FIRST;
+    // the #4561 hold then gates the write of THAT value, not of the
+    // pre-#4222 `isolation`. So a hold preserves a recorded degrade rather
+    // than the host capability, and a re-derived `none` is written as the
+    // fresh derivation it is instead of being weighed against the record.
     // Side-effect write (#3045 CORE REDESIGN) — see the doc comment above.
     // Never allowed to affect this query's own stdout contract or throw.
     if (heldDegrade === null) {
       try {
-        writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag, phase: phaseArg, plan: planArg });
+        writeDispatchIsolationSentinel(cwd, { isolation: recordedIsolation, harnessFlag: recordedHarnessFlag, phase: phaseArg, plan: planArg, decidedBy: forcedApplied ? 'caller' : 'resolver' });
       } catch {
         // writeDispatchIsolationSentinel already swallows its own errors into
         // a { recorded: false } result; this catch is defense in depth only.
@@ -2866,7 +2952,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * per-plan degrade call site and back-compat/tests) share exactly one
    * write implementation. Never throws — returns `{ recorded, path, error? }`.
    */
-  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null }) {
+  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null, decidedBy = 'caller' }) {
     const nodePath = require('path');
     const nodeFs = require('fs');
     const sentinelDir = nodePath.join(cwd, '.gsd');
@@ -2876,6 +2962,17 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       harness_flag: harnessFlag || null,
       phase: phase || null,
       plan: plan || null,
+      // #4630 ADR Phase 2 — the record states WHO decided, so a re-query can
+      // tell a decision it may re-derive from one it must honour. `resolver`:
+      // derived here from state this resolver reads live on every call (the
+      // #3737 opt-out, the #4222 base check), so a later query re-evaluates it
+      // rather than holding it. `caller`: a `--force-isolation` decision from a
+      // dispatch site that computed a degrade this resolver structurally
+      // cannot reconstruct, so a later plain query must hold it. Defaulted to
+      // `caller` on purpose: holding a degrade that could have been re-derived
+      // costs one sequential run, while clobbering one the caller owns makes
+      // the guard refuse the dispatch and the work does not run at all.
+      decided_by: decidedBy,
       written_at: Date.now(),
     };
     try {
@@ -2981,6 +3078,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     }
     if (!held || !held.present || held.stale || held.malformed) return null;
     if (held.isolation !== 'none') return null;
+    // #4630 ADR Phase 2. Pre-fix this held ANY fresh in-scope `none`, which
+    // made #4222 and #4561 mutually exclusive: the degrade #4222 re-derives is
+    // itself written as a fresh in-scope `none`, so the next plain query held
+    // the resolver's OWN prior answer and #4222's "reads live git state" was
+    // silently untrue. Only a decision this resolver cannot re-derive is held.
+    if (held.decidedBy !== 'caller') return null;
     if (phase !== null && phase !== held.phase) return null;
     if (plan !== null && plan !== held.plan) return null;
     return held;
@@ -3051,7 +3154,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       ? args[planIdx + 1]
       : null;
 
-    const result = writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag, phase, plan });
+    // `record-dispatch-isolation` IS the caller's own decision — the verb the
+    // three unrederivable dispatch sites call. Stated rather than defaulted:
+    // this is the record #4561's hold exists to protect (#4630 ADR Phase 2).
+    const result = writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag, phase, plan, decidedBy: 'caller' });
     output(result, raw);
   }
 

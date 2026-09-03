@@ -53,7 +53,7 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const { runHook: runHookSeam, runGit } = require('./helpers/process-seam.cjs');
 const { toLegacyResult, gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { createTempDir, createTempProject, runGsdTools, cleanup } = require('./helpers.cjs');
+const { createTempDir, createTempProject, createTempGitProject, runGsdTools, cleanup } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 const { SENTINEL_RELATIVE_PATH, SENTINEL_STALE_MS, readSentinel } = require('../hooks/lib/isolation-sentinel.js');
 const { REASON_CODE, REASON_INTERPOLATION_MAX_LEN, sanitizeForReason, describeSentinelDiscard } = require('../hooks/lib/isolation-deny-reason.js');
@@ -1412,6 +1412,241 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
   });
 });
 
+describe('#4222 — the #683 base-check degrade is re-derived by the resolver, so a plain re-query cannot clobber it', () => {
+  // #4222 — the #683 worktree base-check auto-degrade (HEAD diverged from the
+  // fork base the harness forks worktrees from, origin/HEAD) was decided ONLY
+  // in workflow shell, after the resolve, and recorded via
+  // `--force-isolation none`. Unlike the #3737 opt-out, the resolver did not
+  // re-derive it, so any plain re-query — the orchestrator's own `--json`
+  // harnessFlag read, a subagent's gsd_run traffic — re-persisted
+  // `harness-worktree` over the record and the guard then denied the
+  // sequential dispatch the degrade had mandated.
+  //
+  // Real git, real `origin`: a bare repo stands in for the remote so
+  // origin/HEAD resolves the same way the harness's fork base does. No
+  // network, no mocked execGit — the resolver must reach the same evaluation
+  // the `worktree base-check` subcommand runs.
+  function git(args, cwd) {
+    return gitOrThrow(args, { cwd });
+  }
+
+  function writeClaudeConfig(dir) {
+    fs.writeFileSync(
+      path.join(dir, '.planning', 'config.json'),
+      JSON.stringify({ runtime: 'claude', workflow: { use_worktrees: true } }),
+    );
+  }
+
+  /** A git project whose HEAD is pushed to a local bare `origin`, with origin/HEAD set. */
+  function projectWithOrigin(t, prefix) {
+    const dir = createTempGitProject(prefix);
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}origin-`));
+    t.after(() => {
+      cleanup(dir);
+      cleanup(bare);
+    });
+    git(['init', '--bare'], bare);
+    git(['remote', 'add', 'origin', bare], dir);
+    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], dir).trim();
+    git(['push', '-u', 'origin', branch], dir);
+    git(['symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/origin/${branch}`], dir);
+    writeClaudeConfig(dir);
+    return { dir, branch };
+  }
+
+  /** Advance local HEAD one commit past origin/HEAD — the #683 divergence. */
+  function diverge(dir) {
+    fs.appendFileSync(path.join(dir, 'README.md'), 'local divergence\n');
+    git(['add', '-A'], dir);
+    git(['commit', '-m', 'local commit not on origin'], dir);
+    assert.notEqual(
+      git(['rev-parse', 'HEAD'], dir).trim(),
+      git(['rev-parse', 'origin/HEAD'], dir).trim(),
+      'precondition: HEAD must differ from origin/HEAD',
+    );
+  }
+
+  const env = (dir) => ({ GSD_RUNTIME: 'claude', HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude') });
+
+  test('#4222: HEAD == origin/HEAD — a fresh run records the natural harness-worktree capability (nothing is sticky)', (t) => {
+    const { dir } = projectWithOrigin(t, 'gsd-4222-basecheck-');
+
+    const result = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(result.success, true, result.error);
+    assert.equal(result.output.trim(), 'harness-worktree');
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'harness-worktree', 'a non-diverged repo must keep the natural capability');
+    assert.equal(sentinel.harness_flag, 'isolation="worktree"');
+    assert.equal(sentinel.phase, '1');
+  });
+
+  test('#4222: HEAD diverged — a plain re-query records none and does not clobber the forced record', (t) => {
+    const { dir } = projectWithOrigin(t, 'gsd-4222-basecheck-');
+    diverge(dir);
+
+    // The workflow's own re-record step after its shell base-check.
+    const forced = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', '--phase', '1', '--force-isolation', 'none'],
+      dir,
+      env(dir),
+    );
+    assert.equal(forced.success, true, forced.error);
+    assert.equal(forced.output.trim(), 'none');
+    assert.equal(readSentinelRaw(dir).isolation, 'none');
+
+    // The plain re-query that pre-fix flipped the sentinel back to
+    // harness-worktree (#4222 reproduction — the `--json` harnessFlag read).
+    const requery = runGsdTools(['query', 'dispatch-isolation', '--json', '--phase', '1'], dir, env(dir));
+    assert.equal(requery.success, true, requery.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'none', '#4222: a plain re-query must not re-persist the host capability over the base-check degrade');
+    assert.equal(sentinel.harness_flag, null);
+    assert.equal(sentinel.phase, '1');
+  });
+
+  test('#4222: HEAD diverged — stdout still reports the host capability (the shell fail-closed guard depends on it)', (t) => {
+    // The degrade is applied to the RECORDED decision only. Every dispatch
+    // site treats an unguarded `none` on stdout as "this runtime declares no
+    // executor-isolation primitive" and exits 1, so the resolver's stdout
+    // contract must not change — the shell still runs its own base-check
+    // and prints the divergence message from it.
+    const { dir } = projectWithOrigin(t, 'gsd-4222-basecheck-');
+    diverge(dir);
+
+    const raw = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(raw.success, true, raw.error);
+    assert.equal(raw.output.trim(), 'harness-worktree', 'stdout is the capability, not the recorded decision');
+
+    const json = runGsdTools(['query', 'dispatch-isolation', '--json', '--phase', '1'], dir, env(dir));
+    assert.equal(json.success, true, json.error);
+    const parsed = JSON.parse(json.output);
+    assert.equal(parsed.isolation, 'harness-worktree');
+    assert.equal(parsed.harnessFlag, 'isolation="worktree"');
+
+    // ...while the sentinel — the guard's input — carries the degrade from
+    // the very first plain query, with no prior `--force-isolation` record.
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'none');
+    assert.equal(sentinel.harness_flag, null);
+  });
+
+  test('#4222: HEAD diverged — the degrade wins over --force-isolation harness-worktree (mirrors #3737)', (t) => {
+    const { dir } = projectWithOrigin(t, 'gsd-4222-basecheck-');
+    diverge(dir);
+
+    const forced = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', '--phase', '1', '--force-isolation', 'harness-worktree'],
+      dir,
+      env(dir),
+    );
+    assert.equal(forced.success, true, forced.error);
+    assert.equal(forced.output.trim(), 'harness-worktree', 'stdout honours the force');
+    assert.equal(readSentinelRaw(dir).isolation, 'none', 'the harness would still fork from the diverged base — the record must say none');
+  });
+
+  test('#4222: not sticky — once origin/HEAD catches up to HEAD, a plain re-query records harness-worktree again', (t) => {
+    const { dir, branch } = projectWithOrigin(t, 'gsd-4222-basecheck-');
+    diverge(dir);
+
+    const first = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(first.success, true, first.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'none', 'precondition: the diverged run recorded none');
+
+    // Push local HEAD to origin so origin/HEAD == HEAD again.
+    git(['push', 'origin', branch], dir);
+    assert.equal(git(['rev-parse', 'HEAD'], dir).trim(), git(['rev-parse', 'origin/HEAD'], dir).trim());
+
+    const second = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(second.success, true, second.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'harness-worktree', 'the evaluation reads live git state — a prior none must not persist');
+    assert.equal(sentinel.harness_flag, 'isolation="worktree"');
+  });
+
+  test('#4222: the resolved mode is threaded into the evaluation — orchestrator-worktree honours worktree.baseRef:"head" (#3659)', (t) => {
+    // In orchestrator-worktree mode GSD itself creates the worktree from the
+    // orchestrator HEAD, so baseRef "head" legitimately suppresses the
+    // divergence check; in harness-worktree mode it never did (#48). The
+    // resolver must pass the mode it resolved, not default to harness.
+    const { dir } = projectWithOrigin(t, 'gsd-4222-basecheck-');
+    diverge(dir);
+    fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.claude', 'settings.local.json'),
+      JSON.stringify({ worktree: { baseRef: 'head' } }),
+    );
+
+    const codex = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', '--phase', '1'],
+      dir,
+      { ...env(dir), GSD_RUNTIME: 'codex' },
+    );
+    assert.equal(codex.success, true, codex.error);
+    assert.equal(codex.output.trim(), 'orchestrator-worktree', 'precondition: codex resolves to orchestrator-worktree');
+    assert.equal(readSentinelRaw(dir).isolation, 'orchestrator-worktree', 'baseRef "head" suppresses the check where GSD creates the worktree');
+
+    // Since #4588 the Claude Code harness is measured to honour baseRef "head"
+    // too, so with no WorktreeCreate hook the same repo keeps the capability
+    // under harness-worktree (the #48 "harness ignores it" premise is retired).
+    const claude = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(claude.success, true, claude.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'harness-worktree', 'the harness honours baseRef "head" where no WorktreeCreate hook replaces it (#4588)');
+  });
+
+  test('#4630: a WorktreeCreate hook host re-derives the #4881 interlock — the resolver records none and the CLI base-check agrees', (t) => {
+    // #4881: a WorktreeCreate hook replaces the harness's worktree creation, so
+    // baseRef "head" says nothing about the fork base there and the base-check
+    // compares against origin/HEAD. That interlock is derived from settings the
+    // resolver reads on every call, so it belongs to the shared derivation
+    // (evaluateWorktreeBaseDegradeForCwd), not the CLI wrapper: had it stayed in
+    // cmdWorktreeBaseCheck, this repo would degrade on the CLI and record
+    // harness-worktree from the resolver — the disagreement #4222's extraction
+    // exists to rule out.
+    const { dir } = projectWithOrigin(t, 'gsd-4630-hookhost-');
+    diverge(dir);
+    fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.claude', 'settings.local.json'),
+      JSON.stringify({
+        worktree: { baseRef: 'head' },
+        hooks: { WorktreeCreate: [{ hooks: [{ type: 'command', command: 'true' }] }] },
+      }),
+    );
+
+    const cli = runGsdTools(['query', 'worktree.base-check', '--mode', 'harness-worktree', '--pick', 'reason'], dir, env(dir));
+    assert.equal(cli.success, true, cli.error);
+    assert.equal(cli.output.trim(), 'baseref-head-bypassed-by-hook', 'precondition: the CLI base-check degrades on the hook host');
+
+    const resolved = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(resolved.success, true, resolved.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'none', 'the resolver must reach the same verdict the CLI base-check emits');
+    assert.equal(sentinel.decided_by, 'resolver', 'a settings-derived degrade is re-derivable, so a later plain query re-evaluates it');
+  });
+
+  test('#4222: end-to-end — after a plain re-query on a diverged repo the guard ALLOWS the sequential dispatch', (t) => {
+    const { dir } = projectWithOrigin(t, 'gsd-4222-basecheck-');
+    diverge(dir);
+
+    // The workflow's resolve → shell base-check → `--force-isolation none`
+    // re-record, then the plain `--json` read that clobbered the record
+    // pre-fix (the originating session's first denial).
+    const forced = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', '--phase', '1', '--force-isolation', 'none'],
+      dir,
+      env(dir),
+    );
+    assert.equal(forced.success, true, forced.error);
+    const requery = runGsdTools(['query', 'dispatch-isolation', '--json', '--phase', '1'], dir, env(dir));
+    assert.equal(requery.success, true, requery.error);
+
+    // The guard fires on the sequential inline Agent() dispatch (no
+    // isolation kwarg) and must NOT deny it (#4222's user-visible symptom).
+    const r = runHook(agentPayload(), dir, { HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude') });
+    assert.equal(r.status, 0, `guard denied a sequential dispatch after a plain re-query on a diverged repo: stdout=${r.stdout} stderr=${r.stderr}`);
+  });
+});
+
 describe('#3045 MAJOR — --harness-flag can now accept a bare CLI-flag value (Cursor real registry value + generalized parsing)', () => {
   test('record-dispatch-isolation --harness-flag=--worktree persists the REAL cursor registry value verbatim', (t) => {
     const cursorFlag = runtimes.cursor.runtime.harnessIsolationFlag;
@@ -1514,6 +1749,16 @@ describe('#3045 MINOR — writer/reader sentinel path derivation now agrees for 
     fs.writeFileSync(path.join(mainRepo, 'README.md'), 'placeholder\n');
     git(['add', '-A'], mainRepo);
     git(['commit', '-m', 'initial commit'], mainRepo);
+    // #4222: the resolver now re-derives the #683 base-check for the decision
+    // it records, and a repo with no fork base at all (`fork-ref-unknown`)
+    // legitimately degrades to `none` — the verdict the workflow shell already
+    // reached on this shape. This test is about path derivation, not the
+    // degrade, so give the fixture an origin whose HEAD matches its own and
+    // the natural capability is what gets recorded.
+    git(['remote', 'add', 'origin', mainRepo], mainRepo);
+    git(['fetch', '--quiet', 'origin'], mainRepo);
+    const mainBranch = gitOrThrow(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: mainRepo }).trim();
+    git(['symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/origin/${mainBranch}`], mainRepo);
 
     // .planning/ is created AFTER the commit — uncommitted/untracked, the
     // documented shape where a linked worktree does NOT get its own copy
@@ -2185,5 +2430,142 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
     const r2 = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7', '--plan', ''], dir, env(dir));
     assert.equal(r2.success, true, r2.error);
     assert.equal(readSentinelRaw(dir).plan, 'plan-a', 'an empty --plan must not be read as a differing scope');
+  });
+});
+
+// ─── #4630 ADR Phase 2 — one vocabulary owner, and a recorded decision that
+// says who made it ───────────────────────────────────────────────────────────
+//
+// Carried from closed PRs #4620 (#4561, the vocabulary owner + the hold) and
+// #4232 (#4222, the in-resolver base-check re-derivation). Folded together the
+// two contradict: the degrade #4222 re-derives is written as a fresh, in-scope
+// `none`, which is exactly the shape #4561's hold protects — so the next plain
+// query held the resolver's OWN previous answer and "#4222 reads live git
+// state" quietly stopped being true. The record now states WHO decided, and
+// the hold keys on that instead of on value-plus-freshness.
+describe('#4630 — the isolation record states who decided it, so a re-query knows what it may re-derive', () => {
+  function git(args, cwd) {
+    return gitOrThrow(args, { cwd });
+  }
+  const env = (dir) => ({ GSD_RUNTIME: 'claude', HOME: dir });
+
+  function writeClaudeConfig(dir) {
+    fs.writeFileSync(
+      path.join(dir, '.planning', 'config.json'),
+      JSON.stringify({ runtime: 'claude', workflow: { use_worktrees: true } }),
+    );
+  }
+
+  function divergedProject(t, prefix) {
+    const dir = createTempGitProject(prefix);
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}origin-`));
+    t.after(() => { cleanup(dir); cleanup(bare); });
+    git(['init', '--bare'], bare);
+    git(['remote', 'add', 'origin', bare], dir);
+    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], dir).trim();
+    git(['push', '-u', 'origin', branch], dir);
+    git(['symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/origin/${branch}`], dir);
+    writeClaudeConfig(dir);
+    fs.appendFileSync(path.join(dir, 'README.md'), 'local divergence\n');
+    git(['add', '-A'], dir);
+    git(['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-m', 'diverge'], dir);
+    return dir;
+  }
+
+  test('the base check reads the subset from the shared owner — `none` and an out-of-vocabulary mode are both outside it', () => {
+    // The whole point of the seam: this subset has ONE definition. Driving a
+    // mode outside it must answer false through the shared guard rather than
+    // through a pair of string comparisons re-stated at the call site.
+    //
+    // NEGATIVE CONTROL: this test is GREEN against pre-adoption code, because
+    // the owner already existed on the #4561 half — what changed is only WHO
+    // baseCheckDegrades asks. A behavioural test cannot separate those: the
+    // inline pair and the owner agree on every input, which is precisely why
+    // the duplicate was safe to keep and therefore dangerous. This is a PIN on
+    // the owner's semantics, not a regression for the adoption. The adoption's
+    // own oracle is structural — no `isolationMode !== '...'` literal survives
+    // in gsd-tools.cjs (1 before, 0 after) — and the drift lint that makes a
+    // reintroduced copy fail loudly is ADR Phase 3, child 2.
+    const { isBaseCheckIsolationMode, BASE_CHECK_ISOLATION_VOCABULARY } =
+      require('../gsd-core/bin/lib/dispatch-isolation.cjs');
+    assert.equal(isBaseCheckIsolationMode('none'), false);
+    assert.equal(isBaseCheckIsolationMode('definitely-not-an-isolation-mode'), false);
+    assert.equal(isBaseCheckIsolationMode(''), false);
+    assert.equal(isBaseCheckIsolationMode(undefined), false);
+    assert.equal(isBaseCheckIsolationMode('harness-worktree'), true);
+    assert.equal(isBaseCheckIsolationMode('orchestrator-worktree'), true);
+    assert.equal(BASE_CHECK_ISOLATION_VOCABULARY.has('none'), false);
+  });
+
+  test('a degrade the RESOLVER re-derived is recorded as `resolver` — the provenance that lets a later query re-evaluate it', (t) => {
+    const dir = divergedProject(t, 'gsd-4630-prov-resolver-');
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    const rec = readSentinelRaw(dir);
+    assert.equal(rec.isolation, 'none', 'precondition: the diverged repo degraded');
+    assert.equal(rec.decided_by, 'resolver', 'the resolver derived this from live git state');
+  });
+
+  test('a FORCED degrade is recorded as `caller` and a plain re-query holds it — #4561 unchanged', (t) => {
+    const dir = createTempProject('gsd-4630-prov-caller-');
+    t.after(() => cleanup(dir));
+    const forced = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', '--phase', '7', '--force-isolation', 'none'],
+      dir, env(dir),
+    );
+    assert.equal(forced.success, true, forced.error);
+    assert.equal(readSentinelRaw(dir).decided_by, 'caller', 'a force is the caller\'s decision, not a re-derivation');
+
+    const written = readSentinelRaw(dir).written_at;
+    const requery = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7'], dir, env(dir));
+    assert.equal(requery.success, true, requery.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'none', 'the caller\'s degrade is held');
+    assert.equal(readSentinelRaw(dir).written_at, written, 'held means NOT rewritten');
+  });
+
+  test('record-dispatch-isolation stamps `caller` — the verb the three unrederivable dispatch sites call', (t) => {
+    const dir = createTempProject('gsd-4630-prov-recordverb-');
+    t.after(() => cleanup(dir));
+    const r = runGsdTools(
+      ['record-dispatch-isolation', '--isolation', 'none', '--phase', '7', '--plan', 'plan-a'],
+      dir, env(dir),
+    );
+    assert.equal(r.success, true, r.error);
+    assert.equal(readSentinelRaw(dir).decided_by, 'caller');
+  });
+
+  test('a record with NO provenance (written by a pre-#4630 gsd-tools) is HELD, not clobbered — the default is the safe direction', (t) => {
+    const dir = createTempProject('gsd-4630-prov-legacy-');
+    t.after(() => cleanup(dir));
+    // writeSentinel emits exactly the pre-#4630 shape: no decided_by at all.
+    //
+    // NEGATIVE CONTROL: also GREEN pre-fix, where every fresh in-scope `none`
+    // was held unconditionally — so it does not discriminate this change. It
+    // is kept as a FORWARD guard: it reds if the unknown-provenance default is
+    // ever flipped to `resolver`, which would silently reopen #4222's failure
+    // (the guard refusing a dispatch the degrade mandated) for every record
+    // written by an older gsd-tools still in flight during an upgrade.
+    writeSentinel(dir, { isolation: 'none', phase: '7', plan: 'plan-a' });
+    const raw = readSentinelRaw(dir);
+    assert.equal('decided_by' in raw, false, 'precondition: the fixture really is fieldless');
+
+    const requery = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7'], dir, env(dir));
+    assert.equal(requery.success, true, requery.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'none',
+      'an unknown provenance reads as the caller\'s: holding costs a sequential run, clobbering makes the guard refuse the dispatch');
+  });
+
+  test('#4734 stays the guard\'s: a non-git root records the capability, and the resolver re-derives no base-check degrade there', (t) => {
+    // A non-git root has no HEAD to compare against a fork base, so the base
+    // check has derived nothing. #4734's own guard fallback already allows the
+    // flag-less dispatch; recording `none` here would make the resolver a
+    // second owner of that decision.
+    const dir = createTempProject('gsd-4630-nogit-');
+    t.after(() => cleanup(dir));
+    writeClaudeConfig(dir);
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'harness-worktree',
+      'the resolver records the host capability; the non-git degrade belongs to the guard');
   });
 });
