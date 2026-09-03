@@ -10553,6 +10553,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
 
   // Track installation failures
   const failures = [];
+  const configuredEntrypoints = [];
   let installerMigrationResult = null;
   const rollbackInstallerMigrations = () => {
     if (!installerMigrationResult || typeof installerMigrationResult.rollback !== 'function') return;
@@ -12224,6 +12225,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
             absoluteRunner: codexNodeRunner,
             platform: process.platform,
           });
+          configuredEntrypoints.push(...(hookWrite.configuredEntrypoints || []));
           if (hookWrite.wrote) {
             console.log(`  ${green}✓${reset} Configured Codex hooks (SessionStart via hooks.json)`);
           } else {
@@ -12252,6 +12254,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
               absoluteRunner: codexNodeRunner,
               platform: process.platform,
             });
+            configuredEntrypoints.push(...(eventWrite.configuredEntrypoints || []));
             if (eventWrite.wrote) {
               console.log(`  ${green}✓${reset} Configured Codex hooks (${codexEvent} via hooks.json)`);
             } else if (eventWrite.changed) {
@@ -12290,7 +12293,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     }
 
     persistActiveProfileMarker();
-    return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
+    return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir, configuredEntrypoints, rollbackInstallerMigrations };
   }
 
   if (plan.installSurface === 'copilot-instructions') {
@@ -12343,7 +12346,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // The re-run is retained for parity with the settings.json install path.
     writeManifest(targetDir, runtime, { mode: _effectiveInstallMode, scope: _installScopeId });
     persistActiveProfileMarker();
-    return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
+    return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir, configuredEntrypoints: cursorHookResult.configuredEntrypoints, rollbackInstallerMigrations };
   }
 
   if (plan.installSurface === 'profile-marker-only') {
@@ -12399,6 +12402,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       const kimiHookOpts = { portableHooks: hasPortableHooks, runtime };
       const kimiHooksTomlPath = path.join(kimiHooksRoot, 'config.toml');
       const kimiHooksResult = writeKimiHooksToml(kimiHooksTomlPath, kimiHooksRoot, { hookOpts: kimiHookOpts });
+      configuredEntrypoints.push(...kimiHooksResult.configuredEntrypoints);
       if (kimiHooksResult.changed) {
         console.log(`  ${green}✓${reset} Configured ${kimiHooksResult.entryCount} GSD hook(s) in ${kimiHooksTomlPath}`);
       }
@@ -12455,6 +12459,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       const windsurfHookResult = writeWindsurfHooksJson(targetDir, src, {
         platform: process.platform,
       });
+      configuredEntrypoints.push(...windsurfHookResult.configuredEntrypoints);
       if (windsurfHookResult.changed) {
         console.log(`  ${green}✓${reset} Configured Windsurf lifecycle hooks (pre_write_code, pre_run_command)`);
       } else {
@@ -12470,7 +12475,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     }
 
     persistActiveProfileMarker();
-    return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
+    return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir, configuredEntrypoints, rollbackInstallerMigrations };
   }
 
   if (plan.installSurface === 'cline-rules') {
@@ -12630,7 +12635,13 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // runtime's hostBehaviors instead of a hardcoded `runtime === 'antigravity'`
   // check inside projectLocalHookPrefix.
   const localPrefix = projectLocalHookPrefix({ runtime, dirName, hookPathStyle: _hostBehaviors(runtime).hookPathStyle });
-  const hookOpts = { portableHooks: hasPortableHooks, runtime };
+  const settingsEntrypoints = [];
+  const hookOpts = {
+    portableHooks: hasPortableHooks,
+    runtime,
+    configPath: settingsPath,
+    configuredEntrypoints: plan.hooksSurface === 'settings-json' ? settingsEntrypoints : undefined,
+  };
   // #2979: local-install hook commands also use a runner GUI/minimal-PATH
   // runtimes can resolve. Bare `node` fails when the host launches the
   // runtime with a stripped PATH (Finder/Antigravity/etc) — #3662 replaces
@@ -12644,19 +12655,19 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // `node` command that recreates the #2979 failure.
   const localCmd = (hookFile) => localNodeRunner === null
     ? null
-    : projectShellCommandText({
+    : hooksSurface.recordConfiguredHookCommand(projectShellCommandText({
       runnerToken: localNodeRunner,
       argTokens: [`${localPrefix}/hooks/${hookFile}`],
       runtime,
       platform: process.platform,
-    });
-  const localShellCmd = (hookFile) => buildLocalShellHookCommand({
+    }), targetDir, hookFile, hookOpts);
+  const localShellCmd = (hookFile) => hooksSurface.recordConfiguredHookCommand(buildLocalShellHookCommand({
     localPrefix,
     hookFile,
     bashRunner: localBashRunner,
     runtime,
     platform: process.platform,
-  });
+  }), targetDir, hookFile, hookOpts);
   const statuslineCommand = isGlobal
     ? buildHookCommand(targetDir, 'gsd-statusline.js', hookOpts)
     : localCmd('gsd-statusline.js');
@@ -12726,6 +12737,19 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       ? buildHookCommand(targetDir, 'gsd-update-banner.js', hookOpts)
       : localCmd('gsd-update-banner.js'));
 
+  const emittedHookCommands = new Set(
+    Object.values(settings.hooks || {})
+      .flatMap(groups => Array.isArray(groups) ? groups : [])
+      .flatMap(group => Array.isArray(group && group.hooks) ? group.hooks : [])
+      .map(hook => hook && hook.command)
+      .filter(command => typeof command === 'string'),
+  );
+  configuredEntrypoints.push(
+    ...settingsEntrypoints.filter(entry => emittedHookCommands.has(entry.command)),
+  );
+  const statuslineEntrypoints = settingsEntrypoints.filter(entry => entry.command === statuslineCommand);
+  const updateBannerEntrypoints = settingsEntrypoints.filter(entry => entry.command === updateBannerCommand);
+
   // #683: Set worktree.baseRef:"head" in settings.local.json for local Claude installs.
   // Both fresh and upgrade paths apply only when worktrees are enabled for the project.
   // Never applies to global installs, non-Claude runtimes, or when the user already
@@ -12794,9 +12818,12 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     settings,
     statuslineCommand,
     updateBannerCommand,
+    statuslineEntrypoints,
+    updateBannerEntrypoints,
     runtime,
     configDir: targetDir,
     rollbackInstallerMigrations,
+    configuredEntrypoints,
   };
 }
 
@@ -13757,9 +13784,18 @@ function installAllRuntimes(runtimes, isGlobal, isInteractive) {
 
   const finalize = (shouldInstallStatusline, shouldInstallBanner) => {
     try {
-      assertConfiguredEntrypoints(
-        results.flatMap(result => result && !result.skipped ? (result.configuredEntrypoints || []) : []),
-      );
+      const selectedConfiguredEntrypoints = (result) => {
+        if (!result || result.skipped) return [];
+        const useStatusline = statuslineRuntimes.includes(result.runtime)
+          && shouldInstallStatusline
+          && (isGlobal || forceStatusline);
+        return [
+          ...(result.configuredEntrypoints || []),
+          ...(useStatusline ? (result.statuslineEntrypoints || []) : []),
+          ...(shouldInstallBanner ? (result.updateBannerEntrypoints || []) : []),
+        ];
+      };
+      assertConfiguredEntrypoints(results.flatMap(selectedConfiguredEntrypoints));
 
       const printSummaries = () => {
         for (const result of results) {
@@ -13777,7 +13813,7 @@ function installAllRuntimes(runtimes, isGlobal, isInteractive) {
             {
               shouldInstallBanner: !!shouldInstallBanner,
               bannerCommand: result.updateBannerCommand,
-              configuredEntrypoints: result.configuredEntrypoints,
+              configuredEntrypoints: selectedConfiguredEntrypoints(result),
             }
           );
         }
