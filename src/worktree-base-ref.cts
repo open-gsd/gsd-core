@@ -365,6 +365,62 @@ export function findWorktreeCreateHook(
 }
 
 /**
+ * The base-check evaluation for a project directory — exactly what
+ * `cmdWorktreeBaseCheck` computes, minus the stdout emit and the `--mode` /
+ * `--observed-fork-base` argv parse (#4222). Resolves the effective baseRef
+ * from `<cwd>/.claude` settings (project local → project shared →
+ * user/global), runs the `WorktreeCreate`-hook interlock where it applies
+ * (#4588/#4881), and evaluates the #683 divergence against both.
+ *
+ * The interlock lives HERE, not in the CLI wrapper, because it is derived
+ * from settings the resolver can read on every call: were it left in
+ * `cmdWorktreeBaseCheck`, a hook host with `baseRef:"head"` would degrade on
+ * the CLI and record `harness-worktree` from the resolver — the disagreement
+ * this extraction exists to rule out. `observedForkBase` is the one input the
+ * resolver cannot supply (a measurement taken inside a created worktree); it
+ * passes none, which is the answer the CLI gives without the flag.
+ *
+ * Extracted so `routeDispatchIsolation` (gsd-tools.cjs) can re-derive the
+ * base-check degrade in-process before it records the dispatch decision,
+ * the way it already re-derives the #3737 `use_worktrees` opt-out. The CLI
+ * subcommand and the resolver share this one derivation so the two can
+ * never disagree about what the fork base is.
+ *
+ * deps.userClaudeDir overrides the user/global config directory resolution
+ * (default: getGlobalConfigDir('claude'), which honours CLAUDE_CONFIG_DIR).
+ */
+export function evaluateWorktreeBaseDegradeForCwd(
+  cwd: string,
+  isolationMode: BaseCheckIsolationMode = 'harness-worktree',
+  deps?: { execGit?: ExecGitFn; readFile?: (p: string) => string | null; userClaudeDir?: string | null; observedForkBase?: string | null }
+): ReturnType<typeof evaluateWorktreeBaseDegrade> {
+  const observedForkBase = deps?.observedForkBase ?? null;
+  const claudeDir = path.join(cwd, '.claude');
+  const userClaudeDir = Object.prototype.hasOwnProperty.call(deps ?? {}, 'userClaudeDir')
+    ? (deps as { userClaudeDir?: string | null }).userClaudeDir
+    : getGlobalConfigDir('claude');
+  const effectiveBaseRef = resolveEffectiveBaseRef(
+    claudeDir,
+    deps?.readFile ? { readFile: deps.readFile } : undefined,
+    userClaudeDir
+  );
+  // The WorktreeCreate-hook interlock (#4588) only matters where the evaluation would
+  // otherwise trust "head" without comparing: harness-created worktrees and no
+  // observation. Skip the settings reads everywhere else.
+  const worktreeCreateHook = effectiveBaseRef === 'head' && isolationMode === 'harness-worktree' && observedForkBase === null
+    ? findWorktreeCreateHook(claudeDir, deps?.readFile ? { readFile: deps.readFile } : undefined, userClaudeDir)
+    : null;
+  return evaluateWorktreeBaseDegrade({
+    cwd,
+    effectiveBaseRef,
+    execGit: deps?.execGit,
+    isolationMode,
+    observedForkBase,
+    worktreeCreateHook,
+  });
+}
+
+/**
  * CLI command: check current worktree base-ref degradation status.
  *
  * Reads effective baseRef from <cwd>/.claude settings (3-layer cascade:
@@ -406,29 +462,7 @@ export function cmdWorktreeBaseCheck(
     }
     observedForkBase = value.trim().toLowerCase();
   }
-  const claudeDir = path.join(cwd, '.claude');
-  const userClaudeDir = Object.prototype.hasOwnProperty.call(deps ?? {}, 'userClaudeDir')
-    ? (deps as { userClaudeDir?: string | null }).userClaudeDir
-    : getGlobalConfigDir('claude');
-  const effectiveBaseRef = resolveEffectiveBaseRef(
-    claudeDir,
-    deps?.readFile ? { readFile: deps.readFile } : undefined,
-    userClaudeDir
-  );
-  // The WorktreeCreate-hook interlock (#4588) only matters where the evaluation would
-  // otherwise trust "head" without comparing: harness-created worktrees and no
-  // observation. Skip the settings reads everywhere else.
-  const worktreeCreateHook = effectiveBaseRef === 'head' && isolationMode === 'harness-worktree' && observedForkBase === null
-    ? findWorktreeCreateHook(claudeDir, deps?.readFile ? { readFile: deps.readFile } : undefined, userClaudeDir)
-    : null;
-  const result = evaluateWorktreeBaseDegrade({
-    cwd,
-    effectiveBaseRef,
-    execGit: deps?.execGit,
-    isolationMode,
-    observedForkBase,
-    worktreeCreateHook,
-  });
+  const result = evaluateWorktreeBaseDegradeForCwd(cwd, isolationMode, { ...(deps ?? {}), observedForkBase });
   // Default emit goes through fs.writeSync(1, …), NOT process.stdout.write:
   // the CLI's --pick capture intercepts writeSync, and command substitution
   // is a pipe — via process.stdout.write a `$(gsd-tools … --pick x)` capture
