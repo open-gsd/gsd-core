@@ -346,19 +346,31 @@ describe('Bug 1 — compute_file_scope SUMMARY parser', () => {
     );
   });
 
-  // #2666 docs-parity: the Tier-3 git-diff fallback must intersect with the
-  // SUMMARY scope and warn on dropped files (not only fire on zero Tier-2 hits).
-  test('#2666 docs-parity: Tier-3 intersects/warns against git diff --name-only', () => {
+  // #2666 docs-parity: the Tier-3 fallback must intersect with the SUMMARY
+  // scope and warn on dropped files (not only fire on zero Tier-2 hits).
+  // #3926 changed the cross-check's SOURCE from `git diff --name-only
+  // ${DIFF_BASE}..HEAD` to the PHASE_DIFF_FILES union derived from the phase
+  // commits themselves — the cross-check itself (compare + warn + add) stays.
+  test('#2666 docs-parity: Tier-3 intersects/warns against the phase change set', () => {
     const src = fs.readFileSync(WORKFLOW_PATH, 'utf8');
-    // The shipped workflow must compute git diff --name-only AND emit a warning
-    // when the diff contains files the SUMMARY extractor did not surface.
+    // Pin the cross-check's own lines INSIDE the Tier-3 fence — a whole-doc
+    // grep passes even with the cross-check deleted (driven by the #3926
+    // pre-file adversarial review): scope every assertion to the fence.
+    const fenceStart = src.indexOf('# Compute diff base from phase commits');
+    assert.ok(fenceStart !== -1, 'Tier-3 fence anchor must exist');
+    const fenceEnd = src.indexOf('\n```', fenceStart);
+    const fence = src.slice(fenceStart, fenceEnd);
     assert.ok(
-      src.includes('git diff --name-only'),
-      'code-review.md must run `git diff --name-only` to cross-check the SUMMARY scope (#2666)'
+      fence.includes('DIFF_FILES="$PHASE_DIFF_FILES"'),
+      'the cross-check must compare against the phase change set (#2666, #3926)'
     );
     assert.ok(
-      /warn|missing|not surfaced|did not|not in/i.test(src),
-      'code-review.md must warn when git diff contains files the SUMMARY extractor dropped (#2666)'
+      fence.includes('MISSING_FROM_SUMMARY+=("$file"); REVIEW_FILES+=("$file")'),
+      'the cross-check must ADD files the SUMMARY missed to the review scope (#2666)'
+    );
+    assert.ok(
+      fence.includes('Warning: SUMMARY scope was missing'),
+      'the cross-check must WARN when the SUMMARY missed changed files (#2666)'
     );
   });
 
@@ -1253,4 +1265,191 @@ describe('Bug 6 (#3503/#3995) — diff base keys on the phase directory, not com
       }
     }
   );
+});
+
+// ---------------------------------------------------------------------------
+// #3926 — the Tier-3 change set must be bounded at the phase, not at HEAD.
+//
+// Both Tier-3 consumers (the D-02 full fallback and the #2666 SUMMARY
+// cross-check) used `git diff ${DIFF_BASE}..HEAD`: the base was the phase's
+// first commit (correct since #3503) but the tip was unconditionally HEAD, so
+// every commit landed outside the phase — interleaved from other sessions, or
+// after the phase closed — joined the review scope. The #2666 cross-check
+// ADDS its findings to REVIEW_FILES, so the inflation became the scope, and
+// the inflated count crossed code-review-depth.cjs's >50 threshold, silently
+// downgrading --depth=deep to standard (measured: a 20-file phase scoped as
+// 248 files). Fix: derive the change set from PHASE_COMMITS themselves —
+// exact under interleaved history, where a DIFF_BASE..<newest-phase-commit>
+// bound recovers almost nothing (2 of 228 excess files on the measured repo).
+//
+// Same behavioral style as Bug 5: the SHIPPED bash is extracted from the
+// workflow .md and executed via a real bash subprocess against a git fixture.
+// ---------------------------------------------------------------------------
+
+describe('#3926 — Tier-3 scope is the phase change set, not everything since the phase began', () => {
+  const SKIP_WIN32 = { skip: process.platform === 'win32' };
+
+  // The WHOLE Tier-3 fence: derivation plus both consumer branches (the D-02
+  // fallback and the #2666 cross-check).
+  function extractTier3FullFence() {
+    const src = readFileNormalized(WORKFLOW_PATH);
+    return fenceContaining(src, '# Compute diff base from phase commits');
+  }
+
+  // Phase-06 commits touch phase-a/phase-b; unrelated commits land before the
+  // phase, interleaved INSIDE the phase window, and after the phase closed.
+  // HEAD sits on the post-phase commit, as in any re-review of a closed phase.
+  function buildScopeFixture(prefix) {
+    const repo = createTempGitProject(prefix);
+    const commits = [
+      ['pre.txt', 'feat: unrelated work before the phase'],
+      ['phase-a.txt', 'feat(06): first phase commit'],
+      ['interleaved.txt', 'chore: unrelated work interleaved inside the phase window'],
+      ['phase-b.txt', 'test(6-3): second phase commit'],
+      ['post.txt', 'docs: unrelated work after the phase closed'],
+    ];
+    for (const [file, message] of commits) {
+      fs.writeFileSync(path.join(repo, file), `${message}\n`);
+      gitOrThrow(['add', file], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+      gitOrThrow(['commit', '-m', message], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+    }
+    return repo;
+  }
+
+  // Run the full Tier-3 fence with REVIEW_FILES seeded by `preamble`, then
+  // sentinel-print the resulting scope.
+  function runScope(repo, preamble) {
+    const script = [
+      'PADDED_PHASE=06',
+      preamble,
+      extractTier3FullFence(),
+      'echo "===REVIEW_FILES==="',
+      '[ ${#REVIEW_FILES[@]} -gt 0 ] && printf \'%s\\n\' "${REVIEW_FILES[@]}"',
+      'echo "===END==="',
+    ].join('\n');
+    return toLegacyResult(
+      runHook('-c', [script, 'bash'], {
+        interpreter: 'bash',
+        cwd: repo,
+        timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
+      })
+    );
+  }
+
+  test(
+    'D-02 fallback scope is exactly the phase change set — pre-phase, interleaved, and post-phase files stay out',
+    SKIP_WIN32,
+    () => {
+      const repo = buildScopeFixture('gsd-3926-fallback-');
+      try {
+        const result = runScope(repo, 'REVIEW_FILES=()');
+        assert.equal(result.status, 0, `fence exited ${result.status}; stderr=${result.stderr}`);
+        const scope = parseSentinel(result.stdout, 'REVIEW_FILES');
+        // Pre-fix: DIFF_BASE..HEAD also sweeps interleaved.txt and post.txt.
+        assert.deepStrictEqual(
+          scope.sort(),
+          ['phase-a.txt', 'phase-b.txt'],
+          `fallback scope must be the phase's own files; got: ${JSON.stringify(scope)}`
+        );
+      } finally {
+        cleanup(repo);
+      }
+    }
+  );
+
+  test(
+    '#2666 cross-check adds only phase files a partial SUMMARY missed — never out-of-phase commits',
+    SKIP_WIN32,
+    () => {
+      const repo = buildScopeFixture('gsd-3926-crosscheck-');
+      try {
+        // SUMMARY surfaced only phase-a.txt; the cross-check must add
+        // phase-b.txt and nothing else.
+        const result = runScope(repo, 'REVIEW_FILES=(phase-a.txt)');
+        assert.equal(result.status, 0, `fence exited ${result.status}; stderr=${result.stderr}`);
+        const scope = parseSentinel(result.stdout, 'REVIEW_FILES');
+        // Pre-fix: the cross-check REVIEW_FILES+='s interleaved.txt and
+        // post.txt too — the inflation that crossed the >50 depth-downgrade
+        // threshold on the reporting repo.
+        assert.deepStrictEqual(
+          scope.sort(),
+          ['phase-a.txt', 'phase-b.txt'],
+          `cross-check must add only missed PHASE files; got: ${JSON.stringify(scope)}`
+        );
+        assert.match(
+          result.stdout,
+          /Warning: SUMMARY scope was missing 1 changed file/,
+          'the cross-check must WARN about the file the SUMMARY missed (#2666)'
+        );
+      } finally {
+        cleanup(repo);
+      }
+    }
+  );
+
+  test(
+    'a phase landing as one phase-scoped MERGE commit scopes to its first-parent diff, not the empty combined diff',
+    SKIP_WIN32,
+    () => {
+      // Phase-06's work arrives as a clean --no-ff merge whose SUBJECT is
+      // phase-scoped while the branch commits are not — `git show` without
+      // --first-parent prints an EMPTY combined diff for it, scoping the
+      // phase to zero files (driven by the #3926 pre-file adversarial review).
+      const repo = createTempGitProject('gsd-3926-merge-');
+      try {
+        fs.writeFileSync(path.join(repo, 'base.txt'), 'base\n');
+        gitOrThrow(['add', 'base.txt'], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+        gitOrThrow(['commit', '-m', 'chore: base'], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+        gitOrThrow(['checkout', '-b', 'phase-branch'], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+        fs.writeFileSync(path.join(repo, 'branch-work.txt'), 'work\n');
+        gitOrThrow(['add', 'branch-work.txt'], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+        gitOrThrow(['commit', '-m', 'feat: branch work, not phase scoped'], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+        gitOrThrow(['checkout', '-'], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+        gitOrThrow(['merge', '--no-ff', 'phase-branch', '-m', 'feat(06): land phase work'], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+        const result = runScope(repo, 'REVIEW_FILES=()');
+        assert.equal(result.status, 0, `fence exited ${result.status}; stderr=${result.stderr}`);
+        const scope = parseSentinel(result.stdout, 'REVIEW_FILES');
+        assert.deepStrictEqual(
+          scope,
+          ['branch-work.txt'],
+          `merge-landed phase must scope to its first-parent diff; got: ${JSON.stringify(scope)}`
+        );
+      } finally {
+        cleanup(repo);
+      }
+    }
+  );
+
+  // Docs-parity anti-revert: neither Tier-3 consumer may diff to HEAD, both
+  // must consume the PHASE_DIFF_FILES union, and spawn_reviewer must hand the
+  // agent the diff_tip bound its own fallback consumes.
+  test('docs-parity: no ..HEAD tip in Tier-3; spawn_reviewer passes diff_tip; agent fallback is bounded', () => {
+    const workflow = readFileNormalized(WORKFLOW_PATH);
+    const tier3 = extractTier3FullFence();
+    assert.ok(
+      !/git diff [^\n]*\.\.HEAD/.test(tier3),
+      'Tier-3 fence must not diff to HEAD — the scope is the phase change set (#3926)'
+    );
+    assert.ok(
+      tier3.includes('PHASE_DIFF_FILES=$(for c in $(printf'),
+      'Tier-3 fence must derive the change set from the phase commits themselves'
+    );
+    assert.ok(
+      tier3.includes('--first-parent "$c"'),
+      'the per-commit show must use --first-parent — a clean phase-scoped merge otherwise contributes an EMPTY combined diff (#3926)'
+    );
+    assert.ok(
+      workflow.includes('${DIFF_TIP:+diff_tip: ${DIFF_TIP}}'),
+      'spawn_reviewer must pass diff_tip to the reviewer agent (#3926)'
+    );
+    const reviewer = readFileNormalized(REVIEWER_PATH);
+    assert.ok(
+      reviewer.includes('${DIFF_BASE}..${DIFF_TIP:-HEAD}'),
+      'reviewer-agent fallback diff must be bounded by diff_tip when provided (#3926)'
+    );
+    assert.ok(
+      !/git diff [^\n]*\$\{DIFF_BASE\}\.\.HEAD/.test(reviewer),
+      'reviewer-agent fallback must not hardcode ..HEAD (#3926)'
+    );
+  });
 });
