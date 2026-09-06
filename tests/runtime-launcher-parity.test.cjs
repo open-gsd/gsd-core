@@ -31,7 +31,13 @@ const path = require('node:path');
 const os = require('node:os');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
-const { cleanup } = require('./helpers.cjs');
+// #4312: TEST_ENV_BASE blanks every registry-derived config-location env var
+// for the CHILD process. The launcher deliberately honours CLAUDE_CONFIG_DIR
+// (#1865, fixed by #2024) — but these fixtures override only HOME and inherit
+// the rest of process.env, so a contributor who exports it had the launcher
+// resolve out of the fixture and into their real config dir. The product
+// behaviour is correct; the test just has to control what it asserts against.
+const { cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
@@ -392,7 +398,7 @@ describe('runtime-launcher-parity (#373)', () => {
 
       const r = runHookSeam(scriptPath, [], {
         interpreter: 'bash',
-        env: { ...process.env, PATH: isolatedPath, HOME: base },
+        env: { ...process.env, ...TEST_ENV_BASE, PATH: isolatedPath, HOME: base },
       });
       const threw = r.exitCode !== 0;
       const stderrOutput = r.stderr || '';
@@ -439,7 +445,7 @@ describe('runtime-launcher-parity (#373)', () => {
       fs.writeFileSync(scriptPath, scriptContent);
 
       const stdout = runBashFile(scriptPath, {
-        env: { ...process.env, PATH: `${pathBinDir}${path.delimiter}${process.env.PATH || ''}` },
+        env: { ...process.env, ...TEST_ENV_BASE, PATH: `${pathBinDir}${path.delimiter}${process.env.PATH || ''}` },
       });
 
       // The PATH fallback must have resolved GSD_TOOLS to the stub binary.
@@ -590,7 +596,7 @@ describe('runtime-launcher-parity (#373)', () => {
       }
 
       const stdout = runBashFile(scriptPath, {
-        env: { ...process.env, PATH: systemPaths.join(path.delimiter), HOME: fakeHome },
+        env: { ...process.env, ...TEST_ENV_BASE, PATH: systemPaths.join(path.delimiter), HOME: fakeHome },
       });
 
       const normStdout = stdout.replace(/\\/g, '/');
@@ -898,7 +904,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 const SNIPPET_FILE = path.join(WORKFLOWS_DIR, '_runtime-launcher.snippet.sh');
@@ -936,6 +942,67 @@ describe('bug-211: launcher ~/.claude home fallback', () => {
       content.includes(CLAUDE_HOME_PROBE),
       `add-backlog.md must contain "${CLAUDE_HOME_PROBE}" after propagation. ` +
         `Run \`node scripts/sync-runtime-launcher.cjs\` to propagate the updated snippet.`,
+    );
+  });
+
+  // --- (D) #4312: the fixture must win over an ambient CLAUDE_CONFIG_DIR -------
+  //
+  // The launcher deliberately honours CLAUDE_CONFIG_DIR (#1865, fixed by #2024).
+  // (C) below overrides only HOME and inherits the rest of process.env, so on a
+  // contributor's machine that exports the variable the child resolved out of
+  // the fixture and into their real config dir — a hard error, and a red suite
+  // from a clean clone. This case exports the variable IN THIS PROCESS, so it
+  // fails on every CI lane if the TEST_ENV_BASE scrub is dropped, instead of
+  // only on the machines that were already affected.
+  test('(D) an exported CLAUDE_CONFIG_DIR does not divert the fixture home (#4312)', (t) => {
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4312-home-'));
+    const fakeRuntime = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4312-rt-'));
+    const decoy = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4312-decoy-'));
+    const savedVar = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = decoy;
+    t.after(() => {
+      if (savedVar === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = savedVar;
+      cleanup(fakeHome); cleanup(fakeRuntime); cleanup(decoy);
+    });
+
+    const claudeBinDir = path.join(fakeHome, '.claude', 'gsd-core', 'bin');
+    fs.mkdirSync(claudeBinDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(claudeBinDir, 'gsd-tools.cjs'),
+      '#!/usr/bin/env node\nconsole.log("CLAUDE_HOME_STUB:" + process.argv.slice(2).join(","));\n',
+    );
+
+    const scriptPath = path.join(fakeRuntime, 'test-ambient-config-dir.sh');
+    fs.writeFileSync(
+      scriptPath,
+      `unset GSD_TOOLS\n` +
+      `export RUNTIME_DIR=${JSON.stringify(fakeRuntime)}\n` +
+      `export HOME=${JSON.stringify(fakeHome)}\n` +
+      fs.readFileSync(SNIPPET_FILE, 'utf8') +
+      `\nprintf "GSD_TOOLS=%s\\n" "$GSD_TOOLS"\n`,
+    );
+
+    const isolatedPath = (process.env.PATH || '/usr/bin:/bin')
+      .split(path.delimiter)
+      .filter((p) => {
+        try { fs.accessSync(path.join(p, 'gsd-tools'), fs.constants.X_OK); return false; }
+        catch { return true; }
+      })
+      .join(path.delimiter);
+
+    const stdout = runBashFile(scriptPath, {
+      env: { ...process.env, ...TEST_ENV_BASE, PATH: isolatedPath, HOME: fakeHome },
+    });
+
+    const norm = stdout.replace(/\\/g, '/');
+    assert.ok(
+      norm.includes('.claude/gsd-core/bin/'),
+      `Expected GSD_TOOLS to resolve into the fixture's .claude/gsd-core/bin/, got:\n${stdout.trim()}`,
+    );
+    assert.ok(
+      !norm.includes(decoy.replace(/\\/g, '/')),
+      `GSD_TOOLS must not resolve through the ambient CLAUDE_CONFIG_DIR (${decoy}), got:\n${stdout.trim()}`,
     );
   });
 
@@ -999,7 +1066,7 @@ describe('bug-211: launcher ~/.claude home fallback', () => {
       }
 
       const stdout = runBashFile(scriptPath, {
-        env: { ...process.env, PATH: systemPaths.join(path.delimiter), HOME: fakeHome },
+        env: { ...process.env, ...TEST_ENV_BASE, PATH: systemPaths.join(path.delimiter), HOME: fakeHome },
       });
 
       // GSD_TOOLS must point into the fake ~/.claude dir
@@ -1053,7 +1120,7 @@ describe('bug-211: launcher ~/.claude home fallback', () => {
 
       const r = runHookSeam(scriptPath, [], {
         interpreter: 'bash',
-        env: { ...process.env, PATH: isolatedPath, HOME: fakeHome },
+        env: { ...process.env, ...TEST_ENV_BASE, PATH: isolatedPath, HOME: fakeHome },
       });
       const threw = r.exitCode !== 0;
       const stderrOutput = r.stderr || '';
@@ -1115,7 +1182,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
@@ -1407,7 +1474,7 @@ describe('bug-891: non-Claude runtime home fallback arms', () => {
       fs.writeFileSync(scriptPath, scriptContent);
 
       const stdout = runBashFile(scriptPath, {
-        env: { ...process.env, PATH: isolatedPath, HOME: fakeHome, HERMES_HOME: fakeHermesHome },
+        env: { ...process.env, ...TEST_ENV_BASE, PATH: isolatedPath, HOME: fakeHome, HERMES_HOME: fakeHermesHome },
       });
 
       const normStdout = stdout.replace(/\\/g, '/');
@@ -1456,7 +1523,7 @@ describe('bug-891: non-Claude runtime home fallback arms', () => {
       fs.writeFileSync(scriptPath, scriptContent);
 
       const stdout = runBashFile(scriptPath, {
-        env: { ...process.env, PATH: isolatedPath, HOME: fakeHome },
+        env: { ...process.env, ...TEST_ENV_BASE, PATH: isolatedPath, HOME: fakeHome },
       });
 
       const normStdout = stdout.replace(/\\/g, '/');
@@ -1551,7 +1618,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
-const { readFileNormalized } = require('./helpers.cjs');
+const { readFileNormalized, TEST_ENV_BASE } = require('./helpers.cjs');
 
 const WORKFLOW_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'next.md');
 
@@ -1637,7 +1704,7 @@ function runResolver({ cwd, runtimeDir, pathDir }) {
     interpreter: 'bash',
     cwd,
     env: {
-      ...process.env,
+      ...process.env, ...TEST_ENV_BASE,
       PATH: `${pathDir}${path.delimiter}${process.env.PATH || ''}`,
       RUNTIME_DIR: runtimeDir || '',
     },
@@ -1747,7 +1814,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 const SNIPPET_FILE = path.join(WORKFLOWS_DIR, '_runtime-launcher.snippet.sh');
@@ -1871,7 +1938,7 @@ describe('bug-444: resolver finds repo-local .claude install', () => {
       const isolatedPath = makeIsolatedPath([noToolsBin]);
 
       const stdout = runBashFile(scriptPath, {
-        env: { ...process.env, PATH: isolatedPath, HOME: fakeHome },
+        env: { ...process.env, ...TEST_ENV_BASE, PATH: isolatedPath, HOME: fakeHome },
       });
 
       // Must have resolved to the local .claude stub
@@ -1934,7 +2001,7 @@ describe('bug-444: resolver finds repo-local .claude install', () => {
       const isolatedPath = makeIsolatedPath([noToolsBin]);
 
       const stdout = runBashFile(scriptPath, {
-        env: { ...process.env, PATH: isolatedPath, HOME: fakeHome },
+        env: { ...process.env, ...TEST_ENV_BASE, PATH: isolatedPath, HOME: fakeHome },
       });
 
       assert.ok(
