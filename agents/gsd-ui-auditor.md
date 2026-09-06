@@ -109,37 +109,133 @@ This gate runs unconditionally on every audit. The .gitignore ensures screenshot
 ## Screenshot Capture (CLI only — no MCP, no persistent browser)
 
 ```bash
-# Check for running dev server
-DEV_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 2>/dev/null || echo "000")
+# Detect a running dev server across the documented ports. The probe follows
+# redirects, accepts any 2xx, and is time-bounded, so a root path that
+# redirects (Next.js middleware/i18n, trailing-slash normalization) or a port
+# that accepts but never answers is not misread as "no dev server". fetch()
+# rather than curl, for cross-platform parity with
+# gsd-core/references/checkpoints.md.
+DEV_URL=""
+DEV_GATED=""
+for PORT in 3000 5173 8080; do
+  # process.stdout.write(String(...)), never console.log(r.status): console.log
+  # CAN colorize a NUMBER — whenever node emits color, i.e. a TTY or FORCE_COLOR — so
+  # the probe would emit "\033[33m200\033[39m" and every 2xx would fall through to the
+  # no-dev-server branch. Measured: piped and uncoloured it prints "200\n"; with
+  # FORCE_COLOR=1 it prints the escapes. Writing the string is unconditional, which is
+  # why it is the fix rather than relying on the caller's colour state.
+  PROBE=$(node -e 'fetch(process.argv[1],{redirect:"follow",signal:AbortSignal.timeout(5000)}).then(r=>process.stdout.write(String(r.status))).catch(()=>process.stdout.write("000"))' "http://localhost:$PORT" 2>/dev/null || echo "000")
+  PROBE=${PROBE:-000}
+  case "$PROBE" in
+    2??)     DEV_URL="http://localhost:$PORT"; break ;;
+    # The WHOLE auth-required class, not just its two common members: 407 (proxy)
+    # and 511 (captive portal) also mean a server ANSWERED and demanded credentials,
+    # so leaving them out reports a present server as an absent one — which is
+    # #4176's own defect, one status family over.
+    # First gated port wins, matching the documented port PRECEDENCE below. An
+    # unguarded assignment here reports whichever gated port was tried LAST, so
+    # with 3000 and 8080 both auth-gated the reason would name 8080.
+    401|403|407|511) [ -n "$DEV_GATED" ] || DEV_GATED="http://localhost:$PORT (HTTP $PROBE)" ;;
+  esac
+done
 
-if [ "$DEV_STATUS" = "200" ]; then
-  SCREENSHOT_DIR=".planning/ui-reviews/${PADDED_PHASE}-$(date +%Y%m%d-%H%M%S)"
-  mkdir -p "$SCREENSHOT_DIR"
+if [ -n "$DEV_URL" ]; then
+  # ALLOCATE THE DIRECTORY ATOMICALLY. `mkdir` WITHOUT `-p` fails when the directory
+  # already exists, so exactly one caller can win it; `-p` succeeds for both and hands
+  # two audits the same directory. That matters because phase plus a whole-second
+  # timestamp is not unique — two audits of the same phase in one second collide, and
+  # so does the same shell running this block twice — and from a shared directory no
+  # cleanup can be safe, since both audits write exactly `desktop.png`, `mobile.png`
+  # and `tablet.png`. A filename can never establish whose it is; winning the mkdir can.
+  # A PID suffix does NOT solve this: `$$` names the shell, not the invocation, so it is
+  # identical across two runs in one shell and inside command substitution.
+  mkdir -p .planning/ui-reviews
+  SCREENSHOT_BASE=".planning/ui-reviews/${PADDED_PHASE}-$(date +%Y%m%d-%H%M%S)"
+  SCREENSHOT_DIR="$SCREENSHOT_BASE"
+  SUFFIX=1
+  until mkdir "$SCREENSHOT_DIR" 2>/dev/null; do
+    if [ "$SUFFIX" -gt 99 ]; then
+      SCREENSHOT_DIR=""
+      break
+    fi
+    SCREENSHOT_DIR="$SCREENSHOT_BASE-$SUFFIX"
+    SUFFIX=$((SUFFIX + 1))
+  done
 
-  # Desktop
-  npx playwright screenshot http://localhost:3000 \
-    "$SCREENSHOT_DIR/desktop.png" \
-    --viewport-size=1440,900 2>/dev/null
+  if [ -z "$SCREENSHOT_DIR" ]; then
+    # The allocation loop above gave up. Never fall through: with SCREENSHOT_DIR empty
+    # the capture below would write to /desktop.png, outside the project entirely.
+    CAPTURE_STATUS="not captured (capture failed)"
+    echo "Could not allocate a review directory under .planning/ui-reviews — code-only audit"
+  else
+    # Capture each viewport from the RESOLVED port, and believe only what the
+    # exit status and the file on disk actually say.
+    CAPTURED=0
+    FAILED_SHOTS=""
+    for SHOT in "desktop:1440,900" "mobile:375,812" "tablet:768,1024"; do
+      SHOT_NAME="${SHOT%%:*}"
+      SHOT_VIEWPORT="${SHOT##*:}"
+      # --timeout is not belt-and-braces here: `playwright screenshot` passes it to
+      # context.setDefaultTimeout() and defaults it to 0 — NO timeout — so this CLI path
+      # drops the 30s bound the Playwright library applies everywhere else. Without it a
+      # hung navigation blocks the audit forever, which is the same failure the probe's
+      # AbortSignal.timeout(5000) closes one step earlier.
+      if npx playwright screenshot "$DEV_URL" \
+           "$SCREENSHOT_DIR/$SHOT_NAME.png" \
+           --viewport-size="$SHOT_VIEWPORT" \
+           --timeout=30000 >/dev/null 2>&1 \
+         && [ -s "$SCREENSHOT_DIR/$SHOT_NAME.png" ]; then
+        CAPTURED=$((CAPTURED + 1))
+      else
+        # Remove what THIS viewport may have written before scoring it a failure. A
+        # crashed browser commonly leaves a zero-byte or partial .png, which the
+        # `[ -s ]` above correctly refuses to count and which would otherwise sit in
+        # the review directory looking like evidence. Doing it here rather than in
+        # the all-failed branch below is what makes the claim true of a PARTIAL
+        # capture too — two good shots and one stray file was the gap.
+        # By name rather than a `*.png` glob. For this audit's own files the two are
+        # equivalent; the name form additionally leaves alone anything else that happens
+        # to be in the directory. What keeps a CONCURRENT audit's captures safe is the
+        # atomic allocation above, never this line.
+        rm -f "$SCREENSHOT_DIR/$SHOT_NAME.png"
+        FAILED_SHOTS="$FAILED_SHOTS $SHOT_NAME"
+      fi
+    done
 
-  # Mobile
-  npx playwright screenshot http://localhost:3000 \
-    "$SCREENSHOT_DIR/mobile.png" \
-    --viewport-size=375,812 2>/dev/null
-
-  # Tablet
-  npx playwright screenshot http://localhost:3000 \
-    "$SCREENSHOT_DIR/tablet.png" \
-    --viewport-size=768,1024 2>/dev/null
-
-  echo "Screenshots captured to $SCREENSHOT_DIR"
+    if [ "$CAPTURED" -eq 3 ]; then
+      CAPTURE_STATUS="captured"
+      echo "Screenshots captured to $SCREENSHOT_DIR (3/3) from $DEV_URL"
+    elif [ "$CAPTURED" -gt 0 ]; then
+      CAPTURE_STATUS="partially captured"
+      echo "Screenshots PARTIALLY captured to $SCREENSHOT_DIR ($CAPTURED/3) from $DEV_URL — failed:$FAILED_SHOTS"
+    else
+      CAPTURE_STATUS="not captured (capture failed)"
+      # `rm -rf`, not `rmdir`, and the atomic allocation above is what licenses it: this
+      # directory was won by this audit and shared with nobody, so removing it whole
+      # cannot destroy another audit's work. rmdir could not honour the claim — it fails
+      # on any file the capture command wrote under a name this block did not ask for,
+      # leaving both that file and the directory behind while the docs said otherwise.
+      rm -rf "$SCREENSHOT_DIR"
+      echo "Screenshot capture FAILED for all 3 viewports at $DEV_URL — code-only audit"
+    fi
+  fi
+elif [ -n "$DEV_GATED" ]; then
+  CAPTURE_STATUS="not captured (dev server auth-gated)"
+  echo "Dev server at $DEV_GATED is auth-gated — code-only audit"
 else
-  echo "No dev server at localhost:3000 — code-only audit"
+  CAPTURE_STATUS="not captured (no dev server)"
+  echo "No dev server on ports 3000, 5173 or 8080 — code-only audit"
 fi
 ```
 
-If dev server not detected: audit runs on code review only (Tailwind class audit, string audit for generic labels, state handling check). Note in output that visual screenshots were not captured.
+Ports are tried in order — 3000, then 5173 (Vite default), then 8080 — and the
+first one that answers 2xx is the port every capture command uses.
 
-Try port 3000 first, then 5173 (Vite default), then 8080.
+`$CAPTURE_STATUS` is the single source of truth for the `**Screenshots:**` field
+of both the UI-REVIEW.md report and the structured return. Report what it holds
+— never assume capture succeeded because the block ran.
+
+If no dev server is detected, or capture fails: the audit runs on code review only (Tailwind class audit, string audit for generic labels, state handling check). Note in output that visual screenshots were not captured, and say why.
 
 </screenshot_approach>
 
@@ -299,7 +395,7 @@ Write to: `$PHASE_DIR/$PADDED_PHASE-UI-REVIEW.md`
 
 **Audited:** {date}
 **Baseline:** {UI-SPEC.md / abstract standards}
-**Screenshots:** {captured / not captured (no dev server)}
+**Screenshots:** {$CAPTURE_STATUS — captured / partially captured (N/3, list the failures) / not captured, with the reason}
 
 ---
 
@@ -366,7 +462,7 @@ Run the gitignore gate from `<gitignore_gate>`. This MUST happen before step 3.
 
 ## Step 3: Detect Dev Server and Capture Screenshots
 
-Run the screenshot approach from `<screenshot_approach>`. Record whether screenshots were captured.
+Run the screenshot approach from `<screenshot_approach>`. Carry `$CAPTURE_STATUS` forward and record it verbatim — full, partial, or none with its reason.
 
 ## Step 4: Scan Implemented Files
 
@@ -406,7 +502,7 @@ Use output format from `<output_format>`. If registry audit produced flags, add 
 
 **Phase:** {phase_number} - {phase_name}
 **Overall Score:** {total}/24
-**Screenshots:** {captured / not captured}
+**Screenshots:** {$CAPTURE_STATUS — captured / partially captured (N/3) / not captured, with the reason}
 
 ### Pillar Summary
 | Pillar | Score |
@@ -440,7 +536,7 @@ UI audit is complete when:
 - [ ] All `<required_reading>` loaded before any action
 - [ ] .gitignore gate executed before any screenshot capture
 - [ ] Dev server detection attempted
-- [ ] Screenshots captured (or noted as unavailable)
+- [ ] Capture outcome recorded from `$CAPTURE_STATUS` — full, partial, or none with its reason
 - [ ] All 6 pillars scored with evidence
 - [ ] Registry safety audit executed (if shadcn + third-party registries present)
 - [ ] Top 3 priority fixes identified with concrete solutions
