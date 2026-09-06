@@ -39,6 +39,89 @@ const AGENTS_DIR = path.join(__dirname, '..', 'agents');
 const SNIPPET_FILE = path.join(WORKFLOWS_DIR, '_runtime-launcher.snippet.sh');
 
 /**
+ * Build a PATH with no gsd-tools binary so the PATH fallback branch is skipped,
+ * while guaranteeing that a bare `node` lookup still resolves regardless of whether
+ * the real node binary co-locates with a global gsd-tools shim (e.g. fnm/nvm/Homebrew).
+ *
+ * #4348: declared once, at FILE scope. The fold blocks from the #1969
+ * consolidation epic are brace-scoped and each re-declares its own requires, so
+ * the previous copy — which lived inside the bug-891 block — was unreachable
+ * from the others and had been hand-copied into them. The copies were not
+ * identical, which is why this takes a strategy rather than being a plain
+ * deletion:
+ *
+ *   nodeShim: 'own'    create a temp dir holding only a `node` symlink and
+ *                      prepend it. The caller owns `result.nodeBinDir` and must
+ *                      pass it to cleanup(). This is the pre-#4348 behaviour and
+ *                      what (B0) exercises.
+ *   nodeShim: 'caller' put the symlink in the caller's own `nodeShimDir` (already
+ *                      inside a fixture the test cleans up), and only when node is
+ *                      not already resolvable on the filtered PATH. Returns
+ *                      nodeBinDir: null — there is nothing extra to clean up.
+ *   nodeShim: 'none'   no symlink. For the cases that assert a HARD ERROR, where
+ *                      nothing is ever executed through the resolved PATH.
+ *
+ * On Windows the co-location bug does not apply (gsd-tools resolves via .cmd/.ps1,
+ * not the bare binary probed here), and symlinks may require elevated privileges,
+ * so the symlink step is skipped entirely there and `nodeBinDir` is null — every
+ * caller already handles that.
+ *
+ * @param {object}   [opts]
+ * @param {string[]} [opts.extraBefore]  dirs prepended ahead of the filtered PATH
+ * @param {'own'|'caller'|'none'} [opts.nodeShim]  see above
+ * @param {string}   [opts.nodeShimDir]  required for nodeShim: 'caller'
+ * @returns {{ isolatedPath: string, nodeBinDir: string|null }}
+ */
+function buildIsolatedPath({ extraBefore = [], nodeShim = 'own', nodeShimDir = null } = {}) {
+  const systemPaths = (process.env.PATH || '/usr/bin:/bin')
+    .split(path.delimiter)
+    .filter((p) => {
+      try { fs.accessSync(path.join(p, 'gsd-tools'), fs.constants.X_OK); return false; }
+      catch { return true; }
+    });
+
+  const join = (dirs) => [...extraBefore, ...dirs].join(path.delimiter);
+
+  // Validated before the platform branches below: a missing nodeShimDir is a
+  // programming error in the CALL, not a property of the host, so it must fail
+  // the same way on every lane rather than passing silently on Windows (where
+  // the symlink step is skipped) and throwing only on POSIX.
+  if (nodeShim === 'caller' && (typeof nodeShimDir !== 'string' || !nodeShimDir)) {
+    throw new TypeError("buildIsolatedPath: nodeShim 'caller' requires nodeShimDir");
+  }
+
+  // Windows: no symlink (see JSDoc above); callers must handle nodeBinDir === null.
+  if (nodeShim === 'none' || process.platform === 'win32') {
+    return { isolatedPath: join(systemPaths), nodeBinDir: null };
+  }
+
+  if (nodeShim === 'caller') {
+    // Only shim when the filter actually removed node along with gsd-tools —
+    // the co-location case. Otherwise the filtered PATH already resolves it.
+    const nodeAlreadyResolvable = systemPaths.some((p) => {
+      try { fs.accessSync(path.join(p, 'node'), fs.constants.X_OK); return true; }
+      catch { return false; }
+    });
+    if (!nodeAlreadyResolvable) {
+      fs.mkdirSync(nodeShimDir, { recursive: true });
+      fs.symlinkSync(process.execPath, path.join(nodeShimDir, 'node'));
+      systemPaths.unshift(nodeShimDir);
+    }
+    return { isolatedPath: join(systemPaths), nodeBinDir: null };
+  }
+
+  const nodeBinDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-891-node-'));
+  try {
+    fs.symlinkSync(process.execPath, path.join(nodeBinDir, 'node'));
+  } catch (err) {
+    cleanup(nodeBinDir);
+    throw err;
+  }
+  return { isolatedPath: join([nodeBinDir, ...systemPaths]), nodeBinDir };
+}
+
+
+/**
  * Run a bash script FILE via the process seam, preserving the throw-on-
  * nonzero-exit semantics of the execFileSync('bash', [path], ...) idiom
  * this replaces.
@@ -380,15 +463,10 @@ describe('runtime-launcher-parity (#373)', () => {
       const scriptPath = path.join(base, 'test-guard.sh');
       fs.writeFileSync(scriptPath, scriptContent);
 
-      // Build a PATH that has noToolsBin first (no gsd-tools stub there) but retains
-      // system paths needed for bash. Exclude any PATH entry that contains a gsd-tools binary.
-      const systemPaths = (process.env.PATH || '/usr/bin:/bin')
-        .split(path.delimiter)
-        .filter((p) => {
-          try { fs.accessSync(path.join(p, 'gsd-tools'), fs.constants.X_OK); return false; }
-          catch { return true; }
-        });
-      const isolatedPath = [noToolsBin, ...systemPaths].join(path.delimiter);
+      // noToolsBin first (no gsd-tools stub there), then the gsd-tools-filtered
+      // system paths bash needs. No node shim: this case asserts a HARD ERROR,
+      // so nothing is ever executed through the resolved PATH (#4348).
+      const { isolatedPath } = buildIsolatedPath({ extraBefore: [noToolsBin], nodeShim: 'none' });
 
       const r = runHookSeam(scriptPath, [], {
         interpreter: 'bash',
@@ -969,37 +1047,17 @@ describe('bug-211: launcher ~/.claude home fallback', () => {
       const scriptPath = path.join(fakeRuntime, 'test-home-fb.sh');
       fs.writeFileSync(scriptPath, scriptContent);
 
-      // Build a PATH with no gsd-tools binary to force the ~/.claude arm.
-      // Filter out directories that contain a gsd-tools executable. If node lives
-      // in the same directory as gsd-tools, create a dedicated shim dir with a
-      // symlink to node only (no gsd-tools there).
-      const nodeBinResult = runHookSeam('node', [], { interpreter: 'which' });
-      throwIfFailed(nodeBinResult, 'which node');
-      const nodeBin = nodeBinResult.stdout.trim();
-      const systemPaths = (process.env.PATH || '/usr/bin:/bin')
-        .split(path.delimiter)
-        .filter((p) => {
-          try {
-            fs.accessSync(path.join(p, 'gsd-tools'), fs.constants.X_OK);
-            return false;
-          } catch {
-            return true;
-          }
-        });
-      // If node's dir was filtered (it contained gsd-tools), create a shim dir
-      // with just a node symlink so the stub's shebang (#!/usr/bin/env node) resolves.
-      const nodeShimDir = path.join(fakeRuntime, 'node-shim');
-      if (!systemPaths.some((p) => {
-        try { fs.accessSync(path.join(p, 'node'), fs.constants.X_OK); return true; }
-        catch { return false; }
-      })) {
-        fs.mkdirSync(nodeShimDir, { recursive: true });
-        fs.symlinkSync(nodeBin, path.join(nodeShimDir, 'node'));
-        systemPaths.unshift(nodeShimDir);
-      }
+      // A PATH with no gsd-tools binary, to force the ~/.claude arm. The node
+      // shim lands inside fakeRuntime — which this test already cleans up — and
+      // is only created when the filter removed node along with gsd-tools, so
+      // the stub's `#!/usr/bin/env node` shebang always resolves (#4348).
+      const { isolatedPath } = buildIsolatedPath({
+        nodeShim: 'caller',
+        nodeShimDir: path.join(fakeRuntime, 'node-shim'),
+      });
 
       const stdout = runBashFile(scriptPath, {
-        env: { ...process.env, PATH: systemPaths.join(path.delimiter), HOME: fakeHome },
+        env: { ...process.env, PATH: isolatedPath, HOME: fakeHome },
       });
 
       // GSD_TOOLS must point into the fake ~/.claude dir
@@ -1039,17 +1097,8 @@ describe('bug-211: launcher ~/.claude home fallback', () => {
       const scriptPath = path.join(fakeRuntime, 'test-allfail.sh');
       fs.writeFileSync(scriptPath, scriptContent);
 
-      const systemPaths = (process.env.PATH || '/usr/bin:/bin')
-        .split(path.delimiter)
-        .filter((p) => {
-          try {
-            fs.accessSync(path.join(p, 'gsd-tools'), fs.constants.X_OK);
-            return false;
-          } catch {
-            return true;
-          }
-        });
-      const isolatedPath = [noToolsBin, ...systemPaths].join(path.delimiter);
+      // Hard-error case: no node shim, nothing is executed (#4348).
+      const { isolatedPath } = buildIsolatedPath({ extraBefore: [noToolsBin], nodeShim: 'none' });
 
       const r = runHookSeam(scriptPath, [], {
         interpreter: 'bash',
@@ -1215,48 +1264,6 @@ function extractShellBlocks(content) {
   return blocks;
 }
 
-/**
- * Build a PATH with no gsd-tools binary so the PATH fallback branch is skipped,
- * while guaranteeing that a bare `node` lookup still resolves regardless of whether
- * the real node binary co-locates with a global gsd-tools shim (e.g. fnm/nvm/Homebrew).
- *
- * Strategy (POSIX only): create a temp dir containing only a `node` symlink →
- * process.execPath, prepend it to the gsd-tools-filtered PATH.  The filtered
- * PATH excludes any directory that contains an executable `gsd-tools`.
- *
- * On Windows the co-location bug does not apply (gsd-tools resolves via .cmd/.ps1,
- * not the bare binary probed here), and symlinks may require elevated privileges,
- * so we skip the symlink step entirely on that platform.
- *
- * The caller is responsible for cleaning up `result.nodeBinDir` when non-null
- * (pass it to `cleanup()` in a `t.after` or `finally` block).
- *
- * @returns {{ isolatedPath: string, nodeBinDir: string|null }}
- */
-function buildIsolatedPath() {
-  const filteredPath = (process.env.PATH || '/usr/bin:/bin')
-    .split(path.delimiter)
-    .filter((p) => {
-      try { fs.accessSync(path.join(p, 'gsd-tools'), fs.constants.X_OK); return false; }
-      catch { return true; }
-    })
-    .join(path.delimiter);
-
-  // Windows: no symlink (see JSDoc above); callers must handle nodeBinDir === null.
-  if (process.platform === 'win32') {
-    return { isolatedPath: filteredPath, nodeBinDir: null };
-  }
-
-  const nodeBinDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-891-node-'));
-  try {
-    fs.symlinkSync(process.execPath, path.join(nodeBinDir, 'node'));
-  } catch (err) {
-    cleanup(nodeBinDir);
-    throw err;
-  }
-
-  return { isolatedPath: nodeBinDir + path.delimiter + filteredPath, nodeBinDir };
-}
 
 describe('bug-891: non-Claude runtime home fallback arms', () => {
 
@@ -1373,6 +1380,74 @@ describe('bug-891: non-Claude runtime home fallback arms', () => {
       );
     },
   );
+
+  // ── (B0b) #4348: the three node-shim strategies, on one controlled PATH ────
+  //
+  // (B0) covers the co-location hazard for the default strategy. These cover the
+  // two strategies the hoist added for the callers that could not reach the
+  // helper before — the parameters are what a careless consolidation would get
+  // wrong, and the same PATH pinning keeps them machine-independent.
+  describe("(B0b) buildIsolatedPath node-shim strategies (#4348)", () => {
+    function withColocatedPath(t, fn) {
+      const fakeBinDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4348-colocated-'));
+      const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4348-empty-'));
+      t.after(() => cleanup(fakeBinDir));
+      t.after(() => cleanup(emptyDir));
+      const fakeGsdTools = path.join(fakeBinDir, 'gsd-tools');
+      fs.writeFileSync(fakeGsdTools, '#!/bin/sh\necho fake-gsd-tools\n');
+      fs.chmodSync(fakeGsdTools, 0o755);
+      fs.symlinkSync(process.execPath, path.join(fakeBinDir, 'node'));
+      const origPath = process.env.PATH;
+      process.env.PATH = fakeBinDir + path.delimiter + emptyDir;
+      try { return fn({ fakeBinDir, emptyDir }); }
+      finally { process.env.PATH = origPath; }
+    }
+
+    const resolvable = (isolatedPath, bin) => isolatedPath.split(path.delimiter).some((dir) => {
+      try { fs.accessSync(path.join(dir, bin), fs.constants.X_OK); return true; }
+      catch { return false; }
+    });
+
+    test("'none' filters gsd-tools, prepends extraBefore, and creates nothing to clean up", (t) => {
+      const extra = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4348-extra-'));
+      t.after(() => cleanup(extra));
+      const result = withColocatedPath(t, () =>
+        buildIsolatedPath({ extraBefore: [extra], nodeShim: 'none' }));
+      assert.equal(result.nodeBinDir, null, "'none' owns no temp dir");
+      assert.equal(result.isolatedPath.split(path.delimiter)[0], extra, 'extraBefore comes first');
+      assert.equal(resolvable(result.isolatedPath, 'gsd-tools'), false,
+        'the co-located dir carrying gsd-tools must be filtered out');
+    });
+
+    test("'caller' puts the shim in the caller's dir and reports no cleanup obligation",
+      { skip: process.platform === 'win32' ? 'POSIX-only symlink strategy' : false },
+      (t) => {
+        const owned = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4348-owned-'));
+        t.after(() => cleanup(owned));
+        const shimDir = path.join(owned, 'node-shim');
+        const result = withColocatedPath(t, () =>
+          buildIsolatedPath({ nodeShim: 'caller', nodeShimDir: shimDir }));
+        assert.equal(result.nodeBinDir, null, "'caller' owns nothing — the caller's fixture does");
+        assert.ok(fs.existsSync(path.join(shimDir, 'node')), 'the node symlink lands in the given dir');
+        assert.equal(resolvable(result.isolatedPath, 'node'), true,
+          'node must stay resolvable after its co-located dir is filtered');
+        assert.equal(resolvable(result.isolatedPath, 'gsd-tools'), false);
+      });
+
+    test("'caller' without a dir fails loudly rather than silently dropping node", () => {
+      assert.throws(() => buildIsolatedPath({ nodeShim: 'caller' }), /requires nodeShimDir/);
+    });
+
+    test("'own' is the default and keeps its cleanup obligation",
+      { skip: process.platform === 'win32' ? 'POSIX-only symlink strategy' : false },
+      (t) => {
+        const result = withColocatedPath(t, () => buildIsolatedPath());
+        t.after(() => cleanup(result.nodeBinDir));
+        assert.equal(typeof result.nodeBinDir, 'string', "'own' hands the caller a dir to clean up");
+        assert.equal(resolvable(result.isolatedPath, 'node'), true);
+        assert.equal(resolvable(result.isolatedPath, 'gsd-tools'), false);
+      });
+  });
 
   // ── (B) Behavioral: HERMES_HOME stub is resolved ──────────────────────────
   test('(B) gsd_run resolves ${HERMES_HOME}/gsd-core/bin/ stub when set and local+PATH both miss', () => {
