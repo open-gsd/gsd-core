@@ -31,10 +31,13 @@ Orchestrator coordinates, not executes. Each subagent loads the full execute-pla
   Code), you MUST spawn gsd-executor agents — inline execution is not authorized. Check for
   actual tool availability, not runtime name.
 
+- **Codex:** a subagent may end `turn_aborted` with the plan finished — reconcile, don't fail (#4217).
+
 **Fallback rule:** If a spawned agent completes its work (commits visible, SUMMARY.md exists) but
 the orchestrator never receives the completion signal, treat it as successful based on spot-checks
 and continue to the next wave/plan. Never block indefinitely waiting for a signal — always verify
-via filesystem and git state.
+via filesystem and git state. This holds however the session ended, the
+orchestrator's own interrupt included (#4217).
 </runtime_compatibility>
 
 <required_reading>
@@ -848,7 +851,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
    [checkpoint] phase {PHASE_NUMBER} wave {N}/{M} plan {plan_id} checkpoint ({P}/{Q} plans done)
    ```
 
-   **Completion signal fallback (Copilot and runtimes where Agent() may not return):**
+   **Completion signal fallback (EVERY runtime — a terminal response may not arrive):**
 
    If a spawned agent does not return a completion signal but appears to have finished
    its work, do NOT block indefinitely. Instead, verify completion via spot-checks:
@@ -866,10 +869,9 @@ increases monotonically across waves. `{status}` is `complete` (success),
    **If SUMMARY.md exists AND commits are found:** The agent completed successfully —
    treat as done and proceed to step 5. Log: `"✓ {Plan ID} completed (verified via spot-check — completion signal not received)"`
 
-   **If SUMMARY.md does NOT exist after a reasonable wait:** The agent may still be
-   running or may have failed silently. Check `git log --oneline -5` for recent
-   activity. If commits are still appearing, wait longer. If no activity, report
-   the plan as failed and route to the failure handler in step 6.
+   **Before failing ANY plan** — a child interrupted, closed or `turn_aborted` included —
+   read and execute `execute-phase/steps/completion-reconciliation.md` (#4217).
+
 
    **Configurable stall surveillance (#3212):** Every `${EXECUTOR_STALL_INTERVAL_MINUTES}`
    minutes while waiting, inspect `git log "${EXPECTED_BRANCH}" --since="${DISPATCH_TS}"`
