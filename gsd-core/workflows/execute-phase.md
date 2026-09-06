@@ -733,7 +733,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
        <worktree_branch_check>
        ORCHESTRATOR build-time embed (NOT a sub-agent runtime step): before this dispatch, read `gsd-core/references/worktree-branch-check.md`, substitute `{EXPECTED_BASE}` with the base SHA captured above ({EXPECTED_BASE}), and replace this note with that fragment's `<worktree_branch_check>` block so the dispatched prompt carries the runnable guard verbatim — do not pass this instruction through in its place.
-       Per-commit HEAD/cwd-drift/path-guard: `agents/gsd-executor.md` steps 0/0a/0b + `gsd-core/references/worktree-path-safety.md` (in <execution_context>).
+       Per-commit HEAD/cwd-drift/path-guard: `gsd-core/references/worktree-path-safety.md` steps 0p/0a/0b/0 (in <execution_context>).
        </worktree_branch_check>
 
        <parallel_execution>
@@ -810,9 +810,15 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    **Orchestrator-managed worktree dispatch** (`ISOLATION=orchestrator-worktree`): read and execute `execute-phase/steps/executor-isolation-dispatch.md`. GSD creates each worktree (`worktree create`) and spawns the executor into it; the orchestrator performs every git operation. Merge-back and cleanup are the existing manifest-scoped gauntlet, unchanged.
 
-   **Sequential mode** (`USE_WORKTREES_FOR_PLAN` is `false` — either project-level `USE_WORKTREES=false`, or per-plan submodule intersection forced it false in step 2.5):
+   **Sequential mode** (`USE_WORKTREES_FOR_PLAN` is false project-wide or from step 2.5's submodule check):
 
-   Omit `isolation="worktree"` from the Agent call. Replace the `<parallel_execution>` block with:
+   Omit `isolation="worktree"` and `<worktree_branch_check>`. ORCHESTRATOR build-time
+   embed: run the composer in `worktree-path-safety.md` with the validated
+   `$ORCHESTRATOR_WT` and that reference's absolute path. Replace the entire
+   `PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)` assignment in
+   `<required_reading>` with its returned `assignment` (including `PROJECT_ROOT=`).
+   Put its returned runnable `guard` inside `<project_root_pin>`; do not pass this
+   instruction through in its place. Replace `<parallel_execution>` with:
 
    ```
        <sequential_execution>
@@ -820,9 +826,13 @@ increases monotonically across waves. `{status}` is `complete` (success),
        Use normal git commits (with hooks). Do NOT use --no-verify.
        REQUIRED ORDER: Write SUMMARY.md → commit → only then any narration. No text between Write and commit (truncation risk; #2070 rescue is not primary defense).
        </sequential_execution>
+
+       <project_root_pin>{composer guard, with the root already shell-quoted and bound}</project_root_pin>
    ```
 
-   The sequential mode Agent prompt uses the same structure as worktree mode but with these differences in success_criteria — since there is only one agent writing at a time, there are no shared-file conflicts:
+   Submodule plans must follow step 0p's cwd contract and re-run the guard after entering the submodule.
+
+   Also replace `success_criteria` with:
 
    ```
        <success_criteria>
@@ -834,7 +844,8 @@ increases monotonically across waves. `{status}` is `complete` (success),
        </success_criteria>
    ```
 
-   When worktrees are disabled for a plan (per-plan or project-level), that plan's executor runs on the main working tree. If **any** plan in the current wave dropped to sequential mode, execute the affected plan(s) **one at a time** to avoid concurrent writes to the main working tree — plans in the same wave that retained worktree isolation can still run in parallel alongside the sequential ones, but two non-worktree plans in the same wave must serialize. When the project-level `USE_WORKTREES=false`, all plans in the wave serialize regardless of the `PARALLELIZATION` setting.
+   When worktrees are disabled for a plan, serialize it on the pinned tree; isolated plans may run in parallel.
+   Project-level `USE_WORKTREES=false` serializes the whole wave regardless of `PARALLELIZATION`.
 
 4. **Wait for all agents in wave to complete.**
 

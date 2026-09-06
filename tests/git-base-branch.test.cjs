@@ -1167,14 +1167,15 @@ describe('#3819: allow_default_branch_commits escape hatch', () => {
 
 /**
  * Extract the FIRST ```bash fenced block that follows the "Pre-commit
- * protected-branch safety assertion" heading in agents/gsd-executor.md.
+ * protected-branch safety assertion" heading in the canonical worktree-path-safety.md reference.
  * Keyed off the heading text (not a `<step name>` tag — this step has no
  * such wrapper) so a future rewording of the heading fails the test loudly
  * instead of silently extracting nothing.
  */
 function extractExecutorPreCommitBash() {
   const executorPath = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
-  const content = readFileNormalized(executorPath);
+  assert.match(readFileNormalized(executorPath), /worktree-path-safety\.md/, 'executor must load the canonical guards');
+  const content = readFileNormalized(path.join(__dirname, '..', 'gsd-core', 'references', 'worktree-path-safety.md'));
   const lines = content.split('\n');
   const headingIndex = lines.findIndex(
     (line) => line.includes('Pre-commit HEAD safety assertion'),
