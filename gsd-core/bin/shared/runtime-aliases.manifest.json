@@ -72,6 +72,10 @@
     "codebuddy",
     "codebuddy-cli"
   ],
+  "workbuddy": [
+    "workbuddy",
+    "workbuddy-cli"
+  ],
   "cline": [
     "cline",
     "cline-cli"

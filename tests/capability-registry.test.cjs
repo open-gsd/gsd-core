@@ -4317,9 +4317,16 @@ describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
   // are genuinely new agent converters (not renamed/leftover), so the agent
   // count grows from 11 to 14; the 16 command/skill/workflow converters are
   // unchanged.
-  test('VALID_CONVERTER_NAMES has exactly 30 entries (16 command/skill/workflow + 14 agent converters)', () => {
+  //
+  // #4952 (WorkBuddy runtime): 3 converters added —
+  // convertClaudeCommandToWorkbuddyCommand / convertClaudeCommandToWorkbuddySkill
+  // (commands + skills artifacts) and convertClaudeAgentToWorkbuddyAgent (agents
+  // artifact). Genuinely new (WorkBuddy is a distinct host with its own
+  // ~/.workbuddy root), so the counts grow: command/skill/workflow 16 → 18 and
+  // agent 14 → 15.
+  test('VALID_CONVERTER_NAMES has exactly 33 entries (18 command/skill/workflow + 15 agent converters)', () => {
     assert.ok(VALID_CONVERTER_NAMES instanceof Set, 'VALID_CONVERTER_NAMES must be a Set');
-    assert.strictEqual(VALID_CONVERTER_NAMES.size, 30, 'VALID_CONVERTER_NAMES must have exactly 30 entries, got: ' + VALID_CONVERTER_NAMES.size);
+    assert.strictEqual(VALID_CONVERTER_NAMES.size, 33, 'VALID_CONVERTER_NAMES must have exactly 33 entries, got: ' + VALID_CONVERTER_NAMES.size);
   });
 
   test('VALID_CONVERTER_NAMES contains all expected converter names', () => {
@@ -4331,6 +4338,8 @@ describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
       'convertClaudeCommandToClaudeSkill',
       'convertClaudeCommandToCodebuddyCommand',
       'convertClaudeCommandToCodebuddySkill',
+      'convertClaudeCommandToWorkbuddyCommand',
+      'convertClaudeCommandToWorkbuddySkill',
       'convertClaudeCommandToCodexSkill',
       'convertClaudeCommandToCopilotSkill',
       'convertClaudeCommandToCursorSkill',
@@ -4348,6 +4357,7 @@ describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
       'convertClaudeAgentToAugmentAgent',
       'convertClaudeAgentToTraeAgent',
       'convertClaudeAgentToCodebuddyAgent',
+      'convertClaudeAgentToWorkbuddyAgent',
       'convertClaudeAgentToClineAgent',
       'convertClaudeAgentToCodexAgent',
       // ADR-1239 / #2092 Phase B Upgrade 1 — native .qwen/agents/*.md subagent projection.

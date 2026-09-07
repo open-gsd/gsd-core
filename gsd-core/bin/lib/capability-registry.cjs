@@ -4138,6 +4138,124 @@ const capabilities = {
       }
     }
   },
+  "workbuddy": {
+    "id": "workbuddy",
+    "role": "runtime",
+    "version": "1.13.0",
+    "title": "WorkBuddy",
+    "description": "WorkBuddy (Tencent) — converted commands + skills artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".workbuddy",
+        "env": [
+          "WORKBUDDY_CONFIG_DIR"
+        ]
+      },
+      "localConfigDir": ".workbuddy",
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToWorkbuddyCommand"
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToWorkbuddySkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToWorkbuddyAgent"
+          }
+        ],
+        "local": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToWorkbuddyCommand"
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToWorkbuddySkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToWorkbuddyAgent"
+          }
+        ]
+      },
+      "triggerPrecedence": [
+        "skills",
+        "commands"
+      ],
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "settings-json",
+      "hookEvents": "claude",
+      "sandboxTier": "none",
+      "supportTier": 2,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": null,
+      "extendedHookEvents": [
+        "SubagentStop",
+        "Stop",
+        "PreCompact",
+        "SubagentStart"
+      ],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": false,
+          "maxDepth": 1,
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": false,
+          "isolation": "undocumented",
+          "maxConcurrency": "undocumented"
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node",
+        "effortSurface": "undocumented"
+      },
+      "hostBehaviors": {
+        "reportCommandsDir": true
+      }
+    }
+  },
   "zcode": {
     "id": "zcode",
     "role": "runtime",
@@ -7855,6 +7973,124 @@ const runtimes = {
       }
     }
   },
+  "workbuddy": {
+    "id": "workbuddy",
+    "role": "runtime",
+    "version": "1.13.0",
+    "title": "WorkBuddy",
+    "description": "WorkBuddy (Tencent) — converted commands + skills artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".workbuddy",
+        "env": [
+          "WORKBUDDY_CONFIG_DIR"
+        ]
+      },
+      "localConfigDir": ".workbuddy",
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToWorkbuddyCommand"
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToWorkbuddySkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToWorkbuddyAgent"
+          }
+        ],
+        "local": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToWorkbuddyCommand"
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToWorkbuddySkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToWorkbuddyAgent"
+          }
+        ]
+      },
+      "triggerPrecedence": [
+        "skills",
+        "commands"
+      ],
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "settings-json",
+      "hookEvents": "claude",
+      "sandboxTier": "none",
+      "supportTier": 2,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": null,
+      "extendedHookEvents": [
+        "SubagentStop",
+        "Stop",
+        "PreCompact",
+        "SubagentStart"
+      ],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": false,
+          "maxDepth": 1,
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": false,
+          "isolation": "undocumented",
+          "maxConcurrency": "undocumented"
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node",
+        "effortSurface": "undocumented"
+      },
+      "hostBehaviors": {
+        "reportCommandsDir": true
+      }
+    }
+  },
   "zcode": {
     "id": "zcode",
     "role": "runtime",
@@ -8170,6 +8406,7 @@ const _requiresGraph = {
   "ui": [],
   "vscode": [],
   "windsurf": [],
+  "workbuddy": [],
   "zcode": []
 };
 

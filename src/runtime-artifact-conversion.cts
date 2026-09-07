@@ -1720,6 +1720,96 @@ function convertClaudeCommandToCodebuddyCommand(content, commandName) {
   return lines.join('\n');
 }
 
+// ── WorkBuddy converters ────────────────────────────────────────────────────
+
+function convertSlashCommandsToWorkbuddySkillMentions(content) {
+  return content.replace(/\/gsd:([a-z0-9-]+)/g, (_, commandName) => {
+    return `/gsd-${commandName}`;
+  });
+}
+
+function convertClaudeToWorkbuddyMarkdown(content) {
+  let converted = convertSlashCommandsToWorkbuddySkillMentions(content);
+  // WorkBuddy uses the same tool names as Claude Code (Bash, Edit, Read, Write, etc.)
+  // No tool name conversion needed.
+  //
+  // #4952: unlike CodeBuddy (which rewrites $ARGUMENTS → {{GSD_ARGS}}), WorkBuddy
+  // expands `$ARGUMENTS` natively in command bodies — its builtin commands
+  // (e.g. plugins/workbuddy-builtin/.../commands/excel.md) interpolate
+  // `$ARGUMENTS` verbatim. Rewriting it here would leave commands with an
+  // unexpanded literal, so it is deliberately preserved.
+  converted = converted.replace(/`\.\/CLAUDE\.md`/g, '`CODEBUDDY.md`');
+  converted = converted.replace(/\.\/CLAUDE\.md/g, 'CODEBUDDY.md');
+  converted = converted.replace(/`CLAUDE\.md`/g, '`CODEBUDDY.md`');
+  converted = converted.replace(/\bCLAUDE\.md\b/g, 'CODEBUDDY.md');
+  converted = converted.replace(/\.claude\/skills\//g, '.workbuddy/skills/');
+  converted = converted.replace(/\.\/\.claude\//g, './.workbuddy/');
+  converted = converted.replace(/\.claude\//g, '.workbuddy/');
+  converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
+  converted = converted.replace(/- \*\*classifyHandoffIfNeeded false failure:\*\*[^\n]*\n/g, '');
+  // #2284(b): skips <runtime_compatibility> comparison-table content (protected region).
+  converted = applyClaudeCodeBrandSwap(converted, 'WorkBuddy');
+  return converted;
+}
+
+function convertClaudeCommandToWorkbuddySkill(content, skillName) {
+  const converted = convertClaudeToWorkbuddyMarkdown(content);
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  let description = `Run GSD workflow ${skillName}.`;
+  if (frontmatter) {
+    const maybeDescription = extractFrontmatterField(frontmatter, 'description');
+    if (maybeDescription) {
+      description = maybeDescription;
+    }
+  }
+  description = toSingleLine(description);
+  const shortDescription = description.length > 180 ? `${description.slice(0, 177)}...` : description;
+  // #2876: quote so YAML flow indicators (`[BETA] …`) don't break
+  // the frontmatter parser.
+  //
+  // #789: mark user-invocable:false so the skill is NOT shown in the host's
+  // '/' menu (it defaults to true). The commands/ surface (#789) is the sole
+  // '/' entry point; skills remain model-invocable background knowledge,
+  // avoiding a duplicated /gsd-* entry per workflow.
+  return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\nuser-invocable: false\n---\n${body}`;
+}
+
+/**
+ * Convert a Claude Code slash-command (.md) to a WorkBuddy slash-command (.md).
+ *
+ * WorkBuddy reads user-level slash commands from ~/.workbuddy/commands/<name>.md
+ * (same convention as CodeBuddy — WorkBuddy is built on the CodeBuddy Code
+ * core). The filename determines the command name (gsd-help.md → /gsd-help), so
+ * the Claude-specific `name: gsd:<x>` frontmatter field is dropped. WorkBuddy
+ * command frontmatter supports `description` and `argument-hint`; both are
+ * preserved when present. The body is brand/path-converted via
+ * convertClaudeToWorkbuddyMarkdown.
+ *
+ * @param {string} content      raw Claude command markdown
+ * @param {string} commandName  installed command name (e.g. 'gsd-help')
+ * @returns {string}
+ */
+function convertClaudeCommandToWorkbuddyCommand(content, commandName) {
+  const converted = convertClaudeToWorkbuddyMarkdown(content);
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  let description = `Run GSD workflow ${commandName}.`;
+  let argumentHint = '';
+  if (frontmatter) {
+    const maybeDescription = extractFrontmatterField(frontmatter, 'description');
+    if (maybeDescription) description = maybeDescription;
+    const maybeArgHint = extractFrontmatterField(frontmatter, 'argument-hint');
+    if (maybeArgHint) argumentHint = maybeArgHint;
+  }
+  description = toSingleLine(description);
+  const shortDescription = description.length > 180 ? `${description.slice(0, 177)}...` : description;
+  // #2876: quote values so YAML flow indicators (`[BETA] …`, `[name]`) don't
+  // break the frontmatter parser.
+  const lines = ['---', `description: ${yamlQuote(shortDescription)}`];
+  if (argumentHint) lines.push(`argument-hint: ${yamlQuote(toSingleLine(argumentHint))}`);
+  lines.push('---', body.trimStart());
+  return lines.join('\n');
+}
+
 // ── Cline converters ────────────────────────────────────────────────────────
 
 function convertClaudeToCliineMarkdown(content) {
@@ -2796,6 +2886,20 @@ function convertClaudeAgentToCodebuddyAgent(content) {
   return `${cleanFrontmatter}\n${body}`;
 }
 
+function convertClaudeAgentToWorkbuddyAgent(content) {
+  const converted = convertClaudeToWorkbuddyMarkdown(content);
+
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  if (!frontmatter) return converted;
+
+  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
+  const description = extractFrontmatterField(frontmatter, 'description') || '';
+
+  const cleanFrontmatter = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n---`;
+
+  return `${cleanFrontmatter}\n${body}`;
+}
+
 function convertClaudeAgentToClineAgent(content) {
   const converted = convertClaudeToCliineMarkdown(content);
   const { frontmatter, body } = extractFrontmatterAndBody(converted);
@@ -3253,6 +3357,20 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false, a
       content = content.replace(/\$HOME\/\.codebuddy\//g, pathPrefix);
       content = content.replace(/~\/\.codebuddy\b/g, normalizedPathPrefix);
       content = content.replace(/\$HOME\/\.codebuddy\b/g, normalizedPathPrefix);
+      content = processAttribution(content, attribution);
+      break;
+
+    case 'workbuddy':
+      content = content.replace(/~\/\.claude\//g, pathPrefix);
+      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
+      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
+      content = content.replace(/~\/\.claude\b/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
+      content = content.replace(/\.\/\.claude\b/g, `./${dirName}`);
+      content = content.replace(/~\/\.workbuddy\//g, pathPrefix);
+      content = content.replace(/\$HOME\/\.workbuddy\//g, pathPrefix);
+      content = content.replace(/~\/\.workbuddy\b/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.workbuddy\b/g, normalizedPathPrefix);
       content = processAttribution(content, attribution);
       break;
 
@@ -3853,6 +3971,9 @@ export = {
   convertClaudeToCodebuddyMarkdown,
   convertClaudeCommandToCodebuddySkill,
   convertClaudeCommandToCodebuddyCommand,
+  convertClaudeToWorkbuddyMarkdown,
+  convertClaudeCommandToWorkbuddySkill,
+  convertClaudeCommandToWorkbuddyCommand,
   convertClaudeToCliineMarkdown,
   convertClaudeCommandToClineSkill,
   convertSlashCommandsToCodexSkillMentions,
@@ -3886,6 +4007,7 @@ export = {
   convertClaudeAgentToAugmentAgent,
   convertClaudeAgentToTraeAgent,
   convertClaudeAgentToCodebuddyAgent,
+  convertClaudeAgentToWorkbuddyAgent,
   convertClaudeAgentToClineAgent,
   convertClaudeAgentToCodexAgent,
   // #2875 Part 2 (J10): Hermes named branding converter, generic underlying

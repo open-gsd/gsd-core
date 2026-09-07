@@ -94,6 +94,10 @@ const EXPECTED_PROFILES = {
   antigravity: 'declarative-cli',
   augment:     'declarative-cli',
   codebuddy:   'declarative-cli',
+  // #4952: WorkBuddy shares the CodeBuddy Code core (same declarative plugin
+  // surface: ~/.workbuddy/{commands,skills,agents,settings.json} with no
+  // in-process programmatic API). Groups with codebuddy for the same reason.
+  workbuddy:   'declarative-cli',
   codex:       'declarative-cli',
   copilot:     'declarative-cli',
   'kimi-code': 'declarative-cli',
@@ -324,6 +328,10 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     claude:      true,
     cline:       true,
     codebuddy:   true,
+    // #4952: WorkBuddy mirrors codebuddy's dispatch shape (same CodeBuddy Code
+    // core → same nesting toolkit and same depth budget), so the flatten
+    // consequence is identical: force-flattened.
+    workbuddy:   true,
     codex:       true,
     copilot:     true,
     cursor:      false,

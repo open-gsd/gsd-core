@@ -19,7 +19,7 @@ Sync managed `gsd-*` skill directories from one canonical runtime's skills root 
 
 If neither `--dry-run` nor `--apply` is specified, dry-run is the default.
 
-**Supported runtime names:** `antigravity`, `augment`, `claude`, `cline`, `codebuddy`, `codex`, `copilot`, `cursor`, `grok`, `hermes`, `kilo`, `kimi`, `kimi-code`, `opencode`, `pi`, `qwen`, `trae`, `windsurf`, `zcode` — the full capability registry runtime set (`gsd-core/bin/lib/capability-registry.cjs`'s `runtimes`) plus `grok` (a live, dedicated `~/.agents`-layout resolution branch in `getGlobalConfigDir` predating the capability registry — overridable via `GROK_AGENTS_HOME`), excluding `vscode`: it is `installSurface: 'none'` (#2103) and `getGlobalSkillsBase('vscode')` returns `null`, so a skills-root sync to/from it always aborts at Step 2's resolution guard — there is nowhere on disk to sync to.
+**Supported runtime names:** `antigravity`, `augment`, `claude`, `cline`, `codebuddy`, `codex`, `copilot`, `cursor`, `grok`, `hermes`, `kilo`, `kimi`, `kimi-code`, `opencode`, `pi`, `qwen`, `trae`, `windsurf`, `workbuddy`, `zcode` — the full capability registry runtime set (`gsd-core/bin/lib/capability-registry.cjs`'s `runtimes`) plus `grok` (a live, dedicated `~/.agents`-layout resolution branch in `getGlobalConfigDir` predating the capability registry — overridable via `GROK_AGENTS_HOME`), excluding `vscode`: it is `installSurface: 'none'` (#2103) and `getGlobalSkillsBase('vscode')` returns `null`, so a skills-root sync to/from it always aborts at Step 2's resolution guard — there is nowhere on disk to sync to.
 
 ---
 

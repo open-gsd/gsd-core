@@ -31,6 +31,7 @@ const RUNTIME_SURFACES: Record<string, string[]> = {
   hermes: ['gsd-core', 'skills/gsd', 'agents'],
   cline: ['gsd-core', 'skills', 'agents'],
   codebuddy: ['gsd-core', 'skills', 'agents'],
+  workbuddy: ['gsd-core', 'skills', 'agents'],
 };
 
 const COMMON_SURFACES = ['gsd-core', 'skills', 'agents', 'hooks'];

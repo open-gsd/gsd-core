@@ -30,6 +30,7 @@ const FALLBACK_ALIASES: Readonly<Record<string, string[]>> = {
   kimi: ['kimi'],
   'kimi-code': ['kimi-code', 'kimicode', 'kimi_code'],
   codebuddy: ['codebuddy', 'codebuddy-cli'],
+  workbuddy: ['workbuddy', 'workbuddy-cli'],
   cline: ['cline', 'cline-cli'],
 };
 
@@ -241,6 +242,7 @@ const RUNTIME_LABELS: Readonly<Record<string, string>> = {
   kimi: 'Kimi CLI',
   'kimi-code': 'Kimi Code',
   codebuddy: 'CodeBuddy',
+  workbuddy: 'WorkBuddy',
   cline: 'Cline',
   zcode: 'ZCode',
   pi: 'pi',
@@ -294,6 +296,7 @@ const GLOBAL_CONFIG_HOME_FRAGMENTS: Readonly<Record<string, string>> = {
   qwen:      "'.qwen'",
   hermes:    "'.hermes'",
   codebuddy: "'.codebuddy'",
+  workbuddy: "'.workbuddy'",
   cline:     "'.cline'",
   kimi:      "'.config', 'agents'",
   'kimi-code': "'.kimi-code'",
@@ -332,7 +335,7 @@ export function getGlobalConfigHomeFragment(runtime: string): string {
 // folds the shared-hooks-install skip).
 const RUNTIME_FLAG_IDS = Object.freeze([
   'opencode', 'kilo', 'codex', 'copilot', 'antigravity', 'cursor',
-  'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi', 'kimi-code', 'zcode', 'pi',
+  'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'workbuddy', 'cline', 'kimi', 'kimi-code', 'zcode', 'pi',
 ] as const);
 
 /**

@@ -386,6 +386,32 @@ CodeBuddy's own [background sub-agent dispatch](https://www.codebuddy.ai/docs/cl
 
 ---
 
+### WorkBuddy
+
+WorkBuddy is built on the same CodeBuddy Code core, so the installation shape, hook event dialect, and slash-command/skill/agent surface mirror CodeBuddy — only the root path and the per-command `$ARGUMENTS` interpolation differ.
+
+```bash
+npx @opengsd/gsd-core@latest --workbuddy --global
+```
+
+GSD installs four surfaces. Slash command definitions land in `~/.workbuddy/commands/gsd-*.md` and appear as `/gsd-help`, `/gsd-phase`, `/gsd-ship`, etc. in the `/` menu. Subagents land in `~/.workbuddy/agents/gsd-*.md`. Skills land in `~/.workbuddy/skills/gsd-*/SKILL.md` — emitted with `user-invocable: false` so they stay out of the `/` menu (the commands surface is the sole `/` entry point) and remain available for model invocation. WorkBuddy hooks are written to `settings.json`. No `mcp.json` is written: GSD ships no MCP server.
+
+**Override the install directory**
+
+```bash
+WORKBUDDY_CONFIG_DIR=~/.workbuddy-alt npx @opengsd/gsd-core@latest --workbuddy --global
+```
+
+**`$ARGUMENTS` vs `{{GSD_ARGS}}`**
+
+Unlike CodeBuddy (which rewrites every `$ARGUMENTS` in the source command to `{{GSD_ARGS}}` for its own interpolation engine), WorkBuddy preserves `$ARGUMENTS` verbatim — its built-in commands interpolate the variable natively. If you write your own command files that piggy-back on a GSD-installed one, you can reference the user's slash-command arguments in the same `$ARGUMENTS` form the WorkBuddy host expands for every other built-in.
+
+**Hook coverage**
+
+Identical to CodeBuddy — GSD registers the same events automatically on install (Claude hook event dialect). See the hook table in the [CodeBuddy](#codebuddy) section above for the full event → hook → purpose mapping.
+
+---
+
 ### Qwen Code
 
 Qwen Code uses the same open skills standard as Claude Code 2.1.88+.

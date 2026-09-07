@@ -79,14 +79,15 @@ const RUNTIME_META = {
   qwen:         { localDir: '.qwen',             globalSuffix: '.qwen' },
   trae:         { localDir: '.trae',             globalSuffix: '.trae' },
   windsurf:     { localDir: '.windsurf',          globalSuffix: path.join('.codeium', 'windsurf') },
+  workbuddy:    { localDir: '.workbuddy',         globalSuffix: '.workbuddy' },
   zcode:        { localDir: '.zcode',             globalSuffix: '.zcode' },
 };
 
 /**
  * The emitted manifest families, as (fixtureName -> install spec).
  *
- * NOT simply `Object.keys(RUNTIME_META)`: that has 18 entries while the fixture set has
- * 19. The extra one is `claude-local` — claude is the reference host and the ONLY
+ * NOT simply `Object.keys(RUNTIME_META)`: that has 19 entries while the fixture set has
+ * 20. The extra one is `claude-local` — claude is the reference host and the ONLY
  * runtime with a distinct LOCAL "legacy flat-commands" layout (`commands/gsd-*.md` +
  * `agents/gsd-*.md` at project scope), which `golden-install-parity.test.cjs` guards
  * with a hand-coded test outside its RUNTIME_META loop (#2086).
@@ -116,12 +117,12 @@ const MANIFEST_FAMILIES = [
  * derived — it ratchets, and lowering it is a deliberate, reviewable act. It never
  * blocks ADDING a runtime, which is the asymmetry the old shared literal lacked.
  */
-const MINIMUM_MANIFEST_FAMILIES = 19;
+const MINIMUM_MANIFEST_FAMILIES = 20;
 
 // Runtimes that emit per-skill files under skills/ (not rules-based or commands-based)
 const SKILL_RUNTIMES = [
   'claude', 'opencode', 'kilo', 'codex', 'copilot', 'antigravity',
-  'cursor', 'augment', 'trae', 'qwen', 'codebuddy',
+  'cursor', 'augment', 'trae', 'qwen', 'codebuddy', 'workbuddy',
 ];
 
 // ─── Golden install-parity manifest (canonical — issue #2266) ────────────────

@@ -1174,7 +1174,7 @@ fix(03-01): correct auth token expiry
 **Purpose:** Run GSD across multiple AI coding agent runtimes.
 
 **Requirements:**
-- REQ-RUNTIME-01: System MUST support Claude Code, OpenCode, Kilo, Codex, Copilot, Antigravity, Trae, Cline, Augment Code, CodeBuddy, Qwen Code
+- REQ-RUNTIME-01: System MUST support Claude Code, OpenCode, Kilo, Codex, Copilot, Antigravity, Trae, Cline, Augment Code, CodeBuddy, WorkBuddy, Qwen Code
 - REQ-RUNTIME-02: Installer MUST transform content per runtime (tool names, paths, frontmatter)
 - REQ-RUNTIME-03: Installer MUST support interactive and non-interactive (`--claude --global`) modes
 - REQ-RUNTIME-04: Installer MUST support both global and local installation
@@ -1205,6 +1205,9 @@ fix(03-01): correct auth token expiry
 **New slash-command surfaces (1.4.0):**
 - **CodeBuddy** — `/gsd-*` slash commands written to `~/.codebuddy/commands/`
 - **Augment** — `commands/gsd-<name>.md` written to `~/.augment/commands/`
+
+**WorkBuddy (1.13.0):**
+- **WorkBuddy** — `/gsd-*` slash commands written to `~/.workbuddy/commands/`. Built on the same CodeBuddy Code core as CodeBuddy, with the same settings.json hook surface; the only behavioral difference is that WorkBuddy preserves `$ARGUMENTS` verbatim in command bodies (CodeBuddy rewrites it to `{{GSD_ARGS}}`).
 - **Cursor** (Cursor >= 1.6) — `.cursor/commands/gsd-<name>.md` so GSD appears in the `/` command menu
 
 **Cross-runtime lifecycle hooks (1.4.0):** Each supported runtime registers lifecycle hook events for per-turn context-headroom tracking and workflow state management. Notable registrations:
