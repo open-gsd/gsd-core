@@ -1130,9 +1130,21 @@ function _normalizeMd(content: string): string {
   const lines = text.split('\n');
   const result: string[] = [];
   const fenceRegex = /^```/;
+  const insideFrontmatter = new Array<boolean>(lines.length).fill(false);
+  if ((lines[0] ?? '').trimEnd() === '---') {
+    insideFrontmatter[0] = true;
+    for (let i = 1; i < lines.length; i++) {
+      insideFrontmatter[i] = true;
+      if (lines[i].trimEnd() === '---') break;
+    }
+  }
   const insideFence = new Array<boolean>(lines.length);
   let fenceOpen = false;
   for (let i = 0; i < lines.length; i++) {
+    if (insideFrontmatter[i]) {
+      insideFence[i] = false;
+      continue;
+    }
     if (fenceRegex.test(lines[i].trimEnd())) {
       if (fenceOpen) {
         insideFence[i] = false;
@@ -1151,19 +1163,20 @@ function _normalizeMd(content: string): string {
     const prevTrimmed = prev.trimEnd();
     const trimmed = line.trimEnd();
     const isFenceLine = fenceRegex.test(trimmed);
-    if (/^#{1,6}\s/.test(trimmed) && i > 0 && prevTrimmed !== '' && prevTrimmed !== '---') result.push('');
-    if (isFenceLine && i > 0 && prevTrimmed !== '' && !insideFence[i] && (i === 0 || !insideFence[i - 1] || isFenceLine)) {
+    const isFrontmatterLine = insideFrontmatter[i];
+    if (!isFrontmatterLine && /^#{1,6}\s/.test(trimmed) && i > 0 && prevTrimmed !== '' && prevTrimmed !== '---') result.push('');
+    if (!isFrontmatterLine && isFenceLine && i > 0 && prevTrimmed !== '' && !insideFence[i] && (i === 0 || !insideFence[i - 1] || isFenceLine)) {
       if (i === 0 || !insideFence[i - 1]) result.push('');
     }
     // #3854: the `!/^\s/.test(prev)` guard mirrors the after-a-bullet rule below —
     // an indented non-bullet line is a CONTINUATION of the previous list item, not a
     // preceding paragraph, so no separating blank may be injected before this bullet
     // (that injection converted every tight multi-line list to a loose one on write).
-    if (/^(\s*[-*+]\s|\s*\d+\.\s)/.test(line) && i > 0 && prevTrimmed !== '' && !/^(\s*[-*+]\s|\s*\d+\.\s)/.test(prev) && !/^\s/.test(prev) && prevTrimmed !== '---') result.push('');
+    if (!isFrontmatterLine && /^(\s*[-*+]\s|\s*\d+\.\s)/.test(line) && i > 0 && prevTrimmed !== '' && !/^(\s*[-*+]\s|\s*\d+\.\s)/.test(prev) && !/^\s/.test(prev) && prevTrimmed !== '---') result.push('');
     result.push(line);
-    if (/^#{1,6}\s/.test(trimmed) && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '') result.push('');
-    if (/^```\s*$/.test(trimmed) && i > 0 && insideFence[i - 1] && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '') result.push('');
-    if (/^(\s*[-*+]\s|\s*\d+\.\s)/.test(line) && i < lines.length - 1) {
+    if (!isFrontmatterLine && /^#{1,6}\s/.test(trimmed) && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '') result.push('');
+    if (!isFrontmatterLine && /^```\s*$/.test(trimmed) && i > 0 && insideFence[i - 1] && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '') result.push('');
+    if (!isFrontmatterLine && /^(\s*[-*+]\s|\s*\d+\.\s)/.test(line) && i < lines.length - 1) {
       const next = lines[i + 1];
       if (next !== undefined && next.trimEnd() !== '' && !/^(\s*[-*+]\s|\s*\d+\.\s)/.test(next) && !/^\s/.test(next)) result.push('');
     }

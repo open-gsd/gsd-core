@@ -109,3 +109,51 @@ describe('#3854: write normalization preserves tight multi-line lists', () => {
     }
   });
 });
+
+describe('#4499: markdown normalization preserves leading YAML frontmatter', () => {
+  test('block sequences remain adjacent when an unrelated scalar changes', () => {
+    const input = [
+      '---',
+      'phase: 01',
+      'tags:',
+      '- api',
+      '- sdk',
+      'owners:',
+      '- platform',
+      '- runtime',
+      '---',
+      '# Plan',
+      '',
+      'Body.',
+      '',
+    ].join('\n');
+
+    const updated = input.replace('phase: 01', 'phase: 02');
+    assert.strictEqual(normalizeContent(MD, updated).content, updated);
+  });
+
+  test('a block sequence immediately before the closing delimiter gains no blank', () => {
+    const input = '---\ntags:\n- api\n- sdk\n---\n\nBody.\n';
+    const { content } = normalizeContent(MD, input);
+    assert.ok(!content.includes('- api\n\n- sdk'));
+    assert.ok(!content.includes('- sdk\n\n---'));
+    assert.strictEqual(content, input);
+  });
+
+  test('flow arrays in frontmatter remain byte-identical', () => {
+    const input = '---\ntags: [api, sdk]\nphase: 01\n---\n\nBody.\n';
+    assert.strictEqual(normalizeContent(MD, input).content, input);
+  });
+
+  test('body lists still receive paragraph separation after frontmatter', () => {
+    const input = '---\ntags:\n- api\n- sdk\n---\n\nLead paragraph.\n- body item\n';
+    const { content } = normalizeContent(MD, input);
+    assert.ok(content.includes('tags:\n- api\n- sdk\n---'));
+    assert.ok(content.includes('Lead paragraph.\n\n- body item'));
+  });
+
+  test('documents without frontmatter retain the existing list normalization', () => {
+    const input = 'Lead paragraph.\n- item\n';
+    assert.strictEqual(normalizeContent(MD, input).content, 'Lead paragraph.\n\n- item\n');
+  });
+});
