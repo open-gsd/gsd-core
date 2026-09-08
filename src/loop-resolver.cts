@@ -571,10 +571,11 @@ function resolveActiveHooksForPoint(
   // to confine, and `--phase 05 --phase-dir <another in-project phase>` is
   // rejected as incoherent rather than silently believed — a disagreement no
   // containment check could catch, since both paths are inside the project.
-  // An empty string is not special-cased: `readDualFormFlag` already rejects a
-  // bare or empty `--phase`/`--phase-dir` at the CLI boundary, and an in-process
-  // caller passing '' falls through to the same "did not match" warning every
-  // other unresolvable token gets. One degrade path, no second error channel.
+  // `resolveActiveHooksForPoint` is exported (dispatch-step calls it directly,
+  // bypassing the CLI's `readDualFormFlag` entirely), so an empty string here is
+  // a real input this boundary must handle on its own, not dead defense against
+  // a CLI that already filters it. Treated identically to undefined either way:
+  // one degrade path (unresolvable token -> warning), never a hard error.
   const phaseArg = typeof options['phase'] === 'string' && options['phase'] !== '' ? options['phase'] : undefined;
   const phaseDirArg = typeof options['phaseDir'] === 'string' && options['phaseDir'] !== '' ? options['phaseDir'] : undefined;
   let phaseContext: { phase: string; phaseDir: string } | undefined;
@@ -592,10 +593,25 @@ function resolveActiveHooksForPoint(
         directory: string;
         phase_number: string;
         ambiguous_matches?: string[];
+        archived?: string;
       } | null;
     };
     const phaseResult = guardedFindPhase(cwd, phaseArg, config['project_code']);
-    if (phaseResult?.found) {
+    if (phaseResult?.found && phaseResult.archived) {
+      // guardedFindPhase falls back to archived .planning/milestones/ phases
+      // when no ACTIVE phase matches the token — the same fallback init.*'s
+      // own callers guard against (applyRoadmapFallback's `phaseInfo?.archived
+      // -> null` rule). A hook-dispatch context is documented as resolving
+      // "one direct child beneath the active project's .planning/phases"
+      // (ADR-4030); an archived milestone directory is neither, so this
+      // degrades exactly like an unresolved token — warning, no context —
+      // rather than silently pointing a phase-scoped hook at retired plans.
+      phaseWarnings.push(
+        `--phase ${JSON.stringify(phaseArg)} resolved only to an archived phase ` +
+        `(${JSON.stringify(phaseResult.directory)}, milestone ${JSON.stringify(phaseResult.archived)}); ` +
+        'context omitted.',
+      );
+    } else if (phaseResult?.found) {
       // A supplied --phase-dir must AGREE with what the token resolved to.
       // Confinement is not the interesting failure here: two in-project
       // directories both pass any containment check, yet `--phase 05
@@ -689,7 +705,13 @@ function resolveActiveHooksForPoint(
   // to the operator/agent — no host workflow reads `.warnings` back out of
   // the `*_HOOKS_JSON` envelope it captures, so stderr is the only channel
   // that actually surfaces these today.
-  for (const w of [...loadFailWarnings, ...phaseWarnings]) {
+  // Two sequential loops, not one spread-merged array: phaseWarnings never
+  // holds more than one entry (its three push sites are mutually exclusive
+  // branches), so merging buys nothing on the path most calls take.
+  for (const w of loadFailWarnings) {
+    process.stderr.write(`gsd: warning — ${w}\n`);
+  }
+  for (const w of phaseWarnings) {
     process.stderr.write(`gsd: warning — ${w}\n`);
   }
 
