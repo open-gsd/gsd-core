@@ -80,11 +80,8 @@ Dispatch the referenced unit. Exactly one of `ref.skill`, `ref.agent`, or `ref.c
   gsd_run ${ref.command} --raw
   ```
 
-  `context.phaseDir` is not passed here: no first-party `ref.command` consumer
-  (`intel api-surface`, `refactor evaluate`) parses a `--phase-dir` flag today. A
-  capability that needs the directory, not just the token, resolves it itself from
-  `--phase` the same way `init.*` does, rather than this contract inventing an
-  unconsumed flag.
+  `context.phaseDir` is not passed here — a capability that needs the directory, not just
+  the token, resolves it itself from `--phase` the same way `init.*` does.
 
 Wait for the result before continuing to the next hook or the next step.
 
@@ -141,15 +138,14 @@ Evaluate `check` (one of `query`, `predicate`, or `agentVerdict`). Then honor `b
 Honor `onError` if the check itself errors: `skip` means treat as non-blocking and continue;
 `halt` means surface the error and stop.
 
-When the check invocation needs a phase argument, `context.phase` / `context.phaseDir` and a
-workflow's own already-resolved `${PHASE_NUMBER}` / `${PHASE_DIR}` are the same value — both
-derive from the identical `guardedFindPhase` resolution — so either source is correct; prefer
-whichever the surrounding workflow already has in scope rather than a redundant extraction.
-Match the subcommand's own argument shape, they differ: a `query` check's phase-taking
-subcommands (e.g. `verify-context-drift`, `verify-schema-drift`) take the phase **token** as a
-positional argument (`gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw`); a `predicate`
-check's `gate-predicate-evaluator.cts` (per ADR-2008) takes the **directory** as a named flag
-(`--phase-dir "${PHASE_DIR}"`).
+When the check invocation needs a phase argument, use whichever the surrounding workflow
+already has in scope — `context.phase`/`context.phaseDir` and a workflow's own already-resolved
+`${PHASE_NUMBER}`/`${PHASE_DIR}` are the identical value (same `guardedFindPhase` resolution), so
+a fresh extraction is redundant. Match the subcommand's own argument shape, they differ: a
+`query` check's phase-taking subcommands (e.g. `verify-context-drift`, `verify-schema-drift`)
+take the phase **token** as a positional argument (`gsd_run check ${hook.check.query}
+"${PHASE_NUMBER}" --raw`); a `predicate` check's `gate-predicate-evaluator.cts` (per ADR-2008)
+takes the **directory** as a named flag (`--phase-dir "${PHASE_DIR}"`).
 
 ## Empty / absent `activeHooks`
 
