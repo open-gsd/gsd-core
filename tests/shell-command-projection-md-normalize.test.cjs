@@ -249,3 +249,59 @@ describe('#4725: write normalization must not reflow untouched prose', () => {
     );
   });
 });
+
+describe('#4499: markdown normalization preserves leading YAML frontmatter', () => {
+  test('block sequences remain adjacent when an unrelated scalar changes', () => {
+    const input = [
+      '---',
+      'phase: 01',
+      'tags:',
+      '- api',
+      '- sdk',
+      'owners:',
+      '- platform',
+      '- runtime',
+      '---',
+      '# Plan',
+      '',
+      'Body.',
+      '',
+    ].join('\n');
+
+    const updated = input.replace('phase: 01', 'phase: 02');
+    assert.strictEqual(normalizeContent(MD, updated).content, updated);
+  });
+
+  test('a block sequence immediately before the closing delimiter gains no blank', () => {
+    const input = '---\ntags:\n- api\n- sdk\n---\n\nBody.\n';
+    const { content } = normalizeContent(MD, input);
+    assert.ok(!content.includes('- api\n\n- sdk'));
+    assert.ok(!content.includes('- sdk\n\n---'));
+    assert.strictEqual(content, input);
+  });
+
+  test('flow arrays in frontmatter remain byte-identical', () => {
+    const input = '---\ntags: [api, sdk]\nphase: 01\n---\n\nBody.\n';
+    assert.strictEqual(normalizeContent(MD, input).content, input);
+  });
+
+  test('body normalization still applies after frontmatter (heading-before-list)', () => {
+    // #4725 removed the paragraph-before-list rule this test used to exercise
+    // (a bare "Lead paragraph.\n- body item" now stays byte-identical, same as
+    // the #4725 suite above asserts for a document with no frontmatter at all).
+    // The after-heading rule is unaffected by #4725, so it still demonstrates
+    // that frontmatter protection does not disable body normalization generally.
+    const input = '---\ntags:\n- api\n- sdk\n---\n\n## Section\n- body item\n';
+    const { content } = normalizeContent(MD, input);
+    assert.ok(content.includes('tags:\n- api\n- sdk\n---'));
+    assert.ok(content.includes('## Section\n\n- body item'));
+  });
+
+  test('documents without frontmatter are unaffected by the frontmatter guard', () => {
+    // Post-#4725, a bare paragraph-before-list document is byte-identical —
+    // this pins that the frontmatter-detection code path added here is a
+    // no-op (never even entered) when there is no leading `---`.
+    const input = 'Lead paragraph.\n- item\n';
+    assert.strictEqual(normalizeContent(MD, input).content, input);
+  });
+});

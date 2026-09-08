@@ -1131,9 +1131,21 @@ function _normalizeMd(content: string): string {
   const lines = text.split('\n');
   const result: string[] = [];
   const fenceRegex = /^```/;
+  const insideFrontmatter = new Array<boolean>(lines.length).fill(false);
+  if ((lines[0] ?? '').trimEnd() === '---') {
+    insideFrontmatter[0] = true;
+    for (let i = 1; i < lines.length; i++) {
+      insideFrontmatter[i] = true;
+      if (lines[i].trimEnd() === '---') break;
+    }
+  }
   const insideFence = new Array<boolean>(lines.length);
   let fenceOpen = false;
   for (let i = 0; i < lines.length; i++) {
+    if (insideFrontmatter[i]) {
+      insideFence[i] = false;
+      continue;
+    }
     if (fenceRegex.test(lines[i].trimEnd())) {
       if (fenceOpen) {
         insideFence[i] = false;
@@ -1152,8 +1164,9 @@ function _normalizeMd(content: string): string {
     const prevTrimmed = prev.trimEnd();
     const trimmed = line.trimEnd();
     const isFenceLine = fenceRegex.test(trimmed);
-    if (/^#{1,6}\s/.test(trimmed) && i > 0 && prevTrimmed !== '' && prevTrimmed !== '---') result.push('');
-    if (isFenceLine && i > 0 && prevTrimmed !== '' && !insideFence[i] && (i === 0 || !insideFence[i - 1] || isFenceLine)) {
+    const isFrontmatterLine = insideFrontmatter[i];
+    if (!isFrontmatterLine && /^#{1,6}\s/.test(trimmed) && i > 0 && prevTrimmed !== '' && prevTrimmed !== '---') result.push('');
+    if (!isFrontmatterLine && isFenceLine && i > 0 && prevTrimmed !== '' && !insideFence[i] && (i === 0 || !insideFence[i - 1] || isFenceLine)) {
       if (i === 0 || !insideFence[i - 1]) result.push('');
     }
     // No "separate a list from a preceding paragraph" rule (#3854, #4725).
@@ -1166,9 +1179,9 @@ function _normalizeMd(content: string): string {
     // from the after-heading rule below. The after-a-bullet rule at the end
     // of this loop is a different transition (list→prose) and is unaffected.
     result.push(line);
-    if (/^#{1,6}\s/.test(trimmed) && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '') result.push('');
-    if (/^```\s*$/.test(trimmed) && i > 0 && insideFence[i - 1] && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '') result.push('');
-    if (/^(\s*[-*+]\s|\s*\d+\.\s)/.test(line) && i < lines.length - 1) {
+    if (!isFrontmatterLine && /^#{1,6}\s/.test(trimmed) && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '') result.push('');
+    if (!isFrontmatterLine && /^```\s*$/.test(trimmed) && i > 0 && insideFence[i - 1] && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '') result.push('');
+    if (!isFrontmatterLine && /^(\s*[-*+]\s|\s*\d+\.\s)/.test(line) && i < lines.length - 1) {
       const next = lines[i + 1];
       if (next !== undefined && next.trimEnd() !== '' && !/^(\s*[-*+]\s|\s*\d+\.\s)/.test(next) && !/^\s/.test(next)) result.push('');
     }
