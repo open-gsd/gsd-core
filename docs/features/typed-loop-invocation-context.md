@@ -24,11 +24,12 @@ about what this call is scoped to.
 
 `context` is **authoritative for task-local phase identity** — a capability
 must prefer it over `STATE.current_phase` or artifact inference when both
-are available. All 17 phase-scoped call sites now pass the phase they are
+are available. All 19 phase-scoped call sites now pass the phase they are
 operating on, across `plan-phase.md`, `execute-phase.md`, `verify-work.md`,
-`secure-phase.md`, `validate-phase.md`, `autonomous.md` and
-`code-review-fix.md`, and `gsd-core/references/loop-hook-dispatch.md` tells
-every `step` / `gate` dispatch how to project it onto the unit it invokes.
+`secure-phase.md`, `validate-phase.md`, `discuss-phase.md`, `autonomous.md`
+and `code-review-fix.md`, and `gsd-core/references/loop-hook-dispatch.md`
+tells every `step` / `gate` dispatch how to project it onto the unit it
+invokes.
 
 **The resolver derives the directory; a supplied one is only ever a check.**
 `--phase` takes the bare token every workflow already holds (`"05"`,
@@ -54,5 +55,6 @@ different phases that are *both* inside the project.
 - A token that matches no phase directory, matches more than one, or
   carries a foreign project-code prefix omits `context` and appends to the
   existing `warnings` array. `--phase` degrades; it never fails a render.
-- `discuss:*` and `ship:*` are not phase-scoped points and are unchanged;
-  `audit-milestone.md` and `quick.md` hold no phase to pass.
+- `ship:*` is not a phase-scoped point and is unchanged (shipping runs at
+  the milestone/project level); `audit-milestone.md` and `quick.md` hold no
+  phase to pass either.

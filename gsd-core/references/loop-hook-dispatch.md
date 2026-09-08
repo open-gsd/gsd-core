@@ -71,10 +71,14 @@ Dispatch the referenced unit. Exactly one of `ref.skill`, `ref.agent`, or `ref.c
   `` ` ``, `$(`, or a newline would terminate the assignment and run as its own statement
   before any shell-side check could execute. A value that fails is a malformed manifest:
   record a warning, skip that hook, continue to the next entry. Only a value that has passed
-  is run, with `context.phase` appended when present:
+  is run. When `context` is present, append `context.phase`; when absent, run the command with
+  no phase argument at all — never substitute an empty string for a missing token:
 
   ```bash
+  # context present
   gsd_run ${ref.command} --phase "${context.phase}" --raw
+  # context absent
+  gsd_run ${ref.command} --raw
   ```
 
   `context.phaseDir` is not passed here: no first-party `ref.command` consumer
@@ -138,12 +142,15 @@ Evaluate `check` (one of `query`, `predicate`, or `agentVerdict`). Then honor `b
 Honor `onError` if the check itself errors: `skip` means treat as non-blocking and continue;
 `halt` means surface the error and stop.
 
-When `context` is present and the check invocation needs a phase argument, source it from
-`context`, not an ambient variable — and match the subcommand's own argument shape, they
-differ: a `query` check's phase-taking subcommands (e.g. `verify-context-drift`,
-`verify-schema-drift`) take the phase **token** as a positional argument (`gsd_run check
-${hook.check.query} "${context.phase}" --raw`); a `predicate` check's `gate-predicate-evaluator.cts`
-(per ADR-2008) takes the **directory** as a named flag (`--phase-dir "${context.phaseDir}"`).
+When the check invocation needs a phase argument, `context.phase` / `context.phaseDir` and a
+workflow's own already-resolved `${PHASE_NUMBER}` / `${PHASE_DIR}` are the same value — both
+derive from the identical `guardedFindPhase` resolution — so either source is correct; prefer
+whichever the surrounding workflow already has in scope rather than a redundant extraction.
+Match the subcommand's own argument shape, they differ: a `query` check's phase-taking
+subcommands (e.g. `verify-context-drift`, `verify-schema-drift`) take the phase **token** as a
+positional argument (`gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw`); a `predicate`
+check's `gate-predicate-evaluator.cts` (per ADR-2008) takes the **directory** as a named flag
+(`--phase-dir "${PHASE_DIR}"`).
 
 ## Empty / absent `activeHooks`
 

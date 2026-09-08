@@ -20,6 +20,7 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 RESPONSE_LANGUAGE=$(gsd_run query config-get response_language --raw --default "" 2>/dev/null || echo "")
 INIT=$(gsd_run query init.phase-op "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
+PHASE_NUMBER=$(printf '%s' "$INIT" | jq -r '.phase_number // empty')
 AGENT_SKILLS_AUDITOR=$(gsd_run query agent-skills gsd-security-auditor)
 ```
 
@@ -29,7 +30,7 @@ Parse: `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `padded_phase`.
 
 ```bash
 AUDITOR_MODEL=$(gsd_run query resolve-model gsd-security-auditor --raw)
-VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw --phase "${phase_number}")
+VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw --phase "${PHASE_NUMBER}")
 SECURITY_ASVS=$(gsd_run query config-get workflow.security_asvs_level --raw 2>/dev/null || echo "1")
 SECURITY_BLOCK_ON=$(gsd_run query config-get workflow.security_block_on --raw 2>/dev/null || echo "high")
 ```
