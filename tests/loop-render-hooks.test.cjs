@@ -20,6 +20,7 @@ const { cleanup } = require('./helpers.cjs');
 const {
   resolveLoopHooks,
   renderLoopHooks,
+  resolveActiveHooksForPoint,
   _getNestedConfigValue,
   _resolveActivationValue,
   _readRawConfigKey,
@@ -1452,6 +1453,9 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
   });
 
   test('[negative] --phase "" (explicit empty string) degrades like an omitted flag, never a hard error', (t) => {
+    // Via the CLI: readDualFormFlag's graceful mode already collapses an
+    // empty --phase to undefined before it ever reaches the resolver (see
+    // gsd-tools.cjs), so this is silent — identical to omitting the flag.
     const dir = makePhaseProject('05-widgets');
     t.after(() => cleanup(dir));
     const result = renderWithPhase(dir, 'plan:pre', ['--phase', '', '--raw']);
@@ -1459,6 +1463,31 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
     const envelope = JSON.parse(result.stdout.trim());
     assert.ok(!Object.prototype.hasOwnProperty.call(envelope, 'context'));
     assert.ok(!Object.prototype.hasOwnProperty.call(envelope, 'warnings'));
+  });
+
+  test('[negative] resolveActiveHooksForPoint called in-process with phase: \'\' warns, unlike the CLI path above (#4030 review)', (t) => {
+    // dispatch-step (gsd-tools.cjs) calls resolveActiveHooksForPoint directly,
+    // bypassing readDualFormFlag entirely — this exported function is its own
+    // boundary and must not silently swallow an explicit empty string the way
+    // the CLI's graceful-flag normalization does upstream. An empty phase here
+    // reaches guardedFindPhase('', ...), which returns null (its own falsy-phase
+    // guard), and falls through to the same "did not match" warning any other
+    // unresolvable token gets.
+    const dir = makePhaseProject('05-widgets');
+    t.after(() => cleanup(dir));
+    const result = resolveActiveHooksForPoint(dir, 'plan:pre', { phase: '' });
+    assert.strictEqual(result.context, undefined);
+    assert.ok(result.warnings.some((w) => w.includes('did not match a phase directory')),
+      `expected an unresolvable-token warning, got: ${JSON.stringify(result.warnings)}`);
+  });
+
+  test('[negative] resolveActiveHooksForPoint called in-process with phaseDir: \'\' and no phase warns (#4030 review)', (t) => {
+    const dir = makePhaseProject('05-widgets');
+    t.after(() => cleanup(dir));
+    const result = resolveActiveHooksForPoint(dir, 'plan:pre', { phaseDir: '' });
+    assert.strictEqual(result.context, undefined);
+    assert.ok(result.warnings.some((w) => w.includes('--phase-dir requires --phase')),
+      `expected the phase-dir-without-phase warning, got: ${JSON.stringify(result.warnings)}`);
   });
 
   // #4030 extracted the four render-hooks value flags onto one dual-form parser.
