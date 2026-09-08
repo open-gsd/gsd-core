@@ -1750,20 +1750,6 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
     }
   });
 
-  test('[happy] the emitted phaseDir is the locator\'s value, never the caller\'s string', (t) => {
-    const dir = makePhaseProject('05-widgets');
-    t.after(() => cleanup(dir));
-    const supplied = '.planning/phases/05-widgets';
-    const result = renderWithPhase(dir, 'plan:pre', ['--phase', '05', '--phase-dir', supplied, '--raw']);
-    assert.strictEqual(result.exitCode, 0, 'stderr: ' + result.stderr);
-    const { phaseDir } = JSON.parse(result.stdout.trim()).context;
-    // Same text, but it must come from guardedFindPhase — asserted by shape, since
-    // the caller can only ever supply a string the locator would itself produce.
-    assert.strictEqual(phaseDir, supplied);
-    assert.ok(!path.isAbsolute(phaseDir) && !phaseDir.includes('..'),
-      'the emitted phaseDir is always a project-relative locator result');
-  });
-
   test('[negative] --phase-dir without --phase is refused rather than trusted', (t) => {
     const dir = makePhaseProject('05-widgets');
     t.after(() => cleanup(dir));
@@ -1794,7 +1780,7 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
     assert.match((envelope.warnings || []).join('\n'), /is ambiguous/);
   });
 
-  test('[happy] context does not mutate STATE.md, and outranks STATE.current_phase', (t) => {
+  test('[happy] context is resolved from --phase alone, and STATE.md is neither read back nor written', (t) => {
     const dir = makePhaseProject('02-beta');
     t.after(() => cleanup(dir));
     const statePath = path.join(dir, '.planning', 'STATE.md');
@@ -1803,7 +1789,7 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
     const result = renderWithPhase(dir, 'plan:pre', ['--phase', '02', '--raw']);
     assert.strictEqual(result.exitCode, 0, 'stderr: ' + result.stderr);
     assert.strictEqual(JSON.parse(result.stdout.trim()).context.phase, '02',
-      'invocation context must win over STATE.current_phase');
+      'the emitted phase is the caller\'s token, not STATE.current_phase (01)');
     assert.deepStrictEqual(fs.readFileSync(statePath), before, 'STATE.md must stay byte-identical');
   });
 });

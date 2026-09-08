@@ -571,17 +571,20 @@ function resolveActiveHooksForPoint(
   // to confine, and `--phase 05 --phase-dir <another in-project phase>` is
   // rejected as incoherent rather than silently believed — a disagreement no
   // containment check could catch, since both paths are inside the project.
-  const phaseArg = typeof options['phase'] === 'string' ? options['phase'] : undefined;
-  if (phaseArg === '') {
-    throw new Error('--phase requires a <token> value (e.g. --phase 05)');
-  }
-  const phaseDirArg = typeof options['phaseDir'] === 'string' ? options['phaseDir'] : undefined;
-  if (phaseDirArg === '') {
-    throw new Error('--phase-dir requires a <dir> value (e.g. --phase-dir .planning/phases/05-widgets)');
-  }
+  // An empty string is not special-cased: `readDualFormFlag` already rejects a
+  // bare or empty `--phase`/`--phase-dir` at the CLI boundary, and an in-process
+  // caller passing '' falls through to the same "did not match" warning every
+  // other unresolvable token gets. One degrade path, no second error channel.
+  const phaseArg = typeof options['phase'] === 'string' && options['phase'] !== '' ? options['phase'] : undefined;
+  const phaseDirArg = typeof options['phaseDir'] === 'string' && options['phaseDir'] !== '' ? options['phaseDir'] : undefined;
   let phaseContext: { phase: string; phaseDir: string } | undefined;
   const phaseWarnings: string[] = [];
   if (phaseArg !== undefined) {
+    // Required lazily, inside this --phase branch rather than at module load:
+    // phase-locator pulls roadmap-parser, plan-dependency-graph and frontmatter
+    // behind it (~18 ms first load). Most render-hooks calls omit --phase — that
+    // is the documented byte-identical-envelope default — so a module-level
+    // import would tax every one of those for a cost only the --phase path needs.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { guardedFindPhase } = require('./phase-locator.cjs') as {
       guardedFindPhase: (cwd: string, phase: string, projectCode: unknown) => {

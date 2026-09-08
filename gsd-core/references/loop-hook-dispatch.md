@@ -9,7 +9,7 @@ execute:wave:post, execute:post, verify:pre, verify:post, ship:pre, ship:post).
 
 ```json
 {
-  "point": "discuss:pre",
+  "point": "plan:pre",
   "activeHooks": [
     { "kind": "contribution", "into": "orchestrator", "fragment": { "inline": "..." } },
     { "kind": "step", "ref": { "skill": "my-skill" } },
