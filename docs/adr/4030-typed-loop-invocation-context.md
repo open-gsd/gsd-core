@@ -95,10 +95,12 @@ diverges from it whenever one phase plans/verifies while another executes.
   `plan:pre`/`plan:post`
   points are the exception, not the rule: its own "Generic step hook
   dispatch contract" (§5.6) already hand-fills `${PHASE}` for `ref.skill`
-  args and `ref.agent` prompts, and does so correctly, since `$PHASE` there
-  is the same already-`guardedFindPhase`-resolved value this ADR's `context`
-  field independently re-derives — so it is unaffected by this ADR either
-  way and is left as-is. Formalizing `context` as a resolver-derived,
+  args and `ref.agent` prompts, and does so correctly: `$PHASE` there is the
+  raw token this file resolves from `$ARGUMENTS` (`PHASE="${BASH_REMATCH[1]}"`),
+  the same bare-tolerant spelling `guardedFindPhase` accepts as input and
+  denotes the same phase this ADR's `context.phase` derives — not literally
+  identical (`5` vs the normalized `05`), but the same phase either way — so
+  §5.6 is unaffected by this ADR and is left as-is. Formalizing `context` as a resolver-derived,
   validated envelope field closes the gap with one seam that every point can
   rely on, instead of requiring each workflow to hand-roll its own
   phase-filling prose the way `plan-phase.md` happened to.

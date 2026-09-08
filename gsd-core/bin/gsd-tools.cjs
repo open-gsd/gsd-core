@@ -2900,24 +2900,32 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   // Semantics are preserved exactly, including that the `=` form trims and the
   // space form does not, and that a missing value calls `error` with the
   // flag's own usage text.
-  // A null `usage` (used only by --phase/--phase-dir, #4030) means a
-  // missing/empty value returns undefined instead of calling `error` —
-  // matching the resolver's own documented contract that an unresolvable
-  // phase degrades to a warning and never a hard error. Without this,
-  // `--phase "${PHASE_NUMBER}"` failing closed on the CLI's usage-error path
-  // (exit 1, no envelope at all) whenever the shell variable happened to be
-  // empty would be a strictly worse failure than the "degrades, never fails a
-  // render" promise every phase-scoped call site relies on — it would drop
-  // every hook at that point, not just phase context. The other three callers
-  // (--config-dir/--active-cap/--runtime) pass a real usage string and keep
-  // the strict default: an empty value there IS an authoring mistake worth
-  // failing on.
+  // A null `usage` (used only by --phase/--phase-dir, #4030) means: when the
+  // flag is present but its value is an EXPLICIT empty string (`--phase=` or
+  // `--phase ""`), return that empty string rather than undefined, so the
+  // resolver's own unresolvable-token path (which treats '' identically to a
+  // not-found token) can warn instead of going silent. When the flag is truly
+  // ABSENT — never passed, or immediately followed by another flag — this
+  // still returns undefined, indistinguishable from omitting the flag, since
+  // there is no explicit value to surface a warning about.
+  //
+  // Without the empty-string case, `--phase "${PHASE_NUMBER}"` with an unset
+  // shell variable would silently drop every hook at that point (this CLI
+  // path is what all real call sites use) — a strictly worse failure than the
+  // "degrades to a warning, never fails a render" promise every phase-scoped
+  // call site relies on. The other three callers (--config-dir/--active-cap/
+  // --runtime) pass a real usage string and keep the strict default: an empty
+  // value there IS an authoring mistake worth failing on.
   function readDualFormFlag(args, flag, usage, error) {
     const eqArg = args.find(arg => arg.startsWith(`${flag}=`));
     if (eqArg) {
       const value = eqArg.slice(flag.length + 1).trim();
-      if (!value) {
-        if (!usage) return undefined;
+      // An explicit empty value (--flag=) is present, just empty — always
+      // returned as '' rather than treated as absent, so a graceful caller's
+      // resolver can tell "given but empty" from "never given" (see below).
+      // Strict callers still error on it: `!value` alone decides that, same
+      // as before this comment's rewrite.
+      if (!value && usage) {
         error(usage, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
       }
       return value;
@@ -2925,8 +2933,16 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const idx = args.indexOf(flag);
     if (idx === -1) return undefined;
     const value = args[idx + 1];
-    if (!value || value.startsWith('--')) {
-      if (!usage) return undefined;
+    // No token follows, or the next token looks like another flag: there is
+    // no value to speak of, explicit-empty or otherwise — always treated as
+    // absent, both for graceful (silent) and strict (error) callers.
+    if (value === undefined || value.startsWith('--')) {
+      if (usage) error(usage, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+      return undefined;
+    }
+    // A real, if possibly empty, string follows. Strict callers still error
+    // on empty here — `!value` matches '' — graceful callers return it as-is.
+    if (!value && usage) {
       error(usage, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
     }
     return value;

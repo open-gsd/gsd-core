@@ -138,14 +138,23 @@ Evaluate `check` (one of `query`, `predicate`, or `agentVerdict`). Then honor `b
 Honor `onError` if the check itself errors: `skip` means treat as non-blocking and continue;
 `halt` means surface the error and stop.
 
-When the check invocation needs a phase argument, use whichever the surrounding workflow
-already has in scope — `context.phase`/`context.phaseDir` and a workflow's own already-resolved
-`${PHASE_NUMBER}`/`${PHASE_DIR}` are the identical value (same `guardedFindPhase` resolution), so
-a fresh extraction is redundant. Match the subcommand's own argument shape, they differ: a
-`query` check's phase-taking subcommands (e.g. `verify-context-drift`, `verify-schema-drift`)
-take the phase **token** as a positional argument (`gsd_run check ${hook.check.query}
-"${PHASE_NUMBER}" --raw`); a `predicate` check's `gate-predicate-evaluator.cts` (per ADR-2008)
-takes the **directory** as a named flag (`--phase-dir "${PHASE_DIR}"`).
+When the check invocation needs a phase argument, source the **token** from whichever the
+surrounding workflow already has in scope — `context.phase` and a workflow's own
+already-resolved `${PHASE_NUMBER}` are the identical value (same `guardedFindPhase`
+resolution), so a fresh extraction is redundant. The **directory** is NOT interchangeable the
+same way: `context.phaseDir` is project-relative (`phase-locator.cts`'s own on-disk form), while
+a workflow's `${PHASE_DIR}` (from `init.phase-op` and similar) is absolute — do not treat them
+as one value in a path-construction context, only the token is guaranteed identical.
+
+Match the subcommand's own argument shape, they differ: a `query` check's phase-taking
+subcommands (e.g. `verify-context-drift`, `verify-schema-drift`) take the phase **token** as a
+positional argument (`gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw`); a `predicate`
+check's `gate-predicate-evaluator.cts` (per ADR-2008) takes `--phase-number "${PHASE_NUMBER}"`
+(the flag `execute-phase.md`'s own predicate dispatch actually uses) and, only if the predicate's
+own command interpolates `${PHASE_DIR}` or `${PHASE_REQ_IDS}`, the matching `--phase-dir
+"${PHASE_DIR}"` / `--phase-req-ids "${PHASE_REQ_IDS}"` — a value the predicate never references
+is safe to omit; a missing interpolation substitutes an empty string, not an error, so omitting
+one a predicate DOES reference fails silently rather than loudly.
 
 ## Empty / absent `activeHooks`
 
