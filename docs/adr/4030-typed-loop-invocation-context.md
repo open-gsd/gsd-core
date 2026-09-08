@@ -10,8 +10,8 @@
 
 `cmdLoopRenderHooks` (`src/loop-resolver.cts`) accepts one new optional flag,
 `--phase <token>`, supplied by the invoking workflow at phase-scoped points
-(`plan:pre`, `plan:post`, `execute:wave:pre`, `execute:wave:post`,
-`execute:post`, `verify:pre`, `verify:post`). `<token>` uses the same
+(`discuss:pre`, `discuss:post`, `plan:pre`, `plan:post`, `execute:wave:pre`,
+`execute:wave:post`, `execute:post`, `verify:pre`, `verify:post`). `<token>` uses the same
 bare-tolerant grammar every phase-scoped workflow already holds
 (`phase_number` from its own `init.*` query — e.g. `"05"`), not the bracket
 display form. Workstream scoping needs no new plumbing: `gsd-tools.cjs`

@@ -48,12 +48,11 @@ Dispatch the referenced unit. Exactly one of `ref.skill`, `ref.agent`, or `ref.c
   `context` is present and the target skill accepts a phase argument, pass it as the skill's
   args (e.g. `args="${context.phase}"`, plus whatever else that host's own dispatch already
   appends — this file is point-agnostic and assumes no ambient shell variable exists).
-  Check the skill's own argument contract first. Do not assume a skill fails loudly when the argument is
-  omitted: some (e.g. `code-review`) exit with "Phase not found"; others (e.g.
-  `validate-phase`, whose `argument-hint` documents "optional, defaults to last
-  completed phase") silently fall back to artifact-order inference — exactly the failure
-  mode this field exists to close. Pass `context.phase` whenever it is present, in both
-  cases.
+  Check the skill's own argument contract first, then pass `context.phase` whenever it is
+  present — skills diverge sharply on what an omitted phase argument does: some (e.g.
+  `code-review`) exit with "Phase not found"; others (e.g. `validate-phase`, whose
+  `argument-hint` documents "optional, defaults to last completed phase") silently fall back
+  to artifact-order inference, exactly the failure mode this field exists to close.
 - `ref.agent` present → dispatch via the Agent tool with `subagent_type` = `ref.agent`. If
   `context` is present, include `context.phase` / `context.phaseDir` in the agent's prompt so
   it operates on the task-local phase rather than inferring one.

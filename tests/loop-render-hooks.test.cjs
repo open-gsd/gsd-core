@@ -1581,6 +1581,7 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
   // sampled above — a point wired in the resolver but broken at the CLI seam
   // would otherwise ship silently.
   for (const point of [
+    'discuss:pre', 'discuss:post',
     'plan:pre', 'plan:post',
     'execute:wave:pre', 'execute:wave:post', 'execute:post',
     'verify:pre', 'verify:post',
