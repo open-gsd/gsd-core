@@ -1452,27 +1452,43 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
       'a bare --phase must be silent, exactly like omitting the flag entirely');
   });
 
-  test('[negative] --phase "" (explicit empty string) degrades like an omitted flag, never a hard error', (t) => {
-    // Via the CLI: readDualFormFlag's graceful mode already collapses an
-    // empty --phase to undefined before it ever reaches the resolver (see
-    // gsd-tools.cjs), so this is silent — identical to omitting the flag.
+  test('[negative] --phase "" (explicit empty string, space form) warns, never a hard error (#4030 review)', (t) => {
+    // readDualFormFlag distinguishes "explicit empty value" (--phase "") from
+    // "flag never given" (bare --phase) — only the latter stays silent. An
+    // explicit empty string reaches the resolver as '', which guardedFindPhase
+    // treats as any other unresolvable token: a warning, never a hard error and
+    // never a dropped envelope. This is the CLI path all real call sites use —
+    // an unset `${PHASE_NUMBER}` in a workflow must be diagnosable, not silent.
     const dir = makePhaseProject('05-widgets');
     t.after(() => cleanup(dir));
     const result = renderWithPhase(dir, 'plan:pre', ['--phase', '', '--raw']);
     assert.strictEqual(result.exitCode, 0, 'stderr: ' + result.stderr);
     const envelope = JSON.parse(result.stdout.trim());
     assert.ok(!Object.prototype.hasOwnProperty.call(envelope, 'context'));
-    assert.ok(!Object.prototype.hasOwnProperty.call(envelope, 'warnings'));
+    assert.ok(Array.isArray(envelope.warnings) && envelope.warnings.length > 0,
+      'an explicit empty --phase must warn, not go silent');
+    assert.match(envelope.warnings.join('\n'), /did not match a phase directory/);
   });
 
-  test('[negative] resolveActiveHooksForPoint called in-process with phase: \'\' warns, unlike the CLI path above (#4030 review)', (t) => {
+  test('[negative] --phase= (explicit empty string, equals form) warns, never a hard error (#4030 review)', (t) => {
+    const dir = makePhaseProject('05-widgets');
+    t.after(() => cleanup(dir));
+    const result = renderWithPhase(dir, 'plan:pre', ['--phase=', '--raw']);
+    assert.strictEqual(result.exitCode, 0, 'stderr: ' + result.stderr);
+    const envelope = JSON.parse(result.stdout.trim());
+    assert.ok(!Object.prototype.hasOwnProperty.call(envelope, 'context'));
+    assert.ok(Array.isArray(envelope.warnings) && envelope.warnings.length > 0,
+      'an explicit empty --phase= must warn, not go silent');
+  });
+
+  test('[negative] resolveActiveHooksForPoint called in-process with phase: \'\' warns the same way (#4030 review)', (t) => {
     // dispatch-step (gsd-tools.cjs) calls resolveActiveHooksForPoint directly,
     // bypassing readDualFormFlag entirely — this exported function is its own
     // boundary and must not silently swallow an explicit empty string the way
-    // the CLI's graceful-flag normalization does upstream. An empty phase here
-    // reaches guardedFindPhase('', ...), which returns null (its own falsy-phase
+    // a bare, truly-absent --phase does. An empty phase here reaches
+    // guardedFindPhase('', ...), which returns null (its own falsy-phase
     // guard), and falls through to the same "did not match" warning any other
-    // unresolvable token gets.
+    // unresolvable token gets — matching the CLI path exactly now.
     const dir = makePhaseProject('05-widgets');
     t.after(() => cleanup(dir));
     const result = resolveActiveHooksForPoint(dir, 'plan:pre', { phase: '' });
@@ -1859,5 +1875,57 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
       'the emitted phase is the caller\'s token, not STATE.current_phase (01)');
     assert.deepStrictEqual(fs.readFileSync(statePath), before, 'STATE.md must stay byte-identical');
   });
+});
+
+// #4030 review: only one of 20 phase-scoped call sites (execute:wave:pre, in
+// tests/capability-registry.test.cjs) had a regression guard pinning that it
+// actually carries --phase, not just that the point is dispatched. Silently
+// dropping --phase from any of the other 19 would reintroduce the exact bug
+// this PR fixes, with a green suite — table-driven so adding a 21st site
+// means adding one row here, not writing a new test.
+describe('every phase-scoped render-hooks call site actually carries --phase (#4030 review)', () => {
+  const ROOT = path.resolve(__dirname, '..');
+
+  // {file, point, count}: how many render-hooks <point> occurrences that
+  // file has, and how many of them must carry --phase. Both counts are
+  // asserted so a call site that gains a --phase-less duplicate is caught
+  // too, not just a wholesale removal.
+  const SITES = [
+    ['gsd-core/workflows/discuss-phase.md', 'discuss:pre', 1],
+    ['gsd-core/workflows/discuss-phase.md', 'discuss:post', 1],
+    ['gsd-core/workflows/plan-phase.md', 'plan:pre', 4],
+    ['gsd-core/workflows/plan-phase.md', 'plan:post', 1],
+    ['gsd-core/workflows/execute-phase.md', 'execute:post', 2],
+    ['gsd-core/workflows/execute-phase.md', 'execute:wave:pre', 1],
+    ['gsd-core/workflows/execute-phase.md', 'execute:wave:post', 1],
+    ['gsd-core/workflows/execute-phase.md', 'verify:post', 1],
+    ['gsd-core/workflows/verify-work.md', 'verify:pre', 1],
+    ['gsd-core/workflows/verify-work.md', 'verify:post', 1],
+    ['gsd-core/workflows/secure-phase.md', 'verify:post', 1],
+    ['gsd-core/workflows/validate-phase.md', 'verify:post', 1],
+    ['gsd-core/workflows/autonomous.md', 'execute:post', 1],
+    ['gsd-core/workflows/autonomous.md', 'verify:post', 1],
+    ['gsd-core/workflows/code-review-fix.md', 'execute:post', 1],
+    ['gsd-core/references/autonomous-ui-design-contract.md', 'plan:pre', 1],
+  ];
+
+  for (const [file, point, expectedCount] of SITES) {
+    test(`${file} :: ${point} carries --phase at all ${expectedCount} call site(s)`, () => {
+      const content = fs.readFileSync(path.join(ROOT, file), 'utf8');
+      // --active-cap lines are excluded: that mode returns only 'true'/'false'
+      // for one capability's activation (unaffected by phase), never reads
+      // `context`, and deliberately does not combine with --phase today (#4030
+      // review S1) — a hook-dispatch call site fetching the JSON envelope for
+      // actual dispatch is what this table pins, not every render-hooks use.
+      const lines = content.split('\n').filter((l) => !l.includes('--active-cap'));
+      const scoped = lines.join('\n');
+      const bare = scoped.match(new RegExp(`render-hooks ${point}\\b`, 'g')) || [];
+      const withPhase = scoped.match(new RegExp(`render-hooks ${point}\\b[^\\n]*--phase `, 'g')) || [];
+      assert.strictEqual(bare.length, expectedCount,
+        `expected ${expectedCount} render-hooks ${point} call site(s) in ${file}, found ${bare.length} — update this table's count if the site count genuinely changed`);
+      assert.strictEqual(withPhase.length, expectedCount,
+        `expected all ${expectedCount} render-hooks ${point} call site(s) in ${file} to carry --phase, only ${withPhase.length} did`);
+    });
+  }
 });
 
