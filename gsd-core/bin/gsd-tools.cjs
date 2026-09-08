@@ -2900,22 +2900,24 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   // Semantics are preserved exactly, including that the `=` form trims and the
   // space form does not, and that a missing value calls `error` with the
   // flag's own usage text.
-  // `graceful: true` (used only by --phase/--phase-dir, #4030) returns undefined
-  // on a missing/empty value instead of calling `error` — matching the resolver's
-  // own documented contract that an unresolvable phase degrades to a warning and
-  // never a hard error. Without this, `--phase "${PHASE_NUMBER}"` failing closed
-  // on the CLI's usage-error path (exit 1, no envelope at all) whenever the
-  // shell variable happened to be empty would be a strictly worse failure than
-  // the "degrades, never fails a render" promise every phase-scoped call site
-  // relies on — it would drop every hook at that point, not just phase context.
-  // The other three callers (--config-dir/--active-cap/--runtime) keep the
-  // strict default: an empty value there IS an authoring mistake worth failing on.
-  function readDualFormFlag(args, flag, usage, error, graceful = false) {
+  // A null `usage` (used only by --phase/--phase-dir, #4030) means a
+  // missing/empty value returns undefined instead of calling `error` —
+  // matching the resolver's own documented contract that an unresolvable
+  // phase degrades to a warning and never a hard error. Without this,
+  // `--phase "${PHASE_NUMBER}"` failing closed on the CLI's usage-error path
+  // (exit 1, no envelope at all) whenever the shell variable happened to be
+  // empty would be a strictly worse failure than the "degrades, never fails a
+  // render" promise every phase-scoped call site relies on — it would drop
+  // every hook at that point, not just phase context. The other three callers
+  // (--config-dir/--active-cap/--runtime) pass a real usage string and keep
+  // the strict default: an empty value there IS an authoring mistake worth
+  // failing on.
+  function readDualFormFlag(args, flag, usage, error) {
     const eqArg = args.find(arg => arg.startsWith(`${flag}=`));
     if (eqArg) {
       const value = eqArg.slice(flag.length + 1).trim();
       if (!value) {
-        if (graceful) return undefined;
+        if (!usage) return undefined;
         error(usage, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
       }
       return value;
@@ -2924,7 +2926,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     if (idx === -1) return undefined;
     const value = args[idx + 1];
     if (!value || value.startsWith('--')) {
-      if (graceful) return undefined;
+      if (!usage) return undefined;
       error(usage, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
     }
     return value;
@@ -2944,11 +2946,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             const loopRuntime = readDualFormFlag(args, '--runtime', 'Missing value for --runtime', error);
             // --phase <token> (#4030): task-local phase for the invocation.
             // Mirrors the --runtime dual-form parsing above.
-            const loopPhase = readDualFormFlag(args, '--phase', 'Missing value for --phase (e.g. --phase 05)', error, true);
+            const loopPhase = readDualFormFlag(args, '--phase', null, error);
             // --phase-dir <dir> (#4030): optional cross-check on --phase. The
             // resolver compares it against the directory the token resolves to
             // and never uses it as an independent path.
-            const loopPhaseDir = readDualFormFlag(args, '--phase-dir', 'Missing value for --phase-dir (e.g. --phase-dir .planning/phases/05-widgets)', error, true);
+            const loopPhaseDir = readDualFormFlag(args, '--phase-dir', null, error);
             loopResolver.cmdLoopRenderHooks(cwd, args[2], raw, {
               configDir: loopConfigDir ? path.resolve(loopConfigDir) : undefined,
               activeCap: loopActiveCap,

@@ -34,6 +34,10 @@ import path from 'node:path';
 import ioMod = require('./io.cjs');
 const { output: coreOutput, error: coreError } = ioMod;
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
+import phaseLocator = require('./phase-locator.cjs');
+const { guardedFindPhase } = phaseLocator;
+
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderModule = require('./config-loader.cjs');
 const { loadConfig } = configLoaderModule;
@@ -490,11 +494,17 @@ function sanitizeLoadFailReason(reason: unknown): string {
   return cleaned || '(no reason given)';
 }
 
+/** The additive, optional field `--phase <token>` resolves into (#4030). */
+interface PhaseContext {
+  phase: string;
+  phaseDir: string;
+}
+
 interface ResolvedActiveHooks {
   point: string;
   activeHooks: ActiveHook[];
   warnings: string[];
-  context?: { phase: string; phaseDir: string };
+  context?: PhaseContext;
 }
 
 /**
@@ -583,25 +593,20 @@ function resolveActiveHooksForPoint(
   // 'string'`, i.e. never passed at all) skips the branch below and stays silent.
   const phaseArg = typeof options['phase'] === 'string' ? options['phase'] : undefined;
   const phaseDirArg = typeof options['phaseDir'] === 'string' ? options['phaseDir'] : undefined;
-  let phaseContext: { phase: string; phaseDir: string } | undefined;
+  let phaseContext: PhaseContext | undefined;
   const phaseWarnings: string[] = [];
   if (phaseArg !== undefined) {
-    // Required lazily, inside this --phase branch rather than at module load:
-    // phase-locator pulls roadmap-parser, plan-dependency-graph and frontmatter
-    // behind it (~18 ms first load). Most render-hooks calls omit --phase — that
-    // is the documented byte-identical-envelope default — so a module-level
-    // import would tax every one of those for a cost only the --phase path needs.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { guardedFindPhase } = require('./phase-locator.cjs') as {
-      guardedFindPhase: (cwd: string, phase: string, projectCode: unknown) => {
-        found: boolean;
-        directory: string;
-        phase_number: string;
-        ambiguous_matches?: string[];
-        archived?: string;
-      } | null;
-    };
-    const phaseResult = guardedFindPhase(cwd, phaseArg, config['project_code']);
+    // guardedFindPhase's own declared return type is Record<string, unknown> |
+    // null (phase-locator.cts erases it the same way for its other caller,
+    // init.cts) — narrowed here to the fields this function actually reads,
+    // once, rather than re-declaring the cast inline at every access below.
+    const phaseResult = guardedFindPhase(cwd, phaseArg, config['project_code']) as {
+      found: boolean;
+      directory: string;
+      phase_number: string;
+      ambiguous_matches?: string[];
+      archived?: string;
+    } | null;
     if (phaseResult?.found && phaseResult.archived) {
       // guardedFindPhase falls back to archived .planning/milestones/ phases
       // when no ACTIVE phase matches the token — the same fallback init.*'s
@@ -709,10 +714,9 @@ function resolveActiveHooksForPoint(
   // skipped gate or a dropped #4030 phase context is never silently invisible
   // to the operator/agent — no host workflow reads `.warnings` back out of
   // the `*_HOOKS_JSON` envelope it captures, so stderr is the only channel
-  // that actually surfaces these today.
-  // Two sequential loops, not one spread-merged array: phaseWarnings never
-  // holds more than one entry (its three push sites are mutually exclusive
-  // branches), so merging buys nothing on the path most calls take.
+  // that actually surfaces these today. Deliberately excludes state.warnings
+  // (unlike combinedWarnings below): that channel predates #4030 and its own
+  // scope was never stderr — not this fix's call to widen.
   for (const w of loadFailWarnings) {
     process.stderr.write(`gsd: warning — ${w}\n`);
   }
@@ -766,7 +770,7 @@ function cmdLoopRenderHooks(
     activeHooks: ActiveHook[];
     rendered: string;
     warnings?: string[];
-    context?: { phase: string; phaseDir: string };
+    context?: PhaseContext;
   } = {
     point: result.point,
     activeHooks: result.activeHooks,
