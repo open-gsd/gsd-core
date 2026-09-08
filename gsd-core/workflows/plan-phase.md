@@ -298,7 +298,7 @@ Capability-driven dispatch, same lazy-init pattern already used elsewhere in thi
 
 ```bash
 if [ -z "${PLAN_PRE_HOOKS_JSON:-}" ]; then
-  PLAN_PRE_HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw)
+  PLAN_PRE_HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw --phase "$PHASE")
 fi
 ```
 
@@ -394,7 +394,7 @@ fi
 ```bash
 PHASE_DESC=$(gsd_run query roadmap.get-phase "${PHASE}" --pick section)
 if [ -z "${PLAN_PRE_HOOKS_JSON:-}" ]; then
-  PLAN_PRE_HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw)
+  PLAN_PRE_HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw --phase "$PHASE")
 fi
 ```
 
@@ -460,7 +460,7 @@ test -f "${PHASE_DIR}/${PADDED_PHASE}-VALIDATION.md" && echo "VALIDATION_CREATED
 > Capability-driven dispatch. Resolves active `plan:pre` hooks via the capability registry; the security hook's `when` condition is evaluated by the registry.
 
 ```bash
-PLAN_PRE_HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw)
+PLAN_PRE_HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw --phase "$PHASE")
 ```
 
 **Contribution dispatch (#3606):** inject every `kind == "contribution"` fragment from `PLAN_PRE_HOOKS_JSON` per @gsd-core/references/loop-hook-dispatch.md, in array order, into the role each entry's `into` names — planner-targeted ones land in the prompt block below, orchestrator-targeted ones in your working context. The security specialization below is one such contribution, not a replacement for the generic dispatch.
@@ -490,7 +490,7 @@ Continue to step 5.6. Security config is passed to the planner in step 8.
 > **Config semantics (cutover fix):** `workflow.ui_phase` gates UI-SPEC *generation* (step); `workflow.ui_safety_gate` gates the *planning block* (gate). Both-on = identical to OLD §5.6. Intended change: `{ui_phase:true, ui_safety_gate:false}` now auto-generates in pipelines but does NOT block manual planning (each key controls exactly what its description says).
 
 ```bash
-PLAN_PRE_HOOKS_JSON=${PLAN_PRE_HOOKS_JSON:-$(gsd_run loop render-hooks plan:pre --raw)}
+PLAN_PRE_HOOKS_JSON=${PLAN_PRE_HOOKS_JSON:-$(gsd_run loop render-hooks plan:pre --raw --phase "$PHASE")}
 HOOKS_JSON="$PLAN_PRE_HOOKS_JSON"
 ```
 
@@ -1414,7 +1414,7 @@ Proactive, non-blocking coverage report gated on `workflow.post_planning_gaps`
 `<decisions>` and cross-references each REQ-ID / D-ID against `${PHASE_DIR}/*-PLAN.md`.
 
 ```bash
-PLAN_POST_HOOKS_JSON=$(gsd_run loop render-hooks plan:post --raw)
+PLAN_POST_HOOKS_JSON=$(gsd_run loop render-hooks plan:post --raw --phase "$PHASE")
 PHASE_REQ_IDS=$(gsd_run query init.plan-phase "$PHASE" --pick phase_req_ids 2>/dev/null)
 PHASE_REQ_IDS="${PHASE_REQ_IDS:-TBD}"
 ```
