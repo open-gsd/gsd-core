@@ -16,6 +16,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { cleanup } = require('./helpers.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const {
   resolveLoopHooks,
@@ -1917,7 +1918,7 @@ describe('every phase-scoped render-hooks call site actually carries --phase (#4
       // `context`, and deliberately does not combine with --phase today (#4030
       // review S1) — a hook-dispatch call site fetching the JSON envelope for
       // actual dispatch is what this table pins, not every render-hooks use.
-      const lines = content.split('\n').filter((l) => !l.includes('--active-cap'));
+      const lines = splitLines(content).filter((l) => !l.includes('--active-cap'));
       const scoped = lines.join('\n');
       const bare = scoped.match(new RegExp(`render-hooks ${point}\\b`, 'g')) || [];
       const withPhase = scoped.match(new RegExp(`render-hooks ${point}\\b[^\\n]*--phase `, 'g')) || [];
