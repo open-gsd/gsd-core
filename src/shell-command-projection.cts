@@ -1132,10 +1132,27 @@ function _normalizeMd(content: string): string {
   const fenceRegex = /^```/;
   const insideFrontmatter = new Array<boolean>(lines.length).fill(false);
   if ((lines[0] ?? '').trimEnd() === '---') {
-    insideFrontmatter[0] = true;
+    let closingDelimiter = -1;
+    let yamlMappingSeen = false;
     for (let i = 1; i < lines.length; i++) {
-      insideFrontmatter[i] = true;
-      if (lines[i].trimEnd() === '---') break;
+      if (lines[i].trimEnd() === '---') {
+        closingDelimiter = i;
+        break;
+      }
+      const candidate = lines[i].trim();
+      if (!candidate || candidate.startsWith('#')) continue;
+      if (!yamlMappingSeen && /^[A-Za-z_][A-Za-z0-9_.-]*\s*:/.test(candidate)) {
+        yamlMappingSeen = true;
+        continue;
+      }
+      // A top-of-file thematic break followed by ordinary Markdown is not
+      // frontmatter merely because another `---` divider appears later.
+      if (!yamlMappingSeen) break;
+    }
+    // Unterminated regions remain ordinary Markdown. Silently treating the
+    // rest of the document as frontmatter would disable every spacing rule.
+    if (yamlMappingSeen && closingDelimiter !== -1) {
+      for (let i = 0; i <= closingDelimiter; i++) insideFrontmatter[i] = true;
     }
   }
   const insideFence = new Array<boolean>(lines.length);

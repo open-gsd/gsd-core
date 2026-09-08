@@ -24,6 +24,7 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
+const fc = require('fast-check');
 const fs = require('fs');
 const os = require('node:os');
 const path = require('path');
@@ -155,5 +156,57 @@ describe('#4499: markdown normalization preserves leading YAML frontmatter', () 
   test('documents without frontmatter retain the existing list normalization', () => {
     const input = 'Lead paragraph.\n- item\n';
     assert.strictEqual(normalizeContent(MD, input).content, 'Lead paragraph.\n\n- item\n');
+  });
+
+  test('the issue-shaped nested block sequences remain byte-identical', () => {
+    const input = [
+      '---',
+      'phase: 01',
+      'must_haves:',
+      '  truths:',
+      '    - API behavior stays stable',
+      '    - SDK behavior stays stable',
+      '  artifacts:',
+      '    - path: src/api.ts',
+      '      provides:',
+      '        - public API',
+      '        - type declarations',
+      '---',
+      '# Plan',
+      '',
+    ].join('\n');
+    assert.strictEqual(normalizeContent(MD, input).content, input);
+  });
+
+  test('single-item, empty, and deeply nested sequences preserve their boundaries', () => {
+    const inputs = [
+      '---\ntags:\n  - only\n---\n\nBody.\n',
+      '---\ntags: []\n---\n\nBody.\n',
+      '---\na:\n  b:\n    c:\n      - deep\n---\n\nBody.\n',
+    ];
+    for (const input of inputs) assert.strictEqual(normalizeContent(MD, input).content, input);
+  });
+
+  test('an unterminated opening delimiter does not disable body normalization', () => {
+    const input = '---\nphase: 01\n# Heading\n- item\n';
+    const { content } = normalizeContent(MD, input);
+    assert.ok(content.includes('phase: 01\n\n# Heading\n\n- item'));
+  });
+
+  test('a leading thematic break and later divider are not mistaken for frontmatter', () => {
+    const input = '---\n# Heading\n- item\n---\nTail.\n';
+    const { content } = normalizeContent(MD, input);
+    assert.ok(content.includes('# Heading\n\n- item'));
+  });
+
+  test('property: normalization preserves every generated frontmatter mapping byte-for-byte', () => {
+    const scalar = fc.stringMatching(/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,30}$/);
+    fc.assert(fc.property(fc.array(scalar, { maxLength: 12 }), (items) => {
+      const list = items.length ? ['items:', ...items.map((item) => `  - ${item}`)] : ['items: []'];
+      const frontmatter = ['---', 'phase: 01', ...list, '---'].join('\n');
+      const input = `${frontmatter}\n# Plan\n\nBody.\n`;
+      const output = normalizeContent(MD, input).content;
+      assert.strictEqual(output.slice(0, frontmatter.length), frontmatter);
+    }), { numRuns: 250 });
   });
 });
