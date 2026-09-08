@@ -1406,6 +1406,21 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
     assert.match(result.stderr, /did not match a phase directory/);
   });
 
+  test('[negative] --phase matching only an archived milestone phase omits context, not the archived path (#4030 review)', (t) => {
+    const dir = makePhaseProject();
+    t.after(() => cleanup(dir));
+    // Archive shape: <planning>/milestones/vX.Y-phases/<phase-dir>/ — no matching
+    // dir under .planning/phases/, so guardedFindPhase falls through to this.
+    fs.mkdirSync(path.join(dir, '.planning', 'milestones', 'v1.0-phases', '05-widgets'), { recursive: true });
+    const result = renderWithPhase(dir, 'plan:pre', ['--phase', '05', '--raw']);
+    assert.strictEqual(result.exitCode, 0, 'stderr: ' + result.stderr);
+    const envelope = JSON.parse(result.stdout.trim());
+    assert.ok(!Object.prototype.hasOwnProperty.call(envelope, 'context'),
+      'an archived-only match must not surface a .planning/milestones/ path as context.phaseDir');
+    assert.ok(Array.isArray(envelope.warnings) && envelope.warnings.length > 0);
+    assert.match(envelope.warnings.join('\n'), /archived phase/);
+  });
+
   test('[bva] --phase matching two directories (ambiguous) omits context, warns with both names, exits 0 not thrown', (t) => {
     const dir = makePhaseProject('05-widgets', '05-gadgets');
     t.after(() => cleanup(dir));
@@ -1419,12 +1434,31 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
     assert.match(warningText, /05-gadgets/);
   });
 
-  test('[negative] bare --phase with no value exits non-zero with a clear usage message', (t) => {
+  test('[negative] bare --phase with no value degrades like an omitted flag, never a hard error', (t) => {
+    // #4030 review: --phase/--phase-dir are the two graceful value flags — an
+    // empty or missing value must never turn a call that would otherwise still
+    // produce every activeHooks entry into a total failure. Unlike the other
+    // three render-hooks value flags (still strict; see the differential loop
+    // below), a workflow's `--phase "${PHASE_NUMBER}"` with an unset variable
+    // must not drop the whole hook envelope for a call site.
     const dir = makePhaseProject('05-widgets');
     t.after(() => cleanup(dir));
-    const result = renderWithPhase(dir, 'plan:pre', ['--phase']);
-    assert.notStrictEqual(result.exitCode, 0);
-    assert.match(result.stderr, /Missing value for --phase/);
+    const result = renderWithPhase(dir, 'plan:pre', ['--phase', '--raw']);
+    assert.strictEqual(result.exitCode, 0, 'stderr: ' + result.stderr);
+    const envelope = JSON.parse(result.stdout.trim());
+    assert.ok(!Object.prototype.hasOwnProperty.call(envelope, 'context'));
+    assert.ok(!Object.prototype.hasOwnProperty.call(envelope, 'warnings'),
+      'a bare --phase must be silent, exactly like omitting the flag entirely');
+  });
+
+  test('[negative] --phase "" (explicit empty string) degrades like an omitted flag, never a hard error', (t) => {
+    const dir = makePhaseProject('05-widgets');
+    t.after(() => cleanup(dir));
+    const result = renderWithPhase(dir, 'plan:pre', ['--phase', '', '--raw']);
+    assert.strictEqual(result.exitCode, 0, 'stderr: ' + result.stderr);
+    const envelope = JSON.parse(result.stdout.trim());
+    assert.ok(!Object.prototype.hasOwnProperty.call(envelope, 'context'));
+    assert.ok(!Object.prototype.hasOwnProperty.call(envelope, 'warnings'));
   });
 
   // #4030 extracted the four render-hooks value flags onto one dual-form parser.
@@ -1643,6 +1677,7 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
   }
 
   const PHASE_SCOPED_POINTS = [
+    'discuss:pre', 'discuss:post',
     'plan:pre', 'plan:post',
     'execute:wave:pre', 'execute:wave:post', 'execute:post',
     'verify:pre', 'verify:post',
@@ -1761,12 +1796,14 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
     assert.match((envelope.warnings || []).join('\n'), /--phase-dir requires --phase/);
   });
 
-  test('[negative] bare --phase-dir with no value exits non-zero', (t) => {
+  test('[negative] bare --phase-dir with no value degrades like an omitted flag, never a hard error', (t) => {
     const dir = makePhaseProject('05-widgets');
     t.after(() => cleanup(dir));
-    const result = renderWithPhase(dir, 'plan:pre', ['--phase', '05', '--phase-dir']);
-    assert.notStrictEqual(result.exitCode, 0);
-    assert.match(result.stderr, /Missing value for --phase-dir/);
+    const result = renderWithPhase(dir, 'plan:pre', ['--phase', '05', '--phase-dir', '--raw']);
+    assert.strictEqual(result.exitCode, 0, 'stderr: ' + result.stderr);
+    const envelope = JSON.parse(result.stdout.trim());
+    // --phase alone still resolves — a bare trailing --phase-dir just contributes nothing.
+    assert.deepStrictEqual(envelope.context, { phase: '05', phaseDir: '.planning/phases/05-widgets' });
   });
 
   test('[bva] an ambiguous token yields no context even when --phase-dir names a candidate', (t) => {
