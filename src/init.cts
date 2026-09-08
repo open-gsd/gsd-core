@@ -146,8 +146,9 @@ void stripShippedMilestones;
 
 // #2056/#2104: isForeignPrefixedPhaseQuery is imported from phase-id.cts
 // (the canonical predicate). parsePhasePrefix is no longer needed locally.
-// phaseInfoMatchesExactPrefix and roadmapPhaseMatchesExactPrefix are local
-// helpers that post-filter the lookup results for foreign-prefix queries.
+// roadmapPhaseMatchesExactPrefix is a local helper that post-filters the lookup
+// results for foreign-prefix queries; the phase-info equivalent moved to
+// phase-locator.cts alongside guardedFindPhase (#4030).
 
 function roadmapPhaseMatchesExactPrefix(
   roadmapPhase: Record<string, unknown> | null,

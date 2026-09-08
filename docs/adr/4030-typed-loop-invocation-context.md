@@ -16,11 +16,9 @@ bare-tolerant grammar every phase-scoped workflow already holds
 (`phase_number` from its own `init.*` query — e.g. `"05"`), not the bracket
 display form. Workstream scoping needs no new plumbing: `gsd-tools.cjs`
 already resolves `--ws`/`GSD_WORKSTREAM` generically for every command before
-dispatch (`resolveActiveWorkstream` / `applyResolvedWorkstreamEnv`). Whether a
-call site *also* passes `${GSD_WS}` explicitly follows each file's own existing
-convention for phase-resolving `gsd_run` calls, rather than one blanket rule:
-`verify-work.md` passes it (its `query init.verify-work` does), `execute-phase.md`
-does not (its `query init.execute-phase` does not).
+dispatch (`resolveActiveWorkstream` / `applyResolvedWorkstreamEnv`). No `render-hooks`
+call site passes `${GSD_WS}` — none did before this change and none gains it
+here, so workstream behaviour is exactly what it was.
 
 The resolver never treats a caller-supplied directory as a source of truth. It
 resolves `phaseDir` itself by calling `guardedFindPhase(cwd, phase,
