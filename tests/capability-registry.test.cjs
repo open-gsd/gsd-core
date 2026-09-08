@@ -5303,6 +5303,12 @@ describe('#1196 — discuss loop wiring + wired-point guard', () => {
         wavePre !== -1 && stepDispatch > wavePre && executorSpawn > stepDispatch,
         'wave-pre step dispatch must occur after hook rendering and before executor spawning',
       );
+      // #4030: the call site must actually pass --raw and --phase, not merely start
+      // with the anchored prefix above (which alone would still match a --raw-less
+      // or --phase-less call).
+      const wavePreCall = workflow.slice(wavePre, workflow.indexOf(')', wavePre) + 1);
+      assert.match(wavePreCall, /--raw\b/, 'execute:wave:pre call must pass --raw');
+      assert.match(wavePreCall, /--phase "\$\{PHASE_NUMBER\}"/, 'execute:wave:pre call must pass --phase "${PHASE_NUMBER}"');
 
       const stepContract = workflow.slice(stepDispatch, executorSpawn);
       assert.match(stepContract, /kind == "step"/, 'wave-pre must select step hooks');
