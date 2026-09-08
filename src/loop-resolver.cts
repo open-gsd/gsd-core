@@ -573,11 +573,16 @@ function resolveActiveHooksForPoint(
   // containment check could catch, since both paths are inside the project.
   // `resolveActiveHooksForPoint` is exported (dispatch-step calls it directly,
   // bypassing the CLI's `readDualFormFlag` entirely), so an empty string here is
-  // a real input this boundary must handle on its own, not dead defense against
-  // a CLI that already filters it. Treated identically to undefined either way:
-  // one degrade path (unresolvable token -> warning), never a hard error.
-  const phaseArg = typeof options['phase'] === 'string' && options['phase'] !== '' ? options['phase'] : undefined;
-  const phaseDirArg = typeof options['phaseDir'] === 'string' && options['phaseDir'] !== '' ? options['phaseDir'] : undefined;
+  // a real input this boundary must handle on its own. Kept as a string, not
+  // collapsed to undefined: `guardedFindPhase(cwd, '', ...)` returns null (its
+  // own `if (!phase) return null` guard), so an empty `--phase` falls through to
+  // the SAME "did not match a phase directory" warning every other unresolvable
+  // token gets below — surfacing the anomaly rather than silently doing nothing,
+  // consistent with this function's one design rule: degrade with a warning,
+  // never fail, never go quiet. Only a genuinely absent flag (`typeof !==
+  // 'string'`, i.e. never passed at all) skips the branch below and stays silent.
+  const phaseArg = typeof options['phase'] === 'string' ? options['phase'] : undefined;
+  const phaseDirArg = typeof options['phaseDir'] === 'string' ? options['phaseDir'] : undefined;
   let phaseContext: { phase: string; phaseDir: string } | undefined;
   const phaseWarnings: string[] = [];
   if (phaseArg !== undefined) {
