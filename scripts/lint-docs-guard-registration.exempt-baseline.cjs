@@ -46,6 +46,7 @@ const DOCS_GUARD_EXEMPT_BASELINE = [
   'codebuddy-upgrades.test.cjs',
   'commands.test.cjs',
   'commit-docs-bypass.test.cjs',
+  'compact-content-partition-guard.test.cjs',
   'complexity-trigger.test.cjs',
   'concurrency-safety.test.cjs',
   'cursor-imperative-reference.test.cjs',
@@ -80,6 +81,7 @@ const DOCS_GUARD_EXEMPT_BASELINE = [
   'repo-invariants.test.cjs',
   'require-issue-link-policy.test.cjs',
   'reviewer-manifest-body.test.cjs',
+  'reviewer-step-dispatch.test.cjs',
   'run-tests-harness.test.cjs',
   'runtime-name-policy.test.cjs',
   'security-prompt-injection.security.test.cjs',
@@ -135,6 +137,10 @@ const DOCS_GUARD_EXEMPT_DOCS_PATHS = {
   'commit-docs-bypass.test.cjs': [
     'docs/40-design.md', 'docs/CONFIGURATION.md', 'docs/readme.md', 'docs/tracked-var-mentioning',
   ],
+  // #4403: cites docs/PARTITION-RULES.md as a "see" pointer in the module docstring
+  // describing the operational spec this guard implements; the file never reads that
+  // (or any) docs/ file.
+  'compact-content-partition-guard.test.cjs': ['docs/PARTITION-RULES.md'],
   'complexity-trigger.test.cjs': ['docs/readme.md'],
   // #3884: cites docs/CLI-TOOLS.md:736 in an explanatory comment describing
   // the real `frontmatter get <file> [--field key]` CLI shape; the file
@@ -187,6 +193,11 @@ const DOCS_GUARD_EXEMPT_DOCS_PATHS = {
   'repo-invariants.test.cjs': ['docs/FEATURES.md', 'docs/workflows/README'],
   'require-issue-link-policy.test.cjs': ['docs/-prefixed', 'docs/CONFIGURATION.md', 'docs/a.md', 'docs/b.md', 'docs/guide.md'],
   'reviewer-manifest-body.test.cjs': ['docs/how-to/ship-a-reviewer-lane.md'],
+  // #4209: 'docs/spec.md' is a synthetic, never-read fake path proving dispatchReviewerLanes
+  // has no code-review-specific special-casing; 'docs/adr/456-test-rigor-architecture.md' is a
+  // prose citation in a code comment justifying the fast-check property tests below (#4209
+  // review). Neither is a real filesystem read — the file never reads any docs/ file.
+  'reviewer-step-dispatch.test.cjs': ['docs/adr/456-test-rigor-architecture.md', 'docs/spec.md'],
   'run-tests-harness.test.cjs': ['docs/TESTING-SUITES.md'],
   'runtime-name-policy.test.cjs': ['docs/customize/skills'],
   'security-prompt-injection.security.test.cjs': ['docs/notes.md'],

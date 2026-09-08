@@ -79,7 +79,17 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('node:os');
 const path = require('path');
-const { lfByteCount: byteCount, listWorkflowStems, measureWorkflows } = require('../scripts/workflow-size.cjs');
+const fc = require('fast-check');
+const {
+  lfByteCount: byteCount,
+  listWorkflowStems,
+  measureWorkflows,
+  MARGIN_RATIO,
+  marginFor,
+  buildHeadroomRows,
+  formatHeadroomTable,
+  appendHeadroomStepSummary,
+} = require('../scripts/workflow-size.cjs');
 const { cleanup } = require('./helpers.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
@@ -89,9 +99,17 @@ const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 // only as the outer bound where the correct response is lazy extraction, never
 // a raise. Each sits above its tier's current high-water mark with real
 // headroom (vs the old GRACE=3000 hug):
-//   XL      96 KiB — high-water execute-phase.md 93,400 → ~4.8 KB headroom
-//   LARGE   60 KiB — high-water docs-update.md 55,468 → ~5.8 KB headroom
-//   DEFAULT 40 KiB — high-water settings.md 40,352 → ~608 B headroom
+//   XL      96 KiB
+//   LARGE   60 KiB
+//   DEFAULT 40 KiB
+//
+// #4261: the per-tier high-water marks that used to be written out here are
+// gone rather than refreshed. They were measured once and then quietly
+// diverged from the tree — the XL line named execute-phase.md as the
+// high-water when plan-phase.md had passed it — so the comment meant to
+// document the remaining headroom became a reason to believe there was more
+// of it than there was. The headroom census below emits the live numbers on
+// every run instead of asking a comment to stay true.
 // (DEFAULT is deliberately the tightest: a single-purpose workflow approaching
 // 40 KiB is the strongest extraction signal of the three. The previous DEFAULT
 // high-water, verify-phase.md at 40,931 (29 bytes of headroom), was deleted as
@@ -150,6 +168,87 @@ function capFor(workflow) {
 // baseline generator so the guard and the snapshot can never measure
 // differently. See the #683 regression test at the bottom of this file.
 
+// ─── #4261: headroom visibility + reserved margin ──────────────────────────
+//
+// See the twin block in tests/agent-size-budget.test.cjs for the rationale.
+// The short version: a green run used to say nothing, so the difference
+// between a file at 60% of its cap and one at 99.9% was invisible until the
+// day someone crossed the line — and because each PR's CI measures only its
+// own base plus its own diff, two individually-green PRs can be jointly over
+// with no run either of them produces able to show it.
+const WORKFLOW_HEADROOM_ROWS = buildHeadroomRows(SIZES, capFor);
+
+describe('SIZE: workflow headroom census (issue #4261)', () => {
+  test('reports every workflow\'s remaining bytes, and never fails for it', (t) => {
+    for (const line of formatHeadroomTable(WORKFLOW_HEADROOM_ROWS)) t.diagnostic(line);
+    const pressured = WORKFLOW_HEADROOM_ROWS.filter((r) => r.overMargin);
+    t.diagnostic(
+      `workflows: ${WORKFLOW_HEADROOM_ROWS.length} | over the ${Math.round(MARGIN_RATIO * 100)}% margin: ${pressured.length}`,
+    );
+    appendHeadroomStepSummary('Workflow size headroom', WORKFLOW_HEADROOM_ROWS);
+
+    // Reporting, not a gate — assert only that the corpus was measured, so an
+    // empty census cannot read as good news.
+    assert.equal(WORKFLOW_HEADROOM_ROWS.length, ALL_WORKFLOWS.length);
+  });
+
+  test('names the workflows inside the reserved margin', (t) => {
+    for (const r of WORKFLOW_HEADROOM_ROWS.filter((row) => row.overMargin)) {
+      t.diagnostic(
+        `RESERVED MARGIN: ${r.name}.md is ${r.bytes} bytes — ${r.headroom} under the ${r.tier} cap ` +
+        `(${r.usedPct.toFixed(1)}%), past the ${r.margin}-byte margin. The cap is not moving: ` +
+        `extract per-mode bodies to workflows/${r.name}/modes/, templates to ` +
+        `workflows/${r.name}/templates/, or shared references to gsd-core/references/ — lazily.`,
+      );
+    }
+    // No assertion on the count, deliberately: pinning it would recreate the
+    // per-file size baseline #2724 deleted for conflicting on 7 of 7 PRs.
+  });
+
+  test('the reserved margin sits strictly below every tier cap', () => {
+    // Negative proof for the margin arithmetic, mirroring the hard-cap
+    // boundary fixtures: a ratio or operator edit that widened the margin to
+    // the cap would silently disable the warning, and no real-corpus test
+    // would notice.
+    for (const cap of [DEFAULT_CAP, LARGE_CAP, XL_CAP]) {
+      const margin = marginFor(cap);
+      assert.ok(margin < cap, `margin ${margin} must sit below cap ${cap}`);
+      const rows = buildHeadroomRows({
+        'below.md': margin - 1,
+        'exact.md': margin,
+        'above.md': margin + 1,
+      }, () => ({ tier: 'FIXTURE', cap }));
+      const byName = new Map(rows.map((row) => [row.name, row]));
+      assert.equal(byName.get('below').overMargin, false, 'margin - 1 is NOT over it');
+      assert.equal(byName.get('exact').overMargin, false, 'exactly at the margin is NOT over it');
+      assert.equal(byName.get('above').overMargin, true, 'margin + 1 IS over it');
+    }
+  });
+
+  test('reserved-margin classification holds for every positive cap', () => {
+    fc.assert(fc.property(
+      fc.integer({ min: 2, max: 10_000_000 }),
+      (cap) => {
+        const margin = marginFor(cap);
+        const rows = buildHeadroomRows({
+          'below.md': margin - 1,
+          'exact.md': margin,
+          'above.md': margin + 1,
+        }, () => ({ tier: 'FIXTURE', cap }));
+        const byName = new Map(rows.map((row) => [row.name, row]));
+
+        assert.ok(margin >= 0 && margin < cap);
+        assert.equal(byName.get('below').overMargin, false);
+        assert.equal(byName.get('exact').overMargin, false);
+        assert.equal(byName.get('above').overMargin, true);
+        assert.equal(byName.get('below').headroom, cap - (margin - 1));
+        assert.equal(byName.get('exact').headroom, cap - margin);
+        assert.equal(byName.get('above').headroom, cap - (margin + 1));
+      },
+    ));
+  });
+});
+
 describe('SIZE: workflow tier hard caps (issue #1074)', () => {
   // Absolute outer bound per tier. Unlike the old tighten-only ceiling, a cap
   // is NOT raised when a file approaches it — crossing it means extract, not
@@ -185,6 +284,71 @@ describe('SIZE: workflow tier hard caps (issue #1074)', () => {
   // already exists. Narrower than the original — the pure differential module cannot
   // see XL_WORKFLOWS/LARGE_WORKFLOWS tiering, so a legitimately large new file must
   // extract rather than tier in — a disclosed, deliberate simplification.
+});
+
+describe('SIZE: detail/ subtree is excluded from tier classification (#4403, ADR-4139 §6)', () => {
+  // ADR-4139 §6 (the `NEW_FILE_CAP` row): a spine's `<workflow>/detail/<part>.md`
+  // files are governed SOLELY by the hard, non-waivable NEW_FILE_CAP (32768 bytes,
+  // exported from tests/helpers/emitted-diff.cjs) -- NEVER by the XL/LARGE/DEFAULT
+  // tier caps above, because NEW_FILE_CAP carries no per-tier escape hatch the way
+  // the old pre-#2724 per-file baseline did.
+  //
+  // This already holds TRUE BY CONSTRUCTION: measureWorkflows() / listWorkflowStems()
+  // (scripts/workflow-size.cjs) do a plain, non-recursive fs.readdirSync() over the
+  // top-level workflows directory, so a `detail/` subdirectory (like the
+  // modes/steps/templates subdirectories before it) is never walked and never
+  // contributes a key to SIZES or a stem to ALL_WORKFLOWS -- it is never a candidate
+  // for capFor()/XL_CAP/LARGE_CAP/DEFAULT_CAP at all. These tests make that explicit
+  // rather than true-by-omission, and lock it as a regression guard: a future switch
+  // to a recursive scan must not start tier-classifying detail files.
+  test('measureWorkflows()/listWorkflowStems() do not recurse into any <workflow>/detail/ subdirectory', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-size-detail-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'sample.md'), 'top-level spine\n');
+      const detailDir = path.join(dir, 'sample', 'detail');
+      fs.mkdirSync(detailDir, { recursive: true });
+      fs.writeFileSync(path.join(detailDir, 'part.md'), 'detail part\n');
+
+      const sizes = measureWorkflows(dir);
+      assert.deepEqual(
+        Object.keys(sizes), ['sample.md'],
+        'measureWorkflows() must only key the top-level spine, never a nested detail/ file'
+      );
+
+      const stems = listWorkflowStems(dir);
+      assert.deepEqual(
+        stems, ['sample'],
+        'listWorkflowStems() must not surface a stem for anything under detail/'
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('a near-NEW_FILE_CAP-sized detail/ file is excluded from SIZES and never tier-classified', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-size-detail-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'sample.md'), 'top-level spine\n');
+      const detailDir = path.join(dir, 'sample', 'detail');
+      fs.mkdirSync(detailDir, { recursive: true });
+      // Sized just under the NEW_FILE_CAP anchor (32768 bytes,
+      // tests/helpers/emitted-diff.cjs) -- the cap this file is ACTUALLY governed
+      // by -- and comfortably below every tier cap in this file (DEFAULT_CAP alone
+      // is 40960), so a regression that started tier-classifying it would still
+      // pass on size and only be caught by the key-shape assertion below.
+      const largeBody = 'x'.repeat(32760);
+      fs.writeFileSync(path.join(detailDir, 'large-part.md'), largeBody);
+
+      const sizes = measureWorkflows(dir);
+      assert.deepEqual(
+        Object.keys(sizes), ['sample.md'],
+        'a large detail/ file must not appear in SIZES -- it is governed solely by ' +
+        'NEW_FILE_CAP (tests/helpers/emitted-diff.cjs), never by XL/LARGE/DEFAULT tiering'
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
 });
 
 // A prior "SIZE: per-file workflow baseline (issue #1074)" describe block lived here,

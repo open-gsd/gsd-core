@@ -616,6 +616,145 @@ describe('real fixture reads via readAckTrailers', () => {
       );
     },
   );
+
+  // #4454 follow-on: a trailer buried mid-message by squash-merge concatenation is
+  // recovered per-bullet, without reintroducing the false-positive class the
+  // whole-message %(trailers:...) design deliberately avoids (row 32). These three
+  // rows mirror a real squash commit's shape directly (GitHub's own suffix, `* `
+  // bullet boundaries) rather than a synthetic simplification of it, since the whole
+  // point is that the ordinary `%(trailers:...)` reader cannot see through this shape.
+
+  test(
+    'a growth trailer buried mid-message by squash-merge concatenation is recovered — #4454',
+    (t) => {
+      const dir = makeTempRepo('gsd-ack-trailer-4454-buried-');
+      withCleanup(t, dir);
+      commitMessage(dir, 'base\n\nno trailer\n');
+      const baseSha = headSha(dir);
+      // Mirrors GitHub's real squash-merge shape: several `* <subject>` bullets
+      // concatenated, the ack trailer landing on a NON-LAST one, followed by more
+      // bullets and then GitHub's own appended suffix — the exact shape that made
+      // #4447's ack invisible to a later PR's emitted-attribution check.
+      commitMessage(
+        dir,
+        'fix(#9999): example squash-merged PR (#1000)\n\n'
+        + '* fix(#9999): first commit\n\n'
+        + 'Some body text for the first commit.\n\n'
+        + '* fix(#9999): second commit grows a workflow file\n\n'
+        + 'Body text.\n\n'
+        + `${trailerLine(ACK_TRAILER_GROWTH, 'some-workflow.md', 'deliberate growth for #9999')}\n\n`
+        + '* fix(#9999): third commit, unrelated\n\n'
+        + 'More body text, landing AFTER the trailer above in the squashed message.\n\n'
+        + '---------\n\n'
+        + 'Co-authored-by: real-author <real@example.com>\n',
+      );
+      const r = readAckTrailers({ baseRef: baseSha, headRef: 'HEAD', cwd: dir });
+      assert.equal(r.errors.length, 0);
+      assert.equal(
+        r.growth.get('some-workflow.md')?.reason,
+        'deliberate growth for #9999',
+        'the buried trailer must be recovered even though a later bullet and ' +
+        "GitHub's own appended suffix follow it in the squashed message",
+      );
+    },
+  );
+
+  test(
+    'an ordinary commit with markdown bullets but no squash suffix finds nothing — #4454 (no false positive)',
+    (t) => {
+      const dir = makeTempRepo('gsd-ack-trailer-4454-ordinary-');
+      withCleanup(t, dir);
+      commitMessage(dir, 'base\n\nno trailer\n');
+      const baseSha = headSha(dir);
+      // A normal commit body using markdown bullets for ordinary prose — no GitHub
+      // squash suffix anywhere, so the sub-chunk recovery pass must not activate at
+      // all, regardless of what the bullets contain.
+      commitMessage(
+        dir,
+        'docs: explain the ack mechanism\n\n'
+        + 'This adds documentation. Notes:\n\n'
+        + '* first bullet, ordinary prose\n'
+        + `* second bullet mentioning ${ACK_TRAILER_GROWTH}: foo.md${ACK_TRAILER_DELIM}not a real trailer, just prose in a bullet\n`
+        + '* third bullet\n\n'
+        + 'No real trailer in this commit.\n',
+      );
+      const r = readAckTrailers({ baseRef: baseSha, headRef: 'HEAD', cwd: dir });
+      assert.equal(r.errors.length, 0);
+      assert.equal(r.growth.size, 0, 'ordinary bullet prose must never be recognized as a trailer');
+      assert.equal(r.hash.size, 0);
+    },
+  );
+
+  test(
+    'a squash-shaped commit where one bullet merely MENTIONS trailer syntax mid-paragraph stays inert — #4454 (row 32, per-chunk)',
+    (t) => {
+      const dir = makeTempRepo('gsd-ack-trailer-4454-mention-');
+      withCleanup(t, dir);
+      commitMessage(dir, 'base\n\nno trailer\n');
+      const baseSha = headSha(dir);
+      // Squash-shaped (has the GitHub suffix), but the trailer-looking text inside
+      // its one bullet is MID-PARAGRAPH — followed by more prose within that SAME
+      // chunk — so it is not that chunk's own terminal line and must stay inert,
+      // exactly as the whole-message design already guaranteed for the un-squashed
+      // case (row 32).
+      commitMessage(
+        dir,
+        'chore: squash-shaped with mid-chunk mention (#1000)\n\n'
+        + '* docs: explain the ack mechanism\n\n'
+        + 'This docs commit teaches contributors the trailer format, e.g.\n'
+        + `${trailerLine(ACK_TRAILER_GROWTH, 'some-file.md', 'example text in the docs body')}\n`
+        + 'followed by more prose so it is NOT this chunk\'s terminal line.\n\n'
+        + 'Co-Authored-By: Someone <someone@example.com>\n\n'
+        + '---------\n\n'
+        + 'Co-authored-by: real-author <real@example.com>\n',
+      );
+      const r = readAckTrailers({ baseRef: baseSha, headRef: 'HEAD', cwd: dir });
+      assert.equal(r.errors.length, 0);
+      assert.equal(r.growth.size, 0, 'a mid-paragraph mention of trailer syntax must never be recognized');
+      assert.equal(r.hash.size, 0);
+    },
+  );
+
+  // Isolated review finding (2026-09-08): a bare `.match()` against the squash-suffix
+  // pattern returns the FIRST occurrence scanning left-to-right, not the last. GitHub's
+  // OWN appended suffix is always the true tail of the message, so an EARLIER bullet's
+  // own body legitimately using a markdown horizontal rule (also `---------`-shaped,
+  // e.g. as a section break in prose) truncated the scan too early and silently
+  // excluded a LATER bullet's real ack from the split/parse pass — reintroducing the
+  // exact #4454 bug this whole function exists to fix. Reproduced directly against a
+  // real fixture before the fix (readAckTrailers returned an EMPTY growth map here);
+  // must find the ack after it.
+  test(
+    'an earlier bullet\'s own markdown HR does not truncate the scan before a LATER bullet\'s real ack — #4454 (last-match, not first-match)',
+    (t) => {
+      const dir = makeTempRepo('gsd-ack-trailer-4454-earlier-hr-');
+      withCleanup(t, dir);
+      commitMessage(dir, 'base\n\nno trailer\n');
+      const baseSha = headSha(dir);
+      commitMessage(
+        dir,
+        'chore: squash-shaped with an EARLIER HR before the real ack bullet (#1000)\n\n'
+        + '* docs: a bullet with its own legitimate markdown HR\n\n'
+        + 'Some docs text explaining something.\n\n'
+        + '---------\n\n'
+        + 'That has its own HR divider used as a section break in ordinary prose.\n\n'
+        + '* fix: second bullet carries the real ack\n\n'
+        + 'Body text.\n\n'
+        + `${trailerLine(ACK_TRAILER_GROWTH, 'foo.md', 'real ack, must be recovered')}\n\n`
+        + '* fix: third bullet, unrelated\n\n'
+        + 'More text.\n\n'
+        + '---------\n\n'
+        + 'Co-authored-by: real-author <real@example.com>\n',
+      );
+      const r = readAckTrailers({ baseRef: baseSha, headRef: 'HEAD', cwd: dir });
+      assert.equal(r.errors.length, 0);
+      assert.equal(
+        r.growth.get('foo.md')?.reason, 'real ack, must be recovered',
+        'the real ack must be found even though an EARLIER bullet contains its own ' +
+        'HR-shaped divider before it',
+      );
+    },
+  );
 });
 
 // ─── hostile IO: uncomputable range, subprocess failure, timeout — rows 22-24 ─

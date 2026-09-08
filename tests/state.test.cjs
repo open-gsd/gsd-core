@@ -3893,6 +3893,453 @@ Progress: [..........] 0%
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// #4243 — begin-phase: prose bold-lookalikes stay untouched (anchored bold
+// form in stateReplaceField) and frontmatter round-trips unknown keys
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#4243: begin-phase leaves prose lookalikes untouched, preserves unknown frontmatter', () => {
+  const ISSUE_PROSE_LINE =
+    '- [Phase 170]: archived files gained a `**Status:**Ready to execute` marker. Must not change.';
+
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createFixture();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // The issue's suggested regression fixture 1, verbatim shape: a bold
+  // `**Status:**` inside prose (## Accumulated Context), the real field in
+  // the plain template form. begin-phase must rewrite ONLY the real field.
+  test('issue fixture 1: prose **Status:** lookalike is byte-identical, real field updates', () => {
+    writeState(tmpDir, [
+      '# Project State',
+      '',
+      '## Current Position',
+      'Phase: 5 of 9 (Fifth)',
+      'Plan: 2 of 6 in current phase',
+      'Status: Ready to execute',
+      'Last activity: 2026-08-01 — did a thing',
+      '',
+      'Progress: [████░░░░░░] 40%',
+      '',
+      '## Accumulated Context',
+      '',
+      '### Decisions',
+      '',
+      ISSUE_PROSE_LINE,
+      '',
+    ].join('\n'));
+
+    const result = runGsdTools(
+      ['state', 'begin-phase', '--phase', '901', '--plans', '3'],
+      tmpDir,
+    );
+    assert.ok(result.success, `begin-phase failed: ${result.error}`);
+
+    const content = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(
+      content.includes(ISSUE_PROSE_LINE),
+      `prose lookalike must survive begin-phase byte-identically, got:\n${content}`,
+    );
+    const pos = sectionMatchOf(content, 'Current Position');
+    assert.ok(pos, 'Current Position section should exist');
+    assert.match(pos[1], /^Status: Executing Phase 901$/m);
+  });
+
+  // Corruption shape 1b: the lookalike section ordered BEFORE ## Current
+  // Position, real field in the bold form — first-match-in-document-order is
+  // the prose under the unanchored pattern.
+  test('lookalike before Current Position: prose survives, real bold field updates', () => {
+    writeState(tmpDir, [
+      '# Project State',
+      '',
+      '## Accumulated Context',
+      '',
+      ISSUE_PROSE_LINE,
+      '',
+      '## Current Position',
+      '',
+      'Phase: 5 of 9',
+      'Plan: 2 of 6',
+      '**Status:** Ready to execute',
+      'Last activity: 2026-08-01 — did a thing',
+      '',
+    ].join('\n'));
+
+    const result = runGsdTools(
+      ['state', 'begin-phase', '--phase', '901', '--plans', '3'],
+      tmpDir,
+    );
+    assert.ok(result.success, `begin-phase failed: ${result.error}`);
+
+    const content = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(
+      content.includes(ISSUE_PROSE_LINE),
+      `prose lookalike must survive begin-phase byte-identically, got:\n${content}`,
+    );
+    assert.match(content, /^\*\*Status:\*\* Executing Phase 901$/m);
+  });
+
+  // Corruption shape 1c: lookalikes for OTHER served fields — a mid-sentence
+  // `**Last Activity:**` must not capture the Last-activity refresh.
+  test('mid-sentence **Last Activity:** lookalike survives, real field refreshes', () => {
+    const lookalike = 'An earlier note mentions **Last Activity:** thresholds for archival. Keep.';
+    writeState(tmpDir, [
+      '# Project State',
+      '',
+      '## Current Position',
+      'Phase: 5 of 9',
+      'Plan: 2 of 6',
+      'Status: Ready to execute',
+      'Last activity: 2026-08-01 — did a thing',
+      '',
+      '## Accumulated Context',
+      '',
+      lookalike,
+      '',
+    ].join('\n'));
+
+    const result = runGsdTools(
+      ['state', 'begin-phase', '--phase', '901', '--plans', '3'],
+      tmpDir,
+    );
+    assert.ok(result.success, `begin-phase failed: ${result.error}`);
+
+    const content = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(content.includes(lookalike), `lookalike must survive, got:\n${content}`);
+    const pos = sectionMatchOf(content, 'Current Position');
+    assert.ok(pos, 'Current Position section should exist');
+    assert.match(pos[1], /^Last activity: \d{4}-\d{2}-\d{2}/m);
+  });
+
+  // The issue's suggested regression fixture 2, no-ROADMAP arm: a custom
+  // frontmatter key, a populated progress block (with a custom subkey), a
+  // curated stopped_at, and milestone identity — all must survive begin-phase
+  // without a ROADMAP.md, and milestone/milestone_name must NOT be reset to
+  // invented defaults. (Already-correct behavior on next via the #2202
+  // carry-forward + #3216 milestone-identity fix + the #4129 ratchet; pinned
+  // here so the class cannot regress.)
+  const FRONTMATTER_FIXTURE = [
+    '---',
+    "gsd_state_version: '1.0'",
+    'milestone: v2.1',
+    'milestone_name: Real Curated Name',
+    'status: planning',
+    "stopped_at: '2026-08-01 — curated stop note'",
+    'custom_key: hand-added-by-agent',
+    'progress:',
+    '  total_phases: 9',
+    '  completed_phases: 4',
+    '  total_plans: 30',
+    '  completed_plans: 12',
+    '  percent: 40',
+    '  custom_subkey: 77',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Current Position',
+    'Phase: 5 of 9 (Fifth)',
+    'Plan: 2 of 6 in current phase',
+    'Status: Ready to execute',
+    'Last activity: 2026-08-01 — did a thing',
+    '',
+  ].join('\n');
+
+  test('issue fixture 2 (no ROADMAP): unknown keys, progress subkeys, stopped_at, milestone survive', () => {
+    writeState(tmpDir, FRONTMATTER_FIXTURE);
+
+    const result = runGsdTools(
+      ['state', 'begin-phase', '--phase', '901', '--name', 'Nine-Oh-One', '--plans', '3'],
+      tmpDir,
+    );
+    assert.ok(result.success, `begin-phase failed: ${result.error}`);
+
+    const content = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    const fm = frontmatterLib.extractFrontmatter(content);
+    assert.equal(fm['custom_key'], 'hand-added-by-agent', 'custom frontmatter key must survive');
+    assert.equal(fm['milestone'], 'v2.1', 'milestone must not be reset to an invented default');
+    assert.equal(fm['milestone_name'], 'Real Curated Name', 'curated milestone_name must survive');
+    assert.ok(String(fm['stopped_at']).includes('curated stop note'), 'stopped_at must survive');
+    const progress = fm['progress'];
+    assert.ok(progress && typeof progress === 'object', 'progress block must survive');
+    // Numeric-tolerant: reconstructFrontmatter may serialize an unknown subkey
+    // as a quoted scalar, so it re-parses as a string — the VALUE surviving is
+    // the contract, not the YAML scalar shape.
+    assert.equal(Number(progress['custom_subkey']), 77, 'custom progress subkey must survive');
+    // With ROADMAP.md absent and a milestone asserted, the #3573/#4094 withhold
+    // keeps all four counters at their STORED values (pinned below) and omits
+    // percent (an unmeasured scan must not assert one, #3233). `percent` is a
+    // DECLARED derived subkey governed by that recorded semantics — unlike the
+    // custom subkey above, its absence here is the documented behavior, so this
+    // row deliberately does not pin its value in either arm.
+    assert.equal(Number(progress['total_phases']), 9, 'stored total_phases kept under the #3573 withhold');
+    assert.equal(Number(progress['completed_phases']), 4, 'stored completed_phases kept under the #3573 withhold');
+    assert.equal(Number(progress['total_plans']), 30, 'stored total_plans kept under the #3573 withhold');
+    assert.equal(Number(progress['completed_plans']), 12, 'stored completed_plans kept under the #3573 withhold');
+    // Known keys still take the begin-phase update.
+    assert.equal(fm['status'], 'executing');
+    assert.equal(String(fm['current_phase']), '901');
+  });
+
+  test('issue fixture 2 (with ROADMAP): unknown keys and progress subkeys survive', () => {
+    writeState(tmpDir, FRONTMATTER_FIXTURE);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      ['# Roadmap', '', '## v2.1 — Real Curated Name', '', '### Phase 5: Fifth', '', 'complete.', ''].join('\n'),
+    );
+
+    const result = runGsdTools(
+      ['state', 'begin-phase', '--phase', '901', '--name', 'Nine-Oh-One', '--plans', '3'],
+      tmpDir,
+    );
+    assert.ok(result.success, `begin-phase failed: ${result.error}`);
+
+    const content = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    const fm = frontmatterLib.extractFrontmatter(content);
+    assert.equal(fm['custom_key'], 'hand-added-by-agent', 'custom frontmatter key must survive');
+    assert.equal(fm['milestone'], 'v2.1');
+    assert.equal(fm['milestone_name'], 'Real Curated Name');
+    const progress = fm['progress'];
+    assert.ok(progress && typeof progress === 'object', 'progress block must survive');
+    assert.equal(Number(progress['custom_subkey']), 77, 'custom progress subkey must survive');
+    assert.equal(fm['status'], 'executing');
+  });
+
+  test('milestone without milestone_name, no ROADMAP: no invented identity appears', () => {
+    writeState(tmpDir, [
+      '---',
+      "gsd_state_version: '1.0'",
+      'milestone: v2.1',
+      'custom_key: keep-me',
+      '---',
+      '',
+      '# Project State',
+      '',
+      '## Current Position',
+      'Phase: 5 of 9',
+      'Plan: 2 of 6',
+      'Status: Ready to execute',
+      '',
+    ].join('\n'));
+
+    const result = runGsdTools(
+      ['state', 'begin-phase', '--phase', '901', '--plans', '3'],
+      tmpDir,
+    );
+    assert.ok(result.success, `begin-phase failed: ${result.error}`);
+
+    const content = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    const fm = frontmatterLib.extractFrontmatter(content);
+    assert.equal(fm['milestone'], 'v2.1', 'milestone must survive without a ROADMAP');
+    assert.equal(fm['milestone_name'], undefined, 'no fabricated milestone_name may appear');
+    assert.equal(fm['custom_key'], 'keep-me');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #4243 follow-up — update-progress: the bold branch of
+// stateReplaceProgressPercent is anchored to line start (same fix as #4453's
+// stateReplaceField anchoring), so prose bold-percent lookalikes stay
+// untouched and the real Progress line takes the machine-segment rewrite.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#4243 follow-up: update-progress leaves prose **Progress:** lookalikes untouched', () => {
+  const PROSE_LINE =
+    '- [2026-07-15] Progress dashboard: the **Progress:** field is machine-managed by state update-progress; do not hand-edit.';
+
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createFixture();
+    // Same #3217 free-form ROADMAP as the update-progress block above: a
+    // no-version ROADMAP is COMPLETE scope, so the percent is computed rather
+    // than withheld.
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function seedOnePhaseTwoPlans() {
+    // 1 of 2 plans summarized, no *-VERIFICATION.md → min-capped 0% (the
+    // existing update-progress rows' derivation; exact value is incidental —
+    // what matters is WHERE the rewrite lands).
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    fs.writeFileSync(path.join(phaseDir, '01-02-PLAN.md'), '# Plan\n');
+  }
+
+  // The repro verbatim: the real status line in the plain template form, the
+  // lookalike quoted mid-sentence inside an Accumulated Context bullet whose
+  // value has no percent (the pre-fix whole-value replacement shape).
+  test('issue repro: prose lookalike is byte-identical, real plain line updates, surfaces agree', () => {
+    writeState(tmpDir, [
+      '# Project State',
+      '',
+      '## Current Position',
+      'Phase: 1 of 1',
+      'Plan: 2 of 2',
+      'Status: Executing Phase 1',
+      'Last activity: 2026-08-01 — did a thing',
+      '',
+      'Progress: [█████░░░░░] 50% (1/2 plans done)',
+      '',
+      '## Accumulated Context',
+      '',
+      '### Decisions',
+      '',
+      PROSE_LINE,
+      '',
+    ].join('\n'));
+    seedOnePhaseTwoPlans();
+
+    const result = runGsdTools('state update-progress', tmpDir);
+    assert.ok(result.success, `update-progress failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.updated, true, 'the real plain Progress line must still match');
+
+    const content = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(
+      content.includes(PROSE_LINE),
+      `prose lookalike must survive update-progress byte-identically, got:\n${content}`,
+    );
+    // The whole-document Progress extractor (stateExtractField) is itself
+    // bold-anywhere on the read side — with a bold lookalike in prose it
+    // extracts the PROSE value, so it cannot witness this write. Assert on
+    // the Current Position section body instead (#4453's precedent for
+    // prose-lookalike fixtures), plus the frontmatter surface for agreement.
+    const pos = sectionMatchOf(content, 'Current Position');
+    assert.ok(pos, 'Current Position section should exist');
+    assert.match(
+      pos[1],
+      new RegExp(`^Progress: \\[${'░'.repeat(10)}\\] ${out.percent}% \\(1/2 plans done\\)$`, 'm'),
+      'the real plain line takes the machine-segment rewrite with its suffix intact',
+    );
+    const fm = frontmatterLib.extractFrontmatter(content);
+    assert.strictEqual(
+      Number(fm.progress && fm.progress.percent),
+      out.percent,
+      'frontmatter percent must agree with the reported percent (#4213 surfaces-agree)',
+    );
+  });
+
+  // Corruption shape 2: lookalike section ordered BEFORE the status line,
+  // real field in the line-start bold form.
+  test('lookalike before Current Position: prose survives, real line-start bold line updates', () => {
+    writeState(tmpDir, [
+      '# Project State',
+      '',
+      '## Accumulated Context',
+      '',
+      PROSE_LINE,
+      '',
+      '## Current Position',
+      '',
+      '**Progress:** [█████░░░░░] 50% (2/4 plans done; blocked on API keys)',
+      '',
+    ].join('\n'));
+    seedOnePhaseTwoPlans();
+
+    const result = runGsdTools('state update-progress', tmpDir);
+    assert.ok(result.success, `update-progress failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.updated, true);
+
+    const content = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(
+      content.includes(PROSE_LINE),
+      `prose lookalike must survive update-progress byte-identically, got:\n${content}`,
+    );
+    // Read-side extractor is bold-anywhere (see C1 note): assert on the
+    // Current Position section body instead.
+    const pos = sectionMatchOf(content, 'Current Position');
+    assert.ok(pos, 'Current Position section should exist');
+    assert.match(
+      pos[1],
+      new RegExp(`^\\*\\*Progress:\\*\\* \\[${'░'.repeat(10)}\\] ${out.percent}% \\(2/4 plans done; blocked on API keys\\)$`, 'm'),
+      'the real line-start bold line takes the machine-segment rewrite with its suffix intact',
+    );
+  });
+
+  // Honest absence: with only a prose lookalike (no line-start Progress line
+  // at all), the command must report updated:false with the #3957 body-layer
+  // reason — not a false success that corrupts the prose.
+  test('lookalike only, no body Progress line: updated:false, file unchanged', () => {
+    const before = [
+      '# Project State',
+      '',
+      '## Accumulated Context',
+      '',
+      PROSE_LINE,
+      '',
+    ].join('\n');
+    writeState(tmpDir, before);
+    seedOnePhaseTwoPlans();
+
+    const result = runGsdTools('state update-progress', tmpDir);
+    assert.ok(result.success, `update-progress failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.updated, false, 'a prose lookalike is not a Progress line');
+    assert.strictEqual(
+      out.reason,
+      'no Progress: line found in STATE.md body to update (frontmatter progress data is unaffected)',
+    );
+    const content = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(content.includes(PROSE_LINE), 'the prose must be untouched');
+  });
+
+  // #2177 priority restated at CLI level among LINE-START forms: an earlier
+  // free-text plain `Progress:` line must not capture the rewrite ahead of
+  // the real bold status line.
+  test('free-text plain Progress: line above the real bold line stays byte-identical (#2177)', () => {
+    const freeText = 'Progress: tracked in the weekly thread, do not edit this line by hand';
+    writeState(tmpDir, [
+      '# Project State',
+      '',
+      freeText,
+      '',
+      '**Progress:** [█████░░░░░] 50%',
+      '',
+      '## Accumulated Context',
+      '',
+      PROSE_LINE,
+      '',
+    ].join('\n'));
+    seedOnePhaseTwoPlans();
+
+    const result = runGsdTools('state update-progress', tmpDir);
+    assert.ok(result.success, `update-progress failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.updated, true);
+
+    const content = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(content.includes(freeText), 'the free-text plain line must stay byte-identical');
+    assert.ok(content.includes(PROSE_LINE), 'the prose lookalike must stay byte-identical');
+    // Read-side extractor is bold-anywhere (see the C1 note above); the free-
+    // text plain line and the bold status line live in the top-of-body region
+    // between the title and the first ## heading. Scope with splitLines
+    // (CRLF-safe per local/no-crlf-fragile-split), never a bare \n split.
+    const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+    const lines = splitLines(content);
+    const firstSectionIdx = lines.findIndex((l) => l.startsWith('## '));
+    const beforeFirstSection = lines.slice(0, firstSectionIdx === -1 ? lines.length : firstSectionIdx).join('\n');
+    assert.match(
+      beforeFirstSection,
+      new RegExp(`^\\*\\*Progress:\\*\\* \\[${'░'.repeat(10)}\\] ${out.percent}%$`, 'm'),
+      'the line-start bold status line is the one rewritten',
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Bug #1589 — progress counters not updated during plan execution
 // ─────────────────────────────────────────────────────────────────────────────
 

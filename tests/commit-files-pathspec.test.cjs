@@ -183,6 +183,129 @@ describe('commit --files: pathspec honors declared scope (#2112)', () => {
     );
   });
 
+  // ── #4454: skipped-missing --files paths are reported, not silently dropped ──
+
+  test('#4454: --files with one existing + one missing file reports skipped_files and does not commit the deletion', () => {
+    // Mirrors the issue's own repro shape: an existing modified file alongside
+    // a missing tracked one (e.g. milestone.lock + state.json). state.json
+    // must be TRACKED then removed from disk — an untracked-and-missing path
+    // would make the #2014 assertion below vacuous, since `git rm --cached`
+    // on a never-tracked path is a no-op with or without the skip guard.
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'milestone.lock'), 'a\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'state.json'), '{}\n');
+    gitOrThrow(['add', '.planning/milestone.lock', '.planning/state.json'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+    gitOrThrow(['commit', '-m', 'seed milestone.lock and state.json'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'milestone.lock'), 'b\n');
+    fs.unlinkSync(path.join(tmpDir, '.planning', 'state.json'));
+
+    const res = runGsdTools(
+      ['commit', 'docs: update milestone', '--files', '.planning/milestone.lock', '.planning/state.json'],
+      tmpDir,
+    );
+    const parsed = JSON.parse(res.output);
+
+    assert.strictEqual(parsed.committed, true, `expected a commit: ${res.output}`);
+    assert.ok(typeof parsed.hash === 'string' && parsed.hash.length > 0, 'hash must be a non-empty string');
+    assert.deepStrictEqual(
+      parsed.skipped_files, ['.planning/state.json'],
+      `skipped_files must name exactly the missing path: ${res.output}`,
+    );
+
+    // #2014: state.json was TRACKED and is now missing from disk — the skip
+    // guard must leave its deletion unstaged, not just leave an
+    // already-untracked path alone (which would prove nothing).
+    const diffNameStatus = gitOrThrow(['diff', 'HEAD~1', 'HEAD', '--name-status'], {
+      cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS,
+    });
+    assert.ok(
+      !diffNameStatus.includes('state.json'),
+      `no deletion of the still-tracked-on-disk-missing file may be recorded: ${diffNameStatus}`,
+    );
+    const lsTree = gitOrThrow(['ls-tree', '-r', '--name-only', 'HEAD'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+    assert.ok(
+      lsTree.includes('.planning/state.json'),
+      `state.json must still be tracked at HEAD — its deletion must not have been committed: ${lsTree}`,
+    );
+  });
+
+  test('#4454: --files with only existing files omits skipped_files entirely', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'RESEARCH.md'), '# Research\n');
+
+    const res = runGsdTools(
+      ['commit', 'docs: artifacts only', '--files', '.planning/PLAN.md', '.planning/RESEARCH.md'],
+      tmpDir,
+    );
+    const parsed = JSON.parse(res.output);
+
+    assert.strictEqual(parsed.committed, true, `expected a commit: ${res.output}`);
+    assert.ok(
+      !('skipped_files' in parsed),
+      `no skipped_files key may be present when nothing was skipped: ${res.output}`,
+    );
+  });
+
+  test('#4454: --files naming only missing file(s) reports nothing_to_commit with skipped_files', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '# State\n');
+    gitOrThrow(['add', '.planning/STATE.md'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+    gitOrThrow(['commit', '-m', 'add STATE.md'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+    fs.unlinkSync(path.join(tmpDir, '.planning', 'STATE.md'));
+
+    const res = runGsdTools(
+      ['commit', 'docs: try', '--files', '.planning/STATE.md'],
+      tmpDir,
+    );
+    const parsed = JSON.parse(res.output);
+
+    assert.strictEqual(parsed.committed, false);
+    assert.strictEqual(parsed.reason, 'nothing_to_commit');
+    assert.deepStrictEqual(
+      parsed.skipped_files, ['.planning/STATE.md'],
+      `an all-missing --files list reaches nothing_to_commit via stagedPaths.length === 0; ` +
+      `skipped_files must still name the reason: ${res.output}`,
+    );
+  });
+
+  test('#4454: default mode (no --files) with a missing tracked file is unaffected — no skipped_files anywhere', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '# State\n');
+    gitOrThrow(['add', '.planning/STATE.md'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+    gitOrThrow(['commit', '-m', 'add STATE.md'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+    fs.unlinkSync(path.join(tmpDir, '.planning', 'STATE.md'));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'PLAN.md'), '# Plan\n');
+
+    const res = runGsdTools(['commit', 'docs: default mode'], tmpDir);
+    const parsed = JSON.parse(res.output);
+
+    assert.strictEqual(parsed.committed, true, `expected a commit: ${res.output}`);
+    assert.ok(!('skipped_files' in parsed), `default mode never sets explicitFiles: ${res.output}`);
+
+    // The deletion IS staged and committed as before — explicitFiles is false here.
+    const diffNameStatus = gitOrThrow(['diff', 'HEAD~1', 'HEAD', '--name-status'], {
+      cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS,
+    });
+    assert.ok(
+      diffNameStatus.includes('D\t.planning/STATE.md'),
+      `default mode must still stage/commit the deletion: ${diffNameStatus}`,
+    );
+  });
+
+  test('#4454: --files naming two missing files reports both, in the order they were named', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'PLAN.md'), '# Plan\n');
+
+    const res = runGsdTools(
+      ['commit', 'docs: mixed missing', '--files', '.planning/PLAN.md', '.planning/GONE-A.md', '.planning/GONE-B.md'],
+      tmpDir,
+    );
+    const parsed = JSON.parse(res.output);
+
+    assert.strictEqual(parsed.committed, true, `expected a commit: ${res.output}`);
+    assert.deepStrictEqual(
+      parsed.skipped_files,
+      ['.planning/GONE-A.md', '.planning/GONE-B.md'],
+      `both missing paths must be reported in the order named: ${res.output}`,
+    );
+  });
+
   test('#2523: absolute --files path inside the repo is committed, not silently dropped', () => {
     // init phase-op emits phase_dir as an ABSOLUTE path (#2428); cmdCommit must
     // accept it. The bug was path.join(cwd, absPath) → cwd+absPath (non-existent)
@@ -1573,6 +1696,12 @@ describe('workflow call sites declare --files (#2269)', () => {
       // vouch as a value.
       'gsd_run query commit "docs: revert" --files >/dev/null 2>&1 || true',
       'gsd_run query commit "docs: plan" --files > out.md',
+      // #4276 NEGATIVE CONTROL. Here the 2 is genuinely an IO number: the
+      // shell consumes `2>&1` whole and --files reaches argv with no value.
+      // This row is what stops the quoted-digit fix below from over-
+      // correcting into "stop consuming IO numbers" — an implementation that
+      // simply dropped the redirection branch would satisfy the scoped rows
+      // and fail here.
       'gsd_run query commit "docs: plan" --files 2>&1',
       // An unquoted # begins a comment: everything after it, --files included,
       // never reaches argv.
@@ -1612,6 +1741,20 @@ describe('workflow call sites declare --files (#2269)', () => {
       'gsd_run query commit "docs: ship phase 4 — PR #42 [ci skip]" --files .planning/STATE.md',
       // Mid-word # is literal too, as in the shell.
       'gsd_run query commit docs:PR#42 --files .planning/STATE.md',
+      // #4276: a QUOTED digit run is not an IO number. POSIX recognizes one
+      // only when the digits are bare, so the shell passes `"2"` as an
+      // ordinary argument and this invocation IS scoped — on a file named
+      // `2`, which is legal. Before the fix the tokenizer read the token's
+      // characters without its quoting, ate the value as an IO number, and
+      // reported a correct line as unscoped.
+      'gsd_run query commit "docs: plan" --files "2">out',
+      // Detached from the operator, and single-quoted, so neither the gluing
+      // nor the quote style is what carries the fix.
+      'gsd_run query commit "docs: plan" --files \'2\' > out',
+      // Partially quoted: `2"3"` is not a bare digit run either, and a mask
+      // test that asked "any character unquoted?" instead of "every
+      // character unquoted?" would get this one wrong.
+      'gsd_run query commit "docs: plan" --files 2"3">out',
     ];
     for (const line of scoped) {
       assert.ok(invocationCandidates(line).length > 0, `should be an invocation: ${line}`);

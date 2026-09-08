@@ -275,6 +275,26 @@
     "message": "Double quote to prevent globbing and word splitting."
   },
   {
+    "file": "gsd-core/workflows/complete-milestone/detail/elaboration.md",
+    "code": "2001",
+    "message": "See if you can use ${variable//search/replace} instead."
+  },
+  {
+    "file": "gsd-core/workflows/complete-milestone/detail/elaboration.md",
+    "code": "2001",
+    "message": "See if you can use ${variable//search/replace} instead."
+  },
+  {
+    "file": "gsd-core/workflows/complete-milestone/detail/elaboration.md",
+    "code": "2086",
+    "message": "Double quote to prevent globbing and word splitting."
+  },
+  {
+    "file": "gsd-core/workflows/complete-milestone/detail/elaboration.md",
+    "code": "2086",
+    "message": "Double quote to prevent globbing and word splitting."
+  },
+  {
     "file": "gsd-core/workflows/debug.md",
     "code": "2010",
     "message": "Don't use ls | grep. Use a glob or a for loop with a condition to allow non-alphanumeric filenames."
@@ -366,6 +386,11 @@
   },
   {
     "file": "gsd-core/workflows/execute-phase.md",
+    "code": "2086",
+    "message": "Double quote to prevent globbing and word splitting."
+  },
+  {
+    "file": "gsd-core/workflows/execute-phase/detail/elaboration.md",
     "code": "2086",
     "message": "Double quote to prevent globbing and word splitting."
   },
@@ -476,6 +501,16 @@
   },
   {
     "file": "gsd-core/workflows/new-project.md",
+    "code": "2012",
+    "message": "Use find instead of ls to better handle non-alphanumeric filenames."
+  },
+  {
+    "file": "gsd-core/workflows/new-project/detail/elaboration.md",
+    "code": "2012",
+    "message": "Use find instead of ls to better handle non-alphanumeric filenames."
+  },
+  {
+    "file": "gsd-core/workflows/new-project/detail/elaboration.md",
     "code": "2012",
     "message": "Use find instead of ls to better handle non-alphanumeric filenames."
   },

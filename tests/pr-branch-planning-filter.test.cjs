@@ -164,6 +164,26 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       assert.strictEqual(classifyCommit([], strictOpts), 'exclude');
     });
 
+    // #4447: a `.planning/`-only commit that mixes a structural path with a
+    // non-structural planning path (transient-dir or the "other" bucket) is
+    // the exact shape the workflow's prose could not classify — the four
+    // arms as written never compute a total planning-file count, so they
+    // cannot tell "only structural" from "structural plus something else".
+    // The JS model here already resolves it correctly (`classifyCommit`'s
+    // structural check has no upper bound against the total), so these pin
+    // that behavior; the actual defect is fixed in the workflow prose itself
+    // (see test 51).
+    test('49: #4447 [.planning/STATE.md, .planning/phases/PLAN.md] (structural + transient, no code) includes default, excludes strict', () => {
+      const files = ['.planning/STATE.md', '.planning/phases/PLAN.md'];
+      assert.strictEqual(classifyCommit(files, defaultOpts), 'include');
+      assert.strictEqual(classifyCommit(files, strictOpts), 'exclude');
+    });
+
+    test('50: #4447 [.planning/STATE.md, .planning/config.json] (structural + third-bucket, no code) includes default', () => {
+      const files = ['.planning/STATE.md', '.planning/config.json'];
+      assert.strictEqual(classifyCommit(files, defaultOpts), 'include');
+    });
+
     test('8: [.planning/STATE.md, src/a.ts] — forbiddenPaths [] default, [.planning/STATE.md] strict', () => {
       const files = ['.planning/STATE.md', 'src/a.ts'];
       assert.deepStrictEqual(forbiddenPaths(files, defaultOpts), []);
@@ -840,6 +860,29 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       assert.ok(
         !text.includes('- [ ] No .planning/ files in PR branch diff'),
         'the unconditional "No .planning/ files in PR branch diff" success line must be removed/replaced',
+      );
+    });
+
+    // #4447: this pins the actual documented defect — ambiguous prose read by
+    // an LLM executing the workflow, not the already-correct JS model in
+    // pr-branch-filter.cjs (see tests 49/50). Before the fix, `analyze_commits`
+    // computed FILES/NON_PLANING/STRUCTURAL but never a total planning-file
+    // count, so its four classification arms had no way to distinguish
+    // "only structural" `.planning/` commits from "structural plus a
+    // transient/other `.planning/` path" — that second shape matched none of
+    // the four arms and was silently dropped, breaking STATE.md's per-commit
+    // revision chain in default mode. This must FAIL against the original
+    // (unedited) step text, which had no `PLANNING_COUNT=` assignment at all.
+    test('51: #4447 analyze_commits computes an explicit total .planning/ file count (PLANNING_COUNT), closing the gap that let a structural+transient/other planning commit match none of the four classification arms', () => {
+      const text = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+      const stepMatch = text.match(/<step name="analyze_commits">([\s\S]{0,20000}?)<\/step>/);
+      assert.ok(stepMatch, 'analyze_commits step not found in pr-branch.md');
+      assert.match(
+        stepMatch[1],
+        /^PLANNING_COUNT=\$\(/m,
+        'analyze_commits must compute an explicit total planning-file count via a real shell '
+          + 'assignment (PLANNING_COUNT=$(...)) so the classification arms can distinguish '
+          + '"only structural" planning commits from "structural plus transient/other" ones',
       );
     });
   });

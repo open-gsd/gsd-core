@@ -69,7 +69,11 @@ if [ -f .planning/config.json ]; then
     echo "gsd-validate-commit.sh: could not read .planning/config.json (opt-in check) — validator disabled for this call. $(cat "$ENABLED_ERR")" >&2
     exit 0
   fi
-  ENABLED=$(printf '%s\n' "$CONFIG_OUT" | head -1)
+  # Pure parameter expansion, not `printf ... | head -1`: same SIGPIPE race
+  # class as the SUBJECT extraction below (`echo "$MSG" | head -1`) — CONFIG_OUT
+  # is multi-line whenever extra commit types are configured, and `head -1`
+  # closing early can SIGPIPE `printf` under `set -euo pipefail`.
+  ENABLED="${CONFIG_OUT%%$'\n'*}"
   if [ "$ENABLED" != "1" ]; then exit 0; fi
   # Remaining lines (if any) are the sanitized, deduped configured commit
   # types beyond the 10 built-ins (#3811). Read into a bash-3.2-safe array —
@@ -521,9 +525,18 @@ if [ "$CLASSIFY_STATUS" = "0" ]; then
       SUBJECT=$(GIT_CMD_LIB="$HOOK_DIR/lib/git-cmd.js" MSG="$MSG" node -e "
         const {resolveCommitSubject}=require(process.env.GIT_CMD_LIB);
         process.stdout.write(resolveCommitSubject(process.env.MSG));
-      " 2>/dev/null) || SUBJECT=$(echo "$MSG" | head -1)
+      " 2>/dev/null) || SUBJECT="${MSG%%$'\n'*}"
     else
-      SUBJECT=$(echo "$MSG" | head -1)
+      # Pure parameter expansion, not `echo "$MSG" | head -1`: that pipeline
+      # raced a SIGPIPE under `set -euo pipefail` whenever $MSG had a body
+      # (the common case) — `head -1` can close its read end as soon as it
+      # has the first line, and if `echo`'s write lands after that close,
+      # `echo` dies with signal 13 (exit 141), which is NOT suppressed by
+      # `set -e` and aborted the whole hook intermittently (observed in
+      # tests/hooks-opt-in.test.cjs's --fixup=HEAD "round 7" case). Zero
+      # subprocesses here means zero pipe/race surface. Equivalent to
+      # `head -1` for single-line, multi-line, and trailing-newline input.
+      SUBJECT="${MSG%%$'\n'*}"
     fi
     # Single source of truth for the accepted commit-type list (#3811): the
     # 10 built-ins plus whatever passed the safe-token filter above. Both the

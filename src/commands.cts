@@ -49,7 +49,7 @@ import { parseCodexAgentToml, renderCodexAgentToml, stripModel, stripReasoningEf
 import hostIntegrationMod = require('./host-integration.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
-const { planningDir, planningPaths } = planningWorkspace;
+const { planningDir, planningPaths, todosDir } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
 const { extractFrontmatter, agentScalarNeedsDoubleQuoting, escapeDoubleQuotedScalar } = frontmatter;
@@ -239,7 +239,10 @@ function cmdCurrentTimestamp(format: string | undefined, raw: boolean): void {
 }
 
 function cmdListTodos(cwd: string, area: string | undefined, raw: boolean): void {
-  const pendingDir = path.join(planningDir(cwd), 'todos', 'pending');
+  // #4256: todos are root-scoped shared state — resolve via todosDir(cwd),
+  // never planningDir(cwd) (workstream-scoped), or the listing goes empty
+  // under a workstream.
+  const pendingDir = path.join(todosDir(cwd), 'pending');
 
   let count = 0;
   const todos: Array<{ file: string; created: string; title: string; area: string; path: string; severity?: string }> = [];
@@ -1724,6 +1727,10 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   // a linked worktree, timeout) was discarded and the operator saw a downstream
   // pathspec error pointing at an innocent file.
   const stagingFailures: Array<{ file: string; error: string; timed_out: boolean }> = [];
+  // #4454: explicit --files paths skipped because they were missing from disk
+  // (the #2014 guard below). Tracked so the caller can tell a partial commit
+  // from a complete one instead of an unqualified `committed: true`.
+  const skippedFiles: string[] = [];
   // Paths already in the index BEFORE this call. On a staging failure the
   // rollback below unstages only what THIS call added — unstaging a path the
   // caller had staged themselves would destroy their work.
@@ -1738,6 +1745,9 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
         // Caller passed an explicit --files list: missing files are skipped.
         // Staging a deletion here would silently remove tracked planning files
         // (e.g. STATE.md, ROADMAP.md) when they are temporarily absent (#2014).
+        // #4454: record what was skipped so the caller can tell a partial
+        // commit from a complete one, instead of an unqualified success.
+        skippedFiles.push(file);
         continue;
       }
       // Default mode (staging all of .planning/): stage the deletion so
@@ -2038,7 +2048,15 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
         ).exitCode === 0
         && !assumeUnchangedWouldRecord()));
   if (nothingToCommit) {
-    const result = { committed: false, hash: null, reason: 'nothing_to_commit' };
+    // #4454: an explicit --files list where every named path was missing
+    // reaches this branch via `stagedPaths.length === 0` above — surface
+    // which path(s) were the reason, same as the success result below.
+    const result = {
+      committed: false,
+      hash: null,
+      reason: 'nothing_to_commit',
+      ...(skippedFiles.length > 0 ? { skipped_files: skippedFiles } : {}),
+    };
     output(result, raw, 'nothing');
     return;
   }
@@ -2107,7 +2125,18 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       return;
     }
     if (commitResult.stdout.includes('nothing to commit') || commitResult.stderr.includes('nothing to commit')) {
-      const result = { committed: false, hash: null, reason: 'nothing_to_commit' };
+      // #4454: this is the residual window the surrounding comments already
+      // document (a partial skip + partialCommitRefused bypassing the diff
+      // probe + git's own empty-commit refusal) — skippedFiles can be
+      // non-empty here too, and omitting it would be the same misreport
+      // this fix exists to close, just on the other branch that reaches
+      // "nothing to commit".
+      const result = {
+        committed: false,
+        hash: null,
+        reason: 'nothing_to_commit',
+        ...(skippedFiles.length > 0 ? { skipped_files: skippedFiles } : {}),
+      };
       output(result, raw, 'nothing');
       return;
     }
@@ -2124,7 +2153,15 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   // Get short hash
   const hashResult = execGit(['rev-parse', '--short', 'HEAD'], { cwd });
   const hash = hashResult.exitCode === 0 ? hashResult.stdout : null;
-  const result = { committed: true, hash, reason: 'committed' };
+  // #4454: report explicit --files paths that were skipped as missing (the
+  // #2014 guard above) so a caller can tell a partial commit from a complete
+  // one, without changing the payload shape when nothing was skipped.
+  const result = {
+    committed: true,
+    hash,
+    reason: 'committed',
+    ...(skippedFiles.length > 0 ? { skipped_files: skippedFiles } : {}),
+  };
   output(result, raw, hash || 'committed');
 }
 
@@ -2778,7 +2815,8 @@ function cmdProgressRender(cwd: string, format: string | undefined, raw: boolean
 function cmdTodoMatchPhase(cwd: string, phase: string | undefined, raw: boolean): void {
   if (!phase) { error('phase required for todo match-phase'); }
 
-  const pendingDir = path.join(planningDir(cwd), 'todos', 'pending');
+  // #4256: root-scoped todos read — see cmdListTodos.
+  const pendingDir = path.join(todosDir(cwd), 'pending');
   const todos: Array<{
     file: string;
     title: string;
@@ -2945,8 +2983,12 @@ function cmdTodoComplete(cwd: string, filename: string | undefined, options: Tod
     error('filename required for todo complete');
   }
 
-  const pendingDir = path.join(planningDir(cwd), 'todos', 'pending');
-  const completedDir = path.join(planningDir(cwd), 'todos', 'completed');
+  // #4256: root-scoped todos read/write — see cmdListTodos. The pending and
+  // completed halves of the move must resolve from the SAME root or the
+  // completion would strand files where no reader looks.
+  const todosRoot = todosDir(cwd);
+  const pendingDir = path.join(todosRoot, 'pending');
+  const completedDir = path.join(todosRoot, 'completed');
   const sourcePath = path.join(pendingDir, filename as string);
 
   if (!fs.existsSync(sourcePath)) {

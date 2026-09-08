@@ -278,16 +278,27 @@ For each commit, check what it touches:
 FILES=$(git diff-tree --no-commit-id --name-only -r $HASH)
 NON_PLANNING=$(echo "$FILES" | grep -c -v "^\.planning/" || true)
 STRUCTURAL=$(echo "$FILES" | grep -Ec "$STRUCTURAL_RE" || true)
+PLANNING_COUNT=$(echo "$FILES" | grep -c "^\.planning/" || true)
 ```
 
-Classify:
-- **Code commits**: touch at least one non-`.planning/` file → INCLUDE (both modes)
-- **Mixed commits**: touch code + any planning files → INCLUDE (both modes; the planning
-  paths are filtered out by `create_pr_branch`, not the commit)
-- **Structural planning commits**: touch only structural `.planning/` files → INCLUDE in
+Classify, using `NON_PLANNING`, `STRUCTURAL`, and `PLANNING_COUNT` computed above — every arm's
+condition is explicit and computable so no reading of it is ambiguous:
+- **Code commits**: `NON_PLANNING > 0` and `PLANNING_COUNT == 0` → INCLUDE (both modes)
+- **Mixed code+planning commits**: `NON_PLANNING > 0` and `PLANNING_COUNT > 0` → INCLUDE (both
+  modes; the planning paths are filtered out by `create_pr_branch`, not the commit)
+- **Structural-only planning commits**: `NON_PLANNING == 0` and `STRUCTURAL == PLANNING_COUNT`
+  and `PLANNING_COUNT > 0` (every `.planning/` file touched is structural) → INCLUDE in
   **default** mode; **EXCLUDE** in strict mode, which has no structural carve-out
-- **Transient planning commits**: touch only `.planning/` paths that are not structural →
-  EXCLUDE (both modes)
+- **Mixed planning commits (#4447)**: `NON_PLANNING == 0` and `STRUCTURAL > 0` and
+  `STRUCTURAL < PLANNING_COUNT` (some but not all `.planning/` files touched are structural —
+  the rest are transient and/or the "other" bucket, e.g. `config.json`/`intel/`) → INCLUDE in
+  **default** mode (the transient-dir subset of the non-structural paths is filtered out by
+  `create_pr_branch`'s universal per-commit filter exactly as for a mixed code+planning commit;
+  any "other" non-structural, non-transient path — `config.json`, `intel/`, etc. — is simply
+  preserved, same as default mode already does for such paths on any commit); **EXCLUDE** in
+  strict mode
+- **Transient-only planning commits**: `NON_PLANNING == 0` and `STRUCTURAL == 0` and
+  `PLANNING_COUNT > 0` → EXCLUDE (both modes)
 
 In strict mode this collapses to a single rule: `NON_PLANNING > 0` → INCLUDE, else EXCLUDE.
 
@@ -297,6 +308,7 @@ Commits to include: {N} (code changes{, + structural planning — default mode o
 Commits to exclude: {N} (planning-only)
 Mixed commits: {N} (code + planning — included, planning paths filtered)
 Structural planning commits: {N} ({included|excluded — strict mode})
+Mixed planning commits: {N} ({included — structural + transient/other, planning paths filtered|excluded — strict mode})
 ```
 </step>
 
