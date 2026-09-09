@@ -47,14 +47,18 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const fc = require('fast-check');
-const { cleanup, readFileNormalized, readWorkflowCombined } = require('./helpers.cjs');
+const { cleanup, readFileNormalized, readWorkflowCombined, runGsdTools } = require('./helpers.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const PLAN_PHASE_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'plan-phase.md');
 const STALL_HELPERS_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'plan-phase', 'steps', 'stall-detection-helpers.md');
 const CHUNKED_PLANNING_MODE_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'plan-phase', 'steps', 'chunked-planning-mode.md');
 const CONFIG_SCHEMA_MANIFEST_PATH = path.join(REPO_ROOT, 'gsd-core', 'bin', 'shared', 'config-schema.manifest.json');
+const CONFIG_DEFAULTS_MANIFEST_PATH = path.join(REPO_ROOT, 'gsd-core', 'bin', 'shared', 'config-defaults.manifest.json');
 const CONFIGURATION_DOCS_PATH = path.join(REPO_ROOT, 'docs', 'CONFIGURATION.md');
+const PT_BR_CONFIGURATION_DOCS_PATH = path.join(REPO_ROOT, 'docs', 'pt-BR', 'CONFIGURATION.md');
+const ZH_CN_CONFIGURATION_DOCS_PATH = path.join(REPO_ROOT, 'docs', 'zh-CN', 'CONFIGURATION.md');
+const SETTINGS_ADVANCED_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'settings-advanced.md');
 
 function readPlanPhase() {
   return readFileNormalized(PLAN_PHASE_PATH);
@@ -461,6 +465,140 @@ describe('bug #2650 config schema — planner.stall_* keys mirror executor.stall
   });
 });
 
+describe('enhancement #4570 config contract — planner stall detection has a typed default-on opt-out', () => {
+  function makeProject(t, config = {}) {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4570-config-'));
+    t.after(() => cleanup(tmp));
+    fs.mkdirSync(path.join(tmp, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, '.planning', 'config.json'), `${JSON.stringify(config, null, 2)}\n`);
+    return tmp;
+  }
+
+  test('central schema and canonical defaults manifest register planner.stall_detection_enabled=true', () => {
+    const schema = JSON.parse(fs.readFileSync(CONFIG_SCHEMA_MANIFEST_PATH, 'utf8'));
+    const defaults = JSON.parse(fs.readFileSync(CONFIG_DEFAULTS_MANIFEST_PATH, 'utf8'));
+    assert.ok(schema.validKeys.includes('planner.stall_detection_enabled'));
+    assert.equal(defaults.planner?.stall_detection_enabled, true);
+    assert.equal(schema.validKeys.includes('executor.stall_detection_enabled'), false,
+      'the planner opt-out must not introduce an executor sibling outside approved scope');
+  });
+
+  test('config-get defaults absent values to true; config-set false round-trips as boolean false', (t) => {
+    const tmp = makeProject(t);
+    const env = { HOME: tmp, USERPROFILE: tmp };
+
+    const absent = runGsdTools(['config-get', 'planner.stall_detection_enabled', '--raw'], tmp, env);
+    assert.equal(absent.success, true, absent.error);
+    assert.equal(absent.output, 'true');
+
+    const noConfig = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4570-no-config-'));
+    t.after(() => cleanup(noConfig));
+    const absentFile = runGsdTools(
+      ['config-get', 'planner.stall_detection_enabled', '--raw'],
+      noConfig,
+      { HOME: noConfig, USERPROFILE: noConfig },
+    );
+    assert.equal(absentFile.success, true, absentFile.error);
+    assert.equal(absentFile.output, 'true');
+
+    const set = runGsdTools(['config-set', 'planner.stall_detection_enabled', 'false'], tmp, env);
+    assert.equal(set.success, true, set.error);
+    const onDisk = JSON.parse(fs.readFileSync(path.join(tmp, '.planning', 'config.json'), 'utf8'));
+    assert.equal(onDisk.planner.stall_detection_enabled, false);
+    assert.equal(typeof onDisk.planner.stall_detection_enabled, 'boolean');
+
+    const roundTrip = runGsdTools(['config-get', 'planner.stall_detection_enabled', '--raw'], tmp, env);
+    assert.equal(roundTrip.success, true, roundTrip.error);
+    assert.equal(roundTrip.output, 'false');
+  });
+
+  test('property: every non-boolean CLI value is rejected without modifying config', (t) => {
+    const tmp = makeProject(t, { planner: { stall_detection_enabled: true }, sentinel: 'preserve' });
+    const configPath = path.join(tmp, '.planning', 'config.json');
+    const before = fs.readFileSync(configPath, 'utf8');
+    const printable = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789[]{}._- ';
+    const invalidValue = fc.array(fc.constantFrom(...printable), { minLength: 1, maxLength: 16 })
+      .map((chars) => chars.join(''))
+      .filter((value) => !['true', 'false', 'null'].includes(value));
+
+    fc.assert(
+      fc.property(invalidValue, (value) => {
+        const result = runGsdTools(
+          ['config-set', 'planner.stall_detection_enabled', value],
+          tmp,
+          { HOME: tmp, USERPROFILE: tmp },
+        );
+        return result.success === false && fs.readFileSync(configPath, 'utf8') === before;
+      }),
+      { numRuns: 20 },
+    );
+  });
+
+  test('hand-edited non-booleans fail safely to true on both config-get and Config Loader reads', (t) => {
+    const tmp = makeProject(t, { planner: { stall_detection_enabled: 'false' } });
+    const result = runGsdTools(
+      ['config-get', 'planner.stall_detection_enabled', '--raw'],
+      tmp,
+      { HOME: tmp, USERPROFILE: tmp },
+    );
+    assert.equal(result.success, true, result.error);
+    assert.equal(result.output, 'true', 'a string "false" must not disable the watchdog');
+
+    const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
+    assert.equal(loadConfig(tmp).planner_stall_detection_enabled, true);
+  });
+
+  test('root, GSD_PROJECT, and workstream reads retain canonical scope precedence', (t) => {
+    const tmp = makeProject(t, { planner: { stall_detection_enabled: false } });
+    const projectDir = path.join(tmp, '.planning', 'product-a');
+    const workstreamDir = path.join(tmp, '.planning', 'workstreams', 'alpha');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.mkdirSync(workstreamDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'config.json'), '{"planner":{"stall_detection_enabled":true}}\n');
+    fs.writeFileSync(path.join(workstreamDir, 'config.json'), '{"planner":{"stall_detection_enabled":true}}\n');
+    const home = { HOME: tmp, USERPROFILE: tmp };
+
+    assert.equal(runGsdTools(['config-get', 'planner.stall_detection_enabled', '--raw'], tmp, home).output, 'false');
+    assert.equal(runGsdTools(
+      ['config-get', 'planner.stall_detection_enabled', '--raw'], tmp,
+      { ...home, GSD_PROJECT: 'product-a' },
+    ).output, 'true');
+    assert.equal(runGsdTools(
+      ['config-get', 'planner.stall_detection_enabled', '--raw'], tmp,
+      { ...home, GSD_WORKSTREAM: 'alpha' },
+    ).output, 'true');
+
+    const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
+    assert.equal(loadConfig(tmp).planner_stall_detection_enabled, false);
+    assert.equal(loadConfig(tmp, { workstream: 'alpha' }).planner_stall_detection_enabled, true);
+
+    fs.writeFileSync(path.join(workstreamDir, 'config.json'), '{"planner":{}}\n');
+    assert.equal(runGsdTools(
+      ['config-get', 'planner.stall_detection_enabled', '--raw'], tmp,
+      { ...home, GSD_WORKSTREAM: 'alpha' },
+    ).output, 'false', 'an omitted workstream value must inherit the root value');
+    assert.equal(loadConfig(tmp, { workstream: 'alpha' }).planner_stall_detection_enabled, false);
+  });
+
+  test('English and enumerating localized docs state default, CLI opt-out, effect, and recovery loss', () => {
+    for (const docsPath of [CONFIGURATION_DOCS_PATH, PT_BR_CONFIGURATION_DOCS_PATH, ZH_CN_CONFIGURATION_DOCS_PATH]) {
+      const docs = fs.readFileSync(docsPath, 'utf8');
+      assert.match(docs, /`planner\.stall_detection_enabled`\s*\|\s*boolean\s*\|\s*`true`/);
+      assert.match(docs, /config-set planner\.stall_detection_enabled false/);
+      assert.match(docs, /runtime-native|nativa do runtime|运行时原生/i);
+      assert.match(docs, /bounded recovery|recupera[cç][aã]o limitada|有界恢复/i);
+    }
+  });
+
+  test('advanced settings warns about recovery loss before offering to persist false', () => {
+    const settings = fs.readFileSync(SETTINGS_ADVANCED_PATH, 'utf8');
+    assert.match(settings, /planner\.stall_detection_enabled/);
+    assert.match(settings, /default:\s*`true`/);
+    assert.match(settings, /bounded automatic recovery[\s\S]{0,500}false/i);
+    assert.match(settings, /config-set planner\.stall_detection_enabled false/);
+  });
+});
+
 describe('bug #2650 plan-phase — all five planner/plan-checker spawns dispatch in the background with bounded stall surveillance', () => {
   let workflow;
 
@@ -475,8 +613,30 @@ describe('bug #2650 plan-phase — all five planner/plan-checker spawns dispatch
 
   test('stall-detection-helpers.md resolves PLANNER_STALL_INTERVAL_MINUTES / PLANNER_STALL_THRESHOLD_MINUTES from config', () => {
     const helpersDoc = readStallHelpersDoc();
+    assert.match(helpersDoc, /PLANNER_STALL_DETECTION_ENABLED=.*planner\.stall_detection_enabled/);
     assert.match(helpersDoc, /PLANNER_STALL_INTERVAL_MINUTES=.*planner\.stall_detect_interval_minutes/);
     assert.match(helpersDoc, /PLANNER_STALL_THRESHOLD_MINUTES=.*planner\.stall_threshold_minutes/);
+  });
+
+  test('invalid or absent toggle values normalize to default-on; only boolean false disables', (t) => {
+    const helpersBash = extractStallHelpersBash();
+    for (const [stored, expected] of [[undefined, 'true'], [true, 'true'], [false, 'false'], ['false', 'true'], [0, 'true'], [null, 'true']]) {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4570-resolve-'));
+      t.after(() => cleanup(tmp));
+      fs.mkdirSync(path.join(tmp, '.planning'), { recursive: true });
+      const config = stored === undefined ? {} : { planner: { stall_detection_enabled: stored } };
+      fs.writeFileSync(path.join(tmp, '.planning', 'config.json'), `${JSON.stringify(config)}\n`);
+      const result = runBashScript(
+        `${helpersBash}\nprintf '%s\\n' "$PLANNER_STALL_DETECTION_ENABLED"\n`,
+        [],
+        {
+          cwd: tmp,
+          env: { ...process.env, HOME: tmp, USERPROFILE: tmp, RUNTIME_DIR: REPO_ROOT, GSD_PROJECT: '', GSD_WORKSTREAM: '' },
+        },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.trim(), expected, `stored ${JSON.stringify(stored)} resolved incorrectly`);
+    }
   });
 
   test('standard planner spawn (step 8) dispatches with run_in_background=true and calls gsd_stall_watch', () => {
@@ -591,6 +751,34 @@ describe('bug #2650 plan-phase — all five planner/plan-checker spawns dispatch
     const callCount = (combined.match(/gsd_stall_watch\s+"\$TS"\s+"\{outputFile\}"/g) || []).length;
     assert.equal(callCount, 5,
       `expected exactly 5 gsd_stall_watch "$TS" "{outputFile}" spawn-site invocations across plan-phase.md + steps/*.md, found ${callCount}`);
+  });
+
+  test('all five spawn classes gate background surveillance and retain a runtime-native blocking result path', () => {
+    const mainSections = [
+      ['standard planner', '## 8. Spawn gsd-planner Agent', '## 9. Handle Planner Return'],
+      ['plan-checker', '## 10. Spawn gsd-plan-checker Agent', '## 11. Handle Checker Return'],
+      ['revision planner', '## 12. Revision Loop', '## 12.5. Plan Bounce'],
+    ];
+    const chunkedDoc = readChunkedPlanningMode();
+    const sections = mainSections.map(([label, start, end]) => {
+      const startAt = workflow.indexOf(start);
+      return [label, workflow.slice(startAt, workflow.indexOf(end, startAt))];
+    });
+    sections.push(
+      ['chunked outline', chunkedDoc.slice(
+        chunkedDoc.indexOf('### 8.5.1 Outline Phase'),
+        chunkedDoc.indexOf('### 8.5.2 Per-Plan Tasks'),
+      )],
+      ['chunked per-plan', chunkedDoc.slice(chunkedDoc.indexOf('### 8.5.2 Per-Plan Tasks'))],
+    );
+
+    for (const [label, section] of sections) {
+      assert.match(section, /PLANNER_STALL_DETECTION_ENABLED/, `${label}: missing toggle gate`);
+      assert.match(section, /`true`[\s\S]*run_in_background=true[\s\S]*gsd_stall_watch/,
+        `${label}: default-on branch must retain background watcher behavior`);
+      assert.match(section, /`false`[\s\S]{0,700}(?:omit|without) `?run_in_background`?[\s\S]{0,700}(?:ordinary|runtime-native)[\s\S]{0,500}(?:return|result)/i,
+        `${label}: explicit-off branch must omit backgrounding and await the real runtime result`);
+    }
   });
 
   test('step 7.99 documents that {outputFile} must be bound from the real Agent() return (not passed literally)', () => {
