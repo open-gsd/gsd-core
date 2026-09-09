@@ -159,8 +159,19 @@ const CONFIG_DEFAULTS = {
   research_before_questions: _getNestedConfigDefault('workflow', 'research_before_questions'), // #3894
   smart_zone_tokens: _getNestedConfigDefault('workflow', 'smart_zone_tokens'),
   inline_plan_threshold: _getNestedConfigDefault('workflow', 'inline_plan_threshold'), // #3801
+  planner_stall_detection_enabled: _getNestedConfigDefault('planner', 'stall_detection_enabled'),
   max_prompt_tokens: _getNestedConfigDefault('review', 'max_prompt_tokens'),
 };
+
+/**
+ * Resolve the planner watchdog policy from hand-edited configuration.
+ * Only a real JSON boolean may override the default; strings/numbers/null
+ * fail safe to the manifest-owned default-on behavior (#4570).
+ */
+function resolvePlannerStallDetectionEnabled(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  return CONFIG_DEFAULTS.planner_stall_detection_enabled === true;
+}
 
 /**
  * Deep-merge two plain config objects. `overlay` wins on key conflict.
@@ -929,6 +940,9 @@ function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}):
       phase_naming: get('phase_naming') ?? defaults.phase_naming,
       project_code: get('project_code') ?? defaults.project_code,
       subagent_timeout: get('subagent_timeout', { section: 'workflow', field: 'subagent_timeout' }) ?? defaults.subagent_timeout,
+      planner_stall_detection_enabled: resolvePlannerStallDetectionEnabled(
+        getNested('planner', 'stall_detection_enabled'),
+      ),
       model_overrides: (parsed['model_overrides']) || null,
       agent_tools: (parsed['agent_tools']) || null,
       models: (parsed['models']) || null,
@@ -1088,6 +1102,9 @@ function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}):
         resolve_model_ids: (globalDefaults['resolve_model_ids']) ?? defaults.resolve_model_ids,
         context_window: (globalDefaults['context_window']) ?? defaults.context_window,
         subagent_timeout: (globalDefaults['subagent_timeout']) ?? defaults.subagent_timeout,
+        planner_stall_detection_enabled: resolvePlannerStallDetectionEnabled(
+          (globalDefaults['planner'] as Record<string, unknown> | undefined)?.['stall_detection_enabled'],
+        ),
         model_overrides: (globalDefaults['model_overrides']) || null,
         models: (globalDefaults['models']) || null,
         granularity: (globalDefaults['granularity']) !== undefined ? globalDefaults['granularity'] : null,
@@ -1143,6 +1160,7 @@ export = {
   _getNestedConfigDefault,
   _getConfigValue,
   _getConfigNested,
+  resolvePlannerStallDetectionEnabled,
   _deepMergeConfig,
   _warnedUnknownConfigKeys,
   _warnedShadowedGlobalKeys,

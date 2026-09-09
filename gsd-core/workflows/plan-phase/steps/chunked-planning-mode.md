@@ -50,6 +50,9 @@ Display:
 Spawn the planner in **outline-only** mode — it must write only the outline manifest, not any
 PLAN.md files:
 
+**Dispatch/wait gate — `PLANNER_STALL_DETECTION_ENABLED`:**
+- **`true` (default):** use `run_in_background=true` in the Agent() call below, then use `gsd_stall_watch` after it.
+
 ```javascript
 Agent(
   prompt="{same planning_context as step 8, plus:}
@@ -72,6 +75,8 @@ Agent(
 ```
 
 **ORCHESTRATOR RULE — ALL RUNTIMES:** `TS=$(date +%s)`; repeat `PLANNER_STALL_RESULT=$(gsd_stall_watch "$TS" "{outputFile}" "$OUTLINE_FILE" "## OUTLINE COMPLETE")` while waiting/active.
+
+- **`false`:** issue the same Agent() call but omit `run_in_background`; await its ordinary runtime-native completion and consume the real returned result. Skip `gsd_stall_watch` entirely and treat a recognized `## OUTLINE COMPLETE` return exactly like `marker_received`; empty or unrecognized returns keep the existing Retry/Stop path.
 
 Handle return:
 - **`marker_received`:** Read `PLAN-OUTLINE.md`, extract plan list. Continue to 8.5.2.
@@ -137,7 +142,8 @@ path regardless of `CHUNKED_PARALLEL` — there is nothing to batch.
 4. Spawn the planner in **single-plan** mode — it must write exactly one PLAN.md file. The prompt
    is unchanged per plan; what changes is whether the runnable set's Agent() calls are issued one
    at a time (serial) or together in one message (concurrent, every call still carrying
-   `run_in_background=true` exactly as today):
+   `run_in_background=true` exactly as today when `PLANNER_STALL_DETECTION_ENABLED` is `true`
+   (default)):
    ```javascript
    Agent(
      prompt="{same planning_context as step 8, plus:}
@@ -170,6 +176,13 @@ path regardless of `CHUNKED_PARALLEL` — there is nothing to batch.
    Retry/Stop recovery for that one plan; it does not block verifying/committing sibling entries
    in the same batch that already reached `marker_received`.
 
+   - **`false`:** when `PLANNER_STALL_DETECTION_ENABLED` is `false`, omit `run_in_background`
+     from every call, skip `gsd_stall_watch`, and await each real returned result through the
+     ordinary runtime-native completion mechanism. A concurrent batch still issues the runnable
+     calls together and awaits all of their ordinary results before step 6. Treat each recognized
+     `## PLAN COMPLETE` return exactly like `marker_received`; empty or unrecognized returns keep
+     step 8's existing Retry/Stop path. This is never fire-and-forget.
+
 6. **Verify disk, per entry:** check `${PHASE_DIR}/{plan_id}-PLAN.md` exists for each entry that
    reached `marker_received`. Unchanged per-plan check.
 
@@ -189,4 +202,3 @@ gsd_run query commit "docs(${PADDED_PHASE}): plan ${plan_id} (chunked)" --files 
 Move to the next Wave only once every entry in the current Wave is committed or the run was
 stopped. After every Wave's plans are written and committed, treat this as `## PLANNING COMPLETE`
 and continue to step 9.
-
