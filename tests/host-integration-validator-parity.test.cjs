@@ -559,8 +559,16 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
       assert.throws(() => set.add('bogus-mode'), TypeError);
       assert.throws(() => set.delete('none'), TypeError);
       assert.throws(() => set.clear(), TypeError);
+      // The review's continuation drove this path past a shadowed-method seal:
+      // a native Set method applied to the view must find no Set internals.
+      assert.throws(() => Set.prototype.add.call(set, 'bogus-mode'), TypeError);
+      assert.throws(() => Set.prototype.delete.call(set, 'none'), TypeError);
+      assert.throws(() => Set.prototype.clear.call(set), TypeError);
       assert.ok(Object.isFrozen(set));
       assert.equal(set.has('bogus-mode'), false, 'a refused add must not have taken effect');
+      assert.equal(set.has('none') || set === BASE_CHECK_ISOLATION_VOCABULARY, true, 'a refused delete must not have taken effect');
+      assert.ok(set.size > 0, 'a refused clear must not have taken effect');
+      assert.deepEqual([...set], [...set.values()], 'iteration and values() agree (spread is what the validator uses)');
     }
     assert.equal(isDispatchIsolation('bogus-mode'), false);
     assert.deepEqual(sorted(DISPATCH_ISOLATION_VOCABULARY), sorted(DISPATCH_ISOLATION_MODES), 'membership unchanged after the refused mutations');
