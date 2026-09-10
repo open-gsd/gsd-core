@@ -199,6 +199,16 @@ describe('#4499: markdown normalization preserves leading YAML frontmatter', () 
     assert.ok(content.includes('# Heading\n\n- item'));
   });
 
+  test('a thematic break with an incidental colon line is not mistaken for frontmatter', () => {
+    const input = '---\nNote: see below.\nLead paragraph.\n- alpha\n- beta\n---\nTail.\n';
+    const { content } = normalizeContent(MD, input);
+    assert.strictEqual(
+      content,
+      '---\nNote: see below.\nLead paragraph.\n\n- alpha\n- beta\n\n---\nTail.\n',
+      'ordinary Markdown after a thematic break must retain list normalization even if prose resembles YAML'
+    );
+  });
+
   test('property: normalization preserves every generated frontmatter mapping byte-for-byte', () => {
     const scalar = fc.stringMatching(/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,30}$/);
     fc.assert(fc.property(fc.array(scalar, { maxLength: 12 }), (items) => {

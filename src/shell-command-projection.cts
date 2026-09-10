@@ -18,6 +18,7 @@ import fs from 'node:fs';
 // at load time and become un-mockable.
 import childProcess from 'node:child_process';
 import { escapeRegex } from './pattern.cjs';
+import { load as yamlLoad, FAILSAFE_SCHEMA } from './vendor/js-yaml.cjs';
 
 /**
  * Convert a filesystem path to POSIX form (forward slashes) by translating the
@@ -1133,26 +1134,26 @@ function _normalizeMd(content: string): string {
   const insideFrontmatter = new Array<boolean>(lines.length).fill(false);
   if ((lines[0] ?? '').trimEnd() === '---') {
     let closingDelimiter = -1;
-    let yamlMappingSeen = false;
     for (let i = 1; i < lines.length; i++) {
       if (lines[i].trimEnd() === '---') {
         closingDelimiter = i;
         break;
       }
-      const candidate = lines[i].trim();
-      if (!candidate || candidate.startsWith('#')) continue;
-      if (!yamlMappingSeen && /^[A-Za-z_][A-Za-z0-9_.-]*\s*:/.test(candidate)) {
-        yamlMappingSeen = true;
-        continue;
-      }
-      // A top-of-file thematic break followed by ordinary Markdown is not
-      // frontmatter merely because another `---` divider appears later.
-      if (!yamlMappingSeen) break;
     }
-    // Unterminated regions remain ordinary Markdown. Silently treating the
-    // rest of the document as frontmatter would disable every spacing rule.
-    if (yamlMappingSeen && closingDelimiter !== -1) {
-      for (let i = 0; i <= closingDelimiter; i++) insideFrontmatter[i] = true;
+    // A leading thematic break is not frontmatter merely because a later body
+    // line resembles `key: value`. Treat a bounded region as frontmatter only
+    // when it parses as a YAML mapping; malformed or scalar regions remain
+    // ordinary Markdown so their spacing rules still apply.
+    if (closingDelimiter !== -1) {
+      try {
+        const parsed = yamlLoad(lines.slice(1, closingDelimiter).join('\n'), { schema: FAILSAFE_SCHEMA, json: true });
+        if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          for (let i = 0; i <= closingDelimiter; i++) insideFrontmatter[i] = true;
+        }
+      } catch {
+        // Invalid YAML between leading delimiters is body content, not a
+        // frontmatter region that may disable Markdown normalization.
+      }
     }
   }
   const insideFence = new Array<boolean>(lines.length);
