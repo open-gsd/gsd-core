@@ -59,20 +59,44 @@ export type DispatchIsolation = (typeof DISPATCH_ISOLATION_MODES)[number];
  * plain object implementing the `ReadonlySet` surface — `has`, `size`,
  * `forEach`, `keys`/`values`/`entries`, iteration and spread all work, while a
  * native Set method applied to it throws "incompatible receiver" because the
- * object carries no Set internals at all.
+ * object carries no Set internals at all. The Set methods the view delegates
+ * to are captured HERE, at module load, so the view never performs a dynamic
+ * `Set.prototype` lookup at call time — a later `Set.prototype.has = …` patch
+ * cannot use the view as a channel to the backing Set.
+ *
+ * Contract boundary, stated so nobody reads more into this than it holds: the
+ * seal defends the vocabulary against ordinary in-process mutation — a stray
+ * `.add`, a `Set.prototype.*.call`, a well-meaning "let me just extend the
+ * set here". It is not, and cannot be, a defense against code that has
+ * already rewritten the language built-ins this module loaded against; such
+ * code owns the process and needs no channel through this file. (Raised by
+ * the review's second continuation, which patched `Set.prototype.has` before
+ * the first call; declared out of contract rather than chased into
+ * `Function.prototype.call`.)
  */
+// Unbound on purpose — each is invoked below with an explicit `.call(backing, …)`;
+// capturing the reference is what pins the method against a later prototype patch.
+/* eslint-disable @typescript-eslint/unbound-method */
+const SET_HAS = Set.prototype.has;
+const SET_FOR_EACH = Set.prototype.forEach;
+const SET_KEYS = Set.prototype.keys;
+const SET_VALUES = Set.prototype.values;
+const SET_ENTRIES = Set.prototype.entries;
+const SET_SIZE = Object.getOwnPropertyDescriptor(Set.prototype, 'size')!.get!;
+/* eslint-enable @typescript-eslint/unbound-method */
+
 function sealedSet(values: readonly string[]): ReadonlySet<string> {
   const backing = new Set<string>(values);
   const view: ReadonlySet<string> = {
-    get size() { return backing.size; },
-    has: (value: string) => backing.has(value),
+    get size() { return SET_SIZE.call(backing) as number; },
+    has: (value: string) => SET_HAS.call(backing, value),
     forEach(callback: (value: string, value2: string, set: ReadonlySet<string>) => void, thisArg?: unknown) {
-      backing.forEach((value) => callback.call(thisArg, value, value, view));
+      SET_FOR_EACH.call(backing, (value: string) => callback.call(thisArg, value, value, view));
     },
-    keys: () => backing.keys(),
-    values: () => backing.values(),
-    entries: () => backing.entries(),
-    [Symbol.iterator]: () => backing.values(),
+    keys: () => SET_KEYS.call(backing),
+    values: () => SET_VALUES.call(backing),
+    entries: () => SET_ENTRIES.call(backing),
+    [Symbol.iterator]: () => SET_VALUES.call(backing),
   };
   return Object.freeze(view);
 }
