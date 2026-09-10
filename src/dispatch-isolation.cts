@@ -47,10 +47,34 @@ export const DISPATCH_ISOLATION_MODES = Object.freeze(['harness-worktree', 'orch
 export type DispatchIsolation = (typeof DISPATCH_ISOLATION_MODES)[number];
 
 /**
- * Set view for membership tests over untrusted strings (CLI arguments, a
- * sentinel payload read back from disk, a registry descriptor).
+ * A Set whose mutators refuse. `ReadonlySet` is a compile-time annotation that
+ * erases to an ordinary, mutable `Set` in the emitted .cjs, and every runtime
+ * consumer of this module is plain CommonJS with no compiler in the loop — so
+ * a `VALID_DISPATCH_ISOLATION.add('x')` anywhere would split the Set view from
+ * the tuple and the type guards inside one process (found by the pre-create
+ * adversarial review of #4561, driven). The overrides are own properties, so
+ * they shadow `Set.prototype`; `Object.freeze` then stops them being put back.
+ * `has`, `size`, iteration and spread are untouched.
  */
-export const DISPATCH_ISOLATION_VOCABULARY: ReadonlySet<string> = new Set<string>(DISPATCH_ISOLATION_MODES);
+function sealedSet(values: readonly string[]): ReadonlySet<string> {
+  const set = new Set<string>(values);
+  const refuse = (): never => {
+    throw new TypeError('the dispatch-isolation vocabulary is closed — a mode is added in src/dispatch-isolation.cts, never at runtime (#4561)');
+  };
+  Object.defineProperties(set, {
+    add: { value: refuse, writable: false, configurable: false },
+    delete: { value: refuse, writable: false, configurable: false },
+    clear: { value: refuse, writable: false, configurable: false },
+  });
+  return Object.freeze(set);
+}
+
+/**
+ * Set view for membership tests over untrusted strings (CLI arguments, a
+ * sentinel payload read back from disk, a registry descriptor). Sealed — see
+ * `sealedSet`.
+ */
+export const DISPATCH_ISOLATION_VOCABULARY: ReadonlySet<string> = sealedSet(DISPATCH_ISOLATION_MODES);
 
 /**
  * The worktree-CREATING members — everything but `none`, which creates no
@@ -64,7 +88,7 @@ export const BASE_CHECK_ISOLATION_MODES: readonly BaseCheckIsolationMode[] = Obj
   DISPATCH_ISOLATION_MODES.filter((mode): mode is BaseCheckIsolationMode => mode !== 'none'),
 );
 
-export const BASE_CHECK_ISOLATION_VOCABULARY: ReadonlySet<string> = new Set<string>(BASE_CHECK_ISOLATION_MODES);
+export const BASE_CHECK_ISOLATION_VOCABULARY: ReadonlySet<string> = sealedSet(BASE_CHECK_ISOLATION_MODES);
 
 /** Type guard: is `value` a member of the dispatch-isolation vocabulary? */
 export function isDispatchIsolation(value: unknown): value is DispatchIsolation {

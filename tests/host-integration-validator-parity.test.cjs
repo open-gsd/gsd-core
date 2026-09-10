@@ -552,6 +552,21 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
     }
   });
 
+  test('the Set views are SEALED at runtime — `ReadonlySet` erases, so the mutators must refuse (pre-create review MISSED, driven)', () => {
+    const { VALID_DISPATCH_ISOLATION } = require(path.join(__dirname, '../gsd-core/bin/lib/capability-validator.cjs'));
+    assert.strictEqual(VALID_DISPATCH_ISOLATION, DISPATCH_ISOLATION_VOCABULARY, 'the validator consumes the owner Set by identity');
+    for (const set of [DISPATCH_ISOLATION_VOCABULARY, BASE_CHECK_ISOLATION_VOCABULARY]) {
+      assert.throws(() => set.add('bogus-mode'), TypeError);
+      assert.throws(() => set.delete('none'), TypeError);
+      assert.throws(() => set.clear(), TypeError);
+      assert.ok(Object.isFrozen(set));
+      assert.equal(set.has('bogus-mode'), false, 'a refused add must not have taken effect');
+    }
+    assert.equal(isDispatchIsolation('bogus-mode'), false);
+    assert.deepEqual(sorted(DISPATCH_ISOLATION_VOCABULARY), sorted(DISPATCH_ISOLATION_MODES), 'membership unchanged after the refused mutations');
+    assert.equal(DISPATCH_ISOLATION_VOCABULARY.size, DISPATCH_ISOLATION_MODES.length);
+  });
+
   test('worktree base-check --mode consumes the subset: `none` and a bogus value are rejected with a message derived from the owner', () => {
     const expectedList = BASE_CHECK_ISOLATION_MODES.join(' or ');
     for (const rejected of ['none', 'bogus-mode']) {
