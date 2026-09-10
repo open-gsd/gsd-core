@@ -477,3 +477,89 @@ describe('#3673 dispatch.maxConcurrency — all 19 shipped descriptors', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// #4561: the dispatch-isolation vocabulary has ONE owner — src/dispatch-isolation.cts
+// ---------------------------------------------------------------------------
+//
+// Until #4561 the set {harness-worktree, orchestrator-worktree, none} and its
+// worktree-creating subset were hand-written at eight sites with nothing
+// asserting they agreed (half of them outside the TypeScript project). This
+// block is the cross-check. Every runtime site now CONSUMES the owner, so most
+// rows below assert consumption (same object / same set); the one deliberate
+// mirror — hooks/lib/isolation-sentinel.js's VALID_ISOLATION, kept literal so
+// the guard hooks load on a raw install with no compiled lib — is asserted
+// EQUAL, so adding a mode to the owner turns into a red test here until the
+// mirror follows.
+describe('#4561: dispatch-isolation vocabulary — single owner, every site consumes or mirrors it', () => {
+  const owner = require(path.join(__dirname, '../gsd-core/bin/lib/dispatch-isolation.cjs'));
+  const {
+    DISPATCH_ISOLATION_MODES,
+    DISPATCH_ISOLATION_VOCABULARY,
+    BASE_CHECK_ISOLATION_MODES,
+    BASE_CHECK_ISOLATION_VOCABULARY,
+    isDispatchIsolation,
+    isBaseCheckIsolationMode,
+  } = owner;
+  const { VALID_ISOLATION: hookMirror } = require(path.join(__dirname, '../hooks/lib/isolation-sentinel.js'));
+  const { cmdWorktreeBaseCheck } = require(path.join(__dirname, '../gsd-core/bin/lib/worktree-base-ref.cjs'));
+
+  test('the owner tuple is frozen, non-empty, duplicate-free, and contains `none` (the fail-closed member every degrade lands on)', () => {
+    assert.ok(Object.isFrozen(DISPATCH_ISOLATION_MODES));
+    assert.ok(DISPATCH_ISOLATION_MODES.length >= 1);
+    assert.equal(new Set(DISPATCH_ISOLATION_MODES).size, DISPATCH_ISOLATION_MODES.length);
+    assert.ok(DISPATCH_ISOLATION_MODES.includes('none'));
+    assert.deepEqual(sorted(DISPATCH_ISOLATION_VOCABULARY), sorted(DISPATCH_ISOLATION_MODES));
+  });
+
+  test('HOST_INTEGRATION_AXES.isolation IS the owner tuple (consumed by identity, not copied)', () => {
+    assert.strictEqual(HOST_INTEGRATION_AXES.isolation, DISPATCH_ISOLATION_MODES);
+  });
+
+  test('isolation: validator VALID_DISPATCH_ISOLATION === owner (the row the ADR-1239 parity block never had)', () => {
+    assert.deepEqual(
+      sorted(_HOST_INTEGRATION_VOCAB.isolation),
+      sorted(DISPATCH_ISOLATION_MODES),
+      'validator VALID_DISPATCH_ISOLATION must exactly match the owner tuple',
+    );
+  });
+
+  test('hooks/lib/isolation-sentinel.js VALID_ISOLATION mirror === owner (update the mirror when you add a mode)', () => {
+    assert.deepEqual(
+      sorted(hookMirror),
+      sorted(DISPATCH_ISOLATION_MODES),
+      'hooks/lib/isolation-sentinel.js keeps a deliberate literal mirror of the vocabulary; it has drifted from src/dispatch-isolation.cts',
+    );
+  });
+
+  test('the base-check subset is exactly the owner minus `none` — derived, not a second list', () => {
+    assert.ok(Object.isFrozen(BASE_CHECK_ISOLATION_MODES));
+    assert.deepEqual(
+      sorted(BASE_CHECK_ISOLATION_MODES),
+      sorted(DISPATCH_ISOLATION_MODES.filter((m) => m !== 'none')),
+    );
+    assert.deepEqual(sorted(BASE_CHECK_ISOLATION_VOCABULARY), sorted(BASE_CHECK_ISOLATION_MODES));
+    assert.ok(!BASE_CHECK_ISOLATION_VOCABULARY.has('none'));
+  });
+
+  test('type guards accept every member and reject non-members, `none` (for the subset), and non-strings', () => {
+    for (const mode of DISPATCH_ISOLATION_MODES) assert.equal(isDispatchIsolation(mode), true, mode);
+    for (const mode of BASE_CHECK_ISOLATION_MODES) assert.equal(isBaseCheckIsolationMode(mode), true, mode);
+    assert.equal(isBaseCheckIsolationMode('none'), false);
+    for (const bogus of ['bogus-mode', '', 'HARNESS-WORKTREE', null, undefined, 3, {}, ['none']]) {
+      assert.equal(isDispatchIsolation(bogus), false, JSON.stringify(bogus));
+      assert.equal(isBaseCheckIsolationMode(bogus), false, JSON.stringify(bogus));
+    }
+  });
+
+  test('worktree base-check --mode consumes the subset: `none` and a bogus value are rejected with a message derived from the owner', () => {
+    const expectedList = BASE_CHECK_ISOLATION_MODES.join(' or ');
+    for (const rejected of ['none', 'bogus-mode']) {
+      assert.throws(
+        () => cmdWorktreeBaseCheck('/repo', ['--mode', rejected], { readFile: () => null, execGit: () => { throw new Error('unreachable'); }, write: () => {}, userClaudeDir: '/nonexistent-hermetic-user-dir' }),
+        (err) => err instanceof Error && err.message.includes(`--mode must be ${expectedList}`),
+        `--mode ${rejected} must be refused with the owner-derived list`,
+      );
+    }
+  });
+});

@@ -120,10 +120,21 @@ gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" >/dev/null
 
 `--force-isolation` pushes the final, shell-computed value through the same single write path
 (`none` also clears the stored `harnessFlag`, since none applies to sequential dispatch). It is
-idempotent and last-write-wins, so a site that degrades more than once simply calls it again —
-record immediately before dispatch so the sentinel is always fresh. Best-effort by design: a
-write failure must never fail the dispatch, since the guards' sentinel-absent fallback is safe,
-just less precise.
+idempotent and last-write-wins among forced records, so a site that degrades more than once
+simply calls it again — record immediately before dispatch so the sentinel is always fresh.
+Best-effort by design: a write failure must never fail the dispatch, since the guards'
+sentinel-absent fallback is safe, just less precise.
+
+**A plain re-query does not undo it (#4561).** Once a fresh `none` is recorded, a later plain
+`query dispatch-isolation` — the `--json` harness-flag read above, a subagent's own `gsd_run`
+traffic, a wave transition — *holds* that record instead of re-persisting the host capability
+over it, provided it names no different `--phase`/`--plan` (an identifier it omits is
+unconstrained; one it names must match). Its **stdout is unchanged** — it still answers the
+capability question every gate in this file branches on — only the sentinel write is skipped.
+A forced record always writes, a plain query scoped to a *different* plan writes (the per-plan
+gate's fresh record for the next plan), and a record past the reader's freshness window is
+replaced as before, so nothing is permanently sticky. The re-record is still mandatory: the
+resolver cannot compute these degrades itself, it only stops racing you for the file.
 
 Wave sites re-record per plan rather than per phase — see
 `gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md`.
