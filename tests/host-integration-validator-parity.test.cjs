@@ -570,6 +570,19 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
       assert.ok(set.size > 0, 'a refused clear must not have taken effect');
       assert.deepEqual([...set], [...set.values()], 'iteration and values() agree (spread is what the validator uses)');
     }
+    // The view must not do a dynamic Set.prototype lookup at call time — a
+    // patched `has` would otherwise receive the backing Set as `this` and leak
+    // it (the review's second continuation drove exactly that). Restored in
+    // finally so a failure here cannot poison the rest of this process.
+    const originalHas = Set.prototype.has;
+    let leaked = null;
+    try {
+      Set.prototype.has = function patchedHas(value) { leaked = this; return originalHas.call(this, value); };
+      DISPATCH_ISOLATION_VOCABULARY.has('none');
+    } finally {
+      Set.prototype.has = originalHas;
+    }
+    assert.equal(leaked, null, 'a Set.prototype.has patch installed after load must not observe the backing Set');
     assert.equal(isDispatchIsolation('bogus-mode'), false);
     assert.deepEqual(sorted(DISPATCH_ISOLATION_VOCABULARY), sorted(DISPATCH_ISOLATION_MODES), 'membership unchanged after the refused mutations');
     assert.equal(DISPATCH_ISOLATION_VOCABULARY.size, DISPATCH_ISOLATION_MODES.length);
