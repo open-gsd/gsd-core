@@ -17,6 +17,8 @@ import path from 'node:path';
 import { ensureToolOwnedGsdDir } from './gsd-tool-dir.cjs';
 import { execGit as execGitSeam, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
 import { getGlobalConfigDir } from './runtime-homes.cjs';
+import { BASE_CHECK_ISOLATION_MODES, isBaseCheckIsolationMode } from './dispatch-isolation.cjs';
+import type { BaseCheckIsolationMode } from './dispatch-isolation.cjs';
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -89,10 +91,11 @@ function parseJsonc(text: string): unknown {
 
 type ExecGitFn = typeof execGitSeam;
 
-// Who creates the isolated worktree — the two worktree-creating members of
-// host-integration.cts's DispatchIsolation vocabulary ('none' creates none and
-// never reaches this check).
-type BaseCheckIsolationMode = 'harness-worktree' | 'orchestrator-worktree';
+// Who creates the isolated worktree — the worktree-creating members of the
+// DispatchIsolation vocabulary ('none' creates none and never reaches this
+// check). `BaseCheckIsolationMode` is imported from src/dispatch-isolation.cts
+// (#4561), where it is derived from the one vocabulary tuple by excluding
+// 'none' — not restated here.
 
 /**
  * A settings layer that defeats the `worktree.baseRef:"head"` trust (#4588): either it
@@ -386,8 +389,8 @@ export function cmdWorktreeBaseCheck(
   const modeIdx = args.indexOf('--mode');
   if (modeIdx !== -1) {
     const value = args[modeIdx + 1];
-    if (value !== 'harness-worktree' && value !== 'orchestrator-worktree') {
-      throw new Error(`worktree base-check: --mode must be harness-worktree or orchestrator-worktree, got ${JSON.stringify(value ?? null)}`);
+    if (!isBaseCheckIsolationMode(value)) {
+      throw new Error(`worktree base-check: --mode must be ${BASE_CHECK_ISOLATION_MODES.join(' or ')}, got ${JSON.stringify(value ?? null)}`);
     }
     isolationMode = value;
   }
