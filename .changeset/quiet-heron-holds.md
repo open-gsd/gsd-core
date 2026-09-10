@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 0
+---
+**A plain `query dispatch-isolation` re-query no longer clobbers a shell-computed `none` degrade** — the three dispatch sites whose degrade the resolver cannot re-derive (the single-agent `orchestrator-worktree` fallback, the per-plan submodule intersection, `execute-plan`'s Pattern B) record it with `--force-isolation none`; the resolver now holds that record on any later plain query that names no different phase/plan while it is fresh, instead of re-persisting the host capability over it, so the isolation guard stops denying the sequential dispatch the degrade itself mandated. Stdout is unchanged, a forced record always writes, a plain query scoped to a different plan still writes, and nothing outlives the reader's own freshness window. The dispatch-isolation vocabulary (`harness-worktree` / `orchestrator-worktree` / `none`) and its base-check subset now have a single owner, `src/dispatch-isolation.cts`, consumed by every runtime site and pinned to the one remaining hook-side mirror by a parity test. (#4561)
