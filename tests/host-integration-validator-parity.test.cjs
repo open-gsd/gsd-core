@@ -552,7 +552,7 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
     }
   });
 
-  test('the Set views are SEALED at runtime — `ReadonlySet` erases, so the mutators must refuse (pre-create review MISSED, driven)', () => {
+  test('the Set views are SEALED at runtime — `ReadonlySet` erases, so the mutators must refuse (pre-create review MISSED, driven)', (t) => {
     const { VALID_DISPATCH_ISOLATION } = require(path.join(__dirname, '../gsd-core/bin/lib/capability-validator.cjs'));
     assert.strictEqual(VALID_DISPATCH_ISOLATION, DISPATCH_ISOLATION_VOCABULARY, 'the validator consumes the owner Set by identity');
     for (const set of [DISPATCH_ISOLATION_VOCABULARY, BASE_CHECK_ISOLATION_VOCABULARY]) {
@@ -572,16 +572,15 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
     }
     // The view must not do a dynamic Set.prototype lookup at call time — a
     // patched `has` would otherwise receive the backing Set as `this` and leak
-    // it (the review's second continuation drove exactly that). Restored in
-    // finally so a failure here cannot poison the rest of this process.
+    // it (the review's second continuation drove exactly that). Restored via
+    // t.after (the repo's test ruleset bars a try-with-cleanup block in a test body) so a
+    // failure here cannot poison the rest of this process.
     const originalHas = Set.prototype.has;
+    t.after(() => { Set.prototype.has = originalHas; });
     let leaked = null;
-    try {
-      Set.prototype.has = function patchedHas(value) { leaked = this; return originalHas.call(this, value); };
-      DISPATCH_ISOLATION_VOCABULARY.has('none');
-    } finally {
-      Set.prototype.has = originalHas;
-    }
+    Set.prototype.has = function patchedHas(value) { leaked = this; return originalHas.call(this, value); };
+    DISPATCH_ISOLATION_VOCABULARY.has('none');
+    Set.prototype.has = originalHas;
     assert.equal(leaked, null, 'a Set.prototype.has patch installed after load must not observe the backing Set');
     assert.equal(isDispatchIsolation('bogus-mode'), false);
     assert.deepEqual(sorted(DISPATCH_ISOLATION_VOCABULARY), sorted(DISPATCH_ISOLATION_MODES), 'membership unchanged after the refused mutations');
