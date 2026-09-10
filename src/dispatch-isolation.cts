@@ -47,26 +47,34 @@ export const DISPATCH_ISOLATION_MODES = Object.freeze(['harness-worktree', 'orch
 export type DispatchIsolation = (typeof DISPATCH_ISOLATION_MODES)[number];
 
 /**
- * A Set whose mutators refuse. `ReadonlySet` is a compile-time annotation that
- * erases to an ordinary, mutable `Set` in the emitted .cjs, and every runtime
- * consumer of this module is plain CommonJS with no compiler in the loop — so
- * a `VALID_DISPATCH_ISOLATION.add('x')` anywhere would split the Set view from
+ * A read-only Set VIEW. `ReadonlySet` is a compile-time annotation that erases
+ * to an ordinary, mutable `Set` in the emitted .cjs, and every runtime consumer
+ * of this module is plain CommonJS with no compiler in the loop — so a
+ * `VALID_DISPATCH_ISOLATION.add('x')` anywhere would split the Set view from
  * the tuple and the type guards inside one process (found by the pre-create
- * adversarial review of #4561, driven). The overrides are own properties, so
- * they shadow `Set.prototype`; `Object.freeze` then stops them being put back.
- * `has`, `size`, iteration and spread are untouched.
+ * adversarial review of #4561, driven). Shadowing `add`/`delete`/`clear` on a
+ * real Set is NOT enough: `Set.prototype.add.call(set, 'x')` reaches the
+ * internal storage regardless (the same review's continuation drove that too).
+ * So the backing Set never leaves this closure; what is exported is a frozen
+ * plain object implementing the `ReadonlySet` surface — `has`, `size`,
+ * `forEach`, `keys`/`values`/`entries`, iteration and spread all work, while a
+ * native Set method applied to it throws "incompatible receiver" because the
+ * object carries no Set internals at all.
  */
 function sealedSet(values: readonly string[]): ReadonlySet<string> {
-  const set = new Set<string>(values);
-  const refuse = (): never => {
-    throw new TypeError('the dispatch-isolation vocabulary is closed — a mode is added in src/dispatch-isolation.cts, never at runtime (#4561)');
+  const backing = new Set<string>(values);
+  const view: ReadonlySet<string> = {
+    get size() { return backing.size; },
+    has: (value: string) => backing.has(value),
+    forEach(callback: (value: string, value2: string, set: ReadonlySet<string>) => void, thisArg?: unknown) {
+      backing.forEach((value) => callback.call(thisArg, value, value, view));
+    },
+    keys: () => backing.keys(),
+    values: () => backing.values(),
+    entries: () => backing.entries(),
+    [Symbol.iterator]: () => backing.values(),
   };
-  Object.defineProperties(set, {
-    add: { value: refuse, writable: false, configurable: false },
-    delete: { value: refuse, writable: false, configurable: false },
-    clear: { value: refuse, writable: false, configurable: false },
-  });
-  return Object.freeze(set);
+  return Object.freeze(view);
 }
 
 /**
