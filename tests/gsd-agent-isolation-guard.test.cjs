@@ -2014,4 +2014,24 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
     );
     assert.equal(r.status, 0, `the degraded dispatch must be allowed — stdout: ${r.stdout} stderr: ${r.stderr}`);
   });
+
+  test('an EMPTY --phase / --plan argument (the workflows\' `"${PHASE_NUMBER:-}"` expansion) names no scope — the record is held, not treated as a mismatching ""', (t) => {
+    // executor-isolation-dispatch.md passes `--phase "${PHASE_NUMBER:-}"`, which
+    // expands to an EMPTY argument when PHASE_NUMBER is unset. If "" counted as
+    // a named identifier, "" !== held.phase would put every such query out of
+    // scope and the hold would silently never fire on exactly the re-query it
+    // exists for. The existing parser folds "" to null; this pins that.
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+
+    const r1 = runGsdTools(['query', 'dispatch-isolation', '--json', '--phase', ''], dir, env(dir));
+    assert.equal(r1.success, true, r1.error);
+    assert.equal(JSON.parse(r1.output).isolation, 'harness-worktree');
+    assert.equal(readSentinelRaw(dir).isolation, 'none', 'an empty --phase must not be read as a differing scope');
+
+    const r2 = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7', '--plan', ''], dir, env(dir));
+    assert.equal(r2.success, true, r2.error);
+    assert.equal(readSentinelRaw(dir).plan, 'plan-a', 'an empty --plan must not be read as a differing scope');
+  });
 });
