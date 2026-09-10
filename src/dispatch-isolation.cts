@@ -74,21 +74,24 @@ export type DispatchIsolation = (typeof DISPATCH_ISOLATION_MODES)[number];
  * the first call; declared out of contract rather than chased into
  * `Function.prototype.call`.)
  */
-// Unbound on purpose — each is invoked below with an explicit `.call(backing, …)`;
-// capturing the reference is what pins the method against a later prototype patch.
-/* eslint-disable @typescript-eslint/unbound-method */
-const SET_HAS = Set.prototype.has;
-const SET_FOR_EACH = Set.prototype.forEach;
-const SET_KEYS = Set.prototype.keys;
-const SET_VALUES = Set.prototype.values;
-const SET_ENTRIES = Set.prototype.entries;
-const SET_SIZE = Object.getOwnPropertyDescriptor(Set.prototype, 'size')!.get!;
-/* eslint-enable @typescript-eslint/unbound-method */
+// Captured unbound on purpose — each is invoked below with an explicit
+// `.call(backing, …)`; holding the reference is what pins the method against a
+// later prototype patch. Read through a plain record so the capture is a
+// property read, not a method access (no lint carve-out needed — the emitted
+// .cjs is linted too, under a config without the TypeScript rule set).
+type StringSet = Set<string>;
+const SET_PROTO = Set.prototype as unknown as Record<string, unknown>;
+const SET_HAS = SET_PROTO.has as (this: StringSet, value: string) => boolean;
+const SET_FOR_EACH = SET_PROTO.forEach as (this: StringSet, cb: (value: string) => void) => void;
+const SET_KEYS = SET_PROTO.keys as (this: StringSet) => SetIterator<string>;
+const SET_VALUES = SET_PROTO.values as (this: StringSet) => SetIterator<string>;
+const SET_ENTRIES = SET_PROTO.entries as (this: StringSet) => SetIterator<[string, string]>;
+const SET_SIZE = (Object.getOwnPropertyDescriptor(Set.prototype, 'size') as unknown as { get: (this: StringSet) => number }).get;
 
 function sealedSet(values: readonly string[]): ReadonlySet<string> {
   const backing = new Set<string>(values);
   const view: ReadonlySet<string> = {
-    get size() { return SET_SIZE.call(backing) as number; },
+    get size() { return SET_SIZE.call(backing); },
     has: (value: string) => SET_HAS.call(backing, value),
     forEach(callback: (value: string, value2: string, set: ReadonlySet<string>) => void, thisArg?: unknown) {
       SET_FOR_EACH.call(backing, (value: string) => callback.call(thisArg, value, value, view));
