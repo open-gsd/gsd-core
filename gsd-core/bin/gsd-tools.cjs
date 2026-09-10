@@ -2289,13 +2289,60 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       exec = null;
     }
 
+    // #4561: a PLAIN query holds a fresh, in-scope `none` record instead of
+    // overwriting it. Three dispatch sites compute a degrade the resolver
+    // structurally cannot re-derive — which host tool the caller dispatches
+    // through (dispatch-isolation-gate.md's single-agent fallback), the #2474
+    // per-plan submodule intersection (per-plan-worktree-gate.md), and
+    // execute-plan.md's Pattern B unisolated segments — and each records it
+    // with `--force-isolation none`. Before this fix any later plain query in
+    // the same run (the orchestrator's own `--json` harnessFlag read, a
+    // subagent's gsd_run traffic, a wave transition) re-persisted the host
+    // capability over that record, and the guard denied the sequential
+    // dispatch the degrade mandated (#4222's race, on the three producers
+    // #4232 could not reach). Enumerating producers does not terminate; the
+    // resolver instead stops racing the shell for the sentinel:
+    //
+    //   forced  → the shell's decision; always recorded (unchanged).
+    //   plain, a fresh well-formed `none` stands, and every scope identifier
+    //           THIS query names matches the record's → hold: no write.
+    //   plain, otherwise → recorded as before.
+    //
+    // Scope: an identifier the query omits is unconstrained, one it names
+    // must equal the record's. So an unscoped or same-phase re-query holds a
+    // plan-scoped degrade, while the per-plan gate's plain `--plan <other>`
+    // re-resolve — a new record request for a different plan — still writes,
+    // exactly as per-plan-worktree-gate.md requires ("a stale `none` … a
+    // LATER, genuinely harness-worktree plan"). Stale (the reader's 10-minute
+    // window) or malformed records are never held, so nothing is permanently
+    // sticky, and a fresh run with no sentinel records the natural
+    // capability as it always did.
+    //
+    // STDOUT IS UNCHANGED, deliberately (the same separation #4232 draws):
+    // every dispatch site fails closed on an unguarded `none` from this
+    // query ("declares no executor-isolation primitive", exit 1), so the
+    // held record governs only what the GUARD reads, never what the
+    // workflow's decision tree branches on. `harnessFlag`/`exec` stay the
+    // natural resolution for the same reason — the `--json` read that
+    // fetches the flag is one of the plain re-queries this hold exists for.
+    //
+    // The reader is the guards' own (hooks/lib/isolation-sentinel.js), so
+    // "fresh and well-formed" here is byte-for-byte what the guard will
+    // honour at dispatch time — a second definition would let the two drift.
+    const forcedApplied = Boolean(forcedIsolation && DISPATCH_ISOLATION_VOCABULARY.has(forcedIsolation));
+    const heldDegrade = !forcedApplied && isolation !== 'none'
+      ? heldDegradeRecord(cwd, { phase: phaseArg, plan: planArg })
+      : null;
+
     // Side-effect write (#3045 CORE REDESIGN) — see the doc comment above.
     // Never allowed to affect this query's own stdout contract or throw.
-    try {
-      writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag, phase: phaseArg, plan: planArg });
-    } catch {
-      // writeDispatchIsolationSentinel already swallows its own errors into
-      // a { recorded: false } result; this catch is defense in depth only.
+    if (heldDegrade === null) {
+      try {
+        writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag, phase: phaseArg, plan: planArg });
+      } catch {
+        // writeDispatchIsolationSentinel already swallows its own errors into
+        // a { recorded: false } result; this catch is defense in depth only.
+      }
     }
 
     if (args.indexOf('--json') !== -1) {
@@ -2560,7 +2607,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     return trimmed;
   }
 
-  const DISPATCH_ISOLATION_VOCABULARY = new Set(['harness-worktree', 'orchestrator-worktree', 'none']);
+  // #4561: the closed vocabulary has ONE owner — src/dispatch-isolation.cts,
+  // compiled to ./lib/dispatch-isolation.cjs (reachable here: this file's
+  // bootstrap ran ensureRuntimeBuild before any route handler). Previously a
+  // hand-written Set, one of eight uncross-checked copies.
+  const { DISPATCH_ISOLATION_VOCABULARY } = require('./lib/dispatch-isolation.cjs');
 
   /**
    * Shared, side-effect-free resolution of the negotiated dispatch isolation:
@@ -2786,6 +2837,42 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     }
   }
 
+  /**
+   * #4561 — the degrade record a PLAIN `dispatch-isolation` query must not
+   * overwrite, or `null`. Reads the sentinel at exactly the path
+   * `writeDispatchIsolationSentinel` writes (`<cwd>/.gsd/…`, `cwd` already
+   * resolved by main()) through the guards' shared reader, so freshness and
+   * shape are judged by the one definition the guard itself applies.
+   *
+   * Returns the record only when ALL hold: present, fresh, well-formed,
+   * `isolation === 'none'`, and every identifier the query names equals the
+   * record's (an omitted identifier is unconstrained — see the call site).
+   *
+   * Never throws. The reader lives in hooks/lib/, which some runtime
+   * installs omit (`hostBehaviors.skipSharedHooksInstall`); there it cannot
+   * be required and this returns `null` — pre-#4561 behaviour, on exactly
+   * the installs that have no guard hook to deny the dispatch.
+   */
+  function heldDegradeRecord(cwd, { phase, plan }) {
+    let readSentinelAt;
+    try {
+      ({ readSentinelAt } = require('../../hooks/lib/isolation-sentinel.js'));
+    } catch {
+      return null;
+    }
+    let held;
+    try {
+      held = readSentinelAt(cwd);
+    } catch {
+      return null;
+    }
+    if (!held || !held.present || held.stale || held.malformed) return null;
+    if (held.isolation !== 'none') return null;
+    if (phase !== null && phase !== held.phase) return null;
+    if (plan !== null && plan !== held.plan) return null;
+    return held;
+  }
+
   function routeRecordDispatchIsolation({ args, cwd, raw, error }) {
     // #3045: `routeDispatchIsolation` (the `dispatch-isolation` query) is now
     // the PRIMARY write path for the sentinel (CORE REDESIGN) — it records
@@ -2803,7 +2890,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // registry+config check, so a missing sentinel is safe, just less precise.
     //
     // Output: { recorded: true|false, path, error? }
-    const VALID_ISOLATION = new Set(['harness-worktree', 'orchestrator-worktree', 'none']);
+    // #4561: the same owner `routeDispatchIsolation` validates against — the
+    // two verbs can no longer disagree on what a mode is.
+    const VALID_ISOLATION = DISPATCH_ISOLATION_VOCABULARY;
     const isoIdx = args.indexOf('--isolation');
     const isolation = isoIdx !== -1 ? args[isoIdx + 1] : undefined;
     if (!isolation || !VALID_ISOLATION.has(isolation)) {

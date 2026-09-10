@@ -404,6 +404,7 @@
       "coverage.cjs",
       "decision-coverage-support.cjs",
       "decisions.cjs",
+      "dispatch-isolation.cjs",
       "docs.cjs",
       "drift.cjs",
       "edge-probe.cjs",

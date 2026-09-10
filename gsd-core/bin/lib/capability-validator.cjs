@@ -939,7 +939,12 @@ const VALID_SUBAGENT_TOOLKITS = new Set(['full', 'read-only', 'built-in-only']);
 const VALID_EFFORT_SURFACES   = new Set(['argv', 'none']);
 // ADR-1239 Codex-binding amendment (#2584): how a host isolates concurrent
 // same-wave executors — a dispatch sub-field, not a top-level axis.
-const VALID_DISPATCH_ISOLATION = new Set(['harness-worktree', 'orchestrator-worktree', 'none']);
+// #4561: consumed from the single owner (src/dispatch-isolation.cts, compiled to
+// the ./dispatch-isolation.cjs sibling) instead of restated. This file is
+// hand-written and tracked while the owner is a build artifact; every consumer
+// of this module (gsd-tools.cjs after its ensureRuntimeBuild, the gen-*/lint-*
+// scripts and the tests after `build:lib`) already runs post-build.
+const { DISPATCH_ISOLATION_VOCABULARY: VALID_DISPATCH_ISOLATION } = require('./dispatch-isolation.cjs');
 
 // ─── Reviewer lane body (ADR-2782 D1/D2/D3/D7/D8) ────────────────────────────
 //

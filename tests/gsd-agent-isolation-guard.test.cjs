@@ -1837,3 +1837,181 @@ describe('gsd-agent-isolation-guard.js: #4734 — a non-git project root is neve
     assert.equal(JSON.parse(r.stdout).decision, 'block');
   });
 });
+
+// #4561 — three dispatch sites compute a degrade the resolver cannot re-derive
+// (the single-agent orchestrator-worktree fallback in
+// references/dispatch-isolation-gate.md, the #2474 per-plan submodule
+// intersection in per-plan-worktree-gate.md, execute-plan.md's Pattern B) and
+// record it with `--force-isolation none`. Pre-fix, ANY later plain query in
+// the same run — the orchestrator's own `--json` harnessFlag read, a
+// subagent's gsd_run traffic, a wave transition — re-persisted the host
+// capability over that record, and the guard denied the sequential dispatch
+// the degrade had mandated. The resolver now HOLDS a fresh, in-scope `none`
+// record on a plain query instead of racing the shell for the file. Every
+// test drives the real CLI (runGsdTools) and reads the sentinel it wrote.
+describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade instead of clobbering it', () => {
+  const env = (dir) => ({ GSD_RUNTIME: 'claude', HOME: dir });
+
+  function shellDegradesToNone(dir, scopeArgs = []) {
+    // The per-plan gate's re-record shape: the shell decided `none` where the
+    // resolver cannot see why, and pushes it through the single write path.
+    const r = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', ...scopeArgs, '--force-isolation', 'none'],
+      dir,
+      env(dir),
+    );
+    assert.equal(r.success, true, r.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'none', 'precondition: the forced degrade is on disk');
+    return readSentinelRaw(dir).written_at;
+  }
+
+  test('an UNSCOPED plain re-query (a subagent\'s gsd_run traffic) leaves the forced `none` record untouched', (t) => {
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    const writtenAt = shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+
+    const requery = runGsdTools(['query', 'dispatch-isolation', '--raw'], dir, env(dir));
+    assert.equal(requery.success, true, requery.error);
+
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'none', 'the forced degrade must survive a plain re-query');
+    assert.equal(sentinel.harness_flag, null);
+    assert.equal(sentinel.plan, 'plan-a', 'the record is held as-is — not rewritten with the query\'s (absent) scope');
+    assert.equal(sentinel.phase, '7');
+    assert.equal(sentinel.written_at, writtenAt, 'held means NOT rewritten: the timestamp must not refresh, or a polling re-query could keep a degrade alive forever');
+  });
+
+  test('stdout is UNCHANGED by the hold — a plain re-query still answers the host capability, never the held `none`', (t) => {
+    // Every dispatch site fails closed on an unguarded `none` from this query
+    // ("declares no executor-isolation primitive", exit 1). The hold governs
+    // what the GUARD reads, not what the workflow's decision tree branches on.
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+
+    const raw = runGsdTools(['query', 'dispatch-isolation', '--raw'], dir, env(dir));
+    assert.equal(raw.success, true, raw.error);
+    assert.equal(raw.output.trim(), 'harness-worktree');
+
+    // The `--json` harnessFlag read (executor-isolation-dispatch.md) is one of
+    // the plain re-queries the hold exists for — it must still return the flag.
+    const json = runGsdTools(['query', 'dispatch-isolation', '--json', '--phase', '7'], dir, env(dir));
+    assert.equal(json.success, true, json.error);
+    const parsed = JSON.parse(json.output);
+    assert.equal(parsed.isolation, 'harness-worktree');
+    assert.equal(parsed.harnessFlag, 'isolation="worktree"');
+    assert.equal(readSentinelRaw(dir).isolation, 'none', 'and the record is still held after the --json read');
+  });
+
+  test('a plain re-query naming the SAME phase (the orchestrator\'s --json harnessFlag read) holds a plan-scoped record — an omitted identifier is unconstrained', (t) => {
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+
+    const r = runGsdTools(['query', 'dispatch-isolation', '--json', '--phase', '7'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'none');
+    assert.equal(sentinel.plan, 'plan-a');
+  });
+
+  test('a plain re-query naming a DIFFERENT plan still writes — the per-plan gate\'s fresh record for the next plan is not held hostage by the last plan\'s degrade', (t) => {
+    // per-plan-worktree-gate.md: "a plan-level submodule degrade elsewhere in
+    // the wave could leave a stale `none` sentinel that a LATER, genuinely
+    // harness-worktree plan's own dispatch could be misread against."
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7', '--plan', 'plan-b'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'harness-worktree');
+    assert.equal(sentinel.harness_flag, 'isolation="worktree"');
+    assert.equal(sentinel.plan, 'plan-b');
+    assert.equal(sentinel.phase, '7');
+  });
+
+  test('a plain query naming a phase over an UNSCOPED `none` record writes — a scoped request is a new record for that scope, not a re-read of somebody else\'s', (t) => {
+    // execute-plan.md's Pattern B records `none` with no identifiers. A later
+    // execute-phase resolve for phase 7 is a different workflow's record.
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    shellDegradesToNone(dir);
+    assert.equal(readSentinelRaw(dir).phase, null);
+
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'harness-worktree');
+    assert.equal(sentinel.phase, '7');
+  });
+
+  test('a FORCED record always writes — the shell can widen its own degrade back to the capability', (t) => {
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    shellDegradesToNone(dir, ['--phase', '7']);
+
+    const r = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', '--phase', '7', '--force-isolation', 'harness-worktree'],
+      dir,
+      env(dir),
+    );
+    assert.equal(r.success, true, r.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'harness-worktree');
+  });
+
+  test('a STALE `none` record is not held — a plain query past the reader\'s freshness window records the capability again (nothing is permanently sticky)', (t) => {
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    writeSentinel(dir, { isolation: 'none', writtenAt: Date.now() - (SENTINEL_STALE_MS + 60000) });
+
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'harness-worktree');
+    assert.ok(sentinel.written_at > Date.now() - 60000, 'freshly rewritten');
+  });
+
+  test('a MALFORMED sentinel is not held — a plain query overwrites it with a well-formed record', (t) => {
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    fs.mkdirSync(path.dirname(sentinelFile(dir)), { recursive: true });
+    fs.writeFileSync(sentinelFile(dir), '{ this is not valid json');
+
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'harness-worktree');
+  });
+
+  test('a fresh run with NO sentinel records the natural capability exactly as before', (t) => {
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    assert.equal(fs.existsSync(sentinelFile(dir)), false, 'precondition: no sentinel');
+
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'harness-worktree');
+    assert.equal(sentinel.harness_flag, 'isolation="worktree"');
+  });
+
+  test('END TO END — after the shell\'s degrade and the orchestrator\'s own --json re-query, the guard ALLOWS the sequential dispatch the degrade mandated', (t) => {
+    // The #4222-class failure on a producer #4232 does not reach: pre-fix the
+    // --json re-query flipped the sentinel back to harness-worktree, and this
+    // dispatch — correctly omitting the isolation kwarg — was denied (exit 2).
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+    const requery = runGsdTools(['query', 'dispatch-isolation', '--json', '--phase', '7'], dir, env(dir));
+    assert.equal(requery.success, true, requery.error);
+
+    const r = runHook(
+      agentPayload({ tool_input: { subagent_type: 'gsd-executor', description: 'Execute plan plan-a of phase 7' } }),
+      dir,
+      { HOME: dir },
+    );
+    assert.equal(r.status, 0, `the degraded dispatch must be allowed — stdout: ${r.stdout} stderr: ${r.stderr}`);
+  });
+});
