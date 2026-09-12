@@ -2014,6 +2014,539 @@ describe('cmdWorktreeCreate / cmdWorktreeRecordAgent — on-disk entry parity (#
 // ─── executeWorktreeWaveCleanupPlan ───────────────────────────────────────────
 
 describe('executeWorktreeWaveCleanupPlan', () => {
+
+  // ── #4415 regression ───────────────────────────────────────────────────────
+  // Claude Code removes a subagent's worktree the moment the subagent finishes
+  // with a clean tree. A gsd-executor that committed everything (SUMMARY.md
+  // included, under `commit_docs: true`) is exactly that case, so by the time
+  // the orchestrator reaches wave cleanup the directory is routinely gone while
+  // the branch it left behind is intact and mergeable.
+  //
+  // `git -C <gone> rev-parse` fails, and that failure was indistinguishable
+  // from a genuine branch mismatch: the entry blocked as `branch_mismatch`,
+  // NOTHING merged, and the branch was left dangling. If the directory instead
+  // disappeared after the merge landed, `git worktree remove` failed with "is
+  // not a working tree" and the entry blocked as `worktree_remove_failed`,
+  // leaving the branch undeleted.
+  //
+  // Every row below stubs the ABSENT shape the way real git behaves — the
+  // in-worktree calls fail — and injects `existsSync` so the scenario states
+  // whether the directory is there rather than relying on a fake path.
+  describe('#4415 regression: a worktree the harness already removed', () => {
+    const WT = '/repo/.claude/worktrees/agent-a1';
+    const BR = 'worktree-agent-a1';
+    const ABSENT_ERR = `fatal: cannot change to '${WT}': No such file or directory`;
+
+    function plan(entries) {
+      return {
+        ok: true,
+        repoRoot: '/repo/main',
+        action: 'cleanup_wave',
+        discovery: 'manifest',
+        entries,
+      };
+    }
+
+    const entry = { agent_id: 'a1', worktree_path: WT, branch: BR, expected_base: 'abc123' };
+
+    // Stubs the repo-side calls that stay identical whether or not the worktree
+    // is present; every in-worktree (`-C <WT> ...`) call fails, as it does on a
+    // directory that is gone.
+    function absentWorktreeGit(overrides = {}) {
+      return (args) => {
+        const key = args.join(' ');
+        if (Object.prototype.hasOwnProperty.call(overrides, key)) return overrides[key];
+        if (key.startsWith(`-C ${WT} `)) return { exitCode: 128, stdout: '', stderr: ABSENT_ERR };
+        if (key === `rev-parse --verify --quiet refs/heads/${BR}`) {
+          return { exitCode: 0, stdout: 'deadbeef', stderr: '' };
+        }
+        if (key === `merge-base HEAD ${BR}`) return { exitCode: 0, stdout: 'abc123', stderr: '' };
+        if (key === `diff --diff-filter=D --name-only HEAD...${BR}`) {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        if (key.startsWith(`merge ${BR}`)) return { exitCode: 0, stdout: '', stderr: '' };
+        // git's real failure when the path is already gone.
+        if (key === `worktree remove ${WT} --force`) {
+          return { exitCode: 128, stdout: '', stderr: `fatal: '${WT}' is not a working tree` };
+        }
+        if (key === 'worktree prune') return { exitCode: 0, stdout: '', stderr: '' };
+        // Explicit, not swallowed by a catch-all: the #3707 unlock/retry path
+        // runs whenever `worktree remove` fails, and a silent success for it
+        // would hide a call this scenario should be stating. (Codex round 1.)
+        if (key === `worktree unlock ${WT}`) return { exitCode: 1, stdout: '', stderr: 'not locked' };
+        if (key === `branch -D ${BR}`) return { exitCode: 0, stdout: '', stderr: '' };
+        throw new Error(`unexpected git call: ${key}`);
+      };
+    }
+
+    test('merges the branch instead of blocking as branch_mismatch', () => {
+      // Acceptance criterion 1. Pre-fix this returned blocked/branch_mismatch
+      // with the merge never attempted.
+      const calls = [];
+      const result = executeWorktreeWaveCleanupPlan(plan([entry]), {
+        existsSync: () => false,
+        execGit: (args) => { calls.push(args.join(' ')); return absentWorktreeGit()(args); },
+      });
+
+      assert.equal(result.entries[0].status, 'merged_removed');
+      assert.equal(result.entries[0].reason, 'ok');
+      assert.equal(result.ok, true);
+      assert.ok(
+        calls.some((k) => k.startsWith(`merge ${BR}`)),
+        'the branch must actually be merged, not merely reported clean',
+      );
+      assert.ok(
+        calls.includes(`branch -D ${BR}`),
+        'the branch must be deleted — leaving it dangling is half the reported bug',
+      );
+    });
+
+    test('identity falls back to the branch ref, and a missing ref still blocks', () => {
+      // The absence must not become a silent pass: with no checkout to read,
+      // the ref is the only evidence the entry names something real.
+      // The override map returns VALUES, so a thrown-guard function placed in it
+      // is just handed back as a git result and never runs. Record the calls and
+      // assert on them instead. (Codex review round 1.)
+      const calls = [];
+      const result = executeWorktreeWaveCleanupPlan(plan([entry]), {
+        existsSync: () => false,
+        execGit: (args) => {
+          calls.push(args.join(' '));
+          return absentWorktreeGit({
+            [`rev-parse --verify --quiet refs/heads/${BR}`]: { exitCode: 1, stdout: '', stderr: '' },
+          })(args);
+        },
+      });
+
+      assert.equal(result.entries[0].status, 'blocked');
+      assert.equal(result.entries[0].reason, 'branch_mismatch');
+      assert.equal(
+        calls.some((k) => k.startsWith(`merge ${BR}`)), false,
+        'a branch whose ref does not exist must never be merged',
+      );
+      assert.equal(
+        calls.some((k) => k === `branch -D ${BR}`), false,
+        'and must never be deleted',
+      );
+    });
+
+    test('teardown prunes stale admin state instead of failing worktree_remove_failed', () => {
+      // Acceptance criterion 2 — the post-merge failure shape. `git worktree
+      // remove` on a vanished path cannot succeed; what is left behind is the
+      // .git/worktrees admin entry, which `prune` clears.
+      const calls = [];
+      const result = executeWorktreeWaveCleanupPlan(plan([entry]), {
+        existsSync: () => false,
+        execGit: (args) => { calls.push(args.join(' ')); return absentWorktreeGit()(args); },
+      });
+
+      assert.notEqual(result.entries[0].reason, 'worktree_remove_failed');
+      assert.ok(calls.includes('worktree prune'), 'stale admin state must be pruned');
+    });
+
+    test('a PRESENT worktree on the wrong branch still blocks with branch_mismatch', () => {
+      // Acceptance criterion 3 — the safety property this fix must not erode.
+      // The read SUCCEEDS here and simply disagrees, so the presence check is
+      // never consulted and the behavior is byte-for-byte what it always was.
+      const result = executeWorktreeWaveCleanupPlan(plan([entry]), {
+        existsSync: () => true,
+        execGit: (args) => {
+          const key = args.join(' ');
+          if (key === `-C ${WT} rev-parse --abbrev-ref HEAD`) {
+            return { exitCode: 0, stdout: 'some-other-branch', stderr: '' };
+          }
+          throw new Error(`no further git call may run after a branch mismatch: ${key}`);
+        },
+      });
+
+      assert.equal(result.entries[0].status, 'blocked');
+      assert.equal(result.entries[0].reason, 'branch_mismatch');
+    });
+
+    test('a PRESENT worktree whose in-worktree read fails still blocks with branch_mismatch', () => {
+      // The other half of criterion 3: a read failure on a directory that IS
+      // there is a real failure, not a harness removal. Without the presence
+      // check this row and the first row are the same input.
+      const result = executeWorktreeWaveCleanupPlan(plan([entry]), {
+        existsSync: () => true,
+        execGit: (args) => {
+          const key = args.join(' ');
+          if (key === `-C ${WT} rev-parse --abbrev-ref HEAD`) {
+            return { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository' };
+          }
+          throw new Error(`no further git call may run after a branch mismatch: ${key}`);
+        },
+      });
+
+      assert.equal(result.entries[0].status, 'blocked');
+      assert.equal(result.entries[0].reason, 'branch_mismatch');
+    });
+
+    test('the base and deletion gates still run for an absent worktree', () => {
+      // Criterion 4 — skipping the in-worktree checks must not skip the checks
+      // that protect repoRoot. Both of these run against repoRoot already.
+      const baseBlocked = executeWorktreeWaveCleanupPlan(plan([entry]), {
+        existsSync: () => false,
+        execGit: absentWorktreeGit({
+          [`merge-base HEAD ${BR}`]: { exitCode: 0, stdout: 'unrelatedbase', stderr: '' },
+        }),
+      });
+      assert.equal(baseBlocked.entries[0].reason, 'base_mismatch');
+
+      const deletionBlocked = executeWorktreeWaveCleanupPlan(plan([entry]), {
+        existsSync: () => false,
+        execGit: absentWorktreeGit({
+          [`diff --diff-filter=D --name-only HEAD...${BR}`]:
+            { exitCode: 0, stdout: 'src/deleted.ts\n', stderr: '' },
+        }),
+      });
+      assert.equal(deletionBlocked.entries[0].reason, 'branch_contains_deletions');
+    });
+
+    test('an absent worktree does not attempt a SUMMARY rescue', () => {
+      // A worktree the harness removed had a clean tree by definition, so there
+      // is nothing to rescue — and calling the rescue would read a path that is
+      // gone. `findSummaryFiles` is the rescue's entry point; it must not run.
+      let rescueAttempted = false;
+      const result = executeWorktreeWaveCleanupPlan(plan([entry]), {
+        existsSync: () => false,
+        findSummaryFiles: () => { rescueAttempted = true; return []; },
+        execGit: absentWorktreeGit(),
+      });
+
+      assert.equal(rescueAttempted, false, 'the rescue must be skipped, not merely survive');
+      assert.equal(result.entries[0].status, 'merged_removed');
+    });
+
+
+    // ── Transition coverage (Codex review round 1) ──────────────────────────
+    // Every row above holds presence CONSTANT — absent throughout, or present
+    // throughout. The bug this fix addresses is caused by a directory that
+    // disappears WHILE cleanup runs, so a constant-presence stub cannot reach
+    // the windows that matter.
+    //
+    // The transition is driven by the GIT results, not by the presence stub: the
+    // branch read succeeds and the `status` read then fails, which is exactly
+    // "removed in between". The stub only has to answer the probe that follows.
+    // An earlier cut used a probe-COUNTING helper to place the removal at a
+    // chosen probe index; that coupled the tests to how many times the code
+    // probes — brittle, and wrong in spirit, since the SUMMARY rescue shares the
+    // same injected seam. (Codex review round 2 agreed; helper removed.)
+
+    test('a worktree removed AFTER the branch read merges instead of blocking dirty', () => {
+      // branch read succeeds (present) → harness removes it while the repoRoot
+      // base/deletion/scope checks run → `status` fails. Before this round that
+      // failure blocked `worktree_dirty` with nothing merged: the same bug as
+      // the branch read, one window later.
+      const calls = [];
+      const result = executeWorktreeWaveCleanupPlan(plan([entry]), {
+        // The branch read SUCCEEDS without probing — the probe only runs when a
+        // git read fails — so the only probe reached is the one after the failed
+        // `status`, and it must answer "gone".
+        existsSync: () => false,
+        execGit: (args) => {
+          const key = args.join(' ');
+          calls.push(key);
+          if (key === `-C ${WT} rev-parse --abbrev-ref HEAD`) {
+            return { exitCode: 0, stdout: BR, stderr: '' };
+          }
+          if (key.startsWith(`-C ${WT} status`)) {
+            return { exitCode: 128, stdout: '', stderr: ABSENT_ERR };
+          }
+          if (key === `merge-base HEAD ${BR}`) return { exitCode: 0, stdout: 'abc123', stderr: '' };
+          if (key === `diff --diff-filter=D --name-only HEAD...${BR}`) {
+            return { exitCode: 0, stdout: '', stderr: '' };
+          }
+          if (key.startsWith(`merge ${BR}`)) return { exitCode: 0, stdout: '', stderr: '' };
+          if (key === `worktree remove ${WT} --force`) {
+            return { exitCode: 128, stdout: '', stderr: `fatal: '${WT}' is not a working tree` };
+          }
+          if (key === `worktree unlock ${WT}`) return { exitCode: 1, stdout: '', stderr: 'not locked' };
+          if (key === 'worktree prune') return { exitCode: 0, stdout: '', stderr: '' };
+          if (key === `branch -D ${BR}`) return { exitCode: 0, stdout: '', stderr: '' };
+          throw new Error(`unexpected git call: ${key}`);
+        },
+      });
+
+      assert.notEqual(result.entries[0].reason, 'worktree_dirty');
+      assert.equal(result.entries[0].status, 'merged_removed');
+      assert.ok(calls.some((k) => k.startsWith(`merge ${BR}`)), 'the branch must be merged');
+    });
+
+    test('a PRESENT worktree whose status query fails still blocks worktree_dirty', () => {
+      // The other half: the read failed and the directory is still there, so
+      // this is a real failure and must keep blocking. Without the presence
+      // probe this row and the one above are the same input.
+      const result = executeWorktreeWaveCleanupPlan(plan([entry]), {
+        existsSync: () => true,
+        execGit: (args) => {
+          const key = args.join(' ');
+          if (key === `-C ${WT} rev-parse --abbrev-ref HEAD`) {
+            return { exitCode: 0, stdout: BR, stderr: '' };
+          }
+          if (key.startsWith(`-C ${WT} status`)) {
+            return { exitCode: 128, stdout: '', stderr: 'fatal: something else broke' };
+          }
+          if (key === `merge-base HEAD ${BR}`) return { exitCode: 0, stdout: 'abc123', stderr: '' };
+          if (key === `diff --diff-filter=D --name-only HEAD...${BR}`) {
+            return { exitCode: 0, stdout: '', stderr: '' };
+          }
+          throw new Error(`nothing may run after a dirty block: ${key}`);
+        },
+      });
+
+      assert.equal(result.entries[0].status, 'blocked');
+      assert.equal(result.entries[0].reason, 'worktree_dirty');
+    });
+
+    test('a worktree removed between the clean status read and teardown still tears down', () => {
+      // The narrowest window: everything succeeds against a present worktree,
+      // the merge lands, and only then does the directory go. Teardown re-reads
+      // presence precisely so this does not report worktree_remove_failed after
+      // a successful merge.
+      const calls = [];
+      const result = executeWorktreeWaveCleanupPlan(plan([entry]), {
+        existsSync: () => false, // the only probe reached is the teardown one
+        execGit: (args) => {
+          const key = args.join(' ');
+          calls.push(key);
+          if (key === `-C ${WT} rev-parse --abbrev-ref HEAD`) {
+            return { exitCode: 0, stdout: BR, stderr: '' };
+          }
+          if (key.startsWith(`-C ${WT} status`)) return { exitCode: 0, stdout: '', stderr: '' };
+          if (key === `merge-base HEAD ${BR}`) return { exitCode: 0, stdout: 'abc123', stderr: '' };
+          if (key === `diff --diff-filter=D --name-only HEAD...${BR}`) {
+            return { exitCode: 0, stdout: '', stderr: '' };
+          }
+          if (key.startsWith(`merge ${BR}`)) return { exitCode: 0, stdout: '', stderr: '' };
+          if (key === `worktree remove ${WT} --force`) {
+            return { exitCode: 128, stdout: '', stderr: `fatal: '${WT}' is not a working tree` };
+          }
+          if (key === `worktree unlock ${WT}`) return { exitCode: 1, stdout: '', stderr: 'not locked' };
+          if (key === 'worktree prune') return { exitCode: 0, stdout: '', stderr: '' };
+          if (key === `branch -D ${BR}`) return { exitCode: 0, stdout: '', stderr: '' };
+          throw new Error(`unexpected git call: ${key}`);
+        },
+      });
+
+      assert.equal(result.entries[0].status, 'merged_removed');
+      assert.ok(calls.includes('worktree prune'));
+      assert.ok(calls.includes(`branch -D ${BR}`), 'the branch must still be deleted');
+    });
+
+    test('a blocked absent entry does not abort the entries after it (#2852)', () => {
+      // Per-entry isolation across the new branches: entry 1 blocks on a missing
+      // ref, entry 2 must still merge and nothing may land in `pending`.
+      const e2 = { agent_id: 'a2', worktree_path: '/repo/.claude/worktrees/agent-a2', branch: 'worktree-agent-a2', expected_base: 'abc123' };
+      const result = executeWorktreeWaveCleanupPlan(plan([entry, e2]), {
+        existsSync: () => false,
+        execGit: (args) => {
+          const key = args.join(' ');
+          if (key.startsWith(`-C ${WT} `) || key.startsWith(`-C ${e2.worktree_path} `)) {
+            return { exitCode: 128, stdout: '', stderr: ABSENT_ERR };
+          }
+          if (key === `rev-parse --verify --quiet refs/heads/${BR}`) {
+            return { exitCode: 1, stdout: '', stderr: '' };            // entry 1: gone
+          }
+          if (key === `rev-parse --verify --quiet refs/heads/${e2.branch}`) {
+            return { exitCode: 0, stdout: 'cafebabe', stderr: '' };    // entry 2: fine
+          }
+          if (key === `merge-base HEAD ${e2.branch}`) return { exitCode: 0, stdout: 'abc123', stderr: '' };
+          if (key === `diff --diff-filter=D --name-only HEAD...${e2.branch}`) {
+            return { exitCode: 0, stdout: '', stderr: '' };
+          }
+          if (key.startsWith(`merge ${e2.branch}`)) return { exitCode: 0, stdout: '', stderr: '' };
+          if (key === `worktree remove ${e2.worktree_path} --force`) {
+            return { exitCode: 128, stdout: '', stderr: 'fatal: not a working tree' };
+          }
+          if (key === `worktree unlock ${e2.worktree_path}`) return { exitCode: 1, stdout: '', stderr: 'not locked' };
+          if (key === 'worktree prune') return { exitCode: 0, stdout: '', stderr: '' };
+          if (key === `branch -D ${e2.branch}`) return { exitCode: 0, stdout: '', stderr: '' };
+          throw new Error(`unexpected git call: ${key}`);
+        },
+      });
+
+      assert.equal(result.entries[0].reason, 'branch_mismatch');
+      assert.equal(result.entries[1].status, 'merged_removed');
+      assert.deepEqual(result.pending, [], 'a blocked entry must never strand the ones after it');
+    });
+
+    test('the presence probe resolves a relative worktree_path against repoRoot', () => {
+      // `normalizeCleanupManifestEntry` takes worktree_path from the manifest
+      // verbatim, so it can be relative. Every git call passes it as `-C <path>`
+      // with `cwd: plan.repoRoot`, which resolves it against the REPO ROOT — but
+      // a bare fs.existsSync resolves against the PROCESS working directory.
+      // Those differ whenever cleanup runs from elsewhere (reachable through
+      // gsd-tools' --cwd override), and the mismatch reads both ways: a present
+      // checkout reported absent, or an absent one reported present.
+      // (Codex review round 1.)
+      const relEntry = {
+        agent_id: 'a1',
+        worktree_path: '.claude/worktrees/agent-a1',
+        branch: BR,
+        expected_base: 'abc123',
+      };
+      const probed = [];
+      executeWorktreeWaveCleanupPlan(plan([relEntry]), {
+        existsSync: (probePath) => { probed.push(probePath); return false; },
+        execGit: (args) => {
+          const key = args.join(' ');
+          if (key.startsWith(`-C ${relEntry.worktree_path} `)) {
+            return { exitCode: 128, stdout: '', stderr: ABSENT_ERR };
+          }
+          if (key === `rev-parse --verify --quiet refs/heads/${BR}`) {
+            return { exitCode: 0, stdout: 'deadbeef', stderr: '' };
+          }
+          if (key === `merge-base HEAD ${BR}`) return { exitCode: 0, stdout: 'abc123', stderr: '' };
+          if (key === `diff --diff-filter=D --name-only HEAD...${BR}`) {
+            return { exitCode: 0, stdout: '', stderr: '' };
+          }
+          if (key.startsWith(`merge ${BR}`)) return { exitCode: 0, stdout: '', stderr: '' };
+          if (key === `worktree remove ${relEntry.worktree_path} --force`) {
+            return { exitCode: 128, stdout: '', stderr: 'fatal: not a working tree' };
+          }
+          if (key === `worktree unlock ${relEntry.worktree_path}`) return { exitCode: 1, stdout: '', stderr: 'not locked' };
+          if (key === 'worktree prune') return { exitCode: 0, stdout: '', stderr: '' };
+          if (key === `branch -D ${BR}`) return { exitCode: 0, stdout: '', stderr: '' };
+          throw new Error(`unexpected git call: ${key}`);
+        },
+      });
+
+      assert.ok(probed.length > 0, 'the presence probe must actually run');
+      // Build the expectation with path.resolve, not path.join: on win32 resolve
+      // prepends the current drive to a drive-less absolute path (`/repo/main` ->
+      // `D:\repo\main`) and join does not, so a join-built expectation fails on
+      // Windows against correct behavior. Scope of that claim (Codex review
+      // round 3): computing the expectation the way production computes it does
+      // NOT give this row an independent oracle for win32 or git semantics — it
+      // cannot catch `path.resolve` being the wrong choice, only a drift between
+      // the two. What it does still catch is the mutation that matters here,
+      // dropping the repoRoot anchoring, which the equality below rejects
+      // whenever the fixture paths differ. The two notEqual rows state that
+      // difference explicitly rather than leaving it to the reader — ruling out
+      // the bare relative path and a process-cwd resolution.
+      const expected = path.resolve('/repo/main', '.claude/worktrees/agent-a1');
+      for (const probePath of probed) {
+        assert.equal(
+          probePath,
+          expected,
+          'the probe must resolve against plan.repoRoot, not the process cwd',
+        );
+        assert.notEqual(
+          probePath,
+          relEntry.worktree_path,
+          'the probe must not receive the raw relative path — git would resolve it against repoRoot',
+        );
+        assert.notEqual(
+          probePath,
+          path.resolve(relEntry.worktree_path),
+          'the probe must not resolve against the process working directory',
+        );
+      }
+    });
+
+    test('a genuine prune failure after the merge still reports worktree_remove_failed', () => {
+      // The fallback must not swallow a real teardown failure — the merge has
+      // already landed, and the operator needs to know the admin state is stale.
+      const calls = [];
+      const result = executeWorktreeWaveCleanupPlan(plan([entry]), {
+        existsSync: () => false,
+        execGit: (args) => {
+          calls.push(args.join(' '));
+          return absentWorktreeGit({
+            'worktree prune': { exitCode: 1, stdout: '', stderr: 'prune exploded' },
+          })(args);
+        },
+      });
+
+      assert.equal(result.entries[0].status, 'blocked');
+      assert.equal(result.entries[0].reason, 'worktree_remove_failed');
+      assert.equal(result.ok, false);
+      // A blocked teardown must not go on to delete the branch — the same
+      // property the pre-existing `does not delete a branch when worktree
+      // removal fails` row pins for the present-worktree path. (Codex round 2.)
+      assert.equal(
+        calls.some((k) => k === `branch -D ${BR}`), false,
+        'branch deletion must be withheld when teardown blocked',
+      );
+    });
+
+    test('an entry accepted as ABSENT tears down by prune, never by force-remove', () => {
+      // Codex review round 2, P2. An absent entry is merged WITHOUT the rescue
+      // and dirty checks, on the evidence that it had no checkout. If one is
+      // recreated at that path before teardown, `worktree remove --force` would
+      // delete contents that never passed either check — strictly worse than the
+      // bug this PR fixes. Teardown for such an entry must prune, never force.
+      //
+      // Scope (Codex review round 3, P3): this row proves the UNCONDITIONAL
+      // contract — no force-remove is ever issued for an absent-accepted entry —
+      // which is what makes a reappearance harmless. It does NOT model the
+      // reappearance transition itself: on this path production probes presence
+      // once, at identification, so a stub that flips on a later call would never
+      // be asked. The row was previously named for a transition it does not
+      // exercise; the assertions below are unchanged and still meaningful.
+      const calls = [];
+      executeWorktreeWaveCleanupPlan(plan([entry]), {
+        existsSync: () => { calls.push('probe'); return false; },
+        execGit: (args) => {
+          const key = args.join(' ');
+          calls.push(key);
+          return absentWorktreeGit()(args);
+        },
+      });
+
+      assert.equal(
+        calls.some((k) => k === `worktree remove ${WT} --force`), false,
+        'a forced removal must never run for an entry accepted as absent',
+      );
+      assert.ok(calls.includes('worktree prune'), 'teardown still clears stale admin state');
+    });
+
+    test('an UNREADABLE worktree is not accepted as absent — it still blocks', () => {
+      // Codex review round 3, P2. Absence is what lets an entry skip the rescue
+      // and dirty checks, so it must be CONFIRMED, never inferred. `fs.existsSync`
+      // answers false for a genuinely missing path AND for one it cannot traverse
+      // (EACCES on a parent, an unreachable mount) — verified out-of-band: with a
+      // parent at mode 000, existsSync returns false while statSync throws EACCES.
+      // Taking that false at face value would merge over uncommitted work that
+      // the dirty check exists to refuse. Pre-fix behavior for an unreadable
+      // checkout was to block, and it must stay blocked.
+      const calls = [];
+      const eacces = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      const result = executeWorktreeWaveCleanupPlan(plan([entry]), {
+        // The probe cannot answer: it throws rather than returning false.
+        existsSync: () => { throw eacces; },
+        execGit: (args) => { calls.push(args.join(' ')); return absentWorktreeGit()(args); },
+      });
+
+      assert.equal(result.entries[0].status, 'blocked');
+      assert.equal(result.entries[0].reason, 'branch_mismatch');
+      assert.equal(result.ok, false);
+      assert.equal(
+        calls.some((k) => k.startsWith(`merge ${BR}`)), false,
+        'an unreadable worktree must not be merged — the dirty check never ran',
+      );
+      assert.equal(
+        calls.some((k) => k === 'worktree prune' || k === `worktree remove ${WT} --force`), false,
+        'no teardown may run for an entry that was never accepted',
+      );
+    });
+
+    test('a genuinely absent path (probe reports ENOENT) is still accepted as absent', () => {
+      // The other side of the row above: the discrimination must not over-block.
+      // A probe that throws ENOENT states confirmed absence, which is exactly the
+      // case this PR exists to handle, so the entry must still merge and tear down.
+      const enoent = Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
+      const result = executeWorktreeWaveCleanupPlan(plan([entry]), {
+        existsSync: () => { throw enoent; },
+        execGit: absentWorktreeGit(),
+      });
+
+      assert.equal(result.entries[0].status, 'merged_removed');
+      assert.equal(result.entries[0].reason, 'ok');
+      assert.equal(result.ok, true);
+    });
+  });
   test('#1265 accepts a merge-base listed in allowed_bases even when expected_base is the plan commit', () => {
     const plan = {
       ok: true,
@@ -2107,6 +2640,11 @@ describe('executeWorktreeWaveCleanupPlan', () => {
       }],
     };
     const result = executeWorktreeWaveCleanupPlan(plan, {
+      // #4415: this row's premise is a worktree that IS present and whose removal
+      // genuinely fails (locked). Cleanup now distinguishes that from a worktree the
+      // harness already deleted — which prunes instead of blocking — so the premise
+      // has to be stated rather than inferred from a path that never existed on disk.
+      existsSync: () => true,
       execGit: (args, opts) => {
         calls.push({ cwd: opts && opts.cwd, args });
         const key = args.join(' ');
@@ -3362,6 +3900,11 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     const e2 = makeEntry('a2', 'worktree-agent-a2');
     const plan = { ok: true, repoRoot: '/repo/main', action: 'cleanup_wave', discovery: 'manifest', entries: [e1, e2] };
     const result = executeWorktreeWaveCleanupPlan(plan, {
+      // #4415: this row's premise is a worktree that IS present and whose removal
+      // genuinely fails (locked). Cleanup now distinguishes that from a worktree the
+      // harness already deleted — which prunes instead of blocking — so the premise
+      // has to be stated rather than inferred from a path that never existed on disk.
+      existsSync: () => true,
       execGit: (args) => {
         const key = args.join(' ');
         if (key === '-C /repo/.claude/worktrees/agent-a1 rev-parse --abbrev-ref HEAD') {
@@ -3431,6 +3974,11 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     const e2 = makeEntry('a2', 'worktree-agent-a2');
     const plan = { ok: true, repoRoot: '/repo/main', action: 'cleanup_wave', discovery: 'manifest', entries: [e1, e2] };
     const result = executeWorktreeWaveCleanupPlan(plan, {
+      // #4415: this row's premise is a worktree that IS present whose `status`
+      // query failed. Cleanup now distinguishes that from a worktree removed
+      // mid-entry — which merges rather than blocking — so the premise has to be
+      // stated rather than inferred from a path that never existed on disk.
+      existsSync: () => true,
       execGit: (args) => {
         const key = args.join(' ');
         if (key === '-C /repo/.claude/worktrees/agent-a1 rev-parse --abbrev-ref HEAD') {
