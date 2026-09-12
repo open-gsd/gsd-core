@@ -29,6 +29,35 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { NPM_VIEW_TIMEOUT_MS } = require('../gsd-core/bin/check-latest-version.cjs');
+
+/**
+ * NOT a margin above NPM_VIEW_TIMEOUT_MS (imported above for disclosure,
+ * per this batch's epic issue -- this file and check-latest-version.cjs
+ * once independently guessed the same 15000ms value, causing a Windows
+ * double-SIGKILL collision fixed in PR #4428). This specific scenario
+ * (missing compiled runtime library) degrades BEFORE reaching the wrapped
+ * `npm view` call at all -- see this test's own #3582 comment
+ * ("checkLatestVersion -> not ok" on the degrade, never invoked) -- so its
+ * bound has no margin relationship to NPM_VIEW_TIMEOUT_MS to preserve.
+ * Kept as its own independent, pre-existing value.
+ */
+const WORKER_DEGRADED_PATH_TIMEOUT_MS = 8000;
+
+/**
+ * gsd-update-banner.js only reads a small cache file from disk and prints
+ * JSON -- no subprocess/network work -- so this leaves generous headroom
+ * over its sub-second worst case even on a contended CI runner. NOT
+ * related to NPM_VIEW_TIMEOUT_MS or WORKER_DEGRADED_PATH_TIMEOUT_MS above
+ * (a different hook script entirely).
+ */
+const UPDATE_BANNER_HOOK_TIMEOUT_MS = 10_000;
+
+// Imported for disclosure only (see WORKER_DEGRADED_PATH_TIMEOUT_MS's own
+// doc comment above): confirms this file references the collision-prone
+// constant from check-latest-version.cjs without deriving any of this
+// file's own timeout values from it.
+void NPM_VIEW_TIMEOUT_MS;
 
 const WORKER_PATH = path.join(__dirname, '..', 'hooks', 'gsd-check-update-worker.js');
 const PROJECTION_PATH = path.join(
@@ -134,7 +163,7 @@ describe('worker delegates the npm spawn (does not re-open the gate, #498)', () 
       };
       const r = runHookSeam(path.join(cold.hooksDir, 'gsd-check-update-worker.js'), [], {
         env,
-        timeoutMs: 8000,
+        timeoutMs: WORKER_DEGRADED_PATH_TIMEOUT_MS,
       });
       assert.equal(r.exitCode, 0, `worker must exit 0 on a build failure; stderr: ${r.stderr}`);
       assert.ok(fs.existsSync(cacheFile), 'worker must still reach the end and write a cache record');
@@ -863,7 +892,7 @@ describe('gsd-update-banner.js end-to-end', () => {
     // contended CI runner.
     const r = seamRunHook(HOOK_PATH, [], {
       env: { ...process.env, HOME: home, USERPROFILE: home },
-      timeoutMs: 10_000,
+      timeoutMs: UPDATE_BANNER_HOOK_TIMEOUT_MS,
     });
     return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
   }
@@ -1017,7 +1046,7 @@ describe('gsd-update-banner.js: #3582 cold tree — degrades to silent, never cr
 
     const r = seamRunHook(path.join(cold.hooksDir, 'gsd-update-banner.js'), [], {
       env: { ...process.env, HOME: home, USERPROFILE: home },
-      timeoutMs: 10_000,
+      timeoutMs: UPDATE_BANNER_HOOK_TIMEOUT_MS,
     });
 
     assert.equal(r.exitCode, 0, `hook must exit 0 on a build failure; stderr: ${r.stderr}`);
