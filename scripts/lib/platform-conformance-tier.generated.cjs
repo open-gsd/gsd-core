@@ -253,6 +253,7 @@ module.exports = {
   "tests/state.test.cjs",
   "tests/teams-status.test.cjs",
   "tests/todos-workstream-scope.test.cjs",
+  "tests/ui-interaction-capture.test.cjs",
   "tests/unreachable-guard-drift.test.cjs",
   "tests/unreachable-shell-guard.test.cjs",
   "tests/unusable-input.test.cjs",
