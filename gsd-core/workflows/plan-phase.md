@@ -1437,7 +1437,7 @@ CHECK_EXIT=$?
 ```
 OR, for a generic `predicate` gate (ADR-2008 / #2008), inline the predicate as compact JSON (the context flags feed `${PHASE_NUMBER}`/`${PHASE_DIR}`/`${PHASE_REQ_IDS}` interpolation):
 ```bash
-GATE_RESULT=$(gsd_run check predicate --predicate '<hook.check.predicate as JSON>' --phase-number "${PHASE}" --phase-dir "${PHASE_DIR}" --phase-req-ids "${PHASE_REQ_IDS}" --raw)
+GATE_RESULT=$(gsd_run check predicate --predicate '<hook.check.predicate as JSON>' --phase-number "${PHASE_NUMBER}" --phase-dir "${PHASE_DIR}" --phase-req-ids "${PHASE_REQ_IDS}" --raw)
 CHECK_EXIT=$?
 ```
 (Read the hook's `check` object in-context to pick the branch; a gate with neither is a malformed registry entry — skip with a warning.)

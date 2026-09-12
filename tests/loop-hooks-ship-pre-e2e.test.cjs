@@ -373,7 +373,7 @@ describe('predicate gate phase-context forwarding (#4483)', () => {
 
   test('plan:post forwards phase number, phase directory, and requirement ids', () => {
     const line = predicateDispatchLine(PLAN_PHASE_MD, 'plan:post');
-    assert.match(line, /--phase-number "\$\{PHASE\}"/);
+    assert.match(line, /--phase-number "\$\{PHASE_NUMBER\}"/);
     assert.match(line, /--phase-dir "\$\{PHASE_DIR\}"/);
     assert.match(line, /--phase-req-ids "\$\{PHASE_REQ_IDS\}"/);
   });
