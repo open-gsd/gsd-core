@@ -53,6 +53,17 @@ test('native V2 worktrees use the established external ignored root without requ
   }
 });
 
+test('native V2 encodes cleanup scope for the legacy worktree.create flags, never as JSON arrays', () => {
+  assert.match(dispatch, /`worktree\.create` parses each scope flag as one whitespace-separated string,\s+# not JSON/);
+  assert.match(dispatch, /PLAN_FILES=\$\(PLAN_ENTRY_JSON="\$PLAN_ENTRY_JSON" node -e/);
+  assert.match(dispatch, /PLAN_DELETIONS=\$\(PLAN_ENTRY_JSON="\$PLAN_ENTRY_JSON" node -e/);
+  assert.match(dispatch, /paths\.join\(" "\)/);
+  assert.match(dispatch, /non-empty whitespace-free paths/);
+  assert.match(dispatch, /if \[ -n "\$PLAN_DELETIONS" \]; then[\s\S]*--files "\$PLAN_FILES" --deletions "\$PLAN_DELETIONS" --raw[\s\S]*else[\s\S]*--files "\$PLAN_FILES" --raw/);
+  assert.doesNotMatch(dispatch, /JSON arrays passed unchanged to worktree\.create/);
+  assert.doesNotMatch(dispatch, /--files "\$PLAN_ENTRY_JSON"|--deletions "\$PLAN_ENTRY_JSON"/);
+});
+
 test('native merge performs both fresh attestations, all merges, then teardown', () => {
   ordered(merge, ['### Fresh gate before prepare', '{"action":"recover"}', '{"action":"status","wave_id":"{WAVE_ID}"}', 'quick-batch v2-attest', '--phase merge_intent', '### Fresh gate immediately before mutation', '{"action":"recover"}', '{"action":"status","wave_id":"{WAVE_ID}"}', 'quick-batch v2-attest', 'quick-batch v2-merge', '### Teardown only after every durable merge', 'quick-batch v2-teardown']);
   assert.match(merge, /model\s+must literally observe[\s\S]*merge_ready:true/);

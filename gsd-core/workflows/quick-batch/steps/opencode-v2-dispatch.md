@@ -73,8 +73,23 @@ PLAN_ENTRY_JSON=$(gsd_run quick-batch cleanup-entry \
   --agent-id "temporary-plan-reader" --worktree-path "$ORCHESTRATOR_WT" \
   --branch "$ORCH_BRANCH" --expected-base "$(git -C "$ORCHESTRATOR_WT" rev-parse HEAD)" \
   --plan-content "$PLAN_CONTENT" --raw) || exit 1
-# Parse PLAN_FILES and PLAN_DELETIONS from PLAN_ENTRY_JSON's files_modified and
-# declared_deletions. They are JSON arrays passed unchanged to worktree.create.
+# `worktree.create` parses each scope flag as one whitespace-separated string,
+# not JSON. Derive its legacy CLI values from the trusted cleanup entry without
+# shell evaluation. Every declared path must be a non-empty string containing no
+# whitespace: that is the supported boundary of this CLI seam. Halt for a path
+# with whitespace rather than split it lossy or pass JSON punctuation as a path.
+PLAN_FILES=$(PLAN_ENTRY_JSON="$PLAN_ENTRY_JSON" node -e '
+const entry=JSON.parse(process.env.PLAN_ENTRY_JSON);
+const paths=entry.files_modified;
+if(!Array.isArray(paths)||paths.some((p)=>typeof p!=="string"||p.length===0||/\s/.test(p))) throw new Error("files_modified must be non-empty whitespace-free paths for worktree.create --files");
+process.stdout.write(paths.join(" "));
+') || exit 1
+PLAN_DELETIONS=$(PLAN_ENTRY_JSON="$PLAN_ENTRY_JSON" node -e '
+const entry=JSON.parse(process.env.PLAN_ENTRY_JSON);
+const paths=entry.declared_deletions;
+if(!Array.isArray(paths)||paths.some((p)=>typeof p!=="string"||p.length===0||/\s/.test(p))) throw new Error("declared_deletions must be non-empty whitespace-free paths for worktree.create --deletions");
+process.stdout.write(paths.join(" "));
+') || exit 1
 ```
 
 Before assigning the default, preflight both the active plugin and registry:
@@ -159,10 +174,17 @@ Now create into the helper-owned
 round manifest using the **actual** random manifest agent id:
 
 ```bash
-CREATE_JSON=$(gsd_run query worktree.create \
-  --manifest "$ROUND_MANIFEST" --agent-id "$MANIFEST_AGENT_ID" \
-  --path "$WT_PATH" --branch "$WT_BRANCH" --base "$EXPECTED_BASE" \
-  --root "$ORCHESTRATOR_WT" --files "$PLAN_FILES" --deletions "$PLAN_DELETIONS" --raw) || exit 1
+if [ -n "$PLAN_DELETIONS" ]; then
+  CREATE_JSON=$(gsd_run query worktree.create \
+    --manifest "$ROUND_MANIFEST" --agent-id "$MANIFEST_AGENT_ID" \
+    --path "$WT_PATH" --branch "$WT_BRANCH" --base "$EXPECTED_BASE" \
+    --root "$ORCHESTRATOR_WT" --files "$PLAN_FILES" --deletions "$PLAN_DELETIONS" --raw) || exit 1
+else
+  CREATE_JSON=$(gsd_run query worktree.create \
+    --manifest "$ROUND_MANIFEST" --agent-id "$MANIFEST_AGENT_ID" \
+    --path "$WT_PATH" --branch "$WT_BRANCH" --base "$EXPECTED_BASE" \
+    --root "$ORCHESTRATOR_WT" --files "$PLAN_FILES" --raw) || exit 1
+fi
 ```
 
 Require `CREATE_JSON.ok === true`, `reason === "created"`, exact manifest,
