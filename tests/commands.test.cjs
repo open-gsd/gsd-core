@@ -6609,11 +6609,15 @@ describe('#4055: merged-and-deleted phase branch must not be resurrected', () =>
       base,
       'HEAD must stay on the base branch (no create-and-switch)'
     );
-    assert.strictEqual(
-      gitOrThrow(['rev-parse', '--verify', '--quiet', 'refs/heads/gsd/phase-07-example-phase'], { cwd: tmpDir }).status !== 0,
-      true,
-      'the deleted phase branch must not be recreated'
-    );
+    // gitOrThrow throws on the expected absence (rev-parse --quiet exits 1) —
+    // the throw itself is the proof the branch was not recreated.
+    let resurrected = true;
+    try {
+      gitOrThrow(['rev-parse', '--verify', '--quiet', 'refs/heads/gsd/phase-07-example-phase'], { cwd: tmpDir });
+    } catch {
+      resurrected = false;
+    }
+    assert.strictEqual(resurrected, false, 'the deleted phase branch must not be recreated');
     const landed = gitOrThrow(
       ['show', 'HEAD:.planning/phases/07-example-phase/07-VERIFICATION.md'], { cwd: tmpDir }
     );
@@ -6652,10 +6656,12 @@ describe('#4055: merged-and-deleted phase branch must not be resurrected', () =>
       'side-work',
       'HEAD must stay on the non-base branch (no create-and-switch)'
     );
-    assert.strictEqual(
-      gitOrThrow(['rev-parse', '--verify', '--quiet', 'refs/heads/gsd/phase-02-next'], { cwd: tmpDir }).status !== 0,
-      true,
-      'no phase branch may be created off a non-base branch'
-    );
+    let createdBranch = true;
+    try {
+      gitOrThrow(['rev-parse', '--verify', '--quiet', 'refs/heads/gsd/phase-02-next'], { cwd: tmpDir });
+    } catch {
+      createdBranch = false;
+    }
+    assert.strictEqual(createdBranch, false, 'no phase branch may be created off a non-base branch');
   });
 });
