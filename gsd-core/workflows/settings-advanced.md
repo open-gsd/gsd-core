@@ -1,8 +1,8 @@
 Apply response_language to all user-facing prose — narration between tool calls, status updates, progress notes, and findings included; preserve code, paths, and identifiers.
 
 <purpose>
-Interactive configuration of GSD power-user knobs — plan bounce, node repair, subagent timeouts,
-inline plan threshold, cross-AI execution, base branch, branch templates, response language,
+Interactive configuration of GSD power-user knobs — plan bounce, planner stall detection, node
+repair, subagent timeouts, inline plan threshold, cross-AI execution, base branch, branch templates, response language,
 context window, gitignored search, graphify build timeout, runtime model tier overrides, and
 model policy configuration (provider + budget → canonical tier mapping, or manual model ID
 assignment per cost tier).
@@ -49,6 +49,7 @@ Parse the following current values. If a key is absent, fall back to the documen
 shown in parentheses:
 
 Planning Tuning:
+- `planner.stall_detection_enabled` (default: `true`)
 - `workflow.plan_bounce` (default: `false`)
 - `workflow.plan_bounce_passes` (default: `2`)
 - `workflow.plan_bounce_script` (default: `null`)
@@ -126,8 +127,21 @@ stored verbatim as a string.
 
 ### Section 1 — Planning Tuning
 
+Before offering the disabled choice, display this warning verbatim:
+
+`Warning: disabling planner stall detection gives up bounded automatic recovery if the runtime loses an agent completion handoff. Planning still waits through the runtime-native completion mechanism, but you may need to interrupt and use the filesystem fallback.`
+
 ```text
 AskUserQuestion([
+  {
+    question: "Enable bounded planner/plan-checker stall detection? (current: <value or true>)",
+    header: "Planner Watchdog",
+    multiSelect: false,
+    options: [
+      { label: "Yes (default: true)", description: "Poll for completion markers and plan-file activity, with bounded recovery." },
+      { label: "No (false)", description: "Await runtime-native completion without polling. Gives up bounded automatic recovery if completion handoff is lost." }
+    ]
+  },
   {
     question: "Run external plan-bounce validator against generated PLAN.md? (current: <value or false>)",
     header: "Plan Bounce",
@@ -502,6 +516,7 @@ keys and sibling sub-objects.
 
 ```bash
 # Example — only write keys the user changed. "Keep current" selections are skipped.
+gsd_run query config-set planner.stall_detection_enabled false
 gsd_run query config-set workflow.plan_bounce_passes 5
 gsd_run query config-set workflow.subagent_timeout 300000
 gsd_run query config-set git.base_branch main
@@ -519,6 +534,10 @@ anything not listed in Sections 1–8 MUST survive the update):
 ```json
 {
   ...existing_config,
+  "planner": {
+    ...existing_planner,
+    "stall_detection_enabled": <new|existing>
+  },
   "workflow": {
     ...existing_workflow,
     "plan_bounce": <new|existing>,
@@ -753,6 +772,7 @@ Display:
 
 | Setting                                    | Value |
 |--------------------------------------------|-------|
+| planner.stall_detection_enabled            | {true/false} |
 | workflow.plan_bounce                       | {on/off} |
 | workflow.plan_bounce_passes                | {n} |
 | workflow.plan_bounce_script                | {path/null} |
@@ -806,6 +826,7 @@ UI/AI phase gates), use /gsd:settings.
 - [ ] Current config read from resolved `$GSD_CONFIG_PATH`
 - [ ] Eight sections rendered (Planning, Execution, Discussion, Cross-AI, Git, Runtime/Output, Runtime Model Tiers, Model Policy)
 - [ ] Every field pre-selected to its current value (or documented default if absent)
+- [ ] Disabling planner stall detection shows the bounded-recovery warning before writing `false`
 - [ ] Numeric inputs validated — non-numeric rejected and re-prompted
 - [ ] Branch-template inputs validated — non-default must contain a placeholder
 - [ ] Null-allowed fields accept an empty input as a clear

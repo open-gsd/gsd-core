@@ -1,8 +1,9 @@
 # Bounded Stall-Detection Helpers (#2650)
 
-Every planner/plan-checker spawn in `plan-phase.md` dispatches with
-`run_in_background=true`, records `TS=$(date +%s)`, and then repeatedly
-calls `gsd_stall_watch` until it returns something other than
+`planner.stall_detection_enabled` controls the wait policy for the five scoped
+planner/plan-checker spawns. It defaults to `true`. In that default-on mode each
+spawn dispatches with `run_in_background=true`, records `TS=$(date +%s)`, and
+then repeatedly calls `gsd_stall_watch` until it returns something other than
 `waiting`/`active`. This mirrors the already-shipped `executor.stall_*`
 pattern (`execute-phase.md`, bug #3212, commit `e7942c21b`) but — unlike
 that prose-only surveillance, which cannot run during a *blocking* `Agent()`
@@ -10,6 +11,15 @@ call — each `gsd_stall_watch` call is a real, bounded bash subprocess wait
 issued as its own tool call, so it returns control to the orchestrator on
 its own schedule regardless of whether the backgrounded agent's own
 completion notification ever arrives.
+
+When the key is explicitly the JSON boolean `false`, each scoped call instead
+omits `run_in_background`, waits through the runtime-native ordinary Agent()
+completion mechanism, and consumes that real returned result. It never calls
+`gsd_stall_watch`, so there are no periodic shell sleeps. This is still a wait,
+not fire-and-forget. It deliberately gives up #2650's bounded automatic
+recovery: if the runtime loses the completion handoff, the user may need to
+interrupt and use the existing filesystem fallback. The completion markers and
+empty/truncated/unrecognized-return fallback remain unchanged.
 
 **Binding `{outputFile}` (load-bearing, not optional):** every `gsd_stall_watch`
 call below takes `{outputFile}` as its second argument — a literal token the
@@ -71,10 +81,18 @@ config-get calls.
 This block is independent of, and never gated behind, the `query
 teams-status` / `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` guard used for the
 researcher spawn — the stall path applies on every runtime, teams-active or
-not (AC2).
+not (AC2). The toggle is resolved through the canonical `config-get` seam, so
+root/project/workstream selection stays with the Config Loader rather than a
+workflow-local JSON parser. Only the exact boolean result `false` disables;
+missing, malformed, string, numeric, or otherwise unrecognized values fail safe
+to `true`.
 
 ```bash
 _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; GSD_TOOLS="${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}"; _gsd_at() { for _p; do if [ -f "$_p" ]; then GSD_TOOLS="$_p"; return 0; fi; done; return 1; }; if _gsd_at "${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.codex/gsd-core/bin/${_GSD_SHIM_NAME}"; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif unset -f gsd_run; _G="$(command -v gsd_run)"; then GSD_TOOLS="$_G"; gsd_run() { "$GSD_TOOLS" "$@"; }; elif _gsd_at "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/${_GSD_SHIM_NAME}" "${HERMES_HOME:-$HOME/.hermes}/gsd-core/bin/${_GSD_SHIM_NAME}" "${CURSOR_CONFIG_DIR:-$HOME/.cursor}/gsd-core/bin/${_GSD_SHIM_NAME}" "${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/${_GSD_SHIM_NAME}" "${GEMINI_CONFIG_DIR:-$HOME/.gemini}/gsd-core/bin/${_GSD_SHIM_NAME}" "${COPILOT_CONFIG_DIR:-$HOME/.copilot}/gsd-core/bin/${_GSD_SHIM_NAME}" "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}/gsd-core/bin/${_GSD_SHIM_NAME}" "${AUGMENT_CONFIG_DIR:-$HOME/.augment}/gsd-core/bin/${_GSD_SHIM_NAME}" "${TRAE_CONFIG_DIR:-$HOME/.trae}/gsd-core/bin/${_GSD_SHIM_NAME}" "${QWEN_CONFIG_DIR:-$HOME/.qwen}/gsd-core/bin/${_GSD_SHIM_NAME}" "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}/gsd-core/bin/${_GSD_SHIM_NAME}" "${CLINE_CONFIG_DIR:-$HOME/.cline}/gsd-core/bin/${_GSD_SHIM_NAME}" "${GROK_AGENTS_HOME:-$HOME/.agents}/gsd-core/bin/${_GSD_SHIM_NAME}" "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}/gsd-core/bin/${_GSD_SHIM_NAME}" "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}/gsd-core/bin/${_GSD_SHIM_NAME}" "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}/gsd-core/bin/${_GSD_SHIM_NAME}"; then gsd_run() { node "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd_run is not on PATH. Run: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi; GSD_IDENTITY_STATUS=unverified; case "$(gsd_run runtime-identity --raw 2>/dev/null || true)" in '{"packageName":"@opengsd/gsd-core"'*'}') GSD_IDENTITY_STATUS=ok;; esac; export GSD_IDENTITY_STATUS; [ "$GSD_IDENTITY_STATUS" = ok ] || echo "WARNING: \"$GSD_TOOLS\" did not prove it is @opengsd/gsd-core - it is either a different package or an @opengsd/gsd-core older than the runtime-identity verb. See docs/how-to/diagnose-a-foreign-gsd-tools.md" >&2; if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "${GSD_TOOLS:-}" ]; then printf "export PATH='%s':\"\$PATH\"\n" "${GSD_TOOLS%/*}" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true; fi
+PLANNER_STALL_DETECTION_ENABLED=$(gsd_run query config-get planner.stall_detection_enabled --raw 2>/dev/null || echo "true")
+# Defense in depth for hand-edited config and old runtimes: only the exact
+# canonical false token may disable the default-on recovery policy.
+[ "$PLANNER_STALL_DETECTION_ENABLED" = "false" ] || PLANNER_STALL_DETECTION_ENABLED=true
 PLANNER_STALL_INTERVAL_MINUTES=$(gsd_run query config-get planner.stall_detect_interval_minutes --raw 2>/dev/null || echo "5")
 PLANNER_STALL_THRESHOLD_MINUTES=$(gsd_run query config-get planner.stall_threshold_minutes --raw 2>/dev/null || echo "10")
 # Both values are config-controlled (.planning/config.json, editable by any repo

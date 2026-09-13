@@ -17,7 +17,7 @@ import cliExitMod = require('./cli-exit.cjs');
 const { ExitError } = cliExitMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoader = require('./config-loader.cjs');
-const { CONFIG_DEFAULTS } = configLoader;
+const { CONFIG_DEFAULTS, resolvePlannerStallDetectionEnabled } = configLoader;
 import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -98,6 +98,7 @@ const SCHEMA_DEFAULTS: Record<string, unknown> = {
   'context_window': 200000,
   'executor.stall_detect_interval_minutes': 5,
   'executor.stall_threshold_minutes': 10,
+  'planner.stall_detection_enabled': CONFIG_DEFAULTS.planner_stall_detection_enabled,
   'planner.stall_detect_interval_minutes': 5,
   'planner.stall_threshold_minutes': 10,
   'git.create_tag': true,
@@ -176,12 +177,15 @@ function resolveSchemaDefault(cwd: string, kp: string): { found: boolean; value:
  * Centralizing emission here means masking can't be missed at a call site.
  */
 function emitResolvedDefault(kp: string, value: unknown, raw: boolean): void {
+  const resolvedValue = kp === 'planner.stall_detection_enabled'
+    ? resolvePlannerStallDetectionEnabled(value)
+    : value;
   if (isSecretKey(kp)) {
-    const masked = maskSecret(value as Parameters<typeof maskSecret>[0]);
+    const masked = maskSecret(resolvedValue as Parameters<typeof maskSecret>[0]);
     output(masked, raw, masked);
     return;
   }
-  output(value, raw, String(value));
+  output(resolvedValue, raw, String(resolvedValue));
 }
 
 // ─── Validation helpers ───────────────────────────────────────────────────────
@@ -942,6 +946,14 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
     }
   }
 
+  // Planner watchdog opt-out (#4570) — only a real boolean may change the
+  // default-on policy. In particular, string "false" must not disable it.
+  if (kp === 'planner.stall_detection_enabled') {
+    if (typeof parsedValue !== 'boolean') {
+      error(`Invalid planner.stall_detection_enabled '${val}'. Must be a boolean (true or false).`);
+    }
+  }
+
   // #3086 — git.create_tag: boolean only
   if (kp === 'git.create_tag') {
     if (typeof parsedValue !== 'boolean') {
@@ -1236,6 +1248,10 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
     const sd = resolveSchemaDefault(cwd, kp);
     if (sd.found) { emitResolvedDefault(kp, sd.value, raw); return; }
     error(`Key not found: ${kp}`, ERROR_REASON.CONFIG_KEY_NOT_FOUND);
+  }
+
+  if (kp === 'planner.stall_detection_enabled') {
+    current = resolvePlannerStallDetectionEnabled(current);
   }
 
   // Never echo plaintext for sensitive keys via config-get. Plaintext lives

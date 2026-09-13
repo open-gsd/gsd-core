@@ -25,6 +25,9 @@ GSD 将项目设置存储在 `.planning/config.json` 中。该文件在 `/gsd-ne
     "search_gitignored": false,
     "sub_repos": []
   },
+  "planner": {
+    "stall_detection_enabled": true
+  },
   "context": null,
   "workflow": {
     "research": true,
@@ -268,6 +271,9 @@ API 密钥字段接受字符串值（密钥本身）。也可以设置为哨兵�
 | `workflow.subagent_timeout` | number | `600` | 单个 subagent 调用的超时秒数。对于长时间运行的研究或执行阶段可适当增加 |
 | `executor.stall_detect_interval_minutes` | number | `5` | 执行器 agent 活跃时，执行器停滞检测的间隔分钟数。执行阶段编排器以此频率检查最近的提交，避免无限等待静默的 agent。 |
 | `executor.stall_threshold_minutes` | number | `10` | 执行器完成或预期分支提交活动缺失超过此分钟数后，执行阶段为可能停滞的执行器提供恢复选项。 |
+| `planner.stall_detection_enabled` | boolean | `true` | 控制标准规划器、分块大纲/逐计划规划器、计划检查器和修订规划器的有界停滞检测。运行 `gsd config-set planner.stall_detection_enabled false` 可跳过 watchdog 轮询，改用运行时原生完成机制等待每个 agent。**警告：** `false` 会放弃运行时丢失完成回传时的有界恢复；届时可能需要中断并使用现有文件系统回退。规划器执行和结果处理不会被跳过。 |
+| `planner.stall_detect_interval_minutes` | number | `5` | 规划器或计划检查器活跃时的停滞检查间隔分钟数。规划阶段编排器按此频率检查磁盘上的 `*-PLAN.md` 活动（#2650）。 |
+| `planner.stall_threshold_minutes` | number | `10` | 没有完成标记或新的磁盘计划活动超过此分钟数后，规划阶段自动提供接受计划/重试/停止恢复选项（#2650）。 |
 | `workflow.inline_plan_threshold` | number | `3` | 阶段中任务数量的最大值，超过此值后规划器生成单独的 PLAN.md 文件而非在提示词中内联任务 |
 | `workflow.drift_threshold` | number | `3` | 阶段期间引入的新结构元素（新目录、桶形导出、迁移、路由模块）的最小数量，超过此值后执行后代码库漂移门禁采取行动。参见 [#2003](https://github.com/open-gsd/gsd-core/issues/2003)。v1.39 新增 |
 | `workflow.drift_action` | string | `warn` | `/gsd-execute-phase` 后超过 `workflow.drift_threshold` 时的处理方式。`warn` 打印建议运行 `/gsd-map-codebase --paths …` 的消息；`auto-remap` 派生 `gsd-codebase-mapper` 限定于受影响路径。v1.39 新增 |

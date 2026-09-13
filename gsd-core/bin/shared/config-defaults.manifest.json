@@ -68,6 +68,9 @@
     "sub_repos": [],
     "granularity": "standard"
   },
+  "planner": {
+    "stall_detection_enabled": true
+  },
   "hooks": {
     "context_warnings": true,
     "workflow_guard": false

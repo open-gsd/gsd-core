@@ -62,6 +62,9 @@ const REPO_ROOT = path.join(__dirname, '..');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const PILOT_REL = path.join('gsd-core', 'workflows', 'execute-phase.md');
 const PILOT_PATH = path.join(REPO_ROOT, PILOT_REL);
+const PLAN_PHASE_REL = path.join('gsd-core', 'workflows', 'plan-phase.md');
+const CHUNKED_PLAN_REL = path.join('gsd-core', 'workflows', 'plan-phase', 'steps', 'chunked-planning-mode.md');
+const STALL_HELPERS_REL = path.join('gsd-core', 'workflows', 'plan-phase', 'steps', 'stall-detection-helpers.md');
 // plan-phase.md was the original #2930 pilot but was reverted to unmarked
 // (chore/2930 retarget: it sits 36 B under the ADR-857 Phase-6 PRE_PHASE6
 // gate and cannot absorb marker overhead) — it was a genuinely unmarked
@@ -284,6 +287,22 @@ test('noSectionMarkerLeaksIntoEmittedArtifacts', (t) => {
       false,
       `${runtime}: emitted execute-phase.md still contains a gsd:section marker token`,
     );
+
+    // #4570: assert against the real installed workflow bytes for every runtime,
+    // after composition and runtime conversion. The background parameter itself
+    // is runtime vocabulary (`run_in_background` becomes `background` on Hermes),
+    // so parity is pinned on the shared gate and its two semantic branches.
+    for (const relativePath of [PLAN_PHASE_REL, CHUNKED_PLAN_REL, STALL_HELPERS_REL]) {
+      const installedPath = path.join(configDir, relativePath);
+      assert.ok(fs.existsSync(installedPath), `${runtime}: emitted ${relativePath} is missing`);
+      const installed = fs.readFileSync(installedPath, 'utf8');
+      assert.match(installed, /PLANNER_STALL_DETECTION_ENABLED/,
+        `${runtime}: ${relativePath} lost the planner stall-detection gate during conversion`);
+      assert.match(installed, /gsd_stall_watch/,
+        `${runtime}: ${relativePath} lost the default-on watcher branch during conversion`);
+      assert.match(installed, /runtime-native/,
+        `${runtime}: ${relativePath} lost the explicit-off ordinary completion branch during conversion`);
+    }
     cleanup(root);
   }
 });
