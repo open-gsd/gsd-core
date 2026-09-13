@@ -2076,6 +2076,11 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
           // genuinely new phase from a merged-and-deleted one (#4055).
           let createBlockReason: string | null = null;
           if (branchingStrategy === 'phase' && phaseDirRelative) {
+            // #4055 residual: searchPhaseInDir's #2237 fail-safe can return an
+            // empty `directory` for ambiguous phase names (leaving
+            // phaseDirRelative null) — there the history half is skipped and
+            // only the base check below guards; shallow clones can also show
+            // an empty probe for old merged phases (depth-sensitive).
             const history = execGit(
               ['log', 'HEAD', '--oneline', '--', phaseDirRelative],
               { cwd },
@@ -2086,6 +2091,13 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
             }
           }
           if (!createBlockReason) {
+            // The base half of the guard applies to BOTH strategies (it does
+            // not need a directory): a phase/milestone branch is created only
+            // from the resolved base branch. NOTE the milestone arm keeps its
+            // existence-only guard for the HISTORY half — a merged-and-deleted
+            // milestone branch remains resurrectable by an on-base caller
+            // until a milestone-directory derivation exists here (#4055
+            // follow-up candidate).
             /* eslint-disable @typescript-eslint/no-require-imports */
             const gitBaseBranch = require('./git-base-branch.cjs') as {
               resolveBaseBranch: (cwd: string) => string;
