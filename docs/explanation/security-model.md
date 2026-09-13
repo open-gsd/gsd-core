@@ -197,6 +197,23 @@ the install root, and a link planted at a capability's own `SKILL.md` was
 followed by `statSync`, so an outside file's contents were installed as a skill
 body.
 
+**The ratchet.** A convention saying "remember to use the predicate" is exactly
+what produced the unvalidated sites in the first place, so the rule
+`local/no-unconfined-path-join` enforces it under `npm run lint` with an empty
+allowlist. It bans the hand-rolled comparison `X.startsWith(Y + separator)` and
+a containment predicate called as a bare statement with its answer discarded.
+It deliberately does not try to decide, for each of the repository's ~2000
+`path.join` calls, whether an argument came from user input — that question is
+not answerable locally, and a rule that fires on hundreds of correct sites earns
+an exemption list of hundreds. What actually gets copied is the comparison.
+
+A site that legitimately cannot use the predicate carries a comment
+`// allow-handrolled-containment: <reason>` naming why: either the comparison is
+not a containment decision (an ancestor-walk loop, identity matching), or the
+predicate is unreachable — two files run before the compiled module they would
+need to import exists. The reason is mandatory and reviewable; the rule does not
+accept an empty one.
+
 **Runtime hook: `gsd-prompt-guard.js`.** This hook fires on every Write or
 Edit call that targets `.planning/` files. It scans the content being written
 for injection patterns shared with `gsd-read-injection-scanner.js` through
