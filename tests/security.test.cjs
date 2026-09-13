@@ -9,10 +9,10 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const { cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const fc = require('./helpers/fast-check-setup.cjs');
 
 const {
-  validatePath,
   requireSafePath,
   scanForInjection,
   sanitizeForPrompt,
@@ -23,76 +23,78 @@ const {
   validateFieldName,
   validateShellArg,
   validatePromptStructure,
+  assertWithinRoot,
+  tryWithinRoot,
+  PathAcceptance,
 } = require('../gsd-core/bin/lib/security.cjs');
 
 // ─── Path Traversal Prevention ──────────────────────────────────────────────
 
-describe('validatePath', () => {
+describe('assertWithinRoot / tryWithinRoot — engine invariance', () => {
   const base = '/projects/my-app';
 
   test('allows relative paths within base', () => {
-    const result = validatePath('src/index.js', base);
-    assert.ok(result.safe);
-    assert.equal(result.resolved, path.resolve(base, 'src/index.js'));
+    const r = tryWithinRoot('src/index.js', base);
+    assert.ok(r !== null);
+    assert.equal(r, path.resolve(base, 'src/index.js'));
   });
 
   test('allows nested relative paths', () => {
-    const result = validatePath('.planning/phases/01-setup/PLAN.md', base);
-    assert.ok(result.safe);
+    const r = tryWithinRoot('.planning/phases/01-setup/PLAN.md', base);
+    assert.ok(r !== null);
   });
 
   test('rejects ../ traversal escaping base', () => {
-    const result = validatePath('../../etc/passwd', base);
-    assert.ok(!result.safe);
-    assert.ok(result.error.includes('escapes allowed directory'));
+    assert.throws(
+      () => assertWithinRoot('../../etc/passwd', base, 'test'),
+      /escapes allowed directory/,
+    );
   });
 
   test('rejects absolute paths by default', () => {
-    const result = validatePath('/etc/passwd', base);
-    assert.ok(!result.safe);
-    assert.ok(result.error.includes('Absolute paths not allowed'));
+    assert.throws(
+      () => assertWithinRoot('/etc/passwd', base, 'test'),
+      /Absolute paths not allowed/,
+    );
   });
 
   test('allows absolute paths within base when opted in', () => {
-    const result = validatePath(path.join(base, 'src/file.js'), base, { allowAbsolute: true });
-    assert.ok(result.safe);
+    const r = tryWithinRoot(path.join(base, 'src/file.js'), base, PathAcceptance.AbsoluteInsideRoot);
+    assert.ok(r !== null);
   });
 
   test('rejects absolute paths outside base even when opted in', () => {
-    const result = validatePath('/etc/passwd', base, { allowAbsolute: true });
-    assert.ok(!result.safe);
+    assert.equal(tryWithinRoot('/etc/passwd', base, PathAcceptance.AbsoluteInsideRoot), null);
   });
 
   test('rejects null bytes', () => {
-    const result = validatePath('src/\0evil.js', base);
-    assert.ok(!result.safe);
-    assert.ok(result.error.includes('null bytes'));
+    assert.throws(
+      () => assertWithinRoot('src/\0evil.js', base, 'test'),
+      /null bytes/,
+    );
   });
 
   test('rejects empty path', () => {
-    const result = validatePath('', base);
-    assert.ok(!result.safe);
+    assert.equal(tryWithinRoot('', base), null);
   });
 
   test('rejects non-string path', () => {
-    const result = validatePath(42, base);
-    assert.ok(!result.safe);
+    assert.equal(tryWithinRoot(42, base), null);
   });
 
   test('handles . and ./ correctly (stays in base)', () => {
-    const result = validatePath('.', base);
-    assert.ok(result.safe);
-    assert.equal(result.resolved, path.resolve(base));
+    const r = tryWithinRoot('.', base);
+    assert.ok(r !== null);
+    assert.equal(r, path.resolve(base));
   });
 
   test('handles complex traversal like src/../../..', () => {
-    const result = validatePath('src/../../../etc/shadow', base);
-    assert.ok(!result.safe);
+    assert.equal(tryWithinRoot('src/../../../etc/shadow', base), null);
   });
 
   test('allows path that resolves back into base after ..', () => {
-    const result = validatePath('src/../lib/file.js', base);
-    assert.ok(result.safe);
+    const r = tryWithinRoot('src/../lib/file.js', base);
+    assert.ok(r !== null);
   });
 
   // ─── Dangling symlink + non-canonical base regression coverage ───────────
@@ -146,9 +148,8 @@ describe('validatePath', () => {
       const linkPath = path.join(scratch, 'link.txt');
       const ok = withSymlinkGuard(t, () => fs.symlinkSync(targetPath, linkPath, 'file'));
       if (ok) {
-        const result = validatePath('link.txt', scratch);
-        assert.ok(result.safe, `expected safe:true, got error: ${result.error}`);
-        assert.equal(result.resolved, fs.realpathSync(targetPath));
+        const r = assertWithinRoot('link.txt', scratch, 'in-project symlink');
+        assert.equal(r, fs.realpathSync(targetPath));
       }
     } finally {
       cleanup(scratch);
@@ -164,8 +165,7 @@ describe('validatePath', () => {
       const linkPath = path.join(scratch, 'evil-link.txt');
       const ok = withSymlinkGuard(t, () => fs.symlinkSync(outsideTarget, linkPath, 'file'));
       if (ok) {
-        const result = validatePath('evil-link.txt', scratch);
-        assert.ok(!result.safe);
+        assert.equal(tryWithinRoot('evil-link.txt', scratch), null);
       }
     } finally {
       cleanup(scratch);
@@ -180,11 +180,9 @@ describe('validatePath', () => {
       const linkPath = path.join(scratch, 'dangling-link.txt');
       const ok = withSymlinkGuard(t, () => fs.symlinkSync(nonExistentOutsideTarget, linkPath, 'file'));
       if (ok) {
-        const result = validatePath('dangling-link.txt', scratch);
-        assert.ok(!result.safe, 'a dangling symlink must not be accepted as an in-project path');
-        assert.ok(
-          result.error && result.error.includes('unresolvable symbolic link'),
-          `expected the unresolvable-symlink error, got: ${result.error}`,
+        assert.throws(
+          () => assertWithinRoot('dangling-link.txt', scratch, 'test'),
+          /unresolvable symbolic link/,
         );
       }
     } finally {
@@ -199,9 +197,8 @@ describe('validatePath', () => {
       nc = makeNonCanonicalBase(scratch, t);
       if (nc) {
         fs.mkdirSync(path.join(nc.canonical, 'existingSub'));
-        const result = validatePath('existingSub/newfile.txt', nc.base);
-        assert.ok(result.safe, `expected safe:true, got error: ${result.error}`);
-        assert.equal(result.resolved, path.join(nc.canonical, 'existingSub', 'newfile.txt'));
+        const r = assertWithinRoot('existingSub/newfile.txt', nc.base, 'existing-subdir');
+        assert.equal(r, path.join(nc.canonical, 'existingSub', 'newfile.txt'));
       }
     } finally {
       cleanup(scratch);
@@ -217,9 +214,8 @@ describe('validatePath', () => {
       if (nc) {
         // Neither 'sub1' nor 'sub1/sub2' exist — the immediate-parent-only
         // fallback fails here, which is exactly the BLOCKER-2 scenario.
-        const result = validatePath('sub1/sub2/newfile.txt', nc.base);
-        assert.ok(result.safe, `expected safe:true, got error: ${result.error}`);
-        assert.equal(result.resolved, path.join(nc.canonical, 'sub1', 'sub2', 'newfile.txt'));
+        const r = assertWithinRoot('sub1/sub2/newfile.txt', nc.base, 'BLOCKER-2');
+        assert.equal(r, path.join(nc.canonical, 'sub1', 'sub2', 'newfile.txt'));
       }
     } finally {
       cleanup(scratch);
@@ -236,8 +232,11 @@ describe('validatePath', () => {
         // sub1/sub2 don't exist, and the .. segments escape not just the
         // not-yet-created subdirs but the base itself — the ancestor walk-up
         // must not turn this into an accepted path.
-        const result = validatePath('sub1/sub2/../../../escape.txt', nc.base);
-        assert.ok(!result.safe, 'escaping via .. through not-yet-created dirs must still be rejected');
+        assert.equal(
+          tryWithinRoot('sub1/sub2/../../../escape.txt', nc.base),
+          null,
+          'escaping via .. through not-yet-created dirs must still be rejected',
+        );
       }
     } finally {
       cleanup(scratch);
@@ -1209,3 +1208,284 @@ describe('SECURE: ASVS level scaling (#1627)', () => {
 });
   });
 }
+
+// ─── #4652: validatePath property tests (both directions) ────────────────────
+//
+// PR1: any relative path with `..` segments that resolves OUTSIDE the root is
+// ALWAYS rejected. PR2: any path that resolves INSIDE the root is ALWAYS
+// accepted. Both directions are required — a predicate rejecting everything
+// would vacuously satisfy PR1 alone.
+
+describe('containment properties (#4652)', () => {
+  // A path SEGMENT: letters/digits/dash/underscore, non-empty, never '.' or '..'
+  // by construction so every generated escaping path is escaping ONLY via the
+  // deliberately-injected `..` components below (never an accidental one).
+  const segmentArb = fc
+    .stringMatching(/^[A-Za-z0-9_-]+$/)
+    .filter((s) => s.length > 0 && s !== '.' && s !== '..');
+
+  test('PR1: a relative path with enough leading ".." segments to resolve OUTSIDE the root is ALWAYS rejected', () => {
+    fc.assert(fc.property(
+      fc.array(segmentArb, { minLength: 1, maxLength: 4 }), // base depth below an anchor
+      fc.integer({ min: 1, max: 8 }), // extra ".." beyond the base depth
+      fc.array(segmentArb, { minLength: 0, maxLength: 3 }), // trailing segments after escaping
+      (baseSegments, extraUp, tailSegments) => {
+        // Root sits `baseSegments.length` levels below a stable anchor.
+        const anchor = path.resolve('/gsd-root-anchor');
+        const root = path.join(anchor, ...baseSegments);
+        // Enough ".." to exit past the anchor itself, guaranteeing the resolved
+        // path is OUTSIDE root (and outside the anchor) regardless of anchor
+        // depth on this OS.
+        const upCount = baseSegments.length + extraUp;
+        const traversal = path.join(...Array(upCount).fill('..'), ...tailSegments, 'target');
+
+        const result = tryWithinRoot(traversal, root);
+        assert.strictEqual(
+          result,
+          null,
+          `traversal ${JSON.stringify(traversal)} against root ${root} must be rejected, got: ${JSON.stringify(result)}`,
+        );
+      },
+    ), { seed: 4652, numRuns: 200 });
+  });
+
+  test('PR2: a path that resolves INSIDE the root (no traversal beyond it) is ALWAYS accepted', () => {
+    fc.assert(fc.property(
+      fc.array(segmentArb, { minLength: 1, maxLength: 5 }),
+      (segments) => {
+        const root = path.resolve('/gsd-root-anchor-in');
+        const relPath = path.join(...segments);
+
+        const result = tryWithinRoot(relPath, root);
+        assert.strictEqual(
+          result !== null,
+          true,
+          `in-root path ${JSON.stringify(relPath)} against root ${root} must be accepted, got: ${JSON.stringify(result)}`,
+        );
+        assert.strictEqual(result, path.resolve(root, relPath));
+      },
+    ), { seed: 4652, numRuns: 200 });
+  });
+});
+
+// ─── #4652: cross-boundary containment — same escaping inputs, all four
+// boundaries, same rejection shape ────────────────────────────────────────────
+//
+// One shared list of escaping inputs is driven through all four containment
+// boundaries named in #4652 (todo complete, check predicate --phase-dir,
+// check decision-coverage-plan's resolvePath, check gap-analysis.plan-post).
+// Each boundary is asserted to reject with the SAME error shape:
+// `{ ok: false, reason: 'usage', message }` (ERROR_REASON.USAGE) under
+// `--json-errors`. None of these boundaries validate today, so every row is
+// expected to FAIL until the fix lands (RED).
+
+describe('cross-boundary containment — shared escaping inputs, same rejection shape (#4652)', () => {
+  const ESCAPING_INPUTS = ['../../escaped', '../sibling', 'a/../../b'];
+
+  function setupProject() {
+    const tmpDir = createTempProject();
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-x');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const pendingDir = path.join(tmpDir, '.planning', 'todos', 'pending');
+    fs.mkdirSync(pendingDir, { recursive: true });
+    return { tmpDir, phaseDir, pendingDir };
+  }
+
+  function assertUsageRejection(result, label) {
+    assert.strictEqual(
+      result.success,
+      false,
+      `${label} must be rejected (currently: ${result.success ? `SUCCEEDED with output ${result.output}` : 'failed for an unrelated reason'})`,
+    );
+    let parsed = null;
+    try { parsed = JSON.parse(result.error); } catch (_) { /* not JSON — also a failure to fix */ }
+    assert.ok(parsed, `${label}: stderr must be JSON under --json-errors, got: ${result.error}`);
+    assert.strictEqual(parsed.ok, false, `${label}: parsed.ok must be false`);
+    assert.strictEqual(parsed.reason, 'usage', `${label}: reason must be ERROR_REASON.USAGE ("usage"), got: ${parsed.reason}`);
+  }
+
+  for (const escaping of ESCAPING_INPUTS) {
+    test(`[RED #4652] "${escaping}" is rejected identically (reason: usage) at all four boundaries`, () => {
+      const { tmpDir } = setupProject();
+      try {
+        // Boundary 1: todo complete <name>
+        const todoResult = runGsdTools(['--json-errors', 'todo', 'complete', escaping], tmpDir);
+        assertUsageRejection(todoResult, `todo complete "${escaping}"`);
+
+        // Boundary 2: check predicate --phase-dir <dir>
+        const predicate = JSON.stringify({
+          kind: 'command-exit-zero',
+          command: 'true',
+        });
+        const predicateResult = runGsdTools(
+          ['--json-errors', 'check', 'predicate', '--predicate', predicate, '--phase-dir', escaping, '--raw'],
+          tmpDir,
+        );
+        assertUsageRejection(predicateResult, `check predicate --phase-dir "${escaping}"`);
+
+        // Boundary 3: check decision-coverage-plan <phase-dir> <context-path>
+        const contextPath = path.join(tmpDir, 'CONTEXT.md');
+        fs.writeFileSync(contextPath, '# Context\n\n<decisions>\n## Implementation Decisions\n\n- **D-01:** x\n</decisions>\n');
+        const decisionResult = runGsdTools(
+          ['--json-errors', 'query', 'check.decision-coverage-plan', escaping, contextPath],
+          tmpDir,
+        );
+        assertUsageRejection(decisionResult, `check decision-coverage-plan "${escaping}"`);
+
+        // Boundary 4: check gap-analysis.plan-post <phase-dir>
+        const gapResult = runGsdTools(
+          ['--json-errors', 'check', 'gap-analysis.plan-post', escaping, '--raw'],
+          tmpDir,
+        );
+        assertUsageRejection(gapResult, `check gap-analysis.plan-post "${escaping}"`);
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+  }
+});
+
+// ─── #4653: assertWithinRoot / tryWithinRoot — narrowed export ──────────────
+//
+// Phase 3 narrows the public surface: `validatePath` becomes module-internal
+// and two new exports appear, both returning a branded ContainedPath.
+// `assertWithinRoot` throws on escape (requireSafePath becomes a thin alias
+// of it); `tryWithinRoot` returns null on escape. Neither export exists yet
+// — this whole block is RED by construction (missing export, not a typo:
+// verified against the compiled gsd-core/bin/lib/security.cjs export list,
+// which lists only validatePath/loadTrustedGlobalRoots/requireSafePath/
+// scanForInjection/sanitizeForPrompt/sanitizeForDisplay/sanitizeLabel/
+// validateShellArg/safeJsonParse/validatePhaseNumber/validateFieldName/
+// validatePromptStructure).
+
+describe('assertWithinRoot / tryWithinRoot — narrowed export (#4653)', () => {
+  const base = '/projects/my-app';
+
+  describe('assertWithinRoot', () => {
+    test('returns the resolved path for a contained relative input', () => {
+      const resolved = assertWithinRoot('src/index.js', base);
+      assert.equal(resolved, path.resolve(base, 'src/index.js'));
+    });
+
+    test('returns the resolved path for an absolute input INSIDE the root when {allowAbsolute:true}', () => {
+      const resolved = assertWithinRoot(path.join(base, 'src/file.js'), base, null, PathAcceptance.AbsoluteInsideRoot);
+      assert.equal(resolved, path.resolve(base, 'src/file.js'));
+    });
+
+    test('throws on a ../ traversal escaping the root', () => {
+      assert.throws(() => assertWithinRoot('../../etc/passwd', base));
+    });
+
+    test('throws on an absolute path outside the root even with {allowAbsolute:true}', () => {
+      assert.throws(() => assertWithinRoot('/etc/passwd', base, null, PathAcceptance.AbsoluteInsideRoot));
+    });
+
+    test('throws on a null byte', () => {
+      assert.throws(() => assertWithinRoot('src/\0evil.js', base));
+    });
+
+    test('throws on empty input', () => {
+      assert.throws(() => assertWithinRoot('', base));
+    });
+
+    test('throws on non-string input', () => {
+      assert.throws(() => assertWithinRoot(42, base));
+    });
+
+    test('thrown message uses the label, matching requireSafePath\'s "<label> validation failed: <reason>" shape', () => {
+      assert.throws(
+        () => assertWithinRoot('../../etc/passwd', base, 'PRD file'),
+        /PRD file validation failed/,
+      );
+    });
+  });
+
+  describe('tryWithinRoot', () => {
+    test('returns the resolved path for a contained relative input', () => {
+      const resolved = tryWithinRoot('src/index.js', base);
+      assert.equal(resolved, path.resolve(base, 'src/index.js'));
+    });
+
+    test('returns the resolved path for an absolute input INSIDE the root when {allowAbsolute:true}', () => {
+      const resolved = tryWithinRoot(path.join(base, 'src/file.js'), base, PathAcceptance.AbsoluteInsideRoot);
+      assert.equal(resolved, path.resolve(base, 'src/file.js'));
+    });
+
+    test('returns exactly null (not "" and not the escaping path) for a ../ traversal escaping the root', () => {
+      const result = tryWithinRoot('../../etc/passwd', base);
+      assert.strictEqual(result, null);
+    });
+
+    test('returns exactly null for an absolute path outside the root even with {allowAbsolute:true}', () => {
+      const result = tryWithinRoot('/etc/passwd', base, PathAcceptance.AbsoluteInsideRoot);
+      assert.strictEqual(result, null);
+    });
+
+    test('returns exactly null for a null byte, empty input, and non-string input', () => {
+      assert.strictEqual(tryWithinRoot('src/\0evil.js', base), null);
+      assert.strictEqual(tryWithinRoot('', base), null);
+      assert.strictEqual(tryWithinRoot(42, base), null);
+    });
+
+    test('on a traversal escape, the return value does NOT contain the escaping path\'s basename', () => {
+      // Regression guard: the current validatePath shape populates `resolved`
+      // with the ESCAPING path on the traversal branch even when safe:false —
+      // a caller who ignores the boolean gets a usable attacker-controlled
+      // value. tryWithinRoot must not leak that value in any form; asserting
+      // strict null (above) already covers this, but this test additionally
+      // guards against a partial fix that returns '' or a truncated variant
+      // still containing the escaping basename.
+      const result = tryWithinRoot('../../etc/passwd', base);
+      assert.strictEqual(result, null);
+      const resultStr = String(result);
+      assert.ok(!resultStr.includes('passwd'), `leaked escaping path basename: ${resultStr}`);
+    });
+  });
+
+  // ── Parity: the two shapes must never drift ──────────────────────────────
+  //
+  // tryWithinRoot(p, root) returns non-null IFF assertWithinRoot(p, root)
+  // does not throw, and when both succeed the returned values are equal.
+  // Two exported shapes over one engine is a divergence pair by
+  // construction; this is the parity assertion for it. Seeded per this
+  // repo's fast-check convention (see the #4652 containment properties
+  // above in this same file).
+
+  test('parity: tryWithinRoot succeeds IFF assertWithinRoot does not throw, and values agree (#4653)', () => {
+    const root = path.resolve('/gsd-root-anchor-parity');
+    fc.assert(fc.property(
+      fc.string(),
+      (candidate) => {
+        let assertResult;
+        let assertThrew = false;
+        try {
+          assertResult = assertWithinRoot(candidate, root);
+        } catch {
+          assertThrew = true;
+        }
+        const tryResult = tryWithinRoot(candidate, root);
+
+        if (assertThrew) {
+          assert.strictEqual(tryResult, null, `assertWithinRoot threw for ${JSON.stringify(candidate)} but tryWithinRoot returned non-null: ${tryResult}`);
+        } else {
+          assert.notStrictEqual(tryResult, null, `assertWithinRoot succeeded for ${JSON.stringify(candidate)} but tryWithinRoot returned null`);
+          assert.strictEqual(tryResult, assertResult, `assertWithinRoot and tryWithinRoot disagree on resolved value for ${JSON.stringify(candidate)}`);
+        }
+      },
+    ), { seed: 4653, numRuns: 200 });
+  });
+
+  // ── Message-text contract ─────────────────────────────────────────────────
+  //
+  // A user-facing `reason` field elsewhere in the test suite asserts on the
+  // literal string "escapes allowed directory" (see the existing
+  // `validatePath` "rejects ../ traversal escaping base" test above). A
+  // refactor to assertWithinRoot/tryWithinRoot must not reword it.
+
+  test('escape rejection still carries the text "escapes allowed directory" (#4653)', () => {
+    assert.throws(
+      () => assertWithinRoot('../../etc/passwd', base),
+      /escapes allowed directory/,
+    );
+  });
+});

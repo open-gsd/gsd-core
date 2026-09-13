@@ -620,14 +620,11 @@ function readTextArgOrFile(cwd: string, value: string | undefined, filePath: str
 
   // Path traversal guard: ensure file resolves within project directory
   // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/unbound-method
-  const { validatePath } = require('./security.cjs') as { validatePath(filePath: unknown, baseDir: unknown, opts?: { allowAbsolute?: boolean }): { safe: boolean; resolved: string; error?: string } };
-  const pathCheck = validatePath(filePath, cwd, { allowAbsolute: true });
-  if (!pathCheck.safe) {
-    throw new Error(`${label} path rejected: ${pathCheck.error as string}`);
-  }
+  const { assertWithinRoot, PathAcceptance } = require('./security.cjs') as { assertWithinRoot(filePath: unknown, baseDir: unknown, label?: string | null, policy?: 'relative-only' | 'absolute-inside-root'): string; PathAcceptance: { RelativeOnly: 'relative-only'; AbsoluteInsideRoot: 'absolute-inside-root' } };
+  const contained = assertWithinRoot(filePath, cwd, `${label} path`, PathAcceptance.AbsoluteInsideRoot);
 
   try {
-    return fs.readFileSync(pathCheck.resolved, 'utf-8').trimEnd();
+    return fs.readFileSync(contained, 'utf-8').trimEnd();
   } catch {
     throw new Error(`${label} file not found: ${filePath}`);
   }

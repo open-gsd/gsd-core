@@ -34,6 +34,7 @@ const helpers = require('./helpers.cjs');
 const { runGsdTools, createTempProject, cleanup, TOOLS_PATH, captureFdSync } = helpers;
 const processSeam = require('./helpers/process-seam.cjs');
 const { collectSection } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // runGsdTools's legacy shape drops stderr on success, but the #3311 contract
 // is exactly that a conflict is VISIBLE — these tests must see stderr. Drive
@@ -43,7 +44,7 @@ function runToolsWithStderr(args, cwd, env = {}) {
   return processSeam.runNode([TOOLS_PATH, ...args], {
     cwd,
     env: { ...process.env, ...helpers.TEST_ENV_BASE, ...env },
-    timeoutMs: 60000,
+    timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
   });
 }
 

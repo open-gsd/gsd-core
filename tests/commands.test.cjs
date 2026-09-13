@@ -13,11 +13,13 @@ const { test, describe, after, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { runGsdTools, createTempProject, createTempDir, cleanup } = require('./helpers.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { gitOrThrow, throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 describe('history-digest command', () => {
   let tmpDir;
@@ -794,6 +796,226 @@ describe('todo complete command', () => {
       fs.existsSync(path.join(pendingDir, 'flag-probe.md')),
       'file must not move when a flag is rejected'
     );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// todo complete — containment boundary (#4327)
+//
+// cmdTodoComplete joins the externally-supplied `filename` into
+// todosDir(cwd)/pending with NO containment validation (src/commands.cts).
+// These tests prove the boundary is currently unconfined — a traversal name
+// is neither rejected before the existence check nor before the move.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('todo complete — containment boundary (#4327)', () => {
+  let tmpDir;
+  let pendingDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    pendingDir = path.join(tmpDir, '.planning', 'todos', 'pending');
+    fs.mkdirSync(pendingDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // ── Regressions: normal completion must keep working ─────────────────────
+
+  test('[regression] a valid existing todo name completes and the file moves to completed/', () => {
+    fs.writeFileSync(path.join(pendingDir, 'ok-name.md'), '---\nstatus: pending\n---\n');
+    const result = runGsdTools(['todo', 'complete', 'ok-name.md'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.ok(!fs.existsSync(path.join(pendingDir, 'ok-name.md')), 'removed from pending');
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'todos', 'completed', 'ok-name.md')),
+      'present in completed',
+    );
+  });
+
+  test('[regression] a name with dots like "2026-09-12.some.todo.md" completes', () => {
+    fs.writeFileSync(path.join(pendingDir, '2026-09-12.some.todo.md'), '---\nstatus: pending\n---\n');
+    const result = runGsdTools(['todo', 'complete', '2026-09-12.some.todo.md'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'todos', 'completed', '2026-09-12.some.todo.md')),
+      'dotted-name todo completes',
+    );
+  });
+
+  test('[regression] a missing name still produces the existing "Todo not found" error', () => {
+    const result = runGsdTools(['todo', 'complete', 'does-not-exist.md'], tmpDir);
+    assert.ok(!result.success, 'must still fail');
+    assert.ok(result.error.includes('not found'), 'error must still mention "not found"');
+  });
+
+  // ── MUST BE REJECTED — currently unconfined (RED) ─────────────────────────
+
+  const ESCAPING_NAMES = ['../../escaped', '../sibling.md', 'sub/name.md', 'a/../../b.md'];
+
+  for (const name of ESCAPING_NAMES) {
+    test(`[RED #4327] "todo complete ${name}" must be rejected (currently unconfined)`, () => {
+      const targetPath = path.join(pendingDir, name);
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, '---\nstatus: pending\n---\nSENTINEL\n');
+
+      const result = runGsdTools(['todo', 'complete', name], tmpDir);
+      assert.strictEqual(
+        result.success,
+        false,
+        `"${name}" must be rejected as an escaping/invalid todo name (currently ` +
+          `${result.success ? 'SUCCEEDED — unconfined join, no containment check' : 'failed for an unrelated reason'})`,
+      );
+    });
+  }
+
+  // '.' and '..' resolve to the pending dir itself (which IS inside the
+  // root, so containment passes) but are not a todo name — before #4652
+  // this fell through to an uncaught EISDIR with an absolute-path stack
+  // trace instead of a clean rejection.
+  for (const name of ['.', '..']) {
+    test(`[regression #4652] "todo complete ${name}" is rejected cleanly (no uncaught EISDIR / stack trace)`, () => {
+      const result = runGsdTools(['todo', 'complete', name], tmpDir);
+      assert.strictEqual(result.success, false, `"${name}" must be rejected`);
+      assert.ok(
+        !/at\s+\S+\s+\(.*\.c?ts?:\d+/.test(result.error || ''),
+        `rejection must not leak a stack trace (got: ${result.error})`,
+      );
+      assert.ok(
+        !(result.error || '').includes('EISDIR'),
+        `rejection must be a clean USAGE error, not an uncaught EISDIR (got: ${result.error})`,
+      );
+    });
+  }
+
+  test('[#4327] an absolute filename is rejected as a non-basename before any join — the outside file is untouched', () => {
+    // A basename guard added since #4327 rejects any filename containing `/`
+    // or `\` BEFORE it is ever joined against pendingDir — so an absolute
+    // path never reaches path.join, containment, or the filesystem at all.
+    // It is a USAGE rejection, not a containment/escape check and not a
+    // plain "not found". This test also pins the thing that actually
+    // matters: the real outside file is never read, moved, or deleted.
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-todo-outside-'));
+    try {
+      const outsideFile = path.join(outsideDir, 'evil.md');
+      const sentinel = '---\nstatus: pending\n---\nSENTINEL\n';
+      fs.writeFileSync(outsideFile, sentinel);
+      const result = runGsdTools(['--json-errors', 'todo', 'complete', outsideFile], tmpDir);
+
+      assert.strictEqual(result.success, false, 'the command must fail (a filename containing a separator is rejected)');
+      const parsed = JSON.parse(result.error);
+      assert.strictEqual(parsed.ok, false);
+      assert.strictEqual(parsed.reason, 'usage');
+      assert.ok(fs.existsSync(outsideFile), 'the real outside file must still exist');
+      assert.strictEqual(
+        fs.readFileSync(outsideFile, 'utf-8'),
+        sentinel,
+        'the real outside file must never be read/touched',
+      );
+      const completedDir = path.join(tmpDir, '.planning', 'todos', 'completed');
+      if (fs.existsSync(completedDir)) {
+        assert.ok(
+          !fs.readdirSync(completedDir).includes('evil.md'),
+          'the outside file must never land inside completed/',
+        );
+      }
+    } finally {
+      cleanup(outsideDir);
+    }
+  });
+
+  // ── CRITICAL ORDERING (#4327): the existence check AND the move target ────
+  // both follow the unvalidated join, so a rejection that happens after the
+  // read has already leaked. Prove the outside file is neither read-through
+  // nor moved/deleted by a (today, absent) rejection.
+
+  test('[RED #4327] CRITICAL ORDERING: a traversal name resolving to a real outside file is rejected WITHOUT the outside file being moved or deleted', () => {
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-todo-outside-'));
+    try {
+      const outsideFile = path.join(outsideDir, 'leak-target.md');
+      const sentinel = '---\nstatus: pending\n---\nSENTINEL-LEAK\n';
+      fs.writeFileSync(outsideFile, sentinel);
+      const relName = path.relative(pendingDir, outsideFile);
+
+      const result = runGsdTools(['todo', 'complete', relName], tmpDir);
+
+      assert.strictEqual(
+        result.success,
+        false,
+        `traversal name "${relName}" resolving to ${outsideFile} must be rejected`,
+      );
+      assert.ok(
+        fs.existsSync(outsideFile),
+        'the outside file must still exist — a rejected completion must not move/delete it',
+      );
+      assert.strictEqual(
+        fs.readFileSync(outsideFile, 'utf-8'),
+        sentinel,
+        'the outside file content must be byte-for-byte untouched',
+      );
+      const completedDir = path.join(tmpDir, '.planning', 'todos', 'completed');
+      if (fs.existsSync(completedDir)) {
+        assert.ok(
+          !fs.readdirSync(completedDir).includes('leak-target.md'),
+          'the outside file must never land inside completed/',
+        );
+      }
+    } finally {
+      cleanup(outsideDir);
+    }
+  });
+
+  test('[RED #4327] "todo complete <traversal> --dry-run" must be rejected — a dry run must not leak a resolved outside path', () => {
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-todo-outside-'));
+    try {
+      const outsideFile = path.join(outsideDir, 'dry-leak.md');
+      fs.writeFileSync(outsideFile, '---\nstatus: pending\n---\n');
+      const relName = path.relative(pendingDir, outsideFile);
+
+      const result = runGsdTools(['todo', 'complete', relName, '--dry-run'], tmpDir);
+
+      assert.strictEqual(
+        result.success,
+        false,
+        `dry-run completion of traversal name "${relName}" resolving to ${outsideFile} must be rejected`,
+      );
+    } finally {
+      cleanup(outsideDir);
+    }
+  });
+
+  test('[#4652] a symlink inside pending/ whose target is a real file outside the todos root is rejected — the outside target is untouched', (t) => {
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-todo-outside-'));
+    const linkPath = path.join(pendingDir, 'linked.md');
+    try {
+      const outsideFile = path.join(outsideDir, 'real-target.md');
+      const sentinel = '---\nstatus: pending\n---\nSENTINEL-SYMLINK\n';
+      fs.writeFileSync(outsideFile, sentinel);
+      try {
+        fs.symlinkSync(outsideFile, linkPath, 'file');
+      } catch (e) {
+        if (e.code === 'EPERM') {
+          t.skip('symlink creation is not permitted on this platform (EPERM)');
+          return;
+        }
+        throw e;
+      }
+
+      const result = runGsdTools(['todo', 'complete', 'linked.md'], tmpDir);
+
+      assert.strictEqual(result.success, false, 'a symlink pointing outside the todos root must be rejected');
+      assert.ok(fs.existsSync(outsideFile), 'the outside symlink target must still exist');
+      assert.strictEqual(
+        fs.readFileSync(outsideFile, 'utf-8'),
+        sentinel,
+        'the outside symlink target content must be byte-for-byte untouched',
+      );
+    } finally {
+      cleanup(outsideDir);
+      try { fs.unlinkSync(linkPath); } catch { /* not created, or already gone */ }
+    }
   });
 });
 
@@ -3199,7 +3421,7 @@ describe('commit-docs-guard hook script (#3588 A1-A5)', () => {
     const probe = spawnSync('git', ['config', '--get', 'core.hooksPath'], {
       cwd: tmpDir,
       encoding: 'utf-8',
-      timeout: 15_000,
+      timeout: GIT_TIMEOUT_MS,
     });
     assert.notEqual(probe.status, 0, `a child git must not see a host core.hooksPath; got: ${probe.stdout}`);
     assert.ok(fs.existsSync(hookPath), 'the beforeEach enable installed the hook at the repo-local default path');
@@ -4322,6 +4544,7 @@ const os = require('node:os');
 const path = require('path');
 const { spawnSync } = require('node:child_process');
 const { cleanup } = require('./helpers.cjs');
+const { GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const COMMAND_ALIASES_FILE = path.join(
@@ -4450,7 +4673,7 @@ function runGsdTools(args, projectDir) {
   return spawnSync(process.execPath, [GSD_TOOLS, ...args], {
     cwd: projectDir,
     encoding: 'utf8',
-    timeout: 30000,
+    timeout: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS,
     killSignal: 'SIGKILL',
   });
 }

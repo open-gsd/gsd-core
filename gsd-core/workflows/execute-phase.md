@@ -190,7 +190,12 @@ from the active incomplete plan in `INIT`, then search recent history:
 SUMMARY_PATH="{phase_dir}/{plan_padded}-SUMMARY.md"
 # #4003: no padding rule in the commit protocol, so zero-strip both components and
 # match ANCHORED at the commit scope; bound to the latest reachable tag (milestone marker).
-PHASE_N=$((10#{phase_number}))
+PHASE_NUMBER="{phase_number}"
+# #4619: {phase_number} may be decimal (01.1) or N-segment (23.1.2) — $((10#...))
+# is a hard shell syntax error on a non-integer, so zero-strip only the LEADING
+# integer segment and keep the rest as an escaped-dot string for the ERE below.
+PHASE_INT=${PHASE_NUMBER%%.*}; PHASE_FRAC=${PHASE_NUMBER#"$PHASE_INT"}
+PHASE_N="$((10#$PHASE_INT))${PHASE_FRAC//./\\.}"
 PLAN_N=$((10#{plan_padded}))
 PLAN_SCOPE_RE="^[a-z]+\((0*${PHASE_N})-(0*${PLAN_N})\):"
 MILESTONE_BASE=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
@@ -211,7 +216,10 @@ if [ "$TDD_MODE" = "true" ]; then
   if [ "$IS_BEHAVIOR_ADDING" = "true" ]; then
     # #4003: same anchored scope and milestone bound as safe_resume_gate — a padded
     # literal grep hard-halts on a correct unpadded RED commit.
-    PHASE_N=$((10#${PHASE_NUMBER}))
+    # #4619: PHASE_NUMBER may be decimal/N-segment; zero-strip only the leading
+    # integer segment, escape the rest for the ERE below.
+    PHASE_INT=${PHASE_NUMBER%%.*}; PHASE_FRAC=${PHASE_NUMBER#"$PHASE_INT"}
+    PHASE_N="$((10#$PHASE_INT))${PHASE_FRAC//./\\.}"
     PLAN_N=$((10#${PLAN_ID}))
     PLAN_SCOPE_RE="^[a-z]+\((0*${PHASE_N})-(0*${PLAN_N})\):"  # TDD gate's own scope check
     TDD_MILESTONE_BASE=$(git describe --tags --abbrev=0 2>/dev/null || echo "")

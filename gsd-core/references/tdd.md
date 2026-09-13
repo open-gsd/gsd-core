@@ -273,8 +273,11 @@ When `workflow.tdd_mode` is enabled in config, the RED/GREEN/REFACTOR gate seque
 After completing a `type: tdd` plan, the executor validates the git log:
 ```bash
 # The commit protocol promises no zero-padding for ${PHASE}/${PLAN} — strip both and
-# match the commit-scope position anchored (#4003).
-PHASE_N=$((10#${PHASE})); PLAN_N=$((10#${PLAN}))
+# match the commit-scope position anchored (#4003). #4619: PHASE may be decimal/
+# N-segment; zero-strip only the leading integer segment, escape the rest.
+PHASE_INT=${PHASE%%.*}; PHASE_FRAC=${PHASE#"$PHASE_INT"}
+PHASE_N="$((10#$PHASE_INT))${PHASE_FRAC//./\\.}"
+PLAN_N=$((10#${PLAN}))
 # Check for RED gate commit
 git log --oneline -E --grep="^test\((0*${PHASE_N})-(0*${PLAN_N})\):" | head -1
 # Check for GREEN gate commit  

@@ -56,7 +56,11 @@ describe('ci-test-scope.cjs', () => {
     assert.strictEqual(result.full_matrix, true);
     assert.ok(result.targeted_tests.includes('tests/workflow-shell-pinning.test.cjs'));
     assert.ok(result.targeted_tests.includes('tests/release-tarball-smoke-workflow.test.cjs'));
-    assert.ok(result.windows_tests.includes('tests/workflow-shell-pinning.test.cjs'));
+    // #4641: the `test` job's windows lane is deleted; full_matrix (already
+    // asserted true above) is the only Windows signal left, and classify()
+    // emits no windows_tests key at all.
+    assert.strictEqual(Object.hasOwn(result, 'windows_tests'), false,
+      `expected no windows_tests property, got keys: ${JSON.stringify(Object.keys(result))}`);
   });
 
   test('pipeline workflow (install-smoke.yml) — product_changed true, full_matrix true', () => {
@@ -307,18 +311,21 @@ describe('ci-test-scope superset invariant (#494, rescinded by #4421)', () => {
       `expected full_matrix=true for a tests/**-only change (rescinded #494 carve-out, see #4421), got: ${JSON.stringify(result)}`);
     assert.ok(result.targeted_tests.includes('tests/perf-317-context-monitor-fs.test.cjs'),
       `expected the changed test in targeted_tests, got: ${JSON.stringify(result.targeted_tests)}`);
-    assert.ok(result.windows_tests.includes('tests/perf-317-context-monitor-fs.test.cjs'),
-      `expected the changed test in windows_tests, got: ${JSON.stringify(result.windows_tests)}`);
+    // #4641: the `test` job's windows lane is deleted; full_matrix (already
+    // asserted true above) is the only Windows signal left.
+    assert.strictEqual(Object.hasOwn(result, 'windows_tests'), false,
+      `expected no windows_tests property, got keys: ${JSON.stringify(Object.keys(result))}`);
   });
 
-  test('A2: a changed test file with no windows hint still joins the windows lane and triggers full_matrix', () => {
-    // commands.test.cjs matches none of the WINDOWS_HINTS substrings — the
-    // unconditional changed-test → windows lane rule must include it anyway.
+  test('A2: a changed test file with no windows hint still triggers full_matrix, with no side lane (#4641)', () => {
+    // commands.test.cjs matches none of the WINDOWS_HINTS substrings — under
+    // the old #494/#4421 behavior it still joined the windows lane. Post-#4641
+    // there is no windows lane to join; full_matrix is the sole signal.
     const result = scopeFor(['tests/commands.test.cjs']);
     assert.strictEqual(result.full_matrix, true,
       `expected full_matrix=true (rescinded #494 carve-out, see #4421), got: ${JSON.stringify(result)}`);
-    assert.ok(result.windows_tests.includes('tests/commands.test.cjs'),
-      `expected hint-less changed test in windows_tests, got: ${JSON.stringify(result.windows_tests)}`);
+    assert.strictEqual(Object.hasOwn(result, 'windows_tests'), false,
+      `expected no windows_tests property, got keys: ${JSON.stringify(Object.keys(result))}`);
   });
 
   test('A3: a deleted/nonexistent test path falls back to the unit token; full_matrix now depends on conformance-tier reachability (#4592)', () => {
@@ -1029,6 +1036,66 @@ describe('#4592 reachability-based full_matrix classifier', () => {
   });
 });
 
+describe('#4641 windows lane removal: test-conformance becomes the sole Windows selector', () => {
+  const { classify } = require('../scripts/ci-test-scope.cjs');
+
+  // Case C: a changed test file that is not tagged in Phase 2's
+  // CONFORMANCE_TIER_FILES no longer needs to force a Windows run of its own —
+  // once the `test` job's `scope: windows` lane is deleted, the only Windows
+  // signal left is full_matrix (routed to test-conformance).
+  test('a non-tier test file no longer forces a Windows run (#4641)', () => {
+    const { CONFORMANCE_TIER_FILES } = require('../scripts/lib/platform-conformance-tier.generated.cjs');
+    const file = 'tests/some-brand-new-non-tier-4641.test.cjs';
+    assert.ok(!CONFORMANCE_TIER_FILES.includes(file), 'precondition: fixture path must not be tier-tagged');
+    const result = classify([file]);
+    assert.strictEqual(result.full_matrix, false,
+      `expected full_matrix=false for a non-conformance-tier test file, got: ${JSON.stringify(result)}`);
+  });
+
+  // Case D: post-#4641, classify() must not emit a `windows_tests` key at all —
+  // "absent" and "empty array" are different claims, and only the former
+  // matches a workflow with no windows_tests output to consume.
+  test('windows_tests is gone, not merely empty (#4641)', () => {
+    const result = classify(['tests/some-brand-new-non-tier-4641.test.cjs']);
+    assert.strictEqual(
+      Object.hasOwn(result, 'windows_tests'), false,
+      `expected classify() to return no windows_tests property at all, got keys: ${JSON.stringify(Object.keys(result))}`,
+    );
+  });
+
+  // Case E: the one non-redundant residue of the deleted windows lane — a
+  // RULE whose tests[] includes a filename matching isWindowsHint — must be
+  // preserved by escalating to full_matrix instead of a side lane.
+  // 'portability lint rules (ADR-1703)' pulls in
+  // tests/no-path-literal-in-assert.rule.test.cjs and
+  // tests/normalize-path-in-content.rule.test.cjs, both matching the 'path'
+  // hint in WINDOWS_HINTS, and today carries no fullMatrix of its own.
+  test('RULE-pulled windows-hint tests force full_matrix, not a side lane (#4641)', () => {
+    const file = 'eslint-rules/no-path-literal-in-assert.cjs';
+    const result = classify([file]);
+    assert.strictEqual(result.full_matrix, true,
+      `expected full_matrix=true because the matched rule pulls in a windows-hint test, got: ${JSON.stringify(result)}`);
+    assert.ok(
+      result.reasons.some(r => r.startsWith(`${file}: portability lint rules (ADR-1703)`)),
+      `expected reasons to name the windows-hint rule, got: ${JSON.stringify(result.reasons)}`,
+    );
+  });
+
+  // Case F: MUST-PASS pin, already covered by the "full_matrix true for a
+  // conformance-tier test file" test in the '#4592 reachability-based
+  // full_matrix classifier' describe block above — a changed test file that
+  // IS in CONFORMANCE_TIER_FILES still yields full_matrix=true. Restated here
+  // so the #4641 removal's regression surface is pinned in one place too.
+  test('a conformance-tier test file still yields full_matrix=true (#4641 pin)', () => {
+    const { CONFORMANCE_TIER_FILES } = require('../scripts/lib/platform-conformance-tier.generated.cjs');
+    assert.ok(CONFORMANCE_TIER_FILES.length > 0, 'precondition: committed tier list must be non-empty');
+    const file = CONFORMANCE_TIER_FILES[0];
+    const result = classify([file]);
+    assert.strictEqual(result.full_matrix, true,
+      `expected full_matrix=true for conformance-tier file ${file}, got: ${JSON.stringify(result)}`);
+  });
+});
+
 // ────────────────────────────────────────────────────────────────────────
 // Folded from tests/bug-641-files-from-suite-token.test.cjs — consolidation epic #1969 (B6 #1975)
 // ────────────────────────────────────────────────────────────────────────
@@ -1250,7 +1317,7 @@ describe('bug #1329 — ci-prepare-test-scope fallback never emits a deleted fil
       fs.writeFileSync(path.join(tmpDir, f), PASS_BODY, 'utf8');
     }
 
-    const lines = resolveSelection({ scope: 'targeted', targeted: '', windows: '', root: tmpDir });
+    const lines = resolveSelection({ scope: 'targeted', targeted: '', root: tmpDir });
 
     assert.ok(!lines.includes(absent), `absent file "${absent}" must be filtered out, got: ${lines.join(', ')}`);
     for (const f of present) {
@@ -1260,8 +1327,22 @@ describe('bug #1329 — ci-prepare-test-scope fallback never emits a deleted fil
 
   test('empty detection with no surviving fallback files falls back to the unit sentinel', () => {
     // tmpDir/tests exists but contains none of the FALLBACK files.
-    const lines = resolveSelection({ scope: 'windows', targeted: '', windows: '', root: tmpDir });
+    // #4641: this used to run under scope: 'windows'; that scope was retired
+    // with the windows CI lane. Re-pointed at 'targeted' (still empty-detected)
+    // to keep the fallback-sentinel contract covered.
+    const lines = resolveSelection({ scope: 'targeted', targeted: '', root: tmpDir });
     assert.deepStrictEqual(lines, [FALLBACK_SENTINEL]);
+  });
+
+  test('resolveSelection rejects the retired windows scope (#4641)', () => {
+    // #4641: the `test` job's `scope: windows` lane was deleted (see
+    // docs/adr/4641-windows-selector-consolidation.md). Do not restore this
+    // scope — resolveSelection must now fail loudly for it rather than
+    // silently falling back.
+    assert.throws(
+      () => resolveSelection({ scope: 'windows', targeted: '', root: tmpDir }),
+      /Unknown test scope: windows/,
+    );
   });
 
   test('detected list passes through verbatim — files and suite sentinels preserved, not existence-filtered', () => {
@@ -1270,7 +1351,6 @@ describe('bug #1329 — ci-prepare-test-scope fallback never emits a deleted fil
     const lines = resolveSelection({
       scope: 'targeted',
       targeted: 'tests/does-not-exist.test.cjs unit',
-      windows: '',
       root: tmpDir,
     });
     assert.deepStrictEqual(lines, ['tests/does-not-exist.test.cjs', 'unit']);
@@ -1288,7 +1368,7 @@ describe('bug #1329 — ci-prepare-test-scope fallback never emits a deleted fil
       [path.join(REPO_ROOT, 'scripts', 'ci-prepare-test-scope.cjs')],
       {
         cwd: tmpDir,
-        env: { ...process.env, TEST_SCOPE: 'targeted', TARGETED_TESTS: '', WINDOWS_TESTS: '' },
+        env: { ...process.env, TEST_SCOPE: 'targeted', TARGETED_TESTS: '' },
         timeoutMs: PROBE_TIMEOUT_MS,
       },
     );

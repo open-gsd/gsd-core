@@ -100,6 +100,15 @@ function saveSurfacedEnv() {
 // Require capability-state to assert gate parity in regression tests below.
 const { isCapabilityActive } = require('../gsd-core/bin/lib/capability-state.cjs');
 
+/**
+ * NOT a real subprocess timeout. spawnSync is fully mocked in this test --
+ * this is test-input/fixture data proving an explicit timeout override is
+ * correctly forwarded from execGraphify's options into the (fake) spawnSync
+ * call. Renamed at BOTH the call site and the assertion site so the
+ * override-forwarding check keeps its teeth.
+ */
+const MOCK_TIMEOUT_OVERRIDE_FIXTURE_MS = 60000;
+
 describe('status', () => {
   // ─── Tri-state gate (Phase 3 cutover from isGraphifyEnabled → isCapabilityActive) ──
   //
@@ -535,8 +544,8 @@ describe('build', () => {
         return { status: 0, stdout: '', stderr: '', error: undefined, signal: null };
       });
 
-      execGraphify('/tmp', ['build'], { timeout: 60000 });
-      assert.strictEqual(captured.timeout, 60000);
+      execGraphify('/tmp', ['build'], { timeout: MOCK_TIMEOUT_OVERRIDE_FIXTURE_MS });
+      assert.strictEqual(captured.timeout, MOCK_TIMEOUT_OVERRIDE_FIXTURE_MS);
     });
 
     test('trims stdout and stderr whitespace', () => {

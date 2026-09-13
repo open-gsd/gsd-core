@@ -95,7 +95,9 @@ const FIXTURE_DIR = path.join(__dirname, 'fixtures', 'adversarial', 'security');
 const {
   scanForInjection,
   sanitizeForPrompt,
-  validatePath,
+  assertWithinRoot,
+  tryWithinRoot,
+  PathAcceptance,
   validateShellArg,
   validatePhaseNumber,
   validateFieldName,
@@ -618,20 +620,24 @@ describe('validatePath: hostile path values are rejected before write', () => {
   afterEach(() => { cleanup(tmpDir); });
 
   test('parent-directory traversal is rejected', () => {
-    const r = validatePath('../../etc/passwd', path.join(tmpDir, '.planning'));
-    assert.strictEqual(r.safe, false);
-    assert.ok(typeof r.error === 'string' && r.error.length > 0);
+    assert.throws(
+      () => assertWithinRoot('../../etc/passwd', path.join(tmpDir, '.planning'), 'test'),
+      /.+/,
+    );
   });
 
   test('absolute path outside base is rejected', () => {
-    const r = validatePath('/etc/passwd', path.join(tmpDir, '.planning'), { allowAbsolute: true });
-    assert.strictEqual(r.safe, false);
+    assert.equal(
+      tryWithinRoot('/etc/passwd', path.join(tmpDir, '.planning'), PathAcceptance.AbsoluteInsideRoot),
+      null,
+    );
   });
 
   test('null byte in path is rejected', () => {
-    const r = validatePath('plan .md', path.join(tmpDir, '.planning'));
-    assert.strictEqual(r.safe, false);
-    assert.match(r.error, /null byte/i);
+    assert.throws(
+      () => assertWithinRoot('plan .md', path.join(tmpDir, '.planning'), 'test'),
+      /null byte/i,
+    );
   });
 
   test('symlink escaping the base is rejected', () => {
@@ -640,8 +646,7 @@ describe('validatePath: hostile path values are rejected before write', () => {
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3596-escape-'));
     const linkInside = path.join(base, 'escape-link');
     fs.symlinkSync(outside, linkInside);
-    const r = validatePath('escape-link/anything', base);
-    assert.strictEqual(r.safe, false,
+    assert.equal(tryWithinRoot('escape-link/anything', base), null,
       'a symlink whose target is outside the base must fail containment');
     // Cleanup the outside dir; the link itself is cleaned by cleanup(tmpDir).
     cleanup(outside);

@@ -38,7 +38,7 @@ const { listMilestonePhaseDirs, getAllArchivedPhaseDirs } = phaseLocator;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import auditMod = require('./audit.cjs');
 const { isAuditItemAcknowledged, deriveUatGapSnapshotValue } = auditMod;
-import { requireSafePath, sanitizeForDisplay } from './security.cjs';
+import { requireSafePath, sanitizeForDisplay, PathAcceptance } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
 import configLoader = require('./config-loader.cjs');
 const { loadConfig } = configLoader;
@@ -403,7 +403,7 @@ function cmdRenderCheckpoint(cwd: string, options: { file?: string } = {}, raw: 
     error('UAT file required: use uat render-checkpoint --file <path>');
   }
 
-  const resolvedPath = requireSafePath(filePath, cwd, 'UAT file', { allowAbsolute: true });
+  const resolvedPath = requireSafePath(filePath, cwd, 'UAT file', PathAcceptance.AbsoluteInsideRoot);
   if (!fs.existsSync(resolvedPath)) {
     error(`UAT file not found: ${filePath}`);
   }

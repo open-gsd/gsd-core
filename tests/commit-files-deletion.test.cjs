@@ -12,7 +12,9 @@
 const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const { createTempGitProject, cleanup, runGsdTools } = require('./helpers.cjs');
 const fc = require('fast-check');
 const { collectListFlagValues, COMMIT_LIST_FLAGS } = require('../gsd-core/bin/gsd-tools.cjs');
@@ -487,6 +489,49 @@ describe('commit --files-removed: index states absent by design are never remova
   beforeEach(() => { tmpDir = createTempGitProject(); stray = null; });
   afterEach(() => { cleanup(tmpDir); if (stray) cleanup(stray); });
 
+  // Deterministic, privilege-independent restore-failure injection.
+  // `chmod a-w` on the git dir (as this file's other restore-failure tests
+  // used to) relies on the OS enforcing the *owner's own* permission bits
+  // against itself -- which root, a routine identity inside a Docker-based
+  // CI bench, does not: every DAC check short-circuits true for uid 0, so the
+  // write the chmod meant to block SUCCEEDS, the restore silently comes back
+  // clean, and the disclosure this test exists to pin never fires. That is
+  // this repo's own named anti-pattern for I/O-failure injection (see
+  // CLAUDE.md "Cross-platform test IO-failure injection") -- and it was the
+  // actual root cause here: the two tests below failed under a real remote
+  // `gsd-test` run against unmodified `next` (root inside the bench
+  // container) while passing on an unprivileged workstation, and every OTHER
+  // fault-injection test in this file that does NOT depend on a permission
+  // check (the timeout hook two tests down that just sleeps; the mode-flip
+  // hook after it that runs a real `update-index`) passed in that same run.
+  // The fix here targets the CALL, not a permission bit: a fake `git` ahead
+  // of the real one on PATH turns `update-index --add --cacheinfo` — the one
+  // and only call the restore path makes — into a hard failure unconditionally,
+  // in any process regardless of uid. Every other invocation execs straight
+  // through to the real binary, so the rest of the commit (the `rm --cached`,
+  // the verification `ls-files`, etc.) behaves exactly as it does today.
+  function findRealGit() {
+    return execFileSync('command', ['-v', 'git'], { shell: '/bin/sh', timeout: GIT_TIMEOUT_MS }).toString().trim();
+  }
+  function installCacheinfoRestoreFailureShim() {
+    const realGit = findRealGit();
+    const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-fake-git-'));
+    fs.writeFileSync(path.join(shimDir, 'git'), [
+      '#!/bin/sh',
+      'has_cacheinfo=0',
+      'for arg in "$@"; do',
+      '  if [ "$arg" = "--cacheinfo" ]; then has_cacheinfo=1; fi',
+      'done',
+      'if [ "$1" = "update-index" ] && [ "$has_cacheinfo" = "1" ]; then',
+      '  echo "fake-git: forced update-index --cacheinfo failure for test" >&2',
+      '  exit 1',
+      'fi',
+      `exec "${realGit}" "$@"`,
+      '',
+    ].join('\n'), { mode: 0o755 });
+    return { shimDir, path: `${shimDir}${path.delimiter}${process.env.PATH}` };
+  }
+
   test('a directory entry leaves a hand-deleted submodule gitlink in the index and records only the file move', () => {
     seedMove();
     addSubmoduleThenDeleteDir();
@@ -705,14 +750,15 @@ describe('commit --files-removed: index states absent by design are never remova
   });
 
   test('a removal the call cannot put back is reported, never as nothing_to_commit',
-    { skip: process.platform === 'win32' ? 'chmod cannot make a directory unwritable on Windows (driven: a write into a ReadOnly directory succeeds), so the fixture cannot drive a failed restore' : false },
+    { skip: process.platform === 'win32' ? 'the fault-injection shim is a #!/bin/sh script resolved via PATH; Windows git resolution needs a .exe/.cmd shim, a separate fixture' : false },
     (t) => {
     // The restore is best-effort, so it can FAIL -- and reporting
     // nothing_to_commit over a removal we tried and could not undo is the same
     // false "no state changed" the restore exists to prevent, one level down.
-    // Driven with a post-index-change hook that makes the git dir unwritable
-    // the moment `rm --cached` lands, so the `update-index --cacheinfo` restore
-    // cannot take its lock.
+    // Driven with a fake `git` ahead of the real one on PATH that fails the
+    // one call the restore makes (`update-index --add --cacheinfo`) — see
+    // installCacheinfoRestoreFailureShim's header for why this replaced a
+    // chmod-based hook.
     fs.mkdirSync(path.join(tmpDir, PENDING), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, PENDING, 'seed.md'), 'seed\n');
     git(['add', '.planning/']);
@@ -720,29 +766,14 @@ describe('commit --files-removed: index states absent by design are never remova
     fs.writeFileSync(path.join(tmpDir, PENDING, 'gone.md'), 'gone\n');
     git(['add', path.join(PENDING, 'gone.md')]);
     fs.unlinkSync(path.join(tmpDir, PENDING, 'gone.md'));
-    const gitDir = path.join(tmpDir, '.git');
-    const hooksDir = path.join(gitDir, 'hooks');
-    fs.mkdirSync(hooksDir, { recursive: true });
-    fs.writeFileSync(path.join(hooksDir, 'post-index-change'),
-      '#!/bin/sh\nchmod a-w "$(git rev-parse --git-dir)"\n', { mode: 0o755 });
-    // Give the dir back in a FINALLY below, not only in `t.after`: t.after runs
-    // AFTER the parent afterEach, so a throw between the hook and the explicit
-    // chmod leaves afterEach unable to delete the fixture. t.after stays as a
-    // belt for the case where the finally itself is skipped.
-    t.after(() => { try { fs.chmodSync(gitDir, 0o755); } catch { /* already writable */ } });
-    const emptyConfig = path.join(tmpDir, 'empty.gitconfig');
-    fs.writeFileSync(emptyConfig, '');
+    const shim = installCacheinfoRestoreFailureShim();
+    t.after(() => cleanup(shim.shimDir));
 
-    let result;
-    try {
-      result = runGsdTools(
-        ['commit', 'docs: remove an uncommitted path', '--files-removed', '.planning/todos/pending/gone.md'],
-        tmpDir,
-        { GIT_CONFIG_GLOBAL: emptyConfig, GIT_CONFIG_NOSYSTEM: '1' },
-      );
-    } finally {
-      fs.chmodSync(gitDir, 0o755);
-    }
+    const result = runGsdTools(
+      ['commit', 'docs: remove an uncommitted path', '--files-removed', '.planning/todos/pending/gone.md'],
+      tmpDir,
+      { PATH: shim.path },
+    );
     const parsed = JSON.parse(result.output);
     assert.strictEqual(parsed.committed, false, result.output);
     assert.notStrictEqual(parsed.reason, 'nothing_to_commit', 'a removal left staged must never be reported as no state change');
@@ -752,38 +783,29 @@ describe('commit --files-removed: index states absent by design are never remova
   });
 
   test('a rollback that cannot restore a removal discloses it, even when the reported failure is another entry',
-    { skip: process.platform === 'win32' ? 'chmod cannot make a directory unwritable on Windows (driven: a write into a ReadOnly directory succeeds), so the fixture cannot drive a failed restore' : false },
+    { skip: process.platform === 'win32' ? 'the fault-injection shim is a #!/bin/sh script resolved via PATH; Windows git resolution needs a .exe/.cmd shim, a separate fixture' : false },
     (t) => {
     // The rollback exit reports the failure that CAUSED it -- here a
     // contradictory declaration about a path still on disk -- so a caller
     // reading `failures` would learn nothing about the removal this call had
     // already staged and then could not put back. Both must be disclosed.
+    // Driven with the same fake-`git` restore-failure shim as the test above
+    // (see installCacheinfoRestoreFailureShim's header).
     seedMove();
     fs.writeFileSync(path.join(tmpDir, PENDING, 'stays.md'), 'stays\n');
     git(['add', path.join(PENDING, 'stays.md')]);
     git(['commit', '-q', '-m', 'seed a present todo']);
-    const gitDir = path.join(tmpDir, '.git');
-    const hooksDir = path.join(gitDir, 'hooks');
-    fs.mkdirSync(hooksDir, { recursive: true });
-    fs.writeFileSync(path.join(hooksDir, 'post-index-change'),
-      '#!/bin/sh\nchmod a-w "$(git rev-parse --git-dir)"\n', { mode: 0o755 });
-    t.after(() => { try { fs.chmodSync(gitDir, 0o755); } catch { /* already writable */ } });
-    const emptyConfig = path.join(tmpDir, 'empty.gitconfig');
-    fs.writeFileSync(emptyConfig, '');
+    const shim = installCacheinfoRestoreFailureShim();
+    t.after(() => cleanup(shim.shimDir));
 
-    let result;
-    try {
-      // mine.md was moved away (a real removal); stays.md is still on disk, so
-      // declaring it removed contradicts the declaration and fails the call.
-      result = runGsdTools(
-        ['commit', 'docs: bad declaration',
-          '--files-removed', '.planning/todos/pending/mine.md', '.planning/todos/pending/stays.md'],
-        tmpDir,
-        { GIT_CONFIG_GLOBAL: emptyConfig, GIT_CONFIG_NOSYSTEM: '1' },
-      );
-    } finally {
-      fs.chmodSync(gitDir, 0o755);
-    }
+    // mine.md was moved away (a real removal); stays.md is still on disk, so
+    // declaring it removed contradicts the declaration and fails the call.
+    const result = runGsdTools(
+      ['commit', 'docs: bad declaration',
+        '--files-removed', '.planning/todos/pending/mine.md', '.planning/todos/pending/stays.md'],
+      tmpDir,
+      { PATH: shim.path },
+    );
     const parsed = JSON.parse(result.output);
     assert.strictEqual(parsed.reason, 'staging_failed', result.output);
     assert.strictEqual(parsed.file, '.planning/todos/pending/stays.md', 'the REPORTED failure is still the contradictory declaration');

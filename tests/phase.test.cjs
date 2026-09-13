@@ -19,6 +19,11 @@ const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { toLegacyResult } = require('./helpers/git-fixture.cjs');
+const {
+  GIT_TIMEOUT_MS,
+  LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
+  PROBE_TIMEOUT_MS,
+} = require('./helpers/timeouts.cjs');
 
 // `phase complete` against a real STATE.md rewrite; matches the 60000ms bound
 // already used for the same CLI call elsewhere in this file (runPhaseComplete
@@ -2528,7 +2533,7 @@ describe('phase add allocation vs sibling git worktrees (#3849)', () => {
   const activeDirs = [];
 
   function git(args, cwd) {
-    return execFileSync('git', args, { cwd, encoding: 'utf-8', timeout: 15_000 });
+    return execFileSync('git', args, { cwd, encoding: 'utf-8', timeout: GIT_TIMEOUT_MS });
   }
 
   function initRepo(repoDir) {
@@ -2700,7 +2705,7 @@ describe('phase add --ws workstream-scoped allocation vs sibling git worktrees (
   const activeDirs = [];
 
   function git(args, cwd) {
-    return execFileSync('git', args, { cwd, encoding: 'utf-8', timeout: 15_000 });
+    return execFileSync('git', args, { cwd, encoding: 'utf-8', timeout: GIT_TIMEOUT_MS });
   }
 
   /**
@@ -6577,7 +6582,7 @@ function runPhaseComplete(tmpDir, { phase = '1', tolerateExit = false } = {}) {
   try {
     return execFileSync('node', [GSD_TOOLS_BIN, 'phase', 'complete', phase], {
       cwd: tmpDir,
-      timeout: 60000,
+      timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -9379,7 +9384,7 @@ function run(args, cwd) {
     return {
       stdout: execFileSync('node', [gsdTools, ...args], {
         cwd,
-        timeout: 15000,
+        timeout: PROBE_TIMEOUT_MS,
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
       }),
@@ -9749,7 +9754,7 @@ function run2853(args, cwd) {
   try {
     return {
       stdout: execFileSync('node', [gsdTools2853, ...args], {
-        cwd, timeout: 15000, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
+        cwd, timeout: PROBE_TIMEOUT_MS, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
       }),
       ok: true,
     };

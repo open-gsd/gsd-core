@@ -12,6 +12,7 @@ const { createFixture, seedPhase } = require('./fixtures/index.cjs');
 const { createTempProject, createTempDir } = require('./helpers.cjs');
 const { executionContextRefs } = require('../scripts/command-contract-helpers.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
+const { GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 /**
  * #3188: write the canonical flat planning docs so an init-query "present" test
@@ -3711,7 +3712,7 @@ describe('init section manifest', () => {
       cwd,
       encoding: 'utf8',
       env: { ...process.env, GSD_JSON_ERRORS: '1', ...env },
-      timeout: 30000,
+      timeout: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS,
     });
     let stdout = result.stdout || '';
     // output() spills payloads over 50KB to a tmpfile and prints "@file:<path>"

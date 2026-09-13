@@ -596,6 +596,7 @@
   "hooks/lib/cli-exit.js",
   "hooks/lib/cursor-workspace.js",
   "hooks/lib/exit-code-registry.js",
+  "hooks/lib/filename-classification.js",
   "hooks/lib/git-cmd.js",
   "hooks/lib/git-probe.js",
   "hooks/lib/gsd-graphify-rebuild.sh",

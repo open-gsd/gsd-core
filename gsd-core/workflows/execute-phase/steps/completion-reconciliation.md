@@ -27,7 +27,10 @@ block indefinitely waiting for a signal; verify via filesystem and git state.
 # For each plan in this wave, check if the executor finished:
 SUMMARY_EXISTS=$(test -f "{phase_dir}/{plan_number}-{plan_padded}-SUMMARY.md" && echo "true" || echo "false")
 # #4003: anchored, zero-pad-tolerant scope (see safe_resume_gate); --since stays.
-SPOT_PHASE_N=$((10#{phase_number}))
+SPOT_PHASE_NUMBER="{phase_number}"
+# #4619: same decimal/N-segment handling as safe_resume_gate.
+SPOT_PHASE_INT=${SPOT_PHASE_NUMBER%%.*}; SPOT_PHASE_FRAC=${SPOT_PHASE_NUMBER#"$SPOT_PHASE_INT"}
+SPOT_PHASE_N="$((10#$SPOT_PHASE_INT))${SPOT_PHASE_FRAC//./\\.}"
 SPOT_PLAN_N=$((10#{plan_padded}))
 COMMITS_FOUND=$(git log --oneline --all -E --grep="^[a-z]+\((0*${SPOT_PHASE_N})-(0*${SPOT_PLAN_N})\):" --since="1 hour ago" | head -1)
 COMMITS_SINCE_DISPATCH=$(git log "${EXPECTED_BRANCH}" --since="${DISPATCH_TS}" --oneline | head -1)

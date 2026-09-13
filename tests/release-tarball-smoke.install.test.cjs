@@ -511,25 +511,42 @@ function safeRealpath(p) {
 
 describe('bug-131: runNpm isolates HOME from the caller environment', () => {
   // ── Test 1 — runNpm works with an unwritable HOME ────────────────────────
-  // Spawn a child Node process that sets HOME to a chmod-0500 directory, then
-  // invokes runNpm(['--version']). Without the fix, npm tries to read/write
-  // HOME/.npmrc and HOME/.npm, fails with EACCES, and runNpm throws.
-  // With the fix, runNpm injects its own isolated HOME and npm succeeds.
+  // Spawn a child Node process that sets HOME to an unwritable directory, then
+  // invokes runNpm(['cache', 'verify']). `npm --version` performs zero
+  // filesystem I/O against HOME/.npm or HOME/.npmrc on modern npm, and even
+  // `npm config get cache` only *resolves* the cache path as a string without
+  // touching disk — both stay green even without HOME isolation, making the
+  // assertion vacuous. `npm cache verify` genuinely creates/reads/writes the
+  // cache directory under HOME (mkdir _cacache, write logs), so without the
+  // fix it fails with ENOTDIR against the unwritable HOME, and with the fix
+  // runNpm's injected isolated HOME lets it succeed. (Proven empirically: with
+  // this exact probe, neutralising runNpm()'s isolation flips this test from
+  // green to red, whereas `npm config get cache` stayed green either way.)
   test('runNpm succeeds even when process HOME is unwritable', () => {
-    // Create an unwritable dir to serve as a poisoned HOME.
-    const poisonedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-bug131-poison-'));
+    // Simulate an unwritable HOME with a mechanism that holds for every uid,
+    // including root (as gsd-test Docker benches run). chmod 0o500 is
+    // insufficient because root bypasses mode bits entirely, silently making
+    // this assertion vacuous under root — see CLAUDE.md section 4. Instead,
+    // make the PARENT of "HOME" a regular file rather than a directory: any
+    // attempt to create or write an entry under a non-directory parent fails
+    // with ENOTDIR at the filesystem/VFS level, a property that has nothing
+    // to do with permission bits and therefore cannot be bypassed by root.
+    const poisonedHomeBlocker = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-bug131-poison-'));
+    const blockerFile = path.join(poisonedHomeBlocker, 'blocker');
+    fs.writeFileSync(blockerFile, ''); // regular file, not a directory
+    const poisonedHome = path.join(blockerFile, 'home'); // parent is a file → ENOTDIR
     try {
-      fs.chmodSync(poisonedHome, 0o500); // r-x only — not writable
 
       // We exercise the real runNpm() path by running a tiny inline Node script
-      // that requires helpers.cjs and calls runNpm(['--version']) with HOME set
-      // to the unwritable dir. The script exits 0 on success, non-zero on throw.
+      // that requires helpers.cjs and calls runNpm(['cache', 'verify']) with
+      // HOME set to the unwritable dir. The script exits 0 on success, non-zero
+      // on throw.
       const script = `
         process.env.HOME = ${JSON.stringify(poisonedHome)};
         process.env.USERPROFILE = ${JSON.stringify(poisonedHome)};
         const { runNpm } = require(${JSON.stringify(path.join(__dirname, 'helpers.cjs'))});
         try {
-          const out = runNpm(['--version']);
+          const out = runNpm(['cache', 'verify']);
           if (!out || out.trim() === '') process.exit(2); // vacuous success guard
           process.stdout.write(out);
           process.exit(0);
@@ -558,16 +575,16 @@ describe('bug-131: runNpm isolates HOME from the caller environment', () => {
         0,
         `runNpm should succeed with an unwritable HOME but exited ${exitCode}. stderr: ${stderr}`,
       );
-      // npm --version returns something like "10.x.y"
+      // npm cache verify reports what it found/fixed in the cache directory.
       assert.match(
-        stdout.trim(),
-        /^\d+\.\d+/,
-        `expected semver output from npm --version, got: ${stdout}`,
+        stdout,
+        /cache verified|content verified/i,
+        `expected npm cache verify output, got: ${stdout}`,
       );
     } finally {
-      // Restore write permission before cleanup so the directory can be deleted.
-      try { fs.chmodSync(poisonedHome, 0o700); } catch (_) { /* best-effort */ }
-      cleanup(poisonedHome);
+      // poisonedHome itself was never created (its parent is a file), so only
+      // the directory holding the blocker file needs cleanup.
+      cleanup(poisonedHomeBlocker);
     }
   });
 

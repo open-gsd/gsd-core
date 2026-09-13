@@ -19,6 +19,7 @@ import {
 import { platformWriteSync, retryRenameSync, posixNormalize } from './shell-command-projection.cjs';
 import { realClock, type Clock } from './clock.cjs';
 import { isInstallScopeId, type InstallScope } from './install-scope.cjs';
+import { tryWithinRootLexical } from './security.cjs';
 // #2874 (ADR-58 cleanup phase): this file is the ~1200-line migration
 // plan/apply/rollback/lock/journal engine — almost none of it is on the
 // installRuntimeArtifacts call tree. Only `readInstallManifest` and
@@ -664,11 +665,30 @@ interface EnsureInsideConfigResult {
   fullPath: string;
 }
 
+// DELIBERATELY LEXICAL — the RESOLUTION policy stays lexical, never realpath
+// (`assertWithinRoot` / `tryWithinRoot`, src/security.cts).
+//
+// Reviewed under epic #4636 Phase 3 and reverted after the remote matrix proved
+// the realpath collapse wrong. This module's contract is that a symlinked
+// managed path is treated AS A LINK and never dereferenced — it is snapshotted
+// as a link, restored as a link, and backed up as a link. The realpath-based
+// predicate dereferences exactly the symlinks this module exists to preserve
+// and then rejects them for escaping configDir
+// ("migration path escapes configDir: extensions/gsd.cjs"). Four tests in
+// tests/installer-migrations.test.cjs pin that behavior.
+//
+// The containment DECISION now routes through the canonical LEXICAL predicate
+// (`tryWithinRootLexical`, ADR-4650 decision 6) — only the comparison moved;
+// the lexical policy itself remains this module's own required choice, and
+// the thrown message / returned `fullPath` are unchanged.
+//
+// `normalizeRelPath` is the pre-gate: it throws on absolute paths and on any
+// '..' segment BEFORE this runs, so the check below is defense-in-depth over
+// already-traversal-free input rather than the primary boundary.
 function ensureInsideConfig(configDir: string, relPath: string): EnsureInsideConfigResult {
   const normalized = normalizeRelPath(relPath);
   const fullPath = path.resolve(configDir, normalized);
-  const root = path.resolve(configDir);
-  if (fullPath !== root && !fullPath.startsWith(root + path.sep)) {
+  if (tryWithinRootLexical(fullPath, configDir) === null) {
     throw new Error(`migration path escapes configDir: ${relPath}`);
   }
   return { normalized, fullPath };

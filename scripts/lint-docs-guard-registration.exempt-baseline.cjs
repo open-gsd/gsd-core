@@ -125,8 +125,12 @@ const DOCS_GUARD_EXEMPT_DOCS_PATHS = {
     'docs/how-to/some-unrelated-guide.md', 'docs/how-to/x.md', 'docs/some-unrelated-file.md',
     'docs/totally-unrelated.md',
   ],
+  // #4641: cites docs/adr/4641-windows-selector-consolidation.md in an
+  // explanatory comment describing why the retired `windows` scope must not
+  // be restored; the file never reads that (or any) docs/ file.
   'ci-test-scope.test.cjs': [
-    'docs/a.md', 'docs/adr', 'docs/adr/22-plan-drift-guard.md', 'docs/how-to/configure-model-profiles.md',
+    'docs/a.md', 'docs/adr', 'docs/adr/22-plan-drift-guard.md',
+    'docs/adr/4641-windows-selector-consolidation.md', 'docs/how-to/configure-model-profiles.md',
     'docs/installer-migrations.md', 'docs/ja-JP', 'docs/ja-JP/USAGE.md', 'docs/usage.md', 'docs/x.md',
   ],
   'cline-install.test.cjs': ['docs/guide.md'],

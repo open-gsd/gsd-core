@@ -35,6 +35,27 @@
  * is the safe direction — a false positive costs one extra test running on a
  * real OS; a false negative silently drops real-OS coverage).
  *
+ * That stance is a correct per-file tiebreak, but proved wrong in aggregate
+ * (#4641): applied to two categories that matched the house test idiom
+ * rather than a genuine platform signal, it produced a Windows "tier" of
+ * 547 of 931 eligible unit-suite files (58.8%, measured 2026-09-11) — most
+ * of the suite. Measured per-category UNIQUE (sole-signal, i.e. the file
+ * would have been excluded without it) contribution as of that same
+ * measurement: `process-seam-subprocess` 118 files, `hardcoded-path-vs-
+ * path-call` 108 files, every other category 41 files COMBINED. Both were
+ * removed outright from CATEGORIES; the same-tree, same-day recount put
+ * the tier at 255 of 931 (27.4%) — exactly 292 entries removed from the
+ * committed list, none added. The macOS tier was unaffected by this change
+ * (a diff of macos-conformance-tier.generated.cjs across the same removal
+ * showed zero changed lines). None of these counts is asserted as a
+ * literal anywhere in the test suite: the ceilings this generator enforces
+ * are ratios against a live denominator (the current eligible-file count),
+ * and the committed lists are pinned by comparing against a fresh
+ * classification of the live tree, not against a hardcoded number —
+ * deliberately, since a hardcoded count in a test is a failure scheduled
+ * for the next time the suite grows. See
+ * docs/adr/4641-windows-selector-consolidation.md for the full rationale.
+ *
  * KNOWN LIMIT, disclosed deliberately: this is a STATIC content classifier,
  * not a real per-file, per-OS behavioral diff. Epic #4589's issue #4591 asked
  * for the cutover to be validated by "running the existing full matrix one
@@ -130,10 +151,6 @@ const CATEGORIES = [
     test: (content) => /\bPATHEXT\b|\bUSERPROFILE\b|\bHOMEDRIVE\b|\bHOMEPATH\b/.test(content),
   },
   {
-    name: 'process-seam-subprocess',
-    test: (content) => /\brunNode\(|\brunGit\(|\brunHook\(|\brunGsdTools\(|\bgitOrThrow\(/.test(content),
-  },
-  {
     name: 'raw-child-process',
     // Requires BOTH the child_process import/reference token AND one of the
     // three call names in the same file — this is what keeps a same-named
@@ -146,6 +163,32 @@ const CATEGORIES = [
     },
   },
   {
+    name: 'shell-interpreter-spawn',
+    // Added after an adversarial review (#4641) caught a REAL false negative
+    // introduced by removing 'process-seam-subprocess' above: that removal
+    // also dropped the only coverage for tests/execute-phase-worktree-guard.
+    // test.cjs, which calls tests/helpers/process-seam.cjs's `runHook(...,
+    // { interpreter: 'bash', ... })`. `runHook` spawns `options.interpreter`
+    // via a real `spawnSync`, so `interpreter: 'bash'` is a genuine real-shell
+    // invocation — bash availability, quoting, and git output parsing all
+    // differ across OSes. This is deliberately narrower than (and does not
+    // reintroduce) 'process-seam-subprocess': the rationale that going
+    // through the injected-`platform`-parameter seam in
+    // src/shell-command-projection.cts is NOT a platform signal (because the
+    // caller supplies `platform` itself) holds for THAT seam only — it does
+    // not hold for `runHook`'s `interpreter` option, which spawns a real
+    // interpreter binary rather than taking platform as injected data.
+    // Measured 2026-09-11: 33 eligible files match this pattern; 9 of them
+    // were outside the committed Windows tier and are added back by this
+    // change, taking the tier from 255 to 264 of 931 eligible files (27.4% ->
+    // 28.4%), still under the 33% ceiling. All 9 additions were verified by
+    // reading the matching source line: 0 false positives, every match is a
+    // live `interpreter:` option on a real `runHook`/`runHookSeam` call. As
+    // with all counts in this file, these are dated point-in-time
+    // measurements, not standing facts.
+    test: (content) => /interpreter:\s*['"`](bash|sh|zsh|dash|pwsh|powershell|cmd)['"`]/.test(content),
+  },
+  {
     name: 'symlink-keyword',
     // A leading `\b` with no trailing one, case-insensitive: this is
     // deliberately NOT `/\bsymlink\b|\bSymlink\b/` (that literal pair would
@@ -155,25 +198,65 @@ const CATEGORIES = [
     // alone still excludes a mid-word embedding like "presymlink".
     test: (content) => /\bsymlink/i.test(content),
   },
-  {
-    name: 'hardcoded-path-vs-path-call',
-    // Intentionally coarse (design doc: over-inclusion is the safe
-    // direction): a path.* call ANYWHERE in the file plus a quoted
-    // forward-slash-leading string literal ANYWHERE in the file, with no
-    // attempt at proximity/scoping.
-    test: (content) =>
-      /path\.(join|resolve|dirname|basename|normalize|relative)\(/.test(content) &&
-      /['"`]\/[\w.\-/]*['"`]/.test(content),
-  },
 ];
 
-// Two CATEGORIES entries precise enough for TEST-file classification (this
-// module's own purpose) but far too broad for SOURCE-file reachability
-// (scripts/ci-test-scope.cjs's #4592 use). Empirically verified: applying
-// classifyContent to every file under src/ (235 files) flags 100 of them,
-// driven almost entirely by these two categories; excluding them narrows it
-// to 28 files, all verified to carry a genuine platform-conditional branch.
-const NOISY_FOR_SOURCE_REACHABILITY = new Set(['hardcoded-path-vs-path-call', 'symlink-keyword']);
+// A CATEGORIES entry precise enough for TEST-file classification (this
+// module's own purpose) but too broad for SOURCE-file reachability
+// (scripts/ci-test-scope.cjs's #4592 use). This set used to hold a second
+// member, 'hardcoded-path-vs-path-call', alongside 'symlink-keyword'; that
+// category was removed outright from CATEGORIES (#4641 — measured to be the
+// single largest driver of Windows-tier over-inclusion, a universal Node
+// test-suite idiom rather than a platform signal), not merely exempted here,
+// because it was over-broad for BOTH consumers (this module's own Windows
+// tier AND source reachability), not source-reachability alone. Only
+// 'symlink-keyword' remains: still precise enough for test-file
+// classification but, per the same empirical pass described above, too noisy
+// for source reachability.
+const NOISY_FOR_SOURCE_REACHABILITY = new Set(['symlink-keyword']);
+
+/**
+ * Escape hatch, WINDOWS TIER ONLY (union'd into `classifyTree`, never into
+ * `classifyMacosTree`/`MACOS_CATEGORIES` — those stay untouched by this map).
+ *
+ * `classifyContent` above is a STATIC CONTENT classifier: it can only see
+ * text in the test file itself. Some files need real-OS coverage for a
+ * reason that lives in the CODE UNDER TEST, not in the test's own text — no
+ * regex over the test file can ever detect that, because the signal simply
+ * isn't there to find. Rather than chase that gap with ever-more-specific
+ * content heuristics (the exact failure mode #4641 measured and rolled
+ * back — see the header comment above), this map is the single, centrally-
+ * enumerated source of truth for those cases, matching ADR-1703's
+ * `portability-vocab.cjs` stance and epic #4589 Phase 2's explicit
+ * requirement that such overrides be "centrally-enumerated, not a naming
+ * convention". It is deliberately NOT a heuristic: it is a `Map` (path ->
+ * reason) precisely so every entry is forced to carry a recorded,
+ * human-reviewed reason at the call site — an entry without one is
+ * impossible by construction (there is no positional/array form that would
+ * let a path be added without a paired reason string).
+ *
+ * Adding an entry requires a recorded reason and should be rare: prefer
+ * fixing the classifier (a new CATEGORIES signal) when the real-OS need IS
+ * expressible as content; reach for this map only when it structurally is
+ * not.
+ *
+ * Current entries:
+ * - tests/external-descriptor-confinement.test.cjs: exercises `isPathConfined`
+ *   (src/external-descriptor-trust.cts:41-49), which calls the AMBIENT
+ *   `path` module directly — `path.resolve(root, target)` and `path.sep` —
+ *   with no platform/path injection seam. Its win32 semantics (drive
+ *   letters, UNC paths, `\` separator) are therefore only reachable by
+ *   actually running on Windows; the win32 branch is unreachable on Linux.
+ *   This is a security-relevant write-confinement gate, so a silent gap
+ *   here is a security regression, not a coverage nit (#4641).
+ */
+const ALWAYS_REAL_OS = new Map([
+  [
+    'tests/external-descriptor-confinement.test.cjs',
+    'Exercises isPathConfined (src/external-descriptor-trust.cts:41-49), which uses the ambient ' +
+      'path module (path.resolve/path.sep) with no platform injection; its win32 branch (drive ' +
+      'letters, UNC paths, \\ separator) is unreachable on Linux. Security-relevant write-confinement gate.',
+  ],
+]);
 
 /**
  * macOS-specific detection categories (#4593, design doc
@@ -274,15 +357,20 @@ function classifyTree(testsDir) {
   const unitFiles = absoluteFiles.filter((absPath) => suiteOf(absPath) === null);
   const flagged = [];
   for (const absPath of unitFiles) {
+    const rel = 'tests/' + path.relative(testsDir, absPath).replace(/\\/g, '/');
     const content = fs.readFileSync(absPath, 'utf8');
     const { needsRealOs } = classifyContent(content);
-    if (needsRealOs) {
-      const rel = path.relative(testsDir, absPath).replace(/\\/g, '/');
-      flagged.push('tests/' + rel);
+    // The ALWAYS_REAL_OS escape hatch (Windows tier only — see its doc
+    // comment) is unioned in HERE, keyed off a file that this walk actually
+    // found, rather than blindly appended regardless of `testsDir` — that
+    // keeps the escape hatch from leaking a real-repo path into an unrelated
+    // temp-fixture-tree classification (e.g. this module's own tests).
+    if (needsRealOs || ALWAYS_REAL_OS.has(rel)) {
+      flagged.push(rel);
     }
   }
-  flagged.sort();
-  return { total: absoluteFiles.length, files: flagged };
+  const result = [...new Set(flagged)].sort();
+  return { total: absoluteFiles.length, files: result };
 }
 
 /**
@@ -458,6 +546,7 @@ module.exports = {
   classifyContent,
   CATEGORIES,
   NOISY_FOR_SOURCE_REACHABILITY,
+  ALWAYS_REAL_OS,
   walkTestFiles,
   classifyTree,
   renderGeneratedFile,

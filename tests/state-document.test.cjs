@@ -15,6 +15,7 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('fast-check');
+const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const {
   stateReplaceField,
@@ -1100,7 +1101,7 @@ describe('#3204 buildStateFrontmatter total_phases — negative space / boundari
     const { TOOLS_PATH, TEST_ENV_BASE } = require('./helpers.cjs');
     const rec = runNode(
       [TOOLS_PATH, 'state', 'json', '--raw'],
-      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: 60000 },
+      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS },
     );
     assert.ok(rec.exitCode === 0, `state json --raw failed: ${rec.stderr}`);
     assert.ok(
@@ -1658,7 +1659,7 @@ describe('#3355 phase-dir dedup — collision tie-break must not consult mtime',
     // (runGsdTools discards stderr on success, so drive the seam directly).
     const rec = runNode(
       [TOOLS_PATH, 'state', 'json', '--raw'],
-      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: 60000 },
+      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS },
     );
     assert.ok(rec.exitCode === 0, `state json --raw failed: ${rec.stderr}`);
     assert.ok(
@@ -1726,7 +1727,7 @@ describe('#3354 buildStateFrontmatter total_phases — milestoned-but-unbounded 
     // stderr on success). The warning is asserted on THIS invocation.
     const rec = runNode(
       [TOOLS_PATH, 'state', 'record-session', '--stopped-at', 'Phase 1, Plan 1', '--resume-file', 'none'],
-      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: 60000 },
+      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS },
     );
     assert.ok(rec.exitCode === 0, `state record-session failed: ${rec.stderr}`);
 
@@ -1823,7 +1824,7 @@ describe('#3573 total_phases — roadmap absent with an asserted milestone', () 
   function recordSession(dir, stoppedAt = 'Phase 1, Plan 1') {
     return runNode(
       [TOOLS_PATH, 'state', 'record-session', '--stopped-at', stoppedAt, '--resume-file', 'none'],
-      { cwd: dir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: 60000 },
+      { cwd: dir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS },
     );
   }
 
@@ -1867,7 +1868,7 @@ describe('#3573 total_phases — roadmap absent with an asserted milestone', () 
     // about total_phases surviving the resync.
     const rec = runNode(
       [TOOLS_PATH, 'state', 'begin-phase', '--phase', '2'],
-      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: 60000 },
+      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS },
     );
     assert.ok(rec.exitCode === 0, `state begin-phase failed: ${rec.stderr}`);
     assert.strictEqual(
@@ -1935,7 +1936,7 @@ describe('#3573 total_phases — roadmap absent with an asserted milestone', () 
     // about total_phases surviving the resync.
     const rec = runNode(
       [TOOLS_PATH, 'state', 'planned-phase', '--phase', '2', '--name', 'Core'],
-      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: 60000 },
+      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS },
     );
     assert.ok(rec.exitCode === 0, `state planned-phase failed: ${rec.stderr}`);
     assert.strictEqual(
@@ -2072,7 +2073,7 @@ describe('#4094 milestone-unbounded withhold — all four progress counters', ()
   function recordSession(dir, stoppedAt = 'Phase 1, Plan 1') {
     return runNode(
       [TOOLS_PATH, 'state', 'record-session', '--stopped-at', stoppedAt, '--resume-file', 'none'],
-      { cwd: dir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: 60000 },
+      { cwd: dir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS },
     );
   }
 
@@ -2288,7 +2289,7 @@ describe('#4094 milestone-unbounded withhold — all four progress counters', ()
 
     const rec = runNode(
       [TOOLS_PATH, 'state', 'sync'],
-      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: 60000 },
+      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS },
     );
     assert.ok(rec.exitCode === 0, `state sync failed: ${rec.stderr}`);
 

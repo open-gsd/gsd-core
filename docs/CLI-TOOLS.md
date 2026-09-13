@@ -1177,6 +1177,20 @@ from `todos/pending/` to `todos/completed/` and upserts `completed:` and
 `status: completed` inside the file's frontmatter block. Unknown flags are
 rejected loudly.
 
+`<filename>` is a **basename inside the todos root**, not a path. A basename
+guard runs first, before `<filename>` is joined onto any directory: a value
+containing an embedded separator (either `/` or `\`, e.g. `sub/name.md` or
+`sub\name.md`), a value whose own basename differs from itself (e.g.
+`a/../../b.md`, `../sibling.md`), a bare `.` or `..`, an absolute path (e.g.
+`/etc/passwd`), or a NUL byte is rejected as a usage error **before** any file
+is read or moved (#4327, #4652). A traversal that only escapes the `pending`/
+`completed` subdirectory without leaving the todos root (`../sibling.md`) is
+caught by this same guard, not by containment. Containment against the todos
+root still runs afterward as defense-in-depth for the resolved source and
+target paths, so neither half of the move can land outside the root. The
+check covers both halves of the move, and `--dry-run` is rejected on the same
+terms rather than previewing a resolved outside path.
+
 ```bash
 # UAT audit — scan all phases for unresolved items
 node gsd-tools.cjs audit-uat

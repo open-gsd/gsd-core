@@ -9,8 +9,12 @@
  *
  * A prior version of this PR added a `docs guards` RULE to `RULES` in
  * scripts/ci-test-scope.cjs, on the theory that classify()'s `!codeChanged`
- * normalization (which zeroes fullMatrix/targeted_tests/windows_tests for
- * docs-only diffs) made the RULE inert to classify()'s scope decision.
+ * normalization (which at the time zeroed fullMatrix/targeted_tests/
+ * windows_tests for docs-only diffs) made the RULE inert to classify()'s
+ * scope decision. (#4641 later removed `windows_tests` from classify()'s
+ * output entirely; the normalization today only zeroes fullMatrix and
+ * targeted_tests. This paragraph is historical narration of a rejected
+ * design, not a description of current behaviour.)
  *
  * That is true for docs-ONLY diffs and FALSE for MIXED docs+code diffs:
  * `codeChanged` is true whenever ANY changed file is product/pipeline code,

@@ -11,10 +11,14 @@ import path from 'node:path';
 import { normalizeEol } from './text-lines.cjs';
 import { execGit, platformWriteSync, platformReadSync, platformEnsureDir, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
 import { escapeRegex } from './pattern.cjs';
-import { requireSafePath, sanitizeForDisplay } from './security.cjs';
+import { requireSafePath, sanitizeForDisplay, tryWithinRoot, PathAcceptance } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
-const { output, error, ERROR_REASON } = ioMod;
+const { output, ERROR_REASON } = ioMod;
+// Explicitly annotated so TypeScript applies never-return control-flow narrowing.
+// See the identical note in check-command-router.cts: a destructured const carries no
+// type annotation, so TS will not narrow after `error(...)` without this.
+const error: typeof ioMod.error = ioMod.error;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderMod = require('./config-loader.cjs');
 const { loadConfig, isGitIgnored } = configLoaderMod;
@@ -348,7 +352,7 @@ function cmdListSeeds(cwd: string, statusFilter: string | undefined, raw: boolea
 
     let safeFilePath: string;
     try {
-      safeFilePath = requireSafePath(path.join(seedsDir, entry.name), planDir, 'seed file', { allowAbsolute: true });
+      safeFilePath = requireSafePath(path.join(seedsDir, entry.name), planDir, 'seed file', PathAcceptance.AbsoluteInsideRoot);
     } catch {
       continue;
     }
@@ -401,11 +405,11 @@ function cmdVerifyPathExists(cwd: string, targetPath: string | undefined, raw: b
   }
 
   // Reject null bytes and validate path does not contain traversal attempts
-  if ((targetPath as string).includes('\0')) {
+  if (targetPath.includes('\0')) {
     error('path contains null bytes');
   }
 
-  const fullPath = path.isAbsolute(targetPath as string) ? targetPath as string : path.join(cwd, targetPath as string);
+  const fullPath = path.isAbsolute(targetPath) ? targetPath : path.join(cwd, targetPath);
 
   try {
     const stats = fs.statSync(fullPath);
@@ -541,20 +545,20 @@ function cmdResolveModel(cwd: string, agentType: string | undefined, raw: boolea
 
   const config = loadConfig(cwd);
   const profile = (config['model_profile'] as string) || 'balanced';
-  const model = resolveModelInternal(cwd, agentType!);
-  const effort = resolveEffortInternal(cwd, agentType!);
+  const model = resolveModelInternal(cwd, agentType);
+  const effort = resolveEffortInternal(cwd, agentType);
 
   // Own-property guard: agentType is an unvalidated CLI positional, so a
   // prototype-chain value ("toString", "constructor") would otherwise return
   // an inherited truthy member from this plain object and misreport a
   // genuinely unknown agent as known (unknown_agent dropped from the result).
   const agentModelsMap = MODEL_PROFILES as Record<string, unknown>;
-  const agentModels = Object.hasOwn(agentModelsMap, agentType!) ? agentModelsMap[agentType!] : undefined;
+  const agentModels = Object.hasOwn(agentModelsMap, agentType) ? agentModelsMap[agentType] : undefined;
   // #2229: `tier` is additive — existing keys and their values are untouched, so
   // every `--pick model` / `--pick profile` / `--raw` consumer is unaffected. It
   // exists because the model id is deliberately blank under resolve_model_ids:"omit",
   // which leaves a tier-sensitive guard with nothing to read.
-  const tier = resolveTierInternal(cwd, agentType!);
+  const tier = resolveTierInternal(cwd, agentType);
   const result = agentModels
     ? { model, profile, effort, tier }
     : { model, profile, effort, tier, unknown_agent: true };
@@ -567,7 +571,7 @@ function cmdResolveGranularity(cwd: string, phaseType: string | undefined, raw: 
   }
   assertValidGranularityOverride(override, error);
   const granularity = resolveGranularityInternal(cwd, phaseType, override);
-  const result = (VALID_PHASE_TYPES).has(phaseType!)
+  const result = (VALID_PHASE_TYPES).has(phaseType)
     ? { granularity, phase_type: phaseType }
     : { granularity, phase_type: phaseType, unknown_phase_type: true };
   output(result, raw, granularity);
@@ -599,8 +603,8 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
   // explicit attempt routes through the tier ladder. resolveModelForTier itself
   // still falls back to resolveModelInternal when dynamic_routing is off.
   let model = (opts.attempt !== undefined && opts.attempt !== null)
-    ? resolveModelForTier(cwd, agentType!, opts.attempt)
-    : resolveModelInternal(cwd, agentType!);
+    ? resolveModelForTier(cwd, agentType, opts.attempt)
+    : resolveModelInternal(cwd, agentType);
 
   // #2296: when the caller reports WHY the previous attempt failed, consult the
   // provider-escalation ladder. Only a quota/rate-limit class warrants it — a
@@ -610,7 +614,7 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
   let escalation: Record<string, unknown> | undefined;
   if (opts.failureClass !== undefined) {
     const applicable = opts.failureClass === AGENT_FAILURE_CLASSES.QUOTA_EXCEEDED;
-    const resolved = resolveProviderEscalation(cwd, agentType!, opts.attempt, applicable);
+    const resolved = resolveProviderEscalation(cwd, agentType, opts.attempt, applicable);
     if (resolved.escalated) model = resolved.to;
     escalation = { class: opts.failureClass, ...resolved };
   }
@@ -622,10 +626,10 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
   if (typeof opts.fastModeOverride === 'boolean') fastModeOpts['override'] = opts.fastModeOverride;
 
   const effort = (opts.attempt !== undefined && opts.attempt !== null)
-    ? resolveEffortForTier(cwd, agentType!, opts.attempt)
-    : resolveEffortInternal(cwd, agentType!, effortOpts);
+    ? resolveEffortForTier(cwd, agentType, opts.attempt)
+    : resolveEffortInternal(cwd, agentType, effortOpts);
 
-  const fastMode = resolveFastModeInternal(cwd, agentType!, fastModeOpts);
+  const fastMode = resolveFastModeInternal(cwd, agentType, fastModeOpts);
 
   const runtime = (config['runtime'] as string) || 'claude';
   // #3007: pass the resolved model so the per-model advertised-effort ceiling
@@ -681,7 +685,7 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
   // an inherited truthy member from this plain object and misreport a
   // genuinely unknown agent as known (unknown_agent dropped from the result).
   const agentModelsMap = MODEL_PROFILES as Record<string, unknown>;
-  const agentModels = Object.hasOwn(agentModelsMap, agentType!) ? agentModelsMap[agentType!] : undefined;
+  const agentModels = Object.hasOwn(agentModelsMap, agentType) ? agentModelsMap[agentType] : undefined;
   const result: Record<string, unknown> = {
     model,
     profile,
@@ -2738,7 +2742,7 @@ function cmdCommitToSubrepo(cwd: string, message: string | undefined, files: str
   }
 
   // Group files by sub-repo prefix
-  const { grouped, unmatched } = groupFilesBySubrepo(files as string[], subRepos as string[]);
+  const { grouped, unmatched } = groupFilesBySubrepo(files, subRepos);
 
   if (unmatched.length > 0) {
     process.stderr.write(`Warning: ${unmatched.length} file(s) did not match any sub-repo prefix: ${unmatched.join(', ')}\n`);
@@ -2793,8 +2797,8 @@ function cmdCommitToSubrepo(cwd: string, message: string | undefined, files: str
     const isMergeInProgressSub = execGit(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], { cwd: repoCwd }).exitCode === 0;
     const canScopeSub = stagedRelPaths.length > 0 && !isMergeInProgressSub;
     const commitArgs = canScopeSub
-      ? ['commit', '-m', message as string, '--', ...stagedRelPaths]
-      : ['commit', '-m', message as string];
+      ? ['commit', '-m', message, '--', ...stagedRelPaths]
+      : ['commit', '-m', message];
     // #3859 follow-up fix as cmdCommit above (line ~2081) — git 2.39.5 needs
     // this override for pathspec-scoped AND whole-index commits alike.
     const commitEnvSub: Record<string, string> = {
@@ -2866,22 +2870,18 @@ function cmdPrSubrepo(
   if (!commitMessage || commitMessage.startsWith('--')) {
     error('commit message required');
   }
-  if ((branch as string).startsWith('-')) {
+  if (branch.startsWith('-')) {
     error(`Branch name must not start with '-': ${branch}`);
   }
 
   // 0. Security: validate repo path is contained within the workspace root.
-  //    Uses security.cjs validatePath (symlink-safe realpathSync + startsWith guard)
+  //    Uses security.cjs tryWithinRoot (symlink-safe realpathSync + startsWith guard)
   //    to reject ../escape, absolute paths, and symlink traversal.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/unbound-method
-  const { validatePath } = require('./security.cjs') as {
-    validatePath(filePath: string, baseDir: string): { safe: boolean; resolved: string; error?: string };
-  };
-  const pathCheck = validatePath(repo as string, cwd);
-  if (!pathCheck.safe) {
-    error(`Sub-repo path is unsafe: ${pathCheck.error}`);
+  const repoContained = tryWithinRoot(repo, cwd);
+  if (repoContained === null) {
+    error(`Sub-repo path is unsafe: resolves outside the workspace root`);
   }
-  const repoCwd = pathCheck.resolved;
+  const repoCwd = repoContained;
   if (!fs.existsSync(repoCwd)) {
     error(`Sub-repo not found: ${repoCwd}`);
   }
@@ -2938,7 +2938,7 @@ function cmdPrSubrepo(
   }
 
   // 2. Guard: refuse if branch already exists — checkout -b is non-idempotent
-  const branchCheck = execGit(['rev-parse', '--verify', branch as string], { cwd: repoCwd });
+  const branchCheck = execGit(['rev-parse', '--verify', branch], { cwd: repoCwd });
   if (branchCheck.exitCode === 0) {
     error(`Branch already exists in ${repo}: ${branch}. Delete it first or choose a unique name.`);
   }
@@ -2949,7 +2949,7 @@ function cmdPrSubrepo(
   const prevBranchName = prevBranchResult.exitCode === 0 ? prevBranchResult.stdout.trim() : null;
 
   // 3. Create branch
-  const checkoutResult = execGit(['checkout', '-b', branch as string], { cwd: repoCwd });
+  const checkoutResult = execGit(['checkout', '-b', branch], { cwd: repoCwd });
   if (checkoutResult.exitCode !== 0) {
     error(`Failed to create branch ${branch} in ${repo}: ${checkoutResult.stderr}`);
   }
@@ -2959,7 +2959,7 @@ function cmdPrSubrepo(
     if (prevBranchName) {
       execGit(['checkout', prevBranchName], { cwd: repoCwd });
     }
-    execGit(['branch', '-D', branch as string], { cwd: repoCwd });
+    execGit(['branch', '-D', branch], { cwd: repoCwd });
   };
 
   // 4. Stage explicit files (never git add -A per universal-anti-patterns.md:44)
@@ -2978,8 +2978,8 @@ function cmdPrSubrepo(
   const isMergeInProgressPr = execGit(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], { cwd: repoCwd }).exitCode === 0;
   const canScopePr = changedFiles.length > 0 && !isMergeInProgressPr;
   const commitArgs = canScopePr
-    ? ['commit', '-m', commitMessage as string, '--', ...changedFiles]
-    : ['commit', '-m', commitMessage as string];
+    ? ['commit', '-m', commitMessage, '--', ...changedFiles]
+    : ['commit', '-m', commitMessage];
   // #3859 follow-up fix as cmdCommit above (line ~2081) — git 2.39.5 needs
   // this override for pathspec-scoped AND whole-index commits alike.
   const commitEnvPr: Record<string, string> = {
@@ -3017,7 +3017,7 @@ function cmdPrSubrepo(
   //    Do NOT rollback on push failure — the commit already exists on the local branch.
   //    Deleting the branch here would destroy the only ref holding the user's work.
   //    Leave the branch in place so the user can retry the push.
-  const pushResult = execGit(['push', '--set-upstream', 'origin', branch as string], { cwd: repoCwd, timeout: 60_000 });
+  const pushResult = execGit(['push', '--set-upstream', 'origin', branch], { cwd: repoCwd, timeout: 60_000 });
   if (pushResult.exitCode !== 0) {
     error(`Failed to push ${branch} in ${repo}: ${pushResult.stderr}\nBranch ${branch} was created locally — retry with: git -C ${repo} push --set-upstream origin ${branch}`);
   }
@@ -3040,7 +3040,7 @@ function cmdSummaryExtract(cwd: string, summaryPath: string | undefined, fields:
     error('summary-path required for summary-extract');
   }
 
-  const fullPath = path.join(cwd, summaryPath as string);
+  const fullPath = path.join(cwd, summaryPath);
 
   if (!fs.existsSync(fullPath)) {
     output({ error: 'File not found', path: summaryPath }, raw, undefined);
@@ -3490,13 +3490,61 @@ function cmdTodoComplete(cwd: string, filename: string | undefined, options: Tod
   const todosRoot = todosDir(cwd);
   const pendingDir = path.join(todosRoot, 'pending');
   const completedDir = path.join(todosRoot, 'completed');
-  const sourcePath = path.join(pendingDir, filename as string);
 
-  if (!fs.existsSync(sourcePath)) {
-    error(`Todo not found: ${filename as string}`);
+  // #4652: containment against todosRoot only rejects paths that leave the
+  // root — it cannot express "a todo name is a basename, not a path" (see
+  // #4327). `../sibling.md`, `a/../../b.md`, and `sub/name.md` all resolve
+  // to a location inside todosRoot (or inside pending/) and would pass
+  // containment, yet none of them is a bare filename. Reject on basename
+  // shape FIRST, before any path is even joined — same predicate shape as
+  // findPhaseArtifact in check-command-router.cts. Checking both `/` and
+  // `\` explicitly (not just path.basename) matters on POSIX, where a
+  // literal backslash is just an ordinary filename character to
+  // path.basename but not to path.win32.basename or to the user's intent.
+  const rawFilename = filename;
+  if (
+    rawFilename === '.' ||
+    rawFilename === '..' ||
+    rawFilename.includes('\0') ||
+    rawFilename.includes('/') ||
+    rawFilename.includes('\\') ||
+    path.basename(rawFilename) !== rawFilename ||
+    path.win32.basename(rawFilename) !== rawFilename
+  ) {
+    error(`todo name must be a plain filename inside the pending directory, not a path: ${rawFilename}`, ERROR_REASON.USAGE);
   }
 
-  const content = fs.readFileSync(sourcePath, 'utf-8');
+  const sourcePath = path.join(pendingDir, filename);
+  const targetPath = path.join(completedDir, filename);
+
+  const sourceContained = tryWithinRoot(sourcePath, todosRoot, PathAcceptance.AbsoluteInsideRoot);
+  if (sourceContained === null) {
+    error(`todo file escapes its allowed directory: ${filename}`, ERROR_REASON.USAGE);
+  }
+  const targetContained = tryWithinRoot(targetPath, todosRoot, PathAcceptance.AbsoluteInsideRoot);
+  if (targetContained === null) {
+    error(`todo file escapes its allowed directory: ${filename}`, ERROR_REASON.USAGE);
+  }
+
+  const resolvedSource = sourceContained;
+  const resolvedTarget = targetContained;
+
+  if (!fs.existsSync(resolvedSource)) {
+    error(`Todo not found: ${filename}`);
+  }
+
+  // #4652: a name that IS a bare basename can still resolve to something that
+  // is not a regular file — a directory, symlink-to-directory, FIFO or socket
+  // sitting in pending/ under an ordinary-looking name. `.` and `..` no longer
+  // reach here (the basename guard above rejects them first), so this is not
+  // about traversal; it stops fs.readFileSync from throwing an uncaught EISDIR
+  // with an absolute-path stack trace where every sibling case gives a clean
+  // USAGE rejection.
+  if (!fs.statSync(resolvedSource).isFile()) {
+    error(`todo name is not a file: ${filename}`, ERROR_REASON.USAGE);
+  }
+
+  const content = fs.readFileSync(resolvedSource, 'utf-8');
   const today = realClock.localToday();
 
   // #4096: --dry-run mirrors `milestone complete --dry-run` (#2118) — every
@@ -3509,8 +3557,8 @@ function cmdTodoComplete(cwd: string, filename: string | undefined, options: Tod
       file: filename,
       date: today,
       would_move: {
-        source: path.relative(cwd, sourcePath).split(path.sep).join('/'),
-        target: path.relative(cwd, path.join(completedDir, filename as string)).split(path.sep).join('/'),
+        source: path.relative(cwd, resolvedSource).split(path.sep).join('/'),
+        target: path.relative(cwd, resolvedTarget).split(path.sep).join('/'),
       },
       would_set: { completed: today, status: 'completed' },
     }, raw);
@@ -3523,8 +3571,8 @@ function cmdTodoComplete(cwd: string, filename: string | undefined, options: Tod
 
   const completedContent = upsertTodoCompletionFields(content, today);
 
-  platformWriteSync(path.join(completedDir, filename as string), completedContent);
-  fs.unlinkSync(sourcePath);
+  platformWriteSync(resolvedTarget, completedContent);
+  fs.unlinkSync(resolvedSource);
 
   output({ completed: true, file: filename, date: today }, raw, 'completed');
 }

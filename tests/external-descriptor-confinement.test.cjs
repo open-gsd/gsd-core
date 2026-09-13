@@ -25,6 +25,53 @@ test('isPathConfined: confined paths are true, escapes are false', () => {
   assert.ok(!isPathConfined('skills', ''), 'empty root is NOT confined');
 });
 
+test('isPathConfined: win32 injection — confined and escape cases', () => {
+  const win32 = path.win32;
+  const root = 'C:\\Users\\me\\.gsd';
+  assert.ok(
+    isPathConfined('sub\\file.md', root, { pathImpl: win32 }),
+    'win32 target under root is confined',
+  );
+  assert.ok(
+    !isPathConfined('D:\\evil', root, { pathImpl: win32 }),
+    'a different drive letter is NOT confined',
+  );
+  assert.ok(
+    !isPathConfined('C:\\Windows\\system32', root, { pathImpl: win32 }),
+    'an absolute path on the same drive outside root is NOT confined',
+  );
+  assert.ok(
+    !isPathConfined('..\\..\\evil', root, { pathImpl: win32 }),
+    'a backslash traversal is NOT confined',
+  );
+  assert.ok(
+    !isPathConfined('\\\\server\\share\\x', root, { pathImpl: win32 }),
+    'a UNC path is NOT confined',
+  );
+  assert.ok(
+    !isPathConfined('../../x', root, { pathImpl: win32 }),
+    'a forward-slash traversal is NOT confined (win32 accepts / too)',
+  );
+});
+
+test('isPathConfined: win32 prefix-boundary — sibling with root as a string prefix is refused', () => {
+  const win32 = path.win32;
+  const root = 'C:\\Users\\me\\.gsd';
+  assert.ok(
+    !isPathConfined('..\\.gsdEVIL', root, { pathImpl: win32 }),
+    'C:\\Users\\me\\.gsdEVIL must be refused despite sharing the "C:\\Users\\me\\.gsd" string prefix',
+  );
+});
+
+test('isPathConfined: posix prefix-boundary — sibling with root as a string prefix is refused', () => {
+  const posix = path.posix;
+  const root = '/home/me/.gsd';
+  assert.ok(
+    !isPathConfined('../.gsdEVIL', root, { pathImpl: posix }),
+    '/home/me/.gsdEVIL must be refused despite sharing the "/home/me/.gsd" string prefix',
+  );
+});
+
 test('assertDescriptorConfined: a benign descriptor (all destSubpaths under configHome) passes', () => {
   const desc = {
     id: 'community-host',

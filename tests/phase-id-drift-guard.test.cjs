@@ -366,20 +366,18 @@ describe('#2128 phase-id drift scanner: the live repo is clean', () => {
     }
   });
 
-  test(
-    "#4619 shell-arith violations are known and tracked separately (characterization, not this PR's scope)",
-    () => {
-      const violations = scanMarkdownShellArith(ROOT);
-      assert.equal(
-        violations.length,
-        7,
-        'expected exactly the 7 known #4619 sites (workflows/execute-phase.md x4, ' +
-          'workflows/execute-phase/steps/completion-reconciliation.md x2, references/tdd.md x1) — ' +
-          'if this count changed, either #4619 was fixed (great — update/remove this pin) or a NEW ' +
-          'unrelated shell-arith site was introduced (investigate before adjusting the number)',
-      );
-    },
-  );
+  test('scanMarkdownShellArith finds zero unsanctioned shell phase-arithmetic (#4619 fixed)', () => {
+    // Was a characterization test pinning 7 known #4619 sites
+    // (workflows/execute-phase.md x4, workflows/execute-phase/steps/
+    // completion-reconciliation.md x2, references/tdd.md x1) while #4619 was
+    // still unfixed. #4619 is now fixed — every site zero-strips the leading
+    // integer segment into a `*_INT`-suffixed variable before doing
+    // `$((10#...))` arithmetic on it, which the refined detector recognizes
+    // as safe — so this retires back to the same "must be zero" assertion
+    // the branch-slug-fallback pin used once ITS underlying bug was fixed.
+    const violations = scanMarkdownShellArith(ROOT);
+    assert.equal(violations.length, 0);
+  });
 });
 
 describe('#2128 phase-id single-owner identity guard', () => {

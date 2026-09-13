@@ -70,13 +70,15 @@ function assertBlocked(r, label, { code = 'secret-read', tool, path: expectedPat
 describe('gsd-secret-read-guard: Read', () => {
   const blocks = ['.env', '/proj/.env', '.env.local', '/p/.env.production', '.secrets', 'C:\\proj\\.env', '/p/.secrets/',
     // Case-insensitive: these ARE the secret file on macOS/Windows.
-    '.ENV', '.Secrets', '.Env.production', '/P/.SECRETS'];
+    '.ENV', '.Secrets', '.Env.production', '/P/.SECRETS',
+    // Windows trailing-dot alias: strips to `.env` (#4651).
+    '.env.'];
   for (const p of blocks) {
     test(`blocks Read of ${JSON.stringify(p)}`, () => {
       assertBlocked(runHook(read(p)), p, { tool: 'Read', path: p });
     });
   }
-  const allows = ['.env.example', '.env.sample', '.env.template', '.env.dist', '.env.EXAMPLE', '.ENV.EXAMPLE', '.envrc', 'env', 'foo.env', '/p/src/index.ts', '.environment', '.env.'];
+  const allows = ['.env.example', '.env.sample', '.env.template', '.env.dist', '.env.EXAMPLE', '.ENV.EXAMPLE', '.envrc', 'env', 'foo.env', '/p/src/index.ts', '.environment'];
   for (const p of allows) {
     test(`allows Read of ${JSON.stringify(p)}`, () => {
       assertAllowed(runHook(read(p)), p);
@@ -353,6 +355,150 @@ describe('gsd-secret-read-guard: Kimi vocabulary', () => {
   test('blocks kimi_cli.tools.file:Grep with `path` (module prefix stripped)', () => {
     const r = runHook({ tool_name: 'kimi_cli.tools.file:Grep', tool_input: { path: '/p/.env' } });
     assertBlocked(r, 'Grep', { tool: 'Grep', path: '/p/.env' });
+  });
+});
+
+describe('regressions: #4580 — final-extension classification', () => {
+  // #4580: isSecretBasename compares everything after `.env.` as ONE token
+  // against the template set {example, sample, template, dist}, so a
+  // multi-segment template name like `.env.local.example` compares the
+  // whole tail `local.example` against that set and wrongly blocks. The
+  // classification must key off the FINAL extension, not the full suffix.
+  const TEMPLATES = [
+    '.env.local.example',
+    '.env.production.example',
+    '.env.staging.sample',
+    '.env.local.template',
+    '.ENV.Local.EXAMPLE',
+    'cfg/.env.local.example',
+    '.env.dist.example',
+    '.env.example.example',
+  ];
+  const SECRETS = [
+    // CRITICAL: final extension is `local`, not a template — this IS a secret.
+    '.env.example.local',
+    '.env.local.',
+    '.env.local',
+    '.env',
+    '.secrets',
+    '.env.production',
+  ];
+
+  describe('Read arm', () => {
+    for (const p of TEMPLATES) {
+      test(`allows Read of ${JSON.stringify(p)}`, () => {
+        assertAllowed(runHook(read(p)), p);
+      });
+    }
+    for (const p of SECRETS) {
+      test(`blocks Read of ${JSON.stringify(p)}`, () => {
+        assertBlocked(runHook(read(p)), p, { tool: 'Read', path: p });
+      });
+    }
+    describe('Windows trailing dot/space aliases are the protected file (#4651)', () => {
+      // Win32 strips trailing dots and spaces from each path component when
+      // resolving a filesystem path, so `.env.`, `.env..`, `.env `, etc. all
+      // resolve to the same on-disk file as `.env` — these are ALIASES, not
+      // distinct names, and must be blocked like the name they alias.
+      const aliasBlocks = ['.env.', '.env..', '.env ', '.env. ', '.env .', '.secrets.', '.secrets ', '.env.local.'];
+      for (const p of aliasBlocks) {
+        test(`blocks Read of Windows alias ${JSON.stringify(p)}`, () => {
+          assertBlocked(runHook(read(p)), p, { tool: 'Read', path: p });
+        });
+      }
+      // `.env.example.` aliases the already-trusted template `.env.example`,
+      // not the secret `.env` — it must stay allowed.
+      test('allows Read of .env.example. (aliases the trusted template)', () => {
+        assertAllowed(runHook(read('.env.example.')), '.env.example.');
+      });
+    });
+    test('does not change unrelated allow: .envrc stays allowed', () => {
+      assertAllowed(runHook(read('.envrc')), '.envrc');
+    });
+  });
+
+  describe('Bash arm — git show HEAD:<path>', () => {
+    test('allows a multi-segment template name via git show', () => {
+      assertAllowed(runHook(bash('git show HEAD:.env.local.example')), 'HEAD:.env.local.example');
+    });
+    test('still blocks a plain secret via git show', () => {
+      assertBlocked(runHook(bash('git show HEAD:.env.local')), 'HEAD:.env.local', { tool: 'Bash', path: 'HEAD:.env.local' });
+    });
+  });
+
+  describe('Grep glob arm — globAltSelectsSecret parity', () => {
+    const allowedGlobs = ['.env.local.example', 'sub/.env.local.example', '{.env.local.example,zzz.ts}'];
+    for (const g of allowedGlobs) {
+      test(`allows glob ${JSON.stringify(g)}`, () => {
+        assertAllowed(runHook(grep({ glob: g })), g);
+      });
+    }
+    const blockedGlobs = ['.env.local', '.env', '.env.local.exam*', '.e*', '.env*', '*.local', '{.env.local,zzz.ts}'];
+    for (const g of blockedGlobs) {
+      test(`blocks glob ${JSON.stringify(g)}`, () => {
+        assertBlocked(runHook(grep({ glob: g })), g, { tool: 'Grep', path: g });
+      });
+    }
+    const allowedRegressionGlobs = ['*.example', '*', '?'];
+    for (const g of allowedRegressionGlobs) {
+      test(`allows glob ${JSON.stringify(g)} (regression)`, () => {
+        assertAllowed(runHook(grep({ glob: g })), g);
+      });
+    }
+  });
+
+  // NOTE: Read and Bash both route through the shared `namesSecret` predicate,
+  // so they are not independent of each other here — only the Grep glob arm
+  // (classifyGrepGlob) is a genuinely separate implementation. This describe
+  // checks that all three still agree, not that Read/Bash are independent.
+  describe('cross-arm parity — Read, exact-literal Grep glob, and Bash must agree (Read/Bash share namesSecret; Grep glob is the independent arm)', () => {
+    for (const name of TEMPLATES) {
+      test(`Read, glob and Bash all allow ${JSON.stringify(name)}`, () => {
+        assertAllowed(runHook(read(name)), `read:${name}`);
+        assertAllowed(runHook(grep({ glob: name })), `glob:${name}`);
+        assertAllowed(runHook(bash('cat ' + name)), `bash:${name}`);
+      });
+    }
+    for (const name of SECRETS) {
+      test(`Read, glob and Bash all block ${JSON.stringify(name)}`, () => {
+        assertBlocked(runHook(read(name)), `read:${name}`, { tool: 'Read', path: name });
+        assertBlocked(runHook(grep({ glob: name })), `glob:${name}`, { tool: 'Grep', path: name });
+        assertBlocked(runHook(bash('cat ' + name)), `bash:${name}`, { tool: 'Bash', path: name });
+      });
+    }
+
+    // #4651: TEMPLATES/SECRETS above are all bare basenames, so this loop
+    // never exercised path segmentation and could not have caught the
+    // Read-vs-Grep-glob divergence on a backslash-bearing path (`lastSegment`
+    // splits on `/` AND `\`; classifyGrepGlob used to split on `/` only).
+    // Cover both separators explicitly.
+    const pathBlocks = ['config/.env', 'config\\.env'];
+    for (const name of pathBlocks) {
+      test(`Read and Grep glob agree: both block ${JSON.stringify(name)}`, () => {
+        assertBlocked(runHook(read(name)), `read:${name}`, { tool: 'Read', path: name });
+        assertBlocked(runHook(grep({ glob: name })), `glob:${name}`, { tool: 'Grep', path: name });
+      });
+    }
+    const pathAllows = ['config/.env.local.example', 'config\\.env.local.example'];
+    for (const name of pathAllows) {
+      test(`Read and Grep glob agree: both allow ${JSON.stringify(name)}`, () => {
+        assertAllowed(runHook(read(name)), `read:${name}`);
+        assertAllowed(runHook(grep({ glob: name })), `glob:${name}`);
+      });
+    }
+  });
+});
+
+describe('regressions: #4651 — trailing-dot normalization must not touch prose', () => {
+  // Pins the header's "No whitespace trimming" guarantee for Bash PROSE:
+  // trailing-alias normalization applies to file-path/operand classification
+  // only, not to commit-message text, so leading/interior whitespace in a
+  // commit message must still read as prose, not as a secret operand.
+  test('allows a commit message mentioning .env', () => {
+    assertAllowed(runHook(bash('git commit -m "fix: .env parsing"')), 'commit message');
+  });
+  test('allows a commit message with .env at the end of prose', () => {
+    assertAllowed(runHook(bash('git commit -m "update .env"')), 'commit message 2');
   });
 });
 
