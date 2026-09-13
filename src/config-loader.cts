@@ -173,7 +173,9 @@ const CONFIG_DEFAULTS = {
  */
 function resolvePlannerStallDetectionEnabled(value: unknown): boolean {
   if (typeof value === 'boolean') return value;
-  return CONFIG_DEFAULTS.planner_stall_detection_enabled === true;
+  // A missing or skewed manifest must never convert an absent override into
+  // permission to disable the watchdog. The documented contract is default-on.
+  return true;
 }
 
 /**

@@ -105,6 +105,7 @@ GSD はプロジェクト設定を `.planning/config.json` に保存します。
 | `workflow.discuss_mode` | string | `'discuss'` | `/gsd-discuss-phase` のコンテキスト収集方法を制御。`'discuss'`（デフォルト）は質問を1つずつ行います。`'assumptions'` はまずコードベースを読み取り、信頼度レベル付きの構造化された仮説を生成し、誤っている点のみ修正を求めます。v1.28 で追加 |
 | `workflow.skip_discuss` | boolean | `false` | `true` の場合、`/gsd-autonomous` は discuss-phase を完全にスキップし、ROADMAP のフェーズ目標から最小限の CONTEXT.md を作成します。開発者の要望が PROJECT.md/REQUIREMENTS.md に十分に記載されているプロジェクトに適しています。v1.28 で追加 |
 | `workflow.text_mode` | boolean | `false` | AskUserQuestion の TUI メニューをプレーンテキストの番号付きリストに置き換えます。TUI メニューが表示されない Claude Code リモートセッション（`/rc` モード）で必要です。discuss-phase で `--text` フラグを使用してセッションごとに設定することもできます。v1.28 で追加 |
+| `planner.stall_detection_enabled` | boolean | `true` | 標準プランナー、チャンク化されたアウトライン/プラン別プランナー、プランチェッカー、改訂プランナーの有界な停止検出を制御します。`gsd config-set planner.stall_detection_enabled false` を設定すると watchdog ポーリングを省略し、各エージェントをランタイムネイティブの完了機構で待機します。**警告:** `false` はランタイムが完了通知を失った場合の有界な復旧を放棄します。既存のファイルシステムフォールバックを使うために中断が必要になることがあります。 |
 
 ### 推奨プリセット
 
