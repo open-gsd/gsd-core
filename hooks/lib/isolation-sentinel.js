@@ -280,6 +280,29 @@ function sentinelAppliesToDispatch(sentinel, dispatchIds) {
   return true;
 }
 
+/**
+ * #4594 F3: build the structured "a fresh sentinel was present but did not
+ * apply to this dispatch" descriptor, mirroring the exact comparison
+ * `sentinelAppliesToDispatch` performs. Returns `null` when the sentinel is
+ * absent, stale, malformed, or DOES apply — i.e. exactly when there is
+ * nothing to report as discarded. Otherwise returns the nested
+ * `{ sentinel: {phase, plan}, dispatch: {phase, plan} }` shape, reusing the
+ * `{phase, plan}` pair already flowing through this module end to end rather
+ * than renaming its fields into an ad hoc `sentinelPhase`/`dispatchPlan` bag
+ * (previously rebuilt identically at two call sites in the guard hooks).
+ */
+function buildSentinelDiscard(sentinel, dispatchIds) {
+  if (!sentinel || !sentinel.present || sentinel.stale) return null;
+  if (sentinelAppliesToDispatch(sentinel, dispatchIds)) return null;
+  return {
+    sentinel: { phase: sentinel.phase ?? null, plan: sentinel.plan ?? null },
+    dispatch: {
+      phase: dispatchIds ? (dispatchIds.phase ?? null) : null,
+      plan: dispatchIds ? (dispatchIds.plan ?? null) : null,
+    },
+  };
+}
+
 module.exports = {
   VALID_ISOLATION,
   SENTINEL_RELATIVE_PATH,
@@ -289,4 +312,5 @@ module.exports = {
   readSentinel,
   extractDispatchIdentifiers,
   sentinelAppliesToDispatch,
+  buildSentinelDiscard,
 };

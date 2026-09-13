@@ -181,11 +181,15 @@ addition cannot break a deployed parser. **Revisit condition, stated so it is ac
 the moment this marker needs a third semantic key or any structure, stop and implement
 alternative 3 instead.**
 
-**Accepted limit.** On the harness path the marker is emitted by a model following a
-template, so a model that drops it degrades to the prose fallback. That fallback is now
-correct-or-absent, which is sufficient to resolve #4594 on the phase field alone, but
-plan-level scoping is exact only when the marker survives. On the orchestrator-worktree path
-the prompt is built in shell, so the marker is guaranteed.
+**Accepted limit.** The marker is emitted by a model following a template on BOTH paths —
+the harness path AND the orchestrator-worktree path. Per
+`executor-isolation-dispatch.md:131`, the orchestrator-worktree path's `{plan_number}` and
+`{phase_number}` "are template placeholders, not shell variables," and `{plan_id}` is
+model-substituted there exactly as on the harness path — there is no shell-built prompt on
+either path, so the marker is NOT guaranteed on either. A model that drops it degrades to
+the prose fallback everywhere. That fallback is now correct-or-absent, which is sufficient
+to resolve #4594 on the phase field alone, but plan-level scoping is exact only when the
+marker survives. The prose fallback is therefore the real floor on both paths.
 
 **Hyrum's Law constraint.** The prose sentence `Execute plan X of phase Y` is read by the
 executor agent itself, not only by the guards. It stays **byte-identical**; the marker is

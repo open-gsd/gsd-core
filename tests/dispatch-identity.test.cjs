@@ -18,6 +18,7 @@
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const fc = require('fast-check');
@@ -190,6 +191,36 @@ describe('hooks/lib/dispatch-identity.js', () => {
       const result = parseDispatchIdentity('[gsd:dispatch phase="03"]');
       assert.deepEqual(result, { phase: '03', plan: null, source: 'marker' });
     });
+
+    // #4594 F1: a syntactically well-formed marker that carries NEITHER
+    // `phase=` nor `plan=` must not suppress the prose fallback — it is not
+    // a marker at all for this parser's purposes.
+    test('F1: keyless marker (no recognized keys) falls through to prose', () => {
+      const result = parseDispatchIdentity('Execute plan 02 of phase 03-auth.\n[gsd:dispatch]');
+      assert.deepEqual(result, { phase: '03', plan: null, source: 'prose' });
+    });
+
+    test('F1: marker with only an unrecognized key falls through to prose', () => {
+      const result = parseDispatchIdentity('Execute plan 02 of phase 03-auth.\n[gsd:dispatch run="x"]');
+      assert.deepEqual(result, { phase: '03', plan: null, source: 'prose' });
+    });
+
+    test('F1: keyless marker with no prose anywhere yields the empty result', () => {
+      const result = parseDispatchIdentity('[gsd:dispatch]');
+      assert.deepEqual(result, { phase: null, plan: null, source: null });
+    });
+
+    test('F1: mixed case — a keyless marker precedes a later QUALIFYING marker, which wins', () => {
+      const result = parseDispatchIdentity(
+        '[gsd:dispatch] some text [gsd:dispatch phase="03" plan="03-02-hardening"]',
+      );
+      assert.deepEqual(result, { phase: '03', plan: '03-02-hardening', source: 'marker' });
+    });
+
+    test('F1: unknown-key tolerance is preserved for a marker that ALSO carries a recognized key', () => {
+      const result = parseDispatchIdentity('[gsd:dispatch phase="03" run="x"]');
+      assert.deepEqual(result, { phase: '03', plan: null, source: 'marker' });
+    });
   });
 
   describe('hostile and edge inputs', () => {
@@ -330,12 +361,62 @@ describe('hooks/lib/dispatch-identity.js', () => {
   });
 
   describe('producer/consumer parity', () => {
+    // #4594 F7: this reads the REAL workflow templates and runs their
+    // marker literal through the owner's real parser after substituting the
+    // measured placeholders — a template that loses its `[gsd:dispatch …]`
+    // line, or whose grammar the owner's parser can no longer read, reds
+    // this test. The prior version only called `renderDispatchIdentityMarker`
+    // and re-parsed its own output (a duplicate of the round-trip test
+    // above) and would have passed even if both templates below were
+    // deleted. There are 3 prose "execute plan ... of phase ..." sites
+    // across these 2 files; only 2 of them carry the `[gsd:dispatch …]`
+    // marker (execute-phase.md's `description=` field is prose-only) — see
+    // `.gsd/phase/fix-4594-dispatch-identity-seam/40-design.md`'s "Known
+    // limits" section.
+    const TEMPLATE_FILES = [
+      path.join(REPO_ROOT, 'gsd-core', 'workflows', 'execute-phase.md'),
+      path.join(REPO_ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'executor-isolation-dispatch.md'),
+    ];
+
+    /**
+     * Extract every `[gsd:dispatch ...]` marker LINE from a template's raw
+     * text, verbatim (still containing its `{phase_number}`/`{plan_id}`
+     * placeholders) — not a string match on content, a line-oriented
+     * extraction feeding the real parser below.
+     */
+    function extractMarkerLines(text) {
+      return text.split(/\r?\n/).filter((line) => line.includes('[gsd:dispatch'));
+    }
+
+    function substitutePlaceholders(line) {
+      return line
+        .replace(/\{phase_number\}/g, MEASURED_SENTINEL.phase)
+        .replace(/\{plan_id\}/g, MEASURED_SENTINEL.plan);
+    }
+
     test('templates: every producer\'s marker parses', () => {
-      // Rendered with the same measured shell values the sentinel records
-      // ($PHASE_NUMBER, $plan_id) — see 40-design.md's "Ground truth" section.
-      const rendered = renderDispatchIdentityMarker(MEASURED_SENTINEL);
-      const parsed = parseDispatchIdentity(rendered);
-      assert.deepEqual(parsed, { phase: MEASURED_SENTINEL.phase, plan: MEASURED_SENTINEL.plan, source: 'marker' });
+      let totalMarkerLines = 0;
+      for (const file of TEMPLATE_FILES) {
+        assert.equal(fs.existsSync(file), true, `template file not found: ${file}`);
+        const text = fs.readFileSync(file, 'utf-8');
+        const markerLines = extractMarkerLines(text);
+        assert.equal(
+          markerLines.length,
+          1,
+          `expected exactly one [gsd:dispatch ...] marker line in ${file}, found ${markerLines.length}`,
+        );
+        totalMarkerLines += markerLines.length;
+
+        const substituted = substitutePlaceholders(markerLines[0]);
+        const parsed = parseDispatchIdentity(substituted);
+        assert.deepEqual(
+          parsed,
+          { phase: MEASURED_SENTINEL.phase, plan: MEASURED_SENTINEL.plan, source: 'marker' },
+          `template marker in ${file} did not parse to the expected identifiers (got ${JSON.stringify(parsed)})`,
+        );
+      }
+      // 3 prose sites exist across these 2 files; exactly 2 carry the marker.
+      assert.equal(totalMarkerLines, 2);
     });
 
     test('templates: prose token source matches the case-flexible phase-id grammar', () => {

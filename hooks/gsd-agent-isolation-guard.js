@@ -63,8 +63,8 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { readSentinel, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch } = require('./lib/isolation-sentinel.js');
-const { REASON_CODE } = require('./lib/isolation-deny-reason.js');
+const { readSentinel, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
+const { REASON_CODE, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
 const { HOOK_ON_CRASH, allow, deny, crash } = require('./lib/hook-exit.js');
 
 // Required at module top, alongside the other ./lib requires — NOT behind
@@ -96,35 +96,6 @@ const { ensureRuntimeBuild, RuntimeBuildError } = require('../gsd-core/bin/ensur
 // so a future sibling executor role can be added here without touching the
 // matching logic below.
 const EXECUTOR_SUBAGENT_TYPES = new Set(['gsd-executor']);
-
-// #4594 row 15: values interpolated into a deny reason below (`sentinelDiscarded`
-// phase/plan) come from a sentinel file on disk and, transitively, from
-// model-authored prompt text neither of which is trusted — bound length and
-// strip control characters/newlines so a crafted value cannot forge extra
-// lines or otherwise inject content into the guard's stdout/stderr message
-// (same discipline as escaping an untrusted token before embedding it in a
-// message, e.g. phase-plan-index's `depends_on` warning).
-const REASON_INTERPOLATION_MAX_LEN = 64;
-function sanitizeForReason(value) {
-  if (typeof value !== 'string' || value.length === 0) return '(none)';
-  // eslint-disable-next-line no-control-regex -- deliberately stripping control chars/newlines
-  const stripped = value.replace(/[\x00-\x1f\x7f]/g, '');
-  return stripped.length > REASON_INTERPOLATION_MAX_LEN
-    ? `${stripped.slice(0, REASON_INTERPOLATION_MAX_LEN)}…`
-    : stripped;
-}
-
-function describeSentinelDiscard(sentinelDiscarded) {
-  const sentinelPhase = sanitizeForReason(sentinelDiscarded.sentinelPhase);
-  const sentinelPlan = sanitizeForReason(sentinelDiscarded.sentinelPlan);
-  const dispatchPhase = sanitizeForReason(sentinelDiscarded.dispatchPhase);
-  const dispatchPlan = sanitizeForReason(sentinelDiscarded.dispatchPlan);
-  return (
-    ` A fresh dispatch-isolation sentinel was present but did not apply to this dispatch ` +
-    `(sentinel phase="${sentinelPhase}" plan="${sentinelPlan}"; dispatch phase="${dispatchPhase}" ` +
-    `plan="${dispatchPlan}"), so it was not consulted.`
-  );
-}
 
 /**
  * Parse a registry `harnessIsolationFlag` of the shape `key="value"` (the
@@ -470,14 +441,7 @@ function resolveIsolationState(cwd, { clock = Date, dispatchIds = null } = {}) {
   // "stale" — record what was discarded so evaluateDispatch can name it in a
   // block reason instead of silently falling through to a registry-resolution
   // message that never mentions the sentinel existed.
-  const sentinelDiscarded = (sentinel.present && !sentinel.stale && !applies)
-    ? {
-        sentinelPhase: sentinel.phase ?? null,
-        sentinelPlan: sentinel.plan ?? null,
-        dispatchPhase: dispatchIds ? (dispatchIds.phase ?? null) : null,
-        dispatchPlan: dispatchIds ? (dispatchIds.plan ?? null) : null,
-      }
-    : null;
+  const sentinelDiscarded = buildSentinelDiscard(sentinel, dispatchIds);
 
   try {
     const { isolation, harnessFlag } = resolveRegistryIsolation(cwd, configPath);
@@ -549,7 +513,7 @@ function evaluateDispatch(data, { clock = Date } = {}) {
         `project configuration is readable.`;
     const reasonCode = isBuildFailure ? REASON_CODE.RUNTIME_BUILD_FAILED : REASON_CODE.CONFIG_UNREADABLE;
     const fullReason = state.sentinelDiscarded ? reason + describeSentinelDiscard(state.sentinelDiscarded) : reason;
-    return { action: 'block', reason: fullReason, reasonCode };
+    return { action: 'block', reason: fullReason, reasonCode, sentinelDiscarded: state.sentinelDiscarded };
   }
 
   if (state.isolation !== 'harness-worktree') return { action: 'allow' };
@@ -566,7 +530,7 @@ function evaluateDispatch(data, { clock = Date } = {}) {
     `call so the executor runs in an isolated worktree instead of the primary checkout ` +
     `(gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md).`;
   if (state.sentinelDiscarded) reason += describeSentinelDiscard(state.sentinelDiscarded);
-  return { action: 'block', reason, reasonCode: REASON_CODE.HARNESS_FLAG_MISSING };
+  return { action: 'block', reason, reasonCode: REASON_CODE.HARNESS_FLAG_MISSING, sentinelDiscarded: state.sentinelDiscarded };
 }
 
 /* istanbul ignore next -- stdin adapter, exercised via spawnSync in tests */
@@ -581,7 +545,12 @@ function main() {
       const data = JSON.parse(input);
       const decision = evaluateDispatch(data);
       if (decision.action === 'block') {
-        const out = { decision: 'block', reason: decision.reason, reason_code: decision.reasonCode };
+        const out = {
+          decision: 'block',
+          reason: decision.reason,
+          reason_code: decision.reasonCode,
+          sentinel_discarded: decision.sentinelDiscarded ?? null,
+        };
         // Kimi feeds stderr (not stdout) back to the model on exit 2.
         deny(out, decision.reason);
       }

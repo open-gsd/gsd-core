@@ -87,11 +87,22 @@ function emptyResult() {
 }
 
 /**
- * Scan `texts` in order for the first well-formed marker. Returns
- * `{ phase, plan }` (both possibly null) or `null` if no marker was found in
- * any text. Unrecognized keys inside a marker are ignored (forward
- * compatibility — a later `run=`/`wave=` key must not break a deployed
- * parser).
+ * Scan `texts` in order for the first well-formed marker that yields at
+ * least one recognized key (`phase` and/or `plan`). Returns `{ phase, plan }`
+ * (one of the two possibly null, never both) or `null` if no QUALIFYING
+ * marker was found in any text. Unrecognized keys inside a marker are
+ * ignored (forward compatibility — a later `run=`/`wave=` key must not break
+ * a deployed parser).
+ *
+ * #4594 F1 fix: a marker that matches `MARKER_RE` but carries neither
+ * `phase=` nor `plan=` (e.g. only unrecognized keys, or an empty kv block)
+ * is NOT treated as "found" — it is skipped and scanning continues (later
+ * markers in the same text, then subsequent texts), falling through to the
+ * prose fallback if nothing qualifying turns up. Without this, prompt text
+ * that merely CONTAINS the literal marker syntax with no usable identifiers
+ * silently suppressed the prose fallback entirely, since the old
+ * implementation returned on the first syntactic match regardless of
+ * content.
  */
 function findMarker(texts) {
   for (const text of texts) {
@@ -109,6 +120,7 @@ function findMarker(texts) {
         if (key === 'phase' && phase === null) phase = val;
         else if (key === 'plan' && plan === null) plan = val;
       }
+      if (phase === null && plan === null) continue;
       return { phase, plan };
     }
   }

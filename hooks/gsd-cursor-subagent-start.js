@@ -62,8 +62,8 @@ const { allow } = require('./lib/hook-exit.js');
 // hooks/lib/cursor-workspace.js. Staged next to these scripts by
 // writeCursorHooksJson so the require always resolves post-install.
 const { resolveStatePath } = require('./lib/cursor-workspace.js');
-const { readSentinel, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch } = require('./lib/isolation-sentinel.js');
-const { REASON_CODE } = require('./lib/isolation-deny-reason.js');
+const { readSentinel, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
+const { REASON_CODE, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
 // #3582: gsd-core/bin/lib/*.cjs (runtime-homes.cjs, worktree-safety.cjs,
 // runtime-name-policy.cjs, capability-registry.cjs — required below, inside
 // resolveIsolationEvidence and resolveFallbackIsolation) are tsc build
@@ -88,33 +88,6 @@ const MSG_ABSENT =
 // for on Claude. A Set, not a bare string compare, so a future sibling
 // executor role can be added here without touching the matching logic below.
 const EXECUTOR_SUBAGENT_TYPES = new Set(['gsd-executor']);
-
-// #4594 row 15: values interpolated into a deny reason below (`sentinelDiscarded`
-// phase/plan) come from a sentinel file on disk and, transitively, from
-// model-authored task text — neither trusted — so bound length and strip
-// control characters/newlines before embedding them, matching the discipline
-// used for hooks/gsd-agent-isolation-guard.js's own copy of this helper.
-const REASON_INTERPOLATION_MAX_LEN = 64;
-function sanitizeForReason(value) {
-  if (typeof value !== 'string' || value.length === 0) return '(none)';
-  // eslint-disable-next-line no-control-regex -- deliberately stripping control chars/newlines
-  const stripped = value.replace(/[\x00-\x1f\x7f]/g, '');
-  return stripped.length > REASON_INTERPOLATION_MAX_LEN
-    ? `${stripped.slice(0, REASON_INTERPOLATION_MAX_LEN)}…`
-    : stripped;
-}
-
-function describeSentinelDiscard(sentinelDiscarded) {
-  const sentinelPhase = sanitizeForReason(sentinelDiscarded.sentinelPhase);
-  const sentinelPlan = sanitizeForReason(sentinelDiscarded.sentinelPlan);
-  const dispatchPhase = sanitizeForReason(sentinelDiscarded.dispatchPhase);
-  const dispatchPlan = sanitizeForReason(sentinelDiscarded.dispatchPlan);
-  return (
-    ` A fresh dispatch-isolation sentinel was present but did not apply to this dispatch ` +
-    `(sentinel phase="${sentinelPhase}" plan="${sentinelPlan}"; dispatch phase="${dispatchPhase}" ` +
-    `plan="${dispatchPlan}"), so it was not consulted.`
-  );
-}
 
 /**
  * Runs `realpathFn`, never throwing. A path that cannot be resolved (does not
@@ -518,6 +491,7 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
         `Refusing to allow this subagent to spawn until the runtime library is built — a guard ` +
         `that cannot verify must not answer "safe" (#3050).`,
       reasonCode: REASON_CODE.RUNTIME_BUILD_FAILED,
+      sentinelDiscarded: null,
     };
   }
 
@@ -531,14 +505,7 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
   // instead of silently discarded.
   const sentinel = readSentinel(root, { clock });
   const applies = sentinelAppliesToDispatch(sentinel, dispatchIds);
-  const sentinelDiscarded = (sentinel.present && !sentinel.stale && !applies)
-    ? {
-        sentinelPhase: sentinel.phase ?? null,
-        sentinelPlan: sentinel.plan ?? null,
-        dispatchPhase: dispatchIds ? (dispatchIds.phase ?? null) : null,
-        dispatchPlan: dispatchIds ? (dispatchIds.plan ?? null) : null,
-      }
-    : null;
+  const sentinelDiscarded = buildSentinelDiscard(sentinel, dispatchIds);
 
   let declaredIsolation;
   try {
@@ -556,6 +523,7 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
         `Retry once the project configuration is readable.` +
         (sentinelDiscarded ? describeSentinelDiscard(sentinelDiscarded) : ''),
       reasonCode: REASON_CODE.CONFIG_UNREADABLE,
+      sentinelDiscarded,
     };
   }
 
@@ -574,6 +542,7 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
         `is a GSD executor — a guard that cannot verify must not answer "safe" (#3050).` +
         (sentinelDiscarded ? describeSentinelDiscard(sentinelDiscarded) : ''),
       reasonCode: REASON_CODE.NO_SUBAGENT_TYPE,
+      sentinelDiscarded,
     };
   }
 
@@ -592,6 +561,7 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
         `cannot verify must not answer "safe" (#3050). Retry once git is responsive.` +
         (sentinelDiscarded ? describeSentinelDiscard(sentinelDiscarded) : ''),
       reasonCode: REASON_CODE.CANNOT_DETERMINE_ISOLATION,
+      sentinelDiscarded,
     };
   }
 
@@ -606,6 +576,7 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
       `under "~/.cursor/worktrees/") and retry.` +
       (sentinelDiscarded ? describeSentinelDiscard(sentinelDiscarded) : ''),
     reasonCode: REASON_CODE.NOT_ISOLATED_WORKTREE,
+    sentinelDiscarded,
   };
 }
 
@@ -655,7 +626,12 @@ function main() {
         decision = { action: 'allow' };
       }
       if (decision.action === 'deny') {
-        const out = { permission: 'deny', user_message: decision.reason, reason_code: decision.reasonCode };
+        const out = {
+          permission: 'deny',
+          user_message: decision.reason,
+          reason_code: decision.reasonCode,
+          sentinel_discarded: decision.sentinelDiscarded ?? null,
+        };
         if (additionalContext !== null) out.additional_context = additionalContext;
         process.stdout.write(JSON.stringify(out));
         return;
