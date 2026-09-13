@@ -246,13 +246,28 @@ list anywhere else in this file.
 
 ```bash
 # Transient planning subdirectories — reviewer noise (PLAN.md, SUMMARY.md, CONTEXT.md,
-# RESEARCH.md, and friends). Filtered out in BOTH modes.
+# RESEARCH.md, and friends). Filtered out in BOTH modes. `phases` also nests per-milestone
+# at `.planning/milestones/<milestone>-phases/` (the naming `gsd-roadmapper` uses once a
+# project is milestone-scoped) — that slug isn't static, so it's discovered below rather
+# than hardcoded.
 TRANSIENT_DIRS="phases quick research threads todos debug seeds codebase ui-reviews"
 
 # Structural planning files — repository planning state. Preserved in default mode,
 # filtered out in strict mode. Anchored on both alternatives so `.planning/STATEX.md`
-# and `.planning/STATE.md.bak` are NOT treated as structural.
-STRUCTURAL_RE="^\.planning/(STATE|ROADMAP|MILESTONES|PROJECT|REQUIREMENTS)\.md$|^\.planning/milestones/"
+# and `.planning/STATE.md.bak` are NOT treated as structural. The milestones
+# alternative matches only FILES directly under `.planning/milestones/` (e.g.
+# `v1.0-ROADMAP.md`) — not a `<milestone>-phases/` subdirectory nested there. That
+# subdirectory is reviewer noise, not structural state (#4605); it falls through to
+# `$MILESTONE_PHASES_RE` below instead.
+STRUCTURAL_RE="^\.planning/(STATE|ROADMAP|MILESTONES|PROJECT|REQUIREMENTS)\.md$|^\.planning/milestones/[^/]+\.md$"
+
+# Milestone-scoped phase-plan directories — the same reviewer noise as
+# `$TRANSIENT_DIRS`'s `phases` entry, but nested per-milestone once a project has
+# passed at least one milestone: `.planning/milestones/<milestone>-phases/`. The
+# milestone slug (`v1.0`, `m2`, ...) varies per project, so this is declared as a
+# shape, not a literal path — a single path segment standing in for the slug,
+# anchored the same way `$STRUCTURAL_RE`'s alternatives are (#4605).
+MILESTONE_PHASES_RE="^\.planning/milestones/[^/]+-phases/"
 ```
 
 Derive the mode's two projections — `FILTER_PATHS` (what `create_pr_branch` removes from
@@ -267,7 +282,23 @@ else
   # `$VAR` word-splits under bash but not zsh, collapsing every element onto
   # one iteration there.
   FILTER_PATHS=$(for d in $(printf '%s' "$TRANSIENT_DIRS"); do printf '.planning/%s/ ' "$d"; done)
-  FORBIDDEN_RE="^\.planning/($(echo "$TRANSIENT_DIRS" | tr ' ' '|'))/"
+  FORBIDDEN_RE="^\.planning/($(echo "$TRANSIENT_DIRS" | tr ' ' '|'))/|$MILESTONE_PHASES_RE"
+
+  # $MILESTONE_PHASES_RE is a shape, not a path — create_pr_branch's filter loop
+  # needs concrete paths to `git rm`, so resolve which `<milestone>-phases/`
+  # directories actually exist in this worktree (#4605). A project with no
+  # milestones yet (`.planning/milestones/` absent) yields nothing here, same as
+  # any other empty FILTER_PATHS entry. `-exec printf ... \;` rather than
+  # `for D in $(find ...)`: a `for` over unquoted `find` output word-splits a
+  # milestone slug containing a space into two spurious entries (ShellCheck
+  # SC2044) — the exact class of bug #4109 already fixed once in this file.
+  # `2>/dev/null` also swallows a genuine `find` failure (e.g. an unreadable
+  # `.planning/milestones/`), not just the expected-absent case — the unsafe
+  # direction, since a real failure then silently leaves those paths
+  # unfiltered rather than aborting. Accepted here because `$FORBIDDEN_RE`
+  # still asserts their absence downstream in `verify`, catching what this
+  # step misses.
+  FILTER_PATHS="${FILTER_PATHS}$(find .planning/milestones -mindepth 1 -maxdepth 1 -type d -name '*-phases' -exec printf '%s/ ' {} \; 2>/dev/null)"
 fi
 ```
 
@@ -463,7 +494,8 @@ When `$OTHER` is non-empty (default mode only — strict forbids all of it), app
 - [ ] PR branch created from target
 - [ ] Planning-only commits excluded
 - [ ] Zero paths matching the active mode's `$FORBIDDEN_RE` in the PR branch diff —
-      strict: no `.planning/` path at all; default: none from `$TRANSIENT_DIRS`
+      strict: no `.planning/` path at all; default: none from `$TRANSIENT_DIRS` or
+      `$MILESTONE_PHASES_RE`
 - [ ] No `.planning/` path the target branch already tracked was deleted
 - [ ] Every included commit landed — none dropped by a failed cherry-pick
 - [ ] Commit messages preserved from original

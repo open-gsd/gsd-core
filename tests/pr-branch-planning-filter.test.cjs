@@ -75,6 +75,7 @@ const {
   otherPlanningPaths,
 } = require('./helpers/pr-branch-filter.cjs');
 const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
+const { extractFencedBlock } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const CONFIG_DEFAULTS_MANIFEST_PATH = path.join(
@@ -126,11 +127,12 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
   describe('L1: pure predicates over an inline workflow-text fixture', () => {
     const FIXTURE_TEXT = [
       'TRANSIENT_DIRS="phases quick research threads todos debug seeds codebase ui-reviews"',
-      'STRUCTURAL_RE="^\\.planning/(STATE|ROADMAP|MILESTONES|PROJECT|REQUIREMENTS)\\.md$|^\\.planning/milestones/"',
+      'STRUCTURAL_RE="^\\.planning/(STATE|ROADMAP|MILESTONES|PROJECT|REQUIREMENTS)\\.md$|^\\.planning/milestones/[^/]+\\.md$"',
+      'MILESTONE_PHASES_RE="^\\.planning/milestones/[^/]+-phases/"',
     ].join('\n');
     const fixture = parseWorkflow(FIXTURE_TEXT);
-    const strictOpts = { strict: true, transientDirs: fixture.transientDirs, structuralRe: fixture.structuralRe };
-    const defaultOpts = { strict: false, transientDirs: fixture.transientDirs, structuralRe: fixture.structuralRe };
+    const strictOpts = { strict: true, transientDirs: fixture.transientDirs, structuralRe: fixture.structuralRe, milestonePhasesRe: fixture.milestonePhasesRe };
+    const defaultOpts = { strict: false, transientDirs: fixture.transientDirs, structuralRe: fixture.structuralRe, milestonePhasesRe: fixture.milestonePhasesRe };
 
     test('1: [src/a.ts] includes in both modes', () => {
       assert.strictEqual(classifyCommit(['src/a.ts'], strictOpts), 'include');
@@ -155,10 +157,37 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       assert.strictEqual(classifyCommit(files, strictOpts), 'exclude');
     });
 
-    test('5: [.planning/milestones/m1/x.md] includes default, excludes strict', () => {
-      const files = ['.planning/milestones/m1/x.md'];
+    test('5: [.planning/milestones/v1.0-ROADMAP.md] (true milestone-level FILE) includes default, excludes strict', () => {
+      const files = ['.planning/milestones/v1.0-ROADMAP.md'];
       assert.strictEqual(classifyCommit(files, defaultOpts), 'include');
       assert.strictEqual(classifyCommit(files, strictOpts), 'exclude');
+    });
+
+    // #4605 parity pair for test 5: the nested <milestone>-phases/ directory
+    // is the same reviewer noise as the flat .planning/phases/ case (test 3),
+    // not structural state — it must NOT ride along with test 5's milestone
+    // FILE just because both paths start with .planning/milestones/.
+    test('5b: #4605 [.planning/milestones/v1.0-phases/01-01-PLAN.md] excludes in both modes (nested phases dir, not structural)', () => {
+      const files = ['.planning/milestones/v1.0-phases/01-01-PLAN.md'];
+      assert.strictEqual(classifyCommit(files, defaultOpts), 'exclude');
+      assert.strictEqual(classifyCommit(files, strictOpts), 'exclude');
+      assert.deepStrictEqual(forbiddenPaths(files, defaultOpts), files);
+      assert.deepStrictEqual(structuralPaths(files, defaultOpts), []);
+    });
+
+    // #4605: test 5's ORIGINAL path (.planning/milestones/m1/x.md) is neither
+    // a true milestone-level file (it's nested one level deeper, under `m1/`)
+    // nor a <milestone>-phases/ directory — post-fix it lands in the same
+    // "third bucket" as .planning/config.json (test 6), not structural. This
+    // is a deliberate behavior change from the fix (previously mis-included
+    // as structural by the over-broad old regex); pinned explicitly so it
+    // isn't mistaken for a future regression.
+    test('5c: #4605 [.planning/milestones/m1/x.md] (nested, neither milestone-level file nor phases dir) now excludes in both modes (third bucket)', () => {
+      const files = ['.planning/milestones/m1/x.md'];
+      assert.strictEqual(classifyCommit(files, defaultOpts), 'exclude');
+      assert.strictEqual(classifyCommit(files, strictOpts), 'exclude');
+      assert.deepStrictEqual(structuralPaths(files, defaultOpts), []);
+      assert.deepStrictEqual(forbiddenPaths(files, defaultOpts), []);
     });
 
     test('6: [.planning/config.json] excludes in both modes (third bucket)', () => {
@@ -295,6 +324,58 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         () => parseWorkflow(dupStructural),
         /STRUCTURAL_RE declared 2 times/,
       );
+    });
+
+    // ── #4605: MILESTONE_PHASES_RE — folded into this same fixture/opts
+    // above (tests 5/5b/5c already cover the core classification shape) ────
+    test('#4605 parseWorkflow: MILESTONE_PHASES_RE is optional — absent in fixture text with no throw, and forbiddenRegex degrades to pre-#4605 behavior', () => {
+      const noMilestonePhases = parseWorkflow([
+        'TRANSIENT_DIRS="phases quick research threads todos debug seeds codebase ui-reviews"',
+        'STRUCTURAL_RE="^\\.planning/STATE\\.md$"',
+      ].join('\n'));
+      assert.strictEqual(noMilestonePhases.milestonePhasesRe, undefined);
+      const opts = { strict: false, transientDirs: noMilestonePhases.transientDirs, milestonePhasesRe: noMilestonePhases.milestonePhasesRe };
+      assert.deepStrictEqual(forbiddenPaths(['.planning/milestones/v1.0-phases/01-01-PLAN.md'], opts), []);
+    });
+
+    test('#4605 parseWorkflow: throws on a duplicate MILESTONE_PHASES_RE, same as the other two declarations', () => {
+      const dup = [
+        'TRANSIENT_DIRS="a b"',
+        'STRUCTURAL_RE="^\\.planning/STATE\\.md$"',
+        'MILESTONE_PHASES_RE="^\\.planning/milestones/[^/]+-phases/"',
+        'MILESTONE_PHASES_RE="^\\.planning/milestones/[^/]+-phases/"',
+      ].join('\n');
+      assert.throws(
+        () => parseWorkflow(dup),
+        /MILESTONE_PHASES_RE declared 2 times/,
+      );
+    });
+
+    test('#4605 mixed [.planning/STATE.md, .planning/milestones/v1.0-phases/01-01-PLAN.md] includes default (structural + nested-phases), planning path filtered', () => {
+      const files = ['.planning/STATE.md', '.planning/milestones/v1.0-phases/01-01-PLAN.md'];
+      assert.strictEqual(classifyCommit(files, defaultOpts), 'include');
+      assert.strictEqual(classifyCommit(files, strictOpts), 'exclude');
+      assert.deepStrictEqual(
+        forbiddenPaths(files, defaultOpts),
+        ['.planning/milestones/v1.0-phases/01-01-PLAN.md'],
+      );
+    });
+
+    test('#4605 LOOKALIKE [.planning/milestones/v1.0-phasesXYZ/x.md] (segment merely starts with "-phases", does not end the path component there) is not forbidden by MILESTONE_PHASES_RE', () => {
+      const files = ['.planning/milestones/v1.0-phasesXYZ/x.md'];
+      assert.deepStrictEqual(forbiddenPaths(files, defaultOpts), []);
+    });
+
+    test('#4605 LOOKALIKE [.planning/milestones-fake/v1.0-phases/x.md] ("milestones-fake", not "milestones") is not forbidden by MILESTONE_PHASES_RE', () => {
+      const files = ['.planning/milestones-fake/v1.0-phases/x.md'];
+      assert.deepStrictEqual(forbiddenPaths(files, defaultOpts), []);
+    });
+
+    test('#4605 every parsed milestone-phases path is forbidden for any milestone slug, default mode', () => {
+      for (const slug of ['v1.0', 'm2', '2026-Q1']) {
+        const p = `.planning/milestones/${slug}-phases/01-01-PLAN.md`;
+        assert.deepStrictEqual(forbiddenPaths([p], defaultOpts), [p], `expected ${p} to be forbidden in default mode`);
+      }
     });
   });
 
@@ -540,6 +621,77 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         teardown();
       }
     });
+
+    // #4605: a separate small fixture (not buildFixture above) because it
+    // needs a `.planning/milestones/<slug>-phases/` shape buildFixture never
+    // produces. FILTER_PATHS here is built the same way the real workflow's
+    // "Derive the mode's two projections" step builds it post-#4605: the
+    // parsed transient dirs, PLUS whichever `<slug>-phases/` directories this
+    // fixture repo actually has on disk — mirroring the shipped `find`
+    // discovery rather than hand-listing `v1.0-phases` as a literal.
+    function buildMilestonePhasesFixture() {
+      const dir = trackDir(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-prbranch-mstone-')));
+      initRepo(dir);
+      writeFile(dir, 'code.txt', 'line1\n');
+      writeFile(dir, '.planning/STATE.md', 'state v1\n');
+      writeFile(dir, '.planning/milestones/v1.0-phases/old.md', 'old plan\n');
+      commitAll(dir, 'chore: base');
+      git(['branch', 'feature'], dir);
+
+      git(['checkout', '-q', 'feature'], dir);
+      writeFile(dir, 'code.txt', 'line1-c1\n');
+      writeFile(dir, '.planning/STATE.md', 'state v2\n');
+      writeFile(dir, '.planning/milestones/v1.0-phases/new.md', 'new plan v1\n');
+      commitAll(dir, 'feat: c1');
+
+      git(['checkout', '-q', 'main'], dir);
+      git(['checkout', '-q', '-b', 'prbranch', 'main'], dir);
+      return dir;
+    }
+
+    function discoverMilestonePhaseDirs(repoDir) {
+      const base = path.join(repoDir, '.planning', 'milestones');
+      if (!fs.existsSync(base)) return [];
+      return fs.readdirSync(base, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && e.name.endsWith('-phases'))
+        .map((e) => `.planning/milestones/${e.name}/`);
+    }
+
+    test('#4605 L2: a milestone-nested <slug>-phases/ dir is filtered from the PR branch by the real create_pr_branch recipe', () => {
+      const transientDirs = currentTransientDirs();
+      const dir = buildMilestonePhasesFixture();
+      try {
+        const filterPaths = transientDirs.map((d) => `.planning/${d}/`)
+          .concat(discoverMilestonePhaseDirs(dir));
+        const script = buildRecipeScript(filterPaths);
+        let result;
+        try {
+          const stdout = execFileSync('sh', ['-c', script], { cwd: dir, encoding: 'utf8', timeout: CHERRY_PICK_RECIPE_TIMEOUT_MS });
+          result = { status: 0, stdout, stderr: '' };
+        } catch (err) {
+          result = { status: typeof err.status === 'number' ? err.status : 1, stdout: err.stdout || '', stderr: err.stderr || '' };
+        }
+        assert.strictEqual(result.status, 0, `filter loop failed: ${result.stderr}`);
+
+        const diffFiles = git(['diff', '--name-only', 'main..prbranch'], dir)
+          .split('\n').map((s) => s.trim()).filter(Boolean);
+        assert.ok(
+          !diffFiles.some((f) => f.startsWith('.planning/milestones/v1.0-phases/')),
+          `milestone-phases content leaked into the PR branch diff: ${diffFiles.join(', ')}`,
+        );
+        assert.ok(diffFiles.includes('code.txt'), `expected code.txt in diff: ${diffFiles.join(', ')}`);
+        assert.ok(diffFiles.includes('.planning/STATE.md'), `expected .planning/STATE.md in diff: ${diffFiles.join(', ')}`);
+
+        // old.md predates the branch point (it's on `main` itself, same as
+        // buildFixture's old.md in test 19) so it legitimately persists on
+        // prbranch unchanged — that's the #3679 target-preservation contract,
+        // not a leak. Assert it stays byte-identical rather than absent.
+        const oldContent = fs.readFileSync(path.join(dir, '.planning/milestones/v1.0-phases/old.md'), 'utf-8');
+        assert.strictEqual(oldContent, 'old plan\n', 'pre-existing old.md must survive unchanged on the checked-out prbranch worktree');
+      } finally {
+        teardown();
+      }
+    });
   });
 
   // ── L3: planning.pr_strict registration through the real CLI/config ─────
@@ -738,9 +890,13 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         '.planning/MILESTONES.md',
         '.planning/PROJECT.md',
         '.planning/REQUIREMENTS.md',
-        '.planning/milestones/m1/x.md',
+        '.planning/milestones/v1.0-ROADMAP.md',
       ];
-      const thirdBucket = ['.planning/config.json', '.planning/notes.md'];
+      // #4605: .planning/milestones/m1/x.md moved here from structuralPathsPool
+      // — post-fix it's neither a true milestone-level file (test 5) nor a
+      // <milestone>-phases/ dir (test 5b), so it lands in the same bucket as
+      // config.json (test 5c pins this explicitly for the classifier itself).
+      const thirdBucket = ['.planning/config.json', '.planning/notes.md', '.planning/milestones/m1/x.md'];
       const nonPlanning = ['src/a.ts', 'docs/readme.md', 'package.json', 'src/planning-inspect.cts'];
       return fc.constantFrom(...transientPaths, ...structuralPathsPool, ...thirdBucket, ...nonPlanning);
     }
@@ -891,6 +1047,66 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         'analyze_commits must compute an explicit total planning-file count via a real shell '
           + 'assignment (PLANNING_COUNT=$(...)) so the classification arms can distinguish '
           + '"only structural" planning commits from "structural plus transient/other" ones',
+      );
+    });
+
+    // #4605: pins the actual documented defect against the shipped file, not
+    // just the JS model — a bare, unanchored `^\.planning/milestones/` in
+    // STRUCTURAL_RE matches a nested `<milestone>-phases/` directory (reviewer
+    // noise) exactly as readily as a milestone-level file (structural state),
+    // silently defeating default-mode filtering the moment a project passes a
+    // milestone. This must FAIL against the pre-fix STRUCTURAL_RE, which had
+    // no `[^/]+\.md$` anchor past `milestones/`.
+    test('#4605 shipped STRUCTURAL_RE matches a milestone-level FILE but not a nested <milestone>-phases/ directory', () => {
+      const { structuralRe } = readWorkflow();
+      const re = new RegExp(structuralRe); // allow-adhoc-regex-escape: runtime-contract-is-the-product
+      assert.ok(
+        re.test('.planning/milestones/v1.0-ROADMAP.md'),
+        'STRUCTURAL_RE must still accept a milestone-level file (e.g. v1.0-ROADMAP.md)',
+      );
+      assert.ok(
+        !re.test('.planning/milestones/v1.0-phases/01-01-PLAN.md'),
+        'STRUCTURAL_RE must NOT accept a nested <milestone>-phases/ path — that is reviewer '
+          + 'noise, not structural state (#4605), and must fall through to MILESTONE_PHASES_RE',
+      );
+    });
+
+    // #4605: MILESTONE_PHASES_RE is a new canonical declaration (optional in
+    // the parsing seam for backward compatibility — see pr-branch-filter.cjs
+    // — but the shipped file itself must always declare it exactly once,
+    // same as the other two).
+    test('#4605 shipped workflow declares MILESTONE_PHASES_RE exactly once, matching the <milestone>-phases/ shape', () => {
+      const { milestonePhasesRe } = readWorkflow();
+      assert.ok(typeof milestonePhasesRe === 'string' && milestonePhasesRe.length > 0, 'MILESTONE_PHASES_RE must be declared in the shipped workflow');
+      const re = new RegExp(milestonePhasesRe); // allow-adhoc-regex-escape: runtime-contract-is-the-product
+      assert.ok(re.test('.planning/milestones/v1.0-phases/01-01-PLAN.md'));
+      assert.ok(!re.test('.planning/milestones/v1.0-ROADMAP.md'));
+    });
+
+    // #4605: FORBIDDEN_RE (default mode) must actually fold MILESTONE_PHASES_RE
+    // in — declaring the regex alone does nothing if create_pr_branch's
+    // derivation step never references it.
+    test('#4605 default-mode FORBIDDEN_RE derivation references $MILESTONE_PHASES_RE', () => {
+      const text = readFileNormalized(WORKFLOW_PATH);
+      // Plain string search for the prose marker, THEN the sectionizer's own
+      // fence scanner for the code block after it — not an ad-hoc fence
+      // regex (local/no-adhoc-markdown-parsing forbids hand-rolled
+      // ```-delimited parsing; extractFencedBlock is the sanctioned seam).
+      const markerIdx = text.indexOf("Derive the mode's two projections");
+      assert.ok(markerIdx >= 0, 'could not find the "Derive the mode\'s two projections" prose marker');
+      const block = extractFencedBlock(text.slice(markerIdx), 'bash');
+      assert.ok(block, 'could not find the FILTER_PATHS/FORBIDDEN_RE derivation bash block');
+      assert.match(
+        block,
+        /^\s*FORBIDDEN_RE=.*\$MILESTONE_PHASES_RE/m,
+        'the default-mode FORBIDDEN_RE assignment must fold in $MILESTONE_PHASES_RE, or a '
+          + 'milestone-nested phases dir silently escapes the verify step\'s forbidden-path gate',
+      );
+      assert.match(
+        block,
+        /find \.planning\/milestones .*-name '\*-phases'/,
+        'FILTER_PATHS must discover concrete <milestone>-phases/ directories on disk (the '
+          + 'milestone slug is not static, so create_pr_branch cannot git-rm a literal path)',
       );
     });
   });

@@ -24,12 +24,20 @@
  *
  * ## Known limits
  *
- * This is a targeted regex extraction of two specific `NAME="..."` shell
+ * This is a targeted regex extraction of specific `NAME="..."` shell
  * assignments, not a shell parser: it assumes each declaration appears
  * verbatim, unquoted-value-free (no embedded `"` — shell wouldn't allow that
  * unescaped inside a double-quoted assignment either), and on its own line.
  * It does not evaluate shell variable expansion, comments, or conditionals
  * around the declaration — only the literal assigned string.
+ *
+ * `MILESTONE_PHASES_RE` (#4605) is OPTIONAL: it names the shape of a
+ * milestone-scoped phase-plan directory (`.planning/milestones/<slug>-phases/`),
+ * a regex fragment, not a path list, since the milestone slug varies per
+ * project. It is parsed the same way as `STRUCTURAL_RE` when present, but its
+ * absence is not an error — fixture text written before #4605 (or a project on
+ * a GSD version that predates it) has no such directory shape to guard against,
+ * and `forbiddenRegex` below degrades to its pre-#4605 behavior in that case.
  */
 
 const fs = require('fs');
@@ -40,6 +48,7 @@ const WORKFLOW_PATH = path.join(__dirname, '..', '..', 'gsd-core', 'workflows', 
 
 const TRANSIENT_DIRS_RE = /^\s*TRANSIENT_DIRS="([^"]*)"/gm;
 const STRUCTURAL_RE_RE = /^\s*STRUCTURAL_RE="([^"]*)"/gm;
+const MILESTONE_PHASES_RE_RE = /^\s*MILESTONE_PHASES_RE="([^"]*)"/gm;
 
 // Collects every match of `re` (a global regex) against `text`, returning
 // the captured group-1 values in order. `re.lastIndex` is reset first so
@@ -78,7 +87,16 @@ const parseWorkflow = (text) => {
   const transientDirs = transientMatches[0].split(/\s+/).filter((s) => s.length > 0);
   const structuralRe = structuralMatches[0];
 
-  return { transientDirs, structuralRe };
+  // Optional (#4605) — see the module doc comment. Zero occurrences is fine;
+  // more than one is the same "ambiguous canonical source" error as the other
+  // two declarations.
+  const milestonePhasesMatches = collectMatches(MILESTONE_PHASES_RE_RE, text);
+  if (milestonePhasesMatches.length > 1) {
+    throw new Error(`pr-branch.md: MILESTONE_PHASES_RE declared ${milestonePhasesMatches.length} times — the filter must have exactly one canonical declaration`);
+  }
+  const milestonePhasesRe = milestonePhasesMatches[0];
+
+  return { transientDirs, structuralRe, milestonePhasesRe };
 };
 
 const readWorkflow = () => parseWorkflow(fs.readFileSync(WORKFLOW_PATH, 'utf-8'));
@@ -133,15 +151,26 @@ const normalizePaths = (input) => {
   return raw.map((s) => s.replace(/\r$/, '')).filter((s) => s.length > 0);
 };
 
-const forbiddenRegex = ({ strict, transientDirs }) => {
+const forbiddenRegex = ({ strict, transientDirs, milestonePhasesRe }) => {
   if (strict === true) {
     return /^\.planning\//;
   }
-  if (!transientDirs || transientDirs.length === 0) {
+  const parts = [];
+  if (transientDirs && transientDirs.length > 0) {
+    const alt = transientDirs.map((d) => escapeRe(d)).join('|');
+    parts.push(`^\\.planning/(${alt})/`);
+  }
+  // #4605: milestone-scoped phase dirs are the same reviewer noise as a
+  // transient dir, just shaped as a regex (variable milestone slug) instead of
+  // a literal name — folded in as its own alternative rather than into
+  // `transientDirs`, since it isn't one of the fixed names in that list.
+  if (milestonePhasesRe) {
+    parts.push(milestonePhasesRe);
+  }
+  if (parts.length === 0) {
     return /(?!)/;
   }
-  const alt = transientDirs.map((d) => escapeRe(d)).join('|');
-  return new RegExp(`^\\.planning/(${alt})/`);
+  return new RegExp(parts.join('|'));
 };
 
 const forbiddenPaths = (files, opts) => {
