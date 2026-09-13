@@ -660,6 +660,7 @@
       "execute-phase/steps/regression-gate-run.md",
       "execute-phase/steps/regression-gate.md",
       "execute-phase/steps/sequential-root-pin.md",
+      "execute-phase/steps/session-survivability-dispatch.md",
       "execute-phase/steps/tdd-applicability-resolution.md",
       "execute-phase/steps/wave-post-gate-hooks.md",
       "execute-phase/steps/worktree-recovery-policy.md",
