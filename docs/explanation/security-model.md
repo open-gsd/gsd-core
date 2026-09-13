@@ -211,8 +211,19 @@ A site that legitimately cannot use the predicate carries a comment
 `// allow-handrolled-containment: <reason>` naming why: either the comparison is
 not a containment decision (an ancestor-walk loop, identity matching), or the
 predicate is unreachable — two files run before the compiled module they would
-need to import exists. The reason is mandatory and reviewable; the rule does not
-accept an empty one.
+need to import exists. The reason is mandatory and reviewable; the rule does
+not accept an empty one.
+
+A marker cannot cover a shipped, checksum-locked artifact whose body must not
+change: the four `src/installer-migrations/*.cts` bodies hashed against
+`EXPECTED_CHECKSUMS` (#670) hash `plan.toString()`, the function's source text
+INCLUDING comments, so a marker placed inside the body drifts the checksum
+exactly as an edit would — verified directly against the committed baseline.
+These four files are instead excluded from the rule entirely, by exact path in
+`eslint.config.mjs`'s `ignores` (not a directory wildcard, so a new migration
+file is still linted), leaving their hand-rolled comparisons permanently
+un-ratcheted; the only remedy is a fix-forward migration, never an edit to a
+shipped body.
 
 **Runtime hook: `gsd-prompt-guard.js`.** This hook fires on every Write or
 Edit call that targets `.planning/` files. It scans the content being written

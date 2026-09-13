@@ -45,6 +45,7 @@ import coreUtilsMod = require('./core-utils.cjs');
 import planningScopeMod = require('./planning-scope.cjs');
 import { execGit } from './shell-command-projection.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
+import { isContainedIn } from './security.cjs';
 
 const { output, error } = io;
 const { extractPhaseToken, scopeToPhase } = phaseId;
@@ -297,8 +298,11 @@ function computeCoveredDigest(projectRoot: string, coveredFiles: readonly string
       // confinement check above is not enough. realpathSync resolves the
       // actual target; re-confining against realRoot closes that gap.
       const real = fs.realpathSync(resolved);
-      const realRel = path.relative(realRoot, real);
-      if (realRel === '' || realRel === '..' || realRel.startsWith(`..${path.sep}`) || path.isAbsolute(realRel)) {
+      // Both operands are already realpath-resolved (this fn's own realpathSync calls
+      // above), so the shared containment comparison applies directly (ADR-4650) —
+      // no re-resolution through assertWithinRoot/tryWithinRoot, which would redo work
+      // this function already owns for its exists-vs-escaped tri-state.
+      if (!isContainedIn(real, realRoot)) {
         return null;
       }
       const st = fs.statSync(real);

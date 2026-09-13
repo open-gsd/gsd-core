@@ -263,7 +263,7 @@ function installedManifestIsComplete(
         // stat'd) and refused if it is a symlink just below, so this gate must
         // refuse rather than resolve.
         const candidate = tryWithinRootLexical(parts.join('/'), runtimeConfigDir);
-        if (candidate === null) return false;
+        if (candidate === null || candidate === path.resolve(runtimeConfigDir)) return false;
         const stat = io.lstatSync(candidate);
         if (!stat.isFile() || stat.isSymbolicLink()) return false;
         if (installerMigrations.classifyArtifact(runtimeConfigDir, key, manifest).classification !== 'managed-pristine') {
@@ -316,7 +316,7 @@ function providersShareRequiredRoots(
     const overlap = (leftPath: string, rightPath: string): boolean => {
       const relative = path.relative(leftPath, rightPath);
       return relative === '' ||
-        (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+        (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)); // allow-handrolled-containment: bidirectional physical-root overlap/identity check between two providers for dedup detection — not a security confinement gate on untrusted input
     };
     const physicalLeft = canonicalize(leftFs, leftRoot);
     const physicalRight = canonicalize(rightFs, rightRoot);

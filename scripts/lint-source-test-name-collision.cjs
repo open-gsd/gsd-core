@@ -114,7 +114,7 @@ function toPosix(p) {
 function isGeneratedOutput(relPath) {
   const posixRel = toPosix(relPath);
   return GENERATED_OUTPUT_PREFIXES.some(
-    (prefix) => posixRel === prefix || posixRel.startsWith(`${prefix}/`)
+    (prefix) => posixRel === prefix || posixRel.startsWith(`${prefix}/`) // allow-handrolled-containment: scan-exclusion membership test against a fixed generated-output prefix list, not a filesystem root-confinement gate
   );
 }
 

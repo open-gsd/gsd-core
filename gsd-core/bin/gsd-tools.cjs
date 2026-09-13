@@ -440,7 +440,7 @@ function dispatchCapabilityCommand({ command, args, cwd, raw, error, registry, r
     // and must start with libDir + sep so "libDir-suffix" can't sneak through).
     const { tryWithinRootLexical } = require('./lib/security.cjs');
     const resolved = tryWithinRootLexical(m, libDir);
-    if (resolved === null) {
+    if (resolved === null || resolved === path.resolve(libDir)) {
       throw new Error('capability module path escapes bin/lib/: ' + JSON.stringify(m));
     }
     // Step 3: require the resolved absolute path — the SAME representation that
@@ -516,15 +516,19 @@ function defaultRequireFromInstallRoot(installRoot, m) {
   if (typeof m !== 'string' || !/^[A-Za-z0-9._-]+\.cjs$/.test(m)) {
     throw new Error('capability module must be a bare .cjs basename: ' + JSON.stringify(m));
   }
-  // Realpath the root and the resolved module (both symlinked-ancestor and
-  // symlinked-file escapes) in one call — tryWithinRoot resolves the base,
-  // then the candidate, then realpaths the result and re-checks containment.
-  const { tryWithinRoot, PathAcceptance } = require('./lib/security.cjs');
-  const resolved = tryWithinRoot(m, installRoot, PathAcceptance.RelativeOnly);
-  if (resolved === null) {
+  const { tryWithinRoot, tryWithinRootLexical, PathAcceptance } = require('./lib/security.cjs');
+  // Lexical containment check: a symlinked ancestor can't widen confinement.
+  const lexical = tryWithinRootLexical(m, installRoot);
+  if (lexical === null || lexical === path.resolve(installRoot)) {
     throw new Error('capability module path escapes its install root: ' + JSON.stringify(m));
   }
-  return require(resolved);
+  // Realpath/symlink check: the module file itself must not be a symlink
+  // pointing outside the root.
+  const real = tryWithinRoot(m, installRoot, PathAcceptance.RelativeOnly);
+  if (real === null) {
+    throw new Error('capability module resolves outside its install root (symlink): ' + JSON.stringify(m));
+  }
+  return require(real);
 }
 
 /**

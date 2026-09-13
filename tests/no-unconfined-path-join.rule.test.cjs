@@ -107,6 +107,45 @@ describe('no-unconfined-path-join: arm 1 fires', () => {
       ],
     });
   });
+
+  test('invalid: x.startsWith(`${root}${path.sep}`) — template literal ending in a `.sep` expression', () => {
+    ruleTester.run('no-unconfined-path-join', rule, {
+      valid: [],
+      invalid: [
+        {
+          code: 'x.startsWith(`${root}${path.sep}`);',
+          filename: 'src/foo.cts',
+          errors: [{ messageId: 'handRolledContainment' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: x.startsWith(`${root}/`) — template literal ending in a literal separator character', () => {
+    ruleTester.run('no-unconfined-path-join', rule, {
+      valid: [],
+      invalid: [
+        {
+          code: 'x.startsWith(`${root}/`);',
+          filename: 'src/foo.cts',
+          errors: [{ messageId: 'handRolledContainment' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: const sep = path.sep; x.startsWith(root + sep) — separator reached through a single const alias', () => {
+    ruleTester.run('no-unconfined-path-join', rule, {
+      valid: [],
+      invalid: [
+        {
+          code: 'const sep = path.sep; x.startsWith(root + sep);',
+          filename: 'src/foo.cts',
+          errors: [{ messageId: 'handRolledContainment' }],
+        },
+      ],
+    });
+  });
 });
 
 // ─── Arm 1: hand-rolled containment — silent ─────────────────────────────────
@@ -140,9 +179,32 @@ describe('no-unconfined-path-join: arm 1 silent', () => {
     });
   });
 
+  test('valid: let sep = path.sep; x.startsWith(root + sep) — reassignable `let` binding is not resolved', () => {
+    ruleTester.run('no-unconfined-path-join', rule, {
+      valid: [{ code: `let sep = path.sep; x.startsWith(root + sep);`, filename: 'src/foo.cts' }],
+      invalid: [],
+    });
+  });
+
+  test('valid: function f(sep) { x.startsWith(root + sep); } — parameter binding is not resolved', () => {
+    ruleTester.run('no-unconfined-path-join', rule, {
+      valid: [
+        { code: `function f(sep) { x.startsWith(root + sep); }`, filename: 'src/foo.cts' },
+      ],
+      invalid: [],
+    });
+  });
+
   test('valid: x.startsWith(a, b) — wrong arity', () => {
     ruleTester.run('no-unconfined-path-join', rule, {
       valid: [{ code: `x.startsWith(a, b);`, filename: 'src/foo.cts' }],
+      invalid: [],
+    });
+  });
+
+  test('valid: x.startsWith(`${root}-suffix`) — template literal NOT ending in a separator', () => {
+    ruleTester.run('no-unconfined-path-join', rule, {
+      valid: [{ code: 'x.startsWith(`${root}-suffix`);', filename: 'src/foo.cts' }],
       invalid: [],
     });
   });
@@ -170,6 +232,19 @@ describe('no-unconfined-path-join: arm 2 fires', () => {
       invalid: [
         {
           code: `tryWithinRoot(p, root);`,
+          filename: 'src/foo.cts',
+          errors: [{ messageId: 'discardedContainmentResult' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: isContainedIn(p, root); as a bare statement — boolean predicate discarded', () => {
+    ruleTester.run('no-unconfined-path-join', rule, {
+      valid: [],
+      invalid: [
+        {
+          code: `isContainedIn(p, root);`,
           filename: 'src/foo.cts',
           errors: [{ messageId: 'discardedContainmentResult' }],
         },
@@ -280,12 +355,50 @@ describe('no-unconfined-path-join: marker escape', () => {
     });
   });
 
+  test('invalid: does NOT suppress with a BLOCK comment on the same line', () => {
+    ruleTester.run('no-unconfined-path-join', rule, {
+      valid: [],
+      invalid: [
+        {
+          code: `resolved.startsWith(root + path.sep); /* allow-handrolled-containment: legacy call site pending migration */`,
+          filename: 'src/foo.cts',
+          errors: [{ messageId: 'handRolledContainment' }],
+        },
+      ],
+    });
+  });
+
+  test('two violations on one line: trailing marker suppresses only the one it trails', () => {
+    ruleTester.run('no-unconfined-path-join', rule, {
+      valid: [],
+      invalid: [
+        {
+          code: `a.startsWith(root + path.sep); b.startsWith(root + path.sep); // allow-handrolled-containment: legacy call site pending migration`,
+          filename: 'src/foo.cts',
+          errors: [{ messageId: 'handRolledContainment' }],
+        },
+      ],
+    });
+  });
+
   test('valid: suppressed with a justification (b) reason — pre-build bootstrap file', () => {
     ruleTester.run('no-unconfined-path-join', rule, {
       valid: [
         {
           code: `resolved.startsWith(root + path.sep); // allow-handrolled-containment: this is a committed .cjs that must run before npm run build:lib, so src/security.cts is unreachable here`,
           filename: 'gsd-core/bin/lib/capability-validator.cjs',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: marker suppresses a discarded arm-2 call — tryWithinRoot(p, root); // allow-handrolled-containment: <reason>', () => {
+    ruleTester.run('no-unconfined-path-join', rule, {
+      valid: [
+        {
+          code: `tryWithinRoot(p, root); // allow-handrolled-containment: legacy call site pending migration`,
+          filename: 'src/foo.cts',
         },
       ],
       invalid: [],
@@ -361,6 +474,19 @@ describe('no-unconfined-path-join: allowlist', () => {
           errors: [{ messageId: 'handRolledContainment' }],
         },
       ],
+    });
+  });
+
+  test('valid: allowlisted file with one marked and one unmarked occurrence keeps the entry alive', () => {
+    ruleTester.run('no-unconfined-path-join', rule, {
+      valid: [
+        {
+          code: `a.startsWith(root + path.sep); // allow-handrolled-containment: legacy call site pending migration\nb.startsWith(root + path.sep);`,
+          filename: 'src/legacy.cts',
+          options: [{ allowlist: ['src/legacy.cts'] }],
+        },
+      ],
+      invalid: [],
     });
   });
 

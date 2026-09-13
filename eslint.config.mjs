@@ -673,6 +673,21 @@ export default tseslint.config(
   // may legitimately construct a hand-rolled containment shape as a fixture.
   {
     files: ['src/**/*.cts', 'src/**/*.ts', 'scripts/**/*.cjs', 'gsd-core/bin/**/*.cjs', 'hooks/**/*.js'],
+    // These four shipped installer-migration bodies are checksum-locked
+    // (tests/installer-migrations.test.cjs, #670): `migrationChecksum` hashes
+    // `migration.plan.toString()`, which includes comments, so neither a code
+    // fix nor a suppression marker can be added to these bodies without
+    // drifting EXPECTED_CHECKSUMS. Listed by exact path (not a directory
+    // wildcard) so a NEW migration file still gets linted — only these four
+    // already-shipped bodies are exempt. This leaves the corresponding
+    // containment comparisons in these four files permanently un-ratcheted;
+    // the remedy is a fix-forward migration, never an edit to a shipped body.
+    ignores: [
+      'src/installer-migrations/003-rename-get-shit-done-to-gsd-core.cts',
+      'src/installer-migrations/004-prune-stale-pristine-snapshots.cts',
+      'src/installer-migrations/009-pi-retire-reserved-hooks-dir.cts',
+      'src/installer-migrations/010-antigravity-retire-confighome-artifacts.cts',
+    ],
     plugins: {
       local: localPlugin,
     },
@@ -689,7 +704,7 @@ export default tseslint.config(
       // src/security.cts containment predicates whose return value is thrown away —
       // "validate one path, use another" recurred five times across this epic). A
       // justified holdout on the first arm can suppress a single occurrence with a
-      // trailing same-line `// allow-lexical-prefix-match: <reason>` comment. Like
+      // trailing same-line `// allow-handrolled-containment: <reason>` comment. Like
       // `no-unbounded-spawn`, the allowlist is seeded empty and stays empty — this
       // epic migrated every call site, so the rule runs with no exemption surface.
       'local/no-unconfined-path-join': ['error', { allowlist: unconfinedPathJoinAllowlist }],

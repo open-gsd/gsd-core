@@ -29,7 +29,6 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { tryWithinRootLexical } from '../security.cjs';
 
 interface MigrationAction {
   type: string;
@@ -68,10 +67,7 @@ function walkPristineFiles(root: string, relDir: string, baseResolved: string, r
     const relPath = path.posix.join(relDir, entry.name);
     // Bounds check: ensure the resolved path stays under configDir.
     const resolved = path.resolve(root, relPath);
-    // Containment decision is the canonical lexical predicate (ADR-4650
-    // decision 6); lexical because this walk deliberately does not resolve
-    // symlinks — it skips them explicitly above.
-    if (tryWithinRootLexical(resolved, baseResolved) === null) continue;
+    if (resolved !== baseResolved && !resolved.startsWith(baseResolved + path.sep)) continue;
     if (entry.isDirectory()) {
       walkPristineFiles(root, relPath, baseResolved, results);
     } else if (entry.isFile()) {
@@ -123,7 +119,7 @@ const migration: InstallerMigration = {
     for (const relPath of relPaths) {
       // Bounds-check each relPath before emitting any action.
       const resolved = path.resolve(ctx.configDir, relPath);
-      if (tryWithinRootLexical(resolved, baseResolved) === null) continue;
+      if (resolved !== baseResolved && !resolved.startsWith(baseResolved + path.sep)) continue;
 
       // These files are GSD-managed pristine snapshots — the installer writes
       // them during install/upgrade; users never place personal files inside

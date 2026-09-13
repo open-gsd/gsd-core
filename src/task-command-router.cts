@@ -8,6 +8,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { tryWithinRootLexical } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output, error, ERROR_REASON } = ioMod;
@@ -164,12 +165,14 @@ function routeResolveContent(
   }
 
   const projectRoot = path.resolve(cwd || process.cwd());
-  const resolvedPlanPath = path.resolve(projectRoot, plan);
-  const rel = path.relative(projectRoot, resolvedPlanPath);
-  if (rel === '..' || rel.startsWith(`..${path.sep}`)) {
+  // Lexical containment (ADR-4650): this path is validated before existence is
+  // checked below, so realpath resolution is neither available nor required.
+  const contained = tryWithinRootLexical(plan, projectRoot);
+  if (contained === null) {
     error(`Plan file is outside project scope: ${plan}`, ERROR_REASON.USAGE);
     return;
   }
+  const resolvedPlanPath = contained;
   if (!fs.existsSync(resolvedPlanPath)) {
     error(`Plan file not found: ${plan}`, ERROR_REASON.USAGE);
     return;
@@ -238,11 +241,14 @@ function routeTaskCommand({ args, cwd, raw }: RouteTaskCommandOptions): void {
   } else if (args[2]) {
     const projectRoot = path.resolve(cwd || process.cwd());
     const requestedPath = args[2];
-    const resolvedTaskPath = path.resolve(projectRoot, requestedPath);
-    const rel = path.relative(projectRoot, resolvedTaskPath);
-    if (rel === '..' || rel.startsWith(`..${path.sep}`)) {
+    // Lexical containment (ADR-4650): validated before existence is checked below.
+    // `error()` here does not return/throw (preserved from before this migration),
+    // so resolvedTaskPath must still be computed identically on the rejected path.
+    const contained = tryWithinRootLexical(requestedPath, projectRoot);
+    if (contained === null) {
       error(`Task file is outside project scope: ${requestedPath}`, ERROR_REASON.USAGE);
     }
+    const resolvedTaskPath = contained ?? path.resolve(projectRoot, requestedPath);
     if (!fs.existsSync(resolvedTaskPath)) {
       error(`Task file not found: ${requestedPath}`, ERROR_REASON.USAGE);
     }

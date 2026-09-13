@@ -91,6 +91,53 @@ const path = require('path');
  * counted internally but not reported; a listed file with zero violations
  * reports `staleAllowlistEntry` so the dead entry gets deleted. The
  * allowlist only ever ratchets down.
+ *
+ * ## Known gaps
+ *
+ * This rule raises the COST of the accidental hand-rolled copy — the failure
+ * mode this repo actually observed five separate times — it is not a proof
+ * that every unconfined path comparison is caught. Specifically:
+ *
+ *   - `x.startsWith(root)` with NO separator — the genuinely unsafe variant,
+ *     since it accepts a sibling like `/root-evil` — is NOT flagged. Flagging
+ *     every bare `startsWith(identifier)` call in the codebase would swamp
+ *     the rule with unrelated string-prefix checks, so arm 1 only fires once
+ *     a separator is visibly appended. The canonical predicate
+ *     (`isContainedIn` / `assertWithinRoot` / `tryWithinRoot`) is
+ *     separator-aware internally, which is exactly why replacing either
+ *     shape — the correct-looking `root + sep` form and the actually-unsafe
+ *     bare form — with a call to it is the fix.
+ *   - Other spellings of the same comparison are not recognized:
+ *     `indexOf(root + path.sep) === 0` and
+ *     `x.slice(root.length).startsWith(path.sep)`.
+ *   - The suppression marker is a trailing same-line comment anchored to the
+ *     reported node's END line (`node.loc.end.line`): a call whose closing
+ *     paren lands on a later line than its first argument needs the marker
+ *     after THAT line, not after the call's opening line — there is no
+ *     "anywhere in this call" anchoring.
+ *   - A separator reached through more than one level of `const` aliasing
+ *     (e.g. `const s1 = path.sep; const sep = s1; x.startsWith(root + sep)`)
+ *     is not resolved — only a single hop from a `+` right-operand Identifier
+ *     to its unique `const` initializer is followed, and only when that
+ *     initializer is itself a separator operand. `let`/reassigned/parameter
+ *     bindings are deliberately left unresolved: this is targeted alias
+ *     resolution for the one common shape, not general constant folding.
+ *   - Four shipped installer-migration bodies —
+ *     `src/installer-migrations/003-rename-get-shit-done-to-gsd-core.cts`,
+ *     `004-prune-stale-pristine-snapshots.cts`,
+ *     `009-pi-retire-reserved-hooks-dir.cts`, and
+ *     `010-antigravity-retire-confighome-artifacts.cts` — are entirely
+ *     un-ratcheted (excluded via `ignores` in `eslint.config.mjs`, listed by
+ *     exact path, not a directory wildcard). Their `plan` bodies are hashed
+ *     into `EXPECTED_CHECKSUMS` via `plan.toString()`
+ *     (tests/installer-migrations.test.cjs, issue #670), and that hash
+ *     includes comments — so neither a code fix NOR a suppression marker can
+ *     land inside these four bodies without drifting the checksum and
+ *     breaking upgrade state for anyone who already applied the migration.
+ *     A justification-(c) marker was tried and measured to still drift the
+ *     checksum, which is why (c) does not appear above: a marker cannot
+ *     serve this case. The only remedy is a fix-forward migration; a NEW
+ *     migration file is unaffected and still fully linted.
  */
 
 const DISCARDED_CALL_NAMES = new Set([
@@ -101,6 +148,10 @@ const DISCARDED_CALL_NAMES = new Set([
   'tryWithinRootLexical',
   'isPathConfined',
   'assertDestWithinConfigHome',
+  // `isContainedIn` (src/security.cts) is a boolean predicate: calling it as a
+  // bare statement and discarding the boolean is a pure no-op — arm 2's
+  // failure mode, on the one function the whole consolidation funnels through.
+  'isContainedIn',
 ]);
 
 const MARKER_RE = /allow-handrolled-containment:(.*)$/;
@@ -163,15 +214,29 @@ const rule = {
     const sourceCode = context.sourceCode || context.getSourceCode();
 
     /**
-     * Returns true if a same-line trailing comment carries
+     * Returns true if a trailing LINE comment carries
      * `allow-handrolled-containment: <non-empty reason>`.
+     *
+     * Two hardening constraints, both load-bearing:
+     *   - `comment.type === 'Line'` only: a BLOCK comment on the same line must not
+     *     suppress — the convention is a trailing `//` marker, and accepting `/* *\/`
+     *     would let an unrelated block comment on the line silently suppress too.
+     *   - the comment must START at or after the reported NODE'S END (not just share
+     *     `loc.start.line`): matching on the line alone over-suppresses — one marker
+     *     would cover every violation on that line, so a justified holdout comment
+     *     could silently launder an unjustified violation earlier on the same line.
+     *     Anchoring to the node's end means the marker only suppresses the violation
+     *     it visibly trails.
      */
     function isMarkerSuppressed(node) {
       const allComments =
         typeof sourceCode.getAllComments === 'function' ? sourceCode.getAllComments() : [];
-      const line = node.loc.start.line;
+      const line = node.loc.end.line;
+      const nodeEnd = node.range[1];
       for (const comment of allComments) {
+        if (comment.type !== 'Line') continue;
         if (comment.loc.start.line !== line) continue;
+        if (comment.range[0] < nodeEnd) continue;
         const match = MARKER_RE.exec(comment.value);
         if (match && match[1] && match[1].trim().length > 0) {
           return true;
@@ -199,6 +264,56 @@ const rule = {
         return node.value === '/' || node.value === '\\';
       }
       return false;
+    }
+
+    /**
+     * A template-literal argument ends with a separator: either the trailing
+     * quasi text itself ends with `/` or `\` (`` `${root}/` ``), or the
+     * trailing quasi is empty and the LAST expression is a separator operand
+     * (`` `${root}${path.sep}` ``). Only the tail matters — a separator
+     * embedded mid-template followed by further literal text is not a
+     * containment-prefix shape.
+     */
+    function isSeparatorEndingTemplate(node) {
+      if (!node || node.type !== 'TemplateLiteral') return false;
+      const quasis = node.quasis;
+      if (!quasis || quasis.length === 0) return false;
+      const lastQuasi = quasis[quasis.length - 1];
+      const tail =
+        lastQuasi.value.cooked !== null && lastQuasi.value.cooked !== undefined
+          ? lastQuasi.value.cooked
+          : lastQuasi.value.raw;
+      if (tail && (tail.endsWith('/') || tail.endsWith('\\'))) {
+        return true;
+      }
+      if (tail === '' && node.expressions.length > 0) {
+        const lastExpr = node.expressions[node.expressions.length - 1];
+        return isSeparatorOperand(lastExpr);
+      }
+      return false;
+    }
+
+    /**
+     * Resolves a `+` right-operand Identifier to a separator via a single
+     * `const` alias hop: `const sep = path.sep; x.startsWith(root + sep)`.
+     * Uses scope analysis to find the unique binding for the identifier and
+     * checks whether ITS initializer is a separator operand. Deliberately
+     * narrow: only a `const` declarator with exactly one definition is
+     * resolved, and only one hop is followed — this is not general constant
+     * folding, and `let`/reassigned/parameter bindings are left unresolved.
+     */
+    function resolveSeparatorAlias(identifierNode) {
+      const scope = sourceCode.getScope(identifierNode);
+      const ref = scope.references.find((r) => r.identifier === identifierNode);
+      if (!ref || !ref.resolved) return false;
+      const variable = ref.resolved;
+      if (variable.defs.length !== 1) return false;
+      const def = variable.defs[0];
+      if (def.type !== 'Variable') return false;
+      if (!def.parent || def.parent.kind !== 'const') return false;
+      const declarator = def.node;
+      if (!declarator || !declarator.init) return false;
+      return isSeparatorOperand(declarator.init);
     }
 
     /**
@@ -251,8 +366,13 @@ const rule = {
           if (
             arg.type === 'BinaryExpression' &&
             arg.operator === '+' &&
-            isSeparatorOperand(arg.right)
+            (isSeparatorOperand(arg.right) ||
+              (arg.right.type === 'Identifier' && resolveSeparatorAlias(arg.right)))
           ) {
+            reportViolation(node, 'handRolledContainment');
+            return;
+          }
+          if (isSeparatorEndingTemplate(arg)) {
             reportViolation(node, 'handRolledContainment');
             return;
           }

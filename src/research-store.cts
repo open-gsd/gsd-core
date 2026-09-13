@@ -165,7 +165,7 @@ function putResearch(
   const dir = resolveStorePath(cwd, source, { homeDir });
 
   const containedFile = tryWithinRootLexical(`${key}.json`, dir);
-  if (containedFile === null) {
+  if (containedFile === null || containedFile === path.resolve(dir)) {
     throw new Error('invalid research key');
   }
 
@@ -200,7 +200,7 @@ function getResearch(cwd: string, key: string, { clock = Date, homeDir = os.home
 
     for (const dir of tierDirs) {
       const containedFile = tryWithinRootLexical(`${key}.json`, dir);
-      if (containedFile === null) continue;
+      if (containedFile === null || containedFile === path.resolve(dir)) continue;
 
       if (!fs.existsSync(containedFile)) continue;
 
