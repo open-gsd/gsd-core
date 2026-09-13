@@ -56,6 +56,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { parseDispatchIdentity } = require('./dispatch-identity.js');
 
 // Isolation modes ADR-1239 declares (mirrors gsd-tools.cjs
 // routeDispatchIsolation / routeRecordDispatchIsolation).
@@ -223,26 +224,40 @@ function readSentinel(cwd, { clock = Date } = {}) {
 }
 
 /**
- * #3045 SECURITY F2: extract the `{plan, phase}` a specific Agent()/Task()
- * dispatch is FOR, from the one place that data is reliably embedded today —
- * the dispatch prompt/description text (`execute-phase.md`'s Agent() block
- * uses the literal shape `description="Execute plan {plan_number} of phase
- * {phase_number}"`, and the prompt body's `<objective>` repeats "Execute plan
- * {plan_number} of phase {phase_number}-{phase_name}." verbatim — the SAME
- * text the orchestrator-worktree EXECUTOR_PROMPT template and Cursor's `task`
- * field carry, since Cursor dispatches the same prompt content). There is no
- * structured per-dispatch kwarg carrying plan/phase identifiers today (#3045
- * would need a larger dispatch-protocol change to add one) — this is
- * therefore a best-effort, NOT a guaranteed, extraction: a dispatch whose
- * text doesn't match the expected shape returns `{ plan: null, phase: null }`
- * and the caller must NOT treat that as a mismatch (see
- * `sentinelAppliesToDispatch`).
+ * #3045 SECURITY F2 / #4594: extract the `{plan, phase}` a specific
+ * Agent()/Task() dispatch is FOR. Variadic — accepts any number of text
+ * sources (short description, full prompt body, etc) and delegates to
+ * `hooks/lib/dispatch-identity.js::parseDispatchIdentity`, the one canonical
+ * owner of both the `[gsd:dispatch phase="…" plan="…"]` marker format and its
+ * prose fallback (see `.gsd/phase/fix-4594-dispatch-identity-seam/40-design.md`).
+ *
+ * MARKER-FIRST CONTRACT: producers embed a structured marker carrying the
+ * exact shell values the sentinel itself records (`$PHASE_NUMBER`,
+ * `$plan_id`), so producer and consumer agree by construction, independent
+ * of how the prose reads or whether a model paraphrases the dispatch
+ * sentence. Only when no marker is found anywhere in the supplied texts does
+ * this fall back to scanning for the prose frame "execute plan <token> of
+ * phase <PHASE TOKEN>".
+ *
+ * The prose fallback is now CORRECT-OR-ABSENT rather than possibly-wrong:
+ * the phase token is bounded by the same grammar `src/phase-id.cts` owns
+ * (ADR-2121), so a directory-name slug or trailing punctuation can no longer
+ * leak into the phase value, and the prose plan token is never reported at
+ * all (it lives in a different namespace than the sentinel's phase-prefixed,
+ * slugged `plan_id` — reporting it was the #4594 false-mismatch bug).
+ *
+ * This is still a best-effort, NOT a guaranteed, extraction: a dispatch that
+ * carries neither a marker nor a matching prose frame in ANY supplied text
+ * returns `{ plan: null, phase: null }`, and the caller MUST NEVER treat
+ * that as a mismatch — see `sentinelAppliesToDispatch`, whose whole
+ * contract depends on "missing" and "wrong" being distinguishable.
+ *
+ * Returns only the two-field `{ plan, phase }` shape existing callers
+ * depend on — `parseDispatchIdentity`'s `source` field is discarded here.
  */
-function extractDispatchIdentifiers(text) {
-  if (typeof text !== 'string' || text.length === 0) return { plan: null, phase: null };
-  const m = /execute\s+plan\s+(\S+)\s+of\s+phase\s+(\S+)/i.exec(text);
-  if (!m) return { plan: null, phase: null };
-  return { plan: m[1], phase: m[2] };
+function extractDispatchIdentifiers(...texts) {
+  const { phase, plan } = parseDispatchIdentity(...texts);
+  return { plan, phase };
 }
 
 /**

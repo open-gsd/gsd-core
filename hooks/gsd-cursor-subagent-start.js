@@ -89,6 +89,33 @@ const MSG_ABSENT =
 // executor role can be added here without touching the matching logic below.
 const EXECUTOR_SUBAGENT_TYPES = new Set(['gsd-executor']);
 
+// #4594 row 15: values interpolated into a deny reason below (`sentinelDiscarded`
+// phase/plan) come from a sentinel file on disk and, transitively, from
+// model-authored task text — neither trusted — so bound length and strip
+// control characters/newlines before embedding them, matching the discipline
+// used for hooks/gsd-agent-isolation-guard.js's own copy of this helper.
+const REASON_INTERPOLATION_MAX_LEN = 64;
+function sanitizeForReason(value) {
+  if (typeof value !== 'string' || value.length === 0) return '(none)';
+  // eslint-disable-next-line no-control-regex -- deliberately stripping control chars/newlines
+  const stripped = value.replace(/[\x00-\x1f\x7f]/g, '');
+  return stripped.length > REASON_INTERPOLATION_MAX_LEN
+    ? `${stripped.slice(0, REASON_INTERPOLATION_MAX_LEN)}…`
+    : stripped;
+}
+
+function describeSentinelDiscard(sentinelDiscarded) {
+  const sentinelPhase = sanitizeForReason(sentinelDiscarded.sentinelPhase);
+  const sentinelPlan = sanitizeForReason(sentinelDiscarded.sentinelPlan);
+  const dispatchPhase = sanitizeForReason(sentinelDiscarded.dispatchPhase);
+  const dispatchPlan = sanitizeForReason(sentinelDiscarded.dispatchPlan);
+  return (
+    ` A fresh dispatch-isolation sentinel was present but did not apply to this dispatch ` +
+    `(sentinel phase="${sentinelPhase}" plan="${sentinelPlan}"; dispatch phase="${dispatchPhase}" ` +
+    `plan="${dispatchPlan}"), so it was not consulted.`
+  );
+}
+
 /**
  * Runs `realpathFn`, never throwing. A path that cannot be resolved (does not
  * exist, dangling symlink, ELOOP, ...) yields `null` rather than an
@@ -494,15 +521,28 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
     };
   }
 
+  // #3045 BLOCKER fix: a fresh sentinel is authoritative for THIS dispatch's
+  // actual resolved isolation — see the doc comment above.
+  // #3045 SECURITY F2: a fresh sentinel that names a DIFFERENT plan/phase
+  // than this dispatch is not applicable to it — fall through to the
+  // conservative fallback exactly as a stale sentinel would.
+  // Hoisted (readSentinel never throws) so the "present, fresh, but did not
+  // apply" case (#4594 row 15) can be reported on every deny path below
+  // instead of silently discarded.
+  const sentinel = readSentinel(root, { clock });
+  const applies = sentinelAppliesToDispatch(sentinel, dispatchIds);
+  const sentinelDiscarded = (sentinel.present && !sentinel.stale && !applies)
+    ? {
+        sentinelPhase: sentinel.phase ?? null,
+        sentinelPlan: sentinel.plan ?? null,
+        dispatchPhase: dispatchIds ? (dispatchIds.phase ?? null) : null,
+        dispatchPlan: dispatchIds ? (dispatchIds.plan ?? null) : null,
+      }
+    : null;
+
   let declaredIsolation;
   try {
-    // #3045 BLOCKER fix: a fresh sentinel is authoritative for THIS
-    // dispatch's actual resolved isolation — see the doc comment above.
-    // #3045 SECURITY F2: a fresh sentinel that names a DIFFERENT
-    // plan/phase than this dispatch is not applicable to it — fall through
-    // to the conservative fallback exactly as a stale sentinel would.
-    const sentinel = readSentinel(root, { clock });
-    declaredIsolation = (sentinel.present && !sentinel.stale && sentinelAppliesToDispatch(sentinel, dispatchIds))
+    declaredIsolation = (sentinel.present && !sentinel.stale && applies)
       ? sentinel.isolation
       : resolveFallbackIsolation(root, configPath);
   } catch {
@@ -513,7 +553,8 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
         `dispatch-isolation configuration ('.planning/config.json' exists under "${root}"). ` +
         `Refusing to allow this subagent to spawn without being able to verify whether ` +
         `isolation is required — a guard that cannot verify must not answer "safe" (#3050). ` +
-        `Retry once the project configuration is readable.`,
+        `Retry once the project configuration is readable.` +
+        (sentinelDiscarded ? describeSentinelDiscard(sentinelDiscarded) : ''),
       reasonCode: REASON_CODE.CONFIG_UNREADABLE,
     };
   }
@@ -530,7 +571,8 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
         `GSD subagent isolation guard: this project's dispatch isolation resolves to ` +
         `"harness-worktree", but the subagentStart payload for this dispatch carries no usable ` +
         `subagent_type. Refusing to allow it to spawn without being able to confirm whether it ` +
-        `is a GSD executor — a guard that cannot verify must not answer "safe" (#3050).`,
+        `is a GSD executor — a guard that cannot verify must not answer "safe" (#3050).` +
+        (sentinelDiscarded ? describeSentinelDiscard(sentinelDiscarded) : ''),
       reasonCode: REASON_CODE.NO_SUBAGENT_TYPE,
     };
   }
@@ -547,7 +589,8 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
         `"harness-worktree", but whether "${root}" is running in an isolated Cursor worktree ` +
         `could not be determined (git did not respond). Refusing to allow subagent_type=` +
         `"${subagentType}" to spawn without being able to verify isolation — a guard that ` +
-        `cannot verify must not answer "safe" (#3050). Retry once git is responsive.`,
+        `cannot verify must not answer "safe" (#3050). Retry once git is responsive.` +
+        (sentinelDiscarded ? describeSentinelDiscard(sentinelDiscarded) : ''),
       reasonCode: REASON_CODE.CANNOT_DETERMINE_ISOLATION,
     };
   }
@@ -560,7 +603,8 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
       `which is not an isolated Cursor worktree — it would edit the user's primary checkout ` +
       `directly, with no consent and no warning. Start an isolated session first (the ` +
       `"--worktree" CLI flag or the "/worktree" chat command; Cursor manages these worktrees ` +
-      `under "~/.cursor/worktrees/") and retry.`,
+      `under "~/.cursor/worktrees/") and retry.` +
+      (sentinelDiscarded ? describeSentinelDiscard(sentinelDiscarded) : ''),
     reasonCode: REASON_CODE.NOT_ISOLATED_WORKTREE,
   };
 }

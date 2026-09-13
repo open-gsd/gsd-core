@@ -149,8 +149,12 @@ Assign the composed prompt to a shell variable so it can be passed as one argume
 #      An unreadable source file is a halt condition (#3637 fail-closed),
 #      never a skip — a child without these texts is not a gsd-executor.
 #   2. Substitute this plan's {plan_number}, {phase_number}, {phase_name},
-#      {phase_dir}, and {plan_file} placeholders (same values the harness
-#      path substitutes into its Agent() prompt).
+#      {phase_dir}, {plan_file}, and {plan_id} placeholders (same values the
+#      harness path substitutes into its Agent() prompt). {plan_id} is this
+#      plan's `id` field from the phase-plan-index JSON — the guard hooks
+#      compare it verbatim against the sentinel the per-plan gate wrote, so a
+#      paraphrase or omission costs the dispatch its recorded isolation
+#      decision.
 #   3. Inline the gsd-executor ROLE DEFINITION: read `agents/gsd-executor.md`
 #      (resolved against the install root the same way the harness runtime
 #      resolves subagent types) and inline it verbatim at the provenance
@@ -175,6 +179,7 @@ TDD_APPLICABLE="$_TDD_APPLICABLE_RAW"
 
 EXECUTOR_PROMPT='<objective>
 Execute plan {plan_number} of phase {phase_number}-{phase_name}.
+[gsd:dispatch phase="{phase_number}" plan="{plan_id}"]
 Commit each task atomically. Create SUMMARY.md.
 Do NOT update STATE.md or ROADMAP.md — the orchestrator owns those writes after all worktree agents in the wave complete.
 </objective>

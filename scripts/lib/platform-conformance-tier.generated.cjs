@@ -68,6 +68,7 @@ module.exports = {
   "tests/cursor-hook-workspace-roots.test.cjs",
   "tests/cursor-hooks.test.cjs",
   "tests/cursor-subagent-isolation.test.cjs",
+  "tests/dispatch-identity.test.cjs",
   "tests/dispatcher.test.cjs",
   "tests/drift-detection.test.cjs",
   "tests/effort-surface-axis.test.cjs",

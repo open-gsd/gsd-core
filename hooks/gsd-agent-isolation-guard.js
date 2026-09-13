@@ -97,6 +97,35 @@ const { ensureRuntimeBuild, RuntimeBuildError } = require('../gsd-core/bin/ensur
 // matching logic below.
 const EXECUTOR_SUBAGENT_TYPES = new Set(['gsd-executor']);
 
+// #4594 row 15: values interpolated into a deny reason below (`sentinelDiscarded`
+// phase/plan) come from a sentinel file on disk and, transitively, from
+// model-authored prompt text neither of which is trusted — bound length and
+// strip control characters/newlines so a crafted value cannot forge extra
+// lines or otherwise inject content into the guard's stdout/stderr message
+// (same discipline as escaping an untrusted token before embedding it in a
+// message, e.g. phase-plan-index's `depends_on` warning).
+const REASON_INTERPOLATION_MAX_LEN = 64;
+function sanitizeForReason(value) {
+  if (typeof value !== 'string' || value.length === 0) return '(none)';
+  // eslint-disable-next-line no-control-regex -- deliberately stripping control chars/newlines
+  const stripped = value.replace(/[\x00-\x1f\x7f]/g, '');
+  return stripped.length > REASON_INTERPOLATION_MAX_LEN
+    ? `${stripped.slice(0, REASON_INTERPOLATION_MAX_LEN)}…`
+    : stripped;
+}
+
+function describeSentinelDiscard(sentinelDiscarded) {
+  const sentinelPhase = sanitizeForReason(sentinelDiscarded.sentinelPhase);
+  const sentinelPlan = sanitizeForReason(sentinelDiscarded.sentinelPlan);
+  const dispatchPhase = sanitizeForReason(sentinelDiscarded.dispatchPhase);
+  const dispatchPlan = sanitizeForReason(sentinelDiscarded.dispatchPlan);
+  return (
+    ` A fresh dispatch-isolation sentinel was present but did not apply to this dispatch ` +
+    `(sentinel phase="${sentinelPhase}" plan="${sentinelPlan}"; dispatch phase="${dispatchPhase}" ` +
+    `plan="${dispatchPlan}"), so it was not consulted.`
+  );
+}
+
 /**
  * Parse a registry `harnessIsolationFlag` of the shape `key="value"` (the
  * only shape an `Agent()` tool_input kwarg can express) into its parameter
@@ -385,16 +414,20 @@ function resolveIsolationState(cwd, { clock = Date, dispatchIds = null } = {}) {
     projectExists = false;
   }
   if (!projectExists) {
-    return { gsdProject: false, isolation: null, harnessFlag: null, error: null };
+    return { gsdProject: false, isolation: null, harnessFlag: null, error: null, sentinelDiscarded: null };
   }
 
   const sentinel = readSentinel(cwd, { clock });
-  if (sentinel.present && !sentinel.stale && sentinelAppliesToDispatch(sentinel, dispatchIds)) {
+  // Hoisted so the "sentinel was present/fresh but did not apply" case below
+  // (#4594 row 15 — Postel's-Law finding) can distinguish itself from
+  // "absent"/"stale" without re-deriving applicability.
+  const applies = sentinelAppliesToDispatch(sentinel, dispatchIds);
+  if (sentinel.present && !sentinel.stale && applies) {
     if (sentinel.isolation !== 'harness-worktree') {
-      return { gsdProject: true, isolation: sentinel.isolation, harnessFlag: null, error: null };
+      return { gsdProject: true, isolation: sentinel.isolation, harnessFlag: null, error: null, sentinelDiscarded: null };
     }
     if (sentinel.harnessFlag) {
-      return { gsdProject: true, isolation: 'harness-worktree', harnessFlag: sentinel.harnessFlag, error: null };
+      return { gsdProject: true, isolation: 'harness-worktree', harnessFlag: sentinel.harnessFlag, error: null, sentinelDiscarded: null };
     }
     // #3045 BLOCKER 2 fix: the sentinel already PROVED this dispatch requires
     // isolation (it resolved harness-worktree) but carries no usable flag —
@@ -423,6 +456,7 @@ function resolveIsolationState(cwd, { clock = Date, dispatchIds = null } = {}) {
         'dispatch-isolation sentinel resolved "harness-worktree" but recorded no harness_flag — ' +
         'cannot verify what parameter the dispatch must carry.'
       ),
+      sentinelDiscarded: null,
     };
   }
 
@@ -430,11 +464,26 @@ function resolveIsolationState(cwd, { clock = Date, dispatchIds = null } = {}) {
   // conservative fallback (#3045 finding — must still cover fail-closed case
   // (a): a project that opted out of worktrees entirely via
   // workflow.use_worktrees).
+  //
+  // #4594 row 15: a PRESENT, FRESH sentinel that simply does not apply to
+  // THIS dispatch (identifiers disagree) is a distinct case from "absent" or
+  // "stale" — record what was discarded so evaluateDispatch can name it in a
+  // block reason instead of silently falling through to a registry-resolution
+  // message that never mentions the sentinel existed.
+  const sentinelDiscarded = (sentinel.present && !sentinel.stale && !applies)
+    ? {
+        sentinelPhase: sentinel.phase ?? null,
+        sentinelPlan: sentinel.plan ?? null,
+        dispatchPhase: dispatchIds ? (dispatchIds.phase ?? null) : null,
+        dispatchPlan: dispatchIds ? (dispatchIds.plan ?? null) : null,
+      }
+    : null;
+
   try {
     const { isolation, harnessFlag } = resolveRegistryIsolation(cwd, configPath);
-    return { gsdProject: true, isolation, harnessFlag, error: null };
+    return { gsdProject: true, isolation, harnessFlag, error: null, sentinelDiscarded };
   } catch (err) {
-    return { gsdProject: true, isolation: null, harnessFlag: null, error: err };
+    return { gsdProject: true, isolation: null, harnessFlag: null, error: err, sentinelDiscarded };
   }
 }
 
@@ -464,10 +513,16 @@ function evaluateDispatch(data, { clock = Date } = {}) {
   }
 
   const cwd = data.cwd || process.cwd();
-  // #3045 SECURITY F2: best-effort plan/phase extraction from this
-  // dispatch's own description text, so a fresh sentinel that disagrees
-  // with THIS dispatch is treated as inapplicable rather than trusted.
-  const dispatchIds = extractDispatchIdentifiers(toolInput.description);
+  // #3045 SECURITY F2 / #4594: best-effort plan/phase extraction from this
+  // dispatch's own text, so a fresh sentinel that disagrees with THIS
+  // dispatch is treated as inapplicable rather than trusted. PROMPT FIRST:
+  // `description` is short, model-authored free text that only carries usable
+  // identity when the model happens to reproduce the dispatch template
+  // verbatim, while the canonical `[gsd:dispatch phase="…" plan="…"]` marker
+  // (or, failing that, the prose fallback) lives in the prompt body itself —
+  // `description` is kept only as a fallback for a marker/prose match that
+  // exists solely in it.
+  const dispatchIds = extractDispatchIdentifiers(toolInput.prompt, toolInput.description);
   const state = resolveIsolationState(cwd, { clock, dispatchIds });
 
   if (!state.gsdProject) return { action: 'allow' };
@@ -493,7 +548,8 @@ function evaluateDispatch(data, { clock = Date } = {}) {
         `required — a guard that cannot verify must not answer "safe" (#3050). Retry once the ` +
         `project configuration is readable.`;
     const reasonCode = isBuildFailure ? REASON_CODE.RUNTIME_BUILD_FAILED : REASON_CODE.CONFIG_UNREADABLE;
-    return { action: 'block', reason, reasonCode };
+    const fullReason = state.sentinelDiscarded ? reason + describeSentinelDiscard(state.sentinelDiscarded) : reason;
+    return { action: 'block', reason: fullReason, reasonCode };
   }
 
   if (state.isolation !== 'harness-worktree') return { action: 'allow' };
@@ -503,12 +559,13 @@ function evaluateDispatch(data, { clock = Date } = {}) {
 
   if (toolInput[parsed.param] === parsed.value) return { action: 'allow' };
 
-  const reason =
+  let reason =
     `Agent isolation guard: this project's dispatch isolation resolves to "harness-worktree", ` +
     `but the Agent() dispatch for subagent_type="${subagentType}" is missing ` +
     `${parsed.param}="${parsed.value}". Add ${parsed.param}="${parsed.value}" to the Agent() ` +
     `call so the executor runs in an isolated worktree instead of the primary checkout ` +
     `(gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md).`;
+  if (state.sentinelDiscarded) reason += describeSentinelDiscard(state.sentinelDiscarded);
   return { action: 'block', reason, reasonCode: REASON_CODE.HARNESS_FLAG_MISSING };
 }
 

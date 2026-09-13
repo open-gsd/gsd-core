@@ -854,6 +854,31 @@ describe('gsd-cursor-subagent-start.js: #3045 SECURITY F2 — sentinel bound to 
   });
 });
 
+describe('gsd-cursor-subagent-start.js: #4594 row 30 — sentinel-discard reporting parity with the Claude guard', () => {
+  let harnessProject;
+
+  before(() => {
+    harnessProject = makeGitProject('gsd-cs-4594-', JSON.stringify({ runtime: 'cursor' }));
+  });
+
+  after(() => {
+    cleanup(harnessProject);
+  });
+
+  test('row 30: `data.task` in prose form + a fresh matching {isolation:"none"} sentinel -> ALLOW (was: discarded and denied)', (t) => {
+    // Measured production shape: sentinel plan is phase-prefixed-and-slugged
+    // (phase-plan-index's `plans[].id`); the prose fallback never reports a
+    // plan (see hooks/lib/dispatch-identity.js's findProse doc comment), so
+    // only phase is compared here — exactly the real-world match path.
+    writeSentinel(harnessProject, { isolation: 'none', phase: '03', plan: '03-02-hardening' });
+    t.after(() => cleanup(path.join(harnessProject, '.gsd')));
+    const r = runHook(subagentPayload([harnessProject], { task: 'Execute plan 02 of phase 03-auth.' }));
+    assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.permission, undefined, `expected allow, got: ${r.stdout}`);
+  });
+});
+
 describe('gsd-cursor-subagent-start.js: #3045 MAJOR — clock seam boundary coverage (in-process, no subprocess wall-clock race)', () => {
   const cursorHookModule = require('../hooks/gsd-cursor-subagent-start.js');
 

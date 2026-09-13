@@ -666,6 +666,7 @@
   "hooks/gsd-write-guard.js",
   "hooks/lib/cli-exit.js",
   "hooks/lib/cursor-workspace.js",
+  "hooks/lib/dispatch-identity.js",
   "hooks/lib/exit-code-registry.js",
   "hooks/lib/filename-classification.js",
   "hooks/lib/git-cmd.js",

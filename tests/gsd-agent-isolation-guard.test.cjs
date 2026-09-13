@@ -568,6 +568,87 @@ describe('gsd-agent-isolation-guard.js: #3045 SECURITY F2 — sentinel bound to 
   });
 });
 
+describe('gsd-agent-isolation-guard.js: #4594 rows 15/28-32 — prompt-first extraction + sentinel-discard reporting', () => {
+  let harnessProject;
+
+  before(() => {
+    harnessProject = mkProject('gsd-aig-4594-');
+    writeConfig(harnessProject, JSON.stringify({ runtime: 'claude' }));
+  });
+
+  after(() => {
+    cleanup(harnessProject);
+  });
+
+  test('row 29 (THE REGRESSION): fresh sentinel matches a real prose dispatch carried only in tool_input.prompt -> ALLOW', (t) => {
+    // Measured production shapes (not simplified): sentinel plan is
+    // phase-prefixed-and-slugged (`03-02-hardening`, phase-plan-index's
+    // `plans[].id`), the dispatch prose is the verbatim frame the workflow
+    // actually emits. `description` is deliberately OMITTED so this only
+    // passes when evaluateDispatch scans `prompt` — before this change the
+    // guard read only `description` and never saw this text at all.
+    writeSentinel(harnessProject, { isolation: 'none', phase: '03', plan: '03-02-hardening' });
+    t.after(() => cleanup(path.join(harnessProject, '.gsd')));
+    const r = runHook(
+      agentPayload({ tool_input: { subagent_type: 'gsd-executor', prompt: 'Execute plan 02 of phase 03-auth.' } }),
+      harnessProject,
+    );
+    assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    assert.equal(r.stdout, '');
+  });
+
+  test('row 28: unusable description + marker-bearing prompt, sentinel matches -> ALLOW', (t) => {
+    writeSentinel(harnessProject, { isolation: 'none', phase: '03', plan: '03-02-hardening' });
+    t.after(() => cleanup(path.join(harnessProject, '.gsd')));
+    const r = runHook(
+      agentPayload({
+        tool_input: {
+          subagent_type: 'gsd-executor',
+          description: 'Run the executor',
+          prompt: '[gsd:dispatch phase="03" plan="03-02-hardening"] Execute the plan.',
+        },
+      }),
+      harnessProject,
+    );
+    assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    assert.equal(r.stdout, '');
+  });
+
+  test('row 31: fresh sentinel for a DIFFERENT plan, isolation harness-worktree, kwarg missing -> DENY naming the discarded sentinel and both identifiers', (t) => {
+    writeSentinel(harnessProject, {
+      isolation: 'harness-worktree',
+      harnessFlag: 'isolation="worktree"',
+      phase: '03',
+      plan: '03-02-hardening',
+    });
+    t.after(() => cleanup(path.join(harnessProject, '.gsd')));
+    const r = runHook(
+      agentPayload({
+        tool_input: {
+          subagent_type: 'gsd-executor',
+          prompt: '[gsd:dispatch phase="03" plan="07-01-x"] Execute the plan.',
+        },
+      }),
+      harnessProject,
+    );
+    assert.equal(r.status, 2, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, 'block');
+    assert.match(out.reason, /sentinel/i);
+    assert.match(out.reason, /sentinel phase="03" plan="03-02-hardening"/);
+    assert.match(out.reason, /dispatch phase="03" plan="07-01-x"/);
+  });
+
+  test('row 32: no sentinel at all -> unchanged conservative fallback (DENY, registry resolves harness-worktree)', () => {
+    const r = runHook(agentPayload(), harnessProject);
+    assert.equal(r.status, 2, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, 'block');
+    // No sentinel existed, so there is nothing to discard/report.
+    assert.doesNotMatch(out.reason, /was not consulted/);
+  });
+});
+
 describe('gsd-agent-isolation-guard.js: #3045 MAJOR — clock seam boundary coverage (in-process, no subprocess wall-clock race)', () => {
   const guardModule = require('../hooks/gsd-agent-isolation-guard.js');
 
