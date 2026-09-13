@@ -23,6 +23,21 @@ const { evaluatePredicate } = require('../gsd-core/bin/lib/gate-predicate-evalua
 const { buildPredicateDeps, parsePredicateFlags } = require('../gsd-core/bin/lib/check-command-router.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
+/**
+ * A real, bounded `sh -c` subprocess spawned via the production
+ * runBoundedShell dependency -- the describe block's own name is "real
+ * bounded sh -c subprocess."
+ */
+const BOUNDED_SHELL_PROBE_TIMEOUT_MS = 5000;
+
+/**
+ * The same runBoundedShell call as BOUNDED_SHELL_PROBE_TIMEOUT_MS, but
+ * deliberately tiny (not generous headroom) to force a `sleep 1` command
+ * past the bound within this test's own lifetime, proving "timeout kills
+ * the subprocess (SIGTERM => timedOut:true)."
+ */
+const BOUNDED_SHELL_FORCED_TIMEOUT_MS = 100;
+
 // ─── buildPredicateDeps: real subprocess exit mapping ─────────────────────────
 
 describe('buildPredicateDeps — real bounded sh -c subprocess', () => {
@@ -30,30 +45,30 @@ describe('buildPredicateDeps — real bounded sh -c subprocess', () => {
   const cwd = process.cwd();
 
   test('`true` => exitCode 0, not timed out', () => {
-    const r = deps.runBoundedShell({ command: 'true', cwd, timeoutMs: 5000 });
+    const r = deps.runBoundedShell({ command: 'true', cwd, timeoutMs: BOUNDED_SHELL_PROBE_TIMEOUT_MS });
     assert.equal(r.exitCode, 0);
     assert.equal(r.timedOut, false);
   });
 
   test('`false` => exitCode 1, not timed out', () => {
-    const r = deps.runBoundedShell({ command: 'false', cwd, timeoutMs: 5000 });
+    const r = deps.runBoundedShell({ command: 'false', cwd, timeoutMs: BOUNDED_SHELL_PROBE_TIMEOUT_MS });
     assert.equal(r.exitCode, 1);
     assert.equal(r.timedOut, false);
   });
 
   test('`exit 3` => exitCode 3', () => {
-    const r = deps.runBoundedShell({ command: 'exit 3', cwd, timeoutMs: 5000 });
+    const r = deps.runBoundedShell({ command: 'exit 3', cwd, timeoutMs: BOUNDED_SHELL_PROBE_TIMEOUT_MS });
     assert.equal(r.exitCode, 3);
   });
 
   test('stderr is captured from the subprocess', () => {
-    const r = deps.runBoundedShell({ command: 'echo oops >&2; exit 4', cwd, timeoutMs: 5000 });
+    const r = deps.runBoundedShell({ command: 'echo oops >&2; exit 4', cwd, timeoutMs: BOUNDED_SHELL_PROBE_TIMEOUT_MS });
     assert.equal(r.exitCode, 4);
     assert.match(r.stderr, /oops/);
   });
 
   test('timeout kills the subprocess (SIGTERM => timedOut:true)', () => {
-    const r = deps.runBoundedShell({ command: 'sleep 1', cwd, timeoutMs: 100 });
+    const r = deps.runBoundedShell({ command: 'sleep 1', cwd, timeoutMs: BOUNDED_SHELL_FORCED_TIMEOUT_MS });
     assert.equal(r.timedOut, true);
     assert.equal(r.signal, 'SIGTERM');
   });
