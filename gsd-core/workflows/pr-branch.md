@@ -292,6 +292,12 @@ else
   # `for D in $(find ...)`: a `for` over unquoted `find` output word-splits a
   # milestone slug containing a space into two spurious entries (ShellCheck
   # SC2044) — the exact class of bug #4109 already fixed once in this file.
+  # `2>/dev/null` also swallows a genuine `find` failure (e.g. an unreadable
+  # `.planning/milestones/`), not just the expected-absent case — the unsafe
+  # direction, since a real failure then silently leaves those paths
+  # unfiltered rather than aborting. Accepted here because `$FORBIDDEN_RE`
+  # still asserts their absence downstream in `verify`, catching what this
+  # step misses.
   FILTER_PATHS="${FILTER_PATHS}$(find .planning/milestones -mindepth 1 -maxdepth 1 -type d -name '*-phases' -exec printf '%s/ ' {} \; 2>/dev/null)"
 fi
 ```
