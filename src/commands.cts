@@ -1985,6 +1985,10 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   const branchingStrategy = config['branching_strategy'] as string | undefined;
   if (branchingStrategy && branchingStrategy !== 'none') {
     let branchName: string | null = null;
+    // #4055: the phase directory (cwd-relative POSIX path from
+    // findPhaseInternal) captured while resolving the phase identity — the
+    // state-3 guard below needs it for the committed-history check.
+    let phaseDirRelative: string | null = null;
     if (branchingStrategy === 'phase') {
       // Determine which phase we're committing for from the file paths.
       // #2539: the extraction is anchored to the directory SEGMENT immediately
@@ -2015,6 +2019,10 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
             phaseInfo['phase_number'],
             phaseInfo['phase_slug'],
           );
+          // #4055: findPhaseInternal already returns the directory as a
+          // cwd-relative POSIX path.
+          const dir = phaseInfo['directory'];
+          if (typeof dir === 'string' && dir !== '') phaseDirRelative = dir;
         }
       }
     } else if (branchingStrategy === 'milestone') {
@@ -2038,6 +2046,14 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       }
     }
     if (branchName) {
+      // #4055: state-3 discriminator for the create arm. `rev-parse --verify`
+      // alone cannot distinguish "branch never existed" (create is the #1278
+      // intent) from "branch existed, was merged, then deleted" (the phase is
+      // over — recreating it hijacks the close-out commit onto a resurrected
+      // ref, the #3079 bug #3363 reopened). Both extra conditions come from
+      // the confirmed issue: the create arm may fire only for a phase whose
+      // directory has NO committed history on the current line (a genuinely
+      // new phase) while the caller sits on the resolved base branch.
       const currentBranch = execGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
       if (currentBranch.exitCode === 0 && currentBranch.stdout.trim() !== branchName) {
         // #2539/#3079/#3207: two cases the prior (#3079) code collapsed into one.
@@ -2052,20 +2068,59 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
         // EXISTING branch is never switched to (the else arm logs + commits in
         // place). The fresh create is logged so the first phase-scoped commit is
         // not silent about where the work is landing (#3207 AC3).
+        // #4055: "brand-new" is now VERIFIED, not assumed — see the state-3
+        // guard between the verify and the create below.
         const verify = execGit(['rev-parse', '--verify', `refs/heads/${branchName}`], { cwd });
         if (verify.exitCode !== 0) {
-          // Branch does not exist — CREATE AND SWITCH (the #1278 first-commit
-          // case). checkout -b cannot resurrect anything: the branch was just
-          // verified absent, so it is created fresh at HEAD.
-          const create = execGit(['checkout', '-b', branchName], { cwd });
-          if (create.exitCode === 0) {
-            process.stderr.write(
-              `${branchingStrategy} branch "${branchName}" created; switched to it for this commit.\n`
+          // Branch does not exist — but absence alone cannot distinguish a
+          // genuinely new phase from a merged-and-deleted one (#4055).
+          let createBlockReason: string | null = null;
+          if (branchingStrategy === 'phase' && phaseDirRelative) {
+            const history = execGit(
+              ['log', 'HEAD', '--oneline', '--', phaseDirRelative],
+              { cwd },
             );
+            if (history.exitCode === 0 && history.stdout.trim() !== '') {
+              createBlockReason =
+                'its phase directory already has committed history (the phase is resolved)';
+            }
+          }
+          if (!createBlockReason) {
+            /* eslint-disable @typescript-eslint/no-require-imports */
+            const gitBaseBranch = require('./git-base-branch.cjs') as {
+              resolveBaseBranch: (cwd: string) => string;
+            };
+            /* eslint-enable @typescript-eslint/no-require-imports */
+            const resolvedBase = gitBaseBranch.resolveBaseBranch(cwd);
+            if (resolvedBase && resolvedBase !== currentBranch.stdout.trim()) {
+              createBlockReason =
+                `the current branch "${currentBranch.stdout.trim()}" is not the ` +
+                `resolved base branch "${resolvedBase}"`;
+            }
+          }
+          if (createBlockReason === null) {
+            // State 1 confirmed: brand-new phase, first phase-scoped commit
+            // from the base branch. CREATE AND SWITCH (the #1278 first-commit
+            // case). checkout -b cannot resurrect anything: the branch was
+            // just verified absent, so it is created fresh at HEAD.
+            const create = execGit(['checkout', '-b', branchName], { cwd });
+            if (create.exitCode === 0) {
+              process.stderr.write(
+                `${branchingStrategy} branch "${branchName}" created; switched to it for this commit.\n`
+              );
+            } else {
+              process.stderr.write(
+                `Warning: could not create ${branchingStrategy} branch "${branchName}" ` +
+                `(${create.stderr.trim()}); committing on the current branch "${currentBranch.stdout.trim()}".\n`
+              );
+            }
           } else {
+            // State 3 (or a non-base caller): the phase is resolved — commit
+            // in place, disclosed (#2539 AC2), never recreate the branch.
             process.stderr.write(
-              `Warning: could not create ${branchingStrategy} branch "${branchName}" ` +
-              `(${create.stderr.trim()}); committing on the current branch "${currentBranch.stdout.trim()}".\n`
+              `Warning: resolved ${branchingStrategy} branch "${branchName}" is absent and ` +
+              `will not be recreated (${createBlockReason}); committing on the current ` +
+              `branch "${currentBranch.stdout.trim()}" instead of recreating it.\n`
             );
           }
         } else {
