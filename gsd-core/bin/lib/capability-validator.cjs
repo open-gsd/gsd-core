@@ -2801,7 +2801,7 @@ function materializeHookFragments(cap, capDir) {
 
       const abs = path.resolve(capDir, fragment.path);
       const capRoot = path.resolve(capDir);
-      if (abs !== capRoot && !abs.startsWith(capRoot + path.sep)) {
+      if (abs !== capRoot && !abs.startsWith(capRoot + path.sep)) { // allow-handrolled-containment: committed pre-build .cjs; compiled security.cjs is untracked build output
         errors.push(
           cap.id + '/' + groupName + '[' + i + '].fragment.path escapes capability directory: ' +
           fragment.path,

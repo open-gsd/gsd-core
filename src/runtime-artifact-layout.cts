@@ -23,6 +23,7 @@ import os from 'node:os';
 // unless the top-level installRuntimeArtifacts call injected a `deps.fs`.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import installFsAdapter = require('./install-fs-adapter.cjs');
+import { tryWithinRootLexical } from './security.cjs';
 const { installFs, mkInstallTempDir } = installFsAdapter;
 // Reuse the install manifest's existing parser and streamed SHA-256
 // classification instead of deriving a second integrity implementation here.
@@ -196,10 +197,15 @@ function isReadableDirectory(candidate: string, routed: boolean): boolean {
 }
 
 function isPhysicallyConfinedTo(root: string, candidate: string): boolean {
+  // ADR-4650 decision 6: lexical family on already-realpath'd operands — the
+  // surrounding try/catch must survive verbatim, since a non-existent
+  // candidate throwing out of realpathSync (not `tryWithinRootLexical`, which
+  // would accept it) is exactly the "incomplete manifest" signal this
+  // function's callers depend on.
   try {
     const physicalRoot = installFs().realpathSync(root);
     const physicalCandidate = installFs().realpathSync(candidate);
-    return physicalCandidate === physicalRoot || physicalCandidate.startsWith(physicalRoot + path.sep);
+    return tryWithinRootLexical(physicalCandidate, physicalRoot) !== null;
   } catch {
     return false;
   }
@@ -253,9 +259,11 @@ function installedManifestIsComplete(
       for (const key of expected) {
         const parts = key.split('/');
         if (parts.some((part) => part === '' || part === '.' || part === '..')) return false;
-        const candidate = path.resolve(runtimeConfigDir, ...parts);
-        const root = path.resolve(runtimeConfigDir);
-        if (!candidate.startsWith(root + path.sep)) return false;
+        // ADR-4650 decision 6: lexical family — the object is lstat'd (never
+        // stat'd) and refused if it is a symlink just below, so this gate must
+        // refuse rather than resolve.
+        const candidate = tryWithinRootLexical(parts.join('/'), runtimeConfigDir);
+        if (candidate === null || candidate === path.resolve(runtimeConfigDir)) return false;
         const stat = io.lstatSync(candidate);
         if (!stat.isFile() || stat.isSymbolicLink()) return false;
         if (installerMigrations.classifyArtifact(runtimeConfigDir, key, manifest).classification !== 'managed-pristine') {
@@ -308,7 +316,7 @@ function providersShareRequiredRoots(
     const overlap = (leftPath: string, rightPath: string): boolean => {
       const relative = path.relative(leftPath, rightPath);
       return relative === '' ||
-        (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+        (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)); // allow-handrolled-containment: bidirectional physical-root overlap/identity check between two providers for dedup detection — not a security confinement gate on untrusted input
     };
     const physicalLeft = canonicalize(leftFs, leftRoot);
     const physicalRight = canonicalize(rightFs, rightRoot);

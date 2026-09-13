@@ -124,8 +124,16 @@ function evaluateRemoveEmptyDir(configDir: string, fullPath: string): string {
   } catch {
     return 'left-in-place';
   }
-  if (resolvedTarget === resolvedRoot || !resolvedTarget.startsWith(resolvedRoot + path.sep)) {
-    // Refuses both "target IS configDir" and "target escaped configDir".
+  // `resolvedTarget === resolvedRoot` is a DELIBERATE ADDITIONAL rejection,
+  // separate from the containment decision: `tryWithinRootLexical` treats
+  // target === root as CONTAINED, but removing the config root itself is
+  // never in scope for this action (see the doc comment above) — this arm
+  // prevents `rmdirSync` from ever being asked to remove `configDir` itself.
+  // Kept as its own check per ADR-4650 decision 6 (a wrapper may add its own
+  // conditions on top of the canonical predicate, never invert it).
+  if (resolvedTarget === resolvedRoot) return 'left-in-place';
+  if (tryWithinRootLexical(resolvedTarget, resolvedRoot) === null) {
+    // Refuses "target escaped configDir".
     return 'left-in-place';
   }
 

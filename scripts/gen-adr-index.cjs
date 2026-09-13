@@ -31,6 +31,7 @@ const path = require('node:path');
 
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 const { escapeRegex: escapeRegExp } = require('../gsd-core/bin/lib/pattern.cjs');
+const { isContainedIn } = require('../gsd-core/bin/lib/security.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const ADR_DIR = path.join(ROOT, 'docs', 'adr');
@@ -176,10 +177,15 @@ const ADR_FILENAME_RE = /^[0-9]+-[a-z0-9-]+\.md$/;
  * segment merely BEGINS with two dots (`..hidden.md`), and a false "escapes
  * the repository" on a valid path is a worse failure than a miss — hence the
  * whole-segment `rel === '..' || rel.startsWith('..' + sep)` form.
+ *
+ * Delegates to the shared `isContainedIn` (ADR-4650): every call site here
+ * already resolved both operands itself (either lexically, before any
+ * filesystem call, or via realpathSync after a symlink) and needs only this
+ * comparison step — the exact already-resolved-caller case `isContainedIn`
+ * documents.
  */
 function escapesRoot(abs, root) {
-  const rel = path.relative(root, abs);
-  return rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel);
+  return !isContainedIn(abs, root);
 }
 
 /**

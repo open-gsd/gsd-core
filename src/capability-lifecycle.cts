@@ -22,6 +22,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { tryWithinRootLexical } from './security.cjs';
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const sourceMod = require('./capability-source.cjs') as {
@@ -371,7 +372,10 @@ function safeRmUnder(runtimeDir: string, rel: string): boolean {
   const target = path.resolve(realRoot, rel);
   let realParent: string;
   try { realParent = fs.realpathSync(path.dirname(target)); } catch { return false; }
-  if (realParent !== realRoot && !realParent.startsWith(realRoot + path.sep)) return false;
+  // Containment decision is the canonical LEXICAL predicate (ADR-4650 decision 6); lexical because
+  // both operands are already realpath-resolved here and the final component is deliberately
+  // handled as a link (see above).
+  if (tryWithinRootLexical(realParent, realRoot) === null) return false;
   const realTarget = path.join(realParent, path.basename(target));
   let st: fs.Stats;
   try { st = fs.lstatSync(realTarget); } catch { return true; /* already gone — idempotent */ }
@@ -405,10 +409,10 @@ function confinedSharedFile(runtimeDir: string, relFile: unknown): string | null
   } catch {
     // Parent does not exist yet (created inside the scope on write): a non-existent path cannot be a
     // symlink escaping the root, so a lexical containment check is sufficient.
-    if (parentDir !== realRoot && !parentDir.startsWith(realRoot + path.sep)) return null;
+    if (tryWithinRootLexical(parentDir, realRoot) === null) return null;
     return target;
   }
-  if (realParent !== realRoot && !realParent.startsWith(realRoot + path.sep)) return null;
+  if (tryWithinRootLexical(realParent, realRoot) === null) return null;
   return path.join(realParent, path.basename(target));
 }
 
@@ -512,7 +516,7 @@ function confinedBundleScript(capDirPath: string, script: string): string | null
     // disk): a non-existent root cannot be a symlink escaping itself, so confine lexically.
     realCapRoot = path.resolve(capDirPath);
     const targetLex = path.resolve(realCapRoot, script);
-    if (targetLex !== realCapRoot && !targetLex.startsWith(realCapRoot + path.sep)) return null;
+    if (tryWithinRootLexical(targetLex, realCapRoot) === null) return null;
     return targetLex;
   }
 
@@ -524,12 +528,12 @@ function confinedBundleScript(capDirPath: string, script: string): string | null
   } catch {
     // Parent does not exist yet (created inside the bundle): lexical containment is sufficient
     // because a non-existent path cannot be a symlink escaping the root.
-    if (parentDir !== realCapRoot && !parentDir.startsWith(realCapRoot + path.sep)) return null;
+    if (tryWithinRootLexical(parentDir, realCapRoot) === null) return null;
     return target;
   }
   // The realpath'd parent chain must remain inside the bundle — an ancestor symlink escaping the
   // bundle is refused here (the symlink is followed by realpathSync, so its real location is checked).
-  if (realParent !== realCapRoot && !realParent.startsWith(realCapRoot + path.sep)) return null;
+  if (tryWithinRootLexical(realParent, realCapRoot) === null) return null;
   return path.join(realParent, path.basename(target));
 }
 

@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { textEncodingError } from './validate.cjs';
+import { tryWithinRootLexical } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
@@ -173,9 +174,12 @@ function verifySummaryCore(
     const firstSegment = candidate.split('/')[0] || '';
     if (firstSegment.indexOf('.') > 0) return false;
     // Containment guard: a `../`-bearing reference must not turn this advisory
-    // into a filesystem existence probe outside the project.
-    const resolved = path.resolve(projectRoot, candidate);
-    if (resolved !== projectRoot && !resolved.startsWith(projectRoot + path.sep)) return false;
+    // into a filesystem existence probe outside the project. Lexical (ADR-4650
+    // decision 6): the candidate is a string pulled from a SUMMARY document and
+    // by construction may not exist yet — existence is what gets probed
+    // downstream — and this is a pure string-heuristic filter with no other fs
+    // access, so a realpath call would also change its cost profile.
+    if (tryWithinRootLexical(candidate, projectRoot) === null) return false;
     return true;
   };
 

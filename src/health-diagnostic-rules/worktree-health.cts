@@ -162,7 +162,7 @@ function isActiveWorktreePath(
 ): boolean {
   const active = shellCmdProjection.toComparablePathKey(activeCwd, platform);
   const worktree = shellCmdProjection.toComparablePathKey(worktreePath, platform);
-  return active === worktree || active.startsWith(worktree + '/');
+  return active === worktree || active.startsWith(worktree + '/'); // allow-handrolled-containment: worktree identity matching, not a containment gate
 }
 
 function checkW027(snapshot: PlanningSnapshot): Diagnostic[] {

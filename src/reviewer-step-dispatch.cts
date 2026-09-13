@@ -36,6 +36,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { estimateTokens } from './prompt-budget.cjs';
+import { tryWithinRootLexical } from './security.cjs';
 import type { LanePlan, ResolveResult } from './review-lane-invocation.cjs';
 import { resolveLaneBudget, artifactPaths } from './review-lane-invocation.cjs';
 import type { ReviewerLane } from './review-lane-descriptor.cjs';
@@ -190,8 +191,13 @@ function validatePaths(
     if (typeof p !== 'string' || p.length === 0 || CONTROL_CHAR.test(p)) {
       return { ok: false, reason: DISPATCH_REASON.INVALID_PATHS };
     }
+    // ADR-4650 decision 6: lexical family — this is the first of the two
+    // deliberate halves (#4209 WR-05); the ENOENT-tolerant realpath half
+    // below cannot be folded into a single `tryWithinRoot` call (its
+    // ancestor-walk would accept a deleted path via the nearest existing
+    // ancestor, not the explicit `continue` this code requires).
     const resolved = path.resolve(root, p);
-    if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+    if (tryWithinRootLexical(p, root) === null) {
       return { ok: false, reason: DISPATCH_REASON.PATH_ESCAPES_REPO_ROOT };
     }
     // #4209 WR-05: `path.resolve` is lexical only — a symlink whose OWN path sits inside
@@ -205,7 +211,7 @@ function validatePaths(
     } catch {
       continue;
     }
-    if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
+    if (tryWithinRootLexical(real, realRoot) === null) {
       return { ok: false, reason: DISPATCH_REASON.PATH_ESCAPES_REPO_ROOT };
     }
   }
