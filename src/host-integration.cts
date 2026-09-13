@@ -861,6 +861,7 @@ interface OrchestratorExec {
 // Native tool names cross the host boundary as identifiers, never shell text.
 // Keep this intentionally narrower than a general command path: no whitespace,
 // separators, option prefixes, or prototype-sensitive names are meaningful.
+// phase-id-owner: native-tool identifier validation, not a bracket phase ID.
 const SAFE_NATIVE_TOOL_RE = /^[A-Za-z][A-Za-z0-9_]*$/;
 
 function isSafeNativeToolName(tool: unknown): tool is string {
