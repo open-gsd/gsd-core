@@ -27,6 +27,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const os = require('node:os');
 const espree = require('espree');
+const fc = require('./helpers/fast-check-setup.cjs');
 const { splitLines, joinLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const { createTempDir, cleanup, writePackageSourceMarkerFixture } = require('./helpers.cjs');
@@ -5216,6 +5217,206 @@ describe('rewriteStagedCommandBodies', () => {
       scope: 'global',
     });
     assert.equal(result, '/nonexistent/dir', 'should return input path unchanged for missing dir');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4377: project-relative includes for local installs
+// ---------------------------------------------------------------------------
+
+describe('#4377 _computePathPrefix — project-relative local includes', () => {
+  // This block sits inside the enh-1511 fold, whose scope has its own
+  // `conversion` binding and does NOT see the outer file's
+  // `runtimeNamePolicy` (that one belongs to the fold that closed above).
+  // require() is cached, so this is a lookup, not a second load.
+  const namePolicy = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
+  // A local install baked the install-time absolute path into every generated
+  // @ include. Worked from several git worktrees, that means each worktree
+  // runs its own engine but reads its workflow prose out of ONE checkout —
+  // and updating that checkout breaks every other worktree at once, with no
+  // way to stage it. The relative form lets each worktree read its own copy.
+  //
+  // Every arm below passes `projectRelative` explicitly rather than leaning on
+  // the environment default, so these assertions cannot flip on an ambient
+  // GSD_RELATIVE_INCLUDES leaking in from the runner.
+  const prefix = (over) => conversion._computePathPrefix({
+    isGlobal: false,
+    isOpencode: false,
+    isWindowsHost: false,
+    resolvedTarget: '/project/.cursor',
+    homeDir: '/home/u',
+    ...over,
+  });
+
+  test('opted in, a local install emits the descriptor dir, not the checkout path', () => {
+    assert.equal(prefix({ projectRelative: true, localDirName: '.cursor' }), '.cursor/');
+  });
+
+  test('opted OUT, a local install is byte-identical to the pre-#4377 behavior', () => {
+    // The default must not change for the single-checkout majority.
+    assert.equal(prefix({ projectRelative: false, localDirName: '.cursor' }), '/project/.cursor/');
+  });
+
+  test('a GLOBAL install ignores the opt-in entirely', () => {
+    // The $HOME-shorthand branch is the global contract and #4377 does not
+    // touch it — a relative include in a global install would resolve against
+    // whatever project the user happens to be sitting in.
+    assert.equal(
+      conversion._computePathPrefix({
+        isGlobal: true, isOpencode: false, isWindowsHost: false,
+        resolvedTarget: '/home/u/.cursor', homeDir: '/home/u',
+        projectRelative: true, localDirName: '.cursor',
+      }),
+      '$HOME/.cursor/',
+    );
+  });
+
+  test('a nested descriptor dir survives as a nested relative prefix', () => {
+    assert.equal(
+      prefix({ projectRelative: true, localDirName: '.config/opencode', resolvedTarget: '/project/.config/opencode' }),
+      '.config/opencode/',
+    );
+  });
+
+  test('a Windows-style descriptor value is normalized to POSIX', () => {
+    // The prefix is substituted into markdown @-references, which are POSIX
+    // universally — a backslash here leaks into shipped content (#1615).
+    assert.equal(prefix({ projectRelative: true, localDirName: '.claude\\nested' }), '.claude/nested/');
+  });
+
+  test('a trailing slash in the descriptor does not double up', () => {
+    assert.equal(prefix({ projectRelative: true, localDirName: '.cursor/' }), '.cursor/');
+  });
+
+  // ── fail-safe arms: anything unexpressible falls back to absolute ──────────
+  // A wrong-but-absolute include still points at a real file. A wrong RELATIVE
+  // one silently resolves against whatever the reader's cwd happens to be,
+  // which is a worse failure than the one being fixed.
+  for (const [label, localDirName] of [
+    ['the no-local-config-dir sentinel (vscode)', namePolicy.NO_LOCAL_CONFIG_DIR_SENTINEL],
+    ['an absolute descriptor value', '/etc/gsd'],
+    ['a Windows-absolute descriptor value', 'C:/gsd'],
+    ['a value climbing out of the project', '../outside'],
+    ['a value climbing out of the project mid-path', 'nested/../../outside'],
+    ['a bare ..', '..'],
+    ['an empty value', ''],
+    ['a missing value', undefined],
+  ]) {
+    test(`falls back to the absolute prefix for ${label}`, () => {
+      assert.equal(prefix({ projectRelative: true, localDirName }), '/project/.cursor/');
+    });
+  }
+});
+
+describe('#4377 _relativeIncludesEnabled — the opt-in is off unless asked for', () => {
+  test('reads GSD_RELATIVE_INCLUDES=1 from the injected environment', () => {
+    assert.equal(conversion._relativeIncludesEnabled({ GSD_RELATIVE_INCLUDES: '1' }), true);
+  });
+
+  test('anything other than the exact string 1 is off', () => {
+    // No truthiness coercion: 'true'/'0'/'' must not silently opt a user in.
+    for (const value of ['true', 'yes', '0', '', 'TRUE', ' 1']) {
+      assert.equal(conversion._relativeIncludesEnabled({ GSD_RELATIVE_INCLUDES: value }), false, `value=${JSON.stringify(value)}`);
+    }
+  });
+
+  test('an absent variable is off', () => {
+    assert.equal(conversion._relativeIncludesEnabled({}), false);
+  });
+
+  test('the opt-in is true for exactly the string 1 over arbitrary JSON values', () => {
+    fc.assert(fc.property(fc.jsonValue(), (value) => {
+      assert.equal(
+        conversion._relativeIncludesEnabled({ GSD_RELATIVE_INCLUDES: value }),
+        value === '1',
+      );
+    }));
+  });
+});
+
+describe('#4377 project-relative prefix properties', () => {
+  const segment = fc.array(
+    fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz0123456789_-'),
+    { minLength: 1, maxLength: 12 },
+  ).map((chars) => chars.join(''));
+
+  test('safe descriptor segments normalize to one POSIX prefix', () => {
+    fc.assert(fc.property(
+      fc.array(segment, { minLength: 1, maxLength: 5 }),
+      fc.constantFrom('/', '\\'),
+      fc.boolean(),
+      (segments, separator, trailingSlash) => {
+        const localDirName = segments.join(separator) + (trailingSlash ? separator : '');
+        assert.equal(conversion._projectRelativePrefix(localDirName), `${segments.join('/')}/`);
+      },
+    ));
+  });
+
+  test('a traversal segment is rejected at every generated depth', () => {
+    fc.assert(fc.property(
+      fc.array(segment, { maxLength: 4 }),
+      fc.array(segment, { maxLength: 4 }),
+      (before, after) => {
+        assert.equal(conversion._projectRelativePrefix([...before, '..', ...after].join('/')), '');
+      },
+    ));
+  });
+});
+
+test('#4377: a project-root local target falls back to absolute includes', () => {
+  assert.equal(conversion._localIncludeDirName('cline'), undefined);
+  assert.equal(conversion._localIncludeDirName('claude'), '.claude');
+});
+
+describe('#4377 relative rewrites preserve every runtime launcher shell default', () => {
+  test('the shared mask preserves a complete nested shell default as one unit', () => {
+    const nested = '${OUTER:-${INNER:-$HOME/.claude}/gsd-core}';
+    const input = `outside=$HOME/.claude inside=${nested}`;
+    const rewritten = conversion._withShellDefaultsPreserved(
+      input,
+      (body) => body.replace(/\$HOME\/\.claude/g, '.claude'),
+    );
+    assert.equal(rewritten, `outside=.claude inside=${nested}`);
+  });
+
+  test('all emitted runtime conversions leave ${VAR:-default} probes verbatim', () => {
+    const launcher = fs.readFileSync(
+      path.join(__dirname, '..', 'gsd-core', 'workflows', '_runtime-launcher.snippet.sh'),
+      'utf8',
+    );
+    const defaults = [];
+    for (let start = launcher.indexOf('${'); start !== -1; start = launcher.indexOf('${', start + 2)) {
+      let depth = 1;
+      let end = start + 2;
+      while (end < launcher.length && depth > 0) {
+        if (launcher.startsWith('${', end)) {
+          depth += 1;
+          end += 2;
+        } else {
+          if (launcher[end] === '}') depth -= 1;
+          end += 1;
+        }
+      }
+      if (depth !== 0) break;
+      const expansion = launcher.slice(start, end);
+      if (/^\$\{[A-Za-z_][A-Za-z0-9_]*:-/.test(expansion)) defaults.push(expansion);
+      start = end - 2;
+    }
+    assert.ok(defaults.length > 0, 'the launcher fixture must contain shell-default probes');
+
+    for (const runtime of ['claude', ...conversion.NON_CLAUDE_RUNTIMES]) {
+      const rewritten = conversion._applyRuntimeRewrites(
+        launcher,
+        runtime,
+        `.${runtime}/`,
+      );
+      for (const shellDefault of defaults) {
+        assert.ok(
+          rewritten.includes(shellDefault),
+          `${runtime} relative rewrite must preserve ${shellDefault}`,
+        );
+      }
+    }
   });
 });
 
