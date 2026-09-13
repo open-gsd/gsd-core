@@ -234,7 +234,7 @@ describe('check tdd-red-evidence verb (#3770)', () => {
 describe('executor spec requires intentional RED evidence before GREEN (#3770)', () => {
   const read = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 
-  test('row 11 — executor routes RED evidence by actual runner and requires semantic proof', () => {
+  test('row 11 — executor routes RED evidence by actual runner and requires semantic inspection', () => {
     const agent = read('agents/gsd-executor.md');
     const tddRef = read('gsd-core/references/tdd.md');
     const mvpRef = read('gsd-core/references/execute-mvp-tdd.md');
@@ -247,20 +247,28 @@ describe('executor spec requires intentional RED evidence before GREEN (#3770)',
         `${name} must use the classifier only for an actual Node built-in command with compatible TAP`);
       assert.match(content, /(package\.json|package metadata)[\s\S]{0,180}(npm|pnpm|package manager)[\s\S]{0,180}TAP/i,
         `${name} must reject metadata, package-manager use, and TAP-shaped text as runner signals`);
-      assert.match(content, /(other|non-Node|unknown) runner[\s\S]{0,300}(direct|inspect)/i,
-        `${name} must directly inspect evidence from every other or unknown runner`);
+      assert.match(content, /(other identified|identified non-Node) runner[\s\S]{0,300}(direct|inspect)/i,
+        `${name} must directly inspect evidence from other identified runners`);
+      assert.match(content, /runner[\s\S]{0,100}(unresolved|cannot be identified)[\s\S]{0,180}(STOP|halt|block|investigate)/i,
+        `${name} must stop and investigate an unresolved runner before choosing a branch`);
       assert.match(content, /target[\s\S]{0,200}(executed|ran)[\s\S]{0,200}(planned|intended)[\s\S]{0,120}assertion/i,
-        `${name} must prove the planned target assertion executed and failed for the intended reason`);
+        `${name} must inspect whether the planned target assertion executed and failed for the intended reason`);
       for (const stop of ['zero tests', 'skipped', 'setup', 'collection', 'import', 'syntax', 'fixture', 'unrelated', 'unexpected green', 'incomplete', 'ambiguous']) {
         assert.match(content, new RegExp(stop, 'i'), `${name} must stop GREEN on ${stop} evidence`);
       }
       assert.match(content, /(do not|never)[^\n]{0,100}(fabricate|invent)[^\n]{0,100}(parser verdict|Node counters)/i,
         `${name} must not fabricate a parser verdict or Node counters for direct inspection`);
       assert.match(content, /INVALID_RED/, `${name} must retain the INVALID_RED stop`);
+      assert.doesNotMatch(content, /persist (?:the )?RED evidence record[^\n]{0,240}and verify it:\s*`?gsd_run check tdd-red-evidence/i,
+        `${name} must not restore the superseded unconditional parser requirement`);
+      assert.doesNotMatch(content, /every (?:runner|RED evidence record)[^\n]{0,180}(?:must|requires?)[^\n]{0,120}tdd-red-evidence/i,
+        `${name} must not require the Node parser for every runner`);
     }
 
-    assert.match(tddRef, /Node('|’)?s built-in test runner[\s\S]{0,500}semantic/i,
+    assert.match(tddRef, /Node('|’)?s built-in test runner[\s\S]{0,700}semantic/i,
       'tdd.md must require semantic inspection after the Node parser verdict');
+    assert.match(mvpRef, /INVALID_RED[^\n]{0,180}(trip|halt|block|STOP)/i,
+      'execute-mvp-tdd.md must explicitly halt GREEN on a Node INVALID_RED verdict');
     assert.match(agent, /references\/tdd\.md[\s\S]{0,200}Gate Enforcement Rules/i,
       'gsd-executor.md must keep the canonical Gate Enforcement Rules pointer');
   });
