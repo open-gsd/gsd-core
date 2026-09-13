@@ -1584,6 +1584,43 @@ OpenCode's `task` interface do not accept an inline `model` parameter, so
 running `gsd install <runtime>` after editing `model_overrides` is required
 for the change to take effect. See issue #2256.
 
+#### Per-runtime override values — added in v1.14
+
+An override value may be a runtime-keyed object instead of a single model ID:
+
+```json
+{
+  "model_overrides": {
+    "gsd-planner": { "codex": "gpt-6-astra", "claude": "opus" },
+    "gsd-debugger": { "codex": "gpt-6-astra" },
+    "gsd-verifier": "gpt-5.6-sol"
+  }
+}
+```
+
+`.planning/config.json` is committed and shared, so on a machine running two
+runtimes against one repository a flat override is a claim only one of them can
+be right about: an ID written for Codex is what the Claude install resolves too.
+The object form lets one config express "spend the strong model on planning" once
+and have each runtime answer with its own.
+
+A runtime the object does not name — `claude` for `gsd-debugger` above — falls
+through to normal tier resolution for that agent, exactly as an agent carrying no
+override does. Enumerating every installed runtime is therefore optional, and
+adopting the object form for one runtime never changes what another resolves.
+
+The flat string form is unchanged and still applies to every runtime. Both
+readers of `model_overrides` — spawn-time resolution and the install-time bake
+described above — share one parser, so a config means the same thing to each.
+
+> **Sequencing note.** At install time the selected runtime is the one being
+> installed for. At spawn time it is the `runtime` key in config, which
+> [#4505](https://github.com/open-gsd/gsd-core/issues/4505) reports is read from
+> the persisted field rather than the runtime actually resolving. Until that
+> lands, the object form is fully effective for the install-time bake
+> (`opencode`, `kilo`) and selects by the configured runtime elsewhere. See
+> [#4669](https://github.com/open-gsd/gsd-core/issues/4669).
+
 ### Per-Phase-Type Models (`models`) — added in v1.41
 
 > Express tuning at the **phase** level (planning, research, execution, verification) without learning the agent taxonomy. Added in [#3023](https://github.com/open-gsd/gsd-core/pull/3030).

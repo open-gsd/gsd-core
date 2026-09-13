@@ -45,10 +45,26 @@ import modelCatalog = require('./model-catalog.cjs');
 const { MODEL_PROFILES: GSD_MODEL_PROFILES } = modelCatalog as unknown as { MODEL_PROFILES: Record<string, Record<string, string>> };
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- model-resolver.cjs is an export= CommonJS module
 import modelResolverModule = require('./model-resolver.cjs');
-const { resolveTierEntry: gsdResolveTierEntry, resolveModelPolicy: gsdResolveModelPolicy } = modelResolverModule as {
+const {
+  resolveTierEntry: gsdResolveTierEntry,
+  resolveModelPolicy: gsdResolveModelPolicy,
+  // #4669: the shared owner of the `string | Record<runtime, string>` shape a
+  // `model_overrides` entry may take. Imported rather than reimplemented — a
+  // second copy of that parser across the install and dispatch surfaces is the
+  // exact Generative Fix Divergence this module's own header was written about.
+  selectAgentModelOverride: gsdSelectAgentModelOverride,
+} = modelResolverModule as {
   resolveTierEntry: (opts: { runtime: string; tier: string; overrides: unknown }) => { model?: string } | null;
   resolveModelPolicy: (policy: unknown, tier: string | null | undefined) => string | null;
+  selectAgentModelOverride: (entry: unknown, runtime: string | null | undefined) => string | null;
 };
+
+/**
+ * #4669 — a `model_overrides` entry is either one model id for every runtime,
+ * or a runtime-keyed map. `selectAgentModelOverride` owns the choice.
+ */
+type ModelOverrideEntry = string | Record<string, string>;
+type ModelOverridesMap = Record<string, ModelOverrideEntry>;
 
 interface ReadOptions {
   homedir?: () => string;
@@ -68,7 +84,7 @@ interface RuntimeProfileResolver {
  * (silent try/catch — no stderr warning on malformed JSON, unlike
  * `_readGsdConfigFile`'s effort-config sibling — preserved for byte-parity).
  */
-function readGsdGlobalModelOverrides(options: ReadOptions = {}): Record<string, string> | null {
+function readGsdGlobalModelOverrides(options: ReadOptions = {}): ModelOverridesMap | null {
   try {
     const home = options.homedir ? options.homedir() : os.homedir();
     const defaultsPath = path.join(home, '.gsd', 'defaults.json');
@@ -77,7 +93,7 @@ function readGsdGlobalModelOverrides(options: ReadOptions = {}): Record<string, 
     const parsed = JSON.parse(raw) as { model_overrides?: unknown };
     const overrides = parsed.model_overrides;
     if (!overrides || typeof overrides !== 'object') return null;
-    return overrides as Record<string, string>;
+    return overrides as ModelOverridesMap;
   } catch {
     return null;
   }
@@ -97,10 +113,10 @@ function readGsdGlobalModelOverrides(options: ReadOptions = {}): Record<string, 
  * Returns a plain `{ agentName: modelId }` object, or `null` when neither
  * source defines `model_overrides`.
  */
-function readGsdEffectiveModelOverrides(targetDir: string | null = null, options: ReadOptions = {}): Record<string, string> | null {
+function readGsdEffectiveModelOverrides(targetDir: string | null = null, options: ReadOptions = {}): ModelOverridesMap | null {
   const global = readGsdGlobalModelOverrides(options);
 
-  let projectOverrides: Record<string, string> | null = null;
+  let projectOverrides: ModelOverridesMap | null = null;
   if (targetDir) {
     // #2875 defect fix (Generative Fix Divergence): the 8-deep upward walk to
     // `.planning/config.json` is single-sourced in install-effort-resolver.cts
@@ -112,7 +128,7 @@ function readGsdEffectiveModelOverrides(targetDir: string | null = null, options
       try {
         const parsed = JSON.parse(installFs().readFileSync(candidate, 'utf-8')) as { model_overrides?: unknown };
         if (parsed && typeof parsed === 'object' && parsed.model_overrides && typeof parsed.model_overrides === 'object') {
-          projectOverrides = parsed.model_overrides as Record<string, string>;
+          projectOverrides = parsed.model_overrides as ModelOverridesMap;
         }
       } catch {
         // Malformed config.json — fall back to global; readGsdRuntimeProfileResolver
@@ -293,17 +309,38 @@ function readGsdRuntimeProfileResolver(targetDir: string | null = null): Runtime
  *
  * Precedence (J8 — identical for kilo and opencode, resolved through this ONE
  * shared function so the two runtimes can never diverge):
- *   1. modelOverrides[agentName]         (#2256 — explicit per-agent override)
+ *   1. modelOverrides[agentName]         (#2256 — explicit per-agent override;
+ *      #4669 — selected for `targetRuntime` when the entry is runtime-keyed)
  *   2. runtimeResolver.resolve(agentName)?.model
  *      (#2794 — tier-based model_profile_overrides.<runtime>.<tier>)
  *   3. null (omit — J7: the frontmatter key must not appear, not `null`/`""`)
+ *
+ * #4669 does not add a fourth outcome. A runtime-keyed entry that says nothing
+ * about `targetRuntime` yields null from step 1 and falls to step 2, which is
+ * where an agent carrying no override at all has always landed — so adopting
+ * the object form for one runtime never changes what another runtime bakes.
  */
 function resolveAgentModelOverride(
   agentName: string,
-  modelOverrides: Record<string, string> | null | undefined,
+  modelOverrides: ModelOverridesMap | null | undefined,
   runtimeResolver: RuntimeProfileResolver | null | undefined,
+  targetRuntime?: string | null,
 ): string | null {
-  const explicit = modelOverrides ? modelOverrides[agentName] : undefined;
+  // #4669: which runtime this install is FOR. The caller
+  // (runtime-artifact-layout.cts's convertedAgentsKind) already holds it as
+  // `agentCtx.runtime` — the runtime whose agents directory is being written.
+  // Falling back to `runtimeResolver.runtime` keeps callers that predate the
+  // parameter working: that is the statically-configured runtime, which is the
+  // right answer whenever only one runtime is installed and the only answer
+  // those callers ever had.
+  const runtimeForSelection = targetRuntime || runtimeResolver?.runtime || null;
+  // Own-property guard, matching the dispatch-side reader in model-resolver.cts:
+  // an agent literally named "toString" would otherwise pick up an inherited
+  // member of Object.prototype instead of undefined.
+  const rawEntry = (modelOverrides && Object.hasOwn(modelOverrides, agentName))
+    ? modelOverrides[agentName]
+    : undefined;
+  const explicit = gsdSelectAgentModelOverride(rawEntry, runtimeForSelection);
   if (explicit) return explicit;
   if (runtimeResolver) {
     const entry = runtimeResolver.resolve(agentName);
