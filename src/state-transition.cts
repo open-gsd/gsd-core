@@ -520,6 +520,82 @@ export function rebuildStateTransaction(init: StateTransactionInit): StateTransa
 }
 
 // ----------------------------------------------------------------------------
+// StateWriteIntent — ADR-4629 §8.1 (epic #4629, child C1, migration step 1)
+// ----------------------------------------------------------------------------
+//
+// ADR-1769 Decision 2 scoped the state-transition model to 10 transitions and
+// REJECTED covering all 16 writers; the residual writers still ride an opaque
+// `transformFn: (content: string) => string` (`readModifyWriteStateMd`,
+// src/state.cts). The write seam preserves FRONTMATTER, but the opaque body
+// transform is neither verified (did every intended assertion land? §8.2) nor
+// bounded (did anything OUTSIDE the declared scope change? §8.3) — the residue
+// behind the write-path bugs epic #4629 absorbs.
+//
+// StateWriteIntent is the declared replacement: which field/section assertions
+// the write must land (required vs best-effort) and the mutation scope it may
+// touch (narrow | broad). It EXTENDS StateTransaction so an intent IS-A
+// transaction everywhere the write seam already expects one. C1 ships the TYPE +
+// constructor only — §8.1's caller-side rule ("no residual caller supplies an
+// anonymous transform") is statused *Required — Phase 2*, so nothing constructs
+// this in production yet; C2 (the verifying executor) and C3+ (caller migration)
+// consume it.
+
+export type StateAssertionRequirement = 'required' | 'best-effort';
+export type StateMutationScope = 'narrow' | 'broad';
+
+/** One declared post-state assertion: a frontmatter field or a body section. */
+export type StateFieldAssertion = {
+  readonly field: string;
+  readonly requirement: StateAssertionRequirement;
+};
+
+export type StateWriteIntentInit = {
+  readonly assertions?: ReadonlyArray<StateFieldAssertion>;
+  readonly scope?: StateMutationScope;
+};
+
+/**
+ * ADR-4629 §8.1: a StateTransaction PLUS the declared write intent — the
+ * assertions verified against the re-read file (§8.2) and the mutation scope the
+ * write may not exceed (§8.3). Both are Phase-2 consumers; the type exists now so
+ * Phase 2 has a surface to build on.
+ */
+export type StateWriteIntent = StateTransaction & {
+  readonly assertions: ReadonlyArray<StateFieldAssertion>;
+  readonly scope: StateMutationScope;
+};
+
+/**
+ * Extend an existing StateTransaction into a StateWriteIntent. The base
+ * transaction is REQUIRED — an absent base is a construction failure, mirroring
+ * `createStateTransaction`'s ADR-3473 §8.6 posture (do not tolerate null). `scope`
+ * defaults to the conservative `'narrow'`; `assertions` defaults to none. Frozen
+ * so an intent, like a transaction, cannot be mutated after construction.
+ */
+export function createStateWriteIntent(
+  transaction: StateTransaction,
+  init: StateWriteIntentInit = {},
+): StateWriteIntent {
+  if (transaction === null || typeof transaction !== 'object' || Array.isArray(transaction)) {
+    const err = new Error(
+      'createStateWriteIntent: a base StateTransaction is required (build it with ' +
+      'openStateTransaction / rebuildStateTransaction first). Per ADR-4629 §8.1, an absent ' +
+      'transaction is a construction failure — do not tolerate null.',
+    ) as Error & { code: string };
+    err.code = 'STATE_WRITE_INTENT_TRANSACTION_REQUIRED';
+    throw err;
+  }
+  const assertions: ReadonlyArray<StateFieldAssertion> = Object.freeze(
+    (init.assertions ?? []).map((a) => Object.freeze({ field: a.field, requirement: a.requirement })),
+  );
+  return Object.freeze({
+    ...transaction,
+    assertions,
+    scope: init.scope ?? 'narrow',
+  });
+}
+
+// ----------------------------------------------------------------------------
 // applyStatePreservation — table-driven post-sync preservation (ADR-1769 #1796)
 // ----------------------------------------------------------------------------
 //
