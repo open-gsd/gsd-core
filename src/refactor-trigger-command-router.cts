@@ -415,11 +415,24 @@ function loadWindowsOrDegrade(
  * the lock is infrastructure, not a parser stand-in.
  */
 function withLedgerLock<T>(cwd: string, fn: () => T): T {
-  /* eslint-disable @typescript-eslint/no-require-imports */
-  const lockMod = require('./broken-windows.cjs') as {
+  let lockMod: {
     withLedgerLock: (cwd: string, fn: () => T) => T;
   };
-  /* eslint-enable @typescript-eslint/no-require-imports */
+  try {
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    lockMod = require('./broken-windows.cjs') as {
+      withLedgerLock: (cwd: string, fn: () => T) => T;
+    };
+    /* eslint-enable @typescript-eslint/no-require-imports */
+  } catch {
+    // Ledger module unavailable (the #1953 degrade world — see the row-86
+    // notesLedgerUnavailableWithoutBrokenWindows contract): no lock-holding
+    // writer can exist either, because every WINDOWS.md writer requires this
+    // same module. Run the body unlocked and let loadWindowsOrDegrade
+    // produce the canonical degrade note — wrapping that world in lock
+    // ceremony would only rewrite the note the degrade contract pins.
+    return fn();
+  }
   return lockMod.withLedgerLock(cwd, fn);
 }
 
