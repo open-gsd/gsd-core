@@ -479,14 +479,21 @@ function firstPartyCaps(): Record<string, unknown> {
 let _centralKeysMemo: Set<string> | null = null;
 function centralConfigKeys(): Set<string> {
   if (_centralKeysMemo === null) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const mod = require('../../../scripts/gen-capability-registry.cjs') as {
-        loadCentralConfigKeys: () => Set<string>;
-      };
-      _centralKeysMemo = mod.loadCentralConfigKeys();
-    } catch {
-      _centralKeysMemo = new Set<string>();
+    // Same generator seam loadRegistry uses (including the test override), so
+    // install-time and load-time central keys cannot diverge when the
+    // generator is stubbed.
+    if (_generatorOverride) {
+      _centralKeysMemo = _generatorOverride.loadCentralConfigKeys();
+    } else {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const mod = require('../../../scripts/gen-capability-registry.cjs') as {
+          loadCentralConfigKeys: () => Set<string>;
+        };
+        _centralKeysMemo = mod.loadCentralConfigKeys();
+      } catch {
+        _centralKeysMemo = new Set<string>();
+      }
     }
   }
   return _centralKeysMemo;
@@ -536,9 +543,10 @@ export function crossValidationSeed(
     const { committed } = ledgerOverlayIds(ledger, root.dir);
     for (const id of committed) {
       // First-party always wins (CONTEXT.md capability-loader entry): an
-      // overlay claiming a first-party id is rejected at load, so it must
-      // not shadow the first-party entry in the validation set either.
+      // overlay claiming a first-party id — or a reserved first-party prefix
+      // — is rejected at load, so it must not join the validation set.
       if (Object.prototype.hasOwnProperty.call(fp, id)) continue;
+      if (RESERVED_ID_PREFIX.test(id)) continue;
       let cap: unknown;
       try {
         const manifestPath = path.join(root.dir, id, 'capability.json');
