@@ -1980,7 +1980,11 @@ describe('#3780: parallel writers serialize on the ledger lock', () => {
 
   test('REASON enum gains WINDOWS_LEDGER_LOCK and stays frozen+closed', () => {
     assert.equal(Object.isFrozen(REASON), true);
-    assert.deepEqual(Object.keys(REASON).sort(), [
+    // Assert on the VALUES (the wire codes --json-errors can emit), not
+    // Object.keys — the keys are the UPPER_CASE identifiers. Closure over
+    // all 14 codes is the contract: adding/removing a code must update this
+    // list in the same commit (the three-coordinated-changes rule).
+    assert.deepEqual(Object.values(REASON).sort(), [
       'windows_already_resolved',
       'windows_append_missing_field',
       'windows_id_not_found',
@@ -1994,6 +1998,7 @@ describe('#3780: parallel writers serialize on the ledger lock', () => {
       'windows_ledger_table_drift',
       'windows_ok',
       'windows_usage',
+      'windows_waive_reason_empty',
     ]);
   });
 });
