@@ -33,6 +33,23 @@ const TEST_DIRS = [
 const ALLOWLIST_PATH = path.join(__dirname, 'lint-test-file-count.allowlist.json');
 const MAX_FILES = 2;
 
+// Filename prefixes are normally a useful, mechanical proxy for the production
+// module a test owns. These V2 transport tests are deliberate exceptions: their
+// names describe the feature that introduced them, not their primary subject.
+// Keep the exceptions explicit and small rather than raising quick-batch-v2's
+// budget or teaching the generic matcher feature-specific heuristics.
+//
+// - The lock suite is the cross-process regression suite for journal-lock's
+//   acquire/release/durable-replace contract. It uses quick-batch-v2 solely as
+//   the real consumer that demonstrates lock contention is surfaced safely.
+// - The workflow suite is a markdown orchestration-artifact contract. It has no
+//   one production JavaScript module, so it must not consume the state-machine
+//   module's file budget merely because its filename starts with that module.
+const TEST_MODULE_OVERRIDES = new Map([
+  ['quick-batch-v2-lock.test.cjs', 'journal-lock'],
+  ['quick-batch-v2-workflow.test.cjs', null],
+]);
+
 const Verdict = Object.freeze({
   OK_UNDER_LIMIT:       'OK_UNDER_LIMIT',
   OK_IN_ALLOWLIST:      'OK_IN_ALLOWLIST',
@@ -117,7 +134,13 @@ function collectAllTestFiles() {
 function buildTestMap(prodPrefixes, allTestFiles) {
   const map = new Map([...prodPrefixes.keys()].map(p => [p, []]));
   for (const tf of allTestFiles) {
-    const ep = testEffectivePrefix(path.basename(tf));
+    const name = path.basename(tf);
+    if (TEST_MODULE_OVERRIDES.has(name)) {
+      const override = TEST_MODULE_OVERRIDES.get(name);
+      if (override !== null && map.has(override)) map.get(override).push(tf);
+      continue;
+    }
+    const ep = testEffectivePrefix(name);
     // fs.readdirSync order (and therefore prodPrefixes' Map insertion order,
     // which is built from it in collectProdPrefixes) is NOT stable across
     // platforms/filesystems — e.g. ext4 hash order on Linux CI differs from
@@ -259,6 +282,7 @@ function run() {
 
 module.exports = {
   Verdict, evaluateLint, testEffectivePrefix, prodPrefix,
+  TEST_MODULE_OVERRIDES,
   _collectProdPrefixes: collectProdPrefixes,
   _collectAllTestFiles: collectAllTestFiles,
   _buildTestMap: buildTestMap,

@@ -903,6 +903,64 @@ function updateBatchItems(
   }
 }
 
+/**
+ * Persist one native worktree executor outcome. A passed executor remains
+ * pending until completeQuickItem publishes the exactly-once STATE.md row;
+ * failed/blocked outcomes are durable and block every transitive dependent in
+ * the same planning-lock transaction.
+ */
+function applyV2Outcome(
+  cwd: string,
+  batchId: string,
+  quickId: string,
+  outcome: 'passed' | 'gaps_found' | 'merge_failed' | 'human_needed',
+  reason?: string,
+  options: { clock?: Clock } = {},
+): Result<{ manifest: QuickBatchManifest; pending_completion: boolean }> {
+  const clock = options.clock ?? realClock;
+  try {
+    return withPlanningLock(cwd, (): Result<{ manifest: QuickBatchManifest; pending_completion: boolean }> => {
+      const loaded = loadBatch(cwd, batchId);
+      if (!loaded.ok) return loaded;
+      const manifest = loaded.value;
+      const item = manifest.items.find((it) => it.quick_id === quickId);
+      if (!item) return { ok: false, reason: `batch ${batchId} has no item ${quickId}` };
+      if (!['passed', 'gaps_found', 'merge_failed', 'human_needed'].includes(outcome)) {
+        return { ok: false, reason: `unsupported V2 outcome: ${String(outcome)}` };
+      }
+      if (outcome === 'passed') return { ok: true, value: { manifest, pending_completion: true } };
+      if (item.status === 'complete') return { ok: false, reason: `cannot apply ${outcome} to completed item ${quickId}` };
+      const isBlocked = outcome === 'human_needed';
+      item.status = isBlocked ? 'blocked' : 'failed';
+      item.failure_reason = isBlocked ? `human_needed:${reason ?? ''}` : (reason ?? outcome);
+
+      const byId = new Map(manifest.items.map((it) => [it.quick_id, it]));
+      let changed = true;
+      let iterations = 0;
+      while (changed && iterations <= manifest.items.length) {
+        changed = false;
+        iterations += 1;
+        for (const candidate of manifest.items) {
+          if (candidate.status !== 'pending') continue;
+          const badDependencies = candidate.depends_on.filter((dependency) => {
+            const dependencyItem = byId.get(dependency);
+            return dependencyItem?.status === 'failed' || dependencyItem?.status === 'blocked';
+          });
+          if (badDependencies.length === 0) continue;
+          candidate.status = 'blocked';
+          candidate.failure_reason = `dependency_failed:${badDependencies.join(',')}`;
+          changed = true;
+        }
+      }
+
+      platformWriteSync(batchManifestPath(cwd, batchId), JSON.stringify(manifest, null, 2) + '\n');
+      return { ok: true, value: { manifest, pending_completion: false } };
+    }, clock);
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // ─── Resume ──────────────────────────────────────────────────────────────────────
 
 interface QuickBatchTransition {
@@ -1022,4 +1080,5 @@ export = {
   completeQuickItem,
   hasQuickTaskRow,
   updateBatchItems,
+  applyV2Outcome,
 };

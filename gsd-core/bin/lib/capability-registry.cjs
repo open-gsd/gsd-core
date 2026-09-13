@@ -3045,12 +3045,8 @@ const capabilities = {
         "effortSurface": "argv"
       },
       "orchestratorExec": {
-        "command": "opencode",
-        "args": [
-          "run"
-        ],
-        "cwdFlag": "--dir",
-        "promptFlag": null
+        "transport": "native-tool",
+        "tool": "gsd_worktree_task"
       },
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
@@ -3063,6 +3059,8 @@ const capabilities = {
           "file": "gsd-core.js",
           "source": ".opencode/plugins/gsd-core.js"
         },
+        "localPathPrefix": ".opencode/",
+        "localToolCandidateDir": ".opencode",
         "skipHomePrefixSubstitution": true,
         "skipSettingsUi": true,
         "skipUpdateBannerCommand": true,
@@ -7307,12 +7305,8 @@ const runtimes = {
         "effortSurface": "argv"
       },
       "orchestratorExec": {
-        "command": "opencode",
-        "args": [
-          "run"
-        ],
-        "cwdFlag": "--dir",
-        "promptFlag": null
+        "transport": "native-tool",
+        "tool": "gsd_worktree_task"
       },
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
@@ -7325,6 +7319,8 @@ const runtimes = {
           "file": "gsd-core.js",
           "source": ".opencode/plugins/gsd-core.js"
         },
+        "localPathPrefix": ".opencode/",
+        "localToolCandidateDir": ".opencode",
         "skipHomePrefixSubstitution": true,
         "skipSettingsUi": true,
         "skipUpdateBannerCommand": true,

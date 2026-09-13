@@ -14,6 +14,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { spawnSync } = require('node:child_process');
 
 const { runNode } = require('./helpers/process-seam.cjs');
 
@@ -471,6 +472,75 @@ describe('installer migration install integration', { concurrency: false }, () =
 
   afterEach(() => {
     cleanup(tmpRoot);
+  });
+
+  test('OpenCode ships and installs only the flat native plugin seam globally and locally', () => {
+    const nativePlugin = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '..', 'capabilities', 'opencode', 'capability.json'), 'utf8'),
+    ).runtime.hostBehaviors.nativePlugin;
+    assert.deepEqual(nativePlugin, {
+      dir: 'plugins',
+      file: 'gsd-core.js',
+      source: '.opencode/plugins/gsd-core.js',
+    });
+
+    const packed = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
+      'pack', '--dry-run', '--json', '--ignore-scripts',
+    ], { cwd: path.join(__dirname, '..'), encoding: 'utf8', timeout: INSTALL_TIMEOUT_MS });
+    assert.equal(packed.status, 0, packed.stderr || packed.stdout);
+    const packResult = JSON.parse(packed.stdout);
+    const files = (Array.isArray(packResult) ? packResult[0] : packResult[Object.keys(packResult)[0]]).files;
+    const shippedOpenCodePaths = files.map((entry) => entry.path.replaceAll('\\', '/'))
+      .filter((entry) => entry.startsWith('.opencode/'))
+      .sort();
+    assert.deepEqual(shippedOpenCodePaths, ['.opencode/plugins/gsd-core.js']);
+
+    const source = fs.readFileSync(path.join(__dirname, '..', nativePlugin.source));
+    const globalTarget = path.join(tmpRoot, 'opencode-global');
+    const globalInstall = runInstallerCli('opencode', globalTarget);
+    assert.equal(globalInstall.exitCode, 0, globalInstall.stderr || globalInstall.stdout);
+
+    const localProject = path.join(tmpRoot, 'opencode-local-project');
+    fs.mkdirSync(localProject, { recursive: true });
+    const localEnv = {
+      ...process.env,
+      HOME: path.join(tmpRoot, 'home'),
+      USERPROFILE: path.join(tmpRoot, 'home'),
+      GSD_ALLOW_REAL_HOME_FOR_TESTS: path.join(tmpRoot, 'home'),
+    };
+    delete localEnv.GSD_TEST_MODE;
+    const localInstall = runNode([installScript, '--opencode', '--local', '--minimal', '--no-sdk'], {
+      cwd: localProject,
+      env: localEnv,
+      timeoutMs: INSTALL_TIMEOUT_MS,
+    });
+    assert.equal(localInstall.exitCode, 0, localInstall.stderr || localInstall.stdout);
+
+    for (const target of [globalTarget, path.join(localProject, '.opencode')]) {
+      const pluginPath = path.join(target, 'plugins', 'gsd-core.js');
+      assert.deepEqual(fs.readFileSync(pluginPath), source, `${target} must stage the flat plugin byte-for-byte`);
+      assert.deepEqual(fs.readdirSync(path.join(target, 'plugins')).sort(), ['gsd-core.js', 'package.json']);
+      const manifest = JSON.parse(fs.readFileSync(path.join(target, 'gsd-file-manifest.json'), 'utf8'));
+      assert.ok(manifest.files['plugins/gsd-core.js'], 'manifest must track the flat plugin');
+    }
+
+    const uninstallEnv = { ...process.env, HOME: path.join(tmpRoot, 'home'), USERPROFILE: path.join(tmpRoot, 'home') };
+    delete uninstallEnv.GSD_TEST_MODE;
+    const globalUninstall = runNode([installScript, '--opencode', '--global', '--config-dir', globalTarget, '--uninstall'], {
+      env: uninstallEnv,
+      timeoutMs: INSTALL_TIMEOUT_MS,
+    });
+    const localUninstall = runNode([installScript, '--opencode', '--local', '--uninstall'], {
+      cwd: localProject,
+      env: localEnv,
+      timeoutMs: INSTALL_TIMEOUT_MS,
+    });
+    assert.equal(globalUninstall.exitCode, 0, globalUninstall.stderr || globalUninstall.stdout);
+    assert.equal(localUninstall.exitCode, 0, localUninstall.stderr || localUninstall.stdout);
+    for (const target of [globalTarget, path.join(localProject, '.opencode')]) {
+      assert.equal(fs.existsSync(path.join(target, 'plugins', 'gsd-core.js')), false);
+      assert.equal(fs.existsSync(path.join(target, 'plugins', 'package.json')), false);
+    }
   });
 
   test('reports applied migration actions before package materialization', () => {

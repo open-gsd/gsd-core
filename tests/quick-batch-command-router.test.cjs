@@ -34,6 +34,56 @@ function mkTmpProject() {
 // ─── Unit-level: argument shaping against injected mocks ───────────────────
 
 describe('quick-batch-command-router: argument shaping (mocked modules)', () => {
+  test('delegates a V2 verb without changing legacy router ownership', async () => {
+    const calls = [];
+    const returned = routeQuickBatchCommand({
+      args: ['quick-batch', 'v2-reconcile', '--parent-session', 'ses', '--batch', 'batch'],
+      cwd: '/project', raw: true, error: (message) => { throw new Error(message); },
+      _quickBatch: {}, _quickBatchDispatch: {},
+      _quickBatchV2: { reconcileActiveRound: (...args) => { calls.push(args); return { ok: true, value: {} }; } },
+    });
+    assert.ok(returned instanceof Promise);
+    await returned;
+    assert.deepEqual(calls, [['/project', 'ses', 'batch']]);
+  });
+
+  test('legacy parse-args invokes its recording mock before the router returns', () => {
+    const calls = [];
+    const returned = routeQuickBatchCommand({
+      args: ['quick-batch', 'parse-args', '--text', '--jobs 2'],
+      cwd: '/project', raw: true, error: (message) => { throw new Error(message); },
+      _quickBatch: {},
+      _quickBatchDispatch: {
+        parseQuickBatchArgs: (args) => {
+          calls.push(args);
+          return { ok: true, value: {} };
+        },
+      },
+    });
+    assert.equal(returned, undefined);
+    assert.deepEqual(calls, [['--jobs', '2']]);
+  });
+
+  test('unknown non-V2 verbs keep the Hub unknown-command behavior', () => {
+    let message = null;
+    const returned = routeQuickBatchCommand({
+      args: ['quick-batch', 'not-a-command'], cwd: '/project', raw: true,
+      error: (value) => { message = value; }, _quickBatch: {}, _quickBatchDispatch: {},
+    });
+    assert.equal(returned, undefined);
+    assert.match(message, /Unknown quick-batch subcommand/);
+  });
+
+  test('unknown V2-prefixed verbs fall through to the Hub instead of being accepted', () => {
+    let message = null;
+    const returned = routeQuickBatchCommand({
+      args: ['quick-batch', 'v2-unknown'], cwd: '/project', raw: true,
+      error: (value) => { message = value; }, _quickBatch: {}, _quickBatchDispatch: {},
+    });
+    assert.equal(returned, undefined);
+    assert.match(message, /Unknown quick-batch subcommand/);
+  });
+
   test('create requires --file', () => {
     let message = null;
     routeQuickBatchCommand({
@@ -163,6 +213,18 @@ describe('quick-batch-command-router: argument shaping (mocked modules)', () => 
       _quickBatchDispatch: {},
     });
     assert.match(message, /Usage: gsd-tools quick-batch complete/);
+  });
+
+  test('generic complete remains available for process batches but rejects active native ownership', async () => {
+    let completed = false;
+    const args = ['quick-batch', 'complete', '--batch', 'b1', '--quick-id', '260101-abc', '--description', 'task', '--date', '2026-09-12', '--commit', 'abc', '--directory', '.planning/quick/item'];
+    await routeQuickBatchCommand({ args, cwd: '/project', raw: true, error: (msg) => { throw new Error(msg); }, _quickBatch: { completeQuickItem: () => { completed = true; return { ok: true, value: {} }; } }, _quickBatchDispatch: {}, _quickBatchV2: { guardGenericCompletion: () => ({ ok: true, value: { native: false } }) } });
+    assert.equal(completed, true);
+    completed = false;
+    let message = null;
+    await routeQuickBatchCommand({ args, cwd: '/project', raw: true, error: (msg) => { message = msg; }, _quickBatch: { completeQuickItem: () => { completed = true; return { ok: true, value: {} }; } }, _quickBatchDispatch: {}, _quickBatchV2: { guardGenericCompletion: () => ({ ok: false, reason: 'active native item requires coordinate-bound quick-batch v2-complete' }) } });
+    assert.equal(completed, false);
+    assert.match(message, /coordinate-bound/);
   });
 
   test('effective-concurrency forwards jobs/task-count/capacity/isolation/mutating to the dispatch module', () => {

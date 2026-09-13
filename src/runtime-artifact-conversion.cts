@@ -2972,7 +2972,7 @@ function convertClaudeCommandToKiloSkill(content, skillName) {
  *
  * @private — exported as `_computePathPrefix` for tests.
  */
-function computePathPrefix({ isGlobal, isOpencode, isWindowsHost: _isWindowsHost, resolvedTarget, homeDir }) {
+function computePathPrefix({ isGlobal, isOpencode, isWindowsHost: _isWindowsHost, resolvedTarget, homeDir, localPathPrefix = undefined }) {
   // #1615: normalize Windows backslashes to forward slashes. This prefix is
   // substituted into markdown @-references (e.g. Windsurf workflow files),
   // which use POSIX paths universally. Idempotent on POSIX (no backslashes).
@@ -2981,10 +2981,23 @@ function computePathPrefix({ isGlobal, isOpencode, isWindowsHost: _isWindowsHost
   // See DEFECT.WINDOWS-PATH-LEAK-IN-MARKDOWN-CONTENT in CONTEXT.md.
   const posixTarget = posixNormalize(String(resolvedTarget));
   const posixHome = homeDir ? posixNormalize(String(homeDir)) : homeDir;
+  if (!isGlobal && typeof localPathPrefix === 'string' && localPathPrefix.length > 0) {
+    return localPathPrefix.endsWith('/') ? localPathPrefix : `${String(localPathPrefix)}/`;
+  }
   if (isGlobal && posixTarget.startsWith(posixHome) && !isOpencode) {
     return '$HOME' + posixTarget.slice(posixHome.length) + '/';
   }
   return `${posixTarget}/`;
+}
+
+/** Add a descriptor-declared project-local gsd-tools launcher candidate. */
+function injectLocalToolCandidate(content, runtime) {
+  const localToolCandidateDir = _hostBehaviors(runtime).localToolCandidateDir;
+  if (typeof localToolCandidateDir !== 'string' || localToolCandidateDir.length === 0) return content;
+  const codexCandidate = '"${_GSD_RUNTIME_ROOT}/.codex/gsd-core/bin/${_GSD_SHIM_NAME}"';
+  const localCandidate = `"\${_GSD_RUNTIME_ROOT}/${localToolCandidateDir}/gsd-core/bin/\${_GSD_SHIM_NAME}"`;
+  if (content.includes(localCandidate)) return content;
+  return content.replaceAll(codexCandidate, `${codexCandidate} ${localCandidate}`);
 }
 
 /**
@@ -3073,7 +3086,7 @@ function _stampNonClaudeRuntimeDefaults(content: string, runtime: string): strin
     /config-get runtime --default claude --raw 2>\/dev\/null \|\| echo "claude"/g,
     `config-get runtime --default ${runtime} --raw 2>/dev/null || echo "${runtime}"`,
   );
-  return content;
+  return injectLocalToolCandidate(content, runtime);
 }
 
 /**
@@ -3945,6 +3958,7 @@ export = {
   READONLY_AGENT_DISALLOWED_TOOLS,
   applyAgentFrontmatterExtensions,
   _computePathPrefix: computePathPrefix,
+  _injectLocalToolCandidate: injectLocalToolCandidate,
   _restoreClaudeGlobalAtRefTilde: restoreClaudeGlobalAtRefTilde,
   _applyRuntimeRewrites,
   _stampNonClaudeRuntimeDefaults,

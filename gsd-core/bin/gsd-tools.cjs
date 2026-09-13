@@ -2436,7 +2436,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // degrades to "no --model" (session model fallback) rather than to
           // resolution.ok === false.
           if (resolution.ok) {
-            exec = { command: resolution.command, args: resolution.args, cwd: resolution.cwd };
+            exec = resolution.transport === 'native-tool'
+              ? { transport: 'native-tool', tool: resolution.tool }
+              : { transport: 'process', command: resolution.command, args: resolution.args, cwd: resolution.cwd };
           } else {
             isolation = 'none';
           }
@@ -2999,9 +3001,24 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
   function routeWorktree({ args, cwd, raw, error }) {
     const subcommand = args[1];
-          const worktreeSafety = require('./lib/worktree-safety.cjs');
+           const worktreeSafety = require('./lib/worktree-safety.cjs');
           if (subcommand === 'cleanup-wave') {
+            const cleanupArgs = args.slice(2);
+            const manifestIndex = cleanupArgs.indexOf('--manifest');
+            const manifestPath = manifestIndex >= 0 ? cleanupArgs[manifestIndex + 1] : '';
+            if (manifestPath) {
+              let callerManifest;
+              try { callerManifest = fs.readFileSync(path.resolve(cwd, manifestPath), 'utf8'); }
+              catch { callerManifest = null; }
+              if (callerManifest !== null && require('./lib/quick-batch-v2.cjs').cleanupManifestRequiresNativeAuthorization(cwd, callerManifest)) {
+                error('Native OpenCode worktree cleanup requires per-item quick-batch v2 journal authorization', ERROR_REASON.USAGE);
+              }
+            }
             worktreeSafety.cmdWorktreeCleanupWave(cwd, args.slice(2));
+          } else if (require('./lib/opencode-v2-worktree-command-router.cjs').tryRouteOpenCodeV2WorktreeCommand({
+            args, cwd, raw, error, output, formatDiagnosticToken,
+          })) {
+            return;
           } else if (subcommand === 'record-agent') {
             worktreeSafety.cmdWorktreeRecordAgent(cwd, args.slice(2));
           } else if (subcommand === 'reap-orphans') {
@@ -3011,9 +3028,24 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           } else if (subcommand === 'set-baseref') {
             require('./lib/worktree-base-ref.cjs').cmdWorktreeSetBaseRef(cwd, args.slice(2));
           } else if (subcommand === 'create') {
-            worktreeSafety.cmdWorktreeCreate(cwd, args.slice(2));
+            // Composition-root-only OpenCode setup: generic worktree policy
+            // exposes the callback seam but never imports host provisioning.
+            let provisionWorktree;
+            const { resolveRuntime } = require('./lib/runtime-slash.cjs');
+            if (resolveRuntime(cwd) === 'opencode') {
+              // Only an absent source directory is a successful provisioning
+              // no-op. Once normal runtime resolution selected OpenCode, a
+              // missing/broken compiled provisioner is a deployment failure,
+              // not permission to create an unprovisioned worktree.
+              const { provisionOpenCodeV2Worktree } = require('./lib/opencode-v2-worktree-provisioner.cjs');
+              if (typeof provisionOpenCodeV2Worktree !== 'function') {
+                error('OpenCode worktree provisioner is unavailable', ERROR_REASON.SDK_FAIL_FAST);
+              }
+              provisionWorktree = provisionOpenCodeV2Worktree;
+            }
+            worktreeSafety.cmdWorktreeCreate(cwd, args.slice(2), { provisionWorktree });
           } else {
-            error('Unknown worktree subcommand. Available: cleanup-wave, record-agent, reap-orphans, base-check, set-baseref, create', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+            error('Unknown worktree subcommand. Available: cleanup-wave, merge-one, teardown-one, record-agent, reap-orphans, base-check, set-baseref, create', ERROR_REASON.SDK_UNKNOWN_COMMAND);
           }
   }
 
@@ -5280,4 +5312,3 @@ module.exports = {
   MODEL_ID_SANITIZE_STRIP_RE,
   MODEL_ID_MAX_LENGTH,
 };
-

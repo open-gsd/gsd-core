@@ -243,7 +243,7 @@ describe('bug #685: Windows spawns must set windowsHide:true (no console-window 
 
   const cts = () => read('src/shell-command-projection.cts');
   const helpers = [
-    ['execGit', 'export function execGit', "_spawnResult(result, 'git')"],
+    ['execGit', 'export function execGit', "_spawnResult(result, 'git', { rawStdout: opts.rawStdout })"],
     ['execNpm', 'export function execNpm', "_spawnResult(result, 'npm')"],
     ['execTool', 'export function execTool', '_spawnResult(result, program)'],
   ];

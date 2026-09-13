@@ -12,6 +12,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execGit as execGitSeam, posixNormalize, type SpawnResultOutput } from './shell-command-projection.cjs';
 import { isContainedIn } from './security.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- opencode-v2-worktree-mutation.cjs is an export= CommonJS module
+import openCodeV2WorktreeMutationModule = require('./opencode-v2-worktree-mutation.cjs');
 
 // Default timeout for worktree-related git subprocess calls.
 // 10 s is generous enough for normal git operations on large repos while still
@@ -39,7 +41,7 @@ type ExecGitFn = typeof execGitSeam;
  * passthrough. Tests inject mocks via deps.execGit using the same
  * (args, opts) shape — see worktree-safety-policy.test.cjs.
  */
-function execGitDefault(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeout?: number } = {}): GitResult {
+function execGitDefault(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeout?: number; rawStdout?: boolean } = {}): GitResult {
   return execGitSeam(args, { ...opts, timeout: opts.timeout ?? DEFAULT_GIT_TIMEOUT_MS });
 }
 
@@ -95,6 +97,8 @@ interface WorktreeDeps {
   readFileSync?: (p: string) => string;
   mkdirSync?: (d: string, o?: { recursive?: boolean }) => void;
   copyFileSync?: (src: string, dest: string) => void;
+  /** Optional runtime-specific setup for a successfully-created worktree. */
+  provisionWorktree?: (context: { repoRoot: string; worktreePath: string }) => void | { ok?: boolean; error?: string };
   isPidAlive?: (pid: number) => boolean;
   readDirSafe?: (dir: string) => string[] | null;
   readFileSafe?: (file: string) => string | null;
@@ -103,6 +107,15 @@ interface WorktreeDeps {
   /** Injected current time in ms since epoch for deterministic tests (#1191). */
   nowMs?: number;
   parseWorktreePorcelain?: (porcelain: string) => WorktreeBranchEntry[];
+}
+
+/** OpenCode V2-only mutation seams kept out of the generic worktree policy. */
+interface OpenCodeV2WorktreeMutationDeps extends WorktreeDeps {
+  now?: () => number;
+  beforeMerge?: () => void;
+  afterMergeCas?: () => void;
+  beforeWorktreeRemove?: () => void;
+  beforeBranchDelete?: () => void;
 }
 
 function readWorktreeList(repoRoot: string, deps: WorktreeDeps = {}): WorktreeListResult {
@@ -1008,6 +1021,27 @@ interface WaveCleanupResult {
   warnings: WaveCleanupWarning[];
 }
 
+const openCodeV2WorktreeMutation = openCodeV2WorktreeMutationModule.createOpenCodeV2WorktreeMutation({
+  execGitDefault,
+  readWorktreeList,
+  normalizeCleanupManifestEntry,
+  repoRootStillMidMerge,
+  planWaveScopeConformance,
+  partitionDeclaredDeletions,
+  gitResultOk,
+  worktreeAgentBranchRe: WORKTREE_AGENT_BRANCH_RE,
+});
+
+/** OpenCode V2 compatibility wrapper; durable mutation policy lives in its isolated module. */
+function mergePreparedWorktree(input: unknown, deps: OpenCodeV2WorktreeMutationDeps = {}): Record<string, unknown> {
+  return openCodeV2WorktreeMutation.mergePreparedWorktree(input as never, deps);
+}
+
+/** OpenCode V2 compatibility wrapper; durable teardown policy lives in its isolated module. */
+function teardownMergedWorktree(input: unknown, deps: OpenCodeV2WorktreeMutationDeps = {}): Record<string, unknown> {
+  return openCodeV2WorktreeMutation.teardownMergedWorktree(input as never, deps);
+}
+
 function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: WorktreeDeps = {}): WaveCleanupResult {
   const execGit = deps.execGit || execGitDefault;
   const entries = Array.isArray(plan?.entries) ? plan.entries : [];
@@ -1686,6 +1720,7 @@ function rollbackPartialWorktree(execGit: ExecGitFn, worktreePath: string, repoR
  */
 function executeWorktreeCreatePlan(plan: WorktreeCreatePlan, repoRoot: string, deps: WorktreeDeps = {}): WorktreeCreateResult {
   const execGit = deps.execGit || execGitDefault;
+  const provisionWorktree = deps.provisionWorktree;
   if (!plan || !plan.ok || !plan.entry) {
     return {
       ok: false,
@@ -1722,6 +1757,27 @@ function executeWorktreeCreatePlan(plan: WorktreeCreatePlan, repoRoot: string, d
     // work. The safe response to a clean failure is to fail loudly and leave
     // whatever is already on disk untouched.
     return { ok: false, reason: 'worktree_add_failed', worktree_path: normalizedPath, branch, base, stderr: addResult.stderr || '' };
+  }
+
+  // Runtime-specific provisioning runs only after Git has successfully created
+  // this exact worktree. The generic lifecycle owns the resulting rollback.
+  if (provisionWorktree) {
+    try {
+      const provisioned = provisionWorktree({ repoRoot, worktreePath });
+      if (provisioned && provisioned.ok === false) {
+        throw new Error(provisioned.error || 'worktree provisioning failed');
+      }
+    } catch (err) {
+      rollbackPartialWorktree(execGit, worktreePath, repoRoot);
+      return {
+        ok: false,
+        reason: 'worktree_provision_failed',
+        worktree_path: normalizedPath,
+        branch,
+        base,
+        stderr: (err as Error).message || String(err),
+      };
+    }
   }
 
   return {
@@ -2253,6 +2309,77 @@ function cmdWorktreeReapOrphans(cwd: string, deps: RecordAgentCmdDeps & Worktree
   write(`${JSON.stringify({ ok: true, reaped: result.filter((r) => r.status === 'reaped').length, entries: result }, null, 2)}\n`);
 }
 
+interface NativeWaveJobIdentity {
+  session_id: string;
+  directory: string;
+  manifest_path: string;
+  manifest_agent_id: string;
+}
+
+interface NativeWaveMergeExpectation {
+  wave_id: string;
+  parent_session_id?: string;
+  jobs: NativeWaveJobIdentity[];
+}
+
+/**
+ * Validate a freshly-returned native worktree-wave status before a caller may
+ * enter the mutating merge gauntlet. This is intentionally stricter than a
+ * truthy `merge_ready` check: exact wave/parent/job/manifest identities,
+ * sealed membership, an empty reason set, and bounded status age are all
+ * required. Pure and fail-closed so every workflow can share one decision.
+ */
+function validateNativeWaveMergeStatus(
+  status: unknown,
+  expected: NativeWaveMergeExpectation,
+  options: { nowMs?: number; maxAgeMs?: number } = {},
+): { ok: true; reason: 'merge_ready' } | { ok: false; reason: string } {
+  if (!status || typeof status !== 'object' || Array.isArray(status)) return { ok: false, reason: 'status_missing' };
+  if (!expected || typeof expected !== 'object' || !Array.isArray(expected.jobs)) return { ok: false, reason: 'expectation_invalid' };
+  const value = status as Record<string, unknown>;
+  if (value.wave_id !== expected.wave_id) return { ok: false, reason: 'wave_identity_mismatch' };
+  if (expected.parent_session_id !== undefined && value.parent_session_id !== expected.parent_session_id) {
+    return { ok: false, reason: 'parent_identity_mismatch' };
+  }
+  if (value.sealed !== true) return { ok: false, reason: 'wave_not_sealed' };
+  if (value.merge_ready !== true) return { ok: false, reason: 'merge_not_ready' };
+  if (!Array.isArray(value.reasons) || value.reasons.length !== 0) return { ok: false, reason: 'status_has_reasons' };
+
+  const nowMs = options.nowMs ?? Date.now();
+  const maxAgeMs = options.maxAgeMs ?? 30_000;
+  if (
+    typeof value.checked_at !== 'number' || !Number.isSafeInteger(value.checked_at) ||
+    !Number.isSafeInteger(nowMs) || !Number.isSafeInteger(maxAgeMs) || maxAgeMs < 0 ||
+    value.checked_at > nowMs || nowMs - value.checked_at > maxAgeMs
+  ) {
+    return { ok: false, reason: 'status_not_fresh' };
+  }
+
+  if (!Array.isArray(value.jobs) || value.jobs.length !== expected.jobs.length) {
+    return { ok: false, reason: 'job_set_mismatch' };
+  }
+  const actualBySession = new Map<string, Record<string, unknown>>();
+  for (const item of value.jobs) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return { ok: false, reason: 'job_identity_invalid' };
+    const job = item as Record<string, unknown>;
+    if (typeof job.session_id !== 'string' || actualBySession.has(job.session_id)) {
+      return { ok: false, reason: 'job_identity_invalid' };
+    }
+    actualBySession.set(job.session_id, job);
+  }
+  if (new Set(expected.jobs.map((job) => job.session_id)).size !== expected.jobs.length) {
+    return { ok: false, reason: 'expectation_invalid' };
+  }
+  for (const expectedJob of expected.jobs) {
+    const actual = actualBySession.get(expectedJob.session_id);
+    if (!actual) return { ok: false, reason: 'job_set_mismatch' };
+    for (const field of ['directory', 'manifest_path', 'manifest_agent_id'] as const) {
+      if (actual[field] !== expectedJob[field]) return { ok: false, reason: `job_${field}_mismatch` };
+    }
+  }
+  return { ok: true, reason: 'merge_ready' };
+}
+
 // Unused exports kept for API compatibility
 void parseWorktreeListPaths;
 
@@ -2327,6 +2454,8 @@ export = {
   normalizeCleanupManifest,
   planWorktreeWaveCleanup,
   executeWorktreeWaveCleanupPlan,
+  mergePreparedWorktree,
+  teardownMergedWorktree,
   WAVE_CLEANUP_WARNING,
   planWaveScopeConformance,
   isSummaryArtifactRelPath,
@@ -2338,6 +2467,7 @@ export = {
   cmdWorktreeCreate,
   reapOrphanWorktrees,
   cmdWorktreeReapOrphans,
+  validateNativeWaveMergeStatus,
   resolveWorktreeRoot,
   pruneOrphanedWorktrees,
 };

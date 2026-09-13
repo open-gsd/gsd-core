@@ -7,9 +7,8 @@
  * `runMinimalInstall`) plus targeted unit coverage to prove the four real
  * upgrades Kilo contributes as part of the imperative-adapter migration:
  *
- *   UPGRADE 1 — native hook-bus plugin: `.kilo/plugins/gsd-core.js`, a
- *   byte-identical copy of `.opencode/plugins/gsd-core.js` (Kilo is an
- *   OpenCode fork sharing the same plugin/extension event bus).
+ *   UPGRADE 1 — native hook-bus plugin: `.kilo/plugins/gsd-core.js`.
+ *   Kilo retains its CommonJS host adapter while OpenCode uses its V2 API.
  *
  *   UPGRADE 2 — active-model routing: `convertClaudeToKiloFrontmatter` now
  *   emits a `model:` field from the resolved model override instead of
@@ -104,22 +103,20 @@ test('.kilo/plugins/gsd-core.js loads as raw CommonJS and exposes id "gsd-core" 
   assert.ok(mod.server._internals, 'server._internals must be present');
 });
 
-// DEFECT.GENERATIVE-FIX parity guard: .kilo/plugins/gsd-core.js is a deliberate
-// byte-copy of .opencode/plugins/gsd-core.js (Kilo is an OpenCode fork sharing
-// the same plugin/extension event bus, see the UPGRADE 1 doc comment above).
-// Nothing enforces that copy relationship — a future edit to either file that
-// forgets its twin would silently drift the two runtimes apart. This fails the
-// instant that happens.
-test('.kilo/plugins/gsd-core.js stays byte-identical to .opencode/plugins/gsd-core.js (Kilo is an OpenCode fork; parity guard, UPGRADE 1)', () => {
-  const kilo = fs.readFileSync(ADAPTER_SRC, 'utf8');
-  const opencode = fs.readFileSync(OPENCODE_ADAPTER_SRC, 'utf8');
-  assert.equal(
-    kilo,
-    opencode,
-    '.kilo/plugins/gsd-core.js and .opencode/plugins/gsd-core.js must stay byte-identical — ' +
-      'Kilo is an OpenCode fork and intentionally reuses the same plugin verbatim; if you edited ' +
-      'one, mirror the change into the other (or this guard will keep failing).',
+test('Kilo CommonJS and OpenCode V2 adapters remain intentionally separate', () => {
+  const opencode = require(OPENCODE_ADAPTER_SRC);
+  assert.ok(fs.existsSync(ADAPTER_SRC));
+  assert.ok(fs.existsSync(OPENCODE_ADAPTER_SRC));
+  assert.notEqual(
+    fs.readFileSync(ADAPTER_SRC, 'utf8'),
+    fs.readFileSync(OPENCODE_ADAPTER_SRC, 'utf8'),
+    'Kilo and OpenCode intentionally ship distinct adapters',
   );
+  assert.deepEqual(Object.keys(opencode).sort(), ['id', 'setup']);
+  assert.equal(opencode.id, 'gsd-core');
+  assert.equal(typeof opencode.setup, 'function');
+  assert.equal(opencode.server, undefined,
+    'the flat OpenCode V2 adapter must not expose Kilo\'s V1-style server export');
 });
 
 // ---------------------------------------------------------------------------

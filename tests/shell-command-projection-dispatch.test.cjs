@@ -87,6 +87,24 @@ describe('execGit', () => {
     const result = execGit(['status', '--porcelain'], { cwd: tmpDir });
     assert.strictEqual(result.exitCode, 0);
   });
+
+  test('rawStdout preserves exact NUL-delimited bytes while default stdout remains trimmed', () => {
+    const payload = Buffer.from('   \0 leading\0trailing \0line\nfeed\0雪\0old name\0new name\0', 'utf8');
+    mock.method(childProcess, 'spawnSync', () => ({
+      status: 0,
+      signal: null,
+      stdout: payload,
+      stderr: Buffer.alloc(0),
+    }));
+    const raw = execGit(['diff-tree', '-z'], { rawStdout: true });
+    assert.deepEqual(raw.stdoutRaw, payload);
+    assert.equal(raw.stdout, payload.toString('utf8'));
+
+    const ordinary = execGit(['diff-tree', '-z']);
+    assert.equal(ordinary.stdout, payload.toString('utf8').trim());
+    assert.equal(Object.prototype.hasOwnProperty.call(ordinary, 'stdoutRaw'), false);
+    mock.restoreAll();
+  });
 });
 
 // ─── execNpm ─────────────────────────────────────────────────────────────────

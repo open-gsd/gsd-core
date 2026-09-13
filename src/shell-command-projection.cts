@@ -604,6 +604,8 @@ export function projectPersistentPathExportActions({ targetDir, platform = proce
 export interface SpawnResultOutput {
   exitCode: number;
   stdout: string;
+  /** Exact stdout bytes, populated only when execGit({ rawStdout: true }) is requested. */
+  stdoutRaw?: Buffer;
   stderr: string;
   signal: NodeJS.Signals | null;
   error: Error | null;
@@ -631,15 +633,22 @@ export function isSpawnTimeout(result: { error?: unknown }): boolean {
   return (result.error as NodeJS.ErrnoException | null | undefined)?.code === 'ETIMEDOUT';
 }
 
-function _spawnResult(result: { error?: NodeJS.ErrnoException | null; status?: number | null; stdout?: Buffer | string | null; stderr?: Buffer | string | null; signal?: NodeJS.Signals | null }, program: string): SpawnResultOutput {
+function _spawnResult(
+  result: { error?: NodeJS.ErrnoException | null; status?: number | null; stdout?: Buffer | string | null; stderr?: Buffer | string | null; signal?: NodeJS.Signals | null },
+  program: string,
+  options: { rawStdout?: boolean } = {},
+): SpawnResultOutput {
   if (result.error && result.error.code === 'ENOENT') {
     return { exitCode: 127, stdout: '', stderr: `${program}: not found`, signal: null, error: result.error, timedOut: false };
   }
   const signal = result.signal ?? null;
   const error = result.error ?? null;
-  return {
+  const stdoutRaw = Buffer.isBuffer(result.stdout)
+    ? result.stdout
+    : Buffer.from(result.stdout ?? '', 'utf8');
+  const output: SpawnResultOutput = {
     exitCode: result.status ?? 1,
-    stdout: (result.stdout ?? '').toString().trim(),
+    stdout: options.rawStdout ? stdoutRaw.toString('utf8') : stdoutRaw.toString('utf8').trim(),
     stderr: (result.stderr ?? '').toString().trim(),
     signal,
     error,
@@ -648,9 +657,11 @@ function _spawnResult(result: { error?: NodeJS.ErrnoException | null; status?: n
     // error.code === 'ETIMEDOUT' is checked (not signal === 'SIGTERM').
     timedOut: isSpawnTimeout({ error }),
   };
+  if (options.rawStdout) output.stdoutRaw = stdoutRaw;
+  return output;
 }
 
-export function execGit(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeout?: number } = {}): SpawnResultOutput {
+export function execGit(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeout?: number; rawStdout?: boolean } = {}): SpawnResultOutput {
   // Non-interactive defaults: a hung credential prompt or terminal-input
   // probe must surface as a timeout, not block the tool forever. Callers
   // can override via opts.env.
@@ -663,12 +674,12 @@ export function execGit(args: string[], opts: { cwd?: string; env?: Record<strin
   const result = childProcess.spawnSync('git', args, {
     cwd: opts.cwd,
     env,
-    encoding: 'utf-8',
+    encoding: opts.rawStdout ? null : 'utf-8',
     stdio: 'pipe',
     timeout: opts.timeout ?? 10_000,
     windowsHide: true,
   });
-  return _spawnResult(result, 'git');
+  return _spawnResult(result, 'git', { rawStdout: opts.rawStdout });
 }
 
 export function execNpm(args: string[], opts: { cwd?: string; timeout?: number } = {}): SpawnResultOutput {

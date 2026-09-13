@@ -19,6 +19,7 @@ const {
   projectCodexHookTomlCommand,
   shellHookOmitsBashRunner,
   buildLocalShellHookCommand,
+  retryRenameSync,
 } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 
 // Bidirectional GSD slash-command namespace transformer (#3583).
@@ -875,6 +876,143 @@ const {
   discardStagedUserArtifacts,
   recoverOrphanedUserArtifacts,
 } = require(path.join(_gsdLibDir, 'user-artifact-staging.cjs'));
+
+// Install-local native-plugin ownership state. `install()` is synchronous, so
+// one slot is enough: every invocation resets it before staging and
+// writeManifest() consumes it. This cannot retain entries for unrelated roots.
+let nativePluginManifestOverride = null;
+
+function _nativePluginLstatOrNull(entryPath) {
+  try {
+    return fs.lstatSync(entryPath);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function _removeNativePluginParkingDir(parkingDir) {
+  // The directory was made by this invocation with mkdtempSync. rmdirSync only
+  // succeeds when it is empty, so it cannot remove an entry a concurrent actor
+  // placed there after our own parked entry was moved or deleted.
+  fs.rmdirSync(parkingDir);
+}
+
+function _throwNativePluginTransactionErrors(primaryError, cleanupError, message) {
+  if (!cleanupError) throw primaryError;
+  throw new AggregateError([primaryError, cleanupError], message);
+}
+
+function prepareNativePluginUpgrade(runtime, configDir) {
+  nativePluginManifestOverride = null;
+  const nativePlugin = _hostBehaviors(runtime).nativePlugin;
+  if (!nativePlugin || !nativePlugin.source) return null;
+
+  const relativePath = `${nativePlugin.dir}/${nativePlugin.file}`;
+  const destination = assertDestWithinConfigHome(configDir, path.join(nativePlugin.dir, nativePlugin.file));
+  const source = path.join(__dirname, '..', nativePlugin.source);
+  const initialStat = _nativePluginLstatOrNull(destination);
+  if (!initialStat || !fs.existsSync(source)) return null;
+
+  // Reserve an invocation-private sibling directory before moving the entry.
+  // Unlike a PID/sequence filename, mkdtempSync is atomic; classifying only the
+  // moved entry closes the live-path lstat/read/hash race and never dereferences
+  // a user symlink at the destination.
+  const destinationParent = path.dirname(destination);
+  if (hasExistingSymlinkBetween(path.resolve(configDir), destinationParent, { allowOptInFollow: false })) {
+    throw new Error(`native plugin destination parent "${destinationParent}" contains an untrusted symlink — refusing to park`);
+  }
+  const parkingDir = fs.mkdtempSync(path.join(destinationParent, '.gsd-native-plugin-preserve-'));
+  const parkedPath = path.join(parkingDir, path.basename(destination));
+  try {
+    retryRenameSync(destination, parkedPath);
+  } catch (error) {
+    try { _removeNativePluginParkingDir(parkingDir); } catch (_) { /* best-effort after an unsuccessful move */ }
+    // A concurrent remover leaves no entry to protect; all other failures are
+    // actionable and must not be guessed away.
+    if (error && error.code === 'ENOENT') return null;
+    throw error;
+  }
+
+  try {
+    let manifestFiles = {};
+    try {
+      const manifest = JSON.parse(fs.readFileSync(path.join(configDir, MANIFEST_NAME), 'utf8'));
+      manifestFiles = manifest && typeof manifest.files === 'object' && manifest.files ? manifest.files : {};
+    } catch {
+      // No readable prior manifest means GSD cannot prove ownership.
+    }
+
+    const previousHash = manifestFiles[relativePath];
+    const parkedStat = fs.lstatSync(parkedPath);
+    const isRegularFile = parkedStat.isFile() && !parkedStat.isSymbolicLink();
+    // Never read/hash a parked non-regular entry: it is user content, including
+    // a dangling or target-bearing symlink.
+    const isManagedPristine = isRegularFile && typeof previousHash === 'string'
+      && fileHash(parkedPath) === previousHash;
+    const preserveOnSuccess = !isManagedPristine;
+
+    if (preserveOnSuccess) {
+      nativePluginManifestOverride = {
+        configDir: path.resolve(configDir),
+        relativePath,
+        previousHash: typeof previousHash === 'string' ? previousHash : null,
+      };
+    }
+    return {
+      destination,
+      parkedPath,
+      parkingDir,
+      preserveOnSuccess,
+    };
+  } catch (error) {
+    // Classification failed after the original entry moved. Put it back before
+    // surfacing the failure; do not leave a vanished user/plugin entry behind.
+    let restoreError = null;
+    try {
+      retryRenameSync(parkedPath, destination);
+      _removeNativePluginParkingDir(parkingDir);
+    } catch (restoreFailure) {
+      restoreError = restoreFailure;
+    }
+    _throwNativePluginTransactionErrors(error, restoreError, 'native plugin preparation and restoration both failed');
+  }
+}
+
+function finishNativePluginUpgrade(protectedPlugin, materialized) {
+  if (!protectedPlugin) return;
+  let finishError = null;
+  try {
+    if (materialized && !protectedPlugin.preserveOnSuccess) {
+      // A pristine old/current adapter was safely superseded. Delete only the
+      // exact parked entry and then its exact, private, now-empty parent.
+      fs.unlinkSync(protectedPlugin.parkedPath);
+      _removeNativePluginParkingDir(protectedPlugin.parkingDir);
+      return;
+    }
+
+    // On a failed materialization OR a preserved user collision, remove only a
+    // regular replacement we staged. Never unlink or write through a symlink or
+    // another unexpected entry that appeared after parking.
+    const replacementStat = _nativePluginLstatOrNull(protectedPlugin.destination);
+    if (replacementStat) {
+      if (!replacementStat.isFile() || replacementStat.isSymbolicLink()) {
+        throw new Error(`native plugin destination "${protectedPlugin.destination}" changed to a non-regular entry while parked — refusing to overwrite it`);
+      }
+      fs.unlinkSync(protectedPlugin.destination);
+    }
+    retryRenameSync(protectedPlugin.parkedPath, protectedPlugin.destination);
+    _removeNativePluginParkingDir(protectedPlugin.parkingDir);
+  } catch (error) {
+    finishError = error;
+  } finally {
+    // A failed materialization must never leave an ownership decision available
+    // to a later, same-root manifest sub-write. Successful preserved collisions
+    // deliberately retain it until the first writeManifest call consumes it.
+    if (!materialized || finishError) nativePluginManifestOverride = null;
+  }
+  if (finishError) throw finishError;
+}
 
 /**
  * Resolve the durable staging root for `configDir`, confined via
@@ -10063,8 +10201,22 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
       manifest.files[`${_npM.dir}/${_npM.file}`] = fileHash(pluginInstallPath);
     }
   }
+  const _nativePluginOverride = nativePluginManifestOverride;
+  if (_nativePluginOverride && _nativePluginOverride.configDir === path.resolve(configDir)) {
+    if (_nativePluginOverride.previousHash === null) {
+      delete manifest.files[_nativePluginOverride.relativePath];
+    } else {
+      manifest.files[_nativePluginOverride.relativePath] = _nativePluginOverride.previousHash;
+    }
+  }
 
-  fs.writeFileSync(path.join(configDir, MANIFEST_NAME), JSON.stringify(manifest, null, 2));
+  try {
+    fs.writeFileSync(path.join(configDir, MANIFEST_NAME), JSON.stringify(manifest, null, 2));
+  } finally {
+    if (_nativePluginOverride && _nativePluginOverride.configDir === path.resolve(configDir)) {
+      nativePluginManifestOverride = null;
+    }
+  }
   return manifest;
 }
 
@@ -10773,6 +10925,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     isWindowsHost,
     resolvedTarget,
     homeDir,
+    localPathPrefix: _hostBehaviors(runtime).localPathPrefix,
   });
 
   // runtimeLabel is now the single-source getRuntimeLabel lookup (ADR-1239
@@ -11185,19 +11338,32 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // engine call -> byte-identical output (gated by golden-install-parity). Fail-open
     // to the engine directly if the composed-registry adapter can't load.
     const _adapter = _runtimeAdapter(runtime);
-    if (_adapter) {
-      _adapter.install({
-        configDir: targetDir,
-        scope,
-        resolvedProfile: _resolvedProfile,
-        resolveAttribution: getCommitAttribution,
-      });
-    } else {
-      // #2322: fallback path (adapter unavailable) — thread the composed
-      // registry too, so this path stages third-party capability skills
-      // identically to the primary adapter path above.
-      installRuntimeArtifacts(runtime, targetDir, scope, _resolvedProfile, getCommitAttribution, _installedCapabilityRegistry);
+    const _protectedNativePlugin = prepareNativePluginUpgrade(runtime, targetDir);
+    let _nativePluginMaterialized = false;
+    try {
+      if (_adapter) {
+        _adapter.install({
+          configDir: targetDir,
+          scope,
+          resolvedProfile: _resolvedProfile,
+          resolveAttribution: getCommitAttribution,
+        });
+      } else {
+        // #2322: fallback path (adapter unavailable) — thread the composed
+        // registry too, so this path stages third-party capability skills
+        // identically to the primary adapter path above.
+        installRuntimeArtifacts(runtime, targetDir, scope, _resolvedProfile, getCommitAttribution, _installedCapabilityRegistry);
+      }
+      _nativePluginMaterialized = true;
+    } catch (installError) {
+      try {
+        finishNativePluginUpgrade(_protectedNativePlugin, false);
+      } catch (restoreError) {
+        _throwNativePluginTransactionErrors(installError, restoreError, 'native plugin install and restoration both failed');
+      }
+      throw installError;
     }
+    finishNativePluginUpgrade(_protectedNativePlugin, _nativePluginMaterialized);
 
     // #1326 — Codex only: remove stale agents/openai.yaml sidecars from managed
     // gsd-* skill dirs. Prior installs wrote these files so Codex would show a
@@ -14250,6 +14416,8 @@ module.exports = {
     GSD_AGENTS_MD_MARKER,
     GSD_AGENTS_MD_CLOSE_MARKER,
     writeManifest,
+    _prepareNativePluginUpgrade: prepareNativePluginUpgrade,
+    _finishNativePluginUpgrade: finishNativePluginUpgrade,
     saveLocalPatches,
     reportLocalPatches,
     validateHookFields,

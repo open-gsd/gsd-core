@@ -3863,8 +3863,9 @@ describe('require-registered-exit rule', () => {
   // pins that undefined resolution explicitly.
   // bin/lib/**/*.cjs is skipped here: it is a build-time-generated directory
   // with no file checked into this repo, so there is no real representative
-  // path to resolve config for. Eight of the nine globs are exercised.
-  test('n/no-process-exit is error on eight of its nine CommonJS globs (bin/lib/** has no checked-in file; no supersession)', async () => {
+  // path to resolve config for. The representative list intentionally asserts
+  // concrete supported surfaces rather than config-block position or count.
+  test('n/no-process-exit is error on CommonJS representatives', async () => {
     const REPO_ROOT = path.join(__dirname, '..');
     const eslint = new ESLint({ cwd: REPO_ROOT });
     const allPaths = [
@@ -3875,7 +3876,6 @@ describe('require-registered-exit rule', () => {
       path.join(REPO_ROOT, 'examples', 'dynamic-context-management', 'demo.cjs'),
       path.join(REPO_ROOT, 'vscode', 'extension.js'),
       path.join(REPO_ROOT, '.kilo', 'plugins', 'gsd-core.js'),
-      path.join(REPO_ROOT, '.opencode', 'plugins', 'gsd-core.js'),
     ];
     for (const p of allPaths) {
       const config = await eslint.calculateConfigForFile(p);

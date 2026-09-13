@@ -284,7 +284,7 @@ function applyOpencodeFamilyPathPrefix(content: string, runtime: string, pathPre
   content = content.replace(/\.\/\.claude\//g, `./${getDirName(runtime)}/`);
   content = content.replace(/~\/\.opencode\//g, pathPrefix);
   content = content.replace(/~\/\.kilo\//g, pathPrefix);
-  return content;
+  return (runtimeArtifactConversion as any)._injectLocalToolCandidate(content, runtime);
 }
 
 /**
@@ -1872,6 +1872,21 @@ function _installNativePluginIfDeclared(
         configDir,
         path.join(np.dir, np.file),
       );
+      const relativePath = `${np.dir}/${np.file}`;
+      const manifest = installerMigrations.readInstallManifest(configDir);
+      const existing = installFs().existsSync(destPath);
+      const { classification } = existing
+        ? installerMigrations.classifyArtifact(configDir, relativePath, manifest)
+        : { classification: 'missing' };
+      const sourceMatchesExisting = existing
+        && Buffer.from(installFs().readFileSync(pluginSrc)).equals(Buffer.from(installFs().readFileSync(destPath)));
+      // A current pristine adapter may be refreshed normally. A different
+      // pristine manifest entry is the retired adapter, while modified and
+      // unknown entries are user content and must win this path collision.
+      if (existing && (classification === 'managed-modified' || classification === 'unknown')) return;
+      if (existing && classification === 'managed-pristine' && !sourceMatchesExisting) {
+        installFs().unlinkSync(destPath);
+      }
       installFs().mkdirSync(path.dirname(destPath), { recursive: true });
       installFs().copyFileSync(pluginSrc, destPath);
       // #2544: the staged adapter is a `.js` file, so Node decides its module
@@ -2044,6 +2059,7 @@ function installOpencodeFamilyArtifacts(
     isWindowsHost: process.platform === 'win32',
     resolvedTarget: posixNormalize(path.resolve(configDir)),
     homeDir: posixNormalize(os.homedir()),
+    localPathPrefix: behaviors.localPathPrefix,
   });
 
   // #2329: destDir is derived from the SAME hostBehaviors.flatCommandDir

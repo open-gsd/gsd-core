@@ -1589,12 +1589,17 @@ describe('resolveOrchestratorExec — the 4 shipped orchestrator-worktree descri
     assert.equal(result.cwd, CWD);
   });
 
-  test('opencode: run --dir <cwd>', () => {
-    const result = resolveOrchestratorExec({ command: 'opencode', args: ['run'], cwdFlag: '--dir' }, CWD);
+  test('opencode: durable native tool (never opencode run)', () => {
+    const result = resolveOrchestratorExec({ transport: 'native-tool', tool: 'gsd_worktree_task' }, CWD);
     assert.equal(result.ok, true);
-    assert.equal(result.command, 'opencode');
-    assert.deepEqual(result.args, ['run', '--dir', CWD]);
-    assert.equal(result.cwd, CWD);
+    assert.deepEqual(result, { ok: true, transport: 'native-tool', tool: 'gsd_worktree_task' });
+  });
+
+  test('native tool identity is a safe identifier, never shell/path text', () => {
+    for (const tool of [' ', 'gsd-worktree-task', '../gsd_worktree_task', '--tool', 'constructor']) {
+      const result = resolveOrchestratorExec({ transport: 'native-tool', tool }, CWD);
+      assert.deepEqual(result, { ok: false, reason: 'invalid_tool' });
+    }
   });
 
   // #2627: `args` carries --print because kimi's working mode is otherwise the
@@ -1926,7 +1931,6 @@ describe('#2584 orchestratorExec — parity / divergence guard', () => {
     // cwd only, which implies a prompt flag carries the instruction.
     const expected = {
       codex: ['exec'],
-      opencode: ['run'],
       kimi: ['--print'],
       'kimi-code': [],
     };
@@ -1941,6 +1945,11 @@ describe('#2584 orchestratorExec — parity / divergence guard', () => {
       assert.ok(resolved.args.includes('do the thing'),
         `${id}: the executor prompt must reach the argv, else the spawned process has no instruction`);
     }
+    const opencode = loadCapability('opencode').runtime.orchestratorExec;
+    assert.deepEqual(
+      resolveOrchestratorExec(opencode, '/tmp/wt', 'do the thing'),
+      { ok: true, transport: 'native-tool', tool: 'gsd_worktree_task' },
+    );
   });
 
   test('kimi and kimi-code both spawn the "kimi" binary — kimi-code is a package name, not a binary', () => {
@@ -2008,6 +2017,29 @@ describe('#2584 orchestratorExec — validator', () => {
     const errors = validateCapability(cap, 'codex');
     const oeErrors = errors.filter((e) => e.includes('orchestratorExec'));
     assert.deepEqual(oeErrors, []);
+  });
+
+  test('a well-formed native-tool orchestratorExec passes without a process command', () => {
+    const cap = shippedCodexCapabilityWithoutOrchestratorExec();
+    cap.runtime.orchestratorExec = { transport: 'native-tool', tool: 'gsd_worktree_task' };
+    const errors = validateCapability(cap, 'codex');
+    assert.deepEqual(errors.filter((e) => e.includes('orchestratorExec')), []);
+  });
+
+  test('native-tool requires a tool and unknown transports fail closed', () => {
+    const cap = shippedCodexCapabilityWithoutOrchestratorExec();
+    cap.runtime.orchestratorExec = { transport: 'native-tool' };
+    assert.ok(validateCapability(cap, 'codex').some((e) => e.includes('runtime.orchestratorExec.tool')));
+    cap.runtime.orchestratorExec = { transport: 'telepathy', command: 'codex' };
+    assert.ok(validateCapability(cap, 'codex').some((e) => e.includes('runtime.orchestratorExec.transport')));
+  });
+
+  test('native-tool validator rejects unsafe tool identities while retaining the process descriptor contract', () => {
+    const cap = shippedCodexCapabilityWithoutOrchestratorExec();
+    cap.runtime.orchestratorExec = { transport: 'native-tool', tool: '../gsd_worktree_task' };
+    assert.ok(validateCapability(cap, 'codex').some((e) => e.includes('runtime.orchestratorExec.tool')));
+    cap.runtime.orchestratorExec = { command: 'kimi', args: ['--print'], cwdFlag: '--work-dir' };
+    assert.deepEqual(validateCapability(cap, 'codex').filter((e) => e.includes('orchestratorExec')), []);
   });
 
   test('orchestratorExec: not an object (array/null/string) → rejected', () => {
@@ -2870,8 +2902,9 @@ describe('#3714 dispatch-isolation CLI — model policy end-to-end (RED pre-fix 
       writeConfig(pinnedDir, { model_overrides: { 'gsd-executor': 'sonnet' } });
       const { json: noPinResult, stderr: noPinStderr } = queryCodexJson(noPinDir, { GSD_RUNTIME: 'opencode' });
       const { json: pinnedResult, stderr: pinnedStderr } = queryCodexJson(pinnedDir, { GSD_RUNTIME: 'opencode' });
-      assert.deepEqual(pinnedResult.exec.args, noPinResult.exec.args,
-        'opencode argv with a "sonnet" pin must be byte-identical to the no-pin argv');
+      assert.deepEqual(pinnedResult.exec, noPinResult.exec,
+        'opencode native-tool transport with a "sonnet" pin must be byte-identical to the no-pin transport');
+      assert.deepEqual(pinnedResult.exec, { transport: 'native-tool', tool: 'gsd_worktree_task' });
       assert.equal(noPinStderr, '');
       assert.equal(pinnedStderr, '', 'opencode declares no modelFlag — the pin policy must not run at all, so no warning');
     } finally {
@@ -2952,15 +2985,20 @@ describe('#2627 dispatch-isolation CLI route', () => {
     assert.equal(withTarget.harnessFlag, null);
   });
 
-  test('each orchestrator-worktree host resolves to its own documented argv shape', () => {
+  test('each process orchestrator-worktree host resolves to its own documented argv shape', () => {
     const args = (id) => queryJson(id, ['--cwd-target', '/tmp/wt', '--prompt', 'P']).exec.args;
-    assert.deepEqual(args('opencode'), ['run', '--dir', '/tmp/wt', 'P']);
     // kimi carries the prompt behind --prompt (its --print mode requires it),
-    // unlike codex/opencode which take it positionally.
+    // unlike codex which takes it positionally.
     assert.deepEqual(args('kimi'), ['--print', '--work-dir', '/tmp/wt', '--prompt', 'P']);
     // kimi-code binds by process cwd — no flag in argv, but cwd still returned.
     assert.deepEqual(args('kimi-code'), ['--prompt', 'P']);
     assert.equal(queryJson('kimi-code', ['--cwd-target', '/tmp/wt', '--prompt', 'P']).exec.cwd, '/tmp/wt');
+  });
+
+  test('opencode resolves to the durable native worktree tool, never opencode run', () => {
+    const result = queryJson('opencode', ['--cwd-target', '/tmp/wt', '--prompt', 'P']);
+    assert.equal(result.isolation, 'orchestrator-worktree');
+    assert.deepEqual(result.exec, { transport: 'native-tool', tool: 'gsd_worktree_task' });
   });
 
   test('a cwd target with no prompt still resolves (prompt is optional at this seam)', () => {
@@ -2978,7 +3016,13 @@ describe('#2627 dispatch-isolation CLI route', () => {
       if (r.isolation === 'harness-worktree') {
         assert.ok(r.harnessFlag && r.harnessFlag.length > 0, `${id}: harness-worktree without a flag`);
       } else if (r.isolation === 'orchestrator-worktree') {
-        assert.ok(r.exec && r.exec.command, `${id}: orchestrator-worktree without a spawnable exec`);
+        assert.ok(
+          r.exec && (
+            (r.exec.transport === 'process' && r.exec.command) ||
+            (r.exec.transport === 'native-tool' && r.exec.tool)
+          ),
+          `${id}: orchestrator-worktree without a usable transport`,
+        );
       } else {
         assert.equal(r.isolation, 'none', `${id}: unexpected isolation value ${r.isolation}`);
         assert.equal(r.exec, null);

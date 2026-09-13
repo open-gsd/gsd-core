@@ -87,6 +87,16 @@ export default tseslint.config(
       '**/dist/**',
       '.worktrees/**',
       '.claude/**',
+      // Manifest-owned local OpenCode installation output. This is a copied
+      // runtime tree, not repository source; lint the canonical runtime and
+      // authored plugin sources instead.
+      '.opencode/gsd-core/**',
+      '.opencode/hooks/**',
+      '.opencode/scripts/**',
+      // The OpenCode V2 flat-plugin bundle is generated from the authored
+      // sources under src/opencode-v2-plugin/. Keep this exact path explicit:
+      // .opencode itself is not an ignored tree.
+      '.opencode/plugins/gsd-core.js',
       'coverage/**',
       // #4141: Stryker's sandbox (tempDirName in stryker.config.mjs, also gitignored
       // and always-ignored by Stryker itself). A run that dies before cleanup leaves a
@@ -286,6 +296,17 @@ export default tseslint.config(
       // sources, not these emitted .cjs files.
       'gsd-core/bin/lib/quick-batch-dispatch.cjs',
       'gsd-core/bin/lib/quick-batch-command-router.cjs',
+      // Generated OpenCode V2 runtime artifacts. The seven direct-tsc outputs
+      // map to their matching src/*.cts files; attestation is canonical
+      // bundle-producer output even though tsc also emits an intermediate.
+      'gsd-core/bin/lib/journal-lock.cjs',
+      'gsd-core/bin/lib/quick-batch-v2.cjs',
+      'gsd-core/bin/lib/quick-batch-v2-command-router.cjs',
+      'gsd-core/bin/lib/opencode-v2-attestation.cjs',
+      'gsd-core/bin/lib/opencode-v2-verification-receipt.cjs',
+      'gsd-core/bin/lib/opencode-v2-worktree-command-router.cjs',
+      'gsd-core/bin/lib/opencode-v2-worktree-mutation.cjs',
+      'gsd-core/bin/lib/opencode-v2-worktree-provisioner.cjs',
       'gsd-core/bin/lib/roadmap-parser.cjs',
       'gsd-core/bin/lib/drift.cjs',
       'gsd-core/bin/lib/cjs-command-router-adapter.cjs',
@@ -511,8 +532,8 @@ export default tseslint.config(
 
   // ── gsd-core/bin/**/*.cjs + scripts/**/*.cjs ───────────────────────────
   // CommonJS Node files: js.recommended + eslint-plugin-n + local plugin rules
-  // eslint-rules/**, bin/lib/**, pi/**, examples/**, vscode/*.js, .kilo/plugins/*.js,
-  // and .opencode/plugins/*.js were previously unmatched by every glob in this config
+  // eslint-rules/**, bin/lib/**, pi/**, examples/**, vscode/*.js, and .kilo/plugins/*.js
+  // were previously unmatched by every glob in this config
   // (drift guard scripts/lint-eslint-glob-coverage.cjs, #3059). All are CommonJS
   // (require/module.exports); folded into this block rather than duplicated.
   {
@@ -525,7 +546,7 @@ export default tseslint.config(
       'examples/**/*.cjs',
       'vscode/*.js',
       '.kilo/plugins/*.js',
-      '.opencode/plugins/*.js',
+      'src/opencode-v2-plugin/**/*.cjs',
     ],
     plugins: {
       n: pluginN,
@@ -564,6 +585,47 @@ export default tseslint.config(
       // to scripts/**/*.cjs — see the src/**/*.cts block above for detail.
       // The rule self-gates on filename too (eslint-rules/no-adhoc-markdown-parsing.cjs),
       // so registering here alone would be inert without that gate change.
+      'local/no-adhoc-markdown-parsing': 'error',
+    },
+  },
+
+  // ── Authored OpenCode plugin ES modules ───────────────────────────────────
+  // The generated flat-plugin output is explicitly ignored above. These source
+  // files execute under OpenCode's ESM runtime, so use the same Node JS quality
+  // rules as the CommonJS block without assigning CommonJS parsing.
+  {
+    files: [
+      'src/opencode-v2-plugin/**/*.mjs',
+    ],
+    plugins: {
+      n: pluginN,
+      local: localPlugin,
+    },
+    languageOptions: {
+      sourceType: 'module',
+      globals: {
+        ...globals.node,
+      },
+    },
+    rules: {
+      ...js.configs.recommended.rules,
+      'no-var': 'error',
+      // Keep the already security-reviewed plugin source bytes stable; these
+      // two style-only rules do not affect the semantic/security coverage
+      // supplied by the remaining JS, Node, and local rules in this block.
+      'prefer-const': 'off',
+      'no-unused-vars': ['warn', {
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_',
+        caughtErrors: 'none',
+      }],
+      'no-empty': ['warn', { allowEmptyCatch: true }],
+      'no-useless-escape': 'off',
+      'no-unsafe-finally': 'warn',
+      'n/no-process-exit': 'error',
+      'n/no-path-concat': 'error',
+      'local/no-source-grep': 'error',
+      'local/no-adhoc-regex-escape': 'error',
       'local/no-adhoc-markdown-parsing': 'error',
     },
   },

@@ -21,7 +21,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const childProcess = require('node:child_process');
 const fc = require('fast-check');
-const { createTempDir, cleanup } = require('./helpers.cjs');
+const { createTempDir, createTempGitProject, cleanup } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 const { makeFaultyGit } = require('./helpers/faulty-deps.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
@@ -56,7 +56,50 @@ const {
   planWorktreeCreate,
   executeWorktreeCreatePlan,
   cmdWorktreeCreate,
+  validateNativeWaveMergeStatus,
 } = require(WORKTREE_SAFETY_PATH);
+
+describe('native worktree-wave merge authorization', () => {
+  const expected = {
+    wave_id: 'phase-1-wave-2',
+    parent_session_id: 'ses_parent',
+    jobs: [{
+      session_id: 'ses_child',
+      directory: '/repo/wt',
+      manifest_path: '/repo/manifest.json',
+      manifest_agent_id: 'agent-1',
+    }],
+  };
+  const good = {
+    wave_id: expected.wave_id,
+    parent_session_id: expected.parent_session_id,
+    checked_at: 9_990,
+    sealed: true,
+    merge_ready: true,
+    reasons: [],
+    jobs: [{ ...expected.jobs[0], status: 'succeeded' }],
+  };
+
+  test('accepts only a fresh exact sealed status with literal merge_ready:true', () => {
+    assert.deepEqual(
+      validateNativeWaveMergeStatus(good, expected, { nowMs: 10_000, maxAgeMs: 100 }),
+      { ok: true, reason: 'merge_ready' },
+    );
+  });
+
+  test('rejects stale, false, reason-bearing, and identity-mismatched statuses', () => {
+    const cases = [
+      [{ ...good, checked_at: 9_000 }, 'status_not_fresh'],
+      [{ ...good, merge_ready: false }, 'merge_not_ready'],
+      [{ ...good, reasons: ['failed'] }, 'status_has_reasons'],
+      [{ ...good, wave_id: 'other' }, 'wave_identity_mismatch'],
+      [{ ...good, jobs: [{ ...good.jobs[0], manifest_agent_id: 'other' }] }, 'job_manifest_agent_id_mismatch'],
+    ];
+    for (const [status, reason] of cases) {
+      assert.deepEqual(validateNativeWaveMergeStatus(status, expected, { nowMs: 10_000, maxAgeMs: 100 }), { ok: false, reason });
+    }
+  });
+});
 
 const isWindows = process.platform === 'win32';
 
@@ -1397,6 +1440,77 @@ describe('worktree record-agent — real CLI dispatch (#1298)', () => {
   });
 });
 
+describe('OpenCode V2 worktree provisioning — real CLI composition', () => {
+  const fs = require('node:fs');
+  const { runGit, runNode } = require('./helpers/process-seam.cjs');
+  const GSD_TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+
+  test('query worktree.create copies a project-local .opencode only for the OpenCode runtime', () => {
+    const dir = createTempGitProject();
+    try {
+      const source = path.join(dir, '.opencode');
+      fs.mkdirSync(source, { recursive: true });
+      fs.writeFileSync(path.join(source, 'worktree-marker'), 'native setup\n');
+      const worktreeRoot = path.join(dir, 'worktrees');
+      fs.mkdirSync(worktreeRoot, { recursive: true });
+      const worktree = path.join(worktreeRoot, 'agent-a1');
+      const manifest = path.join(dir, 'wave-manifest.json');
+      fs.writeFileSync(manifest, JSON.stringify({ orchestrator_root: dir, worktrees: [] }));
+      const baseResult = runGit(['rev-parse', 'HEAD'], { cwd: dir, timeoutMs: SUBPROCESS_TIMEOUT_MS });
+      assert.equal(baseResult.exitCode, 0, baseResult.stderr);
+      assert.equal(baseResult.timedOut, false, baseResult.stderr);
+      const base = baseResult.stdout.trim();
+      const result = runNode([
+        GSD_TOOLS, 'query', 'worktree.create',
+        '--manifest', manifest, '--agent-id', 'a1', '--path', worktree,
+        '--branch', 'worktree-agent-a1', '--base', base, '--root', worktreeRoot,
+      ], {
+        cwd: dir,
+        env: { ...process.env, GSD_RUNTIME: 'opencode' },
+        timeoutMs: SUBPROCESS_TIMEOUT_MS,
+      });
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.equal(fs.readFileSync(path.join(worktree, '.opencode', 'worktree-marker'), 'utf8'), 'native setup\n');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('a non-OpenCode runtime resolved from project config preserves generic create', () => {
+    const dir = createTempGitProject();
+    try {
+      fs.mkdirSync(path.join(dir, '.opencode'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.opencode', 'worktree-marker'), 'must not copy\n');
+      fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ runtime: 'codex' }));
+      const worktreeRoot = path.join(dir, 'worktrees');
+      fs.mkdirSync(worktreeRoot, { recursive: true });
+      const worktree = path.join(worktreeRoot, 'agent-a1');
+      const manifest = path.join(dir, 'wave-manifest.json');
+      fs.writeFileSync(manifest, JSON.stringify({ orchestrator_root: dir, worktrees: [] }));
+      const baseResult = runGit(['rev-parse', 'HEAD'], { cwd: dir, timeoutMs: SUBPROCESS_TIMEOUT_MS });
+      assert.equal(baseResult.exitCode, 0, baseResult.stderr);
+      assert.equal(baseResult.timedOut, false, baseResult.stderr);
+      const base = baseResult.stdout.trim();
+      const result = runNode([
+        GSD_TOOLS, 'query', 'worktree.create',
+        '--manifest', manifest, '--agent-id', 'a1', '--path', worktree,
+        '--branch', 'worktree-agent-a1', '--base', base, '--root', worktreeRoot,
+      ], {
+        cwd: dir,
+        // Empty env rung deliberately leaves config.runtime as the resolver's
+        // next normal-precedence source; no runtime-specific CLI shortcut.
+        env: { ...process.env, GSD_RUNTIME: '' },
+        timeoutMs: SUBPROCESS_TIMEOUT_MS,
+      });
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.equal(fs.existsSync(path.join(worktree, '.opencode', 'worktree-marker')), false);
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
 // ─── worktree create (#2584 ADR-1239 Codex-binding amendment — Phase 2) ───────
 // UNCONSUMED in Phase 2: no scheduler calls this yet (Phase 3 wires it). These
 // tests pin the git-worktree-creation primitive itself.
@@ -1536,6 +1650,51 @@ describe('executeWorktreeCreatePlan', () => {
     assert.equal(result.branch, 'worktree-agent-a1');
     assert.equal(result.base, 'abc123');
     assert.ok(calls.some((c) => c[0] === 'worktree' && c[1] === 'add'), 'must call `git worktree add`');
+  });
+
+  test('calls the optional provisioner after a successful worktree add', () => {
+    const plan = planWorktreeCreate(okFields);
+    const calls = [];
+    const provisioned = [];
+    const result = executeWorktreeCreatePlan(plan, '/repo/main', {
+      execGit: (args) => {
+        calls.push(args);
+        return { exitCode: 0, stdout: '', stderr: '', timedOut: false };
+      },
+      provisionWorktree: (context) => provisioned.push(context),
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(provisioned, [{
+      repoRoot: '/repo/main',
+      worktreePath: '/repo/.claude/worktrees/agent-a1',
+    }]);
+    assert.ok(calls.findIndex((args) => args[0] === 'worktree' && args[1] === 'add') >= 0);
+  });
+
+  test('no provisioner is a successful no-op', () => {
+    const plan = planWorktreeCreate(okFields);
+    const result = executeWorktreeCreatePlan(plan, '/repo/main', {
+      execGit: () => ({ exitCode: 0, stdout: '', stderr: '', timedOut: false }),
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.reason, 'created');
+  });
+
+  test('a provision failure rolls back only the just-created worktree', () => {
+    const plan = planWorktreeCreate(okFields);
+    const calls = [];
+    const result = executeWorktreeCreatePlan(plan, '/repo/main', {
+      execGit: (args) => {
+        calls.push(args);
+        return { exitCode: 0, stdout: '', stderr: '', timedOut: false };
+      },
+      provisionWorktree: () => ({ ok: false, error: 'provision OpenCode environment failed' }),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'worktree_provision_failed');
+    assert.match(result.stderr, /provision OpenCode environment failed/);
+    const rollbackCall = calls.find((c) => c[0] === 'worktree' && c[1] === 'remove');
+    assert.deepEqual(rollbackCall, ['worktree', 'remove', '--force', okFields.worktreePath]);
   });
 
   test('timeout on the base check degrades to git_timeout — does not throw, and no rollback is attempted (nothing was created)', () => {

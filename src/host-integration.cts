@@ -837,32 +837,48 @@ function extensionEventSurfaceFor(extensionEvents: unknown): readonly string[] |
 }
 
 // ---------------------------------------------------------------------------
-// resolveOrchestratorExec — ADR-1239 Codex-binding amendment (#2584), Phase 2
+// resolveOrchestratorExec — orchestrator-worktree transport resolution
 //
 // The `orchestratorExec` descriptor field (sibling of `runtime.hostBehaviors`
-// in capability.json) tells GSD how to process-spawn a host's own CLI as the
-// executor inside a worktree GSD itself created (`isolation:
-// 'orchestrator-worktree'`). Pure, no I/O — this only shapes the argv/cwd a
-// caller would pass to a process-spawn primitive; it does not spawn anything
-// itself. UNCONSUMED in Phase 2 — no scheduler calls this yet (Phase 3 wires
-// it to the actual spawn).
+// in capability.json) tells GSD how a host dispatches an executor inside a
+// worktree GSD itself created (`isolation: 'orchestrator-worktree'`). Legacy
+// descriptors default to the process transport. Hosts with a durable native
+// worktree tool declare `transport: 'native-tool'` and its exact tool name.
+// Pure, no I/O — this resolves transport data but invokes neither process nor
+// tool itself.
 // ---------------------------------------------------------------------------
 
 interface OrchestratorExec {
-  command: string;
+  transport?: 'process' | 'native-tool';
+  command?: string;
+  tool?: string;
   args?: string[];
   cwdFlag?: string | null;
   promptFlag?: string | null;
   modelFlag?: string | null;
 }
 
+// Native tool names cross the host boundary as identifiers, never shell text.
+// Keep this intentionally narrower than a general command path: no whitespace,
+// separators, option prefixes, or prototype-sensitive names are meaningful.
+const SAFE_NATIVE_TOOL_RE = /^[A-Za-z][A-Za-z0-9_]*$/;
+
+function isSafeNativeToolName(tool: unknown): tool is string {
+  return typeof tool === 'string' &&
+    SAFE_NATIVE_TOOL_RE.test(tool) &&
+    tool !== '__proto__' && tool !== 'constructor' && tool !== 'prototype';
+}
+
 type OrchestratorExecResolution =
-  | { ok: true; command: string; args: string[]; cwd: string }
+  | { ok: true; transport: 'process'; command: string; args: string[]; cwd: string }
+  | { ok: true; transport: 'native-tool'; tool: string }
   | { ok: false; reason: string };
 
 /**
  * Resolve an `orchestratorExec` descriptor + target cwd (+ optional executor
- * prompt) into a concrete argv/cwd shape for a process-spawn primitive.
+ * prompt) into either a concrete argv/cwd shape for a process-spawn primitive
+ * or a native tool identity. Descriptors without `transport` retain the
+ * original process behavior.
  *
  * Fail-closed: never throws, always returns a discriminated result. When
  * `cwdFlag` is a non-empty string, `[cwdFlag, cwd]` is appended to `args`
@@ -907,6 +923,16 @@ function resolveOrchestratorExec(
     return { ok: false, reason: 'missing_command' };
   }
   const oe = orchestratorExec as unknown as Record<string, unknown>;
+  if (oe.transport !== undefined && oe.transport !== 'process' && oe.transport !== 'native-tool') {
+    return { ok: false, reason: 'invalid_transport' };
+  }
+  if (oe.transport === 'native-tool') {
+    if (typeof oe.tool !== 'string' || oe.tool.length === 0) {
+      return { ok: false, reason: 'missing_tool' };
+    }
+    if (!isSafeNativeToolName(oe.tool)) return { ok: false, reason: 'invalid_tool' };
+    return { ok: true, transport: 'native-tool', tool: oe.tool };
+  }
   if (typeof oe.command !== 'string' || oe.command.length === 0) {
     return { ok: false, reason: 'missing_command' };
   }
@@ -975,7 +1001,7 @@ function resolveOrchestratorExec(
     }
   }
 
-  return { ok: true, command: oe.command, args, cwd };
+  return { ok: true, transport: 'process', command: oe.command, args, cwd };
 }
 
 // ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@
     "assets",
     "agents",
     ".claude-plugin",
-    ".opencode",
+    ".opencode/plugins/gsd-core.js",
     "GEMINI.md",
     "hooks",
     "scripts",
@@ -65,10 +65,14 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@opencode/client": "2.0.3",
+    "@opencode/schema": "2.0.3",
+    "@opencode/util": "2.0.3",
     "@stryker-mutator/core": "^9.6.1",
     "@stryker-mutator/tap-runner": "^9.6.1",
     "@types/node": "^22.19.19",
     "c8": "^11.0.0",
+    "esbuild": "0.28.2",
     "eslint": "^9.39.4",
     "eslint-plugin-n": "^17.24.0",
     "eslint-plugin-no-only-tests": "^3.4.0",
@@ -101,7 +105,9 @@
     "check:integrity": "node scripts/check-npm-integrity.cjs",
     "build": "npm run generate:identity && npm run build:lib && npm run gen:section-manifest && npm run gen:context-index && npm run gen:plugin-skills && npm run gen:loop-host-contract && npm run gen:capability-registry && npm run build:hooks",
     "build:hooks": "node scripts/build-hooks.js",
-    "build:lib": "tsc -p tsconfig.build.json",
+    "build:lib": "tsc -p tsconfig.build.json && npm run build:opencode-v2",
+    "build:opencode-v2": "node scripts/build-opencode-v2-bundles.cjs",
+    "check:opencode-v2-bundles": "node scripts/build-opencode-v2-bundles.cjs --check",
     "generate:identity": "node scripts/generate-package-identity.cjs",
     "gen:context-index": "node scripts/gen-context-index.cjs --write",
     "gen:loop-host-contract": "node scripts/gen-loop-host-contract.cjs --write",
@@ -132,7 +138,7 @@
     "lint:test-file-count": "node scripts/lint-test-file-count.cjs",
     "lint:pr-checks": "node scripts/lint-pr-check-project-dir.cjs",
     "lint:changeset": "node scripts/changeset/lint.cjs",
-    "lint:generated-sync": "node scripts/gen-capability-registry.cjs --check && node scripts/gen-loop-host-contract.cjs --check && node scripts/gen-capability-matrix.cjs --check && node scripts/sync-manifest-versions.cjs --check && node scripts/gen-inventory-manifest.cjs --check && node scripts/generate-package-identity.cjs --check && node scripts/gen-plugin-skills.cjs --check && node scripts/gen-registry.cjs --check && node scripts/gen-adr-index.cjs --check && node scripts/gen-features.cjs --check && node scripts/check-glossary-refs.cjs --check && node scripts/lint-compiled-artifact-sync.cjs --check && node scripts/gen-context-index.cjs --check && node scripts/gen-section-manifest.cjs --check && node scripts/gen-health-docs.cjs --check && node scripts/gen-state-md-docs.cjs --check && node scripts/gen-scripts-cli-exit.cjs --check && node scripts/gen-hooks-cli-exit.cjs --check && node scripts/gen-exit-code-registry.cjs --check && node scripts/gen-exit-code-docs.cjs --check && node scripts/gen-platform-conformance-tier.cjs --check && node scripts/gen-platform-conformance-tier.cjs --target macos --check",
+    "lint:generated-sync": "node scripts/gen-capability-registry.cjs --check && node scripts/gen-loop-host-contract.cjs --check && node scripts/gen-capability-matrix.cjs --check && node scripts/sync-manifest-versions.cjs --check && node scripts/gen-inventory-manifest.cjs --check && node scripts/generate-package-identity.cjs --check && node scripts/gen-plugin-skills.cjs --check && node scripts/gen-registry.cjs --check && node scripts/gen-adr-index.cjs --check && node scripts/gen-features.cjs --check && node scripts/check-glossary-refs.cjs --check && node scripts/lint-compiled-artifact-sync.cjs --check && npm run check:opencode-v2-bundles && node scripts/gen-context-index.cjs --check && node scripts/gen-section-manifest.cjs --check && node scripts/gen-health-docs.cjs --check && node scripts/gen-state-md-docs.cjs --check && node scripts/gen-scripts-cli-exit.cjs --check && node scripts/gen-hooks-cli-exit.cjs --check && node scripts/gen-exit-code-registry.cjs --check && node scripts/gen-exit-code-docs.cjs --check && node scripts/gen-platform-conformance-tier.cjs --check && node scripts/gen-platform-conformance-tier.cjs --target macos --check",
     "lint:docs": "node scripts/lint-docs-required.cjs",
     "lint:qa-smells": "node scripts/qa-smell-ratchet.cjs",
     "lint:legacy-name": "node scripts/lint-legacy-dir-name.cjs",
@@ -163,6 +169,7 @@
     "gen:state-md-docs": "node scripts/gen-state-md-docs.cjs"
   },
   "allowScripts": {
+    "esbuild@0.28.2": true,
     "fallow@2.70.0": true
   }
 }

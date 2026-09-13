@@ -10,6 +10,10 @@ commands.html
 
 # Local test installs
 .claude/
+/.opencode/*
+!/.opencode/plugins/
+/.opencode/plugins/*
+!/.opencode/plugins/gsd-core.js
 
 # Cursor IDE — local agents/skills bundle (never commit)
 .cursor/
@@ -261,6 +265,20 @@ build/
 /gsd-core/bin/lib/file-overlap-partitioner.cjs
 # #3675: compiled from src/quick-batch.cts (ADR-457 build-at-publish).
 /gsd-core/bin/lib/quick-batch.cjs
+# OpenCode V2 durable transport: compiled from matching src/*.cts sources
+# (ADR-457 build-at-publish).
+/gsd-core/bin/lib/journal-lock.cjs
+/gsd-core/bin/lib/quick-batch-v2.cjs
+/gsd-core/bin/lib/quick-batch-v2-command-router.cjs
+/gsd-core/bin/lib/opencode-v2-verification-receipt.cjs
+/gsd-core/bin/lib/opencode-v2-worktree-command-router.cjs
+/gsd-core/bin/lib/opencode-v2-worktree-mutation.cjs
+/gsd-core/bin/lib/opencode-v2-worktree-provisioner.cjs
+# Canonical dependency-bundled attestation output and sidecars. The flat
+# .opencode/plugins/gsd-core.js output from the same producer stays tracked.
+/gsd-core/bin/lib/opencode-v2-attestation.cjs
+/gsd-core/bin/lib/opencode-v2-attestation.cjs.map
+/gsd-core/bin/lib/opencode-v2-attestation.THIRD_PARTY_NOTICES.txt
 # #3676: compiled from src/quick-batch-dispatch.cts and
 # src/quick-batch-command-router.cts (ADR-457 build-at-publish).
 /gsd-core/bin/lib/quick-batch-dispatch.cjs

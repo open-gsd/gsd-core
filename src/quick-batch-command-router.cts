@@ -29,6 +29,10 @@ import quickBatch = require('./quick-batch.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import quickBatchDispatch = require('./quick-batch-dispatch.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+import quickBatchV2 = require('./quick-batch-v2.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import quickBatchV2Router = require('./quick-batch-v2-command-router.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import commandRoutingHub = require('./command-routing-hub.cjs');
@@ -70,33 +74,28 @@ interface RouteQuickBatchCommandOptions {
   error: (message: string, reason?: string) => void;
   _quickBatch?: QuickBatchModule;
   _quickBatchDispatch?: QuickBatchDispatchModule;
+  _quickBatchV2?: unknown;
 }
 
-// ─── Small arg-parsing helpers (local — no new shared convention needed) ────
-
-/** `--flag value` lookup; undefined when the flag is absent. */
 function argValue(args: string[], flag: string): string | undefined {
-  const idx = args.indexOf(flag);
-  if (idx === -1) return undefined;
-  return args[idx + 1];
+  const index = args.indexOf(flag);
+  return index === -1 ? undefined : args[index + 1];
 }
 
 function parseJsonArg<T>(raw: string | undefined, label: string): { ok: true; value: T } | { ok: false; reason: string } {
-  if (raw === undefined) {
-    return { ok: false, reason: `${label} requires a JSON value` };
-  }
+  if (raw === undefined) return { ok: false, reason: `${label} requires a JSON value` };
   const parsed = safeJsonParse(raw, { maxLength: 1048576, label });
-  if (!parsed.ok) {
-    return { ok: false, reason: `${label} is not valid JSON: ${parsed.error ?? 'unknown parse error'}` };
-  }
-  return { ok: true, value: parsed.value as T };
+  return parsed.ok ? { ok: true, value: parsed.value as T } : { ok: false, reason: `${label} is not valid JSON: ${parsed.error ?? 'unknown parse error'}` };
 }
 
 // ─── Implementation ───────────────────────────────────────────────────────────
 
-function routeQuickBatchCommand({ args, cwd, raw, error, _quickBatch, _quickBatchDispatch }: RouteQuickBatchCommandOptions): void {
+function routeQuickBatchCommand({ args, cwd, raw, error, _quickBatch, _quickBatchDispatch, _quickBatchV2 }: RouteQuickBatchCommandOptions): void | Promise<void> {
   const qb: QuickBatchModule = _quickBatch ?? (quickBatch as unknown as QuickBatchModule);
   const dispatch: QuickBatchDispatchModule = _quickBatchDispatch ?? (quickBatchDispatch as unknown as QuickBatchDispatchModule);
+  // This is the sole shared V2 authority seam: legacy `complete` must not
+  // bypass an active coordinate-bound native item.
+  const v2Core = _quickBatchV2 ?? quickBatchV2;
 
   /** Forward a `Result<T>` from either module straight to output()/error(). */
   function emit(result: unknown): void {
@@ -110,6 +109,17 @@ function routeQuickBatchCommand({ args, cwd, raw, error, _quickBatch, _quickBatc
       return;
     }
     output(result, raw);
+  }
+
+  const v2Router = quickBatchV2Router as {
+    isQuickBatchV2Command(args: string[]): boolean;
+    tryRouteQuickBatchV2Command(input: unknown): Promise<boolean>;
+  };
+  // Keep the legacy contract synchronous. The classifier owns the V2 verb set,
+  // so unknown `v2-*` tokens still fall through to the Hub's normal unknown
+  // command error rather than becoming an accepted asynchronous no-op.
+  if (v2Router.isQuickBatchV2Command(args)) {
+    return v2Router.tryRouteQuickBatchV2Command({ args, cwd, raw, emit, error, v2: _quickBatchV2 }).then(() => undefined);
   }
 
   routeHubCommandFamily({
@@ -185,6 +195,8 @@ function routeQuickBatchCommand({ args, cwd, raw, error, _quickBatch, _quickBatc
           );
         }
         const directory = argValue(args, '--directory');
+        const nativeGuard = (v2Core as { guardGenericCompletion: (cwd: string, batchId: string, quickId: string) => unknown }).guardGenericCompletion(cwd, batchId, quickId) as { ok: boolean; reason?: string };
+        if (!nativeGuard.ok) return makeInvalidArgs('--batch/--quick-id', nativeGuard.reason ?? 'native completion requires authorization', ERROR_REASON.USAGE);
         emit(qb.completeQuickItem(cwd, batchId, quickId, { description, date, commit, directory }));
       },
       // `quick-batch effective-concurrency --jobs <auto|N> --task-count <N> --capacity <N> --isolation <str> [--mutating]`

@@ -26,7 +26,8 @@
  * ## What this checks
  *
  * Walks the ENTIRE repository tree (skipping node_modules/.git/dist/coverage/
- * .worktrees/.claude, mirroring eslint.config.mjs's global ignores), and for
+ * .worktrees/.claude and manifest-owned local runtime copies, mirroring
+ * eslint.config.mjs's global ignores), and for
  * every source-like file (.cjs/.js/.mjs/.cts/.ts), text-scans for a
  * `<expr>.replace(<regex-literal>, <string-literal>)` call whose regex
  * literal's character class matches the escape-all-metachars member set
@@ -52,6 +53,18 @@ const ROOT = path.join(__dirname, '..');
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'coverage', '.worktrees', '.claude']);
 const SOURCE_EXT = new Set(['.cjs', '.js', '.mjs', '.cts', '.ts']);
+
+// `.opencode/gsd-core/` is an installed copy of this repository's runtime,
+// recorded by `.opencode/gsd-file-manifest.json`. It is neither source nor an
+// independent generated artifact: scanning it makes this whole-tree backstop
+// report the same production shape twice, once in the canonical tree and once
+// in the local installation. Do not exclude `.opencode/plugins/**` or
+// `.opencode/agents/**`; those remain authored project surfaces.
+const LOCAL_RUNTIME_COPY_PREFIXES = ['.opencode/gsd-core/'];
+
+function isLocalRuntimeCopy(rel) {
+  return LOCAL_RUNTIME_COPY_PREFIXES.some((prefix) => rel.startsWith(prefix));
+}
 
 // The seam owns this shape — not a violation of itself.
 const SEAM_FILE_RE = /(?:^|\/)src\/pattern\.cts$/;
@@ -189,6 +202,7 @@ function scan(root) {
   const violations = [];
   for (const abs of walk(root)) {
     const rel = path.relative(root, abs).replace(/\\/g, '/');
+    if (isLocalRuntimeCopy(rel)) continue;
     if (SEAM_FILE_RE.test(rel)) continue;
     if (GENERATED_BUNDLE_FILES.has(rel)) continue;
     if (RULE_FIXTURE_FILES.has(rel)) continue;
@@ -231,6 +245,8 @@ module.exports = {
   walk,
   SOURCE_EXT,
   SKIP_DIRS,
+  LOCAL_RUNTIME_COPY_PREFIXES,
+  isLocalRuntimeCopy,
 };
 
 if (require.main === module) runMain(main);

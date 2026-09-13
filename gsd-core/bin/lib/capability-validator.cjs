@@ -209,6 +209,10 @@ const SHA512_INTEGRITY_RE = /^sha512-[A-Za-z0-9+/]{86}==$/;
 // and not absolute. Anything else (whitespace, any shell metacharacter, control/NUL) is a
 // hard validation error — fail closed so the capability install/load is rejected loudly.
 const SAFE_HOOK_SCRIPT_RE = /^[A-Za-z0-9._/-]+$/;
+// Native host-tool identifiers are not executable paths. Keep the accepted
+// shape deliberately narrow: no whitespace, path separators, option prefixes,
+// or punctuation that could be reinterpreted by an RPC/tool dispatcher.
+const SAFE_NATIVE_TOOL_RE = /^[A-Za-z][A-Za-z0-9_]*$/;
 
 // #3631 (defense-in-depth, mirrors capability-lifecycle.cts — KEEP BOTH IN SYNC): a declared script
 // path must not point into the space bundleContentHash (capability-consent.cts) excludes from the
@@ -1672,7 +1676,8 @@ function validateRuntimeBody(cap) {
   // OPTIONAL top-level field (sibling of hostBehaviors), like hookEvents:
   // only hosts whose hostIntegration.dispatch.isolation is
   // 'orchestrator-worktree' need it, so it is not required on every runtime
-  // descriptor. When present it must be a well-formed exec descriptor for
+  // descriptor. When present it must be either a well-formed process exec
+  // descriptor or a durable native-tool descriptor for
   // src/host-integration.cts's resolveOrchestratorExec.
   if (r.orchestratorExec !== undefined) {
     if (typeof r.orchestratorExec !== 'object' || r.orchestratorExec === null || Array.isArray(r.orchestratorExec)) {
@@ -1694,13 +1699,30 @@ function validateRuntimeBody(cap) {
         errors.push('runtime.orchestratorExec must not contain reserved key "prototype"');
       }
 
-      // command — required non-empty string; reserved-name guard (CodeQL barrier)
-      if (oe.command === '__proto__' || oe.command === 'constructor' || oe.command === 'prototype') {
-        errors.push('runtime.orchestratorExec.command "' + oe.command + '" is a reserved name');
-      } else if (typeof oe.command !== 'string' || oe.command.length === 0) {
+      const transport = oe.transport === undefined ? 'process' : oe.transport;
+      if (transport !== 'process' && transport !== 'native-tool') {
         errors.push(
-          'runtime.orchestratorExec.command must be a non-empty string (got: ' + JSON.stringify(oe.command) + ')',
+          'runtime.orchestratorExec.transport must be "process" or "native-tool" (got: ' + JSON.stringify(oe.transport) + ')',
         );
+      }
+
+      if (transport === 'native-tool') {
+        if (oe.tool === '__proto__' || oe.tool === 'constructor' || oe.tool === 'prototype') {
+          errors.push('runtime.orchestratorExec.tool "' + oe.tool + '" is a reserved name');
+        } else if (typeof oe.tool !== 'string' || oe.tool.length === 0 || !SAFE_NATIVE_TOOL_RE.test(oe.tool)) {
+          errors.push(
+            'runtime.orchestratorExec.tool must be a non-empty safe identifier for native-tool transport (got: ' + JSON.stringify(oe.tool) + ')',
+          );
+        }
+      } else {
+        // command — required non-empty string; reserved-name guard (CodeQL barrier)
+        if (oe.command === '__proto__' || oe.command === 'constructor' || oe.command === 'prototype') {
+          errors.push('runtime.orchestratorExec.command "' + oe.command + '" is a reserved name');
+        } else if (typeof oe.command !== 'string' || oe.command.length === 0) {
+          errors.push(
+            'runtime.orchestratorExec.command must be a non-empty string (got: ' + JSON.stringify(oe.command) + ')',
+          );
+        }
       }
 
       // args — optional array of strings
@@ -1926,7 +1948,9 @@ const KNOWN_HOST_BEHAVIORS = new Set([
   'localCommandsViaRules',
   'localInstallDeferred',
   'localInstallStyle',
+  'localPathPrefix',
   'localTargetIsProjectRoot',
+  'localToolCandidateDir',
   'managedHookEvents',
   'mcpCompanion',
   'namedSubagentsSupported',

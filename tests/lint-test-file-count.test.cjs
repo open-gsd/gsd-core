@@ -21,6 +21,7 @@ const {
   evaluateLint,
   testEffectivePrefix,
   _buildTestMap,
+  TEST_MODULE_OVERRIDES,
 } = require(LINT_SCRIPT);
 
 // ---------------------------------------------------------------------------
@@ -366,6 +367,33 @@ describe('_buildTestMap — dotted suite-qualifier bucketing (#3227)', () => {
     const map = _buildTestMap(prodPrefixes, [testFile]);
     assert.deepStrictEqual(map.get('state-contract'), [testFile]);
     assert.deepStrictEqual(map.get('state'), []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Explicit architectural ownership overrides — V2 transport
+// ---------------------------------------------------------------------------
+
+describe('_buildTestMap — explicit V2 transport ownership', () => {
+  test('attributes the cross-process lock regression to journal-lock, not its quick-batch-v2 consumer', () => {
+    const testFile = makeFiles('quick-batch-v2-lock', ['quick-batch-v2-lock.test.cjs'])[0];
+    const prodPrefixes = new Map([
+      ['journal-lock', '/fake/src/journal-lock.cjs'],
+      ['quick-batch-v2', '/fake/src/quick-batch-v2.cjs'],
+    ]);
+    const map = _buildTestMap(prodPrefixes, [testFile]);
+    assert.deepStrictEqual(map.get('journal-lock'), [testFile]);
+    assert.deepStrictEqual(map.get('quick-batch-v2'), []);
+  });
+
+  test('does not charge the workflow artifact contract to the V2 state machine', () => {
+    const testFile = makeFiles('quick-batch-v2-workflow', ['quick-batch-v2-workflow.test.cjs'])[0];
+    const prodPrefixes = new Map([
+      ['quick-batch-v2', '/fake/src/quick-batch-v2.cjs'],
+    ]);
+    const map = _buildTestMap(prodPrefixes, [testFile]);
+    assert.deepStrictEqual(map.get('quick-batch-v2'), []);
+    assert.equal(TEST_MODULE_OVERRIDES.get('quick-batch-v2-workflow.test.cjs'), null);
   });
 });
 
