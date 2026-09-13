@@ -58,6 +58,9 @@ const CONFIG_DEFAULTS_MANIFEST_PATH = path.join(REPO_ROOT, 'gsd-core', 'bin', 's
 const CONFIGURATION_DOCS_PATH = path.join(REPO_ROOT, 'docs', 'CONFIGURATION.md');
 const PT_BR_CONFIGURATION_DOCS_PATH = path.join(REPO_ROOT, 'docs', 'pt-BR', 'CONFIGURATION.md');
 const ZH_CN_CONFIGURATION_DOCS_PATH = path.join(REPO_ROOT, 'docs', 'zh-CN', 'CONFIGURATION.md');
+const JA_JP_CONFIGURATION_DOCS_PATH = path.join(REPO_ROOT, 'docs', 'ja-JP', 'CONFIGURATION.md');
+const KO_KR_CONFIGURATION_DOCS_PATH = path.join(REPO_ROOT, 'docs', 'ko-KR', 'CONFIGURATION.md');
+const ZH_CN_PLANNING_CONFIG_PATH = path.join(REPO_ROOT, 'docs', 'zh-CN', 'references', 'planning-config.md');
 const SETTINGS_ADVANCED_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'settings-advanced.md');
 
 function readPlanPhase() {
@@ -548,6 +551,13 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
     assert.equal(loadConfig(tmp).planner_stall_detection_enabled, true);
   });
 
+  test('manifest skew cannot make a non-boolean planner setting disable detection', () => {
+    const { resolvePlannerStallDetectionEnabled } = require('../gsd-core/bin/lib/config-loader.cjs');
+    for (const value of [undefined, null, 'false', 0, {}]) {
+      assert.equal(resolvePlannerStallDetectionEnabled(value), true);
+    }
+  });
+
   test('root, GSD_PROJECT, and workstream reads retain canonical scope precedence', (t) => {
     const tmp = makeProject(t, { planner: { stall_detection_enabled: false } });
     const projectDir = path.join(tmp, '.planning', 'product-a');
@@ -581,13 +591,14 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
   });
 
   test('English and enumerating localized docs state default, CLI opt-out, effect, and recovery loss', () => {
-    for (const docsPath of [CONFIGURATION_DOCS_PATH, PT_BR_CONFIGURATION_DOCS_PATH, ZH_CN_CONFIGURATION_DOCS_PATH]) {
+    for (const docsPath of [CONFIGURATION_DOCS_PATH, PT_BR_CONFIGURATION_DOCS_PATH, ZH_CN_CONFIGURATION_DOCS_PATH, JA_JP_CONFIGURATION_DOCS_PATH, KO_KR_CONFIGURATION_DOCS_PATH]) {
       const docs = fs.readFileSync(docsPath, 'utf8');
       assert.match(docs, /`planner\.stall_detection_enabled`\s*\|\s*boolean\s*\|\s*`true`/);
       assert.match(docs, /config-set planner\.stall_detection_enabled false/);
-      assert.match(docs, /runtime-native|nativa do runtime|运行时原生/i);
-      assert.match(docs, /bounded recovery|recupera[cç][aã]o limitada|有界恢复/i);
+      assert.match(docs, /runtime-native|nativa do runtime|运行时原生|ランタイムネイティブ|런타임 네이티브/i);
+      assert.match(docs, /bounded recovery|recupera[cç][aã]o limitada|有界恢复|有界な復旧|제한된 복구/i);
     }
+    assert.match(fs.readFileSync(ZH_CN_PLANNING_CONFIG_PATH, 'utf8'), /planner\.stall_detection_enabled/);
   });
 
   test('advanced settings warns about recovery loss before offering to persist false', () => {
