@@ -26,7 +26,11 @@ GSD will:
 8. Offer to restore the user-added files it backed up in step 5.
 9. Report whether locally modified GSD files were backed up to `gsd-local-patches/`.
 
-Restart your runtime after the update to pick up new commands and agents.
+Before reporting completion, the installer checks each GSD-managed script and interpreter path written into runtime configuration, resolving the interpreter against the current install-time `PATH`. This only proves the path resolves now — a hook fired later under a different, more restricted `PATH` (e.g. a GUI launcher) can still fail even after this check passes.
+
+If a script is missing, unreadable, has the wrong file type, lacks a required execute permission, or its interpreter cannot be resolved, the update fails and reports every invalid path. For Claude Code and other settings.json-based runtimes, this check runs before the update writes settings.json, so nothing new is persisted (an earlier settings.json/settings.local.json migration, if one applied, is the one exception and stays applied). For Codex, this reverts config.toml/hooks.json along with the rest of that runtime's pre-install snapshot (skills/, agents/, gsd-core/VERSION). For Cursor, Windsurf, Kimi, and Cline, the runtime's config file is already written earlier in the update, ahead of this check, so a failure is reported but that file is left in place. Fix the reported path problem and rerun `/gsd-update` — do not restart into the incomplete update.
+
+Restart your runtime after a successful update to pick up new commands and agents.
 
 ---
 

@@ -37,6 +37,12 @@
  *     colon-namespace leaks (WORKFLOW_BODY_COLON_LEAK).
  *   This check populates result.details with counters but does NOT return a
  *   failure code by default; it is informational until enforcement is enabled.
+ *
+ * Configured-entrypoint checks (Cycle 4 — #4154):
+ *   For each runtime in entrypointRuntimes, runs the tarball-installed
+ *   installer into a throwaway HOME, then re-reads that runtime's own written
+ *   config files and asserts every GSD-managed script path they name resolves
+ *   to a file (ENTRYPOINT_UNRESOLVED). Requires fixtureDir.
  */
 
 'use strict';
@@ -86,6 +92,8 @@ const SMOKE = Object.freeze({
   INIT_FAILED: 'init_failed',
   // Cycle 3 code
   WORKFLOW_BODY_COLON_LEAK: 'workflow_body_colon_leak',
+  // Cycle 4 code (#4154)
+  ENTRYPOINT_UNRESOLVED: 'entrypoint_unresolved',
 });
 
 // ---------------------------------------------------------------------------
@@ -275,6 +283,95 @@ function scanWorkflowColonLeak(filePath, cmdNames) {
 }
 
 // ---------------------------------------------------------------------------
+// Cycle 4 helpers: configured-entrypoint resolution (#4154)
+// ---------------------------------------------------------------------------
+
+/**
+ * Top-level config files this scan reads. These are the surfaces that carry
+ * every GSD-managed launch path for the runtimes Cycle 4 actually installs
+ * (`entrypointRuntimes`, default claude + codex): claude registers into
+ * settings.json, codex into hooks.json and config.toml.
+ *
+ * This is NOT an exhaustive map of where GSD writes launch paths across all
+ * runtimes, and the scan is top-level only by design. Two known surfaces sit
+ * outside it: Cline registers its hook at `.clinerules/hooks/PreToolUse` (a
+ * subdirectory, and not one of these names — see writeClineArtifacts in
+ * src/runtime-hooks-surface.cts), and Kimi's native `[[hooks]]` config.toml
+ * lives under `resolveKimiHooksTomlDir()` (`~/.kimi`), a directory separate
+ * from Kimi's own GSD configDir. Adding either runtime to entrypointRuntimes
+ * requires teaching scanConfiguredEntrypoints about its surface first,
+ * otherwise the scan reports zero entrypoints and silently proves nothing.
+ */
+const RUNTIME_CONFIG_FILES = Object.freeze(['settings.json', 'hooks.json', 'config.toml']);
+
+/**
+ * An absolute path token ending in a launchable-script extension. The first
+ * alternative matches a Windows drive prefix (C:\ or C:/), the second a POSIX
+ * root. Non-greedy so it stops at the first extension rather than swallowing
+ * the rest of a shell command; the excluded quote characters keep it inside a
+ * single JSON/TOML string value.
+ */
+const SCRIPT_PATH_RE = /(?:[A-Za-z]:[\\/]|\/)[^"'\s]{0,400}?\.(?:js|cjs|mjs|sh|cmd|ps1)/g;
+
+/**
+ * Extract every script path `text` names underneath `configDir`.
+ *
+ * Windows configs store paths with backslashes, which JSON/TOML doubles on
+ * write; collapsing `\\` to `\` first makes the raw text scan work on both
+ * platforms without parsing each config format separately (POSIX text has no
+ * backslashes, so the collapse is a no-op there).
+ */
+function configuredEntrypointsIn(text, configDir) {
+  const prefix = configDir.endsWith(path.sep) ? configDir : configDir + path.sep;
+  const fold = (value) => (process.platform === 'win32' ? value.toLowerCase() : value);
+  const found = new Set();
+  for (const match of text.replace(/\\\\/g, '\\').matchAll(SCRIPT_PATH_RE)) {
+    const resolved = path.resolve(match[0]);
+    if (fold(resolved).startsWith(fold(prefix))) found.add(resolved);
+  }
+  return [...found];
+}
+
+/**
+ * Throwaway HOME the Cycle 4 install for `runtime` runs against. Exported so a
+ * test can seed that runtime's config before the install rather than
+ * hard-coding the layout runSmoke picks.
+ */
+function entrypointFixtureHome(fixtureDir, runtime) {
+  return path.join(fixtureDir, `entrypoints-${runtime}`);
+}
+
+/**
+ * Re-derive the configured entrypoints a completed install wrote into a
+ * runtime's own config files and report the ones that do not resolve to a
+ * file. Internal to Cycle 4; the smoke's verdict is the exported contract.
+ *
+ * This deliberately does NOT consult the installer's own entrypoint list (the
+ * assertConfiguredEntrypoints gate in bin/install.js). That gate can only
+ * validate paths a config writer remembered to register; reading the written
+ * config back is what catches a writer that emits a launch path without
+ * registering it, and a stale registration an install left behind.
+ *
+ * @param {string} configDir - Absolute path to the runtime config dir.
+ * @returns {{ checked: string[], unresolved: { configPath: string, scriptPath: string }[] }}
+ */
+function scanConfiguredEntrypoints(configDir) {
+  const checked = [];
+  const unresolved = [];
+  for (const name of RUNTIME_CONFIG_FILES) {
+    const configPath = path.join(configDir, name);
+    if (!fs.existsSync(configPath) || !fs.statSync(configPath).isFile()) continue;
+    const text = fs.readFileSync(configPath, 'utf-8');
+    for (const scriptPath of configuredEntrypointsIn(text, configDir)) {
+      checked.push(scriptPath);
+      if (fs.existsSync(scriptPath) && fs.statSync(scriptPath).isFile()) continue;
+      unresolved.push({ configPath, scriptPath });
+    }
+  }
+  return { checked, unresolved };
+}
+
+// ---------------------------------------------------------------------------
 // Pure function: runSmoke
 // ---------------------------------------------------------------------------
 
@@ -285,6 +382,8 @@ function scanWorkflowColonLeak(filePath, cmdNames) {
  * @param {string}   opts.expectedVersion    - semver string to assert (e.g. "1.50.0")
  * @param {string}   [opts.fixtureDir]       - Temp dir to run `init` into (must NOT be HOME)
  * @param {string[]} [opts.lifecycleCommands] - Commands to file-check (default: see below)
+ * @param {string[]} [opts.entrypointRuntimes] - Runtime profiles whose configured entrypoints are
+ *   re-checked after a real install (default: see below). Requires fixtureDir; pass [] to skip.
  * @param {boolean}  [opts.dryRun=false]     - If true, skip actual npm install; validate input only
  * @param {object}   [opts.npmEnv]           - Optional env dict for the internal npm install
  *   spawnSync call. Pass an isolated HOME env (e.g. from isolatedNpmEnv() in tests/helpers.cjs)
@@ -298,6 +397,11 @@ function runSmoke({
   expectedVersion,
   fixtureDir,
   lifecycleCommands = ['init', 'discuss-phase', 'plan-phase', 'execute-phase'],
+  // claude and codex cover the two top-level config surfaces this scan knows
+  // how to read (settings.json, and hooks.json + config.toml). Most other
+  // runtimes reuse one of those two shapes; Cline and Kimi do not (see
+  // RUNTIME_CONFIG_FILES), so they are out of scope here rather than covered.
+  entrypointRuntimes = ['claude', 'codex'],
   dryRun = false,
   npmEnv = undefined,
 }) {
@@ -551,6 +655,70 @@ function runSmoke({
   // NOTE: colonLeakCount is informational here. Once the backlog is fixed,
   // a future enforcement mode can fail on non-zero counts.
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Cycle 4: configured-entrypoint resolution (#4154)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // The installer's own gate (assertConfiguredEntrypoints) runs in-process and
+  // only sees the paths a config writer registered with it. Installing the
+  // packed tarball for real and reading each runtime's written config back is
+  // what proves the launch paths a user's runtime will actually invoke exist
+  // in the shipped layout.
+  const entrypointProfiles = [];
+  if (fixtureDir && entrypointRuntimes.length > 0) {
+    for (const runtime of entrypointRuntimes) {
+      // Own HOME per runtime so a --global install cannot reach the real one.
+      const runtimeHome = entrypointFixtureHome(fixtureDir, runtime);
+      const configDir = path.join(runtimeHome, `.${runtime}`);
+      fs.mkdirSync(runtimeHome, { recursive: true });
+
+      const installResult = spawnSync(
+        process.execPath,
+        [path.join(pkg, 'bin', 'install.js'), `--${runtime}`, '--global', '--config-dir', configDir],
+        {
+          encoding: 'utf-8',
+          cwd: runtimeHome,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: {
+            ...effectiveNpmEnv,
+            HOME: runtimeHome,
+            USERPROFILE: runtimeHome,
+            // Same reason as the init check above: install.js skips its main()
+            // block when GSD_TEST_MODE is set and would exit 0 writing nothing.
+            GSD_TEST_MODE: '',
+            NO_UPDATE_NOTIFIER: '1',
+          },
+          timeout: CHILD_TIMEOUT_MS,
+        },
+      );
+
+      if (installResult.status !== 0) {
+        return {
+          code: SMOKE.INIT_FAILED,
+          details: {
+            ...details,
+            runtime,
+            configDir,
+            stderr: installResult.stderr,
+            stdout: installResult.stdout,
+          },
+        };
+      }
+
+      const scan = scanConfiguredEntrypoints(configDir);
+      if (scan.unresolved.length > 0) {
+        return {
+          code: SMOKE.ENTRYPOINT_UNRESOLVED,
+          details: { ...details, runtime, configDir, unresolved: scan.unresolved },
+        };
+      }
+
+      entrypointProfiles.push({ runtime, configDir, entrypointsChecked: scan.checked.length });
+    }
+  }
+
+  details.entrypointProfiles = entrypointProfiles;
+
   return { code: SMOKE.OK, details };
 }
 
@@ -635,7 +803,13 @@ function cleanup(...dirs) {
 // Exports
 // ---------------------------------------------------------------------------
 
-module.exports = { SMOKE, runSmoke, binInvocation, CHILD_TIMEOUT_MS };
+module.exports = {
+  SMOKE,
+  runSmoke,
+  binInvocation,
+  entrypointFixtureHome,
+  CHILD_TIMEOUT_MS,
+};
 
 if (require.main === module) {
   runMain(cliMain);

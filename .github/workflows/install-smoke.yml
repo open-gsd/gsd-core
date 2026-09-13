@@ -144,6 +144,14 @@ jobs:
         if: steps.skip.outputs.skip != 'true'
         run: npm ci
 
+      # `npm pack` runs prepack/prepare (build:lib) but NOT prepublishOnly, so
+      # a packed tarball is missing hooks/dist — the very launch targets the
+      # published package ships and the lifecycle smoke is meant to exercise.
+      # Build them here so the smoked tarball is publish-shaped (#4154).
+      - name: Build hooks (prepublishOnly parity)
+        if: steps.skip.outputs.skip != 'true'
+        run: npm run build:hooks
+
       - name: Pack root tarball
         if: steps.skip.outputs.skip != 'true'
         id: pack

@@ -562,13 +562,16 @@ describe('install/uninstall — trae (nested skills/gsd-<router>/skills/<stem>/ 
     const result = install(false, 'trae');
     const targetDir = path.join(tmpDir, '.trae');
 
-    assert.deepStrictEqual(result, {
+    assert.equal(typeof result.rollbackInstallerMigrations, 'function');
+    const { rollbackInstallerMigrations: _rollbackInstallerMigrations, ...resultWithoutRollback } = result;
+    assert.deepStrictEqual(resultWithoutRollback, {
       settingsPath: null,
       settings: null,
       statuslineCommand: null,
       updateBannerCommand: null,
       runtime: 'trae',
       configDir: fs.realpathSync(targetDir),
+      configuredEntrypoints: [],
     });
 
     // trae nests: skills/gsd-<router>/skills/<stem>/SKILL.md
@@ -5464,6 +5467,36 @@ describe('#338 case 1: fresh local Claude install writes to settings.local.json'
     assert.ok(
       result.settingsPath.endsWith('settings.local.json'),
       `install() must return settingsPath ending in settings.local.json for local Claude installs; got: ${result.settingsPath}`
+    );
+  });
+
+  // #4249 (agy adversarial review, round 8): every early-return branch of
+  // install() must still return the configuredEntrypoints/rollbackInstallerMigrations
+  // shape — rollbackFinalizedInstallerMigrations reads the latter unconditionally,
+  // so an omission here silently drops this runtime's rollback on a later
+  // finalize-stage failure.
+  test('malformed settings.local.json still returns configuredEntrypoints and a working rollbackInstallerMigrations', (t) => {
+    const origCwd = process.cwd();
+    t.after(() => { process.chdir(origCwd); });
+    process.chdir(tmpDir);
+
+    fs.mkdirSync(path.join(tmpDir, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.claude', 'settings.local.json'), '{ not valid json', 'utf-8');
+
+    const result = install(false, 'claude');
+    assert.deepStrictEqual(
+      result.configuredEntrypoints,
+      [],
+      'unparseable settings.local.json must still return configuredEntrypoints: []'
+    );
+    assert.strictEqual(
+      typeof result.rollbackInstallerMigrations,
+      'function',
+      'unparseable settings.local.json must still return a callable rollbackInstallerMigrations'
+    );
+    assert.doesNotThrow(
+      () => result.rollbackInstallerMigrations(),
+      'rollbackInstallerMigrations() must not throw when called on this early-return path'
     );
   });
 });

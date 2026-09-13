@@ -15,7 +15,8 @@ const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 
 const { cleanup, createTempDir, runNpm, isolatedNpmEnv } = require('./helpers.cjs');
-const { SMOKE, runSmoke, CHILD_TIMEOUT_MS } = require('../scripts/release-tarball-smoke.cjs');
+const { ensureHooksDist } = require('./helpers/hooks-dist.cjs');
+const { SMOKE, runSmoke, entrypointFixtureHome, CHILD_TIMEOUT_MS } = require('../scripts/release-tarball-smoke.cjs');
 
 const smokeMsg = (label, result) =>
   `${label}: code=${result.code} details=${JSON.stringify(result.details)}`;
@@ -85,6 +86,11 @@ describe('release-tarball-smoke', () => {
   let fixtureDir;
 
   before(async () => {
+    // hooks/dist is gitignored and only produced by `npm run build:hooks`; the
+    // pack below must ship it or Cycle 4's entrypoint scan runs against a
+    // tarball with no hook scripts at all (SMOKE.INIT_FAILED on a clean tree).
+    ensureHooksDist();
+
     // Pack once into a temp dir.
     packDir = createTempDir('gsd-smoke-pack-');
     installPrefix = createTempDir('gsd-smoke-prefix-');
@@ -435,6 +441,87 @@ describe('release-tarball-smoke', () => {
         const counts = JSON.parse(result.stdout);
         assert.ok(counts.after > 0 && counts.after < counts.before);
       }
+  });
+
+  // ── H: configured entrypoints resolve for supported runtime profiles ──────
+  //
+  // #4154's scope bullet: the installer's in-process assertConfiguredEntrypoints
+  // gate is unit-covered in tests/configured-entrypoint-validation.test.cjs.
+  // This asserts the same property survives the packaged path — install the
+  // real tarball, run its installer for a runtime, and re-read that runtime's
+  // own config back off disk.
+  test('H: packed install leaves every configured entrypoint resolvable', () => {
+    const result = runSmoke({
+      tarballPath,
+      installPrefix,
+      expectedVersion: pkg.version,
+      fixtureDir,
+      // The lifecycle-command and workflow-body cycles are covered by A/C/E;
+      // skipping them here keeps this test to the entrypoint cycle.
+      lifecycleCommands: [],
+      entrypointRuntimes: ['claude', 'codex'],
+      npmEnv: isolatedNpmEnv(),
+    });
+
+    assert.equal(result.code, SMOKE.OK, smokeMsg('H', result));
+    assert.deepEqual(
+      result.details.entrypointProfiles.map((profile) => profile.runtime),
+      ['claude', 'codex'],
+      smokeMsg('H', result),
+    );
+    for (const profile of result.details.entrypointProfiles) {
+      // Structural: a profile whose scan found nothing would satisfy the
+      // "no unresolved entrypoints" verdict vacuously.
+      assert.ok(
+        profile.entrypointsChecked > 0,
+        `${profile.runtime} configured no entrypoints: ${smokeMsg('H', result)}`,
+      );
+    }
+  });
+
+  // ── I: an unresolvable configured entrypoint fails the packed install ─────
+  //
+  // Red proof for ENTRYPOINT_UNRESOLVED, end to end through the packed tarball,
+  // and the reason this smoke check is not redundant with the installer's own
+  // gate: the fixture pre-registers a hook no install will ever write, the
+  // packed installer merges its own entries around it and exits 0 — its
+  // in-process assertConfiguredEntrypoints only validates paths the config
+  // writers registered with it during that run, so a registration it never
+  // touched is invisible to it — and reading settings.json back off disk is
+  // what catches the dangling launch path.
+  test('I: a registered hook that no install writes fails the smoke', (t) => {
+    const runtimeHome = entrypointFixtureHome(fixtureDir, 'claude');
+    // fixtureDir is shared with A/C/E/H, which install into this same home.
+    t.after(() => cleanup(runtimeHome));
+
+    const configDir = path.join(runtimeHome, '.claude');
+    const ghostHook = path.join(configDir, 'hooks', 'gsd-ghost-hook.js');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'settings.json'), JSON.stringify({
+      hooks: {
+        PreToolUse: [
+          { matcher: 'Bash', hooks: [{ type: 'command', command: `node "${ghostHook}"` }] },
+        ],
+      },
+    }, null, 2));
+
+    const result = runSmoke({
+      tarballPath,
+      installPrefix,
+      expectedVersion: pkg.version,
+      fixtureDir,
+      lifecycleCommands: [],
+      entrypointRuntimes: ['claude'],
+      npmEnv: isolatedNpmEnv(),
+    });
+
+    assert.equal(result.code, SMOKE.ENTRYPOINT_UNRESOLVED, smokeMsg('I', result));
+    assert.equal(result.details.runtime, 'claude', smokeMsg('I', result));
+    assert.deepEqual(
+      result.details.unresolved,
+      [{ configPath: path.join(configDir, 'settings.json'), scriptPath: ghostHook }],
+      smokeMsg('I', result),
+    );
   });
 });
 
