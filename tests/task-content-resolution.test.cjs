@@ -8,6 +8,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fc = require('fast-check');
+const { TASK_RESOLVER_INVOKE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const m = require('../gsd-core/bin/lib/task-content-resolution.cjs');
 const {
@@ -22,6 +23,22 @@ const {
   ResolverMalformedOutputError,
 } = m;
 
+/**
+ * NOT a subprocess spawn timeout. Fixture DATA: a plausible-looking
+ * invoke.timeoutMs value used as filler in tests whose actual assertion is
+ * about something ELSE in the manifest (a substring-vs-placeholder
+ * distinction, a missing {{id}} placeholder, an empty binary field) -- the
+ * timeout value itself is never the thing under test at these sites.
+ */
+const TASK_RESOLVER_INVOKE_FILLER_TIMEOUT_MS = 1000;
+
+/** NOT a subprocess spawn timeout. Fixture DATA: a deliberately-invalid (zero) invoke.timeoutMs value in a findResolver garbage-shapes test, proving a zero timeout is rejected. */
+const INVALID_TIMEOUT_ZERO_MS = 0;
+/** NOT a subprocess spawn timeout. Fixture DATA: a deliberately-invalid (negative) invoke.timeoutMs value in a findResolver garbage-shapes test, proving a negative timeout is rejected. */
+const INVALID_TIMEOUT_NEGATIVE_MS = -5;
+/** NOT a subprocess spawn timeout. Fixture DATA: a deliberately-invalid (non-integer) invoke.timeoutMs value in a findResolver garbage-shapes test, proving a non-integer timeout is rejected. */
+const INVALID_TIMEOUT_NON_INTEGER_MS = 1.5;
+
 function beadsCapability(overrides = {}) {
   return {
     id: 'beads-capability',
@@ -30,7 +47,7 @@ function beadsCapability(overrides = {}) {
       invoke: {
         binary: 'bd',
         args: ['show', '{{id}}', '--json'],
-        timeoutMs: 10000,
+        timeoutMs: TASK_RESOLVER_INVOKE_TIMEOUT_MS,
       },
       ...overrides,
     },
@@ -68,16 +85,16 @@ test('id containing colons splits on first colon only (row 16)', () => {
 // ─── buildInvocation — pure ─────────────────────────────────────────────────────
 
 test('buildInvocation replaces every {{id}} entry with the literal id', () => {
-  const resolver = { invoke: { binary: 'bd', args: ['show', '{{id}}', '--json'], timeoutMs: 10000 } };
+  const resolver = { invoke: { binary: 'bd', args: ['show', '{{id}}', '--json'], timeoutMs: TASK_RESOLVER_INVOKE_TIMEOUT_MS } };
   assert.deepStrictEqual(buildInvocation(resolver, 'GSD-42'), {
     binary: 'bd',
     args: ['show', 'GSD-42', '--json'],
-    timeoutMs: 10000,
+    timeoutMs: TASK_RESOLVER_INVOKE_TIMEOUT_MS,
   });
 });
 
 test('buildInvocation does not touch args that merely contain {{id}} as a substring', () => {
-  const resolver = { invoke: { binary: 'bd', args: ['prefix-{{id}}-suffix'], timeoutMs: 1000 } };
+  const resolver = { invoke: { binary: 'bd', args: ['prefix-{{id}}-suffix'], timeoutMs: TASK_RESOLVER_INVOKE_FILLER_TIMEOUT_MS } };
   assert.deepStrictEqual(buildInvocation(resolver, 'X').args, ['prefix-{{id}}-suffix']);
 });
 
@@ -104,7 +121,7 @@ test('findResolver returns "ambiguous" for two matching capabilities (row 7)', (
 test('findResolver ignores a declaration missing the {{id}} placeholder (row 15)', () => {
   const bad = {
     id: 'bad-capability',
-    taskContentResolver: { trackerPrefix: 'beads', invoke: { binary: 'bd', args: ['show'], timeoutMs: 1000 } },
+    taskContentResolver: { trackerPrefix: 'beads', invoke: { binary: 'bd', args: ['show'], timeoutMs: TASK_RESOLVER_INVOKE_FILLER_TIMEOUT_MS } },
   };
   assert.strictEqual(findResolver('beads', [bad]), null);
 });
@@ -115,10 +132,10 @@ test('findResolver ignores garbage taskContentResolver shapes without throwing',
     { id: 'b', taskContentResolver: 'not-an-object' },
     { id: 'c', taskContentResolver: [] },
     { id: 'd', taskContentResolver: { trackerPrefix: 'beads' } }, // no invoke
-    { id: 'e', taskContentResolver: { trackerPrefix: 'beads', invoke: { binary: '', args: ['{{id}}'], timeoutMs: 1000 } } },
-    { id: 'f', taskContentResolver: { trackerPrefix: 'beads', invoke: { binary: 'bd', args: ['{{id}}'], timeoutMs: 0 } } },
-    { id: 'g', taskContentResolver: { trackerPrefix: 'beads', invoke: { binary: 'bd', args: ['{{id}}'], timeoutMs: -5 } } },
-    { id: 'h', taskContentResolver: { trackerPrefix: 'beads', invoke: { binary: 'bd', args: ['{{id}}'], timeoutMs: 1.5 } } },
+    { id: 'e', taskContentResolver: { trackerPrefix: 'beads', invoke: { binary: '', args: ['{{id}}'], timeoutMs: TASK_RESOLVER_INVOKE_FILLER_TIMEOUT_MS } } },
+    { id: 'f', taskContentResolver: { trackerPrefix: 'beads', invoke: { binary: 'bd', args: ['{{id}}'], timeoutMs: INVALID_TIMEOUT_ZERO_MS } } },
+    { id: 'g', taskContentResolver: { trackerPrefix: 'beads', invoke: { binary: 'bd', args: ['{{id}}'], timeoutMs: INVALID_TIMEOUT_NEGATIVE_MS } } },
+    { id: 'h', taskContentResolver: { trackerPrefix: 'beads', invoke: { binary: 'bd', args: ['{{id}}'], timeoutMs: INVALID_TIMEOUT_NON_INTEGER_MS } } },
   ];
   assert.strictEqual(findResolver('beads', garbage), null);
 });
@@ -216,7 +233,7 @@ test('row 12: resolver exceeding timeoutMs throws ResolverTimeoutError (simulate
     () => resolveTaskContent({ trackerId: 'beads:GSD-42', capabilities: [beadsCapability()], execFn }),
     (err) => {
       assert.ok(err instanceof ResolverTimeoutError);
-      assert.strictEqual(err.timeoutMs, 10000);
+      assert.strictEqual(err.timeoutMs, TASK_RESOLVER_INVOKE_TIMEOUT_MS);
       return true;
     },
   );
@@ -245,7 +262,7 @@ test('row 14: valid JSON non-object stdout (null/array/string/number/bool) throw
 test('row 15: invoke.args without {{id}} placeholder is rejected — resolves no-resolver, never spawns', () => {
   const badCapability = {
     id: 'bad-capability',
-    taskContentResolver: { trackerPrefix: 'beads', invoke: { binary: 'bd', args: ['show'], timeoutMs: 1000 } },
+    taskContentResolver: { trackerPrefix: 'beads', invoke: { binary: 'bd', args: ['show'], timeoutMs: TASK_RESOLVER_INVOKE_FILLER_TIMEOUT_MS } },
   };
   const execFn = () => { throw new Error('must not spawn a rejected declaration'); };
   const result = resolveTaskContent({ trackerId: 'beads:GSD-42', capabilities: [badCapability], execFn });

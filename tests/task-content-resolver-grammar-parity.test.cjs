@@ -21,9 +21,10 @@ const assert = require('node:assert/strict');
 
 const { validateTaskContentResolver } = require('../gsd-core/bin/lib/capability-validator.cjs');
 const { findResolver } = require('../gsd-core/bin/lib/task-content-resolution.cjs');
+const { TASK_RESOLVER_INVOKE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 function validInvoke() {
-  return { binary: 'bd', args: ['show', '{{id}}', '--json'], timeoutMs: 10000 };
+  return { binary: 'bd', args: ['show', '{{id}}', '--json'], timeoutMs: TASK_RESOLVER_INVOKE_TIMEOUT_MS };
 }
 
 function featureCapWithResolver(trackerPrefix) {
