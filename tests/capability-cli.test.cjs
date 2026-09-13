@@ -60,7 +60,7 @@ function makeCwdWithStrict(strictValue) {
  * (usable directly as an install <spec>). Declarative by default; pass `hooks`
  * (with materialized scripts) to make it an executable surface requiring consent.
  */
-function writeCapSource(id, { version = '1.0.0', hooks = [], engines, mcp } = {}) {
+function writeCapSource(id, { version = '1.0.0', hooks = [], engines, mcp, requires, config } = {}) {
   const src = tmpDir(`cap-cli-src-${id}-`);
   const cap = {
     id,
@@ -69,12 +69,12 @@ function writeCapSource(id, { version = '1.0.0', hooks = [], engines, mcp } = {}
     title: id,
     description: 'test capability',
     tier: 'standard',
-    requires: [],
+    requires: requires ?? [],
     runtimeCompat: { supported: ['*'], unsupported: [] },
     skills: [],
     agents: [],
     hooks,
-    config: {},
+    config: config ?? {},
     steps: [],
     contributions: [],
     gates: [],
@@ -1179,5 +1179,72 @@ describe('issue-2322: capability set --runtime materializes an installed third-p
     );
     assert.ok(!staged.includes('~/.claude/'), 'the ~/.claude/ literal must have been rewritten to the resolved path prefix');
     assert.ok(staged.includes('workflows/example.md'), 'the rewrite must preserve the referenced path suffix, not corrupt the body');
+  });
+});
+
+// ─── #3929 — install-time cross-capability validation sees the merged registry ──
+
+describe('#3929: install-time validation is seeded with first-party + installed overlays + candidate', () => {
+  test('requires on a first-party capability resolves at install time', () => {
+    const home = tmpDir('cap-cli-3929-fp-');
+    const src = writeCapSource('needs-fp', { requires: ['tdd'] });
+    const r = runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, true, `install must succeed: tdd is first-party — got: ${r.error || r.output}`);
+    const o = parse(r.output);
+    assert.equal(o.status, 'installed');
+    assert.ok(readLedgerEntry(home, 'needs-fp'), 'ledger entry recorded');
+  });
+
+  test('requires on a genuinely missing capability still refuses', () => {
+    const home = tmpDir('cap-cli-3929-missing-');
+    const src = writeCapSource('needs-missing', { requires: ['no-such-capability-xyz'] });
+    const r = runGsdTools(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, false, 'a genuinely missing requires id must still be refused');
+    assert.match(`${r.error}\n${r.output}`, /no-such-capability-xyz/);
+    assert.equal(readLedgerEntry(home, 'needs-missing'), null, 'no ledger entry');
+  });
+
+  test('requires on an installed overlay capability resolves at install time', () => {
+    const home = tmpDir('cap-cli-3929-overlay-');
+    const srcA = writeCapSource('overlay-a');
+    const first = runGsdTools(['capability', 'install', srcA, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    assert.equal(first.success, true, `seed install failed: ${first.error || first.output}`);
+
+    const srcB = writeCapSource('overlay-b', { requires: ['overlay-a'] });
+    const r = runGsdTools(['capability', 'install', srcB, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, true, `install must succeed: overlay-a is a committed installed overlay — got: ${r.error || r.output}`);
+    assert.ok(readLedgerEntry(home, 'overlay-b'), 'ledger entry recorded');
+  });
+
+  test('a pending (uncommitted) overlay does not satisfy requires', () => {
+    const home = tmpDir('cap-cli-3929-pending-');
+    const srcA = writeCapSource('pending-a');
+    const first = runGsdTools(['capability', 'install', srcA, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    assert.equal(first.success, true, `seed install failed: ${first.error || first.output}`);
+
+    // Flip cap-a's committed ledger entry to an in-flight _pending intent —
+    // exactly the state reconciliation defers on (the loader excludes it from
+    // the accepted map, so install-time validation must exclude it too).
+    const lp = ledgerPath(home);
+    const ledger = JSON.parse(fs.readFileSync(lp, 'utf8'));
+    ledger.entries['pending-a']['_pending'] = { kind: 'upgrade' };
+    fs.writeFileSync(lp, JSON.stringify(ledger, null, 2));
+
+    const srcB = writeCapSource('pending-b', { requires: ['pending-a'] });
+    const r = runGsdTools(['capability', 'install', srcB, '--scope', 'global'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, false, 'a pending overlay must not satisfy requires (committed-only rule)');
+    assert.match(`${r.error}\n${r.output}`, /pending-a/);
+  });
+
+  test('install-time config-key exclusivity against the central schema actually runs', () => {
+    const home = tmpDir('cap-cli-3929-central-');
+    // `mode` is a real central-schema validKey; declaring it federated must be
+    // refused at install once centralKeys is seeded (empty Set pre-fix).
+    const src = writeCapSource('claims-central', {
+      config: { mode: { type: 'string', default: 'standard', description: 'collides with the central schema' } },
+    });
+    const r = runGsdTools(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, false, 'declaring a central config key must refuse at install');
+    assert.match(`${r.error}\n${r.output}`, /central config-schema/);
   });
 });
