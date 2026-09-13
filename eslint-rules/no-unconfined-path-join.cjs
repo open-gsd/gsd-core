@@ -45,6 +45,13 @@ const path = require('path');
  *
  *     resolved.startsWith(root + path.sep); // allow-handrolled-containment: <reason>
  *
+ * Reporting is deferred to `Program:exit` so a marker can be matched against
+ * the SPECIFIC violation it trails: among the violations that END on the
+ * marker's line and before the marker starts, only the one with the LARGEST
+ * end offset (i.e. the one immediately preceding the marker) is suppressed.
+ * An earlier violation sharing the same line is still reported, and a marker
+ * suppresses at most one violation.
+ *
  * The marker covers two distinct justifications, and the mandatory reason
  * text is what distinguishes them for review:
  *
@@ -110,11 +117,16 @@ const path = require('path');
  *   - Other spellings of the same comparison are not recognized:
  *     `indexOf(root + path.sep) === 0` and
  *     `x.slice(root.length).startsWith(path.sep)`.
- *   - The suppression marker is a trailing same-line comment anchored to the
- *     reported node's END line (`node.loc.end.line`): a call whose closing
- *     paren lands on a later line than its first argument needs the marker
- *     after THAT line, not after the call's opening line — there is no
- *     "anywhere in this call" anchoring.
+ *   - The suppression marker is anchored to the reported node's END line
+ *     (`node.loc.end.line`), not its start line: a call whose closing paren
+ *     lands on a later line than its first argument needs the marker after
+ *     THAT (closing) line, not after the call's opening line. `end.line` was
+ *     chosen over `start.line` specifically so a multi-line call CAN be
+ *     suppressed — the marker just has to trail the line the call's closing
+ *     paren is on, which is where a reader's eye (and a trailing `//`
+ *     comment) naturally lands after a multi-line expression. There is still
+ *     no "anywhere in this call" anchoring: a marker placed after the
+ *     opening line of a multi-line call does not suppress it.
  *   - A separator reached through more than one level of `const` aliasing
  *     (e.g. `const s1 = path.sep; const sep = s1; x.startsWith(root + sep)`)
  *     is not resolved — only a single hop from a `+` right-operand Identifier
@@ -214,35 +226,24 @@ const rule = {
     const sourceCode = context.sourceCode || context.getSourceCode();
 
     /**
-     * Returns true if a trailing LINE comment carries
-     * `allow-handrolled-containment: <non-empty reason>`.
-     *
-     * Two hardening constraints, both load-bearing:
-     *   - `comment.type === 'Line'` only: a BLOCK comment on the same line must not
-     *     suppress — the convention is a trailing `//` marker, and accepting `/* *\/`
-     *     would let an unrelated block comment on the line silently suppress too.
-     *   - the comment must START at or after the reported NODE'S END (not just share
-     *     `loc.start.line`): matching on the line alone over-suppresses — one marker
-     *     would cover every violation on that line, so a justified holdout comment
-     *     could silently launder an unjustified violation earlier on the same line.
-     *     Anchoring to the node's end means the marker only suppresses the violation
-     *     it visibly trails.
+     * Returns the list of valid suppression-marker comments in the file: a
+     * Line comment carrying `allow-handrolled-containment: <non-empty
+     * reason>`. A BLOCK comment never qualifies — the convention is a
+     * trailing `//` marker, and accepting `/* *\/` would let an unrelated
+     * block comment silently suppress too.
      */
-    function isMarkerSuppressed(node) {
+    function findMarkerComments() {
       const allComments =
         typeof sourceCode.getAllComments === 'function' ? sourceCode.getAllComments() : [];
-      const line = node.loc.end.line;
-      const nodeEnd = node.range[1];
+      const markers = [];
       for (const comment of allComments) {
         if (comment.type !== 'Line') continue;
-        if (comment.loc.start.line !== line) continue;
-        if (comment.range[0] < nodeEnd) continue;
         const match = MARKER_RE.exec(comment.value);
         if (match && match[1] && match[1].trim().length > 0) {
-          return true;
+          markers.push(comment);
         }
       }
-      return false;
+      return markers;
     }
 
     /**
@@ -333,22 +334,20 @@ const rule = {
       return null;
     }
 
-    // A marker-suppressed occurrence is not a violation at all, so it must NOT
-    // count toward keeping an allowlist entry alive — otherwise a file whose
-    // every occurrence carries a marker keeps its allowlist entry forever and
-    // `staleAllowlistEntry` never fires, which defeats the one-directional
-    // ratchet this rule exists to be.
+    // Violations are not reported (or counted) during traversal. Each
+    // would-be violation is deferred so that, once every node in the file has
+    // been visited, a trailing marker can be matched against the SPECIFIC
+    // violation it trails rather than every violation that happens to share
+    // its line. See `Program:exit` for the resolution pass.
     //
-    // Truth table:
+    // Truth table (after resolution):
     //   marked                              -> not counted, not reported
     //   allowlisted + real violations        -> counted (entry justified), not reported
     //   allowlisted + only marked violations -> counter 0 -> staleAllowlistEntry fires, entry removable
     //   neither                              -> counted and reported
+    const pending = [];
     function reportViolation(node, messageId, data) {
-      if (isMarkerSuppressed(node)) return;
-      violations += 1;
-      if (allowlisted) return;
-      context.report({ node, messageId, data });
+      pending.push({ node, messageId, data });
     }
 
     return {
@@ -388,6 +387,34 @@ const rule = {
       },
 
       'Program:exit'(node) {
+        // Resolve marker suppression: for each valid marker comment, find
+        // among the still-unresolved pending violations the one whose node
+        // ends on the marker's line and before the marker starts, preferring
+        // the LARGEST such end offset — i.e. the violation the marker
+        // visibly trails most closely. A marker suppresses at most one
+        // violation; a violation is suppressed by at most one marker.
+        const markers = findMarkerComments();
+        const suppressed = new Set();
+        for (const comment of markers) {
+          let best = null;
+          for (const entry of pending) {
+            if (suppressed.has(entry)) continue;
+            if (entry.node.loc.end.line !== comment.loc.start.line) continue;
+            if (entry.node.range[1] > comment.range[0]) continue;
+            if (!best || entry.node.range[1] > best.node.range[1]) {
+              best = entry;
+            }
+          }
+          if (best) suppressed.add(best);
+        }
+
+        for (const entry of pending) {
+          if (suppressed.has(entry)) continue;
+          violations += 1;
+          if (allowlisted) continue;
+          context.report({ node: entry.node, messageId: entry.messageId, data: entry.data });
+        }
+
         if (allowlisted && violations === 0) {
           context.report({ node, messageId: 'staleAllowlistEntry', data: { file: rel } });
         }
