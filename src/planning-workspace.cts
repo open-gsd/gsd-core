@@ -139,12 +139,15 @@ type WorkstreamAdapterOpts = Record<string, unknown>;
  * two-readers-two-bases lesson).
  */
 function resolveEnvWorkstream(): string | null {
-  return process.env['GSD_WORKSTREAM'] ?? null;
+  const value = process.env['GSD_WORKSTREAM']?.trim();
+  return value || null;
 }
 
 function planningDir(cwd: string, ws?: string | null, project?: string | null): string {
-  if (project === undefined) project = process.env['GSD_PROJECT'] ?? null;
+  if (project === undefined) project = process.env['GSD_PROJECT']?.trim() || null;
+  else if (typeof project === 'string') project = project.trim() || null;
   if (ws === undefined) ws = resolveEnvWorkstream();
+  else if (typeof ws === 'string') ws = ws.trim() || null;
 
   // Reject path separators and traversal components in project/workstream names
   const BAD_SEGMENT = /[/\\]|\.\./;
@@ -210,7 +213,7 @@ function worktreesOptedOutUnguarded(cwd: string): boolean {
   };
   const scoped = ownKey(readCfg(path.join(planningDir(cwd), 'config.json')));
   if (scoped.present) return scoped.value === false;
-  if (process.env['GSD_WORKSTREAM']) {
+  if (resolveEnvWorkstream() !== null) {
     const root = ownKey(readCfg(path.join(planningRoot(cwd), 'config.json')));
     if (root.present) return root.value === false;
   }

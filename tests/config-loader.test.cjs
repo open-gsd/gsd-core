@@ -494,6 +494,26 @@ describe('loadConfigResolved — provenance', () => {
     assert.equal(result.degraded, false);
   });
 
+  test('whitespace-only explicit and environment workstreams resolve and label the root (#4462)', () => {
+    writeConfig(tmpDir, { model_profile: 'quality' });
+    for (const workstream of ['  ', '\t', '\n', ' \t\n ']) {
+      const explicit = loadConfigResolved(tmpDir, { workstream });
+      assert.equal(explicit.source, 'root');
+      assert.equal(explicit.degraded, false);
+
+      const original = process.env.GSD_WORKSTREAM;
+      try {
+        process.env.GSD_WORKSTREAM = workstream;
+        const ambient = loadConfigResolved(tmpDir);
+        assert.equal(ambient.source, 'root');
+        assert.equal(ambient.degraded, false);
+      } finally {
+        if (original === undefined) delete process.env.GSD_WORKSTREAM;
+        else process.env.GSD_WORKSTREAM = original;
+      }
+    }
+  });
+
   test('Fix 2a: GSD_WORKSTREAM set to nonexistent workstream (dir absent) → source:"root", degraded:true', () => {
     writeConfig(tmpDir, { model_profile: 'root-value' });
     const origWs = process.env['GSD_WORKSTREAM'];
