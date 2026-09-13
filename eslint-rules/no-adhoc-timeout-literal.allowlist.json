@@ -1,6 +1,0 @@
-[
-  "tests/cjs-command-router-adapter.test.cjs",
-  "tests/dispatcher.test.cjs",
-  "tests/run-tests-temp-root.test.cjs",
-  "tests/shell-command-projection-dispatch.test.cjs"
-]

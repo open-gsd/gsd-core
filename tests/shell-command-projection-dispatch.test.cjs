@@ -35,6 +35,23 @@ const {
 
 const { createTempGitProject, createTempDir, cleanup } = require('./helpers.cjs');
 
+/**
+ * NOT a subprocess timeout -- childProcess.spawnSync is fully mocked in
+ * this test, so no real spawn ever runs. Arbitrary fixture value proving
+ * execTool forwards its caller-supplied `timeout` option to spawnSync
+ * verbatim (a pass-through assertion, not a timing assertion).
+ */
+const EXEC_TOOL_OPTION_PASSTHROUGH_TIMEOUT_MS = 1234;
+
+/**
+ * Deliberately far smaller than any real dispatchGsdCommand invocation
+ * could complete, forcing a genuine wall-clock timeout so this test can
+ * assert timedOut:true is reported correctly (mirrors the
+ * RUN_BASH_SCRIPT_FORCED_TIMEOUT_MS / BOUNDED_SHELL_FORCED_TIMEOUT_MS
+ * pattern used elsewhere in this migration).
+ */
+const DISPATCH_FORCED_TIMEOUT_MS = 1;
+
 // ─── execGit ─────────────────────────────────────────────────────────────────
 
 describe('execGit', () => {
@@ -1114,10 +1131,10 @@ describe('execTool (#3411 windows resolution)', () => {
     });
     t.after(() => mock.restoreAll());
 
-    execTool('some-tool', [], { cwd: '/tmp/x', env: { FOO: 'bar' }, timeout: 1234 });
+    execTool('some-tool', [], { cwd: '/tmp/x', env: { FOO: 'bar' }, timeout: EXEC_TOOL_OPTION_PASSTHROUGH_TIMEOUT_MS });
 
     assert.equal(receivedOptions.cwd, '/tmp/x');
-    assert.equal(receivedOptions.timeout, 1234);
+    assert.equal(receivedOptions.timeout, EXEC_TOOL_OPTION_PASSTHROUGH_TIMEOUT_MS);
     assert.equal(receivedOptions.env.FOO, 'bar');
     // Case-insensitive: process.env's actual key casing is OS-dependent (Windows
     // conventionally sets `Path`, not `PATH`), and the merged object here is a
@@ -1198,7 +1215,7 @@ describe('dispatchGsdCommand', () => {
 
   test('a wall-clock timeout is reported via timedOut:true, ok:false — never throws', () => {
     assert.doesNotThrow(() => {
-      const result = dispatchGsdCommand({ family: 'progress', subcommand: 'json', cwd: tmpDir, timeout: 1 });
+      const result = dispatchGsdCommand({ family: 'progress', subcommand: 'json', cwd: tmpDir, timeout: DISPATCH_FORCED_TIMEOUT_MS });
       assert.equal(result.ok, false);
       assert.equal(result.timedOut, true);
     });

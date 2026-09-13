@@ -204,7 +204,7 @@ const r = runHookSeam(WORKER_PATH, [], { timeoutMs: NPM_VIEW_TIMEOUT_MS + WORKER
 
 Import an existing class-norm constant from `tests/helpers/timeouts.cjs` (`PROBE_TIMEOUT_MS`, `GIT_TIMEOUT_MS`, `BUILD_TIMEOUT_MS`, `INSTALL_TIMEOUT_MS`) when the call is the same class of subprocess, or declare a local one with a comment justifying why it is a distinct class — see CONTRIBUTING.md's "Use Centralized Test Helpers" section.
 
-**Enforcement:** `local/no-adhoc-timeout-literal` (ESLint, `error`). A non-literal value (an `Identifier`, `MemberExpression`, or `CallExpression`) is trusted; only a resolvable numeric literal is flagged. There is no marker-comment escape — the fix is always to extract a named constant. `allowlist` (`eslint-rules/no-adhoc-timeout-literal.allowlist.json`) exempts pre-existing legacy violations and only ever ratchets down.
+**Enforcement:** `local/no-adhoc-timeout-literal` (ESLint, `error`). A non-literal value (an `Identifier`, `MemberExpression`, or `CallExpression`) is trusted; only a resolvable numeric literal is flagged. There is no marker-comment escape — the fix is always to extract a named constant. There is no allowlist. `eslint-rules/no-adhoc-timeout-literal.allowlist.json` grandfathered pre-existing legacy violations; the epic that introduced it (#4445) migrated every site across seventeen batches and deleted the file in its terminal batch, so `local/no-adhoc-timeout-literal` now runs with **no exemption surface**.
 
 ### Mutation testing — 80 % threshold
 

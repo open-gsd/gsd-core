@@ -42,7 +42,6 @@ import noAdhocTimeoutLiteral from './eslint-rules/no-adhoc-timeout-literal.cjs';
 import noRenderedTextLengthAssert from './eslint-rules/no-rendered-text-length-assert.cjs';
 import noUnconfinedPathJoin from './eslint-rules/no-unconfined-path-join.cjs';
 
-const adhocTimeoutLiteralAllowlist = require('./eslint-rules/no-adhoc-timeout-literal.allowlist.json');
 const unconfinedPathJoinAllowlist = require('./eslint-rules/no-unconfined-path-join.allowlist.json');
 
 const localPlugin = {
@@ -781,9 +780,9 @@ export default tseslint.config(
       'local/no-unbounded-spawn': 'error',
       // Ban a bare numeric `timeout`/`timeoutMs` literal in tests (DEFECT.AD-HOC-TIMEOUT-LITERAL,
       // #4428): two independently-guessed copies of the same magic number can drift apart, or
-      // collide exactly into a zero-margin race. Allowlist starts empty; a pre-existing violation
-      // gets grandfathered in here as it's found, per eslint-rules/no-adhoc-timeout-literal.allowlist.json.
-      'local/no-adhoc-timeout-literal': ['error', { allowlist: adhocTimeoutLiteralAllowlist }],
+      // collide exactly into a zero-margin race. No allowlist: the epic (#4445) migrated every
+      // site; the rule runs with no exemption surface.
+      'local/no-adhoc-timeout-literal': 'error',
       // Ban a consolidation-epic folded suite appearing twice in one host file (#3271).
       // A second copy runs the same tests twice on every lane and drifts silently.
       'local/no-duplicate-fold-marker': 'error',
