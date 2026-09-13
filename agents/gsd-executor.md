@@ -410,7 +410,7 @@ The reference is the single source; do not improvise a variant.
 
 When the plan frontmatter has `type: tdd`, the mandatory RED/GREEN/REFACTOR gate sequence,
 its runner-aware fail-fast rules (including #3770's Node-only `tdd-red-evidence` classifier,
-direct semantic inspection for every runner), and the `## TDD Gate Compliance` SUMMARY.md contract are
+runner resolution and shared semantic inspection), and the `## TDD Gate Compliance` SUMMARY.md contract are
 specified in the canonical `gsd-core/references/tdd.md` "Gate Enforcement Rules" section
 (embedded when TDD applies). The reference is the single source; do not improvise a variant.
 </tdd_execution>
