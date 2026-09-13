@@ -1225,9 +1225,12 @@ describe('#3929: install-time validation is seeded with first-party + installed 
     // Flip cap-a's committed ledger entry to an in-flight _pending intent —
     // exactly the state reconciliation defers on (the loader excludes it from
     // the accepted map, so install-time validation must exclude it too).
+    // The shape must satisfy isValidLedgerEntry's _pending rules
+    // (kind 'install'|'upgrade', backupName string|null, string[] sharedFiles)
+    // or the shared ledger reader refuses the whole file as corrupt.
     const lp = ledgerPath(home);
     const ledger = JSON.parse(fs.readFileSync(lp, 'utf8'));
-    ledger.entries['pending-a']['_pending'] = { kind: 'upgrade' };
+    ledger.entries['pending-a']['_pending'] = { kind: 'upgrade', backupName: null, sharedFiles: [] };
     fs.writeFileSync(lp, JSON.stringify(ledger, null, 2));
 
     const srcB = writeCapSource('pending-b', { requires: ['pending-a'] });

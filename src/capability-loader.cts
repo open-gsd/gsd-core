@@ -461,6 +461,80 @@ function ledgerOverlayIds(ledger: LedgerModule, rootDir: string): {
   return { pending, committed };
 }
 
+// ─── #3929: install-time cross-capability validation seed ──────────────────
+
+/** First-party capabilities from the frozen registry, keyed by id. */
+function firstPartyCaps(): Record<string, unknown> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const base = require('./capability-registry.cjs') as { capabilities?: Record<string, unknown> };
+  return base.capabilities ?? {};
+}
+
+/**
+ * Central config-schema validKeys for the ownership-exclusivity check — the
+ * same source `loadRegistry`'s generator path reads, with the same
+ * missing-schema fallback (empty set). Memoized per process: the manifest is
+ * static for the lifetime of the runtime.
+ */
+let _centralKeysMemo: Set<string> | null = null;
+function centralConfigKeys(): Set<string> {
+  if (_centralKeysMemo === null) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const mod = require('../../../scripts/gen-capability-registry.cjs') as {
+        loadCentralConfigKeys: () => Set<string>;
+      };
+      _centralKeysMemo = mod.loadCentralConfigKeys();
+    } catch {
+      _centralKeysMemo = new Set<string>();
+    }
+  }
+  return _centralKeysMemo;
+}
+
+/**
+ * #3929: the validation seed `capability-source.stageValidated` runs the
+ * cross-capability suite against — the FIRST-PARTY registry capabilities plus
+ * every COMMITTED installed overlay (both scopes, `_pending` intents excluded,
+ * unreadable/unparseable manifests skipped fail-closed), mirroring exactly
+ * what `loadRegistry`'s accepted map contains at load time. The candidate
+ * itself is added by the caller LAST (mirroring `acceptedMap.set(id, cap)`),
+ * so an upgrade replaces its own overlay entry while a first-party-id
+ * collision stays visible to ownership checks.
+ *
+ * Exported (not inlined in the installer) so the overlay semantics this
+ * reuses — `overlayRoots` realpath dedup + scope escalation, `ledgerOverlayIds`
+ * committed-only filtering, the shared bounded manifest reader — have exactly
+ * one owner and cannot drift from the loader's load-time rules.
+ */
+export function crossValidationSeed(
+  cwd: string,
+  gsdHome?: string,
+): { capMap: Map<string, unknown>; centralKeys: Set<string> } {
+  const fp = firstPartyCaps();
+  const capMap = new Map<string, unknown>(Object.entries(fp));
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const ledger: LedgerModule = require('./capability-ledger.cjs') as LedgerModule;
+  for (const root of overlayRoots(cwd, gsdHome)) {
+    const { committed } = ledgerOverlayIds(ledger, root.dir);
+    for (const id of committed) {
+      // First-party always wins (CONTEXT.md capability-loader entry): an
+      // overlay claiming a first-party id is rejected at load, so it must not
+      // shadow the first-party entry in the validation set either.
+      if (Object.prototype.hasOwnProperty.call(fp, id)) continue;
+      try {
+        const manifestPath = path.join(root.dir, id, 'capability.json');
+        const raw = ledger.readSmallRegularFile(manifestPath, MANIFEST_MAX_BYTES);
+        if (raw === null) continue; // missing/non-regular/oversized — skip fail-closed
+        capMap.set(id, JSON.parse(raw) as unknown);
+      } catch {
+        continue; // unreadable overlay — skip fail-closed (same rule as load)
+      }
+    }
+  }
+  return { capMap, centralKeys: centralConfigKeys() };
+}
+
 /** Shallow-attach overlay diagnostics WITHOUT mutating the frozen registry module. */
 function withOverlayMeta(reg: Registry, meta: OverlayMeta): Registry {
   return Object.assign({}, reg, { _overlay: meta });

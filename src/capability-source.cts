@@ -833,8 +833,29 @@ function stageValidated(opts: {
     }
 
     // Cross-capability validations (contract, consumes, cross-capability).
-    const capMap = new Map<string, unknown>([[id, cap]]);
-    const centralKeys = new Set<string>();
+    //
+    // #3929: seed the validation set the way the loader does — frozen
+    // first-party registry ∪ committed installed overlays (both scopes,
+    // `_pending` excluded, unreadable manifests skipped fail-closed) — then
+    // add the candidate LAST (mirroring `acceptedMap.set(id, cap)`, so an
+    // upgrade replaces its own overlay entry). The singleton seed
+    // `new Map([[id, cap]])` this replaced made every non-empty `requires`
+    // unsatisfiable (membership is checked against the map) and left cycles,
+    // tier-monotone and central config-key exclusivity vacuous at install.
+    // The seed builder lives in capability-loader so the overlay semantics
+    // have one owner. No swallow: if the loader cannot build the seed the
+    // install fails loudly — silently degrading to the singleton map would
+    // re-hide #3929.
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    const seedLoader = require('./capability-loader.cjs') as {
+      crossValidationSeed: (
+        cwd: string,
+        gsdHome?: string,
+      ) => { capMap: Map<string, unknown>; centralKeys: Set<string> };
+    };
+    /* eslint-enable @typescript-eslint/no-require-imports */
+    const { capMap, centralKeys } = seedLoader.crossValidationSeed(process.cwd(), gsdHome);
+    capMap.set(id, cap);
     const crossErrs = [
       ...capValidator.validateAgainstContract(cap, id),
       ...capValidator.validateConsumesGlobal(capMap),
