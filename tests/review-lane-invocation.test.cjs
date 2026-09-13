@@ -70,28 +70,52 @@ function resolve(slug, { config = FULL_CONFIG, effortArgs = ['--effort', 'high']
 const FILE_REF = fileRefPrompt(`${RUN}/gsd-review-prompt.md`, ROOT);
 
 /**
+ * Fixture/golden-contract DATA describing each shipped reviewer CLI tool's
+ * own real-world native timeout convention. NOT a real subprocess spawn
+ * timeout in this file's own execution -- each row is exercised only
+ * through the pure resolveLanePlan() function, never a real spawn here.
+ * Several lanes coincidentally share a value with another lane below;
+ * each still gets its own named constant since each describes an
+ * independently-configured external tool, not a shared internal class norm.
+ */
+const GEMINI_NATIVE_TIMEOUT_MS = 900000;
+const CLAUDE_NATIVE_TIMEOUT_MS = 1200000;
+const CODEX_NATIVE_TIMEOUT_MS = 1200000;
+const CODERABBIT_NATIVE_TIMEOUT_MS = 360000;
+const OPENCODE_NATIVE_TIMEOUT_MS = 660000;
+const QWEN_NATIVE_TIMEOUT_MS = 900000;
+const CURSOR_NATIVE_TIMEOUT_MS = 900000;
+/**
+ * Mirrors a PRODUCTION `{{nativeTimeout}}` placeholder default resolved
+ * elsewhere in resolveLanePlan (#3274) -- this row's own comment states
+ * it proves the unconfigured default reproduces this exact literal.
+ */
+const ANTIGRAVITY_NATIVE_TIMEOUT_MS = 600000;
+const KIMI_CODE_NATIVE_TIMEOUT_MS = 900000;
+
+/**
  * One row per shipped lane: the exact argv its bash leg produced, with a model configured and
  * effort available. `stdin` is the prompt path for a stdin lane, `null` otherwise.
  */
 const GOLDEN = [
-  { slug: 'gemini', binary: 'gemini', argv: ['-m', 'G', '-p', '-'], stdin: true, out: 'stdout', timeout: 900000 },
-  { slug: 'claude', binary: 'claude', argv: ['--model', 'C', '--effort', 'high', '-p', '-'], stdin: true, out: 'stdout', timeout: 1200000 },
+  { slug: 'gemini', binary: 'gemini', argv: ['-m', 'G', '-p', '-'], stdin: true, out: 'stdout', timeout: GEMINI_NATIVE_TIMEOUT_MS },
+  { slug: 'claude', binary: 'claude', argv: ['--model', 'C', '--effort', 'high', '-p', '-'], stdin: true, out: 'stdout', timeout: CLAUDE_NATIVE_TIMEOUT_MS },
   {
     slug: 'codex',
     binary: 'codex',
     // `exec` is a SUBCOMMAND and must stay first; the output file lands mid-argv and the bare `-`
     // stays last. Splicing injected flags positionally produced an invalid invocation.
     argv: ['exec', '--ephemeral', '--model', 'X', '--effort', 'high', '--skip-git-repo-check', '-o', `${RUN}/gsd-review-codex.md`, '-'],
-    stdin: true, out: 'file', timeout: 1200000,
+    stdin: true, out: 'file', timeout: CODEX_NATIVE_TIMEOUT_MS,
   },
-  { slug: 'coderabbit', binary: 'coderabbit', argv: ['review', '--prompt-only'], stdin: false, out: 'stdout', timeout: 360000 },
-  { slug: 'opencode', binary: 'opencode', argv: ['run', '--model', 'O', '--effort', 'high', '--format', 'json', '-'], stdin: true, out: 'stdout', timeout: 660000 },
-  { slug: 'qwen', binary: 'qwen', argv: ['-'], stdin: true, out: 'stdout', timeout: 900000 },
-  { slug: 'cursor', binary: 'cursor-agent', argv: ['-p', '--model', 'U', '--mode', 'ask', '--trust', '--output-format', 'text', FILE_REF], stdin: false, out: 'stdout', timeout: 900000 },
+  { slug: 'coderabbit', binary: 'coderabbit', argv: ['review', '--prompt-only'], stdin: false, out: 'stdout', timeout: CODERABBIT_NATIVE_TIMEOUT_MS },
+  { slug: 'opencode', binary: 'opencode', argv: ['run', '--model', 'O', '--effort', 'high', '--format', 'json', '-'], stdin: true, out: 'stdout', timeout: OPENCODE_NATIVE_TIMEOUT_MS },
+  { slug: 'qwen', binary: 'qwen', argv: ['-'], stdin: true, out: 'stdout', timeout: QWEN_NATIVE_TIMEOUT_MS },
+  { slug: 'cursor', binary: 'cursor-agent', argv: ['-p', '--model', 'U', '--mode', 'ask', '--trust', '--output-format', 'text', FILE_REF], stdin: false, out: 'stdout', timeout: CURSOR_NATIVE_TIMEOUT_MS },
   // resolveLanePlan fully resolves {{nativeTimeout}} itself (#3274) — this row proves the
   // unconfigured default reproduces the original literal exactly.
-  { slug: 'antigravity', binary: 'agy', argv: ['--print-timeout', '540s', '--model', 'A', '-p', FILE_REF], stdin: false, out: 'stdout', timeout: 600000 },
-  { slug: 'kimi-code', binary: 'kimi', argv: ['-m', 'K', '-p', FILE_REF], stdin: false, out: 'stdout', timeout: 900000 },
+  { slug: 'antigravity', binary: 'agy', argv: ['--print-timeout', '540s', '--model', 'A', '-p', FILE_REF], stdin: false, out: 'stdout', timeout: ANTIGRAVITY_NATIVE_TIMEOUT_MS },
+  { slug: 'kimi-code', binary: 'kimi', argv: ['-m', 'K', '-p', FILE_REF], stdin: false, out: 'stdout', timeout: KIMI_CODE_NATIVE_TIMEOUT_MS },
 ];
 
 describe('reviewer lane invocation — golden plans (the strangler-fig contract)', () => {
@@ -153,6 +177,11 @@ describe('#3274 — timeoutConfigKey resolves the outer wall-clock cap', () => {
 
   test('a configured positive number overrides timeoutFloorMs, seconds -> ms (row 2)', () => {
     const r = resolve('antigravity', { config: { [AGY_KEY]: 900 } });
+    // 900_000 here is the arithmetic result of this test's own input (900
+    // configured seconds * 1000), not a reuse of any lane's *_NATIVE_TIMEOUT_MS
+    // golden default -- it only coincidentally matches GEMINI/QWEN/CURSOR/
+    // KIMI_CODE_NATIVE_TIMEOUT_MS (all 900000). antigravity's own native
+    // default is ANTIGRAVITY_NATIVE_TIMEOUT_MS (600000), unrelated here.
     assert.equal(r.plan.timeoutMs, 900_000);
   });
 
@@ -243,6 +272,9 @@ describe('#3274 — timeoutConfigKey resolves the outer wall-clock cap', () => {
 
   test('a configured antigravity timeout derives both the outer cap and the native flag (row 10)', () => {
     const r = resolve('antigravity', { config: { [AGY_KEY]: 900 } });
+    // 900_000 is this test's own 900-configured-seconds * 1000, not a reuse
+    // of a *_NATIVE_TIMEOUT_MS golden constant -- see the row-2 test above
+    // for the same coincidental-match note.
     assert.equal(r.plan.timeoutMs, 900_000);
     const i = r.plan.argv.indexOf('--print-timeout');
     assert.equal(r.plan.argv[i + 1], '840s');

@@ -34,8 +34,22 @@ const path = require('path');
 const { execFileSync } = require('node:child_process');
 const { readFileNormalized, readWorkflowCombined, createTempDir, cleanup } = require('./helpers.cjs');
 const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { PROBE_TIMEOUT_MS, QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const fc = require('fast-check');
+
+// A nested bash → node → gsd-tools.cjs cold-start chain: `execFileSync('bash',
+// ['-c', script], ...)` where `script` itself invokes `node "$GSD_TOOLS_PATH"
+// ...`. Deliberately NOT `GENERATOR_SCRIPT_TIMEOUT_MS` despite the
+// coincidentally-matching value: that constant's own doc comment (see
+// tests/helpers/timeouts.cjs) scopes it to "a single scripts/*.cjs generator
+// or lint script, spawned directly ... no fan-out" — and its cited precedent
+// sites (tests/adr-index-gate.test.cjs, tests/check-env.test.cjs) confirm
+// that shape in practice: both spawn `process.execPath` against a single
+// script file directly via spawnSync, with no intermediate shell. This
+// file's sites are a heavier, different shape (bash wrapping a further node
+// spawn), so they get their own file-local constant instead of borrowing one
+// whose doc comment describes something else.
+const NESTED_BASH_GSD_TOOLS_TIMEOUT_MS = 30000;
 
 const COMMAND_PATH = path.join(__dirname, '..', 'commands', 'gsd', 'plan-review-convergence.md');
 const WORKFLOW_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-review-convergence.md');
@@ -52,7 +66,7 @@ const WORKFLOW_REVIEW_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows',
 // for the same skip pattern). Behavioral tests that exercise the deployed jq
 // pipeline skip when jq is absent; structural tests still run.
 let jqAvailable = false;
-try { execFileSync('jq', ['--version'], { stdio: 'ignore', timeout: 10000, killSignal: 'SIGKILL' }); jqAvailable = true; } catch { /* no jq on PATH */ }
+try { execFileSync('jq', ['--version'], { stdio: 'ignore', timeout: QUICK_SPAWN_TIMEOUT_MS, killSignal: 'SIGKILL' }); jqAvailable = true; } catch { /* no jq on PATH */ }
 
 // #2800: the hand-written per-flag `grep -q '\-\-<flag>'` whitelist lines were
 // replaced by a loop deriving REVIEWER_FLAGS from `gsd_run review-lane flags`
@@ -77,13 +91,14 @@ function runReviewerFlagsParseBlock(block, args) {
   return execFileSync('bash', ['-c', script], {
     env: { ...process.env, ARGUMENTS: args, GSD_TOOLS_PATH },
     encoding: 'utf8',
-    // 30s covers the nested bash → node → gsd-tools.cjs cold-start chain this
-    // helper spawns. 5s was too tight: on a loaded bench (30k tests running
-    // in parallel) that budget was consumed by process-spawn scheduling
-    // latency alone, producing a spurious ETIMEDOUT with no genuine hang.
-    // 30_000 matches the convention other script-invocation tests in this
-    // repo already use (see e.g. adr-index-gate.test.cjs, check-env.test.cjs).
-    timeout: 30_000,
+    // NESTED_BASH_GSD_TOOLS_TIMEOUT_MS (30s) covers the nested bash → node →
+    // gsd-tools.cjs cold-start chain this helper spawns. 5s was too tight: on
+    // a loaded bench (30k tests running in parallel) that budget was consumed
+    // by process-spawn scheduling latency alone, producing a spurious
+    // ETIMEDOUT with no genuine hang. See that constant's doc comment for why
+    // this is a distinct class from GENERATOR_SCRIPT_TIMEOUT_MS despite the
+    // matching value.
+    timeout: NESTED_BASH_GSD_TOOLS_TIMEOUT_MS,
   }).trim();
 }
 
@@ -403,10 +418,11 @@ describe('plan-review-convergence: #2315 respects review.default_reviewers (no-f
       return execFileSync('bash', ['-c', script], {
         env: { ...process.env, ARGUMENTS: args, GSD_TEST_DEFAULT_REVIEWERS: defaultReviewers ?? '', GSD_TOOLS_PATH },
         encoding: 'utf8',
-        // 30s covers the same nested bash → node → gsd-tools.cjs cold-start
-        // chain as runReviewerFlagsParseBlock above; see that helper's
-        // comment for why 5s flaked under bench load.
-        timeout: 30_000,
+        // NESTED_BASH_GSD_TOOLS_TIMEOUT_MS covers the same nested bash → node
+        // → gsd-tools.cjs cold-start chain as runReviewerFlagsParseBlock
+        // above; see that helper's comment for why 5s flaked under bench
+        // load.
+        timeout: NESTED_BASH_GSD_TOOLS_TIMEOUT_MS,
       });
     };
 
@@ -460,10 +476,11 @@ describe('plan-review-convergence: #2315 respects review.default_reviewers (no-f
       return execFileSync('bash', ['-c', script], {
         env: { ...process.env, ARGUMENTS: args, GSD_TEST_DEFAULT_REVIEWERS: defaultReviewers ?? '', GSD_TOOLS_PATH },
         encoding: 'utf8',
-        // 30s covers the same nested bash → node → gsd-tools.cjs cold-start
-        // chain as runReviewerFlagsParseBlock above; see that helper's
-        // comment for why 5s flaked under bench load.
-        timeout: 30_000,
+        // NESTED_BASH_GSD_TOOLS_TIMEOUT_MS covers the same nested bash → node
+        // → gsd-tools.cjs cold-start chain as runReviewerFlagsParseBlock
+        // above; see that helper's comment for why 5s flaked under bench
+        // load.
+        timeout: NESTED_BASH_GSD_TOOLS_TIMEOUT_MS,
       });
     };
 

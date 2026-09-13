@@ -319,6 +319,18 @@ const GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS = 30000;
  */
 const TASK_RESOLVER_INVOKE_TIMEOUT_MS = 10000;
 
+/**
+ * NOT a subprocess spawn timeout. Fixture DATA -- the default `timeoutMs`
+ * value for an `http-reachable`-kind reviewer-lane probe declaration,
+ * validated by `validateReviewerBody()` (pure schema validation, never a
+ * real HTTP call or spawn in these tests).
+ *
+ * Shared across 2 files in batch #4527 of the ad hoc timeout literal
+ * migration, epic #4445 -- every site independently arrived at this exact
+ * value -- that is why it lives here rather than as a file-local constant.
+ */
+const HTTP_REACHABLE_PROBE_TIMEOUT_FIXTURE_MS = 2000;
+
 module.exports = {
   PROBE_TIMEOUT_MS,
   HOOK_FANOUT_TIMEOUT_MS,
@@ -338,4 +350,5 @@ module.exports = {
   PATHOLOGICAL_INPUT_TEST_TIMEOUT_MS,
   GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS,
   TASK_RESOLVER_INVOKE_TIMEOUT_MS,
+  HTTP_REACHABLE_PROBE_TIMEOUT_FIXTURE_MS,
 };

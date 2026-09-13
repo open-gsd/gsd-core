@@ -1,15 +1,6 @@
 [
-  "tests/assumption-delta-checkpoint-e2e.test.cjs",
-  "tests/assumption-delta.test.cjs",
   "tests/cjs-command-router-adapter.test.cjs",
-  "tests/code-review-pipeline-regression.test.cjs",
-  "tests/code-review.test.cjs",
   "tests/dispatcher.test.cjs",
-  "tests/plan-phase-stall-detection.test.cjs",
-  "tests/plan-review-convergence.test.cjs",
-  "tests/review-lane-invocation.test.cjs",
-  "tests/reviewer-manifest-body.test.cjs",
-  "tests/reviewer-trust-disclosure.test.cjs",
   "tests/run-tests-temp-root.test.cjs",
   "tests/shell-command-projection-dispatch.test.cjs"
 ]
