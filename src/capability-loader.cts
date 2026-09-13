@@ -494,45 +494,85 @@ function centralConfigKeys(): Set<string> {
 
 /**
  * #3929: the validation seed `capability-source.stageValidated` runs the
- * cross-capability suite against — the FIRST-PARTY registry capabilities plus
- * every COMMITTED installed overlay (both scopes, `_pending` intents excluded,
- * unreadable/unparseable manifests skipped fail-closed), mirroring exactly
- * what `loadRegistry`'s accepted map contains at load time. The candidate
- * itself is added by the caller LAST (mirroring `acceptedMap.set(id, cap)`),
- * so an upgrade replaces its own overlay entry while a first-party-id
- * collision stays visible to ownership checks.
+ * cross-capability suite against. Built the way `loadRegistry` builds its
+ * accepted map: first-party registry capabilities, then each COMMITTED overlay
+ * of the TARGET (global) install scope accepted INCREMENTALLY — structural
+ * validation, engines.gsd against the running host, then the FULL
+ * cross-capability suite; an overlay joins only if the suite stays clean
+ * after adding it (load's invariant: first-party alone is clean, so any new
+ * error is that overlay's fault — skip it, never fail the seed). The seed is
+ * therefore CLEAN BY CONSTRUCTION: pre-existing junk in the install scope
+ * (colliding entries, shape-invalid manifests, engines-incompatible bundles)
+ * is skipped exactly as load skips it and can never fail or skew a
+ * candidate's install decision — a repo-planted ledger cannot veto installs
+ * (#1459 CB-3).
  *
- * Exported (not inlined in the installer) so the overlay semantics this
- * reuses — `overlayRoots` realpath dedup + scope escalation, `ledgerOverlayIds`
- * committed-only filtering, the shared bounded manifest reader — have exactly
- * one owner and cannot drift from the loader's load-time rules.
+ * Scope: only the install TARGET scope is walked — `stageValidated` promotes
+ * into `${gsdHome}/.gsd/capabilities`, so target scope == global.
+ * Project-scope overlays are deliberately NOT seeded (they additionally
+ * require user consent to activate at load; the issue asks for overlays "in
+ * the target scope"). The candidate is added by the caller LAST, mirroring
+ * `acceptedMap.set(id, cap)`.
+ *
+ * Exported (not inlined in the installer) so the semantics this reuses —
+ * `overlayRoots`, `ledgerOverlayIds`, the shared bounded manifest reader, and
+ * the incremental-accept rules — have exactly one owner and cannot drift from
+ * the loader's load-time rules.
  */
 export function crossValidationSeed(
   cwd: string,
-  gsdHome?: string,
+  gsdHome: string,
+  hostVersion: string,
+  validator: ValidatorModule,
+  semver: SemverModule,
 ): { capMap: Map<string, unknown>; centralKeys: Set<string> } {
   const fp = firstPartyCaps();
   const capMap = new Map<string, unknown>(Object.entries(fp));
+  const centralKeys = centralConfigKeys();
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const ledger: LedgerModule = require('./capability-ledger.cjs') as LedgerModule;
   for (const root of overlayRoots(cwd, gsdHome)) {
+    if (root.scope !== 'global') continue; // seed the TARGET scope only
     const { committed } = ledgerOverlayIds(ledger, root.dir);
     for (const id of committed) {
       // First-party always wins (CONTEXT.md capability-loader entry): an
-      // overlay claiming a first-party id is rejected at load, so it must not
-      // shadow the first-party entry in the validation set either.
+      // overlay claiming a first-party id is rejected at load, so it must
+      // not shadow the first-party entry in the validation set either.
       if (Object.prototype.hasOwnProperty.call(fp, id)) continue;
+      let cap: unknown;
       try {
         const manifestPath = path.join(root.dir, id, 'capability.json');
         const raw = ledger.readSmallRegularFile(manifestPath, MANIFEST_MAX_BYTES);
         if (raw === null) continue; // missing/non-regular/oversized — skip fail-closed
-        capMap.set(id, JSON.parse(raw) as unknown);
+        cap = JSON.parse(raw);
       } catch {
-        continue; // unreadable overlay — skip fail-closed (same rule as load)
+        continue; // unreadable overlay — skip (same rule as load)
       }
+      // Same per-overlay pre-filters load applies before the cross suite:
+      // structural validity, then engines.gsd against the running host.
+      if (validator.validateCapability(cap, id).length > 0) continue;
+      const engines = (cap as Record<string, unknown>)['engines'];
+      if (engines && typeof engines === 'object' && !Array.isArray(engines)) {
+        const range = (engines as Record<string, unknown>)['gsd'];
+        if (typeof range === 'string' && range && !semver.semverSatisfies(hostVersion, range)) continue;
+      }
+      // Incremental accept: the overlay joins only if the FULL suite stays
+      // clean after adding it; any error is that overlay's fault — skip it.
+      capMap.set(id, cap);
+      let errs: string[] = [];
+      try {
+        errs = [
+          ...validator.validateConsumesGlobal(capMap),
+          ...validator.validateCrossCapability(capMap, centralKeys),
+        ];
+      } catch {
+        // The cross validators are not total over arbitrary shapes (#1461
+        // finding 1); a throwing overlay is skipped, as load skips it.
+      }
+      if (errs.length > 0) capMap.delete(id);
     }
   }
-  return { capMap, centralKeys: centralConfigKeys() };
+  return { capMap, centralKeys };
 }
 
 /** Shallow-attach overlay diagnostics WITHOUT mutating the frozen registry module. */
@@ -976,4 +1016,4 @@ export function loadRegistry(options: LoadRegistryOptions = {}): Registry {
 }
 
 // readHostVersion is exported for the #1920 regression (VERSION-first host-version resolution).
-module.exports = { loadRegistry, readHostVersion, _setValidatorForTest, _setGeneratorForTest };
+module.exports = { loadRegistry, readHostVersion, crossValidationSeed, _setValidatorForTest, _setGeneratorForTest };
