@@ -149,7 +149,9 @@ async function main(argv = process.argv.slice(2)) {
     }
   }
   assert.deepEqual([...producedOutputs].sort(), artifactManifest.outputs, 'bundle producer manifest does not match outputs');
-  console.log(`${check ? 'ok' : 'built'} OpenCode V2 bundles (${BUNDLES.length} entries)`);
+  // npm pack --json reserves stdout for its machine-readable manifest, even
+  // while lifecycle scripts run. Keep this useful build diagnostic separate.
+  console.error(`${check ? 'ok' : 'built'} OpenCode V2 bundles (${BUNDLES.length} entries)`);
 }
 if (require.main === module) main().catch((error) => { console.error(error.message); process.exitCode = 1; });
 module.exports = { BUNDLE_PRODUCER, getBundleArtifactManifest, main };
