@@ -60,6 +60,43 @@ test('rejects the former nested production topology before creating a partial de
   assert.equal(fs.readFileSync(path.join(f.root, '.opencode', 'config.json'), 'utf8'), 'source\n');
 });
 
+test('rejects source .opencode itself before recursive copy starts', (t) => {
+  const f = fixture(t);
+  const source = path.join(f.root, '.opencode');
+  fs.mkdirSync(source);
+  fs.writeFileSync(path.join(source, 'config.json'), 'source\n');
+
+  assert.throws(
+    () => provisionOpenCodeV2Worktree({ repoRoot: f.root, worktreePath: source }),
+    /refuses a worktree inside source \.opencode/,
+  );
+  assert.equal(fs.readFileSync(path.join(source, 'config.json'), 'utf8'), 'source\n');
+});
+
+test('allows a prefix sibling of source .opencode', (t) => {
+  const f = fixture(t);
+  const source = path.join(f.root, '.opencode');
+  const prefixSibling = path.join(f.root, '.opencode-other');
+  fs.mkdirSync(source);
+  fs.mkdirSync(prefixSibling);
+  fs.writeFileSync(path.join(source, 'config.json'), 'source\n');
+
+  provisionOpenCodeV2Worktree({ repoRoot: f.root, worktreePath: prefixSibling });
+
+  assert.equal(fs.readFileSync(path.join(prefixSibling, '.opencode', 'config.json'), 'utf8'), 'source\n');
+});
+
+test('allows a normal sibling worktree outside source .opencode', (t) => {
+  const f = fixture(t);
+  const source = path.join(f.root, '.opencode');
+  fs.mkdirSync(source);
+  fs.writeFileSync(path.join(source, 'config.json'), 'source\n');
+
+  provisionOpenCodeV2Worktree({ repoRoot: f.root, worktreePath: f.worktreePath });
+
+  assert.equal(fs.readFileSync(path.join(f.worktreePath, '.opencode', 'config.json'), 'utf8'), 'source\n');
+});
+
 test('rejects a symlink alias that resolves inside source before recursive copy starts', (t) => {
   const f = fixture(t);
   const source = path.join(f.root, '.opencode');

@@ -27,6 +27,8 @@ import path from 'node:path';
 /**
  * THE containment comparison — the single place this repo decides whether an
  * already-resolved path lies inside an already-resolved root (ADR-4650).
+ * Callers that need filesystem identity must realpath both operands first;
+ * this helper intentionally performs no path resolution or filesystem access.
  *
  * Separator-aware on purpose: comparing the bare strings would accept a
  * sibling that merely shares a prefix (`<root>-evil` against `<root>`), so both

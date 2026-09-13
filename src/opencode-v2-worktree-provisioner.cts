@@ -7,6 +7,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { isContainedIn } from './security.cjs';
 
 interface ProvisionWorktreeContext {
   repoRoot: string;
@@ -27,8 +28,7 @@ function provisionOpenCodeV2Worktree({ repoRoot, worktreePath }: ProvisionWorktr
   } catch (error) {
     throw new Error(`OpenCode V2 provisioning requires usable existing source and worktree directories: ${(error as Error).message}`);
   }
-  const relativeToSource = path.relative(canonicalSource, canonicalWorktreePath);
-  if (relativeToSource === '' || (!relativeToSource.startsWith(`..${path.sep}`) && relativeToSource !== '..' && !path.isAbsolute(relativeToSource))) {
+  if (isContainedIn(canonicalWorktreePath, canonicalSource)) {
     throw new Error(`OpenCode V2 provisioning refuses a worktree inside source .opencode: ${canonicalWorktreePath}`);
   }
   fs.cpSync(canonicalSource, path.join(canonicalWorktreePath, '.opencode'), { recursive: true, force: true });
