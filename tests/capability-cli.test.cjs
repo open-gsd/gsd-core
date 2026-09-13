@@ -1304,7 +1304,8 @@ describe('#3929: a throwing (duplicate-producer) overlay is skipped, never attri
       id: 'poison-b', role: 'feature', version: '1.0.0', title: 'poison-b',
       description: 'duplicate producer of SHARED-ARTIFACT.md', tier: 'standard',
       requires: [], skills: ['poison-skill'], agents: [], config: {},
-      steps: [poisonedStep], contributions: [], gates: [],
+      runtimeCompat: { supported: ['*'], unsupported: [] },
+      hooks: [], steps: [poisonedStep], contributions: [], gates: [],
     });
     // poison-a is re-planted with the SAME producer so the pair trips
     // validateConsumesGlobal's duplicate-producer throw when both are seeded.
@@ -1312,7 +1313,8 @@ describe('#3929: a throwing (duplicate-producer) overlay is skipped, never attri
       id: 'poison-a', role: 'feature', version: '1.0.0', title: 'poison-a',
       description: 'duplicate producer of SHARED-ARTIFACT.md', tier: 'standard',
       requires: [], skills: ['poison-skill'], agents: [], config: {},
-      steps: [poisonedStep], contributions: [], gates: [],
+      runtimeCompat: { supported: ['*'], unsupported: [] },
+      hooks: [], steps: [poisonedStep], contributions: [], gates: [],
     });
 
     // The candidate only installs if the throwing overlay was DROPPED from
