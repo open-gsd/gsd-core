@@ -69,10 +69,9 @@ if [ -f .planning/config.json ]; then
     echo "gsd-validate-commit.sh: could not read .planning/config.json (opt-in check) — validator disabled for this call. $(cat "$ENABLED_ERR")" >&2
     exit 0
   fi
-  # Pure parameter expansion, not `printf ... | head -1`: same SIGPIPE race
-  # class as the SUBJECT extraction below (`echo "$MSG" | head -1`) — CONFIG_OUT
-  # is multi-line whenever extra commit types are configured, and `head -1`
-  # closing early can SIGPIPE `printf` under `set -euo pipefail`.
+  # Parse the captured payload without a short-reading pipeline. Under
+  # `pipefail`, `printf | head -1` can surface SIGPIPE (141) when the optional
+  # commit-type list is larger than the pipe buffer (#4429).
   ENABLED="${CONFIG_OUT%%$'\n'*}"
   if [ "$ENABLED" != "1" ]; then exit 0; fi
   # Remaining lines (if any) are the sanitized, deduped configured commit
@@ -80,9 +79,12 @@ if [ -f .planning/config.json ]; then
   # `mapfile`/`readarray` are bash 4+ only and this hook is tested against
   # bash 3.2.57 (macOS default).
   EXTRA_COMMIT_TYPES=()
-  while IFS= read -r _extra_type; do
-    [ -n "$_extra_type" ] && EXTRA_COMMIT_TYPES+=("$_extra_type")
-  done < <(printf '%s\n' "$CONFIG_OUT" | tail -n +2)
+  if [[ "$CONFIG_OUT" == *$'\n'* ]]; then
+    EXTRA_TYPES_OUT=${CONFIG_OUT#*$'\n'}
+    while IFS= read -r _extra_type; do
+      [ -n "$_extra_type" ] && EXTRA_COMMIT_TYPES+=("$_extra_type")
+    done <<< "$EXTRA_TYPES_OUT"
+  fi
 else
   exit 0
 fi
