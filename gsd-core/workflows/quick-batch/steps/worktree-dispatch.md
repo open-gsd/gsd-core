@@ -1,5 +1,12 @@
 **Step 6: Worktree create + executor dispatch**
 
+## Native-tool guard — first action
+
+`EXEC_TRANSPORT` is resolved once by `quick-batch.md` before Step 6. If it is
+`native-tool`, read and execute `opencode-v2-dispatch.md` and **stop processing this shared file**.
+Do not run any generic command, mutation, SUMMARY check, or routing step first.
+Only `EXEC_TRANSPORT != "native-tool"` continues with the generic algorithm below.
+
 This is the batch's MUTATING wave — worktree create/executor dispatch/merge
 are the operations `isolation == "none"` caps to concurrency 1 (row 6),
 unlike planning/research above.
@@ -132,12 +139,15 @@ EXEC_CONCURRENCY=$(printf '%s' "$QB_EXEC_CONC_JSON" | node -e 'let s="";process.
 
    **`isolation == "orchestrator-worktree"`:** GSD creates the worktree
    (`gsd_run query worktree.create --manifest "$QUICK_BATCH_WORKTREE_MANIFEST" --agent-id ... --path ... --branch ... --base ... --files "$PLAN_FILES" --deletions "$PLAN_DELETIONS"`) then
-   process-spawns the executor via `dispatch-isolation --json --cwd-target
-   --prompt`, exactly as `gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md`'s
-   "orchestrator-worktree" section
-   describes — reuse that mechanism verbatim, substituting this item's
-   `${quick_id}`/`${ITEM_DIR}`/`${quick_id}-PLAN.md` for its
-   `{plan_number}`/`{phase_dir}`/`{plan_file}` placeholders.
+   resolves `dispatch-isolation --json --cwd-target --prompt`, exactly as
+   `gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md`'s
+   "orchestrator-worktree" section describes. Dispatch on the returned
+   `exec.transport`, substituting this item's `${quick_id}`/`${ITEM_DIR}`/
+   `${quick_id}-PLAN.md` for its plan placeholders:
+
+   - `process`: preserve the existing background process argv/cwd path.
+   - `native-tool`: skip this generic round and execute the complete journaled
+     V2 branch below. It is the sole owner of native start/seal/recovery.
 
    **`isolation == "none"`:** no worktree. Dispatch the executor inline on the
    primary checkout (same prompt, minus the worktree-only framing), one item
@@ -160,7 +170,7 @@ EXEC_CONCURRENCY=$(printf '%s' "$QB_EXEC_CONC_JSON" | node -e 'let s="";process.
 
    > **ORCHESTRATOR RULE — CODEX RUNTIME**: after each `Agent()` call above, wait for it to return before starting the next worktree create.
 
-4. **After every item dispatched this round returns:** verify
+4. **After every process/harness item dispatched this round returns:** verify
    `${ITEM_DIR}/${quick_id}-SUMMARY.md` exists. If missing, the item stays
    `pending`/its worktree preserved for diagnosis rather than guessing
    completion — do not proceed to merge for it this round.

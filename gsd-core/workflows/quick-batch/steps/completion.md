@@ -1,5 +1,12 @@
 **Step 9: Completion**
 
+## Native-tool guard — first action
+
+`EXEC_TRANSPORT` is resolved once by `quick-batch.md` before Step 6. If it is
+`native-tool`, read and execute `opencode-v2-completion.md` and **stop processing this shared file**.
+Do not run any generic command, mutation, SUMMARY check, or routing step first.
+Only `EXEC_TRANSPORT != "native-tool"` continues with the generic algorithm below.
+
 For every item that merged successfully in Step 7 AND (NOT `$VALIDATE_MODE`,
 OR Step 8 routed it to `complete`): call `completeQuickItem` via its CLI verb
 — this is the ONLY writer of a "Quick Tasks Completed" STATE.md row and the

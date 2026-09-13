@@ -810,6 +810,13 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    **Manifest source of truth (#3384):** Cleanup consumes the `WAVE_WORKTREE_MANIFEST` created and populated during executor dispatch in step 3. Do not recreate or truncate it here.
 
+   **Native-tool merge authorization:** If `exec.transport == "native-tool"`, read
+   and execute `execute-phase/steps/opencode-v2-native-worktree.md` before this
+   mutating gauntlet. It exclusively owns same-parent recovery, fresh literal
+   `merge_ready:true`, exact complete-set attestation, all-merges-before-teardown,
+   and the no-post-removal-status rule. Prior status and notifications are not
+   authority; process and harness gates remain unchanged.
+
    Prefer the bounded helper, which validates branch identity, expected base, deletion
    diffs, merge result, and worktree removal before deleting the temporary branch.
    If the helper reports a blocked cleanup, resolve the reported manifest entry and
@@ -836,6 +843,8 @@ increases monotonically across waves. `{status}` is `complete` (success),
    ORCH_BRANCH=$(git rev-parse --abbrev-ref HEAD)
    [ -z "${EXPECTED_BRANCH:-}" ] || [ "$ORCH_BRANCH" = "$EXPECTED_BRANCH" ] || { echo "FATAL: orchestrator on '$ORCH_BRANCH' but expected '$EXPECTED_BRANCH' before worktree cleanup — refusing to merge (#3174-class drift)" >&2; exit 1; }
 
+   # For native-tool waves, fresh status.merge_ready:true was required directly
+   # above before this mutating merge command. Never bypass that tool gate.
    # Fail closed: SDK refusal (safety guard #3174/#3384) must surface — do not swallow exit 1.
    gsd_run query worktree.cleanup-wave --manifest "$WAVE_WORKTREE_MANIFEST" || exit 1
    ```

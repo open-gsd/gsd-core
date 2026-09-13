@@ -155,16 +155,45 @@ before advancing to the next layer.
 
 ---
 
-**Step 6: Worktree create + executor dispatch**
+**Step 5.5: Resolve executor transport before Step 6 (pre-mutation)**
+
+Resolve the transport once from the canonical current coordinator checkout. This is
+a pre-mutation discriminator: `dispatch-isolation --json` retains its normal
+idempotent isolation-sentinel persistence, but this probe performs no worktree
+create, BATCH mutation, or executor dispatch. Omit `--prompt` here; actual process
+dispatch still resolves its descriptor later with the per-item cwd and composed
+prompt. Do not branch on a runtime name.
+
+```bash
+ORCHESTRATOR_WT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 1
+ORCHESTRATOR_WT=$(cd "$ORCHESTRATOR_WT" && pwd -P) || exit 1
+EXEC_JSON=$(gsd_run query dispatch-isolation --json --cwd-target "$ORCHESTRATOR_WT") || exit 1
+EXEC_TRANSPORT=$(printf '%s' "$EXEC_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s),e=j&&j.exec;if(j&&j.isolation!=="orchestrator-worktree")return process.stdout.write("not-orchestrator");if(e&&e.transport==="native-tool"&&e.tool==="gsd_worktree_task")return process.stdout.write("native-tool");if(e&&e.transport==="process"&&typeof e.command==="string"&&e.command&&Array.isArray(e.args)&&typeof e.cwd==="string"&&e.cwd)return process.stdout.write("process");process.stdout.write("invalid")}catch{process.stdout.write("invalid")}})')
+case "$EXEC_TRANSPORT" in
+  native-tool|process|not-orchestrator) ;;
+  *) echo "FATAL: orchestrator-worktree requires a usable process descriptor or exact gsd_worktree_task native-tool descriptor." >&2; exit 1 ;;
+esac
+```
+
+**Mutually exclusive Step 6–9 route:**
+
+- When `EXEC_TRANSPORT == "native-tool"`, read and execute
+  `quick-batch/steps/opencode-v2-lifecycle.md` **now**. It owns the full native
+  loop and explicitly runs native dispatch → merge → optional verification →
+  completion. After it returns/halts, **skip generic Steps 6–9 entirely**.
+- Otherwise, execute the existing generic Steps 6–9 below unchanged. Process,
+  harness-worktree, and `none` retain their existing behavior.
+
+**Step 6: Worktree create + executor dispatch (generic route only)**
 
 Read and execute `gsd-core/workflows/quick-batch/steps/worktree-dispatch.md`.
-Worktree create/executor dispatch is serialized per item (one `git worktree
-add` in flight at a time); already-created worktrees run concurrently up to
-the effective MUTATING-wave concurrency.
+Worktree create/executor dispatch is serialized per item (one `git worktree add`
+in flight at a time); already-created worktrees run concurrently up to the
+effective MUTATING-wave concurrency.
 
 ---
 
-**Step 7: Deterministic merge**
+**Step 7: Deterministic merge (generic route only)**
 
 Read and execute `gsd-core/workflows/quick-batch/steps/merge-wave.md`. Merges
 apply strictly in the wave's original dispatch order (`quick-batch
@@ -173,16 +202,16 @@ merge-eligible`), never completion order.
 ---
 
 <!-- gsd:section id="verification-wave" when="flag:--validate" -->
-If `section_manifest` is `null` or `"verification-wave"` is in its `included` list: read and execute `gsd-core/workflows/quick-batch/steps/verification-wave.md`. Otherwise skip — do not read the file.
+If `section_manifest` is `null` or `"verification-wave"` is in its `included` list: read and execute `gsd-core/workflows/quick-batch/steps/verification-wave.md`. Otherwise skip — do not read the file. This is the generic route only.
 <!-- /gsd:section -->
 
 ---
 
-**Step 9: Completion**
+**Step 9: Completion (generic route only)**
 
 Read and execute `gsd-core/workflows/quick-batch/steps/completion.md`. Calls
-`completeQuickItem` (via `quick-batch complete`) only for a genuinely
-complete item, updates STATE.md, and prints the final batch report.
+`completeQuickItem` (via `quick-batch complete`) only for a genuinely complete
+item, updates STATE.md, and prints the final batch report.
 
 </process>
 

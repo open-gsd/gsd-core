@@ -1,5 +1,12 @@
 **Step 8: Verification (only when `$VALIDATE_MODE`)**
 
+## Native-tool guard — first action
+
+`EXEC_TRANSPORT` is resolved once by `quick-batch.md` before Step 6. If it is
+`native-tool`, read and execute `opencode-v2-verification.md` and **stop processing this shared file**.
+Do not run any generic command, mutation, SUMMARY check, or routing step first.
+Only `EXEC_TRANSPORT != "native-tool"` continues with the generic algorithm below.
+
 Skip this step entirely if NOT `$VALIDATE_MODE`.
 
 For every item merged in Step 7 (status still `pending`, a real `commit` was

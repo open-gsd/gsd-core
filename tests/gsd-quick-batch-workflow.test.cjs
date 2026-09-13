@@ -57,6 +57,10 @@ function readStep(name) {
   return fs.readFileSync(path.join(STEPS_DIR, name), 'utf-8');
 }
 
+function readV2Step(name) {
+  return readStep(`opencode-v2-${name}.md`);
+}
+
 // ─── Command frontmatter (rows 5,7,8,9,10,13-15) ────────────────────────────
 
 describe('quick-batch command: frontmatter and objective', () => {
@@ -184,6 +188,81 @@ describe('quick-batch workflow: isolation model coverage (rows 20-22)', () => {
     const content = readStep('worktree-dispatch.md');
     assert.match(content, /worktree\.base-check/);
     assert.match(content, /shouldDegrade/);
+  });
+});
+
+describe('quick-batch workflow: durable native-tool transport and merge gate', () => {
+  test('dispatch uses start/seal/recover and explicitly forbids process/session substitutes', () => {
+    const content = readV2Step('dispatch');
+    for (const token of ['native-tool', '"action":"start"', '"action":"seal"', '"action":"recover"']) {
+      assert.ok(content.includes(token), `missing native transport token ${token}`);
+    }
+    for (const forbidden of ['`opencode run`', '`session_move`', 'poll status']) {
+      assert.ok(content.includes(forbidden), `missing explicit prohibition for ${forbidden}`);
+    }
+  });
+
+  test('merge requires a fresh literal status.merge_ready:true immediately before mutation', () => {
+    const content = readV2Step('merge');
+    const sectionStart = content.indexOf('### Fresh gate immediately before mutation');
+    const sectionEnd = content.indexOf('\n### ', sectionStart + 4);
+    assert.ok(sectionStart >= 0, 'missing fresh pre-mutation gate section');
+    const section = content.slice(sectionStart, sectionEnd === -1 ? undefined : sectionEnd);
+    const recover = section.indexOf('{"action":"recover"}');
+    const status = section.indexOf('{"action":"status","wave_id":"{WAVE_ID}"}');
+    const attest = section.indexOf('QB_V2_ATTEST=$(gsd_run quick-batch v2-attest');
+    assert.ok(recover >= 0 && status > recover && attest > status, 'fresh gate must order recover -> status -> v2-attest');
+    const attestBlock = section.match(/QB_V2_ATTEST=\$\(gsd_run quick-batch v2-attest \\\n([\s\S]*?)\) \|\| exit 1/);
+    assert.ok(attestBlock, 'missing concrete second v2-attest command block');
+    assert.deepEqual(
+      [...attestBlock[0].matchAll(/--[a-z-]+/g)].map((match) => match[0]),
+      ['--parent-session', '--batch', '--round', '--item', '--expected-revision', '--raw'],
+    );
+    assert.equal((content.match(/quick-batch v2-attest/g) || []).length, 2);
+    assert.match(content, /notification is only a[\s\S]*never job-selection or merge authorization/i);
+  });
+
+  test('one round shares one wave id and exposes one exact complete seal after all starts', () => {
+    const content = readV2Step('dispatch');
+    const wave = content.indexOf('WAVE_ID="qb-${ROUND}-${WAVE_NONCE}"');
+    const start = content.indexOf('"action":"start"', wave);
+    const seal = content.indexOf('"action":"seal"', start);
+    const sealed = content.indexOf('--phase sealed', seal);
+    assert.ok(wave >= 0 && start > wave && seal > start && sealed > seal);
+    assert.equal((content.match(/WAVE_ID="qb-/g) || []).length, 1);
+    assert.equal((content.match(/"action":"seal"/g) || []).length, 1);
+    assert.match(content.slice(seal, sealed), /SESSION_ID_1[\s\S]*SESSION_ID_N/);
+    assert.doesNotMatch(content, /single-job seal|one-job wave|seal this item as its own/i);
+  });
+
+  test('all native merges precede teardown and teardown contains no status call', () => {
+    const content = readV2Step('merge');
+    const mergeStart = content.indexOf('### Merge every item while the complete wave remains intact');
+    const crash = content.indexOf('### Crash at `merge_intent`', mergeStart);
+    const teardownStart = content.indexOf('### Teardown only after every durable merge', crash);
+    assert.ok(mergeStart >= 0 && crash > mergeStart && teardownStart > crash);
+    const mergeSection = content.slice(mergeStart, crash);
+    const teardownSection = content.slice(teardownStart);
+    assert.match(mergeSection, /quick-batch v2-merge/);
+    assert.doesNotMatch(mergeSection, /quick-batch v2-teardown|--phase teardown_pending/);
+    assert.match(teardownSection, /--phase teardown_pending[\s\S]*quick-batch v2-teardown/);
+    assert.doesNotMatch(teardownSection, /"action":"status"/);
+  });
+
+  test('V2 verification uses only exact coordinates and records same-buffer current evidence', () => {
+    const content = readV2Step('verification');
+    const native = content;
+    const block = native.match(/QB_V2_VERIFY=\$\(gsd_run quick-batch v2-verify \\\n([\s\S]*?)\) \|\| exit 1/);
+    assert.ok(block, 'missing coordinate-only v2-verify command');
+    assert.deepEqual(
+      [...block[0].matchAll(/--[a-z-]+/g)].map((match) => match[0]),
+      ['--parent-session', '--batch', '--round', '--item', '--expected-revision', '--raw'],
+    );
+    assert.doesNotMatch(native, /QB_VERIFY_ROUTE_JSON|--artifact|--status/);
+    assert.match(native, /exactly one pre-receipt read[\s\S]*hashes the same\s+captured buffer/);
+    assert.match(native, /gaps_found[\s\S]*non-authorizing/);
+    assert.match(native, /human_needed[\s\S]*non-authorizing/);
+    assert.match(native, /Stale, malformed, missing, unknown, or staleness-indeterminate evidence:[\s\S]*no receipt/);
   });
 });
 

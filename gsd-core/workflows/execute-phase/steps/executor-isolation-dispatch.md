@@ -303,9 +303,9 @@ CREATE_JSON=$(gsd_run query worktree.create \
     exit 1
   }
 
-# 2. Resolve the host's headless-exec argv for that worktree. Descriptor
-#    data — command, args, cwd flag and prompt flag all come from the
-#    capability descriptor, so no host is named here.
+# 2. Resolve the host's executor transport for that worktree. Descriptor
+#    data selects either a process argv/cwd shape or a durable native tool;
+#    no host is named here and no caller may substitute another transport.
 EXEC_JSON=$(gsd_run query dispatch-isolation --json \
   --cwd-target "$WT_PATH" \
   --prompt "$EXECUTOR_PROMPT")
@@ -317,9 +317,9 @@ EXEC_JSON=$(gsd_run query dispatch-isolation --json \
 #    effect), so an unusable exec must NOT be spawned and must NOT be left
 #    behind as an orphan: tear it down through the manifest-scoped cleanup
 #    and halt rather than silently running the wave unisolated.
-EXEC_OK=$(printf '%s' "$EXEC_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(j&&j.isolation==="orchestrator-worktree"&&j.exec&&j.exec.command?"true":"false")}catch{process.stdout.write("false")}})')
+EXEC_OK=$(printf '%s' "$EXEC_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s),e=j&&j.exec;process.stdout.write(j&&j.isolation==="orchestrator-worktree"&&e&&((e.transport==="process"&&e.command)||(e.transport==="native-tool"&&e.tool))?"true":"false")}catch{process.stdout.write("false")}})')
 if [ "$EXEC_OK" != "true" ]; then
-  echo "FATAL: could not resolve an orchestrator-exec invocation for plan {plan_number} after its worktree was created. The wave is halted rather than run unisolated. Retained for inspection: $WT_PATH (branch $WT_BRANCH, recorded in $WAVE_WORKTREE_MANIFEST) — run 'gsd_run query worktree.cleanup-wave --manifest \"$WAVE_WORKTREE_MANIFEST\"' to merge/clean it." >&2
+  echo "FATAL: could not resolve an orchestrator executor transport for plan {plan_number} after its worktree was created. The wave is halted rather than run unisolated. Retained for inspection: $WT_PATH (branch $WT_BRANCH, recorded in $WAVE_WORKTREE_MANIFEST)." >&2
   exit 1
 fi
 ```
@@ -330,11 +330,21 @@ fi
 
 `worktree create` records the entry in `$WAVE_WORKTREE_MANIFEST` itself, so **do not** call `worktree.record-agent` for these plans — that verb is the harness-path counterpart, used because the harness creates the worktree behind GSD's back. Double-recording is deduped by path+branch, but the create verb is the single writer here.
 
-Spawn `EXEC_JSON`'s `command` + `args` as a background process with its working directory set to `EXEC_JSON.cwd`. The `cwd` is returned for **every** host, including those whose descriptor has no cwd flag (`cwdFlag: null`) and therefore bind through the process's own working directory — always set it, never assume the flag did the job. Wait for all spawned executors in the wave before merging.
+Dispatch strictly by `EXEC_JSON.exec.transport`:
+
+- **`process`:** spawn `command` + `args` as a background process with its
+  working directory set to `cwd`. The `cwd` is returned for every process
+  host, including descriptors with `cwdFlag:null`; always bind it. Preserve
+  the existing process transport for Codex, Kimi, and Kimi Code. Wait for all
+  spawned processes before merging.
+- **`native-tool`:** read and execute
+  `execute-phase/steps/opencode-v2-native-worktree.md`. It exclusively owns
+  native `start`/one exact `seal`/`recover`/fresh `status` and merge lifecycle;
+  do not substitute another transport.
+
 
 The executor never touches `STATE.md`/`ROADMAP.md`, and that guard needs no new code — `execute-plan` auto-detects worktree mode via the `IS_WORKTREE` (`.git`-is-a-file) primitive, which a GSD-created worktree trips identically to a harness-created one.
 
 Merge-back, validation, and cleanup are the **existing** gauntlet, unchanged: the serialized `worktree.cleanup-wave` merge loop that stops the wave and retains the worktree on conflict, and manifest-only cleanup (never glob-inferred). Because the manifest shape is identical, the orchestrator path reuses it verbatim.
 
 > **Declared-scope conformance (#2596):** ADR-1239 specifies that *both* isolation adapters route their merge through a check that each plan branch's committed diff stayed inside its declared `files_modified` scope. That check now exists, advisory-first, and is wired into **both** paths: this one passes `--files "$PLAN_FILES"` to `worktree create` above, the harness path passes it to `worktree record-agent`, and `cleanup-wave` runs the one comparison for both. A path outside the declared scope is reported in the result's `warnings` array; it does not block the merge. Promotion to a hard gate is a separate, disclosed change.
-

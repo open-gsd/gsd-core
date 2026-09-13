@@ -1,11 +1,21 @@
 **Step 7: Deterministic merge**
 
+## Native-tool guard — first action
+
+`EXEC_TRANSPORT` is resolved once by `quick-batch.md` before Step 6. If it is
+`native-tool`, read and execute `opencode-v2-merge.md` and **stop processing this shared file**.
+Do not run any generic command, mutation, SUMMARY check, or routing step first.
+Only `EXEC_TRANSPORT != "native-tool"` continues with the generic algorithm below.
+
 Skip entirely if `$ISOLATION == "none"` — nothing was worktree-isolated,
 there is nothing to merge (executors already committed to the primary
 checkout in Step 6).
 
 **Merge rounds.** Repeat until no wave has a mergeable prefix left (bounded
 by `$ITEM_COUNT` rounds):
+
+Process and harness transports retain their existing completion checks. The
+first-action native guard routes native-tool work before this SUMMARY-driven loop.
 
 1. For each DISTINCT `wave` value present among items that are
    `status == "pending"` with a `${item_dir}/${quick_id}-SUMMARY.md` on disk

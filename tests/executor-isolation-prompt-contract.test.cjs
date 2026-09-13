@@ -21,6 +21,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const FRAGMENT = path.join(
   __dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'executor-isolation-dispatch.md',
@@ -127,4 +128,47 @@ test('#3637: the prompt body contains no single-quote character (single-quoted a
   const startQuote = body.indexOf("'");
   const rest = body.slice(startQuote + 1);
   assert.ok(!rest.includes("'"), 'the prompt body must be free of apostrophes or the shell assignment breaks');
+});
+
+const nativePath = path.join(
+  __dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'opencode-v2-native-worktree.md',
+);
+const native = fs.readFileSync(nativePath, 'utf8');
+
+test('shared dispatch delegates native transport while preserving the process descriptor contract', () => {
+  assert.match(content, /`native-tool`:.*opencode-v2-native-worktree\.md/s);
+  const processStart = content.indexOf('- **`process`:**');
+  const nativeStart = content.indexOf('- **`native-tool`:**', processStart);
+  assert.ok(processStart >= 0 && nativeStart > processStart);
+  const processBranch = content.slice(processStart, nativeStart);
+  for (const token of ['command', 'args', 'working directory set to `cwd`', 'Codex, Kimi, and Kimi Code', 'Wait for all']) {
+    assert.ok(processBranch.includes(token), `missing process-runtime compatibility token: ${token}`);
+  }
+  assert.ok(splitLines(content).length < 380, 'shared fragment must remain a short dispatcher');
+});
+
+test('native-tool lifecycle owns exact start/seal/recover/status and prohibitions', () => {
+  for (const token of ['gsd_worktree_task', '`start`', '`seal`', '`recover`', 'exact complete returned']) {
+    assert.ok(native.includes(token), `missing native transport contract ${token}`);
+  }
+  for (const forbidden of ['`opencode run`', '`session_move`', 'Bash polling', 'legacy `wait`']) {
+    assert.ok(native.includes(forbidden), `missing explicit prohibition for ${forbidden}`);
+  }
+  assert.match(native, /medium` or `high`/);
+});
+
+test('native lifecycle uses fresh literal readiness then all merges before teardown', () => {
+  assert.match(native, /fresh `merge_ready:true`/);
+  const completeSet = native.indexOf('complete sealed job set');
+  const mergeAll = native.indexOf('Merge every same-wave worktree', completeSet);
+  const noStatus = native.indexOf('do not request another wave status', mergeAll);
+  assert.ok(completeSet >= 0 && mergeAll > completeSet && noStatus > mergeAll);
+  const workflow = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md'), 'utf8');
+  assert.match(workflow, /opencode-v2-native-worktree\.md/);
+});
+
+test('native restart recovery is same-parent and notification remains wake-up only', () => {
+  assert.match(native, /canonical orchestrator checkout[\s\S]*same parent session/);
+  assert.match(native, /notification is\s+only a wake-up signal/);
+  assert.match(native, /never recovered status/);
 });
