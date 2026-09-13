@@ -7,7 +7,6 @@
   "tests/code-review.test.cjs",
   "tests/dispatcher.test.cjs",
   "tests/gate-predicate-evaluator.test.cjs",
-  "tests/gsd-statusline.test.cjs",
   "tests/phase6-capstone-conformance.test.cjs",
   "tests/plan-phase-stall-detection.test.cjs",
   "tests/plan-review-convergence.test.cjs",
@@ -17,6 +16,5 @@
   "tests/reviewer-manifest-body.test.cjs",
   "tests/reviewer-trust-disclosure.test.cjs",
   "tests/run-tests-temp-root.test.cjs",
-  "tests/shell-command-projection-dispatch.test.cjs",
-  "tests/teams-status.test.cjs"
+  "tests/shell-command-projection-dispatch.test.cjs"
 ]

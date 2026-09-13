@@ -15,6 +15,20 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const { resolveTeamsStatus } = require('../gsd-core/bin/lib/teams-status.cjs');
+/**
+ * Reuses the existing PROBE_TIMEOUT_MS constant rather than declaring a
+ * new one, despite this batch's own issue (#4525, epic #4445) cautioning
+ * against forcing a "long-lived status renderer" onto PROBE_TIMEOUT_MS
+ * without checking. Checked directly: gsd-core/bin/lib/teams-status.cjs's
+ * cmdTeamsStatus (what these 5 sites spawn via `gsd-tools.cjs query
+ * teams-status`) is a lightweight env-truthiness check plus one fast
+ * synchronous runtime resolution -- no rendering, no subprocess fan-out --
+ * genuinely matching PROBE_TIMEOUT_MS's class, not the heavier
+ * "long-lived renderer" class the issue's caution targets (that class is
+ * hooks/gsd-statusline.js, correctly kept off PROBE_TIMEOUT_MS in this
+ * same batch's sibling file, tests/gsd-statusline.test.cjs).
+ */
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const gsdToolsPath = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
@@ -120,7 +134,7 @@ describe('gsd-tools query teams-status — CLI subprocess tests', () => {
       [gsdToolsPath, 'query', 'teams-status'],
       {
         encoding: 'utf8',
-        timeout: 15000,
+        timeout: PROBE_TIMEOUT_MS,
         env: makeEnv({ runtime: 'claude', teamsFlag: '1' }),
       },
     );
@@ -142,7 +156,7 @@ describe('gsd-tools query teams-status — CLI subprocess tests', () => {
       [gsdToolsPath, 'query', 'teams-status'],
       {
         encoding: 'utf8',
-        timeout: 15000,
+        timeout: PROBE_TIMEOUT_MS,
         env: makeEnv({ runtime: 'claude' }),
       },
     );
@@ -158,7 +172,7 @@ describe('gsd-tools query teams-status — CLI subprocess tests', () => {
       [gsdToolsPath, 'query', 'teams-status', '--active'],
       {
         encoding: 'utf8',
-        timeout: 15000,
+        timeout: PROBE_TIMEOUT_MS,
         env: makeEnv({ runtime: 'claude', teamsFlag: '1' }),
       },
     );
@@ -173,7 +187,7 @@ describe('gsd-tools query teams-status — CLI subprocess tests', () => {
       [gsdToolsPath, 'query', 'teams-status', '--active'],
       {
         encoding: 'utf8',
-        timeout: 15000,
+        timeout: PROBE_TIMEOUT_MS,
         env: makeEnv({ runtime: 'claude' }),
       },
     );
@@ -186,7 +200,7 @@ describe('gsd-tools query teams-status — CLI subprocess tests', () => {
       [gsdToolsPath, 'query', 'teams-status', '--active'],
       {
         encoding: 'utf8',
-        timeout: 15000,
+        timeout: PROBE_TIMEOUT_MS,
         env: makeEnv({ runtime: 'codex', teamsFlag: '1' }),
       },
     );
