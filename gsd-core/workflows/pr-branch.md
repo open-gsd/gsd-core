@@ -368,6 +368,17 @@ for HASH in $(printf '%s' "$INCLUDED_COMMITS"); do
   # no "theirs" blob to check out, so fall back to accepting the deletion (the
   # `verify` step's `$PLANNING_DELETIONS` gate independently catches this if
   # `$TARGET` ever legitimately tracked that path).
+  #
+  # The deleted-by-$HASH case is checked explicitly with `git cat-file -e`
+  # rather than inferred from `checkout --theirs` failing, so an unrelated
+  # checkout failure (I/O, permissions, a stale index lock) can't be
+  # misread as a deletion and silently `git rm`-ed — it falls through to the
+  # unmerged-path halt below instead.
+  #
+  # The `git add` below restages a path already committed to $CURRENT_BRANCH's
+  # own history onto the disposable $PR_BRANCH; not a commit_docs bypass
+  # (#1783/#3585), which guards against staging .planning/ content that was
+  # never committed at all.
   for P in $(git diff --name-only --diff-filter=U); do
     case "$P" in
       .planning/*) ;;
@@ -375,7 +386,11 @@ for HASH in $(printf '%s' "$INCLUDED_COMMITS"); do
     esac
     if echo "$P" | grep -Eq "$FORBIDDEN_RE"; then continue; fi
     if echo "$P" | grep -Eq "$STRUCTURAL_RE"; then continue; fi
-    git checkout --theirs -- "$P" 2>/dev/null && git add -- "$P" || git rm -f -q -- "$P" 2>/dev/null || true # gsd-scan-ignore: #4606 -- restages a path already committed to $CURRENT_BRANCH's own history onto the disposable $PR_BRANCH; not a commit_docs bypass (#1783/#3585), which guards against staging .planning/ content that was never committed at all
+    if git cat-file -e "$HASH:$P" 2>/dev/null; then
+      git checkout --theirs -- "$P" && git add -- "$P" # gsd-scan-ignore: #4606 -- see block comment above
+    else
+      git rm -f -q -- "$P" 2>/dev/null || true
+    fi
   done
 
   # Anything still unmerged is a REAL conflict, outside the filter. Halt — do not
