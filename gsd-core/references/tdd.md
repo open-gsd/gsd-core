@@ -95,7 +95,7 @@ After completion, create SUMMARY.md with:
 1. Create test file following project conventions
 2. Write test describing expected behavior (from `<behavior>` element)
 3. Run test - it MUST fail **intentionally** (#3770): the TARGET test you named must be the test that fails, on an assertion for the planned behavior. A nonzero exit alone is NOT RED — syntax errors, zero-test discovery, fixture crashes, parser errors, and unrelated assertions are INVALID_RED and must not authorize GREEN.
-4. Persist the RED evidence record (command, exit code, failing test, expected result, actual result) and verify it: `gsd_run check tdd-red-evidence <record.json>`. Only verdict `RED_EVIDENCE_OK` satisfies the RED gate; `INVALID_RED` blocks GREEN until the RED phase is fixed.
+4. Persist the RED evidence for every runner: the real command, actual exit status, unmodified output, target test identity, and expected and actual result. Select the validation branch from the actual command that produced the evidence, including in mixed-runner projects. If the command invokes Node's built-in test runner and the output is compatible TAP, pass the unchanged record to `gsd_run check tdd-red-evidence <record.json>` and require `RED_EVIDENCE_OK`; if its reporter is incompatible, rerun the planned target with Node's compatible TAP reporter and capture that real command and result first. Do not infer this branch from `package.json` or other package metadata, npm/pnpm or another package manager, or TAP-shaped text alone. For every other or unknown runner, directly inspect the captured output and the test assertion. In both branches confirm the named target actually executed and failed on the planned assertion for the intended reason. Zero tests, a missing or skipped target, setup, collection, import, syntax, or fixture faults, unrelated failures, unexpected green, and incomplete or ambiguous evidence are INVALID_RED and block GREEN. Record the concise assessment in the existing RED evidence and SUMMARY surfaces; do not fabricate a parser verdict or Node counters.
 5. If test passes: feature exists or test is wrong. Investigate.
 6. Commit: `test({phase}-{plan}): add failing test for [feature]`
 
@@ -279,14 +279,14 @@ When `workflow.tdd_mode` is enabled in config, the RED/GREEN/REFACTOR gate seque
 
 | Gate | Required | Commit Pattern | Validation |
 |------|----------|---------------|------------|
-| RED | Yes | `test({phase}-{plan}): ...` | Test exists AND fails before implementation — intentionally: `check tdd-red-evidence` returns `RED_EVIDENCE_OK` (target test failed on an assertion for the behavior; anything else is INVALID_RED) |
+| RED | Yes | `test({phase}-{plan}): ...` | Test exists AND fails before implementation — intentionally: route by the actual command; Node built-in compatible TAP must return `RED_EVIDENCE_OK`, every other runner requires direct inspection, and all runners require semantic proof that the planned target assertion failed for the intended reason |
 | GREEN | Yes | `feat({phase}-{plan}): ...` | Test passes after implementation |
 | REFACTOR | No | `refactor({phase}-{plan}): ...` | Tests still pass after cleanup |
 
 ### Fail-Fast Rules
 
 1. **Unexpected GREEN in RED phase:** If the test passes before any implementation code is written, STOP. The feature may already exist or the test is wrong. Investigate before proceeding.
-2. **INVALID_RED in RED phase (#3770):** A nonzero exit is not RED by itself. Zero-test discovery, fixture/load crashes, nonzero exits with no failing test, unrelated failing tests, and unexpected greens all classify as INVALID_RED (`gsd_run check tdd-red-evidence`). STOP and fix the RED phase — do NOT proceed to GREEN.
+2. **INVALID_RED in RED phase (#3770):** A nonzero exit is not RED by itself. Preserve the real command, actual exit status, unmodified output, target identity, and expected/actual result. Choose from that actual command: only Node's built-in test runner with compatible TAP uses the unchanged `gsd_run check tdd-red-evidence <record.json>` record and requires `RED_EVIDENCE_OK`; every other or unknown runner requires direct inspection. Package metadata, npm/pnpm, or TAP-shaped text alone never selects Node. After either branch, semantically confirm the named target executed and failed on the planned assertion for the intended reason. Zero tests, missing/skipped targets, setup/collection/import/syntax/fixture faults, unrelated failures, unexpected green, and incomplete or ambiguous evidence are INVALID_RED. STOP and fix the RED phase — do NOT proceed to GREEN, and do not fabricate a parser verdict or Node counters.
 3. **Missing RED commit:** If no `test(...)` commit precedes the `feat(...)` commit, the TDD discipline was violated. Flag in SUMMARY.md.
 4. **REFACTOR breaks tests:** Undo the refactor immediately. Commit was premature — refactor in smaller steps.
 
