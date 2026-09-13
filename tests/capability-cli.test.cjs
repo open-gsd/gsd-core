@@ -60,7 +60,7 @@ function makeCwdWithStrict(strictValue) {
  * (usable directly as an install <spec>). Declarative by default; pass `hooks`
  * (with materialized scripts) to make it an executable surface requiring consent.
  */
-function writeCapSource(id, { version = '1.0.0', hooks = [], engines, mcp, requires, config } = {}) {
+function writeCapSource(id, { version = '1.0.0', hooks = [], engines, mcp, requires, config, tier = 'standard' } = {}) {
   const src = tmpDir(`cap-cli-src-${id}-`);
   const cap = {
     id,
@@ -68,7 +68,7 @@ function writeCapSource(id, { version = '1.0.0', hooks = [], engines, mcp, requi
     version,
     title: id,
     description: 'test capability',
-    tier: 'standard',
+    tier,
     requires: requires ?? [],
     runtimeCompat: { supported: ['*'], unsupported: [] },
     skills: [],
@@ -1187,7 +1187,10 @@ describe('issue-2322: capability set --runtime materializes an installed third-p
 describe('#3929: install-time validation is seeded with first-party + installed overlays + candidate', () => {
   test('requires on a first-party capability resolves at install time', () => {
     const home = tmpDir('cap-cli-3929-fp-');
-    const src = writeCapSource('needs-fp', { requires: ['tdd'] });
+    // tier: 'full' — the issue's own repro manifest; tdd is a full-tier
+    // capability and the (now-live) tier-monotone check forbids standard
+    // requiring full, so the candidate must be full to require it at all.
+    const src = writeCapSource('needs-fp', { requires: ['tdd'], tier: 'full' });
     const r = runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, true, `install must succeed: tdd is first-party — got: ${r.error || r.output}`);
     const o = parse(r.output);
