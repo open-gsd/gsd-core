@@ -6636,7 +6636,6 @@ describe('#4055: merged-and-deleted phase branch must not be resurrected', () =>
 
   test('create arm requires the current branch to be the resolved base', () => {
     const tmpDir = createTempGitProject('gsd-4055-base-');
-    const base = gitOrThrow(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: tmpDir }).trim();
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'config.json'),
       JSON.stringify({
