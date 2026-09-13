@@ -150,6 +150,49 @@ If --files NOT provided:
 if [ -z "$FILES_OVERRIDE" ]; then
   SUMMARIES=$(ls "${PHASE_DIR}"/*-SUMMARY.md 2>/dev/null)
   REVIEW_FILES=()
+
+  # Keep the literal heredoc outside command substitution: Bash 3.2 (the
+  # system Bash on macOS) reparses heredoc bodies nested directly in $(...).
+  extract_summary_files() {
+    node - "$1" 2>/dev/null <<'NODE'
+    const fs = require('fs');
+    const content = fs.readFileSync(process.argv[2], 'utf-8');
+    const match = content.replace(/\r\n/g, '\n').match(/^---\n([\s\S]*?)\n---/);
+    if (!match) { process.exit(0); }
+    const yaml = match[1];
+    const files = [];
+    let inSection = null;
+    for (const line of yaml.split('\n')) {
+      if (/^\s+created:/.test(line)) { inSection = 'created'; continue; }
+      if (/^\s+modified:/.test(line)) { inSection = 'modified'; continue; }
+      if (/^\s*[\w-]+:/.test(line) && !/^\s*-/.test(line)) { inSection = null; continue; }
+      if (inSection && /^\s+-\s+(.+)/.test(line)) {
+        let raw = line.match(/^\s+-\s+(.+)/)[1].trim();
+        raw = raw.replace(/^['"]|['"]$/g, '');
+        raw = raw.replace(/\s+\([^)]*\)\s*$/, '');
+        raw = raw.split(/\s+—\s/)[0].trim();
+        // #2666: accept root-level paths (no `/`) and known extensionless build
+        // files, not only nested paths with a trailing extension. The pre-fix
+        // guard required BOTH a directory separator AND a trailing dot-extension,
+        // which silently dropped every repository-root file (Dockerfile,
+        // renovate.json, AGENTS.md, package.json, .gitlab-ci.yml, …) and every
+        // extensionless build file anywhere in the tree (**/Dockerfile, **/Makefile).
+        // Prose bullets are rejected by the known-filename / has-extension
+        // distinction, with the post-processing existence check (`[ -f ]`) as a
+        // backstop — a prose string is never a real file on disk.
+        const KNOWN_EXTENSIONLESS_BUILD_FILES = new Set([
+          'dockerfile', 'containerfile', 'makefile', 'justfile', 'procfile',
+        ]);
+        const hasExtension = /\.[A-Za-z0-9]+$/.test(raw);
+        const basename = raw.split('/').pop().toLowerCase();
+        if (hasExtension || KNOWN_EXTENSIONLESS_BUILD_FILES.has(basename)) {
+          files.push(raw);
+        }
+      }
+    }
+    if (files.length) console.log(files.join('\n'));
+NODE
+  }
   
   if [ -n "$SUMMARIES" ]; then
     # Rewrapped through unquoted command substitution (gsd-core#4109): a bare
@@ -166,44 +209,7 @@ if [ -z "$FILES_OVERRIDE" ]; then
 
       # Extract key_files.created and key_files.modified using node for reliable YAML parsing
       # This avoids fragile awk parsing that breaks on indentation differences
-      EXTRACTED=$(node -e "
-        const fs = require('fs');
-        const content = fs.readFileSync('$summary', 'utf-8');
-        const match = content.replace(/\r\n/g, '\n').match(/^---\n([\s\S]*?)\n---/);
-        if (!match) { process.exit(0); }
-        const yaml = match[1];
-        const files = [];
-        let inSection = null;
-        for (const line of yaml.split('\n')) {
-          if (/^\s+created:/.test(line)) { inSection = 'created'; continue; }
-          if (/^\s+modified:/.test(line)) { inSection = 'modified'; continue; }
-          if (/^\s*[\w-]+:/.test(line) && !/^\s*-/.test(line)) { inSection = null; continue; }
-          if (inSection && /^\s+-\s+(.+)/.test(line)) {
-            let raw = line.match(/^\s+-\s+(.+)/)[1].trim();
-            raw = raw.replace(/^['"]|['"]$/g, '');
-            raw = raw.replace(/\s+\([^)]*\)\s*$/, '');
-            raw = raw.split(/\s+—\s/)[0].trim();
-            // #2666: accept root-level paths (no `/`) and known extensionless build
-            // files, not only nested paths with a trailing extension. The pre-fix
-            // guard required BOTH a directory separator AND a trailing dot-extension,
-            // which silently dropped every repository-root file (Dockerfile,
-            // renovate.json, AGENTS.md, package.json, .gitlab-ci.yml, …) and every
-            // extensionless build file anywhere in the tree (**/Dockerfile, **/Makefile).
-            // Prose bullets are rejected by the known-filename / has-extension
-            // distinction, with the post-processing existence check (`[ -f ]`) as a
-            // backstop — a prose string is never a real file on disk.
-            const KNOWN_EXTENSIONLESS_BUILD_FILES = new Set([
-              'dockerfile', 'containerfile', 'makefile', 'justfile', 'procfile',
-            ]);
-            const hasExtension = /\.[A-Za-z0-9]+$/.test(raw);
-            const basename = raw.split('/').pop().toLowerCase();
-            if (hasExtension || KNOWN_EXTENSIONLESS_BUILD_FILES.has(basename)) {
-              files.push(raw);
-            }
-          }
-        }
-        if (files.length) console.log(files.join('\n'));
-      " 2>/dev/null)
+      EXTRACTED=$(extract_summary_files "$summary")
       
       # Add extracted files to REVIEW_FILES array
       if [ -n "$EXTRACTED" ]; then

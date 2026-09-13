@@ -132,6 +132,74 @@ function parseFrontmatterCritical(frontmatter) {
 // file list, and must strip em-dash descriptions and parentheticals.
 // ---------------------------------------------------------------------------
 describe('Bug 1 — compute_file_scope SUMMARY parser', () => {
+  test('#4461: the shipped compute_file_scope bash fence parses verbatim', () => {
+    const src = readFileNormalized(WORKFLOW_PATH);
+    const stepStart = src.indexOf('<step name="compute_file_scope">');
+    assert.notStrictEqual(stepStart, -1, 'compute_file_scope step must exist');
+    const marker = src.indexOf('EXTRACTED=$(', stepStart);
+    assert.notStrictEqual(marker, -1, 'Tier-2 SUMMARY extractor must exist');
+    const fenceStart = src.lastIndexOf('```bash\n', marker);
+    const fenceEnd = src.indexOf('\n```', marker);
+    assert.ok(fenceStart !== -1 && fenceEnd !== -1, 'Tier-2 SUMMARY bash fence must be complete');
+    const script = src.slice(fenceStart + '```bash\n'.length, fenceEnd);
+
+    const result = runHook('-n', ['-c', script], {
+      interpreter: 'bash',
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assert.equal(result.exitCode, 0, `bash rejected the shipped fence:\n${result.stderr}`);
+  });
+
+  test('#4461: the shipped heredoc treats adversarial SUMMARY text and paths as inert data', () => {
+    const src = readFileNormalized(WORKFLOW_PATH);
+    const helperStart = src.indexOf('  extract_summary_files() {');
+    const helperEnd = src.indexOf('\n  \n  if [ -n "$SUMMARIES" ]; then', helperStart);
+    assert.ok(helperStart !== -1 && helperEnd !== -1, 'extract_summary_files helper must be extractable');
+    const helper = src.slice(helperStart, helperEnd);
+
+    const dir = createTempDir('gsd-4461-adversarial-');
+    try {
+      const sentinel = path.join(dir, 'MUST-NOT-EXIST');
+      // Double quotes are not legal in Windows filenames. Keep the path
+      // adversarial with shell syntax, whitespace, and a quote that is valid
+      // on every supported filesystem; the SUMMARY payload below exercises
+      // a literal double quote independently.
+      const summary = path.join(dir, "SUMMARY $(not-a-command) 'quoted'.md");
+      // Git Bash launches the native Windows Node binary in CI. Forward-slash
+      // absolute paths survive that argv boundary on both platforms, while a
+      // raw drive path's backslashes are MSYS quoting syntax rather than data.
+      const shellSentinel = sentinel.replace(/\\/g, '/');
+      const shellSummary = summary.replace(/\\/g, '/');
+      const dollarPath = `src/$(touch ${shellSentinel}).js`;
+      const backtickPath = `src/\`touch ${shellSentinel}\`.js`;
+      const quotePath = 'src/"quoted".js';
+      fs.writeFileSync(summary, [
+        '---',
+        'key-files:',
+        '  created:',
+        `    - ${dollarPath}`,
+        '  modified:',
+        `    - ${backtickPath}`,
+        `    - ${quotePath}`,
+        '---',
+        '',
+      ].join('\n'));
+
+      const script = ['set -eu', helper, 'extract_summary_files "$SUMMARY_PATH"'].join('\n');
+      const result = toLegacyResult(runHook('-c', [script, 'bash'], {
+        interpreter: 'bash',
+        env: { ...process.env, SUMMARY_PATH: shellSummary },
+        timeoutMs: PROBE_TIMEOUT_MS,
+      }));
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepStrictEqual(result.stdout.trim().split('\n'), [dollarPath, backtickPath, quotePath]);
+      assert.ok(!fs.existsSync(sentinel), 'SUMMARY payload must never execute command substitutions');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('extracts only key-files.created and key-files.modified entries', () => {
     const yaml = [
       'key-files:',
