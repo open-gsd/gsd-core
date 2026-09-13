@@ -23,7 +23,7 @@ const path = require('path');
 const os = require('os');
 const { spawnSync } = require('child_process');
 
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, createTempDir, cleanup, installSpawnEnv, writeAmbientCapabilityGate } = require('./helpers.cjs');
 const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const GSD_TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
@@ -77,7 +77,7 @@ function spawnRenderHooks(point, cwd) {
     cwd,
     encoding: 'utf8',
     timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
-    env: { ...process.env, GSD_SESSION_KEY: '', CODEX_THREAD_ID: '', CLAUDE_SESSION_ID: '' },
+    env: installSpawnEnv({ GSD_SESSION_KEY: '', CODEX_THREAD_ID: '', CLAUDE_SESSION_ID: '' }),
   });
   return {
     status: result.status,
@@ -135,6 +135,27 @@ describe('render-hooks plan:post — gate discovery', () => {
     assert.ok(typeof envelope.rendered === 'string', 'rendered must be string');
     assert.ok(envelope.rendered.includes('gap-analysis'), 'rendered must mention gap-analysis');
     assert.ok(envelope.rendered.includes('gap-analysis.plan-post'), 'rendered must include check query');
+  });
+
+  test('#4485: render-hooks ignores capabilities installed in ambient user locations', (t) => {
+    const ambientHome = createTempDir('gsd-ambient-plan-post-');
+    writeAmbientCapabilityGate(ambientHome, 'ambient-plan-post', 'plan:post');
+    const previous = { home: process.env.HOME, userprofile: process.env.USERPROFILE, gsdHome: process.env.GSD_HOME };
+    process.env.HOME = ambientHome;
+    process.env.USERPROFILE = ambientHome;
+    process.env.GSD_HOME = ambientHome;
+    t.after(() => {
+      for (const [key, value] of [['HOME', previous.home], ['USERPROFILE', previous.userprofile], ['GSD_HOME', previous.gsdHome]]) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      cleanup(ambientHome);
+    });
+
+    const result = spawnRenderHooks('plan:post', tmpDir);
+    assert.strictEqual(result.status, 0, `exit non-zero: ${result.stderr}`);
+    const activeIds = JSON.parse(result.stdout).activeHooks.map((hook) => hook.capId);
+    assert.deepStrictEqual(activeIds, ['gap-analysis']);
   });
 
   test('[negative] render-hooks plan:post returns empty activeHooks when workflow.post_planning_gaps=false (gate deactivated)', () => {

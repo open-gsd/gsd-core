@@ -1251,7 +1251,30 @@ function writePackageSourceMarkerFixture(configDir) {
   return configDir;
 }
 
-module.exports = { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, tmpRootCandidates, readFileNormalized, readWorkflowCombined, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, SESSION_ENV_KEYS, saveSessionEnv, restoreSessionEnv, clearSessionEnv, isolateWorkstreamEnv, restoreWorkstreamEnv, TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS, scrubConfigLocationEnv, installSpawnEnv, installSpawnHome, sandboxHome, writePackageSourceMarkerFixture, TEST_HOME_SANDBOX_MARKER, mockPartialWriteThenThrow, captureFdSync, suppressFdAsync };
+/** Write one valid third-party gate into a synthetic user capability home. */
+function writeAmbientCapabilityGate(home, id, point) {
+  const capDir = path.join(home, '.gsd', 'capabilities', id);
+  fs.mkdirSync(capDir, { recursive: true });
+  fs.writeFileSync(path.join(capDir, 'capability.json'), JSON.stringify({
+    id,
+    title: 'Ambient test capability',
+    version: '1.0.0',
+    role: 'feature',
+    tier: 'full',
+    description: 'Capability outside the test fixture that must remain invisible.',
+    engines: { gsd: '>=1.7.0' },
+    requires: [],
+    runtimeCompat: { supported: ['claude'], unsupported: [] },
+    skills: [],
+    agents: [],
+    config: {},
+    steps: [],
+    contributions: [],
+    gates: [{ point, check: { query: 'ambient.check' }, blocking: false, onError: 'skip' }],
+  }), 'utf8');
+}
+
+module.exports = { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, tmpRootCandidates, readFileNormalized, readWorkflowCombined, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, SESSION_ENV_KEYS, saveSessionEnv, restoreSessionEnv, clearSessionEnv, isolateWorkstreamEnv, restoreWorkstreamEnv, TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS, scrubConfigLocationEnv, installSpawnEnv, installSpawnHome, sandboxHome, writePackageSourceMarkerFixture, writeAmbientCapabilityGate, TEST_HOME_SANDBOX_MARKER, mockPartialWriteThenThrow, captureFdSync, suppressFdAsync };
 
 // Lazy, for the reason builtLib() is lazy: reading either of these is what
 // forces the built-lib require, so a test file that needs neither can still

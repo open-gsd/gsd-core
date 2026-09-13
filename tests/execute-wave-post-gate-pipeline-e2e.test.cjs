@@ -29,7 +29,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, createTempDir, installSpawnEnv, writeAmbientCapabilityGate } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -61,14 +61,13 @@ function gitAddCommit(dir, message) {
  * When raw=true the tool emits JSON; parsed is set on success.
  */
 function runTool(args, { cwd, env = {} } = {}) {
-  const childEnv = {
-    ...process.env,
+  const childEnv = installSpawnEnv({
     GSD_SESSION_KEY: '',
     CODEX_THREAD_ID: '',
     CLAUDE_SESSION_ID: '',
     CLAUDE_CODE_SSE_PORT: '',
     ...env,
-  };
+  });
   const r = spawnSync(process.execPath, [GSD_TOOLS, ...args], {
     cwd: cwd || os.tmpdir(),
     encoding: 'utf8',
@@ -96,6 +95,28 @@ after(() => { for (const d of tmpDirs) { try { cleanup(d); } catch { /* best-eff
 // ─── Section A: loop render-hooks execute:wave:post ──────────────────────────
 
 describe('A. loop render-hooks execute:wave:post — resolution', () => {
+
+  test('#4485: render-hooks ignores capabilities installed in ambient user locations', (t) => {
+    const ambientHome = createTempDir('gsd-ambient-wave-post-');
+    writeAmbientCapabilityGate(ambientHome, 'ambient-wave-post', 'execute:wave:post');
+    const previous = { home: process.env.HOME, userprofile: process.env.USERPROFILE, gsdHome: process.env.GSD_HOME };
+    process.env.HOME = ambientHome;
+    process.env.USERPROFILE = ambientHome;
+    process.env.GSD_HOME = ambientHome;
+    t.after(() => {
+      for (const [key, value] of [['HOME', previous.home], ['USERPROFILE', previous.userprofile], ['GSD_HOME', previous.gsdHome]]) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      cleanup(ambientHome);
+    });
+
+    const dir = makeTmpDir();
+    const result = runTool(['loop', 'render-hooks', 'execute:wave:post', '--raw'], { cwd: dir });
+    assert.strictEqual(result.status, 0, result.stderr);
+    const activeIds = result.parsed.activeHooks.map((hook) => hook.capId);
+    assert.deepStrictEqual(activeIds, ['drift', 'drift', 'ui']);
+  });
 
   test('[happy] full resolution: all 3 gates present with default config', () => {
     const dir = makeTmpDir();
