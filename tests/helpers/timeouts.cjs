@@ -300,6 +300,25 @@ const PATHOLOGICAL_INPUT_TEST_TIMEOUT_MS = 60000;
  */
 const GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS = 30000;
 
+/**
+ * NOT a subprocess spawn timeout. Fixture DATA -- the default, plausible-
+ * looking `invoke.timeoutMs` value for a well-formed task-content-resolver
+ * manifest, used as the base fixture across most "valid resolver" tests on
+ * the RESOLUTION side of that system (tests/task-content-resolution.cjs and
+ * its grammar-parity sibling). Coincides in value and role with epic #4445
+ * batch 10's file-local `TASK_RESOLVER_FIXTURE_TIMEOUT_MS` in
+ * tests/capability-validator-task-content-resolver.test.cjs (the VALIDATION
+ * side of the same resolver system, a different file, not exported) --
+ * disclosed, not merged; both independently describe the same manifest
+ * field's plausible default, unsurprising for two suites covering the same
+ * resolver.
+ *
+ * Shared across 2 files in batch #4524 of the ad hoc timeout literal
+ * migration, epic #4445 -- every site independently arrived at this exact
+ * value -- that is why it lives here rather than as a file-local constant.
+ */
+const TASK_RESOLVER_INVOKE_TIMEOUT_MS = 10000;
+
 module.exports = {
   PROBE_TIMEOUT_MS,
   HOOK_FANOUT_TIMEOUT_MS,
@@ -318,4 +337,5 @@ module.exports = {
   REAL_REPO_GIT_TIMEOUT_MS,
   PATHOLOGICAL_INPUT_TEST_TIMEOUT_MS,
   GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS,
+  TASK_RESOLVER_INVOKE_TIMEOUT_MS,
 };

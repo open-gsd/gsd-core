@@ -18,8 +18,5 @@
   "tests/reviewer-trust-disclosure.test.cjs",
   "tests/run-tests-temp-root.test.cjs",
   "tests/shell-command-projection-dispatch.test.cjs",
-  "tests/task-command-router-resolve-content.test.cjs",
-  "tests/task-content-resolution.test.cjs",
-  "tests/task-content-resolver-grammar-parity.test.cjs",
   "tests/teams-status.test.cjs"
 ]

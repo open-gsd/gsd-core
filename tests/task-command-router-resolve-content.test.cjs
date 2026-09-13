@@ -27,6 +27,13 @@ const {
   ResolverFailedError,
 } = require('../gsd-core/bin/lib/task-content-resolution.cjs');
 
+/**
+ * NOT a subprocess spawn timeout. Fixture DATA inside a fakeCapabilities
+ * manifest consumed by a fully-injected resolveTaskContentFn -- neither
+ * test using this constant ever reaches a real child process.
+ */
+const FAKE_RESOLVER_INVOKE_TIMEOUT_MS = 5000;
+
 function writePlan(dir, taskXml) {
   const planPath = path.join(dir, '01-PLAN.md');
   fs.writeFileSync(planPath, `# Plan\n\n${taskXml}\n`, 'utf8');
@@ -123,7 +130,7 @@ describe('task resolve-content (rows 17-19)', () => {
         id: 'fake-tracker',
         taskContentResolver: {
           trackerPrefix: 'test',
-          invoke: { binary: 'fake-cli', args: ['show', '{{id}}'], timeoutMs: 5000 },
+          invoke: { binary: 'fake-cli', args: ['show', '{{id}}'], timeoutMs: FAKE_RESOLVER_INVOKE_TIMEOUT_MS },
         },
       },
     ];
@@ -176,7 +183,7 @@ describe('task resolve-content (rows 17-19)', () => {
         id: 'fake-tracker',
         taskContentResolver: {
           trackerPrefix: 'test',
-          invoke: { binary: 'fake-cli', args: ['show', '{{id}}'], timeoutMs: 5000 },
+          invoke: { binary: 'fake-cli', args: ['show', '{{id}}'], timeoutMs: FAKE_RESOLVER_INVOKE_TIMEOUT_MS },
         },
       },
     ];
