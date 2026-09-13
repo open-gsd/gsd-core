@@ -550,7 +550,13 @@ export function crossValidationSeed(
       }
       // Same per-overlay pre-filters load applies before the cross suite:
       // structural validity, then engines.gsd against the running host.
-      if (validator.validateCapability(cap, id).length > 0) continue;
+      // validateCapability itself is not total over malformed array entries
+      // (#1461 finding 1) — a throw skips the overlay, as load skips it.
+      try {
+        if (validator.validateCapability(cap, id).length > 0) continue;
+      } catch {
+        continue;
+      }
       const engines = (cap as Record<string, unknown>)['engines'];
       if (engines && typeof engines === 'object' && !Array.isArray(engines)) {
         const range = (engines as Record<string, unknown>)['gsd'];
@@ -567,7 +573,12 @@ export function crossValidationSeed(
         ];
       } catch {
         // The cross validators are not total over arbitrary shapes (#1461
-        // finding 1); a throwing overlay is skipped, as load skips it.
+        // finding 1 — e.g. the duplicate-producer invariant throws). A
+        // throwing overlay must be REMOVED here, exactly as load's
+        // acceptedMap.delete(id) does — retaining it would leave poisoning
+        // content in the seed and attribute pre-existing junk to the
+        // candidate.
+        capMap.delete(id);
       }
       if (errs.length > 0) capMap.delete(id);
     }

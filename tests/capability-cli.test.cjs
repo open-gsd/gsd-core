@@ -1251,3 +1251,72 @@ describe('#3929: install-time validation is seeded with first-party + installed 
     assert.match(`${r.error}\n${r.output}`, /central config-schema/);
   });
 });
+
+describe('#3929: a throwing (duplicate-producer) overlay is skipped, never attributed to the candidate', () => {
+  // Hand-plant a committed overlay (manifest + structurally-valid ledger
+  // entry) WITHOUT the CLI — needed because post-fix installs refuse a
+  // duplicate-producer candidate up front, so the poisoned pair can only
+  // exist from pre-fix history (the exact scenario the seed must survive).
+  function plantOverlay(home, id, cap) {
+    const dir = capDir(home, id);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'capability.json'), JSON.stringify(cap, null, 2));
+    const lp = ledgerPath(home);
+    let ledger;
+    try {
+      ledger = JSON.parse(fs.readFileSync(lp, 'utf8'));
+    } catch {
+      ledger = { schema_version: 1, updatedAt: new Date().toISOString(), entries: {} };
+    }
+    ledger.entries = ledger.entries || {};
+    ledger.entries[id] = {
+      id,
+      version: cap.version || '1.0.0',
+      source: 'test-plant',
+      integrity: '',
+      files: ['capability.json'],
+      sharedEdits: [],
+    };
+    fs.writeFileSync(lp, JSON.stringify(ledger, null, 2));
+  }
+
+  test('pre-existing duplicate-producer overlays do not fail a later install', () => {
+    const home = tmpDir('cap-cli-3929-poison-');
+    const cwd = makeCwd();
+
+    // poison-a must be seeded (and accepted) BEFORE poison-b trips the
+    // duplicate-producer throw during the seed's own suite run.
+    const srcA = writeCapSource('poison-a');
+    const first = runGsdTools(['capability', 'install', srcA, '--scope', 'global', '--raw'], cwd, scopeEnv(home));
+    assert.equal(first.success, true, `seed install failed: ${first.error || first.output}`);
+
+    const poisonedStep = {
+      point: 'plan:pre',
+      ref: { skill: 'poison-skill' },
+      produces: ['SHARED-ARTIFACT.md'],
+      consumes: [],
+    };
+    plantOverlay(home, 'poison-b', {
+      id: 'poison-b', role: 'feature', version: '1.0.0', title: 'poison-b',
+      description: 'duplicate producer of SHARED-ARTIFACT.md', tier: 'standard',
+      requires: [], skills: ['poison-skill'], agents: [], config: {},
+      steps: [poisonedStep], contributions: [], gates: [],
+    });
+    // poison-a is re-planted with the SAME producer so the pair trips
+    // validateConsumesGlobal's duplicate-producer throw when both are seeded.
+    plantOverlay(home, 'poison-a', {
+      id: 'poison-a', role: 'feature', version: '1.0.0', title: 'poison-a',
+      description: 'duplicate producer of SHARED-ARTIFACT.md', tier: 'standard',
+      requires: [], skills: ['poison-skill'], agents: [], config: {},
+      steps: [poisonedStep], contributions: [], gates: [],
+    });
+
+    // The candidate only installs if the throwing overlay was DROPPED from
+    // the seed — if it were retained, the whole-map suite would throw during
+    // the candidate's own validation and this install would fail.
+    const srcC = writeCapSource('poison-c', { requires: ['poison-a'] });
+    const r = runGsdTools(['capability', 'install', srcC, '--scope', 'global', '--raw'], cwd, scopeEnv(home));
+    assert.equal(r.success, true, `install must succeed despite the poisoned overlay: ${r.error || r.output}`);
+    assert.ok(readLedgerEntry(home, 'poison-c'), 'candidate ledger entry recorded');
+  });
+});
