@@ -11,7 +11,7 @@ import path from 'node:path';
 import { normalizeEol } from './text-lines.cjs';
 import { execGit, platformWriteSync, platformReadSync, platformEnsureDir, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
 import { escapeRegex } from './pattern.cjs';
-import { requireSafePath, sanitizeForDisplay, tryWithinRoot, PathAcceptance } from './security.cjs';
+import { requireSafePath, sanitizeForDisplay, tryWithinRoot, assertWithinRoot, PathAcceptance } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output, ERROR_REASON } = ioMod;
@@ -657,13 +657,11 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
       // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/unbound-method
       const { getGlobalConfigDir } = require('./runtime-homes.cjs') as { getGlobalConfigDir(runtime: string, explicitDir?: string | null): string };
       const agentsDirEff = path.join(getGlobalConfigDir(runtime), 'agents');
-      const agentPath = path.join(agentsDirEff, `${agentType}.md`);
       // agentType is an unvalidated CLI positional: keep the read inside the
       // agents dir so `../../x` cannot point it elsewhere (defense in depth —
-      // the reflected surface is only a frontmatter effort line).
-      if (!path.resolve(agentPath).startsWith(path.resolve(agentsDirEff) + path.sep)) {
-        throw new Error('agent path escapes the agents directory');
-      }
+      // the reflected surface is only a frontmatter effort line). Untrusted
+      // input feeding a real read → realpath family (ADR-4650 decision 6).
+      const agentPath = assertWithinRoot(`${agentType}.md`, agentsDirEff, 'agent file');
       const agentContent = fs.readFileSync(agentPath, 'utf8');
       // eslint-disable-next-line local/no-unbounded-quantifier -- same lazy `*?` bounded by the `^---$/m` closing anchor as the sibling frontmatter regexes in this file
       const fmMatchEff = /^---\r?\n([\s\S]*?)^---\r?$/m.exec(agentContent);
@@ -2707,7 +2705,7 @@ function groupFilesBySubrepo(files: string[], subRepos: string[]): GroupFilesByS
     let matchLen = -1;
     if (candidates) {
       for (const repo of candidates) {
-        if (file.startsWith(repo + '/')) {
+        if (file.startsWith(repo + '/')) { // allow-handrolled-containment: sub-repo file grouping, not a safety decision
           const repoLen = String(repo).length;
           if (repoLen > matchLen) {
             match = repo;

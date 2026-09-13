@@ -162,7 +162,7 @@ function readRegexLiteralAt(line, start) {
 // root + separator — a plain `startsWith(root)` would also accept a sibling
 // directory whose name merely starts with the root's name (`/repo-evil`).
 function isInsideRoot(realPath, realRoot) {
-  return realPath === realRoot || realPath.startsWith(realRoot + path.sep);
+  return realPath === realRoot || realPath.startsWith(realRoot + path.sep); // allow-handrolled-containment: lint:ci guard; runs before build:lib, compiled security.cjs may not exist
 }
 
 // True when `realPath` (already confirmed inside `realRoot` by `isInsideRoot`)

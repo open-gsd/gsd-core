@@ -438,8 +438,9 @@ function dispatchCapabilityCommand({ command, args, cwd, raw, error, registry, r
     // Step 2: confinement check — belt-and-suspenders even after the basename
     // validation above. Resolved path must be inside libDir (not equal to it,
     // and must start with libDir + sep so "libDir-suffix" can't sneak through).
-    const resolved = path.resolve(libDir, m);
-    if (resolved === libDir || !resolved.startsWith(libDir + path.sep)) {
+    const { tryWithinRootLexical } = require('./lib/security.cjs');
+    const resolved = tryWithinRootLexical(m, libDir);
+    if (resolved === null) {
       throw new Error('capability module path escapes bin/lib/: ' + JSON.stringify(m));
     }
     // Step 3: require the resolved absolute path — the SAME representation that
@@ -515,18 +516,15 @@ function defaultRequireFromInstallRoot(installRoot, m) {
   if (typeof m !== 'string' || !/^[A-Za-z0-9._-]+\.cjs$/.test(m)) {
     throw new Error('capability module must be a bare .cjs basename: ' + JSON.stringify(m));
   }
-  // Realpath the root so a symlinked ancestor can't widen confinement.
-  const realRoot = fs.realpathSync(installRoot);
-  const resolved = path.resolve(realRoot, m);
-  if (resolved === realRoot || !resolved.startsWith(realRoot + path.sep)) {
+  // Realpath the root and the resolved module (both symlinked-ancestor and
+  // symlinked-file escapes) in one call — tryWithinRoot resolves the base,
+  // then the candidate, then realpaths the result and re-checks containment.
+  const { tryWithinRoot, PathAcceptance } = require('./lib/security.cjs');
+  const resolved = tryWithinRoot(m, installRoot, PathAcceptance.RelativeOnly);
+  if (resolved === null) {
     throw new Error('capability module path escapes its install root: ' + JSON.stringify(m));
   }
-  // The module file itself must not be a symlink pointing outside the root.
-  const realResolved = fs.realpathSync(resolved);
-  if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path.sep)) {
-    throw new Error('capability module resolves outside its install root (symlink): ' + JSON.stringify(m));
-  }
-  return require(realResolved);
+  return require(resolved);
 }
 
 /**

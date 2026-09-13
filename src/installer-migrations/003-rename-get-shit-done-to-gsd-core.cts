@@ -25,6 +25,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { tryWithinRootLexical } from '../security.cjs';
 
 interface ClassifiedArtifact {
   classification: string;
@@ -62,7 +63,10 @@ function walkLegacyFiles(root: string, relDir: string, baseResolved: string, res
     const relPath = path.posix.join(relDir, entry.name);
     // Bounds check: ensure the resolved path stays under configDir.
     const resolved = path.resolve(root, relPath);
-    if (resolved !== baseResolved && !resolved.startsWith(baseResolved + path.sep)) continue;
+    // Containment decision is the canonical lexical predicate (ADR-4650
+    // decision 6); lexical because this walk deliberately does not resolve
+    // symlinks — it skips them explicitly above.
+    if (tryWithinRootLexical(resolved, baseResolved) === null) continue;
     if (entry.isDirectory()) {
       walkLegacyFiles(root, relPath, baseResolved, results);
     } else if (entry.isFile()) {
@@ -100,7 +104,7 @@ const migration: InstallerMigration = {
     for (const relPath of relPaths) {
       // Bounds-check each relPath before emitting any action.
       const resolved = path.resolve(ctx.configDir, relPath);
-      if (resolved !== baseResolved && !resolved.startsWith(baseResolved + path.sep)) continue;
+      if (tryWithinRootLexical(resolved, baseResolved) === null) continue;
       const { classification } = ctx.classifyArtifact(relPath);
       if (classification === 'managed-pristine') {
         actions.push({

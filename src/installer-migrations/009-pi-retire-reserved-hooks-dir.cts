@@ -73,6 +73,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { tryWithinRootLexical } from '../security.cjs';
 
 interface ClassifiedArtifact {
   classification: string;
@@ -145,7 +146,10 @@ function walkPiHooksTree(root: string, relDir: string, baseResolved: string, fil
     if (entry.isSymbolicLink()) continue;
     const relPath = path.posix.join(relDir, entry.name);
     const resolved = path.resolve(root, relPath);
-    if (resolved !== baseResolved && !resolved.startsWith(baseResolved + path.sep)) continue;
+    // Containment decision is the canonical lexical predicate (ADR-4650
+    // decision 6); lexical because this walk deliberately does not resolve
+    // symlinks — it skips them explicitly above.
+    if (tryWithinRootLexical(resolved, baseResolved) === null) continue;
     if (entry.isDirectory()) {
       dirs.push(relPath);
       walkPiHooksTree(root, relPath, baseResolved, files, dirs);

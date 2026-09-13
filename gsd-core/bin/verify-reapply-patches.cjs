@@ -406,7 +406,7 @@ function resolveSkillsRedirect(configDir) {
     if (!kind) return null;
     const root = path.resolve(path.join(kind.home || configDir, kind.destSubpath));
     const resolvedConfig = path.resolve(configDir);
-    if (root === resolvedConfig || root.startsWith(resolvedConfig + path.sep)) return null;
+    if (root === resolvedConfig || root.startsWith(resolvedConfig + path.sep)) return null; // allow-handrolled-containment: answers whether the skills root is a separate location, not a containment/admission decision
     // Same descriptor-driven manifest prefix writeManifest uses for skills
     // keys (hermes nests under 'skills/gsd/', everyone else 'skills/'), read
     // from the same shipped registry the installer's _resolveHostBehaviors

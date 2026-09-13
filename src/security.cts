@@ -35,14 +35,22 @@ import path from 'node:path';
  *
  * `pathImpl` lets a caller supply `path.win32` / `path.posix` instead of the
  * ambient module, so win32 separator semantics are testable off Windows.
+ *
+ * Exported for callers that have ALREADY resolved both operands themselves
+ * and need only this comparison step (e.g. a caller that owns its own
+ * `fs.realpathSync` calls to preserve an exists-vs-escaped tri-state). A
+ * caller that has NOT resolved its operands must NOT reach for this function
+ * directly — the comparison alone is not a containment check — and should use
+ * `assertWithinRoot` / `tryWithinRoot` (or the `assertWithinRootLexical` /
+ * `tryWithinRootLexical` pair) instead.
  */
-function isContainedIn(
+export function isContainedIn(
   resolvedTarget: string,
   resolvedRoot: string,
   pathImpl: { sep: string } = path,
 ): boolean {
   if (resolvedTarget === resolvedRoot) return true;
-  return (resolvedTarget + pathImpl.sep).startsWith(resolvedRoot + pathImpl.sep);
+  return (resolvedTarget + pathImpl.sep).startsWith(resolvedRoot + pathImpl.sep); // allow-handrolled-containment: this IS the canonical comparison every other site routes through
 }
 
 /**

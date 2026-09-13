@@ -33,6 +33,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { retryRenameSync } from './shell-command-projection.cjs';
+import { tryWithinRootLexical } from './security.cjs';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
@@ -240,8 +241,11 @@ function resolvePhaseDirForArg(cwd: string, phaseArg: string): ResolvedPhase | n
  */
 function resolveConfinedPath(cwd: string, relFile: string): string | null {
   const root = path.resolve(cwd);
-  const resolved = path.resolve(root, relFile);
-  if (resolved !== root && !resolved.startsWith(root + path.sep)) return null;
+  // ADR-4650 decision 6: lexical family — resolving the symlink here would
+  // undo the refuse-don't-resolve posture documented above; `lstatSync` below
+  // is the gate that actually refuses a symlink.
+  const resolved = tryWithinRootLexical(relFile, root);
+  if (resolved === null) return null;
   try {
     if (!fs.lstatSync(resolved).isFile()) return null;
   } catch {

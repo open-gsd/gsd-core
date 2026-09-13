@@ -40,8 +40,10 @@ import noSwallowedPrecondition from './eslint-rules/no-swallowed-precondition.cj
 import noExactCaseEnvAccess from './eslint-rules/no-exact-case-env-access.cjs';
 import noAdhocTimeoutLiteral from './eslint-rules/no-adhoc-timeout-literal.cjs';
 import noRenderedTextLengthAssert from './eslint-rules/no-rendered-text-length-assert.cjs';
+import noUnconfinedPathJoin from './eslint-rules/no-unconfined-path-join.cjs';
 
 const adhocTimeoutLiteralAllowlist = require('./eslint-rules/no-adhoc-timeout-literal.allowlist.json');
+const unconfinedPathJoinAllowlist = require('./eslint-rules/no-unconfined-path-join.allowlist.json');
 
 const localPlugin = {
   rules: {
@@ -74,6 +76,7 @@ const localPlugin = {
     'no-exact-case-env-access': noExactCaseEnvAccess,
     'no-adhoc-timeout-literal': noAdhocTimeoutLiteral,
     'no-rendered-text-length-assert': noRenderedTextLengthAssert,
+    'no-unconfined-path-join': noUnconfinedPathJoin,
   },
 };
 
@@ -660,6 +663,36 @@ export default tseslint.config(
       'local/require-registered-exit': 'error',
       // #3624: see the src/**/*.cts block above for detail.
       'local/no-exact-case-env-access': 'error',
+    },
+  },
+
+  // ── first-party source — no-unconfined-path-join (#4636) ──────────────────
+  // No single existing block covers this exact shape (src/**/*.cts + src/**/*.ts
+  // + scripts/**/*.cjs + gsd-core/bin/**/*.cjs + hooks/**/*.js), so this is a
+  // NEW block rather than a reuse. tests/** is deliberately excluded — a test
+  // may legitimately construct a hand-rolled containment shape as a fixture.
+  {
+    files: ['src/**/*.cts', 'src/**/*.ts', 'scripts/**/*.cjs', 'gsd-core/bin/**/*.cjs', 'hooks/**/*.js'],
+    plugins: {
+      local: localPlugin,
+    },
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: {
+        ...globals.node,
+      },
+    },
+    rules: {
+      // #4636: bans a hand-rolled containment comparison (`x.startsWith(y + sep)`,
+      // a plain string-prefix test with no symlink resolution or `..` normalization)
+      // and a discarded containment answer (a bare-statement call to one of the
+      // src/security.cts containment predicates whose return value is thrown away —
+      // "validate one path, use another" recurred five times across this epic). A
+      // justified holdout on the first arm can suppress a single occurrence with a
+      // trailing same-line `// allow-lexical-prefix-match: <reason>` comment. Like
+      // `no-unbounded-spawn`, the allowlist is seeded empty and stays empty — this
+      // epic migrated every call site, so the rule runs with no exemption surface.
+      'local/no-unconfined-path-join': ['error', { allowlist: unconfinedPathJoinAllowlist }],
     },
   },
 

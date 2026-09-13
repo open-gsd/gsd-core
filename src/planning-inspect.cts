@@ -94,7 +94,7 @@ import coreUtilsMod = require('./core-utils.cjs');
 const { normalizeLineEndings } = coreUtilsMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import securityMod = require('./security.cjs');
-const { tryWithinRoot, PathAcceptance } = securityMod;
+const { tryWithinRoot, PathAcceptance, isContainedIn } = securityMod;
 
 /**
  * The wire schema version. A consumer MUST reject any value other than this
@@ -217,15 +217,14 @@ function toPosix(value: string): string {
  * (and its own not-found/broken-symlink handling).
  *
  * NOT an independent containment implementation — it is the comparison step
- * of one. `readDocument` below realpaths target and root itself (to keep its
- * own exists-vs-escaped tri-state) and calls this directly; `isPathContained`
- * gets its containment DECISION from the canonical `tryWithinRoot` predicate
- * instead (ADR-4650 decision 6) and no longer uses this function. Every
+ * of one, and that comparison now comes from `security.cts`'s exported
+ * `isContainedIn` rather than being redeclared here. `readDocument` below
+ * realpaths target and root itself (to keep its own exists-vs-escaped
+ * tri-state) and calls `isContainedIn` directly; `isPathContained` gets its
+ * containment DECISION from the canonical `tryWithinRoot` predicate instead
+ * (ADR-4650 decision 6) and never called this comparison directly. Every
  * caller owns its own resolution.
  */
-function isWithinRoot(resolvedTarget: string, resolvedRoot: string): boolean {
-  return resolvedTarget === resolvedRoot || resolvedTarget.startsWith(resolvedRoot + path.sep);
-}
 
 /**
  * Containment check for a path (file OR directory), used where the caller
@@ -234,7 +233,7 @@ function isWithinRoot(resolvedTarget: string, resolvedRoot: string): boolean {
  * call site that uses this (an escaped or unresolvable phase directory is
  * treated identically to an unreadable one). `readDocument` below needs
  * that distinction for its own exists/readable tri-state, so it keeps its
- * own inline `realpathSync` calls and calls `isWithinRoot` directly instead
+ * own inline `realpathSync` calls and calls `isContainedIn` directly instead
  * of this wrapper.
  *
  * The containment DECISION comes from the canonical `tryWithinRoot`
@@ -277,7 +276,7 @@ function readDocument(filePath: string, root: string): { text: string | null; ex
     // here — the same non-answer `readDocument` already gives "not exists".
     return { text: null, exists: false, readable: false };
   }
-  if (!isWithinRoot(realTarget, realRoot)) {
+  if (!isContainedIn(realTarget, realRoot)) {
     return { text: null, exists: true, readable: false };
   }
 

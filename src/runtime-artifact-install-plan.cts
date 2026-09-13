@@ -11,6 +11,7 @@
 // In .cts (CommonJS output) files, `require` is available as a global.
 const _require: NodeRequire = require;
 const path = _require('node:path') as typeof import('node:path');
+const { tryWithinRootLexical } = _require('./security.cjs') as typeof import('./security.cjs');
 
 // #2870: InstallScope is owned by install-scope.cts, not re-declared here.
 // `isGlobalScope` centralizes the `scope === 'global'` boolean projection
@@ -140,13 +141,21 @@ function assertDestWithinConfigHome(configDir: string, destSubpath: string): str
     );
   }
   const root = path.resolve(configDir);
-  const resolved = path.resolve(configDir, destSubpath);
-  if (resolved === root || !resolved.startsWith(root + path.sep)) {
+  // `resolved === root` is a DELIBERATE ADDITIONAL rejection, separate from
+  // the containment decision: `tryWithinRootLexical` treats target === root
+  // as CONTAINED, but a destSubpath of "" (or one that resolves to configDir
+  // itself) must never be accepted here — this is the strict-subpath
+  // requirement Phase B of ADR-1239 imposes on third-party descriptors, and
+  // it prevents a descriptor from writing at configHome itself. Kept as its
+  // own check per ADR-4650 decision 6 (a wrapper may add its own conditions
+  // on top of the canonical predicate, never invert it).
+  const contained = tryWithinRootLexical(destSubpath, configDir);
+  if (contained === null || contained === root) {
     throw new Error(
       `destSubpath "${destSubpath}" must be a strict subpath of configHome "${configDir}" — not configHome itself or outside it (escapes configHome)`,
     );
   }
-  return resolved;
+  return contained;
 }
 
 function errorMessage(err: unknown): string {
