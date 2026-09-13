@@ -141,8 +141,8 @@ describe('#4499: markdown normalization preserves leading YAML frontmatter', () 
     assert.strictEqual(content, input);
   });
 
-  test('flow arrays in frontmatter remain byte-identical', () => {
-    const input = '---\ntags: [api, sdk]\nphase: 01\n---\n\nBody.\n';
+  test('flow arrays alongside block sequences in frontmatter remain byte-identical', () => {
+    const input = '---\ntags: [api, sdk]\nowners:\n- api\n- sdk\nphase: 01\n---\n\nBody.\n';
     assert.strictEqual(normalizeContent(MD, input).content, input);
   });
 
@@ -181,7 +181,7 @@ describe('#4499: markdown normalization preserves leading YAML frontmatter', () 
   test('single-item, empty, and deeply nested sequences preserve their boundaries', () => {
     const inputs = [
       '---\ntags:\n  - only\n---\n\nBody.\n',
-      '---\ntags: []\n---\n\nBody.\n',
+      '---\ntags: []\nowners:\n  - only\n---\n\nBody.\n',
       '---\na:\n  b:\n    c:\n      - deep\n---\n\nBody.\n',
     ];
     for (const input of inputs) assert.strictEqual(normalizeContent(MD, input).content, input);
@@ -209,6 +209,20 @@ describe('#4499: markdown normalization preserves leading YAML frontmatter', () 
     );
   });
 
+  test('anchors and aliases are refused before the frontmatter classifier can expand them', () => {
+    const input = '---\na: &a [safe]\nb: [*a, *a, *a, *a]\n---\nLead paragraph.\n- body item\n';
+    const { content } = normalizeContent(MD, input);
+    assert.ok(content.includes('Lead paragraph.\n\n- body item'),
+      'a refused YAML region must remain ordinary Markdown and retain body-list normalization');
+  });
+
+  test('empty and comment-only YAML regions are still frontmatter', () => {
+    for (const region of ['', '# intentionally empty\n# - a comment, not a Markdown list']) {
+      const input = `---\n${region}\n---\n\nBody.\n`;
+      assert.strictEqual(normalizeContent(MD, input).content, input);
+    }
+  });
+
   test('property: normalization preserves every generated frontmatter mapping byte-for-byte', () => {
     const scalar = fc.stringMatching(/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,30}$/);
     fc.assert(fc.property(fc.array(scalar, { maxLength: 12 }), (items) => {
@@ -218,5 +232,16 @@ describe('#4499: markdown normalization preserves leading YAML frontmatter', () 
       const output = normalizeContent(MD, input).content;
       assert.strictEqual(output.slice(0, frontmatter.length), frontmatter);
     }), { numRuns: 250 });
+  });
+
+  test('property: scalar and sequence regions stay on the ordinary-Markdown path', () => {
+    const scalar = fc.stringMatching(/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,30}$/);
+    fc.assert(fc.property(fc.oneof(
+      scalar,
+      fc.array(scalar, { minLength: 1, maxLength: 5 }).map((items) => items.map((item) => `- ${item}`).join('\n')),
+    ), (region) => {
+      const input = `---\n${region}\n---\nLead paragraph.\n- body item\n`;
+      assert.ok(normalizeContent(MD, input).content.includes('Lead paragraph.\n\n- body item'));
+    }), { numRuns: 100 });
   });
 });

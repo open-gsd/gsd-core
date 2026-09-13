@@ -1143,11 +1143,23 @@ function _normalizeMd(content: string): string {
     // A leading thematic break is not frontmatter merely because a later body
     // line resembles `key: value`. Treat a bounded region as frontmatter only
     // when it parses as a YAML mapping; malformed or scalar regions remain
-    // ordinary Markdown so their spacing rules still apply.
+    // ordinary Markdown so their spacing rules still apply. FAILSAFE_SCHEMA
+    // does not itself disable aliases, so the listener aborts before an alias
+    // expansion can allocate an attacker-controlled object graph (ADR-3473).
     if (closingDelimiter !== -1) {
       try {
-        const parsed = yamlLoad(lines.slice(1, closingDelimiter).join('\n'), { schema: FAILSAFE_SCHEMA, json: true });
-        if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        class AnchorDetectedSignal extends Error {}
+        const parsed = yamlLoad(lines.slice(1, closingDelimiter).join('\n'), {
+          schema: FAILSAFE_SCHEMA,
+          json: true,
+          listener: (_event: string, state: { anchor?: string | null }) => {
+            if (state.anchor !== null && state.anchor !== undefined) throw new AnchorDetectedSignal();
+          },
+        });
+        // Empty/comment-only YAML is legitimate empty frontmatter. Its lines
+        // have no list to rewrite today, but preserving the region keeps the
+        // classification correct if comments are later edited into YAML lists.
+        if (parsed === undefined || parsed === null || (typeof parsed === 'object' && !Array.isArray(parsed))) {
           for (let i = 0; i <= closingDelimiter; i++) insideFrontmatter[i] = true;
         }
       } catch {
