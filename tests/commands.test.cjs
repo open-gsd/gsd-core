@@ -6595,12 +6595,17 @@ describe('#4055: merged-and-deleted phase branch must not be resurrected', () =>
       path.join(tmpDir, '.planning', 'phases', '07-example-phase', '07-VERIFICATION.md'),
       'verification\n'
     );
-    const result = runGsdTools(
-      'commit "docs(phase-07): verification report" --files .planning/phases/07-example-phase/07-VERIFICATION.md',
-      tmpDir
-    );
-    assert.ok(result.success, `commit failed: ${result.error || result.output}`);
-    const output = JSON.parse(result.output);
+    // Invoke via the process seam so stderr is observable on the success
+    // path — the refusal disclosure (#2539 AC2) is written to stderr, which
+    // execFileSync discards on success (same idiom as the #2539 no-switch
+    // test above).
+    const { TOOLS_PATH } = require('./helpers.cjs');
+    const proc = runNode([
+      TOOLS_PATH, 'commit', 'docs(phase-07): verification report',
+      '--files', '.planning/phases/07-example-phase/07-VERIFICATION.md',
+    ], { cwd: tmpDir });
+    throwIfFailed(proc, 'gsd-tools commit (post-merge close-out)');
+    const output = JSON.parse((proc.stdout || '').trim());
     assert.strictEqual(output.committed, true, 'must commit');
 
     // The fix: no resurrection, no switch — the commit lands in place.
@@ -6623,7 +6628,7 @@ describe('#4055: merged-and-deleted phase branch must not be resurrected', () =>
     );
     assert.ok(landed.includes('verification'), 'the commit must land on the base branch');
     assert.match(
-      `${result.error}\n${result.output}`,
+      proc.stderr || '',
       /instead of recreating/,
       'the refusal must be disclosed on stderr (#2539 AC2)'
     );
