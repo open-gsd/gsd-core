@@ -518,6 +518,29 @@ test("blocks an existing ignored path that the merge would start tracking", (t) 
     assert.equal(mustGit(f.root, ["rev-parse", "HEAD"]), prepared.target_tip);
 });
 
+test("merges through a large ignored raw inventory without reporting target dirt", (t) => {
+    const f = fixture(t);
+    fs.writeFileSync(path.join(f.root, ".git", "info", "exclude"), "node_modules/\n");
+    const longName = "x".repeat(230);
+    for (let index = 0; index < 5_000; index += 1) {
+        const packageDir = path.join(f.root, "node_modules", `package-${String(index).padStart(5, "0")}`);
+        fs.mkdirSync(packageDir, { recursive: true });
+        fs.writeFileSync(path.join(packageDir, longName), "ignored\n");
+    }
+    const pathBytes = Buffer.byteLength(`node_modules/package-00000/${longName}\0`);
+    assert.ok(pathBytes * 5_000 > 1024 * 1024, "fixture must exceed Node's default spawnSync maxBuffer");
+    const prepared = mergePreparedWorktree(input(f, { prepare: true }));
+    assert.equal(prepared.status, "prepared", prepared.stderr);
+
+    const result = mergePreparedWorktree(input(f, {
+        expectedChildTip: prepared.child_tip,
+        expectedTargetTip: prepared.target_tip,
+    }));
+    assert.equal(result.status, "merged", `${result.reason}: ${result.stderr}`);
+    assert.equal(git(f.root, ["diff", "--quiet", "HEAD"]).exitCode, 0);
+    assert.equal(fs.readFileSync(path.join(f.root, "child.txt"), "utf8"), "child\n");
+});
+
 test("prepare behaviorally rejects Git without two-argument merge-tree write-tree", (t) => {
     const f = fixture(t);
     let casAttempted = false;

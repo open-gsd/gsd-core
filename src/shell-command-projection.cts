@@ -677,6 +677,11 @@ export function execGit(args: string[], opts: { cwd?: string; env?: Record<strin
     encoding: opts.rawStdout ? null : 'utf-8',
     stdio: 'pipe',
     timeout: opts.timeout ?? 10_000,
+    // Git inventories can legitimately exceed Node's 1 MiB default: OpenCode
+    // V2 uses raw NUL-delimited `ls-files` output to protect ignored local
+    // paths from checkout collisions. Keep the subprocess bounded while
+    // allowing large dependency trees to be inspected accurately.
+    maxBuffer: 64 * 1024 * 1024,
     windowsHide: true,
   });
   return _spawnResult(result, 'git', { rawStdout: opts.rawStdout });
