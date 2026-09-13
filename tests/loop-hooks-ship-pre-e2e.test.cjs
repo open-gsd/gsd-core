@@ -343,6 +343,7 @@ describe('real registry ship:pre — structural guards', () => {
 
 const SHIP_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'ship.md');
 const EXECUTE_PHASE_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
+const WAVE_POST_GATE_HOOKS_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'wave-post-gate-hooks.md');
 const PLAN_PHASE_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-phase.md');
 
 // The repo's shared generic-gate-dispatch phrasing, used verbatim at execute:wave:post
@@ -355,6 +356,7 @@ const GENERIC_GATE_LOOP = /For each active entry where\s+`kind == "gate"`/;
 function predicateDispatchLine(workflowPath, point) {
   // allow-test-rule: source-text-is-the-product (#4483)
   const lines = splitLines(fs.readFileSync(workflowPath, 'utf8'));
+  if (!point) return lines.find((line) => line.includes('gsd_run check predicate')) ?? '';
   const pointLine = lines.findIndex((line) => (
     line.toLowerCase().includes(point) && line.includes('gate') && line.includes('dispatch')
   ));
@@ -365,6 +367,12 @@ function predicateDispatchLine(workflowPath, point) {
 }
 
 describe('predicate gate phase-context forwarding (#4483)', () => {
+  test('execute:wave:post forwards both phase number and phase directory', () => {
+    const line = predicateDispatchLine(WAVE_POST_GATE_HOOKS_MD, '');
+    assert.match(line, /--phase-number "\$\{PHASE_NUMBER\}"/);
+    assert.match(line, /--phase-dir "\$\{PHASE_DIR\}"/);
+  });
+
   test('execute:post forwards both phase number and phase directory', () => {
     const line = predicateDispatchLine(EXECUTE_PHASE_MD, 'execute:post');
     assert.match(line, /--phase-number "\$\{PHASE_NUMBER\}"/);
