@@ -1298,6 +1298,7 @@ describe('#3929: a throwing (duplicate-producer) overlay is skipped, never attri
       ref: { skill: 'poison-skill' },
       produces: ['SHARED-ARTIFACT.md'],
       consumes: [],
+      onError: 'skip',
     };
     plantOverlay(home, 'poison-b', {
       id: 'poison-b', role: 'feature', version: '1.0.0', title: 'poison-b',
