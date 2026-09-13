@@ -20,6 +20,7 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { spawnSync } = require('child_process');
 
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
@@ -715,5 +716,138 @@ describe('resolveLoopHooks plan:post — pure function against real registry', (
       `plan:post contributions must be external-job + claude-orchestration; got ${capIds.join(',')}`);
     assert.strictEqual(entry.gates.length, 1, 'plan:post must have exactly one gate');
     assert.strictEqual(entry.gates[0].capId, 'gap-analysis');
+  });
+});
+
+// ─── #4652: containment boundaries — resolvePath (check-command-router.cts:92)
+// and `check gap-analysis.plan-post <phase-dir>` ───────────────────────────────
+//
+// Boundary 3: `check decision-coverage-plan <phase-dir>` resolves the phase-dir
+// positional via `resolvePath()`, which just does
+// `path.isAbsolute(p) ? p : path.join(projectDir, p)` — no containment check.
+// Boundary 4: `check gap-analysis.plan-post <phase-dir>` takes `args[2]`
+// unconfined and joins it directly in `runGapAnalysis` (gap-checker.cts).
+
+function runDecisionCoveragePlan(extraFlags, phaseDir, contextPath, cwd) {
+  return runGsdTools(['query', 'check.decision-coverage-plan', ...extraFlags, phaseDir, contextPath], cwd);
+}
+
+describe('resolvePath / check decision-coverage-plan — containment boundary (#4652)', () => {
+  let tmpDir;
+  let phaseDir;
+  let outsideDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    phaseDir = path.join(tmpDir, '.planning', 'phases', '01-test');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-decision-outside-'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+    cleanup(outsideDir);
+  });
+
+  test('[RED #4652] an outside phase-dir is rejected (currently resolves and proceeds unconfined)', () => {
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    fs.writeFileSync(
+      contextPath,
+      '# Phase Context\n\n<decisions>\n## Implementation Decisions\n\n- **D-01:** Use pattern X\n</decisions>\n',
+    );
+    fs.writeFileSync(path.join(outsideDir, '01-PLAN.md'), '# Plan\n\nImplements D-01.\n');
+    const relOutside = path.relative(tmpDir, outsideDir);
+
+    const result = runGsdTools(
+      ['--json-errors', 'query', 'check.decision-coverage-plan', relOutside, contextPath],
+      tmpDir,
+    );
+
+    assert.strictEqual(
+      result.success,
+      false,
+      `an outside phase-dir must be rejected before evaluating plan coverage ` +
+        `(currently: ${result.success ? `SUCCEEDED with output ${result.output}` : 'failed for an unrelated reason'})`,
+    );
+  });
+
+  test('[regression] a valid in-project relative phase-dir still proceeds', () => {
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    fs.writeFileSync(
+      contextPath,
+      '# Phase Context\n\n<decisions>\n## Implementation Decisions\n\n- **D-01:** Use pattern X\n</decisions>\n',
+    );
+    fs.writeFileSync(path.join(phaseDir, '01-PLAN.md'), '# Plan\n\n## tasks\n\n- D-01: Use pattern X\n');
+    const relPhaseDir = path.relative(tmpDir, phaseDir);
+
+    const result = runDecisionCoveragePlan([], relPhaseDir, contextPath, tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.passed, true, 'in-project phase-dir with covered decision must pass');
+  });
+
+  test('[regression] an absolute path INSIDE the project is accepted', () => {
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    fs.writeFileSync(
+      contextPath,
+      '# Phase Context\n\n<decisions>\n## Implementation Decisions\n\n- **D-01:** Use pattern X\n</decisions>\n',
+    );
+    fs.writeFileSync(path.join(phaseDir, '01-PLAN.md'), '# Plan\n\n## tasks\n\n- D-01: Use pattern X\n');
+
+    const result = runDecisionCoveragePlan([], phaseDir, contextPath, tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.passed, true, 'absolute in-project phase-dir must be accepted');
+  });
+});
+
+describe('check gap-analysis.plan-post — containment boundary (#4652)', () => {
+  let tmpDir;
+  let phaseDir;
+  let outsideDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    phaseDir = path.join(tmpDir, '.planning', 'phases', '01-test');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const init = runGsdTools('config-ensure-section', tmpDir);
+    assert.ok(init.success, `config-ensure-section failed: ${init.error}`);
+    outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-gap-outside-'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+    cleanup(outsideDir);
+  });
+
+  test('[RED #4652] an outside phase-dir is rejected (currently resolves and proceeds unconfined)', () => {
+    fs.writeFileSync(path.join(outsideDir, '01-PLAN.md'), '# Plan\n\nSome content.\n');
+    const relOutside = path.relative(tmpDir, outsideDir);
+
+    const result = runGsdTools(['--json-errors', 'check', 'gap-analysis.plan-post', relOutside, '--raw'], tmpDir);
+
+    assert.strictEqual(
+      result.success,
+      false,
+      `an outside phase-dir must be rejected ` +
+        `(currently: ${result.success ? `SUCCEEDED with output ${result.output}` : 'failed for an unrelated reason'})`,
+    );
+  });
+
+  test('[regression] a valid phase-dir still proceeds (advisory, block:false)', () => {
+    writeRequirements(path.join(tmpDir, '.planning'), ['REQ-01']);
+    writePlan(phaseDir, '01', '# Plan\n\nImplements REQ-01.\n');
+
+    const r = runGapCheck([phaseDir], tmpDir);
+    assert.ok(r.success, `check failed: ${r.error}`);
+    const out = JSON.parse(r.output);
+    assert.strictEqual(out.block, false, 'gap-analysis is always advisory');
+  });
+
+  test('[regression] a missing phase-dir argument still gives the existing SDK_MISSING_ARG error', () => {
+    const result = runGsdTools(['--json-errors', 'check', 'gap-analysis.plan-post', '--raw'], tmpDir);
+    assert.strictEqual(result.success, false, 'must fail when phaseDir omitted');
+    const parsed = JSON.parse(result.error);
+    assert.strictEqual(parsed.reason, 'sdk_missing_arg', 'must keep the existing SDK_MISSING_ARG reason');
   });
 });

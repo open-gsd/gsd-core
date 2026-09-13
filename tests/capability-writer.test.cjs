@@ -14,6 +14,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const { cleanup } = require('./helpers.cjs');
 
@@ -303,7 +304,7 @@ describe('capability-writer: setCapabilityState', () => {
       // Test: capability set ui --off (--config-dir rcd) exits 0
       const offResult = runNode([gsdToolsBin, 'capability', 'set', 'ui', '--off', '--config-dir', rcd], {
         cwd,
-        timeoutMs: 15000,
+        timeoutMs: PROBE_TIMEOUT_MS,
       });
       assert.equal(offResult.exitCode, 0,
         `capability set ui --off should exit 0, got ${String(offResult.exitCode)}. stderr: ${offResult.stderr}`);
@@ -311,7 +312,7 @@ describe('capability-writer: setCapabilityState', () => {
       // Test: capability set ui --on (--config-dir rcd) exits 0
       const onResult = runNode([gsdToolsBin, 'capability', 'set', 'ui', '--on', '--config-dir', rcd], {
         cwd,
-        timeoutMs: 15000,
+        timeoutMs: PROBE_TIMEOUT_MS,
       });
       assert.equal(onResult.exitCode, 0,
         `capability set ui --on should exit 0, got ${String(onResult.exitCode)}. stderr: ${onResult.stderr}`);
@@ -319,7 +320,7 @@ describe('capability-writer: setCapabilityState', () => {
       // Test: unknown id exits non-zero
       const unknownResult = runNode([gsdToolsBin, 'capability', 'set', 'does-not-exist', '--off', '--config-dir', rcd], {
         cwd,
-        timeoutMs: 15000,
+        timeoutMs: PROBE_TIMEOUT_MS,
       });
       assert.notEqual(unknownResult.exitCode, 0,
         `capability set does-not-exist --off should exit non-zero, got ${String(unknownResult.exitCode)}`);
@@ -502,7 +503,7 @@ describe('capability-writer: setCapabilityState', () => {
 
       const conflictResult = runNode(
         [gsdToolsBin, 'capability', 'set', 'ui', '--on', '--off', '--config-dir', rcd],
-        { cwd, timeoutMs: 15000 },
+        { cwd, timeoutMs: PROBE_TIMEOUT_MS },
       );
       assert.notEqual(
         conflictResult.exitCode, 0,

@@ -11,7 +11,13 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
-const { output, error, ERROR_REASON } = io;
+const { output, ERROR_REASON } = io;
+// Explicitly annotated so TypeScript applies never-return control-flow narrowing.
+// A destructured `const { error } = io` is a const WITHOUT a type annotation, and TS
+// only narrows after a never-returning call when the callee is a function declaration
+// or an annotated const. Without the annotation every `error(...)` guard below would
+// need a dead `throw` after it to convince the checker that the value is non-null.
+const error: typeof io.error = io.error;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspaceMod = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspaceMod;
@@ -24,7 +30,7 @@ import type { Decision } from './decisions.cjs';
 import frontmatterMod = require('./frontmatter.cjs');
 const { extractFrontmatter } = frontmatterMod;
 import { stripFencedCode, collectSections } from './markdown-sectionizer.cjs';
-import { validatePath } from './security.cjs';
+import { tryWithinRoot, PathAcceptance } from './security.cjs';
 import { checkUiPresence } from './ui-safety-gate.cjs';
 import { hasStaticFrontendEvidence } from './ui-frontend-evidence.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -90,7 +96,12 @@ function readIfExists(filePath: string): string {
 }
 
 function resolvePath(inputPath: string, projectDir: string): string {
-  return path.isAbsolute(inputPath) ? inputPath : path.join(projectDir, inputPath);
+  const candidate = path.isAbsolute(inputPath) ? inputPath : path.join(projectDir, inputPath);
+  const contained = tryWithinRoot(candidate, projectDir, PathAcceptance.AbsoluteInsideRoot);
+  if (contained === null) {
+    error(`path escapes its allowed directory: ${inputPath}`, ERROR_REASON.USAGE);
+  }
+  return contained;
 }
 
 interface WorkflowConfig {
@@ -1194,8 +1205,9 @@ function cmdGapAnalysisPlanPost(projectDir: string, args: string[], raw: boolean
     error('gap-analysis.plan-post requires a phase-dir argument: check gap-analysis.plan-post <phase-dir> [phase-req-ids]', ERROR_REASON.SDK_MISSING_ARG);
     return;
   }
+  const resolvedPhaseDir = resolvePath(phaseDir, projectDir);
   const phaseReqIds = args[3] ?? undefined;
-  const result = runGapAnalysis(projectDir, phaseDir, { phaseReqIds });
+  const result = runGapAnalysis(projectDir, resolvedPhaseDir, { phaseReqIds });
   // Uniform gate contract: block = false (gap-analysis is always advisory, never blocks).
   // `message` carries the human-readable gap analysis report so the dispatch's
   // advisory branch can surface it. --raw emits JSON (rawValue=undefined), not
@@ -1265,20 +1277,20 @@ function buildPredicateDeps() {
       ) {
         return null;
       }
-      const directPath = validatePath(artifactSuffix, phaseDir);
-      if (directPath.safe && fs.existsSync(directPath.resolved) && fs.statSync(directPath.resolved).isFile()) {
-        return directPath.resolved;
+      const directContained = tryWithinRoot(artifactSuffix, phaseDir);
+      if (directContained !== null && fs.existsSync(directContained) && fs.statSync(directContained).isFile()) {
+        return directContained;
       }
-      const planningPath = validatePath(path.join('.planning', artifactSuffix), phaseDir);
-      if (planningPath.safe && fs.existsSync(planningPath.resolved) && fs.statSync(planningPath.resolved).isFile()) {
-        return planningPath.resolved;
+      const planningContained = tryWithinRoot(path.join('.planning', artifactSuffix), phaseDir);
+      if (planningContained !== null && fs.existsSync(planningContained) && fs.statSync(planningContained).isFile()) {
+        return planningContained;
       }
       try {
         const files = fs.readdirSync(phaseDir);
         for (const f of files) {
           if (f.endsWith('-' + artifactSuffix) || f === artifactSuffix) {
-            const candidate = validatePath(f, phaseDir);
-            if (candidate.safe && fs.statSync(candidate.resolved).isFile()) return candidate.resolved;
+            const candidateContained = tryWithinRoot(f, phaseDir);
+            if (candidateContained !== null && fs.statSync(candidateContained).isFile()) return candidateContained;
           }
         }
       } catch { /* ignore */ }
@@ -1362,10 +1374,15 @@ function cmdCheckPredicate(projectDir: string, args: string[], raw: boolean): vo
     error('predicate --predicate value must be valid JSON', ERROR_REASON.USAGE);
     return;
   }
+  const rawPhaseDir = flags['phase-dir'];
+  let resolvedPhaseDir: string | undefined = rawPhaseDir;
+  if (typeof rawPhaseDir === 'string' && rawPhaseDir !== '') {
+    resolvedPhaseDir = resolvePath(rawPhaseDir, projectDir);
+  }
   const ctx = {
     cwd: projectDir,
     phaseNumber: flags['phase-number'],
-    phaseDir: flags['phase-dir'],
+    phaseDir: resolvedPhaseDir,
     phaseReqIds: flags['phase-req-ids'],
   };
   let result;

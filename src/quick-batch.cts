@@ -34,7 +34,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { requireSafePath, safeJsonParse } from './security.cjs';
+import { requireSafePath, safeJsonParse, PathAcceptance } from './security.cjs';
 import {
   appendQuickTaskRow,
   parseMarkdownTable,
@@ -305,7 +305,7 @@ function parseTaskListFromFile(cwd: string, filePath: string): Result<QuickBatch
   const root = planningRoot(cwd);
   let safePath: string;
   try {
-    safePath = requireSafePath(filePath, root, 'quick-batch --file', { allowAbsolute: true });
+    safePath = requireSafePath(filePath, root, 'quick-batch --file', PathAcceptance.AbsoluteInsideRoot);
   } catch (err) {
     return { ok: false, reason: err instanceof Error ? err.message : String(err) };
   }

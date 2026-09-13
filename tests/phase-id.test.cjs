@@ -1507,3 +1507,78 @@ describe('phaseKeyFrom* — one key space for directories and prose', () => {
     );
   });
 });
+
+// ─── renderPhaseBranchName (#4126) ───────────────────────────────────────────
+//
+// The ONE branch-name-template renderer shared by cmdCommit (src/commands.cts)
+// and cmdInitExecutePhase (src/init.cts), so the two consumers cannot diverge
+// on how an undeliverable phase_slug degrades.
+describe('renderPhaseBranchName — shared branch-name template renderer', () => {
+  const DEFAULT_TEMPLATE = 'gsd/phase-{phase}-{slug}';
+
+  test('a real slug substitutes normally, unchanged from prior behavior', () => {
+    assert.strictEqual(
+      phaseId.renderPhaseBranchName(DEFAULT_TEMPLATE, '8', 'my-feature'),
+      'gsd/phase-08-my-feature',
+    );
+  });
+
+  test('an empty slug drops the {slug} token cleanly for the default template', () => {
+    assert.strictEqual(phaseId.renderPhaseBranchName(DEFAULT_TEMPLATE, '8', ''), 'gsd/phase-08');
+    assert.strictEqual(phaseId.renderPhaseBranchName(DEFAULT_TEMPLATE, '8', null), 'gsd/phase-08');
+    assert.strictEqual(phaseId.renderPhaseBranchName(DEFAULT_TEMPLATE, '8', undefined), 'gsd/phase-08');
+  });
+
+  test('the literal word "phase" is never substituted for an undeliverable slug', () => {
+    const result = phaseId.renderPhaseBranchName(DEFAULT_TEMPLATE, '8', '');
+    assert.ok(!result.endsWith('-phase'), result);
+  });
+
+  test('an empty slug at the START of a template drops the token and its trailing separator', () => {
+    assert.strictEqual(phaseId.renderPhaseBranchName('{slug}-gsd-{phase}', '8', ''), 'gsd-08');
+  });
+
+  test('an empty slug at the END of a template drops the token and its leading separator', () => {
+    assert.strictEqual(phaseId.renderPhaseBranchName('gsd-{phase}-{slug}', '8', ''), 'gsd-08');
+  });
+
+  test('a doubled-separator template does not produce an invalid leading/trailing separator', () => {
+    assert.strictEqual(phaseId.renderPhaseBranchName('feature//{slug}', '8', ''), 'feature');
+    assert.strictEqual(phaseId.renderPhaseBranchName('feature//{slug}', '8', 'x'), 'feature//x');
+  });
+
+  test('non-string phaseSlug values (digits, objects) degrade like an empty slug', () => {
+    assert.strictEqual(phaseId.renderPhaseBranchName(DEFAULT_TEMPLATE, '8', 42), 'gsd/phase-08');
+    assert.strictEqual(phaseId.renderPhaseBranchName(DEFAULT_TEMPLATE, '8', {}), 'gsd/phase-08');
+    assert.strictEqual(phaseId.renderPhaseBranchName(DEFAULT_TEMPLATE, '8', []), 'gsd/phase-08');
+  });
+
+  test('a template with no {slug} token at all is returned unchanged, just phase-substituted', () => {
+    assert.strictEqual(phaseId.renderPhaseBranchName('gsd/phase-{phase}', '8', ''), 'gsd/phase-08');
+    assert.strictEqual(phaseId.renderPhaseBranchName('gsd/phase-{phase}', '8', 'x'), 'gsd/phase-08');
+  });
+
+  test('a template that is only {slug} degrades to null rather than an empty branch name', () => {
+    assert.strictEqual(phaseId.renderPhaseBranchName('{slug}', '8', ''), null);
+  });
+
+  test('property: an undeliverable slug never leaves {slug} or a leading/trailing separator behind', () => {
+    // Realistic slugs (as generateSlugInternal produces them: lowercase
+    // alnum/dash, never separator-edged) are covered by the "real slug"
+    // tests above; this property targets the DEGRADE path (#4126's actual
+    // invariant), so the slug domain here is exactly the undeliverable one.
+    fc.assert(
+      fc.property(
+        fc.constantFrom('gsd/phase-{phase}-{slug}', '{slug}-gsd-{phase}', 'gsd-{phase}-{slug}', 'feature//{slug}', '{phase}.{slug}'),
+        fc.integer({ min: 0, max: 999 }),
+        fc.constantFrom('', null, undefined, 0, 42, {}, []),
+        (template, phaseNumber, phaseSlug) => {
+          const result = phaseId.renderPhaseBranchName(template, phaseNumber, phaseSlug);
+          if (result === null) return true;
+          if (result.includes('{slug}')) return false;
+          return !/^[-_./]/.test(result) && !/[-_./]$/.test(result);
+        },
+      ),
+    );
+  });
+});

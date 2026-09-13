@@ -7,6 +7,14 @@
   applies ADR-1703's evidence-first, static-classifier discipline to a second, macOS-specific surface,
   rather than reusing ADR-1703's Windows-oriented signal set unmodified.
 
+> **Amendment (2026-09-11, [ADR-4641](./4641-windows-selector-consolidation.md)):** the general /
+> Windows-oriented tier this ADR compares against was **546 files** when this ADR was written, and
+> every figure below is accurate as of that date. ADR-4641 has since removed two over-broad
+> detectors from `CATEGORIES`, taking it to **254**. Nothing in this ADR's decision changes:
+> `MACOS_CATEGORIES` is a separate array, `chmod-mode-bit` and `symlink-keyword` keep the
+> definitions and rationale recorded here, and the macOS tier remains 196 files. The historical
+> figures below are deliberately left unedited.
+
 ## Context
 
 `test-conformance`'s `macos-latest` CI leg (#4591, epic #4589 Phase 2) runs only the

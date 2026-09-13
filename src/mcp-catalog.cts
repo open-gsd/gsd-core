@@ -93,7 +93,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { validatePath } from './security.cjs';
+import { tryWithinRoot } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- workflow-fragments.cjs is a CommonJS module compiled from a sibling .cts source; `import x = require()` reads its module.exports namespace directly.
 import workflowFragments = require('./workflow-fragments.cjs');
 const { composeWorkflow } = workflowFragments;
@@ -506,8 +506,8 @@ function classifyUnindexedUri(uri: string): string {
 
 /** Second, independent gate (design "Hostile inputs" gate 2): re-validate an INDEXED entry's relPath against the catalog root, catching a symlink planted after the index was built. */
 function readIndexedResource(catalog: Catalog, entry: CatalogResourceEntry): ReadResourceResult {
-  const check = validatePath(entry.relPath, catalog.root);
-  if (!check.safe) {
+  const contained = tryWithinRoot(entry.relPath, catalog.root);
+  if (contained === null) {
     fail(REASON.TRAVERSAL_REFUSED, `indexed resource escapes catalog root: ${entry.relPath}`);
   }
   let raw: string;

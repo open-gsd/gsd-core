@@ -190,7 +190,12 @@ from the active incomplete plan in `INIT`, then search recent history:
 SUMMARY_PATH="{phase_dir}/{plan_padded}-SUMMARY.md"
 # #4003: no padding rule in the commit protocol, so zero-strip both components and
 # match ANCHORED at the commit scope; bound to the latest reachable tag (milestone marker).
-PHASE_N=$((10#{phase_number}))
+PHASE_NUMBER="{phase_number}"
+# #4619: {phase_number} may be decimal (01.1) or N-segment (23.1.2) — $((10#...))
+# is a hard shell syntax error on a non-integer, so zero-strip only the LEADING
+# integer segment and keep the rest as an escaped-dot string for the ERE below.
+PHASE_INT=${PHASE_NUMBER%%.*}; PHASE_FRAC=${PHASE_NUMBER#"$PHASE_INT"}
+PHASE_N="$((10#$PHASE_INT))${PHASE_FRAC//./\\.}"
 PLAN_N=$((10#{plan_padded}))
 PLAN_SCOPE_RE="^[a-z]+\((0*${PHASE_N})-(0*${PLAN_N})\):"
 MILESTONE_BASE=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
@@ -211,7 +216,10 @@ if [ "$TDD_MODE" = "true" ]; then
   if [ "$IS_BEHAVIOR_ADDING" = "true" ]; then
     # #4003: same anchored scope and milestone bound as safe_resume_gate — a padded
     # literal grep hard-halts on a correct unpadded RED commit.
-    PHASE_N=$((10#${PHASE_NUMBER}))
+    # #4619: PHASE_NUMBER may be decimal/N-segment; zero-strip only the leading
+    # integer segment, escape the rest for the ERE below.
+    PHASE_INT=${PHASE_NUMBER%%.*}; PHASE_FRAC=${PHASE_NUMBER#"$PHASE_INT"}
+    PHASE_N="$((10#$PHASE_INT))${PHASE_FRAC//./\\.}"
     PLAN_N=$((10#${PLAN_ID}))
     PLAN_SCOPE_RE="^[a-z]+\((0*${PHASE_N})-(0*${PLAN_N})\):"  # TDD gate's own scope check
     TDD_MILESTONE_BASE=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
@@ -1381,42 +1389,37 @@ Copy failure must NOT block phase completion.
 </step>
 
 <step name="close_phase_todos">
-**Auto-close pending todos tagged for this phase (#2433).**
-
-After `update_roadmap`, moves todos whose `resolves_phase` matches to `completed/`.
+**Auto-close todos whose `resolves_phase` matches this phase (#2433)**, after `update_roadmap`.
 
 ```bash
 shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
-PHASE_NUM="${PHASE_NUMBER}"
 PENDING_DIR=".planning/todos/pending"
 COMPLETED_DIR=".planning/todos/completed"
 mkdir -p "$COMPLETED_DIR"
-
+PHASE_NUM="${PHASE_NUMBER}"
 #2576
 normalize_phase_num() {
-  local p="${1//\"/}"; printf '%s' "$p" | sed 's/^0*\([0-9]\)/\1/'
+  printf '%s' "${1//\"/}" | sed 's/^0*\([0-9]\)/\1/'
 }
 PHASE_NUM_NORM=$(normalize_phase_num "$PHASE_NUM")
-
 CLOSED=()
 for TODO_FILE in "$PENDING_DIR"/*.md; do
   [ -f "$TODO_FILE" ] || continue
   RP=$(awk '/^---/{c++;next} c==1 && /^resolves_phase:/{print $2;exit} c==2{exit}' "$TODO_FILE" 2>/dev/null || true)
   RP_NORM=$(normalize_phase_num "$RP")
-  if [ -n "$RP_NORM" ] && [ "$RP_NORM" = "$PHASE_NUM_NORM" ]; then
-    mv "$TODO_FILE" "$COMPLETED_DIR/"
-    CLOSED+=("$(basename "$TODO_FILE")")
-  fi
+  [ -n "$RP_NORM" ] && [ "$RP_NORM" = "$PHASE_NUM_NORM" ] || continue
+  mv "$TODO_FILE" "$COMPLETED_DIR/"
+  CLOSED+=("$(basename "$TODO_FILE")")
 done
-
 if [ ${#CLOSED[@]} -gt 0 ]; then
-  gsd_run query commit "docs(phase-${PHASE_NUMBER}): close ${#CLOSED[@]} resolved todo(s)" --files .planning/todos/completed/ .planning/todos/pending/ .planning/STATE.md|| true
-  echo "◆ Closed ${#CLOSED[@]} todo(s) resolved by Phase ${PHASE_NUMBER}:"
-  for f in "${CLOSED[@]}"; do echo "  ✓ $f"; done
+  ADDED=(); REMOVED=()
+  for f in "${CLOSED[@]}"; do ADDED+=("$COMPLETED_DIR/$f"); REMOVED+=("$PENDING_DIR/$f"); done
+  gsd_run query commit "docs(phase-${PHASE_NUMBER}): close ${#CLOSED[@]} resolved todo(s)" --files "${ADDED[@]}" .planning/STATE.md --files-removed "${REMOVED[@]}" || true
+  echo "◆ Closed ${#CLOSED[@]} todo(s) for Phase ${PHASE_NUMBER}:"; printf '  ✓ %s\n' "${CLOSED[@]}"
 fi
 ```
 
-**No matches:** skip silently (always additive, non-blocking).
+No matches: skip silently, never blocks.
 </step>
 
 <step name="delegate_post_completion_to_transition">

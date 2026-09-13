@@ -4380,3 +4380,212 @@ describe('Bug #4135: saveLocalPatches reports honest gsd-pristine coverage on mu
 });
   });
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// #4636 RED: isPathConfined (external-descriptor-trust.cts) is lexical-only —
+// it never calls realpath and cannot see a symlink. Three call sites rely on
+// it with no independent symlink defense of their own. These three tests
+// pre-plant a REAL symlink at the exact write/read target and assert the
+// OUTCOME (outside content untouched / not leaked) rather than the mechanism.
+// Each must FAIL today — that is the deliverable.
+// ─────────────────────────────────────────────────────────────────────────
+describe('#4636 RED: capability-skill symlink escape (isPathConfined has no realpath defense)', () => {
+  const { createTempDir } = require('./helpers.cjs');
+  const runtimeArtifactLayout = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
+  const runtimeArtifactInstallPlan = require('../gsd-core/bin/lib/runtime-artifact-install-plan.cjs');
+  const installProfiles = require('../gsd-core/bin/lib/install-profiles.cjs');
+  const { installOpencodeFamilySkills } = require('../gsd-core/bin/lib/install-engine.cjs');
+
+  let savedGsdHome;
+  beforeEach(() => {
+    savedGsdHome = process.env['GSD_HOME'];
+  });
+  afterEach(() => {
+    if (savedGsdHome === undefined) delete process.env['GSD_HOME'];
+    else process.env['GSD_HOME'] = savedGsdHome;
+  });
+
+  test('[RED #4636] a pre-planted symlink at the skill dir must not redirect the SKILL.md write outside dest (install-engine.cts installOpencodeFamilySkills)', (t) => {
+    const targetDir = createTempDir('gsd-4636-oc-target-');
+    const rawDir = createTempDir('gsd-4636-oc-raw-');
+    const outsideDir = createTempDir('gsd-4636-oc-outside-');
+    const gsdHome = createTempDir('gsd-4636-oc-home-');
+    process.env['GSD_HOME'] = gsdHome;
+
+    const capId = 'evil-cap';
+    const stem = 'victim';
+    const capSkillDir = path.join(gsdHome, '.gsd', 'capabilities', capId, 'skills', stem);
+    fs.mkdirSync(capSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(capSkillDir, 'SKILL.md'), '# safe capability skill\n', 'utf8');
+    // A pre-existing, harmless file in rawDir so the writer does not early-return.
+    fs.writeFileSync(path.join(rawDir, 'other.md'), '# other\n', 'utf8');
+
+    const registry = { capabilityClusters: { [capId]: [stem] } };
+    const resolvedProfile = { skills: new Set([stem]) };
+
+    // Derive the exact write target the production code will compute, via the
+    // SAME real functions it calls — not a reimplementation.
+    const layout = runtimeArtifactLayout.resolveRuntimeArtifactLayout('opencode', targetDir);
+    const skillsKindEntry = layout.kinds.find((k) => k.kind === 'skills');
+    if (!skillsKindEntry) {
+      t.skip('opencode layout declares no skills kind on this build');
+      return;
+    }
+    const installRoot = skillsKindEntry.home ?? targetDir;
+    const dest = runtimeArtifactInstallPlan.assertDestWithinConfigHome(installRoot, skillsKindEntry.destSubpath);
+    const skillName = `${skillsKindEntry.prefix}${stem}`;
+    const skillDirPath = path.join(dest, skillName);
+
+    // installOpencodeFamilySkills creates `dest` and prunes any existing
+    // gsd-*-prefixed entries BEFORE reading rawDir — so a symlink planted
+    // before the call is swept by that prune. The window this defect actually
+    // lives in is AFTER the prune and BEFORE this stem's write: hook the
+    // real fs.readdirSync call that reads rawDir (the first read that happens
+    // once the prune has already run) to plant the symlink deterministically
+    // in that exact window — not a race, a synchronous side effect of a call
+    // the function is already guaranteed to make.
+    const origReaddirSync = fs.readdirSync;
+    let planted = false;
+    fs.readdirSync = (...args) => {
+      const [p] = args;
+      if (!planted && fs.existsSync(dest) && path.resolve(String(p)) === path.resolve(rawDir)) {
+        planted = true;
+        fs.symlinkSync(outsideDir, skillDirPath);
+      }
+      return origReaddirSync.apply(fs, args);
+    };
+
+    let installOpencodeFamilySkillsErr = null;
+    try {
+      installOpencodeFamilySkills('opencode', targetDir, rawDir, '~/.opencode/', undefined, resolvedProfile, registry);
+    } catch (err) {
+      installOpencodeFamilySkillsErr = err;
+    } finally {
+      fs.readdirSync = origReaddirSync;
+    }
+
+    try {
+      assert.strictEqual(
+        installOpencodeFamilySkillsErr,
+        null,
+        `installOpencodeFamilySkills threw unexpectedly: ${installOpencodeFamilySkillsErr && installOpencodeFamilySkillsErr.message}`,
+      );
+      assert.ok(planted, 'the symlink was never planted — this test would pass vacuously');
+      assert.strictEqual(
+        fs.existsSync(path.join(outsideDir, 'SKILL.md')),
+        false,
+        'SKILL.md must not be written outside dest via a pre-planted symlink at the skill dir',
+      );
+    } finally {
+      try { fs.unlinkSync(skillDirPath); } catch { /* may not exist / already a real dir */ }
+      cleanup(targetDir);
+      cleanup(rawDir);
+      cleanup(outsideDir);
+      cleanup(gsdHome);
+    }
+  });
+
+  test('[RED #4636] a pre-planted symlink at the staged skill dir must not redirect the SKILL.md write outside stageDir (install-profiles.cts stageSkillsForRuntimeAsSkills)', () => {
+    const srcCommandsDir = createTempDir('gsd-4636-stage-src-');
+    const outsideDir = createTempDir('gsd-4636-stage-outside-');
+    const gsdHome = createTempDir('gsd-4636-stage-home-');
+    process.env['GSD_HOME'] = gsdHome;
+
+    const capId = 'evil-cap-2';
+    const stem = 'victim2';
+    const capSkillDir = path.join(gsdHome, '.gsd', 'capabilities', capId, 'skills', stem);
+    fs.mkdirSync(capSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(capSkillDir, 'SKILL.md'), '# safe capability skill\n', 'utf8');
+    fs.writeFileSync(path.join(srcCommandsDir, 'other.md'), '# other\n', 'utf8');
+
+    const registry = { capabilityClusters: { [capId]: [stem] } };
+    const resolvedProfile = { skills: new Set([stem]) };
+    const converter = (content, _skillName) => content;
+    const prefix = 'gsd-';
+    const skillName = `${prefix}${stem}`;
+
+    // stageDir is a freshly mkdtemp'd, unpredictable-named directory created
+    // INSIDE the function under test, so it cannot be pre-planted from the
+    // outside before the call. Hook the real fs.mkdtempSync call (the same
+    // deterministic-monkeypatch technique already used elsewhere in this repo,
+    // e.g. tests/install-runtime-artifacts.test.cjs's
+    // "rmSync is called on the tempDir when readFileSync throws") to capture
+    // the exact directory this invocation creates and plant the symlink inside
+    // it immediately after creation, before the function's first write.
+    const origMkdtempSync = fs.mkdtempSync;
+    let stageDirSeen = null;
+    fs.mkdtempSync = (...args) => {
+      const dir = origMkdtempSync.apply(fs, args);
+      stageDirSeen = dir;
+      fs.symlinkSync(outsideDir, path.join(dir, skillName));
+      return dir;
+    };
+
+    let stageDir;
+    let stageErr = null;
+    try {
+      stageDir = installProfiles.stageSkillsForRuntimeAsSkills(srcCommandsDir, resolvedProfile, converter, prefix, false, registry);
+    } catch (err) {
+      stageErr = err;
+    } finally {
+      fs.mkdtempSync = origMkdtempSync;
+    }
+
+    try {
+      assert.strictEqual(stageErr, null, `stageSkillsForRuntimeAsSkills threw unexpectedly: ${stageErr && stageErr.message}`);
+      assert.ok(stageDirSeen, 'the function under test must have created a stageDir via mkdtempSync');
+      assert.strictEqual(
+        fs.existsSync(path.join(outsideDir, 'SKILL.md')),
+        false,
+        'SKILL.md must not be written outside stageDir via a pre-planted symlink at the staged skill dir',
+      );
+    } finally {
+      try { fs.unlinkSync(path.join(stageDirSeen, skillName)); } catch { /* may not exist / already a real dir */ }
+      cleanup(srcCommandsDir);
+      cleanup(outsideDir);
+      cleanup(gsdHome);
+      if (stageDir) cleanup(stageDir);
+    }
+  });
+
+  test('[RED #4636] a symlinked SKILL.md inside a capability skill dir must not leak outside file content (install-profiles.cts readInstalledCapabilitySkill)', (t) => {
+    const gsdHome = createTempDir('gsd-4636-read-home-');
+    process.env['GSD_HOME'] = gsdHome;
+    const outsideDir = createTempDir('gsd-4636-read-outside-');
+
+    const capId = 'evil-cap-3';
+    const stem = 'victim3';
+    const capSkillDir = path.join(gsdHome, '.gsd', 'capabilities', capId, 'skills', stem);
+    fs.mkdirSync(capSkillDir, { recursive: true });
+
+    const CANARY_CONTENT = '# TOP SECRET OUTSIDE FILE — must never be surfaced as a skill\n';
+    const canaryPath = path.join(outsideDir, 'secret.txt');
+    fs.writeFileSync(canaryPath, CANARY_CONTENT, 'utf8');
+
+    const skillMdPath = path.join(capSkillDir, 'SKILL.md');
+    try {
+      fs.symlinkSync(canaryPath, skillMdPath, 'file');
+    } catch (err) {
+      if (err && ['EPERM', 'EACCES', 'ENOTSUP'].includes(err.code)) {
+        t.skip('symlink creation is not available on this platform/privilege');
+        cleanup(gsdHome);
+        cleanup(outsideDir);
+        return;
+      }
+      throw err;
+    }
+
+    try {
+      const registry = { capabilityClusters: { [capId]: [stem] } };
+      const found = installProfiles.readInstalledCapabilitySkill(stem, registry);
+      assert.ok(
+        found === null || !String(found.content).includes(CANARY_CONTENT),
+        'readInstalledCapabilitySkill must not return content read through a symlinked SKILL.md pointing outside the capability dir',
+      );
+    } finally {
+      try { fs.unlinkSync(skillMdPath); } catch { /* already gone */ }
+      cleanup(gsdHome);
+      cleanup(outsideDir);
+    }
+  });
+});

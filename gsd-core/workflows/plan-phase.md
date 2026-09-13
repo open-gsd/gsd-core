@@ -128,7 +128,7 @@ In research-only mode, two modifiers control behavior when `RESEARCH.md` already
 ```bash
 RESEARCH_ONLY=false
 VIEW_ONLY=false
-if [[ "$ARGUMENTS" =~ --research-phase[[:space:]]+([0-9]+(\.[0-9]+)?) ]]; then
+if [[ "$ARGUMENTS" =~ --research-phase[[:space:]]+([0-9]+(\.[0-9]+)*) ]]; then
   RESEARCH_ONLY=true
   PHASE="${BASH_REMATCH[1]}"
 fi

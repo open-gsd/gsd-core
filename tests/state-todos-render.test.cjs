@@ -15,6 +15,7 @@ const initLib = require('../gsd-core/bin/lib/init.cjs');
 const { renderPendingTodosMarkdown } = initLib;
 const { cleanup } = require('./helpers.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const MAX = 240;
 
@@ -293,7 +294,7 @@ function runQueryInitTodos(cwd) {
   const result = spawnSync(process.execPath, [gsdTools, 'query', 'init.todos'], {
     cwd,
     encoding: 'utf8',
-    timeout: 15000,
+    timeout: PROBE_TIMEOUT_MS,
   });
   assert.equal(result.status, 0, `gsd_run query init.todos failed: ${result.stderr}`);
   return JSON.parse(result.stdout);

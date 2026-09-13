@@ -1581,6 +1581,24 @@ function stripLeadingDelimiter(s: string): string {
 }
 
 /**
+ * #4134/#4433 (§7.2 rule 6 floor, applied symmetrically): a captured "name"
+ * with no letter or digit anywhere is heading/bullet STRUCTURE, not a curated
+ * name — e.g. the trailing `)` a name-then-version heading leaves after its
+ * version token, or a malformed 🚧-bullet whose only content past the version
+ * is punctuation (`---`, `***`, a lone `:`). #4134 fixed this for
+ * `extractMilestoneHeadingName`'s heading path only; #4433 found the sibling
+ * 🚧-bullet capture (`getMilestoneInfo`'s `listMatch`) and the no-STATE.md
+ * fallback (`inProgressMatch`) both skipped straight to a bare truthiness
+ * check, so a punctuation-only bullet name passed through as a real one. This
+ * is now the SOLE name-validity predicate — every capture site in this file
+ * calls it instead of re-deriving the character class. A name that merely
+ * CONTAINS punctuation is unaffected; digits alone qualify.
+ */
+function hasNameableContent(s: string): boolean {
+  return /[\p{L}\p{N}]/u.test(s);
+}
+
+/**
  * #3216 (ADR-3180 §7.2's "Name extraction — pinned rule"): the sole "milestone
  * heading text → version + curated name" rule. Strips everything through the
  * heading's OWN version token — NOT necessarily a version a caller is
@@ -1648,7 +1666,7 @@ function extractMilestoneHeadingName(
   // scope TRUNCATED) for an unresolvable name. A name that merely CONTAINS
   // punctuation is untouched — `(` is an ordinary name character (#3171) —
   // and digits alone qualify (`## v4.0 — 42` is the name `42`).
-  const name = candidate !== null && /[\p{L}\p{N}]/u.test(candidate) ? candidate : null;
+  const name = candidate !== null && hasNameableContent(candidate) ? candidate : null;
   return { version, name };
 }
 
@@ -1737,7 +1755,7 @@ function getMilestoneInfo(cwd?: string): { value: MilestoneInfo | null; scope: S
       );
       if (listMatch) {
         const name = stripLeadingDelimiter(listMatch[1]);
-        if (name) return scoped({ version: stateVersion, name }, SCOPE.COMPLETE);
+        if (name && hasNameableContent(name)) return scoped({ version: stateVersion, name }, SCOPE.COMPLETE);
       }
 
       // #3216: heading selection routes through the shared owner
@@ -1773,10 +1791,13 @@ function getMilestoneInfo(cwd?: string): { value: MilestoneInfo | null; scope: S
     // (unchanged from the pre-#3216 fallback).
     const inProgressMatch = roadmap.match(/🚧\s*\*\*v(\d+(?:\.\d+)+)\s+([^*]+)\*\*/);
     if (inProgressMatch) {
-      return scoped(
-        { version: 'v' + inProgressMatch[1], name: inProgressMatch[2].trim() },
-        SCOPE.COMPLETE,
-      );
+      const inProgressName = inProgressMatch[2].trim();
+      if (hasNameableContent(inProgressName)) {
+        return scoped(
+          { version: 'v' + inProgressMatch[1], name: inProgressName },
+          SCOPE.COMPLETE,
+        );
+      }
     }
 
     // #3216: enumerate every OPEN (non-shipped) milestone heading via the

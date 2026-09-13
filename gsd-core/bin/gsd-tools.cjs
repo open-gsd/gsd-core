@@ -950,15 +950,27 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   function routeCommit({ args, cwd, raw, error }) {
     const amend = args.includes('--amend');
           const noVerify = args.includes('--no-verify');
-          const filesIndex = args.indexOf('--files');
+          // #4208: `--files` and `--files-removed` are two path lists, each
+          // running from its flag to the NEXT LIST FLAG. A boolean flag
+          // inside a list (`--files a --amend b`) is skipped, not a
+          // terminator: that is what the previous slice-to-end collection
+          // did (it filtered `--` tokens and kept everything else), and a
+          // list that stopped at any `--` token silently dropped `b`
+          // (review of #4253). The previous form could not carry a second
+          // list flag at all, which is the only thing that changed.
+          // A REPEATED list flag (`--files a --files b`) merges, as the old
+          // slice-to-end parse merged it: every occurrence contributes its
+          // run, and none of them ends another's silently.
+          const firstListFlag = args.findIndex((a, i) => i > 0 && COMMIT_LIST_FLAGS.has(a));
           // Collect all positional args between command name and first flag,
           // then join them — handles both quoted ("multi word msg") and
           // unquoted (multi word msg) invocations from different shells
-          const endIndex = filesIndex !== -1 ? filesIndex : args.length;
+          const endIndex = firstListFlag !== -1 ? firstListFlag : args.length;
           const messageArgs = args.slice(1, endIndex).filter(a => !a.startsWith('--'));
           const message = messageArgs.join(' ') || undefined;
-          const files = filesIndex !== -1 ? args.slice(filesIndex + 1).filter(a => !a.startsWith('--')) : [];
-          commands.cmdCommit(cwd, message, files, raw, amend, noVerify);
+          const files = collectListFlagValues(args, '--files');
+          const filesRemoved = collectListFlagValues(args, '--files-removed');
+          commands.cmdCommit(cwd, message, files, raw, amend, noVerify, filesRemoved);
   }
 
   function routeCheckCommit({ args, cwd, raw, error }) {
@@ -3340,18 +3352,30 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     return out;
   }
 
-  // Why these three checks rather than security.cjs's `validatePath`: that seam
-  // resolves symlinks with realpathSync and then tests containment, so a link
-  // whose target sits inside the config dir passes. For a restore that is still
-  // wrong — writing through any link overwrites whatever it points at instead
-  // of materializing a regular file at the backed-up path. These checks reject
-  // links outright, which is strictly stricter than validatePath, not a
-  // reimplementation of it. Do not "simplify" this to validatePath.
+  // Why these three checks rather than security.cjs's `assertWithinRoot` /
+  // `tryWithinRoot`: that seam resolves symlinks with realpathSync and then
+  // tests containment, so a link whose target sits inside the config dir
+  // passes. For a restore that is still wrong — writing through any link
+  // overwrites whatever it points at instead of materializing a regular file
+  // at the backed-up path. These checks reject links outright, which is
+  // strictly stricter than assertWithinRoot/tryWithinRoot, not a
+  // reimplementation of them. Do not "simplify" this to assertWithinRoot or
+  // tryWithinRoot. Reviewed under epic #4636 Phase 3: the containment
+  // DECISION now routes through the canonical lexical predicate
+  // (`tryWithinRootLexical`, ADR-4650 decision 6); isInsideDir below still
+  // treats target === root as NOT contained via its own extra `!==` check
+  // (unlike every other containment implementation in this repo, which
+  // treats target === root as contained) — that condition is this gate's
+  // own and is layered on top of the shared predicate, not folded into it.
 
   /** True when `target` resolves strictly inside `root`. */
   function isInsideDir(root, target) {
-    const rel = path.relative(path.resolve(root), path.resolve(target));
-    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+    // Containment decision: canonical lexical predicate (ADR-4650 decision 6).
+    // The extra `!==` condition is this gate's own: a restore must never
+    // target the config directory itself, only something strictly inside it.
+    if (path.resolve(target) === path.resolve(root)) return false;
+    const { tryWithinRootLexical } = require('./lib/security.cjs');
+    return tryWithinRootLexical(target, root) !== null;
   }
 
   /**
@@ -4289,6 +4313,31 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
  * declares that file "All OS-facing I/O; single platform seam", and a private
  * duplicate here is what made it untrue.
  */
+const COMMIT_LIST_FLAGS = new Set(['--files', '--files-removed']);
+
+// #4208 review: hoisted out of routeCommit's closure so the parser is reachable
+// from a test. It is the whole of the two-list argument contract, and its edge
+// cases (a boolean flag inside a run, a repeated list flag, either order) were
+// already the subject of a review round -- a parser that only the CLI can reach
+// can only be tested by example, one spawn at a time.
+//
+// Every occurrence of `flag` contributes a run; a run ends at the next LIST
+// flag and skips boolean flags on the way, so no token strictly between one
+// list flag and the next is ever dropped. Repeated runs of the same flag merge,
+// as the pre-#4208 slice-to-end parse merged them.
+function collectListFlagValues(args, flag) {
+  const values = [];
+  args.forEach((a, i) => {
+    if (a !== flag) return;
+    for (const b of args.slice(i + 1)) {
+      if (COMMIT_LIST_FLAGS.has(b)) break;
+      if (b.startsWith('--')) continue;
+      values.push(b);
+    }
+  });
+  return values;
+}
+
 function resolveSpawnBinary(name, platform = process.platform, env = process.env) {
   const { resolveExecutableBinary } = require('./lib/shell-command-projection.cjs');
   return resolveExecutableBinary(name, { platform, env });
@@ -5208,6 +5257,10 @@ module.exports = {
   // #3275: exported for tests — the shared PATH+PATHEXT resolver behind
   // review-lane invoke's `deps.spawn` / `deps.hasBinary` seams.
   resolveSpawnBinary,
+  // #4208 review: exported for tests — the two-list commit parser is otherwise
+  // reachable only by spawning the CLI, which a property test cannot afford.
+  collectListFlagValues,
+  COMMIT_LIST_FLAGS,
   // #3714 follow-up: exported for tests — the dispatch model-pin VALUE
   // policy (charset accept/render parity, max-length boundary, leading-char
   // anchor) is otherwise unreachable from outside the dispatchOverlayCapabilityCommand closure.

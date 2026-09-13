@@ -81,6 +81,18 @@ the gate context; all others are left untouched for `sh` to interpret:
 
 An undefined placeholder interpolates to the empty string.
 
+**`--phase-dir` is confined to the project.** The value is validated to resolve
+inside the project root before any predicate is evaluated; one that escapes is
+rejected as a usage error rather than evaluated. This applies to both kinds —
+`artifact-frontmatter-equals` resolves its artifact under that directory, and
+`command-exit-zero` interpolates it into `${PHASE_DIR}` — so an unconfined value
+would let a **blocking** gate return `block: false` on evidence from a directory
+the caller chose (#4354). An absolute path inside the project is still accepted;
+absolute is not a synonym for escaping. `${PHASE_DIR}` always interpolates the
+**resolved absolute path**, even when `--phase-dir` was given as a relative
+value — a command relying on `${PHASE_DIR}` staying relative must not assume
+that.
+
 **Sandbox.** cwd = project root; env = inherited from the GSD process; killed
 (SIGTERM) on timeout. The command runs as the user, on the user's machine —
 there is no sandbox boundary vs. the user's own shell. See ADR-2008 "Trust

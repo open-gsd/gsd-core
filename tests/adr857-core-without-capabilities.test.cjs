@@ -106,6 +106,15 @@ function buildTddOnlyConfig() {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
+ * A single gsd-tools.cjs CLI subcommand invocation via execFileSync, no
+ * fan-out. Same class as tests/helpers/timeouts.cjs's
+ * LOOP_HOOK_POINT_CLI_TIMEOUT_MS, but at half that constant's pre-existing
+ * bound -- not equalized without bench data. Kept file-local: this batch's
+ * only site at this exact class+value.
+ */
+const GSD_TOOLS_CLI_TIMEOUT_MS = 30000;
+
+/**
  * Run gsd-tools subprocess and return { exitCode, output }.
  * Does NOT throw on non-zero exit — let the test assert.
  */
@@ -114,7 +123,7 @@ function runCli(args, cwd) {
     const stdout = execFileSync(process.execPath, [GSD_TOOLS, ...args], {
       cwd,
       encoding: 'utf-8',
-      timeout: 30000,
+      timeout: GSD_TOOLS_CLI_TIMEOUT_MS,
     });
     return { exitCode: 0, output: stdout.trim() };
   } catch (err) {

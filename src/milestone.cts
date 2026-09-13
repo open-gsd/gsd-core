@@ -21,7 +21,7 @@ import { transitionCore } from './state-transition.cjs';
 import { writeSetComplete } from './write-set.cjs';
 import type { WriteSet } from './write-set.cjs';
 import { updateTableCell, resetQuickTaskRows, QUICK_TASKS_SECTION_ABSENT } from './markdown-table.cjs';
-import { requireSafePath } from './security.cjs';
+import { requireSafePath, PathAcceptance } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- audit.cjs is an export= CommonJS module
 import auditMod = require('./audit.cjs');
 const { resolveQuickTaskSummaryFile } = auditMod;
@@ -1640,7 +1640,7 @@ function listQuickTaskDirsForArchive(cwd: string): string[] {
   for (const entry of sourceEntries) {
     if (!entry.isDirectory()) continue; // excludes symlinks too — see MAJOR 3 note above
     try {
-      requireSafePath(path.join(quickDir, entry.name), planningBase, 'quick task dir', { allowAbsolute: true });
+      requireSafePath(path.join(quickDir, entry.name), planningBase, 'quick task dir', PathAcceptance.AbsoluteInsideRoot);
     } catch {
       continue; // symlink/escape attempt — never a candidate, in preview OR real run
     }
@@ -1719,7 +1719,7 @@ function archiveQuickTaskDirectories(cwd: string, version: string): { archiveDir
         // rename are two separate filesystem observations, and an entry
         // that was a safe real directory at selection time could in theory
         // be swapped for a symlink before this loop reaches it.
-        safeSrc = requireSafePath(src, planningBase, 'quick task dir', { allowAbsolute: true });
+        safeSrc = requireSafePath(src, planningBase, 'quick task dir', PathAcceptance.AbsoluteInsideRoot);
       } catch {
         continue; // symlink/escape attempt — skip, not archived
       }

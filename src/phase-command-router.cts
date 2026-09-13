@@ -36,7 +36,13 @@ interface PhaseHandlers {
   cmdPhaseNextDecimal: (cwd: string, arg: string | undefined, raw: boolean) => void;
   cmdPhaseAdd: (cwd: string, desc: string, raw: boolean, customId: string | null) => void;
   cmdPhaseAddBatch: (cwd: string, descriptions: string[], raw: boolean) => void;
-  cmdPhaseInsert: (cwd: string, pos: string | undefined, desc: string, raw: boolean) => void;
+  cmdPhaseInsert: (
+    cwd: string,
+    pos: string | undefined,
+    desc: string,
+    raw: boolean,
+    allocation?: 'nested' | 'sibling',
+  ) => void;
   cmdPhaseRemove: (cwd: string, phaseNum: string, opts: { force: boolean }, raw: boolean) => void;
   cmdPhaseComplete: (cwd: string, phaseNum: string | undefined, raw: boolean) => void;
   cmdPhaseUatPassed: (cwd: string, phaseNum: string | undefined, raw: boolean, opts?: { policy?: { requireVerification?: boolean } }) => void;
@@ -154,7 +160,19 @@ function routePhaseCommand({ phase, args, cwd, raw, error }: RoutePhaseCommandOp
         if (args.includes('--dry-run')) {
           return makeInvalidArgs('--dry-run', 'phase insert does not support --dry-run');
         }
-        phase.cmdPhaseInsert(cwd, args[2], args.slice(3).join(' '), raw);
+        // #4569: --sibling opts into joining afterPhase's parent decimal level
+        // instead of nesting one level deeper. Filtered out like other
+        // boolean flags (see `remove`'s --force handling above) so it never
+        // leaks into the free-text description.
+        const sibling = args.includes('--sibling');
+        const insertArgs = args.slice(2).filter(token => token !== '--sibling');
+        phase.cmdPhaseInsert(
+          cwd,
+          insertArgs[0],
+          insertArgs.slice(1).join(' '),
+          raw,
+          sibling ? 'sibling' : 'nested',
+        );
         return { ok: true as const, data: null };
       },
       remove: (_ctx: Record<string, unknown>) => {

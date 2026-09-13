@@ -1111,6 +1111,78 @@ describe('roadmap-parser: getMilestoneInfo #4134 — name-then-version heading',
   });
 });
 
+// ─── getMilestoneInfo — #4433 name-validity guard on bullet captures ──────────
+// `hasNameableContent` (the #4134 name-validity predicate) is not exported
+// from roadmap-parser.cjs; these tests exercise it indirectly through
+// getMilestoneInfo's two bullet-capture sites (the STATE-anchored 🚧 bullet
+// and the no-STATE.md in-progress 🚧 bullet), which #4433 found had skipped
+// straight to a bare truthiness check.
+
+describe('roadmap-parser: getMilestoneInfo #4433 — name-validity guard on bullet captures', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  test('#4433 — punctuation-only 🚧-bullet name (STATE.md version known) falls through to TRUNCATED, not the bullet fragment', () => {
+    writeState(tmpDir, { milestone: 'v3.3' });
+    writeRoadmap(tmpDir, [
+      '🚧 **v3.3** !!!',
+      '',
+      '## v3.4: Something Else',
+      '### Phase 1: Setup',
+    ].join('\n'));
+    const info = getMilestoneInfo(tmpDir);
+    assert.strictEqual(info.scope, SCOPE.TRUNCATED, `scope: ${JSON.stringify(info)}`);
+    assert.strictEqual(info.value.version, 'v3.3');
+    assert.notStrictEqual(info.value.name, '!!!');
+    assert.strictEqual(info.value.name, null);
+  });
+
+  test('#4433 — real, non-punctuation 🚧-bullet name (STATE.md version known) still resolves COMPLETE (regression control)', () => {
+    writeState(tmpDir, { milestone: 'v3.3' });
+    writeRoadmap(tmpDir, [
+      '🚧 **v3.3** Real Feature Name',
+      '',
+      '## v3.4: Something Else',
+      '### Phase 1: Setup',
+    ].join('\n'));
+    const info = getMilestoneInfo(tmpDir);
+    assert.strictEqual(info.scope, SCOPE.COMPLETE, `scope: ${JSON.stringify(info)}`);
+    assert.strictEqual(info.value.version, 'v3.3');
+    assert.match(info.value.name, /Real Feature Name/);
+  });
+
+  test('#4433 — punctuation-only in-progress 🚧-bullet (no STATE.md) is not returned as COMPLETE with the punctuation as name', () => {
+    writeRoadmap(tmpDir, '🚧 **v3.3 !!!**\n### Phase 1: Setup\n');
+    const info = getMilestoneInfo(tmpDir);
+    assert.notStrictEqual(info.value.name, '!!!');
+    if (info.scope === SCOPE.COMPLETE) {
+      assert.fail(`punctuation-only in-progress bullet name leaked through as COMPLETE: ${JSON.stringify(info)}`);
+    }
+    assert.strictEqual(info.scope, SCOPE.TRUNCATED, `scope: ${JSON.stringify(info)}`);
+    assert.strictEqual(info.value.version, 'v3.3');
+    assert.strictEqual(info.value.name, null);
+  });
+
+  test('#4433 — real in-progress 🚧-bullet name (no STATE.md) still resolves COMPLETE (regression control)', () => {
+    writeRoadmap(tmpDir, '🚧 **v3.3 Some Real Name**\n### Phase 1: Setup\n');
+    const info = getMilestoneInfo(tmpDir);
+    assert.strictEqual(info.scope, SCOPE.COMPLETE, `scope: ${JSON.stringify(info)}`);
+    assert.strictEqual(info.value.version, 'v3.3');
+    assert.match(info.value.name, /Some Real Name/);
+  });
+
+  test('#4433 — digits-only captured name is accepted (boundary: digits alone qualify)', () => {
+    writeState(tmpDir, { milestone: 'v4.0' });
+    writeRoadmap(tmpDir, '## v4.0 — 42\n### Phase 1: Setup\n');
+    const info = getMilestoneInfo(tmpDir);
+    assert.strictEqual(info.scope, SCOPE.COMPLETE, `scope: ${JSON.stringify(info)}`);
+    assert.strictEqual(info.value.version, 'v4.0');
+    assert.strictEqual(info.value.name, '42');
+  });
+});
+
 // ─── isMilestoneShippedInRoadmap ──────────────────────────────────────────────
 
 // #2562: this module owns milestone-heading classification, so its own shipped

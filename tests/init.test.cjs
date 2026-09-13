@@ -12,6 +12,7 @@ const { createFixture, seedPhase } = require('./fixtures/index.cjs');
 const { createTempProject, createTempDir } = require('./helpers.cjs');
 const { executionContextRefs } = require('../scripts/command-contract-helpers.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
+const { GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 /**
  * #3188: write the canonical flat planning docs so an init-query "present" test
@@ -1282,6 +1283,37 @@ describe('init plan-phase zero-padded phase number (bug #2391)', () => {
     // branch_name must use the normalized phase number, not the raw "CK-01" token
     assert.strictEqual(output.branch_name, 'gsd/phase-01-foundation',
       'branch_name must use normalized phase number (strip project_code prefix, zero-pad), not raw phase_number');
+  });
+
+  // #4126: an undeliverable phase_slug (a bare phase directory with no slug
+  // remainder, e.g. seeded here as literally "01") must never produce a
+  // branch name ending in the literal word "phase" — routed through the
+  // shared renderPhaseBranchName owner (src/phase-id.cts) so this and
+  // commands.cts's cmdCommit phase-branching arm can never diverge on the
+  // fallback.
+  test('#4126: an undeliverable phase_slug drops the token instead of substituting the literal "phase"', () => {
+    seedPhase(tmpDir, '01', {
+      '01-01-PLAN.md': '# Plan',
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({
+        git: {
+          branching_strategy: 'phase',
+          phase_branch_template: 'gsd/phase-{phase}-{slug}',
+        },
+      }, null, 2)
+    );
+
+    const result = runGsdTools('init execute-phase 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_slug, null, 'precondition: phase_slug must be undeliverable');
+    assert.ok(!output.branch_name.endsWith('-phase'),
+      `branch_name must not end in the literal "-phase": ${output.branch_name}`);
+    assert.strictEqual(output.branch_name, 'gsd/phase-01',
+      'expected the {slug} token to be dropped cleanly');
   });
 });
 
@@ -3680,7 +3712,7 @@ describe('init section manifest', () => {
       cwd,
       encoding: 'utf8',
       env: { ...process.env, GSD_JSON_ERRORS: '1', ...env },
-      timeout: 30000,
+      timeout: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS,
     });
     let stdout = result.stdout || '';
     // output() spills payloads over 50KB to a tmpfile and prints "@file:<path>"

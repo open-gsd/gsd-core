@@ -755,6 +755,10 @@ function readInstalledCapabilitySkill(stem: string, registry: CapabilityRegistry
   if (!isPathConfined(relSkillPath, capDir)) return null;
   const skillPath = path.join(capDir, relSkillPath);
   try {
+    // statSync follows symlinks; isPathConfined is lexical and cannot see one.
+    // Refuse to read through a link so an outside file's content cannot be
+    // installed as a capability skill (epic #4636).
+    if (fs.lstatSync(skillPath).isSymbolicLink()) return null;
     if (!fs.statSync(skillPath).isFile()) return null;
     return { capId, content: fs.readFileSync(skillPath, 'utf8') };
   } catch {
@@ -879,6 +883,13 @@ function stageSkillsForRuntimeAsSkills(
         const skillName = `${prefix}${stem}`;
         if (!isPathConfined(skillName, stageDir)) continue; // defense-in-depth
         const destDir = path.join(stageDir, skillName);
+        // isPathConfined is lexical and cannot see a symlink. mkdirSync({recursive:true})
+        // does NOT throw when destDir already exists as a symlink to a directory, so a
+        // pre-planted link would redirect the SKILL.md write outside `stageDir`. Refuse
+        // to write through a link (epic #4636; mirrors retired-artifact-cleanup.cts:77).
+        try {
+          if (installFs().lstatSync(destDir).isSymbolicLink()) continue;
+        } catch { /* ENOENT: not created yet — the normal case */ }
         installFs().mkdirSync(destDir, { recursive: true });
         installFs().writeFileSync(path.join(destDir, 'SKILL.md'), found.content);
         // #2322 HIGH-3: persist the capability-owned marker so a later prune

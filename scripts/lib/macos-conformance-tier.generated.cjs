@@ -6,6 +6,7 @@
 
 module.exports = {
   MACOS_CONFORMANCE_TIER_FILES: [
+  "tests/adr-612-bracket-phase-counting.test.cjs",
   "tests/adr-index-gate.test.cjs",
   "tests/adr-parser.property.test.cjs",
   "tests/adr-parser.unit.test.cjs",
@@ -30,6 +31,7 @@ module.exports = {
   "tests/capability-trust.test.cjs",
   "tests/changeset-parse.test.cjs",
   "tests/check-contract-drift.test.cjs",
+  "tests/check-predicate.test.cjs",
   "tests/check-ui-safety-gate.test.cjs",
   "tests/check-update-config-dir.test.cjs",
   "tests/chunked-planning-parallel.test.cjs",
@@ -43,6 +45,7 @@ module.exports = {
   "tests/codex-config.test.cjs",
   "tests/commands.test.cjs",
   "tests/commit-docs-bypass.test.cjs",
+  "tests/commit-files-deletion.test.cjs",
   "tests/commit-files-pathspec.test.cjs",
   "tests/commonjs-marker.test.cjs",
   "tests/completion-ratio-scope-withholding.test.cjs",
@@ -60,6 +63,7 @@ module.exports = {
   "tests/effort-sync-installed-runtime.test.cjs",
   "tests/emitted-attribution.test.cjs",
   "tests/ensure-runtime-build.test.cjs",
+  "tests/execute-phase-decimal-arithmetic.test.cjs",
   "tests/executed-plan.test.cjs",
   "tests/executor-mvp-tdd-section.test.cjs",
   "tests/external-job.test.cjs",

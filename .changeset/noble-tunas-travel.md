@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 4640
+---
+**Milestone-name, branch-name, and phase-insert allocation bugs consolidated at the seam** — a punctuation-only 🚧-bullet name (e.g. a malformed `🚧 **v3.3** ---`) could surface as a real milestone name in two of three capture sites; an undeliverable `phase_slug` produced a branch name ending in the literal `-phase` instead of dropping the segment; `phase insert` (and `phase next-decimal`) could silently reallocate a decimal sub-phase number that existed only as a roadmap checklist bullet, with no way to request a sibling instead of always nesting one level deeper. All three are now single, shared implementations (`hasNameableContent`, `renderPhaseBranchName`, `scanExistingDecimalPhaseNumbers`) applied everywhere the concept is used instead of each consumer reimplementing it independently, with the phase-id anti-divergence guard extended to catch a re-derivation of any of them — and, separately, to catch banned $((10#...)) shell arithmetic on phase-number variables in workflow/reference docs. `phase insert` gains a `--sibling` flag. (#4126, #4433, #4569, #4634)

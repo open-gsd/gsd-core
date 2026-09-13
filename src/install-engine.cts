@@ -1610,6 +1610,13 @@ function installOpencodeFamilySkills(
       content = applyOpencodeFamilyPathPrefix(content, runtime, pathPrefix);
       content = processAttribution(content, resolveAttribution(runtime));
       const skillDir = path.join(dest, skillName);
+      // isPathConfined is lexical and cannot see a symlink. mkdirSync({recursive:true})
+      // does NOT throw when skillDir already exists as a symlink to a directory, so a
+      // pre-planted link would redirect the SKILL.md write outside `dest`. Refuse to
+      // write through a link (epic #4636; mirrors retired-artifact-cleanup.cts:77).
+      try {
+        if (installFs().lstatSync(skillDir).isSymbolicLink()) continue;
+      } catch { /* ENOENT: not created yet — the normal case */ }
       installFs().mkdirSync(skillDir, { recursive: true });
       installFs().writeFileSync(path.join(skillDir, 'SKILL.md'), content);
       // #2322 HIGH-3 parity: persist the capability-owned marker so a later

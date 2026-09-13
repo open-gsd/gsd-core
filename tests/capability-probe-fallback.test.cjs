@@ -39,6 +39,19 @@ const DELTA_FRAGMENT = path.join(
 const TOOLS_PATH = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
 
 /**
+ * The OUTER runNode() timeoutMs bound for a node -e wrapper that itself
+ * spawns ONE bash subprocess to execute an extracted capability-fragment
+ * probe snippet (a two-level nested spawn). Distinct from
+ * HOOK_FANOUT_TIMEOUT_MS (a git-hook-shaped multi-spawn fan-out, ~4 spawns)
+ * and LOOP_HOOK_POINT_CLI_TIMEOUT_MS (specifically gsd-tools.cjs, not a
+ * generic node -e wrapper) despite the coincidentally-matching value. Does
+ * NOT touch the inner `timeout: 60000` inside the node-e script's own
+ * string literal a few lines above -- that is JS text content passed to a
+ * spawned child, not a real object-literal property in this file's AST.
+ */
+const FRAGMENT_PROBE_SNIPPET_TIMEOUT_MS = 60000;
+
+/**
  * Pull the fragment's probe snippet out of its markdown: the first fenced
  * ```bash block that assigns `varName`. The block is returned verbatim so the
  * test executes exactly the bytes the planner is handed.
@@ -84,7 +97,7 @@ function runSnippet({ block, varName, prelude, cwd }) {
       const { spawnSync } = require('node:child_process');
       const r = spawnSync('bash', [process.argv[1]], { cwd: process.argv[2], encoding: 'utf8', timeout: 60000 });
       process.stdout.write(r.stdout || '');
-    `, scriptFile, cwd], { cwd, timeoutMs: 60000 });
+    `, scriptFile, cwd], { cwd, timeoutMs: FRAGMENT_PROBE_SNIPPET_TIMEOUT_MS });
     assert.strictEqual(r.outcome, OUTCOME.EXITED, `snippet runner outcome: ${r.outcome}`);
     return r.stdout;
   } finally {

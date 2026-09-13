@@ -44,7 +44,7 @@ import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { resolveReportedRuntime } from './host-runtime-detection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- commands.cjs is an export= CommonJS module
 import commandsMod = require('./commands.cjs');
-import { validatePath, loadTrustedGlobalRoots } from './security.cjs';
+import { tryWithinRoot, loadTrustedGlobalRoots, PathAcceptance } from './security.cjs';
 import { getGlobalSkillDir, getGlobalSkillDisplayPath, getGlobalSkillsBase, getGlobalConfigDir } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
 import frontmatterMod = require('./frontmatter.cjs');
@@ -97,7 +97,7 @@ const {
   extractCurrentMilestone,
 } = roadmapParser;
 const { pathExistsInternal, generateSlugInternal, toPosixPath } = coreUtils;
-const { comparePhaseNum, normalizePhaseName, matchPhaseDirs, stripProjectCodePrefix, PHASE_NUMBER_TOKEN_SOURCE, isForeignPrefixedPhaseQuery, isSentinelPhaseId, extractPhaseToken, scopeToPhase } = phaseId;
+const { comparePhaseNum, normalizePhaseName, matchPhaseDirs, stripProjectCodePrefix, PHASE_NUMBER_TOKEN_SOURCE, isForeignPrefixedPhaseQuery, isSentinelPhaseId, extractPhaseToken, scopeToPhase, renderPhaseBranchName } = phaseId;
 const { pruneOrphanedWorktrees } = worktreeSafety;
 
 const {
@@ -989,10 +989,11 @@ function cmdInitExecutePhase(
 
     branch_name:
       config.branching_strategy === 'phase' && phaseInfo
-        ? (config.phase_branch_template as string)
-            .replace('{project}', (config.project_code as string) || '')
-            .replace('{phase}', normalizePhaseName(phaseInfo['phase_number']))
-            .replace('{slug}', (phaseInfo['phase_slug'] as string) || 'phase')
+        ? renderPhaseBranchName(
+            (config.phase_branch_template as string).replace('{project}', (config.project_code as string) || ''),
+            phaseInfo['phase_number'],
+            phaseInfo['phase_slug'],
+          )
         : config.branching_strategy === 'milestone'
           ? (config.milestone_branch_template as string)
               .replace('{milestone}', (milestone['version'] as string | undefined) ?? '')
@@ -4014,12 +4015,11 @@ function buildAgentSkillsBlock(
         );
         continue;
       }
-      const pathCheck = validatePath(globalSkillMd, globalSkillsBase, { allowAbsolute: true }) as unknown as Record<string, unknown>;
-      if (!pathCheck['safe']) {
-        const acceptedViaTrustedRoot = trustedGlobalRoots.some((root) => {
-          const rootCheck = validatePath(globalSkillMd, root, { allowAbsolute: true }) as unknown as Record<string, unknown>;
-          return Boolean(rootCheck['safe']);
-        });
+      const globalSkillMdContained = tryWithinRoot(globalSkillMd, globalSkillsBase, PathAcceptance.AbsoluteInsideRoot);
+      if (globalSkillMdContained === null) {
+        const acceptedViaTrustedRoot = trustedGlobalRoots.some(
+          (root) => tryWithinRoot(globalSkillMd, root, PathAcceptance.AbsoluteInsideRoot) !== null,
+        );
         if (!acceptedViaTrustedRoot) {
           warn(
             `[agent-skills] WARNING: Global skill "${skillName}" failed path check (symlink escape?) — skipping\n`,
@@ -4030,19 +4030,27 @@ function buildAgentSkillsBlock(
         // trace, not a skip, so it must not land in the diagnostics warnings[].
         process.stderr.write(`[agent-skills] NOTE: Global skill "${skillName}" accepted via trusted_global_roots (resolves outside the default skills dir)\n`);
       }
+      // `ref` is an emitted display token, not a path anything reads or writes
+      // through — the containment check above is a gate, not a path producer.
+      // Emitting the validated (realpath-resolved, platform-separator) value
+      // instead of this literal broke symlinked skill dirs and Windows output.
+      // The only filesystem read here (existsSync above) already ran on the
+      // lexical path before containment was checked, so ADR-4650's "use the
+      // validated value" rule doesn't apply to this emission.
       validEntries.push({ kind: 'include', ref: `${globalSkillDir}/SKILL.md`, display: displayPath });
       continue;
     }
 
-    const pathCheck = validatePath(skillPath, projectRoot) as unknown as Record<string, unknown>;
-    if (!pathCheck['safe']) {
+    const skillPathContained = tryWithinRoot(skillPath, projectRoot);
+    if (skillPathContained === null) {
       warn(
-        `[agent-skills] WARNING: Skipping unsafe path "${skillPath}": ${pathCheck['error'] as string}\n`,
+        `[agent-skills] WARNING: Skipping unsafe path "${skillPath}": not confined to the project directory\n`,
       );
       continue;
     }
 
-    const skillMdPath = path.join(projectRoot, skillPath, 'SKILL.md');
+    // ADR-4650: the validated value is the value used — never re-derive from raw input.
+    const skillMdPath = path.join(skillPathContained, 'SKILL.md');
     if (!fs.existsSync(skillMdPath)) {
       // #2941: if the bare name matches a global skill, hint at the global: prefix.
       // The bare name resolves as project-relative (which doesn't exist), but the

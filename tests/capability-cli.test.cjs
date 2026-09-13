@@ -19,6 +19,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -1013,7 +1014,7 @@ describe('capability consent store (#1459)', () => {
     const { throwIfFailed } = require('./helpers/git-fixture.cjs');
     const fifoPath = path.join(dir, 'capability.json');
     throwIfFailed(
-      runHook(fifoPath, [], { interpreter: 'mkfifo', timeoutMs: 15000 }),
+      runHook(fifoPath, [], { interpreter: 'mkfifo', timeoutMs: PROBE_TIMEOUT_MS }),
       `mkfifo ${fifoPath}`,
     );
     // A committed project ledger so the list iterates this entry (the FIFO is on the metadata-read path).

@@ -9,7 +9,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { requireSafePath } from './security.cjs';
+import { requireSafePath, PathAcceptance } from './security.cjs';
 import { collectSections } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import cliExitModule = require('./cli-exit.cjs');
@@ -458,7 +458,7 @@ function parseCliArgs(argv: string[]): CliOpts {
 
 function main(argv: string[]): void {
   const opts = parseCliArgs(argv);
-  const safePath = requireSafePath(opts.input, path.resolve(opts.projectDir), 'ADR input path', { allowAbsolute: true });
+  const safePath = requireSafePath(opts.input, path.resolve(opts.projectDir), 'ADR input path', PathAcceptance.AbsoluteInsideRoot);
   const content = fs.readFileSync(safePath, 'utf8');
   const parsed = parseAdrMarkdown(content, { sourcePath: opts.input ?? undefined, format: opts.format });
   process.stdout.write(JSON.stringify(parsed, null, 2));
