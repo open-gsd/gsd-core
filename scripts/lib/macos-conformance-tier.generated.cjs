@@ -127,6 +127,7 @@ module.exports = {
   "tests/no-posix-mode-bit-assert.rule.test.cjs",
   "tests/no-private-binary-resolution.rule.test.cjs",
   "tests/no-unguarded-nonportable-exec.rule.test.cjs",
+  "tests/nsegment-phase-grammar.test.cjs",
   "tests/observability/event.test.cjs",
   "tests/onboard-command.test.cjs",
   "tests/opencode-plugin-adapter.test.cjs",

@@ -136,10 +136,11 @@ branch=$(git branch --show-current)
 test -n "$branch" || { echo "Detached HEAD is not supported for review-fix (#2686)"; exit 1; }
 
 # padded_phase is interpolated into a worktree PATH and a git BRANCH NAME —
-# validate at this sink too (defense in depth): digits + one or more dotted
-# numeric segments only (e.g. '02' or '36.14'); reject '../', spaces, shell metachars.
-if ! [[ "$padded_phase" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
-  echo "Invalid padded_phase for review-fix: '$padded_phase' (expected e.g. '02', '36.14', or '23.1.2')"; exit 1
+# validate at this sink too (defense in depth): the canonical phase-number grammar
+# (src/phase-id.cts) — digits, an optional single uppercase letter, then dotted
+# numeric segments (e.g. '02', '36.14', '12A'); reject '../', spaces, shell metachars.
+if ! [[ "$padded_phase" =~ ^[0-9]+[A-Z]?(\.[0-9]+)*$ ]]; then
+  echo "Invalid padded_phase for review-fix: '$padded_phase' (expected e.g. '02', '36.14', '23.1.2', or '12A')"; exit 1
 fi
 
 # Recovery-sentinel: ${phase_dir}/.review-fix-recovery-pending.json existing means
