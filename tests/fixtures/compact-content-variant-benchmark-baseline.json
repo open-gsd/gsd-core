@@ -38,9 +38,9 @@
       "reductionPct": 9.76
     },
     "agents/gsd-debug-session-manager.md": {
-      "offTokens": 4938,
-      "onTokens": 4649,
-      "reductionPct": 5.85
+      "offTokens": 5027,
+      "onTokens": 4738,
+      "reductionPct": 5.75
     },
     "agents/gsd-doc-classifier.md": {
       "offTokens": 2901,
@@ -169,8 +169,8 @@
     }
   },
   "aggregate": {
-    "offTokens": 118869,
-    "onTokens": 94513,
-    "reductionPct": 20.49
+    "offTokens": 118958,
+    "onTokens": 94602,
+    "reductionPct": 20.47
   }
 }

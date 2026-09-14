@@ -20,9 +20,16 @@ const DEBUG_WORKFLOW = path.join(ROOT, 'gsd-core', 'workflows', 'debug.md');
 // shipped spawn rather than against a pattern retyped from the fix.
 function agentSpawnBlocks(content) {
   const blocks = [];
-  const re = /Agent\(\s*\n([\s\S]*?)\n\)/g;
+  // Multi-line form: Agent(\n … \n). Non-greedy, so it stops at the first
+  // line that is exactly ")".
+  const multi = /Agent\(\s*\n[\s\S]*?\n\)/g;
+  // Single-line form: Agent(…). Without this a one-line spawn evades the
+  // class guard in row 4 entirely — the guard would be vacuous against
+  // exactly the kind of future offender it exists to catch.
+  const single = /Agent\([^\n)]*\)/g;
   let m;
-  while ((m = re.exec(content)) !== null) blocks.push(m[0]);
+  while ((m = multi.exec(content)) !== null) blocks.push(m[0]);
+  while ((m = single.exec(content)) !== null) blocks.push(m[0]);
   return blocks;
 }
 
@@ -100,18 +107,32 @@ describe('debug session manager: the debugger spawn must block (#4395)', () => {
     );
   });
 
-  // ROW 6 — Step 2 stays the single spawn-format source.
-  test('continuation spawns delegate to Step 2 rather than inlining their own Agent() call', () => {
-    const manager = readFileNormalized(MANAGER);
-    const spawnBlocks = agentSpawnBlocks(manager).filter((b) => b.includes('subagent_type='));
-    assert.equal(
-      spawnBlocks.length,
-      1,
-      'exactly one Agent() spawn literal may exist — the continuation sites say "see Step 2 format", ' +
-      'which is what makes fixing Step 2 fix all of them',
-    );
-    assert.match(manager, /see Step 2 format/, 'the continuation sites must still point at Step 2');
-  });
+  // ROW 6 — Step 2 must stay the SOLE spawn literal, in both variants.
+  //
+  // This is the invariant the fix actually rests on, and it is narrower than it
+  // first looks. The continuation sites do NOT all name Step 2: in the full
+  // variant, 8 sites say "spawn continuation agent" and exactly ONE adds
+  // "(see Step 2 format)"; the compact variant says "Step 2 format" without the
+  // "see". The other sites inherit the blocking flag only because there is no
+  // other Agent() spawn literal in the file to inherit from. Pin that, not the
+  // prose wording — if a second literal is ever added, those sites silently stop
+  // inheriting and #4395 comes back on whichever paths route through it.
+  for (const [label, file] of [['full', MANAGER], ['compact', MANAGER_COMPACT]]) {
+    test(`${label} variant keeps Step 2 as the sole Agent() spawn literal`, () => {
+      const content = readFileNormalized(file);
+      const spawnBlocks = agentSpawnBlocks(content).filter((b) => b.includes('subagent_type='));
+      assert.equal(
+        spawnBlocks.length,
+        1,
+        `${label} variant: exactly one Agent() spawn literal may exist — the continuation sites ` +
+        're-spawn by reference to it, so a second literal would not carry the flag',
+      );
+      assert.ok(
+        /Step 2 format/.test(content),
+        `${label} variant: at least one continuation site must still name Step 2 as the format source`,
+      );
+    });
+  }
 
   // ROW 7 — the non-terminal shape was not collaterally removed.
   test('CONTINUE_REQUIRED and both terminal markers survive', () => {
