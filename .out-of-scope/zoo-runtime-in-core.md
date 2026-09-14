@@ -19,6 +19,7 @@
 This entry denies **first-party, in-tree runtime registration for Zoo Code.** It does not deny, and must never be cited against:
 
 - **Shipping an out-of-tree host-plugin for Zoo Code.** This is welcome and supported, and is the intended route — a Zoo plugin that embeds GSD via the Host-Integration SDK and is listed in `docs/registries/eos.json`, same as `gsd-cursor`/`gsd-omp`/`gsd-reasonix`. The reporter's own docs-verified integration research (custom-modes schema, `.roo/commands/` layout, `new_task` subagent dispatch) is directly reusable there without any gsd-core change.
+- **Shipping Zoo as a third-party `role: "runtime"` capability via ADR-1244's external loader.** ADR-857 D8 deferred third-party CLI/runtime support "to an external loader + trust/validation gate"; ADR-1244 (Accepted, ratified 2026-07-17) is that ADR and delivers that gate — a third-party capability, including `role: "runtime"`, can be installed from outside gsd-core's own tree (`~/.gsd/capabilities/<id>/` global, or `.gsd/capabilities/<id>/` project-scoped) under its trust/consent model. This is a live mechanism today, not a future trigger — see "Re-open criteria" below.
 - **A Zoo integration built as a Capability**, if what's actually needed is a toggleable feature rather than a new host identity.
 - **Fixing defects that surface through a non-registered runtime**, or improving the documented override/SDK contracts a host plugin depends on.
 - **Migrations of already-supported runtimes onto the EoS architecture.**
@@ -26,8 +27,8 @@ This entry denies **first-party, in-tree runtime registration for Zoo Code.** It
 
 ## Re-open criteria
 
-- GSD reopens first-class in-tree runtime registration — e.g. funded development changes the maintenance calculus, or third-party `role: "runtime"` descriptors become loadable from outside the repo (ADR-857 D8's deferred purely-additive external loader). Until one of these holds, the answer for any new host is the EoS Registry, not the in-tree registry.
-- Zoo Code demonstrates an integration need the EoS Host-Integration Interface genuinely cannot express (none shown to date).
+- **The ADR-857 D8 external-loader condition is already met** — ADR-1244 (Accepted 2026-07-17) delivers third-party `role: "runtime"` capability loading; this is no longer a future trigger. What remains unmet is a maintainer decision to expand gsd-core's own *first-party, in-tree* supported-runtime set specifically — that is a bandwidth/scope call, not a tooling gap, and reopens only if funded development changes the maintenance calculus described above.
+- Zoo Code demonstrates an integration need the EoS Host-Integration Interface AND the ADR-1244 third-party capability loader genuinely cannot express (none shown to date).
 
 ## Related
 
