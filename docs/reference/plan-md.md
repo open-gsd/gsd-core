@@ -164,7 +164,7 @@ Lists the workflow files associated with executing the plan. Always includes the
 </execution_context>
 ```
 
-These `@` paths point at the local GSD install, not at repository files. The prefix shown here (`~/.claude/gsd-core/…`) is the Claude global-install location; other runtimes and local installs resolve to their own install directory — for example `.cursor/gsd-core/…`, or an absolute project path for a `--local` install. Because the prefix is install-relative, this block is not clone-portable: a committed plan carries whichever prefix the authoring install had. Execution does not depend on it — `/gsd-execute-phase` loads the execute-plan workflow from its own installed copy — so the block records the execution context rather than resolvable repository references. Contrast `<context>` (below), whose repository-relative `@` paths resolve after a `git clone`.
+These `@` paths point at the local GSD install, not at repository files. The prefix shown here (`~/.claude/gsd-core/…`) is the Claude global-install location; other runtimes resolve to their own install directory — for example `.cursor/gsd-core/…`. A local OpenCode install uses the portable `.opencode/gsd-core/…` prefix; some other local runtimes use an absolute project path. An absolute prefix is not clone-portable because a committed plan carries the authoring install's path. Execution does not depend on it — `/gsd-execute-phase` loads the execute-plan workflow from its own installed copy — so the block records the execution context rather than resolvable repository references. Contrast `<context>` (below), whose repository-relative `@` paths resolve after a `git clone`.
 
 ### `<context>`
 

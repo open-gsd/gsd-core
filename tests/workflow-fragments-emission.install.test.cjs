@@ -292,7 +292,7 @@ test('noSectionMarkerLeaksIntoEmittedArtifacts', (t) => {
 //
 // Two representative runtimes chosen to cover BOTH observed @-ref forms
 // (empirically confirmed, #2930 dispatch): claude/cursor/codex rewrite to
-// `@$HOME/...`, while opencode rewrites to a bare `@<absolute-path>/...`.
+// `@$HOME/...`, while global OpenCode rewrites to a bare `@<absolute-path>/...`.
 // Both installed SKILL.md files themselves pass through composeWorkflow too
 // (as a no-op, being unmarked) — this proves that pass never corrupts or
 // relocates the referenced workflow file.

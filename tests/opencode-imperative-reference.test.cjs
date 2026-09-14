@@ -40,6 +40,7 @@ const {
   PROFILE_BASELINES,
   UNDOCUMENTED,
 } = require('../gsd-core/bin/lib/host-integration.cjs');
+const conversion = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 
 const OC_CAP = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', 'capabilities', 'opencode', 'capability.json'), 'utf8'),
@@ -49,6 +50,16 @@ const OC_AXES = OC_CAP.runtime.hostIntegration;
 // Keep this independent of the descriptor: changing the descriptor without
 // updating the install contract must fail rather than redefine the assertion.
 const EXPECTED_OPEN_CODE_PLUGIN_FILES = ['gsd-core.js'];
+
+function markdownFilesUnder(root) {
+  const files = [];
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const candidate = path.join(root, entry.name);
+    if (entry.isDirectory()) files.push(...markdownFilesUnder(candidate));
+    else if (entry.isFile() && entry.name.endsWith('.md')) files.push(candidate);
+  }
+  return files;
+}
 
 test('generated OpenCode V2 dependency bundles are byte-for-byte current', () => {
   const result = spawnSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'build-opencode-v2-bundles.cjs'), '--check'], {
@@ -300,6 +311,22 @@ test('opencode descriptor declares runtime.hostBehaviors (the folded-in behavior
     transport: 'native-tool',
     tool: 'gsd_worktree_task',
   }, 'OpenCode orchestration uses the durable V2 native tool, never opencode run');
+});
+
+test('OpenCode local path prefix is portable on POSIX and Windows targets', () => {
+  for (const [resolvedTarget, homeDir, isWindowsHost] of [
+    ['/private/fixture/project/.opencode', '/private/fixture/home', false],
+    ['C:\\fixture\\project\\.opencode', 'C:\\fixture\\home', true],
+  ]) {
+    assert.equal(conversion._computePathPrefix({
+      isGlobal: false,
+      isOpencode: true,
+      isWindowsHost,
+      resolvedTarget,
+      homeDir,
+      localPathPrefix: OC_CAP.runtime.hostBehaviors.localPathPrefix,
+    }), '.opencode/');
+  }
 });
 
 test('no `runtime === "opencode"` string-equality branch remains in the install source (AC2)', () => {
@@ -610,6 +637,27 @@ test('local install is movable and resolves its repository-local gsd-tools', asy
   assert.ok(workflow.includes('"${_GSD_RUNTIME_ROOT}/.opencode/gsd-core/bin/${_GSD_SHIM_NAME}"'));
   assert.equal(command.includes(project), false, 'command must not embed its install-machine project path');
   assert.equal(workflow.includes(project), false, 'workflow must not embed its install-machine project path');
+  const installedMarkdown = markdownFilesUnder(path.join(project, '.opencode'));
+  assert.ok(installedMarkdown.some((file) => file.includes(`${path.sep}agents${path.sep}`)), 'fixture must cover installed agents');
+  assert.ok(installedMarkdown.some((file) => file.includes(`${path.sep}commands${path.sep}`)), 'fixture must cover installed commands');
+  assert.ok(installedMarkdown.some((file) => file.includes(`${path.sep}skills${path.sep}`)), 'fixture must cover installed skills');
+  assert.ok(installedMarkdown.some((file) => file.includes(`${path.sep}gsd-core${path.sep}workflows${path.sep}`)), 'fixture must cover copied workflows');
+  assert.ok(installedMarkdown.some((file) => file.includes(`${path.sep}gsd-core${path.sep}references${path.sep}`)), 'fixture must cover copied references');
+  const portableProject = project.replaceAll('\\', '/');
+  const portableConfig = path.join(project, '.opencode').replaceAll('\\', '/');
+  const activeMarkdown = installedMarkdown.filter((file) => /(?:agents|commands|skills|gsd-core[\\/]workflows|gsd-core[\\/]references)[\\/]/.test(path.relative(project, file)));
+  for (const file of installedMarkdown) {
+    const content = fs.readFileSync(file, 'utf8');
+    assert.equal(content.includes(portableProject), false,
+      `${path.relative(project, file)} must not embed the local project root in Markdown`);
+    assert.equal(content.includes(portableConfig), false,
+      `${path.relative(project, file)} must not embed the local OpenCode config root in Markdown`);
+  }
+  for (const file of activeMarkdown) {
+    const absoluteRef = fs.readFileSync(file, 'utf8').match(/@(?:[A-Za-z]:[\\/]|\/|\\\\|~\/|\$HOME\/)[^\s`"'<>)]*/);
+    assert.equal(absoluteRef, null,
+      `${path.relative(project, file)} must use .opencode/ rather than an absolute or home-relative @file reference`);
+  }
   assert.equal(fs.existsSync(path.join(project, '.opencode', 'gsd-core', 'bin', 'gsd-tools.cjs')), true);
   const installedHelper = path.join(project, '.opencode', 'gsd-core', 'bin', 'lib', 'opencode-v2-attestation.cjs');
   const helperImport = spawnSync(process.execPath, ['-e', `const helper=require(${JSON.stringify(installedHelper)});process.stdout.write(helper.RPC_ID)`], {
