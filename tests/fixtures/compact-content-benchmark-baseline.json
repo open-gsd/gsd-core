@@ -18,14 +18,9 @@
       "reductionPct": 16.51
     },
     "execute-phase": {
-<<<<<<< HEAD
-      "offTokens": 25952,
-      "onTokens": 23701,
-=======
-      "offTokens": 25961,
-      "onTokens": 23710,
->>>>>>> c8d7d6274 (docs(workflows): route OpenCode through native V2 worktrees)
-      "reductionPct": 8.67
+      "offTokens": 26086,
+      "onTokens": 23835,
+      "reductionPct": 8.63
     },
     "new-project": {
       "offTokens": 14279,
@@ -44,13 +39,8 @@
     }
   },
   "aggregate": {
-<<<<<<< HEAD
-    "offTokens": 107411,
-    "onTokens": 90763,
-=======
-    "offTokens": 107420,
-    "onTokens": 90772,
->>>>>>> c8d7d6274 (docs(workflows): route OpenCode through native V2 worktrees)
-    "reductionPct": 15.5
+    "offTokens": 107545,
+    "onTokens": 90897,
+    "reductionPct": 15.48
   }
 }
