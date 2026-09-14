@@ -9,7 +9,7 @@ Um guia narrativo complementar ao GSD Core — comece aqui para se orientar e si
 
 ## Sumário
 
-- [Formas do slash-command](#formas-do-slash-command-hífen-vs-dois-pontos)
+- [Formas do slash-command](#formas-do-slash-command)
 - [Introdução ao roteamento de namespace](#introdução-ao-roteamento-de-namespace-gsdnamespace-v140)
 - [Visão geral do ciclo de vida do projeto](#visão-geral-do-ciclo-de-vida-do-projeto)
 - [Diagramas de fluxo](#diagramas-de-fluxo)
@@ -31,14 +31,13 @@ execute → verify → review → ship usando as primitivas GSD existentes.
 
 ---
 
-## Formas do slash-command (hífen vs dois-pontos)
+## Formas do slash-command
 
-O GSD fornece **o mesmo conjunto de habilidades** para todos os runtimes suportados, mas dois estilos de barra são utilizados:
+O GSD fornece **o mesmo conjunto de habilidades** para todos os runtimes suportados, usando a grafia com hífen para o slash-command:
 
 - **Forma com hífen** — `/gsd-command-name` — usada por Claude Code, Copilot, OpenCode, Kilo, Cursor, Windsurf, Augment, Antigravity e Trae.
-- **Forma com dois-pontos** — `/gsd:command-name` — usada **exclusivamente pelo Gemini CLI**. O Gemini coloca todos os comandos de cada plugin sob o ID do plugin, portanto o instalador reescreve todas as referências no corpo do texto e nos arquivos de comando para a forma com dois-pontos durante a instalação com `--gemini`.
 
-Você não precisa escolher — o instalador grava a forma correta no diretório de comandos de cada runtime que você especificar. Ao seguir um guia passo a passo num terminal Gemini, substitua o hífen após `gsd` por dois-pontos ao ler cada slash-command.
+O instalador grava essa forma no diretório de comandos de cada runtime que você especificar.
 
 ## Introdução ao roteamento de namespace (`gsd:<namespace>`, v1.40)
 
@@ -676,7 +675,7 @@ Cada servidor desabilitado remove seu esquema de cada turno subsequente. Reduzir
 
 Para a auditoria completa, referência do harness e a nota de composição com `model_profile`, consulte [Custo de esquema de ferramentas MCP](../../gsd-core/references/context-budget.md#mcp-tool-schema-cost-harness-concern) na referência `context-budget.md` incluída.
 
-### Usando runtimes não-Claude (Codex, OpenCode, Gemini CLI, Kilo)
+### Usando runtimes não-Claude (Codex, OpenCode, Antigravity CLI, Kilo)
 
 > **Versão mínima suportada do Codex CLI: `0.130.0`** (issue [#3562](https://github.com/open-gsd/gsd-core/issues/3562)).
 
@@ -753,7 +752,6 @@ WINDSURF_CONFIG_DIR=~/.codeium/windsurf-next npx @opengsd/gsd-core@latest --wind
 | Runtime | Padrão estável | Variável de ambiente para substituição |
 |---|---|---|
 | Claude Code | `~/.claude` | `CLAUDE_CONFIG_DIR` |
-| Gemini CLI | `~/.gemini` | `GEMINI_CONFIG_DIR` |
 | OpenCode | `XDG_CONFIG_HOME/opencode` | `OPENCODE_CONFIG_DIR` |
 | Codex | (per Codex CLI) | `--config-dir` flag |
 | Copilot | `~/.copilot` | `COPILOT_CONFIG_DIR` |

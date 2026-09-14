@@ -1,6 +1,6 @@
 # コンテキストウィンドウモニター
 
-ツール使用後に実行されるフック（Claude Code では `PostToolUse`、Gemini CLI では `AfterTool`）で、コンテキストウィンドウの使用量が高くなった際にエージェントに警告します。
+ツール使用後に実行されるフック（Claude Code では `PostToolUse`、Antigravity CLI では `AfterTool`）で、コンテキストウィンドウの使用量が高くなった際にエージェントに警告します。
 
 ## 問題
 
@@ -62,7 +62,7 @@ GSD の `/gsd-pause-work` コマンドは実行状態を保存します。WARNIN
 
 両フックは `npx @opengsd/gsd-core` のインストール時に自動的に登録されます——通常の状況では手動の手順は不要です。フック設定の詳細、しきい値のオーバーライド、手動登録の例については、[設定](CONFIGURATION.md) を参照してください。
 
-簡単な参考として：ステータスラインフックは `settings.json` に `statusLine` として登録されます；コンテキストモニター（`gsd-context-monitor.js`）は `PostToolUse` フックとして登録されます（Gemini CLI の場合は `AfterTool`）。どちらのエントリも、インストーラーを実行した Node 実行ファイルの絶対パスを使います。Windows PowerShell では、引用符付きの実行ファイルパスに `&` をプレフィックスしてください。
+簡単な参考として：ステータスラインフックは `settings.json` に `statusLine` として登録されます；コンテキストモニター（`gsd-context-monitor.js`）は `PostToolUse` フックとして登録されます（Antigravity CLI の場合は `AfterTool`）。どちらのエントリも、インストーラーを実行した Node 実行ファイルの絶対パスを使います。Windows PowerShell では、引用符付きの実行ファイルパスに `&` をプレフィックスしてください。
 
 ## 安全性
 

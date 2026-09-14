@@ -1013,7 +1013,7 @@ fix(03-01): correct auth token expiry
 **目的:** 複数の AI コーディングエージェントランタイムで GSD を実行します。
 
 **要件:**
-- REQ-RUNTIME-01: システムは Claude Code、OpenCode、Gemini CLI、Kilo、Codex、Copilot、Antigravity をサポートしなければならない
+- REQ-RUNTIME-01: システムは Claude Code、OpenCode、Kilo、Codex、Copilot、Antigravity をサポートしなければならない
 - REQ-RUNTIME-02: インストーラーはランタイムごとにコンテンツを変換しなければならない（ツール名、パス、フロントマター）
 - REQ-RUNTIME-03: インストーラーはインタラクティブおよび非インタラクティブ（`--claude --global`）モードをサポートしなければならない
 - REQ-RUNTIME-04: インストーラーはグローバルとローカルの両方のインストールをサポートしなければならない

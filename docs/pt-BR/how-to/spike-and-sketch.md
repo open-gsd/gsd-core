@@ -90,7 +90,7 @@ GSD abre uma conversa breve para explorar sensação, referências visuais e a a
 
 `--quick` ignora completamente a conversa de coleta e usa o argumento como direção de design.
 
-### Runtimes não-Claude (Codex, Gemini CLI, etc.)
+### Runtimes não-Claude (Codex, Antigravity CLI, etc.)
 
 ```bash
 /gsd-sketch --text "onboarding flow"

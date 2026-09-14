@@ -7,7 +7,6 @@
 ## コマンド構文
 
 - **Claude Code / Copilot / OpenCode / Kilo:** `/gsd-command-name [args]`（ハイフン形式）
-- **Gemini CLI:** `/gsd:command-name [args]`（コロン形式 — Gemini は `gsd:` 配下にコマンドを名前空間化します）
 - **Codex:** `$gsd-command-name [args]`
 
 ハイフン形式とコロン形式は、*同じコマンドのランタイム固有の表記*です。どのランタイムを使用していても、インストーラーが正しい形式をランタイムのコマンドディレクトリに書き込みます。

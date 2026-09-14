@@ -866,7 +866,7 @@ As cinco camadas compõem de cima para baixo: `model_profile` é o nível base, 
 | `"opus"` / `"sonnet"` / `"haiku"` | Nível padrão — a resolução de runtime mapeia para o modelo do runtime ativo para aquele nível |
 | `"inherit"` | Agentes nesta fase seguem o modelo da sessão (mesma semântica que `model_profile: "inherit"`) |
 
-Se você precisar de um ID de modelo totalmente qualificado (`"openai/gpt-5"`, `"google/gemini-2.5-pro"`), use `model_overrides` por agente. `models.*` é intencionalmente apenas de nível para que o mapeamento com reconhecimento de runtime permaneça correto nas instalações Codex / OpenCode / Gemini CLI.
+Se você precisar de um ID de modelo totalmente qualificado (`"openai/gpt-5"`, `"google/gemini-2.5-pro"`), use `model_overrides` por agente. `models.*` é intencionalmente apenas de nível para que o mapeamento com reconhecimento de runtime permaneça correto nas instalações Codex / OpenCode / Antigravity CLI.
 
 #### Quando usar qual
 
@@ -1089,7 +1089,7 @@ Use `node gsd-tools.cjs resolve-execution <agent-type> [--effort <level>] [--fas
 
 ---
 
-### Runtimes Não-Claude (Codex, OpenCode, Gemini CLI, Kilo)
+### Runtimes Não-Claude (Codex, OpenCode, Antigravity CLI, Kilo)
 
 > **Versão mínima suportada do Codex CLI: `0.130.0`** (issue [#3562](https://github.com/open-gsd/gsd-core/issues/3562)).
 >
@@ -1128,7 +1128,7 @@ A intenção é a mesma que os níveis de perfil do Claude -- use um modelo mais
 |-------|----------|----------|
 | `false` (padrão) | Retorna aliases Claude (`opus`, `sonnet`, `haiku`) | Claude Code com API Anthropic nativa |
 | `true` | Mapeia aliases para IDs completos de modelo Claude (`claude-opus-4-8`) | Claude Code com API que requer IDs completos |
-| `"omit"` | Retorna string vazia (runtime escolhe seu padrão) | Runtimes não-Claude (Codex, OpenCode, Gemini CLI, Kilo) |
+| `"omit"` | Retorna string vazia (runtime escolhe seu padrão) | Runtimes não-Claude (Codex, OpenCode, Antigravity CLI, Kilo) |
 
 ### Perfis com Reconhecimento de Runtime (#2517)
 

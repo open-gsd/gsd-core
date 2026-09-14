@@ -7,7 +7,6 @@
 ## 명령어 구문
 
 - **Claude Code / Copilot / OpenCode / Kilo:** `/gsd-command-name [args]` (하이픈 형식)
-- **Gemini CLI:** `/gsd:command-name [args]` (콜론 형식 — Gemini는 `gsd:` 네임스페이스로 명령어를 분류합니다)
 - **Codex:** `$gsd-command-name [args]`
 
 하이픈 형식과 콜론 형식은 *동일한 명령어의 런타임별 표기법*입니다. 사용 중인 런타임에 따라 인스톨러가 해당 런타임의 명령어 디렉토리에 올바른 형식을 자동으로 작성합니다.

@@ -21,7 +21,7 @@
 
 ## Visão Geral do Sistema
 
-O GSD Core é um **framework de meta-prompting** que fica entre o usuário e os agentes de codificação com IA (Claude Code, Gemini CLI, OpenCode, Kilo, Codex, Copilot, Antigravity, Trae, Cline, Augment Code). Ele fornece:
+O GSD Core é um **framework de meta-prompting** que fica entre o usuário e os agentes de codificação com IA (Claude Code, Kimi CLI, OpenCode, Kilo, Codex, Copilot, Antigravity, Trae, Cline, Augment Code). Ele fornece:
 
 1. **Engenharia de contexto** — Artefatos estruturados que fornecem à IA tudo o que ela precisa por tarefa (consulte [Engenharia de contexto](explanation/context-engineering.md))
 2. **Orquestração multi-agente** — Orquestradores leves que criam agentes especializados com janelas de contexto novas (consulte [Orquestração multi-agente](explanation/multi-agent-orchestration.md))
@@ -117,7 +117,6 @@ Pontos de entrada voltados ao usuário. Cada arquivo contém frontmatter YAML (n
 - **OpenCode / Kilo:** Comandos slash (forma com hífen, `/gsd-command-name`)
 - **Codex:** Skills (`$gsd-command-name`)
 - **Copilot:** Comandos slash (forma com hífen, `/gsd-command-name`)
-- **Gemini CLI:** Comandos slash sob o namespace `gsd:` (forma com dois-pontos, `/gsd:command-name`) — o Gemini agrupa todos os comandos customizados sob o id do plugin, portanto a instalação reescreve cada referência no corpo do texto para a forma com dois-pontos
 - **Antigravity:** Skills
 
 **Total de comandos:** consulte [`docs/INVENTORY.md`](INVENTORY.md#commands) para a contagem oficial e o roster completo.
@@ -499,7 +498,6 @@ Caminhos equivalentes para outros runtimes:
 
 - **OpenCode:** `~/.config/opencode/` global ou `./.opencode/` local
 - **Kilo:** `~/.config/kilo/` global ou `./.kilo/` local
-- **Gemini CLI:** `~/.gemini/` global ou `./.gemini/` local
 - **Codex:** `~/.codex/` global ou `./.codex/` local
 - **Copilot:** `~/.copilot/` global ou `./.github/` local
 - **Antigravity:** raiz global detectada automaticamente (`~/.gemini/antigravity/`, `~/.gemini/antigravity-ide/`, ou `~/.gemini/antigravity-cli/`) ou `./.agent/` local
@@ -604,7 +602,7 @@ O instalador (`bin/install.js`, ~10.700 linhas) trata de:
   - Kilo: Reutiliza o pipeline de conversão do OpenCode com os caminhos de configuração do Kilo
   - Codex: Gera config TOML + skills a partir de comandos
   - Copilot: Mapeia nomes de ferramentas (Read→read, Bash→execute, etc.)
-  - Gemini: Ajusta nomes de eventos de hook (`AfterTool` em vez de `PostToolUse`)
+  - Antigravity: Ajusta nomes de eventos de hook (`AfterTool` em vez de `PostToolUse`)
   - Antigravity: Skills em primeiro lugar com equivalentes de modelo do Google
   - Cursor: Skills em primeiro lugar com referências de regras do Cursor
   - Windsurf: Skills em primeiro lugar com referências de regras do Windsurf
@@ -643,7 +641,7 @@ O guarda de desvio de plano (`plan_review.source_grounding`) — que verifica re
 ### Arquitetura
 
 ```
-Motor de Runtime (Claude Code / Gemini CLI)
+Motor de Runtime (Claude Code / Antigravity CLI)
     │
     ├── evento statusLine ──► gsd-statusline.js
     │   Lê: stdin (JSON de sessão)
@@ -737,7 +735,6 @@ A propriedade específica de migração e os snapshots de fonte vivem em
 | Claude Code | `~/.claude` | `./.claude` | `skills/gsd-*/SKILL.md` global; `commands/gsd/*.md` local | `agents/gsd-*.md` | Entradas de hook e statusLine em `settings.json` |
 | OpenCode | `~/.config/opencode` | `./.opencode` | `command/gsd-*.md` | `agents/gsd-*.md` | `opencode.json` ou `opencode.jsonc`; sem hooks do GSD |
 | Kilo | `~/.config/kilo` | `./.kilo` | `command/gsd-*.md` | `agents/gsd-*.md` | `kilo.json` ou `kilo.jsonc`; sem hooks do GSD |
-| Gemini CLI | `~/.gemini` | `./.gemini` | `commands/gsd/*.toml` | `agents/gsd-*.md` | flag de funcionalidade, hooks e statusline em `settings.json` |
 | Codex | `~/.codex` | `./.codex` | `skills/gsd-*/SKILL.md` | markdown de origem de agentes mais TOML por agente | `config.toml` `[agents.gsd-*]`, `[features].hooks` (canônico; alias legado `codex_hooks` é reconhecido e migrado no reinstall, #3566) e tabelas de hooks |
 | GitHub Copilot | `~/.copilot` | `./.github` | `skills/gsd-*/SKILL.md` e `copilot-instructions.md` | arquivos `.agent.md` | Sem hooks ou statusline do GSD |
 | Antigravity | detectado automaticamente: `~/.gemini/antigravity`, `~/.gemini/antigravity-ide`, ou `~/.gemini/antigravity-cli` | `./.agent` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | Entradas de hook `settings.json` no estilo Gemini quando instalado pelo GSD |
@@ -757,7 +754,7 @@ disponível. O snapshot de fonte atual é 2026-05-11:
 
 - Claude Code: Documentação de comandos slash, configurações, hooks e subagentes da Anthropic.
 - OpenCode e Kilo: Documentação de configuração do OpenCode e documentação de subagente customizado do Kilo.
-- Gemini CLI e Qwen Code: Documentação de comandos/configuração; a documentação de comandos do Qwen foi atualizada pela última vez em 2026-05-06.
+- Qwen Code: Documentação de comandos/configuração; a documentação de comandos do Qwen foi atualizada pela última vez em 2026-05-06.
 - Codex: Documentação do OpenAI Codex e `config-schema.json`; o instalador também carrega compatibilidade com o Codex 0.124.0 para o formato de tabela de agentes.
 - Copilot, Cursor, Cline, Augment, Hermes e CodeBuddy: Documentação do fornecedor para instruções customizadas, regras, skills ou configuração.
 - Antigravity, Windsurf e Trae: Linhas com fontes limitadas. O instalador documenta os shims de compatibilidade atuais, e as migrações devem atualizar essas fontes antes de reescrever sua configuração.
@@ -765,7 +762,7 @@ disponível. O snapshot de fonte atual é 2026-05-11:
 ### Pontos de Abstração
 
 1. **Mapeamento de nomes de ferramentas** — Cada runtime tem seus próprios nomes de ferramentas (ex.: `Bash` do Claude → `execute` do Copilot)
-2. **Nomes de eventos de hook** — Claude usa `PostToolUse`, Gemini usa `AfterTool`
+2. **Nomes de eventos de hook** — Claude usa `PostToolUse`, Antigravity usa `AfterTool`
 3. **Frontmatter de agente** — Cada runtime tem seu próprio formato de definição de agente
 4. **Convenções de caminho** — Cada runtime armazena a configuração em diretórios diferentes
 5. **Referências de modelo** — O perfil `inherit` permite que o GSD adie para a seleção de modelo do runtime

@@ -7,7 +7,6 @@
 ## Sintaxe de Comandos
 
 - **Claude Code / Copilot / OpenCode / Kilo:** `/gsd-command-name [args]` (forma com hífen)
-- **Gemini CLI:** `/gsd:command-name [args]` (forma com dois-pontos — o Gemini agrupa comandos sob `gsd:`)
 - **Codex:** `$gsd-command-name [args]`
 
 As formas com hífen e com dois-pontos são *variações específicas do runtime para o mesmo comando*. Independente do runtime utilizado, o instalador escreve a forma correta no diretório de comandos do seu runtime.

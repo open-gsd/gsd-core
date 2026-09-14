@@ -1025,7 +1025,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
    RETRY_AFTER=$(echo "$CLASS_JSON" | jq -r '.retryAfterSeconds // empty')
    if [ -n "$RETRY_AFTER" ]; then RETRY_HINT="  Provider hinted retry-after: ${RETRY_AFTER}s"; else RETRY_HINT=""; fi
    ```
-   One classifier branch handles sentinels across Claude/Copilot/Codex/Gemini. Reference: `docs/research/provider-rate-limit-signals.md`.
+   One classifier branch handles sentinels across Claude/Copilot/Codex/Antigravity. Reference: `docs/research/provider-rate-limit-signals.md`.
    **Abnormal ends reconcile first (#4217):** an abnormal session end (`turn_aborted`-class) routes through the step-4 artifact reconciliation BEFORE classifying the failure — artifacts decide.
    **Step 7.1 — `class == "quota-exceeded"`:** follow the quota-recovery fragment below.
    **Step 7.2 — `class == "classify-handoff-bug"`:**

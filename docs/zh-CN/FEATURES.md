@@ -1013,7 +1013,7 @@ fix(03-01): correct auth token expiry
 **目的：** 跨多个 AI 编程智能体运行时运行 GSD。
 
 **需求：**
-- REQ-RUNTIME-01：系统必须支持 Claude Code、OpenCode、Gemini CLI、Kilo、Codex、Copilot、Antigravity、Trae、Cline、Augment Code、CodeBuddy、Qwen Code
+- REQ-RUNTIME-01：系统必须支持 Claude Code、OpenCode、Kilo、Codex、Copilot、Antigravity、Trae、Cline、Augment Code、CodeBuddy、Qwen Code
 - REQ-RUNTIME-02：安装器必须按运行时转换内容（工具名称、路径、前置元数据）
 - REQ-RUNTIME-03：安装器必须支持交互式和非交互式（`--claude --global`）模式
 - REQ-RUNTIME-04：安装器必须支持全局和本地安装

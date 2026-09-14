@@ -93,7 +93,7 @@ In interactive mode:
 
 ## Run on a non-Claude runtime
 
-To run autonomously on a runtime that does not support the `AskUserQuestion` tool (for example Codex CLI or Gemini CLI), add `--text`:
+To run autonomously on a runtime that does not support the `AskUserQuestion` tool (for example Codex CLI or Antigravity), add `--text`:
 
 ```bash
 /gsd-autonomous --text

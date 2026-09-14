@@ -835,7 +835,7 @@ gsd-tools query config-set features.thinking_partner false
 | `"opus"` / `"sonnet"` / `"haiku"` | 标准层级——运行时解析映射到该层级的活跃运行时模型 |
 | `"inherit"` | 此阶段的 agent 遵循会话模型（与 `model_profile: "inherit"` 语义相同） |
 
-如果需要完全限定的模型 ID（`"openai/gpt-5"`、`"google/gemini-2.5-pro"`），请改为按 agent 使用 `model_overrides`。`models.*` 有意仅接受层级别名，以便运行时感知映射在 Codex / OpenCode / Gemini CLI 安装上保持正确。
+如果需要完全限定的模型 ID（`"openai/gpt-5"`、`"google/gemini-2.5-pro"`），请改为按 agent 使用 `model_overrides`。`models.*` 有意仅接受层级别名，以便运行时感知映射在 Codex / OpenCode / Antigravity CLI 安装上保持正确。
 
 #### 何时使用哪种方式
 
@@ -1058,7 +1058,7 @@ minimal < low < medium < high < xhigh < max
 
 ---
 
-### 非 Claude 运行时（Codex、OpenCode、Gemini CLI、Kilo）
+### 非 Claude 运行时（Codex、OpenCode、Antigravity CLI、Kilo）
 
 > **Codex CLI 最低支持版本：`0.130.0`**（issue [#3562](https://github.com/open-gsd/gsd-core/issues/3562)）。
 >
@@ -1097,7 +1097,7 @@ minimal < low < medium < high < xhigh < max
 |-------|----------|----------|
 | `false`（默认） | 返回 Claude 别名（`opus`、`sonnet`、`haiku`） | 使用原生 Anthropic API 的 Claude Code |
 | `true` | 将别名映射到完整 Claude 模型 ID（`claude-opus-4-8`） | 使用需要完整 ID 的 API 的 Claude Code |
-| `"omit"` | 返回空字符串（运行时选择其默认值） | 非 Claude 运行时（Codex、OpenCode、Gemini CLI、Kilo） |
+| `"omit"` | 返回空字符串（运行时选择其默认值） | 非 Claude 运行时（Codex、OpenCode、Antigravity CLI、Kilo） |
 
 ### 运行时感知配置文件（#2517）
 

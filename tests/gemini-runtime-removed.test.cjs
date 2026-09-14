@@ -583,4 +583,134 @@ describe('#4709 the Gemini CLI reviewer lane is retired', () => {
     );
   });
 });
+
+/**
+ * #4728 — localized docs and runtime-loaded workflow prose still surface the retired Gemini CLI
+ * runtime as a selectable option, outside the English `how-to`/`ARCHITECTURE.md` surfaces #4709
+ * already covers.
+ *
+ * As with #4709, every assertion here is STRUCTURAL: a heading position, a table's first cell, or
+ * a captured runtime-example parenthetical — never "the string gemini is absent". `gemini` is
+ * load-bearing across Antigravity's real on-disk contract (~/.gemini/antigravity, ~/.gemini/config,
+ * GEMINI.md, hookEvents "gemini", GEMINI_API_KEY, every gemini-* model id), so a bare-string
+ * assertion would be wrong and would fail on correct code. The PRESERVE block below is the
+ * over-reach guard: it is what fails first if a "helpful" blanket gemini->antigravity sweep lands
+ * instead of the scoped removal this issue asks for.
+ */
+describe('#4728 Gemini CLI prose retired from localized docs and runtime-loaded workflows', () => {
+  const LOCALES = ['ja-JP', 'ko-KR', 'pt-BR', 'zh-CN'];
+  const linesOf = (file) => fs.readFileSync(file, 'utf8').split(/\r?\n/);
+  const relPath = (p) => path.relative(ROOT, p).split(path.sep).join('/');
+
+  test('no locale install-on-your-runtime.md has a Gemini CLI ### heading', () => {
+    // Heading-scoped (### only) so Antigravity's own ~/.gemini/... paths documented in the same
+    // file cannot trip this — a bare substring match on "Gemini CLI" would be too broad here.
+    const HEADING = /^###\s+Gemini CLI\s*$/m;
+    const offenders = LOCALES
+      .map((locale) => path.join(ROOT, 'docs', locale, 'how-to', 'install-on-your-runtime.md'))
+      .filter((file) => HEADING.test(fs.readFileSync(file, 'utf8')))
+      .map(relPath);
+
+    assert.deepStrictEqual(offenders, [],
+      'a localized how-to still documents Gemini CLI as an installable runtime under its own '
+        + `heading, after #1928 retired the runtime. Offenders:\n  ${offenders.join('\n  ')}`);
+  });
+
+  test('no locale ARCHITECTURE.md tables a Gemini CLI row', () => {
+    // First-cell-scoped so the Antigravity row's ~/.gemini/antigravity cells are untouched.
+    const ROW = /^\|\s*Gemini CLI\s*\|/m;
+    const offenders = LOCALES
+      .map((locale) => path.join(ROOT, 'docs', locale, 'ARCHITECTURE.md'))
+      .filter((file) => ROW.test(fs.readFileSync(file, 'utf8')))
+      .map(relPath);
+
+    assert.deepStrictEqual(offenders, [],
+      'a localized ARCHITECTURE.md still tables Gemini CLI as a runtime row, after #1928 retired '
+        + `the runtime. Offenders:\n  ${offenders.join('\n  ')}`);
+  });
+
+  test('no locale USER-GUIDE.md tables a Gemini CLI row', () => {
+    const ROW = /^\|\s*Gemini CLI\s*\|/m;
+    const offenders = LOCALES
+      .map((locale) => path.join(ROOT, 'docs', locale, 'USER-GUIDE.md'))
+      .filter((file) => ROW.test(fs.readFileSync(file, 'utf8')))
+      .map(relPath);
+
+    assert.deepStrictEqual(offenders, [],
+      'a localized USER-GUIDE.md still tables Gemini CLI as a runtime row, after #1928 retired the '
+        + `runtime. Offenders:\n  ${offenders.join('\n  ')}`);
+  });
+
+  test('runtime-example parentheticals in runtime-loaded workflows no longer name Gemini', () => {
+    // These five workflow files are runtime-loaded, not just reader-facing documentation: they are
+    // read by the agent at execution time and their example parentheticals steer which runtime the
+    // agent reaches for, so a stale "Gemini" example here actively misdirects execution, not merely
+    // a reader.
+    const WORKFLOW_FILES = ['settings', 'health', 'map-codebase', 'docs-update', 'execute-phase']
+      .map((name) => path.join(ROOT, 'gsd-core', 'workflows', `${name}.md`));
+    const PARENTHETICAL = [
+      /non-Claude runtimes \(([^)]*)\)/g,
+      /\(e\.g\. ([^)]*)\)/g,
+    ];
+    const offenders = [];
+
+    for (const file of WORKFLOW_FILES) {
+      linesOf(file).forEach((line, i) => {
+        for (const pattern of PARENTHETICAL) {
+          for (const m of line.matchAll(pattern)) {
+            if (/\bGemini\b/.test(m[1])) {
+              offenders.push(`${relPath(file)}:${i + 1} names Gemini in "${m[0]}"`);
+            }
+          }
+        }
+      });
+    }
+
+    assert.deepStrictEqual(offenders, [],
+      'a runtime-loaded workflow still names Gemini in a runtime-example parenthetical, steering '
+        + `the agent toward a retired runtime. Offenders:\n  ${offenders.join('\n  ')}`);
+  });
+
+  test('PRESERVE: Antigravity survives in every surface the removal above touches (over-reach guard)', () => {
+    // These four assertions are what fails first if someone "fixes" #4728 with a blanket
+    // gemini->antigravity string sweep instead of the scoped, structural removal above.
+    for (const locale of LOCALES) {
+      const installGuide = fs.readFileSync(
+        path.join(ROOT, 'docs', locale, 'how-to', 'install-on-your-runtime.md'), 'utf8',
+      );
+      assert.match(installGuide, /^###\s+Antigravity\s*$/m,
+        `docs/${locale}/how-to/install-on-your-runtime.md must still document Antigravity under its own heading`);
+
+      const architecture = fs.readFileSync(path.join(ROOT, 'docs', locale, 'ARCHITECTURE.md'), 'utf8');
+      assert.ok(architecture.includes('~/.gemini/antigravity'),
+        `docs/${locale}/ARCHITECTURE.md must still document Antigravity's ~/.gemini/antigravity config home`);
+
+      const configuration = fs.readFileSync(path.join(ROOT, 'docs', locale, 'CONFIGURATION.md'), 'utf8');
+      assert.ok(configuration.includes('GEMINI_API_KEY'),
+        `docs/${locale}/CONFIGURATION.md must still document GEMINI_API_KEY`);
+
+      const contextMonitor = fs.readFileSync(path.join(ROOT, 'docs', locale, 'context-monitor.md'), 'utf8');
+      assert.ok(contextMonitor.includes('AfterTool'),
+        `docs/${locale}/context-monitor.md must still document AfterTool, the hook dialect Antigravity `
+          + 'inherits — re-attributed on gemini removal, never deleted');
+    }
+  });
+
+  test('MODEL AXIS: Gemini 2.5 Pro asymmetry across locale ARCHITECTURE.md is a measured fact, not an assumption', () => {
+    // Measured on 2026-09-14: ko-KR/pt-BR/zh-CN mention Gemini 2.5 Pro on the model axis (distinct
+    // from the retired RUNTIME axis covered above); ja-JP genuinely does not. Both sides are
+    // asserted so a later "helpful" uniform patch that adds the mention to ja-JP — treating the
+    // asymmetry as an oversight rather than a measured divergence — fails here.
+    for (const locale of ['ko-KR', 'pt-BR', 'zh-CN']) {
+      const text = fs.readFileSync(path.join(ROOT, 'docs', locale, 'ARCHITECTURE.md'), 'utf8');
+      assert.ok(text.includes('Gemini 2.5 Pro'),
+        `docs/${locale}/ARCHITECTURE.md must still mention Gemini 2.5 Pro on the model axis`);
+    }
+
+    const jaText = fs.readFileSync(path.join(ROOT, 'docs', 'ja-JP', 'ARCHITECTURE.md'), 'utf8');
+    assert.ok(!jaText.includes('Gemini 2.5 Pro'),
+      'docs/ja-JP/ARCHITECTURE.md does not mention Gemini 2.5 Pro — this locale genuinely diverged '
+        + 'from the other three and must not be uniformly patched to match them');
+  });
+});
 });
