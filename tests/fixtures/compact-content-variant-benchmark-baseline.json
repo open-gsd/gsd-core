@@ -23,9 +23,9 @@
       "reductionPct": 20.79
     },
     "agents/gsd-code-fixer.md": {
-      "offTokens": 10734,
-      "onTokens": 6682,
-      "reductionPct": 37.75
+      "offTokens": 10741,
+      "onTokens": 6690,
+      "reductionPct": 37.72
     },
     "agents/gsd-code-reviewer.md": {
       "offTokens": 4408,
@@ -169,8 +169,8 @@
     }
   },
   "aggregate": {
-    "offTokens": 118691,
-    "onTokens": 94333,
+    "offTokens": 118698,
+    "onTokens": 94341,
     "reductionPct": 20.52
   }
 }
