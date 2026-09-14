@@ -892,11 +892,28 @@ done
 
 _PRESERVE_OK=true
 if [ ${#_DIAG_MD[@]} -gt 0 ] || [ ${#_DIAG_ERR[@]} -gt 0 ]; then
-  if mkdir -p "$DIAG_DIR"; then
-    if [ ${#_DIAG_MD[@]} -gt 0 ] && ! cp "${_DIAG_MD[@]}" "$DIAG_DIR/"; then
+  # #4351: ONE SUBDIRECTORY PER RUN. A flat copy used each file's SOURCE basename,
+  # and a lane slug is stable across runs — so a second review of the same phase
+  # silently overwrote the first run's evidence for any lane that ran both times.
+  # `cp` over an existing file is a success, so this lost data with no warning, in
+  # the one directory whose entire purpose is to outlive the `rm -rf` below.
+  #
+  # $RUN_DIR is `mktemp -d .../gsd-review-XXXXXX`, so its basename is already
+  # unique per run BY CONSTRUCTION — uniqueness never depends on the clock. The
+  # UTC stamp is only a sort key in front of it, and is omitted entirely if `date`
+  # fails. Lane basenames are unchanged INSIDE the subdirectory, so evidence still
+  # correlates back to its lane, and nothing inside $RUN_DIR is renamed (both
+  # `prepare_trimmed_prompt_for_reviewer` and the lane invocation resolver depend
+  # on those exact basenames).
+  _DIAG_STAMP="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || true)"
+  _DIAG_RUN_DIR="$DIAG_DIR/${_DIAG_STAMP:+${_DIAG_STAMP}-}$(basename "$RUN_DIR")"
+  # `mkdir -p` still creates $DIAG_DIR itself, so a plain FILE sitting at
+  # $DIAG_DIR still fails here and still skips the `rm -rf` (#3885).
+  if mkdir -p "$_DIAG_RUN_DIR"; then
+    if [ ${#_DIAG_MD[@]} -gt 0 ] && ! cp "${_DIAG_MD[@]}" "$_DIAG_RUN_DIR/"; then
       _PRESERVE_OK=false
     fi
-    if [ ${#_DIAG_ERR[@]} -gt 0 ] && ! cp "${_DIAG_ERR[@]}" "$DIAG_DIR/"; then
+    if [ ${#_DIAG_ERR[@]} -gt 0 ] && ! cp "${_DIAG_ERR[@]}" "$_DIAG_RUN_DIR/"; then
       _PRESERVE_OK=false
     fi
   else
@@ -907,7 +924,7 @@ fi
 if [ "$_PRESERVE_OK" = "true" ]; then
   rm -rf "$RUN_DIR"
 else
-  echo "WARNING: evidence preservation to $DIAG_DIR failed — leaving the un-preserved run directory intact at: $RUN_DIR" >&2
+  echo "WARNING: evidence preservation to ${_DIAG_RUN_DIR:-$DIAG_DIR} failed — leaving the un-preserved run directory intact at: $RUN_DIR" >&2
 fi
 ```
 </step>
