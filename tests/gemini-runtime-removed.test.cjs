@@ -51,6 +51,7 @@ const {
 } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-name-policy.cjs'));
 
 const registry = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'capability-registry.cjs'));
+const catalog = require(path.join(ROOT, 'gsd-core', 'bin', 'shared', 'model-catalog.json'));
 
 const { convertClaudeAgentToAntigravityAgent } = require('../bin/install.js');
 
@@ -207,5 +208,175 @@ describe('#1928 Antigravity preserved (shared surface with the removed gemini ru
     assert.ok(toolsLine.includes('write_file'), 'Write → write_file');
     assert.ok(toolsLine.includes('web_fetch'), 'WebFetch → web_fetch');
     assert.ok(!/\bskill\b/.test(toolsLine), 'Skill is still excluded (would be an invalid backend tool name)');
+  });
+});
+
+/**
+ * #4709 — the #1928 removal reached the installer and the runtime enum, but runtime-loaded
+ * workflow text kept MINTING the retired id: `RUNTIME="gemini"` from `$GEMINI_CONFIG_DIR`, a
+ * runtime selection menu offering "Gemini CLI.", a runtime->model-tier table row keyed `gemini`,
+ * and `config-set runtime gemini` examples.
+ *
+ * The name policy's unknown-id fallbacks are DELIBERATE and stay unchanged — see the
+ * 'gemini no longer maps to GEMINI.md (defaults to AGENTS.md)' test above, and
+ * src/runtime-name-policy.cts:220-222, which calls the label default "the always-safe default,
+ * fail-closed". This block removes the REACHABILITY instead: nothing shipped may mint an id the
+ * policy does not recognize.
+ *
+ * Every assertion is STRUCTURAL (the literal must be canonical / the runtime must exist as a
+ * catalog key), never "the string gemini is absent" — that string is load-bearing across
+ * Antigravity's real on-disk contract, which the final test pins.
+ */
+describe('#4709 no shipped surface mints a retired runtime id', () => {
+  /** Recursively collect every `.md` file under `dir` (missing dir -> []). */
+  function markdownFilesUnder(dir) {
+    if (!fs.existsSync(dir)) return [];
+    const out = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) out.push(...markdownFilesUnder(full));
+      else if (entry.isFile() && entry.name.endsWith('.md')) out.push(full);
+    }
+    return out;
+  }
+
+  /** The shipped, runtime-loaded markdown corpus this block governs. */
+  function shippedMarkdown() {
+    return [
+      ...markdownFilesUnder(path.join(ROOT, 'gsd-core', 'workflows')),
+      ...markdownFilesUnder(path.join(ROOT, 'commands')),
+      ...markdownFilesUnder(path.join(ROOT, 'skills')),
+    ];
+  }
+
+  const relPath = (p) => path.relative(ROOT, p).split(path.sep).join('/');
+  const linesOf = (file) => fs.readFileSync(file, 'utf8').split(/\r?\n/);
+
+  const SETTINGS_ADVANCED = path.join(ROOT, 'gsd-core', 'workflows', 'settings-advanced.md');
+
+  test('every RUNTIME= assignment in workflow text names a canonical runtime', () => {
+    // Bare-literal assignments only: RUNTIME=codex / RUNTIME="codex". A `$VAR`, `$(cmd)` or
+    // `<placeholder>` assignment is resolved at runtime and carries no id to validate here.
+    const ASSIGN = /\bRUNTIME=("?)([a-z][a-z0-9-]*)\1(?![\w-])/g;
+    const offenders = [];
+
+    for (const file of shippedMarkdown()) {
+      linesOf(file).forEach((line, i) => {
+        for (const m of line.matchAll(ASSIGN)) {
+          if (canonicalizeRuntimeName(m[2]) === null) {
+            offenders.push(`${relPath(file)}:${i + 1} mints RUNTIME=${m[2]}`);
+          }
+        }
+      });
+    }
+
+    assert.deepStrictEqual(offenders, [],
+      'shipped workflow text assigns a runtime id the name policy does not recognize. A '
+        + 'non-canonical id does not fail loudly — it resolves to Claude Code defaults, so the '
+        + `wrong config dir and instruction file are used silently. Offenders:\n  ${offenders.join('\n  ')}`);
+  });
+
+  test('the runtime tier table names only runtimes the model catalog defines', () => {
+    const known = new Set(Object.keys(catalog.runtimeTierDefaults));
+    const offenders = [];
+
+    // Rows of the runtime -> model-tier table: | `<id>` | `<opus>` | `<sonnet>` | `<haiku>` |
+    const ROW = /^\|\s*`([a-z][a-z0-9-]*)`\s*\|/;
+    linesOf(SETTINGS_ADVANCED).forEach((line, i) => {
+      const m = ROW.exec(line);
+      if (m && !known.has(m[1])) {
+        offenders.push(`${relPath(SETTINGS_ADVANCED)}:${i + 1} tables runtime \`${m[1]}\``);
+      }
+    });
+
+    assert.deepStrictEqual(offenders, [],
+      'the runtime->model-tier table documents built-in defaults for a runtime the model catalog '
+        + 'has no entry for, so `config-set runtime <id>` would be ignored. The retired `gemini` '
+        + 'row carried the three model IDs of the `google` PROVIDER preset — a provider axis '
+        + `rendered as a runtime axis. Offenders:\n  ${offenders.join('\n  ')}`);
+  });
+
+  test('the runtime selection menu offers only canonical runtimes', () => {
+    const offenders = [];
+
+    // Scoped to RUNTIME menus by tracking the nearest preceding `question:`. The same file also
+    // carries a provider menu (anthropic / openai) and a budget menu (high / medium / low) whose
+    // labels are single lowercase tokens too; neither names a runtime, so validating those
+    // against the runtime policy would be a false positive, not extra rigor.
+    const QUESTION = /^\s*question:\s*"(.*)"\s*,?\s*$/;
+    const OPTION = /\{\s*label:\s*"([a-z][a-z0-9-]*)"\s*,\s*description:/;
+    let inRuntimeMenu = false;
+
+    linesOf(SETTINGS_ADVANCED).forEach((line, i) => {
+      const q = QUESTION.exec(line);
+      if (q) {
+        inRuntimeMenu = /runtime/i.test(q[1]);
+        return;
+      }
+      if (!inRuntimeMenu) return;
+      const m = OPTION.exec(line);
+      if (m && canonicalizeRuntimeName(m[1]) === null) {
+        offenders.push(`${relPath(SETTINGS_ADVANCED)}:${i + 1} offers \`${m[1]}\``);
+      }
+    });
+
+    assert.deepStrictEqual(offenders, [],
+      'a runtime selection menu offers a runtime GSD does not support — selecting it writes a '
+        + `config value that silently resolves to Claude Code. Offenders:\n  ${offenders.join('\n  ')}`);
+  });
+
+  test('documented config examples name only canonical runtimes', () => {
+    const offenders = [];
+    const SET_RUNTIME = /config-set\s+runtime\s+([a-z][a-z0-9-]*)/g;
+    const OVERRIDE = /model_profile_overrides\.([a-z][a-z0-9-]*)\./g;
+
+    for (const file of shippedMarkdown()) {
+      linesOf(file).forEach((line, i) => {
+        for (const m of line.matchAll(SET_RUNTIME)) {
+          if (canonicalizeRuntimeName(m[1]) === null) {
+            offenders.push(`${relPath(file)}:${i + 1} \`config-set runtime ${m[1]}\``);
+          }
+        }
+        for (const m of line.matchAll(OVERRIDE)) {
+          if (canonicalizeRuntimeName(m[1]) === null) {
+            offenders.push(`${relPath(file)}:${i + 1} \`model_profile_overrides.${m[1]}\``);
+          }
+        }
+      });
+    }
+
+    assert.deepStrictEqual(offenders, [],
+      'a documented example sets a runtime id the name policy does not recognize; a user who '
+        + `copies it lands on Claude Code defaults. Offenders:\n  ${offenders.join('\n  ')}`);
+  });
+
+  test("Antigravity's Gemini-family descriptor contract is preserved", () => {
+    // Negative space for every test above: Antigravity's real on-disk contract IS Google's
+    // Gemini surface, so an over-broad gemini -> antigravity replacement must fail HERE rather
+    // than ship. Asserted against the DESCRIPTOR, never a resolved path — getGlobalConfigDir()
+    // reads $ANTIGRAVITY_CONFIG_DIR and the real $HOME, which is the #4312 defect class.
+    const agy = JSON.parse(
+      fs.readFileSync(path.join(ROOT, 'capabilities', 'antigravity', 'capability.json'), 'utf8'),
+    );
+    assert.strictEqual(agy.runtime.configHome.parent, '.gemini',
+      "Antigravity's config home is nested under ~/.gemini");
+    assert.strictEqual(agy.runtime.configHome.name, 'antigravity');
+    assert.strictEqual(agy.runtime.hookEvents, 'gemini',
+      'Antigravity speaks the Gemini hook-event dialect');
+    assert.strictEqual(agy.runtime.hostBehaviors.projectInstructionFile, 'GEMINI.md');
+    for (const kind of agy.runtime.artifactLayout.global) {
+      assert.strictEqual(kind.home, '.gemini/config',
+        'global skills/agents install to ~/.gemini/config, the dir agy scans (#3738)');
+    }
+
+    assert.ok(Object.prototype.hasOwnProperty.call(catalog.runtimeTierDefaults, 'antigravity'),
+      'antigravity must remain a model-catalog runtime');
+
+    // The three model IDs the stale `gemini` table row carried belong to the google PROVIDER
+    // preset and must survive — they name real Google models, not a GSD runtime.
+    const google = JSON.stringify(catalog.providerPresets.google);
+    for (const model of ['gemini-3.1-pro-preview', 'gemini-3-flash', 'gemini-2.5-flash-lite']) {
+      assert.ok(google.includes(model), `google provider preset must still offer ${model}`);
+    }
   });
 });
