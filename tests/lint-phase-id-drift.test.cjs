@@ -10,6 +10,8 @@ const {
   findShellPhaseArithDrift,
   findSingleSegmentPhaseRegexDrift,
   scanMarkdownSingleSegmentPhaseRegex,
+  findLetterlessPhaseMirrorDrift,
+  scanMarkdownLetterlessPhaseMirror,
 } = require('../scripts/lint-phase-id-drift.cjs');
 
 const ROOT = path.join(__dirname, '..');
@@ -158,4 +160,55 @@ test('findSingleSegmentPhaseRegexDrift does NOT flag a site sanctioned with an H
 test('scanMarkdownSingleSegmentPhaseRegex against the real repo tree reports zero violations (#4568 fixed)', () => {
   const violations = scanMarkdownSingleSegmentPhaseRegex(ROOT);
   assert.deepEqual(violations, []);
+});
+
+// #4660 (epic #4634): the letter-less phase-mirror ban — the letter-axis twin
+// of the single-segment rule above.
+test('findLetterlessPhaseMirrorDrift flags the digit-only [0-9]+(\\.[0-9]+)* shape on a phase-carrying line', () => {
+  const text = 'if ! [[ "$PADDED_PHASE" =~ ^[0-9]+(\\.[0-9]+)*$ ]]; then';
+  const found = findLetterlessPhaseMirrorDrift(text);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].line, 1);
+});
+
+test('findLetterlessPhaseMirrorDrift flags the extracting grep -oE form', () => {
+  const text = "PHASE=$(echo \"$PLAN_PATH\" | grep -oE '[0-9]+(\\.[0-9]+)*-[0-9]+')";
+  assert.equal(findLetterlessPhaseMirrorDrift(text).length, 1);
+});
+
+test('findLetterlessPhaseMirrorDrift flags the \\d near-variant on a phase-carrying line', () => {
+  const text = 'if ! [[ "$padded_phase" =~ ^\\d+(\\.\\d+)*$ ]]; then';
+  assert.equal(findLetterlessPhaseMirrorDrift(text).length, 1);
+});
+
+test('findLetterlessPhaseMirrorDrift is SILENT on the fixed [A-Z]? form', () => {
+  const text = 'if ! [[ "$PADDED_PHASE" =~ ^[0-9]+[A-Z]?(\\.[0-9]+)*$ ]]; then';
+  assert.deepEqual(findLetterlessPhaseMirrorDrift(text), []);
+});
+
+test('findLetterlessPhaseMirrorDrift tolerates the case-flexible [A-Za-z]? directory-scanning variant', () => {
+  const text = 'if [[ "$phase_dir" =~ ^[0-9]+[A-Za-z]?(\\.[0-9]+)*- ]]; then';
+  assert.deepEqual(findLetterlessPhaseMirrorDrift(text), []);
+});
+
+test('findLetterlessPhaseMirrorDrift does NOT flag the bounded single-segment shape (that is the other rule)', () => {
+  const text = 'if ! [[ "$PADDED_PHASE" =~ ^[0-9]+(\\.[0-9]+)?$ ]]; then';
+  assert.deepEqual(findLetterlessPhaseMirrorDrift(text), []);
+});
+
+test('findLetterlessPhaseMirrorDrift does NOT flag a non-phase-carrying line (e.g. a version number)', () => {
+  const text = 'if ! [[ "$VERSION" =~ ^[0-9]+(\\.[0-9]+)*$ ]]; then';
+  assert.deepEqual(findLetterlessPhaseMirrorDrift(text), []);
+});
+
+test('findLetterlessPhaseMirrorDrift does NOT flag a site sanctioned with an HTML comment', () => {
+  const text = [
+    '<!-- phase-id-owner: deliberate, tracked in #4660 -->',
+    'if ! [[ "$PADDED_PHASE" =~ ^[0-9]+(\\.[0-9]+)*$ ]]; then',
+  ].join('\n');
+  assert.deepEqual(findLetterlessPhaseMirrorDrift(text), []);
+});
+
+test('scanMarkdownLetterlessPhaseMirror against the real repo tree reports zero violations (#4660 fixed)', () => {
+  assert.deepEqual(scanMarkdownLetterlessPhaseMirror(ROOT), []);
 });

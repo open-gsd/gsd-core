@@ -389,6 +389,66 @@ function scanMarkdownSingleSegmentPhaseRegex(root) {
   return violations;
 }
 
+// #4660 (epic #4634): the six shell/markdown mirrors #4568 widened on the
+// segment-count axis stayed digit-only on the LETTER axis — the canonical
+// grammar (`src/phase-id.cts`) is `\d+[A-Z]?(?:\.\d+)*`, with an optional
+// single uppercase letter after the leading digits (`12A`, `3A`, `23A.1.2`,
+// documented in docs/CONFIGURATION.md and relied on by `renameIntegerPhases`).
+// A digit-only mirror `[0-9]+(\.[0-9]+)*` hard-rejects (validating sites) or
+// silently truncates (extracting sites) a letter-suffixed id. This rule is the
+// ratchet for that axis, the twin of the single-segment rule above: it flags
+// the unbounded-segment shape whose digit run is NOT followed by the letter
+// class. `[A-Z]` is the canonical spelling; the case-flexible `[A-Za-z]`
+// directory-scanning variant is a deliberately separate axis and is tolerated
+// here so this rule cannot force it to narrow.
+const LETTERLESS_PHASE_MIRROR_DRIFT_RE =
+  /(?:\\{1,2}d|\[0-9\])\+(?!\[A-Z(?:a-z)?\]\?)\(\\{1,2}\.(?:\\{1,2}d|\[0-9\])\+\)\*/;
+
+/**
+ * Pure: find every unsanctioned digit-only (letter-less) unbounded-segment
+ * phase regex in `text`, restricted to lines that plausibly carry a
+ * phase-number variable — the same `PHASE_CARRYING_LINE_RE` filter and the
+ * same `<!-- phase-id-owner: ... -->` sanction as the single-segment rule.
+ * Returns [{ line, found }].
+ */
+function findLetterlessPhaseMirrorDrift(text) {
+  const out = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = LETTERLESS_PHASE_MIRROR_DRIFT_RE.exec(line);
+    if (!m) continue;
+    if (!PHASE_CARRYING_LINE_RE.test(line)) continue;
+    if (isSanctionedByPrecedingComment(lines, i, MD_OWNER_RE)) continue;
+    out.push({ line: i + 1, found: m[0] });
+  }
+  return out;
+}
+
+/**
+ * Scan the same three markdown roots as the single-segment rule for
+ * unsanctioned letter-less phase-regex mirrors. Returns [{ file, line, found }]
+ * with repo-relative paths.
+ */
+function scanMarkdownLetterlessPhaseMirror(root) {
+  const violations = [];
+  for (const dir of SINGLE_SEGMENT_SCAN_DIRS) {
+    for (const file of walkMd(path.join(root, dir), [])) {
+      const rel = path.relative(root, file);
+      let text;
+      try {
+        text = fs.readFileSync(file, 'utf8');
+      } catch {
+        continue;
+      }
+      for (const d of findLetterlessPhaseMirrorDrift(text)) {
+        violations.push({ file: rel, kind: 'letterless-phase-mirror', ...d });
+      }
+    }
+  }
+  return violations;
+}
+
 // Authored TypeScript source only (the generated bin/lib/*.cjs mirror it).
 const SCAN_DIRS = ['src'];
 const SCAN_EXT = new Set(['.cts', '.ts', '.mts']);
@@ -541,6 +601,7 @@ function scanAll(root) {
     ...scanRepo(root),
     ...scanMarkdownShellArith(root),
     ...scanMarkdownSingleSegmentPhaseRegex(root),
+    ...scanMarkdownLetterlessPhaseMirror(root),
   ];
 }
 
@@ -567,6 +628,9 @@ function main() {
   process.stderr.write('near-variant) is banned outright in gsd-core/workflows/**/*.md,\n');
   process.stderr.write('gsd-core/references/**/*.md, and agents/**/*.md — widen it to `*` (unbounded\n');
   process.stderr.write('segments) or sanction with `<!-- phase-id-owner: <reason> -->`.\n');
+  process.stderr.write('A digit-only unbounded-segment phase regex `[0-9]+(\\.[0-9]+)*` on the same roots\n');
+  process.stderr.write('is missing the canonical letter axis (#4660) — widen to `[0-9]+[A-Z]?(\\.[0-9]+)*`\n');
+  process.stderr.write('or sanction with `<!-- phase-id-owner: <reason> -->`.\n');
   process.stderr.write('A `.replace(\'{slug}\', ... || \'phase\')` fallback is banned outright (#4126) —\n');
   process.stderr.write('use `renderPhaseBranchName(` or sanction with\n');
   process.stderr.write('`// phase-id-owner: <reason>` on the line directly above:\n');
@@ -585,8 +649,10 @@ module.exports = {
   findBranchSlugFallbackDrift,
   findShellPhaseArithDrift,
   findSingleSegmentPhaseRegexDrift,
+  findLetterlessPhaseMirrorDrift,
   scanMarkdownShellArith,
   scanMarkdownSingleSegmentPhaseRegex,
+  scanMarkdownLetterlessPhaseMirror,
   scanRepo,
   scanAll,
   countSelectorBaselines,
@@ -597,4 +663,5 @@ module.exports = {
   BRANCH_SLUG_FALLBACK_DRIFT_RE,
   SHELL_PHASE_ARITH_DRIFT_RE,
   SINGLE_SEGMENT_PHASE_DRIFT_RE,
+  LETTERLESS_PHASE_MIRROR_DRIFT_RE,
 };
