@@ -221,22 +221,16 @@ describe('#4379 — the TDD RED pathspec is language-agnostic', () => {
   test('implementation files never match — the gate must still be able to trip', (t) => {
     // A pathspec broad enough to catch ordinary source would make the gate pass on
     // ANY in-scope commit, which is worse than the bug being fixed.
+    //
+    // `src/lib.rs` carries the Rust consequence: `#[test]` conventionally lives
+    // INSIDE the implementation file, so a Rust RED commit touches only source and
+    // no path-based gate can see it. That gap is a direct consequence of this row
+    // holding — the two cannot both be satisfied — which is why it is documented in
+    // references/tdd.md rather than "fixed" by widening the pathspec.
     const dir = seedRepo(t);
     const hits = matched(dir, shippedRedPathspec());
     for (const rel of ['src/impl.go', 'src/lib.rs']) {
       assert.ok(!hits.has(rel), `${rel} must NOT be treated as a test file`);
     }
-  });
-
-  test('rust inline #[test] remains out of reach — a documented limit, not a fix', (t) => {
-    // `#[test]` normally lives in the implementation file, so there is no
-    // test-shaped path to match and no pathspec can close this. Asserted rather
-    // than left silent, because references/tdd.md advertises `cargo test`.
-    const dir = seedRepo(t);
-    const hits = matched(dir, shippedRedPathspec());
-    assert.ok(
-      !hits.has('src/lib.rs'),
-      'if this ever passes, the pathspec has been widened to ordinary source — see #4379',
-    );
   });
 });
