@@ -1,13 +1,17 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const esbuild = require('esbuild');
+const { cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const SOURCE = path.join(ROOT, 'src', 'opencode-v2-plugin', 'index.cjs');
 const BUNDLE = path.join(ROOT, '.opencode', 'plugins', 'gsd-core.js');
 const BUILDER = path.join(ROOT, 'scripts', 'build-opencode-v2-bundles.cjs');
+const { bundleBuildOptions } = require('../scripts/build-opencode-v2-bundles.cjs');
 
 function eventStream() {
   return {
@@ -95,4 +99,25 @@ test('bundle is deterministic, checkable, and has no external @opencode import',
   const descriptor = require(BUNDLE);
   assert.deepEqual(Object.keys(descriptor).sort(), ['id', 'setup']);
   assert.equal(descriptor.id, 'gsd-core');
+});
+
+test('producer keeps symlinked node_modules paths inside the checkout', async () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-opencode-v2-bundle-'));
+  try {
+    const dependencyRoot = path.join(fixture, 'dependency-target');
+    const projectRoot = path.join(fixture, 'project');
+    fs.mkdirSync(path.join(dependencyRoot, 'linked-package'), { recursive: true });
+    fs.mkdirSync(projectRoot, { recursive: true });
+    fs.writeFileSync(path.join(dependencyRoot, 'linked-package', 'package.json'), JSON.stringify({ name: 'linked-package', version: '1.0.0', main: 'index.js' }));
+    fs.writeFileSync(path.join(dependencyRoot, 'linked-package', 'index.js'), 'module.exports = "linked";\n');
+    fs.writeFileSync(path.join(projectRoot, 'entry.cjs'), 'module.exports = require("linked-package");\n');
+    fs.symlinkSync(dependencyRoot, path.join(projectRoot, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+
+    const result = await esbuild.build(bundleBuildOptions({ entry: 'entry.cjs', outfile: 'bundle.cjs', format: 'cjs', sourcemap: false }, projectRoot));
+    const output = Buffer.from(result.outputFiles[0].contents).toString('utf8');
+    assert.equal(output.includes(dependencyRoot), false, 'bundle must not disclose the node_modules symlink target');
+    assert.match(output, /node_modules\/linked-package\/index\.js/);
+  } finally {
+    cleanup(fixture);
+  }
 });

@@ -113,6 +113,27 @@ function assertNoOpenCodeRuntimeImports(bytes, outfile) {
   assert.doesNotMatch(output, /\brequire\(\s*["']@opencode\//, `${outfile} must bundle @opencode dependencies`);
   assert.doesNotMatch(output, /\bimport\(\s*["']@opencode\//, `${outfile} must bundle @opencode dependencies`);
 }
+function assertNoHostPathLeak(bytes, outfile, roots = [ROOT, fs.realpathSync(ROOT), fs.realpathSync(path.join(ROOT, 'node_modules'))]) {
+  const output = Buffer.from(bytes).toString('utf8');
+  for (const root of new Set(roots)) {
+    assert.equal(output.includes(root), false, `${outfile} must not embed host path: ${root}`);
+  }
+  assert.doesNotMatch(output, /(?:^|[^A-Za-z])\/(?:Users|home)\//, `${outfile} must not embed a host home path`);
+}
+function bundleBuildOptions(bundle, root = ROOT) {
+  return {
+    absWorkingDir: root, entryPoints: [bundle.entry], outfile: path.join(root, bundle.outfile), bundle: true,
+    platform: 'node', format: bundle.format, target: 'node24', sourcemap: bundle.sourcemap, sourcesContent: false,
+    legalComments: 'none', banner: { js: GENERATED_BANNER.trimEnd() },
+    // Keep module paths rooted at this checkout when node_modules is a linked-worktree symlink.
+    // Otherwise esbuild realpaths dependencies and emits the symlink target in its source comments.
+    preserveSymlinks: true,
+    // CJS always selects the __dirname branch; this replacement prevents
+    // esbuild from lowering the source-only ESM fallback to an empty object.
+    define: { 'import.meta.url': JSON.stringify('file:///unused-in-cjs-bundle') },
+    metafile: true, write: false,
+  };
+}
 
 async function main(argv = process.argv.slice(2)) {
   const check = argv.includes('--check');
@@ -121,15 +142,7 @@ async function main(argv = process.argv.slice(2)) {
   const declaredOutputs = new Set(artifactManifest.outputs);
   const producedOutputs = new Set();
   for (const bundle of BUNDLES) {
-    const result = await esbuild.build({
-      absWorkingDir: ROOT, entryPoints: [bundle.entry], outfile: path.join(ROOT, bundle.outfile), bundle: true,
-      platform: 'node', format: bundle.format, target: 'node24', sourcemap: bundle.sourcemap, sourcesContent: false,
-      legalComments: 'none', banner: { js: GENERATED_BANNER.trimEnd() },
-      // CJS always selects the __dirname branch; this replacement prevents
-      // esbuild from lowering the source-only ESM fallback to an empty object.
-      define: { 'import.meta.url': JSON.stringify('file:///unused-in-cjs-bundle') },
-      metafile: true, write: false,
-    });
+    const result = await esbuild.build(bundleBuildOptions(bundle));
     const names = bundledPackageNames(result.metafile);
     for (const output of result.outputFiles) {
       const relative = path.relative(ROOT, output.path).split(path.sep).join('/');
@@ -138,6 +151,7 @@ async function main(argv = process.argv.slice(2)) {
       producedOutputs.add(relative);
       const contents = bundle.embeddedNotice ? Buffer.concat([Buffer.from(renderEmbeddedNotice(names)), output.contents]) : output.contents;
       if (bundle.embeddedNotice) assertNoOpenCodeRuntimeImports(contents, relative);
+      assertNoHostPathLeak(contents, relative);
       compareOrWrite(relative, contents, check);
     }
     if (bundle.notice) {
@@ -154,4 +168,4 @@ async function main(argv = process.argv.slice(2)) {
   console.error(`${check ? 'ok' : 'built'} OpenCode V2 bundles (${BUNDLES.length} entries)`);
 }
 if (require.main === module) main().catch((error) => { console.error(error.message); process.exitCode = 1; });
-module.exports = { BUNDLE_PRODUCER, getBundleArtifactManifest, main };
+module.exports = { BUNDLE_PRODUCER, bundleBuildOptions, getBundleArtifactManifest, main };
