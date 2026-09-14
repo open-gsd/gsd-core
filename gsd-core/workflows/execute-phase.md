@@ -223,25 +223,12 @@ if [ "$TDD_MODE" = "true" ]; then
     PLAN_N=$((10#${PLAN_ID}))
     PLAN_SCOPE_RE="^[a-z]+\((0*${PHASE_N})-(0*${PLAN_N})\):"  # TDD gate's own scope check
     TDD_MILESTONE_BASE=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-    # #4379: the pathspec is the definition of "a test file" for this gate, so a
-    # JS/TS-only list means a Go project trips on EVERY behaviour-adding task —
-    # `go test` is documented as supported (references/tdd.md), and `*_test.go`
-    # matches none of the old patterns. Two corrections, both measured:
-    #   1. cover the conventions of the languages tdd.md already advertises;
-    #   2. drop the `**/` prefix — it does NOT match a ROOT-level path, so a
-    #      root `foo.test.js` was invisible even in the supported language. A
-    #      bare glob matches at every depth, root included.
-    # Deliberately NOT widened to ordinary source: a pathspec that matches
-    # implementation files makes the gate pass on any in-scope commit, which is
-    # worse than tripping wrongly. Rust is a known gap for exactly that reason —
-    # `#[test]` lives in the implementation file, so no pathspec can see it.
-    # Honest about the cost: `*.spec.*` can match a non-test file that happens to
-    # carry the word (`api.spec.json`, `openapi.spec.yaml`), which would let the
-    # gate pass on a commit touching only that. This is not new — `**/*.spec.*`
-    # already matched those at any nested path — dropping `**/` only extends the
-    # same false-positive class to the repo root. It is accepted rather than
-    # fixed here because narrowing it is a separate behaviour change to the
-    # currently-supported case, not part of making other languages visible.
+    # #4379: this pathspec IS the gate's definition of "a test file". It was
+    # JS/TS-only, so Go tripped on every task; and `**/` never matches a
+    # root-level path, so a root `foo.test.js` was invisible too. Bare globs
+    # match at every depth. NOT widened to ordinary source — that would make
+    # the gate pass on any in-scope commit. Trade-offs and the Rust gap:
+    # references/tdd.md § Create first test file.
 
     RED_COMMIT=$(git log --oneline -E ${TDD_MILESTONE_BASE:+"$TDD_MILESTONE_BASE..HEAD"} --grep="${PLAN_SCOPE_RE}" -- "*.test.*" "*.spec.*" "tests/" "__tests__/" "*_test.go" "test_*.py" "*_test.py" "*_test.exs" "*_spec.rb" "*_test.rb" | head -1)
     if [ -z "$RED_COMMIT" ]; then

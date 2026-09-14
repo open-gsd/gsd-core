@@ -192,6 +192,13 @@ RED commits go unseen:
 - `*_test.exs` — Elixir
 - `*_spec.rb` / `*_test.rb` — Ruby
 
+**Cost of the broad pathspec (#4379).** `*.spec.*` can match a non-test file that happens to carry
+the word — `api.spec.json`, `openapi.spec.yaml` — which lets the RED gate pass on a commit touching
+only that. This is not new: the previous `**/*.spec.*` already matched those at any nested path, so
+dropping the `**/` prefix only extends the same false-positive class to the repo root. It is
+accepted rather than narrowed, because narrowing it is a behaviour change to the
+currently-supported case and not part of making other languages visible.
+
 **Known gap — Rust (#4379).** `#[test]` conventionally lives inside the implementation file, so a
 Rust RED commit touches `src/*.rs` and no path-based gate can distinguish it from ordinary source.
 Widening the pathspec to cover it would match all source and make the gate meaningless. `cargo test`
