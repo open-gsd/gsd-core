@@ -1,7 +1,13 @@
 # Claude orchestration — Workflow execution backend (BETA)
 
-> Injected at `execute:wave:pre` `into: executor` only when
-> `claude_orchestration.enabled` is true. Default-off; `onError: skip`.
+> This is the orchestrator-side procedure for the Workflow execution backend.
+> It is NOT a loop contribution and is not injected anywhere. It was
+> previously declared as an `execute:wave:pre` contribution with
+> `into: "executor"`, which routed orchestrator instructions into executor
+> prompts — a role-partition violation (the orchestrator only orchestrates,
+> the executor only executes). It is retained here as the reference for
+> whoever wires the orchestrator side through a host-level mechanism. See
+> issue #4740.
 
 ## When this contribution is active
 

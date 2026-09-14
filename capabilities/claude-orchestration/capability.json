@@ -56,19 +56,6 @@
   "steps": [],
   "contributions": [
     {
-      "point": "execute:wave:pre",
-      "into": "executor",
-      "fragment": {
-        "path": "fragments/execute-wave-pre.md"
-      },
-      "produces": [],
-      "consumes": [
-        "PLAN.md"
-      ],
-      "when": "claude_orchestration.enabled",
-      "onError": "skip"
-    },
-    {
       "point": "plan:post",
       "into": "planner",
       "fragment": {
