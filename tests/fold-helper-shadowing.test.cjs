@@ -3,10 +3,10 @@
 // inner declaration shadows the outer one for everything in that fold and the
 // two copies then drift independently (#4409, same class as #4205/#4337).
 //
-// Every assertion here walks an AST. None reads a .cjs and calls .includes():
-// that is `local/no-source-grep`'s exact shape, and it is also the wrong
-// instrument — "how many declarations exist" is a construct count, not a text
-// count, and a regex would also match the word inside a comment or a string.
+// Every assertion walks an AST. None reads a .cjs and calls .includes(): that is
+// `local/no-source-grep`'s trigger shape, and it is also the wrong instrument —
+// "how many declarations exist" is a construct count, and a regex would match the
+// name inside a comment or a string literal too.
 
 'use strict';
 
@@ -19,15 +19,16 @@ const espree = require('espree');
 const TESTS_DIR = __dirname;
 const SUBJECT = 'runtime-launcher-parity.test.cjs';
 
-// The 26 fold-shadowed helpers that remain elsewhere in tests/, measured — not
-// guessed — with this same walker. They are the #1969 fold consolidation's
-// leftovers and are NOT this issue's scope: 15 of them DIVERGE from their
-// module-scope twin, and a diverged shadow cannot be deleted mechanically
-// (its fold's tests were written against its own copy), so each needs its own
-// behavioural check.
+// The fold-shadowed helpers that remain elsewhere in tests/, measured with this
+// same walker — not guessed. They are leftovers of the #1969 fold consolidation
+// and are NOT this issue's scope: most of them DIVERGE from their module-scope
+// twin (16 of 26 comparing whitespace-normalized bodies; 15 if comments are
+// stripped too — one pair differs only in its comments), and a diverged shadow
+// cannot be deleted mechanically the way this issue's could, because its fold's
+// tests were written against its own copy.
 //
-// An exact sorted list, deliberately not a count: `27 !== 26` names no
-// offender and costs a CI round-trip to diagnose.
+// An exact sorted list, deliberately not a count: `27 !== 26` names no offender
+// and costs a CI round-trip to diagnose.
 const KNOWN_FOLD_SHADOWS = [
   'capability-registry.test.cjs::makeTempCapDir',
   'codex-config-agents.test.cjs::readHooksSessionStartCommands',
@@ -57,6 +58,8 @@ const KNOWN_FOLD_SHADOWS = [
   'update-custom-backup.test.cjs::writeManifest',
 ];
 
+const FUNCTION_INITIALIZERS = new Set(['FunctionExpression', 'ArrowFunctionExpression']);
+
 function walk(node, visit) {
   if (!node || typeof node.type !== 'string') return;
   visit(node);
@@ -68,46 +71,71 @@ function walk(node, visit) {
   }
 }
 
-function parseTestFile(name) {
-  // allow-test-rule: source-text-is-the-product (#4409)
-  // The subject under test IS the test corpus's declaration structure; this is
-  // a parse, not a substring scan.
-  const src = fs.readFileSync(path.join(TESTS_DIR, name), 'utf8');
+/** Recursive: tests/ has subdirectories (dispatch/, qa/, helpers/, …) that a
+ *  flat readdir would silently exclude from the corpus guard. */
+function allTestFiles(dir = TESTS_DIR, rel = '') {
+  const out = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const abs = path.join(dir, entry.name);
+    const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) out.push(...allTestFiles(abs, relPath));
+    else if (entry.name.endsWith('.cjs')) out.push(relPath);
+  }
+  return out.sort();
+}
+
+function parseTestFile(relPath) {
+  const src = fs.readFileSync(path.join(TESTS_DIR, relPath), 'utf8');
   return espree.parse(src, { ecmaVersion: 2024, sourceType: 'script', loc: true });
 }
 
-/** Module-scope function declarations, by name -> first line. */
-function moduleScopeFunctions(ast) {
+/**
+ * Names a statement declares as a callable: a `function foo()` declaration AND a
+ * `const foo = () => {}` / `= function () {}` binding. Arrow-form helpers shadow
+ * exactly the same way; detecting only FunctionDeclaration would leave the guard
+ * blind to half the shapes a future fold could use.
+ */
+function declaredCallables(node) {
   const found = new Map();
-  for (const node of ast.body) {
-    if (node.type === 'FunctionDeclaration' && node.id && !found.has(node.id.name)) {
-      found.set(node.id.name, node.loc.start.line);
+  if (node.type === 'FunctionDeclaration' && node.id) {
+    found.set(node.id.name, node.loc.start.line);
+  }
+  if (node.type === 'VariableDeclaration') {
+    for (const d of node.declarations) {
+      if (d.id.type === 'Identifier' && d.init && FUNCTION_INITIALIZERS.has(d.init.type)) {
+        found.set(d.id.name, d.loc.start.line);
+      }
     }
   }
   return found;
 }
 
 /**
- * Function declarations anywhere inside a PROGRAM-LEVEL bare block whose name
- * collides with a module-scope declaration in the same file. The bare `{` is
- * the fold marker (`// Folded from … consolidation epic #1969`); the
- * declarations themselves sit deeper, inside the arrow passed to
- * `__foldDescribe`, which is why this walks descendants rather than children.
+ * Callables declared anywhere inside a PROGRAM-LEVEL bare block whose name
+ * collides with a module-scope callable in the same file. The bare `{` is the
+ * fold marker (`// Folded from … consolidation epic #1969`); the declarations sit
+ * deeper, inside the arrow passed to `__foldDescribe`, hence a descendant walk.
  */
-function foldShadowedIn(name) {
-  const ast = parseTestFile(name);
-  const moduleScope = moduleScopeFunctions(ast);
+function foldShadowedIn(relPath) {
+  const ast = parseTestFile(relPath);
+  const moduleScope = new Map();
+  for (const node of ast.body) {
+    for (const [name, line] of declaredCallables(node)) {
+      if (!moduleScope.has(name)) moduleScope.set(name, line);
+    }
+  }
   const shadows = [];
   if (moduleScope.size === 0) return shadows;
   for (const node of ast.body) {
     if (node.type !== 'BlockStatement') continue;
     walk(node, (d) => {
-      if (d.type === 'FunctionDeclaration' && d.id && moduleScope.has(d.id.name)) {
+      for (const [name, line] of declaredCallables(d)) {
+        if (!moduleScope.has(name)) continue;
         shadows.push({
-          key: `${name}::${d.id.name}`,
-          name: d.id.name,
-          moduleLine: moduleScope.get(d.id.name),
-          foldLine: d.loc.start.line,
+          key: `${relPath}::${name}`,
+          name,
+          moduleLine: moduleScope.get(name),
+          foldLine: line,
         });
       }
     });
@@ -115,18 +143,15 @@ function foldShadowedIn(name) {
   return shadows;
 }
 
-function allTestFiles() {
-  return fs.readdirSync(TESTS_DIR).filter((f) => f.endsWith('.cjs')).sort();
-}
-
-function allFoldShadows() {
-  const out = [];
-  for (const name of allTestFiles()) {
-    let shadows;
-    try { shadows = foldShadowedIn(name); } catch { continue; }
-    out.push(...shadows);
+/** Scans the whole corpus. Parse failures are RAISED, never skipped: a silent
+ *  `continue` would let the guard go quietly blind on the file that broke. */
+function scanCorpus() {
+  const shadows = [];
+  const files = allTestFiles();
+  for (const relPath of files) {
+    shadows.push(...foldShadowedIn(relPath));
   }
-  return out;
+  return { shadows, scanned: files.length };
 }
 
 describe('fold-shadowed test helpers (#4409)', () => {
@@ -145,31 +170,23 @@ describe('fold-shadowed test helpers (#4409)', () => {
     );
   });
 
-  // ROW 2 — the rest of the corpus, pinned as an exact sorted list.
-  test('no NEW fold-shadowed helper appears anywhere in tests/', () => {
-    const actual = allFoldShadows().map((s) => s.key).sort();
+  // ROW 2 — the rest of the corpus, pinned as an exact sorted list. A stale
+  // baseline entry fails here too (the lists stop matching), so there is no
+  // separate staleness row to pass vacuously.
+  test('the fold-shadowed set across tests/ matches the recorded baseline exactly', () => {
+    const { shadows, scanned } = scanCorpus();
+    assert.ok(scanned > 900, `expected the full corpus, scanned only ${scanned} files`);
     assert.deepEqual(
-      actual,
+      shadows.map((s) => s.key).sort(),
       [...KNOWN_FOLD_SHADOWS].sort(),
       'The set of fold-shadowed helpers changed. If you REMOVED one, delete its line from ' +
-      'KNOWN_FOLD_SHADOWS — the baseline is meant to shrink. If you ADDED one, do not add it here: ' +
-      'declare the helper once at module scope instead (#4409).',
+      'KNOWN_FOLD_SHADOWS — the baseline is meant to shrink. If you ADDED one, do not add it ' +
+      'here: declare the helper once at module scope instead (#4409).',
     );
   });
 
-  // ROW 3 — the baseline cannot rot into strings that match nothing.
-  test('every baseline entry names a real module-scope/fold declaration pair', () => {
-    const live = new Set(allFoldShadows().map((s) => s.key));
-    const stale = [...new Set(KNOWN_FOLD_SHADOWS)].filter((k) => !live.has(k));
-    assert.deepEqual(
-      stale,
-      [],
-      `These baseline entries no longer correspond to a real shadowed pair — remove them:\n  ${stale.join('\n  ')}`,
-    );
-  });
-
-  // ROW 4 — the behavioural half: the defect a Windows user actually hits.
-  test('the surviving extractShellBlocks is CRLF-safe', () => {
+  // ROW 3 — the behavioural half: the defect a Windows user actually hits.
+  test(`every extractShellBlocks in ${SUBJECT} splits lines CRLF-safely`, () => {
     const ast = parseTestFile(SUBJECT);
     const declarations = [];
     walk(ast, (n) => {
@@ -179,34 +196,39 @@ describe('fold-shadowed test helpers (#4409)', () => {
     });
     assert.equal(declarations.length, 1, 'exactly one extractShellBlocks may exist in this file');
 
-    // Assert the split is CRLF-aware at the AST level: the argument to .split()
-    // must be a regex that tolerates \r, never the bare '\n' string literal.
-    let splitArg = null;
-    walk(declarations[0], (n) => {
-      if (
-        splitArg === null &&
-        n.type === 'CallExpression' &&
-        n.callee.type === 'MemberExpression' &&
-        n.callee.property.name === 'split'
-      ) {
-        splitArg = n.arguments[0];
-      }
-    });
-    assert.ok(splitArg, 'extractShellBlocks must split its input into lines');
-    assert.equal(
-      splitArg.type,
-      'Literal',
-      'expected a literal split argument',
-    );
-    assert.ok(
-      splitArg.regex,
-      `extractShellBlocks splits on ${JSON.stringify(splitArg.value)} — a bare "\\n" leaves a ` +
-      'trailing \\r on every line of a CRLF checkout (core.autocrlf=true on Windows). Use /\\r?\\n/.',
-    );
-    assert.match(
-      splitArg.regex.pattern,
-      /\\r\?\\n/,
-      'the line split must tolerate a carriage return (#4409)',
-    );
+    // Check EVERY declaration, not just the first: on the pre-fix tree the
+    // module-scope copy came first and was already correct, so inspecting only
+    // declarations[0] would have missed the folded copy that carried the bug.
+    for (const declaration of declarations) {
+      const param = declaration.params[0];
+      assert.equal(param?.type, 'Identifier', 'extractShellBlocks takes a content parameter');
+
+      // Pin the split to the one applied TO THAT PARAMETER, rather than taking
+      // whichever `.split()` appears first in the body.
+      let splitArg = null;
+      walk(declaration, (n) => {
+        if (
+          splitArg === null &&
+          n.type === 'CallExpression' &&
+          n.callee.type === 'MemberExpression' &&
+          n.callee.property.name === 'split' &&
+          n.callee.object.type === 'Identifier' &&
+          n.callee.object.name === param.name
+        ) {
+          splitArg = n.arguments[0];
+        }
+      });
+      assert.ok(splitArg, `extractShellBlocks must split its "${param.name}" parameter into lines`);
+      assert.ok(
+        splitArg.regex,
+        `extractShellBlocks splits on ${JSON.stringify(splitArg.value)} — a bare "\\n" leaves a ` +
+        'trailing \\r on every line of a CRLF checkout (core.autocrlf=true on Windows). Use /\\r?\\n/.',
+      );
+      assert.match(
+        splitArg.regex.pattern,
+        /\\r\?\\n/,
+        'the line split must tolerate a carriage return (#4409)',
+      );
+    }
   });
 });
