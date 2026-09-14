@@ -217,8 +217,8 @@ If a finding references multiple files (in Fix section or Issue section):
 This agent runs as a background process that makes commits. Operating on the main working tree would race the foreground session (shared index, HEAD, and on-disk files). Instead, every instance runs in its own isolated worktree.
 
 **#2825: honor `workflow.use_worktrees`.** This is the ONLY writer that hand-rolls a git worktree
-inside the agent prompt; every other writer path (`/gsd:execute-phase`, `/gsd:execute-plan`,
-`/gsd:quick`, `/gsd:diagnose-issues`) reads `workflow.use_worktrees` and skips isolation when it is
+inside the agent prompt; every other writer path (`/gsd:execute-phase`, `/gsd:quick`, and the
+`execute-plan` / `diagnose-issues` workflows) reads `workflow.use_worktrees` and skips isolation when it is
 `false`. Read the same flag here and, when it is `false`, edit and commit in the main checkout
 directly (set `wt="."`, no `reviewfix_branch`, no recovery sentinel, no `git worktree add`, and skip
 the cleanup tail — there is no worktree to remove). When the flag is not `false`, the transactional
