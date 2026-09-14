@@ -240,12 +240,17 @@ describe('#4709 no shipped surface mints a retired runtime id', () => {
     return out;
   }
 
-  /** The shipped, runtime-loaded markdown corpus this block governs. */
+  /**
+   * The shipped, runtime-loaded markdown corpus this block governs. `agents/` is included
+   * deliberately: it ships runtime-loaded markdown too, including `.compact.md` variants, and
+   * leaving it out was a coverage gap an adversarial review caught.
+   */
   function shippedMarkdown() {
     return [
       ...markdownFilesUnder(path.join(ROOT, 'gsd-core', 'workflows')),
       ...markdownFilesUnder(path.join(ROOT, 'commands')),
       ...markdownFilesUnder(path.join(ROOT, 'skills')),
+      ...markdownFilesUnder(path.join(ROOT, 'agents')),
     ];
   }
 
@@ -378,5 +383,49 @@ describe('#4709 no shipped surface mints a retired runtime id', () => {
     for (const model of ['gemini-3.1-pro-preview', 'gemini-3-flash', 'gemini-2.5-flash-lite']) {
       assert.ok(google.includes(model), `google provider preset must still offer ${model}`);
     }
+  });
+
+  test('PR template runtime checklists name only supported runtimes', () => {
+    // #1928's follow-up dropped Gemini CLI from .github/ISSUE_TEMPLATE/*.yml but missed the PR
+    // templates, which kept offering it under "Runtimes tested" -- a contributor-facing surface
+    // still advertising a retired runtime two releases later. Labels here are DISPLAY names
+    // ("Claude Code", not "claude"), so they are checked against the label table, not the id set.
+    const labels = new Set(
+      Object.keys(registry.runtimes).map((id) => getRuntimeLabel(id)),
+    );
+    // Non-runtime checklist entries that legitimately appear in the same list.
+    const NON_RUNTIME = /^(Other:|N\/A\b)/;
+    const offenders = [];
+
+    const templateDir = path.join(ROOT, '.github', 'PULL_REQUEST_TEMPLATE');
+    for (const name of fs.readdirSync(templateDir).filter((f) => f.endsWith('.md'))) {
+      const file = path.join(templateDir, name);
+      const fileLines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+      let inRuntimeSection = false;
+      fileLines.forEach((line, i) => {
+        if (/^#+\s*Runtimes tested/i.test(line)) {
+          inRuntimeSection = true;
+          return;
+        }
+        // The section ends at the next heading or horizontal rule.
+        if (inRuntimeSection && /^(#+\s|---\s*$)/.test(line)) {
+          inRuntimeSection = false;
+          return;
+        }
+        if (!inRuntimeSection) return;
+        const m = /^\s*-\s*\[\s*\]\s*(.+?)\s*$/.exec(line);
+        if (!m) return;
+        const label = m[1];
+        if (NON_RUNTIME.test(label)) return;
+        if (!labels.has(label)) {
+          offenders.push(`.github/PULL_REQUEST_TEMPLATE/${name}:${i + 1} offers "${label}"`);
+        }
+      });
+    }
+
+    assert.deepStrictEqual(offenders, [],
+      'a PR template asks contributors which runtime they tested and lists one GSD does not '
+        + 'support. Labels must match the runtime label table (src/runtime-name-policy.cts '
+        + `RUNTIME_LABELS), so a retired runtime cannot linger here. Offenders:\n  ${offenders.join('\n  ')}`);
   });
 });
