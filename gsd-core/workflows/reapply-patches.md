@@ -90,6 +90,12 @@ if [ -z "$PATCHES_DIR" ]; then
     PATCHES_DIR="$HOME/.opencode/gsd-local-patches"
   elif [ -d "$HOME/.gemini/antigravity/gsd-local-patches" ]; then
     PATCHES_DIR="$HOME/.gemini/antigravity/gsd-local-patches"
+  # Legacy: a pre-#1928 Gemini CLI install put patches at ~/.gemini/gsd-local-patches.
+  # That runtime is retired, but a stranded patches dir is still the user's work — probed
+  # AFTER Antigravity so a live install always wins. This is a directory probe, not a
+  # runtime home: nothing here assigns the retired runtime id.
+  elif [ -d "$HOME/.gemini/gsd-local-patches" ]; then
+    PATCHES_DIR="$HOME/.gemini/gsd-local-patches"
   elif [ -d "$HOME/.codex/gsd-local-patches" ]; then
     PATCHES_DIR="$HOME/.codex/gsd-local-patches"
   else
