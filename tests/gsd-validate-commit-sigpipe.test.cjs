@@ -353,6 +353,10 @@ describe('#4429 — subprocess statuses must not be inherited from the environme
     const hook = makeHookLayout(t, toPreFixAmbientStatus);
     const dir = makeProject(t, 0);
     const res = runValidate(hook, dir, NON_CONFORMING, { CLASSIFY_STATUS: '3' });
+    // Load-bearing, not ceremony: an orphaned layout ALSO exits 0 here, so
+    // without this the row would pass for entirely the wrong reason. Measured:
+    // the genuine bypass emits no CLASSIFIER_THREW, an orphaned layout does.
+    assertSubstantive(res, 'pre-fix ambient-status control');
     assert.equal(
       res.status,
       0,
@@ -375,6 +379,11 @@ describe('#4429 — subprocess statuses must not be inherited from the environme
     const res = runValidate(hook, dir, NON_CONFORMING, {
       PATH: `${binDir}${path.delimiter}${hookEnv.PATH}`,
     });
+    // This row EXPECTS a fail-open, so exit 0 alone cannot tell "the node shim
+    // made the config read fail" from "the layout was broken and the classifier
+    // could not load". Only the latter emits CLASSIFIER_THREW, so this pins the
+    // pass to the cause the row actually names.
+    assertSubstantive(res, 'genuine fail-open row');
     assert.equal(
       res.status,
       0,
