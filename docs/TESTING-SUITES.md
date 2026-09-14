@@ -515,15 +515,15 @@ mis-ranked files badly enough that the slowest chunk ran ~3.9x the lightest.
 
 | Knob | Default | Meaning |
 |---|---|---|
-| `RUN_TESTS_MAX_FILES_PER_CHUNK` | `60` | Per-chunk weight budget. Weights are normalized so an **average-cost** file weighs 1, so this still reads as "about 60 average files". |
+| `RUN_TESTS_MAX_FILES_PER_CHUNK` | `60` (`22` on win32) | Per-chunk weight budget. Weights are normalized so an **average-cost** file weighs 1, so this still reads as "about 60 average files" (about 22 on win32). Windows gets a lower cap than Linux/macOS because the weight table's calibration does not transfer 1:1 to the Windows runner for install/subprocess-heavy work — see the derivation comment above `DEFAULT_MAX_FILES_PER_CHUNK` in `scripts/run-tests.cjs`. |
 | `RUN_TESTS_MAX_CMDLINE_CHARS` | `28000` | argv ceiling per chunk, with headroom under the Windows 32,767 limit. |
 | `RUN_TESTS_TIMINGS_FILE` | `tests/test-timings.json` | Path to the timing table. Tests override it to inject a synthetic cost profile. |
 | `RUN_TESTS_CHUNK_TIMEOUT_MS` | `600000` | Per-chunk timeout. |
 
 The timing table is **advisory and deliberately un-gated**. There is no `--check`
 mode and no CI lint that fails on staleness, because timing data legitimately
-varies run to run. A file missing from the table falls back to the table's median
-weight, and a missing or unparseable table falls back to uniform weight — so
+varies run to run. A file missing from the table falls back to the table's mean
+weight (1), and a missing or unparseable table falls back to uniform weight — so
 drift costs chunk *balance*, never a red build. A count-based floor additionally
 guarantees the packer never produces fewer chunks than plain count-based packing
 would, so a badly stale table cannot collapse the suite into a few fat chunks.

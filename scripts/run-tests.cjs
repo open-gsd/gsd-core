@@ -349,6 +349,13 @@ function positiveNumberEnv(raw, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+// Per-chunk file-count budget default, by platform. See the comment above its
+// call site in main() (win32 arithmetic derivation, backstop citations, and
+// the count-floor-vs-weight-ceiling explanation for the conformance pool).
+function defaultMaxFilesPerChunk(platform) {
+  return platform === 'win32' ? 22 : 60;
+}
+
 // ── #4020: run-scoped temp root ─────────────────────────────────────────────
 //
 // Fixture trees leak under os.tmpdir() on the SUCCESS path (the untouched half
@@ -483,10 +490,13 @@ const SUPPORTED_TIMINGS_SCHEMA = 1;
 // The chunk COMPOSITION still differs — LPT balances where first-fit filled
 // greedily, so 7 uniform files at budget 3 pack {3,2,2} rather than {3,3,1}.
 //
-// `medianWeight` is the fallback for a file absent from the table (a new test,
-// or a table that has drifted). The median — not the mean — because the cost
-// distribution is heavily right-skewed (median 0.28s vs mean 4.6s across the
-// suite), so the median is the honest estimate for an unknown file.
+// `medianWeight` is retained on the returned table for callers that report on
+// table skew, but it is NOT the fallback weight for a file absent from the
+// table. It was until the #2456 follow-up (red next, 2026-09-14): the cost
+// distribution is heavily right-skewed (median 381ms vs mean 7152ms across
+// the suite), so the median modelled an unknown file as ~19x cheaper than
+// average, under-declaring its real share of the chunk budget. See
+// makeFileWeigher below for the corrected (mean) fallback.
 //
 // Returns null when the table is missing or unusable; the caller then treats
 // every file as weight 1, which reproduces the pre-#2456 count-based balance.
@@ -509,7 +519,7 @@ function loadTestTimings(timingsPath) {
   // Array.isArray guard: `typeof [] === 'object'`, so a hand-edit that turned
   // the map into a list would pass a bare typeof check and be accepted as a
   // valid table. It degrades harmlessly (no basename ever matches an array
-  // index, so every file takes medianWeight), but silently accepting a
+  // index, so every file falls back to weight 1), but silently accepting a
   // malformed table is worse than rejecting it — reject, and fall back to
   // uniform weight the same way a missing file does.
   if (!timings || typeof timings !== 'object' || Array.isArray(timings)) return null;
@@ -528,10 +538,21 @@ function loadTestTimings(timingsPath) {
 // Build the packer's weight function from a loaded timing table.
 //
 // A file present in the table weighs its measured duration relative to the
-// table mean. A file ABSENT from it weighs the table's median — this is the
-// "advisory, not gated" contract: a new test or a drifted table costs chunk
-// balance, never a red build. A null table (missing or unparseable file) makes
-// every file weigh 1, reproducing the pre-#2456 count-based balance exactly.
+// table mean. A file ABSENT from it weighs 1 — the table MEAN, the same
+// value a null table (missing or unparseable file) yields for every file,
+// because both states mean the same thing: cost unknown.
+//
+// This was previously `timings.medianWeight`, on the claim that an absent
+// file "costs chunk balance, never a red build." That claim is false. In a
+// right-skewed table (measured: mean 7152ms, median 381ms — an 18.8x skew)
+// the median models an unknown file as ~19x cheaper than average, which
+// under-declares its real share of the budget. That under-declaration DID
+// cause a red build: Windows conformance shard 2/3, chunk 4/6 was killed at
+// 600018ms with ZERO failing tests, because files absent from the table
+// packed as if they were nearly free and the chunk blew the 600s cap.
+// Empirically, mean is the right estimate for an unknown file: 9 unmeasured
+// files that caused the incident averaged 6659ms against a table mean of
+// 7152ms — within 7%.
 function makeFileWeigher(timings) {
   if (!timings) return () => 1;
   return (f) => {
@@ -546,9 +567,22 @@ function makeFileWeigher(timings) {
     // keeps the lookup correct for arbitrary input, since this function is
     // exported and does not control its caller's strings.
     const ms = Object.hasOwn(timings.timings, key) ? timings.timings[key] : undefined;
-    return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0
-      ? ms / timings.mean
-      : timings.medianWeight;
+    return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? ms / timings.mean : 1;
+  };
+}
+
+// Build a predicate answering "does the timings table carry a genuine
+// measurement for this file?" — distinct from makeFileWeigher, which returns
+// a USABLE weight (1) for an unmeasured file too, on purpose (advisory
+// balance). Isolation (partitionIsolatedFiles) needs the stronger fact: a
+// file must never be isolated on the strength of the unknown-file fallback
+// weight alone, only on a weight it actually earned.
+function makeMeasuredPredicate(timings) {
+  if (!timings) return () => false;
+  return (f) => {
+    const key = basename(f);
+    const ms = Object.hasOwn(timings.timings, key) ? timings.timings[key] : undefined;
+    return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0;
   };
 }
 
@@ -684,56 +718,84 @@ function packChunks(files, { weightOf, maxWeight, maxChars, fixedOverhead }) {
 // fewer light files available to pad around it. This is a structural risk of
 // the smaller conformance-tier pool, not a one-off.
 //
-// A first attempt at this fix hand-picked a handful of candidates by eye and
-// missed three heavier files — caught by an isolated code-review pass, which
-// is the reason this comment says "systematically", not "we looked at the
-// obvious ones". The corrected method: codex-config.test.cjs's own weight
-// (17.87) is 44.7% of the Windows MAX_FILES_PER_CHUNK budget (40) — that
-// ratio, not a round "~45%", is the actual established threshold, since it's
-// the exact file two prior documented incidents already proved dangerous.
-// Computing weight/budget for EVERY unit-suite file in the timings table
-// (`suiteOf(f) === null` — the same eligibility test that decides
-// conformance-tier membership) and keeping everything at or above that ratio
-// found SEVEN files, not four: run-tests-harness.test.cjs (31.23, 78.1%),
-// emitted-attribution.test.cjs (26.47, 66.2%), install-minimal-hooks.test.cjs
-// (24.45, 61.1%), phase.test.cjs (23.31, 58.3%), state.test.cjs (21.35,
-// 53.4%), config.test.cjs (19.76, 49.4%), install.test.cjs (18.84, 47.1%) —
-// each at or above codex-config.test.cjs's own proven-dangerous ratio.
+// 2026-09-14 fix (post-#4603 follow-up): the original derivation above tied
+// the isolation bar to `MAX_FILES_PER_CHUNK`, a per-PLATFORM file-COUNT cap
+// (win32 22, linux/darwin 60) — a category error (count vs. weight) that also
+// made the bar platform-dependent: at win32's cap the ratio isolated files
+// the incidents never implicated (`commands`, `init`), while at linux/darwin's
+// larger cap (0.447 * 60 = 26.82) it dropped SEVEN of the historical EIGHT
+// files the incidents above proved dangerous — only run-tests-harness.test.cjs
+// (31.23) still cleared it; `emitted-attribution`, `install-minimal-hooks`,
+// `phase`, `state`, `config`, `install`, and `codex-config` itself (17.87,
+// the file both incidents centered on) all fell back into the shared pool.
 //
-// Isolating all eight (these seven plus codex-config.test.cjs) into their own
-// chunk, unconditionally, on every platform, removes the gamble at its
-// source rather than tuning the shared budget again around a moving target:
-// no other file's packing changes (these files simply never enter the shared
-// pool `packChunks` balances), and no future single-file addition can
-// silently reintroduce this exact failure by landing in one of their chunks.
-// If a future profiling pass genuinely speeds any of them up, this isolation
-// can be revisited — this is a packing-side mitigation for KNOWN files' cost,
-// not a statement that the cost is irreducible. If a FUTURE file's measured
-// weight ever crosses this same ratio, it needs the same treatment; nothing
-// currently re-runs this sweep automatically when the timings table changes.
-const ISOLATED_HEAVY_FILES = new Set([
-  'codex-config.test.cjs',
-  'run-tests-harness.test.cjs',
-  'emitted-attribution.test.cjs',
-  'install-minimal-hooks.test.cjs',
-  'phase.test.cjs',
-  'state.test.cjs',
-  'config.test.cjs',
-  'install.test.cjs',
-]);
+// The bar is now anchored to what actually failed: WALL-CLOCK time against
+// the 600000ms per-chunk backstop (chunkTimeoutMs above), not a file-count
+// cap. `CHUNK_WORKING_BUDGET_MS` (400000ms) is the same "healthy chunk"
+// working budget the win32 MAX_FILES_PER_CHUNK derivation targets (see that
+// comment, above `DEFAULT_MAX_FILES_PER_CHUNK`) — one file eating
+// `ISOLATION_BUDGET_FRACTION` (30%) of that budget BY ITSELF is exactly the
+// "any companion is gambling with the remaining headroom" condition both
+// incidents above describe, restated in ms instead of a per-platform count.
+// codex-config.test.cjs (measured 127783ms) clears this bar;
+// run-tests-harness.test.cjs (measured 223372ms) clears it by ~1.86x.
+//
+// `isolationThresholdWeight` below converts that ms bar into the packer's
+// weight units by dividing by the LIVE timings table's own mean duration —
+// the same normalization `makeFileWeigher` already applies to every file, so
+// isolation and packing share one scale. This is platform-independent BY
+// CONSTRUCTION: the timings table is not sharded by OS, so every platform
+// computes the identical threshold weight and therefore the identical
+// isolated set (pinned by
+// "the isolated set is identical across win32, linux, darwin" in
+// tests/run-tests-harness.test.cjs). Isolating a file into its own chunk,
+// unconditionally, on every platform, removes the gamble at its source
+// rather than tuning a shared per-platform budget again around a moving
+// target: an isolated file never enters the shared pool `packChunks`
+// balances, so no other file's packing changes.
+//
+// The set of isolated files is DERIVED PER RUN from the live timings table,
+// not hand-maintained: a newly heavy file, or a changed
+// CHUNK_WORKING_BUDGET_MS/ISOLATION_BUDGET_FRACTION, crosses the threshold
+// automatically on the next run, with no separate sweep to remember to
+// re-run.
+const CHUNK_WORKING_BUDGET_MS = 400000;
+const ISOLATION_BUDGET_FRACTION = 0.3;
 
 /**
- * Split `files` (absolute or repo-relative paths) into `{isolated, packable}`
- * by basename membership in `ISOLATED_HEAVY_FILES`. Pure and order-preserving
+ * Split `files` (absolute or repo-relative paths) into `{isolated, packable}`.
+ * A file is isolated when it has a genuine measured weight AND that weight is
+ * at or above `thresholdWeight`. Eligibility is "is this file heavy?", not
+ * "which suite does it belong to" — suite scoping (unit vs. install vs. all)
+ * happens upstream, in `selectFiles`, before this function ever sees the
+ * list, so a unit-only invocation's isolated set is unaffected either way;
+ * what this DOES change is that install-suite outliers (e.g.
+ * fragment-single-edit-propagation.install.test.cjs at 575000ms, 96% of the
+ * 600000ms backstop alone) become isolatable on an `all`/`install`-suite run,
+ * where they were previously permanently ineligible regardless of weight.
+ * An unmeasured file is NEVER isolated on the strength of the unknown-file
+ * fallback weight alone — isolation is reserved for files PROVEN heavy, not
+ * files merely absent from the timings table. Pure and order-preserving
  * within each half, so it is unit-testable without spawning `main()` as a
  * subprocess. `isolated` files are meant to become their own single-file
- * chunk each; `packable` files are meant to go through `packChunks` as before.
+ * chunk each; `packable` files are meant to go through `packChunks` as
+ * before.
+ *
+ * `thresholdWeight` must be a finite, positive number — a non-finite or
+ * non-positive value would make every `>=` comparison below false, silently
+ * disabling isolation with no error, so this throws instead of failing open.
  */
-function partitionIsolatedFiles(files) {
+function partitionIsolatedFiles(files, { weightOf, isMeasured, thresholdWeight }) {
+  if (!(Number.isFinite(thresholdWeight) && thresholdWeight > 0)) {
+    throw new Error(
+      `partitionIsolatedFiles: thresholdWeight must be a finite, positive number (got ${thresholdWeight})`,
+    );
+  }
   const isolated = [];
   const packable = [];
   for (const f of files) {
-    (ISOLATED_HEAVY_FILES.has(f.split(/[\\/]/).pop()) ? isolated : packable).push(f);
+    const heavy = isMeasured(f) && weightOf(f) >= thresholdWeight;
+    (heavy ? isolated : packable).push(f);
   }
   return { isolated, packable };
 }
@@ -1119,13 +1181,27 @@ function main() {
   // matched). Memoized so the two consumers still read the table at most once.
   // Advisory in both places: a missing table yields uniform weight 1, under
   // which the shard partition degenerates to the legacy equal-count split.
+  let timingsMemo; // undefined = not loaded yet; distinct from null = loaded-but-missing
+  const loadedTimings = () => {
+    if (timingsMemo === undefined) {
+      const timingsPath = process.env.RUN_TESTS_TIMINGS_FILE || DEFAULT_TIMINGS_PATH;
+      timingsMemo = loadTestTimings(timingsPath);
+    }
+    return timingsMemo;
+  };
   let weigherMemo = null;
   const fileWeightOf = () => {
     if (weigherMemo === null) {
-      const timingsPath = process.env.RUN_TESTS_TIMINGS_FILE || DEFAULT_TIMINGS_PATH;
-      weigherMemo = makeFileWeigher(loadTestTimings(timingsPath));
+      weigherMemo = makeFileWeigher(loadedTimings());
     }
     return weigherMemo;
+  };
+  let measuredMemo = null;
+  const fileMeasuredOf = () => {
+    if (measuredMemo === null) {
+      measuredMemo = makeMeasuredPredicate(loadedTimings());
+    }
+    return measuredMemo;
   };
 
   const usingShard = parsed.shard !== null;
@@ -1342,16 +1418,45 @@ function main() {
   // Lowered from 90 to 60 after #1575 — macOS Node 22 shard 2/3 chunk 2 (~80 files
   // including state.test.cjs, perf-*, worktree-cleanup) exceeded 600s with 90.
   //
-  // 2026-09-06 (PR #4428 CI): a Windows full-matrix chunk (chunk 3/6, ~32/60
-  // weight-budget units, dominated by codex-config.test.cjs at a genuinely
-  // MEASURED weight of 17.87 — not a stale-table miss) still exceeded the
-  // 600s per-chunk backstop. The weight table's calibration does not
-  // transfer 1:1 to the Windows runner for install/subprocess-heavy work —
-  // it needs a smaller budget than Linux/macOS to stay inside the same
-  // wall-clock ceiling. Windows gets its own, lower cap (~33% reduction,
-  // proportionate to the >30% single-file share codex-config.test.cjs alone
-  // consumed of that chunk's budget); other platforms are unaffected.
-  const DEFAULT_MAX_FILES_PER_CHUNK = process.platform === 'win32' ? 40 : 60;
+  // 2026-09-14: on `next` @ca8d9d4459 a Windows conformance chunk (shard 2/3,
+  // chunk 4/6, 29 files) was KILLED at 600018ms against the 600000ms backstop.
+  // The same shard/chunk position on PR #4726 (green, larger pool) measured
+  // 525548ms for 29 files — 87.6% of the then-current cap of 40, passing by
+  // only 74s. Worst packed-chunk rate: 525548/29 = 18122 ms/file. At that
+  // rate the old cap of 40 arithmetically permits 40 * 18122 = 724880ms —
+  // 121% of the 600000ms backstop, i.e. the cap allowed a chunk that could
+  // not fit its own timeout even before accounting for run-to-run variance.
+  // Target CHUNK_WORKING_BUDGET_MS (400000ms, ~67% of the backstop, leaving
+  // ~200s headroom — roughly 4x the >=14% run-to-run variance observed
+  // between the killed and passing runs of this same chunk position;
+  // CHUNK_WORKING_BUDGET_MS is defined once, above partitionIsolatedFiles,
+  // and shared with the isolation threshold so both derivations target the
+  // same "healthy chunk" budget). 400000 / 18122 = 22.07 -> 22.
+  //
+  // This cap is a WEIGHT floor here, not a count floor — an earlier version
+  // of this comment claimed the opposite, misreading a single PACKED chunk's
+  // own weight as the whole pool's total weight. Per-shard packable-file-count
+  // and total-pool-weight figures are deliberately NOT pinned here: they drift
+  // with the timings table and the conformance-tier file set on every commit,
+  // and no test asserts them (only the cap-derivation arithmetic above, and
+  // the 600000ms-backstop test cited below, are pinned). Do not restate a
+  // specific pool snapshot in this comment; if you need current figures,
+  // measure them against the live timings table rather than trusting a
+  // comment.
+  //
+  // Strongest evidence the cap is load-bearing even against a fully measured
+  // table: summing per-file durations UNDERSHOOTS real chunk wall-clock. The
+  // chunk killed above at 600018ms sums to far less than that by any
+  // per-file method — a model-to-reality gap from per-chunk overhead
+  // (process spawn, serialization, contention) that no per-file table
+  // captures. The cap therefore cannot be justified by summed per-file time
+  // alone; only the direction of the gap (summed-per-file < real wall-clock)
+  // is robust across measurement methods, not a specific magnitude.
+  //
+  // A future change raising this value must redo the arithmetic above; see
+  // tests/run-tests-harness.test.cjs ("the win32 per-chunk cap must not
+  // permit a chunk that exceeds the 600s backstop") which enforces it.
+  const DEFAULT_MAX_FILES_PER_CHUNK = defaultMaxFilesPerChunk(process.platform);
   const MAX_FILES_PER_CHUNK = positiveNumberEnv(
     process.env.RUN_TESTS_MAX_FILES_PER_CHUNK,
     DEFAULT_MAX_FILES_PER_CHUNK,
@@ -1375,7 +1480,7 @@ function main() {
   // remains the per-chunk weight budget and keeps its scale — weights are
   // normalized so an average-cost file weighs 1 — so an all-uniform suite chunks
   // exactly as it did before. Timings are ADVISORY, never gated: an unknown file
-  // falls back to the table's median weight and a missing table falls back to
+  // falls back to the mean weight of 1 and a missing table falls back to
   // uniform weight 1, so staleness degrades chunk BALANCE gracefully instead of
   // failing CI. Regenerate via `node scripts/gen-test-timings.cjs <events.jsonl>`.
   // The cost table is loaded lazily above and memoized; both the shard
@@ -1475,7 +1580,22 @@ function main() {
 
   const FIXED_OVERHEAD = process.execPath.length + '--test'.length + concurrency.length + (forceExit ? '--test-force-exit'.length + 1 : 0) + reporterOverhead + 8;
 
-  const { isolated: isolatedFiles, packable: packableFiles } = partitionIsolatedFiles(selected);
+  // Convert the ms-denominated isolation bar into the packer's weight units
+  // by dividing by the live table's own mean duration — see the comment
+  // above partitionIsolatedFiles/CHUNK_WORKING_BUDGET_MS for the derivation.
+  // No measured table (loadedTimings() === null) makes fileMeasuredOf()
+  // return false for every file, which already disables isolation entirely;
+  // the fallback of 1 here just keeps thresholdWeight finite/positive so
+  // partitionIsolatedFiles' own guard does not throw on that degraded path.
+  const timingsForIsolation = loadedTimings();
+  const isolationThresholdWeight = timingsForIsolation
+    ? (ISOLATION_BUDGET_FRACTION * CHUNK_WORKING_BUDGET_MS) / timingsForIsolation.mean
+    : 1;
+  const { isolated: isolatedFiles, packable: packableFiles } = partitionIsolatedFiles(selected, {
+    weightOf: fileWeightOf(),
+    isMeasured: fileMeasuredOf(),
+    thresholdWeight: isolationThresholdWeight,
+  });
   const chunks = [
     ...isolatedFiles.map((f) => [f]),
     ...packChunks(packableFiles, {
@@ -1731,12 +1851,18 @@ module.exports = {
   parseShardReserve,
   selectShard,
   positiveNumberEnv,
+  defaultMaxFilesPerChunk,
   loadTestTimings,
   makeFileWeigher,
+  makeMeasuredPredicate,
   packChunks,
   // 2026-09-07 (PR #4497): the codex-config.test.cjs chunk-isolation fix —
-  // see the comment above their definitions.
-  ISOLATED_HEAVY_FILES,
+  // see the comment above their definitions. The heavy set is now DERIVED
+  // per run from CHUNK_WORKING_BUDGET_MS/ISOLATION_BUDGET_FRACTION against
+  // the live timings table's own mean, not a hand-maintained list or a
+  // per-platform file-count cap.
+  CHUNK_WORKING_BUDGET_MS,
+  ISOLATION_BUDGET_FRACTION,
   partitionIsolatedFiles,
   analyzeChunkEvents,
   DEFAULT_TIMINGS_PATH,
