@@ -5,7 +5,8 @@ node_modules
 node_modules/.cache/eslint/
 TO-DOS.md
 CLAUDE.md
-/AGENTS.md
+AGENTS.md
+docs/temp
 /research.claude/
 commands.html
 
