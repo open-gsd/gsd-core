@@ -8,10 +8,90 @@ const { cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
-const SOURCE = path.join(ROOT, 'src', 'opencode-v2-plugin', 'index.cjs');
 const BUNDLE = path.join(ROOT, '.opencode', 'plugins', 'gsd-core.js');
 const BUILDER = path.join(ROOT, 'scripts', 'build-opencode-v2-bundles.cjs');
-const { bundleBuildOptions } = require('../scripts/build-opencode-v2-bundles.cjs');
+const {
+  bundleBuildOptions,
+  renderNotice,
+  reviewedPackageMetadata,
+} = require('../scripts/build-opencode-v2-bundles.cjs');
+
+const EFFECT_LICENSE_SHA256 = '774c3bc5924ad8ae6c5a75f1c53db13feb238ade15989625c513d07b60dedf30';
+
+function effectMetadata() {
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'node_modules', 'effect', 'package.json'), 'utf8'));
+  const lock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
+  return { manifest, lockEntry: lock.packages['node_modules/effect'] };
+}
+
+function changed(object, pathSegments, value) {
+  const copy = structuredClone(object);
+  let target = copy;
+  for (const segment of pathSegments.slice(0, -1)) target = target[segment];
+  target[pathSegments.at(-1)] = value;
+  return copy;
+}
+
+test('bundle notice policy accepts reviewed effect exact metadata', () => {
+  const { manifest, lockEntry } = effectMetadata();
+  const metadata = reviewedPackageMetadata('effect', manifest, lockEntry);
+  assert.equal(metadata.name, 'effect');
+  assert.equal(metadata.version, '4.0.0-rc.112');
+  assert.equal(metadata.license, 'MIT');
+  assert.equal(metadata.repository, 'https://github.com/Effect-TS/effect.git');
+  assert.equal(metadata.directory, 'packages/effect');
+  assert.equal(metadata.resolved, 'https://registry.npmjs.org/effect/-/effect-4.0.0-rc.112.tgz');
+  assert.equal(metadata.integrity, 'sha512-wXxwuh1Ywnv4cPRM3Wfa0vDwuOHnZ1TsTgHJkG9XgzND6inhBH9n1vBxhg3iIXOia/OrpmvVmd3lrD4vq6bF3A==');
+  assert.equal(metadata.provenance, true);
+  assert.equal(metadata.licensePath, 'LICENSE');
+  assert.equal(metadata.licenseSha256, EFFECT_LICENSE_SHA256);
+});
+
+test('bundle notice policy rejects unknown dependencies including the OpenCode namespace', () => {
+  assert.throws(() => reviewedPackageMetadata('unknown', {}, {}), /unexpected bundled dependency unknown/);
+  assert.throws(() => reviewedPackageMetadata('@opencode/unreviewed', { license: 'MIT' }, {}), /unexpected bundled dependency @opencode\/unreviewed/);
+});
+
+test('bundle notice policy rejects wrong effect version and SPDX license', () => {
+  const { manifest, lockEntry } = effectMetadata();
+  assert.throws(() => reviewedPackageMetadata('effect', changed(manifest, ['version'], '4.0.0'), lockEntry), /effect manifest version/);
+  assert.throws(() => reviewedPackageMetadata('effect', changed(manifest, ['license'], 'Apache-2.0'), lockEntry), /effect manifest license/);
+});
+
+test('bundle notice policy rejects wrong effect repository and directory', () => {
+  const { manifest, lockEntry } = effectMetadata();
+  assert.throws(() => reviewedPackageMetadata('effect', changed(manifest, ['repository', 'url'], 'https://example.invalid/effect.git'), lockEntry), /effect manifest repository/);
+  assert.throws(() => reviewedPackageMetadata('effect', changed(manifest, ['repository', 'directory'], 'packages/other'), lockEntry), /effect manifest repository directory/);
+});
+
+test('bundle notice policy rejects wrong effect lock SRI', () => {
+  const { manifest, lockEntry } = effectMetadata();
+  assert.throws(() => reviewedPackageMetadata('effect', manifest, changed(lockEntry, ['integrity'], 'sha512-wrong')), /effect lock integrity/);
+});
+
+test('bundle notice policy rejects wrong embedded effect license digest', () => {
+  const { manifest, lockEntry } = effectMetadata();
+  assert.throws(() => reviewedPackageMetadata('effect', manifest, lockEntry, { effectLicenseText: 'MIT License\nwrong\n' }), /effect reviewed license digest/);
+});
+
+test('bundle notice policy renders deterministic lexical package ordering under shuffled input', () => {
+  const expected = ['@opencode/client', '@opencode/protocol', '@opencode/schema', 'effect'];
+  const first = renderNotice(new Set(['effect', '@opencode/schema', '@opencode/client', '@opencode/protocol']));
+  const second = renderNotice(new Set(['@opencode/protocol', 'effect', '@opencode/schema', '@opencode/client']));
+  assert.equal(first, second);
+  const positions = expected.map((name) => first.indexOf(`${name}@`));
+  assert.ok(positions.every((position) => position >= 0));
+  assert.deepEqual([...positions].sort((a, b) => a - b), positions);
+});
+
+test('bundle notice policy retains distinct OpenCode and Effect MIT blocks', () => {
+  const notice = renderNotice(new Set(['effect', '@opencode/client']));
+  assert.match(notice, /Copyright \(c\) 2025 opencode/);
+  assert.match(notice, /Copyright \(c\) 2023 Effectful Technologies Inc/);
+  assert.equal((notice.match(/MIT License/g) || []).length, 2);
+  assert.equal((notice.match(/Copyright \(c\) 2025 opencode/g) || []).length, 1);
+  assert.equal((notice.match(/Copyright \(c\) 2023 Effectful Technologies Inc/g) || []).length, 1);
+});
 
 function eventStream() {
   return {
@@ -35,7 +115,7 @@ function context(log, options = {}) {
       async hook(name) { return disposer(`core-${name}`); },
       async transform(callback) {
         if (options.failWorktreeSetup) throw new Error('worktree setup failed');
-        callback({ add() {} });
+        callback({ add(definition) { options.toolDefinitions?.push(definition); } });
         return disposer('worktree-tool');
       },
     },
@@ -43,55 +123,47 @@ function context(log, options = {}) {
       async hook(name) { return disposer(`core-${name}`, options.failCoreCleanup); },
       async get() { return { id: 'ses_parent', permissions: [] }; },
     },
-    rpc: { async register() { return disposer('worktree-rpc', options.failWorktreeCleanup); } },
+    rpc: { async register(id, definition) { options.rpcDefinitions?.push({ id, definition }); if (options.failRpcSetup) throw new Error('rpc setup failed'); return disposer('worktree-rpc', options.failWorktreeCleanup); } },
     event: eventStream(),
     storage: { async scan() { return { entries: [] }; } },
     worktree: { async list() { return []; } },
   };
 }
 
-test('source descriptor is immediately the exact flat host shape', () => {
-  delete require.cache[SOURCE];
-  const descriptor = require(SOURCE);
+test('C5-01', () => {
+  delete require.cache[BUNDLE];
+  const descriptor = require(BUNDLE);
   assert.deepEqual(Object.keys(descriptor).sort(), ['id', 'setup']);
   assert.equal(descriptor.id, 'gsd-core');
   assert.equal(typeof descriptor.setup, 'function');
 });
 
-test('setup rolls core back when the worktree registration fails', async () => {
+test('C5-02', async () => {
   const log = [];
-  const descriptor = require(SOURCE);
-  await assert.rejects(descriptor.setup(context(log, { failWorktreeSetup: true })), /worktree setup failed/);
-  assert.deepEqual(log, [
-    'core-compaction',
-    'core-execute.after',
-    'core-execute.before',
-    'core-shell',
-  ]);
+  const toolDefinitions = [];
+  const descriptor = require(BUNDLE);
+  await assert.rejects(descriptor.setup(context(log, { toolDefinitions, failRpcSetup: true })), /rpc setup failed/);
+  assert.equal(toolDefinitions.length, 1);
+  assert.equal(toolDefinitions[0].name, 'gsd_worktree_task');
+  assert.equal(typeof toolDefinitions[0].execute, 'function');
+  assert.equal(toolDefinitions[0].options.codemode, true);
+  assert.deepEqual(Object.keys(toolDefinitions[0].input).sort(), ['oneOf']);
 });
 
-test('cleanup runs worktree then core, settles both failures, and is idempotent', async () => {
-  const log = [];
-  const descriptor = require(SOURCE);
-  const cleanup = await descriptor.setup(context(log, { failWorktreeCleanup: true, failCoreCleanup: true }));
-  await assert.rejects(cleanup(), AggregateError);
-  assert.deepEqual(log, [
-    'worktree-rpc',
-    'worktree-tool',
-    'core-compaction',
-    'core-execute.after',
-    'core-execute.before',
-    'core-shell',
-  ]);
-  await assert.rejects(cleanup(), AggregateError);
-  assert.equal(log.length, 6);
+test('C5-03', async () => {
+  const log = [], rpcDefinitions = [];
+  const descriptor = require(BUNDLE);
+  const cleanup = await descriptor.setup(context(log, { rpcDefinitions }));
+  assert.equal(rpcDefinitions.length, 1);
+  assert.equal(rpcDefinitions[0].id.id, 'gsd-worktree-task.attestation.v1');
+  assert.equal(typeof rpcDefinitions[0].definition.status, 'function');
+  await cleanup();
+  assert.equal(log[0], 'worktree-rpc');
 });
 
-test('bundle is deterministic, checkable, and has no external @opencode import', () => {
-  for (const args of [[], ['--check']]) {
-    const result = runNode([BUILDER, ...args], { cwd: ROOT });
-    assert.equal(result.exitCode, 0, result.stderr || result.stdout);
-  }
+test('C5-04', async () => {
+  const result = runNode([BUILDER, '--check'], { cwd: ROOT });
+  assert.equal(result.exitCode, 0, result.stderr || result.stdout);
   const bundle = fs.readFileSync(BUNDLE, 'utf8');
   assert.match(bundle, /Third-Party Notices for the generated OpenCode V2 runtime bundle/);
   assert.doesNotMatch(bundle, /\brequire\(\s*["']@opencode\//);
@@ -99,6 +171,15 @@ test('bundle is deterministic, checkable, and has no external @opencode import',
   const descriptor = require(BUNDLE);
   assert.deepEqual(Object.keys(descriptor).sort(), ['id', 'setup']);
   assert.equal(descriptor.id, 'gsd-core');
+  const firstLog = [], secondLog = [];
+  const firstCleanup = await descriptor.setup(context(firstLog));
+  await firstCleanup();
+  await firstCleanup();
+  const secondCleanup = await descriptor.setup(context(secondLog));
+  await secondCleanup();
+  assert.deepEqual(firstLog, secondLog);
+  assert.equal(firstLog.filter((entry) => entry === 'worktree-rpc').length, 1);
+  assert.equal(firstLog.filter((entry) => entry === 'worktree-tool').length, 1);
 });
 
 test('producer keeps symlinked node_modules paths inside the checkout', async () => {

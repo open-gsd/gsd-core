@@ -8,6 +8,7 @@ is a fail-closed condition, not permission to substitute a process transport.
 Claude, Codex, Kilo, Kimi, and other process-based runtimes retain their
 descriptor-selected process argv/cwd behavior; this native contract applies
 only when the descriptor selects `exec.transport == "native-tool"`.
+The native route preserves every non-OpenCode process descriptor and process-local execution contract unchanged.
 
 ## Flat V2 plugin and provisioning
 
@@ -52,15 +53,27 @@ worktree. It durably observes the sealed wave and queues one
 notification is only a wake-up signal. It is model-visible, replayable, and
 never job-selection, status, attestation, or mutation authority.
 
-On resume, the same current parent calls parent-scoped `recover`, reconciles the
+On resume after an interrupted workflow, the same current parent calls parent-scoped `recover`, reconciles the
 complete wave with its retained start/seal records, and obtains fresh `status`.
-After a required OpenCode/OpenChamber restart, the operator uses the normal
-application restart, resumes the same parent session in the same canonical
-`$PROJECT_FOLDER`, and then performs that recover/status sequence. If the
+If the
 parent, project, plugin version/hash, agent registry, or wave identity cannot be
 proved, execution stops with resources preserved. Shell process termination,
 guessed PIDs, nested OpenCode execution, detached sessions, and self-move are
 not recovery mechanisms.
+
+### Revision 5 qualification scope
+
+Revision 5 is the approved Transport scope correction dated 2026-09-14. Only exact OpenCode 2.0.3 public compatibility is qualified. The installed version is a user-provided deployment fact, not machine evidence.
+
+Qualification is offline and deterministic. It exercises public client/plugin contracts through fixtures and runtime no-replay behavior through controlled dependency seams. C7 proves behavior of project-local installed dependencies whose manifests identify exact 2.0.3 together with lockfile version/SRI metadata. It does not cryptographically prove installed `node_modules` bytes equal an npm tarball or SRI preimage, and makes no npm-provenance or installation-identity claim. It does not depend on an ambient installation, external environment, or native worktree transport as evidence. Passing evidence therefore makes no environment-attestation claim and needs no operational user checkpoint.
+
+The final Transport receipt uses `opencode-v2-transport-evidence.v5`, `schema_version:5`, marker `TRANSPORT_203_COMPATIBILITY_COMPLETE`, and exact records `C1,C2,C3,C4,C5,C6,C7,C9`. No canonical qualification manifest exists: project/base coordinates, C9 tracked-tree/path-set facts, and generated bindings are sufficient. Installer manifests, worktree manifests, and inventories remain operational inputs only and are not qualification evidence or final-receipt inputs. Root migration remains blocked, untouched, and excluded.
+
+C9 compares its exact 17-path authored change set against pre-Revision-5 base `37a81ea35d3303f57e1c2d0212bc50af2413b5cd`. The four workflow files remain unchanged product prerequisites validated by C3 and must not be touched solely to enter C9 scope.
+
+Explicitly excluded are older OpenCode versions, dual-version qualification,
+ambient-installation and external-environment qualification, operational
+challenge state, native worktree invocation as qualification, and root migration.
 
 The parent records each quick-batch round in a crash-visible journal under
 `.opencode/.runtime/gsd-worktree-waves/`. Journal mutations use immutable
@@ -71,10 +84,18 @@ journal path components.
 Before merge, the parent must literally observe a fresh native-tool `status`
 result with `merge_ready: true`. A notification is only a wake-up signal and
 never authorization. The model then invokes coordinate-only
-`quick-batch v2-attest`; the helper discovers the compatible managed OpenCode
-service and obtains the authoritative status bytes over the registered
+`quick-batch v2-attest`; for this release, “compatible managed OpenCode service”
+means exact version **2.0.3**, with no version range or fallback. The helper
+discovers that service and obtains the authoritative status bytes over the registered
 `gsd-worktree-task.attestation.v1` RPC. Caller-supplied status, recovery,
 endpoint, header, and BATCH evidence is rejected.
+
+Tool and RPC status are pure shared reads; only fresh literal whole-wave RPC `merge_ready:true`, followed by the existing journal and Git guards, authorizes merge.
+That necessary readiness result is not sufficient by itself: the journal phase,
+freshness, prepared tips, manifest and inventory bindings, and Git reference
+guards must all still pass at the mutation boundary. Git, worktree files,
+SUMMARY/prose, notifications, and recovery responses are never child-outcome
+authority and cannot replace the native start/seal/recover/status transport.
 
 The helper validates the whole RPC wave before selecting an item: exact
 parent/wave, one complete sealed expected job set, literal `merge_ready:true`,
@@ -97,7 +118,7 @@ manifest/agent/worktree/branch must match before the route calls the approved
 merge primitive. The native route passes a journal-derived absolute expiry and
 a journal revision/digest/phase/tip callback into that primitive; both are
 rechecked immediately before the target `update-ref` compare-and-swap, so time
-spent in merge-tree, policy, identity, or inventory preflight cannot consume
+spent in merge-tree, policy, identity, or inventory checks cannot consume
 expired authority. Unknown, duplicate, or omitted fields fail closed. The legacy
 `query worktree.merge-one` mutation route refuses active native manifests;
 process-host manifests keep their existing behavior.
@@ -152,8 +173,8 @@ not that the model's judgment is objectively correct.
 
 The flat descriptor and generated helper are loaded by the long-running
 OpenCode V2 service and the coordinate-only CLI route respectively. After
-installing or updating them, restart OpenCode/OpenChamber before dispatch and
-follow the same-parent restart protocol above. Both project-local and global
+installing or updating them, complete the deployment through the host's normal
+operator procedure; that host lifecycle is outside Transport qualification. Both project-local and global
 installs resolve the project directory through OpenCode's location context and
 discover the managed service; no machine-specific checkout or tool path is
 embedded. `npm run check:opencode-v2-bundles` byte-compares the generated

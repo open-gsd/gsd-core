@@ -2,6 +2,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const esbuild = require('esbuild');
@@ -30,6 +31,45 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 `;
+const EFFECT_MIT_LICENSE = `MIT License
+
+Copyright (c) 2023 Effectful Technologies Inc
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+`;
+const REVIEWED_PACKAGE_NAMES = Object.freeze([
+  '@opencode/client',
+  '@opencode/protocol',
+  '@opencode/schema',
+  'effect',
+]);
+const EFFECT_REVIEW = Object.freeze({
+  version: '4.0.0-rc.112',
+  license: 'MIT',
+  repository: 'https://github.com/Effect-TS/effect.git',
+  directory: 'packages/effect',
+  resolved: 'https://registry.npmjs.org/effect/-/effect-4.0.0-rc.112.tgz',
+  integrity: 'sha512-wXxwuh1Ywnv4cPRM3Wfa0vDwuOHnZ1TsTgHJkG9XgzND6inhBH9n1vBxhg3iIXOia/OrpmvVmd3lrD4vq6bF3A==',
+  provenance: true,
+  licensePath: 'LICENSE',
+  licenseSha256: '774c3bc5924ad8ae6c5a75f1c53db13feb238ade15989625c513d07b60dedf30',
+});
 
 const BUNDLES = Object.freeze([
   Object.freeze({ entry: 'src/opencode-v2-plugin/index.cjs', outfile: '.opencode/plugins/gsd-core.js', format: 'cjs', sourcemap: false, embeddedNotice: true }),
@@ -78,15 +118,60 @@ function packageName(input) {
   const segments = input.slice(index + marker.length).split('/');
   return segments[0].startsWith('@') ? `${segments[0]}/${segments[1]}` : segments[0];
 }
+function reviewedPackageMetadata(name, manifest, lockEntry, options = {}) {
+  assert.ok(REVIEWED_PACKAGE_NAMES.includes(name), `unexpected bundled dependency ${name} needs a reviewed notice`);
+  assert.equal(manifest.name, name, `${name} manifest name does not match package`);
+  if (name !== 'effect') {
+    assert.equal(manifest.license, 'MIT', `bundled dependency ${name} needs an explicit license renderer`);
+    return Object.freeze({
+      name,
+      version: manifest.version,
+      license: manifest.license,
+      repository: manifest.repository?.url || 'https://github.com/anomalyco/opencode',
+      licenseText: MIT_LICENSE,
+    });
+  }
+
+  assert.equal(manifest.version, EFFECT_REVIEW.version, 'effect manifest version must match reviewed metadata');
+  assert.equal(manifest.license, EFFECT_REVIEW.license, 'effect manifest license must match reviewed SPDX identifier');
+  assert.equal(manifest.repository?.url, EFFECT_REVIEW.repository, 'effect manifest repository must match reviewed metadata');
+  assert.equal(manifest.repository?.directory, EFFECT_REVIEW.directory, 'effect manifest repository directory must match reviewed metadata');
+  assert.equal(manifest.publishConfig?.provenance, EFFECT_REVIEW.provenance, 'effect manifest provenance must remain enabled');
+  assert.ok(lockEntry && typeof lockEntry === 'object', 'effect package-lock entry is required');
+  assert.equal(lockEntry.version, EFFECT_REVIEW.version, 'effect lock version must match reviewed metadata');
+  assert.equal(lockEntry.license, EFFECT_REVIEW.license, 'effect lock license must match reviewed SPDX identifier');
+  assert.equal(lockEntry.resolved, EFFECT_REVIEW.resolved, 'effect lock tarball must match reviewed metadata');
+  assert.equal(lockEntry.integrity, EFFECT_REVIEW.integrity, 'effect lock integrity must match reviewed SRI');
+  const licenseSha256 = crypto.createHash('sha256').update(options.effectLicenseText || EFFECT_MIT_LICENSE).digest('hex');
+  assert.equal(licenseSha256, EFFECT_REVIEW.licenseSha256, 'effect reviewed license digest must match embedded text');
+  return Object.freeze({
+    name,
+    ...EFFECT_REVIEW,
+    licenseText: EFFECT_MIT_LICENSE,
+  });
+}
 function packageMetadata(name) {
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'node_modules', ...name.split('/'), 'package.json'), 'utf8'));
-  assert.equal(manifest.license, 'MIT', `bundled dependency ${name} needs an explicit license renderer`);
-  assert.match(name, /^@opencode\//, `unexpected bundled dependency ${name} needs a reviewed notice`);
-  return { name, version: manifest.version, repository: manifest.repository?.url || 'https://github.com/anomalyco/opencode' };
+  const lock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
+  return reviewedPackageMetadata(name, manifest, lock.packages[`node_modules/${name}`]);
 }
 function renderNotice(names) {
   const packages = [...names].sort().map(packageMetadata);
-  return ['Third-Party Notices for the generated OpenCode V2 runtime bundle', '', ...packages.map((item) => `${item.name}@${item.version} — MIT — ${item.repository}`), '', 'The packages above are distributed under the following license:', '', MIT_LICENSE].join('\n');
+  const openCodePackages = packages.filter((item) => item.name.startsWith('@opencode/'));
+  const effectPackage = packages.find((item) => item.name === 'effect');
+  const licenseBlocks = [];
+  if (openCodePackages.length > 0) {
+    licenseBlocks.push(`License for ${openCodePackages.map((item) => item.name).join(', ')}:`, '', MIT_LICENSE.trimEnd());
+  }
+  if (effectPackage) licenseBlocks.push('License for effect:', '', effectPackage.licenseText.trimEnd());
+  return [
+    'Third-Party Notices for the generated OpenCode V2 runtime bundle',
+    '',
+    ...packages.map((item) => `${item.name}@${item.version} — ${item.license} — ${item.repository}`),
+    '',
+    ...licenseBlocks,
+    '',
+  ].join('\n');
 }
 function renderEmbeddedNotice(names) { return `/*\n${renderNotice(names).replaceAll('*/', '* /')}\n*/\n`; }
 function compareOrWrite(relative, bytes, check) {
@@ -168,4 +253,4 @@ async function main(argv = process.argv.slice(2)) {
   console.error(`${check ? 'ok' : 'built'} OpenCode V2 bundles (${BUNDLES.length} entries)`);
 }
 if (require.main === module) main().catch((error) => { console.error(error.message); process.exitCode = 1; });
-module.exports = { BUNDLE_PRODUCER, bundleBuildOptions, getBundleArtifactManifest, main };
+module.exports = { BUNDLE_PRODUCER, bundleBuildOptions, getBundleArtifactManifest, main, renderNotice, reviewedPackageMetadata };

@@ -127,6 +127,19 @@ test('native lifecycle explicitly owns dispatch → merge → optional verificat
   assert.match(lifecycle, /never falls\s+through to the generic Steps 6–9/);
 });
 
+test('opencode-v2-process-preservation', () => {
+  const product = fs.readFileSync(path.join(root, 'docs', 'opencode-v2-worktree-transport.md'), 'utf8');
+
+  assert.match(lifecycle, /Process-based\s+`orchestrator-worktree` hosts retain the separate generic route/);
+  assert.match(product, /Claude, Codex, Kilo, Kimi, and other process-based runtimes retain their\s+descriptor-selected process argv\/cwd behavior/);
+  assert.match(dispatch, /Never invoke `wait`, poll status, run `opencode run`, create a detached session,\s+use `session_move`/);
+  assert.match(
+    product,
+    /The native route preserves every non-OpenCode process descriptor and process-local execution contract unchanged\./,
+    'T-D must explicitly preserve non-OpenCode process-local execution contracts',
+  );
+});
+
 test('every shared native guard runs before generic content or mutation', () => {
   const cases = [
     ['worktree-dispatch.md', 'worktree.base-check'],

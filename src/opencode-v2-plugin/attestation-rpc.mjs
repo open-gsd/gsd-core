@@ -137,8 +137,7 @@ export const ATTESTATION_RPC_OUTPUT_SCHEMA = {
   additionalProperties: false,
 };
 
-// This uses only the JSON Schema RPC surface shared by 2.0.2 and 2.0.3. A
-// real 2.0.2 service remains the required runtime compatibility proof.
+// This uses the JSON Schema RPC surface supported by OpenCode 2.0.3.
 export const ATTESTATION_RPC = Rpc.define({
   id: ATTESTATION_RPC_ID,
   methods: {

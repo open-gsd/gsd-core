@@ -172,3 +172,22 @@ test('native restart recovery is same-parent and notification remains wake-up on
   assert.match(native, /notification is\s+only a wake-up signal/);
   assert.match(native, /never recovered status/);
 });
+
+test('opencode-v2-lifecycle', () => {
+  const product = fs.readFileSync(path.join(
+    __dirname, '..', 'docs', 'opencode-v2-worktree-transport.md',
+  ), 'utf8');
+
+  assert.match(product, /`gsd_worktree_task` native\s+tool/);
+  for (const forbidden of ['opencode run', 'detached executor sessions', 'session_move', 'shell-poll', 'legacy `wait` action']) {
+    assert.ok(product.includes(forbidden), `product contract must forbid ${forbidden}`);
+  }
+  assert.match(native, /same parent session/);
+  assert.match(native, /fresh `merge_ready:true`/);
+  assert.match(product, /whole RPC wave before selecting an item/);
+  assert.match(
+    product,
+    /Tool and RPC status are pure shared reads; only fresh literal whole-wave RPC `merge_ready:true`, followed by the existing journal and Git guards, authorizes merge\./,
+    'T-D must state status/RPC purity and the sole whole-wave merge authority',
+  );
+});

@@ -20,7 +20,7 @@ const testNativeAttestation = {
   RPC_METHOD: "status",
   RPC_TIMEOUT_MS: 10_000,
   OBSERVATION_CLOCK_TOLERANCE_MS: 1_000,
-  compatibleVersion: (version) => version === "2.0.2" || version === "2.0.3",
+  compatibleVersion: (version) => version === "2.0.3",
   observe: async () => { throw new Error("test observation fixture is not installed"); },
 };
 const v2Base = require("../gsd-core/bin/lib/quick-batch-v2.cjs");
@@ -300,6 +300,43 @@ function sealedFixture() {
     input: evidence(identity, "ses-child", pluginJob(identity, "ses-child", entry)),
   };
 }
+
+test("opencode-v2-transport", async () => {
+  const pluginContract = await import(pathToFileURL(path.join(
+    __dirname, "..", "src", "opencode-v2-plugin", "attestation-rpc.mjs",
+  )).href);
+
+  assert.equal(attestationContract.PROVENANCE, "opencode_plugin_rpc_v1");
+  assert.equal(attestationContract.RPC_ID, "gsd-worktree-task.attestation.v1");
+  assert.equal(attestationContract.RPC_METHOD, "status");
+  assert.deepEqual(Object.keys(attestationContract.RPC_DEFINITION_VALUE.methods), ["status"]);
+  assert.deepEqual(
+    attestationContract.RPC_DEFINITION_VALUE.methods.status.input,
+    pluginContract.ATTESTATION_RPC_INPUT_SCHEMA,
+  );
+  assert.deepEqual(
+    attestationContract.RPC_DEFINITION_VALUE.methods.status.output,
+    pluginContract.ATTESTATION_RPC_OUTPUT_SCHEMA,
+  );
+  assert.deepEqual(
+    attestationContract.RPC_DEFINITION_VALUE.methods.status.errors,
+    pluginContract.ATTESTATION_RPC.methods.status.errors,
+  );
+  assert.equal(testNativeAttestation.compatibleVersion("2.0.3"), true);
+  assert.equal(testNativeAttestation.compatibleVersion("2.0.4"), false);
+
+  const { cwd, allocation, input } = sealedFixture();
+  const accepted = await attest(cwd, allocation.round, item, input);
+  assert.equal(accepted.ok, true, accepted.reason);
+  assert.equal(round(cwd).items[item].phase, "attested");
+
+  const incomplete = structuredClone(input);
+  incomplete.status.jobs = [];
+  const rejected = await attest(cwd, allocation.round, item, incomplete);
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.reason, /complete job set/);
+});
+
 async function assertAttestationRejectedWithoutMutation(cwd, allocation, itemId, input) {
   const file = v2.roundPath(cwd, parent, batch, allocation.round);
   const beforeBytes = fs.readFileSync(file);

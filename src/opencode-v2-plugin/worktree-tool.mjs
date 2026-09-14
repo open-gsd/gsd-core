@@ -1,8 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { OpenCode } from "@opencode/client";
+import { ClientError, OpenCode } from "@opencode/client";
 import { Service } from "@opencode/client/service";
+import {
+  ConflictError,
+  InvalidRequestError,
+  ServiceUnavailableError,
+  SessionNotFoundError,
+  UnauthorizedError,
+} from "@opencode/protocol/errors";
 import { findingSeverity, HIGH_CONFIDENCE_FINDING_THRESHOLD, scanPromptInjection } from "./injection-scanner.mjs";
 import { assertAttestationRPCInput, ATTESTATION_RPC } from "./attestation-rpc.mjs";
 
@@ -12,10 +19,13 @@ const STATE_VERSION = 1;
 const DEFAULT_TIMEOUT_SECONDS = 3600;
 const MAX_JOBS = 5;
 const MAX_IMPORT_ATTEMPTS = 3;
-const MAX_ADMISSION_CHECKS = 3;
 const MAX_TERMINAL_WRITE_ATTEMPTS = 3;
 const MAX_TERMINAL_WRITE_BACKOFF_MS = 1_000;
 const MAX_NOTIFICATION_BACKOFF_MS = 30_000;
+const OBSERVATION_REQUEST_BOUND_MS = 2_000;
+const CLEANUP_DRAIN_BOUND_MS = 100;
+const MAX_UINT32 = 4_294_967_295;
+const SUPPORTED_OPENCODE_VERSIONS = new Set(["2.0.3"]);
 // Bound the exact prompt forwarded to a child session. The limit is in Unicode
 // code points, matching JSON Schema maxLength rather than UTF-16 code units.
 const MAX_PROMPT_LENGTH = 65_536;
@@ -97,18 +107,48 @@ function makeSessionID() {
 }
 
 function isConflict(error) {
-  return error?.status === 409 ||
-    error?.response?.status === 409 ||
-    error?.cause?.status === 409 ||
-    error?._tag === "ConflictError" ||
-    error?.data?._tag === "ConflictError";
+  return taggedProtocolError(error, ConflictError, "ConflictError", [], ["resource"]);
 }
 
 function isNotFound(error) {
-  return error?.status === 404 ||
-    error?.response?.status === 404 ||
-    error?.cause?.status === 404 ||
-    /NotFoundError$/.test(error?._tag || error?.data?._tag || "");
+  return taggedProtocolError(error, SessionNotFoundError, "SessionNotFoundError", ["sessionID"]) || declaredStatus(error) === 404;
+}
+
+function isPlainRecord(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function exactKeys(value, allowed, required = allowed) {
+  if (!isPlainRecord(value)) return false;
+  const keys = Object.keys(value);
+  return keys.every((key) => allowed.includes(key)) && required.every((key) => Object.hasOwn(value, key));
+}
+
+function declaredStatus(error) {
+  if (error instanceof ClientError && error.name === "ClientError" && error.reason === "UnexpectedStatus" &&
+      exactKeys(error.cause, ["status"]) && Number.isInteger(error.cause.status) &&
+      error.cause.status >= 400 && error.cause.status <= 599) {
+    return error.cause.status;
+  }
+  return undefined;
+}
+
+function taggedProtocolError(error, ErrorClass, tag, requiredFields, optionalFields = []) {
+  const validFields = () => requiredFields.every((field) => typeof error?.[field] === "string") &&
+    optionalFields.every((field) => error?.[field] === undefined || typeof error[field] === "string") &&
+    typeof error?.message === "string";
+  if (error instanceof ErrorClass) {
+    return error.name === tag && error._tag === tag && validFields() &&
+      Object.keys(error).every((key) => ["_tag", ...requiredFields, ...optionalFields].includes(key));
+  }
+  return exactKeys(error, ["_tag", "message", ...requiredFields, ...optionalFields], ["_tag", "message", ...requiredFields]) &&
+    error._tag === tag && validFields();
+}
+
+function supportedVersion(version) {
+  return SUPPORTED_OPENCODE_VERSIONS.has(version);
 }
 
 function notificationID(parentID, waveID) {
@@ -308,6 +348,235 @@ function sessionAttestationReasons(info, expected) {
   return reasons;
 }
 
+const MODEL_KEYS = ["providerID", "id", "variant"];
+const PERMISSION_KEYS = ["action", "resource", "effect"];
+const MANIFEST_ENTRY_KEYS = ["agent_id", "worktree_path", "branch", "expected_base", "files_modified", "declared_deletions"];
+const REQUESTED_EXECUTOR_KEYS = ["session_id", "parent_session_id", "directory", "manifest_agent_id", "agent", "model", "final_permission"];
+const OBSERVATION_KEYS = ["episode", "cycle", "operation", "reason", "first_deferred_at", "last_deferred_at", "retry_at", "state"];
+const JOB_KEYS = [
+  "session_id", "directory", "status", "agent", "model", "manifest_path", "manifest_agent_id", "manifest_entry",
+  "manifest_entry_hash", "requested_executor", "started_at", "deadline", "finished_at", "text", "error", "cleanup_error", "observation",
+];
+const WAVE_KEYS = ["version", "parent_session_id", "wave_id", "created_at", "sealed", "sealed_at", "manifest_path", "expected_session_ids", "jobs", "notification"];
+const OBSERVATION_OPERATIONS = new Set(["service.discover", "health.get", "session.get", "session.wait"]);
+const OBSERVATION_REASONS = new Set([
+  "attempt_due", "outcome_pending", "transport", "request_cancelled", "not_found", "unavailable", "http_4xx", "http_5xx",
+  "unsupported_content_type", "malformed_response", "attestation_mismatch", "unknown", "counter_exhausted",
+]);
+const RETRYABLE_OBSERVATION_REASONS = new Set(["attempt_due", "outcome_pending", "transport", "request_cancelled", "unavailable", "http_5xx"]);
+
+function validModel(model) {
+  return exactKeys(model, MODEL_KEYS) && MODEL_KEYS.every((key) => typeof model[key] === "string" && model[key].length > 0);
+}
+
+function validPermission(permission) {
+  return exactKeys(permission, PERMISSION_KEYS) && permission.action === TOOL_NAME && permission.resource === "*" && permission.effect === "deny";
+}
+
+function validManifestEntry(entry) {
+  return exactKeys(entry, MANIFEST_ENTRY_KEYS) && typeof entry.agent_id === "string" && typeof entry.worktree_path === "string" &&
+    typeof entry.branch === "string" && typeof entry.expected_base === "string" &&
+    [entry.files_modified, entry.declared_deletions].every((value) => value === null ||
+      (Array.isArray(value) && value.every((item) => typeof item === "string")));
+}
+
+function validRequestedExecutor(requested) {
+  return exactKeys(requested, REQUESTED_EXECUTOR_KEYS) && typeof requested.session_id === "string" &&
+    typeof requested.parent_session_id === "string" && typeof requested.directory === "string" &&
+    typeof requested.manifest_agent_id === "string" && typeof requested.agent === "string" &&
+    validModel(requested.model) && validPermission(requested.final_permission);
+}
+
+function closedJobShape(job) {
+  return exactKeys(job, JOB_KEYS, ["session_id", "directory", "status", "agent", "model", "manifest_path", "manifest_agent_id", "manifest_entry", "manifest_entry_hash", "requested_executor", "deadline"]) &&
+    exactKeys(job.model, MODEL_KEYS) && exactKeys(job.manifest_entry, MANIFEST_ENTRY_KEYS) &&
+    exactKeys(job.requested_executor, REQUESTED_EXECUTOR_KEYS) && exactKeys(job.requested_executor?.model, MODEL_KEYS) &&
+    exactKeys(job.requested_executor?.final_permission, PERMISSION_KEYS);
+}
+
+function validObservation(observation, deadline) {
+  if (observation === undefined) return true;
+  if (!exactKeys(observation, OBSERVATION_KEYS, ["episode", "cycle", "operation", "reason", "first_deferred_at", "last_deferred_at"])) return false;
+  if (!Number.isInteger(observation.episode) || observation.episode < 1 || observation.episode > MAX_UINT32 ||
+      !Number.isInteger(observation.cycle) || observation.cycle < 0 || observation.cycle > MAX_UINT32 ||
+      !OBSERVATION_OPERATIONS.has(observation.operation) || !OBSERVATION_REASONS.has(observation.reason) ||
+      !Number.isSafeInteger(observation.first_deferred_at) || observation.first_deferred_at < 1 ||
+      !Number.isSafeInteger(observation.last_deferred_at) || observation.last_deferred_at < observation.first_deferred_at) return false;
+  const hasRetry = Object.hasOwn(observation, "retry_at");
+  const hasState = Object.hasOwn(observation, "state");
+  if (hasRetry === hasState) return false;
+  if (observation.reason === "attempt_due") {
+    if (observation.operation !== "service.discover") return false;
+    if (!hasRetry) return observation.state === "blocked";
+    return observation.cycle === 0 && observation.first_deferred_at === observation.last_deferred_at &&
+      observation.retry_at === observation.last_deferred_at && observation.retry_at <= deadline;
+  }
+  if (observation.cycle === 0) return false;
+  if (observation.reason === "outcome_pending" &&
+      observation.operation !== "session.get" && observation.operation !== "session.wait") return false;
+  if (observation.reason === "counter_exhausted") {
+    return observation.cycle === MAX_UINT32 && observation.state === "blocked" && !hasRetry;
+  }
+  if (hasRetry) {
+    return RETRYABLE_OBSERVATION_REASONS.has(observation.reason) && Number.isSafeInteger(observation.retry_at) &&
+      observation.retry_at >= observation.last_deferred_at && observation.retry_at <= deadline;
+  }
+  if (observation.state !== "blocked" && observation.state !== "quarantined") return false;
+  return observation.state === "blocked" || !RETRYABLE_OBSERVATION_REASONS.has(observation.reason);
+}
+
+function validOptionalJobFields(job) {
+  return ["started_at", "finished_at"].every((field) => !Object.hasOwn(job, field) ||
+    (Number.isSafeInteger(job[field]) && job[field] > 0)) &&
+    ["text", "error", "cleanup_error"].every((field) => !Object.hasOwn(job, field) || typeof job[field] === "string");
+}
+
+function validNotification(notification) {
+  if (notification === undefined) return true;
+  if (!isPlainRecord(notification) || typeof notification.id !== "string" ||
+      !["sending", "sent", "retrying"].includes(notification.state)) return false;
+  const legacyRetry = notification.state === "retrying" && Object.hasOwn(notification, "last_error");
+  const allowed = notification.state === "sending" ? ["id", "state", "attempts", "attempted_at"]
+    : notification.state === "sent" ? ["id", "state", "attempts", "sent_at"]
+    : legacyRetry ? ["id", "state", "attempts", "last_error", "retry_at"]
+      : ["id", "state", "attempts", "retry_at"];
+  if (!exactKeys(notification, allowed, ["id", "state"])) return false;
+  if (legacyRetry && typeof notification.last_error !== "string") return false;
+  if (Object.hasOwn(notification, "attempts") && (!Number.isSafeInteger(notification.attempts) || notification.attempts < 1)) return false;
+  return ["attempted_at", "sent_at", "retry_at"].every((field) => !Object.hasOwn(notification, field) ||
+    (Number.isSafeInteger(notification[field]) && notification[field] > 0));
+}
+
+function legacyRetryNotification(notification) {
+  return notification?.state === "retrying" && Object.hasOwn(notification, "last_error") && validNotification(notification);
+}
+
+function validJobShape(job, parentID, waveManifestPath) {
+  if (!exactKeys(job, JOB_KEYS, ["session_id", "directory", "status", "agent", "model", "manifest_path", "manifest_agent_id", "manifest_entry", "manifest_entry_hash", "requested_executor", "deadline"])) return false;
+  if (typeof job.session_id !== "string" || !job.session_id.startsWith("ses") || typeof job.directory !== "string" ||
+      !["provisioning", "running", "succeeded", "failed", "interrupted", "timeout"].includes(job.status) ||
+      typeof job.agent !== "string" || !validModel(job.model) || job.manifest_path !== waveManifestPath ||
+      typeof job.manifest_agent_id !== "string" || !validManifestEntry(job.manifest_entry) ||
+      typeof job.manifest_entry_hash !== "string" || !validRequestedExecutor(job.requested_executor) ||
+      !Number.isSafeInteger(job.deadline) || job.deadline < 1 || !validObservation(job.observation, job.deadline) ||
+      !validOptionalJobFields(job)) return false;
+  if (job.status !== "running" && job.observation !== undefined) return false;
+  const requested = job.requested_executor;
+  return requested.session_id === job.session_id && requested.parent_session_id === parentID && requested.directory === job.directory &&
+    requested.manifest_agent_id === job.manifest_agent_id && requested.agent === job.agent &&
+    JSON.stringify(requested.model) === JSON.stringify(job.model);
+}
+
+function validWaveShape(wave, parentID = wave?.parent_session_id, waveID = wave?.wave_id) {
+  if (!exactKeys(wave, WAVE_KEYS, ["version", "parent_session_id", "wave_id", "sealed", "manifest_path", "jobs"]) ||
+      wave.version !== STATE_VERSION || wave.parent_session_id !== parentID || wave.wave_id !== waveID ||
+      typeof wave.sealed !== "boolean" || typeof wave.manifest_path !== "string" || !isPlainRecord(wave.jobs) ||
+      Object.keys(wave.jobs).length > MAX_JOBS ||
+      (Object.hasOwn(wave, "created_at") && (!Number.isSafeInteger(wave.created_at) || wave.created_at < 1)) ||
+      (Object.hasOwn(wave, "sealed_at") && (!Number.isSafeInteger(wave.sealed_at) || wave.sealed_at < 1)) ||
+      !validNotification(wave.notification)) return false;
+  const jobIDs = Object.keys(wave.jobs).sort();
+  if (wave.sealed) {
+    if (!Array.isArray(wave.expected_session_ids) || wave.expected_session_ids.length === 0 ||
+        !wave.expected_session_ids.every((id) => typeof id === "string") ||
+        new Set(wave.expected_session_ids).size !== wave.expected_session_ids.length ||
+        JSON.stringify([...wave.expected_session_ids].sort()) !== JSON.stringify(jobIDs)) return false;
+  } else if (Object.hasOwn(wave, "expected_session_ids")) return false;
+  return Object.entries(wave.jobs).every(([sessionID, job]) => sessionID === job?.session_id && validJobShape(job, parentID, wave.manifest_path));
+}
+
+function modelProjection(model) {
+  return {
+    providerID: typeof model?.providerID === "string" ? model.providerID : "",
+    id: typeof model?.id === "string" ? model.id : "",
+    variant: typeof model?.variant === "string" ? model.variant : "",
+  };
+}
+
+function manifestEntryProjection(entry) {
+  return {
+    agent_id: typeof entry?.agent_id === "string" ? entry.agent_id : "",
+    worktree_path: typeof entry?.worktree_path === "string" ? entry.worktree_path : "",
+    branch: typeof entry?.branch === "string" ? entry.branch : "",
+    expected_base: typeof entry?.expected_base === "string" ? entry.expected_base : "",
+    files_modified: Array.isArray(entry?.files_modified) ? entry.files_modified.filter((item) => typeof item === "string") : null,
+    declared_deletions: Array.isArray(entry?.declared_deletions) ? entry.declared_deletions.filter((item) => typeof item === "string") : null,
+  };
+}
+
+function requestedExecutorProjection(requested) {
+  return {
+    session_id: typeof requested?.session_id === "string" ? requested.session_id : "",
+    parent_session_id: typeof requested?.parent_session_id === "string" ? requested.parent_session_id : "",
+    directory: typeof requested?.directory === "string" ? requested.directory : "",
+    manifest_agent_id: typeof requested?.manifest_agent_id === "string" ? requested.manifest_agent_id : "",
+    agent: typeof requested?.agent === "string" ? requested.agent : "",
+    model: modelProjection(requested?.model),
+    final_permission: {
+      action: typeof requested?.final_permission?.action === "string" ? requested.final_permission.action : "",
+      resource: typeof requested?.final_permission?.resource === "string" ? requested.final_permission.resource : "",
+      effect: typeof requested?.final_permission?.effect === "string" ? requested.final_permission.effect : "",
+    },
+  };
+}
+
+function recoverJobProjection(job) {
+  return {
+    session_id: typeof job?.session_id === "string" ? job.session_id : "",
+    directory: typeof job?.directory === "string" ? job.directory : "",
+    manifest_path: typeof job?.manifest_path === "string" ? job.manifest_path : "",
+    manifest_agent_id: typeof job?.manifest_agent_id === "string" ? job.manifest_agent_id : "",
+    manifest_entry_hash: typeof job?.manifest_entry_hash === "string" ? job.manifest_entry_hash : "",
+    status: ["provisioning", "running", "succeeded", "failed", "interrupted", "timeout"].includes(job?.status) ? job.status : "failed",
+    ...(typeof job?.text === "string" && job.text ? { text: job.text } : {}),
+    ...(typeof job?.error === "string" && job.error ? { error: job.error } : {}),
+  };
+}
+
+function failedSafeJobProjection(job) {
+  return {
+    session_id: typeof job?.session_id === "string" && /^ses/.test(job.session_id) ? job.session_id : "",
+    directory: "",
+    manifest_path: "",
+    manifest_agent_id: "",
+    manifest_entry_hash: "",
+    status: "failed",
+  };
+}
+
+function failedSafeStatusJobProjection(job) {
+  return {
+    ...failedSafeJobProjection(job),
+    agent: "",
+    model: modelProjection(),
+    manifest_entry: manifestEntryProjection(),
+    requested_executor: requestedExecutorProjection(),
+    observed_executor: null,
+  };
+}
+
+function legacyRecoverJobProjection(job) {
+  const allowed = ["session_id", "directory", "status", "text", "error"];
+  if (!exactKeys(job, allowed, ["session_id", "directory", "status"]) ||
+      typeof job.session_id !== "string" || !job.session_id.startsWith("ses") ||
+      typeof job.directory !== "string" ||
+      !["running", "succeeded", "failed", "interrupted", "timeout"].includes(job.status) ||
+      (Object.hasOwn(job, "text") && typeof job.text !== "string") ||
+      (Object.hasOwn(job, "error") && typeof job.error !== "string")) return undefined;
+  return {
+    session_id: job.session_id,
+    directory: job.directory,
+    status: job.status,
+    ...(typeof job.text === "string" && job.text ? { text: job.text } : {}),
+    ...(typeof job.error === "string" && job.error ? { error: job.error } : {}),
+  };
+}
+
+function legacyTransportCandidate(job) {
+  return job?.status === "failed" && job.error === "Transport" &&
+    !Object.hasOwn(job, "cleanup_error") && !Object.hasOwn(job, "observation");
+}
+
 function pluginIsActive(plugins) {
   return plugins.some((item) => item && item.id === PLUGIN_ID && item.state?.status === "active");
 }
@@ -322,10 +591,23 @@ function extractResult(info, messages) {
     .trim() || "";
   const error = latest?.error?.message || latest?.retry?.error?.message;
   return {
-    status: info.outcome || "failed",
-    text,
+    status: info.outcome,
+    ...(text ? { text } : {}),
     ...(error ? { error } : {}),
   };
+}
+
+function validContextProjection(messages) {
+  if (!Array.isArray(messages)) return false;
+  return messages.every((message) => {
+    if (!isPlainRecord(message) || typeof message.type !== "string") return false;
+    if (message.type !== "assistant") return true;
+    if (!Array.isArray(message.content) || !message.content.every((part) =>
+      isPlainRecord(part) && typeof part.type === "string" && (part.type !== "text" || typeof part.text === "string"))) return false;
+    const validError = (value) => value === undefined || (isPlainRecord(value) && typeof value.message === "string");
+    return validError(message.error) && (message.retry === undefined ||
+      (isPlainRecord(message.retry) && validError(message.retry.error)));
+  });
 }
 
 function response(value) {
@@ -336,6 +618,23 @@ function sameJobs(left, right) {
   if (left.length !== right.length) return false;
   const normalize = (items) => items.map((item) => `${item.session_id}\0${item.directory}`).sort();
   return normalize(left).every((item, index) => item === normalize(right)[index]);
+}
+
+function statusAuthoritySnapshot(wave) {
+  if (!wave || typeof wave !== "object") return JSON.stringify(wave);
+  const storedNotificationID = wave.notification?.id;
+  const expectedNotificationID = notificationID(wave.parent_session_id, wave.wave_id);
+  return JSON.stringify({
+    version: wave.version,
+    parent_session_id: wave.parent_session_id,
+    wave_id: wave.wave_id,
+    manifest_path: wave.manifest_path,
+    sealed: wave.sealed,
+    expected_session_ids: wave.expected_session_ids,
+    jobs: wave.jobs,
+    notification_identity: typeof storedNotificationID === "string" && storedNotificationID.startsWith("msg_") &&
+      storedNotificationID !== expectedNotificationID ? storedNotificationID : expectedNotificationID,
+  });
 }
 
 function makeServiceClient(endpoint) {
@@ -351,18 +650,60 @@ export function createRuntime(ctx, dependencies = {}) {
   const makeID = dependencies.makeSessionID || makeSessionID;
   const now = dependencies.now || Date.now;
   const schedule = dependencies.schedule || ((callback, delay) => setTimeout(callback, delay));
+  const cancelSchedule = dependencies.cancelSchedule || ((handle) => clearTimeout(handle));
+  const boundSchedule = dependencies.boundSchedule || dependencies.requestSchedule || ((callback, delay) => setTimeout(callback, delay));
+  const cancelBound = dependencies.cancelBound || dependencies.cancelRequestSchedule || ((handle) => clearTimeout(handle));
+  const requestBoundMs = dependencies.requestBoundMs ?? dependencies.requestTimeoutMs ?? OBSERVATION_REQUEST_BOUND_MS;
+  const cleanupBoundMs = dependencies.cleanupBoundMs ?? dependencies.cleanupTimeoutMs ?? CLEANUP_DRAIN_BOUND_MS;
   const sleep = dependencies.sleep || ((delay) => new Promise((resolve) => setTimeout(resolve, delay)));
   const shared = globalThis[PROCESS_STATE] ||= {
     observers: new Map(),
     notificationTimers: new Map(),
     reobserveTimers: new Map(),
     locks: new Map(),
+    waveOwners: new Map(),
   };
   shared.notificationTimers ||= new Map();
   shared.reobserveTimers ||= new Map();
-  const { observers, notificationTimers, reobserveTimers, locks } = shared;
+  shared.waveOwners ||= new Map();
+  const { observers, notificationTimers, reobserveTimers, locks, waveOwners } = shared;
   const owner = Symbol("gsd-worktree-task-runtime");
   let disposed = false;
+  let disposePromise;
+  const tasks = new Set();
+  const operations = new Set();
+
+  function track(promise) {
+    const task = Promise.resolve(promise);
+    tasks.add(task);
+    task.then(
+      () => tasks.delete(task),
+      () => tasks.delete(task),
+    );
+    return task;
+  }
+
+  function activeForWave(key) {
+    return !disposed && waveOwners.get(key) === owner;
+  }
+
+  function activeSlot(key, observerKey, slot) {
+    return activeForWave(key) && observers.get(observerKey) === slot && slot.owner === owner;
+  }
+
+  function activeOperation(operation) {
+    return !disposed && operations.has(operation) && operation.owner === owner && !operation.revoked;
+  }
+
+  function assertActiveOperation(operation) {
+    if (!activeOperation(operation)) throw new Error("worktree runtime operation was revoked");
+  }
+
+  function runOperation(callback) {
+    const operation = { owner, controllers: new Set(), revoked: false };
+    operations.add(operation);
+    return track(Promise.resolve().then(() => callback(operation)).finally(() => operations.delete(operation)));
+  }
 
   async function withWaveLock(key, operation) {
     const previous = locks.get(key) || Promise.resolve();
@@ -379,217 +720,528 @@ export function createRuntime(ctx, dependencies = {}) {
     }
   }
 
-  async function clientForImport() {
-    const endpoint = await service.discover({ version: ctx.app.version });
+  async function clientForImport(operation) {
+    if (!supportedVersion(ctx.app.version)) throw new Error("unsupported OpenCode version");
+    const endpoint = await bounded(operation, () => service.discover({ version: ctx.app.version }));
+    assertActiveOperation(operation);
     if (!endpoint) {
       throw new Error("the current process is not a discoverable managed OpenCode service; refusing standalone or explicit-server import");
     }
     const client = makeClient(endpoint);
-    const health = await client.health.get();
-    if (health?.healthy !== true || health.pid !== process.pid || health.version !== ctx.app.version) {
+    assertActiveOperation(operation);
+    const health = unwrap(await bounded(operation, (signal) => client.health.get({ signal })));
+    assertActiveOperation(operation);
+    if (health?.healthy !== true || health.pid !== process.pid || health.version !== ctx.app.version || !supportedVersion(health.version)) {
       throw new Error("discovered OpenCode service identity does not match this plugin host process and version");
     }
     return client;
   }
 
-  async function cleanupMintedChild(client, sessionID) {
-    await client.session.interrupt({ sessionID, continue: false }).catch(() => {});
+  async function cleanupMintedChild(client, sessionID, operation) {
+    assertActiveOperation(operation);
+    await bounded(operation, (signal) => client.session.interrupt({ sessionID, continue: false }, { signal })).catch(() => {});
+    assertActiveOperation(operation);
     let removalClient = client;
     if (typeof removalClient.session.remove !== "function") {
-      const endpoint = await service.discover({ version: ctx.app.version });
+      const endpoint = await bounded(operation, () => service.discover({ version: ctx.app.version }));
+      assertActiveOperation(operation);
       if (!endpoint) throw new Error("cannot verify the managed service for child cleanup");
       removalClient = makeClient(endpoint);
-      const health = await removalClient.health.get();
-      if (health?.healthy !== true || health.pid !== process.pid || health.version !== ctx.app.version) {
+      assertActiveOperation(operation);
+      const health = unwrap(await bounded(operation, (signal) => removalClient.health.get({ signal })));
+      assertActiveOperation(operation);
+      if (health?.healthy !== true || health.pid !== process.pid || health.version !== ctx.app.version || !supportedVersion(health.version)) {
         throw new Error("refusing child cleanup through an unverified service");
       }
     }
     try {
-      await removalClient.session.remove({ sessionID });
+      assertActiveOperation(operation);
+      await bounded(operation, (signal) => removalClient.session.remove({ sessionID }, { signal }));
+      assertActiveOperation(operation);
     } catch (error) {
       if (!isNotFound(error)) throw error;
     }
   }
 
-  async function assertInventory(directory) {
-    const inventory = await ctx.worktree.list();
+  async function assertInventory(directory, operation) {
+    const inventory = await bounded(operation, (signal) => ctx.worktree.list({ signal }));
+    assertActiveOperation(operation);
     const found = inventory.some((item) => {
       try { return canonical(item.directory) === directory; } catch { return false; }
     });
     if (!found) throw new Error("directory is absent from the OpenCode worktree inventory");
   }
 
-  async function assertTarget(client, directory, agent) {
+  async function assertTarget(client, directory, agent, operation) {
     const location = { directory };
-    await client.plugin.awaitActivation?.({ location });
-    const pluginsResult = await client.plugin.list({ location });
+    if (client.plugin.awaitActivation) {
+      await bounded(operation, (signal) => client.plugin.awaitActivation({ location }, { signal }));
+    }
+    assertActiveOperation(operation);
+    const pluginsResult = await bounded(operation, (signal) => client.plugin.list({ location }, { signal }));
+    assertActiveOperation(operation);
     const plugins = Array.isArray(pluginsResult) ? pluginsResult : pluginsResult.data;
     if (!pluginIsActive(plugins || [])) {
       throw new Error(`plugin "${PLUGIN_ID}" is not active in the target worktree`);
     }
-    const agentsResult = await client.agent.list({ location });
+    const agentsResult = await bounded(operation, (signal) => client.agent.list({ location }, { signal }));
+    assertActiveOperation(operation);
     const agents = Array.isArray(agentsResult) ? agentsResult : agentsResult.data;
     if (!(agents || []).some((item) => item?.id === agent || item?.name === agent)) {
       throw new Error(`agent "${agent}" is unavailable in the target worktree`);
     }
   }
 
-  async function updateJob(parentID, waveID, sessionID, update) {
-    const key = waveKey(parentID, waveID);
-    let lastError;
-    for (let attempt = 0; attempt < MAX_TERMINAL_WRITE_ATTEMPTS; attempt += 1) {
-      try {
-        await withWaveLock(key, async () => {
-          const wave = await ctx.storage.get(key);
-          if (!wave?.jobs?.[sessionID] || TERMINAL.has(wave.jobs[sessionID].status)) return;
-          wave.jobs[sessionID] = { ...wave.jobs[sessionID], ...update, finished_at: now() };
-          await ctx.storage.set(key, wave);
-        });
-        void maybeNotify(parentID, waveID).catch(() => {});
-        return;
-      } catch (error) {
-        lastError = error;
-        if (attempt + 1 < MAX_TERMINAL_WRITE_ATTEMPTS) {
-          await sleep(Math.min(25 * (2 ** attempt), MAX_TERMINAL_WRITE_BACKOFF_MS));
-        }
-      }
-    }
-    const error = new Error(`terminal job update could not be stored: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
-    error.terminalWriteFailure = true;
-    throw error;
+  function unwrap(value) {
+    return value && typeof value === "object" && Object.hasOwn(value, "data") ? value.data : value;
   }
 
-  function scheduleReobserve(parentID, waveID, job) {
-    if (disposed) return;
-    const observerKey = `${parentID}\0${waveID}\0${job.session_id}`;
-    if (observers.get(observerKey)?.owner !== owner) return;
-    const previous = reobserveTimers.get(observerKey);
-    if (previous?.owner === owner) return;
-    const slot = { owner, handle: undefined };
+  function errorReason(error) {
+    if (error?.requestBoundExpired) return "request_cancelled";
+    if (taggedProtocolError(error, InvalidRequestError, "InvalidRequestError", [], ["kind", "field"]) ||
+        taggedProtocolError(error, UnauthorizedError, "UnauthorizedError", [])) return "http_4xx";
+    if (taggedProtocolError(error, SessionNotFoundError, "SessionNotFoundError", ["sessionID"])) return "not_found";
+    if (taggedProtocolError(error, ServiceUnavailableError, "ServiceUnavailableError", [], ["service"])) return "unavailable";
+    if (error instanceof ClientError && error.name === "ClientError" && error.reason === "Transport") return "transport";
+    if (error instanceof ClientError && error.name === "ClientError" && error.reason === "UnsupportedContentType") return "unsupported_content_type";
+    if (error instanceof ClientError && error.name === "ClientError" && error.reason === "MalformedResponse") return "malformed_response";
+    const status = declaredStatus(error);
+    if (status === 499) return "request_cancelled";
+    if (status === 404) return "not_found";
+    if (status === 503) return "unavailable";
+    if (status >= 400 && status < 500) return "http_4xx";
+    if (status >= 500 && status < 600) return "http_5xx";
+    return "unknown";
+  }
+
+  function transientReason(reason) {
+    return reason === "transport" || reason === "request_cancelled" || reason === "unavailable" || reason === "http_5xx";
+  }
+
+  async function bounded(slot, operation) {
+    const controller = new AbortController();
+    slot.controllers.add(controller);
+    let handle;
+    let active = true;
+    const timedOut = new Promise((_, reject) => {
+      handle = boundSchedule(() => {
+        if (!active) return;
+        controller.abort();
+        const error = new Error("request bound expired");
+        error.requestBoundExpired = true;
+        reject(error);
+      }, requestBoundMs);
+      handle?.unref?.();
+    });
+    const work = Promise.resolve().then(() => operation(controller.signal));
+    work.catch(() => {});
     try {
-      slot.handle = schedule(() => {
-        if (reobserveTimers.get(observerKey) !== slot) return;
-        reobserveTimers.delete(observerKey);
-        if (!disposed) observe(parentID, waveID, job);
-      }, 100);
+      return await Promise.race([work, timedOut]);
+    } catch (error) {
+      if (controller.signal.aborted && !error?.requestBoundExpired) {
+        const ownedAbort = new Error("owned request aborted");
+        ownedAbort.ownedAbort = true;
+        throw ownedAbort;
+      }
+      throw error;
+    } finally {
+      active = false;
+      cancelBound(handle);
+      slot.controllers.delete(controller);
+    }
+  }
+
+  function requestedExecutorMatches(job, parentID) {
+    const requested = job.requested_executor;
+    const permission = requested?.final_permission;
+    return requested && requested.session_id === job.session_id && requested.parent_session_id === parentID &&
+      requested.directory === job.directory && requested.manifest_agent_id === job.manifest_agent_id &&
+      requested.agent === job.agent && requested.model?.providerID === job.model?.providerID &&
+      requested.model?.id === job.model?.id && requested.model?.variant === job.model?.variant &&
+      permission && Object.keys(permission).length === 3 && permission.action === TOOL_NAME &&
+      permission.resource === "*" && permission.effect === "deny";
+  }
+
+  function observationAttested(info, wave, job) {
+    if (!requestedExecutorMatches(job, wave.parent_session_id)) return false;
+    if (verifyManifestBinding(ctx.location.project.canonical || ctx.location.project.directory, job)) return false;
+    return sessionAttestationReasons(info, {
+      session_id: job.session_id,
+      parent_session_id: wave.parent_session_id,
+      directory: job.directory,
+      agent: job.agent,
+      model: job.model,
+    }).length === 0;
+  }
+
+  function retryDelay(cycle) {
+    return Math.min(cycle >= 8 ? 30_000 : 250 * (2 ** (cycle - 1)), 30_000);
+  }
+
+  async function writeDisposition(slot, operation, reason, state) {
+    const { key, observerKey, sessionID, episode, cycle } = slot;
+    let written;
+    await withWaveLock(key, async () => {
+      if (!activeSlot(key, observerKey, slot)) return;
+      const wave = await ctx.storage.get(key);
+      const job = wave?.jobs?.[sessionID];
+      if (!job || job.status !== "running" || job.observation?.episode !== episode || job.observation?.cycle !== cycle) return;
+      const nextWave = structuredClone(wave);
+      const nextJob = nextWave.jobs[sessionID];
+      const timestamp = Math.max(1, now(), nextJob.observation?.first_deferred_at || 1, nextJob.observation?.last_deferred_at || 1);
+      const effectiveState = timestamp >= nextJob.deadline ? "blocked" : state;
+      if (cycle === MAX_UINT32) {
+        nextJob.observation = {
+          episode, cycle, operation, reason: "counter_exhausted",
+          first_deferred_at: nextJob.observation?.first_deferred_at || timestamp,
+          last_deferred_at: timestamp, state: "blocked",
+        };
+      } else {
+        const nextCycle = cycle + 1;
+        const first = nextJob.observation?.reason === "attempt_due"
+          ? timestamp
+          : (nextJob.observation?.first_deferred_at || timestamp);
+        nextJob.observation = {
+          episode, cycle: nextCycle, operation, reason,
+          first_deferred_at: first, last_deferred_at: timestamp,
+          ...(effectiveState ? { state: effectiveState } : { retry_at: Math.min(timestamp + retryDelay(nextCycle), nextJob.deadline) }),
+        };
+      }
+      if (!validObservation(nextJob.observation, nextJob.deadline)) return;
+      await ctx.storage.set(key, nextWave);
+      if (!activeSlot(key, observerKey, slot)) return;
+      slot.cycle = nextJob.observation.cycle;
+      written = structuredClone(nextJob.observation);
+    });
+    if (!written || written.state || !activeSlot(key, observerKey, slot)) return;
+    await scheduleCycle(slot, written.retry_at);
+  }
+
+  async function publishTerminal(slot, result) {
+    let committed = false;
+    for (let attempt = 0; attempt < MAX_TERMINAL_WRITE_ATTEMPTS && !committed; attempt += 1) {
+      try {
+        await withWaveLock(slot.key, async () => {
+          if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+          const wave = await ctx.storage.get(slot.key);
+          const job = wave?.jobs?.[slot.sessionID];
+          if (!job || job.status !== "running" || job.observation?.episode !== slot.episode || job.observation?.cycle !== slot.cycle) return;
+          const terminal = { ...job, ...result, finished_at: now() };
+          delete terminal.observation;
+          wave.jobs[slot.sessionID] = terminal;
+          if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+          await ctx.storage.set(slot.key, wave);
+          committed = true;
+        });
+      } catch {
+        if (attempt + 1 < MAX_TERMINAL_WRITE_ATTEMPTS) await sleep(Math.min(25 * (2 ** attempt), MAX_TERMINAL_WRITE_BACKOFF_MS));
+      }
+    }
+    if (committed && activeForWave(slot.key)) track(maybeNotify(slot.parentID, slot.waveID));
+    return committed;
+  }
+
+  async function blockSchedulingFailure(slot) {
+    let blocked = false;
+    await withWaveLock(slot.key, async () => {
+      if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+      const wave = await ctx.storage.get(slot.key);
+      const job = wave?.jobs?.[slot.sessionID];
+      if (!job || job.status !== "running" || job.observation?.episode !== slot.episode || job.observation?.cycle !== slot.cycle) return;
+      const nextWave = structuredClone(wave);
+      const observation = nextWave.jobs[slot.sessionID].observation;
+      nextWave.jobs[slot.sessionID].observation = {
+        episode: observation.episode,
+        cycle: observation.cycle,
+        operation: observation.operation,
+        reason: "unknown",
+        first_deferred_at: observation.first_deferred_at,
+        last_deferred_at: Math.max(1, now()),
+        state: "blocked",
+      };
+      await ctx.storage.set(slot.key, nextWave);
+      blocked = activeSlot(slot.key, slot.observerKey, slot);
+    });
+    if (!blocked || observers.get(slot.observerKey) !== slot) return;
+    observers.delete(slot.observerKey);
+    slot.revoked = true;
+    for (const controller of slot.controllers) controller.abort();
+  }
+
+  async function scheduleCycle(slot, retryAt) {
+    if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+    const old = reobserveTimers.get(slot.observerKey);
+    if (old && old !== slot.timerSlot) return;
+    const timerSlot = { owner, observer: slot, handle: undefined };
+    try {
+      timerSlot.handle = schedule(() => {
+        if (!activeSlot(slot.key, slot.observerKey, slot) || reobserveTimers.get(slot.observerKey) !== timerSlot) return;
+        reobserveTimers.delete(slot.observerKey);
+        track(runCycle(slot));
+      }, Math.max(0, retryAt - now()));
     } catch {
+      await blockSchedulingFailure(slot);
       return;
     }
-    slot.handle?.unref?.();
-    reobserveTimers.set(observerKey, slot);
-    if (previous && reobserveTimers.get(observerKey) === slot) clearTimeout(previous.handle);
+    timerSlot.handle?.unref?.();
+    reobserveTimers.set(slot.observerKey, timerSlot);
+    slot.timerSlot = timerSlot;
   }
 
-  function observe(parentID, waveID, job, suppliedClient) {
-    const observerKey = `${parentID}\0${waveID}\0${job.session_id}`;
-    if (disposed || TERMINAL.has(job.status)) return;
-    const controller = new AbortController();
-    const slot = { controller, owner, promise: undefined };
-    const previous = observers.get(observerKey);
-    if (previous?.owner === owner) return;
-    observers.set(observerKey, slot);
-    previous?.controller.abort();
-    const retry = reobserveTimers.get(observerKey);
-    if (retry && retry.owner !== owner && reobserveTimers.get(observerKey) === retry) {
-      reobserveTimers.delete(observerKey);
-      clearTimeout(retry.handle);
+  async function classifyFailure(slot, operation, error, cutoff) {
+    if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+    if (slot.revoked || error?.ownedAbort) return;
+    const reason = operation === "service.discover" ? "unavailable" : errorReason(error);
+    const state = cutoff ? "blocked" : (transientReason(reason) ? undefined : "quarantined");
+    await writeDisposition(slot, operation, reason, state);
+  }
+
+  async function finalizeOutcome(slot, info, client) {
+    let messages = [];
+    try {
+      const projected = unwrap(await bounded(slot, (signal) => client.session.context({ sessionID: slot.sessionID }, { signal })));
+      messages = validContextProjection(projected) ? projected : [];
+    } catch {
+      messages = [];
     }
-    slot.promise = (async () => {
-      let client = suppliedClient;
-      let timer;
-      try {
-        client ||= await clientForImport();
-        const remaining = job.deadline - now();
-        if (remaining <= 0) {
-          await client.session.interrupt({ sessionID: job.session_id, continue: false }).catch(() => {});
-          await updateJob(parentID, waveID, job.session_id, { status: "timeout", error: "child session exceeded its deadline" });
-          return;
-        }
-        const timeout = new Promise((resolve) => {
-          timer = setTimeout(() => resolve("timeout"), remaining);
-          timer.unref?.();
-        });
-        let info;
-        let messages;
-        for (let admissionCheck = 0; admissionCheck < MAX_ADMISSION_CHECKS; admissionCheck += 1) {
-          const waited = client.session.wait(
-            { sessionID: job.session_id },
-            { signal: controller.signal },
-          ).then(() => "terminal");
-          const result = await Promise.race([waited, timeout]);
-          if (result === "timeout") {
-            controller.abort();
-            await client.session.interrupt({ sessionID: job.session_id, continue: false }).catch(() => {});
-            await updateJob(parentID, waveID, job.session_id, { status: "timeout", error: "child session exceeded its deadline" });
-            return;
-          }
-          [info, messages] = await Promise.all([
-            client.session.get({ sessionID: job.session_id }),
-            client.session.context({ sessionID: job.session_id }),
-          ]);
-          if (info.outcome) break;
-          if (job.status !== "running") break;
-          const [inbox, active] = await Promise.all([
-            client.session.inbox?.list?.({ sessionID: job.session_id }).catch(() => []),
-            client.session.active?.().catch(() => ({})),
-          ]);
-          if (admissionCheck > 0 && !(inbox?.length || active?.[job.session_id])) break;
-          await Promise.resolve();
-        }
-        clearTimeout(timer);
-        const resultInfo = extractResult(info, messages);
-        await updateJob(parentID, waveID, job.session_id, resultInfo);
-      } catch (error) {
-        if (disposed || controller.signal.aborted) return;
-        if (error?.terminalWriteFailure) {
-          scheduleReobserve(parentID, waveID, job);
-          return;
-        }
-        await updateJob(parentID, waveID, job.session_id, {
-          status: "failed",
-          error: error instanceof Error ? error.message : String(error),
-        }).catch(() => scheduleReobserve(parentID, waveID, job));
-      } finally {
-        clearTimeout(timer);
+    if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+    const result = extractResult(info, Array.isArray(messages) ? messages : []);
+    if (!TERMINAL.has(result.status) || result.status === "timeout") return;
+    const committed = await publishTerminal(slot, result);
+    if (!committed && activeSlot(slot.key, slot.observerKey, slot)) {
+      await writeDisposition(slot, "session.get", "outcome_pending");
+    }
+  }
+
+  async function cleanupInterrupt(slot, client) {
+    if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+    try {
+      await bounded(slot, (signal) => client.session.interrupt({ sessionID: slot.sessionID, continue: false }, { signal }));
+    } catch {
+      // Timeout is already immutable; interruption is cleanup only.
+    }
+  }
+
+  async function publishTimeout(slot, client) {
+    const committed = await publishTerminal(slot, { status: "timeout", error: "child session exceeded its deadline" });
+    if (committed && activeSlot(slot.key, slot.observerKey, slot)) track(cleanupInterrupt(slot, client));
+  }
+
+  async function settleCrossedCutoff(slot, wave, job, client) {
+    let info;
+    try {
+      info = unwrap(await bounded(slot, (signal) => client.session.get({ sessionID: slot.sessionID }, { signal })));
+    } catch (error) {
+      if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+      await classifyFailure(slot, "session.get", error, true);
+      return;
+    }
+    if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+    if (!observationAttested(info, wave, job)) {
+      await writeDisposition(slot, "session.get", "attestation_mismatch", "blocked");
+      return;
+    }
+    const recognizedOutcome = ["succeeded", "failed", "interrupted"].includes(info?.outcome);
+    const validTerminalIdle = Number.isSafeInteger(info?.time?.idle) && info.time.idle > 0;
+    if (recognizedOutcome && validTerminalIdle) {
+      await finalizeOutcome(slot, info, client);
+      return;
+    }
+    if (info?.outcome !== undefined) {
+      await writeDisposition(slot, "session.get", "malformed_response", "blocked");
+      return;
+    }
+    await publishTimeout(slot, client);
+  }
+
+  async function runCycle(slot) {
+    if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+    let wave;
+    let job;
+    await withWaveLock(slot.key, async () => {
+      if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+      wave = await ctx.storage.get(slot.key);
+      job = wave?.jobs?.[slot.sessionID];
+      if (!validWaveShape(wave, slot.parentID, slot.waveID) || !job || job.status !== "running" ||
+          job.observation?.episode !== slot.episode || job.observation?.cycle !== slot.cycle) {
+        wave = undefined;
       }
-    })().finally(() => {
-      if (observers.get(observerKey) === slot) observers.delete(observerKey);
     });
+    if (!wave || !activeSlot(slot.key, slot.observerKey, slot)) return;
+    if (!supportedVersion(ctx.app.version)) return;
+    if (slot.cycle === MAX_UINT32) {
+      await writeDisposition(slot, job.observation.operation, "counter_exhausted", "blocked");
+      return;
+    }
+    const cutoff = now() >= job.deadline;
+    let endpoint;
+    try { endpoint = await service.discover({ version: ctx.app.version }); } catch (error) {
+      if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+      await classifyFailure(slot, "service.discover", error, now() >= job.deadline); return;
+    }
+    if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+    if (!endpoint) { await classifyFailure(slot, "service.discover", undefined, now() >= job.deadline); return; }
+    let client;
+    try { client = makeClient(endpoint); } catch (error) { await classifyFailure(slot, "service.discover", error, now() >= job.deadline); return; }
+    if (!cutoff && now() >= job.deadline) {
+      await settleCrossedCutoff(slot, wave, job, client); return;
+    }
+    let health;
+    try { health = unwrap(await bounded(slot, (signal) => client.health.get({ signal }))); } catch (error) {
+      if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+      if (!cutoff && now() >= job.deadline) {
+        await settleCrossedCutoff(slot, wave, job, client); return;
+      }
+      await classifyFailure(slot, "health.get", error, now() >= job.deadline); return;
+    }
+    if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+    if (!cutoff && now() >= job.deadline) {
+      await settleCrossedCutoff(slot, wave, job, client); return;
+    }
+    if (health?.healthy !== true) { await writeDisposition(slot, "health.get", "unavailable", now() >= job.deadline ? "blocked" : undefined); return; }
+    if (health.pid !== process.pid || health.version !== ctx.app.version || !supportedVersion(health.version)) {
+      await writeDisposition(slot, "health.get", "attestation_mismatch", now() >= job.deadline ? "blocked" : "quarantined"); return;
+    }
+    let info;
+    try { info = unwrap(await bounded(slot, (signal) => client.session.get({ sessionID: slot.sessionID }, { signal }))); } catch (error) {
+      if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+      if (!cutoff && now() >= job.deadline) {
+        await settleCrossedCutoff(slot, wave, job, client); return;
+      }
+      await classifyFailure(slot, "session.get", error, now() >= job.deadline); return;
+    }
+    if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+    if (!observationAttested(info, wave, job)) {
+      await writeDisposition(slot, "session.get", "attestation_mismatch", cutoff ? "blocked" : "quarantined"); return;
+    }
+    const recognizedOutcome = ["succeeded", "failed", "interrupted"].includes(info?.outcome);
+    const validTerminalIdle = Number.isSafeInteger(info?.time?.idle) && info.time.idle > 0;
+    if (recognizedOutcome && validTerminalIdle) {
+      await finalizeOutcome(slot, info, client); return;
+    }
+    if (info?.outcome !== undefined && (!recognizedOutcome || !validTerminalIdle)) {
+      await writeDisposition(slot, "session.get", "malformed_response", cutoff ? "blocked" : "quarantined"); return;
+    }
+    if (cutoff || now() >= job.deadline) {
+      await publishTimeout(slot, client);
+      return;
+    }
+    try {
+      await bounded(slot, (signal) => client.session.wait({ sessionID: slot.sessionID }, { signal }));
+    } catch (error) {
+      if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+      if (now() >= job.deadline) {
+        await settleCrossedCutoff(slot, wave, job, client); return;
+      }
+      await classifyFailure(slot, "session.wait", error, now() >= job.deadline);
+      return;
+    }
+    if (!activeSlot(slot.key, slot.observerKey, slot)) return;
+    if (now() >= job.deadline) {
+      await settleCrossedCutoff(slot, wave, job, client); return;
+    }
+    if (job.observation?.retry_at > now()) {
+      await scheduleCycle(slot, job.observation.retry_at);
+      return;
+    }
+    await writeDisposition(slot, "session.wait", "outcome_pending");
+  }
+
+  async function claimObserver(parentID, waveID, sessionID, explicit = false) {
+    const key = waveKey(parentID, waveID);
+    const observerKey = `${parentID}\0${waveID}\0${sessionID}`;
+    let slot;
+    let retryAt;
+    await withWaveLock(key, async () => {
+      if (disposed || !supportedVersion(ctx.app.version)) return;
+      const wave = await ctx.storage.get(key);
+      const job = wave?.jobs?.[sessionID];
+      if (!validWaveShape(wave, parentID, waveID) || !job || job.status !== "running") return;
+      const current = job.observation;
+      if (!explicit && (current?.state === "blocked" || current?.state === "quarantined")) return;
+      const priorEpisode = Number.isInteger(current?.episode) ? current.episode : 0;
+      if (explicit && priorEpisode === MAX_UINT32) return;
+      const episode = explicit ? (priorEpisode ? priorEpisode + 1 : 1) : (priorEpisode || 1);
+      const cycle = explicit ? 0 : (Number.isInteger(current?.cycle) ? current.cycle : 0);
+      const previous = observers.get(observerKey);
+      if (!explicit && previous?.owner === owner && activeSlot(key, observerKey, previous) &&
+          previous.episode === episode && previous.cycle === cycle) return;
+      const nextWave = structuredClone(wave);
+      const nextJob = nextWave.jobs[sessionID];
+      const timestamp = Math.max(1, now());
+      if (cycle === MAX_UINT32) {
+        nextJob.observation = {
+          episode, cycle, operation: current?.operation || "service.discover", reason: "counter_exhausted",
+          first_deferred_at: current?.first_deferred_at || timestamp, last_deferred_at: timestamp, state: "blocked",
+        };
+      } else if (explicit || !current) {
+        const dueAt = Math.max(1, Math.min(timestamp, nextJob.deadline));
+        nextJob.observation = {
+          episode, cycle, operation: "service.discover", reason: "attempt_due",
+          first_deferred_at: dueAt, last_deferred_at: dueAt, retry_at: dueAt,
+        };
+      }
+      retryAt = nextJob.observation?.retry_at;
+      if (JSON.stringify(nextWave) !== JSON.stringify(wave)) await ctx.storage.set(key, nextWave);
+      if (disposed) return;
+      previous && (previous.revoked = true);
+      for (const controller of previous?.controllers || []) controller.abort();
+      const oldTimer = reobserveTimers.get(observerKey);
+      if (oldTimer) { reobserveTimers.delete(observerKey); cancelSchedule(oldTimer.handle); }
+      waveOwners.set(key, owner);
+      slot = { owner, key, observerKey, parentID, waveID, sessionID, episode, cycle, controllers: new Set(), revoked: false };
+      observers.set(observerKey, slot);
+    });
+    if (!slot || !activeSlot(key, observerKey, slot) || retryAt === undefined) return;
+    if (!explicit && retryAt > now()) await scheduleCycle(slot, retryAt);
+    else if (explicit) await track(runCycle(slot));
+    else track(runCycle(slot));
+  }
+
+  function observe(parentID, waveID, job) {
+    return claimObserver(parentID, waveID, job.session_id, false);
   }
 
   function scheduleNotification(parentID, waveID, attempt) {
     const timerKey = `${parentID}\0${waveID}`;
-    if (disposed) return;
+    const key = waveKey(parentID, waveID);
+    if (!activeForWave(key)) return;
     const previous = notificationTimers.get(timerKey);
     if (previous?.owner === owner) return;
     const delay = Math.min(250 * (2 ** Math.min(attempt, 7)), MAX_NOTIFICATION_BACKOFF_MS);
     const slot = { owner, handle: undefined };
     try {
       slot.handle = schedule(() => {
-        if (notificationTimers.get(timerKey) !== slot) return;
+        if (!activeForWave(key) || notificationTimers.get(timerKey) !== slot) return;
         notificationTimers.delete(timerKey);
-        void maybeNotify(parentID, waveID).catch(() => {});
+        track(maybeNotify(parentID, waveID));
       }, delay);
     } catch {
       return;
     }
     slot.handle?.unref?.();
     notificationTimers.set(timerKey, slot);
-    if (previous && notificationTimers.get(timerKey) === slot) clearTimeout(previous.handle);
+    if (previous && notificationTimers.get(timerKey) === slot) cancelSchedule(previous.handle);
   }
 
   async function maybeNotify(parentID, waveID) {
     const key = waveKey(parentID, waveID);
+    if (!activeForWave(key) || !supportedVersion(ctx.app.version)) return;
     let retryAttempt = 0;
     try {
       await withWaveLock(key, async () => {
+        if (!activeForWave(key)) return;
         const wave = await ctx.storage.get(key);
+        if (!activeForWave(key)) return;
+        if (!validWaveShape(wave, parentID, waveID)) return;
+        if (wave.version === STATE_VERSION && Object.values(wave.jobs).some(legacyTransportCandidate)) return;
         if (!wave?.sealed || wave.notification?.state === "sent") return;
         const expected = wave.expected_session_ids || [];
         if (!expected.length || !expected.every((id) => TERMINAL.has(wave.jobs?.[id]?.status))) return;
         const id = normalizedNotificationID(parentID, waveID, wave.notification);
         retryAttempt = (wave.notification?.attempts || 0) + 1;
         wave.notification = { id, state: "sending", attempts: retryAttempt, attempted_at: now() };
+        if (!activeForWave(key)) return;
         await ctx.storage.set(key, wave);
         const jobs = expected.map((sessionID) => wave.jobs[sessionID]);
         const content = JSON.stringify({
@@ -600,6 +1252,7 @@ export function createRuntime(ctx, dependencies = {}) {
           })),
           next_action: { tool: TOOL_NAME, action: "status", wave_id: waveID },
         });
+        if (!activeForWave(key)) return;
         await ctx.session.prompt({
           sessionID: parentID,
           id,
@@ -607,6 +1260,7 @@ export function createRuntime(ctx, dependencies = {}) {
           delivery: "queue",
           metadata: { plugin: PLUGIN_ID, wave_id: waveID },
         });
+        if (!activeForWave(key)) return;
         wave.notification = { id, state: "sent", attempts: retryAttempt, sent_at: now() };
         await ctx.storage.set(key, wave);
       });
@@ -614,26 +1268,31 @@ export function createRuntime(ctx, dependencies = {}) {
       if (error?.notificationIdentityMismatch) throw error;
       try {
         await withWaveLock(key, async () => {
+          if (!activeForWave(key)) return;
           const wave = await ctx.storage.get(key);
+          if (!activeForWave(key)) return;
+          if (!validWaveShape(wave, parentID, waveID)) return;
           if (!wave || wave.notification?.state === "sent") return;
           retryAttempt = Math.max(retryAttempt, wave.notification?.attempts || 1);
           wave.notification = {
             id: normalizedNotificationID(parentID, waveID, wave.notification),
             state: "retrying",
             attempts: retryAttempt,
-            last_error: error instanceof Error ? error.message : String(error),
             retry_at: now() + Math.min(250 * (2 ** Math.min(retryAttempt, 7)), MAX_NOTIFICATION_BACKOFF_MS),
           };
+          if (!activeForWave(key)) return;
           await ctx.storage.set(key, wave);
         });
       } catch {
         // A durable "sending" record already carries the deterministic ID and is retryable on recovery.
       }
-      scheduleNotification(parentID, waveID, retryAttempt);
+      if (activeForWave(key)) scheduleNotification(parentID, waveID, retryAttempt);
     }
   }
 
-  async function start(input, tool) {
+  async function start(input, tool, operation) {
+    assertActiveOperation(operation);
+    if (!supportedVersion(ctx.app.version)) throw new Error("unsupported OpenCode version");
     const parentID = tool.sessionID;
     const root = ctx.location.project.canonical || ctx.location.project.directory;
     assertPromptSize(input.prompt);
@@ -649,13 +1308,20 @@ export function createRuntime(ctx, dependencies = {}) {
     }
     const directory = resolveWorktreeDirectory(root, input.directory);
     const manifestBinding = readManifestBinding(root, input.manifest_path, input.manifest_agent_id, directory);
-    await assertInventory(directory);
-    const client = await clientForImport();
-    await assertTarget(client, directory, input.agent);
+    await assertInventory(directory, operation);
+    assertActiveOperation(operation);
+    const client = await clientForImport(operation);
+    assertActiveOperation(operation);
+    await assertTarget(client, directory, input.agent, operation);
+    assertActiveOperation(operation);
     const key = waveKey(parentID, input.wave_id);
     let job;
     await withWaveLock(key, async () => {
+      if (disposed) throw new Error("worktree runtime is disposed");
       let existing = await ctx.storage.get(key);
+      assertActiveOperation(operation);
+      if (existing && !validWaveShape(existing, parentID, input.wave_id)) throw new Error("stored wave structure is unsupported");
+      waveOwners.set(key, owner);
       if (existing?.sealed) throw new Error("cannot add a job to a sealed wave");
       const existingJobs = Object.values(existing?.jobs || {});
       if (existingJobs.length && (
@@ -666,7 +1332,9 @@ export function createRuntime(ctx, dependencies = {}) {
       }
       if (existing && !existingJobs.length) existing.manifest_path = manifestBinding.manifest_path;
       if (Object.keys(existing?.jobs || {}).length >= MAX_JOBS) throw new Error(`a wave may contain at most ${MAX_JOBS} jobs`);
-      const parent = await ctx.session.get({ sessionID: parentID });
+      assertActiveOperation(operation);
+      const parent = await bounded(operation, (signal) => ctx.session.get({ sessionID: parentID }, { signal }));
+      assertActiveOperation(operation);
       const permissions = [
         ...(Array.isArray(parent.permissions) ? parent.permissions : []),
         { action: TOOL_NAME, resource: "*", effect: "deny" },
@@ -694,6 +1362,7 @@ export function createRuntime(ctx, dependencies = {}) {
           started_at: created,
           deadline: created + (input.timeout_seconds || DEFAULT_TIMEOUT_SECONDS) * 1000,
         };
+        assertActiveOperation(operation);
         const wave = existing || {
           version: STATE_VERSION,
           parent_session_id: parentID,
@@ -704,21 +1373,28 @@ export function createRuntime(ctx, dependencies = {}) {
           jobs: {},
         };
         wave.jobs[sessionID] = job;
+        assertActiveOperation(operation);
         await ctx.storage.set(key, wave);
+        assertActiveOperation(operation);
         existing = wave;
         const removeProvisional = async () => {
+          assertActiveOperation(operation);
           delete wave.jobs[sessionID];
           await ctx.storage.set(key, wave);
+          assertActiveOperation(operation);
         };
         const cleanupFailedAttempt = async (error) => {
+          assertActiveOperation(operation);
           try {
-            await cleanupMintedChild(client, sessionID);
+            await cleanupMintedChild(client, sessionID, operation);
+            assertActiveOperation(operation);
             await removeProvisional();
           } catch (cleanupError) {
             job.status = "failed";
             job.error = error instanceof Error ? error.message : String(error);
             job.cleanup_error = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
             job.finished_at = now();
+            assertActiveOperation(operation);
             await ctx.storage.set(key, wave).catch(() => {});
             throw new AggregateError([error, cleanupError], "child launch failed and cleanup could not be verified");
           }
@@ -738,8 +1414,11 @@ export function createRuntime(ctx, dependencies = {}) {
           permissions,
         };
         try {
-          await client.session.import({ info, messages: [], location: { directory } });
+          assertActiveOperation(operation);
+          await bounded(operation, (signal) => client.session.import({ info, messages: [], location: { directory } }, { signal }));
+          assertActiveOperation(operation);
         } catch (error) {
+          if (!activeOperation(operation)) throw error;
           if (isConflict(error)) {
             await removeProvisional();
             if (attempt < MAX_IMPORT_ATTEMPTS) continue;
@@ -749,7 +1428,9 @@ export function createRuntime(ctx, dependencies = {}) {
           throw error;
         }
         try {
-          const importedInfo = await client.session.get({ sessionID });
+          assertActiveOperation(operation);
+          const importedInfo = await bounded(operation, (signal) => client.session.get({ sessionID }, { signal }));
+          assertActiveOperation(operation);
           const attestation = sessionAttestationReasons(importedInfo, {
             session_id: sessionID,
             parent_session_id: parentID,
@@ -760,17 +1441,23 @@ export function createRuntime(ctx, dependencies = {}) {
           if (attestation.length) {
             throw new Error(`imported child session attestation failed: ${attestation.join(",")}`);
           }
-          await client.session.prompt({ sessionID, text: input.prompt, delivery: "queue" });
+          assertActiveOperation(operation);
+          await bounded(operation, (signal) => client.session.prompt({ sessionID, text: input.prompt, delivery: "queue" }, { signal }));
+          assertActiveOperation(operation);
           job.status = "running";
+          assertActiveOperation(operation);
           await ctx.storage.set(key, wave);
+          assertActiveOperation(operation);
           break;
         } catch (error) {
+          if (!activeOperation(operation)) throw error;
           await cleanupFailedAttempt(error);
           throw error;
         }
       }
     });
-    void observe(parentID, input.wave_id, job, client);
+    assertActiveOperation(operation);
+    track(observe(parentID, input.wave_id, job));
     return response({
       wave_id: input.wave_id,
       session_id: job.session_id,
@@ -784,6 +1471,7 @@ export function createRuntime(ctx, dependencies = {}) {
   }
 
   async function seal(input, tool) {
+    if (!supportedVersion(ctx.app.version)) throw new Error("unsupported OpenCode version");
     const parentID = tool.sessionID;
     const key = waveKey(parentID, input.wave_id);
     const root = ctx.location.project.canonical || ctx.location.project.directory;
@@ -795,6 +1483,8 @@ export function createRuntime(ctx, dependencies = {}) {
       throw new Error("seal jobs must contain unique session IDs");
     }
     const wave = await withWaveLock(key, async () => {
+      if (disposed) throw new Error("worktree runtime is disposed");
+      waveOwners.set(key, owner);
       const wave = await ctx.storage.get(key);
       if (!wave) throw new Error("cannot seal an unknown wave");
       const manifestPaths = new Set(Object.values(wave.jobs || {}).map((job) => job.manifest_path));
@@ -805,6 +1495,7 @@ export function createRuntime(ctx, dependencies = {}) {
         const manifestReason = verifyManifestBinding(root, job);
         if (manifestReason) throw new Error(`manifest binding verification failed for ${job.session_id}: ${manifestReason}`);
       }
+      if (!validWaveShape(wave, parentID, input.wave_id)) throw new Error("stored wave structure is unsupported");
       const actual = Object.values(wave.jobs).map((job) => ({ session_id: job.session_id, directory: job.directory }));
       if (!sameJobs(requested, actual)) throw new Error("seal jobs must exactly match all started wave jobs");
       if (wave.sealed) {
@@ -819,20 +1510,25 @@ export function createRuntime(ctx, dependencies = {}) {
       return wave;
     });
     for (const job of Object.values(wave.jobs || {})) {
-      if (!TERMINAL.has(job.status)) void observe(parentID, input.wave_id, job);
+      if (job.status === "running") track(observe(parentID, input.wave_id, job));
     }
-    void maybeNotify(parentID, input.wave_id).catch(() => {});
+    track(maybeNotify(parentID, input.wave_id));
     return response({ wave_id: input.wave_id, sealed: true, jobs: requested });
   }
 
-  async function computeStatus(parentID, waveID) {
+  async function computeStatusOwned(parentID, waveID, operation) {
     const key = waveKey(parentID, waveID);
-    const wave = await ctx.storage.get(key);
+    const wave = await withWaveLock(key, () => ctx.storage.get(key));
+    assertActiveOperation(operation);
     if (!wave) throw new Error("unknown wave");
+    const durableSnapshot = statusAuthoritySnapshot(wave);
     const reasons = [];
-    const expected = wave.expected_session_ids || [];
-    const jobs = expected.length ? expected.map((id) => wave.jobs?.[id]).filter(Boolean) : Object.values(wave.jobs || {});
-    const actualIDs = Object.keys(wave.jobs || {}).sort();
+    const waveShapeValid = validWaveShape(wave, parentID, waveID);
+    if (!waveShapeValid) reasons.push("wave_identity_mismatch");
+    const expected = Array.isArray(wave.expected_session_ids) ? wave.expected_session_ids : [];
+    const durableJobs = isPlainRecord(wave.jobs) ? wave.jobs : {};
+    const jobs = expected.length ? expected.map((id) => durableJobs[id]).filter(Boolean) : Object.values(durableJobs);
+    const actualIDs = Object.keys(durableJobs).sort();
     const expectedIDs = [...expected].sort();
     const root = ctx.location.project.canonical || ctx.location.project.directory;
     if (wave.parent_session_id !== parentID || wave.wave_id !== waveID) reasons.push("wave_identity_mismatch");
@@ -851,17 +1547,50 @@ export function createRuntime(ctx, dependencies = {}) {
       reasons.push("wave_manifest_identity_mismatch");
     }
     let client;
-    try { client = await clientForImport(); } catch { reasons.push("same_service_unverified"); }
+    const liveEligible = waveShapeValid && supportedVersion(ctx.app.version) && jobs.length > 0 && jobs.every((job) => job?.status === "succeeded");
+    if (liveEligible) {
+      try { client = await clientForImport(operation); } catch { reasons.push("same_service_unverified"); }
+    } else if (!supportedVersion(ctx.app.version)) {
+      reasons.push("same_service_unverified");
+    }
     let inventory = [];
-    try { inventory = await ctx.worktree.list(); } catch { reasons.push("worktree_inventory_unavailable"); }
+    if (waveShapeValid) {
+      try {
+        inventory = await bounded(operation, (signal) => ctx.worktree.list({ signal }));
+        assertActiveOperation(operation);
+      } catch { reasons.push("worktree_inventory_unavailable"); }
+    } else {
+      reasons.push("worktree_inventory_unavailable");
+    }
     const inventoryPaths = new Set(inventory.flatMap((item) => {
       try { return [canonical(item.directory)]; } catch { return []; }
     }));
     const statusJobs = [];
     for (const job of jobs) {
-      if (job.status !== "succeeded") reasons.push(`${job.session_id}:status_${job.status}`);
+      if (!waveShapeValid) {
+        const safeSessionID = typeof job?.session_id === "string" && job.session_id.startsWith("ses") ? job.session_id : "unknown";
+        reasons.push(`${safeSessionID}:requested_executor_mismatch`);
+        statusJobs.push(failedSafeStatusJobProjection(job));
+        continue;
+      }
+      const safeSessionID = typeof job?.session_id === "string" ? job.session_id : "unknown";
+      const jobShapeValid = validJobShape(job, wave.parent_session_id, wave.manifest_path) && closedJobShape(job);
+      if (!jobShapeValid) reasons.push(`${safeSessionID}:requested_executor_mismatch`);
+      if (job.status !== "succeeded") reasons.push(`${safeSessionID}:status_${typeof job.status === "string" ? job.status : "failed"}`);
+      if (job.status === "provisioning") reasons.push(`${safeSessionID}:provisioning_unresolved`);
+      if (job.status === "running") {
+        const observation = job.observation;
+        if (observation?.episode === MAX_UINT32) reasons.push(`${safeSessionID}:observation_episode_exhausted`);
+        if (observation?.state === "blocked") reasons.push(`${safeSessionID}:observation_blocked:${observation.operation}:${observation.reason}`);
+        else if (observation?.state === "quarantined") reasons.push(`${safeSessionID}:observation_quarantined:${observation.operation}:${observation.reason}`);
+        else if (observation?.retry_at !== undefined) reasons.push(`${safeSessionID}:observation_retry_scheduled:${observation.operation}:${observation.reason}`);
+      }
+      if (wave.version === STATE_VERSION && job.status === "failed" && job.error === "Transport" &&
+          !Object.hasOwn(job, "cleanup_error") && !Object.hasOwn(job, "observation")) {
+        reasons.push(`${safeSessionID}:legacy_transport_repair_refused:admission_provenance_unavailable`);
+      }
       const manifestReason = verifyManifestBinding(root, job);
-      if (manifestReason) reasons.push(`${job.session_id}:${manifestReason}`);
+      if (manifestReason) reasons.push(`${safeSessionID}:${manifestReason}`);
       const requestedExecutor = job.requested_executor;
       const requestedPermission = requestedExecutor?.final_permission;
       if (!requestedExecutor || requestedExecutor.session_id !== job.session_id ||
@@ -874,20 +1603,21 @@ export function createRuntime(ctx, dependencies = {}) {
           requestedExecutor.model?.variant !== job.model?.variant ||
           !requestedPermission || Object.keys(requestedPermission).length !== 3 ||
           requestedPermission.action !== TOOL_NAME || requestedPermission.resource !== "*" || requestedPermission.effect !== "deny") {
-        reasons.push(`${job.session_id}:requested_executor_mismatch`);
+        reasons.push(`${safeSessionID}:requested_executor_mismatch`);
       }
       let directory;
       try {
         directory = resolveWorktreeDirectory(root, job.directory);
-        if (!inventoryPaths.has(directory)) reasons.push(`${job.session_id}:worktree_missing_from_inventory`);
+        if (!inventoryPaths.has(directory)) reasons.push(`${safeSessionID}:worktree_missing_from_inventory`);
       } catch {
-        reasons.push(`${job.session_id}:worktree_missing`);
+        reasons.push(`${safeSessionID}:worktree_missing`);
         continue;
       }
       let observedExecutor = null;
       if (client) {
         try {
-          const info = await client.session.get({ sessionID: job.session_id });
+          const info = unwrap(await bounded(operation, (signal) => client.session.get({ sessionID: job.session_id }, { signal })));
+          assertActiveOperation(operation);
           const finalPermission = Array.isArray(info?.permissions) ? info.permissions.at(-1) : undefined;
           let observedDirectory = "";
           try { observedDirectory = canonical(info?.location?.directory); } catch { /* recorded by sessionAttestationReasons */ }
@@ -914,33 +1644,39 @@ export function createRuntime(ctx, dependencies = {}) {
             directory,
             agent: job.agent,
             model: job.model,
-          })) reasons.push(`${job.session_id}:${reason}`);
-          if (info.outcome !== "succeeded") reasons.push(`${job.session_id}:outcome_${info.outcome || "missing"}`);
+          })) reasons.push(`${safeSessionID}:${reason}`);
+          if (info.outcome !== "succeeded") reasons.push(`${safeSessionID}:outcome_${info.outcome || "missing"}`);
         } catch {
-          reasons.push(`${job.session_id}:session_unverifiable`);
+          reasons.push(`${safeSessionID}:session_unverifiable`);
         }
       }
       statusJobs.push({
-        session_id: job.session_id,
-        directory: job.directory,
-        status: job.status,
-        agent: job.agent,
-        model: job.model,
-        manifest_path: job.manifest_path,
-        manifest_agent_id: job.manifest_agent_id,
-        manifest_entry: job.manifest_entry,
-        manifest_entry_hash: job.manifest_entry_hash,
-        ...(job.started_at !== undefined ? { started_at: job.started_at } : {}),
-        ...(job.deadline !== undefined ? { deadline: job.deadline } : {}),
-        ...(job.finished_at !== undefined ? { finished_at: job.finished_at } : {}),
-        ...(job.text !== undefined ? { text: job.text } : {}),
-        ...(job.error !== undefined ? { error: job.error } : {}),
-        ...(job.cleanup_error !== undefined ? { cleanup_error: job.cleanup_error } : {}),
-        requested_executor: requestedExecutor,
+        session_id: typeof job.session_id === "string" ? job.session_id : "",
+        directory: typeof job.directory === "string" ? job.directory : "",
+        status: ["provisioning", "running", "succeeded", "failed", "interrupted", "timeout"].includes(job.status) ? job.status : "failed",
+        agent: typeof job.agent === "string" ? job.agent : "",
+        model: modelProjection(job.model),
+        manifest_path: typeof job.manifest_path === "string" ? job.manifest_path : "",
+        manifest_agent_id: typeof job.manifest_agent_id === "string" ? job.manifest_agent_id : "",
+        manifest_entry: manifestEntryProjection(job.manifest_entry),
+        manifest_entry_hash: typeof job.manifest_entry_hash === "string" ? job.manifest_entry_hash : "",
+        ...(Number.isSafeInteger(job.started_at) && job.started_at > 0 ? { started_at: job.started_at } : {}),
+        ...(Number.isSafeInteger(job.deadline) && job.deadline > 0 ? { deadline: job.deadline } : {}),
+        ...(Number.isSafeInteger(job.finished_at) && job.finished_at > 0 ? { finished_at: job.finished_at } : {}),
+        ...(typeof job.text === "string" ? { text: job.text } : {}),
+        ...(typeof job.error === "string" ? { error: job.error } : {}),
+        ...(typeof job.cleanup_error === "string" ? { cleanup_error: job.cleanup_error } : {}),
+        requested_executor: requestedExecutorProjection(requestedExecutor),
         observed_executor: observedExecutor,
       });
     }
-    void maybeNotify(parentID, waveID).catch(() => {});
+    const storedNotificationID = wave.notification?.id;
+    if (typeof storedNotificationID === "string" && storedNotificationID.startsWith("msg_") &&
+        storedNotificationID !== notificationID(parentID, waveID)) reasons.push("notification_identity_mismatch");
+    if (legacyRetryNotification(wave.notification)) reasons.push("notification_legacy_retry_pending");
+    const current = await withWaveLock(key, () => ctx.storage.get(key));
+    assertActiveOperation(operation);
+    if (statusAuthoritySnapshot(current) !== durableSnapshot) reasons.push("wave_changed_during_status");
     return {
       wave_id: waveID,
       parent_session_id: parentID,
@@ -952,16 +1688,34 @@ export function createRuntime(ctx, dependencies = {}) {
     };
   }
 
+  function computeStatus(parentID, waveID) {
+    return runOperation((operation) => computeStatusOwned(parentID, waveID, operation));
+  }
+
   async function status(input, tool) {
     return response(await computeStatus(tool.sessionID, input.wave_id));
   }
 
-  async function execute(input, tool) {
-    if (input.action === "start") return start(input, tool);
-    if (input.action === "seal") return seal(input, tool);
-    if (input.action === "status") return status(input, tool);
-    if (input.action === "recover") return recoverParent(tool.sessionID);
-    throw new Error(`unsupported action: ${input.action}`);
+  function execute(input, tool) {
+    try {
+      if (disposed) throw new Error("worktree runtime is disposed");
+      if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("unsupported tool input");
+      const allowed = input.action === "recover" ? ["action"]
+        : input.action === "status" ? ["action", "wave_id"]
+        : input.action === "seal" ? ["action", "wave_id", "jobs"]
+        : input.action === "start" ? ["action", "wave_id", "directory", "manifest_path", "manifest_agent_id", "prompt", "agent", "provider", "model", "reasoning_effort", "title", "timeout_seconds"]
+        : [];
+      if (!allowed.length || Object.keys(input).some((key) => !allowed.includes(key))) throw new Error("unsupported action or additional input property");
+      if (input.action === "start") return runOperation((operation) => start(input, tool, operation));
+      if (input.action === "seal") return seal(input, tool);
+      if (input.action === "status") return status(input, tool);
+      if (input.action === "recover") return runOperation((operation) => recoverParent(tool.sessionID, operation));
+      throw new Error(`unsupported action: ${input.action}`);
+    } catch (error) {
+      const rejected = Promise.reject(error);
+      rejected.catch(() => {});
+      return rejected;
+    }
   }
 
   async function scanWaves(prefix, onWave) {
@@ -969,7 +1723,9 @@ export function createRuntime(ctx, dependencies = {}) {
     const found = [];
     do {
       const page = await ctx.storage.scan({ prefix, limit: 100, ...(after ? { after } : {}) });
+      if (disposed) return found;
       for (const entry of page.entries) {
+        if (disposed) return found;
         const wave = entry.value;
         if (!wave?.jobs) continue;
         found.push(wave);
@@ -980,36 +1736,58 @@ export function createRuntime(ctx, dependencies = {}) {
     return found;
   }
 
-  async function recoverParent(parentID) {
-    const waves = await scanWaves(`wave/${parentID}/`, async (wave) => {
-      if (wave.parent_session_id !== parentID) return;
-      for (const job of Object.values(wave.jobs)) {
-        if (!TERMINAL.has(job.status)) void observe(parentID, wave.wave_id, job);
+  async function recoverParent(parentID, operation) {
+    const waves = await scanWaves(`wave/${parentID}/`);
+    assertActiveOperation(operation);
+    for (const wave of waves.filter((item) => item.parent_session_id === parentID &&
+      supportedVersion(ctx.app.version) && validWaveShape(item, parentID, item.wave_id))) {
+      const key = waveKey(parentID, wave.wave_id);
+      for (const job of Object.values(wave.jobs || {}).sort((left, right) => left.session_id.localeCompare(right.session_id))) {
+        if (job.status === "running") await claimObserver(parentID, wave.wave_id, job.session_id, true);
+        assertActiveOperation(operation);
       }
-      void maybeNotify(parentID, wave.wave_id).catch(() => {});
-    });
+      if (legacyRetryNotification(wave.notification) && !Object.values(wave.jobs).some((job) => job.status === "running")) {
+        waveOwners.set(key, owner);
+        scheduleNotification(parentID, wave.wave_id, wave.notification.attempts);
+      }
+    }
+    const latest = await scanWaves(`wave/${parentID}/`);
+    assertActiveOperation(operation);
     return response({
       parent_session_id: parentID,
-      waves: waves
+      waves: latest
         .filter((wave) => wave.parent_session_id === parentID)
-        .map((wave) => ({
-          wave_id: wave.wave_id,
-          sealed: wave.sealed === true,
-          notification_state: wave.notification?.state || "pending",
-          jobs: Object.values(wave.jobs).map(({ session_id, directory, manifest_path, manifest_agent_id, manifest_entry_hash, status, text, error }) => ({
-            session_id, directory, manifest_path, manifest_agent_id, manifest_entry_hash, status,
-            ...(text ? { text } : {}), ...(error ? { error } : {}),
-          })),
-        })),
+        .map((wave) => {
+          const valid = validWaveShape(wave, parentID, wave.wave_id);
+          const durableJobs = Object.values(isPlainRecord(wave.jobs) ? wave.jobs : {});
+          const legacyJobs = wave.version === undefined ? durableJobs.map(legacyRecoverJobProjection) : [];
+          const validLegacy = wave.version === undefined && legacyJobs.every(Boolean);
+          return {
+            wave_id: typeof wave.wave_id === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(wave.wave_id) ? wave.wave_id : "",
+            sealed: (valid || validLegacy) && wave.sealed === true,
+            notification_state: valid && ["sending", "sent", "retrying"].includes(wave.notification?.state) ? wave.notification.state : "pending",
+            jobs: valid ? durableJobs.map(recoverJobProjection)
+              : validLegacy ? legacyJobs
+                : durableJobs.map(failedSafeJobProjection),
+          };
+        }),
     });
   }
 
   async function recover() {
     await scanWaves("wave/", async (wave) => {
-        for (const job of Object.values(wave.jobs || {})) {
-          if (!TERMINAL.has(job.status)) void observe(wave.parent_session_id, wave.wave_id, job);
+        if (disposed || !supportedVersion(ctx.app.version) || !wave.parent_session_id || !wave.wave_id ||
+            !validWaveShape(wave, wave.parent_session_id, wave.wave_id)) return;
+        const key = waveKey(wave.parent_session_id, wave.wave_id);
+        for (const job of Object.values(wave.jobs || {}).sort((left, right) => left.session_id.localeCompare(right.session_id))) {
+          if (job.status === "running") await claimObserver(wave.parent_session_id, wave.wave_id, job.session_id, false);
         }
-        void maybeNotify(wave.parent_session_id, wave.wave_id).catch(() => {});
+        const hasLegacyCandidate = wave.version === STATE_VERSION && Object.values(wave.jobs || {}).some(legacyTransportCandidate);
+        if (!Object.values(wave.jobs || {}).some((job) => job.status === "running")) waveOwners.set(key, owner);
+        if (activeForWave(key) && !hasLegacyCandidate) {
+          if (legacyRetryNotification(wave.notification)) scheduleNotification(wave.parent_session_id, wave.wave_id, wave.notification.attempts);
+          else track(maybeNotify(wave.parent_session_id, wave.wave_id));
+        }
     });
   }
 
@@ -1017,25 +1795,47 @@ export function createRuntime(ctx, dependencies = {}) {
     execute,
     computeStatus,
     recover,
+    startSetupRecovery() {
+      if (!disposed) track(recover());
+    },
     dispose() {
+      if (disposePromise) return disposePromise;
       disposed = true;
+      for (const operation of operations) {
+        operation.revoked = true;
+        for (const controller of operation.controllers) controller.abort();
+      }
       for (const [key, slot] of observers) {
         if (slot.owner !== owner) continue;
         observers.delete(key);
-        slot.controller.abort();
+        slot.revoked = true;
+        for (const controller of slot.controllers || []) controller.abort();
       }
       for (const [key, slot] of notificationTimers) {
         if (slot.owner !== owner) continue;
         notificationTimers.delete(key);
-        clearTimeout(slot.handle);
+        cancelSchedule(slot.handle);
       }
       for (const [key, slot] of reobserveTimers) {
         if (slot.owner !== owner || reobserveTimers.get(key) !== slot) continue;
         reobserveTimers.delete(key);
-        clearTimeout(slot.handle);
+        cancelSchedule(slot.handle);
       }
+      for (const [key, currentOwner] of waveOwners) if (currentOwner === owner) waveOwners.delete(key);
+      const snapshot = [...tasks];
+      disposePromise = new Promise((resolve) => {
+        let handle;
+        const done = () => { cancelBound(handle); resolve(); };
+        Promise.allSettled(snapshot).then(done);
+        handle = boundSchedule(resolve, cleanupBoundMs);
+        handle?.unref?.();
+      });
+      return disposePromise;
     },
-    observers,
+    observers: {
+      has(key) { return observers.get(key)?.owner === owner; },
+      get(key) { const slot = observers.get(key); return slot?.owner === owner ? slot : undefined; },
+    },
   };
 }
 
@@ -1048,17 +1848,18 @@ export async function setupWorktreePlugin(ctx, dependencies) {
   const cleanup = () => {
     cleanupPromise ||= (async () => {
       const errors = [];
+      const runtimeCleanup = runtime.dispose();
       if (rpcRegistration) {
         const registration = rpcRegistration;
         rpcRegistration = undefined;
         try { await registration.dispose(); } catch (error) { errors.push(error); }
       }
-      runtime.dispose();
       if (toolRegistration) {
         const registration = toolRegistration;
         toolRegistration = undefined;
         try { await registration.dispose(); } catch (error) { errors.push(error); }
       }
+      try { await runtimeCleanup; } catch (error) { errors.push(error); }
       if (errors.length) throw new AggregateError(errors, "GSD worktree task plugin cleanup failed");
     })();
     return cleanupPromise;
@@ -1090,7 +1891,7 @@ export async function setupWorktreePlugin(ctx, dependencies) {
         }
       },
     });
-    await runtime.recover();
+    runtime.startSetupRecovery();
     return cleanup;
   } catch (error) {
     try {

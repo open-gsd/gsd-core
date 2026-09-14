@@ -2,7 +2,7 @@
 
 import fs from 'node:fs';
 
-const OPENCODE_SERVICE_VERSIONS = Object.freeze(['2.0.2', '2.0.3']);
+const OPENCODE_SERVICE_VERSION = '2.0.3';
 const RPC_ID = 'gsd-worktree-task.attestation.v1';
 const RPC_METHOD = 'status';
 const PROVENANCE = 'opencode_plugin_rpc_v1';
@@ -154,7 +154,7 @@ interface AttestationRequest {
 }
 
 function compatibleVersion(version: string): boolean {
-  return OPENCODE_SERVICE_VERSIONS.includes(version);
+  return version === OPENCODE_SERVICE_VERSION;
 }
 
 async function observe(request: AttestationRequest): Promise<unknown> {
@@ -171,11 +171,11 @@ async function observe(request: AttestationRequest): Promise<unknown> {
     import('@opencode/schema/rpc'),
   ]);
   const endpoint = await Service.discover({ version: compatibleVersion });
-  if (!endpoint) throw new Error('no compatible managed OpenCode service is discoverable');
+  if (!endpoint) throw new Error('no exact-version managed OpenCode service is discoverable');
   const client = OpenCode.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) });
   const health = await client.health.get({ signal: AbortSignal.timeout(RPC_TIMEOUT_MS) });
   if (health?.healthy !== true || !compatibleVersion(health.version)) {
-    throw new Error('discovered OpenCode service failed health/version compatibility');
+    throw new Error('discovered OpenCode service failed exact-version health check');
   }
 
   const definition = Rpc.define(RPC_DEFINITION_VALUE);
@@ -200,7 +200,7 @@ async function observe(request: AttestationRequest): Promise<unknown> {
 }
 
 export = {
-  OPENCODE_SERVICE_VERSIONS,
+  OPENCODE_SERVICE_VERSION,
   RPC_ID,
   RPC_METHOD,
   PROVENANCE,
