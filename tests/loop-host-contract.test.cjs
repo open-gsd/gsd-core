@@ -13,12 +13,14 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const fc = require('fast-check');
 
 const { cleanup } = require('./helpers.cjs');
 
 const {
   parseLoopHostBlock,
   crossCheckRoles,
+  crossCheckRoleFamilies,
   assertPointsCoverage,
   buildContract,
   serializeContract,
@@ -27,6 +29,7 @@ const {
   CANONICAL_POINTS,
   EXPECTED_POINTS_BY_STEP,
   ROLE_TO_AGENT,
+  ROLE_FAMILY,
 } = require('../scripts/gen-loop-host-contract.cjs');
 
 const { LOOP_HOST_CONTRACT } = require('../gsd-core/bin/lib/loop-host-contract.cjs');
@@ -202,6 +205,158 @@ describe('crossCheckRoles', () => {
   });
 });
 
+// ─── 2b. crossCheckRoleFamilies (#4740) ──────────────────────────────────────
+
+describe('crossCheckRoleFamilies (#4740)', () => {
+  test('accepts the execution family at execute', () => {
+    const errors = crossCheckRoleFamilies('execute', ['executor', 'verifier'], 'execute-phase.md');
+    assert.deepEqual(errors, []);
+  });
+
+  test('accepts orchestrator at discuss', () => {
+    const errors = crossCheckRoleFamilies('discuss', ['orchestrator'], 'discuss-phase.md');
+    assert.deepEqual(errors, []);
+  });
+
+  test('accepts the planning family at plan', () => {
+    const errors = crossCheckRoleFamilies('plan', ['researcher', 'planner', 'checker'], 'plan-phase.md');
+    assert.deepEqual(errors, []);
+  });
+
+  test('accepts orchestrator at verify and ship', () => {
+    assert.deepEqual(crossCheckRoleFamilies('verify', ['orchestrator'], 'verify-work.md'), []);
+    assert.deepEqual(crossCheckRoleFamilies('ship', ['orchestrator'], 'ship.md'), []);
+  });
+
+  test('a strict subset of the family is legal', () => {
+    const errors = crossCheckRoleFamilies('execute', ['executor'], 'execute-phase.md');
+    assert.deepEqual(errors, []);
+  });
+
+  test('rejects orchestrator added to execute', () => {
+    const errors = crossCheckRoleFamilies('execute', ['executor', 'verifier', 'orchestrator'], 'execute-phase.md');
+    assert.strictEqual(errors.length, 1, 'expected exactly 1 error');
+    assert.match(errors[0], /orchestrator/);
+    assert.match(errors[0], /execute/);
+  });
+
+  test('rejects an execution role at an orchestration step', () => {
+    const errors = crossCheckRoleFamilies('discuss', ['orchestrator', 'executor'], 'discuss-phase.md');
+    assert.strictEqual(errors.length, 1, 'expected exactly 1 error');
+    assert.match(errors[0], /executor/);
+  });
+
+  test('rejects an execution role at plan', () => {
+    const errors = crossCheckRoleFamilies('plan', ['planner', 'executor'], 'plan-phase.md');
+    assert.strictEqual(errors.length, 1, 'expected exactly 1 error');
+    assert.match(errors[0], /executor/);
+  });
+
+  test('rejects a planning role at execute', () => {
+    const errors = crossCheckRoleFamilies('execute', ['executor', 'planner'], 'execute-phase.md');
+    assert.strictEqual(errors.length, 1, 'expected exactly 1 error');
+    assert.match(errors[0], /planner/);
+  });
+
+  test('rejects a role with no family', () => {
+    const errors = crossCheckRoleFamilies('execute', ['executer'], 'execute-phase.md');
+    assert.ok(errors.length >= 1, 'expected at least 1 error');
+    assert.ok(errors.some((e) => e.includes('executer')));
+  });
+
+  test('fails closed on an unknown step', () => {
+    const errors = crossCheckRoleFamilies('audit', ['orchestrator'], 'audit.md');
+    assert.strictEqual(errors.length, 1, 'expected exactly 1 error for unknown step');
+    assert.match(errors[0], /audit/);
+  });
+
+  test('rejects a role whose capitalization does not match', () => {
+    const errors = crossCheckRoleFamilies('execute', ['Orchestrator'], 'execute-phase.md');
+    assert.ok(errors.length >= 1, 'capitalized role must not silently match');
+    assert.ok(errors.some((e) => e.includes('Orchestrator')));
+  });
+
+  test('a duplicated in-family role is not an error', () => {
+    const errors = crossCheckRoleFamilies('execute', ['executor', 'executor'], 'execute-phase.md');
+    assert.deepEqual(errors, []);
+  });
+
+  test('reports every offending role, not just the first', () => {
+    const errors = crossCheckRoleFamilies('execute', ['executor', 'orchestrator', 'planner'], 'execute-phase.md');
+    assert.strictEqual(errors.length, 2, 'expected one error per offending role');
+    const combined = errors.join('\n');
+    assert.ok(combined.includes('orchestrator'));
+    assert.ok(combined.includes('planner'));
+  });
+
+  test('is pure and does not mutate its arguments', () => {
+    // Deliberately NOT alphabetically sorted — an in-place agentRoles.sort()
+    // must be caught by THIS test, not merely coincide with already-sorted
+    // input (#4740 review finding).
+    const agentRoles = ['verifier', 'executor', 'orchestrator'];
+    const snapshot = agentRoles.slice();
+    const first = crossCheckRoleFamilies('execute', agentRoles, 'execute-phase.md');
+    assert.deepEqual(agentRoles, snapshot, 'input array must not be mutated');
+    const second = crossCheckRoleFamilies('execute', agentRoles, 'execute-phase.md');
+    assert.deepEqual(first, second, 'repeated calls must produce identical results');
+    assert.deepEqual(agentRoles, snapshot, 'input array must still not be mutated after second call');
+  });
+
+  test('ROLE_FAMILY and ROLE_TO_AGENT cover the exact same role-name domain (#4740)', () => {
+    // Generative-fix-divergence guard: ROLE_FAMILY and ROLE_TO_AGENT are parallel
+    // constants over the same role-name domain (every non-orchestrator role, plus
+    // orchestrator which is family-only). Exact set equality both directions —
+    // not a subset check — so adding a role to only one map is caught here.
+    const familyKeys = new Set(Object.keys(ROLE_FAMILY));
+    const expectedKeys = new Set([...Object.keys(ROLE_TO_AGENT), 'orchestrator']);
+    assert.deepEqual(
+      [...familyKeys].sort(),
+      [...expectedKeys].sort(),
+      'ROLE_FAMILY keys must equal ROLE_TO_AGENT keys plus "orchestrator", exactly',
+    );
+  });
+
+  test('property: in-family subsets pass, any foreign role fails', () => {
+    const ROLE_FAMILY_LOCAL = {
+      orchestrator: 'orchestration',
+      researcher: 'planning', planner: 'planning', checker: 'planning',
+      executor: 'execution', verifier: 'execution',
+    };
+    const familyRoles = {
+      orchestration: ['orchestrator'],
+      planning: ['researcher', 'planner', 'checker'],
+      execution: ['executor', 'verifier'],
+    };
+    const stepsByFamily = {
+      discuss: 'orchestration', plan: 'planning', execute: 'execution',
+      verify: 'orchestration', ship: 'orchestration',
+    };
+    const steps = Object.keys(stepsByFamily);
+
+    fc.assert(
+      fc.property(
+        fc.constantFrom(...steps),
+        fc.subarray(Object.keys(ROLE_FAMILY_LOCAL), { minLength: 1 }),
+        (step, roles) => {
+          const family = stepsByFamily[step];
+          const inFamilySubset = familyRoles[family];
+          const errors = crossCheckRoleFamilies(step, inFamilySubset, 'x.md');
+          assert.deepEqual(errors, []);
+
+          const hasForeign = roles.some((r) => ROLE_FAMILY_LOCAL[r] !== family);
+          const errors2 = crossCheckRoleFamilies(step, roles, 'x.md');
+          if (hasForeign) {
+            assert.ok(errors2.length >= 1);
+          } else {
+            assert.deepEqual(errors2, []);
+          }
+        },
+      ),
+      { seed: 4740, numRuns: 200 },
+    );
+  });
+});
+
 // ─── 3. assertPointsCoverage ─────────────────────────────────────────────────
 
 describe('assertPointsCoverage', () => {
@@ -332,6 +487,19 @@ describe('buildContract from real workflows', () => {
     assert.deepEqual(ship.agentRoles, ['orchestrator']);
     assert.deepEqual(ship.coreArtifacts.produces, []);
     assert.deepEqual(ship.coreArtifacts.consumes, ['UAT.md']);
+  });
+
+  test('the shipped workflows declare no cross-family role (#4740)', () => {
+    // Pins something real about THIS change, distinct from the per-step field
+    // assertions above: running crossCheckRoleFamilies directly against every
+    // entry of the REAL contract returns zero errors for every step, not merely
+    // that buildContract() didn't throw (which every other test in this describe
+    // block already exercises incidentally).
+    const contract = buildContract();
+    for (const entry of contract) {
+      const errors = crossCheckRoleFamilies(entry.step, entry.agentRoles, entry.step + '.md');
+      assert.deepEqual(errors, [], 'step "' + entry.step + '" must declare no cross-family role');
+    }
   });
 });
 
