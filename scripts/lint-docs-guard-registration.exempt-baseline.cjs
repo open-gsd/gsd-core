@@ -68,6 +68,7 @@ const DOCS_GUARD_EXEMPT_BASELINE = [
   'lint-allow-test-rule-refs.test.cjs',
   'lint-docs-command-form.test.cjs',
   'lint-docs-required.test.cjs',
+  'lint-retired-runtime-name.test.cjs',
   'manifest-version-sync.test.cjs',
   'milestone-archive.test.cjs',
   'model-resolver.test.cjs',
@@ -177,6 +178,26 @@ const DOCS_GUARD_EXEMPT_DOCS_PATHS = {
   'lint-docs-required.test.cjs': [
     'docs/COMMANDS.md', 'docs/USER-GUIDE.md', 'docs/adr', 'docs/adr/0001-foo.md', 'docs/adr/0099-new.md',
     'docs/agents', 'docs/agents/triage-labels.md',
+  ],
+  // #4729: `writeFile('docs/...', ...)` calls WRITE fabricated fixture
+  // content into a throwaway mkdtemp repo; the file never reads real shipped
+  // docs/ content — every path here is fixture data for the guard under
+  // test.
+  // Re-confirmed: every path below is WRITTEN as fabricated fixture content
+  // into a throwaway mkdtemp repo; none reads real shipped docs. The a*/b*/c*/
+  // d* entries are the adversarial-regression fixtures (dialect-plus-runtime-
+  // word, adjacency laundering, version laundering, bare-marker abuse).
+  'lint-retired-runtime-name.test.cjs': [
+    'docs/adr', 'docs/adr/999-retired-runtime-record.md', 'docs/filler/note-',
+    'docs/guides/a1.md', 'docs/guides/a2.md', 'docs/guides/b1.md',
+    'docs/guides/b2.md', 'docs/guides/b3.md', 'docs/guides/c3.md',
+    'docs/guides/c4.md', 'docs/guides/config-homes.md', 'docs/guides/d1.md',
+    'docs/guides/hooks.md', 'docs/guides/one.md', 'docs/guides/runtime-claim.md',
+    'docs/guides/setup.md', 'docs/history/migration-note.md',
+    'docs/ja-JP/guides/runtimes.md', 'docs/pt-BR/guides/a3.md',
+    'docs/pt-BR/guides/hooks.md', 'docs/pt-BR/guides/policy.md',
+    'docs/reference/client-models.md', 'docs/reference/models.md',
+    'docs/zh-CN/guides/a4.md', 'docs/zh-CN/reference/models.md',
   ],
   'manifest-version-sync.test.cjs': [],
   // #3884: re-confirmed — the added docs/CLI-TOOLS.md:458 reference is the

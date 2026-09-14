@@ -6,7 +6,7 @@
 
 [English](README.md) · [Português](README.pt-BR.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md) · **한국어**
 
-**Claude Code, OpenCode, Gemini CLI, Kilo, Codex, Copilot, Cursor, Windsurf 등을 위한 경량 메타 프롬프팅, 컨텍스트 엔지니어링, 스펙 기반 개발 시스템.**
+**Claude Code, OpenCode, Antigravity CLI, Kimi CLI, Kilo, Codex, Copilot, Cursor, Windsurf 등을 위한 경량 메타 프롬프팅, 컨텍스트 엔지니어링, 스펙 기반 개발 시스템.**
 
 [![npm version](https://img.shields.io/npm/v/%40opengsd%2Fgsd-core?style=for-the-badge&logo=npm&logoColor=white&color=CB3837)](https://www.npmjs.com/package/@opengsd/gsd-core)
 [![npm downloads](https://img.shields.io/npm/dm/%40opengsd%2Fgsd-core?style=for-the-badge&logo=npm&logoColor=white&color=CB3837)](https://www.npmjs.com/package/@opengsd/gsd-core)
@@ -21,7 +21,7 @@
 
 ## GSD Core란
 
-GSD Core는 컨텍스트 엔지니어링 및 스펙 기반 개발 프레임워크로, AI 코딩 에이전트(Claude Code, Codex, Gemini CLI, Copilot, Cursor 등)를 엄격한 단계 루프로 운용합니다. AI가 컨텍스트 창을 채워 나가면서 발생하는 품질 저하인 [컨텍스트 rot](docs/ko-KR/explanation/context-engineering.md) 문제를 해결합니다. 무거운 리서치, 기획, 실행 작업은 새로운 컨텍스트의 서브에이전트에서 처리하고, 메인 세션은 가볍게 유지됩니다.
+GSD Core는 컨텍스트 엔지니어링 및 스펙 기반 개발 프레임워크로, AI 코딩 에이전트(Claude Code, Codex, Antigravity CLI, Kimi CLI, Copilot, Cursor 등)를 엄격한 단계 루프로 운용합니다. AI가 컨텍스트 창을 채워 나가면서 발생하는 품질 저하인 [컨텍스트 rot](docs/ko-KR/explanation/context-engineering.md) 문제를 해결합니다. 무거운 리서치, 기획, 실행 작업은 새로운 컨텍스트의 서브에이전트에서 처리하고, 메인 세션은 가볍게 유지됩니다.
 
 ---
 
@@ -43,7 +43,7 @@ GSD Core는 컨텍스트 엔지니어링 및 스펙 기반 개발 프레임워�
 npx @opengsd/gsd-core@latest
 ```
 
-설치 프로그램이 런타임(Claude Code, OpenCode, Gemini CLI, Kilo, Codex, Copilot, Cursor, Windsurf 등)과 전역/로컬 설치 여부를 묻습니다. 크로스 런타임 호환성을 위해 설치 프로그램을 사용해야 합니다 — `agents/` 또는 `commands/`에서 파일을 직접 복사하지 마세요.
+설치 프로그램이 런타임(Claude Code, OpenCode, Antigravity CLI, Kimi CLI, Kilo, Codex, Copilot, Cursor, Windsurf 등)과 전역/로컬 설치 여부를 묻습니다. 크로스 런타임 호환성을 위해 설치 프로그램을 사용해야 합니다 — `agents/` 또는 `commands/`에서 파일을 직접 복사하지 마세요.
 
 다른 런타임이나 Node.js가 없는 환경은 [런타임에 설치하기](docs/ko-KR/how-to/install-on-your-runtime.md)를 참조하세요.
 

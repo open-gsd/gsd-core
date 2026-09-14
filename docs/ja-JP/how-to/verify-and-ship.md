@@ -86,7 +86,7 @@ PR の本文はプランニング成果物から自動的に組み立てられ�
 /gsd-code-review 1 --depth=deep  # インポートグラフを含むクロスファイル分析
 ```
 
-サイクルの早い段階でのプランレビューに Gemini、Codex、その他のレビュアーを設定するには [クロス AI レビューの設定](set-up-cross-ai-review.md) を参照してください。
+サイクルの早い段階でのプランレビューに Antigravity、Codex、その他のレビュアーを設定するには [クロス AI レビューの設定](set-up-cross-ai-review.md) を参照してください。
 
 ---
 

@@ -85,7 +85,7 @@ O histórico git exibirá um commit por tarefa (de cada executor), seguido de co
 
 ## Execução Cross-AI
 
-Para delegar a execução a uma CLI de IA externa (Codex, Gemini, etc.) configurada em `workflow.cross_ai_command`:
+Para delegar a execução a uma CLI de IA externa (Codex, Antigravity, etc.) configurada em `workflow.cross_ai_command`:
 
 ```bash
 /gsd-execute-phase 2 --cross-ai

@@ -86,7 +86,7 @@ Não é necessário escrever o corpo manualmente.
 /gsd-code-review 1 --depth=deep  # Análise entre arquivos incluindo grafos de importação
 ```
 
-Consulte [Configurar revisão entre IAs](set-up-cross-ai-review.md) para configurar o Gemini, Codex ou outros revisores para revisão de planos mais cedo no ciclo.
+Consulte [Configurar revisão entre IAs](set-up-cross-ai-review.md) para configurar o Antigravity, Codex ou outros revisores para revisão de planos mais cedo no ciclo.
 
 ---
 

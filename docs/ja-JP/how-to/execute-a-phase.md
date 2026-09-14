@@ -85,7 +85,7 @@ Git の履歴には、各エグゼキュータからのタスクごとのコミ�
 
 ## クロス AI 実行
 
-`workflow.cross_ai_command` で設定された外部 AI CLI（Codex、Gemini など）に実行を委任するには:
+`workflow.cross_ai_command` で設定された外部 AI CLI（Codex、Antigravity など）に実行を委任するには:
 
 ```bash
 /gsd-execute-phase 2 --cross-ai

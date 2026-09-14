@@ -1166,7 +1166,7 @@ fix(03-01): correct auth token expiry
 
 **コマンド:** `/gsd-review --phase N [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy] [--antigravity] [--ollama] [--lm-studio] [--llama-cpp] [--kimi-code] [--all]`
 
-**目的:** 外部の AI CLI（Gemini、Claude、Codex、CodeRabbit、OpenCode、Qwen Code、Cursor、Antigravity、Kimi Code）とローカルの OpenAI 互換サーバー（Ollama、LM Studio、llama.cpp）を呼び出して、フェーズプランを独立してレビューします。レビュアーごとのフィードバックを含む構造化された REVIEWS.md を生成します。
+**目的:** 外部の AI CLI（Claude、Codex、CodeRabbit、OpenCode、Qwen Code、Cursor、Antigravity、Kimi Code）とローカルの OpenAI 互換サーバー（Ollama、LM Studio、llama.cpp）を呼び出して、フェーズプランを独立してレビューします。レビュアーごとのフィードバックを含む構造化された REVIEWS.md を生成します。
 
 **要件:**
 - REQ-REVIEW-01: システムはシステム上で利用可能な AI CLI を検出しなければならない
@@ -1430,7 +1430,7 @@ Claude が GSD ワークフローコンテキスト外でファイル編集を�
 **目的:** 1回のインタラクティブなインストールセッションで複数のランタイムを選択します。
 
 **要件:**
-- REQ-MULTI-RT-01: インタラクティブプロンプトはマルチセレクトをサポートしなければならない（例: Claude Code + Gemini）
+- REQ-MULTI-RT-01: インタラクティブプロンプトはマルチセレクトをサポートしなければならない（例: Claude Code + Antigravity）
 - REQ-MULTI-RT-02: CLI フラグは非インタラクティブインストールで引き続き動作しなければならない
 
 **プロセス:**
@@ -1672,13 +1672,13 @@ Claude が GSD ワークフローコンテキスト外でファイル編集を�
 **要件:**
 - REQ-SKILLS-01: インストーラーは Claude Code 2.1.88+ 向けに `skills/gsd-*/SKILL.md` を書き込まなければならない
 - REQ-SKILLS-02: インストーラーはレガシー `commands/gsd/` ディレクトリを自動クリーンしなければならない
-- REQ-SKILLS-03: Gemini パスを通じて古い Claude Code バージョンとの後方互換性を維持しなければならない
+- REQ-SKILLS-03: レガシー `commands/gsd/` パスを通じて古い Claude Code バージョンとの後方互換性を維持しなければならない
 
 **プロセス:**
 1. **検出** — Claude Code のバージョンをチェックしてスキルサポートを判定
 2. **マイグレーション** — 各 GSD コマンドに対して `skills/gsd-*/SKILL.md` ファイルを書き込み
 3. **クリーン** — スキルがインストールされた場合、レガシー `commands/gsd/` ディレクトリを削除
-4. **フォールバック** — 古い Claude Code バージョンのために Gemini パス互換性を維持
+4. **フォールバック** — 古い Claude Code バージョンのためにレガシー `commands/gsd/` パス互換性を維持
 
 ---
 
@@ -2952,7 +2952,7 @@ Source commit: abc1234 (3 commits behind HEAD)
 
 **要件:**
 - REQ-QUOTA-01: クォータ失敗は即時再試行を主要な回復として提供してはならない。
-- REQ-QUOTA-02: 分類は Claude、Copilot、Codex、Gemini、および汎用プロバイダーセンチネルをカバーしなければならない。
+- REQ-QUOTA-02: 分類は Claude、Copilot、Codex、および汎用プロバイダーセンチネルをカバーしなければならない。
 - REQ-QUOTA-03: 非クォータ失敗は通常の実行失敗パスを継続しなければならない。
 
 **参照:** [プロバイダーレート制限シグナル](../research/provider-rate-limit-signals.md)

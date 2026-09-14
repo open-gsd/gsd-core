@@ -113,6 +113,7 @@ module.exports = {
   "tests/issue-version-gate.test.cjs",
   "tests/kimi-upgrades.test.cjs",
   "tests/lint-docs-command-form.test.cjs",
+  "tests/lint-retired-runtime-name.test.cjs",
   "tests/lint-workflow-shellcheck-fetch.test.cjs",
   "tests/list-seeds.test.cjs",
   "tests/markdown-sectionizer.test.cjs",

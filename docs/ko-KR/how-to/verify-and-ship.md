@@ -86,7 +86,7 @@ PR 본문은 기획 산출물에서 자동으로 조합됩니다:
 /gsd-code-review 1 --depth=deep  # 임포트 그래프를 포함한 파일 간 분석
 ```
 
-주기 초반의 계획 리뷰를 위해 Gemini, Codex 또는 다른 리뷰어를 설정하려면 [크로스 AI 리뷰 설정](set-up-cross-ai-review.md)을 참고하세요.
+주기 초반의 계획 리뷰를 위해 Antigravity, Codex 또는 다른 리뷰어를 설정하려면 [크로스 AI 리뷰 설정](set-up-cross-ai-review.md)을 참고하세요.
 
 ---
 

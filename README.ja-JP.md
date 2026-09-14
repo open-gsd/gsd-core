@@ -6,7 +6,7 @@
 
 [English](README.md) · [Português](README.pt-BR.md) · [简体中文](README.zh-CN.md) · **日本語** · [한국어](README.ko-KR.md)
 
-**Claude Code、OpenCode、Gemini CLI、Kilo、Codex、Copilot、Cursor、Windsurf などに対応した、軽量なメタプロンプティング・コンテキストエンジニアリング・仕様駆動開発システムです。**
+**Claude Code、OpenCode、Antigravity CLI、Kimi CLI、Kilo、Codex、Copilot、Cursor、Windsurf などに対応した、軽量なメタプロンプティング・コンテキストエンジニアリング・仕様駆動開発システムです。**
 
 [![npm version](https://img.shields.io/npm/v/%40opengsd%2Fgsd-core?style=for-the-badge&logo=npm&logoColor=white&color=CB3837)](https://www.npmjs.com/package/@opengsd/gsd-core)
 [![npm downloads](https://img.shields.io/npm/dm/%40opengsd%2Fgsd-core?style=for-the-badge&logo=npm&logoColor=white&color=CB3837)](https://www.npmjs.com/package/@opengsd/gsd-core)
@@ -21,7 +21,7 @@
 
 ## GSD Core とは
 
-GSD Core は、コンテキストエンジニアリングと仕様駆動開発のフレームワークです。AI コーディングエージェント（Claude Code、Codex、Gemini CLI、Copilot、Cursor など）を規律あるフェーズループで動かします。[コンテキストの腐敗](docs/ja-JP/explanation/context-engineering.md)—AI がコンテキストウィンドウを埋めるにつれて出力品質が低下する問題—を解決するために、重いリサーチ・計画・実行作業をすべて新鮮なコンテキストのサブエージェントで実行し、メインセッションをスリムに保ちます。
+GSD Core は、コンテキストエンジニアリングと仕様駆動開発のフレームワークです。AI コーディングエージェント（Claude Code、Codex、Antigravity CLI、Kimi CLI、Copilot、Cursor など）を規律あるフェーズループで動かします。[コンテキストの腐敗](docs/ja-JP/explanation/context-engineering.md)—AI がコンテキストウィンドウを埋めるにつれて出力品質が低下する問題—を解決するために、重いリサーチ・計画・実行作業をすべて新鮮なコンテキストのサブエージェントで実行し、メインセッションをスリムに保ちます。
 
 ---
 
@@ -43,7 +43,7 @@ GSD Core は、コンテキストエンジニアリングと仕様駆動開発�
 npx @opengsd/gsd-core@latest
 ```
 
-インストーラーはランタイム（Claude Code、OpenCode、Gemini CLI、Kilo、Codex、Copilot、Cursor、Windsurf など）とグローバルインストールかローカルインストールかを尋ねます。クロスランタイム互換性のためにインストーラーが必要です。`agents/` や `commands/` からファイルを直接コピーしないでください。
+インストーラーはランタイム（Claude Code、OpenCode、Antigravity CLI、Kimi CLI、Kilo、Codex、Copilot、Cursor、Windsurf など）とグローバルインストールかローカルインストールかを尋ねます。クロスランタイム互換性のためにインストーラーが必要です。`agents/` や `commands/` からファイルを直接コピーしないでください。
 
 別のランタイムをお使いの場合や Node.js がない場合は [ランタイムへのインストール](docs/ja-JP/how-to/install-on-your-runtime.md) を参照してください。
 
