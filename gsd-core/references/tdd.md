@@ -178,10 +178,21 @@ cargo test    # Rust
 ```
 
 **5. Create first test file:**
-Follow project conventions for test location:
-- `*.test.ts` / `*.spec.ts` next to source
+Follow project conventions for test location. The RED-commit gate
+(`workflows/execute-phase.md`) recognises these, at any depth including the repo root:
+- `*.test.*` / `*.spec.*` next to source — JS/TS and anything sharing the convention
 - `__tests__/` directory
 - `tests/` directory at root
+- `*_test.go` — Go
+- `test_*.py` / `*_test.py` — Python (in addition to `tests/`)
+- `*_test.exs` — Elixir
+- `*_spec.rb` / `*_test.rb` — Ruby
+
+**Known gap — Rust (#4379).** `#[test]` conventionally lives inside the implementation file, so a
+Rust RED commit touches `src/*.rs` and no path-based gate can distinguish it from ordinary source.
+Widening the pathspec to cover it would match all source and make the gate meaningless. `cargo test`
+works; the RED-*commit* gate cannot see it, so a Rust project using `workflow.tdd_mode` should
+expect the gate to trip.
 
 Framework setup is a one-time cost included in the first TDD plan's RED phase.
 </framework_setup>
