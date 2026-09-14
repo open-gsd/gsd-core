@@ -1154,16 +1154,27 @@ describe('bug #3683 — workflow/reference colon-namespace leak (Claude local in
   ];
 
   // Structural markers that legitimately use `gsd:` and are NOT slash commands.
-  // Two shapes, both enumerated rather than inferred:
-  //   • anything inside an HTML comment — `<!-- gsd:section … -->`,
-  //     `<!-- gsd:protected:start -->`, `<!-- gsd:loop-host`,
-  //     `<!-- gsd:plan-revision-conflicts:begin -->`, `<!-- gsd: no compact … -->`
-  //   • these bare tokens, which appear outside comments
+  // Enumerated BY FAMILY, never by "it sits in a comment": a blanket
+  // comment-context waiver would also wave through a genuinely broken command
+  // reference that merely happens to be commented out, e.g.
+  // `<!-- see /gsd:typo-cmd -->`, which is exactly the leak this guard exists
+  // to catch.
+  const COMMENT_MARKER_TOKENS = new Set([
+    'section',                  // <!-- gsd:section id="…" when="…" --> / <!-- /gsd:section -->
+    'protected',                // <!-- gsd:protected:start --> / :end
+    'loop-host',                // <!-- gsd:loop-host … -->
+    'plan-revision-conflicts',  // <!-- gsd:plan-revision-conflicts:begin --> / :end
+    'live-dom-families',        // <!-- gsd:live-dom-families -->
+    'write-continue',           // <!-- gsd:write-continue … -->
+  ]);
   const BARE_MARKER_TOKENS = new Set([
     'guard',      // `# gsd:guard=orchestrator-cwd-drift`
     'dispatch',   // `[gsd:dispatch phase="…" plan="…"]`
   ]);
-  const HTML_COMMENT_MARKER = /<!--[^>]*gsd:/;
+  const IN_HTML_COMMENT = /<!--[^>]*gsd:/;
+  // `<!-- gsd: no compact sibling … -->` — the compact-content disclosure
+  // banner. Its token is empty, so it is matched by shape rather than by name.
+  const COMPACT_DISCLOSURE = /<!--\s*gsd:\s/;
 
   function collect(dir, out = []) {
     let entries;
@@ -1215,8 +1226,10 @@ describe('bug #3683 — workflow/reference colon-namespace leak (Claude local in
           if (convertibleAt.has(m.index)) continue;           // installer handles it
           const lineNo = src.slice(0, m.index).split(/\r?\n/).length;
           const line = lines[lineNo - 1] || '';
-          if (HTML_COMMENT_MARKER.test(line)) continue;        // structural marker
           if (BARE_MARKER_TOKENS.has(m[1])) continue;          // structural marker
+          const inComment = IN_HTML_COMMENT.test(line);
+          if (inComment && COMMENT_MARKER_TOKENS.has(m[1])) continue;
+          if (inComment && m[1] === '' && COMPACT_DISCLOSURE.test(line)) continue;
           violations.push(
             `${path.relative(ROOT, file)}:${lineNo}: "${m[0]}" in "${line.trim().slice(0, 90)}"`,
           );
@@ -1265,41 +1278,93 @@ describe('bug #3683 — workflow/reference colon-namespace leak (Claude local in
       );
     });
 
-    // ROW 3 — cross-surface parity. help/modes/topic.md tells the model which bold
-    // signature line to extract from help/modes/full.md. full.md is converted at
-    // install time, so a literal prefix baked into topic.md's rule can never match
-    // and `/gsd-help --brief <topic>` degrades silently to its fallback branch.
-    test('help topic-mode signature rule names no literal command prefix', () => {
-      const topic = path.join(ROOT, 'gsd-core', 'workflows', 'help', 'modes', 'topic.md');
-      const full = path.join(ROOT, 'gsd-core', 'workflows', 'help', 'modes', 'full.md');
-      assert.ok(fs.existsSync(topic), 'help/modes/topic.md must exist');
-      assert.ok(fs.existsSync(full), 'help/modes/full.md must exist');
+    // ROW 3 — cross-surface parity, across BOTH served reference variants.
+    // topic.md tells the model which bold signature line to extract AND where
+    // that line's one-line summary sits. Two things can go wrong, and both did:
+    //   1. a literal prefix baked into the rule can never match the installed
+    //      reference, which is converted to hyphen form at install time; and
+    //   2. the two served variants put the summary in DIFFERENT places —
+    //      full.md on the following line, full.compact.md trailing an em-dash on
+    //      the signature line itself. A rule that knows only one shape emits the
+    //      following `Usage:` line as if it were the summary.
+    test('help topic-mode rule covers every served reference variant', () => {
+      const modes = path.join(ROOT, 'gsd-core', 'workflows', 'help', 'modes');
+      const topicPath = path.join(modes, 'topic.md');
+      assert.ok(fs.existsSync(topicPath), 'help/modes/topic.md must exist');
+
+      const variants = ['full.md', 'full.compact.md']
+        .map((name) => ({ name, file: path.join(modes, name) }))
+        .filter((v) => fs.existsSync(v.file));
+      assert.equal(variants.length, 2, 'both full.md and full.compact.md must ship');
+
+      const shapes = new Set();
+      for (const variant of variants) {
+        // allow-test-rule: source-text-is-the-product (#4324)
+        // The installed reference text IS what the model reads; its rendered
+        // shape is the contract topic.md's extraction rule is written against.
+        const converted = transformContentToHyphen(
+          fs.readFileSync(variant.file, 'utf-8'), cmdNames,
+        );
+        const lines = converted.split(/\r?\n/);
+        const signatureLines = lines.filter((l) => /^\*\*`\/gsd[-:]/.test(l));
+        assert.ok(
+          signatureLines.length > 0,
+          `${variant.name} must contain command-signature bold lines`,
+        );
+
+        const prefixes = new Set(
+          signatureLines.map((l) => l.match(/^\*\*`(\/gsd[-:])/)[1]),
+        );
+        assert.deepEqual(
+          [...prefixes], ['/gsd-'],
+          `${variant.name} must ship only the hyphen signature prefix after install conversion`,
+        );
+
+        for (const l of signatureLines) {
+          shapes.add(/\*\*\s+—\s+\S/.test(l) ? 'same-line' : 'next-line');
+        }
+      }
+
+      // The variants genuinely disagree. This is WHY topic.md's rule must branch,
+      // and it is asserted rather than assumed: if the corpus ever collapses to a
+      // single placement, the two-case rule can be simplified — deliberately.
+      assert.deepEqual(
+        [...shapes].sort(), ['next-line', 'same-line'],
+        'the served variants must between them use both summary placements',
+      );
 
       // allow-test-rule: source-text-is-the-product (#4324)
-      // Both files are shipped workflow text the runtime loads; the parity between
-      // the extraction rule and the reference it reads is the deployed contract.
-      const fullConverted = transformContentToHyphen(fs.readFileSync(full, 'utf-8'), cmdNames);
-      const shipped = new Set(
-        [...fullConverted.matchAll(/^\*\*`(\/gsd[-:])/gm)].map((m) => m[1]),
-      );
+      // topic.md is shipped workflow text the runtime loads; its wording is the
+      // deployed contract, so the wording is what must be asserted.
+      const topic = fs.readFileSync(topicPath, 'utf-8');
+      const topicConverted = transformContentToHyphen(topic, cmdNames);
+
+      // (a) no literal command prefix baked into a bold-signature instruction —
+      //     such a prefix can never match the converted reference.
+      const instructed = [...topicConverted.matchAll(/\*\*`(\/gsd[-:])/g)].map((m) => m[1]);
       assert.deepEqual(
-        [...shipped],
-        ['/gsd-'],
-        'full.md must ship exactly one signature prefix, and it must be the hyphen form',
+        instructed, [],
+        `topic.md bakes the literal prefix(es) ${JSON.stringify(instructed)} into a ` +
+        `bold-signature instruction, but the installed reference ships '/gsd-' after ` +
+        `conversion — the match can never succeed and --brief silently falls back to ` +
+        `"heading + first paragraph" on every topic (#4324).`,
       );
 
-      const topicConverted = transformContentToHyphen(fs.readFileSync(topic, 'utf-8'), cmdNames);
-      const instructed = [...topicConverted.matchAll(/\*\*`(\/gsd[-:])/g)].map((m) => m[1]);
-      const mismatched = instructed.filter((p) => !shipped.has(p));
-      assert.deepEqual(
-        mismatched,
-        [],
-        `topic.md instructs the model to match a bold signature line prefixed ` +
-        `${JSON.stringify(mismatched)}, but full.md ships ${JSON.stringify([...shipped])} ` +
-        `after install conversion — the match can never succeed and --brief silently ` +
-        `falls back to "heading + first paragraph" on every topic (#4324). ` +
-        `Describe the signature line without baking in a literal prefix.`,
-      );
+      // (b) the rule must actually COVER both placements. Without this, (a) is
+      //     vacuous: any rewording that merely avoids spelling a literal prefix
+      //     would pass, including one that handles only a single variant.
+      for (const [needle, why] of [
+        [/Locating the summary/, 'a named sub-rule that says where the summary sits'],
+        [/em-dash/, 'the full.compact.md case — summary trailing an em-dash on the signature line'],
+        [/single non-blank line immediately after/, 'the full.md case — summary on the following line'],
+        [/`Usage:` line is never a summary/, 'the guard against emitting a Usage: line as the summary'],
+      ]) {
+        assert.match(
+          topic, needle,
+          `topic.md must retain ${why}; without it the compact variant emits the ` +
+          `following "Usage:" line as if it were the one-line summary (#4324).`,
+        );
+      }
     });
   });
 
