@@ -18,7 +18,6 @@ Check which AI CLIs are available on the system:
 ```bash
 _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; GSD_TOOLS="${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}"; _gsd_at() { for _p; do if [ -f "$_p" ]; then GSD_TOOLS="$_p"; return 0; fi; done; return 1; }; if _gsd_at "${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.codex/gsd-core/bin/${_GSD_SHIM_NAME}"; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif unset -f gsd_run; _G="$(command -v gsd_run)"; then GSD_TOOLS="$_G"; gsd_run() { "$GSD_TOOLS" "$@"; }; elif _gsd_at "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/${_GSD_SHIM_NAME}" "${HERMES_HOME:-$HOME/.hermes}/gsd-core/bin/${_GSD_SHIM_NAME}" "${CURSOR_CONFIG_DIR:-$HOME/.cursor}/gsd-core/bin/${_GSD_SHIM_NAME}" "${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/${_GSD_SHIM_NAME}" "${GEMINI_CONFIG_DIR:-$HOME/.gemini}/gsd-core/bin/${_GSD_SHIM_NAME}" "${COPILOT_CONFIG_DIR:-$HOME/.copilot}/gsd-core/bin/${_GSD_SHIM_NAME}" "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}/gsd-core/bin/${_GSD_SHIM_NAME}" "${AUGMENT_CONFIG_DIR:-$HOME/.augment}/gsd-core/bin/${_GSD_SHIM_NAME}" "${TRAE_CONFIG_DIR:-$HOME/.trae}/gsd-core/bin/${_GSD_SHIM_NAME}" "${QWEN_CONFIG_DIR:-$HOME/.qwen}/gsd-core/bin/${_GSD_SHIM_NAME}" "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}/gsd-core/bin/${_GSD_SHIM_NAME}" "${CLINE_CONFIG_DIR:-$HOME/.cline}/gsd-core/bin/${_GSD_SHIM_NAME}" "${GROK_AGENTS_HOME:-$HOME/.agents}/gsd-core/bin/${_GSD_SHIM_NAME}" "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}/gsd-core/bin/${_GSD_SHIM_NAME}" "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}/gsd-core/bin/${_GSD_SHIM_NAME}" "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}/gsd-core/bin/${_GSD_SHIM_NAME}"; then gsd_run() { node "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd_run is not on PATH. Run: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi; GSD_IDENTITY_STATUS=unverified; case "$(gsd_run runtime-identity --raw 2>/dev/null || true)" in '{"packageName":"@opengsd/gsd-core"'*'}') GSD_IDENTITY_STATUS=ok;; esac; export GSD_IDENTITY_STATUS; [ "$GSD_IDENTITY_STATUS" = ok ] || echo "WARNING: \"$GSD_TOOLS\" did not prove it is @opengsd/gsd-core - it is either a different package or an @opengsd/gsd-core older than the runtime-identity verb. See docs/how-to/diagnose-a-foreign-gsd-tools.md" >&2; if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "${GSD_TOOLS:-}" ]; then printf "export PATH='%s':\"\$PATH\"\n" "${GSD_TOOLS%/*}" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true; fi
 # Check each CLI
-command -v gemini >/dev/null 2>&1 && echo "gemini:available" || echo "gemini:missing"
 command -v claude >/dev/null 2>&1 && echo "claude:available" || echo "claude:missing"
 command -v codex >/dev/null 2>&1 && echo "codex:available" || echo "codex:missing"
 command -v coderabbit >/dev/null 2>&1 && echo "coderabbit:available" || echo "coderabbit:missing"
@@ -62,15 +61,14 @@ that lane. Tell the user to install jq:
 ```
 NOTE: jq is not on PATH — the ollama, lm_studio, llama_cpp, opencode, and
 antigravity reviewer lanes are unavailable. Install jq (https://jqlang.org/download/)
-or select a lane that does not require it (--gemini, --claude, --codex,
+or select a lane that does not require it (--claude, --codex,
 --coderabbit, --qwen, --cursor).
 ```
 
-The remaining lanes (`gemini`, `claude`, `codex`, `coderabbit`, `qwen`, `cursor`)
+The remaining lanes (`claude`, `codex`, `coderabbit`, `qwen`, `cursor`)
 do not require jq and must stay selectable on a jq-less host.
 
 Parse flags from `$ARGUMENTS`:
-- `--gemini` → include Gemini
 - `--claude` → include Claude
 - `--codex` → include Codex
 - `--coderabbit` → include CodeRabbit
@@ -86,7 +84,7 @@ Parse flags from `$ARGUMENTS`:
 - No flags → if `review.default_reviewers` is set, include only configured reviewers that are detected; otherwise include all available
 
 Reviewer-selection precedence:
-1. Individual reviewer flags (`--gemini`, `--codex`, etc.)
+1. Individual reviewer flags (`--claude`, `--codex`, etc.)
 2. `--all`
 3. `review.default_reviewers`
 4. No key + no flags → all detected reviewers
@@ -94,7 +92,7 @@ Reviewer-selection precedence:
 **Explicit reviewer flags are an assertion, not a preference (ADR-2782 D4).** A lane the user
 named on the command line and that cannot run is an **error**, surfaced and non-silent — even
 when other named lanes did run. Do not proceed with a thinner reviewer set and report success:
-`--gemini --qwen` on a host without `qwen` fails, it does not quietly become a Gemini-only
+`--codex --qwen` on a host without `qwen` fails, it does not quietly become a Codex-only
 review. This applies however the lane became unavailable — binary missing, prerequisite `jq`
 absent, or a local server not reachable.
 
@@ -103,7 +101,7 @@ lane somebody asked for is an error.* A user who wants "whatever is available" h
 user who wants a preferred set has `review.default_reviewers`. Both stay lenient below.
 
 `review.default_reviewers` behavior:
-- Value must be a non-empty array of slug strings (configured via `gsd config-set review.default_reviewers '["gemini","codex"]'`)
+- Value must be a non-empty array of slug strings (configured via `gsd config-set review.default_reviewers '["codex","claude"]'`)
 - Unknown slugs warn and are ignored
 - Known-but-undetected slugs emit an info note and are ignored — a configured default is a
   preference evaluated across many hosts, so a subset being present is expected, not an error
@@ -116,7 +114,6 @@ If `section_manifest` is `null` or `"reviewer-instances-note-1"` is in its `incl
 If no CLIs are available:
 ```
 No external AI CLIs found. Install at least one:
-- gemini: https://github.com/google-gemini/gemini-cli
 - codex: https://github.com/openai/codex
 - claude: https://github.com/anthropics/claude-code
 - opencode: https://opencode.ai (leverages GitHub Copilot subscription models)
@@ -142,7 +139,7 @@ elif [ -n "$CLAUDE_CODE_ENTRYPOINT" ]; then
   # Running inside Claude Code CLI — skip claude for independence
   SELF_CLI="claude"
 else
-  # Other environments (Gemini CLI, Codex CLI, etc.)
+  # Other environments (Codex CLI, Antigravity CLI, etc.)
   # Fall back to AI self-identification to decide which CLI to skip
   SELF_CLI="auto"
 fi
@@ -150,7 +147,7 @@ fi
 
 Rules:
 - If `SELF_CLI="none"` → invoke ALL available CLIs (no skip)
-- If `SELF_CLI="claude"` → skip claude, use gemini/codex
+- If `SELF_CLI="claude"` → skip claude, use codex/antigravity
 - If `SELF_CLI="auto"` → the executing AI identifies itself and skips its own CLI
 - At least one DIFFERENT CLI must be available for the review to proceed.
 </step>
@@ -731,7 +728,7 @@ a lane, its `value` already carries a `(reasoning=<level>)` suffix (e.g.
 ```markdown
 ---
 phase: {N}
-reviewers: [gemini, claude, codex, coderabbit, opencode, qwen, cursor, antigravity, ollama, lm_studio, llama_cpp]  # populate at runtime with only the reviewers actually invoked
+reviewers: [claude, codex, coderabbit, opencode, qwen, cursor, antigravity, ollama, lm_studio, llama_cpp]  # populate at runtime with only the reviewers actually invoked
 reviewed_at: {ISO timestamp}
 plans_reviewed: [{list of PLAN.md files}]
 models:                   # resolved model per reviewer; `unknown` when not recoverable

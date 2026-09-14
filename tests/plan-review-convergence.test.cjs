@@ -116,7 +116,7 @@ describe('plan-review-convergence command source (#2306)', () => {
 
   test('command declares all reviewer flags in context', () => {
     assert.ok(command.includes('--codex'), 'must document --codex flag');
-    assert.ok(command.includes('--gemini'), 'must document --gemini flag');
+    assert.ok(command.includes('--coderabbit'), 'must document --coderabbit flag');
     assert.ok(command.includes('--claude'), 'must document --claude flag');
     assert.ok(command.includes('--opencode'), 'must document --opencode flag');
     assert.ok(command.includes('--all'), 'must document --all flag');
@@ -272,10 +272,10 @@ describe('plan-review-convergence: --agy/--antigravity reviewer whitelist (#2293
     // invocation (no flag) MUST yield an empty REVIEWER_FLAGS here; the default
     // is resolved later in step 1.5 against review.default_reviewers.
     assert.strictEqual(run('5'), '', 'no reviewer flag → empty REVIEWER_FLAGS from parse (default applied in step 1.5 per #2315)');
-    const mixed = run('5 --codex --gemini');
-    assert.ok(mixed.includes('--codex') && mixed.includes('--gemini'), 'existing flags still recognized');
+    const mixed = run('5 --codex --coderabbit');
+    assert.ok(mixed.includes('--codex') && mixed.includes('--coderabbit'), 'existing flags still recognized');
     // --agy must not be spuriously matched by an unrelated flag (independence).
-    assert.ok(!run('5 --gemini').includes('--agy'), '--gemini must not trip the --agy whitelist');
+    assert.ok(!run('5 --coderabbit').includes('--agy'), '--coderabbit must not trip the --agy whitelist');
   });
 });
 
@@ -377,7 +377,7 @@ describe('plan-review-convergence: #2315 respects review.default_reviewers (no-f
   //   - bare + default_reviewers configured → empty REVIEWER_FLAGS (gsd-review applies default)
   //   - bare + default_reviewers unset      → --codex fallback (pre-fix behavior preserved)
   //   - bare + empty-array default          → --codex fallback (defensive — schema would reject)
-  //   - explicit --gemini + default set     → --gemini wins (explicit flags unaffected, #2315 AC5)
+  //   - explicit --codex + default set      → --codex wins (explicit flags unaffected, #2315 AC5)
   test('[behavioral] no-flag invocation resolves to default_reviewers when configured, --codex otherwise', (t) => {
     if (process.platform === 'win32') { t.skip('POSIX shell extraction; not run on Windows'); return; }
     if (!jqAvailable) { t.skip('jq not on PATH — workflow resolution block pipes through jq (production dependency, review.md:244); structural tests above still validate the fix'); return; }
@@ -444,9 +444,9 @@ describe('plan-review-convergence: #2315 respects review.default_reviewers (no-f
     r = run({ args: '5', defaultReviewers: '[]' });
     assert.ok(/REVIEWER_FLAGS=\[--codex\]/.test(r), `empty-array default → --codex fallback, got: "${r}"`);
 
-    // AC5 (out of scope but must not regress): explicit --gemini overrides configured default.
-    r = run({ args: '5 --gemini', defaultReviewers: '["claude"]' });
-    assert.ok(/REVIEWER_FLAGS=\[.*--gemini.*\]/.test(r), `explicit flag wins over configured default, got: "${r}"`);
+    // AC5 (out of scope but must not regress): explicit --codex overrides configured default.
+    r = run({ args: '5 --codex', defaultReviewers: '["claude"]' });
+    assert.ok(/REVIEWER_FLAGS=\[.*--codex.*\]/.test(r), `explicit flag wins over configured default, got: "${r}"`);
   });
 
   // Property test — CLAUDE.md mandates at least one fast-check (fc) property

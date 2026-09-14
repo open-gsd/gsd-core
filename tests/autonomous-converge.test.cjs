@@ -119,7 +119,7 @@ describe('autonomous --converge flag (#711)', () => {
     // They must now be DERIVED at runtime via `gsd_run review-lane flags`, not listed.
     const formerlyHardcodedLaneFlags = [
       '--codex',
-      '--gemini',
+      '--qwen',
       '--claude',
       '--opencode',
       '--ollama',

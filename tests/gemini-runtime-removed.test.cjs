@@ -428,4 +428,104 @@ describe('#4709 no shipped surface mints a retired runtime id', () => {
         + 'support. Labels must match the runtime label table (src/runtime-name-policy.cts '
         + `RUNTIME_LABELS), so a retired runtime cannot linger here. Offenders:\n  ${offenders.join('\n  ')}`);
   });
+
+/**
+ * #4709 Phase 3 — the Gemini CLI reviewer lane is retired.
+ *
+ * #1928 removed the gemini RUNTIME in 1.8.0 after Google sunset Gemini CLI on 2026-06-18. The
+ * reviewer lane was re-created afterwards by the reviewer-lane-as-manifest-data work (6a9babda69,
+ * #2798/#2837) — per the maintainer that re-creation was an error in that buildout, not a
+ * decision, so retiring it corrects a mistake and needs no ADR-2782 amendment.
+ *
+ * The lane spawned `gemini {{model}} -p -`, a binary Google no longer serves for the
+ * free/Pro/Ultra tiers that ARE GSD's audience.
+ *
+ * Every assertion below is STRUCTURAL — a declared lane, an owned config key, a capability count.
+ * None asserts that the string "gemini" is absent, because that string is load-bearing across
+ * Antigravity's real on-disk contract (~/.gemini/antigravity, ~/.gemini/config, hookEvents
+ * "gemini", GEMINI.md) and across Google's own model IDs. The Antigravity block below is the
+ * negative space that keeps this removal from overreaching.
+ */
+describe('#4709 the Gemini CLI reviewer lane is retired', () => {
+  const reviewerIds = () => Object.keys(registry.capabilities)
+    .filter((id) => registry.capabilities[id] && registry.capabilities[id].reviewer);
+
+  test('capabilities/gemini/ no longer exists', () => {
+    assert.strictEqual(
+      fs.existsSync(path.join(ROOT, 'capabilities', 'gemini')),
+      false,
+      'the gemini capability directory must be deleted, not emptied',
+    );
+  });
+
+  test('no capability declares a gemini reviewer lane', () => {
+    const offenders = reviewerIds().filter((id) => {
+      const rev = registry.capabilities[id].reviewer;
+      return id === 'gemini' || rev.slug === 'gemini' || (rev.flags || []).includes('--gemini');
+    });
+    assert.deepStrictEqual(
+      offenders,
+      [],
+      'a reviewer lane still resolves for the retired Gemini CLI; --gemini would spawn a binary '
+        + `Google stopped serving on 2026-06-18. Offenders: ${offenders.join(', ')}`,
+    );
+  });
+
+  test('no config key is owned for the retired lane', () => {
+    const offenders = Object.keys(registry.configKeys).filter((k) => /\.gemini$/.test(k));
+    assert.deepStrictEqual(
+      offenders,
+      [],
+      'the retired lane still owns config keys, so `gsd config-set` would accept settings for a '
+        + `lane that cannot run. Offenders:\n  ${offenders.join('\n  ')}`,
+    );
+  });
+
+  test('exactly 11 reviewer lanes remain', () => {
+    // Counted from the registry, not hardcoded per-name, so adding a 12th lane later cannot
+    // silently re-admit gemini under cover of the count still "looking right".
+    const ids = reviewerIds().sort();
+    assert.strictEqual(
+      ids.length,
+      11,
+      `expected 11 reviewer lanes after retiring gemini, got ${ids.length}: ${ids.join(', ')}`,
+    );
+    assert.ok(!ids.includes('gemini'), 'gemini must not be among them');
+  });
+
+  test("Antigravity's reviewer lane is untouched (negative space)", () => {
+    const agy = registry.capabilities.antigravity;
+    assert.ok(agy && agy.reviewer, 'antigravity must still declare a reviewer lane');
+    assert.strictEqual(agy.reviewer.slug, 'antigravity');
+    for (const flag of ['--antigravity', '--agy']) {
+      assert.ok(
+        (agy.reviewer.flags || []).includes(flag),
+        `antigravity must keep its ${flag} flag`,
+      );
+    }
+    // Its own keys survive, including the deliberately `agy`-suffixed model key.
+    for (const key of [
+      'review.models.agy',
+      'review.timeouts.antigravity',
+      'review.max_prompt_tokens_per_reviewer.antigravity',
+    ]) {
+      assert.ok(
+        Object.prototype.hasOwnProperty.call(registry.configKeys, key),
+        `antigravity must still own ${key}`,
+      );
+    }
+  });
+
+  test('the other ten lanes are untouched (negative space)', () => {
+    const expected = [
+      'antigravity', 'claude', 'coderabbit', 'codex', 'cursor',
+      'kimi-code', 'llama-cpp', 'lm-studio', 'ollama', 'opencode', 'qwen',
+    ];
+    assert.deepStrictEqual(
+      reviewerIds().sort(),
+      expected,
+      'retiring gemini must remove exactly one lane and disturb no other',
+    );
+  });
+});
 });

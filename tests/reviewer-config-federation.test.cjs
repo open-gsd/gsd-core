@@ -33,7 +33,6 @@ const { REVIEWER_LANES } = require('../gsd-core/bin/lib/review-lane-descriptor.c
 
 /** Keys that moved to a lane capability, with the lane that must own each. */
 const FEDERATED = {
-  'review.models.gemini': 'gemini',
   'review.models.claude': 'claude',
   'review.models.codex': 'codex',
   'review.models.opencode': 'opencode',

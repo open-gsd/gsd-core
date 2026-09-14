@@ -218,7 +218,7 @@ WebSearch에서 가져온 패키지는 `[ASSUMED]`(`[VERIFIED]`가 아님)로 �
 | 인수 / 플래그 | 필수 | 설명 |
 |-----------------|----------|-------------|
 | `N` | **예** | 계획 및 리뷰할 단계 번호 |
-| 리뷰어 플래그 | 아니요 | 모든 리뷰어 레인 플래그를 그대로 전달: `--gemini`, `--claude`, `--codex`, `--coderabbit`, `--opencode`, `--qwen`, `--cursor`, `--agy` / `--antigravity`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--kimi-code` |
+| 리뷰어 플래그 | 아니요 | 모든 리뷰어 레인 플래그를 그대로 전달: `--claude`, `--codex`, `--coderabbit`, `--opencode`, `--qwen`, `--cursor`, `--agy` / `--antigravity`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--kimi-code` |
 | `--all` | 아니요 | 구성된 모든 리뷰어를 실행합니다. 레인은 기본적으로 **순차적으로** 디스패치되며, `review.parallel_lanes`를 `true`로 설정하면 단일 리뷰 패스 내에서 동시에 디스패치됩니다 |
 | `--max-cycles N` | 아니요 | 사이클 상한 재정의 (기본값 3) |
 
@@ -1244,7 +1244,6 @@ AI 시스템 구축을 포함하는 단계에 대한 AI-SPEC.md 디자인 계약
 
 | 플래그 | 설명 |
 |------|-------------|
-| `--gemini` | Gemini CLI 검토 포함 |
 | `--claude` | Claude CLI 검토 포함 (별도 세션) |
 | `--codex` | Codex CLI 검토 포함 |
 | `--coderabbit` | CodeRabbit 검토 포함 |
@@ -1260,7 +1259,7 @@ AI 시스템 구축을 포함하는 단계에 대한 AI-SPEC.md 디자인 계약
 
 **기본 리뷰어 동작 (플래그 없음):**
 - `review.default_reviewers`가 **설정되지 않은** 경우, `/gsd-review`는 감지된 모든 리뷰어를 실행합니다 (현재 기본 동작).
-- `review.default_reviewers`가 **설정된** 경우, `/gsd-review`는 해당 하위 집합만 실행합니다 (예: `["gemini","codex"]`).
+- `review.default_reviewers`가 **설정된** 경우, `/gsd-review`는 해당 하위 집합만 실행합니다 (예: `["codex","claude"]`).
 - `--all`은 항상 설정을 재정의하고 전체 감지된 집합을 실행합니다.
 - 명시적 플래그 (예: `--cursor`)는 해당 실행에 대해 `--all`과 설정 기본값 모두를 재정의합니다.
 
@@ -1268,11 +1267,11 @@ AI 시스템 구축을 포함하는 단계에 대한 AI-SPEC.md 디자인 계약
 
 ```bash
 # 플래그 없는 /gsd-review 실행을 위한 프로젝트 기본 리뷰어 설정
-gsd config-set review.default_reviewers '["gemini","codex"]'
+gsd config-set review.default_reviewers '["codex","claude"]'
 
-/gsd-review --phase 2             # 설정에서 gemini+codex 실행
+/gsd-review --phase 2             # 설정에서 codex+claude 실행
 /gsd-review --phase 3 --all
-/gsd-review --phase 2 --gemini
+/gsd-review --phase 2 --codex
 /gsd-review --phase 2 --cursor    # 일회성 재정의
 ```
 

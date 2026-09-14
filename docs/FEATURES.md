@@ -1414,9 +1414,9 @@ When verification returns `human_needed`, items are persisted as a trackable HUM
 
 ### 42. Cross-AI Peer Review
 
-**Command:** `/gsd-review --phase N [--gemini] [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy] [--antigravity] [--ollama] [--lm-studio] [--llama-cpp] [--kimi-code] [--all]`
+**Command:** `/gsd-review --phase N [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy] [--antigravity] [--ollama] [--lm-studio] [--llama-cpp] [--kimi-code] [--all]`
 
-**Purpose:** Invoke external AI CLIs (Gemini, Claude, Codex, CodeRabbit, OpenCode, Qwen Code, Cursor, Antigravity, Kimi Code) and local OpenAI-compatible servers (Ollama, LM Studio, llama.cpp) to independently review phase plans. Produces structured REVIEWS.md with per-reviewer feedback.
+**Purpose:** Invoke external AI CLIs (Claude, Codex, CodeRabbit, OpenCode, Qwen Code, Cursor, Antigravity, Kimi Code) and local OpenAI-compatible servers (Ollama, LM Studio, llama.cpp) to independently review phase plans. Produces structured REVIEWS.md with per-reviewer feedback.
 
 Each reviewer is a **declared lane**: its binary, prompt and output channels, timeout, availability probe, and empty-output policy come from a capability manifest rather than hand-written per-CLI logic, so a reviewer can be shipped as an installable capability instead of a core change.
 
@@ -3735,7 +3735,7 @@ See [Resolve verify-command path findings](how-to/resolve-verify-command-path-fi
 
 **Config key:** `review.parallel_lanes` (default `false`)
 
-**Purpose:** Reviewer lanes within one review pass have no data dependency on each other — they all inspect the same immutable plan snapshot — but were dispatched strictly one at a time, so a pass with Codex, Gemini and Claude cost roughly the sum of three long reviewer calls. The serialization was a deliberate, unconditional protection against provider rate limits, which made it a global policy imposed on users whose providers could comfortably take concurrent requests, or who run local model servers with no limits at all (#3034).
+**Purpose:** Reviewer lanes within one review pass have no data dependency on each other — they all inspect the same immutable plan snapshot — but were dispatched strictly one at a time, so a pass with Codex, Antigravity and Claude cost roughly the sum of three long reviewer calls. The serialization was a deliberate, unconditional protection against provider rate limits, which made it a global policy imposed on users whose providers could comfortably take concurrent requests, or who run local model servers with no limits at all (#3034).
 
 **Behavior:** With the key enabled, the `invoke_reviewers` step dispatches each selected lane as a background job and joins all of them before `REVIEWS.md` and consensus are rendered. Wall-clock cost falls toward the slowest lane rather than the sum. Default remains `false`, preserving the existing sequential dispatch and its rate-limit protection.
 

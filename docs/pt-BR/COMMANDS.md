@@ -218,7 +218,7 @@ Loop de convergência de planos cross-AI — replaneja com feedback de revisão 
 | Argumento / Flag | Obrigatório | Descrição |
 |------------------|-------------|-----------|
 | `N` | **Sim** | Número da fase a planejar e revisar |
-| Flags de revisor | Não | Repassa todas as flags de lane de revisor: `--gemini`, `--claude`, `--codex`, `--coderabbit`, `--opencode`, `--qwen`, `--cursor`, `--agy` / `--antigravity`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--kimi-code` |
+| Flags de revisor | Não | Repassa todas as flags de lane de revisor: `--claude`, `--codex`, `--coderabbit`, `--opencode`, `--qwen`, `--cursor`, `--agy` / `--antigravity`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--kimi-code` |
 | `--all` | Não | Executa todos os revisores configurados. As lanes são despachadas **sequencialmente** por padrão; defina `review.parallel_lanes` como `true` para despachá-las simultaneamente em uma única passagem de revisão |
 | `--max-cycles N` | Não | Substitui o limite de ciclos (padrão 3) |
 
@@ -1241,7 +1241,6 @@ Revisão por pares cross-AI de planos de fase a partir de CLIs de IA externas.
 
 | Flag | Descrição |
 |------|-----------|
-| `--gemini` | Inclui revisão pelo Gemini CLI |
 | `--claude` | Inclui revisão pelo Claude CLI (sessão separada) |
 | `--codex` | Inclui revisão pelo Codex CLI |
 | `--coderabbit` | Inclui revisão pelo CodeRabbit |
@@ -1257,7 +1256,7 @@ Revisão por pares cross-AI de planos de fase a partir de CLIs de IA externas.
 
 **Comportamento do revisor padrão (sem flags):**
 - Se `review.default_reviewers` estiver **não definido**, `/gsd-review` executa todos os revisores detectados (comportamento padrão atual).
-- Se `review.default_reviewers` estiver **definido**, `/gsd-review` executa somente esse subconjunto (por exemplo `["gemini","codex"]`).
+- Se `review.default_reviewers` estiver **definido**, `/gsd-review` executa somente esse subconjunto (por exemplo `["codex","claude"]`).
 - `--all` sempre substitui a configuração e executa o conjunto detectado completo.
 - Flags explícitas (por exemplo `--cursor`) substituem tanto `--all` quanto os padrões de configuração para aquela execução.
 
@@ -1265,11 +1264,11 @@ Revisão por pares cross-AI de planos de fase a partir de CLIs de IA externas.
 
 ```bash
 # define revisores padrão do projeto para execuções de /gsd-review sem flag
-gsd config-set review.default_reviewers '["gemini","codex"]'
+gsd config-set review.default_reviewers '["codex","claude"]'
 
-/gsd-review --phase 2             # executa gemini+codex da configuração
+/gsd-review --phase 2             # executa codex+claude da configuração
 /gsd-review --phase 3 --all
-/gsd-review --phase 2 --gemini
+/gsd-review --phase 2 --codex
 /gsd-review --phase 2 --cursor    # substituição avulsa
 ```
 

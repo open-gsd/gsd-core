@@ -105,7 +105,7 @@ if [ -z "$REVIEWER_FLAGS" ]; then
   fi
 else
   # Strip the leading space accumulated by the parse block so the banner renders
-  # "Reviewers: --gemini" not "Reviewers:  --gemini" (#2315 review nit).
+  # "Reviewers: --codex" not "Reviewers:  --codex" (#2315 review nit).
   REVIEWER_DISPLAY="${REVIEWER_FLAGS# }"
 fi
 ```

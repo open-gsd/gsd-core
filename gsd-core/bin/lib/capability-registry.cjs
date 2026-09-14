@@ -1790,69 +1790,6 @@ const capabilities = {
       }
     ]
   },
-  "gemini": {
-    "id": "gemini",
-    "role": "reviewer",
-    "version": "1.14.0",
-    "title": "Gemini CLI",
-    "description": "Google Gemini CLI — cross-AI /gsd:review reviewer lane only; not a GSD install target (no runtime body, no artifacts). Spawned as `gemini -p - -m <model>` with the plan piped on stdin.",
-    "tier": "full",
-    "requires": [],
-    "engines": {
-      "gsd": ">=1.8.0"
-    },
-    "reviewer": {
-      "slug": "gemini",
-      "flags": [
-        "--gemini"
-      ],
-      "transport": "spawn",
-      "probe": {
-        "kind": "command-exists",
-        "binary": "gemini"
-      },
-      "invoke": {
-        "binary": "gemini",
-        "args": [
-          "{{model}}",
-          "-p",
-          "-"
-        ],
-        "promptChannel": "stdin",
-        "outputChannel": "stdout",
-        "modelArg": "-m",
-        "effortChannel": "none"
-      },
-      "timeoutFloorMs": 900000,
-      "timeoutConfigKey": "review.timeouts.gemini",
-      "emptyOutput": "stub-with-stderr",
-      "reviewsSection": "Gemini",
-      "evidenceClass": "source-grounded",
-      "requiresBinaries": [],
-      "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.gemini",
-      "modelConfigKey": "review.models.gemini",
-      "effortConfigKey": null,
-      "defaultEffort": null,
-      "handler": null
-    },
-    "config": {
-      "review.models.gemini": {
-        "type": "string",
-        "default": "",
-        "description": "Model passed to the Gemini reviewer lane."
-      },
-      "review.max_prompt_tokens_per_reviewer.gemini": {
-        "type": "number",
-        "default": -1,
-        "description": "Prompt-token budget for the Gemini reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
-      },
-      "review.timeouts.gemini": {
-        "type": "number",
-        "default": -1,
-        "description": "Outer wall-clock timeout override (seconds) for the Gemini reviewer lane. Unset is -1, a sentinel: 0 or a negative number is also treated as unset (a timeout has no legitimate zero/negative value), so no second sentinel is needed. Falls back to the lane's built-in timeoutFloorMs when unset."
-      }
-    }
-  },
   "graphify": {
     "id": "graphify",
     "role": "feature",
@@ -4942,9 +4879,6 @@ const configKeys = {
   "external_job.submit_timeout_ms": "external-job",
   "external_job.poll_timeout_ms": "external-job",
   "workflow.post_planning_gaps": "gap-analysis",
-  "review.models.gemini": "gemini",
-  "review.max_prompt_tokens_per_reviewer.gemini": "gemini",
-  "review.timeouts.gemini": "gemini",
   "graphify.enabled": "graphify",
   "intel.enabled": "intel",
   "review.models.kimi-code": "kimi-code",
@@ -5237,24 +5171,6 @@ const configSchema = {
     "type": "boolean",
     "default": true,
     "description": "Run the post-planning gap analysis report after plans are generated."
-  },
-  "review.models.gemini": {
-    "owner": "gemini",
-    "type": "string",
-    "default": "",
-    "description": "Model passed to the Gemini reviewer lane."
-  },
-  "review.max_prompt_tokens_per_reviewer.gemini": {
-    "owner": "gemini",
-    "type": "number",
-    "default": -1,
-    "description": "Prompt-token budget for the Gemini reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
-  },
-  "review.timeouts.gemini": {
-    "owner": "gemini",
-    "type": "number",
-    "default": -1,
-    "description": "Outer wall-clock timeout override (seconds) for the Gemini reviewer lane. Unset is -1, a sentinel: 0 or a negative number is also treated as unset (a timeout has no legitimate zero/negative value), so no second sentinel is needed. Falls back to the lane's built-in timeoutFloorMs when unset."
   },
   "graphify.enabled": {
     "owner": "graphify",
@@ -8145,7 +8061,6 @@ const _requiresGraph = {
   "drift": [],
   "external-job": [],
   "gap-analysis": [],
-  "gemini": [],
   "graphify": [],
   "hermes": [],
   "intel": [],

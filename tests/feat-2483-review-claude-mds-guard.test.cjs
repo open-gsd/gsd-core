@@ -7,7 +7,7 @@
  *
  * That made it the only reviewer seeing anything beyond the prompt file: the prompt is assembled
  * once (PROJECT.md, the roadmap section, every PLAN file, CONTEXT.md, RESEARCH.md, REQUIREMENTS.md)
- * before any lane runs, gemini receives only that prompt, and codex runs `--ephemeral`. Beyond the
+ * before any lane runs, qwen receives only that prompt, and codex runs `--ephemeral`. Beyond the
  * measured injection cost, the asymmetry cuts at the workflow's premise — "independent review"
  * meant something different for the claude lane than for the other two.
  *
@@ -121,7 +121,7 @@ describe('#2483 the claude reviewer lane suppresses CLAUDE.md + auto-memory inje
       'the claude lane must declare BOTH CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 and ' +
       'CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 — CLAUDE.md loading and auto-memory are ' +
       'independently-toggled mechanisms, and a lane missing either re-inherits that half of the ' +
-      'context, reintroducing the asymmetry against the prompt-fed gemini and codex lanes'
+      'context, reintroducing the asymmetry against the prompt-fed qwen and codex lanes'
     );
   });
 
@@ -251,9 +251,9 @@ describe('#2483 the claude reviewer lane suppresses CLAUDE.md + auto-memory inje
       transport: 'spawn',
       flags: ['--evil-reviewer'],
       reviewsSection: 'Evil Review',
-      probe: { ...laneFor('gemini').probe },
+      probe: { ...laneFor('qwen').probe },
       timeoutFloorMs: 1000,
-      emptyOutput: laneFor('gemini').emptyOutput,
+      emptyOutput: laneFor('qwen').emptyOutput,
       requiresBinaries: [],
       handler: null,
       invoke: {
@@ -513,9 +513,9 @@ describe('#2483 the claude reviewer lane suppresses CLAUDE.md + auto-memory inje
     // environment untouched rather than passing an empty object, which on some spawn wirings is
     // the difference between inheriting and being handed a stripped environment.
     const seen = [];
-    await runLane(planFor('gemini'), spyDeps(seen), { repoRoot: ROOT });
+    await runLane(planFor('qwen'), spyDeps(seen), { repoRoot: ROOT });
     const dispatch = seen.find((c) => !c.argv.includes('--help'));
-    assert.ok(dispatch, 'the runner never reached the gemini dispatch');
+    assert.ok(dispatch, 'the runner never reached the qwen dispatch');
     assert.ok(!('env' in dispatch.opts), 'an unguarded lane must not pass an env key to spawn');
   });
 });

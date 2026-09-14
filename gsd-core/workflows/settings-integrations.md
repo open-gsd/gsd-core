@@ -163,7 +163,7 @@ namespace — any other slug fails with `Unknown config key`.
 Settable keys (the shipped registry's model-bearing lanes):
 
 `review.models.agy` (Antigravity), `review.models.claude`, `review.models.codex`,
-`review.models.cursor`, `review.models.gemini`, `review.models.kimi-code`,
+`review.models.cursor`, `review.models.kimi-code`,
 `review.models.llama_cpp`, `review.models.lm_studio`, `review.models.ollama`,
 `review.models.opencode`.
 
@@ -197,7 +197,6 @@ AskUserQuestion([
     options: [
       { label: "Claude", description: "review.models.claude — defaults to session model when unset" },
       { label: "Codex", description: "review.models.codex — bare model id injected into --model, e.g. 'gpt-5'" },
-      { label: "Gemini", description: "review.models.gemini — bare model id injected into -m, e.g. 'gemini-2.5-pro'" },
       { label: "OpenCode", description: "review.models.opencode — bare model id injected into --model, e.g. 'claude-sonnet-4'" }
     ]
   }

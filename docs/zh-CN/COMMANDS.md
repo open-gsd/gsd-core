@@ -218,7 +218,7 @@ v1.40 中，六个命名空间路由器作为第一阶段入口点随附发布�
 | 参数 / 标志 | 必填 | 描述 |
 |-----------------|----------|-------------|
 | `N` | **是** | 要规划和审查的阶段编号 |
-| 审查者标志 | 否 | 原样传递所有审查者通道标志：`--gemini`、`--claude`、`--codex`、`--coderabbit`、`--opencode`、`--qwen`、`--cursor`、`--agy` / `--antigravity`、`--ollama`、`--lm-studio`、`--llama-cpp`、`--kimi-code` |
+| 审查者标志 | 否 | 原样传递所有审查者通道标志：`--claude`、`--codex`、`--coderabbit`、`--opencode`、`--qwen`、`--cursor`、`--agy` / `--antigravity`、`--ollama`、`--lm-studio`、`--llama-cpp`、`--kimi-code` |
 | `--all` | 否 | 运行所有已配置的审查者。审查通道默认**顺序**分发；将 `review.parallel_lanes` 设为 `true` 可在单次审查中并发分发 |
 | `--max-cycles N` | 否 | 覆盖循环上限（默认 3） |
 
@@ -1238,7 +1238,6 @@ node gsd-tools.cjs intel api-surface              # 渲染 api-map.json → API-
 
 | 标志 | 描述 |
 |------|-------------|
-| `--gemini` | 包含 Gemini CLI 审查 |
 | `--claude` | 包含 Claude CLI 审查（独立会话） |
 | `--codex` | 包含 Codex CLI 审查 |
 | `--coderabbit` | 包含 CodeRabbit 审查 |
@@ -1254,7 +1253,7 @@ node gsd-tools.cjs intel api-surface              # 渲染 api-map.json → API-
 
 **默认审查者行为（无标志）：**
 - 如果 `review.default_reviewers` **未设置**，`/gsd-review` 运行所有检测到的审查者（当前默认行为）。
-- 如果 `review.default_reviewers` **已设置**，`/gsd-review` 仅运行该子集（例如 `["gemini","codex"]`）。
+- 如果 `review.default_reviewers` **已设置**，`/gsd-review` 仅运行该子集（例如 `["codex","claude"]`）。
 - `--all` 始终覆盖配置并运行完整的检测集。
 - 显式标志（例如 `--cursor`）在该次运行中覆盖 `--all` 和配置默认值。
 
@@ -1262,11 +1261,11 @@ node gsd-tools.cjs intel api-surface              # 渲染 api-map.json → API-
 
 ```bash
 # 设置项目默认审查者，用于无标志的 /gsd-review 运行
-gsd config-set review.default_reviewers '["gemini","codex"]'
+gsd config-set review.default_reviewers '["codex","claude"]'
 
-/gsd-review --phase 2             # 使用配置中的 gemini+codex 运行
+/gsd-review --phase 2             # 使用配置中的 codex+claude 运行
 /gsd-review --phase 3 --all
-/gsd-review --phase 2 --gemini
+/gsd-review --phase 2 --codex
 /gsd-review --phase 2 --cursor    # 一次性覆盖
 ```
 

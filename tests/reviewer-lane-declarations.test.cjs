@@ -85,8 +85,13 @@ const capabilityRegistry = require('../gsd-core/bin/lib/capability-registry.cjs'
 
 const ROOT = path.join(__dirname, '..');
 
-/** The five net-new lane-only `role:"reviewer"` capabilities (ADR-2782 D3). */
-const NEW_LANE_ONLY_IDS = ['gemini', 'coderabbit', 'ollama', 'lm-studio', 'llama-cpp'];
+/**
+ * The four net-new lane-only `role:"reviewer"` capabilities (ADR-2782 D3).
+ *
+ * Was five: `gemini` was retired by #4709 (Google sunset Gemini CLI 2026-06-18, the same sunset
+ * that removed the gemini RUNTIME in #1928/1.8.0), so `capabilities/gemini/` no longer exists.
+ */
+const NEW_LANE_ONLY_IDS = ['coderabbit', 'ollama', 'lm-studio', 'llama-cpp'];
 
 /** The six pre-existing dual-purpose `role:"runtime"` capabilities. */
 const RUNTIME_REVIEWER_IDS = ['antigravity', 'claude', 'codex', 'cursor', 'opencode', 'qwen'];
@@ -98,7 +103,7 @@ const RUNTIME_REVIEWER_IDS = ['antigravity', 'claude', 'codex', 'cursor', 'openc
  * refactor would otherwise sail through.
  */
 const LITERAL_ROSTER = [
-  'antigravity', 'claude', 'coderabbit', 'codex', 'cursor', 'gemini',
+  'antigravity', 'claude', 'coderabbit', 'codex', 'cursor',
   // `kimi-code` joined in Phase 5b (#2799, closes #2718) — see
   // kimiCodeIsDeclaredAndInvocableInThisPhase for why it landed here and not in 5a.
   'kimi-code',
@@ -212,8 +217,8 @@ describe('A. The five new lane-only capabilities', () => {
         `"${expectedSlug}" would fail KEBAB_RE as a folder/id — that is exactly the trap this row guards`,
       );
     }
-    // The other three new capabilities are single-word and unaffected: id === slug.
-    for (const id of ['gemini', 'coderabbit', 'ollama']) {
+    // The other two new capabilities are single-word and unaffected: id === slug.
+    for (const id of ['coderabbit', 'ollama']) {
       const cap = SHIPPED.capMap.get(id);
       assert.ok(KEBAB_RE.test(id), `capability id "${id}" must satisfy KEBAB_RE`);
       assert.equal(cap.reviewer.slug, id, `single-word capability "${id}" must have a matching slug`);
@@ -351,7 +356,7 @@ describe('C. Roster derivation — src/review-reviewer-selection.cts', () => {
     // KEYSTONE. This row is GREEN before and after #2801 — it is the invariant
     // the phase must not break, not a red row. The literal list is never
     // computed by the machinery under test.
-    assert.equal(KNOWN_REVIEWER_SLUGS.length, 12, 'roster must be exactly 12 — not 11, not 13');
+    assert.equal(KNOWN_REVIEWER_SLUGS.length, 11, 'roster must be exactly 11 — not 10, not 12');
     assert.deepEqual(
       [...KNOWN_REVIEWER_SLUGS].sort(), LITERAL_ROSTER,
       `roster must be exactly the declared lane set, got: ${JSON.stringify(KNOWN_REVIEWER_SLUGS)}`,
@@ -590,13 +595,13 @@ describe('D. Cross-phase invariants that must not regress', () => {
     // derivation would also surface here — normalizeReviewerInstances /
     // resolveReviewerSelection gate config_default membership on
     // KNOWN_REVIEWER_SLUGS.includes(...).
-    const detected = ['gemini', 'claude', 'qwen'];
+    const detected = ['codex', 'claude', 'qwen'];
 
     const explicit = resolveReviewerSelection({
-      detected, explicitFlags: ['gemini'], allFlag: true, configuredDefaultReviewers: ['claude'],
+      detected, explicitFlags: ['codex'], allFlag: true, configuredDefaultReviewers: ['claude'],
     });
     assert.equal(explicit.source, 'explicit_flags');
-    assert.deepEqual(explicit.selected, ['gemini']);
+    assert.deepEqual(explicit.selected, ['codex']);
 
     const allFlagResult = resolveReviewerSelection({
       detected, explicitFlags: [], allFlag: true, configuredDefaultReviewers: ['claude'],
@@ -633,8 +638,8 @@ describe('E. Lane fidelity — no translation layer', () => {
       }
     }
 
-    assert.equal(REVIEWER_LANES.length, 12, 'expected exactly 12 declared descriptor lanes');
-    assert.equal(bySlug.size, 12, `expected exactly 12 capabilities declaring a reviewer body, got: ${bySlug.size}`);
+    assert.equal(REVIEWER_LANES.length, 11, 'expected exactly 11 declared descriptor lanes');
+    assert.equal(bySlug.size, 11, `expected exactly 11 capabilities declaring a reviewer body, got: ${bySlug.size}`);
 
     // Top-level scalar/array fields compared whole; the two fields that are
     // themselves nested objects (probe, invoke) are compared sub-field-by-
@@ -712,8 +717,8 @@ describe('F. Isolated-security-review regressions', () => {
   test('slugIsTrimmedRatherThanDropped', () => {
     // The fix must NOT discard a slug that merely carries incidental whitespace.
     assert.deepEqual(
-      deriveReviewerSlugs({ capabilities: { x: { reviewer: { slug: '  gemini  ' } } } }),
-      ['gemini'],
+      deriveReviewerSlugs({ capabilities: { x: { reviewer: { slug: '  codex  ' } } } }),
+      ['codex'],
     );
   });
 
@@ -746,7 +751,7 @@ describe('F. Isolated-security-review regressions', () => {
     // The module under test already imported successfully above; assert the
     // derived roster is a usable array rather than a partially-initialised value.
     assert.ok(Array.isArray([...KNOWN_REVIEWER_SLUGS]), 'roster must be iterable after module load');
-    assert.equal(KNOWN_REVIEWER_SLUGS.length, 12, 'the real registry still yields the twelve lanes');
+    assert.equal(KNOWN_REVIEWER_SLUGS.length, 11, 'the real registry still yields the eleven lanes');
     // And the derivation itself is total over the shapes JSON can express.
     for (const hostile of [null, undefined, [], 0, 'x', { capabilities: null }, { capabilities: [] }]) {
       assert.doesNotThrow(

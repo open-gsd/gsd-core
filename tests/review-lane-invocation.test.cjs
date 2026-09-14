@@ -43,7 +43,6 @@ const FC = { seed: 42, numRuns: 200 };
 
 /** Config with every model key set, so the model-bearing rows exercise the configured branch. */
 const FULL_CONFIG = {
-  'review.models.gemini': 'G',
   'review.models.claude': 'C',
   'review.models.codex': 'X',
   'review.models.opencode': 'O',
@@ -78,7 +77,6 @@ const FILE_REF = fileRefPrompt(`${RUN}/gsd-review-prompt.md`, ROOT);
  * each still gets its own named constant since each describes an
  * independently-configured external tool, not a shared internal class norm.
  */
-const GEMINI_NATIVE_TIMEOUT_MS = 900000;
 const CLAUDE_NATIVE_TIMEOUT_MS = 1200000;
 const CODEX_NATIVE_TIMEOUT_MS = 1200000;
 const CODERABBIT_NATIVE_TIMEOUT_MS = 360000;
@@ -98,7 +96,6 @@ const KIMI_CODE_NATIVE_TIMEOUT_MS = 900000;
  * effort available. `stdin` is the prompt path for a stdin lane, `null` otherwise.
  */
 const GOLDEN = [
-  { slug: 'gemini', binary: 'gemini', argv: ['-m', 'G', '-p', '-'], stdin: true, out: 'stdout', timeout: GEMINI_NATIVE_TIMEOUT_MS },
   { slug: 'claude', binary: 'claude', argv: ['--model', 'C', '--effort', 'high', '-p', '-'], stdin: true, out: 'stdout', timeout: CLAUDE_NATIVE_TIMEOUT_MS },
   {
     slug: 'codex',
@@ -179,7 +176,7 @@ describe('#3274 — timeoutConfigKey resolves the outer wall-clock cap', () => {
     const r = resolve('antigravity', { config: { [AGY_KEY]: 900 } });
     // 900_000 here is the arithmetic result of this test's own input (900
     // configured seconds * 1000), not a reuse of any lane's *_NATIVE_TIMEOUT_MS
-    // golden default -- it only coincidentally matches GEMINI/QWEN/CURSOR/
+    // golden default -- it only coincidentally matches QWEN/CURSOR/
     // KIMI_CODE_NATIVE_TIMEOUT_MS (all 900000). antigravity's own native
     // default is ANTIGRAVITY_NATIVE_TIMEOUT_MS (600000), unrelated here.
     assert.equal(r.plan.timeoutMs, 900_000);
@@ -208,7 +205,7 @@ describe('#3274 — timeoutConfigKey resolves the outer wall-clock cap', () => {
   });
 
   test('a lane with no timeoutConfigKey field falls back like an unset key (row 7)', () => {
-    const lane = { ...REVIEWER_LANES.find((l) => l.slug === 'gemini') };
+    const lane = { ...REVIEWER_LANES.find((l) => l.slug === 'claude') };
     delete lane.timeoutConfigKey;
     const r = resolveLanePlan({ lane, configGet: () => 900, runDir: RUN, repoRoot: ROOT });
     assert.equal(r.ok, true);
@@ -231,9 +228,9 @@ describe('#3274 — timeoutConfigKey resolves the outer wall-clock cap', () => {
   });
 
   test("a non-antigravity lane's configured timeout does not touch argv (row 13)", () => {
-    const key = REVIEWER_LANES.find((l) => l.slug === 'gemini').timeoutConfigKey;
-    const unset = resolve('gemini', { config: {} });
-    const configured = resolve('gemini', { config: { [key]: 300 } });
+    const key = REVIEWER_LANES.find((l) => l.slug === 'claude').timeoutConfigKey;
+    const unset = resolve('claude', { config: {} });
+    const configured = resolve('claude', { config: { [key]: 300 } });
     assert.deepStrictEqual(configured.plan.argv, unset.plan.argv);
     assert.notEqual(configured.plan.timeoutMs, unset.plan.timeoutMs);
   });
@@ -344,7 +341,7 @@ describe('reviewer lane invocation — model resolution', () => {
     // `"null"` is the four literal characters `config-get --raw` prints for a missing key — every
     // bash leg tested for it. A config written by an older workflow can still contain it.
     for (const bad of [undefined, null, '', '   ', 'null', 'undefined']) {
-      const r = resolve('gemini', { config: { 'review.models.gemini': bad } });
+      const r = resolve('claude', { config: { 'review.models.claude': bad }, effortArgs: [] });
       assert.deepStrictEqual(r.plan.argv, ['-p', '-'], `${JSON.stringify(bad)} must not reach argv`);
     }
   });
@@ -353,15 +350,15 @@ describe('reviewer lane invocation — model resolution', () => {
     // String(0) would put "0" in as a model name. A wrong model silently reviewed is worse than no
     // override at all.
     for (const bad of [0, 1, true, false, [], {}, ['a']]) {
-      const r = resolve('gemini', { config: { 'review.models.gemini': bad } });
+      const r = resolve('claude', { config: { 'review.models.claude': bad }, effortArgs: [] });
       assert.deepStrictEqual(r.plan.argv, ['-p', '-'], `${JSON.stringify(bad)} must not reach argv`);
     }
   });
 
   test('shell metacharacters in a model value stay a single inert argv element', () => {
     const hostile = '; rm -rf /; $(whoami) `id` && echo "x"';
-    const r = resolve('gemini', { config: { 'review.models.gemini': hostile } });
-    assert.deepStrictEqual(r.plan.argv, ['-m', hostile, '-p', '-']);
+    const r = resolve('claude', { config: { 'review.models.claude': hostile }, effortArgs: [] });
+    assert.deepStrictEqual(r.plan.argv, ['--model', hostile, '-p', '-']);
     // Nothing here builds a shell string; the runner spawns with shell:false and an argv array.
     assert.equal(r.plan.argv.filter((a) => a === hostile).length, 1);
   });

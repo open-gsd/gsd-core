@@ -79,8 +79,8 @@ done
 **#3025 — Cross-runtime refuse guard (run BEFORE Step 2 resolution / Step 5 copy):**
 
 Skill content and directory layout are runtime-specific. The installer applies per-runtime
-converters, adapter headers, brand swaps, and layout rules at install time, and two runtimes
-(`grok`, `gemini`) resolve to ANOTHER runtime's skills root. A verbatim copy from one runtime's
+converters, adapter headers, brand swaps, and layout rules at install time, and one runtime
+(`grok`) resolves to ANOTHER runtime's skills root. A verbatim copy from one runtime's
 skills root therefore produces content the installer would never have written for the destination,
 and can damage a runtime the user never named. Every cross-runtime pair is unsafe (content and/or
 layout and/or aliasing); only identity (`--from` == `--to`) is safe. Refuse cross-runtime and point
