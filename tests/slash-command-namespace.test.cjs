@@ -1250,31 +1250,64 @@ describe('bug #3683 — workflow/reference colon-namespace leak (Claude local in
       );
     });
 
-    // ROW 2 — the reported symptom, at the exact surface the user sees.
-    test('command and skill descriptions convert cleanly to the hyphen namespace', () => {
-      const descFiles = [
-        path.join(ROOT, 'commands', 'gsd', 'quick-batch.md'),
-        path.join(ROOT, 'skills', 'gsd-quick-batch', 'SKILL.md'),
+    // ROW 2 — the reported symptom, asserted at the surface the user sees AND
+    // through the code that actually produces it.
+    //
+    // The first version of this test called `transformContentToHyphen` on the
+    // description line directly and passed — while a real install still shipped
+    // the colon form, because both hyphen-namespace skill converters rebuild
+    // `description:` from the raw frontmatter field and never run the transform
+    // on it. That is the difference between asserting the identity and asserting
+    // a proxy for it: drive the converter, or the next converter that forgets to
+    // normalise a field ships the same bug again (#4324).
+    test('installed skill descriptions carry no colon form', () => {
+      // allow-test-rule: integration-test-input (#4324)
+      // The command files are passed to the converters as DATA — real fixture
+      // input to the transformation under test — and the assertion is on the
+      // converter's emitted frontmatter, which is the text the host's skill
+      // picker renders and therefore the deployed contract itself.
+      const {
+        convertClaudeCommandToClaudeSkill,
+        convertClaudeCommandToClineSkill,
+      } = require(path.join(ROOT, 'bin', 'install.js'));
+
+      const converters = [
+        ['claude', convertClaudeCommandToClaudeSkill],
+        ['cline', convertClaudeCommandToClineSkill],
       ];
+
       const offenders = [];
-      for (const file of descFiles) {
+      let checked = 0;
+      for (const stem of cmdNames) {
+        const file = path.join(ROOT, 'commands', 'gsd', `${stem}.md`);
         if (!fs.existsSync(file)) continue;
-        // allow-test-rule: source-text-is-the-product (#4324)
-        // A frontmatter `description:` is rendered verbatim in the host's command
-        // picker; the shipped text is the user-visible contract.
         const src = fs.readFileSync(file, 'utf-8');
-        const descLine = src.split(/\r?\n/).find((l) => l.startsWith('description:'));
-        if (!descLine) continue;
-        const converted = transformContentToHyphen(descLine, cmdNames);
-        if (/gsd:/.test(converted)) {
-          offenders.push(`${path.relative(ROOT, file)}: ${converted.trim().slice(0, 110)}`);
+        for (const [label, convert] of converters) {
+          const emitted = convert(src, `gsd-${stem}`, null, cmdNames);
+          const descLine = emitted
+            .split(/\r?\n/)
+            .find((l) => l.startsWith('description:'));
+          if (!descLine) continue;
+          checked += 1;
+          if (/gsd:/.test(descLine)) {
+            offenders.push(
+              `${label} · commands/gsd/${stem}.md → ${descLine.trim().slice(0, 110)}`,
+            );
+          }
         }
       }
+
+      // Guard against the whole loop silently doing nothing.
+      assert.ok(
+        checked >= cmdNames.length,
+        `expected at least one emitted description per command per converter; checked ${checked}`,
+      );
       assert.deepEqual(
         offenders,
         [],
-        `A shipped description still shows the /gsd: colon form after the install ` +
-        `transform runs — this is the picker text #4324 reported.\n  ${offenders.join('\n  ')}`,
+        `A converter emitted a skill description still carrying the /gsd: colon ` +
+        `form. This is the picker text #4324 reported, and it reaches the user on ` +
+        `every install.\n  ${offenders.join('\n  ')}`,
       );
     });
 
