@@ -526,7 +526,7 @@ already empty). Say nothing and continue — the update flow is unchanged.
 
 Otherwise, render the report. Each entry carries `path`, `outcome`, and a
 `warnings` array of `{code, detail}` produced by a compatibility pass against
-the just-installed release — a renamed workflow it `@`-references, a `/gsd:`
+the just-installed release — a renamed workflow it `@`-references, a slash
 command that no longer exists, missing skill frontmatter. Render each entry's
 warnings under its path. Entries whose `outcome` starts with `skipped_` will
 **not** be restored; list them separately, with their reason, so the user knows

@@ -53,19 +53,29 @@ Emit a section from the full reference for the topic in `$ARGUMENTS`. Read `work
 
    Use the canonical alias from the leftmost column. Use the literal heading text from the matched cell. State the scope you are about to emit.
 
-5. Read `workflows/help/modes/full.md`. Strip `<reference>` / `</reference>` wrapper tags — never emit them. Apply the extraction rule for the matched table cell, modulated by scope:
+5. Read `workflows/help/modes/full.md` — when `workflow.compact_content` is on, the installed reference is its `full.compact.md` sibling instead, and the two differ in where a command's one-line summary sits (see *Locating the summary* below). Strip `<reference>` / `</reference>` wrapper tags — never emit them. Apply the extraction rule for the matched table cell, modulated by scope:
 
    5a. **Single section** (cell contains a single `` `## Heading` `` or `` `### Heading` ``):
    - *Full scope:* emit from that heading up to (but not including) the next sibling or higher-level heading.
-   - *Compact scope:* emit the heading, then the first `` **`/gsd:...`** `` bold line within the section (the signature) and the single non-blank line immediately after it (the one-line summary). If the section has no `` **`/gsd:...`** `` bold line, emit the heading and the first paragraph.
+   - *Compact scope:* emit the heading, then the first **command-signature** bold line within the section (a `` **`<command> [args]`** `` line, whatever prefix the installed reference uses) together with its one-line summary, located per *Locating the summary* below. If the section has no command-signature bold line, emit the heading and the first paragraph.
 
    5b. **Multiple sections joined by "plus"**: apply rule 5a to each listed section in document order and emit them sequentially with no gap between them.
 
-   5c. **Sub-block** (cell says `the /gsd:X block under ### Heading` or `the /gsd:X ... blocks under ### Heading`): within the named heading's section, start at each `` **`/gsd:X ...`** `` bold line.
-   - *Full scope:* stop immediately before the next `` **`/gsd:...`** `` bold line or the next heading, whichever comes first.
-   - *Compact scope:* emit the bold line and the single non-blank line immediately after it (the one-line summary).
+   5c. **Sub-block** (cell says `the <command> block under ### Heading` or `the <command> ... blocks under ### Heading`): within the named heading's section, start at each command-signature bold line for that command.
+   - *Full scope:* stop immediately before the next command-signature bold line or the next heading, whichever comes first.
+   - *Compact scope:* emit the bold line together with its one-line summary, located per *Locating the summary* below.
 
    For cells listing multiple sub-blocks, emit them sequentially.
+
+   **Locating the summary.** The summary sits in one of two places, and which one depends on which
+   reference variant is installed — decide per signature line, by looking at the line itself:
+   - If the signature line continues past its closing `**` with an em-dash followed by prose, that
+     trailing prose **is** the summary. Emit that one line and stop; do not also emit the line
+     after it.
+   - Otherwise the summary is the single non-blank line immediately after the signature line. Emit
+     both lines.
+   A `Usage:` line is never a summary. If applying the second case would emit one, emit the
+   signature line alone.
 
 6. After the section content, emit a single closing line:
 
