@@ -344,24 +344,37 @@ function cmdListTodos(cwd: string, area: string | undefined, raw: boolean): void
  * validated with requireSafePath before reading. Read-only — never mutates.
  */
 /**
+ * Seed id grammars. `SEED-YYMMDD-xxx` (date + 3 base36 chars, the shape
+ * `.planning/quick/` uses) is what plant-seed has minted since #4378 removed
+ * the shared `wc -l` counter; `SEED-NNN` is the legacy counter form, which
+ * keeps parsing forever — existing seeds must never lose their identity.
+ */
+const CANONICAL_SEED_ID_RE = /^SEED-(?:\d{6}-[a-z0-9]{3}|\d+)$/i;
+const SEED_ID_PREFIX_RE = /^(SEED-(?:\d{6}-[a-z0-9]{3}|\d+))/i;
+const SEED_SLUG_RE = /^SEED-(?:\d{6}-[a-z0-9]{3}|\d+)-(.+)$/i;
+
+/**
  * Derive the canonical `{ seed_id, slug }` from a seed filename stem and the
  * frontmatter `id:` value. Pure (no I/O) so it can be property-tested directly.
  *
- * seed_id: frontmatter `id:` when it matches `SEED-NNN`, else the numeric prefix
- * of the filename (`SEED-NNN-…`), else the whole stem. slug: the descriptive
- * remainder after `SEED-NNN-`, else the stem with a leading `SEED-` stripped.
- * `rawFmId` is `unknown` because frontmatter values are not guaranteed strings.
+ * seed_id: frontmatter `id:` when it matches a seed id grammar (`SEED-YYMMDD-xxx`
+ * or legacy `SEED-NNN`), else the id prefix of the filename (`SEED-…-<slug>`),
+ * else the whole stem. The prefix fallback must keep the FULL new-format id —
+ * truncating at the date gives every same-day seed the same id (#4378).
+ * slug: the descriptive remainder after the id, else the stem with a leading
+ * `SEED-` stripped. `rawFmId` is `unknown` because frontmatter values are not
+ * guaranteed strings.
  */
 function deriveSeedIdentity(stem: string, rawFmId: unknown): { seed_id: string; slug: string } {
   const fmId = typeof rawFmId === 'string' ? rawFmId.trim() : '';
   let seedId: string;
-  if (/^SEED-\d+$/i.test(fmId)) {
+  if (CANONICAL_SEED_ID_RE.test(fmId)) {
     seedId = fmId;
   } else {
-    const numMatch = stem.match(/^(SEED-\d+)/i);
-    seedId = numMatch ? numMatch[1] : stem;
+    const prefixMatch = stem.match(SEED_ID_PREFIX_RE);
+    seedId = prefixMatch ? prefixMatch[1] : stem;
   }
-  const slugMatch = stem.match(/^SEED-\d+-(.+)$/i);
+  const slugMatch = stem.match(SEED_SLUG_RE);
   const slug = slugMatch ? slugMatch[1] : stem.replace(/^SEED-/i, '');
   return { seed_id: seedId, slug };
 }
