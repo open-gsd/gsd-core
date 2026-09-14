@@ -1099,3 +1099,272 @@ describe('bug #3683 — workflow/reference colon-namespace leak (Claude local in
 });
   });
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// #4324 — colon tokens the install transform CANNOT convert leak to users
+// ────────────────────────────────────────────────────────────────────────
+//
+// Companion to the `#3443` invariant above, and deliberately its mirror image.
+// That one asserts the source stays COLON. This one asserts every colon token
+// in the source is one the installer can actually turn into hyphen form.
+//
+// The install rewrite (`transformContentToHyphen`) is gated on an exact match
+// against the `commands/gsd/*.md` stem list, so a `/gsd:<token>` whose token is
+// not a registered stem survives the install untouched and reaches the user as
+// the deprecated colon form. #4324 reported this as "all auto-suggestions are
+// still using the outdated /gsd:".
+//
+// That gate is load-bearing and must NOT be widened: it is the only thing
+// protecting the workflow DSL marker family (`gsd:section`, `gsd:protected`,
+// `gsd:loop-host`, `gsd:guard`, `gsd:dispatch`, `gsd:plan-revision-conflicts`),
+// which is parsed as a literal — `src/workflow-fragments.cts` pins
+// `CLOSE_TAG = '/gsd:section'`. The fix therefore belongs in the shipped text,
+// and this suite is what keeps it there.
+{
+  const { describe, test } = require('node:test');
+  const assert = require('node:assert/strict');
+  const fs = require('node:fs');
+  const path = require('node:path');
+
+  const ROOT = path.join(__dirname, '..');
+  const FIXER = path.join(ROOT, 'scripts', 'fix-slash-commands.cjs');
+  // Drive the REAL production transform with the REAL roster. A roster invented
+  // here could only confirm what this test's author already believed about the
+  // gate (fixture-provenance rule, #2371).
+  const {
+    transformContentToHyphen,
+    buildColonPattern,
+    readCmdNames,
+    SKIP_DIRS,
+  } = require(FIXER);
+
+  const cmdNames = readCmdNames();
+
+  // Shipped surfaces whose text the runtime loads and shows the user. `skills/`
+  // is included here although the #3443 scan omits it: a SKILL.md `description:`
+  // is rendered in the host's command picker, which is exactly the surface #4324
+  // was filed about.
+  const SCAN_DIRS = [
+    path.join(ROOT, 'commands', 'gsd'),
+    path.join(ROOT, 'agents'),
+    path.join(ROOT, 'gsd-core', 'workflows'),
+    path.join(ROOT, 'gsd-core', 'references'),
+    path.join(ROOT, 'gsd-core', 'templates'),
+    path.join(ROOT, 'skills'),
+  ];
+
+  // Structural markers that legitimately use `gsd:` and are NOT slash commands.
+  // Two shapes, both enumerated rather than inferred:
+  //   • anything inside an HTML comment — `<!-- gsd:section … -->`,
+  //     `<!-- gsd:protected:start -->`, `<!-- gsd:loop-host`,
+  //     `<!-- gsd:plan-revision-conflicts:begin -->`, `<!-- gsd: no compact … -->`
+  //   • these bare tokens, which appear outside comments
+  const BARE_MARKER_TOKENS = new Set([
+    'guard',      // `# gsd:guard=orchestrator-cwd-drift`
+    'dispatch',   // `[gsd:dispatch phase="…" plan="…"]`
+  ]);
+  const HTML_COMMENT_MARKER = /<!--[^>]*gsd:/;
+
+  function collect(dir, out = []) {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (SKIP_DIRS.has(e.name)) continue;
+        collect(full, out);
+      } else if (e.name.endsWith('.md')) {
+        out.push(full);
+      }
+    }
+    return out;
+  }
+
+  const shippedFiles = SCAN_DIRS.flatMap((d) => collect(d));
+
+  // Same lookbehind as buildColonPattern, so match indices from the two regexes
+  // are directly comparable.
+  const ANY_COLON_TOKEN = /(?<![a-zA-Z0-9_-])gsd:([a-zA-Z0-9_-]*)/g;
+
+  describe('install-convertibility of colon tokens (#4324)', () => {
+    test('the scan corpus and the real roster are both populated', () => {
+      assert.ok(cmdNames.length > 0, 'commands/gsd/ must yield a non-empty roster');
+      assert.ok(shippedFiles.length > 0, 'SCAN_DIRS must yield shipped .md files');
+      assert.ok(cmdNames.includes('quick'), 'quick must be a registered command stem');
+    });
+
+    // ROW 1 — the failing-first regression test for #4324.
+    test('every gsd: token in user-facing source is convertible or a declared structural marker', () => {
+      const colonPattern = buildColonPattern(cmdNames);
+      assert.ok(colonPattern, 'buildColonPattern must compile for a non-empty roster');
+
+      const violations = [];
+      for (const file of shippedFiles) {
+        // allow-test-rule: source-text-is-the-product (#4324)
+        // These are shipped command/agent/workflow/skill bodies — their text IS
+        // what the runtime loads and renders, so the deployed text is the contract.
+        const src = fs.readFileSync(file, 'utf-8');
+        if (!src.includes('gsd:')) continue;
+
+        const convertibleAt = new Set(
+          [...src.matchAll(new RegExp(colonPattern.source, 'g'))].map((m) => m.index),
+        );
+        const lines = src.split(/\r?\n/);
+
+        for (const m of src.matchAll(ANY_COLON_TOKEN)) {
+          if (convertibleAt.has(m.index)) continue;           // installer handles it
+          const lineNo = src.slice(0, m.index).split(/\r?\n/).length;
+          const line = lines[lineNo - 1] || '';
+          if (HTML_COMMENT_MARKER.test(line)) continue;        // structural marker
+          if (BARE_MARKER_TOKENS.has(m[1])) continue;          // structural marker
+          violations.push(
+            `${path.relative(ROOT, file)}:${lineNo}: "${m[0]}" in "${line.trim().slice(0, 90)}"`,
+          );
+        }
+      }
+
+      assert.deepEqual(
+        violations,
+        [],
+        `Found ${violations.length} colon token(s) the install transform cannot convert — ` +
+        `they reach the user as the deprecated /gsd: form (#4324).\n` +
+        `Fix the SHIPPED TEXT, not the transform: the command-stem gate protects the ` +
+        `gsd:section / gsd:protected / gsd:loop-host marker family.\n` +
+        `Either close the command token at a boundary ("\`/gsd:quick\`-shaped", not ` +
+        `"/gsd:quick-shaped"), stop rendering a non-command as a slash command, or ` +
+        `declare a new structural marker in BARE_MARKER_TOKENS.\n` +
+        `Offenders:\n  ${violations.join('\n  ')}`,
+      );
+    });
+
+    // ROW 2 — the reported symptom, at the exact surface the user sees.
+    test('command and skill descriptions convert cleanly to the hyphen namespace', () => {
+      const descFiles = [
+        path.join(ROOT, 'commands', 'gsd', 'quick-batch.md'),
+        path.join(ROOT, 'skills', 'gsd-quick-batch', 'SKILL.md'),
+      ];
+      const offenders = [];
+      for (const file of descFiles) {
+        if (!fs.existsSync(file)) continue;
+        // allow-test-rule: source-text-is-the-product (#4324)
+        // A frontmatter `description:` is rendered verbatim in the host's command
+        // picker; the shipped text is the user-visible contract.
+        const src = fs.readFileSync(file, 'utf-8');
+        const descLine = src.split(/\r?\n/).find((l) => l.startsWith('description:'));
+        if (!descLine) continue;
+        const converted = transformContentToHyphen(descLine, cmdNames);
+        if (/gsd:/.test(converted)) {
+          offenders.push(`${path.relative(ROOT, file)}: ${converted.trim().slice(0, 110)}`);
+        }
+      }
+      assert.deepEqual(
+        offenders,
+        [],
+        `A shipped description still shows the /gsd: colon form after the install ` +
+        `transform runs — this is the picker text #4324 reported.\n  ${offenders.join('\n  ')}`,
+      );
+    });
+
+    // ROW 3 — cross-surface parity. help/modes/topic.md tells the model which bold
+    // signature line to extract from help/modes/full.md. full.md is converted at
+    // install time, so a literal prefix baked into topic.md's rule can never match
+    // and `/gsd-help --brief <topic>` degrades silently to its fallback branch.
+    test('help topic-mode signature rule names no literal command prefix', () => {
+      const topic = path.join(ROOT, 'gsd-core', 'workflows', 'help', 'modes', 'topic.md');
+      const full = path.join(ROOT, 'gsd-core', 'workflows', 'help', 'modes', 'full.md');
+      assert.ok(fs.existsSync(topic), 'help/modes/topic.md must exist');
+      assert.ok(fs.existsSync(full), 'help/modes/full.md must exist');
+
+      // allow-test-rule: source-text-is-the-product (#4324)
+      // Both files are shipped workflow text the runtime loads; the parity between
+      // the extraction rule and the reference it reads is the deployed contract.
+      const fullConverted = transformContentToHyphen(fs.readFileSync(full, 'utf-8'), cmdNames);
+      const shipped = new Set(
+        [...fullConverted.matchAll(/^\*\*`(\/gsd[-:])/gm)].map((m) => m[1]),
+      );
+      assert.deepEqual(
+        [...shipped],
+        ['/gsd-'],
+        'full.md must ship exactly one signature prefix, and it must be the hyphen form',
+      );
+
+      const topicConverted = transformContentToHyphen(fs.readFileSync(topic, 'utf-8'), cmdNames);
+      const instructed = [...topicConverted.matchAll(/\*\*`(\/gsd[-:])/g)].map((m) => m[1]);
+      const mismatched = instructed.filter((p) => !shipped.has(p));
+      assert.deepEqual(
+        mismatched,
+        [],
+        `topic.md instructs the model to match a bold signature line prefixed ` +
+        `${JSON.stringify(mismatched)}, but full.md ships ${JSON.stringify([...shipped])} ` +
+        `after install conversion — the match can never succeed and --brief silently ` +
+        `falls back to "heading + first paragraph" on every topic (#4324). ` +
+        `Describe the signature line without baking in a literal prefix.`,
+      );
+    });
+  });
+
+  // The gate's own boundary behaviour. These characterize WHY the residuals above
+  // escape, so a future editor cannot "fix" #4324 by widening the gate without
+  // reding the marker guard directly below.
+  describe('colon-gate boundary behaviour (#4324)', () => {
+    test('a command stem at a token boundary converts', () => {
+      for (const input of ['/gsd:quick ', '`/gsd:quick`', '/gsd:quick.', '/gsd:quick']) {
+        assert.match(
+          transformContentToHyphen(input, cmdNames),
+          /gsd-quick/,
+          `expected ${JSON.stringify(input)} to convert`,
+        );
+      }
+    });
+
+    test('a command stem followed by a hyphen is not a command token', () => {
+      // `quick` is a stem, but `quick-shaped` is not, and the right-hand lookahead
+      // rejects the following `-`. Nothing matches — this is the #4324 mechanism.
+      assert.equal(transformContentToHyphen('/gsd:quick-shaped', cmdNames), '/gsd:quick-shaped');
+    });
+
+    test('longest-stem-first ordering is preserved', () => {
+      assert.equal(transformContentToHyphen('/gsd:quick-batch', cmdNames), '/gsd-quick-batch');
+    });
+
+    test('an empty roster converts nothing', () => {
+      assert.equal(buildColonPattern([]), null);
+      assert.equal(transformContentToHyphen('/gsd:quick', []), '/gsd:quick');
+    });
+
+    test('non-command gsd- identifiers are left alone', () => {
+      for (const input of ['/gsd-sdk', '/gsd-tools']) {
+        assert.equal(transformContentToHyphen(input, cmdNames), input);
+      }
+    });
+
+    // NEGATIVE SPACE — the guard that makes "just un-gate the regex" fail loudly.
+    test('structural markers survive the install transform unchanged', () => {
+      const markers = [
+        '<!-- gsd:section id="converge-loop" when="state:plan-strategy-converge" -->',
+        '<!-- /gsd:section -->',
+        '<!-- gsd:protected:start -->',
+        '<!-- gsd:protected:end -->',
+        '<!-- gsd:loop-host',
+        '<!-- gsd:plan-revision-conflicts:begin -->',
+        '<!-- gsd:plan-revision-conflicts:end -->',
+        '# gsd:guard=orchestrator-cwd-drift',
+        '[gsd:dispatch phase="{phase_number}" plan="{plan_id}"]',
+        '<!-- gsd:live-dom-families -->',
+      ];
+      for (const marker of markers) {
+        assert.equal(
+          transformContentToHyphen(marker, cmdNames),
+          marker,
+          `structural marker must survive byte-identical: ${marker}`,
+        );
+        // CRLF variant — same verdict.
+        assert.equal(
+          transformContentToHyphen(`${marker}\r\n`, cmdNames),
+          `${marker}\r\n`,
+          `structural marker must survive byte-identical under CRLF: ${marker}`,
+        );
+      }
+    });
+  });
+}
