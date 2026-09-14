@@ -1366,7 +1366,7 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
   function renderWithPhase(projectDir, point, extraArgs = []) {
     return runNode(
       [GSD_TOOLS, 'loop', 'render-hooks', point, '--cwd', projectDir, ...extraArgs],
-      { cwd: ROOT, timeoutMs: 15000 },
+      { cwd: ROOT, timeoutMs: PROBE_TIMEOUT_MS },
     );
   }
 
@@ -1737,7 +1737,7 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
 
       const result = runNode(
         [GSD_TOOLS, 'loop', 'render-hooks', point, '--cwd', fx.project, '--raw', '--phase', '05'],
-        { cwd: ROOT, timeoutMs: 15000, env: { ...process.env, GSD_HOME: fx.home } },
+        { cwd: ROOT, timeoutMs: PROBE_TIMEOUT_MS, env: { ...process.env, GSD_HOME: fx.home } },
       );
       assert.strictEqual(result.exitCode, 0, 'stderr: ' + result.stderr);
       const envelope = JSON.parse(result.stdout.trim());
@@ -1761,7 +1761,7 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
 
     const result = runNode(
       [GSD_TOOLS, 'loop', 'render-hooks', 'plan:pre', '--cwd', fx.project, '--raw'],
-      { cwd: ROOT, timeoutMs: 15000, env: { ...process.env, GSD_HOME: fx.home } },
+      { cwd: ROOT, timeoutMs: PROBE_TIMEOUT_MS, env: { ...process.env, GSD_HOME: fx.home } },
     );
     assert.strictEqual(result.exitCode, 0, 'stderr: ' + result.stderr);
     const envelope = JSON.parse(result.stdout.trim());
