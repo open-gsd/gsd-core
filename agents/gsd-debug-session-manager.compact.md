@@ -92,9 +92,18 @@ Agent(
   prompt=filled_prompt,
   subagent_type="gsd-debugger",
   model="{debugger_model}",
-  description="Debug {slug}"
+  description="Debug {slug}",
+  run_in_background=false
 )
 ```
+
+**Foreground, blocking spawn — #4395.** `run_in_background: false` is REQUIRED, for the same
+reason `/gsd:debug` requires it when spawning this agent (#2196): Claude Code backgrounds
+subagents by default, and only that flag makes the spawn return the debugger's structured header
+for Step 3 to classify. Backgrounded, Step 3 has nothing to inspect, so this agent returns
+`CONTINUE_REQUIRED`, the orchestrator auto-resumes (#2257/#3448), and the resumed manager spawns a
+SECOND debugger that races the first on `.planning/debug/{slug}.md`. Wait for it; do not background
+it, and do not poll for it. Never pass an agent id to `TaskOutput` — an agent id is not a task id.
 
 Resolve the debugger model before spawning (canonical `gsd_run` preamble — established once here, the single definition this agent carries):
 ```bash

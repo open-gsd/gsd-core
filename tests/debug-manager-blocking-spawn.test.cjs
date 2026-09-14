@@ -44,7 +44,7 @@ describe('debug session manager: the debugger spawn must block (#4395)', () => {
       // first on .planning/debug/<slug>.md.
       assert.match(
         spawn,
-        /run_in_background:\s*false/,
+        /run_in_background\s*=\s*false/,
         `${label} variant: the debugger spawn must be blocking, or the manager cannot see its result`,
       );
     });
@@ -54,7 +54,7 @@ describe('debug session manager: the debugger spawn must block (#4395)', () => {
   test('both variants agree on the debugger spawn flag', () => {
     const full = debuggerSpawn(readFileNormalized(MANAGER), 'full variant');
     const compact = debuggerSpawn(readFileNormalized(MANAGER_COMPACT), 'compact variant');
-    const flagOf = (s) => (s.match(/run_in_background:\s*(true|false)/) || [])[1];
+    const flagOf = (s) => (s.match(/run_in_background\s*=\s*(true|false)/) || [])[1];
     // Assert the flag is PRESENT before asserting agreement: two missing flags
     // are also "equal", so a bare equality check passes vacuously on the very
     // tree this test exists to reject.
@@ -75,7 +75,7 @@ describe('debug session manager: the debugger spawn must block (#4395)', () => {
       const file = path.join(AGENTS_DIR, name);
       for (const block of agentSpawnBlocks(readFileNormalized(file))) {
         if (!block.includes('subagent_type=')) continue;
-        if (!/run_in_background:\s*(true|false)/.test(block)) {
+        if (!/run_in_background\s*=\s*(true|false)/.test(block)) {
           offenders.push(`${name}: ${block.split('\n').find((l) => l.includes('subagent_type=')).trim()}`);
         }
       }
