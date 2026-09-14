@@ -87,4 +87,54 @@ describe('list-seeds: deriveSeedIdentity properties', () => {
       )
     );
   });
+
+  // ── #4378: the new-format grammar `SEED-YYMMDD-xxx` (date + 3 base36 chars) ──
+
+  // New-format short suffix: exactly 6 digits, hyphen, exactly 3 lowercase base36.
+  const seedDate = fc.integer({ min: 0, max: 99 })
+    .map((n) => String(n).padStart(2, '0'))
+    .chain((yy) =>
+      fc.integer({ min: 1, max: 12 }).map((m) => yy + String(m).padStart(2, '0'))
+        .chain((ym) =>
+          fc.integer({ min: 1, max: 31 }).map((d) => ym + String(d).padStart(2, '0'))
+        )
+    );
+  const seedSuffix = fc.tuple(
+    fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz0123456789'.split('')),
+    fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz0123456789'.split('')),
+    fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz0123456789'.split('')),
+  ).map(([a, b, c]) => a + b + c);
+
+  // (e) Canonical new format: frontmatter id wins; slug is the filename remainder.
+  test('property: new-format id `SEED-YYMMDD-xxx` round-trips (#4378)', () => {
+    fc.assert(
+      fc.property(seedDate, seedSuffix, slug, (date, suf, s) => {
+        const id = `SEED-${date}-${suf}`;
+        const stem = `${id}-${s}`;
+        const result = deriveSeedIdentity(stem, id);
+        assert.strictEqual(result.seed_id, id);
+        assert.strictEqual(result.slug, s);
+      })
+    );
+  });
+
+  // (f) The filename-prefix fallback must keep the FULL new-format id. Truncating
+  // at `SEED-<digits>` (the date) gives every same-day seed the same id — the
+  // exact ambiguity #4378 files.
+  test('property: missing id falls back to the full new-format prefix (#4378)', () => {
+    fc.assert(
+      fc.property(
+        seedDate,
+        seedSuffix,
+        slug,
+        fc.oneof(fc.constant(undefined), fc.constant(''), fc.constant(42)),
+        (date, suf, s, badId) => {
+          const stem = `SEED-${date}-${suf}-${s}`;
+          const result = deriveSeedIdentity(stem, badId);
+          assert.strictEqual(result.seed_id, `SEED-${date}-${suf}`);
+          assert.strictEqual(result.slug, s);
+        }
+      )
+    );
+  });
 });
