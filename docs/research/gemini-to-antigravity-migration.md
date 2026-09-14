@@ -310,3 +310,38 @@ The missing guard proposed in §5 was scoped to locale prose. It must also cover
 runtime-loaded workflow text, and the cheapest durable form is to make the name policy
 **fail loud** on a non-canonical id rather than defaulting to Claude Code — which would have
 turned every site in §7.2 into a hard error on the day #1928 landed.
+
+---
+
+## Addendum — 2026-09-14 (#4727)
+
+Everything above is pinned to `next` at `c0b2a05d2f` and is left unedited on purpose: §1 quotes
+#1928's commit message verbatim, and §2(a) quotes a test docblock verbatim. Rewriting a citation to
+match a later tree falsifies the primary source, so the record stands and the delta is recorded here
+instead.
+
+**The rename recommended in the PRESERVE table has landed (#4727).** The two GSD-chosen identifiers
+were renamed to follow the file's own `claudeTo<Runtime>Tools` / `convert<Runtime>ToolName`
+convention, already established by the neighboring Copilot pair:
+
+| before | after |
+|---|---|
+| `claudeToGeminiTools` | `claudeToAntigravityTools` |
+| `convertGeminiToolName` | `convertAntigravityToolName` |
+
+Both were declared **twice** — the extracted copy in `src/runtime-artifact-conversion.cts` (also in
+that module's `export =` block, added by #1182 as a "dependency closure") and a working inline copy
+in the hand-maintained `bin/install.js`. No generator emits `bin/install.js`, verified against every
+`package.json` script, so both copies were renamed together; renaming one would have left two names
+for one concept, which is the exact drift this epic exists to end.
+
+What did **not** change, and why the table's "PRESERVE — trap" verdict still holds: every mapped
+value (`read_file`, `write_file`, `replace`, `run_shell_command`, `glob`, `search_file_content`,
+`google_web_search`, `web_fetch`, `write_todos`) is Gemini's built-in tool dialect, which Antigravity
+genuinely speaks. The values are Google's contract; only GSD's own identifiers were ever GSD's to
+choose. The exclusion comments keep their reasoning and their issue refs (#3362, #1394) with only
+the subject corrected — those describe the dialect's behavior, which is still Antigravity's.
+
+Epic status at this addendum: #4711 (phases 1b/2) and #4716 (phase 3, reviewer lane, 12 lanes/13
+flags to 11/12) merged; #4728 (workflow prose + all four locales) and #4729 (the repo-wide drift
+guard, which must land last) open.

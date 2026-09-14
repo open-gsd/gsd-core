@@ -12,8 +12,8 @@
  *      co-selected valid runtime still installs.
  *   B. The `gemini` runtime is gone from every runtime-name-policy surface.
  *   C. Antigravity is PRESERVED everywhere it shared surface with gemini
- *      (GEMINI.md instruction file + the shared convertGeminiToolName tool
- *      vocabulary) — the shared-infra regression this change had to avoid.
+ *      (GEMINI.md instruction file + the shared convertAntigravityToolName
+ *      tool vocabulary) — the shared-infra regression this change had to avoid.
  */
 
 'use strict';
@@ -204,10 +204,65 @@ describe('#1928 Antigravity preserved (shared surface with the removed gemini ru
   test('the shared Gemini-backend tool vocabulary still powers Antigravity agent conversion', () => {
     const input = ['---', 'name: gsd-x', 'description: d', 'tools: Read, Write, WebFetch, Skill', '---', '', 'body'].join('\n');
     const toolsLine = convertClaudeAgentToAntigravityAgent(input).split('\n').find((l) => l.startsWith('tools:')) || '';
-    assert.ok(toolsLine.includes('read_file'), 'Read → read_file via the retained convertGeminiToolName');
+    assert.ok(toolsLine.includes('read_file'), 'Read → read_file via the retained convertAntigravityToolName');
     assert.ok(toolsLine.includes('write_file'), 'Write → write_file');
     assert.ok(toolsLine.includes('web_fetch'), 'WebFetch → web_fetch');
     assert.ok(!/\bskill\b/.test(toolsLine), 'Skill is still excluded (would be an invalid backend tool name)');
+  });
+
+  test('#4727 the rename is complete: no gemini-named alias survives alongside the antigravity-named exports', () => {
+    // Exports-shape check against the compiled module, not a text scan of source — #4727 renamed
+    // claudeToGeminiTools/convertGeminiToolName to claudeToAntigravityTools/convertAntigravityToolName
+    // in place; a partial rename would leave BOTH names live as two aliases for one concept, which
+    // is exactly the drift this epic exists to end.
+    const mod = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-artifact-conversion.cjs'));
+
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(mod, 'claudeToAntigravityTools'),
+      'the renamed tool map must be exported under its new name',
+    );
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(mod, 'convertAntigravityToolName'),
+      'the renamed conversion function must be exported under its new name',
+    );
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(mod, 'claudeToGeminiTools'),
+      'the retired gemini-named map must not still be exported — a surviving alias means the rename never finished',
+    );
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(mod, 'convertGeminiToolName'),
+      'the retired gemini-named function must not still be exported — a surviving alias means the rename never finished',
+    );
+
+    // The rename must be a pure identifier change: every value byte-identical, so an added OR
+    // removed key (not just a renamed export) fails this too.
+    assert.deepStrictEqual(mod.claudeToAntigravityTools, {
+      Read: 'read_file',
+      Write: 'write_file',
+      Edit: 'replace',
+      Bash: 'run_shell_command',
+      Glob: 'glob',
+      Grep: 'search_file_content',
+      WebSearch: 'google_web_search',
+      WebFetch: 'web_fetch',
+      TodoWrite: 'write_todos',
+    }, 'the tool map values are Gemini\'s built-in tool dialect, which Antigravity speaks — Google\'s '
+      + 'contract, not GSD\'s to alter by renaming the map that carries it');
+
+    // In-set / out-of-set boundary pair: the excluded ids still return null individually...
+    for (const excluded of ['mcp__anything', 'Task', 'Agent', 'AskUserQuestion', 'ask_user', 'Skill', 'SlashCommand']) {
+      assert.strictEqual(
+        mod.convertAntigravityToolName(excluded),
+        null,
+        `${excluded} must still be excluded from the Antigravity tool dialect after the rename`,
+      );
+    }
+    // ...and an unmapped name still falls through to the lowercase default.
+    assert.strictEqual(
+      mod.convertAntigravityToolName('SomeOtherTool'),
+      'someothertool',
+      'an unmapped tool name must still lowercase-fallback after the rename',
+    );
   });
 });
 
