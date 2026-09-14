@@ -4,14 +4,17 @@
 **Decision:** wontfix — No-go as filed; redirected to the EoS Registry / out-of-tree host-plugin path (or a Capability, if the actual need turns out to be feature-shaped rather than runtime-shaped)
 **Date:** 2026-09-14
 
+## Policy (standing, not case-by-case)
+
+**GSD is not accepting new runtimes or add-ons as first-party, in-tree work at this time — full stop, not a "go-with-conditions" case-by-case call.** This is the same standing ground already recorded twice: [`crush-runtime-in-core.md`](./crush-runtime-in-core.md) and [`omp-runtime-in-core.md`](./omp-runtime-in-core.md). The standing decision text is direct: evaluate "does this ask for a new runtime or add-on in-tree," not "is this particular one well executed." Nothing about Zoo's specific quality, research depth, or the reporter's cited working private-fork port changes this — the same class of well-executed prior asks (crush, OMP, Reasonix) were declined on identical grounds.
+
 ## Proposal summary
 
 #4746 asked to add `zoo` (Zoo Code, the VS Code extension community continuation of the archived Roo Code) as a **first-party, in-tree** tier-2 runtime: a `capabilities/zoo/capability.json` descriptor, alias canonicalization (`roo`, `roo-code`, `roo-cline`, `zoo-code` → `zoo`), and a new dedicated `zoo-modes` install-surface writer to merge GSD agents into Zoo's single-file `.roomodes`/`custom_modes.yaml` custom-mode format (following the `cline-rules` precedent for merge-into-one-file surfaces). The proposal included extensive docs-verified integration facts (schema, tool names, subagent dispatch semantics, globalStorage paths) and cited a working private-fork port (`harmony-ai-solutions/gsd-roo-code`).
 
 ## Why GSD does not own this
 
-- **GSD is not expanding its in-tree supported-runtime set.** This is the same standing ground already recorded twice: [`crush-runtime-in-core.md`](./crush-runtime-in-core.md) and [`omp-runtime-in-core.md`](./omp-runtime-in-core.md). Each first-class runtime is a permanent maintenance obligation across the registry, installer, artifact conversion, agent discovery, model routing, dispatch isolation, golden install-parity fixtures, and localized capability matrices — carried indefinitely for a host GSD does not control.
-- **The policy is explicitly non-case-by-case.** The standing decision text is direct: evaluate "does this ask for a new runtime or add-on in-tree," not "is this particular one well executed." Nothing about Zoo's specific quality, research depth, or the reporter's cited working private-fork port changes this — the same class of well-executed prior asks (crush, OMP, Reasonix) were declined on identical grounds.
+- **GSD is not expanding its in-tree supported-runtime set.** Each first-class runtime is a permanent maintenance obligation across the registry, installer, artifact conversion, agent discovery, model routing, dispatch isolation, golden install-parity fixtures, and localized capability matrices — carried indefinitely for a host GSD does not control.
 - **Neither `zoo` nor `roo` exists in `capabilities/` or `docs/registries/eos.json` today** (verified at triage time), so there is no existing partial support to build on that would change the calculus.
 
 ## What this does NOT cover

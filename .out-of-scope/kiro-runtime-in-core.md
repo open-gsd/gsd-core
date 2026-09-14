@@ -4,15 +4,18 @@
 **Decision:** wontfix — No-go as filed; redirected to the EoS Registry / out-of-tree host-plugin path (or a Capability, if the actual need turns out to be feature-shaped rather than runtime-shaped)
 **Date:** 2026-09-14
 
+## Policy (standing, not case-by-case)
+
+**GSD is not accepting new runtimes or add-ons as first-party, in-tree work at this time — full stop, not a "go-with-conditions" case-by-case call.** Same standing ground recorded in [`crush-runtime-in-core.md`](./crush-runtime-in-core.md) and [`omp-runtime-in-core.md`](./omp-runtime-in-core.md). The policy is explicitly host-agnostic: no Kiro-specific prior denial existed before this issue, but the standing decision text evaluates "does this ask for a new runtime or add-on in-tree," not "is this particular one well executed" — AWS backing does not change the maintenance-obligation calculus the policy is about.
+
 ## Proposal summary
 
 #4722 asked to add `--kiro` as a new first-party, in-tree runtime integration for AWS's Kiro CLI + IDE — a new runtime descriptor and installer wiring, structurally the same shape as prior first-party-runtime requests.
 
 ## Why GSD does not own this
 
-- **GSD is not expanding its in-tree supported-runtime set.** Same standing ground recorded in [`crush-runtime-in-core.md`](./crush-runtime-in-core.md) and [`omp-runtime-in-core.md`](./omp-runtime-in-core.md): each first-class runtime is a permanent maintenance obligation across the registry, installer, artifact conversion, agent discovery, model routing, dispatch isolation, golden install-parity fixtures, and localized capability matrices — carried indefinitely for a host GSD does not control.
-- **The policy is explicitly non-case-by-case and host-agnostic.** No Kiro-specific prior denial existed before this issue, but the standing decision text evaluates "does this ask for a new runtime or add-on in-tree," not "is this particular one well executed" or "is this host well-known/well-backed" — AWS backing does not change the maintenance-obligation calculus the policy is about.
-- **`kiro` does not exist in `capabilities/` or `docs/registries/eos.json` today** (verified at triage time).
+- **GSD is not expanding its in-tree supported-runtime set.** Each first-class runtime is a permanent maintenance obligation across the registry, installer, artifact conversion, agent discovery, model routing, dispatch isolation, golden install-parity fixtures, and localized capability matrices — carried indefinitely for a host GSD does not control.
+- **`kiro` does not exist in `capabilities/` or `docs/registries/eos.json` today** (verified at triage time), so there is no existing partial support to build on that would change the calculus.
 
 ## What this does NOT cover
 
