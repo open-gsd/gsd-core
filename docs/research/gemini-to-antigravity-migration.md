@@ -313,35 +313,68 @@ turned every site in §7.2 into a hard error on the day #1928 landed.
 
 ---
 
-## Addendum — 2026-09-14 (#4727)
+## 8. Addendum — 2026-09-14 (#4727): §2(c) narrowed, deliberately
 
-Everything above is pinned to `next` at `c0b2a05d2f` and is left unedited on purpose: §1 quotes
-#1928's commit message verbatim, and §2(a) quotes a test docblock verbatim. Rewriting a citation to
-match a later tree falsifies the primary source, so the record stands and the delta is recorded here
+Everything above §8 is pinned to `next` at `c0b2a05d2f` and is left byte-for-byte intact on
+purpose: §1 quotes #1928's commit message verbatim and §2(a) quotes a test docblock verbatim, so
+rewriting either to match a later tree would falsify a primary source. The delta is recorded here
 instead.
 
-**The rename recommended in the PRESERVE table has landed (#4727).** The two GSD-chosen identifiers
-were renamed to follow the file's own `claudeTo<Runtime>Tools` / `convert<Runtime>ToolName`
-convention, already established by the neighboring Copilot pair:
+### This overturns a verdict recorded above. Saying so plainly.
+
+§2(c) is headed **"MUST NOT be renamed"**, and the §6 PRESERVE table files
+`claudeToGeminiTools` / `convertGeminiToolName` under category (c) with the verdict
+**"PRESERVE — trap"**. #4727 renamed them anyway:
 
 | before | after |
 |---|---|
 | `claudeToGeminiTools` | `claudeToAntigravityTools` |
 | `convertGeminiToolName` | `convertAntigravityToolName` |
 
-Both were declared **twice** — the extracted copy in `src/runtime-artifact-conversion.cts` (also in
-that module's `export =` block, added by #1182 as a "dependency closure") and a working inline copy
-in the hand-maintained `bin/install.js`. No generator emits `bin/install.js`, verified against every
-`package.json` script, so both copies were renamed together; renaming one would have left two names
-for one concept, which is the exact drift this epic exists to end.
+That is a **narrowing of (c), not compliance with it**, and the earlier verdict was too broad
+rather than wrong. (c)'s real subject is the part of the Gemini surface that Google owns — the
+directories, the hook dialect, `GEMINI.md`, the model ids, and, for these two symbols
+specifically, the **mapped values**:
 
-What did **not** change, and why the table's "PRESERVE — trap" verdict still holds: every mapped
-value (`read_file`, `write_file`, `replace`, `run_shell_command`, `glob`, `search_file_content`,
-`google_web_search`, `web_fetch`, `write_todos`) is Gemini's built-in tool dialect, which Antigravity
-genuinely speaks. The values are Google's contract; only GSD's own identifiers were ever GSD's to
-choose. The exclusion comments keep their reasoning and their issue refs (#3362, #1394) with only
-the subject corrected — those describe the dialect's behavior, which is still Antigravity's.
+```
+read_file  write_file  replace  run_shell_command  glob
+search_file_content  google_web_search  web_fetch  write_todos
+```
 
-Epic status at this addendum: #4711 (phases 1b/2) and #4716 (phase 3, reviewer lane, 12 lanes/13
-flags to 11/12) merged; #4728 (workflow prose + all four locales) and #4729 (the repo-wide drift
-guard, which must land last) open.
+Those are Gemini's built-in tool names, Antigravity genuinely speaks that dialect, and they remain
+byte-identical — the "trap" the table warned about is real and still stands for them. What (c) had
+swept in along with them were two **GSD-chosen identifiers**, which no external contract references.
+Renaming those breaks nothing and removes a name that had outlived its runtime by more than a year.
+
+Superseded rows, named explicitly so a later reader is not misled: §2(c)'s
+"Shared tool-name vocabulary" bullet (~`:55`) and the §6 PRESERVE table row for `bin/install.js`
+(~`:136`) both cite `bin/install.js:1628-1720` under the old identifiers. The cited line range is
+still correct; only the two names are now the Antigravity-prefixed ones.
+
+### One citation above now reproduces superseded wording
+
+§2(a) (~`:40`) quotes the `tests/gemini-runtime-removed.test.cjs` docblock verbatim, including the
+phrase *"the shared convertGeminiToolName tool vocabulary"*. #4727 reworded that docblock to name
+the live symbol, so **the quotation no longer matches its source**. Disclosed rather than silently
+edited, because editing the quote is precisely what this addendum exists to avoid. The docblock had
+to move: leaving it would have made the repo's #1928 guard describe a symbol that no longer exists.
+
+### What was NOT renamed, and one coverage gap
+
+Untouched: `~/.gemini/antigravity{,-ide,-cli}` and `~/.gemini` as their parent; `~/.gemini/config`
+(#3738); `GEMINI.md` as `projectInstructionFile`; `hookEvents: "gemini"`; every `gemini-*` /
+`google/gemini-*` model id and `providerPresets.google`; the `--gemini` **installer** flag, which
+remains #1928's sunset redirect; the `GEMINI_CONFIG_DIR` launcher arm (epic #4632). `bin/install.js`
+still carries 36 `gemini` references after the rename, which is the correct number.
+
+The symbol existed **twice** — the extracted copy in `src/runtime-artifact-conversion.cts` (and that
+module's `export =` block, added by #1182 as a dependency closure) plus a working inline copy in
+`bin/install.js`. `CLAUDE.md` labels that file "(generated)", but no `package.json` script emits it;
+`build:lib` is `tsc -p tsconfig.build.json` and writes `gsd-core/bin/lib/**` only. Both copies were
+renamed, since renaming one would have left two names for one concept.
+
+**Known gap:** the `bin/install.js` half is test-unprotected. That file exports none of the four
+identifiers, and the export audit asserts `installer[name] === undefined` for both spellings, so
+reverting that half would break no test — its behavior is covered, its *naming* is not. Closing that
+requires the repo-wide drift guard (#4729), which is the last phase of this epic for exactly this
+reason.
