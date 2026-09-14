@@ -23,9 +23,9 @@
       "reductionPct": 20.79
     },
     "agents/gsd-code-fixer.md": {
-      "offTokens": 10741,
+      "offTokens": 10740,
       "onTokens": 6690,
-      "reductionPct": 37.72
+      "reductionPct": 37.71
     },
     "agents/gsd-code-reviewer.md": {
       "offTokens": 4408,
@@ -38,9 +38,9 @@
       "reductionPct": 9.76
     },
     "agents/gsd-debug-session-manager.md": {
-      "offTokens": 4766,
-      "onTokens": 4477,
-      "reductionPct": 6.06
+      "offTokens": 4938,
+      "onTokens": 4649,
+      "reductionPct": 5.85
     },
     "agents/gsd-doc-classifier.md": {
       "offTokens": 2901,
@@ -169,8 +169,8 @@
     }
   },
   "aggregate": {
-    "offTokens": 118698,
-    "onTokens": 94341,
-    "reductionPct": 20.52
+    "offTokens": 118869,
+    "onTokens": 94513,
+    "reductionPct": 20.49
   }
 }
