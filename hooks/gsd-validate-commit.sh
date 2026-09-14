@@ -615,9 +615,11 @@ if [ "$CLASSIFY_STATUS" = "0" ]; then
     # Validate Conventional Commits format.
     #
     # #4429: do NOT build `^(type1|type2|...)` out of COMMIT_TYPES. That
-    # alternation grows with the CONFIGURED list, and bash caps a compiled
-    # pattern at 64 KiB - measured on bash 3.2.57 (this repo's macOS target):
-    # a 65504-byte alternation compiles, 65515 fails. Past the cap `[[ =~ ]]`
+    # alternation grows with the CONFIGURED list, and how large a pattern can be
+    # compiled is a property of the platform's regex engine. bash 3.2.57 / BSD
+    # libc (macOS, this file's stated target) caps it at 64 KiB - bisected: a
+    # 65504-byte alternation compiles, 65515 fails. bash 5.2 / glibc has no
+    # reachable cap, so this half never bit Linux. Past a cap `[[ =~ ]]`
     # returns 2, and `if !` cannot tell a COMPILE ERROR from "the subject does
     # not conform" - so a valid `feat(auth): ...` was blocked with
     # CONVENTIONAL_COMMITS_VIOLATION while `feat` sat in its own valid_types.
