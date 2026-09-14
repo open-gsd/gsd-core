@@ -39,9 +39,19 @@ const REPO_ROOT = path.join(__dirname, '..');
 const HOOKS_DIR = path.join(REPO_ROOT, 'hooks');
 const isWindows = process.platform === 'win32';
 
-// Measured on bash 3.2.57 (this repo's macOS target) by bisecting the compiled
-// pattern: a 65504-byte alternation compiles, 65515 fails. Expressed as type
-// counts so the rows read as limit-1 / limit / limit+1.
+// The compiled-regex ceiling is a PROPERTY OF THE PLATFORM'S REGEX ENGINE, not a
+// repo invariant — do not read these as universal constants.
+//
+//   bash 3.2.57 / BSD libc (macOS, this repo's stated target): bisected to a
+//     65504-byte alternation compiling and 65515 failing — 6051 vs 6052 types.
+//   bash 5.2.15 / glibc (the Linux tester image, which is the ONLY OS the remote
+//     matrix runs): measured MATCH at 6051, 6052 and 20000 types (228943 bytes).
+//     No reachable cap, so the regcomp defect does not reproduce there at all.
+//
+// Encoding the macOS numbers as a cross-platform expectation is precisely what
+// made the first verification run red. The rows below therefore assert only what
+// holds everywhere, and the control that needs a capped engine calibrates itself
+// at runtime instead of assuming one.
 const ALT_LAST_COMPILING = 6051;
 const ALT_FIRST_FAILING = 6052;
 const ALT_PAST_FAILING = 6053;
@@ -241,23 +251,42 @@ describe('#4429 — gsd-validate-commit.sh under a large commit_types config', {
     });
   }
 
-  test('CONTROL: the pre-fix alternation form really does block a valid commit', (t) => {
+  test('CONTROL: the pre-fix alternation blocks a valid commit wherever the engine caps pattern size', (t) => {
     const hook = makeHookLayout(t, toPreFixAlternation);
     const dir = makeProject(t, ALT_FIRST_FAILING);
     const res = runValidate(hook, dir, 'feat(auth): add login flow');
     assertSubstantive(res, 'pre-fix alternation control');
+
+    if (res.status === 0) {
+      // Self-calibrating rather than assuming a cap: this engine compiled the
+      // whole list-derived alternation, so the regcomp defect is NOT reachable
+      // here and there is nothing for this control to reproduce. Skipped out
+      // loud — never silently passed — because a green row here would otherwise
+      // read as "the defect is covered" on a platform where it cannot occur.
+      // glibc/bash 5.2 (the Linux tester image) measured exactly this.
+      t.skip(
+        `this platform's regex engine compiled a ${ALT_FIRST_FAILING}-type alternation, `
+        + 'so it has no reachable compile cap and the regcomp defect cannot be '
+        + 'reproduced. The defect and this control are specific to a capped engine '
+        + '(bash 3.2 / BSD libc on macOS). The SIGPIPE control below is unaffected.',
+      );
+      return;
+    }
+
     assert.equal(
       res.status,
       2,
-      'the pre-fix reconstruction did NOT reproduce the regcomp defect, so the rows '
+      'this engine rejected the alternation somewhere, but not as a block — the '
+      + 'pre-fix reconstruction did not reproduce the regcomp defect, so the rows '
       + 'above would pass with or without the fix. Re-derive it before trusting them.',
     );
   });
 
   test('CONTROL: the pre-fix alternation still ACCEPTS one type below the cliff', (t) => {
-    // Without this, the limit-1 row is vacuous: it would pass whether or not the
-    // cliff sits where this suite claims. Together with the row below it pins the
-    // boundary to exactly 6051/6052.
+    // On a capped engine this pins the boundary's LOW side, so the limit-1 row is
+    // not vacuous there. On an uncapped engine it passes trivially — that is
+    // acknowledged, not hidden: the row it guards is the macOS-specific one, and
+    // the paired high-side control above skips out loud on such platforms.
     const hook = makeHookLayout(t, toPreFixAlternation);
     const dir = makeProject(t, ALT_LAST_COMPILING);
     const res = runValidate(hook, dir, 'feat(auth): add login flow');
