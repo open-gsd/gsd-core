@@ -1397,6 +1397,58 @@ describe('verify references command', () => {
     assert.strictEqual(output.total, 0, `Expected total 0 (template skipped): ${JSON.stringify(output)}`);
   });
 
+  test('#4678: line-numbered citations are checked, not dropped or misreported', () => {
+    fs.writeFileSync(path.join(tmpDir, 'src', 'app.js'), 'console.log("app");\n');
+    fs.writeFileSync(path.join(tmpDir, 'src', 'utils', 'helper.js'), 'module.exports = {};\n');
+    const filePath = path.join(tmpDir, '.planning', 'phases', '01-test', 'doc.md');
+    fs.writeFileSync(filePath, [
+      '- `src/gone.ts:99`',
+      '- `src/utils/helper.js:7`',
+      '- @src/app.js:42',
+      '- @src/gone.ts:1',
+      '- `src/utils/helper.js`',
+      '- `src/gone.ts`',
+      '- @src/app.js',
+      '',
+    ].join('\n'));
+
+    const result = runGsdTools('verify references .planning/phases/01-test/doc.md', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    // Every citation must land in exactly one bucket: the three gone.ts citations
+    // (with and without the line suffix, in both citation styles) are missing;
+    // the rest resolve.
+    assert.strictEqual(output.total, 7, `Expected total 7: ${JSON.stringify(output)}`);
+    assert.strictEqual(output.found, 4, `Expected found 4: ${JSON.stringify(output)}`);
+    assert.ok(
+      output.missing.includes('src/gone.ts:99'),
+      `Expected missing to keep the original citation text "src/gone.ts:99": ${JSON.stringify(output.missing)}`
+    );
+    assert.ok(
+      output.missing.includes('src/gone.ts:1'),
+      `Expected missing to keep the original citation text "src/gone.ts:1": ${JSON.stringify(output.missing)}`
+    );
+    assert.ok(
+      output.missing.includes('src/gone.ts'),
+      `Expected missing to include "src/gone.ts": ${JSON.stringify(output.missing)}`
+    );
+    assert.strictEqual(output.valid, false, 'should be invalid');
+  });
+
+  test('#4678: an all-missing line-numbered document is not reported valid', () => {
+    const filePath = path.join(tmpDir, '.planning', 'phases', '01-test', 'doc.md');
+    fs.writeFileSync(filePath, ['- `src/gone.ts:99`', '- `src/also-gone.ts:1-20`', ''].join('\n'));
+
+    const result = runGsdTools('verify references .planning/phases/01-test/doc.md', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.total, 2, `Expected total 2: ${JSON.stringify(output)}`);
+    assert.strictEqual(output.missing.length, 2, `Expected both citations missing: ${JSON.stringify(output)}`);
+    assert.strictEqual(output.valid, false, `Must not report valid: ${JSON.stringify(output)}`);
+  });
+
   test('returns error for nonexistent file', () => {
     const result = runGsdTools('verify references .planning/phases/01-test/nonexistent.md', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
