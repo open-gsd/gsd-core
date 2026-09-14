@@ -107,6 +107,7 @@ module.exports = {
   "tests/gsd-mcp-server-bin.test.cjs",
   "tests/gsd-statusline.test.cjs",
   "tests/gsd-validate-commit-crash-policy.test.cjs",
+  "tests/gsd-validate-commit-sigpipe.test.cjs",
   "tests/gsd-write-guard.test.cjs",
   "tests/health-diagnostic-rules/config-validation.test.cjs",
   "tests/health-diagnostic-rules/worktree-health.test.cjs",

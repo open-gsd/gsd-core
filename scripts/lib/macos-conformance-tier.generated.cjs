@@ -83,6 +83,7 @@ module.exports = {
   "tests/gsd-statusline.test.cjs",
   "tests/gsd-tools-path-refs.test.cjs",
   "tests/gsd-validate-commit-crash-policy.test.cjs",
+  "tests/gsd-validate-commit-sigpipe.test.cjs",
   "tests/gsd-write-guard.test.cjs",
   "tests/health-diagnostic-rules/worktree-health.test.cjs",
   "tests/health-diagnostic.test.cjs",
