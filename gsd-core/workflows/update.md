@@ -74,7 +74,7 @@ Parse output:
 - Line 1 = installed version (`0.0.0` means unknown version)
 - Line 2 = install scope (`LOCAL`, `GLOBAL`, or `UNKNOWN`)
 - Line 3 = target runtime (`claude`, `opencode`, `kilo`, `codex`, `antigravity`, `windsurf`); empty when no installed target is resolved
-- Line 4 = resolved GSD config dir (e.g. `/Users/me/.claude`, `/Users/me/.gemini`); empty when no installed target is resolved. Capture this as `GSD_DIR` and pass it to subsequent steps so they don't re-derive the runtime path.
+- Line 4 = resolved GSD config dir (e.g. `/Users/me/.claude`, `/Users/me/.gemini/antigravity`); empty when no installed target is resolved. Capture this as `GSD_DIR` and pass it to subsequent steps so they don't re-derive the runtime path.
 
 `update-context` reproduces the previous detection cascade — preferred-config-dir fast path, local-over-global with same-path dedup (so `CWD=$HOME` does not misdetect as LOCAL), env-var overrides (`CLAUDE_CONFIG_DIR`, `OPENCODE_CONFIG_DIR`, `KILO_CONFIG`, `XDG_CONFIG_HOME`, `CODEX_HOME`, …), and semver validation — but as a tested projection rather than ~280 lines of inline bash. Branch coverage lives in `tests/update-context.test.cjs`.
 
@@ -132,7 +132,7 @@ Extract `section_manifest` from `INIT_UPDATE` — gates the `channel-banner` sec
 <step name="check_latest_version">
 Check npm for latest version via the deterministic script. **Do NOT run `npm view` or `npm search` directly** — the package name must come from the script, not from a free choice at execution time. (#2992: LLM-driven prescriptions of npm package names produced wrong-package queries; moving the package name into a script constant closes that gap.)
 
-The `GSD_DIR` value emitted by `get_installed_version` (line 4) resolves to the runtime-specific config dir (`~/.claude/`, `~/.gemini/`, `~/.codex/`, etc.), so the script invocation works for every runtime — not just Claude. An unresolved target exits in `get_installed_version` before this step.
+The `GSD_DIR` value emitted by `get_installed_version` (line 4) resolves to the runtime-specific config dir (`~/.claude/`, `~/.gemini/antigravity/`, `~/.codex/`, etc.), so the script invocation works for every runtime — not just Claude. An unresolved target exits in `get_installed_version` before this step.
 
 `LATEST_RESULT` is a JSON document with the documented shape `{ ok: bool, version: string, reason: string, detail?: string }`. Parse it with the Node-only `uc_field` helper. When the script cannot run or returns nothing, preserve its failure as a meaningful diagnostic (#2993 CR feedback):
 
@@ -273,8 +273,8 @@ rm -f "$CHANGELOG_TMP"
 - `agents/gsd-*` files will be replaced
 
 (Paths are relative to detected runtime install location:
-global: `~/.claude/`, `~/.config/opencode/`, `~/.opencode/`, `~/.gemini/`, `~/.config/kilo/`, or `~/.codex/`
-local: `./.claude/`, `./.config/opencode/`, `./.opencode/`, `./.gemini/`, `./.kilo/`, or `./.codex/`)
+global: `~/.claude/`, `~/.config/opencode/`, `~/.opencode/`, `~/.gemini/antigravity/`, `~/.config/kilo/`, or `~/.codex/`
+local: `./.claude/`, `./.config/opencode/`, `./.opencode/`, `./.agents/`, `./.kilo/`, or `./.codex/`)
 
 Your custom files in other locations are preserved:
 - Custom commands not in `commands/gsd/` ✓
@@ -312,7 +312,7 @@ First, resolve the config directory (`RUNTIME_DIR`) from the install scope
 detected in `get_installed_version`:
 
 ```bash
-# RUNTIME_DIR is the resolved config directory (e.g. ~/.config/opencode, ~/.gemini).
+# RUNTIME_DIR is the resolved config directory (e.g. ~/.config/opencode, ~/.gemini/antigravity).
 # get_installed_version emits it as GSD_DIR for a resolved LOCAL or GLOBAL install.
 # The unresolved-target gate exits before this step; the empty guard remains defensive.
 RUNTIME_DIR="$GSD_DIR"

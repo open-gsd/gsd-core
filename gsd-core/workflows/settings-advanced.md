@@ -357,7 +357,6 @@ Built-in tier defaults by runtime:
 |------------|-------------------------------|---------------------------------|-------------------------------|
 | `claude`   | `claude-opus-4-8`             | `claude-sonnet-5`             | `claude-haiku-4-5`            |
 | `codex`    | `gpt-5.6-sol`                 | `gpt-5.6-terra`                 | `gpt-5.6-luna`                |
-| `gemini`   | `gemini-3.1-pro-preview`      | `gemini-3-flash`                | `gemini-2.5-flash-lite`       |
 | `qwen`     | `qwen3-max-2026-01-23`        | `qwen3-coder-plus`              | `qwen3-coder-next`            |
 | `opencode` | `anthropic/claude-opus-4-8`   | `anthropic/claude-sonnet-5`   | `anthropic/claude-haiku-4-5`  |
 | `copilot`  | `claude-opus-4-8`             | `claude-sonnet-5`             | `claude-haiku-4-5`            |
@@ -390,7 +389,7 @@ AskUserQuestion([
     multiSelect: false,
     options: [
       { label: "Keep current (<runtime>)", description: "Configure overrides for the current runtime." },
-      { label: "Common runtimes", description: "claude, codex, gemini, qwen" },
+      { label: "Common runtimes", description: "claude, codex, qwen" },
       { label: "Additional runtimes", description: "opencode, copilot, hermes, kilo" },
       { label: "Other (Group B or custom)", description: "cline, cursor, windsurf, augment, trae, codebuddy, antigravity, or a custom runtime string." }
     ]
@@ -409,7 +408,6 @@ AskUserQuestion([
     options: [
       { label: "claude", description: "Claude Code / Anthropic CLI." },
       { label: "codex", description: "OpenAI Codex CLI." },
-      { label: "gemini", description: "Gemini CLI." },
       { label: "qwen", description: "Qwen CLI." }
     ]
   }
@@ -506,10 +504,11 @@ gsd_run query config-set workflow.plan_bounce_passes 5
 gsd_run query config-set workflow.subagent_timeout 300000
 gsd_run query config-set git.base_branch main
 gsd_run query config-set context_window 1000000
-# Runtime model tier examples:
-gsd_run query config-set runtime gemini
-gsd_run query config-set model_profile_overrides.gemini.opus gemini-3-ultra
-gsd_run query config-set model_profile_overrides.gemini.haiku null
+# Runtime model tier examples (antigravity ships no built-in tier defaults, so
+# overrides are how you pin its models):
+gsd_run query config-set runtime antigravity
+gsd_run query config-set model_profile_overrides.antigravity.opus gemini-3.1-pro-preview
+gsd_run query config-set model_profile_overrides.antigravity.haiku null
 ```
 
 Conceptual shape after merge (unchanged top-level keys like `model_profile`,
