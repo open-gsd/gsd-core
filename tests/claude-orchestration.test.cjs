@@ -1806,9 +1806,10 @@ describe('I. docs/explanation/claude-orchestration-capability.md reflects the #4
   test('[happy] the doc no longer claims the capability registers at execute:wave:pre or execute:wave:post', () => {
     const docPath = path.join(ROOT, 'docs', 'explanation', 'claude-orchestration-capability.md');
     const content = fs.readFileSync(docPath, 'utf8');
-    assert.ok(
-      !/execute:wave:pre.*\(into the executor\)/.test(content),
-      'doc must not still claim the wired point is execute:wave:pre',
+    assert.match(
+      content,
+      /Registers at one \*\*wired\*\* loop point: `plan:post`/,
+      'doc must state the capability registers at exactly one wired loop point (plan:post)',
     );
     assert.ok(
       !/execute:wave:post.*\(into the executor\)/.test(content),

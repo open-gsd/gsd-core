@@ -9,6 +9,13 @@
 > whoever wires the orchestrator side through a host-level mechanism. See
 > issue #4740.
 
+> **Editor's note:** the body below is preserved byte-for-byte from when this
+> file WAS the `execute:wave:pre` contribution fragment, so its section
+> headings and prose ("this contribution", "injected", etc.) still speak in
+> those terms. That is intentional — it is not being rewritten to match its
+> new status — and it is retained purely as the orchestrator-side reference
+> described above.
+
 ## When this contribution is active
 
 The Claude orchestration capability is **default-off and BETA**. It activates only
