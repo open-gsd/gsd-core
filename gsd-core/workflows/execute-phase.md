@@ -235,6 +235,14 @@ if [ "$TDD_MODE" = "true" ]; then
     # implementation files makes the gate pass on any in-scope commit, which is
     # worse than tripping wrongly. Rust is a known gap for exactly that reason —
     # `#[test]` lives in the implementation file, so no pathspec can see it.
+    # Honest about the cost: `*.spec.*` can match a non-test file that happens to
+    # carry the word (`api.spec.json`, `openapi.spec.yaml`), which would let the
+    # gate pass on a commit touching only that. This is not new — `**/*.spec.*`
+    # already matched those at any nested path — dropping `**/` only extends the
+    # same false-positive class to the repo root. It is accepted rather than
+    # fixed here because narrowing it is a separate behaviour change to the
+    # currently-supported case, not part of making other languages visible.
+
     RED_COMMIT=$(git log --oneline -E ${TDD_MILESTONE_BASE:+"$TDD_MILESTONE_BASE..HEAD"} --grep="${PLAN_SCOPE_RE}" -- "*.test.*" "*.spec.*" "tests/" "__tests__/" "*_test.go" "test_*.py" "*_test.py" "*_test.exs" "*_spec.rb" "*_test.rb" | head -1)
     if [ -z "$RED_COMMIT" ]; then
       gsd_run query state.update last_gate_trip "${PLAN_ID}/${TASK_ID}" || true

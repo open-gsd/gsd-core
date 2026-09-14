@@ -179,7 +179,11 @@ cargo test    # Rust
 
 **5. Create first test file:**
 Follow project conventions for test location. The RED-commit gate
-(`workflows/execute-phase.md`) recognises these, at any depth including the repo root:
+(`workflows/execute-phase.md`) recognises the patterns below at any depth, repo root
+included. Note the gate's pathspec is deliberately **wider than the project types the
+detection step above enumerates** — it costs nothing to recognise a convention the
+onboarding flow does not yet auto-detect, and a project using one should not have its
+RED commits go unseen:
 - `*.test.*` / `*.spec.*` next to source — JS/TS and anything sharing the convention
 - `__tests__/` directory
 - `tests/` directory at root
