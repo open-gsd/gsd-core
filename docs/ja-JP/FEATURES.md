@@ -1022,12 +1022,12 @@ fix(03-01): correct auth token expiry
 
 **ランタイム変換:**
 
-| 側面 | Claude Code | OpenCode | Gemini | Kilo | Codex | Copilot | Antigravity |
-|------|------------|----------|--------|-------|-------|---------|-------------|
-| コマンド | スラッシュコマンド | スラッシュコマンド | スラッシュコマンド | スラッシュコマンド | スキル（TOML） | スラッシュコマンド | スキル |
-| エージェント形式 | Claude ネイティブ | `mode: subagent` | Claude ネイティブ | `mode: subagent` | スキル | ツールマッピング | スキル |
-| フックイベント | `PostToolUse` | N/A | `AfterTool` | N/A | N/A | N/A | N/A |
-| 設定 | `settings.json` | `opencode.json(c)` | `settings.json` | `kilo.json(c)` | TOML | Instructions | Config |
+| 側面 | Claude Code | OpenCode | Kilo | Codex | Copilot | Antigravity |
+|------|------------|----------|-------|-------|---------|-------------|
+| コマンド | スラッシュコマンド | スラッシュコマンド | スラッシュコマンド | スキル（TOML） | スラッシュコマンド | スキル |
+| エージェント形式 | Claude ネイティブ | `mode: subagent` | `mode: subagent` | スキル | ツールマッピング | スキル |
+| フックイベント | `PostToolUse` | N/A | N/A | N/A | N/A | N/A |
+| 設定 | `settings.json` | `opencode.json(c)` | `kilo.json(c)` | TOML | Instructions | Config |
 
 ---
 

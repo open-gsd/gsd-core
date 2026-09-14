@@ -9,7 +9,7 @@
 - **Claude Code / Copilot / OpenCode / Kilo:** `/gsd-command-name [args]` (hyphen form)
 - **Codex:** `$gsd-command-name [args]`
 
-The hyphen and colon forms are *runtime-specific spellings of the same command*. Whichever runtime you're on, the installer writes the correct form into your runtime's command directory.
+Whichever runtime you're on, the installer writes the correct form into your runtime's command directory.
 
 ### Skill Runtime Behavior (Claude Code)
 

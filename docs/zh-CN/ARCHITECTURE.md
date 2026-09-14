@@ -567,7 +567,7 @@ UI-SPEC.md (per phase) ───────────────────
 
 安装程序（`bin/install.js`，约 10,700 行）处理以下事项：
 
-1. **运行时检测** — 交互式提示或 CLI 标志（`--claude`、`--opencode`、`--gemini`、`--kilo`、`--codex`、`--copilot`、`--antigravity`、`--cursor`、`--windsurf`、`--augment`、`--trae`、`--qwen`、`--hermes`、`--codebuddy`、`--cline`、`--all`）
+1. **运行时检测** — 交互式提示或 CLI 标志（`--claude`、`--opencode`、`--kimi`、`--kilo`、`--codex`、`--copilot`、`--antigravity`、`--cursor`、`--windsurf`、`--augment`、`--trae`、`--qwen`、`--hermes`、`--codebuddy`、`--cline`、`--all`）
 2. **位置选择** — 全局（`--global`）或本地（`--local`）
 3. **文件部署** — 复制命令、技能、工作流、参考文档、模板、Agent 和 hook
 4. **运行时适配** — 按运行时转换文件内容：
@@ -576,8 +576,7 @@ UI-SPEC.md (per phase) ───────────────────
   - Kilo：复用 OpenCode 转换流水线，使用 Kilo 配置路径
   - Codex：从命令生成 TOML 配置 + 技能
   - Copilot：映射工具名称（Read→read、Bash→execute 等）
-  - Antigravity：调整 hook 事件名称（`AfterTool` 而非 `PostToolUse`）
-  - Antigravity：以技能为主，使用 Google 模型等效项
+  - Antigravity：以技能为主，使用 Google 模型等效项；调整 hook 事件名称（`AfterTool` 而非 `PostToolUse`）
   - Cursor：以技能为主，带 Cursor 规则引用
   - Windsurf：以技能为主，带 Windsurf 规则引用
   - Trae：以技能为主安装到 `~/.trae` / `./.trae`，不含 `settings.json` 或 hook 集成

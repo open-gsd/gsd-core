@@ -9,7 +9,7 @@ A narrative companion guide to GSD Core — orient yourself here, then follow th
 
 ## Table of Contents
 
-- [Slash-command forms](#slash-command-forms-hyphen-vs-colon)
+- [Slash-command forms](#slash-command-form)
 - [Namespace routing primer](#namespace-routing-primer-gsd-ns--v140)
 - [Reading GSD's output](#reading-gsds-output)
 - [Project lifecycle overview](#project-lifecycle-overview)

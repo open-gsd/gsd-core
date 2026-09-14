@@ -9,7 +9,7 @@
 - **Claude Code / Copilot / OpenCode / Kilo：** `/gsd-command-name [args]`（连字符形式）
 - **Codex：** `$gsd-command-name [args]`
 
-连字符形式与冒号形式是*同一命令在不同运行时中的拼写方式*。无论使用哪种运行时，安装程序都会将正确的形式写入该运行时的命令目录。
+无论使用哪种运行时，安装程序都会将正确的形式写入该运行时的命令目录。
 
 ---
 

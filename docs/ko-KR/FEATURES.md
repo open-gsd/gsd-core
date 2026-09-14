@@ -927,12 +927,12 @@ fix(03-01): correct auth token expiry
 
 **런타임 변환.**
 
-| 측면 | Claude Code | OpenCode | Gemini | Kilo | Codex | Copilot | Antigravity |
-|--------|------------|----------|--------|-------|-------|---------|-------------|
-| 명령어 | 슬래시 명령어 | 슬래시 명령어 | 슬래시 명령어 | 슬래시 명령어 | Skills(TOML) | 슬래시 명령어 | Skills |
-| 에이전트 형식 | Claude native | `mode: subagent` | Claude native | `mode: subagent` | Skills | Tool mapping | Skills |
-| 훅 이벤트 | `PostToolUse` | N/A | `AfterTool` | N/A | N/A | N/A | N/A |
-| 구성 | `settings.json` | `opencode.json(c)` | `settings.json` | `kilo.json(c)` | TOML | Instructions | Config |
+| 측면 | Claude Code | OpenCode | Kilo | Codex | Copilot | Antigravity |
+|--------|------------|----------|-------|-------|---------|-------------|
+| 명령어 | 슬래시 명령어 | 슬래시 명령어 | 슬래시 명령어 | Skills(TOML) | 슬래시 명령어 | Skills |
+| 에이전트 형식 | Claude native | `mode: subagent` | `mode: subagent` | Skills | Tool mapping | Skills |
+| 훅 이벤트 | `PostToolUse` | N/A | N/A | N/A | N/A | N/A |
+| 구성 | `settings.json` | `opencode.json(c)` | `kilo.json(c)` | TOML | Instructions | Config |
 
 ---
 

@@ -593,7 +593,7 @@ os helpers de ida e volta `readMappedCommit` e `writeMappedCommit`.
 
 O instalador (`bin/install.js`, ~10.700 linhas) trata de:
 
-1. **Detecção de runtime** — Prompt interativo ou flags CLI (`--claude`, `--opencode`, `--gemini`, `--kilo`, `--codex`, `--copilot`, `--antigravity`, `--cursor`, `--windsurf`, `--augment`, `--trae`, `--qwen`, `--hermes`, `--codebuddy`, `--cline`, `--all`)
+1. **Detecção de runtime** — Prompt interativo ou flags CLI (`--claude`, `--opencode`, `--kimi`, `--kilo`, `--codex`, `--copilot`, `--antigravity`, `--cursor`, `--windsurf`, `--augment`, `--trae`, `--qwen`, `--hermes`, `--codebuddy`, `--cline`, `--all`)
 2. **Seleção de local** — Global (`--global`) ou local (`--local`)
 3. **Implantação de arquivos** — Copia comandos, skills, workflows, referências, templates, agentes e hooks
 4. **Adaptação de runtime** — Transforma o conteúdo de arquivos por runtime:
@@ -602,8 +602,7 @@ O instalador (`bin/install.js`, ~10.700 linhas) trata de:
   - Kilo: Reutiliza o pipeline de conversão do OpenCode com os caminhos de configuração do Kilo
   - Codex: Gera config TOML + skills a partir de comandos
   - Copilot: Mapeia nomes de ferramentas (Read→read, Bash→execute, etc.)
-  - Antigravity: Ajusta nomes de eventos de hook (`AfterTool` em vez de `PostToolUse`)
-  - Antigravity: Skills em primeiro lugar com equivalentes de modelo do Google
+  - Antigravity: Skills em primeiro lugar com equivalentes de modelo do Google; ajusta nomes de eventos de hook (`AfterTool` em vez de `PostToolUse`)
   - Cursor: Skills em primeiro lugar com referências de regras do Cursor
   - Windsurf: Skills em primeiro lugar com referências de regras do Windsurf
   - Trae: Instalação skills-first em `~/.trae` / `./.trae` sem `settings.json` ou integração de hooks

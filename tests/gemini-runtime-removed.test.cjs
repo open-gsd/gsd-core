@@ -583,6 +583,7 @@ describe('#4709 the Gemini CLI reviewer lane is retired', () => {
     );
   });
 });
+});
 
 /**
  * #4728 — localized docs and runtime-loaded workflow prose still surface the retired Gemini CLI
@@ -641,34 +642,80 @@ describe('#4728 Gemini CLI prose retired from localized docs and runtime-loaded 
         + `runtime. Offenders:\n  ${offenders.join('\n  ')}`);
   });
 
-  test('runtime-example parentheticals in runtime-loaded workflows no longer name Gemini', () => {
-    // These five workflow files are runtime-loaded, not just reader-facing documentation: they are
-    // read by the agent at execution time and their example parentheticals steer which runtime the
-    // agent reaches for, so a stale "Gemini" example here actively misdirects execution, not merely
-    // a reader.
-    const WORKFLOW_FILES = ['settings', 'health', 'map-codebase', 'docs-update', 'execute-phase']
-      .map((name) => path.join(ROOT, 'gsd-core', 'workflows', `${name}.md`));
-    const PARENTHETICAL = [
-      /non-Claude runtimes \(([^)]*)\)/g,
-      /\(e\.g\. ([^)]*)\)/g,
-    ];
-    const offenders = [];
+  test('no runtime-loaded workflow file names the retired Gemini runtime', () => {
+    // Walk gsd-core/workflows/ recursively (this MUST cover nested dirs like
+    // new-project/steps/, where #4728's auto-mode-config.md defect lived) and assert no `.md`
+    // file contains a case-sensitive standalone `Gemini` token, i.e. no match for /\bGemini\b/.
+    //
+    // Why a bare `/\bGemini\b/` is the right predicate, and not a narrower parenthetical/heading
+    // scoped one: every LEGITIMATE gemini reference in this directory is spelled differently and
+    // therefore cannot collide with this assertion —
+    //   - Antigravity's config paths are lowercase with a slash: ~/.gemini/antigravity,
+    //     ~/.gemini/config, .gemini/antigravity-ide
+    //   - Google model ids are lowercase and hyphenated: gemini-3.1-pro-preview,
+    //     gemini-2.5-flash-lite
+    //   - env vars are uppercase: GEMINI_CONFIG_DIR, GEMINI_SESSION_ID, GEMINI_API_KEY
+    //   - the generated runtime-launcher preamble only ever uses GEMINI_CONFIG_DIR / $HOME/.gemini
+    // So a bare capitalised `Gemini` anywhere under gsd-core/workflows/ can only mean the retired
+    // RUNTIME is being named — which is exactly the defect this test exists to catch. These files
+    // are runtime-loaded (read by the agent at execution time), so a stale "Gemini" mention here
+    // actively steers execution toward a retired runtime, not merely misinforms a reader.
+    const WORKFLOWS_ROOT = path.join(ROOT, 'gsd-core', 'workflows');
+    const GEMINI_TOKEN = /\bGemini\b/;
+    // Two allowlisted exceptions, both matched by line CONTENT (never line number, so neither can
+    // silently drift if the file is edited above the matched line):
+    //   1. reapply-patches.md's historical note about where a pre-#1928 Gemini CLI install used
+    //      to place patches.
+    //   2. settings-advanced.md's Section 8 "Known provider" menu option. This predicate forbids
+    //      `Gemini` naming the retired RUNTIME axis; it does NOT forbid `Gemini` naming the
+    //      PROVIDER / MODEL-FAMILY axis. Section 8 ("Model Policy") is explicitly scoped to model
+    //      selection, independent of which runtime is installed, and its own intro says so. The
+    //      "Known provider" option lists Gemini alongside Claude/OpenAI/Qwen as a model provider —
+    //      the same axis as the lowercase `gemini-*` model ids used elsewhere in this file — and
+    //      Antigravity runs on that provider's models. That is the same runtime-vs-provider
+    //      taxonomy the whole #4709 epic rests on, so this line is correct as written and must
+    //      keep working, not get rewritten to dodge the predicate.
+    const isAllowlistedLegacyLine = (file, line) =>
+      (relPath(file) === 'gsd-core/workflows/reapply-patches.md'
+        && line.includes('Legacy:')
+        && line.includes('pre-#1928'))
+      || (relPath(file) === 'gsd-core/workflows/settings-advanced.md'
+        && line.includes('Known provider'));
 
-    for (const file of WORKFLOW_FILES) {
+    /** Recursively collect every `.md` file under `dir`. */
+    function markdownFilesUnder(dir) {
+      const out = [];
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          out.push(...markdownFilesUnder(full));
+        } else if (entry.isFile() && entry.name.endsWith('.md')) {
+          out.push(full);
+        }
+      }
+      return out;
+    }
+
+    const files = markdownFilesUnder(WORKFLOWS_ROOT);
+    // Guard against an empty or failed walk making this test pass vacuously.
+    assert.ok(files.length >= 50,
+      `expected at least 50 .md files under gsd-core/workflows/, found ${files.length} — the `
+        + 'recursive walk may be broken');
+
+    const offenders = [];
+    for (const file of files) {
       linesOf(file).forEach((line, i) => {
-        for (const pattern of PARENTHETICAL) {
-          for (const m of line.matchAll(pattern)) {
-            if (/\bGemini\b/.test(m[1])) {
-              offenders.push(`${relPath(file)}:${i + 1} names Gemini in "${m[0]}"`);
-            }
-          }
+        if (isAllowlistedLegacyLine(file, line)) return;
+        if (GEMINI_TOKEN.test(line)) {
+          offenders.push(`${relPath(file)}:${i + 1} names Gemini: "${line.trim()}"`);
         }
       });
     }
 
     assert.deepStrictEqual(offenders, [],
-      'a runtime-loaded workflow still names Gemini in a runtime-example parenthetical, steering '
-        + `the agent toward a retired runtime. Offenders:\n  ${offenders.join('\n  ')}`);
+      'a runtime-loaded workflow file under gsd-core/workflows/ still names the retired Gemini '
+        + 'runtime, steering the agent (these files are read at execution time, not just by a '
+        + `reader) toward a retired runtime. Offenders:\n  ${offenders.join('\n  ')}`);
   });
 
   test('PRESERVE: Antigravity survives in every surface the removal above touches (over-reach guard)', () => {
@@ -712,5 +759,4 @@ describe('#4728 Gemini CLI prose retired from localized docs and runtime-loaded 
       'docs/ja-JP/ARCHITECTURE.md does not mention Gemini 2.5 Pro — this locale genuinely diverged '
         + 'from the other three and must not be uniformly patched to match them');
   });
-});
 });

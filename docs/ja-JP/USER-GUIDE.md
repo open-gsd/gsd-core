@@ -33,7 +33,7 @@ execute → verify → review → ship ループにマッピングするレシ�
 
 ## スラッシュコマンドの形式 {#slash-command-forms-hyphen-vs-colon}
 
-GSD はサポートされているすべてのランタイムに **同一のスキルセット** を提供しており、ハイフン形式のスラッシュ表記を使用します。
+GSD はサポートされているすべてのランタイムに **同一のスキルセット** を提供しており、ハイフン形式のスラッシュ表記を使用します：
 
 - **ハイフン形式** — `/gsd-command-name` — Claude Code、Copilot、OpenCode、Kilo、Cursor、Windsurf、Augment、Antigravity、Trae で使用されます。
 

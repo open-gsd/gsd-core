@@ -37,7 +37,7 @@ GSD는 지원되는 모든 런타임에 **동일한 스킬 세트**를 제공하
 
 - **하이픈 형식** — `/gsd-command-name` — Claude Code, Copilot, OpenCode, Kilo, Cursor, Windsurf, Augment, Antigravity, Trae에서 사용됩니다.
 
-설치 프로그램이 대상으로 하는 각 런타임의 명령어 디렉터리에 이 형식을 작성합니다.
+설치 프로그램은 사용자가 대상으로 하는 각 런타임의 명령어 디렉터리에 이 형식을 작성합니다.
 
 ## 네임스페이스 라우팅 입문 (`gsd:<namespace>`, v1.40)
 

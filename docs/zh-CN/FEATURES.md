@@ -1022,12 +1022,12 @@ fix(03-01): correct auth token expiry
 
 **运行时转换：**
 
-| 方面 | Claude Code | OpenCode | Gemini | Kilo | Codex | Copilot | Antigravity | Trae | Cline | Augment | CodeBuddy | Qwen Code |
-|--------|------------|----------|--------|-------|-------|---------|-------------|------|-------|---------|-----------|-----------|
-| 命令 | 斜杠命令 | 斜杠命令 | 斜杠命令 | 斜杠命令 | Skills (TOML) | 斜杠命令 | Skills | Skills | Rules | Skills | Skills | Skills |
-| 智能体格式 | Claude 原生 | `mode: subagent` | Claude 原生 | `mode: subagent` | Skills | 工具映射 | Skills | Skills | Rules | Skills | Skills | Skills |
-| 钩子事件 | `PostToolUse` | N/A | `AfterTool` | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
-| 配置 | `settings.json` | `opencode.json(c)` | `settings.json` | `kilo.json(c)` | TOML | Instructions | Config | Config | `.clinerules` | Config | Config | Config |
+| 方面 | Claude Code | OpenCode | Kilo | Codex | Copilot | Antigravity | Trae | Cline | Augment | CodeBuddy | Qwen Code |
+|--------|------------|----------|-------|-------|---------|-------------|------|-------|---------|-----------|-----------|
+| 命令 | 斜杠命令 | 斜杠命令 | 斜杠命令 | Skills (TOML) | 斜杠命令 | Skills | Skills | Rules | Skills | Skills | Skills |
+| 智能体格式 | Claude 原生 | `mode: subagent` | `mode: subagent` | Skills | 工具映射 | Skills | Skills | Rules | Skills | Skills | Skills |
+| 钩子事件 | `PostToolUse` | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
+| 配置 | `settings.json` | `opencode.json(c)` | `kilo.json(c)` | TOML | Instructions | Config | Config | `.clinerules` | Config | Config | Config |
 
 ---
 

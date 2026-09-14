@@ -567,7 +567,7 @@ UI-SPEC.md (단계별) ───────────────────
 
 인스톨러(`bin/install.js`, ~10,700줄)는 다음을 처리한다:
 
-1. **런타임 감지** — 대화형 프롬프트 또는 CLI 플래그 (`--claude`, `--opencode`, `--gemini`, `--kilo`, `--codex`, `--copilot`, `--antigravity`, `--cursor`, `--windsurf`, `--augment`, `--trae`, `--qwen`, `--hermes`, `--codebuddy`, `--cline`, `--all`)
+1. **런타임 감지** — 대화형 프롬프트 또는 CLI 플래그 (`--claude`, `--opencode`, `--kimi`, `--kilo`, `--codex`, `--copilot`, `--antigravity`, `--cursor`, `--windsurf`, `--augment`, `--trae`, `--qwen`, `--hermes`, `--codebuddy`, `--cline`, `--all`)
 2. **위치 선택** — 전역(`--global`) 또는 로컬(`--local`)
 3. **파일 배포** — commands, skills, workflows, references, templates, agents, hooks 복사
 4. **런타임 적응** — 런타임별 파일 내용 변환:
@@ -576,8 +576,7 @@ UI-SPEC.md (단계별) ───────────────────
   - Kilo: Kilo 설정 경로로 OpenCode 변환 파이프라인 재사용
   - Codex: commands에서 TOML config + skills 생성
   - Copilot: 도구 이름 매핑 (Read→read, Bash→execute 등)
-  - Antigravity: 훅 이벤트 이름 조정 (`PostToolUse` 대신 `AfterTool`)
-  - Antigravity: Google 모델 등가물을 사용한 skills-first
+  - Antigravity: Google 모델 등가물을 사용한 skills-first; 훅 이벤트 이름 조정 (`PostToolUse` 대신 `AfterTool`)
   - Cursor: Cursor 규칙 참조를 사용한 skills-first
   - Windsurf: Windsurf 규칙 참조를 사용한 skills-first
   - Trae: `settings.json` 또는 훅 통합 없이 `~/.trae` / `./.trae`에 skills-first 설치

@@ -516,7 +516,7 @@ UI-SPEC.md (per phase) ───────────────────
 
 インストーラー（`bin/install.js`、約 10,700 行）は以下を処理します：
 
-1. **ランタイム検出** — インタラクティブプロンプトまたは CLI フラグ（`--claude`、`--opencode`、`--gemini`、`--kilo`、`--codex`、`--copilot`、`--antigravity`、`--cursor`、`--windsurf`、`--augment`、`--trae`、`--qwen`、`--hermes`、`--codebuddy`、`--cline`、`--all`）
+1. **ランタイム検出** — インタラクティブプロンプトまたは CLI フラグ（`--claude`、`--opencode`、`--kimi`、`--kilo`、`--codex`、`--copilot`、`--antigravity`、`--cursor`、`--windsurf`、`--augment`、`--trae`、`--qwen`、`--hermes`、`--codebuddy`、`--cline`、`--all`）
 2. **インストール先の選択** — グローバル（`--global`）またはローカル（`--local`）
 3. **ファイルデプロイ** — コマンド、スキル、ワークフロー、リファレンス、テンプレート、エージェント、フックをコピー
 4. **ランタイム適応** — ランタイムごとにファイル内容を変換：
@@ -525,8 +525,7 @@ UI-SPEC.md (per phase) ───────────────────
    - Kilo: OpenCode 変換パイプラインを Kilo の設定パスで再利用
    - Codex: コマンドから TOML 設定 + スキルを生成
    - Copilot: ツール名をマッピング（Read→read、Bash→execute など）
-   - Antigravity: フックイベント名を調整（`PostToolUse` の代わりに `AfterTool`）
-   - Antigravity: Google モデル同等品によるスキルファースト
+   - Antigravity: Google モデル同等品によるスキルファースト；フックイベント名を調整（`PostToolUse` の代わりに `AfterTool`）
    - Cursor: ルール参照付きスキルファースト
    - Windsurf: ルール参照付きスキルファースト
    - Trae: `~/.trae` / `./.trae` へのスキルファーストインストール、`settings.json` またはフック統合なし
