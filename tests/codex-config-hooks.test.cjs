@@ -3629,16 +3629,39 @@ describe('#3427 + #3433 — Codex installer avoids duplicate skills and mixed ho
 }
 
 
-// ---------------------------------------------------------------------------
-// #4544 — manifest-driven rollback: hooks/, scripts/, gsd-core payload, manifest
-// ---------------------------------------------------------------------------
+{
+  const { test, describe } = require('node:test');
+  const assert = require('node:assert/strict');
+  const os = require('os');
+  const { cleanup } = require('./helpers.cjs');
+  const { install: installFor4544 } = require('../bin/install.js');
+  const installModule = require('../bin/install.js');
 
-// concurrency: false — same harness as the #3245 block above: patches
-// module.exports.__codexSchemaValidator and drives the real install pipeline.
-// The validator seam fires AFTER skills/, agents/, VERSION, CHANGELOG.md,
-// scripts/, the initial manifest, and hooks/ staging have all run, so every
-// assertion below observes a genuinely overwritten state, not a vacuous one.
-describe('#4544 — manifest-driven rollback covers hooks/, scripts/, gsd-core payload, and the manifest', { concurrency: false }, () => {
+  // Harness copy of runCodexInstall — the canonical one lives inside a folded
+  // block above and is not visible at this scope.
+  function runCodexInstall(codexHome) {
+    const previousCodexHome = process.env.CODEX_HOME;
+    const previousCwd = process.cwd();
+    const previousHome = process.env.HOME;
+    const previousUserProfile = process.env.USERPROFILE;
+    process.env.CODEX_HOME = codexHome;
+    process.env.HOME = codexHome;
+    process.env.USERPROFILE = codexHome;
+    try {
+      process.chdir(path.join(__dirname, '..'));
+      return installFor4544(true, 'codex');
+    } finally {
+      process.chdir(previousCwd);
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = previousUserProfile;
+    }
+  }
+
+  describe('#4544 — manifest-driven rollback covers hooks/, scripts/, gsd-core payload, and the manifest', { concurrency: false }, () => {
   let tmpDir;
   let codexHome;
 
@@ -3861,3 +3884,4 @@ describe('#4544 — manifest-driven rollback covers hooks/, scripts/, gsd-core p
     }
   });
 });
+}
