@@ -132,7 +132,7 @@ The host has no harness-native isolation primitive, so **GSD** creates each work
 gsd_run query worktree.worker-status --root "${ORCH_ROOT}/.claude/worktrees"
 ```
 
-Every entry with `needsReconciliation: true` (recorded running, process gone) is reconciled from its persisted record — SUMMARY + plan-scoped commits + branch state per `execute-phase/steps/completion-reconciliation.md`, merge if artifact-complete, preserve with recovery information otherwise — then marked with `worker-complete`. **Never re-dispatch a recorded plan, and never reconcile on narration alone.**
+Every entry with `needsReconciliation: true` (recorded running, process gone) is reconciled from its persisted record — SUMMARY + plan-scoped commits + branch state per `execute-phase/steps/completion-reconciliation.md`, merge if artifact-complete, preserve with recovery information otherwise — then marked with `worker-complete`. An entry that is still `running` with `pidAlive: true` is a live worker — wait on it or leave it running; its terminal state surfaces on the next sweep. One caution: pid reuse on a long-lived host can keep a dead worker reading as alive — when a running entry's `startedAt` is older than the executor timeout budget, inspect its log and worktree before trusting liveness. **Never re-dispatch a recorded plan, and never reconcile on narration alone.**
 
 Run the loop below once per runnable plan in the wave, **one plan at a time** (`git worktree add` races on `.git/config.lock`).
 
@@ -338,7 +338,7 @@ fi
 
 `worktree create` records the entry in `$WAVE_WORKTREE_MANIFEST` itself, so **do not** call `worktree.record-agent` for these plans — that verb is the harness-path counterpart, used because the harness creates the worktree behind GSD's back. Double-recording is deduped by path+branch, but the create verb is the single writer here.
 
-Spawn `EXEC_JSON`'s `command` + `args` as a background process with its working directory set to `EXEC_JSON.cwd`, capturing the PID (`$!`) and redirecting stdout+stderr into a per-worker log placed BESIDE the worktree — `${WT_PATH}.worker.log`, not inside it: cleanup removes the worktree, and the log plus the lifecycle record must survive it. The `cwd` is returned for **every** host, including those whose descriptor has no cwd flag (`cwdFlag: null`) and therefore bind through the process's own working directory — always set it, never assume the flag did the job.
+Spawn `EXEC_JSON`'s `command` + `args` as a background process with its working directory set to `EXEC_JSON.cwd`, capturing the PID (`WORKER_PID=$!`) and redirecting stdout+stderr into a per-worker log placed BESIDE the worktree — `${WT_PATH}.worker.log`, not inside it: cleanup removes the worktree, and the log plus the lifecycle record must survive it. The `cwd` is returned for **every** host, including those whose descriptor has no cwd flag (`cwdFlag: null`) and therefore bind through the process's own working directory — always set it, never assume the flag did the job.
 
 **Record the launch before any wait (#4624).** A bare background `wait` left the wave with no durable lifecycle: when the orchestrator's turn ended first, a finished worker sat undiscovered and a blocked one sat unreported, and a resumed session had nothing to recover from. Immediately after the spawn — before waiting on anything — persist the launch identity and result location:
 
@@ -362,7 +362,7 @@ gsd_run query worktree.worker-complete --path "$WT_PATH" --exit-code "$WORKER_EX
   --note "{worker_note}"
 ```
 
-`{worker_note}` carries the blocker description and the log path for a preserved worktree (`{WT_PATH}.worker.log`), or is empty for a clean finish.
+`{worker_note}` carries the blocker description and the log path for a preserved worktree (`$WT_PATH.worker.log`), or is empty for a clean finish.
 
 The executor never touches `STATE.md`/`ROADMAP.md`, and that guard needs no new code — `execute-plan` auto-detects worktree mode via the `IS_WORKTREE` (`.git`-is-a-file) primitive, which a GSD-created worktree trips identically to a harness-created one.
 

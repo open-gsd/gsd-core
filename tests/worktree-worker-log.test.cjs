@@ -111,7 +111,7 @@ describe('#4624 worktree worker lifecycle records', () => {
 
   test('status composes the recovery view: dead pid + running record = needsReconciliation', () => {
     run('record', ['--path', wtPath, '--pid', '4242', '--plan', '3', '--summary-path', summaryPath]);
-    const r = run('status', ['--path', wtPath], { pidAlive: dead });
+    const r = run('status', ['--path', wtPath], { isPidAlive: dead });
     const out = JSON.parse(r.stdout);
     assert.equal(out.found, true);
     assert.equal(out.workers[0].state, 'running');
@@ -123,7 +123,7 @@ describe('#4624 worktree worker lifecycle records', () => {
   test('status surfaces artifact-completion independently of the process result', () => {
     run('record', ['--path', wtPath, '--pid', '4242', '--plan', '3', '--summary-path', summaryPath]);
     require('node:fs').writeFileSync(summaryPath, '# SUMMARY\n');
-    const r = run('status', ['--path', wtPath], { pidAlive: dead });
+    const r = run('status', ['--path', wtPath], { isPidAlive: dead });
     const out = JSON.parse(r.stdout);
     assert.equal(out.workers[0].summaryExists, true, 'the exit-after-artifact-completion shape the issue describes');
     assert.equal(out.workers[0].needsReconciliation, true);
@@ -155,7 +155,7 @@ describe('#4624 worktree worker lifecycle records', () => {
     assert.equal(again.exitCode, 0);
     const out = JSON.parse(again.stdout);
     assert.equal(out.alreadyComplete, true);
-    const view = JSON.parse(run('status', ['--path', wtPath], { pidAlive: dead }).stdout);
+    const view = JSON.parse(run('status', ['--path', wtPath], { isPidAlive: dead }).stdout);
     assert.equal(view.workers[0].state, 'complete');
     assert.equal(view.workers[0].exitCode, 1);
     assert.equal(view.workers[0].needsReconciliation, false, 'a terminal record never needs reconciliation');
@@ -170,6 +170,7 @@ describe('#4624 worktree worker lifecycle records', () => {
   test('usage errors: missing/invalid --pid, and status requires exactly one of --path/--root', () => {
     assert.equal(run('record', ['--path', wtPath, '--plan', '3', '--summary-path', summaryPath]).exitCode, 2);
     assert.equal(run('record', ['--path', wtPath, '--pid', 'not-a-pid', '--plan', '3', '--summary-path', summaryPath]).exitCode, 2);
+    assert.equal(run('record', ['--path', wtPath, '--pid', '4242', '--plan', '3']).exitCode, 2, '--summary-path is required — an omitted path would make summaryExists vacuously true');
     assert.equal(run('status', ['--path', wtPath, '--root', dir]).exitCode, 2);
     assert.equal(run('status', []).exitCode, 2);
   });

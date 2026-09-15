@@ -2335,7 +2335,7 @@ function cmdWorktreeWorkerRecord(cwd: string, args: string[] = [], deps: Record<
   const plan = flag('--plan');
   const summaryPath = flag('--summary-path');
   const logFile = flag('--log-file');
-  if (!worktreePath || !pidText || !plan) {
+  if (!worktreePath || !pidText || !plan || !summaryPath) {
     writeErr('Usage: worktree worker-record --path <worktree> --pid <pid> --plan <plan_number> --summary-path <path> [--log-file <path>]\n');
     process.exitCode = 2;
     return;
@@ -2461,13 +2461,19 @@ function cmdWorktreeWorkerStatus(cwd: string, args: string[] = [], deps: Record<
   if (worktreePath) {
     const recordPath = workerRecordPath(path.resolve(cwd, worktreePath));
     let record: WorkerRecord | null = null;
+    let unreadable = false;
     try {
       record = JSON.parse(readFile(recordPath)) as WorkerRecord;
     } catch {
-      write(`${JSON.stringify({ ok: true, found: false, workers: [] }, null, 2)}\n`);
-      return;
+      // A record that exists but cannot be parsed is NOT "never dispatched" —
+      // conflating the two invites a re-dispatch. Surface it as a candidate.
+      unreadable = fs.existsSync(recordPath);
     }
-    views.push(workerStatusView(record, deps));
+    if (unreadable || !record) {
+      views.push({ state: 'unreadable', needsReconciliation: true, recordPath });
+    } else {
+      views.push(workerStatusView(record, deps));
+    }
   } else {
     for (const { record } of readWorkerRecordsFromRoot(path.resolve(cwd, root), readFile, readdir)) {
       if (!record) { // torn record is itself a reconciliation candidate
