@@ -812,6 +812,7 @@ const {
   applyInstallerMigrationPlan,
   discoverInstallerMigrations,
   MANIFEST_SCHEMA_VERSION,
+  readInstallManifest,
   runInstallerMigrations,
 } = require(path.join(_gsdLibDir, 'installer-migrations.cjs'));
 const {
@@ -10842,6 +10843,22 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // Map<filename, Buffer> — content snapshot of each pre-existing gsd-* agent file.
   const codexPreInstallAgentContents = new Map();
   let codexPreInstallVersionBytes = null;
+  // #4544 — manifest-driven snapshot state (captured in the block below):
+  //   codexPreInstallManagedFiles  — Map<normalizedRelPath, Buffer|null>; one
+  //       entry per path the PRIOR install's gsd-file-manifest.json recorded.
+  //       null means the path did not exist pre-install, so rollback re-deletes
+  //       whatever this install put there instead of resurrecting it.
+  //   codexPreInstallManifestBytes — Buffer (or null) of the prior manifest file
+  //       itself, which a reinstall rewrites.
+  //   codexPreInstallHooksTree     — Map<relPath, Buffer>, a full recursive
+  //       snapshot of <targetDir>/hooks/. The Codex manifest deliberately omits
+  //       hooks/ (the !isCodex gate on shared-hooks tracking), and hooks/ is
+  //       shared space, so the restore is wholesale: user files that predate
+  //       the install are in the snapshot and come back; anything the failed
+  //       install staged does not.
+  const codexPreInstallManagedFiles = new Map();
+  let codexPreInstallManifestBytes = null;
+  const codexPreInstallHooksTree = new Map();
   if (_hostBehaviors(runtime).tomlConfigInstall && !isMinimalMode(_effectiveInstallMode)) {
     const _preSkillsDir = _resolveSkillsRootDir(runtime, targetDir, _installScopeId);
     if (fs.existsSync(_preSkillsDir)) {
@@ -10884,18 +10901,111 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     if (fs.existsSync(_preVersionPath)) {
       try { codexPreInstallVersionBytes = fs.readFileSync(_preVersionPath); } catch (_) { /* best-effort */ }
     }
+    // #4544 — capture the manifest-driven surfaces, same best-effort
+    // conventions as the skills/ snapshot above. readInstallManifest is the
+    // same hardened reader installer-migrations uses (array/ garbage shapes
+    // degrade to an empty file set — rollback then simply covers less, never
+    // crashes), and resolveInstallRelativePath keeps a hostile manifest key
+    // from turning into a write outside the install root.
+    const _priorManifest = readInstallManifest(targetDir);
+    for (const rel of Object.keys(_priorManifest.files)) {
+      const resolved = resolveInstallRelativePath(targetDir, rel);
+      if (!resolved) continue;
+      try {
+        codexPreInstallManagedFiles.set(resolved.relPath, fs.readFileSync(resolved.fullPath));
+      } catch (_) {
+        // Listed but absent/unreadable pre-install: snapshot absence, so
+        // rollback re-deletes instead of resurrecting.
+        codexPreInstallManagedFiles.set(resolved.relPath, null);
+      }
+    }
+    const _preManifestPath = path.join(targetDir, MANIFEST_NAME);
+    if (fs.existsSync(_preManifestPath)) {
+      try { codexPreInstallManifestBytes = fs.readFileSync(_preManifestPath); } catch (_) { /* best-effort */ }
+    }
+    const _preHooksDir = path.join(targetDir, 'hooks');
+    if (fs.existsSync(_preHooksDir)) {
+      const _snapshotHooksDir = (dir, relBase) => {
+        let children;
+        try { children = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+        for (const child of children) {
+          const relPath = relBase ? `${relBase}/${child.name}` : child.name;
+          const fullPath = path.join(dir, child.name);
+          if (child.isDirectory()) {
+            _snapshotHooksDir(fullPath, relPath);
+          } else {
+            try { codexPreInstallHooksTree.set(relPath, fs.readFileSync(fullPath)); } catch (_) { /* best-effort */ }
+          }
+        }
+      };
+      _snapshotHooksDir(_preHooksDir, '');
+    }
   }
+
+  // #4544 — shared restore for the manifest-driven surfaces. Called by BOTH
+  // rollback paths: _codexPreConfigRollback (CHANGELOG.md, scripts/ and the
+  // initial manifest write all happen BEFORE config.toml is touched, so the
+  // early path must cover them) and the full restoreCodexSnapshot() below
+  // (which additionally handles hooks/ staging and config.toml). Best-effort
+  // throughout, matching the #3245 convention: restore failures never mask
+  // the original install error.
+  const restoreCodexManagedSnapshot = () => {
+    // hooks/ — wholesale: drop the current tree, recreate the pre-install
+    // snapshot. A user file that predated the install is IN the snapshot and
+    // comes back; anything the failed install staged is not, and goes away
+    // with the tree.
+    const _hooksRestoreDir = path.join(targetDir, 'hooks');
+    if (codexPreInstallHooksTree.size > 0) {
+      try { fs.rmSync(_hooksRestoreDir, { recursive: true, force: true }); } catch (_) { /* best-effort */ }
+      for (const [relPath, buf] of codexPreInstallHooksTree) {
+        const destFile = path.join(_hooksRestoreDir, relPath);
+        try {
+          fs.mkdirSync(path.dirname(destFile), { recursive: true });
+          fs.writeFileSync(destFile, buf);
+        } catch (_) { /* best-effort */ }
+      }
+    } else if (fs.existsSync(_hooksRestoreDir)) {
+      // Nothing pre-existed under hooks/: nothing this install staged may
+      // survive either.
+      try { fs.rmSync(_hooksRestoreDir, { recursive: true, force: true }); } catch (_) { /* best-effort */ }
+    }
+    // Every GSD-owned path the prior manifest recorded: restore bytes, or
+    // re-delete a path that was absent pre-install.
+    for (const [relPath, buf] of codexPreInstallManagedFiles) {
+      const resolved = resolveInstallRelativePath(targetDir, relPath);
+      if (!resolved) continue;
+      try {
+        if (buf !== null) {
+          fs.mkdirSync(path.dirname(resolved.fullPath), { recursive: true });
+          fs.writeFileSync(resolved.fullPath, buf);
+        } else if (fs.existsSync(resolved.fullPath)) {
+          fs.rmSync(resolved.fullPath, { force: true });
+        }
+      } catch (_) { /* best-effort */ }
+    }
+    // The prior manifest file itself: reinstall rewrites it; rollback returns
+    // the previous install's manifest (or removes it on a clean first install).
+    const _manifestRestorePath = path.join(targetDir, MANIFEST_NAME);
+    if (codexPreInstallManifestBytes !== null) {
+      try { fs.writeFileSync(_manifestRestorePath, codexPreInstallManifestBytes); } catch (_) { /* best-effort */ }
+    } else if (fs.existsSync(_manifestRestorePath)) {
+      try { fs.unlinkSync(_manifestRestorePath); } catch (_) { /* best-effort */ }
+    }
+  };
 
   // #3245 CR finding 2 — Rollback coverage extends to ALL post-snapshot operations,
   // not just the Codex config/hook error paths. Any throw between snapshot capture and
   // the Codex config block (skills copy, agents copy, VERSION write, manifest write, etc.)
   // must also trigger rollback so the caller is never left in a partially-installed state.
   //
-  // _codexPreConfigRollback covers the four surfaces that can be mutated before
-  // config.toml is touched: skills/, agents/, gsd-core/VERSION, and orphaned
+  // _codexPreConfigRollback covers the surfaces that can be mutated before
+  // config.toml is touched: skills/, agents/, gsd-core/VERSION, the manifest-
+  // driven surfaces (#4544 — CHANGELOG.md, scripts/, .gsd-runtime and the
+  // manifest itself are all rewritten in this window), and orphaned
   // atomic-write temp files. It is safe to call before any writes have happened.
   // The full restoreCodexSnapshot() (defined inside the config block) additionally
-  // handles config.toml, which is not yet touched at this point in the pipeline.
+  // handles config.toml and the staged hooks/ tree, which are not yet touched
+  // at this point in the pipeline.
   const _codexPreConfigRollback = !_hostBehaviors(runtime).tomlConfigInstall || isMinimalMode(_effectiveInstallMode) ? null : () => {
     rollbackInstallerMigrations();
     // skills/gsd-* — pass 1: restore snapshot entries (may be absent if deleted mid-install).
@@ -10956,6 +11066,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     } else if (fs.existsSync(_earlyVersionPath)) {
       try { fs.unlinkSync(_earlyVersionPath); } catch (_) { /* best-effort */ }
     }
+    // #4544 — manifest-driven surfaces (hooks/ is not touched in this window,
+    // but the shared restore is idempotent against an untouched tree).
+    restoreCodexManagedSnapshot();
     // Orphaned atomic-write temp files.
     const _earlyTmpPattern = /\.tmp-\d+-\d+$/;
     function _earlyCleanTmpFiles(dir) {
@@ -12255,6 +12368,11 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       } else if (fs.existsSync(_rollbackVersionPath)) {
         try { fs.unlinkSync(_rollbackVersionPath); } catch (_) { /* best-effort */ }
       }
+
+      // 4b. #4544 — manifest-driven surfaces: the staged hooks/ tree, every
+      // GSD-owned path the prior manifest recorded (scripts/, gsd-core/
+      // payload), and the prior manifest file itself.
+      restoreCodexManagedSnapshot();
 
       // 5. Orphaned atomic-write temp files (<file>.tmp-<pid>-<n>) in targetDir.
       // These can accumulate if an atomic write fails mid-rename. Best-effort scan.
