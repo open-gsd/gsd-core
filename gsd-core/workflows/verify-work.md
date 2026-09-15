@@ -46,6 +46,7 @@ PHASE_ARG=$(echo "$ARGUMENTS" | sed -E 's/--ws[[:space:]]+[A-Za-z0-9._-]+//g' | 
 
 INIT=$(gsd_run query init.verify-work "${PHASE_ARG}" ${GSD_WS})
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
+PHASE_NUMBER=$(printf '%s' "$INIT" | jq -r '.phase_number // empty')
 AGENT_SKILLS_PLANNER=$(gsd_run query agent-skills gsd-planner)
 AGENT_SKILLS_CHECKER=$(gsd_run query agent-skills gsd-plan-checker)
 ```
@@ -69,7 +70,7 @@ kind, not gates alone. Each hook is data-driven — resolved from the capability
 registry, not hardcoded here.
 
 ```bash
-VERIFY_PRE_HOOKS_JSON=$(gsd_run loop render-hooks verify:pre --raw)
+VERIFY_PRE_HOOKS_JSON=$(gsd_run loop render-hooks verify:pre --raw --phase "${PHASE_NUMBER}")
 PHASE_DIR=$(printf '%s' "$INIT" | jq -r '.phase_dir // empty')
 ```
 
@@ -599,7 +600,7 @@ Present summary:
 **If issues == 0:**
 
 ```bash
-VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
+VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw --phase "${PHASE_NUMBER}")
 SECURITY_FILE=$(ls "${PHASE_DIR}"/*-SECURITY.md 2>/dev/null | head -1)
 ```
 
