@@ -1013,7 +1013,7 @@ fix(03-01): correct auth token expiry
 **目的：** 跨多个 AI 编程智能体运行时运行 GSD。
 
 **需求：**
-- REQ-RUNTIME-01：系统必须支持 Claude Code、OpenCode、Gemini CLI、Kilo、Codex、Copilot、Antigravity、Trae、Cline、Augment Code、CodeBuddy、Qwen Code
+- REQ-RUNTIME-01：系统必须支持 Claude Code、OpenCode、Kilo、Codex、Copilot、Antigravity、Trae、Cline、Augment Code、CodeBuddy、Qwen Code
 - REQ-RUNTIME-02：安装器必须按运行时转换内容（工具名称、路径、前置元数据）
 - REQ-RUNTIME-03：安装器必须支持交互式和非交互式（`--claude --global`）模式
 - REQ-RUNTIME-04：安装器必须支持全局和本地安装
@@ -1022,12 +1022,12 @@ fix(03-01): correct auth token expiry
 
 **运行时转换：**
 
-| 方面 | Claude Code | OpenCode | Gemini | Kilo | Codex | Copilot | Antigravity | Trae | Cline | Augment | CodeBuddy | Qwen Code |
-|--------|------------|----------|--------|-------|-------|---------|-------------|------|-------|---------|-----------|-----------|
-| 命令 | 斜杠命令 | 斜杠命令 | 斜杠命令 | 斜杠命令 | Skills (TOML) | 斜杠命令 | Skills | Skills | Rules | Skills | Skills | Skills |
-| 智能体格式 | Claude 原生 | `mode: subagent` | Claude 原生 | `mode: subagent` | Skills | 工具映射 | Skills | Skills | Rules | Skills | Skills | Skills |
-| 钩子事件 | `PostToolUse` | N/A | `AfterTool` | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
-| 配置 | `settings.json` | `opencode.json(c)` | `settings.json` | `kilo.json(c)` | TOML | Instructions | Config | Config | `.clinerules` | Config | Config | Config |
+| 方面 | Claude Code | OpenCode | Kilo | Codex | Copilot | Antigravity | Trae | Cline | Augment | CodeBuddy | Qwen Code |
+|--------|------------|----------|-------|-------|---------|-------------|------|-------|---------|-----------|-----------|
+| 命令 | 斜杠命令 | 斜杠命令 | 斜杠命令 | Skills (TOML) | 斜杠命令 | Skills | Skills | Rules | Skills | Skills | Skills |
+| 智能体格式 | Claude 原生 | `mode: subagent` | `mode: subagent` | Skills | 工具映射 | Skills | Skills | Rules | Skills | Skills | Skills |
+| 钩子事件 | `PostToolUse` | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
+| 配置 | `settings.json` | `opencode.json(c)` | `kilo.json(c)` | TOML | Instructions | Config | Config | `.clinerules` | Config | Config | Config |
 
 ---
 
@@ -1174,9 +1174,9 @@ GSD update available: 1.39.0 → 1.40.0. Run /gsd-update.
 
 ### 42. 跨 AI 同行评审
 
-**命令：** `/gsd-review --phase N [--gemini] [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy] [--antigravity] [--ollama] [--lm-studio] [--llama-cpp] [--kimi-code] [--all]`
+**命令：** `/gsd-review --phase N [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy] [--antigravity] [--ollama] [--lm-studio] [--llama-cpp] [--kimi-code] [--all]`
 
-**目的：** 调用外部 AI CLI（Gemini、Claude、Codex、CodeRabbit、OpenCode、Qwen Code、Cursor、Antigravity、Kimi Code）和本地 OpenAI 兼容服务器（Ollama、LM Studio、llama.cpp）独立审查阶段计划。生成包含每位审查者反馈的结构化 REVIEWS.md。
+**目的：** 调用外部 AI CLI（Claude、Codex、CodeRabbit、OpenCode、Qwen Code、Cursor、Antigravity、Kimi Code）和本地 OpenAI 兼容服务器（Ollama、LM Studio、llama.cpp）独立审查阶段计划。生成包含每位审查者反馈的结构化 REVIEWS.md。
 
 **需求：**
 - REQ-REVIEW-01：系统必须检测系统上可用的 AI CLI
@@ -1447,7 +1447,7 @@ PreToolUse 钩子，检测 Claude 在 GSD 工作流上下文之外尝试文件�
 **目的：** 在单个交互式安装会话中选择多个运行时。
 
 **需求：**
-- REQ-MULTI-RT-01：交互式提示必须支持多选（例如 Claude Code + Gemini）
+- REQ-MULTI-RT-01：交互式提示必须支持多选（例如 Claude Code + Antigravity）
 - REQ-MULTI-RT-02：CLI 标志必须继续适用于非交互式安装
 
 **流程：**
@@ -1688,13 +1688,13 @@ PreToolUse 钩子，检测 Claude 在 GSD 工作流上下文之外尝试文件�
 **需求：**
 - REQ-SKILLS-01：安装器必须为 Claude Code 2.1.88+ 写入 `skills/gsd-*/SKILL.md`
 - REQ-SKILLS-02：安装器必须自动清理旧版 `commands/gsd/` 目录
-- REQ-SKILLS-03：安装器必须通过 Gemini 路径维护与旧版 Claude Code 的向后兼容性
+- REQ-SKILLS-03：安装器必须通过旧版 `commands/gsd/` 路径维护与旧版 Claude Code 的向后兼容性
 
 **流程：**
 1. **检测** — 检查 Claude Code 版本以确定技能支持情况
 2. **迁移** — 为每个 GSD 命令写入 `skills/gsd-*/SKILL.md` 文件
 3. **清理** — 如果已安装技能，则删除旧版 `commands/gsd/` 目录
-4. **回退** — 为旧版 Claude Code 维护 Gemini 路径兼容性
+4. **回退** — 为旧版 Claude Code 维护旧版 `commands/gsd/` 路径兼容性
 
 ---
 
@@ -2968,7 +2968,7 @@ explicit reviewer flags -> --all -> review.default_reviewers -> all detected rev
 
 **需求：**
 - REQ-QUOTA-01：配额失败不得将立即重试作为主要恢复选项。
-- REQ-QUOTA-02：分类必须涵盖 Claude、Copilot、Codex、Gemini 和通用提供商哨兵。
+- REQ-QUOTA-02：分类必须涵盖 Claude、Copilot、Codex 和通用提供商哨兵。
 - REQ-QUOTA-03：非配额失败必须继续通过正常的执行失败路径。
 
 **参考：** [提供商速率限制信号](../research/provider-rate-limit-signals.md)

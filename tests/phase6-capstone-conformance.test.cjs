@@ -22,6 +22,22 @@ const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
 const { isCentralConfigKey } = require('../gsd-core/bin/lib/config-schema.cjs');
 const { escapeRegex: escapeRegExp } = require('../gsd-core/bin/lib/pattern.cjs');
 
+/**
+ * A single gsd-tools.cjs `check <query> --raw` CLI subcommand spawn, no
+ * fan-out, doing real registry lookup and gate-predicate evaluation work
+ * through the full CLI dispatch path -- "the real dispatch form used by
+ * the host loop." Coincides numerically with tests/helpers/timeouts.cjs's
+ * QUICK_SPAWN_TIMEOUT_MS and epic #4445 batch 13's
+ * TASK_RESOLVER_INVOKE_TIMEOUT_MS, but describes neither of those
+ * operations -- kept local. Also distinct from
+ * LOOP_HOOK_POINT_CLI_TIMEOUT_MS (60000ms), whose own doc comment lists
+ * `check <check-id>` as one of its representative verbs at a heavier
+ * bound -- this site's pre-existing value (10000ms) was not bench-
+ * remeasured against that class norm and is preserved as-is, not
+ * reclassified.
+ */
+const GATE_CHECK_CLI_TIMEOUT_MS = 10000;
+
 function readRepoFile(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 }
@@ -421,7 +437,7 @@ describe('ADR-857 phase 6 — capabilities must not bake install paths into the 
         rawOut = execFileSync(
           process.execPath,
           [gsdTools, 'check', query, '1', '--raw'],
-          { cwd: tmpDir, encoding: 'utf-8', timeout: 10000 },
+          { cwd: tmpDir, encoding: 'utf-8', timeout: GATE_CHECK_CLI_TIMEOUT_MS },
         );
         const parsed = JSON.parse(rawOut.trim());
         if (typeof parsed.block !== 'boolean') {
@@ -437,7 +453,7 @@ describe('ADR-857 phase 6 — capabilities must not bake install paths into the 
           rawOut = execFileSync(
             process.execPath,
             [gsdTools, 'check', query, tmpDir, '--raw'],
-            { cwd: tmpDir, encoding: 'utf-8', timeout: 10000 },
+            { cwd: tmpDir, encoding: 'utf-8', timeout: GATE_CHECK_CLI_TIMEOUT_MS },
           );
           const parsed = JSON.parse(rawOut.trim());
           if (typeof parsed.block !== 'boolean') {

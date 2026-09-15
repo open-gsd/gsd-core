@@ -195,7 +195,6 @@ API 密钥字段接受字符串值（密钥本身）。也可以设置为哨兵�
 |---------|------|---------|-------------|
 | `review.models.claude` | string | （会话模型） | Claude 风格审查的命令。未设置时默认使用会话模型 |
 | `review.models.codex` | string | `null` | Codex 审查命令，如 `"codex exec --model gpt-5"` |
-| `review.models.gemini` | string | `null` | Gemini 审查命令，如 `"gemini -m gemini-2.5-pro"` |
 | `review.models.opencode` | string | `null` | OpenCode 审查命令，如 `"opencode run --model claude-sonnet-4"` |
 
 `<cli>` slug 需通过 `[a-zA-Z0-9_-]+` 验证。空值或包含路径的 slug 会被 `config-set` 拒绝。
@@ -206,14 +205,14 @@ API 密钥字段接受字符串值（密钥本身）。也可以设置为哨兵�
 
 | 设置 | 类型 | 默认值 | 描述 |
 |---------|------|---------|-------------|
-| `review.default_reviewers` | string[] \| null | `null`（所有已检测审查器） | 无标志 `/gsd-review` 的可选默认子集，如 `["gemini","codex"]`。优先级顺序：显式审查器标志 > `--all` > `review.default_reviewers` > 所有已检测。未知 slug 以警告忽略；已知但未检测到的 slug 以信息提示忽略；空数组会被 `config-set` 拒绝。 |
+| `review.default_reviewers` | string[] \| null | `null`（所有已检测审查器） | 无标志 `/gsd-review` 的可选默认子集，如 `["codex","claude"]`。优先级顺序：显式审查器标志 > `--all` > `review.default_reviewers` > 所有已检测。未知 slug 以警告忽略；已知但未检测到的 slug 以信息提示忽略；空数组会被 `config-set` 拒绝。 |
 
 示例：
 
 ```json
 {
   "review": {
-    "default_reviewers": ["gemini", "codex"]
+    "default_reviewers": ["codex", "claude"]
   }
 }
 ```
@@ -254,7 +253,7 @@ API 密钥字段接受字符串值（密钥本身）。也可以设置为哨兵�
 | `workflow.plan_bounce_script` | string | （无） | 用于计划反弹验证的外部脚本路径。接收 PLAN.md 路径作为第一个参数。当 `plan_bounce` 为 `true` 时必需。v1.36 新增 |
 | `workflow.plan_bounce_passes` | number | `2` | 顺序执行的反弹轮数。每轮将上一轮的输出反馈给验证器。较高的值提升严格性，但会增加延迟。v1.36 新增 |
 | `workflow.post_planning_gaps` | boolean | `true` | 统一的规划后差距报告（#2493）。所有计划生成并提交后，扫描 REQUIREMENTS.md 和 CONTEXT.md 的 `<decisions>` 与阶段目录中的每个 PLAN.md，然后打印一个 `Source \| Item \| Status` 表格。单词边界匹配（REQ-1 vs REQ-10）和自然排序（REQ-02 在 REQ-10 之前）。非阻塞——仅为信息性报告。设为 `false` 跳过计划阶段的步骤 13e。 |
-| `workflow.plan_review_convergence` | boolean | `false` | 启用 `/gsd-plan-review-convergence` 命令。默认禁用——此键为 `false` 时命令以启用说明退出。该命令自动化手动计划→审查→重新规划循环：派生已配置的审查器（Codex、Gemini、Claude、OpenCode、Ollama、LM Studio、llama.cpp），通过 CYCLE_SUMMARY 契约计算未解决的 HIGH 问题，用 `--reviews` 反馈重新规划，并重复直至收敛或达到最大循环次数。通过 `gsd config-set workflow.plan_review_convergence true` 启用。v1.39 新增 |
+| `workflow.plan_review_convergence` | boolean | `false` | 启用 `/gsd-plan-review-convergence` 命令。默认禁用——此键为 `false` 时命令以启用说明退出。该命令自动化手动计划→审查→重新规划循环：派生已配置的审查器（Codex、Claude、OpenCode、Ollama、LM Studio、llama.cpp），通过 CYCLE_SUMMARY 契约计算未解决的 HIGH 问题，用 `--reviews` 反馈重新规划，并重复直至收敛或达到最大循环次数。通过 `gsd config-set workflow.plan_review_convergence true` 启用。v1.39 新增 |
 | `workflow.plan_chunked` | boolean | `false` | 启用分块规划模式。为 `true`（或向 `/gsd-plan-phase` 传递 `--chunked` 标志）时，编排器将单个长期规划器任务拆分为一个简短的轮廓任务，后跟 N 个简短的按计划任务（每个约 3-5 分钟）。每个计划单独提交以具备崩溃韧性。如果任务挂起且终端被强制终止，使用 `--chunked` 重新运行将从最后完成的计划处恢复。在长期任务可能在 stdio 上挂起的 Windows 上特别有用。v1.38 新增 |
 | `workflow.code_review_command` | string | （无） | `/gsd-ship` 中外部代码审查集成的 shell 命令。通过 stdin 接收更改的文件路径。非零退出阻塞发布工作流。v1.36 新增 |
 | `workflow.tdd_mode` | boolean | `false` | 将 TDD 流水线作为一等执行模式启用。为 `true` 时，规划器积极地将 `type: tdd` 应用于符合条件的任务（业务逻辑、API、验证、算法），执行器强制执行 RED/GREEN/REFACTOR 门禁序列。阶段结束时的协作审查检查点验证门禁合规性。v1.36 新增 |
@@ -670,7 +669,6 @@ gsd-tools query config-set features.thinking_partner false
 
 | 设置 | 类型 | 默认值 | 描述 |
 |---------|------|---------|-------------|
-| `review.models.gemini` | string | （CLI 默认） | 调用 `--gemini` 审查器时使用的模型 |
 | `review.models.claude` | string | （CLI 默认） | 调用 `--claude` 审查器时使用的模型 |
 | `review.models.codex` | string | （CLI 默认） | 调用 `--codex` 审查器时使用的模型 |
 | `review.models.opencode` | string | （CLI 默认） | 调用 `--opencode` 审查器时使用的模型 |
@@ -679,9 +677,9 @@ gsd-tools query config-set features.thinking_partner false
 | `review.models.ollama` | string | （服务器默认） | 调用 `--ollama` 审查器时传递给 Ollama 的模型名称。未设置时使用服务器报告的第一个可用模型（如 `llama3`）。设置为特定标签：`gsd config-set review.models.ollama codellama` |
 | `review.models.lm_studio` | string | （服务器默认） | 调用 `--lm-studio` 审查器时传递给 LM Studio 的模型名称。未设置时使用服务器报告的第一个可用模型。 |
 | `review.models.llama_cpp` | string | （服务器默认） | 调用 `--llama-cpp` 审查器时传递给 llama.cpp 的模型名称。未设置时使用 `/v1/models` 报告的第一个模型。 |
-| `review.default_reviewers` | string[] \| null | （所有已检测审查器） | 无标志 `/gsd-review` 的默认审查器子集。示例：`["gemini","codex"]`。显式标志和 `--all` 覆盖此设置。 |
+| `review.default_reviewers` | string[] \| null | （所有已检测审查器） | 无标志 `/gsd-review` 的默认审查器子集。示例：`["codex","claude"]`。显式标志和 `--all` 覆盖此设置。 |
 | `review.max_prompt_tokens` | number\|null | null | 组装审查提示词的默认最大预估 token 数。设置后，在发送给每个审查器之前对提示词进行确定性裁剪。按审查器覆盖通过 `review.max_prompt_tokens_per_reviewer` 优先。null = 不裁剪（当前行为）。 |
-| `review.max_prompt_tokens_per_reviewer` | object | {} | 按审查器的 token 预算覆盖。键为审查器 slug（ollama、llama_cpp、lm_studio、gemini、claude、codex、opencode、qwen、cursor）。值覆盖该审查器的 `review.max_prompt_tokens`。推荐用于本地模型服务器。 |
+| `review.max_prompt_tokens_per_reviewer` | object | {} | 按审查器的 token 预算覆盖。键为审查器 slug（ollama、llama_cpp、lm_studio、claude、codex、opencode、qwen、cursor）。值覆盖该审查器的 `review.max_prompt_tokens`。推荐用于本地模型服务器。 |
 | `review.ollama_host` | string | `http://localhost:11434` | Ollama 服务器的基础 URL。在非默认端口或远程主机上运行 Ollama 时覆盖：`gsd config-set review.ollama_host http://192.168.1.10:11434` |
 | `review.lm_studio_host` | string | `http://localhost:1234` | LM Studio 本地服务器的基础 URL。使用非默认端口时覆盖。 |
 | `review.llama_cpp_host` | string | `http://localhost:8080` | llama.cpp 服务器（`llama-server`）的基础 URL。使用非默认端口时覆盖。 |
@@ -696,7 +694,7 @@ gsd-tools query config-set features.thinking_partner false
 {
   "review": {
     "models": {
-      "gemini": "gemini-2.5-pro",
+      "agy": "gemini-3.1-pro-preview",
       "qwen": "qwen-max"
     }
   }
@@ -837,7 +835,7 @@ gsd-tools query config-set features.thinking_partner false
 | `"opus"` / `"sonnet"` / `"haiku"` | 标准层级——运行时解析映射到该层级的活跃运行时模型 |
 | `"inherit"` | 此阶段的 agent 遵循会话模型（与 `model_profile: "inherit"` 语义相同） |
 
-如果需要完全限定的模型 ID（`"openai/gpt-5"`、`"google/gemini-2.5-pro"`），请改为按 agent 使用 `model_overrides`。`models.*` 有意仅接受层级别名，以便运行时感知映射在 Codex / OpenCode / Gemini CLI 安装上保持正确。
+如果需要完全限定的模型 ID（`"openai/gpt-5"`、`"google/gemini-2.5-pro"`），请改为按 agent 使用 `model_overrides`。`models.*` 有意仅接受层级别名，以便运行时感知映射在 Codex / OpenCode / Antigravity CLI 安装上保持正确。
 
 #### 何时使用哪种方式
 
@@ -1060,7 +1058,7 @@ minimal < low < medium < high < xhigh < max
 
 ---
 
-### 非 Claude 运行时（Codex、OpenCode、Gemini CLI、Kilo）
+### 非 Claude 运行时（Codex、OpenCode、Antigravity CLI、Kilo）
 
 > **Codex CLI 最低支持版本：`0.130.0`**（issue [#3562](https://github.com/open-gsd/gsd-core/issues/3562)）。
 >
@@ -1099,7 +1097,7 @@ minimal < low < medium < high < xhigh < max
 |-------|----------|----------|
 | `false`（默认） | 返回 Claude 别名（`opus`、`sonnet`、`haiku`） | 使用原生 Anthropic API 的 Claude Code |
 | `true` | 将别名映射到完整 Claude 模型 ID（`claude-opus-4-8`） | 使用需要完整 ID 的 API 的 Claude Code |
-| `"omit"` | 返回空字符串（运行时选择其默认值） | 非 Claude 运行时（Codex、OpenCode、Gemini CLI、Kilo） |
+| `"omit"` | 返回空字符串（运行时选择其默认值） | 非 Claude 运行时（Codex、OpenCode、Antigravity CLI、Kilo） |
 
 ### 运行时感知配置文件（#2517）
 

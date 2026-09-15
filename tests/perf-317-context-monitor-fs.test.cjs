@@ -27,9 +27,41 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { cleanup } = require('./helpers.cjs');
+const { GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const MONITOR_PATH = path.join(__dirname, '..', 'hooks', 'gsd-context-monitor.js');
 const tmpDir = os.tmpdir();
+
+/**
+ * A plain single-invocation query-style spawn of hooks/gsd-context-monitor.js
+ * via the file's MONITOR_PATH constant -- no fan-out, no detached child
+ * writer triggered.
+ */
+const CONTEXT_MONITOR_QUERY_TIMEOUT_MS = 5000;
+
+/**
+ * The #1974 fold: this hook invocation additionally triggers a DETACHED
+ * `state record-session` writer internally -- heavier than
+ * CONTEXT_MONITOR_QUERY_TIMEOUT_MS's plain-query class despite the
+ * coincidentally-matching value with sites in other files this batch.
+ */
+const CONTEXT_MONITOR_CRITICAL_RECORD_TIMEOUT_MS = 10000;
+
+/**
+ * A tighter bound chosen for one specific quick-probe scenario in this
+ * file -- distinct tier from the other three context-monitor constants in
+ * this file, not equalized without bench data.
+ */
+const CONTEXT_MONITOR_QUICK_PROBE_TIMEOUT_MS = 4000;
+
+/**
+ * The #2289/#3709 folds: a hook spawn sometimes carrying an extra
+ * `--require <preload-script>` flag ahead of the hook path itself --
+ * still one process, no fan-out. Coincides numerically with other files'
+ * timeout constants in this same batch (a CLI pathological-input query, a
+ * worker's degraded fast path) but describes neither -- kept local.
+ */
+const CONTEXT_MONITOR_PRELOAD_HOOK_TIMEOUT_MS = 8000;
 
 /**
  * Spawn the context-monitor hook with the given options.
@@ -100,7 +132,7 @@ function runMonitorRaw(opts) {
     stdout = execFileSync(process.execPath, [MONITOR_PATH], {
       input,
       encoding: 'utf-8',
-      timeout: 5000,
+      timeout: CONTEXT_MONITOR_QUERY_TIMEOUT_MS,
     });
   } catch (e) {
     exitCode = e.status ?? 1;
@@ -220,7 +252,7 @@ describe('perf #317: config.json absent (exercises config-missing → defaults p
       stdout = execFileSync(process.execPath, [MONITOR_PATH], {
         input: JSON.stringify({ session_id: sessionId, cwd: testCwd, hook_event_name: 'PostToolUse' }),
         encoding: 'utf-8',
-        timeout: 5000,
+        timeout: CONTEXT_MONITOR_QUERY_TIMEOUT_MS,
       });
     } catch (e) {
       exitCode = e.status ?? 1;
@@ -395,7 +427,7 @@ function runHook(sessionId, remainingPct, cwd) {
 
   const result = runHookSeam(HOOK_PATH, [], {
     input,
-    timeoutMs: 10000,
+    timeoutMs: CONTEXT_MONITOR_CRITICAL_RECORD_TIMEOUT_MS,
     env: { ...process.env, HOME: process.env.HOME },
   });
 
@@ -412,7 +444,7 @@ function runRecordSession(cwd, stoppedAt) {
   const result = spawnSync(
     process.execPath,
     [GSD_TOOLS, 'state', 'record-session', '--stopped-at', stoppedAt, '--cwd', cwd],
-    { encoding: 'utf-8', timeout: 30000 }
+    { encoding: 'utf-8', timeout: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS }
   );
   return {
     exitCode: result.status,
@@ -652,7 +684,7 @@ function runStatuslineHook(remainingPct, totalTokens = 1_000_000, acwEnv = null)
     execFileSync(process.execPath, [HOOK_PATH], {
       input: payload,
       env,
-      timeout: 4000,
+      timeout: CONTEXT_MONITOR_QUICK_PROBE_TIMEOUT_MS,
     });
   } catch { /* non-zero exit is fine; we only need the bridge file */ }
 
@@ -685,7 +717,7 @@ function runMonitorHook(remainingPct, usedPct) {
     stdout = execFileSync(process.execPath, [MONITOR_PATH], {
       input,
       encoding: 'utf-8',
-      timeout: 5000,
+      timeout: CONTEXT_MONITOR_QUERY_TIMEOUT_MS,
     });
   } catch (e) {
     stdout = e.stdout || '';
@@ -843,7 +875,7 @@ function runMonitor({ hookEventName, sessionId, remainingPct = 30, usedPct = 70,
     stdout = execFileSync(process.execPath, [MONITOR_PATH], {
       input: JSON.stringify(payload),
       encoding: 'utf-8',
-      timeout: 5000,
+      timeout: CONTEXT_MONITOR_QUERY_TIMEOUT_MS,
       env: { ...process.env, ...env },
     });
   } catch (e) {
@@ -1069,7 +1101,7 @@ function runMonitor(opts) {
       input: JSON.stringify(payload),
       env,
       encoding: 'utf8',
-      timeout: 8000,
+      timeout: CONTEXT_MONITOR_PRELOAD_HOOK_TIMEOUT_MS,
     });
   } catch (e) {
     stdout = e.stdout || '';
@@ -1359,7 +1391,7 @@ describe('#3709 context-monitor: PreCompact resets the warn sentinel', () => {
           stdout = execFileSync(process.execPath, argv, {
             input: JSON.stringify({ session_id: id, cwd, hook_event_name: event }),
             encoding: 'utf8',
-            timeout: 8000,
+            timeout: CONTEXT_MONITOR_PRELOAD_HOOK_TIMEOUT_MS,
             env,
           });
         } catch (e) { stdout = e.stdout || ''; exitCode = e.status ?? 1; }
@@ -2302,7 +2334,7 @@ describe('#3709 round 3: DEBOUNCE_CALLS and STALE_SECONDS at their limits', () =
       stdout = execFileSync(process.execPath, ['--require', NOW_PRELOAD, HOOK], {
         input: JSON.stringify({ session_id: id, cwd: os.tmpdir(), hook_event_name: 'PostToolUse' }),
         encoding: 'utf8',
-        timeout: 8000,
+        timeout: CONTEXT_MONITOR_PRELOAD_HOOK_TIMEOUT_MS,
         env: { ...process.env, GSD_TEST_NOW_MS: String(nowMs) },
       });
     } catch (e) { stdout = e.stdout || ''; exitCode = e.status ?? 1; }

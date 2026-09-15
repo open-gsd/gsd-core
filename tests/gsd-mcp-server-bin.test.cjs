@@ -11,6 +11,7 @@ const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const { PROTOCOL_VERSION } = require('../gsd-core/bin/lib/mcp-server.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const SHIM = path.join(__dirname, '..', 'bin', 'gsd-mcp-server.js');
 
@@ -18,7 +19,7 @@ function run(stdin) {
   return spawnSync(process.execPath, [SHIM], {
     input: stdin,
     encoding: 'utf-8',
-    timeout: 15000,
+    timeout: PROBE_TIMEOUT_MS,
     env: { ...process.env, GSD_TEST_MODE: '1' },
   });
 }

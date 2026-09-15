@@ -6667,3 +6667,338 @@ describe('#4192 model_overrides: fully-qualified claude IDs resolve as configure
       `warning must contain the capped pin render: ${warnings[0]}`);
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// #4505 — resolveModelInternal bypassed BOTH resolveActiveRuntime and
+// dynamic_routing.tier_models. Consolidates #4495 and #4493.
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Every row drives the REAL CLI in a subprocess rather than calling the
+// resolver in-process. That is load-bearing, not stylistic: the defect is
+// *which function the shipped call sites reach*, so a test that called
+// resolveModelForTier directly would pass while every real spawn stayed broken.
+// It also makes GSD_RUNTIME hermetic — it is ambient, and an in-process test
+// would leak it between rows.
+//
+// The sharpest statement of the bug, measured on the unfixed tree with one
+// config (dynamic_routing.enabled + tier_models.standard="sonnet"):
+//
+//   query resolve-execution gsd-executor --attempt 0  ->  sonnet   (correct)
+//   query resolve-model     gsd-executor --raw        ->  opus     (wrong)
+//   init quick --raw        .executor_model           ->  opus     (wrong)
+//
+// Same agent, same config, three answers. The parity rows below assert those
+// surfaces AGREE, which is a stronger and more durable invariant than pinning
+// any single literal.
+{
+  const { describe, test, afterEach } = require('node:test');
+  const assert = require('node:assert/strict');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const os = require('node:os');
+  const { cleanup, runGsdTools } = require('./helpers.cjs');
+
+  /**
+   * `config === null` writes NO .planning/config.json at all. That is not a
+   * stylistic choice: the shared ~/.gsd/defaults.json layer is only consulted
+   * when the project has no config of its own (config-loader Branch D), so a
+   * fixture that writes even `{}` silently stops exercising the "poisoned
+   * global" path and tests something else. Measured, with a global omit and
+   * GSD_RUNTIME=codex:
+   *   .planning/ with config.json -> gpt-5.6-terra
+   *   .planning/ present, no config.json -> gpt-5.6-terra   <- the subtle one
+   *   no .planning/ at all -> ""
+   * The DIRECTORY alone is enough to disable the layer, so `config === null`
+   * must not create it either.
+   *
+   * The runners redirect BOTH `HOME` and `GSD_HOME` into `dir` — the loader reads
+   * `process.env.GSD_HOME || os.homedir()`, so redirecting only HOME leaves a
+   * developer's real ~/.gsd/defaults.json in play.
+   */
+  function project(config, globalDefaults = null) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4505-'));
+    if (config !== null) {
+      fs.mkdirSync(path.join(dir, '.planning', 'phases'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify(config));
+    }
+    if (globalDefaults) {
+      fs.mkdirSync(path.join(dir, '.gsd'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.gsd', 'defaults.json'), JSON.stringify(globalDefaults));
+    }
+    return dir;
+  }
+
+  // HOME is redirected into the project so a developer's own ~/.gsd/defaults.json
+  // cannot change a concrete expected value (helpers.cjs documents this).
+  // GSD_RUNTIME is always passed EXPLICITLY, including as '' for "declared
+  // nowhere" — inheriting it from the parent shell would make these rows depend
+  // on who ran them.
+  function resolveModel(dir, agent, runtime = '') {
+    const r = runGsdTools(`query resolve-model ${agent} --raw`, dir, { HOME: dir, GSD_HOME: dir, GSD_RUNTIME: runtime });
+    assert.ok(r.success, `resolve-model ${agent} failed: ${r.error}`);
+    return r.output.trim();
+  }
+
+  function initQuick(dir, runtime = '') {
+    const r = runGsdTools('init quick --raw', dir, { HOME: dir, GSD_HOME: dir, GSD_RUNTIME: runtime });
+    assert.ok(r.success, `init quick failed: ${r.error}`);
+    return JSON.parse(r.output);
+  }
+
+  function resolveExecutionModel(dir, agent, attempt, runtime = '') {
+    const r = runGsdTools(`query resolve-execution ${agent} --attempt ${attempt}`, dir, { HOME: dir, GSD_HOME: dir, GSD_RUNTIME: runtime });
+    assert.ok(r.success, `resolve-execution ${agent} failed: ${r.error}`);
+    return JSON.parse(r.output).model;
+  }
+
+  const DR_CONFIG = {
+    model_profile: 'quality',
+    dynamic_routing: { enabled: true, tier_models: { light: 'haiku', standard: 'sonnet', heavy: 'opus' } },
+  };
+
+  describe('#4505 half B — dynamic_routing.tier_models must reach the FIRST spawn', () => {
+    let dir;
+    afterEach(() => { if (dir) cleanup(dir); dir = null; });
+
+    // FAILING-FIRST. Measured on the unfixed tree: "opus".
+    test('query resolve-model uses the tier table (#4493)', () => {
+      dir = project(DR_CONFIG);
+      assert.strictEqual(
+        resolveModel(dir, 'gsd-executor'),
+        'sonnet',
+        'docs/features/dynamic-routing-with-failure-tier-escalation.md: "the resolver picks '
+        + 'tier_models[default_tier] for the FIRST spawn"',
+      );
+    });
+
+    // FAILING-FIRST, and the one that matters most: this payload IS what a real
+    // spawn reads. #4493's complaint is precisely that no real spawn sees it.
+    test('the init payload a real spawn reads carries it (#4493)', () => {
+      dir = project(DR_CONFIG);
+      assert.strictEqual(initQuick(dir).executor_model, 'sonnet');
+    });
+
+    // The invariant, not a literal: two surfaces resolving the same agent under
+    // the same config must not disagree.
+    test('resolve-model agrees with resolve-execution --attempt 0', () => {
+      dir = project(DR_CONFIG);
+      const viaExecution = resolveExecutionModel(dir, 'gsd-executor', 0);
+      assert.strictEqual(
+        resolveModel(dir, 'gsd-executor'),
+        viaExecution,
+        'the same agent under the same config resolved differently depending on which '
+        + 'command asked — that divergence IS #4505',
+      );
+    });
+
+    // REQ-DYNROUTE-01: "zero behavior change" when off. `false` and ABSENT are
+    // different code paths, so both are asserted.
+    test('enabled:false leaves the classic profile path untouched', () => {
+      dir = project({ ...DR_CONFIG, dynamic_routing: { ...DR_CONFIG.dynamic_routing, enabled: false } });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor'), 'opus');
+      assert.strictEqual(initQuick(dir).executor_model, 'opus');
+    });
+
+    test('an absent dynamic_routing block leaves the classic path untouched', () => {
+      dir = project({ model_profile: 'quality' });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor'), 'opus');
+      assert.strictEqual(initQuick(dir).executor_model, 'opus');
+    });
+
+    // Documented composition: "model_overrides always wins".
+    test('model_overrides still outranks tier_models', () => {
+      dir = project({ ...DR_CONFIG, model_overrides: { 'gsd-executor': 'my-pinned-model' } });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor'), 'my-pinned-model');
+    });
+
+    test('a tier absent from tier_models falls back to the classic path', () => {
+      dir = project({ model_profile: 'quality', dynamic_routing: { enabled: true, tier_models: { light: 'haiku' } } });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor'), 'opus');
+    });
+  });
+
+  // dynamic_routing sits at a DOCUMENTED precedence slot, and an earlier cut of
+  // this fix put it above everything by routing call sites through
+  // resolveModelForTier -- which returns the tier model directly and so skipped
+  // the runtime tier map, the omit gate and the claude tier override. These rows
+  // pin the composition the feature doc states:
+  //   "model_overrides always wins; dynamic_routing.tier_models[<tier>] resolves
+  //    above models.<phase_type> and model_profile."
+  describe('#4505 — dynamic_routing must not outrank higher-precedence layers', () => {
+    let dir;
+    afterEach(() => { if (dir) cleanup(dir); dir = null; });
+
+    const DR = { enabled: true, tier_models: { light: 'haiku', standard: 'DR-STANDARD', heavy: 'opus' } };
+
+    // REGRESSION for the blocker: with a non-Claude runtime and an omit, the gate
+    // returned "" before this PR and must keep doing so. The earlier cut handed
+    // out a model id here.
+    test('resolve_model_ids:"omit" still wins over the tier table', () => {
+      dir = project({ model_profile: 'quality', resolve_model_ids: 'omit', dynamic_routing: DR });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), '');
+    });
+
+    test('the omit gate wins in the init payload a real spawn reads, too', () => {
+      dir = project({ model_profile: 'quality', resolve_model_ids: 'omit', dynamic_routing: DR });
+      assert.strictEqual(initQuick(dir, 'codex').executor_model, '');
+    });
+
+    test('the runtime tier map (step 3) outranks the tier table', () => {
+      dir = project({
+        model_profile: 'quality',
+        dynamic_routing: DR,
+        model_profile_overrides: { codex: { opus: 'MPO-CODEX-OPUS' } },
+      });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'MPO-CODEX-OPUS');
+    });
+
+    test('model_overrides still wins over everything', () => {
+      dir = project({ model_profile: 'quality', dynamic_routing: DR, model_overrides: { 'gsd-executor': 'PINNED' } });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor'), 'PINNED');
+    });
+
+    // `tier` reports the PROFILE tier; dynamic_routing keys off the ROUTING tier
+    // (light/standard/heavy), a different vocabulary. So under dynamic routing the
+    // two fields describe different axes and do not have to match. Pinned here so
+    // the combination is a deliberate, visible property rather than a surprise.
+    test('`tier` keeps reporting the profile tier when the tier table supplies the model', () => {
+      dir = project({ model_profile: 'quality', dynamic_routing: DR });
+      const r = runGsdTools('query resolve-model gsd-executor', dir, { HOME: dir, GSD_HOME: dir, GSD_RUNTIME: '' });
+      assert.ok(r.success, r.error);
+      const parsed = JSON.parse(r.output);
+      assert.strictEqual(parsed.model, 'DR-STANDARD');
+      assert.strictEqual(parsed.tier, 'opus');
+    });
+
+    // resolve-execution with the attempt ABSENT is the one behaviour the
+    // #2068 gate change touches; it must agree with resolve-model.
+    test('resolve-execution with no --attempt agrees with resolve-model', () => {
+      dir = project({ model_profile: 'quality', dynamic_routing: DR });
+      const r = runGsdTools('query resolve-execution gsd-executor', dir, { HOME: dir, GSD_HOME: dir, GSD_RUNTIME: '' });
+      assert.ok(r.success, r.error);
+      assert.strictEqual(JSON.parse(r.output).model, resolveModel(dir, 'gsd-executor'));
+    });
+
+    // Boundary on the escalation cap: limit-1 / limit / limit+1.
+    for (const [attempt, expected] of [[0, 'DR-STANDARD'], [1, 'opus'], [2, 'opus']]) {
+      test(`max_escalations:1 — attempt ${attempt} resolves ${expected}`, () => {
+        dir = project({ model_profile: 'quality', dynamic_routing: { ...DR, max_escalations: 1 } });
+        assert.strictEqual(resolveExecutionModel(dir, 'gsd-executor', attempt), expected);
+      });
+    }
+
+    test('max_escalations:0 pins attempt 1 to the default tier', () => {
+      dir = project({ model_profile: 'quality', dynamic_routing: { ...DR, max_escalations: 0 } });
+      assert.strictEqual(resolveExecutionModel(dir, 'gsd-executor', 1), 'DR-STANDARD');
+    });
+  });
+
+  describe('#4505 half A — the runtime-aware tier map must follow the ACTIVE runtime', () => {
+    let dir;
+    afterEach(() => { if (dir) cleanup(dir); dir = null; });
+
+    const OVERRIDES = { model_profile_overrides: { opencode: { sonnet: 'TEST-OPENCODE' } } };
+
+    // FAILING-FIRST. Measured on the unfixed tree: "sonnet" — the override is
+    // silently ignored because config.runtime is absent.
+    test('GSD_RUNTIME selects the runtime tier map (#4495)', () => {
+      dir = project(OVERRIDES);
+      assert.strictEqual(resolveModel(dir, 'gsd-phase-researcher', 'opencode'), 'TEST-OPENCODE');
+    });
+
+    // CONTROL — identical override, runtime declared in the config instead.
+    // Passes on the unfixed tree, so it proves the override machinery works and
+    // the fixture is live; without it the row above could be failing for any
+    // reason at all.
+    test('CONTROL: the same override already works when runtime is written into the config', () => {
+      dir = project({ runtime: 'opencode', ...OVERRIDES });
+      assert.strictEqual(resolveModel(dir, 'gsd-phase-researcher'), 'TEST-OPENCODE');
+    });
+
+    // NEGATIVE SPACE: with no runtime declared anywhere the active runtime is
+    // 'claude', so step 3's deliberate claude skip (#1156/#2297/#4192) must
+    // still apply and the opencode map must NOT leak in.
+    test('no runtime declared anywhere still resolves claude-native, not opencode', () => {
+      dir = project(OVERRIDES);
+      assert.strictEqual(resolveModel(dir, 'gsd-phase-researcher'), 'sonnet');
+    });
+
+    test('claude stays alias-native via its own tier override path', () => {
+      dir = project({ model_profile_overrides: { claude: { sonnet: 'TEST-CLAUDE' } } });
+      assert.strictEqual(resolveModel(dir, 'gsd-phase-researcher', 'claude'), 'TEST-CLAUDE');
+    });
+
+    // The VALUE policy follows the active runtime too. #4192 originally keyed
+    // this off `config.runtime` and wrote that it must stay that way; applying
+    // #4505's criterion to it turned out to SERVE #4192's own principle ("an
+    // explicit pin must not be silently unpinned") rather than fight it, and no
+    // test pinned the old reading. Without the fix the first assertion returns
+    // 'opus' — a Claude-only alias handed to a runtime that cannot spawn it.
+    test('an explicit claude pin is not unpinned just because the runtime came from env', () => {
+      dir = project({ model_overrides: { 'gsd-phase-researcher': 'claude-opus-4-8' } });
+      assert.strictEqual(resolveModel(dir, 'gsd-phase-researcher', 'opencode'), 'claude-opus-4-8');
+    });
+
+    test('the same pin still collapses to its alias when claude IS the active runtime', () => {
+      dir = project({ model_overrides: { 'gsd-phase-researcher': 'claude-opus-4-8' } });
+      assert.strictEqual(resolveModel(dir, 'gsd-phase-researcher', 'claude'), 'opus');
+    });
+  });
+
+  // Making step 3 reachable for env/marker-declared runtimes newly exposes an
+  // ordering that two shipped fixes had each decided in isolation, and which
+  // only coexisted because step 3 could not fire without `config.runtime`.
+  // Neither #4505 nor #4495/#4493 mentions it. These rows pin both halves so a
+  // future edit cannot quietly pick one and drop the other.
+  describe('#4505 — runtime tier map vs the resolve_model_ids:"omit" gate', () => {
+    let dir;
+    afterEach(() => { if (dir) cleanup(dir); dir = null; });
+
+    test('#2517: an explicit runtime opt-in in the config outranks an omit', () => {
+      dir = project({ runtime: 'codex', resolve_model_ids: 'omit' });
+      // The concrete codex tier model, not merely "not empty" — `notStrictEqual('')`
+      // would also pass on `opus`, i.e. on the omit gate being skipped for the
+      // wrong reason.
+      assert.strictEqual(resolveModel(dir, 'gsd-executor'), 'gpt-5.6-terra');
+    });
+
+    // The omit lives in the SHARED ~/.gsd/defaults.json, not the project config —
+    // that is the "poisoned global" #2297 acceptance #4 is actually about. An
+    // earlier cut of this row wrote it into the project config, which is the
+    // #2517 project-explicit path and exercises a different branch entirely.
+    test('#2297 acceptance #4: a merely DETECTED runtime still honors a GLOBAL omit', () => {
+      // No project config at all — see the `project` docblock: that is the only
+      // shape in which the shared defaults layer is consulted.
+      dir = project(null, { resolve_model_ids: 'omit' });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), '');
+    });
+
+    test('a project-explicit omit is honored for a detected runtime too', () => {
+      dir = project({ resolve_model_ids: 'omit' });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), '');
+    });
+
+    // The opt-in signal is CANONICALIZED. An earlier cut of this fix compared the
+    // raw config field against the literal 'claude', so every other spelling of
+    // Claude — and any non-string — counted as a deliberate non-Claude opt-in and
+    // bought an escalation past an explicit omit. Failing OPEN, in the exact case
+    // the guard exists to protect. Each row below returned a model id before the
+    // canonicalization and returns '' on origin/next.
+    for (const [label, runtimeValue] of [
+      ['a case variant', 'Claude'],
+      ['a known alias', 'claude-code'],
+      ['a non-string', 5],
+      ['an unrecognised runtime', 'not-a-real-runtime'],
+    ]) {
+      test(`${label} in the runtime key is NOT a non-Claude opt-in`, () => {
+        dir = project({ runtime: runtimeValue, resolve_model_ids: 'omit' });
+        assert.strictEqual(
+          resolveModel(dir, 'gsd-executor', 'codex'),
+          '',
+          'only a value that canonicalizes to a recognised non-Claude runtime may '
+          + 'outrank the omit gate — anything else must fail safe',
+        );
+      });
+    }
+  });
+}

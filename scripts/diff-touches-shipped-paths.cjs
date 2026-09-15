@@ -72,7 +72,7 @@ function isShipped(diffPath, shipPrefixes) {
   // forward slashes, but a developer running this locally on a different
   // tool's output shouldn't get a false negative).
   const p = diffPath.replace(/\\/g, '/');
-  return shipPrefixes.some((s) => p === s || p.startsWith(s + '/'));
+  return shipPrefixes.some((s) => p === s || p.startsWith(s + '/')); // allow-handrolled-containment: shipped-path filtering for a CI check, not a safety decision
 }
 
 // #2980: commits that touch `.github/workflows/*` cannot be cherry-picked

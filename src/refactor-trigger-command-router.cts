@@ -33,6 +33,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { retryRenameSync } from './shell-command-projection.cjs';
+import { tryWithinRootLexical } from './security.cjs';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
@@ -240,8 +241,11 @@ function resolvePhaseDirForArg(cwd: string, phaseArg: string): ResolvedPhase | n
  */
 function resolveConfinedPath(cwd: string, relFile: string): string | null {
   const root = path.resolve(cwd);
-  const resolved = path.resolve(root, relFile);
-  if (resolved !== root && !resolved.startsWith(root + path.sep)) return null;
+  // ADR-4650 decision 6: lexical family — resolving the symlink here would
+  // undo the refuse-don't-resolve posture documented above; `lstatSync` below
+  // is the gate that actually refuses a symlink.
+  const resolved = tryWithinRootLexical(relFile, root);
+  if (resolved === null) return null;
   try {
     if (!fs.lstatSync(resolved).isFile()) return null;
   } catch {
@@ -403,6 +407,36 @@ function loadWindowsOrDegrade(
 }
 
 /**
+ * #3780: lazy (module-load cost, see file header) require of the ledger's
+ * serialization seam — the same `.planning/.WINDOWS.lock` the windows cmd*
+ * writers hold, so this router's own read-compute-write cycles on
+ * WINDOWS.md cannot lose updates against them. Required from the REAL
+ * compiled module, never through the injectable `windowsOverride` seam:
+ * the lock is infrastructure, not a parser stand-in.
+ */
+function withLedgerLock<T>(cwd: string, fn: () => T): T {
+  let lockMod: {
+    withLedgerLock: (cwd: string, fn: () => T) => T;
+  };
+  try {
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    lockMod = require('./broken-windows.cjs') as {
+      withLedgerLock: (cwd: string, fn: () => T) => T;
+    };
+    /* eslint-enable @typescript-eslint/no-require-imports */
+  } catch {
+    // Ledger module unavailable (the #1953 degrade world — see the row-86
+    // notesLedgerUnavailableWithoutBrokenWindows contract): no lock-holding
+    // writer can exist either, because every WINDOWS.md writer requires this
+    // same module. Run the body unlocked and let loadWindowsOrDegrade
+    // produce the canonical degrade note — wrapping that world in lock
+    // ceremony would only rewrite the note the degrade contract pins.
+    return fn();
+  }
+  return lockMod.withLedgerLock(cwd, fn);
+}
+
+/**
  * Strict-mode window append (step 9 of `evaluate`). Degrades to
  * `{ recorded: false, note }` per `loadWindowsOrDegrade` — never an error,
  * never throws. Idempotent: re-evaluating the same still-untriaged phase
@@ -410,6 +444,28 @@ function loadWindowsOrDegrade(
  * file/line) and does not append a second one.
  */
 function recordStrictWindow(
+  cwd: string,
+  padded: string,
+  target: Candidate,
+  windowsOverride: WindowsModule | undefined,
+): { recorded: boolean; note?: string } {
+  // #3780: hold the same cross-process ledger lock the windows cmd* writers
+  // hold — this site's read-compute-write on WINDOWS.md is otherwise the
+  // same lost-update race: a concurrent `gsd_run windows append` (or another
+  // evaluator) could silently overwrite this entry, or be overwritten by
+  // it. The lock comes from the real ledger module, not the injectable
+  // `windowsOverride` seam — it is infrastructure, not a parser stand-in.
+  // The wrapper keeps the #1953-defect-2 degrade contract: the lock's typed
+  // refusal degrades to `{ recorded: false, note }` like every other
+  // failure, it never throws out of this function.
+  try {
+    return withLedgerLock(cwd, () => recordStrictWindowLocked(cwd, padded, target, windowsOverride));
+  } catch (e) {
+    return { recorded: false, note: `failed to record broken-windows entry: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+function recordStrictWindowLocked(
   cwd: string,
   padded: string,
   target: Candidate,
@@ -449,6 +505,26 @@ function recordStrictWindow(
  * `accept`/`decline` never tell a user "it failed" without saying why.
  */
 function resolveLedgerWindow(
+  cwd: string,
+  padded: string,
+  file: string,
+  line: number,
+  kind: 'accept' | 'decline',
+  reasonText: string,
+  windowsOverride: WindowsModule | undefined,
+): { resolved: boolean; note?: string } {
+  // #3780: same serialization as recordStrictWindow — a concurrent ledger
+  // writer holding a stale snapshot would silently revert this resolve (or
+  // lose its own write to this one). Same degrade contract: the lock's
+  // typed refusal degrades, never throws.
+  try {
+    return withLedgerLock(cwd, () => resolveLedgerWindowLocked(cwd, padded, file, line, kind, reasonText, windowsOverride));
+  } catch (e) {
+    return { resolved: false, note: `failed to resolve broken-windows entry: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+function resolveLedgerWindowLocked(
   cwd: string,
   padded: string,
   file: string,

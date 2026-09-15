@@ -6,7 +6,7 @@
 
 [English](README.md) · [Português](README.pt-BR.md) · **简体中文** · [日本語](README.ja-JP.md) · [한국어](README.ko-KR.md)
 
-**一套轻量级的元提示、上下文工程与规范驱动开发系统，适用于 Claude Code、OpenCode、Gemini CLI、Kilo、Codex、Copilot、Cursor、Windsurf 等 AI 编程工具。**
+**一套轻量级的元提示、上下文工程与规范驱动开发系统，适用于 Claude Code、OpenCode、Antigravity CLI、Kimi CLI、Kilo、Codex、Copilot、Cursor、Windsurf 等 AI 编程工具。**
 
 [![npm version](https://img.shields.io/npm/v/%40opengsd%2Fgsd-core?style=for-the-badge&logo=npm&logoColor=white&color=CB3837)](https://www.npmjs.com/package/@opengsd/gsd-core)
 [![npm downloads](https://img.shields.io/npm/dm/%40opengsd%2Fgsd-core?style=for-the-badge&logo=npm&logoColor=white&color=CB3837)](https://www.npmjs.com/package/@opengsd/gsd-core)
@@ -21,7 +21,7 @@
 
 ## 什么是 GSD Core
 
-GSD Core 是一套上下文工程与规范驱动开发框架，能够引导 AI 编程智能体（Claude Code、Codex、Gemini CLI、Copilot、Cursor 等）按照严格的阶段循环推进工作。它解决了[上下文腐化](docs/zh-CN/explanation/context-engineering.md)问题——即随着 AI 填满上下文窗口而逐渐累积的质量下降——通过在全新上下文的子智能体中运行所有繁重的研究、规划和执行工作，同时保持主会话的精简。
+GSD Core 是一套上下文工程与规范驱动开发框架，能够引导 AI 编程智能体（Claude Code、Codex、Antigravity CLI、Kimi CLI、Copilot、Cursor 等）按照严格的阶段循环推进工作。它解决了[上下文腐化](docs/zh-CN/explanation/context-engineering.md)问题——即随着 AI 填满上下文窗口而逐渐累积的质量下降——通过在全新上下文的子智能体中运行所有繁重的研究、规划和执行工作，同时保持主会话的精简。
 
 ---
 
@@ -43,7 +43,7 @@ GSD Core 是一套上下文工程与规范驱动开发框架，能够引导 AI �
 npx @opengsd/gsd-core@latest
 ```
 
-安装程序会提示选择运行时（Claude Code、OpenCode、Gemini CLI、Kilo、Codex、Copilot、Cursor、Windsurf 等）以及是全局安装还是本地安装。跨运行时兼容性需要使用安装程序——请勿直接从 `agents/` 或 `commands/` 目录复制文件。
+安装程序会提示选择运行时（Claude Code、OpenCode、Antigravity CLI、Kimi CLI、Kilo、Codex、Copilot、Cursor、Windsurf 等）以及是全局安装还是本地安装。跨运行时兼容性需要使用安装程序——请勿直接从 `agents/` 或 `commands/` 目录复制文件。
 
 使用其他运行时或没有 Node.js？请参阅[在你的运行时上安装](docs/zh-CN/how-to/install-on-your-runtime.md)。
 

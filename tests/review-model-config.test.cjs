@@ -27,17 +27,6 @@ describe('review.models.<cli> config key', () => {
     cleanup(tmpDir);
   });
 
-  test('isValidConfigKey accepts review.models.gemini', () => {
-    // Exercised via config-set, which calls isValidConfigKey internally and
-    // errors out if the key is not valid.
-    const result = runGsdTools(
-      ['config-set', 'review.models.gemini', 'gemini-3.1-pro-preview'],
-      tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
-    );
-    assert.ok(result.success, `config-set should succeed for review.models.gemini: ${result.error}`);
-  });
-
   test('isValidConfigKey accepts review.models.codex', () => {
     const result = runGsdTools(
       ['config-set', 'review.models.codex', 'gpt-5-codex'],
@@ -94,21 +83,21 @@ describe('review.models.<cli> config key', () => {
 
   test('round-trip: config-set then config-get for a model ID', () => {
     const setResult = runGsdTools(
-      ['config-set', 'review.models.gemini', 'gemini-3.1-pro-preview'],
+      ['config-set', 'review.models.codex', 'gpt-5.6-sol'],
       tmpDir,
       { HOME: tmpDir, USERPROFILE: tmpDir }
     );
     assert.ok(setResult.success, `config-set failed: ${setResult.error}`);
 
     const getResult = runGsdTools(
-      ['config-get', 'review.models.gemini', '--raw'],
+      ['config-get', 'review.models.codex', '--raw'],
       tmpDir,
       { HOME: tmpDir, USERPROFILE: tmpDir }
     );
     assert.ok(getResult.success, `config-get failed: ${getResult.error}`);
     assert.strictEqual(
       getResult.output,
-      'gemini-3.1-pro-preview',
+      'gpt-5.6-sol',
       'config-get should return the value set via config-set'
     );
   });
@@ -121,14 +110,14 @@ describe('review.models.<cli> config key', () => {
     // review.md:259) treats the resulting empty read as "no override → use the
     // reviewer's default", exactly as it treated the old "null" sentinel.
     const setResult = runGsdTools(
-      ['config-set', 'review.models.gemini', 'gemini-3.1-pro-preview'],
+      ['config-set', 'review.models.codex', 'gpt-5.6-sol'],
       tmpDir,
       { HOME: tmpDir, USERPROFILE: tmpDir }
     );
     assert.ok(setResult.success, `config-set failed: ${setResult.error}`);
 
     const clearResult = runGsdTools(
-      ['config-set', 'review.models.gemini', 'null'],
+      ['config-set', 'review.models.codex', 'null'],
       tmpDir,
       { HOME: tmpDir, USERPROFILE: tmpDir }
     );
@@ -140,17 +129,17 @@ describe('review.models.<cli> config key', () => {
     const config = JSON.parse(rawText);
     assert.ok(
       !config.review || !config.review.models ||
-        !Object.prototype.hasOwnProperty.call(config.review.models, 'gemini'),
-      `review.models.gemini must be absent after clear, got: ${rawText}`
+        !Object.prototype.hasOwnProperty.call(config.review.models, 'codex'),
+      `review.models.codex must be absent after clear, got: ${rawText}`
     );
-    assert.doesNotMatch(rawText, /"gemini":\s*"null"/,
-      'must never persist review.models.gemini as the literal string "null"');
+    assert.doesNotMatch(rawText, /"codex":\s*"null"/,
+      'must never persist review.models.codex as the literal string "null"');
 
     // config-get on the removed key yields EMPTY (the review workflow reads it as
     // `... 2>/dev/null || echo ""` → empty → the `[ -n "$VAR" ]` guard falls back
     // to the reviewer default).
     //
-    // #2797: this key is now federated to the `gemini` lane capability, and a
+    // #2797: this key is now federated to the `codex` lane capability, and a
     // federated key always resolves to its declared default — so config-get exits
     // 0 with empty output rather than exiting non-zero with "Key not found". The
     // WORKFLOW outcome is unchanged: the guard above sees empty either way, which
@@ -160,7 +149,7 @@ describe('review.models.<cli> config key', () => {
     // must never yield the literal string "null", which would be handed to the
     // CLI as a model name.
     const getResult = runGsdTools(
-      ['config-get', 'review.models.gemini', '--raw'],
+      ['config-get', 'review.models.codex', '--raw'],
       tmpDir,
       { HOME: tmpDir, USERPROFILE: tmpDir }
     );

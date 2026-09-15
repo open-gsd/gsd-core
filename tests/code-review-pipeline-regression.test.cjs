@@ -36,6 +36,13 @@ const {
   findShellFencedMatches,
 } = require('./helpers/shell-doc-scan.cjs');
 
+/**
+ * A single invocation of the external `fallow` binary's `audit`
+ * subcommand against the REAL current repo tree (CI-only) -- a heavier
+ * third-party tool operation distinct from any existing shared constant.
+ */
+const FALLOW_AUDIT_TIMEOUT_MS = 120000;
+
 const ROOT = path.resolve(__dirname, '..');
 const WORKFLOW_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'code-review.md');
 const PRE_PASS_STEP_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'code-review', 'steps', 'structural-pre-pass.md');
@@ -1066,7 +1073,7 @@ describe('Bug 5 (#3191) — same anchored, portable phase-scope grep at all thre
           const audit = execTool(
             requireFallowBinary({ cwd: ROOT, envPath: '' }),
             ['audit', '--changed-since', fallowBase[0], '--format', 'json'],
-            { cwd: repo, timeout: 120000 },
+            { cwd: repo, timeout: FALLOW_AUDIT_TIMEOUT_MS },
           );
           assert.ok([0, 1].includes(audit.exitCode), `fallow root audit exit=${audit.exitCode}; stderr=${audit.stderr}`);
           console.log(`fallow-root-audit normal-exit=${audit.exitCode}`);

@@ -30,7 +30,7 @@ import type { Decision } from './decisions.cjs';
 import frontmatterMod = require('./frontmatter.cjs');
 const { extractFrontmatter } = frontmatterMod;
 import { stripFencedCode, collectSections } from './markdown-sectionizer.cjs';
-import { tryWithinRoot, PathAcceptance } from './security.cjs';
+import { tryWithinRoot, tryWithinRootLexical, PathAcceptance } from './security.cjs';
 import { checkUiPresence } from './ui-safety-gate.cjs';
 import { hasStaticFrontendEvidence } from './ui-frontend-evidence.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -415,12 +415,6 @@ function recentCommitMessages(projectDir: string): string {
   }
 }
 
-function isInsideRoot(candidatePath: string, rootDir: string): boolean {
-  const root = path.resolve(rootDir);
-  const target = path.resolve(root, candidatePath);
-  return target === root || target.startsWith(`${root}${path.sep}`);
-}
-
 function readModifiedFilesContent(projectDir: string, summaries: string[]): string {
   const out: string[] = [];
   let total = 0;
@@ -431,8 +425,15 @@ function readModifiedFilesContent(projectDir: string, summaries: string[]): stri
         .map((match) => match[1].trim().replace(/^["']|["']$/g, ''));
       for (const file of files) {
         if (total >= 50) break;
-        if (!file || !isInsideRoot(file, projectDir)) continue;
-        const raw = readIfExists(resolvePath(file, projectDir));
+        if (!file) continue;
+        // Migrated off the hand-rolled prefix check (ADR-4650): resolve+contain in one
+        // step via the canonical realpath predicate — the eventual read below follows
+        // symlinks, so containment must be decided on the resolved target, not a lexical
+        // prefix. Read the value the predicate RETURNED; do not re-derive the path.
+        const candidate = path.isAbsolute(file) ? file : path.join(projectDir, file);
+        const contained = tryWithinRoot(candidate, projectDir, PathAcceptance.AbsoluteInsideRoot);
+        if (contained === null) continue;
+        const raw = readIfExists(contained);
         out.push(raw.length > 256 * 1024 ? raw.slice(0, 256 * 1024) : raw);
         total++;
       }
@@ -1494,7 +1495,14 @@ function cmdApiCoverageVerifyPre(projectDir: string, args: string[], raw: boolea
   // Defense-in-depth: the resolved dir must be inside the phases root (or a
   // milestone archive under .planning/milestones).
   const milestonesRoot = path.join(pDir, 'milestones');
-  if (!isInsideRoot(resolvedDir, phasesRoot) && !isInsideRoot(resolvedDir, milestonesRoot)) {
+  // Lexical containment (ADR-4650): resolvedDir is a directory path, not read
+  // through here — mirrors the prior path.resolve(root, candidate)-based check
+  // without introducing a filesystem/realpath dependency this defense-in-depth
+  // recheck never had.
+  if (
+    tryWithinRootLexical(resolvedDir, phasesRoot) === null &&
+    tryWithinRootLexical(resolvedDir, milestonesRoot) === null
+  ) {
     output(
       {
         block: true,

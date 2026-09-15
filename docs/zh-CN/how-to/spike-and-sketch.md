@@ -90,7 +90,7 @@ GSD 会开启一段简短对话，在编写任何代码之前探索感觉、视�
 
 `--quick` 完全跳过引导对话，直接使用参数作为设计方向。
 
-### 非 Claude 运行时（Codex、Gemini CLI 等）
+### 非 Claude 运行时（Codex、Antigravity CLI 等）
 
 ```bash
 /gsd-sketch --text "onboarding flow"

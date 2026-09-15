@@ -8,16 +8,13 @@
 
 ## 使用するレビュアーを決める
 
-GSD Core は Gemini CLI、Claude（別セッション）、Codex CLI、CodeRabbit、OpenCode、Qwen Code、Cursor、Antigravity CLI、Ollama、LM Studio、llama.cpp の任意の組み合わせにレビューリクエストをルーティングできます。
+GSD Core は Claude（別セッション）、Codex CLI、CodeRabbit、OpenCode、Qwen Code、Cursor、Antigravity CLI、Ollama、LM Studio、llama.cpp の任意の組み合わせにレビューリクエストをルーティングできます。
 
 各レビュアーは `PLAN.md` ファイルに対して同じ構造化プロンプトを独立して実行します。モデルによって盲点が異なるため、複数レビュアーのコンセンサスは単一レビュアーよりも多くの問題を検出できます。
 
 **外部 CLI がまだインストールされていない場合**は、少なくとも 1 つをインストールしてください:
 
 ```bash
-# Gemini CLI（Google 認証情報で無料）
-npm install -g @google/gemini-cli
-
 # Antigravity CLI（Google 認証情報で無料）
 curl -fsSL https://antigravity.google/cli/install.sh | bash
 
@@ -35,12 +32,12 @@ npm install -g @openai/codex
 /gsd-config --integrations
 ```
 
-インテグレーションウィザードは API キー、コードレビュー CLI のルーティング、`review.default_reviewers` リストをカバーします。フラグなしのデフォルトとして使用したいレビュアーのリストを設定します。例: `["gemini","codex"]`。
+インテグレーションウィザードは API キー、コードレビュー CLI のルーティング、`review.default_reviewers` リストをカバーします。フラグなしのデフォルトとして使用したいレビュアーのリストを設定します。例: `["codex","claude"]`。
 
 または `gsd-tools` で直接設定することもできます:
 
 ```bash
-gsd config-set review.default_reviewers '["gemini","codex"]'
+gsd config-set review.default_reviewers '["codex","claude"]'
 ```
 
 インテグレーション設定スキーマの全体（API キー、レビュアーごとのモデルオーバーライド、ローカルサーバーのホストアドレス）については [設定](../CONFIGURATION.md) を参照してください。
@@ -60,7 +57,7 @@ GSD は各レビュアーを順番に呼び出し、構造化されたフィー�
 ### 1 回限りの実行で特定のレビュアーを選ぶ
 
 ```bash
-/gsd-review --phase 3 --gemini
+/gsd-review --phase 3 --agy
 /gsd-review --phase 3 --codex
 /gsd-review --phase 3 --cursor
 ```
@@ -124,7 +121,7 @@ HIGH 重大度の懸念事項がすべて解決されるまで反復したい場
 
 ```bash
 /gsd-plan-review-convergence 3 --codex
-/gsd-plan-review-convergence 3 --gemini
+/gsd-plan-review-convergence 3 --agy
 ```
 
 ### すべてのレビュアーと高いサイクル上限でのコンバージェンス
@@ -141,13 +138,13 @@ HIGH 重大度の懸念事項がすべて解決されるまで反復したい場
 
 | 状況 | 推奨アプローチ |
 |-----------|---------------------|
-| Gemini CLI がすでにインストール済み | `--gemini` は常に良い出発点のレビュアー |
-| 無料のマルチレビュアーカバレッジが欲しい | `--gemini` + `--agy`（両方とも Google 認証情報を使用） |
+| Antigravity がすでにインストール済み | `--agy` は常に良い出発点のレビュアー |
+| 無料のマルチレビュアーカバレッジが欲しい | `--agy`（Google 認証情報） + `--claude` |
 | プロジェクトが OpenAI 中心 | OpenAI モデルの観点のために `--codex` を追加 |
 | GitHub Copilot のモデルが欲しい | `--opencode` を追加 |
 | API コストを完全に避けたい | Ollama にローカルモデルを設定して `--ollama` を使用 |
 | リリース前に最大限のカバレッジが必要 | `/gsd-plan-review-convergence N --all` |
-| 素早く反復して高速なフィードバックが欲しい | 1 つの CLI を選ぶ: `/gsd-review --phase N --gemini` |
+| 素早く反復して高速なフィードバックが欲しい | 1 つの CLI を選ぶ: `/gsd-review --phase N --agy` |
 
 ---
 

@@ -13,6 +13,22 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const ENFORCEMENT_LIB = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'prohibition-enforcement.cjs');
 
+/**
+ * A deliberately-short (not generous headroom) enforcement bound, forcing
+ * a real hung node --test fixture (whose own internal block is 10
+ * seconds) past the bound quickly within this test's own runtime --
+ * proving "a HANGING node-test fails closed via the bounded timeout."
+ */
+const HANG_TEST_ENFORCEMENT_TIMEOUT_MS = 1500;
+
+/**
+ * The same deliberately-short enforcement-bound pattern as
+ * HANG_TEST_ENFORCEMENT_TIMEOUT_MS, but for a different regression
+ * (#3660: no orphaned descendant survives a runner-only kill) at a
+ * different pre-existing bound -- kept separate, never equalized.
+ */
+const ORPHAN_HANG_TEST_ENFORCEMENT_TIMEOUT_MS = 1200;
+
 const TEST_TIER = Object.freeze({
   requirement_id: 'R1',
   category: 'safety',
@@ -710,7 +726,7 @@ describe('prohibition-enforcement REAL runner end-to-end (#1259)', () => {
     const result = enforce.runProhibitionEnforcement(
       TEST_TIER,
       { kind: 'node-test', target: tf, failFirst: true },
-      { cwd: dir, timeoutMs: 1500 },
+      { cwd: dir, timeoutMs: HANG_TEST_ENFORCEMENT_TIMEOUT_MS },
     );
     assert.notEqual(result.status, 'green', 'a hung check must be killed and fail closed — never hang verify or green');
     assert.equal(result.located, true);
@@ -875,7 +891,7 @@ describe('prohibition-enforcement REAL runner end-to-end (#1259)', () => {
     const result = enforce.runProhibitionEnforcement(
       TEST_TIER,
       { kind: 'node-test', target: tf, failFirst: true },
-      { cwd: dir, timeoutMs: 1200 },
+      { cwd: dir, timeoutMs: ORPHAN_HANG_TEST_ENFORCEMENT_TIMEOUT_MS },
     );
     assert.notEqual(result.status, 'green', 'a hung check must fail closed (unchanged pre-existing contract)');
     const workerPid = await readPidWithRetry(pidfilePath);

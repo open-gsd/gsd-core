@@ -24,6 +24,26 @@ const {
 } = require('../hooks/gsd-statusline.js');
 const { cleanup, saveSessionEnv, restoreSessionEnv, clearSessionEnv } = require('./helpers.cjs');
 
+/**
+ * A single hooks/gsd-statusline.js spawn, no fan-out -- the "long-lived
+ * status renderer" class (renders context-window percentage, git
+ * branch/status, active-teams state), a distinct and heavier operation
+ * than a trivial CLI query despite this file's own PROBE_TIMEOUT_MS-sized
+ * sibling class norm elsewhere in the suite.
+ */
+const STATUSLINE_HOOK_TIMEOUT_MS = 4000;
+
+/**
+ * The same hooks/gsd-statusline.js hook as STATUSLINE_HOOK_TIMEOUT_MS, but
+ * this one test rigs a custom PATH (a git shim directory) and
+ * CLAUDE_CONFIG_DIR override -- a heavier setup than the plain invocation,
+ * hence the larger pre-existing bound. Coincides numerically with
+ * tests/helpers/timeouts.cjs's SCAN_USAGE_ERROR_TIMEOUT_MS and
+ * MALFORMED_INPUT_HOOK_TIMEOUT_MS (both 5000ms) but describes neither of
+ * those operations -- kept local.
+ */
+const STATUSLINE_HOOK_GIT_SHIM_TIMEOUT_MS = 5000;
+
 // ─── parseStateMd ───────────────────────────────────────────────────────────
 
 describe('parseStateMd', () => {
@@ -639,7 +659,7 @@ describe('context meter respects CLAUDE_CODE_AUTO_COMPACT_WINDOW (#2219)', () =>
       delete env.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
     }
 
-    const r = runHookSeam(hookPath, [], { input: payload, env, timeoutMs: 4000 });
+    const r = runHookSeam(hookPath, [], { input: payload, env, timeoutMs: STATUSLINE_HOOK_TIMEOUT_MS });
     const stdout = r.stdout;
 
     // Parse normalized used% from the statusline bar output (e.g. "60%")
@@ -736,7 +756,7 @@ describe('context meter boundary: acw at/near totalCtx does not pin used at 100%
         input: payload,
         env,
         encoding: 'utf8',
-        timeout: 4000,
+        timeout: STATUSLINE_HOOK_TIMEOUT_MS,
       });
     } catch (e) {
       stdout = e.stdout || '';
@@ -878,7 +898,7 @@ describe('todo-resolution: resolves in_progress task from the newest matching to
         input: payload,
         env,
         encoding: 'utf8',
-        timeout: 4000,
+        timeout: STATUSLINE_HOOK_TIMEOUT_MS,
       });
     } catch (e) {
       stdout = e.stdout || '';
@@ -1656,7 +1676,7 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
           },
         },
       });
-      const r = runHookSeam(hookPath, [], { input: payload, timeoutMs: 4000 });
+      const r = runHookSeam(hookPath, [], { input: payload, timeoutMs: STATUSLINE_HOOK_TIMEOUT_MS });
       // eslint-disable-next-line no-control-regex -- stripping ANSI SGR sequences from captured CLI output
       return r.stdout.replace(/\x1b\[[0-9;]*m/g, '');
     }
@@ -2254,7 +2274,7 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
         workspace: { current_dir: dir },
         session_id: `test-git-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       });
-      const r = runHookSeam(hookPath, [], { input: payload, timeoutMs: 4000 });
+      const r = runHookSeam(hookPath, [], { input: payload, timeoutMs: STATUSLINE_HOOK_TIMEOUT_MS });
       // eslint-disable-next-line no-control-regex -- stripping ANSI SGR sequences from captured CLI output
       return r.stdout.replace(/\x1b\[[0-9;]*m/g, '');
     }
@@ -2514,7 +2534,7 @@ describe('evaluateUpdateCache lineage guard', () => {
       });
       const r = runHookSeam(path.join(cold.hooksDir, 'gsd-statusline.js'), [], {
         input: payload,
-        timeoutMs: 4000,
+        timeoutMs: STATUSLINE_HOOK_TIMEOUT_MS,
       });
       assert.equal(r.exitCode, 0, `must exit 0 on a build failure; stdout: ${r.stdout} stderr: ${r.stderr}`);
       assert.equal(r.stdout, '', 'must degrade to empty output, not throw a stack trace to stdout');
@@ -3056,7 +3076,7 @@ describe('evaluateUpdateCache lineage guard', () => {
         const r = runHookSeam(hookPath, [], {
           input: payload,
           env: { ...process.env, PATH: `${shimDir}${path.delimiter}${process.env.PATH}`, CLAUDE_CONFIG_DIR: claudeDir },
-          timeoutMs: 5000,
+          timeoutMs: STATUSLINE_HOOK_GIT_SHIM_TIMEOUT_MS,
         });
         assert.equal(r.outcome, OUTCOME.EXITED, `expected clean exit, got outcome=${r.outcome}`);
         assert.equal(r.exitCode, 0);

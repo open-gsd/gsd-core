@@ -396,6 +396,7 @@
   "gsd-hooks/gsd-write-guard.js",
   "gsd-hooks/lib/cli-exit.js",
   "gsd-hooks/lib/cursor-workspace.js",
+  "gsd-hooks/lib/dispatch-identity.js",
   "gsd-hooks/lib/exit-code-registry.js",
   "gsd-hooks/lib/filename-classification.js",
   "gsd-hooks/lib/git-cmd.js",

@@ -86,7 +86,7 @@ No manual body writing required.
 /gsd-code-review 1 --depth=deep  # Cross-file analysis including import graphs
 ```
 
-See [Set up cross-AI review](set-up-cross-ai-review.md) to configure Gemini, Codex, or other reviewers for plan review earlier in the cycle.
+See [Set up cross-AI review](set-up-cross-ai-review.md) to configure Antigravity, Codex, or other reviewers for plan review earlier in the cycle.
 
 ---
 

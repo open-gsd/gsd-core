@@ -55,7 +55,7 @@ const { toLegacyResult, gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { createTempDir, createTempProject, runGsdTools, cleanup } = require('./helpers.cjs');
 const { SENTINEL_RELATIVE_PATH, SENTINEL_STALE_MS, readSentinel } = require('../hooks/lib/isolation-sentinel.js');
-const { REASON_CODE } = require('../hooks/lib/isolation-deny-reason.js');
+const { REASON_CODE, REASON_INTERPOLATION_MAX_LEN, sanitizeForReason, describeSentinelDiscard } = require('../hooks/lib/isolation-deny-reason.js');
 const { runtimes } = require('../gsd-core/bin/lib/capability-registry.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-agent-isolation-guard.js');
@@ -565,6 +565,93 @@ describe('gsd-agent-isolation-guard.js: #3045 SECURITY F2 — sentinel bound to 
       harnessProject,
     );
     assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+  });
+});
+
+describe('gsd-agent-isolation-guard.js: #4594 rows 15/28-32 — prompt-first extraction + sentinel-discard reporting', () => {
+  let harnessProject;
+
+  before(() => {
+    harnessProject = mkProject('gsd-aig-4594-');
+    writeConfig(harnessProject, JSON.stringify({ runtime: 'claude' }));
+  });
+
+  after(() => {
+    cleanup(harnessProject);
+  });
+
+  test('row 29 (THE REGRESSION): fresh sentinel matches a real prose dispatch carried only in tool_input.prompt -> ALLOW', (t) => {
+    // Measured production shapes (not simplified): sentinel plan is
+    // phase-prefixed-and-slugged (`03-02-hardening`, phase-plan-index's
+    // `plans[].id`), the dispatch prose is the verbatim frame the workflow
+    // actually emits. `description` is deliberately OMITTED so this only
+    // passes when evaluateDispatch scans `prompt` — before this change the
+    // guard read only `description` and never saw this text at all.
+    writeSentinel(harnessProject, { isolation: 'none', phase: '03', plan: '03-02-hardening' });
+    t.after(() => cleanup(path.join(harnessProject, '.gsd')));
+    const r = runHook(
+      agentPayload({ tool_input: { subagent_type: 'gsd-executor', prompt: 'Execute plan 02 of phase 03-auth.' } }),
+      harnessProject,
+    );
+    assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    assert.equal(r.stdout, '');
+  });
+
+  test('row 28: unusable description + marker-bearing prompt, sentinel matches -> ALLOW', (t) => {
+    writeSentinel(harnessProject, { isolation: 'none', phase: '03', plan: '03-02-hardening' });
+    t.after(() => cleanup(path.join(harnessProject, '.gsd')));
+    const r = runHook(
+      agentPayload({
+        tool_input: {
+          subagent_type: 'gsd-executor',
+          description: 'Run the executor',
+          prompt: '[gsd:dispatch phase="03" plan="03-02-hardening"] Execute the plan.',
+        },
+      }),
+      harnessProject,
+    );
+    assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    assert.equal(r.stdout, '');
+  });
+
+  test('row 31: fresh sentinel for a DIFFERENT plan, isolation harness-worktree, kwarg missing -> DENY naming the discarded sentinel and both identifiers', (t) => {
+    writeSentinel(harnessProject, {
+      isolation: 'harness-worktree',
+      harnessFlag: 'isolation="worktree"',
+      phase: '03',
+      plan: '03-02-hardening',
+    });
+    t.after(() => cleanup(path.join(harnessProject, '.gsd')));
+    const r = runHook(
+      agentPayload({
+        tool_input: {
+          subagent_type: 'gsd-executor',
+          prompt: '[gsd:dispatch phase="03" plan="07-01-x"] Execute the plan.',
+        },
+      }),
+      harnessProject,
+    );
+    assert.equal(r.status, 2, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, 'block');
+    assert.match(out.reason, /sentinel/i);
+    // #4594 F4: the reason PROSE is not the contract (CONTRIBUTING.md
+    // "Prohibited: Raw Text Matching on Test Outputs") — assert the
+    // STRUCTURED `sentinel_discarded` field instead.
+    assert.deepEqual(out.sentinel_discarded, {
+      sentinel: { phase: '03', plan: '03-02-hardening' },
+      dispatch: { phase: '03', plan: '07-01-x' },
+    });
+  });
+
+  test('row 32: no sentinel at all -> unchanged conservative fallback (DENY, registry resolves harness-worktree)', () => {
+    const r = runHook(agentPayload(), harnessProject);
+    assert.equal(r.status, 2, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, 'block');
+    // No sentinel existed, so there is nothing to discard/report.
+    assert.doesNotMatch(out.reason, /was not consulted/);
+    assert.equal(out.sentinel_discarded, null);
   });
 });
 
@@ -1628,5 +1715,53 @@ describe('worktreesOptedOut — ladder unit semantics (#3972)', () => {
 
     fs.writeFileSync(ws, '{ malformed');
     assert.equal(worktreesOptedOut(dir), true, 'unreadable scoped config falls to the root view under the gate');
+  });
+});
+
+describe('hooks/lib/isolation-deny-reason.js — sanitizeForReason (#4594 F2/F5/F6)', () => {
+  test('boundary: 63 chars is not truncated', () => {
+    const value = 'a'.repeat(63);
+    assert.equal(sanitizeForReason(value), value);
+    assert.equal(REASON_INTERPOLATION_MAX_LEN, 64);
+  });
+
+  test('boundary: exactly 64 chars (the limit) is NOT truncated', () => {
+    const value = 'a'.repeat(64);
+    assert.equal(sanitizeForReason(value), value);
+    assert.equal(sanitizeForReason(value).includes('…'), false);
+  });
+
+  test('boundary: 65 chars is truncated to 64 chars plus an ellipsis', () => {
+    const value = 'a'.repeat(65);
+    const result = sanitizeForReason(value);
+    assert.equal(result, `${'a'.repeat(64)}…`);
+    assert.equal(result.length, 65);
+  });
+
+  test('F6: strips Unicode line/paragraph separators (U+2028/U+2029)', () => {
+    assert.equal(sanitizeForReason('before after'), 'beforeafter');
+    assert.equal(sanitizeForReason('before after'), 'beforeafter');
+  });
+
+  test('F6: strips bidi override/isolate control characters (U+202A-U+202E, U+2066-U+2069)', () => {
+    assert.equal(sanitizeForReason('‮evil‬'), 'evil');
+    assert.equal(sanitizeForReason('‪evil‫‭'), 'evil');
+    assert.equal(sanitizeForReason('⁦evil⁧⁨⁩'), 'evil');
+  });
+
+  test('empty/non-string values render "(none)"', () => {
+    assert.equal(sanitizeForReason(''), '(none)');
+    assert.equal(sanitizeForReason(null), '(none)');
+    assert.equal(sanitizeForReason(undefined), '(none)');
+  });
+
+  test('describeSentinelDiscard consumes the {sentinel, dispatch} shape from buildSentinelDiscard (#4594 F3)', () => {
+    const discard = {
+      sentinel: { phase: '03', plan: '03-02-hardening' },
+      dispatch: { phase: '03', plan: '07-01-x' },
+    };
+    const message = describeSentinelDiscard(discard);
+    assert.match(message, /sentinel phase="03" plan="03-02-hardening"/);
+    assert.match(message, /dispatch phase="03" plan="07-01-x"/);
   });
 });

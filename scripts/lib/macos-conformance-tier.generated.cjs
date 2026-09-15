@@ -6,6 +6,7 @@
 
 module.exports = {
   MACOS_CONFORMANCE_TIER_FILES: [
+  "tests/adr-612-bracket-phase-counting.test.cjs",
   "tests/adr-index-gate.test.cjs",
   "tests/adr-parser.property.test.cjs",
   "tests/adr-parser.unit.test.cjs",
@@ -72,6 +73,7 @@ module.exports = {
   "tests/features-index-gate.test.cjs",
   "tests/frontmatter.unit.test.cjs",
   "tests/gap-checker.property.test.cjs",
+  "tests/gemini-runtime-removed.test.cjs",
   "tests/gen-context-index.test.cjs",
   "tests/gen-section-manifest.test.cjs",
   "tests/git-base-branch.test.cjs",
@@ -82,6 +84,7 @@ module.exports = {
   "tests/gsd-statusline.test.cjs",
   "tests/gsd-tools-path-refs.test.cjs",
   "tests/gsd-validate-commit-crash-policy.test.cjs",
+  "tests/gsd-validate-commit-sigpipe.test.cjs",
   "tests/gsd-write-guard.test.cjs",
   "tests/health-diagnostic-rules/worktree-health.test.cjs",
   "tests/health-diagnostic.test.cjs",
@@ -110,6 +113,7 @@ module.exports = {
   "tests/issue-version-gate.test.cjs",
   "tests/kimi-upgrades.test.cjs",
   "tests/lint-docs-command-form.test.cjs",
+  "tests/lint-retired-runtime-name.test.cjs",
   "tests/lint-workflow-shellcheck-fetch.test.cjs",
   "tests/list-seeds.test.cjs",
   "tests/markdown-sectionizer.test.cjs",
@@ -124,6 +128,7 @@ module.exports = {
   "tests/no-posix-mode-bit-assert.rule.test.cjs",
   "tests/no-private-binary-resolution.rule.test.cjs",
   "tests/no-unguarded-nonportable-exec.rule.test.cjs",
+  "tests/nsegment-phase-grammar.test.cjs",
   "tests/observability/event.test.cjs",
   "tests/onboard-command.test.cjs",
   "tests/opencode-plugin-adapter.test.cjs",
@@ -173,6 +178,7 @@ module.exports = {
   "tests/roadmap-parser.test.cjs",
   "tests/roadmap-phase-fallback.test.cjs",
   "tests/roadmap.test.cjs",
+  "tests/run-tests-harness.test.cjs",
   "tests/runtime-artifact-layout.test.cjs",
   "tests/runtime-identity.test.cjs",
   "tests/runtime-launcher-parity.test.cjs",

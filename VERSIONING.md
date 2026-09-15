@@ -130,10 +130,10 @@ Certain runtime-integration manifests carry a `version` field that must always
 match `package.json`:
 
 - `.claude-plugin/plugin.json` — Claude Code plugin manifest (issue #766)
-- `gemini-extension.json` — Gemini CLI extension manifest (issue #775)
 - `.claude-plugin/marketplace.json` — Claude plugin marketplace manifest; its
   version lives at `plugins[0].version` and is stamped via a nested versionKey
   descriptor (issue #1855)
+- `vscode/package.json` — VS Code extension manifest (issue #1942)
 
 The `version` npm lifecycle script (`scripts/sync-manifest-versions.cjs --stage`)
 stamps these files automatically on every `npm version` call, and stages them so

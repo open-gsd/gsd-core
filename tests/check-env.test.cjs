@@ -23,6 +23,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
+const { GENERATOR_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const SCRIPT = path.resolve(__dirname, '..', 'scripts', 'check-env.cjs');
 const FIXTURE_ROOT = path.resolve(__dirname, 'fixtures', 'check-env');
@@ -41,7 +42,7 @@ function runScript(cwd, args = [], envOverrides = {}) {
   const result = spawnSync(process.execPath, [SCRIPT, ...args], {
     cwd,
     encoding: 'utf8',
-    timeout: 30_000,
+    timeout: GENERATOR_SCRIPT_TIMEOUT_MS,
     env: { ...process.env, ...envOverrides },
   });
   return {

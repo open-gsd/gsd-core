@@ -31,14 +31,13 @@ execute → verify → review → ship ループにマッピングするレシ�
 
 ---
 
-## スラッシュコマンドの形式（ハイフン形式 vs コロン形式） {#slash-command-forms-hyphen-vs-colon}
+## スラッシュコマンドの形式 {#slash-command-forms-hyphen-vs-colon}
 
-GSD はサポートされているすべてのランタイムに **同一のスキルセット** を提供しますが、スラッシュ形式には 2 種類の表記が存在します。
+GSD はサポートされているすべてのランタイムに **同一のスキルセット** を提供しており、ハイフン形式のスラッシュ表記を使用します：
 
 - **ハイフン形式** — `/gsd-command-name` — Claude Code、Copilot、OpenCode、Kilo、Cursor、Windsurf、Augment、Antigravity、Trae で使用されます。
-- **コロン形式** — `/gsd:command-name` — **Gemini CLI 専用**。Gemini はすべてのプラグインコマンドをプラグイン ID 配下に名前空間分けするため、インストール時に `--gemini` フラグを指定するとコマンドディレクトリ内の本文参照とコマンドファイルがすべてコロン形式に書き換えられます。
 
-どちらを選ぶ必要はありません — インストーラーが対象の各ランタイムのコマンドディレクトリに正しい形式を書き込みます。Gemini 端末でウォークスルーを実行する場合は、スラッシュコマンドを読む際に `gsd` 後のハイフンをコロンに置き換えてください。
+インストーラーが、対象とする各ランタイムのコマンドディレクトリにこの形式を書き込みます。
 
 ## 名前空間ルーティング入門（`gsd:<namespace>`、v1.40） {#namespace-routing-primer-gsdnamespace-v140}
 
@@ -671,7 +670,7 @@ budget プロファイルに切り替えてください: `/gsd-config --profile 
 
 完全な監査、ハーネスリファレンス、`model_profile` との組み合わせに関するノートは、バンドルされた `context-budget.md` リファレンスの [MCP ツールスキーマコスト](../../gsd-core/references/context-budget.md#mcp-tool-schema-cost-harness-concern) を参照してください。
 
-### 非 Claude ランタイムの使用（Codex、OpenCode、Gemini CLI、Kilo）
+### 非 Claude ランタイムの使用（Codex、OpenCode、Antigravity CLI、Kilo）
 
 > **Codex CLI の最小サポートバージョン: `0.130.0`**（イシュー [#3562](https://github.com/open-gsd/gsd-core/issues/3562)）。
 
@@ -748,7 +747,6 @@ WINDSURF_CONFIG_DIR=~/.codeium/windsurf-next npx @opengsd/gsd-core@latest --wind
 | ランタイム | 安定版デフォルト | オーバーライド環境変数 |
 |---|---|---|
 | Claude Code | `~/.claude` | `CLAUDE_CONFIG_DIR` |
-| Gemini CLI | `~/.gemini` | `GEMINI_CONFIG_DIR` |
 | OpenCode | `XDG_CONFIG_HOME/opencode` | `OPENCODE_CONFIG_DIR` |
 | Codex | （Codex CLI による） | `--config-dir` フラグ |
 | Copilot | `~/.copilot` | `COPILOT_CONFIG_DIR` |

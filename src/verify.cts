@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { textEncodingError } from './validate.cjs';
+import { tryWithinRootLexical } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
@@ -173,9 +174,12 @@ function verifySummaryCore(
     const firstSegment = candidate.split('/')[0] || '';
     if (firstSegment.indexOf('.') > 0) return false;
     // Containment guard: a `../`-bearing reference must not turn this advisory
-    // into a filesystem existence probe outside the project.
-    const resolved = path.resolve(projectRoot, candidate);
-    if (resolved !== projectRoot && !resolved.startsWith(projectRoot + path.sep)) return false;
+    // into a filesystem existence probe outside the project. Lexical (ADR-4650
+    // decision 6): the candidate is a string pulled from a SUMMARY document and
+    // by construction may not exist yet — existence is what gets probed
+    // downstream — and this is a pure string-heuristic filter with no other fs
+    // access, so a realpath call would also change its cost profile.
+    if (tryWithinRootLexical(candidate, projectRoot) === null) return false;
     return true;
   };
 
@@ -1308,6 +1312,12 @@ function cmdVerifyPhaseCompleteness(cwd: string, phase: string, raw: boolean): v
   );
 }
 
+// #4678: citations may carry a trailing line suffix (":42", ":1-20") that
+// describes a location inside the file, not part of the path itself.
+function stripLineSuffix(ref: string): string {
+  return ref.replace(/:\d+(?:-\d+)?$/, '');
+}
+
 function cmdVerifyReferences(cwd: string, filePath: string, raw: boolean): void {
   if (!filePath) {
     error('file path required');
@@ -1325,9 +1335,10 @@ function cmdVerifyReferences(cwd: string, filePath: string, raw: boolean): void 
   const atRefs = content.match(/@([^\s\n,)]+\/[^\s\n,)]+)/g) || [];
   for (const ref of atRefs) {
     const cleanRef = ref.slice(1);
-    const resolved = cleanRef.startsWith('~/')
-      ? path.join(process.env['HOME'] || '', cleanRef.slice(2))
-      : path.join(cwd, cleanRef);
+    const fsRef = stripLineSuffix(cleanRef);
+    const resolved = fsRef.startsWith('~/')
+      ? path.join(process.env['HOME'] || '', fsRef.slice(2))
+      : path.join(cwd, fsRef);
     if (fs.existsSync(resolved)) {
       found.push(cleanRef);
     } else {
@@ -1335,12 +1346,12 @@ function cmdVerifyReferences(cwd: string, filePath: string, raw: boolean): void 
     }
   }
 
-  const backtickRefs = content.match(/`([^`]+\/[^`]+\.[a-zA-Z]{1,10})`/g) || [];
+  const backtickRefs = content.match(/`([^`]+\/[^`]+\.[a-zA-Z]{1,10}(?::\d+(?:-\d+)?)?)`/g) || [];
   for (const ref of backtickRefs) {
     const cleanRef = ref.slice(1, -1);
     if (cleanRef.startsWith('http') || cleanRef.includes('${') || cleanRef.includes('{{')) continue;
     if (found.includes(cleanRef) || missing.includes(cleanRef)) continue;
-    const resolved = path.join(cwd, cleanRef);
+    const resolved = path.join(cwd, stripLineSuffix(cleanRef));
     if (fs.existsSync(resolved)) {
       found.push(cleanRef);
     } else {

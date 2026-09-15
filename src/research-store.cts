@@ -12,6 +12,10 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { platformWriteSync } from './shell-command-projection.cjs';
+// ADR-4650 decision 6: lexical family — the key is validated before
+// `fs.mkdirSync` creates the store dir, so the candidate legitimately does
+// not exist yet at check time.
+import { tryWithinRootLexical } from './security.cjs';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -160,16 +164,13 @@ function putResearch(
   const entry: ResearchEntry = { content, source, provider, confidence, fetched_at, ttl, kind };
   const dir = resolveStorePath(cwd, source, { homeDir });
 
-  // Belt-and-suspenders: ensure the resolved file path stays inside the store dir.
-  const resolvedDir = path.resolve(dir);
-  const filePath = path.join(dir, `${key}.json`);
-  const resolvedFile = path.resolve(filePath);
-  if (!resolvedFile.startsWith(resolvedDir + path.sep)) {
+  const containedFile = tryWithinRootLexical(`${key}.json`, dir);
+  if (containedFile === null || containedFile === path.resolve(dir)) {
     throw new Error('invalid research key');
   }
 
   fs.mkdirSync(dir, { recursive: true });
-  platformWriteSync(filePath, JSON.stringify(entry));
+  platformWriteSync(containedFile, JSON.stringify(entry));
   return entry;
 }
 
@@ -198,16 +199,14 @@ function getResearch(cwd: string, key: string, { clock = Date, homeDir = os.home
     const candidates: Candidate[] = [];
 
     for (const dir of tierDirs) {
-      const resolvedDir = path.resolve(dir);
-      const filePath = path.join(dir, `${key}.json`);
-      // Belt-and-suspenders: ensure path stays inside tier dir
-      if (!path.resolve(filePath).startsWith(resolvedDir + path.sep)) continue;
+      const containedFile = tryWithinRootLexical(`${key}.json`, dir);
+      if (containedFile === null || containedFile === path.resolve(dir)) continue;
 
-      if (!fs.existsSync(filePath)) continue;
+      if (!fs.existsSync(containedFile)) continue;
 
       let entry: ResearchEntry;
       try {
-        entry = JSON.parse(fs.readFileSync(filePath, 'utf8')) as ResearchEntry;
+        entry = JSON.parse(fs.readFileSync(containedFile, 'utf8')) as ResearchEntry;
       } catch {
         // Corrupt file in this tier — skip it
         continue;

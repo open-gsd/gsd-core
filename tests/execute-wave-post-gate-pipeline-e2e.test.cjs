@@ -652,9 +652,9 @@ describe('F. Real registry execute:wave:post shape — guard against accidental 
       `execute:wave:post step ref must be { agent: 'gsd-dom-verifier' }; got ${JSON.stringify(domUatStep.ref)}`);
     assert.strictEqual(domUatStep.onError, 'skip',
       `execute:wave:post step onError must be 'skip'; got ${domUatStep.onError}`);
-    // #2285: claude-orchestration's dispatch-backend-selector contribution moved
-    // from execute:wave:post to execute:wave:pre — wave:post fires AFTER the
-    // wave already dispatched inline, too late to select a dispatch backend.
+    // #4740: claude-orchestration never contributed here (external-job +
+    // mempalace are unrelated capabilities), so this assertion is unaffected
+    // by #4740 removing claude-orchestration's execute:wave:pre contribution.
     assert.strictEqual(point.contributions.length, 2,
       `execute:wave:post must have 2 contributions (external-job + mempalace); got ${point.contributions.length}`);
     const capIds = point.contributions.map(c => c.capId).sort();
@@ -662,15 +662,21 @@ describe('F. Real registry execute:wave:post shape — guard against accidental 
       `execute:wave:post contributions must be external-job + mempalace; got ${capIds.join(',')}`);
   });
 
-  test('[happy] real registry: execute:wave:pre has 1 contribution (claude-orchestration dispatch-backend selector, #2285)', () => {
+  test('[happy] real registry: execute:wave:pre has 0 contributions (#4740 removed claude-orchestration\'s)', () => {
+    // #4740: the execute:wave:pre / into:executor contribution was pure
+    // orchestrator procedure (build a wave manifest, resolve the dispatch
+    // backend, spawn executor agents) with nothing an executor agent could
+    // act on — orchestration is not delivered through an agent contribution,
+    // so it was removed outright rather than retargeted. No capability
+    // contributes at execute:wave:pre anymore.
     const point = realRegistry.byLoopPoint['execute:wave:pre'];
     assert.strictEqual(point.steps.length, 0,
       `execute:wave:pre steps must be empty; got ${point.steps.length}`);
-    assert.strictEqual(point.contributions.length, 1,
-      `execute:wave:pre must have 1 contribution (claude-orchestration); got ${point.contributions.length}`);
+    assert.strictEqual(point.contributions.length, 0,
+      `execute:wave:pre must have 0 contributions (#4740); got ${point.contributions.length}`);
     const capIds = point.contributions.map(c => c.capId).sort();
-    assert.deepStrictEqual(capIds, ['claude-orchestration'],
-      `execute:wave:pre contributions must be claude-orchestration; got ${capIds.join(',')}`);
+    assert.deepStrictEqual(capIds, [],
+      `execute:wave:pre contributions must be empty; got ${capIds.join(',')}`);
   });
 
 });

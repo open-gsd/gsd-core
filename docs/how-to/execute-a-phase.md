@@ -85,7 +85,7 @@ Git history will show one commit per task (from each executor), followed by trac
 
 ## Cross-AI execution
 
-To delegate execution to an external AI CLI (Codex, Gemini, etc.) configured in `workflow.cross_ai_command`:
+To delegate execution to an external AI CLI (Codex, Antigravity, etc.) configured in `workflow.cross_ai_command`:
 
 ```bash
 /gsd-execute-phase 2 --cross-ai

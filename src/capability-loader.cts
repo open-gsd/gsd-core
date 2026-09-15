@@ -461,6 +461,139 @@ function ledgerOverlayIds(ledger: LedgerModule, rootDir: string): {
   return { pending, committed };
 }
 
+// ─── #3929: install-time cross-capability validation seed ──────────────────
+
+/** First-party capabilities from the frozen registry, keyed by id. */
+function firstPartyCaps(): Record<string, unknown> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const base = require('./capability-registry.cjs') as { capabilities?: Record<string, unknown> };
+  return base.capabilities ?? {};
+}
+
+/**
+ * Central config-schema validKeys for the ownership-exclusivity check — the
+ * same source `loadRegistry`'s generator path reads, with the same
+ * missing-schema fallback (empty set). Memoized per process: the manifest is
+ * static for the lifetime of the runtime.
+ */
+let _centralKeysMemo: Set<string> | null = null;
+function centralConfigKeys(): Set<string> {
+  if (_centralKeysMemo === null) {
+    // Same generator seam loadRegistry uses (including the test override), so
+    // install-time and load-time central keys cannot diverge when the
+    // generator is stubbed.
+    if (_generatorOverride) {
+      _centralKeysMemo = _generatorOverride.loadCentralConfigKeys();
+    } else {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const mod = require('../../../scripts/gen-capability-registry.cjs') as {
+          loadCentralConfigKeys: () => Set<string>;
+        };
+        _centralKeysMemo = mod.loadCentralConfigKeys();
+      } catch {
+        _centralKeysMemo = new Set<string>();
+      }
+    }
+  }
+  return _centralKeysMemo;
+}
+
+/**
+ * #3929: the validation seed `capability-source.stageValidated` runs the
+ * cross-capability suite against. Built the way `loadRegistry` builds its
+ * accepted map: first-party registry capabilities, then each COMMITTED overlay
+ * of the TARGET (global) install scope accepted INCREMENTALLY — structural
+ * validation, engines.gsd against the running host, then the FULL
+ * cross-capability suite; an overlay joins only if the suite stays clean
+ * after adding it (load's invariant: first-party alone is clean, so any new
+ * error is that overlay's fault — skip it, never fail the seed). The seed is
+ * therefore CLEAN BY CONSTRUCTION: pre-existing junk in the install scope
+ * (colliding entries, shape-invalid manifests, engines-incompatible bundles)
+ * is skipped exactly as load skips it and can never fail or skew a
+ * candidate's install decision — a repo-planted ledger cannot veto installs
+ * (#1459 CB-3).
+ *
+ * Scope: only the install TARGET scope is walked — `stageValidated` promotes
+ * into `${gsdHome}/.gsd/capabilities`, so target scope == global.
+ * Project-scope overlays are deliberately NOT seeded (they additionally
+ * require user consent to activate at load; the issue asks for overlays "in
+ * the target scope"). The candidate is added by the caller LAST, mirroring
+ * `acceptedMap.set(id, cap)`.
+ *
+ * Exported (not inlined in the installer) so the semantics this reuses —
+ * `overlayRoots`, `ledgerOverlayIds`, the shared bounded manifest reader, and
+ * the incremental-accept rules — have exactly one owner and cannot drift from
+ * the loader's load-time rules.
+ */
+export function crossValidationSeed(
+  cwd: string,
+  gsdHome: string,
+  hostVersion: string,
+  validator: ValidatorModule,
+  semver: SemverModule,
+): { capMap: Map<string, unknown>; centralKeys: Set<string> } {
+  const fp = firstPartyCaps();
+  const capMap = new Map<string, unknown>(Object.entries(fp));
+  const centralKeys = centralConfigKeys();
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const ledger: LedgerModule = require('./capability-ledger.cjs') as LedgerModule;
+  for (const root of overlayRoots(cwd, gsdHome)) {
+    if (root.scope !== 'global') continue; // seed the TARGET scope only
+    const { committed } = ledgerOverlayIds(ledger, root.dir);
+    for (const id of committed) {
+      // First-party always wins (CONTEXT.md capability-loader entry): an
+      // overlay claiming a first-party id — or a reserved first-party prefix
+      // — is rejected at load, so it must not join the validation set.
+      if (Object.prototype.hasOwnProperty.call(fp, id)) continue;
+      if (RESERVED_ID_PREFIX.test(id)) continue;
+      let cap: unknown;
+      try {
+        const manifestPath = path.join(root.dir, id, 'capability.json');
+        const raw = ledger.readSmallRegularFile(manifestPath, MANIFEST_MAX_BYTES);
+        if (raw === null) continue; // missing/non-regular/oversized — skip fail-closed
+        cap = JSON.parse(raw);
+      } catch {
+        continue; // unreadable overlay — skip (same rule as load)
+      }
+      // Same per-overlay pre-filters load applies before the cross suite:
+      // structural validity, then engines.gsd against the running host.
+      // validateCapability itself is not total over malformed array entries
+      // (#1461 finding 1) — a throw skips the overlay, as load skips it.
+      try {
+        if (validator.validateCapability(cap, id).length > 0) continue;
+      } catch {
+        continue;
+      }
+      const engines = (cap as Record<string, unknown>)['engines'];
+      if (engines && typeof engines === 'object' && !Array.isArray(engines)) {
+        const range = (engines as Record<string, unknown>)['gsd'];
+        if (typeof range === 'string' && range && !semver.semverSatisfies(hostVersion, range)) continue;
+      }
+      // Incremental accept: the overlay joins only if the FULL suite stays
+      // clean after adding it; any error is that overlay's fault — skip it.
+      capMap.set(id, cap);
+      let errs: string[] = [];
+      try {
+        errs = [
+          ...validator.validateConsumesGlobal(capMap),
+          ...validator.validateCrossCapability(capMap, centralKeys),
+        ];
+      } catch {
+        // The cross validators are not total over arbitrary shapes (#1461
+        // finding 1 — e.g. the duplicate-producer invariant throws). A
+        // throwing overlay must be REMOVED here, exactly as load's
+        // acceptedMap.delete(id) does — retaining it would leave poisoning
+        // content in the seed and attribute pre-existing junk to the
+        // candidate.
+        capMap.delete(id);
+      }
+      if (errs.length > 0) capMap.delete(id);
+    }
+  }
+  return { capMap, centralKeys };
+}
+
 /** Shallow-attach overlay diagnostics WITHOUT mutating the frozen registry module. */
 function withOverlayMeta(reg: Registry, meta: OverlayMeta): Registry {
   return Object.assign({}, reg, { _overlay: meta });
@@ -902,4 +1035,4 @@ export function loadRegistry(options: LoadRegistryOptions = {}): Registry {
 }
 
 // readHostVersion is exported for the #1920 regression (VERSION-first host-version resolution).
-module.exports = { loadRegistry, readHostVersion, _setValidatorForTest, _setGeneratorForTest };
+module.exports = { loadRegistry, readHostVersion, crossValidationSeed, _setValidatorForTest, _setGeneratorForTest };

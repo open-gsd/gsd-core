@@ -104,7 +104,7 @@ describe('ADR-15: /gsd:progress --next --auto --converge (#1190)', () => {
     // They must now be DERIVED at runtime via `gsd_run review-lane flags`, not listed.
     const formerlyHardcodedLaneFlags = [
       '--codex',
-      '--gemini',
+      '--qwen',
       '--claude',
       '--opencode',
       '--ollama',

@@ -606,7 +606,7 @@ function declaredPathCovers(declaredPaths: string[] | undefined, norm: string): 
   return declaredPaths.some(p => {
     if (typeof p !== 'string') return false;
     const dp = stripLeadingDotSlash(toSlash(p));
-    return dp === target || dp.startsWith(target + '/');
+    return dp === target || dp.startsWith(target + '/'); // allow-handrolled-containment: declared-path coverage for pending-creation detection, not containment
   });
 }
 

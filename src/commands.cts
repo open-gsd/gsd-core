@@ -11,7 +11,7 @@ import path from 'node:path';
 import { normalizeEol } from './text-lines.cjs';
 import { execGit, platformWriteSync, platformReadSync, platformEnsureDir, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
 import { escapeRegex } from './pattern.cjs';
-import { requireSafePath, sanitizeForDisplay, tryWithinRoot, PathAcceptance } from './security.cjs';
+import { requireSafePath, sanitizeForDisplay, tryWithinRoot, assertWithinRoot, PathAcceptance } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output, ERROR_REASON } = ioMod;
@@ -595,13 +595,10 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
   opts = opts || {};
   const config = loadConfig(cwd);
   const profile = (config['model_profile'] as string) || 'balanced';
-  // #2068: resolve the model per-attempt so dynamic_routing escalates the MODEL
-  // (heavy tier) alongside effort. Gated on an explicit --attempt exactly like the
-  // effort resolution below, so the two fields stay symmetric: with no --attempt
-  // the model comes from the classic profile path (unchanged for everyone,
-  // including dynamic_routing-enabled users who don't pass --attempt), and only an
-  // explicit attempt routes through the tier ladder. resolveModelForTier itself
-  // still falls back to resolveModelInternal when dynamic_routing is off.
+  // #2068: resolve the model per-attempt so dynamic_routing ESCALATES the MODEL
+  // (heavy tier) alongside effort. The FIRST-spawn tier now comes from
+  // resolveModelInternal's own dynamic_routing step (#4505), so the absent-attempt
+  // branch below reaches it too — this gate is only about escalation.
   let model = (opts.attempt !== undefined && opts.attempt !== null)
     ? resolveModelForTier(cwd, agentType, opts.attempt)
     : resolveModelInternal(cwd, agentType);
@@ -657,13 +654,11 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
       // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/unbound-method
       const { getGlobalConfigDir } = require('./runtime-homes.cjs') as { getGlobalConfigDir(runtime: string, explicitDir?: string | null): string };
       const agentsDirEff = path.join(getGlobalConfigDir(runtime), 'agents');
-      const agentPath = path.join(agentsDirEff, `${agentType}.md`);
       // agentType is an unvalidated CLI positional: keep the read inside the
       // agents dir so `../../x` cannot point it elsewhere (defense in depth —
-      // the reflected surface is only a frontmatter effort line).
-      if (!path.resolve(agentPath).startsWith(path.resolve(agentsDirEff) + path.sep)) {
-        throw new Error('agent path escapes the agents directory');
-      }
+      // the reflected surface is only a frontmatter effort line). Untrusted
+      // input feeding a real read → realpath family (ADR-4650 decision 6).
+      const agentPath = assertWithinRoot(`${agentType}.md`, agentsDirEff, 'agent file');
       const agentContent = fs.readFileSync(agentPath, 'utf8');
       // eslint-disable-next-line local/no-unbounded-quantifier -- same lazy `*?` bounded by the `^---$/m` closing anchor as the sibling frontmatter regexes in this file
       const fmMatchEff = /^---\r?\n([\s\S]*?)^---\r?$/m.exec(agentContent);
@@ -1987,6 +1982,10 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   const branchingStrategy = config['branching_strategy'] as string | undefined;
   if (branchingStrategy && branchingStrategy !== 'none') {
     let branchName: string | null = null;
+    // #4055: the phase directory (cwd-relative POSIX path from
+    // findPhaseInternal) captured while resolving the phase identity — the
+    // state-3 guard below needs it for the committed-history check.
+    let phaseDirRelative: string | null = null;
     if (branchingStrategy === 'phase') {
       // Determine which phase we're committing for from the file paths.
       // #2539: the extraction is anchored to the directory SEGMENT immediately
@@ -2017,6 +2016,10 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
             phaseInfo['phase_number'],
             phaseInfo['phase_slug'],
           );
+          // #4055: findPhaseInternal already returns the directory as a
+          // cwd-relative POSIX path.
+          const dir = phaseInfo['directory'];
+          if (typeof dir === 'string' && dir !== '') phaseDirRelative = dir;
         }
       }
     } else if (branchingStrategy === 'milestone') {
@@ -2040,6 +2043,14 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       }
     }
     if (branchName) {
+      // #4055: state-3 discriminator for the create arm. `rev-parse --verify`
+      // alone cannot distinguish "branch never existed" (create is the #1278
+      // intent) from "branch existed, was merged, then deleted" (the phase is
+      // over — recreating it hijacks the close-out commit onto a resurrected
+      // ref, the #3079 bug #3363 reopened). Both extra conditions come from
+      // the confirmed issue: the create arm may fire only for a phase whose
+      // directory has NO committed history on the current line (a genuinely
+      // new phase) while the caller sits on the resolved base branch.
       const currentBranch = execGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
       if (currentBranch.exitCode === 0 && currentBranch.stdout.trim() !== branchName) {
         // #2539/#3079/#3207: two cases the prior (#3079) code collapsed into one.
@@ -2054,20 +2065,71 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
         // EXISTING branch is never switched to (the else arm logs + commits in
         // place). The fresh create is logged so the first phase-scoped commit is
         // not silent about where the work is landing (#3207 AC3).
+        // #4055: "brand-new" is now VERIFIED, not assumed — see the state-3
+        // guard between the verify and the create below.
         const verify = execGit(['rev-parse', '--verify', `refs/heads/${branchName}`], { cwd });
         if (verify.exitCode !== 0) {
-          // Branch does not exist — CREATE AND SWITCH (the #1278 first-commit
-          // case). checkout -b cannot resurrect anything: the branch was just
-          // verified absent, so it is created fresh at HEAD.
-          const create = execGit(['checkout', '-b', branchName], { cwd });
-          if (create.exitCode === 0) {
-            process.stderr.write(
-              `${branchingStrategy} branch "${branchName}" created; switched to it for this commit.\n`
+          // Branch does not exist — but absence alone cannot distinguish a
+          // genuinely new phase from a merged-and-deleted one (#4055).
+          let createBlockReason: string | null = null;
+          if (branchingStrategy === 'phase' && phaseDirRelative) {
+            // #4055 residual: searchPhaseInDir's #2237 fail-safe can return an
+            // empty `directory` for ambiguous phase names (leaving
+            // phaseDirRelative null) — there the history half is skipped and
+            // only the base check below guards; shallow clones can also show
+            // an empty probe for old merged phases (depth-sensitive).
+            const history = execGit(
+              ['log', 'HEAD', '--oneline', '--', phaseDirRelative],
+              { cwd },
             );
+            if (history.exitCode === 0 && history.stdout.trim() !== '') {
+              createBlockReason =
+                'its phase directory already has committed history (the phase is resolved)';
+            }
+          }
+          if (!createBlockReason) {
+            // The base half of the guard applies to BOTH strategies (it does
+            // not need a directory): a phase/milestone branch is created only
+            // from the resolved base branch. NOTE the milestone arm keeps its
+            // existence-only guard for the HISTORY half — a merged-and-deleted
+            // milestone branch remains resurrectable by an on-base caller
+            // until a milestone-directory derivation exists here (#4055
+            // follow-up candidate).
+            /* eslint-disable @typescript-eslint/no-require-imports */
+            const gitBaseBranch = require('./git-base-branch.cjs') as {
+              resolveBaseBranch: (cwd: string) => string;
+            };
+            /* eslint-enable @typescript-eslint/no-require-imports */
+            const resolvedBase = gitBaseBranch.resolveBaseBranch(cwd);
+            if (resolvedBase && resolvedBase !== currentBranch.stdout.trim()) {
+              createBlockReason =
+                `the current branch "${currentBranch.stdout.trim()}" is not the ` +
+                `resolved base branch "${resolvedBase}"`;
+            }
+          }
+          if (createBlockReason === null) {
+            // State 1 confirmed: brand-new phase, first phase-scoped commit
+            // from the base branch. CREATE AND SWITCH (the #1278 first-commit
+            // case). checkout -b cannot resurrect anything: the branch was
+            // just verified absent, so it is created fresh at HEAD.
+            const create = execGit(['checkout', '-b', branchName], { cwd });
+            if (create.exitCode === 0) {
+              process.stderr.write(
+                `${branchingStrategy} branch "${branchName}" created; switched to it for this commit.\n`
+              );
+            } else {
+              process.stderr.write(
+                `Warning: could not create ${branchingStrategy} branch "${branchName}" ` +
+                `(${create.stderr.trim()}); committing on the current branch "${currentBranch.stdout.trim()}".\n`
+              );
+            }
           } else {
+            // State 3 (or a non-base caller): the phase is resolved — commit
+            // in place, disclosed (#2539 AC2), never recreate the branch.
             process.stderr.write(
-              `Warning: could not create ${branchingStrategy} branch "${branchName}" ` +
-              `(${create.stderr.trim()}); committing on the current branch "${currentBranch.stdout.trim()}".\n`
+              `Warning: resolved ${branchingStrategy} branch "${branchName}" is absent and ` +
+              `will not be recreated (${createBlockReason}); committing on the current ` +
+              `branch "${currentBranch.stdout.trim()}" instead of recreating it.\n`
             );
           }
         } else {
@@ -2707,7 +2769,7 @@ function groupFilesBySubrepo(files: string[], subRepos: string[]): GroupFilesByS
     let matchLen = -1;
     if (candidates) {
       for (const repo of candidates) {
-        if (file.startsWith(repo + '/')) {
+        if (file.startsWith(repo + '/')) { // allow-handrolled-containment: sub-repo file grouping, not a safety decision
           const repoLen = String(repo).length;
           if (repoLen > matchLen) {
             match = repo;

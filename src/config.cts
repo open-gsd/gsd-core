@@ -595,7 +595,7 @@ function _setNestedValue(
 
 /**
  * Deletes a value from the config object, allowing nested values via dot
- * notation (e.g., "review.models.gemini"). Mirrors `_setNestedValue`'s
+ * notation (e.g., "review.models.codex"). Mirrors `_setNestedValue`'s
  * prototype-pollution guard on every path segment (including intermediates).
  *
  * Unlike `_setNestedValue`, this NEVER creates missing intermediate objects —

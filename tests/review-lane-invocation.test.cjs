@@ -43,7 +43,6 @@ const FC = { seed: 42, numRuns: 200 };
 
 /** Config with every model key set, so the model-bearing rows exercise the configured branch. */
 const FULL_CONFIG = {
-  'review.models.gemini': 'G',
   'review.models.claude': 'C',
   'review.models.codex': 'X',
   'review.models.opencode': 'O',
@@ -70,28 +69,50 @@ function resolve(slug, { config = FULL_CONFIG, effortArgs = ['--effort', 'high']
 const FILE_REF = fileRefPrompt(`${RUN}/gsd-review-prompt.md`, ROOT);
 
 /**
+ * Fixture/golden-contract DATA describing each shipped reviewer CLI tool's
+ * own real-world native timeout convention. NOT a real subprocess spawn
+ * timeout in this file's own execution -- each row is exercised only
+ * through the pure resolveLanePlan() function, never a real spawn here.
+ * Several lanes coincidentally share a value with another lane below;
+ * each still gets its own named constant since each describes an
+ * independently-configured external tool, not a shared internal class norm.
+ */
+const CLAUDE_NATIVE_TIMEOUT_MS = 1200000;
+const CODEX_NATIVE_TIMEOUT_MS = 1200000;
+const CODERABBIT_NATIVE_TIMEOUT_MS = 360000;
+const OPENCODE_NATIVE_TIMEOUT_MS = 660000;
+const QWEN_NATIVE_TIMEOUT_MS = 900000;
+const CURSOR_NATIVE_TIMEOUT_MS = 900000;
+/**
+ * Mirrors a PRODUCTION `{{nativeTimeout}}` placeholder default resolved
+ * elsewhere in resolveLanePlan (#3274) -- this row's own comment states
+ * it proves the unconfigured default reproduces this exact literal.
+ */
+const ANTIGRAVITY_NATIVE_TIMEOUT_MS = 600000;
+const KIMI_CODE_NATIVE_TIMEOUT_MS = 900000;
+
+/**
  * One row per shipped lane: the exact argv its bash leg produced, with a model configured and
  * effort available. `stdin` is the prompt path for a stdin lane, `null` otherwise.
  */
 const GOLDEN = [
-  { slug: 'gemini', binary: 'gemini', argv: ['-m', 'G', '-p', '-'], stdin: true, out: 'stdout', timeout: 900000 },
-  { slug: 'claude', binary: 'claude', argv: ['--model', 'C', '--effort', 'high', '-p', '-'], stdin: true, out: 'stdout', timeout: 1200000 },
+  { slug: 'claude', binary: 'claude', argv: ['--model', 'C', '--effort', 'high', '-p', '-'], stdin: true, out: 'stdout', timeout: CLAUDE_NATIVE_TIMEOUT_MS },
   {
     slug: 'codex',
     binary: 'codex',
     // `exec` is a SUBCOMMAND and must stay first; the output file lands mid-argv and the bare `-`
     // stays last. Splicing injected flags positionally produced an invalid invocation.
     argv: ['exec', '--ephemeral', '--model', 'X', '--effort', 'high', '--skip-git-repo-check', '-o', `${RUN}/gsd-review-codex.md`, '-'],
-    stdin: true, out: 'file', timeout: 1200000,
+    stdin: true, out: 'file', timeout: CODEX_NATIVE_TIMEOUT_MS,
   },
-  { slug: 'coderabbit', binary: 'coderabbit', argv: ['review', '--prompt-only'], stdin: false, out: 'stdout', timeout: 360000 },
-  { slug: 'opencode', binary: 'opencode', argv: ['run', '--model', 'O', '--effort', 'high', '--format', 'json', '-'], stdin: true, out: 'stdout', timeout: 660000 },
-  { slug: 'qwen', binary: 'qwen', argv: ['-'], stdin: true, out: 'stdout', timeout: 900000 },
-  { slug: 'cursor', binary: 'cursor-agent', argv: ['-p', '--model', 'U', '--mode', 'ask', '--trust', '--output-format', 'text', FILE_REF], stdin: false, out: 'stdout', timeout: 900000 },
+  { slug: 'coderabbit', binary: 'coderabbit', argv: ['review', '--prompt-only'], stdin: false, out: 'stdout', timeout: CODERABBIT_NATIVE_TIMEOUT_MS },
+  { slug: 'opencode', binary: 'opencode', argv: ['run', '--model', 'O', '--effort', 'high', '--format', 'json', '-'], stdin: true, out: 'stdout', timeout: OPENCODE_NATIVE_TIMEOUT_MS },
+  { slug: 'qwen', binary: 'qwen', argv: ['-'], stdin: true, out: 'stdout', timeout: QWEN_NATIVE_TIMEOUT_MS },
+  { slug: 'cursor', binary: 'cursor-agent', argv: ['-p', '--model', 'U', '--mode', 'ask', '--trust', '--output-format', 'text', FILE_REF], stdin: false, out: 'stdout', timeout: CURSOR_NATIVE_TIMEOUT_MS },
   // resolveLanePlan fully resolves {{nativeTimeout}} itself (#3274) — this row proves the
   // unconfigured default reproduces the original literal exactly.
-  { slug: 'antigravity', binary: 'agy', argv: ['--print-timeout', '540s', '--model', 'A', '-p', FILE_REF], stdin: false, out: 'stdout', timeout: 600000 },
-  { slug: 'kimi-code', binary: 'kimi', argv: ['-m', 'K', '-p', FILE_REF], stdin: false, out: 'stdout', timeout: 900000 },
+  { slug: 'antigravity', binary: 'agy', argv: ['--print-timeout', '540s', '--model', 'A', '-p', FILE_REF], stdin: false, out: 'stdout', timeout: ANTIGRAVITY_NATIVE_TIMEOUT_MS },
+  { slug: 'kimi-code', binary: 'kimi', argv: ['-m', 'K', '-p', FILE_REF], stdin: false, out: 'stdout', timeout: KIMI_CODE_NATIVE_TIMEOUT_MS },
 ];
 
 describe('reviewer lane invocation — golden plans (the strangler-fig contract)', () => {
@@ -153,6 +174,11 @@ describe('#3274 — timeoutConfigKey resolves the outer wall-clock cap', () => {
 
   test('a configured positive number overrides timeoutFloorMs, seconds -> ms (row 2)', () => {
     const r = resolve('antigravity', { config: { [AGY_KEY]: 900 } });
+    // 900_000 here is the arithmetic result of this test's own input (900
+    // configured seconds * 1000), not a reuse of any lane's *_NATIVE_TIMEOUT_MS
+    // golden default -- it only coincidentally matches QWEN/CURSOR/
+    // KIMI_CODE_NATIVE_TIMEOUT_MS (all 900000). antigravity's own native
+    // default is ANTIGRAVITY_NATIVE_TIMEOUT_MS (600000), unrelated here.
     assert.equal(r.plan.timeoutMs, 900_000);
   });
 
@@ -179,7 +205,7 @@ describe('#3274 — timeoutConfigKey resolves the outer wall-clock cap', () => {
   });
 
   test('a lane with no timeoutConfigKey field falls back like an unset key (row 7)', () => {
-    const lane = { ...REVIEWER_LANES.find((l) => l.slug === 'gemini') };
+    const lane = { ...REVIEWER_LANES.find((l) => l.slug === 'claude') };
     delete lane.timeoutConfigKey;
     const r = resolveLanePlan({ lane, configGet: () => 900, runDir: RUN, repoRoot: ROOT });
     assert.equal(r.ok, true);
@@ -202,9 +228,9 @@ describe('#3274 — timeoutConfigKey resolves the outer wall-clock cap', () => {
   });
 
   test("a non-antigravity lane's configured timeout does not touch argv (row 13)", () => {
-    const key = REVIEWER_LANES.find((l) => l.slug === 'gemini').timeoutConfigKey;
-    const unset = resolve('gemini', { config: {} });
-    const configured = resolve('gemini', { config: { [key]: 300 } });
+    const key = REVIEWER_LANES.find((l) => l.slug === 'claude').timeoutConfigKey;
+    const unset = resolve('claude', { config: {} });
+    const configured = resolve('claude', { config: { [key]: 300 } });
     assert.deepStrictEqual(configured.plan.argv, unset.plan.argv);
     assert.notEqual(configured.plan.timeoutMs, unset.plan.timeoutMs);
   });
@@ -243,6 +269,9 @@ describe('#3274 — timeoutConfigKey resolves the outer wall-clock cap', () => {
 
   test('a configured antigravity timeout derives both the outer cap and the native flag (row 10)', () => {
     const r = resolve('antigravity', { config: { [AGY_KEY]: 900 } });
+    // 900_000 is this test's own 900-configured-seconds * 1000, not a reuse
+    // of a *_NATIVE_TIMEOUT_MS golden constant -- see the row-2 test above
+    // for the same coincidental-match note.
     assert.equal(r.plan.timeoutMs, 900_000);
     const i = r.plan.argv.indexOf('--print-timeout');
     assert.equal(r.plan.argv[i + 1], '840s');
@@ -312,7 +341,7 @@ describe('reviewer lane invocation — model resolution', () => {
     // `"null"` is the four literal characters `config-get --raw` prints for a missing key — every
     // bash leg tested for it. A config written by an older workflow can still contain it.
     for (const bad of [undefined, null, '', '   ', 'null', 'undefined']) {
-      const r = resolve('gemini', { config: { 'review.models.gemini': bad } });
+      const r = resolve('claude', { config: { 'review.models.claude': bad }, effortArgs: [] });
       assert.deepStrictEqual(r.plan.argv, ['-p', '-'], `${JSON.stringify(bad)} must not reach argv`);
     }
   });
@@ -321,15 +350,15 @@ describe('reviewer lane invocation — model resolution', () => {
     // String(0) would put "0" in as a model name. A wrong model silently reviewed is worse than no
     // override at all.
     for (const bad of [0, 1, true, false, [], {}, ['a']]) {
-      const r = resolve('gemini', { config: { 'review.models.gemini': bad } });
+      const r = resolve('claude', { config: { 'review.models.claude': bad }, effortArgs: [] });
       assert.deepStrictEqual(r.plan.argv, ['-p', '-'], `${JSON.stringify(bad)} must not reach argv`);
     }
   });
 
   test('shell metacharacters in a model value stay a single inert argv element', () => {
     const hostile = '; rm -rf /; $(whoami) `id` && echo "x"';
-    const r = resolve('gemini', { config: { 'review.models.gemini': hostile } });
-    assert.deepStrictEqual(r.plan.argv, ['-m', hostile, '-p', '-']);
+    const r = resolve('claude', { config: { 'review.models.claude': hostile }, effortArgs: [] });
+    assert.deepStrictEqual(r.plan.argv, ['--model', hostile, '-p', '-']);
     // Nothing here builds a shell string; the runner spawns with shell:false and an argv array.
     assert.equal(r.plan.argv.filter((a) => a === hostile).length, 1);
   });

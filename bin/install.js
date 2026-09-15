@@ -1625,9 +1625,9 @@ const claudeToOpencodeTools = {
   WebSearch: 'websearch',  // Plugin/MCP - keep for compatibility
 };
 
-// Tool name mapping from Claude Code to Gemini CLI
-// Gemini CLI uses snake_case built-in tool names
-const claudeToGeminiTools = {
+// Tool name mapping from Claude Code to Antigravity
+// Antigravity uses Gemini's snake_case built-in tool names
+const claudeToAntigravityTools = {
   Read: 'read_file',
   Write: 'write_file',
   Edit: 'replace',
@@ -1687,24 +1687,24 @@ function convertToolName(claudeTool) {
 }
 
 /**
- * Convert a Claude Code tool name to Gemini CLI format
- * - Applies Claude→Gemini mapping (Read→read_file, Bash→run_shell_command, etc.)
- * - Filters out MCP tools (mcp__*) — they are auto-discovered at runtime in Gemini
- * - Filters out Task/Agent — agents are auto-registered as tools in Gemini
- * @returns {string|null} Gemini tool name, or null if tool should be excluded
+ * Convert a Claude Code tool name to Antigravity format
+ * - Applies Claude→Antigravity mapping (Read→read_file, Bash→run_shell_command, etc.)
+ * - Filters out MCP tools (mcp__*) — they are auto-discovered at runtime in Antigravity
+ * - Filters out Task/Agent — agents are auto-registered as tools in Antigravity
+ * @returns {string|null} Antigravity tool name, or null if tool should be excluded
  */
-function convertGeminiToolName(claudeTool) {
+function convertAntigravityToolName(claudeTool) {
   // MCP tools: exclude — auto-discovered from mcpServers config at runtime
   if (claudeTool.startsWith('mcp__')) {
     return null;
   }
   // Task/Agent: exclude — agents are auto-registered as callable tools.
-  // AskUserQuestion: exclude — Gemini CLI does not expose an ask_user tool;
-  // emitting it causes frontmatter validation errors (#3362).
-  // Skill/SlashCommand: exclude — Gemini CLI has no 'skill' built-in tool;
-  // the lowercase fallback would emit an invalid 'skill'/'slashcommand' name
-  // that fails frontmatter validation (tools.N: Invalid tool name) and aborts
-  // the entire agent load (#1394).
+  // AskUserQuestion: exclude — Antigravity (Gemini tool dialect) does not expose
+  // an ask_user tool; emitting it causes frontmatter validation errors (#3362).
+  // Skill/SlashCommand: exclude — Antigravity (Gemini tool dialect) has no 'skill'
+  // built-in tool; the lowercase fallback would emit an invalid
+  // 'skill'/'slashcommand' name that fails frontmatter validation
+  // (tools.N: Invalid tool name) and aborts the entire agent load (#1394).
   if (
     claudeTool === 'Task' ||
     claudeTool === 'Agent' ||
@@ -1716,8 +1716,8 @@ function convertGeminiToolName(claudeTool) {
     return null;
   }
   // Check for explicit mapping
-  if (claudeToGeminiTools[claudeTool]) {
-    return claudeToGeminiTools[claudeTool];
+  if (claudeToAntigravityTools[claudeTool]) {
+    return claudeToAntigravityTools[claudeTool];
   }
   // Default: lowercase
   return claudeTool.toLowerCase();
@@ -2023,7 +2023,12 @@ function convertClaudeCommandToClaudeSkill(content, skillName, runtime = null, c
   const names = cmdNames || readGsdCommandNames();
   const normalizedBody = transformContentToHyphen(body, names);
 
-  const description = extractFrontmatterField(frontmatter, 'description') || '';
+  // #4324: the description is the text the host's skill picker renders, so it
+  // needs the same hyphen normalisation the body gets — otherwise a `/gsd:<cmd>`
+  // mention in a command description ships the retired colon form to the user.
+  const description = transformContentToHyphen(
+    extractFrontmatterField(frontmatter, 'description') || '', names,
+  );
   const argumentHint = extractFrontmatterField(frontmatter, 'argument-hint');
   const agent = extractFrontmatterField(frontmatter, 'agent');
   // #769: preserve context: from source command files so it is emitted into
@@ -2486,9 +2491,9 @@ function convertClaudeAgentToAntigravityAgent(content, isGlobal = false) {
   const color = extractFrontmatterField(frontmatter, 'color');
   const toolsRaw = extractFrontmatterField(frontmatter, 'tools') || '';
 
-  // Map tools to Gemini equivalents (reuse existing convertGeminiToolName)
+  // Map tools to Antigravity equivalents (reuse existing convertAntigravityToolName)
   const claudeTools = toolsRaw.split(',').map(t => t.trim()).filter(Boolean);
-  const mappedTools = claudeTools.map(t => convertGeminiToolName(t)).filter(Boolean);
+  const mappedTools = claudeTools.map(t => convertAntigravityToolName(t)).filter(Boolean);
 
   // #2876: quote description for the same reason as the skill variant.
   let fm = `---\nname: ${name}\ndescription: ${yamlQuote(description)}\ntools: ${mappedTools.join(', ')}\n`;
@@ -2947,6 +2952,8 @@ function convertClaudeCommandToClineSkill(content, skillName, runtime = null, cm
   let description = extractFrontmatterField(frontmatter, 'description');
   if (!description) description = `Run GSD workflow ${skillName}.`;
   description = toSingleLine(description);
+  // #4324: same reason as the Claude skill converter above.
+  description = transformContentToHyphen(description, names);
   // Cline documented max is 1024 code points (not UTF-16 code units).
   // Use Array.from to iterate by code point so that multibyte characters
   // (e.g. emoji, astral-plane chars) are never split, which would produce

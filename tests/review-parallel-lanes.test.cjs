@@ -694,14 +694,57 @@ function extractPresentResultsPreserveAndCleanupBash() {
  * "not a directory" for every caller, root included, because it is not a
  * permissions check at all.
  */
+
+// #4351: preserved evidence now lands in a PER-RUN SUBDIRECTORY under
+// `.review-diagnostics/`. A flat copy used each file's SOURCE basename, and a
+// lane slug is stable across runs, so a second review of the same phase silently
+// overwrote the first run's evidence.
+//
+// These helpers resolve THROUGH that subdirectory layer on purpose. Rows that
+// assert WHICH files were preserved should keep asserting exactly that; without
+// them each such row would quietly become an assertion about the directory
+// LAYOUT instead, and would have to be rewritten again the next time the layout
+// moves. The layout itself is pinned once, explicitly, by
+// `oneRunSubdirectoryPerRun_4351`.
+function preservedRunDirs(result) {
+  if (!fs.existsSync(result.diagDir)) return [];
+  return fs.readdirSync(result.diagDir)
+    .map((name) => path.join(result.diagDir, name))
+    .filter((p) => fs.statSync(p).isDirectory())
+    .sort();
+}
+
+function preservedNames(result) {
+  return preservedRunDirs(result)
+    .flatMap((dir) => fs.readdirSync(dir))
+    .sort();
+}
+
+// Resolves a preserved basename to its real path. When the file was NOT
+// preserved this deliberately returns a path that does not exist, so a negative
+// assertion (`existsSync(...) === false`) still reads naturally at the call site.
+function preservedPath(result, name) {
+  for (const dir of preservedRunDirs(result)) {
+    const candidate = path.join(dir, name);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return path.join(result.diagDir, name);
+}
+
 function runWriteReviewsFlow(t, opts) {
   const scriptDir = createTempDir('gsd-3352-script-');
   const runDir = createTempDir('gsd-3352-rundir-');
-  const phaseDir = createTempDir('gsd-3352-phasedir-');
+  // #4351: an explicit phaseDir lets a caller run this flow TWICE against the
+  // SAME phase directory, which is the only way to observe a second run
+  // clobbering the first run's preserved evidence. Omitted (every pre-existing
+  // caller) it mints a fresh one exactly as before.
+  const phaseDir = opts.phaseDir || createTempDir('gsd-3352-phasedir-');
   t.after(() => {
     cleanup(scriptDir);
     cleanup(runDir);
-    cleanup(phaseDir);
+    // A caller-supplied phaseDir is owned by the caller — cleaning it here would
+    // destroy run 1's evidence before run 2 could be asserted against it.
+    if (!opts.phaseDir) cleanup(phaseDir);
   });
 
   if (opts.blockDiagDirWithFile) {
@@ -934,15 +977,15 @@ describe('#3352 per-lane evidence survives cleanup (R3)', () => {
     assert.equal(result.runDirExists, false, 'the run dir must still be destroyed');
     assert.equal(result.diagDirExists, true, 'diagnostics must have been preserved somewhere under phase_dir');
 
-    const codexMd = path.join(result.diagDir, 'gsd-review-codex.md');
-    const codexErr = path.join(result.diagDir, 'gsd-review-codex.err');
-    const claudeErr = path.join(result.diagDir, 'gsd-review-claude.err');
+    const codexMd = preservedPath(result, 'gsd-review-codex.md');
+    const codexErr = preservedPath(result, 'gsd-review-codex.err');
+    const claudeErr = preservedPath(result, 'gsd-review-claude.err');
     assert.ok(fs.existsSync(codexMd), 'codex .md evidence must be preserved');
     assert.equal(fs.readFileSync(codexMd, 'utf-8'), LANE_FAILURE_MD('codex'));
     assert.ok(fs.existsSync(codexErr), 'codex non-empty .err evidence must be preserved');
     assert.ok(fs.existsSync(claudeErr), 'claude non-empty .err evidence must be preserved');
 
-    const geminiErr = path.join(result.diagDir, 'gsd-review-gemini.err');
+    const geminiErr = preservedPath(result, 'gsd-review-gemini.err');
     assert.equal(fs.existsSync(geminiErr), false, 'an empty .err must not be copied as if it were real evidence');
   });
 });
@@ -1045,9 +1088,7 @@ describe('#4097 the run\'s own input copies are not preserved as diagnostics', (
     assert.equal(result.runDirExists, false, 'successful preservation must still clean up the run dir');
     assert.equal(result.diagDirExists, true, 'real lane evidence must still be preserved');
 
-    const preserved = fs.existsSync(result.diagDir)
-      ? fs.readdirSync(result.diagDir).sort()
-      : [];
+    const preserved = preservedNames(result);
     // Only the lane's own output belongs in the diagnostics folder.
     assert.deepEqual(
       preserved,
@@ -1055,13 +1096,13 @@ describe('#4097 the run\'s own input copies are not preserved as diagnostics', (
       `diagnostics must hold exactly the lane report and stderr sidecar, not the run's input copies; got: ${preserved.join(', ')}`,
     );
     assert.equal(
-      fs.readFileSync(path.join(result.diagDir, 'gsd-review-claude.md'), 'utf-8'),
+      fs.readFileSync(preservedPath(result, 'gsd-review-claude.md'), 'utf-8'),
       '# Claude review\nok\n',
       'the lane report must be preserved byte-identically',
     );
     for (const inputName of Object.keys(INPUT_COPIES_4097)) {
       assert.equal(
-        fs.existsSync(path.join(result.diagDir, inputName)),
+        fs.existsSync(preservedPath(result, inputName)),
         false,
         `input copy ${inputName} must NOT be swept into .review-diagnostics/ (#4097)`,
       );
@@ -1115,5 +1156,109 @@ describe('#3352 preserved evidence is never swept into the commit (N6)', () => {
     const filesIdx = commitArgs.indexOf('--files ');
     const afterFiles = commitArgs.slice(filesIdx + '--files '.length).trim();
     assert.equal(afterFiles.split(/\s+/).length, 1, `--files must carry exactly one path; got: ${afterFiles}`);
+  });
+});
+
+// ─── #4351: repeated runs must accumulate evidence, never clobber it ────────
+//
+// The preserve block copies lane output into `.review-diagnostics/` using each
+// file's SOURCE basename (`gsd-review-<slug>.md` / `.err`). A lane slug is
+// stable across runs, so before this fix the destination path was stable across
+// runs too — and `cp` over an existing file is a SUCCESS, so a second review of
+// the same phase destroyed the first run's evidence with no error and no
+// warning, in the one directory that exists to outlive `rm -rf "$RUN_DIR"`.
+//
+// These rows run the REAL extracted fence twice against ONE phase directory,
+// which is the only arrangement that can observe the overwrite.
+describe('#4351 repeated review runs accumulate evidence instead of clobbering it', () => {
+  test('twoRunsOnOnePhaseBothPreserved_4351', (t) => {
+    const sharedPhaseDir = createTempDir('gsd-4351-phasedir-');
+    t.after(() => cleanup(sharedPhaseDir));
+
+    const first = runWriteReviewsFlow(t, {
+      phaseDir: sharedPhaseDir,
+      selected: 'codex',
+      jsonlLines: [{ slug: 'codex' }],
+      lanes: { codex: { md: '# run one report\n', err: 'run one stderr\n' } },
+    });
+    assert.equal(first.outcome, 'exited');
+    assert.equal(first.diagDirExists, true, 'run 1 must preserve its evidence');
+
+    const second = runWriteReviewsFlow(t, {
+      phaseDir: sharedPhaseDir,
+      selected: 'codex',
+      jsonlLines: [{ slug: 'codex' }],
+      lanes: { codex: { md: '# run two report\n', err: 'run two stderr\n' } },
+    });
+    assert.equal(second.outcome, 'exited');
+
+    // Assert on CONTENT, not on a file count: a clobber that happened to produce
+    // the same number of files would pass a count-only check, and the whole
+    // defect is that run 1's bytes were replaced by run 2's.
+    const runDirs = preservedRunDirs(second);
+    assert.equal(
+      runDirs.length, 2,
+      `each run must own a distinct subdirectory; got ${runDirs.length}: ${runDirs.map((d) => path.basename(d)).join(', ')}`,
+    );
+
+    const reports = runDirs
+      .map((dir) => path.join(dir, 'gsd-review-codex.md'))
+      .filter((p) => fs.existsSync(p))
+      .map((p) => readFileNormalized(p));
+    assert.deepEqual(
+      reports.sort(),
+      ['# run one report\n', '# run two report\n'].sort(),
+      'BOTH runs\' reports must be recoverable — before #4351 only the second survived',
+    );
+  });
+
+  test('identicalLaneFailureTwiceLeavesTwoStubs_4351', (t) => {
+    // The 2nd acceptance criterion, and the worst case for a flat layout: the
+    // SAME lane failing the SAME way twice produces byte-identical basenames.
+    const sharedPhaseDir = createTempDir('gsd-4351-phasedir-err-');
+    t.after(() => cleanup(sharedPhaseDir));
+
+    const opts = {
+      phaseDir: sharedPhaseDir,
+      selected: 'claude',
+      jsonlLines: [],
+      lanes: { claude: { md: '# lane failed\n', err: 'identical stack trace\n' } },
+    };
+    runWriteReviewsFlow(t, opts);
+    const second = runWriteReviewsFlow(t, opts);
+
+    const stubs = preservedRunDirs(second)
+      .map((dir) => path.join(dir, 'gsd-review-claude.err'))
+      .filter((p) => fs.existsSync(p));
+    assert.equal(
+      stubs.length, 2,
+      'two identical failures must leave two independently recoverable stubs',
+    );
+    for (const stub of stubs) {
+      assert.equal(readFileNormalized(stub), 'identical stack trace\n');
+    }
+  });
+
+  test('oneRunSubdirectoryPerRun_4351', (t) => {
+    // Pins the LAYOUT itself, once, so the helpers above stay honest: a single
+    // run creates exactly one subdirectory, the lane basenames are unchanged
+    // INSIDE it (nothing in $RUN_DIR was renamed — two consumers depend on those
+    // names), and no evidence is left sitting flat in the diagnostics root.
+    const result = runWriteReviewsFlow(t, {
+      selected: 'codex',
+      jsonlLines: [{ slug: 'codex' }],
+      lanes: { codex: { md: '# only run\n', err: 'only stderr\n' } },
+    });
+
+    const runDirs = preservedRunDirs(result);
+    assert.equal(runDirs.length, 1, 'one run must create exactly one subdirectory');
+    assert.deepEqual(
+      fs.readdirSync(runDirs[0]).sort(),
+      ['gsd-review-codex.err', 'gsd-review-codex.md'],
+      'lane basenames must be unchanged inside the run subdirectory',
+    );
+    const flat = fs.readdirSync(result.diagDir)
+      .filter((name) => fs.statSync(path.join(result.diagDir, name)).isFile());
+    assert.deepEqual(flat, [], 'no evidence may be left flat in the diagnostics root');
   });
 });

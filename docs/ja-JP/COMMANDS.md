@@ -7,10 +7,9 @@
 ## コマンド構文
 
 - **Claude Code / Copilot / OpenCode / Kilo:** `/gsd-command-name [args]`（ハイフン形式）
-- **Gemini CLI:** `/gsd:command-name [args]`（コロン形式 — Gemini は `gsd:` 配下にコマンドを名前空間化します）
 - **Codex:** `$gsd-command-name [args]`
 
-ハイフン形式とコロン形式は、*同じコマンドのランタイム固有の表記*です。どのランタイムを使用していても、インストーラーが正しい形式をランタイムのコマンドディレクトリに書き込みます。
+どのランタイムを使用していても、インストーラーが正しい形式をランタイムのコマンドディレクトリに書き込みます。
 
 ---
 
@@ -218,7 +217,7 @@ WebSearch から取得したパッケージは `[ASSUMED]`（`[VERIFIED]` では
 | 引数 / フラグ | 必須 | 説明 |
 |-----------------|----------|-------------|
 | `N` | **Yes** | 計画およびレビューするフェーズ番号 |
-| レビュアーフラグ | No | すべてのレビュアーレーンフラグをそのまま渡す: `--gemini`、`--claude`、`--codex`、`--coderabbit`、`--opencode`、`--qwen`、`--cursor`、`--agy` / `--antigravity`、`--ollama`、`--lm-studio`、`--llama-cpp`、`--kimi-code` |
+| レビュアーフラグ | No | すべてのレビュアーレーンフラグをそのまま渡す: `--claude`、`--codex`、`--coderabbit`、`--opencode`、`--qwen`、`--cursor`、`--agy` / `--antigravity`、`--ollama`、`--lm-studio`、`--llama-cpp`、`--kimi-code` |
 | `--all` | No | 設定済みのすべてのレビュアーを実行。レーンはデフォルトでは**順次**ディスパッチされます。`review.parallel_lanes` を `true` にすると、1 回のレビューパス内で並行してディスパッチされます |
 | `--max-cycles N` | No | サイクル上限を上書き（デフォルト3） |
 
@@ -1238,7 +1237,6 @@ AI システムの構築を含むフェーズの AI-SPEC.md デザインコン�
 
 | フラグ | 説明 |
 |------|-------------|
-| `--gemini` | Gemini CLI レビューを含める |
 | `--claude` | Claude CLI レビューを含める（別のセッション） |
 | `--codex` | Codex CLI レビューを含める |
 | `--coderabbit` | CodeRabbit レビューを含める |
@@ -1254,7 +1252,7 @@ AI システムの構築を含むフェーズの AI-SPEC.md デザインコン�
 
 **デフォルトレビュアーの動作（フラグなし）:**
 - `review.default_reviewers` が**未設定**の場合、`/gsd-review` は検出されたすべてのレビュアーを実行します（現在のデフォルト動作）。
-- `review.default_reviewers` が**設定済み**の場合、`/gsd-review` はそのサブセットのみを実行します（例: `["gemini","codex"]`）。
+- `review.default_reviewers` が**設定済み**の場合、`/gsd-review` はそのサブセットのみを実行します（例: `["codex","claude"]`）。
 - `--all` は常に設定を上書きし、完全な検出セットを実行します。
 - 明示的なフラグ（例: `--cursor`）は、そのランの `--all` と設定デフォルトの両方を上書きします。
 
@@ -1262,11 +1260,11 @@ AI システムの構築を含むフェーズの AI-SPEC.md デザインコン�
 
 ```bash
 # フラグなしの /gsd-review 実行用のプロジェクトデフォルトレビュアーを設定
-gsd config-set review.default_reviewers '["gemini","codex"]'
+gsd config-set review.default_reviewers '["codex","claude"]'
 
-/gsd-review --phase 2             # 設定から gemini+codex を実行
+/gsd-review --phase 2             # 設定から codex+claude を実行
 /gsd-review --phase 3 --all
-/gsd-review --phase 2 --gemini
+/gsd-review --phase 2 --codex
 /gsd-review --phase 2 --cursor    # ワンオフの上書き
 ```
 

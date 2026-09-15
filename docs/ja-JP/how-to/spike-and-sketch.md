@@ -90,7 +90,7 @@ GSD は、コードを書く前に、雰囲気、ビジュアルリファレン�
 
 `--quick` は受付の会話を完全にスキップし、引数をデザイン方向として使用します。
 
-### Claude 以外のランタイム（Codex、Gemini CLI など）
+### Claude 以外のランタイム（Codex、Antigravity CLI など）
 
 ```bash
 /gsd-sketch --text "onboarding flow"

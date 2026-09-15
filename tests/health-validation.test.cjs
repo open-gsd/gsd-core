@@ -1492,6 +1492,19 @@ const {
   buildNotStartedPhaseVariants,
 } = require('../gsd-core/bin/lib/validate.cjs');
 
+/**
+ * NOT a subprocess spawn timeout. This is `node:test`'s own per-test
+ * `{ timeout }` option (the second positional argument to `test(name,
+ * options, fn)`), used as a hang BACKSTOP for two ReDoS (#663) adversarial-
+ * input regression tests -- catches any regression that re-introduces a
+ * catastrophically-backtracking pattern. Coincides numerically with
+ * tests/helpers/timeouts.cjs's SCAN_USAGE_ERROR_TIMEOUT_MS and
+ * MALFORMED_INPUT_HOOK_TIMEOUT_MS but is a completely different mechanism
+ * (a node:test option, not a subprocess spawn bound) -- disclosed, not
+ * merged.
+ */
+const REDOS_BACKSTOP_TEST_TIMEOUT_MS = 5000;
+
 // ─── Part A: behavior preservation ───────────────────────────────────────────
 
 describe('buildRoadmapPhaseVariants — behavior preservation (#663)', () => {
@@ -1588,7 +1601,7 @@ describe('buildRoadmapPhaseVariants — ReDoS adversarial fixture (#663)', () =>
   // yields NO match (empty roadmapPhases Set) — the correct behavior when the
   // terminating colon is absent.  The { timeout: 5000 } backstop catches any
   // regression that re-introduces a slow pattern.
-  test('malformed heading without colon yields no phase match (adversarial input)', { timeout: 5000 }, () => {
+  test('malformed heading without colon yields no phase match (adversarial input)', { timeout: REDOS_BACKSTOP_TEST_TIMEOUT_MS }, () => {
     const pathological = '## Phase a' + '-a'.repeat(32) + ' ';
     const { roadmapPhases } = buildRoadmapPhaseVariants(pathological);
     assert.strictEqual(roadmapPhases.size, 0,
@@ -1601,7 +1614,7 @@ describe('buildNotStartedPhaseVariants — ReDoS adversarial fixture (#663)', ()
   // A checklist-style line with many "-a" segments and no colon triggers the
   // same catastrophic backtracking.  Assert the correct structured result:
   // the malformed line yields an empty notStarted Set.
-  test('malformed unchecked-item without terminator yields no phase match (adversarial input)', { timeout: 5000 }, () => {
+  test('malformed unchecked-item without terminator yields no phase match (adversarial input)', { timeout: REDOS_BACKSTOP_TEST_TIMEOUT_MS }, () => {
     // No trailing colon or whitespace: the regex terminator [:\s*] cannot match,
     // so the engine must backtrack through all '-a' repetitions and conclude no
     // match.  Under the old nested-quantifier pattern this was exponential;

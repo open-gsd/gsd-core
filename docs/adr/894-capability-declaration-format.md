@@ -267,3 +267,81 @@ This ADR was stress-tested in two rounds before merge; the format changed materi
 - The declarative-predicate vocabulary for gates (`artifact-exists`, `config-equals`, …).
 - The exact `commandStyle`/`sandboxTier`/`hooksSurface` enums for `role: runtime` (phase 5, against the 15 runtimes).
 - Point/role-set deprecation policy once third-party capabilities exist (additive-only holds until then; a rename/removal needs a major bump + deprecation window — deferred with third-party loading per ADR-857).
+
+## Amendment (2026-09-14): the role assignment in §3 is normative, and the families are disjoint
+
+Issue [#4740](https://github.com/open-gsd/gsd-core/issues/4740).
+
+§3 presents the per-step role assignment parenthesised as *"(illustrative roles)"*. That word was
+accurate about the list's **purpose** — it illustrated the shape of a generated contract entry — and
+wrong about its **status**, because the assignment was load-bearing from the moment the generator
+consumed it. Read literally it makes the partition an example rather than a rule, which is the
+reading this amendment closes. **The assignment in §3 is normative.**
+
+### The partition
+
+Every role belongs to exactly one of three disjoint families:
+
+| family | roles |
+|---|---|
+| orchestration | `orchestrator` |
+| planning | `researcher`, `planner`, `checker` |
+| execution | `executor`, `verifier` |
+
+Every loop step admits exactly one family:
+
+| step | admits |
+|---|---|
+| `discuss` | orchestration |
+| `plan` | planning |
+| `execute` | execution |
+| `verify` | orchestration |
+| `ship` | orchestration |
+
+**No step may declare roles from more than one family.** `execute:*` never admits `orchestrator`;
+the orchestration steps never admit `executor` or `verifier`. A step MAY declare a strict subset of
+its family (`execute: [executor]` is legal); it may never declare outside it.
+
+Orchestration and execution are distinct functions of the loop. The orchestrator decides what runs
+and owns the shared-state writes; an executor does one plan's work inside its own worktree. A
+contribution aimed at one is, by construction, not usable by the other — so a step that admitted
+both would be publishing an interface no reader could resolve.
+
+### Why this is a clarification, not a new decision
+
+§3's own mechanism already made the partition true in fact. The contract is generated from the
+workflow markers *"so it cannot drift into a lie"*, and all five step workflows have always declared
+single-family role sets. What was absent was any statement that this is **required**, and any check
+that it **holds**. This amendment supplies the first; the enforcement below supplies the second.
+No shipped behavior changes.
+
+### Enforcement
+
+`scripts/gen-loop-host-contract.cjs` gains `crossCheckRoleFamilies(step, agentRoles, fileName)`,
+which fails contract generation on a cross-family declaration, a role outside the vocabulary, or an
+unknown step. `lint:generated-sync` already runs `gen-loop-host-contract.cjs --check` in CI, so a
+violation blocks a PR.
+
+It **fails closed on an unknown step**, deliberately diverging from `assertPointsCoverage`'s
+`if (!expected) continue; // unknown step — caught elsewhere`. For *points* that comment is true —
+the canonical-set and cross-step duplicate checks catch it. For *roles* there is no second net, so
+failing open would leave an unknown step as the single input that bypasses the gate.
+
+This is **additive to §3's existing validation rule** (*"every `contribution.into` ∈ that step's
+`agentRoles`"*), which is unchanged. The two govern different actors and do not interact:
+
+| rule | governs | enforced by |
+|---|---|---|
+| `contribution.into ∈ agentRoles` (§3, unchanged) | what a **capability** may target | `capability-validator.cjs` |
+| role family matches the step (this amendment) | what a **workflow** may declare | `gen-loop-host-contract.cjs` |
+
+### Scope and limits
+
+- **Declarations only.** No capability is affected: a contribution targeting a legitimately-declared
+  role is valid before and after this amendment.
+- **No workflow changes.** All five already declare single-family sets, so the gate is green on the
+  same commit that introduces it. It constrains future edits.
+- **It does not make the partition unfalsifiable.** Someone may still edit
+  `EXPECTED_FAMILY_BY_STEP`. The value is that the boundary moves from an unstated property of five
+  workflow files to a named, reviewed constant with a test that fails when it changes — the same
+  bar §3 set for points.

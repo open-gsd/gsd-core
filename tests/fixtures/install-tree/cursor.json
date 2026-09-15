@@ -572,6 +572,7 @@
   "hooks/gsd-cursor-subagent-stop.js",
   "hooks/lib/cli-exit.js",
   "hooks/lib/cursor-workspace.js",
+  "hooks/lib/dispatch-identity.js",
   "hooks/lib/exit-code-registry.js",
   "hooks/lib/hook-exit.js",
   "hooks/lib/isolation-deny-reason.js",

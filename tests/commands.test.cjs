@@ -6545,3 +6545,127 @@ describe('gsd-tools.cjs resolveMainWorktreeCwd (#3050)', () => {
     assert.equal(resolved, '/repo/wt');
   });
 });
+
+// ─── #4055 — a merged-and-deleted phase branch must not be resurrected ──────
+
+describe('#4055: merged-and-deleted phase branch must not be resurrected', () => {
+  const { createTempGitProject } = require('./helpers.cjs');
+
+  test('post-merge phase-scoped commit lands on the current branch', () => {
+    const tmpDir = createTempGitProject('gsd-4055-lifecycle-');
+    const base = gitOrThrow(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: tmpDir }).trim();
+
+    // Configure phase branching (the issue's config shape).
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({
+        commit_docs: true,
+        branching_strategy: 'phase',
+        phase_branch_template: 'gsd/phase-{phase}-{slug}',
+      })
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '07-example-phase'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'phases', '07-example-phase', '07-PLAN.md'),
+      '---\nphase: 07-example-phase\nplan: 01\n---\n# Plan\n'
+    );
+    gitOrThrow(['add', '-A'], { cwd: tmpDir });
+    gitOrThrow(['commit', '-m', 'chore: seed phase 07'], { cwd: tmpDir });
+
+    // Normal phase lifecycle: branch, work, merge, delete the branch.
+    gitOrThrow(['checkout', '-qb', 'gsd/phase-07-example-phase'], { cwd: tmpDir });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'phases', '07-example-phase', '07-01-SUMMARY.md'),
+      'summary\n'
+    );
+    gitOrThrow(['add', '-A'], { cwd: tmpDir });
+    gitOrThrow(['commit', '-m', 'docs(07-01): summary'], { cwd: tmpDir });
+    gitOrThrow(['checkout', '-q', base], { cwd: tmpDir });
+    gitOrThrow(['merge', '-q', '--no-ff', '-m', 'Phase 07 (#1)', 'gsd/phase-07-example-phase'], { cwd: tmpDir });
+    gitOrThrow(['branch', '-qD', 'gsd/phase-07-example-phase'], { cwd: tmpDir });
+
+    assert.strictEqual(
+      gitOrThrow(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: tmpDir }).trim(),
+      base,
+      'lifecycle setup: must be back on the base branch post-merge'
+    );
+
+    // The ordinary post-merge close-out commit.
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'phases', '07-example-phase', '07-VERIFICATION.md'),
+      'verification\n'
+    );
+    // Invoke via the process seam so stderr is observable on the success
+    // path — the refusal disclosure (#2539 AC2) is written to stderr, which
+    // execFileSync discards on success (same idiom as the #2539 no-switch
+    // test above).
+    const { TOOLS_PATH } = require('./helpers.cjs');
+    const proc = runNode([
+      TOOLS_PATH, 'commit', 'docs(phase-07): verification report',
+      '--files', '.planning/phases/07-example-phase/07-VERIFICATION.md',
+    ], { cwd: tmpDir });
+    throwIfFailed(proc, 'gsd-tools commit (post-merge close-out)');
+    const output = JSON.parse((proc.stdout || '').trim());
+    assert.strictEqual(output.committed, true, 'must commit');
+
+    // The fix: no resurrection, no switch — the commit lands in place.
+    assert.strictEqual(
+      gitOrThrow(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: tmpDir }).trim(),
+      base,
+      'HEAD must stay on the base branch (no create-and-switch)'
+    );
+    // gitOrThrow throws on the expected absence (rev-parse --quiet exits 1) —
+    // the throw itself is the proof the branch was not recreated.
+    let resurrected = true;
+    try {
+      gitOrThrow(['rev-parse', '--verify', '--quiet', 'refs/heads/gsd/phase-07-example-phase'], { cwd: tmpDir });
+    } catch {
+      resurrected = false;
+    }
+    assert.strictEqual(resurrected, false, 'the deleted phase branch must not be recreated');
+    const landed = gitOrThrow(
+      ['show', 'HEAD:.planning/phases/07-example-phase/07-VERIFICATION.md'], { cwd: tmpDir }
+    );
+    assert.ok(landed.includes('verification'), 'the commit must land on the base branch');
+    assert.match(
+      proc.stderr || '',
+      /instead of recreating/,
+      'the refusal must be disclosed on stderr (#2539 AC2)'
+    );
+  });
+
+  test('create arm requires the current branch to be the resolved base', () => {
+    const tmpDir = createTempGitProject('gsd-4055-base-');
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({
+        commit_docs: true,
+        branching_strategy: 'phase',
+        phase_branch_template: 'gsd/phase-{phase}-{slug}',
+      })
+    );
+    // A genuinely new phase (no committed history touches its directory) but
+    // the caller is NOT on the base branch — the create arm must not fire.
+    gitOrThrow(['checkout', '-qb', 'side-work'], { cwd: tmpDir });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '02-next'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '02-next', '02-CONTEXT.md'), '# Context\n');
+
+    const result = runGsdTools(
+      'commit "docs(02): context" --files .planning/phases/02-next/02-CONTEXT.md',
+      tmpDir
+    );
+    assert.ok(result.success, `commit failed: ${result.error || result.output}`);
+    assert.strictEqual(
+      gitOrThrow(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: tmpDir }).trim(),
+      'side-work',
+      'HEAD must stay on the non-base branch (no create-and-switch)'
+    );
+    let createdBranch = true;
+    try {
+      gitOrThrow(['rev-parse', '--verify', '--quiet', 'refs/heads/gsd/phase-02-next'], { cwd: tmpDir });
+    } catch {
+      createdBranch = false;
+    }
+    assert.strictEqual(createdBranch, false, 'no phase branch may be created off a non-base branch');
+  });
+});

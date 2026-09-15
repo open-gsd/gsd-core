@@ -746,6 +746,7 @@ const { runGsdTools, createTempDir, cleanup } = require('./helpers.cjs');
 const OUTCOME = {
   ELIGIBLE: 'eligible',
   RESTORED: 'restored',
+  ALREADY_PRESENT: 'already_present',
   SKIPPED_DESTINATION_MANAGED: 'skipped_destination_managed',
   SKIPPED_DESTINATION_EXISTS: 'skipped_destination_exists',
   SKIPPED_COPY_FAILED: 'skipped_copy_failed',
@@ -945,7 +946,7 @@ describe('restore-custom-files — compatibility pass against the new release', 
     );
   });
 
-  test('a byte-identical destination restores idempotently instead of blocking', () => {
+  test('a byte-identical destination is already present, neither blocked nor restored (#4558)', () => {
     writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Planner\n' });
     const body = '---\nname: gsd-mine\ndescription: mine\n---\n# Mine\n';
     const dest = path.join(tmpDir, 'skills', 'gsd-mine', 'SKILL.md');
@@ -956,8 +957,12 @@ describe('restore-custom-files — compatibility pass against the new release', 
     const entry = entryFor(parseRestore(tmpDir, ['--apply']), 'skills/gsd-mine/SKILL.md');
 
     assert.strictEqual(
-      entry.outcome, OUTCOME.RESTORED,
-      'identical content is a no-op restore, not a conflict',
+      entry.outcome, OUTCOME.ALREADY_PRESENT,
+      'identical content is a no-op, not a conflict and not a restore',
+    );
+    assert.ok(
+      !warningCodes(entry).includes(WARNING.DESTINATION_EXISTS),
+      'an identical destination is not a destination_exists conflict',
     );
   });
 
@@ -1152,6 +1157,98 @@ describe('restore-custom-files — apply mode', () => {
       fs.existsSync(path.join(tmpDir, 'gsd-user-files-backup', 'skills', 'gsd-blocked', 'SKILL.md')),
       'the failed entry stays in the backup',
     );
+  });
+});
+
+describe('restore-custom-files — byte-identical destination settles the restore prompt (#4558)', () => {
+  let tmpDir;
+  const REL = 'hooks/example.cmd';
+  const body = '@echo off\r\necho example\r\n';
+
+  // A fixed, clearly-in-the-past mtime so any rewrite of the destination —
+  // even a copy of identical bytes over itself — is observable.
+  const PAST = new Date('2020-01-01T00:00:00Z');
+
+  function seedIdenticalDestination() {
+    writeInstalledManifest(tmpDir, { 'gsd-core/workflows/update.md': '# Update\n' });
+    const dest = path.join(tmpDir, REL);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, body);
+    fs.utimesSync(dest, PAST, PAST);
+    const backupPath = writeBackupEntry(tmpDir, REL, body);
+    return { dest, backupPath };
+  }
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-4558-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('plan reports already_present and excludes it from eligible_count', () => {
+    seedIdenticalDestination();
+
+    const json = parseRestore(tmpDir);
+
+    assert.strictEqual(entryFor(json, REL).outcome, OUTCOME.ALREADY_PRESENT);
+    assert.strictEqual(json.eligible_count, 0, 'accepting the prompt would restore nothing for an already-present file');
+    assert.strictEqual(json.restored_count, 0);
+    assert.strictEqual(json.entries.length, 1, 'the entry is still reported (RESTORE_TOTAL semantics unchanged)');
+    assert.strictEqual(json.entries.length, json.eligible_count + json.skipped_count);
+  });
+
+  test('--apply writes nothing for an already_present entry and keeps the backup intact', () => {
+    const { dest, backupPath } = seedIdenticalDestination();
+
+    const json = parseRestore(tmpDir, ['--apply']);
+
+    assert.strictEqual(entryFor(json, REL).outcome, OUTCOME.ALREADY_PRESENT);
+    assert.strictEqual(json.restored_count, 0, 'no-op must not count as restored');
+    assert.strictEqual(json.eligible_count, 0);
+    assert.strictEqual(
+      fs.statSync(dest).mtimeMs, PAST.getTime(),
+      'the destination must not be rewritten, not even with identical bytes',
+    );
+    assert.strictEqual(fs.readFileSync(dest, 'utf8'), body);
+    assert.ok(fs.existsSync(backupPath), 'the backup must survive');
+    assert.strictEqual(fs.readFileSync(backupPath, 'utf8'), body);
+  });
+
+  test('a plan run after a successful restore is silent (idempotent after success)', () => {
+    writeInstalledManifest(tmpDir, { 'gsd-core/workflows/update.md': '# Update\n' });
+    writeBackupEntry(tmpDir, REL, body);
+
+    const plan1 = parseRestore(tmpDir);
+    assert.strictEqual(entryFor(plan1, REL).outcome, OUTCOME.ELIGIBLE);
+    assert.strictEqual(plan1.eligible_count, 1, 'a genuinely missing file is offered');
+
+    const applied = parseRestore(tmpDir, ['--apply']);
+    assert.strictEqual(entryFor(applied, REL).outcome, OUTCOME.RESTORED);
+    assert.strictEqual(applied.restored_count, 1, 'a genuinely missing file still restores normally');
+    assert.strictEqual(fs.readFileSync(path.join(tmpDir, REL), 'utf8'), body);
+
+    const plan2 = parseRestore(tmpDir);
+    assert.strictEqual(entryFor(plan2, REL).outcome, OUTCOME.ALREADY_PRESENT);
+    assert.strictEqual(plan2.eligible_count, 0, 'the next plan must not re-offer the restore');
+  });
+
+  test('mixed backup: only the missing entry is eligible, the differing one is still skipped', () => {
+    seedIdenticalDestination();
+    writeBackupEntry(tmpDir, 'hooks/missing.cmd', 'echo missing\n');
+    const differing = path.join(tmpDir, 'hooks', 'differing.cmd');
+    fs.writeFileSync(differing, 'echo on-disk\n');
+    writeBackupEntry(tmpDir, 'hooks/differing.cmd', 'echo backed-up\n');
+
+    const json = parseRestore(tmpDir);
+
+    assert.strictEqual(entryFor(json, REL).outcome, OUTCOME.ALREADY_PRESENT);
+    assert.strictEqual(entryFor(json, 'hooks/missing.cmd').outcome, OUTCOME.ELIGIBLE);
+    assert.strictEqual(entryFor(json, 'hooks/differing.cmd').outcome, OUTCOME.SKIPPED_DESTINATION_EXISTS);
+    assert.strictEqual(json.eligible_count, 1);
+    assert.strictEqual(json.skipped_count, 2);
+    assert.strictEqual(fs.readFileSync(differing, 'utf8'), 'echo on-disk\n');
   });
 });
 

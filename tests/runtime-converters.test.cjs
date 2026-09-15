@@ -452,10 +452,10 @@ Do nothing.`;
 //
 // The gemini-RUNTIME's own top-level converter (convertClaudeToGeminiAgent) and
 // its dedicated test coverage were removed with the gemini runtime (#1928,
-// Google sunset Gemini CLI 2026-06-18). convertGeminiToolName and
-// claudeToGeminiTools STAY — they are shared infra reused by Antigravity (which
-// runs on the same backend tool-name vocabulary), so the Antigravity-facing
-// regression coverage below is retained unchanged.
+// Google sunset Gemini CLI 2026-06-18). convertAntigravityToolName and
+// claudeToAntigravityTools STAY — they are shared infra reused by Antigravity
+// (which runs on the same backend tool-name vocabulary), so the
+// Antigravity-facing regression coverage below is retained unchanged.
 
 describe('#1394 regression: excludes Skill/SlashCommand from Antigravity frontmatter', () => {
   // Skill/SlashCommand are Claude-only tools with no Gemini-backend built-in
@@ -463,7 +463,7 @@ describe('#1394 regression: excludes Skill/SlashCommand from Antigravity frontma
   // emit an invalid 'skill'/'slashcommand' tool name, which fails frontmatter
   // validation (tools.N: Invalid tool name) and aborts the entire agent load.
 
-  // Antigravity reuses convertGeminiToolName (it runs on the Gemini backend),
+  // Antigravity reuses convertAntigravityToolName (it runs on the Gemini backend),
   // so the exclusion intentionally applies there too. Antigravity surfaces GSD
   // skills through the skill surface (SKILL.md), not the agent tools: allowlist,
   // so dropping the invalid 'skill' tool name does not remove skill access —

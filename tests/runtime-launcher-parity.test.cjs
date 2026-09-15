@@ -1262,7 +1262,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { cleanup } = require('./helpers.cjs');
-const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 const SNIPPET_FILE = path.join(WORKFLOWS_DIR, '_runtime-launcher.snippet.sh');
@@ -1289,67 +1288,6 @@ const EXPECTED_RUNTIME_PROBES = {
   opencode:    'opencode}/gsd-core/bin/',
   kilo:        'kilo}/gsd-core/bin/',
 };
-
-/**
- * Collect all workflow .md files recursively.
- */
-function collectWorkflowFiles() {
-  const results = [];
-  function walk(dir) {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walk(full);
-      } else if (entry.isFile() && entry.name.endsWith('.md')) {
-        results.push(full);
-      }
-    }
-  }
-  walk(WORKFLOWS_DIR);
-  return results;
-}
-
-/**
- * Extract all bash/sh/shell fenced blocks from markdown content.
- */
-function extractShellBlocks(content) {
-  const allLines = content.split('\n');
-  const blocks = [];
-  let inBlock = false;
-  let blockLang = null;
-  let blockLines = [];
-  let blockIndent = '';
-  let closingPattern = null;
-
-  for (let i = 0; i < allLines.length; i++) {
-    const line = allLines[i];
-    if (!inBlock) {
-      const fenceOpen = line.match(/^(\s*)```(\w+)?\s*$/);
-      if (fenceOpen) {
-        inBlock = true;
-        blockIndent = fenceOpen[1];
-        blockLang = (fenceOpen[2] || '').toLowerCase();
-        blockLines = [];
-        closingPattern = new RegExp('^' + escapeRegex(blockIndent) + '```\\s*$');
-        continue;
-      }
-    } else {
-      if (closingPattern.test(line)) {
-        if (['bash', 'sh', 'shell', 'zsh', ''].includes(blockLang)) {
-          blocks.push({ lines: blockLines });
-        }
-        inBlock = false;
-        blockLang = null;
-        blockLines = [];
-        blockIndent = '';
-        closingPattern = null;
-        continue;
-      }
-      blockLines.push(line);
-    }
-  }
-  return blocks;
-}
 
 
 describe('bug-891: non-Claude runtime home fallback arms', () => {

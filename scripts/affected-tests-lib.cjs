@@ -339,7 +339,7 @@ function pickAffectedTests(changedFiles, allTests, reverseIndex, options = {}) {
       if (!isSourceFile) continue;
       // Check: is this file under a recognised source tree?
       const isUnderSourceTree = SOURCE_TREES.some(
-        tree => file === tree || file.startsWith(tree + '/'),
+        tree => file === tree || file.startsWith(tree + '/'), // allow-handrolled-containment: test-selection path filtering, not a safety decision
       );
       if (!isUnderSourceTree) continue;
       // Does it have any test dependents?

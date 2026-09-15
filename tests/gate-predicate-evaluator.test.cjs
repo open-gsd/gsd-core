@@ -28,6 +28,24 @@ const {
   EVALUATOR_KINDS,
 } = require('../gsd-core/bin/lib/gate-predicate-evaluator.cjs');
 
+/**
+ * NOT a subprocess spawn timeout. Fixture DATA: an arbitrary declarative
+ * `timeout` value (seconds) feeding a canned timedOut:true fake-shell
+ * response -- the value itself is not asserted on, only the resulting
+ * block/message behavior.
+ */
+const PREDICATE_TIMEOUT_FIXTURE_SECONDS = 5;
+/**
+ * NOT a subprocess spawn timeout. Fixture DATA: specifically tests the
+ * predicate's own seconds-to-milliseconds conversion -- the assertion
+ * below checks the converted value is exactly this times 1000.
+ */
+const PREDICATE_TIMEOUT_CUSTOM_SECONDS = 90;
+/** NOT a subprocess spawn timeout. Fixture DATA: a deliberately-invalid (zero) declarative timeout value, proving the predicate validator rejects a non-positive timeout. */
+const INVALID_PREDICATE_TIMEOUT_ZERO = 0;
+/** NOT a subprocess spawn timeout. Fixture DATA: a deliberately-invalid (negative) declarative timeout value, proving the predicate validator rejects a non-positive timeout. */
+const INVALID_PREDICATE_TIMEOUT_NEGATIVE = -5;
+
 // ─── Fake bounded-shell seam ──────────────────────────────────────────────────
 
 /** Build a fake runBoundedShell that records the invocation and returns a preset result. */
@@ -113,7 +131,7 @@ describe('evaluatePredicate — command-exit-zero timeout', () => {
   test('timedOut => block:true with timed-out message', () => {
     const shell = fakeShell({ timedOut: true, exitCode: null, signal: 'SIGTERM' });
     const res = evaluatePredicate(
-      { kind: 'command-exit-zero', command: 'sleep 100', timeout: 5 },
+      { kind: 'command-exit-zero', command: 'sleep 100', timeout: PREDICATE_TIMEOUT_FIXTURE_SECONDS },
       baseCtx,
       { runBoundedShell: shell.run },
     );
@@ -134,7 +152,7 @@ describe('evaluatePredicate — command-exit-zero timeout', () => {
   test('custom timeout (seconds) honored and converted to ms', () => {
     const shell = fakeShell({ exitCode: 0 });
     evaluatePredicate(
-      { kind: 'command-exit-zero', command: 'true', timeout: 90 },
+      { kind: 'command-exit-zero', command: 'true', timeout: PREDICATE_TIMEOUT_CUSTOM_SECONDS },
       baseCtx,
       { runBoundedShell: shell.run },
     );
@@ -240,11 +258,11 @@ describe('evaluatePredicate — malformed predicate throws (maps to check-cmd fa
 
   test('non-positive timeout throws', () => {
     assert.throws(
-      () => evaluatePredicate({ kind: 'command-exit-zero', command: 'x', timeout: 0 }, baseCtx, { runBoundedShell: fakeShell({}).run }),
+      () => evaluatePredicate({ kind: 'command-exit-zero', command: 'x', timeout: INVALID_PREDICATE_TIMEOUT_ZERO }, baseCtx, { runBoundedShell: fakeShell({}).run }),
       /timeout/i,
     );
     assert.throws(
-      () => evaluatePredicate({ kind: 'command-exit-zero', command: 'x', timeout: -5 }, baseCtx, { runBoundedShell: fakeShell({}).run }),
+      () => evaluatePredicate({ kind: 'command-exit-zero', command: 'x', timeout: INVALID_PREDICATE_TIMEOUT_NEGATIVE }, baseCtx, { runBoundedShell: fakeShell({}).run }),
       /timeout/i,
     );
   });

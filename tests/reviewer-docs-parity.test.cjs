@@ -25,7 +25,7 @@ const {
 
 const ROOT = path.join(__dirname, '..');
 
-/** Every declared flag, in descriptor order (13 across 12 lanes — antigravity carries two). */
+/** Every declared flag, in descriptor order (12 across 11 lanes — antigravity carries two). */
 const ALL_FLAGS = REVIEWER_LANES.flatMap((l) => l.flags);
 /** Every declared reviewsSection title. */
 const ALL_TITLES = REVIEWER_LANES.map((l) => l.reviewsSection);
@@ -77,11 +77,11 @@ describe('reviewer docs parity — flag arm', () => {
   });
 
   test('every missing flag is named, not just the first', () => {
-    const missing = ALL_FLAGS.filter((f) => f !== '--gemini' && f !== '--qwen');
+    const missing = ALL_FLAGS.filter((f) => f !== '--codex' && f !== '--qwen');
     const r = checkReviewerDocsParity({ descriptor: REVIEWER_LANES, docs: { d: commandsDoc(missing) } });
     assert.strictEqual(r.violations.length, 2);
     const subjects = r.violations.map((v) => v.subject).sort();
-    assert.deepStrictEqual(subjects, ['--gemini', '--qwen']);
+    assert.deepStrictEqual(subjects, ['--codex', '--qwen']);
     for (const v of r.violations) {
       assert.strictEqual(v.reason, DOCS_PARITY_VIOLATION.DOC_FLAG_MISSING);
     }
@@ -115,11 +115,11 @@ describe('reviewer docs parity — flag arm', () => {
   });
 
   test('bracketed flags satisfy the gate too', () => {
-    const rest = ALL_FLAGS.filter((f) => f !== '--gemini');
+    const rest = ALL_FLAGS.filter((f) => f !== '--codex');
     const doc = [
       '### `/gsd-review`',
       '',
-      `Reviewer flags: [--gemini] ${backtickAll(rest)}`,
+      `Reviewer flags: [--codex] ${backtickAll(rest)}`,
       '',
     ].join('\n');
     const r = checkReviewerDocsParity({ descriptor: REVIEWER_LANES, docs: { d: doc } });
@@ -132,12 +132,12 @@ describe('reviewer docs parity — signature arm', () => {
     const doc = [
       backtickAll(ALL_FLAGS),
       '',
-      '**Command:** `/gsd-review --phase N [--gemini] [--all]`',
+      '**Command:** `/gsd-review --phase N [--codex] [--all]`',
       '',
       `**Purpose:** ${ALL_TITLES.join(', ')}.`,
     ].join('\n');
     const r = checkReviewerDocsParity({ descriptor: REVIEWER_LANES, docs: { d: doc } });
-    const omitted = ALL_FLAGS.filter((f) => f !== '--gemini');
+    const omitted = ALL_FLAGS.filter((f) => f !== '--codex');
     assert.strictEqual(r.violations.length, omitted.length);
     assert.ok(r.violations.every((v) => v.reason === DOCS_PARITY_VIOLATION.SIGNATURE_FLAG_MISSING));
     assert.deepStrictEqual(
@@ -582,7 +582,7 @@ describe('reviewer docs parity — independence and properties', () => {
   });
 
   test('verdict is independent of doc key insertion order', () => {
-    const dirty = commandsDoc(ALL_FLAGS.filter((f) => f !== '--gemini'));
+    const dirty = commandsDoc(ALL_FLAGS.filter((f) => f !== '--codex'));
     const clean = commandsDoc(ALL_FLAGS);
     const forward = checkReviewerDocsParity({ descriptor: REVIEWER_LANES, docs: { a: dirty, b: clean } });
     const reversed = checkReviewerDocsParity({ descriptor: REVIEWER_LANES, docs: { b: clean, a: dirty } });
@@ -678,7 +678,7 @@ describe('reviewer docs parity — the shipped repo', () => {
 
   test('the shipped descriptor is non-empty', () => {
     // Guards the vacuous-truth failure mode: an empty roster trivially satisfies every check below.
-    assert.ok(REVIEWER_LANES.length >= 12, 'expected at least the 12 shipped lanes');
+    assert.ok(REVIEWER_LANES.length >= 11, 'expected at least the 11 shipped lanes');
   });
 
   test('the shipped docs satisfy reviewer lane parity', () => {

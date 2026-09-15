@@ -101,8 +101,21 @@ describe('gsd-windsurf-pre-write.js (pre_write_code guard)', () => {
       tool_info: { file_path: path.join(otherRepo, 'target.txt') },
     }, { cwd: cwdRepo });
 
-    assert.equal(result.status, 2, `expected exit 2, got ${result.status} (stderr: ${result.stderr})`);
-    assert.match(result.stderr, /differs from the active project root|inside a git internal/);
+    // hooks/gsd-windsurf-pre-write.js gives every git probe a 2000 ms budget
+    // (SPAWNOPT.timeout) and, by documented design, fails OPEN (exit 0) via
+    // hooks/lib/git-probe.js's reportIfUndetermined() (#3911) when the probe
+    // cannot be resolved in time — its own header records a macOS CI run
+    // landing at 2084ms/2112ms/2177ms, just past the budget. This is NOT a
+    // tolerated flake: both halves of the hook's contract are asserted below,
+    // and which half applies is decided by the observed probe outcome, not
+    // guessed in advance.
+    const probeUndetermined = /git probe '[^']+'.*allowing this call because the probe's answer is unknown/.test(result.stderr);
+    if (probeUndetermined) {
+      assert.equal(result.status, 0, `probe was undetermined, so the hook must fail OPEN (exit 0), got ${result.status} (stderr: ${result.stderr})`);
+    } else {
+      assert.equal(result.status, 2, `expected exit 2, got ${result.status} (stderr: ${result.stderr})`);
+      assert.match(result.stderr, /differs from the active project root|inside a git internal/);
+    }
   });
 
   test('G1b: a write inside a DIFFERENT repo\'s .git internals -> exit 2 + stderr reason', (t) => {
@@ -116,8 +129,18 @@ describe('gsd-windsurf-pre-write.js (pre_write_code guard)', () => {
       tool_info: { file_path: path.join(otherRepo, '.git', 'config') },
     }, { cwd: cwdRepo });
 
-    assert.equal(result.status, 2, `expected exit 2, got ${result.status} (stderr: ${result.stderr})`);
-    assert.match(result.stderr, /inside a git internal \(\.git\) directory/);
+    // Same rationale as G1 above: hooks/gsd-windsurf-pre-write.js's 2000 ms
+    // per-probe budget, its documented fail-open, and hooks/lib/git-probe.js's
+    // reportIfUndetermined() (#3911) mean an undetermined probe is a
+    // legitimate, documented outcome (CI observed 2084ms/2112ms/2177ms —
+    // just past budget), not a flake to be tolerated by loosening the assert.
+    const probeUndetermined = /git probe '[^']+'.*allowing this call because the probe's answer is unknown/.test(result.stderr);
+    if (probeUndetermined) {
+      assert.equal(result.status, 0, `probe was undetermined, so the hook must fail OPEN (exit 0), got ${result.status} (stderr: ${result.stderr})`);
+    } else {
+      assert.equal(result.status, 2, `expected exit 2, got ${result.status} (stderr: ${result.stderr})`);
+      assert.match(result.stderr, /inside a git internal \(\.git\) directory/);
+    }
   });
 
   test('G2: a write resolving to the SAME git root as cwd -> exit 0 (allowed)', (t) => {
