@@ -1484,8 +1484,8 @@ function cmdWorktreeRecordAgent(cwd: string, args: string[] = [], deps: RecordAg
     if (i < 0 || i + 1 >= args.length) return '';
     return args[i + 1];
   };
-  const write = (deps.write as ((s: string) => void)) || ((s: string) => process.stdout.write(s));
-  const writeErr = (deps.writeErr as ((s: string) => void)) || ((s: string) => process.stderr.write(s));
+  const write = deps.write || ((s: string) => process.stdout.write(s));
+  const writeErr = deps.writeErr || ((s: string) => process.stderr.write(s));
 
   const manifestPath = flag('--manifest');
   if (!manifestPath) {
@@ -1766,8 +1766,8 @@ function cmdWorktreeCreate(cwd: string, args: string[] = [], deps: RecordAgentCm
     if (i < 0 || i + 1 >= args.length) return '';
     return args[i + 1];
   };
-  const write = (deps.write as ((s: string) => void)) || ((s: string) => process.stdout.write(s));
-  const writeErr = (deps.writeErr as ((s: string) => void)) || ((s: string) => process.stderr.write(s));
+  const write = deps.write || ((s: string) => process.stdout.write(s));
+  const writeErr = deps.writeErr || ((s: string) => process.stderr.write(s));
 
   const manifestPath = flag('--manifest');
   if (!manifestPath) {
@@ -2235,8 +2235,8 @@ function defaultMtimeSafe(file: string): Date | null {
 }
 
 function cmdWorktreeReapOrphans(cwd: string, deps: RecordAgentCmdDeps & WorktreeDeps = {}): void {
-  const write = (deps.write as ((s: string) => void)) || ((s: string) => process.stdout.write(s));
-  const writeErr = (deps.writeErr as ((s: string) => void)) || ((s: string) => process.stderr.write(s));
+  const write = deps.write || ((s: string) => process.stdout.write(s));
+  const writeErr = deps.writeErr || ((s: string) => process.stderr.write(s));
   let result: ReapResult[];
   try {
     result = reapOrphanWorktrees(cwd, deps);
@@ -2283,17 +2283,6 @@ interface WorkerRecord {
   exitCode: number | null;
   note: string;
   completedAt: string | null;
-}
-
-function defaultPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    // ESRCH = no such process; EPERM = exists but owned by another user —
-    // both mapped to their liveness truth, never swallowed.
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
-  }
 }
 
 const RENAME_RETRY_ERRNOS = new Set(['EPERM', 'EBUSY', 'EACCES']);
@@ -2404,7 +2393,9 @@ function workerStatusView(
   record: WorkerRecord,
   deps: Record<string, unknown> = {}
 ): Record<string, unknown> {
-  const pidAlive = (deps.pidAlive as ((pid: number) => boolean)) || defaultPidAlive;
+  // Only ESRCH is dead (defaultIsPidAlive contract): a verdict feeding a
+  // merge/reconcile decision must fail toward ALIVE on unrecognized errnos.
+  const pidAlive = (deps.isPidAlive as ((pid: number) => boolean)) || defaultIsPidAlive;
   const exists = (deps.existsSync as ((p: string) => boolean)) || fs.existsSync;
   const summaryExists = exists(record.summaryPath);
   const alive = record.state === 'running' && pidAlive(record.pid);

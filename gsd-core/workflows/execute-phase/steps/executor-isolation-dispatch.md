@@ -129,7 +129,7 @@ The host has no harness-native isolation primitive, so **GSD** creates each work
 **Resume-first guard (#4624).** The launching turn may end while external workers are still live — that is expected here, not an error. So before dispatching ANY plan in this section, sweep for workers a previous session left behind:
 
 ```bash
-gsd_run query worktree worker-status --root "${ORCH_ROOT}/.claude/worktrees"
+gsd_run query worktree.worker-status --root "${ORCH_ROOT}/.claude/worktrees"
 ```
 
 Every entry with `needsReconciliation: true` (recorded running, process gone) is reconciled from its persisted record — SUMMARY + plan-scoped commits + branch state per `execute-phase/steps/completion-reconciliation.md`, merge if artifact-complete, preserve with recovery information otherwise — then marked with `worker-complete`. **Never re-dispatch a recorded plan, and never reconcile on narration alone.**
@@ -157,7 +157,7 @@ Assign the composed prompt to a shell variable so it can be passed as one argume
 #      An unreadable source file is a halt condition (#3637 fail-closed),
 #      never a skip — a child without these texts is not a gsd-executor.
 #   2. Substitute this plan's {plan_number}, {phase_number}, {phase_name},
-#      {phase_dir}, {plan_file}, and {plan_id} placeholders (same values the
+#      {phase_dir}, {plan_file}, {plan_id}, and {plan_padded} placeholders (same values the
 #      harness path substitutes into its Agent() prompt). {plan_id} is this
 #      plan's `id` field from the phase-plan-index JSON — the guard hooks
 #      compare it verbatim against the sentinel the per-plan gate wrote, so a
@@ -344,7 +344,7 @@ Spawn `EXEC_JSON`'s `command` + `args` as a background process with its working 
 
 ```bash
 WORKER_LOG="${WT_PATH}.worker.log"
-gsd_run query worktree worker-record \
+gsd_run query worktree.worker-record \
   --path "$WT_PATH" \
   --pid "$WORKER_PID" \
   --plan "{plan_number}" \
@@ -355,14 +355,14 @@ gsd_run query worktree worker-record \
   }
 ```
 
-**Wait until terminal, reconcile BEFORE classifying (#4217/#4624).** Wait for the wave's executors to reach a terminal process state (`wait` on the captured PIDs, or poll `worktree worker-status --root "${ORCH_ROOT}/.claude/worktrees"` and read `pidAlive`). When a worker's process ends, record the outcome:
+**Wait until terminal, reconcile BEFORE recording the outcome (#4217/#4624).** Wait for the wave's executors to reach a terminal process state (`wait` on the captured PIDs, or poll `worktree.worker-status --root "${ORCH_ROOT}/.claude/worktrees"` and read `pidAlive`). While a worker's record is `running`, it is a reconciliation candidate the moment its process dies — a crash between classification and recording can never strand it. So the ordering is: run the **existing** artifact reconciliation (`execute-phase/steps/completion-reconciliation.md`) FIRST — SUMMARY + plan-scoped commits + branch state decide the outcome: a worker that exits 0 with no artifacts is not done, and one that exits non-zero with artifacts complete may still merge. Merge artifact-complete workers through the manifest-only gauntlet below; preserve a blocked/failed worktree untouched. Only then record the terminal outcome, carrying the recovery information:
 
 ```bash
-gsd_run query worktree worker-complete --path "$WT_PATH" --exit-code "$WORKER_EXIT" \
-  --note "<blocker description, or empty for a clean finish>"
+gsd_run query worktree.worker-complete --path "$WT_PATH" --exit-code "$WORKER_EXIT" \
+  --note "{worker_note}"
 ```
 
-Then run the **existing** artifact reconciliation (`execute-phase/steps/completion-reconciliation.md`): SUMMARY + plan-scoped commits + branch state decide the outcome — a worker that exits 0 with no artifacts is not done, and one that exits non-zero with artifacts complete may still merge. Merge artifact-complete workers through the manifest-only gauntlet below; preserve a blocked/failed worktree untouched, carrying the log path and the blocker from the completion note as its recovery information.
+`{worker_note}` carries the blocker description and the log path for a preserved worktree (`{WT_PATH}.worker.log`), or is empty for a clean finish.
 
 The executor never touches `STATE.md`/`ROADMAP.md`, and that guard needs no new code — `execute-plan` auto-detects worktree mode via the `IS_WORKTREE` (`.git`-is-a-file) primitive, which a GSD-created worktree trips identically to a harness-created one.
 
