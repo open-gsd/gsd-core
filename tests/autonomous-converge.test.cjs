@@ -26,6 +26,7 @@ const STEP_FAIL_FAST_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'auton
 const STEP_DISPATCH_BG_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'autonomous', 'steps', 'converge-dispatch-bg.md');
 const STEP_DISPATCH_INLINE_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'autonomous', 'steps', 'converge-dispatch-inline.md');
 const STEP_LOOP_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'autonomous', 'steps', 'converge-loop.md');
+const CONVERGENCE_WORKFLOW_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'plan-review-convergence.md');
 
 function read(filePath) {
   return fs.readFileSync(filePath, 'utf8');
@@ -89,6 +90,43 @@ describe('autonomous --converge flag (#711)', () => {
       step,
       /remains the default for non-flag invocation/,
       'the step must state that the config is the non-flag default',
+    );
+  });
+
+  test('the dispatched convergence run bypasses the config gate (#4600)', () => {
+    // End-to-end contract: the fail-fast step proceeding is not enough — the
+    // dispatched gsd-plan-review-convergence workflow has its own §1.5 gate
+    // that would veto the same run one step later. The autonomous dispatch
+    // must carry an explicit override the gate honors; the veto itself stays
+    // for standalone invocation, where the config gate is documented behavior.
+    const workflow = read(WORKFLOW_PATH);
+    const convergence = read(CONVERGENCE_WORKFLOW_PATH);
+    const howTo = read(HOW_TO_PATH);
+
+    assert.match(
+      workflow,
+      /--override-gate/,
+      'the autonomous converge dispatch must carry --override-gate so the dispatched run cannot be vetoed by the config gate (#4600)',
+    );
+    assert.match(
+      convergence,
+      /--override-gate/,
+      'plan-review-convergence must honor a --override-gate dispatch instead of failing fast (#4600)',
+    );
+    assert.match(
+      convergence,
+      /gsd-plan-review-convergence is disabled \(workflow\.plan_review_convergence=false\)/,
+      'the §1.5 veto must remain for standalone invocation, where the config gate decides (#4600)',
+    );
+    assert.doesNotMatch(
+      workflow,
+      /fail fast unless the existing convergence feature gate/,
+      'the host must not instruct a runtime agent to fail fast on the gate before the converge step (#4600)',
+    );
+    assert.match(
+      howTo,
+      /overrides the gate for that run/,
+      'the how-to must document that an explicit --converge overrides the gate on /gsd-autonomous (#4600)',
     );
   });
 
