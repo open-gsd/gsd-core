@@ -3833,14 +3833,15 @@ describe('#3427 + #3433 — Codex installer avoids duplicate skills and mixed ho
   });
 
   test('a malformed prior manifest degrades gracefully', () => {
-    fs.mkdirSync(path.join(codexHome, 'gsd-core'), { recursive: true });
-    fs.writeFileSync(path.join(codexHome, 'gsd-core', 'VERSION'), 'old', 'utf8');
+    // No VERSION pre-exists, so the five-target restore must still remove the
+    // one the failed install wrote -- an unreadable prior manifest must cost
+    // the original restores nothing.
+    fs.mkdirSync(codexHome, { recursive: true });
     fs.writeFileSync(path.join(codexHome, 'gsd-file-manifest.json'), 'garbage{{{', 'utf8');
 
     forceValidationFailure();
     runFailingInstall();
 
-    // The five original restores must be unaffected by the unreadable manifest.
     assert.strictEqual(fs.existsSync(path.join(codexHome, 'gsd-core', 'VERSION')), false,
       'VERSION rollback must still work when the prior manifest is unreadable');
   });
@@ -3852,8 +3853,11 @@ describe('#3427 + #3433 — Codex installer avoids duplicate skills and mixed ho
     forceValidationFailure();
     runFailingInstall();
 
-    assert.strictEqual(fs.existsSync(path.join(codexHome, 'gsd-file-manifest.json')), false,
-      'an array-shaped manifest is not a usable prior state; the failed install copy must not survive');
+    // The array file PRE-EXISTED, so it is pre-install state: rollback
+    // restores those exact bytes rather than deleting them. What must be gone
+    // is any manifest the failed install wrote over it.
+    assert.strictEqual(fs.readFileSync(path.join(codexHome, 'gsd-file-manifest.json'), 'utf8'), '[]',
+      'an array-shaped prior manifest is restored as pre-install state; rollback must not crash on it');
   });
 
   test('a traversal-shaped manifest key is skipped, not written', () => {
