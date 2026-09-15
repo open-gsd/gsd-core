@@ -8,16 +8,13 @@
 
 ## 决定使用哪些评审者
 
-GSD Core 可将评审请求路由至以下任意组合：Gemini CLI、Claude（独立会话）、Codex CLI、CodeRabbit、OpenCode、Qwen Code、Cursor、Antigravity CLI、Ollama、LM Studio 以及 llama.cpp。
+GSD Core 可将评审请求路由至以下任意组合：Claude（独立会话）、Codex CLI、CodeRabbit、OpenCode、Qwen Code、Cursor、Antigravity CLI、Ollama、LM Studio 以及 llama.cpp。
 
 每位评审者会独立地对您的 `PLAN.md` 文件执行相同的结构化提示。由于不同模型存在不同的盲区，多评审者共识能比任何单一评审者发现更多问题。
 
 **如果您尚未安装任何外部 CLI**，请至少安装一个：
 
 ```bash
-# Gemini CLI（使用 Google 凭据免费使用）
-npm install -g @google/gemini-cli
-
 # Antigravity CLI（使用 Google 凭据免费使用）
 curl -fsSL https://antigravity.google/cli/install.sh | bash
 
@@ -35,12 +32,12 @@ npm install -g @openai/codex
 /gsd-config --integrations
 ```
 
-集成向导涵盖 API 密钥、代码评审 CLI 路由以及 `review.default_reviewers` 列表。将该列表设置为您希望作为无标志默认值的评审者——例如 `["gemini","codex"]`。
+集成向导涵盖 API 密钥、代码评审 CLI 路由以及 `review.default_reviewers` 列表。将该列表设置为您希望作为无标志默认值的评审者——例如 `["codex","claude"]`。
 
 或者，也可通过 `gsd-tools` 直接设置：
 
 ```bash
-gsd config-set review.default_reviewers '["gemini","codex"]'
+gsd config-set review.default_reviewers '["codex","claude"]'
 ```
 
 完整的集成设置架构（API 密钥、每个评审者的模型覆盖、本地服务器主机地址）请参阅[配置](../CONFIGURATION.md)。
@@ -60,7 +57,7 @@ GSD 会依次调用每位评审者，收集结构化反馈（摘要、优点、H
 ### 为一次性运行选择单个评审者
 
 ```bash
-/gsd-review --phase 3 --gemini
+/gsd-review --phase 3 --agy
 /gsd-review --phase 3 --codex
 /gsd-review --phase 3 --cursor
 ```
@@ -124,7 +121,7 @@ GSD 会依次调用每位评审者，收集结构化反馈（摘要、优点、H
 
 ```bash
 /gsd-plan-review-convergence 3 --codex
-/gsd-plan-review-convergence 3 --gemini
+/gsd-plan-review-convergence 3 --agy
 ```
 
 ### 使用所有评审者并提高循环上限进行收敛
@@ -141,13 +138,13 @@ GSD 会依次调用每位评审者，收集结构化反馈（摘要、优点、H
 
 | 场景 | 推荐方式 |
 |-----------|---------------------|
-| 已安装 Gemini CLI | `--gemini` 始终是良好的起始评审者 |
-| 希望免费多评审者覆盖 | `--gemini` + `--agy`（两者均使用 Google 凭据） |
+| 已安装 Antigravity | `--agy` 始终是良好的起始评审者 |
+| 希望免费多评审者覆盖 | `--agy`（Google 凭据）+ `--claude` |
 | 项目以 OpenAI 为主 | 添加 `--codex` 以获取 OpenAI 模型视角 |
 | 希望使用 GitHub Copilot 的模型 | 添加 `--opencode` |
 | 希望完全避免 API 费用 | 使用本地模型配置 Ollama 并使用 `--ollama` |
 | 发布前需要最大覆盖率 | `/gsd-plan-review-convergence N --all` |
-| 快速迭代并希望获得快速反馈 | 选择一个 CLI：`/gsd-review --phase N --gemini` |
+| 快速迭代并希望获得快速反馈 | 选择一个 CLI：`/gsd-review --phase N --agy` |
 
 ---
 

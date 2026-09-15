@@ -36,13 +36,18 @@ gate. It is blocked-on-nothing now that the ADR-857 capability system is release
 - **`role: feature`**, `runtimeCompat.supported: ["claude"]`, `tier: full`.
 - **`activationKey: claude_orchestration.enabled`** — default `false`. Nothing
   changes until you opt in.
-- Registers at two **wired** loop points: `execute:wave:pre` (into the executor)
-  and `plan:post` (into the planner). Both are `onError: skip` and gated by the
-  `enabled` key. The dispatch-backend selector fires at `execute:wave:pre` — the
-  seam that runs immediately BEFORE a wave's agents are dispatched — because a
-  selector fired *after* a wave already dispatched inline (the original
-  `execute:wave:post` placement, [#2285]) is structurally too late to change how
-  dispatch happens.
+- Registers at one **wired** loop point: `plan:post` (into the planner),
+  `onError: skip` and gated by the `enabled` key. The capability previously
+  also contributed at `execute:wave:pre` (`into: executor`), but that fragment
+  was pure orchestrator procedure — build a wave manifest, resolve the
+  dispatch backend, spawn executor agents — with nothing an executor agent can
+  act on. Injecting orchestrator instructions into executor prompts violates
+  the loop's role partition (the orchestrator orchestrates, the executor
+  executes), so the contribution was removed ([#4740]). The procedure text is
+  preserved at
+  [`capabilities/claude-orchestration/docs/workflow-backend-dispatch.md`](../../capabilities/claude-orchestration/docs/workflow-backend-dispatch.md)
+  as reference for wiring the orchestrator side through a host-level
+  mechanism; it is not injected anywhere.
 
 ## How it decides whether to activate
 
@@ -106,3 +111,4 @@ own runtime gate continues to no-op on non-Claude runtimes.
 [#1143]: https://github.com/open-gsd/gsd-core/issues/1143
 [#2772]: https://github.com/open-gsd/gsd-core/issues/2772
 [#2285]: https://github.com/open-gsd/gsd-core/issues/2285
+[#4740]: https://github.com/open-gsd/gsd-core/issues/4740

@@ -1,6 +1,6 @@
 # 上下文窗口监视器
 
-一个后置工具钩子（Claude Code 中的 `PostToolUse`，Gemini CLI 中的 `AfterTool`），当上下文窗口使用率较高时向 Agent 发出警告。
+一个后置工具钩子（Claude Code 中的 `PostToolUse`，Antigravity CLI 中的 `AfterTool`），当上下文窗口使用率较高时向 Agent 发出警告。
 
 ## 问题背景
 
@@ -62,7 +62,7 @@ GSD 的 `/gsd-pause-work` 命令用于保存执行状态。WARNING 消息建议�
 
 两个钩子均在执行 `npx @opengsd/gsd-core` 安装时自动注册——正常情况下无需手动操作。有关钩子配置详情、阈值覆盖以及手动注册示例，请参阅[配置文档](CONFIGURATION.md)。
 
-简要参考：状态栏钩子在 `settings.json` 中注册为 `statusLine`；上下文监视器（`gsd-context-monitor.js`）注册为 `PostToolUse` 钩子（Gemini CLI 中为 `AfterTool`）。两项配置均使用运行安装程序时的 Node 可执行文件绝对路径。在 Windows PowerShell 中，需在带引号的可执行文件路径前添加 `&` 前缀。
+简要参考：状态栏钩子在 `settings.json` 中注册为 `statusLine`；上下文监视器（`gsd-context-monitor.js`）注册为 `PostToolUse` 钩子（Antigravity CLI 中为 `AfterTool`）。两项配置均使用运行安装程序时的 Node 可执行文件绝对路径。在 Windows PowerShell 中，需在带引号的可执行文件路径前添加 `&` 前缀。
 
 ## 安全性
 

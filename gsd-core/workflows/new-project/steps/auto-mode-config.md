@@ -92,9 +92,9 @@ AskUserQuestion([
     question: "Which AI models for planning agents?",
     multiSelect: false,
     options: [
-      { label: "Adaptive (Recommended)", description: "Role-based cost optimization: heavy roles use the highest-tier model available on the active runtime, light roles use the cheapest. Best balance of quality and cost across all supported runtimes (Claude, Codex, Gemini, OpenRouter, local)." },
+      { label: "Adaptive (Recommended)", description: "Role-based cost optimization: heavy roles use the highest-tier model available on the active runtime, light roles use the cheapest. Best balance of quality and cost across all supported runtimes (Claude, Codex, Antigravity, OpenRouter, local)." },
       { label: "Standard tier…", description: "Choose Quality, Balanced, or Budget — flat tier applied to all agents" },
-      { label: "Inherit", description: "Use the current session model for all agents (required for non-Claude runtimes: Codex, Gemini CLI, OpenCode /model, OpenRouter, local models)" }
+      { label: "Inherit", description: "Use the current session model for all agents (required for non-Claude runtimes: Codex, Antigravity, OpenCode /model, OpenRouter, local models)" }
     ]
   }
 ])

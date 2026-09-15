@@ -7,8 +7,8 @@
  * #3025 — sync-skills must refuse cross-runtime sync.
  *
  * Skill content/layout is runtime-specific (the installer applies per-runtime
- * converters, adapter headers, brand swaps, layout rules), and `grok`/`gemini`
- * resolve to ANOTHER runtime's skills root. A verbatim `cp -r` from one runtime
+ * converters, adapter headers, brand swaps, layout rules), and `grok`
+ * resolves to ANOTHER runtime's skills root. A verbatim `cp -r` from one runtime
  * corrupts every other destination and can damage a runtime the user never named.
  *
  * Chosen fix (user decision, 2026-08-13): option (b) — refuse unsafe (cross-
@@ -50,11 +50,15 @@ describe('#3025: sync-skills refuses cross-runtime skill sync', () => {
   test('the refusal points the user at the installer (actionable, not a bare rejection)', () => {
     // Hyrum's Law: the narrowed vocabulary is a visible contract change; the error must
     // hand the user a command that produces correctly converted skills. The pointer is
-    // generic (`--<runtime>`, not `--$DEST`) because grok/gemini have no dedicated flag.
+    // generic (`--<runtime>`, not `--$DEST`) because grok has no dedicated flag. `gemini`
+    // was dropped from this sentence by #4709: that runtime was retired in 1.8.0 (#1928)
+    // and never aliased claude -- canonicalizeRuntimeName returns null for it and the
+    // caller's fail-closed default merely happens to be claude, so calling it an alias
+    // mischaracterised a deliberate unknown-id fallback as designed behavior.
     assert.match(text, /cross-runtime skill sync is not supported/, 'names the unsupported operation');
     assert.match(text, /npx -y @opengsd\/gsd-core@latest --global --<runtime>/, 'prints the installer command');
     assert.match(text, /\$DEST/, 'names the refused destination runtime');
-    assert.match(text, /grok and gemini have no dedicated installer flag/, 'accurately notes grok/gemini aliasing rather than printing a wrong --grok/--gemini flag');
+    assert.match(text, /grok has no dedicated installer flag/, 'accurately notes grok aliasing rather than printing a wrong --grok flag');
   });
 
   test('the guard runs BEFORE Step 5\'s verbatim cp -r copy (cross-runtime can never reach the copy)', () => {

@@ -10,35 +10,35 @@ const {
 describe('review default reviewers resolution (#3079)', () => {
   test('no flags + config defaults selects configured subset', () => {
     const result = resolveReviewerSelection({
-      detected: ['gemini', 'codex', 'claude'],
+      detected: ['qwen', 'codex', 'claude'],
       explicitFlags: [],
       allFlag: false,
-      configuredDefaultReviewers: ['gemini', 'codex'],
+      configuredDefaultReviewers: ['qwen', 'codex'],
     });
 
     assert.strictEqual(result.source, 'config_default');
-    assert.deepStrictEqual(result.selected, ['codex', 'gemini']);
+    assert.deepStrictEqual(result.selected, ['codex', 'qwen']);
     assert.deepStrictEqual(result.errors, []);
   });
 
   test('--all ignores configured defaults', () => {
     const result = resolveReviewerSelection({
-      detected: ['gemini', 'codex', 'claude'],
+      detected: ['qwen', 'codex', 'claude'],
       explicitFlags: [],
       allFlag: true,
-      configuredDefaultReviewers: ['gemini'],
+      configuredDefaultReviewers: ['qwen'],
     });
 
     assert.strictEqual(result.source, 'all_flag');
-    assert.deepStrictEqual(result.selected, ['claude', 'codex', 'gemini']);
+    assert.deepStrictEqual(result.selected, ['claude', 'codex', 'qwen']);
   });
 
   test('explicit flags win over config defaults', () => {
     const result = resolveReviewerSelection({
-      detected: ['gemini', 'codex', 'claude', 'cursor'],
+      detected: ['qwen', 'codex', 'claude', 'cursor'],
       explicitFlags: ['cursor'],
       allFlag: false,
-      configuredDefaultReviewers: ['gemini', 'codex'],
+      configuredDefaultReviewers: ['qwen', 'codex'],
     });
 
     assert.strictEqual(result.source, 'explicit_flags');
@@ -47,7 +47,7 @@ describe('review default reviewers resolution (#3079)', () => {
 
   test('unknown configured slugs warn and all-undetected known slugs error', () => {
     const result = resolveReviewerSelection({
-      detected: ['gemini'],
+      detected: ['qwen'],
       explicitFlags: [],
       allFlag: false,
       configuredDefaultReviewers: ['unknown_slug', 'codex'],

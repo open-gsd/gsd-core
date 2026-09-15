@@ -8,7 +8,7 @@
 
 ## Decide which reviewers to use
 
-GSD Core can route review requests to any combination of: Gemini CLI, Claude (separate session), Codex CLI, CodeRabbit, OpenCode, Qwen Code, Cursor, Antigravity CLI, Ollama, LM Studio, llama.cpp, and Kimi Code.
+GSD Core can route review requests to any combination of: Claude (separate session), Codex CLI, CodeRabbit, OpenCode, Qwen Code, Cursor, Antigravity CLI, Ollama, LM Studio, llama.cpp, and Kimi Code.
 
 That list is not fixed. Each of those is a declared reviewer lane, and a capability can ship its own — see [Ship a reviewer lane in your capability](ship-a-reviewer-lane.md). To see exactly which lanes your installation has, run `gsd-tools review-lane sections`.
 
@@ -17,9 +17,6 @@ Each reviewer runs the same structured prompt against your `PLAN.md` files indep
 **If you have no external CLIs installed yet**, install at least one:
 
 ```bash
-# Gemini CLI (free with Google credentials)
-npm install -g @google/gemini-cli
-
 # Antigravity CLI (free with Google credentials)
 curl -fsSL https://antigravity.google/cli/install.sh | bash
 
@@ -37,12 +34,12 @@ By default, `/gsd-review` runs all detected CLIs. To pin a subset as project def
 /gsd-config --integrations
 ```
 
-The integrations wizard covers API keys, code-review CLI routing, and the `review.default_reviewers` list. Set the list to the reviewers you want as the no-flag default — for example `["gemini","codex"]`.
+The integrations wizard covers API keys, code-review CLI routing, and the `review.default_reviewers` list. Set the list to the reviewers you want as the no-flag default — for example `["codex","claude"]`.
 
 Alternatively, set it directly with `gsd-tools`:
 
 ```bash
-gsd config-set review.default_reviewers '["gemini","codex"]'
+gsd config-set review.default_reviewers '["codex","claude"]'
 ```
 
 For the full integration settings schema (API keys, model overrides per reviewer, local server host addresses), see [Configuration](../CONFIGURATION.md).
@@ -64,7 +61,7 @@ GSD invokes each reviewer in sequence, collects structured feedback (Summary, St
 ### Select a single reviewer for a one-off run
 
 ```bash
-/gsd-review --phase 3 --gemini
+/gsd-review --phase 3 --agy
 /gsd-review --phase 3 --codex
 /gsd-review --phase 3 --cursor
 ```
@@ -139,7 +136,7 @@ This runs `plan-phase → review → replan → re-review` up to three cycles (d
 
 ```bash
 /gsd-plan-review-convergence 3 --codex
-/gsd-plan-review-convergence 3 --gemini
+/gsd-plan-review-convergence 3 --agy
 ```
 
 ### Convergence with all reviewers and a higher cycle cap
@@ -156,13 +153,13 @@ This runs `plan-phase → review → replan → re-review` up to three cycles (d
 
 | Situation | Recommended approach |
 |-----------|---------------------|
-| You have Gemini CLI already installed | `--gemini` is always a good starting reviewer |
-| You want free multi-reviewer coverage | `--gemini` + `--agy` (both use Google credentials) |
+| You have Antigravity already installed | `--agy` is always a good starting reviewer |
+| You want free multi-reviewer coverage | `--agy` (Google credentials) + `--claude` |
 | Your project is OpenAI-heavy | add `--codex` for an OpenAI-model perspective |
 | You want GitHub Copilot's model | add `--opencode` |
 | You want to avoid API costs entirely | configure Ollama with a local model and use `--ollama` |
 | You need maximum coverage before a release | `/gsd-plan-review-convergence N --all` |
-| You're iterating quickly and want fast feedback | pick one CLI: `/gsd-review --phase N --gemini` |
+| You're iterating quickly and want fast feedback | pick one CLI: `/gsd-review --phase N --agy` |
 
 ---
 

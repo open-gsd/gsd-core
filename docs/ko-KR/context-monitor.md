@@ -1,6 +1,6 @@
 # 컨텍스트 윈도우 모니터
 
-에이전트의 컨텍스트 윈도우 사용량이 높을 때 경고를 주는 post-tool 훅 (Claude Code의 경우 `PostToolUse`, Gemini CLI의 경우 `AfterTool`).
+에이전트의 컨텍스트 윈도우 사용량이 높을 때 경고를 주는 post-tool 훅 (Claude Code의 경우 `PostToolUse`, Antigravity CLI의 경우 `AfterTool`).
 
 ## 문제
 
@@ -62,7 +62,7 @@ GSD의 `/gsd-pause-work` 명령어는 실행 상태를 저장한다. WARNING 메
 
 두 훅 모두 `npx @opengsd/gsd-core` 설치 중에 자동으로 등록된다 — 정상적인 상황에서는 수동 단계가 필요하지 않다. 훅 설정 상세, 임계값 재정의, 수동 등록 예시는 [설정](CONFIGURATION.md)을 참조하라.
 
-간략한 참고: statusline 훅은 `settings.json`에 `statusLine`으로 등록된다; context monitor(`gsd-context-monitor.js`)는 `PostToolUse` 훅으로 등록된다(Gemini CLI의 경우 `AfterTool`). 두 항목 모두 설치 프로그램을 실행한 절대 Node 실행 경로를 사용한다. Windows PowerShell에서는 인용된 실행 경로 앞에 `&`를 붙인다.
+간략한 참고: statusline 훅은 `settings.json`에 `statusLine`으로 등록된다; context monitor(`gsd-context-monitor.js`)는 `PostToolUse` 훅으로 등록된다(Antigravity CLI의 경우 `AfterTool`). 두 항목 모두 설치 프로그램을 실행한 절대 Node 실행 경로를 사용한다. Windows PowerShell에서는 인용된 실행 경로 앞에 `&`를 붙인다.
 
 ## 안전성
 

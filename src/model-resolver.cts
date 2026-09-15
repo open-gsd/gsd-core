@@ -35,7 +35,7 @@ import { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS, VALID_TIERS, CL
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { resolveRuntimeNameFromCandidates } from './runtime-name-policy.cjs';
+import { resolveRuntimeNameFromCandidates, canonicalizeRuntimeName } from './runtime-name-policy.cjs';
 import {
   readInstallRuntimeMarker,
   _setInstallRuntimeMarkerForTests,
@@ -151,7 +151,13 @@ function resolveTierEntry({ runtime, tier, overrides }: ResolveTierEntryOpts): T
  */
 function _resolveRuntimeTier(config: Record<string, unknown>, tier: string): TierEntryResolved | null {
   return resolveTierEntry({
-    runtime: config['runtime'] as string | null | undefined,
+    // #4505/#4495: TIER SELECTION follows the runtime that is actually
+    // resolving, not whatever the config file happens to say. `config.runtime`
+    // is frequently absent (the runtime is normally known from GSD_RUNTIME or
+    // the per-install marker), and reading it raw made
+    // `model_profile_overrides.<runtime>.<tier>` silently inert for every
+    // install that did not also write the key by hand.
+    runtime: resolveActiveRuntime(config),
     tier,
     overrides: config['model_profile_overrides'] as Record<string, unknown> | null | undefined,
   });
@@ -171,10 +177,19 @@ function _resolveRuntimeTier(config: Record<string, unknown>, tier: string): Tie
  *
  * This helper reads ONLY the user's override entry for the effective claude
  * runtime and tier — never the builtin claude tier map — so an install with no
- * override is byte-identical to before the fix. The runtime is resolved the
- * same way steps 1-3 resolve it (config['runtime'], defaulting to 'claude'),
- * NOT via resolveActiveRuntime (GSD_RUNTIME/marker): the value policy must
- * key off the config the operator wrote, matching mapClaudeOverrideForRuntime.
+ * override is byte-identical to before the fix.
+ *
+ * #4505 CHANGED how the runtime reaches here. #4192 originally passed
+ * `config['runtime']` and recorded that the value policy "must key off the
+ * config the operator wrote, NOT resolveActiveRuntime". That reading turned out
+ * to defeat #4192's own stated principle — that an explicit pin must not be
+ * silently UNPINNED. With `config.runtime` absent and GSD_RUNTIME=opencode, the
+ * config-keyed read treated the session as claude and collapsed an explicit
+ * `claude-opus-4-8` pin to the bare alias `opus`, which is a Claude-only token
+ * the actual runtime cannot spawn. The runtime is now the ACTIVE one, so the
+ * claude value policy applies exactly when claude is what is running. No test
+ * pinned the previous behaviour; the ones covering #4192's pins and the
+ * alias-native posture all still pass.
  *
  * Value policy mirrors the model_overrides path (#2041/#4192): an override
  * value that maps to a current tier alias collapses to that alias
@@ -185,12 +200,13 @@ function _resolveRuntimeTier(config: Record<string, unknown>, tier: string): Tie
  * through to normal alias resolution (ADR-443 D1: invalid values fall through).
  */
 function resolveClaudeTierOverrideModel(
-  configRuntime: string | null | undefined,
+  // The ACTIVE runtime (#4505), not the raw config key — see docblock.
+  activeRuntime: string | null | undefined,
   tier: string | null | undefined,
   overrides: Record<string, unknown> | null | undefined,
 ): string | null {
   if (!tier || tier === 'inherit') return null;
-  const effectiveRuntime = configRuntime || 'claude';
+  const effectiveRuntime = activeRuntime || 'claude';
   if (effectiveRuntime !== 'claude') return null; // non-claude runtimes resolve at step 3
   const overridesMap = overrides as Record<string, Record<string, unknown>> | null | undefined;
   if (!overridesMap || typeof overridesMap !== 'object') return null;
@@ -302,14 +318,18 @@ function _resetModelOverrideWarningCacheForTests(): void {
  */
 function mapClaudeOverrideForRuntime(
   override: string,
-  configRuntime: string | null | undefined,
+  // The ACTIVE runtime (#4505). Previously the raw `config['runtime']`, which
+  // made an explicit claude pin collapse to a bare alias whenever the runtime
+  // was declared via GSD_RUNTIME or the install marker rather than the config —
+  // handing a Claude-only token to a runtime that cannot spawn it.
+  activeRuntime: string | null | undefined,
   agentType: string,
 ): string | null {
   // Defensive: model_overrides is typed Record<string,string> but a malformed
   // config could surface a non-string; pass through verbatim (preserving the
   // pre-fix no-crash behaviour) and let the downstream Agent tool reject it.
   if (typeof override !== 'string') return override;
-  const onClaude = !configRuntime || configRuntime === 'claude';
+  const onClaude = !activeRuntime || activeRuntime === 'claude';
   if (!onClaude) return override;
   // Object.hasOwn guards against __proto__/constructor returning a truthy
   // non-string from the plain object literal (#2041 security review).
@@ -518,7 +538,7 @@ function resolveModelInternal(cwd: string, agentType: string): string {
     ? modelOverrides[agentType]
     : undefined;
   if (override) {
-    const mapped = mapClaudeOverrideForRuntime(override, config['runtime'] as string | null | undefined, agentType);
+    const mapped = mapClaudeOverrideForRuntime(override, resolveActiveRuntime(config), agentType);
     if (mapped !== null) return mapped;
     // Unmappable Claude ID — fall through to tier resolution (matches model_policy).
   }
@@ -536,10 +556,19 @@ function resolveModelInternal(cwd: string, agentType: string): string {
   const tier = computeProfileTier(config, agentType);
 
   // 2.5. model_policy preset (#49, #1133)
+  // `configRuntime` is retained ONLY as the EXPLICIT-OPT-IN signal for step 3's
+  // precedence over the omit gate (see the note there). Every actual runtime
+  // question — which tier map to read, which value policy applies — now uses
+  // the active runtime (#4505).
   const configRuntime = config['runtime'] as string | null | undefined;
+  // #4505/#4495: GSD_RUNTIME -> config.runtime -> per-install marker -> 'claude'.
+  // Never undefined, so the "no runtime declared anywhere" case still resolves
+  // 'claude' and step 3's deliberate claude skip (#1156/#2297/#4192) is
+  // unchanged for every existing install.
+  const activeRuntime = resolveActiveRuntime(config);
   if (tier && tier !== 'inherit') {
-    const onClaude = !configRuntime || configRuntime === 'claude';
-    const effectiveRuntime = configRuntime || 'claude';
+    const onClaude = activeRuntime === 'claude';
+    const effectiveRuntime = activeRuntime;
     const mergedPolicy = config['model_policy']
       ? { ...(config['model_policy'] as Record<string, unknown>), runtime: effectiveRuntime }
       : null;
@@ -562,8 +591,44 @@ function resolveModelInternal(cwd: string, agentType: string): string {
     }
   }
 
-  // 3. Runtime-aware resolution (#2517)
-  if (configRuntime && configRuntime !== 'claude' && tier && tier !== 'inherit') {
+  // #4505: the omit DECISION is computed here, ahead of step 3, though the
+  // return still happens at step 4 below.
+  //
+  // Step 3 was previously unreachable unless the operator had written `runtime`
+  // into the config. Keying it off the ACTIVE runtime — the #4495 fix — makes it
+  // reachable for env- and marker-declared runtimes too, which newly exposes an
+  // ordering the corpus already decided, in two places that only coexisted
+  // because step 3 could not fire:
+  //
+  //   #2517  `runtime:"codex"` + resolve_model_ids:"omit"  -> the codex tier
+  //          model. "Explicit non-Claude opt-in wins" — the operator naming a
+  //          runtime in the project config outranks an omit.
+  //   #2297  GSD_RUNTIME/marker = codex + a GLOBAL (defaults-poisoned) omit
+  //          -> "" (acceptance #4). A merely DETECTED runtime does not
+  //          constitute that opt-in, so the omit still wins.
+  //
+  // So the opt-in signal is specifically the `runtime` KEY, not the resolved
+  // runtime: step 3 reads the active runtime's tier map, but only outranks the
+  // omit gate when the operator wrote that key. Both contracts hold unchanged.
+  const omitApplies = config['resolve_model_ids'] === 'omit'
+    && (projectExplicitlySetsOmit(cwd) || !RUNTIMES_WITH_NATIVE_ALIASES.has(activeRuntime));
+  // CANONICALIZED, not the raw field. Comparing the raw value against the literal
+  // 'claude' made every spelling that is not exactly that string count as a
+  // non-Claude opt-in and outrank the omit gate: `runtime:"Claude"`,
+  // `runtime:"claude-code"` and even `runtime:5` each emitted a model id where
+  // origin/next returned "". That is the #2297 acceptance-#4 case this very
+  // block claims to preserve, failing OPEN. (Security review of #4505.)
+  //
+  // null covers both "not a string" and "not a runtime we recognise", and both
+  // must read as NOT an opt-in: an unrecognised value is not evidence the
+  // operator deliberately chose a non-Claude runtime, so it must not buy an
+  // escalation past an explicit omit.
+  const configRuntimeCanonical = canonicalizeRuntimeName(configRuntime);
+  const explicitNonClaudeOptIn = configRuntimeCanonical !== null && configRuntimeCanonical !== 'claude';
+
+  // 3. Runtime-aware resolution (#2517), keyed off the ACTIVE runtime (#4505).
+  if (activeRuntime !== 'claude' && tier && tier !== 'inherit'
+      && (explicitNonClaudeOptIn || !omitApplies)) {
     const entry = _resolveRuntimeTier(config, tier);
     if (entry?.model) return entry.model;
   }
@@ -578,8 +643,7 @@ function resolveModelInternal(cwd: string, agentType: string): string {
   // NOTE: a non-Claude runtime that HAS a populated runtime-tier map already
   // returned its own model id at step 3 above, before this gate — for those the
   // explicit-project-omit honoring here is moot (step 3 wins, by #2517 design).
-  if (config['resolve_model_ids'] === 'omit'
-      && (projectExplicitlySetsOmit(cwd) || !RUNTIMES_WITH_NATIVE_ALIASES.has(resolveActiveRuntime(config)))) {
+  if (omitApplies) {
     return '';
   }
 
@@ -593,11 +657,31 @@ function resolveModelInternal(cwd: string, agentType: string): string {
   // resolveClaudeTierOverrideModel for why the builtin map stays out.
   if (tier && tier !== 'inherit') {
     const claudeOverrideModel = resolveClaudeTierOverrideModel(
-      configRuntime,
+      activeRuntime,
       tier,
       config['model_profile_overrides'] as Record<string, unknown> | null | undefined,
     );
     if (claudeOverrideModel !== null) return claudeOverrideModel;
+  }
+
+  // 4.75 dynamic_routing.tier_models (#4505 / #3024).
+  //
+  // Position is the documented composition, not a convenience:
+  //   docs/features/dynamic-routing-with-failure-tier-escalation.md —
+  //   "model_overrides always wins; dynamic_routing.tier_models[<tier>] resolves
+  //    above models.<phase_type> and model_profile."
+  // So it sits BELOW model_overrides (step 1), the model_policy preset (2.5),
+  // the runtime tier map (3), the resolve_model_ids:"omit" gate (4) and the
+  // claude tier override (4.5) — and ABOVE the profile lookup (5).
+  //
+  // An earlier cut of this fix routed every call site through resolveModelForTier
+  // instead, which returns the tier model directly and therefore skipped steps 3,
+  // 4 and 4.5 entirely: with `resolve_model_ids:"omit"` and a non-Claude runtime
+  // it handed out a model id where the gate had returned "". Putting the step
+  // here keeps every higher-precedence layer reachable.
+  if (tier !== 'inherit') {
+    const routed = dynamicRoutingModel(config, agentType, 0);
+    if (routed !== null) return routed;
   }
 
   // 5. Profile lookup (Claude-native default).
@@ -665,6 +749,55 @@ function assertValidGranularityOverride(
 }
 
 /**
+ * #4505 — the ONE implementation of `dynamic_routing.tier_models` lookup.
+ *
+ * Returns the configured model for this agent's routing tier at `attempt`, or
+ * null when dynamic routing does not apply (disabled, absent, no tier table, an
+ * agent with no default routing tier, or no entry for the tier). Both entry
+ * points call it, so the first-spawn value and the escalated value can never
+ * drift apart — the "Generative Fix Divergence" this repo names by name.
+ *
+ * `attempt` 0 means "no escalation yet", which is the documented FIRST-SPAWN
+ * case, NOT "skip dynamic routing":
+ *   docs/features/dynamic-routing-with-failure-tier-escalation.md —
+ *   "enabled: true — the resolver picks tier_models[default_tier] for the first
+ *    spawn and escalates one tier up on orchestrator-detected soft failure."
+ */
+function dynamicRoutingModel(
+  config: Record<string, unknown>,
+  agentType: string,
+  attempt: number,
+): string | null {
+  const dr = config['dynamic_routing'] as Record<string, unknown> | null | undefined;
+  if (!dr || typeof dr !== 'object' || dr['enabled'] !== true) return null;
+
+  const tierModels = dr['tier_models'] as Record<string, string> | null | undefined;
+  if (!tierModels || typeof tierModels !== 'object') return null;
+
+  const defaultTier = (AGENT_DEFAULT_TIERS)[agentType];
+  if (!defaultTier || !(VALID_AGENT_TIERS).has(defaultTier)) return null;
+
+  const maxEscalations = Number.isInteger(dr['max_escalations']) && (dr['max_escalations'] as number) >= 0
+    ? (dr['max_escalations'] as number)
+    : 1;
+  const escalationEnabled = dr['escalate_on_failure'] !== false;
+  const effectiveAttempt = escalationEnabled ? Math.min(attempt, maxEscalations) : 0;
+
+  let tier = defaultTier;
+  for (let i = 0; i < effectiveAttempt; i += 1) {
+    const next = (nextTier)(tier);
+    if (!next || next === tier) break;
+    tier = next;
+  }
+
+  // Own-property guard: `tier_models` is a config-supplied plain object, so a
+  // prototype-chain key must not resolve an inherited member.
+  const alias = Object.hasOwn(tierModels, tier) ? tierModels[tier] : undefined;
+  if (typeof alias !== 'string' || alias.length === 0) return null;
+  return alias;
+}
+
+/**
  * #3024 — Resolve a model for a specific dynamic-routing attempt.
  */
 function resolveModelForTier(cwd: string, agentType: string, attempt?: number): string {
@@ -680,50 +813,19 @@ function resolveModelForTier(cwd: string, agentType: string, attempt?: number): 
     ? modelOverrides[agentType]
     : undefined;
   if (override) {
-    const mapped = mapClaudeOverrideForRuntime(override, config['runtime'] as string | null | undefined, agentType);
+    const mapped = mapClaudeOverrideForRuntime(override, resolveActiveRuntime(config), agentType);
     if (mapped !== null) return mapped;
     // Unmappable Claude ID — fall through to dynamic_routing / model_policy resolution.
   }
 
-  if (config['model_policy'] && config['runtime'] && config['runtime'] !== 'claude') {
+  // #4505: same active-runtime rule as resolveModelInternal step 3.
+  if (config['model_policy'] && resolveActiveRuntime(config) !== 'claude') {
     return resolveModelInternal(cwd, agentType);
   }
 
-  const dr = config['dynamic_routing'] as Record<string, unknown> | null | undefined;
-  if (!dr || typeof dr !== 'object' || dr['enabled'] !== true) {
-    return resolveModelInternal(cwd, agentType);
-  }
-
-  const tierModels = dr['tier_models'] as Record<string, string> | null | undefined;
-  if (!tierModels || typeof tierModels !== 'object') {
-    return resolveModelInternal(cwd, agentType);
-  }
-
-  const defaultTier = (AGENT_DEFAULT_TIERS)[agentType];
-  if (!defaultTier || !(VALID_AGENT_TIERS).has(defaultTier)) {
-    return resolveModelInternal(cwd, agentType);
-  }
-
-  const maxEscalations = Number.isInteger(dr['max_escalations']) && (dr['max_escalations'] as number) >= 0
-    ? (dr['max_escalations'] as number)
-    : 1;
-  const escalationEnabled = dr['escalate_on_failure'] !== false;
-  const effectiveAttempt = escalationEnabled
-    ? Math.min(attemptN, maxEscalations)
-    : 0;
-
-  let tier = defaultTier;
-  for (let i = 0; i < effectiveAttempt; i += 1) {
-    const next = (nextTier)(tier);
-    if (!next || next === tier) break;
-    tier = next;
-  }
-
-  const alias = tierModels[tier];
-  if (typeof alias !== 'string' || alias.length === 0) {
-    return resolveModelInternal(cwd, agentType);
-  }
-  return alias;
+  const alias = dynamicRoutingModel(config, agentType, attemptN);
+  if (alias !== null) return alias;
+  return resolveModelInternal(cwd, agentType);
 }
 
 /**

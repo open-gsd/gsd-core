@@ -2,7 +2,7 @@
 
 **Status:** research note — informs #3095 reactive classification and points at the proactive path forward.
 
-GSD dispatches executor subagents into one of four host runtimes today: Claude Code, GitHub Copilot CLI, OpenAI Codex CLI, and Google Gemini CLI. Each provider exposes rate-limit information at three different layers — pre-warning, post-mortem error body, and underlying HTTP transport — but the *host runtime* (the CLI that wraps the provider for us) gates how much of that surfaces to GSD's orchestrator.
+GSD dispatches executor subagents into one of four host runtimes today: Claude Code, GitHub Copilot CLI, OpenAI Codex CLI, and Antigravity CLI (Google Gemini backend). Each provider exposes rate-limit information at three different layers — pre-warning, post-mortem error body, and underlying HTTP transport — but the *host runtime* (the CLI that wraps the provider for us) gates how much of that surfaces to GSD's orchestrator.
 
 The reactive classifier shipped with #3095 (`agent.classify-failure`) parses post-mortem error bodies. This note records the proactive signals that exist at the provider layer but are not yet surfaced to orchestrators by the host runtimes — i.e. the forward path once host runtimes expose them to hooks.
 
@@ -29,7 +29,9 @@ The reactive classifier shipped with #3095 (`agent.classify-failure`) parses pos
 | HTTP headers | `x-ratelimit-remaining-requests`, `x-ratelimit-remaining-tokens`      | No — Codex CLI does not forward these to hooks |
 | Error body   | `429`, `usage_limit_reached`, `"exceeded your current quota"`, `Too Many Requests` ([openai/codex#9135](https://github.com/openai/codex/issues/9135)) | Yes — parsed by `agent.classify-failure` |
 
-## Google Gemini CLI
+## Google Gemini (via Antigravity CLI)
+
+*Host runtime: Antigravity CLI. GSD's Gemini CLI runtime was removed in #1928 after Google sunset it on 2026-06-18; Antigravity is the documented successor and runs on the same Gemini backend, so the provider-layer signals below are unchanged.*
 
 | Layer        | Signal                                                                    | Available to GSD today? |
 |--------------|---------------------------------------------------------------------------|-------------------------|

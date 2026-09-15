@@ -95,3 +95,30 @@ GSD's first-party plugin/extension on every supported platform should both **pro
 - **[ADR-766](766-claude-code-plugin-manifest-module.md)** (Claude plugin manifest, Accepted) — referenced for the provision methodology (the `skills` manifest field Phase B-provide / Phase D adds).
 - **[ADR-1235](1235-descriptor-driven-agent-conversion-migration.md)** (descriptor-driven agent conversion) — complementary; its byte-parity transform-ordering rule is cited in Decision 3.
 - **Epic [#1258](https://github.com/open-gsd/gsd-core/issues/1258)** — this is Phase A. Phase B-consume (PR #1261, merged) is the reference implementation canonized in Decision 5. Phases B-provide, C (C1–C6), D are tracked as separate issues per the epic's governance.
+
+---
+
+## Amendment — 2026-09-14 (#4727)
+
+**Dimension 3's helper roster changed name, not behavior.** The table above is left as written
+per `docs/adr/README.md`: *"ADRs are append-only. Amendments extend existing ADRs with a dated
+section rather than replacing them."* Read the row through this amendment:
+
+| Dimension 3 helper, as written above | now named |
+|---|---|
+| `convertGeminiToolName` | `convertAntigravityToolName` |
+| (its backing table, `claudeToGeminiTools`) | `claudeToAntigravityTools` |
+
+The methodology this ADR decided is unchanged: dimension 3 still maps Claude tool names to
+runtime equivalents, through the same helper with the same mapping table and the same exclusion
+set. Only the identifier moved, and only because GSD has had no Gemini runtime since #1928
+(Google sunset Gemini CLI on 2026-06-18, removal shipped 1.8.0). The sole consumer was, and
+remains, `convertClaudeAgentToAntigravityAgent`.
+
+The mapped **values** are untouched and must stay so — `read_file`, `write_file`, `replace`,
+`run_shell_command`, `glob`, `search_file_content`, `google_web_search`, `web_fetch`,
+`write_todos` are Gemini's built-in tool dialect, which Antigravity genuinely speaks. That
+dialect is Google's contract; the identifier was GSD's own choice. `ConverterName` (ADR-1016's
+closed enum, and `VALID_CONVERTER_NAMES` in `gsd-core/bin/lib/capability-validator.cjs`) is
+**not** affected: it admits only `convertClaude{Command,Agent}To*` names, and neither renamed
+symbol was ever a member, so no capability descriptor's `converter` field changes.

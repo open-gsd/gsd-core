@@ -306,19 +306,19 @@ describe('reviewer lane parity — descriptor-internal uniqueness (ADR-2782 D8)'
   });
 
   test('duplicate lane flags are a violation', () => {
-    const clash = { ...fakeLane('acme'), flags: ['--gemini'] };
+    const clash = { ...fakeLane('acme'), flags: ['--codex'] };
     const r = check({ descriptor: [...REVIEWER_LANES, clash] });
     assert.ok(
-      reasons(r).includes(`${PARITY_VIOLATION.DUPLICATE_FLAG}:--gemini`),
+      reasons(r).includes(`${PARITY_VIOLATION.DUPLICATE_FLAG}:--codex`),
       `expected a duplicate-flag violation, got: ${JSON.stringify(reasons(r))}`,
     );
   });
 
   test('duplicate reviewsSection is a violation', () => {
-    const clash = { ...fakeLane('acme'), reviewsSection: 'Gemini' };
+    const clash = { ...fakeLane('acme'), reviewsSection: 'Codex' };
     const r = check({ descriptor: [...REVIEWER_LANES, clash] });
     assert.ok(
-      reasons(r).includes(`${PARITY_VIOLATION.DUPLICATE_SECTION}:Gemini`),
+      reasons(r).includes(`${PARITY_VIOLATION.DUPLICATE_SECTION}:Codex`),
       `expected a duplicate-section violation, got: ${JSON.stringify(reasons(r))}`,
     );
   });
@@ -754,7 +754,7 @@ const {
 } = require('../gsd-core/bin/lib/review-lane-descriptor.cjs');
 
 /** A first-party lane set small enough to read at a glance, but real-shaped. */
-const FP = REVIEWER_LANES.slice(0, 2); // gemini, claude
+const FP = REVIEWER_LANES.slice(0, 2); // claude, codex
 const FP_SLUGS = FP.map((l) => l.slug);
 
 /** A valid overlay `reviewer` body, field-identical to a SpawnLane (ADR-2782 D1). */
@@ -812,7 +812,7 @@ describe('mergeReviewerLanes (#2927)', () => {
     const merged = mergeReviewerLanes(FP, registry(reviewerCap(overlayLane())));
     const slugs = merged.map((l) => l.slug);
     assert.ok(slugs.includes('agy-revisor'), 'overlay slug admitted into merged set');
-    assert.ok(slugs.includes('gemini'), 'first-party lanes preserved');
+    assert.ok(slugs.includes('claude'), 'first-party lanes preserved');
     // the overlay body itself is the merged entry (no translation layer)
     const overlay = merged.find((l) => l.slug === 'agy-revisor');
     assert.ok(overlay, 'agy-revisor overlay lane should be present in merged set');

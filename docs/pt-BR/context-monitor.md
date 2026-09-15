@@ -1,6 +1,6 @@
 # Monitor de Janela de Contexto
 
-Um hook pós-ferramenta (`PostToolUse` para o Claude Code, `AfterTool` para o Gemini CLI) que avisa o agente quando o uso da janela de contexto está elevado.
+Um hook pós-ferramenta (`PostToolUse` para o Claude Code, `AfterTool` para o Antigravity CLI) que avisa o agente quando o uso da janela de contexto está elevado.
 
 ## Problema
 
@@ -62,7 +62,7 @@ O comando `/gsd-pause-work` do GSD salva o estado de execução. A mensagem de A
 
 Ambos os hooks são registrados automaticamente durante a instalação do `npx @opengsd/gsd-core` — nenhuma etapa manual é necessária em circunstâncias normais. Para detalhes de configuração de hooks, substituições de limiares e exemplos de registro manual, consulte [Configuração](CONFIGURATION.md).
 
-Como referência rápida: o hook da barra de status se registra como `statusLine` em `settings.json`; o monitor de contexto (`gsd-context-monitor.js`) se registra como um hook `PostToolUse` (ou `AfterTool` para o Gemini CLI). Ambas as entradas utilizam o caminho absoluto do executável Node que executou o instalador. No Windows PowerShell, prefixe caminhos de executáveis entre aspas com `&`.
+Como referência rápida: o hook da barra de status se registra como `statusLine` em `settings.json`; o monitor de contexto (`gsd-context-monitor.js`) se registra como um hook `PostToolUse` (ou `AfterTool` para o Antigravity CLI). Ambas as entradas utilizam o caminho absoluto do executável Node que executou o instalador. No Windows PowerShell, prefixe caminhos de executáveis entre aspas com `&`.
 
 ## Segurança
 

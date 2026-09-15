@@ -50,7 +50,7 @@ Closes #
 ### Runtimes tested
 
 - [ ] Claude Code
-- [ ] Gemini CLI
+- [ ] Antigravity
 - [ ] OpenCode
 - [ ] Other: ___
 - [ ] N/A (not runtime-specific)

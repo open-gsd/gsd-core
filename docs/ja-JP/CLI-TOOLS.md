@@ -479,7 +479,7 @@ node gsd-tools.cjs graphify snapshot [name]
 
 ```bash
 node gsd-tools.cjs config-set review.models.codex    "codex exec --model gpt-5"
-node gsd-tools.cjs config-set review.models.gemini   "gemini -m gemini-2.5-pro"
+node gsd-tools.cjs config-set review.models.agy      "gemini-3.1-pro-preview"
 node gsd-tools.cjs config-set review.models.opencode "opencode run --model claude-sonnet-4"
 node gsd-tools.cjs config-set review.models.claude   ""   # クリア — セッションモデルにフォールバック
 ```

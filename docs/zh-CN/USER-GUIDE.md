@@ -30,14 +30,13 @@ GSD Core 的叙述性辅助指南——从这里开始了解系统全貌，然�
 
 ---
 
-## 斜杠命令形式（连字符 vs 冒号）
+## 斜杠命令形式 {#slash-command-forms-hyphen-vs-colon}
 
-GSD 向所有支持的运行时提供**同一套技能**，但有两种斜杠拼写方式：
+GSD 向所有支持的运行时提供**同一套技能**，使用连字符形式的斜杠拼写：
 
 - **连字符形式** — `/gsd-command-name` — 供 Claude Code、Copilot、OpenCode、Kilo、Cursor、Windsurf、Augment、Antigravity 和 Trae 使用。
-- **冒号形式** — `/gsd:command-name` — **仅供 Gemini CLI 使用**。Gemini 将每个插件的命令置于插件 ID 的命名空间下，因此安装时会在 `--gemini` 安装过程中将所有正文引用和命令文件改写为冒号形式。
 
-无需手动选择——安装器会为您所针对的每个运行时写入正确形式。在 Gemini 终端上阅读演示时，将每个斜杠命令中 `gsd` 后的连字符替换为冒号即可。
+安装器会将此形式写入您所针对的每个运行时的命令目录。
 
 ## 命名空间路由入门（`gsd:<namespace>`，v1.40）
 
@@ -675,7 +674,7 @@ GSD 子 Agent 在单独的上下文窗口中运行——其工作在进行中对
 
 完整审计、运行时参考及与 `model_profile` 的组合说明，请参阅捆绑的 `context-budget.md` 参考中的 [MCP 工具模式成本](../../gsd-core/references/context-budget.md#mcp-tool-schema-cost-harness-concern)。
 
-### 使用非 Claude 运行时（Codex、OpenCode、Gemini CLI、Kilo）
+### 使用非 Claude 运行时（Codex、OpenCode、Antigravity CLI、Kilo）
 
 > **Codex CLI 最低支持版本：`0.130.0`**（issue [#3562](https://github.com/open-gsd/gsd-core/issues/3562)）。
 
@@ -752,7 +751,6 @@ WINDSURF_CONFIG_DIR=~/.codeium/windsurf-next npx @opengsd/gsd-core@latest --wind
 | 运行时 | 稳定默认值 | 覆盖环境变量 |
 |---|---|---|
 | Claude Code | `~/.claude` | `CLAUDE_CONFIG_DIR` |
-| Gemini CLI | `~/.gemini` | `GEMINI_CONFIG_DIR` |
 | OpenCode | `XDG_CONFIG_HOME/opencode` | `OPENCODE_CONFIG_DIR` |
 | Codex | （按 Codex CLI） | `--config-dir` 标志 |
 | Copilot | `~/.copilot` | `COPILOT_CONFIG_DIR` |

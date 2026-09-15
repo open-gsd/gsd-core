@@ -21,7 +21,7 @@
 
 ## 시스템 개요
 
-GSD Core는 사용자와 AI 코딩 에이전트(Claude Code, Gemini CLI, OpenCode, Kilo, Codex, Copilot, Antigravity, Trae, Cline, Augment Code) 사이에 위치하는 **메타 프롬프팅 프레임워크**이다. 다음을 제공한다:
+GSD Core는 사용자와 AI 코딩 에이전트(Claude Code, Kimi CLI, OpenCode, Kilo, Codex, Copilot, Antigravity, Trae, Cline, Augment Code) 사이에 위치하는 **메타 프롬프팅 프레임워크**이다. 다음을 제공한다:
 
 1. **컨텍스트 엔지니어링** — 작업별로 AI에게 필요한 모든 것을 제공하는 구조화된 결과물([컨텍스트 엔지니어링](explanation/context-engineering.md) 참조)
 2. **다중 에이전트 오케스트레이션** — 신선한 컨텍스트 윈도우로 전문화된 에이전트를 생성하는 얇은 오케스트레이터([다중 에이전트 오케스트레이션](explanation/multi-agent-orchestration.md) 참조)
@@ -115,7 +115,6 @@ GSD Core는 사용자와 AI 코딩 에이전트(Claude Code, Gemini CLI, OpenCod
 - **OpenCode / Kilo:** 슬래시 명령어 (하이픈 형식, `/gsd-command-name`)
 - **Codex:** Skills (`$gsd-command-name`)
 - **Copilot:** 슬래시 명령어 (하이픈 형식, `/gsd-command-name`)
-- **Gemini CLI:** `gsd:` 네임스페이스 하의 슬래시 명령어 (콜론 형식, `/gsd:command-name`) — Gemini는 플러그인 id 아래 모든 커스텀 명령어를 네임스페이스화하므로 설치 경로가 모든 본문 텍스트 참조를 콜론 형식으로 다시 쓴다
 - **Antigravity:** Skills
 
 **전체 명령어 수:** 권위 있는 개수와 전체 목록은 [`docs/INVENTORY.md`](INVENTORY.md#commands)를 참조하라.
@@ -484,7 +483,6 @@ UI-SPEC.md (단계별) ───────────────────
 
 - **OpenCode:** `~/.config/opencode/` 전역 또는 `./.opencode/` 로컬
 - **Kilo:** `~/.config/kilo/` 전역 또는 `./.kilo/` 로컬
-- **Gemini CLI:** `~/.gemini/` 전역 또는 `./.gemini/` 로컬
 - **Codex:** `~/.codex/` 전역 또는 `./.codex/` 로컬
 - **Copilot:** `~/.copilot/` 전역 또는 `./.github/` 로컬
 - **Antigravity:** 자동 감지된 전역 루트 (`~/.gemini/antigravity/`, `~/.gemini/antigravity-ide/`, 또는 `~/.gemini/antigravity-cli/`) 또는 `./.agent/` 로컬
@@ -569,7 +567,7 @@ UI-SPEC.md (단계별) ───────────────────
 
 인스톨러(`bin/install.js`, ~10,700줄)는 다음을 처리한다:
 
-1. **런타임 감지** — 대화형 프롬프트 또는 CLI 플래그 (`--claude`, `--opencode`, `--gemini`, `--kilo`, `--codex`, `--copilot`, `--antigravity`, `--cursor`, `--windsurf`, `--augment`, `--trae`, `--qwen`, `--hermes`, `--codebuddy`, `--cline`, `--all`)
+1. **런타임 감지** — 대화형 프롬프트 또는 CLI 플래그 (`--claude`, `--opencode`, `--kimi`, `--kilo`, `--codex`, `--copilot`, `--antigravity`, `--cursor`, `--windsurf`, `--augment`, `--trae`, `--qwen`, `--hermes`, `--codebuddy`, `--cline`, `--all`)
 2. **위치 선택** — 전역(`--global`) 또는 로컬(`--local`)
 3. **파일 배포** — commands, skills, workflows, references, templates, agents, hooks 복사
 4. **런타임 적응** — 런타임별 파일 내용 변환:
@@ -578,8 +576,7 @@ UI-SPEC.md (단계별) ───────────────────
   - Kilo: Kilo 설정 경로로 OpenCode 변환 파이프라인 재사용
   - Codex: commands에서 TOML config + skills 생성
   - Copilot: 도구 이름 매핑 (Read→read, Bash→execute 등)
-  - Gemini: 훅 이벤트 이름 조정 (`PostToolUse` 대신 `AfterTool`)
-  - Antigravity: Google 모델 등가물을 사용한 skills-first
+  - Antigravity: Google 모델 등가물을 사용한 skills-first; 훅 이벤트 이름 조정 (`PostToolUse` 대신 `AfterTool`)
   - Cursor: Cursor 규칙 참조를 사용한 skills-first
   - Windsurf: Windsurf 규칙 참조를 사용한 skills-first
   - Trae: `settings.json` 또는 훅 통합 없이 `~/.trae` / `./.trae`에 skills-first 설치
@@ -612,7 +609,7 @@ UI-SPEC.md (단계별) ───────────────────
 ### 아키텍처
 
 ```
-런타임 엔진 (Claude Code / Gemini CLI)
+런타임 엔진 (Claude Code / Antigravity CLI)
     │
     ├── statusLine 이벤트 ──► gsd-statusline.js
     │   읽기: stdin (세션 JSON)
@@ -705,7 +702,6 @@ GSD는 통합된 명령어/워크플로우 아키텍처를 통해 여러 AI 코�
 | Claude Code | `~/.claude` | `./.claude` | 전역 `skills/gsd-*/SKILL.md`; 로컬 `commands/gsd/*.md` | `agents/gsd-*.md` | `settings.json` 훅 및 statusLine 항목 |
 | OpenCode | `~/.config/opencode` | `./.opencode` | `command/gsd-*.md` | `agents/gsd-*.md` | `opencode.json` 또는 `opencode.jsonc`; GSD 훅 없음 |
 | Kilo | `~/.config/kilo` | `./.kilo` | `command/gsd-*.md` | `agents/gsd-*.md` | `kilo.json` 또는 `kilo.jsonc`; GSD 훅 없음 |
-| Gemini CLI | `~/.gemini` | `./.gemini` | `commands/gsd/*.toml` | `agents/gsd-*.md` | `settings.json` 기능 플래그, 훅, statusline |
 | Codex | `~/.codex` | `./.codex` | `skills/gsd-*/SKILL.md` | `agents/` 소스 마크다운 + 에이전트별 TOML | `config.toml` `[agents.gsd-*]`, `[features].hooks` (정규; 레거시 별칭 `codex_hooks`는 인식되며 재설치 시 마이그레이션됨, #3566), 훅 테이블 |
 | GitHub Copilot | `~/.copilot` | `./.github` | `skills/gsd-*/SKILL.md` 및 `copilot-instructions.md` | `.agent.md` 파일 | GSD 훅 또는 statusline 없음 |
 | Antigravity | 자동 감지: `~/.gemini/antigravity`, `~/.gemini/antigravity-ide`, 또는 `~/.gemini/antigravity-cli` | `./.agent` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | GSD가 설치 시 Gemini 스타일 `settings.json` 훅 항목 |
@@ -724,7 +720,7 @@ GSD는 통합된 명령어/워크플로우 아키텍처를 통해 여러 AI 코�
 
 - Claude Code: Anthropic 슬래시 명령어, 설정, 훅, 서브에이전트 문서.
 - OpenCode 및 Kilo: OpenCode 설정 문서 및 Kilo 커스텀 서브에이전트 문서.
-- Gemini CLI 및 Qwen Code: 명령어/설정 문서; Qwen 명령어 문서는 2026-05-06에 마지막으로 업데이트됨.
+- Qwen Code: 명령어/설정 문서; Qwen 명령어 문서는 2026-05-06에 마지막으로 업데이트됨.
 - Codex: OpenAI Codex 문서 및 `config-schema.json`; 인스톨러는 에이전트 테이블 형태를 위한 Codex 0.124.0 호환성도 포함.
 - Copilot, Cursor, Cline, Augment, Hermes, CodeBuddy: 커스텀 지시, 규칙, 스킬, 설정을 위한 벤더 문서.
 - Antigravity, Windsurf, Trae: 소스가 제한된 행. 인스톨러는 현재 호환성 심을 문서화하며, 마이그레이션은 설정을 재작성하기 전에 해당 소스를 새로 고쳐야 한다.
@@ -732,7 +728,7 @@ GSD는 통합된 명령어/워크플로우 아키텍처를 통해 여러 AI 코�
 ### 추상화 포인트
 
 1. **도구 이름 매핑** — 각 런타임은 고유한 도구 이름을 가진다 (예: Claude의 `Bash` → Copilot의 `execute`)
-2. **훅 이벤트 이름** — Claude는 `PostToolUse`를 사용하고 Gemini는 `AfterTool`을 사용한다
+2. **훅 이벤트 이름** — Claude는 `PostToolUse`를 사용하고 Antigravity는 `AfterTool`을 사용한다
 3. **에이전트 전문** — 각 런타임은 고유한 에이전트 정의 형식을 가진다
 4. **경로 컨벤션** — 각 런타임은 서로 다른 디렉터리에 설정을 저장한다
 5. **모델 참조** — `inherit` 프로필은 GSD가 런타임의 모델 선택에 위임하도록 한다

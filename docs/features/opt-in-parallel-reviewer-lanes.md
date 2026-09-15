@@ -8,7 +8,7 @@ group: v1.7.0 Features
 
 **Config key:** `review.parallel_lanes` (default `false`)
 
-**Purpose:** Reviewer lanes within one review pass have no data dependency on each other — they all inspect the same immutable plan snapshot — but were dispatched strictly one at a time, so a pass with Codex, Gemini and Claude cost roughly the sum of three long reviewer calls. The serialization was a deliberate, unconditional protection against provider rate limits, which made it a global policy imposed on users whose providers could comfortably take concurrent requests, or who run local model servers with no limits at all (#3034).
+**Purpose:** Reviewer lanes within one review pass have no data dependency on each other — they all inspect the same immutable plan snapshot — but were dispatched strictly one at a time, so a pass with Codex, Antigravity and Claude cost roughly the sum of three long reviewer calls. The serialization was a deliberate, unconditional protection against provider rate limits, which made it a global policy imposed on users whose providers could comfortably take concurrent requests, or who run local model servers with no limits at all (#3034).
 
 **Behavior:** With the key enabled, the `invoke_reviewers` step dispatches each selected lane as a background job and joins all of them before `REVIEWS.md` and consensus are rendered. Wall-clock cost falls toward the slowest lane rather than the sum. Default remains `false`, preserving the existing sequential dispatch and its rate-limit protection.
 

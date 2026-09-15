@@ -90,7 +90,7 @@ GSD는 코드 작성 전에 느낌, 시각적 참조, 핵심 사용자 작업을
 
 `--quick`은 입력 대화를 완전히 건너뛰고 인자를 디자인 방향으로 사용합니다.
 
-### 비 Claude 런타임(Codex, Gemini CLI 등)
+### 비 Claude 런타임(Codex, Antigravity CLI 등)
 
 ```bash
 /gsd-sketch --text "onboarding flow"

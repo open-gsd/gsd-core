@@ -184,7 +184,13 @@ const DOCS_GUARD_EXEMPT_DOCS_PATHS = {
   // / explanatory comment citing documented CLI behavior for context, never
   // a read target); the exemption's premise still holds for both.
   'milestone-archive.test.cjs': ['docs/CLI-TOOLS.md', 'docs/TESTING-SUITES.md'],
-  'model-resolver.test.cjs': ['docs/TESTING-SUITES.md'],
+  // #4505: additionally cites docs/features/dynamic-routing-with-failure-tier-escalation.md
+  // in explanatory comments, quoting the documented first-spawn contract the new rows
+  // assert against; the file never reads that (or any) docs/ file — every read it makes
+  // targets a tmpdir .planning fixture.
+  'model-resolver.test.cjs': [
+    'docs/TESTING-SUITES.md', 'docs/features/dynamic-routing-with-failure-tier-escalation.md',
+  ],
   'new-project-mvp-prompt.test.cjs': ['docs/CONFIGURATION.md'],
   'onboard-command.test.cjs': ['docs/adr/0001-runtime.md'],
   'opencode-command-dir-plural.test.cjs': ['docs/commands'],

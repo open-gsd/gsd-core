@@ -1013,7 +1013,7 @@ fix(03-01): correct auth token expiry
 **目的：** 跨多个 AI 编程智能体运行时运行 GSD。
 
 **需求：**
-- REQ-RUNTIME-01：系统必须支持 Claude Code、OpenCode、Gemini CLI、Kilo、Codex、Copilot、Antigravity、Trae、Cline、Augment Code、CodeBuddy、Qwen Code
+- REQ-RUNTIME-01：系统必须支持 Claude Code、OpenCode、Kilo、Codex、Copilot、Antigravity、Trae、Cline、Augment Code、CodeBuddy、Qwen Code
 - REQ-RUNTIME-02：安装器必须按运行时转换内容（工具名称、路径、前置元数据）
 - REQ-RUNTIME-03：安装器必须支持交互式和非交互式（`--claude --global`）模式
 - REQ-RUNTIME-04：安装器必须支持全局和本地安装
@@ -1022,12 +1022,12 @@ fix(03-01): correct auth token expiry
 
 **运行时转换：**
 
-| 方面 | Claude Code | OpenCode | Gemini | Kilo | Codex | Copilot | Antigravity | Trae | Cline | Augment | CodeBuddy | Qwen Code |
-|--------|------------|----------|--------|-------|-------|---------|-------------|------|-------|---------|-----------|-----------|
-| 命令 | 斜杠命令 | 斜杠命令 | 斜杠命令 | 斜杠命令 | Skills (TOML) | 斜杠命令 | Skills | Skills | Rules | Skills | Skills | Skills |
-| 智能体格式 | Claude 原生 | `mode: subagent` | Claude 原生 | `mode: subagent` | Skills | 工具映射 | Skills | Skills | Rules | Skills | Skills | Skills |
-| 钩子事件 | `PostToolUse` | N/A | `AfterTool` | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
-| 配置 | `settings.json` | `opencode.json(c)` | `settings.json` | `kilo.json(c)` | TOML | Instructions | Config | Config | `.clinerules` | Config | Config | Config |
+| 方面 | Claude Code | OpenCode | Kilo | Codex | Copilot | Antigravity | Trae | Cline | Augment | CodeBuddy | Qwen Code |
+|--------|------------|----------|-------|-------|---------|-------------|------|-------|---------|-----------|-----------|
+| 命令 | 斜杠命令 | 斜杠命令 | 斜杠命令 | Skills (TOML) | 斜杠命令 | Skills | Skills | Rules | Skills | Skills | Skills |
+| 智能体格式 | Claude 原生 | `mode: subagent` | `mode: subagent` | Skills | 工具映射 | Skills | Skills | Rules | Skills | Skills | Skills |
+| 钩子事件 | `PostToolUse` | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
+| 配置 | `settings.json` | `opencode.json(c)` | `kilo.json(c)` | TOML | Instructions | Config | Config | `.clinerules` | Config | Config | Config |
 
 ---
 
@@ -1174,7 +1174,7 @@ GSD update available: 1.39.0 → 1.40.0. Run /gsd-update.
 
 ### 42. 跨 AI 同行评审
 
-**命令：** `/gsd-review --phase N [--gemini] [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy] [--antigravity] [--ollama] [--lm-studio] [--llama-cpp] [--kimi-code] [--all]`
+**命令：** `/gsd-review --phase N [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy] [--antigravity] [--ollama] [--lm-studio] [--llama-cpp] [--kimi-code] [--all]`
 
 **目的：** 调用外部 AI CLI（Gemini、Claude、Codex、CodeRabbit、OpenCode、Qwen Code、Cursor、Antigravity、Kimi Code）和本地 OpenAI 兼容服务器（Ollama、LM Studio、llama.cpp）独立审查阶段计划。生成包含每位审查者反馈的结构化 REVIEWS.md。
 

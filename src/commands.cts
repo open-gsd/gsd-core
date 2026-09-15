@@ -595,13 +595,10 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
   opts = opts || {};
   const config = loadConfig(cwd);
   const profile = (config['model_profile'] as string) || 'balanced';
-  // #2068: resolve the model per-attempt so dynamic_routing escalates the MODEL
-  // (heavy tier) alongside effort. Gated on an explicit --attempt exactly like the
-  // effort resolution below, so the two fields stay symmetric: with no --attempt
-  // the model comes from the classic profile path (unchanged for everyone,
-  // including dynamic_routing-enabled users who don't pass --attempt), and only an
-  // explicit attempt routes through the tier ladder. resolveModelForTier itself
-  // still falls back to resolveModelInternal when dynamic_routing is off.
+  // #2068: resolve the model per-attempt so dynamic_routing ESCALATES the MODEL
+  // (heavy tier) alongside effort. The FIRST-spawn tier now comes from
+  // resolveModelInternal's own dynamic_routing step (#4505), so the absent-attempt
+  // branch below reaches it too — this gate is only about escalation.
   let model = (opts.attempt !== undefined && opts.attempt !== null)
     ? resolveModelForTier(cwd, agentType, opts.attempt)
     : resolveModelInternal(cwd, agentType);

@@ -1423,7 +1423,7 @@ User-facing entry point: `/gsd-graphify` (see [Command Reference](COMMANDS.md#gs
 
 ```bash
 node gsd-tools.cjs config-set review.models.codex    "gpt-5"
-node gsd-tools.cjs config-set review.models.gemini   "gemini-2.5-pro"
+node gsd-tools.cjs config-set review.models.agy      "gemini-3.1-pro-preview"
 node gsd-tools.cjs config-set review.models.opencode "claude-sonnet-4"
 node gsd-tools.cjs config-set review.models.claude   ""   # clear — fall back to session model
 ```

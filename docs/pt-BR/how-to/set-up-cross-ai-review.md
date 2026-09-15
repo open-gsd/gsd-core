@@ -8,16 +8,13 @@
 
 ## Decidir quais revisores usar
 
-O GSD Core pode encaminhar solicitações de revisão para qualquer combinação de: Gemini CLI, Claude (sessão separada), Codex CLI, CodeRabbit, OpenCode, Qwen Code, Cursor, Antigravity CLI, Ollama, LM Studio e llama.cpp.
+O GSD Core pode encaminhar solicitações de revisão para qualquer combinação de: Claude (sessão separada), Codex CLI, CodeRabbit, OpenCode, Qwen Code, Cursor, Antigravity CLI, Ollama, LM Studio e llama.cpp.
 
 Cada revisor executa o mesmo prompt estruturado contra seus arquivos `PLAN.md` de forma independente. Como diferentes modelos têm diferentes pontos cegos, o consenso de múltiplos revisores detecta mais problemas do que qualquer revisor individual.
 
 **Se você ainda não tem CLIs externos instalados**, instale pelo menos um:
 
 ```bash
-# Gemini CLI (gratuito com credenciais Google)
-npm install -g @google/gemini-cli
-
 # Antigravity CLI (gratuito com credenciais Google)
 curl -fsSL https://antigravity.google/cli/install.sh | bash
 
@@ -35,12 +32,12 @@ Por padrão, `/gsd-review` executa todos os CLIs detectados. Para fixar um subco
 /gsd-config --integrations
 ```
 
-O assistente de integrações cobre chaves de API, roteamento de CLIs para revisão de código e a lista `review.default_reviewers`. Defina a lista com os revisores que você deseja como padrão sem flags — por exemplo `["gemini","codex"]`.
+O assistente de integrações cobre chaves de API, roteamento de CLIs para revisão de código e a lista `review.default_reviewers`. Defina a lista com os revisores que você deseja como padrão sem flags — por exemplo `["codex","claude"]`.
 
 Como alternativa, defina diretamente com `gsd-tools`:
 
 ```bash
-gsd config-set review.default_reviewers '["gemini","codex"]'
+gsd config-set review.default_reviewers '["codex","claude"]'
 ```
 
 Para o esquema completo de configurações de integração (chaves de API, substituições de modelo por revisor, endereços de servidor local), consulte [Configuração](../CONFIGURATION.md).
@@ -60,7 +57,7 @@ O GSD invoca cada revisor em sequência, coleta feedback estruturado (Resumo, Po
 ### Selecionar um único revisor para uma execução pontual
 
 ```bash
-/gsd-review --phase 3 --gemini
+/gsd-review --phase 3 --agy
 /gsd-review --phase 3 --codex
 /gsd-review --phase 3 --cursor
 ```
@@ -124,7 +121,7 @@ Isso executa `plan-phase → review → replan → re-review` por até três cic
 
 ```bash
 /gsd-plan-review-convergence 3 --codex
-/gsd-plan-review-convergence 3 --gemini
+/gsd-plan-review-convergence 3 --agy
 ```
 
 ### Convergência com todos os revisores e um limite maior de ciclos
@@ -141,13 +138,13 @@ Isso executa `plan-phase → review → replan → re-review` por até três cic
 
 | Situação | Abordagem recomendada |
 |-----------|---------------------|
-| Você já tem o Gemini CLI instalado | `--gemini` é sempre um bom revisor inicial |
-| Você quer cobertura gratuita com múltiplos revisores | `--gemini` + `--agy` (ambos usam credenciais Google) |
+| Você já tem o Antigravity instalado | `--agy` é sempre um bom revisor inicial |
+| Você quer cobertura gratuita com múltiplos revisores | `--agy` (credenciais Google) + `--claude` |
 | Seu projeto é fortemente baseado em OpenAI | adicione `--codex` para uma perspectiva de modelo OpenAI |
 | Você quer o modelo do GitHub Copilot | adicione `--opencode` |
 | Você quer evitar custos de API completamente | configure o Ollama com um modelo local e use `--ollama` |
 | Você precisa de cobertura máxima antes de um lançamento | `/gsd-plan-review-convergence N --all` |
-| Você está iterando rapidamente e quer feedback rápido | escolha um CLI: `/gsd-review --phase N --gemini` |
+| Você está iterando rapidamente e quer feedback rápido | escolha um CLI: `/gsd-review --phase N --agy` |
 
 ---
 

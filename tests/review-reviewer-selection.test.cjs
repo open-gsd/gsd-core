@@ -285,12 +285,16 @@ describe('resolveReviewerSelection — discovery paths stay lenient (ADR-2782 D4
   });
 
   test('a configured default that is undetected stays an info, not an error', () => {
+    // `qwen` is a genuinely KNOWN lane (REVIEWER_LANES) that is simply absent from `detected` here —
+    // the shape this test needs. `gemini` no longer works as this fixture: it was retired from
+    // REVIEWER_LANES by #4709, so it now falls into the UNKNOWN-slug branch (a warning) instead of
+    // the known-but-undetected branch (an info) this test exists to prove.
     const r = resolveReviewerSelection({
-      detected: ['gemini'],
-      configuredDefaultReviewers: ['gemini', 'codex'],
+      detected: ['qwen'],
+      configuredDefaultReviewers: ['qwen', 'codex'],
     });
     assert.equal(r.source, 'config_default');
-    assert.deepStrictEqual(r.selected, ['gemini']);
+    assert.deepStrictEqual(r.selected, ['qwen']);
     assert.deepStrictEqual(r.errors, [], 'a preference miss must not become an error');
     assert.ok(
       r.infos.some((i) => i.includes('codex')),
@@ -299,9 +303,13 @@ describe('resolveReviewerSelection — discovery paths stay lenient (ADR-2782 D4
   });
 
   test('an unknown configured slug stays a warning', () => {
+    // `qwen` here plays the genuinely KNOWN, detected lane so `selected`/`errors` behave as expected;
+    // `__nope__` remains the genuinely UNKNOWN slug under test — `gemini` would ALSO now be a valid
+    // fixture for the unknown branch (retired from REVIEWER_LANES by #4709), but `__nope__` already
+    // names that branch unambiguously without relying on retirement history.
     const r = resolveReviewerSelection({
-      detected: ['gemini'],
-      configuredDefaultReviewers: ['gemini', '__nope__'],
+      detected: ['qwen'],
+      configuredDefaultReviewers: ['qwen', '__nope__'],
     });
     assert.deepStrictEqual(r.errors, []);
     assert.ok(r.warnings.some((w) => w.includes('__nope__')));

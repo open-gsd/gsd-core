@@ -918,7 +918,7 @@ fix(03-01): correct auth token expiry
 **목적:** 여러 AI 코딩 에이전트 런타임에서 GSD를 실행합니다.
 
 **요구사항.**
-- REQ-RUNTIME-01: Claude Code, OpenCode, Gemini CLI, Kilo, Codex, Copilot, Antigravity를 지원해야 합니다.
+- REQ-RUNTIME-01: Claude Code, OpenCode, Kilo, Codex, Copilot, Antigravity를 지원해야 합니다.
 - REQ-RUNTIME-02: 설치 프로그램은 런타임별로 콘텐츠를 변환해야 합니다(도구 이름, 경로, 프론트매터).
 - REQ-RUNTIME-03: 설치 프로그램은 대화형 및 비대화형(`--claude --global`) 모드를 모두 지원해야 합니다.
 - REQ-RUNTIME-04: 설치 프로그램은 전역 및 로컬 설치를 모두 지원해야 합니다.
@@ -927,12 +927,12 @@ fix(03-01): correct auth token expiry
 
 **런타임 변환.**
 
-| 측면 | Claude Code | OpenCode | Gemini | Kilo | Codex | Copilot | Antigravity |
-|--------|------------|----------|--------|-------|-------|---------|-------------|
-| 명령어 | 슬래시 명령어 | 슬래시 명령어 | 슬래시 명령어 | 슬래시 명령어 | Skills(TOML) | 슬래시 명령어 | Skills |
-| 에이전트 형식 | Claude native | `mode: subagent` | Claude native | `mode: subagent` | Skills | Tool mapping | Skills |
-| 훅 이벤트 | `PostToolUse` | N/A | `AfterTool` | N/A | N/A | N/A | N/A |
-| 구성 | `settings.json` | `opencode.json(c)` | `settings.json` | `kilo.json(c)` | TOML | Instructions | Config |
+| 측면 | Claude Code | OpenCode | Kilo | Codex | Copilot | Antigravity |
+|--------|------------|----------|-------|-------|---------|-------------|
+| 명령어 | 슬래시 명령어 | 슬래시 명령어 | 슬래시 명령어 | Skills(TOML) | 슬래시 명령어 | Skills |
+| 에이전트 형식 | Claude native | `mode: subagent` | `mode: subagent` | Skills | Tool mapping | Skills |
+| 훅 이벤트 | `PostToolUse` | N/A | N/A | N/A | N/A | N/A |
+| 구성 | `settings.json` | `opencode.json(c)` | `kilo.json(c)` | TOML | Instructions | Config |
 
 ---
 
@@ -1068,7 +1068,7 @@ fix(03-01): correct auth token expiry
 
 ### 42. Cross-AI Peer Review
 
-**명령어:** `/gsd-review --phase N [--gemini] [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy] [--antigravity] [--ollama] [--lm-studio] [--llama-cpp] [--kimi-code] [--all]`
+**명령어:** `/gsd-review --phase N [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy] [--antigravity] [--ollama] [--lm-studio] [--llama-cpp] [--kimi-code] [--all]`
 
 **목적:** 외부 AI CLI(Gemini, Claude, Codex, CodeRabbit, OpenCode, Qwen Code, Cursor, Antigravity, Kimi Code)와 로컬 OpenAI 호환 서버(Ollama, LM Studio, llama.cpp)를 호출하여 페이즈 계획을 독립적으로 검토합니다. 검토자별 피드백이 담긴 구조화된 REVIEWS.md를 생성합니다.
 

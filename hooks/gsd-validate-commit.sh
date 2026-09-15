@@ -16,6 +16,21 @@ set -euo pipefail
 # Idempotent and failure-proof by construction: unset vars expand to "" (a
 # no-op rm -f target), and `|| true` guarantees the trap itself never changes
 # the script's exit status.
+# Subprocess exit statuses, pre-initialised so they can never be inherited from
+# the ambient environment. Each is captured as `... || VAR=$?`, which assigns
+# ONLY on the failure branch; on success the variable keeps whatever it already
+# held, and `${VAR:-0}` defaults only when unset or empty. So an EXPORTED
+# CONFIG_STATUS / CMD_STATUS / CLASSIFY_STATUS — from a CI wrapper, a .envrc, or
+# another hook — survived into the success path and was read as "the subprocess
+# failed". Measured: `CLASSIFY_STATUS=3 git commit -m "nope: bad"` printed
+# "validator disabled for this call" and exited 0, silently accepting a
+# non-conforming commit. Same for CONFIG_STATUS and CMD_STATUS. Found by the
+# security review of #4429; the gate is fail-open by design on a genuine
+# subprocess failure (#3838), which is exactly what made this bypass quiet.
+CONFIG_STATUS=0
+CMD_STATUS=0
+CLASSIFY_STATUS=0
+
 ENABLED_ERR=""
 CMD_ERR=""
 CLASSIFY_ERR=""
@@ -61,6 +76,12 @@ if [ -f .planning/config.json ]; then
       process.exit(3);
     }
   " 2>"$ENABLED_ERR") || CONFIG_STATUS=$?
+  # Pre-initialised, NOT left to `${...:-0}` alone: the capture below only
+  # assigns on the `||` branch, so on SUCCESS the variable keeps whatever it
+  # already held — and an EXPORTED variable of this name is inherited from the
+  # ambient environment. `${VAR:-0}` defaults only when unset/empty, so
+  # `CONFIG_STATUS=3 git commit …` made this hook print "validator disabled" and exit 0,
+  # silently accepting a non-conforming commit. Found by review of #4429.
   CONFIG_STATUS=${CONFIG_STATUS:-0}
   if [ "$CONFIG_STATUS" != "0" ]; then
     # Could not determine the opt-in flag at all (node missing, JSON parse
@@ -103,6 +124,12 @@ CMD=$(echo "$INPUT" | node -e "
     }
   });
 " 2>"$CMD_ERR") || CMD_STATUS=$?
+# Pre-initialised, NOT left to `${...:-0}` alone: the capture below only
+# assigns on the `||` branch, so on SUCCESS the variable keeps whatever it
+# already held — and an EXPORTED variable of this name is inherited from the
+# ambient environment. `${VAR:-0}` defaults only when unset/empty, so
+# `CMD_STATUS=3 git commit …` made this hook print "validator disabled" and exit 0,
+# silently accepting a non-conforming commit. Found by review of #4429.
 CMD_STATUS=${CMD_STATUS:-0}
 if [ "$CMD_STATUS" != "0" ]; then
   # Could not extract tool_input.command at all (node missing, malformed
@@ -127,6 +154,12 @@ GIT_CMD_LIB="$HOOK_DIR/lib/git-cmd.js" node -e "
     process.exit(3);
   }
 " "$CMD" 2>"$CLASSIFY_ERR" || CLASSIFY_STATUS=$?
+# Pre-initialised, NOT left to `${...:-0}` alone: the capture below only
+# assigns on the `||` branch, so on SUCCESS the variable keeps whatever it
+# already held — and an EXPORTED variable of this name is inherited from the
+# ambient environment. `${VAR:-0}` defaults only when unset/empty, so
+# `CLASSIFY_STATUS=3 git commit …` made this hook print "validator disabled" and exit 0,
+# silently accepting a non-conforming commit. Found by review of #4429.
 CLASSIFY_STATUS=${CLASSIFY_STATUS:-0}
 if [ "$CLASSIFY_STATUS" != "0" ] && [ "$CLASSIFY_STATUS" != "1" ]; then
   # 0 = is a git commit (validate below); 1 = genuinely not a git commit
@@ -557,7 +590,7 @@ if [ "$CLASSIFY_STATUS" = "0" ]; then
     fi
     # Single source of truth for the accepted commit-type list (#3811): the
     # 10 built-ins plus whatever passed the safe-token filter above. Both the
-    # regex alternation and the human-readable error text below are derived
+    # membership test and the human-readable error text below are derived
     # from this ONE array — no hand-synced second copy.
     #
     # The `"${EXTRA_COMMIT_TYPES[@]+"${EXTRA_COMMIT_TYPES[@]}"}"` form (not
@@ -568,7 +601,6 @@ if [ "$CLASSIFY_STATUS" = "0" ]; then
     # /bin/bash 3.2.57 on macOS. The `${arr[@]+word}` form is the
     # nounset-safe idiom for "expand if set, empty otherwise" on empty arrays.
     COMMIT_TYPES=("${BUILTIN_COMMIT_TYPES[@]}" "${EXTRA_COMMIT_TYPES[@]+"${EXTRA_COMMIT_TYPES[@]}"}")
-    COMMIT_TYPE_ALT=$(IFS='|'; echo "${COMMIT_TYPES[*]}")
     COMMIT_TYPE_LIST=$(printf '%s, ' "${COMMIT_TYPES[@]}")
     COMMIT_TYPE_LIST="${COMMIT_TYPE_LIST%, }"
     # Typed `valid_types` array (#3811 review finding): CONTRIBUTING.md bans
@@ -580,8 +612,35 @@ if [ "$CLASSIFY_STATUS" = "0" ]; then
     # or `\`.
     COMMIT_TYPES_JSON=$(printf '"%s",' "${COMMIT_TYPES[@]}")
     COMMIT_TYPES_JSON="[${COMMIT_TYPES_JSON%,}]"
-    # Validate Conventional Commits format
-    if ! [[ "$SUBJECT" =~ ^($COMMIT_TYPE_ALT)(\(.+\))?:[[:space:]].+ ]]; then
+    # Validate Conventional Commits format.
+    #
+    # #4429: do NOT build `^(type1|type2|...)` out of COMMIT_TYPES. That
+    # alternation grows with the CONFIGURED list, and how large a pattern can be
+    # compiled is a property of the platform's regex engine. bash 3.2.57 / BSD
+    # libc (macOS, this file's stated target) caps it at 64 KiB - bisected: a
+    # 65504-byte alternation compiles, 65515 fails. bash 5.2 / glibc has no
+    # reachable cap, so this half never bit Linux. Past a cap `[[ =~ ]]`
+    # returns 2, and `if !` cannot tell a COMPILE ERROR from "the subject does
+    # not conform" - so a valid `feat(auth): ...` was blocked with
+    # CONVENTIONAL_COMMITS_VIOLATION while `feat` sat in its own valid_types.
+    #
+    # Match the SHAPE with a fixed-size pattern, then test membership against
+    # the array. The regex no longer depends on how many types are configured,
+    # and the loop adds no subprocess or pipe (the #4429 hazard this file
+    # already avoids elsewhere). The character class is exactly the safe-token
+    # filter `^[a-z][a-z0-9-]*$` applied above, so it captures every type that
+    # can legally reach COMMIT_TYPES and no token that cannot.
+    SUBJECT_TYPE=''
+    if [[ "$SUBJECT" =~ ^([a-z][a-z0-9-]*)(\(.+\))?:[[:space:]].+ ]]; then
+      SUBJECT_TYPE="${BASH_REMATCH[1]}"
+    fi
+    COMMIT_TYPE_OK=0
+    if [ -n "$SUBJECT_TYPE" ]; then
+      for _known_type in "${COMMIT_TYPES[@]}"; do
+        if [ "$_known_type" = "$SUBJECT_TYPE" ]; then COMMIT_TYPE_OK=1; break; fi
+      done
+    fi
+    if [ "$COMMIT_TYPE_OK" -ne 1 ]; then
       # Emit typed `code` and `valid_types` fields alongside `reason` (#2974,
       # #3811). Tests assert on the stable code string and the typed array;
       # the reason is the human-readable copy, never grepped by tests.

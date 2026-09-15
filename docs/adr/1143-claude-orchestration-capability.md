@@ -130,3 +130,48 @@ execution path (actual orchestration via the Workflow tool inside Claude Code) i
 not verifiable outside that runtime. The capability is structurally complete and
 tested at the contract level; flipping to Accepted follows maintainer sign-off on
 the E2E behaviour once exercised on Claude Code with the Workflow tool present.
+
+## Amendment (2026-09-14): the `execute:wave:*` contribution is removed — orchestration is not an agent contribution
+
+Issue [#4740](https://github.com/open-gsd/gsd-core/issues/4740).
+
+Decision §2 and the 2026-07-06 amendment above are **historical record and are not rewritten**;
+this section supersedes them on the single point of loop registration.
+
+`capabilities/claude-orchestration/capability.json` declared a contribution at `execute:wave:pre`
+with `into: "executor"`. `gsd-core/references/loop-hook-dispatch.md` defines a contribution as
+*"Inject `fragment.inline` verbatim into the context for the role named in `into`"*, so that
+fragment was injected into **executor** prompts whenever `claude_orchestration.enabled`.
+
+Its 267 lines are orchestration end to end: construct a wave manifest, resolve the dispatch
+backend, invoke the Workflow tool to spawn executors, bridge per-agent results into the merge
+chain. An executor can act on none of it.
+
+**Retargeting it to `into: "orchestrator"` would not have been a fix.** `ROLE_TO_AGENT` carries no
+`orchestrator` entry by design — the orchestrator IS the host, not an agent, and the host's
+procedure lives in `gsd-core/workflows/execute-phase.md`. A step's `agentRoles` enumerates agents a
+capability may inject context INTO. Adding `orchestrator` there would model the host as an
+injectable agent: the same category error pointed the other way, and it would have required
+carving an exception into the role partition ADR-894 §3's 2026-09-14 amendment had just made
+normative.
+
+The defect is therefore the **mechanism**, not the label. A `contribution` injects into an agent's
+context; *"replace step 3's inline dispatch loop"* (`execute-phase.md:588`) is a change to what the
+**host** does. The contribution channel was being used as a host-behaviour directive because it was
+the only channel available at an `execute:*` point.
+
+**What changed:** the `execute:wave:pre` contribution is removed. The `plan:post` /
+`into: "planner"` contribution is correct and is untouched. The orchestrator-side procedure is
+preserved verbatim at `capabilities/claude-orchestration/docs/workflow-backend-dispatch.md` — it is
+the only copy in the repo — and is no longer injected anywhere.
+
+**Consequence, stated plainly:** the Workflow execution backend now has **no loop wiring**. Its
+detection and emission code (`detectWorkflowBackend`, `emitWorkflowScript`) and its federated
+config remain, and its design is intact in the preserved document, but nothing dispatches it. Under
+the orchestration/execution separation this ADR itself asserts — *"only the orchestrator (the
+script's return) writes shared files; executors stay in their worktrees"* — it never had a
+legitimate channel. This makes that visible rather than changing it, and the "Why this is still
+Proposed" audit above already records that the end-to-end path has never been exercised.
+
+Wiring it properly needs a **host-level mechanism** for a capability to alter the orchestrator's
+own dispatch procedure. That does not exist today and is not proposed here.
