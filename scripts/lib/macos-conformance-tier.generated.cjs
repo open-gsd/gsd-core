@@ -193,6 +193,7 @@ module.exports = {
   "tests/state.test.cjs",
   "tests/todos-workstream-scope.test.cjs",
   "tests/tracer-bullet.test.cjs",
+  "tests/uat-predicate.test.cjs",
   "tests/uat.test.cjs",
   "tests/ui-safety-gate.test.cjs",
   "tests/ui-spec-inventory-provenance.test.cjs",

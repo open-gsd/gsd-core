@@ -137,10 +137,11 @@
         "verify-npm-publish.test.cjs",
         "verify-test-quality.test.cjs",
         "verify-work-auto-transition.test.cjs",
+        "verify-work-deferred-promotion.test.cjs",
         "verify.test.cjs"
       ],
       "issue": "#3813 \u2014 the live-path #1883 suite drives buildPlanningSnapshot in-process with an fs fault; the verify module suites are CLI-driving and cannot host an fs monkeypatch",
-      "justification": "verify-command-grounding added by #2401/#3678; allowlist follow-up landed with #3606 (base was red on this lane)."
+      "justification": "verify-command-grounding added by #2401/#3678; allowlist follow-up landed with #3606 (base was red on this lane). #4546 adds verify-work-deferred-promotion (deferred-follow-up promotion writer contract + parity)."
     },
     "install": {
       "files": [
