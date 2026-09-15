@@ -43,6 +43,7 @@
 const fs = require('fs');
 const path = require('path');
 const { escapeRegex: escapeRe } = require('../../gsd-core/bin/lib/pattern.cjs');
+const { extractFencedBlock } = require('../../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 const WORKFLOW_PATH = path.join(__dirname, '..', '..', 'gsd-core', 'workflows', 'pr-branch.md');
 
@@ -146,6 +147,42 @@ const extractPickLoop = (text) => {
   return matches[0];
 };
 
+const DERIVATION_MARKER = "Derive the mode's two projections";
+
+// Returns the verbatim body of the shipped workflow's `FILTER_PATHS` /
+// `FORBIDDEN_RE` derivation block — the `if [ "$PR_STRICT" = "true" ]` shell
+// that turns the declarations above it into the two projections
+// `create_pr_branch` and `verify` consume.
+//
+// Exists so a caller can EXECUTE that derivation as real shell rather than
+// re-implementing it in JS (#4605). The distinction matters: the block's
+// `find -exec printf` discovery and its newline-delimited accumulation of
+// `$FILTER_PATHS` have word-splitting semantics a `fs.readdirSync` mirror
+// cannot reproduce, so a JS model of this step cannot prove the shipped one
+// survives a milestone slug containing a space.
+//
+// Located by the prose marker then handed to `extractFencedBlock` — the
+// sanctioned fence scanner — rather than an ad-hoc ```-delimited regex.
+// Throws if the marker or the block after it is missing, so a moved/renamed
+// step fails loudly instead of silently testing nothing.
+const extractFilterDerivation = (text) => {
+  if (typeof text !== 'string') {
+    throw new Error('extractFilterDerivation: expected the workflow text as a string');
+  }
+  const markerIdx = text.indexOf(DERIVATION_MARKER);
+  if (markerIdx < 0) {
+    throw new Error(`pr-branch.md: no "${DERIVATION_MARKER}" prose marker — the FILTER_PATHS/FORBIDDEN_RE derivation step moved or was renamed`);
+  }
+  const block = extractFencedBlock(text.slice(markerIdx), 'bash');
+  if (block === null || block.length === 0) {
+    throw new Error(`pr-branch.md: no bash block after "${DERIVATION_MARKER}"`);
+  }
+  if (!block.includes('FILTER_PATHS=')) {
+    throw new Error(`pr-branch.md: the bash block after "${DERIVATION_MARKER}" assigns no FILTER_PATHS — wrong block`);
+  }
+  return block;
+};
+
 const normalizePaths = (input) => {
   const raw = typeof input === 'string' ? input.split('\n') : input;
   return raw.map((s) => s.replace(/\r$/, '')).filter((s) => s.length > 0);
@@ -211,6 +248,7 @@ module.exports = {
   parseWorkflow,
   readWorkflow,
   extractPickLoop,
+  extractFilterDerivation,
   normalizePaths,
   forbiddenRegex,
   forbiddenPaths,

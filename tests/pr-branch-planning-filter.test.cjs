@@ -68,6 +68,7 @@ const {
   parseWorkflow,
   readWorkflow,
   extractPickLoop,
+  extractFilterDerivation,
   forbiddenRegex,
   forbiddenPaths,
   structuralPaths,
@@ -459,7 +460,10 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         'PR_BRANCH=prbranch',
         'TARGET=main',
         'INCLUDED_COMMITS=$(git rev-list --reverse main..feature)',
-        `FILTER_PATHS="${filterPaths.join(' ')}"`,
+        // NEWLINE-delimited, matching the shipped derivation step post-#4605 —
+        // `create_pr_branch`'s loop reads one path per line, so joining these
+        // on spaces here would test a delimiter the workflow no longer emits.
+        `FILTER_PATHS="${filterPaths.join('\n')}"`,
         extractPickLoop(readWorkflowText()),
       ].join('\n');
     }
@@ -624,24 +628,23 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
 
     // #4605: a separate small fixture (not buildFixture above) because it
     // needs a `.planning/milestones/<slug>-phases/` shape buildFixture never
-    // produces. FILTER_PATHS here is built the same way the real workflow's
-    // "Derive the mode's two projections" step builds it post-#4605: the
-    // parsed transient dirs, PLUS whichever `<slug>-phases/` directories this
-    // fixture repo actually has on disk — mirroring the shipped `find`
-    // discovery rather than hand-listing `v1.0-phases` as a literal.
-    function buildMilestonePhasesFixture() {
+    // produces. `slug` is a parameter because the milestone slug is the one
+    // piece of FILTER_PATHS the workflow does not control — it comes off the
+    // user's disk, so it can legitimately contain a space.
+    function buildMilestonePhasesFixture(slug) {
+      const phasesDir = `.planning/milestones/${slug}-phases`;
       const dir = trackDir(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-prbranch-mstone-')));
       initRepo(dir);
       writeFile(dir, 'code.txt', 'line1\n');
       writeFile(dir, '.planning/STATE.md', 'state v1\n');
-      writeFile(dir, '.planning/milestones/v1.0-phases/old.md', 'old plan\n');
+      writeFile(dir, `${phasesDir}/old.md`, 'old plan\n');
       commitAll(dir, 'chore: base');
       git(['branch', 'feature'], dir);
 
       git(['checkout', '-q', 'feature'], dir);
       writeFile(dir, 'code.txt', 'line1-c1\n');
       writeFile(dir, '.planning/STATE.md', 'state v2\n');
-      writeFile(dir, '.planning/milestones/v1.0-phases/new.md', 'new plan v1\n');
+      writeFile(dir, `${phasesDir}/new.md`, 'new plan v1\n');
       commitAll(dir, 'feat: c1');
 
       git(['checkout', '-q', 'main'], dir);
@@ -649,45 +652,92 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       return dir;
     }
 
-    function discoverMilestonePhaseDirs(repoDir) {
-      const base = path.join(repoDir, '.planning', 'milestones');
-      if (!fs.existsSync(base)) return [];
-      return fs.readdirSync(base, { withFileTypes: true })
-        .filter((e) => e.isDirectory() && e.name.endsWith('-phases'))
-        .map((e) => `.planning/milestones/${e.name}/`);
+    /**
+     * Runs the FULL shipped default-mode recipe as real shell: the workflow's
+     * own `FILTER_PATHS`/`FORBIDDEN_RE` derivation block (extracted verbatim)
+     * followed by its own cherry-pick loop (likewise). Nothing about
+     * FILTER_PATHS is modelled in JS here.
+     *
+     * That is the point (#4605). The earlier version of this test built
+     * FILTER_PATHS with a JS `fs.readdirSync` mirror of the shipped `find`,
+     * which has no word-splitting semantics at all — so it could not observe
+     * whether the real, space-bearing shell value survives discovery AND
+     * consumption. Only `TRANSIENT_DIRS`/`MILESTONE_PHASES_RE` are injected,
+     * and those come from `parseWorkflow` against the shipped declarations,
+     * not from literals typed here.
+     */
+    function runShippedDerivationAndFilter(repoDir) {
+      const { transientDirs, milestonePhasesRe } = readWorkflow();
+      const text = readWorkflowText();
+      const script = [
+        'set -u',
+        'CURRENT_BRANCH=feature',
+        'PR_BRANCH=prbranch',
+        'TARGET=main',
+        'PR_STRICT=false',
+        `TRANSIENT_DIRS="${transientDirs.join(' ')}"`,
+        `MILESTONE_PHASES_RE="${milestonePhasesRe}"`,
+        'INCLUDED_COMMITS=$(git rev-list --reverse main..feature)',
+        extractFilterDerivation(text),
+        extractPickLoop(text),
+      ].join('\n');
+      try {
+        const stdout = execFileSync('sh', ['-c', script], { cwd: repoDir, encoding: 'utf8', timeout: CHERRY_PICK_RECIPE_TIMEOUT_MS });
+        return { status: 0, stdout, stderr: '' };
+      } catch (err) {
+        return {
+          status: typeof err.status === 'number' ? err.status : 1,
+          stdout: err.stdout || '',
+          stderr: err.stderr || '',
+        };
+      }
+    }
+
+    function assertMilestonePhasesFiltered(dir, slug) {
+      const phasesDir = `.planning/milestones/${slug}-phases`;
+      const result = runShippedDerivationAndFilter(dir);
+      assert.strictEqual(result.status, 0, `filter loop failed: ${result.stderr}`);
+
+      const diffFiles = git(['diff', '--name-only', 'main..prbranch'], dir)
+        .split('\n').map((s) => s.trim()).filter(Boolean);
+      // `git diff --name-only` quotes a path containing a space, so compare on
+      // the unquoted slug fragment rather than on an exact path string.
+      assert.ok(
+        !diffFiles.some((f) => f.includes(`${slug}-phases/`)),
+        `milestone-phases content leaked into the PR branch diff: ${diffFiles.join(', ')}`,
+      );
+      assert.ok(diffFiles.includes('code.txt'), `expected code.txt in diff: ${diffFiles.join(', ')}`);
+      assert.ok(diffFiles.includes('.planning/STATE.md'), `expected .planning/STATE.md in diff: ${diffFiles.join(', ')}`);
+
+      // old.md predates the branch point (it's on `main` itself, same as
+      // buildFixture's old.md in test 19) so it legitimately persists on
+      // prbranch unchanged — that's the #3679 target-preservation contract,
+      // not a leak. Assert it stays byte-identical rather than absent.
+      const oldContent = fs.readFileSync(path.join(dir, phasesDir, 'old.md'), 'utf-8');
+      assert.strictEqual(oldContent, 'old plan\n', 'pre-existing old.md must survive unchanged on the checked-out prbranch worktree');
     }
 
     test('#4605 L2: a milestone-nested <slug>-phases/ dir is filtered from the PR branch by the real create_pr_branch recipe', () => {
-      const transientDirs = currentTransientDirs();
-      const dir = buildMilestonePhasesFixture();
+      const dir = buildMilestonePhasesFixture('v1.0');
       try {
-        const filterPaths = transientDirs.map((d) => `.planning/${d}/`)
-          .concat(discoverMilestonePhaseDirs(dir));
-        const script = buildRecipeScript(filterPaths);
-        let result;
-        try {
-          const stdout = execFileSync('sh', ['-c', script], { cwd: dir, encoding: 'utf8', timeout: CHERRY_PICK_RECIPE_TIMEOUT_MS });
-          result = { status: 0, stdout, stderr: '' };
-        } catch (err) {
-          result = { status: typeof err.status === 'number' ? err.status : 1, stdout: err.stdout || '', stderr: err.stderr || '' };
-        }
-        assert.strictEqual(result.status, 0, `filter loop failed: ${result.stderr}`);
+        assertMilestonePhasesFiltered(dir, 'v1.0');
+      } finally {
+        teardown();
+      }
+    });
 
-        const diffFiles = git(['diff', '--name-only', 'main..prbranch'], dir)
-          .split('\n').map((s) => s.trim()).filter(Boolean);
-        assert.ok(
-          !diffFiles.some((f) => f.startsWith('.planning/milestones/v1.0-phases/')),
-          `milestone-phases content leaked into the PR branch diff: ${diffFiles.join(', ')}`,
-        );
-        assert.ok(diffFiles.includes('code.txt'), `expected code.txt in diff: ${diffFiles.join(', ')}`);
-        assert.ok(diffFiles.includes('.planning/STATE.md'), `expected .planning/STATE.md in diff: ${diffFiles.join(', ')}`);
-
-        // old.md predates the branch point (it's on `main` itself, same as
-        // buildFixture's old.md in test 19) so it legitimately persists on
-        // prbranch unchanged — that's the #3679 target-preservation contract,
-        // not a leak. Assert it stays byte-identical rather than absent.
-        const oldContent = fs.readFileSync(path.join(dir, '.planning/milestones/v1.0-phases/old.md'), 'utf-8');
-        assert.strictEqual(oldContent, 'old plan\n', 'pre-existing old.md must survive unchanged on the checked-out prbranch worktree');
+    // #4605 follow-up: the space is the whole point. The shipped discovery
+    // uses `find -exec printf` specifically so a space-bearing slug is emitted
+    // as ONE entry, but that guarantee is only worth something if the
+    // consuming loop also splits on newlines rather than on IFS. Before the
+    // newline-delimited FILTER_PATHS fix, this test failed: `for P in $(...)`
+    // tore `.planning/milestones/My Milestone-phases/` into `My` and
+    // `Milestone-phases/`, neither of which names a real path, so the
+    // directory was never `git rm`-ed and its content landed in the PR branch.
+    test('#4605 L2: a <slug>-phases/ dir whose milestone slug contains a SPACE is still filtered — the shipped FILTER_PATHS survives discovery and consumption intact', () => {
+      const dir = buildMilestonePhasesFixture('My Milestone');
+      try {
+        assertMilestonePhasesFiltered(dir, 'My Milestone');
       } finally {
         teardown();
       }
@@ -1107,6 +1157,53 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         /find \.planning\/milestones .*-name '\*-phases'/,
         'FILTER_PATHS must discover concrete <milestone>-phases/ directories on disk (the '
           + 'milestone slug is not static, so create_pr_branch cannot git-rm a literal path)',
+      );
+    });
+
+    // #4605: the space-bearing-slug defect is a two-ended contract — the
+    // derivation must EMIT one path per line, and create_pr_branch must
+    // CONSUME it that way. Either end reverting to a space delimiter silently
+    // reintroduces the word-split, and the L2 space test is the only thing
+    // that would catch it at runtime. Pin both ends in the shipped text too,
+    // so the intent survives an edit that does not run the suite.
+    test('#4605 FILTER_PATHS is newline-delimited at BOTH ends — emitted per line, consumed by a newline-splitting read loop', () => {
+      const text = readFileNormalized(WORKFLOW_PATH);
+
+      const markerIdx = text.indexOf("Derive the mode's two projections");
+      assert.ok(markerIdx >= 0, 'could not find the "Derive the mode\'s two projections" prose marker');
+      const block = extractFencedBlock(text.slice(markerIdx), 'bash');
+      assert.ok(block, 'could not find the FILTER_PATHS/FORBIDDEN_RE derivation bash block');
+      assert.ok(
+        !/printf '[^']*%s\/ '/.test(block),
+        'the derivation must not emit space-separated FILTER_PATHS entries — a milestone slug '
+          + 'containing a space would then be indistinguishable from two entries',
+      );
+      assert.match(
+        block,
+        /printf '\.planning\/%s\/\\n'/,
+        'the transient-dir projection must emit one path per line',
+      );
+      assert.match(
+        block,
+        /-exec printf '%s\/\\n' \{\} \\;/,
+        'the <milestone>-phases/ discovery must emit one path per line',
+      );
+
+      // Comment lines are stripped first: the loop's own comment NAMES the
+      // banned form in order to explain why it is banned, and a naive
+      // whole-block search would match that explanation rather than real code.
+      const loopCode = extractPickLoop(text)
+        .split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+      assert.ok(
+        !loopCode.includes('for P in $(printf \'%s\' "$FILTER_PATHS")'),
+        'create_pr_branch must not consume $FILTER_PATHS through unquoted command substitution — '
+          + '`for P in $(...)` splits on IFS, tearing a space-bearing <milestone>-phases/ path into '
+          + 'fragments that match no real directory, so those paths survive into the PR branch',
+      );
+      assert.match(
+        loopCode,
+        /while IFS= read -r P; do/,
+        'create_pr_branch must consume $FILTER_PATHS with a newline-splitting read loop',
       );
     });
   });

@@ -278,10 +278,12 @@ if [ "$PR_STRICT" = "true" ]; then
   FILTER_PATHS=".planning/"
   FORBIDDEN_RE="^\.planning/"
 else
-  # Rewrapped through unquoted command substitution (gsd-core#4109): a bare
-  # `$VAR` word-splits under bash but not zsh, collapsing every element onto
-  # one iteration there.
-  FILTER_PATHS=$(for d in $(printf '%s' "$TRANSIENT_DIRS"); do printf '.planning/%s/ ' "$d"; done)
+  # One path per LINE, not per space (#4605) — see create_pr_branch's consumption
+  # loop: a discovered `<milestone>-phases/` directory can contain a space, so
+  # whitespace cannot be the delimiter. Rewrapped through unquoted command
+  # substitution (gsd-core#4109): a bare `$VAR` word-splits under bash but not
+  # zsh, collapsing every element onto one iteration there.
+  FILTER_PATHS=$(for d in $(printf '%s' "$TRANSIENT_DIRS"); do printf '.planning/%s/\n' "$d"; done)
   FORBIDDEN_RE="^\.planning/($(echo "$TRANSIENT_DIRS" | tr ' ' '|'))/|$MILESTONE_PHASES_RE"
 
   # $MILESTONE_PHASES_RE is a shape, not a path — create_pr_branch's filter loop
@@ -298,7 +300,14 @@ else
   # unfiltered rather than aborting. Accepted here because `$FORBIDDEN_RE`
   # still asserts their absence downstream in `verify`, catching what this
   # step misses.
-  FILTER_PATHS="${FILTER_PATHS}$(find .planning/milestones -mindepth 1 -maxdepth 1 -type d -name '*-phases' -exec printf '%s/ ' {} \; 2>/dev/null)"
+  MILESTONE_PHASE_DIRS=$(find .planning/milestones -mindepth 1 -maxdepth 1 -type d -name '*-phases' -exec printf '%s/\n' {} \; 2>/dev/null)
+  # Appended as its own LINE, and only when non-empty so no blank entry is
+  # introduced. The separator is a literal newline inside the quotes — `$(...)`
+  # has already stripped the trailing one off each side.
+  if [ -n "$MILESTONE_PHASE_DIRS" ]; then
+    FILTER_PATHS="${FILTER_PATHS}
+${MILESTONE_PHASE_DIRS}"
+  fi
 fi
 ```
 
@@ -378,10 +387,21 @@ for HASH in $(printf '%s' "$INCLUDED_COMMITS"); do
   # filtered path is absent from HEAD by construction. Do not treat it as a failure here.
   git cherry-pick --no-commit "$HASH" || true
 
-  for P in $(printf '%s' "$FILTER_PATHS"); do
+  # `$FILTER_PATHS` is newline-delimited and must be split on newlines ONLY
+  # (#4605). `for P in $(printf '%s' "$FILTER_PATHS")` splits on IFS, tearing a
+  # discovered `.planning/milestones/<slug>-phases/` whose slug contains a space
+  # into fragments that name no real directory — those paths then survive into
+  # the PR branch unfiltered. Same bug class #4109 fixed at the discovery end; it
+  # reaches the consumption end too, now that FILTER_PATHS carries discovered
+  # names rather than only literal ones. Fed by heredoc rather than a pipe so the
+  # loop body runs in THIS shell, not a subshell.
+  while IFS= read -r P; do
+    [ -n "$P" ] || continue
     git rm -r -f -q --ignore-unmatch -- "$P" 2>/dev/null || true
     git checkout HEAD -- "$P" 2>/dev/null || true
-  done
+  done <<FILTER_PATHS_EOF
+$FILTER_PATHS
+FILTER_PATHS_EOF
 
   # Anything still unmerged is a REAL conflict, outside the filter. Halt — do not
   # improvise a resolution and do not continue, which would drop the rest of the queue.
