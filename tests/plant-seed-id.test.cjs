@@ -1,9 +1,3 @@
-// allow-test-rule: source-text-is-the-product (#4378)
-// gsd-core/workflows/plant-seed.md is runtime-loaded text — the workflow IS its
-// markdown. Asserting on the shipped `generate-seed-id` and `parse-idea` text
-// tests the deployed contract (the alternative — executing cross-worktree
-// collisions end-to-end — is not reproducible in a single checkout).
-
 'use strict';
 
 /**
@@ -22,8 +16,10 @@
  *      captures the COMPLETE id, uppercase-tolerant (legacy `SEED-NNN` still
  *      resolves) — writer and reader grammars must not diverge (the reader
  *      grammar is pinned behaviorally in tests/list-seeds.test.cjs /
- *      .property.test.cjs on the SAME sample ids). A truncated or ambiguous
- *      target fails closed instead of enriching an arbitrary same-day seed.
+ *      .property.test.cjs on the SAME sample ids, and the parity property at
+ *      the bottom of this file proves every id the writer grammar can mint
+ *      round-trips through the reader). A truncated or ambiguous target fails
+ *      closed instead of enriching an arbitrary same-day seed.
  *   3. No counting-era placeholder (`SEED-{PADDED}`) survives anywhere in the
  *      file — a stale placeholder would write malformed ids at runtime.
  */
@@ -32,10 +28,17 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const fc = require('./helpers/fast-check-setup.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const PLANT_SEED_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'plant-seed.md');
 
+// allow-test-rule: source-text-is-the-product (#4378)
+// The readFileSync below is the marker's suppression site: plant-seed.md is
+// runtime-loaded text — the workflow IS its markdown — so asserting on the
+// shipped `generate-seed-id` and `parse-idea` text tests the deployed contract
+// (the alternative — executing cross-worktree collisions end-to-end — is not
+// reproducible in a single checkout).
 function readPlantSeedNormalized() {
   const src = fs.readFileSync(PLANT_SEED_PATH, 'utf8');
   return src.replace(/\r\n/g, '\n');
@@ -86,7 +89,7 @@ describe('plant-seed id contract (#4378)', () => {
     // ids would all collapse to the bare date — the #4378 collision reborn).
     assert.match(
       block,
-      /\[ \$\{#SEED_SUFX\} -ne 3 \]/,
+      /\[ \$\{#SEED_SUFFIX\} -ne 3 \]/,
       'the drawn suffix must be length-checked; an empty suffix must abort the step'
     );
     assert.match(
@@ -96,18 +99,23 @@ describe('plant-seed id contract (#4378)', () => {
     );
     assert.match(
       block,
-      /SEED-\$\{SEED_DATE\}-\$\{SEED_SUFX\}/,
+      /SEED-\$\{SEED_DATE\}-\$\{SEED_SUFFIX\}/,
       'generate-seed-id must assemble SEED-<date>-<suffix>'
     );
 
     // Same-day regen guard — as a find existence test, never `ls <glob>`
     // (under a stray nullglob that shape silently degenerates: #3409 drift
-    // guard, Detector B). A 1-in-46,656 local collision must be retried, not
-    // shipped silently.
+    // guard, Detector B) — with a loud terminal failure if the retry also
+    // collides.
     assert.match(
       block,
       /find \.planning\/seeds -maxdepth 1 -name "\$\{SEED_ID\}-\*\.md"/,
       'generate-seed-id must check the freshly drawn id against existing same-day seeds via find'
+    );
+    assert.match(
+      block,
+      /could not draw an unused seed id/,
+      'a regen retry that also collides must abort loudly, not ship a duplicate'
     );
     assert.doesNotMatch(
       block,
@@ -203,5 +211,39 @@ describe('plant-seed id contract (#4378)', () => {
       'the SEED-{PADDED} placeholder would write malformed ids at runtime; write-seed/confirm must use {SEED_ID}'
     );
     assert.match(src, /\{SEED_ID\}/, 'write-seed/confirm must reference {SEED_ID}');
+  });
+
+  test('parity: every id the writer grammar can mint round-trips through the reader (#4378)', () => {
+    // The writer (plant-seed.md generate-seed-id) and the reader
+    // (deriveSeedIdentity) are parallel surfaces owning one grammar — per
+    // CLAUDE.md's generative-fix rule their agreement must be ASSERTED, not
+    // assumed. The widths are parsed out of the shipped MINT sites (the
+    // `date +%y%m%d` directive and the `head -c N` draw) so a width drift on
+    // either side fails here. (The enrich matcher is deliberately wider — it
+    // must also accept legacy `SEED-NNN` — so it is not the parity source.)
+    const { deriveSeedIdentity } = require('../gsd-core/bin/lib/commands.cjs');
+    const genBlock = stepBlock(src, 'generate-seed-id');
+    const suffixWidth = Number(genBlock.match(/head -c (\d+)/)?.[1]);
+    const dateFormat = genBlock.match(/date \+(\S+)/)?.[1] ?? '';
+    const dateWidth = (dateFormat.match(/%[ymd]/g) ?? []).length * 2;
+    assert.ok(dateWidth > 0, 'writer mint block must declare the date format via %y%m%d');
+    assert.ok(suffixWidth > 0, 'writer mint block must declare the suffix width via head -c N');
+
+    const digits = fc.integer({ min: 0, max: 10 ** dateWidth - 1 })
+      .map((n) => String(n).padStart(dateWidth, '0'));
+    const base36 = fc.tuple(
+      ...Array.from({ length: suffixWidth }, () =>
+        fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz0123456789'.split('')))
+    ).map((parts) => parts.join(''));
+
+    fc.assert(
+      fc.property(digits, base36, fc.stringMatching(/^[a-z0-9][a-z0-9-]{0,20}$/), (date, suf, slug) => {
+        const id = `SEED-${date}-${suf}`;
+        const result = deriveSeedIdentity(`${id}-${slug}`, id);
+        assert.strictEqual(result.seed_id, id, `reader must accept the writer's id ${id}`);
+        assert.strictEqual(result.slug, slug);
+      }),
+      { numRuns: 200 }
+    );
   });
 });

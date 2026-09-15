@@ -35,7 +35,7 @@ if echo "$ARGUMENTS" | grep -qE '\-\-enrich[[:space:]]+SEED-[0-9]+(-[a-zA-Z0-9]{
     exit 1
   fi
   if [ "$(printf '%s\n' "$SEED_FILE" | grep -c .)" -gt 1 ]; then
-    echo "ERROR: '$ENRICH_TARGET' matches multiple seed files — re-run with the complete id:" >&2
+    echo "ERROR: '$ENRICH_TARGET' matches multiple seed files — duplicate legacy ids cannot be disambiguated by a longer id, so rename the duplicates; for new-format ids re-run with the complete id:" >&2
     printf '%s\n' "$SEED_FILE" >&2
     exit 1
   fi
@@ -73,23 +73,24 @@ mkdir -p .planning/seeds
 # can still draw the same suffix (~1 in 46,656 per pair) — the same bound the
 # `.planning/quick/` scheme accepts.
 SEED_DATE=$(date +%y%m%d)
-# `|| true`: `tr` reads an infinite stream, so `head -c` closing the pipe takes
-# SIGPIPE — harmless (head already has its 3 bytes) but fatal under pipefail.
-SEED_SUFX=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 3) || true
-if [ ${#SEED_SUFX} -ne 3 ]; then
-  echo "ERROR: could not draw a random id suffix (is /dev/urandom available?)" >&2
-  exit 1
-fi
-SEED_ID="SEED-${SEED_DATE}-${SEED_SUFX}"
-# Same-day regen guard, written as a find existence test (never `ls <glob>`:
-# under a stray nullglob that shape silently degenerates — #3409 drift guard).
-if [ -n "$(find .planning/seeds -maxdepth 1 -name "${SEED_ID}-*.md" -print 2>/dev/null | head -1)" ]; then
-  SEED_SUFX=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 3) || true
-  if [ ${#SEED_SUFX} -ne 3 ]; then
+SEED_ID=""
+for _SEED_ATTEMPT in 1 2; do
+  # `|| true`: `tr` reads an infinite stream, so `head -c` closing the pipe
+  # takes SIGPIPE — harmless (head already has its 3 bytes) but fatal under
+  # pipefail.
+  SEED_SUFFIX=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 3) || true
+  if [ ${#SEED_SUFFIX} -ne 3 ]; then
     echo "ERROR: could not draw a random id suffix (is /dev/urandom available?)" >&2
     exit 1
   fi
-  SEED_ID="SEED-${SEED_DATE}-${SEED_SUFX}"
+  SEED_ID="SEED-${SEED_DATE}-${SEED_SUFFIX}"
+  # Same-day regen guard, written as a find existence test (never `ls <glob>`:
+  # under a stray nullglob that shape silently degenerates — #3409 drift guard).
+  [ -z "$(find .planning/seeds -maxdepth 1 -name "${SEED_ID}-*.md" -print 2>/dev/null)" ] && break
+done
+if [ -n "$(find .planning/seeds -maxdepth 1 -name "${SEED_ID}-*.md" -print 2>/dev/null)" ]; then
+  echo "ERROR: could not draw an unused seed id after 2 attempts" >&2
+  exit 1
 fi
 ```
 

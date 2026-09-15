@@ -267,4 +267,16 @@ describe('list-seeds command', () => {
     assert.strictEqual(s.seed_id, 'SEED-260914-k3x');
     assert.strictEqual(s.slug, 'bare');
   });
+
+  test('uppercase new-format id is canonical end-to-end (#4378)', () => {
+    // The docs display SEED-YYMMDD-XXX and the writer's enrich path is
+    // uppercase-tolerant, so the reader must be too — an uppercase id must
+    // survive verbatim, never be truncated to its date prefix.
+    writeSeed(tmpDir, 'SEED-260914-K3X-Upper.md',
+      { id: 'SEED-260914-K3X', status: 'dormant' }, 'SEED-260914-K3X: upper');
+    const output = JSON.parse(runGsdTools('list-seeds', tmpDir).output);
+    assert.strictEqual(output.count, 1);
+    assert.strictEqual(output.seeds[0].seed_id, 'SEED-260914-K3X');
+    assert.strictEqual(output.seeds[0].slug, 'Upper');
+  });
 });

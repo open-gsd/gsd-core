@@ -137,4 +137,59 @@ describe('list-seeds: deriveSeedIdentity properties', () => {
       )
     );
   });
+
+  // (g) Width boundaries — the new grammar is exactly 6 digits + exactly 3
+  // base36 chars; off-by-one widths must resolve through the documented
+  // grammar branches, never by mis-parsing as a different seed's id
+  // (CLAUDE.md: boundary coverage at limit-1 / limit / limit+1).
+  describe('width boundaries (limit-1 / limit+1 vs the new grammar)', () => {
+    test('5-digit date (limit-1) parses as legacy', () => {
+      const r = deriveSeedIdentity('SEED-26091-k3x-slug', 'SEED-26091');
+      assert.strictEqual(r.seed_id, 'SEED-26091');
+      assert.strictEqual(r.slug, 'slug');
+    });
+
+    test('7-digit date (limit+1) parses as legacy (all-digit legacy ids stay verbatim)', () => {
+      const r = deriveSeedIdentity('SEED-2609147-k3x-slug', 'SEED-2609147');
+      assert.strictEqual(r.seed_id, 'SEED-2609147');
+      assert.strictEqual(r.slug, 'slug');
+    });
+
+    test('4-char suffix (limit+1): canonical frontmatter wins; without frontmatter the id prefix absorbs exactly 3 suffix chars', () => {
+      // Off-grammar input is never minted by the writer (it length-checks the
+      // draw), so this pins the parser's documented greedy-then-legacy
+      // behavior rather than a contract the writer can produce.
+      assert.strictEqual(deriveSeedIdentity('SEED-260914-k3xy-slug', 'SEED-260914').seed_id, 'SEED-260914');
+      const noFm = deriveSeedIdentity('SEED-260914-k3xy-slug', '');
+      assert.strictEqual(noFm.seed_id, 'SEED-260914-k3x',
+        'the prefix fallback tries the new-format branch (exactly 3 suffix chars) before legacy');
+      assert.strictEqual(noFm.slug, 'y-slug');
+    });
+
+    test('2-char suffix (limit-1) never parses as new-format', () => {
+      const withFm = deriveSeedIdentity('SEED-260914-k3', 'SEED-260914-k3');
+      assert.strictEqual(withFm.seed_id, 'SEED-260914',
+        'a frontmatter id matching NO grammar is ignored; the filename fallback applies');
+      assert.strictEqual(withFm.slug, 'k3');
+      const noFm = deriveSeedIdentity('SEED-260914-k3', '');
+      assert.strictEqual(noFm.seed_id, 'SEED-260914');
+      assert.strictEqual(noFm.slug, 'k3');
+    });
+
+    test('property: a 5-digit date (below the {6} width) always resolves to the legacy numeric prefix', () => {
+      fc.assert(
+        fc.property(
+          fc.integer({ min: 10000, max: 99999 }), // 5-digit date, below {6}
+          fc.stringMatching(/^[a-z0-9]{2}([a-z0-9])?$/), // 2 or 4 suffix chars
+          slug,
+          (date, suf, s) => {
+            const stem = `SEED-${date}-${suf}-${s}`;
+            const r = deriveSeedIdentity(stem, '');
+            assert.strictEqual(r.seed_id, `SEED-${date}`,
+              'a short date can never start a new-format id');
+          }
+        )
+      );
+    });
+  });
 });

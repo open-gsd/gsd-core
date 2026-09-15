@@ -432,9 +432,11 @@ function cmdListSeeds(cwd: string, statusFilter: string | undefined, raw: boolea
     // sanitizeForDisplay is for output, not comparison.
     if (wantStatus && status !== wantStatus) continue;
 
-    // Canonical seed id is `SEED-NNN` (frontmatter `id:`, e.g. SEED-001). Fall
-    // back to the numeric prefix of the filename, then to the whole stem. The
-    // descriptive remainder of the filename (`SEED-NNN-<slug>.md`) is the slug.
+    // Canonical seed ids are `SEED-YYMMDD-xxx` (frontmatter `id:`, what
+    // plant-seed has minted since #4378) or legacy `SEED-NNN`; deriveSeedIdentity
+    // owns that grammar. Fall back to the id prefix of the filename, then to the
+    // whole stem. The descriptive remainder of the filename (`SEED-…-<slug>.md`)
+    // is the slug.
     const stem = path.basename(entry.name, '.md');
     const { seed_id: seedId, slug } = deriveSeedIdentity(stem, fm.id);
 
