@@ -35,12 +35,13 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 const RUN_WITH_TIMEOUT_HARNESS_BACKSTOP_MS = 30000;
 
 /**
- * Tighter backstop for the C1 reap test specifically: its own verb-internal
- * budget is 3s plus ~900ms of heartbeat-settle waits, so this keeps a
- * smaller margin than the file default while still comfortably covering it.
- * Pre-existing value, unchanged.
+ * Tighter backstop for the tree-reap tests (the C1 POSIX group reap and the
+ * #4601 win32 tree kill): their own verb-internal budgets are 2-3s plus ~900ms
+ * of heartbeat-settle waits, so this keeps a smaller margin than the file
+ * default while still comfortably covering them. Pre-existing value, unchanged
+ * (generalized from C1-only to both reap tests by #4601).
  */
-const RUN_WITH_TIMEOUT_C1_REAP_BACKSTOP_MS = 20000;
+const RUN_WITH_TIMEOUT_REAP_BACKSTOP_MS = 20000;
 
 const ROOT = path.join(__dirname, '..');
 const GSD_TOOLS = path.join(ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
@@ -200,7 +201,7 @@ describe('#2351 run-with-timeout — kill semantics (POSIX process groups)', () 
       'process.on("SIGTERM", () => process.exit(0));',
       'setInterval(() => {}, 1000);',
     ].join('\n'));
-    const r = runVerb(['3', '--', NODE, parentFile, hbFile], { timeout: RUN_WITH_TIMEOUT_C1_REAP_BACKSTOP_MS });
+    const r = runVerb(['3', '--', NODE, parentFile, hbFile], { timeout: RUN_WITH_TIMEOUT_REAP_BACKSTOP_MS });
     assert.equal(r.status, 124, 'must report a timeout (124), not hang');
     assert.ok(fs.existsSync(hbFile), 'child heartbeat should exist');
     await sleep(300); // let any in-flight write settle after the SIGKILL
@@ -213,6 +214,52 @@ describe('#2351 run-with-timeout — kill semantics (POSIX process groups)', () 
   test('a command killed by a signal exits 128+signum (bash convention)', { skip: !posix }, () => {
     const r = runVerb(['10', '--', 'bash', '-c', 'kill -TERM $$']);
     assert.equal(r.status, 143, 'self-SIGTERM (15) → 128+15 = 143');
+  });
+});
+
+describe('#4601 run-with-timeout — tree reap (Windows has no process groups)', () => {
+  // The #4601 defect: on Windows `detached` is always false, so killTree fell
+  // through to a bare child.kill(), which terminates the DIRECT child only —
+  // any process the child launched survived the timeout and kept running
+  // (typically a model CLI wrapped via workflow.cross_ai_command, calling a
+  // paid API with nothing bounding it). The fix tree-kills via
+  // `taskkill /PID <pid> /T /F` at the SIGKILL stage (the timeout exit path
+  // and the escalation backstop), which reaches the descendants the way the
+  // POSIX group kill does. Methodology mirrors the C1 test above: HEARTBEAT
+  // liveness, not kill(pid,0); first sample written synchronously at startup;
+  // bounded settle waits >> the 100ms tick.
+  const isWin = process.platform === 'win32';
+
+  test("a timed-out command's descendant stops ticking — the tree dies, not just the direct child", { skip: !isWin ? 'win32-only' : false }, async (t) => {
+    const dir = createTempDir('rwt-4601-tree');
+    t.after(() => cleanup(dir));
+    const parentFile = path.join(dir, 'parent.js');
+    const hbFile = path.join(dir, 'heartbeat');
+    fs.writeFileSync(parentFile, [
+      'const cp = require("child_process");',
+      "const childCode = 'const fs=require(\"fs\");const hb=process.argv[1];const tick=()=>fs.writeFileSync(hb,String(Date.now()));tick();setInterval(tick,100);';",
+      'cp.spawn(process.execPath, ["-e", childCode, process.argv[2]], { stdio: "ignore" });',
+      // The parent does NOT trap or exit on SIGTERM: on Windows the graceful
+      // stage is TerminateProcess on the direct child either way — what #4601
+      // tests is that the DESCENDANT (which no direct kill can reach) is gone.
+      'setInterval(() => {}, 1000);',
+    ].join('\n'));
+    const r = runVerb(['2', '--', NODE, parentFile, hbFile], { timeout: RUN_WITH_TIMEOUT_REAP_BACKSTOP_MS });
+    assert.equal(r.status, 124, 'must report a timeout (124), not hang');
+    assert.ok(fs.existsSync(hbFile), 'descendant heartbeat should exist');
+    await sleep(300); // let any in-flight write settle after the tree kill
+    const first = fs.readFileSync(hbFile, 'utf8');
+    await sleep(600); // >> the 100ms heartbeat interval
+    const second = fs.readFileSync(hbFile, 'utf8');
+    assert.equal(second, first, 'descendant must be tree-killed (heartbeat frozen), not orphaned and still ticking');
+  });
+
+  test('a fast-exiting command still exits with its own code — the tree kill never weakens the normal path', { skip: !isWin ? 'win32-only' : false }, () => {
+    // Guards the fall-through: on every fast-exit run the timeout exit path's
+    // tree kill races an already-exited process (taskkill reports non-zero),
+    // and the verb must still resolve the child's own exit code.
+    const r = runVerb(['5', '--', NODE, '-e', 'process.exit(7)']);
+    assert.equal(r.status, 7);
   });
 });
 
