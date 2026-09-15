@@ -23,6 +23,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { evaluateUatPassed } = require('../gsd-core/bin/lib/uat-predicate.cjs');
+const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 const { cleanup, createTempDir } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
@@ -94,7 +95,7 @@ describe('verify-work deferred follow-up promotion (#4546)', () => {
     for (const marker of nextShapeMarkers) {
       assert.ok(nextBlock.includes(marker),
         `next.md prior_phase_completeness entry shape must contain ${marker} (fixture sanity)`);
-      assert.match(block, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+      assert.match(block, new RegExp(escapeRegex(marker)),
         `complete_session promotion entry must reuse the next.md shape marker: ${marker}`);
     }
 
