@@ -99,6 +99,13 @@ const PASSING_RESULTS = new Set(['passed', 'pass']);
 // (process_response) are two halves of one contract, pinned together by
 // tests/verify-work-deferred-promotion.test.cjs.
 const DEFERRED_REASON_RE = /^["']?deferred follow-up\b/i;
+// Trust note (#4546 review): the reason line is user-authored state — an
+// author could equally write `result: passed` — so this prefix is an
+// AUTHORING contract with the verify-work writer, not a security boundary.
+// A hand-written deferral that skips the UAT file's ## Deferred Follow-Ups
+// section also bypasses the complete_session promotion offer; the section is
+// the durable project-level record. Variant spellings that do not match
+// ("Deferred follow-ups:", "followup") block — fail-closed by design.
 
 // ─── stripFalsePositiveContexts ───────────────────────────────────────────────
 

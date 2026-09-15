@@ -558,15 +558,15 @@ Choice [K]:
 (TEXT_MODE: present this as a plain-text numbered list per the text-mode convention and wait for the typed choice.)
 
 **If the user chooses [P]:**
-1. Compute the next backlog number: `N` = 1 + the count of existing `### Phase 999.` headings in `.planning/ROADMAP.md`.
-2. Append to `ROADMAP.md` under `## Backlog` (create the section if absent), one `- [ ]` line per entry in the `## Deferred Follow-Ups` section with `test`/`idea`/`deferred_at` verbatim from its YAML:
+1. Compute the next backlog number: `{backlog_number}` = the smallest positive integer not already used by an existing `### Phase 999.{n}` heading in `.planning/ROADMAP.md` — scan the headings rather than counting them, since numbering may be non-contiguous. If `.planning/ROADMAP.md` does not exist, create it containing only a `## Backlog` section and use `1`.
+2. Append to that `## Backlog` section one backlog entry per deferred follow-up (each with its own `999.{backlog_number}` heading, incrementing per entry), with `test`/`idea`/`deferred_at` verbatim from the section's YAML and `{idea}` flattened to a single line (newlines → spaces — a multi-line response would corrupt the single-line entry; this mirrors `next.md`'s use of a slug for the same reason):
 
 ```markdown
-### Phase 999.{N}: Follow-up — Phase {phase_num} deferred UAT follow-ups (BACKLOG)
+### Phase 999.{backlog_number}: Follow-up — Phase {phase_num} deferred UAT follow-up: Test {test} (BACKLOG)
 
-**Goal:** Resolve UAT checkpoints deferred during Phase {phase_num} verification
+**Goal:** Resolve the UAT checkpoint deferred during Phase {phase_num} verification
 **Source phase:** {phase_num}
-**Deferred at:** {today} during /gsd:verify-work {phase} session completion
+**Deferred at:** {date} during /gsd:verify-work {phase} session completion
 **Follow-ups:**
 - [ ] Test {test}: {idea} (deferred {deferred_at})
 ```

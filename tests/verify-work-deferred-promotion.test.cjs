@@ -16,19 +16,14 @@
  * workflow, placeholder substituted) through the real predicate — if either
  * surface changes its half of the contract, this fails.
  *
- * allow-test-rule: source-text-is-the-product (#4546)
- * verify-work.md is runtime-loaded text — the workflow IS its markdown — so
- * asserting on the shipped complete_session text tests the deployed contract.
- */
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
 
 const { evaluateUatPassed } = require('../gsd-core/bin/lib/uat-predicate.cjs');
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, createTempDir } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const VERIFY_WORK_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'verify-work.md');
@@ -60,21 +55,21 @@ describe('verify-work deferred follow-up promotion (#4546)', () => {
 
     // Drive the writer's own template text through the real predicate: a UAT
     // file whose only non-passing item carries this reason must pass.
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4546-parity-'));
-    try {
-      const content = [
-        '---', 'status: complete', '---', '',
-        '### 1. Test A', 'expected: A', 'result: passed', '',
-        '### 2. Test B', 'expected: B', 'result: skipped',
-        `reason: "${sampleReason}"`, '',
-      ].join('\n');
-      fs.writeFileSync(path.join(tmpDir, 'phase-UAT.md'), content, 'utf8');
-      const report = evaluateUatPassed(tmpDir);
-      assert.strictEqual(report.passed, true,
-        `the writer's own deferred template text must be non-blocking to the reader: ${JSON.stringify(report.blockers)}`);
-    } finally {
-      cleanup(tmpDir);
-    }
+    // allow-test-rule: source-text-is-the-product (#4546) — the readFileSync
+    // in readWorkflow above is this marker's other suppression site: the
+    // workflow text is the deployed contract.
+    const tmpDir = createTempDir('gsd-4546-parity-');
+    const content = [
+      '---', 'status: complete', '---', '',
+      '### 1. Test A', 'expected: A', 'result: passed', '',
+      '### 2. Test B', 'expected: B', 'result: skipped',
+      `reason: "${sampleReason}"`, '',
+    ].join('\n');
+    fs.writeFileSync(path.join(tmpDir, 'phase-UAT.md'), content, 'utf8');
+    const report = evaluateUatPassed(tmpDir);
+    assert.strictEqual(report.passed, true,
+      `the writer's own deferred template text must be non-blocking to the reader: ${JSON.stringify(report.blockers)}`);
+    cleanup(tmpDir);
   });
 
   test('complete_session offers 999.x promotion of deferred follow-ups (#4546)', () => {
@@ -85,9 +80,12 @@ describe('verify-work deferred follow-up promotion (#4546)', () => {
     assert.match(block, /Deferred Follow-Ups/,
       'complete_session must consult the Deferred Follow-Ups section');
 
-    // An OFFER (not silent auto-mutation): the user chooses whether to promote.
-    assert.match(block, /\[P\]|\[K\]|AskUserQuestion|offer/i,
-      'complete_session must offer the promotion choice to the user');
+    // An OFFER (not silent auto-mutation): the literal [P]/[K] choice pair
+    // must exist — a bare prose 'offer' would satisfy nothing testable.
+    assert.match(block, /\[P\] Promote to ROADMAP\.md 999\.x backlog/,
+      'complete_session must present the [P] promote choice');
+    assert.match(block, /\[K\] Keep them in the UAT file only/,
+      'complete_session must present the [K] keep choice');
 
     // The promoted entry reuses next.md's exact mechanism shape.
     const nextWork = readWorkflow(NEXT_PATH);
