@@ -223,6 +223,25 @@ describe('#4499: markdown normalization preserves leading YAML frontmatter', () 
     }
   });
 
+  test('a closed region parsing to a bare YAML scalar stays ordinary Markdown', () => {
+    const input = '---\njust a sentence\n---\nLead paragraph.\n- body item\n';
+    const { content } = normalizeContent(MD, input);
+    assert.ok(
+      content.includes('Lead paragraph.\n\n- body item'),
+      'a scalar is not a mapping, so the document keeps ordinary Markdown normalization'
+    );
+  });
+
+  test('a top-level YAML sequence region stays ordinary Markdown — a deliberate boundary', () => {
+    // Frontmatter in this repo is always a mapping, so a leading region that is
+    // itself a sequence is classified as body content and keeps its spacing
+    // rules. Pinned so the `!Array.isArray` guard reads as a decision rather
+    // than an accident if the classifier is refactored.
+    const input = '---\n- alpha\n- beta\n---\nLead paragraph.\n- body item\n';
+    const { content } = normalizeContent(MD, input);
+    assert.ok(content.includes('Lead paragraph.\n\n- body item'));
+  });
+
   test('property: normalization preserves every generated frontmatter mapping byte-for-byte', () => {
     const scalar = fc.stringMatching(/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,30}$/);
     fc.assert(fc.property(fc.array(scalar, { maxLength: 12 }), (items) => {

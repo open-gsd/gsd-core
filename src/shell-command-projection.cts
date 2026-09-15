@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import childProcess from 'node:child_process';
 import { escapeRegex } from './pattern.cjs';
 import { load as yamlLoad, FAILSAFE_SCHEMA } from './vendor/js-yaml.cjs';
+import { refuseAnchorsListener } from './yaml-anchor-guard.cjs';
 
 /**
  * Convert a filesystem path to POSIX form (forward slashes) by translating the
@@ -1148,13 +1149,10 @@ function _normalizeMd(content: string): string {
     // expansion can allocate an attacker-controlled object graph (ADR-3473).
     if (closingDelimiter !== -1) {
       try {
-        class AnchorDetectedSignal extends Error {}
         const parsed = yamlLoad(lines.slice(1, closingDelimiter).join('\n'), {
           schema: FAILSAFE_SCHEMA,
           json: true,
-          listener: (_event: string, state: { anchor?: string | null }) => {
-            if (state.anchor !== null && state.anchor !== undefined) throw new AnchorDetectedSignal();
-          },
+          listener: refuseAnchorsListener,
         });
         // Empty/comment-only YAML is legitimate empty frontmatter. Its lines
         // have no list to rewrite today, but preserving the region keeps the
