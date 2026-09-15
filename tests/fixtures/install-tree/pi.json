@@ -240,6 +240,7 @@
   "gsd-core/workflows/eval-review.md",
   "gsd-core/workflows/execute-phase.md",
   "gsd-core/workflows/execute-phase/detail/elaboration.md",
+  "gsd-core/workflows/execute-phase/steps/code-review-disposition.md",
   "gsd-core/workflows/execute-phase/steps/codebase-drift-gate.md",
   "gsd-core/workflows/execute-phase/steps/completion-reconciliation.md",
   "gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md",
