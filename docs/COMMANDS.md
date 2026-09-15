@@ -1033,7 +1033,7 @@ Run all remaining phases autonomously.
 | `--to N` | Stop after completing a specific phase number |
 | `--only N` | Restrict execution to phase N; lifecycle step is skipped |
 | `--interactive` | Lean context with user input |
-| `--converge` | Route each planning step through `/gsd-plan-review-convergence`; requires `workflow.plan_review_convergence=true` |
+| `--converge` | Route each planning step through `/gsd-plan-review-convergence`; explicitly passed, it overrides `workflow.plan_review_convergence=false` for the run — without the flag the config decides |
 | `--cross-ai` | Alias for `--converge` |
 | Reviewer flags | With `--converge`, pass through every reviewer lane flag: `--claude`, `--codex`, `--coderabbit`, `--opencode`, `--qwen`, `--cursor`, `--agy` / `--antigravity`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--kimi-code`, `--all`, and `--max-cycles N` |
 | `--text` | Replace `AskUserQuestion` prompts with plain numbered lists |
