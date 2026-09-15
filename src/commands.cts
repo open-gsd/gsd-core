@@ -348,6 +348,11 @@ function cmdListTodos(cwd: string, area: string | undefined, raw: boolean): void
  * `.planning/quick/` uses) is what plant-seed has minted since #4378 removed
  * the shared `wc -l` counter; `SEED-NNN` is the legacy counter form, which
  * keeps parsing forever — existing seeds must never lose their identity.
+ *
+ * Known (theoretical, documented-not-fixed per #4378 review): a frontmatter-less
+ * legacy file whose counter is exactly 6 digits and whose slug opens with
+ * exactly 3 base36 chars parses as new-format. Requires a counter >= 100000 AND
+ * a missing frontmatter id; with frontmatter the legacy id always wins.
  */
 const CANONICAL_SEED_ID_RE = /^SEED-(?:\d{6}-[a-z0-9]{3}|\d+)$/i;
 const SEED_ID_PREFIX_RE = /^(SEED-(?:\d{6}-[a-z0-9]{3}|\d+))/i;
