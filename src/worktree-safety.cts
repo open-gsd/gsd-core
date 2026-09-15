@@ -19,6 +19,18 @@ import { isContainedIn } from './security.cjs';
 // remote, stalled NFS mount, etc.).  Callers can override via deps.timeout.
 const DEFAULT_GIT_TIMEOUT_MS = 10000;
 
+// #4721: the wave's `git merge --no-ff` is the one call in this module that runs
+// the commit-family hooks (`pre-merge-commit`, `prepare-commit-msg`,
+// `commit-msg`, `post-merge`), and a repo whose pre-merge hook is a test-suite
+// gate routinely runs for minutes. That is hook runtime, not "git stalling", so
+// the merge gets its own budget instead of inheriting DEFAULT_GIT_TIMEOUT_MS —
+// raising the shared default would be the wrong lever, because every other
+// caller in the module is exactly what the 10 s comment above describes.
+// (`worktree add` runs `post-checkout` and every ref update runs
+// `reference-transaction`; those are plumbing-cheap and stay on the default.)
+// Callers override via deps.mergeTimeoutMs.
+const DEFAULT_MERGE_TIMEOUT_MS = 10 * 60 * 1000;
+
 // #3021: accept the Workflow tool's worktree-wf_<runid>-<n> naming convention
 // (claude-orchestration's isolation:"worktree" emission) alongside the
 // existing agent-<id> / worktree-agent-<id> shapes.
@@ -103,6 +115,12 @@ interface WorktreeDeps {
   /** Injected current time in ms since epoch for deterministic tests (#1191). */
   nowMs?: number;
   parseWorktreePorcelain?: (porcelain: string) => WorktreeBranchEntry[];
+  /**
+   * #4721: budget for the wave's `git merge --no-ff` — the one call that runs
+   * the commit-family hooks. Defaults to DEFAULT_MERGE_TIMEOUT_MS; every other
+   * git call in the wave keeps the module default.
+   */
+  mergeTimeoutMs?: number;
 }
 
 function readWorktreeList(repoRoot: string, deps: WorktreeDeps = {}): WorktreeListResult {
@@ -645,6 +663,102 @@ function repoRootStillMidMerge(execGit: ExecGitFn, repoRoot: string): boolean {
   return true; // any other exit code (e.g. a fatal git error) — fail closed
 }
 
+/**
+ * #4721: after a merge that was KILLED — at its budget or by a signal — and
+ * did not leave MERGE_HEAD behind, undo whatever it staged in repoRoot's index
+ * and re-apply any work it had autostashed. (A kill that lands once MERGE_HEAD
+ * exists — inside `commit-msg`, say — is the ordinary #2852 path: `git merge
+ * --abort` restores the tree and re-applies an autostash itself, unstaged, as
+ * it does for any aborted autostashed merge.)
+ *
+ * Why the staged set is attributable to the merge — on this path only: `git
+ * merge` refuses to start when the index already differs from HEAD ("your
+ * local changes … would be overwritten", even for paths the branch never
+ * touches), and a refusal is an immediate exit with a code, never a kill. The
+ * one way for a KILLED merge to leave a dirty index with no MERGE_HEAD is a
+ * kill between populating the index and writing MERGE_HEAD — i.e. during a
+ * merge hook. The exception is `merge.autoStash`: git then parks the pre-existing
+ * work in MERGE_AUTOSTASH and starts anyway, and a killed merge never
+ * re-applies it. Handled below; it is why the reset runs even on a clean
+ * index.
+ *
+ * `git reset --merge` (no commit → HEAD) is the restore: it resets the index
+ * to HEAD and updates the worktree only for the paths the index changed,
+ * keeping unrelated unstaged edits intact, and it refuses rather than clobbers
+ * when an unstaged edit overlaps a staged path. It also moves a pending
+ * MERGE_AUTOSTASH into the stash list ("Autostash exists; creating a new stash
+ * entry"), which `git stash pop --index` then re-applies — the same outcome
+ * `git merge --abort` gives an autostashed merge that could be aborted.
+ *
+ * Returns `halt: true` only when repoRoot is still (or unverifiably) dirty —
+ * the same repo-level carve-out `repoRootStillMidMerge` uses, and for the same
+ * reason: every remaining entry's merge would run against a dirty index.
+ */
+function restoreMergeResidue(
+  execGit: ExecGitFn,
+  repoRoot: string,
+  branch: string,
+): { halt: boolean; warnings: WaveCleanupWarning[] } {
+  const stagedPaths = (raw: string): string[] => raw
+    .split('\n')
+    .map((line) => decodeGitQuotedPath(line.trim()))
+    .filter((p) => p.length > 0);
+  const leftStaged = (paths: Array<string | null>): { halt: boolean; warnings: WaveCleanupWarning[] } => ({
+    halt: true,
+    warnings: paths.map((p) => ({ code: WAVE_CLEANUP_WARNING.MERGE_RESIDUE_LEFT_STAGED, branch, path: p })),
+  });
+
+  const staged = execGit(['diff', '--cached', '--name-only'], { cwd: repoRoot });
+  if (!gitResultOk(staged)) {
+    // Cannot tell whether the index is dirty — fail closed, same as an
+    // unverifiable MERGE_HEAD check. A null path marks "the check itself could
+    // not run", the convention SCOPE_CHECK_UNAVAILABLE already uses.
+    return leftStaged([null]);
+  }
+  const before = stagedPaths(staged.stdout || '');
+
+  // Exit 0 = git parked pre-existing work here before starting the merge;
+  // exit 1 = no autostash. Anything else is unknown: do not pop blind, but do
+  // say so — the reset below will have moved any stash into the list unread.
+  const autostash = execGit(['rev-parse', '--verify', '-q', 'MERGE_AUTOSTASH'], { cwd: repoRoot });
+  const hadAutostash = !autostash.timedOut && autostash.exitCode === 0;
+  const autostashUnknown = !!autostash.timedOut || (autostash.exitCode !== 0 && autostash.exitCode !== 1);
+  if (before.length === 0 && !hadAutostash && !autostashUnknown) return { halt: false, warnings: [] };
+
+  const reset = execGit(['reset', '--merge'], { cwd: repoRoot });
+  const recheck = gitResultOk(reset) ? execGit(['diff', '--cached', '--name-only'], { cwd: repoRoot }) : null;
+  if (!recheck || !gitResultOk(recheck)) {
+    // The reset failed, or its result could not be re-read: report the set we
+    // know was staged, and halt.
+    return leftStaged(before.length > 0 ? before : [null]);
+  }
+  const after = stagedPaths(recheck.stdout || '');
+  if (after.length > 0) return leftStaged(after);
+
+  const warnings: WaveCleanupWarning[] = before.map((p) => ({ code: WAVE_CLEANUP_WARNING.MERGE_RESIDUE_RESTORED, branch, path: p }));
+  if (hadAutostash) {
+    const pop = execGit(['stash', 'pop', '--index'], { cwd: repoRoot });
+    if (!gitResultOk(pop)) {
+      warnings.push({ code: WAVE_CLEANUP_WARNING.MERGE_AUTOSTASH_UNRESTORED, branch, path: null });
+      // A failed pop keeps the stash entry, but it can leave conflict entries
+      // (`UU`) and partially applied paths behind it — and the next merge then
+      // fails with "you have unmerged files" (caught in review). Re-read rather
+      // than assume: a dirty index here halts exactly as an unrestorable
+      // residue does.
+      const afterPop = execGit(['diff', '--cached', '--name-only'], { cwd: repoRoot });
+      if (!gitResultOk(afterPop)) return { halt: true, warnings: [...warnings, ...leftStaged([null]).warnings] };
+      const dirty = stagedPaths(afterPop.stdout || '');
+      if (dirty.length > 0) return { halt: true, warnings: [...warnings, ...leftStaged(dirty).warnings] };
+    }
+  } else if (autostashUnknown) {
+    warnings.push({ code: WAVE_CLEANUP_WARNING.MERGE_AUTOSTASH_UNRESTORED, branch, path: null });
+  }
+  // Not a halt: the index is verified clean, or holds only the operator's own
+  // re-applied work (a successful `--index` pop), which the next merge
+  // autostashes again under the same config.
+  return { halt: false, warnings };
+}
+
 // #2596: the single definition of "this file is an executor-written SUMMARY
 // artifact". Shared by `defaultFindSummaryFiles` (which walks for them to
 // rescue) and the scope advisory below (which must never flag them) — a plan's
@@ -887,6 +1001,29 @@ const WAVE_CLEANUP_WARNING = Object.freeze({
   SCOPE_OUT_OF_DECLARED: 'scope_out_of_declared',
   /** The scope diff could not be computed, so conformance is unknown. */
   SCOPE_CHECK_UNAVAILABLE: 'scope_check_unavailable',
+  /**
+   * #4721: a killed merge (at its budget, or by a signal) left this path
+   * staged in repoRoot's index with no MERGE_HEAD, and `git reset --merge`
+   * restored it to HEAD. Informational — repoRoot is clean again.
+   */
+  MERGE_RESIDUE_RESTORED: 'merge_residue_restored',
+  /**
+   * #4721: a killed merge left this path staged in repoRoot's index with no
+   * MERGE_HEAD and it could NOT be restored (null path: the index could not
+   * be read at all) — or a failed autostash pop left it unmerged. repoRoot is
+   * dirty; committing from it would squash the executor's history into one
+   * parent. The wave halts.
+   */
+  MERGE_RESIDUE_LEFT_STAGED: 'merge_residue_left_staged',
+  /**
+   * #4721: the killed merge had parked pre-existing work in MERGE_AUTOSTASH
+   * (`merge.autoStash`), and re-applying it failed or could not be verified.
+   * The work is in the stash list, not lost. Path is always null. On its own
+   * the index is clean and the wave continues; when a failed pop left
+   * unmerged entries it is accompanied by MERGE_RESIDUE_LEFT_STAGED rows and
+   * the wave halts.
+   */
+  MERGE_AUTOSTASH_UNRESTORED: 'merge_autostash_unrestored',
 });
 
 interface WaveCleanupWarning {
@@ -1160,9 +1297,30 @@ function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: Work
       continue; // #2852: isolate
     }
 
-    const merge = execGit(['merge', entry.branch, '--no-ff', '--no-edit', '-m', `chore: merge executor worktree (${entry.branch})`], { cwd: plan.repoRoot });
+    // #4721: the merge runs user hooks, so it carries its own budget — see
+    // DEFAULT_MERGE_TIMEOUT_MS. Every other call in this gauntlet keeps the
+    // module default.
+    const mergeTimeoutMs = deps.mergeTimeoutMs ?? DEFAULT_MERGE_TIMEOUT_MS;
+    const merge = execGit(
+      ['merge', entry.branch, '--no-ff', '--no-edit', '-m', `chore: merge executor worktree (${entry.branch})`],
+      { cwd: plan.repoRoot, timeout: mergeTimeoutMs },
+    );
     if (!gitResultOk(merge)) {
-      blockEntry(result, 'merge_failed', merge?.stderr || merge?.stdout || '');
+      if (merge?.timedOut) {
+        // #4721: say "timeout" when it was one. The captured output is whatever
+        // the hook printed before git was killed, which read as a git error under
+        // the old `merge_failed` label and made a healthy executor branch look
+        // broken. The hook itself is a child of the killed git process and may
+        // still be running.
+        const partial = (merge.stderr || merge.stdout || '').trim();
+        blockEntry(
+          result,
+          'merge_timed_out',
+          `git merge did not finish within ${mergeTimeoutMs} ms and was killed (a merge hook such as pre-merge-commit may still be running; raise deps.mergeTimeoutMs or shorten the hook)${partial ? `; output before the kill: ${partial}` : ''}`,
+        );
+      } else {
+        blockEntry(result, 'merge_failed', merge?.stderr || merge?.stdout || '');
+      }
       // #2852: a failed --no-ff merge MIGHT leave repoRoot itself mid-merge
       // (MERGE_HEAD set, conflict markers in the tree) — unlike every other block
       // reason above, that specific state is NOT scoped to this one entry: a second
@@ -1180,6 +1338,37 @@ function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: Work
       if (repoRootStillMidMerge(execGit, plan.repoRoot)) {
         pending.push(...entries.slice(i + 1));
         break;
+      }
+      // #4721: "no MERGE_HEAD" is not "tree never touched". A merge killed while
+      // its pre-merge-commit hook ran has already written the merged tree into
+      // repoRoot's index (and set ORIG_HEAD) but never got to write MERGE_HEAD,
+      // so the #2852 check above reads it as clean while the executor's whole
+      // diff sits staged against the old HEAD. `git merge --abort` cannot see
+      // that state either. Left alone, the next `git merge` in this wave would
+      // refuse ("your local changes would be overwritten") or, worse, an
+      // orchestrator that trusts the block reason and commits from repoRoot
+      // squashes the executor's history into one parent. Restore it; if that
+      // cannot be verified, halt the wave exactly as the mid-merge case does.
+      //
+      // ONLY when git was KILLED — at its budget, or by a signal from outside.
+      // A merge git REFUSED (no MERGE_HEAD either) leaves the index exactly as
+      // it found it — and "your local changes would be overwritten" is precisely
+      // the refusal a pre-existing dirty index earns, so on that path anything
+      // staged is the operator's own work and must not be touched (caught in
+      // review). A kill is the one shape that stages a tree git never finished
+      // with, and an external SIGTERM produces the same state as the timeout
+      // without `timedOut` (caught in review too). The seam normalizes a
+      // signal death to exitCode 1 and carries the signal alongside, so the
+      // signal — never the exit code — is the tell; a refused merge has none.
+      const mergeKilled = !!merge?.timedOut || !!merge?.signal;
+      if (mergeKilled) {
+        const residue = restoreMergeResidue(execGit, plan.repoRoot, entry.branch);
+        result.warnings.push(...residue.warnings);
+        allWarnings.push(...residue.warnings);
+        if (residue.halt) {
+          pending.push(...entries.slice(i + 1));
+          break;
+        }
       }
       continue; // #2852: isolate — repoRoot is not (or no longer) mid-merge
     }
@@ -2328,6 +2517,7 @@ export = {
   planWorktreeWaveCleanup,
   executeWorktreeWaveCleanupPlan,
   WAVE_CLEANUP_WARNING,
+  DEFAULT_MERGE_TIMEOUT_MS,
   planWaveScopeConformance,
   isSummaryArtifactRelPath,
   cmdWorktreeCleanupWave,
