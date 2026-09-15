@@ -223,11 +223,14 @@ describe('#4601 run-with-timeout — tree reap (Windows has no process groups)',
   // any process the child launched survived the timeout and kept running
   // (typically a model CLI wrapped via workflow.cross_ai_command, calling a
   // paid API with nothing bounding it). The fix tree-kills via
-  // `taskkill /PID <pid> /T /F` at the SIGKILL stage (the timeout exit path
-  // and the escalation backstop), which reaches the descendants the way the
-  // POSIX group kill does. Methodology mirrors the C1 test above: HEARTBEAT
-  // liveness, not kill(pid,0); first sample written synchronously at startup;
-  // bounded settle waits >> the 100ms tick.
+  // `taskkill /PID <pid> /T /F` on the FIRST kill attempt — it must run while
+  // the root is alive, because child.kill on Windows is TerminateProcess and
+  // the moment the direct child exits its descendants are orphaned and no
+  // taskkill can reach them (the issue's graceful-then-forceful staging prose
+  // is unsatisfiable there; its own snippet applies taskkill on every call).
+  // Methodology mirrors the C1 test above: HEARTBEAT liveness, not
+  // kill(pid,0); first sample written synchronously at startup; bounded
+  // settle waits >> the 100ms tick.
   const isWin = process.platform === 'win32';
 
   test("a timed-out command's descendant stops ticking — the tree dies, not just the direct child", { skip: !isWin ? 'win32-only' : false }, async (t) => {
@@ -254,12 +257,36 @@ describe('#4601 run-with-timeout — tree reap (Windows has no process groups)',
     assert.equal(second, first, 'descendant must be tree-killed (heartbeat frozen), not orphaned and still ticking');
   });
 
-  test('a fast-exiting command still exits with its own code — the tree kill never weakens the normal path', { skip: !isWin ? 'win32-only' : false }, () => {
-    // Guards the fall-through: on every fast-exit run the timeout exit path's
-    // tree kill races an already-exited process (taskkill reports non-zero),
-    // and the verb must still resolve the child's own exit code.
+  test('a fast-exiting command still exits with its own code — the win32 branch never perturbs the normal path', { skip: !isWin ? 'win32-only' : false }, () => {
+    // Negative-space guard: for a fast command no timer fires and killTree is
+    // never invoked — the taskkill branch must only ever attach to the
+    // timeout/escalation force stage, never to the timerless normal path.
     const r = runVerb(['5', '--', NODE, '-e', 'process.exit(7)']);
     assert.equal(r.status, 7);
+  });
+
+  test('a timed-out .cmd-mediated command has its whole subtree reaped (the model-CLI shape)', { skip: !isWin ? 'win32-only' : false }, async (t) => {
+    // The #2667 mediation makes cmd.exe the direct child, so the real command
+    // is a GRANDCHILD even with no further nesting — this is the shape of
+    // workflow.cross_ai_command wrapping a model CLI .cmd shim (the paid-orphan
+    // case from the issue). taskkill /T from the cmd.exe pid must reach it.
+    const dir = createTempDir('rwt-4601-cmd');
+    t.after(() => cleanup(dir));
+    const shim = path.join(dir, 'slow.cmd');
+    const hbFile = path.join(dir, 'heartbeat');
+    fs.writeFileSync(shim, [
+      '@echo off',
+      `start "" /b "${NODE}" -e "const fs=require('fs');const hb=process.argv[1];const tick=()=>fs.writeFileSync(hb,String(Date.now()));tick();setInterval(tick,100);" "${hbFile}"`,
+      'pause',
+    ].join('\r\n'), 'utf8');
+    const r = runVerb(['2', '--', shim], { timeout: RUN_WITH_TIMEOUT_REAP_BACKSTOP_MS });
+    assert.equal(r.status, 124, 'the mediated .cmd must time out (124), not hang');
+    assert.ok(fs.existsSync(hbFile), 'grandchild heartbeat should exist');
+    await sleep(300); // let any in-flight write settle after the tree kill
+    const first = fs.readFileSync(hbFile, 'utf8');
+    await sleep(600); // >> the 100ms heartbeat interval
+    const second = fs.readFileSync(hbFile, 'utf8');
+    assert.equal(second, first, 'the .cmd grandchild must be tree-killed (heartbeat frozen), not orphaned and still ticking');
   });
 });
 
