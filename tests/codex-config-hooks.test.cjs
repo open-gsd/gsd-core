@@ -3632,8 +3632,7 @@ describe('#3427 + #3433 — Codex installer avoids duplicate skills and mixed ho
 {
   const { test, describe, beforeEach, afterEach } = require('node:test');
   const assert = require('node:assert/strict');
-  const os = require('os');
-  const { cleanup } = require('./helpers.cjs');
+  const { cleanup, createTempDir } = require('./helpers.cjs');
   const { install: installFor4544 } = require('../bin/install.js');
   const installModule = require('../bin/install.js');
 
@@ -3666,7 +3665,7 @@ describe('#3427 + #3433 — Codex installer avoids duplicate skills and mixed ho
   let codexHome;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4544-rollback-'));
+    tmpDir = createTempDir('gsd-4544-rollback-');
     codexHome = path.join(tmpDir, 'codex-home');
   });
 
@@ -3694,9 +3693,14 @@ describe('#3427 + #3433 — Codex installer avoids duplicate skills and mixed ho
   }
 
   function runFailingInstall() {
-    let threw = false;
-    try { runCodexInstall(codexHome); } catch (_) { threw = true; }
-    assert.strictEqual(threw, true, 'install must throw when validation fails');
+    let err = null;
+    try { runCodexInstall(codexHome); } catch (e) { err = e; }
+    assert.ok(err, 'install must throw when validation fails');
+    assert.match(
+      String(err && err.message),
+      /post-write Codex schema validation failed/,
+      'the throw must be the injected validation failure, not an unrelated error'
+    );
   }
 
   test('restores prior-manifest files the failed install overwrote (#4544 must-have)', () => {
@@ -3823,13 +3827,11 @@ describe('#3427 + #3433 — Codex installer avoids duplicate skills and mixed ho
       false,
       'no prior manifest existed, so the manifest the failed install wrote must be gone'
     );
-    if (fs.existsSync(path.join(codexHome, 'hooks'))) {
-      assert.deepStrictEqual(
-        fs.readdirSync(path.join(codexHome, 'hooks')),
-        [],
-        'hooks/ must not keep failed-install payload on a clean first install'
-      );
-    }
+    assert.strictEqual(
+      fs.existsSync(path.join(codexHome, 'hooks')),
+      false,
+      'hooks/ must not exist at all after a clean-first-install rollback (nothing pre-existed)'
+    );
   });
 
   test('a malformed prior manifest degrades gracefully', () => {
@@ -3883,9 +3885,59 @@ describe('#3427 + #3433 — Codex installer avoids duplicate skills and mixed ho
 
     assert.strictEqual(fs.existsSync(path.join(codexHome, 'gsd-file-manifest.json')), false,
       'an empty home must still be empty after rollback');
-    if (fs.existsSync(path.join(codexHome, 'hooks'))) {
-      assert.deepStrictEqual(fs.readdirSync(path.join(codexHome, 'hooks')), []);
+    assert.strictEqual(fs.existsSync(path.join(codexHome, 'hooks')), false,
+      'an empty home must have no hooks/ residue after rollback');
+  });
+
+  test('minimal-mode rollback never touches a pre-existing hooks/ tree (capture gate)', () => {
+    // BLOCKER regression (#4544 review): the capture gate is off in minimal
+    // mode, and the restore must treat "no snapshot" as "do nothing" — never
+    // as "hooks/ was absent". Seeds the profile marker so the in-process
+    // install runs minimal without a validator-unreachable subprocess.
+    fs.mkdirSync(path.join(codexHome, 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(codexHome, 'hooks', 'gsd-check-update.js'), 'SENTINEL-OLD-HOOK', 'utf8');
+    fs.writeFileSync(path.join(codexHome, 'hooks', 'user-backup.js'), 'PRECIOUS-USER-DATA', 'utf8');
+    fs.writeFileSync(path.join(codexHome, '.gsd-profile'), 'core', 'utf8');
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(
+      fs.readFileSync(path.join(codexHome, 'hooks', 'gsd-check-update.js'), 'utf8'),
+      'SENTINEL-OLD-HOOK',
+      'minimal-mode rollback must preserve the pre-existing hook file'
+    );
+    assert.strictEqual(
+      fs.readFileSync(path.join(codexHome, 'hooks', 'user-backup.js'), 'utf8'),
+      'PRECIOUS-USER-DATA',
+      'minimal-mode rollback must preserve user files under hooks/ (empty snapshot means do nothing)'
+    );
+  });
+
+  test('a symlink under hooks/ is neither followed nor restored', (t) => {
+    const canaryDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'gsd-4544-canary-'));
+    t.after(() => cleanup(canaryDir));
+    const canary = path.join(canaryDir, 'secret.txt');
+    fs.writeFileSync(canary, 'DO-NOT-READ', 'utf8');
+
+    fs.mkdirSync(path.join(codexHome, 'hooks'), { recursive: true });
+    const linkPath = path.join(codexHome, 'hooks', 'evil-link');
+    try {
+      fs.symlinkSync(canary, linkPath);
+    } catch (_) {
+      t.skip('symlinks unavailable on this platform/filesystem');
+      return;
     }
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(fs.readFileSync(canary, 'utf8'), 'DO-NOT-READ',
+      'the symlink referent must never be read into the snapshot or written over');
+    assert.strictEqual(fs.existsSync(linkPath), false,
+      'a symlink that predates the install is not regular-file state; wholesale restore drops it');
+    assert.strictEqual(fs.existsSync(path.join(codexHome, 'hooks', 'secret.txt')), false,
+      'the referent bytes must not leak into the install tree as a regular file');
   });
 });
 }
