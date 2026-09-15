@@ -2567,3 +2567,107 @@ describe('bug #950: quick-task SUMMARY must carry status: complete', () => {
     });
   });
 }
+
+
+// ────────────────────────────────────────────────────────────────────────
+// #4378 — audit seed identity agrees with list-seeds; acknowledge resolves
+// by canonical id (legacy stems still resolve for back-compat).
+// ────────────────────────────────────────────────────────────────────────
+{
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { cleanup } = require('./helpers.cjs');
+
+  function readJson4546(result) {
+    assert.ok(result.success, `command must succeed. stdout: ${result.output}\nstderr: ${result.error}`);
+    return JSON.parse(result.output);
+  }
+
+  function auditJson(tmpDir) {
+    return readJson4546(runGsdTools(['audit-open', '--json'], tmpDir));
+  }
+
+  function ack4546(tmpDir, args) {
+    return runGsdTools(['audit-open', 'acknowledge', ...args, '--json'], tmpDir);
+  }
+
+  describe('audit seed identity agrees with list-seeds (#4378)', () => {
+    let tmpDir;
+
+    beforeEach(() => { tmpDir = createTempProject('gsd-4378-seedident-'); });
+    afterEach(() => { cleanup(tmpDir); });
+
+    function planningPath(...segs) {
+      return path.join(tmpDir, '.planning', ...segs);
+    }
+
+    function seedItem(output, seedId) {
+      const item = output.items.seeds.find((s) => s.seed_id === seedId);
+      assert.ok(item, `expected a seed item with seed_id ${seedId}; got: ${JSON.stringify(output.items.seeds.map((s) => s.seed_id))}`);
+      return item;
+    }
+
+    test('legacy seed publishes the canonical frontmatter id, not the fused filename stem', () => {
+      const seedsDir = planningPath('seeds');
+      fs.mkdirSync(seedsDir, { recursive: true });
+      fs.writeFileSync(path.join(seedsDir, 'SEED-081-region-becomes.md'),
+        '---\nid: SEED-081\nstatus: dormant\n---\n# SEED-081: region idea\n', 'utf8');
+
+      const output = auditJson(tmpDir);
+      const item = seedItem(output, 'SEED-081');
+      assert.strictEqual(item.slug, 'region-becomes',
+        'slug is the remainder after the canonical id, matching list-seeds');
+      assert.ok(!output.items.seeds.some((s) => s.seed_id === 'SEED-081-region-becomes'),
+        'the fused filename stem must not resurface as a second id');
+    });
+
+    test('date-suffixed seed publishes its full id (never truncated at the date prefix)', () => {
+      const seedsDir = planningPath('seeds');
+      fs.mkdirSync(seedsDir, { recursive: true });
+      fs.writeFileSync(path.join(seedsDir, 'SEED-260914-k3x-my-slug.md'),
+        '---\nid: SEED-260914-k3x\nstatus: dormant\n---\n# SEED-260914-k3x: idea\n', 'utf8');
+
+      const output = auditJson(tmpDir);
+      const item = seedItem(output, 'SEED-260914-k3x');
+      assert.strictEqual(item.slug, 'my-slug');
+    });
+
+    test('acknowledge resolves the canonical id to the real file and writes the marker', () => {
+      const seedsDir = planningPath('seeds');
+      fs.mkdirSync(seedsDir, { recursive: true });
+      const legacyFile = path.join(seedsDir, 'SEED-081-region-becomes.md');
+      fs.writeFileSync(legacyFile,
+        '---\nid: SEED-081\nstatus: dormant\n---\n# SEED-081: region idea\n', 'utf8');
+
+      const result = ack4546(tmpDir, ['--category', 'seeds', '--seed-id', 'SEED-081', '--milestone', 'v1.0', '--at', '2026-09-15']);
+      assert.ok(result.success, `acknowledge by canonical id must succeed. stderr: ${result.error}`);
+      assert.match(fs.readFileSync(legacyFile, 'utf-8'), /^status: dormant$/m,
+        'verdict-preserving: the seed status line must be unchanged');
+
+      const after = auditJson(tmpDir);
+      assert.equal(after.counts.seeds, 0, 'acknowledged seed drops out of counts');
+    });
+
+    test('full filename stem still resolves (back-compat with pre-canonical callers)', () => {
+      const seedsDir = planningPath('seeds');
+      fs.mkdirSync(seedsDir, { recursive: true });
+      fs.writeFileSync(path.join(seedsDir, 'SEED-081-region-becomes.md'),
+        '---\nid: SEED-081\nstatus: dormant\n---\nbody\n', 'utf8');
+
+      const result = ack4546(tmpDir, ['--category', 'seeds', '--seed-id', 'SEED-081-region-becomes', '--milestone', 'v1.0', '--at', '2026-09-15']);
+      assert.ok(result.success, `acknowledge by legacy stem must succeed. stderr: ${result.error}`);
+    });
+
+    test('an unknown seed id still fails with the file-not-found error', () => {
+      const seedsDir = planningPath('seeds');
+      fs.mkdirSync(seedsDir, { recursive: true });
+      fs.writeFileSync(path.join(seedsDir, 'SEED-081-region-becomes.md'),
+        '---\nid: SEED-081\nstatus: dormant\n---\nbody\n', 'utf8');
+
+      const result = ack4546(tmpDir, ['--category', 'seeds', '--seed-id', 'SEED-999', '--milestone', 'v1.0', '--at', '2026-09-15']);
+      assert.equal(result.success, false, 'an unresolvable id must fail');
+      assert.match(String(result.error), /file not found: seeds\/SEED-999\.md/,
+        'the error names the unresolvable id exactly as before');
+    });
+  });
+}
