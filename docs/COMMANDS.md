@@ -2012,21 +2012,31 @@ node gsd-tools.cjs roadmap validate
 
 ---
 
-### `roadmap upgrade --convention milestone-prefixed`
+### `roadmap upgrade --convention <target>`
 
-Migrate legacy `Phase N` IDs to the milestone-prefixed `Phase M-NN` convention.
+Migrate an existing roadmap to a phase-ID convention. The historical
+`milestone-prefixed` target converts legacy `Phase N` IDs to `Phase M-NN`.
+The `bracket` target converts either legacy or M-NN IDs to `[CODE.MM] NN`,
+renames matching phase directories, and writes `phase_id_convention: "bracket"`.
 
 | Flag | Required | Description |
 |------|----------|-------------|
-| `--convention milestone-prefixed` | Yes | Target convention to migrate to |
+| `--convention milestone-prefixed` | No | Historical target; also the default when the flag is omitted |
+| `--convention bracket` | No | Bracket target; requires `project_code` in `.planning/config.json` |
 | `--apply` | No | Write changes to disk (default: dry-run only) |
 
 **Prerequisites:** `.planning/ROADMAP.md` exists
-**Produces:** Dry-run diff (default) or in-place ROADMAP.md rewrite (`--apply`)
+**Produces:** Dry-run JSON plan (default) or in-place ROADMAP/config updates and phase-directory renames (`--apply`)
+
+An apply refuses a dirty tracked working tree. If a later migration operation
+fails, it reverses completed renames and restores the exact files it changed;
+this rollback also works when `.planning/` is ignored by Git.
 
 ```bash
 node gsd-tools.cjs roadmap upgrade --convention milestone-prefixed         # dry-run
 node gsd-tools.cjs roadmap upgrade --convention milestone-prefixed --apply  # apply
+node gsd-tools.cjs roadmap upgrade --convention bracket                    # dry-run
+node gsd-tools.cjs roadmap upgrade --convention bracket --apply            # apply
 ```
 
 ---

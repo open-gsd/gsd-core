@@ -1,6 +1,6 @@
 /**
  * Roadmap Upgrade — Migration tool for converting legacy 'Phase N' phase IDs
- * to milestone-prefixed 'Phase M-NN' form.
+ * to milestone-prefixed 'Phase M-NN', or legacy/M-NN IDs to bracket form.
  *
  * ADR-457 build-at-publish: the hand-written bin/lib/roadmap-upgrade.cjs collapsed
  * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
@@ -15,8 +15,21 @@ import { retryRenameSync } from './shell-command-projection.cjs';
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseLocatorMod = require('./phase-locator.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningScopeMod = require('./planning-scope.cjs');
 const { planningDir } = planningWorkspace;
-const { stripProjectCodePrefix, PHASE_NUMBER_TOKEN_SOURCE } = phaseIdMod;
+const { listAllPhaseDirs } = phaseLocatorMod;
+const { SCOPE } = planningScopeMod;
+const {
+  BRACKET_ID_SRC,
+  BRACKET_PROJECT_CODE_SRC,
+  normalizePhaseName,
+  PHASE_NUMBER_TOKEN_SOURCE,
+  stripProjectCodePrefix,
+  toDir,
+} = phaseIdMod;
 
 // ─── Regex helpers ────────────────────────────────────────────────────────────
 
@@ -33,6 +46,21 @@ const MIGRATED_PHASE_HEADING_RE = /^#{2,4}\s*(?:\[[^\]]{1,200}\]\s*)?Phase\s+\d+
 // Matches milestone section headings: ## v1.0, ## Roadmap v2.0, ## ✅ v1.0, ## [GSD] v1.0, etc.
 // The optional bracket-token prefix (e.g., [GSD]) must be tested before the emoji group.
 const MILESTONE_HEADING_RE = /^##\s+(?:\[[^\]]{1,200}\]\s+|Roadmap\s+|[✅🚧]\s*)?v(\d+)\.(\d+)(?:\s|:)/iu;
+
+// Bracket headings are terminal migration targets. Both the bracket identity
+// and the following phase token come from the phase-id owner (#2128).
+const BRACKET_PHASE_HEADING_RE = new RegExp(
+  `^#{2,4}\\s*\\[${BRACKET_ID_SRC}\\][ \\t]*(?:Phase\\s+)?${PHASE_NUMBER_TOKEN_SOURCE}\\s*:`,
+  'i',
+);
+
+// phase-id-owner: ADR-612 PR-3 exclusively owns the deprecated M-NN source grammar during the migration window.
+const MNN_SOURCE_TOKEN_SOURCE = '\\d+-\\d+(?:-\\d+)?';
+const MNN_PHASE_HEADING_RE = new RegExp(
+  `^(#{2,4})\\s*(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+(${MNN_SOURCE_TOKEN_SOURCE})\\s*:(.*)`,
+  'i',
+);
+const PROJECT_CODE_RE = new RegExp(`^${BRACKET_PROJECT_CODE_SRC}$`);
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -77,6 +105,7 @@ interface MigrationPlan {
   phases: PhaseRename[];
   roadmapEdits: RoadmapEdit[];
   crossRefEdits: CrossRefEdit[];
+  targetConvention?: 'milestone-prefixed' | 'bracket';
 }
 
 interface ApplyMigrationResult {
@@ -203,13 +232,400 @@ function buildNewDirName(oldDirName: string, newId: string, projectCode: string 
   return projectCode ? `${projectCode}-${newBase}` : newBase;
 }
 
+// ─── Bracket-convention computation (ADR-612 PR-3) ──────────────────────────
+
+interface BracketSourceEntry {
+  lineIndex: number;
+  alreadyMigrated: boolean;
+  source?: 'legacy' | 'mnn';
+  milestoneInt?: number | null;
+  sourceToken?: string;
+  headingTail?: string;
+  hashes?: string;
+}
+
+interface BracketMapping {
+  lineIndex: number;
+  milestoneInt: number;
+  token: string;
+  source: 'legacy' | 'mnn';
+  sourceToken: string;
+}
+
+const pad2 = (value: number): string => String(value).padStart(2, '0');
+
+function parseBracketSourcePhases(lines: string[]): BracketSourceEntry[] {
+  const results: BracketSourceEntry[] = [];
+  let currentMilestoneInt: number | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const milestoneMatch = line.match(MILESTONE_HEADING_RE);
+    if (milestoneMatch) {
+      currentMilestoneInt = parseInt(milestoneMatch[1], 10);
+      continue;
+    }
+
+    if (BRACKET_PHASE_HEADING_RE.test(line)) {
+      results.push({ lineIndex: i, alreadyMigrated: true });
+      continue;
+    }
+
+    // M-NN must be tested before legacy. It is a convertible source under
+    // bracket, not the terminal convention it is for the legacy migrator.
+    const mnnMatch = line.match(MNN_PHASE_HEADING_RE);
+    if (mnnMatch) {
+      const segments = mnnMatch[2].split('-');
+      results.push({
+        lineIndex: i,
+        alreadyMigrated: false,
+        source: 'mnn',
+        milestoneInt: parseInt(segments[0], 10),
+        sourceToken: mnnMatch[2],
+        headingTail: mnnMatch[3],
+        hashes: mnnMatch[1],
+      });
+      continue;
+    }
+
+    const legacyMatch = line.match(LEGACY_PHASE_HEADING_RE);
+    if (legacyMatch) {
+      results.push({
+        lineIndex: i,
+        alreadyMigrated: false,
+        source: 'legacy',
+        milestoneInt: currentMilestoneInt,
+        sourceToken: legacyMatch[2],
+        headingTail: legacyMatch[3],
+        hashes: legacyMatch[1],
+      });
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Resolve bracket target tokens. Legacy phases receive the same deterministic
+ * per-milestone sequence as the existing migrator. M-NN sources preserve their
+ * integer identity while moving the milestone into the bracket:
+ * `2-01` → `01`; `2-04-01` → `04.01`.
+ */
+function assignBracketTokens(entries: BracketSourceEntry[]): Map<number, BracketMapping> {
+  const milestoneCounters = new Map<number, number>();
+  const mappings = new Map<number, BracketMapping>();
+
+  for (const entry of entries) {
+    if (entry.alreadyMigrated || entry.milestoneInt === null || entry.milestoneInt === undefined) continue;
+
+    if (entry.source === 'mnn') {
+      const segments = entry.sourceToken!.split('-');
+      const token = segments.slice(1).map((segment) => pad2(parseInt(segment, 10))).join('.');
+      mappings.set(entry.lineIndex, {
+        lineIndex: entry.lineIndex,
+        milestoneInt: entry.milestoneInt,
+        token,
+        source: 'mnn',
+        sourceToken: entry.sourceToken!,
+      });
+      continue;
+    }
+
+    const counter = (milestoneCounters.get(entry.milestoneInt) ?? 0) + 1;
+    milestoneCounters.set(entry.milestoneInt, counter);
+    mappings.set(entry.lineIndex, {
+      lineIndex: entry.lineIndex,
+      milestoneInt: entry.milestoneInt,
+      token: pad2(counter),
+      source: 'legacy',
+      sourceToken: entry.sourceToken!,
+    });
+  }
+
+  return mappings;
+}
+
+function asciiInteger(segment: string): number | null {
+  if (segment.length === 0) return null;
+  for (const character of segment) {
+    if (character < '0' || character > '9') return null;
+  }
+  return parseInt(segment, 10);
+}
+
+function legacyLookupKey(token: string): string {
+  return String(normalizePhaseName(token)).toLowerCase();
+}
+
+/**
+ * Return the old directory's slug when it belongs to a mapping, otherwise
+ * null. M-NN matching consumes exactly the expected number of numeric fields,
+ * so a digit-leading slug remains a slug instead of becoming another identity
+ * segment (the ambiguity the bracket convention removes).
+ */
+function matchBracketSourceDir(dirName: string, mapping: BracketMapping): { slug: string } | null {
+  const stripped = stripProjectCodePrefix(dirName);
+
+  if (mapping.source === 'mnn') {
+    const expected = mapping.sourceToken.split('-').map((segment) => parseInt(segment, 10));
+    const parts = stripped.split('-');
+    if (parts.length < expected.length) return null;
+    for (let i = 0; i < expected.length; i++) {
+      const actual = asciiInteger(parts[i]);
+      if (actual === null || actual !== expected[i]) return null;
+    }
+    return { slug: parts.slice(expected.length).join('-') };
+  }
+
+  const legacyDirMatch = stripped.match(
+    new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})(?:-(.*))?$`, 'i'),
+  );
+  if (!legacyDirMatch) return null;
+  if (legacyLookupKey(legacyDirMatch[1]) !== legacyLookupKey(mapping.sourceToken)) return null;
+  return { slug: legacyDirMatch[2] ?? '' };
+}
+
+function buildBracketDirName(
+  projectCode: string,
+  mapping: BracketMapping,
+  slug: string,
+  sourceDir: string,
+): string {
+  const milestone = pad2(mapping.milestoneInt);
+  const [phase, subphase] = mapping.token.split('.');
+  if (!slug) return `${projectCode}.${milestone}-${mapping.token}`;
+  try {
+    return toDir(
+      {
+        project: projectCode,
+        milestone,
+        phase,
+        ...(subphase ? { subphase } : {}),
+      },
+      slug,
+    );
+  } catch (err) {
+    throw new Error(
+      `Cannot build bracket directory for phase ${JSON.stringify(mapping.sourceToken)} `
+      + `from source directory ${JSON.stringify(sourceDir)}: ${(err as Error).message}`,
+    );
+  }
+}
+
+function computeBracketPlan(cwd: string): MigrationPlan {
+  const pDir = planningDir(cwd);
+  const roadmapPath = path.join(pDir, 'ROADMAP.md');
+  const configPath = path.join(pDir, 'config.json');
+  const phasesDir = path.join(pDir, 'phases');
+  const done: MigrationPlan = {
+    alreadyMigrated: true,
+    phases: [],
+    roadmapEdits: [],
+    crossRefEdits: [],
+    targetConvention: 'bracket',
+  };
+
+  let configData: Record<string, unknown> = {};
+  try {
+    configData = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+  } catch { /* config may not exist */ }
+
+  if (configData['phase_id_convention'] === 'bracket') return done;
+  const projectCode = typeof configData['project_code'] === 'string' && configData['project_code'].length > 0
+    ? configData['project_code']
+    : null;
+
+  let roadmapContent: string;
+  try {
+    roadmapContent = fs.readFileSync(roadmapPath, 'utf8');
+  } catch {
+    throw new Error(`ROADMAP.md not found at ${roadmapPath}`);
+  }
+
+  const lines = roadmapContent.split('\n');
+  const parsed = parseBracketSourcePhases(lines);
+  if (parsed.some((entry) => entry.alreadyMigrated)) return done;
+
+  if (!projectCode) {
+    throw new Error(
+      'Cannot migrate to the bracket convention without a project_code in .planning/config.json '
+      + '(bracket phase IDs are [CODE.MM] NN). Set "project_code" first, then re-run.',
+    );
+  }
+  if (!PROJECT_CODE_RE.test(projectCode)) {
+    throw new Error(`Cannot migrate to the bracket convention with invalid project_code ${JSON.stringify(projectCode)}.`);
+  }
+  const code = projectCode;
+
+  const sourcePhases = parsed.filter((entry) => !entry.alreadyMigrated);
+
+  // Real single-milestone repositories may omit a `## vN.M` heading while
+  // carrying project-prefixed phase directories. Resolve those legacy entries
+  // from STATE.md instead of silently producing an empty migration plan.
+  if (sourcePhases.some((entry) => entry.source === 'legacy' && entry.milestoneInt == null)) {
+    let fallbackMilestone: number | null = null;
+    try {
+      const state = fs.readFileSync(path.join(pDir, 'STATE.md'), 'utf8');
+      const stateMilestone = state.match(/^milestone:\s*v?(\d+)/im);
+      if (stateMilestone) fallbackMilestone = parseInt(stateMilestone[1], 10);
+    } catch { /* STATE.md may not exist */ }
+    if (fallbackMilestone !== null) {
+      for (const entry of sourcePhases) {
+        if (entry.source === 'legacy' && entry.milestoneInt == null) {
+          entry.milestoneInt = fallbackMilestone;
+        }
+      }
+    }
+  }
+
+  const unresolvedLegacy = sourcePhases.filter(
+    (entry) => entry.source === 'legacy' && entry.milestoneInt == null,
+  );
+  if (unresolvedLegacy.length > 0) {
+    throw new Error(
+      'Cannot determine a milestone for legacy phase headings. Add a ## vN.M roadmap heading '
+      + 'or a milestone field in .planning/STATE.md, then re-run.',
+    );
+  }
+
+  const idMapping = assignBracketTokens(sourcePhases);
+
+  const milestoneLegacyMap = new Map<number, Map<string, string>>();
+  for (const mapping of idMapping.values()) {
+    if (mapping.source !== 'legacy') continue;
+    if (!milestoneLegacyMap.has(mapping.milestoneInt)) {
+      milestoneLegacyMap.set(mapping.milestoneInt, new Map<string, string>());
+    }
+    milestoneLegacyMap.get(mapping.milestoneInt)!.set(
+      legacyLookupKey(mapping.sourceToken),
+      mapping.token,
+    );
+  }
+
+  const phaseDirListing = listAllPhaseDirs(phasesDir, { includeSentinels: true });
+  if (phaseDirListing.scope === SCOPE.UNREADABLE) {
+    throw new Error(`Cannot read phase directories at ${phasesDir}`);
+  }
+  const existingDirs = phaseDirListing.value;
+
+  const orderedMappings = [...idMapping.values()].map((mapping) => ({ mapping, used: false }));
+  const phases: PhaseRename[] = [];
+  for (const dirName of existingDirs) {
+    let hit: { mapping: BracketMapping; used: boolean } | undefined;
+    let matchedSlug = '';
+    for (const candidate of orderedMappings) {
+      if (candidate.used) continue;
+      const match = matchBracketSourceDir(dirName, candidate.mapping);
+      if (!match) continue;
+      hit = candidate;
+      matchedSlug = match.slug;
+      break;
+    }
+    if (!hit) continue;
+    hit.used = true;
+
+    const newDir = buildBracketDirName(code, hit.mapping, matchedSlug, dirName);
+    if (newDir !== dirName) {
+      phases.push({
+        oldId: hit.mapping.sourceToken,
+        newId: `${code}.${pad2(hit.mapping.milestoneInt)}-${hit.mapping.token}`,
+        oldDir: dirName,
+        newDir,
+      });
+    }
+  }
+
+  const roadmapEdits: RoadmapEdit[] = [];
+  for (const entry of sourcePhases) {
+    const mapping = idMapping.get(entry.lineIndex);
+    if (!mapping) continue;
+    const oldLine = lines[entry.lineIndex];
+    const heading = `${entry.hashes} [${code}.${pad2(mapping.milestoneInt)}] ${mapping.token}:`;
+    const newLine = heading + (entry.headingTail ?? '');
+    if (newLine !== oldLine) {
+      roadmapEdits.push({ lineIndex: entry.lineIndex, from: oldLine, to: newLine });
+    }
+  }
+
+  let currentMilestone: number | null = null;
+  const mnnChecklistRe = new RegExp(
+    `^(\\s*-\\s*\\[[ x]\\]\\s*\\*{0,2})Phase\\s+(${MNN_SOURCE_TOKEN_SOURCE})(\\s*:)`,
+    'i',
+  );
+  const legacyChecklistRe = new RegExp(
+    `^(\\s*-\\s*\\[[ x]\\]\\s*\\*{0,2})Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(\\s*:)`,
+    'i',
+  );
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const milestoneMatch = line.match(MILESTONE_HEADING_RE);
+    if (milestoneMatch) {
+      currentMilestone = parseInt(milestoneMatch[1], 10);
+      continue;
+    }
+    if (roadmapEdits.some((edit) => edit.lineIndex === i)) continue;
+
+    const mnnChecklist = line.match(mnnChecklistRe);
+    if (mnnChecklist) {
+      const segments = mnnChecklist[2].split('-');
+      const milestone = parseInt(segments[0], 10);
+      const token = segments.slice(1).map((segment) => pad2(parseInt(segment, 10))).join('.');
+      const replacement = `${mnnChecklist[1]}[${code}.${pad2(milestone)}] ${token}${mnnChecklist[3]}`;
+      roadmapEdits.push({
+        lineIndex: i,
+        from: line,
+        to: replacement + line.slice(mnnChecklist[0].length),
+      });
+      continue;
+    }
+
+    const legacyChecklist = line.match(legacyChecklistRe);
+    if (!legacyChecklist) continue;
+    const key = legacyLookupKey(legacyChecklist[2]);
+    let resolvedMilestone = currentMilestone;
+    let token = resolvedMilestone === null
+      ? undefined
+      : milestoneLegacyMap.get(resolvedMilestone)?.get(key);
+    if (!token) {
+      for (const [milestone, lookup] of milestoneLegacyMap) {
+        const candidate = lookup.get(key);
+        if (!candidate) continue;
+        resolvedMilestone = milestone;
+        token = candidate;
+        break;
+      }
+    }
+    if (!token || resolvedMilestone === null) continue;
+    const replacement = `${legacyChecklist[1]}[${code}.${pad2(resolvedMilestone)}] ${token}${legacyChecklist[3]}`;
+    roadmapEdits.push({
+      lineIndex: i,
+      from: line,
+      to: replacement + line.slice(legacyChecklist[0].length),
+    });
+  }
+
+  // Bare STATE.md / PROJECT.md `Phase N` prose carries no milestone context in
+  // multi-milestone repositories. That emit concern remains deferred; guessing
+  // here would recreate the ambiguity this migration removes.
+  const crossRefEdits: CrossRefEdit[] = [];
+
+  return {
+    alreadyMigrated: false,
+    phases,
+    roadmapEdits,
+    crossRefEdits,
+    targetConvention: 'bracket',
+  };
+}
+
 // ─── computeMigrationPlan ─────────────────────────────────────────────────────
 
 /**
  * Compute a migration plan without touching the filesystem.
  */
 function computeMigrationPlan(cwd: string, options: Record<string, unknown> = {}): MigrationPlan {
-  void options;
+  if (options['convention'] === 'bracket') return computeBracketPlan(cwd);
   const pDir = planningDir(cwd);
   const roadmapPath = path.join(pDir, 'ROADMAP.md');
   const configPath = path.join(pDir, 'config.json');
@@ -612,15 +1028,20 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
       }
     }
 
-    // 4. Update config.json: set phase_id_convention to 'milestone-prefixed'
+    // 4. Update config.json to the convention named by this plan. Legacy plans
+    // omit targetConvention and retain the historical milestone-prefixed target.
     let configData: Record<string, unknown> = {};
     try {
       configData = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
     } catch { /* config may not exist yet */ }
 
-    configData['phase_id_convention'] = 'milestone-prefixed';
+    configData['phase_id_convention'] = plan.targetConvention ?? 'milestone-prefixed';
     snapshotFile(configPath);
-    fs.writeFileSync(configPath, JSON.stringify(configData, null, 2) + '\n', 'utf8');
+    try {
+      fs.writeFileSync(configPath, JSON.stringify(configData, null, 2) + '\n', 'utf8');
+    } catch (err) {
+      throw new Error(`config.json write phase failed: ${(err as Error).message}`);
+    }
     editedFiles.push('config.json');
 
   } catch (err) {

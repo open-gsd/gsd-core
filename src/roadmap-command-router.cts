@@ -16,6 +16,9 @@ const { routeCjsCommandFamily } = cjsCommandRouterAdapter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapUpgrade = require('./roadmap-upgrade.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdCardMod = require('./phase-id-card.cjs');
+const { phaseIdCard } = phaseIdCardMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -274,7 +277,7 @@ function routeRoadmapCommand({ roadmap, args, cwd, raw, error }: RouteRoadmapCom
       'upgrade': () => {
         const dryRun = !args.includes('--apply');
         // Parse `--convention <value>` and `--convention=<value>`. When the flag is
-        // absent entirely, default to the only supported convention; when present
+        // absent entirely, default to the legacy supported convention; when present
         // with a missing/unsupported value, fall through to the rejection below
         // (fail-closed — never silently run a migration the user did not request).
         let convention = 'milestone-prefixed';
@@ -287,13 +290,18 @@ function routeRoadmapCommand({ roadmap, args, cwd, raw, error }: RouteRoadmapCom
             ? token.slice(token.indexOf('=') + 1)
             : (args[conventionFlagIdx + 1] ?? '');
         }
-        if (convention !== 'milestone-prefixed') {
+        if (convention !== 'milestone-prefixed' && convention !== 'bracket') {
           // No-throw hub contract (ADR-0012): a hub-dispatched handler must not call
           // process.exit. Throw instead — the hub converts this to HandlerFailure and
           // the adapter routes it through the injected error() boundary.
-          throw new Error('Only --convention milestone-prefixed is supported');
+          throw new Error('Only --convention milestone-prefixed or bracket is supported');
         }
-        const plan = roadmapUpgrade.computeMigrationPlan(cwd);
+        if (convention === 'bracket') {
+          // Keep stdout machine-readable for the dry-run JSON plan. The card is
+          // human guidance emitted at command start for both dry-run and apply.
+          process.stderr.write(`${phaseIdCard({ title: 'Bracket phase-ID convention' })}\n`);
+        }
+        const plan = roadmapUpgrade.computeMigrationPlan(cwd, { convention });
         roadmapUpgrade.applyMigration(cwd, plan, { dryRun });
       },
     },
