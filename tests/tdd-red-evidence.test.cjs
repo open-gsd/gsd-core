@@ -234,6 +234,12 @@ describe('check tdd-red-evidence verb (#3770)', () => {
 describe('executor spec requires intentional RED evidence before GREEN (#3770)', () => {
   const read = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 
+  function nodeValidationBullet(content, name) {
+    const branches = [...content.matchAll(/^ {3}- If the (?:actual )?command invokes Node's built-in test runner\b[^\r\n]*(?:\r?\n {5,}\S[^\r\n]*)*/gm)];
+    assert.equal(branches.length, 1, `${name} must have exactly one Node validation bullet`);
+    return branches[0];
+  }
+
   test('row 11 — executor routes RED evidence by actual runner and requires semantic inspection', () => {
     const agent = read('agents/gsd-executor.md');
     const tddRef = read('gsd-core/references/tdd.md');
@@ -259,10 +265,6 @@ describe('executor spec requires intentional RED evidence before GREEN (#3770)',
       assert.match(content, /(do not|never)[^\n]{0,100}(fabricate|invent)[^\n]{0,100}(parser verdict|Node counters)/i,
         `${name} must not fabricate a parser verdict or Node counters for direct inspection`);
       assert.match(content, /INVALID_RED/, `${name} must retain the INVALID_RED stop`);
-      assert.doesNotMatch(content, /persist (?:the )?RED evidence record[^\n]{0,240}and verify it:\s*`?gsd_run check tdd-red-evidence/i,
-        `${name} must not restore the superseded unconditional parser requirement`);
-      assert.doesNotMatch(content, /every (?:runner|RED evidence record)[^\n]{0,180}(?:must|requires?)[^\n]{0,120}tdd-red-evidence/i,
-        `${name} must not require the Node parser for every runner`);
     }
 
     assert.match(tddRef, /Node('|’)?s built-in test runner[\s\S]{0,700}semantic/i,
@@ -272,4 +274,36 @@ describe('executor spec requires intentional RED evidence before GREEN (#3770)',
     assert.match(agent, /references\/tdd\.md[\s\S]{0,200}Gate Enforcement Rules/i,
       'gsd-executor.md must keep the canonical Gate Enforcement Rules pointer');
   });
+
+  for (const name of ['tdd.md', 'execute-mvp-tdd.md']) {
+    test(`#4692 — ${name} confines the classifier command to the Node branch`, () => {
+      const content = read(`gsd-core/references/${name}`);
+      // Check ownership of every command mention, independent of words such as
+      // "must" or "every runner". Correct prose must not mask a contradictory
+      // requirement appended to the non-Node branch or elsewhere in the file.
+      const nodeMatch = nodeValidationBullet(content, name);
+      const nodeBranch = nodeMatch[0];
+      assert.equal((nodeBranch.match(/tdd-red-evidence/g) || []).length, 1,
+        `${name} must invoke the classifier exactly once in the Node branch`);
+      const outsideNodeBranch = content.slice(0, nodeMatch.index)
+        + content.slice(nodeMatch.index + nodeBranch.length);
+      assert.deepEqual(outsideNodeBranch.match(/tdd-red-evidence/gi) || [], [],
+        `${name} must not mention the classifier command outside the Node branch`);
+    });
+
+    test(`#4692 — ${name} retains all seven INVALID_RED reason codes in the Node branch`, () => {
+      const content = read(`gsd-core/references/${name}`);
+      const nodeBranch = nodeValidationBullet(content, name);
+      const reasons = [...nodeBranch[0].matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)].map((match) => match[1]);
+      assert.deepEqual(reasons.sort(), [
+        'fixture_or_load_failure',
+        'invalid_record',
+        'no_target_test_failure',
+        'nonzero_exit_without_test_failure',
+        'unexpected_green',
+        'unreadable_record',
+        'zero_tests_discovered',
+      ], `${name} must enumerate the complete INVALID_RED taxonomy, without missing or extra codes`);
+    });
+  }
 });
