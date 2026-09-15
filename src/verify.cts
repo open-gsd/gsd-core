@@ -1312,6 +1312,12 @@ function cmdVerifyPhaseCompleteness(cwd: string, phase: string, raw: boolean): v
   );
 }
 
+// #4678: citations may carry a trailing line suffix (":42", ":1-20") that
+// describes a location inside the file, not part of the path itself.
+function stripLineSuffix(ref: string): string {
+  return ref.replace(/:\d+(?:-\d+)?$/, '');
+}
+
 function cmdVerifyReferences(cwd: string, filePath: string, raw: boolean): void {
   if (!filePath) {
     error('file path required');
@@ -1329,9 +1335,10 @@ function cmdVerifyReferences(cwd: string, filePath: string, raw: boolean): void 
   const atRefs = content.match(/@([^\s\n,)]+\/[^\s\n,)]+)/g) || [];
   for (const ref of atRefs) {
     const cleanRef = ref.slice(1);
-    const resolved = cleanRef.startsWith('~/')
-      ? path.join(process.env['HOME'] || '', cleanRef.slice(2))
-      : path.join(cwd, cleanRef);
+    const fsRef = stripLineSuffix(cleanRef);
+    const resolved = fsRef.startsWith('~/')
+      ? path.join(process.env['HOME'] || '', fsRef.slice(2))
+      : path.join(cwd, fsRef);
     if (fs.existsSync(resolved)) {
       found.push(cleanRef);
     } else {
@@ -1339,12 +1346,12 @@ function cmdVerifyReferences(cwd: string, filePath: string, raw: boolean): void 
     }
   }
 
-  const backtickRefs = content.match(/`([^`]+\/[^`]+\.[a-zA-Z]{1,10})`/g) || [];
+  const backtickRefs = content.match(/`([^`]+\/[^`]+\.[a-zA-Z]{1,10}(?::\d+(?:-\d+)?)?)`/g) || [];
   for (const ref of backtickRefs) {
     const cleanRef = ref.slice(1, -1);
     if (cleanRef.startsWith('http') || cleanRef.includes('${') || cleanRef.includes('{{')) continue;
     if (found.includes(cleanRef) || missing.includes(cleanRef)) continue;
-    const resolved = path.join(cwd, cleanRef);
+    const resolved = path.join(cwd, stripLineSuffix(cleanRef));
     if (fs.existsSync(resolved)) {
       found.push(cleanRef);
     } else {
