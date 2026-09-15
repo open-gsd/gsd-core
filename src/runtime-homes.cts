@@ -34,6 +34,8 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 
+import { assertNotRetiredRuntime } from './runtime-name-policy.cjs';
+
 /**
  * Expand a leading ~ to the given home directory (defaults to os.homedir()).
  * Every call site inside resolveConfigHomeFromDescriptor threads its
@@ -602,6 +604,9 @@ export function resolveKimiHooksTomlDir(opts: ResolveKimiHooksTomlOpts = {}): st
  *   the behaviour of bin/install.js getGlobalDir(runtime, explicitDir).
  */
 export function getGlobalConfigDir(runtime: string, explicitDir?: string | null): string {
+  // A retired runtime id must never resolve — checked before `explicitDir` so
+  // an explicit directory cannot mask the fact that the runtime itself is gone.
+  assertNotRetiredRuntime(runtime);
   if (explicitDir) return expandTilde(explicitDir);
 
   // ── Grok: not in the registry — hardcoded branch ─────────────────────────

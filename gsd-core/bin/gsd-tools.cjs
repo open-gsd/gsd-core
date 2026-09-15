@@ -1183,7 +1183,18 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // First positional that isn't a flag also works (lenient); otherwise ignore unknown flags.
             if (!a.startsWith('-') && !pifRuntime) { pifRuntime = a; }
           }
-          const filename = getProjectInstructionFile(pifRuntime);
+          // A retired runtime id now THROWS rather than resolving (#4709 AC#1).
+          // Map it to the same clean single-line error routeSkillsRoot emits for
+          // an unknown runtime — a CLI must not answer a bad flag value with a
+          // stack trace. The thrown message already names the successor and the
+          // retiring issue, so it is surfaced verbatim.
+          let filename;
+          try {
+            filename = getProjectInstructionFile(pifRuntime);
+          } catch (err) {
+            if (err && err.code === 'GSD_RETIRED_RUNTIME') error(err.message);
+            throw err;
+          }
           process.stdout.write(filename + '\n');
   }
 

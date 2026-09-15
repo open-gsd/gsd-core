@@ -182,6 +182,7 @@ module.exports = {
   "tests/runtime-artifact-layout.test.cjs",
   "tests/runtime-identity.test.cjs",
   "tests/runtime-launcher-parity.test.cjs",
+  "tests/runtime-name-policy.test.cjs",
   "tests/security.test.cjs",
   "tests/settings-jsonc.test.cjs",
   "tests/shared-hooks-dir-resolution.test.cjs",

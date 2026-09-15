@@ -6883,8 +6883,13 @@ describe('#3024: gsd-tools query skills-root', () => {
   // dedicated branch (making it grok's true peer), this second assertion
   // would fail and force a conscious decision, instead of someone
   // reflexively adding it to LEGACY_NON_REGISTRY_RUNTIME_IDS.
-  test("gemini: rejected — because its bare resolution is claude's fallback, not because it is merely unregistered", () => {
-    const claudeSkillsRoot = path.join(os.homedir(), '.claude', 'skills');
+  // #4709 AC#1 inverted the second half of this test: gemini's bare
+  // resolution used to silently fall through to claude's skills root (the
+  // wrong-runtime bug this test used to pin); getGlobalSkillsBase now goes
+  // through getGlobalConfigDir's retired-runtime guard and refuses outright.
+  // The CLI-level rejection (isRegisteredRuntimeId) is unchanged and still
+  // asserted as before.
+  test("gemini: rejected by the CLI gate, and its underlying resolution now refuses too (not merely unregistered, and no longer claude's fallback)", () => {
     const result = runNode([TOOLS_PATH, 'query', 'skills-root', 'gemini', '--raw'], {
       env: { ...process.env, GSD_TEST_MODE: '1' },
     });
@@ -6892,13 +6897,15 @@ describe('#3024: gsd-tools query skills-root', () => {
     assert.notStrictEqual(result.exitCode, 0, 'gemini must be rejected by isRegisteredRuntimeId');
     assert.strictEqual(result.stdout.trim(), '', `stdout must not emit a path for rejected gemini; got: ${result.stdout}`);
 
-    // Prove the reason: gemini's underlying (ungated) resolution IS claude's
-    // wrong-runtime fallback — unlike grok's, which resolves to a real,
-    // distinct path (see the sibling grok test above).
+    // Prove the reason: gemini's underlying (ungated) resolution now refuses via
+    // RetiredRuntimeError — unlike grok's, which resolves to a real, distinct path
+    // (see the sibling grok test above), and unlike its own pre-#4709 behavior of
+    // silently falling through to claude's skills root.
     const { getGlobalSkillsBase } = require('../gsd-core/bin/lib/runtime-homes.cjs');
-    assert.strictEqual(
-      getGlobalSkillsBase('gemini'), claudeSkillsRoot,
-      "gemini's bare resolution must be claude's fallback path — this is the wrong-runtime bug that justifies keeping gemini rejected"
+    assert.throws(
+      () => getGlobalSkillsBase('gemini'),
+      /retired by #1928/,
+      "gemini's bare resolution must now refuse — it no longer silently resolves to claude's fallback path",
     );
   });
 });
