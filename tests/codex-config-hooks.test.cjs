@@ -2361,6 +2361,95 @@ describe('#3245 — idempotent rollback reverts skills/, agents/, and VERSION', 
   });
 }
 
+// ────────────────────────────────────────────────────────────────────────
+// #4249 — install() exposes the full snapshot restore, not just migrations rollback
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { test, describe, beforeEach, afterEach } = require('node:test');
+  const os = require('os');
+  const { cleanup } = require('./helpers.cjs');
+  const previousGsdTestMode = process.env.GSD_TEST_MODE;
+  process.env.GSD_TEST_MODE = '1';
+  const { install } = require('../bin/install.js');
+  if (previousGsdTestMode === undefined) {
+    delete process.env.GSD_TEST_MODE;
+  } else {
+    process.env.GSD_TEST_MODE = previousGsdTestMode;
+  }
+
+  // concurrency: false — drives the real install pipeline like the block above.
+  describe('#4249 — install() exposes the full snapshot restore, not just migrations rollback', { concurrency: false }, () => {
+    let tmpDir;
+    let codexHome;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4249-codex-rollback-'));
+      codexHome = path.join(tmpDir, 'codex-home');
+      fs.mkdirSync(codexHome, { recursive: true });
+    });
+
+    afterEach(() => cleanup(tmpDir));
+
+    test('result.rollbackPreInstallSnapshot() reverts skills/, agents/, and VERSION', () => {
+      // Skills resolve $HOME-relative independent of CODEX_HOME (#2088), so the
+      // rollback closure must run before this sandboxing is torn down — inline
+      // runCodexInstall's env dance instead of using the auto-restoring helper,
+      // matching how installAllRuntimes' real aggregate gate calls it: in the
+      // same process env install() itself ran in, never after it's restored.
+      const previousHome = process.env.HOME;
+      const previousUserProfile = process.env.USERPROFILE;
+      const previousCodexHome = process.env.CODEX_HOME;
+      const previousCwd = process.cwd();
+      process.env.HOME = codexHome;
+      process.env.USERPROFILE = codexHome;
+      process.env.CODEX_HOME = codexHome;
+      process.chdir(path.join(__dirname, '..'));
+      try {
+        const result = install(true, 'codex');
+
+        // A configured-entrypoint validation failure discovered outside install()
+        // (installAllRuntimes' aggregate assertConfiguredEntrypoints, run after
+        // this function already returned) reaches for this field. Before #4249
+        // the only rollback Codex exposed was rollbackInstallerMigrations, which
+        // reverts installer-migration state only and leaves the skills/agents/
+        // VERSION this successful install just wrote untouched.
+        result.rollbackPreInstallSnapshot();
+
+        const skillsDir = codexSkillsRoot(codexHome);
+        const gsdSkills = fs.existsSync(skillsDir)
+          ? fs.readdirSync(skillsDir, { withFileTypes: true }).filter(e => e.isDirectory() && e.name.startsWith('gsd-'))
+          : [];
+        assert.strictEqual(gsdSkills.length, 0, 'rollback must remove all gsd-* skill directories: ' + gsdSkills.map(e => e.name).join(', '));
+
+        const versionPath = path.join(codexHome, 'gsd-core', 'VERSION');
+        assert.strictEqual(fs.existsSync(versionPath), false, 'rollback must remove gsd-core/VERSION');
+
+        // #4249 (agy adversarial review): the whole point of this describe block
+        // is that rollback covers the full pre-install snapshot, not just
+        // installer migrations — config.toml/hooks.json must revert too. Both
+        // were absent before this fresh install, so rollback must remove them.
+        assert.strictEqual(
+          fs.existsSync(path.join(codexHome, 'config.toml')),
+          false,
+          'rollback must remove config.toml (absent before this fresh install)'
+        );
+        assert.strictEqual(
+          fs.existsSync(path.join(codexHome, 'hooks.json')),
+          false,
+          'rollback must remove hooks.json (absent before this fresh install)'
+        );
+      } finally {
+        process.chdir(previousCwd);
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+        if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+        else process.env.USERPROFILE = previousUserProfile;
+        if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+        else process.env.CODEX_HOME = previousCodexHome;
+      }
+    });
+  });
+}
 
 // ────────────────────────────────────────────────────────────────────────
 // Folded from tests/bug-3285-codex-hooks-state-allowed.test.cjs — consolidation epic #1969 (B1 #1970)

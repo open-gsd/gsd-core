@@ -52,6 +52,7 @@ module.exports = {
   "tests/config-loader.test.cjs",
   "tests/config-schema.property.test.cjs",
   "tests/config.test.cjs",
+  "tests/configured-entrypoint-validation.test.cjs",
   "tests/contributor-standards.test.cjs",
   "tests/core-utils.test.cjs",
   "tests/cursor-subagent-isolation.test.cjs",

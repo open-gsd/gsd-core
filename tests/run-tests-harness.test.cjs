@@ -3135,8 +3135,14 @@ describe('partitionIsolatedFiles (#4497 codex-config.test.cjs chunk isolation, d
   // same set as each other under the OLD (pre-fix) platform-scaled rule this
   // row is guarding against — confirming both rows are load-bearing, not
   // vacuous.
+  //
+  // #4249 split codex-config.test.cjs's heavy install()-pipeline blocks into
+  // codex-config-hooks.test.cjs, dropping codex-config.test.cjs's own
+  // measured weight from 127783ms to 189ms — well under this derived bar
+  // (0.3 * CHUNK_WORKING_BUDGET_MS ~= 120000ms). It correctly no longer
+  // appears in the live-computed isolated set, so it is dropped from this
+  // pinned expectation too, in place of being isolated by name.
   const EXPECTED_ISOLATED_UNIT_FILES = [
-    'codex-config.test.cjs',
     'config.test.cjs',
     'emitted-attribution.test.cjs',
     'install-minimal-hooks.test.cjs',
