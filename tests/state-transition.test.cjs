@@ -4826,3 +4826,46 @@ describe('stateReplaceProgressPercent — anchored bold form leaves prose lookal
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// C1 of epic #4629 (ADR-4629 §8.1) — the StateWriteIntent type surface.
+// StateWriteIntent EXTENDS StateTransaction, adding the §8.1 concepts: field/
+// section assertions marked required-vs-best-effort, plus a declared mutation
+// scope (narrow | broad). C1 ships the type + constructor (no caller migrated —
+// §8.1's caller-side rule is Required — Phase 2); C2+ consume it. Frozen like its
+// base so a transaction cannot be mutated after construction.
+describe('C1 (ADR-4629 §8.1): StateWriteIntent type surface', () => {
+  const { createStateWriteIntent } = require('../gsd-core/bin/lib/state-transition.cjs');
+
+  test('createStateWriteIntent extends a StateTransaction with assertions + declared scope', () => {
+    const base = openStateTransaction({ snapshot: {} });
+    const intent = createStateWriteIntent(base, {
+      assertions: [
+        { field: 'Progress', requirement: 'required' },
+        { field: 'Notes', requirement: 'best-effort' },
+      ],
+      scope: 'narrow',
+    });
+    // still a StateTransaction (IS-A: every base field carried through)
+    assert.strictEqual(intent.kind, 'open');
+    assert.strictEqual(typeof intent.snapshot, 'object');
+    assert.strictEqual(intent.resync, false);
+    // plus the §8.1 additions
+    assert.deepStrictEqual(
+      intent.assertions.map((a) => [a.field, a.requirement]),
+      [['Progress', 'required'], ['Notes', 'best-effort']],
+    );
+    assert.strictEqual(intent.scope, 'narrow');
+    assert.ok(Object.isFrozen(intent), 'StateWriteIntent must be frozen like StateTransaction');
+  });
+
+  test('createStateWriteIntent defaults scope to narrow and assertions to [] when omitted', () => {
+    const intent = createStateWriteIntent(openStateTransaction({ snapshot: {} }), {});
+    assert.deepStrictEqual(intent.assertions, []);
+    assert.strictEqual(intent.scope, 'narrow');
+  });
+
+  test('createStateWriteIntent rejects an absent base transaction (construction failure, per §8.6 posture)', () => {
+    assert.throws(() => createStateWriteIntent(null, { scope: 'narrow' }), /transaction/i);
+  });
+});
