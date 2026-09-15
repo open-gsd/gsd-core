@@ -15,15 +15,13 @@ If any of these is false, the gate is inactive — execution proceeds normally.
 For each task gated by TDD, the executor MUST verify (before running the implementation step):
 
 1. **A failing-test commit exists.** Search git log on the current branch for a commit matching `test({phase}-{plan})` whose subject mentions the same plan as the current task. The commit must touch a test file (`*.test.*`, `*.spec.*`, `tests/**`).
-2. **The test was actually red — INTENTIONALLY (#3770).** A nonzero exit is not RED by itself: syntax errors, zero-test discovery, fixture crashes, parser errors, and unrelated assertions are INVALID_RED. The executor must persist the RED evidence record (command, exit code, failing test, expected result from `<behavior>`, actual result) and verify it:
-   ```bash
-   gsd_run check tdd-red-evidence <record.json> --raw
-   ```
-   - `RED_EVIDENCE_OK` (reason `target_test_failed`): the TARGET test named by the plan failed on a real assertion — the ONLY verdict that authorizes GREEN.
-   - `INVALID_RED` (reasons `unexpected_green`, `zero_tests_discovered`, `nonzero_exit_without_test_failure`, `fixture_or_load_failure`, `no_target_test_failure`, `invalid_record`, `unreadable_record`): the gate trips — halt, fix the RED phase (test identity, fixture, discovery), and re-verify before any implementation step. A `RED:` prefix or `(RED)` tag in the commit message is NOT sufficient evidence on its own.
+2. **The test was actually red — INTENTIONALLY (#3770).** For every runner, persist the real command, actual exit status, unmodified output, target test identity, expected result from the plan's `<behavior>`, and actual result from the captured run. Identify the runner from the actual command that produced the evidence, including in mixed-runner projects. If the runner is unresolved, STOP and investigate before selecting a validation branch.
+   - If the actual command invokes Node's built-in test runner and the output is compatible TAP, pass the unchanged record to `gsd_run check tdd-red-evidence <record.json> --raw` and require `RED_EVIDENCE_OK`. If the reporter is incompatible, rerun the planned target with Node's compatible TAP reporter and capture that real command and result first. Do not infer Node from `package.json` or package metadata, npm/pnpm or another package manager, or TAP-shaped text alone. Every existing `INVALID_RED` reason (`unexpected_green`, `zero_tests_discovered`, `nonzero_exit_without_test_failure`, `fixture_or_load_failure`, `no_target_test_failure`, `invalid_record`, `unreadable_record`) trips the gate.
+   - For every other identified runner, directly inspect the captured output and the test assertion.
+   - After either branch, inspect whether the named target actually executed and failed on the planned assertion for the intended reason. Zero tests, a missing or skipped target, setup, collection, import, syntax, or fixture faults, unrelated failures, unexpected green, and incomplete or ambiguous evidence block GREEN. Record the concise assessment in the existing RED evidence and SUMMARY surfaces; do not fabricate a parser verdict or Node counters. A `RED:` prefix or `(RED)` tag in the commit message is not evidence.
 3. **No implementation commit yet.** No `feat({phase}-{plan})` commit may exist for the same plan ID before the failing-test commit.
 
-If any check fails, the gate trips. For check 2, an INVALID_RED verdict (`check tdd-red-evidence`) trips the gate — the executor MUST halt and block the implementation step.
+If any check fails, the gate trips. For check 2, an `INVALID_RED` Node verdict or a failed direct semantic assessment trips the gate — the executor MUST halt and block the implementation step.
 
 ## What "behavior-adding task" means
 
@@ -73,7 +71,7 @@ The `--force-mvp-gate` flag is documented but not introduced by this plan — it
 
 - It does not enforce REFACTOR commits. REFACTOR remains optional (per `gsd-core/references/tdd.md`).
 - It does not check test quality (the test could be trivially weak). That's the planner's job. It DOES check that the RED failure was intentional — the target test failing an assertion (#3770).
-- It does not run tests. The executor only inspects git log + file system. Running tests is the implementation step's job.
+- It does not start implementation by running tests. During RED, the executor runs the planned test and captures its result; before GREEN, this gate inspects that persisted output, git history, and test assertion, and reruns the planned Node target with compatible TAP when required. The implementation step starts only after the RED gate passes.
 - It does not gate config-only or doc-only tasks (see "behavior-adding task" definition).
 
 ## Compatibility with existing TDD discipline
