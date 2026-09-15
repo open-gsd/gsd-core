@@ -2469,10 +2469,15 @@ function cmdWorktreeWorkerStatus(cwd: string, args: string[] = [], deps: Record<
       // conflating the two invites a re-dispatch. Surface it as a candidate.
       unreadable = fs.existsSync(recordPath);
     }
-    if (unreadable || !record) {
+    if (unreadable) {
+      // exists but unparseable — a reconciliation candidate, never "never dispatched"
       views.push({ state: 'unreadable', needsReconciliation: true, recordPath });
-    } else {
+    } else if (record) {
       views.push(workerStatusView(record, deps));
+    } else {
+      // no record file: genuinely never dispatched (found:false)
+      write(`${JSON.stringify({ ok: true, found: false, workers: [] }, null, 2)}\n`);
+      return;
     }
   } else {
     for (const { record } of readWorkerRecordsFromRoot(path.resolve(cwd, root), readFile, readdir)) {

@@ -129,8 +129,10 @@ The host has no harness-native isolation primitive, so **GSD** creates each work
 **Resume-first guard (#4624).** The launching turn may end while external workers are still live — that is expected here, not an error. So before dispatching ANY plan in this section, sweep for workers a previous session left behind:
 
 ```bash
-gsd_run query worktree.worker-status --root "${ORCH_ROOT}/.claude/worktrees"
+gsd_run query worktree.worker-status --root "${ORCH_ROOT}/.claude/worktrees" 2>/dev/null || true
 ```
+
+(An older installed shim without these verbs reports nothing here — its waves stay owned by the #3707 orphan sweep, as before.)
 
 Every entry with `needsReconciliation: true` (recorded running, process gone) is reconciled from its persisted record — SUMMARY + plan-scoped commits + branch state per `execute-phase/steps/completion-reconciliation.md`, merge if artifact-complete, preserve with recovery information otherwise — then marked with `worker-complete`. An entry that is still `running` with `pidAlive: true` is a live worker — wait on it or leave it running; its terminal state surfaces on the next sweep. One caution: pid reuse on a long-lived host can keep a dead worker reading as alive — when a running entry's `startedAt` is older than the executor timeout budget, inspect its log and worktree before trusting liveness. **Never re-dispatch a recorded plan, and never reconcile on narration alone.**
 
@@ -350,7 +352,7 @@ gsd_run query worktree.worker-record \
   --plan "{plan_number}" \
   --summary-path "{phase_dir}/{plan_padded}-SUMMARY.md" \
   --log-file "$WORKER_LOG" || {
-    echo "FATAL: worker launch not recorded for plan {plan_number} — a running record already exists for this worktree (a resumed session dispatched it). Reconcile that worker per completion-reconciliation.md instead of spawning a second one." >&2
+    echo "FATAL: worker launch not recorded for plan {plan_number} — either a running record already exists for this worktree (a resumed session dispatched it: reconcile that worker per completion-reconciliation.md, never spawn a second one) or the record write failed (surface the error output)." >&2
     exit 1
   }
 ```
