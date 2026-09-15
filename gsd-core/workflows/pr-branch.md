@@ -379,7 +379,18 @@ for HASH in $(printf '%s' "$INCLUDED_COMMITS"); do
   # own history onto the disposable $PR_BRANCH; not a commit_docs bypass
   # (#1783/#3585), which guards against staging .planning/ content that was
   # never committed at all.
-  for P in $(git diff --name-only --diff-filter=U); do
+  #
+  # The unmerged list is snapshotted, then read one path PER LINE. `for P in
+  # $(git diff --name-only --diff-filter=U)` would split it on IFS instead: a
+  # third-bucket path containing a space (`.planning/My Notes.md`) becomes the
+  # fragments `.planning/My` and `Notes.md`, neither of which names the real
+  # conflicted file, so nothing is resolved and the run aborts with exactly the
+  # #4606 failure this block exists to prevent. Same word-split class as #4109.
+  # Snapshot-then-iterate (rather than piping) both keeps the list stable while
+  # the body restages paths and keeps the body in THIS shell, not a subshell.
+  UNMERGED_PATHS=$(git diff --name-only --diff-filter=U)
+  while IFS= read -r P; do
+    [ -n "$P" ] || continue
     case "$P" in
       .planning/*) ;;
       *) continue ;;
@@ -391,7 +402,9 @@ for HASH in $(printf '%s' "$INCLUDED_COMMITS"); do
     else
       git rm -f -q -- "$P" 2>/dev/null || true
     fi
-  done
+  done <<UNMERGED_PATHS_EOF
+$UNMERGED_PATHS
+UNMERGED_PATHS_EOF
 
   # Anything still unmerged is a REAL conflict, outside the filter. Halt — do not
   # improvise a resolution and do not continue, which would drop the rest of the queue.
