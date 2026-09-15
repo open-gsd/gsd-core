@@ -3914,7 +3914,7 @@ describe('#3427 + #3433 — Codex installer avoids duplicate skills and mixed ho
     );
   });
 
-  test('a symlink under hooks/ is neither followed nor restored', (t) => {
+  test('a symlink under hooks/ is never followed; downgrade preserves it uncaptured', (t) => {
     const canaryDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'gsd-4544-canary-'));
     t.after(() => cleanup(canaryDir));
     const canary = path.join(canaryDir, 'secret.txt');
@@ -3934,8 +3934,11 @@ describe('#3427 + #3433 — Codex installer avoids duplicate skills and mixed ho
 
     assert.strictEqual(fs.readFileSync(canary, 'utf8'), 'DO-NOT-READ',
       'the symlink referent must never be read into the snapshot or written over');
-    assert.strictEqual(fs.existsSync(linkPath), false,
-      'a symlink that predates the install is not regular-file state; wholesale restore drops it');
+    // The link makes the capture incomplete, so the restore downgrades to
+    // per-file: nothing uncaptured is deleted — the pre-existing link is
+    // pre-install state and survives, still pointing at its referent.
+    assert.strictEqual(fs.readFileSync(linkPath, 'utf8'), 'DO-NOT-READ',
+      'the preserved link must still resolve to the untouched referent');
     assert.strictEqual(fs.existsSync(path.join(codexHome, 'hooks', 'secret.txt')), false,
       'the referent bytes must not leak into the install tree as a regular file');
   });
