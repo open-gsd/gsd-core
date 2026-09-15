@@ -308,6 +308,93 @@ describe('resolveVerifyCommandTarget — grounded forms', () => {
   });
 });
 
+describe('#4730 — entity-escaped chain operators decode to the same verdict as the literal form', () => {
+  test('escaped && agrees with literal && when the cd target exists', () => {
+    const root = fixtureRoot('4730-ok');
+    writePackageJson(path.join(root, 'src'), { test: 'node --version' });
+    const esc = resolveVerifyCommandTarget('cd src &amp;&amp; npm test', { projectRoot: root });
+    const lit = resolveVerifyCommandTarget('cd src && npm test', { projectRoot: root });
+    assert.equal(esc.status, 'ok');
+    assert.equal(esc.status, lit.status);
+    assert.equal(esc.reason, lit.reason);
+    assert.equal(esc.severity, lit.severity);
+    assert.equal(esc.form, lit.form);
+    assert.equal(esc.target, lit.target);
+    assert.equal(esc.rawTarget, lit.rawTarget);
+    assert.equal(esc.manifest, lit.manifest);
+  });
+
+  test('escaped && on a missing dir keeps the literal form\u2019s missing_dir blocker', () => {
+    const root = fixtureRoot('4730-missing');
+    const esc = resolveVerifyCommandTarget('cd nope &amp;&amp; npm test', { projectRoot: root });
+    const lit = resolveVerifyCommandTarget('cd nope && npm test', { projectRoot: root });
+    assert.equal(esc.status, 'broken');
+    assert.equal(esc.reason, 'missing_dir');
+    assert.equal(esc.severity, 'blocker');
+    assert.equal(esc.status, lit.status);
+    assert.equal(esc.reason, lit.reason);
+    assert.equal(esc.severity, lit.severity);
+    assert.equal(esc.rawTarget, lit.rawTarget);
+  });
+
+  test('escaped && on a dir without a manifest keeps the literal form\u2019s no_manifest blocker', () => {
+    const root = fixtureRoot('4730-nomanifest');
+    fs.mkdirSync(path.join(root, 'docs-only'), { recursive: true });
+    const esc = resolveVerifyCommandTarget('cd docs-only &amp;&amp; npm run lint', { projectRoot: root });
+    const lit = resolveVerifyCommandTarget('cd docs-only && npm run lint', { projectRoot: root });
+    assert.equal(esc.status, 'broken');
+    assert.equal(esc.reason, 'no_manifest');
+    assert.equal(esc.severity, 'blocker');
+    assert.equal(esc.status, lit.status);
+    assert.equal(esc.reason, lit.reason);
+    assert.equal(esc.severity, lit.severity);
+  });
+
+  test('escaped && agrees with literal && for the --prefix form', () => {
+    const root = fixtureRoot('4730-prefix');
+    writePackageJson(path.join(root, 'web'), { build: 'vite build' });
+    const esc = resolveVerifyCommandTarget('npm --prefix ./web run build &amp;&amp; echo done', {
+      projectRoot: root,
+    });
+    const lit = resolveVerifyCommandTarget('npm --prefix ./web run build && echo done', {
+      projectRoot: root,
+    });
+    assert.equal(esc.status, 'ok');
+    assert.equal(esc.status, lit.status);
+    assert.equal(esc.form, lit.form);
+    assert.equal(esc.target, lit.target);
+  });
+
+  test('a literal & inside a quoted dir name survives the decode intact', () => {
+    const root = fixtureRoot('4730-litamp');
+    writePackageJson(path.join(root, 'a&b'), { test: 'node --version' });
+    const esc = resolveVerifyCommandTarget('cd "a&amp;b" &amp;&amp; npm test', { projectRoot: root });
+    const lit = resolveVerifyCommandTarget('cd "a&b" && npm test', { projectRoot: root });
+    assert.equal(esc.status, 'ok');
+    assert.equal(esc.status, lit.status);
+    assert.equal(esc.target, lit.target);
+  });
+
+  test('probe of a plan with an escaped <automated> block is ok and reports the command verbatim', () => {
+    const root = fixtureRoot('4730-probe');
+    writePackageJson(path.join(root, 'src'), { test: 'node --version' });
+    const phaseDir = path.join(root, '01-demo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(phaseDir, '01-01-PLAN.md'),
+      '<task>\n<name>demo</name>\n<verify>\n<automated>cd src &amp;&amp; npm test</automated>\n</verify>\n</task>\n',
+      'utf8',
+    );
+    const r = probePhaseVerifyCommands({ phaseDir, projectRoot: root });
+    assert.equal(r.status, 'ok');
+    assert.equal(r.counts.blocker, 0);
+    assert.equal(r.commands.length, 1);
+    assert.equal(r.commands[0].command, 'cd src &amp;&amp; npm test');
+    assert.equal(r.commands[0].status, 'ok');
+    assert.equal(r.commands[0].target, path.join(root, 'src'));
+  });
+});
+
 describe('#2401 review Finding 1 — script check runs for --prefix form regardless of flag order', () => {
   test('npm --prefix ./web run <missing-script> is script_missing/warning', () => {
     const root = fixtureRoot('finding1-prefix-first-missing');
