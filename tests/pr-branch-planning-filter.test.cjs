@@ -540,6 +540,176 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         teardown();
       }
     });
+
+    // #4606: c1 touches ONLY a third-bucket path (.planning/WINDOWS.md) and is
+    // EXCLUDEd by classification (test 6's shape); c2 touches a structural
+    // path (.planning/STATE.md) plus that SAME third-bucket path, so c2 is
+    // INCLUDEd (#4447's 5th arm) — but c2's diff for WINDOWS.md is written
+    // against c1's content, which the PR branch never received. Before the
+    // #4606 fix, cherry-picking c2 aborts with a real content conflict on
+    // WINDOWS.md and the whole create_pr_branch run rolls back.
+    //
+    // `thirdBucketPath` is a parameter because the shipped loop reads this
+    // path list out of `git diff --name-only`, and a real `.planning/` path
+    // may legitimately contain a space — the one input shape that tells a
+    // newline-split loop apart from an IFS-split one.
+    // `deleteInC2` selects the OTHER arm of the resolution: `$HASH` removing
+    // the third-bucket path, so `git cat-file -e` fails and the loop must
+    // accept the deletion rather than check out a blob that does not exist.
+    function buildThirdBucketChainFixture({
+      thirdBucketPath = '.planning/WINDOWS.md',
+      deleteInC2 = false,
+    } = {}) {
+      const dir = trackDir(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-prbranch-3rdbucket-')));
+      initRepo(dir);
+      writeFile(dir, 'code.txt', 'line1\n');
+      writeFile(dir, '.planning/STATE.md', 'state v1\n');
+      writeFile(dir, thirdBucketPath, 'v1\n');
+      commitAll(dir, 'chore: base');
+      git(['branch', 'feature'], dir);
+
+      git(['checkout', '-q', 'feature'], dir);
+      writeFile(dir, thirdBucketPath, 'v1\nv2\n');
+      commitAll(dir, 'docs: c1 third-bucket-only (excluded by classification)');
+      const c1 = git(['rev-parse', 'HEAD'], dir).trim();
+
+      writeFile(dir, '.planning/STATE.md', 'state v2\n');
+      if (deleteInC2) {
+        fs.unlinkSync(path.join(dir, thirdBucketPath));
+      } else {
+        writeFile(dir, thirdBucketPath, 'v1\nv2\nv3\n');
+      }
+      commitAll(dir, 'docs: c2 structural + third-bucket (included by #4447 5th arm)');
+      const c2 = git(['rev-parse', 'HEAD'], dir).trim();
+
+      git(['checkout', '-q', 'main'], dir);
+      git(['checkout', '-q', '-b', 'prbranch', 'main'], dir);
+      return { dir, c1, c2 };
+    }
+
+    // Unlike buildRecipeScript above, this #4606 fix makes create_pr_branch's
+    // loop reference $STRUCTURAL_RE/$FORBIDDEN_RE for the first time (to tell
+    // a real conflict from a third-bucket one), so this script sets them from
+    // the real shipped declarations — not hand-copied literals — same
+    // single-source-of-truth principle as parseWorkflow itself.
+    function buildThirdBucketRecipeScript({ includedHash, filterPaths, structuralRe, forbiddenRe }) {
+      return [
+        'set -u',
+        'CURRENT_BRANCH=feature',
+        'PR_BRANCH=prbranch',
+        'TARGET=main',
+        `INCLUDED_COMMITS="${includedHash}"`,
+        `FILTER_PATHS="${filterPaths.join(' ')}"`,
+        `STRUCTURAL_RE='${structuralRe}'`,
+        `FORBIDDEN_RE='${forbiddenRe}'`,
+        extractPickLoop(readWorkflowText()),
+      ].join('\n');
+    }
+
+    test('#4606 L2: a later mixed commit reusing an excluded third-bucket path cherry-picks cleanly and reaches the chained final content', () => {
+      const { transientDirs, structuralRe } = readWorkflow();
+      const { dir, c2 } = buildThirdBucketChainFixture();
+      try {
+        const filterPaths = transientDirs.map((d) => `.planning/${d}/`);
+        const forbiddenRe = forbiddenRegex({ strict: false, transientDirs }).source;
+        // Only c2 is "included" here — c1 is deliberately omitted, simulating
+        // what analyze_commits' classification produces (L1 tests 6/49/50
+        // already prove that classification in isolation); this L2 layer
+        // proves create_pr_branch's cherry-pick mechanics given that input,
+        // same division of labor as the other L2 tests above.
+        const script = buildThirdBucketRecipeScript({ includedHash: c2, filterPaths, structuralRe, forbiddenRe });
+        let result;
+        try {
+          const stdout = execFileSync('sh', ['-c', script], { cwd: dir, encoding: 'utf8', timeout: CHERRY_PICK_RECIPE_TIMEOUT_MS });
+          result = { status: 0, stdout, stderr: '' };
+        } catch (err) {
+          result = { status: typeof err.status === 'number' ? err.status : 1, stdout: err.stdout || '', stderr: err.stderr || '' };
+        }
+        assert.strictEqual(result.status, 0, `create_pr_branch must not abort on the third-bucket chain conflict: ${result.stderr}`);
+
+        const windowsContent = fs.readFileSync(path.join(dir, '.planning/WINDOWS.md'), 'utf-8');
+        assert.strictEqual(
+          windowsContent, 'v1\nv2\nv3\n',
+          'WINDOWS.md must reach c2\'s exact chained content, not c1\'s dropped intermediate state or main\'s stale original',
+        );
+        const stateContent = fs.readFileSync(path.join(dir, '.planning/STATE.md'), 'utf-8');
+        assert.strictEqual(stateContent, 'state v2\n', 'the structural path in the same commit must still land correctly');
+
+        const count = parseInt(git(['rev-list', '--count', 'main..prbranch'], dir).trim(), 10);
+        assert.strictEqual(count, 1, 'exactly one commit (c2) should have landed on the PR branch');
+      } finally {
+        teardown();
+      }
+    });
+
+    // Runs the same shipped recipe as the test above; factored out because the
+    // two cases below only differ in the fixture they feed it.
+    function runThirdBucketRecipe(dir, includedHash) {
+      const { transientDirs, structuralRe } = readWorkflow();
+      const filterPaths = transientDirs.map((d) => `.planning/${d}/`);
+      const forbiddenRe = forbiddenRegex({ strict: false, transientDirs }).source;
+      const script = buildThirdBucketRecipeScript({ includedHash, filterPaths, structuralRe, forbiddenRe });
+      try {
+        const stdout = execFileSync('sh', ['-c', script], { cwd: dir, encoding: 'utf8', timeout: CHERRY_PICK_RECIPE_TIMEOUT_MS });
+        return { status: 0, stdout, stderr: '' };
+      } catch (err) {
+        return { status: typeof err.status === 'number' ? err.status : 1, stdout: err.stdout || '', stderr: err.stderr || '' };
+      }
+    }
+
+    // #4606 follow-up: the resolution loop reads its path list out of
+    // `git diff --name-only`, which emits a space-bearing path unquoted. With
+    // `for P in $(...)` that list is split on IFS, so `.planning/My Notes.md`
+    // arrives as `.planning/My` and `Notes.md` — neither names the conflicted
+    // file, nothing is resolved, and the run aborts with the very #4606 failure
+    // this block exists to prevent. Same assertions as the test above: the
+    // space is the only variable.
+    test('#4606 L2: the third-bucket resolution also fires for a path containing a SPACE, which the unmerged-path list emits unquoted', () => {
+      const thirdBucketPath = '.planning/My Notes.md';
+      const { dir, c2 } = buildThirdBucketChainFixture({ thirdBucketPath });
+      try {
+        const result = runThirdBucketRecipe(dir, c2);
+        assert.strictEqual(result.status, 0, `create_pr_branch must not abort on the third-bucket chain conflict: ${result.stderr}`);
+
+        const content = fs.readFileSync(path.join(dir, thirdBucketPath), 'utf-8');
+        assert.strictEqual(
+          content, 'v1\nv2\nv3\n',
+          `${thirdBucketPath} must reach c2's exact chained content — a word-split path is never checked out, leaving main's stale original`,
+        );
+        const stateContent = fs.readFileSync(path.join(dir, '.planning/STATE.md'), 'utf-8');
+        assert.strictEqual(stateContent, 'state v2\n', 'the structural path in the same commit must still land correctly');
+
+        const count = parseInt(git(['rev-list', '--count', 'main..prbranch'], dir).trim(), 10);
+        assert.strictEqual(count, 1, 'exactly one commit (c2) should have landed on the PR branch');
+      } finally {
+        teardown();
+      }
+    });
+
+    // #4606 follow-up: the `git cat-file -e` else-arm — $HASH DELETES the
+    // third-bucket path, so there is no "theirs" blob to check out and the
+    // loop must accept the deletion. Previously untested: both commits in the
+    // original fixture only ever modified the path.
+    test('#4606 L2: when the included commit DELETES the third-bucket path, the resolution accepts the deletion instead of halting', () => {
+      const thirdBucketPath = '.planning/WINDOWS.md';
+      const { dir, c2 } = buildThirdBucketChainFixture({ thirdBucketPath, deleteInC2: true });
+      try {
+        const result = runThirdBucketRecipe(dir, c2);
+        assert.strictEqual(result.status, 0, `a delete/modify conflict on a third-bucket path must resolve, not halt: ${result.stderr}`);
+
+        assert.strictEqual(
+          fs.existsSync(path.join(dir, thirdBucketPath)), false,
+          'the deletion c2 records must be honoured — the path must not survive on the PR branch',
+        );
+        const stateContent = fs.readFileSync(path.join(dir, '.planning/STATE.md'), 'utf-8');
+        assert.strictEqual(stateContent, 'state v2\n', 'the structural path in the same commit must still land correctly');
+
+        const count = parseInt(git(['rev-list', '--count', 'main..prbranch'], dir).trim(), 10);
+        assert.strictEqual(count, 1, 'exactly one commit (c2) should have landed on the PR branch');
+      } finally {
+        teardown();
+      }
+    });
   });
 
   // ── L3: planning.pr_strict registration through the real CLI/config ─────
@@ -891,6 +1061,35 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         'analyze_commits must compute an explicit total planning-file count via a real shell '
           + 'assignment (PLANNING_COUNT=$(...)) so the classification arms can distinguish '
           + '"only structural" planning commits from "structural plus transient/other" ones',
+      );
+    });
+
+    // #4606: the resolution loop only works if it splits its unmerged-path
+    // list on newlines. Reverting to `for P in $(git diff ...)` reintroduces
+    // the IFS word-split silently — the L2 space test is the only runtime
+    // catch, so pin the shipped form here too.
+    test('#4606 the third-bucket resolution splits the unmerged-path list on newlines, not on IFS', () => {
+      const text = readFileNormalized(WORKFLOW_PATH);
+      // Comments are stripped first: the loop's own comment names the banned
+      // form in order to explain why it is banned.
+      const loopCode = extractPickLoop(text)
+        .split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+      assert.ok(
+        !loopCode.includes('for P in $(git diff --name-only --diff-filter=U)'),
+        'the third-bucket resolution must not iterate the unmerged-path list through unquoted '
+          + 'command substitution — `for P in $(...)` splits on IFS, so a third-bucket path '
+          + 'containing a space is torn into fragments that name no conflicted file, nothing is '
+          + 'resolved, and the run aborts with the exact #4606 failure this block prevents',
+      );
+      assert.match(
+        loopCode,
+        /UNMERGED_PATHS=\$\(git diff --name-only --diff-filter=U\)/,
+        'the unmerged-path list must be snapshotted before the loop restages paths',
+      );
+      assert.match(
+        loopCode,
+        /while IFS= read -r P; do/,
+        'the third-bucket resolution must consume the unmerged-path list with a newline-splitting read loop',
       );
     });
   });
