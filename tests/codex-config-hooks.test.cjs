@@ -3630,7 +3630,7 @@ describe('#3427 + #3433 — Codex installer avoids duplicate skills and mixed ho
 
 
 {
-  const { test, describe } = require('node:test');
+  const { test, describe, beforeEach, afterEach } = require('node:test');
   const assert = require('node:assert/strict');
   const os = require('os');
   const { cleanup } = require('./helpers.cjs');
