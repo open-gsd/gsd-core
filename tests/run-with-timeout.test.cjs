@@ -231,6 +231,14 @@ describe('#4601 run-with-timeout — tree reap (Windows has no process groups)',
   // Methodology mirrors the C1 test above: HEARTBEAT liveness, not
   // kill(pid,0); first sample written synchronously at startup; bounded
   // settle waits >> the 100ms tick.
+  //
+  // KNOWN RUNNER MASKING, recorded deliberately: on GitHub's windows runners
+  // the test harness reaps orphaned descendants shortly after the verb exits,
+  // so the freeze assertion can pass even against UNFIXED code (observed: the
+  // direct tree test below was green on the unfixed RED head's windows tier).
+  // The environment where the bug manifests is a user's real Windows session,
+  // per the reporter's repro. These tests pin the contract; they are not a
+  // full differential witness on CI runners.
   const isWin = process.platform === 'win32';
 
   test("a timed-out command's descendant stops ticking — the tree dies, not just the direct child", { skip: !isWin ? 'win32-only' : false }, async (t) => {
@@ -270,6 +278,9 @@ describe('#4601 run-with-timeout — tree reap (Windows has no process groups)',
     // is a GRANDCHILD even with no further nesting — this is the shape of
     // workflow.cross_ai_command wrapping a model CLI .cmd shim (the paid-orphan
     // case from the issue). taskkill /T from the cmd.exe pid must reach it.
+    // The shim stays alive with a ping sleep-loop, NOT `pause`: pause blocks on
+    // stdin, which spawnSync-harness semantics resolve differently (observed on
+    // a real runner: the shim quit early and the verb exited 0, no timeout).
     const dir = createTempDir('rwt-4601-cmd');
     t.after(() => cleanup(dir));
     const shim = path.join(dir, 'slow.cmd');
@@ -277,10 +288,12 @@ describe('#4601 run-with-timeout — tree reap (Windows has no process groups)',
     fs.writeFileSync(shim, [
       '@echo off',
       `start "" /b "${NODE}" -e "const fs=require('fs');const hb=process.argv[1];const tick=()=>fs.writeFileSync(hb,String(Date.now()));tick();setInterval(tick,100);" "${hbFile}"`,
-      'pause',
+      ':loop',
+      'ping -n 2 127.0.0.1 > NUL',
+      'goto :loop',
     ].join('\r\n'), 'utf8');
     const r = runVerb(['2', '--', shim], { timeout: RUN_WITH_TIMEOUT_REAP_BACKSTOP_MS });
-    assert.equal(r.status, 124, 'the mediated .cmd must time out (124), not hang');
+    assert.equal(r.status, 124, 'the mediated .cmd must time out (124), not exit early or hang');
     assert.ok(fs.existsSync(hbFile), 'grandchild heartbeat should exist');
     await sleep(300); // let any in-flight write settle after the tree kill
     const first = fs.readFileSync(hbFile, 'utf8');
