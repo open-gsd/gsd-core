@@ -4570,8 +4570,9 @@ function runWithTimeout(argv) {
   // Detached (own process group) on POSIX so a timeout can reap the WHOLE tree —
   // a bare child.kill() misses grandchildren (e.g. a test runner's workers).
   // Windows has no POSIX process groups and process.kill(-pid) is unsupported
-  // there, so the tree kill rides on `taskkill /PID <pid> /T /F` at the SIGKILL
-  // stage instead (see killTree) — the graceful stage stays a plain child.kill.
+  // there, so EVERY killTree attempt on Windows tree-kills via
+  // `taskkill /PID <pid> /T /F` while the root is alive (see killTree) — by the
+  // time the direct child exits, its descendants are already orphaned.
   const detached = !isWin && secs > 0;
   const spawnFailureCode = (err) =>
     (err && err.code === 'ENOENT' ? 127 : err && err.code === 'EACCES' ? 126 : 125);

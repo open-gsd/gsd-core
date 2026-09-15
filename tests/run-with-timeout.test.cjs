@@ -259,8 +259,8 @@ describe('#4601 run-with-timeout — tree reap (Windows has no process groups)',
 
   test('a fast-exiting command still exits with its own code — the win32 branch never perturbs the normal path', { skip: !isWin ? 'win32-only' : false }, () => {
     // Negative-space guard: for a fast command no timer fires and killTree is
-    // never invoked — the taskkill branch must only ever attach to the
-    // timeout/escalation force stage, never to the timerless normal path.
+    // never invoked — the taskkill branch must only ever attach to killTree
+    // attempts, never to the timerless normal path.
     const r = runVerb(['5', '--', NODE, '-e', 'process.exit(7)']);
     assert.equal(r.status, 7);
   });
