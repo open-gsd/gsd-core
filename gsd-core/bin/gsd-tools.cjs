@@ -3017,6 +3017,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             worktreeSafety.cmdWorktreeRecordAgent(cwd, args.slice(2));
           } else if (subcommand === 'reap-orphans') {
             worktreeSafety.cmdWorktreeReapOrphans(cwd);
+          } else if (subcommand === 'worker-record') {
+            worktreeSafety.cmdWorktreeWorkerRecord(cwd, args.slice(2));
+          } else if (subcommand === 'worker-status') {
+            worktreeSafety.cmdWorktreeWorkerStatus(cwd, args.slice(2));
+          } else if (subcommand === 'worker-complete') {
+            worktreeSafety.cmdWorktreeWorkerComplete(cwd, args.slice(2));
           } else if (subcommand === 'base-check') {
             require('./lib/worktree-base-ref.cjs').cmdWorktreeBaseCheck(cwd, args.slice(2));
           } else if (subcommand === 'set-baseref') {
@@ -3024,7 +3030,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           } else if (subcommand === 'create') {
             worktreeSafety.cmdWorktreeCreate(cwd, args.slice(2));
           } else {
-            error('Unknown worktree subcommand. Available: cleanup-wave, record-agent, reap-orphans, base-check, set-baseref, create', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+            error('Unknown worktree subcommand. Available: cleanup-wave, record-agent, reap-orphans, base-check, set-baseref, create, worker-record, worker-status, worker-complete', ERROR_REASON.SDK_UNKNOWN_COMMAND);
           }
   }
 

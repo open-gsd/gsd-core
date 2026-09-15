@@ -126,6 +126,14 @@ in `execute-phase.md` step 3 (on Claude Code it is literally `isolation="worktre
 
 The host has no harness-native isolation primitive, so **GSD** creates each worktree and process-spawns the executor into it. Fan-out is OS-level (N processes), not the host's subagent tool. Per the Codex `workspace-write` sandbox constraint, **the orchestrator performs every git operation** — create, merge, cleanup; the spawned executor only edits files and commits inside its own worktree.
 
+**Resume-first guard (#4624).** The launching turn may end while external workers are still live — that is expected here, not an error. So before dispatching ANY plan in this section, sweep for workers a previous session left behind:
+
+```bash
+gsd_run query worktree worker-status --root "${ORCH_ROOT}/.claude/worktrees"
+```
+
+Every entry with `needsReconciliation: true` (recorded running, process gone) is reconciled from its persisted record — SUMMARY + plan-scoped commits + branch state per `execute-phase/steps/completion-reconciliation.md`, merge if artifact-complete, preserve with recovery information otherwise — then marked with `worker-complete`. **Never re-dispatch a recorded plan, and never reconcile on narration alone.**
+
 Run the loop below once per runnable plan in the wave, **one plan at a time** (`git worktree add` races on `.git/config.lock`).
 
 **Before running the bash block, substitute the plan's identifiers into it** exactly as you do for the `Agent()` prompt on the harness path: replace `{plan_number}` and `{phase_number}` with this plan's values. They are template placeholders, not shell variables. `$ORCH_ROOT` and `$EXPECTED_BASE` are real shell variables, already assigned earlier in this step; `$WAVE_WORKTREE_MANIFEST` was initialized above.
@@ -330,7 +338,31 @@ fi
 
 `worktree create` records the entry in `$WAVE_WORKTREE_MANIFEST` itself, so **do not** call `worktree.record-agent` for these plans — that verb is the harness-path counterpart, used because the harness creates the worktree behind GSD's back. Double-recording is deduped by path+branch, but the create verb is the single writer here.
 
-Spawn `EXEC_JSON`'s `command` + `args` as a background process with its working directory set to `EXEC_JSON.cwd`. The `cwd` is returned for **every** host, including those whose descriptor has no cwd flag (`cwdFlag: null`) and therefore bind through the process's own working directory — always set it, never assume the flag did the job. Wait for all spawned executors in the wave before merging.
+Spawn `EXEC_JSON`'s `command` + `args` as a background process with its working directory set to `EXEC_JSON.cwd`, capturing the PID (`$!`) and redirecting stdout+stderr into a per-worker log placed BESIDE the worktree — `${WT_PATH}.worker.log`, not inside it: cleanup removes the worktree, and the log plus the lifecycle record must survive it. The `cwd` is returned for **every** host, including those whose descriptor has no cwd flag (`cwdFlag: null`) and therefore bind through the process's own working directory — always set it, never assume the flag did the job.
+
+**Record the launch before any wait (#4624).** A bare background `wait` left the wave with no durable lifecycle: when the orchestrator's turn ended first, a finished worker sat undiscovered and a blocked one sat unreported, and a resumed session had nothing to recover from. Immediately after the spawn — before waiting on anything — persist the launch identity and result location:
+
+```bash
+WORKER_LOG="${WT_PATH}.worker.log"
+gsd_run query worktree worker-record \
+  --path "$WT_PATH" \
+  --pid "$WORKER_PID" \
+  --plan "{plan_number}" \
+  --summary-path "{phase_dir}/{plan_padded}-SUMMARY.md" \
+  --log-file "$WORKER_LOG" || {
+    echo "FATAL: worker launch not recorded for plan {plan_number} — a running record already exists for this worktree (a resumed session dispatched it). Reconcile that worker per completion-reconciliation.md instead of spawning a second one." >&2
+    exit 1
+  }
+```
+
+**Wait until terminal, reconcile BEFORE classifying (#4217/#4624).** Wait for the wave's executors to reach a terminal process state (`wait` on the captured PIDs, or poll `worktree worker-status --root "${ORCH_ROOT}/.claude/worktrees"` and read `pidAlive`). When a worker's process ends, record the outcome:
+
+```bash
+gsd_run query worktree worker-complete --path "$WT_PATH" --exit-code "$WORKER_EXIT" \
+  --note "<blocker description, or empty for a clean finish>"
+```
+
+Then run the **existing** artifact reconciliation (`execute-phase/steps/completion-reconciliation.md`): SUMMARY + plan-scoped commits + branch state decide the outcome — a worker that exits 0 with no artifacts is not done, and one that exits non-zero with artifacts complete may still merge. Merge artifact-complete workers through the manifest-only gauntlet below; preserve a blocked/failed worktree untouched, carrying the log path and the blocker from the completion note as its recovery information.
 
 The executor never touches `STATE.md`/`ROADMAP.md`, and that guard needs no new code — `execute-plan` auto-detects worktree mode via the `IS_WORKTREE` (`.git`-is-a-file) primitive, which a GSD-created worktree trips identically to a harness-created one.
 

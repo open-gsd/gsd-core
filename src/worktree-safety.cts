@@ -1484,8 +1484,8 @@ function cmdWorktreeRecordAgent(cwd: string, args: string[] = [], deps: RecordAg
     if (i < 0 || i + 1 >= args.length) return '';
     return args[i + 1];
   };
-  const write = deps.write || ((s: string) => process.stdout.write(s));
-  const writeErr = deps.writeErr || ((s: string) => process.stderr.write(s));
+  const write = (deps.write as ((s: string) => void)) || ((s: string) => process.stdout.write(s));
+  const writeErr = (deps.writeErr as ((s: string) => void)) || ((s: string) => process.stderr.write(s));
 
   const manifestPath = flag('--manifest');
   if (!manifestPath) {
@@ -1766,8 +1766,8 @@ function cmdWorktreeCreate(cwd: string, args: string[] = [], deps: RecordAgentCm
     if (i < 0 || i + 1 >= args.length) return '';
     return args[i + 1];
   };
-  const write = deps.write || ((s: string) => process.stdout.write(s));
-  const writeErr = deps.writeErr || ((s: string) => process.stderr.write(s));
+  const write = (deps.write as ((s: string) => void)) || ((s: string) => process.stdout.write(s));
+  const writeErr = (deps.writeErr as ((s: string) => void)) || ((s: string) => process.stderr.write(s));
 
   const manifestPath = flag('--manifest');
   if (!manifestPath) {
@@ -2235,8 +2235,8 @@ function defaultMtimeSafe(file: string): Date | null {
 }
 
 function cmdWorktreeReapOrphans(cwd: string, deps: RecordAgentCmdDeps & WorktreeDeps = {}): void {
-  const write = deps.write || ((s: string) => process.stdout.write(s));
-  const writeErr = deps.writeErr || ((s: string) => process.stderr.write(s));
+  const write = (deps.write as ((s: string) => void)) || ((s: string) => process.stdout.write(s));
+  const writeErr = (deps.writeErr as ((s: string) => void)) || ((s: string) => process.stderr.write(s));
   let result: ReapResult[];
   try {
     result = reapOrphanWorktrees(cwd, deps);
@@ -2251,6 +2251,293 @@ function cmdWorktreeReapOrphans(cwd: string, deps: RecordAgentCmdDeps & Worktree
     writeErr(`[gsd] worktree.reap-orphans: ${skippedCount} orphan(s) skipped (run with DEBUG=1 for details)\n`);
   }
   write(`${JSON.stringify({ ok: true, reaped: result.filter((r) => r.status === 'reaped').length, entries: result }, null, 2)}\n`);
+}
+
+// ─── Worker lifecycle records (#4624) ────────────────────────────────────────
+// Durable per-worker launch/terminal state for the orchestrator-worktree
+// backend. The dispatch fragment spawns external executor processes with a
+// bare background `wait`; when the orchestrator's turn ends before a worker
+// finishes, nothing records the launch or guarantees reconciliation, and a
+// resumed session has no state to recover — it re-derives everything from
+// manual PID/log discovery. These records persist the launch identity, the
+// result location, and the terminal outcome as a small JSON file beside the
+// worktree (NOT inside it — cleanup removes the worktree; the record must
+// survive it), so `worker-status` can answer "who was dispatched, is it
+// still running, did it finish its artifacts, does it need reconciliation"
+// deterministically on resume.
+
+/** Path of the lifecycle record for a worktree: a SIBLING of the worktree dir. */
+function workerRecordPath(worktreePath: string): string {
+  return `${worktreePath}.worker.json`;
+}
+
+interface WorkerRecord {
+  agentId: string;
+  pid: number;
+  plan: string;
+  worktreePath: string;
+  summaryPath: string;
+  logFile: string;
+  startedAt: string;
+  state: 'running' | 'complete';
+  exitCode: number | null;
+  note: string;
+  completedAt: string | null;
+}
+
+function defaultPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // ESRCH = no such process; EPERM = exists but owned by another user —
+    // both mapped to their liveness truth, never swallowed.
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+const RENAME_RETRY_ERRNOS = new Set(['EPERM', 'EBUSY', 'EACCES']);
+
+// local/require-fs-op-fallback: a concurrent reader or antivirus scanner can
+// transiently hold the rename target open on Windows (DEFECT.WINDOWS-FS-OPS) —
+// bounded retry on the transient errnos, per the house pattern.
+function renameWithRetry(tmp: string, target: string): void {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      fs.renameSync(tmp, target);
+      return;
+    } catch (err) {
+      lastErr = err;
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code && RENAME_RETRY_ERRNOS.has(code) && attempt < 3) {
+        const until = Date.now() + 25 * (attempt + 1);
+        while (Date.now() < until) { /* bounded spin: transient locks clear in <100ms */ }
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
+function writeWorkerRecord(
+  recordPath: string,
+  record: WorkerRecord,
+  deps: Record<string, unknown> = {}
+): void {
+  const writeFile = (deps.writeFile as ((p: string, d: string) => void)) || ((p: string, d: string) => fs.writeFileSync(p, d));
+  const tmp = `${recordPath}.tmp-${process.pid}`;
+  writeFile(tmp, `${JSON.stringify(record, null, 2)}\n`);
+  renameWithRetry(tmp, recordPath);
+}
+
+function cmdWorktreeWorkerRecord(cwd: string, args: string[] = [], deps: Record<string, unknown> = {}): void {
+  const flag = (name: string): string => {
+    const i = args.indexOf(name);
+    if (i < 0 || i + 1 >= args.length) return '';
+    return args[i + 1];
+  };
+  const write = (deps.write as ((s: string) => void)) || ((s: string) => process.stdout.write(s));
+  const writeErr = (deps.writeErr as ((s: string) => void)) || ((s: string) => process.stderr.write(s));
+
+  const worktreePath = flag('--path');
+  const pidText = flag('--pid');
+  const plan = flag('--plan');
+  const summaryPath = flag('--summary-path');
+  const logFile = flag('--log-file');
+  if (!worktreePath || !pidText || !plan) {
+    writeErr('Usage: worktree worker-record --path <worktree> --pid <pid> --plan <plan_number> --summary-path <path> [--log-file <path>]\n');
+    process.exitCode = 2;
+    return;
+  }
+  const pid = Number(pidText);
+  if (!Number.isInteger(pid) || pid <= 0) {
+    writeErr(`[gsd] worktree.worker-record: invalid --pid: ${pidText}\n`);
+    process.exitCode = 2;
+    return;
+  }
+
+  const resolvedWorktree = path.resolve(cwd, worktreePath);
+  const recordPath = workerRecordPath(resolvedWorktree);
+  const readFile = (deps.readFile as ((p: string) => string)) || ((p: string) => fs.readFileSync(p, 'utf8'));
+  let existing: WorkerRecord | null = null;
+  try {
+    existing = JSON.parse(readFile(recordPath)) as WorkerRecord;
+  } catch { /* no record yet — first dispatch for this worktree */ }
+  if (existing && existing.state === 'running') {
+    // Duplicate-dispatch guard (#4624): a running record means a resumed
+    // session re-entered the dispatch step. The worker must be reconciled
+    // (worker-status → completion-reconciliation), never re-spawned.
+    const hint = 'A worker is already recorded RUNNING for this worktree. Reconcile it (worktree worker-status, then execute-phase/steps/completion-reconciliation.md) before any new dispatch — never re-dispatch a recorded plan.';
+    writeErr(`[gsd] worktree.worker-record: already_running — ${hint}\n`);
+    write(`${JSON.stringify({ ok: false, reason: 'already_running', hint, record: existing }, null, 2)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const record: WorkerRecord = {
+    agentId: path.basename(resolvedWorktree),
+    pid,
+    plan,
+    worktreePath: resolvedWorktree,
+    summaryPath: path.resolve(cwd, summaryPath),
+    logFile: logFile ? path.resolve(cwd, logFile) : '',
+    startedAt: new Date().toISOString(),
+    state: 'running',
+    exitCode: null,
+    note: '',
+    completedAt: null,
+  };
+  try {
+    writeWorkerRecord(recordPath, record, deps);
+  } catch (err) {
+    writeErr(`[gsd] worktree.worker-record: write_failed — ${(err as Error).message}\n`);
+    write(`${JSON.stringify({ ok: false, reason: 'write_failed', error: (err as Error).message }, null, 2)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  write(`${JSON.stringify({ ok: true, record }, null, 2)}\n`);
+}
+
+function workerStatusView(
+  record: WorkerRecord,
+  deps: Record<string, unknown> = {}
+): Record<string, unknown> {
+  const pidAlive = (deps.pidAlive as ((pid: number) => boolean)) || defaultPidAlive;
+  const exists = (deps.existsSync as ((p: string) => boolean)) || fs.existsSync;
+  const summaryExists = exists(record.summaryPath);
+  const alive = record.state === 'running' && pidAlive(record.pid);
+  return {
+    agentId: record.agentId,
+    pid: record.pid,
+    plan: record.plan,
+    worktreePath: record.worktreePath,
+    summaryPath: record.summaryPath,
+    logFile: record.logFile,
+    state: record.state,
+    exitCode: record.exitCode,
+    note: record.note,
+    startedAt: record.startedAt,
+    completedAt: record.completedAt,
+    pidAlive: record.state === 'running' ? alive : null,
+    summaryExists,
+    needsReconciliation: record.state === 'running' && !alive,
+  };
+}
+
+function readWorkerRecordsFromRoot(
+  root: string,
+  readFile: (p: string) => string,
+  readdir: (p: string) => string[]
+): { path: string; record: WorkerRecord }[] {
+  let entries: string[] = [];
+  try {
+    entries = readdir(root).filter((f) => f.endsWith('.worker.json'));
+  } catch { /* root missing — no workers ever recorded */ return []; }
+  const out: { path: string; record: WorkerRecord }[] = [];
+  for (const entry of entries) {
+    const recordPath = path.join(root, entry);
+    try {
+      out.push({ path: recordPath, record: JSON.parse(readFile(recordPath)) as WorkerRecord });
+    } catch { // a torn/partial record must not hide the others
+      out.push({ path: recordPath, record: null as unknown as WorkerRecord });
+    }
+  }
+  return out;
+}
+
+function cmdWorktreeWorkerStatus(cwd: string, args: string[] = [], deps: Record<string, unknown> = {}): void {
+  const flag = (name: string): string => {
+    const i = args.indexOf(name);
+    if (i < 0 || i + 1 >= args.length) return '';
+    return args[i + 1];
+  };
+  const write = (deps.write as ((s: string) => void)) || ((s: string) => process.stdout.write(s));
+  const writeErr = (deps.writeErr as ((s: string) => void)) || ((s: string) => process.stderr.write(s));
+
+  const worktreePath = flag('--path');
+  const root = flag('--root');
+  if (!worktreePath === !root) { // exactly one of the two
+    writeErr('Usage: worktree worker-status (--path <worktree> | --root <worktrees-dir>)\n');
+    process.exitCode = 2;
+    return;
+  }
+  const readFile = (deps.readFile as ((p: string) => string)) || ((p: string) => fs.readFileSync(p, 'utf8'));
+  const readdir = (deps.readdir as ((p: string) => string[])) || ((p: string) => fs.readdirSync(p));
+
+  const views: Record<string, unknown>[] = [];
+  if (worktreePath) {
+    const recordPath = workerRecordPath(path.resolve(cwd, worktreePath));
+    let record: WorkerRecord | null = null;
+    try {
+      record = JSON.parse(readFile(recordPath)) as WorkerRecord;
+    } catch {
+      write(`${JSON.stringify({ ok: true, found: false, workers: [] }, null, 2)}\n`);
+      return;
+    }
+    views.push(workerStatusView(record, deps));
+  } else {
+    for (const { record } of readWorkerRecordsFromRoot(path.resolve(cwd, root), readFile, readdir)) {
+      if (!record) { // torn record is itself a reconciliation candidate
+        views.push({ state: 'unreadable', needsReconciliation: true });
+        continue;
+      }
+      views.push(workerStatusView(record, deps));
+    }
+  }
+  write(`${JSON.stringify({ ok: true, found: true, workers: views }, null, 2)}\n`);
+}
+
+function cmdWorktreeWorkerComplete(cwd: string, args: string[] = [], deps: Record<string, unknown> = {}): void {
+  const flag = (name: string): string => {
+    const i = args.indexOf(name);
+    if (i < 0 || i + 1 >= args.length) return '';
+    return args[i + 1];
+  };
+  const write = (deps.write as ((s: string) => void)) || ((s: string) => process.stdout.write(s));
+  const writeErr = (deps.writeErr as ((s: string) => void)) || ((s: string) => process.stderr.write(s));
+
+  const worktreePath = flag('--path');
+  const exitText = flag('--exit-code');
+  const note = flag('--note');
+  if (!worktreePath || !exitText) {
+    writeErr('Usage: worktree worker-complete --path <worktree> --exit-code <n> [--note <recovery info>]\n');
+    process.exitCode = 2;
+    return;
+  }
+  const exitCode = Number(exitText);
+  if (!Number.isInteger(exitCode)) {
+    writeErr(`[gsd] worktree.worker-complete: invalid --exit-code: ${exitText}\n`);
+    process.exitCode = 2;
+    return;
+  }
+
+  const recordPath = workerRecordPath(path.resolve(cwd, worktreePath));
+  const readFile = (deps.readFile as ((p: string) => string)) || ((p: string) => fs.readFileSync(p, 'utf8'));
+  let record: WorkerRecord;
+  try {
+    record = JSON.parse(readFile(recordPath)) as WorkerRecord;
+  } catch (err) {
+    writeErr(`[gsd] worktree.worker-complete: no_record — ${(err as Error).message}\n`);
+    write(`${JSON.stringify({ ok: false, reason: 'no_record', error: (err as Error).message }, null, 2)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  const alreadyComplete = record.state === 'complete';
+  record.state = 'complete';
+  record.exitCode = exitCode;
+  record.note = note || record.note || '';
+  record.completedAt = record.completedAt || new Date().toISOString();
+  try {
+    writeWorkerRecord(recordPath, record, deps);
+  } catch (err) {
+    writeErr(`[gsd] worktree.worker-complete: write_failed — ${(err as Error).message}\n`);
+    write(`${JSON.stringify({ ok: false, reason: 'write_failed', error: (err as Error).message }, null, 2)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  write(`${JSON.stringify({ ok: true, alreadyComplete, record }, null, 2)}\n`);
 }
 
 // Unused exports kept for API compatibility
@@ -2338,6 +2625,10 @@ export = {
   cmdWorktreeCreate,
   reapOrphanWorktrees,
   cmdWorktreeReapOrphans,
+  workerRecordPath,
+  cmdWorktreeWorkerRecord,
+  cmdWorktreeWorkerStatus,
+  cmdWorktreeWorkerComplete,
   resolveWorktreeRoot,
   pruneOrphanedWorktrees,
 };
