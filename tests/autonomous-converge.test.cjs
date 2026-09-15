@@ -82,8 +82,13 @@ describe('autonomous --converge flag (#711)', () => {
     assert.doesNotMatch(step, /exit 1/, 'the step must not stop an explicit-flag run');
     assert.match(
       step,
-      /overrides? the (?:existing )?convergence feature gate|config is the default/i,
-      'the step must state the precedence: explicit flag wins, config is the non-flag default',
+      /OVERRIDES the `workflow\.plan_review_convergence` config gate/,
+      'the step must state that the explicit flag overrides the config gate',
+    );
+    assert.match(
+      step,
+      /remains the default for non-flag invocation/,
+      'the step must state that the config is the non-flag default',
     );
   });
 
