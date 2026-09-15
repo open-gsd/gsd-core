@@ -28,6 +28,7 @@ import { splitLines } from './text-lines.cjs';
 import unusableInputMod = require('./unusable-input.cjs');
 const { UNUSABLE_REASON, warnUnusableInput } = unusableInputMod;
 import { load as yamlLoad, dump as yamlDump, FAILSAFE_SCHEMA, YAMLException } from './vendor/js-yaml.cjs';
+import { AnchorDetectedSignal, refuseAnchorsListener } from './yaml-anchor-guard.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -198,23 +199,9 @@ function toPlainValueTree(value: unknown): unknown {
  * ordinary literal `"<<"` string key with a normal, non-expanding nested map — so it carries none
  * of the resource-exhaustion risk this guard exists for.
  */
-/** Thrown from inside the `listener` callback below; never surfaced past `refuseAnchorsAndAliases`. */
-class AnchorDetectedSignal extends Error {}
-
 function refuseAnchorsAndAliases(yaml: string): void {
   try {
-    yamlLoad(yaml, {
-      ...YAML_LOAD_OPTS,
-      listener: (_event: string, state: { anchor?: string | null }) => {
-        // Thrown FROM INSIDE the listener, not merely recorded and checked after `load`
-        // returns: js-yaml keeps parsing (and, for an alias, keeps EXPANDING) past a listener
-        // that only sets a flag, which reintroduces the exact resource-exhaustion window this
-        // guard exists to close. Throwing here aborts the parse immediately, before any
-        // expansion — the billion-laughs fixture refuses in ~1-2ms rather than building the
-        // ~35MB tree first and discarding it.
-        if (state.anchor !== null && state.anchor !== undefined) throw new AnchorDetectedSignal();
-      },
-    });
+    yamlLoad(yaml, { ...YAML_LOAD_OPTS, listener: refuseAnchorsListener });
   } catch (e) {
     if (e instanceof AnchorDetectedSignal) {
       throw new YAMLException(

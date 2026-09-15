@@ -591,7 +591,8 @@
       "workstream.cjs",
       "worktree-base-ref.cjs",
       "worktree-safety.cjs",
-      "write-set.cjs"
+      "write-set.cjs",
+      "yaml-anchor-guard.cjs"
     ],
     "hooks": [
       "gsd-agent-isolation-guard.js",

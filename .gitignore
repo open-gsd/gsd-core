@@ -317,6 +317,7 @@ build/
 /gsd-core/bin/lib/host-runtime-detection.cjs
 /gsd-core/bin/lib/task-content-resolution.cjs
 /gsd-core/bin/lib/tdd-red-evidence.cjs
+/gsd-core/bin/lib/yaml-anchor-guard.cjs
 __pycache__/
 *.pyc
 .venv/
