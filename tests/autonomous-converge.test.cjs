@@ -88,8 +88,13 @@ describe('autonomous --converge flag (#711)', () => {
     );
     assert.match(
       step,
-      /remains the default for non-flag invocation/,
-      'the step must state that the config is the non-flag default',
+      /invocation carries `--override-gate`/,
+      'the step must state that the dispatched convergence run carries the override flag (#4600)',
+    );
+    assert.match(
+      step,
+      /without the flag, `PLAN_STRATEGY` is `local`/,
+      'the step must state that the config is not consulted on the non-flag autonomous path',
     );
   });
 
@@ -127,6 +132,20 @@ describe('autonomous --converge flag (#711)', () => {
       howTo,
       /overrides the gate for that run/,
       'the how-to must document that an explicit --converge overrides the gate on /gsd-autonomous (#4600)',
+    );
+    // Security-review constraint: the override must be appended conditionally on the converge
+    // strategy (never ride on local-strategy runs) and parsed token-anchored by §1.5.
+    // Search from the conditional: the host prose at the precedence sentence also names the
+    // flag, so a bare indexOf would resolve there and the ordering check could never pass.
+    const conditionalAt = workflow.indexOf('if [ "${PLAN_STRATEGY}" = "converge" ]; then');
+    const overrideAt = workflow.indexOf('--override-gate', conditionalAt);
+    assert.ok(
+      conditionalAt !== -1 && overrideAt !== -1,
+      'the PLAN_STRATEGY=converge conditional must exist and append --override-gate (#4600)',
+    );
+    assert.ok(
+      convergence.includes('(^|[[:space:]])--override-gate([[:space:]]|$)'),
+      '§1.5 must match --override-gate token-anchored so no other argument can carry it (#4600)',
     );
   });
 

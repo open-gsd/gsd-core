@@ -59,6 +59,8 @@ If the phase is already complete, autonomous mode exits immediately with a messa
 Use `--converge` when you want each phase to run the plan-review convergence loop before execution. Both `/gsd-autonomous` and `/gsd-progress --next --auto` support this flag.
 
 ```bash
+# Needed only for /gsd-progress --next --converge and standalone /gsd-plan-review-convergence
+# (/gsd-autonomous --converge overrides the gate for its own run):
 gsd config-set workflow.plan_review_convergence true
 
 # Via autonomous (multi-phase or single-phase):
@@ -72,7 +74,7 @@ gsd config-set workflow.plan_review_convergence true
 
 `--cross-ai` is accepted as an alias for `--converge`. Reviewer flags supported by `/gsd-plan-review-convergence` pass through unchanged, including `--codex`, `--claude`, `--opencode`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--all`, and `--max-cycles N`.
 
-If `workflow.plan_review_convergence` is not enabled, the command stops before planning and prints the enable command instead of silently falling back to regular planning.
+An explicit `--converge` on `/gsd-autonomous` overrides the gate for that run: convergence runs even when `workflow.plan_review_convergence` is `false`, and without the flag autonomous plans with `gsd-plan-phase`. The gate still governs `/gsd-progress --next --converge` and standalone `/gsd-plan-review-convergence`, which stop with the enable command when it is not enabled.
 
 ---
 

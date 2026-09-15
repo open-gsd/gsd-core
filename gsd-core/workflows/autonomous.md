@@ -75,7 +75,7 @@ if [[ "$INIT_AUTONOMOUS" == @file:* ]]; then INIT_AUTONOMOUS=$(cat "${INIT_AUTON
 
 Extract `section_manifest` from `INIT_AUTONOMOUS` (used by the `converge-*` sections below and in step 3).
 
-If `PLAN_STRATEGY` is `converge`, fail fast unless the existing convergence feature gate is enabled:
+If `PLAN_STRATEGY` is `converge`, the dispatch below carries `--override-gate` (#4600): the operator's explicit `--converge`/`--cross-ai` overrides the convergence feature gate for this run. Without the flag, `PLAN_STRATEGY` is `local` and this block never appends it.
 
 ```bash
 # Lane flags derived from the declared roster (#2800/#2272); --all and --text are convergence
@@ -93,6 +93,13 @@ MAX_CYCLES_ARG=""
 if echo "$ARGUMENTS" | grep -qE '\-\-max-cycles\s+[0-9]+'; then
   MAX_CYCLES_ARG=$(echo "$ARGUMENTS" | grep -oE '\-\-max-cycles\s+[0-9]+' | awk '{print $2}')
   CONVERGENCE_ARGS="${CONVERGENCE_ARGS} --max-cycles ${MAX_CYCLES_ARG}"
+fi
+
+# #4600: the dispatched convergence workflow re-checks the feature gate in its own §1.5 —
+# an explicit --converge/--cross-ai must override it, so mark this dispatch explicitly.
+# Conditional on PLAN_STRATEGY: a local-strategy run must never carry the override.
+if [ "${PLAN_STRATEGY}" = "converge" ]; then
+  CONVERGENCE_ARGS="${CONVERGENCE_ARGS} --override-gate"
 fi
 ```
 
@@ -841,7 +848,7 @@ When any phase operation fails or a blocker is detected, present 3 options via A
 - [ ] `--interactive` compatible with `--only`, `--from`, and `--to` flags
 - [ ] `--converge` routes planning through `gsd-plan-review-convergence`
 - [ ] `--cross-ai` is accepted as an alias for `--converge`
-- [ ] `--converge` fails fast with enable instructions when `workflow.plan_review_convergence=false`
+- [ ] `--converge` overrides `workflow.plan_review_convergence=false` for the run — the dispatch carries `--override-gate`, which the convergence workflow's §1.5 gate honors (#4600)
 - [ ] `--converge` forwards reviewer selector flags and `--max-cycles N`
 - [ ] Default autonomous planning remains `gsd-plan-phase` when convergence is not requested
 </success_criteria>
