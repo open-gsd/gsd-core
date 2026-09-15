@@ -56,27 +56,34 @@ describe('autonomous --converge flag (#711)', () => {
     assert.match(workflow, /converge\|cross-ai/, 'workflow should accept --converge and --cross-ai');
   });
 
-  test('workflow fails fast when convergence is requested but disabled', () => {
-    // #2994: this check lives in the converge-fail-fast step file now
+  test('explicit --converge overrides the config gate (#4600)', () => {
+    // #2994: this contract lives in the converge-fail-fast step file now
     // (state:plan-strategy-converge) — the host only carries the gated
     // conditional-read stub.
+    // #4600: an explicit `--converge`/`--cross-ai` (PLAN_STRATEGY=converge is
+    // set by nothing else) must WIN over `workflow.plan_review_convergence`
+    // — the config is the default for non-flag invocation, not a veto over an
+    // explicit operator request. The step must therefore not gate on the
+    // config at all, and must state the precedence so a runtime agent
+    // executes it as written.
     const workflow = read(WORKFLOW_PATH);
     const step = read(STEP_FAIL_FAST_PATH);
 
     assert.match(
       workflow,
       /gsd:section id="converge-fail-fast" when="state:plan-strategy-converge"/,
-      'workflow should gate the fail-fast check behind state:plan-strategy-converge',
+      'workflow should keep the step behind state:plan-strategy-converge',
     );
-    assert.match(
+    assert.doesNotMatch(
       step,
       /config-get workflow\.plan_review_convergence/,
-      'converge-fail-fast step should check workflow.plan_review_convergence before planning',
+      'the step must not gate an explicit flag on workflow.plan_review_convergence (#4600)',
     );
+    assert.doesNotMatch(step, /exit 1/, 'the step must not stop an explicit-flag run');
     assert.match(
       step,
-      /gsd config-set workflow\.plan_review_convergence true/,
-      'converge-fail-fast step should print the enable command instead of silently downgrading',
+      /overrides? the (?:existing )?convergence feature gate|config is the default/i,
+      'the step must state the precedence: explicit flag wins, config is the non-flag default',
     );
   });
 
