@@ -1,10 +1,10 @@
 0.5. **Inter-wave worktree base re-check (wave N+1 guard — #1369):**
 
    After Wave N merges and tracking commits advance orchestrator HEAD, Claude Code's
-   `isolation="worktree"` still forks new worktrees from `origin/HEAD` (the "fresh" base),
-   not the live HEAD. This means Wave N+1 worktrees would be created from the stale
-   pre-Wave-N base, causing the `worktree_branch_check` guard inside each executor to halt
-   immediately with a base-mismatch fatal.
+   `isolation="worktree"` forks new worktrees from `origin/HEAD` (the "fresh" base) unless
+   `worktree.baseRef:"head"` is set — not the live HEAD. Without the setting, Wave N+1
+   worktrees would be created from the stale pre-Wave-N base, causing the
+   `worktree_branch_check` guard inside each executor to halt with a base-mismatch fatal.
 
    **Run this check at the start of every wave when `USE_WORKTREES != "false"` and
    `ISOLATION = "harness-worktree"`** (#2652 — the harness caches the fork base, so this is a
@@ -30,10 +30,14 @@
    this check and may re-enable worktree isolation once `origin/HEAD` matches HEAD again
    (e.g. via `git fetch` or a push that advances it).
 
-   **Why `worktree.baseRef:"head"` does not avoid this degrade (#48, #3659):** the runtime
-   harness does not read project-settings `baseRef` — an isolated dispatch always forks from
-   `origin/HEAD` regardless of the setting, so the check compares against the real fork base
-   and degrades whenever HEAD has diverged. Parallel worktrees return once HEAD is
-   merged/pushed so `origin/HEAD` matches it. The setting still restores parallel execution
-   on runtimes where GSD itself creates the worktrees (orchestrator-managed isolation:
-   Codex, OpenCode, Kimi, Kimi Code). See #683 for the base-ref configuration detail.
+   **How `worktree.baseRef:"head"` interacts with this degrade (#3659, #4588):** with the
+   setting in place the check does not compare at all — the worktree creator forks from the
+   orchestrator HEAD (GSD's own `git worktree add` by construction; the Claude Code harness as
+   measured from all three settings layers, #4588; Cursor unmeasured), so this guard only fires when the setting
+   is absent and HEAD has diverged from `origin/HEAD`. Parallel worktrees then return once HEAD
+   is merged/pushed so `origin/HEAD` matches it, or once the setting is applied. The exception
+   is a Claude Code `WorktreeCreate` hook in those settings files: the hook creates the worktree
+   without applying the setting, so the check compares against `origin/HEAD` anyway and a
+   mismatch degrades with `baseref-head-bypassed-by-hook` (#4588). The exit-42
+   guard in each executor remains the backstop on a host that does not honor the setting.
+   See #683 for the base-ref configuration detail.
