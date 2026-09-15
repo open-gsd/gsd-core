@@ -3627,3 +3627,237 @@ describe('#3427 + #3433 — Codex installer avoids duplicate skills and mixed ho
 });
   });
 }
+
+
+// ---------------------------------------------------------------------------
+// #4544 — manifest-driven rollback: hooks/, scripts/, gsd-core payload, manifest
+// ---------------------------------------------------------------------------
+
+// concurrency: false — same harness as the #3245 block above: patches
+// module.exports.__codexSchemaValidator and drives the real install pipeline.
+// The validator seam fires AFTER skills/, agents/, VERSION, CHANGELOG.md,
+// scripts/, the initial manifest, and hooks/ staging have all run, so every
+// assertion below observes a genuinely overwritten state, not a vacuous one.
+describe('#4544 — manifest-driven rollback covers hooks/, scripts/, gsd-core payload, and the manifest', { concurrency: false }, () => {
+  let tmpDir;
+  let codexHome;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4544-rollback-'));
+    codexHome = path.join(tmpDir, 'codex-home');
+  });
+
+  afterEach(() => {
+    delete installModule.__codexSchemaValidator;
+    cleanup(tmpDir);
+  });
+
+  /** Seed a shape-valid prior-install manifest listing `relPaths`. */
+  function seedPriorManifest(relPaths) {
+    const files = {};
+    for (const rel of relPaths) files[rel] = 'prior-install-hash';
+    fs.writeFileSync(
+      path.join(codexHome, 'gsd-file-manifest.json'),
+      JSON.stringify({ manifestVersion: 2, version: '1.12.0', files }),
+      'utf8',
+    );
+  }
+
+  function forceValidationFailure() {
+    installModule.__codexSchemaValidator = () => ({
+      ok: false,
+      reason: 'simulated failure for #4544 rollback test',
+    });
+  }
+
+  function runFailingInstall() {
+    let threw = false;
+    try { runCodexInstall(codexHome); } catch (_) { threw = true; }
+    assert.strictEqual(threw, true, 'install must throw when validation fails');
+  }
+
+  test('restores prior-manifest files the failed install overwrote (#4544 must-have)', () => {
+    fs.mkdirSync(codexHome, { recursive: true });
+    const sentinels = new Map([
+      ['gsd-core/CHANGELOG.md', 'SENTINEL-CHANGELOG'],
+      ['gsd-core/.gsd-runtime', 'SENTINEL-RUNTIME'],
+      ['scripts/lib/drift-scan.cjs', 'SENTINEL-LIB'],
+    ]);
+    fs.mkdirSync(path.join(codexHome, 'gsd-core'), { recursive: true });
+    fs.mkdirSync(path.join(codexHome, 'scripts', 'lib'), { recursive: true });
+    for (const [rel, body] of sentinels) {
+      fs.writeFileSync(path.join(codexHome, rel), body, 'utf8');
+    }
+    seedPriorManifest([...sentinels.keys()]);
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    for (const [rel, body] of sentinels) {
+      assert.strictEqual(
+        fs.readFileSync(path.join(codexHome, rel), 'utf8'),
+        body,
+        `rollback must restore the pre-install bytes of ${rel}`
+      );
+    }
+  });
+
+  test('re-deletes a prior-manifest path that was absent before the install', () => {
+    fs.mkdirSync(codexHome, { recursive: true });
+    // Listed by the prior install but deleted before this one: the null
+    // snapshot branch must remove whatever the failed install recreates.
+    seedPriorManifest(['scripts/lib/drift-scan.cjs']);
+    assert.strictEqual(fs.existsSync(path.join(codexHome, 'scripts')), false,
+      'fixture precondition: the path must not exist pre-install');
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(
+      fs.existsSync(path.join(codexHome, 'scripts', 'lib', 'drift-scan.cjs')),
+      false,
+      'rollback must re-delete a prior-manifest path the user had removed'
+    );
+  });
+
+  test('wholesale-restores the hooks/ directory (the Codex manifest omits it)', () => {
+    fs.mkdirSync(path.join(codexHome, 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(codexHome, 'hooks', 'gsd-check-update.js'),
+      'SENTINEL-USER-EDITED-HOOK', 'utf8');
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(
+      fs.readFileSync(path.join(codexHome, 'hooks', 'gsd-check-update.js'), 'utf8'),
+      'SENTINEL-USER-EDITED-HOOK',
+      'rollback must restore the pre-install hook bytes the install overwrote'
+    );
+    assert.strictEqual(
+      fs.existsSync(path.join(codexHome, 'hooks', 'package.json')),
+      false,
+      'the CommonJS marker the failed install staged must not survive rollback'
+    );
+    assert.strictEqual(
+      fs.existsSync(path.join(codexHome, 'hooks', 'managed-hooks-registry.cjs')),
+      false,
+      'a staged hook file that did not pre-exist must not survive rollback'
+    );
+    assert.strictEqual(
+      fs.existsSync(path.join(codexHome, 'hooks', 'lib')),
+      false,
+      'transitive hooks/lib/ helpers staged by the failed install must not survive rollback'
+    );
+  });
+
+  test('preserves pre-existing user files under hooks/', () => {
+    fs.mkdirSync(path.join(codexHome, 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(codexHome, 'hooks', 'my-own.sh'), '#!/bin/sh\necho mine\n', 'utf8');
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(
+      fs.readFileSync(path.join(codexHome, 'hooks', 'my-own.sh'), 'utf8'),
+      '#!/bin/sh\necho mine\n',
+      'a user-owned hooks/ file that predated the install must survive rollback'
+    );
+  });
+
+  test('restores the prior gsd-file-manifest.json the failed install rewrote', () => {
+    fs.mkdirSync(codexHome, { recursive: true });
+    const priorManifest = JSON.stringify({
+      manifestVersion: 2, version: '1.12.0',
+      files: { 'gsd-core/CHANGELOG.md': 'prior-hash' },
+    }, null, 2);
+    fs.writeFileSync(path.join(codexHome, 'gsd-file-manifest.json'), priorManifest, 'utf8');
+    fs.mkdirSync(path.join(codexHome, 'gsd-core'), { recursive: true });
+    fs.writeFileSync(path.join(codexHome, 'gsd-core', 'CHANGELOG.md'), 'SENTINEL', 'utf8');
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(
+      fs.readFileSync(path.join(codexHome, 'gsd-file-manifest.json'), 'utf8'),
+      priorManifest,
+      'rollback must restore the prior manifest bytes'
+    );
+    assert.strictEqual(
+      fs.readFileSync(path.join(codexHome, 'gsd-core', 'CHANGELOG.md'), 'utf8'),
+      'SENTINEL',
+      'the manifest-listed file must be restored alongside the manifest itself'
+    );
+  });
+
+  test('clean-first-install rollback leaves no manifest or hooks residue', () => {
+    fs.mkdirSync(codexHome, { recursive: true });
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(
+      fs.existsSync(path.join(codexHome, 'gsd-file-manifest.json')),
+      false,
+      'no prior manifest existed, so the manifest the failed install wrote must be gone'
+    );
+    if (fs.existsSync(path.join(codexHome, 'hooks'))) {
+      assert.deepStrictEqual(
+        fs.readdirSync(path.join(codexHome, 'hooks')),
+        [],
+        'hooks/ must not keep failed-install payload on a clean first install'
+      );
+    }
+  });
+
+  test('a malformed prior manifest degrades gracefully', () => {
+    fs.mkdirSync(path.join(codexHome, 'gsd-core'), { recursive: true });
+    fs.writeFileSync(path.join(codexHome, 'gsd-core', 'VERSION'), 'old', 'utf8');
+    fs.writeFileSync(path.join(codexHome, 'gsd-file-manifest.json'), 'garbage{{{', 'utf8');
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    // The five original restores must be unaffected by the unreadable manifest.
+    assert.strictEqual(fs.existsSync(path.join(codexHome, 'gsd-core', 'VERSION')), false,
+      'VERSION rollback must still work when the prior manifest is unreadable');
+  });
+
+  test('a prior manifest that is a JSON array degrades gracefully', () => {
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(path.join(codexHome, 'gsd-file-manifest.json'), '[]', 'utf8');
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(fs.existsSync(path.join(codexHome, 'gsd-file-manifest.json')), false,
+      'an array-shaped manifest is not a usable prior state; the failed install copy must not survive');
+  });
+
+  test('a traversal-shaped manifest key is skipped, not written', () => {
+    fs.mkdirSync(codexHome, { recursive: true });
+    const canary = path.join(tmpDir, 'evil.txt');
+    fs.writeFileSync(canary, 'do-not-touch', 'utf8');
+    // `../evil.txt` resolves OUTSIDE codexHome — resolveInstallRelativePath
+    // must reject it, and the snapshotter must skip the key entirely.
+    seedPriorManifest(['../evil.txt']);
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(fs.readFileSync(canary, 'utf8'), 'do-not-touch',
+      'a traversal manifest key must never cause a write outside the install root');
+  });
+
+  test('very early failure: the new restores stay idempotent before any capture', () => {
+    fs.mkdirSync(codexHome, { recursive: true });
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(fs.existsSync(path.join(codexHome, 'gsd-file-manifest.json')), false,
+      'an empty home must still be empty after rollback');
+    if (fs.existsSync(path.join(codexHome, 'hooks'))) {
+      assert.deepStrictEqual(fs.readdirSync(path.join(codexHome, 'hooks')), []);
+    }
+  });
+});
