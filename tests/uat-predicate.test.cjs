@@ -1794,7 +1794,7 @@ describe('#4546 — deferred follow-up skips', () => {
           assert.deepStrictEqual(report.blockers, specPassing ? [] : [report.blockers[0]]);
         }
       ),
-      { numRuns: 120, seed: 4546, path: 'tests/uat-predicate.test.cjs #4546 property' }
+      { numRuns: 120, seed: 4546 }
     );
   });
 });

@@ -15,7 +15,7 @@
  * Row 8 drives the writer's OWN template text (extracted from the shipped
  * workflow, placeholder substituted) through the real predicate — if either
  * surface changes its half of the contract, this fails.
- *
+ */
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
