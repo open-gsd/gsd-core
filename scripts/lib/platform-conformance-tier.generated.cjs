@@ -3,6 +3,7 @@
 
 module.exports = {
   CONFORMANCE_TIER_FILES: [
+  "tests/adr-612-bracket-new-project-config.test.cjs",
   "tests/adr-index-gate.test.cjs",
   "tests/adr857-core-without-capabilities.test.cjs",
   "tests/agent-install-check.test.cjs",

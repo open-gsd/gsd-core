@@ -48,6 +48,11 @@ const {
   matchPhaseDirs,
   isSentinelPhaseId,
   scopeToPhase,
+  parsePhaseId,
+  renderPhaseId,
+  toDir,
+  phaseHeadingPrefixSrcFor,
+  PHASE_HEADING_BASELINE,
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
   OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,
@@ -61,7 +66,15 @@ import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap-parser.cjs is an export= CommonJS module
 import roadmapParserMod = require('./roadmap-parser.cjs');
-const { stripShippedMilestones, extractCurrentMilestone, currentMilestoneRawRanges, withPhaseSection, findMilestoneScopeHeadingLines } = roadmapParserMod;
+const {
+  stripShippedMilestones,
+  extractCurrentMilestone,
+  currentMilestoneRawRanges,
+  withPhaseSection,
+  findMilestoneScopeHeadingLines,
+  getMilestoneInfo,
+  scanMilestonePhaseIds,
+} = roadmapParserMod;
 // #4129: the single owner of "count the ROADMAP's milestone Complete rows"
 // (pure computation, no I/O — no cycle on this path) for the intent-first
 // progress counters the phase-complete transaction passes downstream.
@@ -1226,14 +1239,121 @@ function assertDescriptionPreservesMilestoneScope(cwd: string, description: stri
   );
 }
 
+type BracketWriteContext = {
+  project: string;
+  milestone: string;
+};
+
+/**
+ * Canonicalize one numeric field before handing the complete identity to the
+ * phase-id owner. This mirrors the owner's two-character minimum without ever
+ * assembling a display or directory spelling locally.
+ */
+function bracketNumericField(value: unknown, label: string): string {
+  const raw = String(value);
+  if (!/^\d+$/.test(raw)) error(`${label} must be a non-negative integer`);
+  const numeric = Number(raw);
+  if (!Number.isSafeInteger(numeric)) error(`${label} exceeds the supported integer range`);
+  return String(numeric).padStart(2, '0');
+}
+
+/**
+ * Resolve the write identity shared by add/insert/remove. Convention selection
+ * happens at the caller and is the sole branch gate; project/milestone checks
+ * here validate the identity after that branch has already been selected.
+ */
+function bracketWriteContext(cwd: string, config: Record<string, unknown>): BracketWriteContext {
+  const project = typeof config['project_code'] === 'string' ? config['project_code'].trim() : '';
+  if (!project) {
+    error('phase_id_convention is "bracket" but project_code is missing in .planning/config.json');
+  }
+
+  const milestoneInfo = getMilestoneInfo(cwd) as {
+    value?: { version?: string } | null;
+  };
+  const version = milestoneInfo.value?.version ?? '';
+  const match = String(version).match(/^v?(\d+)/i);
+  if (!match) {
+    error('phase_id_convention is "bracket" but the active milestone cannot be resolved');
+  }
+
+  return { project, milestone: bracketNumericField(match![1], 'milestone') };
+}
+
+function bracketPhaseId(
+  context: BracketWriteContext,
+  phase: unknown,
+  subphase?: unknown,
+): { project: string; milestone: string; phase: string; subphase?: string } {
+  const id: { project: string; milestone: string; phase: string; subphase?: string } = {
+    project: context.project,
+    milestone: context.milestone,
+    phase: bracketNumericField(phase, 'phase'),
+  };
+  if (subphase !== undefined) id.subphase = bracketNumericField(subphase, 'subphase');
+  return id;
+}
+
+/** The owner-rendered bare token used by plan/summary artifact filenames. */
+function bracketArtifactToken(id: { project: string; milestone: string; phase: string; subphase?: string }): string {
+  return renderPhaseId(id).split('] ')[1];
+}
+
+function bracketDirSlug(
+  dirName: string,
+  id: { project: string; milestone: string; phase: string; subphase?: string },
+): string | null {
+  const probeSlug = 'phase-slug-probe';
+  const probe = toDir(id, probeSlug);
+  const prefix = probe.slice(0, -probeSlug.length);
+  return dirName.startsWith(prefix) ? dirName.slice(prefix.length) : null;
+}
+
+function bracketIdsInContext(
+  phasesDir: string,
+  context: BracketWriteContext,
+): Array<{ dir: string; id: { project: string; milestone: string; phase: string; subphase?: string }; slug: string }> {
+  const found: Array<{ dir: string; id: { project: string; milestone: string; phase: string; subphase?: string }; slug: string }> = [];
+  for (const dir of readSubdirectories(phasesDir, true)) {
+    try {
+      const id = parsePhaseId(dir) as { project: string; milestone: string; phase: string; subphase?: string };
+      if (id.project !== context.project || id.milestone !== context.milestone) continue;
+      const slug = bracketDirSlug(dir, id);
+      if (slug) found.push({ dir, id, slug });
+    } catch {
+      // A bracket writer shares the directory with migration-window legacy
+      // names. Names outside the canonical bracket grammar do not allocate an
+      // identity in this branch.
+    }
+  }
+  return found;
+}
+
+function collectBracketPhaseNumbers(
+  roadmapContent: string,
+  phasesDir: string,
+  context: BracketWriteContext,
+): Set<number> {
+  const used = new Set<number>();
+  for (const token of scanMilestonePhaseIds(roadmapContent, 'bracket')) {
+    const leading = String(token).split('.')[0];
+    if (/^\d+$/.test(leading)) used.add(Number(leading));
+  }
+  for (const { id } of bracketIdsInContext(phasesDir, context)) used.add(Number(id.phase));
+  used.delete(0);
+  used.delete(999);
+  return used;
+}
+
 /**
  * #3849 — widen "used phase numbers" beyond this checkout. Every sibling git
  * worktree carries its own `.planning/` on its own branch, so a phase minted
  * there is invisible to the cwd-scoped sources (headers, bullets, on-disk
- * dirs). Scan each sibling's phase-directory names (cheap — dir names alone
- * caught the real incident) and its WHOLE ROADMAP.md headers (a row can exist
- * before any directory does; milestone-scoping is wrong here because a number
- * used under any milestone on another branch is still taken).
+ * dirs). Legacy identities scan each sibling's phase-directory names and whole
+ * ROADMAP because their phase number has no milestone qualifier. Bracket ids
+ * are globally qualified, so their directory scan is restricted to the same
+ * project+milestone identity; each writer creates that directory in the same
+ * planning lock as its ROADMAP entry.
  *
  * #4225 — the horizon must track the ALLOCATION scope. When the allocation is
  * workstream-scoped (`--ws`/`GSD_WORKSTREAM`, resolved into the env before
@@ -1254,7 +1374,11 @@ function assertDescriptionPreservesMilestoneScope(cwd: string, description: stri
  * `isSentinelPhaseId`; the dir pattern is the same one the on-disk scan uses,
  * so decimal sub-phases (`411.1-foo`) are correctly not integers.
  */
-function collectSiblingWorktreePhaseNums(cwd: string, used: Set<number>): void {
+function collectSiblingWorktreePhaseNums(
+  cwd: string,
+  used: Set<number>,
+  bracketContext?: BracketWriteContext,
+): void {
   let porcelain: string;
   try {
     porcelain = execFileSync('git', ['worktree', 'list', '--porcelain'], {
@@ -1285,6 +1409,19 @@ function collectSiblingWorktreePhaseNums(cwd: string, used: Set<number>): void {
     if (!wt || path.resolve(wt) === path.resolve(cwd)) continue;
     try {
       for (const entry of fs.readdirSync(path.join(siblingPlanningDir(wt), 'phases'))) {
+        if (bracketContext) {
+          try {
+            const id = parsePhaseId(entry) as { project: string; milestone: string; phase: string };
+            if (
+              id.project === bracketContext.project
+              && id.milestone === bracketContext.milestone
+              && !isSentinelPhaseId(Number(id.phase))
+            ) {
+              used.add(Number(id.phase));
+            }
+          } catch { /* migration-window legacy directory */ }
+          continue;
+        }
         const match = entry.match(dirNumPattern);
         if (!match) continue;
         const num = parseInt(match[1], 10);
@@ -1294,6 +1431,7 @@ function collectSiblingWorktreePhaseNums(cwd: string, used: Set<number>): void {
       /* worktree has no .planning (or no copy of this scope) — normal, contributes nothing */
     }
     try {
+      if (bracketContext) continue;
       const content = fs.readFileSync(path.join(siblingPlanningDir(wt), 'ROADMAP.md'), 'utf-8');
       let m: RegExpExecArray | null;
       headerPattern.lastIndex = 0;
@@ -1320,6 +1458,8 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
   }
 
   const slug = generateSlugInternal(description) || '';
+  const convention = resolvePhaseIdConvention(cwd);
+  const bracketContext = convention === 'bracket' ? bracketWriteContext(cwd, config) : null;
 
   const { newPhaseId, dirName } = withPlanningLock(cwd, () => {
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
@@ -1331,7 +1471,13 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     let _newPhaseId: number | string;
     let _dirName: string;
 
-    if (customId || config.phase_naming === 'custom') {
+    if (bracketContext) {
+      const phasesOnDisk = path.join(planningDir(cwd), 'phases');
+      const usedPhaseNums = collectBracketPhaseNumbers(content, phasesOnDisk, bracketContext);
+      collectSiblingWorktreePhaseNums(cwd, usedPhaseNums, bracketContext);
+      _newPhaseId = (usedPhaseNums.size > 0 ? Math.max(...usedPhaseNums) : 0) + 1;
+      _dirName = toDir(bracketPhaseId(bracketContext, _newPhaseId), slug);
+    } else if (customId || config.phase_naming === 'custom') {
       _newPhaseId = customId || slug.toUpperCase();
       if (!_newPhaseId) error('--id required when phase_naming is "custom"');
       _dirName = `${prefix}${_newPhaseId}-${slug}`;
@@ -1394,12 +1540,21 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     platformEnsureDir(dirPath);
     platformWriteSync(path.join(dirPath, '.gitkeep'), '');
 
-    const dependsOn =
-      config.phase_naming === 'custom'
-        ? ''
-        : `\n**Depends on:** Phase ${typeof _newPhaseId === 'number' ? _newPhaseId - 1 : 'TBD'}`;
-    const phaseEntry =
-      `\n### Phase ${_newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_newPhaseId} to break down)\n`;
+    let phaseEntry: string;
+    if (bracketContext && typeof _newPhaseId === 'number') {
+      const id = bracketPhaseId(bracketContext, _newPhaseId);
+      const display = renderPhaseId(id);
+      const dependsOn = `\n**Depends on:** ${renderPhaseId(bracketPhaseId(bracketContext, _newPhaseId - 1))}`;
+      phaseEntry =
+        `\n### ${display}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${id.phase} to break down)\n`;
+    } else {
+      const dependsOn =
+        config.phase_naming === 'custom'
+          ? ''
+          : `\n**Depends on:** Phase ${typeof _newPhaseId === 'number' ? _newPhaseId - 1 : 'TBD'}`;
+      phaseEntry =
+        `\n### Phase ${_newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_newPhaseId} to break down)\n`;
+    }
 
     const insertAt = phaseEntryInsertOffset(rawContent, cwd);
     const updatedContent = rawContent.slice(0, insertAt) + phaseEntry + rawContent.slice(insertAt);
@@ -1455,12 +1610,22 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
   }
   const projectCode = (config.project_code as string) || '';
   const prefix = projectCode ? `${projectCode}-` : '';
+  const convention = resolvePhaseIdConvention(cwd);
+  const bracketContext = convention === 'bracket' ? bracketWriteContext(cwd, config) : null;
 
   const results = withPlanningLock(cwd, () => {
     let rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     const content = extractCurrentMilestone(rawContent, cwd);
     let maxPhase = 0;
-    if (config.phase_naming !== 'custom') {
+    if (bracketContext) {
+      const used = collectBracketPhaseNumbers(
+        content,
+        path.join(planningDir(cwd), 'phases'),
+        bracketContext,
+      );
+      collectSiblingWorktreePhaseNums(cwd, used, bracketContext);
+      maxPhase = used.size > 0 ? Math.max(...used) : 0;
+    } else if (config.phase_naming !== 'custom') {
       // Same three cwd-scoped sources as cmdPhaseAdd (#1229): headers, roadmap
       // bullets, on-disk dirs. The bullet scan was missing here — a bullet-only
       // `Phase N` row was invisible to batch allocation (#3849 secondary).
@@ -1503,7 +1668,11 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
       const slug = generateSlugInternal(description) || '';
       let newPhaseId: number | string;
       let dirName: string;
-      if (config.phase_naming === 'custom') {
+      if (bracketContext) {
+        maxPhase += 1;
+        newPhaseId = maxPhase;
+        dirName = toDir(bracketPhaseId(bracketContext, newPhaseId), slug);
+      } else if (config.phase_naming === 'custom') {
         newPhaseId = slug.toUpperCase();
         dirName = `${prefix}${newPhaseId}-${slug}`;
       } else {
@@ -1514,12 +1683,20 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
       const dirPath = path.join(planningDir(cwd), 'phases', dirName);
       platformEnsureDir(dirPath);
       platformWriteSync(path.join(dirPath, '.gitkeep'), '');
-      const dependsOn =
-        config.phase_naming === 'custom'
-          ? ''
-          : `\n**Depends on:** Phase ${typeof newPhaseId === 'number' ? newPhaseId - 1 : 'TBD'}`;
-      const phaseEntry =
-        `\n### Phase ${newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${newPhaseId} to break down)\n`;
+      let phaseEntry: string;
+      if (bracketContext && typeof newPhaseId === 'number') {
+        const id = bracketPhaseId(bracketContext, newPhaseId);
+        const dependsOn = `\n**Depends on:** ${renderPhaseId(bracketPhaseId(bracketContext, newPhaseId - 1))}`;
+        phaseEntry =
+          `\n### ${renderPhaseId(id)}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${id.phase} to break down)\n`;
+      } else {
+        const dependsOn =
+          config.phase_naming === 'custom'
+            ? ''
+            : `\n**Depends on:** Phase ${typeof newPhaseId === 'number' ? newPhaseId - 1 : 'TBD'}`;
+        phaseEntry =
+          `\n### Phase ${newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${newPhaseId} to break down)\n`;
+      }
       const insertAt = phaseEntryInsertOffset(rawContent, cwd);
       rawContent = rawContent.slice(0, insertAt) + phaseEntry + rawContent.slice(insertAt);
       added.push({
@@ -1611,6 +1788,27 @@ function scanExistingDecimalPhaseNumbers(phasesDir: string, rawContent: string, 
   return decimalSet;
 }
 
+function scanExistingBracketDecimalPhaseNumbers(
+  phasesDir: string,
+  roadmapContent: string,
+  base: string,
+  context: BracketWriteContext,
+): Set<number> {
+  const decimalSet = new Set<number>();
+  for (const token of scanMilestonePhaseIds(roadmapContent, 'bracket')) {
+    const [phase, subphase, extra] = String(token).split('.');
+    if (!extra && Number(phase) === Number(base) && /^\d+$/.test(subphase ?? '')) {
+      decimalSet.add(Number(subphase));
+    }
+  }
+  for (const { id } of bracketIdsInContext(phasesDir, context)) {
+    if (Number(id.phase) === Number(base) && id.subphase) {
+      decimalSet.add(Number(id.subphase));
+    }
+  }
+  return decimalSet;
+}
+
 function cmdPhaseInsert(
   cwd: string,
   afterPhase: string,
@@ -1629,6 +1827,9 @@ function cmdPhaseInsert(
   }
 
   const slug = generateSlugInternal(description) || '';
+  const insertConfig = loadConfig(cwd);
+  const convention = resolvePhaseIdConvention(cwd);
+  const bracketContext = convention === 'bracket' ? bracketWriteContext(cwd, insertConfig) : null;
 
   const { decimalPhase, dirName } = withPlanningLock(cwd, () => {
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
@@ -1636,20 +1837,24 @@ function cmdPhaseInsert(
 
     const normalizedAfter = normalizePhaseName(afterPhase);
     const afterPhaseEscaped = phaseMarkdownRegexSource(normalizedAfter);
-    const targetPattern = new RegExp(`#{2,4}\\s*Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:`, 'i');
+    const headingIntro = phaseHeadingPrefixSrcFor(
+      PHASE_HEADING_BASELINE.LABEL_ONLY,
+      convention,
+    );
+    const targetPattern = new RegExp(`#{2,4}\\s*${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:`, 'i');
     const headingMatch = targetPattern.test(content);
 
     const bulletPattern = new RegExp(
-      `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
+      `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
       'i',
     );
-    const anyHeadingPattern = /#{2,4}\s*Phase\s+\d/i;
+    const anyHeadingPattern = new RegExp(`#{2,4}\\s*${headingIntro}\\d`, 'i');
     const roadmapHasHeadingPhases = anyHeadingPattern.test(content);
-    const isBulletStyle = !headingMatch && bulletPattern.test(content) && !roadmapHasHeadingPhases;
+    const isBulletStyle = !bracketContext && !headingMatch && bulletPattern.test(content) && !roadmapHasHeadingPhases;
 
     if (!headingMatch && !isBulletStyle) {
       const checklistPattern = new RegExp(
-        `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
+        `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
         'i',
       );
       if (checklistPattern.test(content)) {
@@ -1662,10 +1867,14 @@ function cmdPhaseInsert(
 
     const phasesDir = path.join(planningDir(cwd), 'phases');
     const normalizedBase = normalizePhaseName(afterPhase);
-    const decimalSet = scanExistingDecimalPhaseNumbers(phasesDir, rawContent, normalizedBase);
+    const decimalSet = bracketContext
+      ? scanExistingBracketDecimalPhaseNumbers(phasesDir, content, normalizedBase, bracketContext)
+      : scanExistingDecimalPhaseNumbers(phasesDir, rawContent, normalizedBase);
 
     const nextDecimal = decimalSet.size === 0 ? 1 : Math.max(...decimalSet) + 1;
-    let _decimalPhase = `${normalizedBase}.${nextDecimal}`;
+    let selectedBase = normalizedBase;
+    let selectedNextDecimal = nextDecimal;
+    let _decimalPhase = `${selectedBase}.${selectedNextDecimal}`;
 
     // #4569: sibling allocation joins afterPhase's PARENT level instead of nesting
     // one level deeper under afterPhase itself. A top-level phase (no existing
@@ -1674,14 +1883,21 @@ function cmdPhaseInsert(
     const lastDotIndex = normalizedBase.lastIndexOf('.');
     if (allocation === 'sibling' && lastDotIndex !== -1) {
       const parentBase = normalizedBase.slice(0, lastDotIndex);
-      const siblingDecimalSet = scanExistingDecimalPhaseNumbers(phasesDir, rawContent, parentBase);
+      const siblingDecimalSet = bracketContext
+        ? scanExistingBracketDecimalPhaseNumbers(phasesDir, content, parentBase, bracketContext)
+        : scanExistingDecimalPhaseNumbers(phasesDir, rawContent, parentBase);
       const siblingNextDecimal = siblingDecimalSet.size === 0 ? 1 : Math.max(...siblingDecimalSet) + 1;
+      selectedBase = parentBase;
+      selectedNextDecimal = siblingNextDecimal;
       _decimalPhase = `${parentBase}.${siblingNextDecimal}`;
     }
-    const insertConfig = loadConfig(cwd);
+    const bracketId = bracketContext
+      ? bracketPhaseId(bracketContext, selectedBase, selectedNextDecimal)
+      : null;
+    if (bracketId) _decimalPhase = bracketArtifactToken(bracketId);
     const projectCode = (insertConfig.project_code as string) || '';
     const pfx = projectCode ? `${projectCode}-` : '';
-    const _dirName = `${pfx}${_decimalPhase}-${slug}`;
+    const _dirName = bracketId ? toDir(bracketId, slug) : `${pfx}${_decimalPhase}-${slug}`;
     const dirPath = path.join(planningDir(cwd), 'phases', _dirName);
 
     platformEnsureDir(dirPath);
@@ -1739,11 +1955,17 @@ function cmdPhaseInsert(
       updatedContent =
         rawContent.slice(0, insertIdx) + bulletEntry + rawContent.slice(insertIdx);
     } else {
+      const headingId = bracketId ? renderPhaseId(bracketId) : `Phase ${_decimalPhase}`;
+      let dependsId = `Phase ${afterPhase}`;
+      if (bracketContext) {
+        const [dependsPhase, dependsSubphase] = normalizedBase.split('.');
+        dependsId = renderPhaseId(bracketPhaseId(bracketContext, dependsPhase, dependsSubphase));
+      }
       const phaseEntry =
-        `\n### Phase ${_decimalPhase}: ${description} (INSERTED)\n\n**Goal:** [Urgent work - to be planned]\n**Requirements**: TBD\n**Depends on:** Phase ${afterPhase}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_decimalPhase} to break down)\n`;
+        `\n### ${headingId}: ${description} (INSERTED)\n\n**Goal:** [Urgent work - to be planned]\n**Requirements**: TBD\n**Depends on:** ${dependsId}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_decimalPhase} to break down)\n`;
 
       const headerPattern = new RegExp(
-        `(#{2,4}\\s*Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:[^\\n]*\\n)`,
+        `(#{2,4}\\s*${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:[^\\n]*\\n)`,
         'i',
       );
       const headerMatch = rawContent.match(headerPattern);
@@ -1753,7 +1975,9 @@ function cmdPhaseInsert(
 
       const headerIdx = rawContent.indexOf(headerMatch![0]);
       const afterHeader = rawContent.slice(headerIdx + headerMatch![0].length);
-      const nextPhaseMatch = afterHeader.match(/\r?\n#{2,4}\s+Phase\s+\d[\d.]*/i);
+      const nextPhaseMatch = afterHeader.match(
+        new RegExp(`\\r?\\n#{2,4}\\s+${headingIntro}\\d[\\d.]*`, 'i'),
+      );
 
       let insertIdx: number;
       if (nextPhaseMatch) {
@@ -2292,6 +2516,182 @@ function insertStateBodyFieldAtTop(content: string, fieldLine: string): string {
   return fieldLine + '\n' + content;
 }
 
+function renameBracketArtifactFiles(
+  phaseDir: string,
+  oldId: { project: string; milestone: string; phase: string; subphase?: string },
+  newId: { project: string; milestone: string; phase: string; subphase?: string },
+  renamedFiles: { from: string; to: string }[],
+  renamedFileCollisions: { from: string; to: string; displaced_to: string | null }[],
+): void {
+  const oldToken = bracketArtifactToken(oldId);
+  const newToken = bracketArtifactToken(newId);
+  for (const file of fs.readdirSync(phaseDir)) {
+    if (!file.startsWith(oldToken) || !/^(?:[-.]|$)/.test(file.slice(oldToken.length))) continue;
+    const newFileName = newToken + file.slice(oldToken.length);
+    const source = path.join(phaseDir, file);
+    const destination = path.join(phaseDir, newFileName);
+    if (fs.existsSync(destination)) {
+      const displaced = findOrphanedDisplacementName(phaseDir, newFileName);
+      if (!displaced) {
+        renamedFileCollisions.push({ from: file, to: newFileName, displaced_to: null });
+        continue;
+      }
+      retryRenameSync(destination, path.join(phaseDir, displaced));
+      renamedFileCollisions.push({ from: file, to: newFileName, displaced_to: displaced });
+    }
+    retryRenameSync(source, destination);
+    renamedFiles.push({ from: file, to: newFileName });
+  }
+}
+
+function renameBracketPhases(
+  phasesDir: string,
+  removedInt: number,
+  context: BracketWriteContext,
+  removedSubphase?: number,
+): {
+  renamedDirs: { from: string; to: string }[];
+  renamedFiles: { from: string; to: string }[];
+  renamedFileCollisions: { from: string; to: string; displaced_to: string | null }[];
+} {
+  const renamedDirs: { from: string; to: string }[] = [];
+  const renamedFiles: { from: string; to: string }[] = [];
+  const renamedFileCollisions: { from: string; to: string; displaced_to: string | null }[] = [];
+  const candidates = bracketIdsInContext(phasesDir, context)
+    .filter(({ id }) => {
+      if (removedSubphase !== undefined) {
+        return Number(id.phase) === removedInt
+          && id.subphase !== undefined
+          && Number(id.subphase) > removedSubphase;
+      }
+      return Number(id.phase) > removedInt && !isSentinelPhaseId(Number(id.phase));
+    })
+    .sort((a, b) => {
+      const phaseDelta = Number(a.id.phase) - Number(b.id.phase);
+      return phaseDelta !== 0
+        ? phaseDelta
+        : Number(a.id.subphase ?? 0) - Number(b.id.subphase ?? 0);
+    });
+
+  for (const item of candidates) {
+    const newId = bracketPhaseId(
+      context,
+      removedSubphase === undefined ? Number(item.id.phase) - 1 : item.id.phase,
+      removedSubphase === undefined ? item.id.subphase : Number(item.id.subphase) - 1,
+    );
+    const newDirName = toDir(newId, item.slug);
+    retryRenameSync(path.join(phasesDir, item.dir), path.join(phasesDir, newDirName));
+    renamedDirs.push({ from: item.dir, to: newDirName });
+    renameBracketArtifactFiles(
+      path.join(phasesDir, newDirName),
+      item.id,
+      newId,
+      renamedFiles,
+      renamedFileCollisions,
+    );
+  }
+
+  return { renamedDirs, renamedFiles, renamedFileCollisions };
+}
+
+function updateRoadmapAfterBracketPhaseRemoval(
+  roadmapPath: string,
+  targetPhase: string,
+  isDecimal: boolean,
+  removedInt: number,
+  context: BracketWriteContext,
+  cwd: string,
+): boolean {
+  return withPlanningLock(cwd, () => {
+    const originalContent = fs.readFileSync(roadmapPath, 'utf-8');
+    const removedSubphase = isDecimal
+      ? parseInt(targetPhase.split('.')[1], 10)
+      : undefined;
+    const targetDisplay = renderPhaseId(
+      bracketPhaseId(context, removedInt, removedSubphase),
+    );
+    let content = deleteSection(
+      originalContent,
+      (heading) => {
+        if (heading.level < 2 || heading.level > 4 || !heading.text.startsWith(targetDisplay)) {
+          return false;
+        }
+        const remainder = heading.text.slice(targetDisplay.length);
+        return /^(?:\s*\([^\r\n)]{0,200}\))?\s*:/.test(remainder);
+      },
+    );
+
+    // Remove a summary checkbox for the same fully-qualified identity. The id
+    // itself is owner-rendered above; this line classifier only recognizes the
+    // markdown checkbox wrapper around it.
+    content = content
+      .split('\n')
+      .filter((line) => !/^\s*[-*]\s+\[[ xX]\]/.test(line) || !line.includes(`${targetDisplay}:`))
+      .join('\n');
+
+    const progressHeadingMatch = content.match(/^##[ \t]+Progress\b/im);
+    if (progressHeadingMatch && progressHeadingMatch.index !== undefined) {
+      const headingOffset = progressHeadingMatch.index;
+      const before = content.slice(0, headingOffset);
+      const fromHeading = content.slice(headingOffset);
+      const nextHeadingOffset = fromHeading.search(/\n#{1,2}[ \t]/);
+      const progressSection = nextHeadingOffset >= 0
+        ? fromHeading.slice(0, nextHeadingOffset)
+        : fromHeading;
+      const rest = nextHeadingOffset >= 0 ? fromHeading.slice(nextHeadingOffset) : '';
+      const targetCell = new RegExp(`^${escapeRegex(targetDisplay)}(?:\\s|:|$)`);
+      const deleted = deleteTableRow(
+        progressSection,
+        (row) => targetCell.test((Object.values(row)[0] ?? '').trim()),
+      );
+      if (deleted.ok) content = before + deleted.value + rest;
+    }
+
+    const tokens = new Set<number>();
+    for (const rawToken of scanMilestonePhaseIds(content, 'bracket')) {
+      const [phase, subphase, extra] = String(rawToken).split('.');
+      if (extra || !/^\d+$/.test(phase) || (subphase !== undefined && !/^\d+$/.test(subphase))) continue;
+      if (isDecimal) {
+        if (Number(phase) === removedInt && subphase !== undefined && Number(subphase) > removedSubphase!) {
+          tokens.add(Number(subphase));
+        }
+      } else if (Number(phase) > removedInt && !isSentinelPhaseId(Number(phase))) {
+        tokens.add(Number(phase));
+      }
+    }
+
+    for (const token of [...tokens].sort((a, b) => a - b)) {
+      const oldId = isDecimal
+        ? bracketPhaseId(context, removedInt, token)
+        : bracketPhaseId(context, token);
+      const newId = isDecimal
+        ? bracketPhaseId(context, removedInt, token - 1)
+        : bracketPhaseId(context, token - 1);
+      const oldDisplay = renderPhaseId(oldId);
+      const newDisplay = renderPhaseId(newId);
+      content = content.replace(
+        new RegExp(`${escapeRegex(oldDisplay)}(?!\\d)`, 'g'),
+        () => newDisplay,
+      );
+
+      const oldToken = bracketArtifactToken(oldId);
+      const newToken = bracketArtifactToken(newId);
+      const artifactTail = isDecimal ? '' : '(?:\\.\\d+)?';
+      content = content.replace(
+        new RegExp(
+          `(?<![\\d.])${escapeRegex(oldToken)}(?=${artifactTail}-\\d{2}`
+          + '(?:-[A-Za-z][A-Za-z0-9-]*)?-(?:PLAN|SUMMARY)\\.md)',
+          'g',
+        ),
+        () => newToken,
+      );
+    }
+
+    platformWriteSync(roadmapPath, content);
+    return contentChangedAfterNormalize(roadmapPath, originalContent, content);
+  });
+}
+
 function cmdPhaseRemove(
   cwd: string,
   targetPhase: string,
@@ -2308,6 +2708,10 @@ function cmdPhaseRemove(
   const normalized = normalizePhaseName(targetPhase);
   const isDecimal = targetPhase.includes('.');
   const force = options.force || false;
+  const removeConvention = resolvePhaseIdConvention(cwd);
+  const removeContext = removeConvention === 'bracket'
+    ? bracketWriteContext(cwd, loadConfig(cwd))
+    : null;
 
   const subdirs = readSubdirectories(phasesDir, true);
   // #2237/#2528: every other resolution path refuses to choose between multiple
@@ -2315,7 +2719,14 @@ function cmdPhaseRemove(
   // taking `matches[0]` silently is strictly worse than anywhere else: it turns
   // "resolve nothing" into "delete one of two candidates, unrecoverably, and
   // renumber every phase after it". Refuse before any file is touched.
-  const { matches: phaseDirMatches } = matchPhaseDirs(subdirs, normalized);
+  const candidateDirs = removeContext
+    ? bracketIdsInContext(phasesDir, removeContext).map(({ dir }) => dir)
+    : subdirs;
+  const { matches: phaseDirMatches } = matchPhaseDirs(
+    candidateDirs,
+    normalized,
+    removeConvention,
+  );
   if (phaseDirMatches.length > 1) {
     output(
       {
@@ -2356,7 +2767,17 @@ function cmdPhaseRemove(
   let renamedFiles: { from: string; to: string }[] = [];
   let renamedFileCollisions: { from: string; to: string; displaced_to: string | null }[] = [];
   try {
-    if (isDecimal) {
+    if (removeContext) {
+      const renamed = renameBracketPhases(
+        phasesDir,
+        parseInt(normalized, 10),
+        removeContext,
+        isDecimal ? parseInt(normalized.split('.')[1], 10) : undefined,
+      );
+      renamedDirs = renamed.renamedDirs;
+      renamedFiles = renamed.renamedFiles;
+      renamedFileCollisions = renamed.renamedFileCollisions;
+    } else if (isDecimal) {
       const renamed = renameDecimalPhases(
         phasesDir,
         parseInt(normalized.split('.')[0], 10),
@@ -2384,13 +2805,22 @@ function cmdPhaseRemove(
     error(`Failed to renumber phase directories after removing phase ${targetPhase}: ${msg}`);
   }
 
-  const roadmapUpdated = updateRoadmapAfterPhaseRemoval(
-    roadmapPath,
-    targetPhase,
-    isDecimal,
-    parseInt(normalized, 10),
-    cwd,
-  );
+  const roadmapUpdated = removeContext
+    ? updateRoadmapAfterBracketPhaseRemoval(
+        roadmapPath,
+        normalized,
+        isDecimal,
+        parseInt(normalized, 10),
+        removeContext,
+        cwd,
+      )
+    : updateRoadmapAfterPhaseRemoval(
+        roadmapPath,
+        targetPhase,
+        isDecimal,
+        parseInt(normalized, 10),
+        cwd,
+      );
 
   const statePath = path.join(planningDir(cwd), 'STATE.md');
   let stateUpdated = false;

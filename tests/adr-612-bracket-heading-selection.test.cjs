@@ -118,6 +118,10 @@ const BASE_SITES = [
   { file: 'state.cts', site: 'cmdStateSync roadmapPhaseCount', baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
   { file: 'state.cts', site: 'extractRetiredPhaseNumbers phaseRef',
     baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
+  // #4304 PR-4: phase remove now selects the convention-gated heading intro
+  // before rewriting ROADMAP phase sections.
+  { file: 'phase.cts', site: 'cmdPhaseRemove phase heading matcher',
+    baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
   // #3309/#3310 moved the health reads out of verify.cts and into the parsed
   // planning snapshot consumed by the diagnostic rule table. Pin the same two
   // ROADMAP reads at their new owner so neither can silently narrow.
@@ -689,6 +693,7 @@ describe('#612 PR-2: every selector call site declares the right baseline (live 
   const EXPECTED = {
     'commands.cts': [1, 0],
     'init.cts': [0, 2],
+    'phase.cts': [0, 1],
     'roadmap.cts': [3, 3],
     'validate.cts': [1, 2],
     'state.cts': [0, 3],
