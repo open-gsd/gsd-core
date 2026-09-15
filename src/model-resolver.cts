@@ -147,6 +147,51 @@ function resolveTierEntry({ runtime, tier, overrides }: ResolveTierEntryOpts): T
 }
 
 /**
+ * #4669 — Select a per-agent `model_overrides` entry for one runtime.
+ *
+ * `model_overrides.<agent>` historically held a single model id, which on a
+ * machine running two runtimes against one shared `.planning/config.json` is a
+ * claim only one of them can be right about. The entry may now also be a
+ * runtime-keyed object, the same `string | object` widening `resolveTierEntry`
+ * above already applies to `model_profile_overrides.<runtime>.<tier>`.
+ *
+ *   "gsd-planner": "gpt-6-astra"                        // every runtime
+ *   "gsd-planner": { codex: "gpt-6-astra", claude: "opus" }
+ *
+ * Returns the selected id, or null to mean "this agent has no override here" —
+ * a runtime absent from an object entry falls through to tier resolution
+ * exactly as an unlisted agent does, rather than erroring. Enumerating every
+ * installed runtime is then optional, not a precondition for using the form.
+ *
+ * This is the single owner of that shape. Both readers of `model_overrides`
+ * call it — this module at dispatch and install-model-override-resolver.cts at
+ * install time — so the two surfaces cannot disagree about what a config
+ * means; `tests/model-override-runtime-parity.test.cjs` fails if they do.
+ *
+ * Which runtime each caller passes is a separate question this function does
+ * not own. At install time it is the runtime being installed for. At dispatch
+ * it is `config['runtime']`, which #4505 reports is the statically-persisted
+ * field rather than the active runtime — so on the two-runtime setup this
+ * feature exists for, dispatch still selects by a runtime that may be wrong
+ * until that issue lands. Parsing is fixed here; resolution is fixed there.
+ */
+function selectAgentModelOverride(
+  entry: unknown,
+  runtime: string | null | undefined,
+): string | null {
+  if (typeof entry === 'string') return entry || null;
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+  if (!runtime) return null;
+  // Own-property guard, as every other config-keyed lookup in this module: the
+  // runtime name reaches here from a config file, and a prototype-chain key
+  // ("toString", "constructor") would otherwise resolve to an inherited member
+  // instead of undefined.
+  if (!Object.hasOwn(entry, runtime)) return null;
+  const selected = (entry as Record<string, unknown>)[runtime];
+  return typeof selected === 'string' && selected ? selected : null;
+}
+
+/**
  * Convenience wrapper used by resolveModelInternal.
  */
 function _resolveRuntimeTier(config: Record<string, unknown>, tier: string): TierEntryResolved | null {
@@ -466,10 +511,13 @@ function resolveTierFromConfig(config: Record<string, unknown>, agentType: strin
   // known agent list); a prototype-chain agentType ("toString",
   // "constructor") against ANY model_overrides object — even `{}` — would
   // otherwise return an inherited member instead of undefined.
-  const override = (modelOverrides && Object.hasOwn(modelOverrides, agentType))
+  // #4669: the raw entry is `string | Record<runtime, string>`; the shared
+  // selector owns that shape for both readers of model_overrides.
+  const rawEntry = (modelOverrides && Object.hasOwn(modelOverrides, agentType))
     ? modelOverrides[agentType]
     : undefined;
-  if (override && typeof override === 'string') {
+  const override = selectAgentModelOverride(rawEntry, config['runtime'] as string | null | undefined);
+  if (override) {
     if (CLAUDE_AGENT_ALIASES.has(override)) return override;
     // Own-property guard: this indexes a plain object with a config-supplied
     // string, so a prototype-chain key ("toString", "constructor", "valueOf")
@@ -534,9 +582,15 @@ function resolveModelInternal(cwd: string, agentType: string): string {
   // agentType of "toString" against `model_overrides: {}` returned the
   // inherited Function.prototype.toString as the resolved "model" — verified
   // reachable purely via the CLI, no override value needed.
-  const override = (modelOverrides && Object.hasOwn(modelOverrides, agentType))
+  // #4669: the raw entry is `string | Record<runtime, string>`; the shared
+  // selector owns that shape for both readers of model_overrides. The runtime
+  // it selects by is still the statically-persisted `config['runtime']` — the
+  // gap #4505 reports — so an object entry resolves correctly here only once
+  // that lands.
+  const rawEntry = (modelOverrides && Object.hasOwn(modelOverrides, agentType))
     ? modelOverrides[agentType]
     : undefined;
+  const override = selectAgentModelOverride(rawEntry, config['runtime'] as string | null | undefined);
   if (override) {
     const mapped = mapClaudeOverrideForRuntime(override, resolveActiveRuntime(config), agentType);
     if (mapped !== null) return mapped;
@@ -809,9 +863,15 @@ function resolveModelForTier(cwd: string, agentType: string, attempt?: number): 
   // agentType of "toString" against `model_overrides: {}` returned the
   // inherited Function.prototype.toString as the resolved "model" — verified
   // reachable purely via the CLI, no override value needed.
-  const override = (modelOverrides && Object.hasOwn(modelOverrides, agentType))
+  // #4669: the raw entry is `string | Record<runtime, string>`; the shared
+  // selector owns that shape for both readers of model_overrides. The runtime
+  // it selects by is still the statically-persisted `config['runtime']` — the
+  // gap #4505 reports — so an object entry resolves correctly here only once
+  // that lands.
+  const rawEntry = (modelOverrides && Object.hasOwn(modelOverrides, agentType))
     ? modelOverrides[agentType]
     : undefined;
+  const override = selectAgentModelOverride(rawEntry, config['runtime'] as string | null | undefined);
   if (override) {
     const mapped = mapClaudeOverrideForRuntime(override, resolveActiveRuntime(config), agentType);
     if (mapped !== null) return mapped;
@@ -1106,6 +1166,7 @@ function resolveEffortForTier(cwd: string, agentType: string, attempt?: number):
 
 export = {
   resolveTierEntry,
+  selectAgentModelOverride,
   CLAUDE_AGENT_ALIASES,
   resolveModelPolicy,
   resolveModelInternal,

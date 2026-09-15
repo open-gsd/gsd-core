@@ -670,8 +670,19 @@ function convertedAgentsKind(
           ? installEffortResolver.readGsdEffectiveEffortConfig(overrideTargetDir)
           : null;
         converter = (content, _isGlobal, meta) => {
+          // #4669: `agentCtx.runtime` is the runtime this stage() is installing
+          // for — the one whose agents directory these files land in. Passing it
+          // lets a runtime-keyed `model_overrides` entry pick the id meant for
+          // this host, instead of the statically-configured `config['runtime']`
+          // that `runtimeResolver` carries and that is wrong for at least one
+          // host whenever two runtimes share one project config.
           const modelOverride = meta
-            ? installModelOverrideResolver.resolveAgentModelOverride(meta.agentName, modelOverrides, runtimeResolver)
+            ? installModelOverrideResolver.resolveAgentModelOverride(
+              meta.agentName,
+              modelOverrides,
+              runtimeResolver,
+              agentCtx?.runtime,
+            )
             : null;
           // The universal level is NOT emitted raw. `clampEffortForHost` is the
           // declared OpenCode effort capability (EFFORT_ARGV.opencode: its own
