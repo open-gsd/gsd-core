@@ -345,6 +345,7 @@ const SHIP_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'ship.md');
 const EXECUTE_PHASE_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
 const WAVE_POST_GATE_HOOKS_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'wave-post-gate-hooks.md');
 const PLAN_PHASE_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-phase.md');
+const VERIFY_WORK_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'verify-work.md');
 
 // The repo's shared generic-gate-dispatch phrasing, used verbatim at execute:wave:post
 // (execute-phase.md), execute:post (execute-phase.md) and plan:post (plan-phase.md).
@@ -370,6 +371,15 @@ describe('predicate gate phase-context forwarding (#4483)', () => {
   test('execute:wave:post forwards both phase number and phase directory', () => {
     const line = predicateDispatchLine(WAVE_POST_GATE_HOOKS_MD, '');
     assert.match(line, /--phase-number "\$\{PHASE_NUMBER\}"/);
+    assert.match(line, /--phase-dir "\$\{PHASE_DIR\}"/);
+  });
+
+  // Not one of ADR-2008's three enumerated sites, but the same `check predicate`
+  // CLI. Pinned so the four call sites cannot drift back into three different
+  // argument shapes for one command.
+  test('verify:pre forwards both phase number and phase directory', () => {
+    const line = predicateDispatchLine(VERIFY_WORK_MD, '');
+    assert.match(line, /--phase-number "\$\{phase_number\}"/);
     assert.match(line, /--phase-dir "\$\{PHASE_DIR\}"/);
   });
 

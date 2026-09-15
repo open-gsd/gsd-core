@@ -88,7 +88,7 @@ Record the union of `produces` artefact names declared by the active step entrie
 Resolve active gate hooks from `VERIFY_PRE_HOOKS_JSON` where `kind == "gate"`.
 For each active gate hook, run its declared check (a `check.query` gate runs
 `gsd_run check ${hook.check.query} "${PHASE_DIR}" --raw`; a `predicate` gate
-runs `gsd_run check predicate --predicate '<hook.check.predicate as JSON>' --phase-dir "${PHASE_DIR}" --raw`):
+runs `gsd_run check predicate --predicate '<hook.check.predicate as JSON>' --phase-number "${phase_number}" --phase-dir "${PHASE_DIR}" --raw`):
 
 ```bash
 GATE_RESULT=$(gsd_run check "${hook_check_query}" "${PHASE_DIR}" --raw)
