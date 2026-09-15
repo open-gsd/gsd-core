@@ -1426,27 +1426,72 @@ function cmdVerifyArtifacts(cwd: string, planFilePath: string, raw: boolean): vo
     const exists = fs.existsSync(artFullPath);
     const check: Record<string, unknown> = { path: artPath, exists, issues: [], passed: false };
 
-    if (exists) {
-      const fileContent = safeReadFile(artFullPath) || '';
-      const lineCount = fileContent.split('\n').length;
+    // #4685: one artifact's I/O problem is that artifact's failure, never the
+    // whole plan's. `safeReadFile` rethrows every errno except ENOENT, so before
+    // this an unreadable entry — a directory most commonly, but equally an EACCES
+    // file or a dangling mount — threw out of the loop and the command reported
+    // NOTHING: not the offending entry, and not the plan's other, perfectly good
+    // artifacts either. A check that disappears is worse than a check that fails,
+    // because a failure is visible.
+    //
+    // Scope of this guard, stated precisely (review nit): the `try` encloses the
+    // whole per-artifact body, but the only statements in it that can throw are the
+    // `statSync` and the read — the `min_lines`/`contains`/`exports` checks below
+    // are pure string operations. So this catches I/O, and nothing here is a
+    // deliberate guard around those criteria checks. A path `fs.existsSync` already
+    // rejected never reaches here either (that is the `File not found` branch), so
+    // this is not a claim to catch every way a path can be unusable.
+    try {
+      if (exists) {
+        // A directory is reported as its own kind of failure, distinct from
+        // `File not found`: the path resolved, it simply is not the thing an
+        // artifact entry can be checked against. Verifying a directory (matching
+        // `contains:`/`min_lines:`/`exports:` across the files inside it) is a
+        // feature decision, deliberately not made here.
+        if (fs.statSync(artFullPath).isDirectory()) {
+          (check['issues'] as string[]).push('Not a file: path is a directory');
+        } else {
+          // `safeReadFile` returns null on ENOENT, and `|| ''` would turn that
+          // into an empty file — which an entry carrying only `path`/`provides`
+          // would then PASS, having checked nothing. `statSync` just succeeded, so
+          // a null here means the artifact went away mid-check. Report that rather
+          // than inheriting a pass from it. (Pre-existing above this fix, reachable
+          // through the same race after `existsSync`; found in review.)
+          const rawContent = safeReadFile(artFullPath);
+          if (rawContent === null) {
+            (check['issues'] as string[]).push('Unreadable: disappeared during check');
+            results.push(check);
+            continue;
+          }
+          const fileContent = rawContent;
+          const lineCount = fileContent.split('\n').length;
 
-      if (artifact['min_lines'] && lineCount < (artifact['min_lines'] as number)) {
-        (check['issues'] as string[]).push(`Only ${lineCount} lines, need ${artifact['min_lines'] as number}`);
-      }
-      if (artifact['contains'] && !fileContent.includes(artifact['contains'] as string)) {
-        (check['issues'] as string[]).push(`Missing pattern: ${artifact['contains'] as string}`);
-      }
-      if (artifact['exports']) {
-        const exports = Array.isArray(artifact['exports'])
-          ? artifact['exports']
-          : [artifact['exports']];
-        for (const exp of exports) {
-          if (!fileContent.includes(exp as string)) (check['issues'] as string[]).push(`Missing export: ${exp as string}`);
+          if (artifact['min_lines'] && lineCount < (artifact['min_lines'] as number)) {
+            (check['issues'] as string[]).push(`Only ${lineCount} lines, need ${artifact['min_lines'] as number}`);
+          }
+          if (artifact['contains'] && !fileContent.includes(artifact['contains'] as string)) {
+            (check['issues'] as string[]).push(`Missing pattern: ${artifact['contains'] as string}`);
+          }
+          if (artifact['exports']) {
+            const exports = Array.isArray(artifact['exports'])
+              ? artifact['exports']
+              : [artifact['exports']];
+            for (const exp of exports) {
+              if (!fileContent.includes(exp as string)) (check['issues'] as string[]).push(`Missing export: ${exp as string}`);
+            }
+          }
+          check['passed'] = (check['issues'] as string[]).length === 0;
         }
+      } else {
+        (check['issues'] as string[]).push('File not found');
       }
-      check['passed'] = (check['issues'] as string[]).length === 0;
-    } else {
-      (check['issues'] as string[]).push('File not found');
+    } catch (err) {
+      // Unreadable for some other reason. Record the errno rather than a generic
+      // message — an operator seeing EACCES acts differently from one seeing EIO —
+      // and leave `passed` false.
+      const e = err as NodeJS.ErrnoException;
+      (check['issues'] as string[]).push(`Unreadable: ${e.code || (e.message ?? String(err))}`);
+      check['passed'] = false;
     }
 
     results.push(check);
