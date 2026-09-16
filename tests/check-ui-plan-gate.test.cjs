@@ -23,10 +23,17 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, createTempDir } = require('./helpers.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { computeUiPlanGate } = require('../gsd-core/bin/lib/check-command-router.cjs');
 const { hasStaticFrontendEvidence } = require('../gsd-core/bin/lib/ui-frontend-evidence.cjs');
+
+// Shared native fixture literals — kept in one place so the fixtures cannot
+// drift from NATIVE_UI_CONTENT_MARKERS when a marker is tightened (#4658).
+const COMPOSE_IMPORT = 'import androidx.compose.material3.Text\n';
+const FLUTTER_IMPORT = "import 'package:flutter/material.dart';\n";
+const FLUTTER_IMPORT_DOUBLE_QUOTED = 'import "package:flutter/material.dart";\n';
+
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -61,10 +68,10 @@ function makeProject({ phaseSection = '', hasUiSpec = false, frontendEvidence = 
     fs.writeFileSync(path.join(tmpDir, 'Sources', 'ContentView.swift'), 'import SwiftUI\nstruct ContentView: View { var body: some View { Text("hi") } }\n', 'utf8');
   } else if (frontendEvidence === 'compose') {
     fs.mkdirSync(path.join(tmpDir, 'lib'), { recursive: true });
-    fs.writeFileSync(path.join(tmpDir, 'lib', 'Main.kt'), 'import androidx.compose.material3.Text\n', 'utf8');
+    fs.writeFileSync(path.join(tmpDir, 'lib', 'Main.kt'), COMPOSE_IMPORT, 'utf8');
   } else if (frontendEvidence === 'flutter') {
     fs.mkdirSync(path.join(tmpDir, 'lib'), { recursive: true });
-    fs.writeFileSync(path.join(tmpDir, 'lib', 'main.dart'), "import 'package:flutter/material.dart';\nvoid main() {}\n", 'utf8');
+    fs.writeFileSync(path.join(tmpDir, 'lib', 'main.dart'), `${FLUTTER_IMPORT}void main() {}\n`, 'utf8');
   } else if (frontendEvidence === 'xaml') {
     fs.writeFileSync(path.join(tmpDir, 'MainPage.xaml'), '<Page x:Class="App.MainPage" />\n', 'utf8');
   } else if (frontendEvidence === 'swift-non-ui') {
@@ -490,7 +497,7 @@ describe('computeUiPlanGate — ui.plan-gate check logic (#1026)', () => {
 describe('hasStaticFrontendEvidence — native evidence branch (#4658)', () => {
   // relPath -> content; a `null` value creates a DIRECTORY at that path.
   function nativeProject(files) {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-evidence-4658-'));
+    const tmpDir = createTempDir('ui-evidence-4658-');
     for (const rel of Object.keys(files)) {
       const target = path.join(tmpDir, rel);
       if (files[rel] === null) {
@@ -516,15 +523,21 @@ describe('hasStaticFrontendEvidence — native evidence branch (#4658)', () => {
   });
 
   test('a Compose import counts as static frontend evidence (#4658)', (t) => {
-    const dir = nativeProject({ 'lib/Main.kt': 'import androidx.compose.material3.Text\n' });
+    const dir = nativeProject({ 'lib/Main.kt': COMPOSE_IMPORT });
     t.after(() => cleanup(dir));
     assert.strictEqual(hasStaticFrontendEvidence(dir), true);
   });
 
   test('a Flutter import counts as static frontend evidence (#4658)', (t) => {
-    const dir = nativeProject({ 'lib/main.dart': "import 'package:flutter/material.dart';\nvoid main() {}\n" });
+    const dir = nativeProject({ 'lib/main.dart': `${FLUTTER_IMPORT}void main() {}\n` });
     t.after(() => cleanup(dir));
     assert.strictEqual(hasStaticFrontendEvidence(dir), true);
+  });
+
+  test('a double-quoted Flutter import also counts as evidence (#4658)', (t) => {
+    const dir = nativeProject({ 'lib/main.dart': `${FLUTTER_IMPORT_DOUBLE_QUOTED}void main() {}\n` });
+    t.after(() => cleanup(dir));
+    assert.strictEqual(hasStaticFrontendEvidence(dir), true, 'both Dart quote styles are imports');
   });
 
   test('a XAML page counts as static frontend evidence (#4658)', (t) => {
@@ -557,7 +570,7 @@ describe('hasStaticFrontendEvidence — native evidence branch (#4658)', () => {
 
     const lowercased = nativeProject({ 'Sources/A.swift': 'import swiftui\n' });
     t.after(() => cleanup(lowercased));
-    assert.strictEqual(hasStaticFrontendEvidence(lowercased), false, 'imports are case-sensitive in all four ecosystems');
+    assert.strictEqual(hasStaticFrontendEvidence(lowercased), false, 'imports are case-sensitive in all three marker-scanned languages');
 
     const kotlinComment = nativeProject({ 'lib/Main.kt': '// TODO: migrate to androidx.compose\nfun main() {}\n' });
     t.after(() => cleanup(kotlinComment));
@@ -605,12 +618,13 @@ describe('hasStaticFrontendEvidence — native evidence branch (#4658)', () => {
       ['.swift', 'import UIKit'],
       ['.kt', 'import androidx.compose'],
       ['.dart', "import 'package:flutter"],
+      ['.dart', 'import "package:flutter'],
     ];
     const filler = fc.string({ minLength: 0, maxLength: 80 })
       .filter((s) => !s.includes('import') && !s.includes('androidx') && !s.includes('package:') && !s.includes('\n'));
     // try/finally lives in this HELPER (no test context), per the exemption.
     function withFixture(content, fn) {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-evidence-prop-4658-'));
+      const dir = createTempDir('ui-evidence-prop-4658-');
       try {
         fs.writeFileSync(path.join(dir, `probe${content.ext}`), content.text, 'utf8');
         return fn(dir);
@@ -695,15 +709,13 @@ describe('computeUiPlanGate — native evidence, additional ecosystems (#4658)',
   });
 
   test('an unreadable candidate file degrades to no evidence, never throws', (t) => {
-    const { hasStaticFrontendEvidence: probe } = require('../gsd-core/bin/lib/ui-frontend-evidence.cjs');
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-evidence-io-4658-'));
-    const origRead = fs.readSync;
+    const dir = createTempDir('ui-evidence-io-4658-');
     t.after(() => { cleanup(dir); });
-    fs.writeFileSync(path.join(dir, 'Main.kt'), 'import androidx.compose.material3.Text\n', 'utf8');
+    fs.writeFileSync(path.join(dir, 'Main.kt'), COMPOSE_IMPORT, 'utf8');
+    // t.mock.method auto-restores readSync at test end.
     t.mock.method(fs, 'readSync', () => {
       throw new Error('EIO: simulated read failure');
     });
-    assert.strictEqual(probe(dir), false, 'read failure = no evidence, per the module contract');
-    assert.ok(origRead, 'original readSync preserved by t.mock auto-restore');
+    assert.strictEqual(hasStaticFrontendEvidence(dir), false, 'read failure = no evidence, per the module contract');
   });
 });

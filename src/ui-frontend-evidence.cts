@@ -54,13 +54,14 @@ export const NATIVE_UI_XAML_RE = /\.xaml$/i;
 /**
  * Per-extension UI-framework import markers for `NATIVE_UI_SOURCE_RE` files
  * (#4658). Every marker embeds its ecosystem's import keyword, so a bare
- * framework-name mention in prose or a comment is not evidence. Case-sensitive:
- * imports are case-sensitive in Swift, Kotlin and Dart.
+ * framework-name mention in prose or a comment is not evidence; the Dart
+ * marker carries both legal quote styles. Case-sensitive: imports are
+ * case-sensitive in Swift, Kotlin and Dart.
  */
 export const NATIVE_UI_CONTENT_MARKERS: Readonly<Record<string, readonly string[]>> = {
   '.swift': ['import SwiftUI', 'import UIKit'],
   '.kt': ['import androidx.compose'],
-  '.dart': ["import 'package:flutter"],
+  '.dart': ["import 'package:flutter", 'import "package:flutter'],
 };
 
 /**
@@ -137,9 +138,19 @@ function packageJsonHasUiFramework(projectDir: string): boolean {
   return false;
 }
 
-function treeHasComponentFile(projectDir: string): boolean {
-  // Iterative BFS — bounded by MAX_WALK_ENTRIES so a pathological tree cannot
-  // stall the gate. Symlinks are never followed (withFileTypes + isDirectory).
+/**
+ * Shared bounded BFS over the project tree — the single home of the walk
+ * semantics both evidence walks depend on: SKIP_DIRS pruning, the
+ * MAX_WALK_ENTRIES entry cap (cap-hit → `false`: the tree is treated as
+ * scanned and evidence stays undecided), symlinks never followed
+ * (withFileTypes Dirents), unreadable directories skipped. `visit` is called
+ * for every regular file with its name and full path; returning `true` stops
+ * the walk with `true` (evidence found).
+ */
+function walkProjectFiles(
+  projectDir: string,
+  visit: (name: string, fullPath: string) => boolean,
+): boolean {
   const queue: string[] = [projectDir];
   let visited = 0;
   while (queue.length > 0 && visited < MAX_WALK_ENTRIES) {
@@ -155,12 +166,16 @@ function treeHasComponentFile(projectDir: string): boolean {
       if (visited >= MAX_WALK_ENTRIES) return false;
       if (entry.isDirectory()) {
         if (!SKIP_DIRS.has(entry.name)) queue.push(path.join(dir, entry.name));
-      } else if (entry.isFile() && UI_COMPONENT_FILE_RE.test(entry.name)) {
+      } else if (entry.isFile() && visit(entry.name, path.join(dir, entry.name))) {
         return true;
       }
     }
   }
   return false;
+}
+
+function treeHasComponentFile(projectDir: string): boolean {
+  return walkProjectFiles(projectDir, (name) => UI_COMPONENT_FILE_RE.test(name));
 }
 
 /**
@@ -193,38 +208,19 @@ function fileHasAnyMarker(file: string, markers: readonly string[]): boolean {
 }
 
 /**
- * Native-UI BFS over the same bounds and skip rules as `treeHasComponentFile`
- * (#4658): `.xaml` is evidence by extension alone; `.swift`/`.kt`/`.dart` are
- * evidence only when the file's content carries its ecosystem's import marker.
+ * Native-UI walk over the shared bounded BFS (#4658): `.xaml` is evidence by
+ * extension alone; `.swift`/`.kt`/`.dart` are evidence only when the file's
+ * content carries its ecosystem's import marker.
  */
 function treeHasNativeUiFile(projectDir: string): boolean {
-  const queue: string[] = [projectDir];
-  let visited = 0;
-  while (queue.length > 0 && visited < MAX_WALK_ENTRIES) {
-    const dir = queue.shift() as string;
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      continue; // unreadable directory → skip it
+  return walkProjectFiles(projectDir, (name, fullPath) => {
+    if (NATIVE_UI_XAML_RE.test(name)) return true;
+    if (NATIVE_UI_SOURCE_RE.test(name)) {
+      const markers = NATIVE_UI_CONTENT_MARKERS[path.extname(name).toLowerCase()];
+      return markers != null && fileHasAnyMarker(fullPath, markers);
     }
-    for (const entry of entries) {
-      visited++;
-      if (visited >= MAX_WALK_ENTRIES) return false;
-      if (entry.isDirectory()) {
-        if (!SKIP_DIRS.has(entry.name)) queue.push(path.join(dir, entry.name));
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      if (NATIVE_UI_XAML_RE.test(entry.name)) return true;
-      if (NATIVE_UI_SOURCE_RE.test(entry.name)) {
-        const ext = path.extname(entry.name).toLowerCase();
-        const markers = NATIVE_UI_CONTENT_MARKERS[ext];
-        if (markers && fileHasAnyMarker(path.join(dir, entry.name), markers)) return true;
-      }
-    }
-  }
-  return false;
+    return false;
+  });
 }
 
 /**
