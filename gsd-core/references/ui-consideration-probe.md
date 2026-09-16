@@ -15,11 +15,16 @@ here. Forcing them into a closed compiled taxonomy is the wrong model.
 
 ## Inputs
 
-A list of UI elements, each a `{ id, text, elements? }` record where `text` is the
-researcher-authored description and `elements` is an optional author-supplied override of the
-element classification. The six element kinds are: `form`, `list-collection`, `nav`, `media`,
-`interactive-control`, `static-content`. When `elements` is absent, a heuristic classifier
-proposes kinds from the prose (propose-then-confirm) — the author may correct the kind.
+A list of UI elements, each a `{ id, text, text_en?, elements? }` record where `text` is the
+researcher-authored description, `elements` is an optional author-supplied override of the
+element classification, and `text_en` is an optional English translation of `text`
+(#4657). The element cues are English word-boundary patterns, so a non-English `text` (a
+project running with `response_language` set) classifies to zero kinds unless `text_en`
+carries a faithful English rendering — engine input, never user-facing output; `text`
+itself keeps the UI-SPEC's own language and is never translated. The six element kinds are:
+`form`, `list-collection`, `nav`, `media`, `interactive-control`, `static-content`. When
+`elements` is absent, a heuristic classifier proposes kinds from the prose
+(`text_en ?? text`, propose-then-confirm) — the author may correct the kind.
 
 ## Taxonomy (8 categories)
 

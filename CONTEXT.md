@@ -614,6 +614,7 @@ The prompt-level data/instruction isolation seam for untrusted web/document ingr
 `PROBE.prohib.verification=test|judgment`
 `PROBE.ui.verification=explicit|backstop`
 `PROBE.ui.axis=MIXED — closed compiled shape-rooted 8 (empty/loading/error/populated/partial/overflow/zero-one-many/long-text) via ui-consideration-probe adapter; open UX (real-time/a11y/i18n-RTL) prose-owned in references/domain-probes.md, NOT compiled (#1867)`
+`PROBE.ui.text_en=optional English translation of Element.text read by classification (text_en ?? text), engine input never user-facing output; mirrors the edge adapter's #3717 field; empty/whitespace/non-string fails closed (#4657)`
 `PROBE.ui.seam=ui-phase Step 9.5 post-verification: element-cue classify -> propose-then-confirm (partial-cue mitigation, Goodhart) -> autoResolve --auto floor (never dismiss; unclassified stays unresolved #1110) -> ## UI Considerations write-back -> plan-phase `## UI Considerations` lift rule (#1867)`
 `PROBE.ci.surface=the contract (parse/validate, projection round-trip, fail-closed guards), NEVER the LLM judgment (ADR-550 D5)`
 `PROHIB.recall=LLM-prose; no compiled prohibition-probe recall engine (only the schema/projection layer is code, ADR-550 D7b)`

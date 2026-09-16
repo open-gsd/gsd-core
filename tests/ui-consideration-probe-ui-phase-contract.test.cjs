@@ -1,4 +1,3 @@
-// allow-test-rule: source-text-is-the-product
 // ui-phase.md Step 9.5 is the deployed workflow runtime contract under assertion; its text IS
 // what the runtime loads. These checks lock the #4657 text_en wiring so the Non-English
 // guidance cannot silently rot the way it did for the edge adapter before #3717 — mirroring
@@ -14,7 +13,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const fc = require('fast-check');
+const fc = require('./helpers/fast-check-setup.cjs');
 
 const UI_PHASE_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'ui-phase.md');
 const { proposeConsiderations } = require(
@@ -22,6 +21,8 @@ const { proposeConsiderations } = require(
 );
 
 function readUiPhase() {
+  // allow-test-rule: source-text-is-the-product (#4657)
+  // The workflow file's text IS the deployed runtime contract; assertions below match on it.
   return fs.readFileSync(UI_PHASE_PATH, 'utf8');
 }
 

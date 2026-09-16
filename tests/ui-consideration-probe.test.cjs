@@ -20,12 +20,11 @@ process.env.GSD_TEST_MODE = '1';
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, createTempDir } = require('./helpers.cjs');
 
 const BUILT_SCRIPT = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'ui-consideration-probe.cjs');
 const uc = require(BUILT_SCRIPT);
@@ -317,8 +316,9 @@ describe('ui-consideration-probe WIRE-02: backward-compat + format-match + idemp
 // ══ #4657 — the text_en language channel (mirrors #3717/#4156 onto the UI adapter) ═════════
 // UI_CUES are English word-boundary patterns; a non-English element classifies to zero kinds
 // and lands in the #1110 unclassified soft signal. text_en carries the classifier-facing
-// English translation — engine input, never user-facing output (ADR-550 amendment, Form 2 =
-// the UI Element). classifyElement's own signature stays untouched; the text_en ?? text
+// English translation — engine input, never user-facing output. (The ADR-550 amendment's
+// record scopes to the edge adapter's Requirement; #4657 extends the same remedy shape to
+// the UI Element.) classifyElement's own signature stays untouched; the text_en ?? text
 // selection lives at the two classification call sites (proposeConsiderations, proposeElements).
 describe('ui-consideration-probe: text_en language-aware classification (#4657)', () => {
   // The reproduction pair from the issue: Danish UI-SPEC prose + faithful English translations.
@@ -403,8 +403,9 @@ describe('ui-consideration-probe: text_en language-aware classification (#4657)'
   });
 
   test('proposeConsiderations: authored elements override still wins when text_en is also present', () => {
+    // nav is an applicable element kind for loading, error, overflow AND long-text.
     const override = uc.proposeConsiderations({ id: 'U9', text: daList, text_en: enList, elements: ['nav'] });
-    assert.deepEqual(override.map((c) => c.category), ['loading', 'error', 'long-text']);
+    assert.deepEqual(override.map((c) => c.category), ['loading', 'error', 'overflow', 'long-text']);
   });
 
   test('proposeConsiderations: zero-cue text_en still surfaces the unclassified soft signal (#1110)', () => {
@@ -434,7 +435,7 @@ describe('ui-consideration-probe: text_en language-aware classification (#4657)'
   });
 
   test('CLI: elements file with text_en classifies through the built engine (exit 0, no unclassified)', (t) => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-probe-4657-'));
+    const dir = createTempDir('ui-probe-4657-');
     t.after(() => cleanup(dir));
     const elementsPath = path.join(dir, 'elements.json');
     fs.writeFileSync(elementsPath, JSON.stringify([
