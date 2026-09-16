@@ -492,10 +492,11 @@ describe('explore seeds: the plant-seed contract (#4648)', () => {
   const workflow = () => fs.readFileSync(workflowPath, 'utf-8');
 
   test('step 5 delegates seeds to the plant-seed workflow instead of hand-writing a file', () => {
+    // allow-test-rule: source-text-is-the-product (#4648) — explore.md text is the deployed contract
     const content = workflow();
     assert.ok(
-      content.includes('/gsd:plant-seed'),
-      'explore step 5 must delegate seeds to the plant-seed workflow so the canonical shape is owned in one place',
+      content.includes('/gsd:capture --seed'),
+      'explore step 5 must delegate seeds via /gsd:capture --seed — the only command surface routing to the plant-seed workflow (#4648)',
     );
     assert.ok(
       !content.includes('trigger_condition'),
@@ -512,6 +513,7 @@ describe('explore seeds: the plant-seed contract (#4648)', () => {
   });
 
   test('the delegation names why: visibility to every seed reader (#4648)', () => {
+    // allow-test-rule: source-text-is-the-product (#4648) — explore.md text is the deployed contract
     const content = workflow();
     for (const reader of ['list-seeds', 'audit-open', 'new-milestone']) {
       assert.ok(

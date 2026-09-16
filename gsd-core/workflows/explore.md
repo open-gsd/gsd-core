@@ -244,7 +244,7 @@ For each selected output, write the file:
 
 - **Notes:** Create `.planning/notes/{slug}.md` with frontmatter (title, date, context)
 - **Todos:** Create `.planning/todos/pending/{slug}.md` with frontmatter (title, date, priority)
-- **Seeds:** Use the existing plant-seed workflow via SlashCommand (`/gsd:plant-seed`) with the idea and its trigger (#4648) — it mints the next `SEED-` id and writes the canonical frontmatter (`status`, `trigger_when`, `planted_during`, `scope`) that `list-seeds`, `audit-open` and `/gsd-new-milestone` read. Do NOT hand-write `.planning/seeds/{slug}.md`: that shape has no `SEED-` prefix, `status`, or `trigger_when`, so every seed reader misses it
+- **Seeds:** Use the existing `/gsd:capture --seed` command via SlashCommand, passing the idea with its trigger in the text (#4648) — capture routes to the plant-seed workflow, which mints the next `SEED-` id and writes the canonical frontmatter (`status`, `trigger_when`, `planted_during`, `scope`) that `list-seeds`, `audit-open` and `/gsd:new-milestone` read. Carry the #2543 B3 untrusted-input fence rules into the idea text you pass. Do NOT hand-write `.planning/seeds/{slug}.md`: that shape has no `SEED-` prefix, `status`, or `trigger_when`, so every seed reader misses it
 - **Research questions:** Append to `.planning/research/questions.md`
 - **Requirements:** Append to `.planning/REQUIREMENTS.md` with next available REQ ID
 - **Phases:** Use existing `/gsd-add-phase` command via SlashCommand

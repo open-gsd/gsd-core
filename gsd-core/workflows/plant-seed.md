@@ -1,4 +1,7 @@
 <purpose>
+Carry the untrusted-input boundary (@gsd-core/references/untrusted-input-boundary.md) when the idea text derives from fetched pages: fence quoted page content, never crystallize an unresolved claim as settled (#2543 B3).
+
+
 Capture a forward-looking idea as a structured seed file with trigger conditions.
 Seeds auto-surface during /gsd:new-milestone when trigger conditions match the
 new milestone's scope.
