@@ -140,7 +140,7 @@ describe('verify-work.md — canonicalize flip is gated by the UAT predicate (#4
   test('canonicalize flips to passed only when the uat-passed predicate reports passed (#4663)', () => {
     const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
     const humanNeededIdx = content.indexOf('if [ "$VERIFICATION_STATUS_VALUE" = "human_needed" ]; then');
-    const precheckIdx = content.indexOf('UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}" --uat-only)');
+    const precheckIdx = content.indexOf('UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}" --uat-only 2>/dev/null)');
     const flipGuardIdx = content.indexOf('if [ "$UAT_PRECHECK_PASSED" = "true" ]; then');
     const setPassedIdx = content.indexOf('gsd_run query frontmatter.set "$VERIFICATION_FILE" --field status --value passed');
 
@@ -153,10 +153,10 @@ describe('verify-work.md — canonicalize flip is gated by the UAT predicate (#4
 
   test('the canonicalize pre-check runs uat-passed without --require-verification (#4663)', () => {
     const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
-    const precheckIdx = content.indexOf('UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}" --uat-only)');
+    const precheckIdx = content.indexOf('UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}" --uat-only 2>/dev/null)');
     const flaggedIdx = content.indexOf('PHASE_COMPLETE=$(gsd_run phase uat-passed "{phase}" --require-verification)');
 
-    assert.ok(precheckIdx !== -1, 'the unflagged pre-check must exist');
+    assert.ok(precheckIdx !== -1, 'the --uat-only pre-check must exist');
     assert.ok(
       !content.slice(precheckIdx, precheckIdx + 120).includes('--require-verification'),
       'the pre-check is the unflagged predicate - requiring verification there would evaluate the very report being written'
