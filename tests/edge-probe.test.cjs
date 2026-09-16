@@ -124,7 +124,7 @@ describe('edge-probe: analyzeCoverage', () => {
   const reqs = [{ id: 'R1', text: 'Merge a list of overlapping intervals' }];
   test('with no resolutions, every applicable edge is unresolved (byVerification zeroed)', () => {
     const rep = ep.analyzeCoverage(reqs, []);
-    assert.deepEqual(rep.coverage, { applicable: 3, resolved: 0, unresolved: 3, byVerification: { explicit: 0, backstop: 0 } });
+    assert.deepEqual(rep.coverage, { applicable: 3, resolved: 0, unresolved: 3, unclassified: 0, byVerification: { explicit: 0, backstop: 0 } });
   });
   test('merges a resolved/explicit resolution and counts it resolved', () => {
     const rep = ep.analyzeCoverage(reqs, [
@@ -153,7 +153,7 @@ describe('edge-probe: CLI (built artifact)', () => {
     const nodeResult = runNode([BUILT_SCRIPT, reqPath], { timeoutMs: PROBE_TIMEOUT_MS });
     throwIfFailed(nodeResult, `node ${BUILT_SCRIPT} ${reqPath}`);
     const rep = JSON.parse(nodeResult.stdout);
-    assert.deepEqual(rep.coverage, { applicable: 2, resolved: 0, unresolved: 2, byVerification: { explicit: 0, backstop: 0 } });
+    assert.deepEqual(rep.coverage, { applicable: 2, resolved: 0, unresolved: 2, unclassified: 0, byVerification: { explicit: 0, backstop: 0 } });
   });
   test('with no args exits with status 2 (assert on exit code, not stderr prose)', () => {
     const result = runNode([BUILT_SCRIPT], { timeoutMs: PROBE_TIMEOUT_MS });
@@ -194,7 +194,7 @@ describe('edge-probe: CLI JSON.parse error handling (RR-10)', () => {
       const r = runNode([BUILT_SCRIPT, reqPath], { timeoutMs: PROBE_TIMEOUT_MS });
       assert.equal(r.exitCode, 0);
       const rep = JSON.parse(r.stdout);
-      assert.deepEqual(rep.coverage, { applicable: 2, resolved: 0, unresolved: 2, byVerification: { explicit: 0, backstop: 0 } });
+      assert.deepEqual(rep.coverage, { applicable: 2, resolved: 0, unresolved: 2, unclassified: 0, byVerification: { explicit: 0, backstop: 0 } });
     } finally {
       cleanup(dir);
     }
@@ -255,6 +255,7 @@ describe('edge-probe: proposeEdges — unclassified candidate for prose-zero-cue
     const report = ep.analyzeCoverage([{ id: 'R1', text: 'Display the company logo' }]);
     assert.equal(report.coverage.applicable, 1);
     assert.equal(report.coverage.unresolved, 1);
+    assert.equal(report.coverage.unclassified, 1, '#4656: the unclassified sibling count must expose the soft-signal row');
     assert.equal(report.items[0].category, 'unclassified');
   });
 

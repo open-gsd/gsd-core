@@ -169,11 +169,44 @@ resolutions supplied, every applicable edge is `unresolved`:
 ```json edge-probe:02-merge-intervals/expected-coverage.json
 {
   "items": [
-    { "requirement_id": "R1", "category": "adjacency", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "When two things are exactly equal or just touch, do they merge, collide, or separate?" },
-    { "requirement_id": "R1", "category": "empty", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "What is the result for empty, single-element, or null input?" },
-    { "requirement_id": "R1", "category": "ordering", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "When elements compare equal, is output order specified and stable?" }
+    {
+      "requirement_id": "R1",
+      "category": "adjacency",
+      "status": "unresolved",
+      "verification": null,
+      "resolution": null,
+      "reason": null,
+      "probe": "When two things are exactly equal or just touch, do they merge, collide, or separate?"
+    },
+    {
+      "requirement_id": "R1",
+      "category": "empty",
+      "status": "unresolved",
+      "verification": null,
+      "resolution": null,
+      "reason": null,
+      "probe": "What is the result for empty, single-element, or null input?"
+    },
+    {
+      "requirement_id": "R1",
+      "category": "ordering",
+      "status": "unresolved",
+      "verification": null,
+      "resolution": null,
+      "reason": null,
+      "probe": "When elements compare equal, is output order specified and stable?"
+    }
   ],
-  "coverage": { "applicable": 3, "resolved": 0, "unresolved": 3, "byVerification": { "explicit": 0, "backstop": 0 } }
+  "coverage": {
+    "applicable": 3,
+    "resolved": 0,
+    "unresolved": 3,
+    "unclassified": 0,
+    "byVerification": {
+      "explicit": 0,
+      "backstop": 0
+    }
+  }
 }
 ```
 
@@ -192,10 +225,35 @@ rule, the requirement classifies as `numeric-range`, which raises `boundary` and
 ```json edge-probe:01-round-half-even/expected-coverage.json
 {
   "items": [
-    { "requirement_id": "R1", "category": "boundary", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "What happens exactly at each min/max/threshold — and one step either side?" },
-    { "requirement_id": "R1", "category": "precision", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "Where can precision loss, overflow, or rounding/tie-breaking occur — and what is the exact contract (e.g. half-up vs half-to-even, ceil/floor/truncate)?" }
+    {
+      "requirement_id": "R1",
+      "category": "boundary",
+      "status": "unresolved",
+      "verification": null,
+      "resolution": null,
+      "reason": null,
+      "probe": "What happens exactly at each min/max/threshold — and one step either side?"
+    },
+    {
+      "requirement_id": "R1",
+      "category": "precision",
+      "status": "unresolved",
+      "verification": null,
+      "resolution": null,
+      "reason": null,
+      "probe": "Where can precision loss, overflow, or rounding/tie-breaking occur — and what is the exact contract (e.g. half-up vs half-to-even, ceil/floor/truncate)?"
+    }
   ],
-  "coverage": { "applicable": 2, "resolved": 0, "unresolved": 2, "byVerification": { "explicit": 0, "backstop": 0 } }
+  "coverage": {
+    "applicable": 2,
+    "resolved": 0,
+    "unresolved": 2,
+    "unclassified": 0,
+    "byVerification": {
+      "explicit": 0,
+      "backstop": 0
+    }
+  }
 }
 ```
 
@@ -211,10 +269,35 @@ the requirement classifies as `text`, which raises `empty` and `encoding`:
 ```json edge-probe:03-truncate-graphemes/expected-coverage.json
 {
   "items": [
-    { "requirement_id": "R1", "category": "empty", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "What is the result for empty, single-element, or null input?" },
-    { "requirement_id": "R1", "category": "encoding", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "Whose definition of length/equality applies — bytes, code points, grapheme clusters, or normalized form?" }
+    {
+      "requirement_id": "R1",
+      "category": "empty",
+      "status": "unresolved",
+      "verification": null,
+      "resolution": null,
+      "reason": null,
+      "probe": "What is the result for empty, single-element, or null input?"
+    },
+    {
+      "requirement_id": "R1",
+      "category": "encoding",
+      "status": "unresolved",
+      "verification": null,
+      "resolution": null,
+      "reason": null,
+      "probe": "Whose definition of length/equality applies — bytes, code points, grapheme clusters, or normalized form?"
+    }
   ],
-  "coverage": { "applicable": 2, "resolved": 0, "unresolved": 2, "byVerification": { "explicit": 0, "backstop": 0 } }
+  "coverage": {
+    "applicable": 2,
+    "resolved": 0,
+    "unresolved": 2,
+    "unclassified": 0,
+    "byVerification": {
+      "explicit": 0,
+      "backstop": 0
+    }
+  }
 }
 ```
 
@@ -231,10 +314,35 @@ classifies as `numeric-range`, which raises `boundary` and `precision`:
 ```json edge-probe:04-money-rounding/expected-coverage.json
 {
   "items": [
-    { "requirement_id": "R1", "category": "boundary", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "What happens exactly at each min/max/threshold — and one step either side?" },
-    { "requirement_id": "R1", "category": "precision", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "Where can precision loss, overflow, or rounding/tie-breaking occur — and what is the exact contract (e.g. half-up vs half-to-even, ceil/floor/truncate)?" }
+    {
+      "requirement_id": "R1",
+      "category": "boundary",
+      "status": "unresolved",
+      "verification": null,
+      "resolution": null,
+      "reason": null,
+      "probe": "What happens exactly at each min/max/threshold — and one step either side?"
+    },
+    {
+      "requirement_id": "R1",
+      "category": "precision",
+      "status": "unresolved",
+      "verification": null,
+      "resolution": null,
+      "reason": null,
+      "probe": "Where can precision loss, overflow, or rounding/tie-breaking occur — and what is the exact contract (e.g. half-up vs half-to-even, ceil/floor/truncate)?"
+    }
   ],
-  "coverage": { "applicable": 2, "resolved": 0, "unresolved": 2, "byVerification": { "explicit": 0, "backstop": 0 } }
+  "coverage": {
+    "applicable": 2,
+    "resolved": 0,
+    "unresolved": 2,
+    "unclassified": 0,
+    "byVerification": {
+      "explicit": 0,
+      "backstop": 0
+    }
+  }
 }
 ```
 
@@ -250,11 +358,44 @@ Given a requirement to deduplicate a list of items, the requirement classifies a
 ```json edge-probe:05-list-dedupe/expected-coverage.json
 {
   "items": [
-    { "requirement_id": "R1", "category": "adjacency", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "When two things are exactly equal or just touch, do they merge, collide, or separate?" },
-    { "requirement_id": "R1", "category": "empty", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "What is the result for empty, single-element, or null input?" },
-    { "requirement_id": "R1", "category": "ordering", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "When elements compare equal, is output order specified and stable?" }
+    {
+      "requirement_id": "R1",
+      "category": "adjacency",
+      "status": "unresolved",
+      "verification": null,
+      "resolution": null,
+      "reason": null,
+      "probe": "When two things are exactly equal or just touch, do they merge, collide, or separate?"
+    },
+    {
+      "requirement_id": "R1",
+      "category": "empty",
+      "status": "unresolved",
+      "verification": null,
+      "resolution": null,
+      "reason": null,
+      "probe": "What is the result for empty, single-element, or null input?"
+    },
+    {
+      "requirement_id": "R1",
+      "category": "ordering",
+      "status": "unresolved",
+      "verification": null,
+      "resolution": null,
+      "reason": null,
+      "probe": "When elements compare equal, is output order specified and stable?"
+    }
   ],
-  "coverage": { "applicable": 3, "resolved": 0, "unresolved": 3, "byVerification": { "explicit": 0, "backstop": 0 } }
+  "coverage": {
+    "applicable": 3,
+    "resolved": 0,
+    "unresolved": 3,
+    "unclassified": 0,
+    "byVerification": {
+      "explicit": 0,
+      "backstop": 0
+    }
+  }
 }
 ```
 
@@ -270,11 +411,44 @@ left unresolved:
 ```json edge-probe:06-resolved-mixed/expected-coverage.json
 {
   "items": [
-    { "requirement_id": "R1", "category": "adjacency", "status": "resolved", "verification": "explicit", "resolution": "AC#6: touching intervals merge", "reason": null, "probe": "When two things are exactly equal or just touch, do they merge, collide, or separate?" },
-    { "requirement_id": "R1", "category": "empty", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "What is the result for empty, single-element, or null input?" },
-    { "requirement_id": "R1", "category": "ordering", "status": "dismissed", "verification": null, "resolution": null, "reason": "output is canonically sorted; no tie possible", "probe": "When elements compare equal, is output order specified and stable?" }
+    {
+      "requirement_id": "R1",
+      "category": "adjacency",
+      "status": "resolved",
+      "verification": "explicit",
+      "resolution": "AC#6: touching intervals merge",
+      "reason": null,
+      "probe": "When two things are exactly equal or just touch, do they merge, collide, or separate?"
+    },
+    {
+      "requirement_id": "R1",
+      "category": "empty",
+      "status": "unresolved",
+      "verification": null,
+      "resolution": null,
+      "reason": null,
+      "probe": "What is the result for empty, single-element, or null input?"
+    },
+    {
+      "requirement_id": "R1",
+      "category": "ordering",
+      "status": "dismissed",
+      "verification": null,
+      "resolution": null,
+      "reason": "output is canonically sorted; no tie possible",
+      "probe": "When elements compare equal, is output order specified and stable?"
+    }
   ],
-  "coverage": { "applicable": 3, "resolved": 2, "unresolved": 1, "byVerification": { "explicit": 1, "backstop": 0 } }
+  "coverage": {
+    "applicable": 3,
+    "resolved": 2,
+    "unresolved": 1,
+    "unclassified": 0,
+    "byVerification": {
+      "explicit": 1,
+      "backstop": 0
+    }
+  }
 }
 ```
 
