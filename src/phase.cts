@@ -4693,7 +4693,7 @@ function cmdPhaseUatPassed(
   cwd: string,
   phaseNum: string | undefined,
   raw: boolean,
-  opts: { policy?: { requireVerification?: boolean } } = {},
+  opts: { policy?: { requireVerification?: boolean; uatOnly?: boolean } } = {},
 ): void {
   if (!phaseNum) {
     error('phase number required for phase uat-passed');

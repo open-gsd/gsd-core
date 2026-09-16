@@ -55,6 +55,14 @@ interface UatPassedReport {
   no_uat_artifacts: boolean;
   policy: {
     require_verification: boolean;
+    /**
+     * #4663: true when the report was produced in uat-only mode — UAT rows
+     * evaluated, VERIFICATION-file blockers (and only those) skipped. The
+     * verify-work canonicalize pre-check uses this form; the flip it gates is
+     * what removes the human_needed verification status, so the full
+     * predicate could never pass at pre-check time.
+     */
+    uat_only: boolean;
   };
   /**
    * #3057 B3: true when the `requireVerification` policy check's own
@@ -283,9 +291,15 @@ function parseUatResultItems(cleanContent: string): Array<{ test: number; name: 
  */
 function evaluateUatPassed(
   phaseFullDir: string,
-  opts?: { policy?: { requireVerification?: boolean } },
+  opts?: { policy?: { requireVerification?: boolean; uatOnly?: boolean } },
 ): UatPassedReport {
-  const requireVerification = opts?.policy?.requireVerification === true;
+  // uatOnly (#4663) takes precedence: it evaluates the UAT rows ONLY, skipping
+  // the VERIFICATION-file blockers entirely. The verify-work canonicalize
+  // pre-check needs exactly that — it runs while the report still reads
+  // `human_needed`, which is itself a blocking verification status, so the
+  // full predicate could never pass there and the flip would deadlock.
+  const uatOnly = opts?.policy?.uatOnly === true;
+  const requireVerification = !uatOnly && opts?.policy?.requireVerification === true;
 
   const blockers: string[] = [];
   const checks: UatCheckItem[] = [];
@@ -309,7 +323,7 @@ function evaluateUatPassed(
       checks: [],
       blockers,
       no_uat_artifacts,
-      policy: { require_verification: requireVerification },
+      policy: { require_verification: requireVerification, uat_only: uatOnly },
       // readVerificationStatus was never reached on this early-return path.
       verification_stale_check_indeterminate: false,
     };
@@ -392,7 +406,7 @@ function evaluateUatPassed(
 
   // ── Process VERIFICATION files ─────────────────────────────────────────────
   let hasPassingVerification = false;
-  for (const file of verFileNames) {
+  for (const file of uatOnly ? [] : verFileNames) {
     verificationFiles.push(file);
     const verificationFilePath = path.join(phaseFullDir, file);
     let raw = '';
@@ -451,6 +465,7 @@ function evaluateUatPassed(
     no_uat_artifacts,
     policy: {
       require_verification: requireVerification,
+      uat_only: uatOnly,
     },
     verification_stale_check_indeterminate: verificationStaleCheckIndeterminate,
   };

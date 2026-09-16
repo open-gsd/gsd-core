@@ -639,7 +639,7 @@ If an active secure-phase step hook exists AND `SECURITY_FILE` exists: check fro
 
 If no active secure-phase step hook exists OR (`SECURITY_FILE` exists AND `threats_open` is `0`):
 
-If execution verification is waiting only on human UAT and this session recorded zero issues, canonicalize the report before the shared completion predicate:
+If execution verification is waiting only on human UAT and this session recorded zero issues, canonicalize the report before the shared completion predicate. (#4663) Zero issues is NOT pass evidence on its own — blocked rows are not issues by this workflow's own rule, so a session that observed nothing (0 passed / 0 issues / N blocked) must NOT flip the report. The flip runs the SAME UAT-row predicate the phase-close uses, in its `--uat-only` form: it skips the verification-status blockers (the report still reads `human_needed` at this point — the full predicate could never pass here), and `passed` means at least one UAT check passed with no row pending/blocked/failed or skipped without a reason. The flagged `--require-verification` call below stays the transition gate:
 
 ```bash
 PHASE_DIR=$(printf '%s' "$INIT" | jq -r '.phase_dir // empty')
@@ -648,7 +648,15 @@ VERIFICATION_STATUS=$(gsd_run query verification.status "$PHASE_DIR" 2>/dev/null
 VERIFICATION_STATUS_VALUE=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.status // empty' 2>/dev/null || echo "")
 PHASE_VERIFICATION_STATUS="$VERIFICATION_STATUS_VALUE"
 if [ "$VERIFICATION_STATUS_VALUE" = "human_needed" ]; then
-  gsd_run query frontmatter.set "$VERIFICATION_FILE" --field status --value passed
+  UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}" --uat-only 2>/dev/null)
+  UAT_PRECHECK_PASSED=$(printf '%s' "$UAT_PRECHECK" | jq -r '.passed // false' 2>/dev/null || echo "false")
+  if [ "$UAT_PRECHECK_PASSED" = "true" ]; then
+    gsd_run query frontmatter.set "$VERIFICATION_FILE" --field status --value passed
+  else
+    UAT_BLOCKERS=$(printf '%s' "$UAT_PRECHECK" | jq -r '.blockers | length' 2>/dev/null)
+    [ -n "$UAT_BLOCKERS" ] || UAT_BLOCKERS="?"
+    echo "NOT canonicalizing: ${UAT_BLOCKERS} UAT row(s) blocked or not passing; verification stays human_needed. Resolve or pass them, then re-run /gsd:verify-work {phase}." >&2
+  fi
 fi
 ```
 

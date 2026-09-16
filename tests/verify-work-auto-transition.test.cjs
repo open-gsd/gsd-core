@@ -133,13 +133,14 @@ describe('verify-work.md — auto-transition after UAT passes with 0 issues', ()
 // "zero issues" is not pass evidence: blocked rows are not issues by this same
 // workflow's rule, so a 0-passed / 0-issues / N-blocked session must NOT flip
 // VERIFICATION.md to `passed`. The flip now consumes the SAME predicate the
-// phase-close uses (unflagged pre-check; the flagged call stays the later
-// transition gate) — one predicate, one answer.
+// phase-close uses in its --uat-only form (the verification-status blocker
+// is exactly what the flip removes, so the full predicate could never pass
+// at pre-check time); the flagged call stays the later transition gate.
 describe('verify-work.md — canonicalize flip is gated by the UAT predicate (#4663)', () => {
   test('canonicalize flips to passed only when the uat-passed predicate reports passed (#4663)', () => {
     const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
     const humanNeededIdx = content.indexOf('if [ "$VERIFICATION_STATUS_VALUE" = "human_needed" ]; then');
-    const precheckIdx = content.indexOf('UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}")');
+    const precheckIdx = content.indexOf('UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}" --uat-only)');
     const flipGuardIdx = content.indexOf('if [ "$UAT_PRECHECK_PASSED" = "true" ]; then');
     const setPassedIdx = content.indexOf('gsd_run query frontmatter.set "$VERIFICATION_FILE" --field status --value passed');
 
@@ -152,7 +153,7 @@ describe('verify-work.md — canonicalize flip is gated by the UAT predicate (#4
 
   test('the canonicalize pre-check runs uat-passed without --require-verification (#4663)', () => {
     const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
-    const precheckIdx = content.indexOf('UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}")');
+    const precheckIdx = content.indexOf('UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}" --uat-only)');
     const flaggedIdx = content.indexOf('PHASE_COMPLETE=$(gsd_run phase uat-passed "{phase}" --require-verification)');
 
     assert.ok(precheckIdx !== -1, 'the unflagged pre-check must exist');
