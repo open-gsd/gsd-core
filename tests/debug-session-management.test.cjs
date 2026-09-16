@@ -10,6 +10,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const {
+  convertClaudeToCodexMarkdown,
+  getCodexSkillAdapterHeader,
+} = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 
 describe('debug session management implementation', () => {
   test('DEBUG.md template contains reasoning_checkpoint field', () => {
@@ -295,6 +299,36 @@ describe('#2196 debug.md session-manager spawn contract', () => {
       'the contract must point to /gsd:debug continue {slug} (canonical colon form) as the resume path');
     assert.ok(/do not claim|do NOT claim/i.test(section),
       'the contract must forbid claiming a lost-handoff session is still running');
+  });
+});
+
+describe('#4664 Codex debug checkpoint handoff', () => {
+  // The workflow and adapter are runtime-loaded instruction text. Convert the
+  // actual workflow and inspect the emitted Codex contract rather than
+  // reconstructing its behavior in this test.
+  const workflow = fs.readFileSync(
+    path.join(__dirname, '..', 'gsd-core', 'workflows', 'debug.md'),
+    'utf8',
+  );
+
+  test('maps one foreground manager handoff to native waiting before the parent turn ends', () => {
+    const emittedWorkflow = convertClaudeToCodexMarkdown(workflow);
+    const adapter = getCodexSkillAdapterHeader('gsd-debug');
+
+    assert.match(emittedWorkflow, /run_in_background=false/,
+      'the projected debug workflow must retain its foreground source contract');
+    assert.match(adapter, /Foreground handoffs/,
+      'the adapter must define foreground handoff behavior separately from fan-out');
+    assert.match(adapter, /wait_agent/,
+      'the adapter must wait for one foreground native child instead of ending the parent turn');
+    assert.match(adapter, /immediately after[\s\S]*spawn/i,
+      'the foreground wait must follow the spawn without starting other parent work');
+    assert.match(adapter, /one foreground child[\s\S]*fan-out/i,
+      'the single-child rule must be distinct from the existing fan-out guidance');
+    assert.match(adapter, /terminal result/,
+      'the parent must wait for the child to finish its own checkpoint loop');
+    assert.doesNotMatch(adapter, /followup_task/,
+      'the adapter must not move the manager-owned checkpoint loop to the orchestrator');
   });
 });
 

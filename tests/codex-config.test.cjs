@@ -356,6 +356,26 @@ Use \`gsd-tools query history-digest\` for history.`;
 // ─── Codex command prefix conversion ────────────────────────────────────────────
 
 describe('Codex hyphen-style command prefix conversion', () => {
+  test('adapter distinguishes an interim mailbox wakeup from a terminal child result', () => {
+    const header = getCodexSkillAdapterHeader('gsd-test');
+
+    assert.match(
+      header,
+      /mailbox wakeup, NOT a completion oracle/,
+      'a wait completion must not be treated as an agent completion',
+    );
+    assert.match(
+      header,
+      /Only a FINAL_ANSWER or a terminal agent status\s+\(completed, failed, or cancelled\) ends the foreground handoff/,
+      'only terminal evidence may release a foreground parent',
+    );
+    assert.match(
+      header,
+      /On an interim MESSAGE or any non-terminal status, do not report an outcome, send a\s+continuation, start parent work, or end the parent turn/,
+      'progress mail must keep the parent in its wait loop',
+    );
+  });
+
   test('converts /gsd-command in workflow output to $gsd-command', () => {
     const input = `---
 name: gsd-test
