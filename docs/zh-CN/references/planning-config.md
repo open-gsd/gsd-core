@@ -24,6 +24,12 @@
 | `git.milestone_branch_template` | `"gsd/{milestone}-{slug}"` | 里程碑策略的分支模板 |
 </config_schema>
 
+<planner_stall_detection>
+
+`planner.stall_detection_enabled` 默认为 `true`，控制标准规划器、分块规划器、计划检查器和修订规划器的有界停滞检测。运行 `gsd config-set planner.stall_detection_enabled false` 可跳过 watchdog 轮询，并通过运行时原生完成机制等待每个 agent。**警告：** `false` 会放弃运行时丢失完成回传时的有界恢复；可能需要中断并使用现有文件系统回退。
+
+</planner_stall_detection>
+
 <commit_docs_behavior>
 
 **当 `commit_docs: true`（默认）：**

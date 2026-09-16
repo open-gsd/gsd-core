@@ -105,6 +105,7 @@ GSD는 프로젝트 설정을 `.planning/config.json`에 저장합니다. `/gsd-
 | `workflow.discuss_mode` | string | `'discuss'` | `/gsd-discuss-phase`의 컨텍스트 수집 방식을 제어합니다. `'discuss'` (기본값)는 질문을 하나씩 합니다. `'assumptions'`는 코드베이스를 먼저 읽고 신뢰도 수준이 있는 구조화된 가정을 생성하여 틀린 부분만 수정하도록 요청합니다. v1.28에서 추가 |
 | `workflow.skip_discuss` | boolean | `false` | `true`로 설정하면 `/gsd-autonomous`가 discuss 단계를 완전히 건너뛰고 ROADMAP 단계 목표로부터 최소한의 CONTEXT.md를 작성합니다. 개발자 선호사항이 PROJECT.md/REQUIREMENTS.md에 모두 캡처된 프로젝트에 유용합니다. v1.28에서 추가 |
 | `workflow.text_mode` | boolean | `false` | AskUserQuestion TUI 메뉴를 일반 텍스트 번호 목록으로 대체합니다. TUI 메뉴가 렌더링되지 않는 Claude Code 원격 세션 (`/rc` 모드)에 필요합니다. discuss 단계에서 `--text` 플래그로 세션별 설정도 가능합니다. v1.28에서 추가 |
+| `planner.stall_detection_enabled` | boolean | `true` | 표준 플래너, 청크형 개요/플랜별 플래너, 플랜 검사기, 수정 플래너의 제한된 정지 감지를 제어합니다. `gsd config-set planner.stall_detection_enabled false`로 설정하면 watchdog 폴링을 건너뛰고 각 에이전트를 런타임 네이티브 완료 메커니즘으로 기다립니다. **경고:** `false`는 런타임이 완료 전달을 잃을 때의 제한된 복구를 포기합니다. 기존 파일 시스템 폴백을 사용하려면 중단해야 할 수 있습니다. |
 
 ### 권장 프리셋
 
