@@ -55,6 +55,15 @@ describe('ui-consideration-probe doc/code parity (ADPT-02)', () => {
     const md = fs.readFileSync(docPath, 'utf8');
     assert.match(md, /domain-probes\.md/);
   });
+
+  test('Inputs section documents the text_en translation channel (#4657)', () => {
+    // PARSED from the `## Inputs` section only (never a whole-file substring) — a reformat
+    // that preserves the data does not fail; a dropped field does.
+    const md = fs.readFileSync(docPath, 'utf8');
+    const inputs = md.split(/^## Inputs/m)[1].split(/^## /m)[0];
+    assert.match(inputs, /text_en/, 'Inputs must document the optional text_en field');
+    assert.match(inputs, /English/, 'Inputs must say text_en is the classifier-facing English rendering');
+  });
 });
 
 describe('UI-SPEC template `## UI Considerations` section (WIRE-02 SC3 de-dup)', () => {

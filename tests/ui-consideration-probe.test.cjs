@@ -19,7 +19,13 @@ process.env.GSD_TEST_MODE = '1';
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { runNode } = require('./helpers/process-seam.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { throwIfFailed } = require('./helpers/git-fixture.cjs');
+const { cleanup } = require('./helpers.cjs');
 
 const BUILT_SCRIPT = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'ui-consideration-probe.cjs');
 const uc = require(BUILT_SCRIPT);
@@ -305,5 +311,140 @@ describe('ui-consideration-probe WIRE-02: backward-compat + format-match + idemp
   test('proposeElements is deterministic — re-running the probe rewrites byte-stable rows, never duplicated (idempotency SC4)', () => {
     const els = [{ id: 'C1', text: 'A table listing all rows of results' }, { id: 'Z', text: 'xyzzy plugh' }];
     assert.deepEqual(uc.proposeElements(els), uc.proposeElements(els));
+  });
+});
+
+// ══ #4657 — the text_en language channel (mirrors #3717/#4156 onto the UI adapter) ═════════
+// UI_CUES are English word-boundary patterns; a non-English element classifies to zero kinds
+// and lands in the #1110 unclassified soft signal. text_en carries the classifier-facing
+// English translation — engine input, never user-facing output (ADR-550 amendment, Form 2 =
+// the UI Element). classifyElement's own signature stays untouched; the text_en ?? text
+// selection lives at the two classification call sites (proposeConsiderations, proposeElements).
+describe('ui-consideration-probe: text_en language-aware classification (#4657)', () => {
+  // The reproduction pair from the issue: Danish UI-SPEC prose + faithful English translations.
+  const daList = 'En liste over projektorer med knapper til at forbinde og afbryde.';
+  const daForm = 'En formular hvor brugeren indtaster IP-adresse og adgangskode.';
+  const enList = 'A list of projectors with buttons to connect and disconnect.';
+  const enForm = 'A form where the user enters IP address and password.';
+
+  test('proposeConsiderations: text_en present is used for classification instead of text (failing-first regression)', () => {
+    // text alone (non-English) classifies to zero kinds -> the unclassified sentinel.
+    const nonEnglishOnly = uc.proposeConsiderations({ id: 'U1', text: daList });
+    assert.deepEqual(nonEnglishOnly.map((c) => c.category), ['unclassified']);
+
+    // text_en present -> classification runs against the English translation (list-collection
+    // from "list", interactive-control from "buttons").
+    const withTextEn = uc.proposeConsiderations({ id: 'U1', text: daList, text_en: enList });
+    assert.deepEqual(
+      withTextEn.map((c) => c.category),
+      ['empty', 'loading', 'error', 'populated', 'partial', 'overflow', 'zero-one-many', 'long-text'],
+    );
+  });
+
+  test('#4657: a non-English element with text_en classifies identically to its English equivalent', () => {
+    for (const [da, en] of [[daList, enList], [daForm, enForm]]) {
+      const englishOnly = uc.proposeConsiderations({ id: 'U1', text: en });
+      const nonEnglishWithTranslation = uc.proposeConsiderations({ id: 'U1', text: da, text_en: en });
+      assert.deepEqual(
+        nonEnglishWithTranslation.map((c) => c.category),
+        englishOnly.map((c) => c.category),
+        `a translated non-English element must raise the same categories as the English original (${da})`,
+      );
+    }
+  });
+
+  test('proposeConsiderations: text_en absent falls back to text (back-compat — English projects unchanged)', () => {
+    const withoutTextEn = uc.proposeConsiderations({ id: 'U1', text: enForm });
+    assert.deepEqual(withoutTextEn.map((c) => c.category), ['empty', 'loading', 'error', 'partial', 'long-text']);
+  });
+
+  test('validateRequirement: text_en: null is treated as absent (no throw)', () => {
+    assert.doesNotThrow(() => uc.validateRequirement({ id: 'U1', text: 'A results table', text_en: null }));
+  });
+
+  test('proposeConsiderations: text_en: null falls back to text', () => {
+    const viaNull = uc.proposeConsiderations({ id: 'U1', text: enForm, text_en: null });
+    assert.deepEqual(viaNull.map((c) => c.category), ['empty', 'loading', 'error', 'partial', 'long-text']);
+  });
+
+  test('validateRequirement: rejects empty-string text_en (?? does not catch \'\')', () => {
+    // Nullish coalescing only falls back on null/undefined — an empty string would otherwise
+    // win `text_en ?? text` and silently classify against '', degrading to zero kinds with no
+    // signal (the exact fail-open #1110/#2773 exist to eliminate).
+    assert.throws(
+      () => uc.validateRequirement({ id: 'U1', text: daList, text_en: '' }),
+      /text_en must be a non-empty string when present/i,
+    );
+  });
+
+  test('validateRequirement: rejects whitespace-only text_en', () => {
+    assert.throws(
+      () => uc.validateRequirement({ id: 'U1', text: daList, text_en: '   ' }),
+      /text_en must be a non-empty string when present/i,
+    );
+  });
+
+  test('validateRequirement: rejects non-string text_en (number/array/object)', () => {
+    for (const bad of [42, ['x'], {}]) {
+      assert.throws(
+        () => uc.validateRequirement({ id: 'U1', text: daList, text_en: bad }),
+        /text_en must be a non-empty string when present/i,
+      );
+    }
+  });
+
+  test('validateRequirement: rejects empty text_en even when an elements override makes it unused', () => {
+    // Validation is unconditional — it does not skip the text_en check just because the
+    // authored-elements branch would never classify prose. Bad data fails closed regardless.
+    assert.throws(
+      () => uc.validateRequirement({ id: 'U1', text: daList, text_en: '', elements: ['form'] }),
+      /text_en must be a non-empty string when present/i,
+    );
+  });
+
+  test('proposeConsiderations: authored elements override still wins when text_en is also present', () => {
+    const override = uc.proposeConsiderations({ id: 'U9', text: daList, text_en: enList, elements: ['nav'] });
+    assert.deepEqual(override.map((c) => c.category), ['loading', 'error', 'long-text']);
+  });
+
+  test('proposeConsiderations: zero-cue text_en still surfaces the unclassified soft signal (#1110)', () => {
+    const zeroCue = uc.proposeConsiderations({ id: 'U1', text: daForm, text_en: 'Purple elephant dreams.' });
+    assert.deepEqual(zeroCue.map((c) => c.category), ['unclassified']);
+  });
+
+  test('proposeElements: kinds derive from text_en when present (confirm surface sees the translation)', () => {
+    const [translated] = uc.proposeElements([{ id: 'U1', text: daList, text_en: enList }]);
+    assert.deepEqual(translated.kinds, ['list-collection', 'interactive-control']);
+    assert.equal(translated.unclassified, false);
+    // and without text_en the same element stays on the unclassified path
+    const [plain] = uc.proposeElements([{ id: 'U1', text: daList }]);
+    assert.equal(plain.unclassified, true);
+    assert.deepEqual(plain.kinds, []);
+  });
+
+  test('analyzeCoverage: the reproduction pair — Danish text + text_en yields the English report\'s categories', () => {
+    const english = uc.analyzeCoverage([{ id: 'U1', text: enList }, { id: 'U2', text: enForm }]);
+    const translated = uc.analyzeCoverage([{ id: 'U1', text: daList, text_en: enList }, { id: 'U2', text: daForm, text_en: enForm }]);
+    assert.equal(translated.coverage.applicable, english.coverage.applicable);
+    assert.equal(translated.coverage.unclassified, 0);
+    assert.deepEqual(
+      translated.items.map((c) => c.category),
+      english.items.map((c) => c.category),
+    );
+  });
+
+  test('CLI: elements file with text_en classifies through the built engine (exit 0, no unclassified)', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-probe-4657-'));
+    t.after(() => cleanup(dir));
+    const elementsPath = path.join(dir, 'elements.json');
+    fs.writeFileSync(elementsPath, JSON.stringify([
+      { id: 'U1', text: daList, text_en: enList },
+      { id: 'U2', text: daForm, text_en: enForm },
+    ]));
+    const r = runNode([BUILT_SCRIPT, elementsPath], { timeoutMs: PROBE_TIMEOUT_MS });
+    throwIfFailed(r, `node ${BUILT_SCRIPT} ${elementsPath}`);
+    const rep = JSON.parse(r.stdout);
+    assert.equal(rep.coverage.unclassified, 0);
+    assert.ok(rep.coverage.applicable > 0, 'translated elements must raise applicable categories');
   });
 });
