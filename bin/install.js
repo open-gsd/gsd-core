@@ -12359,9 +12359,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       // (wrong copy on dual-runtime machines at divergent versions, nothing at
       // all on codex-only ones; #570 cause 2 residue). Every target ships in
       // the codex install, so rewriting the `@~/` include form to the codex
-      // root is mechanical and correct. This runs after ALL emitters (several
-      // bypass the per-runtime converters — that is how the leak survived the
-      // per-emitter fixes), and before the scan below, which stays as the
+      // root is mechanical and correct. This runs after all .md emitters
+      // (several bypass the per-runtime converters — that is how the leak
+      // survived the per-emitter fixes; the agent .tomls are generated later
+      // and prefix themselves), and before the scan below, which stays as the
       // verification backstop. The `_GSD_RUNTIME_ROOT`/`$PREFERRED_CONFIG_DIR`
       // fallback chains and prose `.claude` mentions carry no `@~/` prefix and
       // are deliberately untouched, as is CHANGELOG.md.

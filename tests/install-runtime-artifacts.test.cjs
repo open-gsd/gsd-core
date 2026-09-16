@@ -8366,6 +8366,18 @@ describe('install() global codex — @~/.claude include rewrite (#4667)', () => 
     assert4667.ok(!content.includes('@~/.claude/'), 'no @~/.claude include may survive');
   });
 
+  test('codex install rewrites $HOME-anchored @ includes too (#4667)', () => {
+    __captureConsole4667(() => __install4667(true, 'codex'));
+    const cmdFile = path4667.join(tmpCodexHome, 'gsd-core', 'commands', 'gsd', 'plan-review-convergence.md');
+    assert4667.ok(fs4667.existsSync(cmdFile), 'the plan-review-convergence command must be installed');
+    const content = fs4667.readFileSync(cmdFile, 'utf8');
+    assert4667.ok(
+      content.includes('@$HOME/.codex/gsd-core/workflows/plan-review-convergence.md'),
+      'the $HOME-anchored include must point at the codex install'
+    );
+    assert4667.ok(!content.includes('@$HOME/.claude/'), 'no @$HOME/.claude include may survive');
+  });
+
   test('codex install keeps the _GSD_RUNTIME_ROOT .claude fallbacks (#4667)', () => {
     __captureConsole4667(() => __install4667(true, 'codex'));
     const workflowsDir = path4667.join(tmpCodexHome, 'gsd-core', 'workflows');
