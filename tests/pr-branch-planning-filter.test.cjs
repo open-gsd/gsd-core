@@ -556,9 +556,14 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
     // `deleteInC2` selects the OTHER arm of the resolution: `$HASH` removing
     // the third-bucket path, so `git cat-file -e` fails and the loop must
     // accept the deletion rather than check out a blob that does not exist.
+    // `driftOnTarget` moves `main` ITSELF on the same third-bucket path after
+    // `feature` diverges — the conflict then looks identical from inside the
+    // loop but must NOT be auto-resolved, because `--theirs` would discard
+    // `main`'s own committed content.
     function buildThirdBucketChainFixture({
       thirdBucketPath = '.planning/WINDOWS.md',
       deleteInC2 = false,
+      driftOnTarget = null,
     } = {}) {
       const dir = trackDir(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-prbranch-3rdbucket-')));
       initRepo(dir);
@@ -583,6 +588,10 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       const c2 = git(['rev-parse', 'HEAD'], dir).trim();
 
       git(['checkout', '-q', 'main'], dir);
+      if (driftOnTarget !== null) {
+        writeFile(dir, thirdBucketPath, driftOnTarget);
+        commitAll(dir, 'docs: main edits the same third-bucket path independently');
+      }
       git(['checkout', '-q', '-b', 'prbranch', 'main'], dir);
       return { dir, c1, c2 };
     }
@@ -706,6 +715,53 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
 
         const count = parseInt(git(['rev-list', '--count', 'main..prbranch'], dir).trim(), 10);
         assert.strictEqual(count, 1, 'exactly one commit (c2) should have landed on the PR branch');
+      } finally {
+        teardown();
+      }
+    });
+
+    // #4606 review round 3 — the Blocker. $PR_BRANCH is cut from $TARGET's
+    // CURRENT tip, so whenever the base has moved (this repo's own PRs sit
+    // BEHIND routinely), $TARGET may have its own commit touching the very same
+    // third-bucket path. That produces a conflict shape identical to the #4606
+    // chain gap, but forcing `--theirs` there discards $TARGET's committed work
+    // — a silent data loss, and an asymmetry with code/structural paths, which
+    // have always halted for exactly this cause (test 25).
+    //
+    // Reproduced against the pre-guard recipe before fixing: the run completed
+    // exit 0 with main's "UPSTREAM EDIT" content replaced by the feature
+    // branch's. The guard compares $TARGET's blob for the path against the
+    // merge-base's; unequal means genuine divergence, so the path is left
+    // unmerged for the halt.
+    test('#4606 L2: when $TARGET itself changed the third-bucket path after the branch diverged, the run HALTS instead of discarding $TARGET\'s content', () => {
+      const thirdBucketPath = '.planning/WINDOWS.md';
+      const targetContent = 'v1\nUPSTREAM EDIT FROM ANOTHER PR\n';
+      const { dir, c2 } = buildThirdBucketChainFixture({ thirdBucketPath, driftOnTarget: targetContent });
+      try {
+        const result = runThirdBucketRecipe(dir, c2);
+
+        assert.notStrictEqual(
+          result.status, 0,
+          'a third-bucket conflict caused by $TARGET\'s own divergence must halt, not be force-resolved',
+        );
+        // The load-bearing assertion: read the BRANCH, not the worktree. The
+        // unwind checks out $CURRENT_BRANCH, so the working copy legitimately
+        // shows feature's content; what must survive is main's own commit.
+        assert.strictEqual(
+          git(['show', `main:${thirdBucketPath}`], dir).trim(), targetContent.trim(),
+          '$TARGET\'s own content must be intact — the whole point is that it was not overwritten',
+        );
+        assert.match(
+          result.stderr,
+          /changed this path since .* diverged; not overwriting it/,
+          'the user must be told WHY the path was not auto-resolved — the generic halt message alone blames the filter, not $TARGET drift',
+        );
+        // Same full unwind the code-conflict path performs (test 25's contract).
+        assert.strictEqual(git(['branch', '--show-current'], dir).trim(), 'feature', 'must restore $CURRENT_BRANCH');
+        assert.ok(
+          !git(['branch', '--list', 'prbranch'], dir).trim(),
+          'the partial PR branch must be removed',
+        );
       } finally {
         teardown();
       }
@@ -1090,6 +1146,43 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         loopCode,
         /while IFS= read -r P; do/,
         'the third-bucket resolution must consume the unmerged-path list with a newline-splitting read loop',
+      );
+    });
+
+    // #4606 review round 3: the auto-resolve must stay gated on proof that
+    // $TARGET has not independently changed the path. Dropping the guard
+    // restores a silent-data-loss path that only the L2 drift test catches at
+    // runtime, so pin the shipped shape here too.
+    test('#4606 the third-bucket auto-resolve is gated on a $TARGET-vs-merge-base drift check', () => {
+      const text = readFileNormalized(WORKFLOW_PATH);
+      const loopCode = extractPickLoop(text)
+        .split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+
+      assert.match(
+        loopCode,
+        /MERGE_BASE=\$\(git merge-base "\$TARGET" "\$CURRENT_BRANCH"/,
+        'the loop must compute the merge-base of $TARGET and $CURRENT_BRANCH to tell chain-gap conflicts from $TARGET drift',
+      );
+      assert.match(
+        loopCode,
+        /TARGET_BLOB=\$\(git rev-parse[^\n]*"\$TARGET:\$P"/,
+        'the guard must read $TARGET\'s blob for the conflicted path',
+      );
+      assert.match(
+        loopCode,
+        /BASE_BLOB=\$\(git rev-parse[^\n]*"\$MERGE_BASE:\$P"/,
+        'the guard must read the merge-base blob for the conflicted path',
+      );
+
+      // Order is load-bearing: the drift check must gate the checkout, not
+      // trail it. Compare positions of the guard and the forced resolution.
+      const guardIdx = loopCode.indexOf('if [ "$TARGET_BLOB" != "$BASE_BLOB" ]');
+      const resolveIdx = loopCode.indexOf('git checkout --theirs --');
+      assert.ok(guardIdx >= 0, 'the drift comparison must be present');
+      assert.ok(resolveIdx >= 0, 'the forced resolution must be present');
+      assert.ok(
+        guardIdx < resolveIdx,
+        'the $TARGET-drift guard must run BEFORE `git checkout --theirs` — after it, $TARGET\'s content is already gone',
       );
     });
   });

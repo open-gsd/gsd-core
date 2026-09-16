@@ -388,6 +388,21 @@ for HASH in $(printf '%s' "$INCLUDED_COMMITS"); do
   # #4606 failure this block exists to prevent. Same word-split class as #4109.
   # Snapshot-then-iterate (rather than piping) both keeps the list stable while
   # the body restages paths and keeps the body in THIS shell, not a subshell.
+  #
+  # $TARGET-DRIFT GUARD. Everything above assumes the conflict comes from OUR
+  # dropped-commit chain gap, where forcing $HASH's content is the correct final
+  # value. But an identical conflict shape arises when $TARGET ITSELF changed
+  # $P after $CURRENT_BRANCH diverged — another PR editing the same shared
+  # `.planning/` ledger, the normal case whenever the base has moved (this very
+  # command cuts $PR_BRANCH from $TARGET's *current* tip, not from the old
+  # merge-base). From inside the loop the two are indistinguishable, and forcing
+  # `--theirs` on the second would silently discard $TARGET's own committed work.
+  # So prove it is the first: $TARGET's blob for $P must still equal the
+  # merge-base's. Equal means $TARGET never touched this path and the conflict is
+  # ours to resolve; different means genuine divergence, and the path is left
+  # unmerged for the halt below — the same treatment code and structural paths
+  # already get, rather than a silent overwrite (#4606 review round 3).
+  MERGE_BASE=$(git merge-base "$TARGET" "$CURRENT_BRANCH" 2>/dev/null || true)
   UNMERGED_PATHS=$(git diff --name-only --diff-filter=U)
   while IFS= read -r P; do
     [ -n "$P" ] || continue
@@ -397,6 +412,18 @@ for HASH in $(printf '%s' "$INCLUDED_COMMITS"); do
     esac
     if echo "$P" | grep -Eq "$FORBIDDEN_RE"; then continue; fi
     if echo "$P" | grep -Eq "$STRUCTURAL_RE"; then continue; fi
+    # No merge-base (unrelated histories) means drift cannot be ruled out —
+    # decline to resolve rather than assume. Absent on BOTH sides compares
+    # equal (two empty strings), which is correctly "no drift".
+    if [ -z "$MERGE_BASE" ]; then continue; fi
+    TARGET_BLOB=$(git rev-parse --quiet --verify "$TARGET:$P" 2>/dev/null || true)
+    BASE_BLOB=$(git rev-parse --quiet --verify "$MERGE_BASE:$P" 2>/dev/null || true)
+    if [ "$TARGET_BLOB" != "$BASE_BLOB" ]; then
+      # Say why this one is not being auto-resolved; the halt below reports the
+      # path but cannot explain that $TARGET, not the chain gap, is the cause.
+      echo "  $P — $TARGET changed this path since $CURRENT_BRANCH diverged; not overwriting it." >&2
+      continue
+    fi
     if git cat-file -e "$HASH:$P" 2>/dev/null; then
       git checkout --theirs -- "$P" && git add -- "$P" # gsd-scan-ignore: #4606 -- see block comment above
     else
