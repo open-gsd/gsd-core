@@ -533,11 +533,21 @@ This `if`/`else`/`fi` is the entire guard: when `DEPTH_OK` is not the literal st
 </step>
 
 <step name="check_empty_scope">
-If REVIEW_FILES is empty:
+An empty `REVIEW_FILES` (#3661) means nothing new to re-review — NOT a phase with no standing findings. #4665: with `--fix` + an existing REVIEW.md, route to `dispatch-fix` (the flag covers "if REVIEW.md already exists"):
+
+```bash
+REVIEW_PATH="${PHASE_DIR}/${PADDED_PHASE}-REVIEW.md"
+if [ "${#REVIEW_FILES[@]}" -ne 0 ]; then
+  # non-empty scope: no-op
+  true
+elif [ "$FIX_FLAG" != "true" ] || [ ! -f "${REVIEW_PATH}" ]; then
+  echo "No source files changed in phase ${PHASE_ARG}. Skipping review."
+  # Exit workflow. Do NOT spawn agent or create REVIEW.md.
+  exit 0
+fi
 ```
-No source files changed in phase ${PHASE_ARG}. Skipping review.
-```
-Exit workflow. Do NOT spawn agent or create REVIEW.md.
+
+**`--fix` recovery:** proceed DIRECTLY to `dispatch-fix`, skipping `structural_pre_pass`, `dispatch_reviewer_lanes`, `spawn_reviewer`, `commit_review` — no fresh review, nothing to commit; `code-review-fix.md` resolves the existing REVIEW.md and owns the fix logic. The reviewer agent is not dispatched here.
 </step>
 
 <step name="structural_pre_pass">

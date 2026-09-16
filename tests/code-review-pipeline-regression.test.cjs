@@ -1610,6 +1610,13 @@ describe('#4665 — check_empty_scope --fix recovery onto an existing REVIEW.md'
       block.includes('FIX_FLAG') && block.includes('-f "${REVIEW_PATH}"'),
       'the empty-scope skip must be guarded on FIX_FLAG and the existing REVIEW.md file check'
     );
+    // The fence must be self-contained about its own precondition: an explicit
+    // emptiness check, so a literal-minded execution cannot read the recovery
+    // paragraph as skipping a needed fresh review on a non-empty scope.
+    assert.ok(
+      block.includes("\"${#REVIEW_FILES[@]}\" -ne 0"),
+      'check_empty_scope must assert REVIEW_FILES emptiness explicitly, not only in prose'
+    );
   });
 
   test('the fix-recovery path routes to dispatch-fix past the fresh-review steps (#4665)', () => {
@@ -1625,7 +1632,7 @@ describe('#4665 — check_empty_scope --fix recovery onto an existing REVIEW.md'
     );
     assert.doesNotMatch(
       block, /spawn the (reviewer|agent)|gsd-code-reviewer/,
-      'the recovery must not spawn a fresh reviewer'
+      'the recovery must not contain an instruction to spawn a fresh reviewer'
     );
   });
 

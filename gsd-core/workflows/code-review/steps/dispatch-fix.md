@@ -2,9 +2,10 @@
 If the `--fix` flag was passed (`FIX_FLAG=true`), delegate to the `code-review-fix.md` workflow
 to auto-apply findings from the REVIEW.md that was just written (or that already existed).
 
-This step runs AFTER `commit_review` so REVIEW.md is guaranteed to be on disk before the fixer
-is invoked. If REVIEW.md was not created (agent failed, scope was empty, etc.), the `code-review-fix.md`
-workflow handles the missing-review error and exits cleanly.
+This step runs AFTER `commit_review` so a freshly-written REVIEW.md is guaranteed to be on disk
+before the fixer is invoked. Since #4665 there is a second route: `check_empty_scope` jumps here
+directly when the incremental scope is empty but `--fix` was passed and a REVIEW.md already exists
+— `code-review-fix.md` resolves it from the phase and owns the missing-review error either way.
 
 ```bash
 if [ "$FIX_FLAG" = "true" ]; then
