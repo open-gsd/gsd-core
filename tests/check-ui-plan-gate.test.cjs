@@ -558,6 +558,14 @@ describe('hasStaticFrontendEvidence — native evidence branch (#4658)', () => {
     const lowercased = nativeProject({ 'Sources/A.swift': 'import swiftui\n' });
     t.after(() => cleanup(lowercased));
     assert.strictEqual(hasStaticFrontendEvidence(lowercased), false, 'imports are case-sensitive in all four ecosystems');
+
+    const kotlinComment = nativeProject({ 'lib/Main.kt': '// TODO: migrate to androidx.compose\nfun main() {}\n' });
+    t.after(() => cleanup(kotlinComment));
+    assert.strictEqual(hasStaticFrontendEvidence(kotlinComment), false, 'a bare framework-name mention is not a Kotlin import');
+
+    const dartComment = nativeProject({ 'lib/main.dart': '// see package:flutter docs\nvoid main() {}\n' });
+    t.after(() => cleanup(dartComment));
+    assert.strictEqual(hasStaticFrontendEvidence(dartComment), false, 'a bare package-path mention is not a Dart import');
   });
 
   test('native files are found below the project root', (t) => {
@@ -595,8 +603,8 @@ describe('hasStaticFrontendEvidence — native evidence branch (#4658)', () => {
     const markers = [
       ['.swift', 'import SwiftUI'],
       ['.swift', 'import UIKit'],
-      ['.kt', 'androidx.compose'],
-      ['.dart', 'package:flutter'],
+      ['.kt', 'import androidx.compose'],
+      ['.dart', "import 'package:flutter"],
     ];
     const filler = fc.string({ minLength: 0, maxLength: 80 })
       .filter((s) => !s.includes('import') && !s.includes('androidx') && !s.includes('package:') && !s.includes('\n'));
@@ -667,5 +675,35 @@ describe('computeUiPlanGate — native evidence fires the gate (#4658)', () => {
     assert.strictEqual(r.frontend, true, 'vocabulary match is unchanged');
     assert.strictEqual(r.hasFrontendEvidence, false, 'import Foundation is not UI evidence');
     assert.strictEqual(r.block, false, 'the control case: extension-alone would have blocked this');
+  });
+});
+
+// Review-pass additions (#4658): gate-level coverage for a second native
+// ecosystem, and the unreadable-FILE degrade path of the bounded marker read.
+describe('computeUiPlanGate — native evidence, additional ecosystems (#4658)', () => {
+  test('compose evidence fires the gate through the same block formula', (t) => {
+    const proj = makeProject({
+      phaseSection: 'Migrate the dashboard list to Jetpack Compose components.',
+      hasUiSpec: false,
+      frontendEvidence: 'compose',
+    });
+    t.after(() => cleanup(proj.tmpDir));
+    const r = computeUiPlanGate(proj.tmpDir, '1');
+    assert.strictEqual(r.frontend, true);
+    assert.strictEqual(r.hasFrontendEvidence, true, 'a Compose project IS structural frontend evidence');
+    assert.strictEqual(r.block, true);
+  });
+
+  test('an unreadable candidate file degrades to no evidence, never throws', (t) => {
+    const { hasStaticFrontendEvidence: probe } = require('../gsd-core/bin/lib/ui-frontend-evidence.cjs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-evidence-io-4658-'));
+    const origRead = fs.readSync;
+    t.after(() => { cleanup(dir); });
+    fs.writeFileSync(path.join(dir, 'Main.kt'), 'import androidx.compose.material3.Text\n', 'utf8');
+    t.mock.method(fs, 'readSync', () => {
+      throw new Error('EIO: simulated read failure');
+    });
+    assert.strictEqual(probe(dir), false, 'read failure = no evidence, per the module contract');
+    assert.ok(origRead, 'original readSync preserved by t.mock auto-restore');
   });
 });

@@ -569,8 +569,10 @@ function findUiSpecInDir(phaseDir: string): string {
  * matches the token `dashboard` exactly like the real compound `micro-frontend`
  * (the boundary rule of #3718 is intentional and untouched). The gate therefore
  * blocks only when the token match is corroborated by static frontend evidence
- * in the repo tree (hasStaticFrontendEvidence: package.json UI-framework dep or
- * a component-framework file). This mirrors the sibling post-wave gate
+ * in the repo tree (hasStaticFrontendEvidence: package.json UI-framework dep, a
+ * component-framework file, or native UI evidence — a `.xaml` file or a
+ * `.swift`/`.kt`/`.dart` file carrying its ecosystem's UI import marker,
+ * #4658). This mirrors the sibling post-wave gate
  * computeUiSafetyGate, which requires `hasUiFiles` (git diff) before blocking.
  * matchedToken/matchedLine surface what tripped the sniffer so an operator can
  * judge the flag in one second instead of reaching for --skip-ui.

@@ -22,6 +22,19 @@
  *       html, ...) are deliberately NOT static evidence: docs sites and
  *       markdown/bash/config repos routinely carry stray `.html`/`.css`, which
  *       is precisely the false-positive class #3312 reports.
+ *   (c) any `*.xaml` file, or a `*.swift` / `*.kt` / `*.dart` file whose
+ *       content carries its ecosystem's UI-framework import marker
+ *       (`import SwiftUI` / `import UIKit`, `androidx.compose`,
+ *       `package:flutter`) (#4658). Native UI projects (SwiftUI, Jetpack
+ *       Compose, Flutter, .NET MAUI) carry neither (a) nor (b), which made the
+ *       gate structurally unreachable for them. Source files match on the
+ *       IMPORT, not the extension alone — the same unambiguity bar that
+ *       justifies (b)'s subset and excludes (css, scss, html): a non-UI Swift
+ *       package (a CLI, a server) imports Foundation, not SwiftUI, and must
+ *       stay silent. `.xaml` is extension-alone for the same reason `.tsx` is —
+ *       the extension itself is unambiguous. Marker matching is case-sensitive
+ *       (imports are case-sensitive in all four ecosystems); extension
+ *       matching is case-insensitive, mirroring `UI_COMPONENT_FILE_RE`.
  *
  * All I/O failures degrade to `false` (no evidence) — never throw.
  */
@@ -31,6 +44,24 @@ import path from 'node:path';
 
 /** Component-framework file extensions — the static-evidence subset of UI_FILE_EXTENSIONS_RE. */
 export const UI_COMPONENT_FILE_RE = /\.(tsx|jsx|vue|svelte)$/i;
+
+/** Native UI source files whose CONTENT is scanned for an import marker (#4658). */
+export const NATIVE_UI_SOURCE_RE = /\.(swift|kt|dart)$/i;
+
+/** Native UI files that are evidence by extension alone — `.xaml`, the `.tsx` analogue. */
+export const NATIVE_UI_XAML_RE = /\.xaml$/i;
+
+/**
+ * Per-extension UI-framework import markers for `NATIVE_UI_SOURCE_RE` files
+ * (#4658). Every marker embeds its ecosystem's import keyword, so a bare
+ * framework-name mention in prose or a comment is not evidence. Case-sensitive:
+ * imports are case-sensitive in Swift, Kotlin and Dart.
+ */
+export const NATIVE_UI_CONTENT_MARKERS: Readonly<Record<string, readonly string[]>> = {
+  '.swift': ['import SwiftUI', 'import UIKit'],
+  '.kt': ['import androidx.compose'],
+  '.dart': ["import 'package:flutter"],
+};
 
 /**
  * UI-framework package.json dependencies (dependencies OR devDependencies).
@@ -133,15 +164,82 @@ function treeHasComponentFile(projectDir: string): boolean {
 }
 
 /**
+ * Read at most the first 64 KiB of `file` and report whether any of `markers`
+ * occurs in it (#4658). Import sections live at the top of a source file, so a
+ * bounded prefix read keeps the gate's plan-time cost profile without reading
+ * generated monsters in full. Any I/O failure degrades to false — never throw.
+ */
+function fileHasAnyMarker(file: string, markers: readonly string[]): boolean {
+  let fd: number;
+  try {
+    fd = fs.openSync(file, 'r');
+  } catch {
+    return false;
+  }
+  try {
+    const bytes = Buffer.alloc(64 * 1024);
+    const read = fs.readSync(fd, bytes, 0, bytes.length, 0);
+    const prefix = bytes.toString('utf8', 0, read);
+    return markers.some((m) => prefix.includes(m));
+  } catch {
+    return false;
+  } finally {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      // already closed — nothing to degrade
+    }
+  }
+}
+
+/**
+ * Native-UI BFS over the same bounds and skip rules as `treeHasComponentFile`
+ * (#4658): `.xaml` is evidence by extension alone; `.swift`/`.kt`/`.dart` are
+ * evidence only when the file's content carries its ecosystem's import marker.
+ */
+function treeHasNativeUiFile(projectDir: string): boolean {
+  const queue: string[] = [projectDir];
+  let visited = 0;
+  while (queue.length > 0 && visited < MAX_WALK_ENTRIES) {
+    const dir = queue.shift() as string;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue; // unreadable directory → skip it
+    }
+    for (const entry of entries) {
+      visited++;
+      if (visited >= MAX_WALK_ENTRIES) return false;
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRS.has(entry.name)) queue.push(path.join(dir, entry.name));
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (NATIVE_UI_XAML_RE.test(entry.name)) return true;
+      if (NATIVE_UI_SOURCE_RE.test(entry.name)) {
+        const ext = path.extname(entry.name).toLowerCase();
+        const markers = NATIVE_UI_CONTENT_MARKERS[ext];
+        if (markers && fileHasAnyMarker(path.join(dir, entry.name), markers)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Does the project tree carry static evidence of a frontend?
  *
  * @param projectDir - Absolute path to the project root (the gate's cwd).
- * @returns true when package.json declares a UI-framework dependency or the
- *          tree contains a component-framework file; false otherwise (including
- *          on any I/O failure — evidence must be affirmative).
+ * @returns true when package.json declares a UI-framework dependency, the tree
+ *          contains a component-framework file, or the tree contains native UI
+ *          evidence (a `.xaml` file, or a `.swift`/`.kt`/`.dart` file carrying
+ *          its ecosystem's UI import marker — #4658); false otherwise
+ *          (including on any I/O failure — evidence must be affirmative).
  */
 export function hasStaticFrontendEvidence(projectDir: string): boolean {
   if (typeof projectDir !== 'string' || projectDir === '') return false;
   if (packageJsonHasUiFramework(projectDir)) return true;
-  return treeHasComponentFile(projectDir);
+  if (treeHasComponentFile(projectDir)) return true;
+  return treeHasNativeUiFile(projectDir);
 }
