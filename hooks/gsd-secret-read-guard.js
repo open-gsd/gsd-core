@@ -127,6 +127,15 @@ const NON_READING_COMMANDS = new Set([
   'basename', 'dirname', 'realpath', 'file', 'echo', 'printf',
 ]);
 
+// #4639: container runtimes take `--env-file <file>` — the runtime opens the
+// file itself, interpolates it into the container environment, and returns
+// nothing to the agent, so the flag's VALUE is a name, never contents. The
+// same category NON_READING_COMMANDS encodes, expressed as a flag value. Only
+// the flag's value under these runtimes is exempt; every other operand in the
+// segment is still checked, so the carve-out cannot launder a read.
+const CONTAINER_RUNTIMES = new Set(['docker', 'docker-compose', 'podman', 'nerdctl']);
+const ENV_FILE_FLAG_RE = /^--env-file(=|$)/;
+
 // Shell interpreters that run a script from `-c`, a file operand, or stdin
 // (heredoc / here-string / piped `echo`|`printf`). `su` is here for its `-c`
 // form (`su [user] -c 'cmd'`); a bare `su user` resolves to file mode, which
@@ -840,7 +849,19 @@ function findSecretRead(command, depth) {
 
     if (NON_READING_COMMANDS.has(base)) continue;
 
+    // #4639: exempt ONLY the value of `--env-file`, and only when the
+    // segment's command word is a container runtime. A bare `--env-file`
+    // consumes the next operand; `--env-file=<value>` is a single word.
+    const envFileExempt = CONTAINER_RUNTIMES.has(base);
+    let skipNext = false;
     for (const w of operands) {
+      if (envFileExempt) {
+        if (skipNext) { skipNext = false; continue; }
+        if (ENV_FILE_FLAG_RE.test(w.text)) {
+          if (!w.text.includes('=')) skipNext = true; // bare flag consumes the next operand
+          continue;
+        }
+      }
       if (namesSecret(normalizeOperand(w.text))) return w.text;
     }
   }
