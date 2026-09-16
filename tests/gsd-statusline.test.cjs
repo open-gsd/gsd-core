@@ -657,8 +657,14 @@ describe('context meter respects CLAUDE_CODE_AUTO_COMPACT_WINDOW (#2219)', () =>
    *   - rawUsedPct: the raw value written to the bridge file (100 - remaining,
    *     CC-consistent per #2451 fix)
    */
-  function runHook(remainingPct, totalTokens, acwEnv) {
+  // The meter now consults settings.json for autoCompactEnabled, so pin
+  // CLAUDE_CONFIG_DIR to a scratch dir (optionally seeded with settings) —
+  // otherwise the developer's real ~/.claude/settings.json would steer the
+  // expected percentages below.
+  function runHook(remainingPct, totalTokens, acwEnv, settings) {
     const sessionId = `test-2219-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-statusline-cfg-'));
+    if (settings) fs.writeFileSync(path.join(configDir, 'settings.json'), JSON.stringify(settings));
     const payload = JSON.stringify({
       model: { display_name: 'Claude' },
       workspace: { current_dir: os.tmpdir() },
@@ -669,7 +675,9 @@ describe('context meter respects CLAUDE_CODE_AUTO_COMPACT_WINDOW (#2219)', () =>
       },
     });
 
-    const env = { ...process.env };
+    const env = { ...process.env, CLAUDE_CONFIG_DIR: configDir };
+    delete env.DISABLE_AUTOCOMPACT;
+    delete env.CLAUDE_CODE_DISABLE_AUTO_COMPACT;
     if (acwEnv != null) {
       env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(acwEnv);
     } else {
@@ -677,6 +685,7 @@ describe('context meter respects CLAUDE_CODE_AUTO_COMPACT_WINDOW (#2219)', () =>
     }
 
     const r = runHookSeam(hookPath, [], { input: payload, env, timeoutMs: STATUSLINE_HOOK_TIMEOUT_MS });
+    cleanup(configDir);
     const stdout = r.stdout;
 
     // Parse normalized used% from the statusline bar output (e.g. "60%")
@@ -728,6 +737,41 @@ describe('context meter respects CLAUDE_CODE_AUTO_COMPACT_WINDOW (#2219)', () =>
     assert.strictEqual(normalizedUsed, 50);
   });
 
+  test('autoCompactEnabled:false in settings.json → no buffer, bar shows raw used%', () => {
+    // 16.5% is ordinary usable context when auto-compact is off: raw 40% used
+    // must read 40 (was 48), and raw 83.5% used must not pin the bar at 100.
+    assert.strictEqual(runHook(60, 1_000_000, null, { autoCompactEnabled: false }).normalizedUsed, 40);
+    assert.strictEqual(runHook(16.5, 1_000_000, null, { autoCompactEnabled: false }).normalizedUsed, 84);
+    // …and it overrides CLAUDE_CODE_AUTO_COMPACT_WINDOW too (no compaction → no window).
+    assert.strictEqual(runHook(50, 1_000_000, 400_000, { autoCompactEnabled: false }).normalizedUsed, 50);
+    // autoCompactEnabled:true keeps the default buffer.
+    assert.strictEqual(runHook(50, 1_000_000, null, { autoCompactEnabled: true }).normalizedUsed, 60);
+  });
+
+  test('isAutoCompactDisabled: env switches and settings precedence, fail-soft', () => {
+    const { isAutoCompactDisabled } = require('../hooks/gsd-statusline.js');
+    const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-statusline-cfg-'));
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-statusline-proj-'));
+    try {
+      const env = { CLAUDE_CONFIG_DIR: cfg };
+      assert.equal(isAutoCompactDisabled(proj, env), false, 'nothing configured');
+      assert.equal(isAutoCompactDisabled(proj, { ...env, DISABLE_AUTOCOMPACT: '1' }), true);
+      assert.equal(isAutoCompactDisabled(proj, { ...env, CLAUDE_CODE_DISABLE_AUTO_COMPACT: 'true' }), true);
+      fs.writeFileSync(path.join(cfg, 'settings.json'), '{ not json');
+      assert.equal(isAutoCompactDisabled(proj, env), false, 'unparseable settings are ignored');
+      fs.writeFileSync(path.join(cfg, 'settings.json'), JSON.stringify({ autoCompactEnabled: false }));
+      assert.equal(isAutoCompactDisabled(proj, env), true, 'global settings');
+      fs.mkdirSync(path.join(proj, '.claude'));
+      fs.writeFileSync(path.join(proj, '.claude', 'settings.json'), JSON.stringify({ autoCompactEnabled: true }));
+      assert.equal(isAutoCompactDisabled(proj, env), false, 'project settings outrank global');
+      fs.writeFileSync(path.join(proj, '.claude', 'settings.local.json'), JSON.stringify({ autoCompactEnabled: false }));
+      assert.equal(isAutoCompactDisabled(proj, env), true, 'settings.local.json outranks settings.json');
+    } finally {
+      cleanup(cfg);
+      cleanup(proj);
+    }
+  });
+
   test('bridge used_pct is raw (CC-consistent) regardless of ACW setting (#2451)', () => {
     // Fix for #2451: bridge used_pct must be raw (100 - remaining), not normalized.
     // This ensures gsd-context-monitor warning messages match CC native /context.
@@ -760,7 +804,12 @@ describe('context meter boundary: acw at/near totalCtx does not pin used at 100%
       },
     });
 
-    const env = { ...process.env };
+    // Pin CLAUDE_CONFIG_DIR to an empty scratch dir so the developer's real
+    // ~/.claude/settings.json (autoCompactEnabled) cannot steer the buffer.
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-statusline-cfg-'));
+    const env = { ...process.env, CLAUDE_CONFIG_DIR: configDir };
+    delete env.DISABLE_AUTOCOMPACT;
+    delete env.CLAUDE_CODE_DISABLE_AUTO_COMPACT;
     if (acwEnv != null) {
       env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(acwEnv);
     } else {
@@ -777,6 +826,8 @@ describe('context meter boundary: acw at/near totalCtx does not pin used at 100%
       });
     } catch (e) {
       stdout = e.stdout || '';
+    } finally {
+      cleanup(configDir);
     }
 
     // Strip ANSI escape codes then extract the percentage digit(s) before "%"

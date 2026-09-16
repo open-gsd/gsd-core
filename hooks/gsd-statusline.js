@@ -171,6 +171,51 @@ function readStateFileOrNull(statePath) {
 }
 
 /**
+/**
+ * Is Claude Code's auto-compact switched off for this session? When it is,
+ * the ~16.5% "compact buffer" is ordinary usable context, so the meter must
+ * not subtract it — otherwise the bar pins at 100% from raw 83.5% onward and
+ * the last sixth of the window is invisible.
+ *
+ * Sources, first definitive answer wins:
+ *   1. env: DISABLE_AUTOCOMPACT / CLAUDE_CODE_DISABLE_AUTO_COMPACT ("1"/"true")
+ *   2. <dir>/.claude/settings.local.json, <dir>/.claude/settings.json
+ *   3. (CLAUDE_CONFIG_DIR || ~/.claude)/settings.local.json, settings.json
+ * reading the boolean `autoCompactEnabled`. Fail-soft: anything unreadable
+ * or absent means "not disabled" (current behaviour).
+ */
+function isAutoCompactDisabled(dir, env = process.env) {
+  for (const key of ['DISABLE_AUTOCOMPACT', 'CLAUDE_CODE_DISABLE_AUTO_COMPACT']) {
+    const v = env[key];
+    if (typeof v === 'string' && /^(1|true|yes)$/i.test(v.trim())) return true;
+  }
+  const candidates = [];
+  if (dir) {
+    candidates.push(path.join(dir, '.claude', 'settings.local.json'));
+    candidates.push(path.join(dir, '.claude', 'settings.json'));
+  }
+  let claudeDir;
+  try {
+    claudeDir = env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+  } catch (e) {
+    claudeDir = null;
+  }
+  if (claudeDir) {
+    candidates.push(path.join(claudeDir, 'settings.local.json'));
+    candidates.push(path.join(claudeDir, 'settings.json'));
+  }
+  for (const file of candidates) {
+    try {
+      const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (settings && typeof settings.autoCompactEnabled === 'boolean') {
+        return settings.autoCompactEnabled === false;
+      }
+    } catch (e) { /* absent or unparseable — keep looking */ }
+  }
+  return false;
+}
+
+/**
  * Walk up from dir looking for .planning/STATE.md (flat mode). If an ancestor
  * has no flat STATE.md but IS in workstream mode (.planning/workstreams/
  * present — the single-source-of-truth check `listAvailableWorkstreams`
@@ -842,11 +887,16 @@ function runStatusline() {
     // of the total window, but users can override it via CLAUDE_CODE_AUTO_COMPACT_WINDOW
     // (a token count). When the env var is set, compute the buffer % dynamically so
     // the meter correctly reflects early-compaction configurations (#2219).
+    // With auto-compact disabled (settings autoCompactEnabled:false or the
+    // DISABLE_AUTOCOMPACT env) there is no reserved buffer at all — the bar
+    // shows the raw used% (100 - remaining), matching CC's own /context.
     const totalCtx = data.context_window?.total_tokens || 1_000_000;
     const acw = parseInt(process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || '0', 10);
-    const AUTO_COMPACT_BUFFER_PCT = acw > 0
-      ? Math.min(100, Math.max(0, (1 - acw / totalCtx) * 100))
-      : 16.5;
+    const AUTO_COMPACT_BUFFER_PCT = isAutoCompactDisabled(dir)
+      ? 0
+      : acw > 0
+        ? Math.min(100, Math.max(0, (1 - acw / totalCtx) * 100))
+        : 16.5;
     let ctx = '';
     if (remaining != null) {
       // Normalize: subtract buffer from remaining, scale to usable range
@@ -1096,7 +1146,7 @@ module.exports = {
   STATE_HEAD_ADVISORY_COMMITS, isValidStateHeadStamp,
   readStateHeadCommits, parseRevListCounts, deriveStateFreshness,
   formatStateFreshness, resolveStatuslineOptions,
-  renderBracketPhaseDisplay, renderBracketMilestoneDisplay,
+  renderBracketPhaseDisplay, renderBracketMilestoneDisplay, isAutoCompactDisabled,
 };
 
 /**
