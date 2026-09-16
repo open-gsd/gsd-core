@@ -104,7 +104,10 @@ Generate slug from idea summary.
 Write `.planning/seeds/{SEED_ID}-{slug}.md` immediately with sensible defaults:
 
 - `trigger_when`: default is `"when relevant"` — the seed will surface during any
-  new-milestone scan; the user can narrow it later via `--enrich`
+  new-milestone scan; the user can narrow it later via `--enrich`. If the idea
+  text states a trigger condition in plain words, set `trigger_when` from it
+  instead of the default (#4648: /gsd:explore passes the conversation's trigger
+  inside the idea text)
 - `scope`: default is `"unknown"` — the user can update it via `--enrich`
 
 ```markdown
