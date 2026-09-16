@@ -24,6 +24,7 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
+const fc = require('fast-check');
 const fs = require('fs');
 const os = require('node:os');
 const path = require('path');
@@ -107,5 +108,159 @@ describe('#3854: write normalization preserves tight multi-line lists', () => {
     } finally {
       cleanup(osTmp);
     }
+  });
+});
+
+describe('#4499: markdown normalization preserves leading YAML frontmatter', () => {
+  test('block sequences remain adjacent when an unrelated scalar changes', () => {
+    const input = [
+      '---',
+      'phase: 01',
+      'tags:',
+      '- api',
+      '- sdk',
+      'owners:',
+      '- platform',
+      '- runtime',
+      '---',
+      '# Plan',
+      '',
+      'Body.',
+      '',
+    ].join('\n');
+
+    const updated = input.replace('phase: 01', 'phase: 02');
+    assert.strictEqual(normalizeContent(MD, updated).content, updated);
+  });
+
+  test('a block sequence immediately before the closing delimiter gains no blank', () => {
+    const input = '---\ntags:\n- api\n- sdk\n---\n\nBody.\n';
+    const { content } = normalizeContent(MD, input);
+    assert.ok(!content.includes('- api\n\n- sdk'));
+    assert.ok(!content.includes('- sdk\n\n---'));
+    assert.strictEqual(content, input);
+  });
+
+  test('flow arrays alongside block sequences in frontmatter remain byte-identical', () => {
+    const input = '---\ntags: [api, sdk]\nowners:\n- api\n- sdk\nphase: 01\n---\n\nBody.\n';
+    assert.strictEqual(normalizeContent(MD, input).content, input);
+  });
+
+  test('body lists still receive paragraph separation after frontmatter', () => {
+    const input = '---\ntags:\n- api\n- sdk\n---\n\nLead paragraph.\n- body item\n';
+    const { content } = normalizeContent(MD, input);
+    assert.ok(content.includes('tags:\n- api\n- sdk\n---'));
+    assert.ok(content.includes('Lead paragraph.\n\n- body item'));
+  });
+
+  test('documents without frontmatter retain the existing list normalization', () => {
+    const input = 'Lead paragraph.\n- item\n';
+    assert.strictEqual(normalizeContent(MD, input).content, 'Lead paragraph.\n\n- item\n');
+  });
+
+  test('the issue-shaped nested block sequences remain byte-identical', () => {
+    const input = [
+      '---',
+      'phase: 01',
+      'must_haves:',
+      '  truths:',
+      '    - API behavior stays stable',
+      '    - SDK behavior stays stable',
+      '  artifacts:',
+      '    - path: src/api.ts',
+      '      provides:',
+      '        - public API',
+      '        - type declarations',
+      '---',
+      '# Plan',
+      '',
+    ].join('\n');
+    assert.strictEqual(normalizeContent(MD, input).content, input);
+  });
+
+  test('single-item, empty, and deeply nested sequences preserve their boundaries', () => {
+    const inputs = [
+      '---\ntags:\n  - only\n---\n\nBody.\n',
+      '---\ntags: []\nowners:\n  - only\n---\n\nBody.\n',
+      '---\na:\n  b:\n    c:\n      - deep\n---\n\nBody.\n',
+    ];
+    for (const input of inputs) assert.strictEqual(normalizeContent(MD, input).content, input);
+  });
+
+  test('an unterminated opening delimiter does not disable body normalization', () => {
+    const input = '---\nphase: 01\n# Heading\n- item\n';
+    const { content } = normalizeContent(MD, input);
+    assert.ok(content.includes('phase: 01\n\n# Heading\n\n- item'));
+  });
+
+  test('a leading thematic break and later divider are not mistaken for frontmatter', () => {
+    const input = '---\n# Heading\n- item\n---\nTail.\n';
+    const { content } = normalizeContent(MD, input);
+    assert.ok(content.includes('# Heading\n\n- item'));
+  });
+
+  test('a thematic break with an incidental colon line is not mistaken for frontmatter', () => {
+    const input = '---\nNote: see below.\nLead paragraph.\n- alpha\n- beta\n---\nTail.\n';
+    const { content } = normalizeContent(MD, input);
+    assert.strictEqual(
+      content,
+      '---\nNote: see below.\nLead paragraph.\n\n- alpha\n- beta\n\n---\nTail.\n',
+      'ordinary Markdown after a thematic break must retain list normalization even if prose resembles YAML'
+    );
+  });
+
+  test('anchors and aliases are refused before the frontmatter classifier can expand them', () => {
+    const input = '---\na: &a [safe]\nb: [*a, *a, *a, *a]\n---\nLead paragraph.\n- body item\n';
+    const { content } = normalizeContent(MD, input);
+    assert.ok(content.includes('Lead paragraph.\n\n- body item'),
+      'a refused YAML region must remain ordinary Markdown and retain body-list normalization');
+  });
+
+  test('empty and comment-only YAML regions are still frontmatter', () => {
+    for (const region of ['', '# intentionally empty\n# - a comment, not a Markdown list']) {
+      const input = `---\n${region}\n---\n\nBody.\n`;
+      assert.strictEqual(normalizeContent(MD, input).content, input);
+    }
+  });
+
+  test('a closed region parsing to a bare YAML scalar stays ordinary Markdown', () => {
+    const input = '---\njust a sentence\n---\nLead paragraph.\n- body item\n';
+    const { content } = normalizeContent(MD, input);
+    assert.ok(
+      content.includes('Lead paragraph.\n\n- body item'),
+      'a scalar is not a mapping, so the document keeps ordinary Markdown normalization'
+    );
+  });
+
+  test('a top-level YAML sequence region stays ordinary Markdown — a deliberate boundary', () => {
+    // Frontmatter in this repo is always a mapping, so a leading region that is
+    // itself a sequence is classified as body content and keeps its spacing
+    // rules. Pinned so the `!Array.isArray` guard reads as a decision rather
+    // than an accident if the classifier is refactored.
+    const input = '---\n- alpha\n- beta\n---\nLead paragraph.\n- body item\n';
+    const { content } = normalizeContent(MD, input);
+    assert.ok(content.includes('Lead paragraph.\n\n- body item'));
+  });
+
+  test('property: normalization preserves every generated frontmatter mapping byte-for-byte', () => {
+    const scalar = fc.stringMatching(/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,30}$/);
+    fc.assert(fc.property(fc.array(scalar, { maxLength: 12 }), (items) => {
+      const list = items.length ? ['items:', ...items.map((item) => `  - ${item}`)] : ['items: []'];
+      const frontmatter = ['---', 'phase: 01', ...list, '---'].join('\n');
+      const input = `${frontmatter}\n# Plan\n\nBody.\n`;
+      const output = normalizeContent(MD, input).content;
+      assert.strictEqual(output.slice(0, frontmatter.length), frontmatter);
+    }), { numRuns: 250 });
+  });
+
+  test('property: scalar and sequence regions stay on the ordinary-Markdown path', () => {
+    const scalar = fc.stringMatching(/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,30}$/);
+    fc.assert(fc.property(fc.oneof(
+      scalar,
+      fc.array(scalar, { minLength: 1, maxLength: 5 }).map((items) => items.map((item) => `- ${item}`).join('\n')),
+    ), (region) => {
+      const input = `---\n${region}\n---\nLead paragraph.\n- body item\n`;
+      assert.ok(normalizeContent(MD, input).content.includes('Lead paragraph.\n\n- body item'));
+    }), { numRuns: 100 });
   });
 });
