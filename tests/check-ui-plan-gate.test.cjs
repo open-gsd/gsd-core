@@ -24,7 +24,9 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { cleanup } = require('./helpers.cjs');
+const fc = require('./helpers/fast-check-setup.cjs');
 const { computeUiPlanGate } = require('../gsd-core/bin/lib/check-command-router.cjs');
+const { hasStaticFrontendEvidence } = require('../gsd-core/bin/lib/ui-frontend-evidence.cjs');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -54,6 +56,20 @@ function makeProject({ phaseSection = '', hasUiSpec = false, frontendEvidence = 
       JSON.stringify({ name: 'fixture', dependencies: { react: '^18.3.1' } }),
       'utf8',
     );
+  } else if (frontendEvidence === 'swiftui') {
+    fs.mkdirSync(path.join(tmpDir, 'Sources'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'Sources', 'ContentView.swift'), 'import SwiftUI\nstruct ContentView: View { var body: some View { Text("hi") } }\n', 'utf8');
+  } else if (frontendEvidence === 'compose') {
+    fs.mkdirSync(path.join(tmpDir, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'lib', 'Main.kt'), 'import androidx.compose.material3.Text\n', 'utf8');
+  } else if (frontendEvidence === 'flutter') {
+    fs.mkdirSync(path.join(tmpDir, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'lib', 'main.dart'), "import 'package:flutter/material.dart';\nvoid main() {}\n", 'utf8');
+  } else if (frontendEvidence === 'xaml') {
+    fs.writeFileSync(path.join(tmpDir, 'MainPage.xaml'), '<Page x:Class="App.MainPage" />\n', 'utf8');
+  } else if (frontendEvidence === 'swift-non-ui') {
+    fs.mkdirSync(path.join(tmpDir, 'Sources'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'Sources', 'TaskRunner.swift'), 'import Foundation\nstruct TaskRunner { }\n', 'utf8');
   }
 
   // Minimal ROADMAP.md with one phase section
@@ -458,5 +474,198 @@ describe('computeUiPlanGate — ui.plan-gate check logic (#1026)', () => {
         try { cleanup(proj.tmpDir); } catch { /* ignore */ }
       }
     });
+  });
+});
+
+// ─── #4658 — native (non-JS) frontend evidence ────────────────────────────────
+// hasStaticFrontendEvidence recognised only JS-ecosystem evidence (a root
+// package.json UI-framework dep, or a .tsx/.jsx/.vue/.svelte file), so
+// computeUiPlanGate could never block for a SwiftUI / Compose / Flutter / XAML
+// project — the #3312 gate was structurally unreachable for an entire class of
+// project. The native branch keeps the same unambiguous-component bar as the
+// .tsx subset: source files count only with their import marker (the reporter's
+// 37-file Swift CLI with zero UI imports stays silent), while .xaml is
+// extension-alone for the same reason .tsx is.
+
+describe('hasStaticFrontendEvidence — native evidence branch (#4658)', () => {
+  // relPath -> content; a `null` value creates a DIRECTORY at that path.
+  function nativeProject(files) {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-evidence-4658-'));
+    for (const rel of Object.keys(files)) {
+      const target = path.join(tmpDir, rel);
+      if (files[rel] === null) {
+        fs.mkdirSync(target, { recursive: true });
+      } else {
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, files[rel], 'utf8');
+      }
+    }
+    return tmpDir;
+  }
+
+  test('a SwiftUI import counts as static frontend evidence (#4658)', (t) => {
+    const dir = nativeProject({ 'Sources/ContentView.swift': 'import SwiftUI\nstruct ContentView: View {}\n' });
+    t.after(() => cleanup(dir));
+    assert.strictEqual(hasStaticFrontendEvidence(dir), true, 'import SwiftUI is unambiguous native UI evidence');
+  });
+
+  test('a UIKit import counts as static frontend evidence (#4658)', (t) => {
+    const dir = nativeProject({ 'AppDelegate.swift': 'import UIKit\n' });
+    t.after(() => cleanup(dir));
+    assert.strictEqual(hasStaticFrontendEvidence(dir), true);
+  });
+
+  test('a Compose import counts as static frontend evidence (#4658)', (t) => {
+    const dir = nativeProject({ 'lib/Main.kt': 'import androidx.compose.material3.Text\n' });
+    t.after(() => cleanup(dir));
+    assert.strictEqual(hasStaticFrontendEvidence(dir), true);
+  });
+
+  test('a Flutter import counts as static frontend evidence (#4658)', (t) => {
+    const dir = nativeProject({ 'lib/main.dart': "import 'package:flutter/material.dart';\nvoid main() {}\n" });
+    t.after(() => cleanup(dir));
+    assert.strictEqual(hasStaticFrontendEvidence(dir), true);
+  });
+
+  test('a XAML page counts as static frontend evidence (#4658)', (t) => {
+    const dir = nativeProject({ 'MainPage.xaml': '<Page x:Class="App.MainPage" />\n' });
+    t.after(() => cleanup(dir));
+    assert.strictEqual(hasStaticFrontendEvidence(dir), true, '.xaml is extension-alone, like .tsx');
+  });
+
+  test('a non-UI Swift package stays non-evidence (import marker required)', (t) => {
+    // The reporter's control case: 37 Swift files, zero UI imports — a CLI, a
+    // server. Extension-alone matching would misclassify exactly this class.
+    const dir = nativeProject({ 'Sources/TaskRunner.swift': 'import Foundation\nstruct TaskRunner { }\n' });
+    t.after(() => cleanup(dir));
+    assert.strictEqual(hasStaticFrontendEvidence(dir), false);
+  });
+
+  test('plain Kotlin and Dart sources stay non-evidence', (t) => {
+    const dir = nativeProject({
+      'lib/Repo.kt': 'class Repo { fun get(): Int = 1 }\n',
+      'bin/main.dart': 'void main() { print(1); }\n',
+    });
+    t.after(() => cleanup(dir));
+    assert.strictEqual(hasStaticFrontendEvidence(dir), false);
+  });
+
+  test('marker matching is exact — prose mentions and case changes are not imports', (t) => {
+    const mentioned = nativeProject({ 'Sources/Notes.swift': '// SwiftUI is nice, but this is a comment\nimport Foundation\n' });
+    t.after(() => cleanup(mentioned));
+    assert.strictEqual(hasStaticFrontendEvidence(mentioned), false, 'a prose/comment mention is not an import');
+
+    const lowercased = nativeProject({ 'Sources/A.swift': 'import swiftui\n' });
+    t.after(() => cleanup(lowercased));
+    assert.strictEqual(hasStaticFrontendEvidence(lowercased), false, 'imports are case-sensitive in all four ecosystems');
+  });
+
+  test('native files are found below the project root', (t) => {
+    const dir = nativeProject({ 'lib/ui/deep/Chart.kt': 'import androidx.compose.foundation.Canvas\n' });
+    t.after(() => cleanup(dir));
+    assert.strictEqual(hasStaticFrontendEvidence(dir), true);
+  });
+
+  test('SKIP_DIRS still excludes vendored native matches', (t) => {
+    const dir = nativeProject({ 'node_modules/somepkg/Chart.kt': 'import androidx.compose.foundation.Canvas\n' });
+    t.after(() => cleanup(dir));
+    assert.strictEqual(hasStaticFrontendEvidence(dir), false, 'vendored trees are not project evidence');
+  });
+
+  test('extension matching is case-insensitive (.XAML)', (t) => {
+    const dir = nativeProject({ 'MainPage.XAML': '<Page />\n' });
+    t.after(() => cleanup(dir));
+    assert.strictEqual(hasStaticFrontendEvidence(dir), true, 'matching UI_COMPONENT_FILE_RE\'s existing /i semantics');
+  });
+
+  test('unreadable directories degrade to false, never throw', (t) => {
+    const dir = nativeProject({ 'Sources/ContentView.swift': 'import SwiftUI\n' });
+    const origReaddir = fs.readdirSync;
+    t.after(() => { cleanup(dir); });
+    t.mock.method(fs, 'readdirSync', (p, opts) => {
+      if (String(p).endsWith('Sources')) throw new Error('EIO: simulated read failure');
+      return origReaddir.call(fs, p, opts);
+    });
+    assert.strictEqual(hasStaticFrontendEvidence(dir), false, 'I/O failure = no evidence, per the module contract');
+  });
+
+  test('property: native evidence is exactly the marker-matched source content', () => {
+    // Deterministic: pinned seed, bounded runs, counterexample printed on
+    // failure (fc's default). Filler is filtered so it cannot carry a marker.
+    const markers = [
+      ['.swift', 'import SwiftUI'],
+      ['.swift', 'import UIKit'],
+      ['.kt', 'androidx.compose'],
+      ['.dart', 'package:flutter'],
+    ];
+    const filler = fc.string({ minLength: 0, maxLength: 80 })
+      .filter((s) => !s.includes('import') && !s.includes('androidx') && !s.includes('package:') && !s.includes('\n'));
+    // try/finally lives in this HELPER (no test context), per the exemption.
+    function withFixture(content, fn) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-evidence-prop-4658-'));
+      try {
+        fs.writeFileSync(path.join(dir, `probe${content.ext}`), content.text, 'utf8');
+        return fn(dir);
+      } finally {
+        cleanup(dir);
+      }
+    }
+    fc.assert(
+      fc.property(
+        fc.constantFrom(...markers),
+        filler,
+        ([ext, marker], noise) => withFixture({ ext, text: `${noise}\n${marker}\n${noise}\n` }, (dir) => {
+          assert.strictEqual(hasStaticFrontendEvidence(dir), true, `marker ${JSON.stringify(marker)} must be evidence`);
+        }),
+      ),
+      { seed: 4658, numRuns: 100 },
+    );
+    fc.assert(
+      fc.property(filler, (noise) => withFixture({ ext: '.swift', text: `${noise}\n${noise}\n` }, (dir) => {
+        assert.strictEqual(hasStaticFrontendEvidence(dir), false, 'filler-only content is not evidence');
+      })),
+      { seed: 4659, numRuns: 100 },
+    );
+  });
+});
+
+describe('computeUiPlanGate — native evidence fires the gate (#4658)', () => {
+  test('native frontend evidence fires the gate on a UI phase without a UI-SPEC (#4658)', (t) => {
+    const proj = makeProject({
+      phaseSection: 'Build the SwiftUI dashboard list and detail views.',
+      hasUiSpec: false,
+      frontendEvidence: 'swiftui',
+    });
+    t.after(() => cleanup(proj.tmpDir));
+    const r = computeUiPlanGate(proj.tmpDir, '1');
+    assert.strictEqual(r.frontend, true, 'the vocabulary match already succeeded (#3718 untouched)');
+    assert.strictEqual(r.hasFrontendEvidence, true, 'a SwiftUI project IS structural frontend evidence');
+    assert.strictEqual(r.block, true, 'the issue title criterion: the gate must actually FIRE for native projects');
+  });
+
+  test('native evidence respects the UI-SPEC branch (block:false when the spec exists)', (t) => {
+    const proj = makeProject({
+      phaseSection: 'Build the SwiftUI dashboard list and detail views.',
+      hasUiSpec: true,
+      frontendEvidence: 'swiftui',
+    });
+    t.after(() => cleanup(proj.tmpDir));
+    const r = computeUiPlanGate(proj.tmpDir, '1');
+    assert.strictEqual(r.hasFrontendEvidence, true);
+    assert.strictEqual(r.hasUiSpec, true);
+    assert.strictEqual(r.block, false, 'branch (b) is unchanged for native evidence');
+  });
+
+  test('non-UI native source stays block:false (corroboration still required)', (t) => {
+    const proj = makeProject({
+      phaseSection: 'Build the dashboard views for the settings screen.',
+      hasUiSpec: false,
+      frontendEvidence: 'swift-non-ui',
+    });
+    t.after(() => cleanup(proj.tmpDir));
+    const r = computeUiPlanGate(proj.tmpDir, '1');
+    assert.strictEqual(r.frontend, true, 'vocabulary match is unchanged');
+    assert.strictEqual(r.hasFrontendEvidence, false, 'import Foundation is not UI evidence');
+    assert.strictEqual(r.block, false, 'the control case: extension-alone would have blocked this');
   });
 });
