@@ -150,6 +150,7 @@ module.exports = {
   "tests/loop-hooks-empty-points-e2e.test.cjs",
   "tests/loop-hooks-ship-pre-e2e.test.cjs",
   "tests/loop-hooks-verify-post-e2e.test.cjs",
+  "tests/loop-render-hooks.test.cjs",
   "tests/mcp-catalog.property.test.cjs",
   "tests/mcp-catalog.test.cjs",
   "tests/milestone-archive.test.cjs",
