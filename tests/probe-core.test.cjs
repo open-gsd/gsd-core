@@ -137,7 +137,7 @@ describe('probe-core: analyzeCoverage (merge · rollup · byVerification)', () =
   test('no resolutions → every item unresolved; resolved 0; byVerification zeroed per tier', () => {
     const rep = pc.analyzeCoverage(UNRESOLVED_ITEMS, [], VALIDATORS);
     assert.deepEqual(rep.coverage, {
-      applicable: 3, resolved: 0, unresolved: 3, byVerification: { explicit: 0, backstop: 0 },
+      applicable: 3, resolved: 0, unresolved: 3, unclassified: 0, byVerification: { explicit: 0, backstop: 0 },
     });
   });
   test('merges a resolved/explicit resolution and counts byVerification.explicit', () => {
