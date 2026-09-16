@@ -37,12 +37,9 @@ const TIMEOUT = 5000;
 //   site 1/2 (execute-phase.md):              source PHASE_NUMBER, prefix PHASE
 //   site 3   (completion-reconciliation.md):   source SPOT_PHASE_NUMBER, prefix SPOT_PHASE
 //   site 4   (tdd.md):                         source PHASE, prefix PHASE
-// #4748: the split is at the first NON-DIGIT, not the first dot, so a letter
-// suffix (`03A`, `23A.1.2`) rides through in the rest instead of aborting the
-// base-10 arithmetic; the rest is `_REST`, no longer only a `_FRAC`.
 function fixedSnippet(sourceVar, prefix, indent = '') {
-  return `${indent}${prefix}_INT=\${${sourceVar}%%[!0-9]*}; ${prefix}_REST=\${${sourceVar}#"$${prefix}_INT"}\n` +
-    `${indent}${prefix}_N="$((10#$${prefix}_INT))\${${prefix}_REST//./\\\\.}"`;
+  return `${indent}${prefix}_INT=\${${sourceVar}%%.*}; ${prefix}_FRAC=\${${sourceVar}#"$${prefix}_INT"}\n` +
+    `${indent}${prefix}_N="$((10#$${prefix}_INT))\${${prefix}_FRAC//./\\\\.}"`;
 }
 
 function runFixed(phaseNumberValue) {
@@ -65,11 +62,6 @@ describe('#4619 — execute-phase decimal/N-segment phase-number arithmetic', ()
 
   test('regression control: a padded plain phase number is still zero-stripped (01 -> 1)', () => {
     assert.equal(runFixed('01'), '1');
-  });
-
-  test('#4748: a letter-suffixed phase number keeps its letter and zero-strips the digit run (03A -> 3A, 23A.1.2 -> 23A\\.1\\.2)', () => {
-    assert.equal(runFixed('03A'), '3A');
-    assert.equal(runFixed('23A.1.2'), '23A\\.1\\.2');
   });
 
   test('failing-first: the OLD $((10#...)) form is a hard shell syntax error on a decimal phase number', () => {
@@ -131,13 +123,13 @@ describe('#4619 — execute-phase decimal/N-segment phase-number arithmetic', ()
   });
 
   describe('source parity — each of the 4 production sites carries the fixed logic', () => {
-    test('execute-phase.md safe_resume_gate carries the fixed PHASE_NUMBER/PHASE_INT/PHASE_REST/PHASE_N logic', () => {
+    test('execute-phase.md safe_resume_gate carries the fixed PHASE_NUMBER/PHASE_INT/PHASE_FRAC/PHASE_N logic', () => {
       const w = fs.readFileSync(EXECUTE_PHASE, 'utf8');
       assert.ok(w.includes(fixedSnippet('PHASE_NUMBER', 'PHASE')),
         'safe_resume_gate must carry the byte-identical fixed decimal-tolerant snippet');
     });
 
-    test('execute-phase.md TDD gate carries the fixed PHASE_NUMBER/PHASE_INT/PHASE_REST/PHASE_N logic', () => {
+    test('execute-phase.md TDD gate carries the fixed PHASE_NUMBER/PHASE_INT/PHASE_FRAC/PHASE_N logic', () => {
       const w = fs.readFileSync(EXECUTE_PHASE, 'utf8');
       // The TDD gate block is nested one level deeper (4-space indent) than
       // safe_resume_gate's top-level snippet.

@@ -21,22 +21,19 @@ Read all files referenced by the invoking prompt's execution_context before star
 Parse `$ARGUMENTS` for `--from N`, `--to N`, `--only N`, `--interactive`, `--converge`/`--cross-ai`, reviewer selector flags, and `--max-cycles N`:
 
 ```bash
-# #4748: the phase token is the canonical grammar (src/phase-id.cts) — digits,
-# an optional uppercase letter, any number of dotted segments — so `12A` and
-# `23.1.2` extract whole instead of truncating to `12` / `23.1`.
 FROM_PHASE=""
 if echo "$ARGUMENTS" | grep -qE '\-\-from\s+[0-9]'; then
-  FROM_PHASE=$(echo "$ARGUMENTS" | grep -oE '\-\-from\s+[0-9]+[A-Z]?(\.[0-9]+)*' | awk '{print $2}')
+  FROM_PHASE=$(echo "$ARGUMENTS" | grep -oE '\-\-from\s+[0-9]+\.?[0-9]*' | awk '{print $2}')
 fi
 
 TO_PHASE=""
 if echo "$ARGUMENTS" | grep -qE '\-\-to\s+[0-9]'; then
-  TO_PHASE=$(echo "$ARGUMENTS" | grep -oE '\-\-to\s+[0-9]+[A-Z]?(\.[0-9]+)*' | awk '{print $2}')
+  TO_PHASE=$(echo "$ARGUMENTS" | grep -oE '\-\-to\s+[0-9]+\.?[0-9]*' | awk '{print $2}')
 fi
 
 ONLY_PHASE=""
 if echo "$ARGUMENTS" | grep -qE '\-\-only\s+[0-9]'; then
-  ONLY_PHASE=$(echo "$ARGUMENTS" | grep -oE '\-\-only\s+[0-9]+[A-Z]?(\.[0-9]+)*' | awk '{print $2}')
+  ONLY_PHASE=$(echo "$ARGUMENTS" | grep -oE '\-\-only\s+[0-9]+\.?[0-9]*' | awk '{print $2}')
   FROM_PHASE="$ONLY_PHASE"
 fi
 

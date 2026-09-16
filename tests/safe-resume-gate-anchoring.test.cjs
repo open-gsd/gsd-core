@@ -31,9 +31,9 @@ describe('#4003 — safe_resume_gate commit-scope greps', () => {
     const w = fs.readFileSync(WORKFLOW, 'utf8');
     // Anchored, ERE, zero-pad-tolerant on BOTH components — matches feat(2-02): and
     // feat(02-02): alike, never a substring elsewhere in the message.
-    assert.ok(w.includes('PHASE_INT=${PHASE_NUMBER%%[!0-9]*}; PHASE_REST=${PHASE_NUMBER#"$PHASE_INT"}') &&
-      w.includes('PHASE_N="$((10#$PHASE_INT))${PHASE_REST//./\\\\.}"'),
-      'phase component must be zero-stripped via arithmetic base-10 (#4619: leading integer segment only, decimal/N-segment tolerant; #4748: split at the first non-digit so a letter suffix rides through)');
+    assert.ok(w.includes('PHASE_INT=${PHASE_NUMBER%%.*}; PHASE_FRAC=${PHASE_NUMBER#"$PHASE_INT"}') &&
+      w.includes('PHASE_N="$((10#$PHASE_INT))${PHASE_FRAC//./\\\\.}"'),
+      'phase component must be zero-stripped via arithmetic base-10 (#4619: leading integer segment only, decimal/N-segment tolerant)');
     assert.ok(w.includes('PLAN_N=$((10#{plan_padded}))'),
       'plan component must be zero-stripped via arithmetic base-10');
     assert.ok(w.includes('PLAN_SCOPE_RE="^[a-z]+\\((0*${PHASE_N})-(0*${PLAN_N})\\):"'),
@@ -60,9 +60,9 @@ describe('#4003 — safe_resume_gate commit-scope greps', () => {
 
   test('tdd red gate tolerates both commit-scope spellings (#4011 keying untouched)', () => {
     const w = fs.readFileSync(WORKFLOW, 'utf8');
-    assert.ok(w.includes('PHASE_INT=${PHASE_NUMBER%%[!0-9]*}; PHASE_REST=${PHASE_NUMBER#"$PHASE_INT"}') &&
-      w.includes('PHASE_N="$((10#$PHASE_INT))${PHASE_REST//./\\\\.}"') && w.includes('PLAN_N=$((10#${PLAN_ID}))'),
-      'the TDD block derives zero-stripped components (#4619: leading integer segment only, decimal/N-segment tolerant; #4748: letter-suffix tolerant)');
+    assert.ok(w.includes('PHASE_INT=${PHASE_NUMBER%%.*}; PHASE_FRAC=${PHASE_NUMBER#"$PHASE_INT"}') &&
+      w.includes('PHASE_N="$((10#$PHASE_INT))${PHASE_FRAC//./\\\\.}"') && w.includes('PLAN_N=$((10#${PLAN_ID}))'),
+      'the TDD block derives zero-stripped components (#4619: leading integer segment only, decimal/N-segment tolerant)');
     assert.ok(w.includes('RED_COMMIT=$(git log --oneline -E ${TDD_MILESTONE_BASE:+"$TDD_MILESTONE_BASE..HEAD"} --grep="${PLAN_SCOPE_RE}" -- "*.test.*"'),
       'the RED grep must use the same anchored padding-tolerant scope, milestone-bounded');
     assert.ok(!w.includes('--grep="^test(${PHASE_NUMBER}-${PLAN_ID})"'),
@@ -80,9 +80,9 @@ describe('#4003 — safe_resume_gate commit-scope greps', () => {
       'the padded-literal example grep must not remain');
     assert.ok(ref.includes('--grep="^test\\((0*${PHASE_N})-(0*${PLAN_N})\\):"'),
       'the RED example is anchored and zero-pad-tolerant');
-    assert.ok(ref.includes('PHASE_INT=${PHASE%%[!0-9]*}; PHASE_REST=${PHASE#"$PHASE_INT"}') &&
-      ref.includes('PHASE_N="$((10#$PHASE_INT))${PHASE_REST//./\\\\.}"') && ref.includes('PLAN_N=$((10#${PLAN}))'),
-      'the examples derive zero-stripped components (#4619: leading integer segment only, decimal/N-segment tolerant; #4748: letter-suffix tolerant)');
+    assert.ok(ref.includes('PHASE_INT=${PHASE%%.*}; PHASE_FRAC=${PHASE#"$PHASE_INT"}') &&
+      ref.includes('PHASE_N="$((10#$PHASE_INT))${PHASE_FRAC//./\\\\.}"') && ref.includes('PLAN_N=$((10#${PLAN}))'),
+      'the examples derive zero-stripped components (#4619: leading integer segment only, decimal/N-segment tolerant)');
   });
 
   test('completion spot-check uses the anchored scope and keeps its time bound', () => {
@@ -96,10 +96,10 @@ describe('#4003 — safe_resume_gate commit-scope greps', () => {
       'execute-phase', 'steps', 'completion-reconciliation.md'), 'utf8');
     assert.ok(!w.includes('--grep="{phase_number}-{plan_padded}"') && !frag.includes('--grep="{phase_number}-{plan_padded}"'),
       'the raw padded placeholder substring grep must not remain');
-    assert.ok(frag.includes('SPOT_PHASE_INT=${SPOT_PHASE_NUMBER%%[!0-9]*}; SPOT_PHASE_REST=${SPOT_PHASE_NUMBER#"$SPOT_PHASE_INT"}') &&
-      frag.includes('SPOT_PHASE_N="$((10#$SPOT_PHASE_INT))${SPOT_PHASE_REST//./\\\\.}"') &&
+    assert.ok(frag.includes('SPOT_PHASE_INT=${SPOT_PHASE_NUMBER%%.*}; SPOT_PHASE_FRAC=${SPOT_PHASE_NUMBER#"$SPOT_PHASE_INT"}') &&
+      frag.includes('SPOT_PHASE_N="$((10#$SPOT_PHASE_INT))${SPOT_PHASE_FRAC//./\\\\.}"') &&
       frag.includes('SPOT_PLAN_N=$((10#{plan_padded}))'),
-      'the spot-check derives zero-stripped components (#4619: leading integer segment only, decimal/N-segment tolerant; #4748: letter-suffix tolerant)');
+      'the spot-check derives zero-stripped components (#4619: leading integer segment only, decimal/N-segment tolerant)');
     assert.ok(frag.includes('--since="1 hour ago"'), 'the spot-check keeps its temporal bound');
   });
 

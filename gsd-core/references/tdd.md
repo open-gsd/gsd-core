@@ -297,9 +297,8 @@ After completing a `type: tdd` plan, the executor validates the git log:
 # The commit protocol promises no zero-padding for ${PHASE}/${PLAN} — strip both and
 # match the commit-scope position anchored (#4003). #4619: PHASE may be decimal/
 # N-segment; zero-strip only the leading integer segment, escape the rest.
-# #4748: it may also carry a letter suffix (03A), so split at the first non-digit.
-PHASE_INT=${PHASE%%[!0-9]*}; PHASE_REST=${PHASE#"$PHASE_INT"}
-PHASE_N="$((10#$PHASE_INT))${PHASE_REST//./\\.}"
+PHASE_INT=${PHASE%%.*}; PHASE_FRAC=${PHASE#"$PHASE_INT"}
+PHASE_N="$((10#$PHASE_INT))${PHASE_FRAC//./\\.}"
 PLAN_N=$((10#${PLAN}))
 # Check for RED gate commit
 git log --oneline -E --grep="^test\((0*${PHASE_N})-(0*${PLAN_N})\):" | head -1

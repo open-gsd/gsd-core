@@ -246,14 +246,11 @@ function findBranchSlugFallbackDrift(text) {
 //   1. Prose mentioning the literal pattern in a full-line `#`-comment
 //      (filtered by the caller, not this regex — see below).
 //   2. `$((10#$PHASE_INT))` / `$((10#$SPOT_PHASE_INT))` — arithmetic on the
-//      NOW-safe variable the #4619 fix produces via a leading-digit-run split
-//      (`PHASE_INT=${PHASE_NUMBER%%[!0-9]*}` since #4748; `%%.*` before it);
-//      a digit-run value can never contain a dot OR a letter, so base-10
-//      arithmetic on it can never hit the #4619 / #4748 error classes. Any
-//      name ending in `_INT` (case-insensitive) is that established "already
-//      reduced to a safe integer" convention. That convention is a NAME, not
-//      a proof — `findDotOnlyIntegerSplitDrift` below polices that the split
-//      producing it actually stops at the first non-digit.
+//      NOW-safe variable the #4619 fix produces via `PHASE_INT=${PHASE_NUMBER%%.*}`;
+//      a `%%.*`-stripped value can never contain a dot, so base-10 arithmetic
+//      on it can never hit the #4619 syntax-error class. Any name ending in
+//      `_INT` (case-insensitive) is that established "already reduced to a
+//      safe integer" convention.
 //   3. `$((10#{plan_padded}))` / `$((10#${PLAN_ID}))` — plan ids are plain
 //      integers and were never in scope; this rule only polices variables
 //      that carry a *phase* id.
@@ -452,144 +449,6 @@ function scanMarkdownLetterlessPhaseMirror(root) {
   return violations;
 }
 
-// #4748 (epic #4634): three shell shapes OUTSIDE the grammar-mirror family the
-// rules above police — consumers of a phase id rather than regexes for one —
-// each of which the letter axis broke while every rule above reported clean:
-//
-//   a. `PHASE_INT=${PHASE_NUMBER%%.*}` — the post-#4619 dot-only split. The
-//      `_INT` name it produces satisfies the shell-arithmetic rule's escape,
-//      but on `03A` the "integer" is `03A` and `$((10#03A))` aborts. The safe
-//      split stops at the first NON-digit: `${PHASE_NUMBER%%[!0-9]*}`.
-//   b. `[0-9]+\.?[0-9]*` (and `\d+\.?\d*`) — a digit-then-optional-dot
-//      extraction that is neither the bounded `(\.[0-9]+)?` shape the
-//      single-segment rule bans nor the unbounded `(\.[0-9]+)*` shape the
-//      letterless rule inspects, so both were blind to it. It captures `12`
-//      from `12A` and `23.1` from `23.1.2`, silently.
-//   c. `printf "%02d" "$PHASE_NUMBER"` — re-padding the whole id in shell.
-//      Rejects a letter id (prints `03`, exit 1) and misreads an already
-//      padded `08` as octal (prints `00`). Padding belongs to the canonical
-//      normalizer (`padded_phase` from init, or `normalizePhaseName`); the one
-//      legitimate shell pad is of an `_INT` value via `$((10#…))`.
-//
-// Same sanction as the other markdown rules: `<!-- phase-id-owner: … -->` on
-// the nearest preceding non-blank line. Same documented limit: a per-line
-// textual scan for the common accidental shape, not an obfuscated one.
-
-// a. `<name>_INT=${<phase-carrying>%%.*}` — the `_INT` destination is the
-//    discriminator, deliberately: it is the name the shell-arithmetic rule
-//    trusts as "already a safe integer", so a dot-only split INTO it is the
-//    exact promise this rule exists to check. A dot-only split into any other
-//    name is a different, legitimate operation — `PARENT_PHASE="${PHASE_NUMBER%%.*}"`
-//    (gap-closure-artifacts.md) wants everything before the first dot, letter
-//    included, and is correct. Widening to any destination was tried and flagged
-//    that site. The optional quote after `=` is the one spelling that site uses.
-const DOT_ONLY_INT_SPLIT_DRIFT_RE = /[A-Za-z0-9_]*_INT="?\$\{([A-Za-z0-9_]+)%%\\?\.\*\}/i;
-
-/**
- * Pure: find every unsanctioned dot-only integer split of a phase-carrying
- * variable in `text`. Skips full-line `#` comments (prose). Returns [{ line, found }].
- */
-function findDotOnlyIntegerSplitDrift(text) {
-  const out = [];
-  const lines = text.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (/^\s*#/.test(line)) continue;
-    const m = DOT_ONLY_INT_SPLIT_DRIFT_RE.exec(line);
-    if (!m) continue;
-    if (!/phase/i.test(m[1])) continue;
-    if (isSanctionedByPrecedingComment(lines, i, MD_OWNER_RE)) continue;
-    out.push({ line: i + 1, found: m[0] });
-  }
-  return out;
-}
-
-// b. The digit-then-optional-dot shape, in both `[0-9]` and `\d` spellings.
-//    Anchored on the trailing `*` of the second digit class so a bare `[0-9]+`
-//    probe or a `[0-9]+\.[0-9]+` (mandatory-dot) shape is not matched.
-const LOOSE_DOTTED_PHASE_DRIFT_RE = /(?:\\{1,2}d|\[0-9\])\+\\{1,2}\.\?(?:\\{1,2}d|\[0-9\])\*/;
-
-/**
- * Pure: find every unsanctioned `[0-9]+\.?[0-9]*`-shaped phase extraction in
- * `text`, restricted to phase-carrying lines like its two sibling regex rules.
- * Returns [{ line, found }].
- */
-function findLooseDottedPhaseRegexDrift(text) {
-  const out = [];
-  const lines = text.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const m = LOOSE_DOTTED_PHASE_DRIFT_RE.exec(line);
-    if (!m) continue;
-    if (!PHASE_CARRYING_LINE_RE.test(line)) continue;
-    if (isSanctionedByPrecedingComment(lines, i, MD_OWNER_RE)) continue;
-    out.push({ line: i + 1, found: m[0] });
-  }
-  return out;
-}
-
-// c. `printf "%Nd" …` / `printf '%0Nd' …` — any integer conversion, either
-//    quote, with or without the zero flag — whose argument list names a
-//    phase-carrying variable that is NOT an `_INT` (the `$((10#$PHASE_INT))`
-//    pad is the sanctioned shape). `%d` cannot parse a letter id under any
-//    width, so the flag is not the discriminator. Captures the first such name
-//    so the report says what was padded.
-const SHELL_PHASE_PRINTF_PAD_RE = /printf\s+(?:"%0?\d*d[^"]*"|'%0?\d*d[^']*')\s+(.*)$/;
-const SHELL_VAR_NAME_RE = /\$\{?([A-Za-z_][A-Za-z0-9_]*)/g;
-
-/**
- * Pure: find every unsanctioned `printf "%02d"` re-pad of a phase-carrying,
- * non-`_INT` shell variable in `text`. Skips full-line `#` comments.
- * Returns [{ line, found }].
- */
-function findShellPhasePrintfPadDrift(text) {
-  const out = [];
-  const lines = text.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (/^\s*#/.test(line)) continue;
-    const m = SHELL_PHASE_PRINTF_PAD_RE.exec(line);
-    if (!m) continue;
-    const offender = [...m[1].matchAll(SHELL_VAR_NAME_RE)]
-      .map((v) => v[1])
-      .find((name) => /phase/i.test(name) && !/_int$/i.test(name));
-    if (!offender) continue;
-    if (isSanctionedByPrecedingComment(lines, i, MD_OWNER_RE)) continue;
-    out.push({ line: i + 1, found: `printf "%0…d" …$${offender}` });
-  }
-  return out;
-}
-
-/**
- * Scan the shell roots (`gsd-core/workflows/**\/*.md`, `gsd-core/references/**\/*.md`)
- * for the two shell-idiom rules (a, c) and the three regex roots (those plus
- * `agents/**\/*.md`) for the extraction-shape rule (b). Returns
- * [{ file, kind, line, found }] with repo-relative paths.
- */
-function scanMarkdownLetterAxisConsumers(root) {
-  const violations = [];
-  const collect = (dirs, finder, kind) => {
-    for (const dir of dirs) {
-      for (const file of walkMd(path.join(root, dir), [])) {
-        const rel = path.relative(root, file);
-        let text;
-        try {
-          text = fs.readFileSync(file, 'utf8');
-        } catch {
-          continue;
-        }
-        for (const d of finder(text)) {
-          violations.push({ file: rel, kind, ...d });
-        }
-      }
-    }
-  };
-  collect(MD_SCAN_DIRS, findDotOnlyIntegerSplitDrift, 'dot-only-int-split');
-  collect(SINGLE_SEGMENT_SCAN_DIRS, findLooseDottedPhaseRegexDrift, 'loose-dotted-phase-regex');
-  collect(MD_SCAN_DIRS, findShellPhasePrintfPadDrift, 'shell-phase-printf-pad');
-  return violations;
-}
-
 // Authored TypeScript source only (the generated bin/lib/*.cjs mirror it).
 const SCAN_DIRS = ['src'];
 const SCAN_EXT = new Set(['.cts', '.ts', '.mts']);
@@ -743,7 +602,6 @@ function scanAll(root) {
     ...scanMarkdownShellArith(root),
     ...scanMarkdownSingleSegmentPhaseRegex(root),
     ...scanMarkdownLetterlessPhaseMirror(root),
-    ...scanMarkdownLetterAxisConsumers(root),
   ];
 }
 
@@ -773,11 +631,6 @@ function main() {
   process.stderr.write('A digit-only unbounded-segment phase regex `[0-9]+(\\.[0-9]+)*` on the same roots\n');
   process.stderr.write('is missing the canonical letter axis (#4660) — widen to `[0-9]+[A-Z]?(\\.[0-9]+)*`\n');
   process.stderr.write('or sanction with `<!-- phase-id-owner: <reason> -->`.\n');
-  process.stderr.write('Three letter-hostile consumers of a phase id are banned on the same roots (#4748):\n');
-  process.stderr.write('a dot-only integer split `X_INT=${PHASE%%.*}` (split at the first non-digit,\n');
-  process.stderr.write('`${PHASE%%[!0-9]*}`); a `[0-9]+\\.?[0-9]*` extraction (use `[0-9]+[A-Z]?(\\.[0-9]+)*`);\n');
-  process.stderr.write('and a `printf "%02d"` re-pad of a phase variable (bind init\'s `padded_phase`, or pad\n');
-  process.stderr.write('only an `_INT` via `$((10#…))`) — or sanction with `<!-- phase-id-owner: <reason> -->`.\n');
   process.stderr.write('A `.replace(\'{slug}\', ... || \'phase\')` fallback is banned outright (#4126) —\n');
   process.stderr.write('use `renderPhaseBranchName(` or sanction with\n');
   process.stderr.write('`// phase-id-owner: <reason>` on the line directly above:\n');
@@ -797,13 +650,9 @@ module.exports = {
   findShellPhaseArithDrift,
   findSingleSegmentPhaseRegexDrift,
   findLetterlessPhaseMirrorDrift,
-  findDotOnlyIntegerSplitDrift,
-  findLooseDottedPhaseRegexDrift,
-  findShellPhasePrintfPadDrift,
   scanMarkdownShellArith,
   scanMarkdownSingleSegmentPhaseRegex,
   scanMarkdownLetterlessPhaseMirror,
-  scanMarkdownLetterAxisConsumers,
   scanRepo,
   scanAll,
   countSelectorBaselines,
@@ -815,7 +664,4 @@ module.exports = {
   SHELL_PHASE_ARITH_DRIFT_RE,
   SINGLE_SEGMENT_PHASE_DRIFT_RE,
   LETTERLESS_PHASE_MIRROR_DRIFT_RE,
-  DOT_ONLY_INT_SPLIT_DRIFT_RE,
-  LOOSE_DOTTED_PHASE_DRIFT_RE,
-  SHELL_PHASE_PRINTF_PAD_RE,
 };

@@ -32,7 +32,7 @@ import frontmatterModule = require('./frontmatter.cjs');
 const { extractFrontmatter } = frontmatterModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planDependencyGraphModule = require('./plan-dependency-graph.cjs');
-const { computeHaltPropagation, buildSummaryFileIndex, isSummaryFileHalted } = planDependencyGraphModule;
+const { computeHaltPropagation, buildSummaryFileIndex, isSummaryFileHalted, isSummaryFileBlocked } = planDependencyGraphModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserModule = require('./roadmap-parser.cjs');
 const { getMilestonePhaseFilter } = roadmapParserModule;
@@ -74,8 +74,18 @@ interface PhaseSearchResult {
    * #2830: the runnable-only view — `incomplete_plans` filtered to exclude
    * anything present as a key in `blocked_by`. `incomplete_plans` itself
    * keeps its pre-#2830 meaning ("no matching SUMMARY yet") unchanged.
+   * NOTE (#4628): runnable means "not halted-blocked", NOT DAG-ready — a
+   * runnable plan whose dependencies lack completion evidence is NOT ready.
+   * Consumers dispatch from `ready_plans`.
    */
   runnable_plans: string[];
+  /**
+   * #4628: the DAG-ready view the dispatcher consumes — incomplete plans
+   * whose every resolved dependency has completion evidence (a matching
+   * SUMMARY file) and which are not halted-blocked. Ready-ness is transitive:
+   * a ready plan's own dependencies are complete.
+   */
+  ready_plans: string[];
 }
 
 /**
@@ -224,6 +234,7 @@ function searchPhaseInDir(baseDir: string, relBase: string, normalized: string):
         halted_plans: [],
         blocked_by: {},
         runnable_plans: [],
+        ready_plans: [],
       };
     }
 
@@ -264,12 +275,22 @@ function searchPhaseInDir(baseDir: string, relBase: string, normalized: string):
       plans.map((p, i) => [extractCanonicalPlanId(p).toLowerCase(), planIds[i]]),
     );
 
+    // #4628: raw depends_on per plan, so readiness can fail closed on a
+    // DROPPED edge (a dep token that resolves to nothing carries no evidence)
+    // instead of the resolution silently shrinking the dependency list.
+    const rawDeps = plans.map((p) => parsePlanDependsOn(phaseDir, p));
+    // #4628: completion evidence excludes status:blocked summaries (#3345) —
+    // a failure record is not completion, matching cmdPhasePlanIndex's count.
+    const completionEvidence = buildSummaryFileIndex(
+      summaries.filter((f) => !isSummaryFileBlocked(path.join(phaseDir, f))),
+      extractCanonicalPlanId,
+    );
     const haltNodes = plans.map((p, i) => {
       const planId = planIds[i];
       const canonical = extractCanonicalPlanId(p);
       const summaryFile = summaryFileByPlanId.get(planId) ?? summaryFileByPlanId.get(canonical);
       const halted = summaryFile !== undefined && isSummaryFileHalted(path.join(phaseDir, summaryFile));
-      const resolvedDependsOn = parsePlanDependsOn(phaseDir, p)
+      const resolvedDependsOn = rawDeps[i]
         .map((dep) => {
           const lower = dep.toLowerCase();
           return planIdByLower.get(lower) ?? canonicalToPlanId.get(lower) ?? null;
@@ -283,15 +304,23 @@ function searchPhaseInDir(baseDir: string, relBase: string, normalized: string):
     const incompletePlanSet = new Set(incompletePlans);
     const blockedByFiles: Record<string, string[]> = {};
     const runnablePlans: string[] = [];
+    const readyPlans: string[] = [];
     for (let i = 0; i < plans.length; i++) {
       const p = plans[i];
       if (!incompletePlanSet.has(p)) continue;
       const causes = blockedBy.get(planIds[i]) ?? [];
       if (causes.length > 0) {
         blockedByFiles[p] = causes;
-      } else {
-        runnablePlans.push(p);
+        continue;
       }
+      runnablePlans.push(p);
+      // #4628: DAG-ready on top of runnable — every dependency must have
+      // completion evidence (a matching, non-blocked SUMMARY) and no dropped
+      // edge: both readers of this contract fail closed identically.
+      const depsComplete =
+        rawDeps[i].length === haltNodes[i].resolvedDependsOn.length &&
+        haltNodes[i].resolvedDependsOn.every((dep) => completionEvidence.has(dep));
+      if (depsComplete) readyPlans.push(p);
     }
 
     return {
@@ -315,6 +344,7 @@ function searchPhaseInDir(baseDir: string, relBase: string, normalized: string):
       halted_plans: haltedPlans,
       blocked_by: blockedByFiles,
       runnable_plans: runnablePlans,
+      ready_plans: readyPlans,
     };
   } catch {
     return null;

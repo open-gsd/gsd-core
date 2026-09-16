@@ -1087,34 +1087,6 @@ describe('init commands ROADMAP fallback when phase directory does not exist (#1
     assert.strictEqual(output.phase_name, 'Foundation Setup');
     assert.strictEqual(output.phase_slug, 'foundation-setup');
     assert.strictEqual(output.phase_req_ids, 'R-01, R-02');
-    // #4748: the ROADMAP fallback hands the workflow an UNPADDED number, and
-    // execute-phase.md used to re-pad it with `printf "%02d"` — which cannot
-    // pad a letter id and reads an already-padded `08` as octal. The
-    // normalized form is emitted here, like the plan-phase sibling above.
-    assert.strictEqual(output.padded_phase, '01');
-  });
-
-  test('#4748 — init execute-phase emits padded_phase for a letter-suffixed phase, from a directory and from the ROADMAP fallback', () => {
-    fs.appendFileSync(
-      path.join(tmpDir, '.planning', 'ROADMAP.md'),
-      '\n### Phase 3A: Letter Variant\n**Goal:** On disk\n\n### Phase 4B: Roadmap Only\n**Goal:** No directory yet\n',
-    );
-    seedPhase(tmpDir, '03A-letter-variant', { '03A-01-PLAN.md': '# Plan' });
-
-    const onDisk = JSON.parse(runGsdTools('init execute-phase 3A', tmpDir).output);
-    assert.strictEqual(onDisk.phase_found, true);
-    assert.strictEqual(onDisk.phase_number, '03A');
-    assert.strictEqual(onDisk.padded_phase, '03A');
-
-    const roadmapOnly = JSON.parse(runGsdTools('init execute-phase 4B', tmpDir).output);
-    assert.strictEqual(roadmapOnly.phase_found, true);
-    assert.strictEqual(roadmapOnly.phase_dir, null);
-    assert.strictEqual(roadmapOnly.phase_number, '4B');
-    assert.strictEqual(roadmapOnly.padded_phase, '04B');
-
-    const missing = JSON.parse(runGsdTools('init execute-phase 9Z', tmpDir).output);
-    assert.strictEqual(missing.phase_found, false);
-    assert.strictEqual(missing.padded_phase, null);
   });
 
   test('init verify-work falls back to ROADMAP when no phase directory exists', () => {

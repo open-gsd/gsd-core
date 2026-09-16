@@ -1823,3 +1823,245 @@ describe('lint-phase-enumeration-drift.cjs guard (#3882 rows F1-F3)', () => {
     assert.ok(driftGuard.OWNER_FILES.has(path.join('src', 'phase-id.cts')));
   });
 });
+
+describe('phase-plan-index: DAG-ready view (#4628)', () => {
+  let tmpDir;
+  afterEach(() => { if (tmpDir) { cleanup(tmpDir); tmpDir = null; } });
+
+  // Local copies: the #2830 fixtures live inside the folded block above and
+  // are not in scope here (same idiom, same file — not a third definition of
+  // a shared helper: these are this describe's own fixtures).
+  function writePlan(phaseDir, filename, frontmatterLines, taskLine = '<task>Work</task>') {
+    fs.writeFileSync(
+      path.join(phaseDir, filename),
+      [
+        '---',
+        ...frontmatterLines,
+        '---',
+        '',
+        `# ${filename}`,
+        '',
+        `<objective>${filename}</objective>`,
+        '',
+        taskLine,
+      ].join('\n'),
+    );
+  }
+
+  function writeSummary(phaseDir, filename, status = 'complete') {
+    fs.writeFileSync(
+      path.join(phaseDir, filename),
+      ['---', 'status: ' + status, '---', '', '# Summary', ''].join('\n'),
+    );
+  }
+
+  /**
+   * The issue's exact chain: completed deps feed a wave-7 pair (41/50), whose
+   * incomplete state must hold wave-9 (42) and wave-10 (06) dependents out of
+   * the ready view. Waves are the reporter's declared frontmatter values.
+   */
+  function build4628Fixture(tmpDir) {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '07-chain');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    // completed predecessors of the wave-7 pair
+    writePlan(phaseDir, '07-04-PLAN.md', ['wave: 6', 'objective: Done 04', 'autonomous: true']);
+    writeSummary(phaseDir, '07-04-SUMMARY.md', 'complete');
+    writePlan(phaseDir, '07-05-PLAN.md', ['wave: 6', 'objective: Done 05', 'autonomous: true']);
+    writeSummary(phaseDir, '07-05-SUMMARY.md', 'complete');
+    writePlan(phaseDir, '07-18-PLAN.md', ['wave: 5', 'objective: Done 18', 'autonomous: true']);
+    writeSummary(phaseDir, '07-18-SUMMARY.md', 'complete');
+    writePlan(phaseDir, '07-39-PLAN.md', ['wave: 6', 'objective: Done 39', 'autonomous: true']);
+    writeSummary(phaseDir, '07-39-SUMMARY.md', 'complete');
+    writePlan(phaseDir, '07-40-PLAN.md', ['wave: 6', 'objective: Done 40', 'autonomous: true']);
+    writeSummary(phaseDir, '07-40-SUMMARY.md', 'complete');
+
+    // the wave-7 pair: incomplete but ready (all deps completed)
+    writePlan(phaseDir, '07-41-PLAN.md', [
+      'wave: 7', 'objective: Ready A', 'autonomous: true',
+      'depends_on:', '  - 07-04', '  - 07-40', '  - 07-39',
+    ]);
+    writePlan(phaseDir, '07-50-PLAN.md', [
+      'wave: 7', 'objective: Ready B', 'autonomous: true', 'depends_on:', '  - 07-18',
+    ]);
+
+    // wave-9: depends on incomplete (not halted) 07-41
+    writePlan(phaseDir, '07-42-PLAN.md', [
+      'wave: 9', 'objective: Waiting C', 'autonomous: true',
+      'depends_on:', '  - 07-05', '  - 07-41', '  - 07-39', '  - 07-40',
+    ]);
+
+    // wave-10: depends on incomplete 07-42
+    writePlan(phaseDir, '07-06-PLAN.md', [
+      'wave: 10', 'objective: Waiting D', 'autonomous: true',
+      'depends_on:', '  - 07-40', '  - 07-42', '  - 07-05',
+    ]);
+    return phaseDir;
+  }
+
+  test('locator: the wave-7 pair is ready; the wave-9/10 dependents are runnable but NOT ready', () => {
+    tmpDir = createTempProject('gsd-4628-');
+    build4628Fixture(tmpDir);
+
+    const result = phaseLocator.findPhaseInternal(tmpDir, '7');
+    assert.ok(result, 'expected a result');
+    assert.deepEqual(
+      [...result.ready_plans].sort(),
+      ['07-41-PLAN.md', '07-50-PLAN.md'],
+      'exactly the wave-7 pair is ready — every dependency has completion evidence',
+    );
+    assert.ok(result.runnable_plans.includes('07-42-PLAN.md'),
+      '42 stays runnable (not halted-blocked) — runnable must not be read as DAG-ready');
+    assert.ok(!result.ready_plans.includes('07-42-PLAN.md'),
+      '42 depends on incomplete 07-41 — not ready');
+    assert.ok(!result.ready_plans.includes('07-06-PLAN.md'),
+      '06 depends on incomplete 07-42 — not ready');
+  });
+
+  test('completed plans never appear in ready_plans (ready is a property of incomplete plans)', () => {
+    tmpDir = createTempProject('gsd-4628-');
+    build4628Fixture(tmpDir);
+
+    const result = phaseLocator.findPhaseInternal(tmpDir, '7');
+    assert.ok(!result.ready_plans.includes('07-04-PLAN.md'));
+    assert.ok(!result.ready_plans.includes('07-18-PLAN.md'));
+  });
+
+  test('CLI: per-plan ready/unresolved_dependencies name the missing predecessors', () => {
+    tmpDir = createTempProject('gsd-4628-');
+    build4628Fixture(tmpDir);
+
+    const result = runGsdTools(['phase-plan-index', '7', '--json'], tmpDir);
+    assert.ok(result.success, `phase-plan-index should succeed: ${result.error}`);
+    const data = JSON.parse(result.output);
+
+    assert.deepEqual(
+      [...data.ready_plans].sort(),
+      ['07-41', '07-50'],
+      'ready_plans is the DAG-ready dispatch view',
+    );
+    const p42 = data.plans.find((p) => p.id === '07-42');
+    assert.strictEqual(p42.ready, false);
+    assert.deepEqual(p42.unresolved_dependencies, ['07-41'],
+      'only the actually-incomplete dependency is named');
+    const p06 = data.plans.find((p) => p.id === '07-06');
+    assert.strictEqual(p06.ready, false);
+    assert.deepEqual(p06.unresolved_dependencies, ['07-42']);
+    const p41 = data.plans.find((p) => p.id === '07-41');
+    assert.strictEqual(p41.ready, true);
+    assert.strictEqual(p41.unresolved_dependencies, undefined);
+
+    // a halted predecessor still routes through blocked_by (#2830) AND reads not-ready
+  });
+
+  test('a halted dependency keeps blocked_by semantics AND reads not-ready', () => {
+    tmpDir = createTempProject('gsd-4628-');
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '08-halt');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    writePlan(phaseDir, '08-01-PLAN.md', ['wave: 1', 'objective: Halted', 'autonomous: true']);
+    writeSummary(phaseDir, '08-01-SUMMARY.md', 'halted');
+    writePlan(phaseDir, '08-02-PLAN.md', [
+      'wave: 2', 'objective: Dependent of halt', 'autonomous: true', 'depends_on:', '  - 08-01',
+    ]);
+
+    const result = phaseLocator.findPhaseInternal(tmpDir, '8');
+    assert.deepEqual(result.blocked_by['08-02-PLAN.md'], ['08-01'], '#2830 semantics unchanged');
+    assert.ok(!result.ready_plans.includes('08-02-PLAN.md'), 'halt-blocked is not ready');
+  });
+
+});
+
+describe('phase-plan-index: readiness fail-closed edges (#4628)', () => {
+  let tmpDir;
+  afterEach(() => { if (tmpDir) { cleanup(tmpDir); tmpDir = null; } });
+
+  function writePlan(phaseDir, filename, frontmatterLines, taskLine = '<task>Work</task>') {
+    fs.writeFileSync(
+      path.join(phaseDir, filename),
+      [
+        '---',
+        ...frontmatterLines,
+        '---',
+        '',
+        '# ' + filename,
+        '',
+        '<objective>' + filename + '</objective>',
+        '',
+        taskLine,
+      ].join('\n'),
+    );
+  }
+
+  function writeSummary(phaseDir, filename, status = 'complete') {
+    fs.writeFileSync(
+      path.join(phaseDir, filename),
+      ['---', 'status: ' + status, '---', '', '# Summary', ''].join('\n'),
+    );
+  }
+  test('an unresolved depends_on token carries no evidence — the plan is not ready', () => {
+    tmpDir = createTempProject('gsd-4628-tok-');
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '09-tok');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    writePlan(phaseDir, '09-01-PLAN.md', ['wave: 1', 'objective: Ready by itself', 'autonomous: true']);
+    writePlan(phaseDir, '09-02-PLAN.md', [
+      'wave: 2', 'objective: Typo dependency', 'autonomous: true', 'depends_on:', '  - 99-99',
+    ]);
+
+    const locator = phaseLocator.findPhaseInternal(tmpDir, '9');
+    assert.ok(locator, 'expected a result');
+    assert.ok(locator.ready_plans.includes('09-01-PLAN.md'), '09-01 has no dependencies — ready');
+    assert.ok(!locator.ready_plans.includes('09-02-PLAN.md'),
+      'a dropped edge carries no completion evidence — fail closed');
+
+    const cli = runGsdTools(['phase-plan-index', '9', '--json'], tmpDir);
+    const data = JSON.parse(cli.output);
+    const p02 = data.plans.find((p) => p.id === '09-02');
+    assert.strictEqual(p02.ready, false, 'CLI must fail closed identically to the locator');
+  });
+
+  test('a dependency whose SUMMARY declares status: blocked is NOT completion evidence', () => {
+    tmpDir = createTempProject('gsd-4628-blk-');
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '10-blk');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    writePlan(phaseDir, '10-01-PLAN.md', ['wave: 1', 'objective: Blocked dependency', 'autonomous: true']);
+    writeSummary(phaseDir, '10-01-SUMMARY.md', 'blocked');
+    writePlan(phaseDir, '10-02-PLAN.md', [
+      'wave: 2', 'objective: Dependent of blocked', 'autonomous: true', 'depends_on:', '  - 10-01',
+    ]);
+
+    const locator = phaseLocator.findPhaseInternal(tmpDir, '10');
+    assert.ok(locator, 'expected a result');
+    assert.ok(!locator.ready_plans.includes('10-02-PLAN.md'),
+      'a status:blocked SUMMARY is a failure record, not completion evidence');
+
+    const cli = runGsdTools(['phase-plan-index', '10', '--json'], tmpDir);
+    const data = JSON.parse(cli.output);
+    const p02 = data.plans.find((p) => p.id === '10-02');
+    assert.strictEqual(p02.ready, false, 'CLI and locator must agree: blocked dep = not ready');
+  });
+
+  test('locator and CLI agree on the issue chain (lockstep pin)', () => {
+    tmpDir = createTempProject('gsd-4628-lock-');
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '11-lock');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    // completed
+    writePlan(phaseDir, '11-01-PLAN.md', ['wave: 1', 'objective: Done', 'autonomous: true']);
+    writeSummary(phaseDir, '11-01-SUMMARY.md', 'complete');
+    // incomplete + ready
+    writePlan(phaseDir, '11-02-PLAN.md', ['wave: 2', 'objective: Ready', 'autonomous: true', 'depends_on:', '  - 11-01']);
+    // incomplete + not ready
+    writePlan(phaseDir, '11-03-PLAN.md', ['wave: 3', 'objective: Waiting', 'autonomous: true', 'depends_on:', '  - 11-02']);
+
+    const locator = phaseLocator.findPhaseInternal(tmpDir, '11');
+    const cli = JSON.parse(runGsdTools(['phase-plan-index', '11', '--json'], tmpDir).output);
+    // the locator reports FILENAMES in ready_plans; the CLI reports plan ids —
+    // normalize the filename form before comparing the two views.
+    const locatorIds = locator.ready_plans.map((f) => f.replace(/-PLAN\.md$/, '')).sort();
+    assert.deepEqual(
+      locatorIds,
+      [...cli.ready_plans].sort(),
+      'locator and CLI must never disagree on which plans are ready',
+    );
+    assert.deepEqual([...cli.ready_plans].sort(), ['11-02']);
+  });
+});

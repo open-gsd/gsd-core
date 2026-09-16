@@ -92,7 +92,7 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 AGENT_SKILLS=$(gsd_run query agent-skills gsd-executor)
 ```
 
-Parse JSON for: `executor_model`, `verifier_model`, `commit_docs`, `parallelization`, `branching_strategy`, `branch_name`, `phase_found`, `phase_dir`, `phase_number`, `padded_phase`, `phase_name`, `phase_slug`, `plans`, `incomplete_plans`, `plan_count`, `incomplete_count`, `state_exists`, `roadmap_exists`, `phase_req_ids`, `response_language`, `requirements_path`, `section_manifest`.
+Parse JSON for: `executor_model`, `verifier_model`, `commit_docs`, `parallelization`, `branching_strategy`, `branch_name`, `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `plans`, `incomplete_plans`, `plan_count`, `incomplete_count`, `state_exists`, `roadmap_exists`, `phase_req_ids`, `response_language`, `requirements_path`, `section_manifest`.
 
 `section_manifest` (#2932) gates the three `steps/*.md` reads below: read a step file only when its `id` is in `section_manifest.included` (equivalently, its path is in `section_manifest.read`); skip it — without reading — when its `id` is in `section_manifest.excluded`. When `section_manifest` is `null` (degraded: manifest artifact missing/unreadable), read all three unconditionally — the safe superset.
 
@@ -194,11 +194,8 @@ PHASE_NUMBER="{phase_number}"
 # #4619: {phase_number} may be decimal (01.1) or N-segment (23.1.2) — $((10#...))
 # is a hard shell syntax error on a non-integer, so zero-strip only the LEADING
 # integer segment and keep the rest as an escaped-dot string for the ERE below.
-# #4748: it may also carry a letter suffix (03A, 23A.1.2 — the canonical grammar
-# is digits, optional [A-Z], dotted segments), so split at the first NON-DIGIT,
-# not the first dot: the letter rides along in the rest, unescaped.
-PHASE_INT=${PHASE_NUMBER%%[!0-9]*}; PHASE_REST=${PHASE_NUMBER#"$PHASE_INT"}
-PHASE_N="$((10#$PHASE_INT))${PHASE_REST//./\\.}"
+PHASE_INT=${PHASE_NUMBER%%.*}; PHASE_FRAC=${PHASE_NUMBER#"$PHASE_INT"}
+PHASE_N="$((10#$PHASE_INT))${PHASE_FRAC//./\\.}"
 PLAN_N=$((10#{plan_padded}))
 PLAN_SCOPE_RE="^[a-z]+\((0*${PHASE_N})-(0*${PLAN_N})\):"
 MILESTONE_BASE=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
@@ -220,10 +217,9 @@ if [ "$TDD_MODE" = "true" ]; then
     # #4003: same anchored scope and milestone bound as safe_resume_gate — a padded
     # literal grep hard-halts on a correct unpadded RED commit.
     # #4619: PHASE_NUMBER may be decimal/N-segment; zero-strip only the leading
-    # integer segment, escape the rest for the ERE below. #4748: it may carry a
-    # letter suffix (03A), so the split is at the first non-digit, not the dot.
-    PHASE_INT=${PHASE_NUMBER%%[!0-9]*}; PHASE_REST=${PHASE_NUMBER#"$PHASE_INT"}
-    PHASE_N="$((10#$PHASE_INT))${PHASE_REST//./\\.}"
+    # integer segment, escape the rest for the ERE below.
+    PHASE_INT=${PHASE_NUMBER%%.*}; PHASE_FRAC=${PHASE_NUMBER#"$PHASE_INT"}
+    PHASE_N="$((10#$PHASE_INT))${PHASE_FRAC//./\\.}"
     PLAN_N=$((10#${PLAN_ID}))
     PLAN_SCOPE_RE="^[a-z]+\((0*${PHASE_N})-(0*${PLAN_N})\):"  # TDD gate's own scope check
     TDD_MILESTONE_BASE=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
@@ -333,9 +329,9 @@ Load plan inventory with wave grouping in one call:
 PLAN_INDEX=$(gsd_run query phase-plan-index "${PHASE_NUMBER}")
 ```
 
-Parse JSON for: `phase`, `plans[]` (each with `id`, `wave`, `autonomous`, `objective`, `files_modified`, `task_count`, `has_summary`, `halted`, `blocked_by`), `waves` (map of wave number → plan IDs), `incomplete`, `runnable`, `has_checkpoints`.
+Parse JSON for: `phase`, `plans[]`, `waves`, `incomplete`, `runnable`, `ready_plans`, `has_checkpoints` — full per-plan fields and the #4628 readiness rules: read and follow `execute-phase/steps/ready-wave-gate.md`.
 
-**Filtering:** Skip plans where `has_summary: true`. Additionally skip any plan whose `blocked_by` array is non-empty (#2830) — it depends, directly or transitively, on a plan that halted at a designed stop rather than completing — and report it by name: "Skipping {plan.id}: blocked by halted {blocked_by.join(', ')}". Never silently drop a blocked plan from the report; it must appear by name with its reason, not merely vanish from the executable list. This rule is additive to the `has_summary` skip, not a replacement for it. If `--gaps-only`: also skip non-gap_closure plans. If `WAVE_FILTER` is set: also skip plans whose `wave` does not equal `WAVE_FILTER`.
+**Filtering:** Skip plans where `has_summary: true`. Additionally skip any plan whose `blocked_by` array is non-empty (#2830) — it depends, directly or transitively, on a plan that halted at a designed stop rather than completing — and report it by name: "Skipping {plan.id}: blocked by halted {blocked_by.join(', ')}". Never silently drop a blocked plan from the report; it must appear by name with its reason, not merely vanish from the executable list. This rule is additive to the `has_summary` skip, not a replacement for it. Additionally skip any incomplete plan with `ready: false` (#4628 — see `execute-phase/steps/ready-wave-gate.md`; never dispatch a not-ready plan). If `--gaps-only`: also skip non-gap_closure plans. If `WAVE_FILTER` is set: also skip plans whose `wave` does not equal `WAVE_FILTER`.
 
 **Wave safety check:** If `WAVE_FILTER` is set and there are still incomplete plans in any lower wave that match the current execution mode, STOP and tell the user to finish earlier waves first. Do not let Wave 2+ execute while prerequisite earlier-wave plans remain incomplete.
 
@@ -367,6 +363,7 @@ later conditions once one matches:
    because nothing was left to filter. Report:
    `"Phase stuck: {blocked plan ids} blocked by halted {their blocked_by ids} — resolve the halt, do not resume verification."`
    → exit. Do not fall through to condition 3; this is not a completion state.
+2b. **No filter is active, no blocked-plan skip occurred, and at least one filtered plan was skipped because `ready: false` (#4628)** — the phase is WAITING on incomplete predecessors, not finished: report it by name and exit before any completion state (`execute-phase/steps/ready-wave-gate.md`).
 3. **No filter is active, and every filtered plan was filtered by `has_summary` alone** (no
    blocked-plan skip occurred):
    - **`VERIFY_STATUS == missing`**: the plans are all summarized but the run never reached the
@@ -407,7 +404,7 @@ Report:
 </step>
 
 <step name="cross_ai_delegation">
-**Optional step 2.5 — Delegate plans to an external AI runtime.** Runs after plan discovery, before wave execution. Activates when `--cross-ai` forces all incomplete plans, `--no-cross-ai` disables it entirely, or (default) a plan's `cross_ai: true` frontmatter agrees with the `workflow.cross_ai_execution` config. If no plan is marked, skip to execute_waves; if marked but `workflow.cross_ai_command` is unset, error and tell the user to set it.
+**Optional step 2.5 — Delegate plans to an external AI runtime.** Runs after plan discovery, before wave execution. Activates when `--cross-ai` forces all incomplete plans, `--no-cross-ai` disables it entirely, or (default) a plan's `cross_ai: true` frontmatter agrees with the `workflow.cross_ai_execution` config. **Only `ready` plans are eligible (#4628) — a not-ready plan is never delegated over incomplete predecessors.** If no plan is marked, skip to execute_waves; if marked but `workflow.cross_ai_command` is unset, error and tell the user to set it.
 
 For each marked plan: build a self-contained prompt from the plan's `<objective>`/`<tasks>` plus PROJECT.md context, warn on a dirty working tree, then run the configured command **wrapped in `gsd_run run-with-timeout "${CROSS_AI_TIMEOUT}"` (config `workflow.cross_ai_timeout`, default 300s) — never run it unbounded** — with the prompt piped to **stdin, never shell-interpolated, to prevent injection**. On success (exit 0): validate the captured SUMMARY output is non-empty and structurally valid before writing it as the plan's SUMMARY.md, update STATE/ROADMAP, mark handled. On failure (non-zero exit, or the summary fails that validation): show the error, warn about possible partial edits, and offer **retry** / **skip** (falls back to the normal executor) / **abort**. Successfully handled plans are removed from execute_waves' list; skipped-to-fallback plans remain in it.
 
@@ -1158,9 +1155,7 @@ Skill(skill="gsd-${ref.skill}", args="${PHASE_NUMBER}")
 
 **Check results using deterministic path (not glob):**
 ```bash
-# #4748: bind init's normalized id — `printf "%02d"` cannot pad a letter id
-# (03A → `03`, exit 1) and reads an already-padded `08` as octal (→ `00`).
-PADDED="{padded_phase}"
+PADDED=$(printf "%02d" "${PHASE_NUMBER}")
 REVIEW_FILE="${PHASE_DIR}/${PADDED}-REVIEW.md"
 REVIEW_STATUS=$(sed -n '/^---$/,/^---$/p' "$REVIEW_FILE" | grep "^status:" | head -1 | cut -d: -f2 | tr -d ' ')
 ```
