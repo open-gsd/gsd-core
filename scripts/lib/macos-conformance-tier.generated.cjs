@@ -32,6 +32,7 @@ module.exports = {
   "tests/changeset-parse.test.cjs",
   "tests/check-contract-drift.test.cjs",
   "tests/check-predicate.test.cjs",
+  "tests/check-ui-plan-gate.test.cjs",
   "tests/check-ui-safety-gate.test.cjs",
   "tests/check-update-config-dir.test.cjs",
   "tests/chunked-planning-parallel.test.cjs",
