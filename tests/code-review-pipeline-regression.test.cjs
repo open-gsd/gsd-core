@@ -1577,3 +1577,68 @@ describe('CONS-01..03 — external reviewer evidence consolidation (#4209)', () 
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// #4665 — `--fix` must be able to act on an existing REVIEW.md even when the
+// incremental scope for a FRESH review is empty. check_empty_scope used to
+// exit the entire workflow whenever REVIEW_FILES was empty — before
+// dispatch-fix — so the documented contract ("after review completes (or if
+// REVIEW.md already exists), auto-apply findings found") was unreachable for
+// any phase whose post-review changes are planning artifacts only.
+// ---------------------------------------------------------------------------
+
+describe('#4665 — check_empty_scope --fix recovery onto an existing REVIEW.md', () => {
+  const readWorkflow = () => fs.readFileSync(WORKFLOW_PATH, 'utf8');
+
+  test('check_empty_scope recovers --fix onto an existing REVIEW.md instead of exiting (#4665)', () => {
+    const src = readWorkflow();
+    const stepIdx = src.indexOf('<step name="check_empty_scope">');
+    const nextStepIdx = src.indexOf('<step name="structural_pre_pass">');
+    assert.ok(stepIdx !== -1, 'check_empty_scope step must exist');
+    assert.ok(nextStepIdx > stepIdx, 'structural_pre_pass must follow check_empty_scope');
+    const block = src.slice(stepIdx, nextStepIdx);
+
+    // The recovery computes the phase's REVIEW.md path with the same
+    // expression spawn_reviewer uses.
+    assert.ok(
+      block.includes('REVIEW_PATH="${PHASE_DIR}/${PADDED_PHASE}-REVIEW.md"'),
+      'check_empty_scope must compute REVIEW_PATH exactly as spawn_reviewer does'
+    );
+    // The skip is now guarded: it fires only when --fix is absent OR no
+    // REVIEW.md exists on disk.
+    assert.ok(
+      block.includes('FIX_FLAG') && block.includes('-f "${REVIEW_PATH}"'),
+      'the empty-scope skip must be guarded on FIX_FLAG and the existing REVIEW.md file check'
+    );
+  });
+
+  test('the fix-recovery path routes to dispatch-fix past the fresh-review steps (#4665)', () => {
+    const src = readWorkflow();
+    const stepIdx = src.indexOf('<step name="check_empty_scope">');
+    const nextStepIdx = src.indexOf('<step name="structural_pre_pass">');
+    const block = src.slice(stepIdx, nextStepIdx);
+
+    assert.match(block, /dispatch-fix/, 'the recovery must route to dispatch-fix');
+    assert.match(
+      block, /structural_pre_pass[\s\S]*dispatch_reviewer_lanes[\s\S]*spawn_reviewer[\s\S]*commit_review/,
+      'the recovery must name the fresh-review steps it skips (no reviewer spawn, nothing to commit)'
+    );
+    assert.doesNotMatch(
+      block, /spawn the (reviewer|agent)|gsd-code-reviewer/,
+      'the recovery must not spawn a fresh reviewer'
+    );
+  });
+
+  test('the plain empty-scope skip survives for the non-fix path (#4665)', () => {
+    const src = readWorkflow();
+    const stepIdx = src.indexOf('<step name="check_empty_scope">');
+    const nextStepIdx = src.indexOf('<step name="structural_pre_pass">');
+    const block = src.slice(stepIdx, nextStepIdx);
+
+    assert.ok(
+      block.includes('No source files changed in phase ${PHASE_ARG}. Skipping review.'),
+      'the plain skip text must remain for invocations without --fix or without an existing REVIEW.md'
+    );
+    assert.match(block, /Exit workflow/i, 'the non-recovery path must still end the workflow');
+  });
+});
