@@ -10,7 +10,7 @@
 
 process.env.GSD_TEST_MODE = '1';
 
-const { test } = require('node:test');
+const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -559,4 +559,30 @@ test('#3717: the edge-probe reference documents the text_en field', () => {
     /text_en/,
     'the edge-probe reference `## Inputs` contract must document the optional text_en field and its text_en ?? text fallback',
   );
+});
+
+describe('#4656: the zero-applicable guard is widened to the all-unclassified case', () => {
+  // allow-test-rule: source-text-is-the-product (#4656) — spec-phase.md/ui-phase.md
+  // guard text is the shipped workflow contract.
+  const read = (f) => fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', f), 'utf-8');
+
+  test('spec-phase extracts coverage.unclassified and the guard fires on either condition', () => {
+    const content = read('spec-phase.md');
+    assert.ok(
+      content.includes('coverage.unclassified'),
+      'step 5.5 must extract the unclassified sibling count the #4656 rollup exposes',
+    );
+    assert.ok(
+      content.includes('[ "$UNCLASSIFIED" = "$APPLICABLE" ]'),
+      'the guard must fire when every requirement is unclassified (#4656), not only at applicable:0',
+    );
+  });
+
+  test('ui-phase carries the same widened guard', () => {
+    const content = read('ui-phase.md');
+    assert.ok(
+      content.includes('coverage.unclassified') && content.includes('[ "$UNCLASSIFIED" = "$APPLICABLE" ]'),
+      'ui-phase.md:385 guard must be widened identically (#4656)',
+    );
+  });
 });

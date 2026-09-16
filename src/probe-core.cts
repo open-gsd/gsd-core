@@ -69,6 +69,11 @@ export interface CoverageReport<V extends string = string> {
     applicable: number;
     resolved: number;
     unresolved: number;
+    /** #4656: items in the soft-signal `unclassified` category. Subset of
+     *  `applicable`; a spec where every requirement is unclassified reports
+     *  `unclassified === applicable`, which is the signal the zero-applicable
+     *  guards in spec-phase/ui-phase widen on. */
+    unclassified: number;
     byVerification: Record<string, number>;
   };
 }
@@ -281,6 +286,12 @@ export function analyzeCoverage<V extends string>(
   const unresolved = merged.filter((i) => i.status === 'unresolved').length;
   const applicable = merged.length;
   const resolved = applicable - unresolved; // closed set: resolved-status + dismissed
+  // #4656: the unclassified soft-signal rows count toward `applicable` (the
+  // rollup is count-preserving and `resolved = applicable - unresolved` is a
+  // documented identity), so the count is exposed as a SIBLING field — the
+  // zero-applicable guards can then also fire when EVERY requirement is
+  // unclassified, the case the spec-phase/ui-phase docs promise to catch.
+  const unclassified = merged.filter((i) => i.category === 'unclassified').length;
   const byVerification: Record<string, number> = {};
   for (const tier of validators.verification) byVerification[tier] = 0;
   for (const i of merged) {
@@ -288,7 +299,7 @@ export function analyzeCoverage<V extends string>(
       byVerification[i.verification] = (byVerification[i.verification] ?? 0) + 1;
     }
   }
-  return { items: merged, coverage: { applicable, resolved, unresolved, byVerification } };
+  return { items: merged, coverage: { applicable, resolved, unresolved, unclassified, byVerification } };
 }
 
 /* ------------------------------------------------------------------------- *
