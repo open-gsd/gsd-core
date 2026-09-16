@@ -572,7 +572,21 @@ describe('gsd-secret-read-guard: container --env-file exemption (#4639)', () => 
     block('docker run --env-file conf.env .env.foundation');
   });
 
-  test('negative space: direct reads of the secret stay blocked', () => {
+  test("documented residual: the container command can print the interpolated env", () => {
+    // The exemption's accepted residual (#4639): --env-file feeds the values
+    // into the container's environment, so the container's own command can
+    // print them — the same exposure class as the pre-existing volume-mount
+    // gap. Documented in the hook header's documented-gaps list.
+    allow("docker run --env-file .env alpine printenv");
+    allow("docker compose --env-file=.env config");
+  });
+
+  test("nerdctl and docker-compose (hyphenated) are in the runtime set", () => {
+    allow("nerdctl run --env-file .env.foundation --rm img");
+    allow("docker-compose --env-file .env.foundation up -d");
+  });
+
+  test("negative space: direct reads of the secret stay blocked", () => {
     block('cat .env.foundation');
     block('grep KEY .env.foundation');
     assertBlocked(runHook(read('.env.foundation')), 'Read .env.foundation', { tool: 'Read' });

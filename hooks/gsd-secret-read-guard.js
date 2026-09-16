@@ -86,7 +86,12 @@
 //   on plain commands, without arming the compound-`cd` prompt". Writes to
 //   secret files are out of scope (Write/Edit were never gated). Commands
 //   over 1 MiB are denied outright (`command-too-large`) rather than
-//   scanned partially or waved through.
+//   scanned partially or waved through. (#4639 adds one more, by design: the
+//   value of `--env-file` under a container runtime is exempt, so the
+//   container's own command can print the interpolated environment
+//   (`alpine printenv`, `docker compose config`) — the same exposure class
+//   as the pre-existing volume-mount gap (`-v .env:/s`); the flag's value
+//   itself is a name, never contents.)
 //
 // Triggers on: Read, Grep, Bash tool calls (Kimi: ReadFile, Grep, Shell)
 // Action: BLOCK (decision: 'block', exit 2) — codes secret-read |
