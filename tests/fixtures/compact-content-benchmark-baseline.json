@@ -33,14 +33,14 @@
       "reductionPct": 11.9
     },
     "verify-work": {
-      "offTokens": 12664,
-      "onTokens": 10691,
-      "reductionPct": 15.58
+      "offTokens": 12992,
+      "onTokens": 11019,
+      "reductionPct": 15.19
     }
   },
   "aggregate": {
-    "offTokens": 108302,
-    "onTokens": 91615,
-    "reductionPct": 15.41
+    "offTokens": 108630,
+    "onTokens": 91943,
+    "reductionPct": 15.36
   }
 }
