@@ -129,6 +129,57 @@ describe('verify-work.md — auto-transition after UAT passes with 0 issues', ()
   });
 });
 
+// ── #4663 — the canonicalize flip requires the UAT predicate, not a vacuous zero ──
+// "zero issues" is not pass evidence: blocked rows are not issues by this same
+// workflow's rule, so a 0-passed / 0-issues / N-blocked session must NOT flip
+// VERIFICATION.md to `passed`. The flip now consumes the SAME predicate the
+// phase-close uses (unflagged pre-check; the flagged call stays the later
+// transition gate) — one predicate, one answer.
+describe('verify-work.md — canonicalize flip is gated by the UAT predicate (#4663)', () => {
+  test('canonicalize flips to passed only when the uat-passed predicate reports passed (#4663)', () => {
+    const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
+    const humanNeededIdx = content.indexOf('if [ "$VERIFICATION_STATUS_VALUE" = "human_needed" ]; then');
+    const precheckIdx = content.indexOf('UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}")');
+    const flipGuardIdx = content.indexOf('if [ "$UAT_PRECHECK_PASSED" = "true" ]; then');
+    const setPassedIdx = content.indexOf('gsd_run query frontmatter.set "$VERIFICATION_FILE" --field status --value passed');
+
+    assert.ok(precheckIdx !== -1, 'the canonicalize block must run the uat-passed predicate before flipping');
+    assert.ok(humanNeededIdx !== -1 && precheckIdx > humanNeededIdx, 'the pre-check must sit inside the human_needed branch');
+    assert.ok(content.includes(".passed // false"), 'the verdict must be extracted from the typed report with a false default');
+    assert.ok(flipGuardIdx !== -1 && flipGuardIdx > precheckIdx, 'the flip must be guarded on the extracted passed verdict');
+    assert.ok(setPassedIdx > flipGuardIdx, 'frontmatter.set must sit INSIDE the passed==true guard');
+  });
+
+  test('the canonicalize pre-check runs uat-passed without --require-verification (#4663)', () => {
+    const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
+    const precheckIdx = content.indexOf('UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}")');
+    const flaggedIdx = content.indexOf('PHASE_COMPLETE=$(gsd_run phase uat-passed "{phase}" --require-verification)');
+
+    assert.ok(precheckIdx !== -1, 'the unflagged pre-check must exist');
+    assert.ok(
+      !content.slice(precheckIdx, precheckIdx + 120).includes('--require-verification'),
+      'the pre-check is the unflagged predicate - requiring verification there would evaluate the very report being written'
+    );
+    assert.ok(flaggedIdx !== -1 && flaggedIdx > precheckIdx, 'the flagged predicate remains the later transition gate');
+  });
+
+  test('refused canonicalization says the verification stays human_needed (#4663)', () => {
+    const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
+    assert.match(content, /stays human_needed/, 'the refusal message must say verification stays human_needed');
+    assert.match(content, /blockers \| length/, 'the refusal must carry the blocking-row count');
+  });
+
+  test('an indeterminate pre-check must not flip the report (fail closed) (#4663)', () => {
+    const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
+    // jq -r '.passed // false' with an `|| echo "false"` fallback: empty or
+    // failed gsd_run output must yield no-flip, never a flip.
+    assert.ok(
+      content.includes(`jq -r '.passed // false' 2>/dev/null || echo "false"`),
+      'the extraction must default to false on empty/failed output'
+    );
+  });
+});
+
 
 // ────────────────────────────────────────────────────────────────────────
 // Folded from tests/bug-3381-verify-work-workstream.test.cjs — consolidation epic #1969 (B4 #1973)
