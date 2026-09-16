@@ -201,7 +201,7 @@ When the conversation reaches natural conclusions or the developer signals readi
 |------|-------------|-----------------|
 | Note | `.planning/notes/{slug}.md` | Observations, context, decisions worth remembering |
 | Todo | `.planning/todos/pending/{slug}.md` | Concrete actionable tasks identified |
-| Seed | `.planning/seeds/{slug}.md` | Forward-looking ideas with trigger conditions |
+| Seed | `.planning/seeds/` via the plant-seed workflow (`SEED-…`) | Forward-looking ideas with trigger conditions |
 | Research question | `.planning/research/questions.md` (append) | Open questions that need deeper investigation |
 | Requirement | `REQUIREMENTS.md` (append) | Clear requirements that emerged from discussion |
 | New phase | `ROADMAP.md` (append) | Scope large enough to warrant its own phase |
@@ -244,7 +244,7 @@ For each selected output, write the file:
 
 - **Notes:** Create `.planning/notes/{slug}.md` with frontmatter (title, date, context)
 - **Todos:** Create `.planning/todos/pending/{slug}.md` with frontmatter (title, date, priority)
-- **Seeds:** Create `.planning/seeds/{slug}.md` with frontmatter (title, trigger_condition, planted_date)
+- **Seeds:** Use the existing plant-seed workflow via SlashCommand (`/gsd:plant-seed`) with the idea and its trigger (#4648) — it mints the next `SEED-` id and writes the canonical frontmatter (`status`, `trigger_when`, `planted_during`, `scope`) that `list-seeds`, `audit-open` and `/gsd-new-milestone` read. Do NOT hand-write `.planning/seeds/{slug}.md`: that shape has no `SEED-` prefix, `status`, or `trigger_when`, so every seed reader misses it
 - **Research questions:** Append to `.planning/research/questions.md`
 - **Requirements:** Append to `.planning/REQUIREMENTS.md` with next available REQ ID
 - **Phases:** Use existing `/gsd-add-phase` command via SlashCommand

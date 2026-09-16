@@ -486,3 +486,48 @@ describe('explore research-pass claim disposition (#2229)', () => {
     );
   });
 });
+
+describe('explore seeds: the plant-seed contract (#4648)', () => {
+  const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'explore.md');
+  const workflow = () => fs.readFileSync(workflowPath, 'utf-8');
+
+  test('step 5 delegates seeds to the plant-seed workflow instead of hand-writing a file', () => {
+    const content = workflow();
+    assert.ok(
+      content.includes('/gsd:plant-seed'),
+      'explore step 5 must delegate seeds to the plant-seed workflow so the canonical shape is owned in one place',
+    );
+    assert.ok(
+      !content.includes('trigger_condition'),
+      'the divergent trigger_condition field name must be gone — readers read trigger_when (#4648)',
+    );
+    assert.ok(
+      !content.includes('planted_date'),
+      'the divergent planted_date field name must be gone — plant-seed writes planted/planted_during',
+    );
+    assert.ok(
+      !content.includes('Create `.planning/seeds/{slug}.md`'),
+      'the hand-written seeds/{slug}.md shape must be gone — no reader selects files without the SEED- prefix',
+    );
+  });
+
+  test('the delegation names why: visibility to every seed reader (#4648)', () => {
+    const content = workflow();
+    for (const reader of ['list-seeds', 'audit-open', 'new-milestone']) {
+      assert.ok(
+        content.includes(reader),
+        `the seed instruction must name ${reader} — the readers the divergent shape was invisible to`,
+      );
+    }
+  });
+
+  test('the plant-seed workflow still defines the canonical contract the delegation relies on', () => {
+    const plantSeed = fs.readFileSync(
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'plant-seed.md'),
+      'utf-8',
+    );
+    assert.ok(plantSeed.includes('SEED-'), 'plant-seed mints SEED- ids');
+    assert.match(plantSeed, /status: dormant/, 'plant-seed writes status: dormant');
+    assert.ok(plantSeed.includes('trigger_when'), 'plant-seed writes trigger_when');
+  });
+});
