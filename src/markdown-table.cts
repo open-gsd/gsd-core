@@ -145,6 +145,28 @@ export function isDelimiterRow(cells: string[]): boolean {
  * and non-indented — this parser targets THAT shape, not arbitrary
  * CommonMark (which also allows non-piped rows and up to 3 leading spaces).
  */
+/**
+ * The header scan `parseMarkdownTable` performs, factored out so it has exactly
+ * one implementation (#4736).
+ *
+ * `appendQuickTaskRow` needs the header columns on the path where the PARSE
+ * FAILED: a ragged data row aborts the parse at the row, long after the header
+ * was read successfully, and the failing `Result` carries only a `reason`. Rather
+ * than widen the shared `Result` type or re-scan with a second copy of this loop,
+ * both callers come through here.
+ *
+ * Returns `null` when no header-shaped line exists.
+ */
+export function locateTableHeader(lines: string[]): { headerIdx: number; columns: string[] } | null {
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) {
+      return { headerIdx: i, columns: splitTableRow(lines[i]) };
+    }
+  }
+  return null;
+}
+
 export function parseMarkdownTable(sectionText: string): Result<MarkdownTable> {
   if (typeof sectionText !== 'string' || sectionText.trim() === '') {
     return { ok: false, reason: 'empty or non-string input' };
@@ -152,19 +174,11 @@ export function parseMarkdownTable(sectionText: string): Result<MarkdownTable> {
 
   const lines = sectionText.split(/\r?\n/);
 
-  let headerIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
-    if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) {
-      headerIdx = i;
-      break;
-    }
-  }
-  if (headerIdx === -1) {
+  const header = locateTableHeader(lines);
+  if (!header) {
     return { ok: false, reason: 'no table found' };
   }
-
-  const columns = splitTableRow(lines[headerIdx]);
+  const { headerIdx, columns } = header;
 
   const delimiterLine = lines[headerIdx + 1];
   if (delimiterLine === undefined || !delimiterLine.trim().startsWith('|')) {
@@ -823,6 +837,20 @@ export interface QuickTaskFields {
  * (or immediately after the header/delimiter when the table has zero data
  * rows), preserving any surrounding blank lines/trailing content in the section.
  */
+/**
+ * Is this column set a registered Quick Tasks variant? (#4736 — extracted so the
+ * parse-failure path can ask the same question the success path asks, rather
+ * than approximating it.)
+ */
+function isQuickTasksSchema(columns: string[]): boolean {
+  const match = matchTableSchema(columns);
+  return Boolean(match && match.id === 'QuickTasks');
+}
+
+function unrecognizedQuickTasksReason(columns: string[]): string {
+  return `unrecognized Quick Tasks schema (columns: ${columns.join(' | ')})`;
+}
+
 export function appendQuickTaskRow(
   stateContent: string,
   fields: QuickTaskFields,
@@ -834,16 +862,36 @@ export function appendQuickTaskRow(
 
   const parsed = parseMarkdownTable(section.body);
   if (!parsed.ok) {
-    return { ok: false, reason: `quick-tasks table: ${parsed.reason}` };
+    // #4736: a ragged row must not MASK an unrecognized schema. The parse fails at
+    // the offending data row, but the header was already read, so the schema
+    // question is answerable here and the operator should hear both answers at
+    // once. Reporting only the cell-count error sent people to repair prose in a
+    // historical record file and then hit a second, previously invisible blocker —
+    // observed twice, the second time by someone who had read a write-up warning
+    // about the first. The error message beats the documentation, so the error
+    // message has to be right.
+    // Only speak to the schema when a header/delimiter PAIR was actually
+    // established (Codex review round 1, P3). A parse can fail before any table
+    // exists — a stray `| prose |` line above the real table yields "missing
+    // delimiter row", and its lone cell is not a header. Blaming the schema there
+    // invents a second repair the operator does not need: removing the stray line
+    // exposes a perfectly recognized table.
+    const lines = section.body.split(/\r?\n/);
+    const header = locateTableHeader(lines);
+    const delimiterCells = header ? splitTableRow(lines[header.headerIdx + 1] ?? '') : [];
+    const headerIsReal = Boolean(header)
+      && isDelimiterRow(delimiterCells)
+      && delimiterCells.length === header!.columns.length;
+    const schemaAlso = headerIsReal && !isQuickTasksSchema(header!.columns)
+      ? `; additionally, ${unrecognizedQuickTasksReason(header!.columns)}`
+      : '';
+    return { ok: false, reason: `quick-tasks table: ${parsed.reason}${schemaAlso}` };
   }
 
-  const match = matchTableSchema(parsed.value.columns);
-  if (!match || match.id !== 'QuickTasks') {
-    return {
-      ok: false,
-      reason: `unrecognized Quick Tasks schema (columns: ${parsed.value.columns.join(' | ')})`,
-    };
+  if (!isQuickTasksSchema(parsed.value.columns)) {
+    return { ok: false, reason: unrecognizedQuickTasksReason(parsed.value.columns) };
   }
+  const match = matchTableSchema(parsed.value.columns)!;
 
   const variant = TABLE_SCHEMAS.QuickTasks.find((v) => v.label === match.label);
   const columns = variant ? variant.columns : parsed.value.columns;
