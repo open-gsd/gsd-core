@@ -213,4 +213,70 @@ describe('list-seeds command', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
     assert.strictEqual(result.output.trim(), '1');
   });
+
+  // ── #4378: seed ids are `SEED-YYMMDD-xxx` (date + random base36), not a count ──
+
+  test('new-format id (SEED-YYMMDD-xxx) is canonical, not truncated to its date prefix (#4378)', () => {
+    writeSeed(tmpDir, 'SEED-260914-k3x-my-slug.md',
+      { id: 'SEED-260914-k3x', status: 'dormant', planted: '2026-09-14' },
+      'SEED-260914-k3x: my idea');
+    const output = JSON.parse(runGsdTools('list-seeds', tmpDir).output);
+    assert.strictEqual(output.count, 1);
+    const s = output.seeds[0];
+    // The filename-prefix fallback matches `SEED-<digits>` and would truncate a
+    // new-format id to its date (`SEED-260914`), which is exactly the ambiguity
+    // #4378 files: two same-day seeds then share one id.
+    assert.strictEqual(s.seed_id, 'SEED-260914-k3x');
+    assert.strictEqual(s.slug, 'my-slug');
+  });
+
+  test('same-day seeds with distinct suffixes list as distinct ids (#4378)', () => {
+    // The reported incident: two workstreams plant before either merges and the
+    // counting scheme gives both the same number. With collision-free ids the
+    // reader must surface two DISTINCT ids — one id must never have two answers.
+    writeSeed(tmpDir, 'SEED-260914-k3x-my-slug.md',
+      { id: 'SEED-260914-k3x', status: 'dormant' }, 'SEED-260914-k3x: my idea');
+    writeSeed(tmpDir, 'SEED-260914-b2c-other-slug.md',
+      { id: 'SEED-260914-b2c', status: 'dormant' }, 'SEED-260914-b2c: other idea');
+    const output = JSON.parse(runGsdTools('list-seeds', tmpDir).output);
+    assert.strictEqual(output.count, 2);
+    const ids = output.seeds.map(s => s.seed_id).sort();
+    assert.deepStrictEqual(ids, ['SEED-260914-b2c', 'SEED-260914-k3x']);
+    const slugs = output.seeds.map(s => s.slug).sort();
+    assert.deepStrictEqual(slugs, ['my-slug', 'other-slug']);
+  });
+
+  test('legacy counter id and new-format id coexist (#4378)', () => {
+    writeSeed(tmpDir, 'SEED-081-region.md',
+      { id: 'SEED-081', status: 'dormant' }, 'SEED-081: region idea');
+    writeSeed(tmpDir, 'SEED-260914-k3x-fresh.md',
+      { id: 'SEED-260914-k3x', status: 'dormant' }, 'SEED-260914-k3x: fresh idea');
+    const output = JSON.parse(runGsdTools('list-seeds', tmpDir).output);
+    assert.strictEqual(output.count, 2);
+    const byId = Object.fromEntries(output.seeds.map(s => [s.seed_id, s]));
+    assert.strictEqual(byId['SEED-081'].slug, 'region');
+    assert.strictEqual(byId['SEED-260914-k3x'].slug, 'fresh');
+  });
+
+  test('filename fallback keeps the full new-format id (not just the date prefix) (#4378)', () => {
+    fs.writeFileSync(path.join(seedsDir(tmpDir), 'SEED-260914-k3x-bare.md'),
+      'no frontmatter, no heading\n');
+    const output = JSON.parse(runGsdTools('list-seeds', tmpDir).output);
+    assert.strictEqual(output.count, 1);
+    const s = output.seeds[0];
+    assert.strictEqual(s.seed_id, 'SEED-260914-k3x');
+    assert.strictEqual(s.slug, 'bare');
+  });
+
+  test('uppercase new-format id is canonical end-to-end (#4378)', () => {
+    // The docs display SEED-YYMMDD-XXX and the writer's enrich path is
+    // uppercase-tolerant, so the reader must be too — an uppercase id must
+    // survive verbatim, never be truncated to its date prefix.
+    writeSeed(tmpDir, 'SEED-260914-K3X-Upper.md',
+      { id: 'SEED-260914-K3X', status: 'dormant' }, 'SEED-260914-K3X: upper');
+    const output = JSON.parse(runGsdTools('list-seeds', tmpDir).output);
+    assert.strictEqual(output.count, 1);
+    assert.strictEqual(output.seeds[0].seed_id, 'SEED-260914-K3X');
+    assert.strictEqual(output.seeds[0].slug, 'Upper');
+  });
 });

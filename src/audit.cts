@@ -25,6 +25,11 @@ import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir, quickDirFrom, todosDir } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
+// #4378 (roll-in): scanSeeds publishes the SAME canonical seed identity the
+// list-seeds gate derives — one grammar, two surfaces, no drift. commands.cjs
+// does not require this module, so the edge is acyclic.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import commandsModule = require('./commands.cjs');
 const { extractFrontmatter, spliceFrontmatter } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
@@ -800,6 +805,15 @@ function scanTodos(todosBase: string): ScanOutcome<TodoItem> {
   return { items: results, acknowledged };
 }
 
+// #4378 (roll-in): true when the filename is a well-formed seed name —
+// `SEED-` prefix, `.md` suffix, and no control bytes anywhere in between (the
+// scanSeeds admission filter passes such names through to the identity
+// derivation; a name with an embedded control byte falls back to its raw
+// stem exactly as the pre-canonical code did).
+function seedIdMatchRawName(name: string): boolean {
+  return !/[\u0000-\u001f\u007f]/.test(name);
+}
+
 // ─── scanSeeds ────────────────────────────────────────────────────────────────
 
 /**
@@ -855,16 +869,18 @@ function scanSeeds(planDir: string): ScanOutcome<SeedItem> {
       continue;
     }
 
-    // Extract seed_id from filename or frontmatter. The regex match is
-    // `\w`/hyphen-constrained (safe by construction, like `archived_milestone`)
-    // but the fallback taken when a filename doesn't fully match — e.g. a
-    // `SEED-`-prefixed, `.md`-suffixed name with a control byte SOMEWHERE in
-    // the middle, which still passes the `startsWith`/`endsWith` filter above
-    // — is the raw, unconstrained basename. Both branches are routed through
-    // sanitizeLabel below.
-    const seedIdMatch = entry.name.match(/^(SEED-[\w-]+)\.md$/);
-    const seed_id = seedIdMatch ? seedIdMatch[1] : path.basename(entry.name, '.md');
-    const slug = sanitizeLabel(seed_id.replace(/^SEED-/, ''));
+    // #4378 (roll-in): the canonical identity comes from the SAME derivation
+    // the list-seeds surface uses — frontmatter `id:` when it matches a seed
+    // grammar (legacy `SEED-NNN` or date-suffixed `SEED-YYMMDD-xxx`), else the
+    // filename's id prefix, else the whole stem. The old fused
+    // filename-stem id (e.g. `SEED-081-region` for `SEED-081-region.md`)
+    // disagreed with list-seeds and misfiled deferrals; publishing the
+    // canonical id keeps the two surfaces answering identically. The raw-
+    // basename fallback for control-byte-bearing names is preserved.
+    const stem = path.basename(entry.name, '.md');
+    const derived = commandsModule.deriveSeedIdentity(stem, fm.id);
+    const seed_id = seedIdMatchRawName(entry.name) ? derived.seed_id : stem;
+    const slug = sanitizeLabel(derived.slug);
 
     let title = sanitizeForDisplay(fm.title || '');
     if (!title) {
@@ -1757,8 +1773,44 @@ function cmdAuditAcknowledge(cwd: string, args: string[], raw: boolean): void {
     currentValue = deriveThreadStatus(extractFrontmatter(content, safeFilePath), content);
   } else if (category === 'seeds') {
     if (!seedId) ioError('--seed-id is required for --category seeds');
-    safeFilePath = requireSafePath(path.join(planDir, 'seeds', `${seedId as string}.md`), planDir, 'audit acknowledge target', PathAcceptance.AbsoluteInsideRoot);
-    if (!fs.existsSync(safeFilePath)) ioError(`file not found: seeds/${seedId as string}.md`);
+    // #4378 (roll-in): `--seed-id` arrives as whichever id an audit/list
+    // surface published — the canonical identity (frontmatter `id:` or the
+    // derived prefix, e.g. `SEED-081`, `SEED-260914-k3x`) or, for callers
+    // scripted against pre-canonical output, the full filename stem. Resolve
+    // by scanning the seeds directory and matching each candidate's derived
+    // identity (falling back to the literal stem), then prove the winner with
+    // requireSafePath exactly like every other acknowledge target. The direct
+    // `seeds/<seedId>.md` build stays as the final fallback so a genuine
+    // miss still reports the same "file not found" error as before.
+    const seedsAckDir = path.join(planDir, 'seeds');
+    let ackCandidate: string | null = null;
+    let ackEntries: string[] = [];
+    try {
+      ackEntries = fs.readdirSync(seedsAckDir).filter((n) => n.startsWith('SEED-') && n.endsWith('.md'));
+    } catch {
+      ackEntries = [];
+    }
+    for (const name of ackEntries) {
+      const stem = path.basename(name, '.md');
+      let fmId: unknown;
+      try {
+        const rawAck = platformReadSync(path.join(seedsAckDir, name));
+        if (rawAck !== null) fmId = extractFrontmatter(normalizeLineEndings(rawAck), path.join(seedsAckDir, name)).id;
+      } catch {
+        fmId = undefined;
+      }
+      const { seed_id: derivedAckId } = commandsModule.deriveSeedIdentity(stem, fmId);
+      if (derivedAckId === seedId || stem === seedId) {
+        ackCandidate = name;
+        break;
+      }
+    }
+    if (ackCandidate !== null) {
+      safeFilePath = requireSafePath(path.join(seedsAckDir, ackCandidate), planDir, 'audit acknowledge target', PathAcceptance.AbsoluteInsideRoot);
+    } else {
+      safeFilePath = requireSafePath(path.join(seedsAckDir, `${seedId as string}.md`), planDir, 'audit acknowledge target', PathAcceptance.AbsoluteInsideRoot);
+      ioError(`file not found: seeds/${seedId as string}.md`);
+    }
     const content = fs.readFileSync(safeFilePath, 'utf-8');
     currentValue = ((extractFrontmatter(content, safeFilePath).status as string) || 'dormant').toLowerCase();
   } else if (category === 'todos') {

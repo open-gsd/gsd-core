@@ -1033,7 +1033,7 @@ Run all remaining phases autonomously.
 | `--to N` | Stop after completing a specific phase number |
 | `--only N` | Restrict execution to phase N; lifecycle step is skipped |
 | `--interactive` | Lean context with user input |
-| `--converge` | Route each planning step through `/gsd-plan-review-convergence`; requires `workflow.plan_review_convergence=true` |
+| `--converge` | Route each planning step through `/gsd-plan-review-convergence`; the explicit flag overrides the gate — works even when `workflow.plan_review_convergence` is `false` (the gate `workflow.plan_review_convergence=true` governs standalone `/gsd-plan-review-convergence`); without it, planning runs `gsd-plan-phase` |
 | `--cross-ai` | Alias for `--converge` |
 | Reviewer flags | With `--converge`, pass through every reviewer lane flag: `--claude`, `--codex`, `--coderabbit`, `--opencode`, `--qwen`, `--cursor`, `--agy` / `--antigravity`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--kimi-code`, `--all`, and `--max-cycles N` |
 | `--text` | Replace `AskUserQuestion` prompts with plain numbered lists |
@@ -1939,7 +1939,7 @@ Capture ideas, tasks, notes, and seeds to their appropriate destination. Default
 **Backlog:** 999.x numbering keeps items outside the active phase sequence; phase directories are created immediately so `/gsd-discuss-phase` and `/gsd-plan-phase` work on them.
 **Seeds:** Preserve full WHY, WHEN to surface, and breadcrumbs — consumed by `/gsd-new-milestone`. Audit parked seeds anytime with `--list-seeds` (optionally `--list-seeds dormant`).
 
-**Produces:** `.planning/todos/` (default), note files (--note), ROADMAP.md backlog section (--backlog), `.planning/seeds/SEED-NNN-slug.md` (--seed)
+**Produces:** `.planning/todos/` (default), note files (--note), ROADMAP.md backlog section (--backlog), `.planning/seeds/SEED-YYMMDD-xxx-slug.md` (--seed)
 
 **STATE.md rendering:** each capture (or `--list` action that changes the pending count) refreshes STATE.md's "### Pending Todos" section to one bullet per pending todo, each capped at 240 characters — `- [date] [area] title — [todo file](path) — Needs ...`. The todo-file link is repo-relative (`.planning/todos/pending/...`), so the cap is independent of where the repo is checked out — a long absolute path never consumes the budget or drops the "Needs ..." clause. A todo with no clear next step omits the "Needs ..." clause rather than the bullet. Refresh is fail-safe: a failed or malformed lookup leaves the existing section untouched rather than clearing it.
 

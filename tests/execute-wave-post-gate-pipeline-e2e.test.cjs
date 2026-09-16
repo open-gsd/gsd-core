@@ -29,7 +29,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, installSpawnEnv, withAmbientCapabilityHome } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -61,14 +61,13 @@ function gitAddCommit(dir, message) {
  * When raw=true the tool emits JSON; parsed is set on success.
  */
 function runTool(args, { cwd, env = {} } = {}) {
-  const childEnv = {
-    ...process.env,
+  const childEnv = installSpawnEnv({
     GSD_SESSION_KEY: '',
     CODEX_THREAD_ID: '',
     CLAUDE_SESSION_ID: '',
     CLAUDE_CODE_SSE_PORT: '',
     ...env,
-  };
+  });
   const r = spawnSync(process.execPath, [GSD_TOOLS, ...args], {
     cwd: cwd || os.tmpdir(),
     encoding: 'utf8',
@@ -96,6 +95,18 @@ after(() => { for (const d of tmpDirs) { try { cleanup(d); } catch { /* best-eff
 // ─── Section A: loop render-hooks execute:wave:post ──────────────────────────
 
 describe('A. loop render-hooks execute:wave:post — resolution', () => {
+
+  test('#4485: render-hooks ignores capabilities installed in ambient user locations', (t) => {
+    withAmbientCapabilityHome(t, 'gsd-ambient-wave-post-', 'ambient-wave-post', 'execute:wave:post');
+
+    const dir = makeTmpDir();
+    const result = runTool(['loop', 'render-hooks', 'execute:wave:post', '--raw'], { cwd: dir });
+    assert.strictEqual(result.status, 0, result.stderr);
+    assert.deepStrictEqual(
+      result.parsed.activeHooks.map((hook) => [hook.capId, hook.check?.query]),
+      [['drift', 'verify.schema-drift'], ['drift', 'verify.codebase-drift'], ['ui', 'ui.safety-gate']],
+    );
+  });
 
   test('[happy] full resolution: all 3 gates present with default config', () => {
     const dir = makeTmpDir();

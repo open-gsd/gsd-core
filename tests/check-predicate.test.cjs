@@ -22,13 +22,18 @@ const os = require('os');
 const { evaluatePredicate } = require('../gsd-core/bin/lib/gate-predicate-evaluator.cjs');
 const { buildPredicateDeps, parsePredicateFlags } = require('../gsd-core/bin/lib/check-command-router.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 /**
  * A real, bounded `sh -c` subprocess spawned via the production
  * runBoundedShell dependency -- the describe block's own name is "real
  * bounded sh -c subprocess."
  */
-const BOUNDED_SHELL_PROBE_TIMEOUT_MS = 5000;
+// #4378 (windows conformance lane): the local 5000ms bound timed out on a
+// cold sh.exe spawn under windows-latest shard load while the identical code
+// passed twice earlier the same day -- the probe now uses the class norm
+// (tests/helpers/timeouts.cjs PROBE_TIMEOUT_MS) instead of a local override.
+const BOUNDED_SHELL_PROBE_TIMEOUT_MS = PROBE_TIMEOUT_MS;
 
 /**
  * The same runBoundedShell call as BOUNDED_SHELL_PROBE_TIMEOUT_MS, but

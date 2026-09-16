@@ -542,6 +542,42 @@ Commit the UAT file:
 gsd_run query commit "test({phase_num}): complete UAT - {passed} passed, {issues} issues" --files ".planning/phases/XX-name/{phase_num}-UAT.md"
 ```
 
+**If the UAT file has a non-empty `## Deferred Follow-Ups` section,** those items are currently visible only inside this phase's `*-UAT.md` — offer to promote them to the roadmap backlog so they stay visible at the project level (#4546; reuses the exact entry mechanism `next.md`'s `prior_phase_completeness` step uses for plans-without-summaries):
+
+```
+Deferred follow-ups recorded: {N}
+
+They currently live only in {phase_num}-UAT.md. Promote them to the ROADMAP.md backlog?
+
+  [P] Promote to ROADMAP.md 999.x backlog
+  [K] Keep them in the UAT file only
+
+Choice [K]:
+```
+
+(TEXT_MODE: present this as a plain-text numbered list per the text-mode convention and wait for the typed choice.)
+
+**If the user chooses [P]:**
+1. Compute the next backlog number: `{backlog_number}` = the smallest positive integer not already used by an existing `### Phase 999.{n}` heading in `.planning/ROADMAP.md` — scan the headings rather than counting them, since numbering may be non-contiguous. If `.planning/ROADMAP.md` does not exist, create it containing only a `## Backlog` section and use `1`.
+2. Append to that `## Backlog` section one backlog entry per deferred follow-up (each with its own `999.{backlog_number}` heading, incrementing per entry), with `test`/`idea`/`deferred_at` verbatim from the section's YAML and `{idea}` flattened to a single line (newlines → spaces — a multi-line response would corrupt the single-line entry; this mirrors `next.md`'s use of a slug for the same reason):
+
+```markdown
+### Phase 999.{backlog_number}: Follow-up — Phase {phase_num} deferred UAT follow-up: Test {test} (BACKLOG)
+
+**Goal:** Resolve the UAT checkpoint deferred during Phase {phase_num} verification
+**Source phase:** {phase_num}
+**Deferred at:** {date} during /gsd:verify-work {phase} session completion
+**Follow-ups:**
+- [ ] Test {test}: {idea} (deferred {deferred_at})
+```
+
+3. Commit the deferral record:
+```bash
+gsd_run query commit "docs: defer Phase {phase_num} UAT follow-ups to backlog" --files .planning/ROADMAP.md
+```
+
+**If the user chooses [K]:** continue to the summary unchanged — the deferred items remain in the UAT file's `## Deferred Follow-Ups` section.
+
 Present summary:
 ```
 ## UAT Complete: Phase {phase}

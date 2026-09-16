@@ -609,4 +609,11 @@ function main() {
   return 1;
 }
 
-runMain(main);
+// Only run the lint when invoked directly. `require()`ing this module (the
+// parity test in tests/runtime-name-policy.test.cjs does) must not
+// execute a full repository walk as a side effect.
+if (require.main === module) {
+  runMain(main);
+}
+
+module.exports = { RETIRED_RUNTIMES };

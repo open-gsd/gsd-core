@@ -3973,6 +3973,13 @@ function categorizeItem(rawResult: string, reason?: string, blockedBy?: string):
     return 'blocked';
   }
   if (result === 'skipped') {
+    // #4546 — a deliberately deferred follow-up (the verify-work writer's
+    // "Deferred follow-up:" template, #1921) is its own category, checked
+    // BEFORE the keyword families so e.g. "…on the release build next
+    // version" is not misfiled as build_needed. Must agree with
+    // uat-predicate.cts's DEFERRED_REASON_RE (gate/audit agreement,
+    // #3078-CR), pinned by tests/uat-predicate.test.cjs.
+    if (reason && /^["']?deferred follow-up\b/i.test(reason)) return 'deferred';
     if (reason) {
       if (/server|not running|not available/i.test(reason)) return 'server_blocked';
       if (/simulator|physical|device/i.test(reason)) return 'device_needed';

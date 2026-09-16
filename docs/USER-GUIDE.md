@@ -392,7 +392,7 @@ Seeds are forward-looking ideas with trigger conditions. Unlike backlog items, s
 /gsd-capture --seed "Add real-time collab when WebSocket infra is in place"
 ```
 
-`/gsd-new-milestone` scans all seeds and presents matches. **Storage:** `.planning/seeds/SEED-NNN-slug.md`
+`/gsd-new-milestone` scans all seeds and presents matches. **Storage:** `.planning/seeds/SEED-YYMMDD-xxx-slug.md`
 
 Once you've parked a few, audit them on demand instead of waiting for the next milestone to surface them:
 

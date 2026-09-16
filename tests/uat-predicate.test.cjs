@@ -1654,3 +1654,147 @@ describe('#3078-CR: evaluateUatPassed agrees with the audit surface (parseUatIte
     assert.equal(auditReport.items.length, 0, 'audit: a clean file must have no outstanding rows');
   });
 });
+
+
+// ─── #4546 — deferred follow-up skips are non-blocking ────────────────────────
+
+describe('#4546 — deferred follow-up skips', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+  });
+
+  afterEach(() => {
+    rmDir(tmpDir);
+  });
+
+  function makeDeferredUatItem(n, name, reason) {
+    const lines = [`### ${n}. ${name}`, `expected: ${name} works`];
+    if (reason === null) {
+      lines.push('result: skipped');
+    } else {
+      lines.push('result: skipped', `reason: ${reason}`);
+    }
+    return lines;
+  }
+
+  test('deferred follow-up skip is non-blocking (#4546)', () => {
+    const content = [
+      '---', 'status: complete', '---', '',
+      '### 1. Test A', 'expected: A', 'result: passed', '',
+      ...makeDeferredUatItem(2, 'Test B', '"Deferred follow-up: nice to have, next version"'), '',
+    ].join('\n');
+    writeFile(tmpDir, 'phase-UAT.md', content);
+    const report = evaluateUatPassed(tmpDir);
+    assert.strictEqual(report.passed, true,
+      `a deliberately deferred follow-up must not block: ${JSON.stringify(report.blockers)}`);
+    assert.strictEqual(report.blockers.length, 0);
+    const deferred = report.checks.find(c => c.test === 2);
+    assert.ok(deferred, 'deferred check present');
+    assert.strictEqual(deferred.passing, true, 'deferred skip counts as passing');
+    assert.strictEqual(deferred.deferred, true, 'deferred skip is flagged deferred in the report');
+    const passing = report.checks.find(c => c.test === 1);
+    assert.strictEqual(passing.deferred, false, 'a real pass is not flagged deferred');
+  });
+
+  test('plain skipped without a reason still blocks (#4546 negative space)', () => {
+    const content = [
+      '---', 'status: complete', '---', '',
+      '### 1. Test A', 'expected: A', 'result: passed', '',
+      ...makeDeferredUatItem(2, 'Test B', null), '',
+    ].join('\n');
+    writeFile(tmpDir, 'phase-UAT.md', content);
+    const report = evaluateUatPassed(tmpDir);
+    assert.strictEqual(report.passed, false,
+      'a skipped test with no reason is unresolved and must block');
+    assert.ok(report.blockers.some(b => /test 2/.test(b)),
+      `expected a blocker for test 2, got: ${JSON.stringify(report.blockers)}`);
+  });
+
+  test('skipped with a non-deferral reason still blocks (#4546 negative space)', () => {
+    const content = [
+      '---', 'status: complete', '---', '',
+      '### 1. Test A', 'expected: A', 'result: passed', '',
+      ...makeDeferredUatItem(2, 'Test B', '"waiting on credentials"'), '',
+    ].join('\n');
+    writeFile(tmpDir, 'phase-UAT.md', content);
+    const report = evaluateUatPassed(tmpDir);
+    assert.strictEqual(report.passed, false,
+      'a skipped test whose reason is not a deferral must block');
+  });
+
+  test('deferred reason match is case-insensitive (#4546 boundary)', () => {
+    const content = [
+      '---', 'status: complete', '---', '',
+      ...makeDeferredUatItem(1, 'Test A', '"deferred follow-up: later"'), '',
+    ].join('\n');
+    writeFile(tmpDir, 'phase-UAT.md', content);
+    const report = evaluateUatPassed(tmpDir);
+    assert.strictEqual(report.passed, true,
+      'the matcher anchors on the shipped template text case-insensitively');
+  });
+
+  test('a deferred skip does not mask other blockers (#4546 independence)', () => {
+    const content = [
+      '---', 'status: complete', '---', '',
+      ...makeDeferredUatItem(1, 'Test A', '"Deferred follow-up: later"'), '',
+      '### 2. Test B', 'expected: B', 'result: pending', '',
+      '### 3. Test C', 'expected: C', 'result: blocked', 'blocked_by: server', '',
+      '### 4. Test D', 'expected: D', 'result: issue', 'reported: "crashes"', '',
+    ].join('\n');
+    writeFile(tmpDir, 'phase-UAT.md', content);
+    const report = evaluateUatPassed(tmpDir);
+    assert.strictEqual(report.passed, false,
+      'deferred skip must not mask pending/blocked/issue blockers');
+    assert.ok(report.blockers.some(b => /test 2/.test(b)), 'pending still blocks');
+    assert.ok(report.blockers.some(b => /test 3/.test(b)), 'blocked still blocks');
+    assert.ok(report.blockers.some(b => /test 4/.test(b)), 'issue still blocks');
+    assert.ok(!report.blockers.some(b => /test 1/.test(b)),
+      `the deferred item must not appear among blockers: ${JSON.stringify(report.blockers)}`);
+  });
+
+  test('property: deferred-skip acceptance drives the real gate over arbitrary result/reason pairs (#4546)', () => {
+    // Gate-driven: expectations are derived from the INPUT (the spec sentence
+    // in #4546), then asserted against evaluateUatPassed's report — the
+    // property never restates the implementation's regex. The generated
+    // classes include the no-result-line shape (the parser's 'missing'
+    // branch) and reasonless skips.
+    const deferredRe = /^["']?deferred follow-up\b/i;
+    fc.assert(
+      fc.property(
+        fc.constantFrom('passed', 'pass', 'skipped', 'pending', 'blocked', 'issue', 'missing'),
+        fc.option(fc.stringMatching(/^["']?[a-z ]{0,30}$/), { nil: undefined }),
+        (result, reason) => {
+          const itemLines = [`### 1. Test X`, 'expected: X works'];
+          if (result !== 'missing') {
+            itemLines.push(`result: ${result}`);
+            if (reason !== undefined) itemLines.push(`reason: ${reason}`);
+          }
+          const content = [
+            '---', 'status: complete', '---', '',
+            ...itemLines, '',
+          ].join('\n');
+          fs.writeFileSync(path.join(tmpDir, 'phase-UAT.md'), content, 'utf-8');
+          const report = evaluateUatPassed(tmpDir);
+          assert.strictEqual(report.checks.length, 1);
+          const check = report.checks[0];
+
+          const isDeferral = result === 'skipped' &&
+            typeof reason === 'string' && deferredRe.test(reason);
+          const specPassing = result === 'passed' || result === 'pass' || isDeferral;
+
+          assert.strictEqual(check.result, result === 'missing' ? 'missing' : result);
+          assert.strictEqual(check.passing, specPassing,
+            `result=${result} reason=${JSON.stringify(reason)}: gate must ${specPassing ? 'pass' : 'block'}`);
+          assert.strictEqual(check.deferred, isDeferral,
+            `result=${result} reason=${JSON.stringify(reason)}: deferred flag`);
+          assert.strictEqual(report.passed, specPassing,
+            'a single-item file passes exactly when the item passes');
+          assert.deepStrictEqual(report.blockers, specPassing ? [] : [report.blockers[0]]);
+        }
+      ),
+      { numRuns: 120, seed: 4546 }
+    );
+  });
+});

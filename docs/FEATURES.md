@@ -1464,7 +1464,7 @@ That third-party dependence is a real trade-off, held honestly rather than paper
 | Artifact | Description |
 |----------|-------------|
 | `.planning/phases/999.x-slug/` | Backlog item directory |
-| `.planning/seeds/SEED-NNN-slug.md` | Seed with trigger conditions |
+| `.planning/seeds/SEED-YYMMDD-xxx-slug.md` | Seed with trigger conditions |
 
 ---
 

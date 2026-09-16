@@ -37,6 +37,13 @@ interface UatCheckItem {
   name: string;
   result: string;
   passing: boolean;
+  /**
+   * #4546: true when this item is a `skipped` whose reason matches the
+   * verify-work writer's "Deferred follow-up:" template — a deliberately
+   * deferred follow-up (#1921) counts as passing and never blocks. Additive
+   * report field: consumers read `passed`/`blockers`.
+   */
+  deferred: boolean;
 }
 
 interface UatPassedReport {
@@ -83,6 +90,22 @@ const BLOCKING_VERIFICATION_FM_STATUSES = new Set([
 
 // UAT test-item `result` values that count as passing
 const PASSING_RESULTS = new Set(['passed', 'pass']);
+// #4546 — a `skipped` test-item whose reason carries the verify-work writer's
+// deferral template prefix ("Deferred follow-up: …", #1921) is a deliberately
+// deferred follow-up: non-blocking. Quote-tolerant (the writer wraps the value
+// in double quotes) and case-insensitive (human-edited files vary). Anything
+// else — a reasonless skip, a non-deferral reason — still blocks. PARITY: this
+// matcher and the writer template in gsd-core/workflows/verify-work.md
+// (process_response) are two halves of one contract, pinned together by
+// tests/verify-work-deferred-promotion.test.cjs.
+const DEFERRED_REASON_RE = /^["']?deferred follow-up\b/i;
+// Trust note (#4546 review): the reason line is user-authored state — an
+// author could equally write `result: passed` — so this prefix is an
+// AUTHORING contract with the verify-work writer, not a security boundary.
+// A hand-written deferral that skips the UAT file's ## Deferred Follow-Ups
+// section also bypasses the complete_session promotion offer; the section is
+// the durable project-level record. Variant spellings that do not match
+// ("Deferred follow-ups:", "followup") block — fail-closed by design.
 
 // ─── stripFalsePositiveContexts ───────────────────────────────────────────────
 
@@ -156,8 +179,8 @@ function analyzeMarkdown(raw: string): { unterminatedFence: boolean; unterminate
  * - Support bracketed [passed] and bare passed (#2273).
  * - Returns ALL items (both passing and non-passing).
  */
-function parseUatResultItems(cleanContent: string): Array<{ test: number; name: string; result: string }> {
-  const items: Array<{ test: number; name: string; result: string }> = [];
+function parseUatResultItems(cleanContent: string): Array<{ test: number; name: string; result: string; reason: string }> {
+  const items: Array<{ test: number; name: string; result: string; reason: string }> = [];
 
   // Find all ### N. Name headings.
   // #3078-CR MEDIUM (security review follow-up): STRUCTURE and ATTRIBUTION
@@ -212,16 +235,28 @@ function parseUatResultItems(cleanContent: string): Array<{ test: number; name: 
     // ambiguity counting, matching src/uat.cts's contract.
     // Uses [ \t]* (not \s*) so the captured value must sit on the SAME line as result:.
     // A result: key with the value on a subsequent line yields no match → 'missing' (blocker).
+    // #4546: the `reason:` line is captured with the same frame and FIRST-match
+    // rule — it is the deferral signal the evaluator needs (a `skipped` item
+    // whose reason is the verify-work writer's "Deferred follow-up:" template
+    // is non-blocking). Quoted values are captured with their quotes so the
+    // evaluator's matcher can tolerate them exactly as written.
     const RESULT_LINE_RE = /^result:[ \t]*\[?([\w-]+)\]?/i;
     const resultMatch = blockContent
       .split('\n')
       .map((line) => line.match(RESULT_LINE_RE))
       .find((m): m is RegExpMatchArray => m !== null) ?? null;
+    const REASON_LINE_RE = /^reason:[ \t]*(.*)$/i;
+    const reasonMatch = blockContent
+      .split('\n')
+      .map((line) => line.match(REASON_LINE_RE))
+      .find((m): m is RegExpMatchArray => m !== null) ?? null;
+    const reason = reasonMatch ? reasonMatch[1].trim() : '';
     if (resultMatch) {
       items.push({
         test: h.test,
         name: h.name,
         result: resultMatch[1].toLowerCase(),
+        reason,
       });
     } else {
       // No column-0 result line → emit 'missing' (a non-passing state)
@@ -229,6 +264,7 @@ function parseUatResultItems(cleanContent: string): Array<{ test: number; name: 
         test: h.test,
         name: h.name,
         result: 'missing',
+        reason,
       });
     }
   }
@@ -333,13 +369,20 @@ function evaluateUatPassed(
     const items = parseUatResultItems(cleanContent);
 
     for (const item of items) {
-      const passing = PASSING_RESULTS.has(item.result);
+      // #4546: a `skipped` item whose reason matches the verify-work writer's
+      // "Deferred follow-up:" template is a deliberately deferred follow-up
+      // (#1921) — non-blocking. Quote-tolerant because the writer emits the
+      // reason WITH its wrapping quotes. Everything else — pending, blocked,
+      // issue, missing, and a plain or non-deferral skipped — still blocks.
+      const deferred = item.result === 'skipped' && DEFERRED_REASON_RE.test(item.reason);
+      const passing = PASSING_RESULTS.has(item.result) || deferred;
       checks.push({
         file,
         test: item.test,
         name: item.name,
         result: item.result,
         passing,
+        deferred,
       });
       if (!passing) {
         blockers.push(`${file}: test ${item.test} (${item.result})`);

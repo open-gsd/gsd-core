@@ -100,7 +100,7 @@ const { computeHaltPropagation, buildSummaryFileIndex, isSummaryFileHalted, isSu
 const {
   planningDir, withPlanningLock, listAvailableWorkstreams,
   peekActiveWorkstream, diagnoseUnresolvedActiveWorkstream, describeUnresolvedWorkstreamReason,
-  resolvePhaseIdConvention,
+  resolveEnvWorkstream, resolvePhaseIdConvention,
 } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- milestone-lock.cjs is an export= CommonJS module
 import milestoneLockMod = require('./milestone-lock.cjs');
@@ -3358,7 +3358,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   // non-mutating peek so an unresolvable pointer isn't self-healed (cleared)
   // here and then found "absent" by diagnoseUnresolvedActiveWorkstream below,
   // which would misreport a present-but-bad marker as no marker at all.
-  const resolvedWorkstream = process.env['GSD_WORKSTREAM'] || peekActiveWorkstream(cwd);
+  const resolvedWorkstream = resolveEnvWorkstream() ?? peekActiveWorkstream(cwd);
   if (availableWorkstreams.length > 0 && !resolvedWorkstream) {
     // #3579: getActiveWorkstream now inherits a pointer-less session's read
     // from the shared .planning/active-workstream marker, so reaching this

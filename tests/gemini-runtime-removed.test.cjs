@@ -164,10 +164,23 @@ describe('#1928 gemini removed from every runtime-name-policy surface', () => {
     }
   });
 
-  test('gemini falls back on label / config-fragment / new-project surfaces', () => {
-    assert.strictEqual(getRuntimeLabel('gemini'), 'Claude Code', 'label table entry removed → fail-closed default');
-    assert.strictEqual(getGlobalConfigHomeFragment('gemini'), "'.claude'", 'config-home fragment removed → default');
-    assert.strictEqual(getRuntimeNewProjectCommand('gemini'), '/gsd-new-project', 'new-project override removed → default');
+  // #4709 AC#1 inverted this assertion: gemini used to silently fall back to
+  // Claude Code's label/config-fragment defaults (the defect this test used to
+  // pin); it now REFUSES on those two surfaces with RetiredRuntimeError
+  // instead. getRuntimeNewProjectCommand is NOT one of the functions #4709
+  // changed, so it still falls back — kept un-inverted and asserted as before.
+  test('gemini refuses on label / config-fragment surfaces; new-project still falls back (unchanged by #4709)', () => {
+    assert.throws(
+      () => getRuntimeLabel('gemini'),
+      /retired by #1928/,
+      'label table entry removed → must now refuse, not fail-closed-default',
+    );
+    assert.throws(
+      () => getGlobalConfigHomeFragment('gemini'),
+      /retired by #1928/,
+      'config-home fragment removed → must now refuse, not fail-closed-default',
+    );
+    assert.strictEqual(getRuntimeNewProjectCommand('gemini'), '/gsd-new-project', 'new-project override removed → default (unchanged by #4709)');
   });
 
   test('runtimeFlags has no isGemini and covers exactly the non-claude, CLI-installable registry runtimes (count-agnostic)', () => {
@@ -187,8 +200,11 @@ describe('#1928 gemini removed from every runtime-name-policy surface', () => {
       'flag count must equal the non-claude, CLI-installable registry runtime count');
   });
 
-  test('gemini no longer maps to GEMINI.md (defaults to AGENTS.md)', () => {
-    assert.strictEqual(getProjectInstructionFile('gemini'), 'AGENTS.md');
+  // #4709 AC#1 inverted this assertion: gemini used to silently default to
+  // AGENTS.md (the defect this test used to pin); getProjectInstructionFile
+  // now refuses it outright with RetiredRuntimeError instead.
+  test('gemini no longer maps to GEMINI.md — and no longer falls back to AGENTS.md either; it refuses', () => {
+    assert.throws(() => getProjectInstructionFile('gemini'), /retired by #1928/);
   });
 });
 

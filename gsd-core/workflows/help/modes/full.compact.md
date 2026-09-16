@@ -184,7 +184,7 @@ Usage: `/gsd:capture --note promote 3`
 
 Usage: `/gsd:capture --list api`
 
-**`/gsd:capture --list-seeds [status]`** — Read-only listing of captured seeds (ID, status, scope, trigger, title); optional status filter. Enrich via `/gsd:capture --seed --enrich SEED-NNN`.
+**`/gsd:capture --list-seeds [status]`** — Read-only listing of captured seeds (ID, status, scope, trigger, title); optional status filter. Enrich via `/gsd:capture --seed --enrich SEED-YYMMDD-XXX`.
 
 Usage: `/gsd:capture --list-seeds dormant`
 

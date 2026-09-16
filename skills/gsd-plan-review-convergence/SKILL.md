@@ -55,7 +55,8 @@ Phase number: extracted from $ARGUMENTS (required)
 - `--max-cycles N` — Maximum replan→review cycles (default: 3)
 
 **Feature gate:** This command requires `workflow.plan_review_convergence=true`. Enable with:
-`gsd config-set workflow.plan_review_convergence true`
+`gsd config-set workflow.plan_review_convergence true`. A dispatch carrying `--override-gate` —
+how `/gsd-autonomous --converge` invokes this workflow (#4600) — bypasses the gate for that run.
 </context>
 
 <process>
