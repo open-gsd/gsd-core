@@ -12354,6 +12354,41 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       manifestFiles = null;
     }
     if (manifestFiles !== null) {
+      // #4667: codex-installed artifacts must not keep `@~/.claude/gsd-core/…`
+      // include references — the `@` form resolves into the CLAUDE install
+      // (wrong copy on dual-runtime machines at divergent versions, nothing at
+      // all on codex-only ones; #570 cause 2 residue). Every target ships in
+      // the codex install, so rewriting the `@~/` include form to the codex
+      // root is mechanical and correct. This runs after ALL emitters (several
+      // bypass the per-runtime converters — that is how the leak survived the
+      // per-emitter fixes), and before the scan below, which stays as the
+      // verification backstop. The `_GSD_RUNTIME_ROOT`/`$PREFERRED_CONFIG_DIR`
+      // fallback chains and prose `.claude` mentions carry no `@~/` prefix and
+      // are deliberately untouched, as is CHANGELOG.md.
+      if (runtime === 'codex') {
+        for (const relPath of manifestFiles) {
+          const fileName = path.basename(relPath);
+          if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
+          if (fileName === 'CHANGELOG.md') continue;
+          const rewritePath = path.join(targetDir, relPath);
+          let rewriteContent;
+          try {
+            rewriteContent = fs.readFileSync(rewritePath, 'utf8');
+          } catch (rewriteErr) {
+            continue; // inaccessible or missing — the scan below reports or skips it
+          }
+          const rewritten = rewriteContent
+            .split('@~/.claude/gsd-core/').join('@~/.codex/gsd-core/')
+            .split('@$HOME/.claude/gsd-core/').join('@$HOME/.codex/gsd-core/');
+          if (rewritten !== rewriteContent) {
+            try {
+              fs.writeFileSync(rewritePath, rewritten);
+            } catch (writeErr) {
+              continue; // never fail the install over the rewrite; the scan still warns
+            }
+          }
+        }
+      }
       for (const relPath of manifestFiles) {
         const fileName = path.basename(relPath);
         if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
