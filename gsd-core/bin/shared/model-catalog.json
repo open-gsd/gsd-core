@@ -104,11 +104,6 @@
       "sonnet": { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-sonnet-5" }, "high": { "model": "claude-opus-4-8" } },
       "haiku":  { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-haiku-4-5" }, "high": { "model": "claude-sonnet-5" } }
     },
-    "anthropic-fable": {
-      "opus":   { "low": { "model": "claude-opus-4-5" }, "medium": { "model": "claude-opus-4-8" }, "high": { "model": "claude-fable-5" } },
-      "sonnet": { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-sonnet-5" }, "high": { "model": "claude-fable-5" } },
-      "haiku":  { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-haiku-4-5" }, "high": { "model": "claude-sonnet-5" } }
-    },
     "openai": {
       "opus":   { "low": { "model": "gpt-5.6-terra", "reasoning_effort": "medium" }, "medium": { "model": "gpt-5.6-sol", "reasoning_effort": "high" }, "high": { "model": "gpt-5.6-sol", "reasoning_effort": "xhigh" } },
       "sonnet": { "low": { "model": "gpt-5.6-luna", "reasoning_effort": "low" }, "medium": { "model": "gpt-5.6-terra", "reasoning_effort": "medium" }, "high": { "model": "gpt-5.6-sol", "reasoning_effort": "medium" } },

@@ -3245,7 +3245,7 @@ describe('#443 injectEffortFrontmatter: newline-agnostic YAML frontmatter inject
  *
  *   {
  *     "model_policy": {
- *       "provider": "anthropic-fable",
+ *       "provider": "anthropic",
  *       "budget": "high",
  *       "runtime_tiers": {
  *         "opencode": {
@@ -3372,18 +3372,11 @@ describe('#49 resolveModelPolicy Sub-path B: provider presets', () => {
       `expected anthropic sonnet/high to resolve to claude-opus-4-8, got: ${result}`);
   });
 
-  test('known provider "anthropic-fable" + tier "opus" + budget "high" resolves to Claude Fable 5', () => {
+  test('unknown provider "anthropic-fable" (removed preset) returns null — falls through', () => {
     const policy = { provider: 'anthropic-fable', budget: 'high' };
     const result = resolveModelPolicy(policy, 'opus');
-    assert.strictEqual(result, 'claude-fable-5',
-      `expected anthropic-fable opus/high to resolve to claude-fable-5, got: ${result}`);
-  });
-
-  test('known provider "anthropic-fable" + tier "haiku" + budget "high" keeps low tier on Sonnet', () => {
-    const policy = { provider: 'anthropic-fable', budget: 'high' };
-    const result = resolveModelPolicy(policy, 'haiku');
-    assert.strictEqual(result, 'claude-sonnet-5',
-      `expected anthropic-fable haiku/high to resolve to claude-sonnet-5, got: ${result}`);
+    assert.strictEqual(result, null,
+      `expected anthropic-fable (no longer a known provider) to fall through to null, got: ${result}`);
   });
 
   test('known provider "openai" + tier "sonnet" + budget "low" returns model with reasoning_effort from preset', () => {
@@ -3568,7 +3561,7 @@ describe('#49 resolveModelInternal: model_policy in the resolution chain', () =>
       'anthropic/opus/high must resolve to claude-opus-4-8');
   });
 
-  test('model_policy with provider:"anthropic-fable" + budget:"high" resolves to Fable preset model', () => {
+  test('model_policy with provider:"anthropic-fable" (removed preset) falls through to profile resolution', () => {
     writeConfig(projectDir, {
       runtime: 'opencode',
       model_profile: 'quality',
@@ -3578,8 +3571,8 @@ describe('#49 resolveModelInternal: model_policy in the resolution chain', () =>
       },
     });
     const result = resolveModelInternal(projectDir, 'gsd-planner');
-    assert.strictEqual(result, 'claude-fable-5',
-      'anthropic-fable/opus/high must resolve to claude-fable-5');
+    assert.notStrictEqual(result, 'claude-fable-5',
+      'anthropic-fable is no longer a known provider and must never resolve to claude-fable-5');
   });
 
   test('model_policy is skipped when runtime is absent', () => {
@@ -3617,34 +3610,22 @@ describe('#49 resolveModelInternal: model_policy in the resolution chain', () =>
       'runtime_tiers must not fire when config.runtime is absent');
   });
 
-  test('model_policy provider preset resolves to a Claude alias on runtime:"claude" (#1133)', () => {
+  test('anthropic-fable provider preset never resolves to alias "fable" on runtime:"claude" (removed #49 preset)', () => {
     writeConfig(projectDir, {
       runtime: 'claude',
       model_profile: 'balanced',
       model_policy: { provider: 'anthropic-fable', budget: 'high' },
     });
-    // gsd-planner -> opus tier; anthropic-fable opus/high = claude-fable-5 -> alias "fable"
-    assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'fable');
+    // anthropic-fable is no longer a known provider; must never resolve to the fable alias
+    assert.notStrictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'fable');
   });
 
-  test('model_policy works with implicit claude runtime (no runtime key) (#1133)', () => {
+  test('anthropic-fable provider preset never resolves to alias "fable" with implicit claude runtime (removed #49 preset)', () => {
     writeConfig(projectDir, {
       model_profile: 'balanced',
       model_policy: { provider: 'anthropic-fable', budget: 'high' },
     });
-    // gsd-executor -> sonnet tier; anthropic-fable sonnet/high = claude-fable-5 -> "fable"
-    assert.strictEqual(resolveModelInternal(projectDir, 'gsd-executor'), 'fable');
-  });
-
-  test('unmappable model_policy ID warns and falls back to the tier alias on claude (#1133)', () => {
-    resetRuntimeWarningCaches();
-    writeConfig(projectDir, {
-      runtime: 'claude',
-      model_profile: 'balanced',
-      model_policy: { provider: 'anthropic-fable', budget: 'low' },
-    });
-    // gsd-planner -> opus tier; anthropic-fable opus/low = claude-opus-4-5 (no alias) -> fall back to "opus"
-    assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'opus');
+    assert.notStrictEqual(resolveModelInternal(projectDir, 'gsd-executor'), 'fable');
   });
 
   test('model_policy.runtime_tiers applies on runtime:"claude", mapped to alias (#1133)', () => {
@@ -3676,13 +3657,13 @@ describe('#49 resolveModelInternal: model_policy in the resolution chain', () =>
     assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'opus');
   });
 
-  test('model_policy still returns full IDs on non-claude runtimes (#1133 regression)', () => {
+  test('anthropic-fable provider preset never resolves to claude-fable-5 on non-claude runtimes (removed #49 preset)', () => {
     writeConfig(projectDir, {
       runtime: 'opencode',
       model_profile: 'balanced',
       model_policy: { provider: 'anthropic-fable', budget: 'high' },
     });
-    assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'claude-fable-5');
+    assert.notStrictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'claude-fable-5');
   });
 
   test('model_policy is skipped when tier:"inherit"', () => {
@@ -3973,8 +3954,8 @@ describe('#49 KNOWN_PROVIDERS exports from model-catalog.cjs', () => {
     // 'anthropic' must be in the set since it is a required provider preset
     assert.ok(providers.includes('anthropic'),
       'KNOWN_PROVIDERS must include "anthropic"');
-    assert.ok(providers.includes('anthropic-fable'),
-      'KNOWN_PROVIDERS must include "anthropic-fable"');
+    assert.ok(!providers.includes('anthropic-fable'),
+      'KNOWN_PROVIDERS must NOT include "anthropic-fable" (removed provider option)');
     // 'generic' is a special fallback, not a real provider — it must NOT be in KNOWN_PROVIDERS
     // (KNOWN_PROVIDERS lists only providers with catalog entries)
     assert.ok(!providers.includes('generic'),
