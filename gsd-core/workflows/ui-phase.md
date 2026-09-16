@@ -392,7 +392,7 @@ if [ "$APPLICABLE" = "0" ] || [ "$UNCLASSIFIED" = "$APPLICABLE" ]; then
 fi
 ```
 
-If `$APPLICABLE` is `0`, do NOT proceed silently: ask via AskUserQuestion ("The UI probe found no
+If the guard above fired (`$APPLICABLE` is `0`, or every element is unclassified — `$UNCLASSIFIED = $APPLICABLE`, #4656), do NOT proceed silently: ask via AskUserQuestion ("The UI probe found no
 applicable state considerations — is this genuinely a state-free surface, or should we revisit the
 element descriptions?"). Only write an empty section after explicit confirmation.
 

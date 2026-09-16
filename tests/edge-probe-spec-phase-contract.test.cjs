@@ -576,6 +576,10 @@ describe('#4656: the zero-applicable guard is widened to the all-unclassified ca
       content.includes('[ "$UNCLASSIFIED" = "$APPLICABLE" ]'),
       'the guard must fire when every requirement is unclassified (#4656), not only at applicable:0',
     );
+    assert.ok(
+      content.includes('If the guard above fired'),
+      'the mandatory AskUserQuestion confirmation must key on the widened guard, not only on applicable:0 (#4656)',
+    );
   });
 
   test('ui-phase carries the same widened guard', () => {
@@ -583,6 +587,10 @@ describe('#4656: the zero-applicable guard is widened to the all-unclassified ca
     assert.ok(
       content.includes('coverage.unclassified') && content.includes('[ "$UNCLASSIFIED" = "$APPLICABLE" ]'),
       'ui-phase.md:385 guard must be widened identically (#4656)',
+    );
+    assert.ok(
+      content.includes('If the guard above fired'),
+      'ui-phase confirmation prose must key on the widened guard too (#4656)',
     );
   });
 });

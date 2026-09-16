@@ -326,7 +326,7 @@ if [ "$APPLICABLE" = "0" ] || [ "$UNCLASSIFIED" = "$APPLICABLE" ]; then
 fi
 ```
 
-If `$APPLICABLE` is `0`, do NOT proceed silently: ask the author to confirm via AskUserQuestion
+If the guard above fired (`$APPLICABLE` is `0`, or every requirement is unclassified — `$UNCLASSIFIED = $APPLICABLE`, #4656), do NOT proceed silently: ask the author to confirm via AskUserQuestion
 ("The edge probe found no applicable edges for any requirement — is this genuinely an
 edge-free spec, or should we revisit the requirement wording / authored shapes?"). Only write
 an empty `## Edge Coverage` section after explicit confirmation.
