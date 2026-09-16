@@ -526,17 +526,10 @@ describe('gsd-secret-read-guard: container --env-file exemption (#4639)', () => 
   // the guard exists to prevent. Only the FLAG VALUE is exempt, only under
   // the container runtimes; every other operand and every other command still
   // blocks. Table from the issue's verification section.
-  const block = (command) => {
-    const r = runHook(bash(command));
-    assert.equal(r.status, 2, `expected block: ${command}`);
-    const decision = JSON.parse(r.stdout);
-    assert.equal(decision.decision, 'block');
-    assert.equal(decision.code, 'secret-read');
-  };
-  const allow = (command) => {
-    const r = runHook(bash(command));
-    assert.equal(r.status, 0, `expected allow: ${command} — stderr: ${r.stderr}`);
-  };
+  // Delegate to the file's own assertions (stronger: empty-stdout on allow,
+  // stderr-reason round-trip on block) instead of weaker local copies.
+  const block = (command) => assertBlocked(runHook(bash(command)), command, { code: 'secret-read' });
+  const allow = (command) => assertAllowed(runHook(bash(command)), command);
 
   test('docker compose --env-file <secret> is allowed (the operational use)', () => {
     allow('docker compose --env-file .env.foundation up -d --build app');
@@ -559,7 +552,12 @@ describe('gsd-secret-read-guard: container --env-file exemption (#4639)', () => 
   });
 
   test('the exemption cannot launder a read: && cat still blocks', () => {
-    block('docker compose --env-file .env.foundation up -d && cat .env.foundation');
+    const out = block('docker compose --env-file .env.foundation up -d && cat .env.foundation');
+    assert.equal(out.path, '.env.foundation', 'the block must name the secret the laundering attempt targeted');
+  });
+
+  test('the removed stale pin re-pinned on the allow side with the exact secret name', () => {
+    allow('docker run --env-file .env --rm img');
   });
 
   test('another secret operand in the same segment still blocks', () => {
@@ -577,5 +575,7 @@ describe('gsd-secret-read-guard: container --env-file exemption (#4639)', () => 
   test('negative space: direct reads of the secret stay blocked', () => {
     block('cat .env.foundation');
     block('grep KEY .env.foundation');
+    assertBlocked(runHook(read('.env.foundation')), 'Read .env.foundation', { tool: 'Read' });
+    block("bash -c 'cat .env.foundation'");
   });
 });
