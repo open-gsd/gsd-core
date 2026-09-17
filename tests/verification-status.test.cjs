@@ -2833,7 +2833,7 @@ for (const { id, prefix } of RUNTIMES) {
       makeStale();
       const result = read(id, NO_GIT);
       assert.equal(result.status, 'stale');
-      assert.equal(result.next_command, `${prefix}verify-work 01`);
+      assert.equal(result.next_command, `${prefix}execute-phase 01`);
     });
 
     test('passed has no next step and stays empty, not a bare prefix', () => {
