@@ -401,7 +401,14 @@ describe('verification-status', () => {
       const result = readVerificationStatus(dir, { phaseCleanCommitTimesMs: () => new Map() });
       assert.equal(result.status, 'stale');
       assert.match(result.next_action, /stale/i);
-      assert.equal(result.next_command, '/gsd-verify-work 01');
+      // #4682: stale means covered source changed after the verifier ran — the
+      // only remedy is re-running the verifier. execute-phase resumes at the
+      // verification gates and re-runs it; /gsd-verify-work never rewrites
+      // VERIFICATION.md, so routing there is an advice loop.
+      assert.match(result.next_command, /execute-phase/);
+      assert.doesNotMatch(result.next_command, /verify-work/);
+      assert.match(result.next_action, /verifier/i,
+        'the stale action must name the verifier re-run as the remedy');
     } finally {
       cleanup(baseDir);
     }

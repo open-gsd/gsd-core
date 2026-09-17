@@ -288,3 +288,23 @@ describe('bug #3381: verify-work forwards workstream context', () => {
 });
   });
 }
+
+// ── #4682 — the stale stop routes to the verifier, not to itself ─────────────
+// A stale report means covered source files changed after the verifier ran;
+// the only remedy is re-running the verifier. /gsd-verify-work never rewrites
+// VERIFICATION.md, so advising it from its own stale block is an advice loop.
+describe('verify-work.md — stale stop routes to the verifier (#4682)', () => {
+  test('the stale stop instructs re-running the verifier, not verify-work (#4682)', () => {
+    const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
+    const staleIdx = content.indexOf('If `PHASE_VERIFICATION_STATUS` is `stale`');
+    assert.ok(staleIdx !== -1, 'the stale stop must exist');
+    const block = content.slice(staleIdx, staleIdx + 1600);
+
+    assert.match(block, /gsd-verifier/, 'the stale stop must route to the gsd-verifier agent');
+    assert.match(block, /verification\.status/, 'it must re-check verification.status afterwards');
+    assert.doesNotMatch(
+      block, /`\/gsd:verify-work \{phase\}` — re-run verification/,
+      'the self-referential re-run advice must be gone'
+    );
+  });
+});
