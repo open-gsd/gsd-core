@@ -1704,3 +1704,70 @@ describe('#3894 research_before_questions global-defaults forwarding', () => {
     }
   });
 });
+
+// ── #4717 — an empty config.runtime is filled from GSD_RUNTIME / the marker ──
+describe('loadConfigResolved — runtime identity fill (#4717)', () => {
+  const slash = require('../gsd-core/bin/lib/runtime-slash.cjs');
+  const fsx = require('node:fs');
+  const pathx = require('node:path');
+  const { createTempDir: mkTmp4717, cleanup: cleanup4717 } = require('./helpers.cjs');
+  let tmpCodexHome;
+  let originalCodexHome;
+  let originalGsdRuntime;
+
+  beforeEach(() => {
+    originalCodexHome = process.env.CODEX_HOME;
+    originalGsdRuntime = process.env.GSD_RUNTIME;
+    delete process.env.GSD_RUNTIME;
+    tmpCodexHome = mkTmp4717('gsd-4717-');
+    process.env.CODEX_HOME = tmpCodexHome;
+    slash._setInstallRuntimeMarkerForTests('codex');
+  });
+
+  afterEach(() => {
+    slash._resetInstallRuntimeMarkerCacheForTests();
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+    if (originalGsdRuntime === undefined) delete process.env.GSD_RUNTIME;
+    else process.env.GSD_RUNTIME = originalGsdRuntime;
+    cleanup4717(tmpCodexHome);
+  });
+
+  test('an empty config.runtime is filled from the install marker (#4717)', (t) => {
+    const projDir = mkTmp4717('gsd-4717-proj-');
+    t.after(() => cleanup4717(projDir));
+    const resolved = loadConfigResolved(projDir, { persist: false });
+    assert.equal(resolved.config.runtime, 'codex',
+      'the marker-owned runtime fills an empty config.runtime (copy-on-write)');
+  });
+
+  test('GSD_RUNTIME outranks the marker in the identity fill (#4717)', (t) => {
+    const projDir = mkTmp4717('gsd-4717-proj-');
+    t.after(() => cleanup4717(projDir));
+    process.env.GSD_RUNTIME = 'kimi';
+    const resolved = loadConfigResolved(projDir, { persist: false });
+    assert.equal(resolved.config.runtime, 'kimi');
+  });
+
+  test('an explicit config.runtime is preserved — the fill never overrides it (#4717)', (t) => {
+    const projDir = mkTmp4717('gsd-4717-proj-');
+    t.after(() => cleanup4717(projDir));
+    fsx.mkdirSync(pathx.join(projDir, '.planning'), { recursive: true });
+    fsx.writeFileSync(
+      pathx.join(projDir, '.planning', 'config.json'),
+      JSON.stringify({ runtime: 'claude' }),
+    );
+    const resolved = loadConfigResolved(projDir, { persist: false });
+    assert.equal(resolved.config.runtime, 'claude',
+      'an explicit project runtime is never overwritten by the marker fill');
+  });
+
+  test('copy-on-write: the shared builtin-defaults object is never mutated (#4717)', (t) => {
+    const projDir = mkTmp4717('gsd-4717-proj-');
+    t.after(() => cleanup4717(projDir));
+    const resolved = loadConfigResolved(projDir, { persist: false });
+    assert.equal(resolved.config.runtime, 'codex');
+    const again = loadConfigResolved(projDir, { persist: false });
+    assert.equal(again.config.runtime, 'codex');
+  });
+});

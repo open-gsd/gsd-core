@@ -580,3 +580,82 @@ describe('detectHostRuntime: properties', () => {
     );
   });
 });
+
+// ── #4717 — the per-install .gsd-runtime marker outranks host detection ──────
+// On a multi-runtime machine (CODEX_HOME exported globally), host sniffing
+// misreports every Claude Code session as codex. The per-install marker names
+// the runtime that owns THIS tree — a stronger signal than host detection.
+// Ladder: explicit (GSD_RUNTIME / config.runtime) > marker > host detection >
+// 'claude'. Marker-less trees (dev/source, pre-#2297 installs) are unchanged.
+
+describe('resolveReportedRuntime: install-marker rung (#4717)', () => {
+  const slash = require('../gsd-core/bin/lib/runtime-slash.cjs');
+  const assertStrict = assert.strict || assert;
+
+  // Self-contained withProject: clears GSD_RUNTIME (the marker rung sits below
+  // it) and scaffolds a throwaway project — scoped to this describe so the
+  // sibling precedence describe's own helper is untouched.
+  function withProject4717(t) {
+    const savedGsdRuntime = process.env.GSD_RUNTIME;
+    delete process.env.GSD_RUNTIME;
+    const tmpDir = createTempProject();
+    t.after(() => {
+      cleanup(tmpDir);
+      if (savedGsdRuntime === undefined) delete process.env.GSD_RUNTIME;
+      else process.env.GSD_RUNTIME = savedGsdRuntime;
+    });
+    return tmpDir;
+  }
+
+  function writeConfig4717(tmpDir, runtime) {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ runtime }),
+    );
+  }
+
+  test('install marker outranks host detection (claude session on a codex-sniffing machine)', (t) => {
+    const tmpDir = withProject4717(t);
+    slash._setInstallRuntimeMarkerForTests('claude');
+    t.after(() => slash._resetInstallRuntimeMarkerCacheForTests());
+    // CODEX_SANDBOX makes host detection report codex — the issue's repro shape.
+    const result = resolveReportedRuntime(tmpDir, {
+      env: { CODEX_SANDBOX: 'seatbelt', CODEX_SANDBOX_NETWORK_DISABLED: '1' },
+    });
+    assertStrict.strictEqual(result, 'claude',
+      'the marker (claude) must outrank host detection (codex) on the owning tree');
+  });
+
+  test('install marker supplies the runtime when host detection finds nothing (codex install)', (t) => {
+    const tmpDir = withProject4717(t);
+    slash._setInstallRuntimeMarkerForTests('codex');
+    t.after(() => slash._resetInstallRuntimeMarkerCacheForTests());
+    const result = resolveReportedRuntime(tmpDir, { env: {} });
+    assertStrict.strictEqual(result, 'codex',
+      'a codex-owned tree reports codex even where host sniffing would say claude');
+  });
+
+  test('explicit GSD_RUNTIME still outranks the marker (#4717 ladder rung 1)', (t) => {
+    const tmpDir = withProject4717(t);
+    slash._setInstallRuntimeMarkerForTests('codex');
+    t.after(() => slash._resetInstallRuntimeMarkerCacheForTests());
+    const result = resolveReportedRuntime(tmpDir, { env: { GSD_RUNTIME: 'claude' } });
+    assertStrict.strictEqual(result, 'claude');
+  });
+
+  test('explicit config runtime still outranks the marker (#4717 ladder rung 1)', (t) => {
+    const tmpDir = withProject4717(t);
+    writeConfig4717(tmpDir, 'kimi');
+    slash._setInstallRuntimeMarkerForTests('codex');
+    t.after(() => slash._resetInstallRuntimeMarkerCacheForTests());
+    const result = resolveReportedRuntime(tmpDir, { env: {} });
+    assertStrict.strictEqual(result, 'kimi');
+  });
+
+  test('no marker: host detection unchanged (dev/source trees, pre-#2297 installs)', (t) => {
+    const tmpDir = withProject4717(t);
+    slash._resetInstallRuntimeMarkerCacheForTests();
+    const result = resolveReportedRuntime(tmpDir, { env: { CODEX_SANDBOX: 'seatbelt' } });
+    assertStrict.strictEqual(result, 'codex', 'host detection remains the fallback without a marker');
+  });
+});
