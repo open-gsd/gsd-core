@@ -92,7 +92,9 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 AGENT_SKILLS=$(gsd_run query agent-skills gsd-executor)
 ```
 
-Parse JSON for: `executor_model`, `verifier_model`, `commit_docs`, `parallelization`, `branching_strategy`, `branch_name`, `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `plans`, `incomplete_plans`, `plan_count`, `incomplete_count`, `state_exists`, `roadmap_exists`, `phase_req_ids`, `response_language`, `requirements_path`, `section_manifest`.
+Parse JSON for: `executor_model`, `verifier_model`, `commit_docs`, `parallelization`, `branching_strategy`, `branch_name`, `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `plans`, `incomplete_plans`, `plan_count`, `incomplete_count`, `state_exists`, `roadmap_exists`, `phase_req_ids`, `response_language`, `requirements_path`, `section_manifest`, `threat_id_duplicates`, `threat_id_duplicate_count`.
+
+**Threat-ID gate (#4683):** if `threat_id_duplicate_count` is non-zero, **hard-stop before any dispatch** — do not spawn executors, do not update state. `threat_id_duplicates` lists each `T-{phase}-NN` ID claimed by more than one live PLAN file in the phase (the reserved `T-{phase}-SC` row is never listed). A reused ID names two different threats, so `SECURITY.md` rows and `VALIDATION.md`'s Threat Ref column are ambiguous until it is fixed. Report the full list verbatim (ID → claiming plan files) and tell the user: renumber the newer plans' registers to continue after the phase's highest in-use ID (see `planner-gap-closure.md` §9), then re-run `/gsd-execute-phase`.
 
 `section_manifest` (#2932) gates the three `steps/*.md` reads below: read a step file only when its `id` is in `section_manifest.included` (equivalently, its path is in `section_manifest.read`); skip it — without reading — when its `id` is in `section_manifest.excluded`. When `section_manifest` is `null` (degraded: manifest artifact missing/unreadable), read all three unconditionally — the safe superset.
 

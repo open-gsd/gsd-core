@@ -60,3 +60,5 @@ autonomous: true
 gap_closure: true     # Flag for tracking
 ---
 ```
+
+**9. Number threat IDs after the phase's existing registers** (#4683): when `security_enforcement` is on, read the `<threat_model>` blocks of the phase's existing PLAN files and continue after their highest `T-{phase}-NN` — do not renumber from `T-{phase}-01`. Every ID already names a specific threat in an earlier plan; reusing it makes `SECURITY.md` rows and `VALIDATION.md`'s Threat Ref column ambiguous. `T-{phase}-SC` is reserved and every plan keeps it. The execute-phase init reports any cross-plan duplicates and hard-stops on them (`threat_id_duplicates`), so a collision surfaces here as a failed plan check.

@@ -39,6 +39,8 @@ type Scope = planningScopeMod.Scope;
 import { maskIfSecret } from './secrets.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- plan-scan.cjs is an export= CommonJS module
 import scanPhasePlans = require('./plan-scan.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- plan-document.cjs is an export= CommonJS module
+import planDocument = require('./plan-document.cjs');
 import { stateExtractField } from './state-document.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { resolveReportedRuntime } from './host-runtime-detection.cjs';
@@ -894,6 +896,50 @@ function milestoneRecord(cwd: string): Record<string, unknown> {
   return (getMilestoneInfo(cwd).value ?? {}) as unknown as Record<string, unknown>;
 }
 
+/**
+ * #4683 — threat IDs claimed by more than one of the phase's live PLAN files.
+ * `scanPhasePlans().planFiles` is the right input set twice over: it excludes
+ * derivative files (OUTLINE / PLAN-REVIEW / pre-bounce) AND `status: superseded`
+ * plans (#2349) — a superseded plan's IDs were deliberately reassigned to its
+ * replacement, so they must not hold against it. The per-document row parse is
+ * planDocument.extractThreatRegisterIds; only `<threat_model>` register rows
+ * count, and the reserved `T-{phase}-SC` shape is excluded there by grammar
+ * (every plan keeps that row by design). A missing/unreadable phase directory
+ * degrades to "no duplicates" — planning a brand-new phase has nothing to
+ * collide with.
+ */
+function findDuplicateThreatIds(cwd: string, phaseDirRel: string | null | undefined): Array<{ id: string; plans: string[] }> {
+  if (!phaseDirRel) return [];
+  const phaseDir = path.join(cwd, phaseDirRel);
+  let planFiles: string[];
+  try {
+    planFiles = scanPhasePlans(phaseDir).planFiles;
+  } catch {
+    return [];
+  }
+  const owners = new Map<string, string[]>();
+  for (const planFile of planFiles) {
+    let content: string;
+    try {
+      content = fs.readFileSync(path.join(phaseDir, planFile), 'utf-8');
+    } catch {
+      continue;
+    }
+    for (const id of planDocument.extractThreatRegisterIds(content)) {
+      const claimed = owners.get(id);
+      if (claimed) {
+        if (!claimed.includes(planFile)) claimed.push(planFile);
+      } else {
+        owners.set(id, [planFile]);
+      }
+    }
+  }
+  return [...owners.entries()]
+    .filter(([, claims]) => claims.length > 1)
+    .map(([id, plans]) => ({ id, plans }))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
 function cmdInitExecutePhase(
   cwd: string,
   phase: string,
@@ -957,6 +1003,9 @@ function cmdInitExecutePhase(
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   const requirementsPath = path.join(planningDir(cwd), 'REQUIREMENTS.md');
 
+  // #4683: computed once — see the threat_id_duplicates fields in the payload.
+  const threatIdDuplicates = findDuplicateThreatIds(cwd, phaseInfo?.['directory'] as string | undefined);
+
   const result: Record<string, unknown> = {
     executor_model: resolveModelInternal(cwd, 'gsd-executor'),
     verifier_model: resolveModelInternal(cwd, 'gsd-verifier'),
@@ -997,6 +1046,13 @@ function cmdInitExecutePhase(
     incomplete_plans: phaseInfo?.['incomplete_plans'] || [],
     plan_count: (phaseInfo?.['plans'] as unknown[] | undefined)?.length || 0,
     incomplete_count: (phaseInfo?.['incomplete_plans'] as unknown[] | undefined)?.length || 0,
+
+    // #4683: cross-plan threat-ID collisions (gap-closure plans renumbering
+    // from T-{phase}-01 again). execute-phase.md hard-stops on a non-empty
+    // list BEFORE any dispatch — SECURITY.md rows and VALIDATION.md's Threat
+    // Ref column key on this ID, so a reused ID is ambiguous downstream.
+    threat_id_duplicates: threatIdDuplicates,
+    threat_id_duplicate_count: threatIdDuplicates.length,
 
     // #2830: the halt-aware view, forwarded from the shared computation in
     // phase-locator. Additive — `incomplete_plans`/`incomplete_count` above keep
@@ -1142,6 +1198,9 @@ function cmdInitPlanPhase(
 
   const granularityOverride = options['granularity'] as string | undefined;
   assertValidGranularityOverride(granularityOverride, error);
+
+  // #4683: computed once — see the threat_id_duplicates fields in the payload.
+  const threatIdDuplicatesPlan = findDuplicateThreatIds(cwd, phaseDirPlan);
   const granularity = resolveGranularityInternal(cwd, 'planning', granularityOverride || undefined);
 
   // #3188: see cmdInitExecutePhase — null when absent, parity with the
@@ -1197,6 +1256,12 @@ function cmdInitPlanPhase(
     has_reviews: phaseInfo?.['has_reviews'] || false,
     has_plans: ((phaseInfo?.['plans'] as unknown[] | undefined)?.length || 0) > 0,
     plan_count: (phaseInfo?.['plans'] as unknown[] | undefined)?.length || 0,
+
+    // #4683: the same cross-plan threat-ID duplicate list execute-phase gates
+    // on, surfaced at PLAN time so the checker/reviewer catches the collision
+    // before the plans are approved — not just before execution.
+    threat_id_duplicates: threatIdDuplicatesPlan,
+    threat_id_duplicate_count: threatIdDuplicatesPlan.length,
 
     planning_exists: fs.existsSync(planningDir(cwd)),
     roadmap_exists: fs.existsSync(path.join(planningDir(cwd), 'ROADMAP.md')),
