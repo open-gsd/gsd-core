@@ -5466,3 +5466,71 @@ describe('#4683 — cross-plan threat-ID duplicate detection', () => {
     assert.strictEqual(output.threat_id_duplicate_count, 0);
   });
 });
+
+// ── #4683 review repairs ─────────────────────────────────────────────────────
+describe('#4683 review repairs — fence blindness and deterministic ordering', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = fs.realpathSync(createFixture());
+  });
+  afterEach(() => cleanup(tmpDir));
+
+  test('a register QUOTED inside a code fence is not a claim (#4683 review MAJOR)', () => {
+    seedPhase(tmpDir, '47-security', {
+      '47-03-PLAN.md': [
+        '# Plan', '',
+        '<threat_model>',
+        '| T-47-01 | Tampering | component | high | mitigate | fix |',
+        '</threat_model>', '',
+        'The register we are extending (quoted verbatim):', '',
+        '```markdown',
+        '<threat_model>',
+        '| Threat ID | Category | Component | Severity | Disposition | Mitigation |',
+        '|-----------|----------|-----------|----------|-------------|------------|',
+        '| T-47-01 | Tampering | component | high | mitigate | fix |',
+        '</threat_model>',
+        '```', '',
+      ].join('\n'),
+      '47-04-PLAN.md': [
+        '# Plan', '',
+        '<threat_model>',
+        '| T-47-02 | Repudiation | component | low | accept | rationale |',
+        '</threat_model>', '',
+        'Reference copy of phase 47-03\'s register:', '',
+        '~~~',
+        '<threat_model>',
+        '| T-47-01 | Tampering | component | high | mitigate | fix |',
+        '</threat_model>',
+        '~~~', '',
+      ].join('\n'),
+    });
+    writePlanningDocs(tmpDir);
+
+    const result = runGsdTools('init execute-phase 47', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.deepEqual(output.threat_id_duplicates, [],
+      'quoted registers live in fenced code blocks — prose, not claims; only live blocks count');
+    assert.strictEqual(output.threat_id_duplicate_count, 0);
+  });
+
+  test('duplicate entries list claiming plans in deterministic sorted order (#4683 review MINOR)', () => {
+    seedPhase(tmpDir, '47-security', {
+      '47-07-PLAN.md': [
+        '# Plan', '', '<threat_model>', '| T-47-15 | DoS | component | medium | mitigate | fix |', '</threat_model>', '',
+      ].join('\n'),
+      '47-04-PLAN.md': [
+        '# Plan', '', '<threat_model>', '| T-47-15 | Repudiation | component | high | mitigate | fix |', '</threat_model>', '',
+      ].join('\n'),
+    });
+    writePlanningDocs(tmpDir);
+
+    const result = runGsdTools('init execute-phase 47', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.deepEqual(output.threat_id_duplicates, [
+      { id: 'T-47-15', plans: ['47-04-PLAN.md', '47-07-PLAN.md'] },
+    ], 'claiming-plan lists must be sorted, never readdir order');
+  });
+});

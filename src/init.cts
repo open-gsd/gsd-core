@@ -936,7 +936,7 @@ function findDuplicateThreatIds(cwd: string, phaseDirRel: string | null | undefi
   }
   return [...owners.entries()]
     .filter(([, claims]) => claims.length > 1)
-    .map(([id, plans]) => ({ id, plans }))
+    .map(([id, plans]) => ({ id, plans: [...plans].sort() }))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 

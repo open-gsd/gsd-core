@@ -386,8 +386,23 @@ const THREAT_MODEL_BLOCK_RE = /<threat_model>([\s\S]*?)<\/threat_model>/gi;
 const THREAT_REGISTER_ROW_RE = /^[^\S\n]*\|[^\S\n]*(T-\d+(?:\.\d+)?-\d+)[^\S\n]*\|/;
 
 function extractThreatRegisterIds(content: string): string[] {
+  // Fenced code blocks are prose, not registers (#4683 review MAJOR): a plan
+  // that QUOTES an existing register — exactly what the gap-closure flow tells
+  // the planner to read — must not have its quoted IDs counted as claims, or
+  // the execute-phase gate would hard-stop a correct phase. Same line-toggling
+  // idiom as the deferred-scope scan in phase.cts.
+  const lines: string[] = [];
+  let inFence = false;
+  for (const line of content.split(/\r?\n/)) {
+    if (/^\s*(?:```|~~~)/.test(line)) {
+      inFence = !inFence;
+      lines.push('');
+      continue;
+    }
+    lines.push(inFence ? '' : line);
+  }
   const ids: string[] = [];
-  for (const blockMatch of content.matchAll(THREAT_MODEL_BLOCK_RE)) {
+  for (const blockMatch of lines.join('\n').matchAll(THREAT_MODEL_BLOCK_RE)) {
     for (const line of blockMatch[1].split('\n')) {
       const row = line.match(THREAT_REGISTER_ROW_RE);
       if (row) ids.push(row[1]);
