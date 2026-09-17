@@ -406,7 +406,7 @@ describe('verification-status', () => {
       // verification gates and re-runs it (its resume tree routes a stale
       // report to re-verification); /gsd-verify-work never rewrote the report,
       // so routing there was an advice loop.
-      assert.equal(result.next_command, '/execute-phase 01');
+      assert.equal(result.next_command, '/gsd-execute-phase 01');
       assert.doesNotMatch(result.next_command, /verify-work/);
       assert.match(result.next_action, /verifier/i,
         'the stale action must name the verifier re-run as the remedy');
@@ -452,7 +452,7 @@ describe('verification-status', () => {
       // git times unavailable → mtime-fallback path (#2348).
       const result = readVerificationStatus(dir, { phaseCleanCommitTimesMs: () => new Map() });
       assert.equal(result.status, 'stale');
-      assert.equal(result.next_command, '/execute-phase 01');
+      assert.equal(result.next_command, '/gsd-execute-phase 01');
     } finally {
       cleanup(baseDir);
     }
@@ -534,7 +534,7 @@ describe('verification-status', () => {
 
       const result = readVerificationStatus(dir, { phaseCleanCommitTimesMs });
       assert.equal(result.status, 'stale');
-      assert.equal(result.next_command, '/execute-phase 02');
+      assert.equal(result.next_command, '/gsd-execute-phase 02');
     } finally {
       cleanup(baseDir);
     }
@@ -599,7 +599,7 @@ describe('verification-status', () => {
         'stale',
         'a dirty summary edited after the verification must stale it via mtime, not be shadowed by an equal/earlier commit time',
       );
-      assert.equal(result.next_command, '/execute-phase 02');
+      assert.equal(result.next_command, '/gsd-execute-phase 02');
     } finally {
       cleanup(baseDir);
     }
@@ -716,7 +716,7 @@ describe('verification-status', () => {
           'stale',
           'summary committed after the verification must read stale on the real git clock, and the dash-named file must resolve through the `--` pathspec guard',
         );
-        assert.equal(result.next_command, '/execute-phase 01');
+        assert.equal(result.next_command, '/gsd-execute-phase 01');
       } finally {
         cleanup(repo);
       }
@@ -764,7 +764,7 @@ describe('verification-status', () => {
           'stale',
           'a committed-then-edited (dirty) summary must read stale via mtime, not be shadowed by its now-stale commit time',
         );
-        assert.equal(result.next_command, '/execute-phase 01');
+        assert.equal(result.next_command, '/gsd-execute-phase 01');
       } finally {
         cleanup(repo);
       }
@@ -1318,7 +1318,7 @@ describe('#4187: status surface recognizes a bare VERIFICATION.md', () => {
     writeVerificationMd(dir, 'VERIFICATION.md', 'human_needed');
     const result = readVerificationStatus(dir, { phaseCleanCommitTimesMs: () => new Map() });
     assert.equal(result.status, 'human_needed');
-    assert.equal(result.next_command, '/execute-phase 99');
+    assert.equal(result.next_command, '/gsd-verify-work 99');
   });
 
   test('#4187: bare report with status: gaps_found routes to plan-phase --gaps', (t) => {
@@ -1404,7 +1404,7 @@ describe('#4187: status surface recognizes a bare VERIFICATION.md', () => {
 
     const result = readVerificationStatus(dir, { phaseCleanCommitTimesMs: () => new Map() });
     assert.equal(result.status, 'stale', 'a bare report must be staleness-checked like a dashed one');
-    assert.equal(result.next_command, '/execute-phase 99');
+    assert.equal(result.next_command, '/gsd-execute-phase 99');
   });
 
   test('#4187 unit (findStaleVerificationSummary): staleness is computed against the bare report', (t) => {
@@ -1454,7 +1454,7 @@ describe('#4142: opts.convention threads through findStaleVerificationSummary', 
       'stale',
       'opts.convention must reach the legacy staleness seam so phase 03 is compared to 03-VERIFICATION.md',
     );
-    assert.equal(result.next_command, '/execute-phase');
+    assert.equal(result.next_command, '/gsd-execute-phase');
   });
 });
 
@@ -2033,7 +2033,7 @@ describe('#4155: readVerificationStatus — fingerprint supersedes legacy mtime 
 
     const result = readVerificationStatus(dir, { phaseCleanCommitTimesMs: () => new Map() });
     assert.equal(result.status, 'stale');
-    assert.equal(result.next_command, '/execute-phase 01');
+    assert.equal(result.next_command, '/gsd-execute-phase 01');
   });
 
   // Ponytail #4155 review finding: "disappeared" and "escapes confinement"
