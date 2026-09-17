@@ -199,3 +199,102 @@ Some body text.
     assert.equal(t.trackerId, 'beads:GSD-7');
   });
 });
+
+describe('plan-document: extractThreatRegisterIds (#4683)', () => {
+  const { extractThreatRegisterIds } = require('../gsd-core/bin/lib/plan-document.cjs');
+
+  const register = (rows) => [
+    '<threat_model>',
+    '| Threat ID | Category | Component | Severity | Disposition | Mitigation |',
+    '|-----------|----------|-----------|----------|-------------|------------|',
+    ...rows,
+    '</threat_model>',
+  ].join('\n');
+
+  test('extracts first-cell IDs in document order', () => {
+    const ids = extractThreatRegisterIds(register([
+      '| T-47-01 | Tampering | c | high | mitigate | fix |',
+      '| T-47-02 | Repudiation | c | low | accept | rationale |',
+      '| T-47-19 | DoS | c | medium | mitigate | fix |',
+    ]));
+    assert.deepEqual(ids, ['T-47-01', 'T-47-02', 'T-47-19']);
+  });
+
+  test('the reserved -SC supply-chain row never matches', () => {
+    const ids = extractThreatRegisterIds(register([
+      '| T-47-SC | Tampering | npm installs | high | mitigate | gate |',
+      '| T-47-01 | Tampering | c | high | mitigate | fix |',
+    ]));
+    assert.deepEqual(ids, ['T-47-01']);
+  });
+
+  test('decimal phases match (T-4.1-05)', () => {
+    const ids = extractThreatRegisterIds(register(['| T-4.1-05 | Tampering | c | low | accept | r |']));
+    assert.deepEqual(ids, ['T-4.1-05']);
+  });
+
+  test('rows outside a threat_model block never count', () => {
+    const ids = extractThreatRegisterIds([
+      '# Plan',
+      '',
+      'See T-47-01 in SECURITY.md. | T-47-02 | not a register |',
+      '',
+      register(['| T-47-03 | Tampering | c | high | mitigate | fix |']),
+    ].join('\n'));
+    assert.deepEqual(ids, ['T-47-03']);
+  });
+
+  test('a register quoted inside a backtick fence is prose, not a claim', () => {
+    const quoted = ['```markdown', register(['| T-47-01 | Tampering | c | high | mitigate | fix |']), '```'].join('\n');
+    const live = register(['| T-47-02 | Repudiation | c | low | accept | r |']);
+    assert.deepEqual(extractThreatRegisterIds(`${quoted}\n\n${live}`), ['T-47-02']);
+  });
+
+  test('a tilde fence is stripped the same way', () => {
+    const quoted = ['~~~', register(['| T-47-01 | Tampering | c | high | mitigate | fix |']), '~~~'].join('\n');
+    const live = register(['| T-47-02 | Repudiation | c | low | accept | r |']);
+    assert.deepEqual(extractThreatRegisterIds(`${quoted}\n\n${live}`), ['T-47-02']);
+  });
+
+  test('an unclosed fence suppresses everything after it', () => {
+    const doc = [register(['| T-47-01 | Tampering | c | high | mitigate | fix |']), '```', register(['| T-47-02 | DoS | c | low | accept | r |'])].join('\n');
+    assert.deepEqual(extractThreatRegisterIds(doc), ['T-47-01']);
+  });
+
+  test('block tags are case-insensitive', () => {
+    const ids = extractThreatRegisterIds([
+      '<THREAT_MODEL>', '| T-47-05 | Tampering | c | high | mitigate | fix |', '</THREAT_MODEL>',
+    ].join('\n'));
+    assert.deepEqual(ids, ['T-47-05']);
+  });
+
+  test('multiple blocks yield IDs across both, in order', () => {
+    const doc = [
+      register(['| T-47-01 | Tampering | c | high | mitigate | fix |']),
+      '',
+      register(['| T-47-02 | Repudiation | c | low | accept | r |']),
+    ].join('\n');
+    assert.deepEqual(extractThreatRegisterIds(doc), ['T-47-01', 'T-47-02']);
+  });
+
+  test('CRLF rows are read the same as LF', () => {
+    const ids = extractThreatRegisterIds(register(['| T-47-07 | Tampering | c | high | mitigate | fix |']).replace(/\n/g, '\r\n'));
+    assert.deepEqual(ids, ['T-47-07']);
+  });
+
+  test('indented rows still match on the first cell', () => {
+    const ids = extractThreatRegisterIds([
+      '<threat_model>', '  | T-47-09 | Tampering | c | high | mitigate | fix |', '</threat_model>',
+    ].join('\n'));
+    assert.deepEqual(ids, ['T-47-09']);
+  });
+
+  test('annotated first cells are knowingly unmatched (accepted residual)', () => {
+    const ids = extractThreatRegisterIds(register(['| T-47-06 (revised) | Tampering | c | high | mitigate | fix |']));
+    assert.deepEqual(ids, []);
+  });
+
+  test('content without any threat_model block yields an empty list', () => {
+    assert.deepEqual(extractThreatRegisterIds('# Plan\n\nDo things.\n'), []);
+  });
+});
