@@ -372,7 +372,7 @@ describe('init manager', () => {
     assert.strictEqual(output.phases[0].phase_complete, false);
     assert.strictEqual(output.recommended_actions[0].action, 'verify');
     assert.match(output.recommended_actions[0].reason, /verification stale/);
-    assert.match(output.recommended_actions[0].command, /verify-work 1/);
+    assert.match(output.recommended_actions[0].command, /execute-phase 1/);
   });
 
   test('checked unpadded roadmap token does not satisfy padded unverified dependency', () => {
