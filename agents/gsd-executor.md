@@ -550,7 +550,10 @@ _GSD_LEDGER="$(git rev-parse --git-dir)/gsd-plan-head-before-{phase}-{plan}"
 [ -f "$_GSD_LEDGER" ] || git rev-parse HEAD > "$_GSD_LEDGER"
 ```
 The SUMMARY's `commits:` is MEASURED from this ledger, the base recorded as
-`plan_head_before:` for `/gsd:verify-work`'s same-instrument check. Multi-repo keeps commit-to-subrepo
+`plan_head_before:` — and HEAD at this same measurement moment is recorded as `plan_head_after:`
+(#4670), so `/gsd:verify-work` can reconcile the claim against the plan's OWN window
+(`plan_head_before..plan_head_after`) instead of the unbounded verify-time HEAD, which grows
+with every later plan's commits. Multi-repo keeps commit-to-subrepo
 JSON hashes instead.
 
 Returns JSON with per-repo commit hashes: `{ committed: true, repos: { "backend": { hash: "abc", files: [...] }, ... } }`. Record all hashes for SUMMARY.
@@ -673,9 +676,13 @@ ledger (protocol 0c — a fresh shell per Bash call; the base comes from disk):
 ```bash
 PLAN_HEAD_BEFORE=$(cat "$(git rev-parse --git-dir)/gsd-plan-head-before-{phase}-{plan}")
 COMMITS_ACTUAL=$(git rev-list --count ${PLAN_HEAD_BEFORE}..HEAD)
+PLAN_HEAD_AFTER=$(git rev-parse HEAD)
 ```
-Write BOTH into the frontmatter — `commits: ${COMMITS_ACTUAL}`,
-`plan_head_before: ${PLAN_HEAD_BEFORE}` — including when the count is `0`.
+Write ALL THREE into the frontmatter — `commits: ${COMMITS_ACTUAL}`,
+`plan_head_before: ${PLAN_HEAD_BEFORE}`, `plan_head_after: ${PLAN_HEAD_AFTER}` — including
+when the count is `0`. `plan_head_after` is HEAD at this measurement moment: the last task
+commit, BEFORE the SUMMARY commit lands (#4670 — verify-work bounds its reconciliation to
+`plan_head_before..plan_head_after`, so later plans' commits can never flag this plan).
 A `0` with code changes means the changes sit UNCOMMITTED: **HALT — do not write the
 SUMMARY with a narrated count**; surface `git status --short` in your return. A `0` with no
 code changes (docs-only) is legitimate. `/gsd:verify-work` flags mismatches as BLOCKER.
