@@ -15926,7 +15926,7 @@ describe('phase complete skips already-complete phases as next_phase (#4699)', (
 
     const result = runGsdTools('phase complete 2', tmpDir);
     const output = JSON.parse(result.output);
-    assert.equal(output.next_phase, '3',
-      'without the fix scope change: an unchecked phase 3 stays a valid candidate');
+    assert.equal(output.next_phase, '03',
+      'without the fix scope change: an unchecked phase 3 stays a valid candidate (disk spelling wins)');
   });
 });
