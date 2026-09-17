@@ -15812,3 +15812,121 @@ describe('bug #3982: archived details leak into lowest-outstanding scan', () => 
       `STATE.md current_phase must not jump backwards into the archived range; got: ${state}`);
   });
 });
+
+// ── #4699 — next_phase must skip phases whose roadmap checkbox is [x] ────────
+// Out-of-order completion (a reopened phase finished after later phases
+// shipped) used to persist the already-complete phase as next_phase /
+// STATE.md current_phase: both next-phase scans select the numerically lowest
+// phase above N without consulting completion state. Roadmap checkbox state
+// is the completion rule (#2028) — an [x] phase is never "next".
+
+describe('phase complete skips already-complete phases as next_phase (#4699)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-4699-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function writeRoadmap({ thirdBox = '[x]', fourthBox = '[ ]' } = {}) {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+## Phases
+
+- [x] **Phase 1: One** - Goal one
+- [ ] **Phase 2: Two** - Goal two
+- ${thirdBox} **Phase 3: Three** - Goal three
+- ${fourthBox} **Phase 4: Four** - Goal four
+
+### Phase 1: One
+**Goal**: Goal one
+
+### Phase 2: Two
+**Goal**: Goal two
+
+### Phase 3: Three
+**Goal**: Goal three
+
+### Phase 4: Four
+**Goal**: Goal four
+`,
+    );
+  }
+
+  function scaffoldPhaseDir(n, slug) {
+    const padded = String(n).padStart(2, '0');
+    const dir = path.join(tmpDir, '.planning', 'phases', `${padded}-${slug}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${padded}-01-PLAN.md`), '# Plan');
+    fs.writeFileSync(path.join(dir, `${padded}-01-SUMMARY.md`), '# Summary');
+    fs.writeFileSync(
+      path.join(dir, `${padded}-VERIFICATION.md`),
+      ['---', 'status: passed', '---', '', '# Verification', ''].join('\n'),
+    );
+  }
+
+  function writeMinimalState() {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      '# State\n\n**Current Phase:** 2\n**Status:** In progress\n',
+    );
+  }
+
+  test('completing phase 2 out of order skips the already-complete phase 3 (#4699)', () => {
+    writeRoadmap();
+    writeMinimalState();
+    scaffoldPhaseDir(1, 'one');
+    scaffoldPhaseDir(2, 'two');
+    scaffoldPhaseDir(3, 'three');
+
+    const result = runGsdTools('phase complete 2', tmpDir);
+    const output = JSON.parse(result.output);
+    assert.equal(output.next_phase, '4',
+      'next_phase must skip the already-[x] phase 3 and select the outstanding phase 4');
+    assert.equal(output.is_last_phase, false);
+  });
+
+  test('uppercase [X] checkboxes are recognized as complete (#4699)', () => {
+    writeRoadmap({ thirdBox: '[X]' });
+    writeMinimalState();
+    scaffoldPhaseDir(1, 'one');
+    scaffoldPhaseDir(2, 'two');
+    scaffoldPhaseDir(3, 'three');
+
+    const result = runGsdTools('phase complete 2', tmpDir);
+    const output = JSON.parse(result.output);
+    assert.equal(output.next_phase, '4', '[X] is a complete checkbox, case-insensitively');
+  });
+
+  test('checkbox completion matches phase numbers across zero-padding (#4699)', () => {
+    // Roadmap spells the phase without padding; the directory carries the
+    // zero-padded token — comparePhaseNum must dedupe them in the complete set.
+    writeRoadmap({ thirdBox: '[x]' });
+    writeMinimalState();
+    scaffoldPhaseDir(1, 'one');
+    scaffoldPhaseDir(2, 'two');
+    scaffoldPhaseDir(3, 'three');
+
+    const result = runGsdTools('phase complete 2', tmpDir);
+    const output = JSON.parse(result.output);
+    assert.equal(output.next_phase, '4');
+  });
+
+  test('an outstanding phase 3 (unchecked) is still selected — negative control (#4699)', () => {
+    writeRoadmap({ thirdBox: '[ ]' });
+    writeMinimalState();
+    scaffoldPhaseDir(1, 'one');
+    scaffoldPhaseDir(2, 'two');
+    scaffoldPhaseDir(3, 'three');
+
+    const result = runGsdTools('phase complete 2', tmpDir);
+    const output = JSON.parse(result.output);
+    assert.equal(output.next_phase, '3',
+      'without the fix scope change: an unchecked phase 3 stays a valid candidate');
+  });
+});
