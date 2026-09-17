@@ -381,6 +381,13 @@ export = planDocument;
  * rows inside a threat_model block do. One entry per matched row, in document
  * order — deciding that the same ID in two plans is a collision is the
  * aggregator's question (init.cts), not the per-document parser's.
+ *
+ * Knowingly unmatched residual classes (#4683 review, accepted): lowercase
+ * `t-47-01`, letter suffixes (`T-47-05A`), annotated first cells
+ * (`| T-47-06 (revised) |`), IDs in non-first cells, and an unterminated
+ * `<threat_model>` block all yield no claim. All are off-template shapes — the
+ * planner template fixes the row grammar — so the residual risk is silent
+ * under-detection, never a false hard-stop.
  */
 const THREAT_MODEL_BLOCK_RE = /<threat_model>([\s\S]*?)<\/threat_model>/gi;
 const THREAT_REGISTER_ROW_RE = /^[^\S\n]*\|[^\S\n]*(T-\d+(?:\.\d+)?-\d+)[^\S\n]*\|/;
