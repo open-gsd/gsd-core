@@ -2270,8 +2270,9 @@ export = {
  * label is absent.
  */
 function extractPhaseFieldMultiline(section: string, label: string): string | null {
+  // #2769 label shapes: `**X:**`, `**X**:`, and the spaced `**X** :`.
   const labelRe = new RegExp(
-    '\\*\\*' + label + '(?::\\*\\*|\\*\\*:)\\s*([^\\n]+)',
+    '\\*\\*' + label + '(?::\\*\\*|\\*\\*\\s*:?)\\s*([^\\n]+)',
     'i',
   );
   const match = section.match(labelRe);
