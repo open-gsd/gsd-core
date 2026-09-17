@@ -673,15 +673,23 @@ if [ "$VERIFICATION_STATUS_VALUE" = "human_needed" ]; then
 fi
 ```
 
-If `PHASE_VERIFICATION_STATUS` is `stale`, stop before phase advancement and present:
+If `PHASE_VERIFICATION_STATUS` is `stale`, the covered source files changed after the verifier
+last ran — re-run the VERIFIER, not this workflow (`/gsd:verify-work` never rewrites
+VERIFICATION.md; its only write is the human_needed canonicalization, #4663). Spawn the
+verifier for this phase exactly as execute-phase's `verify_phase_goal` step does (subagent
+`gsd-verifier`; phase directory, goal, requirement IDs, and all SUMMARYs in
+`<required_reading>`), then re-read `verification.status` and continue at the fresh/passed
+case below. (#4682)
 
 ```
-All UAT tests passed, but phase advancement is blocked until canonical verification is fresh.
+Verification is stale: covered source files changed after the verifier last ran.
 
 Blocking completion:
 verification is stale
 
-- `/gsd:verify-work {phase}` — re-run verification against the latest summaries
+- Re-run the verifier for phase {phase} (dispatch `gsd-verifier` as in execute-phase's
+  verify_phase_goal step) to regenerate VERIFICATION.md with a fresh digest, then re-run
+  `/gsd:verify-work {phase}`
 ```
 
 Otherwise, check the shared UAT-plus-verification completion predicate before transition:

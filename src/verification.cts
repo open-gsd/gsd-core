@@ -112,8 +112,14 @@ const VERIFICATION_ROUTING_TABLE: Record<string, VerificationRoute> = {
   },
   stale: {
     status: 'stale',
-    next_action: 'Verification is stale. Re-run verify-work before transition.',
-    next_command: '',
+    // #4682: staleness means covered source files changed after the verifier
+    // last ran — the only remedy is re-running the verifier.
+    // /gsd-verify-work never rewrites VERIFICATION.md, so advising it from
+    // here was an advice loop. execute-phase resumes at the verification
+    // gates and re-runs the verifier (its resume tree routes a stale report
+    // to re-verification), which regenerates VERIFICATION.md and its digest.
+    next_action: 'Verification is stale — covered source files changed after the verifier last ran. Re-run execute-phase for this phase: it resumes at the verification gates and re-runs the verifier, regenerating VERIFICATION.md and its digest. verify-work alone cannot refresh a stale report.',
+    next_command: 'execute-phase',
   },
   // INTERNAL SENTINEL: constructed when no *-VERIFICATION.md file exists or when
   // the file has no parseable frontmatter status. Never emitted by the verifier.
@@ -1115,7 +1121,10 @@ function readVerificationStatus(
     return {
       status: entry.status,
       next_action: entry.next_action,
-      next_command: projectNextCommand('verify-work', runtime, phaseArg),
+      // #4682: execute-phase resumes at the verification gates and re-runs
+      // the verifier, regenerating VERIFICATION.md and its digest — the same
+      // routing the `missing` sentinel has used since #2868.
+      next_command: projectNextCommand('execute-phase', runtime, phaseArg),
     };
   }
 
