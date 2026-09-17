@@ -25,6 +25,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execGit, platformWriteSync, platformReadSync } from './shell-command-projection.cjs';
+// #4717: runtime-identity fill — env rung + per-install marker rung.
+import { readInstallRuntimeMarker } from './runtime-slash.cjs';
+import { resolveRuntimeNameFromCandidates } from './runtime-name-policy.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir, planningRoot } = planningWorkspace;
@@ -669,7 +672,7 @@ function _warnUnusableConfig(fault: ConfigFault): void {
  * cannot dirty the working tree; the ~30 callers that omit it keep persisting, so
  * a legacy config is still migrated exactly once by ordinary use.
  */
-function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}): ConfigResolution {
+function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown> = {}): ConfigResolution {
   // Opt-OUT, not opt-in: omitting the option must preserve the historical
   // write-back for every existing caller.
   const persist = options['persist'] !== false;
@@ -1033,7 +1036,7 @@ function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}):
     // `workstream: null` still wins the `hasOwnProperty` check at the top of this
     // function, so spreading cannot let `workstreamContext` reintroduce a workstream.
     if (wsRequested && rootParsed) {
-      const fb = loadConfigResolved(cwd, { ...options, workstream: null });
+      const fb = loadConfigResolvedInternal(cwd, { ...options, workstream: null });
       return fallback({ config: fb.config, source: 'root', degraded: true });
     }
 
@@ -1042,7 +1045,7 @@ function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}):
       if (rootParsed) {
         // Branch B: workstream requested but ws config.json absent; root config present.
         // (Only reached when wsRequested is false — e.g. ws='' with .planning/workstreams//config.json)
-        const fb = loadConfigResolved(cwd, { ...options, workstream: null });
+        const fb = loadConfigResolvedInternal(cwd, { ...options, workstream: null });
         return fallback({ config: fb.config, source: 'root', degraded: true });
       }
       // Branch C: .planning/ exists but no config.json and no root config — federated/builtin defaults
@@ -1122,6 +1125,30 @@ function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}):
       }
     }
   }
+}
+
+/**
+ * #4717 — fill an empty `runtime` from the environment, then the per-install
+ * marker. writeNonClaudeDefaults stamps `runtime` into the SHARED
+ * ~/.gsd/defaults.json with whichever non-Claude runtime installed first, so
+ * direct readers of config.runtime saw another runtime's identity (or
+ * nothing) on a multi-runtime machine. Copy-on-write: the builtin-defaults
+ * branch returns a shared object, so never assign into it. An explicit
+ * config.runtime is never overridden.
+ */
+function fillRuntimeIdentity(resolved: ConfigResolution): ConfigResolution {
+  const cfg = resolved?.config;
+  if (!cfg || cfg['runtime']) return resolved;
+  const runtime = resolveRuntimeNameFromCandidates(
+    process.env['GSD_RUNTIME'],
+    readInstallRuntimeMarker(),
+  );
+  if (!runtime) return resolved;
+  return { ...resolved, config: { ...cfg, runtime } };
+}
+
+function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}): ConfigResolution {
+  return fillRuntimeIdentity(loadConfigResolvedInternal(cwd, options));
 }
 
 /**

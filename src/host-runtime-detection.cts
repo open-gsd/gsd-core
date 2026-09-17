@@ -16,7 +16,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { resolveExplicitRuntime } from './runtime-slash.cjs';
+import { resolveExplicitRuntime, readInstallRuntimeMarker } from './runtime-slash.cjs';
+import { resolveRuntimeNameFromCandidates } from './runtime-name-policy.cjs';
 import { CODEX_CONFIG_MARKER } from './update-context.cjs';
 
 export { CODEX_CONFIG_MARKER };
@@ -139,6 +140,13 @@ export function resolveReportedRuntime(projectDir: string | null | undefined, de
 function resolveReportedRuntimeUnsafe(projectDir: string | null | undefined, deps?: DetectionDeps): string {
   const explicit = resolveExplicitRuntime(projectDir, deps?.env ?? process.env);
   if (explicit) return explicit;
+  // #4717: the per-install marker names the runtime that owns THIS tree — a
+  // stronger signal than host sniffing, which misreports every session on a
+  // multi-runtime machine (e.g. a globally exported CODEX_HOME makes a Claude
+  // Code session read as codex). Marker-less trees (dev/source, pre-#2297
+  // installs) fall through to host detection unchanged.
+  const marker = resolveRuntimeNameFromCandidates(readInstallRuntimeMarker());
+  if (marker) return marker;
   const detected = detectHostRuntime(deps);
   if (detected.runtime) return detected.runtime;
   return 'claude';
