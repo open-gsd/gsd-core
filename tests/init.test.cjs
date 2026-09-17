@@ -5275,3 +5275,68 @@ describe('#4040 partial-init completeness fields', () => {
       'new-project gate must resume a partial bootstrap instead of erroring');
   });
 });
+
+// ── #4731 — hard-wrapped Goal/Requirements fields read past the line break ───
+// The roadmapper soft-wraps long fields at ~85 chars; the five single-line
+// field regexes truncated every wrapped Goal/Requirements at the first line:
+// plan-phase's phase_req_ids silently dropped the IDs on continuation lines
+// (silently escaping the Requirements Coverage Gate) and get-phase/analyze
+// cut the goal mid-sentence.
+describe('init plan-phase — wrapped Goal/Requirements fields (#4731)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-4731-');
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '# State\n');
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'REQUIREMENTS.md'),
+      ['# Requirements', '', '- [ ] **REQ-01**: thing', '- [ ] **REQ-11**: thing'].join('\n'),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## Phases',
+        '',
+        '- [ ] **Phase 1: Demo** - Goal',
+        '',
+        '## Phase Details',
+        '',
+        '### Phase 1: Demo',
+        '',
+        '**Goal:** Deliver a small demo feature that exercises the planning pipeline end to end with a',
+        'goal sentence long enough to wrap onto a second line',
+        '**Requirements**: REQ-01, REQ-02, REQ-03, REQ-04, REQ-05, REQ-06, REQ-07, REQ-08, REQ-09,',
+        'REQ-10, REQ-11',
+        '**Plans**: 1 plans',
+        '',
+      ].join('\n'),
+    );
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-demo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '---\nphase: 01-demo\nplan: 01\n---\n# Plan');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '---\nphase: 01-demo\nplan: 01\n---\n# Summary');
+  });
+
+  afterEach(() => cleanup(tmpDir));
+
+  test('wrapped Requirements yield all eleven IDs (#4731)', () => {
+    const result = runGsdTools('init plan-phase 1 --pick phase_req_ids', tmpDir);
+    assert.equal(
+      result.output.trim(),
+      'REQ-01, REQ-02, REQ-03, REQ-04, REQ-05, REQ-06, REQ-07, REQ-08, REQ-09, REQ-10, REQ-11',
+      'continuation-line REQ-10/REQ-11 must not be silently dropped',
+    );
+  });
+
+  test('wrapped Goal is returned in full (#4731)', () => {
+    const result = runGsdTools('query roadmap.get-phase 1 --pick goal', tmpDir);
+    assert.equal(
+      result.output.trim(),
+      'Deliver a small demo feature that exercises the planning pipeline end to end with a goal sentence long enough to wrap onto a second line',
+      'the goal must read past the hard wrap',
+    );
+  });
+});
