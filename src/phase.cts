@@ -3897,17 +3897,21 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
 
           const sectionText = phaseSectionMatch ? phaseSectionMatch[1] : '';
           // #4731: multiline-aware — hard-wrapped Requirements read past the
-          // line break before the ID scan.
-          const reqMatch = sectionText.match(
-            /\*\*Requirements:?\*\*[^\S\n]*:?[^\S\n]*([\s\S]+?)(?=\n\s*\*\*[A-Z][A-Za-z ]*(?::\*\*|\*\*:)|\n\s*$|$)/i,
-          );
+          // line break before the ID scan. The shared extractor also stops at
+          // headings and table rows, so a Requirements field followed by the
+          // Traceability table cannot bleed other phases' REQ-IDs into the
+          // citation scan (isolated-review MEDIUM on the inline lookahead,
+          // whose lazy capture swallowed everything to section end).
+          const reqLine = sectionText
+            ? roadmapParserMod.extractPhaseFieldMultiline(sectionText, 'Requirements')
+            : null;
 
           const originalReqContent = fs.readFileSync(reqPath, 'utf-8');
           let reqContent = originalReqContent;
 
           // #2316: `citedReqIds` — the REQ-IDs ROADMAP's own **Requirements:**
           // line for this phase actually cites — is hoisted out of the
-          // `if (reqMatch)` block (previously scoped only inside it) so the
+          // `if (reqLine)` block (previously scoped only inside it) so the
           // ghost-ID cross-check below (~#2316-1) can consult it. `TBD` is the
           // literal placeholder `phase.add`/`-batch`/`-insert` seed
           // (`**Requirements**: TBD`, src/phase.cts:833,920,1078) — never a
@@ -3920,18 +3924,18 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // `else`, discarding this fact silently instead of surfacing it.
           const traceabilityWriteMisses: string[] = [];
 
-          if (reqMatch) {
+          if (reqLine) {
             // #2334 HIGH 3 + #3697: selection and under-selection detection both
             // live in `analyzeRequirementsLine` (module scope, above), extracted in
             // round 3 so the parser is directly testable — a closure in here is
             // reachable only by spawning the CLI, which no fast-check property test
             // can do. `citedReqIds` is byte-identical to the expression that stood
             // here; nothing about what phase-complete MARKS has changed.
-            const reqLineAnalysis = analyzeRequirementsLine(reqMatch[1]);
+            const reqLineAnalysis = analyzeRequirementsLine(reqLine);
             citedReqIds = reqLineAnalysis.citedReqIds;
             const reqLineWarning = formatRequirementsLineWarning(
               phaseNum,
-              reqMatch[1],
+              reqLine,
               reqLineAnalysis,
             );
             if (reqLineWarning) {
