@@ -5340,3 +5340,129 @@ describe('init plan-phase — wrapped Goal/Requirements fields (#4731)', () => {
     );
   });
 });
+
+// ── #4683 — gap-closure plans reused threat IDs that earlier plans in the ────
+// same phase had already assigned to different threats. Nothing detected it:
+// SECURITY.md rows and VALIDATION.md's Threat Ref column key on the ID, so a
+// reused ID makes every downstream consumer ambiguous. The init payloads now
+// carry the cross-plan duplicate list (T-{phase}-NN shapes; the reserved
+// T-{phase}-SC supply-chain row is deliberately shared and never flagged), and
+// execute-phase.md hard-stops on a non-empty list before any dispatch.
+describe('#4683 — cross-plan threat-ID duplicate detection', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = fs.realpathSync(createFixture());
+  });
+  afterEach(() => cleanup(tmpDir));
+
+  function threatPlan({ ids, gapClosure = false, superseded = false, withSc = true }) {
+    const rows = ids.map((id) => `| ${id} | Tampering | component | medium | mitigate | fix it |`);
+    return [
+      ...(superseded ? ['---', 'status: superseded', '---', ''] : []),
+      '# Plan',
+      '',
+      ...(gapClosure ? ['gap_closure: true', ''] : []),
+      '<threat_model>',
+      '| Threat ID | Category | Component | Severity | Disposition | Mitigation |',
+      '|-----------|----------|-----------|----------|-------------|------------|',
+      ...(withSc ? ['| T-47-SC | Tampering | npm installs | high | mitigate | legitimacy gate |'] : []),
+      ...rows,
+      '</threat_model>',
+      '',
+    ].join('\n');
+  }
+
+  test('init execute-phase reports threat IDs reused across plans (#4683)', () => {
+    seedPhase(tmpDir, '47-security', {
+      // Earlier plans own T-47-01..09 / 10..14 / 15..19.
+      '47-03-PLAN.md': threatPlan({ ids: ['T-47-01', 'T-47-02', 'T-47-03'] }),
+      '47-04-PLAN.md': threatPlan({ ids: ['T-47-10', 'T-47-11', 'T-47-15'] }),
+      '47-05-PLAN.md': threatPlan({ ids: ['T-47-19'] }),
+      // Gap-closure plans renumber from 01 again — the bug: every ID below is
+      // already claimed by an earlier plan for a DIFFERENT threat.
+      '47-06-PLAN.md': threatPlan({ ids: ['T-47-10', 'T-47-11', 'T-47-19'], gapClosure: true }),
+      '47-07-PLAN.md': threatPlan({ ids: ['T-47-15'], gapClosure: true }),
+    });
+    writePlanningDocs(tmpDir);
+
+    const result = runGsdTools('init execute-phase 47', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+
+    const duplicates = output.threat_id_duplicates;
+    assert.ok(Array.isArray(duplicates), 'threat_id_duplicates must be an array');
+    const byId = Object.fromEntries(duplicates.map((d) => [d.id, d.plans]));
+    for (const id of ['T-47-10', 'T-47-11', 'T-47-15', 'T-47-19']) {
+      assert.ok(byId[id], `reused ID ${id} must be reported, got: ${JSON.stringify(duplicates)}`);
+      assert.ok(byId[id].length >= 2, `${id} must name at least the two plans claiming it`);
+    }
+    assert.strictEqual(byId['T-47-15'][0], '47-04-PLAN.md');
+    assert.strictEqual(byId['T-47-15'][1], '47-07-PLAN.md');
+    // Only genuinely reused IDs — the unique ones stay out.
+    assert.ok(!byId['T-47-01'] && !byId['T-47-02'] && !byId['T-47-03'], 'uniquely-claimed IDs must not be reported');
+    assert.strictEqual(output.threat_id_duplicate_count, 4,
+      `count must match the duplicate list, got ${output.threat_id_duplicate_count} for ${JSON.stringify(duplicates)}`);
+    // The reserved supply-chain ID is shared BY DESIGN (every plan keeps it).
+    assert.ok(!byId['T-47-SC'], 'T-47-SC is reserved and deliberately shared — never a duplicate');
+  });
+
+  test('init execute-phase reports no duplicates for unique registers (#4683)', () => {
+    seedPhase(tmpDir, '47-security', {
+      '47-03-PLAN.md': threatPlan({ ids: ['T-47-01', 'T-47-02'] }),
+      '47-04-PLAN.md': threatPlan({ ids: ['T-47-03', 'T-47-04'] }),
+    });
+    writePlanningDocs(tmpDir);
+
+    const result = runGsdTools('init execute-phase 47', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.deepEqual(output.threat_id_duplicates, []);
+    assert.strictEqual(output.threat_id_duplicate_count, 0);
+  });
+
+  test('superseded plans do not hold threat IDs against their replacements (#4683)', () => {
+    seedPhase(tmpDir, '47-security', {
+      // Deliberately retired: its IDs moved to the replacing plan.
+      '47-03-PLAN.md': threatPlan({ ids: ['T-47-01'], superseded: true }),
+      '47-05-PLAN.md': threatPlan({ ids: ['T-47-01'] }),
+    });
+    writePlanningDocs(tmpDir);
+
+    const result = runGsdTools('init execute-phase 47', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.deepEqual(output.threat_id_duplicates, [],
+      'a superseded plan\'s IDs were deliberately reassigned — not a collision');
+    assert.strictEqual(output.threat_id_duplicate_count, 0);
+  });
+
+  test('init plan-phase surfaces the same duplicate list (#4683)', () => {
+    seedPhase(tmpDir, '47-security', {
+      '47-03-PLAN.md': threatPlan({ ids: ['T-47-01'] }),
+      '47-04-PLAN.md': threatPlan({ ids: ['T-47-01'] }),
+    });
+    writePlanningDocs(tmpDir);
+
+    const result = runGsdTools('init plan-phase 47', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.threat_id_duplicate_count, 1);
+    assert.deepEqual(output.threat_id_duplicates, [{ id: 'T-47-01', plans: ['47-03-PLAN.md', '47-04-PLAN.md'] }]);
+  });
+
+  test('IDs outside a <threat_model> block never count (#4683)', () => {
+    seedPhase(tmpDir, '47-security', {
+      '47-03-PLAN.md': '# Plan\n\nSee T-47-01 in SECURITY.md. | T-47-02 | not a register |\n',
+      '47-04-PLAN.md': '# Plan\n\nSee T-47-01 again.\n',
+    });
+    writePlanningDocs(tmpDir);
+
+    const result = runGsdTools('init execute-phase 47', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.deepEqual(output.threat_id_duplicates, [],
+      'prose mentions of an ID are not register rows — only <threat_model> tables count');
+    assert.strictEqual(output.threat_id_duplicate_count, 0);
+  });
+});
