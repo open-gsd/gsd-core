@@ -15889,6 +15889,25 @@ describe('phase complete skips already-complete phases as next_phase (#4699)', (
     assert.equal(output.next_phase, '4',
       'next_phase must skip the already-[x] phase 3 and select the outstanding phase 4');
     assert.equal(output.is_last_phase, false);
+    // #4699's actual harm was persistence: STATE.md used to carry the
+    // already-complete phase as current_phase.
+    const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.doesNotMatch(state, /current_phase:\s*3(\s|$)/m,
+      'STATE.md must not carry the already-complete phase as current_phase');
+  });
+
+  test('all later phases already [x] completes the milestone tail (#4699 corner)', () => {
+    writeRoadmap({ fourthBox: '[x]' });
+    writeMinimalState();
+    scaffoldPhaseDir(1, 'one');
+    scaffoldPhaseDir(2, 'two');
+    scaffoldPhaseDir(3, 'three');
+
+    const result = runGsdTools('phase complete 2', tmpDir);
+    const output = JSON.parse(result.output);
+    assert.equal(output.is_last_phase, true,
+      'when every phase above N is already [x], completing N is the milestone tail');
+    assert.equal(output.next_phase, null);
   });
 
   test('uppercase [X] checkboxes are recognized as complete (#4699)', () => {
