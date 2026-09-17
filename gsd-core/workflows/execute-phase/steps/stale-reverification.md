@@ -1,3 +1,5 @@
+Apply response_language to all user-facing prose — narration between tool calls, status updates, progress notes, and findings included; preserve code, paths, and identifiers.
+
 <step name="stale_reverification">
 Covered source files changed after the verifier last ran — the recorded digest no longer
 matches, so the report cannot be trusted until the verifier re-runs (#4682). The plans are all
