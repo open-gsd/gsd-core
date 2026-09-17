@@ -247,3 +247,117 @@ describe('executor spec requires intentional RED evidence before GREEN (#3770)',
       'execute-mvp-tdd.md must halt GREEN on INVALID_RED');
   });
 });
+
+// ── #4724 — Surefire/Failsafe XML RED evidence ────────────────────────────────
+// A JVM project's genuine red is a Surefire/Failsafe XML report, not node:test
+// TAP. The gate used to parse only TAP, so a real Maven red scored
+// INVALID_RED while hand-written synthetic TAP scored RED_EVIDENCE_OK — the
+// gate was passable only by fabricating its input. The XML scanner walks
+// <testcase> tag boundaries (NOT a lazy spanning regex: Surefire writes
+// passing cases self-closing, so `(.*?)</testcase>` spans from a green case
+// to the next closing tag and reports wrong method names).
+
+describe('#4724 — Surefire/Failsafe XML RED evidence', () => {
+  const XML_HEAD = '<?xml version="1.0" encoding="UTF-8"?>\n';
+
+  function surefire(cases) {
+    const body = cases.join('\n');
+    return `${XML_HEAD}<testsuite name="com.example.AppTest" tests="${cases.length}" failures="1" errors="0">\n${body}\n</testsuite>`;
+  }
+
+  const failingCase = (cls, name) =>
+    `<testcase name="${name}" classname="${cls}" time="0.01"><failure message="expected 1 was 2">1 != 2</failure></testcase>`;
+  const errorCase = (cls, name) =>
+    `<testcase name="${name}" classname="${cls}" time="0.01"><error message="boom">NullPointerException</error></testcase>`;
+  const greenCase = (cls, name) =>
+    `<testcase name="${name}" classname="${cls}" time="0.01"/>`;
+
+  const INPUT = {
+    command: 'mvn -Dtest=AppTest test',
+    exitCode: 1,
+    targetTest: 'AppTest',
+    targetFile: 'src/test/java/com/example/AppTest.java',
+  };
+
+  test('a genuine Surefire red with the target class failing classifies RED_EVIDENCE_OK (#4724)', () => {
+    const result = classifyRedEvidence({
+      ...INPUT,
+      output: surefire([failingCase('com.example.AppTest', 'divides_by_zero')]),
+    });
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(result.reason, 'target_test_failed');
+    assert.equal(result.evidence.fail, 1);
+    assert.ok(
+      result.evidence.failing_tests.some((n) => n.includes('AppTest')),
+      'failing_tests must carry the classname so the target matches',
+    );
+  });
+
+  test('an unrelated Surefire failure is not the target test', () => {
+    const result = classifyRedEvidence({
+      ...INPUT,
+      output: surefire([failingCase('com.other.UnrelatedTest', 'unrelated_case')]),
+    });
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'no_target_test_failure');
+  });
+
+  test('an all-green self-closing Surefire report is unexpected_green', () => {
+    const result = classifyRedEvidence({
+      ...INPUT,
+      exitCode: 0,
+      output: surefire([greenCase('com.example.AppTest', 'passes'), greenCase('com.example.AppTest', 'passes2')]),
+    });
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'unexpected_green');
+  });
+
+  test('self-closing passing cases are not spanned into failing names (#4725-class trap)', () => {
+    // The issue's trap: a lazy /(.*?)<\/testcase>/ regex starting at the green
+    // self-closing case spans to the NEXT closing tag, misreporting the green
+    // case's name beside the failing one. Boundary scanning must not.
+    const result = classifyRedEvidence({
+      ...INPUT,
+      output: surefire([
+        greenCase('com.example.AppTest', 'green_before_failure'),
+        failingCase('com.example.AppTest', 'the_real_failure'),
+      ]),
+    });
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.deepEqual(
+      result.evidence.failing_tests,
+      ['com.example.AppTest#the_real_failure'],
+      'exactly the failing case is reported — no spanned green-case names',
+    );
+  });
+
+  test('an <error> child counts as a failing testcase', () => {
+    const result = classifyRedEvidence({
+      ...INPUT,
+      output: surefire([errorCase('com.example.AppTest', 'explodes')]),
+    });
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(result.evidence.fail, 1);
+  });
+
+  test('a testcase-free Surefire report is zero_tests_discovered', () => {
+    const result = classifyRedEvidence({
+      ...INPUT,
+      output: `${XML_HEAD}<testsuite name="com.example.AppTest" tests="0" failures="0" errors="0"></testsuite>`,
+    });
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'zero_tests_discovered');
+  });
+
+  test('Failsafe XML (same schema) classifies like Surefire', () => {
+    const result = classifyRedEvidence({
+      command: 'mvn -Dtest=AppIT verify',
+      exitCode: 1,
+      targetTest: 'AppIT',
+      targetFile: 'src/test/java/com/example/AppIT.java',
+      output: `${XML_HEAD}<testsuite name="com.example.AppIT" tests="1" failures="1" errors="0">\n${failingCase('com.example.AppIT', 'integration_red')}\n</testsuite>`,
+    });
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(result.reason, 'target_test_failed');
+  });
+});
