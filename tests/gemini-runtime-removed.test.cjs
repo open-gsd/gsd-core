@@ -217,13 +217,14 @@ describe('#1928 Antigravity preserved (shared surface with the removed gemini ru
     assert.strictEqual(getRuntimeLabel('antigravity'), 'Antigravity');
   });
 
-  test('the shared Gemini-backend tool vocabulary still powers Antigravity agent conversion', () => {
+  test('the Antigravity-native tool vocabulary powers Antigravity agent conversion (#4705)', () => {
     const input = ['---', 'name: gsd-x', 'description: d', 'tools: Read, Write, WebFetch, Skill', '---', '', 'body'].join('\n');
-    const toolsLine = convertClaudeAgentToAntigravityAgent(input).split('\n').find((l) => l.startsWith('tools:')) || '';
-    assert.ok(toolsLine.includes('read_file'), 'Read → read_file via the retained convertAntigravityToolName');
-    assert.ok(toolsLine.includes('write_file'), 'Write → write_file');
-    assert.ok(toolsLine.includes('web_fetch'), 'WebFetch → web_fetch');
-    assert.ok(!/\bskill\b/.test(toolsLine), 'Skill is still excluded (would be an invalid backend tool name)');
+    const result = convertClaudeAgentToAntigravityAgent(input);
+    const toolsBlock = result.slice(result.indexOf('tools:')).split('\n').filter((l) => l.startsWith('- '));
+    assert.ok(toolsBlock.includes('- view_file'), 'Read → view_file (native name, #4705)');
+    assert.ok(toolsBlock.includes('- write_file'), 'Write → write_file');
+    assert.ok(toolsBlock.includes('- web_fetch'), 'WebFetch → web_fetch');
+    assert.ok(!toolsBlock.some((l) => /\bskill\b/.test(l)), 'Skill is still excluded (would be an invalid backend tool name)');
   });
 
   test('#4727 the rename is complete: no gemini-named alias survives alongside the antigravity-named exports', () => {

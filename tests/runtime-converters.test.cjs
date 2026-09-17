@@ -478,12 +478,12 @@ tools: Read, Write, Bash, Skill, WebFetch, SlashCommand
 <role>Plan the phase.</role>`;
 
     const result = convertClaudeAgentToAntigravityAgent(input);
-    const toolsLine = result.split('\n').find(l => l.startsWith('tools:')) || '';
+    const toolsItems = result.split('\n').filter(l => l.startsWith('- ')).map(l => l.slice(2));
 
-    assert.ok(toolsLine.includes('read_file'), 'maps Read -> read_file');
-    assert.ok(toolsLine.includes('web_fetch'), 'maps WebFetch -> web_fetch');
-    assert.ok(!/\bskill\b/.test(toolsLine), 'no invalid skill tool in Antigravity frontmatter');
-    assert.ok(!/\bslashcommand\b/.test(toolsLine), 'no invalid slashcommand tool in Antigravity frontmatter');
+    assert.ok(toolsItems.includes('view_file'), 'maps Read -> view_file (#4705 native name)');
+    assert.ok(toolsItems.includes('web_fetch'), 'maps WebFetch -> web_fetch');
+    assert.ok(!toolsItems.some(t => /\bskill\b/.test(t)), 'no invalid skill tool in Antigravity frontmatter');
+    assert.ok(!toolsItems.some(t => /\bslashcommand\b/.test(t)), 'no invalid slashcommand tool in Antigravity frontmatter');
   });
 });
 

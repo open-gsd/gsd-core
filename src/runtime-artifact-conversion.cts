@@ -2431,13 +2431,20 @@ const claudeToCopilotTools = {
 
 // Tool name mapping from Claude Code to Antigravity
 // Antigravity uses Gemini's snake_case built-in tool names
+// #4705: values are Antigravity-NATIVE tool names per the documented subagent
+// contract (antigravity.google/docs/subagents: view_file, replace_file_content,
+// grep_search, run_command are the documented examples; the catalog is
+// non-exhaustive, so unmapped entries keep their best-known grant rather than
+// being dropped — dropping would silently remove a restriction). The old
+// values were Gemini CLI dialect names, which Antigravity's tool validation
+// does not document and may hang the subagent on.
 const claudeToAntigravityTools = {
-  Read: 'read_file',
+  Read: 'view_file',
   Write: 'write_file',
-  Edit: 'replace',
-  Bash: 'run_shell_command',
+  Edit: 'replace_file_content',
+  Bash: 'run_command',
   Glob: 'glob',
-  Grep: 'search_file_content',
+  Grep: 'grep_search',
   WebSearch: 'google_web_search',
   WebFetch: 'web_fetch',
   TodoWrite: 'write_todos',
@@ -2552,7 +2559,13 @@ function convertClaudeAgentToAntigravityAgent(content, isGlobal = false) {
   const mappedTools = claudeTools.map(t => convertAntigravityToolName(t)).filter(Boolean);
 
   // #2876: quote description for the same reason as the skill variant.
-  let fm = `---\nname: ${name}\ndescription: ${yamlQuote(description)}\ntools: ${mappedTools.join(', ')}\n`;
+  // #4705: tools is a YAML SEQUENCE of native names (one `- name` item per
+  // line), not a comma-separated scalar. Empty mapped set -> `tools: []` so an
+  // agent whose every tool was filtered stays explicitly restricted.
+  const toolsBlock = mappedTools.length > 0
+    ? `tools:\n${mappedTools.map((t) => `- ${t}`).join('\n')}\n`
+    : 'tools: []\n';
+  let fm = `---\nname: ${name}\ndescription: ${yamlQuote(description)}\n${toolsBlock}`;
   if (color) fm += `color: ${color}\n`;
   fm += '---';
 

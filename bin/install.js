@@ -1659,16 +1659,17 @@ const claudeToOpencodeTools = {
 // Tool name mapping from Claude Code to Antigravity
 // Antigravity uses Gemini's snake_case built-in tool names
 const claudeToAntigravityTools = {
-  Read: 'read_file',
+  // #4705: Antigravity-NATIVE tool names (see src/runtime-artifact-conversion.cts)
+  Read: 'view_file',
   Write: 'write_file',
-  Edit: 'replace',
-  Bash: 'run_shell_command',
+  Edit: 'replace_file_content',
+  Bash: 'run_command',
   Glob: 'glob',
-  Grep: 'search_file_content',
+  Grep: 'grep_search',
   WebSearch: 'google_web_search',
   WebFetch: 'web_fetch',
   TodoWrite: 'write_todos',
-};
+}
 
 // Tool name mapping from Claude/GSD agents to Kimi CLI module paths.
 // Kimi custom agent YAML requires fully-qualified module paths.
@@ -2527,7 +2528,11 @@ function convertClaudeAgentToAntigravityAgent(content, isGlobal = false) {
   const mappedTools = claudeTools.map(t => convertAntigravityToolName(t)).filter(Boolean);
 
   // #2876: quote description for the same reason as the skill variant.
-  let fm = `---\nname: ${name}\ndescription: ${yamlQuote(description)}\ntools: ${mappedTools.join(', ')}\n`;
+  // #4705: tools is a YAML SEQUENCE of native names (see the src twin).
+  const toolsBlock = mappedTools.length > 0
+    ? `tools:\n${mappedTools.map((t) => `- ${t}`).join('\n')}\n`
+    : 'tools: []\n';
+  let fm = `---\nname: ${name}\ndescription: ${yamlQuote(description)}\n${toolsBlock}`;
   if (color) fm += `color: ${color}\n`;
   fm += '---';
 
