@@ -144,6 +144,7 @@ module.exports = {
   "tests/phase-locator.test.cjs",
   "tests/phase.test.cjs",
   "tests/plan-count-single-owner.test.cjs",
+  "tests/plan-document.test.cjs",
   "tests/plan-phase-stall-detection.test.cjs",
   "tests/plan-review-convergence.test.cjs",
   "tests/planning-inspect.test.cjs",
