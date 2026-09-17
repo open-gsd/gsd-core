@@ -361,3 +361,62 @@ describe('#4724 — Surefire/Failsafe XML RED evidence', () => {
     assert.equal(result.reason, 'target_test_failed');
   });
 });
+
+// ── #4724 review hardening — scanner edge cases ──────────────────────────────
+
+test('#4724: a <testcase with no > (truncated output) terminates and fails closed', () => {
+  // Pre-hardening this hung forever: indexOf('<testcase', -1) clamps to 0 and
+  // re-found the same tag. Degrade to what was scanned — an incomplete report
+  // proves nothing.
+  const result = classifyRedEvidence({
+    command: 'mvn test',
+    exitCode: 1,
+    targetTest: 'AppTest',
+    output: '<?xml version="1.0"?><testsuite><testcase name="x" classname="C"',
+  });
+  assert.equal(result.verdict, 'INVALID_RED');
+});
+
+test('#4724: a TAP red whose message quotes <testsuite> stays on the TAP path', () => {
+  // Format detection requires BOTH <testsuite and <testcase: a genuine TAP
+  // red whose error message merely quotes "<testsuite>" must not flip to the
+  // XML path (which would misread it as zero_tests_discovered).
+  const tap = [
+    'TAP version 13',
+    '# Subtest: the test',
+    'not ok 1 - expected <testsuite> was 2',
+    '  ---',
+    '    error: |-',
+    '      expected <testsuite> was 2',
+    '  ...',
+    '# tests 1',
+    '# pass 0',
+    '# fail 1',
+  ].join('\n');
+  const result = classifyRedEvidence({
+    command: 'node --test',
+    exitCode: 1,
+    targetTest: 'the test',
+    output: tap,
+  });
+  assert.equal(result.status ?? result.verdict, 'INVALID_RED');
+  assert.equal(result.reason, 'no_target_test_failure',
+    'the TAP path must classify it (fail=1), not the XML path (zero tests)');
+  assert.equal(result.evidence.fail, 1);
+});
+
+test('#4724: CDATA sections in a passing case are never scanned as failures', () => {
+  // A passing case whose captured System.out (CDATA) echoes an <error .../>
+  // literal must not count as failing — CDATA is verbatim content.
+  const cd = '<testcase name="prints" classname="com.example.AppTest"><system-out><![CDATA[echo <error x/></system-out>]]></testcase>';
+  const fl = '<testcase name="x" classname="com.other.Unrelated"><failure message="e">1 != 2</failure></testcase>';
+  const result = classifyRedEvidence({
+    command: 'mvn test',
+    exitCode: 1,
+    targetTest: 'UnrelatedTest',
+    output: `<?xml version="1.0"?>\n<testsuite>\n${cd}\n${fl}\n</testsuite>`,
+  });
+  assert.equal(result.reason, 'no_target_test_failure',
+    'the CDATA phantom must not flip the unrelated failure into a target match');
+  assert.equal(result.evidence.fail, 1, 'only the real failing case counts');
+});

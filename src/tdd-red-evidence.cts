@@ -116,14 +116,25 @@ function parseSurefireSummary(output: string): {
   const failing_tests: string[] = [];
   let idx = output.indexOf('<testcase');
   while (idx !== -1) {
-    tests++;
     const tagEnd = output.indexOf('>', idx);
-    const tagText = tagEnd === -1 ? output.slice(idx) : output.slice(idx, tagEnd + 1);
+    // #4724 review (HIGH): a `<testcase` with no `>` (truncated/stream-cut
+    // output) must terminate the scan — resuming the search at -1 clamps to 0
+    // and re-finds the same tag forever. Degrade to what was scanned so far
+    // (fail-closed: an incomplete report proves nothing).
+    if (tagEnd === -1) break;
+    tests++;
+    const tagText = output.slice(idx, tagEnd + 1);
     // Self-closing (`/>`): the case has NO body — a failing sibling after it
     // must never be attributed to this case (the #4724 spanning trap).
-    const selfClosing = tagEnd !== -1 && output[tagEnd - 1] === '/';
+    const selfClosing = output[tagEnd - 1] === '/';
     const closeIdx = selfClosing ? -1 : output.indexOf('</testcase>', tagEnd);
-    const body = selfClosing ? '' : output.slice(tagEnd + 1, closeIdx === -1 ? output.length : closeIdx);
+    // CDATA sections are verbatim captured output (e.g. System.out echoing
+    // test source) — their content must never be scanned for failure tags
+    // (#4724 review: CDATA phantom failures).
+    const body = (selfClosing
+      ? ''
+      : output.slice(tagEnd + 1, closeIdx === -1 ? output.length : closeIdx)
+    ).replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '');
     const name = /name="([^"]*)"/.exec(tagText)?.[1] ?? '';
     const classname = /classname="([^"]*)"/.exec(tagText)?.[1] ?? '';
     if (body.includes('<failure') || body.includes('<error')) {
@@ -181,7 +192,10 @@ export function classifyRedEvidence(input: RedEvidenceInput): RedEvidenceResult 
   // parsed by tag-boundary scanning; everything else stays on the proven TAP
   // primitives. Unknown formats keep the TAP parse — which finds nothing — and
   // fail closed below.
-  const isSurefireXml = output.includes('<testsuite');
+  // #4724 review: BOTH element names must appear — a TAP error message that
+  // merely quotes "<testsuite>" (e.g. "expected <testsuite> was 2") must not
+  // flip a genuine TAP red into the XML path.
+  const isSurefireXml = output.includes('<testsuite') && output.includes('<testcase');
   let summary: { tests: number; pass: number; fail: number };
   let failing: string[];
   if (isSurefireXml) {
