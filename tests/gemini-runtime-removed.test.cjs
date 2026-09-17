@@ -251,20 +251,25 @@ describe('#1928 Antigravity preserved (shared surface with the removed gemini ru
       'the retired gemini-named function must not still be exported — a surviving alias means the rename never finished',
     );
 
-    // The rename must be a pure identifier change: every value byte-identical, so an added OR
-    // removed key (not just a renamed export) fails this too.
+    // The #4727 rename remains a pure identifier change: same KEYS, same shape
+    // (an added OR removed key still fails). The VALUES moved from the Gemini
+    // CLI dialect to Antigravity-native names in #4705 — Antigravity's own
+    // documented subagent contract (antigravity.google/docs/subagents) names
+    // view_file / replace_file_content / grep_search / run_command as native,
+    // and its tool-validation warning says wrong names can hang the subagent.
+    // The old "Antigravity speaks the Gemini dialect" rationale was the belief
+    // at #4727 time; the confirmed bug #4705 supersedes it.
     assert.deepStrictEqual(mod.claudeToAntigravityTools, {
-      Read: 'read_file',
+      Read: 'view_file',
       Write: 'write_file',
-      Edit: 'replace',
-      Bash: 'run_shell_command',
+      Edit: 'replace_file_content',
+      Bash: 'run_command',
       Glob: 'glob',
-      Grep: 'search_file_content',
+      Grep: 'grep_search',
       WebSearch: 'google_web_search',
       WebFetch: 'web_fetch',
       TodoWrite: 'write_todos',
-    }, 'the tool map values are Gemini\'s built-in tool dialect, which Antigravity speaks — Google\'s '
-      + 'contract, not GSD\'s to alter by renaming the map that carries it');
+    }, 'the tool map keys are the #4727 rename surface (add/remove still fails); the VALUES are the #4705 Antigravity-native vocabulary');
 
     // In-set / out-of-set boundary pair: the excluded ids still return null individually...
     for (const excluded of ['mcp__anything', 'Task', 'Agent', 'AskUserQuestion', 'ask_user', 'Skill', 'SlashCommand']) {
