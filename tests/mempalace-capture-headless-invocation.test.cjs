@@ -181,6 +181,15 @@ describe('#4700 — headless mine queues on the palace lock', () => {
     }
   });
 
+  test('the wave:post problems fragment queues its headless mine too (#4700)', () => {
+    const frag = 'capabilities/mempalace/fragments/capture-problems.md';
+    const content = fs.readFileSync(path.join(ROOT, frag), 'utf8');
+    assert.match(
+      content, /mempalace mine --daemon --background/,
+      `${frag}: the headless mine must queue via --daemon --background — the issue names the execute:wave:post problem-fix pair as the unrecoverable loss (#4700)`,
+    );
+  });
+
   test('the report step names queued and skipped captures (#4700)', () => {
     for (const rel of SURFACES) {
       const content = fs.readFileSync(path.join(ROOT, rel), 'utf8');
