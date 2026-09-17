@@ -197,10 +197,12 @@ if git merge-base --is-ancestor "$AFTER" HEAD 2>/dev/null \
 fi
 ```
   Consistent → done. Anything else is a **BLOCKER** — `commit_claim_mismatch` with both
-  numbers and the SUMMARY path: commits claimed but never made (#3968), or task commits lost
-  after the fact. The unbounded `${BASE}..HEAD` count is NOT evidence either way: it grows
-  with every later plan's commits and execute-phase's own phase-completion commit, so an
-  honest plan would read as a mismatch (#4670).
+  numbers and the SUMMARY path: commits claimed but never made (#3968), task commits lost
+  after the fact, or the plan's recorded window rewritten afterwards (a rebase/amend/cherry-pick
+  of those commits makes `$AFTER` a non-ancestor — recount that plan's commits manually
+  before treating it as a genuine mismatch). The unbounded `${BASE}..HEAD` count is NOT
+  evidence either way: it grows with every later plan's commits and execute-phase's own
+  phase-completion commit, so an honest plan would read as a mismatch (#4670).
 - **Legacy fallback (#4670).** A SUMMARY with a base but no `plan_head_after:` (pre-#4670)
   cannot be bounded to its own window — report the measured `${BASE}..HEAD` count as a
   **WARNING** with the SUMMARY's task-commit list for manual counting. The old

@@ -43,8 +43,16 @@ describe('#3968 — measured commit claims', () => {
       'verify-work must run a commit-claim reconciliation over each SUMMARY');
     assert.ok(verify.includes('ACTUAL=$(git rev-list --count "${BASE}"..HEAD)'),
       'the reconciliation uses the SAME instrument as the executor (rev-list over the recorded base)');
-    assert.ok(/ACTUAL == CLAIMED \+ 1/.test(verify),
-      'the post-measurement SUMMARY commit is an expected +1, not a false BLOCKER');
+    // #4670: the +1 tolerance is retired for bounded SUMMARYs (exact equality
+    // over plan_head_before..plan_head_after); the literal survives only in
+    // the legacy-fallback retirement sentence. Pin the shipped rule, not the
+    // retired tolerance:
+    assert.match(verify, /Bounded reconciliation \(#4670\)/,
+      'the bounded exact-equality reconciliation is the shipped rule');
+    const reconciliationIdx = verify.indexOf('Commit-claim reconciliation');
+    const legacySentenceIdx = verify.indexOf('`ACTUAL == CLAIMED + 1` tolerance was a guess');
+    assert.ok(legacySentenceIdx > reconciliationIdx,
+      'the +1 tolerance appears only as the retired legacy rule inside the reconciliation block');
     assert.ok(/BLOCKER/.test(verify.slice(verify.indexOf('Commit-claim reconciliation'), verify.indexOf('Commit-claim reconciliation') + 1800)),
       'a mismatch must be flagged BLOCKER — the phase must not read as done');
   });
