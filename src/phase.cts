@@ -3896,8 +3896,10 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           );
 
           const sectionText = phaseSectionMatch ? phaseSectionMatch[1] : '';
+          // #4731: multiline-aware — hard-wrapped Requirements read past the
+          // line break before the ID scan.
           const reqMatch = sectionText.match(
-            /\*\*Requirements:?\*\*[^\S\n]*:?[^\S\n]*([^\n]+)/i,
+            /\*\*Requirements:?\*\*[^\S\n]*:?[^\S\n]*([\s\S]+?)(?=\n\s*\*\*[A-Z][A-Za-z ]*(?::\*\*|\*\*:)|\n\s*$|$)/i,
           );
 
           const originalReqContent = fs.readFileSync(reqPath, 'utf-8');

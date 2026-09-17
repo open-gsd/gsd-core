@@ -231,9 +231,9 @@ function searchPhaseInContent(content: string, escapedPhase: string, phaseNum: s
 
   const section = content.slice(headerIndex, sectionEnd).trim();
 
-  // Extract goal if present (supports both **Goal:** and **Goal**: formats)
-  const goalMatch = section.match(/\*\*Goal(?::\*\*|\*\*:)\s*([^\n]+)/i);
-  const goal = goalMatch ? goalMatch[1].trim() : null;
+  // Extract goal if present (supports both **Goal:** and **Goal**: formats).
+  // #4731: multiline-aware — hard-wrapped Goals read past the line break.
+  const goal = roadmapParserModule.extractPhaseFieldMultiline(section, 'Goal');
 
   // Mode: vertical-MVP slice mode flag. Lowercased + trimmed for canonical
   // comparison; unrecognized values are preserved verbatim for forward-compat.
@@ -509,8 +509,7 @@ function collectAnalyzePhases(
     const sectionEnd = nextHeader ? sectionStart + nextHeader.index! : content.length;
     const section = content.slice(sectionStart, sectionEnd);
 
-    const goalMatch = section.match(/\*\*Goal(?::\*\*|\*\*:)\s*([^\n]+)/i);
-    const goal = goalMatch ? goalMatch[1].trim() : null;
+    const goal = roadmapParserModule.extractPhaseFieldMultiline(section, 'Goal');
 
     const modeMatch = section.match(/\*\*Mode(?::\*\*|\*\*:)\s*([^\n]+)/i);
     const mode = modeMatch ? modeMatch[1].trim().toLowerCase() : null;
@@ -1644,6 +1643,7 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
     cross_cutting_constraints: crossCuttingTruths.length,
   }, raw, updated ? `annotated ${waves.length} wave(s), ${crossCuttingTruths.length} constraint(s)` : 'skipped (already annotated or no plan list)');
 }
+
 
 export = {
   cmdRoadmapGetPhase,

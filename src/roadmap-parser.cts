@@ -2255,5 +2255,44 @@ export = {
   // #3641: the scope axis's phase-ENTRY predicate, exported so roadmap
   // validate's V004 document-level check routes through the same single
   // owner (and its convention gate) instead of a private inline copy.
+  extractPhaseFieldMultiline,
   hasPhaseEntries,
 };
+
+
+/**
+ * #4731 — extract a bold-labeled phase field (Goal, Requirements, ...) reading
+ * past hard-wrapped continuation lines. The roadmapper soft-wraps long fields
+ * at ~85 chars, so a single-line capture silently truncated every wrapped
+ * Goal/Requirements. Stops at: another `**Field**` label line, a blank line,
+ * or any heading. Wrapped lines are trimmed and joined with single spaces; a
+ * single-line field is returned unchanged (trimmed). Returns null when the
+ * label is absent.
+ */
+function extractPhaseFieldMultiline(section: string, label: string): string | null {
+  const labelRe = new RegExp(
+    '\\*\\*' + label + '(?::\\*\\*|\\*\\*:)\\s*([^\\n]+)',
+    'i',
+  );
+  const match = section.match(labelRe);
+  if (!match) return null;
+  const startIdx = match.index ?? 0;
+  const after = section.slice(startIdx + match[0].length);
+  const firstLine = match[1].trim();
+  const contLines = [];
+  const lines = after.split('\n');
+  for (let li = 0; li < lines.length; li++) {
+    const raw = lines[li];
+    // The split's first element is the remainder of the captured first line's
+    // own newline — an empty leading element is the line break, not a blank
+    // continuation line.
+    if (li === 0 && !raw.trim()) continue;
+    if (!raw.trim()) break;
+    if (/^\s*\*\*[A-Z][A-Za-z ]*:?(\*\*)?:?\s/.test(raw)) break;
+    if (/^\s*#{1,4}\s/.test(raw)) break;
+    if (/^\s*\|/.test(raw)) break;
+    contLines.push(raw.trim());
+  }
+  return [firstLine, ...contLines].join(' ').trim() || null;
+}
+
