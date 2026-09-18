@@ -5117,3 +5117,157 @@ describe('#3957 (epic #3473 B9): no-op decline reports the real condition', () =
     });
   });
 });
+
+// ─── #4741: a superseded plan must not be ticked from its SUMMARY ────────────
+
+describe('roadmap update-plan-progress — superseded plans (#4741)', () => {
+  // The issue's self-contained fixture: phase 1 with an active plan (01-01)
+  // and a superseded plan (01-02, `status: superseded` in the PLAN
+  // frontmatter), each with a SUMMARY file. The count excludes the superseded
+  // plan (#2349) while the checkbox tick iterated the raw summaries — so the
+  // ROADMAP read "1/1 plans executed" above two checked rows.
+  function write4741World(tmpDir, opts = {}) {
+    const {
+      supersededPlanStatus = 'superseded',
+      supersededSummaryStatus = 'halted',
+      includeSupersededSummary = true,
+      roadmap = null,
+    } = opts;
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-demo'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      roadmap ?? [
+        '# Roadmap',
+        '',
+        '### Phase 1: Demo',
+        '',
+        '**Goal:** demo',
+        '',
+        '**Plans:** 2 plans',
+        '',
+        'Plans:',
+        '',
+        '- [ ] 01-01-PLAN.md — first',
+        '- [ ] 01-02-PLAN.md — second',
+        '',
+      ].join('\n'),
+    );
+    const plan = (num, extra) =>
+      `---\nphase: 01-demo\nplan: ${num}\ntype: execute\nwave: 1\ndepends_on: []\nfiles_modified: []\nautonomous: true${extra ? `\n${extra}` : ''}\n---\n`;
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '01-demo', '01-01-PLAN.md'), plan('01'));
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'phases', '01-demo', '01-02-PLAN.md'),
+      plan('02', `status: ${supersededPlanStatus}`),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'phases', '01-demo', '01-01-SUMMARY.md'),
+      '---\nphase: 01-demo\nplan: 01\nstatus: complete\n---\n',
+    );
+    if (includeSupersededSummary) {
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'phases', '01-demo', '01-02-SUMMARY.md'),
+        `---\nphase: 01-demo\nplan: 02\nstatus: ${supersededSummaryStatus}\n---\n`,
+      );
+    }
+  }
+
+  function runUpdate(tmpDir) {
+    const result = runGsdTools('roadmap update-plan-progress 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    return JSON.parse(result.output);
+  }
+
+  test('#4741: a superseded plan is not ticked even when its SUMMARY exists', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    write4741World(tmpDir);
+
+    const output = runUpdate(tmpDir);
+    assert.strictEqual(output.plan_count, 1, 'the superseded plan is excluded from the count');
+    assert.strictEqual(output.summary_count, 1);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(roadmap.includes('- [x] 01-01-PLAN.md'), 'the active executed plan ticks');
+    assert.ok(
+      roadmap.includes('- [ ] 01-02-PLAN.md'),
+      'the superseded plan must stay unchecked — a plan the tool does not count must not read as executed',
+    );
+    assert.ok(roadmap.includes('1/1 plans executed'), 'the count line agrees with the checkboxes');
+  });
+
+  test('#4741: the superseded filter ignores the SUMMARY\'s own status', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    write4741World(tmpDir, { supersededSummaryStatus: 'complete' });
+
+    runUpdate(tmpDir);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(
+      roadmap.includes('- [ ] 01-02-PLAN.md'),
+      'a superseded plan with a COMPLETE summary still must not read as executed',
+    );
+  });
+
+  test('#4741: the inserted-rows tick path respects the superseded filter too', (t) => {
+    // Loop 2 fires when a countable plan's row is MISSING (insertion path):
+    // pre-existing superseded row + missing countable row. Before the fix the
+    // insertion path's tick loop iterated the raw summaries and ticked the
+    // pre-existing superseded row as well.
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    write4741World(tmpDir, {
+      roadmap: [
+        '# Roadmap',
+        '',
+        '### Phase 1: Demo',
+        '',
+        '**Goal:** demo',
+        '',
+        '**Plans:** 2 plans',
+        '',
+        'Plans:',
+        '',
+        '- [ ] 01-02-PLAN.md — second',
+        '',
+      ].join('\n'),
+    });
+
+    const output = runUpdate(tmpDir);
+    assert.strictEqual(output.plan_count, 1);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(roadmap.includes('- [x] 01-01-PLAN.md'), 'the inserted countable row is ticked (it has a summary)');
+    assert.ok(
+      roadmap.includes('- [ ] 01-02-PLAN.md'),
+      'the pre-existing superseded row must stay unchecked even on the insertion path',
+    );
+  });
+
+  test('#4741 negative space: a superseded plan without a summary stays unchecked', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    write4741World(tmpDir, { includeSupersededSummary: false });
+
+    const output = runUpdate(tmpDir);
+    assert.strictEqual(output.plan_count, 1);
+    assert.strictEqual(output.summary_count, 1);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(roadmap.includes('- [ ] 01-02-PLAN.md'), 'no summary → no tick (existing behavior preserved)');
+  });
+
+  test('#4741 negative space: a halted summary on an ACTIVE plan still ticks (#2830)', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    write4741World(tmpDir, { supersededPlanStatus: 'held', supersededSummaryStatus: 'complete' });
+    // 01-02's PLAN status "held" is NOT superseded → still counted; its
+    // complete summary ticks it. Only `status: superseded` exits the count.
+    const output = runUpdate(tmpDir);
+    assert.strictEqual(output.plan_count, 2, 'a non-superseded status keeps the plan counted');
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(roadmap.includes('- [x] 01-02-PLAN.md'), 'non-superseded plans tick exactly as before');
+    assert.ok(roadmap.includes('2/2 plans executed'), 'numbers and checkboxes agree');
+  });
+});
