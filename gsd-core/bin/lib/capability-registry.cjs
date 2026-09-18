@@ -2988,8 +2988,7 @@ const capabilities = {
         },
         "skipHomePrefixSubstitution": true,
         "skipSettingsUi": true,
-        "skipUpdateBannerCommand": true,
-        "skipCodexSkillsManifest": true
+        "skipUpdateBannerCommand": true
       }
     },
     "reviewer": {
@@ -7213,8 +7212,7 @@ const runtimes = {
         },
         "skipHomePrefixSubstitution": true,
         "skipSettingsUi": true,
-        "skipUpdateBannerCommand": true,
-        "skipCodexSkillsManifest": true
+        "skipUpdateBannerCommand": true
       }
     },
     "reviewer": {

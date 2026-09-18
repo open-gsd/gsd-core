@@ -123,7 +123,11 @@ test('opencode descriptor declares runtime.hostBehaviors (the folded-in behavior
   assert.equal(hb.skipHomePrefixSubstitution, true);
   assert.equal(hb.skipSettingsUi, true);
   assert.equal(hb.skipUpdateBannerCommand, true);
-  assert.equal(hb.skipCodexSkillsManifest, true);
+  // #4738: the skills-manifest exclusion is retired — opencode stages 72
+  // converted skills and its manifest must record them (the flag was carried
+  // verbatim from a pre-skills-layout era and flagged every staged skill as
+  // user-added on every update).
+  assert.equal(hb.skipCodexSkillsManifest, undefined);
   assert.equal(hb.nativePlugin.file, 'gsd-core.js');
   assert.equal(hb.nativePlugin.source, '.opencode/plugins/gsd-core.js');
 });
