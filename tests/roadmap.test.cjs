@@ -970,30 +970,26 @@ describe('roadmap update-plan-progress command', () => {
   });
 
   test('#4725: leaves surrounding prose byte-identical (bold paragraph above a tight list)', () => {
-    const proseBlock = [
+    const fixture = [
+      '# Roadmap',
+      '',
+      '### Phase 654: Stream Consumer',
+      '',
+      '**Goal:** bind the evidence HMAC key in production',
+      '',
       '**Scope narrowed 2026-09-14, round `663-DISPOSITION` Q7 (3/3)** (`.planning/decisions/663-disposition.md`):',
       '- The "for retry" javadoc correction moved to Phase 663',
       '- Per Q6 (3/3), crash and failed-XACK residue stay this phase\'s population',
+      '',
+      '**Plans:** 2 plans',
+      '',
+      'Plans:',
+      '',
+      '- [ ] 654-01-PLAN.md — (wave 1) the evidence HMAC key binds in production',
+      '- [ ] 654-02-PLAN.md — (wave 2) consumer hardening',
+      '',
     ].join('\n');
-    fs.writeFileSync(
-      path.join(tmpDir, '.planning', 'ROADMAP.md'),
-      [
-        '# Roadmap',
-        '',
-        '### Phase 654: Stream Consumer',
-        '**Goal:** bind the evidence HMAC key in production',
-        '',
-        proseBlock,
-        '',
-        '**Plans:** 2 plans',
-        '',
-        'Plans:',
-        '',
-        '- [ ] 654-01-PLAN.md — (wave 1) the evidence HMAC key binds in production',
-        '- [ ] 654-02-PLAN.md — (wave 2) consumer hardening',
-        '',
-      ].join('\n')
-    );
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), fixture);
 
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '654-stream');
     fs.mkdirSync(phaseDir, { recursive: true });
@@ -1007,12 +1003,17 @@ describe('roadmap update-plan-progress command', () => {
     const output = JSON.parse(result.output);
     assert.strictEqual(output.updated, true, 'should update');
 
+    // Whole-file assertion per the issue's Expected: ONLY the **Plans:**
+    // count line and the matching checkbox row change; every other byte —
+    // the bold paragraph and its tight list included — is untouched.
+    const expected = fixture
+      .replace('**Plans:** 2 plans', '**Plans:** 1/2 plans executed')
+      .replace('- [ ] 654-01-PLAN.md', '- [x] 654-01-PLAN.md');
     const written = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
-    assert.ok(written.includes('1/2 plans executed'), 'count line should be updated');
-    assert.ok(written.includes('- [x] 654-01-PLAN.md'), 'completed plan checkbox should be ticked');
-    assert.ok(
-      written.includes(proseBlock),
-      `the bold paragraph and its tight list must survive byte-identical (no injected blank); written file:\n${written}`
+    assert.strictEqual(
+      written,
+      expected,
+      `the file must differ from the input by exactly the two intended edits; written:\n${written}`
     );
   });
 
