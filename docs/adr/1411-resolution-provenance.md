@@ -135,3 +135,268 @@ Both mechanisms below preserve every current return value. Neither changes a ret
 **Test methodology.** Assert the typed surface, not the diagnostic prose — `CONTRIBUTING.md`'s *Prohibited: Raw Text Matching on Test Outputs* applies to `stderr` as much as to `stdout`, and `tests/roadmap-parser.test.cjs` already states the local convention for this call surface. Where the mechanism's only observable is a diagnostic, the applier exposes the typed surface (a frozen reason enum, or the dedup set) and asserts on that.
 
 First appliers: #1880 (in-band), #1881 / #1882 / #1883 (out-of-band), #1884 (genuinely-fatal carve-out, already throwing) — epic #1879, Phase 0 = #2674.
+
+## Amendment — 2026-09-17: per-key provenance, and one encoder at the CLI boundary
+
+This ADR's `ConfigResolution { config, source, degraded, reason }` is **whole-config** provenance: it
+says which layer supplied *the object*, and says nothing about where any individual key inside that
+object came from after merging. Epic #4633 is the bill for that silence. Four `confirmed-bug` issues (all four closed as duplicates of the epic on 2026-09-11)
+divide into two halves of one pipeline — resolve a value across layers, then hand it to a caller —
+and both halves are implemented more than once, so a consumer that needs the producing layer either
+re-derives it from contents (which this ADR's Decision 2 forbids) or discards it.
+
+This amendment is the **design lock** for that epic (Phase 0 = #4671). It changes no code. It fixes
+the owner, the result type, the family boundaries, the encoding contract and the child boundaries so
+that the implementation children can be reviewed against a written contract rather than against each
+other. It stays in this file rather than opening a second ADR because per-key provenance is the same
+decision as Decision 2 applied one level down — a separate ADR would split ownership of one rule.
+
+### What is actually live on `next`
+
+Measured on `next` at `c9a5cc3e1`, in a hermetic fixture (`HOME` redirected, `.planning/config.json`
+authored per case), not inferred from the issue text. The epic's own framing is corrected in two
+places, and the corrections make the seam argument stronger, not weaker.
+
+| Absorbed | Claim | Measured on `next` |
+|---|---|---|
+| #4071 | `~/.gsd/defaults.json` is dropped wholesale when a project config exists | **Live.** With a project config, `research:false` / `model_profile:"quality"` from the global file do not survive (`research:true`, `model_profile:"balanced"`); the file is only read by Branch D, which requires no `.planning/` at all. `_warnShadowedGlobalDefaults` (#3532) prints that this happened — the defect is announced, not fixed |
+| #4090 | The evaluator discards which layer produced `worktree.baseRef` | **Live.** `resolveEffectiveBaseRef` returns `string \| null`. A user/global `head` reaches `evaluateWorktreeBaseDegrade` as the bare string `"head"`, indistinguishable from a project-local one |
+| #4262 | `config-get --default` emits a JSON string, not the JSON value | **Live.** `--default '[]'` → `"[]"`, `--default 5` → `"5"`, `--default true` → `"true"`, `--default null` → `"null"` |
+| #4382 | `config-get` without `--raw` double-encodes an already-JSON value | **Not reproducible as stated.** A *present* array emits a real JSON array, not a string containing JSON text. #4382's own reproduction uses `--default`, so it reports the same defect as #4262 from the consumer side. There is **one** encoding defect, on the `--default` arm only |
+
+Two further facts the epic does not state, both of which constrain the design:
+
+- **`--default` is already correct under `--raw`.** `--raw --default '[]'` prints `[]` and
+  `--raw --default 5` prints `5`, because the raw arm emits the argv string verbatim. The disagreement
+  is confined to the JSON arm, where the same argv string is JSON-encoded *as a string*. This is why
+  the remedy is a parser at the boundary and not a change to `output()`.
+- **`--raw` cannot round-trip today, for present values, by construction.** `output()`'s raw arm is
+  `String(value)`. Measured: `[]` → the empty string, `[{path,depth}]` → `[object Object]`,
+  `["codex","gemini"]` → `codex,gemini`, `200000` → `200000` (indistinguishable from `"200000"`),
+  `project_code:"007"` → `007` (decodes back as the number `7`). See Decision 4.
+
+### Decision 1 — one resolution owner, and it returns the producing layer
+
+A new leaf module, the **Config Value Resolution Module** (`src/config-value-resolver.cts`), owns
+per-key precedence for every configuration family. It is a new module rather than a function grafted
+onto `config-loader.cts` because the two answer different questions with different return types —
+"assemble the effective config object" versus "resolve one key and say which layer produced it" —
+and because the anti-divergence rule of Decision 5 needs a boundary it can name.
+
+```ts
+type ConfigLayer =
+  | 'workstream' | 'root' | 'global-defaults' | 'schema-default' | 'builtin-default'  // family A
+  | 'runtime-local' | 'runtime-shared' | 'runtime-user';                               // family B
+
+interface ConfigValueResolution {
+  found: boolean;
+  value: unknown;                 // `undefined` if and only if `found === false`
+  layer: ConfigLayer | null;      // `null` if and only if `found === false`
+  reason: ConfigReason;           // config-loader's frozen CONFIG_REASON — not a second vocabulary
+  composite?: Readonly<Record<string, ConfigLayer>>;  // per-leaf layer; present only for merged keys
+}
+
+function resolveConfigValue(key: string, opts: { cwd: string; family?: ConfigFamily }): ConfigValueResolution;
+```
+
+- **Absence** is `{ found:false, value:undefined, layer:null, reason:'not_configured' }`. It is never
+  represented by a falsy value, because a falsy value is a legitimate answer (below).
+- **Unusable input** reuses `CONFIG_REASON.CONFIG_UNPARSEABLE` / `CONFIG_UNREADABLE` and the
+  deduplicated diagnostic introduced by the 2026-07-26 amendment. A corrupt layer does not silently
+  become an absent one, and the resolver introduces **no** new reason vocabulary — `CONFIG_REASON` is
+  already frozen, and `tests/config-loader.test.cjs` already pins its values as the wire contract.
+- **Layer-file access belongs to this boundary.** The resolver obtains each layer from
+  `config-loader.cts`'s existing per-layer read (`_readConfigFile`, promoted to an internal export),
+  so "who may open a config layer file" and "who may decide precedence" are the same two modules.
+  Every other module becomes a *reader of a resolution*, never a participant in one.
+- **Traversal is own-property only.** Dotted paths walk with `Object.prototype.hasOwnProperty.call`,
+  as `cmdConfigGet` already does, so `__proto__` / `constructor` resolve as absent rather than to
+  inherited values.
+- **Key eligibility is preserved, not widened.** The resolver honours the existing
+  `VALID_CONFIG_KEYS` / `DYNAMIC_KEY_PATTERNS` / federated-schema eligibility exactly as today. The
+  epic's non-goals forbid expanding `GLOBAL_DEFAULTS_RESOLUTION_KEYS` or revisiting the `loadConfig`
+  whitelist, and this amendment does neither.
+
+`loadConfig` / `loadConfigResolved` keep their callers (the epic counts 45 direct call sites) and their shape. The owner is additive at
+introduction; adoption and deletion are Decision 5's job.
+
+### Decision 2 — two families, declared separately, with no invented precedence between them
+
+The epic speaks of "layers" as though there were one ladder. There are two, they are read from
+different files by different code for different consumers, and merging their orderings would invent
+a precedence nobody decided.
+
+| Family | Layers (highest first) | Read from |
+|---|---|---|
+| **A — GSD project configuration** | `workstream` → `root` → `global-defaults` → `schema-default` → `builtin-default` | `planningDir(cwd)/config.json`, `planningRoot(cwd)/config.json`, `~/.gsd/defaults.json`, federated/capability `configSchema` default, `CONFIG_DEFAULTS` |
+| **B — runtime harness settings** | `runtime-local` → `runtime-shared` → `runtime-user` | `<cwd>/.claude/settings.local.json`, `<cwd>/.claude/settings.json`, `<userClaudeDir>/settings.json` |
+
+A key belongs to **exactly one** family, declared in one table in the resolver. `worktree.baseRef` is
+family B despite its dotted, GSD-looking name — the value #4090 is about never appears in
+`.planning/config.json`. No ordering is declared between A and B; a caller that needs both asks
+twice and composes the answer itself, visibly.
+
+**Normalization.** `normalizeLegacyKeys` runs per layer, before precedence, exactly where
+`config-loader` runs it today. Family B parses with `parseJsonc`, as `resolveEffectiveBaseRef` does.
+Normalization never crosses layers and never rewrites a file — the resolver is a read path and
+passes `persist:false` semantics all the way down.
+
+**Explicitly falsy values are configured values.** `false`, `0`, `""`, `[]`, `{}` and a JSON `null`
+present in a layer all resolve `found:true` with that value and that layer. Only a key *absent* from
+every layer is `found:false`. This is the rule that makes #4071 unrepresentable rather than merely
+fixed: today's `_globalBaseCfg` uses `??` and `||` against 26 named keys, so a global `false` or `0`
+survives one branch and not another, and "is this key set?" is answered by the truthiness of its
+value in four different places.
+
+**Composite values.** Some keys are objects assembled from more than one layer (`effort`,
+`model_overrides`, `agent_tools`, `agent_skills`). Merge-eligibility is **declared per key** in the
+resolver, not decided at a call site by whether a file happens to exist — which is precisely #4071's
+mechanism, where the *existence* of any project config suppresses the whole global file. For a
+declared-merge key:
+
+- `layer` names the highest layer that contributed at least one leaf;
+- `composite` maps each leaf key to the layer that produced it, at whatever depth the declaration
+  says the merge is deep (`effort.agent_overrides` and `effort.routing_tier_defaults` are per-key
+  deep today, per #3531 — that behaviour is preserved and becomes a declaration);
+- a consumer that branches on origin reads `composite[leaf]`. It never re-derives provenance by
+  re-reading a layer file, which is this ADR's Decision 2 restated for leaves.
+
+Every other key **replaces**: the highest layer that has it wins outright.
+
+### Decision 3 — one parser and one encoder own the CLI boundary
+
+`cmdConfigSet` already contains the only value parser at the config CLI boundary: `true`/`false` → boolean,
+`null` → JSON null, a finite `Number(val)` → number, a leading `[`/`{` → `JSON.parse` with
+fall-through to string, everything else → string. It is extracted verbatim as
+`parseConfigArgValue(raw: string): unknown` and shared, unchanged, with `config-get --default`.
+Extracted, not copied — a second copy would be the defect this epic exists to close.
+
+- **`null` parses to the value `null`. Unsetting is a setter action, not a parse result.** The two are
+  conflated today only because `cmdConfigSet` happens to branch on `parsedValue === null` *after*
+  parsing. That branch stays in the setter, where it is a documented "clear" action (#2046). The
+  getter's `--default null` must emit JSON `null` and unset nothing. Any child that moves the unset
+  decision into the parser has broken this contract.
+- **Per-key setter policy stays in the setter.** `project_code` re-reading `val` verbatim so `"007"`
+  does not collapse to `7`, and every `assertEnumValue` / range validator, are *setter* key policies.
+  The shared parser is type-directed only.
+- **One encoder.** `encodeConfigValue(value, { raw })` is the single emission path for every arm of
+  `cmdConfigGet`: present key, root-inherited key (#2702), `--default`, schema default (#2256), and
+  the masked-secret arm. Today those arms reach `output()` through two different helpers, and the
+  `--default` one hands it a value of the wrong type.
+- **Masking stays ahead of encoding.** `isSecretKey(kp)` → `maskSecret(value)` → encoder. The mask
+  yields a string and is encoded as one; the encoder never sees the plaintext. `emitResolvedDefault`
+  already established this for the schema-default arm and it becomes the rule for all of them.
+- **Both consumer kinds are audited by the children, not assumed.** Structured consumers:
+  `gsd-core/workflows/code-review.md` (`workflow.code_review_depth_overrides --default '[]'`),
+  `ship.md` (`ship.pr_body_sections --default '[]'`), `plan-review-convergence.md`
+  (`review.default_reviewers`), `pr-branch.md` (`planning.sub_repos`). Shell-string consumers:
+  `src/review-lane-invocation.cts`'s `configString()`, which treats the literal four characters
+  `null` as "unset" — a live contract on raw output — and the `config-get … --raw` command strings
+  that `src/runtime-artifact-conversion.cts` bakes into generated runtime artifacts.
+
+### Decision 4 — the round-trip property is asserted in JSON mode; raw output is frozen
+
+The epic asks for `decode(encode(v)) === v` "across `--raw` / `--default` / neither". Measured, that
+property **cannot hold in raw mode** while raw means `String(value)`: `[]` and `""` both print
+empty, `[{…}]` prints `[object Object]`, and `5` and `"5"` are the same three bytes. The epic's
+requirement is therefore split rather than silently weakened:
+
+1. **JSON mode (no `--raw`) — the property holds for every supported type and every layer**, including
+   the `--default` and schema-default arms once they route through the parser. This is the property
+   test the epic asks for, and the cell it is currently red in is `--default`.
+2. **Raw mode — the contract is a display and shell-interpolation contract, and it is frozen.**
+   `String(value)` rendering is preserved byte-for-byte and pinned by tests. The round-trip property
+   is asserted in raw mode over scalars only (`string | number | boolean | null`), which is a typed
+   precondition, not a weakened property: for non-scalars there is no claim to weaken.
+
+Making raw lossless — emitting compact JSON for non-scalars, say — is a **user-visible output-contract
+change** to a surface that live consumers parse by hand (`configString()` above; four workflow call
+sites; baked artifact command strings). It is out of scope for #4633, and needs its own issue and its
+own approval. No child may change raw's non-scalar rendering "while it is in there".
+
+### Decision 5 — migration census, child boundaries, and the anti-divergence guard
+
+**Census.** Every site that reads a configuration layer file directly or re-implements precedence,
+found by path-construction search over `src/`, `bin/`, `hooks/`, `scripts/` at `c9a5cc3e1`.
+
+*Precedence implementations to delete or reduce to delegation:*
+
+| Site | What it re-implements |
+|---|---|
+| `src/capability-activation.cts` `resolveConfigKey` | A full four-level walk (loadConfig result → workstream file → root file → schema default) returning `{found, value}` with **no layer**. The closest thing to the epic's owner that already exists, and the reason the owner must absorb these rather than become another walk beside them |
+| `src/config.cts` `resolveFromRootConfig` + `resolveSchemaDefault` | `cmdConfigGet`'s own workstream→root→schema cascade (#2702, #2256) |
+| `src/config-loader.cts` `_globalBaseCfg` (Branch D) | The 26-key `??` / `\|\|` projection of `~/.gsd/defaults.json` — #4071's site |
+| `src/config.cts` `buildNewProjectConfig` | A project-creation merge of `~/.gsd/defaults.json` |
+| `src/install-model-override-resolver.cts` | Install-time global+project merges (`model_overrides`, `agent_tools`, runtime/profile) |
+| `src/install-effort-resolver.cts` | Install-time `effort` merge, deep per sub-field |
+| `src/worktree-base-ref.cts` `resolveEffectiveBaseRef` | Family B's three-layer cascade, returning a bare `string \| null` — #4090's site |
+
+*Single-layer readers that bypass precedence entirely* (each reads one file and therefore silently
+ignores root inheritance, global defaults and schema defaults): `src/estimate-cli.cts`
+(`workflow.smart_zone_tokens`), `src/gap-checker.cts` (`workflow.post_planning_gaps`),
+`src/check-command-router.cts` (`readWorkflowConfig`), `src/runtime-slash.cts` (`runtime`),
+`src/verify.cts` (`workflow.drift_threshold`), `src/phase.cts` (`workflow.auto_prune_state`),
+`hooks/gsd-agent-isolation-guard.js` and `hooks/gsd-cursor-subagent-start.js` (both read
+`~/.gsd/defaults.json` directly). `runtime-slash.cts` records its reason for bypassing `loadConfig` —
+the normalize-and-write-back side effect — and that reason expired when `persist:false` shipped
+(#3648); a child adopting the owner there must delete the stale comment with the code.
+
+*Excluded, with reasons:* `src/config.cts` setters, `src/capability-writer.cts`'s pre-write parse
+check and `src/planning-snapshot.cts`'s snapshot field are **writes and probes**, not resolutions;
+`hooks/gsd-config-reload.js` and `hooks/gsd-context-monitor.js` watch the file for **change
+detection and display**. None of them may grow a merge or a precedence branch; the guard below still
+watches them.
+
+**Child boundaries.** Each is its own issue, opened and approved separately — this Phase-0 child's
+`type: chore` authorizes none of them.
+
+| Child | Scope | Epic criterion it closes |
+|---|---|---|
+| **C1** | Introduce the owner: module, typed result, family declarations, `fast-check` layer × type matrix over (absent/present) × (array, object, number, boolean, string, null) asserting **value and layer**; register the verb in `scripts/lint-resolution-provenance.cjs`'s `REGISTRY`. No call sites change | "resolver's return type carries the producing layer"; "layer × type matrix" |
+| **C2** | The encoding boundary: extract `parseConfigArgValue`, share it with `--default`, route every `cmdConfigGet` arm through one encoder, freeze raw. Failing-first regressions for #4262 and #4382 | "one encoder owns `--raw` / `--default` / default output"; "encoder round-trip property"; "`/gsd-code-review` runs in a project that has set no config keys at all" |
+| **C3** | Family A adoption + deletion: the six family-A precedence implementations above reduced to delegation or deleted, then the single-layer readers. Failing-first regression for #4071 | "one implementation of layer precedence; the other merge paths deleted" |
+| **C4** | Family B adoption: `resolveEffectiveBaseRef` returns a resolution, `evaluateWorktreeBaseDegrade` branches on `layer` instead of on the bare value. Failing-first regression for #4090 | "consumers that branch on it read it rather than re-infer it" |
+| **C5** | The ratchet: `local/no-adhoc-config-merge`, allowlist drained to empty, and a deliberately reintroduced copy demonstrated going red | "`local/no-adhoc-config-merge` runs with an empty allowlist" |
+
+The epic's remaining criterion — a failing-first regression per absorbed issue — is carried by the
+child that owns each symptom: #4262 and #4382 in C2, #4071 in C3, #4090 in C4. Each writes the test
+first, watches it fail on the unfixed tree, and says so in its PR.
+
+**The guard (`eslint-rules/no-adhoc-config-merge.cjs`).** Follows the `no-adhoc-markdown-parsing` /
+`no-unconfined-path-join` pattern already in the tree: a rule plus a JSON allowlist validated by
+`scripts/lib/allowlist-ratchet.cjs`, which fails on stale entries so the list can only shrink. It
+flags two shapes: (a) constructing a layer-file path — `path.join(…, '.gsd', 'defaults.json')`,
+`path.join(planningDir(…)|planningRoot(…), 'config.json')`, `path.join(…, '.claude', 'settings*.json')`
+— outside the resolver boundary; (b) spread-merging two parsed config objects.
+
+Two exemption kinds, kept apart in the file and not interchangeable:
+
+- **Resolver-internal**, permanent: `src/config-value-resolver.cts` and `src/config-loader.cts` are
+  the boundary and are exempt by construction.
+- **Temporary migration**, each carrying its adopting child's issue number, each removed by that
+  child. C5 lands only when the temporary section is empty. Write and probe sites (the exclusions
+  above) are exempted by *rule shape* — they parse or stat without merging, so they never match —
+  rather than by allowlist entry, so the list is not padded with entries that can never drain.
+
+**Validation.** Hermetic fixtures with a redirected `HOME` and an authored `.planning/` tree, plus
+the real published entry points (`gsd-core/bin/gsd-tools.cjs`, `bin/install.js` — the installer
+already imports both install-time resolvers), never a mocked CLI. C5 additionally demonstrates the
+guard **failing**: reintroduce one deleted merge, watch the rule go red, remove it again. A guard
+that has never been observed red is an assumption.
+
+### The #4588 boundary, restated
+
+#4588 separately investigates what a current Claude Code harness actually honours when it forks a
+worktree. This amendment delivers **provenance** — the evaluator will know that a `head` came from
+the user/global layer. It does **not** assert what the harness does with that fact. C4 preserves
+today's `isolationMode` semantics (#3659, #48) unless #4588 changes them; if #4588's finding and the
+epic's expected evaluator behaviour conflict, that is resolved with the maintainer before C4 locks
+an assertion, not inside C4.
+
+### Limits of this amendment
+
+- No runtime code, configuration behaviour or generated artifact changes here. Every symptom in
+  #4071, #4090, #4262 and #4382 stays live until C2–C4 land.
+- The child issues do not exist yet; C1–C5 are proposed boundaries, and each needs its own approval.
+- Decision 4 freezes raw output. If the maintainer prefers a lossless raw mode, that reverses a
+  decision recorded here and needs its own issue before C2 is planned.
