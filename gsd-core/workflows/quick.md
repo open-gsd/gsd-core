@@ -640,19 +640,29 @@ Insert after `### Blockers/Concerns` section:
 
 **7c. Append new row to table:**
 
-Use `date` from init:
+Append through the helper. Do NOT hand-render this row as markdown:
 
 **If `$VALIDATE_MODE` (or table has Status column):**
-```markdown
-| ${quick_id} | ${DESCRIPTION} | ${date} | ${commit_hash} | ${VERIFICATION_STATUS} | [${quick_id}-${slug}](./quick/${quick_id}-${slug}/) |
+```bash
+gsd_run quick-tasks-append --task "${DESCRIPTION}" --quick-id "${quick_id}" --slug "${slug}" \
+  --date "${date}" --commit "${commit_hash}" --status "${VERIFICATION_STATUS}"
 ```
 
 **If NOT `$VALIDATE_MODE` (and table has no Status column):**
-```markdown
-| ${quick_id} | ${DESCRIPTION} | ${date} | ${commit_hash} | [${quick_id}-${slug}](./quick/${quick_id}-${slug}/) |
+```bash
+gsd_run quick-tasks-append --task "${DESCRIPTION}" --quick-id "${quick_id}" --slug "${slug}" \
+  --date "${date}" --commit "${commit_hash}"
 ```
 
-For a schema-safe append outside this workflow (e.g. from fast.md, which has neither a quick id nor a task directory), `gsd_run quick-tasks-append --task <text>` performs an equivalent-shape write via the shared, schema-backed `appendQuickTaskRow` helper (#2133, ADR-2143 §3/§7) — the `#` cell is a positional ordinal and `Directory` reads `—`, since no id/directory was supplied. A caller that DOES have a real `${quick_id}` and task directory can pass `--quick-id <id> --slug <slug>` (or `--directory <link>` directly) to get the byte-identical row this step renders above (#3356).
+The command selects the variant from the table's own header, so the same call is correct for either shape; `--status` is simply ignored by a table with no Status column. `Directory` is derived from `--quick-id` + `--slug` as `[${quick_id}-${slug}](./quick/${quick_id}-${slug}/)`, or pass `--directory <link>` to set it outright (#3356).
+
+Pass `${date}` and `${commit_hash}` explicitly — do not let the command fall back to its own values here. Its fallbacks exist for callers that have neither (fast.md), and both would be subtly wrong for a quick task: the date fallback is UTC, while this row is operator-facing and must name the LOCAL calendar day that `${date}` from init already carries (otherwise an evening task files under tomorrow and disagrees with the "Last activity" line written from the same init date in 7d); and the commit fallback is current `HEAD`, which is this task's commit only if nothing landed in between — `${commit_hash}` is the executor's own commit, extracted in step 6, and step 5's review scope already refuses `HEAD` for exactly this reason (#4466).
+
+**Why a command and not a markdown row (#4736):** `${DESCRIPTION}` is free prose, and prose contains `|` — a Jinja filter, a command pipeline, an Ansible task name. GFM requires `|` to be escaped inside a table cell **even within a code span**, so interpolating a description straight into a row produces a permanently ragged table that `parseMarkdownTable` then refuses to read, blocking every later append. The helper escapes `\` and `|` per cell (`escapeCell`), so the one writer and the one reader agree by construction. This is also why the row must not be assembled by hand and then written with Edit: hand-rendered markdown is unescaped markdown.
+
+If the command fails, it prints the reason and changes nothing — read the reason rather than falling back to writing the row by hand. An `unrecognized Quick Tasks schema` reason means step 7b's `quick-tasks-migrate` has not run on a legacy table yet; a `row N has M cells` reason means the table is already ragged from a previous hand-written row and needs that row repaired first. Both can be reported together.
+
+The same command serves callers outside this workflow (e.g. fast.md, which has neither a quick id nor a task directory): `gsd_run quick-tasks-append --task <text>` alone renders `#` as a positional ordinal and `Directory` as `—` (#2133, ADR-2143 §3/§7).
 
 **7d. Update "Last activity" line:**
 
@@ -661,7 +671,13 @@ Use `date` from init:
 Last activity: ${date} - Completed quick task ${quick_id}: ${DESCRIPTION}
 ```
 
-Use Edit tool to make these changes atomically
+**Order and tooling (#4736):** run 7b, 7c, 7d in that order, and note which tool each one uses:
+
+- **7b** — creating a missing section is an Edit. **Migrating a legacy table is NOT**: run `gsd_run quick-tasks-migrate` for that, never a hand-edit. The command is the supported transformation and takes STATE.md's lock; a manual rewrite of a historical record is exactly the operation that should not be done by hand.
+- **7c** — the `quick-tasks-append` command, never an Edit. It writes STATE.md itself under that same lock, so folding the row into an Edit of the surrounding text would be writing the row by hand — the unescaped path this step exists to avoid.
+- **7d** — an Edit.
+
+These are three separate writes, not one transaction: the append holds its lock across its own read/transform/write, which does not make the surrounding Edits atomic with it.
 
 ---
 

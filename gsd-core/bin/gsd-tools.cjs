@@ -33,7 +33,7 @@
  *   quick-tasks-migrate                Migrate STATE.md's "Quick Tasks Completed"
  *                                      table onto the canonical schema (#3730).
  *                                      No-op when absent or already canonical.
- *   quick-tasks-append --task <text>   Append a row to STATE.md's "Quick Tasks
+ *   quick-tasks-append --task <text> [--status <s>]  Append a row to STATE.md's "Quick Tasks
  *                                      Completed" table (schema-backed via
  *                                      markdown-table.cjs; #2133/ADR-2143).
  *                                      Fails loud (non-zero exit) on a missing
@@ -1265,7 +1265,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // canonical permalink the same way `workflows/quick.md` renders it.
           const qtaParsed = parseNamedArgsOrExit(
             qtaArgs,
-            { valueFlags: ['task', 'quick-id', 'slug', 'directory'], positionals: 'rest' },
+            { valueFlags: ['task', 'quick-id', 'slug', 'directory', 'status', 'date', 'commit'], positionals: 'rest' },
             error,
           );
           const qtaTask = qtaParsed.task || args[1];
@@ -1282,10 +1282,28 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             error(`quick-tasks-append: STATE.md not found at ${statePath}`, ERROR_REASON.USAGE);
           }
 
-          const date = new Date().toISOString().slice(0, 10);
+          // #4736: a caller that KNOWS these values passes them; the fallbacks are
+          // for callers that do not (fast.md), and are deliberately not the primary
+          // path for quick.md.
+          //
+          // `--date`: the fallback is UTC, while operator-facing date-only fields
+          // must name the LOCAL calendar day (src/clock.cts) — an evening task in
+          // Los Angeles would otherwise be filed under tomorrow, and disagree with
+          // the "Last activity" line written from init's own local date in the same
+          // run. quick.md passes init's date.
+          //
+          // `--commit`: the fallback is current HEAD, which is this task's commit
+          // only if nothing else landed in between. A worktree merge-back, a shared
+          // tree or a concurrent session can move HEAD in exactly that window —
+          // the same hazard #4466 already refuses to accept for review scope a few
+          // steps earlier. quick.md passes the executor's own commit.
+          const date = qtaParsed['date'] || new Date().toISOString().slice(0, 10);
           const { execGit } = require('./lib/shell-command-projection.cjs');
-          const hashResult = execGit(['rev-parse', '--short', 'HEAD'], { cwd });
-          const commit = hashResult.exitCode === 0 && hashResult.stdout ? hashResult.stdout : '—';
+          let commit = qtaParsed['commit'] || '';
+          if (!commit) {
+            const hashResult = execGit(['rev-parse', '--short', 'HEAD'], { cwd });
+            commit = hashResult.exitCode === 0 && hashResult.stdout ? hashResult.stdout : '—';
+          }
 
           const { appendQuickTaskRow } = require('./lib/markdown-table.cjs');
 
@@ -1314,6 +1332,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               date,
               commit,
               quickId: qtaQuickId,
+              // #4736: without this the Status-column variant silently writes the
+              // `—` placeholder, so `quick.md`'s `$VALIDATE_MODE` branch cannot
+              // route through this command without losing its real
+              // `${VERIFICATION_STATUS}`. (Whether that gap is WHY Step 7c
+              // hand-rendered markdown is an inference, not a recorded reason — what
+              // is checkable is that the branch could not have used this command
+              // without it.)
+              status: qtaParsed['status'] || undefined,
               directory: qtaDirectory,
             });
             if (!result.ok) {
