@@ -72,6 +72,7 @@
     "workflow.context_guard_mode",
     "executor.stall_detect_interval_minutes",
     "executor.stall_threshold_minutes",
+    "planner.stall_detection_enabled",
     "planner.stall_detect_interval_minutes",
     "planner.stall_threshold_minutes",
     "workflow.inline_plan_threshold",
