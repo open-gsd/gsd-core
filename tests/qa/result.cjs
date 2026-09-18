@@ -38,6 +38,8 @@ const KIND = Object.freeze({
   EMPTY: 'empty',
   /** exit 0, stdout JSON carrying an `error` key — the documented soft-failure idiom. */
   SOFT_ERROR: 'soft-error',
+  /** exit 1, stdout parsed as a JSON object with no `error` key, no stderr envelope, and no stderr warning lines (at most one stderr line) — a declared FAIL verdict carrying its payload (ADR-3889 §1, #4686). NOT an invocation error. */
+  VERDICT_FAIL: 'verdict-fail',
   /** exit 1, last stderr line parsed as `{ok:false,reason,message}`. */
   STRUCTURED_ERROR: 'structured-error',
   /** exit 1, stderr present but not parseable as the structured envelope. */
@@ -124,9 +126,15 @@ function resolveFilePointer(stdout, io = {}) {
  * Classify a raw invocation into the typed IR.
  *
  * Precedence is deliberate and asserted by the test matrix:
- *   timeout > unexpected exit > exit 1 (error family) > exit 0 (success family)
- * An exit-1 run with a healthy-looking stdout payload is still an error — the
- * exit code outranks the payload.
+ *   timeout > unexpected exit > stderr envelope (exit 1) > stdout verdict
+ *   payload (exit 1) > error family (exit 1) > exit 0 (success family)
+ * An exit-1 run whose stderr carries the structured envelope is still an
+ * invocation error — an explicit error outranks an incidental stdout payload.
+ * An exit-1 run with a JSON-object stdout and NO envelope is a declared FAIL
+ * verdict (ADR-3889 §1, #4686): `phase uat-passed` / `query verify.artifacts`
+ * exit 1 while printing their `passed:false` / `all_passed:false` payloads,
+ * and scenario expectations assert on that payload, so it surfaces as
+ * VERDICT_FAIL with `json` populated rather than as an error kind.
  *
  * CLASSIFICATION KEYS OFF STDOUT, NOT STDERR (exit-0 family): whether a
  * successful run is EMPTY, PROSE, JSON, or SOFT_ERROR depends solely on the
@@ -166,9 +174,49 @@ function classify(raw, io = {}) {
     const parsed = tryParseJson(lastNonEmptyLine(stderr));
     const envelope = parsed.ok && parsed.value !== null && typeof parsed.value === 'object'
       && parsed.value.ok === false && typeof parsed.value.reason === 'string';
-    return envelope
-      ? { ...base, kind: KIND.STRUCTURED_ERROR, err: parsed.value, warnings }
-      : { ...base, kind: KIND.UNSTRUCTURED_ERROR, warnings };
+    if (envelope) {
+      return { ...base, kind: KIND.STRUCTURED_ERROR, err: parsed.value, warnings };
+    }
+
+    // #4686 (ADR-3889 §1): exit 1 is no longer exclusively the error family.
+    // A verb that declares a computed verdict exits 1 carrying the verdict as
+    // its stdout JSON payload, with no stderr envelope. That shape is a
+    // legitimate failed verdict, not a broken invocation — scenarios assert
+    // on its payload (`passed:false`), so it must surface with `json`
+    // populated. Deliberately NARROW on all three axes: only a JSON object
+    // with no `error` key qualifies (an `{error:...}` payload is the
+    // soft-failure idiom, a scalar is not a verdict); the stderr envelope
+    // above still wins; and stderr must carry no warning lines — a real
+    // crash dumps multi-line diagnostics to stderr (a lone synthesized
+    // `Command failed:` line from the harness substrate is the single-line
+    // exception a verdict step legitimately produces), and multi-line
+    // stderr alongside a JSON object is an error wearing a payload, not a
+    // verdict. Fail closed there: UNSTRUCTURED_ERROR. Residual, stated
+    // plainly: the line-count gate is content-blind — a REAL single-line
+    // stderr error beside a JSON-object stdout classifies VERDICT_FAIL
+    // too; distinguishing it from the synthesized line would require the
+    // substrate to pass the child's true stderr through, not a synthesized
+    // stand-in.
+    if (warnings.length === 0) {
+      const verdictResolved = resolveFilePointer(raw.stdout, io);
+      if (!verdictResolved.unreadable) {
+        const verdictText = typeof verdictResolved.text === 'string' ? verdictResolved.text : '';
+        const verdictParsed = tryParseJson(verdictText);
+        const isPlainObject = verdictParsed.ok && verdictParsed.value !== null
+          && typeof verdictParsed.value === 'object'
+          && !Array.isArray(verdictParsed.value);
+        if (isPlainObject && !Object.prototype.hasOwnProperty.call(verdictParsed.value, 'error')) {
+          return {
+            ...base,
+            kind: KIND.VERDICT_FAIL,
+            json: verdictParsed.value,
+            pointer: verdictResolved.pointer,
+            warnings,
+          };
+        }
+      }
+    }
+    return { ...base, kind: KIND.UNSTRUCTURED_ERROR, warnings };
   }
 
   // exit 0: no envelope is ever parsed out of stderr, so every stderr line is
