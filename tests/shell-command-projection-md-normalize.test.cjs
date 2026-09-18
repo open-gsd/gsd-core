@@ -24,6 +24,7 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
+const fc = require('fast-check');
 const fs = require('fs');
 const os = require('node:os');
 const path = require('path');
@@ -107,5 +108,135 @@ describe('#3854: write normalization preserves tight multi-line lists', () => {
     } finally {
       cleanup(osTmp);
     }
+  });
+});
+
+describe('#4725: write normalization must not reflow untouched prose', () => {
+  // The issue's document shape: an ordinary (bold) paragraph immediately
+  // followed by a tight bullet list, inside a phase section that
+  // `roadmap update-plan-progress` never targets. Every full-file .md write
+  // re-normalized the transition and injected a blank, converting the tight
+  // list to a loose one and editing prose the command never touched.
+  const issueFixture = () => [
+    '### Phase 654: Stream Consumer',
+    '',
+    '**Scope narrowed 2026-09-14, round `663-DISPOSITION` Q7 (3/3)** (`.planning/decisions/663-disposition.md`):',
+    '- The "for retry" javadoc correction moved to Phase 663',
+    '- Per Q6 (3/3), crash and failed-XACK residue stay this phase\'s population',
+    '',
+    '**Plans:** 2 plans',
+    '',
+    'Plans:',
+    '',
+    '- [ ] 654-01-PLAN.md — (wave 1) the evidence HMAC key binds in production',
+    '- [ ] 654-02-PLAN.md — (wave 2) consumer hardening',
+    '',
+  ].join('\n') + '\n';
+
+  const blankCount = (s) => s.split('\n').filter((l) => l.trim() === '').length;
+
+  test('#4725: a paragraph directly above a bullet list is preserved byte-identical (no injected blank)', () => {
+    const doc = issueFixture();
+    const { content } = normalizeContent(MD, doc);
+    assert.ok(
+      content.includes('663-disposition.md`):\n- The "for retry"'),
+      'no blank may be injected between the paragraph and its tight list'
+    );
+    assert.strictEqual(
+      blankCount(content),
+      blankCount(doc),
+      'blank-line count must round-trip unchanged'
+    );
+  });
+
+  test('#4725: a paragraph directly above an ordered list is preserved byte-identical', () => {
+    const doc = [
+      'Lead-in prose line.',
+      '1. first numbered item',
+      '2. second numbered item',
+      '',
+    ].join('\n') + '\n';
+    const { content } = normalizeContent(MD, doc);
+    assert.ok(
+      content.includes('Lead-in prose line.\n1. first numbered item'),
+      'no blank may be injected between the paragraph and its tight ordered list'
+    );
+    assert.strictEqual(blankCount(content), blankCount(doc), 'blank-line count must round-trip unchanged');
+  });
+
+  test('#4725 negative space: --- above a list stays byte-identical', () => {
+    const doc = '---\n- item\n';
+    const { content } = normalizeContent(MD, doc);
+    assert.strictEqual(content, doc, 'a --- above a list never triggered the rule and must still not gain a blank');
+  });
+
+  test('#4725 negative space: list→prose separation is a different transition and still happens', () => {
+    // The after-a-bullet rule is NOT part of #4725; the list→prose separation
+    // it provides must keep working.
+    const doc = '- a\n- b\nAfter prose.\n';
+    const { content } = normalizeContent(MD, doc);
+    assert.ok(content.includes('- b\n\nAfter prose.'), 'list→prose keeps its separating blank');
+  });
+
+  test('#4725: normalization is idempotent on the paragraph-above-list fixture', () => {
+    const doc = issueFixture();
+    const once = normalizeContent(MD, doc).content;
+    const twice = normalizeContent(MD, once).content;
+    assert.strictEqual(once, twice, 'second pass must be a no-op');
+    assert.strictEqual(once, doc, 'and the first pass must not have grown the document');
+  });
+
+  test('#4725 property: prose/list documents are byte-stable through the write seam', () => {
+    // Alphabet: prose lines, tight bullet/ordered items, blank lines. Within
+    // this domain NO other normalization rule may act, so byte-stability pins
+    // exactly the #4725 seam. Deliberate exclusions, each the domain of a
+    // different rule or a separately-recorded defect:
+    //   - headings/fences: heading & fence blank-line rules own those
+    //     transitions (rows 6-8 of the test matrix pin them singly);
+    //   - list→prose adjacency: the after-a-bullet rule's domain, out of
+    //     #4725's scope — the generator inserts the blank it will re-insert;
+    //   - fence lines: the blank-line rules do not consult fence state
+    //     (pre-existing fence-blind reflow, separate filing).
+    const proseLine = fc.stringMatching(/^[A-Z][a-z]+(?: [a-z]+){0,7}[.:]?$/);
+    const bulletItem = fc.tuple(
+      fc.constantFrom('- ', '* ', '+ '),
+      fc.stringMatching(/^[A-Za-z][A-Za-z0-9 ]{0,40}$/)
+    ).map(([marker, text]) => marker + text);
+    const orderedItem = fc.tuple(
+      fc.integer({ min: 1, max: 99 }),
+      fc.stringMatching(/^[A-Za-z][A-Za-z0-9 ]{0,40}$/)
+    ).map(([n, text]) => `${n}. ${text}`);
+    const rawLine = fc.oneof(
+      { depthSize: 'small' },
+      proseLine,
+      bulletItem,
+      orderedItem,
+      fc.constant('')
+    );
+    // Repair the generated line list so no rule OTHER than #4725's can fire:
+    // no list→prose adjacency (blank inserted — rule 6's domain), no doubled
+    // blanks (blank-run collapse), no trailing blanks (trailing-newline trim).
+    const constrain = (lines) => {
+      const out = [];
+      let prevClass = 'blank';
+      for (const line of lines) {
+        const cls = line === '' ? 'blank' : /^(?:[-*+] |\d+\. )/.test(line) ? 'item' : 'prose';
+        if (cls === 'prose' && prevClass === 'item') out.push('');
+        if (cls === 'blank' && prevClass === 'blank') continue;
+        out.push(line);
+        prevClass = cls;
+      }
+      while (out.length > 0 && out[out.length - 1] === '') out.pop();
+      return out;
+    };
+    const docGen = fc.array(rawLine, { minLength: 1, maxLength: 40 })
+      .map((lines) => constrain(lines).join('\n') + '\n');
+    fc.assert(
+      fc.property(docGen, (doc) => {
+        const out = normalizeContent(MD, doc).content;
+        assert.strictEqual(out, doc, `byte-stability violated for:\n${JSON.stringify(doc)}`);
+      }),
+      { seed: 4725, numRuns: 300, endOnFailure: true }
+    );
   });
 });
