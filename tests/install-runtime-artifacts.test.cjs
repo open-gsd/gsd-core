@@ -8306,7 +8306,7 @@ const { test: __test4667, describe: __describe4667, beforeEach: __beforeEach4667
 const assert4667 = require('node:assert/strict');
 const fs4667 = require('node:fs');
 const path4667 = require('node:path');
-const { createTempDir: __createTempDir4667, cleanup: __cleanup4667, captureConsole: __captureConsole4667 } = require('./helpers.cjs');
+const { createTempDir: __createTempDir4667, cleanup: __cleanup4667, captureConsole: __captureConsole4667, sandboxHome: __sandboxHome4667 } = require('./helpers.cjs');
 const { install: __install4667 } = require('../bin/install.js');
 
 describe('install() global codex — @~/.claude include rewrite (#4667)', () => {
@@ -8330,22 +8330,30 @@ describe('install() global codex — @~/.claude include rewrite (#4667)', () => 
 
   function installedMdFiles() {
     // Mirror the installer's own leak-scanner scope: manifest-tracked .md
-    // artifacts under the gsd-core payload, CHANGELOG excluded.
-    const root = path4667.join(tmpCodexHome, 'gsd-core');
+    // artifacts under the gsd-core payload PLUS the codex skills staging root
+    // ($HOME/.agents/skills — the "skills" kind declares a global home
+    // override), CHANGELOG excluded.
+    const roots = [
+      path4667.join(tmpCodexHome, 'gsd-core'),
+      path4667.join(tmpCodexHome, '.agents', 'skills'),
+    ];
     const out = [];
-    if (!fs.existsSync(root)) return out;
     const walk = (dir) => {
+      if (!fs.existsSync(dir)) return;
       for (const entry of fs4667.readdirSync(dir, { withFileTypes: true })) {
         const p = path4667.join(dir, entry.name);
         if (entry.isDirectory()) walk(p);
         else if (entry.name.endsWith('.md') && entry.name !== 'CHANGELOG.md') out.push(p);
       }
     };
-    walk(root);
+    for (const root of roots) walk(root);
     return out;
   }
 
-  test('codex install leaves zero @~/.claude includes in GSD-owned .md artifacts (#4667)', () => {
+  test('codex install leaves zero @~/.claude includes in GSD-owned .md artifacts (#4667)', (t) => {
+    // #3712 guard: the "skills" kind resolves from os.homedir(), so HOME must
+    // be sandboxed before the layout resolves or the real-home guard refuses.
+    __sandboxHome4667(t, tmpCodexHome);
     __captureConsole4667(() => __install4667(true, 'codex'));
     const leaks = installedMdFiles().filter((file) => fs4667.readFileSync(file, 'utf8').includes('@~/.claude/'));
     assert4667.equal(
@@ -8354,7 +8362,8 @@ describe('install() global codex — @~/.claude include rewrite (#4667)', () => 
     );
   });
 
-  test('codex install rewrites agent @ includes to the codex root (#4667)', () => {
+  test('codex install rewrites agent @ includes to the codex root (#4667)', (t) => {
+    __sandboxHome4667(t, tmpCodexHome);
     __captureConsole4667(() => __install4667(true, 'codex'));
     const agentFile = path4667.join(tmpCodexHome, 'gsd-core', 'agents', 'gsd-advisor-researcher.md');
     assert4667.ok(fs.existsSync(agentFile), 'the advisor-researcher agent must be installed');
@@ -8366,7 +8375,8 @@ describe('install() global codex — @~/.claude include rewrite (#4667)', () => 
     assert4667.ok(!content.includes('@~/.claude/'), 'no @~/.claude include may survive');
   });
 
-  test('codex install rewrites $HOME-anchored @ includes too (#4667)', () => {
+  test('codex install rewrites $HOME-anchored @ includes too (#4667)', (t) => {
+    __sandboxHome4667(t, tmpCodexHome);
     __captureConsole4667(() => __install4667(true, 'codex'));
     const cmdFile = path4667.join(tmpCodexHome, 'gsd-core', 'commands', 'gsd', 'plan-review-convergence.md');
     assert4667.ok(fs4667.existsSync(cmdFile), 'the plan-review-convergence command must be installed');
@@ -8378,7 +8388,8 @@ describe('install() global codex — @~/.claude include rewrite (#4667)', () => 
     assert4667.ok(!content.includes('@$HOME/.claude/'), 'no @$HOME/.claude include may survive');
   });
 
-  test('codex install keeps the _GSD_RUNTIME_ROOT .claude fallbacks (#4667)', () => {
+  test('codex install keeps the _GSD_RUNTIME_ROOT .claude fallbacks (#4667)', (t) => {
+    __sandboxHome4667(t, tmpCodexHome);
     __captureConsole4667(() => __install4667(true, 'codex'));
     const workflowsDir = path4667.join(tmpCodexHome, 'gsd-core', 'workflows');
     let fallbacks = 0;
