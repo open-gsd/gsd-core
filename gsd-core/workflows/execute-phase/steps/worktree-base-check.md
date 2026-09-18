@@ -7,10 +7,16 @@ branch). This runs for **any** isolated run, not only Claude: fork-base divergen
 of the repository, so it degrades a GSD-created worktree exactly as a harness-created one. The
 auto-degrade prints a one-line warning to stderr and falls through to the sequential path so
 executors do not hit the exit-42 worktree-branch-check halt. Setting `worktree.baseRef:"head"`
-restores parallel execution only where GSD itself creates the worktrees (orchestrator-managed
-runtimes — Codex, OpenCode, Kimi, Kimi Code); harness-isolated runtimes (Claude Code, Cursor) do
-not read the setting (#48, verified 5/5; upstream claude-code#44965), so there the check compares
-against the real fork base and parallel execution returns once HEAD is merged/pushed so
-`origin/HEAD` matches it (#3659). The `worktree-branch-check` exit-42 guard inside each executor
-remains in place as a backstop.
+restores parallel execution on both isolation models: GSD-created worktrees (Codex, OpenCode,
+Kimi, Kimi Code) fork from the orchestrator HEAD by construction, and harness-created ones do so
+where the harness honors the setting — measured on Claude Code from all three settings layers
+(#4588; #48's earlier finding that it did not predates upstream claude-code#54940), unmeasured on
+Cursor. On a harness-created run with no observation, a Claude Code `WorktreeCreate` hook in any
+of those three settings files, or one of them that does not parse, withholds that trust and the
+check compares against `origin/HEAD` as before. A supplied `--observed-fork-base` is never trusted
+either: HEAD is compared against the observation, in both modes. Without the setting the fork
+base is `origin/HEAD` and parallel execution returns once HEAD is merged/pushed so it matches
+(#3659). The `worktree-branch-check` exit-42 guard inside each executor remains in place as the
+backstop on a host that does not honor the setting; step 0.5 of
+`gsd-core/references/execute-phase-wave-guard.md` carries the measurement detail.
 </step>

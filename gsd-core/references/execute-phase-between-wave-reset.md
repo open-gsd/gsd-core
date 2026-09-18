@@ -24,12 +24,13 @@
    # Unset per-wave manifest so wave N+1 creates a fresh one (#3384, #1369).
    unset WAVE_WORKTREE_MANIFEST
 
-   # Between-wave base re-check (#1369, #3659): after wave N merges and tracking commits,
-   # HEAD has advanced. Re-asserting worktree.baseRef:"head" is deliberately NOT done here —
-   # the runtime harness does not read project-settings baseRef (#48), so in
-   # harness-worktree mode the setting cannot influence the fork base. The safety re-check
-   # below compares HEAD against the REAL fork base and degrades the remaining waves
-   # whenever they diverge, avoiding the base-mismatch FATAL in executor agents.
+   # Between-wave base re-check (#1369, #3659, #4588): after wave N merges and tracking
+   # commits, HEAD has advanced. Re-asserting worktree.baseRef:"head" is NOT done here — the
+   # setting is either already in place (honored by GSD-created worktrees and by the Claude
+   # Code harness, #4588) or
+   # deliberately absent; a re-write would not change the fork base. The safety re-check
+   # below compares HEAD against the fork base and degrades the remaining waves whenever
+   # they diverge, avoiding the base-mismatch FATAL in executor agents.
    if [ "$ISOLATION" = "harness-worktree" ] && [ "$USE_WORKTREES" != "false" ]; then
      _BETWEEN_DEGRADE=$(gsd_run query worktree.base-check --mode "$ISOLATION" --pick shouldDegrade 2>/dev/null || echo "false")
      if [ "$_BETWEEN_DEGRADE" = "true" ]; then
