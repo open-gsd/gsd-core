@@ -1765,3 +1765,35 @@ describe('hooks/lib/isolation-deny-reason.js — sanitizeForReason (#4594 F2/F5/
     assert.match(message, /dispatch phase="03" plan="07-01-x"/);
   });
 });
+
+// ─── #4734: a project root that is not a git repository ──────────────────────
+
+describe('gsd-agent-isolation-guard.js: #4734 — a non-git project root is never demanded worktree isolation', () => {
+  // The bug's world: `.planning/` at the root of a directory that is NOT a
+  // git repository (a multi-repo workspace). `git rev-parse HEAD` exits 128 —
+  // git's definitive answer that no repository exists here — so a harness
+  // worktree can never be created and the fallback must degrade to 'none'
+  // instead of demanding the flag and blocking every dispatch.
+  function mkNonGitProject(prefix) {
+    const dir = createTempDir(prefix);
+    fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+    writeConfig(dir, JSON.stringify({ runtime: 'claude' }));
+    return dir;
+  }
+
+  test('RED: no sentinel (fallback path) + registry harness-worktree + non-git root → ALLOW a flag-less dispatch', (t) => {
+    const project = mkNonGitProject('gsd-aig-4734-nogit-');
+    t.after(() => cleanup(project));
+    const r = runHook(agentPayload(), project);
+    assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    assert.equal(r.stdout, '', 'an allowed dispatch must not write a block decision');
+  });
+
+  test('RED: stale sentinel lying "none" + non-git root → the fallback re-derives and still allows', (t) => {
+    const project = mkNonGitProject('gsd-aig-4734-nogit-stale-');
+    t.after(() => cleanup(project));
+    writeSentinel(project, { isolation: 'none', writtenAt: Date.now() - (SENTINEL_STALE_MS + 60000) });
+    const r = runHook(agentPayload(), project);
+    assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+  });
+});
