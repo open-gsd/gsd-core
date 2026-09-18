@@ -156,6 +156,7 @@ Rules:
 Collect phase artifacts for the review prompt:
 
 ```bash
+PHASE_ARG=$(echo "$ARGUMENTS" | sed -nE 's/.*--phase[[:space:]]+([A-Za-z0-9._-]+).*/\1/p')
 INIT=$(gsd_run query init.review "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
