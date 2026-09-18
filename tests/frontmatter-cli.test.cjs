@@ -125,6 +125,16 @@ describe('frontmatter set', () => {
     assert.deepStrictEqual(fm.tags, ['a', 'b']);
   });
 
+  test('#4499 preserves block-sequence spacing when setting another field', () => {
+    const input = '---\nphase: 01\ntags:\n- api\n- sdk\n---\n\n# Plan\n';
+    const file = writeTempFile(input);
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'phase', '--value', '02']);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const content = fs.readFileSync(file, 'utf-8');
+    assert.strictEqual(content, input.replace('phase: 01', 'phase: 02'));
+  });
+
   test('returns error for missing file', () => {
     const result = runGsdTools('frontmatter set /nonexistent/file.md --field phase --value "01"');
     assert.ok(result.success, 'Command should exit 0 with error JSON');
