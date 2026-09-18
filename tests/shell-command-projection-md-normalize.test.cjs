@@ -18,8 +18,12 @@
  * indented next lines; the before-a-bullet rule must too.
  *
  * These tests pin both directions: tight lists stay tight through the write
- * seam, and the legitimate paragraph↔list separations the rule exists for
- * still happen.
+ * seam. #4725 (maintainer brief on the issue) removed the paragraph→list
+ * half of the old "separate a list from a preceding paragraph" rule: the
+ * pass re-normalizes whole documents, so the inserted blank reflowed
+ * untouched prose — a paragraph→list transition is now preserved
+ * byte-identical. Heading→list and list→prose separations are OTHER rules'
+ * transitions and still happen (pinned below).
  */
 
 const { describe, test } = require('node:test');
@@ -74,12 +78,15 @@ describe('#3854: write normalization preserves tight multi-line lists', () => {
     );
   });
 
-  test('the paragraph→list separation the rule exists for STILL happens', () => {
+  test('#4725: the paragraph→list transition is preserved byte-identical (no separating blank)', () => {
+    // Supersedes the pre-#4725 pin that the separation "STILL happens": the
+    // inserted blank reflowed untouched prose on every full-file .md write.
     const doc = 'A lead-in paragraph.\n- first item\n';
     const { content } = normalizeContent(MD, doc);
-    assert.ok(
-      content.includes('A lead-in paragraph.\n\n- first item'),
-      'a list following a paragraph still gets its separating blank'
+    assert.strictEqual(
+      content,
+      doc,
+      'a list following a paragraph stays byte-identical — no separating blank'
     );
   });
 
@@ -130,7 +137,6 @@ describe('#4725: write normalization must not reflow untouched prose', () => {
     '',
     '- [ ] 654-01-PLAN.md — (wave 1) the evidence HMAC key binds in production',
     '- [ ] 654-02-PLAN.md — (wave 2) consumer hardening',
-    '',
   ].join('\n') + '\n';
 
   const blankCount = (s) => s.split('\n').filter((l) => l.trim() === '').length;
@@ -184,6 +190,16 @@ describe('#4725: write normalization must not reflow untouched prose', () => {
     const twice = normalizeContent(MD, once).content;
     assert.strictEqual(once, twice, 'second pass must be a no-op');
     assert.strictEqual(once, doc, 'and the first pass must not have grown the document');
+  });
+
+  test('#4725: CRLF paragraph-above-list does not grow a blank', () => {
+    const doc = 'Lead-in paragraph.\r\n- first item\r\n- second item\r\n';
+    const { content } = normalizeContent(MD, doc);
+    assert.ok(!content.includes('\r'), 'CRLF is normalized to LF');
+    assert.ok(
+      content.includes('Lead-in paragraph.\n- first item'),
+      'the CRLF variant of the transition is byte-stable too (LF-form)'
+    );
   });
 
   test('#4725 property: prose/list documents are byte-stable through the write seam', () => {

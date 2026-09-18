@@ -2189,11 +2189,13 @@ describe('bug #950: quick-task SUMMARY must carry status: complete', () => {
       const criticalBlock = lines.slice(criticalIdx, criticalEndIdx).join('\n');
       assert.doesNotMatch(criticalBlock, /status: acknowledged/, 'the CRITICAL entry (and its continuation line) must NEVER be touched');
       assert.match(criticalBlock, /see also: - minor typo/, 'the CRITICAL entry continuation line is preserved verbatim');
-      // Measured: the write seam's `_normalizeMd` (src/shell-command-projection.cts:837)
-      // inserts a blank line before a list item whose predecessor is a non-blank, non-list
-      // line — so a blank line appears between the CRITICAL continuation line and the
-      // "- minor typo" bullet after this write. That is repo-wide `.md`-write normalization
-      // (50 callers through the single write seam), not something specific to this feature.
+      // The write seam's `_normalizeMd` carries no before-a-bullet insertion
+      // rule: #3854 guarded the indented-continuation predecessor, #4725
+      // removed the prose-predecessor case outright. No blank line is
+      // injected between the CRITICAL continuation line and the "- minor
+      // typo" bullet by this write — repo-wide `.md`-write normalization
+      // (50 callers through the single write seam), not something specific
+      // to this feature.
       assert.match(content, /- minor typo\n {2}status: acknowledged/, 'the standalone "minor typo" entry (its OWN span) now carries the marker');
 
       const after = audit(tmpDir);
