@@ -204,15 +204,12 @@ describe('#4738: a clean opencode install is invisible to detect-custom-files', 
     const result = runGsdTools(['detect-custom-files', '--config-dir', configDir], root);
     assert.ok(result.success, `detector failed: ${result.error}`);
     const json = JSON.parse(result.output);
+    assert.ok(Array.isArray(json.custom_files), 'the detector must emit a custom_files array');
     assert.deepEqual(
-      (json.custom_files || []).filter((f) => f.startsWith('skills/')),
+      json.custom_files.filter((f) => f.startsWith('skills/')),
       [],
       `no installer-staged skill may be flagged as user-added: ${JSON.stringify(json.custom_files)}`,
     );
-    assert.equal(
-      json.custom_count || 0,
-      0,
-      `a clean opencode install reports zero custom files (got ${json.custom_count}: ${JSON.stringify(json.custom_files)})`,
-    );
+    assert.equal(json.custom_count, 0, `a clean opencode install reports zero custom files: ${JSON.stringify(json.custom_files)}`);
   });
 });
