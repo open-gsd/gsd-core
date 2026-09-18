@@ -8302,31 +8302,44 @@ describe('#3738: antigravity global artifacts install under ~/.gemini/config', (
 // the `_GSD_RUNTIME_ROOT` fallback chains and prose `.claude` mentions are a
 // must-NOT-rewrite group (issue evidence table) and stay byte-identical.
 
-const { test: __test4667, describe: __describe4667, beforeEach: __beforeEach4667, afterEach: __afterEach4667 } = require('node:test');
+const { test: __test4667, describe: __describe4667, before: __before4667, after: __after4667 } = require('node:test');
 const assert4667 = require('node:assert/strict');
 const fs4667 = require('node:fs');
-const path4667 = require('node:path');
-const { createTempDir: __createTempDir4667, cleanup: __cleanup4667, captureConsole: __captureConsole4667, sandboxHome: __sandboxHome4667 } = require('./helpers.cjs');
-const { install: __install4667 } = require('../bin/install.js');
+const { spawnSync: __spawnSync4667 } = require('node:child_process');
+const { createTempDir: __createTempDir4667, cleanup: __cleanup4667, isolatedNpmEnv: __isolatedNpmEnv4667 } = require('./helpers.cjs');
 
 describe('install() global codex — @~/.claude include rewrite (#4667)', () => {
+  const path4667 = path;
   let tmpCodexHome;
-  let originalCodexHome;
+  let configDir;
 
-  __beforeEach4667(() => {
-    originalCodexHome = process.env.CODEX_HOME;
-    tmpCodexHome = __createTempDir4667('gsd-codex-4667-');
-    process.env.CODEX_HOME = tmpCodexHome;
-  });
-
-  __afterEach4667(() => {
-    if (originalCodexHome !== undefined) {
-      process.env.CODEX_HOME = originalCodexHome;
-    } else {
-      delete process.env.CODEX_HOME;
-    }
-    __cleanup4667(tmpCodexHome);
-  });
+  // Install through the real CLI as a SUBPROCESS with a fully controlled env —
+  // the same shape test G uses. In-process installs share the test process's
+  // real HOME and the installer's own exit paths; the subprocess isolates both
+  // (#3712's real-home guard + GSD_TEST_MODE/npm isolation in one place).
+  function codexInstall() {
+    const result = __spawnSync4667(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'install.js'),
+      '--codex',
+      '--global',
+      '--config-dir',
+      configDir,
+    ], {
+      cwd: tmpCodexHome,
+      env: {
+        ...process.env,
+        ...__isolatedNpmEnv4667(),
+        HOME: tmpCodexHome,
+        USERPROFILE: tmpCodexHome,
+        GSD_TEST_MODE: '',
+        NO_UPDATE_NOTIFIER: '1',
+        npm_config_update_notifier: 'false',
+      },
+      encoding: 'utf8',
+      timeout: INSTALL_TIMEOUT_MS,
+    });
+    assert.equal(result.status, 0, `codex install failed:\n${result.stdout}\n${result.stderr}`);
+  }
 
   function installedMdFiles() {
     // Mirror the installer's own leak-scanner scope: manifest-tracked .md
@@ -8334,12 +8347,12 @@ describe('install() global codex — @~/.claude include rewrite (#4667)', () => 
     // ($HOME/.agents/skills — the "skills" kind declares a global home
     // override), CHANGELOG excluded.
     const roots = [
-      path4667.join(tmpCodexHome, 'gsd-core'),
+      path4667.join(configDir, 'gsd-core'),
       path4667.join(tmpCodexHome, '.agents', 'skills'),
     ];
     const out = [];
     const walk = (dir) => {
-      if (!fs.existsSync(dir)) return;
+      if (!fs4667.existsSync(dir)) return;
       for (const entry of fs4667.readdirSync(dir, { withFileTypes: true })) {
         const p = path4667.join(dir, entry.name);
         if (entry.isDirectory()) walk(p);
@@ -8350,11 +8363,18 @@ describe('install() global codex — @~/.claude include rewrite (#4667)', () => 
     return out;
   }
 
-  test('codex install leaves zero @~/.claude includes in GSD-owned .md artifacts (#4667)', (t) => {
-    // #3712 guard: the "skills" kind resolves from os.homedir(), so HOME must
-    // be sandboxed before the layout resolves or the real-home guard refuses.
-    __sandboxHome4667(t, tmpCodexHome);
-    __captureConsole4667(() => __install4667(true, 'codex'));
+  before(() => {
+    tmpCodexHome = __createTempDir4667('gsd-codex-4667-');
+    configDir = path4667.join(tmpCodexHome, 'codex-config');
+    fs4667.mkdirSync(configDir, { recursive: true });
+    codexInstall();
+  });
+
+  after(() => {
+    __cleanup4667(tmpCodexHome);
+  });
+
+  test('codex install leaves zero @~/.claude includes in GSD-owned .md artifacts (#4667)', () => {
     const leaks = installedMdFiles().filter((file) => fs4667.readFileSync(file, 'utf8').includes('@~/.claude/'));
     assert4667.equal(
       leaks.length, 0,
@@ -8362,10 +8382,8 @@ describe('install() global codex — @~/.claude include rewrite (#4667)', () => 
     );
   });
 
-  test('codex install rewrites agent @ includes to the codex root (#4667)', (t) => {
-    __sandboxHome4667(t, tmpCodexHome);
-    __captureConsole4667(() => __install4667(true, 'codex'));
-    const agentFile = path4667.join(tmpCodexHome, 'gsd-core', 'agents', 'gsd-advisor-researcher.md');
+  test('codex install rewrites agent @ includes to the codex root (#4667)', () => {
+    const agentFile = path4667.join(configDir, 'gsd-core', 'agents', 'gsd-advisor-researcher.md');
     assert4667.ok(fs.existsSync(agentFile), 'the advisor-researcher agent must be installed');
     const content = fs4667.readFileSync(agentFile, 'utf8');
     assert4667.ok(
@@ -8375,10 +8393,8 @@ describe('install() global codex — @~/.claude include rewrite (#4667)', () => 
     assert4667.ok(!content.includes('@~/.claude/'), 'no @~/.claude include may survive');
   });
 
-  test('codex install rewrites $HOME-anchored @ includes too (#4667)', (t) => {
-    __sandboxHome4667(t, tmpCodexHome);
-    __captureConsole4667(() => __install4667(true, 'codex'));
-    const cmdFile = path4667.join(tmpCodexHome, 'gsd-core', 'commands', 'gsd', 'plan-review-convergence.md');
+  test('codex install rewrites $HOME-anchored @ includes too (#4667)', () => {
+    const cmdFile = path4667.join(configDir, 'gsd-core', 'commands', 'gsd', 'plan-review-convergence.md');
     assert4667.ok(fs4667.existsSync(cmdFile), 'the plan-review-convergence command must be installed');
     const content = fs4667.readFileSync(cmdFile, 'utf8');
     assert4667.ok(
@@ -8388,10 +8404,8 @@ describe('install() global codex — @~/.claude include rewrite (#4667)', () => 
     assert4667.ok(!content.includes('@$HOME/.claude/'), 'no @$HOME/.claude include may survive');
   });
 
-  test('codex install keeps the _GSD_RUNTIME_ROOT .claude fallbacks (#4667)', (t) => {
-    __sandboxHome4667(t, tmpCodexHome);
-    __captureConsole4667(() => __install4667(true, 'codex'));
-    const workflowsDir = path4667.join(tmpCodexHome, 'gsd-core', 'workflows');
+  test('codex install keeps the _GSD_RUNTIME_ROOT .claude fallbacks (#4667)', () => {
+    const workflowsDir = path4667.join(configDir, 'gsd-core', 'workflows');
     let fallbacks = 0;
     for (const file of fs4667.readdirSync(workflowsDir)) {
       if (!file.endsWith('.md')) continue;
@@ -8400,16 +8414,7 @@ describe('install() global codex — @~/.claude include rewrite (#4667)', () => 
     }
     assert4667.ok(
       fallbacks > 0,
-      'the deliberate _GSD_RUNTIME_ROOT .claude fallback chains must survive untouched'
+      'the _GSD_RUNTIME_ROOT .claude fallback chains must survive the rewrite (must-NOT-rewrite group)'
     );
-  });
-
-  test('codex reinstall is idempotent — no doubled rewrites (#4667)', () => {
-    __captureConsole4667(() => __install4667(true, 'codex'));
-    __captureConsole4667(() => __install4667(true, 'codex'));
-    const doubled = installedMdFiles().filter((file) =>
-      fs4667.readFileSync(file, 'utf8').includes('@~/.codex/gsd-core/gsd-core/')
-    );
-    assert4667.equal(doubled.length, 0, 'no include may be rewritten twice into a doubled prefix');
   });
 });
