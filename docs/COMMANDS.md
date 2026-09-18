@@ -118,7 +118,7 @@ Clarify WHAT a phase delivers through Socratic questioning with quantitative amb
 
 | Flag | Description |
 |------|-------------|
-| `--auto` | Skip interactive questions; Claude selects recommended defaults and writes SPEC.md |
+| `--auto` | Skip interactive questions; Claude selects recommended defaults and writes SPEC.md. An existing SPEC.md is **reused as-is**, never regenerated |
 | `--text` | Use plain-text numbered lists instead of TUI menus (required for `/rc` remote sessions) |
 
 **Position in workflow:** `spec-phase → discuss-phase → plan-phase → execute-phase → verify`
@@ -178,11 +178,17 @@ Generate UI design contract for frontend phases.
 |----------|----------|-------------|
 | `N` | No | Phase number (defaults to current phase) |
 
+| Flag | Description |
+|------|-------------|
+| `--auto` | Skip interactive questions. An existing UI-SPEC.md is **reused as-is** and sent straight to the checker, never re-researched |
+| `--text` | Use plain-text numbered lists instead of TUI menus |
+
 **Prerequisites:** `.planning/ROADMAP.md` exists, phase has frontend/UI work
 **Produces:** `{phase}-UI-SPEC.md`
 
 ```bash
 /gsd-ui-phase 2                     # Design contract for phase 2
+/gsd-ui-phase 2 --auto              # Non-interactive; reuses an existing UI-SPEC
 ```
 
 ---
