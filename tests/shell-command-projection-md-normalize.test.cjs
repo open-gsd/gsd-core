@@ -160,7 +160,6 @@ describe('#4725: write normalization must not reflow untouched prose', () => {
       'Lead-in prose line.',
       '1. first numbered item',
       '2. second numbered item',
-      '',
     ].join('\n') + '\n';
     const { content } = normalizeContent(MD, doc);
     assert.ok(
@@ -222,13 +221,7 @@ describe('#4725: write normalization must not reflow untouched prose', () => {
       fc.integer({ min: 1, max: 99 }),
       fc.stringMatching(/^[A-Za-z][A-Za-z0-9 ]{0,40}$/)
     ).map(([n, text]) => `${n}. ${text}`);
-    const rawLine = fc.oneof(
-      { depthSize: 'small' },
-      proseLine,
-      bulletItem,
-      orderedItem,
-      fc.constant('')
-    );
+    const rawLine = fc.oneof(proseLine, bulletItem, orderedItem, fc.constant(''));
     // Repair the generated line list so no rule OTHER than #4725's can fire:
     // no list→prose adjacency (blank inserted — rule 6's domain), no doubled
     // blanks (blank-run collapse), no trailing blanks (trailing-newline trim).

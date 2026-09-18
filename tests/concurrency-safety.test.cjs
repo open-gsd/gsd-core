@@ -460,7 +460,10 @@ describe('normalizeMd snapshot tests', () => {
 
   test('snapshot - list spacing', () => {
     const input = 'Paragraph\n- item 1\n- item 2\nAnother paragraph';
-    const expected = 'Paragraph\n\n- item 1\n- item 2\n\nAnother paragraph\n';
+    // #4725: the paragraph→list transition is preserved byte-identical (the
+    // removed before-a-bullet rule used to inject a blank there); the
+    // list→prose separation below is the after-a-bullet rule and stays.
+    const expected = 'Paragraph\n- item 1\n- item 2\n\nAnother paragraph\n';
     const result = normalizeMd(input);
     assert.strictEqual(result, expected,
       `List spacing snapshot mismatch.\nGot:      ${JSON.stringify(result)}\nExpected: ${JSON.stringify(expected)}`
