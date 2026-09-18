@@ -106,7 +106,7 @@ function buildMsgBaserefHeadIgnored(headSha: string | null, forkRef: string | nu
 
 const MSG_HEAD_UNRESOLVABLE = `⚠ Cannot determine the worktree base (git rev-parse HEAD did not return a definitive answer). Running this phase sequentially on the main working tree to avoid an unverified base mismatch. Note: worktree.baseRef:"head" silences this check only where GSD itself creates the worktree (orchestrator-managed runtimes) — in harness mode it never applied (#48, #3659). Retry; if it persists, check for a stalled filesystem mount or a stale git index lock (.git/index.lock). See #683, #3050.`;
 
-const MSG_NO_GIT_REPOSITORY = `⚠ This project root is not a git repository (git resolved no HEAD), so a harness worktree cannot be created here. Running this dispatch sequentially on the main working tree instead — no isolation flag is required. See #4734.`;
+const MSG_NO_GIT_REPOSITORY = `⚠ No worktree base exists here (git resolved no HEAD — the root is not a git repository, or the repository has no commits), so a harness worktree cannot be created. Running this dispatch sequentially on the main working tree instead — no isolation flag is required. See #4734.`;
 
 /**
  * Returns true when an execGit result indicates the subprocess was killed by
@@ -399,7 +399,7 @@ export function cmdWorktreeSetBaseRef(
 export function classifyGitHead(deps?: {
   execGit?: ExecGitFn;
   cwd?: string;
-}): { status: 'present' | 'definitive-absence' | 'ambiguous-absence' | 'indeterminate'; headSha: string | null } {
+}): { status: 'present'; headSha: string } | { status: 'definitive-absence' | 'ambiguous-absence' | 'indeterminate'; headSha: null } {
   const execGit: ExecGitFn = deps?.execGit ?? execGitSeam;
   const cwdOpts = deps?.cwd ? { cwd: deps.cwd } : {};
   const headResult = execGit(['rev-parse', 'HEAD'], cwdOpts);
@@ -505,7 +505,7 @@ export function evaluateWorktreeBaseDegrade(deps?: {
     // this SHOULD degrade is unchanged and still open).
     return { shouldDegrade: false, reason: 'no-head', message: null, headSha: null, forkRef: null, forkSha: null, headAbsenceVerified: false };
   }
-  const headSha: string = head.headSha as string;
+  const headSha = head.headSha;
 
   // c. Resolve fork base (what the harness forks 'fresh' worktrees from = origin/HEAD).
   let forkRef: string | null = null;

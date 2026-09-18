@@ -52,7 +52,7 @@ const os = require('node:os');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
 const { toLegacyResult, gitOrThrow } = require('./helpers/git-fixture.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { createTempDir, createTempProject, runGsdTools, cleanup } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 const { SENTINEL_RELATIVE_PATH, SENTINEL_STALE_MS, readSentinel } = require('../hooks/lib/isolation-sentinel.js');
@@ -1656,6 +1656,14 @@ describe('guard fallback — worktreesOptedOut ladder (#3972)', () => {
     fs.mkdirSync(path.join(dir, '.planning', 'workstreams', 'alpha'), { recursive: true });
     fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify(rootCfg));
     fs.writeFileSync(path.join(dir, '.planning', 'workstreams', 'alpha', 'config.json'), JSON.stringify(wsCfg));
+    // #4734: a real repository HEAD. Production GSD workspaces are git repos;
+    // without this the fallback's new definitive-no-repository degrade — not
+    // the ladder — would answer the "no opt-out" pin below.
+    const gitOpts = { cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS };
+    gitOrThrow(['init'], gitOpts);
+    gitOrThrow(['config', 'user.email', 'test@test.com'], gitOpts);
+    gitOrThrow(['config', 'user.name', 'Test'], gitOpts);
+    gitOrThrow(['commit', '--allow-empty', '-m', 'initial commit'], gitOpts);
     return dir;
   }
 
@@ -1785,7 +1793,15 @@ describe('gsd-agent-isolation-guard.js: #4734 — a non-git project root is neve
     return dir;
   }
 
-  test('RED: no sentinel (fallback path) + registry harness-worktree + non-git root → ALLOW a flag-less dispatch', (t) => {
+  function mkGitProject(prefix) {
+    // Mirror of mkNonGitProject with a real repository HEAD — the positive
+    // control proving the git check, not something else, drives the degrade.
+    const dir = createFixture({ prefix, planning: true, git: true, projectDoc: false });
+    writeConfig(dir, JSON.stringify({ runtime: 'claude' }));
+    return dir;
+  }
+
+  test('no sentinel (fallback path) + registry harness-worktree + non-git root → ALLOW a flag-less dispatch', (t) => {
     const project = mkNonGitProject('gsd-aig-4734-nogit-');
     t.after(() => cleanup(project));
     const r = runHook(agentPayload(), project);
@@ -1793,7 +1809,7 @@ describe('gsd-agent-isolation-guard.js: #4734 — a non-git project root is neve
     assert.equal(r.stdout, '', 'an allowed dispatch must not write a block decision');
   });
 
-  test('RED: stale sentinel lying "none" + non-git root → the fallback re-derives and still allows', (t) => {
+  test('stale sentinel lying "none" + non-git root → the fallback re-derives and still allows', (t) => {
     const project = mkNonGitProject('gsd-aig-4734-nogit-stale-');
     t.after(() => cleanup(project));
     writeSentinel(project, { isolation: 'none', writtenAt: Date.now() - (SENTINEL_STALE_MS + 60000) });
@@ -1802,9 +1818,8 @@ describe('gsd-agent-isolation-guard.js: #4734 — a non-git project root is neve
   });
 
   test('positive control: the same shape in a git-inited root still DENIES (the repository is the differentiator)', (t) => {
-    const project = mkProject('gsd-aig-4734-git-');
+    const project = mkGitProject('gsd-aig-4734-git-');
     t.after(() => cleanup(project));
-    writeConfig(project, JSON.stringify({ runtime: 'claude' }));
     const r = runHook(agentPayload(), project);
     assert.equal(r.status, 2, `stdout: ${r.stdout} stderr: ${r.stderr}`);
     assert.equal(JSON.parse(r.stdout).decision, 'block');

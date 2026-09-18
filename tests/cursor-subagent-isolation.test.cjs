@@ -577,9 +577,13 @@ describe('executor-identity parity: hooks/gsd-agent-isolation-guard.js (Claude) 
   let cursorProject; // harness-worktree GSD project, not an isolated worktree
 
   before(() => {
-    claudeProject = createTempDir('gsd-cs-parity-claude-');
-    fs.mkdirSync(path.join(claudeProject, '.planning'), { recursive: true });
-    fs.writeFileSync(path.join(claudeProject, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    // Must be a REAL git repo (not a bare mkdir'd directory) — same reason as
+    // cursorProject below, and load-bearing since #4734: the Claude guard's
+    // fallback degrades to 'none' on a repository-less root, so a non-git
+    // fixture would flip the Claude side to allow and the parity probe would
+    // compare Claude-allowing against Cursor-denying instead of comparing two
+    // ACTUALLY enforcing configurations.
+    claudeProject = makeGitProject('gsd-cs-parity-claude-', JSON.stringify({ runtime: 'claude' }));
 
     // Must be a REAL git repo (not a bare mkdir'd directory): the Cursor hook's
     // #3045 MAJOR 3 "not a git repo -> INERT" branch would otherwise short-circuit

@@ -255,19 +255,20 @@ describe('resolveEffectiveBaseRef', () => {
 
 // ─── evaluateWorktreeBaseDegrade ──────────────────────────────────────────────
 
-describe('evaluateWorktreeBaseDegrade', () => {
-  // Stub helper: matches on args.join(' ') and returns canned results
-  function makeExecGit(responses) {
-    return function stubExecGit(args, _opts) {
-      const key = args.join(' ');
-      if (Object.prototype.hasOwnProperty.call(responses, key)) {
-        return responses[key];
-      }
-      // Default: fail with a helpful error to surface unexpected calls
-      throw new Error(`Unexpected execGit call: ${JSON.stringify(args)}`);
-    };
-  }
+// Stub helper: matches on args.join(' ') and returns canned results.
+// Module-scoped so the #4734 classifyGitHead describe shares one copy (review finding).
+function makeExecGit(responses) {
+  return function stubExecGit(args, _opts) {
+    const key = args.join(' ');
+    if (Object.prototype.hasOwnProperty.call(responses, key)) {
+      return responses[key];
+    }
+    // Default: fail with a helpful error to surface unexpected calls
+    throw new Error(`Unexpected execGit call: ${JSON.stringify(args)}`);
+  };
+}
 
+describe('evaluateWorktreeBaseDegrade', () => {
   // #3659 rows share the diverged-HEAD stub shape — one builder keeps the
   // four fixtures from drifting apart.
   function makeDivergedExecGit(headSha, forkSha) {
@@ -453,7 +454,10 @@ describe('evaluateWorktreeBaseDegrade', () => {
     });
     assert.strictEqual(result.shouldDegrade, true);
     assert.strictEqual(result.reason, 'no-head');
-    assert.ok(result.message !== null && result.message.includes('#4734'), 'the degrade carries the #4734 explanation the workflow prints');
+    assert.strictEqual(result.headAbsenceVerified, true);
+    // Message presence is a typed fact (non-null, non-empty) — its prose is
+    // operator-facing text, not a test oracle (no raw-text matching).
+    assert.ok(typeof result.message === 'string' && result.message.length > 0, 'the degrade carries the message the workflow prints');
   });
 
   // ─── #3057 B8: headAbsenceVerified distinguishes the two "no-head" causes ──
@@ -1404,40 +1408,7 @@ describe('execute-plan Pattern A: pre-dispatch worktree base-check (#2649)', () 
   });
 }
 
-// ─── #4734: the definitive no-repository answer must degrade ─────────────────
-
-describe('#4734: git\'s definitive no-repository answer degrades the base-check', () => {
-  test('exit 128 → shouldDegrade:true with a user-visible message and headAbsenceVerified:true', () => {
-    // RED-first for #4734: a project root that is not a git repository can
-    // never host a harness worktree, so the base-check must degrade (the
-    // workflows pick `message` and print it while degrading to sequential).
-    const faultyGit = makeFaultyGit({
-      faults: [{ kind: 'exit', exitCode: 128, stderr: 'fatal: not a git repository' }],
-    });
-    const result = evaluateWorktreeBaseDegrade({ execGit: faultyGit });
-    assert.strictEqual(result.shouldDegrade, true);
-    assert.strictEqual(result.reason, 'no-head');
-    assert.strictEqual(result.headAbsenceVerified, true);
-    assert.ok(
-      typeof result.message === 'string' && result.message.length > 0,
-      'a degrade must carry a user-visible message (the workflows print --pick message)',
-    );
-  });
-});
-
 describe('#4734: classifyGitHead — single owner of the HEAD-resolution classes', () => {
-  // Local stub, same shape as evaluateWorktreeBaseDegrade's describe helper —
-  // that helper is scoped inside its own describe and cannot be reused here.
-  function makeExecGit(responses) {
-    return function stubExecGit(args, _opts) {
-      const key = args.join(' ');
-      if (Object.prototype.hasOwnProperty.call(responses, key)) {
-        return responses[key];
-      }
-      throw new Error(`Unexpected execGit call: ${JSON.stringify(args)}`);
-    };
-  }
-
   test('exit 0 with a sha → present, headSha carries the trimmed sha', () => {
     const SHA = 'aabbccdd11223344aabbccdd11223344aabbccdd';
     const status = classifyGitHead({
@@ -1457,6 +1428,17 @@ describe('#4734: classifyGitHead — single owner of the HEAD-resolution classes
     });
     assert.strictEqual(status.status, 'definitive-absence');
     assert.strictEqual(status.headSha, null);
+  });
+
+  test('a REAL non-git working directory degrades end-to-end (no injected seam — the #4734 fixture wording)', (t) => {
+    const { createTempDir, cleanup } = require('./helpers.cjs');
+    const dir = createTempDir('gsd-4734-nogit-real-');
+    t.after(() => cleanup(dir));
+    const result = evaluateWorktreeBaseDegrade({ cwd: dir });
+    assert.strictEqual(result.shouldDegrade, true);
+    assert.strictEqual(result.reason, 'no-head');
+    assert.strictEqual(result.headAbsenceVerified, true);
+    assert.ok(typeof result.message === 'string' && result.message.length > 0);
   });
 
   test('exit 0 with empty stdout → ambiguous-absence (git completed without a definitive answer)', () => {

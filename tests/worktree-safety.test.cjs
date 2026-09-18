@@ -326,12 +326,12 @@ describe('shared isSpawnTimeout predicate — parity for worktree-base-ref evalu
       assert.strictEqual(isSpawnTimeout(result), expectTimeout);
 
       // exitCode 128 ("not a git repository") is git's own definitive,
-      // completed answer — the ONLY non-timeout, non-success outcome that
-      // does not degrade. Pairing it with each non-timeout signal/error
-      // combination means: if isExecGitTimeout ever mis-classifies one of
-      // these as a timeout, this assertion flips from 'no-head' (no
-      // degrade) to 'head-unresolvable' (degrade) and the test fails —
-      // a real behavioral divergence signal, not a same-reason coincidence.
+      // completed answer. Since #4734 it degrades (no worktree can exist
+      // without a resolvable HEAD) but keeps its OWN reason — so pairing it
+      // with each non-timeout signal/error combination still yields a real
+      // divergence signal: if isExecGitTimeout ever mis-classifies one of
+      // these as a timeout, the reason flips from 'no-head' (#4734 degrade)
+      // to 'head-unresolvable' and the test fails.
       const execGit = () => ({
         exitCode: expectTimeout ? null : 128,
         stdout: '',
@@ -344,7 +344,7 @@ describe('shared isSpawnTimeout predicate — parity for worktree-base-ref evalu
         assert.strictEqual(degradeResult.shouldDegrade, true);
         assert.strictEqual(degradeResult.reason, 'head-unresolvable');
       } else {
-        assert.strictEqual(degradeResult.shouldDegrade, false);
+        assert.strictEqual(degradeResult.shouldDegrade, true);
         assert.strictEqual(degradeResult.reason, 'no-head');
       }
     });
