@@ -14,7 +14,7 @@
  * `runtime.hostBehaviors` + the combined-family engine install path).
  */
 
-const { test } = require('node:test');
+const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -146,9 +146,7 @@ test('no `runtime === "opencode"` string-equality branch remains in the install 
 
 // ─── #4738: the opencode manifest must record the skills it stages ───────────
 
-const { describe, beforeEach, afterEach } = require('node:test');
-const os = require('node:os');
-const { cleanup, runGsdTools } = require('./helpers.cjs');
+const { cleanup, runGsdTools, createTempDir } = require('./helpers.cjs');
 const { writeManifest } = require(path.join(__dirname, '..', 'bin', 'install.js'));
 const { runMinimalInstall } = require('./helpers/install-shared.cjs');
 
@@ -156,7 +154,7 @@ describe('#4738: writeManifest records staged skills for opencode', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4738-manifest-'));
+    tmpDir = createTempDir('gsd-4738-manifest-');
   });
 
   afterEach(() => {
