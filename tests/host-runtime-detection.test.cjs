@@ -590,7 +590,6 @@ describe('detectHostRuntime: properties', () => {
 
 describe('resolveReportedRuntime: install-marker rung (#4717)', () => {
   const slash = require('../gsd-core/bin/lib/runtime-slash.cjs');
-  const assertStrict = assert.strict || assert;
 
   // Self-contained withProject: clears GSD_RUNTIME (the marker rung sits below
   // it) and scaffolds a throwaway project — scoped to this describe so the
@@ -622,7 +621,7 @@ describe('resolveReportedRuntime: install-marker rung (#4717)', () => {
     const result = resolveReportedRuntime(tmpDir, {
       env: { CODEX_SANDBOX: 'seatbelt', CODEX_SANDBOX_NETWORK_DISABLED: '1' },
     });
-    assertStrict.strictEqual(result, 'claude',
+    assert.strictEqual(result, 'claude',
       'the marker (claude) must outrank host detection (codex) on the owning tree');
   });
 
@@ -631,7 +630,7 @@ describe('resolveReportedRuntime: install-marker rung (#4717)', () => {
     slash._setInstallRuntimeMarkerForTests('codex');
     t.after(() => slash._resetInstallRuntimeMarkerCacheForTests());
     const result = resolveReportedRuntime(tmpDir, { env: {} });
-    assertStrict.strictEqual(result, 'codex',
+    assert.strictEqual(result, 'codex',
       'a codex-owned tree reports codex even where host sniffing would say claude');
   });
 
@@ -640,7 +639,7 @@ describe('resolveReportedRuntime: install-marker rung (#4717)', () => {
     slash._setInstallRuntimeMarkerForTests('codex');
     t.after(() => slash._resetInstallRuntimeMarkerCacheForTests());
     const result = resolveReportedRuntime(tmpDir, { env: { GSD_RUNTIME: 'claude' } });
-    assertStrict.strictEqual(result, 'claude');
+    assert.strictEqual(result, 'claude');
   });
 
   test('explicit config runtime still outranks the marker (#4717 ladder rung 1)', (t) => {
@@ -649,13 +648,13 @@ describe('resolveReportedRuntime: install-marker rung (#4717)', () => {
     slash._setInstallRuntimeMarkerForTests('codex');
     t.after(() => slash._resetInstallRuntimeMarkerCacheForTests());
     const result = resolveReportedRuntime(tmpDir, { env: {} });
-    assertStrict.strictEqual(result, 'kimi');
+    assert.strictEqual(result, 'kimi');
   });
 
   test('no marker: host detection unchanged (dev/source trees, pre-#2297 installs)', (t) => {
     const tmpDir = withProject4717(t);
     slash._resetInstallRuntimeMarkerCacheForTests();
     const result = resolveReportedRuntime(tmpDir, { env: { CODEX_SANDBOX: 'seatbelt' } });
-    assertStrict.strictEqual(result, 'codex', 'host detection remains the fallback without a marker');
+    assert.strictEqual(result, 'codex', 'host detection remains the fallback without a marker');
   });
 });

@@ -2020,7 +2020,7 @@ when the two differ, and `effort_clamp_reason` explains why (`null` when unclamp
 >
 > [Codex CLI 0.130.0](https://github.com/openai/codex/releases/tag/rust-v0.130.0) (released 2026-05-08) removed extra-skills-roots discovery via [openai/codex#21485](https://github.com/openai/codex/pull/21485). From this version forward, Codex CLI only scans `~/.codex/skills/<name>/SKILL.md`, `<project>/.codex/skills/`, and registered plugin roots for invocable skills. GSD installs the `$gsd-*` surface as `~/.codex/skills/gsd-<name>/SKILL.md` so commands resolve after a Codex restart. Earlier Codex CLI versions can show a duplicate listing (the legacy extra-roots scan plus the user-root copies) — restart Codex and either upgrade to ≥ 0.130.0 or accept the duplicates until you do.
 
-When GSD is installed for a non-Claude runtime, the installer automatically sets `resolve_model_ids: "omit"` in `~/.gsd/defaults.json`. This causes GSD to return an empty model parameter for all agents, so each agent uses whatever model the runtime is configured with. No additional setup is needed for the default case.
+When GSD is installed for a non-Claude runtime, the installer automatically sets `resolve_model_ids: "omit"` in the shared `~/.gsd/defaults.json`, and records the runtime identity in the install's `.gsd-runtime` marker. The omit acts as a Claude protection — it keeps a Claude session on the same machine from resolving Claude-tier model IDs against a defaults file written for another runtime. A non-Claude session whose install marker names that runtime resolves its own runtime tier map instead (for example `gpt-5.6-*` on Codex), so agents use models the runtime actually has. No additional setup is needed for the default case.
 
 If you want different agents to use different models, use `model_overrides` with fully-qualified model IDs that your runtime recognizes:
 
@@ -2042,8 +2042,8 @@ The intent is the same as the Claude profile tiers -- use a stronger model for p
 
 | Scenario | Setting | Effect |
 |----------|---------|--------|
-| Non-Claude runtime, single model | `resolve_model_ids: "omit"` (installer default) | All agents use the runtime's default model |
-| Non-Claude runtime, tiered models | `resolve_model_ids: "omit"` + `model_overrides` | Named agents use specific models, others use runtime default |
+| Non-Claude runtime, single model | `resolve_model_ids: "omit"` (installer default) | Agents resolve the runtime's own tier map (runtime default where the runtime has no map) |
+| Non-Claude runtime, tiered models | `resolve_model_ids: "omit"` + `model_overrides` | Named agents use specific models, others resolve from the runtime tier map |
 | Claude Code with OpenRouter/local provider | `model_profile: "inherit"` | All agents follow the session model |
 | Claude Code with OpenRouter, tiered | `model_profile: "inherit"` + `model_overrides` | Named agents use specific models, others inherit |
 
@@ -2053,7 +2053,7 @@ The intent is the same as the Claude profile tiers -- use a stronger model for p
 |-------|----------|----------|
 | `false` (default) | Returns Claude aliases (`opus`, `sonnet`, `haiku`) | Claude Code with native Anthropic API |
 | `true` | Maps aliases to full Claude model IDs (`claude-opus-4-8`) | Claude Code with API that requires full IDs |
-| `"omit"` | Returns empty string (runtime picks its default) | Non-Claude runtimes (Codex, OpenCode, Antigravity CLI, Kilo) |
+| `"omit"` | Claude protection: yields an empty string when no runtime identity is known (or the value fails recognition); a runtime identified by its install marker resolves its own tier map instead | Non-Claude runtimes (Codex, OpenCode, Antigravity CLI, Kilo) |
 
 ### The `tier` Field
 
@@ -2133,7 +2133,7 @@ On the Claude runtime, tier resolution stays on Claude Code's adaptive tier alia
 
 1. `model_overrides[<agent>]` — explicit per-agent ID always wins.
 2. **Runtime-aware tier resolution** (this section) — when `runtime` is set and profile is not `inherit`. On non-Claude runtimes this is the built-in tier map merged with your `model_profile_overrides`; on the Claude runtime it applies only the `model_profile_overrides.claude.<tier>` entry you set (#4192) — never the built-in defaults, so unpinned installs keep resolving aliases.
-3. `resolve_model_ids: "omit"` — returns empty string when no `runtime` is set (an explicit project-level `"omit"` wins over a `claude` tier override too).
+3. `resolve_model_ids: "omit"` — an explicit project-level `"omit"` yields an empty string unless the runtime identity (config, environment, or install marker) names a recognized non-Claude runtime, whose own tier map then applies.
 4. Claude-native default — `model_profile` tier as alias (current default).
 5. `inherit` — propagates literal `inherit` for `Task(model="inherit")` semantics.
 

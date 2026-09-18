@@ -187,7 +187,7 @@ quota / rate-limit failures; other failures keep the tier ladder. Leaving
 
 ## Using GSD on non-Anthropic runtimes
 
-If you installed GSD for Codex, OpenCode, Antigravity CLI, or Kilo, the installer already set `resolve_model_ids: "omit"` in your config. This prevents unresolved Anthropic model IDs from leaking into those runtimes. When `runtime` is set, runtime-native profile resolution still supplies any model and effort that the runtime adapter can transport. No manual setup is needed for the basic case.
+If you installed GSD for Codex, OpenCode, Antigravity CLI, or Kilo, the installer already set `resolve_model_ids: "omit"` in the shared config. This prevents unresolved Anthropic model IDs from leaking into those runtimes. Your install's recorded runtime identity (the `.gsd-runtime` marker) tells GSD which runtime tier map to resolve instead, so runtime-native profile resolution still supplies any model and effort that the runtime adapter can transport. No manual setup is needed for the basic case.
 
 ### Codex routes tiers at spawn time when supported
 
