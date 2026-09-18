@@ -5131,6 +5131,7 @@ describe('roadmap update-plan-progress — superseded plans (#4741)', () => {
       supersededPlanStatus = 'superseded',
       supersededSummaryStatus = 'halted',
       includeSupersededSummary = true,
+      activeSummaryStatus = 'complete',
       roadmap = null,
     } = opts;
     fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-demo'), { recursive: true });
@@ -5161,7 +5162,7 @@ describe('roadmap update-plan-progress — superseded plans (#4741)', () => {
     );
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'phases', '01-demo', '01-01-SUMMARY.md'),
-      '---\nphase: 01-demo\nplan: 01\nstatus: complete\n---\n',
+      `---\nphase: 01-demo\nplan: 01\nstatus: ${activeSummaryStatus}\n---\n`,
     );
     if (includeSupersededSummary) {
       fs.writeFileSync(
@@ -5260,14 +5261,21 @@ describe('roadmap update-plan-progress — superseded plans (#4741)', () => {
   test('#4741 negative space: a halted summary on an ACTIVE plan still ticks (#2830)', (t) => {
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
-    write4741World(tmpDir, { supersededPlanStatus: 'held', supersededSummaryStatus: 'complete' });
-    // 01-02's PLAN status "held" is NOT superseded → still counted; its
-    // complete summary ticks it. Only `status: superseded` exits the count.
+    // #2830: `status: halted` on a plan that still COUNTS is executed-by-design.
+    // The active plan's SUMMARY carries `halted` here; the superseded plan's
+    // row must still stay unchecked in the same document.
+    write4741World(tmpDir, { activeSummaryStatus: 'halted' });
+
     const output = runUpdate(tmpDir);
-    assert.strictEqual(output.plan_count, 2, 'a non-superseded status keeps the plan counted');
+    assert.strictEqual(output.plan_count, 1, 'only the superseded plan is excluded');
+    assert.strictEqual(output.summary_count, 1);
 
     const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
-    assert.ok(roadmap.includes('- [x] 01-02-PLAN.md'), 'non-superseded plans tick exactly as before');
-    assert.ok(roadmap.includes('2/2 plans executed'), 'numbers and checkboxes agree');
+    assert.ok(roadmap.includes('- [x] 01-01-PLAN.md'), 'a halted summary on an ACTIVE plan ticks (#2830)');
+    assert.ok(
+      roadmap.includes('- [ ] 01-02-PLAN.md'),
+      'and the superseded plan stays unchecked in the same document',
+    );
+    assert.ok(roadmap.includes('1/1 plans executed'), 'numbers and checkboxes agree');
   });
 });
