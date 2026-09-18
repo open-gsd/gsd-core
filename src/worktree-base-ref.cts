@@ -106,6 +106,8 @@ function buildMsgBaserefHeadIgnored(headSha: string | null, forkRef: string | nu
 
 const MSG_HEAD_UNRESOLVABLE = `⚠ Cannot determine the worktree base (git rev-parse HEAD did not return a definitive answer). Running this phase sequentially on the main working tree to avoid an unverified base mismatch. Note: worktree.baseRef:"head" silences this check only where GSD itself creates the worktree (orchestrator-managed runtimes) — in harness mode it never applied (#48, #3659). Retry; if it persists, check for a stalled filesystem mount or a stale git index lock (.git/index.lock). See #683, #3050.`;
 
+const MSG_NO_GIT_REPOSITORY = `⚠ This project root is not a git repository (git resolved no HEAD), so a harness worktree cannot be created here. Running this dispatch sequentially on the main working tree instead — no isolation flag is required. See #4734.`;
+
 /**
  * Returns true when an execGit result indicates the subprocess was killed by
  * a timeout. A timeout means the command genuinely could not complete — it
@@ -378,6 +380,46 @@ export function cmdWorktreeSetBaseRef(
 }
 
 /**
+ * One classification of `git rev-parse HEAD`, shared by every surface that
+ * must tell git's definitive "no repository here" answer apart from ambiguous
+ * or failed resolutions (#4734 — before this, evaluateWorktreeBaseDegrade was
+ * the only owner and the isolation guard's fallback simply had no check).
+ * Exit 128 covers BOTH "not a git repository" and "a repository with no
+ * commits" (`ambiguous argument 'HEAD'`); stderr text is localized, so the
+ * exit code is the stable contract — and in neither case can a harness
+ * worktree be created, which is the only question every consumer asks.
+ *
+ * - `present`: exit 0 with a non-empty sha (`headSha` carries it, trimmed).
+ * - `definitive-absence`: exit 128 — git completed and definitively answered.
+ * - `ambiguous-absence`: exit 0 with empty stdout — git completed without a
+ *   definitive answer (#3057 B8).
+ * - `indeterminate`: timeout or any other non-success — never evidence of
+ *   anything; consumers must fail closed (#3050).
+ */
+export function classifyGitHead(deps?: {
+  execGit?: ExecGitFn;
+  cwd?: string;
+}): { status: 'present' | 'definitive-absence' | 'ambiguous-absence' | 'indeterminate'; headSha: string | null } {
+  const execGit: ExecGitFn = deps?.execGit ?? execGitSeam;
+  const cwdOpts = deps?.cwd ? { cwd: deps.cwd } : {};
+  const headResult = execGit(['rev-parse', 'HEAD'], cwdOpts);
+  if (isExecGitTimeout(headResult)) {
+    return { status: 'indeterminate', headSha: null };
+  }
+  const headStdout = headResult.stdout ? headResult.stdout.trim() : '';
+  if (headResult.exitCode === 128) {
+    return { status: 'definitive-absence', headSha: null };
+  }
+  if (headResult.exitCode === 0 && !headStdout) {
+    return { status: 'ambiguous-absence', headSha: null };
+  }
+  if (headResult.exitCode !== 0) {
+    return { status: 'indeterminate', headSha: null };
+  }
+  return { status: 'present', headSha: headStdout };
+}
+
+/**
  * Evaluates whether the current worktree HEAD has diverged from the fork base
  * (origin/HEAD) that the Claude Code harness would use when creating a 'fresh'
  * parallel worktree.
@@ -406,15 +448,14 @@ export function evaluateWorktreeBaseDegrade(deps?: {
   forkRef: string | null;
   forkSha: string | null;
   /**
-   * Only meaningful when `reason === 'no-head'` (both non-degrade outcomes);
-   * `null` for every other reason. `true` for exit 128 — git's definitive
-   * "not a git repository" answer. `false` for exit 0 with empty stdout: git
-   * completed but did NOT give a confirmed "no HEAD" answer, unlike exit 128
-   * — this outcome is left `shouldDegrade:false` unchanged (pinned by an
-   * existing regression guard; the underlying product question of whether it
-   * SHOULD degrade is still open, see #3050 review), but a caller can now
-   * tell the two `'no-head'` causes apart instead of treating them as the
-   * same verified answer. (#3057 B8)
+   * Only meaningful when `reason === 'no-head'`; `null` for every other
+   * reason. Distinguishes the two no-head causes: `true` for exit 128 —
+   * git's definitive "no resolvable HEAD here" answer, which DEGRADES as of
+   * #4734 (a worktree can never be created; the maintainer brief on #4734
+   * answered the previously-open product question). `false` for exit 0 with
+   * empty stdout — git completed but did NOT give a confirmed answer; that
+   * outcome stays `shouldDegrade:false` (pinned by an existing regression
+   * guard; the product question remains open, #3050/#3057 B8).
    */
   headAbsenceVerified: boolean | null;
 } {
@@ -438,44 +479,33 @@ export function evaluateWorktreeBaseDegrade(deps?: {
     return { shouldDegrade: false, reason: 'baseref-head', message: null, headSha: null, forkRef: null, forkSha: null, headAbsenceVerified: null };
   }
 
-  // b. Resolve HEAD sha.
-  const headResult = execGit(['rev-parse', 'HEAD'], cwdOpts);
-  // A TIMEOUT means the command never completed — it is not evidence of "not a
-  // git repository" and must fail closed (distinct from the clean-exit-128
-  // "no-head" case below, which genuinely completed and reported no HEAD).
-  if (isExecGitTimeout(headResult)) {
+  // b. Resolve HEAD sha — through the single classification owner (#4734).
+  const head = classifyGitHead({ execGit, cwd });
+  if (head.status === 'indeterminate') {
+    // A timeout, git missing (exit 127), or any other non-128 non-success is
+    // NOT a definitive answer from git — fail closed (#3050).
     return { shouldDegrade: true, reason: 'head-unresolvable', message: MSG_HEAD_UNRESOLVABLE, headSha: null, forkRef: null, forkSha: null, headAbsenceVerified: null };
   }
-  const headStdout = headResult.stdout ? headResult.stdout.trim() : '';
-  // exit 128 is git's definitive "not a git repository" answer — it completed
-  // and genuinely reported no HEAD. Only this specific, confirmed outcome
-  // stays a benign non-degrade; every other non-success outcome below is
-  // NOT a definitive answer from git and must fail closed (#3050).
-  if (headResult.exitCode === 128) {
-    return { shouldDegrade: false, reason: 'no-head', message: null, headSha: null, forkRef: null, forkSha: null, headAbsenceVerified: true };
+  if (head.status === 'definitive-absence') {
+    // Exit 128 is git's definitive "no resolvable HEAD here" answer — not a
+    // git repository, or a repository with no commits. In either case a
+    // harness worktree can NEVER be created, so demanding worktree isolation
+    // blocked every dispatch from e.g. a multi-repo workspace root (#4734).
+    // This wires the verdict `headAbsenceVerified` (#3057 B8) was added to
+    // enable; the maintainer brief on #4734 answers the previously-open
+    // product question: the definitive case degrades.
+    return { shouldDegrade: true, reason: 'no-head', message: MSG_NO_GIT_REPOSITORY, headSha: null, forkRef: null, forkSha: null, headAbsenceVerified: true };
   }
-  // Exit 0 with empty stdout is pinned as benign no-degrade by an existing
-  // regression guard (tests/worktree-base-ref.test.cjs — "git rev-parse HEAD
-  // returns empty stdout"). Left unchanged deliberately; flagged in the
-  // #3050 review for a product-intent call rather than silently flipped.
-  // Unlike the exit-128 case above, git did NOT give a definitive "no HEAD"
-  // answer here — `headAbsenceVerified:false` names that gap explicitly
-  // instead of leaving it folded into an identical-looking 'no-head' reason
-  // (#3057 B8; the product question of whether this SHOULD degrade is
-  // unchanged and still open).
-  if (headResult.exitCode === 0 && !headStdout) {
+  if (head.status === 'ambiguous-absence') {
+    // Exit 0 with empty stdout is pinned as benign no-degrade by an existing
+    // regression guard (tests/worktree-base-ref.test.cjs — "git rev-parse HEAD
+    // returns empty stdout"). Unlike the exit-128 case above, git did NOT
+    // give a definitive "no HEAD" answer here — `headAbsenceVerified:false`
+    // names that gap explicitly (#3057 B8; the product question of whether
+    // this SHOULD degrade is unchanged and still open).
     return { shouldDegrade: false, reason: 'no-head', message: null, headSha: null, forkRef: null, forkSha: null, headAbsenceVerified: false };
   }
-  if (headResult.exitCode !== 0) {
-    // Any other non-success outcome (e.g. exit 127 — git missing — or any
-    // other non-zero, non-128 exit) is not a definitive "not a repo" answer.
-    // Fail closed instead of silently treating it as benign.
-    // (`!headStdout` was previously OR'd in here but is unreachable: the
-    // exitCode===0 && !headStdout case is already handled above, and every
-    // other branch here has exitCode!==0 already true — #3050 review.)
-    return { shouldDegrade: true, reason: 'head-unresolvable', message: MSG_HEAD_UNRESOLVABLE, headSha: null, forkRef: null, forkSha: null, headAbsenceVerified: null };
-  }
-  const headSha = headStdout;
+  const headSha: string = head.headSha as string;
 
   // c. Resolve fork base (what the harness forks 'fresh' worktrees from = origin/HEAD).
   let forkRef: string | null = null;

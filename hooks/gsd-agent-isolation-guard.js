@@ -337,6 +337,30 @@ function resolveRegistryIsolation(cwd, configPath) {
     if (!useWorktrees) isolation = 'none';
   }
 
+  // #4734: a harness worktree can never be created in a directory that is not
+  // a git repository (or a repository with no commits) — git's definitive
+  // exit-128 answer on `rev-parse HEAD`. Demanding the isolation flag there
+  // blocked every flag-less dispatch the moment the sentinel went stale, on a
+  // root where no worktree can exist. Degrade to 'none' exactly like the
+  // use_worktrees opt-out above; the classification is owned by
+  // `classifyGitHead` (worktree-base-ref.cjs) — the same single owner the
+  // base-check's degrade decision uses — and ambiguous or failed resolutions
+  // keep the conservative (enforce) default, matching that check's own
+  // fail-closed treatment of the same classes.
+  if (isolation === 'harness-worktree') {
+    try {
+      ensureRuntimeBuild();
+      const { classifyGitHead } = require('../gsd-core/bin/lib/worktree-base-ref.cjs');
+      if (classifyGitHead({ cwd }).status === 'definitive-absence') {
+        isolation = 'none';
+      }
+    } catch {
+      // Unbuilt or unreadable runtime library — keep the conservative
+      // (enforce) default rather than silently disabling the guard, same
+      // posture as the ladder fallback above.
+    }
+  }
+
   return { isolation, harnessFlag };
 }
 

@@ -54,6 +54,7 @@ const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
 const { toLegacyResult, gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { createTempDir, createTempProject, runGsdTools, cleanup } = require('./helpers.cjs');
+const { createFixture } = require('./fixtures/index.cjs');
 const { SENTINEL_RELATIVE_PATH, SENTINEL_STALE_MS, readSentinel } = require('../hooks/lib/isolation-sentinel.js');
 const { REASON_CODE, REASON_INTERPOLATION_MAX_LEN, sanitizeForReason, describeSentinelDiscard } = require('../hooks/lib/isolation-deny-reason.js');
 const { runtimes } = require('../gsd-core/bin/lib/capability-registry.cjs');
@@ -121,9 +122,12 @@ function agentPayload(overrides = {}) {
 }
 
 function mkProject(prefix) {
-  const dir = createTempDir(prefix);
-  fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
-  return dir;
+  // #4734: git-inited with a real HEAD. Production GSD project roots are git
+  // repositories, and the guard's fallback now degrades to 'none' when the
+  // root has NO repository — a non-git fixture here would exercise that
+  // degrade instead of the fallback enforcement these suites pin. The
+  // dedicated non-git world lives in the #4734 describe below.
+  return createFixture({ prefix, planning: true, git: true, projectDoc: false });
 }
 
 function writeConfig(dir, content) {
@@ -1795,5 +1799,26 @@ describe('gsd-agent-isolation-guard.js: #4734 — a non-git project root is neve
     writeSentinel(project, { isolation: 'none', writtenAt: Date.now() - (SENTINEL_STALE_MS + 60000) });
     const r = runHook(agentPayload(), project);
     assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+  });
+
+  test('positive control: the same shape in a git-inited root still DENIES (the repository is the differentiator)', (t) => {
+    const project = mkProject('gsd-aig-4734-git-');
+    t.after(() => cleanup(project));
+    writeConfig(project, JSON.stringify({ runtime: 'claude' }));
+    const r = runHook(agentPayload(), project);
+    assert.equal(r.status, 2, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    assert.equal(JSON.parse(r.stdout).decision, 'block');
+  });
+
+  test('#4734 scope: a FRESH sentinel still governs a non-git root — the fix is fallback-only', (t) => {
+    // The sentinel-fresh path carries the workflow's own confirmed decision;
+    // with the base-check degrade (#4734a) that decision is made where git is
+    // actually consulted. The guard does not second-guess it here.
+    const project = mkNonGitProject('gsd-aig-4734-nogit-fresh-');
+    t.after(() => cleanup(project));
+    writeSentinel(project, { isolation: 'harness-worktree', harnessFlag: 'isolation="worktree"' });
+    const r = runHook(agentPayload(), project);
+    assert.equal(r.status, 2, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    assert.equal(JSON.parse(r.stdout).decision, 'block');
   });
 });

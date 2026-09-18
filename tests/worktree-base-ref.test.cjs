@@ -351,13 +351,13 @@ describe('evaluateWorktreeBaseDegrade', () => {
     assert.ok(result.message.includes('sequentially'), 'message must state the sequential fallback');
   });
 
-  test('git rev-parse HEAD fails → no degrade, reason no-head', () => {
+  test('git rev-parse HEAD exits 128 (definitive no-repository) → degrades, reason no-head (#4734)', () => {
     const result = evaluateWorktreeBaseDegrade({
       execGit: makeExecGit({
         'rev-parse HEAD': { exitCode: 128, stdout: '', stderr: 'fatal: not a git repo', signal: null, error: null },
       }),
     });
-    assert.strictEqual(result.shouldDegrade, false);
+    assert.strictEqual(result.shouldDegrade, true);
     assert.strictEqual(result.reason, 'no-head');
     assert.strictEqual(result.headSha, null);
   });
@@ -375,7 +375,10 @@ describe('evaluateWorktreeBaseDegrade', () => {
   // ─── #3050: fail-closed matrix for git rev-parse HEAD outcomes ─────────────
   // DECIDED RULE: degrade UNLESS git completed and gave a definitive answer.
   //   - timeout                       → degrade, reason 'head-unresolvable'
-  //   - exitCode === 128              → NO degrade, reason 'no-head' (unchanged)
+  //   (#4734 revised the exit-128 row: git's definitive no-repository answer
+  //   now DEGRADES — a worktree can never be created there. The ambiguous
+  //   exit-0-empty row is unchanged, still deliberately non-degrading.)
+  //   - exitCode === 128              → degrade, reason 'no-head' (#4734)
   //   - exit 0 with non-empty sha     → proceed (unchanged)
   //   - anything else (127, other     → degrade, reason 'head-unresolvable'
   //     non-zero, exit 0 empty stdout
@@ -442,32 +445,30 @@ describe('evaluateWorktreeBaseDegrade', () => {
     assert.strictEqual(result.reason, 'head-unresolvable');
   });
 
-  test('exitCode 128 ("not a git repository") still does NOT degrade (#3050 regression guard)', () => {
+  test('exitCode 128 ("not a git repository") degrades with a user-visible message (#4734; was a #3050 non-degrade pin)', () => {
     const result = evaluateWorktreeBaseDegrade({
       execGit: makeExecGit({
         'rev-parse HEAD': { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository', signal: null, error: null },
       }),
     });
-    assert.strictEqual(result.shouldDegrade, false);
+    assert.strictEqual(result.shouldDegrade, true);
     assert.strictEqual(result.reason, 'no-head');
+    assert.ok(result.message !== null && result.message.includes('#4734'), 'the degrade carries the #4734 explanation the workflow prints');
   });
 
   // ─── #3057 B8: headAbsenceVerified distinguishes the two "no-head" causes ──
   //
-  // Both outcomes below keep `shouldDegrade:false, reason:'no-head'` — that
-  // product decision is deliberately UNCHANGED (pinned by the regression
-  // guards above and flagged in the #3050 review as still an open question).
-  // What changes is that a caller can now tell git's DEFINITIVE "not a git
-  // repository" answer (exit 128) apart from git completing but returning
-  // nothing useful (exit 0, empty stdout) — the module's own #380-383 comment
-  // named this gap; these two paired tests prove it is closed.
+  // #4734 revised the exit-128 outcome (degrade, with headAbsenceVerified:true
+  // preserved) and left the exit-0-empty outcome deliberately unchanged — the
+  // paired tests below prove both, and that a caller can still tell the two
+  // 'no-head' causes apart.
 
-  test('exit 128 — git\'s definitive "not a git repository" answer → headAbsenceVerified:true', () => {
+  test('exit 128 — git\'s definitive "not a git repository" answer → degrades, headAbsenceVerified:true (#4734)', () => {
     const faultyGit = makeFaultyGit({
       faults: [{ kind: 'exit', exitCode: 128, stderr: 'fatal: not a git repository' }],
     });
     const result = evaluateWorktreeBaseDegrade({ execGit: faultyGit });
-    assert.strictEqual(result.shouldDegrade, false);
+    assert.strictEqual(result.shouldDegrade, true);
     assert.strictEqual(result.reason, 'no-head');
     assert.strictEqual(result.headAbsenceVerified, true);
   });
