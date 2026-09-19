@@ -20,13 +20,24 @@ if [ -z "$BUILD_CMD" ]; then
     # hardcoded 'iPhone 16' can never match on machines whose simulators were
     # never created. Resolve the first available iOS simulator (id= works for
     # both build and test); with none available, skip the Xcode gates loudly
-    # instead of running commands that are guaranteed to fail.
-    XCODE_SIM=$(xcrun simctl list devices available 2>/dev/null | sed -n 's/.*(\([A-F0-9-]\{8,\}\))$/\1/p' | head -1)
+    # instead of running commands that are guaranteed to fail. The sed takes the
+    # LAST ≥8-char hex/dash parenthetical WITHOUT a $ anchor: real simctl lines
+    # end in a (Shutdown)/(Booted) state suffix (often with trailing space), and
+    # the state word is never in the hex class, so the UDID is always the last
+    # in-class group even when the device name carries its own parentheses.
+    XCODE_SIM=$(xcrun simctl list devices available 2>/dev/null | sed -n 's/.*(\([A-F0-9-]\{8,\}\)).*/\1/p' | head -1)
     if [ -z "$XCODE_SIM" ]; then
       echo "⚠ No available iOS Simulator found — skipping the Xcode build gate. Set workflow.build_command to run it anyway."
+      BUILD_CMD=""
       XCODEPROJ=""
     else
       XCODE_DEST="id=$XCODE_SIM"
+      # #4784 review F2: the command string is re-parsed by `bash -c`, so an
+      # apostrophe in a repo/scheme name would terminate the quote (unbalanced-
+      # quote failure; a crafted path shape reaches command injection). Escape
+      # for the single-quoted span at the only boundary GSD owns.
+      XCODEPROJ=$(printf '%s' "$XCODEPROJ" | sed "s/'/'\\\\''/g")
+      XCODE_SCHEME=$(printf '%s' "$XCODE_SCHEME" | sed "s/'/'\\\\''/g")
     fi
     if [ -n "$XCODEPROJ" ] && [ -n "$XCODE_SCHEME" ]; then
       BUILD_CMD="xcodebuild build -project '$XCODEPROJ' -scheme '$XCODE_SCHEME' -destination '${XCODE_DEST}'"
@@ -87,13 +98,16 @@ if [ -z "$TEST_CMD" ]; then
     # #4784: reuse the simulator resolved by the build gate; re-detect if this
     # block runs in a fresh shell. No simulator → skip loudly, same as Step A.
     if [ -z "${XCODE_SIM:-}" ]; then
-      XCODE_SIM=$(xcrun simctl list devices available 2>/dev/null | sed -n 's/.*(\([A-F0-9-]\{8,\}\))$/\1/p' | head -1)
+      XCODE_SIM=$(xcrun simctl list devices available 2>/dev/null | sed -n 's/.*(\([A-F0-9-]\{8,\}\)).*/\1/p' | head -1)
     fi
     if [ -z "$XCODE_SIM" ]; then
       echo "⚠ No available iOS Simulator found — skipping the Xcode test gate. Set workflow.test_command to run it anyway."
+      TEST_CMD=""
       XCODEPROJ=""
     else
       XCODE_DEST="id=$XCODE_SIM"
+      XCODEPROJ=$(printf '%s' "$XCODEPROJ" | sed "s/'/'\\\\''/g")
+      XCODE_SCHEME=$(printf '%s' "$XCODE_SCHEME" | sed "s/'/'\\\\''/g")
     fi
     if [ -n "$XCODEPROJ" ] && [ -n "$XCODE_SCHEME" ]; then
       TEST_CMD="xcodebuild test -project '$XCODEPROJ' -scheme '$XCODE_SCHEME' -destination '${XCODE_DEST}'"
