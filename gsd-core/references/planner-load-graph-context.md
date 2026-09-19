@@ -32,8 +32,10 @@ Why the CLI is preferred: it ranks seeds (IDF weighting, fuzzy matching) and app
 
 The two paths return **different shapes**: the CLI emits prose, the built-in emits JSON with per-edge confidence tiers and `budget_met`/`budget_estimate`. `--budget` caps rendered output on the CLI and estimated payload bytes in the built-in — same flag name, different unit. Read whichever you get; do not assume a stable shape and do not paste raw output into PLAN.md.
 
-Use the keyword that best captures the phase goal. Examples:
-- Phase "User Authentication" -> query term "auth"
+Use the keyword that best captures the phase goal. Prefer the full domain word over a
+prefix of it — on the fallback path a prefix is matched as a substring, so "auth" also
+seeds on `author` and `authoring`. Examples:
+- Phase "User Authentication" -> query term "authentication"
 - Phase "Payment Integration" -> query term "payment"
 - Phase "Database Migration" -> query term "migration"
 
