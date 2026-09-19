@@ -479,39 +479,46 @@ export function observeHarnessForkFromHead(deps: {
   }
 
   // 2. Probe: list linked worktrees, keep the harness's own, require a clean
-  //    one whose HEAD equals the orchestrator HEAD.
-  const list = execGit(['worktree', 'list', '--porcelain'], { cwd });
-  if (isExecGitTimeout(list) || list.exitCode !== 0) {
-    return { confirmed: false, source: 'none', worktreePath: null, worktreeHead: null };
-  }
-  const candidates = String(list.stdout || '')
-    .split('\n\n')
-    .map((block) => block.split('\n').find((l) => l.startsWith('worktree '))?.slice('worktree '.length).trim())
-    .filter((p): p is string => !!p && p.includes('/.claude/worktrees/agent-'));
-  for (const wtPath of candidates) {
-    const status = execGit(['-C', wtPath, 'status', '--porcelain'], { cwd });
-    if (isExecGitTimeout(status) || status.exitCode !== 0) continue;
-    const trackedDirty = String(status.stdout || '')
-      .split('\n')
-      .some((l) => l.trim() !== '' && !l.startsWith('?? '));
-    if (trackedDirty) continue;
-    const wtHeadResult = execGit(['-C', wtPath, 'rev-parse', 'HEAD'], { cwd });
-    if (isExecGitTimeout(wtHeadResult) || wtHeadResult.exitCode !== 0) continue;
-    const wtHead = wtHeadResult.stdout ? wtHeadResult.stdout.trim() : '';
-    if (wtHead && wtHead === deps.headSha) {
-      try {
-        stateWrite(cacheFile, `${JSON.stringify({
-          headSha: deps.headSha,
-          worktreePath: wtPath,
-          worktreeHead: wtHead,
-          verdict: 'fork-from-head-confirmed',
-          probedAt: new Date().toISOString(),
-        })}\n`);
-      } catch {
-        // Cache write is best-effort; the verdict stands for this dispatch.
-      }
-      return { confirmed: true, source: 'probe', worktreePath: wtPath, worktreeHead: wtHead };
+  //    one whose HEAD equals the orchestrator HEAD. ANY failure — timeout,
+  //    non-zero exit, or a throwing execGit — is an inconclusive observation,
+  //    never a crash: the caller falls through to its existing flow (#4588).
+  try {
+    const list = execGit(['worktree', 'list', '--porcelain'], { cwd });
+    if (isExecGitTimeout(list) || list.exitCode !== 0) {
+      return { confirmed: false, source: 'none', worktreePath: null, worktreeHead: null };
     }
+    const candidates = String(list.stdout || '')
+      .split('\n\n')
+      .map((block) => block.split('\n').find((l) => l.startsWith('worktree '))?.slice('worktree '.length).trim())
+      .filter((p): p is string => !!p && p.includes('/.claude/worktrees/agent-'));
+    for (const wtPath of candidates) {
+      const status = execGit(['-C', wtPath, 'status', '--porcelain'], { cwd });
+      if (isExecGitTimeout(status) || status.exitCode !== 0) continue;
+      const trackedDirty = String(status.stdout || '')
+        .split('\n')
+        .some((l) => l.trim() !== '' && !l.startsWith('?? '));
+      if (trackedDirty) continue;
+      const wtHeadResult = execGit(['-C', wtPath, 'rev-parse', 'HEAD'], { cwd });
+      if (isExecGitTimeout(wtHeadResult) || wtHeadResult.exitCode !== 0) continue;
+      const wtHead = wtHeadResult.stdout ? wtHeadResult.stdout.trim() : '';
+      if (wtHead && wtHead === deps.headSha) {
+        try {
+          stateWrite(cacheFile, `${JSON.stringify({
+            headSha: deps.headSha,
+            worktreePath: wtPath,
+            worktreeHead: wtHead,
+            verdict: 'fork-from-head-confirmed',
+            probedAt: new Date().toISOString(),
+          })}\n`);
+        } catch {
+          // Cache write is best-effort; the verdict stands for this dispatch.
+        }
+        return { confirmed: true, source: 'probe', worktreePath: wtPath, worktreeHead: wtHead };
+      }
+    }
+  } catch {
+    // A throwing execGit (unexpected stub shape, seam surprise) is an
+    // inconclusive observation, not a crash — the #3659 comparison governs.
   }
   return { confirmed: false, source: 'none', worktreePath: null, worktreeHead: null };
 }
