@@ -520,8 +520,8 @@ describe('evaluateWorktreeBaseDegrade', () => {
         'rev-parse --verify --quiet origin/HEAD': { exitCode: 0, stdout: FORK_SHA, stderr: '', signal: null, error: null },
       }),
     });
-    assert.strictEqual(result.shouldDegrade, true);
-    assert.strictEqual(result.reason, 'head-diverged-from-fork');
+    assert.strictEqual(result.shouldDegrade, true, `reason=${result.reason}`);
+    assert.strictEqual(result.reason, 'head-diverged-from-fork', `reason=${result.reason}`);
     assert.strictEqual(result.headSha, HEAD_SHA);
     assert.strictEqual(result.forkRef, 'origin/HEAD');
     assert.strictEqual(result.forkSha, FORK_SHA);
@@ -546,8 +546,8 @@ describe('evaluateWorktreeBaseDegrade', () => {
     assert.strictEqual(result.forkRef, 'origin/next');
     assert.strictEqual(result.forkSha, FORK_SHA);
     // HEAD != FORK_SHA in this fixture → degrade
-    assert.strictEqual(result.shouldDegrade, true);
-    assert.strictEqual(result.reason, 'head-diverged-from-fork');
+    assert.strictEqual(result.shouldDegrade, true, `reason=${result.reason}`);
+    assert.strictEqual(result.reason, 'head-diverged-from-fork', `reason=${result.reason}`);
     assert.ok(result.message !== null);
     assert.ok(result.message.includes('origin/next'));
   });
@@ -1022,8 +1022,8 @@ describe('evaluateWorktreeBaseDegrade — defensive trim on SHAs (FIX 3)', () =>
         'rev-parse --verify --quiet origin/HEAD': { exitCode: 0, stdout: FORK_SHA + '\r\n', stderr: '', signal: null, error: null },
       }),
     });
-    assert.strictEqual(result.shouldDegrade, true);
-    assert.strictEqual(result.reason, 'head-diverged-from-fork');
+    assert.strictEqual(result.shouldDegrade, true, `reason=${result.reason}`);
+    assert.strictEqual(result.reason, 'head-diverged-from-fork', `reason=${result.reason}`);
     // After trimming, headSha and forkSha should be clean
     assert.strictEqual(result.headSha, HEAD_SHA);
     assert.strictEqual(result.forkSha, FORK_SHA);
@@ -1592,8 +1592,8 @@ describe('#4588 A2: a clean prior harness worktree at the orchestrator HEAD conf
       execGit: makeWorktreeExecGit({ clean: false }),
       cwd: '/repo',
     });
-    assert.strictEqual(result.shouldDegrade, true, 'unobserved fork base → the #3659 comparison still governs');
-    assert.strictEqual(result.reason, 'head-diverged-from-fork');
+    assert.strictEqual(result.shouldDegrade, true, `unobserved fork base → the #3659 comparison still governs (reason=${result.reason})`);
+    assert.strictEqual(result.reason, 'head-diverged-from-fork', `reason=${result.reason}`);
   });
 
   test('a harness worktree at a different commit is not evidence', () => {
@@ -1601,8 +1601,8 @@ describe('#4588 A2: a clean prior harness worktree at the orchestrator HEAD conf
       execGit: makeWorktreeExecGit({ wtHead: ORIGIN_SHA }),
       cwd: '/repo',
     });
-    assert.strictEqual(result.shouldDegrade, true);
-    assert.strictEqual(result.reason, 'head-diverged-from-fork');
+    assert.strictEqual(result.shouldDegrade, true, `reason=${result.reason}`);
+    assert.strictEqual(result.reason, 'head-diverged-from-fork', `reason=${result.reason}`);
   });
 
   test('no harness worktrees changes nothing', () => {
@@ -1617,8 +1617,8 @@ describe('#4588 A2: a clean prior harness worktree at the orchestrator HEAD conf
       },
       cwd: '/repo',
     });
-    assert.strictEqual(result.shouldDegrade, true);
-    assert.strictEqual(result.reason, 'head-diverged-from-fork');
+    assert.strictEqual(result.shouldDegrade, true, `reason=${result.reason}`);
+    assert.strictEqual(result.reason, 'head-diverged-from-fork', `reason=${result.reason}`);
   });
 
   test('a probe timeout fails closed to the existing flow', () => {
