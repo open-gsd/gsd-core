@@ -63,6 +63,24 @@ const isWindows = process.platform === 'win32';
 // ─── Shared stubs ─────────────────────────────────────────────────────────────
 
 /**
+ * #4758 (windows conformance lanes): the SUMMARY rescue resolves the manifest's
+ * worktree_path against repoRoot before handing it to the fs walker and its own
+ * `git -C` calls.  A driveless-absolute fixture value ('/repo/...') rewrites to
+ * '<cwd-drive>:\repo\...' under win32 path.resolve, so fakes must key on the
+ * RESOLVED path — a verbatim string key silently never matches there and the
+ * rescue stops being exercised on Windows.  gitKeyFor mirrors git's own
+ * `-C <relative>` resolution (against the plan's repoRoot) so one fake answers
+ * both the caller's calls (verbatim values, resolved by git's cwd) and the
+ * rescue's calls (already-resolved values) through the same branch set.
+ */
+function gitKeyFor(repoRoot, args) {
+  if (args[0] === '-C') {
+    return `-C ${path.resolve(repoRoot, args[1])} ${args.slice(2).join(' ')}`;
+  }
+  return args.join(' ');
+}
+
+/**
  * Returns an execGit stub that simulates what spawnSync returns when the
  * subprocess is killed by SIGTERM after exceeding its timeout.
  * Per Node.js docs: result.status === null, result.signal === 'SIGTERM',
@@ -2930,6 +2948,7 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     // (copy to main tree) and succeed, not return worktree_dirty.
     const calls = [];
     const rescued = [];
+    const wtResolved = path.resolve('/repo/main', '/repo/.claude/worktrees/agent-a1');
     const plan = {
       ok: true,
       repoRoot: '/repo/main',
@@ -2945,8 +2964,8 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     const result = executeWorktreeWaveCleanupPlan(plan, {
       execGit: (args) => {
         calls.push(args.join(' '));
-        const key = args.join(' ');
-        if (key === '-C /repo/.claude/worktrees/agent-a1 rev-parse --abbrev-ref HEAD') {
+        const key = gitKeyFor(plan.repoRoot, args);
+        if (key === `-C ${wtResolved} rev-parse --abbrev-ref HEAD`) {
           return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
         }
         if (key === 'merge-base HEAD worktree-agent-a1') {
@@ -2958,10 +2977,10 @@ describe('executeWorktreeWaveCleanupPlan', () => {
         // SUMMARY is NOT committed on the branch. `git cat-file -e HEAD:<path>` returns
         // exit 128 (NOT 1) for an absent path (#2556): "fatal: path '...' does not exist
         // in 'HEAD'". Rescue must fire on this real exit code.
-        if (key === '-C /repo/.claude/worktrees/agent-a1 cat-file -e HEAD:.planning/q1-SUMMARY.md') {
+        if (key === `-C ${wtResolved} cat-file -e HEAD:.planning/q1-SUMMARY.md`) {
           return { exitCode: 128, stdout: '', stderr: "fatal: path '.planning/q1-SUMMARY.md' does not exist in 'HEAD'" };
         }
-        if (key === '-C /repo/.claude/worktrees/agent-a1 status --porcelain --untracked-files=all') {
+        if (key === `-C ${wtResolved} status --porcelain --untracked-files=all`) {
           // Only the SUMMARY is dirty — no other modified files
           return { exitCode: 0, stdout: '?? .planning/q1-SUMMARY.md', stderr: '' };
         }
@@ -2976,15 +2995,18 @@ describe('executeWorktreeWaveCleanupPlan', () => {
         }
         return { exitCode: 0, stdout: '', stderr: '' };
       },
-      // Inject FS deps so tests don't touch the real filesystem
+      // Inject FS deps so tests don't touch the real filesystem.
+      // Key on the RESOLVED path identity and return paths joined off it — the
+      // walker contract the default walker honors, and the only form whose
+      // slice-derived relPath is correct on every platform (#4758).
       findSummaryFiles: (worktreePath) => {
-        if (worktreePath === '/repo/.claude/worktrees/agent-a1') {
-          return ['/repo/.claude/worktrees/agent-a1/.planning/q1-SUMMARY.md'];
+        if (path.resolve(plan.repoRoot, worktreePath) === wtResolved) {
+          return [path.join(wtResolved, '.planning', 'q1-SUMMARY.md')];
         }
         return [];
       },
       readFileSync: (p) => {
-        if (p === '/repo/.claude/worktrees/agent-a1/.planning/q1-SUMMARY.md') return 'summary content';
+        if (p === path.join(wtResolved, '.planning', 'q1-SUMMARY.md')) return 'summary content';
         return '';
       },
       existsSync: (_p) => false,
@@ -2994,7 +3016,7 @@ describe('executeWorktreeWaveCleanupPlan', () => {
 
     // SUMMARY was rescued into the main tree
     assert.equal(rescued.length, 1, 'SUMMARY.md must be rescued (copied) to main tree');
-    assert.equal(rescued[0].src, '/repo/.claude/worktrees/agent-a1/.planning/q1-SUMMARY.md');
+    assert.equal(rescued[0].src, path.join(wtResolved, '.planning', 'q1-SUMMARY.md'));
     // Normalize to forward slashes for cross-platform assertion (path.join uses \ on Windows)
     assert.equal(rescued[0].dest.replace(/\\/g, '/'), '/repo/main/.planning/q1-SUMMARY.md');
 
@@ -3006,6 +3028,7 @@ describe('executeWorktreeWaveCleanupPlan', () => {
 
   test('#3804: still blocks when worktree has non-SUMMARY dirty files alongside SUMMARY', () => {
     // If there are OTHER dirty files (not SUMMARY), cleanup must still block.
+    const wtResolved = path.resolve('/repo/main', '/repo/.claude/worktrees/agent-a1');
     const plan = {
       ok: true,
       repoRoot: '/repo/main',
@@ -3020,8 +3043,8 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     };
     const result = executeWorktreeWaveCleanupPlan(plan, {
       execGit: (args) => {
-        const key = args.join(' ');
-        if (key === '-C /repo/.claude/worktrees/agent-a1 rev-parse --abbrev-ref HEAD') {
+        const key = gitKeyFor(plan.repoRoot, args);
+        if (key === `-C ${wtResolved} rev-parse --abbrev-ref HEAD`) {
           return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
         }
         if (key === 'merge-base HEAD worktree-agent-a1') {
@@ -3032,22 +3055,25 @@ describe('executeWorktreeWaveCleanupPlan', () => {
         }
         // SUMMARY is NOT committed on the branch (uncommitted, per quick.md contract).
         // cat-file -e returns 128 for an absent path (#2556).
-        if (key === '-C /repo/.claude/worktrees/agent-a1 cat-file -e HEAD:.planning/q1-SUMMARY.md') {
+        if (key === `-C ${wtResolved} cat-file -e HEAD:.planning/q1-SUMMARY.md`) {
           return { exitCode: 128, stdout: '', stderr: "fatal: path '.planning/q1-SUMMARY.md' does not exist in 'HEAD'" };
         }
-        if (key === '-C /repo/.claude/worktrees/agent-a1 status --porcelain --untracked-files=all') {
+        if (key === `-C ${wtResolved} status --porcelain --untracked-files=all`) {
           // SUMMARY plus another dirty file
           return { exitCode: 0, stdout: '?? .planning/q1-SUMMARY.md\nM  src/foo.js', stderr: '' };
         }
         throw new Error(`unexpected git call after dirty check: ${key}`);
       },
       findSummaryFiles: (worktreePath) => {
-        if (worktreePath === '/repo/.claude/worktrees/agent-a1') {
-          return ['/repo/.claude/worktrees/agent-a1/.planning/q1-SUMMARY.md'];
+        if (path.resolve(plan.repoRoot, worktreePath) === wtResolved) {
+          return [path.join(wtResolved, '.planning', 'q1-SUMMARY.md')];
         }
         return [];
       },
-      readFileSync: () => 'summary content',
+      readFileSync: (p) => {
+        if (p === path.join(wtResolved, '.planning', 'q1-SUMMARY.md')) return 'summary content';
+        return '';
+      },
       existsSync: () => false,
       mkdirSync: () => {},
       copyFileSync: () => {},
@@ -3130,7 +3156,10 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     const seenWalker = [];
     const seenGit = [];
     const repoRoot = '/repo/main';
-    const resolvedWt = '/repo/main/wt/agent-a1';
+    // Computed, not literal: on win32 path.resolve rewrites driveless-absolute
+    // and forward-slash inputs to the current drive's backslash form — exactly
+    // the value the rescue must hand its readers there.
+    const resolvedWt = path.resolve(repoRoot, 'wt/agent-a1');
     const plan = {
       ok: true,
       repoRoot,
@@ -3195,6 +3224,7 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     // so the entry must be blocked with status='blocked', reason='summary_rescue_failed',
     // and the worktree must NOT be merged or removed.
     const calls = [];
+    const wtResolved = path.resolve('/repo/main', '/repo/.claude/worktrees/agent-a1');
     const plan = {
       ok: true,
       repoRoot: '/repo/main',
@@ -3210,8 +3240,8 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     const result = executeWorktreeWaveCleanupPlan(plan, {
       execGit: (args) => {
         calls.push(args.join(' '));
-        const key = args.join(' ');
-        if (key === '-C /repo/.claude/worktrees/agent-a1 rev-parse --abbrev-ref HEAD') {
+        const key = gitKeyFor(plan.repoRoot, args);
+        if (key === `-C ${wtResolved} rev-parse --abbrev-ref HEAD`) {
           return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
         }
         if (key === 'merge-base HEAD worktree-agent-a1') {
@@ -3222,10 +3252,10 @@ describe('executeWorktreeWaveCleanupPlan', () => {
         }
         // SUMMARY is NOT committed — cat-file -e returns exit 128 for an absent path (#2556);
         // rescue proceeds and copyFileSync throws (ENOSPC).
-        if (key === '-C /repo/.claude/worktrees/agent-a1 cat-file -e HEAD:.planning/q1-SUMMARY.md') {
+        if (key === `-C ${wtResolved} cat-file -e HEAD:.planning/q1-SUMMARY.md`) {
           return { exitCode: 128, stdout: '', stderr: "fatal: path '.planning/q1-SUMMARY.md' does not exist in 'HEAD'" };
         }
-        if (key === '-C /repo/.claude/worktrees/agent-a1 status --porcelain --untracked-files=all') {
+        if (key === `-C ${wtResolved} status --porcelain --untracked-files=all`) {
           // Only the SUMMARY is dirty
           return { exitCode: 0, stdout: '?? .planning/q1-SUMMARY.md', stderr: '' };
         }
@@ -3236,13 +3266,13 @@ describe('executeWorktreeWaveCleanupPlan', () => {
         return { exitCode: 0, stdout: '', stderr: '' };
       },
       findSummaryFiles: (worktreePath) => {
-        if (worktreePath === '/repo/.claude/worktrees/agent-a1') {
-          return ['/repo/.claude/worktrees/agent-a1/.planning/q1-SUMMARY.md'];
+        if (path.resolve(plan.repoRoot, worktreePath) === wtResolved) {
+          return [path.join(wtResolved, '.planning', 'q1-SUMMARY.md')];
         }
         return [];
       },
       readFileSync: (p) => {
-        if (p === '/repo/.claude/worktrees/agent-a1/.planning/q1-SUMMARY.md') return 'summary content';
+        if (p === path.join(wtResolved, '.planning', 'q1-SUMMARY.md')) return 'summary content';
         return '';
       },
       existsSync: () => false,
@@ -3270,6 +3300,7 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     // The rescue step must skip this file entirely.  The merge must succeed.
     const calls = [];
     const rescued = [];
+    const wtResolved = path.resolve('/repo/main', '/repo/.claude/worktrees/agent-a1');
     const plan = {
       ok: true,
       repoRoot: '/repo/main',
@@ -3285,8 +3316,8 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     const result = executeWorktreeWaveCleanupPlan(plan, {
       execGit: (args) => {
         calls.push(args.join(' '));
-        const key = args.join(' ');
-        if (key === '-C /repo/.claude/worktrees/agent-a1 rev-parse --abbrev-ref HEAD') {
+        const key = gitKeyFor(plan.repoRoot, args);
+        if (key === `-C ${wtResolved} rev-parse --abbrev-ref HEAD`) {
           return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
         }
         if (key === 'merge-base HEAD worktree-agent-a1') {
@@ -3296,10 +3327,10 @@ describe('executeWorktreeWaveCleanupPlan', () => {
           return { exitCode: 0, stdout: '', stderr: '' };
         }
         // SUMMARY is committed on the branch — cat-file -e HEAD:<path> succeeds (exit 0)
-        if (key === '-C /repo/.claude/worktrees/agent-a1 cat-file -e HEAD:.planning/q1-SUMMARY.md') {
+        if (key === `-C ${wtResolved} cat-file -e HEAD:.planning/q1-SUMMARY.md`) {
           return { exitCode: 0, stdout: '.planning/q1-SUMMARY.md', stderr: '' };
         }
-        if (key === '-C /repo/.claude/worktrees/agent-a1 status --porcelain --untracked-files=all') {
+        if (key === `-C ${wtResolved} status --porcelain --untracked-files=all`) {
           // Worktree is clean — SUMMARY is committed, not dirty
           return { exitCode: 0, stdout: '', stderr: '' };
         }
@@ -3315,8 +3346,8 @@ describe('executeWorktreeWaveCleanupPlan', () => {
         return { exitCode: 0, stdout: '', stderr: '' };
       },
       findSummaryFiles: (worktreePath) => {
-        if (worktreePath === '/repo/.claude/worktrees/agent-a1') {
-          return ['/repo/.claude/worktrees/agent-a1/.planning/q1-SUMMARY.md'];
+        if (path.resolve(plan.repoRoot, worktreePath) === wtResolved) {
+          return [path.join(wtResolved, '.planning', 'q1-SUMMARY.md')];
         }
         return [];
       },
@@ -3339,6 +3370,7 @@ describe('executeWorktreeWaveCleanupPlan', () => {
 
   test('#706: SUMMARY committed on branch + untracked non-SUMMARY dirty file still blocks', () => {
     // Even when SUMMARY is committed (no rescue needed), a non-SUMMARY dirty file must block.
+    const wtResolved = path.resolve('/repo/main', '/repo/.claude/worktrees/agent-a1');
     const plan = {
       ok: true,
       repoRoot: '/repo/main',
@@ -3353,8 +3385,8 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     };
     const result = executeWorktreeWaveCleanupPlan(plan, {
       execGit: (args) => {
-        const key = args.join(' ');
-        if (key === '-C /repo/.claude/worktrees/agent-a1 rev-parse --abbrev-ref HEAD') {
+        const key = gitKeyFor(plan.repoRoot, args);
+        if (key === `-C ${wtResolved} rev-parse --abbrev-ref HEAD`) {
           return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
         }
         if (key === 'merge-base HEAD worktree-agent-a1') {
@@ -3364,18 +3396,18 @@ describe('executeWorktreeWaveCleanupPlan', () => {
           return { exitCode: 0, stdout: '', stderr: '' };
         }
         // SUMMARY is committed on the branch
-        if (key === '-C /repo/.claude/worktrees/agent-a1 cat-file -e HEAD:.planning/q1-SUMMARY.md') {
+        if (key === `-C ${wtResolved} cat-file -e HEAD:.planning/q1-SUMMARY.md`) {
           return { exitCode: 0, stdout: '.planning/q1-SUMMARY.md', stderr: '' };
         }
-        if (key === '-C /repo/.claude/worktrees/agent-a1 status --porcelain --untracked-files=all') {
+        if (key === `-C ${wtResolved} status --porcelain --untracked-files=all`) {
           // Another untracked file exists alongside the committed SUMMARY
           return { exitCode: 0, stdout: '?? scratch.txt', stderr: '' };
         }
         throw new Error(`unexpected git call after dirty check: ${key}`);
       },
       findSummaryFiles: (worktreePath) => {
-        if (worktreePath === '/repo/.claude/worktrees/agent-a1') {
-          return ['/repo/.claude/worktrees/agent-a1/.planning/q1-SUMMARY.md'];
+        if (path.resolve(plan.repoRoot, worktreePath) === wtResolved) {
+          return [path.join(wtResolved, '.planning', 'q1-SUMMARY.md')];
         }
         return [];
       },
@@ -3398,6 +3430,7 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     // but git status shows 'A  .planning/q1-SUMMARY.md' (staged).  Rescue must
     // copy it into the main tree and the cleanup must proceed.
     const rescued = [];
+    const wtResolved = path.resolve('/repo/main', '/repo/.claude/worktrees/agent-a1');
     const plan = {
       ok: true,
       repoRoot: '/repo/main',
@@ -3412,8 +3445,8 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     };
     const result = executeWorktreeWaveCleanupPlan(plan, {
       execGit: (args) => {
-        const key = args.join(' ');
-        if (key === '-C /repo/.claude/worktrees/agent-a1 rev-parse --abbrev-ref HEAD') {
+        const key = gitKeyFor(plan.repoRoot, args);
+        if (key === `-C ${wtResolved} rev-parse --abbrev-ref HEAD`) {
           return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
         }
         if (key === 'merge-base HEAD worktree-agent-a1') {
@@ -3423,10 +3456,10 @@ describe('executeWorktreeWaveCleanupPlan', () => {
           return { exitCode: 0, stdout: '', stderr: '' };
         }
         // SUMMARY is staged but NOT committed — absent from HEAD, cat-file returns 128 (#2556)
-        if (key === '-C /repo/.claude/worktrees/agent-a1 cat-file -e HEAD:.planning/q1-SUMMARY.md') {
+        if (key === `-C ${wtResolved} cat-file -e HEAD:.planning/q1-SUMMARY.md`) {
           return { exitCode: 128, stdout: '', stderr: "fatal: path '.planning/q1-SUMMARY.md' does not exist in 'HEAD'" };
         }
-        if (key === '-C /repo/.claude/worktrees/agent-a1 status --porcelain --untracked-files=all') {
+        if (key === `-C ${wtResolved} status --porcelain --untracked-files=all`) {
           // File is staged ('A  .planning/q1-SUMMARY.md')
           return { exitCode: 0, stdout: 'A  .planning/q1-SUMMARY.md', stderr: '' };
         }
@@ -3442,8 +3475,8 @@ describe('executeWorktreeWaveCleanupPlan', () => {
         return { exitCode: 0, stdout: '', stderr: '' };
       },
       findSummaryFiles: (worktreePath) => {
-        if (worktreePath === '/repo/.claude/worktrees/agent-a1') {
-          return ['/repo/.claude/worktrees/agent-a1/.planning/q1-SUMMARY.md'];
+        if (path.resolve(plan.repoRoot, worktreePath) === wtResolved) {
+          return [path.join(wtResolved, '.planning', 'q1-SUMMARY.md')];
         }
         return [];
       },
@@ -3474,6 +3507,7 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     //
     // Fixture: cat-file returns exitCode:128.  Rescue MUST fire (copy into main tree).
     const rescued = [];
+    const wtResolved = path.resolve('/repo/main', '/repo/.claude/worktrees/agent-a1');
     const plan = {
       ok: true,
       repoRoot: '/repo/main',
@@ -3488,8 +3522,8 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     };
     const result = executeWorktreeWaveCleanupPlan(plan, {
       execGit: (args) => {
-        const key = args.join(' ');
-        if (key === '-C /repo/.claude/worktrees/agent-a1 rev-parse --abbrev-ref HEAD') {
+        const key = gitKeyFor(plan.repoRoot, args);
+        if (key === `-C ${wtResolved} rev-parse --abbrev-ref HEAD`) {
           return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
         }
         if (key === 'merge-base HEAD worktree-agent-a1') {
@@ -3500,10 +3534,10 @@ describe('executeWorktreeWaveCleanupPlan', () => {
         }
         // cat-file returns 128 — the SUMMARY is absent from HEAD (#2556: the normal
         // uncommitted state, NOT a fatal error)
-        if (key === '-C /repo/.claude/worktrees/agent-a1 cat-file -e HEAD:.planning/q1-SUMMARY.md') {
+        if (key === `-C ${wtResolved} cat-file -e HEAD:.planning/q1-SUMMARY.md`) {
           return { exitCode: 128, stdout: '', stderr: "fatal: path '.planning/q1-SUMMARY.md' does not exist in 'HEAD'", timedOut: false };
         }
-        if (key === '-C /repo/.claude/worktrees/agent-a1 status --porcelain --untracked-files=all') {
+        if (key === `-C ${wtResolved} status --porcelain --untracked-files=all`) {
           // Worktree appears clean (SUMMARY is committed on branch)
           return { exitCode: 0, stdout: '', stderr: '' };
         }
@@ -3519,8 +3553,8 @@ describe('executeWorktreeWaveCleanupPlan', () => {
         return { exitCode: 0, stdout: '', stderr: '' };
       },
       findSummaryFiles: (worktreePath) => {
-        if (worktreePath === '/repo/.claude/worktrees/agent-a1') {
-          return ['/repo/.claude/worktrees/agent-a1/.planning/q1-SUMMARY.md'];
+        if (path.resolve(plan.repoRoot, worktreePath) === wtResolved) {
+          return [path.join(wtResolved, '.planning', 'q1-SUMMARY.md')];
         }
         return [];
       },
@@ -3548,6 +3582,7 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     //
     // Fixture: cat-file returns timedOut:true.  Rescue MUST fire (copy into main tree).
     const rescued = [];
+    const wtResolved = path.resolve('/repo/main', '/repo/.claude/worktrees/agent-a1');
     const plan = {
       ok: true,
       repoRoot: '/repo/main',
@@ -3562,8 +3597,8 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     };
     const result = executeWorktreeWaveCleanupPlan(plan, {
       execGit: (args) => {
-        const key = args.join(' ');
-        if (key === '-C /repo/.claude/worktrees/agent-a1 rev-parse --abbrev-ref HEAD') {
+        const key = gitKeyFor(plan.repoRoot, args);
+        if (key === `-C ${wtResolved} rev-parse --abbrev-ref HEAD`) {
           return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
         }
         if (key === 'merge-base HEAD worktree-agent-a1') {
@@ -3573,7 +3608,7 @@ describe('executeWorktreeWaveCleanupPlan', () => {
           return { exitCode: 0, stdout: '', stderr: '' };
         }
         // cat-file times out — cannot determine if SUMMARY is committed
-        if (key === '-C /repo/.claude/worktrees/agent-a1 cat-file -e HEAD:.planning/q1-SUMMARY.md') {
+        if (key === `-C ${wtResolved} cat-file -e HEAD:.planning/q1-SUMMARY.md`) {
           return {
             exitCode: null,
             stdout: '',
@@ -3583,7 +3618,7 @@ describe('executeWorktreeWaveCleanupPlan', () => {
             error: Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }),
           };
         }
-        if (key === '-C /repo/.claude/worktrees/agent-a1 status --porcelain --untracked-files=all') {
+        if (key === `-C ${wtResolved} status --porcelain --untracked-files=all`) {
           // Worktree appears clean (SUMMARY is committed on branch)
           return { exitCode: 0, stdout: '', stderr: '' };
         }
@@ -3599,8 +3634,8 @@ describe('executeWorktreeWaveCleanupPlan', () => {
         return { exitCode: 0, stdout: '', stderr: '' };
       },
       findSummaryFiles: (worktreePath) => {
-        if (worktreePath === '/repo/.claude/worktrees/agent-a1') {
-          return ['/repo/.claude/worktrees/agent-a1/.planning/q1-SUMMARY.md'];
+        if (path.resolve(plan.repoRoot, worktreePath) === wtResolved) {
+          return [path.join(wtResolved, '.planning', 'q1-SUMMARY.md')];
         }
         return [];
       },
@@ -3687,8 +3722,11 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     const result = executeWorktreeWaveCleanupPlan(waveCleanupPlanFixture, {
       execGit,
       findSummaryFiles: (worktreePath) => (
-        worktreePath === '/repo/.claude/worktrees/agent-a1'
-          ? ['/repo/.claude/worktrees/agent-a1/.planning/q1-SUMMARY.md']
+        path.resolve(waveCleanupPlanFixture.repoRoot, worktreePath)
+          === path.resolve(waveCleanupPlanFixture.repoRoot, '/repo/.claude/worktrees/agent-a1')
+          ? [path.join(
+              path.resolve(waveCleanupPlanFixture.repoRoot, '/repo/.claude/worktrees/agent-a1'),
+              '.planning', 'q1-SUMMARY.md')]
           : []
       ),
       readFileSync: () => 'summary content',
@@ -3710,8 +3748,11 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     const result = executeWorktreeWaveCleanupPlan(waveCleanupPlanFixture, {
       execGit,
       findSummaryFiles: (worktreePath) => (
-        worktreePath === '/repo/.claude/worktrees/agent-a1'
-          ? ['/repo/.claude/worktrees/agent-a1/.planning/q1-SUMMARY.md']
+        path.resolve(waveCleanupPlanFixture.repoRoot, worktreePath)
+          === path.resolve(waveCleanupPlanFixture.repoRoot, '/repo/.claude/worktrees/agent-a1')
+          ? [path.join(
+              path.resolve(waveCleanupPlanFixture.repoRoot, '/repo/.claude/worktrees/agent-a1'),
+              '.planning', 'q1-SUMMARY.md')]
           : []
       ),
       readFileSync: () => 'summary content',
@@ -3794,16 +3835,24 @@ describe('executeWorktreeWaveCleanupPlan', () => {
   // mismatch, no deletions, no dirty files. Returns undefined for an unmatched key
   // so callers can layer entry-specific overrides in front of this fallback.
   function cleanEntryResponse(key, branch, worktreePath) {
-    if (key === `-C ${worktreePath} rev-parse --abbrev-ref HEAD`) {
-      return { exitCode: 0, stdout: branch, stderr: '' };
+    // #4758: answer both `-C` spellings — the caller passes the manifest value
+    // verbatim (git resolves it against its cwd=repoRoot) while tests that
+    // normalize keys hand the path.resolve(repoRoot, …) form; the two are
+    // identical on POSIX and drive-rewritten on win32.  '/repo/main' is this
+    // describe's shared fixture repoRoot.
+    const wtForms = [worktreePath, path.resolve('/repo/main', worktreePath)];
+    for (const wt of wtForms) {
+      if (key === `-C ${wt} rev-parse --abbrev-ref HEAD`) {
+        return { exitCode: 0, stdout: branch, stderr: '' };
+      }
+      if (key === `-C ${wt} status --porcelain --untracked-files=all`) {
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
     }
     if (key === `merge-base HEAD ${branch}`) {
       return { exitCode: 0, stdout: 'abc123', stderr: '' };
     }
     if (key === `diff --diff-filter=D --name-only HEAD...${branch}`) {
-      return { exitCode: 0, stdout: '', stderr: '' };
-    }
-    if (key === `-C ${worktreePath} status --porcelain --untracked-files=all`) {
       return { exitCode: 0, stdout: '', stderr: '' };
     }
     if (key === `merge ${branch} --no-ff --no-edit -m chore: merge executor worktree (${branch})`) {
@@ -4037,10 +4086,11 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     const e1 = makeEntry('a1', 'worktree-agent-a1');
     const e2 = makeEntry('a2', 'worktree-agent-a2');
     const plan = { ok: true, repoRoot: '/repo/main', action: 'cleanup_wave', discovery: 'manifest', entries: [e1, e2] };
+    const wtResolved = path.resolve(plan.repoRoot, e1.worktree_path);
     const result = executeWorktreeWaveCleanupPlan(plan, {
       execGit: (args) => {
-        const key = args.join(' ');
-        if (key === '-C /repo/.claude/worktrees/agent-a1 rev-parse --abbrev-ref HEAD') {
+        const key = gitKeyFor(plan.repoRoot, args);
+        if (key === `-C ${wtResolved} rev-parse --abbrev-ref HEAD`) {
           return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
         }
         if (key === 'merge-base HEAD worktree-agent-a1') {
@@ -4049,7 +4099,7 @@ describe('executeWorktreeWaveCleanupPlan', () => {
         if (key === 'diff --diff-filter=D --name-only HEAD...worktree-agent-a1') {
           return { exitCode: 0, stdout: '', stderr: '' };
         }
-        if (key === '-C /repo/.claude/worktrees/agent-a1 cat-file -e HEAD:.planning/q1-SUMMARY.md') {
+        if (key === `-C ${wtResolved} cat-file -e HEAD:.planning/q1-SUMMARY.md`) {
           return { exitCode: 128, stdout: '', stderr: "fatal: path '.planning/q1-SUMMARY.md' does not exist in 'HEAD'" };
         }
         const clean2 = cleanEntryResponse(key, e2.branch, e2.worktree_path);
@@ -4057,8 +4107,8 @@ describe('executeWorktreeWaveCleanupPlan', () => {
         throw new Error(`unexpected git call: ${key}`);
       },
       findSummaryFiles: (worktreePath) => {
-        if (worktreePath === '/repo/.claude/worktrees/agent-a1') {
-          return ['/repo/.claude/worktrees/agent-a1/.planning/q1-SUMMARY.md'];
+        if (path.resolve(plan.repoRoot, worktreePath) === wtResolved) {
+          return [path.join(wtResolved, '.planning', 'q1-SUMMARY.md')];
         }
         return [];
       },
