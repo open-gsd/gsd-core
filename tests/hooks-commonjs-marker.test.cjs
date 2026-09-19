@@ -158,14 +158,22 @@ describe('#2717 CommonJS marker for staged .js hooks', () => {
   test('#4759: preserved-foreign hooks marker warning must not claim the hooks may not load when the file declares commonjs', (t) => {
     const foreignCommonJs = '{\n  "type": "commonjs"\n}\n';
     const root = createTempDir('gsd-4759-commonjs-');
+    // Register cleanup BEFORE the spawn: runMinimalInstall deliberately never
+    // removes a caller-provided root, on the failure path either, so a spawn
+    // failure must not leak the temp tree.
+    t.after(() => cleanup(root));
     // Plant the foreign file BEFORE the install, at the config dir the global
     // install will resolve (RUNTIME_META.claude.globalSuffix = '.claude').
     const hooksDir = path.join(root, '.claude', 'hooks');
     fs.mkdirSync(hooksDir, { recursive: true });
     fs.writeFileSync(path.join(hooksDir, 'package.json'), foreignCommonJs);
 
-    const { configDir, stdout } = runMinimalInstall({ runtime: 'claude', scope: 'global', root });
-    t.after(() => cleanup(root));
+    // The marker notice is a console.warn — stderr. Assert on the combined
+    // output so a future stream change cannot silently vacate the guards
+    // (precedent: tests/install.test.cjs merges stdout+stderr for installer
+    // output assertions).
+    const { configDir, stdout, stderr } = runMinimalInstall({ runtime: 'claude', scope: 'global', root });
+    const output = stdout + stderr;
     assert.strictEqual(configDir, path.join(root, '.claude'));
 
     // Ownership behavior is NOT the bug — the foreign file stays byte-identical.
@@ -177,25 +185,26 @@ describe('#2717 CommonJS marker for staged .js hooks', () => {
 
     // The false claim must be gone.
     assert.ok(
-      !stdout.includes('may not resolve as CommonJS'),
-      `a foreign package.json declaring "type": "commonjs" must not be told the hooks may not load; stdout:\n${stdout}`,
+      !output.includes('may not resolve as CommonJS'),
+      `a foreign package.json declaring "type": "commonjs" must not be told the hooks may not load; output:\n${output}`,
     );
     // The preserved-foreign notice stays, now with the conditional wording.
     assert.ok(
-      /Left existing hooks\/package\.json untouched \(not GSD's marker\)\. If it declares "type": "module", the staged hooks will not load\./.test(stdout),
-      `expected the conditional preserved-foreign wording; stdout:\n${stdout}`,
+      /Left existing hooks\/package\.json untouched \(not GSD's marker\)\. If it declares "type": "module", the staged hooks will not load\./.test(output),
+      `expected the conditional preserved-foreign wording; output:\n${output}`,
     );
   });
 
   test('#4759: a module-typed foreign hooks package.json gets the conditional will-not-load warning', (t) => {
     const foreignEsm = '{\n  "type": "module"\n}\n';
     const root = createTempDir('gsd-4759-esm-');
+    t.after(() => cleanup(root));
     const hooksDir = path.join(root, '.claude', 'hooks');
     fs.mkdirSync(hooksDir, { recursive: true });
     fs.writeFileSync(path.join(hooksDir, 'package.json'), foreignEsm);
 
-    const { configDir, stdout } = runMinimalInstall({ runtime: 'claude', scope: 'global', root });
-    t.after(() => cleanup(root));
+    const { configDir, stdout, stderr } = runMinimalInstall({ runtime: 'claude', scope: 'global', root });
+    const output = stdout + stderr;
 
     assert.strictEqual(
       fs.readFileSync(path.join(configDir, 'hooks', 'package.json'), 'utf8'),
@@ -205,12 +214,41 @@ describe('#2717 CommonJS marker for staged .js hooks', () => {
     // Still no UNCONDITIONAL may-claim — the will-not-load statement is carried
     // by the conditional sentence, which is true here and only here.
     assert.ok(
-      !stdout.includes('may not resolve as CommonJS'),
-      `the unconditional may-not-load claim must not come back; stdout:\n${stdout}`,
+      !output.includes('may not resolve as CommonJS'),
+      `the unconditional may-not-load claim must not come back; output:\n${output}`,
     );
     assert.ok(
-      /If it declares "type": "module", the staged hooks will not load\./.test(stdout),
-      `a "type": "module" foreign file must still get the conditional will-not-load warning; stdout:\n${stdout}`,
+      /If it declares "type": "module", the staged hooks will not load\./.test(output),
+      `a "type": "module" foreign file must still get the conditional will-not-load warning; output:\n${output}`,
+    );
+  });
+
+  test('#4759: a foreign hooks package.json with no type field gets the conditional wording, not the may-claim', (t) => {
+    // No "type" field: Node defaults .js to CommonJS, so the hooks load — the
+    // old unconditional claim was false here too, and this is arguably the most
+    // common real file (any hand-authored package.json).
+    const foreignNoType = '{\n  "name": "user-hooks"\n}\n';
+    const root = createTempDir('gsd-4759-notype-');
+    t.after(() => cleanup(root));
+    const hooksDir = path.join(root, '.claude', 'hooks');
+    fs.mkdirSync(hooksDir, { recursive: true });
+    fs.writeFileSync(path.join(hooksDir, 'package.json'), foreignNoType);
+
+    const { configDir, stdout, stderr } = runMinimalInstall({ runtime: 'claude', scope: 'global', root });
+    const output = stdout + stderr;
+
+    assert.strictEqual(
+      fs.readFileSync(path.join(configDir, 'hooks', 'package.json'), 'utf8'),
+      foreignNoType,
+      'the foreign package.json must be left untouched',
+    );
+    assert.ok(
+      !output.includes('may not resolve as CommonJS'),
+      `a type-less foreign package.json must not be told the hooks may not load; output:\n${output}`,
+    );
+    assert.ok(
+      /If it declares "type": "module", the staged hooks will not load\./.test(output),
+      `expected the conditional preserved-foreign wording; output:\n${output}`,
     );
   });
 });
