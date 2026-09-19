@@ -5279,3 +5279,108 @@ describe('roadmap update-plan-progress — superseded plans (#4741)', () => {
     assert.ok(roadmap.includes('1/1 plans executed'), 'numbers and checkboxes agree');
   });
 });
+
+// ─── #4786: suffix-less hand-written plan lists tick in place, never duplicated ──
+
+describe('#4786: suffix-less hand-written plan lists are recognized, not duplicated', () => {
+  let tmpDir;
+  let roadmapPath;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-4786-');
+    roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('#4786: a suffix-less hand-written plan list is ticked in place, never duplicated', () => {
+    // The issue's measured shape: a hand-written list WITHOUT the -PLAN.md
+    // suffix, carrying em-dash descriptions. The old detection keyed on the
+    // full plan filename, counted every plan "missing", and inserted a
+    // canonical list above the hand-written one (32 checkbox lines for 16
+    // plans, exit 0).
+    fs.writeFileSync(roadmapPath, [
+      '# ROADMAP',
+      '',
+      '### Phase 5: test phase',
+      '',
+      '**Plans:** 2/3 plans executed',
+      '',
+      'Plans:',
+      '',
+      '- [x] 5-01 — first: does the thing with a long hand-written description',
+      '- [x] 5-02 — second: does the other thing through submit(true)',
+      '- [ ] 5-03 — union run, redeploy and demo rebuild, live measurement',
+      '',
+    ].join('\n'));
+    createPhaseWithPlans(tmpDir, '5', [
+      '5-01-PLAN.md',
+      '5-02-PLAN.md',
+      '5-03-PLAN.md',
+    ]);
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '05-test-phase', '5-01-SUMMARY.md'), '# Summary\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '05-test-phase', '5-02-SUMMARY.md'), '# Summary\n');
+
+    const result = runGsdTools(['roadmap', 'update-plan-progress', '5'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.equal(parsed.updated, true, 'the unchecked plan must be ticked');
+
+    const written = fs.readFileSync(roadmapPath, 'utf-8');
+    // The damage was the INSERTION — none may appear.
+    assert.ok(!written.includes('5-01-PLAN.md'), 'no canonical row may be inserted beside a recognized suffix-less list');
+    assert.ok(!written.includes('5-02-PLAN.md'), 'no canonical row may be inserted beside a recognized suffix-less list');
+    assert.ok(!written.includes('5-03-PLAN.md'), 'no canonical row may be inserted beside a recognized suffix-less list');
+    // The tick happened IN PLACE, with the hand-written description byte-identical.
+    assert.ok(
+      written.includes('- [x] 5-03 — union run, redeploy and demo rebuild, live measurement'),
+      `the unchecked suffix-less row must be ticked in place with its description intact; ROADMAP:\n${written}`,
+    );
+    assert.ok(
+      written.includes('- [x] 5-01 — first: does the thing with a long hand-written description'),
+      'already-ticked rows must be byte-identical',
+    );
+    assert.equal(
+      (written.match(/- \[.\] 5-0/g) || []).length,
+      3,
+      `exactly three checkbox rows must remain (no duplication); ROADMAP:\n${written}`,
+    );
+  });
+
+  test('#4786: a stem does not match a longer plan id', () => {
+    // Boundary: the new stem recognition must not let `- [x] 5-011` satisfy
+    // plan 5-01 (5-011 is a different plan). 5-01 carries no recognizable row,
+    // so the #1163 fresh-template insertion still fires for it — that is the
+    // documented contract; the pin is that 5-011 is not treated as 5-01.
+    fs.writeFileSync(roadmapPath, [
+      '# ROADMAP',
+      '',
+      '### Phase 5: test phase',
+      '',
+      'Plans:',
+      '',
+      '- [x] 5-011 — bogus longer id, not plan 5-01',
+      '',
+    ].join('\n'));
+    createPhaseWithPlans(tmpDir, '5', [
+      '5-01-PLAN.md',
+      '5-02-PLAN.md',
+      '5-03-PLAN.md',
+    ]);
+
+    const result = runGsdTools(['roadmap', 'update-plan-progress', '5'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const written = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(written.includes('- [ ] 5-01-PLAN.md'), '5-01 must still count as missing (5-011 is a different plan)');
+    assert.ok(written.includes('- [ ] 5-02-PLAN.md') && written.includes('- [ ] 5-03-PLAN.md'),
+      'all genuinely absent plans still insert');
+    assert.equal(
+      (written.match(/- \[.\] 5-0/g) || []).length,
+      4,
+      `3 inserted rows + the hand-written 5-011 row; ROADMAP:\n${written}`,
+    );
+  });
+});
