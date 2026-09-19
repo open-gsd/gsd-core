@@ -1139,6 +1139,28 @@ A CI-built graph rebuilt minutes ago against an old checkout will read as
 fresh on mtime but `commit_stale: true`. Surface both when answering
 architecture questions.
 
+#### Who reads the graph: the `graphify` CLI is preferred
+
+`gsd-planner` and `gsd-phase-researcher` query the graph through the `graphify`
+CLI when it is on `PATH`, and fall back to the built-in reader
+(`gsd-tools graphify query`) otherwise. The CLI ranks seeds (IDF weighting,
+fuzzy matching) and applies context filters before traversal; the built-in
+reader seeds by case-insensitive substring over label and description and
+expands a fixed two hops, so a term like `auth` seeds equally on `author`. The
+planner also runs `graphify affected` for reverse traversal, which the built-in
+reader has no equivalent for.
+
+There is **no config key for this** — the binary has to be installed to produce
+a graph in the first place, so its presence is the gate. The two paths return
+different shapes (the CLI emits prose, the built-in emits JSON with confidence
+tiers and budget accounting) and `--budget` counts rendered output on one and
+estimated payload bytes on the other; both are read by a model, and nothing
+machine-parses the injected block.
+
+`graphify status` reports `graph_path`, the resolved absolute graph location
+after `graphify.graph_path` is applied. That is the value passed to the CLI as
+`--graph`, which is how the umbrella override keeps working on the CLI path.
+
 <a id="refactor-trigger-settings"></a>
 ### Refactor-Trigger Settings
 

@@ -566,25 +566,33 @@ if [ -e "${_CTX[0]}" ]; then cat "${_CTX[@]}"; fi
 
 ## Step 1.3: Load Graph Context
 
-Check for knowledge graph:
-
-```bash
-ls .planning/graphs/graph.json 2>/dev/null
-```
-
-If graph.json exists, check freshness:
+Check for a knowledge graph and read its freshness in one call. `status` resolves the
+graph through `graphify.graph_path`, so it is also the presence gate — a bare `ls` of
+the default location misses an umbrella graph shared across sibling repos:
 
 ```bash
 gsd_run graphify status
 ```
 
+If `exists` is `false`, continue to Step 1.5 without graph context.
+
 If the status response has `stale: true`, note for later: "Graph is {age_hours}h old -- treat semantic relationships as approximate." Include this annotation inline with any graph context injected below.
 
-Query the graph for each major capability in the phase scope (2-3 queries per D-05, discovery-focused):
+The same response carries `graph_path` — the resolved graph location. Substitute it for `<graph>` below.
+
+Query the graph for each major capability in the phase scope (2-3 queries per D-05, discovery-focused). Prefer the `graphify` CLI when it is on PATH; fall back to the built-in reader otherwise:
 
 ```bash
-gsd_run graphify query "<capability-keyword>" --budget 1500
+if command -v graphify >/dev/null 2>&1; then
+  graphify query "<capability-keyword>" --graph "<graph>" --budget 1500
+else
+  gsd_run graphify query "<capability-keyword>" --budget 1500
+fi
 ```
+
+Why the CLI is preferred: it ranks seeds (IDF weighting, fuzzy matching) and applies context filters before traversal, where the built-in reader seeds by case-insensitive substring over label and description — so a term like "auth" seeds equally on `author` and `authorize` — and then expands a fixed two hops.
+
+The two paths return **different shapes**: the CLI emits prose, the built-in emits JSON with per-edge confidence tiers and `budget_met`/`budget_estimate`. `--budget` caps rendered output on the CLI and estimated payload bytes in the built-in — same flag name, different unit. Read whichever you get; do not assume a stable shape.
 
 Derive query terms from the phase goal and requirement descriptions. Examples:
 - Phase "user authentication and session management" -> query "authentication", "session", "token"
@@ -597,7 +605,7 @@ Use graph results to:
 - Surface dependencies the phase description does not explicitly mention
 - Inform which subsystems to investigate more deeply in subsequent research steps
 
-If no results or graph.json absent, continue to Step 1.5 without graph context.
+If nothing comes back, continue to Step 1.5 without graph context.
 
 ## Step 1.5: Architectural Responsibility Mapping
 
