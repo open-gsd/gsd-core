@@ -352,6 +352,87 @@ for HASH in $(printf '%s' "$INCLUDED_COMMITS"); do
     git checkout HEAD -- "$P" 2>/dev/null || true
   done
 
+  # #4606: a conflict on a "third bucket" path (`.planning/` — not `$FORBIDDEN_RE`
+  # transient, not `$STRUCTURAL_RE` structural — the same bucket `verify`'s
+  # `$OTHER` reports) is not a real conflict either, and needs its own
+  # resolution distinct from the filter loop above. Such a path is never
+  # per-commit replayed by classification — a commit touching ONLY a
+  # third-bucket path is EXCLUDEd — so when a LATER included commit (structural
+  # or code + that same path) reuses it, the diff's context can predate
+  # whatever the PR branch actually has, and cherry-pick reports a genuine
+  # content conflict on a path this command was never asked to filter.
+  # `git checkout --theirs` resolves it correctly by construction: in a
+  # cherry-pick's 3-way merge, "theirs" IS $HASH's own content for that path —
+  # exactly the chained final value the path is owed, the same guarantee
+  # `create_pr_branch` already gives structural files. A path $HASH deletes has
+  # no "theirs" blob to check out, so fall back to accepting the deletion (the
+  # `verify` step's `$PLANNING_DELETIONS` gate independently catches this if
+  # `$TARGET` ever legitimately tracked that path).
+  #
+  # The deleted-by-$HASH case is checked explicitly with `git cat-file -e`
+  # rather than inferred from `checkout --theirs` failing, so an unrelated
+  # checkout failure (I/O, permissions, a stale index lock) can't be
+  # misread as a deletion and silently `git rm`-ed — it falls through to the
+  # unmerged-path halt below instead.
+  #
+  # The `git add` below restages a path already committed to $CURRENT_BRANCH's
+  # own history onto the disposable $PR_BRANCH; not a commit_docs bypass
+  # (#1783/#3585), which guards against staging .planning/ content that was
+  # never committed at all.
+  #
+  # The unmerged list is snapshotted, then read one path PER LINE. `for P in
+  # $(git diff --name-only --diff-filter=U)` would split it on IFS instead: a
+  # third-bucket path containing a space (`.planning/My Notes.md`) becomes the
+  # fragments `.planning/My` and `Notes.md`, neither of which names the real
+  # conflicted file, so nothing is resolved and the run aborts with exactly the
+  # #4606 failure this block exists to prevent. Same word-split class as #4109.
+  # Snapshot-then-iterate (rather than piping) both keeps the list stable while
+  # the body restages paths and keeps the body in THIS shell, not a subshell.
+  #
+  # $TARGET-DRIFT GUARD. Everything above assumes the conflict comes from OUR
+  # dropped-commit chain gap, where forcing $HASH's content is the correct final
+  # value. But an identical conflict shape arises when $TARGET ITSELF changed
+  # $P after $CURRENT_BRANCH diverged — another PR editing the same shared
+  # `.planning/` ledger, the normal case whenever the base has moved (this very
+  # command cuts $PR_BRANCH from $TARGET's *current* tip, not from the old
+  # merge-base). From inside the loop the two are indistinguishable, and forcing
+  # `--theirs` on the second would silently discard $TARGET's own committed work.
+  # So prove it is the first: $TARGET's blob for $P must still equal the
+  # merge-base's. Equal means $TARGET never touched this path and the conflict is
+  # ours to resolve; different means genuine divergence, and the path is left
+  # unmerged for the halt below — the same treatment code and structural paths
+  # already get, rather than a silent overwrite (#4606 review round 3).
+  MERGE_BASE=$(git merge-base "$TARGET" "$CURRENT_BRANCH" 2>/dev/null || true)
+  UNMERGED_PATHS=$(git diff --name-only --diff-filter=U)
+  while IFS= read -r P; do
+    [ -n "$P" ] || continue
+    case "$P" in
+      .planning/*) ;;
+      *) continue ;;
+    esac
+    if echo "$P" | grep -Eq "$FORBIDDEN_RE"; then continue; fi
+    if echo "$P" | grep -Eq "$STRUCTURAL_RE"; then continue; fi
+    # No merge-base (unrelated histories) means drift cannot be ruled out —
+    # decline to resolve rather than assume. Absent on BOTH sides compares
+    # equal (two empty strings), which is correctly "no drift".
+    if [ -z "$MERGE_BASE" ]; then continue; fi
+    TARGET_BLOB=$(git rev-parse --quiet --verify "$TARGET:$P" 2>/dev/null || true)
+    BASE_BLOB=$(git rev-parse --quiet --verify "$MERGE_BASE:$P" 2>/dev/null || true)
+    if [ "$TARGET_BLOB" != "$BASE_BLOB" ]; then
+      # Say why this one is not being auto-resolved; the halt below reports the
+      # path but cannot explain that $TARGET, not the chain gap, is the cause.
+      echo "  $P — $TARGET changed this path since $CURRENT_BRANCH diverged; not overwriting it." >&2
+      continue
+    fi
+    if git cat-file -e "$HASH:$P" 2>/dev/null; then
+      git checkout --theirs -- "$P" && git add -- "$P" # gsd-scan-ignore: #4606 -- see block comment above
+    else
+      git rm -f -q -- "$P" 2>/dev/null || true
+    fi
+  done <<UNMERGED_PATHS_EOF
+$UNMERGED_PATHS
+UNMERGED_PATHS_EOF
+
   # Anything still unmerged is a REAL conflict, outside the filter. Halt — do not
   # improvise a resolution and do not continue, which would drop the rest of the queue.
   # Unwind first: this loop runs in the user's own checkout, so exiting mid-sequence
