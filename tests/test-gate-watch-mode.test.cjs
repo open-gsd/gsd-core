@@ -139,8 +139,8 @@ describe('#4784: Xcode gate construction', () => {
     assert.ok(constructed.length >= 4, `expected the four Xcode command constructions, got: ${JSON.stringify(constructed)}`);
     for (const cmd of constructed) {
       assert.ok(
-        cmd.includes('-project "$XCODEPROJ"'),
-        `every constructed xcodebuild command must carry -project "$XCODEPROJ", got: ${cmd}`,
+        cmd.includes("-project '$XCODEPROJ'"),
+        `every constructed xcodebuild command must carry -project '$XCODEPROJ', got: ${cmd}`,
       );
     }
   });
