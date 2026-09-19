@@ -1646,3 +1646,128 @@ describe('bug-3584: validate health uses formatter for codex runtime too', () =>
 });
   });
 }
+
+// ─── #4764: dep_phases extracts only in-context phase references ────────────
+
+describe('#4764 dep_phases extracts only Phase-prefixed references', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // The issue's measured phase-663 prose: dates, a round name, ledger ids and
+  // the row's own number, plus one genuine "Phase 654" mention.
+  const ISSUE_663_PROSE =
+    'Nothing. Round 663-DISPOSITION Q7 (3/3, 2026-09-14, ' +
+    '`.planning/decisions/663-CROSSAI-stream-consumer-failure-disposition.md`) moved the ' +
+    '"for retry" javadoc correction into this phase and dropped the dependency on Phase 654; ' +
+    'the defect is already recorded (WINDOWS #1843, #1977-#1985, #1992).';
+
+  test("#4764: dep_phases extracts only Phase-prefixed references from the issue's measured prose", () => {
+    writeState(tmpDir);
+    writeRoadmap(tmpDir, [
+      { number: '663', name: 'Disposition phase', depends_on: ISSUE_663_PROSE },
+      { number: '654', name: 'Prior phase' },
+    ]);
+
+    const output = JSON.parse(runGsdTools('init manager', tmpDir).output);
+    const row = output.phases.find((p) => p.number === '663');
+
+    assert.deepEqual(row.dep_phases, ['654']);
+    for (const junk of ['663', '2026', '09', '14', '7', '3', '1843', '1977', '1985', '1992']) {
+      assert.ok(!row.dep_phases.includes(junk), `must not scrape ${junk} as a dependency`);
+    }
+    assert.strictEqual(row.deps_satisfied, false, '654 is incomplete — the only real reference');
+  });
+
+  test('#4764: a date-only depends_on prose yields no dependencies and a satisfied row', () => {
+    writeState(tmpDir);
+    writeRoadmap(tmpDir, [
+      { number: '674', name: 'Ops current', depends_on: 'Nothing. Opened by the owner on 2026-09-15 after asking whether the operations app was current with the backend.' },
+    ]);
+
+    const output = JSON.parse(runGsdTools('init manager', tmpDir).output);
+    const row = output.phases.find((p) => p.number === '674');
+
+    assert.deepEqual(row.dep_phases, []);
+    assert.strictEqual(row.deps_satisfied, true);
+    assert.strictEqual(row.deps_display, '—');
+  });
+
+  test('#4764: sha-bearing prose contributes no dependency tokens', () => {
+    writeState(tmpDir);
+    writeRoadmap(tmpDir, [
+      { number: '607', name: 'Sha phase', depends_on: 'Landed in 8bf403100d and 9445745c08; follow-up 76aea5c36f tracked separately.' },
+    ]);
+
+    const output = JSON.parse(runGsdTools('init manager', tmpDir).output);
+    const row = output.phases.find((p) => p.number === '607');
+
+    assert.deepEqual(row.dep_phases, []);
+    assert.strictEqual(row.deps_satisfied, true);
+  });
+
+  test('#4764: Phase lists stay fully extracted (and/comma separators)', () => {
+    writeState(tmpDir);
+    writeRoadmap(tmpDir, [
+      { number: '1', name: 'A', complete: true },
+      { number: '2', name: 'B', complete: true },
+      { number: '3', name: 'C', depends_on: 'Phases 1 and 2' },
+      { number: '4', name: 'D', depends_on: 'Phase 1, Phase 2' },
+    ]);
+
+    const output = JSON.parse(runGsdTools('init manager', tmpDir).output);
+    assert.deepEqual(output.phases.find((p) => p.number === '3').dep_phases, ['1', '2']);
+    assert.deepEqual(output.phases.find((p) => p.number === '4').dep_phases, ['1', '2']);
+    assert.strictEqual(output.phases.find((p) => p.number === '3').deps_satisfied, true);
+  });
+
+  test('#4764 property: extraction pulls exactly the Phase-prefixed references out of arbitrary prose', () => {
+    // House fast-check config (seed 42); per-call numRuns caps the cost — each
+    // run spawns the real CLI (runGsdTools), unlike the pure-function properties.
+    const fc = require('./helpers/fast-check-setup.cjs');
+    // Junk fragments whose digit runs the old whole-field scrape pulled in as
+    // "dependencies": calendar dates, git shas, ledger ids, counts, round names.
+    const junkFragments = [
+      fc.nat({ max: 28 }).map((d) => `2026-09-${String(d).padStart(2, '0')}`),
+      fc.hexaString({ minLength: 8, maxLength: 10 }),
+      fc.nat({ max: 99999 }).map((n) => `WINDOWS #${n}`),
+      fc.nat({ max: 999 }).map((n) => `#${n}-#${n + 1}`),
+      fc.nat({ max: 9 }).map((n) => `round ${n}-DISPOSITION (${n}/3`),
+    ];
+    const refFragment = fc.nat({ max: 8 }).map((n) => `Phase ${n + 1}`);
+
+    // The phase under test is 9: any "Phase 9" mention in its own prose must be
+    // dropped as a self-reference.
+    fc.assert(
+      fc.property(
+        fc.array(fc.oneof(junkFragments, refFragment, fc.constant('Phase 9')), { maxLength: 12 }),
+        (fragments) => {
+          writeState(tmpDir);
+          writeRoadmap(tmpDir, [
+            { number: '9', name: 'Property phase', depends_on: fragments.join('; ') + '.' },
+            { number: '1', name: 'Ref target', complete: true },
+          ]);
+          const output = JSON.parse(runGsdTools('init manager', tmpDir).output);
+          const row = output.phases.find((p) => p.number === '9');
+          const extracted = row.dep_phases.map((d) => String(d));
+          // Every extracted token came from a Phase-prefixed reference and is
+          // never the row's own number.
+          for (const tok of extracted) {
+            assert.ok(
+              fragments.includes(`Phase ${tok}`),
+              `extracted "${tok}" is not a Phase-prefixed reference in: ${fragments.join('; ')}`,
+            );
+            assert.notStrictEqual(tok, '9', 'must never include the row\'s own phase number');
+          }
+        },
+      ),
+      { numRuns: 20 },
+    );
+  });
+});
