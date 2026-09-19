@@ -3105,6 +3105,24 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     return reaches(numA, numB) || reaches(numB, numA);
   }
 
+  // #4764: a phase reference in depends_on prose is a PHASE-SHAPED token in
+  // context — directly following "Phase"/"Phases" — never a bare digit run.
+  // The previous whole-field scrape matched the token grammar against every
+  // digit run, so calendar dates ("2026-09-14" → 2026, 09, 14), git shas
+  // ("8bf403100d" → 8b, 403100d, …), bracketed ledger ids (WINDOWS #1843) and
+  // the row's OWN number all became "dependencies", and deps_satisfied came
+  // back false for phases whose prose declares none (50 of 92 phases in the
+  // reporter's milestone). Lists after "Phases" stay fully extracted
+  // ("Phases 601 and 602", "Phase 601, 602") — silently dropping a REAL
+  // dependency would clear deps_satisfied prematurely, the dangerous
+  // direction. Negation prose ("dropped the dependency on Phase 654") is NOT
+  // detected: the issue's own minimum keeps such tokens.
+  const depPhaseRefRe = new RegExp(
+    `\\bphases?\\s+(${PHASE_NUMBER_TOKEN_SOURCE}(?:(?:\\s*,\\s*|\\s+and\\s+|\\s*&\\s*|\\s+(?:to|through)\\s+)${PHASE_NUMBER_TOKEN_SOURCE})*)`,
+    'gi',
+  );
+  const depTokenRe = new RegExp(PHASE_NUMBER_TOKEN_SOURCE, 'gi');
+
   for (const phase of phases) {
     if (
       !phase['depends_on'] ||
@@ -3112,7 +3130,23 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     ) {
       phase['deps_satisfied'] = true;
     } else {
-      const depNums = (phase['depends_on'] as string).match(new RegExp(`${PHASE_NUMBER_TOKEN_SOURCE}`, 'gi')) || [];
+      const prose = phase['depends_on'] as string;
+      const ownNumber = normalizePhaseNumber(phase['number'] as string);
+      const depNums: string[] = [];
+      const seen = new Set<string>();
+      let refMatch: RegExpExecArray | null;
+      depPhaseRefRe.lastIndex = 0;
+      while ((refMatch = depPhaseRefRe.exec(prose)) !== null) {
+        let tok: RegExpExecArray | null;
+        depTokenRe.lastIndex = 0;
+        while ((tok = depTokenRe.exec(refMatch[1])) !== null) {
+          const normalized = normalizePhaseNumber(tok[0]);
+          if (normalized === ownNumber) continue; // #4764: never the row's own phase
+          if (seen.has(normalized)) continue;
+          seen.add(normalized);
+          depNums.push(tok[0]);
+        }
+      }
       phase['deps_satisfied'] = depNums.every((n) => completedNums.has(normalizePhaseNumber(n)));
       phase['dep_phases'] = depNums;
     }
