@@ -69,6 +69,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 
 **Capabilities:**
 - Reads CONTEXT.md to focus research on user's decisions
+- Queries the project knowledge graph through the `graphify` CLI when it is on `PATH` (IDF-ranked, fuzzy-matched, context-filtered seeding), falling back to the built-in substring-seeded reader otherwise (#4836)
 - Investigates implementation patterns for the specific phase domain
 - Detects test infrastructure for Nyquist validation mapping
 - Tags in-repo discrete values (enums, schema unions, error codes, status constants, paths) `[VERIFIED]` only after reading the source-of-truth file that run, citing path and line range, and quoting the values verbatim
@@ -173,6 +174,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 
 **Key behaviors:**
 - Reads PROJECT.md, REQUIREMENTS.md, CONTEXT.md, RESEARCH.md
+- Queries the project knowledge graph through the `graphify` CLI when it is on `PATH`, adding `graphify affected` for reverse traversal, and falls back to the built-in substring-seeded reader otherwise (#4836)
 - Creates 2-3 atomic task plans sized for single context windows
 - Uses XML structure with `<task>` elements
 - Emits a `<fails_when>` sibling for every runnable `<automated>` verify command, naming what output constitutes failure (#3172)

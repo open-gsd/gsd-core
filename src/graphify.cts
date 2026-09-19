@@ -597,7 +597,7 @@ function graphifyStatus(cwd: string): unknown {
 
   const { graphPath, configured } = resolveGraphLocation(cwd, planningDir);
   if (!fs.existsSync(graphPath)) {
-    return { exists: false, message: configured
+    return { exists: false, graph_path: graphPath, message: configured
       ? `Configured graph not found at ${graphPath}. Set graphify.graph_path or run /gsd:graphify build.`
       : 'No graph built yet. Run graphify build to create one.' };
   }
@@ -639,6 +639,11 @@ function graphifyStatus(cwd: string): unknown {
 
   return {
     exists: true,
+    // The absolute location the whole graphify surface reads, already resolved
+    // through `graphify.graph_path` (#1825). Callers that shell out to the
+    // graphify CLI pass this as `--graph` so the umbrella override is honoured
+    // there too, instead of re-deriving `.planning/graphs/graph.json` (#4836).
+    graph_path: graphPath,
     last_build: stat.mtime.toISOString(),
     node_count: (graph.nodes || []).length,
     edge_count: (graph.edges || graph.links || []).length,
