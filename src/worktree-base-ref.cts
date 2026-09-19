@@ -625,8 +625,9 @@ export function evaluateWorktreeBaseDegrade(deps?: {
   // supersedes the origin/HEAD comparison for this dispatch (the stale
   // origin/HEAD the comparison would degrade on is not where the harness
   // forks). Fail-closed: every non-confirming observation falls through to
-  // the exact pre-#4588 flow below. Orchestrator-worktree mode never reaches
-  // here (branch a already returned), and probeStateRead/Write default to the
+  // the exact pre-#4588 flow below. The mode gate below (not branch a)
+  // excludes orchestrator-worktree mode — branch a only returns when
+  // worktree.baseRef:"head" is set — and probeStateRead/Write default to the
   // .gsd cache file under cwd.
   if ((deps?.isolationMode ?? 'harness-worktree') === 'harness-worktree') {
     const observed = observeHarnessForkFromHead({
