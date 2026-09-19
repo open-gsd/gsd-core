@@ -3236,16 +3236,25 @@ describe('evaluateUpdateCache lineage guard', () => {
       test('derivationIsNotMemoizedAcrossRenders', (t) => {
         const dir = createTempGitProject('gsd-freshness-no-memo-');
         t.after(() => cleanup(dir));
+        // This row asserts non-memoization, not the timeout degrade: keep the
+        // real git spawn, lift only the hook's 1500 ms production bound so
+        // runner load cannot turn its designed `null` into a red (#4850).
+        const realExec = childProcess.execFileSync;
+        const unbounded = (file, args, opts) => realExec(file, args, { ...opts, timeout: GIT_FIXTURE_TIMEOUT_MS });
+        const read = () => {
+          let state;
+          withSpawnSpy(unbounded, () => { state = readGsdState(dir, { stateFreshness: true }); });
+          return state;
+        };
+
         const stampA = commitN(dir, 5);
         writeStateHead(dir, stampA);
-
-        const first = readGsdState(dir, { stateFreshness: true });
+        const first = read();
         assert.equal(first.freshness.commits_behind, 5);
 
         const stampB = commitN(dir, 10);
         writeStateHead(dir, stampB);
-
-        const second = readGsdState(dir, { stateFreshness: true });
+        const second = read();
         assert.equal(second.freshness.commits_behind, 10);
         assert.notEqual(first.freshness.commits_behind, second.freshness.commits_behind);
       });
