@@ -62,7 +62,16 @@ describe('#4782 compact agent staging', () => {
     fs.writeFileSync(path.join(agentsDir, 'gsd-doc-writer.compact.md'), '---\nname: gsd-doc-writer\n---\ncompact');
     fs.writeFileSync(path.join(agentsDir, 'gsd-zombie.compact.md'), '---\nname: gsd-zombie\n---\ncompact');
 
-    const { configDir } = runMinimalInstall({ runtime: 'claude', scope: 'global', root });
+    const { configDir } = runMinimalInstall({
+      runtime: 'claude',
+      scope: 'global',
+      root,
+      // The planted copies are not manifest-managed, so the first-time
+      // baseline-scan migration demands an explicit operator choice for them
+      // (fail-closed by design). Resolving "remove" IS the upgrade semantics
+      // under test: the operator retires the stale compact copies.
+      extraEnv: { GSD_INSTALLER_MIGRATION_RESOLVE: 'remove' },
+    });
 
     const staged = listAgents(path.join(configDir, 'agents'));
     assert.deepStrictEqual(

@@ -792,6 +792,15 @@ function _copyStaged(stagedDir: string, destDir: string, kind: any, configDir: s
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     if (!entry.name.endsWith('.md')) continue;
+    // #4782: compact agent variants are consumed ONLY through the non-claude
+    // gate in init.cts's agent-skills persona fallback (`runtime !== 'claude'`
+    // — claude's contract is a skills-injection path, never a persona
+    // fallback). Staging them into Claude's agents directory shipped 29 dead
+    // files whose `name:` frontmatter is identical to their canonical
+    // sibling's, leaving the harness resolution unstated. Claude never
+    // selects compact, so claude is the one runtime whose agents kind skips
+    // them; every other runtime's emission is byte-identical.
+    if (kind.kind === 'agents' && runtime === 'claude' && entry.name.endsWith('.compact.md')) continue;
     const stem = entry.name.slice(0, -3); // strip .md
 
     let destName: string;
