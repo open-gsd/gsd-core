@@ -130,14 +130,14 @@ describe('roadmap upgrade — hub contract + --convention parsing (#1538)', () =
   test('rejects an unsupported convention (space form) via error(), never process.exit', () => {
     const message = runUpgrade(['roadmap', 'upgrade', '--convention', 'sequential']);
     assert.equal(exitCalls.length, 0, 'a hub handler must not call process.exit');
-    assert.equal(message, 'Only --convention milestone-prefixed is supported');
+    assert.equal(message, 'Only --convention milestone-prefixed or bracket is supported');
     assert.equal(applyCalls.length, 0, 'must not run the migration for an unsupported convention');
   });
 
   test('rejects an unsupported convention in equals form — no silent fail-open', () => {
     const message = runUpgrade(['roadmap', 'upgrade', '--convention=sequential']);
     assert.equal(exitCalls.length, 0, 'a hub handler must not call process.exit');
-    assert.equal(message, 'Only --convention milestone-prefixed is supported');
+    assert.equal(message, 'Only --convention milestone-prefixed or bracket is supported');
     assert.equal(applyCalls.length, 0, '--convention=sequential must not silently run the milestone-prefixed migration');
   });
 
@@ -151,7 +151,7 @@ describe('roadmap upgrade — hub contract + --convention parsing (#1538)', () =
       const message = runUpgrade(args);
       assert.equal(
         message,
-        'Only --convention milestone-prefixed is supported',
+        'Only --convention milestone-prefixed or bracket is supported',
         `should reject ${JSON.stringify(args)}`,
       );
       assert.equal(exitCalls.length, 0, 'a hub handler must not call process.exit');

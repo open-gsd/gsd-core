@@ -129,6 +129,14 @@ const BASE_SITES = [
     baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
   { file: 'init.cts', site: 'cmdInitManager phaseHeadingPrefixNoCapture',
     baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
+  // #4144 round 6 B4: the bracket migrator's checklist-bullet matcher, built
+  // from the readers' own checklist grammar (src/roadmap.cts's
+  // `cmdRoadmapAnalyze checklistPattern`) instead of a private, stricter
+  // colon-requiring copy — see roadmap-upgrade.cts's own CHECKLIST_BULLET_INTRO_SRC
+  // comment. Its SOURCE is always non-bracket (the migrator reads a
+  // pre-migration roadmap), so it always compiles the LABEL_ONLY base.
+  { file: 'roadmap-upgrade.cts', site: 'computeBracketPlan CHECKLIST_BULLET_INTRO_SRC',
+    baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
 ];
 
 // Every convention value that is NOT the bracket convention. A repo carrying any
@@ -694,6 +702,7 @@ describe('#612 PR-2: every selector call site declares the right baseline (live 
     'state.cts': [0, 3],
     'planning-snapshot.cts': [0, 2],
     'roadmap-parser.cts': [2, 0],
+    'roadmap-upgrade.cts': [0, 1],
   };
 
   for (const [file, [anyBracket, labelOnly]] of Object.entries(EXPECTED)) {

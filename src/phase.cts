@@ -689,13 +689,22 @@ interface RawPlan {
  * none left in this file) degrades to the pre-#3897 two-tier behavior rather
  * than throwing on a missing argument.
  */
+/**
+ * The dependency resolver's one comparison normalization. Callers that must
+ * predict whether a token names a plan reuse this seam instead of copying its
+ * case-folding rule.
+ */
+function normalizeDependencyToken(token: unknown): string {
+  return String(token).toLowerCase();
+}
+
 function resolveDependencyId(
   dep: string,
   planMap: Map<string, RawPlan>,
   canonicalToId: Map<string, string>,
   shortFormToId?: Map<string, string>,
 ): string | null {
-  const lower = dep.toLowerCase();
+  const lower = normalizeDependencyToken(dep);
   if (planMap.has(lower)) return (planMap.get(lower) as RawPlan).id;
   if (canonicalToId.has(lower)) return canonicalToId.get(lower) as string;
   return shortFormToId?.get(lower) ?? null;
@@ -735,7 +744,7 @@ function buildShortFormToId(rawPlans: RawPlan[]): Map<string, string> {
     const canonical = extractCanonicalPlanId(p.id);
     const lastDash = canonical.lastIndexOf('-');
     if (lastDash > 0 && lastDash < canonical.length - 1) {
-      const shortForm = canonical.slice(lastDash + 1).toLowerCase();
+      const shortForm = normalizeDependencyToken(canonical.slice(lastDash + 1));
       if (/^\d+$/.test(shortForm) && !shortFormToId.has(shortForm)) {
         shortFormToId.set(shortForm, p.id);
       }
@@ -977,7 +986,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
 
   const seenLower = new Map<string, string>();
   for (const p of rawPlans) {
-    const lower = p.id.toLowerCase();
+    const lower = normalizeDependencyToken(p.id);
     const existing = seenLower.get(lower);
     if (existing !== undefined) {
       error(
@@ -988,9 +997,9 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
     seenLower.set(lower, p.id);
   }
 
-  const planMap = new Map(rawPlans.map((p) => [p.id.toLowerCase(), p]));
+  const planMap = new Map(rawPlans.map((p) => [normalizeDependencyToken(p.id), p]));
   const canonicalToId = new Map(
-    rawPlans.map((p) => [extractCanonicalPlanId(p.id).toLowerCase(), p.id]),
+    rawPlans.map((p) => [normalizeDependencyToken(extractCanonicalPlanId(p.id)), p.id]),
   );
   // #3897 rung 4 (ADR-3473 §8.9) — the third depends_on resolution tier.
   // Resolves a bare in-phase plan-number short form (e.g. "01") to its owning
@@ -4808,4 +4817,5 @@ export = {
   cmdPhaseListPlans,
   computeDependencyLevels,
   buildShortFormToId,
+  normalizeDependencyToken,
 };

@@ -68,7 +68,7 @@ describe('#3638: phase_id_convention config enum', () => {
       tmpDir,
     );
     assert.equal(migrationResult.success, false, 'sequential must not become a migration target');
-    assert.match(migrationResult.error, /Only --convention milestone-prefixed is supported/);
+    assert.match(migrationResult.error, /Only --convention milestone-prefixed or bracket is supported/);
   });
 });
 

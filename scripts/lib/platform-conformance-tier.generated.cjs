@@ -233,6 +233,7 @@ module.exports = {
   "tests/reviewer-step-dispatch.test.cjs",
   "tests/revision-remediation-binding.test.cjs",
   "tests/roadmap-parser.test.cjs",
+  "tests/roadmap-upgrade-bracket.test.cjs",
   "tests/roadmap.test.cjs",
   "tests/run-tests-harness.test.cjs",
   "tests/run-tests-temp-root.test.cjs",

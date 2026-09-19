@@ -101,3 +101,70 @@ describe('roadmap upgrade rollback (#1542)', () => {
     assert.equal(config.phase_id_convention, 'milestone-prefixed');
   });
 });
+
+// #4698 Blocker 1: `applyMigration` stamped `phase_id_convention` only when
+// `plan.phases.length > 0` — but `phases` holds DIRECTORY renames, not
+// converted HEADINGS. The historical milestone-prefixed target shares this
+// exact `applyMigration` function with the bracket target, so it carried the
+// identical latent defect: a roadmap with recognizable legacy headings and
+// zero phase directories on disk got its headings rewritten while config
+// stayed unset. Fixed by activating on `roadmapEdits.length > 0 ||
+// phases.length > 0` for both targets.
+function makeGitignoredPlanningRepo(dir) {
+  fs.writeFileSync(path.join(dir, '.gitignore'), '.planning/\n');
+  fs.writeFileSync(path.join(dir, 'README.md'), '# tracked\n');
+  const git = (argv) => gitOrThrow(argv, { cwd: dir });
+  git(['init']);
+  git(['config', 'user.email', 't@t.t']);
+  git(['config', 'user.name', 't']);
+  git(['config', 'commit.gpgsign', 'false']);
+  git(['add', '-A']);
+  git(['commit', '-m', 'initial']);
+}
+
+describe('roadmap upgrade config activation (#4698 Blocker 1)', () => {
+  test('milestone-prefixed target: headings convert and config is stamped even with zero phase directories', (t) => {
+    const dir = createTempDir('m1-headings-only-');
+    t.after(() => cleanup(dir));
+    makeGitignoredPlanningRepo(dir);
+    fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.planning', 'ROADMAP.md'),
+      ['## v1.0: First Milestone', '', '### Phase 1: Foo', '', '### Phase 2: Bar', ''].join('\n'),
+    );
+
+    const plan = computeMigrationPlan(dir);
+    assert.equal(plan.alreadyMigrated, false);
+    assert.equal(plan.phases.length, 0, 'no phase directories exist on disk to rename');
+    assert.ok(plan.roadmapEdits.length >= 1, 'headings must still be converted');
+
+    const result = applyMigration(dir, plan, { dryRun: false });
+
+    assert.equal(result.applied, true);
+    const roadmap = fs.readFileSync(path.join(dir, '.planning', 'ROADMAP.md'), 'utf8');
+    assert.match(roadmap, /### Phase 1-01: Foo/);
+    assert.match(roadmap, /### Phase 1-02: Bar/);
+    const config = JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf8'));
+    assert.equal(
+      config.phase_id_convention,
+      'milestone-prefixed',
+      'config must be stamped once headings convert, even though zero directories were renamed',
+    );
+  });
+
+  test('milestone-prefixed target: an empty plan still writes nothing (regression guard)', (t) => {
+    const dir = createTempDir('m1-empty-plan-');
+    t.after(() => cleanup(dir));
+    makeGitignoredPlanningRepo(dir);
+    const configPath = path.join(dir, '.planning', 'config.json');
+    fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({ phase_id_convention: null }, null, 2) + '\n');
+
+    const emptyPlan = { alreadyMigrated: false, phases: [], roadmapEdits: [], crossRefEdits: [] };
+    const result = applyMigration(dir, emptyPlan, { dryRun: false });
+
+    assert.equal(result.applied, true);
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    assert.equal(config.phase_id_convention, null, 'config must be untouched when the plan converted zero phases');
+  });
+});
