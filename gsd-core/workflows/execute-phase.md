@@ -384,13 +384,17 @@ later conditions once one matches:
      skip `aggregate_results`, `code_review_gate` or `regression_gate` on this path — the manual
      workaround this replaces skipped all three, and that gap is the reason this route exists
      rather than telling users to spawn the verifier by hand.
-   - **`VERIFY_STATUS` ≠ `missing` + `PHASE_MARKED` is `true`**: genuinely finished.
+   - **`PHASE_MARKED` is `true`** (any remaining status): genuinely finished.
      Report "No matching incomplete plans" → exit, unchanged.
-   - **`VERIFY_STATUS` ≠ `missing` + `PHASE_MARKED` not `true`** — the run died between
+   - **`VERIFY_STATUS == passed` + `PHASE_MARKED` not `true`** — the run died between
      `verify_phase_goal` and `update_roadmap` (#3684): verification EXISTS — do not redo
      it or the gates already run. Report `"Phase {X} is verified but never marked
      complete — resuming at update_roadmap (#3684)."` and continue directly at
      `update_roadmap`; the tail steps then run in their normal order.
+   - **`VERIFY_STATUS` is `gaps_found`, `human_needed` or `unknown`, `PHASE_MARKED` not `true`
+     (#4765)**: a report exists but is not a pass — branch on the emitted status, never on
+     `≠ missing`. Present its own next action per `execute-phase/steps/unpassed-resume.md`;
+     never route to `update_roadmap`.
 
 Report:
 ```

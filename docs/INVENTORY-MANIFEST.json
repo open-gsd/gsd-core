@@ -667,6 +667,7 @@
       "execute-phase/steps/stale-reverification.md",
       "execute-phase/steps/tdd-applicability-resolution.md",
       "execute-phase/steps/threat-id-gate.md",
+      "execute-phase/steps/unpassed-resume.md",
       "execute-phase/steps/wave-post-gate-hooks.md",
       "execute-phase/steps/worktree-base-check.md",
       "execute-phase/steps/worktree-recovery-policy.md",
