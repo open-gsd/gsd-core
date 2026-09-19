@@ -1591,6 +1591,8 @@ describe('#4588 A2: a clean prior harness worktree at the orchestrator HEAD conf
     const result = evaluateWorktreeBaseDegrade({
       execGit: makeWorktreeExecGit({ clean: false }),
       cwd: '/repo',
+      probeStateRead: () => null,
+      probeStateWrite: () => {},
     });
     assert.strictEqual(result.shouldDegrade, true, `unobserved fork base → the #3659 comparison still governs (reason=${result.reason})`);
     assert.strictEqual(result.reason, 'head-diverged-from-fork', `reason=${result.reason}`);
@@ -1600,6 +1602,8 @@ describe('#4588 A2: a clean prior harness worktree at the orchestrator HEAD conf
     const result = evaluateWorktreeBaseDegrade({
       execGit: makeWorktreeExecGit({ wtHead: ORIGIN_SHA }),
       cwd: '/repo',
+      probeStateRead: () => null,
+      probeStateWrite: () => {},
     });
     assert.strictEqual(result.shouldDegrade, true, `reason=${result.reason}`);
     assert.strictEqual(result.reason, 'head-diverged-from-fork', `reason=${result.reason}`);
@@ -1616,6 +1620,8 @@ describe('#4588 A2: a clean prior harness worktree at the orchestrator HEAD conf
         return execGit(args, opts);
       },
       cwd: '/repo',
+      probeStateRead: () => null,
+      probeStateWrite: () => {},
     });
     assert.strictEqual(result.shouldDegrade, true, `reason=${result.reason}`);
     assert.strictEqual(result.reason, 'head-diverged-from-fork', `reason=${result.reason}`);
@@ -1625,6 +1631,8 @@ describe('#4588 A2: a clean prior harness worktree at the orchestrator HEAD conf
     const result = evaluateWorktreeBaseDegrade({
       execGit: makeWorktreeExecGit({ listTimeout: true }),
       cwd: '/repo',
+      probeStateRead: () => null,
+      probeStateWrite: () => {},
     });
     assert.strictEqual(result.shouldDegrade, true);
     assert.strictEqual(result.reason, 'head-diverged-from-fork', 'a probe timeout must fall through to the comparison, not skip it');
@@ -1641,6 +1649,8 @@ describe('#4588 A2: a clean prior harness worktree at the orchestrator HEAD conf
         return execGit(args, opts);
       },
       cwd: '/repo',
+      probeStateRead: () => null,
+      probeStateWrite: () => {},
     });
     assert.strictEqual(result.shouldDegrade, false, 'untracked review notes do not disqualify the observation');
     assert.strictEqual(result.reason, 'fork-from-head-observed');
