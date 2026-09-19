@@ -5295,6 +5295,10 @@ describe('#4786: suffix-less hand-written plan lists are recognized, not duplica
     cleanup(tmpDir);
   });
 
+  function writtenAfter() {
+    return fs.readFileSync(roadmapPath, 'utf-8');
+  }
+
   test('#4786: a suffix-less hand-written plan list is ticked in place, never duplicated', () => {
     // The issue's measured shape: a hand-written list WITHOUT the -PLAN.md
     // suffix, carrying em-dash descriptions. The old detection keyed on the
@@ -5320,13 +5324,21 @@ describe('#4786: suffix-less hand-written plan lists are recognized, not duplica
       '5-02-PLAN.md',
       '5-03-PLAN.md',
     ]);
-    fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '05-test-phase', '5-01-SUMMARY.md'), '# Summary\n');
-    fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '05-test-phase', '5-02-SUMMARY.md'), '# Summary\n');
+    // All three plans have summaries (the issue's shape: the call lands the
+    // last summary, 15/16 → 16/16). #4741: only plans the count counts are
+    // tickable — a summary-less row is correctly left alone.
+    for (const n of ['5-01', '5-02', '5-03']) {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '05-test-phase', `${n}-SUMMARY.md`), '# Summary\n');
+    }
 
     const result = runGsdTools(['roadmap', 'update-plan-progress', '5'], tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
     const parsed = JSON.parse(result.output);
     assert.equal(parsed.updated, true, 'the unchecked plan must be ticked');
+    assert.ok(
+      writtenAfter(result).includes('**Plans:** 3/3 plans executed'),
+      'the count line must update to 3/3',
+    );
 
     const written = fs.readFileSync(roadmapPath, 'utf-8');
     // The damage was the INSERTION — none may appear.

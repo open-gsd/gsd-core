@@ -1274,9 +1274,28 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // Detection is scoped to the active region so a plan that appears in an
     // archived <details> block is still correctly detected as missing from the
     // active milestone section.
+    //
+    // #4786: a plan row may be written WITH the `-PLAN.md` suffix (canonical
+    // template form) or WITHOUT it (hand-written form: `- [x] 659-01 — desc`).
+    // The tick loop above keys on the bare planId stem with a PREFIX match
+    // (pre-existing, out of scope here), while detection required the full
+    // `-PLAN.md` filename — so every suffix-less row was counted missing and
+    // the insertion fired BESIDE the recognized list — 32 checkbox lines for
+    // 16 plans, exit 0. The stem arm below accepts the bare id only up to a
+    // boundary (whitespace / `:` / dashes / `-PLAN.md` / `.md` / `**` / `)`),
+    // so `5-011` never satisfies `5-01`. Deliberately NOT in the boundary set:
+    // `.` — a dotted sub-id (`5-01.5`) is a real distinct plan, and counting
+    // its row as 5-01's presence would suppress a genuine insertion.
     const missingPlans = phaseInfo!.plans.filter((planFile) => {
       const planEscaped = escapeRegex(planFile);
-      return !new RegExp(`-\\s*\\[[x ]\\]\\s*(?:\\*\\*)?${planEscaped}`, 'i').test(activeRegion);
+      if (new RegExp(`-\\s*\\[[x ]\\]\\s*(?:\\*\\*)?${planEscaped}`, 'i').test(activeRegion)) return false;
+      const stem = planFile.replace(/-PLAN\.md$/i, '');
+      const stemEscaped = escapeRegex(stem);
+      const stemPresent = new RegExp(
+        `-\\s*\\[[x ]\\]\\s*(?:\\*\\*)?${stemEscaped}(?=$|\\s|:|—|–|-PLAN\\.md|\\.md|\\*\\*|\\))`,
+        'i'
+      ).test(activeRegion);
+      return !stemPresent;
     });
 
     if (missingPlans.length > 0) {
