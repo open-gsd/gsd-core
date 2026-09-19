@@ -79,7 +79,11 @@ ls ${phase_dir}/*-SPEC.md 2>/dev/null | grep -v AI-SPEC | head -1 || true
 
 If SPEC.md already exists:
 
-**If `--auto`:** Auto-select "Update it". Log: `[auto] SPEC.md exists — updating.`
+**If `--auto`:** Auto-select "Skip" — leave the existing SPEC.md unchanged and exit with the same
+message the interactive "Skip" prints. Log: `[auto] SPEC.md exists — reusing as-is.` An unattended
+run reuses an existing artifact rather than regenerating it (#4776): "Update it" re-scores and
+rewrites the spec, discarding answers a person already recorded in it, and nobody is present to
+notice.
 
 **Otherwise:** Use AskUserQuestion:
 - header: "Spec"
