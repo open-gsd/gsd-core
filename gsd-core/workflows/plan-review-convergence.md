@@ -21,7 +21,9 @@ Read all files referenced by the invoking prompt's execution_context before star
 Extract from $ARGUMENTS: phase number, reviewer flags (the declared reviewer lane flags, plus `--all`), `--max-cycles N`, `--text`, `--ws`.
 
 ```bash
-PHASE=$(echo "$ARGUMENTS" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
+# #4748: canonical phase grammar (digits, optional [A-Z], dotted segments) —
+# `12A` / `23.1.2` extract whole instead of truncating to `12` / `23.1`.
+PHASE=$(echo "$ARGUMENTS" | grep -oE '[0-9]+[A-Z]?(\.[0-9]+)*' | head -1)
 
 # #2315: do NOT default REVIEWER_FLAGS to --codex here. The default is resolved
 # against review.default_reviewers in step 1.5 (after the config gate) so a bare

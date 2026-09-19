@@ -1027,6 +1027,13 @@ function cmdInitExecutePhase(
       ? toPosixPath(path.join(cwd, phaseInfo['directory'] as string))
       : null,
     phase_number: phaseInfo?.['phase_number'] || null,
+    // #4748: the disk path hands back the directory's padded number (`03A`)
+    // but the ROADMAP fallback above hands back the heading's bare one (`3A`),
+    // and execute-phase.md's review lookup needs the padded form for
+    // `{PADDED}-REVIEW.md`. It used to re-pad in shell with `printf "%02d"`,
+    // which cannot pad a letter id and reads an already-padded `08` as octal.
+    // Emit the canonical normalization, as the plan-phase/code-review inits do.
+    padded_phase: phaseInfo?.['phase_number'] ? normalizePhaseName(phaseInfo['phase_number']) : null,
     // #3171: prefer the ROADMAP's curated display name for `phase_name`. When
     // the phase directory already exists on disk, the disk-lookup path
     // (searchPhaseInDir) derives phase_name from the directory-name remainder
