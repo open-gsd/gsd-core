@@ -932,6 +932,10 @@ function rescueSummaryArtifacts(
   // (`-C <path>` with `{ cwd: repoRoot }`).  A relative value passed to the
   // walker verbatim made `path.join` emit a relative directory whose reads
   // resolved against process.cwd(), silently walking the wrong tree.
+  // With this resolution, the remaining deps-injectable readers (existsSync,
+  // readFileSync, mkdirSync, copyFileSync) only ever see absolute paths:
+  // `dest` is built from repoRoot, `absPath` from the walker's join off this
+  // resolved base.
   const resolvedWorktreePath = path.resolve(repoRoot, worktreePath);
 
   const summaryPaths = findSummaryFiles(resolvedWorktreePath);

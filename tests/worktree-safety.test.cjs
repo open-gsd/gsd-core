@@ -3056,7 +3056,7 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     assert.equal(result.entries[0].reason, 'worktree_dirty');
   });
 
-  test('#4758: rescue resolves a relative worktree_path against repoRoot, not process.cwd()', () => {
+  test('#4758: rescue resolves a relative worktree_path against repoRoot, not process.cwd()', (t) => {
     const fs = require('node:fs');
     // The manifest's worktree_path is RELATIVE and repoRoot (a temp dir) differs from
     // process.cwd().  Every git consumer of the field resolves `-C <relative>` against
@@ -3066,6 +3066,7 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     // The fs deps are deliberately NOT injected: the real default walker and the real
     // copy are the subjects under test.
     const repoRoot = createTempDir('gsd-4758-repo-');
+    t.after(() => cleanup(repoRoot));
     const worktreePath = '.claude/worktrees/agent-rel-4758';
     const absWorktree = path.join(repoRoot, worktreePath);
     fs.mkdirSync(path.join(absWorktree, '.planning'), { recursive: true });
@@ -3089,40 +3090,36 @@ describe('executeWorktreeWaveCleanupPlan', () => {
       ? `-C ${path.resolve(repoRoot, args[1])} ${args.slice(2).join(' ')}`
       : args.join(' '));
     const wtKey = `-C ${absWorktree}`;
-    try {
-      const result = executeWorktreeWaveCleanupPlan(plan, {
-        execGit: (args) => {
-          const key = resolveGitKey(args);
-          if (key === `${wtKey} rev-parse --abbrev-ref HEAD`) {
-            return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
-          }
-          if (key === 'merge-base HEAD worktree-agent-a1') {
-            return { exitCode: 0, stdout: 'abc123', stderr: '' };
-          }
-          if (key === 'diff --diff-filter=D --name-only HEAD...worktree-agent-a1') {
-            return { exitCode: 0, stdout: '', stderr: '' };
-          }
-          // SUMMARY is NOT committed on the branch (#2556: cat-file -e returns 128).
-          if (key === `${wtKey} cat-file -e HEAD:.planning/q1-SUMMARY.md`) {
-            return { exitCode: 128, stdout: '', stderr: "fatal: path '.planning/q1-SUMMARY.md' does not exist in 'HEAD'" };
-          }
-          if (key === `${wtKey} status --porcelain --untracked-files=all`) {
-            return { exitCode: 0, stdout: '?? .planning/q1-SUMMARY.md', stderr: '' };
-          }
+    const result = executeWorktreeWaveCleanupPlan(plan, {
+      execGit: (args) => {
+        const key = resolveGitKey(args);
+        if (key === `${wtKey} rev-parse --abbrev-ref HEAD`) {
+          return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
+        }
+        if (key === 'merge-base HEAD worktree-agent-a1') {
+          return { exitCode: 0, stdout: 'abc123', stderr: '' };
+        }
+        if (key === 'diff --diff-filter=D --name-only HEAD...worktree-agent-a1') {
           return { exitCode: 0, stdout: '', stderr: '' };
-        },
-      });
+        }
+        // SUMMARY is NOT committed on the branch (#2556: cat-file -e returns 128).
+        if (key === `${wtKey} cat-file -e HEAD:.planning/q1-SUMMARY.md`) {
+          return { exitCode: 128, stdout: '', stderr: "fatal: path '.planning/q1-SUMMARY.md' does not exist in 'HEAD'" };
+        }
+        if (key === `${wtKey} status --porcelain --untracked-files=all`) {
+          return { exitCode: 0, stdout: '?? .planning/q1-SUMMARY.md', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    });
 
-      const rescuedDest = path.join(repoRoot, '.planning', 'q1-SUMMARY.md');
-      assert.equal(fs.readFileSync(rescuedDest, 'utf8'), 'summary content',
-        'rescue must copy the worktree SUMMARY into repoRoot despite the relative manifest path');
-      assert.equal(result.ok, true, 'cleanup must succeed when only the SUMMARY was dirty');
-      assert.equal(result.entries[0].status, 'merged_removed',
-        'a rescued SUMMARY must not block the entry as worktree_dirty');
-      assert.equal(result.entries[0].reason, 'ok');
-    } finally {
-      cleanup(repoRoot);
-    }
+    const rescuedDest = path.join(repoRoot, '.planning', 'q1-SUMMARY.md');
+    assert.equal(fs.readFileSync(rescuedDest, 'utf8'), 'summary content',
+      'rescue must copy the worktree SUMMARY into repoRoot despite the relative manifest path');
+    assert.equal(result.ok, true, 'cleanup must succeed when only the SUMMARY was dirty');
+    assert.equal(result.entries[0].status, 'merged_removed',
+      'a rescued SUMMARY must not block the entry as worktree_dirty');
+    assert.equal(result.entries[0].reason, 'ok');
   });
 
   test('#4758: every rescue reader sees the repoRoot-resolved worktree path', () => {
