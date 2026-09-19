@@ -18,6 +18,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { makeFaultyGit } = require('./helpers/faulty-deps.cjs');
+const { cleanup } = require('./helpers.cjs');
+const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const MODULE_PATH = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'worktree-base-ref.cjs'
@@ -1471,5 +1473,202 @@ describe('#4734: classifyGitHead — single owner of the HEAD-resolution classes
     });
     assert.strictEqual(status.status, 'indeterminate');
     assert.strictEqual(status.headSha, null);
+  });
+});
+
+// ─── #4588 A2: observed fork-from-HEAD confirmation (probe + cache, fail-closed) ──
+
+describe('#4588 A2: a clean prior harness worktree at the orchestrator HEAD confirms fork-from-HEAD', () => {
+  const HEAD_SHA = 'aabbccdd11223344aabbccdd11223344aabbccdd';
+  const WT_PATH = '/repo/.claude/worktrees/agent-x';
+  const ORIGIN_SHA = 'eeee1111223344abeeceeee1111223344abeeceee';
+
+  // Worktree-listing stub: one harness worktree at WT_PATH; origin/HEAD DIVERGED
+  // from HEAD so the pre-#4588 flow would degrade (head-diverged-from-fork).
+  function makeWorktreeExecGit({ clean = true, wtHead = HEAD_SHA, listTimeout = false } = {}) {
+    return function stubExecGit(args, _opts) {
+      const key = args.join(' ');
+      if (key === 'worktree list --porcelain') {
+        if (listTimeout) {
+          const err = new Error('spawnSync git ETIMEDOUT');
+          err.code = 'ETIMEDOUT';
+          return { exitCode: null, stdout: '', stderr: '', signal: 'SIGTERM', error: err };
+        }
+        return {
+          exitCode: 0,
+          stdout: `worktree /repo\nbranch refs/heads/main\n\nworktree ${WT_PATH}\nbranch refs/heads/agent-x\n`,
+          stderr: '', signal: null, error: null,
+        };
+      }
+      if (key === `-C ${WT_PATH} status --porcelain`) {
+        return { exitCode: 0, stdout: clean ? '' : ' M tracked.txt', stderr: '', signal: null, error: null };
+      }
+      if (key === `-C ${WT_PATH} rev-parse HEAD`) {
+        return { exitCode: 0, stdout: `${wtHead}\n`, stderr: '', signal: null, error: null };
+      }
+      if (key === 'rev-parse HEAD') {
+        return { exitCode: 0, stdout: `${HEAD_SHA}\n`, stderr: '', signal: null, error: null };
+      }
+      if (key === 'rev-parse --verify --quiet origin/HEAD') {
+        return { exitCode: 0, stdout: `${ORIGIN_SHA}\n`, stderr: '', signal: null, error: null };
+      }
+      if (key === 'symbolic-ref --quiet refs/remotes/origin/HEAD') {
+        return { exitCode: 1, stdout: '', stderr: '', signal: null, error: null };
+      }
+      throw new Error(`Unexpected execGit call: ${JSON.stringify(args)}`);
+    };
+  }
+
+  test('a clean prior harness worktree at the orchestrator HEAD confirms fork-from-HEAD (no degrade)', () => {
+    // DIVERGED origin/HEAD: the #3659 flow degrades here unless the probe
+    // observes that the harness forks from HEAD.
+    const result = evaluateWorktreeBaseDegrade({
+      execGit: makeWorktreeExecGit(),
+      cwd: '/repo',
+    });
+    assert.strictEqual(result.shouldDegrade, false, 'a clean worktree at the orchestrator HEAD is positive evidence of fork-from-HEAD');
+    assert.strictEqual(result.reason, 'fork-from-head-observed');
+    assert.strictEqual(result.headSha, HEAD_SHA);
+  });
+
+  test('the probe cache serves a matching verdict without re-probing', () => {
+    const stateRead = (_file) => JSON.stringify({
+      headSha: HEAD_SHA,
+      worktreePath: WT_PATH,
+      worktreeHead: HEAD_SHA,
+      verdict: 'fork-from-head-confirmed',
+      probedAt: '2026-09-18T00:00:00.000Z',
+    });
+    // The stub refuses EVERY call: if the probe ran, this throws and fails.
+    const refusing = () => { throw new Error('probe must not run when the cache matches'); };
+    const result = evaluateWorktreeBaseDegrade({ execGit: refusing, cwd: '/repo', probeStateRead: stateRead });
+    assert.strictEqual(result.shouldDegrade, false);
+    assert.strictEqual(result.reason, 'fork-from-head-observed');
+  });
+
+  test('the cache is invalidated by an orchestrator HEAD move', () => {
+    const NEW_HEAD = '11223344aabbccdd11223344aabbccdd11223344';
+    const stateRead = (_file) => JSON.stringify({
+      headSha: HEAD_SHA,
+      worktreePath: WT_PATH,
+      worktreeHead: HEAD_SHA,
+      verdict: 'fork-from-head-confirmed',
+      probedAt: '2026-09-18T00:00:00.000Z',
+    });
+    const execGit = makeWorktreeExecGit();
+    const result = evaluateWorktreeBaseDegrade({
+      execGit,
+      cwd: '/repo',
+      probeStateRead: stateRead,
+      // The stub's HEAD answer is HEAD_SHA; override the orchestrator head by
+      // wrapping so the cached entry (keyed to the OLD head) must be ignored.
+    });
+    // Re-run with a stale cache against a MOVED head: wrap execGit to answer
+    // the new head.
+    const movedExecGit = (args, opts) => {
+      const key = args.join(' ');
+      if (key === 'rev-parse HEAD') return { exitCode: 0, stdout: `${NEW_HEAD}\n`, stderr: '', signal: null, error: null };
+      return execGit(args, opts);
+    };
+    const moved = evaluateWorktreeBaseDegrade({ execGit: movedExecGit, cwd: '/repo', probeStateRead: stateRead });
+    assert.strictEqual(moved.reason, 'head-diverged-from-fork', 'stale cache must not suppress the #3659 comparison');
+    assert.strictEqual(moved.shouldDegrade, true);
+    void result;
+  });
+
+  test('a dirty harness worktree is not evidence', () => {
+    const result = evaluateWorktreeBaseDegrade({
+      execGit: makeWorktreeExecGit({ clean: false }),
+      cwd: '/repo',
+    });
+    assert.strictEqual(result.shouldDegrade, true, 'unobserved fork base → the #3659 comparison still governs');
+    assert.strictEqual(result.reason, 'head-diverged-from-fork');
+  });
+
+  test('a harness worktree at a different commit is not evidence', () => {
+    const result = evaluateWorktreeBaseDegrade({
+      execGit: makeWorktreeExecGit({ wtHead: ORIGIN_SHA }),
+      cwd: '/repo',
+    });
+    assert.strictEqual(result.shouldDegrade, true);
+    assert.strictEqual(result.reason, 'head-diverged-from-fork');
+  });
+
+  test('no harness worktrees changes nothing', () => {
+    const execGit = makeWorktreeExecGit();
+    const result = evaluateWorktreeBaseDegrade({
+      execGit: (args, opts) => {
+        const key = args.join(' ');
+        if (key === 'worktree list --porcelain') {
+          return { exitCode: 0, stdout: 'worktree /repo\nbranch refs/heads/main\n', stderr: '', signal: null, error: null };
+        }
+        return execGit(args, opts);
+      },
+      cwd: '/repo',
+    });
+    assert.strictEqual(result.shouldDegrade, true);
+    assert.strictEqual(result.reason, 'head-diverged-from-fork');
+  });
+
+  test('a probe timeout fails closed to the existing flow', () => {
+    const result = evaluateWorktreeBaseDegrade({
+      execGit: makeWorktreeExecGit({ listTimeout: true }),
+      cwd: '/repo',
+    });
+    assert.strictEqual(result.shouldDegrade, true);
+    assert.strictEqual(result.reason, 'head-diverged-from-fork', 'a probe timeout must fall through to the comparison, not skip it');
+  });
+
+  test('untracked-only worktrees count as clean', () => {
+    const execGit = makeWorktreeExecGit();
+    const result = evaluateWorktreeBaseDegrade({
+      execGit: (args, opts) => {
+        const key = args.join(' ');
+        if (key === `-C ${WT_PATH} status --porcelain`) {
+          return { exitCode: 0, stdout: '?? pr-review-notes.md', stderr: '', signal: null, error: null };
+        }
+        return execGit(args, opts);
+      },
+      cwd: '/repo',
+    });
+    assert.strictEqual(result.shouldDegrade, false, 'untracked review notes do not disqualify the observation');
+    assert.strictEqual(result.reason, 'fork-from-head-observed');
+  });
+
+  test('orchestrator-worktree mode never probes (the suppress predates the probe)', () => {
+    const refusing = () => { throw new Error('probe must not run in orchestrator-worktree mode'); };
+    const result = evaluateWorktreeBaseDegrade({
+      execGit: refusing,
+      cwd: '/repo',
+      effectiveBaseRef: 'head',
+      isolationMode: 'orchestrator-worktree',
+    });
+    assert.strictEqual(result.reason, 'baseref-head');
+    assert.strictEqual(result.shouldDegrade, false);
+  });
+
+  test('end-to-end: a real repo with a clean harness worktree at HEAD passes the base-check', (t) => {
+    const { createTempGitProject } = require('./helpers.cjs');
+    const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+    const dir = createTempGitProject('gsd-4588-e2e-');
+    t.after(() => cleanup(dir));
+    const wtPath = path.join(dir, '.claude', 'worktrees', 'agent-e2e');
+    fs.mkdirSync(path.dirname(wtPath), { recursive: true });
+    gitOrThrow(['worktree', 'add', '-b', 'agent-e2e', wtPath, 'HEAD'], { cwd: dir, timeoutMs: GIT_TIMEOUT_MS });
+
+    const original = fs.writeSync;
+    const chunks = [];
+    fs.writeSync = (fd, buf, ...rest) => {
+      void fd; void rest;
+      chunks.push(typeof buf === 'string' ? buf.slice(0, 200) : Buffer.from(buf).toString('utf8').slice(0, 200));
+      if (typeof buf === 'string') return buf.length;
+      return buf.length;
+    };
+    t.after(() => { fs.writeSync = original; });
+    const result = cmdWorktreeBaseCheck(dir, ['--mode', 'harness-worktree']);
+    fs.writeSync = original;
+    assert.strictEqual(result.shouldDegrade, false,
+      `a clean harness worktree at HEAD must confirm fork-from-HEAD; got reason=${result.reason}`);
+    assert.strictEqual(result.reason, 'fork-from-head-observed');
   });
 });
