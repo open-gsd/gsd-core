@@ -190,6 +190,26 @@ describe('bug #3099: absolute-path safety guidance in gsd-executor.md', () => {
     );
   });
 
+  test('#4767 — the absolute-path guard also precedes <automated> verify execution', () => {
+    const protocolIdx = executorSrc.indexOf('<task_commit_protocol>');
+    const protocolEnd = executorSrc.indexOf('</task_commit_protocol>');
+    const protocol = executorSrc.slice(protocolIdx, protocolEnd);
+    const guardIdx = protocol.indexOf('0b. absolute-path safety');
+    assert.ok(guardIdx !== -1, 'step 0b not found in task_commit_protocol');
+    const guard = protocol.slice(guardIdx);
+    assert.ok(
+      guard.includes('<automated>') && guard.includes('#4767') && guard.includes('worktree-path-safety.md'),
+      'step 0b does not extend the containment check to <automated> command execution — #4767 fix not applied',
+    );
+    // The guard body lives in the reference the parallel executor loads (the executor agent file
+    // sits at its size cap). Fail-closed, never a silent rewrite: the halt is spelled out and
+    // the rewrite is forbidden.
+    const ref = fs.readFileSync(path.join(ROOT, 'gsd-core', 'references', 'worktree-path-safety.md'), 'utf8');
+    assert.ok(/## `<automated>` command guard — step 0c \(#4767\)/.test(ref), 'worktree-path-safety.md lacks the step 0c section');
+    assert.ok(/FATAL: <automated> command names/.test(ref), 'step 0c has no loud halt for an <automated> command outside the worktree');
+    assert.ok(/never\s+rewrite the prefix silently/.test(ref), 'step 0c must forbid silently rewriting the command');
+  });
+
   test('execute-phase.md parallel_execution block references path safety', () => {
     const parallelIdx = executePhaseSrc.indexOf('<parallel_execution>');
     assert.ok(parallelIdx !== -1, 'parallel_execution block not found in execute-phase.md');
@@ -543,4 +563,133 @@ describe('bug #4254: sequential executor supplied-root pin', () => {
     assert.match(isolated, /PROJECT_ROOT=\$\(git rev-parse --show-toplevel/, 'isolated executor keeps its own (correct) root derivation');
     assert.doesNotMatch(isolated, /<project_root_pin>/, 'isolated prompt must not inherit the orchestrator root');
   });
+});
+
+// #4767 — the <automated> command guard (worktree-path-safety.md step 0c) is EXECUTED, not merely
+// grepped for: the fenced bash block is extracted verbatim and driven against a real linked
+// worktree, so a regex regression in the guard fails here rather than in a maintainer's plan run.
+describe('#4767: step 0c <automated> guard executes against a real worktree', { skip: process.platform === 'win32' ? 'bash + git worktree harness is POSIX-only' : false }, () => {
+  const os = require('node:os');
+  const { before, after } = require('node:test');
+  const { spawnSync } = require('node:child_process');
+  const { cleanup } = require('./helpers.cjs');
+  const REPO_ROOT = path.join(__dirname, '..');
+  const SPAWN_TIMEOUT_MS = 30_000;
+  const refSrc = fs.readFileSync(path.join(REPO_ROOT, 'gsd-core', 'references', 'worktree-path-safety.md'), 'utf8');
+  const sectionIdx = refSrc.indexOf('## `<automated>` command guard — step 0c (#4767)');
+  assert.ok(sectionIdx !== -1, 'step 0c section not found');
+  const fenceOpen = refSrc.indexOf('```bash\n', sectionIdx);
+  const fenceClose = refSrc.indexOf('\n```', fenceOpen + 8);
+  const guard = refSrc.slice(fenceOpen + 8, fenceClose);
+
+  let tmp;
+  let main;
+  let wt;
+  before(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4767-guard-'));
+    main = path.join(tmp, 'main');
+    wt = path.join(tmp, 'wt');
+    const git = (args, cwd) => {
+      const r = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: SPAWN_TIMEOUT_MS, env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_AUTHOR_NAME: 'x', GIT_AUTHOR_EMAIL: 'x@x', GIT_COMMITTER_NAME: 'x', GIT_COMMITTER_EMAIL: 'x@x' } });
+      assert.equal(r.status, 0, `git ${args.join(' ')} failed: ${r.stderr}`);
+    };
+    git(['init', '-q', main], tmp);
+    git(['commit', '-q', '--allow-empty', '-m', 'init'], main);
+    git(['worktree', 'add', '-q', wt, '-b', 'wt'], main);
+    fs.mkdirSync(path.join(wt, 'scripts'), { recursive: true });
+    fs.mkdirSync(path.join(main, 'scripts'), { recursive: true });
+    // A symlink INSIDE the worktree that lands in the main checkout — lexically contained, really not.
+    fs.symlinkSync(main, path.join(wt, 'main-link'));
+    fs.symlinkSync(main, path.join(wt, 'scripts copy'));
+    fs.symlinkSync(main, path.join(wt, "O'Reilly"));
+    fs.symlinkSync(main, path.join(wt, 'a"b'));
+    fs.symlinkSync(main, path.join(wt, 'release=main'));
+    fs.symlinkSync(path.join(main, '.git', 'HEAD'), path.join(wt, 'main-head'));
+    fs.writeFileSync(path.join(wt, 'README.md'), 'x\n');
+  });
+  after(() => { if (tmp) cleanup(tmp); });
+
+  // Driven under `bash -eu`: an executor's shell may have both on, and the guard must neither
+  // abort on an unset expansion nor be short-circuited by errexit inside its own helpers.
+  const run = (cmd) => spawnSync('bash', ['-eu', '-c', guard], { cwd: wt, encoding: 'utf8', timeout: SPAWN_TIMEOUT_MS, env: { ...process.env, AUTOMATED_CMD: cmd } });
+  const realMain = () => fs.realpathSync(main);
+  const realWt = () => fs.realpathSync(wt);
+
+  test('halts on a cd into the main checkout (the #4767 shape)', () => {
+    const r = run(`cd ${realMain()}/scripts/verify && python3 -m pytest -q`);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /FATAL: <automated> command relocates to .* outside the worktree/);
+  });
+
+  for (const [label, cmd] of [
+    ['npm --prefix <outside>', 'npm --prefix /srv/other run lint'],
+    ['npm --prefix=<outside>', 'npm --prefix=/srv/other run lint'],
+    ['npm run … --prefix <outside>', 'npm run lint --prefix /srv/other'],
+    ['a subshell-wrapped cd', '(cd /srv/other && make)'],
+    ['a path carrying ERE metacharacters', 'cd /srv/c++/a(b)/[1] && make'],
+    ['a backslash-escaped space', 'cd /srv/other/path\\ with\\ space && ls'],
+    ['cd followed by `;`', 'cd /srv/other; B=x; test -f "$B"'],
+    ['builtin cd', 'builtin cd /srv/other && ls'],
+    ['command cd', 'command cd /srv/other && ls'],
+    ['pushd', 'pushd /srv/other && ls'],
+    ['cd --', 'cd -- /srv/other && ls'],
+    ['an env-prefixed cd', 'FOO=1 cd /srv/other && ls'],
+    ['a target containing `=`', 'cd /srv/other/a=/x && ls'],
+    ['a relative hop out of the worktree', 'cd ../main && ls'],
+    ['a symlink inside the worktree that resolves to main', () => `cd ${realWt()}/main-link && ls`],
+    ['an in-worktree `..` path that resolves to main', () => `cd ${realWt()}/../main && ls`],
+    ['a bare absolute file argument under main', () => `python3 -m pytest ${realMain()}/scripts -q`],
+    ['a double-quoted target with a space that resolves to main', () => `cd "${realWt()}/scripts copy" && ls`],
+    ['a single-quoted outside target with a space', "cd '/srv/other/my dir' && ls"],
+    ['a file read through an in-worktree symlink into main', () => `cat ${realWt()}/main-link/.git/HEAD`],
+    ['a relative cd through the symlink', 'cd main-link && ls'],
+    ['a quoted prefix with an unquoted suffix', () => `cd "${realWt()}"/main-link && ls`],
+    ['an escaped single quote in the path', () => `cd ${realWt()}/O\\'Reilly && ls`],
+    ['an escaped double quote in the path', () => `cd ${realWt()}/a\\"b && ls`],
+    ['a symlinked FILE whose target is in main', () => `cat ${realWt()}/main-head`],
+    ['a chained cd whose second hop leaves the worktree', 'cd scripts && cd ../.. && ls'],
+    ['a chained cd that reaches main relatively', 'cd scripts && cd ../../main && ls'],
+    ['npm --prefix ../.. after a cd (resolved from the reached cwd)', 'cd scripts && npm --prefix ../.. test'],
+    ['a double-quoted name containing an apostrophe', `cd "O'Reilly" && ls`],
+    ['a path containing a literal =', () => `cd ${realWt()}/release=main && ls`],
+    ['an env assignment whose value is a main-checkout path', () => `FOO=${realMain()}/x env | cat`],
+  ]) {
+    test(`halts on ${label}`, () => {
+      const c = typeof cmd === 'function' ? cmd() : cmd;
+      const r = run(c);
+      assert.equal(r.status, 1, `expected a halt for: ${c}\nstderr: ${r.stderr}`);
+      assert.match(r.stderr, /FATAL: <automated> command (names|relocates to)/);
+    });
+  }
+
+  for (const [label, cmd] of [
+    ['a relative cd', 'cd scripts && ls 2>/dev/null'],
+    ['a relative cd into a directory that does not exist yet (Wave-0 scaffold)', 'cd future-scaffold && npm test'],
+    ['a relative cd into a nested not-yet-existing directory', 'cd scripts/new/deep && ls'],
+    ['a relative hop that lands back inside the worktree', 'cd ../wt/scripts && ls'],
+    ['absolute arguments under /tmp and $HOME that are not under main', 'ls /tmp /home 2>/dev/null; cd scripts'],
+    ['a trailing slash and a ./ prefix', 'cd scripts/ && cd ./scripts && ls'],
+    ['a cd onto an existing FILE inside the worktree', 'cd README.md'],
+    ['a glob in an absolute argument (no expansion during normalization)', 'ls /missing/*/deep; cd scripts'],
+    ['a quoted apostrophe in an ordinary argument', `grep -q 'x' README.md && echo "it's fine"`],
+    ['a chained cd that returns to the worktree root', 'cd scripts && cd .. && ls'],
+    ['a chained cd through not-yet-existing directories', 'cd future && cd deeper && ls'],
+    ['a chained cd followed by npm --prefix .', 'cd scripts && npm --prefix . test'],
+    ['a dynamic target the shell would expand (the probe owns these as dynamic_path)', 'cd "$(git rev-parse --show-toplevel)/scripts" && ls'],
+    ['an ordinary argument containing =', 'echo a=b=c && cd scripts'],
+    ['npm --prefix . and make -C inside the worktree', 'npm --prefix . run test && make -C scripts'],
+    ['npm --prefix .. after a cd (npm does not move the cwd)', 'cd scripts && npm --prefix .. test && cd .. && ls'],
+    ['an absolute cd inside the worktree', () => `cd ${realWt()}/scripts && ls`],
+    ['--prefix= inside the worktree', () => `npm run lint --prefix=${realWt()}/scripts`],
+    ['a system path that is not a relocating target', 'cat /etc/hosts | grep -c x'],
+    ['an absolute file argument outside both checkouts', 'ls /srv/other/plain && cd scripts'],
+    ['a redirect to /dev/null', 'test -f /usr/bin/env && echo ok'],
+  ]) {
+    test(`passes ${label}`, () => {
+      const c = typeof cmd === 'function' ? cmd() : cmd;
+      const r = run(c);
+      assert.equal(r.status, 0, `expected a pass for: ${c}\nstderr: ${r.stderr}`);
+      assert.equal(r.stderr.trim(), '', 'a passing command must be silent');
+    });
+  }
 });

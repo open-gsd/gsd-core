@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 4785
+---
+**`check verify-command-paths` now flags an absolute `cd` / `npm --prefix` target outside the project root as `outside_root`** — the same warning a bare `cd ../..` climb already gets — instead of passing it clean because the directory happens to exist. An absolute target is pinned to one checkout, so under worktree isolation a plan whose `<automated>` command carries the orchestrator's absolute root would `cd` into the main tree and pass against code the worktree changed. The probe now takes `--dir <plan-dir>`, and `/gsd-quick --validate` runs it over its own plan directory before the plan-checker pass (it never ran the probe before). The planner carries a standing rule that every path in the plan body is repo-root-relative and every `<automated>` command assumes cwd at the checkout root (prompt inputs stay absolute per #2376), and the executor's worktree absolute-path guard now also precedes `<automated>` execution, halting loudly rather than rewriting the command. (#4767)

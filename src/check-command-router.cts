@@ -1088,8 +1088,16 @@ function resolvePhaseDirOrEmpty(projectDir: string, phase: string): string {
  * phase's `-PLAN.md` files against the filesystem WITHOUT executing anything —
  * see verify-command-grounding.cjs for the recognizer contract.
  *
- * Args: check verify-command-paths <phase>
+ * Args: check verify-command-paths <phase> | check verify-command-paths --dir <plan-dir>
  * Invocable as: gsd_run check verify-command-paths <phase>
+ *               gsd_run check verify-command-paths --dir <plan-dir>
+ *
+ * `--dir` (#4767) names a directory holding `-PLAN.md` files directly, for
+ * plans that live outside `.planning/phases/` — quick mode's
+ * `.planning/quick/<id>/` is the motivating caller, which until #4767 never ran
+ * this probe at all. The directory is resolved against the project root and
+ * probed exactly as a phase directory is; `projectRoot` stays the project root
+ * in both forms.
  *
  * When the phase cannot be resolved to a directory, this emits a non-throwing
  * degraded JSON payload (status/commands/counts all zeroed, `readError`
@@ -1098,15 +1106,20 @@ function resolvePhaseDirOrEmpty(projectDir: string, phase: string): string {
  * look", which a non-zero exit / thrown error would collapse.
  */
 function cmdVerifyCommandPaths(projectDir: string, args: string[], raw: boolean): void {
-  // args[0] = 'check', args[1] = 'verify-command-paths', args[2] = phase
-  const phase = args[2] || '';
-  if (!phase) {
+  // args[0] = 'check', args[1] = 'verify-command-paths', then either a phase
+  // positional or `--dir <plan-dir>` (#4767).
+  const { flags, positionals } = partitionPredicateArgs(args.slice(2));
+  const dirFlag = typeof flags['dir'] === 'string' ? flags['dir'] : '';
+  // First non-flag positional: `--raw` (valueless) lands in positionals too, and its position
+  // relative to the phase argument is the caller's choice.
+  const phase = positionals.find(p => !p.startsWith('--')) ?? '';
+  if (!phase && !dirFlag) {
     output(
       {
         status: 'unresolvable',
         commands: [],
         counts: { blocker: 0, warning: 0, total: 0 },
-        readError: 'verify-command-paths requires a phase argument: check verify-command-paths <phase>',
+        readError: 'verify-command-paths requires a phase argument or --dir: check verify-command-paths <phase> | --dir <plan-dir>',
       },
       raw,
       undefined,
@@ -1114,7 +1127,7 @@ function cmdVerifyCommandPaths(projectDir: string, args: string[], raw: boolean)
     return;
   }
 
-  const phaseDir = resolvePhaseDirOrEmpty(projectDir, phase);
+  const phaseDir = dirFlag ? path.resolve(projectDir, dirFlag) : resolvePhaseDirOrEmpty(projectDir, phase);
 
   if (!phaseDir) {
     output(

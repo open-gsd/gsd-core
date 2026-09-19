@@ -453,7 +453,10 @@ describe('#2401 review Finding 3 — an absolute segment in a chained cd resets,
   test('cd sub && cd <abs-existing-dir> && npm test resolves to the absolute dir', () => {
     const root = fixtureRoot('finding3-abs-reset');
     fs.mkdirSync(path.join(root, 'sub'), { recursive: true });
-    const abs = path.join(ROOT, 'finding3-abs-target');
+    // The absolute target sits INSIDE the fixture root: this test's subject is
+    // reset-not-concatenate, and an outside-root absolute target is now its own
+    // finding (#4767, below) rather than a clean verdict.
+    const abs = path.join(root, 'finding3-abs-target');
     writePackageJson(abs, { test: 'node --version' });
     const r = resolveVerifyCommandTarget(`cd sub && cd ${abs} && npm test`, { projectRoot: root });
     assert.equal(r.status, 'ok');
@@ -468,6 +471,88 @@ describe('#2401 review Finding 3 — an absolute segment in a chained cd resets,
     const r = resolveVerifyCommandTarget('cd a && cd b && npm test', { projectRoot: root });
     assert.equal(r.status, 'ok');
     assert.equal(r.target, path.join(root, 'a', 'b'));
+  });
+});
+
+describe('#4767 — an absolute target outside projectRoot is outside_root, like the bare climb', () => {
+  // The motivating shape: a planner copied the orchestrator's absolute root
+  // into <automated>; under worktree isolation projectRoot is the worktree and
+  // the target is the MAIN checkout — which exists, so the pre-#4767 branch
+  // returned ok/none and the command passed against the wrong tree.
+  test('cd <abs-outside-root> (existing dir) is ok/warning/outside_root — existence is not evidence', () => {
+    const root = fixtureRoot('abs-outside-single');
+    const mainCheckout = path.join(ROOT, 'abs-outside-single-main', 'scripts', 'verify');
+    fs.mkdirSync(mainCheckout, { recursive: true });
+    const r = resolveVerifyCommandTarget(`cd ${mainCheckout} && python3 -m pytest -q`, { projectRoot: root });
+    assert.equal(r.status, 'ok');
+    assert.equal(r.severity, 'warning');
+    assert.equal(r.reason, 'outside_root');
+    assert.equal(r.target, mainCheckout);
+  });
+
+  test('cd sub && cd <abs-outside-root> (absolute reset) is outside_root too', () => {
+    const root = fixtureRoot('abs-outside-chained');
+    fs.mkdirSync(path.join(root, 'sub'), { recursive: true });
+    const abs = path.join(ROOT, 'abs-outside-chained-target');
+    writePackageJson(abs, { test: 'node --version' });
+    const r = resolveVerifyCommandTarget(`cd sub && cd ${abs} && npm test`, { projectRoot: root });
+    assert.equal(r.status, 'ok');
+    assert.equal(r.severity, 'warning');
+    assert.equal(r.reason, 'outside_root');
+    assert.equal(r.target, abs, 'reset-not-concatenate semantics are preserved');
+  });
+
+  test('npm --prefix <abs-outside-root> is outside_root (both grounded forms share the check)', () => {
+    const root = fixtureRoot('abs-outside-prefix');
+    const abs = path.join(ROOT, 'abs-outside-prefix-target');
+    writePackageJson(abs, { lint: 'eslint .' });
+    const r = resolveVerifyCommandTarget(`npm --prefix ${abs} run lint`, { projectRoot: root });
+    assert.equal(r.status, 'ok');
+    assert.equal(r.severity, 'warning');
+    assert.equal(r.reason, 'outside_root');
+  });
+
+  test('a missing absolute target outside the root is still outside_root, not missing_dir — the filesystem is not consulted', () => {
+    const root = fixtureRoot('abs-outside-missing');
+    const abs = path.join(ROOT, 'abs-outside-missing-target', 'never-created');
+    const r = resolveVerifyCommandTarget(`cd ${abs} && npm test`, { projectRoot: root });
+    assert.equal(r.status, 'ok');
+    assert.equal(r.severity, 'warning');
+    assert.equal(r.reason, 'outside_root');
+  });
+
+  test('cd <abs-inside-root> stays clean', () => {
+    const root = fixtureRoot('abs-inside');
+    const abs = path.join(root, 'scripts', 'verify');
+    fs.mkdirSync(abs, { recursive: true });
+    const r = resolveVerifyCommandTarget(`cd ${abs} && python3 -m pytest -q`, { projectRoot: root });
+    assert.equal(r.status, 'ok');
+    assert.equal(r.severity, 'none');
+    assert.equal(r.reason, null);
+    assert.equal(r.target, abs);
+  });
+
+  test('cd <projectRoot> itself is contained (target === root)', () => {
+    const root = fixtureRoot('abs-is-root');
+    const r = resolveVerifyCommandTarget(`cd ${root} && ls`, { projectRoot: root });
+    assert.equal(r.severity, 'none');
+    assert.equal(r.reason, null);
+  });
+
+  test('a sibling whose name merely extends the root is outside (boundary, not prefix)', () => {
+    const root = fixtureRoot('abs-boundary');
+    const sibling = `${root}-sibling`;
+    fs.mkdirSync(sibling, { recursive: true });
+    const r = resolveVerifyCommandTarget(`cd ${sibling} && ls`, { projectRoot: root });
+    assert.equal(r.severity, 'warning');
+    assert.equal(r.reason, 'outside_root');
+  });
+
+  test('the relative bare climb is unchanged by the absolute branch', () => {
+    const root = fixtureRoot('abs-climb-unchanged');
+    const r = resolveVerifyCommandTarget('cd .. && ls', { projectRoot: root });
+    assert.equal(r.severity, 'warning');
+    assert.equal(r.reason, 'outside_root');
   });
 });
 
@@ -915,6 +1000,64 @@ describe('check verify-command-paths verb', () => {
     assert.ok('readError' in payload);
   });
 
+  test('#4767 — --dir probes a plan directory outside .planning/phases (quick mode)', () => {
+    const root = fixtureRoot('dir-flag-quick');
+    const quickDir = path.join(root, '.planning', 'quick', '260915-abc-some-task');
+    fs.mkdirSync(quickDir, { recursive: true });
+    const mainCheckout = path.join(ROOT, 'dir-flag-quick-main');
+    fs.mkdirSync(mainCheckout, { recursive: true });
+    fs.writeFileSync(
+      path.join(quickDir, '260915-abc-PLAN.md'),
+      planWith([`cd ${mainCheckout} && npm test`, 'npm test']),
+      'utf8',
+    );
+
+    const result = runGsdTools(['check', 'verify-command-paths', '--dir', quickDir, '--raw'], root);
+    assert.ok(result.success, `--dir form should succeed. stderr: ${result.error}`);
+    const payload = JSON.parse(result.output);
+    assert.equal(payload.readError, null);
+    assert.equal(payload.commands.length, 2);
+    const [absRow, plainRow] = payload.commands;
+    assert.equal(absRow.reason, 'outside_root');
+    assert.equal(absRow.severity, 'warning');
+    assert.equal(plainRow.severity, 'none');
+    assert.equal(payload.counts.warning, 1);
+  });
+
+  test('#4767 — the phase positional is found regardless of where --raw sits', () => {
+    const root = fixtureRoot('phase-after-raw');
+    writeCliPhase(root, '01-raw-first', planWith(['npm test']));
+    const result = runGsdTools(['check', 'verify-command-paths', '--raw', '1'], root);
+    assert.ok(result.success, `--raw before the phase should still resolve it. stderr: ${result.error}`);
+    const payload = JSON.parse(result.output);
+    assert.equal(payload.readError, null);
+    assert.equal(payload.commands.length, 1);
+  });
+
+  test('#4767 — --dir accepts a project-relative directory', () => {
+    const root = fixtureRoot('dir-flag-relative');
+    const quickDir = path.join(root, '.planning', 'quick', '260915-def-task');
+    fs.mkdirSync(quickDir, { recursive: true });
+    fs.writeFileSync(path.join(quickDir, '260915-def-PLAN.md'), planWith(['npm test']), 'utf8');
+
+    const result = runGsdTools(
+      ['check', 'verify-command-paths', '--dir', '.planning/quick/260915-def-task', '--raw'],
+      root,
+    );
+    assert.ok(result.success, `relative --dir should succeed. stderr: ${result.error}`);
+    const payload = JSON.parse(result.output);
+    assert.equal(payload.commands.length, 1);
+  });
+
+  test('#4767 — --dir on a missing directory degrades to readError, never throws', () => {
+    const root = fixtureRoot('dir-flag-missing');
+    const result = runGsdTools(['check', 'verify-command-paths', '--dir', path.join(root, 'nope'), '--raw'], root);
+    const payload = JSON.parse(result.output);
+    assert.deepEqual(payload.commands, []);
+    assert.equal(typeof payload.readError, 'string');
+    assert.ok(payload.readError.length > 0);
+  });
+
   test('row 45 — check verb degrades on unknown phase', () => {
     const root = fixtureRoot('row45');
     fs.mkdirSync(path.join(root, '.planning', 'phases'), { recursive: true });
@@ -926,6 +1069,59 @@ describe('check verify-command-paths verb', () => {
     assert.deepEqual(payload.commands, []);
     assert.equal(typeof payload.readError, 'string');
     assert.ok(payload.readError.length > 0);
+  });
+});
+
+describe('#4767 — quick mode runs the path probe as plan-phase does', () => {
+  const REPO_ROOT = path.join(__dirname, '..');
+  const read = (rel) => fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
+
+  test('quick/steps/plan-checker-loop.md runs check verify-command-paths --dir over ${QUICK_DIR} before spawning the checker', () => {
+    const src = read('gsd-core/workflows/quick/steps/plan-checker-loop.md');
+    const probeIdx = src.indexOf('gsd_run check verify-command-paths --dir "${QUICK_DIR}" --raw');
+    const spawnIdx = src.indexOf('subagent_type="gsd-plan-checker"');
+    assert.ok(probeIdx !== -1, 'quick plan-checker-loop does not run the verify-command-paths probe');
+    assert.ok(spawnIdx !== -1, 'checker spawn not found');
+    assert.ok(probeIdx < spawnIdx, 'the probe must run before the checker is spawned');
+    assert.ok(src.includes('<verify_command_path_probe>') && src.includes('{VERIFY_PATHS}'),
+      'the checker prompt must carry the probe JSON in a <verify_command_path_probe> block, as plan-phase.md does');
+  });
+
+  test('plan-phase.md and quick share the same probe block shape', () => {
+    const planPhase = read('gsd-core/workflows/plan-phase.md');
+    const quick = read('gsd-core/workflows/quick/steps/plan-checker-loop.md');
+    const block = (s) => {
+      const a = s.indexOf('<verify_command_path_probe>');
+      const b = s.indexOf('</verify_command_path_probe>');
+      return s.slice(a, b);
+    };
+    assert.equal(block(quick), block(planPhase), 'quick and plan-phase must hand the checker an identical probe block');
+  });
+
+  test('the root-relative path-form rule binds in both authoring surfaces', () => {
+    // gsd-planner.md sits within a few hundred chars of its 49152 cap, so the rule's TEXT lives in
+    // the reference the planner @-loads and the planner side asserts the pointer. Both halves are
+    // required: a reference nothing loads is an orphaned rule, and a pointer to a reference that
+    // does not state the rule is an empty one.
+    // The pointer must be the `@~/.claude/...` form, not a repo-relative `@gsd-core/...` one. That
+    // is the form the installer rewrites per install profile (runtime-artifact-conversion's agent
+    // path rewrites key on `~/.claude/`), and the only form this repo's own reference-follower
+    // recognises (check-contract-drift.cjs `referenceIncludes`). A repo-relative pointer resolves
+    // against the consuming project's cwd once installed, where `gsd-core/references/` does not
+    // exist -- so it would leave the rule unreachable while still reading like a citation.
+    const planner = read('agents/gsd-planner.md');
+    const reference = read('gsd-core/references/planner-verify-command-grounding.md');
+    const quick = read('gsd-core/workflows/quick.md');
+    assert.ok(
+      /@~\/\.claude\/gsd-core\/references\/planner-verify-command-grounding\.md/.test(planner),
+      'gsd-planner.md must @-reference planner-verify-command-grounding.md by its installed (~/.claude) path to load the #4767 path-form rule'
+    );
+    assert.ok(
+      /Root-relative, never absolute \(#4767\)/.test(reference),
+      'planner-verify-command-grounding.md lacks the #4767 path-form rule'
+    );
+    assert.ok(/PATH FORM \(#4767\)/.test(quick), "quick.md's planner <constraints> lack the #4767 path-form rule");
+    assert.ok(/repo-root-relative/.test(reference) && /repo-root-relative/.test(quick));
   });
 });
 

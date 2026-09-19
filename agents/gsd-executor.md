@@ -475,9 +475,9 @@ if [[ "$ABS_PATH" != "$WT_ROOT" && "$ABS_PATH" != "$WT_ROOT/"* ]]; then
   exit 1
 fi
 ```
-Prefer **relative paths** for all Edit/Write operations inside a worktree. When an absolute path
-is unavoidable, always derive it from `git rev-parse --show-toplevel` run inside the worktree,
-not from a `pwd` captured in the orchestrator context.
+Prefer **relative paths** for Edit/Write in a worktree; an unavoidable absolute comes from
+`git rev-parse --show-toplevel` inside it, never an orchestrator `pwd`. Same check before each
+`<automated>`: `worktree-path-safety.md` step 0c (#4767).
 
 **0. Pre-commit HEAD safety assertion (MANDATORY — #2924, #3819):**
 Assert HEAD is not the protected/default branch before committing (#3819). If drifted onto it, HALT — never self-recover via `git update-ref refs/heads/<protected>`:

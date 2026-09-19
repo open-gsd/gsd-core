@@ -175,3 +175,101 @@ fi
 **Prefer relative paths** for all Edit/Write operations. When an absolute path is
 unavoidable, always derive it from `git rev-parse --show-toplevel` run inside the
 worktree — never from `pwd` captured in the orchestrator context.
+
+---
+
+## `<automated>` command guard — step 0c (#4767)
+
+The plan's `<automated>` text is where an orchestrator-cwd absolute path most often
+arrives: the planner saw absolute paths in its own context and wrote one into the
+command. Run as written, `cd /abs/main-checkout/… && <test>` leaves the worktree, runs
+against the main tree, and **passes on code this worktree changed and the main tree did
+not** — a green verify that verified nothing. Before executing any `<automated>` command,
+scan its text for absolute paths and halt if one is outside the worktree. Fail loud; never
+rewrite the prefix silently (#3050) — a rewritten command hides the defective plan, and the
+next executor meets it again.
+
+```bash
+# WT_ROOT as in step 0b. MAIN_ROOT is the checkout this worktree was created from — the one an
+# orchestrator-cwd path points at.
+WT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+MAIN_ROOT=$(cd "$(git rev-parse --git-common-dir)/.." 2>/dev/null && pwd -P)
+# Resolve a path the way the shell would land in it. A relative path is taken from the second
+# argument — the cwd a chained `cd` has reached so far — or the worktree root. An existing directory resolves through `cd && pwd -P`; a file through its directory (a
+# symlinked file through its link target first), so a symlink or `..` hop inside the worktree that
+# lands in the main checkout is seen for what it is; a path that does not exist yet — a Wave-0
+# scaffold — is normalized lexically and must still PASS when it sits under the worktree. Never
+# `readlink -m` / `realpath -m` — GNU-only. `_norm` splits with `read -ra` (no glob expansion) and
+# expands the array with the `${a[@]+"${a[@]}"}` idiom (bash < 4.4 errors on an empty array under -u).
+_norm(){ local -a out=() seg; local s; IFS=/ read -ra seg <<<"$1"
+  for s in ${seg[@]+"${seg[@]}"}; do case "$s" in ''|.) ;; ..) [ ${#out[@]} -gt 0 ] && unset 'out[${#out[@]}-1]' ;; *) out+=("$s") ;; esac; done
+  printf '/%s' ${out[@]+"${out[@]}"}; [ ${#out[@]} -gt 0 ] || printf '/'; }
+_resolve(){ local p t; case "$1" in /*) p=$1 ;; *) p="${2:-$WT_ROOT}/$1" ;; esac
+  if [ -L "$p" ] && ! [ -d "$p" ]; then t=$(readlink "$p"); case "$t" in /*) p=$t ;; *) p="$(dirname -- "$p")/$t" ;; esac; fi
+  ( cd -- "$p" 2>/dev/null && pwd -P ) \
+  || ( cd -- "$(dirname -- "$p")" 2>/dev/null && printf '%s/%s' "$(pwd -P)" "$(basename -- "$p")" ) \
+  || _norm "$p"; }
+_outside_wt(){ case "$1" in "$WT_ROOT"|"$WT_ROOT"/*) return 1 ;; *) return 0 ;; esac; }
+# A shell word as the planner wrote it: runs of bare characters, "…" / '…' spans, and backslash
+# escapes, in any mix (`"/x"/y`, `"O'Reilly"`, `path\ with\ space`, `release=main`). `_unquote`
+# walks it with the shell's own three quoting states and returns the string the shell would pass.
+_TOK='("[^"]*"|'"'"'[^'"'"']*'"'"'|\\.|[^[:space:]"'"'"';|&()])+'
+_unquote(){ local s=$1 out='' q='' c i
+  for ((i=0; i<${#s}; i++)); do c=${s:i:1}
+    if [ -z "$q" ]; then case "$c" in '"'|"'") q=$c ;; '\') i=$((i+1)); out+=${s:i:1} ;; *) out+=$c ;; esac
+    elif [ "$q" = '"' ]; then case "$c" in '"') q='' ;; '\') i=$((i+1)); out+=${s:i:1} ;; *) out+=$c ;; esac
+    else case "$c" in "'") q='' ;; *) out+=$c ;; esac; fi
+  done; printf '%s' "$out"; }
+# The relocating verbs — `cd` / `pushd` (bare, `builtin`/`command`-prefixed, env-prefixed, or with
+# `--`) and `npm --prefix` (both `--prefix <p>` and `--prefix=<p>`) at the start of a segment,
+# including after a `(`/`{` opener. Each match is stripped of its prefix with an ANCHORED sed, so
+# the target is taken verbatim, unquoted, and compared LITERALLY — never interpolated into a regex.
+_VERB='((builtin|command)[[:space:]]+)?(cd|pushd)([[:space:]]+--)?'
+_ENV='([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*'
+_OPEN='(^|&&|;|\||\(|\{)[[:space:]]*'
+_NPM='npm[[:space:]]+(--prefix|run[^&;|]*--prefix)[[:space:]=]+'
+# One ordered pass, each target tagged `C` (a cd/pushd — moves the cwd) or `N` (an npm prefix —
+# resolved from the cwd reached so far but does NOT move it).
+_TARGETS=$( printf '%s' "$AUTOMATED_CMD" | grep -oE "${_OPEN}(${_ENV}${_VERB}[[:space:]]+|${_NPM})${_TOK}" \
+            | sed -E "s/^(&&|;|\||\(|\{)?[[:space:]]*//; s/^${_NPM}/N /; s/^${_ENV}${_VERB}[[:space:]]+/C /" | sed '/^$/d' )
+# 1. Every relocating target, relative or absolute, resolved from the cwd the command has reached
+# (chained `cd scripts && cd ..` lands back at the root and passes; `cd scripts && cd ../..` does
+# not): outside the worktree → halt. A target the shell would expand (`~`, `$VAR`, `$(…)`) cannot
+# be evaluated here and passes through — the plan-checker's probe already reports those as
+# `dynamic_path`, and `$(git rev-parse --show-toplevel)` is the form step 0b itself recommends.
+CUR=$WT_ROOT
+while IFS= read -r L; do
+  [ -n "$L" ] || continue
+  K=${L%% *}; T=${L#* }
+  T=$(_unquote "$T"); R=$(_resolve "$T" "$CUR")
+  if _outside_wt "$R"; then
+    echo "FATAL: <automated> command relocates to $T -> $R, outside the worktree ($WT_ROOT) — it would verify the wrong checkout. Rewrite the plan's command root-relative (cwd is the checkout root); do not rewrite it in place." >&2
+    exit 1
+  fi
+  [ "$K" = C ] && CUR=$R
+done <<EOF_TARGETS
+$_TARGETS
+EOF_TARGETS
+# 2. Any other absolute word that resolves under the MAIN checkout — a file argument, a redirect,
+# an include — is the same defect by a different verb; system paths such as /dev/null or /usr/bin
+# are neither and pass.
+while IFS= read -r P; do
+  [ -n "$P" ] || continue
+  P=$(_unquote "$P"); case "$P" in [A-Za-z_]*=*|--*=*) P=${P#*=} ;; esac   # FOO=/x, --flag=/x
+  case "$P" in /*) ;; *) continue ;; esac
+  R=$(_resolve "$P")
+  _outside_wt "$R" || continue
+  case "$R" in
+    "$MAIN_ROOT"|"$MAIN_ROOT"/*)
+      echo "FATAL: <automated> command names $P (-> $R) inside the main checkout, outside the worktree ($WT_ROOT) — it would verify the wrong checkout. Rewrite the plan's command root-relative (cwd is the checkout root); do not rewrite it in place." >&2
+      exit 1 ;;
+  esac
+done <<EOF_ABS
+$(printf '%s' "$AUTOMATED_CMD" | grep -oE "$_TOK")
+EOF_ABS
+```
+
+A halt here is a plan defect, not an executor deviation: report it via the checkpoint return
+format naming the task and the offending command verbatim, and stop. The plan-checker's path
+probe (`check verify-command-paths`) warns on the *outside-orchestrator-root* case before
+execution; this guard is the one that sees the executor's actual root.

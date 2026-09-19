@@ -1288,15 +1288,16 @@ Extract reusable patterns, anti-patterns, and architectural decisions from compl
 ### `gsd-tools check verify-command-paths`
 
 Deterministic resolvability probe over a phase's `<automated>` verify commands (#2401). Run
-automatically by `/gsd-plan-phase` before the plan-check pass and handed to `gsd-plan-checker`;
-runnable by hand to see what the checker saw.
+automatically by `/gsd-plan-phase` and by `/gsd-quick --validate` (#4767) before the plan-check
+pass and handed to `gsd-plan-checker`; runnable by hand to see what the checker saw.
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `N` | **Yes** | Phase number whose `-PLAN.md` files are probed |
+| `N` | One of `N` / `--dir` | Phase number whose `-PLAN.md` files are probed |
 
 | Flag | Description |
 |------|-------------|
+| `--dir <path>` | Probe the `-PLAN.md` files in this directory instead of a phase (quick mode's `.planning/quick/<id>/`); resolved against the project root (#4767) |
 | `--raw` | Emit the JSON payload with no surrounding prose |
 
 **Prerequisites:** none — an unresolvable phase degrades to a JSON payload with `readError` set
@@ -1328,7 +1329,7 @@ the replacement to the planner.
 | `missing_dir` | `blocker` | The resolved directory does not exist, or is not a directory |
 | `no_manifest` | `blocker` | The directory exists but holds no `package.json` / `Makefile` the command needs |
 | `dynamic_path` | `warning` | The path contains `$`, a backtick, `*`, `?`, or `~` — refused, not guessed |
-| `outside_root` | `warning` | A bare ancestor climb (`cd ../..`); the base differs under worktree execution |
+| `outside_root` | `warning` | A bare ancestor climb (`cd ../..`), or an absolute target outside the project root (#4767); the base differs under worktree execution, and an absolute target is pinned to one checkout — the filesystem is not consulted |
 | `script_missing` | `warning` | `npm run <script>` names a script the manifest does not define — this phase may add it |
 | `manifest_unreadable` | `warning` | `package.json` is oversized, unparseable, or not a JSON object |
 | `null` | `none` | Nothing to report |
@@ -1337,6 +1338,7 @@ A non-empty `readError` means the probe **could not look** — distinct from fin
 
 ```bash
 gsd-tools check verify-command-paths 3 --raw    # probe phase 3's verify commands
+gsd-tools check verify-command-paths --dir .planning/quick/260915-abc-task --raw   # a quick plan's dir
 ```
 
 See [Resolve verify-command path findings](how-to/resolve-verify-command-path-findings.md).
