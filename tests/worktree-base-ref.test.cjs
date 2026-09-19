@@ -1566,25 +1566,19 @@ describe('#4588 A2: a clean prior harness worktree at the orchestrator HEAD conf
       verdict: 'fork-from-head-confirmed',
       probedAt: '2026-09-18T00:00:00.000Z',
     });
-    const execGit = makeWorktreeExecGit();
+    // The cached entry is keyed to the OLD orchestrator HEAD while the stub's
+    // HEAD answer is the NEW one — the cache must be ignored and the probe
+    // re-run (whose worktree HEAD no longer matches the new orchestrator
+    // HEAD, so the flow falls through to the fork comparison).
+    const execGit = makeWorktreeExecGit({ wtHead: NEW_HEAD });
     const result = evaluateWorktreeBaseDegrade({
       execGit,
       cwd: '/repo',
       probeStateRead: stateRead,
-      // The stub's HEAD answer is HEAD_SHA; override the orchestrator head by
-      // wrapping so the cached entry (keyed to the OLD head) must be ignored.
+      probeStateWrite: () => {},
     });
-    // Re-run with a stale cache against a MOVED head: wrap execGit to answer
-    // the new head.
-    const movedExecGit = (args, opts) => {
-      const key = args.join(' ');
-      if (key === 'rev-parse HEAD') return { exitCode: 0, stdout: `${NEW_HEAD}\n`, stderr: '', signal: null, error: null };
-      return execGit(args, opts);
-    };
-    const moved = evaluateWorktreeBaseDegrade({ execGit: movedExecGit, cwd: '/repo', probeStateRead: stateRead });
-    assert.strictEqual(moved.reason, 'head-diverged-from-fork', 'stale cache must not suppress the #3659 comparison');
-    assert.strictEqual(moved.shouldDegrade, true);
-    void result;
+    assert.strictEqual(result.reason, 'head-diverged-from-fork', 'stale cache must not suppress the #3659 comparison');
+    assert.strictEqual(result.shouldDegrade, true);
   });
 
   test('a dirty harness worktree is not evidence', () => {
@@ -1677,17 +1671,20 @@ describe('#4588 A2: a clean prior harness worktree at the orchestrator HEAD conf
     fs.mkdirSync(path.dirname(wtPath), { recursive: true });
     gitOrThrow(['worktree', 'add', '-b', 'agent-e2e', wtPath, 'HEAD'], { cwd: dir, timeoutMs: GIT_TIMEOUT_MS });
 
-    const original = fs.writeSync;
-    const chunks = [];
-    fs.writeSync = (fd, buf, ...rest) => {
+    // The command emits its JSON via fs.writeSync(1, …) — capture through the
+    // approved mock mechanism and assert on the EMITTED payload too (the
+    // workflow-facing contract), not just the return value.
+    const emitted = [];
+    const writeSyncMock = t.mock.method(fs, 'writeSync', (fd, buf, ...rest) => {
       void fd; void rest;
-      chunks.push(typeof buf === 'string' ? buf.slice(0, 200) : Buffer.from(buf).toString('utf8').slice(0, 200));
-      if (typeof buf === 'string') return buf.length;
-      return buf.length;
-    };
-    t.after(() => { fs.writeSync = original; });
+      emitted.push(typeof buf === 'string' ? buf : Buffer.from(buf).toString('utf8'));
+      return (typeof buf === 'string' ? buf : Buffer.from(buf)).length;
+    });
     const result = cmdWorktreeBaseCheck(dir, ['--mode', 'harness-worktree']);
-    fs.writeSync = original;
+    assert.ok(writeSyncMock.mock.calls.length > 0, 'the check must emit its JSON payload');
+    const emittedJson = JSON.parse(emitted.join(''));
+    assert.strictEqual(emittedJson.reason, 'fork-from-head-observed', 'the emitted workflow payload must carry the observation');
+    assert.strictEqual(emittedJson.shouldDegrade, false);
     assert.strictEqual(result.shouldDegrade, false,
       `a clean harness worktree at HEAD must confirm fork-from-HEAD; got reason=${result.reason}`);
     assert.strictEqual(result.reason, 'fork-from-head-observed');
