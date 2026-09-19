@@ -105,6 +105,7 @@ const {
   matchPhaseDirs,
   stripProjectCodePrefix,
   PHASE_NUMBER_TOKEN_SOURCE,
+  PHASE_DEP_REF_SOURCE,
   isForeignPrefixedPhaseQuery,
   isSentinelPhaseId,
   extractPhaseToken,
@@ -3112,16 +3113,15 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   // ("8bf403100d" → 8b, 403100d, …), bracketed ledger ids (WINDOWS #1843) and
   // the row's OWN number all became "dependencies", and deps_satisfied came
   // back false for phases whose prose declares none (50 of 92 phases in the
-  // reporter's milestone). Lists after "Phases" stay fully extracted
-  // ("Phases 601 and 602", "Phase 601, 602") — silently dropping a REAL
-  // dependency would clear deps_satisfied prematurely, the dangerous
-  // direction. Negation prose ("dropped the dependency on Phase 654") is NOT
-  // detected: the issue's own minimum keeps such tokens.
-  const depPhaseRefRe = new RegExp(
-    `\\bphases?\\s+(${PHASE_NUMBER_TOKEN_SOURCE}(?:(?:\\s*,\\s*|\\s+and\\s+|\\s*&\\s*|\\s+(?:to|through)\\s+)${PHASE_NUMBER_TOKEN_SOURCE})*)`,
-    'gi',
-  );
-  const depTokenRe = new RegExp(PHASE_NUMBER_TOKEN_SOURCE, 'gi');
+  // reporter's milestone). The anchored grammar (owned by phase-id.cts as
+  // PHASE_DEP_REF_SOURCE, shared with planning-inspect's dependencies) keeps
+  // lists fully extracted ("Phases 601 and 602", "Phase 601, 602, and 603",
+  // "Phase 1-3") — silently dropping a REAL dependency would clear
+  // deps_satisfied prematurely, the dangerous direction. Negation prose
+  // ("dropped the dependency on Phase 654") is NOT detected: the issue's own
+  // minimum keeps such tokens.
+  const depPhaseRefRe = new RegExp(`${PHASE_DEP_REF_SOURCE}`, 'gi');
+  const depTokenRe = new RegExp(`${PHASE_NUMBER_TOKEN_SOURCE}`, 'gi');
 
   for (const phase of phases) {
     if (

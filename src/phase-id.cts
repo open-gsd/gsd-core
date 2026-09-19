@@ -64,6 +64,22 @@ const OPTIONAL_PHASE_TAG_SOURCE = '(?:\\s*\\([^)\\n]{0,200}\\))?';
 // introduced outside this module without a `// phase-id-owner:` justification.
 const PHASE_NUMBER_TOKEN_SOURCE = '\\d+[A-Z]?(?:\\.\\d+)*';
 
+// #4764: a phase REFERENCE in depends-on PROSE — the token in context, directly
+// following "Phase"/"Phases", with bare-token list continuation ("Phases 1 and 2",
+// "Phase 1, 2, and 3", "Phase 1-3"). Built HERE, beside the token grammar it is
+// anchored on, because two readers consume Depends-on prose (init.manager's
+// dep_phases and planning-inspect's dependencies) and re-deriving the anchored
+// form at each would drift exactly the way PHASE_NUMBER_TOKEN_SOURCE's own
+// anti-divergence rule exists to prevent. A bare digit run is the right shape
+// test for a phase id and the WRONG test for a reference: the whole-field
+// scrape this replaces pulled calendar dates ("2026-09-14" → 2026/09/14), git
+// shas ("8bf403100d" → 8b/403100d/…) and ledger ids (WINDOWS #1843) in as
+// dependencies. The `-` separator deliberately extracts range ENDPOINTS only
+// ("Phase 1-3" → 1, 3) — the pre-#4764 behavior; interior enumeration stays
+// out (a range's middle is not written as a reference).
+const PHASE_DEP_REF_SOURCE =
+  `\\bphases?\\s+(${PHASE_NUMBER_TOKEN_SOURCE}(?:(?:\\s*,\\s*(?:and\\s+)?|\\s+and\\s+|\\s*&\\s*|\\s+(?:to|through)\\s+|\\s*-\\s*)${PHASE_NUMBER_TOKEN_SOURCE})*)`;
+
 // #2528 review: the CASE-FLEXIBLE renderings of the two sources above, for call
 // sites that scan directory names (where a project code or a variant suffix may
 // legitimately be lowercase) and therefore cannot use a case-sensitive class.
@@ -1632,6 +1648,7 @@ export = {
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
   OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,
+  PHASE_DEP_REF_SOURCE,
   CASE_FLEXIBLE_PROJECT_CODE_PREFIX_SOURCE,
   CASE_FLEXIBLE_PHASE_NUMBER_TOKEN_SOURCE,
   PHASE_CONTINUATION_SEGMENT_SOURCE,

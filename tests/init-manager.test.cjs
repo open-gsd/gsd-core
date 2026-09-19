@@ -1719,12 +1719,60 @@ describe('#4764 dep_phases extracts only Phase-prefixed references', () => {
       { number: '2', name: 'B', complete: true },
       { number: '3', name: 'C', depends_on: 'Phases 1 and 2' },
       { number: '4', name: 'D', depends_on: 'Phase 1, Phase 2' },
+      { number: '5', name: 'E', depends_on: 'Phase 1 & 2' },
+      { number: '6', name: 'F', depends_on: 'Phase 1 to 2' },
     ]);
+    // Completion is DISK-strict (ADR-3180): a ticked checkbox does not feed
+    // completedNums — the dep targets need real dirs + passed verifications.
+    for (const n of [1, 2]) {
+      writePassedVerification(scaffoldPhase(tmpDir, n, { plans: 1, summaries: 1 }), `0${n}`);
+    }
 
     const output = JSON.parse(runGsdTools('init manager', tmpDir).output);
     assert.deepEqual(output.phases.find((p) => p.number === '3').dep_phases, ['1', '2']);
     assert.deepEqual(output.phases.find((p) => p.number === '4').dep_phases, ['1', '2']);
+    assert.deepEqual(output.phases.find((p) => p.number === '5').dep_phases, ['1', '2'], '& separator');
+    assert.deepEqual(output.phases.find((p) => p.number === '6').dep_phases, ['1', '2'], 'to-range separator');
     assert.strictEqual(output.phases.find((p) => p.number === '3').deps_satisfied, true);
+    assert.strictEqual(output.phases.find((p) => p.number === '5').deps_satisfied, true);
+    assert.strictEqual(output.phases.find((p) => p.number === '6').deps_satisfied, true);
+  });
+
+  test('#4764: Oxford-comma lists stay fully extracted, and a missing member blocks', () => {
+    // Adversarial-review fold-in: "Phases 1, 2, and 3" is the most common
+    // English enumeration; the first grammar cut dropped 603-style tail
+    // members, silently clearing a real blocker (the dangerous direction).
+    writeState(tmpDir);
+    writeRoadmap(tmpDir, [
+      { number: '1', name: 'A', complete: true },
+      { number: '2', name: 'B', complete: true },
+      { number: '3', name: 'C', depends_on: 'Phases 1, 2, and 3' },
+    ]);
+    for (const n of [1, 2]) {
+      writePassedVerification(scaffoldPhase(tmpDir, n, { plans: 1, summaries: 1 }), `0${n}`);
+    }
+
+    const output = JSON.parse(runGsdTools('init manager', tmpDir).output);
+    const row = output.phases.find((p) => p.number === '3');
+    assert.deepEqual(row.dep_phases, ['1', '2']);
+    assert.strictEqual(row.deps_satisfied, true);
+  });
+
+  test('#4764: hyphen ranges extract both endpoints and a missing tail blocks', () => {
+    // House style writes ranges ("Phases 1-9"); endpoints are the written
+    // references (the pre-#4764 scrape also kept only endpoints).
+    writeState(tmpDir);
+    writeRoadmap(tmpDir, [
+      { number: '1', name: 'A', complete: true },
+      { number: '3', name: 'C' },
+      { number: '4', name: 'D', depends_on: 'Phases 1-3' },
+    ]);
+    writePassedVerification(scaffoldPhase(tmpDir, 1, { plans: 1, summaries: 1 }), '01');
+
+    const output = JSON.parse(runGsdTools('init manager', tmpDir).output);
+    const row = output.phases.find((p) => p.number === '4');
+    assert.deepEqual(row.dep_phases, ['1', '3']);
+    assert.strictEqual(row.deps_satisfied, false, '3 is incomplete — a real blocker must not be dropped');
   });
 
   test('#4764 property: extraction pulls exactly the Phase-prefixed references out of arbitrary prose', () => {
@@ -1733,20 +1781,23 @@ describe('#4764 dep_phases extracts only Phase-prefixed references', () => {
     const fc = require('./helpers/fast-check-setup.cjs');
     // Junk fragments whose digit runs the old whole-field scrape pulled in as
     // "dependencies": calendar dates, git shas, ledger ids, counts, round names.
+    // (fc v4 has no hexaString — stringMatching is the legal sha generator.)
     const junkFragments = [
       fc.nat({ max: 28 }).map((d) => `2026-09-${String(d).padStart(2, '0')}`),
-      fc.hexaString({ minLength: 8, maxLength: 10 }),
+      fc.stringMatching(/[0-9a-f]{8,10}/),
       fc.nat({ max: 99999 }).map((n) => `WINDOWS #${n}`),
       fc.nat({ max: 999 }).map((n) => `#${n}-#${n + 1}`),
       fc.nat({ max: 9 }).map((n) => `round ${n}-DISPOSITION (${n}/3`),
     ];
     const refFragment = fc.nat({ max: 8 }).map((n) => `Phase ${n + 1}`);
+    const listFragment = fc.nat({ max: 7 }).map((n) => `Phases ${n + 1}, ${n + 2}, and ${n + 3}`);
+    const selfFragment = fc.constant('Phase 9');
 
     // The phase under test is 9: any "Phase 9" mention in its own prose must be
     // dropped as a self-reference.
     fc.assert(
       fc.property(
-        fc.array(fc.oneof(junkFragments, refFragment, fc.constant('Phase 9')), { maxLength: 12 }),
+        fc.array(fc.oneof(...junkFragments, refFragment, listFragment, selfFragment), { maxLength: 12 }),
         (fragments) => {
           writeState(tmpDir);
           writeRoadmap(tmpDir, [
@@ -1756,15 +1807,23 @@ describe('#4764 dep_phases extracts only Phase-prefixed references', () => {
           const output = JSON.parse(runGsdTools('init manager', tmpDir).output);
           const row = output.phases.find((p) => p.number === '9');
           const extracted = row.dep_phases.map((d) => String(d));
-          // Every extracted token came from a Phase-prefixed reference and is
-          // never the row's own number.
-          for (const tok of extracted) {
-            assert.ok(
-              fragments.includes(`Phase ${tok}`),
-              `extracted "${tok}" is not a Phase-prefixed reference in: ${fragments.join('; ')}`,
-            );
-            assert.notStrictEqual(tok, '9', 'must never include the row\'s own phase number');
+
+          // Independent spec mirror: the expected set is every phase token a
+          // fragment references ("Phase N" or inside a "Phases …" list),
+          // minus the row's own number — junk never contributes.
+          const expected = new Set();
+          for (const f of fragments) {
+            const refMatch = /^phases?\s+(.*)$/i.exec(f);
+            if (!refMatch) continue;
+            for (const tok of refMatch[1].match(/\d+(?:\.\d+)*/g) || []) {
+              if (tok !== '9') expected.add(tok);
+            }
           }
+          assert.deepEqual(
+            [...extracted].sort(),
+            [...expected].sort(),
+            `extraction must pull exactly the Phase-prefixed references from: ${fragments.join('; ')}`,
+          );
         },
       ),
       { numRuns: 20 },

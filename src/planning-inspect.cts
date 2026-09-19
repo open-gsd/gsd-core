@@ -1059,7 +1059,23 @@ function extractGoalProse(sectionBody: string): string | null {
 function extractDependencyTokens(sectionBody: string): string[] {
   const m = DEPENDS_ON_LINE_RE.exec(sectionBody);
   if (!m) return [];
-  return sortedUnique([...m[1].matchAll(/\d+(?:\.\d+)*/g)].map((t) => t[0]));
+  // #4764: phase REFERENCES, not digit runs — the same prose-anchored grammar
+  // init.manager's dep_phases extraction uses (owner: phase-id.cts's
+  // PHASE_DEP_REF_SOURCE). The whole-field token scrape this replaces pulled
+  // calendar dates, git shas and ledger ids in as dependencies. The grammar's
+  // capture group 1 already excludes the "Phase(s)" anchor word, so no
+  // prefix-strip literal is needed here. Self-exclusion (init.manager drops
+  // the row's own number) is deliberately NOT applied: this reader has no row
+  // context at the extraction site and reports informationally, it does not
+  // gate.
+  const refRe = new RegExp(phaseIdMod.PHASE_DEP_REF_SOURCE, 'gi');
+  const tokenRe = new RegExp(phaseIdMod.PHASE_NUMBER_TOKEN_SOURCE, 'g');
+  const tokens: string[] = [];
+  let refMatch: RegExpExecArray | null;
+  while ((refMatch = refRe.exec(m[1])) !== null) {
+    for (const t of refMatch[1].matchAll(tokenRe)) tokens.push(t[0]);
+  }
+  return sortedUnique(tokens);
 }
 
 /**
