@@ -1539,9 +1539,20 @@ describe('#4588 A2: a clean prior harness worktree at the orchestrator HEAD conf
       verdict: 'fork-from-head-confirmed',
       probedAt: '2026-09-18T00:00:00.000Z',
     });
-    // The stub refuses EVERY call: if the probe ran, this throws and fails.
-    const refusing = () => { throw new Error('probe must not run when the cache matches'); };
-    const result = evaluateWorktreeBaseDegrade({ execGit: refusing, cwd: '/repo', probeStateRead: stateRead });
+    // The stub answers rev-parse HEAD (classifyGitHead needs it before the
+    // cache is consulted) and refuses the worktree LIST: if the probe ran,
+    // this throws and fails.
+    const execGit = (args) => {
+      const key = args.join(' ');
+      if (key === 'rev-parse HEAD') {
+        return { exitCode: 0, stdout: `${HEAD_SHA}\n`, stderr: '', signal: null, error: null };
+      }
+      if (key === 'worktree list --porcelain') {
+        throw new Error('probe must not run when the cache matches');
+      }
+      throw new Error(`unexpected execGit call: ${key}`);
+    };
+    const result = evaluateWorktreeBaseDegrade({ execGit, cwd: '/repo', probeStateRead: stateRead });
     assert.strictEqual(result.shouldDegrade, false);
     assert.strictEqual(result.reason, 'fork-from-head-observed');
   });

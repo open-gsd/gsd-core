@@ -399,7 +399,7 @@ export function cmdWorktreeSetBaseRef(
 export function classifyGitHead(deps?: {
   execGit?: ExecGitFn;
   cwd?: string;
-}): { status: 'present'; headSha: string } | { status: 'definitive-absence' | 'ambiguous-absence' | 'indeterminate'; headSha: null } {
+}): { status: 'definitive-absence'; headSha: null } | { status: 'ambiguous-absence'; headSha: null } | { status: 'indeterminate'; headSha: null } | { status: 'present'; headSha: string } {
   const execGit: ExecGitFn = deps?.execGit ?? execGitSeam;
   const cwdOpts = deps?.cwd ? { cwd: deps.cwd } : {};
   const headResult = execGit(['rev-parse', 'HEAD'], cwdOpts);
@@ -417,6 +417,103 @@ export function classifyGitHead(deps?: {
     return { status: 'indeterminate', headSha: null };
   }
   return { status: 'present', headSha: headStdout };
+}
+
+/**
+ * #4588 (decision A2) — observe, from documented git metadata, whether the
+ * harness forks its worktrees from the orchestrator HEAD.
+ *
+ * Substrate: the harness's own prior worktrees. A linked worktree under
+ * `<repo>/.claude/worktrees/agent-*` that is still CLEAN (no tracked
+ * modifications; untracked review notes are fine) and whose HEAD equals the
+ * current orchestrator HEAD can only exist if the harness forked from HEAD
+ * after that commit was made — an origin/HEAD fork would have landed on an
+ * older commit once the orchestrator advanced. That combination is therefore
+ * POSITIVE evidence of fork-from-HEAD, and it is the only configuration that
+ * counts: every other observation (dirty worktree, different HEAD, no
+ * worktrees, git failure) is inconclusive and fails closed to the caller's
+ * existing flow.
+ *
+ * The verdict is cached at `<cwd>/.gsd/harness-fork-probe.json` keyed by the
+ * orchestrator HEAD (the decision's keying): trusted only while the
+ * orchestrator HEAD is unchanged; any HEAD move re-probes. Cache I/O failures
+ * are swallowed — the probe re-runs instead (#3659 fail-closed posture).
+ */
+export function observeHarnessForkFromHead(deps: {
+  execGit?: ExecGitFn;
+  cwd?: string;
+  headSha: string;
+  stateRead?: (file: string) => string | null;
+  stateWrite?: (file: string, content: string) => void;
+}): { confirmed: boolean; source: 'cache' | 'probe' | 'none'; worktreePath: string | null; worktreeHead: string | null } {
+  const execGit = deps.execGit ?? execGitSeam;
+  const cwd = deps.cwd ?? '.';
+  const cacheFile = path.join(cwd, '.gsd', 'harness-fork-probe.json');
+  const stateRead = deps.stateRead ?? ((file: string) => {
+    try {
+      return fs.readFileSync(file, 'utf8');
+    } catch {
+      return null;
+    }
+  });
+  const stateWrite = deps.stateWrite ?? ((file: string, content: string) => {
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, content, 'utf8');
+    } catch {
+      // A cache write must never break the check that produced the verdict.
+    }
+  });
+
+  // 1. Cache — trusted only while the orchestrator HEAD is unchanged.
+  try {
+    const raw = stateRead(cacheFile);
+    if (raw) {
+      const cached = JSON.parse(raw) as { headSha?: string; verdict?: string; worktreePath?: string | null; worktreeHead?: string | null };
+      if (cached.headSha === deps.headSha && cached.verdict === 'fork-from-head-confirmed') {
+        return { confirmed: true, source: 'cache', worktreePath: cached.worktreePath ?? null, worktreeHead: cached.worktreeHead ?? null };
+      }
+    }
+  } catch {
+    // Corrupt cache — re-probe (fail open INTO the probe, which itself fails closed).
+  }
+
+  // 2. Probe: list linked worktrees, keep the harness's own, require a clean
+  //    one whose HEAD equals the orchestrator HEAD.
+  const list = execGit(['worktree', 'list', '--porcelain'], { cwd });
+  if (isExecGitTimeout(list) || list.exitCode !== 0) {
+    return { confirmed: false, source: 'none', worktreePath: null, worktreeHead: null };
+  }
+  const candidates = String(list.stdout || '')
+    .split('\n\n')
+    .map((block) => block.split('\n').find((l) => l.startsWith('worktree '))?.slice('worktree '.length).trim())
+    .filter((p): p is string => !!p && p.includes('/.claude/worktrees/agent-'));
+  for (const wtPath of candidates) {
+    const status = execGit(['-C', wtPath, 'status', '--porcelain'], { cwd });
+    if (isExecGitTimeout(status) || status.exitCode !== 0) continue;
+    const trackedDirty = String(status.stdout || '')
+      .split('\n')
+      .some((l) => l.trim() !== '' && !l.startsWith('?? '));
+    if (trackedDirty) continue;
+    const wtHeadResult = execGit(['-C', wtPath, 'rev-parse', 'HEAD'], { cwd });
+    if (isExecGitTimeout(wtHeadResult) || wtHeadResult.exitCode !== 0) continue;
+    const wtHead = wtHeadResult.stdout ? wtHeadResult.stdout.trim() : '';
+    if (wtHead && wtHead === deps.headSha) {
+      try {
+        stateWrite(cacheFile, `${JSON.stringify({
+          headSha: deps.headSha,
+          worktreePath: wtPath,
+          worktreeHead: wtHead,
+          verdict: 'fork-from-head-confirmed',
+          probedAt: new Date().toISOString(),
+        })}\n`);
+      } catch {
+        // Cache write is best-effort; the verdict stands for this dispatch.
+      }
+      return { confirmed: true, source: 'probe', worktreePath: wtPath, worktreeHead: wtHead };
+    }
+  }
+  return { confirmed: false, source: 'none', worktreePath: null, worktreeHead: null };
 }
 
 /**
@@ -440,6 +537,14 @@ export function evaluateWorktreeBaseDegrade(deps?: {
    * 'head' is honored by construction and still suppresses.
    */
   isolationMode?: BaseCheckIsolationMode;
+  /**
+   * #4588 (decision A2) cache I/O for the observed fork-from-HEAD verdict.
+   * Defaults read/write `<cwd>/.gsd/harness-fork-probe.json`; inject for tests.
+   * The cache is keyed by the orchestrator HEAD and is trusted only while that
+   * HEAD is unchanged.
+   */
+  probeStateRead?: (file: string) => string | null;
+  probeStateWrite?: (file: string, content: string) => void;
 }): {
   shouldDegrade: boolean;
   reason: string;
@@ -506,6 +611,36 @@ export function evaluateWorktreeBaseDegrade(deps?: {
     return { shouldDegrade: false, reason: 'no-head', message: null, headSha: null, forkRef: null, forkSha: null, headAbsenceVerified: false };
   }
   const headSha = head.headSha;
+
+  // b2. #4588 (decision A2): OBSERVED fork-from-HEAD confirmation. A clean
+  // prior harness worktree sitting exactly at the orchestrator HEAD is
+  // positive evidence the harness forks from HEAD — in harness mode that
+  // supersedes the origin/HEAD comparison for this dispatch (the stale
+  // origin/HEAD the comparison would degrade on is not where the harness
+  // forks). Fail-closed: every non-confirming observation falls through to
+  // the exact pre-#4588 flow below. Orchestrator-worktree mode never reaches
+  // here (branch a already returned), and probeStateRead/Write default to the
+  // .gsd cache file under cwd.
+  if ((deps?.isolationMode ?? 'harness-worktree') === 'harness-worktree') {
+    const observed = observeHarnessForkFromHead({
+      execGit,
+      cwd: deps?.cwd,
+      headSha,
+      stateRead: deps?.probeStateRead,
+      stateWrite: deps?.probeStateWrite,
+    });
+    if (observed.confirmed) {
+      return {
+        shouldDegrade: false,
+        reason: 'fork-from-head-observed',
+        message: null,
+        headSha,
+        forkRef: null,
+        forkSha: null,
+        headAbsenceVerified: null,
+      };
+    }
+  }
 
   // c. Resolve fork base (what the harness forks 'fresh' worktrees from = origin/HEAD).
   let forkRef: string | null = null;
