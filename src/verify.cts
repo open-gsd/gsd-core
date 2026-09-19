@@ -922,8 +922,15 @@ function scanQuantitativeCriteria(content: string): { errors: string[]; warnings
       // Not a markdown table: the negated-pipe class matches a SHELL pipeline
       // stage boundary (git before the next `|`), the same shape the
       // #429/#968 scanners use; there is no table row to parse.
+      // #4774: the lookahead keeps `||` — a logical OR, the construct that
+      // HANDLES the failure (e.g. the `git cat-file -e <sha> || echo missing`
+      // ghost-control idiom, reachable here when prose apostrophes leave the
+      // segment's quote state unclosed) — quiet, while `|` and `|&` (a real
+      // pipeline stage, stderr-merged or not) still warn. Accepted trade-off:
+      // a QUOTED `||` literal ahead of a real pipe (``git grep 'a||b' f | wc -l``)
+      // also goes quiet — the lookahead cannot reach past the doubled pipe.
       // allow-adhoc-markdown: shell pipeline stage boundary, not a table cell (#4024)
-      if (/\bgit\s+[a-z][^\n|]*\|/.test(seg)) {
+      if (/\bgit\s+[a-z][^\n|]*\|(?!\|)/.test(seg)) {
         record(
           warnings,
           'R4',
