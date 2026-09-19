@@ -3056,6 +3056,137 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     assert.equal(result.entries[0].reason, 'worktree_dirty');
   });
 
+  test('#4758: rescue resolves a relative worktree_path against repoRoot, not process.cwd()', () => {
+    const fs = require('node:fs');
+    // The manifest's worktree_path is RELATIVE and repoRoot (a temp dir) differs from
+    // process.cwd().  Every git consumer of the field resolves `-C <relative>` against
+    // its cwd=repoRoot; the rescue's filesystem walk must resolve the same field the
+    // same way.  Before the fix the walker resolved against process.cwd(), found
+    // nothing, and the entry blocked worktree_dirty instead of rescuing.
+    // The fs deps are deliberately NOT injected: the real default walker and the real
+    // copy are the subjects under test.
+    const repoRoot = createTempDir('gsd-4758-repo-');
+    const worktreePath = '.claude/worktrees/agent-rel-4758';
+    const absWorktree = path.join(repoRoot, worktreePath);
+    fs.mkdirSync(path.join(absWorktree, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(absWorktree, '.planning', 'q1-SUMMARY.md'), 'summary content');
+
+    const plan = {
+      ok: true,
+      repoRoot,
+      action: 'cleanup_wave',
+      discovery: 'manifest',
+      entries: [{
+        agent_id: 'a1',
+        worktree_path: worktreePath,
+        branch: 'worktree-agent-a1',
+        expected_base: 'abc123',
+      }],
+    };
+    // Resolution-agnostic fake: behavior keys on the repoRoot-resolved -C operand —
+    // the same resolution git itself applies to `-C <relative>`.
+    const resolveGitKey = (args) => (args[0] === '-C'
+      ? `-C ${path.resolve(repoRoot, args[1])} ${args.slice(2).join(' ')}`
+      : args.join(' '));
+    const wtKey = `-C ${absWorktree}`;
+    try {
+      const result = executeWorktreeWaveCleanupPlan(plan, {
+        execGit: (args) => {
+          const key = resolveGitKey(args);
+          if (key === `${wtKey} rev-parse --abbrev-ref HEAD`) {
+            return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
+          }
+          if (key === 'merge-base HEAD worktree-agent-a1') {
+            return { exitCode: 0, stdout: 'abc123', stderr: '' };
+          }
+          if (key === 'diff --diff-filter=D --name-only HEAD...worktree-agent-a1') {
+            return { exitCode: 0, stdout: '', stderr: '' };
+          }
+          // SUMMARY is NOT committed on the branch (#2556: cat-file -e returns 128).
+          if (key === `${wtKey} cat-file -e HEAD:.planning/q1-SUMMARY.md`) {
+            return { exitCode: 128, stdout: '', stderr: "fatal: path '.planning/q1-SUMMARY.md' does not exist in 'HEAD'" };
+          }
+          if (key === `${wtKey} status --porcelain --untracked-files=all`) {
+            return { exitCode: 0, stdout: '?? .planning/q1-SUMMARY.md', stderr: '' };
+          }
+          return { exitCode: 0, stdout: '', stderr: '' };
+        },
+      });
+
+      const rescuedDest = path.join(repoRoot, '.planning', 'q1-SUMMARY.md');
+      assert.equal(fs.readFileSync(rescuedDest, 'utf8'), 'summary content',
+        'rescue must copy the worktree SUMMARY into repoRoot despite the relative manifest path');
+      assert.equal(result.ok, true, 'cleanup must succeed when only the SUMMARY was dirty');
+      assert.equal(result.entries[0].status, 'merged_removed',
+        'a rescued SUMMARY must not block the entry as worktree_dirty');
+      assert.equal(result.entries[0].reason, 'ok');
+    } finally {
+      cleanup(repoRoot);
+    }
+  });
+
+  test('#4758: every rescue reader sees the repoRoot-resolved worktree path', () => {
+    // Seam contract: the rescue resolves entry.worktree_path ONCE against repoRoot and
+    // hands the same absolute path to every reader — the injected fs walker and its own
+    // `git -C` calls — instead of passing the manifest value verbatim to fs reads
+    // (which then resolve against process.cwd()).
+    const seenWalker = [];
+    const seenGit = [];
+    const repoRoot = '/repo/main';
+    const resolvedWt = '/repo/main/wt/agent-a1';
+    const plan = {
+      ok: true,
+      repoRoot,
+      action: 'cleanup_wave',
+      discovery: 'manifest',
+      entries: [{
+        agent_id: 'a1',
+        worktree_path: 'wt/agent-a1',
+        branch: 'worktree-agent-a1',
+        expected_base: 'abc123',
+      }],
+    };
+    const result = executeWorktreeWaveCleanupPlan(plan, {
+      execGit: (args) => {
+        const key = args.join(' ');
+        seenGit.push(key);
+        if (key === `-C ${resolvedWt} rev-parse --abbrev-ref HEAD`) {
+          return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
+        }
+        if (key === 'merge-base HEAD worktree-agent-a1') {
+          return { exitCode: 0, stdout: 'abc123', stderr: '' };
+        }
+        if (key === 'diff --diff-filter=D --name-only HEAD...worktree-agent-a1') {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        if (key === `-C ${resolvedWt} cat-file -e HEAD:.planning/q1-SUMMARY.md`) {
+          return { exitCode: 128, stdout: '', stderr: "fatal: path '.planning/q1-SUMMARY.md' does not exist in 'HEAD'" };
+        }
+        if (key === `-C wt/agent-a1 status --porcelain --untracked-files=all`) {
+          // The CALLER's post-rescue dirty check passes the manifest value verbatim to
+          // git (cwd=repoRoot resolves it) — unchanged by the fix, so keep it answerable.
+          return { exitCode: 0, stdout: '?? .planning/q1-SUMMARY.md', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      findSummaryFiles: (p) => {
+        seenWalker.push(p);
+        return p === resolvedWt ? [path.join(resolvedWt, '.planning/q1-SUMMARY.md')] : [];
+      },
+      readFileSync: (p) => (String(p).endsWith('q1-SUMMARY.md') ? 'summary content' : ''),
+      existsSync: () => false,
+      mkdirSync: () => {},
+      copyFileSync: () => {},
+    });
+
+    assert.deepEqual(seenWalker, [resolvedWt],
+      'the fs walker must receive the repoRoot-resolved path, not the verbatim relative value');
+    assert.ok(
+      seenGit.includes(`-C ${resolvedWt} cat-file -e HEAD:.planning/q1-SUMMARY.md`),
+      `the rescue's own git calls must use the same resolved path; saw: ${JSON.stringify(seenGit)}`);
+    assert.equal(result.entries[0].status, 'merged_removed');
+  });
+
   test('#245: blocks with summary_rescue_failed when copyFileSync throws during rescue', () => {
     // Fixture: the only dirty file is .planning/q1-SUMMARY.md, but copyFileSync throws
     // (simulating ENOSPC / permission error).  The path must NOT be added to rescuedRelPaths,
