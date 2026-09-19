@@ -926,7 +926,15 @@ function rescueSummaryArtifacts(
   const mkdirSync = deps.mkdirSync || ((d: string, o?: { recursive?: boolean }) => fs.mkdirSync(d, o));
   const copyFileSync = deps.copyFileSync || fs.copyFileSync;
 
-  const summaryPaths = findSummaryFiles(worktreePath);
+  // #4758: resolve the manifest's worktree_path against repoRoot once, at this
+  // boundary, so every reader of the field here — the fs walker below and the
+  // `git -C` calls — resolves it the way the caller's git consumers already do
+  // (`-C <path>` with `{ cwd: repoRoot }`).  A relative value passed to the
+  // walker verbatim made `path.join` emit a relative directory whose reads
+  // resolved against process.cwd(), silently walking the wrong tree.
+  const resolvedWorktreePath = path.resolve(repoRoot, worktreePath);
+
+  const summaryPaths = findSummaryFiles(resolvedWorktreePath);
   const rescuedRelPaths = new Set<string>();
   const failures: Array<{ relPath: string; error: string }> = [];
 
@@ -934,7 +942,7 @@ function rescueSummaryArtifacts(
     // relPath is the path relative to the worktree root (e.g. ".planning/q1-SUMMARY.md")
     // Normalize to forward slashes so the Set comparison against `git status --porcelain`
     // output works on Windows too (git always emits forward slashes in porcelain output).
-    const relPath = posixNormalize(absPath.slice(worktreePath.length).replace(/^[/\\]/, ''));
+    const relPath = posixNormalize(absPath.slice(resolvedWorktreePath.length).replace(/^[/\\]/, ''));
 
     // #706: skip rescue when the SUMMARY is already committed on the branch.
     // Use `git cat-file -e HEAD:<relPath>` (not `ls-files --error-unmatch`) so
@@ -953,7 +961,7 @@ function rescueSummaryArtifacts(
     // copy when the main tree already holds identical content (which is also what
     // guards the #706 merge collision). A divergent dest is overwritten, but only
     // uncommitted main-tree content could be lost (committed content is git-recoverable).
-    const catFileResult = execGit(['-C', worktreePath, 'cat-file', '-e', `HEAD:${relPath}`], { cwd: repoRoot });
+    const catFileResult = execGit(['-C', resolvedWorktreePath, 'cat-file', '-e', `HEAD:${relPath}`], { cwd: repoRoot });
     if (catFileResult.exitCode === 0) {
       // exit 0 → the SUMMARY is committed on HEAD; the merge will carry it, so skip rescue.
       continue;

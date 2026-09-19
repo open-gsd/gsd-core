@@ -3150,6 +3150,11 @@ describe('executeWorktreeWaveCleanupPlan', () => {
       execGit: (args) => {
         const key = args.join(' ');
         seenGit.push(key);
+        if (key === `-C wt/agent-a1 rev-parse --abbrev-ref HEAD`) {
+          // The CALLER's branch check passes the manifest value verbatim to git;
+          // its cwd=repoRoot resolves `-C <relative>`. Unchanged by the fix.
+          return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
+        }
         if (key === `-C ${resolvedWt} rev-parse --abbrev-ref HEAD`) {
           return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
         }
