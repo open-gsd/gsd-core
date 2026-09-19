@@ -24,22 +24,32 @@
  *
  * ## Known limits
  *
- * This is a targeted regex extraction of two specific `NAME="..."` shell
+ * This is a targeted regex extraction of specific `NAME="..."` shell
  * assignments, not a shell parser: it assumes each declaration appears
  * verbatim, unquoted-value-free (no embedded `"` — shell wouldn't allow that
  * unescaped inside a double-quoted assignment either), and on its own line.
  * It does not evaluate shell variable expansion, comments, or conditionals
  * around the declaration — only the literal assigned string.
+ *
+ * `MILESTONE_PHASES_RE` (#4605) is OPTIONAL: it names the shape of a
+ * milestone-scoped phase-plan directory (`.planning/milestones/<slug>-phases/`),
+ * a regex fragment, not a path list, since the milestone slug varies per
+ * project. It is parsed the same way as `STRUCTURAL_RE` when present, but its
+ * absence is not an error — fixture text written before #4605 (or a project on
+ * a GSD version that predates it) has no such directory shape to guard against,
+ * and `forbiddenRegex` below degrades to its pre-#4605 behavior in that case.
  */
 
 const fs = require('fs');
 const path = require('path');
 const { escapeRegex: escapeRe } = require('../../gsd-core/bin/lib/pattern.cjs');
+const { extractFencedBlock } = require('../../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 const WORKFLOW_PATH = path.join(__dirname, '..', '..', 'gsd-core', 'workflows', 'pr-branch.md');
 
 const TRANSIENT_DIRS_RE = /^\s*TRANSIENT_DIRS="([^"]*)"/gm;
 const STRUCTURAL_RE_RE = /^\s*STRUCTURAL_RE="([^"]*)"/gm;
+const MILESTONE_PHASES_RE_RE = /^\s*MILESTONE_PHASES_RE="([^"]*)"/gm;
 
 // Collects every match of `re` (a global regex) against `text`, returning
 // the captured group-1 values in order. `re.lastIndex` is reset first so
@@ -78,7 +88,16 @@ const parseWorkflow = (text) => {
   const transientDirs = transientMatches[0].split(/\s+/).filter((s) => s.length > 0);
   const structuralRe = structuralMatches[0];
 
-  return { transientDirs, structuralRe };
+  // Optional (#4605) — see the module doc comment. Zero occurrences is fine;
+  // more than one is the same "ambiguous canonical source" error as the other
+  // two declarations.
+  const milestonePhasesMatches = collectMatches(MILESTONE_PHASES_RE_RE, text);
+  if (milestonePhasesMatches.length > 1) {
+    throw new Error(`pr-branch.md: MILESTONE_PHASES_RE declared ${milestonePhasesMatches.length} times — the filter must have exactly one canonical declaration`);
+  }
+  const milestonePhasesRe = milestonePhasesMatches[0];
+
+  return { transientDirs, structuralRe, milestonePhasesRe };
 };
 
 const readWorkflow = () => parseWorkflow(fs.readFileSync(WORKFLOW_PATH, 'utf-8'));
@@ -128,20 +147,67 @@ const extractPickLoop = (text) => {
   return matches[0];
 };
 
+const DERIVATION_MARKER = "Derive the mode's two projections";
+
+// Returns the verbatim body of the shipped workflow's `FILTER_PATHS` /
+// `FORBIDDEN_RE` derivation block — the `if [ "$PR_STRICT" = "true" ]` shell
+// that turns the declarations above it into the two projections
+// `create_pr_branch` and `verify` consume.
+//
+// Exists so a caller can EXECUTE that derivation as real shell rather than
+// re-implementing it in JS (#4605). The distinction matters: the block's
+// `find -exec printf` discovery and its newline-delimited accumulation of
+// `$FILTER_PATHS` have word-splitting semantics a `fs.readdirSync` mirror
+// cannot reproduce, so a JS model of this step cannot prove the shipped one
+// survives a milestone slug containing a space.
+//
+// Located by the prose marker then handed to `extractFencedBlock` — the
+// sanctioned fence scanner — rather than an ad-hoc ```-delimited regex.
+// Throws if the marker or the block after it is missing, so a moved/renamed
+// step fails loudly instead of silently testing nothing.
+const extractFilterDerivation = (text) => {
+  if (typeof text !== 'string') {
+    throw new Error('extractFilterDerivation: expected the workflow text as a string');
+  }
+  const markerIdx = text.indexOf(DERIVATION_MARKER);
+  if (markerIdx < 0) {
+    throw new Error(`pr-branch.md: no "${DERIVATION_MARKER}" prose marker — the FILTER_PATHS/FORBIDDEN_RE derivation step moved or was renamed`);
+  }
+  const block = extractFencedBlock(text.slice(markerIdx), 'bash');
+  if (block === null || block.length === 0) {
+    throw new Error(`pr-branch.md: no bash block after "${DERIVATION_MARKER}"`);
+  }
+  if (!block.includes('FILTER_PATHS=')) {
+    throw new Error(`pr-branch.md: the bash block after "${DERIVATION_MARKER}" assigns no FILTER_PATHS — wrong block`);
+  }
+  return block;
+};
+
 const normalizePaths = (input) => {
   const raw = typeof input === 'string' ? input.split('\n') : input;
   return raw.map((s) => s.replace(/\r$/, '')).filter((s) => s.length > 0);
 };
 
-const forbiddenRegex = ({ strict, transientDirs }) => {
+const forbiddenRegex = ({ strict, transientDirs, milestonePhasesRe }) => {
   if (strict === true) {
     return /^\.planning\//;
   }
-  if (!transientDirs || transientDirs.length === 0) {
+  const parts = [];
+  if (transientDirs && transientDirs.length > 0) {
+    const alt = transientDirs.map((d) => escapeRe(d)).join('|');
+    parts.push(`^\\.planning/(${alt})/`);
+  }
+  // #4605: milestone-scoped phase dirs are the same reviewer noise as a
+  // transient dir, just shaped as a regex (variable milestone slug) instead of
+  // a literal name — folded in as its own alternative rather than into
+  // `transientDirs`, since it isn't one of the fixed names in that list.
+  if (milestonePhasesRe) {
+    parts.push(milestonePhasesRe);
+  }
+  if (parts.length === 0) {
     return /(?!)/;
   }
-  const alt = transientDirs.map((d) => escapeRe(d)).join('|');
-  return new RegExp(`^\\.planning/(${alt})/`);
+  return new RegExp(parts.join('|'));
 };
 
 const forbiddenPaths = (files, opts) => {
@@ -182,6 +248,7 @@ module.exports = {
   parseWorkflow,
   readWorkflow,
   extractPickLoop,
+  extractFilterDerivation,
   normalizePaths,
   forbiddenRegex,
   forbiddenPaths,
