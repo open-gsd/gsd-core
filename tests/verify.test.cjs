@@ -5199,6 +5199,83 @@ describe('#4024: scanQuantitativeCriteria — pure unit tests', () => {
       `R4 is warn-only, got errors: ${JSON.stringify(result.errors)}`);
   });
 
+  // #4774 — `||` is a logical OR: the construct REACTS to a non-zero exit, so
+  // warning that the failure is "swallowed" inverts the semantics and fires on
+  // the git cat-file -e <sha> || echo missing ghost-control idiom. The R4
+  // regex must require the pipe NOT to be doubled.
+  test('#4774 R4: a logical-OR fallback is a handled failure, not a swallowed one', () => {
+    const content = makeCriteriaPlan(
+      '  - `git cat-file -e $sha || echo missing` exits 0 (ghost control: a bogus hash must print "missing").',
+      '',
+    );
+    const result = scanQuantitativeCriteria(content);
+    assert.ok(
+      !result.warnings.some(w => w.includes('[plan-criteria R4]')),
+      `|| must not read as a pipeline stage boundary, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  test('#4774 R4: a bare logical-OR fallback stays quiet (issue row 1)', () => {
+    const content = makeCriteriaPlan(
+      '  - `git log --oneline || echo none` prints at least the header line.',
+      '',
+    );
+    const result = scanQuantitativeCriteria(content);
+    assert.ok(
+      !result.warnings.some(w => w.includes('[plan-criteria R4]')),
+      `got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  test('#4774 R4: logical-OR into a block stays quiet (issue row 8)', () => {
+    const content = makeCriteriaPlan(
+      '  - `git status --porcelain || { echo dirty; exit 1; }` must not print "dirty".',
+      '',
+    );
+    const result = scanQuantitativeCriteria(content);
+    assert.ok(
+      !result.warnings.some(w => w.includes('[plan-criteria R4]')),
+      `got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  test('#4774 R4: real single-pipe pipelines still warn (issue rows 3/4)', () => {
+    const content = makeCriteriaPlan(
+      '  - `git rev-parse HEAD | cut -c1-10` is 10 chars long.',
+      '  - `git diff --name-only | wc -l` is 0.',
+    );
+    const result = scanQuantitativeCriteria(content);
+    assert.strictEqual(
+      result.warnings.filter(w => w.includes('[plan-criteria R4]')).length,
+      2,
+      `both single-pipe stages must still warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  test('#4774 R4: a pipeline boundary before the OR still warns (issue row 6)', () => {
+    const content = makeCriteriaPlan(
+      '  - `git log --oneline | head -5 || echo none` prints 5 lines.',
+      '',
+    );
+    const result = scanQuantitativeCriteria(content);
+    assert.ok(
+      result.warnings.some(w => w.includes('[plan-criteria R4]')),
+      `git|head is a real non-final stage, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  test('#4774 R4: a |& stderr-merge is a real pipeline and still warns (issue row 7)', () => {
+    const content = makeCriteriaPlan(
+      '  - `git grep -l "pattern" |& wc -l` is 0.',
+      '',
+    );
+    const result = scanQuantitativeCriteria(content);
+    assert.ok(
+      result.warnings.some(w => w.includes('[plan-criteria R4]')),
+      `|& merges stderr into the pipeline — git is still non-final, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
   // Row 10 — phase 443 row 24: BSD wc pads, grep -x 0 never matches
   test('#4024 R5: wc output compared by grep -x string equality is an error', () => {
     const content = makeCriteriaPlan(
