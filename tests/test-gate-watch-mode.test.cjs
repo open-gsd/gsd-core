@@ -124,3 +124,57 @@ describe('#2350: every gate resolves build/test commands with --raw', () => {
     });
   }
 });
+
+// ─── #4784: the Xcode arms carry -project and a machine-independent destination ──
+
+describe('#4784: Xcode gate construction', () => {
+  const gate = read(POST_MERGE_GATE);
+
+  test('#4784: the Xcode gates pass -project to every constructed xcodebuild command', () => {
+    // The gate resolves XCODEPROJ (find . -maxdepth 2) and even uses it for
+    // `xcodebuild -list -json -project` — but the build/test commands used to
+    // drop it, so any project one directory down (App/App.xcodeproj) failed
+    // with exit 66: xcodebuild does not search subdirectories.
+    const constructed = gate.match(/xcodebuild (?:build|test)[^\n]*'/g) || [];
+    assert.ok(constructed.length >= 4, `expected the four Xcode command constructions, got: ${JSON.stringify(constructed)}`);
+    for (const cmd of constructed) {
+      assert.ok(
+        cmd.includes('-project "$XCODEPROJ"'),
+        `every constructed xcodebuild command must carry -project "$XCODEPROJ", got: ${cmd}`,
+      );
+    }
+  });
+
+  test('#4784: the Xcode destination derives from the machine\'s available simulators', () => {
+    // A concrete device NAME is machine state (the reporter's machine had zero
+    // devices matching the hardcoded name). The gate must resolve the first
+    // available simulator (id= destination form) and must not pin a name.
+    assert.ok(
+      gate.includes('simctl list devices available'),
+      'the gate must resolve the destination from simctl list devices available',
+    );
+    assert.ok(gate.includes('id=$XCODE_SIM'), 'the destination must reference the resolved simulator id');
+    assert.ok(
+      !gate.includes('name=iPhone 16'),
+      'the hardcoded simulator name must be gone',
+    );
+  });
+
+  test('#4784: with no available simulator the gates skip loudly instead of guaranteed failure', () => {
+    assert.ok(
+      /No available iOS Simulator[^\n]*workflow\.build_command/.test(gate)
+        && gate.includes('workflow.test_command'),
+      'the no-simulator path must skip loudly naming workflow.build_command / workflow.test_command',
+    );
+  });
+
+  test('#4784: the test-gate timeout guidance names the Xcode diagnostics collector', () => {
+    // A real iOS suite measured 854s wall clock, ~600s of it simctl diagnose
+    // collecting a sysdiagnose AFTER the suite passed — the default timeout
+    // returns 124 on a passing suite. The gate text must surface the flag.
+    assert.ok(
+      gate.includes('-collect-test-diagnostics never'),
+      'the gate must mention -collect-test-diagnostics never for Xcode suites',
+    );
+  });
+});
