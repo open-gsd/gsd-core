@@ -667,3 +667,77 @@ describe('#3177: debug.md dispatches its session manager in the foreground', () 
 });
   });
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// #4783 — the continuation-agent spawn names no template that does not ship
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __contDescribe, test: __contTest } = require('node:test');
+  __contDescribe('checkpoint continuation prompt is self-contained (#4783)', () => {
+    const ROOT = path.join(__dirname, '..');
+    const WORKFLOW = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase.md');
+
+    /** The four values the retired template carried. A lane builds its prompt from these. */
+    const PLACEHOLDERS = [
+      '{completed_tasks_table}',
+      '{resume_task_number}',
+      '{resume_task_name}',
+      '{user_response}',
+      '{resume_instructions}',
+    ];
+
+    const PART = path.join(
+      ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'checkpoint-continuation-prompt.md',
+    );
+
+    /**
+     * Step 6 of checkpoint_handling plus the part it points at. The prompt lives
+     * in the part because execute-phase.md sits under a frozen ADR-857 byte
+     * ceiling — the same reason `stale-reverification.md` is a part. What this
+     * guard cares about is that ONE authoritative prompt exists and that no
+     * unshipped template is named; which of the two files carries it is a size
+     * decision, not a contract one.
+     */
+    function spawnStep() {
+      const text = fs.readFileSync(WORKFLOW, 'utf8');
+      const start = text.indexOf('6. **Spawn continuation agent (NOT resume)**');
+      assert.notEqual(start, -1, 'the continuation-agent spawn step is gone — this guard is pointed at nothing');
+      const rest = text.slice(start);
+      const end = rest.indexOf('\n7. ');
+      const spine = rest.slice(0, end === -1 ? rest.length : end);
+      assert.match(spine, /checkpoint-continuation-prompt\.md/,
+        'the spine step must point at the part that carries the prompt');
+      return `${spine}\n${fs.readFileSync(PART, 'utf8')}`;
+    }
+
+    __contTest('does not send the agent to a template file that is not shipped', () => {
+      // `templates/continuation-prompt.md` was deleted in January 2026 and the
+      // instruction naming it survived for eight months. Nothing failed at
+      // runtime — each lane improvised the prompt around the four values
+      // below — which is why only a text guard can catch it.
+      const step = spawnStep();
+      const named = [...step.matchAll(/`?\b([A-Za-z0-9][A-Za-z0-9._-]*\.md)`?\s+template\b/g)].map((m) => m[1]);
+      const missing = named.filter((name) => ![
+        path.join(ROOT, 'gsd-core', 'references', name),
+        path.join(ROOT, 'gsd-core', 'templates', name),
+        path.join(ROOT, 'gsd-core', 'workflows', name),
+      ].some((p) => fs.existsSync(p)));
+      assert.deepEqual(missing, [],
+        `the continuation-agent step names template file(s) that do not ship: ${missing.join(', ')}`);
+    });
+
+    __contTest('carries the prompt inline, with every contracted placeholder', () => {
+      // Criterion 3 of the issue: the four values stay supported exactly as
+      // named, so no lane reading them silently breaks. The fenced block is
+      // what makes the prompt authoritative rather than reconstructed per lane.
+      const step = spawnStep();
+      // scanFencedBlocks, not a local fence regex: same seam this file already
+      // imports, and what local/no-adhoc-markdown-parsing requires.
+      const fenced = scanFencedBlocks(step.split('\n')).filter((b) => b.closeLineIdx !== -1);
+      assert.ok(fenced.length >= 1, 'the spawn step must carry the prompt itself, not a pointer to one');
+      for (const placeholder of PLACEHOLDERS) {
+        assert.ok(step.includes(placeholder), `contracted placeholder missing: ${placeholder}`);
+      }
+    });
+  });
+}
