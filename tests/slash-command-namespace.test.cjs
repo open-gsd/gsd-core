@@ -1171,6 +1171,7 @@ describe('bug #3683 — workflow/reference colon-namespace leak (Claude local in
     'plan-revision-conflicts',  // <!-- gsd:plan-revision-conflicts:begin --> / :end
     'live-dom-families',        // <!-- gsd:live-dom-families -->
     'write-continue',           // <!-- gsd:write-continue … -->
+    'ui-interaction-capture',   // <!-- gsd:ui-interaction-capture --> / <!-- /gsd:ui-interaction-capture -->
   ]);
   const BARE_MARKER_TOKENS = new Set([
     'guard',      // `# gsd:guard=orchestrator-cwd-drift`
