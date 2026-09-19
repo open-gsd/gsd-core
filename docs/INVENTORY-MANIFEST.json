@@ -419,6 +419,7 @@
       "gap-checker.cjs",
       "gate-predicate-evaluator.cjs",
       "git-base-branch.cjs",
+      "git-scope-commits.cjs",
       "graphify-command-router.cjs",
       "graphify.cjs",
       "gsd2-import.cjs",

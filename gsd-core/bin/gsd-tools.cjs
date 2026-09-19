@@ -349,6 +349,7 @@ const { routeCheckCommand } = require('./lib/check-command-router.cjs');
 const { routeTaskCommand } = require('./lib/task-command-router.cjs');
 const { parseNamedArgsOrExit, parseMultiwordArg } = require('./lib/command-arg-projection.cjs');
 const { cmdGitBaseBranch } = require('./lib/git-base-branch.cjs');
+const { cmdGitScopeCommits, resolveLogDir } = require('./lib/git-scope-commits.cjs');
 const { getEffectiveAuthority, classifyDriftSeverity, comparePhaseStatus } = require('./lib/plan-drift-guard.cjs');
 
 // ─── Bridge collapsed (Phase 4) ────────────────────────────────────────────────
@@ -751,9 +752,17 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
   function routeGit({ args, cwd }) {
     const subcommand = args[1];
+    if (subcommand === 'scope-commits') {
+      // `cwd` here is the resolved PROJECT ROOT, which for a linked worktree is the main
+      // worktree — a different HEAD. The caller derives --range in its own shell against its
+      // own HEAD, so the log is read where the caller stands when that is a worktree of the
+      // same repository, and at the resolved root otherwise (#4661) — see resolveLogDir.
+      cmdGitScopeCommits(resolveLogDir(cwd, process.cwd()), args.slice(2));
+      return;
+    }
     if (subcommand !== 'base-branch') {
       error(
-        `Unknown git subcommand: ${subcommand || '(none)'}. Available: base-branch`,
+        `Unknown git subcommand: ${subcommand || '(none)'}. Available: base-branch, scope-commits`,
         ERROR_REASON.SDK_UNKNOWN_COMMAND,
       );
       return;

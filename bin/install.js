@@ -9069,6 +9069,11 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     try { fs.unlinkSync(path.join(targetDir, 'scripts', gen)); } catch (_) { /* best-effort */ }
   }
 
+  // Remove scripts/release-notes/conventional-title.cjs (#4661) and its directory when that
+  // empties it — a leftover subdirectory would keep the scripts/ rmdir below from firing.
+  try { fs.unlinkSync(path.join(targetDir, 'scripts', 'release-notes', 'conventional-title.cjs')); } catch (_) { /* best-effort */ }
+  try { fs.rmdirSync(path.join(targetDir, 'scripts', 'release-notes')); } catch (_) { /* non-empty or absent */ }
+
   // If scripts/ dir is now empty, remove it too
   const scriptsUninstallDir = path.join(targetDir, 'scripts');
   if (fs.existsSync(scriptsUninstallDir)) {
@@ -10112,6 +10117,12 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
     manifest.files['scripts/fix-slash-commands.cjs'] = fileHash(fixSlashInstallPath);
   }
 
+  // Track scripts/release-notes/conventional-title.cjs (#4661) — not covered by the changeset/lib loops.
+  const conventionalTitleInstallPath = path.join(configDir, 'scripts', 'release-notes', 'conventional-title.cjs');
+  if (fs.existsSync(conventionalTitleInstallPath)) {
+    manifest.files['scripts/release-notes/conventional-title.cjs'] = fileHash(conventionalTitleInstallPath);
+  }
+
   // Track the capability registry generator scripts (#1920) — top-level scripts/ files
   // not covered by the changeset/lib loops.
   for (const gen of ['gen-capability-registry.cjs', 'gen-loop-host-contract.cjs']) {
@@ -11052,7 +11063,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // gsd-core/CHANGELOG.md is sourced from the repo root (not src/gsd-core)
     // and gsd-core/.gsd-runtime is generated at install time — neither appears
     // in the directory walks, so record them explicitly.
-    for (const standalone of ['gsd-core/CHANGELOG.md', 'gsd-core/.gsd-runtime', 'scripts/fix-slash-commands.cjs', 'scripts/gen-capability-registry.cjs', 'scripts/gen-loop-host-contract.cjs']) {
+    for (const standalone of ['gsd-core/CHANGELOG.md', 'gsd-core/.gsd-runtime', 'scripts/fix-slash-commands.cjs', 'scripts/gen-capability-registry.cjs', 'scripts/gen-loop-host-contract.cjs', 'scripts/release-notes/conventional-title.cjs']) {
       if (codexPreInstallManagedFiles.has(standalone)) continue;
       const resolved = resolveInstallRelativePath(targetDir, standalone);
       if (!resolved) continue;
@@ -12277,6 +12288,27 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
         if (!verifyFileInstalled(genDest, `scripts/${gen}`)) {
           failures.push(`scripts/${gen}`);
         }
+      }
+    }
+  }
+
+  // Copy scripts/release-notes/conventional-title.cjs — required by
+  // gsd-core/bin/lib/git-scope-commits.cjs at load time, and gsd-tools.cjs requires that
+  // module unconditionally, so without this file every gsd-tools command crashes with
+  // MODULE_NOT_FOUND. Same class of gap as #1223, copied unconditionally for the same
+  // reason. The file stays under scripts/ because the PR-title CI gate loads it straight
+  // after checkout, with no install and no build; shipping it is what lets /gsd:undo read
+  // commit subjects through that one matcher instead of a second copy of it (#4661).
+  {
+    const titleSrc = path.join(src, 'scripts', 'release-notes', 'conventional-title.cjs');
+    const titleDest = path.join(targetDir, 'scripts', 'release-notes', 'conventional-title.cjs');
+    fs.mkdirSync(path.dirname(titleDest), { recursive: true });
+    if (!fs.existsSync(titleSrc)) {
+      failures.push('scripts/release-notes/conventional-title.cjs (source missing from package — reinstall from npm)');
+    } else {
+      fs.copyFileSync(titleSrc, titleDest);
+      if (!verifyFileInstalled(titleDest, 'scripts/release-notes/conventional-title.cjs')) {
+        failures.push('scripts/release-notes/conventional-title.cjs');
       }
     }
   }

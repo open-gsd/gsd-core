@@ -569,5 +569,6 @@
   "scripts/lib/npm-version-check-diagnosis.cjs",
   "scripts/lib/platform-conformance-tier.generated.cjs",
   "scripts/lib/shellcheck-fetch.cjs",
-  "scripts/lib/suite-detection.cjs"
+  "scripts/lib/suite-detection.cjs",
+  "scripts/release-notes/conventional-title.cjs"
 ]

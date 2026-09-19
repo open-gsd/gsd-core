@@ -183,7 +183,7 @@ const RULES = [
     match: path =>
       ['hooks/', 'commands/', 'agents/', 'skills/', 'gsd-core/workflows/', 'gsd-core/templates/', 'gsd-core/references/', 'gsd-core/contexts/', 'scripts/changeset/', 'scripts/lib/'].some(p => path.startsWith(p)) ||
       (path.startsWith('gsd-core/bin/shared/') && path.endsWith('.json')) ||
-      ['scripts/fix-slash-commands.cjs', 'scripts/gen-capability-registry.cjs', 'scripts/gen-loop-host-contract.cjs'].includes(path),
+      ['scripts/fix-slash-commands.cjs', 'scripts/gen-capability-registry.cjs', 'scripts/gen-loop-host-contract.cjs', 'scripts/release-notes/conventional-title.cjs'].includes(path),
     tests: [
       'tests/golden-install-tree.test.cjs',
       'tests/emitted-provenance.test.cjs',

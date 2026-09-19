@@ -161,17 +161,15 @@ describe('#4465: undo commit selection is bounded', () => {
     );
   });
 
-  test('K: selection pipelines tolerate an empty match', () => {
-    // grep exits 1 on no match. The removed `| head -50` used to mask that rc, so the
-    // pipelines must not now abort before the workflow's own Empty check runs.
-    const selectionBlocks = extractBashBlocks(content).filter(
-      (b) => /git log --oneline --no-merges "\$\{UNDO_RANGE\}"/.test(b),
-    );
-    assert.equal(selectionBlocks.length, 2, 'expected one bounded selection pipeline per mode');
-    for (const block of selectionBlocks) {
+  test('K: no selection fence pipes git log into grep', () => {
+    // #4465 required `|| true` here because grep exits 1 on no match. #4661 removed the
+    // pipeline outright: `git scope-commits` exits 0 on an empty selection, which the
+    // executed half asserts ("an empty selection exits 0"). What stays pinned as text is
+    // that the pipeline does not come back.
+    for (const block of extractBashBlocks(content)) {
       assert.ok(
-        /\|\| true/.test(block),
-        `every selection pipeline must tolerate grep's no-match exit (#4465). Block:\n${block}`,
+        !/git log[^\n]*\|\s*grep/.test(block),
+        `commit selection must not be a git-log|grep pipeline (#4661). Block:\n${block}`,
       );
     }
   });
@@ -197,13 +195,15 @@ describe('#4465: undo commit selection is bounded', () => {
     );
   });
 
-  test('F: selection greps run against the bounded range, not the whole repo', () => {
-    const selectionBlocks = extractBashBlocks(content).filter((b) => /grep -E/.test(b));
-    assert.ok(selectionBlocks.length >= 2, 'expected a selection grep for each of --phase and --plan');
+  test('F: commit selection runs against the bounded range, not the whole repo', () => {
+    // #4661 moved selection from a `grep -E` pipeline to `git scope-commits`; the #4465
+    // property is unchanged — whatever selects must be handed ${UNDO_RANGE}.
+    const selectionBlocks = extractBashBlocks(content).filter((b) => /git scope-commits/.test(b));
+    assert.ok(selectionBlocks.length >= 2, 'expected a selection call for each of --phase and --plan');
     for (const block of selectionBlocks) {
       assert.ok(
-        /\$\{UNDO_RANGE\}/.test(block),
-        `every commit-selection grep must run over \${UNDO_RANGE} (#4465). Block:\n${block}`,
+        /--range "\$\{UNDO_RANGE\}"/.test(block),
+        `every commit selection must run over \${UNDO_RANGE} (#4465). Block:\n${block}`,
       );
     }
   });
@@ -365,12 +365,12 @@ describe('#4465: undo commit selection — executed against a git fixture', { sk
   const phaseAnchor = fenceWhere(bodies, 'phase anchor',
     (b) => b.includes('PHASE_START=$(') && !b.includes('PLAN_PHASE'));
   const phaseSelect = fenceWhere(bodies, 'phase select',
-    (b) => b.includes('grep -E "\\(0*${TARGET_PHASE}'));
+    (b) => b.includes('git scope-commits --phase "${TARGET_PHASE}"'));
   // gather_commits, MODE=plan: resolve+anchor → select
   const planAnchor = fenceWhere(bodies, 'plan resolve+anchor',
     (b) => b.includes('PLAN_PHASE="${TARGET_PLAN%%-*}"'));
   const planSelect = fenceWhere(bodies, 'plan select',
-    (b) => b.includes('grep -E "\\(${TARGET_PLAN}\\):"'));
+    (b) => b.includes('git scope-commits --plan "${TARGET_PLAN}"'));
   // dependency_check: planning-root resolution
   const planningRoot = fenceWhere(bodies, 'planning root',
     (b) => b.includes('PLANNING_DIR=$(gsd_run query planning inspect'));
@@ -802,7 +802,9 @@ describe('#4465: undo commit selection — executed against a git fixture', { sk
     // would run forward from it -- the exact contamination the refusal exists for.
     const cwd = workstreamArchiveFixture({ recreate: false });
     t.after(() => cleanup(cwd));
-    const stub = 'gsd_run() { echo ".planning/milestones/ws-feat-2026-09-01/phases/03-auth"; }';
+    // Narrowed to find-phase (#4661): selection now goes through gsd_run too, and a stub that
+    // answers every verb with a path would hand that path to the selection assertion below.
+    const stub = 'gsd_run() { if [ "$2" = find-phase ]; then echo ".planning/milestones/ws-feat-2026-09-01/phases/03-auth"; else node "$GSD_TOOLS_BIN" "$@"; fi; }';
     const report = 'printf "ARCHIVED=[%s]\\nPHASE_DIR=[%s]\\nUNDO_RANGE=[%s]\\n" "$PHASE_DIR_ARCHIVED" "$PHASE_DIR" "$UNDO_RANGE"';
     for (const [seed, fences] of [
       ['TARGET_PHASE=03', [stub, phaseResolve, phaseArchivedGuard, phaseAnchor, phaseSelect]],

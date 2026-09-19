@@ -225,10 +225,18 @@ Select within the window. **No `--all`:** only commits reachable from `HEAD` may
 reverted, because reverting a commit that is not in the current branch's history stages a
 change the branch never received.
 
+Membership is decided by the scope a commit **declares**, never by a pattern built from
+`TARGET_PHASE`. `git scope-commits` reads each subject through the repository's one
+conventional-header matcher and compares the extracted scope to the id as a value, so a
+dotted id's `.` is not a wildcard, `03+` is not an operator, and a subject that merely
+quotes `feat(03-01):` belongs to whatever scope it opens with. `fixup!`, `squash!`,
+`amend!`, `Revert "` and `Reapply "` subjects are unwrapped first and selected with the commit they
+wrap — dropping them is the silent partial revert the truncation rule below exists to refuse.
+
 ```bash
-# `|| true`: grep exits 1 on no match. The former `| head -50` masked that rc; the empty
-# case is handled by the Empty check step below, so the pipeline must not abort here.
-git log --oneline --no-merges "${UNDO_RANGE}" | grep -E "\(0*${TARGET_PHASE}(-[0-9]+)?\):" || true
+# Prints `<abbrev-sha> <subject>` per selected commit, newest first; nothing on an empty
+# selection (rc 0) -- the Empty check step below owns that case.
+gsd_run query git scope-commits --phase "${TARGET_PHASE}" --range "${UNDO_RANGE}"
 ```
 
 Use matching commits as COMMITS.
@@ -302,8 +310,8 @@ and the same three refusals, each with its own message, when `PHASE_DIR_ARCHIVED
 `PHASE_DIR_FOREIGN` or `PHASE_DIR_REUSED` is non-empty — then select within the window:
 
 ```bash
-# `|| true` for the same reason as MODE=phase: an empty selection is not an error here.
-git log --oneline --no-merges "${UNDO_RANGE}" | grep -E "\(${TARGET_PLAN}\):" || true
+# Same owner as MODE=phase, so the two modes cannot disagree about one commit's scope.
+gsd_run query git scope-commits --plan "${TARGET_PLAN}" --range "${UNDO_RANGE}"
 ```
 
 Use matching commits as COMMITS.
