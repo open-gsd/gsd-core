@@ -40,12 +40,34 @@ export function findProjectRoot(startDir: string): string {
     // fall through
   }
 
+  // A directory reached only by FOLLOWING a symlink is not part of the same
+  // logical repo tree as its lexical parent — a `.git` found by resolving
+  // through it belongs to whatever the symlink points at, not to an ancestor
+  // of `d` in any real sense. `fs.lstatSync` (unlike `fs.statSync`/
+  // `fs.existsSync`) does not dereference its final path component, so it is
+  // the correct check for "is `d` ITSELF a symlink" without following it.
+  // Fixes: a `.planning` symlinked to an externally git-managed store (the
+  // documented "keep planning content out of the tracked repo" convention)
+  // has that external store's OWN `.git` sitting at exactly `d === <the
+  // .planning symlink path>` during the walk below. Without this guard,
+  // `fs.existsSync(d + '/.git')` transparently follows the symlink, finds
+  // that unrelated `.git`, and both isInsideGitRepo/nearestGitRoot misread
+  // it as a crossed nested-child-repo boundary (#2843's guard) — when it is
+  // really just a hop into a deliberately separate, non-ancestor tree.
+  function isSymlinkPath(d: string): boolean {
+    try {
+      return fs.lstatSync(d).isSymbolicLink();
+    } catch {
+      return false;
+    }
+  }
+
   // Walk upward, mirroring isInsideGitRepo from the CJS reference.
   function isInsideGitRepo(candidateParent: string): boolean {
     let d = resolvedStart;
     while (d !== fsRoot) {
       try {
-        if (fs.existsSync(d + path.sep + '.git')) return true;
+        if (!isSymlinkPath(d) && fs.existsSync(d + path.sep + '.git')) return true;
       } catch {
         // ignore
       }
@@ -70,7 +92,7 @@ export function findProjectRoot(startDir: string): string {
     while (d !== fsRoot) {
       if (d === upTo) break;
       try {
-        if (fs.existsSync(d + path.sep + '.git')) return d;
+        if (!isSymlinkPath(d) && fs.existsSync(d + path.sep + '.git')) return d;
       } catch {
         // ignore
       }

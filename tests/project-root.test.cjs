@@ -315,4 +315,55 @@ describe('findProjectRoot nearest-.planning resolution (#1414)', () => {
     assert.strictEqual(result, tmpDir,
       'a co-located .git + .planning (single-repo project) must still resolve to the project root');
   });
+
+  // Regression for the symlinked-.planning case (the documented
+  // ".planning symlinked to an externally git-managed store" convention —
+  // e.g. `.planning -> ~/.gsd-external-planning/<project>/`, itself a
+  // separate git repo, used to keep planning content out of the tracked
+  // project repo). #2843's isInsideGitRepo/nearestGitRoot walk checks
+  // `d + '/.git'` via fs.existsSync, which — when `d` is exactly the
+  // symlinked `.planning` path — transparently follows the symlink and
+  // finds the EXTERNAL store's own `.git`. That gets misread as "a nested
+  // child repo boundary between startDir and the ancestor", so the walk
+  // refuses to trust the real project's `.planning/` and falls all the
+  // way back to returning startDir itself — even though the caller's own
+  // repo (`tmpDir/.git`) is a completely normal, uncrossed, co-located
+  // project boundary with no real nested-repo ambiguity at all.
+  test('a .planning symlink into an externally git-managed store must not be treated as a crossed child-repo boundary', () => {
+    // tmpDir/                          (the real project — has its own .git)
+    //   .git/
+    //   .planning -> externalStore/    (symlink; target has ITS OWN .git)
+    //   src/lib/                       ← startDir
+    // externalStore/                   (sibling directory, NOT an ancestor
+    //   .git/                            or descendant of tmpDir)
+    //   phases/01-x/
+    fs.mkdirSync(path.join(tmpDir, '.git'), { recursive: true });
+    const externalStore = mkDeep(tmpDir, '..', 'external-planning-store');
+    fs.mkdirSync(path.join(externalStore, '.git'), { recursive: true });
+    fs.mkdirSync(path.join(externalStore, 'phases', '01-x'), { recursive: true });
+    fs.symlinkSync(externalStore, path.join(tmpDir, '.planning'), 'dir');
+    const startDir = mkDeep(tmpDir, 'src', 'lib');
+
+    const result = findProjectRoot(startDir);
+    assert.strictEqual(result, tmpDir,
+      'a .planning symlinked to an externally git-managed store must still resolve to the ' +
+      `real project root (tmpDir), not fall back to startDir. Got: ${result}`);
+  });
+
+  test('a .planning symlink into an externally git-managed store resolves correctly from inside the symlinked tree itself', () => {
+    // Same shape as above, but startDir is a path INSIDE the symlinked
+    // .planning/ (e.g. a phase directory) — the shape verification.cjs's
+    // computeCoveredDigest actually invokes findProjectRoot with.
+    fs.mkdirSync(path.join(tmpDir, '.git'), { recursive: true });
+    const externalStore = mkDeep(tmpDir, '..', 'external-planning-store-2');
+    fs.mkdirSync(path.join(externalStore, '.git'), { recursive: true });
+    fs.mkdirSync(path.join(externalStore, 'phases', '01-x'), { recursive: true });
+    fs.symlinkSync(externalStore, path.join(tmpDir, '.planning'), 'dir');
+    const startDir = path.join(tmpDir, '.planning', 'phases', '01-x');
+
+    const result = findProjectRoot(startDir);
+    assert.strictEqual(result, tmpDir,
+      'invoking from inside the symlinked .planning/ tree (e.g. a phase directory, ' +
+      `matching computeCoveredDigest's real call shape) must still resolve to tmpDir. Got: ${result}`);
+  });
 });
