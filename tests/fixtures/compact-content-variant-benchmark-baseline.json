@@ -23,9 +23,9 @@
       "reductionPct": 20.79
     },
     "agents/gsd-code-fixer.md": {
-      "offTokens": 10774,
-      "onTokens": 6720,
-      "reductionPct": 37.63
+      "offTokens": 10835,
+      "onTokens": 6781,
+      "reductionPct": 37.42
     },
     "agents/gsd-code-reviewer.md": {
       "offTokens": 4408,
@@ -38,9 +38,9 @@
       "reductionPct": 9.76
     },
     "agents/gsd-debug-session-manager.md": {
-      "offTokens": 5027,
-      "onTokens": 4738,
-      "reductionPct": 5.75
+      "offTokens": 5088,
+      "onTokens": 4799,
+      "reductionPct": 5.68
     },
     "agents/gsd-doc-classifier.md": {
       "offTokens": 2901,
@@ -73,9 +73,9 @@
       "reductionPct": 17.83
     },
     "agents/gsd-eval-auditor.md": {
-      "offTokens": 2941,
-      "onTokens": 2808,
-      "reductionPct": 4.52
+      "offTokens": 3002,
+      "onTokens": 2869,
+      "reductionPct": 4.43
     },
     "agents/gsd-eval-planner.md": {
       "offTokens": 1674,
@@ -93,9 +93,9 @@
       "reductionPct": 42.1
     },
     "agents/gsd-intel-updater.md": {
-      "offTokens": 4353,
-      "onTokens": 4115,
-      "reductionPct": 5.47
+      "offTokens": 4414,
+      "onTokens": 4176,
+      "reductionPct": 5.39
     },
     "agents/gsd-mempalace-curator.md": {
       "offTokens": 1160,
@@ -113,14 +113,14 @@
       "reductionPct": 15.37
     },
     "agents/gsd-project-researcher.md": {
-      "offTokens": 5464,
-      "onTokens": 5135,
-      "reductionPct": 6.02
+      "offTokens": 5525,
+      "onTokens": 5196,
+      "reductionPct": 5.95
     },
     "agents/gsd-research-synthesizer.md": {
-      "offTokens": 3122,
-      "onTokens": 2917,
-      "reductionPct": 6.57
+      "offTokens": 3183,
+      "onTokens": 2978,
+      "reductionPct": 6.44
     },
     "agents/gsd-roadmapper.md": {
       "offTokens": 6008,
@@ -133,9 +133,9 @@
       "reductionPct": 10.54
     },
     "agents/gsd-ui-auditor.md": {
-      "offTokens": 4145,
+      "offTokens": 6729,
       "onTokens": 3926,
-      "reductionPct": 5.28
+      "reductionPct": 41.66
     },
     "agents/gsd-ui-checker.md": {
       "offTokens": 4499,
@@ -143,9 +143,9 @@
       "reductionPct": 32.25
     },
     "agents/gsd-ui-researcher.md": {
-      "offTokens": 5432,
-      "onTokens": 4815,
-      "reductionPct": 11.36
+      "offTokens": 5493,
+      "onTokens": 4876,
+      "reductionPct": 11.23
     },
     "agents/gsd-user-profiler.md": {
       "offTokens": 1859,
@@ -169,8 +169,8 @@
     }
   },
   "aggregate": {
-    "offTokens": 118975,
-    "onTokens": 94626,
-    "reductionPct": 20.47
+    "offTokens": 121986,
+    "onTokens": 95053,
+    "reductionPct": 22.08
   }
 }
