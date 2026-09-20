@@ -241,9 +241,11 @@ describe('execute-phase completion reconciliation (#4217 — split A of #3754)',
     });
 
     test('host stays under the frozen ADR-857 Phase 6 ceiling (#1168)', () => {
+      // #4030 raised this ceiling from 93600 to 93700 — see
+      // tests/phase6-capstone-conformance.test.cjs's PRE_PHASE6 map for the rationale.
       const { lfByteCount } = require('../scripts/workflow-size.cjs');
       const bytes = lfByteCount(WORKFLOW_PATH);
-      assert.ok(bytes < 93600, `execute-phase.md must stay below the frozen pre-phase-6 ceiling (93600); got ${bytes}`);
+      assert.ok(bytes < 93700, `execute-phase.md must stay below the frozen pre-phase-6 ceiling (93700); got ${bytes}`);
     });
 
     test('fragment keeps the #4003 anchored commit-scope probe and dispatch bound', () => {

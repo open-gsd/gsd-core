@@ -1794,9 +1794,14 @@ describe('H. the workflow-backend-dispatch doc documents concrete manifest const
     // frozen ceiling just gets re-tripped by growth this PR does not own (#4148
     // review history) — the tier hard cap in workflow-size-budget.test.cjs (98304
     // bytes, "extract, not bump") is the correct backstop for that.
+    //
+    // #4030 raised this ceiling from 93600 to 93700 for the same reason as
+    // tests/phase6-capstone-conformance.test.cjs's PRE_PHASE6 map: threading
+    // `--phase "${PHASE_NUMBER}"` through this file's loop render-hooks call
+    // sites is lifecycle-hook dispatch wiring, not an un-extracted feature.
     const { lfByteCount } = require('../scripts/workflow-size.cjs');
     const bytes = lfByteCount(WORKFLOW_PATH);
-    assert.ok(bytes < 93600, `execute-phase.md must stay below the frozen pre-phase-6 ceiling (93600); got ${bytes}`);
+    assert.ok(bytes < 93700, `execute-phase.md must stay below the frozen pre-phase-6 ceiling (93700); got ${bytes}`);
   });
 });
 
