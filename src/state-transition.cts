@@ -18,7 +18,7 @@
 import frontmatter = require('./frontmatter.cjs');
 import { stateReplaceField, stateExtractField, stateReplaceFieldIfTemplate, stateReplaceFieldWithFallback, stateReplaceFieldInSession, stateCurrentPositionSlice } from './state-document.cjs';
 import { KNOWN_TEMPLATE_DEFAULTS, toFiniteNumber, computeProgressPercent } from './state-document.cjs';
-import { tokenizeHeadings } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, withSection } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { deriveProgressFromRoadmap, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
 import { escapeRegex } from './pattern.cjs';
@@ -2145,8 +2145,26 @@ function completePhaseCore(
     updated.push('Status');
   }
 
-  // Current Plan — reset for the next phase.
-  const planAfter = stateReplaceFieldWithFallback(body, 'Current Plan', 'Plan', 'Not started');
+  // Current Plan — reset for the next phase. #4823: when a Current Position
+  // section exists (the canonical layout, #2956 locator), the reset is scoped
+  // to it — the whole-body fallback 'Plan' run matched any hard-wrapped prose
+  // line starting with `plan:` anywhere in the document and rewrote it to
+  // 'Not started', silently destroying narrative. Legacy sectionless layouts
+  // (fields at top level, no section) keep the whole-body behavior unchanged:
+  // there is no section to scope to, and their fields are the intended
+  // targets.
+  let planAfter;
+  const positionScope = stateCurrentPositionSlice(body);
+  if (positionScope !== null) {
+    planAfter = withSection(
+      body,
+      (h) => (h.level === 2 || h.level === 3) && h.text.trim().toLowerCase() === 'current position',
+      (sectionBody) => stateReplaceFieldWithFallback(sectionBody, 'Current Plan', 'Plan', 'Not started'),
+      { levelBounded: true },
+    );
+  } else {
+    planAfter = stateReplaceFieldWithFallback(body, 'Current Plan', 'Plan', 'Not started');
+  }
   if (planAfter !== body) {
     body = planAfter;
     updated.push('Current Plan');
