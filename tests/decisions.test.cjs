@@ -2795,8 +2795,14 @@ describe('parseDecisions hardening — regex lattice pins the mechanism (#4130 f
     // `[^*—–]*[—–]` has exactly one. The narrowing is behavior-preserving
     // because every candidate dash lies before the first `*` and the second
     // `[^*]*` scan reaches that same first star from any candidate.
-    assert.ok(emDashSrc.includes('[^*—–]*[—–]'),
-      `bulletEmDashRe must use the narrowed first separator:\n${emDashSrc}`);
+    //
+    // #4788 makes the leading run code-span-aware (`\u0060` = escaped backtick
+    // in the template): the class-only branch keeps the dash exclusion, so a
+    // dash-laden title WITHOUT spans still has exactly one viable split, and a
+    // span-internal dash is never a separator candidate — the span branch
+    // consumes it atomically. The #4130 no-re-split property is preserved.
+    assert.ok(emDashSrc.includes('[^*—–\\u0060])*[—–]'),
+      `bulletEmDashRe must use the span-aware narrowed first separator:\n${emDashSrc}`);
     assert.ok(!emDashSrc.includes('[^*]*[—–]'),
       `bulletEmDashRe must not retain the overlapping first separator:\n${emDashSrc}`);
   });
