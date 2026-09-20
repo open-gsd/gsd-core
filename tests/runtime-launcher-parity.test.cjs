@@ -315,6 +315,40 @@ function delegatesToResolverReference(content) {
   return content.includes('references/gsd-run-resolver.md');
 }
 
+/**
+ * Write the identity-proving LOCAL install stub shared by the #4834 fixtures:
+ * a `gsd-tools.cjs` at `<dir>/.claude/gsd-core/bin/` that answers
+ * `runtime-identity --raw` like a real same-package install and prints
+ * `LOCAL:<args>` for every other verb. Returns the bin dir.
+ */
+function writeIdentityLocalStub(homeDir) {
+  const localBin = path.join(homeDir, '.claude', 'gsd-core', 'bin');
+  fs.mkdirSync(localBin, { recursive: true });
+  fs.writeFileSync(
+    path.join(localBin, 'gsd-tools.cjs'),
+    '#!/usr/bin/env node\n' +
+      'const a = process.argv.slice(2);\n' +
+      'if (a[0] === "runtime-identity" && a[1] === "--raw") {\n' +
+      '  console.log(\'{"packageName":"@opengsd/gsd-core","version":"1.14.0-test"}\');\n' +
+      '} else {\n' +
+      '  console.log("LOCAL:" + a.join(","));\n' +
+      '}\n',
+  );
+  fs.chmodSync(path.join(localBin, 'gsd-tools.cjs'), 0o755);
+  return localBin;
+}
+
+/**
+ * Write a FOREIGN/older `gsd_run` stub (no `runtime-identity` verb) into
+ * `dir` — the #4834 hijacker. Returns `dir` for PATH construction.
+ */
+function writeForeignGsdRun(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'gsd_run'), '#!/bin/sh\necho "FOREIGN:$*"\n');
+  fs.chmodSync(path.join(dir, 'gsd_run'), 0o755);
+  return dir;
+}
+
 describe('runtime-launcher-parity (#373)', () => {
   // ─── (#3146) Deliberate bootstrap-only preamble placement is preserved ────
   test('sync preserves a deliberate bootstrap-only preamble placement (#3146)', () => {
@@ -687,69 +721,125 @@ describe('runtime-launcher-parity (#373)', () => {
     // verb falls through so the local install resolves instead.
     const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-home-'));
     const fakeRuntime = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-rt-'));
-    const foreignBin = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-foreign-'));
-    try {
-      // Local install at the config home: proves identity, answers verbs.
-      const localBin = path.join(fakeHome, '.claude', 'gsd-core', 'bin');
-      fs.mkdirSync(localBin, { recursive: true });
+    const foreignBin = writeForeignGsdRun(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-foreign-')));
+    writeIdentityLocalStub(fakeHome);
+    t.after(() => { cleanup(fakeHome); cleanup(fakeRuntime); cleanup(foreignBin); });
+
+    const snippet = fs.readFileSync(SNIPPET_FILE, 'utf8');
+    const scriptContent =
+      `unset GSD_TOOLS\n` +
+      `export RUNTIME_DIR=${JSON.stringify(fakeRuntime)}\n` +
+      `export HOME=${JSON.stringify(fakeHome)}\n` +
+      snippet +
+      `\nprintf "GSD_TOOLS=%s\\n" "$GSD_TOOLS"\n` +
+      `gsd_run query git.base-branch --is-protected master\n`;
+
+    const scriptPath = path.join(fakeRuntime, 'test-4834-hijack.sh');
+    fs.writeFileSync(scriptPath, scriptContent);
+
+    const { isolatedPath, nodeBinDir } = buildIsolatedPath();
+    t.after(() => cleanup(nodeBinDir));
+    const testPath = [foreignBin, isolatedPath].join(path.delimiter);
+
+    const stdout = runBashFile(scriptPath, {
+      env: { PATH: testPath, HOME: fakeHome },
+    });
+
+    const normStdout = stdout.replace(/\\/g, '/');
+    assert.ok(
+      normStdout.includes('.claude/gsd-core/bin/'),
+      `Expected GSD_TOOLS to resolve into the local install at .claude/gsd-core/bin/, got:\n${stdout.trim()}`,
+    );
+    // The issue's downstream contract: the LOCAL tool is what answers
+    // `query git.base-branch --is-protected` (a real 1.14.0 tool then honors
+    // git.allow_default_branch_commits — pinned end to end by (K2)).
+    assert.ok(
+      stdout.includes('LOCAL:query,git.base-branch,--is-protected,master'),
+      `Expected the local tool to answer the query, got:\n${stdout.trim()}`,
+    );
+    assert.ok(
+      !stdout.includes('FOREIGN:'),
+      `Expected the foreign PATH stub never to be invoked, got:\n${stdout.trim()}`,
+    );
+  });
+
+  // ─── (K2) end-to-end: the resolved local tool honors the override (#4834) ──
+  test('(K2) end-to-end: the resolved local tool honors git.allow_default_branch_commits (#4834)', (t) => {
+    // The issue's console repro with the REAL gsd-tools: a foreign gsd_run
+    // first on PATH, the real binary installed at the config home, a temp
+    // project on its default branch `master`. With the override set, the
+    // launcher must reach the real local tool and report `master` as NOT
+    // protected; without the override the same tool reports it protected —
+    // the control that keeps the assertion from passing vacuously. Before
+    // #4834 the FOREIGN tool answered here, predating the override, and the
+    // executor's pre-commit guard refused the commit.
+    const { createTempGitProject, cleanup: cleanupDir } = require('./helpers.cjs');
+    const project = createTempGitProject('gsd-4834-k2-');
+    const projectControl = createTempGitProject('gsd-4834-k2c-');
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-k2-home-'));
+    const foreignBin = writeForeignGsdRun(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-k2-path-')));
+    const fakeRuntime = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-k2-rt-'));
+    t.after(() => {
+      cleanupDir(project); cleanupDir(projectControl);
+      cleanup(fakeHome); cleanup(foreignBin); cleanup(fakeRuntime);
+    });
+
+    // Install the REAL tool in the full install shape: gsd-tools.cjs resolves
+    // ensure-runtime-build.cjs and lib/ beside itself, and lib modules reach
+    // repo-root-relative `scripts/` helpers (`../../../scripts/...` from
+    // bin/lib) — so the fixture root plays the repo root: gsd-core/bin plus
+    // the tracked scripts tree beside it.
+    const fixtureRoot = path.join(fakeHome, '.claude');
+    fs.cpSync(path.join(__dirname, '..', 'gsd-core', 'bin'), path.join(fixtureRoot, 'gsd-core', 'bin'), { recursive: true });
+    fs.cpSync(path.join(__dirname, '..', 'scripts'), path.join(fixtureRoot, 'scripts'), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(project, '.planning', 'config.json'),
+      JSON.stringify({ git: { branching_strategy: 'none', allow_default_branch_commits: true } }),
+    );
+    fs.writeFileSync(
+      path.join(projectControl, '.planning', 'config.json'),
+      JSON.stringify({ git: { branching_strategy: 'none' } }),
+    );
+
+    const snippet = fs.readFileSync(SNIPPET_FILE, 'utf8');
+    const runQuery = (cwd) => {
+      const scriptPath = path.join(cwd, 'test-4834-e2e.sh');
       fs.writeFileSync(
-        path.join(localBin, 'gsd-tools.cjs'),
-        '#!/usr/bin/env node\n' +
-          'const a = process.argv.slice(2);\n' +
-          'if (a[0] === "runtime-identity" && a[1] === "--raw") {\n' +
-          '  console.log(\'{"packageName":"@opengsd/gsd-core","version":"1.14.0-test"}\');\n' +
-          '} else {\n' +
-          '  console.log("LOCAL:" + a.join(","));\n' +
-          '}\n',
-      );
-      fs.chmodSync(path.join(localBin, 'gsd-tools.cjs'), 0o755);
-
-      // Foreign/older gsd_run first on PATH: no runtime-identity verb.
-      const foreignStub = path.join(foreignBin, 'gsd_run');
-      fs.writeFileSync(foreignStub, '#!/bin/sh\necho "FOREIGN:$*"\n');
-      fs.chmodSync(foreignStub, 0o755);
-
-      const snippet = fs.readFileSync(SNIPPET_FILE, 'utf8');
-      const scriptContent =
+        scriptPath,
         `unset GSD_TOOLS\n` +
-        `export RUNTIME_DIR=${JSON.stringify(fakeRuntime)}\n` +
-        `export HOME=${JSON.stringify(fakeHome)}\n` +
-        snippet +
-        `\nprintf "GSD_TOOLS=%s\\n" "$GSD_TOOLS"\n` +
-        `gsd_run query git.base-branch --is-protected master\n`;
-
-      const scriptPath = path.join(fakeRuntime, 'test-4834-hijack.sh');
-      fs.writeFileSync(scriptPath, scriptContent);
-
-      const { isolatedPath, nodeBinDir } = buildIsolatedPath();
-      t.after(() => cleanup(nodeBinDir));
+          `export RUNTIME_DIR=${JSON.stringify(fakeRuntime)}\n` +
+          `export HOME=${JSON.stringify(fakeHome)}\n` +
+          `cd ${JSON.stringify(cwd)}\n` +
+          snippet +
+          `\ngsd_run query git.base-branch --is-protected master\n`,
+      );
+      const { isolatedPath, nodeBinDir: nodeDir } = buildIsolatedPath();
+      t.after(() => cleanup(nodeDir));
       const testPath = [foreignBin, isolatedPath].join(path.delimiter);
-
-      const stdout = runBashFile(scriptPath, {
-        env: { PATH: testPath, HOME: fakeHome },
+      return runHookSeam(scriptPath, [], {
+        interpreter: 'bash',
+        env: snippetEnv({ PATH: testPath, HOME: fakeHome }),
       });
+    };
 
-      const normStdout = stdout.replace(/\\/g, '/');
-      assert.ok(
-        normStdout.includes('.claude/gsd-core/bin/'),
-        `Expected GSD_TOOLS to resolve into the local install at .claude/gsd-core/bin/, got:\n${stdout.trim()}`,
-      );
-      // The issue's downstream contract: the LOCAL tool is what answers
-      // `query git.base-branch --is-protected` (a real 1.14.0 tool then honors
-      // git.allow_default_branch_commits — its side of #4834's Actual block).
-      assert.ok(
-        stdout.includes('LOCAL:query,git.base-branch,--is-protected,master'),
-        `Expected the local tool to answer the query, got:\n${stdout.trim()}`,
-      );
-      assert.ok(
-        !stdout.includes('FOREIGN:'),
-        `Expected the foreign PATH stub never to be invoked, got:\n${stdout.trim()}`,
-      );
-    } finally {
-      cleanup(fakeHome);
-      cleanup(fakeRuntime);
-      cleanup(foreignBin);
-    }
+    const withOverride = runQuery(project);
+    assert.equal(withOverride.exitCode, 0, `launcher must resolve and run the local tool: ${(withOverride.stderr || '').trim()}`);
+    const withoutOverride = runQuery(projectControl);
+    assert.equal(withoutOverride.exitCode, 0, `control run must also resolve: ${(withoutOverride.stderr || '').trim()}`);
+
+    // The real tool's own stdout is exactly `false` / `true` (the override is
+    // honored, then the control proves the query can go the other way).
+    assert.equal(
+      withOverride.stdout.trim().split('\n').pop(),
+      'false',
+      `Expected the local tool to honor git.allow_default_branch_commits, got:\n${withOverride.stdout.trim()}`,
+    );
+    assert.equal(
+      withoutOverride.stdout.trim().split('\n').pop(),
+      'true',
+      `Expected the control project to report master as protected, got:\n${withoutOverride.stdout.trim()}`,
+    );
   });
 
   // ─── (D2) identity-gated PATH arm fails closed (#4834) ────────────────────
@@ -760,42 +850,34 @@ describe('runtime-launcher-parity (#373)', () => {
     // terminal the #3146 design names.
     const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-nohome-'));
     const fakeRuntime = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-nort-'));
-    const foreignBin = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-nofx-'));
-    try {
-      const foreignStub = path.join(foreignBin, 'gsd_run');
-      fs.writeFileSync(foreignStub, '#!/bin/sh\necho "FOREIGN:$*"\n');
-      fs.chmodSync(foreignStub, 0o755);
+    const foreignBin = writeForeignGsdRun(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-nofx-')));
+    t.after(() => { cleanup(fakeHome); cleanup(fakeRuntime); cleanup(foreignBin); });
 
-      const snippet = fs.readFileSync(SNIPPET_FILE, 'utf8');
-      const scriptContent =
-        `unset GSD_TOOLS\n` +
-        `export RUNTIME_DIR=${JSON.stringify(fakeRuntime)}\n` +
-        `export HOME=${JSON.stringify(fakeHome)}\n` +
-        snippet +
-        `\ngsd_run ping test\n`;
+    const snippet = fs.readFileSync(SNIPPET_FILE, 'utf8');
+    const scriptContent =
+      `unset GSD_TOOLS\n` +
+      `export RUNTIME_DIR=${JSON.stringify(fakeRuntime)}\n` +
+      `export HOME=${JSON.stringify(fakeHome)}\n` +
+      snippet +
+      `\ngsd_run ping test\n`;
 
-      const scriptPath = path.join(fakeRuntime, 'test-4834-allfail.sh');
-      fs.writeFileSync(scriptPath, scriptContent);
+    const scriptPath = path.join(fakeRuntime, 'test-4834-allfail.sh');
+    fs.writeFileSync(scriptPath, scriptContent);
 
-      const isolated = buildIsolatedPath();
-      t.after(() => cleanup(isolated.nodeBinDir));
-      const testPath = [foreignBin, isolated.isolatedPath].join(path.delimiter);
+    const isolated = buildIsolatedPath();
+    t.after(() => cleanup(isolated.nodeBinDir));
+    const testPath = [foreignBin, isolated.isolatedPath].join(path.delimiter);
 
-      const r = runHookSeam(scriptPath, [], {
-        interpreter: 'bash',
-        env: snippetEnv({ PATH: testPath, HOME: fakeHome }),
-      });
+    const r = runHookSeam(scriptPath, [], {
+      interpreter: 'bash',
+      env: snippetEnv({ PATH: testPath, HOME: fakeHome }),
+    });
 
-      assert.ok(r.exitCode !== 0, 'Expected non-zero exit when only a foreign gsd_run resolves and no local install exists');
-      assert.ok(
-        (r.stderr || '').includes('ERROR: gsd-tools.cjs not found'),
-        `Expected stderr to contain "ERROR: gsd-tools.cjs not found", got: ${(r.stderr || '').trim()}`,
-      );
-    } finally {
-      cleanup(fakeHome);
-      cleanup(fakeRuntime);
-      cleanup(foreignBin);
-    }
+    assert.ok(r.exitCode !== 0, 'Expected non-zero exit when only a foreign gsd_run resolves and no local install exists');
+    assert.ok(
+      (r.stderr || '').includes('ERROR: gsd-tools.cjs not found'),
+      `Expected stderr to contain "ERROR: gsd-tools.cjs not found", got: ${(r.stderr || '').trim()}`,
+    );
   });
 
   // ─── (L) config-home install outranks an identity-proving PATH gsd_run (#4834) ──
@@ -806,71 +888,53 @@ describe('runtime-launcher-parity (#373)', () => {
     const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-l-home-'));
     const fakeRuntime = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-l-rt-'));
     const pathBinDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-l-path-'));
-    try {
-      const localBin = path.join(fakeHome, '.claude', 'gsd-core', 'bin');
-      fs.mkdirSync(localBin, { recursive: true });
-      fs.writeFileSync(
-        path.join(localBin, 'gsd-tools.cjs'),
-        '#!/usr/bin/env node\n' +
-          'const a = process.argv.slice(2);\n' +
-          'if (a[0] === "runtime-identity" && a[1] === "--raw") {\n' +
-          '  console.log(\'{"packageName":"@opengsd/gsd-core","version":"1.14.0-test"}\');\n' +
-          '} else {\n' +
-          '  console.log("LOCAL:" + a.join(","));\n' +
-          '}\n',
-      );
-      fs.chmodSync(path.join(localBin, 'gsd-tools.cjs'), 0o755);
+    writeIdentityLocalStub(fakeHome);
+    fs.mkdirSync(pathBinDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pathBinDir, 'gsd_run'),
+      '#!/bin/sh\n' +
+        'if [ "$1" = "runtime-identity" ] && [ "$2" = "--raw" ]; then\n' +
+        '  echo \'{"packageName":"@opengsd/gsd-core","version":"1.13.0-global"}\'\n' +
+        'else\n' +
+        '  echo "PATHSTUB:$*"\n' +
+        'fi\n',
+    );
+    fs.chmodSync(path.join(pathBinDir, 'gsd_run'), 0o755);
+    t.after(() => { cleanup(fakeHome); cleanup(fakeRuntime); cleanup(pathBinDir); });
 
-      const genuineStub = path.join(pathBinDir, 'gsd_run');
-      fs.writeFileSync(
-        genuineStub,
-        '#!/bin/sh\n' +
-          'if [ "$1" = "runtime-identity" ] && [ "$2" = "--raw" ]; then\n' +
-          '  echo \'{"packageName":"@opengsd/gsd-core","version":"1.13.0-global"}\'\n' +
-          'else\n' +
-          '  echo "PATHSTUB:$*"\n' +
-          'fi\n',
-      );
-      fs.chmodSync(genuineStub, 0o755);
+    const snippet = fs.readFileSync(SNIPPET_FILE, 'utf8');
+    const scriptContent =
+      `unset GSD_TOOLS\n` +
+      `export RUNTIME_DIR=${JSON.stringify(fakeRuntime)}\n` +
+      `export HOME=${JSON.stringify(fakeHome)}\n` +
+      snippet +
+      `\nprintf "GSD_TOOLS=%s\\n" "$GSD_TOOLS"\n` +
+      `gsd_run query state.json\n`;
 
-      const snippet = fs.readFileSync(SNIPPET_FILE, 'utf8');
-      const scriptContent =
-        `unset GSD_TOOLS\n` +
-        `export RUNTIME_DIR=${JSON.stringify(fakeRuntime)}\n` +
-        `export HOME=${JSON.stringify(fakeHome)}\n` +
-        snippet +
-        `\nprintf "GSD_TOOLS=%s\\n" "$GSD_TOOLS"\n` +
-        `gsd_run query state.json\n`;
+    const scriptPath = path.join(fakeRuntime, 'test-4834-local-wins.sh');
+    fs.writeFileSync(scriptPath, scriptContent);
 
-      const scriptPath = path.join(fakeRuntime, 'test-4834-local-wins.sh');
-      fs.writeFileSync(scriptPath, scriptContent);
+    const { isolatedPath, nodeBinDir } = buildIsolatedPath();
+    t.after(() => cleanup(nodeBinDir));
+    const testPath = [pathBinDir, isolatedPath].join(path.delimiter);
 
-      const { isolatedPath, nodeBinDir } = buildIsolatedPath();
-      t.after(() => cleanup(nodeBinDir));
-      const testPath = [pathBinDir, isolatedPath].join(path.delimiter);
+    const stdout = runBashFile(scriptPath, {
+      env: { PATH: testPath, HOME: fakeHome },
+    });
 
-      const stdout = runBashFile(scriptPath, {
-        env: { PATH: testPath, HOME: fakeHome },
-      });
-
-      const normStdout = stdout.replace(/\\/g, '/');
-      assert.ok(
-        normStdout.includes('.claude/gsd-core/bin/'),
-        `Expected the config-home install to outrank the PATH entry, got:\n${stdout.trim()}`,
-      );
-      assert.ok(
-        stdout.includes('LOCAL:query,state.json'),
-        `Expected the local tool to answer the query, got:\n${stdout.trim()}`,
-      );
-      assert.ok(
-        !stdout.includes('PATHSTUB:'),
-        `Expected the identity-proving PATH stub not to be invoked, got:\n${stdout.trim()}`,
-      );
-    } finally {
-      cleanup(fakeHome);
-      cleanup(fakeRuntime);
-      cleanup(pathBinDir);
-    }
+    const normStdout = stdout.replace(/\\/g, '/');
+    assert.ok(
+      normStdout.includes('.claude/gsd-core/bin/'),
+      `Expected the config-home install to outrank the PATH entry, got:\n${stdout.trim()}`,
+    );
+    assert.ok(
+      stdout.includes('LOCAL:query,state.json'),
+      `Expected the local tool to answer the query, got:\n${stdout.trim()}`,
+    );
+    assert.ok(
+      !stdout.includes('PATHSTUB:'),
+      `Expected the identity-proving PATH stub not to be invoked, got:\n${stdout.trim()}`,
+    );
   });
 
   // ─── (M) arm order and gate structure (#4834) ─────────────────────────────
@@ -901,6 +965,49 @@ describe('runtime-launcher-parity (#373)', () => {
       acceptPos !== -1,
       'the PATH arm must still assign GSD_TOOLS="$_G" after the gate',
     );
+  });
+
+  // ─── (N) delegation roster: the size-capped files load the shared resolver ──
+  test('(N) the #4834 delegation roster loads the resolver by @-include, not inline (#4834)', () => {
+    // The LARGE agents and the ceiling-capped workflows sat within 3-73 bytes
+    // of their hard caps, so no snippet growth could ship inline. These files
+    // delegate instead (the onboard.md pattern): the @-include loads
+    // gsd-run-resolver.md — byte-equal to the snippet per (B2) — and the sync
+    // script neither requires nor inserts an inline preamble for them. Pin
+    // the roster so a future edit cannot silently re-inline (blowing the
+    // caps) or drop the @-include (dropping the launcher).
+    //
+    // allow-test-rule: structural-regression-guard (#4834)
+    const DELEGATION_ROSTER = [
+      'gsd-executor.md',
+      'gsd-plan-checker.md',
+      'gsd-verifier.md',
+      'gsd-planner.md',
+    ];
+    const WORKFLOW_DELEGATION_ROSTER = [
+      'execute-phase.md',
+      'execute-plan.md',
+    ];
+    const problems = [];
+    for (const name of DELEGATION_ROSTER) {
+      const content = fs.readFileSync(path.join(AGENTS_DIR, name), 'utf8');
+      if (!content.includes('references/gsd-run-resolver.md')) {
+        problems.push(`${name}: missing the gsd-run-resolver.md @-include`);
+      }
+      if (content.includes('_GSD_SHIM_NAME=')) {
+        problems.push(`${name}: carries an inline preamble — re-inline it only if its size cap has real headroom`);
+      }
+    }
+    for (const rel of WORKFLOW_DELEGATION_ROSTER) {
+      const content = fs.readFileSync(path.join(WORKFLOWS_DIR, rel), 'utf8');
+      if (!content.includes('references/gsd-run-resolver.md')) {
+        problems.push(`${rel}: missing the gsd-run-resolver.md @-include`);
+      }
+      if (content.includes('_GSD_SHIM_NAME=')) {
+        problems.push(`${rel}: carries an inline preamble — re-inline it only if its size cap has real headroom`);
+      }
+    }
+    assert.deepStrictEqual(problems, [], 'delegation roster violations:\n' + problems.join('\n'));
   });
 
   // ─── (G) ~/.claude fallback arm is present (#211) ───────────────────────────
@@ -1240,6 +1347,11 @@ describe('runtime-launcher-parity — agents (#1041)', () => {
     for (const f of files) {
       const rel = path.relative(AGENTS_DIR, f);
       const content = fs.readFileSync(f, 'utf8');
+      // Files that delegate to the shared resolver reference (@-include) do not
+      // inline the preamble — exempt them, mirroring (B)'s workflow-side skip
+      // (#4834: the size-capped LARGE agents delegate; their resolver comes
+      // from the byte-equal reference pinned by (B2) and the (N) roster).
+      if (delegatesToResolverReference(content)) continue;
       const blocks = extractShellBlocks(content);
 
       // Collect all block lines in document order for flat analysis
@@ -1855,21 +1967,34 @@ describe('bug-891: non-Claude runtime home fallback arms', () => {
   // ── (D) Resolution order: claude < hermes < hard-error ───────────────────
   test('(D) resolution order: .claude probe comes before hermes probe, hermes before hard error', () => {
     const snippetContent = fs.readFileSync(SNIPPET_FILE, 'utf8');
-    const claudePos  = snippetContent.indexOf('.claude/gsd-core/bin/');
-    const hermesPos  = snippetContent.indexOf('.hermes}/gsd-core/bin/');
+    // #4834 folded the config-home probes into the _gsd_homes() helper defined
+    // ahead of the if-chain, so raw first-occurrence positions no longer
+    // express arm order — compare the probes WITHIN the helper, and the
+    // helper's arm against the hard error.
+    const helperStart = snippetContent.indexOf('_gsd_homes() {');
+    assert.ok(helperStart !== -1, 'Snippet must define the _gsd_homes helper');
+    const helperEnd = snippetContent.indexOf('; };', helperStart);
+    assert.ok(helperEnd !== -1, 'Snippet _gsd_homes helper must close');
+    const homesBody = snippetContent.slice(helperStart, helperEnd);
+
+    // The helper's claude arm reads `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/...` —
+    // the closing brace sits between `.claude` and the slash, so probe for the
+    // arm text as it is actually spelled (same style as the hermes probe below).
+    const claudePos  = homesBody.indexOf('$HOME/.claude}/gsd-core/bin/');
+    const hermesPos  = homesBody.indexOf('.hermes}/gsd-core/bin/');
     const errorPos   = snippetContent.indexOf('exit 1');
 
-    assert.ok(claudePos  !== -1, 'Snippet must contain .claude/gsd-core/bin/ arm');
+    assert.ok(claudePos  !== -1, 'Snippet must contain the claude config-home arm');
     assert.ok(hermesPos  !== -1, 'Snippet must contain .hermes}/gsd-core/bin/ arm');
     assert.ok(errorPos   !== -1, 'Snippet must contain exit 1 hard-error');
 
     assert.ok(
       claudePos < hermesPos,
-      `Expected .claude probe (at ${claudePos}) before .hermes probe (at ${hermesPos})`,
+      `Expected .claude probe (at ${claudePos}) before .hermes probe (at ${hermesPos}) among the config-home probes`,
     );
     assert.ok(
-      hermesPos < errorPos,
-      `Expected .hermes probe (at ${hermesPos}) before exit 1 (at ${errorPos})`,
+      helperEnd < errorPos,
+      `Expected the config-home arm (ending at ${helperEnd}) before exit 1 (at ${errorPos})`,
     );
   });
 
@@ -1996,12 +2121,14 @@ function makeTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-runtime-resolution-'));
 }
 
-function runResolver({ cwd, runtimeDir, pathDir }) {
+function runResolver({ cwd, runtimeDir, pathDir, home }) {
   // RUNTIME_DIR='' is INDISTINGUISHABLE from unset to the resolver's
   // ${RUNTIME_DIR:-$(git rev-parse --show-toplevel)} — an empty value silently
   // falls back to the real repo root and resolves its real install. Fail loudly
   // instead; every caller passes one.
   if (!runtimeDir) throw new Error('runResolver requires runtimeDir: an empty value resolves the real repo root');
+  // #4834: callers reaching the config-home arm must pass an empty `home` —
+  // with the homes arm ahead of PATH, an ambient $HOME install would win.
   const script = [
     'set -e',
     extractResolverSnippet(),
@@ -2015,13 +2142,15 @@ function runResolver({ cwd, runtimeDir, pathDir }) {
   // suite is guarded to POSIX (matches the host suite's own bash -c guard).
   if (process.platform === 'win32') return '';
 
+  const envOverrides = {
+    PATH: `${pathDir}${path.delimiter}${process.env.PATH || ''}`,
+    RUNTIME_DIR: runtimeDir,
+  };
+  if (home !== undefined) envOverrides.HOME = home;
   const r = runHookSeam('-c', [script], {
     interpreter: 'bash',
     cwd,
-    env: snippetEnv({
-      PATH: `${pathDir}${path.delimiter}${process.env.PATH || ''}`,
-      RUNTIME_DIR: runtimeDir,
-    }),
+    env: snippetEnv(envOverrides),
   });
   throwIfFailed(r, 'bash -c <runtime resolver snippet>');
   return r.stdout;
@@ -2033,7 +2162,7 @@ function writeExecutable(file, content) {
 }
 
 describe('bug-3668: workflow SDK resolver supports installed user projects', { skip: process.platform === 'win32' }, () => {
-  test('falls back to installed gsd_run when project-local runtime copy is absent', () => {
+  test('falls back to installed gsd_run when project-local runtime copy is absent', (t) => {
     // Bug #3668: when a user project has no local gsd-core/bin/gsd-tools.cjs,
     // the elif branch must resolve to the gsd_run binary on PATH.
     // RUNTIME_DIR points to a dir that has no gsd-tools.cjs.
@@ -2049,14 +2178,27 @@ describe('bug-3668: workflow SDK resolver supports installed user projects', { s
     fs.mkdirSync(project, { recursive: true });
     fs.mkdirSync(runtimeNoLocal, { recursive: true });
 
-    // Place gsd_run stub on PATH (installed binary)
+    // Place gsd_run stub on PATH (installed binary). #4834: the PATH arm is
+    // identity-gated, so the stub must answer `runtime-identity --raw` the
+    // way a real same-package install does — a bare stub now falls through
+    // to the hard error (that side is pinned by (D2) above).
+    // HOME is pinned to an empty fake home: #4834 evaluates the config-home
+    // arm before PATH, and an ambient $HOME/.claude install would resolve
+    // there first on machines that have one.
     writeExecutable(
       path.join(pathBin, 'gsd_run'),
-      '#!/bin/sh\nprintf "installed:%s %s\\n" "$1" "$2"\n',
+      '#!/bin/sh\n' +
+        'if [ "$1" = "runtime-identity" ] && [ "$2" = "--raw" ]; then\n' +
+        '  echo \'{"packageName":"@opengsd/gsd-core","version":"installed-test"}\'\n' +
+        'else\n' +
+        '  printf "installed:%s %s\\n" "$1" "$2"\n' +
+        'fi\n',
     );
+    const fakeHome = makeTempDir();
+    t.after(() => cleanup(fakeHome));
 
     // NO gsd-core/bin/gsd-tools.cjs in runtimeNoLocal
-    const output = runResolver({ cwd: project, runtimeDir: runtimeNoLocal, pathDir: pathBin });
+    const output = runResolver({ cwd: project, runtimeDir: runtimeNoLocal, pathDir: pathBin, home: fakeHome });
 
     // GSD_TOOLS must have been reassigned to the PATH binary (not the missing .cjs)
     assert.match(output, /GSD_TOOLS=.+gsd_run(?:\s|$)/m);
@@ -2190,11 +2332,21 @@ describe('bug-444: resolver finds repo-local .claude install', () => {
       `Snippet's Claude arm must honor CLAUDE_CONFIG_DIR via \${CLAUDE_CONFIG_DIR:-$HOME/.claude}.`,
     );
 
-    // Repo-local check must appear BEFORE $HOME/.claude check (local overrides global)
+    // Repo-local check must run BEFORE the config-home arm (local overrides
+    // global). #4834 folded the $HOME/.claude probe into the _gsd_homes()
+    // helper defined ahead of the chain, so raw first-occurrence positions no
+    // longer express arm order — compare the chain positions instead: the
+    // repo-local `if _gsd_at` arm must precede the `elif _gsd_homes` arm.
+    // Behavioral precedence (repo-local wins when both exist) is pinned by
+    // this suite's (C).
+    const chainStartIdx = content.indexOf('if _gsd_at "${_GSD_RUNTIME_ROOT}/gsd-core/bin/');
+    const homesArmIdx = content.indexOf('elif _gsd_homes;');
+    assert.ok(chainStartIdx !== -1, 'Snippet must contain the repo-local if _gsd_at arm');
+    assert.ok(homesArmIdx !== -1, 'Snippet must contain the elif _gsd_homes config-home arm');
     assert.ok(
-      localClaudeIdx < homeClaudeIdx,
-      `Repo-local .claude/ check (idx ${localClaudeIdx}) must appear BEFORE ` +
-        `$HOME/.claude/ check (idx ${homeClaudeIdx}) in the snippet (local overrides global).`,
+      chainStartIdx < homesArmIdx,
+      `Repo-local .claude/ arm (idx ${chainStartIdx}) must run BEFORE ` +
+        `the config-home arm (idx ${homesArmIdx}) in the elif chain (local overrides global).`,
     );
   });
 

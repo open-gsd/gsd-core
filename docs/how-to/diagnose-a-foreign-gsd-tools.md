@@ -7,7 +7,7 @@ This guide tells you which one you have and how to fix a bad resolution.
 Use it when:
 
 - a workflow behaves unlike its documentation,
-- a workflow stops with `gsd-tools.cjs not found … and gsd_run is not on PATH`,
+- a workflow stops with `gsd-tools.cjs not found … and no identity-proving gsd_run is on PATH`,
 - or you simply want to confirm which tool a project is running against.
 
 ## Why this matters
@@ -18,10 +18,13 @@ under the predecessor. Both print success-shaped output, and `.planning/` is git
 default, so the difference is invisible until the directories are gone.
 
 Shipped workflows no longer resolve `gsd-tools` from `PATH` at all — they resolve `gsd_run`,
-which only this package publishes. That closes the path that caused #3129. The remaining
-path-based branches — a project-local install, a runtime config directory — are checked by
-assertion instead: the launcher probes whatever it resolved and warns when the tool cannot
-prove it is `@opengsd/gsd-core`.
+which only this package publishes. That closes the path that caused #3129. The resolver
+prefers its path-based branches — a project-local install, then a runtime config directory —
+and only falls back to a `gsd_run` found on `PATH` when that binary proves it is
+`@opengsd/gsd-core` (#4834): a foreign or too-old `gsd_run` on `PATH` is passed over, not
+used with a warning. The path-based branches are still checked by assertion after
+resolution: the launcher probes whatever it resolved and warns when the tool cannot prove
+it is `@opengsd/gsd-core`.
 
 If you got here from that warning, it looks like this:
 
@@ -96,11 +99,17 @@ command. That version predates the verb. Nothing is wrong beyond being out of da
 npm install -g @opengsd/gsd-core@latest
 ```
 
+Since #4834, a copy this old on your `PATH` can no longer be picked up by a workflow's
+launcher — the resolver requires the identity proof the verb provides, so the global copy
+is passed over in favor of a project-local or config-directory install. You can still
+reach it by hand, which is why upgrading matters.
+
 ## A workflow says `gsd_run is not on PATH`
 
-The resolver looked for `gsd_run` and found nothing, and none of the path-based locations
-matched either. It stops rather than guessing — falling back to an arbitrary `gsd-tools` is
-exactly the behavior that caused #3129.
+The resolver found nothing it could use: no project-local or config-directory install
+matched, and either nothing named `gsd_run` is on `PATH` or the only entry could not prove
+it is `@opengsd/gsd-core`. It stops rather than guessing — falling back to an arbitrary
+`gsd-tools` is exactly the behavior that caused #3129.
 
 This is expected in one specific case: an installation old enough to predate the `gsd_run`
 binary ([#381](https://github.com/open-gsd/gsd-core/issues/381)). Upgrade:

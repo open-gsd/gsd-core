@@ -32,6 +32,25 @@ const {
   importsDirectiveReference,
 } = require('../scripts/lint-response-language-coverage.cjs');
 
+// The canonical launcher preamble, read from its single source of truth. A
+// `sync-runtime-launcher.cjs` propagation rewrites this one line inside every
+// gsd_run-calling workflow — quick.md included — without touching a word of
+// ordinary quick content.
+const CANONICAL_LAUNCHER_PREAMBLE = require('node:fs')
+  .readFileSync(require('node:path').join(__dirname, '..', 'gsd-core', 'workflows', '_runtime-launcher.snippet.sh'), 'utf8')
+  .replace(/\r?\n$/, '');
+
+// A diff line that swaps the launcher preamble removes the OLD canonical line
+// as well as adding the new one, so equality with today's snippet is not
+// enough. Recognize a launcher-preamble line structurally instead: the shim
+// name assignment plus the resolver's PATH probe and function definition —
+// the same definition-shape discriminator
+// tests/no-bare-gsd-tools-command-position.test.cjs uses for its EXCLUSION_RE.
+const looksLikeLauncherPreambleLine = (body) =>
+  body.startsWith('_GSD_SHIM_NAME=')
+  && body.includes('command -v gsd_run')
+  && body.includes('gsd_run()');
+
 /**
  * Does this path's diff say anything beyond the shared response-language
  * directive (#2529)?
@@ -41,6 +60,16 @@ const {
  * matching prose the lint itself no longer recognizes as coverage. A file the
  * branch ADDED answers true, every line being new — which is what a real
  * #3676-phase branch looks like.
+ *
+ * #4834 adds the third mechanical-sweep carve-out, in the same family as the
+ * #3730 and #2529-round-40 scopings below: a line that IS the canonical
+ * launcher preamble is a `sync-runtime-launcher.cjs` propagation, not
+ * quick-batch phase work. The snippet's byte changes reach every workflow in
+ * one mechanical pass; treating them as ordinary-quick edits would freeze the
+ * launcher out of quick.md forever, while the preamble's own content stays
+ * policed by tests/runtime-launcher-parity.test.cjs and the emitted-attribution
+ * gate. Any OTHER line — ordinary quick prose, steps, contracts — still trips
+ * this row exactly as before.
  */
 function editsBeyondSharedDirective(base, file) {
   const diff = git(['diff', '--unified=0', `${base}...HEAD`, '--', file]);
@@ -48,6 +77,8 @@ function editsBeyondSharedDirective(base, file) {
     if (!/^[+-]/.test(line) || line.startsWith('+++') || line.startsWith('---')) return false;
     const body = line.slice(1).trim();
     if (body === '' || body === INLINE_RESPONSE_LANGUAGE_DIRECTIVE) return false;
+    if (body === CANONICAL_LAUNCHER_PREAMBLE.trim()) return false;
+    if (looksLikeLauncherPreambleLine(body)) return false;
     return !importsDirectiveReference(body);
   });
 }
