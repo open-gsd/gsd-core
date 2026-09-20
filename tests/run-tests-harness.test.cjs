@@ -2294,6 +2294,7 @@ describe('bug #969 C — ensureBuiltHooks populates hooks/dist before concurrent
 const {
   packChunks,
   makeFileWeigher,
+  WINDOWS_UNMEASURED_COST_MULTIPLIER,
   loadTestTimings,
   positiveNumberEnv,
   DEFAULT_TIMINGS_PATH,
@@ -2433,6 +2434,46 @@ describe('chunk packing weights measured cost (#2456)', () => {
       } finally {
         cleanup(t.dir);
       }
+    });
+
+    test('#4434: on win32, a file missing from the table falls back to the documented Windows multiplier (2.2), not the mean', () => {
+      const t = tableFrom({ 'a.test.cjs': 10000, 'b.test.cjs': 20000, 'c.test.cjs': 60000 });
+      try {
+        const weigh = makeFileWeigher(loadTestTimings(t.path), 'win32');
+        assert.strictEqual(weigh('brand-new-test.test.cjs'), WINDOWS_UNMEASURED_COST_MULTIPLIER);
+      } finally {
+        cleanup(t.dir);
+      }
+    });
+
+    test('#4434: on linux/darwin, a file missing from the table still falls back to the plain mean (1)', () => {
+      const t = tableFrom({ 'a.test.cjs': 10000, 'b.test.cjs': 20000, 'c.test.cjs': 60000 });
+      try {
+        assert.strictEqual(makeFileWeigher(loadTestTimings(t.path), 'linux')('brand-new-test.test.cjs'), 1);
+        assert.strictEqual(makeFileWeigher(loadTestTimings(t.path), 'darwin')('brand-new-test.test.cjs'), 1);
+      } finally {
+        cleanup(t.dir);
+      }
+    });
+
+    test('#4434: on win32, a MEASURED file is unaffected by the unmeasured-file multiplier', () => {
+      const t = tableFrom({ 'a.test.cjs': 10000, 'b.test.cjs': 20000, 'c.test.cjs': 60000 });
+      try {
+        const weighWin = makeFileWeigher(loadTestTimings(t.path), 'win32');
+        const weighLinux = makeFileWeigher(loadTestTimings(t.path), 'linux');
+        assert.strictEqual(
+          weighWin('b.test.cjs'),
+          weighLinux('b.test.cjs'),
+          'a measured file must weigh identically regardless of platform',
+        );
+      } finally {
+        cleanup(t.dir);
+      }
+    });
+
+    test('#4434: on win32 with no timings table at all, every file falls back to the Windows multiplier', () => {
+      const weigh = makeFileWeigher(null, 'win32');
+      assert.strictEqual(weigh('anything.test.cjs'), WINDOWS_UNMEASURED_COST_MULTIPLIER);
     });
 
     test('an unknown file packs without error rather than failing the run', () => {
