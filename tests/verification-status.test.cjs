@@ -3165,3 +3165,27 @@ describe('#2868: verification status CLI drives the execute-phase stranded-phase
   });
   });
 }
+
+// ─── #4806: unparseable VERIFICATION.md frontmatter is a parse error, not "missing" ──
+
+describe('#4806: unparseable VERIFICATION.md frontmatter reports a parse error, not missing', () => {
+  test('a VERIFICATION.md whose frontmatter fails to parse reports status unparseable, not missing', () => {
+    // The file EXISTS and verification ran — "missing" (and its next_command
+    // re-running execute-phase) is a false statement about the phase. The
+    // YAML syntax error is in the report, not in the phase's execution.
+    const dir = mkPhaseDir('unparseable');
+    fs.writeFileSync(path.join(dir, '01-foo-VERIFICATION.md'),
+      '---\nstatus: "passed\n---\n\n# Verification Report\n');
+    const result = readVerificationStatus(dir);
+    assert.equal(result.status, 'unparseable', 'status must be unparseable');
+    assert.ok(result.next_action.includes('not parseable YAML'),
+      'next_action must name the YAML parse failure');
+  });
+
+  test('a well-formed control file still reports passed (unchanged)', () => {
+    const dir = mkPhaseDir('control');
+    writeVerificationMd(dir, '01-foo-VERIFICATION.md', 'passed');
+    const result = readVerificationStatus(dir);
+    assert.equal(result.status, 'passed');
+  });
+});
