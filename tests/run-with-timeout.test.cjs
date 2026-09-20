@@ -447,3 +447,50 @@ describe('#2351 parity guard — no hardcoded timeout in workflow/agent/referenc
     );
   });
 });
+
+// ─── #4797: the mediation must survive spaces in the shim path ──────────────
+
+describe('#4797 run-with-timeout — .cmd mediation with spaces in the shim path', () => {
+  // The #2667 mediation's private copy passed `/d /s /c <cmd> ...args` with the
+  // shim path as a discrete argv token: Node quotes the whole argv (a space in
+  // the path forces quotes) and `/s` strips the FIRST and LAST quote of the /c
+  // string — so cmd.exe took the pre-space fragment as the program name and
+  // every mediated call under a spaced path failed with exit 1 and empty
+  // stdout. The projectSpawnInvocation seam wraps the WHOLE command line in
+  // one extra quote pair with windowsVerbatimArguments, which is the shape
+  // that survives. The issue's own Windows repro is the pre-fix RED evidence
+  // (exit 1, cmd.exe "not recognized", 0-byte stdout); the linux bench cannot
+  // run cmd.exe, so these tests are win32-gated like their #2667 siblings.
+  const isWin = process.platform === 'win32';
+  const SPACED = 'rwt 4797 dir with spaces';
+
+  test('win32: a .cmd shim under a spaced path runs (the fallow pre-pass shape)', () => {
+    const base = createTempDir('rwt-4797-base');
+    const dir = path.join(base, SPACED);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const shim = path.join(dir, 'fake.cmd');
+      fs.writeFileSync(shim, '@echo {"verdict":"clean"}\r\n', 'utf8');
+      const r = runVerb(['10', '--', shim]);
+      assert.equal(r.status, 0, `expected the spaced-path .cmd shim to run (exit 0); got ${r.status}. stderr: ${r.stderr}`);
+      assert.ok((r.stdout || '').includes('clean'), `expected JSON stdout; got: ${r.stdout}`);
+    } finally {
+      cleanup(base);
+    }
+  });
+
+  test('win32: a .bat shim under a spaced path runs too', () => {
+    const base = createTempDir('rwt-4797-bat-base');
+    const dir = path.join(base, SPACED);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const shim = path.join(dir, 'fake.bat');
+      fs.writeFileSync(shim, '@echo {"verdict":"clean"}\r\n', 'utf8');
+      const r = runVerb(['10', '--', shim]);
+      assert.equal(r.status, 0, `expected the spaced-path .bat shim to run (exit 0); got ${r.status}. stderr: ${r.stderr}`);
+      assert.ok((r.stdout || '').length > 0, 'expected non-empty stdout from the .bat shim');
+    } finally {
+      cleanup(base);
+    }
+  });
+});
