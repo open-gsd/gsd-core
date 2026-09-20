@@ -347,20 +347,24 @@ describe('#4499: markdown normalization preserves leading YAML frontmatter', () 
   });
 
   test('a thematic break with an incidental colon line is not mistaken for frontmatter', () => {
-    const input = '---\nNote: see below.\nLead paragraph.\n- alpha\n- beta\n---\nTail.\n';
+    // #4725 removed the paragraph→list blank (see the #4499 describe block
+    // above), so this uses heading→list — a still-active rule — to prove the
+    // region is normalized as ordinary Markdown rather than protected as
+    // frontmatter (a protected span would suppress every blank-line rule).
+    const input = '---\nNote: see below.\n## Heading\n- alpha\n- beta\n---\nTail.\n';
     const { content } = normalizeContent(MD, input);
     assert.strictEqual(
       content,
-      '---\nNote: see below.\nLead paragraph.\n\n- alpha\n- beta\n\n---\nTail.\n',
-      'ordinary Markdown after a thematic break must retain list normalization even if prose resembles YAML'
+      '---\nNote: see below.\n\n## Heading\n\n- alpha\n- beta\n\n---\nTail.\n',
+      'ordinary Markdown after a thematic break must retain heading/list normalization even if prose resembles YAML'
     );
   });
 
   test('anchors and aliases are refused before the frontmatter classifier can expand them', () => {
-    const input = '---\na: &a [safe]\nb: [*a, *a, *a, *a]\n---\nLead paragraph.\n- body item\n';
+    const input = '---\na: &a [safe]\nb: [*a, *a, *a, *a]\n---\n## Heading\n- body item\n';
     const { content } = normalizeContent(MD, input);
-    assert.ok(content.includes('Lead paragraph.\n\n- body item'),
-      'a refused YAML region must remain ordinary Markdown and retain body-list normalization');
+    assert.ok(content.includes('## Heading\n\n- body item'),
+      'a refused YAML region must remain ordinary Markdown and retain body normalization');
   });
 
   test('empty and comment-only YAML regions are still frontmatter', () => {
@@ -371,10 +375,10 @@ describe('#4499: markdown normalization preserves leading YAML frontmatter', () 
   });
 
   test('a closed region parsing to a bare YAML scalar stays ordinary Markdown', () => {
-    const input = '---\njust a sentence\n---\nLead paragraph.\n- body item\n';
+    const input = '---\njust a sentence\n---\n## Heading\n- body item\n';
     const { content } = normalizeContent(MD, input);
     assert.ok(
-      content.includes('Lead paragraph.\n\n- body item'),
+      content.includes('## Heading\n\n- body item'),
       'a scalar is not a mapping, so the document keeps ordinary Markdown normalization'
     );
   });
@@ -384,9 +388,9 @@ describe('#4499: markdown normalization preserves leading YAML frontmatter', () 
     // itself a sequence is classified as body content and keeps its spacing
     // rules. Pinned so the `!Array.isArray` guard reads as a decision rather
     // than an accident if the classifier is refactored.
-    const input = '---\n- alpha\n- beta\n---\nLead paragraph.\n- body item\n';
+    const input = '---\n- alpha\n- beta\n---\n## Heading\n- body item\n';
     const { content } = normalizeContent(MD, input);
-    assert.ok(content.includes('Lead paragraph.\n\n- body item'));
+    assert.ok(content.includes('## Heading\n\n- body item'));
   });
 
   test('property: normalization preserves every generated frontmatter mapping byte-for-byte', () => {
@@ -401,13 +405,16 @@ describe('#4499: markdown normalization preserves leading YAML frontmatter', () 
   });
 
   test('property: scalar and sequence regions stay on the ordinary-Markdown path', () => {
+    // heading→list (not paragraph→list, removed by #4725 — see the #4499
+    // describe block above) is the still-active rule that distinguishes
+    // "ordinary Markdown, normalized" from "protected as frontmatter".
     const scalar = fc.stringMatching(/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,30}$/);
     fc.assert(fc.property(fc.oneof(
       scalar,
       fc.array(scalar, { minLength: 1, maxLength: 5 }).map((items) => items.map((item) => `- ${item}`).join('\n')),
     ), (region) => {
-      const input = `---\n${region}\n---\nLead paragraph.\n- body item\n`;
-      assert.ok(normalizeContent(MD, input).content.includes('Lead paragraph.\n\n- body item'));
+      const input = `---\n${region}\n---\n## Heading\n- body item\n`;
+      assert.ok(normalizeContent(MD, input).content.includes('## Heading\n\n- body item'));
     }), { numRuns: 100 });
   });
 });
