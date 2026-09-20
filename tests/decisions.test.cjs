@@ -761,9 +761,13 @@ describe('FIX B gate-level: parse-miss → passed:false regardless of covered de
       msg.includes('could not') || msg.includes('format') || msg.includes('mismatch') || msg.includes('parse'),
       `Message must indicate parse/format issue, not D-01 coverage gap. Got: "${parsed.message}"`
     );
-    // Confirm D-01 is NOT in uncovered[] — the failure is parse-miss, not a coverage gap
-    assert.deepStrictEqual(parsed.uncovered, [],
-      `uncovered must be empty (D-01 is covered; failure is parse-miss). Got: ${JSON.stringify(parsed.uncovered)}`);
+    // Confirm the answer is UNMEASURED (#4794): no covered/uncovered fields —
+    // the failure is parse-miss, not a coverage measurement.
+    assert.strictEqual(parsed.covered, null, 'covered must be null — nothing was measured');
+    assert.strictEqual(parsed.total, null, 'total must be null — nothing was measured');
+    assert.ok(!('uncovered' in parsed), 'uncovered must be OMITTED — the list was never built');
+    assert.ok(Array.isArray(parsed.unreadable) && parsed.unreadable.includes('D-02'),
+      `unreadable must carry the malformed bullet's id, got: ${JSON.stringify(parsed.unreadable)}`);
   });
 
   test('verify-side: valid D-01 covered + malformed D-02 → verify advisory surfaces could-not-parse', () => {
@@ -3155,7 +3159,7 @@ describe('#4794: decision-coverage answers an unmeasured shape on could-not-pars
     fs.writeFileSync(path.join(phaseDir, `${name}-PLAN.md`), body);
   }
 
-  test('#4794: could-not-parse answers an unmeasured shape — null counts, unreadable ids, no uncovered', (t) => {
+  test('#4794: could-not-parse answers an unmeasured shape — null counts, unreadable ids, no uncovered', () => {
     // The issue's repro: D-01 parses; D-02's title carries a second colon in
     // plain prose → parse-miss. The gate used to answer covered:0/uncovered:[]
     // — the fields of a measurement that never happened.
@@ -3190,7 +3194,7 @@ describe('#4794: decision-coverage answers an unmeasured shape on could-not-pars
     );
   });
 
-  test('#4794: a directory as the context path fails closed naming the path', (t) => {
+  test('#4794: a directory as the context path fails closed naming the path', () => {
     // The issue's repro 2: the adjacent same-looking positionals swapped.
     // fs.existsSync is true for a directory; the read yields nothing; the gate
     // used to certify passed:true on a phase full of decisions.
@@ -3222,11 +3226,14 @@ describe('#4794: decision-coverage answers an unmeasured shape on could-not-pars
     const md = contentWith([
       '**D-01: The list shows one row per contact.** Nothing else changes.',
       '**D-02: Two managers creating a card for the same pair: the second is rejected.** One pair, one card.',
+      '**D4x-01** ratio 3:1',
     ]);
     const r = extract(md);
     assert.strictEqual(r.outcome, 'could-not-parse');
     assert.ok(Array.isArray(r.unreadableIds) && r.unreadableIds.includes('D-02'),
       `unreadableIds must carry the failed bullet's id, got: ${JSON.stringify(r.unreadableIds)}`);
+    // #4130's phase-prefixed ID_ATTEMPT shape must be captured too.
+    assert.ok(r.unreadableIds.includes('D4x-01'), `phase-prefixed id must be captured, got: ${JSON.stringify(r.unreadableIds)}`);
     assert.ok(!r.unreadableIds.includes('D-01'), 'the parsed bullet is not unreadable');
   });
 });

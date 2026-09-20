@@ -52,6 +52,14 @@ export type DecisionOutcome = 'parsed' | 'none-present' | 'could-not-parse';
 export interface DecisionExtraction {
   decisions: Decision[];
   outcome: DecisionOutcome;
+  /**
+   * #4794: the attempted D-ids of bullets that fell to the parse-miss guard on
+   * a could-not-parse outcome — the ids a JSON caller needs to name what to
+   * fix. Empty when no id could be derived from a missed line; may be ABSENT
+   * on the evidence-based could-not-parse path (no guard-matched line exists
+   * to derive an id from).
+   */
+  unreadableIds?: string[];
 }
 
 const DISCRETION_HEADINGS = new Set([
@@ -431,6 +439,8 @@ function joinWrappedBoldLeadIns(lines: string[]): string[] {
 interface ParseDecisionLinesResult {
   decisions: Decision[];
   parseMisses: number;
+  /** #4794: the attempted D-ids of bullets that fell to the parse-miss guard. */
+  unreadableIds: string[];
 }
 
 /**
@@ -453,6 +463,7 @@ function parseDecisionLines(block: string): ParseDecisionLinesResult {
   let current: Decision | null = null;
   let openIndent: number | null = null;
   let parseMisses = 0;
+  const unreadableIds: string[] = [];
 
   const flush = (): void => {
     if (current) {
@@ -561,6 +572,10 @@ function parseDecisionLines(block: string): ParseDecisionLinesResult {
     if (parseMissGuardRe.test(line)) {
       flush();
       parseMisses += 1;
+      // #4794: carry the attempted id so a caller capturing stdout (a JSON gate)
+      // can name the decision to fix — today it exists only in this stderr warn.
+      const attempted = line.match(/\*\*\s*(D(?:[0-9][A-Za-z0-9]*)?-[A-Za-z0-9_-]*)/);
+      if (attempted && !unreadableIds.includes(attempted[1])) unreadableIds.push(attempted[1]);
       console.warn(`parseDecisions: ignored unparseable decision bullet: ${trimmed}`);
       continue;
     }
@@ -578,7 +593,7 @@ function parseDecisionLines(block: string): ParseDecisionLinesResult {
     }
   }
   flush();
-  return { decisions: out, parseMisses };
+  return { decisions: out, parseMisses, unreadableIds };
 }
 
 // ─── Primary entry point: extractDecisions ────────────────────────────────────
@@ -607,13 +622,13 @@ export function extractDecisions(content: unknown): DecisionExtraction {
   const taggedBlocks = extractTaggedBlocks(stripped, 'decisions');
   if (taggedBlocks.length > 0) {
     const combined = taggedBlocks.join('\n\n');
-    const { decisions, parseMisses } = parseDecisionLines(combined);
+    const { decisions, parseMisses, unreadableIds } = parseDecisionLines(combined);
     if (decisions.length > 0 && parseMisses === 0) {
       return { decisions, outcome: 'parsed' };
     }
     // FIX B: parse-misses present — could-not-parse even if some decisions extracted.
     if (parseMisses > 0) {
-      return { decisions, outcome: 'could-not-parse' };
+      return { decisions, outcome: 'could-not-parse', unreadableIds };
     }
     // FIX A: Block present but 0 extracted and no parse-misses.
     // Only report could-not-parse when there is genuine evidence of real decisions
@@ -640,13 +655,13 @@ export function extractDecisions(content: unknown): DecisionExtraction {
   );
 
   if (section !== null) {
-    const { decisions, parseMisses } = parseDecisionLines(section.body);
+    const { decisions, parseMisses, unreadableIds } = parseDecisionLines(section.body);
     if (decisions.length > 0 && parseMisses === 0) {
       return { decisions, outcome: 'parsed' };
     }
     // FIX B: parse-misses present — could-not-parse even if some decisions extracted.
     if (parseMisses > 0) {
-      return { decisions, outcome: 'could-not-parse' };
+      return { decisions, outcome: 'could-not-parse', unreadableIds };
     }
     // FIX A: Heading found but 0 extracted and no parse-misses.
     // Report could-not-parse when the section body holds a decision-entry-shaped
