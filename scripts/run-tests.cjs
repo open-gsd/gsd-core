@@ -560,7 +560,11 @@ const WINDOWS_UNMEASURED_COST_MULTIPLIER = 2.2;
 // value a null table (missing or unparseable file) yields for every file,
 // because both states mean the same thing: cost unknown. On win32 the
 // fallback is WINDOWS_UNMEASURED_COST_MULTIPLIER instead of 1 (see #4434,
-// above) — every other platform keeps the plain mean.
+// above) — but ONLY for a file absent from an otherwise-loaded table; a
+// completely missing/corrupt/empty timings file (`timings` is `null`) still
+// degrades to uniform weight 1 on every platform, matching the pre-#2456
+// count-based-packing invariant many existing tests depend on. Every other
+// platform keeps the plain mean.
 //
 // This was previously `timings.medianWeight`, on the claim that an absent
 // file "costs chunk balance, never a red build." That claim is false. In a
@@ -576,8 +580,8 @@ const WINDOWS_UNMEASURED_COST_MULTIPLIER = 2.2;
 // equivalence does not hold on win32, where the table's own sources are
 // Linux-only (#4434).
 function makeFileWeigher(timings, platform = process.platform) {
+  if (!timings) return () => 1;
   const unmeasuredWeight = platform === 'win32' ? WINDOWS_UNMEASURED_COST_MULTIPLIER : 1;
-  if (!timings) return () => unmeasuredWeight;
   return (f) => {
     const key = basename(f);
     // Own-property check before the lookup. This is defense-in-depth, NOT a
