@@ -79,7 +79,15 @@ AI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-AI-SPEC.md 2>/dev/null | head -1)
 ```
 
 **Text mode (`workflow.text_mode: true` in config or `--text` flag):** Set `TEXT_MODE=true` if `--text` is present in `$ARGUMENTS` OR `text_mode` from init JSON is `true`. When TEXT_MODE is active, replace every `AskUserQuestion` call with a plain-text numbered list and ask the user to type their choice number. This is required for non-Claude runtimes (OpenAI Codex, Antigravity, etc.) where `AskUserQuestion` is not available.
-**If exists:** Use AskUserQuestion:
+**If exists:**
+
+**If `--auto`:** Auto-select "Skip" — keep the existing AI-SPEC untouched and exit. Log:
+`[auto] AI-SPEC exists — reusing as-is.` Skip is the auto choice because it is the only
+non-destructive one: "Update" re-runs framework selection with the existing spec as baseline,
+which can rewrite decisions a person already recorded in it, and nobody is present to notice
+(#4776).
+
+**Otherwise:** Use AskUserQuestion:
 - header: "Existing AI-SPEC"
 - question: "AI-SPEC.md already exists for Phase {N}. What would you like to do?"
 - options:

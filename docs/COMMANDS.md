@@ -432,9 +432,14 @@ Retroactive 6-pillar visual audit of implemented frontend.
 
 For richer visual evidence, pair this with `gsd-browser` or another browser MCP server so the audit can capture screenshots, state, console/network context, and reproducible interaction steps.
 
+| Flag | Description |
+|------|-------------|
+| `--auto` | Skip interactive questions. An existing UI-REVIEW.md is **reused as-is**, never re-audited |
+
 ```bash
 /gsd-ui-review                      # Audit current phase
 /gsd-ui-review 3                    # Audit phase 3
+/gsd-ui-review 3 --auto             # Non-interactive; reuses an existing UI-REVIEW
 ```
 
 ---
@@ -1665,9 +1670,14 @@ Generate an AI-SPEC.md design contract for phases that involve building AI syste
 
 **Spawns:** 3 parallel specialist agents: domain-researcher, framework-selector, ai-researcher, and eval-planner
 
+| Flag | Description |
+|------|-------------|
+| `--auto` | Skip interactive questions. An existing AI-SPEC.md is **reused as-is**, never regenerated |
+
 ```bash
 /gsd-ai-integration-phase              # Wizard for the current phase
 /gsd-ai-integration-phase 3           # Wizard for a specific phase
+/gsd-ai-integration-phase 3 --auto    # Non-interactive; reuses an existing AI-SPEC
 ```
 
 ---
@@ -1679,9 +1689,14 @@ Audit an executed AI phase's evaluation coverage and produce an EVAL-REVIEW.md r
 **Prerequisites:** Phase has been executed and has an `AI-SPEC.md`
 **Produces:** `{phase}-EVAL-REVIEW.md` with findings, gaps, and remediation guidance
 
+| Flag | Description |
+|------|-------------|
+| `--auto` | Skip interactive questions. An existing EVAL-REVIEW.md is **reused as-is**, never re-audited |
+
 ```bash
 /gsd-eval-review                       # Audit current phase
 /gsd-eval-review 3                     # Audit a specific phase
+/gsd-eval-review 3 --auto              # Non-interactive; reuses an existing EVAL-REVIEW
 ```
 
 ---

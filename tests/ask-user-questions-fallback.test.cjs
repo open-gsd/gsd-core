@@ -209,24 +209,32 @@ describe('bug #17: AskUserQuestion options arrays respect runtime cap', () => {
     const WF = path.join(__dirname, '..', 'gsd-core', 'workflows');
 
     /**
-     * The decision points this issue covers. Each names the heading that opens
-     * the artifact-exists branch and the option the `--auto` arm must take.
+     * The decision points this issue covers. Each names the heading (or, for
+     * files with no dedicated heading at this point, the arm's own guard
+     * clause) that opens the artifact-exists branch, the option the `--auto`
+     * arm must take, and the sibling option that regenerates the artifact
+     * (the one an `--auto` arm must NOT select).
      *
      * The maintainer decision recorded on #4776: an unattended run REUSES an
-     * existing artifact rather than regenerating it. "Update" re-runs the
-     * generator, rewriting a contract that may already carry answers a person
-     * gave, with nobody present to notice — so an `--auto` arm that selects it
-     * is the defect, not the fix.
+     * existing artifact rather than regenerating it. "Update"/"Re-audit"
+     * re-run the generator, rewriting a contract or review that may already
+     * carry answers or findings a person recorded, with nobody present to
+     * notice — so an `--auto` arm that selects one of those is the defect,
+     * not the fix.
      *
-     * Deliberately a named pair rather than a sweep over every workflow: the
-     * same gap exists in ai-integration-phase.md, eval-review.md and
-     * ui-review.md, and #4776's triage scoped those to their own issues. A
-     * sweep here would either fail on them or need an allowlist that this
-     * issue does not own.
+     * Widened from the original ui-phase.md/spec-phase.md pair to all 5
+     * files sharing the gap (#4776's 2026-09-16 triage comment: "give all 5
+     * files a consistent --auto branch... recommended fix").
+     * ai-integration-phase.md mirrors ui-phase.md's 3-way Update/View/Skip
+     * shape; eval-review.md and ui-review.md have only Re-audit/View, so
+     * their non-destructive `--auto` choice is "View", not "Skip".
      */
     const DECISION_POINTS = [
-      { file: 'ui-phase.md', anchor: '## 4. Check Existing UI-SPEC', reuseOption: 'Skip' },
-      { file: 'spec-phase.md', anchor: '**Check for existing SPEC.md:**', reuseOption: 'Skip' },
+      { file: 'ui-phase.md', anchor: '## 4. Check Existing UI-SPEC', reuseOption: 'Skip', regenOption: 'Update' },
+      { file: 'spec-phase.md', anchor: '**Check for existing SPEC.md:**', reuseOption: 'Skip', regenOption: 'Update' },
+      { file: 'ai-integration-phase.md', anchor: '## 4. Check Existing AI-SPEC', reuseOption: 'Skip', regenOption: 'Update' },
+      { file: 'eval-review.md', anchor: '**If `EVAL_REVIEW_FILE` non-empty:**', reuseOption: 'View', regenOption: 'Re-audit' },
+      { file: 'ui-review.md', anchor: '**If `UI_REVIEW_FILE` non-empty:**', reuseOption: 'View', regenOption: 'Re-audit' },
     ];
 
     /** The text from `anchor` up to the next heading of the same or higher level. */
@@ -238,7 +246,7 @@ describe('bug #17: AskUserQuestion options arrays respect runtime cap', () => {
       return rest.slice(0, end === -1 ? rest.length : end);
     }
 
-    for (const { file, anchor, reuseOption } of DECISION_POINTS) {
+    for (const { file, anchor, reuseOption, regenOption } of DECISION_POINTS) {
       __autoTest(`${file}: the --auto arm reuses the existing artifact, before any prompt`, () => {
         const body = section(fs.readFileSync(path.join(WF, file), 'utf8'), anchor);
 
@@ -256,12 +264,13 @@ describe('bug #17: AskUserQuestion options arrays respect runtime cap', () => {
 
         // The arm's own sentence — up to the end of that line — must name the
         // reuse option. Scanning the whole section would match the interactive
-        // option list below it and pass on a file that auto-selects "Update".
+        // option list below it and pass on a file that auto-selects the
+        // regenerating option instead.
         const armLine = body.slice(autoIdx, body.indexOf('\n', autoIdx) === -1 ? undefined : body.indexOf('\n', autoIdx));
         assert.match(armLine, new RegExp(`"${reuseOption}"`),
           `${file}: the --auto arm must select "${reuseOption}" (reuse as-is), not regenerate the artifact`);
-        assert.doesNotMatch(armLine, /"Update/,
-          `${file}: auto-selecting "Update" regenerates an artifact nobody is watching (#4776)`);
+        assert.doesNotMatch(armLine, new RegExp(`"${regenOption}`),
+          `${file}: auto-selecting "${regenOption}" regenerates an artifact nobody is watching (#4776)`);
       });
     }
 
