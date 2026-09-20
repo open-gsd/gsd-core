@@ -2476,6 +2476,48 @@ describe('chunk packing weights measured cost (#2456)', () => {
       assert.strictEqual(weigh('anything.test.cjs'), WINDOWS_UNMEASURED_COST_MULTIPLIER);
     });
 
+    test('property: an unmeasured file weighs exactly the Windows multiplier on win32, and exactly 1 on every other platform, for any measured table', () => {
+      const fc = require('fast-check');
+      fc.assert(
+        fc.property(
+          fc.array(fc.integer({ min: 1, max: 500000 }), { minLength: 1, maxLength: 30 }),
+          fc.constantFrom('win32', 'linux', 'darwin', 'freebsd', 'sunos'),
+          (mss, platform) => {
+            const timingsMap = Object.fromEntries(
+              mss.map((ms, i) => [`p${String(i).padStart(3, '0')}.test.cjs`, ms]),
+            );
+            const mean = mss.reduce((a, b) => a + b, 0) / mss.length;
+            const timings = { timings: timingsMap, mean, medianWeight: 1 };
+            const weigh = makeFileWeigher(timings, platform);
+            const expected = platform === 'win32' ? WINDOWS_UNMEASURED_COST_MULTIPLIER : 1;
+            assert.strictEqual(weigh('never-measured.test.cjs'), expected);
+          },
+        ),
+        { numRuns: 200, seed: 44340 },
+      );
+    });
+
+    test('property: a MEASURED file weighs identically regardless of platform, for any measured table', () => {
+      const fc = require('fast-check');
+      fc.assert(
+        fc.property(
+          fc.array(fc.integer({ min: 1, max: 500000 }), { minLength: 1, maxLength: 30 }),
+          fc.constantFrom('win32', 'linux', 'darwin', 'freebsd', 'sunos'),
+          (mss, platform) => {
+            const timingsMap = Object.fromEntries(
+              mss.map((ms, i) => [`p${String(i).padStart(3, '0')}.test.cjs`, ms]),
+            );
+            const mean = mss.reduce((a, b) => a + b, 0) / mss.length;
+            const timings = { timings: timingsMap, mean, medianWeight: 1 };
+            const weighPlatform = makeFileWeigher(timings, platform);
+            const weighLinux = makeFileWeigher(timings, 'linux');
+            assert.strictEqual(weighPlatform('p000.test.cjs'), weighLinux('p000.test.cjs'));
+          },
+        ),
+        { numRuns: 200, seed: 44341 },
+      );
+    });
+
     test('an unknown file packs without error rather than failing the run', () => {
       const chunks = packMeasured([...FILES, 'never-measured.test.cjs'], 4);
       assert.ok(
