@@ -22,7 +22,7 @@ const path = require('node:path');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
-const { classifyContent, classifyTree } = require('../scripts/gen-platform-conformance-tier.cjs');
+const { classifyContent, classifyTree, NOISY_FOR_SOURCE_REACHABILITY } = require('../scripts/gen-platform-conformance-tier.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const SCRIPT = path.join(ROOT, 'scripts', 'gen-platform-conformance-tier.cjs');
@@ -141,6 +141,20 @@ describe('classifyContent — negative / hostile inputs', () => {
     const { needsRealOs, signals } = classifyContent(fixture);
     assert.equal(needsRealOs, false);
     assert.deepEqual(signals, []);
+  });
+});
+
+// ─── Row 15 (#4592): NOISY_FOR_SOURCE_REACHABILITY drift guard ────────────────
+
+describe('NOISY_FOR_SOURCE_REACHABILITY (#4592)', () => {
+  test('NOISY_FOR_SOURCE_REACHABILITY exports exactly the two noisy categories', () => {
+    assert.ok(NOISY_FOR_SOURCE_REACHABILITY instanceof Set,
+      `expected a Set, got: ${typeof NOISY_FOR_SOURCE_REACHABILITY}`);
+    assert.deepEqual(
+      [...NOISY_FOR_SOURCE_REACHABILITY].sort(),
+      ['hardcoded-path-vs-path-call', 'symlink-keyword'].sort(),
+      `expected exactly the two named noisy categories, got: ${JSON.stringify([...NOISY_FOR_SOURCE_REACHABILITY])}`,
+    );
   });
 });
 

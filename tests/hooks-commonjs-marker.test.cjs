@@ -19,6 +19,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { STAGED_HOOK_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const COMMONJS_MARKER = '{"type":"commonjs"}\n';
 
@@ -82,7 +83,7 @@ describe('#2717 CommonJS marker for staged .js hooks', () => {
         cwd: root,
         input: stdinPayload,
         encoding: 'utf8',
-        timeout: 20000,
+        timeout: STAGED_HOOK_SCRIPT_TIMEOUT_MS,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
     } catch (e) {

@@ -655,7 +655,7 @@ describe('ci-pr-mergeability: CLI', () => {
 
 /** workflow file -> job ids that must be gated on the preflight. */
 const GATED = Object.freeze({
-  'test.yml': ['lint-tests', 'test', 'test-inert', 'test-full', 'coverage-gate', 'qa-loop-walk', 'required-tests'],
+  'test.yml': ['lint-tests', 'test', 'test-inert', 'test-conformance', 'coverage-gate', 'qa-loop-walk', 'required-tests'],
   'install-smoke.yml': ['smoke', 'smoke-unpacked'],
   'mutation.yml': ['detect', 'mutation-gate'],
   'security-scan.yml': ['security'],

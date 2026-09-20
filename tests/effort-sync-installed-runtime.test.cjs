@@ -26,6 +26,7 @@ const { runNode } = require('./helpers/process-seam.cjs');
 
 const { runMinimalInstall } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // Absolute path to the built module, spawned in a child process below so the
 // JSON `cmdEffortSync` writes straight to fd 1 (via io.cjs's writeAllSync) can
@@ -53,7 +54,7 @@ describe('#2071: effort sync runs in an installed runtime (no package-root bin/i
       const gsdTools = path.join(configDir, 'gsd-core', 'bin', 'gsd-tools.cjs');
       const result = runNode(
         [gsdTools, 'effort', 'sync', '--config-dir', configDir],
-        { cwd: root, env: { ...process.env, HOME: root }, timeoutMs: 15000 },
+        { cwd: root, env: { ...process.env, HOME: root }, timeoutMs: PROBE_TIMEOUT_MS },
       );
       const combined = `${result.stdout || ''}${result.stderr || ''}`;
 

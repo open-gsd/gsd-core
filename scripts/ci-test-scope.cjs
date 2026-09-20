@@ -3,9 +3,10 @@
 
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { existsSync, readdirSync, appendFileSync } = require('fs');
+const { existsSync, readdirSync, appendFileSync, readFileSync } = require('fs');
 
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
+const { classifyContent, NOISY_FOR_SOURCE_REACHABILITY } = require('./gen-platform-conformance-tier.cjs');
 
 // Workflow files that are purely administrative / policy bots. Changes to these
 // files do NOT require the cross-platform test matrix — only a lightweight
@@ -487,7 +488,55 @@ function addAll(set, values) {
 const WINDOWS_HINTS = ['windows', 'win32', 'shell', 'path'];
 const isWindowsHint = s => WINDOWS_HINTS.some(k => s.toLowerCase().includes(k));
 
-function classify(files) {
+// A change to the classification mechanism itself cannot be presumed safe by
+// the very mechanism being changed (#4592).
+const CLASSIFIER_DEFINITION_FILES = new Set([
+  'scripts/gen-platform-conformance-tier.cjs',
+  'scripts/lib/platform-conformance-tier.generated.cjs',
+  'scripts/lib/suite-detection.cjs',
+]);
+
+/**
+ * Does `file`'s blast radius reach (a) Phase 2's conformance-tier test-file
+ * list or (b) a live platform-conditional signal in src/? Fail-safe: any
+ * thrown error (a require failure, a readFileSync failure, a malformed
+ * generated module, etc.) is treated as uncertainty and returns true — per
+ * #4592's explicit "fail-safe to full_matrix=true on any reachability-
+ * computation error or uncertainty" requirement.
+ * `loadConformanceTier` is injectable (defaults to the real generated module)
+ * solely so tests can simulate a load failure without touching the real,
+ * committed generated file.
+ * @param {string} file
+ * @param {{loadConformanceTier?: () => {CONFORMANCE_TIER_FILES: string[]}}} [deps]
+ * @returns {boolean}
+ */
+function reachesConformanceTierOrSeam(file, deps = {}) {
+  const loadConformanceTier =
+    deps.loadConformanceTier || (() => require('./lib/platform-conformance-tier.generated.cjs'));
+  try {
+    if (file.startsWith('tests/') && file.endsWith('.test.cjs')) {
+      const { CONFORMANCE_TIER_FILES } = loadConformanceTier();
+      return CONFORMANCE_TIER_FILES.includes(file);
+    }
+
+    if (file.startsWith('src/')) {
+      const content = readFileSync(file, 'utf8');
+      const { signals } = classifyContent(content);
+      const narrowSignals = signals.filter(signal => !NOISY_FOR_SOURCE_REACHABILITY.has(signal));
+      return narrowSignals.length > 0;
+    }
+
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+// `reachabilityDeps` is injectable (defaults to {}, which makes
+// reachesConformanceTierOrSeam use the real generated module) solely so
+// tests can simulate a reachability-computation failure without touching
+// the real, committed generated file.
+function classify(files, reachabilityDeps = {}) {
   const targeted = new Set();
   const windows = new Set();
   const reasons = [];
@@ -532,8 +581,30 @@ function classify(files) {
       // lane already covered them. Rescinded per #4421: PR #4384 landed a
       // macOS-only regression on 2026-09-06 that stayed invisible pre-merge
       // precisely because this carve-out suppressed the only macOS signal.
-      // The ~25-runner-minute cost on test-touching PRs is accepted.
+      // #4592: the blanket rule is replaced with a reachability check — only
+      // a changed test file that actually reaches Phase 2's conformance-tier
+      // list (or is the classification mechanism itself) forces full_matrix.
+      if (reachesConformanceTierOrSeam(file, reachabilityDeps)) {
+        fullMatrix = true;
+        reasons.push(`${file}: conformance-tier reachability`);
+      }
+    }
+
+    // #4592: a src/-only diff (no test file touched) must still be able to
+    // set full_matrix=true when it carries a live platform-conditional
+    // signal — this is independent of the tests/ branch above.
+    if (file.startsWith('src/') && reachesConformanceTierOrSeam(file, reachabilityDeps)) {
       fullMatrix = true;
+      reasons.push(`${file}: platform seam reachability`);
+    }
+
+    // #4592: a changed file that IS the classification mechanism itself
+    // (neither under tests/ nor src/, so neither branch above reaches it)
+    // must also force full_matrix — a change to the mechanism cannot be
+    // presumed safe by the very mechanism being changed.
+    if (CLASSIFIER_DEFINITION_FILES.has(file)) {
+      fullMatrix = true;
+      reasons.push(`${file}: reachability classifier definition changed`);
     }
 
     for (const rule of RULES) {
@@ -629,4 +700,12 @@ if (require.main === module) {
   runMain(main);
 }
 
-module.exports = { RULES, missingRuleTestFiles, PROTECTED_WORKFLOWS, INERT_WORKFLOWS, missingProtectedWorkflows };
+module.exports = {
+  RULES,
+  missingRuleTestFiles,
+  PROTECTED_WORKFLOWS,
+  INERT_WORKFLOWS,
+  missingProtectedWorkflows,
+  classify,
+  reachesConformanceTierOrSeam,
+};

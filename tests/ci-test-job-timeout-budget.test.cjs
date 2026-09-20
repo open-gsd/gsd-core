@@ -97,17 +97,6 @@ const LANE_COSTS = [
     evidence: 'run 33278340189 — 13m48s completed; run 33285384930 — CANCELLED at ~14m51s (#4070)',
   },
   {
-    job: 'test-full',
-    measuredMinutes: 27,
-    // Lane moved from windows-22 to windows-latest/24 and is now sharded three
-    // ways. Worst observed shard is `full test (windows-latest, 24, shard
-    // 3/3)`: 26m18s on run 32614439702 (shard 2/3 23m36s, shard 1/3 19m22s),
-    // and 23m17s for shard 2/3 on run 32603886007. The previous 18m59s /
-    // windows-22 figure recorded here predated this cost and is stale — the
-    // lane is measurably slower now, not merely relabeled.
-    evidence: 'run 32614439702 — 26m18s, windows-latest/24 shard 3/3',
-  },
-  {
     job: 'coverage-gate',
     measuredMinutes: 2,
     // Downloads three shards' raw V8 dumps, renders one merged report and runs
@@ -252,7 +241,6 @@ test('mutation.yml mutate job timeout budgets (#4036)', async (t) => {
 test('near-cap check CI_JOB_TIMEOUT_MINUTES literals match each job\'s own timeout-minutes (#4036)', async (t) => {
   const staticLanes = [
     { workflowFile: 'test.yml', jobKey: 'test', envLiteral: '32' },
-    { workflowFile: 'test.yml', jobKey: 'test-full', envLiteral: '45' },
     { workflowFile: 'test.yml', jobKey: 'test-conformance', envLiteral: '45' },
     { workflowFile: 'install-smoke.yml', jobKey: 'smoke', envLiteral: '12' },
   ];
@@ -280,11 +268,6 @@ test('near-cap check CI_JOB_TIMEOUT_MINUTES literals match each job\'s own timeo
     assert.ok(testWorkflow.jobs.test.name.startsWith('test ('),
       'test.yml jobs.test.name no longer starts with "test (" — update JOB_RULES in scripts/ci-timeout-report.cjs to match');
     assert.equal(testRule.test('test (ubuntu-latest, 24, shard 1/3)'), true);
-
-    const testFullRule = JOB_RULES.find((r) => r.workflowFile === 'test.yml' && r.jobKey === 'test-full');
-    assert.ok(testWorkflow.jobs['test-full'].name.startsWith('full test ('),
-      'test.yml jobs.test-full.name no longer starts with "full test (" — update JOB_RULES to match');
-    assert.equal(testFullRule.test('full test (windows-latest, 24, shard 1/3)'), true);
 
     const testInertRule = JOB_RULES.find((r) => r.workflowFile === 'test.yml' && r.jobKey === 'test-inert');
     assert.equal(testWorkflow.jobs['test-inert'].name, 'test (inert CI)',

@@ -33,7 +33,7 @@ const ROOT = path.join(__dirname, '..');
 const INSTALL_JS = path.join(ROOT, 'bin', 'install.js');
 
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
-const { BUILD_TIMEOUT_MS: BUILD_HOOKS_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { BUILD_TIMEOUT_MS: BUILD_HOOKS_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // hooks/dist is gitignored + built; build it idempotently so a real install
 // emits hooks (mirrors golden-install-parity / install-minimal-hooks).
@@ -64,7 +64,7 @@ function runInstaller(args, homeDir) {
     'XDG_CONFIG_HOME', 'CODEX_CONFIG_DIR', 'OPENCODE_CONFIG_DIR', 'KILO_CONFIG_DIR',
   ]) delete env[k];
   return spawnSync(process.execPath, [INSTALL_JS, ...args], {
-    cwd: homeDir, env, encoding: 'utf8', timeout: 120000,
+    cwd: homeDir, env, encoding: 'utf8', timeout: INSTALL_TIMEOUT_MS,
   });
 }
 
@@ -127,7 +127,7 @@ describe('#1928 --gemini CLI deprecation redirect', () => {
     delete env.GSD_TEST_MODE;
     delete env.CLAUDE_CONFIG_DIR;
     const r = spawnSync(process.execPath, [INSTALL_JS, '--gemini', '--uninstall', '--global'], {
-      cwd: home, env, encoding: 'utf8', timeout: 120000,
+      cwd: home, env, encoding: 'utf8', timeout: INSTALL_TIMEOUT_MS,
     });
 
     assert.strictEqual(r.status, 1, 'must exit 1, not fall through to the uninstall dispatch');

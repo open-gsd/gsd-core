@@ -324,8 +324,8 @@ jobs:
           # runner grew until it blew a 15-minute cap and reddened `next`. Raising
           # the cap treated the symptom; sharding changes the shape. Shards are
           # partitioned by MEASURED per-file duration (tests/test-timings.json)
-          # using LPT in scripts/run-tests.cjs — the same cost-aware packer #2472
-          # gave the `test-full` lane, which measures 0.0% spread across 3 bins on
+          # using LPT in scripts/run-tests.cjs — the #2472 cost-aware packer,
+          # which measures 0.0% spread across 3 bins on
           # the current table. The aux suites (integration/security/install/slow)
           # run on shard 1 only — sharding them too was evaluated and rejected for
           # #4070 (see tests/run-tests-harness.test.cjs's "selectShard
@@ -595,210 +595,20 @@ jobs:
       - name: Run scoped tests
         run: node scripts/run-tests.cjs --files-from .ci-selected-tests.txt
 
-  test-full:
-    name: full test (${{ matrix.os }}, ${{ matrix.node-version }}, shard ${{ matrix.shard }}/3)
-    needs: [changes, preflight]
-    if: needs.changes.outputs.code_changed == 'true' && needs.changes.outputs.full_matrix == 'true'
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        shell: ${{ matrix.shell }}
-    # The unit suite is sharded across 3 parallel runners per OS/node leg
-    # (#1212, cost-weighted in #2472). Each shard runs a deterministic
-    # cost-balanced third of the sorted unit-file list via
-    # `run-tests.cjs --suite unit --shard i/3`, so per-job
-    # wall-clock scales as O(total/3) and stays well under the cap as the suite
-    # grows — replacing the #869 timeout bump (15→20m) which only deferred the
-    # cliff. The cap stays at 20m as a generous backstop; a healthy shard now
-    # finishes in roughly a third of the old single-lane wall-clock.
-    #
-    # The matrix is the cross-product of 2 OS/node legs × 3 shards = 6 jobs
-    # (windows-latest/24, macos-latest/24 — the Node floor is 24, so there is
-    # no separate node-22 leg to cross-product against), enumerated explicitly
-    # as `include:` rows. (A base `shard: [1,2,3]`
-    # dimension would NOT cross-product against `include` legs — include rows
-    # sharing no key with the base matrix are appended as standalone combos —
-    # and a NESTED `leg.os` key is not resolvable by the H1 shell-policy linter
-    # in scripts/workflow-policy.cjs, which reads `matrix.os`/`matrix.shell`
-    # directly. Explicit rows keep both the cross-product and the linter happy.)
-    # #2952: `full test (windows-latest, 22, shard 3/3)` reached 18m59s (94% of
-    # a 20-minute cap) on 05b170e44 and 18m14s (91%) on 81eeb8a53. The Windows
-    # shards are slow for platform reasons — process spawn and filesystem cost,
-    # not extra work — and this lane has already blown its cap twice before
-    # (#1051, #1212).
-    # #3787: fresh measurement on windows-latest/24 shard 3/3 hit 26m18s (run
-    # 32614439702), so the 18m59s figure above is stale and the 30-minute cap
-    # only had ~1.14x headroom, in violation of this repo's own 1.5x rule
-    # (tests/ci-test-job-timeout-budget.test.cjs). 1.5x of 27m requires 41m
-    # minimum; 45 is used instead of the bare minimum because shard
-    # composition is unstable — adding one test file reshuffled 115 of 268
-    # unit files between shards — so the per-shard worst case moves run to
-    # run and a budget pinned to the exact minimum would be re-breached by
-    # the next file anyone adds.
-    timeout-minutes: 45
-    env:
-      GSD_PLUGIN_ROOT: .ci-gsd-plugin-root-disabled
-      # #2665: strict on Linux/macOS, report-only on Windows (see the `test` job note).
-      GSD_STRICT_LIVE_CONFIG_GUARD: ${{ matrix.os != 'windows-latest' && '1' || '' }}
-      # #2854: pin the emitted gate's baseline to the SAME commit the tree was merged
-      # with. "Rebase check" merges `pull_request.base.sha` (pinned by #2472 so all 12
-      # matrix jobs agree on one tree), but `resolveBase()` otherwise falls through to
-      # `origin/next`, which `fetch-depth: 0` leaves at the LIVE tip. Whenever `next`
-      # advanced mid-flight the gate compared a tree built on base.sha against a
-      # baseline at a newer commit — so the correctly-keyed cache was rejected as
-      # "stale" and the run hard-failed on diffs that touched nothing related.
-      # This must stay equal to CI_REBASE_BASE_SHA; a test asserts that parity.
-      GSD_EMITTED_BASE: ${{ github.event.pull_request.base.sha }}
-      # #4196: pin the npm-audit baseline the SAME way GSD_EMITTED_BASE pins
-      # its own baseline (see the comment above) -- origin/next is live under
-      # fetch-depth: 0 and can advance mid-run; base.sha is fixed for the life
-      # of the run. For a push event, github.event.before is git's own record
-      # of the ref's state immediately before this push landed -- correct
-      # even when a rebase-merged PR lands as multiple discrete commits in
-      # one push (HEAD~1 would be wrong there: it could already contain an
-      # earlier commit's newly-introduced vulnerable package, masking it).
-      # #4241: a merge_group event carries no pull_request/push context, so
-      # without this arm it silently fell through to the '' branch --
-      # resolveBaselineRef()'s documented-unreachable origin/next live-tip
-      # fallback (npm-audit-baseline.cjs), reopening the exact race #4196
-      # fixed, but only for merge-queue runs. github.event.merge_group.base_sha
-      # is "the SHA of the merge group's parent commit" (GitHub's merge_group
-      # webhook payload) -- the base tip the temporary merge-group commit was
-      # built against, pinned for the life of the run same as the other two arms.
-      AUDIT_BASELINE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.event.before) || (github.event_name == 'merge_group' && github.event.merge_group.base_sha) || '' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            node-version: 24
-            shell: pwsh
-            shard: 1
-          - os: windows-latest
-            node-version: 24
-            shell: pwsh
-            shard: 2
-          - os: windows-latest
-            node-version: 24
-            shell: pwsh
-            shard: 3
-          - os: macos-latest
-            node-version: 24
-            shell: 'zsh {0}'
-            shard: 1
-          - os: macos-latest
-            node-version: 24
-            shell: 'zsh {0}'
-            shard: 2
-          - os: macos-latest
-            node-version: 24
-            shell: 'zsh {0}'
-            shard: 3
-
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1 (Windows)
-        if: runner.os == 'Windows'
-        with:
-          fetch-depth: 0
-          persist-credentials: true
-          token: ${{ github.token }}
-
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (Linux/macOS)
-        if: runner.os != 'Windows'
-        with:
-          fetch-depth: 0
-          persist-credentials: true
-          token: ${{ github.token }}
-
-      - name: Record job start time (near-cap check)
-        run: node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "CI_JOB_START_EPOCH_MS=" + Date.now() + "\n")'
-
-      - name: Guard — require GitHub-hosted runner
-        run: node scripts/ci-guard-runner.cjs
-
-      - name: Rebase check — merge PR base branch into PR head
-        if: github.event_name == 'pull_request'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          # Pin every job of this run to ONE base commit (#2472). Each job runs
-          # this step independently, minutes apart across a 12-job matrix, so
-          # merging the moving branch ref lets jobs see different trees when the
-          # base advances mid-run. The sharded lane needs all jobs to agree on a
-          # partition, and disagreement there drops a test file silently while
-          # CI stays green. base.sha is fixed for the life of the run.
-          CI_REBASE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: node scripts/ci-rebase-check.cjs
-
-      - name: Set up Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: 'npm'
-
-      - name: Environment check
-        run: npm run check:env
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Dependency integrity gate
-        run: node scripts/check-npm-integrity.cjs
-
-      # #2724 (ADR-2719 §5): restore the differential attribution check's cached
-      # baseline, keyed on the PR's base sha. A miss degrades to an in-job build
-      # rather than failing (resolveBaseline()'s documented precedence).
-      - name: Restore emitted-baseline cache
-        if: github.event_name == 'pull_request'
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
-        with:
-          path: .gsd-cache/emitted-baseline.json
-          key: emitted-baseline-${{ github.event.pull_request.base.sha }}
-
-      # The heavy unit suite is split across the 3 shards — each runs a
-      # deterministic cost-balanced third of the sorted unit-file list (#2472). The
-      # union of shards 1/3 + 2/3 + 3/3 is the full unit suite, so coverage is
-      # unchanged; only wall-clock per job drops to ~total/3.
-      - name: Run unit tests (shard ${{ matrix.shard }}/3)
-        run: node scripts/run-tests.cjs --suite unit --shard ${{ matrix.shard }}/3
-
-      # Integration and security suites are small; run them once per OS/node
-      # leg (on shard 1 only) instead of redundantly on all three shards. They
-      # still run on every leg (3 times total, once per platform), so each
-      # platform's integration/security coverage is unchanged — only the
-      # 3x-per-leg duplication is removed.
-      - name: Run integration tests
-        if: matrix.shard == 1
-        run: npm run test:integration
-
-      - name: Run security tests
-        if: matrix.shard == 1
-        run: npm run test:security
-
-      - name: Check job budget (near-cap advisory)
-        if: always()
-        continue-on-error: true
-        env:
-          CI_JOB_LABEL: "full test (${{ matrix.os }}, ${{ matrix.node-version }}, shard ${{ matrix.shard }}/3)"
-          CI_JOB_TIMEOUT_MINUTES: '45'
-        run: node scripts/ci-check-job-near-cap.cjs
-
   # #4591 (epic #4589 Phase 2): runs ONLY the platform-conformance-tier file
   # list (scripts/lib/platform-conformance-tier.generated.cjs) on real
   # Windows/macOS — the OS-agnostic bulk of the suite already ran once on
-  # ubuntu-latest in the `test` job above. Gated the same way `test-full` is
-  # (product code changed AND full_matrix). Windows is sharded 3 ways
-  # (matching test-full's own precedent) after the first real CI run measured
-  # it: unsharded, windows-latest hit its 45-minute timeout and was CANCELLED
-  # (started 03:41:19Z, cancelled 04:26:25Z, run 34434252144) while
-  # macos-latest finished the identical file set in 26m58s — this conformance
-  # tier is dominated by subprocess-spawning tests (343/565 files), and
-  # Windows process-spawn overhead is the documented reason test-full's own
-  # windows lane needed the same fix (#3057). macos-latest stays unsharded; it
-  # has real headroom (27m against the 45m cap).
-  # `test-full` (above) keeps running the WHOLE suite on the
-  # same OSes as a non-gating safety net for one release cycle (see
-  # `required-tests` below) — this job is the new GATING signal for
-  # windows/macos coverage.
+  # ubuntu-latest in the `test` job above. Gated on product code changed AND
+  # full_matrix (#4591); this is the sole gating signal for windows/macos
+  # coverage (#4603 retired the parallel legacy full-matrix job). Windows is
+  # sharded 3 ways, for the same reason a prior full-suite windows lane
+  # needed 3-way sharding (#3057, since retired — #4603), after the first
+  # real CI run measured it: unsharded, windows-latest hit its 45-minute
+  # timeout and was CANCELLED (started 03:41:19Z, cancelled 04:26:25Z, run
+  # 34434252144) while macos-latest finished the identical file set in
+  # 26m58s — this conformance tier is dominated by subprocess-spawning tests
+  # (343/565 files). macos-latest stays unsharded; it has real headroom (27m
+  # against the 45m cap).
   test-conformance:
     name: conformance test (${{ matrix.os }}, ${{ matrix.node-version }}${{ matrix.shard && format(', shard {0}', matrix.shard) || '' }})
     needs: [changes, preflight]
@@ -810,9 +620,8 @@ jobs:
     # No LANE_COSTS entry exists yet for this brand-new job — see
     # tests/ci-test-job-timeout-budget.test.cjs's own header: "no unit test
     # can prove a lane fits its budget — only a real CI run measures that."
-    # Generous and unchanged from test-full's own budget until a real
-    # measurement exists; the smaller file count should comfortably undercut
-    # this ceiling.
+    # Generous until a real measurement exists; the smaller file count
+    # should comfortably undercut this ceiling.
     timeout-minutes: 45
     env:
       GSD_PLUGIN_ROOT: .ci-gsd-plugin-root-disabled
@@ -1055,7 +864,6 @@ jobs:
       - lint-tests
       - test
       - test-inert
-      - test-full
       - test-conformance
       - coverage-gate
       - qa-loop-walk
@@ -1074,7 +882,6 @@ jobs:
           TEST_RESULT: ${{ needs.test.result }}
           TEST_CONFORMANCE_RESULT: ${{ needs.test-conformance.result }}
           INERT_RESULT: ${{ needs.test-inert.result }}
-          FULL_TEST_RESULT: ${{ needs.test-full.result }}
           COVERAGE_GATE_RESULT: ${{ needs.coverage-gate.result }}
           QA_LOOP_WALK_RESULT: ${{ needs.qa-loop-walk.result }}
         run: |
@@ -1088,7 +895,6 @@ jobs:
           echo "test=$TEST_RESULT"
           echo "test-conformance=$TEST_CONFORMANCE_RESULT"
           echo "test-inert=$INERT_RESULT"
-          echo "test-full=$FULL_TEST_RESULT"
           echo "coverage-gate=$COVERAGE_GATE_RESULT"
           echo "qa-loop-walk=$QA_LOOP_WALK_RESULT"
 
@@ -1143,17 +949,6 @@ jobs:
             # sharding moved them to the `coverage-gate` job, which merges every
             # shard's dumps. TEST_RESULT therefore does NOT cover them any more;
             # COVERAGE_GATE_RESULT below is what gates coverage.
-            # #4591 (epic #4589 Phase 2): downgraded from a hard gate to a
-            # non-blocking safety net for one release cycle, per the epic's
-            # phased-rollout design — test-conformance (above) is now the real
-            # gate for windows/macos coverage. A red full-suite run here is
-            # still surfaced (it means the conformance-tier classifier missed
-            # something) but does not block merge; retire this job entirely
-            # in a follow-up once the classifier has proven itself over one
-            # release cycle with no such miss.
-            if [ "$FULL_TEST_RESULT" != "success" ] && [ "$FULL_TEST_RESULT" != "skipped" ]; then
-              echo "::warning::full legacy parity matrix did not pass (non-gating safety net — see #4591)"
-            fi
 
             # #2952: the coverage gate is skipped when product code did not change
             # (same condition as the test lane). Only a non-success, non-skipped
@@ -1180,7 +975,7 @@ jobs:
 
   # #2724 (ADR-2719 §5): publishes the differential attribution check's baseline
   # artifact after `next` advances, keyed on the merge sha. PR lanes restore it
-  # (see the `test` and `test-full` jobs' "Restore emitted-baseline cache" steps),
+  # (see the `test` and `test-conformance` jobs' "Restore emitted-baseline cache" steps),
   # keyed on `pull_request.base.sha` — "the next sha the PR was merged with", the
   # ADR's own phrasing. Not required by `required-tests`: a miss here degrades PR
   # lanes to an in-job build (resolveBaseline()'s documented precedence) rather

@@ -26,6 +26,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('os');
 const { cleanup } = require('./helpers.cjs');
+const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const ADAPTER_SRC = path.join(__dirname, '..', '.opencode', 'plugins', 'gsd-core.js');
 
@@ -436,7 +437,7 @@ test('installer copies plugin as .js, records it in the manifest, and removes it
 
   const run = (args) => {
     const result = runNode([installer, '--opencode', '--global', '--config-dir', cfg, ...args], {
-      timeoutMs: 120000,
+      timeoutMs: INSTALL_TIMEOUT_MS,
       // #3156: sandbox HOME — the installer writes <home>/.gsd/defaults.json via
       // os.homedir() directly, which no env scrub can reach. See installSpawnEnv.
       env: require('./helpers.cjs').installSpawnEnv(),

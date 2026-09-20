@@ -671,16 +671,56 @@ function packChunks(files, { weightOf, maxWeight, maxChars, fixedOverhead }) {
 // which files end up as that gamble's companions is not something a future
 // PR can predict or control.
 //
-// Isolating it into its own chunk, unconditionally, on every platform,
-// removes the gamble at its source rather than tuning the shared budget a
-// third time around a moving target: no other file's packing changes (this
-// file simply never enters the shared pool `packChunks` balances), and no
-// future single-file addition can silently reintroduce this exact failure by
-// landing in its chunk. If a future profiling pass genuinely speeds up
-// codex-config.test.cjs itself, this isolation can be revisited — this is a
-// packing-side mitigation for a KNOWN file's cost, not a statement that the
-// cost is irreducible.
-const ISOLATED_HEAVY_FILES = new Set(['codex-config.test.cjs']);
+// 2026-09-10 (epic #4589 Phase 2/#4591, #4603): the SAME failure hit
+// state.test.cjs (weight 21.35, heavier than codex-config.test.cjs) on
+// `next`'s own push-triggered Tests run, `conformance test (windows-latest,
+// 24, shard 2/3)` chunk 3/6 — 600019ms, killed. Root cause is not a new
+// outlier: state.test.cjs was already this heavy before Phase 2 existed.
+// What changed is the POOL it gets packed against. Phase 2's
+// platform-conformance-tier job packs only the ~546 conformance-tier files
+// per shard (vs. the ~950-file full suite `packChunks` used to balance
+// against), so the same absolute-weight outlier now represents a much
+// larger share of a much smaller, more homogeneous pool — the LPT packer has
+// fewer light files available to pad around it. This is a structural risk of
+// the smaller conformance-tier pool, not a one-off.
+//
+// A first attempt at this fix hand-picked a handful of candidates by eye and
+// missed three heavier files — caught by an isolated code-review pass, which
+// is the reason this comment says "systematically", not "we looked at the
+// obvious ones". The corrected method: codex-config.test.cjs's own weight
+// (17.87) is 44.7% of the Windows MAX_FILES_PER_CHUNK budget (40) — that
+// ratio, not a round "~45%", is the actual established threshold, since it's
+// the exact file two prior documented incidents already proved dangerous.
+// Computing weight/budget for EVERY unit-suite file in the timings table
+// (`suiteOf(f) === null` — the same eligibility test that decides
+// conformance-tier membership) and keeping everything at or above that ratio
+// found SEVEN files, not four: run-tests-harness.test.cjs (31.23, 78.1%),
+// emitted-attribution.test.cjs (26.47, 66.2%), install-minimal-hooks.test.cjs
+// (24.45, 61.1%), phase.test.cjs (23.31, 58.3%), state.test.cjs (21.35,
+// 53.4%), config.test.cjs (19.76, 49.4%), install.test.cjs (18.84, 47.1%) —
+// each at or above codex-config.test.cjs's own proven-dangerous ratio.
+//
+// Isolating all eight (these seven plus codex-config.test.cjs) into their own
+// chunk, unconditionally, on every platform, removes the gamble at its
+// source rather than tuning the shared budget again around a moving target:
+// no other file's packing changes (these files simply never enter the shared
+// pool `packChunks` balances), and no future single-file addition can
+// silently reintroduce this exact failure by landing in one of their chunks.
+// If a future profiling pass genuinely speeds any of them up, this isolation
+// can be revisited — this is a packing-side mitigation for KNOWN files' cost,
+// not a statement that the cost is irreducible. If a FUTURE file's measured
+// weight ever crosses this same ratio, it needs the same treatment; nothing
+// currently re-runs this sweep automatically when the timings table changes.
+const ISOLATED_HEAVY_FILES = new Set([
+  'codex-config.test.cjs',
+  'run-tests-harness.test.cjs',
+  'emitted-attribution.test.cjs',
+  'install-minimal-hooks.test.cjs',
+  'phase.test.cjs',
+  'state.test.cjs',
+  'config.test.cjs',
+  'install.test.cjs',
+]);
 
 /**
  * Split `files` (absolute or repo-relative paths) into `{isolated, packable}`

@@ -41,8 +41,16 @@ const path = require('node:path');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { copyScriptWithDeps } = require('./helpers/copy-script-fixture.cjs');
+const { STAGED_HOOK_SCRIPT_TIMEOUT_MS, QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
+
+// Bounds a single `driver.cjs` process sweeping many fast-check
+// property-based cases in-process against a stubbed registry; digits
+// coincide with the shared HOOK_FANOUT_TIMEOUT_MS/SEAM_DEFAULT_TIMEOUT_MS
+// constants but this is neither a hook fan-out nor an omitted-default seam
+// call, so kept as its own constant.
+const PROPERTY_DRIVER_TIMEOUT_MS = 60000;
 
 // Requiring the installer (not as main) never runs the CLI — matches the
 // existing tests/claude-imperative-reference.test.cjs convention.
@@ -282,7 +290,7 @@ describe('GROUP A.2: resolveSharedHooksDirName — malformed/hostile values + pr
         UNDEFINED_SENTINEL,
         CASES_JSON: JSON.stringify(ALL_SINGLE_CASES),
       },
-      timeoutMs: 60000,
+      timeoutMs: PROPERTY_DRIVER_TIMEOUT_MS,
     });
 
     assert.equal(result.outcome, OUTCOME.EXITED, `driver did not exit cleanly: ${JSON.stringify(result)}`);
@@ -567,7 +575,7 @@ describe('GROUP C: bundle-directory-name-agnostic hook scripts', () => {
           GSD_GLOBAL_VERSION_FILE: '',
           GSD_CACHE_FILE: cacheFile,
         },
-        timeoutMs: 20000,
+        timeoutMs: STAGED_HOOK_SCRIPT_TIMEOUT_MS,
       },
     );
 
@@ -632,7 +640,7 @@ describe('GROUP C: bundle-directory-name-agnostic hook scripts', () => {
       tool_response: { content: injectionContent },
     });
 
-    const excludedResult = runNode([scannerPath], { input: excludedPayload, timeoutMs: 10000 });
+    const excludedResult = runNode([scannerPath], { input: excludedPayload, timeoutMs: QUICK_SPAWN_TIMEOUT_MS });
     assert.equal(excludedResult.outcome, OUTCOME.EXITED);
     assert.equal(excludedResult.exitCode, 0);
     assert.equal(
@@ -641,7 +649,7 @@ describe('GROUP C: bundle-directory-name-agnostic hook scripts', () => {
       "a path under the scanner's own bundle directory must be excluded (no PostToolUse output at all)",
     );
 
-    const controlResult = runNode([scannerPath], { input: controlPayload, timeoutMs: 10000 });
+    const controlResult = runNode([scannerPath], { input: controlPayload, timeoutMs: QUICK_SPAWN_TIMEOUT_MS });
     assert.equal(controlResult.outcome, OUTCOME.EXITED);
     assert.equal(controlResult.exitCode, 0);
     assert.notEqual(

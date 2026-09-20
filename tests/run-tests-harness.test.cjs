@@ -2875,9 +2875,20 @@ describe('analyzeChunkEvents (#3889)', () => {
 // its chunk and retrigger the per-chunk timeout two prior incidents already
 // hit. These tests pin partitionIsolatedFiles directly — the pure split, not
 // the chunk-execution loop around it.
+//
+// 2026-09-10 (#4603): epic #4589 Phase 2's platform-conformance-tier job packs
+// a much smaller file pool per shard than the full suite did, which exposed
+// the SAME failure on state.test.cjs (weight 21.35, heavier than
+// codex-config.test.cjs) on `next` itself. Re-running the same weight-table
+// analysis found two more unisolated files at or above the same ~45%-of-budget
+// threshold: run-tests-harness.test.cjs (31.23) and phase.test.cjs (23.31),
+// plus config.test.cjs (19.76) just under codex-config.test.cjs's own 45% but
+// still heavier than several already-risky files. All four added to
+// ISOLATED_HEAVY_FILES; see scripts/run-tests.cjs's own comment for the full
+// weight/budget accounting.
 const { ISOLATED_HEAVY_FILES, partitionIsolatedFiles } = require('../scripts/run-tests.cjs');
 
-describe('partitionIsolatedFiles (#4497 codex-config.test.cjs chunk isolation)', () => {
+describe('partitionIsolatedFiles (#4497 codex-config.test.cjs chunk isolation, extended #4603)', () => {
   test('an isolated-heavy file is split out, in its own bucket, everything else stays packable', () => {
     const files = [
       '/repo/tests/a.test.cjs',
@@ -2887,6 +2898,30 @@ describe('partitionIsolatedFiles (#4497 codex-config.test.cjs chunk isolation)',
     const { isolated, packable } = partitionIsolatedFiles(files);
     assert.deepStrictEqual(isolated, ['/repo/tests/codex-config.test.cjs']);
     assert.deepStrictEqual(packable, ['/repo/tests/a.test.cjs', '/repo/tests/b.test.cjs']);
+  });
+
+  test('#4603: every newly-isolated heavy file is split out individually, in original order', () => {
+    const files = [
+      '/repo/tests/a.test.cjs',
+      '/repo/tests/state.test.cjs',
+      '/repo/tests/b.test.cjs',
+      '/repo/tests/phase.test.cjs',
+      '/repo/tests/run-tests-harness.test.cjs',
+      '/repo/tests/config.test.cjs',
+      '/repo/tests/c.test.cjs',
+    ];
+    const { isolated, packable } = partitionIsolatedFiles(files);
+    assert.deepStrictEqual(isolated, [
+      '/repo/tests/state.test.cjs',
+      '/repo/tests/phase.test.cjs',
+      '/repo/tests/run-tests-harness.test.cjs',
+      '/repo/tests/config.test.cjs',
+    ]);
+    assert.deepStrictEqual(packable, [
+      '/repo/tests/a.test.cjs',
+      '/repo/tests/b.test.cjs',
+      '/repo/tests/c.test.cjs',
+    ]);
   });
 
   test('matches by BASENAME, so it isolates regardless of platform path separator or directory prefix', () => {
@@ -2918,7 +2953,66 @@ describe('partitionIsolatedFiles (#4497 codex-config.test.cjs chunk isolation)',
     assert.deepStrictEqual(partitionIsolatedFiles([]), { isolated: [], packable: [] });
   });
 
-  test('ISOLATED_HEAVY_FILES currently names exactly codex-config.test.cjs (documents the set the fix scoped to)', () => {
-    assert.deepStrictEqual([...ISOLATED_HEAVY_FILES], ['codex-config.test.cjs']);
+  test('ISOLATED_HEAVY_FILES currently names exactly the eight known-heavy files (documents the set the fix scoped to)', () => {
+    assert.deepStrictEqual(
+      [...ISOLATED_HEAVY_FILES].sort(),
+      [
+        'codex-config.test.cjs',
+        'config.test.cjs',
+        'emitted-attribution.test.cjs',
+        'install-minimal-hooks.test.cjs',
+        'install.test.cjs',
+        'phase.test.cjs',
+        'run-tests-harness.test.cjs',
+        'state.test.cjs',
+      ].sort(),
+    );
+  });
+
+  // #4603: a durable guard, not a one-time snapshot. A first attempt at this
+  // fix hand-picked candidates by eye and missed three heavier files (caught
+  // by an isolated code-review pass) — this test closes that gap by
+  // RE-DERIVING the same weight/budget computation from the live timings
+  // table on every run, so a future test file crossing the same threshold
+  // fails this test instead of silently reintroducing the per-chunk-timeout
+  // failure this whole mechanism exists to prevent.
+  test('#4603: no unisolated unit-suite file exceeds ISOLATED_HEAVY_FILES\' own established threshold', () => {
+    const { suiteOf } = require('../scripts/lib/suite-detection.cjs');
+    const table = require('../tests/test-timings.json');
+    const timings = table.timings;
+    const values = Object.values(timings).filter(
+      (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0,
+    );
+    const mean = values.reduce((sum, v) => sum + v, 0) / values.length;
+    const WINDOWS_BUDGET = 40;
+
+    // The threshold is codex-config.test.cjs's OWN ratio — the exact file two
+    // prior documented incidents proved dangerous — not an arbitrarily chosen
+    // round number. This makes the test self-consistent even if
+    // WINDOWS_BUDGET or the timings table changes: it always asks "is this
+    // file at least as dangerous as the file we already know is dangerous?"
+    assert.ok(
+      Object.hasOwn(timings, 'codex-config.test.cjs'),
+      'codex-config.test.cjs must remain in the timings table to anchor this threshold',
+    );
+    const codexRatio = timings['codex-config.test.cjs'] / mean / WINDOWS_BUDGET;
+
+    const exceedsThreshold = [];
+    for (const [file, ms] of Object.entries(timings)) {
+      if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) continue;
+      if (suiteOf(file) !== null) continue; // suite-tagged files never enter this pool
+      const ratio = ms / mean / WINDOWS_BUDGET;
+      if (ratio >= codexRatio && !ISOLATED_HEAVY_FILES.has(file)) {
+        exceedsThreshold.push(`${file} (${(ratio * 100).toFixed(1)}% of budget)`);
+      }
+    }
+
+    assert.deepStrictEqual(
+      exceedsThreshold,
+      [],
+      `file(s) at/above codex-config.test.cjs's own danger ratio (${(codexRatio * 100).toFixed(1)}%) ` +
+        `are not in ISOLATED_HEAVY_FILES: ${exceedsThreshold.join(', ')} — add them, following ` +
+        `scripts/run-tests.cjs's ISOLATED_HEAVY_FILES comment for the pattern`,
+    );
   });
 });

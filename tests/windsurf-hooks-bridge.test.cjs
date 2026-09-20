@@ -46,6 +46,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
@@ -69,7 +70,7 @@ function runHook(scriptPath, payload, opts = {}) {
   const input = payload === undefined ? '' : (typeof payload === 'string' ? payload : JSON.stringify(payload));
   const r = runHookSeam(scriptPath, [], {
     input,
-    timeoutMs: 10000,
+    timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
     cwd: opts.cwd || os.tmpdir(),
   });
   return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr, signal: r.signal };

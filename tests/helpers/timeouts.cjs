@@ -141,6 +141,24 @@ const QUICK_SPAWN_TIMEOUT_MS = 10000;
  */
 const FIXTURE_HOOK_TIMEOUT_SECONDS = 5;
 
+/**
+ * Spawning ONE already-staged or already-bundled hook script directly --
+ * never the full installer, never a fan-out across several hooks -- where
+ * the script does a modest amount of real work: a git-root check, a
+ * version-cache read/write, or an ESM-vs-CommonJS module load probe under a
+ * hostile config root. This is a distinct, heavier class than
+ * `QUICK_SPAWN_TIMEOUT_MS` (10000ms, trivial invocations with no real
+ * git/network work), since every site using this constant measurably does
+ * more than that. It is also distinct from `HOOK_FANOUT_TIMEOUT_MS`, which
+ * bounds a different class -- nested shell fan-out across MULTIPLE hooks,
+ * not a single script.
+ *
+ * Shared across 3 files in batch #4516 of the ad hoc timeout literal
+ * migration, epic #4445 -- that is why it lives here rather than as a
+ * file-local constant.
+ */
+const STAGED_HOOK_SCRIPT_TIMEOUT_MS = 20000;
+
 module.exports = {
   PROBE_TIMEOUT_MS,
   HOOK_FANOUT_TIMEOUT_MS,
@@ -151,4 +169,5 @@ module.exports = {
   SEAM_DEFAULT_TIMEOUT_MS,
   QUICK_SPAWN_TIMEOUT_MS,
   FIXTURE_HOOK_TIMEOUT_SECONDS,
+  STAGED_HOOK_SCRIPT_TIMEOUT_MS,
 };
