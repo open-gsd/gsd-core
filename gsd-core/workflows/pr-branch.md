@@ -293,7 +293,14 @@ else
   # any other empty FILTER_PATHS entry. `-exec printf ... \;` rather than
   # `for D in $(find ...)`: a `for` over unquoted `find` output word-splits a
   # milestone slug containing a space into two spurious entries (ShellCheck
-  # SC2044) — the exact class of bug #4109 already fixed once in this file.
+  # SC2044). Adjacent to #4109 above, but NOT the same defect: that one was
+  # cross-shell consistency (bash splits a bare `$VAR`, zsh does not) and left
+  # whitespace-in-path safety untouched, so the space hazard survived it and is
+  # closed here for the first time (#4605). A slug containing a literal NEWLINE
+  # is still not covered — `$FILTER_PATHS` uses newline as its record separator,
+  # so `read` cannot tell one from the other. That limit is inherited, not
+  # introduced: this recipe assumes newline-free paths throughout (every
+  # `git diff-tree`/`git diff --name-only` reader here does the same).
   # `2>/dev/null` also swallows a genuine `find` failure (e.g. an unreadable
   # `.planning/milestones/`), not just the expected-absent case — the unsafe
   # direction, since a real failure then silently leaves those paths
@@ -391,10 +398,12 @@ for HASH in $(printf '%s' "$INCLUDED_COMMITS"); do
   # (#4605). `for P in $(printf '%s' "$FILTER_PATHS")` splits on IFS, tearing a
   # discovered `.planning/milestones/<slug>-phases/` whose slug contains a space
   # into fragments that name no real directory — those paths then survive into
-  # the PR branch unfiltered. Same bug class #4109 fixed at the discovery end; it
-  # reaches the consumption end too, now that FILTER_PATHS carries discovered
-  # names rather than only literal ones. Fed by heredoc rather than a pipe so the
-  # loop body runs in THIS shell, not a subshell.
+  # the PR branch unfiltered. The discovery step above guards the same hazard;
+  # it reaches this consumption end too, now that FILTER_PATHS carries
+  # discovered names rather than only literal ones. (Not #4109 — see the note
+  # there: that fix was cross-shell splitting consistency, not whitespace
+  # safety.) Fed by heredoc rather than a pipe so the loop body runs in THIS
+  # shell, not a subshell.
   while IFS= read -r P; do
     [ -n "$P" ] || continue
     git rm -r -f -q --ignore-unmatch -- "$P" 2>/dev/null || true

@@ -631,10 +631,13 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
     // produces. `slug` is a parameter because the milestone slug is the one
     // piece of FILTER_PATHS the workflow does not control — it comes off the
     // user's disk, so it can legitimately contain a space.
-    function buildMilestonePhasesFixture(slug) {
+    // `autocrlf` sets `core.autocrlf` on the fixture; `true` is Git for
+    // Windows' default and reproduces its line-ending conversion anywhere.
+    function buildMilestonePhasesFixture(slug, { autocrlf = null } = {}) {
       const phasesDir = `.planning/milestones/${slug}-phases`;
       const dir = trackDir(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-prbranch-mstone-')));
       initRepo(dir);
+      if (autocrlf !== null) git(['config', 'core.autocrlf', String(autocrlf)], dir);
       writeFile(dir, 'code.txt', 'line1\n');
       writeFile(dir, '.planning/STATE.md', 'state v1\n');
       writeFile(dir, `${phasesDir}/old.md`, 'old plan\n');
@@ -713,9 +716,42 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       // buildFixture's old.md in test 19) so it legitimately persists on
       // prbranch unchanged — that's the #3679 target-preservation contract,
       // not a leak. Assert it stays byte-identical rather than absent.
-      const oldContent = fs.readFileSync(path.join(dir, phasesDir, 'old.md'), 'utf-8');
-      assert.strictEqual(oldContent, 'old plan\n', 'pre-existing old.md must survive unchanged on the checked-out prbranch worktree');
+      //
+      // Read the COMMITTED blob, not the worktree file. Under
+      // `core.autocrlf=true` (Git for Windows' default) every checkout
+      // rewrites LF to CRLF in the working tree, so a worktree read here would
+      // return 'old plan\r\n' and fail on windows-latest for a reason that has
+      // nothing to do with this filter — the same defect that broke three L2
+      // tests on the sibling #4606 branch. What the command guarantees is the
+      // content of the PR branch; nothing is normalized, so a genuine content
+      // difference still fails byte-for-byte.
+      assert.strictEqual(
+        git(['show', `prbranch:${phasesDir}/old.md`], dir), 'old plan\n',
+        'pre-existing old.md must survive unchanged on prbranch',
+      );
     }
+
+    // Windows parity. `core.autocrlf=true` rewrites LF to CRLF on every
+    // checkout, which is what broke three L2 tests on the sibling #4606 branch
+    // when windows-latest finally ran them. The filter itself is unaffected —
+    // it operates on paths, not content — but this pins that, and pins that the
+    // preserved-file assertion reads the committed blob rather than the
+    // converted worktree, so Linux CI catches a regression here without waiting
+    // on a windows-latest shard.
+    test('#4605 L2: the milestone-phases filter behaves identically under core.autocrlf=true (the Git-for-Windows default)', () => {
+      const dir = buildMilestonePhasesFixture('v1.0', { autocrlf: true });
+      try {
+        assertMilestonePhasesFiltered(dir, 'v1.0');
+        // Sanity: the fixture must actually reproduce the Windows condition,
+        // or this test proves nothing.
+        assert.ok(
+          fs.readFileSync(path.join(dir, '.planning/milestones/v1.0-phases/old.md'), 'utf-8').includes('\r\n'),
+          'with autocrlf=true the working tree is expected to be CRLF — if not, the fixture no longer reproduces windows-latest',
+        );
+      } finally {
+        teardown();
+      }
+    });
 
     test('#4605 L2: a milestone-nested <slug>-phases/ dir is filtered from the PR branch by the real create_pr_branch recipe', () => {
       const dir = buildMilestonePhasesFixture('v1.0');
