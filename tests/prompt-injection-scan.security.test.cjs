@@ -32,6 +32,7 @@ const path = require('path');
 const { scanForInjection } = require('../gsd-core/bin/lib/security.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
+const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
@@ -51,7 +52,7 @@ function scanContent(t, content) {
   t.after(() => cleanup(dir));
   const file = path.join(dir, 'fixture.txt');
   fs.writeFileSync(file, `${content}\n`);
-  const result = runHook(SCAN_SCRIPT, ['--file', file], { interpreter: 'bash', timeoutMs: 10_000 });
+  const result = runHook(SCAN_SCRIPT, ['--file', file], { interpreter: 'bash', timeoutMs: QUICK_SPAWN_TIMEOUT_MS });
   return result;
 }
 

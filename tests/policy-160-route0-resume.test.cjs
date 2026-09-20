@@ -20,6 +20,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { QUICK_SPAWN_TIMEOUT_MS, LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 describe('Route 0: resume_incomplete_phase invariant (#160)', () => {
   const nextMdPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'next.md');
@@ -471,7 +472,7 @@ describe('Route 0: resume_incomplete_phase invariant (#160)', () => {
       // (Route 0 CAN fire), not permanently 0 (the bug this closes).
       const { execFileSync } = require('node:child_process');
       let jqAvailable = false;
-      try { execFileSync('jq', ['--version'], { stdio: 'ignore', timeout: 10000, killSignal: 'SIGKILL' }); jqAvailable = true; } catch { /* no jq on PATH */ }
+      try { execFileSync('jq', ['--version'], { stdio: 'ignore', timeout: QUICK_SPAWN_TIMEOUT_MS, killSignal: 'SIGKILL' }); jqAvailable = true; } catch { /* no jq on PATH */ }
       if (!jqAvailable) { t.skip('jq not on PATH — this contract test applies progress.md\'s literal jq expression to real roadmap.analyze JSON; the source-text assertions above still validate the fix'); return; }
 
       const { createTempProject, cleanup } = require('./helpers.cjs');
@@ -492,7 +493,7 @@ describe('Route 0: resume_incomplete_phase invariant (#160)', () => {
       const roadmapJson = execFileSync(process.execPath, [toolsBin, 'roadmap', 'analyze'], {
         cwd: tmpDir,
         encoding: 'utf8',
-        timeout: 60000,
+        timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
       });
       const phase1 = JSON.parse(roadmapJson).phases.find((p) => String(p.number) === '1');
       assert.ok(phase1, 'roadmap.analyze must report phase 1');
@@ -503,13 +504,13 @@ describe('Route 0: resume_incomplete_phase invariant (#160)', () => {
       const planCountOut = execFileSync('jq', ['-r', '.plan_count // 0'], {
         input: JSON.stringify(phase1),
         encoding: 'utf8',
-        timeout: 10000,
+        timeout: QUICK_SPAWN_TIMEOUT_MS,
         killSignal: 'SIGKILL',
       }).trim();
       const summaryCountOut = execFileSync('jq', ['-r', '.summary_count // 0'], {
         input: JSON.stringify(phase1),
         encoding: 'utf8',
-        timeout: 10000,
+        timeout: QUICK_SPAWN_TIMEOUT_MS,
         killSignal: 'SIGKILL',
       }).trim();
 

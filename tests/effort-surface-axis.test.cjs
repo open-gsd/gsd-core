@@ -24,6 +24,7 @@ const cp = require('node:child_process');
 const fc = require('fast-check');
 
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const {
@@ -663,7 +664,7 @@ describe('#2481 review workflow resolves effort per reviewer', () => {
         {
           cwd: projectDir,
           encoding: 'utf8',
-          timeout: 60000,
+          timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
           killSignal: 'SIGKILL',
           env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` },
         },

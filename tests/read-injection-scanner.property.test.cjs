@@ -33,6 +33,13 @@ const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-read-injection-scanner.js');
 
 /**
+ * Safety-net ceiling for a single hook invocation — 6x the hook's own
+ * internal 5s timer. Never itself an assertion target; see the rationale
+ * in runHook()'s doc comment below.
+ */
+const READ_INJECTION_SCANNER_SAFETY_NET_TIMEOUT_MS = 30000;
+
+/**
  * Run the scanner hook with a payload and return its result.
  *
  * Uses spawnSync (not execFileSync) so non-zero exits return a result object
@@ -57,7 +64,10 @@ function runHook(payload) {
     return { exitCode: 0, stdout: '', skipped: true };
   }
 
-  const result = runHookSeam(HOOK_PATH, [], { input, timeoutMs: 30000 });
+  const result = runHookSeam(HOOK_PATH, [], {
+    input,
+    timeoutMs: READ_INJECTION_SCANNER_SAFETY_NET_TIMEOUT_MS,
+  });
 
   return {
     exitCode: result.exitCode ?? 1,

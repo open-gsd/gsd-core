@@ -1590,6 +1590,18 @@ describe('cmdStateGet (state get)', () => {
     assert.strictEqual(output['Status'], 'Active', 'should extract Status field value');
   });
 
+  test('bold field lookup ignores prose lookalikes and accepts indentation (#4481)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      '# Project State\n\nA note cites **Status:** stale prose.\n  **Status:** Active\n'
+    );
+
+    const result = runGsdTools('state get Status', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output['Status'], 'Active');
+  });
+
   test('extracts markdown section content', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'STATE.md'),
@@ -3889,6 +3901,46 @@ Progress: [..........] 0%
     // After advancing past all plans, Status should say "Phase complete"
     assert.ok(/Status:.*Phase complete/i.test(posSection),
       'Status should be updated to "Phase complete" after last advance-plan');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #4481 — field reads agree with line-anchored field writes
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#4481: stateExtractField ignores mid-sentence bold lookalikes', () => {
+  const documentWithLookalikes = [
+    '# Project State',
+    '',
+    'A note cites **Progress:** dashboards, **Total Plans in Phase:** aggregation, and **Last Activity:** retention.',
+    '',
+    '  **Progress:** [█░░░░░░░░░] 10%',
+    '\t**Total Plans in Phase:** 2',
+    '  **Last Activity:** 2026-01-01',
+    '',
+  ].join('\n');
+
+  test('returns the real line-start value for every sync field', () => {
+    assert.strictEqual(stateDocument.stateExtractField(documentWithLookalikes, 'Progress'), '[█░░░░░░░░░] 10%');
+    assert.strictEqual(stateDocument.stateExtractField(documentWithLookalikes, 'Total Plans in Phase'), '2');
+    assert.strictEqual(stateDocument.stateExtractField(documentWithLookalikes, 'Last Activity'), '2026-01-01');
+  });
+
+  test('sync change advisories name the same old values the writer replaces', () => {
+    const result = stateTransitionMod.transitionCore(
+      documentWithLookalikes,
+      { kind: 'sync', totalPlansInPhase: 3, percent: 20 },
+      { clock: { localToday: () => '2026-09-07' } },
+    );
+    const changes = result.data.changes;
+
+    assert.ok(changes.includes('Total Plans in Phase: 2 -> 3'));
+    assert.ok(changes.some((change) => change.startsWith('Progress: [█░░░░░░░░░] 10% -> ')));
+    assert.ok(changes.includes('Last Activity: 2026-01-01 -> 2026-09-07'));
+    assert.ok(result.content.includes('A note cites **Progress:** dashboards, **Total Plans in Phase:** aggregation, and **Last Activity:** retention.'));
+    assert.ok(result.content.includes('\t**Total Plans in Phase:** 3'));
+    assert.ok(result.content.includes('  **Progress:** [██░░░░░░░░] 20%'));
+    assert.ok(result.content.includes('  **Last Activity:** 2026-09-07'));
   });
 });
 

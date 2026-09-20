@@ -11,7 +11,13 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
-const { output, error, ERROR_REASON } = io;
+const { output, ERROR_REASON } = io;
+// Explicitly annotated so TypeScript applies never-return control-flow narrowing.
+// A destructured `const { error } = io` is a const WITHOUT a type annotation, and TS
+// only narrows after a never-returning call when the callee is a function declaration
+// or an annotated const. Without the annotation every `error(...)` guard below would
+// need a dead `throw` after it to convince the checker that the value is non-null.
+const error: typeof io.error = io.error;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspaceMod = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspaceMod;
@@ -24,7 +30,7 @@ import type { Decision } from './decisions.cjs';
 import frontmatterMod = require('./frontmatter.cjs');
 const { extractFrontmatter } = frontmatterMod;
 import { stripFencedCode, collectSections } from './markdown-sectionizer.cjs';
-import { validatePath } from './security.cjs';
+import { tryWithinRoot, tryWithinRootLexical, PathAcceptance } from './security.cjs';
 import { checkUiPresence } from './ui-safety-gate.cjs';
 import { hasStaticFrontendEvidence } from './ui-frontend-evidence.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -90,7 +96,12 @@ function readIfExists(filePath: string): string {
 }
 
 function resolvePath(inputPath: string, projectDir: string): string {
-  return path.isAbsolute(inputPath) ? inputPath : path.join(projectDir, inputPath);
+  const candidate = path.isAbsolute(inputPath) ? inputPath : path.join(projectDir, inputPath);
+  const contained = tryWithinRoot(candidate, projectDir, PathAcceptance.AbsoluteInsideRoot);
+  if (contained === null) {
+    error(`path escapes its allowed directory: ${inputPath}`, ERROR_REASON.USAGE);
+  }
+  return contained;
 }
 
 interface WorkflowConfig {
@@ -281,11 +292,12 @@ function buildVerifyMessage(notHonored: UncoveredItem[]): string {
   ].join('\n');
 }
 
-function loadDecisionExtraction(contextPath: string): { trackable: Decision[]; outcome: 'parsed' | 'none-present' | 'could-not-parse' } {
+function loadDecisionExtraction(contextPath: string): { trackable: Decision[]; outcome: 'parsed' | 'none-present' | 'could-not-parse'; unreadableIds: string[] } {
   const extraction = extractDecisions(readIfExists(contextPath));
   return {
     trackable: extraction.decisions.filter((d) => d.trackable),
     outcome: extraction.outcome,
+    unreadableIds: extraction.unreadableIds ?? [],
   };
 }
 
@@ -336,23 +348,48 @@ function cmdDecisionCoveragePlan(projectDir: string, args: string[], raw: boolea
     output({ passed: true, skipped: true, reason: 'CONTEXT.md missing', total: 0, covered: 0, uncovered: [], message: 'No CONTEXT.md - nothing to check.' }, raw, undefined);
     return;
   }
+  // #4794: a NON-FILE path (a directory — the adjacent same-looking positional
+  // swapped, the issue's repro 2) is a caller error like #2770's empty argument:
+  // fs.existsSync is true, the read yields nothing, and the gate used to
+  // certify passed:true on a phase full of decisions. Fail closed, naming it.
+  // The stat is wrapped: a path that vanishes between existsSync and statSync
+  // (or any stat failure) must answer the SAME fail-closed JSON, never a throw.
+  let contextIsFile = false;
+  let contextKind = 'non-file entry';
+  try {
+    const st = fs.statSync(contextPath);
+    contextIsFile = st.isFile();
+    if (st.isDirectory()) contextKind = 'directory';
+  } catch {
+    contextIsFile = false;
+    contextKind = 'unreadable path';
+  }
+  if (!contextIsFile) {
+    output({ passed: false, skipped: false, reason: 'context path is not a file', total: null, covered: null, message: `Decision coverage gate: the context path "${contextArg}" is not a readable file (${contextKind}). Swap the adjacent positionals or pass --context <path-to-CONTEXT.md>.` }, raw, undefined);
+    return;
+  }
 
-  const { trackable: decisions, outcome } = loadDecisionExtraction(contextPath);
+  const { trackable: decisions, outcome, unreadableIds } = loadDecisionExtraction(contextPath);
 
   // #1365 fail-loud gate: any could-not-parse outcome must NOT silently pass —
   // even when some decisions were extracted (e.g. D-01 valid but D-02 malformed).
   // A parse-miss on ANY bullet means the gate cannot certify full coverage.
   // Fire independent of decisions.length so a partial-parse still blocks.
   if (outcome === 'could-not-parse') {
+    // #4794: nothing was measured — the answer must not carry the fields of a
+    // gate that did. total/covered are null (a type change is the point:
+    // 0 reads as data, null does not), `uncovered` is OMITTED (the list was
+    // never built), and the ids that failed to parse are carried so a caller
+    // capturing stdout knows which decision to fix.
     const partialParse = decisions.length > 0;
     output({
       passed: false,
       skipped: false,
       reason: 'could-not-parse',
-      total: decisions.length,
-      covered: 0,
-      uncovered: [],
-      message: partialParse
+      total: null,
+      covered: null,
+      unreadable: unreadableIds,
+      message: (partialParse
         ? 'Decision coverage gate: decisions could not be fully parsed — one or more ' +
           '`- **D-NN ...**` bullets appear malformed (missing `:` or ` — ` separator, or a phase ' +
           'prefix that is not a digit run, e.g. `D4x-01`). Fix the bullet format so all decisions ' +
@@ -362,7 +399,8 @@ function cmdDecisionCoveragePlan(projectDir: string, args: string[], raw: boolea
           'or D- tokens) but no decision bullets could be extracted. Check the formatting of the decisions ' +
           'block and ensure bullets follow the `- **D-NN:** text`, `- **D4-NN:** text` (phase-prefixed), ' +
           'or `- **D-NN — title** body` form. An ID grammar the parser does not support (e.g. `DEC-01`) ' +
-          'also lands here.',
+          'also lands here.')
+        + (unreadableIds.length > 0 ? ' Unreadable ids: ' + unreadableIds.join(', ') + '.' : ''),
     }, raw, undefined);
     return;
   }
@@ -404,12 +442,6 @@ function recentCommitMessages(projectDir: string): string {
   }
 }
 
-function isInsideRoot(candidatePath: string, rootDir: string): boolean {
-  const root = path.resolve(rootDir);
-  const target = path.resolve(root, candidatePath);
-  return target === root || target.startsWith(`${root}${path.sep}`);
-}
-
 function readModifiedFilesContent(projectDir: string, summaries: string[]): string {
   const out: string[] = [];
   let total = 0;
@@ -420,8 +452,15 @@ function readModifiedFilesContent(projectDir: string, summaries: string[]): stri
         .map((match) => match[1].trim().replace(/^["']|["']$/g, ''));
       for (const file of files) {
         if (total >= 50) break;
-        if (!file || !isInsideRoot(file, projectDir)) continue;
-        const raw = readIfExists(resolvePath(file, projectDir));
+        if (!file) continue;
+        // Migrated off the hand-rolled prefix check (ADR-4650): resolve+contain in one
+        // step via the canonical realpath predicate — the eventual read below follows
+        // symlinks, so containment must be decided on the resolved target, not a lexical
+        // prefix. Read the value the predicate RETURNED; do not re-derive the path.
+        const candidate = path.isAbsolute(file) ? file : path.join(projectDir, file);
+        const contained = tryWithinRoot(candidate, projectDir, PathAcceptance.AbsoluteInsideRoot);
+        if (contained === null) continue;
+        const raw = readIfExists(contained);
         out.push(raw.length > 256 * 1024 ? raw.slice(0, 256 * 1024) : raw);
         total++;
       }
@@ -557,8 +596,10 @@ function findUiSpecInDir(phaseDir: string): string {
  * matches the token `dashboard` exactly like the real compound `micro-frontend`
  * (the boundary rule of #3718 is intentional and untouched). The gate therefore
  * blocks only when the token match is corroborated by static frontend evidence
- * in the repo tree (hasStaticFrontendEvidence: package.json UI-framework dep or
- * a component-framework file). This mirrors the sibling post-wave gate
+ * in the repo tree (hasStaticFrontendEvidence: package.json UI-framework dep, a
+ * component-framework file, or native UI evidence — a `.xaml` file or a
+ * `.swift`/`.kt`/`.dart` file carrying its ecosystem's UI import marker,
+ * #4658). This mirrors the sibling post-wave gate
  * computeUiSafetyGate, which requires `hasUiFiles` (git diff) before blocking.
  * matchedToken/matchedLine surface what tripped the sniffer so an operator can
  * judge the flag in one second instead of reaching for --skip-ui.
@@ -1194,8 +1235,9 @@ function cmdGapAnalysisPlanPost(projectDir: string, args: string[], raw: boolean
     error('gap-analysis.plan-post requires a phase-dir argument: check gap-analysis.plan-post <phase-dir> [phase-req-ids]', ERROR_REASON.SDK_MISSING_ARG);
     return;
   }
+  const resolvedPhaseDir = resolvePath(phaseDir, projectDir);
   const phaseReqIds = args[3] ?? undefined;
-  const result = runGapAnalysis(projectDir, phaseDir, { phaseReqIds });
+  const result = runGapAnalysis(projectDir, resolvedPhaseDir, { phaseReqIds });
   // Uniform gate contract: block = false (gap-analysis is always advisory, never blocks).
   // `message` carries the human-readable gap analysis report so the dispatch's
   // advisory branch can surface it. --raw emits JSON (rawValue=undefined), not
@@ -1265,20 +1307,20 @@ function buildPredicateDeps() {
       ) {
         return null;
       }
-      const directPath = validatePath(artifactSuffix, phaseDir);
-      if (directPath.safe && fs.existsSync(directPath.resolved) && fs.statSync(directPath.resolved).isFile()) {
-        return directPath.resolved;
+      const directContained = tryWithinRoot(artifactSuffix, phaseDir);
+      if (directContained !== null && fs.existsSync(directContained) && fs.statSync(directContained).isFile()) {
+        return directContained;
       }
-      const planningPath = validatePath(path.join('.planning', artifactSuffix), phaseDir);
-      if (planningPath.safe && fs.existsSync(planningPath.resolved) && fs.statSync(planningPath.resolved).isFile()) {
-        return planningPath.resolved;
+      const planningContained = tryWithinRoot(path.join('.planning', artifactSuffix), phaseDir);
+      if (planningContained !== null && fs.existsSync(planningContained) && fs.statSync(planningContained).isFile()) {
+        return planningContained;
       }
       try {
         const files = fs.readdirSync(phaseDir);
         for (const f of files) {
           if (f.endsWith('-' + artifactSuffix) || f === artifactSuffix) {
-            const candidate = validatePath(f, phaseDir);
-            if (candidate.safe && fs.statSync(candidate.resolved).isFile()) return candidate.resolved;
+            const candidateContained = tryWithinRoot(f, phaseDir);
+            if (candidateContained !== null && fs.statSync(candidateContained).isFile()) return candidateContained;
           }
         }
       } catch { /* ignore */ }
@@ -1362,10 +1404,15 @@ function cmdCheckPredicate(projectDir: string, args: string[], raw: boolean): vo
     error('predicate --predicate value must be valid JSON', ERROR_REASON.USAGE);
     return;
   }
+  const rawPhaseDir = flags['phase-dir'];
+  let resolvedPhaseDir: string | undefined = rawPhaseDir;
+  if (typeof rawPhaseDir === 'string' && rawPhaseDir !== '') {
+    resolvedPhaseDir = resolvePath(rawPhaseDir, projectDir);
+  }
   const ctx = {
     cwd: projectDir,
     phaseNumber: flags['phase-number'],
-    phaseDir: flags['phase-dir'],
+    phaseDir: resolvedPhaseDir,
     phaseReqIds: flags['phase-req-ids'],
   };
   let result;
@@ -1477,7 +1524,14 @@ function cmdApiCoverageVerifyPre(projectDir: string, args: string[], raw: boolea
   // Defense-in-depth: the resolved dir must be inside the phases root (or a
   // milestone archive under .planning/milestones).
   const milestonesRoot = path.join(pDir, 'milestones');
-  if (!isInsideRoot(resolvedDir, phasesRoot) && !isInsideRoot(resolvedDir, milestonesRoot)) {
+  // Lexical containment (ADR-4650): resolvedDir is a directory path, not read
+  // through here — mirrors the prior path.resolve(root, candidate)-based check
+  // without introducing a filesystem/realpath dependency this defense-in-depth
+  // recheck never had.
+  if (
+    tryWithinRootLexical(resolvedDir, phasesRoot) === null &&
+    tryWithinRootLexical(resolvedDir, milestonesRoot) === null
+  ) {
     output(
       {
         block: true,

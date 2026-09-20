@@ -59,9 +59,10 @@ Parse from init JSON: `phase_found`, `phase_dir`, `phase_number`, `phase_name`, 
 
 **Input sanitization (defense-in-depth):**
 ```bash
-# Validate PADDED_PHASE contains only digits and optional dot (e.g., "02", "03.1")
-if ! [[ "$PADDED_PHASE" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-  echo "Error: Invalid phase number format: '${PADDED_PHASE}'. Expected digits (e.g., 02, 03.1)."
+# Validate PADDED_PHASE matches the canonical phase-number grammar (src/phase-id.cts): digits,
+# an optional single uppercase letter, then dotted segments (e.g., "02", "03.1", "23.1.2", "12A")
+if ! [[ "$PADDED_PHASE" =~ ^[0-9]+[A-Z]?(\.[0-9]+)*$ ]]; then
+  echo "Error: Invalid phase number format: '${PADDED_PHASE}'. Expected digits with an optional letter suffix (e.g., 02, 03.1, 23.1.2, 12A)."
   # Exit workflow
 fi
 ```
@@ -150,6 +151,49 @@ If --files NOT provided:
 if [ -z "$FILES_OVERRIDE" ]; then
   SUMMARIES=$(ls "${PHASE_DIR}"/*-SUMMARY.md 2>/dev/null)
   REVIEW_FILES=()
+
+  # Keep the literal heredoc outside command substitution: Bash 3.2 (the
+  # system Bash on macOS) reparses heredoc bodies nested directly in $(...).
+  extract_summary_files() {
+    node - "$1" 2>/dev/null <<'NODE'
+    const fs = require('fs');
+    const content = fs.readFileSync(process.argv[2], 'utf-8');
+    const match = content.replace(/\r\n/g, '\n').match(/^---\n([\s\S]*?)\n---/);
+    if (!match) { process.exit(0); }
+    const yaml = match[1];
+    const files = [];
+    let inSection = null;
+    for (const line of yaml.split('\n')) {
+      if (/^\s+created:/.test(line)) { inSection = 'created'; continue; }
+      if (/^\s+modified:/.test(line)) { inSection = 'modified'; continue; }
+      if (/^\s*[\w-]+:/.test(line) && !/^\s*-/.test(line)) { inSection = null; continue; }
+      if (inSection && /^\s+-\s+(.+)/.test(line)) {
+        let raw = line.match(/^\s+-\s+(.+)/)[1].trim();
+        raw = raw.replace(/^['"]|['"]$/g, '');
+        raw = raw.replace(/\s+\([^)]*\)\s*$/, '');
+        raw = raw.split(/\s+—\s/)[0].trim();
+        // #2666: accept root-level paths (no `/`) and known extensionless build
+        // files, not only nested paths with a trailing extension. The pre-fix
+        // guard required BOTH a directory separator AND a trailing dot-extension,
+        // which silently dropped every repository-root file (Dockerfile,
+        // renovate.json, AGENTS.md, package.json, .gitlab-ci.yml, …) and every
+        // extensionless build file anywhere in the tree (**/Dockerfile, **/Makefile).
+        // Prose bullets are rejected by the known-filename / has-extension
+        // distinction, with the post-processing existence check (`[ -f ]`) as a
+        // backstop — a prose string is never a real file on disk.
+        const KNOWN_EXTENSIONLESS_BUILD_FILES = new Set([
+          'dockerfile', 'containerfile', 'makefile', 'justfile', 'procfile',
+        ]);
+        const hasExtension = /\.[A-Za-z0-9]+$/.test(raw);
+        const basename = raw.split('/').pop().toLowerCase();
+        if (hasExtension || KNOWN_EXTENSIONLESS_BUILD_FILES.has(basename)) {
+          files.push(raw);
+        }
+      }
+    }
+    if (files.length) console.log(files.join('\n'));
+NODE
+  }
   
   if [ -n "$SUMMARIES" ]; then
     # Rewrapped through unquoted command substitution (gsd-core#4109): a bare
@@ -166,44 +210,7 @@ if [ -z "$FILES_OVERRIDE" ]; then
 
       # Extract key_files.created and key_files.modified using node for reliable YAML parsing
       # This avoids fragile awk parsing that breaks on indentation differences
-      EXTRACTED=$(node -e "
-        const fs = require('fs');
-        const content = fs.readFileSync('$summary', 'utf-8');
-        const match = content.replace(/\r\n/g, '\n').match(/^---\n([\s\S]*?)\n---/);
-        if (!match) { process.exit(0); }
-        const yaml = match[1];
-        const files = [];
-        let inSection = null;
-        for (const line of yaml.split('\n')) {
-          if (/^\s+created:/.test(line)) { inSection = 'created'; continue; }
-          if (/^\s+modified:/.test(line)) { inSection = 'modified'; continue; }
-          if (/^\s*[\w-]+:/.test(line) && !/^\s*-/.test(line)) { inSection = null; continue; }
-          if (inSection && /^\s+-\s+(.+)/.test(line)) {
-            let raw = line.match(/^\s+-\s+(.+)/)[1].trim();
-            raw = raw.replace(/^['"]|['"]$/g, '');
-            raw = raw.replace(/\s+\([^)]*\)\s*$/, '');
-            raw = raw.split(/\s+—\s/)[0].trim();
-            // #2666: accept root-level paths (no `/`) and known extensionless build
-            // files, not only nested paths with a trailing extension. The pre-fix
-            // guard required BOTH a directory separator AND a trailing dot-extension,
-            // which silently dropped every repository-root file (Dockerfile,
-            // renovate.json, AGENTS.md, package.json, .gitlab-ci.yml, …) and every
-            // extensionless build file anywhere in the tree (**/Dockerfile, **/Makefile).
-            // Prose bullets are rejected by the known-filename / has-extension
-            // distinction, with the post-processing existence check (`[ -f ]`) as a
-            // backstop — a prose string is never a real file on disk.
-            const KNOWN_EXTENSIONLESS_BUILD_FILES = new Set([
-              'dockerfile', 'containerfile', 'makefile', 'justfile', 'procfile',
-            ]);
-            const hasExtension = /\.[A-Za-z0-9]+$/.test(raw);
-            const basename = raw.split('/').pop().toLowerCase();
-            if (hasExtension || KNOWN_EXTENSIONLESS_BUILD_FILES.has(basename)) {
-              files.push(raw);
-            }
-          }
-        }
-        if (files.length) console.log(files.join('\n'));
-      " 2>/dev/null)
+      EXTRACTED=$(extract_summary_files "$summary")
       
       # Add extracted files to REVIEW_FILES array
       if [ -n "$EXTRACTED" ]; then
@@ -526,11 +533,21 @@ This `if`/`else`/`fi` is the entire guard: when `DEPTH_OK` is not the literal st
 </step>
 
 <step name="check_empty_scope">
-If REVIEW_FILES is empty:
+An empty `REVIEW_FILES` (#3661) means nothing new to re-review — NOT a phase with no standing findings. #4665: with `--fix` + an existing REVIEW.md, route to `dispatch-fix` (the flag covers "if REVIEW.md already exists"):
+
+```bash
+REVIEW_PATH="${PHASE_DIR}/${PADDED_PHASE}-REVIEW.md"
+if [ "${#REVIEW_FILES[@]}" -ne 0 ]; then
+  # non-empty scope: no-op
+  true
+elif [ "$FIX_FLAG" != "true" ] || [ ! -f "${REVIEW_PATH}" ]; then
+  echo "No source files changed in phase ${PHASE_ARG}. Skipping review."
+  # Exit workflow. Do NOT spawn agent or create REVIEW.md.
+  exit 0
+fi
 ```
-No source files changed in phase ${PHASE_ARG}. Skipping review.
-```
-Exit workflow. Do NOT spawn agent or create REVIEW.md.
+
+**`--fix` recovery:** proceed DIRECTLY to `dispatch-fix`, skipping `structural_pre_pass`, `dispatch_reviewer_lanes`, `spawn_reviewer`, `commit_review` — no fresh review, nothing to commit; `code-review-fix.md` resolves the existing REVIEW.md and owns the fix logic. The reviewer agent is not dispatched here.
 </step>
 
 <step name="structural_pre_pass">

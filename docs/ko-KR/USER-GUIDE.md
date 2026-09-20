@@ -9,7 +9,7 @@ GSD Core의 설명형 동반 가이드 — 여기서 방향을 잡은 후 전용
 
 ## 목차
 
-- [슬래시 명령어 형식](#슬래시-명령어-형식-하이픈-vs-콜론)
+- [슬래시 명령어 형식](#슬래시-명령어-형식)
 - [네임스페이스 라우팅 입문](#네임스페이스-라우팅-입문-gsdnamespace-v140)
 - [프로젝트 생명주기 개요](#프로젝트-생명주기-개요)
 - [워크플로우 다이어그램](#워크플로우-다이어그램)
@@ -31,14 +31,13 @@ GitHub / Linear / Jira 이슈에서 GSD를 직접 구동하는 방법은
 
 ---
 
-## 슬래시 명령어 형식 (하이픈 vs 콜론)
+## 슬래시 명령어 형식
 
-GSD는 지원되는 모든 런타임에 **동일한 스킬 세트**를 제공하지만, 두 가지 슬래시 형식이 존재합니다:
+GSD는 지원되는 모든 런타임에 **동일한 스킬 세트**를 제공하며, 하이픈 형식의 슬래시 표기를 사용합니다:
 
 - **하이픈 형식** — `/gsd-command-name` — Claude Code, Copilot, OpenCode, Kilo, Cursor, Windsurf, Augment, Antigravity, Trae에서 사용됩니다.
-- **콜론 형식** — `/gsd:command-name` — **Gemini CLI 전용**입니다. Gemini는 모든 플러그인 명령어를 플러그인 ID 아래에 네임스페이스로 묶으므로, `--gemini` 설치 시 설치 경로가 본문 텍스트 참조와 명령어 파일을 모두 콜론 형식으로 재작성합니다.
 
-직접 선택할 필요는 없습니다 — 설치 프로그램이 각 런타임의 명령어 디렉터리에 올바른 형식을 작성합니다. Gemini 터미널에서 안내를 따를 때는 각 슬래시 명령어를 읽을 때 `gsd` 뒤의 하이픈을 콜론으로 대체하세요.
+설치 프로그램은 사용자가 대상으로 하는 각 런타임의 명령어 디렉터리에 이 형식을 작성합니다.
 
 ## 네임스페이스 라우팅 입문 (`gsd:<namespace>`, v1.40)
 
@@ -676,7 +675,7 @@ GSD 서브에이전트는 별도의 컨텍스트 창에서 실행됩니다 — �
 
 전체 감사, 하네스 레퍼런스, `model_profile`과의 구성 노트는 번들된 `context-budget.md` 레퍼런스의 [MCP 도구 스키마 비용](../../gsd-core/references/context-budget.md#mcp-tool-schema-cost-harness-concern)을 참조하세요.
 
-### 비 Claude 런타임 사용 (Codex, OpenCode, Gemini CLI, Kilo)
+### 비 Claude 런타임 사용 (Codex, OpenCode, Antigravity CLI, Kilo)
 
 > **Codex CLI 최소 지원 버전: `0.130.0`** (이슈 [#3562](https://github.com/open-gsd/gsd-core/issues/3562)).
 
@@ -753,7 +752,6 @@ WINDSURF_CONFIG_DIR=~/.codeium/windsurf-next npx @opengsd/gsd-core@latest --wind
 | 런타임 | 안정 기본값 | 재정의 환경 변수 |
 |---|---|---|
 | Claude Code | `~/.claude` | `CLAUDE_CONFIG_DIR` |
-| Gemini CLI | `~/.gemini` | `GEMINI_CONFIG_DIR` |
 | OpenCode | `XDG_CONFIG_HOME/opencode` | `OPENCODE_CONFIG_DIR` |
 | Codex | (Codex CLI에 따름) | `--config-dir` 플래그 |
 | Copilot | `~/.copilot` | `COPILOT_CONFIG_DIR` |

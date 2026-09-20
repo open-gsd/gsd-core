@@ -154,7 +154,7 @@ npx @opengsd/gsd-core@latest --codex --global   # or --opencode, --kilo, etc.
 
 ## 在非 Anthropic 运行时上使用 GSD Core
 
-如果您为 Codex、OpenCode、Gemini CLI 或 Kilo 安装了 GSD Core，安装程序已在您的配置中设置了 `resolve_model_ids: "omit"`。这告知 GSD Core 跳过 Anthropic 模型 ID 解析，让运行时选择其自己的默认模型。基本情况下无需手动设置。
+如果您为 Codex、OpenCode、Antigravity CLI 或 Kilo 安装了 GSD Core，安装程序已在您的配置中设置了 `resolve_model_ids: "omit"`。这告知 GSD Core 跳过 Anthropic 模型 ID 解析，让运行时选择其自己的默认模型。基本情况下无需手动设置。
 
 **如果您希望在 Codex 上使用分层模型：**
 

@@ -18,6 +18,7 @@ const { spawnSync } = require('node:child_process');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { copyScriptWithDeps } = require('./helpers/copy-script-fixture.cjs');
 const { findTableWithColumns } = require('../gsd-core/bin/lib/markdown-table.cjs');
+const { GENERATOR_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const SCRIPT_REL = path.join('scripts', 'gen-adr-index.cjs');
@@ -61,7 +62,7 @@ function run(root, args = []) {
   const res = spawnSync(process.execPath, [path.join(root, SCRIPT_REL), ...args], {
     cwd: root,
     encoding: 'utf8',
-    timeout: 30_000,
+    timeout: GENERATOR_SCRIPT_TIMEOUT_MS,
   });
   if (res.error) throw res.error;
   return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '' };

@@ -438,8 +438,9 @@ function dispatchCapabilityCommand({ command, args, cwd, raw, error, registry, r
     // Step 2: confinement check — belt-and-suspenders even after the basename
     // validation above. Resolved path must be inside libDir (not equal to it,
     // and must start with libDir + sep so "libDir-suffix" can't sneak through).
-    const resolved = path.resolve(libDir, m);
-    if (resolved === libDir || !resolved.startsWith(libDir + path.sep)) {
+    const { tryWithinRootLexical } = require('./lib/security.cjs');
+    const resolved = tryWithinRootLexical(m, libDir);
+    if (resolved === null || resolved === path.resolve(libDir)) {
       throw new Error('capability module path escapes bin/lib/: ' + JSON.stringify(m));
     }
     // Step 3: require the resolved absolute path — the SAME representation that
@@ -515,18 +516,19 @@ function defaultRequireFromInstallRoot(installRoot, m) {
   if (typeof m !== 'string' || !/^[A-Za-z0-9._-]+\.cjs$/.test(m)) {
     throw new Error('capability module must be a bare .cjs basename: ' + JSON.stringify(m));
   }
-  // Realpath the root so a symlinked ancestor can't widen confinement.
-  const realRoot = fs.realpathSync(installRoot);
-  const resolved = path.resolve(realRoot, m);
-  if (resolved === realRoot || !resolved.startsWith(realRoot + path.sep)) {
+  const { tryWithinRoot, tryWithinRootLexical, PathAcceptance } = require('./lib/security.cjs');
+  // Lexical containment check: a symlinked ancestor can't widen confinement.
+  const lexical = tryWithinRootLexical(m, installRoot);
+  if (lexical === null || lexical === path.resolve(installRoot)) {
     throw new Error('capability module path escapes its install root: ' + JSON.stringify(m));
   }
-  // The module file itself must not be a symlink pointing outside the root.
-  const realResolved = fs.realpathSync(resolved);
-  if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path.sep)) {
+  // Realpath/symlink check: the module file itself must not be a symlink
+  // pointing outside the root.
+  const real = tryWithinRoot(m, installRoot, PathAcceptance.RelativeOnly);
+  if (real === null) {
     throw new Error('capability module resolves outside its install root (symlink): ' + JSON.stringify(m));
   }
-  return require(realResolved);
+  return require(real);
 }
 
 /**
@@ -950,15 +952,27 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   function routeCommit({ args, cwd, raw, error }) {
     const amend = args.includes('--amend');
           const noVerify = args.includes('--no-verify');
-          const filesIndex = args.indexOf('--files');
+          // #4208: `--files` and `--files-removed` are two path lists, each
+          // running from its flag to the NEXT LIST FLAG. A boolean flag
+          // inside a list (`--files a --amend b`) is skipped, not a
+          // terminator: that is what the previous slice-to-end collection
+          // did (it filtered `--` tokens and kept everything else), and a
+          // list that stopped at any `--` token silently dropped `b`
+          // (review of #4253). The previous form could not carry a second
+          // list flag at all, which is the only thing that changed.
+          // A REPEATED list flag (`--files a --files b`) merges, as the old
+          // slice-to-end parse merged it: every occurrence contributes its
+          // run, and none of them ends another's silently.
+          const firstListFlag = args.findIndex((a, i) => i > 0 && COMMIT_LIST_FLAGS.has(a));
           // Collect all positional args between command name and first flag,
           // then join them — handles both quoted ("multi word msg") and
           // unquoted (multi word msg) invocations from different shells
-          const endIndex = filesIndex !== -1 ? filesIndex : args.length;
+          const endIndex = firstListFlag !== -1 ? firstListFlag : args.length;
           const messageArgs = args.slice(1, endIndex).filter(a => !a.startsWith('--'));
           const message = messageArgs.join(' ') || undefined;
-          const files = filesIndex !== -1 ? args.slice(filesIndex + 1).filter(a => !a.startsWith('--')) : [];
-          commands.cmdCommit(cwd, message, files, raw, amend, noVerify);
+          const files = collectListFlagValues(args, '--files');
+          const filesRemoved = collectListFlagValues(args, '--files-removed');
+          commands.cmdCommit(cwd, message, files, raw, amend, noVerify, filesRemoved);
   }
 
   function routeCheckCommit({ args, cwd, raw, error }) {
@@ -1169,7 +1183,18 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // First positional that isn't a flag also works (lenient); otherwise ignore unknown flags.
             if (!a.startsWith('-') && !pifRuntime) { pifRuntime = a; }
           }
-          const filename = getProjectInstructionFile(pifRuntime);
+          // A retired runtime id now THROWS rather than resolving (#4709 AC#1).
+          // Map it to the same clean single-line error routeSkillsRoot emits for
+          // an unknown runtime — a CLI must not answer a bad flag value with a
+          // stack trace. The thrown message already names the successor and the
+          // retiring issue, so it is surfaced verbatim.
+          let filename;
+          try {
+            filename = getProjectInstructionFile(pifRuntime);
+          } catch (err) {
+            if (err && err.code === 'GSD_RETIRED_RUNTIME') error(err.message);
+            throw err;
+          }
           process.stdout.write(filename + '\n');
   }
 
@@ -2992,6 +3017,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             worktreeSafety.cmdWorktreeRecordAgent(cwd, args.slice(2));
           } else if (subcommand === 'reap-orphans') {
             worktreeSafety.cmdWorktreeReapOrphans(cwd);
+          } else if (subcommand === 'worker-record') {
+            worktreeSafety.cmdWorktreeWorkerRecord(cwd, args.slice(2));
+          } else if (subcommand === 'worker-status') {
+            worktreeSafety.cmdWorktreeWorkerStatus(cwd, args.slice(2));
+          } else if (subcommand === 'worker-complete') {
+            worktreeSafety.cmdWorktreeWorkerComplete(cwd, args.slice(2));
           } else if (subcommand === 'base-check') {
             require('./lib/worktree-base-ref.cjs').cmdWorktreeBaseCheck(cwd, args.slice(2));
           } else if (subcommand === 'set-baseref') {
@@ -2999,7 +3030,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           } else if (subcommand === 'create') {
             worktreeSafety.cmdWorktreeCreate(cwd, args.slice(2));
           } else {
-            error('Unknown worktree subcommand. Available: cleanup-wave, record-agent, reap-orphans, base-check, set-baseref, create', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+            error('Unknown worktree subcommand. Available: cleanup-wave, record-agent, reap-orphans, base-check, set-baseref, create, worker-record, worker-status, worker-complete', ERROR_REASON.SDK_UNKNOWN_COMMAND);
           }
   }
 
@@ -3281,6 +3312,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   const RESTORE_OUTCOME = Object.freeze({
     ELIGIBLE: 'eligible',
     RESTORED: 'restored',
+    ALREADY_PRESENT: 'already_present',
     SKIPPED_DESTINATION_MANAGED: 'skipped_destination_managed',
     SKIPPED_DESTINATION_EXISTS: 'skipped_destination_exists',
     SKIPPED_COPY_FAILED: 'skipped_copy_failed',
@@ -3339,18 +3371,30 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     return out;
   }
 
-  // Why these three checks rather than security.cjs's `validatePath`: that seam
-  // resolves symlinks with realpathSync and then tests containment, so a link
-  // whose target sits inside the config dir passes. For a restore that is still
-  // wrong — writing through any link overwrites whatever it points at instead
-  // of materializing a regular file at the backed-up path. These checks reject
-  // links outright, which is strictly stricter than validatePath, not a
-  // reimplementation of it. Do not "simplify" this to validatePath.
+  // Why these three checks rather than security.cjs's `assertWithinRoot` /
+  // `tryWithinRoot`: that seam resolves symlinks with realpathSync and then
+  // tests containment, so a link whose target sits inside the config dir
+  // passes. For a restore that is still wrong — writing through any link
+  // overwrites whatever it points at instead of materializing a regular file
+  // at the backed-up path. These checks reject links outright, which is
+  // strictly stricter than assertWithinRoot/tryWithinRoot, not a
+  // reimplementation of them. Do not "simplify" this to assertWithinRoot or
+  // tryWithinRoot. Reviewed under epic #4636 Phase 3: the containment
+  // DECISION now routes through the canonical lexical predicate
+  // (`tryWithinRootLexical`, ADR-4650 decision 6); isInsideDir below still
+  // treats target === root as NOT contained via its own extra `!==` check
+  // (unlike every other containment implementation in this repo, which
+  // treats target === root as contained) — that condition is this gate's
+  // own and is layered on top of the shared predicate, not folded into it.
 
   /** True when `target` resolves strictly inside `root`. */
   function isInsideDir(root, target) {
-    const rel = path.relative(path.resolve(root), path.resolve(target));
-    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+    // Containment decision: canonical lexical predicate (ADR-4650 decision 6).
+    // The extra `!==` condition is this gate's own: a restore must never
+    // target the config directory itself, only something strictly inside it.
+    if (path.resolve(target) === path.resolve(root)) return false;
+    const { tryWithinRootLexical } = require('./lib/security.cjs');
+    return tryWithinRootLexical(target, root) !== null;
   }
 
   /**
@@ -3548,9 +3592,13 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       }
 
       // An identical destination is a no-op restore, not a conflict: re-running
-      // the restore after a successful one must stay quiet and idempotent.
+      // the restore after a successful one must stay quiet and idempotent. It
+      // gets its own outcome so it is excluded from eligible_count — the update
+      // workflow drives its restore question off that count (#4558).
+      let destExists = false;
       let destDiffers = false;
       if (fs.existsSync(destPath)) {
+        destExists = true;
         try {
           destDiffers = !fs.readFileSync(destPath).equals(fs.readFileSync(srcPath));
         } catch {
@@ -3563,6 +3611,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           detail: 'a different file already exists at this path — restoring would overwrite it',
         });
         entries.push({ path: relPath, outcome: RESTORE_OUTCOME.SKIPPED_DESTINATION_EXISTS, warnings });
+        continue;
+      }
+      if (destExists) {
+        entries.push({ path: relPath, outcome: RESTORE_OUTCOME.ALREADY_PRESENT, warnings });
         continue;
       }
 
@@ -4280,6 +4332,31 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
  * declares that file "All OS-facing I/O; single platform seam", and a private
  * duplicate here is what made it untrue.
  */
+const COMMIT_LIST_FLAGS = new Set(['--files', '--files-removed']);
+
+// #4208 review: hoisted out of routeCommit's closure so the parser is reachable
+// from a test. It is the whole of the two-list argument contract, and its edge
+// cases (a boolean flag inside a run, a repeated list flag, either order) were
+// already the subject of a review round -- a parser that only the CLI can reach
+// can only be tested by example, one spawn at a time.
+//
+// Every occurrence of `flag` contributes a run; a run ends at the next LIST
+// flag and skips boolean flags on the way, so no token strictly between one
+// list flag and the next is ever dropped. Repeated runs of the same flag merge,
+// as the pre-#4208 slice-to-end parse merged them.
+function collectListFlagValues(args, flag) {
+  const values = [];
+  args.forEach((a, i) => {
+    if (a !== flag) return;
+    for (const b of args.slice(i + 1)) {
+      if (COMMIT_LIST_FLAGS.has(b)) break;
+      if (b.startsWith('--')) continue;
+      values.push(b);
+    }
+  });
+  return values;
+}
+
 function resolveSpawnBinary(name, platform = process.platform, env = process.env) {
   const { resolveExecutableBinary } = require('./lib/shell-command-projection.cjs');
   return resolveExecutableBinary(name, { platform, env });
@@ -4472,7 +4549,7 @@ async function dispatchHostCommand({ command, args, cwd, raw, error, defaultValu
 // keep working. No shell is spawned (argv array) — no injection surface beyond
 // the old `timeout … bash -c "$CMD"`.
 function runWithTimeout(argv) {
-  const { spawn } = require('node:child_process');
+  const { spawn, spawnSync } = require('node:child_process');
   const os = require('node:os');
 
   const USAGE = 'Usage: gsd_run run-with-timeout <seconds> [--] <command> [args...]';
@@ -4497,9 +4574,11 @@ function runWithTimeout(argv) {
 
   const isWin = process.platform === 'win32';
   // Detached (own process group) on POSIX so a timeout can reap the WHOLE tree —
-  // a bare child.kill() misses grandchildren (e.g. a test runner's workers) and
-  // would not actually bound the wall clock. Windows has no POSIX process
-  // groups; a direct kill is the best portable option there.
+  // a bare child.kill() misses grandchildren (e.g. a test runner's workers).
+  // Windows has no POSIX process groups and process.kill(-pid) is unsupported
+  // there, so EVERY killTree attempt on Windows tree-kills via
+  // `taskkill /PID <pid> /T /F` while the root is alive (see killTree) — by the
+  // time the direct child exits, its descendants are already orphaned.
   const detached = !isWin && secs > 0;
   const spawnFailureCode = (err) =>
     (err && err.code === 'ENOENT' ? 127 : err && err.code === 'EACCES' ? 126 : 125);
@@ -4551,6 +4630,27 @@ function runWithTimeout(argv) {
       try {
         if (detached && child.pid) {
           try { process.kill(-child.pid, signal); return; } catch { /* group already gone */ }
+        }
+        if (isWin && child.pid) {
+          // #4601: Windows has no POSIX process groups, so the tree kill rides
+          // on `taskkill /T`, which walks the child's descendants the way
+          // `process.kill(-pid)` reaches a POSIX group — this is what bounds
+          // the wall clock when the direct child mediates (cmd.exe /c shim) or
+          // spawns its own children. Deliberately NOT gated on the SIGKILL
+          // stage: child.kill on Windows is TerminateProcess regardless of
+          // signal, so by the time the direct child exits its descendants are
+          // orphaned and no taskkill can reach them — the tree kill must ride
+          // the FIRST attempt, while the root is still alive. /F is required:
+          // without it taskkill posts WM_CLOSE, which a headless CLI never
+          // pumps. Spawned as an argv array per the no-shell-for-argv-array
+          // contract, and bounded — a non-zero/absent status means taskkill
+          // lost a race with an exiting process, and we fall through to the
+          // direct kill so the attempt is never weaker than before.
+          const reap = spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+            encoding: 'utf8',
+            timeout: 15000, // taskkill /T is sub-second in practice; bounded so a wedged taskkill can't hang the gate
+          });
+          if (reap.status === 0) return;
         }
         child.kill(signal);
       } catch { /* already exited */ }
@@ -5199,6 +5299,10 @@ module.exports = {
   // #3275: exported for tests — the shared PATH+PATHEXT resolver behind
   // review-lane invoke's `deps.spawn` / `deps.hasBinary` seams.
   resolveSpawnBinary,
+  // #4208 review: exported for tests — the two-list commit parser is otherwise
+  // reachable only by spawning the CLI, which a property test cannot afford.
+  collectListFlagValues,
+  COMMIT_LIST_FLAGS,
   // #3714 follow-up: exported for tests — the dispatch model-pin VALUE
   // policy (charset accept/render parity, max-length boundary, leading-char
   // anchor) is otherwise unreachable from outside the dispatchOverlayCapabilityCommand closure.

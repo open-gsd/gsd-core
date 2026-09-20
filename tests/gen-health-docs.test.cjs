@@ -18,6 +18,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
+const { GENERATOR_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
   buildErrorCodeRows,
   renderErrorCodesRegion,
@@ -54,7 +55,7 @@ function runGenHealthDocs(args, cwd = ROOT) {
       cwd,
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 30000,
+      timeout: GENERATOR_SCRIPT_TIMEOUT_MS,
     });
     return { code: 0, stdout, stderr: '' };
   } catch (err) {

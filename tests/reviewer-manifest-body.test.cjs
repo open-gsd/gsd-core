@@ -33,6 +33,17 @@ const path = require('node:path');
 const fc = require('fast-check');
 
 const { cleanup } = require('./helpers.cjs');
+const { HTTP_REACHABLE_PROBE_TIMEOUT_FIXTURE_MS } = require('./helpers/timeouts.cjs');
+
+/** NOT a subprocess spawn timeout. Fixture DATA: the default valid `timeoutMs` for a command-capability-kind probe. */
+const COMMAND_CAPABILITY_PROBE_TIMEOUT_FIXTURE_MS = 3000;
+/** NOT a subprocess spawn timeout. Fixture DATA: manifest probe.timeoutMs boundary set (this validator's own -1/0/1 triple is unrelated to, and coincidentally overlaps with, tests/plan-phase-stall-detection.test.cjs's runBashScript seam-level boundary triple -- disclosed, not merged; different validator, different file). */
+const MANIFEST_PROBE_TIMEOUT_BOUNDARY_ZERO_MS = 0;
+const MANIFEST_PROBE_TIMEOUT_BOUNDARY_ONE_MS = 1;
+const MANIFEST_PROBE_TIMEOUT_BOUNDARY_NEGATIVE_MS = -1;
+const MANIFEST_PROBE_TIMEOUT_BOUNDARY_NON_INTEGER_MS = 1.5;
+/** NOT a subprocess spawn timeout. Fixture DATA: an arbitrary value proving a command-exists-kind probe rejects ANY timeoutMs field -- the specific number is not itself under test. */
+const COMMAND_EXISTS_FORBIDDEN_TIMEOUT_MS = 500;
 
 const {
   LANE_SLUG_RE,
@@ -96,7 +107,7 @@ function validHttpLane() {
       kind: 'http-reachable',
       hostConfigKey: 'lmStudio.baseUrl',
       path: '/v1/models',
-      timeoutMs: 2000,
+      timeoutMs: HTTP_REACHABLE_PROBE_TIMEOUT_FIXTURE_MS,
     },
     invoke: {
       hostConfigKey: 'lmStudio.baseUrl',
@@ -778,7 +789,7 @@ describe('E. probe (D7) — bounded-probe control', () => {
   // only coverage until Phase 5b ships one.
   test('commandCapabilityProbeIsValidDespiteNoShippedLane', () => {
     const lane = laneOverride((l) => {
-      l.probe = { kind: 'command-capability', binary: 'my-lane', needle: 'v1.2', timeoutMs: 3000 };
+      l.probe = { kind: 'command-capability', binary: 'my-lane', needle: 'v1.2', timeoutMs: COMMAND_CAPABILITY_PROBE_TIMEOUT_FIXTURE_MS };
     });
     const errs = validateReviewerBody({ id: 'x', reviewer: lane });
     assert.deepEqual(errs, [], `expected no errors, got: ${JSON.stringify(errs)}`);
@@ -786,7 +797,7 @@ describe('E. probe (D7) — bounded-probe control', () => {
 
   test('httpReachableProbeIsValid', () => {
     const lane = laneOverride((l) => {
-      l.probe = { kind: 'http-reachable', hostConfigKey: 'lmStudio.baseUrl', path: '/v1/models', timeoutMs: 2000 };
+      l.probe = { kind: 'http-reachable', hostConfigKey: 'lmStudio.baseUrl', path: '/v1/models', timeoutMs: HTTP_REACHABLE_PROBE_TIMEOUT_FIXTURE_MS };
     });
     const errs = validateReviewerBody({ id: 'x', reviewer: lane });
     assert.deepEqual(errs, [], `expected no errors, got: ${JSON.stringify(errs)}`);
@@ -816,7 +827,7 @@ describe('E. probe (D7) — bounded-probe control', () => {
 
   test('probeTimeoutZeroIsRejected', () => {
     const lane = laneOverride((l) => {
-      l.probe = { kind: 'http-reachable', hostConfigKey: 'x.y', path: '/z', timeoutMs: 0 };
+      l.probe = { kind: 'http-reachable', hostConfigKey: 'x.y', path: '/z', timeoutMs: MANIFEST_PROBE_TIMEOUT_BOUNDARY_ZERO_MS };
     });
     const errs = validateReviewerBody({ id: 'x', reviewer: lane });
     assert.ok(
@@ -827,7 +838,7 @@ describe('E. probe (D7) — bounded-probe control', () => {
 
   test('probeTimeoutOneIsAccepted', () => {
     const lane = laneOverride((l) => {
-      l.probe = { kind: 'http-reachable', hostConfigKey: 'x.y', path: '/z', timeoutMs: 1 };
+      l.probe = { kind: 'http-reachable', hostConfigKey: 'x.y', path: '/z', timeoutMs: MANIFEST_PROBE_TIMEOUT_BOUNDARY_ONE_MS };
     });
     const errs = validateReviewerBody({ id: 'x', reviewer: lane });
     assert.deepEqual(errs, [], `expected no errors (boundary: limit), got: ${JSON.stringify(errs)}`);
@@ -835,7 +846,7 @@ describe('E. probe (D7) — bounded-probe control', () => {
 
   test('probeNegativeTimeoutIsRejected', () => {
     const lane = laneOverride((l) => {
-      l.probe = { kind: 'http-reachable', hostConfigKey: 'x.y', path: '/z', timeoutMs: -1 };
+      l.probe = { kind: 'http-reachable', hostConfigKey: 'x.y', path: '/z', timeoutMs: MANIFEST_PROBE_TIMEOUT_BOUNDARY_NEGATIVE_MS };
     });
     const errs = validateReviewerBody({ id: 'x', reviewer: lane });
     assert.ok(
@@ -846,7 +857,7 @@ describe('E. probe (D7) — bounded-probe control', () => {
 
   test('probeFractionalTimeoutIsRejected', () => {
     const lane = laneOverride((l) => {
-      l.probe = { kind: 'http-reachable', hostConfigKey: 'x.y', path: '/z', timeoutMs: 1.5 };
+      l.probe = { kind: 'http-reachable', hostConfigKey: 'x.y', path: '/z', timeoutMs: MANIFEST_PROBE_TIMEOUT_BOUNDARY_NON_INTEGER_MS };
     });
     const errs = validateReviewerBody({ id: 'x', reviewer: lane });
     assert.ok(
@@ -895,7 +906,7 @@ describe('E. probe (D7) — bounded-probe control', () => {
 
   test('commandExistsProbeRejectsTimeout', () => {
     const lane = laneOverride((l) => {
-      l.probe = { kind: 'command-exists', binary: 'my-lane', timeoutMs: 500 };
+      l.probe = { kind: 'command-exists', binary: 'my-lane', timeoutMs: COMMAND_EXISTS_FORBIDDEN_TIMEOUT_MS };
     });
     const errs = validateReviewerBody({ id: 'x', reviewer: lane });
     assert.ok(
@@ -915,7 +926,7 @@ describe('E. probe (D7) — bounded-probe control', () => {
 
   test('commandCapabilityProbeRequiresNeedle', () => {
     const lane = laneOverride((l) => {
-      l.probe = { kind: 'command-capability', binary: 'my-lane', timeoutMs: 3000 };
+      l.probe = { kind: 'command-capability', binary: 'my-lane', timeoutMs: COMMAND_CAPABILITY_PROBE_TIMEOUT_FIXTURE_MS };
     });
     const errs = validateReviewerBody({ id: 'x', reviewer: lane });
     assert.ok(

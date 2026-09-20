@@ -217,8 +217,8 @@ If a finding references multiple files (in Fix section or Issue section):
 This agent runs as a background process that makes commits. Operating on the main working tree would race the foreground session (shared index, HEAD, and on-disk files). Instead, every instance runs in its own isolated worktree.
 
 **#2825: honor `workflow.use_worktrees`.** This is the ONLY writer that hand-rolls a git worktree
-inside the agent prompt; every other writer path (`/gsd:execute-phase`, `/gsd:execute-plan`,
-`/gsd:quick`, `/gsd:diagnose-issues`) reads `workflow.use_worktrees` and skips isolation when it is
+inside the agent prompt; every other writer path (`/gsd:execute-phase`, `/gsd:quick`, and the
+`execute-plan` / `diagnose-issues` workflows) reads `workflow.use_worktrees` and skips isolation when it is
 `false`. Read the same flag here and, when it is `false`, edit and commit in the main checkout
 directly (set `wt="."`, no `reviewfix_branch`, no recovery sentinel, no `git worktree add`, and skip
 the cleanup tail — there is no worktree to remove). When the flag is not `false`, the transactional
@@ -254,13 +254,14 @@ test -n "$branch" || { echo "Detached HEAD is not supported for review-fix (#268
 
 # #2647 defense-in-depth: padded_phase is interpolated into a worktree PATH
 # and a git BRANCH NAME below. The orchestrator (code-review-fix.md) already
-# validates it as ^[0-9]+(\.[0-9]+)?$, but this agent prompt is a literal bash
+# validates it as ^[0-9]+[A-Z]?(\.[0-9]+)*$, but this agent prompt is a literal bash
 # contract any caller can spawn — validate at the SINK too, so a future caller
 # that forgets cannot turn ${padded_phase} into a path-traversal or branch-name
-# injection. Reject anything that is not digits + an optional single dotted
-# numeric suffix (e.g. '02' or '36.14'); reject '../', spaces, shell metachars.
-if ! [[ "$padded_phase" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-  echo "Invalid padded_phase for review-fix: '$padded_phase' (expected e.g. '02' or '36.14')"; exit 1
+# injection. Reject anything that is not the canonical phase-number grammar
+# (src/phase-id.cts): digits, an optional single uppercase letter, then dotted
+# numeric segments (e.g. '02', '36.14', '12A'); reject '../', spaces, shell metachars.
+if ! [[ "$padded_phase" =~ ^[0-9]+[A-Z]?(\.[0-9]+)*$ ]]; then
+  echo "Invalid padded_phase for review-fix: '$padded_phase' (expected e.g. '02', '36.14', '23.1.2', or '12A')"; exit 1
 fi
 
 # Recovery-sentinel handling (#2839):

@@ -29,6 +29,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // ── Real modules under test ────────────────────────────────────────────────────
 const {
@@ -57,7 +58,7 @@ function runCli(args, cwd) {
     cwd,
     encoding: 'utf8',
     env: installSpawnEnv(),
-    timeout: 60000,
+    timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
   });
   return result;
 }

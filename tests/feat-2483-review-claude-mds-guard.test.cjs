@@ -7,7 +7,7 @@
  *
  * That made it the only reviewer seeing anything beyond the prompt file: the prompt is assembled
  * once (PROJECT.md, the roadmap section, every PLAN file, CONTEXT.md, RESEARCH.md, REQUIREMENTS.md)
- * before any lane runs, gemini receives only that prompt, and codex runs `--ephemeral`. Beyond the
+ * before any lane runs, qwen receives only that prompt, and codex runs `--ephemeral`. Beyond the
  * measured injection cost, the asymmetry cuts at the workflow's premise — "independent review"
  * meant something different for the claude lane than for the other two.
  *
@@ -42,6 +42,32 @@ const { cleanup } = require('./helpers.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const TOOLS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
+
+/**
+ * NOT a subprocess spawn timeout. This is fixture DATA standing in for a
+ * capability manifest's own declared `probe.timeoutMs` config field, passed
+ * only into the pure `discloseExecutableSurfaces` function under test — never
+ * a live spawn timeout, never pass this into a real subprocess options object.
+ */
+const FIXTURE_PROBE_CAPABILITY_TIMEOUT_MS = 1000;
+
+/**
+ * `gsd-tools.cjs review-lane invoke` spawned directly, which itself spawns
+ * the reviewer's `invoke.binary` exactly ONCE (here, the shimmed `claude`
+ * bash script, which does no further spawning of its own — just file I/O
+ * and echo). This is ONE level of nested spawn, not the multi-spawn
+ * git-hook-under-bash shape `HOOK_FANOUT_TIMEOUT_MS`'s own doc comment
+ * defines ("roughly four Git Bash spawns") — that constant does not
+ * describe this call, despite the coincidentally-matching pre-existing
+ * value. Heavier than a bare `PROBE_TIMEOUT_MS` site, though: the outer
+ * `gsd-tools.cjs` process itself does real work beyond a version-string
+ * read-back (resolves the lane plan, spawns the reviewer binary, waits on
+ * its output, parses JSON) before the nested spawn even starts. No bench
+ * data exists to justify a different number, so the pre-existing 60000ms
+ * literal is preserved exactly under its own file-local name rather than
+ * folded into either shared class it does not truly match.
+ */
+const REVIEW_LANE_INVOKE_TIMEOUT_MS = 60000;
 
 const GUARD = Object.freeze({
   CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
@@ -95,7 +121,7 @@ describe('#2483 the claude reviewer lane suppresses CLAUDE.md + auto-memory inje
       'the claude lane must declare BOTH CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 and ' +
       'CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 — CLAUDE.md loading and auto-memory are ' +
       'independently-toggled mechanisms, and a lane missing either re-inherits that half of the ' +
-      'context, reintroducing the asymmetry against the prompt-fed gemini and codex lanes'
+      'context, reintroducing the asymmetry against the prompt-fed qwen and codex lanes'
     );
   });
 
@@ -174,7 +200,7 @@ describe('#2483 the claude reviewer lane suppresses CLAUDE.md + auto-memory inje
             '--repo-root', REPO_ROOT, '--json'],
           {
             encoding: 'utf8',
-            timeout: 60_000,
+            timeout: REVIEW_LANE_INVOKE_TIMEOUT_MS,
             killSignal: 'SIGKILL',
             env: {
               ...process.env,
@@ -225,9 +251,9 @@ describe('#2483 the claude reviewer lane suppresses CLAUDE.md + auto-memory inje
       transport: 'spawn',
       flags: ['--evil-reviewer'],
       reviewsSection: 'Evil Review',
-      probe: { ...laneFor('gemini').probe },
+      probe: { ...laneFor('qwen').probe },
       timeoutFloorMs: 1000,
-      emptyOutput: laneFor('gemini').emptyOutput,
+      emptyOutput: laneFor('qwen').emptyOutput,
       requiresBinaries: [],
       handler: null,
       invoke: {
@@ -373,7 +399,7 @@ describe('#2483 the claude reviewer lane suppresses CLAUDE.md + auto-memory inje
           slug: 'probe-reviewer',
           transport: 'spawn',
           handler: null,
-          probe: { kind: 'command-capability', binary: '/tmp/evil-probe', needle: 'x', timeoutMs: 1000 },
+          probe: { kind: 'command-capability', binary: '/tmp/evil-probe', needle: 'x', timeoutMs: FIXTURE_PROBE_CAPABILITY_TIMEOUT_MS },
           invoke: { binary: 'node', args: ['--version'], promptChannel: 'stdin' },
         },
       };
@@ -487,9 +513,9 @@ describe('#2483 the claude reviewer lane suppresses CLAUDE.md + auto-memory inje
     // environment untouched rather than passing an empty object, which on some spawn wirings is
     // the difference between inheriting and being handed a stripped environment.
     const seen = [];
-    await runLane(planFor('gemini'), spyDeps(seen), { repoRoot: ROOT });
+    await runLane(planFor('qwen'), spyDeps(seen), { repoRoot: ROOT });
     const dispatch = seen.find((c) => !c.argv.includes('--help'));
-    assert.ok(dispatch, 'the runner never reached the gemini dispatch');
+    assert.ok(dispatch, 'the runner never reached the qwen dispatch');
     assert.ok(!('env' in dispatch.opts), 'an unguarded lane must not pass an env key to spawn');
   });
 });

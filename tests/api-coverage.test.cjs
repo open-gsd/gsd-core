@@ -17,6 +17,7 @@ const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const fc = require('fast-check');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const MODULE_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'api-coverage.cjs');
 
@@ -985,7 +986,7 @@ describe('api-coverage CLI — STDIN + exit codes', () => {
     const r = spawnSync(process.execPath, [CLI, '--json'], {
       input: stdin,
       encoding: 'utf-8',
-      timeout: 15000,
+      timeout: PROBE_TIMEOUT_MS,
     });
     return { exitCode: r.status, stdout: r.stdout, stderr: r.stderr };
   }
@@ -1016,7 +1017,6 @@ describe('api-coverage CLI — NO_INPUT / UNAVAILABLE (ADR-3889 Phase 3, #3907)'
   const INJECT_STDIN_ERROR = path.join(__dirname, 'helpers', 'inject-stdin-error.cjs');
   const { exitCodeFor } = require('../gsd-core/bin/lib/exit-code-registry.cjs');
   const { runNode } = require('./helpers/process-seam.cjs');
-  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
   function runCliJson(stdin, extraArgs = [], extraEnv = {}) {
     const r = runNode([CLI, '--json', ...extraArgs], {

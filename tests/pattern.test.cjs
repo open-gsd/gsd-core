@@ -26,6 +26,15 @@ const fc = require('./helpers/fast-check-setup.cjs');
 
 const { escapeRegex, literalPattern, compileUserPattern, MAX_USER_PATTERN_LEN } = require('../gsd-core/bin/lib/pattern.cjs');
 
+/**
+ * A single `node -e` inline probe script testing RegExp.escape fallback
+ * semantics -- one subprocess, no fan-out. Coincides numerically with
+ * tests/helpers/timeouts.cjs's GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS but
+ * describes a different operation (an inline node -e probe, not a
+ * gsd-tools.cjs CLI subcommand spawn) -- kept local.
+ */
+const REGEXP_ESCAPE_PROBE_TIMEOUT_MS = 30_000;
+
 // ─── Section 1: escapeRegex — rows 1-10 ───────────────────────────────────
 
 describe('escapeRegex', () => {
@@ -231,7 +240,7 @@ describe('escapeRegex without RegExp.escape (#3498 Node-22 fallback)', () => {
   ].join('\n');
 
   test('builds and escapes correctly when RegExp.escape is absent (Node 22 semantics)', () => {
-    const r = runNode(['-e', PROBE], { timeoutMs: 30_000 });
+    const r = runNode(['-e', PROBE], { timeoutMs: REGEXP_ESCAPE_PROBE_TIMEOUT_MS });
     assert.strictEqual(r.outcome, OUTCOME.EXITED, `probe must run: ${r.stderr}`);
     assert.strictEqual(r.exitCode, 0, `fallback path failed: ${r.stdout}\n${r.stderr}`);
     assert.match(r.stdout, /fallback-ok/);
@@ -244,7 +253,7 @@ describe('escapeRegex without RegExp.escape (#3498 Node-22 fallback)', () => {
       "if (!new RegExp(escapeRegex('a.b')).test('a.b')) { console.error('post-load neuter broke escaping'); process.exit(1); }",
       "console.log('capture-ok');",
     ].join('\n');
-    const r = runNode(['-e', PROBE2], { timeoutMs: 30_000 });
+    const r = runNode(['-e', PROBE2], { timeoutMs: REGEXP_ESCAPE_PROBE_TIMEOUT_MS });
     assert.strictEqual(r.outcome, OUTCOME.EXITED, `probe must run: ${r.stderr}`);
     assert.strictEqual(r.exitCode, 0, `post-load capture failed: ${r.stdout}\n${r.stderr}`);
   });

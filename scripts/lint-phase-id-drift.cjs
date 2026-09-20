@@ -20,6 +20,34 @@
  * directly above). Sites that build their regex from `PHASE_NUMBER_TOKEN_SOURCE`
  * carry no literal grammar and pass automatically.
  *
+ * #4634 extends the same pattern with two more detectors:
+ *
+ * - name-validity-guard drift: `hasNameableContent(s)` in `src/roadmap-parser.cts`
+ *   is the sole owner of the "does this string have nameable content" predicate
+ *   (`/[\p{L}\p{N}]/u.test(s)`). Any other `src/**` file re-deriving that exact
+ *   character class (regex-literal or `new RegExp` template form) instead of
+ *   calling `hasNameableContent` is drift, sanctioned the same way as the token
+ *   and bracket rules (`// phase-id-owner:` on the nearest preceding non-blank
+ *   line), with a line-level escape for a line that already calls
+ *   `hasNameableContent(`.
+ *
+ * - shell phase-number-arithmetic ban: `$((10#...))` base-10-forced arithmetic
+ *   inside `gsd-core/workflows/**\/*.md` and `gsd-core/references/**\/*.md` breaks
+ *   on decimal or multi-segment phase ids and is banned outright. This scan runs
+ *   over markdown, not `.cts` source, so its sanction is an HTML comment on the
+ *   nearest preceding non-blank line: `<!-- phase-id-owner: <reason> -->`.
+ *
+ * - branch-slug fallback drift: a `.replace('{slug}', ... || 'phase')` call
+ *   silently substitutes the literal string `'phase'` when a phase's slug
+ *   can't be derived, producing a non-identifying branch name like
+ *   `gsd/phase-08-phase` (#4126, now fixed via the shared renderPhaseBranchName
+ *   owner in phase-id.cts, consumed by both prior call sites). Sanctioned
+ *   the same way as the token/bracket/name-validity rules (`// phase-id-owner:`
+ *   on the nearest preceding non-blank line), with a line-level escape for a
+ *   line that already calls `renderPhaseBranchName(`. Unlike the other
+ *   `.cts`-scanning rules, this one has no per-file exemption — it is a banned
+ *   anti-pattern everywhere, not a grammar with one legitimate owner site.
+ *
  * Detection is intentionally NARROW: only the contiguous canonical token
  * (`\d+[A-Z]?(?:\.\d+)*`, its `[A-Za-z]` and `[.-]` near-variants, in both
  * regex-literal `\d` and `new RegExp` template `\\d` escaping) is drift. Bare
@@ -83,6 +111,18 @@ const BRACKET_OWNER_HINT =
   'BRACKET_PROJECT_CODE_SRC / BRACKET_ID_SRC / bracketMilestoneIntroSrcFor / BRACKET_MILESTONE_INTRO_CAPTURING_SRC';
 
 /**
+ * Pure: true if the nearest preceding non-blank line to `lines[i]` is a
+ * dedicated sanction comment matching `ownerRe`. Shared by every detector in
+ * this file so the "how do you sanction a finding" walk has one owner instead
+ * of four independent copies that could silently diverge.
+ */
+function isSanctionedByPrecedingComment(lines, i, ownerRe) {
+  let j = i - 1;
+  while (j >= 0 && lines[j].trim() === '') j--; // nearest preceding non-blank line
+  return j >= 0 && ownerRe.test(lines[j]);
+}
+
+/**
  * Pure: find every literal re-derivation of the canonical phase-number token in
  * `text` that is NOT sanctioned. A site is sanctioned when the nearest preceding
  * NON-BLANK line is a dedicated `// phase-id-owner:` comment (blank lines between
@@ -100,9 +140,7 @@ function findPhaseIdRegexDrift(text) {
     const m = TOKEN_DRIFT_RE.exec(line);
     if (!m) continue;
     if (line.includes(CANON_REF)) continue;
-    let j = i - 1;
-    while (j >= 0 && lines[j].trim() === '') j--; // nearest preceding non-blank line
-    if (j >= 0 && OWNER_RE.test(lines[j])) continue;
+    if (isSanctionedByPrecedingComment(lines, i, OWNER_RE)) continue;
     out.push({ line: i + 1, found: m[0] });
   }
   return out;
@@ -122,12 +160,434 @@ function findBracketGrammarDrift(text) {
   for (let i = 0; i < lines.length; i++) {
     const m = BRACKET_CODE_DRIFT_RE.exec(lines[i]);
     if (!m) continue;
-    let j = i - 1;
-    while (j >= 0 && lines[j].trim() === '') j--; // nearest preceding non-blank line
-    if (j >= 0 && OWNER_RE.test(lines[j])) continue;
+    if (isSanctionedByPrecedingComment(lines, i, OWNER_RE)) continue;
     out.push({ line: i + 1, found: m[0] });
   }
   return out;
+}
+
+// #4634: the name-validity-guard grammar — `hasNameableContent(s)` in
+// `src/roadmap-parser.cts` is `/[\p{L}\p{N}]/u.test(s)`. Tolerates both the
+// regex-literal single-backslash form and the doubled-backslash template
+// form (`new RegExp('[\\p{L}\\p{N}]'`), mirroring how TOKEN_DRIFT_RE tolerates
+// both escapings.
+const NAME_VALIDITY_DRIFT_RE = /\[\\{1,2}p\{L\}\\{1,2}p\{N\}\]/;
+const NAME_VALIDITY_CANON_REF = 'hasNameableContent(';
+
+/**
+ * Pure: find every literal re-derivation of the canonical name-validity
+ * character class in `text` that is NOT sanctioned. Same sanction mechanism
+ * as the token/bracket rules — a dedicated `// phase-id-owner:` comment on
+ * the nearest preceding non-blank line — plus a line-level escape for a line
+ * that already calls `hasNameableContent(`. Returns [{ line, found }].
+ */
+function findNameValidityDrift(text) {
+  const out = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = NAME_VALIDITY_DRIFT_RE.exec(line);
+    if (!m) continue;
+    if (line.includes(NAME_VALIDITY_CANON_REF)) continue;
+    if (isSanctionedByPrecedingComment(lines, i, OWNER_RE)) continue;
+    out.push({ line: i + 1, found: m[0] });
+  }
+  return out;
+}
+
+// #4634: the branch-slug fallback anti-pattern (#4126) — a
+// `.replace('{slug}', ... || 'phase')` call silently falls back to the
+// literal string `'phase'` when a phase's slug can't be derived, producing a
+// non-identifying branch name like `gsd/phase-08-phase`. Now fixed at both
+// prior call sites (commands.cts, init.cts) via the shared
+// `renderPhaseBranchName` owner in phase-id.cts; this rule is the ratchet
+// against a THIRD site reintroducing the inline fallback. Deliberately
+// narrow: it requires the literal `'phase'` fallback on the same line as the
+// `{slug}` template token, so it does NOT match the sibling milestone-branch
+// fallback (`|| 'milestone'`), which is a different, correct-as-is case.
+const BRANCH_SLUG_FALLBACK_DRIFT_RE = /\{slug\}'.*\|\|\s*'phase'/;
+
+// The canonical fix is `renderPhaseBranchName(...)`. There is no "owner file"
+// for this rule the way there is for the token/bracket/name-validity
+// grammars above — it is a banned anti-pattern everywhere, so no per-file
+// exemption exists.
+const BRANCH_SLUG_FALLBACK_CANON_REF = 'renderPhaseBranchName(';
+
+/**
+ * Pure: find every unsanctioned branch-slug `|| 'phase'` fallback in `text`.
+ * Same sanction mechanism as the token/bracket/name-validity rules — a
+ * dedicated `// phase-id-owner:` comment on the nearest preceding non-blank
+ * line — plus a line-level escape for a line that already calls
+ * `renderPhaseBranchName(`. Returns [{ line, found }].
+ */
+function findBranchSlugFallbackDrift(text) {
+  const out = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = BRANCH_SLUG_FALLBACK_DRIFT_RE.exec(line);
+    if (!m) continue;
+    if (line.includes(BRANCH_SLUG_FALLBACK_CANON_REF)) continue;
+    if (isSanctionedByPrecedingComment(lines, i, OWNER_RE)) continue;
+    out.push({ line: i + 1, found: m[0] });
+  }
+  return out;
+}
+
+// #4634: ban base-10-forced shell arithmetic (`$((10#...))`) on a variable
+// that still carries a possibly-decimal/multi-segment phase id — this
+// construct is exactly the pattern that breaks on a value like `08.5`. The
+// capture group grabs the token immediately inside the parens (after an
+// optional `$` and/or `{`, stripping a trailing `}`) so callers can inspect
+// *which* variable is being coerced, not merely that the substring occurred.
+//
+// Refined post-#4619: the original blunt "ban `$((10#` outright" version
+// over-fired on three false-positive classes once #4619's fix landed:
+//   1. Prose mentioning the literal pattern in a full-line `#`-comment
+//      (filtered by the caller, not this regex — see below).
+//   2. `$((10#$PHASE_INT))` / `$((10#$SPOT_PHASE_INT))` — arithmetic on the
+//      NOW-safe variable the #4619 fix produces via a leading-digit-run split
+//      (`PHASE_INT=${PHASE_NUMBER%%[!0-9]*}` since #4748; `%%.*` before it);
+//      a digit-run value can never contain a dot OR a letter, so base-10
+//      arithmetic on it can never hit the #4619 / #4748 error classes. Any
+//      name ending in `_INT` (case-insensitive) is that established "already
+//      reduced to a safe integer" convention. That convention is a NAME, not
+//      a proof — `findDotOnlyIntegerSplitDrift` below polices that the split
+//      producing it actually stops at the first non-digit.
+//   3. `$((10#{plan_padded}))` / `$((10#${PLAN_ID}))` — plan ids are plain
+//      integers and were never in scope; this rule only polices variables
+//      that carry a *phase* id.
+// So a match is only a violation when the captured name contains `phase`
+// case-insensitively (it is phase-carrying) AND does not end in `_int`
+// case-insensitively (it has not already been reduced to a safe integer).
+const SHELL_PHASE_ARITH_DRIFT_RE = /\$\(\(\s*10#\$?\{?([A-Za-z0-9_]+)\}?/;
+
+// A markdown comment can't easily carry a `//` line, so the sanction for the
+// shell-arithmetic rule is an HTML comment on the nearest preceding non-blank
+// line: `<!-- phase-id-owner: <reason> -->`.
+const MD_OWNER_RE = /^\s*<!--.*phase-id-owner:/;
+
+/**
+ * Pure: find every unsanctioned `$((10#...))` base-10-forced shell arithmetic
+ * site in `text` that still coerces an un-reduced phase-carrying variable.
+ * Skips full-line `#` comments outright (pure prose mentioning the pattern,
+ * not executable code), and skips any captured variable name that either
+ * doesn't contain `phase` (never in scope — e.g. plan ids) or already ends
+ * in `_int` (the #4619-fix convention for "safely stripped to an integer").
+ * Sanctioned by an HTML comment `<!-- phase-id-owner: ... -->` on the
+ * nearest preceding non-blank line. Returns [{ line, found }].
+ */
+function findShellPhaseArithDrift(text) {
+  const out = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*#/.test(line)) continue;
+    const m = SHELL_PHASE_ARITH_DRIFT_RE.exec(line);
+    if (!m) continue;
+    const name = m[1];
+    if (!/phase/i.test(name)) continue;
+    if (/_int$/i.test(name)) continue;
+    if (isSanctionedByPrecedingComment(lines, i, MD_OWNER_RE)) continue;
+    out.push({ line: i + 1, found: m[0] });
+  }
+  return out;
+}
+
+// #4634: the markdown scan roots — shell embedded in workflow/reference docs.
+const MD_SCAN_DIRS = [path.join('gsd-core', 'workflows'), path.join('gsd-core', 'references')];
+
+// #4568 (epic #4634): the single-segment phase regex ban scans a THIRD root,
+// `agents/**/*.md`, that the #4619 shell-arithmetic extension above never
+// touched — the gsd-code-fixer agent prompts re-derive the phase-number
+// grammar too. Reuses the same `walkMd` walker as the shell-arith scan.
+const SINGLE_SEGMENT_SCAN_DIRS = [...MD_SCAN_DIRS, 'agents'];
+
+/**
+ * Scan `gsd-core/workflows/**\/*.md` and `gsd-core/references/**\/*.md` for
+ * unsanctioned `$((10#...))` shell arithmetic. Returns [{ file, line, found }]
+ * with repo-relative paths.
+ */
+function scanMarkdownShellArith(root) {
+  const violations = [];
+  for (const dir of MD_SCAN_DIRS) {
+    for (const file of walkMd(path.join(root, dir), [])) {
+      const rel = path.relative(root, file);
+      let text;
+      try {
+        text = fs.readFileSync(file, 'utf8');
+      } catch {
+        continue;
+      }
+      for (const d of findShellPhaseArithDrift(text)) {
+        violations.push({ file: rel, kind: 'shell-arith', ...d });
+      }
+    }
+  }
+  return violations;
+}
+
+// #4568 (epic #4634): ban the single-optional-dotted-segment phase regex
+// shape `[0-9]+(\.[0-9]+)?` (and its `\d`/doubled-backslash near-variants)
+// outright — this is exactly the grammar that hard-rejects or silently
+// truncates a 3-or-more-segment phase id like `23.1.2`. The canonical
+// grammar (`src/phase-id.cts`) uses the unbounded `(?:\.\d+)*` form; shell
+// snippets embedded in markdown can't import that module, so textual parity
+// (`*` in place of `?`) is the fix, and this rule is the ratchet against a
+// future site re-deriving the bounded form. Deliberately narrow to the
+// bounded ONE-optional-segment shape — the fixed `*`-form is not flagged.
+const SINGLE_SEGMENT_PHASE_DRIFT_RE =
+  /(?:\\{1,2}d|\[0-9\])\+\(\\{1,2}\.(?:\\{1,2}d|\[0-9\])\+\)\?/;
+
+// A single-segment shape like `[0-9]+(\.[0-9]+)?` is not inherently
+// phase-specific (e.g. it could describe a version number), so the rule
+// only fires on a line whose text plausibly carries a phase-number
+// variable — a case-insensitive `phase` substring anywhere on the line,
+// mirroring the phase-carrying filter `findShellPhaseArithDrift` already
+// applies to its own variable-name capture.
+const PHASE_CARRYING_LINE_RE = /phase/i;
+
+/**
+ * Pure: find every unsanctioned single-optional-dotted-segment phase regex
+ * in `text`, restricted to lines that plausibly carry a phase-number
+ * variable. Sanctioned by an HTML comment `<!-- phase-id-owner: ... -->` on
+ * the nearest preceding non-blank line (same convention as the shell-arith
+ * rule). Returns [{ line, found }].
+ */
+function findSingleSegmentPhaseRegexDrift(text) {
+  const out = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = SINGLE_SEGMENT_PHASE_DRIFT_RE.exec(line);
+    if (!m) continue;
+    if (!PHASE_CARRYING_LINE_RE.test(line)) continue;
+    if (isSanctionedByPrecedingComment(lines, i, MD_OWNER_RE)) continue;
+    out.push({ line: i + 1, found: m[0] });
+  }
+  return out;
+}
+
+/**
+ * Scan `gsd-core/workflows/**\/*.md`, `gsd-core/references/**\/*.md`, and
+ * `agents/**\/*.md` for unsanctioned single-optional-dotted-segment phase
+ * regexes. Returns [{ file, line, found }] with repo-relative paths.
+ */
+function scanMarkdownSingleSegmentPhaseRegex(root) {
+  const violations = [];
+  for (const dir of SINGLE_SEGMENT_SCAN_DIRS) {
+    for (const file of walkMd(path.join(root, dir), [])) {
+      const rel = path.relative(root, file);
+      let text;
+      try {
+        text = fs.readFileSync(file, 'utf8');
+      } catch {
+        continue;
+      }
+      for (const d of findSingleSegmentPhaseRegexDrift(text)) {
+        violations.push({ file: rel, kind: 'single-segment-phase-regex', ...d });
+      }
+    }
+  }
+  return violations;
+}
+
+// #4660 (epic #4634): the six shell/markdown mirrors #4568 widened on the
+// segment-count axis stayed digit-only on the LETTER axis — the canonical
+// grammar (`src/phase-id.cts`) is `\d+[A-Z]?(?:\.\d+)*`, with an optional
+// single uppercase letter after the leading digits (`12A`, `3A`, `23A.1.2`,
+// documented in docs/CONFIGURATION.md and relied on by `renameIntegerPhases`).
+// A digit-only mirror `[0-9]+(\.[0-9]+)*` hard-rejects (validating sites) or
+// silently truncates (extracting sites) a letter-suffixed id. This rule is the
+// ratchet for that axis, the twin of the single-segment rule above: it flags
+// the unbounded-segment shape whose digit run is NOT followed by the letter
+// class. `[A-Z]` is the canonical spelling; the case-flexible `[A-Za-z]`
+// directory-scanning variant is a deliberately separate axis and is tolerated
+// here so this rule cannot force it to narrow.
+const LETTERLESS_PHASE_MIRROR_DRIFT_RE =
+  /(?:\\{1,2}d|\[0-9\])\+(?!\[A-Z(?:a-z)?\]\?)\(\\{1,2}\.(?:\\{1,2}d|\[0-9\])\+\)\*/;
+
+/**
+ * Pure: find every unsanctioned digit-only (letter-less) unbounded-segment
+ * phase regex in `text`, restricted to lines that plausibly carry a
+ * phase-number variable — the same `PHASE_CARRYING_LINE_RE` filter and the
+ * same `<!-- phase-id-owner: ... -->` sanction as the single-segment rule.
+ * Returns [{ line, found }].
+ */
+function findLetterlessPhaseMirrorDrift(text) {
+  const out = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = LETTERLESS_PHASE_MIRROR_DRIFT_RE.exec(line);
+    if (!m) continue;
+    if (!PHASE_CARRYING_LINE_RE.test(line)) continue;
+    if (isSanctionedByPrecedingComment(lines, i, MD_OWNER_RE)) continue;
+    out.push({ line: i + 1, found: m[0] });
+  }
+  return out;
+}
+
+/**
+ * Scan the same three markdown roots as the single-segment rule for
+ * unsanctioned letter-less phase-regex mirrors. Returns [{ file, line, found }]
+ * with repo-relative paths.
+ */
+function scanMarkdownLetterlessPhaseMirror(root) {
+  const violations = [];
+  for (const dir of SINGLE_SEGMENT_SCAN_DIRS) {
+    for (const file of walkMd(path.join(root, dir), [])) {
+      const rel = path.relative(root, file);
+      let text;
+      try {
+        text = fs.readFileSync(file, 'utf8');
+      } catch {
+        continue;
+      }
+      for (const d of findLetterlessPhaseMirrorDrift(text)) {
+        violations.push({ file: rel, kind: 'letterless-phase-mirror', ...d });
+      }
+    }
+  }
+  return violations;
+}
+
+// #4748 (epic #4634): three shell shapes OUTSIDE the grammar-mirror family the
+// rules above police — consumers of a phase id rather than regexes for one —
+// each of which the letter axis broke while every rule above reported clean:
+//
+//   a. `PHASE_INT=${PHASE_NUMBER%%.*}` — the post-#4619 dot-only split. The
+//      `_INT` name it produces satisfies the shell-arithmetic rule's escape,
+//      but on `03A` the "integer" is `03A` and `$((10#03A))` aborts. The safe
+//      split stops at the first NON-digit: `${PHASE_NUMBER%%[!0-9]*}`.
+//   b. `[0-9]+\.?[0-9]*` (and `\d+\.?\d*`) — a digit-then-optional-dot
+//      extraction that is neither the bounded `(\.[0-9]+)?` shape the
+//      single-segment rule bans nor the unbounded `(\.[0-9]+)*` shape the
+//      letterless rule inspects, so both were blind to it. It captures `12`
+//      from `12A` and `23.1` from `23.1.2`, silently.
+//   c. `printf "%02d" "$PHASE_NUMBER"` — re-padding the whole id in shell.
+//      Rejects a letter id (prints `03`, exit 1) and misreads an already
+//      padded `08` as octal (prints `00`). Padding belongs to the canonical
+//      normalizer (`padded_phase` from init, or `normalizePhaseName`); the one
+//      legitimate shell pad is of an `_INT` value via `$((10#…))`.
+//
+// Same sanction as the other markdown rules: `<!-- phase-id-owner: … -->` on
+// the nearest preceding non-blank line. Same documented limit: a per-line
+// textual scan for the common accidental shape, not an obfuscated one.
+
+// a. `<name>_INT=${<phase-carrying>%%.*}` — the `_INT` destination is the
+//    discriminator, deliberately: it is the name the shell-arithmetic rule
+//    trusts as "already a safe integer", so a dot-only split INTO it is the
+//    exact promise this rule exists to check. A dot-only split into any other
+//    name is a different, legitimate operation — `PARENT_PHASE="${PHASE_NUMBER%%.*}"`
+//    (gap-closure-artifacts.md) wants everything before the first dot, letter
+//    included, and is correct. Widening to any destination was tried and flagged
+//    that site. The optional quote after `=` is the one spelling that site uses.
+const DOT_ONLY_INT_SPLIT_DRIFT_RE = /[A-Za-z0-9_]*_INT="?\$\{([A-Za-z0-9_]+)%%\\?\.\*\}/i;
+
+/**
+ * Pure: find every unsanctioned dot-only integer split of a phase-carrying
+ * variable in `text`. Skips full-line `#` comments (prose). Returns [{ line, found }].
+ */
+function findDotOnlyIntegerSplitDrift(text) {
+  const out = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*#/.test(line)) continue;
+    const m = DOT_ONLY_INT_SPLIT_DRIFT_RE.exec(line);
+    if (!m) continue;
+    if (!/phase/i.test(m[1])) continue;
+    if (isSanctionedByPrecedingComment(lines, i, MD_OWNER_RE)) continue;
+    out.push({ line: i + 1, found: m[0] });
+  }
+  return out;
+}
+
+// b. The digit-then-optional-dot shape, in both `[0-9]` and `\d` spellings.
+//    Anchored on the trailing `*` of the second digit class so a bare `[0-9]+`
+//    probe or a `[0-9]+\.[0-9]+` (mandatory-dot) shape is not matched.
+const LOOSE_DOTTED_PHASE_DRIFT_RE = /(?:\\{1,2}d|\[0-9\])\+\\{1,2}\.\?(?:\\{1,2}d|\[0-9\])\*/;
+
+/**
+ * Pure: find every unsanctioned `[0-9]+\.?[0-9]*`-shaped phase extraction in
+ * `text`, restricted to phase-carrying lines like its two sibling regex rules.
+ * Returns [{ line, found }].
+ */
+function findLooseDottedPhaseRegexDrift(text) {
+  const out = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = LOOSE_DOTTED_PHASE_DRIFT_RE.exec(line);
+    if (!m) continue;
+    if (!PHASE_CARRYING_LINE_RE.test(line)) continue;
+    if (isSanctionedByPrecedingComment(lines, i, MD_OWNER_RE)) continue;
+    out.push({ line: i + 1, found: m[0] });
+  }
+  return out;
+}
+
+// c. `printf "%Nd" …` / `printf '%0Nd' …` — any integer conversion, either
+//    quote, with or without the zero flag — whose argument list names a
+//    phase-carrying variable that is NOT an `_INT` (the `$((10#$PHASE_INT))`
+//    pad is the sanctioned shape). `%d` cannot parse a letter id under any
+//    width, so the flag is not the discriminator. Captures the first such name
+//    so the report says what was padded.
+const SHELL_PHASE_PRINTF_PAD_RE = /printf\s+(?:"%0?\d*d[^"]*"|'%0?\d*d[^']*')\s+(.*)$/;
+const SHELL_VAR_NAME_RE = /\$\{?([A-Za-z_][A-Za-z0-9_]*)/g;
+
+/**
+ * Pure: find every unsanctioned `printf "%02d"` re-pad of a phase-carrying,
+ * non-`_INT` shell variable in `text`. Skips full-line `#` comments.
+ * Returns [{ line, found }].
+ */
+function findShellPhasePrintfPadDrift(text) {
+  const out = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*#/.test(line)) continue;
+    const m = SHELL_PHASE_PRINTF_PAD_RE.exec(line);
+    if (!m) continue;
+    const offender = [...m[1].matchAll(SHELL_VAR_NAME_RE)]
+      .map((v) => v[1])
+      .find((name) => /phase/i.test(name) && !/_int$/i.test(name));
+    if (!offender) continue;
+    if (isSanctionedByPrecedingComment(lines, i, MD_OWNER_RE)) continue;
+    out.push({ line: i + 1, found: `printf "%0…d" …$${offender}` });
+  }
+  return out;
+}
+
+/**
+ * Scan the shell roots (`gsd-core/workflows/**\/*.md`, `gsd-core/references/**\/*.md`)
+ * for the two shell-idiom rules (a, c) and the three regex roots (those plus
+ * `agents/**\/*.md`) for the extraction-shape rule (b). Returns
+ * [{ file, kind, line, found }] with repo-relative paths.
+ */
+function scanMarkdownLetterAxisConsumers(root) {
+  const violations = [];
+  const collect = (dirs, finder, kind) => {
+    for (const dir of dirs) {
+      for (const file of walkMd(path.join(root, dir), [])) {
+        const rel = path.relative(root, file);
+        let text;
+        try {
+          text = fs.readFileSync(file, 'utf8');
+        } catch {
+          continue;
+        }
+        for (const d of finder(text)) {
+          violations.push({ file: rel, kind, ...d });
+        }
+      }
+    }
+  };
+  collect(MD_SCAN_DIRS, findDotOnlyIntegerSplitDrift, 'dot-only-int-split');
+  collect(SINGLE_SEGMENT_SCAN_DIRS, findLooseDottedPhaseRegexDrift, 'loose-dotted-phase-regex');
+  collect(MD_SCAN_DIRS, findShellPhasePrintfPadDrift, 'shell-phase-printf-pad');
+  return violations;
 }
 
 // Authored TypeScript source only (the generated bin/lib/*.cjs mirror it).
@@ -136,7 +596,14 @@ const SCAN_EXT = new Set(['.cts', '.ts', '.mts']);
 // The canonical owner defines the grammar; it is exempt by construction.
 const EXEMPT = new Set([path.join('src', 'phase-id.cts')]);
 
-function walk(dir, acc) {
+// #4634: the name-validity-guard rule owns a DIFFERENT file (roadmap-parser.cts
+// defines `hasNameableContent`), so it needs its own exemption set — the
+// token/bracket rules above must NOT start exempting roadmap-parser.cts too,
+// since it is not their owner.
+const NAME_VALIDITY_EXEMPT = new Set([path.join('src', 'roadmap-parser.cts')]);
+
+function walk(dir, acc, ext) {
+  const extSet = ext || SCAN_EXT;
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -147,12 +614,20 @@ function walk(dir, acc) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name === '.git') continue;
-      walk(full, acc);
-    } else if (entry.isFile() && SCAN_EXT.has(path.extname(entry.name))) {
+      walk(full, acc, extSet);
+    } else if (entry.isFile() && extSet.has(path.extname(entry.name))) {
       acc.push(full);
     }
   }
   return acc;
+}
+
+// #4634: markdown scan for the shell phase-arithmetic ban walks a disjoint set
+// of roots/extensions from the src/**/*.cts scan above, so it gets its own thin
+// wrapper over the same `walk` rather than a parallel tree-walker.
+const MD_EXT = new Set(['.md']);
+function walkMd(dir, acc) {
+  return walk(dir, acc, MD_EXT);
 }
 
 // ─── #2761 M4: the heading-baseline selector census ────────────────────────
@@ -239,23 +714,73 @@ function scanRepo(root) {
       for (const d of findBracketGrammarDrift(text)) {
         violations.push({ file: rel, kind: 'bracket', ...d });
       }
+      // #4634: name-validity-guard drift, exempting only its own owner file.
+      if (!NAME_VALIDITY_EXEMPT.has(rel)) {
+        for (const d of findNameValidityDrift(text)) {
+          violations.push({ file: rel, kind: 'name-validity', ...d });
+        }
+      }
+      // #4634: branch-slug fallback anti-pattern, exempt nowhere.
+      for (const d of findBranchSlugFallbackDrift(text)) {
+        violations.push({ file: rel, kind: 'branch-slug-fallback', ...d });
+      }
     }
   }
   return violations;
 }
 
+/**
+ * Scan EVERYTHING this seam guards: the `src/**\/*.cts` token/bracket/
+ * name-validity invariants (`scanRepo`) plus the markdown shell
+ * phase-arithmetic ban (`scanMarkdownShellArith`). This is what the CLI runs;
+ * `scanRepo` alone stays narrowly scoped to its original src/** contract so
+ * a live, separately-tracked markdown defect (#4619) cannot make the
+ * pinned-clean `scanRepo` test spuriously fail.
+ */
+function scanAll(root) {
+  return [
+    ...scanRepo(root),
+    ...scanMarkdownShellArith(root),
+    ...scanMarkdownSingleSegmentPhaseRegex(root),
+    ...scanMarkdownLetterlessPhaseMirror(root),
+    ...scanMarkdownLetterAxisConsumers(root),
+  ];
+}
+
 function main() {
   const root = path.join(__dirname, '..');
-  const violations = scanRepo(root);
+  const violations = scanAll(root);
   if (violations.length === 0) {
-    process.stdout.write('ok phase-id-drift: no unsanctioned phase-token or bracket-grammar re-derivations outside phase-id.cts\n');
+    process.stdout.write(
+      'ok phase-id-drift: no unsanctioned phase-token, bracket-grammar, name-validity, ' +
+        'branch-slug-fallback, or shell phase-arithmetic re-derivations found\n',
+    );
     return;
   }
   process.stderr.write('phase-id-drift: literal re-derivation(s) of a canonical grammar found.\n');
   process.stderr.write(`Build the regex from phase-id.cjs \`${CANON_REF}\` (or phaseMarkdownRegexSource for a\n`);
   process.stderr.write(`known number) for the phase-number token, or from ${BRACKET_OWNER_HINT}\n`);
-  process.stderr.write('for the bracket grammar — or sanction the site with a dedicated\n');
-  process.stderr.write('`// phase-id-owner: <reason>` comment on the line directly above the regex:\n');
+  process.stderr.write('for the bracket grammar, or call `hasNameableContent(` (src/roadmap-parser.cts) for\n');
+  process.stderr.write('the name-validity predicate — or sanction the site with a dedicated\n');
+  process.stderr.write('`// phase-id-owner: <reason>` comment on the line directly above the regex.\n');
+  process.stderr.write('`$((10#...))` base-10-forced shell arithmetic is banned outright in\n');
+  process.stderr.write('gsd-core/workflows/**/*.md and gsd-core/references/**/*.md — sanction with\n');
+  process.stderr.write('`<!-- phase-id-owner: <reason> -->` on the line directly above.\n');
+  process.stderr.write('The single-optional-dotted-segment phase regex `[0-9]+(\\.[0-9]+)?` (or its \\d\n');
+  process.stderr.write('near-variant) is banned outright in gsd-core/workflows/**/*.md,\n');
+  process.stderr.write('gsd-core/references/**/*.md, and agents/**/*.md — widen it to `*` (unbounded\n');
+  process.stderr.write('segments) or sanction with `<!-- phase-id-owner: <reason> -->`.\n');
+  process.stderr.write('A digit-only unbounded-segment phase regex `[0-9]+(\\.[0-9]+)*` on the same roots\n');
+  process.stderr.write('is missing the canonical letter axis (#4660) — widen to `[0-9]+[A-Z]?(\\.[0-9]+)*`\n');
+  process.stderr.write('or sanction with `<!-- phase-id-owner: <reason> -->`.\n');
+  process.stderr.write('Three letter-hostile consumers of a phase id are banned on the same roots (#4748):\n');
+  process.stderr.write('a dot-only integer split `X_INT=${PHASE%%.*}` (split at the first non-digit,\n');
+  process.stderr.write('`${PHASE%%[!0-9]*}`); a `[0-9]+\\.?[0-9]*` extraction (use `[0-9]+[A-Z]?(\\.[0-9]+)*`);\n');
+  process.stderr.write('and a `printf "%02d"` re-pad of a phase variable (bind init\'s `padded_phase`, or pad\n');
+  process.stderr.write('only an `_INT` via `$((10#…))`) — or sanction with `<!-- phase-id-owner: <reason> -->`.\n');
+  process.stderr.write('A `.replace(\'{slug}\', ... || \'phase\')` fallback is banned outright (#4126) —\n');
+  process.stderr.write('use `renderPhaseBranchName(` or sanction with\n');
+  process.stderr.write('`// phase-id-owner: <reason>` on the line directly above:\n');
   for (const d of violations) {
     process.stderr.write(`  [${d.kind}] ${d.file}:${d.line}  ${d.found}\n`);
   }
@@ -267,9 +792,30 @@ if (require.main === module) main();
 module.exports = {
   findPhaseIdRegexDrift,
   findBracketGrammarDrift,
+  findNameValidityDrift,
+  findBranchSlugFallbackDrift,
+  findShellPhaseArithDrift,
+  findSingleSegmentPhaseRegexDrift,
+  findLetterlessPhaseMirrorDrift,
+  findDotOnlyIntegerSplitDrift,
+  findLooseDottedPhaseRegexDrift,
+  findShellPhasePrintfPadDrift,
+  scanMarkdownShellArith,
+  scanMarkdownSingleSegmentPhaseRegex,
+  scanMarkdownLetterlessPhaseMirror,
+  scanMarkdownLetterAxisConsumers,
   scanRepo,
+  scanAll,
   countSelectorBaselines,
   scanSelectorBaselines,
   TOKEN_DRIFT_RE,
   BRACKET_CODE_DRIFT_RE,
+  NAME_VALIDITY_DRIFT_RE,
+  BRANCH_SLUG_FALLBACK_DRIFT_RE,
+  SHELL_PHASE_ARITH_DRIFT_RE,
+  SINGLE_SEGMENT_PHASE_DRIFT_RE,
+  LETTERLESS_PHASE_MIRROR_DRIFT_RE,
+  DOT_ONLY_INT_SPLIT_DRIFT_RE,
+  LOOSE_DOTTED_PHASE_DRIFT_RE,
+  SHELL_PHASE_PRINTF_PAD_RE,
 };

@@ -806,7 +806,7 @@ describe('capability declaration (capabilities/claude-orchestration/capability.j
     assert.strictEqual(slice.default, 'auto');
   });
 
-  test('registers at WIRED points only (execute:wave:pre, plan:post)', () => {
+  test('registers at WIRED points only (plan:post) — #4740 removed execute:wave:pre', () => {
     const cap = loadCap();
     const points = cap.contributions.map((c) => c.point);
     for (const p of points) {
@@ -815,10 +815,10 @@ describe('capability declaration (capabilities/claude-orchestration/capability.j
         'contribution point ' + p + ' must be a wired point',
       );
     }
-    // #2285: the dispatch-backend selector moved from execute:wave:post (fires
-    // AFTER the wave already dispatched inline — too late to select a backend)
-    // to execute:wave:pre (fires BEFORE step 3's Agent() dispatch).
-    assert.ok(points.includes('execute:wave:pre'), 'registers the pre-wave dispatch-selector hook');
+    // #4740: the execute:wave:pre / into:executor contribution was pure
+    // orchestrator procedure with nothing an executor agent could act on —
+    // it was removed, not retargeted. Only plan:post (into:planner) remains.
+    assert.ok(!points.includes('execute:wave:pre'), 'no longer registers at execute:wave:pre (#4740)');
     assert.ok(points.includes('plan:post'), 'declares plan:* ownership for ultraplan (criterion 5)');
   });
 
@@ -852,16 +852,15 @@ describe('registry integration', () => {
     assert.strictEqual(registry.configSchema['claude_orchestration.execution_backend'].default, 'auto');
   });
 
-  test('byLoopPoint[execute:wave:pre].contributions includes our capability (#2285)', () => {
+  test('byLoopPoint[execute:wave:pre] no longer carries our contribution (#4740 removed it)', () => {
     const { capMap } = loadAndValidate(new Set());
     const registry = buildRegistry(capMap);
     const contribs = registry.byLoopPoint['execute:wave:pre'].contributions;
     const ours = contribs.find((c) => c.capId === 'claude-orchestration');
-    assert.ok(ours, 'our execute:wave:pre contribution is registered');
-    assert.strictEqual(ours.into, 'executor');
+    assert.strictEqual(ours, undefined, 'claude-orchestration must not remain at execute:wave:pre (#4740)');
   });
 
-  test('byLoopPoint[execute:wave:post] no longer carries our contribution (#2285 moved it to wave:pre)', () => {
+  test('byLoopPoint[execute:wave:post] does not carry our contribution', () => {
     const { capMap } = loadAndValidate(new Set());
     const registry = buildRegistry(capMap);
     const contribs = registry.byLoopPoint['execute:wave:post'].contributions;
@@ -1515,28 +1514,30 @@ describe('C. resolveWaveDispatch composes detectWorkflowBackend + emitWorkflowSc
   });
 });
 
-// ─── Section D: capability declaration now targets execute:wave:pre ─────────
+// ─── Section D: capability declaration no longer contributes at execute:wave:pre (#4740) ──
 
-describe('D. capability.json declares the contribution at execute:wave:pre (#2285)', () => {
-  test('[happy] contribution point is execute:wave:pre, not execute:wave:post', () => {
+describe('D. capability.json no longer declares a contribution at execute:wave:pre (#4740)', () => {
+  test('[happy] neither execute:wave:pre nor execute:wave:post carries a contribution', () => {
+    // #4740: the execute:wave:pre / into:executor contribution was pure
+    // orchestrator procedure (build a wave manifest, resolve the dispatch
+    // backend, spawn executor agents) with nothing an executor agent can
+    // act on — injecting it into executor prompts violated the loop's role
+    // partition. It was removed outright, not retargeted.
     const cap = JSON.parse(fs.readFileSync(CAP_PATH, 'utf8'));
     const wavePreContrib = cap.contributions.find((c) => c.point === 'execute:wave:pre');
-    assert.ok(wavePreContrib, 'capability.json must declare a contribution at execute:wave:pre');
-    assert.strictEqual(wavePreContrib.into, 'executor');
-    assert.strictEqual(wavePreContrib.when, 'claude_orchestration.enabled');
-    assert.strictEqual(wavePreContrib.onError, 'skip');
-    assert.strictEqual(wavePreContrib.fragment.path, 'fragments/execute-wave-pre.md');
+    assert.strictEqual(wavePreContrib, undefined, 'capability.json must no longer declare a contribution at execute:wave:pre');
 
     const wavePostContrib = cap.contributions.find((c) => c.point === 'execute:wave:post');
-    assert.strictEqual(wavePostContrib, undefined, 'the capability must no longer contribute at execute:wave:post');
+    assert.strictEqual(wavePostContrib, undefined, 'the capability must not contribute at execute:wave:post either');
   });
 
-  test('[happy] the declared fragment file exists on disk', () => {
-    const fragPath = path.join(ROOT, 'capabilities', 'claude-orchestration', 'fragments', 'execute-wave-pre.md');
-    assert.ok(fs.existsSync(fragPath), 'fragments/execute-wave-pre.md must exist');
-    const content = fs.readFileSync(fragPath, 'utf8');
+  test('[happy] the preserved procedure doc exists on disk (moved, not deleted)', () => {
+    const docPath = path.join(ROOT, 'capabilities', 'claude-orchestration', 'docs', 'workflow-backend-dispatch.md');
+    assert.ok(fs.existsSync(docPath), 'capabilities/claude-orchestration/docs/workflow-backend-dispatch.md must exist');
+    const content = fs.readFileSync(docPath, 'utf8');
     assert.match(content, /execute:wave:pre/);
     assert.match(content, /resolve-wave-dispatch/);
+    assert.match(content, /#4740/, 'header must reference the issue that removed the contribution');
   });
 });
 
@@ -1759,9 +1760,11 @@ describe('G. missing top-level `waves` key never silently exits 0 with no output
 
 // ─── Section H: orthogonal-review finding 3 — manifest construction guidance is concrete ──
 
-describe('H. the execute:wave:pre fragment documents concrete manifest construction (finding 3)', () => {
-  test('[happy] the fragment explains how to build WAVE_MANIFEST_PATH, PHASE_RUN_ID, and per-plan use_worktree', () => {
-    const fragPath = path.join(ROOT, 'capabilities', 'claude-orchestration', 'fragments', 'execute-wave-pre.md');
+describe('H. the workflow-backend-dispatch doc documents concrete manifest construction (finding 3)', () => {
+  test('[happy] the doc explains how to build WAVE_MANIFEST_PATH, PHASE_RUN_ID, and per-plan use_worktree', () => {
+    // #4740: moved out of capabilities/claude-orchestration/fragments (no
+    // longer a loop contribution) to capabilities/claude-orchestration/docs.
+    const fragPath = path.join(ROOT, 'capabilities', 'claude-orchestration', 'docs', 'workflow-backend-dispatch.md');
     const content = fs.readFileSync(fragPath, 'utf8');
     assert.match(content, /Manifest construction/, 'fragment must have concrete manifest-construction guidance, not just reference undefined vars');
     assert.match(content, /PHASE_RUN_ID/);
@@ -1797,17 +1800,22 @@ describe('H. the execute:wave:pre fragment documents concrete manifest construct
   });
 });
 
-// ─── Section I: orthogonal-review finding 4 — stale doc fixed ───────────────
+// ─── Section I: docs/explanation/claude-orchestration-capability.md reflects the #4740 removal ──
 
-describe('I. docs/explanation/claude-orchestration-capability.md reflects the execute:wave:pre move (finding 4)', () => {
-  test('[happy] the doc no longer claims the capability registers at execute:wave:post', () => {
+describe('I. docs/explanation/claude-orchestration-capability.md reflects the #4740 removal', () => {
+  test('[happy] the doc no longer claims the capability registers at execute:wave:pre or execute:wave:post', () => {
     const docPath = path.join(ROOT, 'docs', 'explanation', 'claude-orchestration-capability.md');
     const content = fs.readFileSync(docPath, 'utf8');
-    assert.match(content, /execute:wave:pre/, 'doc must mention execute:wave:pre as the wired point');
+    assert.match(
+      content,
+      /Registers at one \*\*wired\*\* loop point: `plan:post`/,
+      'doc must state the capability registers at exactly one wired loop point (plan:post)',
+    );
     assert.ok(
       !/execute:wave:post.*\(into the executor\)/.test(content),
       'doc must not still claim the wired point is execute:wave:post',
     );
+    assert.match(content, /plan:post/, 'doc must still mention the surviving plan:post contribution');
   });
 });
 
@@ -2231,8 +2239,11 @@ describe('#3302: emitted Workflow script returns per-agent outcomes for the mani
   });
 });
 
-describe('#3302: the execute:wave:pre fragment bridges Workflow results into the manifest merge chain', () => {
-  const FRAG_3302 = path.join(ROOT, 'capabilities', 'claude-orchestration', 'fragments', 'execute-wave-pre.md');
+describe('#3302: the workflow-backend-dispatch doc bridges Workflow results into the manifest merge chain', () => {
+  // #4740: this content is no longer an injected loop contribution (it was
+  // orchestrator procedure wrongly targeted `into: executor`); it now lives
+  // as a plain reference doc, content preserved verbatim.
+  const FRAG_3302 = path.join(ROOT, 'capabilities', 'claude-orchestration', 'docs', 'workflow-backend-dispatch.md');
 
   function fragContent() {
     return fs.readFileSync(FRAG_3302, 'utf8');

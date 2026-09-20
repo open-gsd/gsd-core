@@ -138,9 +138,22 @@ GSD Core addresses prompt injection at three levels.
 **Input validation (`security.cjs`).** The `gsd-core/bin/lib/security.cjs`
 module is the central security utility. It provides:
 
-- Path traversal prevention: user-supplied file paths (`--text-file`, `--prd`)
-  are validated to resolve within the project directory, with macOS
-  `/var` → `/private/var` symlink resolution handled explicitly
+- Path containment: user-supplied file paths and directories are validated to
+  resolve within a declared root before any filesystem access. One predicate
+  answers this for the whole tree (epic #4636, ADR-4650). The resolution engine
+  is module-internal and resolves symlinks, closes a dangling-symlink existence
+  oracle, and canonicalizes ancestors so a not-yet-created path under a
+  non-canonical base (macOS `/var` → `/private/var`) still resolves. The
+  exported surface is `assertWithinRoot` (throws), `tryWithinRoot` (returns
+  `null`), and `requireSafePath` (a preserved alias of the throwing form).
+  All three return a branded `ContainedPath`: a plain `string` is not assignable
+  to it, so validating one path and then handing a different one to the
+  filesystem is a type error rather than a silent bug. Whether an absolute
+  candidate is considered at all is a named policy — `PathAcceptance.RelativeOnly`
+  or `PathAcceptance.AbsoluteInsideRoot` — and neither relaxes containment: an
+  absolute path resolving outside the root is rejected exactly as a traversal is.
+  A caller may decide how to degrade on rejection, never whether a path is
+  contained.
 - Prompt injection detection: known injection patterns (role overrides,
   instruction bypasses, system tag injections) are scanned in user-supplied
   text before it enters any planning artifact
@@ -148,6 +161,69 @@ module is the central security utility. It provides:
   crafted JSON payloads
 - Shell argument validation: arguments passed to subshell commands are
   validated before use
+
+Containment is decided in exactly one place, but resolved two ways. The
+comparison itself — separator-aware, so a sibling merely sharing a prefix is
+never accepted — is internal to `security.cjs` and is the single decision. Two
+exported families sit on it and differ only in how a candidate is resolved
+before that decision: `assertWithinRoot` / `tryWithinRoot` resolve symlinks,
+and `assertWithinRootLexical` / `tryWithinRootLexical` use string resolution
+alone and never touch the filesystem.
+
+The lexical form exists because a realpath-based predicate is the wrong tool
+wherever a symlink must be *preserved* rather than resolved, or where the target
+legitimately does not exist yet. A lexical check **cannot see a symlink**, so a
+caller relying on one for a write-confinement guarantee must pair it with its
+own symlink refusal. Three call sites use it, each for a stated reason.
+
+The backup-restore gate in `gsd-core/bin/gsd-tools.cjs` rejects symlinks outright:
+the canonical predicate accepts a link whose target resolves inside the root, but
+for a restore that is still wrong, because writing through the link overwrites
+whatever it points at instead of materializing a regular file at the backed-up
+path. `isPathConfined` in `src/external-descriptor-trust.cts` is lexical by
+design, because two install callers must validate a destination *before* the
+`mkdirSync` that creates it, where `realpath` cannot resolve. And
+`ensureInsideConfig` in `src/installer-migrations.cts` is lexical because that
+module's contract is that a symlinked managed path is snapshotted, restored and
+backed up *as a link* and never dereferenced — resolving it would dereference
+precisely the links the module exists to preserve, and then reject them for
+escaping the config directory.
+
+A lexical check cannot see a symlink, so callers that rely on one for a
+write-confinement guarantee must pair it with their own symlink refusal. Three
+install call sites did not, and now do: a link planted at a capability skill's
+destination made `mkdirSync` succeed silently and redirected the write outside
+the install root, and a link planted at a capability's own `SKILL.md` was
+followed by `statSync`, so an outside file's contents were installed as a skill
+body.
+
+**The ratchet.** A convention saying "remember to use the predicate" is exactly
+what produced the unvalidated sites in the first place, so the rule
+`local/no-unconfined-path-join` enforces it under `npm run lint` with an empty
+allowlist. It bans the hand-rolled comparison `X.startsWith(Y + separator)` and
+a containment predicate called as a bare statement with its answer discarded.
+It deliberately does not try to decide, for each of the repository's ~2000
+`path.join` calls, whether an argument came from user input — that question is
+not answerable locally, and a rule that fires on hundreds of correct sites earns
+an exemption list of hundreds. What actually gets copied is the comparison.
+
+A site that legitimately cannot use the predicate carries a comment
+`// allow-handrolled-containment: <reason>` naming why: either the comparison is
+not a containment decision (an ancestor-walk loop, identity matching), or the
+predicate is unreachable — two files run before the compiled module they would
+need to import exists. The reason is mandatory and reviewable; the rule does
+not accept an empty one.
+
+A marker cannot cover a shipped, checksum-locked artifact whose body must not
+change: the four `src/installer-migrations/*.cts` bodies hashed against
+`EXPECTED_CHECKSUMS` (#670) hash `plan.toString()`, the function's source text
+INCLUDING comments, so a marker placed inside the body drifts the checksum
+exactly as an edit would — verified directly against the committed baseline.
+These four files are instead excluded from the rule entirely, by exact path in
+`eslint.config.mjs`'s `ignores` (not a directory wildcard, so a new migration
+file is still linted), leaving their hand-rolled comparisons permanently
+un-ratcheted; the only remedy is a fix-forward migration, never an edit to a
+shipped body.
 
 **Runtime hook: `gsd-prompt-guard.js`.** This hook fires on every Write or
 Edit call that targets `.planning/` files. It scans the content being written

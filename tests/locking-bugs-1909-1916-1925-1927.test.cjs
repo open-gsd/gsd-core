@@ -23,6 +23,14 @@ const { spawn } = require('child_process');
 
 const { runGsdTools, createTempProject, cleanup, waitFor, TOOLS_PATH } = require('./helpers.cjs');
 
+/**
+ * NOT a subprocess spawn timeout. This is the file's own `waitFor` busy-
+ * poll helper's giving-up bound, waiting for two racing subprocesses to
+ * each write a "ready" sentinel file before the test drops their shared
+ * synchronization barrier.
+ */
+const BARRIER_WAIT_TIMEOUT_MS = 10000;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -234,7 +242,7 @@ describe('#1925 TOCTOU: state commands use readModifyWriteStateMd', () => {
     // ── Orchestrate: wait for both ready-signals, then drop the barrier ───────
     try {
       await waitFor(() => fs.existsSync(readyA) && fs.existsSync(readyB), {
-        timeoutMs: 10000,
+        timeoutMs: BARRIER_WAIT_TIMEOUT_MS,
         stepMs: 10,
         message: 'Timed out waiting for both subprocesses to reach barrier',
       });
@@ -373,7 +381,7 @@ describe('#1925 TOCTOU: state commands use readModifyWriteStateMd', () => {
     // ── Orchestrate: wait for both ready-signals, then drop the barrier ───────
     try {
       await waitFor(() => fs.existsSync(readyA) && fs.existsSync(readyB), {
-        timeoutMs: 10000,
+        timeoutMs: BARRIER_WAIT_TIMEOUT_MS,
         stepMs: 10,
         message: 'Timed out waiting for both subprocesses to reach barrier',
       });
@@ -501,7 +509,7 @@ describe('#1927 config.json: setConfigValue must hold planning lock', () => {
     // ── Wait for both to reach barrier, then release ──────────────────────────
     try {
       await waitFor(() => fs.existsSync(readyA) && fs.existsSync(readyB), {
-        timeoutMs: 10000,
+        timeoutMs: BARRIER_WAIT_TIMEOUT_MS,
         stepMs: 10,
         message: 'Timed out waiting for both config-set subprocesses to reach barrier',
       });

@@ -41,6 +41,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { createTempDir, cleanup } = require('./helpers.cjs');
+const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const {
   GSD_CURSOR_HOOK_MARKER,
@@ -401,7 +402,7 @@ test('T17: gsd-cursor-session-start.js emits JSON with additional_context', (t, 
 
   const input = JSON.stringify({ session_id: 'test-123', composer_mode: 'agent' });
   const child = execFile(process.execPath, [scriptPath], {
-    timeout: 10000,
+    timeout: QUICK_SPAWN_TIMEOUT_MS,
     cwd: os.tmpdir(), // no .planning/ dir here — should get MSG_ABSENT
   }, (err, stdout) => {
     if (err && !stdout) { done(err); return; }
@@ -432,7 +433,7 @@ test('T18: gsd-cursor-post-tool.js emits {} for non-write tool names', (t, done)
   });
 
   const child = execFile(process.execPath, [scriptPath], {
-    timeout: 10000,
+    timeout: QUICK_SPAWN_TIMEOUT_MS,
     cwd: os.tmpdir(),
   }, (err, stdout) => {
     if (err && !stdout) { done(err); return; }

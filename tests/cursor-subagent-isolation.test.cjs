@@ -577,9 +577,13 @@ describe('executor-identity parity: hooks/gsd-agent-isolation-guard.js (Claude) 
   let cursorProject; // harness-worktree GSD project, not an isolated worktree
 
   before(() => {
-    claudeProject = createTempDir('gsd-cs-parity-claude-');
-    fs.mkdirSync(path.join(claudeProject, '.planning'), { recursive: true });
-    fs.writeFileSync(path.join(claudeProject, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    // Must be a REAL git repo (not a bare mkdir'd directory) — same reason as
+    // cursorProject below, and load-bearing since #4734: the Claude guard's
+    // fallback degrades to 'none' on a repository-less root, so a non-git
+    // fixture would flip the Claude side to allow and the parity probe would
+    // compare Claude-allowing against Cursor-denying instead of comparing two
+    // ACTUALLY enforcing configurations.
+    claudeProject = makeGitProject('gsd-cs-parity-claude-', JSON.stringify({ runtime: 'claude' }));
 
     // Must be a REAL git repo (not a bare mkdir'd directory): the Cursor hook's
     // #3045 MAJOR 3 "not a git repo -> INERT" branch would otherwise short-circuit
@@ -851,6 +855,31 @@ describe('gsd-cursor-subagent-start.js: #3045 SECURITY F2 — sentinel bound to 
     } finally {
       cleanup(path.join(harnessProject, '.gsd'));
     }
+  });
+});
+
+describe('gsd-cursor-subagent-start.js: #4594 row 30 — sentinel-discard reporting parity with the Claude guard', () => {
+  let harnessProject;
+
+  before(() => {
+    harnessProject = makeGitProject('gsd-cs-4594-', JSON.stringify({ runtime: 'cursor' }));
+  });
+
+  after(() => {
+    cleanup(harnessProject);
+  });
+
+  test('row 30: `data.task` in prose form + a fresh matching {isolation:"none"} sentinel -> ALLOW (was: discarded and denied)', (t) => {
+    // Measured production shape: sentinel plan is phase-prefixed-and-slugged
+    // (phase-plan-index's `plans[].id`); the prose fallback never reports a
+    // plan (see hooks/lib/dispatch-identity.js's findProse doc comment), so
+    // only phase is compared here — exactly the real-world match path.
+    writeSentinel(harnessProject, { isolation: 'none', phase: '03', plan: '03-02-hardening' });
+    t.after(() => cleanup(path.join(harnessProject, '.gsd')));
+    const r = runHook(subagentPayload([harnessProject], { task: 'Execute plan 02 of phase 03-auth.' }));
+    assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.permission, undefined, `expected allow, got: ${r.stdout}`);
   });
 });
 

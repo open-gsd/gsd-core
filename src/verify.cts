@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { textEncodingError } from './validate.cjs';
+import { tryWithinRootLexical } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
@@ -34,7 +35,7 @@ import worktreeSafetyMod = require('./worktree-safety.cjs');
 // codebase-drift --name-status parse loop).
 const { decodeGitQuotedPath } = worktreeSafetyMod;
 import { execGit, platformReadSync as safeReadFile } from './shell-command-projection.cjs';
-import { validatePath } from './security.cjs';
+import { tryWithinRoot } from './security.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { detectSchemaFiles, checkSchemaDrift } from './schema-detect.cjs';
 import { extractTaggedBlocks } from './markdown-sectionizer.cjs';
@@ -173,9 +174,12 @@ function verifySummaryCore(
     const firstSegment = candidate.split('/')[0] || '';
     if (firstSegment.indexOf('.') > 0) return false;
     // Containment guard: a `../`-bearing reference must not turn this advisory
-    // into a filesystem existence probe outside the project.
-    const resolved = path.resolve(projectRoot, candidate);
-    if (resolved !== projectRoot && !resolved.startsWith(projectRoot + path.sep)) return false;
+    // into a filesystem existence probe outside the project. Lexical (ADR-4650
+    // decision 6): the candidate is a string pulled from a SUMMARY document and
+    // by construction may not exist yet — existence is what gets probed
+    // downstream — and this is a pure string-heuristic filter with no other fs
+    // access, so a realpath call would also change its cost profile.
+    if (tryWithinRootLexical(candidate, projectRoot) === null) return false;
     return true;
   };
 
@@ -918,8 +922,15 @@ function scanQuantitativeCriteria(content: string): { errors: string[]; warnings
       // Not a markdown table: the negated-pipe class matches a SHELL pipeline
       // stage boundary (git before the next `|`), the same shape the
       // #429/#968 scanners use; there is no table row to parse.
+      // #4774: the lookahead keeps `||` — a logical OR, the construct that
+      // HANDLES the failure (e.g. the `git cat-file -e <sha> || echo missing`
+      // ghost-control idiom, reachable here when prose apostrophes leave the
+      // segment's quote state unclosed) — quiet, while `|` and `|&` (a real
+      // pipeline stage, stderr-merged or not) still warn. Accepted trade-off:
+      // a QUOTED `||` literal ahead of a real pipe (``git grep 'a||b' f | wc -l``)
+      // also goes quiet — the lookahead cannot reach past the doubled pipe.
       // allow-adhoc-markdown: shell pipeline stage boundary, not a table cell (#4024)
-      if (/\bgit\s+[a-z][^\n|]*\|/.test(seg)) {
+      if (/\bgit\s+[a-z][^\n|]*\|(?!\|)/.test(seg)) {
         record(
           warnings,
           'R4',
@@ -1308,6 +1319,12 @@ function cmdVerifyPhaseCompleteness(cwd: string, phase: string, raw: boolean): v
   );
 }
 
+// #4678: citations may carry a trailing line suffix (":42", ":1-20") that
+// describes a location inside the file, not part of the path itself.
+function stripLineSuffix(ref: string): string {
+  return ref.replace(/:\d+(?:-\d+)?$/, '');
+}
+
 function cmdVerifyReferences(cwd: string, filePath: string, raw: boolean): void {
   if (!filePath) {
     error('file path required');
@@ -1325,9 +1342,10 @@ function cmdVerifyReferences(cwd: string, filePath: string, raw: boolean): void 
   const atRefs = content.match(/@([^\s\n,)]+\/[^\s\n,)]+)/g) || [];
   for (const ref of atRefs) {
     const cleanRef = ref.slice(1);
-    const resolved = cleanRef.startsWith('~/')
-      ? path.join(process.env['HOME'] || '', cleanRef.slice(2))
-      : path.join(cwd, cleanRef);
+    const fsRef = stripLineSuffix(cleanRef);
+    const resolved = fsRef.startsWith('~/')
+      ? path.join(process.env['HOME'] || '', fsRef.slice(2))
+      : path.join(cwd, fsRef);
     if (fs.existsSync(resolved)) {
       found.push(cleanRef);
     } else {
@@ -1335,12 +1353,12 @@ function cmdVerifyReferences(cwd: string, filePath: string, raw: boolean): void 
     }
   }
 
-  const backtickRefs = content.match(/`([^`]+\/[^`]+\.[a-zA-Z]{1,10})`/g) || [];
+  const backtickRefs = content.match(/`([^`]+\/[^`]+\.[a-zA-Z]{1,10}(?::\d+(?:-\d+)?)?)`/g) || [];
   for (const ref of backtickRefs) {
     const cleanRef = ref.slice(1, -1);
     if (cleanRef.startsWith('http') || cleanRef.includes('${') || cleanRef.includes('{{')) continue;
     if (found.includes(cleanRef) || missing.includes(cleanRef)) continue;
-    const resolved = path.join(cwd, cleanRef);
+    const resolved = path.join(cwd, stripLineSuffix(cleanRef));
     if (fs.existsSync(resolved)) {
       found.push(cleanRef);
     } else {
@@ -1415,27 +1433,72 @@ function cmdVerifyArtifacts(cwd: string, planFilePath: string, raw: boolean): vo
     const exists = fs.existsSync(artFullPath);
     const check: Record<string, unknown> = { path: artPath, exists, issues: [], passed: false };
 
-    if (exists) {
-      const fileContent = safeReadFile(artFullPath) || '';
-      const lineCount = fileContent.split('\n').length;
+    // #4685: one artifact's I/O problem is that artifact's failure, never the
+    // whole plan's. `safeReadFile` rethrows every errno except ENOENT, so before
+    // this an unreadable entry — a directory most commonly, but equally an EACCES
+    // file or a dangling mount — threw out of the loop and the command reported
+    // NOTHING: not the offending entry, and not the plan's other, perfectly good
+    // artifacts either. A check that disappears is worse than a check that fails,
+    // because a failure is visible.
+    //
+    // Scope of this guard, stated precisely (review nit): the `try` encloses the
+    // whole per-artifact body, but the only statements in it that can throw are the
+    // `statSync` and the read — the `min_lines`/`contains`/`exports` checks below
+    // are pure string operations. So this catches I/O, and nothing here is a
+    // deliberate guard around those criteria checks. A path `fs.existsSync` already
+    // rejected never reaches here either (that is the `File not found` branch), so
+    // this is not a claim to catch every way a path can be unusable.
+    try {
+      if (exists) {
+        // A directory is reported as its own kind of failure, distinct from
+        // `File not found`: the path resolved, it simply is not the thing an
+        // artifact entry can be checked against. Verifying a directory (matching
+        // `contains:`/`min_lines:`/`exports:` across the files inside it) is a
+        // feature decision, deliberately not made here.
+        if (fs.statSync(artFullPath).isDirectory()) {
+          (check['issues'] as string[]).push('Not a file: path is a directory');
+        } else {
+          // `safeReadFile` returns null on ENOENT, and `|| ''` would turn that
+          // into an empty file — which an entry carrying only `path`/`provides`
+          // would then PASS, having checked nothing. `statSync` just succeeded, so
+          // a null here means the artifact went away mid-check. Report that rather
+          // than inheriting a pass from it. (Pre-existing above this fix, reachable
+          // through the same race after `existsSync`; found in review.)
+          const rawContent = safeReadFile(artFullPath);
+          if (rawContent === null) {
+            (check['issues'] as string[]).push('Unreadable: disappeared during check');
+            results.push(check);
+            continue;
+          }
+          const fileContent = rawContent;
+          const lineCount = fileContent.split('\n').length;
 
-      if (artifact['min_lines'] && lineCount < (artifact['min_lines'] as number)) {
-        (check['issues'] as string[]).push(`Only ${lineCount} lines, need ${artifact['min_lines'] as number}`);
-      }
-      if (artifact['contains'] && !fileContent.includes(artifact['contains'] as string)) {
-        (check['issues'] as string[]).push(`Missing pattern: ${artifact['contains'] as string}`);
-      }
-      if (artifact['exports']) {
-        const exports = Array.isArray(artifact['exports'])
-          ? artifact['exports']
-          : [artifact['exports']];
-        for (const exp of exports) {
-          if (!fileContent.includes(exp as string)) (check['issues'] as string[]).push(`Missing export: ${exp as string}`);
+          if (artifact['min_lines'] && lineCount < (artifact['min_lines'] as number)) {
+            (check['issues'] as string[]).push(`Only ${lineCount} lines, need ${artifact['min_lines'] as number}`);
+          }
+          if (artifact['contains'] && !fileContent.includes(artifact['contains'] as string)) {
+            (check['issues'] as string[]).push(`Missing pattern: ${artifact['contains'] as string}`);
+          }
+          if (artifact['exports']) {
+            const exports = Array.isArray(artifact['exports'])
+              ? artifact['exports']
+              : [artifact['exports']];
+            for (const exp of exports) {
+              if (!fileContent.includes(exp as string)) (check['issues'] as string[]).push(`Missing export: ${exp as string}`);
+            }
+          }
+          check['passed'] = (check['issues'] as string[]).length === 0;
         }
+      } else {
+        (check['issues'] as string[]).push('File not found');
       }
-      check['passed'] = (check['issues'] as string[]).length === 0;
-    } else {
-      (check['issues'] as string[]).push('File not found');
+    } catch (err) {
+      // Unreadable for some other reason. Record the errno rather than a generic
+      // message — an operator seeing EACCES acts differently from one seeing EIO —
+      // and leave `passed` false.
+      const e = err as NodeJS.ErrnoException;
+      (check['issues'] as string[]).push(`Unreadable: ${e.code || (e.message ?? String(err))}`);
+      check['passed'] = false;
     }
 
     results.push(check);
@@ -1549,11 +1612,11 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
       // project. Leave sourceContent as null so the existing not-found /
       // pending classification below runs unchanged. Note this guard is
       // narrower than it may look: `from: "."` is a non-empty string, so it
-      // still reaches validatePath and safeReadFile below, and DOES read the
+      // still reaches tryWithinRoot and safeReadFile below, and DOES read the
       // cwd directory (yielding "Source read failed: EISDIR") — this branch
       // only short-circuits the true empty-string case.
-      const fromCheck = validatePath(fromPath, cwd);
-      if (!fromCheck.safe) {
+      const fromContained = tryWithinRoot(fromPath, cwd);
+      if (fromContained === null) {
         // Do not echo result.error — it embeds absolute host paths.
         check['path_rejected'] = 'from';
         check['detail'] = 'Source path rejected — resolves outside the project directory';
@@ -1561,7 +1624,7 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
         continue;
       }
       try {
-        sourceContent = safeReadFile(fromCheck.resolved);
+        sourceContent = safeReadFile(fromContained);
       } catch (err) {
         // Report the errno only — never the message or path (untrusted `from:`
         // can trigger EISDIR/EACCES, which platformReadSync re-throws for any
@@ -1624,15 +1687,15 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
               // An empty/missing `to:` is a malformed plan, not a
               // path-confinement violation — only a non-empty path that
               // actually resolves outside the project is path_rejected.
-              const toCheck = validatePath(toPath, cwd);
-              if (!toCheck.safe) {
+              const toContained = tryWithinRoot(toPath, cwd);
+              if (toContained === null) {
                 // Do not read a rejected `to:` — treat as no target content
                 // and do not echo result.error, which embeds absolute host
                 // paths.
                 check['path_rejected'] = 'to';
                 check['detail'] = `Pattern "${link['pattern'] as string}" not found in source; target path rejected — resolves outside the project directory`;
               } else {
-                targetContent = safeReadFile(toCheck.resolved);
+                targetContent = safeReadFile(toContained);
               }
             }
             if (targetContent && pat.test(targetContent)) {
@@ -2022,8 +2085,8 @@ function resolvePhaseDirByToken(phasesDir: string, phaseArg: string): string | n
   const dirNames = dirEntries.filter((e) => e.isDirectory()).map((e) => e.name);
   const matched = matchPhaseDirs(dirNames, normalizedPhase).matches[0];
   if (matched) return path.join(phasesDir, matched);
-  const check = validatePath(phaseArg, phasesDir);
-  if (check.safe && fs.existsSync(check.resolved)) return check.resolved;
+  const contained = tryWithinRoot(phaseArg, phasesDir);
+  if (contained !== null && fs.existsSync(contained)) return contained;
   return null;
 }
 

@@ -30,7 +30,7 @@ const { output, error } = io;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtils = require('./core-utils.cjs');
 const { toPosixPath } = coreUtils;
-import { requireSafePath, sanitizeForDisplay } from './security.cjs';
+import { requireSafePath, sanitizeForDisplay, PathAcceptance } from './security.cjs';
 
 // ─── Frozen typed-IR surface ────────────────────────────────────────────────
 
@@ -475,7 +475,7 @@ function cmdClassify(cwd: string, options: { summary?: string; file?: string } =
 
   let resolvedPath: string;
   try {
-    resolvedPath = requireSafePath(filePath, cwd, 'SUMMARY file', { allowAbsolute: true });
+    resolvedPath = requireSafePath(filePath, cwd, 'SUMMARY file', PathAcceptance.AbsoluteInsideRoot);
   } catch (e) {
     // Emit a structured command error instead of leaking a raw stack trace.
     error(`Invalid SUMMARY path: ${e instanceof Error ? e.message : 'unsafe path'}`);

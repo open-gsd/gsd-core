@@ -19,7 +19,7 @@
  * `reviewer` bodies in the capability registry, not a hand-maintained tail.
  * A capability of EITHER `role: "runtime"` (the six dual-purpose hosts —
  * antigravity/claude/codex/cursor/opencode/qwen) or the lane-only
- * `role: "reviewer"` (gemini/coderabbit/ollama/lm_studio/llama_cpp) may carry
+ * `role: "reviewer"` (coderabbit/ollama/lm_studio/llama_cpp) may carry
  * a `reviewer` body, and it is the body's `reviewer.slug` — NOT the capability
  * id — that becomes the roster entry: the two differ for `lm-studio` (id) /
  * `lm_studio` (slug) and `llama-cpp` (id) / `llama_cpp` (slug), ADR-2782's
@@ -306,7 +306,7 @@ export function resolveReviewerSelection(
     // ADR-2782 D4: absent-safe governs DISCOVERY, never explicit selection.
     // Not finding a lane nobody asked for is normal; failing to run a lane
     // somebody asked for is an error. Every miss used to be an `info`, so a
-    // PARTIAL miss (`--gemini --qwen` with qwen absent) ran the review with a
+    // PARTIAL miss (`--codex --qwen` with qwen absent) ran the review with a
     // thinner reviewer set while present_results reported success — "a cross-AI
     // review that silently drops a lane is blind in one eye" (review.md).
     // A total miss already errored, but only as a side effect of the selected

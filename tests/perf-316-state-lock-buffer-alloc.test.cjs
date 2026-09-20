@@ -38,6 +38,17 @@ const { cleanup } = require('./helpers.cjs');
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * NOT a subprocess spawn timeout. This is `node:test`'s own per-test
+ * `{ timeout }` option (the second positional argument to `test(name,
+ * options, fn)`), bounding a worker_threads + SharedArrayBuffer
+ * lock-contention regression test (sabCount retry assertion). Coincides
+ * numerically with tests/helpers/timeouts.cjs's PROBE_TIMEOUT_MS but is a
+ * completely different mechanism (a node:test option, not a subprocess
+ * spawn bound) -- disclosed, not merged.
+ */
+const LOCK_RETRY_TEST_TIMEOUT_MS = 15000;
+
 const STATE_CJS_PATH = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'state.cjs'
 );
@@ -193,7 +204,7 @@ describe('perf #316: acquireStateLock hoists sleep buffer — exactly one SAB pe
 
   test(
     'sabCount === 1 after a call that undergoes >= 1 retry (post-fix assertion)',
-    { timeout: 15000 },
+    { timeout: LOCK_RETRY_TEST_TIMEOUT_MS },
     async () => {
       // ── Worker A: hold the lock until the writer signals contention ─────────
       // The holder releases the lock only when the writer signals its first

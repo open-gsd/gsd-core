@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 4828
+---
+**Gap-closure plans can no longer silently reuse threat IDs that earlier plans in the same phase already assigned** — a `--gaps` re-plan numbered its `<threat_model>` registers from `T-{phase}-01` again, so the new plans claimed IDs that earlier plans had already given to different threats, and nothing detected it: `/gsd-secure-phase` builds `SECURITY.md` rows and `VALIDATION.md` carries a Threat Ref column keyed on that ID, leaving every consumer ambiguous. `init execute-phase` and `init plan-phase` now report cross-plan duplicates (`threat_id_duplicates` / `threat_id_duplicate_count` — register rows only, never prose; the reserved `T-{phase}-SC` row is exempt since every plan keeps it; superseded plans don't hold IDs against their replacements), execute-phase hard-stops on a non-empty list before dispatching any executor, and the planner (agent template + `planner-gap-closure.md` §9) is instructed to continue numbering after the phase's highest in-use `T-{phase}-NN`. (#4683)

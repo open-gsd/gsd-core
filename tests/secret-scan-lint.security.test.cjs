@@ -39,6 +39,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { cleanup } = require('./helpers.cjs');
+const { QUICK_SPAWN_TIMEOUT_MS, SCAN_USAGE_ERROR_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 const LINT_SCRIPT = path.join(PROJECT_ROOT, 'scripts', 'secret-scan-lint.sh');
@@ -62,7 +63,7 @@ function runLint(ignoreContent, extraArgs = []) {
     const args = ['--file', ignoreFile, ...extraArgs];
     const result = spawnSync(LINT_SCRIPT, args, {
       encoding: 'utf-8',
-      timeout: 10000,
+      timeout: QUICK_SPAWN_TIMEOUT_MS,
     });
     return {
       status: result.status !== null ? result.status : 1,
@@ -87,7 +88,7 @@ function runSecretScan(fileContent, extraArgs = []) {
     const args = ['--file', tmpFile, ...extraArgs];
     const result = spawnSync(SECRET_SCAN, args, {
       encoding: 'utf-8',
-      timeout: 10000,
+      timeout: QUICK_SPAWN_TIMEOUT_MS,
     });
     return {
       status: result.status !== null ? result.status : 1,
@@ -318,7 +319,7 @@ describe('lint: grandfathered entries (backward compat)', { skip: IS_WINDOWS }, 
       execFileSync(LINT_SCRIPT, [], {
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: 5000,
+        timeout: SCAN_USAGE_ERROR_TIMEOUT_MS,
       });
       assert.fail('Should have exited non-zero');
     } catch (err) {
@@ -339,7 +340,7 @@ describe('secret-scan.sh --strict: reduces effective exclusions', { skip: IS_WIN
     try {
       const result = spawnSync(SECRET_SCAN, ['--file', tmpFile, '--strict'], {
         encoding: 'utf-8',
-        timeout: 10000,
+        timeout: QUICK_SPAWN_TIMEOUT_MS,
         cwd: tmpDir,  // No .secretscanignore here — clean workspace
       });
       const status = result.status !== null ? result.status : 1;
@@ -384,7 +385,7 @@ describe('secret-scan.sh --strict: reduces effective exclusions', { skip: IS_WIN
       // Default mode: grandfathered entry IS honoured → file is excluded → exit 0
       const defaultResult = spawnSync(SECRET_SCAN, ['--file', relFile], {
         encoding: 'utf-8',
-        timeout: 10000,
+        timeout: QUICK_SPAWN_TIMEOUT_MS,
         cwd: tmpDir,  // CWD has .secretscanignore with the grandfathered entry
       });
       const defaultStatus = defaultResult.status !== null ? defaultResult.status : 1;
@@ -392,7 +393,7 @@ describe('secret-scan.sh --strict: reduces effective exclusions', { skip: IS_WIN
       // Strict mode: grandfathered entry NOT honoured → file is scanned → exit 1
       const strictResult = spawnSync(SECRET_SCAN, ['--file', relFile, '--strict'], {
         encoding: 'utf-8',
-        timeout: 10000,
+        timeout: QUICK_SPAWN_TIMEOUT_MS,
         cwd: tmpDir,  // Same CWD, same .secretscanignore
       });
       const strictStatus = strictResult.status !== null ? strictResult.status : 0;
@@ -426,7 +427,7 @@ describe('secret-scan.sh default mode: regression test', { skip: IS_WINDOWS }, (
     // .secretscanignore is found. Excluded → scanned 0 files → exit 0.
     const result = spawnSync(SECRET_SCAN, ['--file', 'gsd-core/workflows/plan-phase.md'], {
       encoding: 'utf-8',
-      timeout: 10000,
+      timeout: QUICK_SPAWN_TIMEOUT_MS,
       cwd: PROJECT_ROOT,
     });
     const status = result.status !== null ? result.status : 1;

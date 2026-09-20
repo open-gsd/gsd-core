@@ -1,6 +1,6 @@
 ---
 name: gsd:quick-batch
-description: Batch several /gsd:quick-shaped tasks together — planned, dispatched, and merged as one run
+description: Batch several `/gsd:quick`-shaped tasks together — planned, dispatched, and merged as one run
 argument-hint: "[--file <path>] [--jobs auto|N] [--validate] [--research] [--resume <batch-id>] [task list]"
 allowed-tools:
   - Read

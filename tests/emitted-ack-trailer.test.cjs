@@ -794,6 +794,17 @@ describe('hostile IO: uncomputable range, subprocess failure, timeout', () => {
     );
   });
 
+  /**
+   * Deliberately, impossibly tiny -- NOT a generous-headroom bound like every
+   * other timeout constant in this test suite. Used to FORCE a TIMED_OUT
+   * outcome against an artificially huge git history (see
+   * growHistoryFastImport above), proving "an unreadable-in-time git call
+   * must throw a timeout, never hang." Named and commented distinctly so a
+   * future reader never mistakes this for a real operation-duration budget
+   * and "fixes" it by raising it.
+   */
+  const IMPOSSIBLY_SHORT_GIT_TIMEOUT_MS = 20;
+
   test('git log is bounded by a timeout — row 24', (t) => {
     const dir = makeTempRepo('gsd-ack-trailer-24-');
     withCleanup(t, dir);
@@ -801,7 +812,9 @@ describe('hostile IO: uncomputable range, subprocess failure, timeout', () => {
 
     const start = Date.now();
     assert.throws(
-      () => readAckTrailers({ baseRef: rootSha, headRef: 'HEAD', cwd: dir, timeoutMs: 20 }),
+      () => readAckTrailers({
+        baseRef: rootSha, headRef: 'HEAD', cwd: dir, timeoutMs: IMPOSSIBLY_SHORT_GIT_TIMEOUT_MS,
+      }),
       /time/i,
       'an unreadable-in-time git call must throw a timeout, never hang',
     );

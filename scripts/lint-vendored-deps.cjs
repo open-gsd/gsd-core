@@ -233,13 +233,17 @@ function checkHandAuthoredTwin(row) {
  * installed version. Shared by checkRow (compares) and fixRow (rewrites) so
  * the two can never silently diverge on how a pin is read.
  * @param {VendoredPackage} row
+ * @param {string} [pkgRoot] Override for testing -- defaults to the real repo ROOT. Lets a
+ *   test point fixRow's pin-rewrite at an isolated temp package.json instead of writing the
+ *   real, shared one, which other concurrently-running node --test files read at module
+ *   top-level (the same race class already fixed for the vendored .cjs copy).
  * @returns {{pinnedSpec: string | undefined, installedVersion: string | undefined}}
  */
-function readPinState(row) {
-  const pkgPath = path.join(ROOT, 'package.json');
+function readPinState(row, pkgRoot = ROOT) {
+  const pkgPath = path.join(pkgRoot, 'package.json');
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
   const pinnedSpec = pkg.devDependencies && pkg.devDependencies[row.name];
-  const installedPkgPath = path.join(ROOT, 'node_modules', row.name, 'package.json');
+  const installedPkgPath = path.join(pkgRoot, 'node_modules', row.name, 'package.json');
   let installedVersion;
   if (fs.existsSync(installedPkgPath)) {
     installedVersion = JSON.parse(fs.readFileSync(installedPkgPath, 'utf8')).version;
@@ -250,9 +254,13 @@ function readPinState(row) {
 /**
  * Run all applicable freshness checks for one vendored package row.
  * @param {VendoredPackage} row
+ * @param {string} [pkgRoot] Override for testing -- defaults to the real repo ROOT. Lets a
+ *   test point fixRow's pin-rewrite at an isolated temp package.json instead of writing the
+ *   real, shared one, which other concurrently-running node --test files read at module
+ *   top-level (the same race class already fixed for the vendored .cjs copy).
  * @returns {string[]} findings (empty when the row is fresh)
  */
-function checkRow(row) {
+function checkRow(row, pkgRoot = ROOT) {
   const findings = [];
 
   const cjsDrift = compareFiles(row.vendoredCjs, row.upstreamCjs);
@@ -271,7 +279,7 @@ function checkRow(row) {
     findings.push(...checkHandAuthoredTwin(row));
   }
 
-  const { pinnedSpec, installedVersion } = readPinState(row);
+  const { pinnedSpec, installedVersion } = readPinState(row, pkgRoot);
   if (!pinnedSpec) {
     findings.push(`package.json devDependencies.${row.name} is missing`);
   } else if (installedVersion === undefined) {
@@ -303,9 +311,13 @@ function checkRow(row) {
  * after this runs, that is by design: the caller must not treat it as
  * fixed.
  * @param {VendoredPackage} row
+ * @param {string} [pkgRoot] Override for testing -- defaults to the real repo ROOT. Lets a
+ *   test point fixRow's pin-rewrite at an isolated temp package.json instead of writing the
+ *   real, shared one, which other concurrently-running node --test files read at module
+ *   top-level (the same race class already fixed for the vendored .cjs copy).
  * @returns {string[]} findings remaining after the fix (empty when fully resolved)
  */
-function fixRow(row) {
+function fixRow(row, pkgRoot = ROOT) {
   fs.copyFileSync(resolvePath(row.upstreamCjs), resolvePath(row.vendoredCjs));
 
   if (row.twinKind === 'upstream-verbatim' && row.upstreamDts) {
@@ -313,18 +325,18 @@ function fixRow(row) {
     if (row.srcTwin) fs.copyFileSync(resolvePath(row.upstreamDts), resolvePath(row.srcTwin));
   }
 
-  const { pinnedSpec, installedVersion } = readPinState(row);
+  const { pinnedSpec, installedVersion } = readPinState(row, pkgRoot);
   if (pinnedSpec && installedVersion !== undefined) {
     const newPin = `${pinOperatorPrefix(pinnedSpec)}${installedVersion}`;
     if (newPin !== pinnedSpec) {
-      const pkgPath = path.join(ROOT, 'package.json');
+      const pkgPath = path.join(pkgRoot, 'package.json');
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
       pkg.devDependencies[row.name] = newPin;
       fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
     }
   }
 
-  return checkRow(row);
+  return checkRow(row, pkgRoot);
 }
 
 function main() {

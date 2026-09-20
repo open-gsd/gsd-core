@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "count": 285,
+  "count": 286,
   "classes": {
     "ARCH": 1,
     "CI": 2,
@@ -14,7 +14,7 @@
     "PLANNING": 3,
     "PR": 2,
     "PRED": 68,
-    "PROBE": 11,
+    "PROBE": 12,
     "PROC": 14,
     "PROHIB": 10,
     "RELEASE-NOTES": 31,
@@ -645,6 +645,11 @@
       "id": "PROBE.ui.seam",
       "klass": "PROBE",
       "value": "ui-phase Step 9.5 post-verification: element-cue classify -> propose-then-confirm (partial-cue mitigation, Goodhart) -> autoResolve --auto floor (never dismiss; unclassified stays unresolved #1110) -> ## UI Considerations write-back -> plan-phase `## UI Considerations` lift rule (#1867)"
+    },
+    {
+      "id": "PROBE.ui.text_en",
+      "klass": "PROBE",
+      "value": "optional English translation of Element.text read by classification (text_en ?? text), engine input never user-facing output; mirrors the edge adapter's #3717 field; empty/whitespace/non-string fails closed (#4657)"
     },
     {
       "id": "PROBE.ui.verification",

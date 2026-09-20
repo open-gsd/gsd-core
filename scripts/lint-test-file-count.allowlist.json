@@ -1,6 +1,15 @@
 {
-  "_doc": "Baseline of modules currently exceeding the 2-test-file limit. Each entry locks in TODAY's exact test filenames as the allowlisted set (identity ratchet). Adding a NEW test file to a capped module fails (novel). Removing one requires pruning this list (stale, ratchet-down). When a cluster drops to \u2264 2, remove its entry entirely. New entries require justification in PR description.",
+  "_doc": "Baseline of modules currently exceeding the 2-test-file limit. Each entry locks in TODAY's exact test filenames as the allowlisted set (identity ratchet). Adding a NEW test file to a capped module fails (novel). Removing one requires pruning this list (stale, ratchet-down). When a cluster drops to ≤ 2, remove its entry entirely. New entries require justification in PR description.",
   "modules": {
+    "ui-consideration-probe": {
+      "files": [
+        "ui-consideration-probe-docs-fixtures.test.cjs",
+        "ui-consideration-probe-ui-phase-contract.test.cjs",
+        "ui-consideration-probe.test.cjs"
+      ],
+      "issue": "4657",
+      "justification": "The ui-consideration-probe cluster gains its workflow-prose contract file (tests/ui-consideration-probe-ui-phase-contract.test.cjs, #4657), mirroring the edge probe's split (edge-probe.test.cjs / edge-probe-docs-fixtures.test.cjs / edge-probe-spec-phase-contract.test.cjs). The contract file reads shipped gsd-core/workflows/ui-phase.md under the source-text-is-the-product exception, which the unit file deliberately does not carry (it asserts typed returns only)."
+    },
     "adr-parser": {
       "files": [
         "adr-parser.property.test.cjs",
@@ -40,7 +49,7 @@
         "frontmatter.unit.test.cjs"
       ],
       "issue": "3881",
-      "justification": "Grandfathered by #3227 for the original 4-file cluster (pre-existing over-cap, not new sprawl). #3881 (ADR-3473 \u00a78.1, the js-yaml parser migration) adds two more: frontmatter-golden-parity.test.cjs (D-series golden-corpus diff against the legacy parser, ~900 real documents \u2014 cannot be folded into an existing file without losing its independent-of-current-parser provenance) and frontmatter-roundtrip.property.test.cjs (fast-check property coverage the migration's bijective-contract rule requires). Both are migration-specific, not incidental sprawl."
+      "justification": "Grandfathered by #3227 for the original 4-file cluster (pre-existing over-cap, not new sprawl). #3881 (ADR-3473 §8.1, the js-yaml parser migration) adds two more: frontmatter-golden-parity.test.cjs (D-series golden-corpus diff against the legacy parser, ~900 real documents — cannot be folded into an existing file without losing its independent-of-current-parser provenance) and frontmatter-roundtrip.property.test.cjs (fast-check property coverage the migration's bijective-contract rule requires). Both are migration-specific, not incidental sprawl."
     },
     "graphify": {
       "files": [
@@ -137,10 +146,11 @@
         "verify-npm-publish.test.cjs",
         "verify-test-quality.test.cjs",
         "verify-work-auto-transition.test.cjs",
+        "verify-work-deferred-promotion.test.cjs",
         "verify.test.cjs"
       ],
-      "issue": "#3813 \u2014 the live-path #1883 suite drives buildPlanningSnapshot in-process with an fs fault; the verify module suites are CLI-driving and cannot host an fs monkeypatch",
-      "justification": "verify-command-grounding added by #2401/#3678; allowlist follow-up landed with #3606 (base was red on this lane)."
+      "issue": "#3813 — the live-path #1883 suite drives buildPlanningSnapshot in-process with an fs fault; the verify module suites are CLI-driving and cannot host an fs monkeypatch",
+      "justification": "verify-command-grounding added by #2401/#3678; allowlist follow-up landed with #3606 (base was red on this lane). #4546 adds verify-work-deferred-promotion (deferred-follow-up promotion writer contract + parity)."
     },
     "install": {
       "files": [
@@ -154,7 +164,7 @@
         "install-write-confinement.test.cjs",
         "install.test.cjs"
       ],
-      "issue": "#3798 \u2014 the profile-closure spawn test reads the real repo surface (commands+workflows+agents); consolidating it into install.test.cjs would put a whole-repo scan behind the suite's heaviest file"
+      "issue": "#3798 — the profile-closure spawn test reads the real repo surface (commands+workflows+agents); consolidating it into install.test.cjs would put a whole-repo scan behind the suite's heaviest file"
     },
     "edge-probe": {
       "files": [
@@ -252,8 +262,8 @@
         "docs-state-md-locale-parity.test.cjs",
         "docs-update.test.cjs"
       ],
-      "issue": "3873 | #3839 \u2014 the hook-event parity suite cross-checks the four docs hook tables against src/runtime-hooks-surface.cts registrations; a generated-docs concern distinct from content freshness and registry parity",
-      "justification": "ADR-3473 \u00a78.8 makes docs/reference/state-md.md and its four locale siblings generated-and-committed and adds the repo's first locale-parity check (verified: no locale-parity lint precedent exists here). That check is a distinct concern from docs-update (content freshness) and docs-parity-live-registry (registry parity); folding it into either would place an unrelated subject inside them purely to satisfy a count. The section it guards is absent from all four translations today and documents the status enum behind #3853."
+      "issue": "3873 | #3839 — the hook-event parity suite cross-checks the four docs hook tables against src/runtime-hooks-surface.cts registrations; a generated-docs concern distinct from content freshness and registry parity",
+      "justification": "ADR-3473 §8.8 makes docs/reference/state-md.md and its four locale siblings generated-and-committed and adds the repo's first locale-parity check (verified: no locale-parity lint precedent exists here). That check is a distinct concern from docs-update (content freshness) and docs-parity-live-registry (registry parity); folding it into either would place an unrelated subject inside them purely to satisfy a count. The section it guards is absent from all four translations today and documents the status enum behind #3853."
     },
     "audit": {
       "files": [
@@ -265,7 +275,7 @@
         "audit-uat-summary-segmentation.test.cjs",
         "audit-workstream-layouts.test.cjs"
       ],
-      "issue": "#3804/#3805 \u2014 audit-layout and acknowledged-marker suites drive the real audit-uat CLI against on-disk fixtures | #3817 \u2014 regression suite proving countReal counts the truncation remainder marker instead of treating it as one phantom item | #3783 \u2014 dedicated suite for the summary.current_milestone/archived segmentation, matching this module's one-file-per-feature-slice precedent (e.g. audit-uat-acknowledged.test.cjs) rather than growing the unrelated 6900+ line tests/uat.test.cjs (a different module, keyed off uat.cjs)"
+      "issue": "#3804/#3805 — audit-layout and acknowledged-marker suites drive the real audit-uat CLI against on-disk fixtures | #3817 — regression suite proving countReal counts the truncation remainder marker instead of treating it as one phantom item | #3783 — dedicated suite for the summary.current_milestone/archived segmentation, matching this module's one-file-per-feature-slice precedent (e.g. audit-uat-acknowledged.test.cjs) rather than growing the unrelated 6900+ line tests/uat.test.cjs (a different module, keyed off uat.cjs)"
     },
     "shell-command-projection": {
       "files": [
@@ -273,7 +283,16 @@
         "shell-command-projection-md-normalize.test.cjs",
         "shell-command-projection-path-sep.test.cjs"
       ],
-      "issue": "#3854 \u2014 the tight-list suite pins the markdown write-normalizer's blank-line policy through the exported normalizeContent/platformWriteSync seam; a distinct concern from dispatch routing and path separation"
+      "issue": "#3854 — the tight-list suite pins the markdown write-normalizer's blank-line policy through the exported normalizeContent/platformWriteSync seam; a distinct concern from dispatch routing and path separation"
+    },
+    "ui-consideration-probe": {
+      "files": [
+        "ui-consideration-probe-docs-fixtures.test.cjs",
+        "ui-consideration-probe-ui-phase-contract.test.cjs",
+        "ui-consideration-probe.test.cjs"
+      ],
+      "issue": "4657",
+      "justification": "The ui-consideration-probe cluster gains its workflow-prose contract file (tests/ui-consideration-probe-ui-phase-contract.test.cjs, #4657), mirroring the edge probe's split (edge-probe.test.cjs / edge-probe-docs-fixtures.test.cjs / edge-probe-spec-phase-contract.test.cjs). The contract file reads shipped gsd-core/workflows/ui-phase.md under the source-text-is-the-product exception, which the unit file deliberately does not carry (it asserts typed returns only)."
     }
   }
 }

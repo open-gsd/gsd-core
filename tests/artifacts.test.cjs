@@ -76,6 +76,17 @@ describe('isCanonicalPlanningFile', () => {
     assert.strictEqual(isCanonicalPlanningFile('WINDOWS.md'), true);
   });
 
+  test('#4282: PATTERNS.md (graduated cross-phase patterns) is a canonical .planning/ artifact', () => {
+    // workflows/graduation.md's own graduation-target table instructs the agent to
+    // append to .planning/PATTERNS.md for the `patterns` category. Before #4282 it
+    // was absent from the registry, so validate health flagged it W019
+    // "Unrecognized" with advice to archive/delete a file gsd-core itself produces.
+    // Distinct from the per-phase NN-PATTERNS.md (templates/README.md), which lives
+    // under a phase subdirectory and was never subject to W019 in the first place.
+    assert.ok(CANONICAL_EXACT.has('PATTERNS.md'), 'PATTERNS.md must be in CANONICAL_EXACT');
+    assert.strictEqual(isCanonicalPlanningFile('PATTERNS.md'), true);
+  });
+
   test('returns false for unrecognized file', () => {
     assert.strictEqual(isCanonicalPlanningFile('random-file.md'), false);
   });

@@ -1,7 +1,7 @@
 ---
 name: gsd-plan-review-convergence
 description: "Cross-AI plan convergence - replan until review concerns are resolved."
-argument-hint: "<phase> [--gemini] [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--antigravity] [--agy] [--ollama] [--lm-studio] [--llama-cpp] [--kimi-code] [--text] [--ws <name>] [--all] [--max-cycles N]"
+argument-hint: "<phase> [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--antigravity] [--agy] [--ollama] [--lm-studio] [--llama-cpp] [--kimi-code] [--text] [--ws <name>] [--all] [--max-cycles N]"
 allowed-tools:
   - Read
   - Write
@@ -20,7 +20,7 @@ Repeatedly: review plans with external AI CLIs → if HIGH or actionable non-HIG
 
 **Flow:** Skill("gsd-plan-phase") → Agent→Skill("gsd-review") → check unresolved HIGH + actionable non-HIGH → Skill("gsd-plan-phase --reviews") → Agent→Skill("gsd-review") → ... → Converge or escalate
 
-Replaces gsd-plan-phase's internal gsd-plan-checker with external AI reviewers (codex, gemini, etc.). Plan-phase runs **inline** (bare Skill at depth 0) so it can spawn gsd-planner/gsd-plan-checker at depth 1. Review runs inside an isolated Agent (gsd-review is a Bash leaf — no sub-agents needed). Orchestrator only does loop control.
+Replaces gsd-plan-phase's internal gsd-plan-checker with external AI reviewers (codex, claude, etc.). Plan-phase runs **inline** (bare Skill at depth 0) so it can spawn gsd-planner/gsd-plan-checker at depth 1. Review runs inside an isolated Agent (gsd-review is a Bash leaf — no sub-agents needed). Orchestrator only does loop control.
 
 **Orchestrator role:** Parse arguments, validate phase, run plan-phase inline (Skill at depth 0), spawn an Agent for gsd-review, check unresolved HIGH and actionable non-HIGH counts, stall detection, escalation gate.
 </objective>
@@ -41,8 +41,7 @@ Phase number: extracted from $ARGUMENTS (required)
 
 **Flags:**
 - `--codex` — Use Codex CLI as reviewer (default if no reviewer flag given AND `review.default_reviewers` is unset; otherwise `review.default_reviewers` wins per ADR-0011 — #2315)
-- `--gemini` — Use Gemini CLI as reviewer
-- `--agy` / `--antigravity` — Use Antigravity CLI as reviewer (successor to the discontinued Gemini CLI)
+- `--agy` / `--antigravity` — Use Antigravity CLI as reviewer
 - `--claude` — Use Claude CLI as reviewer (separate session)
 - `--coderabbit` — Use CodeRabbit as reviewer (reviews the working-tree diff, not the source tree)
 - `--opencode` — Use OpenCode as reviewer
@@ -56,7 +55,8 @@ Phase number: extracted from $ARGUMENTS (required)
 - `--max-cycles N` — Maximum replan→review cycles (default: 3)
 
 **Feature gate:** This command requires `workflow.plan_review_convergence=true`. Enable with:
-`gsd config-set workflow.plan_review_convergence true`
+`gsd config-set workflow.plan_review_convergence true`. A dispatch carrying `--override-gate` —
+how `/gsd-autonomous --converge` invokes this workflow (#4600) — bypasses the gate for that run.
 </context>
 
 <process>

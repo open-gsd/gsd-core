@@ -494,6 +494,26 @@ describe('loadConfigResolved — provenance', () => {
     assert.equal(result.degraded, false);
   });
 
+  test('whitespace-only explicit and environment workstreams resolve and label the root (#4462)', () => {
+    writeConfig(tmpDir, { model_profile: 'quality' });
+    for (const workstream of ['  ', '\t', '\n', ' \t\n ']) {
+      const explicit = loadConfigResolved(tmpDir, { workstream });
+      assert.equal(explicit.source, 'root');
+      assert.equal(explicit.degraded, false);
+
+      const original = process.env.GSD_WORKSTREAM;
+      try {
+        process.env.GSD_WORKSTREAM = workstream;
+        const ambient = loadConfigResolved(tmpDir);
+        assert.equal(ambient.source, 'root');
+        assert.equal(ambient.degraded, false);
+      } finally {
+        if (original === undefined) delete process.env.GSD_WORKSTREAM;
+        else process.env.GSD_WORKSTREAM = original;
+      }
+    }
+  });
+
   test('Fix 2a: GSD_WORKSTREAM set to nonexistent workstream (dir absent) → source:"root", degraded:true', () => {
     writeConfig(tmpDir, { model_profile: 'root-value' });
     const origWs = process.env['GSD_WORKSTREAM'];
@@ -1682,5 +1702,149 @@ describe('#3894 research_before_questions global-defaults forwarding', () => {
       cleanup(homeTmp);
       cleanup(noPlanning);
     }
+  });
+});
+
+// ── #4717 — an empty config.runtime is filled from GSD_RUNTIME / the marker ──
+describe('loadConfigResolved — runtime identity fill (#4717)', () => {
+  const slash = require('../gsd-core/bin/lib/runtime-slash.cjs');
+  const fsx = require('node:fs');
+  const pathx = require('node:path');
+  const { createTempDir: mkTmp4717, cleanup: cleanup4717 } = require('./helpers.cjs');
+  let tmpCodexHome;
+  let originalCodexHome;
+  let originalGsdRuntime;
+
+  let originalGsdHome;
+  let originalHome;
+  let originalUserProfile;
+
+  beforeEach(() => {
+    originalCodexHome = process.env.CODEX_HOME;
+    originalGsdRuntime = process.env.GSD_RUNTIME;
+    originalGsdHome = process.env.GSD_HOME;
+    originalHome = process.env.HOME;
+    originalUserProfile = process.env.USERPROFILE;
+    delete process.env.GSD_RUNTIME;
+    tmpCodexHome = mkTmp4717('gsd-4717-');
+    process.env.CODEX_HOME = tmpCodexHome;
+    // Isolate the SHARED defaults file too: loadConfigResolved's global-defaults
+    // branch reads ~/.gsd/defaults.json from GSD_HOME || homedir, and a real
+    // machine's stamped defaults would bleed into these rows (#4717 review).
+    process.env.GSD_HOME = tmpCodexHome;
+    process.env.HOME = tmpCodexHome;
+    process.env.USERPROFILE = tmpCodexHome;
+    slash._setInstallRuntimeMarkerForTests('codex');
+  });
+
+  afterEach(() => {
+    slash._resetInstallRuntimeMarkerCacheForTests();
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+    if (originalGsdRuntime === undefined) delete process.env.GSD_RUNTIME;
+    else process.env.GSD_RUNTIME = originalGsdRuntime;
+    if (originalGsdHome === undefined) delete process.env.GSD_HOME;
+    else process.env.GSD_HOME = originalGsdHome;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
+    cleanup4717(tmpCodexHome);
+  });
+
+  test('an empty config.runtime is filled from the install marker (#4717)', (t) => {
+    const projDir = mkTmp4717('gsd-4717-proj-');
+    t.after(() => cleanup4717(projDir));
+    const resolved = loadConfigResolved(projDir, { persist: false });
+    assert.equal(resolved.config.runtime, 'codex',
+      'the marker-owned runtime fills an empty config.runtime (copy-on-write)');
+  });
+
+  test('GSD_RUNTIME outranks the marker in the identity fill (#4717)', (t) => {
+    const projDir = mkTmp4717('gsd-4717-proj-');
+    t.after(() => cleanup4717(projDir));
+    process.env.GSD_RUNTIME = 'kimi';
+    const resolved = loadConfigResolved(projDir, { persist: false });
+    assert.equal(resolved.config.runtime, 'kimi');
+  });
+
+  // Branch D (the shared-defaults path) fires only when the project dir has NO
+  // .planning/ at all — these rows use bare dirs for exactly that (#4717).
+  function bareProjDir(t, prefix) {
+    const dir = mkTmp4717(prefix);
+    t.after(() => cleanup4717(dir));
+    return dir;
+  }
+
+  test('#4717 stamped-defaults leg: a shared defaults runtime does not leak past THIS install\'s marker', (t) => {
+    // The issue's second failure shape: the first non-Claude install stamped
+    // `runtime` into the SHARED ~/.gsd/defaults.json; a Claude install on the
+    // same machine must not inherit that identity. Branch D forwards the
+    // stamped value; the fill corrects it to the marker's own.
+    fsx.mkdirSync(pathx.join(tmpCodexHome, '.gsd'), { recursive: true });
+    fsx.writeFileSync(
+      pathx.join(tmpCodexHome, '.gsd', 'defaults.json'),
+      JSON.stringify({ runtime: 'codex' }),
+    );
+    slash._setInstallRuntimeMarkerForTests('claude');
+
+    const projDir = bareProjDir(t, 'gsd-4717-proj-stamped-');
+
+    const resolved = loadConfigResolved(projDir);
+    assert.equal(resolved.source, 'global-defaults', 'fixture: the shared-defaults branch must fire');
+    assert.equal(
+      resolved.config.runtime,
+      'claude',
+      'the marker-owned identity must correct the machine-wide stamp',
+    );
+  });
+
+  test('#4717 stamped-defaults leg: with no marker of its own, the stamped value still stands (status quo preserved)', (t) => {
+    fsx.mkdirSync(pathx.join(tmpCodexHome, '.gsd'), { recursive: true });
+    fsx.writeFileSync(
+      pathx.join(tmpCodexHome, '.gsd', 'defaults.json'),
+      JSON.stringify({ runtime: 'codex' }),
+    );
+    slash._setInstallRuntimeMarkerForTests(null);
+
+    const projDir = bareProjDir(t, 'gsd-4717-proj-stamped-nomarker-');
+
+    const resolved = loadConfigResolved(projDir);
+    assert.equal(resolved.config.runtime, 'codex', 'no own identity — the stamped value is all we know');
+  });
+
+  test('#4717 fail-safe: a garbage marker does not fill the runtime (#4717 review)', (_t) => {
+    slash._setInstallRuntimeMarkerForTests('   not-a-runtime   ');
+
+    const projDir = bareProjDir(_t, 'gsd-4717-proj-garbage-');
+
+    const resolved = loadConfigResolved(projDir);
+    assert.equal(
+      resolved.config.runtime || null,
+      null,
+      'an unrecognizable marker value must fail safe to no identity',
+    );
+  });
+
+  test('an explicit config.runtime is preserved — the fill never overrides it (#4717)', (t) => {
+    const projDir = mkTmp4717('gsd-4717-proj-');
+    t.after(() => cleanup4717(projDir));
+    fsx.mkdirSync(pathx.join(projDir, '.planning'), { recursive: true });
+    fsx.writeFileSync(
+      pathx.join(projDir, '.planning', 'config.json'),
+      JSON.stringify({ runtime: 'claude' }),
+    );
+    const resolved = loadConfigResolved(projDir, { persist: false });
+    assert.equal(resolved.config.runtime, 'claude',
+      'an explicit project runtime is never overwritten by the marker fill');
+  });
+
+  test('copy-on-write: the shared builtin-defaults object is never mutated (#4717)', (t) => {
+    const projDir = mkTmp4717('gsd-4717-proj-');
+    t.after(() => cleanup4717(projDir));
+    const resolved = loadConfigResolved(projDir, { persist: false });
+    assert.equal(resolved.config.runtime, 'codex');
+    const again = loadConfigResolved(projDir, { persist: false });
+    assert.equal(again.config.runtime, 'codex');
   });
 });

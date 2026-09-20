@@ -24,6 +24,7 @@ const { cleanup } = require('./helpers.cjs'); // #4020: fixture-tree removal
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
+const { MALFORMED_INPUT_HOOK_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const HOOK_PATH = require('node:path').join(__dirname, '..', 'hooks', 'gsd-read-injection-scanner.js');
 
@@ -186,7 +187,7 @@ describe('gsd-read-injection-scanner: edge cases', () => {
     let signal = null;
     try {
       stdout = execFileSync(process.execPath, [HOOK_PATH], {
-        input, encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'],
+        input, encoding: 'utf-8', timeout: MALFORMED_INPUT_HOOK_TIMEOUT_MS, stdio: ['pipe', 'pipe', 'pipe'],
       }).trim();
     } catch (err) {
       exitCode = err.status ?? 0;

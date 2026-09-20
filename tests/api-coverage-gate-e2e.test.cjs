@@ -23,6 +23,7 @@ const path = require('node:path');
 
 const { cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
+const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 // In-process seam for the fail-closed read-injection tests at the bottom of this
 // file (#2365 review): readPhaseScope is the pure phase-scope reader behind the
 // gate. Those tests monkeypatch fs rather than drive a subprocess.
@@ -39,7 +40,7 @@ function runTools(args, cwd) {
   const r = runNode([TOOLS_PATH, ...argv], {
     cwd,
     env: { ...process.env, ...TEST_ENV_BASE },
-    timeoutMs: 60000,
+    timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
   });
   if (r.outcome === OUTCOME.EXITED && r.exitCode === 0) {
     return { success: true, output: r.stdout.trim(), exitCode: 0, error: '' };

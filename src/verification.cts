@@ -45,6 +45,7 @@ import coreUtilsMod = require('./core-utils.cjs');
 import planningScopeMod = require('./planning-scope.cjs');
 import { execGit } from './shell-command-projection.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
+import { isContainedIn } from './security.cjs';
 
 const { output, error } = io;
 const { extractPhaseToken, scopeToPhase } = phaseId;
@@ -111,8 +112,14 @@ const VERIFICATION_ROUTING_TABLE: Record<string, VerificationRoute> = {
   },
   stale: {
     status: 'stale',
-    next_action: 'Verification is stale. Re-run verify-work before transition.',
-    next_command: '',
+    // #4682: staleness means covered source files changed after the verifier
+    // last ran — the only remedy is re-running the verifier.
+    // /gsd-verify-work never rewrites VERIFICATION.md, so advising it from
+    // here was an advice loop. execute-phase resumes at the verification
+    // gates and re-runs the verifier (its resume tree routes a stale report
+    // to re-verification), which regenerates VERIFICATION.md and its digest.
+    next_action: 'Verification is stale — covered source files changed after the verifier last ran. Re-run execute-phase for this phase: it resumes at the verification gates and re-runs the verifier, regenerating VERIFICATION.md and its digest. verify-work alone cannot refresh a stale report.',
+    next_command: 'execute-phase',
   },
   // INTERNAL SENTINEL: constructed when no *-VERIFICATION.md file exists or when
   // the file has no parseable frontmatter status. Never emitted by the verifier.
@@ -219,8 +226,98 @@ function canonicalizeCoveredFiles(files: readonly string[]): string[] {
  * Bump on any change to the digest's input shape (path list, hashing order,
  * per-file hash algorithm) so an old stored digest can never collide with a
  * differently-computed new one — a version mismatch is just a mismatch.
+ *
+ * Version history:
+ *   v1 (#4155) — every covered path's whole bytes, uniformly.
+ *   v2 (#4623) — repo-wide planning documents (`isSharedPlanningDoc`) are
+ *                excluded from the hash by construction.
+ *
+ * A stored digest names its own version (`v<N>:sha256:…`), and
+ * `readVerificationStatus` recomputes under the STORED version rather than
+ * this constant — so bumping it does not flip every already-verified phase
+ * to `stale` on upgrade. A legacy v1 report keeps v1 semantics, shared
+ * documents included, until it is re-fingerprinted; only a version outside
+ * `KNOWN_FINGERPRINT_VERSIONS` is unrecomputable and fails closed.
  */
-const FINGERPRINT_VERSION = 1;
+const FINGERPRINT_VERSION = 2;
+const KNOWN_FINGERPRINT_VERSIONS: ReadonlySet<number> = new Set([1, 2]);
+
+/**
+ * #4623: the planning roots whose DIRECT children are repo-wide planning
+ * documents, as project-root-relative posix paths. Always `.planning`; plus
+ * the phase's OWN planning root when a phase directory is known — the parent
+ * of its `phases/` directory, which is how `planningDir` lays out every
+ * scope (`.planning`, `.planning/<project>`, `.planning/workstreams/<ws>`,
+ * `.planning/<project>/workstreams/<ws>`; `planning-workspace.cts`). Derived
+ * from the phase's position rather than from a list of layouts so a
+ * workstream-scoped `ROADMAP.md` is recognised without this function
+ * knowing what a workstream is, and so `.planning/research/notes.md` is
+ * NOT mistaken for one — lexically the two are indistinguishable from
+ * `.planning/<project>/ROADMAP.md`. A phase directory that does not sit
+ * under the project root (unit fixtures at a bare tmpdir) contributes no
+ * extra root.
+ */
+function sharedPlanningRoots(projectRoot: string, phaseDir?: string | null): string[] {
+  const roots = ['.planning'];
+  if (phaseDir) {
+    const phasesDir = path.dirname(path.resolve(phaseDir));
+    const planningDir = path.dirname(phasesDir);
+    const rel = normalizeRel(path.relative(path.resolve(projectRoot), planningDir));
+    // Two structural checks, both load-bearing: the phase dir's PARENT must be
+    // the `phases/` directory `planningDir` lays every scope out with, and the
+    // derived root must sit inside `.planning/`. Without them any accepted
+    // directory — `<root>/src/phases/01-fake` — would nominate `src` as a
+    // planning root and silently drop real implementation evidence from the
+    // digest (found by the cross-AI review of this change). A shape that fails
+    // either check contributes no extra root; `.planning` itself is already
+    // present.
+    if (
+      path.basename(phasesDir) === 'phases' &&
+      rel.startsWith('.planning/') &&
+      !rel.includes('/../') &&
+      !roots.includes(rel)
+    ) {
+      roots.push(rel);
+    }
+  }
+  return roots;
+}
+
+/**
+ * #4623: a covered path names a repo-wide planning document when it sits
+ * DIRECTLY under one of `sharedPlanningRoots` — `ROADMAP.md`,
+ * `REQUIREMENTS.md`, `STATE.md`, `PROJECT.md`, `MILESTONES.md`,
+ * `config.json`, … — as opposed to a phase's own artifacts under
+ * `<root>/phases/<phase>/` or a research note under `.planning/research/`.
+ * Every phase rewrites these as ordinary bookkeeping (a roadmap checkbox, a
+ * requirement's traceability cell, STATE.md's position), so hashing their
+ * whole bytes into one phase's digest coupled every phase's staleness to
+ * every other phase's close — and to its OWN close, since `phase.complete`
+ * and `requirements mark-complete` write them after the verifier has
+ * already run.
+ *
+ * Defined by position, not by a name list, so the set cannot drift as new
+ * top-level planning documents appear (the tree already carries a dozen).
+ * `rel` is expected posix-normalized (`canonicalizeCoveredFiles`), so a
+ * `./.planning/ROADMAP.md` spelling has already collapsed to the bare form.
+ */
+function isSharedPlanningDoc(rel: string, roots: readonly string[] = ['.planning']): boolean {
+  if (rel === '' || rel.endsWith('/')) return false;
+  return roots.includes(path.posix.dirname(rel));
+}
+
+/**
+ * #4623: the fingerprint version a stored `covered_digest` was computed
+ * under, or `null` when the prefix is absent, malformed, or names a version
+ * this build cannot recompute (an unknown version is a mismatch by
+ * construction — the fail-closed shape `FINGERPRINT_VERSION`'s doc promises).
+ */
+function parseFingerprintVersion(digest: string): number | null {
+  const m = /^v(\d+):sha256:/.exec(digest);
+  if (!m) return null;
+  const version = Number(m[1]);
+  return KNOWN_FINGERPRINT_VERSIONS.has(version) ? version : null;
+}
 
 /**
  * #4155: recompute the deterministic content fingerprint over a verifier's
@@ -262,9 +359,22 @@ const FINGERPRINT_VERSION = 1;
  * confinement work (against `projectRoot`, the correct boundary for this
  * data), so no security property is lost by bypassing a narrower seam here.
  */
-function computeCoveredDigest(projectRoot: string, coveredFiles: readonly string[]): string | null {
+function computeCoveredDigest(
+  projectRoot: string,
+  coveredFiles: readonly string[],
+  version: number = FINGERPRINT_VERSION,
+  opts: { phaseDir?: string | null } = {},
+): string | null {
+  // #4623: `version` selects the input shape to hash under — the CURRENT
+  // one for a fresh fingerprint (the CLI verb), or the STORED one when
+  // `readVerificationStatus` recomputes against a report's own digest.
+  // `opts.phaseDir` lets v2 recognise the phase's own planning root
+  // (`sharedPlanningRoots`); without it only `.planning/` itself is shared.
+  if (!KNOWN_FINGERPRINT_VERSIONS.has(version)) return null;
   const uniqueSorted = canonicalizeCoveredFiles(coveredFiles);
   if (uniqueSorted.length === 0) return null;
+  const sharedRoots = version >= 2 ? sharedPlanningRoots(projectRoot, opts.phaseDir) : [];
+  let hashed = 0;
 
   // Canonicalize the root ONCE — every candidate's realpath is checked against
   // this, not the possibly-symlinked `projectRoot` argument itself. Always via
@@ -297,25 +407,42 @@ function computeCoveredDigest(projectRoot: string, coveredFiles: readonly string
       // confinement check above is not enough. realpathSync resolves the
       // actual target; re-confining against realRoot closes that gap.
       const real = fs.realpathSync(resolved);
-      const realRel = path.relative(realRoot, real);
-      if (realRel === '' || realRel === '..' || realRel.startsWith(`..${path.sep}`) || path.isAbsolute(realRel)) {
+      // Both operands are already realpath-resolved (this fn's own realpathSync calls
+      // above), so the shared containment comparison applies directly (ADR-4650) —
+      // no re-resolution through assertWithinRoot/tryWithinRoot, which would redo work
+      // this function already owns for its exists-vs-escaped tri-state.
+      if (!isContainedIn(real, realRoot)) {
         return null;
       }
       const st = fs.statSync(real);
       if (!st.isFile()) return null;
+      // #4623 (v2+): a repo-wide planning document is VALIDATED exactly as
+      // every other covered path — confined, present, a regular file; the
+      // fail-closed contract above is unchanged — but its bytes contribute
+      // nothing to the digest. It may stay declared in `covered_files` (the
+      // verifier's instructions long said to list the mapped requirement,
+      // and every report already written does); its bookkeeping churn can
+      // no longer read as drift.
+      if (isSharedPlanningDoc(rel, sharedRoots)) continue;
       bytes = fs.readFileSync(real);
     } catch {
       return null;
     }
     const fileHash = crypto.createHash('sha256').update(bytes).digest('hex');
     parts.push(`${rel}\n${fileHash}\n`);
+    hashed++;
   }
+  // #4623 (v2+): a declaration made ONLY of shared planning documents has no
+  // evidence in it at all — a constant digest over the header would satisfy
+  // the fingerprint pair while grounding the verification in nothing. Fail
+  // closed, the same way an empty declaration does.
+  if (version >= 2 && hashed === 0) return null;
 
   const aggregate = crypto
     .createHash('sha256')
-    .update(`v${FINGERPRINT_VERSION}\n${parts.join('')}`, 'utf-8')
+    .update(`v${version}\n${parts.join('')}`, 'utf-8')
     .digest('hex');
-  return `v${FINGERPRINT_VERSION}:sha256:${aggregate}`;
+  return `v${version}:sha256:${aggregate}`;
 }
 
 /**
@@ -515,6 +642,15 @@ interface ResolveVerificationFileOptions {
    * pick — the original pre-#3357 behavior — never to null.
    */
   phaseDirName?: string;
+  /**
+   * #612: the repo's resolved `phase_id_convention`, threaded verbatim into
+   * `scopeToPhase(candidates, phaseDirName, convention)` so the fallback
+   * scopes a bracket dir (`{CODE}.{MM}-{PP}-slug`) by its real phase token
+   * instead of the include-everything ambiguity fail-safe. Same ADR-2121
+   * additive shape as every other convention thread: omitted / null resolves
+   * to the unchanged legacy scoping.
+   */
+  convention?: string | null;
 }
 
 /**
@@ -610,7 +746,7 @@ function resolvePhaseArtifactFile(
     // filtered out, and if that leaves nothing the code falls through to
     // `allowBare`/`null` deliberately.
     const scoped = options.phaseDirName
-      ? scopeToPhase(candidates, options.phaseDirName)
+      ? scopeToPhase(candidates, options.phaseDirName, options.convention)
       : candidates;
     if (scoped.length > 0) return scoped[0];
   }
@@ -694,6 +830,15 @@ interface ReadVerificationStatusOptions {
    * this with `phaseDir` unresolved in some branches.
    */
   phaseNumber?: string;
+  /**
+   * #612: the repo's resolved `phase_id_convention`, threaded through to
+   * `resolveVerificationFile` (exact-pin token + fallback scoping) and
+   * `findStaleVerificationSummary` so a bracket phase dir resolves and
+   * scopes its report exactly like its legacy twin. Deliberately NOT used
+   * for the routed command argument — see the derivation comment in the
+   * body. Omitted / null: unchanged legacy behavior.
+   */
+  convention?: string | null;
 }
 
 interface VerificationStatusResult {
@@ -717,6 +862,7 @@ function findStaleVerificationSummary(
   phaseDir: string,
   fsImpl: FsLike = defaultFsImpl,
   phaseCleanCommitTimesMs: PhaseCleanCommitTimesFn = defaultPhaseCleanCommitTimesMs,
+  convention?: string | null,
 ): StaleCheckResult {
   // FS errors (TOCTOU: a SUMMARY listed by scanPhasePlans then removed before statSync;
   // unreadable dir; broken symlink; file->dir swap) must degrade rather than throw
@@ -737,11 +883,15 @@ function findStaleVerificationSummary(
     // status reader sees, or a bare report could never read `stale` while its
     // dashed twin could (two answers from one verb).
     const phaseDirName = path.basename(phaseDir);
-    const phaseToken = extractPhaseToken(phaseDirName);
+    // #612: derive the token with the resolved convention so a bracket dir's
+    // own token is read behind its `{CODE}.{MM}-` prefix. #4187: keep the bare
+    // report tier aligned with the status reader.
+    const phaseToken = extractPhaseToken(phaseDirName, convention);
     const verificationFile = resolveVerificationFile(phaseFiles, {
       allowBare: true,
       phaseToken,
       phaseDirName,
+      convention,
     });
     if (!verificationFile) return { determined: true, stale: false };
 
@@ -814,7 +964,12 @@ function readVerificationStatus(
     opts.phaseCleanCommitTimesMs ?? defaultPhaseCleanCommitTimesMs;
   const runtime = opts.runtime ?? 'claude';
 
-  // Phase token for the gaps_found command
+  // Phase token for the gaps_found command — deliberately convention-LESS
+  // even when `opts.convention` is present: the token becomes a bare COMMAND
+  // ARGUMENT below, and a bare bracket phase number is milestone-ambiguous
+  // (`02` cannot tell GSD.01-02 from GSD.02-02), so the argument keeps its
+  // pre-#612 shape. The convention-aware token is derived separately for
+  // FILE RESOLUTION only (`resolutionToken`, at the readdir below).
   const baseName = path.basename(phaseDir);
   const phaseToken = extractPhaseToken(baseName);
   const derivedPhaseNumber = phaseToken.length > 0 ? phaseToken : baseName;
@@ -831,17 +986,21 @@ function readVerificationStatus(
   let verificationFile: string | null = null;
   try {
     const entries = fsImpl.readdirSync(phaseDir);
-    // #3492: pin selection to THIS phase's own token (already derived above
-    // for the routed command argument) so a stray cross-phase or
-    // sentinel-numbered canonically-shaped file cannot outrank this phase's
-    // own (possibly non-canonical) report. #3511: baseName also scopes the
-    // fallback path to this same phase (see resolveVerificationFile docs).
-    // #4187: allowBare — the status reader must recognize a bare
-    // `VERIFICATION.md` exactly like `verification.resolve-file`,
-    // `determinePhaseStatus`, and the init verification_path projectors
-    // already do; without it a verified phase reported `missing` and
-    // recommended re-running execute-phase.
-    verificationFile = resolveVerificationFile(entries, { allowBare: true, phaseToken, phaseDirName: baseName });
+    // #3492: pin selection to THIS phase's own token so a stray cross-phase
+    // or sentinel-numbered canonically-shaped file cannot outrank this phase's
+    // own report. #612: derive a separate convention-aware RESOLUTION token
+    // for bracket directories while the routed command argument above stays
+    // convention-less and milestone-unambiguous. #4187: keep the bare report
+    // tier aligned with every other verification reader.
+    const resolutionToken = opts.convention === 'bracket'
+      ? extractPhaseToken(baseName, opts.convention)
+      : phaseToken;
+    verificationFile = resolveVerificationFile(entries, {
+      allowBare: true,
+      phaseToken: resolutionToken,
+      phaseDirName: baseName,
+      convention: opts.convention,
+    });
   } catch {
     // Directory unreadable → treat as missing
     verificationFile = null;
@@ -927,12 +1086,28 @@ function readVerificationStatus(
     // short-circuit in turn: the live-directory re-scan (for a plan/summary
     // added AFTER verification and never declared in covered_files) only
     // runs once the digest itself has already matched.
+    //
+    // #4623: recompute under the STORED digest's own version, not the
+    // current constant — a v1 report written before the shared-document
+    // exclusion keeps v1 semantics rather than going stale on upgrade. An
+    // unknown version parses to `null`, which `computeCoveredDigest`
+    // refuses (returns `null`), so the compare below fails closed.
+    const storedVersion =
+      hasWellFormedFingerprint && typeof coveredDigestVal === 'string'
+        ? parseFingerprintVersion(coveredDigestVal)
+        : null;
     isStale =
       !hasWellFormedFingerprint ||
-      computeCoveredDigest(findProjectRoot(phaseDir), coveredFilesVal) !== coveredDigestVal ||
+      storedVersion === null ||
+      computeCoveredDigest(findProjectRoot(phaseDir), coveredFilesVal, storedVersion, { phaseDir }) !== coveredDigestVal ||
       !allCurrentArtifactsCovered(phaseDir, coveredFilesVal);
   } else {
-    const staleCheck = findStaleVerificationSummary(phaseDir, fsImpl, phaseCleanCommitTimesMs);
+    const staleCheck = findStaleVerificationSummary(
+      phaseDir,
+      fsImpl,
+      phaseCleanCommitTimesMs,
+      opts.convention,
+    );
     isStale = staleCheck.determined && staleCheck.stale;
     // staleCheck is either {determined:true, stale:false} (checked; nothing
     // stale) or {determined:false} (could not check — fs/scan/clock failure).
@@ -946,7 +1121,10 @@ function readVerificationStatus(
     return {
       status: entry.status,
       next_action: entry.next_action,
-      next_command: projectNextCommand('verify-work', runtime, phaseArg),
+      // #4682: execute-phase resumes at the verification gates and re-runs
+      // the verifier, regenerating VERIFICATION.md and its digest — the same
+      // routing the `missing` sentinel has used since #2868.
+      next_command: projectNextCommand('execute-phase', runtime, phaseArg),
     };
   }
 
@@ -986,6 +1164,12 @@ interface IsPhaseCompleteDeps {
   runtime?: string;
   /** Phase number appended to the routed command (#2617). */
   phaseNumber?: string;
+  /**
+   * #612: the repo's resolved `phase_id_convention`, threaded through to
+   * readVerificationStatus so a bracket phase dir resolves and scopes its
+   * report exactly like its legacy twin. Omitted / null: unchanged.
+   */
+  convention?: string | null;
 }
 
 interface PhaseCompletionValue {
@@ -1039,6 +1223,7 @@ function isPhaseComplete(
     phaseCleanCommitTimesMs: deps.phaseCleanCommitTimesMs,
     runtime: deps.runtime,
     phaseNumber: deps.phaseNumber,
+    convention: deps.convention,
   });
 
   return {
@@ -1109,6 +1294,66 @@ function cmdVerificationResolveFile(cwd: string, phaseDirArg: string | undefined
 }
 
 /**
+ * #4623: parse the argv tokens after `verification.fingerprint <phaseDir>`
+ * into a covered-file list. The router hands over a raw positional slice,
+ * so every `--files`-style form other `gsd-tools` verbs accept (`commit
+ * --files a b`, `docs/CLI-TOOLS.md`) used to reach `computeCoveredDigest`
+ * with the literal token `--files` — or an unsplit `"a,b"` — as a covered
+ * path, and the whole command failed closed with "a covered file is
+ * missing, unreadable, or escapes the project root". On the reporting
+ * project that message convinced two people the digest was permanently
+ * unrecomputable.
+ *
+ * Accepted, all equivalent and freely mixed:
+ *   - bare positionals            `a b`            (the documented form, unchanged)
+ *   - a single flag               `--files a`
+ *   - a comma-separated value     `--files a,b`    (also `--files=a,b`)
+ *   - a repeated flag             `--files a --files b`
+ *
+ * Only a `--files` VALUE is comma-split: a bare positional keeps its bytes,
+ * so the documented form's behaviour on a comma-bearing filename is
+ * unchanged. Any other `--flag` is an explicit usage error, never a path —
+ * a mis-typed flag must not fail as "file missing" again. (`--raw` never
+ * reaches here; the CLI entry point splices it out before routing.)
+ */
+function parseFingerprintFileArgs(tokens: readonly string[]): { files: string[] } | { error: string } {
+  const files: string[] = [];
+  const EMPTY_VALUE = '--files requires at least one path for verification.fingerprint (a path, or a comma-separated list)';
+  const splitList = (value: string): string[] =>
+    value
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token === '--files') {
+      const value = tokens[i + 1];
+      if (value === undefined || value.startsWith('--')) {
+        return { error: '--files requires a value for verification.fingerprint (a path, or a comma-separated list)' };
+      }
+      const list = splitList(value);
+      // An empty or all-comma value is a usage error, never a silent no-op —
+      // the caller would otherwise meet the generic zero-files error and go
+      // looking for a missing path.
+      if (list.length === 0) return { error: EMPTY_VALUE };
+      files.push(...list);
+      i++;
+    } else if (token.startsWith('--files=')) {
+      const list = splitList(token.slice('--files='.length));
+      if (list.length === 0) return { error: EMPTY_VALUE };
+      files.push(...list);
+    } else if (token.startsWith('--')) {
+      return {
+        error: `unknown flag ${token} for verification.fingerprint (covered files are bare positionals or --files <a[,b]>, repeatable)`,
+      };
+    } else {
+      files.push(token);
+    }
+  }
+  return { files };
+}
+
+/**
  * CLI command handler (#4155): compute the covered-input fingerprint the
  * verifier embeds in VERIFICATION.md frontmatter (`covered_files`,
  * `covered_digest`). The verifier is an LLM agent, not a hashing engine —
@@ -1123,7 +1368,13 @@ function cmdVerificationResolveFile(cwd: string, phaseDirArg: string | undefined
  * @param cwd         - Current working directory.
  * @param phaseDirArg - Phase directory path (absolute or relative to cwd);
  *                       its project root is the base covered paths resolve against.
- * @param files       - Covered-input paths, relative to the project root.
+ *                       Must be an existing directory (#4623): with the
+ *                       phase dir omitted, the first covered file used to be
+ *                       taken as the phase dir and the rest hashed — a
+ *                       plausible digest over the wrong set, at exit 0.
+ * @param fileArgs    - The argv tokens after the phase dir, parsed by
+ *                       `parseFingerprintFileArgs`: covered-input paths
+ *                       relative to the project root, bare or via `--files`.
  * @param raw         - Whether to emit raw (non-JSON) output: just the
  *                       `covered_digest` string, so `VAR=$(gsd_run query
  *                       verification.fingerprint "$PHASE_DIR" ... --raw)` is
@@ -1134,18 +1385,36 @@ function cmdVerificationResolveFile(cwd: string, phaseDirArg: string | undefined
 function cmdVerificationFingerprint(
   cwd: string,
   phaseDirArg: string | undefined,
-  files: string[],
+  fileArgs: readonly string[],
   raw: boolean,
 ): void {
   if (!phaseDirArg) {
     error('phase directory required for verification.fingerprint');
     return;
   }
+  const phaseDir = path.resolve(cwd, phaseDirArg);
+  let phaseDirIsDir = false;
+  try {
+    phaseDirIsDir = fs.statSync(phaseDir).isDirectory();
+  } catch {
+    // not found → not a directory
+  }
+  if (!phaseDirIsDir) {
+    error(
+      `phase directory not found: ${phaseDirArg} — verification.fingerprint takes the phase directory first, then the covered files`,
+    );
+    return;
+  }
+  const parsed = parseFingerprintFileArgs(fileArgs);
+  if ('error' in parsed) {
+    error(parsed.error);
+    return;
+  }
+  const files = parsed.files;
   if (files.length === 0) {
     error('at least one covered file required for verification.fingerprint');
     return;
   }
-  const phaseDir = path.resolve(cwd, phaseDirArg);
   const projectRoot = findProjectRoot(phaseDir);
   // canonicalizeCoveredFiles here is for the emitted `covered_files` field —
   // computeCoveredDigest canonicalizes its own `coveredFiles` argument
@@ -1154,8 +1423,25 @@ function cmdVerificationFingerprint(
   // already-canonical list keeps that internal pass a cheap no-op rather
   // than a second meaningfully different canonicalization.
   const uniqueSorted = canonicalizeCoveredFiles(files);
-  const digest = computeCoveredDigest(projectRoot, uniqueSorted);
+  const digest = computeCoveredDigest(projectRoot, uniqueSorted, FINGERPRINT_VERSION, { phaseDir });
   if (digest === null) {
+    // #4623: name the one null that is NOT a bad path — a declaration made
+    // only of shared planning documents hashes nothing under v2, and the
+    // generic message below would send the caller looking for a missing file
+    // that is not missing. Discriminated AFTER the v2 attempt, and only when a
+    // v1 pass over the same list (which hashes, and therefore validates, every
+    // path) succeeds: an all-shared list with a missing or directory member is
+    // a bad path first, and gets the generic message.
+    const sharedRoots = sharedPlanningRoots(projectRoot, phaseDir);
+    if (
+      uniqueSorted.every((f) => isSharedPlanningDoc(f, sharedRoots)) &&
+      computeCoveredDigest(projectRoot, uniqueSorted, 1) !== null
+    ) {
+      error(
+        `could not compute fingerprint — every covered file is a repo-wide planning document (direct children of ${sharedRoots.join(', ')} never enter the digest); declare the phase's own artifacts and implementation files`,
+      );
+      return;
+    }
     error('could not compute fingerprint — a covered file is missing, unreadable, or escapes the project root');
     return;
   }
@@ -1174,5 +1460,9 @@ export = {
   cmdVerificationStatus,
   cmdVerificationResolveFile,
   computeCoveredDigest,
+  sharedPlanningRoots,
+  isSharedPlanningDoc,
+  parseFingerprintVersion,
+  parseFingerprintFileArgs,
   cmdVerificationFingerprint,
 };

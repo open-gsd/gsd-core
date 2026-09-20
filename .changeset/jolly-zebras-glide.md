@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 4726
+---
+**Runtime-aware model overrides and `dynamic_routing` now affect the agents that actually spawn** — `model_profile_overrides.<runtime>.<tier>` only applied when you had written a `runtime` key into `.planning/config.json`, so it was silently inert for installs that identify their runtime through `GSD_RUNTIME` or the per-install marker. Separately, `dynamic_routing.tier_models` was consulted only on an explicit retry attempt, so the first spawn — the documented case — never used your configured tier. Both now resolve through the runtime that is actually running, and an explicit model pin like `claude-opus-4-8` is no longer collapsed to a Claude-only alias when a different runtime is active. Projects without `dynamic_routing` enabled are unaffected. Note that if your `.planning/config.json` already carries `dynamic_routing.tier_models` or a `model_profile_overrides` block for a runtime you resolve via `GSD_RUNTIME`, those settings were previously inert and now take effect — review them before upgrading. (#4505)

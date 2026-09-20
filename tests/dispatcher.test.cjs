@@ -452,6 +452,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const SDK_CLI = path.join(__dirname, '..', 'sdk', 'dist', 'cli.js');
 const fs = require('node:fs');
+const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 describe('bug #3026 (CR Major outside-diff): SDK forwards plain-text help from gsd-tools fallback', () => {
   test('gsd-sdk query phase --help (fallback path) returns usage, not a JSON parse error', (t) => {
@@ -472,7 +473,7 @@ describe('bug #3026 (CR Major outside-diff): SDK forwards plain-text help from g
     const result = spawnSync(process.execPath, [SDK_CLI, 'query', 'phase', '--help'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 10000,
+      timeout: QUICK_SPAWN_TIMEOUT_MS,
     });
     // The fallback gsd-tools.cjs emits exit 0 with usage on stdout.
     assert.strictEqual(result.status, 0,

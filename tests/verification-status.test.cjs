@@ -52,7 +52,12 @@ const {
   resolveUatFile,
   readVerificationStatus,
   findStaleVerificationSummary,
+  isPhaseComplete,
   computeCoveredDigest,
+  sharedPlanningRoots,
+  isSharedPlanningDoc,
+  parseFingerprintVersion,
+  parseFingerprintFileArgs,
 } = require('../gsd-core/bin/lib/verification.cjs');
 
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
@@ -396,7 +401,15 @@ describe('verification-status', () => {
       const result = readVerificationStatus(dir, { phaseCleanCommitTimesMs: () => new Map() });
       assert.equal(result.status, 'stale');
       assert.match(result.next_action, /stale/i);
-      assert.equal(result.next_command, '/gsd-verify-work 01');
+      // #4682: stale means covered source changed after the verifier ran — the
+      // only remedy is re-running the verifier. execute-phase resumes at the
+      // verification gates and re-runs it (its resume tree routes a stale
+      // report to re-verification); /gsd-verify-work never rewrote the report,
+      // so routing there was an advice loop.
+      assert.equal(result.next_command, '/gsd-execute-phase 01');
+      assert.doesNotMatch(result.next_command, /verify-work/);
+      assert.match(result.next_action, /verifier/i,
+        'the stale action must name the verifier re-run as the remedy');
     } finally {
       cleanup(baseDir);
     }
@@ -439,7 +452,7 @@ describe('verification-status', () => {
       // git times unavailable → mtime-fallback path (#2348).
       const result = readVerificationStatus(dir, { phaseCleanCommitTimesMs: () => new Map() });
       assert.equal(result.status, 'stale');
-      assert.equal(result.next_command, '/gsd-verify-work 01');
+      assert.equal(result.next_command, '/gsd-execute-phase 01');
     } finally {
       cleanup(baseDir);
     }
@@ -521,7 +534,7 @@ describe('verification-status', () => {
 
       const result = readVerificationStatus(dir, { phaseCleanCommitTimesMs });
       assert.equal(result.status, 'stale');
-      assert.equal(result.next_command, '/gsd-verify-work 02');
+      assert.equal(result.next_command, '/gsd-execute-phase 02');
     } finally {
       cleanup(baseDir);
     }
@@ -586,7 +599,7 @@ describe('verification-status', () => {
         'stale',
         'a dirty summary edited after the verification must stale it via mtime, not be shadowed by an equal/earlier commit time',
       );
-      assert.equal(result.next_command, '/gsd-verify-work 02');
+      assert.equal(result.next_command, '/gsd-execute-phase 02');
     } finally {
       cleanup(baseDir);
     }
@@ -703,7 +716,7 @@ describe('verification-status', () => {
           'stale',
           'summary committed after the verification must read stale on the real git clock, and the dash-named file must resolve through the `--` pathspec guard',
         );
-        assert.equal(result.next_command, '/gsd-verify-work 01');
+        assert.equal(result.next_command, '/gsd-execute-phase 01');
       } finally {
         cleanup(repo);
       }
@@ -751,7 +764,7 @@ describe('verification-status', () => {
           'stale',
           'a committed-then-edited (dirty) summary must read stale via mtime, not be shadowed by its now-stale commit time',
         );
-        assert.equal(result.next_command, '/gsd-verify-work 01');
+        assert.equal(result.next_command, '/gsd-execute-phase 01');
       } finally {
         cleanup(repo);
       }
@@ -1391,7 +1404,7 @@ describe('#4187: status surface recognizes a bare VERIFICATION.md', () => {
 
     const result = readVerificationStatus(dir, { phaseCleanCommitTimesMs: () => new Map() });
     assert.equal(result.status, 'stale', 'a bare report must be staleness-checked like a dashed one');
-    assert.equal(result.next_command, '/gsd-verify-work 99');
+    assert.equal(result.next_command, '/gsd-execute-phase 99');
   });
 
   test('#4187 unit (findStaleVerificationSummary): staleness is computed against the bare report', (t) => {
@@ -1408,6 +1421,77 @@ describe('#4187: status surface recognizes a bare VERIFICATION.md', () => {
     assert.equal(result.determined, true);
     assert.equal(result.stale, true);
     assert.equal(result.verificationFile, 'VERIFICATION.md', 'the staleness seam must see the bare report');
+  });
+});
+
+// ─── #4142: bracket convention reaches the legacy staleness seam ────────────
+//
+// readVerificationStatus resolves the report once to read its frontmatter and
+// findStaleVerificationSummary resolves it again for the legacy mtime check.
+// Both resolutions must receive the same convention or a bracket directory can
+// read status from its own report, then compute staleness from a cross-phase
+// stray in that same directory.
+describe('#4142: opts.convention threads through findStaleVerificationSummary', () => {
+  test('a bracket phase checks staleness against its own report, not a newer cross-phase stray', (t) => {
+    const dir = mkPhaseDir('bracket-stale-thread', 'GSD.02-03-three');
+    t.after(() => cleanup(path.dirname(dir)));
+
+    writeVerificationMd(dir, '03-VERIFICATION.md', 'passed');
+    writeVerificationMd(dir, '01-VERIFICATION.md', 'passed');
+    setMtime(path.join(dir, '03-VERIFICATION.md'), '2020-01-01T00:00:00Z');
+    setMtime(path.join(dir, '01-VERIFICATION.md'), '2022-01-01T00:00:00Z');
+    const summaryPath = path.join(dir, '03-01-SUMMARY.md');
+    fs.writeFileSync(summaryPath, '# summary\n');
+    setMtime(summaryPath, '2021-01-01T00:00:00Z');
+
+    const result = readVerificationStatus(dir, {
+      convention: 'bracket',
+      phaseCleanCommitTimesMs: () => new Map(),
+    });
+
+    assert.equal(
+      result.status,
+      'stale',
+      'opts.convention must reach the legacy staleness seam so phase 03 is compared to 03-VERIFICATION.md',
+    );
+    assert.equal(result.next_command, '/gsd-execute-phase');
+  });
+});
+
+// ─── #4142: phase complete must use the convention-aware verdict ───────────
+//
+// cmdPhaseComplete has an advisory VERIFICATION pre-scan and a separate
+// readVerificationStatus completion gate. Exercise the real CLI verdict so a
+// cross-phase report cannot satisfy the gate merely by sitting in the bracket
+// phase's directory.
+describe('#4142: phase complete verdict scopes bracket verification reports', () => {
+  const { runGsdTools } = require('./helpers.cjs');
+
+  test('a passed cross-phase stray cannot complete a bracket phase', (t) => {
+    const projectDir = createTempGitProject('gsd-4142-phase-complete-');
+    t.after(() => cleanup(projectDir));
+
+    fs.writeFileSync(
+      path.join(projectDir, '.planning', 'config.json'),
+      JSON.stringify({ phase_id_convention: 'bracket' }, null, 2),
+    );
+    const phaseDirName = 'GSD.02-03-three';
+    const phaseDir = path.join(projectDir, '.planning', 'phases', phaseDirName);
+    fs.mkdirSync(phaseDir, { recursive: true });
+    writeVerificationMd(phaseDir, '01-VERIFICATION.md', 'passed');
+
+    const result = runGsdTools(
+      ['--json-errors', 'phase', 'complete', phaseDirName],
+      projectDir,
+    );
+
+    assert.equal(
+      result.success,
+      false,
+      'phase complete must reject another phase\'s passed verification report',
+    );
+    const errorPayload = JSON.parse(result.error);
+    assert.equal(errorPayload.reason, 'phase_verification_incomplete');
   });
 });
 
@@ -1688,7 +1772,8 @@ describe('#4155: computeCoveredDigest — direct unit coverage', () => {
     const d1 = computeCoveredDigest(root, ['a.txt', 'b.txt']);
     const d2 = computeCoveredDigest(root, ['b.txt', 'a.txt']);
     assert.equal(d1, d2);
-    assert.match(d1, /^v1:sha256:[0-9a-f]{64}$/);
+    // The version prefix is pinned by the #4623 block below; this test is about order-independence.
+    assert.match(d1, /^v\d+:sha256:[0-9a-f]{64}$/);
   });
 
   test('a "./"-prefixed path and its bare equivalent → identical digest (canonicalized, not double-counted)', (t) => {
@@ -1948,7 +2033,7 @@ describe('#4155: readVerificationStatus — fingerprint supersedes legacy mtime 
 
     const result = readVerificationStatus(dir, { phaseCleanCommitTimesMs: () => new Map() });
     assert.equal(result.status, 'stale');
-    assert.equal(result.next_command, '/gsd-verify-work 01');
+    assert.equal(result.next_command, '/gsd-execute-phase 01');
   });
 
   // Ponytail #4155 review finding: "disappeared" and "escapes confinement"
@@ -2102,6 +2187,543 @@ describe('#4155: verification.fingerprint CLI', () => {
   });
 });
 
+// ─── #4623: shared planning documents + fingerprint argv ─────────────────────
+//
+// Two defects, one issue. (1) `computeCoveredDigest` hashed the whole bytes of
+// repo-wide planning documents (`.planning/ROADMAP.md`, `REQUIREMENTS.md`, …)
+// into a phase's digest, so any phase's ordinary bookkeeping — including the
+// closing phase's OWN checkbox flip — read as drift for every phase that had
+// declared them. Fingerprint v2 excludes those documents by construction, and
+// a stored v1 digest keeps v1 semantics so an upgrade does not stale every
+// already-verified phase. (2) `verification.fingerprint` took a raw positional
+// slice: every `--files` form failed closed as "a covered file is missing",
+// and an omitted phase dir silently hashed the wrong set at exit 0.
+
+const NO_GIT_TIMES = { phaseCleanCommitTimesMs: () => new Map() };
+
+function makePhase4623(projectDir, name) {
+  const phaseDir = path.join(projectDir, '.planning', 'phases', name);
+  fs.mkdirSync(phaseDir, { recursive: true });
+  const num = name.split('-')[0];
+  fs.writeFileSync(path.join(phaseDir, `${num}-01-PLAN.md`), `# Plan ${name}\n`);
+  fs.writeFileSync(path.join(phaseDir, `${num}-01-SUMMARY.md`), `# Summary ${name}\n`);
+  return {
+    phaseDir,
+    num,
+    ownFiles: [
+      `.planning/phases/${name}/${num}-01-PLAN.md`,
+      `.planning/phases/${name}/${num}-01-SUMMARY.md`,
+    ],
+  };
+}
+
+function writeReport4623(phase, coveredFiles, digest) {
+  const sorted = [...new Set(coveredFiles)].sort();
+  fs.writeFileSync(
+    path.join(phase.phaseDir, `${phase.num}-VERIFICATION.md`),
+    `---\nstatus: passed\ncovered_files:\n${sorted.map((f) => `  - ${f}`).join('\n')}\ncovered_digest: "${digest}"\n---\n`,
+  );
+}
+
+function writeSharedDocs4623(projectDir, { roadmapDone = false, reqDone = false } = {}) {
+  fs.writeFileSync(
+    path.join(projectDir, '.planning', 'ROADMAP.md'),
+    `# Roadmap\n\n- [${roadmapDone ? 'x' : ' '}] **Phase 1: Alpha**\n- [ ] **Phase 2: Beta**\n`,
+  );
+  fs.writeFileSync(
+    path.join(projectDir, '.planning', 'REQUIREMENTS.md'),
+    `# Requirements\n\n- [${reqDone ? 'x' : ' '}] **REQ-01**: The thing works\n\n| REQ-01 | Phase 1 | ${reqDone ? 'Complete' : 'Pending'} |\n`,
+  );
+}
+
+const SHARED_DOCS_4623 = ['.planning/ROADMAP.md', '.planning/REQUIREMENTS.md'];
+
+describe('#4623: isSharedPlanningDoc — a repo-wide planning document is a DIRECT child of .planning/', () => {
+  test('top-level planning documents are shared, whatever their name', () => {
+    for (const rel of [
+      '.planning/ROADMAP.md',
+      '.planning/REQUIREMENTS.md',
+      '.planning/STATE.md',
+      '.planning/PROJECT.md',
+      '.planning/MILESTONES.md',
+      '.planning/config.json',
+    ]) {
+      assert.equal(isSharedPlanningDoc(rel), true, rel);
+    }
+  });
+
+  test('phase artifacts, nested planning files, implementation files, and a same-named root file are not', () => {
+    for (const rel of [
+      '.planning/phases/01-example/01-01-PLAN.md',
+      '.planning/phases/01-example/01-VERIFICATION.md',
+      '.planning/research/notes.md',
+      '.planning/milestones/v1.0-ROADMAP.md',
+      'src/thing.cts',
+      'ROADMAP.md',
+      '.planning',
+      '.planning/ROADMAP.md/',
+      '',
+    ]) {
+      assert.equal(isSharedPlanningDoc(rel), false, JSON.stringify(rel));
+    }
+  });
+
+  test('extra planning roots make their direct children shared; sharedPlanningRoots derives them from the phase dir', (t) => {
+    const roots = ['.planning', '.planning/workstreams/w'];
+    assert.equal(isSharedPlanningDoc('.planning/workstreams/w/ROADMAP.md', roots), true);
+    assert.equal(isSharedPlanningDoc('.planning/workstreams/w/phases/01-a/01-01-PLAN.md', roots), false);
+    assert.equal(isSharedPlanningDoc('.planning/workstreams/w/ROADMAP.md'), false, 'unknown root without the phase dir');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4623-roots-'));
+    t.after(() => cleanup(root));
+    assert.deepEqual(sharedPlanningRoots(root), ['.planning']);
+    assert.deepEqual(sharedPlanningRoots(root, path.join(root, '.planning', 'phases', '01-a')), ['.planning']);
+    assert.deepEqual(sharedPlanningRoots(root, path.join(root, '.planning', 'proj', 'phases', '01-a')), ['.planning', '.planning/proj']);
+    assert.deepEqual(sharedPlanningRoots(root, path.join(root, '.planning', 'proj', 'workstreams', 'w', 'phases', '01-a')), ['.planning', '.planning/proj/workstreams/w']);
+    // A phase dir outside the project root contributes nothing.
+    assert.deepEqual(sharedPlanningRoots(root, path.join(os.tmpdir(), 'elsewhere', 'phases', '01-a')), ['.planning']);
+    assert.deepEqual(sharedPlanningRoots(root, root), ['.planning']);
+    // Structural: the parent must be `phases/` and the root must sit inside .planning/ — an
+    // arbitrary accepted directory must never nominate its grandparent as a planning root.
+    assert.deepEqual(sharedPlanningRoots(root, path.join(root, 'src', 'phases', '01-fake')), ['.planning']);
+    assert.deepEqual(sharedPlanningRoots(root, path.join(root, '.planning', 'proj', 'notphases', '01-a')), ['.planning']);
+    assert.deepEqual(sharedPlanningRoots(root, path.join(root, '.planning', 'phases')), ['.planning']);
+    assert.deepEqual(sharedPlanningRoots(root, path.join(root, '.planning')), ['.planning']);
+  });
+});
+
+describe('#4623: parseFingerprintVersion', () => {
+  test('reads the version prefix of a well-formed digest', () => {
+    assert.equal(parseFingerprintVersion('v1:sha256:' + 'a'.repeat(64)), 1);
+    assert.equal(parseFingerprintVersion('v2:sha256:' + 'a'.repeat(64)), 2);
+  });
+
+  test('an unknown, malformed, or absent version → null (fail closed)', () => {
+    assert.equal(parseFingerprintVersion('v9:sha256:' + 'a'.repeat(64)), null);
+    assert.equal(parseFingerprintVersion('sha256:' + 'a'.repeat(64)), null);
+    assert.equal(parseFingerprintVersion('v2:md5:' + 'a'.repeat(32)), null);
+    assert.equal(parseFingerprintVersion(''), null);
+  });
+});
+
+describe('#4623: parseFingerprintFileArgs — every --files form the issue tried, plus the documented bare form', () => {
+  test('bare positionals pass through unchanged, commas included (AC4)', () => {
+    assert.deepEqual(parseFingerprintFileArgs(['a.rb', 'b.rb']), { files: ['a.rb', 'b.rb'] });
+    // Only a --files VALUE is comma-split: the documented form keeps its bytes.
+    assert.deepEqual(parseFingerprintFileArgs(['a,b']), { files: ['a,b'] });
+    assert.deepEqual(parseFingerprintFileArgs([]), { files: [] });
+  });
+
+  test('--files <a> (AC2)', () => {
+    assert.deepEqual(parseFingerprintFileArgs(['--files', 'fastlane/Fastfile']), { files: ['fastlane/Fastfile'] });
+  });
+
+  test('--files "a,b" and --files=a,b split on commas, trimming and dropping empties (AC3)', () => {
+    assert.deepEqual(parseFingerprintFileArgs(['--files', 'a.rb,b.rb']), { files: ['a.rb', 'b.rb'] });
+    assert.deepEqual(parseFingerprintFileArgs(['--files', ' a.rb , b.rb ,']), { files: ['a.rb', 'b.rb'] });
+    assert.deepEqual(parseFingerprintFileArgs(['--files=a.rb,b.rb']), { files: ['a.rb', 'b.rb'] });
+  });
+
+  test('--files a --files b collects every occurrence (AC3)', () => {
+    assert.deepEqual(parseFingerprintFileArgs(['--files', 'a.rb', '--files', 'b.rb']), { files: ['a.rb', 'b.rb'] });
+  });
+
+  test('forms mix freely, in order', () => {
+    assert.deepEqual(parseFingerprintFileArgs(['x', '--files', 'a,b', 'y', '--files=c']), {
+      files: ['x', 'a', 'b', 'y', 'c'],
+    });
+  });
+
+  test('an empty --files value (--files=, --files ",", --files "") is a usage error, never a silent no-op', () => {
+    for (const tokens of [['--files='], ['--files', ','], ['--files', ''], ['--files', ' , ']]) {
+      const parsed = parseFingerprintFileArgs(tokens);
+      assert.ok('error' in parsed, JSON.stringify(tokens));
+      assert.match(parsed.error, /--files requires at least one path/);
+    }
+  });
+
+  test('--files with no value, or followed by another flag, is a usage error', () => {
+    for (const tokens of [['--files'], ['a', '--files'], ['--files', '--files', 'a']]) {
+      const parsed = parseFingerprintFileArgs(tokens);
+      assert.ok('error' in parsed, JSON.stringify(tokens));
+      assert.match(parsed.error, /--files requires a value/);
+    }
+  });
+
+  test('any other --flag is an explicit usage error naming the flag, never a covered path', () => {
+    const parsed = parseFingerprintFileArgs(['a.rb', '--file', 'b.rb']);
+    assert.ok('error' in parsed);
+    assert.match(parsed.error, /unknown flag --file\b/);
+    assert.doesNotMatch(parsed.error, /missing, unreadable/);
+  });
+});
+
+describe('#4623: computeCoveredDigest v2 — shared planning documents do not enter the digest', () => {
+  test('defaults to v2 and names the version in the digest', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4623-version-'));
+    t.after(() => cleanup(root));
+    fs.writeFileSync(path.join(root, 'impl.txt'), 'x');
+    assert.match(computeCoveredDigest(root, ['impl.txt']), /^v2:sha256:[0-9a-f]{64}$/);
+    assert.match(computeCoveredDigest(root, ['impl.txt'], 1), /^v1:sha256:[0-9a-f]{64}$/);
+    assert.notEqual(computeCoveredDigest(root, ['impl.txt']), computeCoveredDigest(root, ['impl.txt'], 1));
+  });
+
+  test('an unknown version → null (fail closed, never a digest under guessed semantics)', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4623-unknown-version-'));
+    t.after(() => cleanup(root));
+    fs.writeFileSync(path.join(root, 'impl.txt'), 'x');
+    assert.equal(computeCoveredDigest(root, ['impl.txt'], 9), null);
+    assert.equal(computeCoveredDigest(root, ['impl.txt'], 0), null);
+  });
+
+  test('a byte change to .planning/ROADMAP.md or REQUIREMENTS.md leaves the v2 digest unchanged; a phase artifact or implementation change still moves it', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4623-shared-'));
+    t.after(() => cleanup(root));
+    fs.mkdirSync(path.join(root, '.planning', 'phases', '01-a'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'src'));
+    writeSharedDocs4623(root);
+    fs.writeFileSync(path.join(root, '.planning', 'phases', '01-a', '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(root, 'src', 'thing.cts'), 'export const x = 1;\n');
+    const covered = [...SHARED_DOCS_4623, '.planning/phases/01-a/01-01-PLAN.md', 'src/thing.cts'];
+
+    const before = computeCoveredDigest(root, covered);
+    writeSharedDocs4623(root, { roadmapDone: true, reqDone: true });
+    assert.equal(computeCoveredDigest(root, covered), before, 'shared-doc bookkeeping must not move a v2 digest');
+
+    fs.writeFileSync(path.join(root, '.planning', 'phases', '01-a', '01-01-PLAN.md'), '# Plan (edited)\n');
+    const afterPlan = computeCoveredDigest(root, covered);
+    assert.notEqual(afterPlan, before, 'a phase artifact change must still move it');
+
+    fs.writeFileSync(path.join(root, 'src', 'thing.cts'), 'export const x = 2;\n');
+    assert.notEqual(computeCoveredDigest(root, covered), afterPlan, 'an implementation change must still move it');
+  });
+
+  test('a nested planning file (.planning/research/…) is NOT shared and still moves the digest', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4623-nested-'));
+    t.after(() => cleanup(root));
+    fs.mkdirSync(path.join(root, '.planning', 'research'), { recursive: true });
+    const note = path.join(root, '.planning', 'research', 'notes.md');
+    fs.writeFileSync(note, 'v1');
+    const before = computeCoveredDigest(root, ['.planning/research/notes.md']);
+    fs.writeFileSync(note, 'v2');
+    assert.notEqual(computeCoveredDigest(root, ['.planning/research/notes.md']), before);
+  });
+
+  test('a declared shared document is validated like any other path — present: inert; missing, a directory, or an escaping symlink: null (fail closed, as v1)', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4623-shared-validated-'));
+    t.after(() => cleanup(root));
+    fs.mkdirSync(path.join(root, '.planning', 'phases'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'impl.txt'), 'x');
+    const withoutDecl = computeCoveredDigest(root, ['impl.txt']);
+    // Missing → null, exactly as v1.
+    assert.equal(computeCoveredDigest(root, ['impl.txt', '.planning/ROADMAP.md']), null);
+    fs.writeFileSync(path.join(root, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+    // Present → contributes nothing: same digest as if undeclared.
+    assert.equal(computeCoveredDigest(root, ['impl.txt', '.planning/ROADMAP.md']), withoutDecl);
+    // A directory directly under the root is not a document → null, as v1.
+    assert.equal(computeCoveredDigest(root, ['impl.txt', '.planning/phases']), null);
+    // An in-root symlink whose target escapes → null, as v1 (nothing is read either way,
+    // but the declaration is still an escape and still invalidates the set).
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4623-shared-outside-'));
+    t.after(() => cleanup(outside));
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 'not this project');
+    fs.symlinkSync(path.join(outside, 'secret.txt'), path.join(root, '.planning', 'ESCAPE.md'));
+    assert.equal(computeCoveredDigest(root, ['impl.txt', '.planning/ESCAPE.md']), null);
+  });
+
+  test('a declaration made only of shared planning documents hashes nothing → null (fail closed, like an empty one)', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4623-all-shared-'));
+    t.after(() => cleanup(root));
+    fs.mkdirSync(path.join(root, '.planning'));
+    writeSharedDocs4623(root);
+    assert.equal(computeCoveredDigest(root, SHARED_DOCS_4623), null);
+    // v1 still hashes them.
+    assert.match(computeCoveredDigest(root, SHARED_DOCS_4623, 1), /^v1:/);
+  });
+
+  test('the phase\'s own planning root is shared too: a workstream-scoped ROADMAP.md is inert, a research note beside it is not', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4623-workstream-'));
+    t.after(() => cleanup(root));
+    const wsRoot = path.join(root, '.planning', 'workstreams', 'payments');
+    const phaseDir = path.join(wsRoot, 'phases', '01-a');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.mkdirSync(path.join(root, '.planning', 'research'), { recursive: true });
+    fs.writeFileSync(path.join(wsRoot, 'ROADMAP.md'), '- [ ] Phase 1\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(root, '.planning', 'research', 'notes.md'), 'v1');
+    const covered = [
+      '.planning/workstreams/payments/ROADMAP.md',
+      '.planning/workstreams/payments/phases/01-a/01-01-PLAN.md',
+      '.planning/research/notes.md',
+    ];
+    assert.deepEqual(sharedPlanningRoots(root, phaseDir), ['.planning', '.planning/workstreams/payments']);
+    const before = computeCoveredDigest(root, covered, 2, { phaseDir });
+    fs.writeFileSync(path.join(wsRoot, 'ROADMAP.md'), '- [x] Phase 1\n');
+    assert.equal(computeCoveredDigest(root, covered, 2, { phaseDir }), before, 'the workstream roadmap is this phase\'s shared doc');
+    // Without the phase dir the same path is NOT recognised (lexically it could be .planning/<project>/…).
+    assert.notEqual(computeCoveredDigest(root, covered, 2), before);
+    fs.writeFileSync(path.join(root, '.planning', 'research', 'notes.md'), 'v2');
+    assert.notEqual(computeCoveredDigest(root, covered, 2, { phaseDir }), before, 'a nested research note is evidence');
+  });
+
+  test('a shared-looking path that escapes the root still fails the whole set', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4623-escape-'));
+    t.after(() => cleanup(root));
+    fs.writeFileSync(path.join(root, 'impl.txt'), 'x');
+    assert.equal(computeCoveredDigest(root, ['impl.txt', '../.planning/ROADMAP.md']), null);
+  });
+
+  test('v1 semantics are preserved on request: a shared-doc change still moves a v1 digest', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4623-v1-'));
+    t.after(() => cleanup(root));
+    fs.mkdirSync(path.join(root, '.planning'));
+    fs.writeFileSync(path.join(root, 'impl.txt'), 'x');
+    writeSharedDocs4623(root);
+    const before = computeCoveredDigest(root, ['impl.txt', ...SHARED_DOCS_4623], 1);
+    writeSharedDocs4623(root, { roadmapDone: true });
+    assert.notEqual(computeCoveredDigest(root, ['impl.txt', ...SHARED_DOCS_4623], 1), before);
+  });
+});
+
+describe('#4623: readVerificationStatus — shared planning documents no longer stale a phase', () => {
+  const { runGsdTools } = require('./helpers.cjs');
+
+  function fingerprintViaCli(projectDir, phase, coveredFiles) {
+    const res = runGsdTools(['verification', 'fingerprint', phase.phaseDir, ...coveredFiles], projectDir);
+    assert.equal(res.success, true, `expected success, got: ${res.output}${res.error}`);
+    return JSON.parse(res.output).covered_digest;
+  }
+
+  test('AC1 cross-phase: completing phase A (roadmap + requirement bookkeeping) leaves phase B passed; B\'s own artifact change still stales B alone', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    writeSharedDocs4623(projectDir);
+    const a = makePhase4623(projectDir, '01-alpha');
+    const b = makePhase4623(projectDir, '02-beta');
+    const aCovered = [...a.ownFiles, ...SHARED_DOCS_4623];
+    const bCovered = [...b.ownFiles, ...SHARED_DOCS_4623];
+    writeReport4623(a, aCovered, fingerprintViaCli(projectDir, a, aCovered));
+    writeReport4623(b, bCovered, fingerprintViaCli(projectDir, b, bCovered));
+    assert.equal(readVerificationStatus(a.phaseDir, NO_GIT_TIMES).status, 'passed');
+    assert.equal(readVerificationStatus(b.phaseDir, NO_GIT_TIMES).status, 'passed');
+
+    // Phase A closes: its roadmap checkbox and its requirement flip.
+    writeSharedDocs4623(projectDir, { roadmapDone: true, reqDone: true });
+    assert.equal(readVerificationStatus(a.phaseDir, NO_GIT_TIMES).status, 'passed', 'the closing phase itself');
+    assert.equal(readVerificationStatus(b.phaseDir, NO_GIT_TIMES).status, 'passed', 'the untouched sibling phase');
+    assert.equal(isPhaseComplete(b.phaseDir).value.complete, true);
+
+    // Real drift in B is still caught, and only in B.
+    fs.appendFileSync(path.join(b.phaseDir, '02-01-PLAN.md'), '\nchanged\n');
+    assert.equal(readVerificationStatus(b.phaseDir, NO_GIT_TIMES).status, 'stale');
+    assert.equal(readVerificationStatus(a.phaseDir, NO_GIT_TIMES).status, 'passed');
+  });
+
+  test('same-phase: the phase\'s own `requirements mark-complete` and `phase.complete` writes do not stale it', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    writeSharedDocs4623(projectDir);
+    const a = makePhase4623(projectDir, '01-alpha');
+    const covered = [...a.ownFiles, ...SHARED_DOCS_4623];
+    writeReport4623(a, covered, fingerprintViaCli(projectDir, a, covered));
+    assert.equal(readVerificationStatus(a.phaseDir, NO_GIT_TIMES).status, 'passed');
+
+    // requirements mark-complete: checkbox + traceability cell.
+    writeSharedDocs4623(projectDir, { reqDone: true });
+    assert.equal(readVerificationStatus(a.phaseDir, NO_GIT_TIMES).status, 'passed');
+    // phase.complete: the phase's own roadmap status cell.
+    writeSharedDocs4623(projectDir, { reqDone: true, roadmapDone: true });
+    assert.equal(readVerificationStatus(a.phaseDir, NO_GIT_TIMES).status, 'passed');
+  });
+
+  test('a legacy v1 report keeps v1 semantics: passed while untouched, stale on a shared-doc edit, and the CLI re-fingerprint is the remedy', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    writeSharedDocs4623(projectDir);
+    const a = makePhase4623(projectDir, '01-alpha');
+    const covered = [...a.ownFiles, ...SHARED_DOCS_4623];
+    const v1 = computeCoveredDigest(projectDir, covered, 1);
+    writeReport4623(a, covered, v1);
+    // The upgrade alone must not stale an intact v1 report.
+    assert.equal(readVerificationStatus(a.phaseDir, NO_GIT_TIMES).status, 'passed');
+
+    writeSharedDocs4623(projectDir, { roadmapDone: true });
+    assert.equal(readVerificationStatus(a.phaseDir, NO_GIT_TIMES).status, 'stale', 'v1 hashed the shared docs; honour that');
+
+    // The documented remedy: recompute through the CLI, paste the result.
+    const v2 = fingerprintViaCli(projectDir, a, covered);
+    assert.match(v2, /^v2:/);
+    writeReport4623(a, covered, v2);
+    assert.equal(readVerificationStatus(a.phaseDir, NO_GIT_TIMES).status, 'passed');
+    writeSharedDocs4623(projectDir, { roadmapDone: true, reqDone: true });
+    assert.equal(readVerificationStatus(a.phaseDir, NO_GIT_TIMES).status, 'passed', 'and it lasts');
+  });
+
+  test('workstream scope through the READ path: the workstream\'s own ROADMAP.md flip leaves its phase passed; its PLAN edit stales it', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const wsRoot = path.join(projectDir, '.planning', 'workstreams', 'payments');
+    const phaseDir = path.join(wsRoot, 'phases', '01-alpha');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(wsRoot, 'ROADMAP.md'), '- [ ] **Phase 1: Alpha**\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    const phase = { phaseDir, num: '01' };
+    const covered = [
+      '.planning/workstreams/payments/ROADMAP.md',
+      '.planning/workstreams/payments/phases/01-alpha/01-01-PLAN.md',
+      '.planning/workstreams/payments/phases/01-alpha/01-01-SUMMARY.md',
+    ];
+    writeReport4623(phase, covered, fingerprintViaCli(projectDir, phase, covered));
+    assert.equal(readVerificationStatus(phaseDir, NO_GIT_TIMES).status, 'passed');
+    fs.writeFileSync(path.join(wsRoot, 'ROADMAP.md'), '- [x] **Phase 1: Alpha**\n');
+    assert.equal(readVerificationStatus(phaseDir, NO_GIT_TIMES).status, 'passed', 'workstream roadmap bookkeeping');
+    fs.appendFileSync(path.join(phaseDir, '01-01-PLAN.md'), 'changed\n');
+    assert.equal(readVerificationStatus(phaseDir, NO_GIT_TIMES).status, 'stale');
+  });
+
+  test('a phase directory that is not <planning-root>/phases/<phase> nominates no extra root: implementation evidence beside it stays hashed', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const fakePhase = path.join(projectDir, 'src', 'phases', '01-fake');
+    fs.mkdirSync(fakePhase, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'src', 'evidence.cts'), 'export const x = 1;\n');
+    fs.writeFileSync(path.join(fakePhase, '01-01-PLAN.md'), '# Plan\n');
+    const covered = ['src/evidence.cts', 'src/phases/01-fake/01-01-PLAN.md'];
+    const digest = computeCoveredDigest(projectDir, covered, 2, { phaseDir: fakePhase });
+    fs.writeFileSync(
+      path.join(fakePhase, '01-VERIFICATION.md'),
+      `---\nstatus: passed\ncovered_files:\n${covered.map((f) => `  - ${f}`).join('\n')}\ncovered_digest: "${digest}"\n---\n`,
+    );
+    assert.equal(readVerificationStatus(fakePhase, NO_GIT_TIMES).status, 'passed');
+    fs.writeFileSync(path.join(projectDir, 'src', 'evidence.cts'), 'export const x = 2;\n');
+    assert.equal(readVerificationStatus(fakePhase, NO_GIT_TIMES).status, 'stale', 'src/ must never be treated as a planning root');
+  });
+
+  test('a digest under an unknown fingerprint version is stale (fail closed)', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const a = makePhase4623(projectDir, '01-alpha');
+    writeReport4623(a, a.ownFiles, 'v9:sha256:' + 'a'.repeat(64));
+    assert.equal(readVerificationStatus(a.phaseDir, NO_GIT_TIMES).status, 'stale');
+  });
+});
+
+describe('#4623: verification.fingerprint CLI — --files forms and the phase-dir guard', () => {
+  const { runGsdTools } = require('./helpers.cjs');
+
+  function setup() {
+    const projectDir = createTempGitProject();
+    const a = makePhase4623(projectDir, '01-alpha');
+    fs.mkdirSync(path.join(projectDir, 'fastlane'));
+    fs.writeFileSync(path.join(projectDir, 'fastlane', 'Fastfile'), 'lane :x do end\n');
+    fs.writeFileSync(path.join(projectDir, 'a.rb'), 'a\n');
+    fs.writeFileSync(path.join(projectDir, 'b.rb'), 'b\n');
+    return { projectDir, a };
+  }
+
+  function run(projectDir, phaseDir, ...tokens) {
+    return runGsdTools(['verification', 'fingerprint', phaseDir, ...tokens], projectDir);
+  }
+
+  function expectJson(res) {
+    assert.equal(res.success, true, `expected success, got: ${res.output}${res.error}`);
+    return JSON.parse(res.output);
+  }
+
+  test('AC2: --files a produces the same covered_files/covered_digest as the bare positional form', (t) => {
+    const { projectDir, a } = setup();
+    t.after(() => cleanup(projectDir));
+    const positional = expectJson(run(projectDir, a.phaseDir, 'fastlane/Fastfile'));
+    const flagged = expectJson(run(projectDir, a.phaseDir, '--files', 'fastlane/Fastfile'));
+    assert.deepEqual(flagged, positional);
+    assert.deepEqual(positional.covered_files, ['fastlane/Fastfile']);
+  });
+
+  test('AC3: --files "a,b" and --files a --files b both resolve to covered_files [a, b], canonicalized like the bare form (AC4)', (t) => {
+    const { projectDir, a } = setup();
+    t.after(() => cleanup(projectDir));
+    const positional = expectJson(run(projectDir, a.phaseDir, 'b.rb', 'a.rb'));
+    assert.deepEqual(positional.covered_files, ['a.rb', 'b.rb']);
+    assert.deepEqual(expectJson(run(projectDir, a.phaseDir, '--files', 'a.rb,b.rb')), positional);
+    assert.deepEqual(expectJson(run(projectDir, a.phaseDir, '--files', 'a.rb', '--files', 'b.rb')), positional);
+    assert.deepEqual(expectJson(run(projectDir, a.phaseDir, '--files=b.rb,a.rb')), positional);
+    assert.deepEqual(expectJson(run(projectDir, a.phaseDir, 'a.rb', '--files', 'b.rb')), positional);
+    assert.equal(positional.covered_digest, computeCoveredDigest(projectDir, ['a.rb', 'b.rb']));
+  });
+
+  test('--raw with --files prints just the digest', (t) => {
+    const { projectDir, a } = setup();
+    t.after(() => cleanup(projectDir));
+    const res = run(projectDir, a.phaseDir, '--files', 'a.rb,b.rb', '--raw');
+    assert.equal(res.success, true, `expected success, got: ${res.output}${res.error}`);
+    assert.equal(res.output.trim(), computeCoveredDigest(projectDir, ['a.rb', 'b.rb']));
+  });
+
+  test('AC5: a phase directory with zero covered files still fails closed with the existing error', (t) => {
+    const { projectDir, a } = setup();
+    t.after(() => cleanup(projectDir));
+    const res = run(projectDir, a.phaseDir);
+    assert.equal(res.success, false);
+    assert.match(`${res.output}${res.error}`, /at least one covered file required/);
+  });
+
+  test('an unrecognized flag is a usage error naming the flag — not "a covered file is missing"', (t) => {
+    const { projectDir, a } = setup();
+    t.after(() => cleanup(projectDir));
+    const res = run(projectDir, a.phaseDir, '--file', 'a.rb');
+    assert.equal(res.success, false);
+    assert.match(`${res.output}${res.error}`, /unknown flag --file\b/);
+    assert.doesNotMatch(`${res.output}${res.error}`, /missing, unreadable/);
+  });
+
+  test('an omitted phase dir (first argument is a covered file) is an error, not a plausible digest over the wrong set at exit 0', (t) => {
+    const { projectDir } = setup();
+    t.after(() => cleanup(projectDir));
+    const res = runGsdTools(['verification', 'fingerprint', 'a.rb', 'b.rb', '--raw'], projectDir);
+    assert.equal(res.success, false);
+    assert.match(`${res.output}${res.error}`, /phase directory not found/);
+    assert.doesNotMatch(res.output, /^v\d+:sha256:/);
+  });
+
+  test('a declaration made only of shared planning documents is a named error, not "file missing"', (t) => {
+    const { projectDir, a } = setup();
+    t.after(() => cleanup(projectDir));
+    writeSharedDocs4623(projectDir);
+    const res = run(projectDir, a.phaseDir, '--files', SHARED_DOCS_4623.join(','));
+    assert.equal(res.success, false);
+    assert.match(`${res.output}${res.error}`, /every covered file is a repo-wide planning document/);
+    assert.doesNotMatch(`${res.output}${res.error}`, /missing, unreadable/);
+  });
+
+  test('an all-shared declaration with a missing or directory member is a bad path first (generic error), not the named all-shared error', (t) => {
+    const { projectDir, a } = setup();
+    t.after(() => cleanup(projectDir));
+    writeSharedDocs4623(projectDir);
+    const res = run(projectDir, a.phaseDir, '.planning/ROADMAP.md', '.planning/MISSING.md');
+    assert.equal(res.success, false);
+    assert.match(`${res.output}${res.error}`, /missing, unreadable/);
+    assert.doesNotMatch(`${res.output}${res.error}`, /every covered file is a repo-wide planning document/);
+    const dir = run(projectDir, a.phaseDir, '.planning/ROADMAP.md', '.planning/phases');
+    assert.equal(dir.success, false);
+    assert.match(`${dir.output}${dir.error}`, /missing, unreadable/);
+  });
+
+  test('a declared shared document stays listed in covered_files, and the emitted v2 digest survives its rewrite', (t) => {
+    const { projectDir, a } = setup();
+    t.after(() => cleanup(projectDir));
+    writeSharedDocs4623(projectDir);
+    const covered = [...a.ownFiles, ...SHARED_DOCS_4623];
+    const first = expectJson(run(projectDir, a.phaseDir, '--files', covered.join(',')));
+    assert.deepEqual(first.covered_files, [...covered].sort());
+    assert.match(first.covered_digest, /^v2:/);
+    assert.equal(first.covered_digest, computeCoveredDigest(projectDir, covered));
+
+    writeSharedDocs4623(projectDir, { roadmapDone: true, reqDone: true });
+    const second = expectJson(run(projectDir, a.phaseDir, ...covered));
+    assert.equal(second.covered_digest, first.covered_digest);
+  });
+});
+
 // ─── #2617: next_command runtime projection ──────────────────────────────────
 //
 // Regression tests for #2617 — verification-status `next_command` bypassed the
@@ -2211,7 +2833,7 @@ for (const { id, prefix } of RUNTIMES) {
       makeStale();
       const result = read(id, NO_GIT);
       assert.equal(result.status, 'stale');
-      assert.equal(result.next_command, `${prefix}verify-work 01`);
+      assert.equal(result.next_command, `${prefix}execute-phase 01`);
     });
 
     test('passed has no next step and stays empty, not a bare prefix', () => {

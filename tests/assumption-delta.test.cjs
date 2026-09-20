@@ -15,6 +15,7 @@ const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const { exitCodeFor } = require('../gsd-core/bin/lib/exit-code-registry.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const MODULE_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'assumption-delta.cjs');
 
@@ -184,7 +185,7 @@ describe('assumption-delta CLI — STDIN exit codes (mirrors ui-safety-gate)', (
     const res = spawnSync(process.execPath, [MODULE_PATH], {
       input: stdin,
       encoding: 'utf-8',
-      timeout: 15000,
+      timeout: PROBE_TIMEOUT_MS,
     });
     return { status: res.status, stdout: res.stdout ?? '', stderr: res.stderr ?? '' };
   }
@@ -212,7 +213,7 @@ describe('assumption-delta CLI — STDIN exit codes (mirrors ui-safety-gate)', (
     const res = spawnSync(process.execPath, [MODULE_PATH, '--json'], {
       input: 'introduces a configurable retry policy',
       encoding: 'utf-8',
-      timeout: 15000,
+      timeout: PROBE_TIMEOUT_MS,
     });
     assert.strictEqual(res.status, 0);
     const parsed = JSON.parse(res.stdout);
@@ -225,7 +226,7 @@ describe('assumption-delta CLI — STDIN exit codes (mirrors ui-safety-gate)', (
     const res = spawnSync(process.execPath, [MODULE_PATH, '--json'], {
       input: 'just a routine refactor',
       encoding: 'utf-8',
-      timeout: 15000,
+      timeout: PROBE_TIMEOUT_MS,
     });
     assert.strictEqual(res.status, 1);
     const parsed = JSON.parse(res.stdout);
@@ -239,7 +240,7 @@ describe('assumption-delta CLI — STDIN exit codes (mirrors ui-safety-gate)', (
     const noFire = spawnSync(process.execPath, [MODULE_PATH, '--terms', 'xyzzy', '--json'], {
       input: 'adds a second platform',
       encoding: 'utf-8',
-      timeout: 15000,
+      timeout: PROBE_TIMEOUT_MS,
     });
     assert.strictEqual(noFire.status, 1);
     assert.strictEqual(JSON.parse(noFire.stdout).detected, false);
@@ -247,7 +248,7 @@ describe('assumption-delta CLI — STDIN exit codes (mirrors ui-safety-gate)', (
     const fire = spawnSync(process.execPath, [MODULE_PATH, '--terms', 'xyzzy', '--json'], {
       input: 'introduces an xyzzy adapter',
       encoding: 'utf-8',
-      timeout: 15000,
+      timeout: PROBE_TIMEOUT_MS,
     });
     assert.strictEqual(fire.status, 0);
     const parsed = JSON.parse(fire.stdout);
@@ -405,7 +406,7 @@ describe('assumption-delta hardening (Codex review)', () => {
     const res = spawnSync(process.execPath, [MODULE_PATH, '--terms', '', '--json'], {
       input: 'adds a second platform',
       encoding: 'utf-8',
-      timeout: 15000,
+      timeout: PROBE_TIMEOUT_MS,
     });
     assert.strictEqual(res.status, 0, 'empty --terms must fall back to defaults → detected');
     const parsed = JSON.parse(res.stdout);

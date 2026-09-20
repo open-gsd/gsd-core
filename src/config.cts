@@ -21,7 +21,7 @@ const { CONFIG_DEFAULTS } = configLoader;
 import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
-const { planningDir, planningRoot, withPlanningLock } = planningWorkspace;
+const { planningDir, planningRoot, resolveEnvWorkstream, withPlanningLock } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import modelProfiles = require('./model-profiles.cjs');
 const { VALID_PROFILES, getAgentToModelMapForProfile, formatAgentToModelMapAsTable } = modelProfiles;
@@ -88,6 +88,15 @@ const SHIP_PR_BODY_TEMPLATE_TOKENS = new Set([
   'padded_phase',
 ]);
 const SHIP_PR_BODY_SOURCE_RE = /^(ROADMAP|PLAN|SUMMARY|VERIFICATION|STATE|REQUIREMENTS|CONTEXT)\.md\s+##\s+[^\r\n#][^\r\n]*$/;
+
+// ADR-612 PR-5: configuration accepts every convention the runtime can read.
+// Keep this distinct from roadmap-upgrade's supported target set: sequential
+// is valid project configuration but is not a migration destination.
+const VALID_PHASE_ID_CONVENTIONS: readonly string[] = Object.freeze([
+  'sequential',
+  'milestone-prefixed',
+  'bracket',
+]);
 
 /**
  * Schema-level defaults for well-known config keys.
@@ -595,7 +604,7 @@ function _setNestedValue(
 
 /**
  * Deletes a value from the config object, allowing nested values via dot
- * notation (e.g., "review.models.gemini"). Mirrors `_setNestedValue`'s
+ * notation (e.g., "review.models.codex"). Mirrors `_setNestedValue`'s
  * prototype-pollution guard on every path segment (including intermediates).
  *
  * Unlike `_setNestedValue`, this NEVER creates missing intermediate objects —
@@ -889,6 +898,10 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
 
   const VALID_CONTEXT_VALUES = ['dev', 'research', 'review'];
   if (kp === 'context') assertEnumValue(parsedValue, val, VALID_CONTEXT_VALUES, 'context value');
+
+  if (kp === 'phase_id_convention') {
+    assertEnumValue(parsedValue, val, VALID_PHASE_ID_CONVENTIONS, 'phase_id_convention');
+  }
 
   // Codebase drift detector (#2003)
   const VALID_DRIFT_ACTIONS = ['warn', 'auto-remap'];
@@ -1269,7 +1282,7 @@ function resolveFromRootConfig(cwd: string, kp: string): { found: boolean; value
   // diverges from planningRoot without a workstream and loadConfigResolved does NOT
   // inherit root — matching the runtime's own `if (ws)` gate keeps the two surfaces
   // from diverging on the project-scoped (non-workstream) case.
-  if (!process.env['GSD_WORKSTREAM']) return { found: false, value: undefined };
+  if (!resolveEnvWorkstream()) return { found: false, value: undefined };
   const root = planningRoot(cwd);
   const rootConfigPath = path.join(root, 'config.json');
   let rootConfig: Record<string, unknown>;
@@ -1388,7 +1401,7 @@ function cmdConfigPath(cwd: string, _raw: boolean, workstreamContext: Workstream
  * (caller uses `await` which is safe on a sync return value).
  */
 function cmdMigrateConfig(cwd: string, raw: boolean): void {
-  const ws = process.env['GSD_WORKSTREAM'] || null;
+  const ws = resolveEnvWorkstream();
   // #3749: resolve the migration target through the project-aware resolver so
   // GSD_PROJECT scopes the write; migrateOnDisk itself cannot (see its
   // configPathOverride note).
@@ -1438,6 +1451,7 @@ function cmdMigrateConfig(cwd: string, raw: boolean): void {
 
 export = {
   VALID_CONFIG_KEYS,
+  VALID_PHASE_ID_CONVENTIONS,
   cmdConfigEnsureSection,
   cmdConfigSet,
   cmdConfigGet,

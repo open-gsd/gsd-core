@@ -24,6 +24,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { PATHOLOGICAL_INPUT_TEST_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 let tmpDir;
 
@@ -526,7 +527,7 @@ ${BROKEN_HEADINGS.map(([, h]) => `${h}\n**Goal:** x\n`).join('\n')}
   // hang backstop, not an assertion: it turns a runaway into a deterministic
   // failure instead of a suite that never returns.
   for (const width of [4000, 16000]) {
-    test(`a pathological unclosed bracket (${width} chars) validates correctly`, { timeout: 60_000 }, () => {
+    test(`a pathological unclosed bracket (${width} chars) validates correctly`, { timeout: PATHOLOGICAL_INPUT_TEST_TIMEOUT_MS }, () => {
       writeProject({ roadmap: `# Roadmap
 
 ## [GSD.02] v2.0 — Expansion

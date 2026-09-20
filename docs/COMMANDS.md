@@ -9,7 +9,7 @@
 - **Claude Code / Copilot / OpenCode / Kilo:** `/gsd-command-name [args]` (hyphen form)
 - **Codex:** `$gsd-command-name [args]`
 
-The hyphen and colon forms are *runtime-specific spellings of the same command*. Whichever runtime you're on, the installer writes the correct form into your runtime's command directory.
+Whichever runtime you're on, the installer writes the correct form into your runtime's command directory.
 
 ### Skill Runtime Behavior (Claude Code)
 
@@ -266,7 +266,7 @@ Cross-AI plan convergence loop — replan with review feedback until no HIGH con
 | Argument / Flag | Required | Description |
 |-----------------|----------|-------------|
 | `N` | **Yes** | Phase number to plan and review |
-| Reviewer flags | No | Pass through every reviewer lane flag: `--gemini`, `--claude`, `--codex`, `--coderabbit`, `--opencode`, `--qwen`, `--cursor`, `--agy` / `--antigravity`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--kimi-code` |
+| Reviewer flags | No | Pass through every reviewer lane flag: `--claude`, `--codex`, `--coderabbit`, `--opencode`, `--qwen`, `--cursor`, `--agy` / `--antigravity`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--kimi-code` |
 | `--all` | No | Run every configured reviewer. Lanes are dispatched **sequentially by default**; set `review.parallel_lanes` to `true` to dispatch them concurrently within a single review pass |
 | `--max-cycles N` | No | Override cycle cap (default 3) |
 
@@ -754,7 +754,7 @@ Show status, next steps, and automatically advance to the next logical workflow 
 | `--next --auto` | Like `--next`, but chains steps automatically until milestone completion or a blocking decision |
 | `--next --converge` | When the next action is planning, route it through `/gsd-plan-review-convergence`; requires `workflow.plan_review_convergence=true` |
 | `--cross-ai` | Alias for `--converge` |
-| Reviewer flags | With `--converge`, pass through every reviewer lane flag: `--gemini`, `--claude`, `--codex`, `--coderabbit`, `--opencode`, `--qwen`, `--cursor`, `--agy` / `--antigravity`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--kimi-code`, `--all`, and `--max-cycles N` |
+| Reviewer flags | With `--converge`, pass through every reviewer lane flag: `--claude`, `--codex`, `--coderabbit`, `--opencode`, `--qwen`, `--cursor`, `--agy` / `--antigravity`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--kimi-code`, `--all`, and `--max-cycles N` |
 | `--do "task description"` | Analyze freeform intent and dispatch to the most appropriate GSD command |
 | `--forensic` | Append a 6-check integrity audit after the standard report (STATE consistency, orphaned handoffs, deferred scope drift, memory-flagged pending work, blocking todos, uncommitted code) |
 
@@ -1033,9 +1033,9 @@ Run all remaining phases autonomously.
 | `--to N` | Stop after completing a specific phase number |
 | `--only N` | Restrict execution to phase N; lifecycle step is skipped |
 | `--interactive` | Lean context with user input |
-| `--converge` | Route each planning step through `/gsd-plan-review-convergence`; requires `workflow.plan_review_convergence=true` |
+| `--converge` | Route each planning step through `/gsd-plan-review-convergence`; the explicit flag overrides the gate — works even when `workflow.plan_review_convergence` is `false` (the gate `workflow.plan_review_convergence=true` governs standalone `/gsd-plan-review-convergence`); without it, planning runs `gsd-plan-phase` |
 | `--cross-ai` | Alias for `--converge` |
-| Reviewer flags | With `--converge`, pass through every reviewer lane flag: `--gemini`, `--claude`, `--codex`, `--coderabbit`, `--opencode`, `--qwen`, `--cursor`, `--agy` / `--antigravity`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--kimi-code`, `--all`, and `--max-cycles N` |
+| Reviewer flags | With `--converge`, pass through every reviewer lane flag: `--claude`, `--codex`, `--coderabbit`, `--opencode`, `--qwen`, `--cursor`, `--agy` / `--antigravity`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--kimi-code`, `--all`, and `--max-cycles N` |
 | `--text` | Replace `AskUserQuestion` prompts with plain numbered lists |
 
 ```bash
@@ -1807,7 +1807,6 @@ Reviewers are prompted to verify the plan's claims against the actual repository
 
 | Flag | Description |
 |------|-------------|
-| `--gemini` | Include Gemini CLI review |
 | `--claude` | Include Claude CLI review (separate session) |
 | `--codex` | Include Codex CLI review |
 | `--coderabbit` | Include CodeRabbit review |
@@ -1823,7 +1822,7 @@ Reviewers are prompted to verify the plan's claims against the actual repository
 
 **No `jq`, `curl`, or `timeout` prerequisite.** Reviewer lanes used to shell out to these for JSON parsing, HTTP calls, and wall-clock bounding, which made five lanes unavailable on a stock Windows/Git-Bash host (no `jq`) and left one lane unbounded on stock macOS (no `timeout` or `gtimeout`). GSD now does all three itself, so every lane runs with nothing on your `PATH` but the reviewer's own CLI. A lane that declares an external tool it genuinely needs still reports itself unavailable with an install hint rather than running into an empty review.
 
-**Unavailable reviewers:** an explicit reviewer flag is an assertion. If you name a reviewer that cannot run on this host — its CLI is not installed, a required external tool is missing, its local server is unreachable, or its egress destination changed (see below) — `/gsd-review` reports an **error** for that reviewer and does not proceed with a reduced set. This holds even when other named reviewers are available: `--gemini --qwen` on a host without `qwen` fails rather than silently becoming a Gemini-only review.
+**Unavailable reviewers:** an explicit reviewer flag is an assertion. If you name a reviewer that cannot run on this host — its CLI is not installed, a required external tool is missing, its local server is unreachable, or its egress destination changed (see below) — `/gsd-review` reports an **error** for that reviewer and does not proceed with a reduced set. This holds even when other named reviewers are available: `--codex --qwen` on a host without `qwen` fails rather than silently becoming a Codex-only review.
 
 Reviewers reached through `--all` or `review.default_reviewers` behave differently: an undetected reviewer there is reported as an info note and skipped. Use `--all` for "whatever is available on this host", and `review.default_reviewers` for a preferred subset that may vary by host.
 
@@ -1831,7 +1830,7 @@ Reviewers reached through `--all` or `review.default_reviewers` behave different
 
 **Default reviewer behavior (no flags):**
 - If `review.default_reviewers` is **unset**, `/gsd-review` runs all detected reviewers (current default behavior).
-- If `review.default_reviewers` is **set**, `/gsd-review` runs only that subset (for example `["gemini","codex"]`).
+- If `review.default_reviewers` is **set**, `/gsd-review` runs only that subset (for example `["codex","claude"]`).
 - `review.default_reviewers` may include names from `review.reviewer_instances`; each instance runs as its own reviewer identity using its configured adapter/model. Instance names are not CLI flags.
 - `--all` always overrides config and runs the full detected set.
 - Explicit flags (for example `--cursor`) override both `--all` and config defaults for that run.
@@ -1844,11 +1843,11 @@ Its frontmatter records the model each reviewer resolved to, as `models:` (the m
 
 ```bash
 # set project default reviewers for no-flag /gsd-review runs
-gsd config-set review.default_reviewers '["gemini","codex"]'
+gsd config-set review.default_reviewers '["codex","claude"]'
 
-/gsd-review --phase 2             # runs gemini+codex from config
+/gsd-review --phase 2             # runs codex+claude from config
 /gsd-review --phase 3 --all
-/gsd-review --phase 2 --gemini
+/gsd-review --phase 2 --codex
 /gsd-review --phase 2 --cursor    # one-off override
 ```
 
@@ -1940,7 +1939,7 @@ Capture ideas, tasks, notes, and seeds to their appropriate destination. Default
 **Backlog:** 999.x numbering keeps items outside the active phase sequence; phase directories are created immediately so `/gsd-discuss-phase` and `/gsd-plan-phase` work on them.
 **Seeds:** Preserve full WHY, WHEN to surface, and breadcrumbs — consumed by `/gsd-new-milestone`. Audit parked seeds anytime with `--list-seeds` (optionally `--list-seeds dormant`).
 
-**Produces:** `.planning/todos/` (default), note files (--note), ROADMAP.md backlog section (--backlog), `.planning/seeds/SEED-NNN-slug.md` (--seed)
+**Produces:** `.planning/todos/` (default), note files (--note), ROADMAP.md backlog section (--backlog), `.planning/seeds/SEED-YYMMDD-xxx-slug.md` (--seed)
 
 **STATE.md rendering:** each capture (or `--list` action that changes the pending count) refreshes STATE.md's "### Pending Todos" section to one bullet per pending todo, each capped at 240 characters — `- [date] [area] title — [todo file](path) — Needs ...`. The todo-file link is repo-relative (`.planning/todos/pending/...`), so the cap is independent of where the repo is checked out — a long absolute path never consumes the budget or drops the "Needs ..." clause. A todo with no clear next step omits the "Needs ..." clause rather than the bullet. Refresh is fail-safe: a failed or malformed lookup leaves the existing section untouched rather than clearing it.
 

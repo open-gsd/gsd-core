@@ -42,6 +42,7 @@ const os = require('os');
 const { runGsdTools, createTempProject, createTempGitProject, cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const GSD_TOOLS_BIN = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
@@ -610,7 +611,7 @@ describe('CR-CONFIG: config key registration', () => {
   function renderHooksEnvelope(tmpDir, point) {
     const result = runNode(
       [GSD_TOOLS_BIN, 'loop', 'render-hooks', point, '--cwd', tmpDir],
-      { cwd: REPO_ROOT, timeoutMs: 15000 },
+      { cwd: REPO_ROOT, timeoutMs: PROBE_TIMEOUT_MS },
     );
     assert.strictEqual(result.exitCode, 0, `Expected exit 0 for render-hooks ${point}. stderr: ` + (result.stderr || ''));
     return JSON.parse(result.stdout.trim());
@@ -737,7 +738,7 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
         'echo "CODE_REVIEW_POINT=[$CODE_REVIEW_POINT]"',
         'echo "EXPLICIT_JOINED=[$EXPLICIT_JOINED]"',
       ].join('\n');
-      const result = require('node:child_process').spawnSync('bash', ['-c', driver], { cwd: tmpDir, encoding: 'utf8', timeout: 15000 });
+      const result = require('node:child_process').spawnSync('bash', ['-c', driver], { cwd: tmpDir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
       assert.equal(result.status, 0, `driver failed: stdout=${result.stdout} stderr=${result.stderr}`);
       assert.match(result.stdout, /CODE_REVIEW_POINT=\[execute:post\]/,
         `CODE_REVIEW_POINT must be computed and survive within the SAME fence that later uses it for --point, got: ${result.stdout}`);
@@ -788,7 +789,7 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
           '--repo-root', tmpDir, '--depth', 'standard', '--base-sha', 'deadbeef',
           '--run-dir', tmpDir, '--cwd', tmpDir, '--explicit', 'not-a-real-reviewer-xyz',
           '--cap-id', 'code-review', '--point', 'execute:post', '--raw'],
-        { cwd: REPO_ROOT, timeoutMs: 15000, input: 'src/foo.ts\n' },
+        { cwd: REPO_ROOT, timeoutMs: PROBE_TIMEOUT_MS, input: 'src/foo.ts\n' },
       );
       assert.strictEqual(result.exitCode, 0, `expected exit 0, stderr: ${result.stderr || ''}`);
       const parsed = JSON.parse(result.stdout.trim());
@@ -811,7 +812,7 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
           '--repo-root', tmpDir, '--depth', 'standard', '--base-sha', 'deadbeef',
           '--run-dir', tmpDir, '--cwd', tmpDir, '--explicit', 'codex',
           '--cap-id', 'no-such-capability-xyz', '--point', 'execute:post', '--raw'],
-        { cwd: REPO_ROOT, timeoutMs: 15000, input: 'src/foo.ts\n' },
+        { cwd: REPO_ROOT, timeoutMs: PROBE_TIMEOUT_MS, input: 'src/foo.ts\n' },
       );
       assert.strictEqual(result.exitCode, 0, `expected exit 0, stderr: ${result.stderr || ''}`);
       const parsed = JSON.parse(result.stdout.trim());
@@ -830,7 +831,7 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
         [GSD_TOOLS_BIN, 'review-lane', 'dispatch-step',
           '--repo-root', tmpDir, '--depth', 'standard', '--base-sha', 'deadbeef',
           '--run-dir', tmpDir, '--cwd', tmpDir, '--explicit', 'codex', '--raw'],
-        { cwd: REPO_ROOT, timeoutMs: 15000, input: 'src/foo.ts\n' },
+        { cwd: REPO_ROOT, timeoutMs: PROBE_TIMEOUT_MS, input: 'src/foo.ts\n' },
       );
       assert.strictEqual(result.exitCode, 0, `expected exit 0, stderr: ${result.stderr || ''}`);
       const parsed = JSON.parse(result.stdout.trim());
@@ -849,7 +850,7 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
           '--repo-root', tmpDir, '--depth', 'standard', '--base-sha', 'deadbeef',
           '--run-dir', tmpDir, '--cwd', tmpDir, '--explicit', 'codex',
           '--cap-id', 'code-review', '--raw'],
-        { cwd: REPO_ROOT, timeoutMs: 15000, input: 'src/foo.ts\n' },
+        { cwd: REPO_ROOT, timeoutMs: PROBE_TIMEOUT_MS, input: 'src/foo.ts\n' },
       );
       assert.strictEqual(result.exitCode, 0, `expected exit 0, stderr: ${result.stderr || ''}`);
       assert.match(result.stderr, /--cap-id and --point must both be given/,
@@ -864,7 +865,7 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
   test('review-lane explicit-from-argv matches CLI flags against the merged roster (#4209 RQ-02)', () => {
     const result = runNode(
       [GSD_TOOLS_BIN, 'review-lane', 'explicit-from-argv', '--', '--codex', '--agy'],
-      { cwd: REPO_ROOT, timeoutMs: 15000 },
+      { cwd: REPO_ROOT, timeoutMs: PROBE_TIMEOUT_MS },
     );
     assert.strictEqual(result.exitCode, 0, `expected exit 0, stderr: ${result.stderr || ''}`);
     assert.strictEqual(result.stdout.trim(), 'antigravity,codex');
@@ -873,7 +874,7 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
   test('review-lane explicit-from-argv resolves to empty when no known flag is present', () => {
     const result = runNode(
       [GSD_TOOLS_BIN, 'review-lane', 'explicit-from-argv', '--'],
-      { cwd: REPO_ROOT, timeoutMs: 15000 },
+      { cwd: REPO_ROOT, timeoutMs: PROBE_TIMEOUT_MS },
     );
     assert.strictEqual(result.exitCode, 0, `expected exit 0, stderr: ${result.stderr || ''}`);
     assert.strictEqual(result.stdout.trim(), '');
@@ -957,7 +958,7 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
           '--repo-root', tmpDir, '--depth', 'standard', '--base-sha', 'deadbeef',
           '--run-dir', tmpDir, '--cwd', tmpDir,
           '--cap-id', 'code-review', '--point', 'execute:post', '--raw'],
-        { cwd: REPO_ROOT, timeoutMs: 15000, input: 'src/foo.ts\n' },
+        { cwd: REPO_ROOT, timeoutMs: PROBE_TIMEOUT_MS, input: 'src/foo.ts\n' },
       );
       assert.strictEqual(result.exitCode, 0, `expected exit 0, stderr: ${result.stderr || ''}`);
       const parsed = JSON.parse(result.stdout.trim());
@@ -976,7 +977,7 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
           '--repo-root', tmpDir, '--depth', 'standard', '--base-sha', 'deadbeef',
           '--run-dir', tmpDir, '--cwd', tmpDir, '--explicit', 'not-a-real-reviewer-xyz',
           '--cap-id', 'code-review', '--point', 'execute:post', '--raw'],
-        { cwd: REPO_ROOT, timeoutMs: 15000, input: 'src/foo.ts\n' },
+        { cwd: REPO_ROOT, timeoutMs: PROBE_TIMEOUT_MS, input: 'src/foo.ts\n' },
       );
       assert.strictEqual(result.exitCode, 0, `expected exit 0, stderr: ${result.stderr || ''}`);
       const parsed = JSON.parse(result.stdout.trim());
@@ -1010,7 +1011,7 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
 
   function runReducer(dispatchJson) {
     const script = `DISPATCH_JSON=${JSON.stringify(dispatchJson)}\n${extractEvidenceReducer()}\necho "$EVIDENCE_LIST"`;
-    const result = require('node:child_process').spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: 15000 });
+    const result = require('node:child_process').spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
     return { stdout: result.stdout, stderr: result.stderr, status: result.status };
   }
 

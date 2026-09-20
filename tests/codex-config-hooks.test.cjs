@@ -2361,6 +2361,95 @@ describe('#3245 — idempotent rollback reverts skills/, agents/, and VERSION', 
   });
 }
 
+// ────────────────────────────────────────────────────────────────────────
+// #4249 — install() exposes the full snapshot restore, not just migrations rollback
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { test, describe, beforeEach, afterEach } = require('node:test');
+  const os = require('os');
+  const { cleanup } = require('./helpers.cjs');
+  const previousGsdTestMode = process.env.GSD_TEST_MODE;
+  process.env.GSD_TEST_MODE = '1';
+  const { install } = require('../bin/install.js');
+  if (previousGsdTestMode === undefined) {
+    delete process.env.GSD_TEST_MODE;
+  } else {
+    process.env.GSD_TEST_MODE = previousGsdTestMode;
+  }
+
+  // concurrency: false — drives the real install pipeline like the block above.
+  describe('#4249 — install() exposes the full snapshot restore, not just migrations rollback', { concurrency: false }, () => {
+    let tmpDir;
+    let codexHome;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4249-codex-rollback-'));
+      codexHome = path.join(tmpDir, 'codex-home');
+      fs.mkdirSync(codexHome, { recursive: true });
+    });
+
+    afterEach(() => cleanup(tmpDir));
+
+    test('result.rollbackPreInstallSnapshot() reverts skills/, agents/, and VERSION', () => {
+      // Skills resolve $HOME-relative independent of CODEX_HOME (#2088), so the
+      // rollback closure must run before this sandboxing is torn down — inline
+      // runCodexInstall's env dance instead of using the auto-restoring helper,
+      // matching how installAllRuntimes' real aggregate gate calls it: in the
+      // same process env install() itself ran in, never after it's restored.
+      const previousHome = process.env.HOME;
+      const previousUserProfile = process.env.USERPROFILE;
+      const previousCodexHome = process.env.CODEX_HOME;
+      const previousCwd = process.cwd();
+      process.env.HOME = codexHome;
+      process.env.USERPROFILE = codexHome;
+      process.env.CODEX_HOME = codexHome;
+      process.chdir(path.join(__dirname, '..'));
+      try {
+        const result = install(true, 'codex');
+
+        // A configured-entrypoint validation failure discovered outside install()
+        // (installAllRuntimes' aggregate assertConfiguredEntrypoints, run after
+        // this function already returned) reaches for this field. Before #4249
+        // the only rollback Codex exposed was rollbackInstallerMigrations, which
+        // reverts installer-migration state only and leaves the skills/agents/
+        // VERSION this successful install just wrote untouched.
+        result.rollbackPreInstallSnapshot();
+
+        const skillsDir = codexSkillsRoot(codexHome);
+        const gsdSkills = fs.existsSync(skillsDir)
+          ? fs.readdirSync(skillsDir, { withFileTypes: true }).filter(e => e.isDirectory() && e.name.startsWith('gsd-'))
+          : [];
+        assert.strictEqual(gsdSkills.length, 0, 'rollback must remove all gsd-* skill directories: ' + gsdSkills.map(e => e.name).join(', '));
+
+        const versionPath = path.join(codexHome, 'gsd-core', 'VERSION');
+        assert.strictEqual(fs.existsSync(versionPath), false, 'rollback must remove gsd-core/VERSION');
+
+        // #4249 (agy adversarial review): the whole point of this describe block
+        // is that rollback covers the full pre-install snapshot, not just
+        // installer migrations — config.toml/hooks.json must revert too. Both
+        // were absent before this fresh install, so rollback must remove them.
+        assert.strictEqual(
+          fs.existsSync(path.join(codexHome, 'config.toml')),
+          false,
+          'rollback must remove config.toml (absent before this fresh install)'
+        );
+        assert.strictEqual(
+          fs.existsSync(path.join(codexHome, 'hooks.json')),
+          false,
+          'rollback must remove hooks.json (absent before this fresh install)'
+        );
+      } finally {
+        process.chdir(previousCwd);
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+        if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+        else process.env.USERPROFILE = previousUserProfile;
+        if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+        else process.env.CODEX_HOME = previousCodexHome;
+      }
+    });
+  });
+}
 
 // ────────────────────────────────────────────────────────────────────────
 // Folded from tests/bug-3285-codex-hooks-state-allowed.test.cjs — consolidation epic #1969 (B1 #1970)
@@ -3626,4 +3715,321 @@ describe('#3427 + #3433 — Codex installer avoids duplicate skills and mixed ho
   });
 });
   });
+}
+
+
+{
+  const { test, describe, beforeEach, afterEach } = require('node:test');
+  const assert = require('node:assert/strict');
+  const { cleanup, createTempDir } = require('./helpers.cjs');
+  const { install: installFor4544 } = require('../bin/install.js');
+  const installModule = require('../bin/install.js');
+
+  // Harness copy of runCodexInstall — the canonical one lives inside a folded
+  // block above and is not visible at this scope.
+  function runCodexInstall(codexHome) {
+    const previousCodexHome = process.env.CODEX_HOME;
+    const previousCwd = process.cwd();
+    const previousHome = process.env.HOME;
+    const previousUserProfile = process.env.USERPROFILE;
+    process.env.CODEX_HOME = codexHome;
+    process.env.HOME = codexHome;
+    process.env.USERPROFILE = codexHome;
+    try {
+      process.chdir(path.join(__dirname, '..'));
+      return installFor4544(true, 'codex');
+    } finally {
+      process.chdir(previousCwd);
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = previousUserProfile;
+    }
+  }
+
+  describe('#4544 — manifest-driven rollback covers hooks/, scripts/, gsd-core payload, and the manifest', { concurrency: false }, () => {
+  let tmpDir;
+  let codexHome;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-4544-rollback-');
+    codexHome = path.join(tmpDir, 'codex-home');
+  });
+
+  afterEach(() => {
+    delete installModule.__codexSchemaValidator;
+    cleanup(tmpDir);
+  });
+
+  /** Seed a shape-valid prior-install manifest listing `relPaths`. */
+  function seedPriorManifest(relPaths) {
+    const files = {};
+    for (const rel of relPaths) files[rel] = 'prior-install-hash';
+    fs.writeFileSync(
+      path.join(codexHome, 'gsd-file-manifest.json'),
+      JSON.stringify({ manifestVersion: 2, version: '1.12.0', files }),
+      'utf8',
+    );
+  }
+
+  function forceValidationFailure() {
+    installModule.__codexSchemaValidator = () => ({
+      ok: false,
+      reason: 'simulated failure for #4544 rollback test',
+    });
+  }
+
+  function runFailingInstall() {
+    let err = null;
+    try { runCodexInstall(codexHome); } catch (e) { err = e; }
+    assert.ok(err, 'install must throw when validation fails');
+    assert.match(
+      String(err && err.message),
+      /post-write Codex schema validation failed/,
+      'the throw must be the injected validation failure, not an unrelated error'
+    );
+  }
+
+  test('restores prior-manifest files the failed install overwrote (#4544 must-have)', () => {
+    fs.mkdirSync(codexHome, { recursive: true });
+    const sentinels = new Map([
+      ['gsd-core/CHANGELOG.md', 'SENTINEL-CHANGELOG'],
+      ['gsd-core/.gsd-runtime', 'SENTINEL-RUNTIME'],
+      ['scripts/lib/drift-scan.cjs', 'SENTINEL-LIB'],
+    ]);
+    fs.mkdirSync(path.join(codexHome, 'gsd-core'), { recursive: true });
+    fs.mkdirSync(path.join(codexHome, 'scripts', 'lib'), { recursive: true });
+    for (const [rel, body] of sentinels) {
+      fs.writeFileSync(path.join(codexHome, rel), body, 'utf8');
+    }
+    seedPriorManifest([...sentinels.keys()]);
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    for (const [rel, body] of sentinels) {
+      assert.strictEqual(
+        fs.readFileSync(path.join(codexHome, rel), 'utf8'),
+        body,
+        `rollback must restore the pre-install bytes of ${rel}`
+      );
+    }
+  });
+
+  test('re-deletes a prior-manifest path that was absent before the install', () => {
+    fs.mkdirSync(codexHome, { recursive: true });
+    // Listed by the prior install but deleted before this one: the null
+    // snapshot branch must remove whatever the failed install recreates.
+    seedPriorManifest(['scripts/lib/drift-scan.cjs']);
+    assert.strictEqual(fs.existsSync(path.join(codexHome, 'scripts')), false,
+      'fixture precondition: the path must not exist pre-install');
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(
+      fs.existsSync(path.join(codexHome, 'scripts', 'lib', 'drift-scan.cjs')),
+      false,
+      'rollback must re-delete a prior-manifest path the user had removed'
+    );
+  });
+
+  test('wholesale-restores the hooks/ directory (the Codex manifest omits it)', () => {
+    fs.mkdirSync(path.join(codexHome, 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(codexHome, 'hooks', 'gsd-check-update.js'),
+      'SENTINEL-USER-EDITED-HOOK', 'utf8');
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(
+      fs.readFileSync(path.join(codexHome, 'hooks', 'gsd-check-update.js'), 'utf8'),
+      'SENTINEL-USER-EDITED-HOOK',
+      'rollback must restore the pre-install hook bytes the install overwrote'
+    );
+    assert.strictEqual(
+      fs.existsSync(path.join(codexHome, 'hooks', 'package.json')),
+      false,
+      'the CommonJS marker the failed install staged must not survive rollback'
+    );
+    assert.strictEqual(
+      fs.existsSync(path.join(codexHome, 'hooks', 'managed-hooks-registry.cjs')),
+      false,
+      'a staged hook file that did not pre-exist must not survive rollback'
+    );
+    assert.strictEqual(
+      fs.existsSync(path.join(codexHome, 'hooks', 'lib')),
+      false,
+      'transitive hooks/lib/ helpers staged by the failed install must not survive rollback'
+    );
+  });
+
+  test('preserves pre-existing user files under hooks/', () => {
+    fs.mkdirSync(path.join(codexHome, 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(codexHome, 'hooks', 'my-own.sh'), '#!/bin/sh\necho mine\n', 'utf8');
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(
+      fs.readFileSync(path.join(codexHome, 'hooks', 'my-own.sh'), 'utf8'),
+      '#!/bin/sh\necho mine\n',
+      'a user-owned hooks/ file that predated the install must survive rollback'
+    );
+  });
+
+  test('restores the prior gsd-file-manifest.json the failed install rewrote', () => {
+    fs.mkdirSync(codexHome, { recursive: true });
+    const priorManifest = JSON.stringify({
+      manifestVersion: 2, version: '1.12.0',
+      files: { 'gsd-core/CHANGELOG.md': 'prior-hash' },
+    }, null, 2);
+    fs.writeFileSync(path.join(codexHome, 'gsd-file-manifest.json'), priorManifest, 'utf8');
+    fs.mkdirSync(path.join(codexHome, 'gsd-core'), { recursive: true });
+    fs.writeFileSync(path.join(codexHome, 'gsd-core', 'CHANGELOG.md'), 'SENTINEL', 'utf8');
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(
+      fs.readFileSync(path.join(codexHome, 'gsd-file-manifest.json'), 'utf8'),
+      priorManifest,
+      'rollback must restore the prior manifest bytes'
+    );
+    assert.strictEqual(
+      fs.readFileSync(path.join(codexHome, 'gsd-core', 'CHANGELOG.md'), 'utf8'),
+      'SENTINEL',
+      'the manifest-listed file must be restored alongside the manifest itself'
+    );
+  });
+
+  test('clean-first-install rollback leaves no manifest or hooks residue', () => {
+    fs.mkdirSync(codexHome, { recursive: true });
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(
+      fs.existsSync(path.join(codexHome, 'gsd-file-manifest.json')),
+      false,
+      'no prior manifest existed, so the manifest the failed install wrote must be gone'
+    );
+    assert.strictEqual(
+      fs.existsSync(path.join(codexHome, 'hooks')),
+      false,
+      'hooks/ must not exist at all after a clean-first-install rollback (nothing pre-existed)'
+    );
+  });
+
+  test('a malformed prior manifest degrades gracefully', () => {
+    // No VERSION pre-exists, so the five-target restore must still remove the
+    // one the failed install wrote -- an unreadable prior manifest must cost
+    // the original restores nothing.
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(path.join(codexHome, 'gsd-file-manifest.json'), 'garbage{{{', 'utf8');
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(fs.existsSync(path.join(codexHome, 'gsd-core', 'VERSION')), false,
+      'VERSION rollback must still work when the prior manifest is unreadable');
+  });
+
+  test('a prior manifest that is a JSON array degrades gracefully', () => {
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(path.join(codexHome, 'gsd-file-manifest.json'), '[]', 'utf8');
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    // The array file PRE-EXISTED, so it is pre-install state: rollback
+    // restores those exact bytes rather than deleting them. What must be gone
+    // is any manifest the failed install wrote over it.
+    assert.strictEqual(fs.readFileSync(path.join(codexHome, 'gsd-file-manifest.json'), 'utf8'), '[]',
+      'an array-shaped prior manifest is restored as pre-install state; rollback must not crash on it');
+  });
+
+  test('a traversal-shaped manifest key is skipped, not written', () => {
+    fs.mkdirSync(codexHome, { recursive: true });
+    const canary = path.join(tmpDir, 'evil.txt');
+    fs.writeFileSync(canary, 'do-not-touch', 'utf8');
+    // `../evil.txt` resolves OUTSIDE codexHome — resolveInstallRelativePath
+    // must reject it, and the snapshotter must skip the key entirely.
+    seedPriorManifest(['../evil.txt']);
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(fs.readFileSync(canary, 'utf8'), 'do-not-touch',
+      'a traversal manifest key must never cause a write outside the install root');
+  });
+
+  test('very early failure: the new restores stay idempotent before any capture', () => {
+    fs.mkdirSync(codexHome, { recursive: true });
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(fs.existsSync(path.join(codexHome, 'gsd-file-manifest.json')), false,
+      'an empty home must still be empty after rollback');
+    assert.strictEqual(fs.existsSync(path.join(codexHome, 'hooks')), false,
+      'an empty home must have no hooks/ residue after rollback');
+  });
+
+  test('minimal-mode rollback never touches a pre-existing hooks/ tree (capture gate)', () => {
+    // BLOCKER regression (#4544 review): the capture gate is off in minimal
+    // mode, and the restore must treat "no snapshot" as "do nothing" — never
+    // as "hooks/ was absent". Seeds the profile marker so the in-process
+    // install runs minimal without a validator-unreachable subprocess.
+    fs.mkdirSync(path.join(codexHome, 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(codexHome, 'hooks', 'gsd-check-update.js'), 'SENTINEL-OLD-HOOK', 'utf8');
+    fs.writeFileSync(path.join(codexHome, 'hooks', 'user-backup.js'), 'PRECIOUS-USER-DATA', 'utf8');
+    fs.writeFileSync(path.join(codexHome, '.gsd-profile'), 'core', 'utf8');
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(
+      fs.readFileSync(path.join(codexHome, 'hooks', 'gsd-check-update.js'), 'utf8'),
+      'SENTINEL-OLD-HOOK',
+      'minimal-mode rollback must preserve the pre-existing hook file'
+    );
+    assert.strictEqual(
+      fs.readFileSync(path.join(codexHome, 'hooks', 'user-backup.js'), 'utf8'),
+      'PRECIOUS-USER-DATA',
+      'minimal-mode rollback must preserve user files under hooks/ (empty snapshot means do nothing)'
+    );
+  });
+
+  test('a symlink under hooks/ is never followed; downgrade preserves it uncaptured', (t) => {
+    const canaryDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'gsd-4544-canary-'));
+    t.after(() => cleanup(canaryDir));
+    const canary = path.join(canaryDir, 'secret.txt');
+    fs.writeFileSync(canary, 'DO-NOT-READ', 'utf8');
+
+    fs.mkdirSync(path.join(codexHome, 'hooks'), { recursive: true });
+    const linkPath = path.join(codexHome, 'hooks', 'evil-link');
+    try {
+      fs.symlinkSync(canary, linkPath);
+    } catch (_) {
+      t.skip('symlinks unavailable on this platform/filesystem');
+      return;
+    }
+
+    forceValidationFailure();
+    runFailingInstall();
+
+    assert.strictEqual(fs.readFileSync(canary, 'utf8'), 'DO-NOT-READ',
+      'the symlink referent must never be read into the snapshot or written over');
+    // The link makes the capture incomplete, so the restore downgrades to
+    // per-file: nothing uncaptured is deleted — the pre-existing link is
+    // pre-install state and survives, still pointing at its referent.
+    assert.strictEqual(fs.readFileSync(linkPath, 'utf8'), 'DO-NOT-READ',
+      'the preserved link must still resolve to the untouched referent');
+    assert.strictEqual(fs.existsSync(path.join(codexHome, 'hooks', 'secret.txt')), false,
+      'the referent bytes must not leak into the install tree as a regular file');
+  });
+});
 }

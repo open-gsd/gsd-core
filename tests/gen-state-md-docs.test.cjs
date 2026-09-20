@@ -27,6 +27,7 @@ const path = require('node:path');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { GENERATOR_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const gen = require('../scripts/gen-state-md-docs.cjs');
 const { splitLines, detectEol, joinLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
@@ -46,7 +47,7 @@ function seedCleanTree(dir) {
 function runGen(args, root) {
   const fullArgs = [SCRIPT, ...args];
   if (root !== undefined) fullArgs.push('--root', root);
-  const r = runNode(fullArgs, { timeoutMs: 30000 });
+  const r = runNode(fullArgs, { timeoutMs: GENERATOR_SCRIPT_TIMEOUT_MS });
   return { code: r.exitCode, stdout: r.stdout, stderr: r.stderr };
 }
 

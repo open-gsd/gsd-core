@@ -311,7 +311,7 @@ If any agent failed, note the failure and continue with successful documents.
 Continue to verify_output.
 </step>
 
-<step name="sequential_mapping" condition="Agent tool is NOT available (e.g. Antigravity, Gemini CLI, Codex)">
+<step name="sequential_mapping" condition="Agent tool is NOT available (e.g. Antigravity, Codex)">
 When the `Agent` tool is unavailable, perform codebase mapping sequentially in the current context. This replaces `spawn_agents` and `collect_confirmations`.
 
 **IMPORTANT:** Do NOT use `browser_subagent`, `Explore`, or any browser-based tool. Use only file system tools (Read, Bash, Write, Grep, Glob, list_dir, view_file, grep_search, or equivalent tools available in your runtime).

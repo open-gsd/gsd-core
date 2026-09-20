@@ -31,6 +31,12 @@ const ROOT = path.join(__dirname, '..');
 const REGRESSION_GATE = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'regression-gate.md');
 const REGRESSION_GATE_RUN = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'regression-gate-run.md');
 const POST_MERGE_GATE = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'post-merge-gate.md');
+
+// #4784: bounds the one-shot sed pipeline the behavioral extraction test runs
+// against a fixture line (a pure text filter on ~50 lines — never the 30s-plus
+// subprocess classes in timeouts.cjs; named so the two copies in this file
+// cannot drift).
+const SIMCTL_EXTRACT_TIMEOUT_MS = 10_000;
 const AUDIT_FIX = path.join(ROOT, 'gsd-core', 'workflows', 'audit-fix.md');
 const EXECUTE_PHASE = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase.md');
 
@@ -123,4 +129,89 @@ describe('#2350: every gate resolves build/test commands with --raw', () => {
       );
     });
   }
+});
+
+// ─── #4784: the Xcode arms carry -project and a machine-independent destination ──
+
+describe('#4784: Xcode gate construction', () => {
+  const gate = read(POST_MERGE_GATE);
+
+  test('#4784: the Xcode gates pass -project to every constructed xcodebuild command', () => {
+    // The gate resolves XCODEPROJ (find . -maxdepth 2) and even uses it for
+    // `xcodebuild -list -json -project` — but the build/test commands used to
+    // drop it, so any project one directory down (App/App.xcodeproj) failed
+    // with exit 66: xcodebuild does not search subdirectories.
+    const constructed = gate.match(/xcodebuild (?:build|test)[^\n]*'/g) || [];
+    assert.ok(constructed.length >= 4, `expected the four Xcode command constructions, got: ${JSON.stringify(constructed)}`);
+    for (const cmd of constructed) {
+      assert.ok(
+        cmd.includes("-project '$XCODEPROJ'"),
+        `every constructed xcodebuild command must carry -project '$XCODEPROJ', got: ${cmd}`,
+      );
+    }
+  });
+
+  test('#4784: the Xcode destination derives from the machine\'s available simulators', () => {
+    // A concrete device NAME is machine state (the reporter's machine had zero
+    // devices matching the hardcoded name). The gate must resolve the first
+    // available simulator (id= destination form) and must not pin a name.
+    assert.ok(
+      gate.includes('simctl list devices available'),
+      'the gate must resolve the destination from simctl list devices available',
+    );
+    assert.ok(gate.includes('id=$XCODE_SIM'), 'the destination must reference the resolved simulator id');
+    assert.ok(
+      !gate.includes('name=iPhone 16'),
+      'the hardcoded simulator name must be gone',
+    );
+  });
+
+  test('#4784: with no available simulator the gates skip loudly instead of guaranteed failure', () => {
+    // Pin BOTH skip echoes: the build arm names workflow.build_command, the
+    // test arm names workflow.test_command (a deleting-the-echo edit must go red).
+    assert.ok(
+      /No available iOS Simulator[^\n]*workflow\.build_command/.test(gate),
+      'build-arm skip must name workflow.build_command',
+    );
+    assert.ok(
+      /No available iOS Simulator[^\n]*workflow\.test_command/.test(gate),
+      'test-arm skip must name workflow.test_command',
+    );
+    // set -u robustness: the skip paths must leave the command variables ASSIGNED.
+    const skipArms = gate.match(/if \[ -z "\$XCODE_SIM" \]; then[\s\S]*?\n {4}fi/g) || [];
+    assert.ok(skipArms.length >= 2, `expected both skip arms, got ${skipArms.length}`);
+    for (const arm of skipArms) {
+      assert.ok(
+        /(?:BUILD|TEST)_CMD=""/.test(arm),
+        'each skip arm must assign its command variable (a set -u agent shell must not abort on an unbound variable)',
+      );
+    }
+  });
+
+  test('#4784: the gate\'s simulator-extraction pipeline yields a UDID from a real-format simctl line', () => {
+    // Adversarial-review Finding 1 (behavioral, would have been red): the first
+    // cut anchored the sed at end-of-line, but real simctl lines end with a
+    // (Shutdown)/(Booted) state suffix (often + trailing space) — the anchored
+    // form matched NOTHING and the gates skipped on every machine. Extract the
+    // gate's OWN pipeline and execute it against a real-format fixture line.
+    const pipeMatch = gate.match(/simctl list devices available 2[^\n]*?(sed -n '[^']+')[^\n]*?head -1/);
+    assert.ok(pipeMatch, 'gate must contain the simctl→sed→head extraction pipeline');
+    const realFormatLine = '    iPhone 17 Pro (94B8198C-8CF1-4860-994A-5669D3388BE8) (Shutdown) ';
+    const { execFileSync } = require('node:child_process');
+    const udid = execFileSync('sh', ['-c', `printf '%s\\n' "$1" | ${pipeMatch[1]} | head -1`, 'sh', realFormatLine], {
+      encoding: 'utf-8',
+      timeout: SIMCTL_EXTRACT_TIMEOUT_MS,
+    }).trim();
+    assert.match(udid, /^[A-F0-9-]{8,}$/, `the pipeline must extract the UDID from a real-format line, got: ${JSON.stringify(udid)}`);
+  });
+
+  test('#4784: the test-gate timeout guidance names the Xcode diagnostics collector', () => {
+    // A real iOS suite measured 854s wall clock, ~600s of it simctl diagnose
+    // collecting a sysdiagnose AFTER the suite passed — the default timeout
+    // returns 124 on a passing suite. The gate text must surface the flag.
+    assert.ok(
+      gate.includes('-collect-test-diagnostics never'),
+      'the gate must mention -collect-test-diagnostics never for Xcode suites',
+    );
+  });
 });

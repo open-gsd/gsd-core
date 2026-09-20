@@ -357,7 +357,7 @@ function parsePlanDocument(content: string, planPath = ''): PlanDocument {
   };
 }
 
-const planDocument = { TASK_KIND, parsePlanDocument, planIdFromFile };
+const planDocument = { TASK_KIND, parsePlanDocument, planIdFromFile, extractThreatRegisterIds };
 
 // Required to merge the compile-time-only types onto the `export =` runtime
 // value; there is no ES-module-syntax way to export a type alongside a CJS
@@ -368,3 +368,52 @@ declare namespace planDocument {
 }
 
 export = planDocument;
+
+/**
+ * #4683 — first-cell IDs of the STRIDE register rows inside every
+ * `<threat_model>` block. The register is a markdown table (the
+ * `<threat_model>` template in agents/gsd-planner.md): one row per threat,
+ * first cell `T-{phase}-NN` — decimal phases included — or the reserved
+ * `T-{phase}-SC` supply-chain row. Only digit-suffixed IDs match: `-SC` is
+ * deliberately shared by EVERY plan in a phase (planner rule "Keep
+ * `T-{phase}-SC` in `<threat_model>`"), so it can never be a uniqueness
+ * violation. IDs in prose or non-threat tables never count; only register
+ * rows inside a threat_model block do. One entry per matched row, in document
+ * order — deciding that the same ID in two plans is a collision is the
+ * aggregator's question (init.cts), not the per-document parser's.
+ *
+ * Knowingly unmatched residual classes (#4683 review, accepted): lowercase
+ * `t-47-01`, letter suffixes (`T-47-05A`), annotated first cells
+ * (`| T-47-06 (revised) |`), IDs in non-first cells, and an unterminated
+ * `<threat_model>` block all yield no claim. All are off-template shapes — the
+ * planner template fixes the row grammar — so the residual risk is silent
+ * under-detection, never a false hard-stop.
+ */
+const THREAT_MODEL_BLOCK_RE = /<threat_model>([\s\S]*?)<\/threat_model>/gi;
+const THREAT_REGISTER_ROW_RE = /^[^\S\n]*\|[^\S\n]*(T-\d+(?:\.\d+)?-\d+)[^\S\n]*\|/;
+
+function extractThreatRegisterIds(content: string): string[] {
+  // Fenced code blocks are prose, not registers (#4683 review MAJOR): a plan
+  // that QUOTES an existing register — exactly what the gap-closure flow tells
+  // the planner to read — must not have its quoted IDs counted as claims, or
+  // the execute-phase gate would hard-stop a correct phase. Same line-toggling
+  // idiom as the deferred-scope scan in phase.cts.
+  const lines: string[] = [];
+  let inFence = false;
+  for (const line of content.split(/\r?\n/)) {
+    if (/^\s*(?:```|~~~)/.test(line)) {
+      inFence = !inFence;
+      lines.push('');
+      continue;
+    }
+    lines.push(inFence ? '' : line);
+  }
+  const ids: string[] = [];
+  for (const blockMatch of lines.join('\n').matchAll(THREAT_MODEL_BLOCK_RE)) {
+    for (const line of blockMatch[1].split('\n')) {
+      const row = line.match(THREAT_REGISTER_ROW_RE);
+      if (row) ids.push(row[1]);
+    }
+  }
+  return ids;
+}

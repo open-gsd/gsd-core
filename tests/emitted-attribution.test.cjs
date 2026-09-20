@@ -90,6 +90,56 @@ const {
   resolveBaseline,
 } = require('./helpers/emitted-baseline.cjs');
 
+/**
+ * git plumbing via a scratch index against this repo's REAL object
+ * database (never a throwaway fixture) -- run through this file's own
+ * hand-rolled git-spawn helper (never the shared
+ * tests/helpers/git-fixture.cjs). Shares the REAL_REPO_GIT_TIMEOUT_MS class
+ * with tests/no-pending-3212-markers.test.cjs's `git ls-files` call --
+ * promoted to tests/helpers/timeouts.cjs rather than kept file-local once a
+ * second file was found sharing the exact same value and shape.
+ */
+const { REAL_REPO_GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+
+/**
+ * git fixture CONSTRUCTION (init/config/add/commit) against a genuinely
+ * fresh temp repo, via this file's own hand-rolled git-spawn helper --
+ * correction from an earlier pass that conflated this with
+ * REAL_REPO_GIT_TIMEOUT_MS's real-repo-tree class; a Standards-axis review
+ * caught that this site's `repo` is a throwaway mkdtemp fixture
+ * (createTempDir + git init), not the real repo tree. Distinct from the
+ * SHARED tests/helpers/git-fixture.cjs's own GIT_FIXTURE_TIMEOUT_MS
+ * (60000ms, a six-spawn construction sequence): this site rolls its own,
+ * lighter five-spawn sequence at a genuinely different pre-existing bound,
+ * so reusing that shared constant would silently double this site's
+ * budget. No fresh bench data justifies a different number, so the
+ * pre-existing 30000ms literal is preserved exactly under this name.
+ */
+const FRESH_FIXTURE_GIT_TIMEOUT_MS = 30_000;
+
+/**
+ * node:test's own per-test timeout option (NOT a subprocess spawn bound) --
+ * bounds the whole test body for this file's two heaviest tests: a real
+ * worktree checkout, `npm run build:lib`, a full multi-runtime install
+ * pass, and real git resolution. A completely different mechanism from
+ * every spawnSync/execFileSync timeout in this file or in
+ * tests/helpers/timeouts.cjs. No fresh bench data justifies a different
+ * number, so the pre-existing 480000ms literal is preserved exactly.
+ */
+const HEAVY_REAL_TREE_TEST_TIMEOUT_MS = 480_000;
+
+/**
+ * Runs the exact same script as the shared BUILD_TIMEOUT_MS constant
+ * (scripts/build-hooks.js) but at 4x that constant's bound. This site
+ * sits inside "differential attribution over the real tree", the single
+ * heaviest test in the suite, where elevated system load plausibly
+ * justifies the wider margin -- not equalized to the lighter shared norm
+ * without bench data. Coincides numerically with INSTALL_TIMEOUT_MS (a
+ * full installer run, an unrelated operation) -- kept separate. No fresh
+ * bench data justifies a different number, so the pre-existing 120000ms
+ * literal is preserved exactly.
+ */
+const BUILD_HOOKS_UNDER_LOAD_TIMEOUT_MS = 120_000;
 
 const SHA_A = 'a'.repeat(40);
 const SHA_B = 'b'.repeat(40);
@@ -618,17 +668,18 @@ test('a ripple names the unexplained path and not the explained one', () => {
   assert.ok(!r.ok);
 });
 
-test('a converter change fails without an ack and passes with one', () => {
+test('an unregistered converter change fails without an ack and passes with one', () => {
   // #2723 AC: "simulate a legitimate converter change: assert it fails without an ack
-  // entry and passes with one." A converter edit moves emitted bytes for files whose
-  // sources nobody touched — ADR-2264's "~5% git cannot review".
+  // entry and passes with one." Registered transforms are now first-class provenance
+  // (covered above), so use a converter path the rule does not declare to retain this
+  // guard for ADR-2264's "~5% git cannot review" rather than contradicting that model.
   const moved = {};
   const base = {};
   for (let i = 0; i < 25; i++) {
     base[`skills/gsd-cmd-${i}/SKILL.md`] = `h${i}`;
     moved[`skills/gsd-cmd-${i}/SKILL.md`] = `x${i}`;
   }
-  const changedPaths = ['src/runtime-artifact-conversion.cts'];
+  const changedPaths = ['src/unregistered-runtime-converter.cts'];
 
   const without = diffEmitted({ baseline: mf(base), current: mf(moved), changedPaths });
   assert.equal(without.unattributable.length, 25);
@@ -1424,7 +1475,7 @@ test('an unreadable baseline surfaces an error', () => {
 test(
   'buildBaselineAtRef resolves a baseline via the in-job build even when the generator '
   + 'script is absent at the ref (#2767 regression)',
-  { timeout: 480_000 },
+  { timeout: HEAVY_REAL_TREE_TEST_TIMEOUT_MS },
   (t) => {
     // Mirrors "differential attribution over the real tree": install output is
     // platform-specific on Windows, and this drives the same heavy worktree +
@@ -1475,7 +1526,7 @@ test(
     // closed. Reusing the SAME helper `buildBaselineAtRef` now uses (below) rather than
     // hand-rolling the flag here keeps the fix from silently diverging per call site.
     const run = (...args) => execFileSync('git', [...safeDirArgs(REPO_ROOT), ...args], {
-      cwd: REPO_ROOT, encoding: 'utf8', timeout: 30_000, env: gitEnv, stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: REPO_ROOT, encoding: 'utf8', timeout: REAL_REPO_GIT_TIMEOUT_MS, env: gitEnv, stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
 
     const headSha = run('rev-parse', 'HEAD');
@@ -1491,7 +1542,7 @@ test(
     // otherwise this test would prove nothing.
     assert.throws(
       () => execFileSync('git', [...safeDirArgs(REPO_ROOT), 'cat-file', '-e', `${syntheticSha}:scripts/gen-emitted-baseline.cjs`], {
-        cwd: REPO_ROOT, encoding: 'utf8', timeout: 30_000, stdio: 'pipe',
+        cwd: REPO_ROOT, encoding: 'utf8', timeout: REAL_REPO_GIT_TIMEOUT_MS, stdio: 'pipe',
       }),
       /./,
       'the synthetic ref must genuinely lack the generator script for this test to prove anything',
@@ -1935,7 +1986,7 @@ test('baseline families are enumerated from the ref, not from the current regist
   // this same process just created with `mkdtempSync` + `git init`, so its owner is
   // always the uid running the test regardless of container — it is never the
   // externally-mounted repo path the dubious-ownership check reacts to.
-  const run = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', timeout: 30_000 });
+  const run = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', timeout: FRESH_FIXTURE_GIT_TIMEOUT_MS });
 
   run('init', '--quiet', '-b', 'main');
   run('config', 'user.email', 'test@example.invalid');
@@ -2049,7 +2100,7 @@ test('property: reported added/dropped are exactly the set differences', () => {
 // the working-tree fixtures, which would be whatever this PR's author regenerated;
 // comparing against those would be vacuous.
 
-test('differential attribution over the real tree', { timeout: 480_000 }, async (t) => {
+test('differential attribution over the real tree', { timeout: HEAVY_REAL_TREE_TEST_TIMEOUT_MS }, async (t) => {
   if (process.platform === 'win32') {
     // Mirrors the golden harness: install output is platform-specific on Windows
     // (backslash paths), so parity is asserted on macOS + Linux. An explicit t.skip,
@@ -2061,7 +2112,7 @@ test('differential attribution over the real tree', { timeout: 480_000 }, async 
   // hooks/dist is gitignored and built (DEFECT.HOOKS-DIST-SCOPED-CI): the scoped CI
   // lane does not run build:hooks, so a real install there would emit no hooks/ dir.
   // Build idempotently, exactly as the golden harness does.
-  execFileSync(process.execPath, [BUILD_SCRIPT], { encoding: 'utf-8', stdio: 'pipe', timeout: 120_000 });
+  execFileSync(process.execPath, [BUILD_SCRIPT], { encoding: 'utf-8', stdio: 'pipe', timeout: BUILD_HOOKS_UNDER_LOAD_TIMEOUT_MS });
 
   // The base ref is not universally available. The gsd-test runner shallow-clones and
   // merges base+head, so no `origin/*` remote-tracking ref exists in the container —

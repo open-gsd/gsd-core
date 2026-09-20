@@ -21,7 +21,7 @@
 
 ## 系统概述
 
-GSD Core 是一个**元提示框架**，位于用户与 AI 编码 Agent（Claude Code、Gemini CLI、OpenCode、Kilo、Codex、Copilot、Antigravity、Trae、Cline、Augment Code）之间。它提供：
+GSD Core 是一个**元提示框架**，位于用户与 AI 编码 Agent（Claude Code、Kimi CLI、OpenCode、Kilo、Codex、Copilot、Antigravity、Trae、Cline、Augment Code）之间。它提供：
 
 1. **上下文工程** — 结构化产物，为每个任务向 AI 提供所需的全部信息（参见[上下文工程](explanation/context-engineering.md)）
 2. **多 Agent 编排** — 轻量级编排器，以全新上下文窗口派生专用 Agent（参见[多 Agent 编排](explanation/multi-agent-orchestration.md)）
@@ -115,7 +115,6 @@ GSD Core 是一个**元提示框架**，位于用户与 AI 编码 Agent（Claude
 - **OpenCode / Kilo：** 斜线命令（连字符形式，`/gsd-command-name`）
 - **Codex：** 技能（`$gsd-command-name`）
 - **Copilot：** 斜线命令（连字符形式，`/gsd-command-name`）
-- **Gemini CLI：** 在 `gsd:` 命名空间下的斜线命令（冒号形式，`/gsd:command-name`）——Gemini 将所有自定义命令置于其插件 id 的命名空间下，因此安装路径会将正文中的每个引用改写为冒号形式
 - **Antigravity：** 技能
 
 **命令总数：** 请参阅 [`docs/INVENTORY.md`](INVENTORY.md#commands) 获取权威数量及完整列表。
@@ -484,7 +483,6 @@ UI-SPEC.md (per phase) ───────────────────
 
 - **OpenCode：** `~/.config/opencode/` 全局或 `./.opencode/` 本地
 - **Kilo：** `~/.config/kilo/` 全局或 `./.kilo/` 本地
-- **Gemini CLI：** `~/.gemini/` 全局或 `./.gemini/` 本地
 - **Codex：** `~/.codex/` 全局或 `./.codex/` 本地
 - **Copilot：** `~/.copilot/` 全局或 `./.github/` 本地
 - **Antigravity：** 自动检测全局根目录（`~/.gemini/antigravity/`、`~/.gemini/antigravity-ide/` 或 `~/.gemini/antigravity-cli/`）或 `./.agent/` 本地
@@ -569,7 +567,7 @@ UI-SPEC.md (per phase) ───────────────────
 
 安装程序（`bin/install.js`，约 10,700 行）处理以下事项：
 
-1. **运行时检测** — 交互式提示或 CLI 标志（`--claude`、`--opencode`、`--gemini`、`--kilo`、`--codex`、`--copilot`、`--antigravity`、`--cursor`、`--windsurf`、`--augment`、`--trae`、`--qwen`、`--hermes`、`--codebuddy`、`--cline`、`--all`）
+1. **运行时检测** — 交互式提示或 CLI 标志（`--claude`、`--opencode`、`--kimi`、`--kilo`、`--codex`、`--copilot`、`--antigravity`、`--cursor`、`--windsurf`、`--augment`、`--trae`、`--qwen`、`--hermes`、`--codebuddy`、`--cline`、`--all`）
 2. **位置选择** — 全局（`--global`）或本地（`--local`）
 3. **文件部署** — 复制命令、技能、工作流、参考文档、模板、Agent 和 hook
 4. **运行时适配** — 按运行时转换文件内容：
@@ -578,8 +576,7 @@ UI-SPEC.md (per phase) ───────────────────
   - Kilo：复用 OpenCode 转换流水线，使用 Kilo 配置路径
   - Codex：从命令生成 TOML 配置 + 技能
   - Copilot：映射工具名称（Read→read、Bash→execute 等）
-  - Gemini：调整 hook 事件名称（`AfterTool` 而非 `PostToolUse`）
-  - Antigravity：以技能为主，使用 Google 模型等效项
+  - Antigravity：以技能为主，使用 Google 模型等效项；调整 hook 事件名称（`AfterTool` 而非 `PostToolUse`）
   - Cursor：以技能为主，带 Cursor 规则引用
   - Windsurf：以技能为主，带 Windsurf 规则引用
   - Trae：以技能为主安装到 `~/.trae` / `./.trae`，不含 `settings.json` 或 hook 集成
@@ -611,7 +608,7 @@ UI-SPEC.md (per phase) ───────────────────
 ### 架构
 
 ```
-Runtime Engine (Claude Code / Gemini CLI)
+Runtime Engine (Claude Code / Antigravity CLI)
     │
     ├── statusLine event ──► gsd-statusline.js
     │   Reads: stdin (session JSON)
@@ -703,7 +700,6 @@ GSD 通过统一的命令/工作流架构支持多种 AI 编码运行时：
 | Claude Code | `~/.claude` | `./.claude` | 全局 `skills/gsd-*/SKILL.md`；本地 `commands/gsd/*.md` | `agents/gsd-*.md` | `settings.json` hook 和 statusLine 条目 |
 | OpenCode | `~/.config/opencode` | `./.opencode` | `command/gsd-*.md` | `agents/gsd-*.md` | `opencode.json` 或 `opencode.jsonc`；无 GSD hook |
 | Kilo | `~/.config/kilo` | `./.kilo` | `command/gsd-*.md` | `agents/gsd-*.md` | `kilo.json` 或 `kilo.jsonc`；无 GSD hook |
-| Gemini CLI | `~/.gemini` | `./.gemini` | `commands/gsd/*.toml` | `agents/gsd-*.md` | `settings.json` 功能标志、hook 和 statusline |
 | Codex | `~/.codex` | `./.codex` | `skills/gsd-*/SKILL.md` | `agents/` 源 markdown 加每个 Agent 的 TOML | `config.toml` `[agents.gsd-*]`、`[features].hooks`（规范；遗留别名 `codex_hooks` 在重新安装时被识别并迁移到新版本，#3566）以及 hook 表 |
 | GitHub Copilot | `~/.copilot` | `./.github` | `skills/gsd-*/SKILL.md` 和 `copilot-instructions.md` | `.agent.md` 文件 | 无 GSD hook 或 statusline |
 | Antigravity | 自动检测：`~/.gemini/antigravity`、`~/.gemini/antigravity-ide` 或 `~/.gemini/antigravity-cli` | `./.agent` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | GSD 安装时的 Gemini 风格 `settings.json` hook 条目 |
@@ -722,7 +718,7 @@ GSD 通过统一的命令/工作流架构支持多种 AI 编码运行时：
 
 - Claude Code：Anthropic 斜线命令、设置、hook 和子 Agent 文档。
 - OpenCode 和 Kilo：OpenCode 配置文档和 Kilo 自定义子 Agent 文档。
-- Gemini CLI 和 Qwen Code：命令/配置文档；Qwen 命令文档最后更新于 2026-05-06。
+- Qwen Code：命令/配置文档；Qwen 命令文档最后更新于 2026-05-06。
 - Codex：OpenAI Codex 文档和 `config-schema.json`；安装程序还支持 Codex 0.124.0 的 Agent 表格格式兼容性。
 - Copilot、Cursor、Cline、Augment、Hermes 和 CodeBuddy：自定义指令、规则、技能或配置的供应商文档。
 - Antigravity、Windsurf 和 Trae：来源有限的行。安装程序记录了当前的兼容性垫片，迁移前必须刷新这些来源后再重写其配置。
@@ -730,7 +726,7 @@ GSD 通过统一的命令/工作流架构支持多种 AI 编码运行时：
 ### 抽象点
 
 1. **工具名称映射** — 每个运行时有其自己的工具名称（例如 Claude 的 `Bash` → Copilot 的 `execute`）
-2. **Hook 事件名称** — Claude 使用 `PostToolUse`，Gemini 使用 `AfterTool`
+2. **Hook 事件名称** — Claude 使用 `PostToolUse`，Antigravity 使用 `AfterTool`
 3. **Agent 前置元数据** — 每个运行时有其自己的 Agent 定义格式
 4. **路径约定** — 每个运行时将配置存储在不同的目录中
 5. **模型引用** — `inherit` 配置文件让 GSD 推迟到运行时的模型选择

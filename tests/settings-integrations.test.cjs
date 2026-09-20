@@ -10,7 +10,7 @@
  * Covers:
  *   - Artifacts exist (command, workflow, skill stub) with correct frontmatter
  *   - Workflow references the four search API key fields
- *   - Workflow exposes review.models.{claude,codex,gemini,opencode} routing
+ *   - Workflow exposes review.models.{claude,codex,opencode} routing
  *   - Workflow exposes agent_skills.<agent-type> injection input
  *   - #3651: workflow states the registry-derived review.models settable rule (no
  *     dynamic-pattern claim) and enumerates exactly the registry's settable lanes
@@ -101,9 +101,13 @@ describe('#2529 workflow — search integrations', () => {
 // ─── Content: review.models routing ──────────────────────────────────────────
 
 describe('#2529 workflow — review.models routing', () => {
-  test('workflow references all four reviewer CLIs', () => {
+  test('workflow references all three reviewer CLIs', () => {
+    // #4709: the gemini reviewer lane was retired (Google sunset Gemini CLI), and the
+    // integrations wizard's AskUserQuestion options dropped its "Gemini" choice along with it —
+    // the workflow's `AskUserQuestion` block at settings-integrations.md:198-200 now offers
+    // exactly Claude, Codex, OpenCode.
     const src = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
-    for (const cli of ['claude', 'codex', 'gemini', 'opencode']) {
+    for (const cli of ['claude', 'codex', 'opencode']) {
       assert.ok(
         src.includes(`review.models.${cli}`),
         `workflow must reference review.models.${cli}`
@@ -115,7 +119,9 @@ describe('#2529 workflow — review.models routing', () => {
     // #3651: these pass because the capability registry federates each lane's
     // modelConfigKey into the valid-key set — NOT via a dynamicKeyPatterns regex
     // (no such pattern exists; see the #3651 describe below).
-    for (const cli of ['claude', 'codex', 'gemini', 'opencode']) {
+    // #4709: gemini dropped from this list along with the retired lane — review.models.gemini
+    // no longer validates because REVIEWER_LANES no longer declares a gemini modelConfigKey.
+    for (const cli of ['claude', 'codex', 'opencode']) {
       assert.ok(
         isValidConfigKey(`review.models.${cli}`),
         `review.models.${cli} must pass isValidConfigKey`

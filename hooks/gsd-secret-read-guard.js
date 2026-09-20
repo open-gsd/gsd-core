@@ -26,12 +26,24 @@
 //   .env, .secrets, and .env.<suffix> — EXCEPT .env.example / .env.sample /
 //   .env.template / .env.dist, which are the non-secret templates GSD's own
 //   phase prompt tells executors to read.
-//   Stated cost: this is narrower than the retired `Read(.env.*)` rule — a
-//   real secret stored in `.env.example` is not protected.
+//   Stated cost (#4580): the exemption matches the token's FINAL EXTENSION,
+//   not the whole name, so the trusted set is `.env.<anything>.example` /
+//   `.sample` / `.template` / `.dist` — an unbounded family, not four fixed
+//   names. A real secret named `.env.prod-real-secrets.example` is NOT
+//   protected, and renaming any secret to end in one of those four
+//   extensions bypasses the guard across Read, Grep and Bash alike. This is
+//   the deliberate cost of #4580, which fixed the prior whole-name
+//   comparison wrongly refusing committed, secret-free templates like
+//   `.env.local.example`.
 //   A token containing `:` is also tested on the part after its LAST `:`,
 //   so `git show HEAD:.env`, `origin/main:config/.env` and `C:\proj\.env`
-//   are caught without git-specific parsing. No whitespace trimming: the
-//   commit message `fix: .env parsing` yields ` .env parsing`, not a name.
+//   are caught without git-specific parsing. Leading/interior whitespace is
+//   still NOT trimmed: the commit message `fix: .env parsing` yields
+//   ` .env parsing`, which is prose, not a name. TRAILING dots and spaces ARE
+//   stripped from the basename before classification (`.env.`, `.env..`,
+//   `.env `, `.env. ` all normalize to `.env`), because Win32 strips trailing
+//   dots and spaces from each path component, so these are aliases for the
+//   same on-disk file, not distinct names.
 //
 // Bash analysis is a two-pass token scan, not a shell:
 //   pass 1 tokenizes with quote state, comments, redirect operators (with fd
@@ -74,7 +86,12 @@
 //   on plain commands, without arming the compound-`cd` prompt". Writes to
 //   secret files are out of scope (Write/Edit were never gated). Commands
 //   over 1 MiB are denied outright (`command-too-large`) rather than
-//   scanned partially or waved through.
+//   scanned partially or waved through. (#4639 adds one more, by design: the
+//   value of `--env-file` under a container runtime is exempt, so the
+//   container's own command can print the interpolated environment
+//   (`alpine printenv`, `docker compose config`) — the same exposure class
+//   as the pre-existing volume-mount gap (`-v .env:/s`); the flag's value
+//   itself is a name, never contents.)
 //
 // Triggers on: Read, Grep, Bash tool calls (Kimi: ReadFile, Grep, Shell)
 // Action: BLOCK (decision: 'block', exit 2) — codes secret-read |
@@ -86,6 +103,7 @@
 'use strict';
 
 const { HOOK_ON_CRASH, allow, deny, crash } = require('./lib/hook-exit.js');
+const { finalExtension, normalizeWindowsBasename, lastSegment } = require('./lib/filename-classification.js');
 
 // Fail open on a hook-internal error (see header). Declared ONCE so the
 // outer catch states its policy explicitly (#3911).
@@ -113,6 +131,15 @@ const NON_READING_COMMANDS = new Set([
   'test', '[', '[[', 'ls', 'stat', 'touch', 'rm', 'chmod', 'chown', 'mkdir',
   'basename', 'dirname', 'realpath', 'file', 'echo', 'printf',
 ]);
+
+// #4639: container runtimes take `--env-file <file>` — the runtime opens the
+// file itself, interpolates it into the container environment, and returns
+// nothing to the agent, so the flag's VALUE is a name, never contents. The
+// same category NON_READING_COMMANDS encodes, expressed as a flag value. Only
+// the flag's value under these runtimes is exempt; every other operand in the
+// segment is still checked, so the carve-out cannot launder a read.
+const CONTAINER_RUNTIMES = new Set(['docker', 'docker-compose', 'podman', 'nerdctl']);
+const ENV_FILE_FLAG_RE = /^--env-file(=|$)/;
 
 // Shell interpreters that run a script from `-c`, a file operand, or stdin
 // (heredoc / here-string / piped `echo`|`printf`). `su` is here for its `-c`
@@ -148,19 +175,16 @@ const GLOB_PROBES = [
 // ---------------------------------------------------------------------------
 
 function isSecretBasename(name) {
-  if (name === '.env' || name === '.secrets') return true;
-  if (name.startsWith('.env.')) {
-    const suffix = name.slice('.env.'.length);
-    return suffix !== '' && !NON_SECRET_ENV_SUFFIXES.has(suffix.toLowerCase());
+  // Win32 strips trailing dots/spaces per path component, so `.env.`,
+  // `.env ` etc. resolve to the real `.env` on Windows — normalize FIRST so
+  // those aliases can't bypass classification.
+  const n = normalizeWindowsBasename(name);
+  if (n === '.env' || n === '.secrets') return true;
+  if (n.startsWith('.env.')) {
+    const suffix = n.slice('.env.'.length);
+    return suffix !== '' && !NON_SECRET_ENV_SUFFIXES.has(finalExtension(suffix).toLowerCase());
   }
   return false;
-}
-
-// Last `/`- or `\`-separated segment, ignoring trailing separators.
-function lastSegment(tok) {
-  const s = tok.replace(/[\\/]+$/, '');
-  const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
-  return i === -1 ? s : s.slice(i + 1);
 }
 
 // True when the token's basename — or the basename of the part after its
@@ -247,7 +271,19 @@ function globAltSelectsSecret(alt) {
   if (/^[*?]+$/.test(alt)) return false; // pure wildcard: equivalent to no glob
   const wild = alt.search(/[*?[]/);
   const lit = wild === -1 ? alt : alt.slice(0, wild);
-  if (lit.startsWith('.env.')) return true;
+  // #4580: when there is no wildcard, `alt` (== `lit`) is a WHOLE literal
+  // filename, so classify it exactly the same way Read/Bash do (by its
+  // FINAL extension, via isSecretBasename) rather than by a `.env.`-prefix
+  // heuristic — that heuristic mis-blocked multi-dot templates like
+  // `.env.local.example`. When a wildcard IS present, `lit` is only a
+  // PARTIAL literal prefix (`.env.local.exam*` can still select
+  // `.env.local`), which cannot be classified exactly, so the original
+  // conservative prefix rule stays.
+  if (wild === -1) {
+    if (isSecretBasename(lit)) return true;
+  } else if (lit.startsWith('.env.')) {
+    return true;
+  }
   if (lit !== '' && ('.env.'.startsWith(lit) || '.secrets'.startsWith(lit))) return true;
   let re;
   try {
@@ -260,10 +296,14 @@ function globAltSelectsSecret(alt) {
 
 // Returns null (allowed), 'secret-read', or 'glob-too-complex'.
 function classifyGrepGlob(glob) {
-  const segIdx = glob.replace(/\/+$/, '').lastIndexOf('/');
+  // Segment via the SAME `lastSegment` helper Read/Bash use (namesSecret),
+  // rather than a hand-rolled forward-slash-only split — the two used to
+  // diverge on a backslash-bearing glob (`config\.env`), which `lastSegment`
+  // reduces to `.env` but a `/`-only split left untouched, letting it escape
+  // this arm's predicate while Read/Bash still blocked it.
   // Case-fold the last segment (GLOB_PROBES are lower case) so `.ENV*` and
   // `*.ENV` select the secret namespace on case-insensitive filesystems.
-  const segment = (segIdx === -1 ? glob : glob.slice(segIdx + 1)).toLowerCase();
+  const segment = lastSegment(glob).toLowerCase();
   const alts = expandBraces(segment);
   if (alts === null) return 'glob-too-complex';
   return alts.some(globAltSelectsSecret) ? 'secret-read' : null;
@@ -814,7 +854,19 @@ function findSecretRead(command, depth) {
 
     if (NON_READING_COMMANDS.has(base)) continue;
 
+    // #4639: exempt ONLY the value of `--env-file`, and only when the
+    // segment's command word is a container runtime. A bare `--env-file`
+    // consumes the next operand; `--env-file=<value>` is a single word.
+    const envFileExempt = CONTAINER_RUNTIMES.has(base);
+    let skipNext = false;
     for (const w of operands) {
+      if (envFileExempt) {
+        if (skipNext) { skipNext = false; continue; }
+        if (ENV_FILE_FLAG_RE.test(w.text)) {
+          if (!w.text.includes('=')) skipNext = true; // bare flag consumes the next operand
+          continue;
+        }
+      }
       if (namesSecret(normalizeOperand(w.text))) return w.text;
     }
   }

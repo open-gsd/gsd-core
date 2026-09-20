@@ -62,8 +62,8 @@ const { allow } = require('./lib/hook-exit.js');
 // hooks/lib/cursor-workspace.js. Staged next to these scripts by
 // writeCursorHooksJson so the require always resolves post-install.
 const { resolveStatePath } = require('./lib/cursor-workspace.js');
-const { readSentinel, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch } = require('./lib/isolation-sentinel.js');
-const { REASON_CODE } = require('./lib/isolation-deny-reason.js');
+const { readSentinel, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
+const { REASON_CODE, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
 // #3582: gsd-core/bin/lib/*.cjs (runtime-homes.cjs, worktree-safety.cjs,
 // runtime-name-policy.cjs, capability-registry.cjs — required below, inside
 // resolveIsolationEvidence and resolveFallbackIsolation) are tsc build
@@ -491,18 +491,25 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
         `Refusing to allow this subagent to spawn until the runtime library is built — a guard ` +
         `that cannot verify must not answer "safe" (#3050).`,
       reasonCode: REASON_CODE.RUNTIME_BUILD_FAILED,
+      sentinelDiscarded: null,
     };
   }
 
+  // #3045 BLOCKER fix: a fresh sentinel is authoritative for THIS dispatch's
+  // actual resolved isolation — see the doc comment above.
+  // #3045 SECURITY F2: a fresh sentinel that names a DIFFERENT plan/phase
+  // than this dispatch is not applicable to it — fall through to the
+  // conservative fallback exactly as a stale sentinel would.
+  // Hoisted (readSentinel never throws) so the "present, fresh, but did not
+  // apply" case (#4594 row 15) can be reported on every deny path below
+  // instead of silently discarded.
+  const sentinel = readSentinel(root, { clock });
+  const applies = sentinelAppliesToDispatch(sentinel, dispatchIds);
+  const sentinelDiscarded = buildSentinelDiscard(sentinel, dispatchIds);
+
   let declaredIsolation;
   try {
-    // #3045 BLOCKER fix: a fresh sentinel is authoritative for THIS
-    // dispatch's actual resolved isolation — see the doc comment above.
-    // #3045 SECURITY F2: a fresh sentinel that names a DIFFERENT
-    // plan/phase than this dispatch is not applicable to it — fall through
-    // to the conservative fallback exactly as a stale sentinel would.
-    const sentinel = readSentinel(root, { clock });
-    declaredIsolation = (sentinel.present && !sentinel.stale && sentinelAppliesToDispatch(sentinel, dispatchIds))
+    declaredIsolation = (sentinel.present && !sentinel.stale && applies)
       ? sentinel.isolation
       : resolveFallbackIsolation(root, configPath);
   } catch {
@@ -513,8 +520,10 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
         `dispatch-isolation configuration ('.planning/config.json' exists under "${root}"). ` +
         `Refusing to allow this subagent to spawn without being able to verify whether ` +
         `isolation is required — a guard that cannot verify must not answer "safe" (#3050). ` +
-        `Retry once the project configuration is readable.`,
+        `Retry once the project configuration is readable.` +
+        (sentinelDiscarded ? describeSentinelDiscard(sentinelDiscarded) : ''),
       reasonCode: REASON_CODE.CONFIG_UNREADABLE,
+      sentinelDiscarded,
     };
   }
 
@@ -530,8 +539,10 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
         `GSD subagent isolation guard: this project's dispatch isolation resolves to ` +
         `"harness-worktree", but the subagentStart payload for this dispatch carries no usable ` +
         `subagent_type. Refusing to allow it to spawn without being able to confirm whether it ` +
-        `is a GSD executor — a guard that cannot verify must not answer "safe" (#3050).`,
+        `is a GSD executor — a guard that cannot verify must not answer "safe" (#3050).` +
+        (sentinelDiscarded ? describeSentinelDiscard(sentinelDiscarded) : ''),
       reasonCode: REASON_CODE.NO_SUBAGENT_TYPE,
+      sentinelDiscarded,
     };
   }
 
@@ -547,8 +558,10 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
         `"harness-worktree", but whether "${root}" is running in an isolated Cursor worktree ` +
         `could not be determined (git did not respond). Refusing to allow subagent_type=` +
         `"${subagentType}" to spawn without being able to verify isolation — a guard that ` +
-        `cannot verify must not answer "safe" (#3050). Retry once git is responsive.`,
+        `cannot verify must not answer "safe" (#3050). Retry once git is responsive.` +
+        (sentinelDiscarded ? describeSentinelDiscard(sentinelDiscarded) : ''),
       reasonCode: REASON_CODE.CANNOT_DETERMINE_ISOLATION,
+      sentinelDiscarded,
     };
   }
 
@@ -560,8 +573,10 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
       `which is not an isolated Cursor worktree — it would edit the user's primary checkout ` +
       `directly, with no consent and no warning. Start an isolated session first (the ` +
       `"--worktree" CLI flag or the "/worktree" chat command; Cursor manages these worktrees ` +
-      `under "~/.cursor/worktrees/") and retry.`,
+      `under "~/.cursor/worktrees/") and retry.` +
+      (sentinelDiscarded ? describeSentinelDiscard(sentinelDiscarded) : ''),
     reasonCode: REASON_CODE.NOT_ISOLATED_WORKTREE,
+    sentinelDiscarded,
   };
 }
 
@@ -611,7 +626,12 @@ function main() {
         decision = { action: 'allow' };
       }
       if (decision.action === 'deny') {
-        const out = { permission: 'deny', user_message: decision.reason, reason_code: decision.reasonCode };
+        const out = {
+          permission: 'deny',
+          user_message: decision.reason,
+          reason_code: decision.reasonCode,
+          sentinel_discarded: decision.sentinelDiscarded ?? null,
+        };
         if (additionalContext !== null) out.additional_context = additionalContext;
         process.stdout.write(JSON.stringify(out));
         return;

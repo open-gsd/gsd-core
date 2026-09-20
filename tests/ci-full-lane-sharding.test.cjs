@@ -73,14 +73,65 @@ function isCompleteShardSet(specs) {
   return seen.size === total && [...seen].every((i) => i >= 1 && i <= total);
 }
 
+test('the test job has no windows lane; test-conformance is the sole Windows selector (#4641)', () => {
+  const workflow = loadWorkflow('test.yml');
+  const testInclude = workflow.jobs.test.strategy.matrix.include;
+  const testWindowsEntries = testInclude.filter((e) => e.os === 'windows-latest');
+  assert.equal(
+    testWindowsEntries.length, 0,
+    `the \`test\` job's matrix.include still has ${testWindowsEntries.length} windows-latest `
+    + `entr${testWindowsEntries.length === 1 ? 'y' : 'ies'} (${JSON.stringify(testWindowsEntries)}). `
+    + '#4641 deletes the `test` job\'s windows lane; test-conformance is the sole Windows selector.',
+  );
+
+  const conformanceInclude = workflow.jobs['test-conformance'].strategy.matrix.include;
+  const conformanceWindowsEntries = conformanceInclude.filter((e) => e.os === 'windows-latest');
+  const conformanceMacosEntries = conformanceInclude.filter((e) => e.os === 'macos-latest');
+
+  // Derived, not pinned: windows-latest must be a non-empty, COMPLETE shard
+  // set (same denominator, numerators 1..N — see isCompleteShardSet above),
+  // whatever N the workflow currently declares. A bare `.length === 3` here
+  // would break the moment the workflow is rebalanced to a different shard
+  // count without a wiring regression, exactly the shape of bug this sweep
+  // exists to remove (the sibling macOS-tier-count magic number already did
+  // this once).
+  assert.ok(
+    conformanceWindowsEntries.length > 0,
+    `test-conformance declares no windows-latest entries: ${JSON.stringify(conformanceInclude)}`,
+  );
+  assert.ok(
+    isCompleteShardSet(conformanceWindowsEntries.map((e) => e.shard)),
+    'the windows-latest entries in test-conformance are not a complete shard set: '
+    + JSON.stringify(conformanceWindowsEntries),
+  );
+
+  // macos-latest is, by design, a single UNSHARDED entry (see the workflow's
+  // "macos-latest stays unsharded; it has real headroom" comment above the
+  // `test-conformance` job) — unlike the windows/full shard counts, this "1"
+  // is not a fact about the live tree that grows with the suite, it is the
+  // structural claim the test exists to pin: more than one entry here would
+  // silently duplicate full macOS runs, and a `shard` key would mean the
+  // workflow started partitioning a lane the run-tests.cjs invocation below
+  // does not expect to be partitioned.
+  assert.equal(
+    conformanceMacosEntries.length, 1,
+    `expected a single unsharded macos-latest entry in test-conformance, got ${conformanceMacosEntries.length}: `
+    + JSON.stringify(conformanceMacosEntries),
+  );
+  assert.equal(
+    conformanceMacosEntries[0] && conformanceMacosEntries[0].shard, undefined,
+    'the macos-latest entry in test-conformance declares a shard, contradicting the '
+    + `workflow's "macos-latest stays unsharded" design: ${JSON.stringify(conformanceMacosEntries)}`,
+  );
+});
+
 test('the full test lane is sharded and complete (#2952)', async (t) => {
   const workflow = loadWorkflow('test.yml');
   const include = workflow.jobs.test.strategy.matrix.include;
   const fullLanes = include.filter((e) => e.scope === 'full');
-  const windowsLanes = include.filter((e) => e.scope === 'windows');
-  // The only lane in this job with no shard is `scope: targeted` — the fast,
-  // single-runner default lane. Both `full` and `windows` are sharded.
-  const shardedScopes = { full: fullLanes, windows: windowsLanes };
+  // #4641: the `test` job's `scope: windows` lane is deleted — there is no
+  // longer a second sharded scope in this job to pin alongside `full`.
+  const shardedScopes = { full: fullLanes };
 
   for (const [scope, lanes] of Object.entries(shardedScopes)) {
     await t.test(`the \`scope: ${scope}\` lane is actually sharded, not a single runner`, () => {
@@ -112,12 +163,13 @@ test('the full test lane is sharded and complete (#2952)', async (t) => {
   }
 
   await t.test('no other lane is sharded', () => {
-    for (const lane of include.filter((e) => e.scope !== 'full' && e.scope !== 'windows')) {
+    // #4641: the `test` job's `scope: windows` lane is deleted, so `full` is
+    // the only sharded scope left in this job's matrix.
+    for (const lane of include.filter((e) => e.scope !== 'full')) {
       assert.equal(
         lane.shard, undefined,
-        `lane ${JSON.stringify(lane)} declares a shard but is neither \`scope: full\` `
-        + 'nor `scope: windows` — the targeted lane runs a selected file list, not '
-        + 'a partition.',
+        `lane ${JSON.stringify(lane)} declares a shard but is not \`scope: full\` — `
+        + 'the targeted lane runs a selected file list, not a partition.',
       );
     }
   });

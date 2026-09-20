@@ -634,3 +634,55 @@ describe('F3 — a guard that cannot fail is not a guard: the real CLI entry poi
     assert.ok(findings.every((f) => f.reason === REASON.COMPOSITION_BYPASS));
   });
 });
+
+// ---------------------------------------------------------------------------
+// C1 of epic #4629 (ADR-4629 §8.1, migration step 1) — the OPAQUE-TRANSFORM
+// recognition CAPABILITY. `findOpaqueStateTransforms` recognizes a residual
+// `readModifyWriteStateMd(path, (content) => …)` write whose transform is an
+// inline anonymous arrow / function expression (the shape §8.1 replaces with a
+// declared StateWriteIntent). C1 ships the capability proven on a seeded fixture;
+// it is deliberately NOT wired into collect()'s failing scan (that is C2 —
+// §8.2/§8.3 Required — Phase 2), so the ~16 existing residual callers do not turn
+// lint:ci red and no ratchet is introduced (ADR-3408 §6 phased migration).
+describe('C1 (ADR-4629 §8.1): findOpaqueStateTransforms — opaque readModifyWriteStateMd recognition', () => {
+  test('positive control: an inline arrow transform (the #4551 residue shape) is flagged', () => {
+    const text = [
+      'stateUpdated = readModifyWriteStateMd(',
+      '  statePath,',
+      '  (stateContent) => {',
+      "    return stateContent.replace(/None/g, '');",
+      '  },',
+      '  cwd,',
+      ');',
+    ].join('\n');
+    const out = guard.findOpaqueStateTransforms('src/some-residual-writer.cts', text);
+    assert.strictEqual(out.length, 1);
+    assert.strictEqual(out[0].reason, REASON.OPAQUE_STATE_TRANSFORM);
+    assert.strictEqual(out[0].axis, 'opaque-transform');
+  });
+
+  test('positive control: a function-expression transform is also flagged (Postel: over-report-safe)', () => {
+    const text = 'readModifyWriteStateMd(p, function (c) { return c; }, cwd);';
+    assert.strictEqual(guard.findOpaqueStateTransforms('src/x.cts', text).length, 1);
+  });
+
+  test('negative control: a declared-intent (identifier) 2nd arg is NOT flagged', () => {
+    const text = 'readModifyWriteStateMd(p, writeIntent, cwd);';
+    assert.strictEqual(guard.findOpaqueStateTransforms('src/x.cts', text).length, 0);
+  });
+
+  test('negative control: a non-readModifyWriteStateMd call with an arrow is NOT flagged', () => {
+    const text = 'someOther(p, (c) => c, cwd);';
+    assert.strictEqual(guard.findOpaqueStateTransforms('src/x.cts', text).length, 0);
+  });
+
+  test('no behavior change: the capability is NOT wired into the failing scan (collect has no opaque-transform findings)', () => {
+    // C1 ships recognition; C2 wires enforcement. Wiring it now would red the ~16 residual callers.
+    const { findings } = guard.collect();
+    assert.strictEqual(
+      findings.some((f) => f.reason === REASON.OPAQUE_STATE_TRANSFORM),
+      false,
+      'C1 must not wire opaque-transform into collect() (that is C2, §8.2/§8.3 Required — Phase 2)',
+    );
+  });
+});

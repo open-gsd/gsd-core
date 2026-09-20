@@ -28,6 +28,12 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-read-guard.js');
 
+// Bounds a single direct invocation of the advisory-only, no-subprocess
+// gsd-read-guard.js hook; tighter than the shared QUICK_SPAWN_TIMEOUT_MS norm
+// (10000ms) despite a similar "no fan-out" class — kept as its own constant
+// since this migration never widens a bound without a fresh bench citation.
+const READ_GUARD_HOOK_TIMEOUT_MS = 5000;
+
 /**
  * Run the read guard hook with a given tool input payload.
  * Returns { exitCode, stdout, stderr }.
@@ -45,7 +51,7 @@ function runHook(payload, envOverrides = {}) {
     CLAUDE_PROJECT_DIR: '',
     ...envOverrides,
   };
-  const r = runHookSeam(HOOK_PATH, [], { input, env, timeoutMs: 5000 });
+  const r = runHookSeam(HOOK_PATH, [], { input, env, timeoutMs: READ_GUARD_HOOK_TIMEOUT_MS });
   if (r.exitCode === 0) {
     return { exitCode: 0, stdout: r.stdout.trim(), stderr: '' };
   }
@@ -152,7 +158,7 @@ describe('gsd-read-guard hook', () => {
       const stdout = execFileSync(process.execPath, [HOOK_PATH], {
         input: 'not json',
         encoding: 'utf-8',
-        timeout: 5000,
+        timeout: READ_GUARD_HOOK_TIMEOUT_MS,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       // Should exit 0 silently
@@ -284,6 +290,12 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-read-guard.js');
 
+// Bounds a single direct invocation of the advisory-only, no-subprocess
+// gsd-read-guard.js hook; tighter than the shared QUICK_SPAWN_TIMEOUT_MS norm
+// (10000ms) despite a similar "no fan-out" class — kept as its own constant
+// since this migration never widens a bound without a fresh bench citation.
+const READ_GUARD_HOOK_TIMEOUT_MS = 5000;
+
 function runHook(payload, envOverrides = {}) {
   const input = JSON.stringify(payload);
   const env = {
@@ -295,7 +307,7 @@ function runHook(payload, envOverrides = {}) {
     CLAUDE_PROJECT_DIR: '',
     ...envOverrides,
   };
-  const r = runHookSeam(HOOK_PATH, [], { input, env, timeoutMs: 5000 });
+  const r = runHookSeam(HOOK_PATH, [], { input, env, timeoutMs: READ_GUARD_HOOK_TIMEOUT_MS });
   if (r.exitCode === 0) {
     return { exitCode: 0, stdout: r.stdout.trim(), stderr: '' };
   }
@@ -394,6 +406,12 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-read-guard.js');
 
+// Bounds a single direct invocation of the advisory-only, no-subprocess
+// gsd-read-guard.js hook; tighter than the shared QUICK_SPAWN_TIMEOUT_MS norm
+// (10000ms) despite a similar "no fan-out" class — kept as its own constant
+// since this migration never widens a bound without a fresh bench citation.
+const READ_GUARD_HOOK_TIMEOUT_MS = 5000;
+
 /**
  * Spawn the hook with an env that mirrors the actual Claude Code hook
  * subprocess env: CLAUDECODE and CLAUDE_SESSION_ID are stripped, only
@@ -419,7 +437,7 @@ function runHookInClaudeCodeSubprocess(payload, envOverrides = {}) {
     const stdout = execFileSync(process.execPath, [HOOK_PATH], {
       input,
       encoding: 'utf-8',
-      timeout: 5000,
+      timeout: READ_GUARD_HOOK_TIMEOUT_MS,
       stdio: ['pipe', 'pipe', 'pipe'],
       env,
     });

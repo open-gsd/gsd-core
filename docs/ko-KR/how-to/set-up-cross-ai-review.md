@@ -8,16 +8,13 @@
 
 ## 어떤 리뷰어를 사용할지 결정
 
-GSD Core는 Gemini CLI, Claude(별도 세션), Codex CLI, CodeRabbit, OpenCode, Qwen Code, Cursor, Antigravity CLI, Ollama, LM Studio, llama.cpp의 조합으로 리뷰 요청을 라우팅할 수 있습니다.
+GSD Core는 Claude(별도 세션), Codex CLI, CodeRabbit, OpenCode, Qwen Code, Cursor, Antigravity CLI, Ollama, LM Studio, llama.cpp의 조합으로 리뷰 요청을 라우팅할 수 있습니다.
 
 각 리뷰어는 `PLAN.md` 파일에 대해 동일한 구조화된 프롬프트를 독립적으로 실행합니다. 서로 다른 모델은 서로 다른 맹점을 가지고 있으므로 멀티 리뷰어 합의가 단일 리뷰어보다 더 많은 문제를 발견합니다.
 
 **외부 CLI가 아직 설치되지 않은 경우**, 최소 하나를 설치하세요:
 
 ```bash
-# Gemini CLI (Google 자격 증명으로 무료)
-npm install -g @google/gemini-cli
-
 # Antigravity CLI (Google 자격 증명으로 무료)
 curl -fsSL https://antigravity.google/cli/install.sh | bash
 
@@ -35,12 +32,12 @@ npm install -g @openai/codex
 /gsd-config --integrations
 ```
 
-통합 마법사는 API 키, 코드 리뷰 CLI 라우팅, `review.default_reviewers` 목록을 다룹니다. 목록을 플래그 없는 기본값으로 사용하려는 리뷰어로 설정하세요. 예: `["gemini","codex"]`.
+통합 마법사는 API 키, 코드 리뷰 CLI 라우팅, `review.default_reviewers` 목록을 다룹니다. 목록을 플래그 없는 기본값으로 사용하려는 리뷰어로 설정하세요. 예: `["codex","claude"]`.
 
 또는 `gsd-tools`로 직접 설정하세요:
 
 ```bash
-gsd config-set review.default_reviewers '["gemini","codex"]'
+gsd config-set review.default_reviewers '["codex","claude"]'
 ```
 
 전체 통합 설정 스키마(API 키, 리뷰어별 모델 재정의, 로컬 서버 호스트 주소)에 대해서는 [설정](../CONFIGURATION.md)을 참고하세요.
@@ -60,7 +57,7 @@ GSD는 각 리뷰어를 순서대로 호출하고 구조화된 피드백(요약,
 ### 일회성 실행을 위한 단일 리뷰어 선택
 
 ```bash
-/gsd-review --phase 3 --gemini
+/gsd-review --phase 3 --agy
 /gsd-review --phase 3 --codex
 /gsd-review --phase 3 --cursor
 ```
@@ -124,7 +121,7 @@ Ollama 또는 LM Studio를 로컬에서 실행하는 경우 서버에 접근할 
 
 ```bash
 /gsd-plan-review-convergence 3 --codex
-/gsd-plan-review-convergence 3 --gemini
+/gsd-plan-review-convergence 3 --agy
 ```
 
 ### 모든 리뷰어로 더 높은 사이클 상한으로 수렴
@@ -141,13 +138,13 @@ Ollama 또는 LM Studio를 로컬에서 실행하는 경우 서버에 접근할 
 
 | 상황 | 권장 방법 |
 |-----------|---------------------|
-| Gemini CLI가 이미 설치되어 있는 경우 | `--gemini`는 항상 좋은 시작 리뷰어 |
-| 무료 멀티 리뷰어 커버리지를 원하는 경우 | `--gemini` + `--agy` (둘 다 Google 자격 증명 사용) |
+| Antigravity가 이미 설치되어 있는 경우 | `--agy`는 항상 좋은 시작 리뷰어 |
+| 무료 멀티 리뷰어 커버리지를 원하는 경우 | `--agy` (Google 자격 증명) + `--claude` |
 | OpenAI 중심 프로젝트인 경우 | OpenAI 모델 관점을 위해 `--codex` 추가 |
 | GitHub Copilot 모델을 원하는 경우 | `--opencode` 추가 |
 | API 비용을 완전히 피하려는 경우 | 로컬 모델로 Ollama를 설정하고 `--ollama` 사용 |
 | 릴리스 전 최대 커버리지가 필요한 경우 | `/gsd-plan-review-convergence N --all` |
-| 빠르게 반복하며 빠른 피드백을 원하는 경우 | CLI 하나 선택: `/gsd-review --phase N --gemini` |
+| 빠르게 반복하며 빠른 피드백을 원하는 경우 | CLI 하나 선택: `/gsd-review --phase N --agy` |
 
 ---
 

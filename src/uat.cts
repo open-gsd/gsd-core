@@ -38,7 +38,7 @@ const { listMilestonePhaseDirs, getAllArchivedPhaseDirs } = phaseLocator;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import auditMod = require('./audit.cjs');
 const { isAuditItemAcknowledged, deriveUatGapSnapshotValue } = auditMod;
-import { requireSafePath, sanitizeForDisplay } from './security.cjs';
+import { requireSafePath, sanitizeForDisplay, PathAcceptance } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
 import configLoader = require('./config-loader.cjs');
 const { loadConfig } = configLoader;
@@ -403,7 +403,7 @@ function cmdRenderCheckpoint(cwd: string, options: { file?: string } = {}, raw: 
     error('UAT file required: use uat render-checkpoint --file <path>');
   }
 
-  const resolvedPath = requireSafePath(filePath, cwd, 'UAT file', { allowAbsolute: true });
+  const resolvedPath = requireSafePath(filePath, cwd, 'UAT file', PathAcceptance.AbsoluteInsideRoot);
   if (!fs.existsSync(resolvedPath)) {
     error(`UAT file not found: ${filePath}`);
   }
@@ -3973,6 +3973,13 @@ function categorizeItem(rawResult: string, reason?: string, blockedBy?: string):
     return 'blocked';
   }
   if (result === 'skipped') {
+    // #4546 — a deliberately deferred follow-up (the verify-work writer's
+    // "Deferred follow-up:" template, #1921) is its own category, checked
+    // BEFORE the keyword families so e.g. "…on the release build next
+    // version" is not misfiled as build_needed. Must agree with
+    // uat-predicate.cts's DEFERRED_REASON_RE (gate/audit agreement,
+    // #3078-CR), pinned by tests/uat-predicate.test.cjs.
+    if (reason && /^["']?deferred follow-up\b/i.test(reason)) return 'deferred';
     if (reason) {
       if (/server|not running|not available/i.test(reason)) return 'server_blocked';
       if (/simulator|physical|device/i.test(reason)) return 'device_needed';

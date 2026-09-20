@@ -37,6 +37,7 @@ const { runNode } = require('./helpers/process-seam.cjs');
 
 const { runMinimalInstall, installerEnv, INSTALL_SCRIPT } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
+const { PROBE_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
   toTildePosixPath,
   buildAntigravityAllowRules,
@@ -225,7 +226,7 @@ test('UPGRADE 2: gsd-mcp-server companion is reachable — spawn, initialize, to
   const res = spawnSync(process.execPath, [MCP_SERVER_BIN], {
     input: stdin,
     encoding: 'utf-8',
-    timeout: 15000,
+    timeout: PROBE_TIMEOUT_MS,
     env: { ...process.env, GSD_TEST_MODE: '1' },
   });
 
@@ -252,7 +253,7 @@ test('antigravity --global uninstall removes only GSD-owned permissions.allow ru
   const args = [INSTALL_SCRIPT, '--antigravity', '--global', '--config-dir', root];
   const installResult = runNode(args, {
     env: installerEnv({ HOME: root, USERPROFILE: root }),
-    timeoutMs: 120000,
+    timeoutMs: INSTALL_TIMEOUT_MS,
   });
   assert.strictEqual(installResult.exitCode, 0, `install failed: ${installResult.stderr}`);
 
@@ -271,7 +272,7 @@ test('antigravity --global uninstall removes only GSD-owned permissions.allow ru
   const uninstallArgs = [INSTALL_SCRIPT, '--antigravity', '--global', '--config-dir', root, '--uninstall'];
   const uninstallResult = runNode(uninstallArgs, {
     env: installerEnv({ HOME: root, USERPROFILE: root }),
-    timeoutMs: 120000,
+    timeoutMs: INSTALL_TIMEOUT_MS,
   });
   assert.strictEqual(uninstallResult.exitCode, 0, `uninstall failed: ${uninstallResult.stderr}`);
 

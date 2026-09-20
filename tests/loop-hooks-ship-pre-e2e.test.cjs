@@ -27,6 +27,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const { cleanup, installSpawnEnv } = require('./helpers.cjs');
+const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const GSD_TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
@@ -55,7 +56,7 @@ const realRegistry = require('../gsd-core/bin/lib/capability-registry.cjs');
 function runTools(args, opts = {}) {
   const result = spawnSync(process.execPath, [GSD_TOOLS, ...args], {
     encoding: 'utf8',
-    timeout: 60000,
+    timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
     cwd: opts.cwd || process.cwd(),
     env: installSpawnEnv(opts.env),
   });

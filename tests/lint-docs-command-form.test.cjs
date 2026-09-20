@@ -19,6 +19,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { GENERATOR_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const GUARD_SCRIPT = path.resolve(__dirname, '..', 'scripts', 'lint-docs-command-form.cjs');
 
@@ -60,7 +61,7 @@ function runGuard(cwd) {
   const r = runNode([GUARD_SCRIPT], {
     cwd,
     env: { ...process.env, GSD_LINT_DOCS_COMMAND_FORM_REPO_ROOT: cwd },
-    timeoutMs: 30_000,
+    timeoutMs: GENERATOR_SCRIPT_TIMEOUT_MS,
   });
   return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
 }

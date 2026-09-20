@@ -1,5 +1,6 @@
 const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const fc = require('fast-check');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -52,6 +53,56 @@ describe('planning-workspace: planningDir/planningPaths parity', () => {
     assert.throws(() => planningDir(cwd, null, '../../etc'), /invalid path characters/);
     assert.throws(() => planningDir(cwd, 'foo/bar', null), /invalid path characters/);
     assert.throws(() => planningDir(cwd, 'foo\\bar', null), /invalid path characters/);
+  });
+
+  test('normalizes whitespace-only and padded environment scope names (#4462)', () => {
+    for (const whitespace of ['  ', '\t', '\n', ' \t\n ']) {
+      process.env.GSD_WORKSTREAM = whitespace;
+      process.env.GSD_PROJECT = whitespace;
+      assert.strictEqual(planningDir(cwd), path.join(cwd, '.planning'));
+    }
+
+    process.env.GSD_WORKSTREAM = '  feature-x  ';
+    process.env.GSD_PROJECT = '  my-app  ';
+    assert.strictEqual(
+      planningDir(cwd),
+      path.join(cwd, '.planning', 'my-app', 'workstreams', 'feature-x'),
+    );
+  });
+
+  test('normalizes explicit project and workstream arguments before routing (#4462)', () => {
+    assert.strictEqual(planningDir(cwd, '\t', '\n'), path.join(cwd, '.planning'));
+    assert.strictEqual(
+      planningDir(cwd, '  feature-x  ', '  my-app  '),
+      path.join(cwd, '.planning', 'my-app', 'workstreams', 'feature-x'),
+    );
+  });
+
+  test('normalizes arbitrary whitespace-padded environment workstream names idempotently (#4462)', () => {
+    const whitespace = fc.array(fc.constantFrom(' ', '\t', '\n', '\r'), { maxLength: 8 })
+      .map((chars) => chars.join(''));
+    const segment = fc.array(fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz0123456789_-'), {
+      minLength: 1,
+      maxLength: 24,
+    }).map((chars) => chars.join(''));
+
+    fc.assert(fc.property(whitespace, segment, whitespace, (leading, name, trailing) => {
+      process.env.GSD_WORKSTREAM = `${leading}${name}${trailing}`;
+      assert.strictEqual(
+        planningDir(cwd),
+        path.join(cwd, '.planning', 'workstreams', name),
+        'the environment value must resolve exactly as its trimmed form',
+      );
+    }));
+
+    fc.assert(fc.property(whitespace, (value) => {
+      process.env.GSD_WORKSTREAM = value;
+      assert.strictEqual(
+        planningDir(cwd),
+        path.join(cwd, '.planning'),
+        'an all-whitespace environment value must be indistinguishable from unset',
+      );
+    }));
   });
 });
 

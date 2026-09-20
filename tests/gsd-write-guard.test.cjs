@@ -29,6 +29,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
+const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-write-guard.js');
 
@@ -40,10 +41,10 @@ const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-write-guard.js');
  * Returns an object shaped like the raw spawnSync() result (status/stdout/
  * stderr) because every call site in this file was written against that
  * shape; the seam itself returns exitCode, not status, so it is mapped here.
- * 10_000ms: gsd-write-guard.js does no subprocess work of its own (pure
- * fs reads + JSON, no execFileSync/spawnSync inside the hook) — generous
- * headroom over the fs-bound workload without matching the 30_000ms figure
- * sibling suites use for guards that shell out to git.
+ * QUICK_SPAWN_TIMEOUT_MS: gsd-write-guard.js does no subprocess work of its
+ * own (pure fs reads + JSON, no execFileSync/spawnSync inside the hook) —
+ * generous headroom over the fs-bound workload without matching the
+ * 30_000ms figure sibling suites use for guards that shell out to git.
  */
 function runHook(payload, extraEnv = {}) {
   const env = { ...process.env };
@@ -52,7 +53,7 @@ function runHook(payload, extraEnv = {}) {
   const r = runHookSeam(HOOK_PATH, [], {
     input: typeof payload === 'string' ? payload : JSON.stringify(payload),
     env,
-    timeoutMs: 10_000,
+    timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
   });
   return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
 }

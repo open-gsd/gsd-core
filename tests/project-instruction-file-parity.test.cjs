@@ -55,7 +55,11 @@ const RUNTIMES = [
   'kimi',
   'copilot',
   'antigravity',
-  'gemini',
+  // 'gemini' intentionally excluded from this loop — #4709 AC#1 made it
+  // REFUSE (RetiredRuntimeError) on both surfaces instead of agreeing on a
+  // fallback value, so `getProjectInstructionFile('gemini')` now throws
+  // before the two sides can even be compared. Its own dedicated test below
+  // pins that refusal-parity instead.
   'future-runtime-xyz',
   '',
 ];
@@ -90,6 +94,43 @@ describe('bug #1529: getProjectInstructionFile ↔ gsd-tools query parity', () =
       );
     });
   }
+
+  // #4709 AC#1 inverted this case: gemini used to silently agree with the CLI
+  // on AGENTS.md (the defect this parity guard would have pinned); both
+  // surfaces now refuse it outright instead, which is still parity — just
+  // parity-of-refusal rather than parity-of-value.
+  test('Node function and CLI query both refuse for runtime=gemini (retired by #1928)', () => {
+    assert.throws(
+      () => getProjectInstructionFile('gemini'),
+      /retired by #1928/,
+      'getProjectInstructionFile("gemini") must refuse, not silently agree with the CLI on AGENTS.md',
+    );
+
+    const args = [GSD_TOOLS_PATH, 'query', 'project-instruction-file', '--runtime', 'gemini'];
+    const r = runNode(args, {
+      cwd: ROOT,
+      env: { ...process.env, GSD_RUNTIME: '' },
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+    assert.notStrictEqual(
+      r.exitCode, 0,
+      'gsd-tools query project-instruction-file --runtime gemini must exit non-zero, not silently print AGENTS.md',
+    );
+    // The CLI must emit the same clean single-line error routeSkillsRoot emits
+    // for an unknown runtime — never a raw stack trace.
+    assert.match(
+      r.stderr, /Antigravity/,
+      'stderr must name the successor runtime (Antigravity)',
+    );
+    assert.match(
+      r.stderr, /#1928/,
+      'stderr must name the retiring issue (#1928)',
+    );
+    assert.ok(
+      !/\n\s+at\s/.test(r.stderr),
+      `stderr must not contain a dumped stack trace, got: ${r.stderr}`,
+    );
+  });
 });
 
 describe('bug #1529: new-project.md workflow uses the shared policy query', () => {

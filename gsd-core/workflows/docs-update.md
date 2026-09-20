@@ -95,7 +95,7 @@ If CONTRIBUTING.md is in the conditional queue AND does NOT appear in the `exist
 
 1. If `--force` is present in `$ARGUMENTS`: skip this check, include CONTRIBUTING.md in the queue.
 
-**Text mode (`workflow.text_mode: true` in config or `--text` flag):** Set `TEXT_MODE=true` if `--text` is present in `$ARGUMENTS` OR `text_mode` from init JSON is `true`. When TEXT_MODE is active, replace every `AskUserQuestion` call with a plain-text numbered list and ask the user to type their choice number. This is required for non-Claude runtimes (OpenAI Codex, Gemini CLI, etc.) where `AskUserQuestion` is not available.
+**Text mode (`workflow.text_mode: true` in config or `--text` flag):** Set `TEXT_MODE=true` if `--text` is present in `$ARGUMENTS` OR `text_mode` from init JSON is `true`. When TEXT_MODE is active, replace every `AskUserQuestion` call with a plain-text numbered list and ask the user to type their choice number. This is required for non-Claude runtimes (OpenAI Codex, Antigravity, etc.) where `AskUserQuestion` is not available.
 2. Otherwise, use AskUserQuestion to confirm:
 
 ```
@@ -722,7 +722,7 @@ Continue to dispatch_monorepo_packages (if monorepo_workspaces is non-empty) or 
 If `section_manifest` (from `INIT_DOCS_UPDATE`) is `null` or `"dispatch-monorepo-packages"` is in its `included` list: read and execute `gsd-core/workflows/docs-update/steps/dispatch-monorepo-packages.md`. Otherwise skip — do not read the file; continue to commit_docs.
 <!-- /gsd:section -->
 
-<step name="sequential_generation" condition="Task tool is NOT available (e.g. Antigravity, Gemini CLI, Codex, Copilot)">
+<step name="sequential_generation" condition="Task tool is NOT available (e.g. Antigravity, Codex, Copilot)">
 When the `Task` tool is unavailable, generate all queued docs sequentially in the current context instead of spawning subagents — this step replaces dispatch_wave_1, collect_wave_1, dispatch_wave_2, and collect_wave_2. Read `agents/gsd-doc-writer.md` once, then for each queued doc (Wave 1: README/ARCHITECTURE/CONFIGURATION, complete before Wave 2; Wave 2: GETTING-STARTED/DEVELOPMENT/TESTING plus any queued conditional docs, referencing Wave 1 outputs) construct the same doc_assignment fields the parallel path uses and write the file inline, using only file system tools (never browser-based tools). If `monorepo_workspaces` is non-empty, generate per-package READMEs sequentially afterward. Continue to verify_docs.
 
 Exact per-doc construction and the monorepo per-package loop: `gsd-core/workflows/docs-update/detail/elaboration.md` § 1.

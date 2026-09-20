@@ -45,6 +45,7 @@ const os = require('node:os');
 const { createTempDir, cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
 const { runHook: runHookSeam, runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { ensureBuiltHooks } = require('../scripts/run-tests.cjs');
 
 const HOOKS_DIR = path.join(__dirname, '..', 'hooks');
@@ -682,7 +683,7 @@ describe('hooks-crash-policy: hooks/dist/lib parity (#3911 review finding)', () 
       `const { terminateNow } = require(${JSON.stringify(distCliExitPath)});`,
       `terminateNow('HOOK_DENY', { x: 1 });`,
     ].join('\n');
-    const r = runNode(['-e', script], { timeoutMs: 15000 });
+    const r = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(r.outcome, OUTCOME.EXITED, `expected a clean exit; got ${r.outcome} stderr=${r.stderr}`);
     assert.equal(r.exitCode, 2, `expected HOOK_DENY's registered exit code 2; stdout=${r.stdout} stderr=${r.stderr}`);
   });

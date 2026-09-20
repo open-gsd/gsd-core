@@ -138,7 +138,7 @@ describe('runner — egress host re-verification (ADR-2782 D5 rules 2-4)', () =>
 
 describe('runner — probe (ADR-2782 D7)', () => {
   test('command-exists both ways', async () => {
-    const p = plan('gemini');
+    const p = plan('cursor');
     assert.equal((await probeLane(p, deps({ hasBinary: () => true }))).available, true);
     const miss = await probeLane(p, deps({ hasBinary: () => false }));
     assert.equal(miss.available, false);
@@ -182,7 +182,7 @@ describe('runner — probe (ADR-2782 D7)', () => {
   });
 
   test('a missing required binary is named rather than left to fail obscurely', async () => {
-    const p = { ...plan('gemini'), requiresBinaries: ['jq'] };
+    const p = { ...plan('cursor'), requiresBinaries: ['jq'] };
     const r = await probeLane(p, deps({ hasBinary: (n) => n !== 'jq' }));
     assert.equal(r.available, false);
     assert.equal(r.reason, LANE_UNAVAILABLE.MISSING_REQUIRED_BINARY);
@@ -208,7 +208,7 @@ describe('runner — probe (ADR-2782 D7)', () => {
 
 describe('runner — empty-output policy (#2494 / #2605 / #2794)', () => {
   test('a real review is written verbatim', () => {
-    const p = plan('gemini');
+    const p = plan('cursor');
     const d = deps();
     const r = writeReviewOrStub(p, '## Findings\nreal', d);
     assert.equal(r.stubbed, false);
@@ -216,8 +216,8 @@ describe('runner — empty-output policy (#2494 / #2605 / #2794)', () => {
   });
 
   test('empty output writes a stub carrying the captured stderr', () => {
-    const p = plan('gemini');
-    const d = deps({ files: { [`${RUN}/gsd-review-gemini.err`]: 'auth failed' } });
+    const p = plan('cursor');
+    const d = deps({ files: { [`${RUN}/gsd-review-cursor.err`]: 'auth failed' } });
     const r = writeReviewOrStub(p, '', d);
     assert.equal(r.stubbed, true);
     assert.ok(d.files[p.reviewPath].includes('failed or returned empty output'));
@@ -226,7 +226,7 @@ describe('runner — empty-output policy (#2494 / #2605 / #2794)', () => {
 
   test('whitespace-only output is stubbed on every lane', () => {
     // Before this, `[ ! -s file ]` counted bytes so "   " rendered as a clean review on five lanes.
-    for (const slug of ['gemini', 'claude', 'codex', 'qwen', 'cursor']) {
+    for (const slug of ['antigravity', 'claude', 'codex', 'qwen', 'cursor']) {
       const p = plan(slug);
       const d = deps();
       assert.equal(writeReviewOrStub(p, '   \n', d).stubbed, true, `${slug} accepted whitespace`);
@@ -316,9 +316,9 @@ describe('runner — empty-output policy (#2494 / #2605 / #2794)', () => {
   });
 
   test('#4255 — a lane that sent no effort argument says so, rather than naming a level', () => {
-    // gemini declares no effort channel, so `plan.effort` is null. Printing a level there would
+    // cursor declares no effort channel, so `plan.effort` is null. Printing a level there would
     // be a lie about what reached the CLI; the stub says the CLI's own configuration applied.
-    const p = plan('gemini');
+    const p = plan('cursor');
     const d = deps();
     writeReviewOrStub(p, '', d, undefined, { status: 0 });
     const out = d.files[p.reviewPath];
@@ -337,7 +337,7 @@ describe('runner — empty-output policy (#2494 / #2605 / #2794)', () => {
 
   test('the stub is distinguishable from a real review', () => {
     // The ambiguity between "failed" and "ran cleanly with nothing to report" IS the defect.
-    const p = plan('gemini');
+    const p = plan('cursor');
     const d = deps();
     writeReviewOrStub(p, '', d);
     assert.ok(/failed or returned empty output/.test(d.files[p.reviewPath]));
@@ -355,7 +355,7 @@ describe('runner — empty-output policy (#2494 / #2605 / #2794)', () => {
 
   test('a filesystem write failure degrades rather than crashing the run', () => {
     // Injected by making the seam throw — never chmod 0o000, which root bypasses.
-    const p = plan('gemini');
+    const p = plan('cursor');
     const d = deps({ writeFile: () => { throw new Error('EROFS'); } });
     assert.throws(() => writeReviewOrStub(p, 'x', d), /EROFS/);
   });
@@ -732,7 +732,7 @@ describe('runner — openai-compatible handler', () => {
 
 describe('runner — orchestration', () => {
   test('an unavailable lane requested EXPLICITLY is surfaced (D4 carve-out)', async () => {
-    const p = plan('gemini');
+    const p = plan('cursor');
     const d = deps({ hasBinary: () => false });
     const r = await runLane(p, d, { repoRoot: ROOT, explicitlyRequested: true });
     assert.equal(r.ok, false);
@@ -740,7 +740,7 @@ describe('runner — orchestration', () => {
   });
 
   test('an unavailable lane nobody asked for is quiet but still reported', async () => {
-    const p = plan('gemini');
+    const p = plan('cursor');
     const d = deps({ hasBinary: () => false });
     const r = await runLane(p, d, { repoRoot: ROOT, explicitlyRequested: false });
     assert.equal(r.ok, false);
@@ -762,14 +762,14 @@ describe('runner — orchestration', () => {
   });
 
   test('stderr is always captured to the sidecar, never discarded', async () => {
-    const p = plan('gemini');
+    const p = plan('cursor');
     const d = deps({ spawn: () => ({ status: 0, stdout: 'R', stderr: 'a warning' }) });
     await runLane(p, d, { repoRoot: ROOT });
     assert.equal(d.files[p.errPath], 'a warning');
   });
 
   test('the prompt reaches stdin for a stdin lane', async () => {
-    const p = plan('gemini');
+    const p = plan('qwen');
     const d = deps({
       files: { [`${RUN}/gsd-review-prompt.md`]: 'THE PLAN' },
       spawn: (b, a, o) => { d.spawns.push({ b, a, o }); return { status: 0, stdout: 'R', stderr: '' }; },
@@ -808,7 +808,7 @@ describe('runner — orchestration', () => {
 
 describe('runner — #3086: spawn errorCode surfaced in err file', () => {
   test('a spawn ENOENT writes the error code to the err file', async () => {
-    const p = plan('gemini');
+    const p = plan('cursor');
     const d = deps({
       spawn: () => ({ status: null, stdout: '', stderr: '', errorCode: 'ENOENT' }),
     });
@@ -830,7 +830,7 @@ describe('runner — #3086: spawn errorCode surfaced in err file', () => {
   });
 
   test('a successful spawn with stderr does NOT add a spawn error marker', async () => {
-    const p = plan('gemini');
+    const p = plan('cursor');
     const d = deps({
       spawn: () => ({ status: 0, stdout: '## Review\nok', stderr: 'some warning', errorCode: undefined }),
     });
@@ -919,7 +919,7 @@ describe('#2494 — a failed lane writes a diagnosable stub, not a zero-byte fil
   }
 
   test('a successful review passes through untouched', async () => {
-    const p = planFor('gemini');
+    const p = planFor('cursor');
     const d = deps({ status: 0, stdout: 'Looks good.\n', stderr: '' });
     const r = await runLane(p, d, { repoRoot: ROOT });
 
@@ -1148,7 +1148,7 @@ describe('#2794 qwen reviewer stderr capture', () => {
 });
 
 // #3194 — a source-grounded lane's grounding is VERIFIED from its review output, never trusted
-// from its declaration. The gemini lane declares evidenceClass 'source-grounded', but nothing at
+// from its declaration. The cursor lane declares evidenceClass 'source-grounded', but nothing at
 // invocation obliged grounding and nothing verified it, so measured plan-only reviews (zero real
 // file:line citations, invented PLAN-line references) rode the declared class at full consensus
 // weight — the weakest review getting the strongest weight, silently. The fix stamps a
@@ -1224,8 +1224,8 @@ describe('#3194 — evidence grounding is verified from review output, not decla
   });
 
   describe('runLane — the stamp reaches {run_dir}/gsd-review-<slug>.md', () => {
-    test('gemini: zero citations → the review file carries the down-weight marker', async () => {
-      const p = plan('gemini');
+    test('cursor: zero citations → the review file carries the down-weight marker', async () => {
+      const p = plan('cursor');
       const d = deps({ spawn: () => ({ status: 0, stdout: PLAN_ONLY, stderr: '' }) });
       await runLane(p, d, { repoRoot: ROOT });
       assert.ok(
@@ -1234,8 +1234,8 @@ describe('#3194 — evidence grounding is verified from review output, not decla
       );
     });
 
-    test('gemini: one citation → full weight, no marker', async () => {
-      const p = plan('gemini');
+    test('cursor: one citation → full weight, no marker', async () => {
+      const p = plan('cursor');
       const d = deps({ spawn: () => ({ status: 0, stdout: CITED, stderr: '' }) });
       await runLane(p, d, { repoRoot: ROOT });
       assert.ok(!d.files[p.reviewPath].includes(MARKER));
@@ -1281,7 +1281,7 @@ describe('#3194 — evidence grounding is verified from review output, not decla
   test('the resolved plan carries the declared evidenceClass (#3194 seam)', () => {
     // The runner gates the stamp on this field; before #3194 the plan did not carry it at all,
     // so the executor had no access to the declaration it was supposed to verify.
-    assert.equal(plan('gemini').evidenceClass, 'source-grounded');
+    assert.equal(plan('cursor').evidenceClass, 'source-grounded');
     assert.equal(plan('ollama').evidenceClass, 'source-grounded');
     assert.equal(plan('coderabbit').evidenceClass, 'diff-only');
   });
@@ -1521,29 +1521,29 @@ describe('#2295 — parseTranscriptModel', () => {
 
 describe('#2295 — resolveLanePlan records only a model that was APPLIED', () => {
   test('a configured model that reached argv is recorded on the plan', () => {
-    const p = plan('gemini', { 'review.models.gemini': 'gemini-3-pro' });
-    assert.equal(p.model, 'gemini-3-pro');
-    assert.ok(p.argv.includes('gemini-3-pro'), 'and it really is in argv');
+    const p = plan('cursor', { 'review.models.cursor': 'cursor-3-pro' });
+    assert.equal(p.model, 'cursor-3-pro');
+    assert.ok(p.argv.includes('cursor-3-pro'), 'and it really is in argv');
   });
 
   test('an unset config yields no plan model', () => {
-    assert.equal(plan('gemini').model, null);
+    assert.equal(plan('cursor').model, null);
   });
 
   test('a lane declaring no modelConfigKey records no model', () => {
-    assert.equal(plan('cursor').model, null);
+    assert.equal(plan('qwen').model, null);
     assert.equal(plan('coderabbit').model, null);
   });
 
   test('the unset sentinels do not become a model', () => {
     for (const v of ['', '   ', 'null', 'undefined']) {
-      assert.equal(plan('gemini', { 'review.models.gemini': v }).model, null, `sentinel ${JSON.stringify(v)}`);
+      assert.equal(plan('cursor', { 'review.models.cursor': v }).model, null, `sentinel ${JSON.stringify(v)}`);
     }
   });
 
   test('a non-string config value is not coerced into a model', () => {
     for (const v of [0, 42, true, { id: 'x' }, ['x']]) {
-      assert.equal(plan('gemini', { 'review.models.gemini': v }).model, null);
+      assert.equal(plan('cursor', { 'review.models.cursor': v }).model, null);
     }
   });
 
@@ -1552,12 +1552,12 @@ describe('#2295 — resolveLanePlan records only a model that was APPLIED', () =
     // argument that carries it. The CLI then reviews with its own default while the config says
     // otherwise. Recording the config value here would assert a model that never ran — the
     // inverse of the very failure #2295 exists to end.
-    const gemini = REVIEWER_LANES.find((l) => l.slug === 'gemini');
+    const cursor = REVIEWER_LANES.find((l) => l.slug === 'cursor');
     const lane = {
-      ...gemini,
+      ...cursor,
       slug: 'noarg',
       modelConfigKey: 'review.models.noarg',
-      invoke: { ...gemini.invoke, modelArg: null },
+      invoke: { ...cursor.invoke, modelArg: null },
     };
     const r = resolveLanePlan({
       lane,
@@ -1578,10 +1578,10 @@ describe('#2295 — resolveLanePlan records only a model that was APPLIED', () =
 
 describe('#2295 — runLane reports the resolved model', () => {
   test('a pinned spawn model is reported as pinned', async () => {
-    const p = plan('gemini', { 'review.models.gemini': 'gemini-3-pro' });
+    const p = plan('cursor', { 'review.models.cursor': 'cursor-3-pro' });
     const d = deps({ spawn: () => ({ status: 0, stdout: 'a review with src/x.ts:10 evidence', stderr: '' }) });
     const r = await runLane(p, d, { repoRoot: ROOT });
-    assert.deepEqual(r.model, { value: 'gemini-3-pro', source: MODEL_SOURCE.PINNED });
+    assert.deepEqual(r.model, { value: 'cursor-3-pro', source: MODEL_SOURCE.PINNED });
   });
 
   test('a file-output lane recovers its model from the stdout banner', async () => {
@@ -1617,7 +1617,7 @@ describe('#2295 — runLane reports the resolved model', () => {
   test('a STDOUT lane never parses its own review text as a banner', async () => {
     // The headline negative. A stdout lane's review lands in exactly the buffer the banner scan
     // would read, so a review that DISCUSSES a model would be recorded as that lane's model.
-    const p = plan('gemini');
+    const p = plan('cursor');
     const d = deps({
       spawn: () => ({ status: 0, stdout: 'model: gpt-5 is the wrong choice, see src/x.ts:10', stderr: '' }),
     });
@@ -1626,7 +1626,7 @@ describe('#2295 — runLane reports the resolved model', () => {
   });
 
   test('an unavailable lane reports unknown and still reports its reason', async () => {
-    const p = plan('gemini');
+    const p = plan('cursor');
     const r = await runLane(p, deps({ hasBinary: () => false }), { repoRoot: ROOT });
     assert.equal(r.ok, false);
     assert.equal(r.reason, LANE_UNAVAILABLE.MISSING_BINARY);
@@ -1653,15 +1653,15 @@ describe('#2295 — runLane reports the resolved model', () => {
     assert.deepEqual(r.model, { value: 'does-not-exist', source: MODEL_SOURCE.PINNED });
   });
 
-  test('a review.models.gemini configured with an embedded newline records UNRESOLVED_MODEL, not pinned', async () => {
+  test('a review.models.cursor configured with an embedded newline records UNRESOLVED_MODEL, not pinned', async () => {
     // `configString` (review-lane-invocation.cjs) is pre-existing and out of scope — it does not
     // strip control characters, so `plan.model` itself still carries the hostile value. The
     // rejection MUST happen at the `resolveSpawnModel` pinned arm, the one choke point every
     // recorded model routes through, so a control character configured into `review.models.<slug>`
     // never reaches the REVIEWS.md frontmatter as a `pinned` value.
     const NL = String.fromCharCode(10);
-    const hostile = `gemini-3-pro${NL}reviewers: [forged]`;
-    const p = plan('gemini', { 'review.models.gemini': hostile });
+    const hostile = `cursor-3-pro${NL}reviewers: [forged]`;
+    const p = plan('cursor', { 'review.models.cursor': hostile });
     assert.equal(p.model, hostile, 'the pre-existing configString gate is unchanged — out of scope here');
     const d = deps({ spawn: () => ({ status: 0, stdout: 'a review citing src/x.ts:10', stderr: '' }) });
     const r = await runLane(p, d, { repoRoot: ROOT });
@@ -1700,8 +1700,8 @@ describe('#2295 — resolveLanePlan records effort only when it actually expande
   });
 
   test('a lane whose effortChannel is not argv records no effort, even with an effortValue passed', () => {
-    const lane = REVIEWER_LANES.find((l) => l.slug === 'gemini');
-    assert.equal(lane.invoke.effortChannel, 'none', 'gemini must declare no argv effort channel for this test to be meaningful');
+    const lane = REVIEWER_LANES.find((l) => l.slug === 'cursor');
+    assert.equal(lane.invoke.effortChannel, 'none', 'cursor must declare no argv effort channel for this test to be meaningful');
     const r = resolveLanePlan({
       lane,
       configGet: () => undefined,
@@ -1732,11 +1732,11 @@ describe('#2295 — the recorded model carries an applied reasoning effort', () 
   }
 
   test('a lane with no applied effort records the bare model id, unchanged (regression guard)', async () => {
-    const p = plan('gemini', { 'review.models.gemini': 'gemini-3-pro' });
+    const p = plan('cursor', { 'review.models.cursor': 'cursor-3-pro' });
     assert.equal(p.effort, null);
     const d = deps({ spawn: () => ({ status: 0, stdout: 'a review with src/x.ts:10 evidence', stderr: '' }) });
     const r = await runLane(p, d, { repoRoot: ROOT });
-    assert.deepEqual(r.model, { value: 'gemini-3-pro', source: MODEL_SOURCE.PINNED });
+    assert.deepEqual(r.model, { value: 'cursor-3-pro', source: MODEL_SOURCE.PINNED });
   });
 
   test('a pinned codex model plus an applied effort records "o4-mini (reasoning=low)"', async () => {
@@ -1993,7 +1993,7 @@ describe('#2295 — properties (pinned seed, bounded runs)', () => {
   test('every reported spawn model satisfies the value-source biconditional', () => {
     fc.assert(
       fc.property(
-        fc.constantFrom('gemini', 'codex', 'antigravity', 'cursor', 'coderabbit'),
+        fc.constantFrom('claude', 'codex', 'antigravity', 'cursor', 'coderabbit'),
         fc.option(fc.string(), { nil: undefined }),
         fc.string(),
         (slug, configured, stdout) => {

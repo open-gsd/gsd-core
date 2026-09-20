@@ -23,6 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import runtimeArtifactConversion = require('./runtime-artifact-conversion.cjs');
+import { tryWithinRootLexical } from './security.cjs';
 import runtimeArtifactLayout = require('./runtime-artifact-layout.cjs');
 import runtimeArtifactInstallPlan = require('./runtime-artifact-install-plan.cjs');
 import runtimeNamePolicy = require('./runtime-name-policy.cjs');
@@ -132,7 +133,7 @@ function previousOwnedCorpusFiles(configDir: string, prefix: string): string[] {
 
 function pruneEmptyCorpusParents(start: string, stop: string): void {
   let current = path.dirname(start);
-  while (current !== stop && current.startsWith(stop + path.sep)) {
+  while (current !== stop && current.startsWith(stop + path.sep)) { // allow-handrolled-containment: ancestor-walk loop condition, not a containment gate
     if (installFs().readdirSync(current).length > 0) return;
     installFs().rmdirSync(current);
     current = path.dirname(current);
@@ -389,8 +390,11 @@ function hasExistingSymlinkBetween(
   const resolvedFullPath = path.resolve(fullPath);
   // (a) Path-traversal refusal — ALWAYS enforced, even with opt-in. An untrusted
   // destSubpath string that escapes the install root via '..' is rejected
-  // regardless of user opt-in state (ADR-1239 Phase B threat (a)).
-  if (resolvedFullPath !== resolvedRoot && !resolvedFullPath.startsWith(resolvedRoot + path.sep)) {
+  // regardless of user opt-in state (ADR-1239 Phase B threat (a)). Lexical
+  // (ADR-4650 decision 6): this function's whole purpose is to DETECT
+  // symlinks between root and target, so resolving them here would erase what
+  // it measures.
+  if (tryWithinRootLexical(resolvedFullPath, resolvedRoot) === null) {
     return true;
   }
 
@@ -788,6 +792,15 @@ function _copyStaged(stagedDir: string, destDir: string, kind: any, configDir: s
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     if (!entry.name.endsWith('.md')) continue;
+    // #4782: compact agent variants are consumed ONLY through the non-claude
+    // gate in init.cts's agent-skills persona fallback (`runtime !== 'claude'`
+    // — claude's contract is a skills-injection path, never a persona
+    // fallback). Staging them into Claude's agents directory shipped 29 dead
+    // files whose `name:` frontmatter is identical to their canonical
+    // sibling's, leaving the harness resolution unstated. Claude never
+    // selects compact, so claude is the one runtime whose agents kind skips
+    // them; every other runtime's emission is byte-identical.
+    if (kind.kind === 'agents' && runtime === 'claude' && entry.name.endsWith('.compact.md')) continue;
     const stem = entry.name.slice(0, -3); // strip .md
 
     let destName: string;
@@ -1610,6 +1623,13 @@ function installOpencodeFamilySkills(
       content = applyOpencodeFamilyPathPrefix(content, runtime, pathPrefix);
       content = processAttribution(content, resolveAttribution(runtime));
       const skillDir = path.join(dest, skillName);
+      // isPathConfined is lexical and cannot see a symlink. mkdirSync({recursive:true})
+      // does NOT throw when skillDir already exists as a symlink to a directory, so a
+      // pre-planted link would redirect the SKILL.md write outside `dest`. Refuse to
+      // write through a link (epic #4636; mirrors retired-artifact-cleanup.cts:77).
+      try {
+        if (installFs().lstatSync(skillDir).isSymbolicLink()) continue;
+      } catch { /* ENOENT: not created yet — the normal case */ }
       installFs().mkdirSync(skillDir, { recursive: true });
       installFs().writeFileSync(path.join(skillDir, 'SKILL.md'), content);
       // #2322 HIGH-3 parity: persist the capability-owned marker so a later
@@ -2033,6 +2053,9 @@ function installOpencodeFamilyArtifacts(
     isWindowsHost: process.platform === 'win32',
     resolvedTarget: posixNormalize(path.resolve(configDir)),
     homeDir: posixNormalize(os.homedir()),
+    // #4377: the runtime's own localConfigDir, so an opted-in local install
+    // emits `<dir>/...` instead of this checkout's absolute path.
+    localDirName: runtimeArtifactConversion._localIncludeDirName(runtime),
   });
 
   // #2329: destDir is derived from the SAME hostBehaviors.flatCommandDir

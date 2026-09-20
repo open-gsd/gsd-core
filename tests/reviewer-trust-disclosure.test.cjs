@@ -32,6 +32,7 @@ const path = require('node:path');
 const fc = require('fast-check');
 
 const { cleanup } = require('./helpers.cjs');
+const { HTTP_REACHABLE_PROBE_TIMEOUT_FIXTURE_MS } = require('./helpers/timeouts.cjs');
 
 const trust = require('../gsd-core/bin/lib/capability-trust.cjs');
 
@@ -94,7 +95,7 @@ function httpLaneManifest(mutator) {
         kind: 'http-reachable',
         hostConfigKey: 'lmStudio.baseUrl',
         path: '/v1/models',
-        timeoutMs: 2000,
+        timeoutMs: HTTP_REACHABLE_PROBE_TIMEOUT_FIXTURE_MS,
       },
       invoke: {
         hostConfigKey: 'lmStudio.baseUrl',

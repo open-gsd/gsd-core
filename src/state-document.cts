@@ -371,7 +371,7 @@ export function stateFieldContinuation(content: string, fieldName: string): stri
   // is deliberately absent: a `| Field | value |` row is bounded by its closing
   // pipe and cannot wrap.
   const match =
-    new RegExp(`\\*\\*${escaped}:\\*\\*[ \\t]*(.+)`, 'i').exec(content) ??
+    new RegExp(`^[ \\t]*\\*\\*${escaped}:\\*\\*[ \\t]*(.+)`, 'im').exec(content) ??
     new RegExp(`^${escaped}:[ \\t]*(.+)`, 'im').exec(content);
   if (!match) return null;
 
@@ -400,8 +400,9 @@ export function stateFieldContinuation(content: string, fieldName: string): stri
 
 export function stateExtractField(content: string, fieldName: string): string | null {
   const escaped = escapeRegex(fieldName);
-  // Bold inline format: **FieldName:** value
-  const boldPattern = new RegExp(`\\*\\*${escaped}:\\*\\*[ \\t]*(.+)`, 'i');
+  // Bold line-start format: **FieldName:** value. Leading same-line whitespace
+  // matches the writer's established indented-field tolerance.
+  const boldPattern = new RegExp(`^[ \\t]*\\*\\*${escaped}:\\*\\*[ \\t]*(.+)`, 'im');
   const boldMatch = content.match(boldPattern);
   if (boldMatch)
     return boldMatch[1].trim();

@@ -20,6 +20,14 @@ function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'cap-trust-test-'));
 }
 
+/**
+ * NOT a subprocess spawn timeout. Fixture DATA inside a synthetic MCP
+ * server config object passed to trust.signatureForManifest() -- proves
+ * key-reordering doesn't change a config's signature. Never passed into a
+ * real spawnSync/execFileSync options object.
+ */
+const FIXTURE_MCP_SERVER_TIMEOUT_VALUE = 30;
+
 // ---------------------------------------------------------------------------
 // discloseExecutableSurfaces
 // ---------------------------------------------------------------------------
@@ -491,8 +499,8 @@ test('finding-5: reordering keys WITHIN the full mcp config does NOT change the 
   // revert-fails: if the full config were folded in via a NON-stable JSON (insertion-order
   // dependent), a mere key reorder would change the signature and this strictEqual would FAIL. The
   // full-config hash must use the stable (recursively key-sorted) encoding.
-  const a = { id: 'x', mcpServers: { srv: { command: 'node', envFile: '.env', timeout: 30, extra: { z: 1, a: 2 } } } };
-  const b = { id: 'x', mcpServers: { srv: { extra: { a: 2, z: 1 }, timeout: 30, envFile: '.env', command: 'node' } } };
+  const a = { id: 'x', mcpServers: { srv: { command: 'node', envFile: '.env', timeout: FIXTURE_MCP_SERVER_TIMEOUT_VALUE, extra: { z: 1, a: 2 } } } };
+  const b = { id: 'x', mcpServers: { srv: { extra: { a: 2, z: 1 }, timeout: FIXTURE_MCP_SERVER_TIMEOUT_VALUE, envFile: '.env', command: 'node' } } };
   assert.strictEqual(
     trust.signatureForManifest(a),
     trust.signatureForManifest(b),

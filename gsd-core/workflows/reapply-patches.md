@@ -59,8 +59,8 @@ elif [ -z "$PATCHES_DIR" ] && [ -n "$XDG_CONFIG_HOME" ]; then
   fi
 fi
 
-if [ -z "$PATCHES_DIR" ] && [ -n "$GEMINI_CONFIG_DIR" ]; then
-  candidate="$(expand_home "$GEMINI_CONFIG_DIR")/gsd-local-patches"
+if [ -z "$PATCHES_DIR" ] && [ -n "$ANTIGRAVITY_CONFIG_DIR" ]; then
+  candidate="$(expand_home "$ANTIGRAVITY_CONFIG_DIR")/gsd-local-patches"
   if [ -d "$candidate" ]; then
     PATCHES_DIR="$candidate"
   fi
@@ -88,6 +88,12 @@ if [ -z "$PATCHES_DIR" ]; then
     PATCHES_DIR="$HOME/.config/opencode/gsd-local-patches"
   elif [ -d "$HOME/.opencode/gsd-local-patches" ]; then
     PATCHES_DIR="$HOME/.opencode/gsd-local-patches"
+  elif [ -d "$HOME/.gemini/antigravity/gsd-local-patches" ]; then
+    PATCHES_DIR="$HOME/.gemini/antigravity/gsd-local-patches"
+  # Legacy: a pre-#1928 Gemini CLI install put patches at ~/.gemini/gsd-local-patches.
+  # That runtime is retired, but a stranded patches dir is still the user's work — probed
+  # AFTER Antigravity so a live install always wins. This is a directory probe, not a
+  # runtime home: nothing here assigns the retired runtime id.
   elif [ -d "$HOME/.gemini/gsd-local-patches" ]; then
     PATCHES_DIR="$HOME/.gemini/gsd-local-patches"
   elif [ -d "$HOME/.codex/gsd-local-patches" ]; then
@@ -98,7 +104,7 @@ if [ -z "$PATCHES_DIR" ]; then
 fi
 # Local install fallback — check all runtime directories
 if [ ! -d "$PATCHES_DIR" ]; then
-  for dir in .config/kilo .kilo .config/opencode .opencode .gemini .codex .claude; do
+  for dir in .config/kilo .kilo .config/opencode .opencode .agents .codex .claude; do
     if [ -d "./$dir/gsd-local-patches" ]; then
       PATCHES_DIR="./$dir/gsd-local-patches"
       break

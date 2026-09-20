@@ -85,7 +85,7 @@ Git 히스토리에는 각 실행자의 태스크당 커밋 하나와 오케스�
 
 ## 크로스 AI 실행
 
-`workflow.cross_ai_command`에 설정된 외부 AI CLI(Codex, Gemini 등)에 실행을 위임하려면:
+`workflow.cross_ai_command`에 설정된 외부 AI CLI(Codex, Antigravity 등)에 실행을 위임하려면:
 
 ```bash
 /gsd-execute-phase 2 --cross-ai

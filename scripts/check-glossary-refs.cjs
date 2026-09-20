@@ -37,6 +37,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
+const { tryWithinRoot, PathAcceptance } = require('../gsd-core/bin/lib/security.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const CONTEXT_PATH = path.join(ROOT, 'CONTEXT.md');
@@ -132,20 +133,6 @@ function isTracked(token) {
 }
 
 /**
- * True if joining `token` to ROOT stays inside ROOT. `PATH_TOKEN_RE` admits `.`
- * inside a segment, so a token like `src/../../../etc/passwd` matches and (via
- * the `src/` prefix) reads as "tracked" — `path.join(ROOT, token)` would then
- * normalize to an out-of-tree absolute path and `fs.existsSync` would probe it,
- * turning a doc lint into a filesystem-existence oracle on the CI host. A
- * CONTEXT.md reference is always a plain in-repo path, so a `..` escape is never
- * legitimate: confine to ROOT and drop anything that climbs out.
- */
-function isWithinRoot(token) {
-  const resolved = path.resolve(ROOT, token);
-  return resolved === ROOT || resolved.startsWith(ROOT + path.sep);
-}
-
-/**
  * Every distinct, trackable file-path token referenced in `text`, with any
  * trailing `:<line>` suffix stripped.
  *
@@ -167,7 +154,11 @@ function isWithinRoot(token) {
  * (CONTRIBUTING's "Do not compute a next number locally"), never a real path.
  */
 function extractTrackedRefs(text) {
-  const tokens = new Set();
+  // Maps token -> the ContainedPath tryWithinRoot returned for it. ADR-4650:
+  // the value that was validated for containment must be the exact value
+  // that gets probed later — never a path re-derived (e.g. re-joined) from
+  // the token, which could diverge from what was actually checked.
+  const tokens = new Map();
   const add = (raw) => {
     if (!PATH_TOKEN_RE.test(raw)) return;
     const token = raw.replace(/:\d+$/, '');
@@ -177,8 +168,18 @@ function extractTrackedRefs(text) {
     if (!/[A-Za-z0-9_]$/.test(token)) return;
     if (token.includes('NNNN')) return;
     if (!isTracked(token)) return;
-    if (!isWithinRoot(token)) return;
-    tokens.add(token);
+    // Containment decision is the canonical predicate's, per ADR-4650. Carry
+    // the returned ContainedPath forward so checkFileRefs stats the SAME
+    // value that was validated, instead of re-joining `token` onto ROOT.
+    //
+    // The containment ANSWER is unchanged from the retired lexical-only
+    // `isWithinRoot`, but the canonical predicate resolves symlinks, so a
+    // rejected token is now realpath-resolved before being rejected rather
+    // than rejected by string comparison alone; the result is still never
+    // surfaced and the token is never stat'd unless it is contained.
+    const contained = tryWithinRoot(token, ROOT, PathAcceptance.AbsoluteInsideRoot);
+    if (contained === null) return;
+    tokens.set(token, contained);
   };
   const subTokenRe = /[\w.-]+(?:\/[\w.-]+)*/g;
   for (const line of text.split(/\r?\n/)) {
@@ -199,14 +200,17 @@ function extractTrackedRefs(text) {
 
 /** Check A: every tracked reference must resolve on disk. */
 function checkFileRefs(contextText) {
-  const tokens = [...extractTrackedRefs(contextText)].sort();
+  const entries = [...extractTrackedRefs(contextText)].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const findings = [];
-  for (const token of tokens) {
-    if (!fs.existsSync(path.join(ROOT, token))) {
+  for (const [token, contained] of entries) {
+    // Stat the ContainedPath returned by tryWithinRoot — NOT a re-joined
+    // path.join(ROOT, token) — so the path that was validated for
+    // containment is the path that is probed (ADR-4650).
+    if (!fs.existsSync(contained)) {
       findings.push(`CONTEXT.md references \`${token}\` which does not exist in the repo.`);
     }
   }
-  return { findings, checked: tokens.length };
+  return { findings, checked: entries.length };
 }
 
 /** The glossary's own claim: `Runtime enum: `allRuntimes` (N values: a, b, c)`. */

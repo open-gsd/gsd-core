@@ -918,7 +918,7 @@ fix(03-01): correct auth token expiry
 **목적:** 여러 AI 코딩 에이전트 런타임에서 GSD를 실행합니다.
 
 **요구사항.**
-- REQ-RUNTIME-01: Claude Code, OpenCode, Gemini CLI, Kilo, Codex, Copilot, Antigravity를 지원해야 합니다.
+- REQ-RUNTIME-01: Claude Code, OpenCode, Kilo, Codex, Copilot, Antigravity를 지원해야 합니다.
 - REQ-RUNTIME-02: 설치 프로그램은 런타임별로 콘텐츠를 변환해야 합니다(도구 이름, 경로, 프론트매터).
 - REQ-RUNTIME-03: 설치 프로그램은 대화형 및 비대화형(`--claude --global`) 모드를 모두 지원해야 합니다.
 - REQ-RUNTIME-04: 설치 프로그램은 전역 및 로컬 설치를 모두 지원해야 합니다.
@@ -927,12 +927,12 @@ fix(03-01): correct auth token expiry
 
 **런타임 변환.**
 
-| 측면 | Claude Code | OpenCode | Gemini | Kilo | Codex | Copilot | Antigravity |
-|--------|------------|----------|--------|-------|-------|---------|-------------|
-| 명령어 | 슬래시 명령어 | 슬래시 명령어 | 슬래시 명령어 | 슬래시 명령어 | Skills(TOML) | 슬래시 명령어 | Skills |
-| 에이전트 형식 | Claude native | `mode: subagent` | Claude native | `mode: subagent` | Skills | Tool mapping | Skills |
-| 훅 이벤트 | `PostToolUse` | N/A | `AfterTool` | N/A | N/A | N/A | N/A |
-| 구성 | `settings.json` | `opencode.json(c)` | `settings.json` | `kilo.json(c)` | TOML | Instructions | Config |
+| 측면 | Claude Code | OpenCode | Kilo | Codex | Copilot | Antigravity |
+|--------|------------|----------|-------|-------|---------|-------------|
+| 명령어 | 슬래시 명령어 | 슬래시 명령어 | 슬래시 명령어 | Skills(TOML) | 슬래시 명령어 | Skills |
+| 에이전트 형식 | Claude native | `mode: subagent` | `mode: subagent` | Skills | Tool mapping | Skills |
+| 훅 이벤트 | `PostToolUse` | N/A | N/A | N/A | N/A | N/A |
+| 구성 | `settings.json` | `opencode.json(c)` | `kilo.json(c)` | TOML | Instructions | Config |
 
 ---
 
@@ -1068,9 +1068,9 @@ fix(03-01): correct auth token expiry
 
 ### 42. Cross-AI Peer Review
 
-**명령어:** `/gsd-review --phase N [--gemini] [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy] [--antigravity] [--ollama] [--lm-studio] [--llama-cpp] [--kimi-code] [--all]`
+**명령어:** `/gsd-review --phase N [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy] [--antigravity] [--ollama] [--lm-studio] [--llama-cpp] [--kimi-code] [--all]`
 
-**목적:** 외부 AI CLI(Gemini, Claude, Codex, CodeRabbit, OpenCode, Qwen Code, Cursor, Antigravity, Kimi Code)와 로컬 OpenAI 호환 서버(Ollama, LM Studio, llama.cpp)를 호출하여 페이즈 계획을 독립적으로 검토합니다. 검토자별 피드백이 담긴 구조화된 REVIEWS.md를 생성합니다.
+**목적:** 외부 AI CLI(Claude, Codex, CodeRabbit, OpenCode, Qwen Code, Cursor, Antigravity, Kimi Code)와 로컬 OpenAI 호환 서버(Ollama, LM Studio, llama.cpp)를 호출하여 페이즈 계획을 독립적으로 검토합니다. 검토자별 피드백이 담긴 구조화된 REVIEWS.md를 생성합니다.
 
 **요구사항.**
 - REQ-REVIEW-01: 시스템에서 사용 가능한 AI CLI를 감지해야 합니다.
@@ -1334,7 +1334,7 @@ Claude가 GSD 워크플로우 컨텍스트 밖에서 파일 편집을 시도하�
 **목적:** 단일 대화형 설치 세션에서 여러 런타임을 선택합니다.
 
 **요구사항.**
-- REQ-MULTI-RT-01: 대화형 프롬프트는 다중 선택을 지원해야 합니다(예: Claude Code + Gemini).
+- REQ-MULTI-RT-01: 대화형 프롬프트는 다중 선택을 지원해야 합니다(예: Claude Code + Antigravity).
 - REQ-MULTI-RT-02: CLI 플래그는 비대화형 설치에서 계속 작동해야 합니다.
 
 **프로세스.**
@@ -1576,13 +1576,13 @@ Claude가 GSD 워크플로우 컨텍스트 밖에서 파일 편집을 시도하�
 **요구사항.**
 - REQ-SKILLS-01: 설치 프로그램은 Claude Code 2.1.88+ 용 `skills/gsd-*/SKILL.md`를 작성해야 합니다.
 - REQ-SKILLS-02: 설치 프로그램은 레거시 `commands/gsd/` 디렉토리를 자동 정리해야 합니다.
-- REQ-SKILLS-03: Gemini 경로를 통해 이전 Claude Code 버전과의 하위 호환성을 유지해야 합니다.
+- REQ-SKILLS-03: 레거시 `commands/gsd/` 경로를 통해 이전 Claude Code 버전과의 하위 호환성을 유지해야 합니다.
 
 **프로세스.**
 1. **감지** — Claude Code 버전을 확인하여 스킬 지원 여부 판단
 2. **마이그레이션** — 각 GSD 명령어에 대해 `skills/gsd-*/SKILL.md` 파일 작성
 3. **정리** — 스킬이 설치되면 레거시 `commands/gsd/` 디렉토리 제거
-4. **폴백** — 이전 Claude Code 버전을 위한 Gemini 경로 호환성 유지
+4. **폴백** — 이전 Claude Code 버전을 위한 레거시 `commands/gsd/` 경로 호환성 유지
 
 ---
 

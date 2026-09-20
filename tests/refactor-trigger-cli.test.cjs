@@ -46,6 +46,7 @@ const {
 } = require('../gsd-core/bin/lib/complexity-trigger.cjs');
 const gitBaseBranch = require('../gsd-core/bin/lib/git-base-branch.cjs');
 const windowsModule = require('../gsd-core/bin/lib/broken-windows.cjs');
+const lockModule = require('../gsd-core/bin/lib/capability-lock.cjs');
 const { routeRefactorTriggerCommand } = require('../gsd-core/bin/lib/refactor-trigger-command-router.cjs');
 const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
 const { validateCapability, VALID_LOOP_POINTS } = require('../gsd-core/bin/lib/capability-validator.cjs');
@@ -653,6 +654,36 @@ describe('refactor-trigger: disposition + ledger', () => {
 });
 
 // ─── Rows 80-86 — strict mode -> broken-windows ledger ───────────────────────
+
+describe('refactor-trigger router: locked-ledger degrade (#3780)', () => {
+  test('evaluate degrades ledger_recorded to false with a note when a writer holds the ledger lock', (t) => {
+    const dir = setupTriggeringProject('gsd-refactor-cli-3780-lock-', true);
+    t.after(() => cleanup(dir));
+    const lockPath = path.join(dir, '.planning', '.WINDOWS.lock');
+    const handle = lockModule.acquireLock(lockPath, { maxAttempts: 1 });
+    assert.ok(handle, 'test setup: the test process must be able to acquire the ledger lock');
+    t.after(() => lockModule.releaseLock(handle));
+
+    const result = runCliOnce(['refactor', 'evaluate', '--phase', '1', '--raw'], dir);
+    assert.strictEqual(result.exitCode, 0, 'evaluate must degrade, never fail, on lock contention');
+    const parsed = parseStdout(result);
+    assert.strictEqual(parsed.artifact_written, true, 'the local proposal artifact is independent of the ledger');
+    assert.strictEqual(parsed.ledger_recorded, false);
+    assert.match(parsed.ledger_note, /ledger lock/, `note must name the contention: ${parsed.ledger_note}`);
+    assert.strictEqual(
+      fs.existsSync(path.join(dir, '.planning', windowsModule.LEDGER_FILE_NAME)),
+      false,
+      'a degraded record must not write the ledger',
+    );
+
+    // After release the same evaluation records — the refusal was contention.
+    lockModule.releaseLock(handle);
+    const result2 = runCliOnce(['refactor', 'evaluate', '--phase', '1', '--raw'], dir);
+    assert.strictEqual(result2.exitCode, 0);
+    assert.strictEqual(parseStdout(result2).ledger_recorded, true);
+  });
+});
+
 
 describe('refactor-trigger: strict mode -> broken-windows ledger', () => {
   test('appendsNoWindowInAdvisoryMode', (t) => {

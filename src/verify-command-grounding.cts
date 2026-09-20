@@ -530,6 +530,26 @@ function splitSegments(cmd: string): string[] {
     .filter(s => s.length > 0);
 }
 
+/**
+ * Decode entity-escaped ampersands (`&amp;` → `&`) — #4730, the grounding
+ * gate's share of the #3611 defect. Planners emit `<automated>` bodies with
+ * `&amp;&amp;` as the chain operator, and the executing agent reads the
+ * decoded (rendered) form. Without this decode, `splitSegments` cuts
+ * `&amp;&amp;` at its semicolons and a `cd` target absorbs the trailing
+ * `&amp` fragment (`rawTarget: "src &amp"`), reporting an existing directory
+ * as a `missing_dir` blocker. Applied to the command text inside
+ * `resolveVerifyCommandTarget` — before any segment splitting or target
+ * resolution, after `result.command` has captured the text verbatim — so the
+ * escaped and literal forms of the same command produce identical verdicts.
+ * Kept module-private beside `splitSegments`, mirroring the sibling
+ * `src/verify.cts`'s own private `decodeEntityAmps` (#3611): the two gates
+ * are separate modules that independently parse `<automated>` text, and
+ * neither imports the other.
+ */
+function decodeEntityAmps(s: string): string {
+  return s.replace(/&amp;/g, '&');
+}
+
 /** Strip a single matching pair of surrounding quotes, if present. */
 function stripQuotes(s: string): string {
   if (s.length >= 2) {
@@ -606,7 +626,7 @@ function declaredPathCovers(declaredPaths: string[] | undefined, norm: string): 
   return declaredPaths.some(p => {
     if (typeof p !== 'string') return false;
     const dp = stripLeadingDotSlash(toSlash(p));
-    return dp === target || dp.startsWith(target + '/');
+    return dp === target || dp.startsWith(target + '/'); // allow-handrolled-containment: declared-path coverage for pending-creation detection, not containment
   });
 }
 
@@ -655,7 +675,10 @@ function resolveVerifyCommandTarget(command: unknown, options?: ResolveOptions):
   if (typeof command !== 'string') return result;
   result.command = command;
 
-  const trimmed = command.trim();
+  // #4730: decode entity-escaped ampersands BEFORE segment splitting (see
+  // decodeEntityAmps) so the chain operator is visible to the splitter and
+  // the verdict matches what the executing agent's decoded form grounds to.
+  const trimmed = decodeEntityAmps(command.trim());
   if (trimmed === '') return result;
 
   // Nyquist "MISSING — Wave 0 must create …" sentinel; Dimension 8 owns it.

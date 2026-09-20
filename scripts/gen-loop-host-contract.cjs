@@ -78,6 +78,23 @@ const ROLE_TO_AGENT = {
   verifier:   'gsd-verifier',
 };
 
+// #4740 — Role → family mapping. Three families: orchestration, planning,
+// execution. This constrains what a workflow may DECLARE in agent-roles for
+// a given step (admissibility), a separate concern from ROLE_TO_AGENT's
+// agent-file presence check above.
+const ROLE_FAMILY = {
+  orchestrator: 'orchestration',
+  researcher: 'planning', planner: 'planning', checker: 'planning',
+  executor: 'execution', verifier: 'execution',
+};
+const EXPECTED_FAMILY_BY_STEP = {
+  discuss: 'orchestration',
+  plan: 'planning',
+  execute: 'execution',
+  verify: 'orchestration',
+  ship: 'orchestration',
+};
+
 // ─── Parser ───────────────────────────────────────────────────────────────────
 
 /**
@@ -228,6 +245,52 @@ function crossCheckRoles(content, agentRoles, fileName) {
   return errors;
 }
 
+// ─── Cross-check: declared roles vs. their permitted family (#4740) ──────────
+
+/**
+ * For a step, verify every role declared in agentRoles belongs to that step's
+ * expected family (orchestration / planning / execution).
+ *
+ * Unlike `assertPointsCoverage`'s `if (!expected) continue // caught
+ * elsewhere` guard, an unknown step here fails CLOSED: for points
+ * there is a second net (the canonical-set and duplicate checks), but nothing
+ * else in the repo validates role families, so failing open on an unknown
+ * step would make it the one input that silently bypasses this gate — the
+ * "unknown resolving to a safe known" failure mode this check exists to close.
+ *
+ * Pure: never sorts, de-dupes, or otherwise mutates `agentRoles` — the same
+ * array `buildContract` puts into the generated contract.
+ *
+ * @param {string}   step        The step named in the marker block.
+ * @param {string[]} agentRoles  Roles declared in the block.
+ * @param {string}   fileName    For error messages.
+ * @returns {string[]}           Array of error strings; empty = OK.
+ */
+function crossCheckRoleFamilies(step, agentRoles, fileName) {
+  const expectedFamily = EXPECTED_FAMILY_BY_STEP[step];
+  if (!expectedFamily) {
+    return [fileName + ': step "' + step + '" has no entry in EXPECTED_FAMILY_BY_STEP'];
+  }
+
+  const errors = [];
+  for (const role of agentRoles) {
+    const family = ROLE_FAMILY[role];
+    if (!family) {
+      errors.push(
+        fileName + ': declared agent-role "' + role + '" has no entry in ROLE_FAMILY mapping',
+      );
+      continue;
+    }
+    if (family !== expectedFamily) {
+      errors.push(
+        fileName + ': declared agent-role "' + role + '" (family "' + family +
+        '") is not permitted at step "' + step + '" (expected family "' + expectedFamily + '")',
+      );
+    }
+  }
+  return errors;
+}
+
 // ─── 12-points coverage assertion ────────────────────────────────────────────
 
 /**
@@ -330,6 +393,10 @@ function buildContract(workflowsDir) {
     // Cross-check roles
     const roleErrors = crossCheckRoles(content, entry.agentRoles, file);
     allErrors.push(...roleErrors);
+
+    // Cross-check role families (#4740)
+    const roleFamilyErrors = crossCheckRoleFamilies(entry.step, entry.agentRoles, file);
+    allErrors.push(...roleFamilyErrors);
 
     for (const auxiliary of auxiliaryHosts) {
       let auxiliaryContent;
@@ -667,6 +734,7 @@ function getWiredLoopPoints(repoRoot) {
 module.exports = {
   parseLoopHostBlock,
   crossCheckRoles,
+  crossCheckRoleFamilies,
   assertPointsCoverage,
   buildContract,
   serializeContract,
@@ -676,6 +744,7 @@ module.exports = {
   CANONICAL_POINTS,
   EXPECTED_POINTS_BY_STEP,
   ROLE_TO_AGENT,
+  ROLE_FAMILY,
   scanWiredPoints,
   getWiredLoopPoints,
   coveredKindsInRegion,

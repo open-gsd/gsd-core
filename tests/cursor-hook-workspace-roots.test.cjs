@@ -33,6 +33,7 @@ const { execFileSync } = require('node:child_process');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
+const { STAGED_HOOK_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const HOOKS = path.join(__dirname, '..', 'hooks');
 const SESSION_START = path.join(HOOKS, 'gsd-cursor-session-start.js');
@@ -54,7 +55,7 @@ function runHook(script, { cwd, payload }) {
   const r = runHookSeam(script, [], {
     cwd,
     input: typeof payload === 'string' ? payload : JSON.stringify(payload),
-    timeoutMs: 20000,
+    timeoutMs: STAGED_HOOK_SCRIPT_TIMEOUT_MS,
   });
   return JSON.parse(r.stdout || '{}');
 }
@@ -343,7 +344,7 @@ describe('#2587: cursor hooks resolve the workspace from workspace_roots, not cw
           cwd: root,
           input: JSON.stringify({ workspace_roots: [ws] }),
           encoding: 'utf8',
-          timeout: 20000,
+          timeout: STAGED_HOOK_SCRIPT_TIMEOUT_MS,
         }) || '{}');
         assert.ok(
           (out.additional_context || '').includes('STATE.md is present'),

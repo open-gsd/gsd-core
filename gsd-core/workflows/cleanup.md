@@ -157,7 +157,7 @@ No quick tasks to archive either.
 Stop here.
 
 
-**Text mode (`workflow.text_mode: true` in config or `--text` flag):** Set `TEXT_MODE=true` if `--text` is present in `$ARGUMENTS` OR `text_mode` from init JSON is `true`. When TEXT_MODE is active, replace every `AskUserQuestion` call with a plain-text numbered list and ask the user to type their choice number. This is required for non-Claude runtimes (OpenAI Codex, Gemini CLI, etc.) where `AskUserQuestion` is not available.
+**Text mode (`workflow.text_mode: true` in config or `--text` flag):** Set `TEXT_MODE=true` if `--text` is present in `$ARGUMENTS` OR `text_mode` from init JSON is `true`. When TEXT_MODE is active, replace every `AskUserQuestion` call with a plain-text numbered list and ask the user to type their choice number. This is required for non-Claude runtimes (OpenAI Codex, Antigravity, etc.) where `AskUserQuestion` is not available.
 AskUserQuestion: "Proceed with archiving and pruning?" with options: "Yes — archive phases and prune stale branches" | "Cancel"
 
 If "Cancel": Stop.
@@ -223,8 +223,10 @@ Notes:
 Commit the changes:
 
 ```bash
-gsd_run query commit "chore: archive phase directories from completed milestones" --files .planning/milestones/ .planning/phases/ .planning/quick/ .planning/STATE.md
+gsd_run query commit "chore: archive phase directories from completed milestones" --files .planning/milestones/ .planning/STATE.md --files-removed .planning/phases/ .planning/quick/
 ```
+
+`.planning/phases/` and `.planning/quick/` go under `--files-removed`, not `--files` (#4208): a `--files` directory entry stages everything under it, so it would also commit any in-flight phase or quick-task file a concurrent session had written there. `--files-removed` stages only the tracked files under those directories that the archival `mv` moved away, and leaves everything still present untouched.
 
 </step>
 

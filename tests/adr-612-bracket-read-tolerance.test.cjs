@@ -28,6 +28,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { PATHOLOGICAL_INPUT_TEST_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 let tmpDir;
 
@@ -1032,7 +1033,7 @@ ${MALFORMED.map(([, h]) => `${h}\n**Goal:** x\n`).join('\n')}`, 'bracket');
     };
   };
 
-  test('pathological bracket input reads correctly at 1x and 4x length', { timeout: 60_000 }, () => {
+  test('pathological bracket input reads correctly at 1x and 4x length', { timeout: PATHOLOGICAL_INPUT_TEST_TIMEOUT_MS }, () => {
     for (const [label, doc, expectedPhases] of ATTACKS) {
       const readings = [5000, 20000].map((n) => [n, readAll(doc(n))]);
       for (const [n, r] of readings) {

@@ -380,6 +380,42 @@ describe('runtime-launcher-parity (#373)', () => {
     );
   });
 
+  // ─── (A2) Snippet's ${VAR:-default} surface is fully covered by the scrub lists (#4424) ──
+  // SNIPPET_SCRUB above is hand-maintained for vars TEST_ENV_BASE cannot derive.
+  // Nothing previously asserted the union actually covers every fallback arm in
+  // the snippet, so a new runtime-home arm with no scrub entry could drift
+  // silently — the same shape as #4205, arriving through the hand-listed half.
+  test('(A2) every ${VAR:-default} arm in the snippet is covered by TEST_ENV_BASE, SNIPPET_SCRUB, or a caller-supplied var', () => {
+    // RUNTIME_DIR: an external input the snippet reads, never assigns — every
+    // fixture that sources the snippet sets it in-script before doing so.
+    // GSD_TOOLS: the snippet assigns this one itself, before this arm's
+    // ${GSD_TOOLS:-} check runs.
+    // Any addition here must justify, in a comment like the two above, why the
+    // var is genuinely caller-supplied/self-assigned — not a real coverage gap
+    // silenced by exemption. When in doubt, add a SNIPPET_SCRUB entry instead.
+    const CALLER_OR_SELF_ASSIGNED = new Set(['RUNTIME_DIR', 'GSD_TOOLS']);
+    const snippetContent = fs.readFileSync(SNIPPET_FILE, 'utf8');
+    const covered = new Set([...Object.keys(TEST_ENV_BASE), ...Object.keys(SNIPPET_SCRUB), ...CALLER_OR_SELF_ASSIGNED]);
+    const extracted = [...new Set(
+      [...snippetContent.matchAll(/\$\{([A-Z_][A-Z0-9_]*):-/g)].map((m) => m[1]),
+    )];
+    // Guards the guard: a truncated/renamed/unreadable snippet would make
+    // `extracted` empty, and an empty `uncovered` below would pass vacuously.
+    assert.ok(
+      extracted.length >= 15,
+      `expected the snippet to yield many distinct \${VAR:-default} arms, got ${extracted.length}`,
+    );
+    const uncovered = extracted.filter((name) => !covered.has(name));
+
+    assert.deepStrictEqual(
+      uncovered,
+      [],
+      'Snippet fallback arm(s) not covered by TEST_ENV_BASE, SNIPPET_SCRUB, or a caller-supplied var — ' +
+        'add a SNIPPET_SCRUB entry (or confirm the capability registry should carry it):\n' +
+        uncovered.join('\n'),
+    );
+  });
+
   // ─── (B) Exactly ONE canonical preamble per using file ───────────────────
   test('(B) each workflow .md using gsd_run contains exactly ONE canonical preamble, before the first gsd_run call', () => {
     const preamble = expectedPreamble();
@@ -1226,7 +1262,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { cleanup } = require('./helpers.cjs');
-const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 const SNIPPET_FILE = path.join(WORKFLOWS_DIR, '_runtime-launcher.snippet.sh');
@@ -1253,67 +1288,6 @@ const EXPECTED_RUNTIME_PROBES = {
   opencode:    'opencode}/gsd-core/bin/',
   kilo:        'kilo}/gsd-core/bin/',
 };
-
-/**
- * Collect all workflow .md files recursively.
- */
-function collectWorkflowFiles() {
-  const results = [];
-  function walk(dir) {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walk(full);
-      } else if (entry.isFile() && entry.name.endsWith('.md')) {
-        results.push(full);
-      }
-    }
-  }
-  walk(WORKFLOWS_DIR);
-  return results;
-}
-
-/**
- * Extract all bash/sh/shell fenced blocks from markdown content.
- */
-function extractShellBlocks(content) {
-  const allLines = content.split('\n');
-  const blocks = [];
-  let inBlock = false;
-  let blockLang = null;
-  let blockLines = [];
-  let blockIndent = '';
-  let closingPattern = null;
-
-  for (let i = 0; i < allLines.length; i++) {
-    const line = allLines[i];
-    if (!inBlock) {
-      const fenceOpen = line.match(/^(\s*)```(\w+)?\s*$/);
-      if (fenceOpen) {
-        inBlock = true;
-        blockIndent = fenceOpen[1];
-        blockLang = (fenceOpen[2] || '').toLowerCase();
-        blockLines = [];
-        closingPattern = new RegExp('^' + escapeRegex(blockIndent) + '```\\s*$');
-        continue;
-      }
-    } else {
-      if (closingPattern.test(line)) {
-        if (['bash', 'sh', 'shell', 'zsh', ''].includes(blockLang)) {
-          blocks.push({ lines: blockLines });
-        }
-        inBlock = false;
-        blockLang = null;
-        blockLines = [];
-        blockIndent = '';
-        closingPattern = null;
-        continue;
-      }
-      blockLines.push(line);
-    }
-  }
-  return blocks;
-}
 
 
 describe('bug-891: non-Claude runtime home fallback arms', () => {

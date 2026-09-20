@@ -42,7 +42,19 @@ const path = require('path');
 const { cleanup, createTempGitProject } = require('./helpers.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
 const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
-const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const {
+  HOOK_FANOUT_TIMEOUT_MS,
+  QUICK_SPAWN_TIMEOUT_MS,
+  SCAN_USAGE_ERROR_TIMEOUT_MS,
+} = require('./helpers/timeouts.cjs');
+
+// Bounds base64-scan.sh under the locale-regression scenario (see the
+// comment above the describe block below): a dir/file scan with non-UTF8
+// content under a non-C locale must complete cleanly within 30s. Numerically
+// coincides with timeouts.cjs's BUILD_TIMEOUT_MS (an unrelated
+// hooks-bundle-build operation) but matches neither that nor any other
+// existing shared constant, so it stays file-local.
+const BASE64_LOCALE_SCAN_TIMEOUT_MS = 30000;
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 const SCRIPTS = {
@@ -68,7 +80,7 @@ function runScript(scriptPath, content, extraArgs) {
     const result = execFileSync(scriptPath, args, {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 10000,
+      timeout: QUICK_SPAWN_TIMEOUT_MS,
     });
     return { status: 0, stdout: result, stderr: '' };
   } catch (err) {
@@ -201,7 +213,7 @@ describe('prompt-injection-scan.sh', { skip: IS_WINDOWS }, () => {
       execFileSync(SCRIPTS.injection, [], {
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: 5000,
+        timeout: SCAN_USAGE_ERROR_TIMEOUT_MS,
       });
       assert.fail('Should have exited non-zero');
     } catch (err) {
@@ -218,7 +230,7 @@ describe('prompt-injection-scan.sh', { skip: IS_WINDOWS }, () => {
 function runScriptOnDir(scriptPath, dirPath, env) {
   const result = spawnSync('bash', [scriptPath, '--dir', dirPath], {
     encoding: 'utf-8',
-    timeout: 30000,
+    timeout: BASE64_LOCALE_SCAN_TIMEOUT_MS,
     env: { ...process.env, ...env },
   });
   return {
@@ -233,7 +245,7 @@ function runScriptOnDir(scriptPath, dirPath, env) {
 function runScriptOnFile(scriptPath, filePath, env) {
   const result = spawnSync('bash', [scriptPath, '--file', filePath], {
     encoding: 'utf-8',
-    timeout: 30000,
+    timeout: BASE64_LOCALE_SCAN_TIMEOUT_MS,
     env: { ...process.env, ...env },
   });
   return {
@@ -292,7 +304,7 @@ describe('base64-scan.sh', { skip: IS_WINDOWS }, () => {
       execFileSync(SCRIPTS.base64, [], {
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: 5000,
+        timeout: SCAN_USAGE_ERROR_TIMEOUT_MS,
       });
       assert.fail('Should have exited non-zero');
     } catch (err) {
@@ -504,7 +516,7 @@ describe('secret-scan.sh', { skip: IS_WINDOWS }, () => {
       execFileSync(SCRIPTS.secret, [], {
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: 5000,
+        timeout: SCAN_USAGE_ERROR_TIMEOUT_MS,
       });
       assert.fail('Should have exited non-zero');
     } catch (err) {

@@ -162,6 +162,12 @@ const REASON = Object.freeze({
   // Axis 2 (§8.6, retained): a raw `fs.writeFileSync(` call targeting the
   // state path — see `findRawStateWrites`.
   RAW_STATE_WRITE: 'raw_state_write',
+  // ADR-4629 §8.1 (epic #4629, C1): a residual `readModifyWriteStateMd(path,
+  // (content) => …)` call whose transform is an inline anonymous arrow/function
+  // — the opaque shape §8.1 replaces with a declared StateWriteIntent. Recognized
+  // by `findOpaqueStateTransforms`; a CAPABILITY in C1 (not wired into collect()),
+  // wired terminal in C2 as the residual callers migrate (ADR-3408 §6 phasing).
+  OPAQUE_STATE_TRANSFORM: 'opaque_state_transform',
   // Axis 4 (§8.3, Decision 4(d)): prompt-layer prose shelling out to a
   // write-side `gsd-tools` subcommand — see `findPromptSeamUses`.
   PROMPT_LAYER_STATE_WRITE: 'prompt_layer_state_write',
@@ -645,6 +651,91 @@ function findRawStateWrites(rel, text) {
   return out;
 }
 
+// ADR-4629 §8.1 (epic #4629, C1) — OPAQUE-TRANSFORM RECOGNITION.
+//
+// A residual `readModifyWriteStateMd(path, (content) => …)` call whose transform
+// (2nd) argument is an inline anonymous arrow / function expression is the opaque
+// shape §8.1 replaces with a declared StateWriteIntent: `readModifyWriteStateMd`
+// goes THROUGH the seam (it is NOT a raw-write bypass — Axis 2's concern), but its
+// opaque body transform is neither verified (§8.2) nor bounded (§8.3). This
+// function RECOGNIZES that shape.
+//
+// C1 ships recognition as a CAPABILITY: it is exported and unit-tested (positive
+// control on a seeded fixture) but is DELIBERATELY NOT wired into `collect()`'s
+// failing scan. §8.1's caller-side rule is *Required — Phase 2*; wiring it now
+// would turn the ~16 residual callers red at once, and ADR-3473 §8.6 retired the
+// ratchet that would otherwise be needed to absorb them. C2 wires this terminal as
+// the verifying executor lands and the callers migrate under ADR-3408 §6 phasing.
+//
+// String match, never an AST — same over-report-safe posture as every axis here.
+const OPAQUE_RMW_CALL_RE = /\breadModifyWriteStateMd\s*\(/g;
+// The transform arg is OPAQUE when it BEGINS an inline anonymous function: an
+// arrow (`(…) =>`, `ident =>`, optionally `async`) or a `function` expression. A
+// bare identifier / object (a declared StateWriteIntent, Phase 2+) is NOT opaque.
+const ANON_TRANSFORM_RE =
+  /^\s*(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>|^\s*(?:async\s+)?function\b/;
+
+/**
+ * Capture the top-level, comma-separated argument list of a call, starting at
+ * `startIdx` (the index just AFTER the opening `(`) — across newlines and
+ * string-aware, tracking `()[]{}` depth. Returns the raw arg strings, or null if
+ * the parens never balance (a truncated arg list is never flagged). Generalizes
+ * `captureFirstArg`'s depth/inStr bookkeeping to every argument.
+ */
+function captureCallArgList(text, startIdx) {
+  let depth = 0;
+  let inStr = null;
+  const args = [];
+  let cur = '';
+  for (let i = startIdx; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      cur += ch;
+      if (ch === inStr && text[i - 1] !== '\\') inStr = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') { inStr = ch; cur += ch; continue; }
+    if (ch === '(' || ch === '[' || ch === '{') { depth++; cur += ch; continue; }
+    if (ch === ')' || ch === ']' || ch === '}') {
+      if (ch === ')' && depth === 0) {
+        if (cur.trim() !== '' || args.length) args.push(cur);
+        return args;
+      }
+      depth--; cur += ch; continue;
+    }
+    if (ch === ',' && depth === 0) { args.push(cur); cur = ''; continue; }
+    cur += ch;
+  }
+  return null; // parens never balanced
+}
+
+/**
+ * Recognize residual opaque-transform STATE.md writes (ADR-4629 §8.1). Returns a
+ * finding per `readModifyWriteStateMd(` call whose 2nd argument is an inline
+ * anonymous transform. CAPABILITY only in C1 — not called by `collect()`.
+ */
+function findOpaqueStateTransforms(rel, text) {
+  const rawLines = text.split('\n');
+  const stripped = stripComments(text).join('\n');
+  const out = [];
+  let m;
+  OPAQUE_RMW_CALL_RE.lastIndex = 0;
+  while ((m = OPAQUE_RMW_CALL_RE.exec(stripped)) !== null) {
+    const args = captureCallArgList(stripped, m.index + m[0].length);
+    if (!args || args.length < 2) continue;
+    if (!ANON_TRANSFORM_RE.test(args[1])) continue;
+    const lineNo = stripped.slice(0, m.index).split('\n').length;
+    out.push({
+      reason: REASON.OPAQUE_STATE_TRANSFORM,
+      axis: 'opaque-transform',
+      file: sanitizeForReport(rel),
+      line: lineNo,
+      source: sanitizeForReport((rawLines[lineNo - 1] || '').trim()),
+    });
+  }
+  return out;
+}
+
 // The two write-seam STAGE functions, matched only as CALLS (`\(`
 // immediately after, modulo whitespace) — never as bare mentions of the
 // name. `writeStateMd(` is deliberately NOT included here (that arm is
@@ -941,6 +1032,8 @@ module.exports = {
   nearestPrecedingAssignment,
   findRawStateWrites,
   targetsStatePath,
+  findOpaqueStateTransforms,
+  captureCallArgList,
   findCompositionBypasses,
   findPromptSeamUses,
   isInsideCodeSpan,

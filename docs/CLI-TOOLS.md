@@ -162,7 +162,7 @@ node gsd-tools.cjs phase next-decimal <phase>
 node gsd-tools.cjs phase add <description>
 
 # Insert decimal phase after existing
-node gsd-tools.cjs phase insert <after> <description>
+node gsd-tools.cjs phase insert <after> <description> [--sibling]
 
 # Remove phase, renumber subsequent
 node gsd-tools.cjs phase remove <phase> [--force]
@@ -1165,6 +1165,13 @@ pre-milestone directories are not counted as current-milestone phases, and the
 aggregate completion percentage no longer reads `100` while phases from the
 active window are still outstanding.
 
+On a project explicitly configured with `phase_id_convention: "bracket"`, both
+JSON surfaces keep the phase's bare join key in `phases[].number` and add its
+canonical human label in `phases[].display_id` (for example,
+`{"number":"05.03","display_id":"[GSD.02] 05.03"}`). Their
+`milestone_version` and table headings use `[GSD.02]` rather than the legacy
+`v2.0` marker. Other conventions retain their prior object and table shapes.
+
 ```bash
 # Complete a todo
 node gsd-tools.cjs todo complete <filename> [--dry-run]
@@ -1176,6 +1183,20 @@ moving the file or touching anything on disk. A real completion moves the todo
 from `todos/pending/` to `todos/completed/` and upserts `completed:` and
 `status: completed` inside the file's frontmatter block. Unknown flags are
 rejected loudly.
+
+`<filename>` is a **basename inside the todos root**, not a path. A basename
+guard runs first, before `<filename>` is joined onto any directory: a value
+containing an embedded separator (either `/` or `\`, e.g. `sub/name.md` or
+`sub\name.md`), a value whose own basename differs from itself (e.g.
+`a/../../b.md`, `../sibling.md`), a bare `.` or `..`, an absolute path (e.g.
+`/etc/passwd`), or a NUL byte is rejected as a usage error **before** any file
+is read or moved (#4327, #4652). A traversal that only escapes the `pending`/
+`completed` subdirectory without leaving the todos root (`../sibling.md`) is
+caught by this same guard, not by containment. Containment against the todos
+root still runs afterward as defense-in-depth for the resolved source and
+target paths, so neither half of the move can land outside the root. The
+check covers both halves of the move, and `--dry-run` is rejected on the same
+terms rather than previewing a resolved outside path.
 
 ```bash
 # UAT audit — scan all phases for unresolved items
@@ -1194,8 +1215,10 @@ node gsd-tools.cjs audit-open acknowledge --category <category> --milestone <ver
 node gsd-tools.cjs from-gsd2 [--path <dir>] [--force] [--dry-run]
 
 # Git commit with config checks
-node gsd-tools.cjs commit <message> [--files f1 f2] [--amend] [--no-verify] [--respect-staged]
+node gsd-tools.cjs commit <message> [--files f1 f2] [--files-removed f3 dir/] [--amend] [--no-verify] [--respect-staged]
 ```
+
+> `--files-removed <paths>` (#4208): the caller-declared deletions. A `--files` entry that is missing on disk is skipped, never staged as a deletion (#2014) — so a moved file's old path cannot be recorded through `--files` at all, and the only form that recorded a move was a directory entry, which also commits any unrelated file sitting in that directory. Each `--files-removed` entry names a file, or a directory whose tracked-but-absent files are the removals; those paths are staged as deletions and join the commit pathspec. "Tracked" means in the index or in `HEAD`, so a deletion the caller already staged with `git rm` is committed too; "present" is the path itself (`lstat`), so a symlink counts as present even when its target is gone. A file entry that is still present on disk fails the commit closed (`reason: 'staging_failed'`); a path git never tracked is a no-op. Absence alone is not removal: an index entry that is absent from the worktree by design — a submodule gitlink, a skip-worktree (sparse-checkout) path, an assume-unchanged path, an unmerged entry, an intent-to-add (`git add -N`) entry — is never staged as a deletion; under a directory entry it is left alone like a present file, and named directly (by any spelling that resolves to it) it fails closed naming the state. On a staging failure the rollback puts back every index entry this call removed with its recorded mode and blob (`update-index --cacheinfo`), including on an unborn `HEAD` where `git reset` has nothing to restore from; like the addition-side reset it is best-effort — an index that cannot be written reports the staging error, not a clean rollback. `--files` keeps its skip-if-missing contract unchanged. A move is therefore `--files new/path --files-removed old/path`. GSD's own `close_phase_todos` step (`execute-phase.md`) uses exactly that form, naming each moved todo on both sides rather than passing the two directories: a directory entry would also commit an unrelated todo a concurrent session dropped into `pending/` or `completed/` while the phase was closing.
 
 > `--no-verify`: Skips pre-commit hooks. Used by parallel executor agents during wave-based execution to avoid build lock contention (e.g., cargo lock fights in Rust projects). The orchestrator runs hooks once after each wave completes. Do not use `--no-verify` during sequential execution — let hooks run normally.
 > `--files <paths>` **staging behaviour**: by default, `--files` runs `git add -- <path>` for each named file before committing. This overwrites any per-hunk staging set up via `git add -p`. Pass `--respect-staged` to skip the `git add` step and commit only what is already in the index within the requested pathspec. If nothing is staged within that scope, the command returns `{ committed: false, reason: 'nothing staged' }` without error. The trailing `-- <paths>` pathspec on the commit is applied under both modes, so files staged outside the `--files` scope are never included (#3061 invariant).
@@ -1231,7 +1254,7 @@ node gsd-tools.cjs restore-custom-files --config-dir <config-dir> --apply
 | Field | Meaning |
 |---|---|
 | `path` | Path relative to the config dir — where the file came from and goes back to |
-| `outcome` | `eligible` (plan mode) · `restored` · `skipped_destination_managed` · `skipped_destination_exists` · `skipped_copy_failed` · `skipped_unsafe_path` |
+| `outcome` | `eligible` (plan mode) · `restored` · `already_present` · `skipped_destination_managed` · `skipped_destination_exists` · `skipped_copy_failed` · `skipped_unsafe_path` |
 | `warnings` | Advisory `{code, detail}` findings from the compatibility pass; never blocks a restore |
 
 Warning codes: `destination_managed`, `destination_exists`,
@@ -1246,9 +1269,12 @@ retired, invokes a `/gsd:` command that no longer exists, or is missing the
 Three things the restore never does: it never deletes the backup, it never
 overwrites a path the new release ships (`skipped_destination_managed`), and it
 never overwrites a different file already on disk
-(`skipped_destination_exists`). Symlinked backup entries are skipped outright
-rather than followed (`skipped_unsafe_path`). A single unwritable entry is
-reported and the remaining entries still restore.
+(`skipped_destination_exists`). A destination that is already byte-identical to
+its backup is reported as `already_present` and left untouched — it counts
+toward neither `eligible_count` nor `restored_count`, so a plan run after a
+successful restore no longer offers the same file again. Symlinked backup
+entries are skipped outright rather than followed (`skipped_unsafe_path`). A
+single unwritable entry is reported and the remaining entries still restore.
 
 ---
 
@@ -1275,7 +1301,7 @@ node gsd-tools.cjs worktree set-baseref
 | `head-matches-fork` | `false` | HEAD and `origin/HEAD` are the same commit |
 | `head-diverged-from-fork` | `true` | Branch is ahead of or diverged from `origin/HEAD` |
 | `fork-ref-unknown` | `true` | `origin/HEAD` could not be resolved |
-| `no-head` | `false` | Not in a git repo (no `HEAD`) — `git rev-parse HEAD` exited 128 (definitive), or exited 0 with empty stdout |
+| `no-head` | `true` for exit 128, `false` for exit 0 with empty stdout | Exit 128 is git's definitive "no resolvable HEAD here" answer — not a git repository, or a repository with no commits; no harness worktree can be created, so the check degrades to sequential (#4734), with a `message` explaining why. Exit 0 with empty stdout is ambiguous (git completed without a definitive answer) and stays non-degrading (`headAbsenceVerified` distinguishes the two: `true` / `false`) |
 | `head-unresolvable` | `true` | `git rev-parse HEAD` did not return a definitive answer (timed out, `git` missing, or any other non-128 failure) — fails closed rather than being treated as `no-head` |
 
 **`worktree set-baseref`** applies a no-clobber write of `worktree.baseRef:"head"` to `.claude/settings.local.json`. If the file already contains an explicit `baseRef` value other than `"head"`, the existing value is preserved and `skipped:"explicit-other"` is returned. Malformed JSON causes an error rather than a silent overwrite. Both fresh installs and upgrades of GSD Core run this automatically when `workflow.use_worktrees` is enabled (the default); the command is also available for manual use — for example, to apply the setting when worktrees were toggled on after installation, or to re-apply it after a settings change.
@@ -1338,6 +1364,18 @@ When a manifest entry carries a declared `files_modified`, `cleanup-wave` compar
 This is advisory: it does not change `ok`, `reason`, the per-entry `status`, or the exit code, and the merge proceeds either way. Promotion to a hard gate would be a separate, disclosed change.
 
 Two deliberate limits keep it from crying wolf. `.planning/**/*SUMMARY.md` paths are always exempt — the executor writes a SUMMARY by orchestration contract and no plan declares it. Glob patterns are matched by their literal prefix only, so `src/**/*.ts` covers everything under `src/`, and a pattern with no literal prefix (`*.md`) suppresses warnings for that entry rather than reporting every file.
+
+**Merge timeout and a killed merge's residue (#4721)**
+
+The merge step is the one git call in `cleanup-wave` that runs the commit-family hooks (`pre-merge-commit`, `prepare-commit-msg`, `commit-msg`, `post-merge`), so it runs under its own budget — 10 minutes by default (`DEFAULT_MERGE_TIMEOUT_MS`; `deps.mergeTimeoutMs` for callers of the module) — rather than the 10-second timeout every other git call in the wave keeps. (`worktree add` runs `post-checkout` and every ref update runs `reference-transaction`; those are plumbing-cheap and stay on the default.) A repo whose pre-merge hook is a test-suite gate therefore merges instead of being killed mid-hook.
+
+When the merge does exceed its budget the entry blocks on `reason: "merge_timed_out"`, and its `stderr` names the budget, says the hook may still be running, and labels whatever the hook had printed as output before the kill — instead of the old `merge_failed`, which carried that partial output as though it were git's own error. `merge_failed` is otherwise unchanged — a merge git refused, one that conflicted, or one killed by a signal from outside (which the seam reports with the signal, not as a timeout; that case still takes the restore below).
+
+A merge killed while its hook runs has already staged the merged tree into the primary checkout's index but never wrote `MERGE_HEAD`, so `git merge --abort` finds nothing and the mid-merge check (#2852) reads the primary as clean. Left there, a plain `git commit` from the primary would squash the executor's history into a single-parent commit. After a merge that was **killed** — at its budget, or by a signal from outside — and only then, `cleanup-wave` reads the index, runs `git reset --merge` (which restores exactly the paths the merge staged and keeps unrelated unstaged edits), and re-reads it. Each restored path is reported as a `code: "merge_residue_restored"` warning and the wave continues. If the index is still dirty afterwards, or cannot be read at all, each remaining path (or a single `path: null` when the read itself failed) is reported as `code: "merge_residue_left_staged"` and the remaining entries are moved to `pending` — the same repo-level halt an unfinished merge triggers, because every later merge would run against that dirty index.
+
+The kill gate is what makes the staged set attributable to the merge. A merge git *refuses* (`error: Your local changes to the following files would be overwritten by merge`) is the immediate exit a pre-existing dirty index earns, and it leaves that index untouched; on that path nothing is read or reset, because anything staged is your own work. The one exception is `merge.autoStash`: git then parks your staged work in `MERGE_AUTOSTASH` and starts anyway, and a merge killed before `MERGE_HEAD` exists never re-applies it. `git reset --merge` moves that autostash into the stash list, and `cleanup-wave` then runs `git stash pop --index` to put it back with its staged state intact. If the pop fails, or the autostash state could not be determined, the entry carries a `code: "merge_autostash_unrestored"` warning (`path: null`) and your work stays in `git stash list`; the index is then re-read, and the wave continues only if it is clean — a pop that left conflict entries behind halts the remaining entries as `merge_residue_left_staged`, since the next merge would fail on unmerged files. A kill that lands once `MERGE_HEAD` exists (inside `commit-msg`, say) is the ordinary abort path: `git merge --abort` restores the tree and re-applies an autostash itself — unstaged, as git does for any aborted autostashed merge — and the residue step finds nothing to do.
+
+Known limit: the kill terminates `git`, not the hook process it spawned. A hook that keeps running and itself stages files after the wave has verified the index clean can re-dirty the primary; the `merge_timed_out` detail says so, and a hook that takes minutes belongs under a larger `mergeTimeoutMs`, not under this recovery.
 
 ---
 
@@ -1404,7 +1442,7 @@ User-facing entry point: `/gsd-graphify` (see [Command Reference](COMMANDS.md#gs
 
 ```bash
 node gsd-tools.cjs config-set review.models.codex    "gpt-5"
-node gsd-tools.cjs config-set review.models.gemini   "gemini-2.5-pro"
+node gsd-tools.cjs config-set review.models.agy      "gemini-3.1-pro-preview"
 node gsd-tools.cjs config-set review.models.opencode "claude-sonnet-4"
 node gsd-tools.cjs config-set review.models.claude   ""   # clear — fall back to session model
 ```

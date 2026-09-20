@@ -673,9 +673,11 @@ ledger (protocol 0c — a fresh shell per Bash call; the base comes from disk):
 ```bash
 PLAN_HEAD_BEFORE=$(cat "$(git rev-parse --git-dir)/gsd-plan-head-before-{phase}-{plan}")
 COMMITS_ACTUAL=$(git rev-list --count ${PLAN_HEAD_BEFORE}..HEAD)
+PLAN_HEAD_AFTER=$(git rev-parse HEAD)
 ```
-Write BOTH into the frontmatter — `commits: ${COMMITS_ACTUAL}`,
-`plan_head_before: ${PLAN_HEAD_BEFORE}` — including when the count is `0`.
+Write ALL THREE into the frontmatter — `commits: ${COMMITS_ACTUAL}`,
+`plan_head_before: ${PLAN_HEAD_BEFORE}`, `plan_head_after: ${PLAN_HEAD_AFTER}` — including
+when the count is `0`.
 A `0` with code changes means the changes sit UNCOMMITTED: **HALT — do not write the
 SUMMARY with a narrated count**; surface `git status --short` in your return. A `0` with no
 code changes (docs-only) is legitimate. `/gsd:verify-work` flags mismatches as BLOCKER.

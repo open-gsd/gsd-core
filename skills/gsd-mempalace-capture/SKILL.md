@@ -84,15 +84,19 @@ On any error or timeout, stop and let the phase continue -- capture is best-effo
    ROOM_DIR="$STAGE/<room>/<phase-id>"
    mkdir -p "$ROOM_DIR"
    cp "<artifact-path>" "$ROOM_DIR/<basename>"
-   # Mine with --wing only — no --room flag; detect_room() assigns from the folder path
-   mempalace mine "$STAGE" --wing <wing>
+   # Mine with --wing only — no --room flag; detect_room() assigns from the folder path.
+   # --daemon --background (#4700): MemPalace wraps every mine in a per-palace
+   # lock; a concurrent writer would make a foreground mine exit 1
+   # (MineAlreadyRunning) and this onError: skip step would silently drop the
+   # capture. The background queue defers the job until the lock frees.
+   mempalace mine "$STAGE" --wing <wing> --daemon --background
    ```
 3. **Mirror KG facts** unless `config.mempalace.mirror_kg === false` (registry default is true — an absent key means enabled): extract decision/delivery facts and `mempalace_kg_add` them with `valid_from` = the phase date (e.g. `(<project>, decided, <decision>)` from CONTEXT; `(<phase>, delivered, <capability>)` from SUMMARY). Under `augment` these are an *additive* mirror of GSD's native `.planning/graphs/`. Under `kg_backend`/`replace` the palace KG is the *authoritative* fact store — GSD still produces `.planning/graphs/` through its normal graphify, so an unreachable palace never loses a fact.
 4. Re-running a phase MUST NOT create duplicate drawers (deterministic ids + `check_duplicate`).
 
 ## Step 4 -- Report
 
-Print a one-line summary: `Filed <artifact> → <wing>/<room> (<n> KG facts)` or `MemPalace unavailable — capture skipped`.
+Print a one-line summary: `Filed <artifact> → <wing>/<room> (<n> KG facts)`, `Capture queued — palace busy; MemPalace will file it when the lock frees` (the background mine was deferred behind another writer), or `MemPalace capture skipped — <reason>` (#4700: a skipped capture is never silent).
 
 ## Anti-Patterns
 

@@ -55,10 +55,22 @@ export interface TaxonomyEntry {
   consideration: string;
 }
 
-/** A UI element to probe; `elements` is an optional authored override of classification. */
+/**
+ * A UI element to probe; `elements` is an optional authored override of classification.
+ *
+ * `text_en` (#4657) is an optional English translation of `text`, read by element
+ * classification in preference to `text` when present (`text_en ?? text`). `UI_CUES`
+ * are English-only word-boundary patterns, so a non-English `text` (e.g. a project
+ * running with `response_language` set) classifies to zero kinds and lands every
+ * element in the `unclassified` soft signal unless `text_en` supplies an English
+ * rendering. `text` itself is unaffected and keeps its own meaning (the element's own
+ * description, in whatever language the UI-SPEC uses) — only classification reads
+ * `text_en` preferentially. Mirrors the edge adapter's `Requirement.text_en` (#3717).
+ */
 export interface Element {
   id: string;
   text?: string;
+  text_en?: string;
   elements?: UIElementKind[];
 }
 
@@ -146,7 +158,7 @@ export const UI_VALIDATORS: Validators = {
  */
 export function validateRequirement(element: Element): void {
   coreValidateRequirement(element);
-  const r = element as unknown as { elements?: unknown; text?: unknown };
+  const r = element as unknown as { elements?: unknown; text?: unknown; text_en?: unknown };
   if (r.elements != null && !Array.isArray(r.elements)) {
     throw new Error(`element ${element.id} elements must be an array when present`);
   }
@@ -154,6 +166,15 @@ export function validateRequirement(element: Element): void {
     throw new Error(
       `element ${element.id} text must be a non-empty string when no elements override is provided`,
     );
+  }
+  // text_en (#4657) is optional, but when present it must be a non-empty string. An empty
+  // string is NOT caught by `??` (only null/undefined are), so an unvalidated `text_en: ''`
+  // would silently win `text_en ?? text` and classify against '' — the same fail-open shape
+  // #1110/#2773 already exist to eliminate, just moved one field over. Validated
+  // unconditionally (not gated on whether `elements` will make it unused) so bad data fails
+  // closed even when it happens to be dead for this particular call.
+  if (r.text_en != null && !(typeof r.text_en === 'string' && r.text_en.trim())) {
+    throw new Error(`element ${element.id} text_en must be a non-empty string when present`);
   }
 }
 
@@ -184,7 +205,11 @@ export function proposeConsiderations(element: Element): UIConsideration[] {
     }
     kinds = element.elements;
   } else {
-    kinds = classifyElement(element.text as string);
+    // #4657: prefer the English translation when present — UI_CUES are English-only
+    // word-boundary patterns, so a non-English `text` (e.g. response_language projects)
+    // would otherwise classify to zero kinds. validateRequirement (called above) has
+    // already guaranteed text_en, if present, is a non-empty string.
+    kinds = classifyElement((element.text_en ?? element.text) as string);
     if (kinds.length === 0) {
       // Prose present but no element cue matched. Do NOT silently drop it (#1110): a UI element
       // whose phrasing missed every cue would otherwise vanish from coverage with no signal — the
@@ -270,7 +295,7 @@ export function proposeElements(elements: Element[]): ElementProposal[] {
     const considerations = proposeConsiderations(el);
     const kinds: UIElementKind[] = Array.isArray(el.elements)
       ? el.elements // already validated inside proposeConsiderations
-      : classifyElement(el.text as string);
+      : classifyElement((el.text_en ?? el.text) as string); // #4657: text_en ?? text
     const unclassified = !Array.isArray(el.elements) && kinds.length === 0;
     const categories = unclassified ? [] : applicableCategories(kinds);
     return { id: el.id, kinds, categories, considerations, unclassified };

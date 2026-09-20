@@ -16,6 +16,14 @@ const path = require('path');
 const os = require('os');
 const { cleanup, captureFdSync } = require('./helpers.cjs');
 
+/**
+ * A `config-get` CLI call with a deliberately pathological 50KB key,
+ * proving the call fails safely without hanging -- distinct from
+ * PROBE_TIMEOUT_MS's plain-query class (15000ms) despite the shared file,
+ * since this site is specifically testing pathological-input tolerance.
+ */
+const LONG_KEY_CLI_TIMEOUT_MS = 8000;
+
 // In-process invocation, not execFileSync: cmdConfigGet is a pure CJS
 // function reachable without spawning `node` as a child. The prior
 // execFileSync(..., { timeout: 5000 }) raced a real subprocess's startup
@@ -767,6 +775,7 @@ const { execFileSync } = require('node:child_process');
 const GSD_TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 const { ERROR_REASON } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'io.cjs'));
 const { cleanup } = require('./helpers.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 describe('bug-2943: config-get returns schema default for context_window', () => {
   let tmpDir;
@@ -798,7 +807,7 @@ describe('bug-2943: config-get returns schema default for context_window', () =>
       stdout = execFileSync(process.execPath, args, {
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: 15000,
+        timeout: PROBE_TIMEOUT_MS,
       });
     } catch (err) {
       exitCode = err.status ?? 1;
@@ -1108,7 +1117,7 @@ test('config-get with a very long key (50KB) fails safely without hanging', (t) 
   const projectDir = createTempProject('cli-neg-config-13-');
   t.after(() => cleanup(projectDir));
   const longKey = 'x'.repeat(50000);
-  const result = runCli(['config-get', longKey], { cwd: projectDir, timeoutMs: 8000 });
+  const result = runCli(['config-get', longKey], { cwd: projectDir, timeoutMs: LONG_KEY_CLI_TIMEOUT_MS });
   assert.equal(result.signal, null, 'long input must not trigger the harness timeout');
   assert.equal(result.hasStackTrace, false, 'long input must not crash');
   assert.notEqual(result.status, 0, 'unknown 50KB key must fail');

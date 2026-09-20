@@ -20,7 +20,7 @@ import { stateReplaceField, stateExtractField, stateReplaceFieldIfTemplate, stat
 import { KNOWN_TEMPLATE_DEFAULTS, toFiniteNumber, computeProgressPercent } from './state-document.cjs';
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
-import { deriveProgressFromRoadmap, clampPercent, clampPercentFromFraction } from './phase-lifecycle.cjs';
+import { deriveProgressFromRoadmap, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
 import { escapeRegex } from './pattern.cjs';
 // #4129: the completion-ratio kernel for the resync-arm ratchet's percent
 // (planning-scope's SCOPE — state-document's own dependency, no cycle here:
@@ -38,12 +38,13 @@ export function formatProgressMachineSegment(percent: number): string {
   // ADR-3180 Decision 7: rounding and the 100 ceiling belong to the
   // completion-ratio kernel. The floor is added here because this helper is
   // also fed persisted frontmatter values (hand-editable, unlike the
-  // count-shaped entries into that kernel), and `'░'.repeat` throws on a
-  // negative count. Bar and printed percent use the clamped value so the two
-  // halves of the segment can never disagree.
+  // count-shaped entries into that kernel). Bar and printed percent use the
+  // clamped value so the two halves of the segment can never disagree.
+  // #4294: the CELL count is the render kernel's — `renderProgressBar` holds a
+  // sub-100 percent one cell short of full, so `[██████████]` beside `95%`
+  // cannot recur here as a seventh inline copy of the rounding.
   const clamped = Math.max(0, clampPercentFromFraction(percent / 100));
-  const filled = Math.round(clamped / 10);
-  return `[${'█'.repeat(filled)}${'░'.repeat(10 - filled)}] ${clamped}%`;
+  return `[${renderProgressBar(clamped, 10)}] ${clamped}%`;
 }
 
 // Consumers (a future STATE.md writer that bypasses all three reintroduces the
@@ -516,6 +517,82 @@ export function openStateTransaction(init: StateTransactionInit): StateTransacti
  */
 export function rebuildStateTransaction(init: StateTransactionInit): StateTransaction {
   return createStateTransaction('rebuild', init, 'rebuildStateTransaction');
+}
+
+// ----------------------------------------------------------------------------
+// StateWriteIntent — ADR-4629 §8.1 (epic #4629, child C1, migration step 1)
+// ----------------------------------------------------------------------------
+//
+// ADR-1769 Decision 2 scoped the state-transition model to 10 transitions and
+// REJECTED covering all 16 writers; the residual writers still ride an opaque
+// `transformFn: (content: string) => string` (`readModifyWriteStateMd`,
+// src/state.cts). The write seam preserves FRONTMATTER, but the opaque body
+// transform is neither verified (did every intended assertion land? §8.2) nor
+// bounded (did anything OUTSIDE the declared scope change? §8.3) — the residue
+// behind the write-path bugs epic #4629 absorbs.
+//
+// StateWriteIntent is the declared replacement: which field/section assertions
+// the write must land (required vs best-effort) and the mutation scope it may
+// touch (narrow | broad). It EXTENDS StateTransaction so an intent IS-A
+// transaction everywhere the write seam already expects one. C1 ships the TYPE +
+// constructor only — §8.1's caller-side rule ("no residual caller supplies an
+// anonymous transform") is statused *Required — Phase 2*, so nothing constructs
+// this in production yet; C2 (the verifying executor) and C3+ (caller migration)
+// consume it.
+
+export type StateAssertionRequirement = 'required' | 'best-effort';
+export type StateMutationScope = 'narrow' | 'broad';
+
+/** One declared post-state assertion: a frontmatter field or a body section. */
+export type StateFieldAssertion = {
+  readonly field: string;
+  readonly requirement: StateAssertionRequirement;
+};
+
+export type StateWriteIntentInit = {
+  readonly assertions?: ReadonlyArray<StateFieldAssertion>;
+  readonly scope?: StateMutationScope;
+};
+
+/**
+ * ADR-4629 §8.1: a StateTransaction PLUS the declared write intent — the
+ * assertions verified against the re-read file (§8.2) and the mutation scope the
+ * write may not exceed (§8.3). Both are Phase-2 consumers; the type exists now so
+ * Phase 2 has a surface to build on.
+ */
+export type StateWriteIntent = StateTransaction & {
+  readonly assertions: ReadonlyArray<StateFieldAssertion>;
+  readonly scope: StateMutationScope;
+};
+
+/**
+ * Extend an existing StateTransaction into a StateWriteIntent. The base
+ * transaction is REQUIRED — an absent base is a construction failure, mirroring
+ * `createStateTransaction`'s ADR-3473 §8.6 posture (do not tolerate null). `scope`
+ * defaults to the conservative `'narrow'`; `assertions` defaults to none. Frozen
+ * so an intent, like a transaction, cannot be mutated after construction.
+ */
+export function createStateWriteIntent(
+  transaction: StateTransaction,
+  init: StateWriteIntentInit = {},
+): StateWriteIntent {
+  if (transaction === null || typeof transaction !== 'object' || Array.isArray(transaction)) {
+    const err = new Error(
+      'createStateWriteIntent: a base StateTransaction is required (build it with ' +
+      'openStateTransaction / rebuildStateTransaction first). Per ADR-4629 §8.1, an absent ' +
+      'transaction is a construction failure — do not tolerate null.',
+    ) as Error & { code: string };
+    err.code = 'STATE_WRITE_INTENT_TRANSACTION_REQUIRED';
+    throw err;
+  }
+  const assertions: ReadonlyArray<StateFieldAssertion> = Object.freeze(
+    (init.assertions ?? []).map((a) => Object.freeze({ field: a.field, requirement: a.requirement })),
+  );
+  return Object.freeze({
+    ...transaction,
+    assertions,
+    scope: init.scope ?? 'narrow',
+  });
 }
 
 // ----------------------------------------------------------------------------

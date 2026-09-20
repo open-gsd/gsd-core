@@ -9,8 +9,12 @@
  *
  * A prior version of this PR added a `docs guards` RULE to `RULES` in
  * scripts/ci-test-scope.cjs, on the theory that classify()'s `!codeChanged`
- * normalization (which zeroes fullMatrix/targeted_tests/windows_tests for
- * docs-only diffs) made the RULE inert to classify()'s scope decision.
+ * normalization (which at the time zeroed fullMatrix/targeted_tests/
+ * windows_tests for docs-only diffs) made the RULE inert to classify()'s
+ * scope decision. (#4641 later removed `windows_tests` from classify()'s
+ * output entirely; the normalization today only zeroes fullMatrix and
+ * targeted_tests. This paragraph is historical narration of a rejected
+ * design, not a description of current behaviour.)
  *
  * That is true for docs-ONLY diffs and FALSE for MIXED docs+code diffs:
  * `codeChanged` is true whenever ANY changed file is product/pipeline code,
@@ -268,6 +272,32 @@ const DOCS_GUARD_TESTS = {
   // seeding, so a content edit to any of them (e.g. renaming a landmark
   // heading/string a hostile-input test targets) can change this test's
   // fixture assumptions.
+  // #4728: pins the retirement of Gemini CLI prose from every localized
+  // how-to/ARCHITECTURE/USER-GUIDE/CONFIGURATION/context-monitor mirror, plus
+  // the PRESERVE (Antigravity) and MODEL-AXIS (Gemini 2.5 Pro) negative-space
+  // checks in the same locales.
+  'tests/gemini-runtime-removed.test.cjs': [
+    'docs/ja-JP/how-to/install-on-your-runtime.md',
+    'docs/ko-KR/how-to/install-on-your-runtime.md',
+    'docs/pt-BR/how-to/install-on-your-runtime.md',
+    'docs/zh-CN/how-to/install-on-your-runtime.md',
+    'docs/ja-JP/ARCHITECTURE.md',
+    'docs/ko-KR/ARCHITECTURE.md',
+    'docs/pt-BR/ARCHITECTURE.md',
+    'docs/zh-CN/ARCHITECTURE.md',
+    'docs/ja-JP/USER-GUIDE.md',
+    'docs/ko-KR/USER-GUIDE.md',
+    'docs/pt-BR/USER-GUIDE.md',
+    'docs/zh-CN/USER-GUIDE.md',
+    'docs/ja-JP/CONFIGURATION.md',
+    'docs/ko-KR/CONFIGURATION.md',
+    'docs/pt-BR/CONFIGURATION.md',
+    'docs/zh-CN/CONFIGURATION.md',
+    'docs/ja-JP/context-monitor.md',
+    'docs/ko-KR/context-monitor.md',
+    'docs/pt-BR/context-monitor.md',
+    'docs/zh-CN/context-monitor.md',
+  ],
   'tests/gen-state-md-docs.test.cjs': [
     'docs/reference/state-md.md',
     'docs/ja-JP/reference/state-md.md',

@@ -21,6 +21,16 @@ const { promisify } = require('node:util');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { getLiveCommandTokens } = require('./helpers/live-command-registry.cjs');
+const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+
+// Bounds a full run of scripts/qa-smell-ratchet.cjs against the real repo
+// tree (a static-analysis scan, not an installer or a CLI subcommand). The
+// value numerically coincides with INSTALL_TIMEOUT_MS in
+// tests/helpers/timeouts.cjs, but describes a different class of work, so
+// it is kept local rather than reusing that constant. No fresh bench data
+// justifies a different number, so the pre-existing 120000ms literal is
+// preserved exactly under this name.
+const QA_SMELL_RATCHET_SCAN_TIMEOUT_MS = 120000;
 
 const { KIND, classify } = require('./qa/result.cjs');
 const { ORACLES, runOracles, SEVERITY } = require('./qa/oracles.cjs');
@@ -1617,7 +1627,7 @@ describe('worktree-concurrency (dedicated — trajectory 9 is not expressible as
     const { stdout } = await execFileAsync(
       process.execPath,
       [TOOLS_PATH, '--json-errors', ...argv],
-      { cwd: dir, encoding: 'utf-8', env, timeout: 60000 },
+      { cwd: dir, encoding: 'utf-8', env, timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS },
     );
     return { stdout: stdout.trim(), startedAtMs, finishedAtMs: Date.now() };
   }
@@ -1849,7 +1859,7 @@ describe('qa-smell-ratchet gate (#3597)', () => {
     const result = spawnSync(
       process.execPath,
       ['-e', `require(${JSON.stringify(scriptPath)})`],
-      { cwd: repoRoot, timeout: 120000, encoding: 'utf-8' },
+      { cwd: repoRoot, timeout: QA_SMELL_RATCHET_SCAN_TIMEOUT_MS, encoding: 'utf-8' },
     );
     assert.strictEqual(
       result.status,

@@ -35,9 +35,10 @@ Parse from init JSON: `phase_found`, `phase_dir`, `phase_number`, `phase_name`, 
 
 **Input sanitization (defense-in-depth):**
 ```bash
-# Validate PADDED_PHASE contains only digits and optional dot (e.g., "02", "03.1")
-if ! [[ "$PADDED_PHASE" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-  echo "Error: Invalid phase number format: '${PADDED_PHASE}'. Expected digits (e.g., 02, 03.1)."
+# Validate PADDED_PHASE matches the canonical phase-number grammar (src/phase-id.cts): digits,
+# an optional single uppercase letter, then dotted segments (e.g., "02", "03.1", "23.1.2", "12A")
+if ! [[ "$PADDED_PHASE" =~ ^[0-9]+[A-Z]?(\.[0-9]+)*$ ]]; then
+  echo "Error: Invalid phase number format: '${PADDED_PHASE}'. Expected digits with an optional letter suffix (e.g., 02, 03.1, 23.1.2, 12A)."
   # Exit workflow
 fi
 ```

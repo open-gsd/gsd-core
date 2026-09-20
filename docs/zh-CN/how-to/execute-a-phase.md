@@ -85,7 +85,7 @@ Git 历史记录中每个任务会有一个提交（来自各执行器），随�
 
 ## 跨 AI 执行
 
-要将执行委托给在 `workflow.cross_ai_command` 中配置的外部 AI CLI（Codex、Gemini 等）：
+要将执行委托给在 `workflow.cross_ai_command` 中配置的外部 AI CLI（Codex、Antigravity 等）：
 
 ```bash
 /gsd-execute-phase 2 --cross-ai

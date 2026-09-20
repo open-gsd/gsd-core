@@ -120,7 +120,7 @@ After applying each fix:
 <step name="setup_worktree">
 **Isolation: create a dedicated git worktree BEFORE touching any files.** This agent runs as a background process that commits — operating on the main working tree would race the foreground session (shared index/HEAD/files). Every instance runs in its own isolated worktree.
 
-**Honor `workflow.use_worktrees` (the documented opt-out; the same flag the sibling writer workflows `/gsd:execute-phase`, `/gsd:execute-plan`, `/gsd:quick`, `/gsd:diagnose-issues` all honor — this is the only writer that hand-rolls its own worktree).** Read it directly via `node` from `.planning/config.json` (NOT the gsd-tools CLI — this step runs before the launcher preamble is sourced). When `false`: edit/commit in the main checkout directly — `wt="."`, `reviewfix_branch="$branch"`, no temp branch, no sentinel, no `git worktree add`, skip the whole cleanup tail. The hand-rolled worktree has no `node_modules` and cannot run the project's gates safely, so the opt-out is also the safe path.
+**Honor `workflow.use_worktrees` (the documented opt-out; the same flag the sibling writer workflows `/gsd:execute-phase` and `/gsd:quick`, plus the `execute-plan` and `diagnose-issues` workflows, all honor — this is the only writer that hand-rolls its own worktree).** Read it directly via `node` from `.planning/config.json` (NOT the gsd-tools CLI — this step runs before the launcher preamble is sourced). When `false`: edit/commit in the main checkout directly — `wt="."`, `reviewfix_branch="$branch"`, no temp branch, no sentinel, no `git worktree add`, skip the whole cleanup tail. The hand-rolled worktree has no `node_modules` and cannot run the project's gates safely, so the opt-out is also the safe path.
 
 ```bash
 USE_WORKTREES=$(node -e '
@@ -136,10 +136,11 @@ branch=$(git branch --show-current)
 test -n "$branch" || { echo "Detached HEAD is not supported for review-fix (#2686)"; exit 1; }
 
 # padded_phase is interpolated into a worktree PATH and a git BRANCH NAME —
-# validate at this sink too (defense in depth): digits + optional single
-# dotted numeric suffix only (e.g. '02' or '36.14'); reject '../', spaces, shell metachars.
-if ! [[ "$padded_phase" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-  echo "Invalid padded_phase for review-fix: '$padded_phase' (expected e.g. '02' or '36.14')"; exit 1
+# validate at this sink too (defense in depth): the canonical phase-number grammar
+# (src/phase-id.cts) — digits, an optional single uppercase letter, then dotted
+# numeric segments (e.g. '02', '36.14', '12A'); reject '../', spaces, shell metachars.
+if ! [[ "$padded_phase" =~ ^[0-9]+[A-Z]?(\.[0-9]+)*$ ]]; then
+  echo "Invalid padded_phase for review-fix: '$padded_phase' (expected e.g. '02', '36.14', '23.1.2', or '12A')"; exit 1
 fi
 
 # Recovery-sentinel: ${phase_dir}/.review-fix-recovery-pending.json existing means

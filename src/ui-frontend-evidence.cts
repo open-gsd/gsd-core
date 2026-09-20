@@ -22,6 +22,19 @@
  *       html, ...) are deliberately NOT static evidence: docs sites and
  *       markdown/bash/config repos routinely carry stray `.html`/`.css`, which
  *       is precisely the false-positive class #3312 reports.
+ *   (c) any `*.xaml` file, or a `*.swift` / `*.kt` / `*.dart` file whose
+ *       content carries its ecosystem's UI-framework import marker
+ *       (`import SwiftUI` / `import UIKit`, `androidx.compose`,
+ *       `package:flutter`) (#4658). Native UI projects (SwiftUI, Jetpack
+ *       Compose, Flutter, .NET MAUI) carry neither (a) nor (b), which made the
+ *       gate structurally unreachable for them. Source files match on the
+ *       IMPORT, not the extension alone — the same unambiguity bar that
+ *       justifies (b)'s subset and excludes (css, scss, html): a non-UI Swift
+ *       package (a CLI, a server) imports Foundation, not SwiftUI, and must
+ *       stay silent. `.xaml` is extension-alone for the same reason `.tsx` is —
+ *       the extension itself is unambiguous. Marker matching is case-sensitive
+ *       (imports are case-sensitive in all four ecosystems); extension
+ *       matching is case-insensitive, mirroring `UI_COMPONENT_FILE_RE`.
  *
  * All I/O failures degrade to `false` (no evidence) — never throw.
  */
@@ -31,6 +44,25 @@ import path from 'node:path';
 
 /** Component-framework file extensions — the static-evidence subset of UI_FILE_EXTENSIONS_RE. */
 export const UI_COMPONENT_FILE_RE = /\.(tsx|jsx|vue|svelte)$/i;
+
+/** Native UI source files whose CONTENT is scanned for an import marker (#4658). */
+export const NATIVE_UI_SOURCE_RE = /\.(swift|kt|dart)$/i;
+
+/** Native UI files that are evidence by extension alone — `.xaml`, the `.tsx` analogue. */
+export const NATIVE_UI_XAML_RE = /\.xaml$/i;
+
+/**
+ * Per-extension UI-framework import markers for `NATIVE_UI_SOURCE_RE` files
+ * (#4658). Every marker embeds its ecosystem's import keyword, so a bare
+ * framework-name mention in prose or a comment is not evidence; the Dart
+ * marker carries both legal quote styles. Case-sensitive: imports are
+ * case-sensitive in Swift, Kotlin and Dart.
+ */
+export const NATIVE_UI_CONTENT_MARKERS: Readonly<Record<string, readonly string[]>> = {
+  '.swift': ['import SwiftUI', 'import UIKit'],
+  '.kt': ['import androidx.compose'],
+  '.dart': ["import 'package:flutter", 'import "package:flutter'],
+};
 
 /**
  * UI-framework package.json dependencies (dependencies OR devDependencies).
@@ -106,9 +138,19 @@ function packageJsonHasUiFramework(projectDir: string): boolean {
   return false;
 }
 
-function treeHasComponentFile(projectDir: string): boolean {
-  // Iterative BFS — bounded by MAX_WALK_ENTRIES so a pathological tree cannot
-  // stall the gate. Symlinks are never followed (withFileTypes + isDirectory).
+/**
+ * Shared bounded BFS over the project tree — the single home of the walk
+ * semantics both evidence walks depend on: SKIP_DIRS pruning, the
+ * MAX_WALK_ENTRIES entry cap (cap-hit → `false`: the tree is treated as
+ * scanned and evidence stays undecided), symlinks never followed
+ * (withFileTypes Dirents), unreadable directories skipped. `visit` is called
+ * for every regular file with its name and full path; returning `true` stops
+ * the walk with `true` (evidence found).
+ */
+function walkProjectFiles(
+  projectDir: string,
+  visit: (name: string, fullPath: string) => boolean,
+): boolean {
   const queue: string[] = [projectDir];
   let visited = 0;
   while (queue.length > 0 && visited < MAX_WALK_ENTRIES) {
@@ -124,7 +166,7 @@ function treeHasComponentFile(projectDir: string): boolean {
       if (visited >= MAX_WALK_ENTRIES) return false;
       if (entry.isDirectory()) {
         if (!SKIP_DIRS.has(entry.name)) queue.push(path.join(dir, entry.name));
-      } else if (entry.isFile() && UI_COMPONENT_FILE_RE.test(entry.name)) {
+      } else if (entry.isFile() && visit(entry.name, path.join(dir, entry.name))) {
         return true;
       }
     }
@@ -132,16 +174,68 @@ function treeHasComponentFile(projectDir: string): boolean {
   return false;
 }
 
+function treeHasComponentFile(projectDir: string): boolean {
+  return walkProjectFiles(projectDir, (name) => UI_COMPONENT_FILE_RE.test(name));
+}
+
+/**
+ * Read at most the first 64 KiB of `file` and report whether any of `markers`
+ * occurs in it (#4658). Import sections live at the top of a source file, so a
+ * bounded prefix read keeps the gate's plan-time cost profile without reading
+ * generated monsters in full. Any I/O failure degrades to false — never throw.
+ */
+function fileHasAnyMarker(file: string, markers: readonly string[]): boolean {
+  let fd: number;
+  try {
+    fd = fs.openSync(file, 'r');
+  } catch {
+    return false;
+  }
+  try {
+    const bytes = Buffer.alloc(64 * 1024);
+    const read = fs.readSync(fd, bytes, 0, bytes.length, 0);
+    const prefix = bytes.toString('utf8', 0, read);
+    return markers.some((m) => prefix.includes(m));
+  } catch {
+    return false;
+  } finally {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      // already closed — nothing to degrade
+    }
+  }
+}
+
+/**
+ * Native-UI walk over the shared bounded BFS (#4658): `.xaml` is evidence by
+ * extension alone; `.swift`/`.kt`/`.dart` are evidence only when the file's
+ * content carries its ecosystem's import marker.
+ */
+function treeHasNativeUiFile(projectDir: string): boolean {
+  return walkProjectFiles(projectDir, (name, fullPath) => {
+    if (NATIVE_UI_XAML_RE.test(name)) return true;
+    if (NATIVE_UI_SOURCE_RE.test(name)) {
+      const markers = NATIVE_UI_CONTENT_MARKERS[path.extname(name).toLowerCase()];
+      return markers != null && fileHasAnyMarker(fullPath, markers);
+    }
+    return false;
+  });
+}
+
 /**
  * Does the project tree carry static evidence of a frontend?
  *
  * @param projectDir - Absolute path to the project root (the gate's cwd).
- * @returns true when package.json declares a UI-framework dependency or the
- *          tree contains a component-framework file; false otherwise (including
- *          on any I/O failure — evidence must be affirmative).
+ * @returns true when package.json declares a UI-framework dependency, the tree
+ *          contains a component-framework file, or the tree contains native UI
+ *          evidence (a `.xaml` file, or a `.swift`/`.kt`/`.dart` file carrying
+ *          its ecosystem's UI import marker — #4658); false otherwise
+ *          (including on any I/O failure — evidence must be affirmative).
  */
 export function hasStaticFrontendEvidence(projectDir: string): boolean {
   if (typeof projectDir !== 'string' || projectDir === '') return false;
   if (packageJsonHasUiFramework(projectDir)) return true;
-  return treeHasComponentFile(projectDir);
+  if (treeHasComponentFile(projectDir)) return true;
+  return treeHasNativeUiFile(projectDir);
 }

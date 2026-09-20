@@ -154,7 +154,7 @@ npx @opengsd/gsd-core@latest --codex --global   # または --opencode、--kilo 
 
 ## Anthropic 以外のランタイムでの GSD 使用
 
-Codex、OpenCode、Gemini CLI、または Kilo 向けに GSD をインストールした場合、インストーラーはすでに設定に `resolve_model_ids: "omit"` を設定しています。これにより GSD は Anthropic のモデル ID 解決をスキップし、ランタイムが独自のデフォルトモデルを選択できるようにします。基本的なケースでは手動設定は不要です。
+Codex、OpenCode、Antigravity CLI、または Kilo 向けに GSD をインストールした場合、インストーラーはすでに設定に `resolve_model_ids: "omit"` を設定しています。これにより GSD は Anthropic のモデル ID 解決をスキップし、ランタイムが独自のデフォルトモデルを選択できるようにします。基本的なケースでは手動設定は不要です。
 
 **Codex でティアードモデルを使用したい場合:**
 

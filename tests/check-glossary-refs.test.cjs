@@ -17,6 +17,7 @@ const { spawnSync } = require('node:child_process');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { copyScriptWithDeps } = require('./helpers/copy-script-fixture.cjs');
+const { GENERATOR_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const SCRIPT_REL = path.join('scripts', 'check-glossary-refs.cjs');
@@ -67,7 +68,7 @@ function run(root, args = []) {
   const res = spawnSync(process.execPath, [path.join(root, SCRIPT_REL), ...args], {
     cwd: root,
     encoding: 'utf8',
-    timeout: 30_000,
+    timeout: GENERATOR_SCRIPT_TIMEOUT_MS,
   });
   if (res.error) throw res.error;
   return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '' };
@@ -227,7 +228,7 @@ test('the real script runs cleanly against the real repo without crashing', () =
   const res = spawnSync(process.execPath, [path.join(REPO_ROOT, SCRIPT_REL), '--check'], {
     cwd: REPO_ROOT,
     encoding: 'utf8',
-    timeout: 30_000,
+    timeout: GENERATOR_SCRIPT_TIMEOUT_MS,
   });
   assert.equal(res.error, undefined, `spawn must not error: ${res.error}`);
   assert.ok(res.status === 0 || res.status === 1, `expected exit 0 or 1, got ${res.status} (stderr: ${res.stderr})`);

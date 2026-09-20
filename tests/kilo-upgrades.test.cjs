@@ -33,6 +33,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { runNode, runGit } = require('./helpers/process-seam.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const { runMinimalInstall, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
@@ -206,7 +207,7 @@ test('UPGRADE 3: gsd-mcp-server companion is reachable — spawn, initialize, to
   const res = spawnSync(process.execPath, [MCP_SERVER_BIN], {
     input: stdin,
     encoding: 'utf-8',
-    timeout: 15000,
+    timeout: PROBE_TIMEOUT_MS,
     env: { ...process.env, GSD_TEST_MODE: '1' },
   });
 

@@ -16,6 +16,7 @@ const { generateFragmentName, scaffoldFragment, parseFragment, parseArgs } = (()
 })();
 const { FRAGMENT_ERROR } = require(path.join(ROOT, 'scripts', 'changeset', 'parse.cjs'));
 const { cleanup } = require('./helpers.cjs');
+const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const NEW_CJS = path.join(ROOT, 'scripts', 'changeset', 'new.cjs');
 
@@ -114,7 +115,7 @@ describe('changeset new: --pr 0 placeholder acceptance (bug #1224)', () => {
       const result = spawnSync(
         process.execPath,
         [NEW_CJS, '--type', 'Fixed', '--pr', '0', '--body', 'placeholder for pr-zero.', '--repo', isolatedDir],
-        { encoding: 'utf8', timeout: 10000 },
+        { encoding: 'utf8', timeout: QUICK_SPAWN_TIMEOUT_MS },
       );
 
       // The bug: old main() did `if (!opts.pr)` → exit 2. Fixed: exit 0.

@@ -69,7 +69,7 @@ Closes #
 ### Runtimes tested
 
 - [ ] Claude Code
-- [ ] Gemini CLI
+- [ ] Antigravity
 - [ ] OpenCode
 - [ ] Codex
 - [ ] Copilot

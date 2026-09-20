@@ -22,6 +22,8 @@ const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
 
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+
 const ROOT = path.resolve(__dirname, '..');
 
 const SKILL_FILES = [
@@ -147,4 +149,54 @@ describe('#2414 — rooms: entries are dicts with a name key (not bare strings)'
       );
     });
   }
+});
+
+// ── #4700 — the headless mine must queue on the palace lock, and a skipped
+// capture must be visible in the report. MemPalace wraps every mine in a
+// per-palace lock; a concurrent writer makes a plain foreground `mine` exit 1
+// (MineAlreadyRunning) and the capability's onError: skip silently dropped the
+// capture. The shipped command queues via --daemon --background (MemPalace
+// #2029), and the report step names the queued/skipped outcome.
+
+describe('#4700 — headless mine queues on the palace lock', () => {
+  const SURFACES = [
+    'commands/gsd/mempalace-capture.md',
+    'skills/gsd-mempalace-capture/SKILL.md',
+  ];
+
+  test('every mempalace mine command line queues via --daemon --background (#4700)', () => {
+    for (const rel of SURFACES) {
+      const lines = splitLines(fs.readFileSync(path.join(ROOT, rel), 'utf8'));
+      let sawMine = false;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (!MINE_CMD_RE.test(line)) continue;
+        sawMine = true;
+        assert.match(
+          line, /--daemon\s+--background/,
+          `${rel}:${i + 1}: "mempalace mine" must queue via --daemon --background so a held palace lock defers the write instead of dropping it (#4700). Offending line: ${line.trim()}`,
+        );
+      }
+      assert.ok(sawMine, `${rel}: expected at least one mempalace mine command line`);
+    }
+  });
+
+  test('the wave:post problems fragment queues its headless mine too (#4700)', () => {
+    const frag = 'capabilities/mempalace/fragments/capture-problems.md';
+    const content = fs.readFileSync(path.join(ROOT, frag), 'utf8');
+    assert.match(
+      content, /mempalace mine --daemon --background/,
+      `${frag}: the headless mine must queue via --daemon --background — the issue names the execute:wave:post problem-fix pair as the unrecoverable loss (#4700)`,
+    );
+  });
+
+  test('the report step names queued and skipped captures (#4700)', () => {
+    for (const rel of SURFACES) {
+      const content = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+      assert.match(content, /queued/,
+        `${rel}: the report step must surface the queued outcome (#4700)`);
+      assert.match(content, /skipped/i,
+        `${rel}: the report step must name skipped captures rather than staying silent (#4700)`);
+    }
+  });
 });

@@ -86,7 +86,7 @@ PR 正文由规划产物自动组装：
 /gsd-code-review 1 --depth=deep  # 包含导入图的跨文件分析
 ```
 
-请参阅[配置跨 AI 审查](set-up-cross-ai-review.md)，了解如何在周期早期为计划审查配置 Gemini、Codex 或其他审查工具。
+请参阅[配置跨 AI 审查](set-up-cross-ai-review.md)，了解如何在周期早期为计划审查配置 Antigravity、Codex 或其他审查工具。
 
 ---
 

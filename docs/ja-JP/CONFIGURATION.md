@@ -298,7 +298,7 @@ quick タスクのブランチ設定例：
 
 有効なオーバーライド値: `opus`、`sonnet`、`haiku`、`inherit`、または完全修飾モデル ID（例: `"openai/o3"`、`"google/gemini-2.5-pro"`）。
 
-### 非 Claude ランタイム（Codex、OpenCode、Gemini CLI、Kilo）
+### 非 Claude ランタイム（Codex、OpenCode、Antigravity CLI、Kilo）
 
 GSD が非 Claude ランタイム向けにインストールされると、インストーラーは自動的に `~/.gsd/defaults.json` に `resolve_model_ids: "omit"` を設定します。これにより GSD はすべてのエージェントに対して空のモデルパラメータを返し、各エージェントはランタイムで設定されたモデルを使用します。デフォルトの場合、追加のセットアップは不要です。
 
@@ -333,7 +333,7 @@ GSD が非 Claude ランタイム向けにインストールされると、イ�
 |----|------|---------|
 | `false`（デフォルト） | Claude エイリアス（`opus`、`sonnet`、`haiku`）を返す | Claude Code + ネイティブ Anthropic API |
 | `true` | エイリアスを完全な Claude モデル ID（`claude-opus-4-8`）にマッピング | 完全な ID が必要な API を使用する Claude Code |
-| `"omit"` | 空文字列を返す（ランタイムがデフォルトを選択） | 非 Claude ランタイム（Codex、OpenCode、Gemini CLI、Kilo） |
+| `"omit"` | 空文字列を返す（ランタイムがデフォルトを選択） | 非 Claude ランタイム（Codex、OpenCode、Antigravity CLI、Kilo） |
 
 ### プロファイルの設計思想
 

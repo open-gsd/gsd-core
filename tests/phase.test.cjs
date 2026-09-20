@@ -19,6 +19,11 @@ const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { toLegacyResult } = require('./helpers/git-fixture.cjs');
+const {
+  GIT_TIMEOUT_MS,
+  LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
+  PROBE_TIMEOUT_MS,
+} = require('./helpers/timeouts.cjs');
 
 // `phase complete` against a real STATE.md rewrite; matches the 60000ms bound
 // already used for the same CLI call elsewhere in this file (runPhaseComplete
@@ -526,6 +531,30 @@ describe('phase next-decimal command', () => {
     const output = JSON.parse(result.output);
     assert.strictEqual(output.found, false, 'base phase not found');
     assert.strictEqual(output.next, '06.1', 'should still suggest 06.1');
+  });
+
+  // #4569: cmdPhaseNextDecimal migrated to the shared scanExistingDecimalPhaseNumbers
+  // helper (also consumed by cmdPhaseInsert), which counts a checklist-only decimal
+  // bullet even when no heading and no on-disk directory exist for it yet.
+  test('#4569: sees a checklist-only decimal with no heading and no on-disk directory', () => {
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '03-something'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+### Phase 3: Something
+**Goal:** Setup
+
+- [ ] Phase 3.1: Something
+`
+    );
+
+    const result = runGsdTools('phase next-decimal 3', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.next, '03.2', 'checklist-only 3.1 must be counted, not just headings/dirs');
+    assert.deepStrictEqual(output.existing, ['03.1'], 'checklist-only decimal listed as existing');
   });
 });
 
@@ -2504,7 +2533,7 @@ describe('phase add allocation vs sibling git worktrees (#3849)', () => {
   const activeDirs = [];
 
   function git(args, cwd) {
-    return execFileSync('git', args, { cwd, encoding: 'utf-8', timeout: 15_000 });
+    return execFileSync('git', args, { cwd, encoding: 'utf-8', timeout: GIT_TIMEOUT_MS });
   }
 
   function initRepo(repoDir) {
@@ -2676,7 +2705,7 @@ describe('phase add --ws workstream-scoped allocation vs sibling git worktrees (
   const activeDirs = [];
 
   function git(args, cwd) {
-    return execFileSync('git', args, { cwd, encoding: 'utf-8', timeout: 15_000 });
+    return execFileSync('git', args, { cwd, encoding: 'utf-8', timeout: GIT_TIMEOUT_MS });
   }
 
   /**
@@ -2916,6 +2945,28 @@ describe('phase add --ws workstream-scoped allocation vs sibling git worktrees (
       output.phase_number,
       442,
       'no --ws: the sibling ROOT roadmap still widens the horizon exactly as #3849 shipped'
+    );
+  });
+
+  test('whitespace-only GSD_WORKSTREAM uses the root sibling horizon (#4462)', () => {
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4462-blank-ws-'));
+    activeDirs.push(repoDir);
+    initWsRepo(repoDir, 2, 'ws-alpha', 39);
+    addSiblingAtHead(repoDir);
+
+    const result = runGsdTools(
+      ['query', 'phase.add', 'Root next'],
+      repoDir,
+      { GSD_WORKSTREAM: '  ' },
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_number, 3);
+    assert.strictEqual(output.directory, '.planning/phases/03-root-next');
+    assert.ok(
+      !fs.existsSync(path.join(repoDir, '.planning', 'workstreams', '  ')),
+      'an effectively-empty env value must not mint a whitespace-named workstream',
     );
   });
 
@@ -3211,6 +3262,119 @@ describe('phase insert command', () => {
 
     const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
     assert.ok(roadmap.includes('Phase 05.1: Hotfix (INSERTED)'), 'roadmap should include inserted phase');
+  });
+
+  // #4569: cmdPhaseInsert's decimal allocation must count an existing decimal
+  // regardless of WHICH of the three representations (on-disk directory,
+  // `### Phase N.M:` heading, `- [ ] Phase N.M:` checklist bullet) carries it —
+  // via the shared scanExistingDecimalPhaseNumbers helper.
+  test('#4569 core regression: does not reallocate a decimal that exists only as a roadmap checklist bullet', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+### Phase 3: Something
+**Goal:** Setup
+
+- [ ] Phase 3.1: Something
+`
+    );
+
+    const result = runGsdTools('phase insert 3 New Thing', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_number, '03.2', 'checklist-only 3.1 must not be reallocated as 03.1');
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'phases', '03.2-new-thing')),
+      'new decimal phase directory should be 03.2, not a collision with the checklist-only 03.1'
+    );
+  });
+
+  test('#4569 independence check: a decimal present in heading, checklist, and on-disk directory simultaneously is counted once', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+### Phase 3: Something
+**Goal:** Setup
+
+### Phase 3.1: Existing Decimal
+**Goal:** Test
+
+- [ ] Phase 3.1: Existing Decimal
+`
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '03.1-existing-decimal'), { recursive: true });
+
+    const result = runGsdTools('phase insert 3 New Thing', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(
+      output.phase_number,
+      '03.2',
+      'triple-represented 03.1 must count once, not skip ahead or collide'
+    );
+  });
+
+  test('#4569 negative-space: a checklist bullet for an unrelated phase family does not pollute this phase\'s decimal allocation', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+### Phase 3: Something
+**Goal:** Setup
+
+### Phase 13: Unrelated
+**Goal:** Unrelated
+
+- [ ] Phase 13.2: Unrelated Decimal
+`
+    );
+
+    const result = runGsdTools('phase insert 3 New Thing', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(
+      output.phase_number,
+      '03.1',
+      'phase 13\'s checklist decimal must not cross-pollute phase 3\'s allocation'
+    );
+  });
+
+  test('#4569: --sibling flag inserts a sibling of a decimal phase via the real CLI', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+### Phase 3: Something
+**Goal:** Setup
+
+### Phase 3.2: Existing Decimal
+**Goal:** Test
+`
+    );
+    const result = runGsdTools('phase insert 3.2 New Thing --sibling', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_number, '03.3', 'sibling allocation must join phase 3\'s level, not nest under 3.2');
+  });
+
+  test('#4569: --sibling flag falls back to nested allocation when afterPhase has no decimal segment', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+### Phase 3: Something
+**Goal:** Setup
+`
+    );
+    const result = runGsdTools('phase insert 3 New --sibling', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_number, '03.1', '--sibling on a top-level phase must fall back to nested allocation');
   });
 });
 
@@ -4203,7 +4367,7 @@ describe('phase complete canonical verification gate (#1522)', () => {
     // runtime's installed surface. This project has no runtime configured, so it
     // takes the `claude` default — the canonical `/gsd-` hyphen form. The colon
     // form this previously asserted is the deprecated shape #2617 removed.
-    assert.match(errorPayload.message, /\/gsd-verify-work 0?1/);
+    assert.match(errorPayload.message, /\/gsd-execute-phase 0?1/);
     assert.equal(fs.readFileSync(roadmapPath, 'utf-8'), beforeRoadmap);
     assert.equal(fs.readFileSync(statePath, 'utf-8'), beforeState);
   });
@@ -6061,6 +6225,22 @@ describe('#2028 — phase complete milestone-end + workstream guard', () => {
     assert.match(result.error || '', /workstream|--ws/i, 'error should name the workstream requirement');
   });
 
+  test('refuses to write root when GSD_WORKSTREAM is whitespace only', (t) => {
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '# State\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n\n### Phase 1: A\n**Goal:** x\n');
+    const previous = process.env.GSD_WORKSTREAM;
+    t.after(() => {
+      if (previous === undefined) delete process.env.GSD_WORKSTREAM;
+      else process.env.GSD_WORKSTREAM = previous;
+    });
+    process.env.GSD_WORKSTREAM = ' \t ';
+
+    const result = runGsdTools('phase complete 1', tmpDir);
+    assert.equal(result.success, false, 'a whitespace workstream must not write the shared root');
+    assert.match(result.error || '', /workstream|--ws/i);
+  });
+
   // An explicit --ws satisfies the guard (it sets GSD_WORKSTREAM upstream) AND
   // targets that workstream — the write must land in the workstream's own
   // STATE.md/ROADMAP.md, leaving root untouched.
@@ -6440,7 +6620,7 @@ function runPhaseComplete(tmpDir, { phase = '1', tolerateExit = false } = {}) {
   try {
     return execFileSync('node', [GSD_TOOLS_BIN, 'phase', 'complete', phase], {
       cwd: tmpDir,
-      timeout: 60000,
+      timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -9242,7 +9422,7 @@ function run(args, cwd) {
     return {
       stdout: execFileSync('node', [gsdTools, ...args], {
         cwd,
-        timeout: 15000,
+        timeout: PROBE_TIMEOUT_MS,
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
       }),
@@ -9612,7 +9792,7 @@ function run2853(args, cwd) {
   try {
     return {
       stdout: execFileSync('node', [gsdTools2853, ...args], {
-        cwd, timeout: 15000, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
+        cwd, timeout: PROBE_TIMEOUT_MS, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
       }),
       ok: true,
     };
@@ -12198,6 +12378,140 @@ describe('issue #2334: ghost-REQ-ID classification must probe write surfaces, no
           !warnings.some((w) => /\bNone\b/.test(w)),
           `#2334 HIGH 3 boundary FAILED: "None" must not be treated as a cited REQ-ID, got: ${JSON.stringify(warnings)}`,
         );
+      } finally {
+        cleanup(tmpDir);
+      }
+    },
+  );
+});
+
+// ── #4731 review follow-up — the phase-complete citation scan must stop at the ─
+// section's own table. The inline lookahead the first cut used stopped only at
+// the next `**Bold**` label or end-of-section, so a Requirements field followed
+// by a table bled every ID-shaped cell after it into the citation scan — and
+// phase complete then ticked other phases' checkboxes and flipped their
+// Traceability rows. The shared extractor stops at headings, table rows, and
+// blank lines; these pins hold that boundary.
+describe('#4731 review follow-up: Requirements citation scan stops at the section table', () => {
+  function build4731TableBleedFixture() {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4731-table-bleed-'));
+    const planDir = path.join(tmpDir, '.planning');
+    const phase1Dir = path.join(planDir, 'phases', '01-preset');
+    const phase2Dir = path.join(planDir, 'phases', '02-next');
+    fs.mkdirSync(phase1Dir, { recursive: true });
+    fs.mkdirSync(phase2Dir, { recursive: true });
+
+    // REQ-99 belongs to phase 02 — it sits in phase 01's deliverables table and
+    // is still Pending in REQUIREMENTS.md. Phase 01's own IDs are hard-wrapped
+    // across three lines (the #4731 shape).
+    fs.writeFileSync(path.join(planDir, 'REQUIREMENTS.md'), [
+      '# Requirements',
+      '',
+      '## Active',
+      '',
+      '- [ ] **REQ-11**: first wrapped requirement',
+      '- [ ] **REQ-12**: second wrapped requirement',
+      '- [ ] **REQ-13**: third wrapped requirement',
+      '- [ ] **REQ-99**: phase 02 requirement, still pending',
+      '',
+      '## Traceability',
+      '',
+      '| Requirement | Phase | Status |',
+      '|-------------|-------|--------|',
+      '| REQ-11 | Phase 1 | Pending |',
+      '| REQ-12 | Phase 1 | Pending |',
+      '| REQ-13 | Phase 1 | Pending |',
+      '| REQ-99 | Phase 2 | Pending |',
+      '',
+    ].join('\n'));
+
+    fs.writeFileSync(path.join(planDir, 'ROADMAP.md'), [
+      '# Roadmap',
+      '',
+      '- [ ] Phase 01: Preset',
+      '- [ ] Phase 02: Next',
+      '',
+      '### Phase 01: Preset',
+      '**Goal:** Build preset',
+      '**Requirements**: REQ-11,',
+      'REQ-12,',
+      'REQ-13',
+      '',
+      '| Deliverable | Requirement |',
+      '|-------------|-------------|',
+      '| Widget | REQ-99 |',
+      '',
+      '**Plans:** 1 plans',
+      '',
+      '### Phase 02: Next',
+      '**Goal:** whatever',
+      '**Requirements:** REQ-99',
+      '**Plans:** 1 plans',
+      '',
+      '## Progress',
+      '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|----------------|--------|-----------|',
+      '| 01. Preset | 0/1 | Not started | - |',
+      '| 02. Next | 0/1 | Not started | - |',
+      '',
+    ].join('\n'));
+
+    fs.writeFileSync(path.join(planDir, 'STATE.md'), [
+      '---', 'milestone: v1.3', '---',
+      '# State',
+      '',
+      '**Current Phase:** 01',
+      '**Completed Phases:** 0',
+      '**Total Phases:** 2',
+      '**Progress:** 0%',
+      '',
+    ].join('\n'));
+
+    for (const [dir, n] of [[phase1Dir, '01'], [phase2Dir, '02']]) {
+      fs.writeFileSync(path.join(dir, `${n}-01-PLAN.md`), '# Plan\nDo the work.\n');
+      fs.writeFileSync(path.join(dir, `${n}-01-SUMMARY.md`), '# Summary\nDone.\n');
+    }
+
+    return tmpDir;
+  }
+
+  test(
+    '#4731-followup: a wrapped Requirements field followed by a table cites ONLY the wrapped IDs — the table\'s REQ-99 stays Pending',
+    () => {
+      const tmpDir = build4731TableBleedFixture();
+      try {
+        const { output } = runVerifiedPhaseComplete(['phase', 'complete', '1'], tmpDir);
+        const parsed = JSON.parse(output);
+        const warnings = parsed.warnings || [];
+        const reqContent = fs.readFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), 'utf-8');
+        for (const id of ['REQ-11', 'REQ-12', 'REQ-13']) {
+          assert.ok(
+            new RegExp(`-\\s*\\[x\\]\\s*\\*\\*${id}\\*\\*`, 'i').test(reqContent),
+            `#4731-followup FAILED (fixture invariant): ${id} is cited by the wrapped Requirements field and must be ticked.\n${reqContent}`,
+          );
+        }
+        // The discriminator: REQ-99 appears AFTER the field (in the section's
+        // deliverables table) — the scan must have stopped at the table.
+        assert.ok(
+          /-\s*\[\s\]\s*\*\*REQ-99\*\*/i.test(reqContent),
+          `#4731-followup FAILED: REQ-99 lives in the table AFTER the Requirements field (it belongs to phase 02) ` +
+          `and must NOT have been ticked by phase 01's completion scan.\n${reqContent}`,
+        );
+        const req99Row = reqContent.split(/\r?\n/)
+          .filter((l) => l.trim().startsWith('|'))
+          .map((l) => splitTableRow(l))
+          .find((cells) => cells[0] && cells[0].trim().toLowerCase() === 'req-99');
+        assert.ok(
+          req99Row && /^Pending$/i.test(req99Row[req99Row.length - 1].trim()),
+          `#4731-followup FAILED: REQ-99's Traceability row must stay Pending — the citation scan bled into the table.\n${reqContent}`,
+        );
+        assert.ok(
+          !warnings.some((w) => /not registered anywhere/i.test(w) && /REQ-99/i.test(w)),
+          `#4731-followup FAILED: REQ-99 must not surface as a ghost — it is registered; the scan just must not reach it, ` +
+          `got: ${JSON.stringify(warnings)}`,
+        );
+        assert.strictEqual(parsed.requirements_updated, true, "#4731-followup FAILED (fixture invariant): the phase's own IDs must have been written");
       } finally {
         cleanup(tmpDir);
       }
@@ -15630,5 +15944,142 @@ describe('bug #3982: archived details leak into lowest-outstanding scan', () => 
     const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
     assert.ok(!/current_phase:\s*10(\s|$)/m.test(state),
       `STATE.md current_phase must not jump backwards into the archived range; got: ${state}`);
+  });
+});
+
+// ── #4699 — next_phase must skip phases whose roadmap checkbox is [x] ────────
+// Out-of-order completion (a reopened phase finished after later phases
+// shipped) used to persist the already-complete phase as next_phase /
+// STATE.md current_phase: both next-phase scans select the numerically lowest
+// phase above N without consulting completion state. Roadmap checkbox state
+// is the completion rule (#2028) — an [x] phase is never "next".
+
+describe('phase complete skips already-complete phases as next_phase (#4699)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-4699-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function writeRoadmap({ thirdBox = '[x]', fourthBox = '[ ]' } = {}) {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+## Phases
+
+- [x] **Phase 1: One** - Goal one
+- [ ] **Phase 2: Two** - Goal two
+- ${thirdBox} **Phase 3: Three** - Goal three
+- ${fourthBox} **Phase 4: Four** - Goal four
+
+### Phase 1: One
+**Goal**: Goal one
+
+### Phase 2: Two
+**Goal**: Goal two
+
+### Phase 3: Three
+**Goal**: Goal three
+
+### Phase 4: Four
+**Goal**: Goal four
+`,
+    );
+  }
+
+  function scaffoldPhaseDir(n, slug) {
+    const padded = String(n).padStart(2, '0');
+    const dir = path.join(tmpDir, '.planning', 'phases', `${padded}-${slug}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${padded}-01-PLAN.md`), '# Plan');
+    fs.writeFileSync(path.join(dir, `${padded}-01-SUMMARY.md`), '# Summary');
+    fs.writeFileSync(
+      path.join(dir, `${padded}-VERIFICATION.md`),
+      ['---', 'status: passed', '---', '', '# Verification', ''].join('\n'),
+    );
+  }
+
+  function writeMinimalState() {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      '# State\n\n**Current Phase:** 2\n**Status:** In progress\n',
+    );
+  }
+
+  test('completing phase 2 out of order skips the already-complete phase 3 (#4699)', () => {
+    writeRoadmap();
+    writeMinimalState();
+    scaffoldPhaseDir(1, 'one');
+    scaffoldPhaseDir(2, 'two');
+    scaffoldPhaseDir(3, 'three');
+
+    const result = runGsdTools('phase complete 2', tmpDir);
+    const output = JSON.parse(result.output);
+    assert.equal(output.next_phase, '4',
+      'next_phase must skip the already-[x] phase 3 and select the outstanding phase 4');
+    assert.equal(output.is_last_phase, false);
+    // #4699's actual harm was persistence: STATE.md used to carry the
+    // already-complete phase as current_phase.
+    const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.doesNotMatch(state, /current_phase:\s*3(\s|$)/m,
+      'STATE.md must not carry the already-complete phase as current_phase');
+  });
+
+  test('all later phases already [x] completes the milestone tail (#4699 corner)', () => {
+    writeRoadmap({ fourthBox: '[x]' });
+    writeMinimalState();
+    scaffoldPhaseDir(1, 'one');
+    scaffoldPhaseDir(2, 'two');
+    scaffoldPhaseDir(3, 'three');
+
+    const result = runGsdTools('phase complete 2', tmpDir);
+    const output = JSON.parse(result.output);
+    assert.equal(output.is_last_phase, true,
+      'when every phase above N is already [x], completing N is the milestone tail');
+    assert.equal(output.next_phase, null);
+  });
+
+  test('uppercase [X] checkboxes are recognized as complete (#4699)', () => {
+    writeRoadmap({ thirdBox: '[X]' });
+    writeMinimalState();
+    scaffoldPhaseDir(1, 'one');
+    scaffoldPhaseDir(2, 'two');
+    scaffoldPhaseDir(3, 'three');
+
+    const result = runGsdTools('phase complete 2', tmpDir);
+    const output = JSON.parse(result.output);
+    assert.equal(output.next_phase, '4', '[X] is a complete checkbox, case-insensitively');
+  });
+
+  test('checkbox completion matches phase numbers across zero-padding (#4699)', () => {
+    // Roadmap spells the phase without padding; the directory carries the
+    // zero-padded token — comparePhaseNum must dedupe them in the complete set.
+    writeRoadmap({ thirdBox: '[x]' });
+    writeMinimalState();
+    scaffoldPhaseDir(1, 'one');
+    scaffoldPhaseDir(2, 'two');
+    scaffoldPhaseDir(3, 'three');
+
+    const result = runGsdTools('phase complete 2', tmpDir);
+    const output = JSON.parse(result.output);
+    assert.equal(output.next_phase, '4');
+  });
+
+  test('an outstanding phase 3 (unchecked) is still selected — negative control (#4699)', () => {
+    writeRoadmap({ thirdBox: '[ ]' });
+    writeMinimalState();
+    scaffoldPhaseDir(1, 'one');
+    scaffoldPhaseDir(2, 'two');
+    scaffoldPhaseDir(3, 'three');
+
+    const result = runGsdTools('phase complete 2', tmpDir);
+    const output = JSON.parse(result.output);
+    assert.equal(output.next_phase, '03',
+      'without the fix scope change: an unchecked phase 3 stays a valid candidate (disk spelling wins)');
   });
 });

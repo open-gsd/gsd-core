@@ -22,6 +22,39 @@ const {
   validateCrossCapability,
 } = require('../gsd-core/bin/lib/capability-validator.cjs');
 
+/**
+ * NOT a subprocess spawn timeout. Fixture DATA -- the default valid
+ * `invoke.timeoutMs` value used across most tests in this file's
+ * `validResolver()` base fixture, validated by validateTaskContentResolver()
+ * as pure manifest data. Coincides numerically with
+ * tests/helpers/timeouts.cjs's QUICK_SPAWN_TIMEOUT_MS but is not a real
+ * timeout in this file's own execution -- kept local.
+ */
+const TASK_RESOLVER_FIXTURE_TIMEOUT_MS = 10000;
+
+/**
+ * NOT a subprocess spawn timeout. Fixture DATA -- the exact ceiling value a
+ * dedicated describe block ("invoke.timeoutMs upper ceiling") asserts is
+ * still ACCEPTED by validateTaskContentResolver(). Mirrors a business-logic
+ * ceiling constant in gsd-core/bin/lib/capability-validator.cjs (production
+ * code, untouched by this migration). Coincides numerically with
+ * tests/helpers/timeouts.cjs's INSTALL_TIMEOUT_MS but is not a real timeout
+ * in this file's own execution -- kept local. Forms a CLAUDE.md
+ * limit/limit+1 boundary pair with TASK_RESOLVER_TIMEOUT_CEILING_PLUS_ONE_MS
+ * below -- do not change either value independently.
+ */
+const TASK_RESOLVER_TIMEOUT_CEILING_MS = 120000;
+
+/**
+ * NOT a subprocess spawn timeout. Fixture DATA -- the boundary-violating
+ * companion to TASK_RESOLVER_TIMEOUT_CEILING_MS above, asserting exactly
+ * one ms past the ceiling is REJECTED. A CLAUDE.md "Boundary Coverage"
+ * limit+1 value -- must always equal TASK_RESOLVER_TIMEOUT_CEILING_MS + 1.
+ * Declared as its own literal (not computed via +1 arithmetic) to match
+ * this migration's convention of plain-literal constants throughout.
+ */
+const TASK_RESOLVER_TIMEOUT_CEILING_PLUS_ONE_MS = 120001;
+
 // ─── Fixture builders ──────────────────────────────────────────────────────
 // House convention (tests/capability-manifest-version.test.cjs): builder
 // functions return a VALID fixture, which each test then mutates. Every call
@@ -34,7 +67,7 @@ function validResolver() {
     invoke: {
       binary: 'bd',
       args: ['show', '{{id}}', '--json'],
-      timeoutMs: 10000,
+      timeoutMs: TASK_RESOLVER_FIXTURE_TIMEOUT_MS,
     },
   };
 }
@@ -233,7 +266,7 @@ describe('row 23 — invoke.timeoutMs must be a positive integer', () => {
 describe('invoke.timeoutMs upper ceiling (120000ms)', () => {
   test('timeoutMs 120000 (exactly at the ceiling) is accepted', () => {
     const resolver = validResolver();
-    resolver.invoke = { ...resolver.invoke, timeoutMs: 120000 };
+    resolver.invoke = { ...resolver.invoke, timeoutMs: TASK_RESOLVER_TIMEOUT_CEILING_MS };
     const cap = featureCap({ taskContentResolver: resolver });
     const errs = validateTaskContentResolver(cap);
     assert.ok(
@@ -244,7 +277,7 @@ describe('invoke.timeoutMs upper ceiling (120000ms)', () => {
 
   test('timeoutMs 120001 (one past the ceiling) is rejected', () => {
     const resolver = validResolver();
-    resolver.invoke = { ...resolver.invoke, timeoutMs: 120001 };
+    resolver.invoke = { ...resolver.invoke, timeoutMs: TASK_RESOLVER_TIMEOUT_CEILING_PLUS_ONE_MS };
     const cap = featureCap({ taskContentResolver: resolver });
     const errs = validateTaskContentResolver(cap);
     assert.ok(

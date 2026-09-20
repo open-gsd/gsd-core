@@ -12,6 +12,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { REAL_REPO_GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const MARKER = 'pending #3212';
@@ -38,7 +39,7 @@ function listTrackedFiles() {
   const stdout = execFileSync('git', ['-c', 'safe.directory=*', 'ls-files'], {
     cwd: ROOT,
     encoding: 'utf8',
-    timeout: 30000,
+    timeout: REAL_REPO_GIT_TIMEOUT_MS,
   });
   return stdout
     .split(/\r?\n/)

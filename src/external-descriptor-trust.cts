@@ -20,6 +20,7 @@
 'use strict';
 
 import path from 'node:path';
+import { tryWithinRootLexical } from './security.cjs';
 
 /**
  * Pure LEXICAL path-containment check (cross-platform). `target` is confined
@@ -32,20 +33,42 @@ import path from 'node:path';
  * `root`) that would redirect the LEXICALLY-confined path to a physically
  * different, unconfined location on disk. A caller relying on this for a
  * write-confinement guarantee against a symlink-planting attacker must pair
- * it with a symlink check (or refuse to follow symlinks at write time) — see
- * capability-source.cts's install adapters (:491,577,675), which is what
- * currently keeps every caller of this function's callers symlink-safe: they
- * reject symlinks upstream, before a target ever reaches a lexical-only check
- * like this one.
+ * it with a symlink check (or refuse to follow symlinks at write time). Only
+ * the capability-loader.cts route into assertDescriptorConfined gets this for
+ * free today: capability-source.cts's staging path rejects symlinks upstream,
+ * before a target ever reaches a lexical-only check like this one — see
+ * copyDirRecursive's `entry.isSymbolicLink()` throw (capability-source.cts:585-586)
+ * and the post-copy budget-walk re-check (capability-source.cts:671-674). This
+ * does NOT extend to isPathConfined's other callers: install-engine.cts:1608
+ * and install-profiles.cts:755,880 do not go through capability-source.cts's
+ * adapters at all and have no symlink guard of their own here. Of the
+ * remaining callers, only retired-artifact-cleanup.cts:69 carries its own
+ * defense, via a local `lstatSync(destDir).isSymbolicLink()` check at line 77.
+ *
+ * `opts.pathImpl` (default: the ambient `path` module) lets a caller inject
+ * `path.win32` or `path.posix`. This is security-relevant: the win32 branch
+ * (drive letters, UNC paths, `\` separator) is otherwise only reachable by
+ * actually running this process on a Windows host, so without injection a
+ * win32-specific confinement escape would be unverified on every other
+ * platform. This mirrors the platform-injection seam already used elsewhere
+ * in this repo, e.g. src/shell-command-projection.cts's `opts.platform`
+ * (#4641). All existing 2-arg callers are unaffected: the default resolves to
+ * the ambient `path`, preserving byte-identical behaviour.
+ *
+ * The containment DECISION here now comes from the canonical predicate in
+ * src/security.cts (`tryWithinRootLexical`, ADR-4650 decision 6) — this
+ * function keeps only the lexical RESOLUTION policy (no realpath, no
+ * filesystem access) as its own choice; the comparison itself is shared.
  */
-export function isPathConfined(target: string, root: string): boolean {
+export function isPathConfined(
+  target: string,
+  root: string,
+  opts: { pathImpl?: typeof path } = {},
+): boolean {
   if (typeof target !== 'string' || typeof root !== 'string' || target.length === 0 || root.length === 0) {
     return false;
   }
-  const rootResolved = path.resolve(root);
-  const targetResolved = path.resolve(root, target);
-  const prefix = rootResolved + path.sep;
-  return targetResolved === rootResolved || targetResolved.startsWith(prefix);
+  return tryWithinRootLexical(target, root, { pathImpl: opts.pathImpl }) !== null;
 }
 
 export interface DescriptorArtifactKind {

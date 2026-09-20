@@ -16,7 +16,7 @@ covered_files: # #4155 — see agents/gsd-verifier.md's "Create VERIFICATION.md"
   - .planning/phases/XX-name/{phase_num}-{plan}-PLAN.md
   - .planning/phases/XX-name/{phase_num}-{plan}-SUMMARY.md
   - src/{changed-file}.cts
-covered_digest: "v1:sha256:{digest from verification.fingerprint}"
+covered_digest: "v2:sha256:{digest from verification.fingerprint}"
 behavior_unverified: 0 # Count of ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truths (present + wired, behavior not exercised)
 behavior_unverified_items: # Only if behavior_unverified > 0 — the truths above as structured items; emitted regardless of overall status
   - truth: "Observable truth whose state transition or cancellation/cleanup/ordering invariant no test exercises"

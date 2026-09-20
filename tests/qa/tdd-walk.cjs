@@ -190,6 +190,19 @@ function parseResultSentinel(stdout) {
   return lineEndIdx === -1 ? stdout.slice(valueStart) : stdout.slice(valueStart, lineEndIdx);
 }
 
+// Bounds `bash -c` execution (below) of a REAL fenced bash block extracted
+// from a workflow markdown file's resolution/dispatch step — a bash-hosted
+// script that may itself shell out further (e.g. via a `gsd_run` shim), not
+// a bare `gsd-tools.cjs` CLI subcommand invocation. Numerically coincides
+// with tests/helpers/timeouts.cjs's `BUILD_TIMEOUT_MS` (hooks-bundle build
+// via scripts/build-hooks.js, an unrelated operation) and with this batch's
+// other file-local `PLAN_PRE_HOOK_CLI_TIMEOUT_MS` (a different file, a
+// different command), but matches neither class — kept local, both
+// coincidences disclosed rather than silently reusing an unrelated existing
+// constant. No fresh bench data justifies a different number, so the
+// pre-existing 30000ms literal is preserved exactly under this name.
+const TDD_BACKEND_SCRIPT_TIMEOUT_MS = 30000;
+
 /**
  * Execute a backend's extracted script for real, via `bash -c`, against
  * `cwd`. Never throws: a non-zero exit is captured and returned as a normal
@@ -217,7 +230,7 @@ function executeBackendScript(script, cwd) {
       cwd,
       env: { ...process.env, ...TEST_ENV_BASE, RUNTIME_DIR: REPO_ROOT, GSD_TEST_MODE: '1' },
       encoding: 'utf8',
-      timeout: 30000,
+      timeout: TDD_BACKEND_SCRIPT_TIMEOUT_MS,
     });
     return { success: true, value: parseResultSentinel(stdout), stdout, stderr: '' };
   } catch (error) {

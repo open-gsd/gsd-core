@@ -10,12 +10,14 @@ process.env.GSD_TEST_MODE = '1';
 const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 
 const { cleanup, createTempDir, runNpm, isolatedNpmEnv } = require('./helpers.cjs');
-const { SMOKE, runSmoke, CHILD_TIMEOUT_MS } = require('../scripts/release-tarball-smoke.cjs');
+const { ensureHooksDist } = require('./helpers/hooks-dist.cjs');
+const { SMOKE, runSmoke, entrypointFixtureHome, CHILD_TIMEOUT_MS, configuredEntrypointsIn } = require('../scripts/release-tarball-smoke.cjs');
 
 const smokeMsg = (label, result) =>
   `${label}: code=${result.code} details=${JSON.stringify(result.details)}`;
@@ -85,6 +87,11 @@ describe('release-tarball-smoke', () => {
   let fixtureDir;
 
   before(async () => {
+    // hooks/dist is gitignored and only produced by `npm run build:hooks`; the
+    // pack below must ship it or Cycle 4's entrypoint scan runs against a
+    // tarball with no hook scripts at all (SMOKE.INIT_FAILED on a clean tree).
+    ensureHooksDist();
+
     // Pack once into a temp dir.
     packDir = createTempDir('gsd-smoke-pack-');
     installPrefix = createTempDir('gsd-smoke-prefix-');
@@ -338,13 +345,26 @@ describe('release-tarball-smoke', () => {
       assert.equal(fs.readFileSync(path.join(upgradedConfigDir, '.gsd-surface.json'), 'utf8'), selectedState);
       assert.equal(fs.readFileSync(path.join(upgradedConfigDir, 'user-owned.txt'), 'utf8'), 'preserve me\n');
       assert.equal(fs.readFileSync(path.join(upgradeCwd, '.planning', 'config.json'), 'utf8'), priorGates);
+      // #4667 (sanctioned baseline change): the deployed codex corpus is a
+      // CONVERTED projection of the package source — @ includes are rewritten
+      // to the codex install root — so the no-drift baseline for an upgrade is
+      // the previously-DEPLOYED tree (the fresh codex install from the same
+      // package), not the raw package bytes. Comparing against packageRoot
+      // would pin the pre-#4667 leak (codex artifacts carrying Claude-rooted
+      // @ includes) as required output.
+      const deployedCodexCommands = path.join(
+        installs.find((entry) => entry.runtime === 'codex').configDir, 'gsd-core', 'commands', 'gsd',
+      );
+      const deployedCodexAgents = path.join(
+        installs.find((entry) => entry.runtime === 'codex').configDir, 'gsd-core', 'agents',
+      );
       assert.deepStrictEqual(
         hashTree(path.join(upgradedConfigDir, 'gsd-core', 'commands', 'gsd')),
-        hashTree(path.join(packageRoot, 'commands', 'gsd')),
+        hashTree(deployedCodexCommands),
       );
       assert.deepStrictEqual(
         hashTree(path.join(upgradedConfigDir, 'gsd-core', 'agents')),
-        hashTree(path.join(packageRoot, 'agents')),
+        hashTree(deployedCodexAgents),
       );
       const upgradedSkillRoot = path.join(upgradedHome, '.agents', 'skills');
       const upgradedSkillCount = fs.readdirSync(upgradedSkillRoot).filter((name) => name.startsWith('gsd-')).length;
@@ -436,6 +456,124 @@ describe('release-tarball-smoke', () => {
         assert.ok(counts.after > 0 && counts.after < counts.before);
       }
   });
+
+  // ── H: configured entrypoints resolve for supported runtime profiles ──────
+  //
+  // #4154's scope bullet: the installer's in-process assertConfiguredEntrypoints
+  // gate is unit-covered in tests/configured-entrypoint-validation.test.cjs.
+  // This asserts the same property survives the packaged path — install the
+  // real tarball, run its installer for a runtime, and re-read that runtime's
+  // own config back off disk.
+  test('H: packed install leaves every configured entrypoint resolvable', () => {
+    const result = runSmoke({
+      tarballPath,
+      installPrefix,
+      expectedVersion: pkg.version,
+      fixtureDir,
+      // The lifecycle-command and workflow-body cycles are covered by A/C/E;
+      // skipping them here keeps this test to the entrypoint cycle.
+      lifecycleCommands: [],
+      entrypointRuntimes: ['claude', 'codex'],
+      npmEnv: isolatedNpmEnv(),
+    });
+
+    assert.equal(result.code, SMOKE.OK, smokeMsg('H', result));
+    assert.deepEqual(
+      result.details.entrypointProfiles.map((profile) => profile.runtime),
+      ['claude', 'codex'],
+      smokeMsg('H', result),
+    );
+    for (const profile of result.details.entrypointProfiles) {
+      // Structural: a profile whose scan found nothing would satisfy the
+      // "no unresolved entrypoints" verdict vacuously.
+      assert.ok(
+        profile.entrypointsChecked > 0,
+        `${profile.runtime} configured no entrypoints: ${smokeMsg('H', result)}`,
+      );
+    }
+  });
+
+  // ── I: an unresolvable configured entrypoint fails the packed install ─────
+  //
+  // Red proof for ENTRYPOINT_UNRESOLVED, end to end through the packed tarball,
+  // and the reason this smoke check is not redundant with the installer's own
+  // gate: the fixture pre-registers a hook no install will ever write, the
+  // packed installer merges its own entries around it and exits 0 — its
+  // in-process assertConfiguredEntrypoints only validates paths the config
+  // writers registered with it during that run, so a registration it never
+  // touched is invisible to it — and reading settings.json back off disk is
+  // what catches the dangling launch path.
+  test('I: a registered hook that no install writes fails the smoke', (t) => {
+    const runtimeHome = entrypointFixtureHome(fixtureDir, 'claude');
+    // fixtureDir is shared with A/C/E/H, which install into this same home.
+    t.after(() => cleanup(runtimeHome));
+
+    const configDir = path.join(runtimeHome, '.claude');
+    const ghostHook = path.join(configDir, 'hooks', 'gsd-ghost-hook.js');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'settings.json'), JSON.stringify({
+      hooks: {
+        PreToolUse: [
+          { matcher: 'Bash', hooks: [{ type: 'command', command: `node "${ghostHook}"` }] },
+        ],
+      },
+    }, null, 2));
+
+    const result = runSmoke({
+      tarballPath,
+      installPrefix,
+      expectedVersion: pkg.version,
+      fixtureDir,
+      lifecycleCommands: [],
+      entrypointRuntimes: ['claude'],
+      npmEnv: isolatedNpmEnv(),
+    });
+
+    assert.equal(result.code, SMOKE.ENTRYPOINT_UNRESOLVED, smokeMsg('I', result));
+    assert.equal(result.details.runtime, 'claude', smokeMsg('I', result));
+    assert.deepEqual(
+      result.details.unresolved,
+      [{ configPath: path.join(configDir, 'settings.json'), scriptPath: ghostHook }],
+      smokeMsg('I', result),
+    );
+  });
+
+  // ── J: configuredEntrypointsIn tolerates whitespace in configDir ──────────
+  //
+  // #4249 (antigravity review): the prior SCRIPT_PATH_RE excluded `\s` from
+  // the path match to avoid swallowing a shell command's trailing args, which
+  // also truncated any legitimate path containing a space — e.g. a real
+  // `/Users/John Doe/.claude` home — so the scan silently returned zero
+  // checked paths there. A direct unit test on the exported pure function:
+  // no packed install needed to prove this property.
+  test('J: configuredEntrypointsIn resolves a script path even when configDir contains a space', () => {
+    const configDir = path.join(os.tmpdir(), 'John Doe', '.claude');
+    const scriptPath = path.join(configDir, 'hooks', 'gsd-write-guard.js');
+    const text = JSON.stringify({
+      hooks: {
+        PreToolUse: [
+          { matcher: 'Bash', hooks: [{ type: 'command', command: `node "${scriptPath}"` }] },
+        ],
+      },
+    });
+
+    assert.deepEqual(configuredEntrypointsIn(text, configDir), [path.resolve(scriptPath)]);
+  });
+
+  // ── K: configuredEntrypointsIn does not swallow a preceding interpreter path ──
+  //
+  // #4249 (antigravity review): anchoring on the literal configDir prefix (a
+  // fix for J) must not regress the original "don't swallow the rest of a
+  // shell command" property — a command string that concatenates an
+  // interpreter path ahead of the real script path must resolve to the
+  // script path alone, not a combined interpreter+script string.
+  test('K: configuredEntrypointsIn does not include a preceding interpreter path', () => {
+    const configDir = path.join(os.tmpdir(), '.claude');
+    const scriptPath = path.join(configDir, 'hooks', 'gsd-write-guard.js');
+    const text = `"command": "/usr/local/bin/node ${scriptPath} --flag"`;
+
+    assert.deepEqual(configuredEntrypointsIn(text, configDir), [path.resolve(scriptPath)]);
+  });
 });
 
 
@@ -511,25 +649,42 @@ function safeRealpath(p) {
 
 describe('bug-131: runNpm isolates HOME from the caller environment', () => {
   // ── Test 1 — runNpm works with an unwritable HOME ────────────────────────
-  // Spawn a child Node process that sets HOME to a chmod-0500 directory, then
-  // invokes runNpm(['--version']). Without the fix, npm tries to read/write
-  // HOME/.npmrc and HOME/.npm, fails with EACCES, and runNpm throws.
-  // With the fix, runNpm injects its own isolated HOME and npm succeeds.
+  // Spawn a child Node process that sets HOME to an unwritable directory, then
+  // invokes runNpm(['cache', 'verify']). `npm --version` performs zero
+  // filesystem I/O against HOME/.npm or HOME/.npmrc on modern npm, and even
+  // `npm config get cache` only *resolves* the cache path as a string without
+  // touching disk — both stay green even without HOME isolation, making the
+  // assertion vacuous. `npm cache verify` genuinely creates/reads/writes the
+  // cache directory under HOME (mkdir _cacache, write logs), so without the
+  // fix it fails with ENOTDIR against the unwritable HOME, and with the fix
+  // runNpm's injected isolated HOME lets it succeed. (Proven empirically: with
+  // this exact probe, neutralising runNpm()'s isolation flips this test from
+  // green to red, whereas `npm config get cache` stayed green either way.)
   test('runNpm succeeds even when process HOME is unwritable', () => {
-    // Create an unwritable dir to serve as a poisoned HOME.
-    const poisonedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-bug131-poison-'));
+    // Simulate an unwritable HOME with a mechanism that holds for every uid,
+    // including root (as gsd-test Docker benches run). chmod 0o500 is
+    // insufficient because root bypasses mode bits entirely, silently making
+    // this assertion vacuous under root — see CLAUDE.md section 4. Instead,
+    // make the PARENT of "HOME" a regular file rather than a directory: any
+    // attempt to create or write an entry under a non-directory parent fails
+    // with ENOTDIR at the filesystem/VFS level, a property that has nothing
+    // to do with permission bits and therefore cannot be bypassed by root.
+    const poisonedHomeBlocker = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-bug131-poison-'));
+    const blockerFile = path.join(poisonedHomeBlocker, 'blocker');
+    fs.writeFileSync(blockerFile, ''); // regular file, not a directory
+    const poisonedHome = path.join(blockerFile, 'home'); // parent is a file → ENOTDIR
     try {
-      fs.chmodSync(poisonedHome, 0o500); // r-x only — not writable
 
       // We exercise the real runNpm() path by running a tiny inline Node script
-      // that requires helpers.cjs and calls runNpm(['--version']) with HOME set
-      // to the unwritable dir. The script exits 0 on success, non-zero on throw.
+      // that requires helpers.cjs and calls runNpm(['cache', 'verify']) with
+      // HOME set to the unwritable dir. The script exits 0 on success, non-zero
+      // on throw.
       const script = `
         process.env.HOME = ${JSON.stringify(poisonedHome)};
         process.env.USERPROFILE = ${JSON.stringify(poisonedHome)};
         const { runNpm } = require(${JSON.stringify(path.join(__dirname, 'helpers.cjs'))});
         try {
-          const out = runNpm(['--version']);
+          const out = runNpm(['cache', 'verify']);
           if (!out || out.trim() === '') process.exit(2); // vacuous success guard
           process.stdout.write(out);
           process.exit(0);
@@ -558,16 +713,16 @@ describe('bug-131: runNpm isolates HOME from the caller environment', () => {
         0,
         `runNpm should succeed with an unwritable HOME but exited ${exitCode}. stderr: ${stderr}`,
       );
-      // npm --version returns something like "10.x.y"
+      // npm cache verify reports what it found/fixed in the cache directory.
       assert.match(
-        stdout.trim(),
-        /^\d+\.\d+/,
-        `expected semver output from npm --version, got: ${stdout}`,
+        stdout,
+        /cache verified|content verified/i,
+        `expected npm cache verify output, got: ${stdout}`,
       );
     } finally {
-      // Restore write permission before cleanup so the directory can be deleted.
-      try { fs.chmodSync(poisonedHome, 0o700); } catch (_) { /* best-effort */ }
-      cleanup(poisonedHome);
+      // poisonedHome itself was never created (its parent is a file), so only
+      // the directory holding the blocker file needs cleanup.
+      cleanup(poisonedHomeBlocker);
     }
   });
 

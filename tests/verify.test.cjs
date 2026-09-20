@@ -1397,6 +1397,58 @@ describe('verify references command', () => {
     assert.strictEqual(output.total, 0, `Expected total 0 (template skipped): ${JSON.stringify(output)}`);
   });
 
+  test('#4678: line-numbered citations are checked, not dropped or misreported', () => {
+    fs.writeFileSync(path.join(tmpDir, 'src', 'app.js'), 'console.log("app");\n');
+    fs.writeFileSync(path.join(tmpDir, 'src', 'utils', 'helper.js'), 'module.exports = {};\n');
+    const filePath = path.join(tmpDir, '.planning', 'phases', '01-test', 'doc.md');
+    fs.writeFileSync(filePath, [
+      '- `src/gone.ts:99`',
+      '- `src/utils/helper.js:7`',
+      '- @src/app.js:42',
+      '- @src/gone.ts:1',
+      '- `src/utils/helper.js`',
+      '- `src/gone.ts`',
+      '- @src/app.js',
+      '',
+    ].join('\n'));
+
+    const result = runGsdTools('verify references .planning/phases/01-test/doc.md', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    // Every citation must land in exactly one bucket: the three gone.ts citations
+    // (with and without the line suffix, in both citation styles) are missing;
+    // the rest resolve.
+    assert.strictEqual(output.total, 7, `Expected total 7: ${JSON.stringify(output)}`);
+    assert.strictEqual(output.found, 4, `Expected found 4: ${JSON.stringify(output)}`);
+    assert.ok(
+      output.missing.includes('src/gone.ts:99'),
+      `Expected missing to keep the original citation text "src/gone.ts:99": ${JSON.stringify(output.missing)}`
+    );
+    assert.ok(
+      output.missing.includes('src/gone.ts:1'),
+      `Expected missing to keep the original citation text "src/gone.ts:1": ${JSON.stringify(output.missing)}`
+    );
+    assert.ok(
+      output.missing.includes('src/gone.ts'),
+      `Expected missing to include "src/gone.ts": ${JSON.stringify(output.missing)}`
+    );
+    assert.strictEqual(output.valid, false, 'should be invalid');
+  });
+
+  test('#4678: an all-missing line-numbered document is not reported valid', () => {
+    const filePath = path.join(tmpDir, '.planning', 'phases', '01-test', 'doc.md');
+    fs.writeFileSync(filePath, ['- `src/gone.ts:99`', '- `src/also-gone.ts:1-20`', ''].join('\n'));
+
+    const result = runGsdTools('verify references .planning/phases/01-test/doc.md', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.total, 2, `Expected total 2: ${JSON.stringify(output)}`);
+    assert.strictEqual(output.missing.length, 2, `Expected both citations missing: ${JSON.stringify(output)}`);
+    assert.strictEqual(output.valid, false, `Must not report valid: ${JSON.stringify(output)}`);
+  });
+
   test('returns error for nonexistent file', () => {
     const result = runGsdTools('verify references .planning/phases/01-test/nonexistent.md', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
@@ -1641,6 +1693,168 @@ describe('verify artifacts command', () => {
       false,
       `Expected all_passed false over a zero-check block: ${JSON.stringify(output)}`
     );
+  });
+
+  // #4685: a directory-valued artifact path used to abort the WHOLE command.
+  // `safeReadFile`/`platformReadSync` rethrows every errno except ENOENT, so
+  // `fs.readFileSync` on a directory threw EISDIR out of the per-artifact loop and
+  // the command printed `Error: EISDIR: illegal operation on a directory, read`
+  // with no results at all — not for the directory entry, and not for the plan's
+  // other, perfectly checkable artifacts. Reproduced against a real plan before
+  // the fix; these rows are the contract that replaced it.
+  test('#4685: a directory artifact fails as its own entry and does not abort the others', () => {
+    fs.mkdirSync(path.join(tmpDir, 'src', 'snapshots'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'src', 'snapshots', 'a.snap'), 'snap\n');
+    fs.writeFileSync(path.join(tmpDir, 'src', 'app.js'), 'hello world\n');
+    writePlanWithArtifacts(tmpDir, [
+      '- path: src/snapshots',
+      '  provides: "a directory of snapshots"',
+      '- path: src/app.js',
+      '  contains: "hello"',
+    ]);
+
+    const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
+    assert.ok(result.success, `Command crashed instead of reporting: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.total, 2, `both artifacts must be checked: ${JSON.stringify(output)}`);
+    assert.strictEqual(output.passed, 1, `the file artifact must still pass: ${JSON.stringify(output)}`);
+    assert.strictEqual(output.all_passed, false);
+
+    const dirCheck = output.artifacts.find((a) => a.path === 'src/snapshots');
+    assert.ok(dirCheck, 'the directory entry must be reported, not swallowed');
+    assert.strictEqual(dirCheck.passed, false);
+    assert.strictEqual(dirCheck.exists, true, 'the path does resolve — this is not "not found"');
+    assert.ok(
+      dirCheck.issues.some((i) => /directory/i.test(i)),
+      `the directory entry needs its own distinct issue, not "File not found": ${JSON.stringify(dirCheck.issues)}`
+    );
+    assert.equal(
+      dirCheck.issues.some((i) => /not found/i.test(i)), false,
+      'a directory that exists must not be reported as missing'
+    );
+
+    // The point of the fix: the OTHER artifact is still independently checked.
+    const fileCheck = output.artifacts.find((a) => a.path === 'src/app.js');
+    assert.ok(fileCheck, 'the file artifact must still be reported');
+    assert.strictEqual(fileCheck.passed, true, `the file artifact is fine and must say so: ${JSON.stringify(fileCheck)}`);
+    assert.deepStrictEqual(fileCheck.issues, []);
+  });
+
+  // The degenerate shape: nothing else in the plan can carry the result, so a
+  // crash here would leave the caller with no verdict at all.
+  test('#4685: a plan whose only artifact is a directory still returns a structured verdict', () => {
+    fs.mkdirSync(path.join(tmpDir, 'src', 'snapshots'), { recursive: true });
+    writePlanWithArtifacts(tmpDir, [
+      '- path: src/snapshots',
+      '  provides: "a directory of snapshots"',
+    ]);
+
+    const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
+    assert.ok(result.success, `Command crashed instead of reporting: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.total, 1);
+    assert.strictEqual(output.passed, 0);
+    assert.strictEqual(output.all_passed, false, 'a directory-only block must never read as a pass');
+  });
+
+  // #4685 review follow-up: the two error branches this PR ADDS are reachable and
+  // must be pinned deterministically. Per ADR-3574, filesystem failures are injected
+  // by monkeypatching the fs method and restoring after — never by chmod or mode-bit
+  // tricks, which root bypasses (yielding a test that passes with zero coverage in
+  // root Docker and CI).
+  //
+  // The injection runs in the CHILD via `NODE_OPTIONS=--require`, because
+  // `output()` writes fd 1 directly (`writeAllSync(1, …)`, io.cjs) rather than
+  // through console.log, so an in-process call cannot have its JSON captured. The
+  // preload patches the child's own module objects, which the compiled code reads at
+  // call time (`shell_command_projection_cjs_1.platformReadSync(…)`,
+  // `node_fs_1.default.statSync(…)`), and the process exits at the end of the case,
+  // so no restore is needed beyond its lifetime.
+  describe('#4685: injected I/O failures on one artifact (ADR-3574 monkeypatching)', () => {
+    const LIB = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib');
+
+    function withInjection(mode, targetPath) {
+      const preload = path.join(tmpDir, `inject-${mode}.cjs`);
+      fs.writeFileSync(preload, `
+const target = ${JSON.stringify(targetPath)};
+if (${JSON.stringify(mode)} === 'enoent-read') {
+  const sp = require(${JSON.stringify(path.join(LIB, 'shell-command-projection.cjs'))});
+  const orig = sp.platformReadSync;
+  // Match on suffix, not string equality: the child resolves the artifact path
+  // itself, and a /tmp vs /private/tmp prefix difference would silently disarm the
+  // injection and leave the test asserting nothing.
+  sp.platformReadSync = (p, o) => (String(p).endsWith(target) ? null : orig(p, o));
+} else {
+  const nodeFs = require('node:fs');
+  const orig = nodeFs.statSync;
+  nodeFs.statSync = (p, o) => {
+    if (String(p).endsWith(target)) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    return orig(p, o);
+  };
+}
+`);
+      return { NODE_OPTIONS: `--require ${preload}` };
+    }
+
+    function writeFixture() {
+      fs.writeFileSync(path.join(tmpDir, 'src', 'app.js'), 'hello world\n');
+      writePlanWithArtifacts(tmpDir, [
+        '- path: src/app.js',
+        '  provides: "a real file, no criteria declared"',
+      ]);
+      return path.join('src', 'app.js');
+    }
+
+    test('a file that disappears between stat and read fails instead of passing empty', () => {
+      // The latent bug this PR also fixes: `safeReadFile(...) || ''` turned a
+      // post-stat ENOENT into empty content, and an entry declaring only
+      // `path`/`provides` then had NO criterion left to fail — so it passed, having
+      // checked nothing. platformReadSync returns null on ENOENT, so returning null
+      // reproduces exactly that window.
+      const target = writeFixture();
+      const result = runGsdTools(
+        'verify artifacts .planning/phases/01-test/01-01-PLAN.md',
+        tmpDir,
+        withInjection('enoent-read', target),
+      );
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const output = JSON.parse(result.output);
+      const check = output.artifacts[0];
+      assert.strictEqual(
+        check.passed, false,
+        `an artifact whose content could not be read must not pass: ${JSON.stringify(check)}`
+      );
+      assert.ok(
+        check.issues.some((i) => /disappeared during check/i.test(i)),
+        `expected the mid-check disappearance to be named: ${JSON.stringify(check.issues)}`
+      );
+      assert.strictEqual(output.all_passed, false);
+    });
+
+    test('a non-ENOENT errno is reported as that entry\'s failure, carrying its code', () => {
+      // The generic catch branch. EACCES is the realistic case (an unreadable parent
+      // directory); the assertion pins that the errno reaches the operator rather
+      // than a generic message, because EACCES and EIO call for different responses.
+      const target = writeFixture();
+      const result = runGsdTools(
+        'verify artifacts .planning/phases/01-test/01-01-PLAN.md',
+        tmpDir,
+        withInjection('eacces-stat', target),
+      );
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const output = JSON.parse(result.output);
+      const check = output.artifacts[0];
+      assert.strictEqual(check.passed, false);
+      assert.ok(
+        check.issues.some((i) => i.includes('EACCES')),
+        `the errno must reach the operator: ${JSON.stringify(check.issues)}`
+      );
+      assert.strictEqual(output.all_passed, false);
+    });
   });
 
   // A MIXED artifacts block (one bare-string prose bullet + one well-formed
@@ -4983,6 +5197,109 @@ describe('#4024: scanQuantitativeCriteria — pure unit tests', () => {
     );
     assert.deepStrictEqual(result.errors, [],
       `R4 is warn-only, got errors: ${JSON.stringify(result.errors)}`);
+  });
+
+  // #4774 — `||` is a logical OR: the construct REACTS to a non-zero exit, so
+  // warning that the failure is "swallowed" inverts the semantics and fires on
+  // the git cat-file -e <sha> || echo missing ghost-control idiom. The R4
+  // regex must require the pipe NOT to be doubled.
+  //
+  // Reachability (adversarial review): splitShellSegments already splits at
+  // UNQUOTED ||, so the plain form never reaches R4 — the false positive
+  // reaches it when prose leaves the segment's quote state unclosed (an
+  // apostrophe: "doesn't"). These tests use that shape, which is genuinely
+  // red under the old regex.
+  test('#4774 R4: a logical-OR fallback is a handled failure, not a swallowed one (apostrophe-confused prose)', () => {
+    const content = makeCriteriaPlan(
+      "  - Doesn't assume tags: `git cat-file -e $sha || echo missing` exits 0 (ghost control: a bogus hash must print \"missing\").",
+      '',
+    );
+    const result = scanQuantitativeCriteria(content);
+    assert.ok(
+      !result.warnings.some(w => w.includes('[plan-criteria R4]')),
+      `|| must not read as a pipeline stage boundary, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  test('#4774 R4: a bare logical-OR fallback stays quiet in apostrophe prose (issue row 1)', () => {
+    const content = makeCriteriaPlan(
+      "  - Doesn't assume history: `git log --oneline || echo none` prints at least the header line.",
+      '',
+    );
+    const result = scanQuantitativeCriteria(content);
+    assert.ok(
+      !result.warnings.some(w => w.includes('[plan-criteria R4]')),
+      `got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  test('#4774 R4: logical-OR into a block stays quiet (issue row 8)', () => {
+    const content = makeCriteriaPlan(
+      "  - Doesn't assume a clean tree: `git status --porcelain || { echo dirty; exit 1; }` must not print \"dirty\".",
+      '',
+    );
+    const result = scanQuantitativeCriteria(content);
+    assert.ok(
+      !result.warnings.some(w => w.includes('[plan-criteria R4]')),
+      `got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  test('#4774 R4: real single-pipe pipelines still warn (issue rows 3/4)', () => {
+    // One criterion per test: the scanner dedupes findings BY MESSAGE, so two
+    // R4-worthy lines report a single warning — per-line is the suite's idiom.
+    for (const line of [
+      '  - `git rev-parse HEAD | cut -c1-10` is 10 chars long.',
+      '  - `git diff --name-only | wc -l` is 0.',
+    ]) {
+      const result = scanQuantitativeCriteria(makeCriteriaPlan(line, ''));
+      assert.ok(
+        result.warnings.some(w => w.includes('[plan-criteria R4]')),
+        `single-pipe stage must still warn, got: ${JSON.stringify(result.warnings)}`,
+      );
+    }
+  });
+
+  test('#4774 R4: a pipeline boundary before the OR still warns (issue row 6)', () => {
+    const content = makeCriteriaPlan(
+      "  - Doesn't assume tags: `git log --oneline | head -5 || echo none` prints 5 lines.",
+      '',
+    );
+    const result = scanQuantitativeCriteria(content);
+    assert.ok(
+      result.warnings.some(w => w.includes('[plan-criteria R4]')),
+      `git|head is a real non-final stage, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  test('#4774 R4: a |& stderr-merge is a real pipeline and still warns (issue row 7)', () => {
+    const content = makeCriteriaPlan(
+      "  - Doesn't assume tags: `git grep -l \"pattern\" |& wc -l` is 0.",
+      '',
+    );
+    const result = scanQuantitativeCriteria(content);
+    assert.ok(
+      result.warnings.some(w => w.includes('[plan-criteria R4]')),
+      `|& merges stderr into the pipeline — git is still non-final, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  test('#4774 R4: a quoted || ahead of a real pipe goes quiet — pinned accepted trade-off', () => {
+    // Adversarial review Finding 3: the lookahead cannot reach past a doubled
+    // pipe, so a QUOTED '||' literal inside a grep pattern ahead of a real
+    // pipeline boundary is no longer flagged. This is a deliberate, disclosed
+    // trade-off (warn-only, narrow class, and the quoted form is exactly the
+    // case where "||" is most likely to be DATA, not control). Pinned here so
+    // a future grammar change makes the trade-off decision consciously.
+    const content = makeCriteriaPlan(
+      "  - `git grep 'a||b' f | wc -l` is 0.",
+      '',
+    );
+    const result = scanQuantitativeCriteria(content);
+    assert.ok(
+      !result.warnings.some(w => w.includes('[plan-criteria R4]')),
+      `pinned trade-off: quoted || ahead of a real pipe is quiet; got: ${JSON.stringify(result.warnings)}`,
+    );
   });
 
   // Row 10 — phase 443 row 24: BSD wc pads, grep -x 0 never matches

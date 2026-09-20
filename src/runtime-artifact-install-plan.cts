@@ -11,6 +11,7 @@
 // In .cts (CommonJS output) files, `require` is available as a global.
 const _require: NodeRequire = require;
 const path = _require('node:path') as typeof import('node:path');
+const { tryWithinRootLexical } = _require('./security.cjs') as typeof import('./security.cjs');
 
 // #2870: InstallScope is owned by install-scope.cts, not re-declared here.
 // `isGlobalScope` centralizes the `scope === 'global'` boolean projection
@@ -78,12 +79,21 @@ interface ComputePathPrefixOpts {
   isWindowsHost: boolean;
   resolvedTarget: string;
   homeDir: string;
+  /** #4377: the runtime's `localConfigDir`, used only when the project-relative
+   *  include style is opted in on a local install. Optional — an omitted value
+   *  falls back to the absolute prefix, which is the pre-#4377 behavior. */
+  localDirName?: string;
+  /** #4377: explicit opt-in override. Defaults to `GSD_RELATIVE_INCLUDES === '1'`
+   *  inside `_computePathPrefix`; present here so tests can drive both arms
+   *  without mutating the environment. */
+  projectRelative?: boolean;
 }
 
 interface RuntimeArtifactConversionExports {
   rewriteStagedSkillBodies: (stagedDir: string, opts: RewriteOpts) => string | void;
   rewriteStagedCommandBodies: (stagedDir: string, opts: RewriteOpts) => string | void;
   _computePathPrefix: (opts: ComputePathPrefixOpts) => string;
+  _localIncludeDirName: (runtime: string) => string | undefined;
 }
 
 interface PlanItem {
@@ -140,13 +150,21 @@ function assertDestWithinConfigHome(configDir: string, destSubpath: string): str
     );
   }
   const root = path.resolve(configDir);
-  const resolved = path.resolve(configDir, destSubpath);
-  if (resolved === root || !resolved.startsWith(root + path.sep)) {
+  // `resolved === root` is a DELIBERATE ADDITIONAL rejection, separate from
+  // the containment decision: `tryWithinRootLexical` treats target === root
+  // as CONTAINED, but a destSubpath of "" (or one that resolves to configDir
+  // itself) must never be accepted here — this is the strict-subpath
+  // requirement Phase B of ADR-1239 imposes on third-party descriptors, and
+  // it prevents a descriptor from writing at configHome itself. Kept as its
+  // own check per ADR-4650 decision 6 (a wrapper may add its own conditions
+  // on top of the canonical predicate, never invert it).
+  const contained = tryWithinRootLexical(destSubpath, configDir);
+  if (contained === null || contained === root) {
     throw new Error(
       `destSubpath "${destSubpath}" must be a strict subpath of configHome "${configDir}" — not configHome itself or outside it (escapes configHome)`,
     );
   }
-  return resolved;
+  return contained;
 }
 
 function errorMessage(err: unknown): string {
@@ -202,7 +220,9 @@ function createRuntimeArtifactInstallPlan(args: CreateRuntimeArtifactInstallPlan
   const isGlobal = isGlobalScope(scope);
   const isOpencode = layout.runtime === 'opencode';
   const isWindowsHost = (platform ?? process.platform) === 'win32';
-  const pathPrefix = conversionExports._computePathPrefix({ isGlobal, isOpencode, isWindowsHost, resolvedTarget, homeDir });
+  // #4377: descriptor-derived local dir name, so an opted-in local install
+  // emits a project-relative prefix instead of this checkout's absolute path.
+  const pathPrefix = conversionExports._computePathPrefix({ isGlobal, isOpencode, isWindowsHost, resolvedTarget, homeDir, localDirName: conversionExports._localIncludeDirName(layout.runtime) });
   const attribution = resolveAttribution ? resolveAttribution(layout.runtime) : undefined;
   // #2875 Part 2 (row I1): layout.configDir IS the install root the inline
   // agent loop called `targetDir` — same value, same resolution.

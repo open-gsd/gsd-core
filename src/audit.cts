@@ -25,6 +25,11 @@ import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir, quickDirFrom, todosDir } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
+// #4378 (roll-in): scanSeeds publishes the SAME canonical seed identity the
+// list-seeds gate derives — one grammar, two surfaces, no drift. commands.cjs
+// does not require this module, so the edge is acyclic.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import commandsModule = require('./commands.cjs');
 const { extractFrontmatter, spliceFrontmatter } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
@@ -32,7 +37,7 @@ const { PHASE_NUMBER_TOKEN_SOURCE, scopeToPhase } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocator = require('./phase-locator.cjs');
 const { getAllArchivedPhaseDirs } = phaseLocator;
-import { requireSafePath, sanitizeForDisplay, sanitizeLabel } from './security.cjs';
+import { requireSafePath, sanitizeForDisplay, sanitizeLabel, PathAcceptance } from './security.cjs';
 import { platformWriteSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
@@ -447,7 +452,7 @@ function scanDebugSessions(planDir: string): ScanOutcome<DebugSessionItem> {
 
     let safeFilePath: string;
     try {
-      safeFilePath = requireSafePath(filePath, planDir, 'debug session file', { allowAbsolute: true });
+      safeFilePath = requireSafePath(filePath, planDir, 'debug session file', PathAcceptance.AbsoluteInsideRoot);
     } catch {
       continue;
     }
@@ -563,7 +568,7 @@ function scanQuickTasks(planDir: string): ScanOutcome<QuickTaskItem> {
 
     let safeTaskDir: string;
     try {
-      safeTaskDir = requireSafePath(taskDir, planDir, 'quick task dir', { allowAbsolute: true });
+      safeTaskDir = requireSafePath(taskDir, planDir, 'quick task dir', PathAcceptance.AbsoluteInsideRoot);
     } catch {
       continue;
     }
@@ -577,7 +582,7 @@ function scanQuickTasks(planDir: string): ScanOutcome<QuickTaskItem> {
     if (summaryPath && fs.existsSync(summaryPath)) {
       let safeSum: string;
       try {
-        safeSum = requireSafePath(summaryPath, planDir, 'quick task summary', { allowAbsolute: true });
+        safeSum = requireSafePath(summaryPath, planDir, 'quick task summary', PathAcceptance.AbsoluteInsideRoot);
       } catch {
         continue;
       }
@@ -658,7 +663,7 @@ function scanThreads(planDir: string): ScanOutcome<ThreadItem> {
 
     let safeFilePath: string;
     try {
-      safeFilePath = requireSafePath(filePath, planDir, 'thread file', { allowAbsolute: true });
+      safeFilePath = requireSafePath(filePath, planDir, 'thread file', PathAcceptance.AbsoluteInsideRoot);
     } catch {
       continue;
     }
@@ -748,7 +753,7 @@ function scanTodos(todosBase: string): ScanOutcome<TodoItem> {
 
     let safeFilePath: string;
     try {
-      safeFilePath = requireSafePath(filePath, todosBase, 'todo file', { allowAbsolute: true });
+      safeFilePath = requireSafePath(filePath, todosBase, 'todo file', PathAcceptance.AbsoluteInsideRoot);
     } catch {
       continue;
     }
@@ -800,6 +805,15 @@ function scanTodos(todosBase: string): ScanOutcome<TodoItem> {
   return { items: results, acknowledged };
 }
 
+// #4378 (roll-in): true when the filename is a well-formed seed name —
+// `SEED-` prefix, `.md` suffix, and no control bytes anywhere in between (the
+// scanSeeds admission filter passes such names through to the identity
+// derivation; a name with an embedded control byte falls back to its raw
+// stem exactly as the pre-canonical code did).
+function seedIdMatchRawName(name: string): boolean {
+  return !/[\u0000-\u001f\u007f]/.test(name);
+}
+
 // ─── scanSeeds ────────────────────────────────────────────────────────────────
 
 /**
@@ -829,7 +843,7 @@ function scanSeeds(planDir: string): ScanOutcome<SeedItem> {
 
     let safeFilePath: string;
     try {
-      safeFilePath = requireSafePath(filePath, planDir, 'seed file', { allowAbsolute: true });
+      safeFilePath = requireSafePath(filePath, planDir, 'seed file', PathAcceptance.AbsoluteInsideRoot);
     } catch {
       continue;
     }
@@ -855,16 +869,18 @@ function scanSeeds(planDir: string): ScanOutcome<SeedItem> {
       continue;
     }
 
-    // Extract seed_id from filename or frontmatter. The regex match is
-    // `\w`/hyphen-constrained (safe by construction, like `archived_milestone`)
-    // but the fallback taken when a filename doesn't fully match — e.g. a
-    // `SEED-`-prefixed, `.md`-suffixed name with a control byte SOMEWHERE in
-    // the middle, which still passes the `startsWith`/`endsWith` filter above
-    // — is the raw, unconstrained basename. Both branches are routed through
-    // sanitizeLabel below.
-    const seedIdMatch = entry.name.match(/^(SEED-[\w-]+)\.md$/);
-    const seed_id = seedIdMatch ? seedIdMatch[1] : path.basename(entry.name, '.md');
-    const slug = sanitizeLabel(seed_id.replace(/^SEED-/, ''));
+    // #4378 (roll-in): the canonical identity comes from the SAME derivation
+    // the list-seeds surface uses — frontmatter `id:` when it matches a seed
+    // grammar (legacy `SEED-NNN` or date-suffixed `SEED-YYMMDD-xxx`), else the
+    // filename's id prefix, else the whole stem. The old fused
+    // filename-stem id (e.g. `SEED-081-region` for `SEED-081-region.md`)
+    // disagreed with list-seeds and misfiled deferrals; publishing the
+    // canonical id keeps the two surfaces answering identically. The raw-
+    // basename fallback for control-byte-bearing names is preserved.
+    const stem = path.basename(entry.name, '.md');
+    const derived = commandsModule.deriveSeedIdentity(stem, fm.id);
+    const seed_id = seedIdMatchRawName(entry.name) ? derived.seed_id : stem;
+    const slug = sanitizeLabel(derived.slug);
 
     let title = sanitizeForDisplay(fm.title || '');
     if (!title) {
@@ -1014,7 +1030,7 @@ function scanUatGaps(planDir: string, cwd: string): ScanOutcome<UatGapItem> {
 
       let safeFilePath: string;
       try {
-        safeFilePath = requireSafePath(filePath, planDir, 'UAT file', { allowAbsolute: true });
+        safeFilePath = requireSafePath(filePath, planDir, 'UAT file', PathAcceptance.AbsoluteInsideRoot);
       } catch {
         continue;
       }
@@ -1097,7 +1113,7 @@ function scanVerificationGaps(planDir: string, cwd: string): ScanOutcome<Verific
 
       let safeFilePath: string;
       try {
-        safeFilePath = requireSafePath(filePath, planDir, 'VERIFICATION file', { allowAbsolute: true });
+        safeFilePath = requireSafePath(filePath, planDir, 'VERIFICATION file', PathAcceptance.AbsoluteInsideRoot);
       } catch {
         continue;
       }
@@ -1166,7 +1182,7 @@ function scanContextQuestions(planDir: string, cwd: string): ScanOutcome<Context
 
       let safeFilePath: string;
       try {
-        safeFilePath = requireSafePath(filePath, planDir, 'CONTEXT file', { allowAbsolute: true });
+        safeFilePath = requireSafePath(filePath, planDir, 'CONTEXT file', PathAcceptance.AbsoluteInsideRoot);
       } catch {
         continue;
       }
@@ -1262,7 +1278,7 @@ function scanDeferredItems(planDir: string, cwd: string): ScanOutcome<DeferredIt
 
     let safeFilePath: string;
     try {
-      safeFilePath = requireSafePath(filePath, planDir, 'deferred items file', { allowAbsolute: true });
+      safeFilePath = requireSafePath(filePath, planDir, 'deferred items file', PathAcceptance.AbsoluteInsideRoot);
     } catch {
       continue;
     }
@@ -1667,7 +1683,7 @@ function cmdAuditAcknowledge(cwd: string, args: string[], raw: boolean): void {
       ioError(`no phase directory found for phase "${phase as string}"${archivedMilestone ? ` (archived-milestone "${archivedMilestone}")` : ''}`);
     }
     const filePath = path.join(targetDir as string, file as string);
-    const safeFilePath = requireSafePath(filePath, planDir, 'audit acknowledge target', { allowAbsolute: true });
+    const safeFilePath = requireSafePath(filePath, planDir, 'audit acknowledge target', PathAcceptance.AbsoluteInsideRoot);
     if (!fs.existsSync(safeFilePath)) ioError(`file not found: ${file as string}`);
 
     if (category === 'deferred_items') {
@@ -1745,20 +1761,56 @@ function cmdAuditAcknowledge(cwd: string, args: string[], raw: boolean): void {
 
   if (category === 'debug_sessions') {
     if (!slug) ioError('--slug is required for --category debug_sessions');
-    safeFilePath = requireSafePath(path.join(planDir, 'debug', `${slug as string}.md`), planDir, 'audit acknowledge target', { allowAbsolute: true });
+    safeFilePath = requireSafePath(path.join(planDir, 'debug', `${slug as string}.md`), planDir, 'audit acknowledge target', PathAcceptance.AbsoluteInsideRoot);
     if (!fs.existsSync(safeFilePath)) ioError(`file not found: debug/${slug as string}.md`);
     const content = fs.readFileSync(safeFilePath, 'utf-8');
     currentValue = ((extractFrontmatter(content, safeFilePath).status as string) || 'unknown').toLowerCase();
   } else if (category === 'threads') {
     if (!slug) ioError('--slug is required for --category threads');
-    safeFilePath = requireSafePath(path.join(planDir, 'threads', `${slug as string}.md`), planDir, 'audit acknowledge target', { allowAbsolute: true });
+    safeFilePath = requireSafePath(path.join(planDir, 'threads', `${slug as string}.md`), planDir, 'audit acknowledge target', PathAcceptance.AbsoluteInsideRoot);
     if (!fs.existsSync(safeFilePath)) ioError(`file not found: threads/${slug as string}.md`);
     const content = fs.readFileSync(safeFilePath, 'utf-8');
     currentValue = deriveThreadStatus(extractFrontmatter(content, safeFilePath), content);
   } else if (category === 'seeds') {
     if (!seedId) ioError('--seed-id is required for --category seeds');
-    safeFilePath = requireSafePath(path.join(planDir, 'seeds', `${seedId as string}.md`), planDir, 'audit acknowledge target', { allowAbsolute: true });
-    if (!fs.existsSync(safeFilePath)) ioError(`file not found: seeds/${seedId as string}.md`);
+    // #4378 (roll-in): `--seed-id` arrives as whichever id an audit/list
+    // surface published — the canonical identity (frontmatter `id:` or the
+    // derived prefix, e.g. `SEED-081`, `SEED-260914-k3x`) or, for callers
+    // scripted against pre-canonical output, the full filename stem. Resolve
+    // by scanning the seeds directory and matching each candidate's derived
+    // identity (falling back to the literal stem), then prove the winner with
+    // requireSafePath exactly like every other acknowledge target. The direct
+    // `seeds/<seedId>.md` build stays as the final fallback so a genuine
+    // miss still reports the same "file not found" error as before.
+    const seedsAckDir = path.join(planDir, 'seeds');
+    let ackCandidate: string | null = null;
+    let ackEntries: string[] = [];
+    try {
+      ackEntries = fs.readdirSync(seedsAckDir).filter((n) => n.startsWith('SEED-') && n.endsWith('.md'));
+    } catch {
+      ackEntries = [];
+    }
+    for (const name of ackEntries) {
+      const stem = path.basename(name, '.md');
+      let fmId: unknown;
+      try {
+        const rawAck = platformReadSync(path.join(seedsAckDir, name));
+        if (rawAck !== null) fmId = extractFrontmatter(normalizeLineEndings(rawAck), path.join(seedsAckDir, name)).id;
+      } catch {
+        fmId = undefined;
+      }
+      const { seed_id: derivedAckId } = commandsModule.deriveSeedIdentity(stem, fmId);
+      if (derivedAckId === seedId || stem === seedId) {
+        ackCandidate = name;
+        break;
+      }
+    }
+    if (ackCandidate !== null) {
+      safeFilePath = requireSafePath(path.join(seedsAckDir, ackCandidate), planDir, 'audit acknowledge target', PathAcceptance.AbsoluteInsideRoot);
+    } else {
+      safeFilePath = requireSafePath(path.join(seedsAckDir, `${seedId as string}.md`), planDir, 'audit acknowledge target', PathAcceptance.AbsoluteInsideRoot);
+      ioError(`file not found: seeds/${seedId as string}.md`);
+    }
     const content = fs.readFileSync(safeFilePath, 'utf-8');
     currentValue = ((extractFrontmatter(content, safeFilePath).status as string) || 'dormant').toLowerCase();
   } else if (category === 'todos') {
@@ -1768,18 +1820,18 @@ function cmdAuditAcknowledge(cwd: string, args: string[], raw: boolean): void {
     // old workstream-scoped planDir boundary would refuse a root todos file
     // outright, and even a path fix alone would have thrown here.
     const rootTodos = todosDir(cwd);
-    safeFilePath = requireSafePath(path.join(rootTodos, 'pending', filename as string), rootTodos, 'audit acknowledge target', { allowAbsolute: true });
+    safeFilePath = requireSafePath(path.join(rootTodos, 'pending', filename as string), rootTodos, 'audit acknowledge target', PathAcceptance.AbsoluteInsideRoot);
     if (!fs.existsSync(safeFilePath)) ioError(`file not found: todos/pending/${filename as string}`);
     currentValue = ''; // presence-only — see scanTodos
   } else if (category === 'quick_tasks') {
     if (!quickDir) ioError('--dir is required for --category quick_tasks');
-    const taskDir = requireSafePath(path.join(planDir, 'quick', quickDir as string), planDir, 'audit acknowledge target dir', { allowAbsolute: true });
+    const taskDir = requireSafePath(path.join(planDir, 'quick', quickDir as string), planDir, 'audit acknowledge target dir', PathAcceptance.AbsoluteInsideRoot);
     if (!fs.existsSync(taskDir)) ioError(`directory not found: quick/${quickDir as string}`);
     // Shared with scanQuickTasks (#3458 follow-up) so the reader and this
     // writer can never disagree about which file is the task's record.
     const resolvedSummaryPath = resolveQuickTaskSummaryFile(taskDir, quickDir as string);
     if (resolvedSummaryPath) {
-      safeFilePath = requireSafePath(resolvedSummaryPath, planDir, 'audit acknowledge target', { allowAbsolute: true });
+      safeFilePath = requireSafePath(resolvedSummaryPath, planDir, 'audit acknowledge target', PathAcceptance.AbsoluteInsideRoot);
       const content = fs.readFileSync(safeFilePath, 'utf-8');
       currentValue = ((extractFrontmatter(content, safeFilePath).status as string) || 'unknown').toLowerCase();
     } else {
@@ -1789,7 +1841,7 @@ function cmdAuditAcknowledge(cwd: string, args: string[], raw: boolean): void {
       // acknowledgment's own snapshot of "no summary exists yet", which
       // self-invalidates the moment a real SUMMARY.md is written (the
       // scanner then reads THAT file's own status instead).
-      safeFilePath = requireSafePath(path.join(taskDir, `${quickDir as string}-SUMMARY.md`), planDir, 'audit acknowledge target', { allowAbsolute: true });
+      safeFilePath = requireSafePath(path.join(taskDir, `${quickDir as string}-SUMMARY.md`), planDir, 'audit acknowledge target', PathAcceptance.AbsoluteInsideRoot);
       currentValue = 'missing';
       createIfMissing = true;
       fmForCreate = { status: 'missing' };

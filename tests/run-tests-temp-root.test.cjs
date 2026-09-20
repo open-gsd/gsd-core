@@ -23,6 +23,30 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const RUNNER = path.join(__dirname, '..', 'scripts', 'run-tests.cjs');
 
+/**
+ * A `node -e` snippet that requires `scripts/run-tests.cjs` and calls one of
+ * its exported functions in an isolated child process, purely so the call
+ * doesn't poison the PARENT process's own os.tmpdir() resolution for every
+ * other subtest. No subprocess fan-out beneath the single node child.
+ * Coincides numerically with GENERATOR_SCRIPT_TIMEOUT_MS, BUILD_TIMEOUT_MS,
+ * and others in tests/helpers/timeouts.cjs, none of which describe this
+ * shape (scripts/run-tests.cjs is the test runner itself, not a generator/
+ * lint script, a hooks bundle, or a git plumbing call) -- kept file-local
+ * and separately named rather than forced onto an unrelated shared norm.
+ */
+const RUN_TESTS_ISOLATED_PROBE_TIMEOUT_MS = 30000;
+
+/**
+ * A REAL end-to-end spawn of scripts/run-tests.cjs itself, running one
+ * trivial test file through its full lifecycle (temp-root setup, discovery,
+ * execution, sweep, teardown) -- heavier than
+ * RUN_TESTS_ISOLATED_PROBE_TIMEOUT_MS above, which only calls one exported
+ * function in isolation. Coincides numerically with INSTALL_TIMEOUT_MS (a
+ * full bin/install.js run) but describes a completely unrelated operation
+ * -- disclosed, not merged.
+ */
+const RUN_TESTS_HARNESS_SPAWN_TIMEOUT_MS = 120000;
+
 describe('#4020 — run-tests temp root', () => {
   // setupRunTempRoot mutates the PROCESS env (TMPDIR/TEMP/TMP), so these rows
   // drive it in an isolated child — an in-process call would poison every other
@@ -43,7 +67,7 @@ describe('#4020 — run-tests temp root', () => {
     t.after(() => cleanup(outer));
 
     const r = runNode(['-e', setupProbe], {
-      timeoutMs: 30_000,
+      timeoutMs: RUN_TESTS_ISOLATED_PROBE_TIMEOUT_MS,
       env: { ...process.env, TMPDIR: outer, TEMP: outer, TMP: outer },
     });
     assert.equal(r.exitCode, 0, `probe failed: ${r.stderr.slice(-300)}`);
@@ -68,7 +92,7 @@ describe('#4020 — run-tests temp root', () => {
     t.after(() => cleanup(outer));
 
     const r = runNode(['-e', probe], {
-      timeoutMs: 30_000,
+      timeoutMs: RUN_TESTS_ISOLATED_PROBE_TIMEOUT_MS,
       env: { ...process.env, TMPDIR: outer, TEMP: outer, TMP: outer },
     });
     assert.equal(r.exitCode, 0, `probe failed: ${r.stderr.slice(-300)}`);
@@ -136,7 +160,7 @@ describe('#4020 — run-tests temp root', () => {
 
     const r = runNode(
       [RUNNER, '--files', path.basename(target)],
-      { timeoutMs: 120_000, env: { ...process.env, TMPDIR: sandbox, TEMP: sandbox, TMP: sandbox } },
+      { timeoutMs: RUN_TESTS_HARNESS_SPAWN_TIMEOUT_MS, env: { ...process.env, TMPDIR: sandbox, TEMP: sandbox, TMP: sandbox } },
     );
     assert.equal(r.exitCode, 0, `runner should pass: ${r.stderr.slice(-400)}`);
     const m = /tmp-root=(\S+)/.exec(r.stderr);
@@ -159,7 +183,7 @@ describe('#4020 — run-tests temp root', () => {
 
     const r = runNode(
       [RUNNER, '--files', path.basename(target)],
-      { timeoutMs: 120_000, env: { ...process.env, TMPDIR: inherited, TEMP: inherited, TMP: inherited } },
+      { timeoutMs: RUN_TESTS_HARNESS_SPAWN_TIMEOUT_MS, env: { ...process.env, TMPDIR: inherited, TEMP: inherited, TMP: inherited } },
     );
     assert.equal(r.exitCode, 0, `nested runner should pass: ${r.stderr.slice(-400)}`);
     const m = /tmp-root=(\S+)/.exec(r.stderr);
@@ -175,7 +199,7 @@ describe('#4020 — run-tests temp root', () => {
     fs.mkdirSync(sibling);
     const r2 = runNode(
       [RUNNER, '--files', path.basename(target)],
-      { timeoutMs: 120_000, env: { ...process.env, TMPDIR: inherited, TEMP: inherited, TMP: inherited } },
+      { timeoutMs: RUN_TESTS_HARNESS_SPAWN_TIMEOUT_MS, env: { ...process.env, TMPDIR: inherited, TEMP: inherited, TMP: inherited } },
     );
     assert.equal(r2.exitCode, 0, `second nested runner should pass: ${r2.stderr.slice(-300)}`);
     assert.ok(fs.existsSync(sibling),

@@ -68,6 +68,7 @@ const DOCS_GUARD_EXEMPT_BASELINE = [
   'lint-allow-test-rule-refs.test.cjs',
   'lint-docs-command-form.test.cjs',
   'lint-docs-required.test.cjs',
+  'lint-retired-runtime-name.test.cjs',
   'manifest-version-sync.test.cjs',
   'milestone-archive.test.cjs',
   'model-resolver.test.cjs',
@@ -125,8 +126,12 @@ const DOCS_GUARD_EXEMPT_DOCS_PATHS = {
     'docs/how-to/some-unrelated-guide.md', 'docs/how-to/x.md', 'docs/some-unrelated-file.md',
     'docs/totally-unrelated.md',
   ],
+  // #4641: cites docs/adr/4641-windows-selector-consolidation.md in an
+  // explanatory comment describing why the retired `windows` scope must not
+  // be restored; the file never reads that (or any) docs/ file.
   'ci-test-scope.test.cjs': [
-    'docs/a.md', 'docs/adr', 'docs/adr/22-plan-drift-guard.md', 'docs/how-to/configure-model-profiles.md',
+    'docs/a.md', 'docs/adr', 'docs/adr/22-plan-drift-guard.md',
+    'docs/adr/4641-windows-selector-consolidation.md', 'docs/how-to/configure-model-profiles.md',
     'docs/installer-migrations.md', 'docs/ja-JP', 'docs/ja-JP/USAGE.md', 'docs/usage.md', 'docs/x.md',
   ],
   'cline-install.test.cjs': ['docs/guide.md'],
@@ -174,13 +179,39 @@ const DOCS_GUARD_EXEMPT_DOCS_PATHS = {
     'docs/COMMANDS.md', 'docs/USER-GUIDE.md', 'docs/adr', 'docs/adr/0001-foo.md', 'docs/adr/0099-new.md',
     'docs/agents', 'docs/agents/triage-labels.md',
   ],
+  // #4729: `writeFile('docs/...', ...)` calls WRITE fabricated fixture
+  // content into a throwaway mkdtemp repo; the file never reads real shipped
+  // docs/ content — every path here is fixture data for the guard under
+  // test.
+  // Re-confirmed: every path below is WRITTEN as fabricated fixture content
+  // into a throwaway mkdtemp repo; none reads real shipped docs. The a*/b*/c*/
+  // d* entries are the adversarial-regression fixtures (dialect-plus-runtime-
+  // word, adjacency laundering, version laundering, bare-marker abuse).
+  'lint-retired-runtime-name.test.cjs': [
+    'docs/adr', 'docs/adr/999-retired-runtime-record.md', 'docs/filler/note-',
+    'docs/guides/a1.md', 'docs/guides/a2.md', 'docs/guides/b1.md',
+    'docs/guides/b2.md', 'docs/guides/b3.md', 'docs/guides/c3.md',
+    'docs/guides/c4.md', 'docs/guides/config-homes.md', 'docs/guides/d1.md',
+    'docs/guides/hooks.md', 'docs/guides/one.md', 'docs/guides/runtime-claim.md',
+    'docs/guides/setup.md', 'docs/history/migration-note.md',
+    'docs/ja-JP/guides/runtimes.md', 'docs/pt-BR/guides/a3.md',
+    'docs/pt-BR/guides/hooks.md', 'docs/pt-BR/guides/policy.md',
+    'docs/reference/client-models.md', 'docs/reference/models.md',
+    'docs/zh-CN/guides/a4.md', 'docs/zh-CN/reference/models.md',
+  ],
   'manifest-version-sync.test.cjs': [],
   // #3884: re-confirmed — the added docs/CLI-TOOLS.md:458 reference is the
   // same class as the existing docs/TESTING-SUITES.md one (a placement-note
   // / explanatory comment citing documented CLI behavior for context, never
   // a read target); the exemption's premise still holds for both.
   'milestone-archive.test.cjs': ['docs/CLI-TOOLS.md', 'docs/TESTING-SUITES.md'],
-  'model-resolver.test.cjs': ['docs/TESTING-SUITES.md'],
+  // #4505: additionally cites docs/features/dynamic-routing-with-failure-tier-escalation.md
+  // in explanatory comments, quoting the documented first-spawn contract the new rows
+  // assert against; the file never reads that (or any) docs/ file — every read it makes
+  // targets a tmpdir .planning fixture.
+  'model-resolver.test.cjs': [
+    'docs/TESTING-SUITES.md', 'docs/features/dynamic-routing-with-failure-tier-escalation.md',
+  ],
   'new-project-mvp-prompt.test.cjs': ['docs/CONFIGURATION.md'],
   'onboard-command.test.cjs': ['docs/adr/0001-runtime.md'],
   'opencode-command-dir-plural.test.cjs': ['docs/commands'],

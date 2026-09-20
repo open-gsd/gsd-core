@@ -137,7 +137,7 @@ describe('probe-core: analyzeCoverage (merge · rollup · byVerification)', () =
   test('no resolutions → every item unresolved; resolved 0; byVerification zeroed per tier', () => {
     const rep = pc.analyzeCoverage(UNRESOLVED_ITEMS, [], VALIDATORS);
     assert.deepEqual(rep.coverage, {
-      applicable: 3, resolved: 0, unresolved: 3, byVerification: { explicit: 0, backstop: 0 },
+      applicable: 3, resolved: 0, unresolved: 3, unclassified: 0, byVerification: { explicit: 0, backstop: 0 },
     });
   });
   test('merges a resolved/explicit resolution and counts byVerification.explicit', () => {
@@ -686,5 +686,60 @@ describe('probe-core: projectTruths (#1154, conservative serializer — Postel) 
     assert.equal(pc.truthStatement(parsed[0]), 'Adjacent intervals merge');
     assert.equal(pc.truthStatement(parsed[1]), 'Overlapping intervals are merged');
     assert.equal(pc.truthVerification(parsed[1]), null, 'a plain truth round-trips with no marker (Hyrum byte-identity backward-compat)');
+  });
+});
+
+describe('probe-core: coverage.unclassified sibling count (#4656)', () => {
+  // #1110's soft-signal rows are legitimate rollup members, so `applicable`
+  // counts them and the documented zero-applicable guards could never fire on
+  // an all-unclassified spec. The fix exposes the count as a SIBLING field,
+  // leaving `applicable` and the documented `resolved = applicable -
+  // unresolved` identity count-preserving.
+
+  const UNCLASSIFIED_VALIDATORS = {
+    categories: ['idempotency', 'ordering', 'unclassified'],
+    verification: ['explicit', 'backstop'],
+    requiredFieldsByVerification: { explicit: ['resolution'], backstop: ['resolution'] },
+  };
+
+  test('the issue defect case: all requirements unclassified reports unclassified === applicable', () => {
+    const items = [
+      item('unclassified', { requirement_id: 'CONN-01' }),
+      item('unclassified', { requirement_id: 'CONN-02' }),
+      item('unclassified', { requirement_id: 'PJL-01' }),
+    ];
+    const rep = pc.analyzeCoverage(items, [], UNCLASSIFIED_VALIDATORS);
+    assert.equal(rep.coverage.applicable, 3);
+    assert.equal(rep.coverage.unclassified, 3, 'the all-unclassified case must be distinguishable from a spec with genuine edge surface');
+    assert.equal(rep.coverage.resolved, 0);
+    assert.equal(rep.coverage.unresolved, 3);
+  });
+
+  test('a classified spec reports unclassified 0 (control 1 — text_en populated)', () => {
+    const items = [
+      item('idempotency', { requirement_id: 'CONN-01' }),
+      item('ordering', { requirement_id: 'CONN-02' }),
+    ];
+    const rep = pc.analyzeCoverage(items, [], UNCLASSIFIED_VALIDATORS);
+    assert.equal(rep.coverage.applicable, 2);
+    assert.equal(rep.coverage.unclassified, 0);
+  });
+
+  test('an edge-free requirement (no items) reports applicable 0 and unclassified 0 (control 2)', () => {
+    const rep = pc.analyzeCoverage([], [], UNCLASSIFIED_VALIDATORS);
+    assert.equal(rep.coverage.applicable, 0);
+    assert.equal(rep.coverage.unclassified, 0);
+  });
+
+  test('mixed spec: unclassified is a strict subset of applicable; the counting identity is preserved', () => {
+    const items = [
+      item('idempotency', { requirement_id: 'CONN-01' }),
+      item('unclassified', { requirement_id: 'CONN-02' }),
+    ];
+    const rep = pc.analyzeCoverage(items, [], UNCLASSIFIED_VALIDATORS);
+    assert.equal(rep.coverage.applicable, 2);
+    assert.equal(rep.coverage.unclassified, 1);
+    assert.ok(rep.coverage.unclassified <= rep.coverage.applicable);
+    assert.equal(rep.coverage.resolved, rep.coverage.applicable - rep.coverage.unresolved);
   });
 });

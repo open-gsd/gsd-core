@@ -444,19 +444,32 @@ test('ambient GSD workstream vars are stripped by the runner', () => {
       return p;
     }
 
-    test('expensive files SPREAD across chunks instead of clustering (#2088, #2456)', () => {
+    test('expensive files SPREAD across chunks instead of clustering (#2088, #2456, #4733)', () => {
       // Discriminating by construction: the three EXPENSIVE files carry names the
       // old prefix heuristic scored 1, and the three TRIVIAL ones carry the
       // `install-` prefix it scored 12 — i.e. exactly inverted from their real
       // cost. Under the old packer this packs {2,2,1,1} (4 chunks, with two
-      // expensive files sharing chunk 1); under measured weights it packs
-      // {2,2,2}, one expensive file per chunk. The assertion below therefore
-      // cannot pass on the old algorithm, nor with the timings file removed.
+      // expensive files sharing chunk 1).
+      //
+      // #4733: isolation is now an ABSOLUTE ms bar (ISOLATION_BUDGET_FRACTION
+      // * CHUNK_WORKING_BUDGET_MS = 0.3 * 400000 = 120000ms), converted to the
+      // packer's weight units via the LIVE table's own mean — NOT scaled by
+      // RUN_TESTS_MAX_FILES_PER_CHUNK (2 here) the way the old ratio-of-budget
+      // rule was. Each heavy file is measured at 200000ms, well above the
+      // 120000ms bar, so it is pulled out by partitionIsolatedFiles into its
+      // own dedicated chunk, BEFORE packChunks ever sees it — an even stronger
+      // guarantee than LPT spread: the three heavy files can never land in the
+      // same chunk as each other or as a trivial file. That yields 5 chunks
+      // total: 3 isolated singles (the heavy files, one per chunk) plus the 3
+      // trivial files packed by count floor (ceil(3/2)=2 chunks: {2,1}), where
+      // 2 is RUN_TESTS_MAX_FILES_PER_CHUNK below (packing budget only — it no
+      // longer influences isolation). The assertion below therefore cannot
+      // pass on the old algorithm, nor with the timings file removed.
       const heavy = ['heavy-0.test.cjs', 'heavy-1.test.cjs', 'heavy-2.test.cjs'];
       const trivial = ['install-cheap-0.test.cjs', 'install-cheap-1.test.cjs', 'install-cheap-2.test.cjs'];
       seed(tmpDir, [...heavy, ...trivial]);
       const timingsFile = writeTimings(tmpDir, {
-        ...Object.fromEntries(heavy.map((f) => [f, 30000])),
+        ...Object.fromEntries(heavy.map((f) => [f, 200000])),
         ...Object.fromEntries(trivial.map((f) => [f, 10])),
       });
       const rh = runHarness(tmpDir, [], {
@@ -465,13 +478,11 @@ test('ambient GSD workstream vars are stripped by the runner', () => {
         RUN_TESTS_TIMINGS_FILE: timingsFile,
       });
       assert.strictEqual(rh.status, 0, `heavy: expected zero exit; STDERR:\n${rh.stderr}`);
-      for (const n of [1, 2, 3]) {
-        assert.match(
-          rh.stderr,
-          new RegExp(`run-tests: chunk ${n}/3 — 2 files`),
-          `expensive files must spread one-per-chunk across exactly 3 chunks; STDERR:\n${rh.stderr}`,
-        );
-      }
+      assert.match(rh.stderr, /run-tests: chunk 1\/5 — 1 files/, `expected isolated heavy chunk 1/5; STDERR:\n${rh.stderr}`);
+      assert.match(rh.stderr, /run-tests: chunk 2\/5 — 1 files/, `expected isolated heavy chunk 2/5; STDERR:\n${rh.stderr}`);
+      assert.match(rh.stderr, /run-tests: chunk 3\/5 — 1 files/, `expected isolated heavy chunk 3/5; STDERR:\n${rh.stderr}`);
+      assert.match(rh.stderr, /run-tests: chunk 4\/5 — 2 files/, `expected packed trivial chunk 4/5; STDERR:\n${rh.stderr}`);
+      assert.match(rh.stderr, /run-tests: chunk 5\/5 — 1 files/, `expected packed trivial chunk 5/5; STDERR:\n${rh.stderr}`);
     });
 
     test('trivial files the old heuristic over-weighted now stay in ONE chunk (#2088, #2456)', () => {
@@ -2412,12 +2423,13 @@ describe('chunk packing weights measured cost (#2456)', () => {
   });
 
   describe('timings are advisory, never gated', () => {
-    test('a file missing from the table falls back to the median weight', () => {
-      // 10s, 20s, 60s → mean 30s, median 20s → median weight = 20/30.
+    test('a file missing from the table falls back to the mean weight (1), not the median', () => {
+      // 10s, 20s, 60s → mean 30s, median 20s. Absent files weigh 1 (the mean),
+      // not 20/30 (the median) — see #2456 follow-up, red-next 2026-09-14.
       const t = tableFrom({ 'a.test.cjs': 10000, 'b.test.cjs': 20000, 'c.test.cjs': 60000 });
       try {
         const weigh = makeFileWeigher(loadTestTimings(t.path));
-        assert.strictEqual(weigh('brand-new-test.test.cjs'), 20000 / 30000);
+        assert.strictEqual(weigh('brand-new-test.test.cjs'), 1);
       } finally {
         cleanup(t.dir);
       }
@@ -2494,6 +2506,72 @@ describe('chunk packing weights measured cost (#2456)', () => {
           Math.ceil(files.length / 6),
           'a right-skewed table must still chunk exactly as count-based packing did',
         );
+      } finally {
+        cleanup(t.dir);
+      }
+    });
+  });
+
+  describe('an unmeasured file is charged the mean, not the median (red next, 2026-09-14)', () => {
+    // MEASURED_MS (above) is NOT right-skewed the way the real table is: its
+    // median (~82435) sits ABOVE its mean (~75959), so medianWeight ≈ 1.09 —
+    // the bug this block guards ("median under-declares an unknown file in a
+    // right-skewed table") is not even expressible against that fixture. Do
+    // NOT reuse MEASURED_MS here or fold this fixture into it; other tests
+    // above depend on MEASURED_MS's exact shape.
+    //
+    // SKEWED_MS models the real suite's shape instead: mostly trivial files
+    // with a long right tail of a few very expensive ones (real table: mean
+    // 7152ms, median 381ms, ratio 0.0533).
+    const SKEWED_MS = {
+      ...Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`small-${i}.test.cjs`, 350])),
+      'huge-a.test.cjs': 100000,
+      'huge-b.test.cjs': 200000,
+      'huge-c.test.cjs': 400000,
+      'huge-d.test.cjs': 575000,
+    };
+
+    test('a file absent from the table weighs 1 (the mean), not the median', () => {
+      const t = tableFrom(SKEWED_MS);
+      try {
+        const table = loadTestTimings(t.path);
+        // Prove the fixture actually models the skew this test exists to
+        // guard against — without this, a passing assertion below would be
+        // meaningless.
+        assert.ok(
+          table.medianWeight < 0.2,
+          `fixture must be right-skewed; got medianWeight=${table.medianWeight}`,
+        );
+        const weigh = makeFileWeigher(table);
+        assert.strictEqual(weigh('never-measured.test.cjs'), 1);
+      } finally {
+        cleanup(t.dir);
+      }
+    });
+
+    test('that matches what a MISSING table already does — both mean "unknown"', () => {
+      const t = tableFrom(SKEWED_MS);
+      try {
+        const weigh = makeFileWeigher(loadTestTimings(t.path));
+        const weighNull = makeFileWeigher(null);
+        assert.strictEqual(weighNull('anything.test.cjs'), 1);
+        assert.strictEqual(weighNull('anything.test.cjs'), weigh('never-measured.test.cjs'));
+      } finally {
+        cleanup(t.dir);
+      }
+    });
+
+    test('a chunk of unmeasured files declares their real share of the budget', () => {
+      const t = tableFrom(SKEWED_MS);
+      try {
+        const table = loadTestTimings(t.path);
+        const weigh = makeFileWeigher(table);
+        const unmeasured = Array.from({ length: 10 }, (_, i) => `new-${i}.test.cjs`);
+        const total = unmeasured.reduce((sum, f) => sum + weigh(f), 0);
+        // Under the old median rule this would have summed to about
+        // 10 * table.medianWeight (~0.05 against this fixture), letting ten
+        // unknown files hide inside a chunk that looked essentially empty.
+        assert.ok(total >= 10, `expected sum >= 10, got ${total}`);
       } finally {
         cleanup(t.dir);
       }
@@ -2691,14 +2769,14 @@ describe('chunk packing weights measured cost (#2456)', () => {
       // an Object.prototype member — so these BARE names are the only inputs
       // that actually reach that path, and makeFileWeigher is exported, so it
       // does not control its caller's strings. The contract is that any key not
-      // present in the table weighs the median, whatever it resolves to.
+      // present in the table weighs 1 (the mean), whatever it resolves to.
       const t = tableFrom({ 'a.test.cjs': 10000, 'b.test.cjs': 20000, 'c.test.cjs': 60000 });
       try {
         const weigh = makeFileWeigher(loadTestTimings(t.path));
         for (const name of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']) {
           const w = weigh(name);
           assert.strictEqual(typeof w, 'number', `${name} must weigh a number, not a function`);
-          assert.strictEqual(w, 20000 / 30000, `${name} must fall back to the median weight`);
+          assert.strictEqual(w, 1, `${name} must fall back to the mean weight`);
         }
       } finally {
         cleanup(t.dir);
@@ -2868,57 +2946,425 @@ describe('analyzeChunkEvents (#3889)', () => {
 
 // ─── partitionIsolatedFiles (#4497 codex-config.test.cjs chunk isolation) ───
 //
-// 2026-09-07: codex-config.test.cjs (weight 17.87, genuinely measured — see
-// scripts/run-tests.cjs's ISOLATED_HEAVY_FILES comment) is pulled out of the
-// weight-balanced packing pool and given its own dedicated chunk, on every
-// platform, so no future single-file addition can reshuffle a companion into
-// its chunk and retrigger the per-chunk timeout two prior incidents already
-// hit. These tests pin partitionIsolatedFiles directly — the pure split, not
-// the chunk-execution loop around it.
-const { ISOLATED_HEAVY_FILES, partitionIsolatedFiles } = require('../scripts/run-tests.cjs');
+// 2026-09-07: codex-config.test.cjs (weight 17.87, genuinely measured) is
+// pulled out of the weight-balanced packing pool and given its own dedicated
+// chunk, on every platform, so no future single-file addition can reshuffle a
+// companion into its chunk and retrigger the per-chunk timeout two prior
+// incidents already hit.
+//
+// 2026-09-14 (#4733): the isolated set used to be a hand-maintained Set, then
+// briefly a ratio (ISOLATION_RATIO) of the per-platform file-COUNT cap
+// (MAX_FILES_PER_CHUNK) — a category error (count vs. weight) that also made
+// the isolated set platform-dependent, silently dropping seven of the eight
+// files #4497/#4603 proved dangerous back into the shared pool on
+// linux/darwin (only run-tests-harness.test.cjs, at 31.23, still cleared the
+// 0.447 * 60 = 26.82 threshold there). It is now an ABSOLUTE ms bar
+// (ISOLATION_BUDGET_FRACTION * CHUNK_WORKING_BUDGET_MS), converted to the packer's weight units via the
+// LIVE table's own mean — platform-independent by construction, since the
+// timings table is not sharded by OS. These tests pin partitionIsolatedFiles
+// directly — the pure split, not the chunk-execution loop around it.
+const {
+  CHUNK_WORKING_BUDGET_MS,
+  ISOLATION_BUDGET_FRACTION,
+  partitionIsolatedFiles,
+} = require('../scripts/run-tests.cjs');
 
-describe('partitionIsolatedFiles (#4497 codex-config.test.cjs chunk isolation)', () => {
-  test('an isolated-heavy file is split out, in its own bucket, everything else stays packable', () => {
-    const files = [
-      '/repo/tests/a.test.cjs',
-      '/repo/tests/codex-config.test.cjs',
-      '/repo/tests/b.test.cjs',
-    ];
-    const { isolated, packable } = partitionIsolatedFiles(files);
-    assert.deepStrictEqual(isolated, ['/repo/tests/codex-config.test.cjs']);
+// Synthetic weigher/measured-predicate builders, keyed by basename, so these
+// tests do not depend on the live tests/test-timings.json table.
+function weigherFromMap(weights) {
+  return (f) => weights[f.split(/[\\/]/).pop()] ?? 1;
+}
+function measuredFromMap(weights) {
+  return (f) => Object.hasOwn(weights, f.split(/[\\/]/).pop());
+}
+
+describe('partitionIsolatedFiles (#4497 codex-config.test.cjs chunk isolation, derived #4733)', () => {
+  test('a file whose weight crosses thresholdWeight is isolated', () => {
+    const thresholdWeight = 9.834;
+    const weights = { 'a.test.cjs': 1, 'heavy.test.cjs': 9.834, 'b.test.cjs': 2 };
+    const files = ['/repo/tests/a.test.cjs', '/repo/tests/heavy.test.cjs', '/repo/tests/b.test.cjs'];
+    const { isolated, packable } = partitionIsolatedFiles(files, {
+      weightOf: weigherFromMap(weights),
+      isMeasured: measuredFromMap(weights),
+      thresholdWeight,
+    });
+    assert.deepStrictEqual(isolated, ['/repo/tests/heavy.test.cjs']);
     assert.deepStrictEqual(packable, ['/repo/tests/a.test.cjs', '/repo/tests/b.test.cjs']);
   });
 
-  test('matches by BASENAME, so it isolates regardless of platform path separator or directory prefix', () => {
-    const files = [
-      'C:\\repo\\tests\\codex-config.test.cjs',
-      '/repo/tests/subdir/codex-config.test.cjs',
-      'codex-config.test.cjs',
-    ];
-    const { isolated, packable } = partitionIsolatedFiles(files);
-    assert.deepStrictEqual(isolated, files, 'every path ending in the isolated basename must be isolated, regardless of prefix/separator');
-    assert.deepStrictEqual(packable, []);
-  });
-
-  test('a file with a similar but not exactly matching name is NOT isolated (exact basename match only)', () => {
-    const files = ['/repo/tests/codex-config-extra.test.cjs', '/repo/tests/my-codex-config.test.cjs'];
-    const { isolated, packable } = partitionIsolatedFiles(files);
+  test('a file just under the threshold is NOT isolated', () => {
+    const thresholdWeight = 9.834;
+    const weights = { 'a.test.cjs': 1, 'almost-heavy.test.cjs': 9.8, 'b.test.cjs': 2 };
+    const files = ['/repo/tests/a.test.cjs', '/repo/tests/almost-heavy.test.cjs', '/repo/tests/b.test.cjs'];
+    const { isolated, packable } = partitionIsolatedFiles(files, {
+      weightOf: weigherFromMap(weights),
+      isMeasured: measuredFromMap(weights),
+      thresholdWeight,
+    });
     assert.deepStrictEqual(isolated, []);
     assert.deepStrictEqual(packable, files);
   });
 
-  test('no isolated-heavy files present: everything is packable, order preserved', () => {
+  // #4733 regression: changing thresholdWeight alone (no change to the
+  // file's own weight) must move a file across the isolation line — proves
+  // the split tracks the threshold parameter rather than a frozen boundary.
+  test('changing thresholdWeight alone moves a file across the isolation line', () => {
+    const weight = { 'borderline.test.cjs': 9.9 };
+    const files = ['/repo/tests/borderline.test.cjs'];
+    const atOldThreshold = partitionIsolatedFiles(files, {
+      weightOf: weigherFromMap(weight),
+      isMeasured: measuredFromMap(weight),
+      thresholdWeight: 17.88, // 9.9 stays packable
+    });
+    assert.deepStrictEqual(atOldThreshold, { isolated: [], packable: files });
+
+    const atNewThreshold = partitionIsolatedFiles(files, {
+      weightOf: weigherFromMap(weight),
+      isMeasured: measuredFromMap(weight),
+      thresholdWeight: 9.834, // 9.9 now crosses it
+    });
+    assert.deepStrictEqual(atNewThreshold, { isolated: files, packable: [] });
+  });
+
+  // #4733 (finding 6): eligibility for isolation is "is this file heavy?",
+  // not "which suite does it belong to" — the suite/unit restriction that
+  // used to live inside partitionIsolatedFiles is gone. Suite scoping still
+  // happens upstream in selectFiles before this function ever sees the list
+  // (verified: main() calls selectFiles(allFiles, suite) to build
+  // `selected`, then feeds `selected` into partitionIsolatedFiles — a
+  // suite='unit' run therefore never presents an install-suite file here at
+  // all), so a heavy install-suite file IS isolated when it reaches this
+  // function, e.g. on an 'all'/'install'-suite run.
+  test('a non-unit-suite file (foo.install.test.cjs) IS isolated when heavy, since suite scoping happens upstream', () => {
+    const weights = { 'foo.install.test.cjs': 1000 };
+    const files = ['/repo/tests/foo.install.test.cjs'];
+    const { isolated, packable } = partitionIsolatedFiles(files, {
+      weightOf: weigherFromMap(weights),
+      isMeasured: measuredFromMap(weights),
+      thresholdWeight: 1,
+    });
+    assert.deepStrictEqual(isolated, files);
+    assert.deepStrictEqual(packable, []);
+  });
+
+  test('an unmeasured file is not isolated on the strength of the fallback weight alone', () => {
+    // weightOf returns a large fallback (as makeFileWeigher's unknown-file
+    // fallback of 1 normalized weight would for a tiny thresholdWeight), but
+    // isMeasured reports false — isolation must refuse it regardless of what
+    // weightOf returns.
+    const files = ['/repo/tests/unknown.test.cjs'];
+    const { isolated, packable } = partitionIsolatedFiles(files, {
+      weightOf: () => 1000,
+      isMeasured: () => false,
+      thresholdWeight: 1,
+    });
+    assert.deepStrictEqual(isolated, []);
+    assert.deepStrictEqual(packable, files);
+  });
+
+  test('matches by BASENAME, so it isolates regardless of platform path separator or directory prefix', () => {
+    const weights = { 'heavy.test.cjs': 100 };
+    const files = [
+      'C:\\repo\\tests\\heavy.test.cjs',
+      '/repo/tests/subdir/heavy.test.cjs',
+      'heavy.test.cjs',
+    ];
+    const { isolated, packable } = partitionIsolatedFiles(files, {
+      weightOf: weigherFromMap(weights),
+      isMeasured: measuredFromMap(weights),
+      thresholdWeight: 1,
+    });
+    assert.deepStrictEqual(isolated, files, 'every path ending in the heavy basename must be isolated, regardless of prefix/separator');
+    assert.deepStrictEqual(packable, []);
+  });
+
+  test('no heavy files present: everything is packable, order preserved', () => {
+    const weights = { 'z.test.cjs': 1, 'a.test.cjs': 1 };
     const files = ['/repo/tests/z.test.cjs', '/repo/tests/a.test.cjs'];
-    const { isolated, packable } = partitionIsolatedFiles(files);
+    const { isolated, packable } = partitionIsolatedFiles(files, {
+      weightOf: weigherFromMap(weights),
+      isMeasured: measuredFromMap(weights),
+      thresholdWeight: 22,
+    });
     assert.deepStrictEqual(isolated, []);
     assert.deepStrictEqual(packable, files);
   });
 
   test('an empty file list produces two empty buckets', () => {
-    assert.deepStrictEqual(partitionIsolatedFiles([]), { isolated: [], packable: [] });
+    assert.deepStrictEqual(
+      partitionIsolatedFiles([], { weightOf: () => 1, isMeasured: () => false, thresholdWeight: 22 }),
+      { isolated: [], packable: [] },
+    );
   });
 
-  test('ISOLATED_HEAVY_FILES currently names exactly codex-config.test.cjs (documents the set the fix scoped to)', () => {
-    assert.deepStrictEqual([...ISOLATED_HEAVY_FILES], ['codex-config.test.cjs']);
+  // #4733 (finding 5): a non-finite/non-positive thresholdWeight would make
+  // every `>=` comparison false, silently disabling isolation with no error
+  // — partitionIsolatedFiles must throw instead of failing open.
+  for (const [label, bad] of [
+    ['zero', 0],
+    ['negative', -1],
+    ['NaN', NaN],
+    ['undefined', undefined],
+  ]) {
+    test(`thresholdWeight=${label} throws instead of failing open`, () => {
+      assert.throws(
+        () => partitionIsolatedFiles(['/repo/tests/a.test.cjs'], {
+          weightOf: () => 100,
+          isMeasured: () => true,
+          thresholdWeight: bad,
+        }),
+        /thresholdWeight must be a finite, positive number/,
+      );
+    });
+  }
+
+  // ── Live-table rows (#4733) ─────────────────────────────────────────────
+  //
+  // These rows pin partitionIsolatedFiles against the REAL
+  // tests/test-timings.json table, computing thresholdWeight the same way
+  // main() does (CHUNK_WORKING_BUDGET_MS/ISOLATION_BUDGET_FRACTION over the
+  // table's own mean).
+  //
+  // Deliberate-mutation check performed while authoring this test (not
+  // committed, reverted after observing the failure): temporarily changing
+  // ISOLATION_BUDGET_FRACTION from 0.3 to 0.1 (thresholdWeight ~5.59 instead
+  // of ~16.78) made row 1 below fail with an extra file
+  // (workflow-fragments-emission.install.test.cjs, weight 15.93) present in
+  // the actual isolated set but absent from EXPECTED_ISOLATED_UNIT_FILES,
+  // and row 2 below fail because win32/linux/darwin no longer computed the
+  // same set as each other under the OLD (pre-fix) platform-scaled rule this
+  // row is guarding against — confirming both rows are load-bearing, not
+  // vacuous.
+  //
+  // #4249 split codex-config.test.cjs's heavy install()-pipeline blocks into
+  // codex-config-hooks.test.cjs, dropping codex-config.test.cjs's own
+  // measured weight from 127783ms to 189ms — well under this derived bar
+  // (0.3 * CHUNK_WORKING_BUDGET_MS ~= 120000ms). It correctly no longer
+  // appears in the live-computed isolated set, so it is dropped from this
+  // pinned expectation too, in place of being isolated by name.
+  const EXPECTED_ISOLATED_UNIT_FILES = [
+    'config.test.cjs',
+    'emitted-attribution.test.cjs',
+    'install-minimal-hooks.test.cjs',
+    'install.test.cjs',
+    'phase.test.cjs',
+    'run-tests-harness.test.cjs',
+    'state.test.cjs',
+  ].sort();
+
+  function liveTableFixtures() {
+    const { suiteOf } = require('../scripts/lib/suite-detection.cjs');
+    const { makeFileWeigher, makeMeasuredPredicate } = require('../scripts/run-tests.cjs');
+    const table = require('../tests/test-timings.json');
+    const values = Object.values(table.timings).filter(
+      (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0,
+    );
+    const mean = values.reduce((sum, v) => sum + v, 0) / values.length;
+    const timings = { timings: table.timings, mean };
+    const weightOf = makeFileWeigher(timings);
+    const isMeasured = makeMeasuredPredicate(timings);
+    const thresholdWeight = (ISOLATION_BUDGET_FRACTION * CHUNK_WORKING_BUDGET_MS) / mean;
+    // Production scoping: suite='unit' runs feed selectFiles-filtered
+    // (suiteOf(f) === null) files into partitionIsolatedFiles (see
+    // selectFiles in scripts/run-tests.cjs and its call site in main()).
+    const unitFiles = Object.keys(table.timings).filter((f) => suiteOf(f) === null);
+    return { weightOf, isMeasured, thresholdWeight, unitFiles };
+  }
+
+  test('#4603/#4733: the live-table unit-suite isolated set equals the historical 8-file set exactly', () => {
+    const { weightOf, isMeasured, thresholdWeight, unitFiles } = liveTableFixtures();
+    const { isolated } = partitionIsolatedFiles(unitFiles, { weightOf, isMeasured, thresholdWeight });
+    const basenames = isolated.map((f) => f.split(/[\\/]/).pop()).sort();
+    assert.deepStrictEqual(basenames, EXPECTED_ISOLATED_UNIT_FILES);
+  });
+
+  test('#4733: the live-table unit-suite isolated set is identical across win32, linux, darwin', () => {
+    // The threshold is computed once from the table mean and does not read
+    // process.platform anywhere in this derivation — this row is the
+    // regression guard for that: it would fail the instant the threshold (or
+    // the set it produces) becomes platform-dependent again, the way the
+    // MAX_FILES_PER_CHUNK-scaled ratio was.
+    const { weightOf, isMeasured, thresholdWeight, unitFiles } = liveTableFixtures();
+    const sets = ['win32', 'linux', 'darwin'].map(() => {
+      const { isolated } = partitionIsolatedFiles(unitFiles, { weightOf, isMeasured, thresholdWeight });
+      return isolated.map((f) => f.split(/[\\/]/).pop()).sort();
+    });
+    assert.deepStrictEqual(sets[0], EXPECTED_ISOLATED_UNIT_FILES);
+    assert.deepStrictEqual(sets[1], sets[0]);
+    assert.deepStrictEqual(sets[2], sets[0]);
+  });
+
+  test('#4733: dynamism — a file that crosses 120000ms in a synthetic table becomes isolated', () => {
+    // Synthetic table: 'was-light.test.cjs' previously measured well under
+    // the bar, now measured at 200000ms (above ISOLATION_BUDGET_FRACTION *
+    // CHUNK_WORKING_BUDGET_MS = 120000ms) — proving the threshold tracks the
+    // table, not a frozen list.
+    const timings = { 'was-light.test.cjs': 200000, 'other.test.cjs': 10000 };
+    const values = Object.values(timings);
+    const mean = values.reduce((a, b) => a + b, 0) / values.length;
+    const table = { timings, mean };
+    const { makeFileWeigher, makeMeasuredPredicate } = require('../scripts/run-tests.cjs');
+    const weightOf = makeFileWeigher(table);
+    const isMeasured = makeMeasuredPredicate(table);
+    const thresholdWeight = (ISOLATION_BUDGET_FRACTION * CHUNK_WORKING_BUDGET_MS) / mean;
+    const { isolated } = partitionIsolatedFiles(['was-light.test.cjs', 'other.test.cjs'], {
+      weightOf,
+      isMeasured,
+      thresholdWeight,
+    });
+    assert.deepStrictEqual(isolated, ['was-light.test.cjs']);
+  });
+
+  test('#4733: dynamism inverse — a file dropping below 120000ms is no longer isolated', () => {
+    const timings = { 'now-light.test.cjs': 50000, 'other.test.cjs': 10000 };
+    const values = Object.values(timings);
+    const mean = values.reduce((a, b) => a + b, 0) / values.length;
+    const table = { timings, mean };
+    const { makeFileWeigher, makeMeasuredPredicate } = require('../scripts/run-tests.cjs');
+    const weightOf = makeFileWeigher(table);
+    const isMeasured = makeMeasuredPredicate(table);
+    const thresholdWeight = (ISOLATION_BUDGET_FRACTION * CHUNK_WORKING_BUDGET_MS) / mean;
+    const { isolated } = partitionIsolatedFiles(['now-light.test.cjs', 'other.test.cjs'], {
+      weightOf,
+      isMeasured,
+      thresholdWeight,
+    });
+    assert.deepStrictEqual(isolated, []);
+  });
+
+  // Boundary triplet on the threshold itself. partitionIsolatedFiles uses
+  // `weightOf(f) >= thresholdWeight` (an inclusive `>=`), so `limit` (a file
+  // whose weight equals thresholdWeight exactly) IS isolated, not excluded —
+  // this triplet documents and pins that convention.
+  describe('boundary triplet on thresholdWeight (inclusive >=)', () => {
+    const thresholdWeight = 10;
+    const weights = { 'below.test.cjs': 9.999999, 'at.test.cjs': 10, 'above.test.cjs': 10.000001 };
+    const files = ['/repo/tests/below.test.cjs', '/repo/tests/at.test.cjs', '/repo/tests/above.test.cjs'];
+
+    test('limit-1 (just under thresholdWeight) is NOT isolated', () => {
+      const { isolated } = partitionIsolatedFiles(['/repo/tests/below.test.cjs'], {
+        weightOf: weigherFromMap(weights),
+        isMeasured: measuredFromMap(weights),
+        thresholdWeight,
+      });
+      assert.deepStrictEqual(isolated, []);
+    });
+
+    test('limit (exactly thresholdWeight) IS isolated (inclusive >=)', () => {
+      const { isolated } = partitionIsolatedFiles(['/repo/tests/at.test.cjs'], {
+        weightOf: weigherFromMap(weights),
+        isMeasured: measuredFromMap(weights),
+        thresholdWeight,
+      });
+      assert.deepStrictEqual(isolated, ['/repo/tests/at.test.cjs']);
+    });
+
+    test('limit+1 (just over thresholdWeight) IS isolated', () => {
+      const { isolated } = partitionIsolatedFiles(['/repo/tests/above.test.cjs'], {
+        weightOf: weigherFromMap(weights),
+        isMeasured: measuredFromMap(weights),
+        thresholdWeight,
+      });
+      assert.deepStrictEqual(isolated, ['/repo/tests/above.test.cjs']);
+    });
+
+    test('all three together, in one call, preserve packable order', () => {
+      const { isolated, packable } = partitionIsolatedFiles(files, {
+        weightOf: weigherFromMap(weights),
+        isMeasured: measuredFromMap(weights),
+        thresholdWeight,
+      });
+      assert.deepStrictEqual(isolated, ['/repo/tests/at.test.cjs', '/repo/tests/above.test.cjs']);
+      assert.deepStrictEqual(packable, ['/repo/tests/below.test.cjs']);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2026-09-14 — the win32 per-chunk cap must not permit a chunk that exceeds
+// the 600s backstop.
+//
+// Measured on `next` @ca8d9d4459: a Windows conformance chunk (shard 2/3,
+// chunk 4/6, 29 files) was KILLED at 600018ms. On PR #4726 (green, larger
+// pool, same shard/chunk position) the equivalent chunk (29 files) measured
+// 525548ms — 87.6% of the then-current cap of 40, passing by only 74s.
+// Worst packed-chunk rate: 525548 / 29 = 18122 ms/file.
+// ---------------------------------------------------------------------------
+
+const { defaultMaxFilesPerChunk } = require('../scripts/run-tests.cjs');
+
+describe('the win32 per-chunk cap must not permit a chunk that exceeds the 600s backstop', () => {
+  const CHUNK_TIMEOUT_MS = 600000;
+  const MEASURED_WORST_MS_PER_FILE = 18122; // 525548ms / 29 files, windows conformance shard 2/3
+  const TARGET_MS = 400000; // 67% of the backstop
+
+  // NOT load-bearing on its own: this passes for ANY shipped cap up to 33
+  // (600000/18122 = 33.1), so it would NOT have caught the previously-shipped
+  // cap of 40. It is kept only as a coarse sanity check ("we are nowhere near
+  // the raw backstop"); the TARGET_MS (400000ms) rows below it are what
+  // actually pin the shipped value.
+  test('the win32 cap x the measured worst per-file rate stays under the raw 600000ms backstop (coarse, non-load-bearing sanity check)', () => {
+    const cap = defaultMaxFilesPerChunk('win32');
+    const product = cap * MEASURED_WORST_MS_PER_FILE;
+    assert.ok(
+      product < CHUNK_TIMEOUT_MS,
+      `win32 cap=${cap} x ${MEASURED_WORST_MS_PER_FILE}ms/file = ${product}ms, ` +
+        `must be < the ${CHUNK_TIMEOUT_MS}ms per-chunk backstop`,
+    );
+  });
+
+  test('the win32 cap leaves the intended headroom', () => {
+    const cap = defaultMaxFilesPerChunk('win32');
+    const product = cap * MEASURED_WORST_MS_PER_FILE;
+    assert.ok(
+      product <= TARGET_MS,
+      `win32 cap=${cap} x ${MEASURED_WORST_MS_PER_FILE}ms/file = ${product}ms, ` +
+        `must be <= the ${TARGET_MS}ms target (67% of the backstop)`,
+    );
+  });
+
+  // Boundary coverage (limit / limit+1) that actually constrains the
+  // EXPORTED function, not just arithmetic on literals: the invariant is
+  // that the shipped win32 cap must be the LARGEST value satisfying
+  // `cap * MEASURED_WORST_MS_PER_FILE <= TARGET_MS`. Both rows call
+  // defaultMaxFilesPerChunk('win32') so a change to the shipped constant
+  // moves both assertions with it — lowering the cap unnecessarily fails
+  // the maximality check below, raising it fails the safety check.
+  //
+  // A limit-1 (cap-1) row is intentionally omitted: `(cap-1) * RATE <=
+  // TARGET_MS` is implied by the maximality check already passing at `cap`
+  // (if cap clears the target, cap-1 trivially does too), so it cannot add
+  // coverage the other two rows don't already provide.
+  describe('the derived cap is the largest value that still clears the target', () => {
+    test('the shipped cap stays under the target (safety)', () => {
+      const cap = defaultMaxFilesPerChunk('win32');
+      const product = cap * MEASURED_WORST_MS_PER_FILE;
+      assert.ok(
+        product <= TARGET_MS,
+        `win32 cap=${cap} x ${MEASURED_WORST_MS_PER_FILE}ms/file = ${product}ms must be <= ${TARGET_MS}ms`,
+      );
+    });
+
+    test('one file over the shipped cap WOULD exceed the target (maximality)', () => {
+      const cap = defaultMaxFilesPerChunk('win32');
+      const product = (cap + 1) * MEASURED_WORST_MS_PER_FILE;
+      assert.ok(
+        product > TARGET_MS,
+        `win32 cap+1=${cap + 1} x ${MEASURED_WORST_MS_PER_FILE}ms/file = ${product}ms must be > ${TARGET_MS}ms ` +
+          `(if this fails, the shipped cap has slack and could safely be raised)`,
+      );
+    });
+  });
+
+  test('non-win32 platforms are unchanged', () => {
+    assert.strictEqual(defaultMaxFilesPerChunk('linux'), 60);
+    assert.strictEqual(defaultMaxFilesPerChunk('darwin'), 60);
+  });
+
+  test('the cap is still overridable by RUN_TESTS_MAX_FILES_PER_CHUNK', () => {
+    const cap = defaultMaxFilesPerChunk('win32');
+    const override = positiveNumberEnv('99', cap);
+    assert.strictEqual(override, 99);
+    assert.notStrictEqual(override, cap);
   });
 });

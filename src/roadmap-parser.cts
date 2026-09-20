@@ -63,7 +63,7 @@ import unusableInputMod = require('./unusable-input.cjs');
 const { UNUSABLE_REASON, warnUnusableInput } = unusableInputMod;
 import { tokenizeHeadings, stripTaggedBlocks, withSection, stripFencedCode, collectSection } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
-import { findTableWithColumns, matchTableSchema, isDelimiterRow, splitTableRow } from './markdown-table.cjs';
+import { findTableWithColumns, isDelimiterRow, splitTableRow } from './markdown-table.cjs';
 import type { MarkdownTable } from './markdown-table.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningScopeMod = require('./planning-scope.cjs');
@@ -645,16 +645,17 @@ function hasPhaseEntries(markdown: string, phaseIdConvention?: string | null): b
 }
 
 // ─── #3577: markdown-table phase listings ─────────────────────────────────────
-// #3577: a GFM table declares phases when its header's FIRST cell is the literal
-// `Phase` (optionally `Phase #` / `Phase No.` / `Phase number`) and the header does
-// NOT match a known non-listing schema — the canonical RoadmapProgress table
-// (`| Phase | Plans Complete | Status | Completed |`) leads with `Phase` too, and
-// its rows are progress markers, not declarations. Data rows carry the phase id in
-// their first cell (digit-bearing canonical shape — `Phase`-word header cells and
-// `---` delimiter rows are digit-free and excluded by construction). Fence-aware
-// via stripFencedCode, matching the #3184 lesson: a fenced EXAMPLE of the table
-// form is not a declared phase.
+// #3577/#4480: a GFM table declares phases only when its header's FIRST cell is
+// the literal `Phase` (optionally `Phase #` / `Phase No.` / `Phase number`) AND
+// it positively identifies a `Name` or `Phase Name` column. This fails closed:
+// ordinary progress/summary tables such as `| Phase | Status |` cannot mint a
+// phase whose name is whichever value happens to occupy column two. Data rows
+// carry the phase id in their first cell (digit-bearing canonical shape —
+// `Phase`-word header cells and `---` delimiter rows are digit-free and excluded
+// by construction). Fence-aware via stripFencedCode, matching the #3184 lesson:
+// a fenced EXAMPLE of the table form is not a declared phase.
 const PHASE_LISTING_HEADER_RE = /^\|?\s*phase(?:\s*(?:#|no\.?|number))?\s*\|/i;
+const PHASE_NAME_HEADER_RE = /^(?:phase\s+)?name$/i;
 const TABLE_PHASE_ID_RE = /^[A-Za-z]?\d[\w.-]*$/;
 
 function collectTablePhaseRows(window: string): Array<{ id: string; name: string | null; row: string }> {
@@ -664,7 +665,8 @@ function collectTablePhaseRows(window: string): Array<{ id: string; name: string
   for (let i = 0; i + 1 < lines.length; i++) {
     if (!PHASE_LISTING_HEADER_RE.test(lines[i])) continue;
     const headerCells = splitTableRow(lines[i]);
-    if (matchTableSchema(headerCells) !== null) continue; // canonical non-listing schema
+    const nameColumn = headerCells.findIndex((cell) => PHASE_NAME_HEADER_RE.test(cell));
+    if (nameColumn === -1) continue;
     if (!isDelimiterRow(splitTableRow(lines[i + 1]))) continue;
     for (let j = i + 2; j < lines.length; j++) {
       // GFM semantics: the table ENDS at the first line that is not a table
@@ -676,7 +678,8 @@ function collectTablePhaseRows(window: string): Array<{ id: string; name: string
       const first = cells[0] ?? '';
       if (!TABLE_PHASE_ID_RE.test(first)) continue;
       if (!/^999\b/.test(first)) {
-        rows.push({ id: first, name: cells[1] && cells[1] !== '' ? cells[1] : null, row: lines[j] });
+        const name = cells[nameColumn];
+        rows.push({ id: first, name: name && name !== '' ? name : null, row: lines[j] });
       }
     }
   }
@@ -1578,6 +1581,24 @@ function stripLeadingDelimiter(s: string): string {
 }
 
 /**
+ * #4134/#4433 (§7.2 rule 6 floor, applied symmetrically): a captured "name"
+ * with no letter or digit anywhere is heading/bullet STRUCTURE, not a curated
+ * name — e.g. the trailing `)` a name-then-version heading leaves after its
+ * version token, or a malformed 🚧-bullet whose only content past the version
+ * is punctuation (`---`, `***`, a lone `:`). #4134 fixed this for
+ * `extractMilestoneHeadingName`'s heading path only; #4433 found the sibling
+ * 🚧-bullet capture (`getMilestoneInfo`'s `listMatch`) and the no-STATE.md
+ * fallback (`inProgressMatch`) both skipped straight to a bare truthiness
+ * check, so a punctuation-only bullet name passed through as a real one. This
+ * is now the SOLE name-validity predicate — every capture site in this file
+ * calls it instead of re-deriving the character class. A name that merely
+ * CONTAINS punctuation is unaffected; digits alone qualify.
+ */
+function hasNameableContent(s: string): boolean {
+  return /[\p{L}\p{N}]/u.test(s);
+}
+
+/**
  * #3216 (ADR-3180 §7.2's "Name extraction — pinned rule"): the sole "milestone
  * heading text → version + curated name" rule. Strips everything through the
  * heading's OWN version token — NOT necessarily a version a caller is
@@ -1645,7 +1666,7 @@ function extractMilestoneHeadingName(
   // scope TRUNCATED) for an unresolvable name. A name that merely CONTAINS
   // punctuation is untouched — `(` is an ordinary name character (#3171) —
   // and digits alone qualify (`## v4.0 — 42` is the name `42`).
-  const name = candidate !== null && /[\p{L}\p{N}]/u.test(candidate) ? candidate : null;
+  const name = candidate !== null && hasNameableContent(candidate) ? candidate : null;
   return { version, name };
 }
 
@@ -1734,7 +1755,7 @@ function getMilestoneInfo(cwd?: string): { value: MilestoneInfo | null; scope: S
       );
       if (listMatch) {
         const name = stripLeadingDelimiter(listMatch[1]);
-        if (name) return scoped({ version: stateVersion, name }, SCOPE.COMPLETE);
+        if (name && hasNameableContent(name)) return scoped({ version: stateVersion, name }, SCOPE.COMPLETE);
       }
 
       // #3216: heading selection routes through the shared owner
@@ -1770,10 +1791,13 @@ function getMilestoneInfo(cwd?: string): { value: MilestoneInfo | null; scope: S
     // (unchanged from the pre-#3216 fallback).
     const inProgressMatch = roadmap.match(/🚧\s*\*\*v(\d+(?:\.\d+)+)\s+([^*]+)\*\*/);
     if (inProgressMatch) {
-      return scoped(
-        { version: 'v' + inProgressMatch[1], name: inProgressMatch[2].trim() },
-        SCOPE.COMPLETE,
-      );
+      const inProgressName = inProgressMatch[2].trim();
+      if (hasNameableContent(inProgressName)) {
+        return scoped(
+          { version: 'v' + inProgressMatch[1], name: inProgressName },
+          SCOPE.COMPLETE,
+        );
+      }
     }
 
     // #3216: enumerate every OPEN (non-shipped) milestone heading via the
@@ -2231,5 +2255,45 @@ export = {
   // #3641: the scope axis's phase-ENTRY predicate, exported so roadmap
   // validate's V004 document-level check routes through the same single
   // owner (and its convention gate) instead of a private inline copy.
+  extractPhaseFieldMultiline,
   hasPhaseEntries,
 };
+
+
+/**
+ * #4731 — extract a bold-labeled phase field (Goal, Requirements, ...) reading
+ * past hard-wrapped continuation lines. The roadmapper soft-wraps long fields
+ * at ~85 chars, so a single-line capture silently truncated every wrapped
+ * Goal/Requirements. Stops at: another `**Field**` label line, a blank line,
+ * or any heading. Wrapped lines are trimmed and joined with single spaces; a
+ * single-line field is returned unchanged (trimmed). Returns null when the
+ * label is absent.
+ */
+function extractPhaseFieldMultiline(section: string, label: string): string | null {
+  // #2769 label shapes: `**X:**`, `**X**:`, and the spaced `**X** :`.
+  const labelRe = new RegExp(
+    '\\*\\*' + label + '(?::\\*\\*|\\*\\*\\s*:?)\\s*([^\\n]+)',
+    'i',
+  );
+  const match = section.match(labelRe);
+  if (!match) return null;
+  const startIdx = match.index ?? 0;
+  const after = section.slice(startIdx + match[0].length);
+  const firstLine = match[1].trim();
+  const contLines = [];
+  const lines = after.split('\n');
+  for (let li = 0; li < lines.length; li++) {
+    const raw = lines[li];
+    // The split's first element is the remainder of the captured first line's
+    // own newline — an empty leading element is the line break, not a blank
+    // continuation line.
+    if (li === 0 && !raw.trim()) continue;
+    if (!raw.trim()) break;
+    if (/^\s*\*\*[A-Z][A-Za-z ]*:?(\*\*)?:?\s/.test(raw)) break;
+    if (/^\s*#{1,4}\s/.test(raw)) break;
+    if (/^\s*\|/.test(raw)) break;
+    contLines.push(raw.trim());
+  }
+  return [firstLine, ...contLines].join(' ').trim() || null;
+}
+

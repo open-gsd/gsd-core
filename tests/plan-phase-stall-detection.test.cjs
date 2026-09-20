@@ -657,6 +657,24 @@ describe('bug #2650 plan-phase — all five planner/plan-checker spawns dispatch
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('#2650 follow-up: runBashScript bounds and reports a bash fan-out correctly', () => {
+  /**
+   * An arbitrary value proving `runBashScript`'s explicit timeoutMs
+   * argument overrides its own class-norm default (HOOK_FANOUT_TIMEOUT_MS).
+   */
+  const RUN_BASH_SCRIPT_OVERRIDE_TIMEOUT_MS = 1234;
+  /**
+   * Deliberately tiny (not generous headroom) to force a real `sleep 5`
+   * command past the bound within this test's own lifetime, proving an
+   * exceeded bound reports TIMED_OUT, not a bare null status.
+   */
+  const RUN_BASH_SCRIPT_FORCED_TIMEOUT_MS = 250;
+  /** CLAUDE.md boundary-coverage triple (limit-1/limit/limit+1) on runBashScript's own timeoutMs value-domain validation: a negative bound must be rejected. */
+  const RUN_BASH_SCRIPT_TIMEOUT_BOUNDARY_NEGATIVE_MS = -1;
+  /** CLAUDE.md boundary-coverage triple (limit-1/limit/limit+1) on runBashScript's own timeoutMs value-domain validation: zero must be rejected, never read as unbounded. Used at both occurrences in this test (the throw assertion and the later leak-check re-throw). */
+  const RUN_BASH_SCRIPT_TIMEOUT_BOUNDARY_ZERO_MS = 0;
+  /** CLAUDE.md boundary-coverage triple (limit-1/limit/limit+1) on runBashScript's own timeoutMs value-domain validation: the smallest positive bound is valid and must be accepted. */
+  const RUN_BASH_SCRIPT_TIMEOUT_BOUNDARY_ONE_MS = 1;
+
   test('bounds the fan-out with the class norm, and an explicit override still wins', (t) => {
     t.after(() => mock.restoreAll());
     const seen = [];
@@ -672,14 +690,14 @@ describe('#2650 follow-up: runBashScript bounds and reports a bash fan-out corre
       `default bound must be the bash-fan-out class norm (${HOOK_FANOUT_TIMEOUT_MS}ms), not a probe-sized literal; got ${seen[0].timeoutMs}`);
     assert.equal(seen[0].interpreter, 'bash', 'the seam must be told to run the script under bash');
 
-    runBashScript('echo hi\n', [], { timeoutMs: 1234 });
-    assert.equal(seen[1].timeoutMs, 1234, 'an explicit timeoutMs must override the class norm');
+    runBashScript('echo hi\n', [], { timeoutMs: RUN_BASH_SCRIPT_OVERRIDE_TIMEOUT_MS });
+    assert.equal(seen[1].timeoutMs, RUN_BASH_SCRIPT_OVERRIDE_TIMEOUT_MS, 'an explicit timeoutMs must override the class norm');
   });
 
   test('an exceeded bound reports TIMED_OUT, not a bare null status', () => {
     // A real sleep against a deliberately tiny bound. The assertion is on the
     // CLASSIFICATION, never on elapsed time.
-    const result = runBashScript('sleep 5\n', [], { timeoutMs: 250 });
+    const result = runBashScript('sleep 5\n', [], { timeoutMs: RUN_BASH_SCRIPT_FORCED_TIMEOUT_MS });
     assert.equal(result.outcome, OUTCOME.TIMED_OUT,
       `an exceeded bound must name itself; got outcome=${result.outcome} status=${result.status}`);
     assert.equal(result.timedOut, true, 'timedOut must be true when the bound is exceeded');
@@ -702,18 +720,18 @@ describe('#2650 follow-up: runBashScript bounds and reports a bash fan-out corre
     // all", which is precisely the unbounded-spawn hazard local/no-unbounded-spawn
     // exists to prevent (CONTRIBUTING.md: "`timeout: 0` — Node reads zero as *no
     // timeout*"). The seam rejects it instead of honouring it.
-    assert.throws(() => runBashScript('exit 0\n', [], { timeoutMs: 0 }), TypeError,
+    assert.throws(() => runBashScript('exit 0\n', [], { timeoutMs: RUN_BASH_SCRIPT_TIMEOUT_BOUNDARY_ZERO_MS }), TypeError,
       'limit: zero must be rejected, never read as unbounded');
-    assert.throws(() => runBashScript('exit 0\n', [], { timeoutMs: -1 }), TypeError,
+    assert.throws(() => runBashScript('exit 0\n', [], { timeoutMs: RUN_BASH_SCRIPT_TIMEOUT_BOUNDARY_NEGATIVE_MS }), TypeError,
       'limit-1: a negative bound must be rejected');
-    assert.doesNotThrow(() => runBashScript('exit 0\n', [], { timeoutMs: 1 }),
+    assert.doesNotThrow(() => runBashScript('exit 0\n', [], { timeoutMs: RUN_BASH_SCRIPT_TIMEOUT_BOUNDARY_ONE_MS }),
       'limit+1: the smallest positive bound is valid and must be accepted');
 
     // The helper must still clean up its temp dir when the seam throws — the throw
     // escapes through runBashScript's `finally`, which is what makes the rejection safe
     // to rely on rather than a resource leak.
     const before = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('gsd-2650-sh-')).length;
-    assert.throws(() => runBashScript('exit 0\n', [], { timeoutMs: 0 }), TypeError);
+    assert.throws(() => runBashScript('exit 0\n', [], { timeoutMs: RUN_BASH_SCRIPT_TIMEOUT_BOUNDARY_ZERO_MS }), TypeError);
     const after = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('gsd-2650-sh-')).length;
     assert.equal(after, before, 'a rejected bound must not leak the script temp dir');
   });

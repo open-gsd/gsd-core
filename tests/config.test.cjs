@@ -13,6 +13,65 @@ const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup, delay } = require('./helpers.cjs');
 
+// ─── ADR-612 PR-5: phase_id_convention enum validation ──────────────────────
+
+describe('#3638: phase_id_convention config enum', () => {
+  test('accepts sequential, milestone-prefixed, and bracket exactly', (t) => {
+    const tmpDir = createTempProject('gsd-phase-id-convention-');
+    t.after(() => cleanup(tmpDir));
+
+    for (const convention of ['sequential', 'milestone-prefixed', 'bracket']) {
+      const result = runGsdTools(['config-set', 'phase_id_convention', convention], tmpDir);
+      assert.ok(result.success, `config-set phase_id_convention ${convention} failed: ${result.error}`);
+      assert.equal(readConfig(tmpDir).phase_id_convention, convention);
+    }
+  });
+
+  test('absent and null preserve the unset legacy behavior', (t) => {
+    const tmpDir = createTempProject('gsd-phase-id-convention-');
+    t.after(() => cleanup(tmpDir));
+    assert.equal(
+      fs.existsSync(path.join(tmpDir, '.planning', 'config.json')),
+      false,
+      'an absent config leaves the convention unset',
+    );
+    writeConfig(tmpDir, { phase_id_convention: 'bracket', model_profile: 'balanced' });
+
+    const result = runGsdTools(['config-set', 'phase_id_convention', 'null'], tmpDir);
+    assert.ok(result.success, `config-set phase_id_convention null failed: ${result.error}`);
+    const config = readConfig(tmpDir);
+    assert.equal(Object.hasOwn(config, 'phase_id_convention'), false);
+    assert.equal(config.model_profile, 'balanced', 'unsetting the convention must preserve sibling config');
+  });
+
+  test('rejects unsupported and case-mismatched values with the supported set', (t) => {
+    const tmpDir = createTempProject('gsd-phase-id-convention-');
+    t.after(() => cleanup(tmpDir));
+
+    for (const value of ['free-form', 'Bracket']) {
+      const result = runGsdTools(['config-set', 'phase_id_convention', value], tmpDir);
+      assert.equal(result.success, false, `${value} must be rejected`);
+      assert.match(result.error, /Invalid phase_id_convention/);
+      assert.match(result.error, /sequential, milestone-prefixed, bracket/);
+    }
+  });
+
+  test('sequential remains valid configuration but is not a roadmap-upgrade target', (t) => {
+    const tmpDir = createTempProject('gsd-phase-id-convention-');
+    t.after(() => cleanup(tmpDir));
+
+    const configResult = runGsdTools(['config-set', 'phase_id_convention', 'sequential'], tmpDir);
+    assert.ok(configResult.success, `sequential config failed: ${configResult.error}`);
+
+    const migrationResult = runGsdTools(
+      ['roadmap', 'upgrade', '--convention', 'sequential', '--dry-run'],
+      tmpDir,
+    );
+    assert.equal(migrationResult.success, false, 'sequential must not become a migration target');
+    assert.match(migrationResult.error, /Only --convention milestone-prefixed is supported/);
+  });
+});
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 function readConfig(tmpDir) {
@@ -840,17 +899,17 @@ describe('config-set <key> null — unset/clear (#2046)', () => {
   afterEach(() => { cleanup(tmpDir); });
 
   test('non-secret routing key: config-set <key> null removes the key (not the string "null")', () => {
-    const setResult = runGsdTools('config-set review.models.gemini foo', tmpDir);
+    const setResult = runGsdTools('config-set review.models.codex foo', tmpDir);
     assert.ok(setResult.success, `Command failed: ${setResult.error}`);
-    assert.strictEqual(readConfig(tmpDir).review.models.gemini, 'foo');
+    assert.strictEqual(readConfig(tmpDir).review.models.codex, 'foo');
 
-    const unsetResult = runGsdTools('config-set review.models.gemini null', tmpDir);
+    const unsetResult = runGsdTools('config-set review.models.codex null', tmpDir);
     assert.ok(unsetResult.success, `Command failed: ${unsetResult.error}`);
 
     const config = readConfig(tmpDir);
     assert.ok(
-      !config.review || !config.review.models || !Object.prototype.hasOwnProperty.call(config.review.models, 'gemini'),
-      'review.models.gemini must be absent on disk after unset, not the string "null"'
+      !config.review || !config.review.models || !Object.prototype.hasOwnProperty.call(config.review.models, 'codex'),
+      'review.models.codex must be absent on disk after unset, not the string "null"'
     );
 
     // #2797: review.models.<slug> is federated to its lane capability now, and a
@@ -859,7 +918,7 @@ describe('config-set <key> null — unset/clear (#2046)', () => {
     // instead of erroring. The property this test actually guards is unchanged
     // and asserted above: the key is REMOVED from disk, never persisted as the
     // literal string "null".
-    const getResult = runGsdTools('config-get review.models.gemini', tmpDir);
+    const getResult = runGsdTools('config-get review.models.codex', tmpDir);
     const shown = (getResult.output || '').trim();
     assert.ok(
       shown === '' || shown === '""' || shown === 'undefined',
@@ -913,8 +972,8 @@ describe('config-set <key> null — unset/clear (#2046)', () => {
   });
 
   test('literal-"null" guard: no config-set <key> null ever persists the literal string "null" on disk', () => {
-    runGsdTools('config-set review.models.gemini foo', tmpDir);
-    runGsdTools('config-set review.models.gemini null', tmpDir);
+    runGsdTools('config-set review.models.codex foo', tmpDir);
+    runGsdTools('config-set review.models.codex null', tmpDir);
     runGsdTools('config-set brave_search sk-test-1234', tmpDir);
     runGsdTools('config-set brave_search null', tmpDir);
     runGsdTools('config-set context dev', tmpDir);
@@ -1078,17 +1137,17 @@ describe('config-set --dry-run (#4444)', () => {
   });
 
   test('config-set <key> null --dry-run does not unset (dry-run covers the unset branch too)', () => {
-    const seed = runGsdTools('config-set review.models.gemini foo', tmpDir);
+    const seed = runGsdTools('config-set review.models.codex foo', tmpDir);
     assert.ok(seed.success, `seed failed: ${seed.error}`);
 
-    const dryRun = runGsdTools('config-set review.models.gemini null --dry-run', tmpDir);
+    const dryRun = runGsdTools('config-set review.models.codex null --dry-run', tmpDir);
     assert.ok(dryRun.success, `Command failed: ${dryRun.error}`);
     const output = JSON.parse(dryRun.output);
     assert.strictEqual(output.dry_run, true);
     assert.strictEqual(output.would_unset, true);
 
     // Still present on disk — the dry-run must not have unset it.
-    assert.strictEqual(readConfig(tmpDir).review.models.gemini, 'foo');
+    assert.strictEqual(readConfig(tmpDir).review.models.codex, 'foo');
   });
 });
 

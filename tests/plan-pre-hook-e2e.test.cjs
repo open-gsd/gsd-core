@@ -29,9 +29,19 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, installSpawnEnv, withAmbientCapabilityHome } = require('./helpers.cjs');
 
 const GSD_TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+
+/**
+ * Bounds a single gsd-tools.cjs CLI subcommand invocation — the same call
+ * shape as the shared LOOP_HOOK_POINT_CLI_TIMEOUT_MS constant in
+ * tests/helpers/timeouts.cjs. This file's pre-existing bound (30000ms) is
+ * half that shared norm's value (60000ms) — kept as its own file-local
+ * constant rather than folded into the shared one, since no fresh bench
+ * data justifies raising this file's bound to match.
+ */
+const PLAN_PRE_HOOK_CLI_TIMEOUT_MS = 30000;
 
 // ─── Subprocess helper (isolated env, no ambient GSD_ vars) ───────────────────
 
@@ -56,7 +66,7 @@ const CLEAN_ENV = {
 
 /**
  * Run gsd-tools via spawnSync. Returns { status, stdout, stderr }.
- * Passes env overrides merged on top of process.env + CLEAN_ENV.
+ * Passes env overrides through the canonical sandboxed child environment.
  */
 function runTools(args, cwd, envOverrides = {}) {
   return spawnSync(
@@ -65,8 +75,8 @@ function runTools(args, cwd, envOverrides = {}) {
     {
       cwd: cwd || process.cwd(),
       encoding: 'utf8',
-      timeout: 30000,
-      env: { ...process.env, ...CLEAN_ENV, ...envOverrides },
+      timeout: PLAN_PRE_HOOK_CLI_TIMEOUT_MS,
+      env: installSpawnEnv({ ...CLEAN_ENV, ...envOverrides }),
     },
   );
 }
@@ -268,10 +278,19 @@ describe('plan:pre all-off — empty resolution', () => {
     assert.strictEqual(result.status, 0, `exit non-zero. stderr=${result.stderr?.slice(0, 300)}`);
     const envelope = parseEnvelope(result, 'all-off');
 
-    assert.deepEqual(envelope.activeHooks, [],
+    assert.deepStrictEqual(envelope.activeHooks, [],
       `activeHooks must be empty when all flags false. Got: ${JSON.stringify(envelope.activeHooks.map(h=>h.capId))}`);
     assert.strictEqual(envelope.rendered, '_No active hooks at plan:pre._',
       'rendered must be placeholder when no active hooks');
+  });
+
+  test('#4485: an ambient plan:pre capability cannot perturb the empty resolution', (t) => {
+    withAmbientCapabilityHome(t, 'gsd-ambient-plan-pre-', 'ambient-plan-pre', 'plan:pre');
+
+    const result = runTools(['loop', 'render-hooks', 'plan:pre', '--cwd', tmpDir, '--raw'], tmpDir);
+    assert.strictEqual(result.status, 0, `exit non-zero. stderr=${result.stderr?.slice(0, 300)}`);
+    const envelope = parseEnvelope(result, 'all-off-ambient');
+    assert.deepStrictEqual(envelope.activeHooks, []);
   });
 });
 

@@ -67,6 +67,15 @@ const neverCentral = (_key) => false;
 /** An always-central isCentralKey. */
 const alwaysCentral = (_key) => true;
 
+/**
+ * NOT a subprocess spawn timeout. Fixture DATA -- the test value for a
+ * fictional `mytool.timeout` config key in a mergeFederatedConfig()
+ * schema-merge test, proving a user-supplied override for a numeric config
+ * key is honored. Never passed into a real spawnSync/execFileSync options
+ * object.
+ */
+const FIXTURE_CONFIG_TIMEOUT_VALUE = 99;
+
 // ─── 1. Empty configSchema ────────────────────────────────────────────────────
 
 describe('empty configSchema', () => {
@@ -279,9 +288,9 @@ describe('valid federated key — user override with correct type', () => {
     const result = mergeFederatedConfig({
       configSchema: { 'mytool.timeout': NUMBER_SLICE },
       isCentralKey: neverCentral,
-      userConfig: { mytool: { timeout: 99 } },
+      userConfig: { mytool: { timeout: FIXTURE_CONFIG_TIMEOUT_VALUE } },
     });
-    assert.strictEqual(result.values['mytool.timeout'], 99);
+    assert.strictEqual(result.values['mytool.timeout'], FIXTURE_CONFIG_TIMEOUT_VALUE);
     assert.deepEqual(result.warnings, []);
   });
 

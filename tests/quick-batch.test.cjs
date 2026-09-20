@@ -51,6 +51,14 @@ const { filterAlreadyExecuted } = require('../gsd-core/bin/lib/quick-batch-dispa
 const { generateSlugInternal } = require('../gsd-core/bin/lib/core-utils.cjs');
 const { planningPaths } = require('../gsd-core/bin/lib/planning-workspace.cjs');
 
+/**
+ * A single `mkfifo` subprocess call, near-instant. Distinct from
+ * tests/capability-cli.test.cjs's mkfifo call (epic #4445 batch 10, which
+ * reuses PROBE_TIMEOUT_MS at 15000ms) -- this site's genuinely different
+ * pre-existing bound is preserved rather than equalized without bench data.
+ */
+const MKFIFO_PROBE_TIMEOUT_MS = 5000;
+
 // ─── Shared fixtures ────────────────────────────────────────────────────────────
 
 function mkTmpProject() {
@@ -188,7 +196,7 @@ describe('quick-batch: task-list parsing', () => {
     try {
       const fifoPath = path.join(dir, '.planning', 'a-fifo');
       try {
-        execFileSync('mkfifo', [fifoPath], { stdio: 'ignore', timeout: 5000 });
+        execFileSync('mkfifo', [fifoPath], { stdio: 'ignore', timeout: MKFIFO_PROBE_TIMEOUT_MS });
       } catch (err) {
         // Documented skip: mkfifo unavailable on this CI platform (e.g. Windows).
         t.skip(`mkfifo unavailable: ${err instanceof Error ? err.message : String(err)}`);

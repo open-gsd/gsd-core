@@ -41,13 +41,26 @@ const { spawnSync } = require('node:child_process');
 
 const { INSTALL_SCRIPT, installerEnv, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
 const { cleanup, createTempDir } = require('./helpers.cjs');
+const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+
+/**
+ * Spawns scripts/build-hooks.js (the same script BUILD_TIMEOUT_MS
+ * documents, at 30000ms) but at four times that constant's bound, used
+ * here as a prep step before this file's own real installer run below.
+ * Not equalized to the lighter shared norm without bench data -- the
+ * identical pattern (and identical value) to epic #4445 batch 9's
+ * file-local BUILD_HOOKS_UNDER_LOAD_TIMEOUT_MS in a different file
+ * (tests/emitted-attribution.test.cjs, not importable) -- disclosed as
+ * coincidence, not merged.
+ */
+const BUILD_HOOKS_PREP_TIMEOUT_MS = 120_000;
 
 // hooks/dist is gitignored and built (DEFECT.HOOKS-DIST-SCOPED-CI): a scoped CI
 // lane does not run build:hooks first, so a real --pi --global install there
 // would emit no gsd-hooks/ dir. Build idempotently before spawning, exactly as
 // the golden/emitted-attribution harnesses do.
 function ensureHooksBuilt() {
-  spawnSync(process.execPath, [BUILD_SCRIPT], { encoding: 'utf-8', stdio: 'pipe', timeout: 120_000 });
+  spawnSync(process.execPath, [BUILD_SCRIPT], { encoding: 'utf-8', stdio: 'pipe', timeout: BUILD_HOOKS_PREP_TIMEOUT_MS });
 }
 
 /** Spawn the real installer for --pi --global against a fresh sandbox HOME,
@@ -57,7 +70,7 @@ function runPiGlobalInstall(home, extraEnv = {}) {
   const result = spawnSync(process.execPath, [INSTALL_SCRIPT, '--pi', '--global'], {
     cwd: home,
     encoding: 'utf8',
-    timeout: 120_000,
+    timeout: INSTALL_TIMEOUT_MS,
     env: installerEnv({ HOME: home, USERPROFILE: home, ...extraEnv }),
   });
   assert.strictEqual(result.status, 0,

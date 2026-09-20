@@ -3,9 +3,10 @@
 
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { existsSync, readdirSync, appendFileSync } = require('fs');
+const { existsSync, readdirSync, appendFileSync, readFileSync } = require('fs');
 
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
+const { classifyContent, NOISY_FOR_SOURCE_REACHABILITY } = require('./gen-platform-conformance-tier.cjs');
 
 // Workflow files that are purely administrative / policy bots. Changes to these
 // files do NOT require the cross-platform test matrix — only a lightweight
@@ -484,12 +485,68 @@ function addAll(set, values) {
 // fullMatrix=true, so the full Windows lane already runs when those paths
 // change. The old six-hint list pulled 102 of ~633 test files into the scoped
 // windows lane, turning it into a ~10-minute job on every PR.
+// #4641: the scoped windows lane itself is gone. These hints now drive
+// full_matrix instead — a matched RULE whose tests[] includes a
+// windows-hint filename AND that hinted file is itself in the conformance
+// tier (per reachesConformanceTierOrSeam) escalates straight to full_matrix
+// (routed to test-conformance, the sole Windows selector) rather than
+// feeding a side lane. Tier-backed on purpose: full_matrix only ever runs
+// CONFORMANCE_TIER_FILES, so a hint on a non-tier file would cost 4 CI jobs
+// with zero Windows coverage of that file. See
+// docs/adr/4641-windows-selector-consolidation.md.
 const WINDOWS_HINTS = ['windows', 'win32', 'shell', 'path'];
 const isWindowsHint = s => WINDOWS_HINTS.some(k => s.toLowerCase().includes(k));
 
-function classify(files) {
+// A change to the classification mechanism itself cannot be presumed safe by
+// the very mechanism being changed (#4592).
+const CLASSIFIER_DEFINITION_FILES = new Set([
+  'scripts/gen-platform-conformance-tier.cjs',
+  'scripts/lib/platform-conformance-tier.generated.cjs',
+  'scripts/lib/suite-detection.cjs',
+]);
+
+/**
+ * Does `file`'s blast radius reach (a) Phase 2's conformance-tier test-file
+ * list or (b) a live platform-conditional signal in src/? Fail-safe: any
+ * thrown error (a require failure, a readFileSync failure, a malformed
+ * generated module, etc.) is treated as uncertainty and returns true — per
+ * #4592's explicit "fail-safe to full_matrix=true on any reachability-
+ * computation error or uncertainty" requirement.
+ * `loadConformanceTier` is injectable (defaults to the real generated module)
+ * solely so tests can simulate a load failure without touching the real,
+ * committed generated file.
+ * @param {string} file
+ * @param {{loadConformanceTier?: () => {CONFORMANCE_TIER_FILES: string[]}}} [deps]
+ * @returns {boolean}
+ */
+function reachesConformanceTierOrSeam(file, deps = {}) {
+  const loadConformanceTier =
+    deps.loadConformanceTier || (() => require('./lib/platform-conformance-tier.generated.cjs'));
+  try {
+    if (file.startsWith('tests/') && file.endsWith('.test.cjs')) {
+      const { CONFORMANCE_TIER_FILES } = loadConformanceTier();
+      return CONFORMANCE_TIER_FILES.includes(file);
+    }
+
+    if (file.startsWith('src/')) {
+      const content = readFileSync(file, 'utf8');
+      const { signals } = classifyContent(content);
+      const narrowSignals = signals.filter(signal => !NOISY_FOR_SOURCE_REACHABILITY.has(signal));
+      return narrowSignals.length > 0;
+    }
+
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+// `reachabilityDeps` is injectable (defaults to {}, which makes
+// reachesConformanceTierOrSeam use the real generated module) solely so
+// tests can simulate a reachability-computation failure without touching
+// the real, committed generated file.
+function classify(files, reachabilityDeps = {}) {
   const targeted = new Set();
-  const windows = new Set();
   const reasons = [];
   let productOrPipelineChanged = false; // product/pipeline code (excludes docs)
   let inertCiChanged = false;           // inert workflow files
@@ -526,14 +583,35 @@ function classify(files) {
 
     if (file.startsWith('tests/') && file.endsWith('.test.cjs')) {
       targeted.add(file);
-      windows.add(file);
       // #494 originally narrowed this to skip full_matrix for changed test
       // files, on the theory that ubuntu targeted_tests + the scoped windows
       // lane already covered them. Rescinded per #4421: PR #4384 landed a
       // macOS-only regression on 2026-09-06 that stayed invisible pre-merge
       // precisely because this carve-out suppressed the only macOS signal.
-      // The ~25-runner-minute cost on test-touching PRs is accepted.
+      // #4592: the blanket rule is replaced with a reachability check — only
+      // a changed test file that actually reaches Phase 2's conformance-tier
+      // list (or is the classification mechanism itself) forces full_matrix.
+      if (reachesConformanceTierOrSeam(file, reachabilityDeps)) {
+        fullMatrix = true;
+        reasons.push(`${file}: conformance-tier reachability`);
+      }
+    }
+
+    // #4592: a src/-only diff (no test file touched) must still be able to
+    // set full_matrix=true when it carries a live platform-conditional
+    // signal — this is independent of the tests/ branch above.
+    if (file.startsWith('src/') && reachesConformanceTierOrSeam(file, reachabilityDeps)) {
       fullMatrix = true;
+      reasons.push(`${file}: platform seam reachability`);
+    }
+
+    // #4592: a changed file that IS the classification mechanism itself
+    // (neither under tests/ nor src/, so neither branch above reaches it)
+    // must also force full_matrix — a change to the mechanism cannot be
+    // presumed safe by the very mechanism being changed.
+    if (CLASSIFIER_DEFINITION_FILES.has(file)) {
+      fullMatrix = true;
+      reasons.push(`${file}: reachability classifier definition changed`);
     }
 
     for (const rule of RULES) {
@@ -541,6 +619,32 @@ function classify(files) {
         addAll(targeted, rule.tests);
         reasons.push(`${file}: ${rule.name}`);
         if (rule.fullMatrix) fullMatrix = true;
+        // #4641: a rule that pulls in a test file matching a Windows-sensitive
+        // filename hint is the one non-redundant residue of the deleted
+        // scoped windows lane — escalate to full_matrix (test-conformance)
+        // instead of feeding a side lane. TIER-BACKED (measured): full_matrix
+        // routes to test-conformance, which runs ONLY CONFORMANCE_TIER_FILES —
+        // escalating on the filename hint alone can fire on a hinted test that
+        // isn't in that tier, costing 4 CI jobs while never actually running it
+        // on Windows. The predicate below requires BOTH the hint AND tier
+        // membership (via reachesConformanceTierOrSeam, the same fail-safe
+        // reachability helper used elsewhere in this file, so error/uncertainty
+        // behavior stays identical). Measured: over the 16 RULES entries this
+        // narrowed form fires on the same rules as the un-narrowed form today
+        // (no behavior change now, correct-by-construction going forward). The
+        // broader alternative — escalate on ANY tier member a rule pulls in,
+        // ignoring the filename hint — was measured and rejected: it fires on
+        // 14 of 16 rules, newly escalating most ordinary product-code PRs
+        // (src/, agents/, commands/, hooks/, skills/, config paths). Only one
+        // rule's escalation is live today: 'portability lint rules (ADR-1703)'.
+        // Four others already had fullMatrix: true (no-op here), and 'inert
+        // CI''s escalation is overridden downstream by the inert-CI reset.
+        // Distinct, greppable reason so the conformance-lane coverage for it
+        // is traceable per rule.
+        if (rule.tests.some(t => isWindowsHint(t) && reachesConformanceTierOrSeam(t, reachabilityDeps))) {
+          fullMatrix = true;
+          reasons.push(`${file}: ${rule.name} (windows-hint rule test, #4641)`);
+        }
       }
     }
   }
@@ -554,7 +658,7 @@ function classify(files) {
     // covered by .github/workflows/install-smoke.yml
     'tests/release-tarball-smoke.install.test.cjs',
   ]);
-  for (const f of SCOPED_LANE_EXCLUDE) { targeted.delete(f); windows.delete(f); }
+  for (const f of SCOPED_LANE_EXCLUDE) { targeted.delete(f); }
 
   // code_changed: true when product/pipeline OR inert CI changed.
   // Docs-only PRs (neither flag set) get code_changed=false → full matrix skip.
@@ -568,8 +672,6 @@ function classify(files) {
     targetedTests.push('unit');
   }
 
-  const windowsTests = existingTests([...new Set([...windows, ...targetedTests.filter(isWindowsHint)])].sort());
-
   // Inert-CI-only: full_matrix must be false (override any RULES that fired).
   if (inertCiChanged && !productOrPipelineChanged) {
     fullMatrix = false;
@@ -578,12 +680,11 @@ function classify(files) {
   // Normalize: when code_changed is false, the output must be self-consistent.
   // A docs file can coincidentally match a coarse content RULE (e.g. docs/installer-migrations.md
   // matches the installer rule via path.includes('install')), leaving full_matrix=true and
-  // non-empty targeted_tests/windows_tests. The workflow skips correctly (gated on code_changed)
+  // non-empty targeted_tests. The workflow skips correctly (gated on code_changed)
   // but the output object would be self-contradictory. Force a clean "nothing to run" result.
   if (!codeChanged) {
     fullMatrix = false;
     targetedTests.length = 0;
-    windowsTests.length = 0;
   }
 
   return {
@@ -591,7 +692,6 @@ function classify(files) {
     product_changed: productOrPipelineChanged,
     full_matrix: fullMatrix,
     targeted_tests: targetedTests,
-    windows_tests: windowsTests,
     reasons: [...new Set(reasons)].sort(),
   };
 }
@@ -603,7 +703,6 @@ function writeOutputs(result) {
     `product_changed=${result.product_changed}`,
     `full_matrix=${result.full_matrix}`,
     `targeted_tests=${result.targeted_tests.join(' ')}`,
-    `windows_tests=${result.windows_tests.join(' ')}`,
   ];
   appendFileSync(process.env.GITHUB_OUTPUT, `${lines.join('\n')}\n`);
 }
@@ -629,4 +728,12 @@ if (require.main === module) {
   runMain(main);
 }
 
-module.exports = { RULES, missingRuleTestFiles, PROTECTED_WORKFLOWS, INERT_WORKFLOWS, missingProtectedWorkflows };
+module.exports = {
+  RULES,
+  missingRuleTestFiles,
+  PROTECTED_WORKFLOWS,
+  INERT_WORKFLOWS,
+  missingProtectedWorkflows,
+  classify,
+  reachesConformanceTierOrSeam,
+};

@@ -42,6 +42,7 @@ const {
   HOOKS_WINDOWS_SHIM_SRC,
   KIMI_ROOT_AGENT_SRC,
   AGENT_TRANSFORM_SRCS,
+  RUNTIME_NOTE_FILTER_TRANSFORM_SRCS,
   stripSkillPrefix,
   matchRules,
   attributeEmittedPath,
@@ -359,8 +360,22 @@ test('agents-verbatim is reclassified to derived with the same transforms, sourc
   assert.deepEqual(got.transforms, AGENT_TRANSFORM_SRCS);
 });
 
+test('#4482 runtime-note-filtered command and skill surfaces declare their converter transform', () => {
+  const command = attributeEmittedPath('commands/gsd-plan-phase.md', 'opencode');
+  const skill = attributeEmittedPath('skills/gsd-plan-phase/SKILL.md', 'opencode');
+  const workflow = attributeEmittedPath('gsd-core/workflows/mvp-phase.md', 'opencode');
+  assert.deepEqual(command.transforms, RUNTIME_NOTE_FILTER_TRANSFORM_SRCS);
+  assert.deepEqual(skill.transforms, RUNTIME_NOTE_FILTER_TRANSFORM_SRCS);
+  assert.deepEqual(workflow.transforms, RUNTIME_NOTE_FILTER_TRANSFORM_SRCS);
+
+  assert.deepEqual(attributeEmittedPath('commands/gsd-plan-phase.md', 'kilo').transforms, RUNTIME_NOTE_FILTER_TRANSFORM_SRCS);
+  assert.deepEqual(attributeEmittedPath('skills/gsd-plan-phase/SKILL.md', 'cursor').transforms, RUNTIME_NOTE_FILTER_TRANSFORM_SRCS);
+  assert.deepEqual(attributeEmittedPath('gsd-core/workflows/mvp-phase.md', 'claude-local').transforms, RUNTIME_NOTE_FILTER_TRANSFORM_SRCS);
+  assert.deepEqual(attributeEmittedPath('gsd-core/workflows/mvp-phase.md', 'copilot').transforms, []);
+});
+
 test('a rule with no transforms field still returns an empty array, never undefined', () => {
-  const got = attributeEmittedPath('gsd-core/workflows/plan-phase.md', 'claude');
+  const got = attributeEmittedPath('agents/gsd-planner.agent.md', 'copilot');
   assert.deepEqual(got.transforms, [], 'absence of transforms must be a stable empty array, not undefined');
 });
 

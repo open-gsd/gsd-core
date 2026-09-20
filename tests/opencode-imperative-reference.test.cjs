@@ -14,7 +14,7 @@
  * `runtime.hostBehaviors` + the combined-family engine install path).
  */
 
-const { test } = require('node:test');
+const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -123,7 +123,11 @@ test('opencode descriptor declares runtime.hostBehaviors (the folded-in behavior
   assert.equal(hb.skipHomePrefixSubstitution, true);
   assert.equal(hb.skipSettingsUi, true);
   assert.equal(hb.skipUpdateBannerCommand, true);
-  assert.equal(hb.skipCodexSkillsManifest, true);
+  // #4738: the skills-manifest exclusion is retired — opencode stages 72
+  // converted skills and its manifest must record them (the flag was carried
+  // verbatim from a pre-skills-layout era and flagged every staged skill as
+  // user-added on every update).
+  assert.equal(hb.skipCodexSkillsManifest, undefined);
   assert.equal(hb.nativePlugin.file, 'gsd-core.js');
   assert.equal(hb.nativePlugin.source, '.opencode/plugins/gsd-core.js');
 });
@@ -138,4 +142,74 @@ test('no `runtime === "opencode"` string-equality branch remains in the install 
     const offenders = strip(src).match(/runtime\s*[!=]==\s*'opencode'/g) || [];
     assert.deepEqual(offenders, [], `AC2: no hardcoded runtime==='opencode' branch may remain in ${rel}; found: ${offenders.join(', ')}`);
   }
+});
+
+// ─── #4738: the opencode manifest must record the skills it stages ───────────
+
+const { cleanup, runGsdTools, createTempDir } = require('./helpers.cjs');
+const { writeManifest } = require(path.join(__dirname, '..', 'bin', 'install.js'));
+const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+
+describe('#4738: writeManifest records staged skills for opencode', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-4738-manifest-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('manifest includes skills/gsd-xxx/SKILL.md entries for opencode (mirrors the kilo sibling)', () => {
+    // Stage the structure an opencode install creates: converted skills under
+    // skills/gsd-*/SKILL.md (convertClaudeCommandToOpencodeSkill) plus the
+    // gsd-core directory writeManifest always records.
+    const skillDir = path.join(tmpDir, 'skills', 'gsd-next');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), 'skill content');
+    const gsdDir = path.join(tmpDir, 'gsd-core');
+    fs.mkdirSync(gsdDir, { recursive: true });
+    fs.writeFileSync(path.join(gsdDir, 'test.md'), 'test');
+
+    writeManifest(tmpDir, 'opencode');
+
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, 'gsd-file-manifest.json'), 'utf8'),
+    );
+    const skillEntries = Object.keys(manifest.files).filter((k) => k.startsWith('skills/'));
+    assert.ok(skillEntries.length > 0, 'manifest has skills/ entries for opencode');
+    assert.ok(
+      skillEntries.includes('skills/gsd-next/SKILL.md'),
+      'manifest records the staged skills/gsd-next/SKILL.md',
+    );
+  });
+});
+
+describe('#4738: a clean opencode install is invisible to detect-custom-files', () => {
+  test('real --opencode --global install: manifest records staged skills and the detector reports zero custom files', (t) => {
+    const { manifest, configDir, root } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
+    t.after(() => cleanup(root));
+
+    const skillEntries = Object.keys(manifest.files).filter((k) => k.startsWith('skills/'));
+    assert.ok(
+      skillEntries.length > 0,
+      `the manifest must record the staged skills (got ${skillEntries.length} skills/ keys)`,
+    );
+    // The on-disk side is unchanged by the fix: every manifested skill exists.
+    for (const rel of skillEntries) {
+      assert.ok(fs.existsSync(path.join(configDir, rel)), `staged file exists: ${rel}`);
+    }
+
+    const result = runGsdTools(['detect-custom-files', '--config-dir', configDir], root);
+    assert.ok(result.success, `detector failed: ${result.error}`);
+    const json = JSON.parse(result.output);
+    assert.ok(Array.isArray(json.custom_files), 'the detector must emit a custom_files array');
+    assert.deepEqual(
+      json.custom_files.filter((f) => f.startsWith('skills/')),
+      [],
+      `no installer-staged skill may be flagged as user-added: ${JSON.stringify(json.custom_files)}`,
+    );
+    assert.equal(json.custom_count, 0, `a clean opencode install reports zero custom files: ${JSON.stringify(json.custom_files)}`);
+  });
 });

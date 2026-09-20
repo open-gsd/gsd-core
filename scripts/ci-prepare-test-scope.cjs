@@ -4,9 +4,9 @@
 // Shell-agnostic: invoked as `node scripts/ci-prepare-test-scope.cjs` from any shell.
 //
 // Required environment variables (set by the workflow step's `env:` block):
-//   TEST_SCOPE       — "windows" | "targeted"
+//   TEST_SCOPE       — "targeted" (the `windows` scope was retired by #4641:
+//                      test-conformance is now the sole Windows selector)
 //   TARGETED_TESTS   — space-separated test file list (from ci-test-scope.cjs output)
-//   WINDOWS_TESTS    — space-separated test file list for the windows lane
 //
 // Writes: .ci-selected-tests.txt (one file per line, no blanks)
 // Exit 0 = success; exit 1 = unknown scope.
@@ -46,13 +46,14 @@ function isResolvable(entry, root) {
 
 // Resolve the scoped test selection for the lane. Pure (no I/O beyond the
 // existence probe under `root`) so it can be unit-tested directly.
-function resolveSelection({ scope, targeted, windows, root }) {
+function resolveSelection({ scope, targeted, root }) {
   let selected;
-  if (scope === 'windows') {
-    selected = windows;
-  } else if (scope === 'targeted') {
+  if (scope === 'targeted') {
     selected = targeted;
   } else {
+    // #4641: the `windows` scope was retired (test-conformance is now the
+    // sole Windows selector) — an unknown/retired scope must fail loudly
+    // rather than silently selecting nothing.
     throw new ExitError(1, `::error::Unknown test scope: ${scope}`);
   }
 
@@ -75,7 +76,6 @@ function main() {
   const lines = resolveSelection({
     scope: process.env.TEST_SCOPE || '',
     targeted: process.env.TARGETED_TESTS || '',
-    windows: process.env.WINDOWS_TESTS || '',
     root,
   });
 
