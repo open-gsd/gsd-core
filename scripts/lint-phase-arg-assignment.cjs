@@ -77,6 +77,18 @@ const SHELL_INFO_STRINGS = new Set(['bash', 'sh', 'shell']);
  * The only accepted spellings of a PHASE_ARG assignment, keyed by grammar.
  * Compared after collapsing runs of whitespace, so indentation inside a
  * block is free but the pipeline itself is not.
+ *
+ * Known limitation (#4777 review): neither `positional` nor `phaseFlag`
+ * strips a surrounding quote — `positional('4 --ws "my team"')` leaves
+ * `--ws`/`my`/`team` tokens in PHASE_ARG instead of stripping the flag, and
+ * `phaseFlag('--phase "4"')` yields an empty PHASE_ARG, reproducing this
+ * issue's own defect for that input shape. Every `argument-hint` in the
+ * repo documents unquoted usage as primary, and `positional` is copied
+ * verbatim from verify-work.md's pre-existing shipped form rather than
+ * "improved" here — hardening the regex would mean changing production
+ * bash text in all 7 shipped workflows this exact-match check compares
+ * against. See tests/lint-phase-arg-assignment.test.cjs's dedicated
+ * describe block for a live repro.
  */
 const CANONICAL_FORMS = Object.freeze({
   /** `/gsd:secure-phase 4` — the phase is the whole argument string, minus a `--ws <name>` pair. */

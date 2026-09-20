@@ -23,6 +23,7 @@ const {
   scan,
 } = require('../scripts/lint-phase-arg-assignment.cjs');
 const { cleanup } = require('./helpers.cjs');
+const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 /** Write a synthetic workflows dir from `{ 'name.md': contents }`; returns its path. */
 function fixture(files) {
@@ -135,6 +136,35 @@ describe('#4777 scan', () => {
   });
 
   test.afterEach(() => { if (dir) cleanup(dir); dir = null; });
+});
+
+describe('#4777 review Minor — canonical forms against a quoted value', () => {
+  // Both frozen forms assume an unquoted argument-hint (every argument-hint
+  // in the repo documents that as primary). Neither strips a surrounding
+  // quote, so a quoted value reproduces the exact pre-fix defect
+  // (PHASE_ARG wrong or empty) for this input shape. Documented as a known
+  // limitation in CANONICAL_FORMS rather than silently "improved" — the
+  // positional form is copied verbatim from verify-work.md's pre-existing
+  // shipped implementation, and CANONICAL_FORMS does exact-text matching
+  // against 7 shipped workflow files, so changing the regex here would mean
+  // changing production bash in all of them.
+  const { execFileSync } = require('node:child_process');
+
+  function runForm(form, argumentsValue) {
+    const script = `ARGUMENTS='${argumentsValue.replace(/'/g, "'\\''")}'\n${form}\necho -n "$PHASE_ARG"`;
+    return execFileSync('/bin/bash', ['-c', script], { encoding: 'utf8', timeout: QUICK_SPAWN_TIMEOUT_MS });
+  }
+
+  test('positional: a quoted --ws value leaves --ws tokens in PHASE_ARG instead of stripping them', () => {
+    const result = runForm(CANONICAL_FORMS.positional, '4 --ws "my team"');
+    assert.notEqual(result, '4', 'documents the current (wrong) output, not the intended one');
+    assert.match(result, /--ws/, 'the --ws flag survives when its value is quoted');
+  });
+
+  test('phaseFlag: a quoted --phase value yields an empty PHASE_ARG, reproducing #4777 for this shape', () => {
+    const result = runForm(CANONICAL_FORMS.phaseFlag, '--phase "4"');
+    assert.equal(result, '', 'documents the current (wrong) output: phase_found would be false again');
+  });
 });
 
 describe('#4777 the shipped tree', () => {
