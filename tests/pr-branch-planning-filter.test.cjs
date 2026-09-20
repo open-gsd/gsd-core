@@ -365,6 +365,29 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       return fs.readFileSync(WORKFLOW_PATH, 'utf-8');
     }
 
+    /**
+     * Reads a path's COMMITTED blob on `ref`, not the working-tree file.
+     *
+     * Byte-exact content assertions must use this. Under `core.autocrlf=true`
+     * — Git for Windows' default — every checkout rewrites LF to CRLF in the
+     * working tree, so a worktree read there returns `'v1\r\nv2\r\nv3\r\n'`
+     * where the committed blob is `'v1\nv2\nv3\n'`. That conversion is normal
+     * Git behavior for the user's checkout, not something create_pr_branch
+     * controls or promises; what the command actually guarantees is the
+     * CONTENT OF THE PR BRANCH, which is what this reads.
+     *
+     * So this is not a line-ending-tolerant comparison — nothing is
+     * normalized, and a genuine content difference still fails byte-for-byte.
+     * It asserts against the right artifact instead of a platform-dependent
+     * rendering of it (#4606 review round 4; verified by reproducing the
+     * Windows failure on Linux via `core.autocrlf=true`, which showed the
+     * committed blob byte-identical to `$HASH`'s own while the worktree was
+     * CRLF).
+     */
+    function readCommitted(dir, ref, relPath) {
+      return git(['show', `${ref}:${relPath}`], dir);
+    }
+
     // Builds the exact fixture script L2 executes: fixed shell vars plus the
     // REAL create_pr_branch cherry-pick loop extracted verbatim from
     // pr-branch.md — not a hand-written mirror of it. NOTE: INCLUDED_COMMITS
@@ -560,13 +583,18 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
     // `feature` diverges — the conflict then looks identical from inside the
     // loop but must NOT be auto-resolved, because `--theirs` would discard
     // `main`'s own committed content.
+    // `autocrlf` sets `core.autocrlf` on the fixture repo. `true` is Git for
+    // Windows' default and reproduces, on any platform, the line-ending
+    // conversion that made this PR's three L2 tests fail on windows-latest.
     function buildThirdBucketChainFixture({
       thirdBucketPath = '.planning/WINDOWS.md',
       deleteInC2 = false,
       driftOnTarget = null,
+      autocrlf = null,
     } = {}) {
       const dir = trackDir(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-prbranch-3rdbucket-')));
       initRepo(dir);
+      if (autocrlf !== null) git(['config', 'core.autocrlf', String(autocrlf)], dir);
       writeFile(dir, 'code.txt', 'line1\n');
       writeFile(dir, '.planning/STATE.md', 'state v1\n');
       writeFile(dir, thirdBucketPath, 'v1\n');
@@ -636,13 +664,14 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         }
         assert.strictEqual(result.status, 0, `create_pr_branch must not abort on the third-bucket chain conflict: ${result.stderr}`);
 
-        const windowsContent = fs.readFileSync(path.join(dir, '.planning/WINDOWS.md'), 'utf-8');
         assert.strictEqual(
-          windowsContent, 'v1\nv2\nv3\n',
+          readCommitted(dir, 'prbranch', '.planning/WINDOWS.md'), 'v1\nv2\nv3\n',
           'WINDOWS.md must reach c2\'s exact chained content, not c1\'s dropped intermediate state or main\'s stale original',
         );
-        const stateContent = fs.readFileSync(path.join(dir, '.planning/STATE.md'), 'utf-8');
-        assert.strictEqual(stateContent, 'state v2\n', 'the structural path in the same commit must still land correctly');
+        assert.strictEqual(
+          readCommitted(dir, 'prbranch', '.planning/STATE.md'), 'state v2\n',
+          'the structural path in the same commit must still land correctly',
+        );
 
         const count = parseInt(git(['rev-list', '--count', 'main..prbranch'], dir).trim(), 10);
         assert.strictEqual(count, 1, 'exactly one commit (c2) should have landed on the PR branch');
@@ -680,13 +709,14 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         const result = runThirdBucketRecipe(dir, c2);
         assert.strictEqual(result.status, 0, `create_pr_branch must not abort on the third-bucket chain conflict: ${result.stderr}`);
 
-        const content = fs.readFileSync(path.join(dir, thirdBucketPath), 'utf-8');
         assert.strictEqual(
-          content, 'v1\nv2\nv3\n',
+          readCommitted(dir, 'prbranch', thirdBucketPath), 'v1\nv2\nv3\n',
           `${thirdBucketPath} must reach c2's exact chained content — a word-split path is never checked out, leaving main's stale original`,
         );
-        const stateContent = fs.readFileSync(path.join(dir, '.planning/STATE.md'), 'utf-8');
-        assert.strictEqual(stateContent, 'state v2\n', 'the structural path in the same commit must still land correctly');
+        assert.strictEqual(
+          readCommitted(dir, 'prbranch', '.planning/STATE.md'), 'state v2\n',
+          'the structural path in the same commit must still land correctly',
+        );
 
         const count = parseInt(git(['rev-list', '--count', 'main..prbranch'], dir).trim(), 10);
         assert.strictEqual(count, 1, 'exactly one commit (c2) should have landed on the PR branch');
@@ -710,11 +740,61 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
           fs.existsSync(path.join(dir, thirdBucketPath)), false,
           'the deletion c2 records must be honoured — the path must not survive on the PR branch',
         );
-        const stateContent = fs.readFileSync(path.join(dir, '.planning/STATE.md'), 'utf-8');
-        assert.strictEqual(stateContent, 'state v2\n', 'the structural path in the same commit must still land correctly');
+        assert.strictEqual(
+          readCommitted(dir, 'prbranch', '.planning/STATE.md'), 'state v2\n',
+          'the structural path in the same commit must still land correctly',
+        );
 
         const count = parseInt(git(['rev-list', '--count', 'main..prbranch'], dir).trim(), 10);
         assert.strictEqual(count, 1, 'exactly one commit (c2) should have landed on the PR branch');
+      } finally {
+        teardown();
+      }
+    });
+
+    // #4606 review round 4 — the windows-latest CI failure. Git for Windows
+    // defaults to `core.autocrlf=true`, which rewrites LF to CRLF on every
+    // checkout, so `git checkout --theirs` leaves CRLF in the working tree and
+    // the three L2 tests above — which read the worktree — compared
+    // 'v1\r\nv2\r\nv3\r\n' against 'v1\nv2\nv3\n' and failed.
+    //
+    // Reproduced on Linux by setting the same config, which established what
+    // the failure actually was: the WORKING TREE is CRLF (correct and expected
+    // for such a checkout — every file there is), while the COMMITTED BLOB on
+    // the PR branch is LF, byte-identical to $HASH's own. create_pr_branch
+    // delivers the right content on Windows; the tests were asserting against
+    // a platform-dependent rendering of it. Hence `readCommitted` above, and
+    // hence NOT forcing `core.autocrlf=false` on the shipped `git checkout`:
+    // that would write one LF file into a Windows user's otherwise-CRLF
+    // worktree, for no gain, since what lands in the commit is already correct.
+    //
+    // This test pins that conclusion so Linux CI covers the Windows hazard
+    // directly, instead of the suite depending on a windows-latest shard to
+    // notice a regression.
+    test('#4606 L2: under core.autocrlf=true (the Git-for-Windows default) the PR branch still commits $HASH\'s exact LF content', () => {
+      const thirdBucketPath = '.planning/WINDOWS.md';
+      const { dir, c2 } = buildThirdBucketChainFixture({ thirdBucketPath, autocrlf: true });
+      try {
+        const result = runThirdBucketRecipe(dir, c2);
+        assert.strictEqual(result.status, 0, `create_pr_branch must not abort under autocrlf: ${result.stderr}`);
+
+        // The contract: what the PR branch carries equals what $HASH committed.
+        assert.strictEqual(
+          readCommitted(dir, 'prbranch', thirdBucketPath),
+          readCommitted(dir, c2, thirdBucketPath),
+          'the PR branch\'s committed blob must be byte-identical to $HASH\'s own, whatever the checkout did to the working tree',
+        );
+        assert.strictEqual(
+          readCommitted(dir, 'prbranch', thirdBucketPath), 'v1\nv2\nv3\n',
+          'and that content must still be LF — autocrlf converts the worktree, not the object store',
+        );
+        // Pin the worktree side too, so the reason this test exists stays
+        // legible: CRLF here is expected, and is NOT a defect.
+        assert.ok(
+          fs.readFileSync(path.join(dir, thirdBucketPath), 'utf-8').includes('\r\n'),
+          'sanity: with autocrlf=true the working tree is expected to be CRLF — if this stops holding, '
+            + 'the fixture no longer reproduces the windows-latest condition and this test proves nothing',
+        );
       } finally {
         teardown();
       }
