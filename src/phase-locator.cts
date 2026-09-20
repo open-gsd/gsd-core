@@ -204,13 +204,15 @@ function listArchiveVersionDirs(cwd: string, wsOverride?: string | null): Archiv
   return out;
 }
 
-function searchPhaseInDir(baseDir: string, relBase: string, normalized: string): PhaseSearchResult | null {
+function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, convention?: string | null): PhaseSearchResult | null {
   try {
     const dirs = readSubdirectories(baseDir, true);
     // #2528: canonical two-pass selection (exact token match, then the
     // bare-integer leading-digit-run fallback) shared with the find-phase and
     // phase-plan-index scans — see phase-id.cts::matchPhaseDirs.
-    const { matches, usedBareFallback } = matchPhaseDirs(dirs, normalized);
+    // #4801: the convention is threaded (optional) so bracket-convention
+    // consumers get exact token matching here too.
+    const { matches, usedBareFallback } = matchPhaseDirs(dirs, normalized, convention);
     if (matches.length === 0) return null;
 
     // #2237: fail loud when multiple directories match the same bare phase
@@ -351,14 +353,15 @@ function searchPhaseInDir(baseDir: string, relBase: string, normalized: string):
   }
 }
 
-function findPhaseInternal(cwd: string, phase: unknown): PhaseSearchResult | null {
+function findPhaseInternal(cwd: string, phase: unknown, convention?: string | null): PhaseSearchResult | null {
   if (!phase) return null;
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
   const normalized = normalizePhaseName(phase);
 
   const relPhasesDir = toPosixPath(path.relative(cwd, phasesDir));
-  const current = searchPhaseInDir(phasesDir, relPhasesDir, normalized);
+  // #4801: convention threaded through to the matcher (see searchPhaseInDir).
+  const current = searchPhaseInDir(phasesDir, relPhasesDir, normalized, convention);
   if (current) return current;
 
   // #2855: scope the archived-milestone fallback to the SAME workstream as the
@@ -372,7 +375,7 @@ function findPhaseInternal(cwd: string, phase: unknown): PhaseSearchResult | nul
   // getArchivedPhaseDirs via listArchiveVersionDirs (see its doc comment).
   for (const { version, archivePath } of listArchiveVersionDirs(cwd)) {
     const relBase = toPosixPath(path.relative(cwd, archivePath));
-    const result = searchPhaseInDir(archivePath, relBase, normalized);
+    const result = searchPhaseInDir(archivePath, relBase, normalized, convention);
     if (result) {
       result.archived = version;
       return result;

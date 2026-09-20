@@ -102,7 +102,6 @@ const { pathExistsInternal, generateSlugInternal, toPosixPath } = coreUtils;
 const {
   comparePhaseNum,
   normalizePhaseName,
-  matchPhaseDirs,
   stripProjectCodePrefix,
   PHASE_NUMBER_TOKEN_SOURCE,
   PHASE_DEP_REF_SOURCE,
@@ -2865,18 +2864,12 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   }
   const rawContent = fs.readFileSync(paths.roadmap, 'utf-8');
   const content = extractCurrentMilestone(rawContent, cwd);
-  const phasesDir = paths.phases;
 
   // #3185 (ADR-3180 Decision 1): "which phase directories belong to the
   // CURRENT milestone" is the scoped question listMilestonePhaseDirs owns —
   // routed through it instead of a hand-rolled readdirSync + a separate
   // getMilestonePhaseFilter window check (which also never excluded
   // sentinels, unlike the owner).
-  const _phaseDirEntries = listMilestonePhaseDirs(phasesDir, {
-    cwd,
-    phaseIdConvention,
-  }).value;
-
   const _checkboxStates = new Map<string, boolean>();
   const _cbPattern = new RegExp(
     `-\\s*\\[(x| )\\]\\s*.*${phaseHeadingPrefix}(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`,
@@ -2928,7 +2921,6 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     const dependsMatch = section.match(/\*\*Depends on(?::\*\*|\*\*:)\s*([^\n]+)/i);
     const depends_on = dependsMatch ? dependsMatch[1].trim() : null;
 
-    const normalized = normalizePhaseName(phaseNum);
     let diskStatus = 'no_directory';
     let planCount = 0;
     let summaryCount = 0;
@@ -2949,19 +2941,24 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     );
 
     try {
-      // #3185 (ADR-3180 Decision 2) moved this lookup off the
-      // milestone-scoped set and onto the physical one; that scope choice is
-      // kept. Only the matcher is this PR's: matchPhaseDirs resolves
-      // digit-leading directory names the token predicate cannot (#2528).
-      const dirMatch = matchPhaseDirs(
-        _phaseDirEntries,
-        normalized,
-        phaseIdConvention,
-      ).matches[0];
+      // #4801: resolve through the canonical locator instead of a private
+      // current-milestone-only scan. findPhaseInternal searches the live
+      // .planning/phases directory FIRST (same set the retired
+      // matchPhaseDirs/_phaseDirEntries pair scanned — the #3185 physical-dir
+      // scope choice is inherited by the locator's live arm) and then falls
+      // back through listArchiveVersionDirs (workstream-scoped, #2855), so an
+      // ARCHIVED phase directory with a passing verification resolves instead
+      // of reporting no_directory/phase_complete:false. Five other init
+      // commands already route through this same primitive; this was the
+      // holdout private copy (#4793-family declared-owner drift).
+      const located = findPhaseInternal(cwd, phaseNum, phaseIdConvention) as unknown as Record<string, unknown> | null;
+      const dirMatch = located && located['found']
+        ? path.posix.basename(String(located['directory']))
+        : null;
 
       if (dirMatch) {
-        const fullDir = path.join(phasesDir, dirMatch);
-        const phaseDirRel = toPosixPath(path.relative(cwd, fullDir));
+        const fullDir = path.join(cwd, String(located!['directory']));
+        const phaseDirRel = String(located!['directory']);
         // #4014 (epic #3473 B4-unreadable): this whole block used to swallow
         // ANY readdirSync failure below into the bare `catch { /* empty */ }`
         // at the bottom — an unreadable phase directory reported the exact
