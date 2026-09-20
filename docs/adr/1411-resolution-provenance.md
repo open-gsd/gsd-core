@@ -294,7 +294,7 @@ Extracted, not copied — a second copy would be the defect this epic exists to 
   `null` as "unset" — a live contract on raw output — and the `config-get … --raw` command strings
   that `src/runtime-artifact-conversion.cts` bakes into generated runtime artifacts.
 
-### Decision 4 — the round-trip property is asserted in JSON mode; raw output is frozen
+### Decision 4 — the round-trip property is asserted in JSON mode; raw output is frozen (ruled 2026-09-20)
 
 The epic asks for `decode(encode(v)) === v` "across `--raw` / `--default` / neither". Measured, that
 property **cannot hold in raw mode** while raw means `String(value)`: `[]` and `""` both print
@@ -314,6 +314,9 @@ change** to a surface that live consumers parse by hand (`configString()` above;
 sites; baked artifact command strings). It is out of scope for #4633, and needs its own issue and its
 own approval. No child may change raw's non-scalar rendering "while it is in there".
 
+**Ruled:** freeze `--raw` as the display/shell-interpolation contract described above. A lossless
+`--raw` would need its own issue before any child that touches raw output is planned; none is filed.
+
 ### Decision 5 — migration census, child boundaries, and the anti-divergence guard
 
 **Census.** Every site that reads a configuration layer file directly or re-implements precedence,
@@ -330,6 +333,7 @@ found by path-construction search over `src/`, `bin/`, `hooks/`, `scripts/` at `
 | `src/install-model-override-resolver.cts` | Install-time global+project merges (`model_overrides`, `agent_tools`, runtime/profile) |
 | `src/install-effort-resolver.cts` | Install-time `effort` merge, deep per sub-field |
 | `src/worktree-base-ref.cts` `resolveEffectiveBaseRef` | Family B's three-layer cascade, returning a bare `string \| null` — #4090's site |
+| `src/model-resolver.cts` `projectExplicitlySetsOmit` | A workstream→root two-layer walk over `config.json` for `resolve_model_ids`, re-implementing `loadConfig`'s precedence order by hand specifically to avoid its normalization side effects |
 
 *Single-layer readers that bypass precedence entirely* (each reads one file and therefore silently
 ignores root inheritance, global defaults and schema defaults): `src/estimate-cli.cts`
@@ -337,7 +341,9 @@ ignores root inheritance, global defaults and schema defaults): `src/estimate-cl
 `src/check-command-router.cts` (`readWorkflowConfig`), `src/runtime-slash.cts` (`runtime`),
 `src/verify.cts` (`workflow.drift_threshold`), `src/phase.cts` (`workflow.auto_prune_state`),
 `hooks/gsd-agent-isolation-guard.js` and `hooks/gsd-cursor-subagent-start.js` (both read
-`~/.gsd/defaults.json` directly). `runtime-slash.cts` records its reason for bypassing `loadConfig` —
+`~/.gsd/defaults.json` directly), `src/init.cts`'s `readConfigJsonBoolean`/`readConfigJsonValue`
+(single-layer reads of the workstream-aware planning dir only — no root fallback, no schema
+default). `runtime-slash.cts` records its reason for bypassing `loadConfig` —
 the normalize-and-write-back side effect — and that reason expired when `persist:false` shipped
 (#3648); a child adopting the owner there must delete the stale comment with the code.
 
@@ -398,5 +404,5 @@ an assertion, not inside C4.
 - No runtime code, configuration behaviour or generated artifact changes here. Every symptom in
   #4071, #4090, #4262 and #4382 stays live until C2–C4 land.
 - The child issues do not exist yet; C1–C5 are proposed boundaries, and each needs its own approval.
-- Decision 4 freezes raw output. If the maintainer prefers a lossless raw mode, that reverses a
-  decision recorded here and needs its own issue before C2 is planned.
+- Decision 4 freezes raw output (ruled 2026-09-20). A lossless raw mode would reverse a decision
+  recorded here and needs its own issue before C2 is planned.
