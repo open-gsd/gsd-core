@@ -2893,61 +2893,86 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           commands.cmdScaffold(cwd, scaffoldType, scaffoldOptions, raw);
   }
 
+  // #4030: the four `loop render-hooks` value flags below (--config-dir,
+  // --active-cap, --runtime, --phase) each parsed both `--flag X` and
+  // `--flag=X` with an identical ~14-line block; the fourth copy was the one
+  // that crossed this repo's "abstract at 3+ identical occurrences" line.
+  // Semantics are preserved exactly, including that the `=` form trims and the
+  // space form does not, and that a missing value calls `error` with the
+  // flag's own usage text.
+  // A null `usage` (used only by --phase/--phase-dir, #4030) means: when the
+  // flag is present but its value is an EXPLICIT empty string (`--phase=` or
+  // `--phase ""`), return that empty string rather than undefined, so the
+  // resolver's own unresolvable-token path (which treats '' identically to a
+  // not-found token) can warn instead of going silent. When the flag is truly
+  // ABSENT — never passed, or immediately followed by another flag — this
+  // still returns undefined, indistinguishable from omitting the flag, since
+  // there is no explicit value to surface a warning about.
+  //
+  // Without the empty-string case, `--phase "${PHASE_NUMBER}"` with an unset
+  // shell variable would silently drop every hook at that point (this CLI
+  // path is what all real call sites use) — a strictly worse failure than the
+  // "degrades to a warning, never fails a render" promise every phase-scoped
+  // call site relies on. The other three callers (--config-dir/--active-cap/
+  // --runtime) pass a real usage string and keep the strict default: an empty
+  // value there IS an authoring mistake worth failing on.
+  function readDualFormFlag(args, flag, usage, error) {
+    const eqArg = args.find(arg => arg.startsWith(`${flag}=`));
+    if (eqArg) {
+      const value = eqArg.slice(flag.length + 1).trim();
+      // An explicit empty value (--flag=) is present, just empty — always
+      // returned as '' rather than treated as absent, so a graceful caller's
+      // resolver can tell "given but empty" from "never given" (see below).
+      // Strict callers still error on it: `!value` alone decides that, same
+      // as before this comment's rewrite.
+      if (!value && usage) {
+        error(usage, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+      }
+      return value;
+    }
+    const idx = args.indexOf(flag);
+    if (idx === -1) return undefined;
+    const value = args[idx + 1];
+    // No token follows, or the next token looks like another flag: there is
+    // no value to speak of, explicit-empty or otherwise — always treated as
+    // absent, both for graceful (silent) and strict (error) callers.
+    if (value === undefined || value.startsWith('--')) {
+      if (usage) error(usage, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+      return undefined;
+    }
+    // A real, if possibly empty, string follows. Strict callers still error
+    // on empty here — `!value` matches '' — graceful callers return it as-is.
+    if (!value && usage) {
+      error(usage, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+    }
+    return value;
+  }
+
   function routeLoop({ args, cwd, raw, error }) {
     // loop render-hooks <point>
           const loopSubcommand = args[1];
           if (loopSubcommand === 'render-hooks') {
-            let loopConfigDir = null;
-            const configDirEqArg = args.find(arg => arg.startsWith('--config-dir='));
-            const configDirIdx = args.indexOf('--config-dir');
-            if (configDirEqArg) {
-              const value = configDirEqArg.slice('--config-dir='.length).trim();
-              if (!value) error('Missing value for --config-dir', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-              loopConfigDir = value;
-            } else if (configDirIdx !== -1) {
-              const value = args[configDirIdx + 1];
-              if (!value || value.startsWith('--')) {
-                error('Missing value for --config-dir', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-              }
-              loopConfigDir = value;
-            }
+            const loopConfigDir = readDualFormFlag(args, '--config-dir', 'Missing value for --config-dir', error);
             // --active-cap <capId>: parse and validate before delegating
-            let loopActiveCap = undefined;
-            const activeCapEqArg = args.find(arg => arg.startsWith('--active-cap='));
-            const activeCapIdx = args.indexOf('--active-cap');
-            if (activeCapEqArg) {
-              const value = activeCapEqArg.slice('--active-cap='.length).trim();
-              if (!value) error('Missing value for --active-cap (e.g. --active-cap tdd)', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-              loopActiveCap = value;
-            } else if (activeCapIdx !== -1) {
-              const value = args[activeCapIdx + 1];
-              if (!value || value.startsWith('--')) {
-                error('Missing value for --active-cap (e.g. --active-cap tdd)', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-              }
-              loopActiveCap = value;
-            }
+            const loopActiveCap = readDualFormFlag(args, '--active-cap', 'Missing value for --active-cap (e.g. --active-cap tdd)', error);
             // --runtime <r> (#2003): explicit runtime override so the config-dir
             // resolution bypasses the persisted-runtime fallback (GSD_RUNTIME →
             // config.runtime). Mirrors the --config-dir dual-form (--runtime X /
             // --runtime=X) and the capability-set --runtime precedent.
-            let loopRuntime = undefined;
-            const runtimeEqArg = args.find(arg => arg.startsWith('--runtime='));
-            const runtimeIdx = args.indexOf('--runtime');
-            if (runtimeEqArg) {
-              const value = runtimeEqArg.slice('--runtime='.length).trim();
-              if (!value) error('Missing value for --runtime', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-              loopRuntime = value;
-            } else if (runtimeIdx !== -1) {
-              const value = args[runtimeIdx + 1];
-              if (!value || value.startsWith('--')) {
-                error('Missing value for --runtime', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-              }
-              loopRuntime = value;
-            }
+            const loopRuntime = readDualFormFlag(args, '--runtime', 'Missing value for --runtime', error);
+            // --phase <token> (#4030): task-local phase for the invocation.
+            // Mirrors the --runtime dual-form parsing above.
+            const loopPhase = readDualFormFlag(args, '--phase', null, error);
+            // --phase-dir <dir> (#4030): optional cross-check on --phase. The
+            // resolver compares it against the directory the token resolves to
+            // and never uses it as an independent path.
+            const loopPhaseDir = readDualFormFlag(args, '--phase-dir', null, error);
             loopResolver.cmdLoopRenderHooks(cwd, args[2], raw, {
               configDir: loopConfigDir ? path.resolve(loopConfigDir) : undefined,
               activeCap: loopActiveCap,
               runtime: loopRuntime,
+              phase: loopPhase,
+              phaseDir: loopPhaseDir,
             });
           } else {
             error(

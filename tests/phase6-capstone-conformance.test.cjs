@@ -235,8 +235,15 @@ describe('ADR-857 Phase 6 capstone conformance (#1139)', () => {
     // and a same-session conflict record never closed on resolution). Same rationale as #3771:
     // conflict-record persistence is core planner control flow, not an un-extracted
     // optional feature.
+    //
+    // #4030: the execute-phase.md ceiling was raised from 93600 to accommodate
+    // threading the new `--phase "${PHASE_NUMBER}"` flag through this file's
+    // `loop render-hooks` dispatch call sites, so phase-scoped capability hooks
+    // receive the phase actually being executed instead of inferring it from
+    // `STATE.current_phase`. That's lifecycle-hook dispatch wiring, not an
+    // optional feature pending capability extraction — same rationale as #1298.
     const { lfByteCount } = require('../scripts/workflow-size.cjs');
-    const PRE_PHASE6 = { 'plan-phase.md': 98300, 'execute-phase.md': 93600 };
+    const PRE_PHASE6 = { 'plan-phase.md': 98300, 'execute-phase.md': 93700 };
     const notShrunk = [];
     for (const [file, frozen] of Object.entries(PRE_PHASE6)) {
       const now = lfByteCount(path.join(ROOT, 'gsd-core', 'workflows', file));

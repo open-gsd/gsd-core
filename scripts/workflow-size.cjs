@@ -94,7 +94,7 @@ function measureWorkflows(dir = WORKFLOWS_DIR) {
  *
  * The hard caps are red lines and stay exactly where they are. This is the
  * second, softer level the caps never had: `execute-phase.md` already carries
- * a hand-rolled version of this shape (a hard `< 93600` plus a `<= 93400`
+ * a hand-rolled version of this shape (a hard `< 93700` plus a `<= 93400`
  * margin whose own message says it exists "so minor future edits don't
  * re-trip the gate"), and it is the only capped file that does. Everywhere
  * else a file is either fine or already over, with nothing in between — so

@@ -28,9 +28,15 @@
  *   - capability-state.cjs (resolveCapabilityRuntimeState — for capabilities list)
  */
 
+import path from 'node:path';
+
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output: coreOutput, error: coreError } = ioMod;
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
+import phaseLocator = require('./phase-locator.cjs');
+const { guardedFindPhase } = phaseLocator;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderModule = require('./config-loader.cjs');
@@ -488,10 +494,17 @@ function sanitizeLoadFailReason(reason: unknown): string {
   return cleaned || '(no reason given)';
 }
 
+/** The additive, optional field `--phase <token>` resolves into (#4030). */
+interface PhaseContext {
+  phase: string;
+  phaseDir: string;
+}
+
 interface ResolvedActiveHooks {
   point: string;
   activeHooks: ActiveHook[];
   warnings: string[];
+  context?: PhaseContext;
 }
 
 /**
@@ -552,6 +565,107 @@ function resolveActiveHooksForPoint(
 
   const resolved: ResolveLoopHooksResult = resolveLoopHooks({ point, registry, config, cwd, capabilityStatesById });
 
+  // ── #4030: optional --phase <token> → derived context: { phase, phaseDir } ─────
+  // Resolves the SAME way `init.*` already does — guardedFindPhase, not bare
+  // findPhaseInternal — so a project_code-scoped repo gets the identical
+  // #2237 foreign-prefix guard `init.*` applies, rather than reopening that
+  // bug for this new call site. A phase-scoped step/gate/contribution handler
+  // gets the task-local phase instead of inferring it from STATE.current_phase
+  // or an ambient shell variable. A missing or ambiguous phase degrades to "no
+  // context" plus a warning (mirroring cmdInitPhaseOp's #2237 handling of the
+  // identical found:false/ambiguous_matches shape) rather than a hard error.
+  //
+  // `--phase-dir` is accepted, but only ever as a CHECK against what the token
+  // resolved to — never as an independent path. The emitted phaseDir is always
+  // a directory the locator itself produced, so there is still no caller path
+  // to confine, and `--phase 05 --phase-dir <another in-project phase>` is
+  // rejected as incoherent rather than silently believed — a disagreement no
+  // containment check could catch, since both paths are inside the project.
+  // `resolveActiveHooksForPoint` is exported (dispatch-step calls it directly,
+  // bypassing the CLI's `readDualFormFlag` entirely), so an empty string here is
+  // a real input this boundary must handle on its own. Kept as a string, not
+  // collapsed to undefined: `guardedFindPhase(cwd, '', ...)` returns null (its
+  // own `if (!phase) return null` guard), so an empty `--phase` falls through to
+  // the SAME "did not match a phase directory" warning every other unresolvable
+  // token gets below — surfacing the anomaly rather than silently doing nothing,
+  // consistent with this function's one design rule: degrade with a warning,
+  // never fail, never go quiet. Only a genuinely absent flag (`typeof !==
+  // 'string'`, i.e. never passed at all) skips the branch below and stays silent.
+  const phaseArg = typeof options['phase'] === 'string' ? options['phase'] : undefined;
+  const phaseDirArg = typeof options['phaseDir'] === 'string' ? options['phaseDir'] : undefined;
+  let phaseContext: PhaseContext | undefined;
+  const phaseWarnings: string[] = [];
+  if (phaseArg !== undefined) {
+    // guardedFindPhase's own declared return type is Record<string, unknown> |
+    // null (phase-locator.cts erases it the same way for its other caller,
+    // init.cts) — narrowed here to the fields this function actually reads,
+    // once, rather than re-declaring the cast inline at every access below.
+    const phaseResult = guardedFindPhase(cwd, phaseArg, config['project_code']) as {
+      found: boolean;
+      directory: string;
+      phase_number: string;
+      ambiguous_matches?: string[];
+      archived?: string;
+    } | null;
+    if (phaseResult?.found && phaseResult.archived) {
+      // guardedFindPhase falls back to archived .planning/milestones/ phases
+      // when no ACTIVE phase matches the token — the same fallback init.*'s
+      // own callers guard against (applyRoadmapFallback's `phaseInfo?.archived
+      // -> null` rule). A hook-dispatch context is documented as resolving
+      // "one direct child beneath the active project's .planning/phases"
+      // (ADR-4030); an archived milestone directory is neither, so this
+      // degrades exactly like an unresolved token — warning, no context —
+      // rather than silently pointing a phase-scoped hook at retired plans.
+      phaseWarnings.push(
+        `--phase ${JSON.stringify(phaseArg)} resolved only to an archived phase ` +
+        `(${JSON.stringify(phaseResult.directory)}, milestone ${JSON.stringify(phaseResult.archived)}); ` +
+        'context omitted.',
+      );
+    } else if (phaseResult?.found) {
+      // A supplied --phase-dir must AGREE with what the token resolved to.
+      // Confinement is not the interesting failure here: two in-project
+      // directories both pass any containment check, yet `--phase 05
+      // --phase-dir .planning/phases/07-other` is an incoherent pair no
+      // confinement can catch. Comparing against the derived value rejects it.
+      // Compared as resolved paths, not raw strings, so an absolute form or a
+      // `./` prefix of the SAME directory is a match — sibling commands accept
+      // absolute paths (`resolvePath`, check-command-router.cts), and a caller
+      // following that convention should not silently lose its context. This is
+      // a pure string comparison: `path.resolve` never touches the filesystem,
+      // and the emitted phaseDir below is still the locator's value, never this
+      // argument. A symlinked spelling therefore still fails closed.
+      const sameDir = phaseDirArg !== undefined
+        && path.resolve(cwd, phaseDirArg) === path.resolve(cwd, phaseResult.directory);
+      if (phaseDirArg !== undefined && !sameDir) {
+        phaseWarnings.push(
+          `--phase-dir ${JSON.stringify(phaseDirArg)} does not match the directory ` +
+          `--phase ${JSON.stringify(phaseArg)} resolves to (${JSON.stringify(phaseResult.directory)}); context omitted.`,
+        );
+      } else {
+        phaseContext = { phase: phaseResult.phase_number, phaseDir: phaseResult.directory };
+      }
+    } else if (phaseResult?.ambiguous_matches?.length) {
+      // An ambiguous token yields no context even when --phase-dir names one of
+      // the candidates. Letting the directory pick a winner would make it an
+      // independent source of truth in exactly the case where the token has
+      // none to check it against, and `init.*` does not disambiguate here
+      // either (#2237) — a token matching two directories is a project to fix,
+      // not an argument to route around.
+      phaseWarnings.push(
+        `--phase ${JSON.stringify(phaseArg)} is ambiguous: ${phaseResult.ambiguous_matches.length} ` +
+        `directories match (${phaseResult.ambiguous_matches.map((m) => `"${m}"`).join(', ')}); context omitted.`,
+      );
+    } else {
+      phaseWarnings.push(`--phase ${JSON.stringify(phaseArg)} did not match a phase directory; context omitted.`);
+    }
+  } else if (phaseDirArg !== undefined) {
+    // --phase-dir alone cannot be honoured: it is checked against the token's
+    // resolution, and with no token there is nothing to check it against.
+    // Accepting it here would make it the independent, unconfined caller path
+    // this design exists to avoid (see #4354 for that shape's failure mode).
+    phaseWarnings.push('--phase-dir requires --phase; it is verified against the token\'s resolution, never used alone. Context omitted.');
+  }
+
   // ── ADR-1244 D2: load-failed capability gates FAIL OPEN with a loud warning ────
   // Decision (#2009): a capability that failed to LOAD must not block the loop.
   // The prior behavior injected a BLOCKING synthetic gate (blocking:true,
@@ -597,16 +711,24 @@ function resolveActiveHooksForPoint(
     }
   }
   // Emit loudly to stderr in EVERY output mode (including --active-cap), so a
-  // skipped gate is never silently invisible to the operator/agent.
+  // skipped gate or a dropped #4030 phase context is never silently invisible
+  // to the operator/agent — no host workflow reads `.warnings` back out of
+  // the `*_HOOKS_JSON` envelope it captures, so stderr is the only channel
+  // that actually surfaces these today. Deliberately excludes state.warnings
+  // (unlike combinedWarnings below): that channel predates #4030 and its own
+  // scope was never stderr — not this fix's call to widen.
   for (const w of loadFailWarnings) {
+    process.stderr.write(`gsd: warning — ${w}\n`);
+  }
+  for (const w of phaseWarnings) {
     process.stderr.write(`gsd: warning — ${w}\n`);
   }
 
   // Surface capability-state warnings and the #2009 load-failure fail-open warnings together
   // (in addition to the stderr emission above, which is the channel host workflows actually see).
-  const combinedWarnings = [...(state.warnings || []), ...loadFailWarnings];
+  const combinedWarnings = [...(state.warnings || []), ...loadFailWarnings, ...phaseWarnings];
 
-  return { point: resolved.point, activeHooks: resolved.activeHooks, warnings: combinedWarnings };
+  return { point: resolved.point, activeHooks: resolved.activeHooks, warnings: combinedWarnings, context: phaseContext };
 }
 
 function cmdLoopRenderHooks(
@@ -648,11 +770,15 @@ function cmdLoopRenderHooks(
     activeHooks: ActiveHook[];
     rendered: string;
     warnings?: string[];
+    context?: PhaseContext;
   } = {
     point: result.point,
     activeHooks: result.activeHooks,
     rendered,
   };
+  if (result.context) {
+    envelope.context = result.context;
+  }
   if (result.warnings.length > 0) {
     envelope.warnings = result.warnings;
   }

@@ -1792,6 +1792,56 @@ describe('migrated exemptions behave identically (#3882 rows E1/E2)', () => {
 
 // ─── F. The guard — both detectors, proven fail-capable ──────────────────
 
+// ─── guardedFindPhase — the #2237 foreign-prefix guard around findPhaseInternal ───
+//
+// #4030 moved this out of init.cts and exported it, because `loop render-hooks
+// --phase` resolves through the SAME guard `init.*` uses rather than the bare
+// findPhaseInternal it wraps. Two callers now depend on these three behaviours.
+
+describe('guardedFindPhase (#4030)', () => {
+  let tmpDir;
+  afterEach(() => { if (tmpDir) { cleanup(tmpDir); tmpDir = null; } });
+
+  test('a bare number resolves exactly as findPhaseInternal does', () => {
+    tmpDir = createTempProject('gsd-pl-guard-');
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '05-widgets'), { recursive: true });
+    const guarded = phaseLocator.guardedFindPhase(tmpDir, '5', undefined);
+    const bare = phaseLocator.findPhaseInternal(tmpDir, '5');
+    assert.ok(guarded !== null, 'expected phase 5 to resolve');
+    assert.strictEqual(guarded.directory, '.planning/phases/05-widgets');
+    assert.deepStrictEqual(guarded, bare, 'the guard must not alter a non-foreign lookup');
+  });
+
+  test('a foreign project-code prefix resolves to null, not to the local phase', () => {
+    tmpDir = createTempProject('gsd-pl-guard-');
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '05-widgets'), { recursive: true });
+    // OTHER-05 names another project's phase 5. The bare lookup would happily
+    // hand back THIS project's 05-widgets; the guard is the only thing between
+    // that and a cross-project write.
+    assert.ok(phaseLocator.findPhaseInternal(tmpDir, 'OTHER-05') !== null,
+      'precondition: the unguarded lookup does resolve the foreign query');
+    assert.strictEqual(phaseLocator.guardedFindPhase(tmpDir, 'OTHER-05', 'MINE'), null);
+  });
+
+  test("the project's own code prefix is not foreign and still resolves", () => {
+    tmpDir = createTempProject('gsd-pl-guard-');
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', 'MINE-05-widgets'), { recursive: true });
+    const result = phaseLocator.guardedFindPhase(tmpDir, 'MINE-05', 'MINE');
+    assert.ok(result !== null, 'expected MINE-05 to resolve under project code MINE');
+    assert.strictEqual(result.directory, '.planning/phases/MINE-05-widgets');
+  });
+
+  test('an ambiguous bare number keeps its found:false/ambiguous_matches shape', () => {
+    tmpDir = createTempProject('gsd-pl-guard-');
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '05-widgets'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '05-gadgets'), { recursive: true });
+    const result = phaseLocator.guardedFindPhase(tmpDir, '05', undefined);
+    assert.ok(result !== null, 'ambiguity is reported, not swallowed');
+    assert.strictEqual(result.found, false);
+    assert.deepStrictEqual([...result.ambiguous_matches].sort(), ['05-gadgets', '05-widgets']);
+  });
+});
+
 describe('lint-phase-enumeration-drift.cjs guard (#3882 rows F1-F3)', () => {
   test('F1: detector 2 (sentinel literal) still fires on a bare 999 outside phase-id.cts', () => {
     const planted = "if (phaseNum === 999) return true;\n";
