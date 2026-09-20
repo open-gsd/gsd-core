@@ -334,7 +334,7 @@ describe('#2667 run-with-timeout — Windows .cmd/.bat/.exe spawn mediation (CVE
       fs.writeFileSync(shim, '@echo {"verdict":"clean"}\r\n', 'utf8');
       const r = runVerb(['10', '--', shim]);
       assert.equal(r.status, 0, `expected the .bat shim to run (exit 0); got ${r.status}. stderr: ${r.stderr}`);
-      assert.ok((r.stdout || '').length > 0, 'expected non-empty stdout from the .bat shim');
+      assert.ok((r.stdout || '').includes('clean'), `expected JSON stdout from the .bat shim; got: ${r.stdout}`);
     } finally {
       cleanup(dir);
     }
@@ -464,7 +464,7 @@ describe('#4797 run-with-timeout — .cmd mediation with spaces in the shim path
   const isWin = process.platform === 'win32';
   const SPACED = 'rwt 4797 dir with spaces';
 
-  test('win32: a .cmd shim under a spaced path runs (the fallow pre-pass shape)', () => {
+  test('win32: a .cmd shim under a spaced path runs (the fallow pre-pass shape)', { skip: !isWin ? 'win32-only' : false }, () => {
     const base = createTempDir('rwt-4797-base');
     const dir = path.join(base, SPACED);
     try {
@@ -479,7 +479,7 @@ describe('#4797 run-with-timeout — .cmd mediation with spaces in the shim path
     }
   });
 
-  test('win32: a .bat shim under a spaced path runs too', () => {
+  test('win32: a .bat shim under a spaced path runs too', { skip: !isWin ? 'win32-only' : false }, () => {
     const base = createTempDir('rwt-4797-bat-base');
     const dir = path.join(base, SPACED);
     try {
@@ -488,7 +488,7 @@ describe('#4797 run-with-timeout — .cmd mediation with spaces in the shim path
       fs.writeFileSync(shim, '@echo {"verdict":"clean"}\r\n', 'utf8');
       const r = runVerb(['10', '--', shim]);
       assert.equal(r.status, 0, `expected the spaced-path .bat shim to run (exit 0); got ${r.status}. stderr: ${r.stderr}`);
-      assert.ok((r.stdout || '').length > 0, 'expected non-empty stdout from the .bat shim');
+      assert.ok((r.stdout || '').includes('clean'), `expected JSON stdout from the .bat shim; got: ${r.stdout}`);
     } finally {
       cleanup(base);
     }
