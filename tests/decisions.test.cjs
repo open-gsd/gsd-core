@@ -3133,3 +3133,100 @@ describe('#4788: code spans in the bold lead-in are opaque to the separator gram
     assert.deepEqual(r.decisions.map((d) => d.id), ['D-01', 'D-91', 'D-119', 'D-92']);
   });
 });
+
+// ─── #4794: a gate that measured nothing must not emit the fields of one that did ──
+
+describe('#4794: decision-coverage answers an unmeasured shape on could-not-parse and a non-file context', () => {
+  let tmpDir;
+  let planningDir;
+  let phaseDir;
+  const contentWith = (bullets) => `<decisions>\n${bullets.map((b) => '- ' + b).join('\n')}\n</decisions>`;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-4794-');
+    planningDir = path.join(tmpDir, '.planning');
+    phaseDir = path.join(planningDir, 'phases', '01-init');
+    fs.mkdirSync(phaseDir, { recursive: true });
+  });
+
+  afterEach(() => cleanup(tmpDir));
+
+  function writePlanFile4794(name, body) {
+    fs.writeFileSync(path.join(phaseDir, `${name}-PLAN.md`), body);
+  }
+
+  test('#4794: could-not-parse answers an unmeasured shape — null counts, unreadable ids, no uncovered', (t) => {
+    // The issue's repro: D-01 parses; D-02's title carries a second colon in
+    // plain prose → parse-miss. The gate used to answer covered:0/uncovered:[]
+    // — the fields of a measurement that never happened.
+    writeContextFile(phaseDir, [
+      '# Context',
+      '',
+      '<decisions>',
+      '',
+      '- **D-01: The list shows one row per contact.** Nothing else changes.',
+      '- **D-02: Two managers creating a card for the same pair: the second is rejected.** One pair, one card.',
+      '',
+      '</decisions>',
+    ].join('\n'));
+    writePlanFile4794('01', '# Plan\n## Objective\nImplement feature.\n');
+
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+    const parsed = JSON.parse(result.output || '{}');
+
+    assert.strictEqual(parsed.passed, false, 'the gate must still block');
+    assert.strictEqual(parsed.reason, 'could-not-parse');
+    assert.strictEqual(parsed.total, null, 'total must be null — nothing was measured');
+    assert.strictEqual(parsed.covered, null, 'covered must be null — nothing was measured');
+    assert.ok(!('uncovered' in parsed), 'uncovered must be OMITTED — the list was never built');
+    assert.ok(
+      Array.isArray(parsed.unreadable) && parsed.unreadable.includes('D-02'),
+      `the ids that failed to parse must be carried as unreadable, got: ${JSON.stringify(parsed.unreadable)}`,
+    );
+    assert.ok(
+      (parsed.message || '').includes('D-02'),
+      'the message must name the unreadable id',
+    );
+  });
+
+  test('#4794: a directory as the context path fails closed naming the path', (t) => {
+    // The issue's repro 2: the adjacent same-looking positionals swapped.
+    // fs.existsSync is true for a directory; the read yields nothing; the gate
+    // used to certify passed:true on a phase full of decisions.
+    writeContextFile(phaseDir, [
+      '# Context',
+      '',
+      '<decisions>',
+      '',
+      '- **D-01: The list shows one row per contact.** Nothing else changes.',
+      '',
+      '</decisions>',
+    ].join('\n'));
+    writePlanFile4794('01', '# Plan\n## Objective\nImplement feature.\n');
+
+    const contextPath = phaseDir; // the DIRECTORY, swapped for the file
+    const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+    const parsed = JSON.parse(result.output || '{}');
+
+    assert.strictEqual(parsed.passed, false, 'must fail closed');
+    assert.strictEqual(parsed.skipped, false, 'must not be a green skip');
+    assert.ok(
+      (parsed.message || '').includes(contextPath) || (parsed.reason || '').includes('not a file'),
+      `the answer must name the path and what it is, got: ${JSON.stringify(parsed)}`,
+    );
+  });
+
+  test('#4794: extractDecisions surfaces the ids of bullets that failed to parse', () => {
+    const { extractDecisions: extract } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'decisions.cjs'));
+    const md = contentWith([
+      '**D-01: The list shows one row per contact.** Nothing else changes.',
+      '**D-02: Two managers creating a card for the same pair: the second is rejected.** One pair, one card.',
+    ]);
+    const r = extract(md);
+    assert.strictEqual(r.outcome, 'could-not-parse');
+    assert.ok(Array.isArray(r.unreadableIds) && r.unreadableIds.includes('D-02'),
+      `unreadableIds must carry the failed bullet's id, got: ${JSON.stringify(r.unreadableIds)}`);
+    assert.ok(!r.unreadableIds.includes('D-01'), 'the parsed bullet is not unreadable');
+  });
+});
