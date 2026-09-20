@@ -138,7 +138,20 @@ describe('#4777 scan', () => {
   test.afterEach(() => { if (dir) cleanup(dir); dir = null; });
 });
 
-describe('#4777 review Minor — canonical forms against a quoted value', () => {
+// bash availability is probed, never assumed. These two arms are the only ones
+// that *execute* a frozen form instead of matching its text, and the spawn named
+// `/bin/bash` by absolute path — an ENOENT on Windows, where this suite runs but
+// that path does not exist.
+const NO_BASH = (() => {
+  if (process.platform === 'win32') return 'POSIX-only: these arms execute the frozen forms under bash';
+  const probe = require('node:child_process').spawnSync('bash', ['-c', 'exit 0'], {
+    encoding: 'utf8',
+    timeout: QUICK_SPAWN_TIMEOUT_MS,
+  });
+  return !probe.error && probe.status === 0 ? false : 'bash is not available on this host';
+})();
+
+describe('#4777 review Minor — canonical forms against a quoted value', { skip: NO_BASH }, () => {
   // Both frozen forms assume an unquoted argument-hint (every argument-hint
   // in the repo documents that as primary). Neither strips a surrounding
   // quote, so a quoted value reproduces the exact pre-fix defect
@@ -152,7 +165,7 @@ describe('#4777 review Minor — canonical forms against a quoted value', () => 
 
   function runForm(form, argumentsValue) {
     const script = `ARGUMENTS='${argumentsValue.replace(/'/g, "'\\''")}'\n${form}\necho -n "$PHASE_ARG"`;
-    return execFileSync('/bin/bash', ['-c', script], { encoding: 'utf8', timeout: QUICK_SPAWN_TIMEOUT_MS });
+    return execFileSync('bash', ['-c', script], { encoding: 'utf8', timeout: QUICK_SPAWN_TIMEOUT_MS });
   }
 
   test('positional: a quoted --ws value leaves --ws tokens in PHASE_ARG instead of stripping them', () => {
