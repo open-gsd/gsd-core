@@ -21512,3 +21512,66 @@ describe('#4138: state begin-phase guards its required --phase argument', () => 
     );
   });
 });
+
+// ─── #4823: the Current Plan reset must not rewrite prose outside the section ──
+
+describe('#4823: Current Plan reset is scoped to the Current Position section', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createFixture();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('a hard-wrapped prose line starting with plan: is never rewritten by phase complete', () => {
+    // The issue's measured damage: a hard-wrapped bullet in an unrelated
+    // notes section began with `plan:**` — the whole-body plain branch
+    // matched it (case-insensitive, first match wins) and rewrote the rest
+    // of the line to 'Not started'. The reset must only touch the Current
+    // Position section.
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, [
+      '# Project State',
+      '',
+      '**Current Phase:** 2',
+      '**Status:** Executing Phase 2',
+      '',
+      '## Current Position',
+      '',
+      'Phase: 2 — Two',
+      'Plan: **2 of 3 complete**',
+      '',
+      '## Accumulated Context',
+      '',
+      '- **One deviation beyond',
+      'plan:** `foo()` was found and fixed as a Rule 1 bug.',
+      '',
+      '## Phase 2 notes',
+      '',
+      'Plan: **3 of 3 complete**',
+      '',
+    ].join('\n'));
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '02-api');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '# Plan 1\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '# Summary 1\n');
+    writePassedVerification(tmpDir, '02-api', '02');
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n## Phase 2: API\n\n- [ ] Phase 2: API Layer\n'
+    );
+
+    const result = runGsdTools('phase complete 2', tmpDir);
+    assert.ok(result.success, `phase complete failed: ${result.error}`);
+
+    const stateAfter = fs.readFileSync(statePath, 'utf-8');
+    assert.ok(
+      stateAfter.includes('plan:** `foo()` was found and fixed as a Rule 1 bug.'),
+      'the hard-wrapped prose line must be byte-identical — the plain-branch reset must never cross into narrative',
+    );
+  });
+});
