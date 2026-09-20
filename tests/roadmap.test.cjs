@@ -5396,3 +5396,93 @@ describe('#4786: suffix-less hand-written plan lists are recognized, not duplica
     );
   });
 });
+
+// ─── #4801: archived phase directories resolve in init.manager ──────────────
+
+describe('#4801: init.manager resolves archived phase directories', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-4801-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function writeState4801() {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nstatus: active\n---\n# State\n');
+  }
+
+  function writeRoadmap4801() {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), [
+      '# Roadmap',
+      '',
+      '### Phase 3: shipped',
+      '',
+      'Goal: shipped before archive',
+      '',
+      '### Phase 5: live',
+      '',
+      'Goal: in progress',
+      '',
+      '### Phase 7: never started',
+      '',
+      'Goal: not started',
+      '',
+    ].join('\n'));
+  }
+
+  function seedArchivedPhase() {
+    // An archived, shipped phase: PLAN + SUMMARY + a NEWER passing VERIFICATION
+    // (mtime discipline per the #3057 fixture — the verification must postdate
+    // the summary for the completion projection to read it as fresh).
+    const arch = path.join(tmpDir, '.planning', 'milestones', 'v0.1-phases', '03-shipped');
+    fs.mkdirSync(arch, { recursive: true });
+    fs.writeFileSync(path.join(arch, '03-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(arch, '03-01-SUMMARY.md'), '# Summary\n');
+    fs.writeFileSync(path.join(arch, '03-VERIFICATION.md'), '---\nstatus: passed\n---\n\n# Verification\n');
+    const older = new Date('2026-01-01T00:00:00.000Z');
+    const newer = new Date('2026-01-01T00:01:00.000Z');
+    fs.utimesSync(path.join(arch, '03-01-SUMMARY.md'), older, older);
+    fs.utimesSync(path.join(arch, '03-VERIFICATION.md'), newer, newer);
+  }
+
+  test('#4801: an archived phase directory resolves and reports complete', () => {
+    writeState4801();
+    writeRoadmap4801();
+    seedArchivedPhase();
+    // A live in-progress phase and a never-started phase for contrast.
+    const live = path.join(tmpDir, '.planning', 'phases', '05-live');
+    fs.mkdirSync(live, { recursive: true });
+    fs.writeFileSync(path.join(live, '05-01-PLAN.md'), '# Plan\n');
+
+    const output = JSON.parse(runGsdTools(['query', 'init.manager'], tmpDir).output);
+    const rows = new Map(output.phases.map((p) => [String(p.number), p]));
+
+    const archived = rows.get('3');
+    assert.ok(archived, 'the archived phase must appear in the enumeration');
+    assert.notStrictEqual(archived.disk_status, 'no_directory',
+      'an archived phase directory must resolve — no_directory means never started');
+    assert.strictEqual(archived.phase_complete, true,
+      'an archived phase with a passed verification reports complete');
+    const neverStarted = rows.get('7');
+    assert.strictEqual(neverStarted.disk_status, 'no_directory',
+      'a never-started phase still reports no_directory');
+  });
+
+  test('#4801: a live in-progress phase is unchanged by the archived-resolution swap', () => {
+    writeState4801();
+    writeRoadmap4801();
+    seedArchivedPhase();
+    const live = path.join(tmpDir, '.planning', 'phases', '05-live');
+    fs.mkdirSync(live, { recursive: true });
+    fs.writeFileSync(path.join(live, '05-01-PLAN.md'), '# Plan\n');
+
+    const output = JSON.parse(runGsdTools(['query', 'init.manager'], tmpDir).output);
+    const row = output.phases.find((p) => String(p.number) === '5');
+    assert.strictEqual(row.phase_complete, false);
+    assert.ok(['planned', 'empty', 'no_directory'].includes(row.disk_status),
+      `live plan-less phase stays incomplete; got ${row.disk_status}`);
+  });
+});
