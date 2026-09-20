@@ -2677,6 +2677,8 @@ describe('bug #950: quick-task SUMMARY must carry status: complete', () => {
 // ─── #4802: an unparseable frontmatter block must not be spliced over ──────
 
 describe('#4802: acknowledge refuses targets whose frontmatter fails to parse', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
   let tmpDir;
 
   beforeEach(() => { tmpDir = createTempProject('gsd-4802-'); });
@@ -2702,6 +2704,10 @@ describe('#4802: acknowledge refuses targets whose frontmatter fails to parse', 
     '---',
   ].join('\n');
 
+  function ack(tmpDir, args) {
+    return runGsdTools(['audit-open', 'acknowledge', ...args, '--json'], tmpDir);
+  }
+
   test('threads: an unparseable-frontmatter target is refused, file byte-identical', () => {
     const threadsDir = planningPath('threads');
     fs.mkdirSync(threadsDir, { recursive: true });
@@ -2712,7 +2718,7 @@ describe('#4802: acknowledge refuses targets whose frontmatter fails to parse', 
     const result = ack(tmpDir, ['--category', 'threads', '--slug', 'broken-yaml', '--milestone', 'v1.0']);
     assert.ok(!result.success, `acknowledge must refuse; stdout: ${result.output}\nstderr: ${result.error}`);
     assert.ok(
-      (result.error || '').includes('unparseable') && (result.error || '').includes('broken-yaml.md'),
+      (result.error || '').includes('not parseable YAML') && (result.error || '').includes('broken-yaml.md'),
       `the refusal must name the file and the unparseable frontmatter; stderr: ${result.error}`,
     );
     assert.strictEqual(fs.readFileSync(filePath, 'utf-8'), before,
