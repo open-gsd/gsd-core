@@ -385,7 +385,12 @@ for HASH in $(printf '%s' "$INCLUDED_COMMITS"); do
   # third-bucket path containing a space (`.planning/My Notes.md`) becomes the
   # fragments `.planning/My` and `Notes.md`, neither of which names the real
   # conflicted file, so nothing is resolved and the run aborts with exactly the
-  # #4606 failure this block exists to prevent. Same word-split class as #4109.
+  # #4606 failure this block exists to prevent. (Adjacent to #4109 above, but
+  # not the same defect: that one was cross-shell splitting consistency — bash
+  # splits a bare `$VAR`, zsh does not — and left whitespace-in-path safety
+  # untouched. A path containing a literal NEWLINE is still not covered, since
+  # newline is the record separator here; that limit is inherited from every
+  # `git diff --name-only` reader in this recipe, not introduced here.)
   # Snapshot-then-iterate (rather than piping) both keeps the list stable while
   # the body restages paths and keeps the body in THIS shell, not a subshell.
   #
