@@ -144,6 +144,7 @@ module.exports = {
   "tests/kimi-agent-converter.test.cjs",
   "tests/kimi-upgrades.test.cjs",
   "tests/kimi-variant-disambiguation.test.cjs",
+  "tests/lint-phase-arg-assignment.test.cjs",
   "tests/lint-workflow-shellcheck-fetch.test.cjs",
   "tests/live-config-guard.test.cjs",
   "tests/lockfile-cve-audit.test.cjs",
