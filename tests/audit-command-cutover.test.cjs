@@ -2673,3 +2673,63 @@ describe('bug #950: quick-task SUMMARY must carry status: complete', () => {
     });
   });
 }
+
+// ─── #4802: an unparseable frontmatter block must not be spliced over ──────
+
+describe('#4802: acknowledge refuses targets whose frontmatter fails to parse', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject('gsd-4802-'); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  function planningPath(...segs) {
+    return path.join(tmpDir, '.planning', ...segs);
+  }
+
+  // A real YAML SYNTAX error (the issue's second shape: an invalid backslash
+  // escape inside a double-quoted value). Note the issue's first shape
+  // (unescaped colons inside a double-quoted value) is actually LEGAL YAML —
+  // double-quoted scalars may contain colons — so the fixture uses a shape
+  // that genuinely fails to parse. Empirically verified against the built
+  // frontmatter.cjs: this content returns an object marked
+  // FRONTMATTER_UNPARSEABLE.
+  const UNPARSEABLE_FM = [
+    '---',
+    'status: complete',
+    'ref: "bad\\q escape"',
+    'key-decisions:',
+    '  - decision one',
+    '---',
+  ].join('\n');
+
+  test('threads: an unparseable-frontmatter target is refused, file byte-identical', () => {
+    const threadsDir = planningPath('threads');
+    fs.mkdirSync(threadsDir, { recursive: true });
+    const filePath = path.join(threadsDir, 'broken-yaml.md');
+    const before = UNPARSEABLE_FM + '\n# Thread\n';
+    fs.writeFileSync(filePath, before, 'utf-8');
+
+    const result = ack(tmpDir, ['--category', 'threads', '--slug', 'broken-yaml', '--milestone', 'v1.0']);
+    assert.ok(!result.success, `acknowledge must refuse; stdout: ${result.output}\nstderr: ${result.error}`);
+    assert.ok(
+      (result.error || '').includes('unparseable') && (result.error || '').includes('broken-yaml.md'),
+      `the refusal must name the file and the unparseable frontmatter; stderr: ${result.error}`,
+    );
+    assert.strictEqual(fs.readFileSync(filePath, 'utf-8'), before,
+      'the file must be byte-identical — no splice may discard frontmatter');
+  });
+
+  test('uat_gaps (phase-scoped): an unparseable-frontmatter target is refused, file byte-identical', () => {
+    const ctxDir = planningPath('phases', '01-init');
+    fs.mkdirSync(ctxDir, { recursive: true });
+    const filePath = path.join(ctxDir, 'CONTEXT.md');
+    const before = UNPARSEABLE_FM + '\n# Context\n';
+    fs.writeFileSync(filePath, before, 'utf-8');
+    fs.writeFileSync(path.join(ctxDir, '01-01-PLAN.md'), '# Plan\n');
+
+    const result = ack(tmpDir, ['--category', 'uat_gaps', '--phase', '01', '--file', 'CONTEXT.md', '--milestone', 'v1.0']);
+    assert.ok(!result.success, `acknowledge must refuse; stdout: ${result.output}\nstderr: ${result.error}`);
+    assert.strictEqual(fs.readFileSync(filePath, 'utf-8'), before,
+      'the file must be byte-identical — no splice may discard frontmatter');
+  });
+});
