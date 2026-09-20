@@ -595,7 +595,7 @@ describe('runtime-launcher-parity (#373)', () => {
     }
   });
 
-  // ─── (E) PATH fallback behavioral (#3668) ────────────────────────────────
+  // ─── (E) PATH fallback behavioral (#3668, identity-gated since #4834) ─────
   test('(E) PATH fallback: uses installed gsd_run when no local gsd-tools.cjs present', () => {
     // Create a temp dir with NO local gsd-core/bin/gsd-tools.cjs.
     // Place an executable gsd_run stub on a dedicated PATH dir.
@@ -605,19 +605,36 @@ describe('runtime-launcher-parity (#373)', () => {
     // The predecessor package `get-shit-done-cc` publishes a colliding
     // `gsd-tools` bin, so the launcher resolves `gsd_run`, which only this
     // package publishes.
+    //
+    // #4834: the PATH arm is gated on runtime-identity proof, so the stub must
+    // answer `runtime-identity --raw` the way a real same-package install does
+    // — a stub without the verb now falls through to the hard error ((D2)
+    // pins that side). HOME is pinned to an empty fake home so the reorder
+    // (config homes ahead of PATH) cannot resolve through the runner's real
+    // $HOME before the PATH arm is reached.
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd 373 pathfb '));
+    const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd 373 pathfb home '));
     try {
       const pathBinDir = path.join(base, 'bin');
       fs.mkdirSync(pathBinDir, { recursive: true });
 
-      // Stub installed gsd_run binary that prints a marker
+      // Stub installed gsd_run binary: proves identity, then prints a marker
       const stubPath = path.join(pathBinDir, 'gsd_run');
-      fs.writeFileSync(stubPath, '#!/bin/sh\necho "installed:$*"\n');
+      fs.writeFileSync(
+        stubPath,
+        '#!/bin/sh\n' +
+          'if [ "$1" = "runtime-identity" ] && [ "$2" = "--raw" ]; then\n' +
+          '  echo \'{"packageName":"@opengsd/gsd-core","version":"installed-test"}\'\n' +
+          'else\n' +
+          '  echo "installed:$*"\n' +
+          'fi\n',
+      );
       fs.chmodSync(stubPath, 0o755);
 
       // RUNTIME_DIR points to base — no gsd-core/bin/gsd-tools.cjs there
       const snippet = fs.readFileSync(SNIPPET_FILE, 'utf8');
       const scriptContent =
+        `unset GSD_TOOLS\n` +
         `export RUNTIME_DIR=${JSON.stringify(base)}\n` +
         snippet +
         `\nprintf "GSD_TOOLS=%s\\n" "$GSD_TOOLS"\n` +
@@ -627,7 +644,10 @@ describe('runtime-launcher-parity (#373)', () => {
       fs.writeFileSync(scriptPath, scriptContent);
 
       const stdout = runBashFile(scriptPath, {
-        env: { PATH: `${pathBinDir}${path.delimiter}${process.env.PATH || ''}` },
+        env: {
+          PATH: `${pathBinDir}${path.delimiter}${process.env.PATH || ''}`,
+          HOME: emptyHome,
+        },
       });
 
       // The PATH fallback must have resolved GSD_TOOLS to the stub binary.
@@ -654,13 +674,242 @@ describe('runtime-launcher-parity (#373)', () => {
       );
     } finally {
       cleanup(base);
+      cleanup(emptyHome);
     }
+  });
+
+  // ─── (K) foreign PATH gsd_run cannot hijack a local install (#4834) ───────
+  test('(K) a foreign gsd_run on PATH cannot hijack a runtime-config-home install (#4834)', (t) => {
+    // The issue's shape: a local install (here at the $HOME/.claude config
+    // home, the same arm 3 the installed-copy path bakes an absolute prefix
+    // into) plus an older foreign gsd_run earlier on PATH. The PATH arm must
+    // prove identity before it may win; a tool without the runtime-identity
+    // verb falls through so the local install resolves instead.
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-home-'));
+    const fakeRuntime = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-rt-'));
+    const foreignBin = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-foreign-'));
+    try {
+      // Local install at the config home: proves identity, answers verbs.
+      const localBin = path.join(fakeHome, '.claude', 'gsd-core', 'bin');
+      fs.mkdirSync(localBin, { recursive: true });
+      fs.writeFileSync(
+        path.join(localBin, 'gsd-tools.cjs'),
+        '#!/usr/bin/env node\n' +
+          'const a = process.argv.slice(2);\n' +
+          'if (a[0] === "runtime-identity" && a[1] === "--raw") {\n' +
+          '  console.log(\'{"packageName":"@opengsd/gsd-core","version":"1.14.0-test"}\');\n' +
+          '} else {\n' +
+          '  console.log("LOCAL:" + a.join(","));\n' +
+          '}\n',
+      );
+      fs.chmodSync(path.join(localBin, 'gsd-tools.cjs'), 0o755);
+
+      // Foreign/older gsd_run first on PATH: no runtime-identity verb.
+      const foreignStub = path.join(foreignBin, 'gsd_run');
+      fs.writeFileSync(foreignStub, '#!/bin/sh\necho "FOREIGN:$*"\n');
+      fs.chmodSync(foreignStub, 0o755);
+
+      const snippet = fs.readFileSync(SNIPPET_FILE, 'utf8');
+      const scriptContent =
+        `unset GSD_TOOLS\n` +
+        `export RUNTIME_DIR=${JSON.stringify(fakeRuntime)}\n` +
+        `export HOME=${JSON.stringify(fakeHome)}\n` +
+        snippet +
+        `\nprintf "GSD_TOOLS=%s\\n" "$GSD_TOOLS"\n` +
+        `gsd_run query git.base-branch --is-protected master\n`;
+
+      const scriptPath = path.join(fakeRuntime, 'test-4834-hijack.sh');
+      fs.writeFileSync(scriptPath, scriptContent);
+
+      const { isolatedPath, nodeBinDir } = buildIsolatedPath();
+      t.after(() => cleanup(nodeBinDir));
+      const testPath = [foreignBin, isolatedPath].join(path.delimiter);
+
+      const stdout = runBashFile(scriptPath, {
+        env: { PATH: testPath, HOME: fakeHome },
+      });
+
+      const normStdout = stdout.replace(/\\/g, '/');
+      assert.ok(
+        normStdout.includes('.claude/gsd-core/bin/'),
+        `Expected GSD_TOOLS to resolve into the local install at .claude/gsd-core/bin/, got:\n${stdout.trim()}`,
+      );
+      // The issue's downstream contract: the LOCAL tool is what answers
+      // `query git.base-branch --is-protected` (a real 1.14.0 tool then honors
+      // git.allow_default_branch_commits — its side of #4834's Actual block).
+      assert.ok(
+        stdout.includes('LOCAL:query,git.base-branch,--is-protected,master'),
+        `Expected the local tool to answer the query, got:\n${stdout.trim()}`,
+      );
+      assert.ok(
+        !stdout.includes('FOREIGN:'),
+        `Expected the foreign PATH stub never to be invoked, got:\n${stdout.trim()}`,
+      );
+    } finally {
+      cleanup(fakeHome);
+      cleanup(fakeRuntime);
+      cleanup(foreignBin);
+    }
+  });
+
+  // ─── (D2) identity-gated PATH arm fails closed (#4834) ────────────────────
+  test('(D2) a foreign gsd_run on PATH with no local install still hard-errors (#4834)', (t) => {
+    // Without the gate, the foreign tool is accepted silently (warning only)
+    // and the verb runs against it. With the gate, resolution falls through
+    // every remaining arm and lands in the hard error — the fail-closed
+    // terminal the #3146 design names.
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-nohome-'));
+    const fakeRuntime = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-nort-'));
+    const foreignBin = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-nofx-'));
+    try {
+      const foreignStub = path.join(foreignBin, 'gsd_run');
+      fs.writeFileSync(foreignStub, '#!/bin/sh\necho "FOREIGN:$*"\n');
+      fs.chmodSync(foreignStub, 0o755);
+
+      const snippet = fs.readFileSync(SNIPPET_FILE, 'utf8');
+      const scriptContent =
+        `unset GSD_TOOLS\n` +
+        `export RUNTIME_DIR=${JSON.stringify(fakeRuntime)}\n` +
+        `export HOME=${JSON.stringify(fakeHome)}\n` +
+        snippet +
+        `\ngsd_run ping test\n`;
+
+      const scriptPath = path.join(fakeRuntime, 'test-4834-allfail.sh');
+      fs.writeFileSync(scriptPath, scriptContent);
+
+      const isolated = buildIsolatedPath();
+      t.after(() => cleanup(isolated.nodeBinDir));
+      const testPath = [foreignBin, isolated.isolatedPath].join(path.delimiter);
+
+      const r = runHookSeam(scriptPath, [], {
+        interpreter: 'bash',
+        env: snippetEnv({ PATH: testPath, HOME: fakeHome }),
+      });
+
+      assert.ok(r.exitCode !== 0, 'Expected non-zero exit when only a foreign gsd_run resolves and no local install exists');
+      assert.ok(
+        (r.stderr || '').includes('ERROR: gsd-tools.cjs not found'),
+        `Expected stderr to contain "ERROR: gsd-tools.cjs not found", got: ${(r.stderr || '').trim()}`,
+      );
+    } finally {
+      cleanup(fakeHome);
+      cleanup(fakeRuntime);
+      cleanup(foreignBin);
+    }
+  });
+
+  // ─── (L) config-home install outranks an identity-proving PATH gsd_run (#4834) ──
+  test('(L) a runtime-config-home install outranks an identity-proving gsd_run on PATH (#4834)', (t) => {
+    // Reorder semantics: installer-managed config-home installs win even when
+    // the PATH entry is genuine (identity-proving) — a stale-but-real global
+    // must not shadow the local install the same way the pre-1.7.0 one did.
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-l-home-'));
+    const fakeRuntime = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-l-rt-'));
+    const pathBinDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4834-l-path-'));
+    try {
+      const localBin = path.join(fakeHome, '.claude', 'gsd-core', 'bin');
+      fs.mkdirSync(localBin, { recursive: true });
+      fs.writeFileSync(
+        path.join(localBin, 'gsd-tools.cjs'),
+        '#!/usr/bin/env node\n' +
+          'const a = process.argv.slice(2);\n' +
+          'if (a[0] === "runtime-identity" && a[1] === "--raw") {\n' +
+          '  console.log(\'{"packageName":"@opengsd/gsd-core","version":"1.14.0-test"}\');\n' +
+          '} else {\n' +
+          '  console.log("LOCAL:" + a.join(","));\n' +
+          '}\n',
+      );
+      fs.chmodSync(path.join(localBin, 'gsd-tools.cjs'), 0o755);
+
+      const genuineStub = path.join(pathBinDir, 'gsd_run');
+      fs.writeFileSync(
+        genuineStub,
+        '#!/bin/sh\n' +
+          'if [ "$1" = "runtime-identity" ] && [ "$2" = "--raw" ]; then\n' +
+          '  echo \'{"packageName":"@opengsd/gsd-core","version":"1.13.0-global"}\'\n' +
+          'else\n' +
+          '  echo "PATHSTUB:$*"\n' +
+          'fi\n',
+      );
+      fs.chmodSync(genuineStub, 0o755);
+
+      const snippet = fs.readFileSync(SNIPPET_FILE, 'utf8');
+      const scriptContent =
+        `unset GSD_TOOLS\n` +
+        `export RUNTIME_DIR=${JSON.stringify(fakeRuntime)}\n` +
+        `export HOME=${JSON.stringify(fakeHome)}\n` +
+        snippet +
+        `\nprintf "GSD_TOOLS=%s\\n" "$GSD_TOOLS"\n` +
+        `gsd_run query state.json\n`;
+
+      const scriptPath = path.join(fakeRuntime, 'test-4834-local-wins.sh');
+      fs.writeFileSync(scriptPath, scriptContent);
+
+      const { isolatedPath, nodeBinDir } = buildIsolatedPath();
+      t.after(() => cleanup(nodeBinDir));
+      const testPath = [pathBinDir, isolatedPath].join(path.delimiter);
+
+      const stdout = runBashFile(scriptPath, {
+        env: { PATH: testPath, HOME: fakeHome },
+      });
+
+      const normStdout = stdout.replace(/\\/g, '/');
+      assert.ok(
+        normStdout.includes('.claude/gsd-core/bin/'),
+        `Expected the config-home install to outrank the PATH entry, got:\n${stdout.trim()}`,
+      );
+      assert.ok(
+        stdout.includes('LOCAL:query,state.json'),
+        `Expected the local tool to answer the query, got:\n${stdout.trim()}`,
+      );
+      assert.ok(
+        !stdout.includes('PATHSTUB:'),
+        `Expected the identity-proving PATH stub not to be invoked, got:\n${stdout.trim()}`,
+      );
+    } finally {
+      cleanup(fakeHome);
+      cleanup(fakeRuntime);
+      cleanup(pathBinDir);
+    }
+  });
+
+  // ─── (M) arm order and gate structure (#4834) ─────────────────────────────
+  test('(M) snippet arms: config homes precede the PATH arm, and the PATH arm is identity-gated (#4834)', () => {
+    // Structural companion to (K)/(L): the behavioral fixtures pin WHAT
+    // resolves; this pins the arm ORDER and the gate so a future edit cannot
+    // silently re-hoist PATH above the config homes or drop the identity
+    // proof. Shipped-text-is-the-product: the snippet's text IS the deployed
+    // resolver for every workflow that inlines it.
+    //
+    // allow-test-rule: structural-regression-guard (#4834)
+    const snippetContent = fs.readFileSync(SNIPPET_FILE, 'utf8');
+    const helperDefPos = snippetContent.indexOf('_gsd_homes() {');
+    const homesArmPos = snippetContent.indexOf('elif _gsd_homes;');
+    const pathArmPos = snippetContent.indexOf('command -v gsd_run');
+    const gatePos = snippetContent.indexOf('_gsd_id_ok "$_G"');
+
+    assert.ok(helperDefPos !== -1, 'snippet must define the _gsd_homes helper (shared config-home candidate list)');
+    assert.ok(homesArmPos !== -1, 'snippet must probe config homes through _gsd_homes in the elif chain');
+    assert.ok(pathArmPos !== -1, 'snippet must keep the PATH fallback arm');
+    assert.ok(gatePos !== -1, 'snippet must gate the PATH arm on _gsd_id_ok "$_G"');
+    assert.ok(
+      homesArmPos < pathArmPos,
+      `config-home arm (at ${homesArmPos}) must precede the PATH arm (at ${pathArmPos}) — local installs outrank PATH`,
+    );
+    const acceptPos = snippetContent.indexOf('GSD_TOOLS="$_G"', gatePos);
+    assert.ok(
+      acceptPos !== -1,
+      'the PATH arm must still assign GSD_TOOLS="$_G" after the gate',
+    );
   });
 
   // ─── (G) ~/.claude fallback arm is present (#211) ───────────────────────────
   test('(G) snippet and all propagated workflow .md files contain the $HOME/.claude fallback arm between PATH check and hard error', () => {
     // The resolution order must be:
-    //   (1) local/RUNTIME_DIR  →  (2) PATH  →  (3) $HOME/.claude/gsd-core/bin  →  (4) hard error
+    //   (1) local/RUNTIME_DIR  →  (2) runtime config homes  →  (3) identity-gated PATH  →  (4) hard error
+    // (#4834 moved the config homes ahead of PATH and gated PATH on
+    // runtime-identity proof; the probe itself still sits between the
+    // `command -v gsd_run` elif and the hard-error else branch.)
     // We probe for .claude/gsd-core/bin (using ${_GSD_SHIM_NAME} indirection)
     // between the `command -v gsd_run` elif and the hard-error else branch.
     const CLAUDE_HOME_PROBE = '.claude/gsd-core/bin/';
@@ -1061,8 +1310,8 @@ describe('runtime-launcher-parity — agents (#1041)', () => {
  * (B) A representative propagated workflow file contains the ~/.claude fallback arm.
  * (C) Behavioral: when RUNTIME_DIR misses and gsd_run is NOT on PATH,
  *     a stub at $HOME/.claude/gsd-core/bin/gsd-tools.cjs is resolved and invoked.
- * (D) The resolution order is preserved: local -> PATH -> ~/.claude -> hard error.
- *     When all three miss, exit non-zero.
+ * (D) All arms miss -> hard error (#4834 reordered: local -> config homes ->
+ *     identity-gated PATH -> hard error). When all of them miss, exit non-zero.
  */
 
 // allow-test-rule: structural-regression-guard (see #211)
