@@ -295,6 +295,22 @@ describe('graphify graph_path override — status', () => {
     assert.strictEqual(result.exists, false);
     assert.strictEqual(result.graph_path, path.join(planningDir, 'graphs', 'graph.json'));
   });
+
+  // #4836 review Minor 1: a present-but-unparseable graph.json hits neither the
+  // `exists:false` nor the `exists:true` branch, so the CLI-first prompt gate
+  // ("if exists is false, skip") does not catch it and the CLI call would
+  // interpolate the literal `<graph>` placeholder without a real path to
+  // substitute. graph_path must be present here too.
+  test('present + unparseable → error response still names graph_path', () => {
+    const def = path.join(planningDir, 'graphs', 'graph.json');
+    fs.mkdirSync(path.dirname(def), { recursive: true });
+    fs.writeFileSync(def, '{not valid json', 'utf8');
+
+    const result = graphifyStatus(tmpDir);
+    assert.strictEqual(result.exists, undefined);
+    assert.ok(result.error, 'must report the parse failure');
+    assert.strictEqual(result.graph_path, def);
+  });
 });
 
 // ─── diff + writeSnapshot (snapshot travels with the configured graph) ────────

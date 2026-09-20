@@ -605,7 +605,10 @@ function graphifyStatus(cwd: string): unknown {
   const stat = fs.statSync(graphPath);
   const graph = safeReadJson(graphPath);
   if (!graph) {
-    return { error: 'Failed to parse graph.json' };
+    // Still surface graph_path (#4836 Minor 1): callers gate on `exists`, not
+    // on this outcome, so without it they'd fall through to the CLI-first
+    // branch with no --graph value to substitute for the <graph> placeholder.
+    return { error: 'Failed to parse graph.json', graph_path: graphPath };
   }
 
   const STALE_MS = 24 * 60 * 60 * 1000; // 24 hours
