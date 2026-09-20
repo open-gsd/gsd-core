@@ -3041,3 +3041,89 @@ describe('parseDecisions hardening — pathological single bullets terminate cor
     assert.strictEqual(r.decisions[0].text, text);
   });
 });
+
+// ─── #4786 sibling family: code spans in the bold lead-in are opaque to the separator grammar (#4788) ──
+
+describe('#4788: code spans in the bold lead-in are opaque to the separator grammar', () => {
+  // Decision titles name modules, paths and globs — `node:http`, `*-UAT.md` —
+  // and inside backticks a `:` is not a separator and a `*` is not emphasis.
+  // The `[^:*]*` runs treated both as grammar characters, so the bullet fell
+  // to the parse-miss guard and a single miss forced outcome:"could-not-parse"
+  // (which blocks check.decision-coverage-plan during plan-phase).
+  const contentWith = (bullets) => `<decisions>\n${bullets.map((b) => '- ' + b).join('\n')}\n</decisions>`;
+
+  test('colon-immediate form: a code span containing a colon sits in the pre-separator run', () => {
+    const md = contentWith([
+      '**D-12 `cfg:a`:** does the thing',
+    ]);
+    const ds = parseDecisions(md);
+    assert.strictEqual(ds.length, 1, `expected the bullet to parse, got: ${JSON.stringify(ds)}`);
+    assert.strictEqual(ds[0].id, 'D-12');
+  });
+
+  test('titled-colon form: a code span containing a colon parses (the D-91 shape)', () => {
+    const md = contentWith([
+      '**D-91: Serve the hub over `node:http` with no framework.** Dropped: colon inside a code span.',
+    ]);
+    const ds = parseDecisions(md);
+    assert.strictEqual(ds.length, 1);
+    assert.strictEqual(ds[0].id, 'D-91');
+    assert.ok(ds[0].text.includes('Dropped: colon inside a code span'), 'body after the closing ** must be preserved');
+  });
+
+  test('titled-colon form: a code span containing an asterisk parses (the D-119 shape)', () => {
+    const md = contentWith([
+      '**D-119: UAT reports are named `*-UAT.md` beside the plan.** Dropped: asterisk inside a code span.',
+    ]);
+    const ds = parseDecisions(md);
+    assert.strictEqual(ds.length, 1);
+    assert.strictEqual(ds[0].id, 'D-119');
+  });
+
+  test('em-dash form: a code span containing an asterisk parses', () => {
+    const md = contentWith([
+      '**D-13 `*-UAT.md` — the naming rule** body text',
+    ]);
+    const ds = parseDecisions(md);
+    assert.strictEqual(ds.length, 1);
+    assert.strictEqual(ds[0].id, 'D-13');
+  });
+
+  test('#1639 negative: a bare second colon before the closing ** still fails loud', () => {
+    const r = extractDecisions(contentWith([
+      '**D-07 ratio 3:1:** body',
+    ]));
+    assert.strictEqual(r.outcome, 'could-not-parse', 'the genuinely-malformed bullet must still fail loud');
+  });
+
+  test('an unterminated backtick in the lead-in now fails loud (pinned trade-off)', () => {
+    // Before the span-aware runs, a lone backtick was an ordinary character and
+    // the bullet parsed. The span-aware grammar treats an unterminated ` as the
+    // start of an opaque span that never closes — the bullet fails to the
+    // parse-miss guard. Deliberate: fail-loud beats mis-parsing prose as grammar.
+    const r = extractDecisions(contentWith([
+      '**D-11: see `docs.** body',
+    ]));
+    assert.strictEqual(r.outcome, 'could-not-parse');
+  });
+
+  test('a safe code span (no :/* inside) keeps parsing (control)', () => {
+    const md = contentWith([
+      '**D-14: Title with `code`.** body',
+    ]);
+    const ds = parseDecisions(md);
+    assert.strictEqual(ds.length, 1);
+    assert.strictEqual(ds[0].id, 'D-14');
+  });
+
+  test('a real mixed block parses end to end (the issue measured 2 of 36 missing)', () => {
+    const r = extractDecisions(contentWith([
+      '**D-01: Single-line title with no code span.** Parses fine.',
+      '**D-91: Serve the hub over `node:http` with no framework.** Dropped: colon inside a code span.',
+      '**D-119: UAT reports are named `*-UAT.md` beside the plan.** Dropped: asterisk inside a code span.',
+      '**D-92: Serve the hub with no framework.** Uses `node:http`. Parses: the same token in the body.',
+    ]));
+    assert.strictEqual(r.outcome, 'parsed');
+    assert.deepEqual(r.decisions.map((d) => d.id), ['D-01', 'D-91', 'D-119', 'D-92']);
+  });
+});
