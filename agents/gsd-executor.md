@@ -777,8 +777,10 @@ gsd_run query state.record-metric \
   --tasks "${TASK_COUNT}" --files "${FILE_COUNT}"
 
 # Add decisions (extract from SUMMARY.md key-decisions)
+# --phase is required here: without it the verb falls back to STATE.md's global
+# pointer, which misattributes decisions when plans execute out of pointer order (#4763).
 for decision in "${DECISIONS[@]}"; do
-  gsd_run query state.add-decision --summary "${decision}"
+  gsd_run query state.add-decision --phase "${PHASE}" --summary "${decision}"
 done
 
 # Update session info (stopped-at, resume-file; timestamp set automatically)

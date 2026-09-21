@@ -3432,6 +3432,79 @@ describe('cmdStateRecordSession (state record-session)', () => {
     );
   });
 
+  test('#4763: an archive-section Stopped At displaced by the document-wide writer is surfaced', () => {
+    // The writer replaces the FIRST case-insensitive label match anywhere in
+    // the document; a Session Continuity Archive line can precede the live
+    // block. The capture mirrors the writer (document-wide), so the displaced
+    // archive record is surfaced instead of silently lost.
+    const withArchive = [
+      '# Project State',
+      '',
+      '## Session Continuity Archive',
+      '',
+      '**Stopped at:** archived Phase 1 record',
+      '',
+      '## Session',
+      '',
+      '**Last session:** 2024-01-10',
+      '**Resume file:** None',
+    ].join('\n') + '\n';
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), withArchive);
+
+    const result = runGsdTools('state record-session --stopped-at "Phase 2"', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(
+      output.replacedRecord['Stopped At'],
+      'archived Phase 1 record',
+      'the displaced archive line must be surfaced — the writer is document-wide',
+    );
+  });
+
+  test('#4763: a wrapped multi-line Stopped At record is surfaced whole', () => {
+    // stateExtractField alone is first-line-only; the displaced record joins
+    // its continuation lines via stateFieldContinuation so a wrapped handoff
+    // is not truncated in the payload.
+    const wrapped = [
+      '# Project State',
+      '',
+      '## Session',
+      '',
+      '**Last session:** 2024-01-10',
+      '**Stopped at:** Phase 2, Plan 1 — handoff:',
+      'the verifier asked for a re-run of the failing probe',
+      '**Resume file:** None',
+    ].join('\n') + '\n';
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), wrapped);
+
+    const result = runGsdTools('state record-session --stopped-at "Phase 2, Plan 2"', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(
+      output.replacedRecord['Stopped At'],
+      'Phase 2, Plan 1 — handoff:\nthe verifier asked for a re-run of the failing probe',
+      'the displaced record includes its continuation lines',
+    );
+  });
+
+  test('#4763: a case-variant template-default Resume File rewrite is not a displacement', () => {
+    // Defaults match case-insensitively (#944 DWIM): 'none' -> 'None' is
+    // normalization of a template default, not displacement of authored content.
+    const lowerNone = sessionFixture.replace('**Resume file:** None', '**Resume file:** none');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), lowerNone);
+
+    const result = runGsdTools('state record-session --stopped-at "Phase 2, Plan 2"', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      output.replacedRecord['Resume File'] === undefined,
+      `a case-variant template-default rewrite is not a displacement, got: ${result.output}`,
+    );
+  });
+
   // ── #4763 (2): the executor's decision loop must pass --phase explicitly.
   // The #3231/#3481 pointer fallback stays for genuinely phase-less callers,
   // but an in-scope caller relying on the global pointer is exactly the
