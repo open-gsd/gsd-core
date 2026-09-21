@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { setImmediate: yieldToReporter } = require('node:timers/promises');
 const { cleanup, runGsdTools } = require('./helpers.cjs');
 const { runMinimalInstall } = require('./helpers/install-shared.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
@@ -154,7 +155,7 @@ test('#4692: the CLI accepts Vitest TAP and returns the same blocking verdict wi
 });
 
 for (const runtime of ['claude', 'codex', 'antigravity']) {
-  test(`#4692: ${runtime} installed runtime validates TAP and XML without node_modules`, () => {
+  test(`#4692: ${runtime} installed runtime validates TAP and XML without node_modules`, async () => {
     const { root, configDir } = runMinimalInstall({ runtime, scope: 'global' });
     try {
       assert.equal(fs.existsSync(path.join(configDir, 'node_modules')), false);
@@ -169,6 +170,11 @@ for (const runtime of ['claude', 'codex', 'antigravity']) {
         throwIfFailed(result, 'installed RED-evidence classifier');
         assert.equal(JSON.parse(result.stdout).verdict, 'RED_EVIDENCE_OK');
       }
-    } finally { cleanup(root); }
+    } finally {
+      cleanup(root);
+      // The test runner uses --test-force-exit. Let its reporter drain between
+      // synchronous installer/CLI subprocesses instead of losing trailing results.
+      await yieldToReporter();
+    }
   });
 }
