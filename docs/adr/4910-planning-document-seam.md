@@ -497,3 +497,73 @@ Two consequences for the phases:
 - Fail-loud precedent: [ADR-1411](1411-resolution-provenance.md) — report provenance rather than fall open silently
 - Sibling consolidation: [#2121](https://github.com/open-gsd/gsd-core/issues/2121) (`phase-id.cts`)
 - Absorbed: [#4736](https://github.com/open-gsd/gsd-core/issues/4736), [#4793](https://github.com/open-gsd/gsd-core/issues/4793), [#4852](https://github.com/open-gsd/gsd-core/issues/4852), [#4862](https://github.com/open-gsd/gsd-core/issues/4862), [#4899](https://github.com/open-gsd/gsd-core/issues/4899), [#4900](https://github.com/open-gsd/gsd-core/issues/4900), [#4837](https://github.com/open-gsd/gsd-core/issues/4837), [#4865](https://github.com/open-gsd/gsd-core/issues/4865), [#4661](https://github.com/open-gsd/gsd-core/issues/4661), [#4605](https://github.com/open-gsd/gsd-core/issues/4605), [#4606](https://github.com/open-gsd/gsd-core/issues/4606), [#4499](https://github.com/open-gsd/gsd-core/issues/4499)
+
+## Amendment (2026-09-21): a write refuses on a document with any unreadable node
+
+**§5's node-scoping is correct for reads and was never examined for writes.** This amendment adds
+the write rule. The original `## Decision` body is unchanged and §5 still holds as written.
+
+### What was missed
+
+§5 was reasoned entirely from [#4899](https://github.com/open-gsd/gsd-core/issues/4899), which is a
+**read** bug — `roadmap.analyze` returning `phases: []`. Node-scoping is the right answer there: a
+ragged Progress table should not make `phase list` and `init.progress` fail, and it must not, because
+those are the commands a user needs in order to *see what to repair*. A hand-editable format whose
+single typo bricks every command that could diagnose it is a worse tool.
+
+But "the error lives on the node" was then stated unqualified, and it silently licensed something the
+original never considered: **`phase.complete` mutating a `ROADMAP.md` whose Progress table it could
+not read.** That is a partial-view write — a verb committing a change derived from a document it only
+partly understood — and it is a strictly worse failure than the one #4899 reports, because the read
+bug returns a wrong answer while this one *persists* one.
+
+### The rule
+
+**Reads are node-scoped. Writes are document-scoped.**
+
+- A **read** of node *n* resolves independently: it returns *n*'s values, or `could-not-parse` with
+  *n*'s span. A sibling node's parse failure is invisible to it. Unchanged from §5.
+- A **write** — any `PlanningDoc` mutation reaching the serializer — **refuses** when *any* node in
+  the document carries a parse error, whether or not the mutation targets that node. The refusal is a
+  typed `WriteOutcome` naming the unreadable node and its span, never a silent skip and never a
+  partial apply.
+
+The asymmetry is deliberate and is the point of the amendment: a reader is answering a bounded
+question and can honestly answer it from a bounded region, while a writer is asserting that the
+document it emits is the document it read. A writer that cannot read a region cannot make that
+assertion about it, and §3's byte-stability guarantee does not rescue it — splicing untouched bytes
+through faithfully is not the same as knowing they were consistent with the change being written.
+
+### Why not the alternatives
+
+- **Document-scoped for reads too** (strictest, one error type, simplest to test). Rejected: one
+  unreadable table blocks every consumer of that file, including the diagnostic commands, and the
+  artifacts are hand-editable by design — the epic's own constraint.
+- **Node-scoped for writes** (what §5 left implied). Rejected on the partial-view write above.
+- **Refuse only when the mutation's own target node is unreadable.** Rejected because it is the
+  appealing middle and it does not hold: `phase.complete` writes the `**Plans:**` field while
+  *deriving the value it writes* from the plan/summary counts — a different region. The regions a
+  write depends on are not statically the regions it touches, so scoping the refusal to the target
+  node reintroduces the hole for exactly the verbs this epic is about.
+
+### What changes downstream
+
+- **Phase 1** ships both scopes: the node-scoped read error of §5, **and** a document-level
+  `hasUnreadableNodes` predicate the serializer consults before applying any mutation. Both get
+  positive controls.
+- **Phase 2** gains an acceptance criterion that is new, not reworded: *a mutation against a document
+  carrying any unreadable node refuses, with a typed outcome naming that node — and the file on disk
+  is byte-identical afterwards.* The last clause matters: "refused" must mean nothing was written,
+  which is a filesystem assertion, not a return-value one.
+- **Phase 4's census gains a second axis.** It was "every read path that can return `[]` for an input
+  it failed to parse". It is now that, **plus** every write path that can apply a mutation to a
+  document with an unreadable node. Those are different call sets and the phase must publish both
+  counts.
+
+### Provenance
+
+Raised by a maintainer ruling on 2026-09-21, after §5 shipped in
+[#4911](https://github.com/open-gsd/gsd-core/pull/4911). The gap was real: §5's node-scoping had been
+recorded in that PR as an interpretation of #4906's *"an unparseable shape surfaces `could-not-parse`
+with the offending span"* — a sentence that carries no read-or-write qualifier — and the
+interpretation was made without examining the write side at all.
