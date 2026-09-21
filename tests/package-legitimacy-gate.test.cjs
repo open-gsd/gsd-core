@@ -718,7 +718,7 @@ describe('execute-phase.md — orchestrator honors the blocking-human gate', () 
 
   test('auto-select rule for decision is conditional, not unconditional', () => {
     const autoSelectLines = lineIndexes(model.lines, (line) =>
-      hasAllTokens(line, ['decision', 'auto-spawn', 'first', 'option'])
+      hasAllTokens(line, ['decision', 'auto-spawn'])
     );
 
     assert.ok(

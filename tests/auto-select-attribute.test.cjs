@@ -51,7 +51,7 @@ describe('issue #4095: plan-md.md documents auto_select', () => {
     const doc = read(PLAN_MD_DOC);
     assert.match(
       doc,
-      /fails `verify plan-structure` at plan-parse time/,
+      /`verify plan-structure` fails at plan-parse time/,
       'plan-md.md must state an unmatched auto_select fails verify plan-structure at plan-parse time',
     );
     assert.match(

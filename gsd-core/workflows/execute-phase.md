@@ -1059,7 +1059,7 @@ AUTO_MODE=$(gsd_run query check auto-mode --pick active 2>/dev/null)
 
 When executor returns a checkpoint AND `AUTO_MODE` is `true`:
 - **human-verify** → Auto-spawn continuation agent with `{user_response}` = `"approved"`. Log `⚡ Auto-approved checkpoint`. **Except `blocking-human`.**
-- **decision** → If the checkpoint's task carried `auto_select="<option-id>"`, auto-spawn continuation agent with `{user_response}` = that named option. Log `⚡ Auto-selected: [option]`. If `auto_select` was absent, treat it like the carve-out below — present to user, do not guess by position (#4095). **Except `blocking-human`** (always presented regardless of `auto_select`).
+- **decision** → `auto_select` present: auto-spawn with `{user_response}` = that option, log `⚡ Auto-selected: [option]`. Absent: present to user (#4095). **Except `blocking-human`.**
 - **human-action** → Present to user (existing behavior below). Auth gates cannot be automated.
 
 <!-- gsd:protected -->
