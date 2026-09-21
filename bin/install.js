@@ -436,7 +436,7 @@ const GSD_CHANGESET_FILES = [
   'github-release-notes.cjs', 'lint.cjs', 'new.cjs',
   'README.md', // documentation only — not user-authored
 ];
-const GSD_SCRIPTS_LIB_FILES = ['cli-exit.cjs', 'allowlist-ratchet.cjs', 'drift-scan.cjs', 'alias-drift-families.cjs', 'exit-code-registry.cjs', 'ndjson-reporter.cjs', 'ci-job-timing.cjs', 'shellcheck-fetch.cjs', 'npm-version-check-diagnosis.cjs', 'platform-conformance-tier.generated.cjs', 'suite-detection.cjs', 'macos-conformance-tier.generated.cjs'];
+const GSD_SCRIPTS_LIB_FILES = ['cli-exit.cjs', 'allowlist-ratchet.cjs', 'drift-scan.cjs', 'alias-drift-families.cjs', 'exit-code-registry.cjs', 'ndjson-reporter.cjs', 'ci-job-timing.cjs', 'shellcheck-fetch.cjs', 'npm-version-check-diagnosis.cjs', 'platform-conformance-tier.generated.cjs', 'suite-detection.cjs', 'macos-conformance-tier.generated.cjs', 'vendor-bundle.cjs'];
 
 // #4544 — the Codex hook payload the install stages into <targetDir>/hooks/.
 // Hoisted to module scope (the #3184 precedent above) so the rollback's
