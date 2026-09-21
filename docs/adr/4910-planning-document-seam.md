@@ -507,14 +507,23 @@ the write rule. The original `## Decision` body is unchanged and §5 still holds
 
 §5 was reasoned entirely from [#4899](https://github.com/open-gsd/gsd-core/issues/4899), which is a
 **read** bug — `roadmap.analyze` returning `phases: []`. Node-scoping is the right answer there: a
-ragged Progress table should not make `phase list` and `init.progress` fail, and it must not, because
-those are the commands a user needs in order to *see what to repair*. A hand-editable format whose
-single typo bricks every command that could diagnose it is a worse tool.
+ragged Progress table should not make `init.progress` fail as well, and it must not, because that is
+a command a user needs in order to *see what to repair*. A hand-editable format whose single typo
+bricks every command that could diagnose it is a worse tool.
+
+> **Correction to §5's own wording, carried here rather than silently.** §5's body names `phase list`
+> alongside `init.progress` as a consumer that would be blocked. That is wrong: `cmdPhasesList`
+> (`src/phase.cts:207`) enumerates the `phases/` directory and never opens `ROADMAP.md`, so an
+> unreadable Progress table cannot affect it either way. `init.progress` (`src/init.cts:3625`) does
+> read `ROADMAP.md` and is a real instance; `roadmap.analyze` is the other. The argument stands on
+> those two — it never needed three — but the example was not checked when §5 was written. §5's body
+> is left unmodified per the append-only rule; fold this correction in at ratification.
 
 But "the error lives on the node" was then stated unqualified, and it silently licensed something the
-original never considered: **`phase.complete` mutating a `ROADMAP.md` whose Progress table it could
-not read.** That is a partial-view write — a verb committing a change derived from a document it only
-partly understood — and it is a strictly worse failure than the one #4899 reports, because the read
+original never considered: **`phase.complete` re-serializing a `ROADMAP.md` whose Progress table it
+could not read.** Serialization re-emits the whole file, so the verb republishes every region —
+including the one nobody could parse — while having understood only part of it. That is a
+partial-view write, and it is a strictly worse failure than the one #4899 reports, because the read
 bug returns a wrong answer while this one *persists* one.
 
 ### The rule
@@ -528,6 +537,13 @@ bug returns a wrong answer while this one *persists* one.
   typed `WriteOutcome` naming the unreadable node and its span, never a silent skip and never a
   partial apply.
 
+**This does not reopen §5's "reserved for".** §5 reserves the document-level `Result<PlanningDoc>`
+*parse* failure for a document that is not a planning artifact at all, and that reservation stands
+untouched. The refusal added here is a different type on a different axis — a `WriteOutcome` at
+mutate/serialize time, on a document that parsed successfully and merely contains one or more nodes
+carrying their own errors. A document can therefore be perfectly valid to *open* and still refuse to
+be *written*, which is the intended state.
+
 The asymmetry is deliberate and is the point of the amendment: a reader is answering a bounded
 question and can honestly answer it from a bounded region, while a writer is asserting that the
 document it emits is the document it read. A writer that cannot read a region cannot make that
@@ -540,11 +556,41 @@ through faithfully is not the same as knowing they were consistent with the chan
   unreadable table blocks every consumer of that file, including the diagnostic commands, and the
   artifacts are hand-editable by design — the epic's own constraint.
 - **Node-scoped for writes** (what §5 left implied). Rejected on the partial-view write above.
-- **Refuse only when the mutation's own target node is unreadable.** Rejected because it is the
-  appealing middle and it does not hold: `phase.complete` writes the `**Plans:**` field while
-  *deriving the value it writes* from the plan/summary counts — a different region. The regions a
-  write depends on are not statically the regions it touches, so scoping the refusal to the target
-  node reintroduces the hole for exactly the verbs this epic is about.
+- **Refuse only when the mutation's own target node is unreadable.** Rejected, for two reasons that
+  survive scrutiny:
+  1. **It would almost never fire.** A verb locates the node in order to write it, so the target is
+     readable in the ordinary case by construction. A precondition that is satisfied whenever the
+     write is attempted is not a precondition.
+  2. **It does not match the blast radius of the operation it guards.** Serialization re-emits the
+     **whole file** (§3). A write is therefore a document-wide assertion — *this is the document I
+     read* — regardless of how narrow the mutated span is. A document-wide act takes a
+     document-wide precondition; scoping it to one node guards something smaller than what is
+     actually happening.
+
+### Stated limit: this rule does not cover a write whose input comes from outside the document
+
+An isolated review of this amendment falsified its first draft's motivating example, and the true
+mechanism is worth recording because it bounds what the rule can promise.
+
+The draft claimed `phase.complete` derives the value it writes into `**Plans:**` from *a different
+region of the same document*. It does not. `planCount` and `summaryCount` are read at
+`src/phase.cts:3429-3434` from `findPhaseInternal(cwd, phaseNum)` — a **filesystem scan of the phase
+directory**. No `PlanningDoc` node holds those counts at all.
+
+That makes the dependency wider than the draft claimed, and it makes the limit explicit:
+
+> **A document-scoped write refusal protects the document's own consistency. It says nothing about
+> the correctness of a value sourced from outside the document.** If the phase directory is
+> mid-write, partially synced, or otherwise disagrees with reality, `phase.complete` writes a wrong
+> count into a perfectly readable `**Plans:**` line and this rule will not object — correctly, since
+> every node parsed.
+
+The write rule still holds on its own terms (see the two reasons above; neither depends on where the
+written *value* came from). But the seam does not make a write *correct*, only *whole*, and an
+implementer must not read §5-plus-this-amendment as a guarantee that a successful write was right.
+Closing the outside-input gap is a separate concern about where verbs source their values, not about
+how documents are parsed, and it is **not** in this epic's scope. It is recorded here so that the
+next reader finds it stated rather than re-derives it from a surprise in production.
 
 ### What changes downstream
 
