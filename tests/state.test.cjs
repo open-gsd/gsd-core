@@ -3331,6 +3331,157 @@ describe('cmdStateRecordSession (state record-session)', () => {
     assert.ok(resumeMatch[1].trim() === 'None', 'Resume file should be None when not specified');
   });
 
+  // ── #4763 (1): last-writer-wins stays (recorded single-slot handoff design),
+  // but a displaced record is no longer silent — the payload carries the FULL
+  // prior value whenever a non-empty Stopped At / Resume File record is actually
+  // replaced. Same-value rewrites, the insert path, and the #944 template-default
+  // DWIM are not displacements and must not fabricate one.
+  test('#4763: replacing a non-empty Stopped At record surfaces the displaced record in the payload', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), sessionFixture);
+
+    const result = runGsdTools('state record-session --stopped-at "Phase 3, Plan 2"', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.recorded, true, 'recorded should be true');
+    assert.ok(
+      output.replacedRecord && typeof output.replacedRecord['Stopped At'] === 'string',
+      `expected replacedRecord["Stopped At"] in the payload, got: ${result.output}`,
+    );
+    assert.strictEqual(
+      output.replacedRecord['Stopped At'],
+      'Phase 2, Plan 1',
+      'the displaced record must be the FULL prior text, not a summary',
+    );
+    // Last-writer-wins unchanged: the disk now carries only the new value.
+    const updated = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(updated.includes('**Stopped at:** Phase 3, Plan 2'), 'disk must carry the new value');
+    assert.ok(!updated.includes('Phase 2, Plan 1'), 'the prior record is still replaced on disk');
+  });
+
+  test('#4763: displacing an authored Resume File surfaces it in the payload', () => {
+    const authored = [
+      '# Project State',
+      '',
+      '## Session Continuity',
+      '',
+      '**Last session:** 2024-01-10',
+      '**Stopped at:** Phase 2, Plan 1',
+      '**Resume file:** .planning/phases/02/02-01-resume.md',
+    ].join('\n') + '\n';
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), authored);
+
+    const result = runGsdTools(
+      'state record-session --stopped-at "Phase 3, Plan 2" --resume-file "None"',
+      tmpDir,
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      output.replacedRecord
+        && output.replacedRecord['Resume File'] === '.planning/phases/02/02-01-resume.md',
+      `expected the authored Resume File surfaced in replacedRecord, got: ${result.output}`,
+    );
+    assert.strictEqual(output.replacedRecord['Stopped At'], 'Phase 2, Plan 1',
+      'both displaced fields land in the one replaced record');
+  });
+
+  test('#4763: a same-value re-record fabricates no replaced record', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), sessionFixture);
+
+    const result = runGsdTools('state record-session --stopped-at "Phase 2, Plan 1"', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      !output.replacedRecord,
+      `nothing was displaced when the value is identical, got: ${result.output}`,
+    );
+  });
+
+  test('#4763: a brand-new session reports no replaced record', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '# Project State\n');
+
+    const result = runGsdTools(
+      'state record-session --stopped-at "Phase 1, Plan 1" --resume-file ".planning/phases/01/01-01-PLAN.md"',
+      tmpDir,
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.created, true, 'insert path reports created');
+    assert.ok(!output.replacedRecord, 'nothing prior existed — nothing was displaced');
+  });
+
+  test('#4763: the #944 template-default Resume File rewrite is not a displacement', () => {
+    // `**Resume file:** None` is a KNOWN_TEMPLATE_DEFAULTS value, so the #944
+    // DWIM rewrites it to the same 'None' — a template default is not authored
+    // content. The displaced Stopped At IS surfaced; the Resume File is not.
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), sessionFixture);
+
+    const result = runGsdTools('state record-session --stopped-at "Phase 2, Plan 2"', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.replacedRecord['Stopped At'], 'Phase 2, Plan 1',
+      'the authored Stopped At displacement is surfaced');
+    assert.ok(
+      output.replacedRecord['Resume File'] === undefined,
+      `a template-default Resume File rewrite is not a displacement, got: ${result.output}`,
+    );
+  });
+
+  // ── #4763 (2): the executor's decision loop must pass --phase explicitly.
+  // The #3231/#3481 pointer fallback stays for genuinely phase-less callers,
+  // but an in-scope caller relying on the global pointer is exactly the
+  // mis-attribution shape the issue measured (decisions landed on Phase 661
+  // while phase 658 executed).
+  //
+  // allow-test-rule: source-text-is-the-product (#4763) — agents/gsd-executor.md
+  // is shipped content; its text IS the deployed contract the runtime loads.
+  test('#4763: the executor decision loop passes --phase explicitly', () => {
+    const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+    const executor = fs.readFileSync(
+      path.join(__dirname, '..', 'agents', 'gsd-executor.md'), 'utf8');
+    const addDecisionLines = splitLines(executor)
+      .filter((l) => l.includes('state.add-decision'));
+    assert.ok(
+      addDecisionLines.length >= 1,
+      'agents/gsd-executor.md must carry the add-decision loop',
+    );
+    for (const line of addDecisionLines) {
+      assert.match(
+        line,
+        /--phase\s+"\$\{PHASE\}"/,
+        `every add-decision invocation must pass --phase "${'${PHASE}'}": ${line.trim()}`,
+      );
+    }
+  });
+
+  test('#4763 parity: the execute-plan add-decision call site also passes --phase', () => {
+    // Generative-fix divergence guard (CLAUDE.md): the two add-decision call
+    // surfaces share one contract; execute-plan.md was fixed first, and this
+    // pin keeps it from regressing while the executor catches up.
+    const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+    const plan = fs.readFileSync(
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-plan.md'), 'utf8');
+    const lines = splitLines(plan);
+    const idx = lines.findIndex((l) => l.includes('state.add-decision'));
+    assert.ok(idx !== -1, 'gsd-core/workflows/execute-plan.md must carry the add-decision call');
+    // The invocation may continue over `\`-continued lines; the contract is on
+    // the whole call, not the first physical line.
+    const invocation = [];
+    for (let i = idx; i < lines.length && (i === idx || lines[i - 1].trimEnd().endsWith('\\')); i++) {
+      invocation.push(lines[i]);
+    }
+    assert.match(
+      invocation.join(' '),
+      /--phase\s+"\$\{PHASE\}"/,
+      'the execute-plan add-decision invocation must pass --phase "${PHASE}"',
+    );
+  });
+
   test('returns error when STATE.md missing', () => {
     // #4186: supply a value so this test keeps exercising the STATE.md-missing
     // decline rather than the (now earlier) no-args usage error.
