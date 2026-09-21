@@ -158,6 +158,11 @@ const AGENT_TRANSFORM_SRCS = [
   'src/runtime-artifact-conversion.cts',
   'src/install-effort-resolver.cts',
   'src/model-catalog.cts',
+  // #4770: the Codex .toml family's sandbox_mode is derived through
+  // src/codex-agent-toml.cts (deriveCodexSandboxMode — the single owner of the
+  // derivation), so a change there moves every emitted agents/*.toml without
+  // touching any agents/*.md source.
+  'src/codex-agent-toml.cts',
 ];
 
 // #3738: antigravity's global skills pass through the antigravity converter
