@@ -235,9 +235,9 @@ describe('check tdd-red-evidence verb (#3770)', () => {
 describe('executor spec requires intentional RED evidence before GREEN (#3770)', () => {
   const read = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 
-  function nodeValidationBullet(content, name) {
-    const branches = [...content.matchAll(/^ {3}- If the (?:actual )?command invokes Node's built-in test runner\b[^\r\n]*(?:\r?\n {5,}\S[^\r\n]*)*/gm)];
-    assert.equal(branches.length, 1, `${name} must have exactly one Node validation bullet`);
+  function machineValidationBlock(content, name) {
+    const branches = [...content.matchAll(/^ {3}- For supported evidence, use machine validation:[^\r\n]*(?:\r?\n {5,}\S[^\r\n]*)*/gm)];
+    assert.equal(branches.length, 1, `${name} must have exactly one machine-validation block`);
     return branches[0];
   }
 
@@ -250,8 +250,10 @@ describe('executor spec requires intentional RED evidence before GREEN (#3770)',
       assert.match(content, /actual command/i, `${name} must select the evidence branch from the actual command`);
       assert.match(content, /command[\s\S]{0,240}(exit (status|code)|status)[\s\S]{0,240}(unmodified|unchanged) output[\s\S]{0,240}target[\s\S]{0,240}expected[\s\S]{0,80}actual/i,
         `${name} must preserve the real command, status, unmodified output, target, and expected/actual result`);
-      assert.match(content, /Node('|’)?s built-in test runner[\s\S]{0,300}compatible TAP[\s\S]{0,300}tdd-red-evidence/i,
-        `${name} must use the classifier only for an actual Node built-in command with compatible TAP`);
+      const machine = machineValidationBlock(content, name)[0];
+      assert.match(machine, /Node's built-in test runner:[^\n]*compatible TAP from the actual command/);
+      assert.match(machine, /Maven Surefire\/Failsafe:/);
+      assert.match(machine, /For either supported branch[^\n]*tdd-red-evidence[^\n]*RED_EVIDENCE_OK/);
       assert.match(content, /(package\.json|package metadata)[\s\S]{0,180}(npm|pnpm|package manager)[\s\S]{0,180}TAP/i,
         `${name} must reject metadata, package-manager use, and TAP-shaped text as runner signals`);
       assert.match(content, /(other identified|identified non-Node) runner[\s\S]{0,300}(direct|inspect)/i,
@@ -271,7 +273,7 @@ describe('executor spec requires intentional RED evidence before GREEN (#3770)',
     assert.match(tddRef, /Node('|’)?s built-in test runner[\s\S]{0,700}semantic/i,
       'tdd.md must require semantic inspection after the Node parser verdict');
     assert.match(mvpRef, /INVALID_RED[^\n]{0,180}(trip|halt|block|STOP)/i,
-      'execute-mvp-tdd.md must explicitly halt GREEN on a Node INVALID_RED verdict');
+      'execute-mvp-tdd.md must explicitly halt GREEN on a classifier INVALID_RED verdict');
     assert.match(agent, /references\/tdd\.md[\s\S]{0,200}Gate Enforcement Rules/i,
       'gsd-executor.md must keep the canonical Gate Enforcement Rules pointer');
   });
@@ -284,31 +286,33 @@ describe('executor spec requires intentional RED evidence before GREEN (#3770)',
       assert.match(maven[0], /unchanged XML[^\n]*target\/surefire-reports\/TEST-\*\.xml[^\n]*target\/failsafe-reports\/TEST-\*\.xml/);
       assert.match(maven[0], /run start[^\n]*modification time[^\n]*target class/,
         `${name} must tie the original report and target class to the actual run`);
+      assert.match(maven[0], /require the report to be newer than the run start/,
+        `${name} must check freshness, not merely record timestamps`);
       assert.match(maven[0], /missing, stale, or ambiguous reports[^\n]*STOP/i,
         `${name} must reject unusable XML instead of downgrading to direct inspection`);
-      assert.match(maven[0], /submit[^\n]*classifier invocation below[^\n]*RED_EVIDENCE_OK/);
+      assert.match(maven[0], /submit[^\n]*classifier invocation below[^\n]*RED_EVIDENCE_OK/i);
       assert.match(maven[0], /must never fall through to direct inspection/);
     });
 
-    test(`#4692 — ${name} confines the classifier command to the Node branch`, () => {
+    test(`#4692 — ${name} confines the classifier command to the supported-evidence block`, () => {
       const content = read(`gsd-core/references/${name}`);
       // Check ownership of every command mention, independent of words such as
       // "must" or "every runner". Correct prose must not mask a contradictory
-      // requirement appended to the non-Node branch or elsewhere in the file.
-      const nodeMatch = nodeValidationBullet(content, name);
-      const nodeBranch = nodeMatch[0];
-      assert.equal((nodeBranch.match(/tdd-red-evidence/g) || []).length, 1,
-        `${name} must invoke the classifier exactly once in the Node branch`);
-      const outsideNodeBranch = content.slice(0, nodeMatch.index)
-        + content.slice(nodeMatch.index + nodeBranch.length);
-      assert.deepEqual(outsideNodeBranch.match(/tdd-red-evidence/gi) || [], [],
-        `${name} must not mention the classifier command outside the Node branch`);
+      // requirement appended to the unsupported-runner branch or elsewhere in the file.
+      const machineMatch = machineValidationBlock(content, name);
+      const machine = machineMatch[0];
+      assert.equal((machine.match(/tdd-red-evidence/g) || []).length, 1,
+        `${name} must name the classifier exactly once in the supported-evidence block`);
+      const outsideMachineBlock = content.slice(0, machineMatch.index)
+        + content.slice(machineMatch.index + machineMatch[0].length);
+      assert.deepEqual(outsideMachineBlock.match(/tdd-red-evidence/gi) || [], [],
+        `${name} must not mention the classifier command outside the supported-evidence block`);
     });
 
-    test(`#4692 — ${name} retains all seven INVALID_RED reason codes in the Node branch`, () => {
+    test(`#4692 — ${name} retains all seven INVALID_RED reason codes for supported evidence`, () => {
       const content = read(`gsd-core/references/${name}`);
-      const nodeBranch = nodeValidationBullet(content, name);
-      const reasons = [...nodeBranch[0].matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)].map((match) => match[1]);
+      const machine = machineValidationBlock(content, name)[0];
+      const reasons = [...machine.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)].map((match) => match[1]);
       assert.deepEqual(reasons.sort(), [
         'fixture_or_load_failure',
         'invalid_record',
@@ -322,31 +326,35 @@ describe('executor spec requires intentional RED evidence before GREEN (#3770)',
 
     test(`#4692 — ${name} routes an incompatible-reporter rerun back to the classifier`, () => {
       const content = read(`gsd-core/references/${name}`);
-      const nodeBranch = nodeValidationBullet(content, name)[0];
+      const machine = machineValidationBlock(content, name)[0];
+      const nodeBranch = machine.match(/^ {5}- Node's built-in test runner:[^\r\n]*/m)?.[0];
+      assert.ok(nodeBranch, `${name} must keep Node on the machine-validation path`);
       // A literal executor could rerun under the compatible reporter and then fall
       // through to the direct-inspection bullet, silently downgrading a genuinely
       // Node run to self-attestation. The instruction must close that path.
       assert.match(nodeBranch,
-        /reporter is incompatible[^\n]{0,400}?rerun the planned target[^\n]{0,400}?submit that rerun's record to the same classifier invocation/i,
+        /reporter is incompatible[^\n]{0,400}?rerun the planned target[^\n]{0,400}?submit that rerun's record to the classifier invocation below/i,
         `${name} must send the reporter-compatible rerun back through the classifier`);
       assert.match(nodeBranch, /must never fall through to direct inspection/i,
         `${name} must forbid a Node rerun from falling through to the direct-inspection branch`);
-      assert.equal((nodeBranch.match(/RED_EVIDENCE_OK/g) || []).length, 2,
-        `${name} must require RED_EVIDENCE_OK for the first run and for the rerun`);
-      assert.equal((nodeBranch.match(/tdd-red-evidence/g) || []).length, 1,
+      assert.match(nodeBranch, /submit that rerun's record[^\n]*require `RED_EVIDENCE_OK`/,
+        `${name} must require the classifier verdict for the rerun`);
+      assert.match(machine, /For either supported branch[^\n]*require `RED_EVIDENCE_OK` before GREEN/);
+      assert.equal((machine.match(/tdd-red-evidence/g) || []).length, 1,
         `${name} must reference the classifier by name once, not repeat the command for the rerun`);
     });
 
     test(`#4692 — ${name} invokes the classifier with --raw`, () => {
-      const nodeBranch = nodeValidationBullet(read(`gsd-core/references/${name}`), name)[0];
-      assert.match(nodeBranch, /`gsd_run check tdd-red-evidence <record\.json> --raw`/,
+      const machine = machineValidationBlock(read(`gsd-core/references/${name}`), name)[0];
+      assert.match(machine, /`gsd_run check tdd-red-evidence <record\.json> --raw`/,
         `${name} must use the same --raw classifier invocation as its sibling reference`);
     });
 
     test(`#4692 — ${name} states the known limits of the direct-inspection branch`, () => {
       const content = read(`gsd-core/references/${name}`);
-      const nonNode = content.match(/^ {3}- For every other identified runner\b[^\r\n]*/m);
+      const nonNode = content.match(/^ {3}- For other identified runners without a supported evidence format\b[^\r\n]*/m);
       assert.ok(nonNode, `${name} must keep the non-Node direct-inspection bullet`);
+      assert.match(nonNode[0], /fallback excludes Node and Maven Surefire\/Failsafe[^\n]*machine validation is mandatory/);
       assert.match(nonNode[0], /self-attestation[^\n]{0,120}no deterministic backstop/i,
         `${name} must name the missing deterministic backstop on the direct-inspection branch`);
       assert.match(nonNode[0], /Node-compatible TAP[^\n]{0,160}machine-checked verdict by accident/i,
