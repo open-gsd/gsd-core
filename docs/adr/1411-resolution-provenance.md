@@ -243,10 +243,11 @@ passes `persist:false` semantics all the way down.
 
 **Explicitly falsy values are configured values.** `false`, `0`, `""`, `[]`, `{}` and a JSON `null`
 present in a layer all resolve `found:true` with that value and that layer. Only a key *absent* from
-every layer is `found:false`. This is the rule that makes #4071 unrepresentable rather than merely
-fixed: today's `_globalBaseCfg` uses `??` and `||` against 26 named keys, so a global `false` or `0`
-survives one branch and not another, and "is this key set?" is answered by the truthiness of its
-value in four different places.
+every layer is `found:false`. This makes #4071's mechanism unrepresentable only when every key is
+correctly classified into its resolution family: a bad declaration can reintroduce the failure as a
+classification defect. Today's `_globalBaseCfg` uses `??` and `||` against 26 named keys, so a
+global `false` or `0` survives one branch and not another, and "is this key set?" is answered by the
+truthiness of its value in four different places.
 
 **Composite values.** Some keys are objects assembled from more than one layer (`effort`,
 `model_overrides`, `agent_tools`, `agent_skills`). Merge-eligibility is **declared per key** in the
@@ -305,9 +306,8 @@ requirement is therefore split rather than silently weakened:
    the `--default` and schema-default arms once they route through the parser. This is the property
    test the epic asks for, and the cell it is currently red in is `--default`.
 2. **Raw mode — the contract is a display and shell-interpolation contract, and it is frozen.**
-   `String(value)` rendering is preserved byte-for-byte and pinned by tests. The round-trip property
-   is asserted in raw mode over scalars only (`string | number | boolean | null`), which is a typed
-   precondition, not a weakened property: for non-scalars there is no claim to weaken.
+   `String(value)` rendering is preserved byte-for-byte and pinned by tests. Raw makes no round-trip
+   claim, including for scalars: `5` and `"5"` collide, and `"007"` can be decoded as the number `7`.
 
 Making raw lossless — emitting compact JSON for non-scalars, say — is a **user-visible output-contract
 change** to a surface that live consumers parse by hand (`configString()` above; four workflow call
