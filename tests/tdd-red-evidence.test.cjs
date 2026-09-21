@@ -306,6 +306,39 @@ describe('executor spec requires intentional RED evidence before GREEN (#3770)',
         'zero_tests_discovered',
       ], `${name} must enumerate the complete INVALID_RED taxonomy, without missing or extra codes`);
     });
+
+    test(`#4692 — ${name} routes an incompatible-reporter rerun back to the classifier`, () => {
+      const content = read(`gsd-core/references/${name}`);
+      const nodeBranch = nodeValidationBullet(content, name)[0];
+      // A literal executor could rerun under the compatible reporter and then fall
+      // through to the direct-inspection bullet, silently downgrading a genuinely
+      // Node run to self-attestation. The instruction must close that path.
+      assert.match(nodeBranch,
+        /reporter is incompatible[^\n]{0,400}?rerun the planned target[^\n]{0,400}?submit that rerun's record to the same classifier invocation/i,
+        `${name} must send the reporter-compatible rerun back through the classifier`);
+      assert.match(nodeBranch, /must never fall through to direct inspection/i,
+        `${name} must forbid a Node rerun from falling through to the direct-inspection branch`);
+      assert.equal((nodeBranch.match(/RED_EVIDENCE_OK/g) || []).length, 2,
+        `${name} must require RED_EVIDENCE_OK for the first run and for the rerun`);
+      assert.equal((nodeBranch.match(/tdd-red-evidence/g) || []).length, 1,
+        `${name} must reference the classifier by name once, not repeat the command for the rerun`);
+    });
+
+    test(`#4692 — ${name} invokes the classifier with --raw`, () => {
+      const nodeBranch = nodeValidationBullet(read(`gsd-core/references/${name}`), name)[0];
+      assert.match(nodeBranch, /`gsd_run check tdd-red-evidence <record\.json> --raw`/,
+        `${name} must use the same --raw classifier invocation as its sibling reference`);
+    });
+
+    test(`#4692 — ${name} states the known limits of the direct-inspection branch`, () => {
+      const content = read(`gsd-core/references/${name}`);
+      const nonNode = content.match(/^ {3}- For every other identified runner\b[^\r\n]*/m);
+      assert.ok(nonNode, `${name} must keep the non-Node direct-inspection bullet`);
+      assert.match(nonNode[0], /self-attestation[^\n]{0,120}no deterministic backstop/i,
+        `${name} must name the missing deterministic backstop on the direct-inspection branch`);
+      assert.match(nonNode[0], /Node-compatible TAP[^\n]{0,160}machine-checked verdict by accident/i,
+        `${name} must state the rigor cost for previously TAP-compatible non-Node runners`);
+    });
   }
 });
 
