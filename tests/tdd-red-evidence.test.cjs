@@ -277,6 +277,19 @@ describe('executor spec requires intentional RED evidence before GREEN (#3770)',
   });
 
   for (const name of ['tdd.md', 'execute-mvp-tdd.md']) {
+    test(`#4692 — ${name} preserves machine validation of current Maven XML evidence (#4724)`, () => {
+      const content = read(`gsd-core/references/${name}`);
+      const maven = content.match(/^ {5}- Maven Surefire\/Failsafe:[^\r\n]*/m);
+      assert.ok(maven, `${name} must retain the supported Maven XML validation branch`);
+      assert.match(maven[0], /unchanged XML[^\n]*target\/surefire-reports\/TEST-\*\.xml[^\n]*target\/failsafe-reports\/TEST-\*\.xml/);
+      assert.match(maven[0], /run start[^\n]*modification time[^\n]*target class/,
+        `${name} must tie the original report and target class to the actual run`);
+      assert.match(maven[0], /missing, stale, or ambiguous reports[^\n]*STOP/i,
+        `${name} must reject unusable XML instead of downgrading to direct inspection`);
+      assert.match(maven[0], /submit[^\n]*classifier invocation below[^\n]*RED_EVIDENCE_OK/);
+      assert.match(maven[0], /must never fall through to direct inspection/);
+    });
+
     test(`#4692 — ${name} confines the classifier command to the Node branch`, () => {
       const content = read(`gsd-core/references/${name}`);
       // Check ownership of every command mention, independent of words such as
