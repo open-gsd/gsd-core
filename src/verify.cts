@@ -1016,6 +1016,10 @@ interface PlanTaskInfo {
   // checkpoint:decision fields
   hasDecision: boolean;
   hasOptions: boolean;
+  /** `auto_select` attribute value from the opening `<task>` tag, or null if absent (#4095). */
+  autoSelect: string | null;
+  /** `id` attribute of every `<option id="…">` found inside `<options>…</options>`, in document order (#4095). */
+  optionIds: string[];
   // checkpoint:human-action fields
   hasInstructions: boolean;
   hasVerification: boolean;
@@ -1060,6 +1064,12 @@ function extractPlanTaskInfos(content: string): PlanTaskInfo[] {
     const hasName = nameArr.length > 0;
     const name = hasName ? nameArr[0].trim() : '';
 
+    const autoSelectMatch = attrs.match(/\bauto_select\s*=\s*["']([^"']*)["']/);
+    const autoSelect = autoSelectMatch ? autoSelectMatch[1] : null;
+
+    const optionsArr = extractTaggedBlocks(body, 'options');
+    const optionIds = optionsArr.length > 0 ? extractOptionIds(optionsArr[0]) : [];
+
     infos.push({
       name,
       type,
@@ -1077,6 +1087,8 @@ function extractPlanTaskInfos(content: string): PlanTaskInfo[] {
       hasHowToVerify: /<how-to-verify[\s>]/.test(body),
       hasDecision: /<decision[\s>]/.test(body),
       hasOptions: /<options[\s>]/.test(body),
+      autoSelect,
+      optionIds,
       hasInstructions: /<instructions[\s>]/.test(body),
       hasVerification: /<verification[\s>]/.test(body),
       hasResumeSignal: /<resume-signal[\s>]/.test(body),
@@ -1088,6 +1100,32 @@ function extractPlanTaskInfos(content: string): PlanTaskInfo[] {
     }
   }
   return infos;
+}
+
+/**
+ * Extract the `id` attribute of every `<option id="…">` opening tag found in
+ * `optionsBody` (the inner text of one `<options>…</options>` block), in
+ * document order. Bounded attribute scan (`[^>]{0,500}`), mirroring the same
+ * ReDoS-safe idiom `extractPlanTaskInfos` uses for the `<task type="…">`
+ * attribute string — this file's established pattern for reading an
+ * attribute value without a general XML parser (#4095).
+ */
+function extractOptionIds(optionsBody: string): string[] {
+  const ids: string[] = [];
+  if (typeof optionsBody !== 'string' || optionsBody.length === 0) return ids;
+
+  const OPTION_OPEN_RE = /<option(\s[^>]{0,500})?>/g;
+  let match: RegExpExecArray | null;
+  while ((match = OPTION_OPEN_RE.exec(optionsBody)) !== null) {
+    const attrs = match[1] ?? '';
+    const idMatch = attrs.match(/\bid\s*=\s*["']([^"']{1,200})["']/);
+    if (idMatch) ids.push(idMatch[1]);
+
+    if (match.index === OPTION_OPEN_RE.lastIndex) {
+      OPTION_OPEN_RE.lastIndex++;
+    }
+  }
+  return ids;
 }
 
 function isCheckpointType(type: string): boolean {
@@ -1131,6 +1169,16 @@ function validatePlanTaskStructure(task: PlanTaskInfo): { errors: string[]; warn
       case 'checkpoint:decision':
         if (!task.hasDecision) errors.push(`Task '${taskName}' missing <decision>`);
         if (!task.hasOptions) errors.push(`Task '${taskName}' missing <options>`);
+        if (task.autoSelect !== null) {
+          if (task.autoSelect.length === 0) {
+            errors.push(`Task '${taskName}' auto_select is empty — name an <option id="…">`);
+          } else if (task.hasOptions && !task.optionIds.includes(task.autoSelect)) {
+            errors.push(
+              `Task '${taskName}' auto_select="${task.autoSelect}" does not match any `
+                + `<option id="…"> (available: ${task.optionIds.join(', ') || 'none'})`,
+            );
+          }
+        }
         break;
       case 'checkpoint:human-action':
         if (!task.hasAction) errors.push(`Task '${taskName}' missing <action>`);

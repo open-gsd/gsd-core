@@ -331,7 +331,7 @@ For full automation-first patterns, server lifecycle, CLI handling:
 **Auto-mode checkpoint behavior** (when `AUTO_CFG` is `"true"`):
 
 - **checkpoint:human-verify** → Auto-approve **except package-legitimacy checkpoints**. If checkpoint has `gate="blocking-human"` OR its purpose indicates package legitimacy verification (`what-built` mentions `Package verification required before install` or `Package install failed — human verification required`), do **not** auto-approve. STOP and return checkpoint_return_format for explicit human confirmation. Precondition-unmet checkpoints report `blocking-human` — never auto-approved.
-- **checkpoint:decision** → If checkpoint has `gate="blocking-human"`, do **not** auto-select — STOP and return checkpoint_return_format for an explicit human decision (a `blocking-human` decision exists because its default answer would be wrong to assume). Otherwise auto-select first option (planners front-load the recommended choice), log `⚡ Auto-selected: [option name]`, continue to next task.
+- **checkpoint:decision** → If checkpoint has `gate="blocking-human"`, do **not** auto-select — STOP and return checkpoint_return_format for an explicit human decision (a `blocking-human` decision exists because its default answer would be wrong to assume). Otherwise auto-select `auto_select`'s option (absent → STOP like `blocking-human`, #4095), log `⚡ Auto-selected: [option]`, continue to next task.
 - **checkpoint:human-action** → STOP normally. Auth gates cannot be automated — return structured checkpoint message using checkpoint_return_format.
 
 **Standard checkpoint behavior** (when `AUTO_CFG` is not `"true"`):
