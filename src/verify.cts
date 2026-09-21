@@ -1064,7 +1064,10 @@ function extractPlanTaskInfos(content: string): PlanTaskInfo[] {
     const hasName = nameArr.length > 0;
     const name = hasName ? nameArr[0].trim() : '';
 
-    const autoSelectMatch = attrs.match(/\bauto_select\s*=\s*["']([^"']*)["']/);
+    // `(?:^|\s)` (not `\b`) so a hyphenated attribute ending in `auto_select`
+    // can never be mistaken for the real attribute — the same defensive
+    // anchor as extractOptionIds' `id` match below (#4095).
+    const autoSelectMatch = attrs.match(/(?:^|\s)auto_select\s*=\s*["']([^"']*)["']/);
     const autoSelect = autoSelectMatch ? autoSelectMatch[1] : null;
 
     const optionsArr = extractTaggedBlocks(body, 'options');
@@ -1118,7 +1121,11 @@ function extractOptionIds(optionsBody: string): string[] {
   let match: RegExpExecArray | null;
   while ((match = OPTION_OPEN_RE.exec(optionsBody)) !== null) {
     const attrs = match[1] ?? '';
-    const idMatch = attrs.match(/\bid\s*=\s*["']([^"']{1,200})["']/);
+    // `(?:^|\s)` (not `\b`) so a decoy attribute like `data-id="…"` inside
+    // the same opening tag cannot be mistaken for the real `id` — `\b`
+    // matches at the `-`→`i` boundary too, which `.match()`'s
+    // first-hit-wins semantics would then silently prefer (#4095).
+    const idMatch = attrs.match(/(?:^|\s)id\s*=\s*["']([^"']{1,200})["']/);
     if (idMatch) ids.push(idMatch[1]);
 
     if (match.index === OPTION_OPEN_RE.lastIndex) {

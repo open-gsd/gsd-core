@@ -156,7 +156,12 @@ describe('issue #4095: checkpoints.md golden rule 5 and checkpoint:decision exam
 // because the plan contains a checkpoint (src/verify.cts's
 // "Has checkpoint tasks but autonomous is not false" rule).
 
-function planWith({ autoSelect = undefined, optionIds = ['a', 'b', 'c'], includeOptions = true } = {}) {
+function planWith({
+  autoSelect = undefined,
+  optionIds = ['a', 'b', 'c'],
+  includeOptions = true,
+  optionAttrsById = {},
+} = {}) {
   const attrs = ['type="checkpoint:decision"', 'gate="blocking"'];
   if (autoSelect !== undefined) {
     attrs.push(`auto_select="${autoSelect}"`);
@@ -170,8 +175,9 @@ function planWith({ autoSelect = undefined, optionIds = ['a', 'b', 'c'], include
   if (includeOptions) {
     lines.push('  <options>');
     for (const id of optionIds) {
+      const extraAttrs = optionAttrsById[id] || '';
       lines.push(
-        `    <option id="${id}">`,
+        `    <option ${extraAttrs}id="${id}">`,
         `      <name>Option ${id}</name>`,
         '      <pros>Pro</pros>',
         '      <cons>Con</cons>',
@@ -270,6 +276,35 @@ describe('issue #4095: cmdVerifyPlanStructure validates auto_select', () => {
     assert.ok(
       !out.errors.some((e) => /auto_select/i.test(e)),
       `a matching auto_select must not error; got: ${JSON.stringify(out.errors)}`,
+    );
+  });
+
+  test('auto_select with a Unicode option id matches correctly → valid, no auto_select errors', (t) => {
+    const tmp = createTempProject();
+    t.after(() => cleanup(tmp));
+
+    const out = verifyPlan(tmp, planWith({ autoSelect: '日本語', optionIds: ['a', '日本語', 'c'] }));
+    assert.strictEqual(out.valid, true, `errors: ${JSON.stringify(out.errors)}`);
+    assert.ok(
+      !out.errors.some((e) => /auto_select/i.test(e)),
+      `a Unicode auto_select matching a Unicode option id must not error; got: ${JSON.stringify(out.errors)}`,
+    );
+  });
+
+  test('a decoy attribute ending in "id" (e.g. data-id) on another option does not shadow the real id', (t) => {
+    const tmp = createTempProject();
+    t.after(() => cleanup(tmp));
+
+    const out = verifyPlan(tmp, planWith({
+      autoSelect: 'decoy-holder',
+      optionIds: ['decoy-holder', 'real'],
+      optionAttrsById: { 'decoy-holder': 'data-id="not-a-real-option" ' },
+    }));
+    assert.strictEqual(out.valid, true, `errors: ${JSON.stringify(out.errors)}`);
+    assert.ok(
+      !out.errors.some((e) => /auto_select/i.test(e)),
+      `auto_select="decoy-holder" must match <option id="decoy-holder"> even though that ` +
+      `same option also carries a data-id attribute; got: ${JSON.stringify(out.errors)}`,
     );
   });
 
