@@ -11,8 +11,8 @@
 Twelve open `confirmed-bug` issues are one defect: **GSD's durable state lives in prose markdown,
 and every verb brings its own regex to it.**
 
-Two seams already exist for this and both are correct. `markdown-sectionizer` (ADR-1372) owns
-fenced code, headings, sections and bullets. `markdown-table` (ADR-2143) owns GFM tables, the
+Two seams already exist for this and both are correct. `markdown-sectionizer` ([ADR-1372](1372-markdown-sectionizer-seam.md)) owns
+fenced code, headings, sections and bullets. `markdown-table` ([ADR-2143](2143-markdown-table-and-mutation-consolidation.md)) owns GFM tables, the
 bounded `withSection` mutation primitive, and the fail-loud `Result<T>` in `write-set.cts`. What
 neither owns is the **composition**: a planning document is frontmatter + a section tree + tables +
 bold-label fields + checklists, and the verbs that mutate one reach past all three seams to a
@@ -96,8 +96,8 @@ sequences it was not asked to touch).
 
 Three facts make this ADR necessary rather than ceremonial.
 
-1. **The composition layer is a genuine gap, not an oversight to patch.** ADR-1372 explicitly
-   excluded tables, mutation and fail-loud; ADR-2143 covered those three and scoped itself to
+1. **The composition layer is a genuine gap, not an oversight to patch.** [ADR-1372](1372-markdown-sectionizer-seam.md) explicitly
+   excluded tables, mutation and fail-loud; [ADR-2143](2143-markdown-table-and-mutation-consolidation.md) covered those three and scoped itself to
    `ROADMAP.md` / `STATE.md` mutation sites, listing *"migrating non-planning markdown"* as a
    non-goal and document-model parsing as out of #3180's scope. A planning *document* as one
    object has never had an owner. Six phases will build against whatever this file says.
@@ -131,7 +131,7 @@ The three existing seams are its **layers, not its alternatives**: `markdown-sec
 structure (including `stripFencedCode` / `scanInlineCodeSpans`, so fence- and code-span-awareness
 is delegated rather than re-decided), `markdown-table` for tables, `frontmatter.cts` for
 frontmatter, `write-set.cts` for `Result<T>` and `WriteOutcome`. **Extend, never mutate** —
-ADR-2143 §2's lock is inherited verbatim. Neither `Accepted` ADR is reopened by this work.
+[ADR-2143](2143-markdown-table-and-mutation-consolidation.md) §2's lock is inherited verbatim. Neither `Accepted` ADR is reopened by this work.
 
 The seam is **registry-scoped to planning artifacts**, not to markdown in general. `.planning/`
 artifacts are already enumerated by `src/artifacts.cts`'s `isCanonicalPlanningFile`; the registry
@@ -211,7 +211,16 @@ parses, the affected node carries the parse error, a consumer that reads that no
 The document-level `Result<PlanningDoc>` failure is reserved for a document that is not a planning
 artifact at all — unreadable, no frontmatter terminator, not the declared kind.
 
-This is ADR-1411's "report provenance rather than fall open silently" and ADR-2143 §5's no-null-
+> **This is an interpretation of #4906's criterion, stated rather than assumed.** The epic's
+> "Done when" reads *"an unparseable shape surfaces `could-not-parse` with the offending span"* and
+> carries no document-or-node qualifier. This ADR reads it **distributively** — per unparseable
+> *shape*, not per file — which is what node-scoping delivers. The reading is recorded here
+> explicitly because the alternative (document-scoped) is also a faithful reading of the same
+> sentence and would produce a materially different Phase 1 and Phase 4: one bad table would fail
+> `phase list` and `init.progress` along with `roadmap.analyze`. If the epic intended the
+> document-scoped reading, §5 and the Phase 1/4 acceptance criteria are what change.
+
+This is [ADR-1411](1411-resolution-provenance.md)'s "report provenance rather than fall open silently" and [ADR-2143](2143-markdown-table-and-mutation-consolidation.md) §5's no-null-
 swallow rule, at document-node granularity; it is the `Evidence` distinction #4631 draws for gates,
 applied to documents. #4899's own bug is the strongest argument for it: the evidence was *already
 computed* — 26 `missing_phase_details` tokens, built and then discarded — and thrown away on the
@@ -238,7 +247,7 @@ So enforcement is two mechanisms with stated scopes:
 - **Type-narrowing at the seam's write boundary** — accepts a `PlanningDoc` mutation, not a
   `string`. Makes the correct path the easy path and catches every bypass *through the seam*.
 - **`local/no-adhoc-markdown-parsing`, extended** — owns the bypass. It is already the mechanism
-  ADR-1372 §2 and ADR-2143 §7 both chose, and ADR-2143's Phase 4 **shipped**: the rule today
+  [ADR-1372](1372-markdown-sectionizer-seam.md) §2 and [ADR-2143](2143-markdown-table-and-mutation-consolidation.md) §7 both chose, and [ADR-2143](2143-markdown-table-and-mutation-consolidation.md)'s Phase 4 **shipped**: the rule today
   guards `src/**/*.cts`, `tests/**/*.cjs` and `scripts/**/*.cjs`, and already carries
   `tableRegex` and `adhocReplaceMutation` message ids alongside `fenceRegex` and `sectionCollect`.
   This ADR does not ask for that work again.
@@ -300,7 +309,7 @@ Behaviour-preserving except where a phase names a fixed bug, driven fail-first.
 - **Phase 2 — field writes (§2, §3).** `src/phase.cts` `**Plans:**` (**fixes #4852**),
   `state.update "Last Activity"` (**fixes #4862**), `frontmatter.set` byte-stability (**fixes
   #4499**). Property test: a mutation to field *k* leaves every other byte identical — the direct
-  analog of ADR-2143 Phase 2's per-phase byte-identity test.
+  analog of [ADR-2143](2143-markdown-table-and-mutation-consolidation.md) Phase 2's per-phase byte-identity test.
 - **Phase 3 — reader/writer escaping parity (§4, §4a).** Quick Tasks append through the seam
   (**fixes #4736**), `parseDecisions` accept-only grammar (**fixes #4793**), the `accepted ⊇
   emittable` assertion.
@@ -311,8 +320,8 @@ Behaviour-preserving except where a phase names a fixed bug, driven fail-first.
 - **Phase 6 — the ratchet (§6, §7).** Narrowed write boundary; extend
   `local/no-adhoc-markdown-parsing`; allowlist drain; the positive-control lint. Asserts zero
   remaining bespoke planning-artifact writers. **Also ratifies this ADR** to `Accepted` with a
-  dated Ratification section, and adds the reciprocal `Subsumed by` back-links to ADR-1372 and
-  ADR-2143 — which lifecycle rule 3 begins demanding at exactly that point.
+  dated Ratification section, and adds the reciprocal `Subsumed by` back-links to [ADR-1372](1372-markdown-sectionizer-seam.md) and
+  [ADR-2143](2143-markdown-table-and-mutation-consolidation.md) — which lifecycle rule 3 begins demanding at exactly that point.
 
 **Ordering constraints.** Phase 1 introduces the primitive every later phase consumes and must
 precede all of them. Phase 6 must land **last**: a ratchet whose allowlist still grandfathers every
@@ -353,7 +362,7 @@ Two consequences follow mechanically:
 - **Risk — the honest one.** Behaviour-preserving migrations regress subtle formatting, and this
   seam's whole value proposition is formatting fidelity. Mitigated by §3's byte-stability property
   test, the fail-first regression per absorbed issue, §7's positive controls, and the per-phase
-  `gsd-test` gate. ADR-2143's own Phase 5 exists because a coverage re-check found a seam its
+  `gsd-test` gate. [ADR-2143](2143-markdown-table-and-mutation-consolidation.md)'s own Phase 5 exists because a coverage re-check found a seam its
   Phase 0 had left unowned; `/adr-phase-coverage` runs again at epic closeout for that reason.
 - **Risk — naming.** `planning-document` beside `plan-document` (§1). Live until absorption lands.
 - **Non-goals.** Repairing the twelve at their existing call sites (the pattern that produced them
