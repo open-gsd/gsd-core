@@ -106,11 +106,11 @@ Three facts make this ADR necessary rather than ceremonial.
    deliver.** Both are corrected in §6 and §7 below. Discovering either mid-Phase-5 would strand
    the phase.
 
-3. **Six of the twelve absorbed issues have open community PRs right now.** #4762 (#4736), #4897
-   (#4837), #4848 (#4661), #4610 (#4605), #4609 (#4606) and #4530 (#4499) are point fixes in
-   flight from external contributors — the epic's stated non-goal, already happening in the
-   contribution queue. §9 records what follows from that; the disposition itself is a maintainer
-   decision, not this ADR's to take.
+3. **Six of the twelve absorbed issues had open community point-fix PRs**, which is the epic's
+   stated non-goal already happening in the contribution queue. All six were closed unmerged, with
+   their issues, rather than landed — see *"The point fixes were closed, deliberately"* below. That
+   decision is what makes each phase's census reflect the real tree rather than a partially-patched
+   one, and it is the reason this ADR can specify census-to-zero as an acceptance criterion at all.
 
 There is no recorded ADR or Cortex decision governing this composition seam today
 (`recall_decision` returns no governing contract; `.out-of-scope/` carries no prior denial), so
@@ -297,57 +297,151 @@ existing drift-guard idiom rather than by review attention. Same rule for `/gsd:
 selector (#4661) and `pr-branch`'s `STRUCTURAL_RE` (#4605, #4606): the pattern is a property of the
 seam's grammar, not a literal each call site owns.
 
+## What makes a phase done
+
+**A phase is done when a structural property holds, not when N symptoms are gone.** This is stated
+as its own section because it is the single thing most likely to be lost between this file and the
+implementation, and the epic says so in its own words: *"An implementation that does that has not
+closed this epic, even with every symptom gone and CI green."*
+
+Every phase below carries the same three acceptance criteria, in this order:
+
+1. **Census → zero.** The phase opens by enumerating every instance of its anti-pattern in the tree
+   and publishing that count in its PR. It closes when the count is **zero**. The number is
+   measured by the phase, not guessed here — but the obligation to measure it, and to drive it to
+   zero rather than to "the reported ones", is locked now.
+2. **Deletion, not coexistence.** The bespoke implementations are **removed**, not kept in sync
+   beside the seam. The epic's framing is exact: *"two copies that agree today are the same defect
+   as two that disagree."* A phase that leaves a migrated call site's old code path in place has
+   not finished.
+3. **Unrepresentable by construction.** Each phase ships one property that makes its class
+   *impossible* rather than *currently absent* — a property test over generated inputs, a type that
+   does not admit the wrong shape, or a drift guard that fails CI on the next copy. A phase whose
+   only evidence is per-site regression tests has bought symptom coverage, not a seam.
+
+**The absorbed issues are regression evidence, never the deliverable.** Each is driven fail-first
+and kept, because a structural change that does not demonstrably fix the reported symptom is
+unproven. But a phase is not permitted to close on those tests alone, and "the three reported sites
+are fixed" is not a passing census.
+
+> **The six absorbed issues whose point-fix PRs were closed are now themselves closed** (#4736,
+> #4837, #4661, #4605, #4606, #4499), superseded by this epic. Their phase PRs therefore reference
+> them with `Refs #NNNN`, never a closing keyword — `CONTRIBUTING.md` forbids a closing keyword
+> against an already-closed issue. Their regression tests are still owed; closure changes the link
+> form, not the evidence obligation.
+
 ## Phases
 
-Each phase is one `chore(#4906): … — Phase N` sub-issue + PR, gated on `gsd-test`.
-Behaviour-preserving except where a phase names a fixed bug, driven fail-first.
+Each phase is one `chore(#4906): … — Phase N` sub-issue + PR, gated on `gsd-test`, and each carries
+the three criteria above.
 
 - **Phase 0 — this ADR.** Design lock. Docs-only. Closes [#4910](https://github.com/open-gsd/gsd-core/issues/4910) only; #4906 stays open.
-- **Phase 1 — the seam.** `PlanningDoc` parse / node-mutate / byte-stable serialize, the artifact
-  registry, and the node-scoped typed parse error (§1, §2, §3, §5). Net-new module; **no call site
-  migrated.** Positive controls for every grammar it declares.
-- **Phase 2 — field writes (§2, §3).** `src/phase.cts` `**Plans:**` (**fixes #4852**),
-  `state.update "Last Activity"` (**fixes #4862**), `frontmatter.set` byte-stability (**fixes
-  #4499**). Property test: a mutation to field *k* leaves every other byte identical — the direct
-  analog of [ADR-2143](2143-markdown-table-and-mutation-consolidation.md) Phase 2's per-phase byte-identity test.
-- **Phase 3 — reader/writer escaping parity (§4, §4a).** Quick Tasks append through the seam
-  (**fixes #4736**), `parseDecisions` accept-only grammar (**fixes #4793**), the `accepted ⊇
-  emittable` assertion.
-- **Phase 4 — empty-vs-error (§5).** `roadmap.analyze` (**fixes #4899**), `adr-parser` (**fixes
-  #4900**), `extractPhaseFieldMultiline` (**fixes #4837**).
-- **Phase 5 — duplication drain (§8).** One phase-heading pattern (**fixes #4865**); #4661, #4605,
-  #4606 onto their single owners.
-- **Phase 6 — the ratchet (§6, §7).** Narrowed write boundary; extend
-  `local/no-adhoc-markdown-parsing`; allowlist drain; the positive-control lint. Asserts zero
-  remaining bespoke planning-artifact writers. **Also ratifies this ADR** to `Accepted` with a
-  dated Ratification section, and adds the reciprocal `Subsumed by` back-links to [ADR-1372](1372-markdown-sectionizer-seam.md) and
-  [ADR-2143](2143-markdown-table-and-mutation-consolidation.md) — which lifecycle rule 3 begins demanding at exactly that point.
+- **Phase 1 — the seam exists, and is the only way to express a planning-document write** (§1, §2,
+  §3, §5). Net-new module; **no call site migrated**, so there is nothing for a census to count
+  yet.
+  - *Unrepresentable:* the mutation API is node-addressed, so a caller cannot name a node the
+    parser did not find and cannot reach past a `valueSpan`. Byte-stability is asserted as a
+    **property over generated documents** (`fast-check`), not over the three known sites: for any
+    document and any single node mutation, every byte outside that node's span is identical.
+  - *Structural:* one positive control per grammar the module declares it accepts (§7); the
+    artifact registry derived from `isCanonicalPlanningFile` rather than a second list.
+
+- **Phase 2 — no verb writes a planning-document field with its own regex** (§2, §3).
+  - *Census:* every `.replace()`-based field write against a registry-recognised planning artifact
+    in `src/*.cts`. Published in the PR; driven to zero.
+  - *Deletion:* the bespoke patterns are **removed** — including `src/roadmap.cts:1196`'s three-arm
+    `planCountPattern`, which is *correct today* and still goes. A correct copy of a rule the seam
+    now owns is exactly the two-copies-that-agree case the epic names; keeping it "because it
+    works" re-creates the divergence this phase exists to end.
+  - *Unrepresentable:* Phase 1's byte-stability property is re-run against the **migrated** call
+    sites, so the guarantee is a property of the writer rather than three passing examples.
+  - *Evidence (fail-first, `Refs`):* #4852, #4862, #4499.
+
+- **Phase 3 — no artifact has a writer that can emit what its own reader rejects** (§4, §4a).
+  - *Census:* every typed field kind in the registry; each must resolve to exactly one
+    escape-or-refuse function, exported by the reader's module.
+  - *Deletion:* `quick.md` Step 7c's prose interpolation is **removed**, not corrected in place —
+    replaced by a `gsd_run` verb that appends through the seam. This is the arm no lint over
+    `src/*.cts` can reach, so deleting the prose is the only mechanism available.
+  - *Unrepresentable:* `emittable ⊆ accepted` asserted **over the registry**, so a new field kind
+    inherits the check instead of needing one written for it.
+  - *Evidence (fail-first; `Refs` for #4736):* #4736, #4793.
+
+- **Phase 4 — a caller can always distinguish "records nothing" from "I could not read it"** (§5).
+  - *Census:* every planning-artifact read path returning a collection. How many can return `[]`
+    for an input they failed to parse? Driven to zero.
+  - *Deletion:* the discard sites go. #4899's `missing_phase_details` evidence is *already
+    computed* — 26 tokens built and then thrown away on the way to reporting `phases: []` — and
+    that discard is the defect, not the parser.
+  - *Unrepresentable:* for a registry-recognised artifact the node type does not admit a silent
+    empty; a collection node carries either values or a parse error with its span, never neither.
+  - *Evidence (fail-first; `Refs` for #4837):* #4899, #4900, #4837.
+
+- **Phase 5 — every shared grammar has exactly one implementation** (§8).
+  - *Census:* copies per pattern. The phase-heading pattern is **five** today (#4865 — four
+    unanchored, one correct, three of them in the same file as the correct one). Driven to one.
+  - *Deletion:* the four copies are **removed**, not aligned. Aligning them is what #4478 did, and
+    it is why #4865 exists.
+  - *Unrepresentable:* a drift guard fails CI on the next copy, so the count cannot climb back —
+    the mechanism `scripts/lint-table-schema-drift.cjs` already applies to table schemas.
+  - *Evidence (fail-first; `Refs` for #4661, #4605, #4606):* #4865, #4661, #4605, #4606. #4661
+    carries a constraint the phase must respect: the obvious anchor fix silently **under**-selects
+    fixups into a partial revert, so the remedy is selecting by the scope a commit *declares*, not
+    a better regex.
+- **Phase 6 — the class cannot be reintroduced** (§6, §7).
+  - *Census:* the grandfather allowlist. It starts at whatever Phases 2–5 could not reach and ends
+    **empty** — an allowlist that survives the phase is a ratchet with nothing to hold.
+  - *Deletion:* allowlist entries are deleted as each site migrates, never renewed. This is the
+    idiom `local/no-source-grep` and ADR-2143 §7 both use, and ADR-2143 Phase 4's own experience is
+    the reason it is restated: entries that are renewed instead of drained become orphaned markers
+    pointing at closed epics.
+  - *Unrepresentable:* the narrowed write boundary plus the field-shaped `.replace()` detector, so
+    the next occurrence fails CI rather than review. Plus the positive-control lint (§7): a parser
+    declaring an accepted grammar with no control fails the build.
+  - *Also ratifies this ADR* to `Accepted` with a dated Ratification section, and adds the
+    reciprocal `Subsumed by` back-links to [ADR-1372](1372-markdown-sectionizer-seam.md) and
+    [ADR-2143](2143-markdown-table-and-mutation-consolidation.md) — which lifecycle rule 3 begins
+    demanding at exactly that point.
 
 **Ordering constraints.** Phase 1 introduces the primitive every later phase consumes and must
 precede all of them. Phase 6 must land **last**: a ratchet whose allowlist still grandfathers every
-unmigrated site is a ratchet with nothing to hold. Phases 2–5 are mutually independent and may run
-in any order, or in parallel, subject to §9.
+unmigrated site is a ratchet with nothing to hold. Phases 2–5 are mutually independent — their
+censuses do not overlap — and may run in any order, or in parallel.
 
-## Relationship to the in-flight point-fix PRs
+## The point fixes were closed, deliberately
 
-Six of the twelve absorbed issues have open community PRs doing point fixes at their existing call
-sites: #4762 (#4736), #4897 (#4837), #4848 (#4661), #4610 (#4605), #4609 (#4606), #4530 (#4499).
+Six of the twelve absorbed issues had open community PRs doing point fixes at their existing call
+sites. **All six were closed unmerged on 2026-09-20**, with thanks and an explanation, along with
+their issues:
 
-This ADR does not dispose of them — that is a maintainer decision about other contributors' open
-work. What it locks is the **rule that applies whichever way that decision goes**:
+| PR | Issue | Contributor | Owning phase |
+|---|---|---|---|
+| #4762 | #4736 | @behruznassre | 3 |
+| #4897 | #4837 | @behruznassre | 4 |
+| #4848 | #4661 | @0xdhx | 5 |
+| #4610 | #4605 | @tarc | 5 |
+| #4609 | #4606 | @tarc | 5 |
+| #4530 | #4499 | @drungrin | 2 |
 
-> **A landed point fix becomes a positive control, never a site the migration silently reverts.**
-> When Phase N migrates a call site whose behaviour a merged PR already corrected, the migration
-> keeps that behaviour and the PR's regression test is carried forward against the seam, unchanged
-> where possible. A migration that makes a previously-passing regression test unnecessary must say
-> which behaviour replaced it.
+This is the epic's non-goal enforced rather than merely stated: *"Repairing the absorbed issues
+individually at their existing call sites without building the seam. That is the pattern that
+produced them — three times for #4852 alone — and it leaves the epic open."* Landing six correct
+point fixes would have left the missing owner missing and made each phase's census start from a
+tree that looks healthier than it is.
 
-Two consequences follow mechanically:
+**The work was not wasted, and this is not a quality judgement.** Every one of those PRs is cited
+in this ADR's Context: #4736 is the sharpest statement of the writer/reader split, #4661 supplies
+the constraint that the obvious anchor fix is *also wrong*, #4606 is the fifth attempt at one
+defect and is the epic's strongest recurrence evidence, and #4499 is the quietest issue in the
+cluster and the one that proves the writer re-renders regions it was never asked to touch.
 
-- **Phases 0 and 1 are unblocked.** Neither touches a file any of the six PRs touch; Phase 1 is
-  purely additive.
-- **Phases 2–5 target exactly those call sites** and must not begin against a moving target. Each
-  waits for its overlapping PR to merge or close.
+Two consequences for the phases:
+
+- **A closed issue changes the link form, not the evidence obligation.** Phase PRs reference these
+  six with `Refs #NNNN`; `CONTRIBUTING.md` forbids a closing keyword against an already-closed
+  issue. Each still owes its fail-first regression.
+- **The census is now the whole tree, not the reported sites.** With no point fix landing, each
+  phase's census reflects the real state of the code, which is the number that matters.
 
 ## Consequences
 
@@ -375,8 +469,9 @@ Two consequences follow mechanically:
 ## Alternatives considered
 
 1. **Repair the twelve issues at their call sites.** The epic's own non-goal, and the pattern that
-   produced them. Rejected — but noted as a live option rather than a hypothetical one, because six
-   community PRs are doing precisely this now (§9).
+   produced them. Rejected **in practice, not only on paper**: six community PRs were doing exactly
+   this and all six were closed unmerged rather than landed. This is the alternative that was
+   genuinely available and genuinely declined, which is what makes the rejection load-bearing.
 2. **Put the composition layer inside `markdown-sectionizer.cts`.** Rejected: that seam is generic
    markdown structure with no planning-domain knowledge, and `CONTEXT.md` scopes it that way.
    Teaching it what a `**Plans:**` line is inverts the dependency, makes a leaf module know about
