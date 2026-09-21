@@ -504,6 +504,7 @@
       "plan-drift-guard.cjs",
       "plan-scan.cjs",
       "planning-command-router.cjs",
+      "planning-document.cjs",
       "planning-inspect.cjs",
       "planning-scope.cjs",
       "planning-snapshot.cjs",
