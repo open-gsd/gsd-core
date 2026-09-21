@@ -23,10 +23,15 @@
  * gsd-core/bin/lib/planning-document.cjs (gitignored).
  */
 
-import { tokenizeHeadings, collectSections, scanFencedBlocks } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, collectSections, scanFencedBlocks, iterateBullets } from './markdown-sectionizer.cjs';
 import { splitTableRow, isDelimiterRow, parseMarkdownTable } from './markdown-table.cjs';
 import { isCanonicalPlanningFile, CANONICAL_EXACT } from './artifacts.cjs';
+// `frontmatter.cts` uses `export =` (CJS-style single export object), so it
+// is imported as a default import (esModuleInterop), not a named import.
+import frontmatterModule from './frontmatter.cjs';
 import type { Result } from './write-set.cjs';
+
+const { frontmatterRegion } = frontmatterModule;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -166,26 +171,48 @@ function splitLinesInfo(source: string): LineInfo[] {
   return out;
 }
 
-/** Locate the frontmatter block, if any. Byte-0 fence only (matches the
- * house convention in `frontmatter.cts`'s `frontmatterRegion`), but this
- * seam does not tolerate a BOM strip or re-derive the YAML parse — it only
- * needs the block's span and whether it is terminated. */
+/**
+ * Locate the frontmatter block, if any, by COMPOSING `frontmatter.cts`'s
+ * `frontmatterRegion` — the fence-detection grammar (byte-0 rule, BOM strip,
+ * `\n---` search, CR handling) lives there, once, and this seam never
+ * re-derives it (ADR-4910 Decision 1).
+ *
+ * `frontmatterRegion` reports the YAML body's own bounds (`region`,
+ * `terminated`, and the possibly BOM-stripped `content`), not this seam's
+ * `Span` shape (an absolute byte range into the UNSTRIPPED `source`,
+ * inclusive of both fences). This adapter translates one into the other by
+ * reading ONLY the two boundary characters `frontmatterRegion` already
+ * anchored (whether the YAML end / closing fence sit on a CRLF line) — it
+ * does not re-scan for the fences themselves.
+ */
 function findFrontmatterSpan(source: string): { span: Span; terminated: boolean } | null {
-  const headerEnd = source.startsWith('---\r\n') ? 5 : source.startsWith('---\n') ? 4 : -1;
-  if (headerEnd === -1) return null;
+  const found = frontmatterRegion(source);
+  if (!found) return null;
 
-  const closingLineStart = source.indexOf('\n---', headerEnd);
-  if (closingLineStart === -1) {
-    return { span: { start: 0, end: source.length }, terminated: false };
+  // `found.content` may be `source` with a single leading BOM stripped;
+  // every offset below is relative to `found.content`, so translate back to
+  // `source` coordinates by the same delta.
+  const bomDelta = source.length - found.content.length;
+  const content = found.content;
+
+  if (!found.terminated) {
+    return { span: { start: bomDelta, end: bomDelta + content.length }, terminated: false };
   }
-  // The closing fence line itself: from the '\n' we found, the fence starts
-  // right after it (closingLineStart + 1) and runs through '---' (3 chars).
+
+  // `frontmatterRegion` already did fence DETECTION — `found` being non-null
+  // and `terminated` IS that result. It reports only the YAML body's bounds
+  // (`region`), not an absolute span, so recover the closing fence's end
+  // from `region`'s length. The one thing still read directly here is the
+  // opening fence's fixed-width line ending (`\n` vs `\r\n`), needed to
+  // translate `region`'s length into a `content` offset — not a re-scan for
+  // the fence itself.
+  const headerEnd = content.startsWith('---\r\n') ? 5 : 4;
+  const yamlEnd = headerEnd + found.region.length;
+  const closingLineStart = content[yamlEnd] === '\r' ? yamlEnd + 1 : yamlEnd;
   const fenceLineStart = closingLineStart + 1;
   let fenceEnd = fenceLineStart + 3;
-  // Absorb an optional trailing '\r' right after the closing '---' so the
-  // frontmatter span never straddles into the following '\n'.
-  if (source[fenceEnd] === '\r') fenceEnd += 1;
-  return { span: { start: 0, end: fenceEnd }, terminated: true };
+  if (content[fenceEnd] === '\r') fenceEnd += 1;
+  return { span: { start: bomDelta, end: bomDelta + fenceEnd }, terminated: true };
 }
 
 /** Build the set of 0-based line indices that fall inside a fenced code
@@ -235,7 +262,33 @@ function parseBoldFieldLine(line: LineInfo): BoldFieldNode | null {
   };
 }
 
-const CHECKLIST_LINE_RE = /^\s*[-*+]\s\[[ xX]\]\s/;
+/** A checklist line is one whose SOLE bullet, per `iterateBullets` (the same
+ * grammar the repo's other bullet consumers use), is a checkbox marker, OR
+ * whose bullet TEXT begins with a task-list marker.
+ *
+ * `iterateBullets` owns bullet *structure* — is this a bullet, where does its
+ * text start — and continues to own that here unchanged. It only classifies
+ * `-`-prefixed bullets as `checkbox-checked`/`checkbox-unchecked`; GFM also
+ * permits `*` and `+` as bullet markers, and `* [ ] x` / `+ [x] y` are valid
+ * GFM task-list items that `iterateBullets` reports as plain `dash`-family
+ * bullets with the `[ ]`/`[x]` left in the bullet's own text. Widening
+ * `iterateBullets` itself is forbidden by ADR-2143 §2's extend-never-mutate
+ * lock (inherited by this epic), so the task-list-marker interpretation is
+ * layered on here, over the bullet's already-extracted text — never by
+ * re-scanning the raw line with a new hand-rolled regex.
+ *
+ * Known limit inherited from `iterateBullets`, not introduced here:
+ * `-\t[ ] text` (a tab between the marker and the text) is not recognised as
+ * a bullet at all, so it can never become a checklist line. That is a
+ * pre-existing `markdown-sectionizer` boundary affecting every consumer of
+ * `iterateBullets`, and fixing it would mean altering the locked seam. */
+function isChecklistLine(text: string): boolean {
+  const items = iterateBullets(text);
+  if (items.length !== 1) return false;
+  const item = items[0];
+  if (item.marker === 'checkbox-checked' || item.marker === 'checkbox-unchecked') return true;
+  return /^\[[ xX]\] /.test(item.text);
+}
 
 /**
  * Scan the document body (everything outside the frontmatter block and
@@ -296,10 +349,10 @@ function scanBodyNodes(source: string, lines: LineInfo[], frontmatterEnd: number
     }
 
     // Checklist: a contiguous run of checkbox-bullet lines.
-    if (CHECKLIST_LINE_RE.test(line.text)) {
+    if (isChecklistLine(line.text)) {
       let last = i;
       let count = 0;
-      while (last < lines.length && !fenced.has(last) && CHECKLIST_LINE_RE.test(lines[last].text)) {
+      while (last < lines.length && !fenced.has(last) && isChecklistLine(lines[last].text)) {
         count += 1;
         last += 1;
       }
@@ -431,6 +484,42 @@ export function setFieldValue(doc: PlanningDoc, id: NodeId, value: string): Resu
   }
   if (node.kind !== 'boldField') {
     return { ok: false, reason: `node kind '${node.kind}' is not writable this phase` };
+  }
+  // #4917 / ADR-4910 Decision 2 & 4: a boldField's token boundary is a LINE
+  // boundary, not just an offset range — a value containing \n or \r escapes
+  // the field's own span and reparses as sibling structure (a forged field)
+  // once spliced back into the source. Decision 4 licenses refusal for any
+  // value the grammar cannot represent; Phase 3 may widen this to escaping,
+  // but Phase 1 refuses outright. Do not remove this as an over-restriction.
+  if (/[\r\n]/.test(value)) {
+    return { ok: false, reason: 'field value must not contain a line break (\\r or \\n)' };
+  }
+  // #4917 / ADR-4910 Decision 4: "a value that cannot be represented in the
+  // grammar is refused by the writer, with a report." This is a GENERAL
+  // round-trip representability check, not a blacklist of forbidden
+  // substrings — the `\r`/`\n` guard above is a narrower special case kept
+  // for its clearer message, but THIS check is the backstop. It rebuilds the
+  // line exactly as it would be written (existing leading/label/spacing +
+  // the new value + the existing trailing text) and re-parses that line
+  // through the SAME `parseBoldFieldLine` grammar the reader uses. If the
+  // value the grammar reads back is not byte-identical to what the caller
+  // staged, the grammar cannot represent this value (e.g. it contains the
+  // ` — ` trailing-separator token, which would silently reclassify the
+  // rest of the value as trailing prose) and the write is refused. Do NOT
+  // replace this with a list of forbidden characters/substrings — the next
+  // separator the grammar grows would silently slip past a blacklist.
+  const leadingText = doc.source.slice(node.span.start, node.labelSpan.start);
+  const tokenText = doc.source.slice(node.labelSpan.start, node.labelSpan.end);
+  const spacingText = doc.source.slice(node.labelSpan.end, node.valueSpan.start);
+  const trailingText = doc.source.slice(node.trailingSpan.start, node.trailingSpan.end);
+  const candidateLine = `${leadingText}${tokenText}${spacingText}${value}${trailingText}`;
+  const candidateInfo: LineInfo = { text: candidateLine, start: 0, end: candidateLine.length };
+  const reparsed = parseBoldFieldLine(candidateInfo);
+  if (!reparsed || reparsed.value !== value) {
+    return {
+      ok: false,
+      reason: 'field value is not representable in the boldField grammar (would not round-trip)',
+    };
   }
   const staged = new Map(doc.staged);
   staged.set(id, value);

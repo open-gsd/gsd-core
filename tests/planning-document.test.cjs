@@ -444,7 +444,26 @@ const safeLabelArb = fc
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
 
-const safeValueArb = fc.stringMatching(/^[A-Za-z0-9 .,!?]{0,20}$/);
+// Values are deliberately widened to include the grammar's own metacharacters
+// (em-dash, hyphen, `*_|[]#:`, bare \n/\r, non-ASCII letters) — this is the
+// exact input space where the setFieldValue representability defects lived
+// (forged sibling via \n; silent truncation on the trailing " — " separator).
+// Labels stay narrow: they are a different, narrower grammar.
+//
+// safeValueArb feeds an INITIAL field's own literal text on ONE physical
+// line of the generated document (`**label:** value`) — it excludes bare
+// \n/\r because embedding a line break there would corrupt the generator's
+// own one-line-per-field assumption (the field would not parse as a
+// boldField at all, which is a generator bug, not a module defect). newValue
+// is only ever passed AS AN ARGUMENT to setFieldValue, never spliced
+// directly into document text, so it carries the full alphabet including
+// \n/\r — exactly what setFieldValue must correctly refuse.
+const HOSTILE_LINE_SAFE_CHARS = 'A-Za-z0-9 .,!?—\\-*_`|\\[\\]#:\\u00C0-\\u024F\\u3040-\\u30FF\\u4E00-\\u9FFF';
+const HOSTILE_VALUE_CHARS = `${HOSTILE_LINE_SAFE_CHARS}\\n\\r`;
+const hostileLineSafeArb = (max) => fc.stringMatching(new RegExp(`^[${HOSTILE_LINE_SAFE_CHARS}]{0,${max}}$`));
+const hostileValueArb = (max) => fc.stringMatching(new RegExp(`^[${HOSTILE_VALUE_CHARS}]{0,${max}}$`));
+
+const safeValueArb = hostileLineSafeArb(20);
 
 const fieldArb = fc.record({ label: safeLabelArb, value: safeValueArb });
 
@@ -455,7 +474,7 @@ const documentPiecesArb = fc.record({
     .filter((s) => s.length > 0),
   fields: fc.uniqueArray(fieldArb, { minLength: 1, maxLength: 5, selector: (r) => r.label.toLowerCase() }),
   mutateIndex: fc.nat(),
-  newValue: fc.stringMatching(/^[A-Za-z0-9 .,!?]{0,25}$/),
+  newValue: hostileValueArb(25),
 });
 
 /** Assemble a document TEXT from arbitrary document-shaped pieces (never via
@@ -490,7 +509,7 @@ describe('row 22-23: document-shaped fast-check properties', () => {
 
         const node = doc.nodes.find((n) => n.id === id);
         const staged = setFieldValue(doc, id, pieces.newValue);
-        assert.strictEqual(staged.ok, true);
+        if (!staged.ok) return; // a representability refusal is a valid outcome, not a failure
         const outcome = serialize(staged.value);
         assert.strictEqual(outcome.ok, true);
 
@@ -514,6 +533,41 @@ describe('row 22-23: document-shaped fast-check properties', () => {
         assert.strictEqual(outcome.value, source);
       }),
       { seed: 20260921, numRuns: 200 },
+    );
+  });
+});
+
+// ─── Row 31: representability — every ACCEPTED value round-trips identically ───
+
+describe('row 31: every value setFieldValue accepts round-trips identically', () => {
+  test('property: every value setFieldValue ACCEPTS round-trips identically', () => {
+    fc.assert(
+      fc.property(documentPiecesArb, (pieces) => {
+        const source = buildDocumentText(pieces);
+        const parsed = parsePlanningDoc(source, ARTIFACT);
+        assert.strictEqual(parsed.ok, true);
+        const doc = parsed.value;
+
+        const idx = pieces.mutateIndex % pieces.fields.length;
+        const label = pieces.fields[idx].label;
+        const id = findField(doc, label);
+        assert.ok(id, `expected to find field ${JSON.stringify(label)}`);
+
+        const staged = setFieldValue(doc, id, pieces.newValue);
+        if (!staged.ok) return; // refusing is a PASS — the whole point of the representability check
+
+        const outcome = serialize(staged.value);
+        assert.strictEqual(outcome.ok, true);
+
+        const reparsed = parsePlanningDoc(outcome.value, ARTIFACT);
+        assert.strictEqual(reparsed.ok, true);
+        const reId = findField(reparsed.value, label);
+        assert.ok(reId, `expected to re-find field ${JSON.stringify(label)} after round-trip`);
+        const read = readNode(reparsed.value, reId);
+        assert.strictEqual(read.ok, true);
+        assert.strictEqual(read.value, pieces.newValue);
+      }),
+      { seed: 20260921, numRuns: 300 },
     );
   });
 });
@@ -619,5 +673,109 @@ describe('row 27: a large document splices without offset corruption', () => {
     assert.strictEqual(outcome.value.slice(0, node.valueSpan.start), source.slice(0, node.valueSpan.start));
     assert.strictEqual(outcome.value.slice(node.valueSpan.start + 'MUTATED'.length), source.slice(node.valueSpan.end));
     assert.strictEqual(outcome.value.length, source.length - (node.valueSpan.end - node.valueSpan.start) + 'MUTATED'.length);
+  });
+});
+
+// ─── Row 29: negative — a line-break value must not become a forged sibling ───
+
+describe('row 29: setFieldValue refuses a value carrying a line break', () => {
+  const source = [
+    '---',
+    'title: Fixture',
+    '---',
+    '',
+    '**Plans:** initial value',
+    '**Owner:** alice',
+    '',
+  ].join('\n');
+
+  test('a value containing \\n is refused', () => {
+    const doc = parseOk(source);
+    const id = findField(doc, 'Plans');
+    const result = setFieldValue(doc, id, '1/1\n**Owner:** mallory');
+    assert.strictEqual(result.ok, false);
+  });
+
+  test('a value containing a bare \\r is refused', () => {
+    const doc = parseOk(source);
+    const id = findField(doc, 'Plans');
+    const result = setFieldValue(doc, id, '1/1\r**Owner:** mallory');
+    assert.strictEqual(result.ok, false);
+  });
+
+  test('a value containing \\r\\n is refused', () => {
+    const doc = parseOk(source);
+    const id = findField(doc, 'Plans');
+    const result = setFieldValue(doc, id, '1/1\r\n**Owner:** mallory');
+    assert.strictEqual(result.ok, false);
+  });
+
+  test('the negative proof: a refused write leaves the original document untouched', () => {
+    const doc = parseOk(source);
+    const id = findField(doc, 'Plans');
+    const result = setFieldValue(doc, id, '1/1\n**Owner:** mallory');
+    assert.strictEqual(result.ok, false);
+
+    const outcome = serialize(doc);
+    assert.strictEqual(outcome.ok, true);
+    assert.strictEqual(outcome.value, source);
+    assert.strictEqual(outcome.value.includes('mallory'), false);
+    assert.strictEqual(readNode(doc, findField(doc, 'Owner')).value, 'alice');
+  });
+
+  test('legitimate values still stage successfully: plain, empty, **, and |', () => {
+    const doc = parseOk(source);
+    const id = findField(doc, 'Plans');
+
+    for (const value of ['plain value', '', '**bold marker**', 'a | b']) {
+      const result = setFieldValue(doc, id, value);
+      assert.strictEqual(result.ok, true);
+    }
+  });
+
+  test('a full round trip with a legitimate value leaves the sibling field intact exactly once', () => {
+    const doc = parseOk(source);
+    const id = findField(doc, 'Plans');
+    const staged = setFieldValue(doc, id, '2/2');
+    assert.strictEqual(staged.ok, true);
+    const outcome = serialize(staged.value);
+    assert.strictEqual(outcome.ok, true);
+
+    const ownerMatches = outcome.value.match(/\*\*Owner:\*\*/g);
+    assert.strictEqual(ownerMatches.length, 1);
+    const ownerId = findField(staged.value, 'Owner');
+    assert.strictEqual(readNode(staged.value, ownerId).value, 'alice');
+  });
+});
+
+// ─── Row 30: negative — a value carrying the trailing separator ───────────────
+
+describe('row 30: setFieldValue refuses a value containing the trailing separator', () => {
+  const source = [
+    '---',
+    'title: Fixture',
+    '---',
+    '',
+    '**Plans:** initial value',
+    '**Owner:** alice',
+    '',
+  ].join('\n');
+
+  test('a value containing the trailing " — " separator is refused', () => {
+    const doc = parseOk(source);
+    const id = findField(doc, 'Plans');
+    const result = setFieldValue(doc, id, `sneaky ${EM_DASH} annotation`);
+    assert.strictEqual(result.ok, false);
+  });
+
+  test('after refusal, the document serializes byte-identically to the source', () => {
+    const doc = parseOk(source);
+    const id = findField(doc, 'Plans');
+    const result = setFieldValue(doc, id, `sneaky ${EM_DASH} annotation`);
+    assert.strictEqual(result.ok, false);
+
+    const outcome = serialize(doc);
+    assert.strictEqual(outcome.ok, true);
+    assert.strictEqual(outcome.value, source);
   });
 });
