@@ -1,0 +1,18 @@
+TAP version 13
+1..1
+not ok 1 - evidence.test.js # time=5.98ms {
+    1..1
+    not ok 1 - email validation # time=5.26ms {
+        1..2
+        not ok 1 - rejects empty email # time=4.67ms
+            ---
+            error:
+                name: "AssertionError"
+                message: "expected 1 to be 2 // Object.is equality"
+            at: "/tmp/gsd-4701-parser-tools/evidence.test.js:2:82"
+            actual: "1"
+            expected: "2"
+            ...
+        ok 2 - accepts valid email # time=0.24ms
+    }
+}
