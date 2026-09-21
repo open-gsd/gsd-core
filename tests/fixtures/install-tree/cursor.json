@@ -607,6 +607,7 @@
   "scripts/lib/platform-conformance-tier.generated.cjs",
   "scripts/lib/shellcheck-fetch.cjs",
   "scripts/lib/suite-detection.cjs",
+  "scripts/lib/vendor-bundle.cjs",
   "skills/gsd-add-tests/SKILL.md",
   "skills/gsd-ai-integration-phase/SKILL.md",
   "skills/gsd-audit-fix/SKILL.md",

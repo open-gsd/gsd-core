@@ -16,6 +16,14 @@ The package that gets vendored stays pinned in `package.json` `devDependencies`,
 
 ## Picking the right upstream artifact
 
+For upstream packages without a standalone build, a `bundle: true` row in
+`scripts/lint-vendored-deps.cjs` builds one reproducibly with the pinned esbuild
+version. `npm run lint:vendored-deps -- --fix` writes the bundle and license
+notices; normal lint rebuilds in memory and checks byte equality. Transitive
+dependencies come from `package-lock.json`, and remaining external imports must
+be Node builtins. Use an `upstream-reference` source type twin to forward the
+package's own declarations during compilation. See `tap-parser` and `saxes`.
+
 Not every file the package ships is vendorable. You need a **self-contained CJS or UMD bundle** — one file, loadable with a single `require()`, containing zero `require()` calls of its own to anything outside Node builtins. Do not reach for the package's `exports.require`/`main` entry point (often `index.js`) without checking it first: that entry is frequently a thin loader that `require()`s several sibling files, which is exactly the shape vendoring cannot tolerate (a vendored `index.js` copied alone would throw at runtime looking for siblings that were never copied). Look instead for a `dist/` bundle purpose-built for standalone consumption.
 
 For js-yaml (ADR-3473 §8.1, #3881) the correct artifact is `dist/js-yaml.js` — the UMD bundle, self-contained, loads under `require()` with zero external `require()` calls, and exposes the symbols this repo needs (`load`, `dump`, `FAILSAFE_SCHEMA`, `YAMLException`). The tempting-looking `index.js` (the `exports.require` entry point) is **not** self-contained and is the wrong choice. Verify your candidate the same way: `require()` it in isolation (outside this repo's `node_modules` resolution, e.g. from a scratch directory with only that one file present) and confirm it loads without reaching for a sibling file.

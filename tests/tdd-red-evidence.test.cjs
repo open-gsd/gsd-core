@@ -140,7 +140,7 @@ describe('classifyRedEvidence (#3770)', () => {
   });
 
   test('row 4 — classifyRedEvidence rejects nonzero exit without a failing test', () => {
-    const result = classifyRedEvidence(validRedInput({ output: TARGET_FAILURE_TAP.replace('# fail 1', '# fail 0') }));
+    const result = classifyRedEvidence(validRedInput({ output: 'TAP version 13\nok 1 - rejects empty email\n1..1\n' }));
     assert.equal(result.verdict, 'INVALID_RED');
     assert.equal(result.reason, 'nonzero_exit_without_test_failure');
   });
@@ -232,135 +232,46 @@ describe('check tdd-red-evidence verb (#3770)', () => {
 
 // ─── Spec surfaces (#3770 acceptance: gate must require evidence before GREEN) ─
 
-describe('executor spec requires intentional RED evidence before GREEN (#3770)', () => {
+describe('executor requires format-based RED evidence (#4692)', () => {
   const read = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
+  const canonical = read('gsd-core/references/tdd.md');
+  const runtime = read('gsd-core/references/execute-mvp-tdd.md');
 
-  function machineValidationBlock(content, name) {
-    const branches = [...content.matchAll(/^ {3}- For supported evidence, use machine validation:[^\r\n]*(?:\r?\n {5,}\S[^\r\n]*)*/gm)];
-    assert.equal(branches.length, 1, `${name} must have exactly one machine-validation block`);
-    return branches[0];
-  }
-
-  test('row 11 — executor routes RED evidence by actual runner and requires semantic inspection', () => {
-    const agent = read('agents/gsd-executor.md');
-    const tddRef = read('gsd-core/references/tdd.md');
-    const mvpRef = read('gsd-core/references/execute-mvp-tdd.md');
-
-    for (const [name, content] of [['tdd.md', tddRef], ['execute-mvp-tdd.md', mvpRef]]) {
-      assert.match(content, /actual command/i, `${name} must select the evidence branch from the actual command`);
-      assert.match(content, /command[\s\S]{0,240}(exit (status|code)|status)[\s\S]{0,240}(unmodified|unchanged) output[\s\S]{0,240}target[\s\S]{0,240}expected[\s\S]{0,80}actual/i,
-        `${name} must preserve the real command, status, unmodified output, target, and expected/actual result`);
-      const machine = machineValidationBlock(content, name)[0];
-      assert.match(machine, /Node's built-in test runner:[^\n]*compatible TAP from the actual command/);
-      assert.match(machine, /Maven Surefire\/Failsafe:/);
-      assert.match(machine, /For either supported branch[^\n]*tdd-red-evidence[^\n]*RED_EVIDENCE_OK/);
-      assert.match(content, /(package\.json|package metadata)[\s\S]{0,180}(npm|pnpm|package manager)[\s\S]{0,180}TAP/i,
-        `${name} must reject metadata, package-manager use, and TAP-shaped text as runner signals`);
-      assert.match(content, /(other identified|identified non-Node) runner[\s\S]{0,300}(direct|inspect)/i,
-        `${name} must directly inspect evidence from other identified runners`);
-      assert.match(content, /runner[\s\S]{0,100}(unresolved|cannot be identified)[\s\S]{0,180}(STOP|halt|block|investigate)/i,
-        `${name} must stop and investigate an unresolved runner before choosing a branch`);
-      assert.match(content, /target[\s\S]{0,200}(executed|ran)[\s\S]{0,200}(planned|intended)[\s\S]{0,120}assertion/i,
-        `${name} must inspect whether the planned target assertion executed and failed for the intended reason`);
-      for (const stop of ['zero tests', 'skipped', 'setup', 'collection', 'import', 'syntax', 'fixture', 'unrelated', 'unexpected green', 'incomplete', 'ambiguous']) {
-        assert.match(content, new RegExp(stop, 'i'), `${name} must stop GREEN on ${stop} evidence`);
-      }
-      assert.match(content, /(do not|never)[^\n]{0,100}(fabricate|invent)[^\n]{0,100}(parser verdict|Node counters)/i,
-        `${name} must not fabricate a parser verdict or Node counters for direct inspection`);
-      assert.match(content, /INVALID_RED/, `${name} must retain the INVALID_RED stop`);
-    }
-
-    assert.match(tddRef, /Node('|’)?s built-in test runner[\s\S]{0,700}semantic/i,
-      'tdd.md must require semantic inspection after the Node parser verdict');
-    assert.match(mvpRef, /INVALID_RED[^\n]{0,180}(trip|halt|block|STOP)/i,
-      'execute-mvp-tdd.md must explicitly halt GREEN on a classifier INVALID_RED verdict');
-    assert.match(agent, /references\/tdd\.md[\s\S]{0,200}Gate Enforcement Rules/i,
-      'gsd-executor.md must keep the canonical Gate Enforcement Rules pointer');
+  test('#4692: TAP and JUnit share mandatory classification, with no Vitest exemption', () => {
+    assert.match(canonical, /report format/);
+    assert.match(canonical, /shared TAP adapter[^\n]*Node[^\n]*Vitest/);
+    assert.match(canonical, /JUnit XML adapter[^\n]*Surefire\/Failsafe/);
+    assert.match(canonical, /`gsd_run check tdd-red-evidence <record\.json> --raw`[^\n]*require `RED_EVIDENCE_OK` before GREEN/);
+    assert.match(canonical, /unsupported format requires a supported reporter or a parser adapter before GREEN/);
+    assert.match(canonical, /Classifier rejection never authorizes a fallback to self-attestation/);
+    assert.doesNotMatch(canonical + runtime, /other identified runners|runner-aware|For either supported branch|no deterministic backstop/);
   });
 
-  for (const name of ['tdd.md', 'execute-mvp-tdd.md']) {
-    test(`#4692 — ${name} preserves machine validation of current Maven XML evidence (#4724)`, () => {
-      const content = read(`gsd-core/references/${name}`);
-      const maven = content.match(/^ {5}- Maven Surefire\/Failsafe:[^\r\n]*/m);
-      assert.ok(maven, `${name} must retain the supported Maven XML validation branch`);
-      assert.match(maven[0], /unchanged XML[^\n]*target\/surefire-reports\/TEST-\*\.xml[^\n]*target\/failsafe-reports\/TEST-\*\.xml/);
-      assert.match(maven[0], /run start[^\n]*modification time[^\n]*target class/,
-        `${name} must tie the original report and target class to the actual run`);
-      assert.match(maven[0], /require the report to be newer than the run start/,
-        `${name} must check freshness, not merely record timestamps`);
-      assert.match(maven[0], /missing, stale, or ambiguous reports[^\n]*STOP/i,
-        `${name} must reject unusable XML instead of downgrading to direct inspection`);
-      assert.match(maven[0], /submit[^\n]*classifier invocation below[^\n]*RED_EVIDENCE_OK/i);
-      assert.match(maven[0], /must never fall through to direct inspection/);
-    });
+  test('#4692: reruns and current Maven reports retain evidence provenance', () => {
+    assert.match(canonical, /reporter is incompatible[^\n]*rerun the planned target[^\n]*submit the rerun's record to the classifier/);
+    assert.match(canonical, /unmodified report/);
+    assert.match(canonical, /target\/surefire-reports\/TEST-\*\.xml[^\n]*target\/failsafe-reports\/TEST-\*\.xml/);
+    assert.match(canonical, /require the report to be newer than the run start/);
+    assert.match(canonical, /Missing, stale, or ambiguous reports require STOP/);
+  });
 
-    test(`#4692 — ${name} confines the classifier command to the supported-evidence block`, () => {
-      const content = read(`gsd-core/references/${name}`);
-      // Check ownership of every command mention, independent of words such as
-      // "must" or "every runner". Correct prose must not mask a contradictory
-      // requirement appended to the unsupported-runner branch or elsewhere in the file.
-      const machineMatch = machineValidationBlock(content, name);
-      const machine = machineMatch[0];
-      assert.equal((machine.match(/tdd-red-evidence/g) || []).length, 1,
-        `${name} must name the classifier exactly once in the supported-evidence block`);
-      const outsideMachineBlock = content.slice(0, machineMatch.index)
-        + content.slice(machineMatch.index + machineMatch[0].length);
-      assert.deepEqual(outsideMachineBlock.match(/tdd-red-evidence/gi) || [], [],
-        `${name} must not mention the classifier command outside the supported-evidence block`);
-    });
+  test('#4692: a parser pass still requires the intended target assertion to fail', () => {
+    assert.match(canonical, /After machine validation[^\n]*target actually executed[^\n]*planned assertion[^\n]*intended reason/);
+    for (const stop of ['zero tests', 'skipped', 'setup', 'collection', 'import', 'syntax', 'fixture', 'unrelated', 'unexpected green', 'incomplete', 'ambiguous']) {
+      assert.match(canonical, new RegExp(stop, 'i'));
+    }
+    for (const reason of ['unexpected_green', 'zero_tests_discovered', 'nonzero_exit_without_test_failure', 'fixture_or_load_failure', 'no_target_test_failure', 'invalid_record', 'unreadable_record']) {
+      assert.ok(canonical.includes('`' + reason + '`'), reason);
+    }
+  });
 
-    test(`#4692 — ${name} retains all seven INVALID_RED reason codes for supported evidence`, () => {
-      const content = read(`gsd-core/references/${name}`);
-      const machine = machineValidationBlock(content, name)[0];
-      const reasons = [...machine.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)].map((match) => match[1]);
-      assert.deepEqual(reasons.sort(), [
-        'fixture_or_load_failure',
-        'invalid_record',
-        'no_target_test_failure',
-        'nonzero_exit_without_test_failure',
-        'unexpected_green',
-        'unreadable_record',
-        'zero_tests_discovered',
-      ], `${name} must enumerate the complete INVALID_RED taxonomy, without missing or extra codes`);
-    });
-
-    test(`#4692 — ${name} routes an incompatible-reporter rerun back to the classifier`, () => {
-      const content = read(`gsd-core/references/${name}`);
-      const machine = machineValidationBlock(content, name)[0];
-      const nodeBranch = machine.match(/^ {5}- Node's built-in test runner:[^\r\n]*/m)?.[0];
-      assert.ok(nodeBranch, `${name} must keep Node on the machine-validation path`);
-      // A literal executor could rerun under the compatible reporter and then fall
-      // through to the direct-inspection bullet, silently downgrading a genuinely
-      // Node run to self-attestation. The instruction must close that path.
-      assert.match(nodeBranch,
-        /reporter is incompatible[^\n]{0,400}?rerun the planned target[^\n]{0,400}?submit that rerun's record to the classifier invocation below/i,
-        `${name} must send the reporter-compatible rerun back through the classifier`);
-      assert.match(nodeBranch, /must never fall through to direct inspection/i,
-        `${name} must forbid a Node rerun from falling through to the direct-inspection branch`);
-      assert.match(nodeBranch, /submit that rerun's record[^\n]*require `RED_EVIDENCE_OK`/,
-        `${name} must require the classifier verdict for the rerun`);
-      assert.match(machine, /For either supported branch[^\n]*require `RED_EVIDENCE_OK` before GREEN/);
-      assert.equal((machine.match(/tdd-red-evidence/g) || []).length, 1,
-        `${name} must reference the classifier by name once, not repeat the command for the rerun`);
-    });
-
-    test(`#4692 — ${name} invokes the classifier with --raw`, () => {
-      const machine = machineValidationBlock(read(`gsd-core/references/${name}`), name)[0];
-      assert.match(machine, /`gsd_run check tdd-red-evidence <record\.json> --raw`/,
-        `${name} must use the same --raw classifier invocation as its sibling reference`);
-    });
-
-    test(`#4692 — ${name} states the known limits of the direct-inspection branch`, () => {
-      const content = read(`gsd-core/references/${name}`);
-      const nonNode = content.match(/^ {3}- For other identified runners without a supported evidence format\b[^\r\n]*/m);
-      assert.ok(nonNode, `${name} must keep the non-Node direct-inspection bullet`);
-      assert.match(nonNode[0], /fallback excludes Node and Maven Surefire\/Failsafe[^\n]*machine validation is mandatory/);
-      assert.match(nonNode[0], /self-attestation[^\n]{0,120}no deterministic backstop/i,
-        `${name} must name the missing deterministic backstop on the direct-inspection branch`);
-      assert.match(nonNode[0], /Node-compatible TAP[^\n]{0,160}machine-checked verdict by accident/i,
-        `${name} must state the rigor cost for previously TAP-compatible non-Node runners`);
-    });
-  }
+  test('#4692: the runtime gate loads the canonical evidence contract before GREEN', () => {
+    assert.match(runtime, /Read `gsd-core\/references\/tdd\.md`, "Red-Green-Refactor Cycle", RED step 4/);
+    assert.match(runtime, /follow its complete evidence contract before GREEN/);
+    assert.match(runtime, /`INVALID_RED` verdict[^\n]*trips this gate/);
+    assert.match(runtime, /self-attestation cannot substitute for machine validation/);
+    assert.match(read('agents/gsd-executor.md'), /references\/tdd\.md[^\n]*"Gate Enforcement Rules"/);
+  });
 });
 
 // ── #4724 — Surefire/Failsafe XML RED evidence ────────────────────────────────
@@ -504,6 +415,7 @@ test('#4724: a TAP red whose message quotes <testsuite> stays on the TAP path', 
     '    error: |-',
     '      expected <testsuite> was 2',
     '  ...',
+    '1..1',
     '# tests 1',
     '# pass 0',
     '# fail 1',
@@ -523,7 +435,7 @@ test('#4724: a TAP red whose message quotes <testsuite> stays on the TAP path', 
 test('#4724: CDATA sections in a passing case are never scanned as failures', () => {
   // A passing case whose captured System.out (CDATA) echoes an <error .../>
   // literal must not count as failing — CDATA is verbatim content.
-  const cd = '<testcase name="prints" classname="com.example.AppTest"><system-out><![CDATA[echo <error x/></system-out>]]></testcase>';
+  const cd = '<testcase name="prints" classname="com.example.AppTest"><system-out><![CDATA[echo <error x/></system-out>]]></system-out></testcase>';
   const fl = '<testcase name="x" classname="com.other.Unrelated"><failure message="e">1 != 2</failure></testcase>';
   const result = classifyRedEvidence({
     command: 'mvn test',

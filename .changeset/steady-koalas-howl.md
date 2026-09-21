@@ -2,4 +2,4 @@
 type: Fixed
 pr: 4701
 ---
-**TDD RED evidence now routes by the actual runner and supported format** — Node TAP and Maven Surefire/Failsafe XML retain mandatory classifier validation, including Node reporter reruns and current-run XML checks. Other identified runners such as Vitest use direct assertion inspection with its self-attestation limits documented; unresolved runners stop before GREEN.
+**TDD RED evidence now uses format adapters** — Node and Vitest TAP share a standards-based parser, while Maven Surefire/Failsafe retain JUnit XML support through an XML parser. Both normalize individual test results for the same target-failure gate. Incomplete reports, TAP bailouts, skipped/TODO targets, and ambiguous identities block GREEN; Vitest no longer relies on self-attestation. Parsers ship with installed runtimes without requiring node_modules.

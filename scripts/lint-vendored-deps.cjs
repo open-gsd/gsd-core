@@ -57,6 +57,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
+const { buildVendorBundle } = require('./lib/vendor-bundle.cjs');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -89,7 +90,8 @@ function resolvePath(p) {
  *                                       or null when there is no bin-side type twin
  * @property {string|null} srcTwin      path under src/vendor/ to the source-side type twin tsc
  *                                       resolves for a relative import from src/**, or null
- * @property {'upstream-verbatim'|'hand-authored'} twinKind
+ * @property {boolean} [bundle]        Reproducibly bundle upstream and its locked dependencies.
+ * @property {'upstream-verbatim'|'upstream-reference'|'hand-authored'} twinKind
  *                                       'upstream-verbatim': srcTwin/vendoredDts are byte-compared
  *                                       against upstream and each other.
  *                                       'hand-authored': no upstream counterpart exists, so the
@@ -99,6 +101,16 @@ function resolvePath(p) {
 
 /** @type {VendoredPackage[]} */
 const VENDORED = [
+  ...['tap-parser', 'saxes'].map((name) => ({
+    name,
+    upstreamCjs: name === 'tap-parser' ? 'node_modules/tap-parser/dist/commonjs/index.js' : 'node_modules/saxes/saxes.js',
+    vendoredCjs: `gsd-core/bin/lib/vendor/${name}.cjs`,
+    upstreamDts: null,
+    vendoredDts: null,
+    srcTwin: `src/vendor/${name}.d.cts`,
+    twinKind: 'upstream-reference',
+    bundle: true,
+  })),
   {
     name: 're2js',
     upstreamCjs: 'node_modules/re2js/build/index.cjs',
@@ -127,6 +139,7 @@ const VENDORED = [
  * @returns {string}
  */
 function buildRefreshCommand(row) {
+  if (row.bundle) return 'npm run lint:vendored-deps -- --fix';
   const parts = [`cp ${row.upstreamCjs} ${row.vendoredCjs}`];
   if (row.twinKind === 'upstream-verbatim' && row.upstreamDts) {
     if (row.vendoredDts) parts.push(`cp ${row.upstreamDts} ${row.vendoredDts}`);
@@ -263,8 +276,17 @@ function readPinState(row, pkgRoot = ROOT) {
 function checkRow(row, pkgRoot = ROOT) {
   const findings = [];
 
-  const cjsDrift = compareFiles(row.vendoredCjs, row.upstreamCjs);
-  if (cjsDrift) findings.push(cjsDrift);
+  if (row.bundle) {
+    const built = buildVendorBundle(ROOT, row.upstreamCjs);
+    for (const [file, expected] of [[row.vendoredCjs, built.code], [`${row.vendoredCjs}.LICENSE.txt`, built.notices]]) {
+      if (!fs.existsSync(resolvePath(file)) || !fs.readFileSync(resolvePath(file)).equals(expected)) {
+        findings.push(`${file} != reproducible upstream bundle (including license notices)`);
+      }
+    }
+  } else {
+    const cjsDrift = compareFiles(row.vendoredCjs, row.upstreamCjs);
+    if (cjsDrift) findings.push(cjsDrift);
+  }
 
   if (row.twinKind === 'upstream-verbatim') {
     if (row.upstreamDts && row.vendoredDts) {
@@ -277,6 +299,11 @@ function checkRow(row, pkgRoot = ROOT) {
     }
   } else if (row.twinKind === 'hand-authored') {
     findings.push(...checkHandAuthoredTwin(row));
+  } else if (row.twinKind === 'upstream-reference') {
+    const expected = `export * from '${row.name}';\n`;
+    if (!row.srcTwin || !fs.existsSync(resolvePath(row.srcTwin)) || fs.readFileSync(resolvePath(row.srcTwin), 'utf8') !== expected) {
+      findings.push(`${row.name}: type twin must forward the upstream declarations verbatim`);
+    }
   }
 
   const { pinnedSpec, installedVersion } = readPinState(row, pkgRoot);
@@ -318,7 +345,13 @@ function checkRow(row, pkgRoot = ROOT) {
  * @returns {string[]} findings remaining after the fix (empty when fully resolved)
  */
 function fixRow(row, pkgRoot = ROOT) {
-  fs.copyFileSync(resolvePath(row.upstreamCjs), resolvePath(row.vendoredCjs));
+  if (row.bundle) {
+    const built = buildVendorBundle(ROOT, row.upstreamCjs);
+    fs.writeFileSync(resolvePath(row.vendoredCjs), built.code);
+    fs.writeFileSync(resolvePath(`${row.vendoredCjs}.LICENSE.txt`), built.notices);
+  } else {
+    fs.copyFileSync(resolvePath(row.upstreamCjs), resolvePath(row.vendoredCjs));
+  }
 
   if (row.twinKind === 'upstream-verbatim' && row.upstreamDts) {
     if (row.vendoredDts) fs.copyFileSync(resolvePath(row.upstreamDts), resolvePath(row.vendoredDts));
