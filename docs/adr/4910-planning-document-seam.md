@@ -613,3 +613,83 @@ Raised by a maintainer ruling on 2026-09-21, after §5 shipped in
 recorded in that PR as an interpretation of #4906's *"an unparseable shape surfaces `could-not-parse`
 with the offending span"* — a sentence that carries no read-or-write qualifier — and the
 interpretation was made without examining the write side at all.
+
+## Amendment (2026-09-22): two of Phase 2's cited defects are already fixed, and STATE.md's field-write engine is re-scoped out
+
+Phase 2's evidence list read *#4852, #4862, #4499*. Two of those three are **already fixed on
+`next`, independently of this epic**, and the third — #4862 — exposed a subsystem whose blast radius
+disqualifies it from a mechanical migration. All three claims below were reproduced against the
+built module, not inferred from reading source.
+
+### #4499 is already fixed
+
+`src/frontmatter.cts`'s `spliceFrontmatter` already preserves untouched top-level keys verbatim,
+per-key, comparing structural equality before deciding whether to regenerate a key's raw text.
+Reproduced: a document with `must_haves` and `tags` block sequences, with only `wave` changed,
+round-trips those two keys **byte-identically**. This predates this epic — the mechanism (`#1572`
+in its own comments) already implements the identity-preservation rule Decision 3 asks for, for
+YAML frontmatter specifically.
+
+**Struck from Phase 2's evidence.** Frontmatter is a different grammar from the body-field grammar
+this seam models (`boldField` / `table` / `checklist`) — Decision 1 treats it as one opaque region,
+supplied by `frontmatter.cts` as a layer, not decomposed into writable nodes. `spliceFrontmatter`'s
+internal per-key YAML splicing is therefore not a "verb writes a field with its own regex" instance
+in the sense this phase targets, and it is not broken. No migration is owed here.
+
+### #4862 is already fixed at its own level, and its subsystem is re-scoped out
+
+`state-document.cts`'s `stateReplaceField` already anchors its bold-field pattern to line start with
+same-line-only leading whitespace (its own comments cite `#4243`). Reproduced: writing `Last
+Activity` leaves a sibling `**Last Activity Description:**` field and the `state_head` frontmatter
+key both intact. The exact symptom #4862 reported does not reproduce.
+
+**What #4862's site actually is, measured rather than assumed:** `stateReplaceField` /
+`stateReplaceFieldWithFallback` carries a **CRITICAL** `get_impact(direction=both)` rating — 190+
+affected symbols, truncated as a lower bound. So, measured the same way, do `phase.cts`'s
+`mutateMilestonePhase` (121) and `roadmap.cts`'s `cmdRoadmapUpdatePlanProgress` (200) — the two
+sites Phase 2 *does* keep. **The CRITICAL label does not distinguish these groups**, and an earlier
+draft of this amendment claimed it did without checking the second two; corrected here. All three
+symbols live in large, single-file modules (`phase.cts` at 4,800+ lines, `roadmap.cts` at 1,600+,
+`state-transition.cts` at 3,500+), and `direction: both` walks into every sibling function such a
+file touches — a known measurement artifact of bidirectional impact on a large shared module, not
+evidence specific to any one of these three symbols' actual behavior.
+
+**What genuinely distinguishes them is architectural, and this is the actual basis for the
+re-scoping:** `stateReplaceField` is one building block inside `updateCore`
+(`state-transition.cts`), which is a full read-modify-write transaction — session-vs-body field
+routing (`sessionLabelsForBodyField`), a three-condition frontmatter-fallback case (`#3699` case D),
+frontmatter reconstruction and re-sync, and post-write preservation reconciliation
+(`readModifyWriteStateMd`). Its own comments cite four prior hardening passes against exactly the
+corruption classes this epic worries about — `#3374`, `#3699`, `#4010`, `#4243` — predating #4906.
+`mutateMilestonePhase` and `cmdRoadmapUpdatePlanProgress`, by contrast, are each **one field, one
+grammar, a three-arm decision that collapses onto a single `setFieldValue` call plus a caller-side
+pre-check**, inside a confinement window another module already computes — a substitution of
+mechanism with the same inputs and outputs, not a design task.
+
+This is not "a verb brings its own regex to a field write." `updateCore` is a proven,
+actively-maintained transactional engine that already defends against silent corruption, and it
+does not map onto `PlanningDoc`'s current node model at all: there is no node concept for a
+multi-field transaction, a frontmatter-derived-from-body sync pass, or a session-scoped write with
+an archive-shadowing guard. Migrating it would mean designing that model, not calling an existing
+seam function.
+
+**The STATE.md field-write engine is re-scoped out of Phase 2** on that architectural basis. It is
+not defective, so there is no urgency, and its migration — if ever undertaken — needs its own design
+phase with its own node-model design, not a slot inside a phase whose other deliverable is a
+same-mechanism substitution in `phase.cts`/`roadmap.cts`.
+
+**Struck from Phase 2's evidence.**
+
+### What Phase 2 actually delivers
+
+With both struck, Phase 2's census is exactly the `**Plans:**` line: `src/phase.cts`'s
+`planCountBodyPattern` (still live — one capture group, confined by `withPhaseSection` but still a
+regex the seam should own) and `src/roadmap.cts`'s `planCountPattern` (the correct three-arm sibling,
+still a duplicate implementation under Decision 2's "two copies that agree today are the same
+defect" rule). Both write the same field on the same artifact and migrate together onto one seam
+call. `#4852` remains the phase's fail-first evidence; `Refs #4852`, since it is already closed
+`NOT_PLANNED`.
+
+No new phase number is opened for the STATE.md engine. If a future contributor wants to bring
+`STATE.md` under this seam, that is new work requiring its own issue, its own design, and its own
+`get_impact` accounting — not an unclaimed fragment of this phase.

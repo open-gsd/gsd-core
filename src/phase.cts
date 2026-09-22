@@ -75,6 +75,7 @@ import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- state.cjs is an export= CommonJS module
 import stateMod = require('./state.cjs');
 import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync, contentChangedAfterNormalize } from './shell-command-projection.cjs';
+import { parsePlanningDoc, findField, setFieldValue, serialize } from './planning-document.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
@@ -3728,7 +3729,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // whole-slice `.replace()` onto the seam. Applied per single physical
         // line by updateBullet, so the pattern no longer needs the `m` flag
         // (it never sees more than one line at a time); see
-        // planCountBodyPattern below for the sites that were migrated onto
+        // writePlansField below for the sites that were migrated onto
         // withPhaseSection instead.
         //
         // #2245 review Fix 6: this is behaviour-preserving for GSD-GENERATED
@@ -3787,12 +3788,44 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
 
         // ADR-2143 §4: the plan-count write is now routed through
         // withPhaseSection (see mutateMilestonePhase below), which hands this
-        // pattern ONLY phase N's own detail-section body — so the pattern no
-        // longer needs its own `#{2,4}\s*Phase\s+N` anchor + skip-ahead-past-
-        // interior-headings lookahead; the section boundary itself confines
-        // the match (the #2067/#2200 boundary-crossing class is now
-        // structurally impossible for this site rather than regex-enforced).
-        const planCountBodyPattern = /(\*\*Plans:\*\*\s*)[^\n]+/i;
+        // seam call ONLY phase N's own detail-section body — the section
+        // boundary itself confines the write (the #2067/#2200 boundary-
+        // crossing class is structurally impossible for this site).
+        //
+        // #4906 Phase 2 (#4917/ADR-4910): migrated off the one-capture-group
+        // regex that replaced to end of line, dropping any hand-written
+        // trailing prose after the count (#4852) — onto the PlanningDoc
+        // `boldField` write seam, whose `valueSpan`/`trailingSpan` split
+        // never touches the trailing annotation.
+        const writePlansField = (body: string): string => {
+          const parsed = parsePlanningDoc(body, 'ROADMAP.md');
+          if (!parsed.ok) {
+            preservationWarnings.push({ field: 'Plans', reason: parsed.reason });
+            return body;
+          }
+          const fieldId = findField(parsed.value, 'Plans');
+          if (!fieldId) {
+            // No `**Plans:**` line in this phase's section — nothing to write;
+            // not a failure (mirrors the old regex's silent no-match no-op).
+            return body;
+          }
+          const staged = setFieldValue(parsed.value, fieldId, `${summaryCount}/${planCount} plans complete`);
+          if (!staged.ok) {
+            preservationWarnings.push({ field: 'Plans', reason: staged.reason });
+            return body;
+          }
+          const out = serialize(staged.value);
+          if (!out.ok) {
+            // `hasUnreadableNodes` refusal (ADR-4910 amendment) — a ragged
+            // SIBLING node elsewhere in this same section refuses the whole
+            // splice. Never throw / crash the phase-complete transaction over
+            // a node unrelated to this write; surface it and leave `body`
+            // unchanged, same as any other preservation warning.
+            preservationWarnings.push({ field: 'Plans', reason: out.reason });
+            return body;
+          }
+          return out.value;
+        };
 
         const phaseInfoSummaries = phaseInfo['summaries'] as string[];
 
@@ -3839,7 +3872,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // section's body, so neither regex can escape into a sibling
           // phase's section, a shipped milestone, or a Backlog entry.
           s = withPhaseSection(s, phaseNum, (body) => {
-            let b = body.replace(planCountBodyPattern, `$1${summaryCount}/${planCount} plans complete`);
+            let b = writePlansField(body);
             for (const summaryFile of phaseInfoSummaries) {
               const planId = summaryFile.replace('-SUMMARY.md', '').replace('SUMMARY.md', '');
               if (!planId) continue;
