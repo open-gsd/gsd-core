@@ -535,12 +535,36 @@ function loadTestTimings(timingsPath) {
   return { timings, mean, medianWeight: median / mean };
 }
 
+// #4434: the table's own `sources` are Linux-only (test-events-linux-node22/24
+// .jsonl — never a Windows event stream), and this runner's own chunk-kill
+// diagnostic already tells operators "real Windows cost runs ~2.2x the
+// recorded figure, so treat every number as a floor" (see the catch block
+// around the per-chunk timeout, below). That string was, until this fix,
+// advisory text ONLY — nothing in the weigher actually applied it. Verified
+// live: `next` @ ccfed6335 (unrelated to the chunk's own diff — see #4434)
+// killed Windows conformance shard 3/3 chunk 6/8 at 600016ms; 6 of that
+// chunk's 17 files were wholly absent from the table and were packed at the
+// table's plain mean, identically to how a Linux/macOS chunk would price
+// them. A MEASURED file does not get this multiplier: #4733 already
+// calibrates measured-file packing against a real Windows wall-clock via
+// MAX_FILES_PER_CHUNK, so inflating measured weights again here would
+// double-apply the correction. An unmeasured file has no real data at all —
+// it is exactly the "floor, not a verdict" case the diagnostic already warns
+// about, so only its fallback gets the multiplier, and only on win32.
+const WINDOWS_UNMEASURED_COST_MULTIPLIER = 2.2;
+
 // Build the packer's weight function from a loaded timing table.
 //
 // A file present in the table weighs its measured duration relative to the
 // table mean. A file ABSENT from it weighs 1 — the table MEAN, the same
 // value a null table (missing or unparseable file) yields for every file,
-// because both states mean the same thing: cost unknown.
+// because both states mean the same thing: cost unknown. On win32 the
+// fallback is WINDOWS_UNMEASURED_COST_MULTIPLIER instead of 1 (see #4434,
+// above) — but ONLY for a file absent from an otherwise-loaded table; a
+// completely missing/corrupt/empty timings file (`timings` is `null`) still
+// degrades to uniform weight 1 on every platform, matching the pre-#2456
+// count-based-packing invariant many existing tests depend on. Every other
+// platform keeps the plain mean.
 //
 // This was previously `timings.medianWeight`, on the claim that an absent
 // file "costs chunk balance, never a red build." That claim is false. In a
@@ -550,11 +574,14 @@ function loadTestTimings(timingsPath) {
 // cause a red build: Windows conformance shard 2/3, chunk 4/6 was killed at
 // 600018ms with ZERO failing tests, because files absent from the table
 // packed as if they were nearly free and the chunk blew the 600s cap.
-// Empirically, mean is the right estimate for an unknown file: 9 unmeasured
-// files that caused the incident averaged 6659ms against a table mean of
-// 7152ms — within 7%.
-function makeFileWeigher(timings) {
+// Empirically, mean is the right estimate for an unknown file on the
+// platform the table was MEASURED on: 9 unmeasured files that caused the
+// incident averaged 6659ms against a table mean of 7152ms — within 7%. That
+// equivalence does not hold on win32, where the table's own sources are
+// Linux-only (#4434).
+function makeFileWeigher(timings, platform = process.platform) {
   if (!timings) return () => 1;
+  const unmeasuredWeight = platform === 'win32' ? WINDOWS_UNMEASURED_COST_MULTIPLIER : 1;
   return (f) => {
     const key = basename(f);
     // Own-property check before the lookup. This is defense-in-depth, NOT a
@@ -567,7 +594,9 @@ function makeFileWeigher(timings) {
     // keeps the lookup correct for arbitrary input, since this function is
     // exported and does not control its caller's strings.
     const ms = Object.hasOwn(timings.timings, key) ? timings.timings[key] : undefined;
-    return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? ms / timings.mean : 1;
+    return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0
+      ? ms / timings.mean
+      : unmeasuredWeight;
   };
 }
 
@@ -1192,7 +1221,7 @@ function main() {
   let weigherMemo = null;
   const fileWeightOf = () => {
     if (weigherMemo === null) {
-      weigherMemo = makeFileWeigher(loadedTimings());
+      weigherMemo = makeFileWeigher(loadedTimings(), process.platform);
     }
     return weigherMemo;
   };
@@ -1854,6 +1883,7 @@ module.exports = {
   defaultMaxFilesPerChunk,
   loadTestTimings,
   makeFileWeigher,
+  WINDOWS_UNMEASURED_COST_MULTIPLIER,
   makeMeasuredPredicate,
   packChunks,
   // 2026-09-07 (PR #4497): the codex-config.test.cjs chunk-isolation fix —

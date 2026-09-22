@@ -374,7 +374,9 @@ describe('launcher resolver: PATH branch prefers the collision-free bin', () => 
   test('prefers gsd_run when a foreign gsd-tools is also on PATH', (t) => {
     if (skipOnWindows(t)) return;
     const ours = path.join(dir, 'OURS');
-    writeFake('gsd_run', `: > "${ours}"`);
+    // #4834: the PATH arm is identity-gated, so the fake must answer
+    // `runtime-identity --raw` the way a real same-package install does.
+    writeFake('gsd_run', `if [ "$1" = "runtime-identity" ] && [ "$2" = "--raw" ]; then echo '{"packageName":"@opengsd/gsd-core","version":"1.0.0-test"}'; else : > "${ours}"; fi`);
     const foreign = path.join(dir, 'FOREIGN');
     writeFake('gsd-tools', `: > "${foreign}"`);
 
@@ -406,7 +408,9 @@ describe('launcher resolver: PATH branch prefers the collision-free bin', () => 
     if (skipOnWindows(t)) return;
     const ours = path.join(dir, 'OURS');
     const alive = path.join(dir, 'ALIVE');
-    writeFake('gsd_run', `: > "${ours}"`);
+    // #4834: the stub must prove identity — a bare stub now falls through the
+    // gate and would land in the resolver's exit 1 on the second source.
+    writeFake('gsd_run', `if [ "$1" = "runtime-identity" ] && [ "$2" = "--raw" ]; then echo '{"packageName":"@opengsd/gsd-core","version":"1.0.0-test"}'; else : > "${ours}"; fi`);
 
     const r = sourceAndRun(`. "${SNIPPET}"; . "${SNIPPET}"; : > "${alive}"; gsd_run query anything`);
 

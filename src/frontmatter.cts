@@ -1378,6 +1378,14 @@ function cmdFrontmatterGet(cwd: string, filePath: string, field: string | undefi
   // Pass the resolved path so a truncated file is named in the diagnostic and deduplicated
   // per file rather than per content digest (#1882, ADR-1411 wiring clause).
   const fm = extractFrontmatter(content, fullPath);
+  // #4806: an unparseable frontmatter block is a distinct outcome — the file
+  // HAS a frontmatter block but its YAML failed to parse. Reporting
+  // "Field not found" tells the caller the key is absent, which is
+  // indistinguishable from a file that genuinely lacks it.
+  if ((fm as unknown as Record<symbol, unknown>)[FRONTMATTER_UNPARSEABLE] === true) {
+    output({ error: 'Frontmatter is not parseable YAML — fix the syntax error in the frontmatter block', path: filePath }, raw, undefined);
+    return;
+  }
   if (field) {
     const value = fm[field];
     if (value === undefined) { output({ error: 'Field not found', field }, raw, undefined); return; }
@@ -1589,4 +1597,9 @@ export = {
   cmdFrontmatterMerge,
   cmdFrontmatterValidate,
   propagateCommentChannel,
+  // #4917 / ADR-4910 Decision 1: additive-only export so `planning-document.cts`
+  // can COMPOSE this seam's fence-detection grammar (byte-0 rule, BOM strip,
+  // CR handling) instead of reimplementing it. No behavior change — same
+  // function `extractFrontmatter`/`frontmatterListEntries` already call.
+  frontmatterRegion,
 };

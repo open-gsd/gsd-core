@@ -448,9 +448,9 @@ export function stripReasoningEffort(doc: CodexAgentDoc): CodexAgentDoc {
 /**
  * The 17 roles measured as widening under derivation (declare Write/Edit,
  * never in the pre-#3897 `CODEX_AGENT_SANDBOX` map, so the old
- * `|| 'read-only'` fallback silently under-granted them). Pinned to
- * `read-only` pending the open question of whether Codex enforces
- * `sandbox_mode` or treats it as advisory (HALT.md). This list is CLOSED and
+ * `|| 'read-only'` fallback silently under-granted them) — pinned to
+ * `read-only` from 2026-09-08 (HALT.md) until #4770 lifted the hold on
+ * 2026-09-21. This list is CLOSED and
  * SHRINK-ONLY: a new writing role never lands here (S6, T26); it is validated
  * against the live tool contract every time it is consulted
  * ({@link _deriveCodexSandboxModeFromTools}) and against the real
@@ -467,29 +467,25 @@ export function stripReasoningEffort(doc: CodexAgentDoc): CodexAgentDoc {
  * parses the list correctly, so this role genuinely derives
  * `workspace-write` from its tool contract — HALT.md's original 16-role
  * count measured against the pre-fix (single-line) readers and undercounted
- * this role. It is held here for the same reason as the other 16: pending
- * Codex's `sandbox_mode` enforcement decision, not because the derivation is
- * wrong.
+ * this role.
+ *
+ * **LIFTED 2026-09-21 (#4770, maintainer decision: documented enforcement
+ * suffices).** The map is empty: the rung-3 hold's recorded reopen condition
+ * — official OpenAI documentation establishing Codex `sandbox_mode` as an
+ * enforced technical boundary that custom subagent TOML files honor — is
+ * satisfied, so every role now derives `sandbox_mode` purely from its own
+ * `tools:` frontmatter (`workspace-write` iff Write/Edit is declared). The
+ * shrink-to-zero invariant (ADR-3473 §8.3) is satisfied by reaching zero;
+ * the map is kept as an empty frozen structure so a future re-hold has a
+ * shape to land in, and {@link validateCodexSandboxHolds} keeps failing if
+ * the list ever grows a role that no longer exists in `agents/`. The
+ * #3897 security-review F1/F3 fail-closed pins are unchanged and
+ * map-independent: `suspicious` identities (non-ASCII after
+ * normalization) still pin `read-only`, and post-lift the sandbox derives
+ * from an artifact's own CONTENT, so the F1 identity-confusion attack no
+ * longer has a hold to ride.
  */
-export const CODEX_SANDBOX_HOLDS: Readonly<Record<string, string>> = Object.freeze({
-  'gsd-ai-researcher': 'declares Write/Edit; pending Codex sandbox_mode enforcement decision',
-  'gsd-code-fixer': 'declares Write/Edit; pending Codex sandbox_mode enforcement decision',
-  'gsd-code-reviewer': 'declares Write/Edit; pending Codex sandbox_mode enforcement decision',
-  'gsd-debug-session-manager': 'declares Write/Edit; pending Codex sandbox_mode enforcement decision',
-  'gsd-doc-classifier': 'declares Write/Edit; pending Codex sandbox_mode enforcement decision',
-  'gsd-doc-synthesizer': 'declares Write/Edit; pending Codex sandbox_mode enforcement decision',
-  'gsd-doc-verifier': 'declares Write/Edit; pending Codex sandbox_mode enforcement decision',
-  'gsd-doc-writer': 'declares Write/Edit; pending Codex sandbox_mode enforcement decision',
-  'gsd-dom-verifier': 'declares Write/Edit; pending Codex sandbox_mode enforcement decision',
-  'gsd-domain-researcher': 'declares Write/Edit; pending Codex sandbox_mode enforcement decision',
-  'gsd-eval-auditor': 'declares Write/Edit; pending Codex sandbox_mode enforcement decision',
-  'gsd-eval-planner': 'declares Write/Edit; pending Codex sandbox_mode enforcement decision',
-  'gsd-intel-updater': 'declares Write/Edit; pending Codex sandbox_mode enforcement decision',
-  'gsd-pattern-mapper': 'declares Write/Edit; pending Codex sandbox_mode enforcement decision',
-  'gsd-ui-auditor': 'declares Write/Edit; pending Codex sandbox_mode enforcement decision',
-  'gsd-ui-researcher': 'declares Write/Edit; pending Codex sandbox_mode enforcement decision',
-  'gsd-nyquist-auditor': 'declares Write/Edit (YAML list-form tools:, surfaced by the list-form parse fix); pending Codex sandbox_mode enforcement decision',
-});
+export const CODEX_SANDBOX_HOLDS: Readonly<Record<string, string>> = Object.freeze({});
 
 // True iff a `tools:` frontmatter value declares Write or Edit as a whole
 // token (never a substring match, so a hypothetical "Edith"-named tool could

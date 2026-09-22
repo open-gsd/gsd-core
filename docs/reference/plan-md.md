@@ -244,6 +244,40 @@ Full taxonomy, emission rules, and anti-patterns (chiefly: rating everything `on
 
 ---
 
+## Auto-select
+
+`auto_select` is an **optional** attribute on a `<task type="checkpoint:decision">` element (issue #4095). It names the `id` of the `<option>` that auto-mode (`workflow._auto_chain_active` / `workflow.auto_advance`) should select when the checkpoint is reached unattended.
+
+```xml
+<task type="checkpoint:decision" gate="blocking" auto_select="nextauth">
+  <decision>Select authentication provider</decision>
+  <options>
+    <option id="supabase"><name>Supabase Auth</name></option>
+    <option id="clerk"><name>Clerk</name></option>
+    <option id="nextauth"><name>NextAuth.js</name></option>
+  </options>
+  <resume-signal>Select: supabase, clerk, or nextauth</resume-signal>
+</task>
+```
+
+**Semantics:**
+
+| `auto_select` | Auto-mode behavior |
+|---|---|
+| Absent | Escalates to a human — same treatment as `gate="blocking-human"`. Auto-mode does not guess an answer from option order. |
+| Names a real `<option id="…">` | Selects that option and logs `⚡ Auto-selected: [option id]`, then continues. |
+| Names an id that does not match any `<option id="…">` | `verify plan-structure` fails at plan-parse time. Never a silent fallback to the first option. |
+
+`gate="blocking-human"` continues to win over everything, unchanged — it stops for a human in every mode regardless of `auto_select`.
+
+**Why:** before this attribute existed, auto-mode always picked the first `<option>`, and the planner convention of front-loading the recommended choice meant the safety of every decision checkpoint depended on presentation order — a detail no plan author was told was load-bearing. `auto_select` makes the unattended answer an authored decision instead of a byproduct of layout.
+
+**Optional and back-compat for the structural validator:** a plan that omits `auto_select` on every `checkpoint:decision` task still passes `verify plan-structure` — the validator only rejects a *declared* `auto_select` that doesn't match any option id. What changes is auto-mode's *runtime* behavior (escalate instead of guessing), not plan-structure validity.
+
+Full behavioral reference: `gsd-core/references/checkpoints.md` → `checkpoint:decision`.
+
+---
+
 ## Task types
 
 | Type | Use | Autonomy |
@@ -251,7 +285,7 @@ Full taxonomy, emission rules, and anti-patterns (chiefly: rating everything `on
 | `auto` | Everything the executor can do independently. | Fully autonomous. |
 | `tracer` | The leading thin end-to-end slice a plan starts with by default (tracer-first) — production-quality, wired through every layer, with a real end-to-end `<verify>`. | Fully autonomous; after committing, the executor runs the tracer's `<verify>` as an early integration gate. A tracer carrying `gate="blocking-human"` STOPs for a human in every mode, auto included. Otherwise autonomous runs halt on failure before expansion, and interactive runs honor `workflow.human_verify_mode` (#3299): under the `end-of-phase` default a `<verify>` carrying only `<automated>` is re-run and, on success, expansion continues with **no** checkpoint (failure still halts); under `mid-flight`, or when the tracer carries `<human-check>`, a `checkpoint:human-verify` is presented. Full precedence chain: `gsd-core/references/checkpoints.md` → "Tracer feedback gate". |
 | `checkpoint:human-verify` | Visual or functional verification that requires a human to look at a running UI or service. | Pauses execution; presents to the developer; resumes on approval. |
-| `checkpoint:decision` | Implementation choices that arose during execution and require the developer's input. | Pauses execution; presents options; resumes on selection. |
+| `checkpoint:decision` | Implementation choices that arose during execution and require the developer's input. | Pauses execution; presents options; resumes on selection. In auto-mode, an `auto_select="<option-id>"` attribute lets the plan name the unattended answer — see [Auto-select](#auto-select). |
 | `checkpoint:human-action` | Truly unavoidable manual steps (account creation, hardware interaction). Used sparingly. | Pauses execution; resumes on confirmation. |
 
 Plans that contain any checkpoint task must set `autonomous: false` in frontmatter.

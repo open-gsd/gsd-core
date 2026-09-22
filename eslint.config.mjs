@@ -126,6 +126,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/resolution.cjs',
       'gsd-core/bin/lib/unusable-input.cjs',
       'gsd-core/bin/lib/plan-drift-guard.cjs',
+      // #4917 (epic #4906 Phase 1, ADR-4910): lint src/planning-document.cts, not this.
+      'gsd-core/bin/lib/planning-document.cjs',
       // #2401: tsc-generated runtime artifact — lint the src/verify-command-grounding.cts source.
       'gsd-core/bin/lib/verify-command-grounding.cjs',
       'gsd-core/bin/lib/cli-exit.cjs',

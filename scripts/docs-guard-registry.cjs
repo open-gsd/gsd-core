@@ -174,6 +174,7 @@ const DOCS_GUARD_TESTS = {
   // entry).
   'tests/learnings.test.cjs': ['docs/FEATURES.md'],
   'tests/analyze-dependencies.test.cjs': ['docs/COMMANDS.md'],
+  'tests/auto-select-attribute.test.cjs': ['docs/reference/plan-md.md'],
   'tests/autonomous-converge.test.cjs': [
     'docs/COMMANDS.md',
     'docs/how-to/run-phases-autonomously.md',

@@ -783,3 +783,33 @@ describe('frontmatter get — truncated vs absent frontmatter (#1882)', () => {
     assert.strictEqual(r.stderr, '', 'a horizontal rule is valid Markdown, not a truncated file');
   });
 });
+
+// ─── #4806: unparseable frontmatter is a distinct error, not "Field not found" ──
+
+describe('#4806 frontmatter get — unparseable frontmatter', () => {
+  test('reports a parse error naming the field, not "Field not found"', () => {
+    // An invalid backslash escape inside a double-quoted value is a YAML
+    // SYNTAX error: the file HAS a status key but its frontmatter cannot be
+    // read. Reporting "Field not found" tells the caller the key is absent —
+    // indistinguishable from a file that genuinely lacks it.
+    const file = writeTempFile('---\nstatus: "passed\n---\n\n# Verification Report\n');
+    const result = runGsdTools(['frontmatter', 'get', file, '--field', 'status']);
+    // The verb answers exit-0 JSON with an `error` FIELD (its documented
+    // error shape) — the assertion is on the error text, not the exit code.
+    assert.strictEqual(result.success, true, `command failed: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.ok(
+      (parsed.error || '').includes('not parseable YAML'),
+      `must report a parse error, got: ${JSON.stringify(parsed)}`,
+    );
+    assert.ok(!parsed.error.includes('Field not found'), 'parse failure must not read as Field not found');
+  });
+
+  test('a well-formed file still returns the field', () => {
+    const file = writeTempFile('---\nstatus: passed\n---\n\n# V\n');
+    const result = runGsdTools(['frontmatter', 'get', file, '--field', 'status']);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.status, 'passed');
+  });
+});
