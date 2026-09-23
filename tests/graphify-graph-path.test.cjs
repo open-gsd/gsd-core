@@ -224,6 +224,93 @@ describe('graphify graph_path override — status', () => {
     assert.strictEqual(result.exists, false);
     assert.ok(result.message.includes(abs), 'status message must name the configured path');
   });
+
+  // `graph_path` (#4836). The planner/researcher prompts prefer the `graphify` CLI,
+  // which takes the graph location as `--graph`. They read that value from status
+  // rather than re-deriving `.planning/graphs/graph.json`, which would silently
+  // point the CLI at a non-existent local mirror whenever the umbrella override is
+  // configured — the exact case graph_path exists to serve. So status must emit the
+  // SAME absolute path the built-in reader uses, on both the present and the missing
+  // branch (the missing branch is what makes the error actionable at the call site).
+
+  test('set + present → status emits graph_path = the configured absolute path', () => {
+    const umbrellaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-umbrella-gp-'));
+    try {
+      const abs = path.join(umbrellaDir, 'graph.json');
+      fs.writeFileSync(abs, JSON.stringify(UMBRELLA_GRAPH), 'utf8');
+      setGraphPath(planningDir, abs);
+
+      const result = graphifyStatus(tmpDir);
+      assert.strictEqual(result.exists, true);
+      assert.strictEqual(result.graph_path, abs);
+      assert.notStrictEqual(
+        result.graph_path,
+        path.join(planningDir, 'graphs', 'graph.json'),
+        'graph_path must be the configured location, not the default mirror',
+      );
+    } finally {
+      cleanup(umbrellaDir);
+    }
+  });
+
+  test('set + relative → graph_path is resolved against the project root', () => {
+    const umbrellaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-umbrella-rel-'));
+    try {
+      const abs = path.join(umbrellaDir, 'graph.json');
+      fs.writeFileSync(abs, JSON.stringify(UMBRELLA_GRAPH), 'utf8');
+      const rel = path.relative(tmpDir, abs);
+      assert.ok(!path.isAbsolute(rel), 'fixture must feed a relative graph_path');
+      setGraphPath(planningDir, rel);
+
+      const result = graphifyStatus(tmpDir);
+      assert.strictEqual(result.exists, true);
+      assert.ok(path.isAbsolute(result.graph_path), 'graph_path must be absolute');
+      assert.strictEqual(result.graph_path, abs);
+    } finally {
+      cleanup(umbrellaDir);
+    }
+  });
+
+  test('set + missing → graph_path still names the configured path', () => {
+    const abs = path.join(tmpDir, 'missing.json');
+    setGraphPath(planningDir, abs);
+
+    const result = graphifyStatus(tmpDir);
+    assert.strictEqual(result.exists, false);
+    assert.strictEqual(result.graph_path, abs);
+  });
+
+  test('unset → graph_path is the default .planning/graphs/graph.json', () => {
+    fs.mkdirSync(path.join(planningDir, 'graphs'), { recursive: true });
+    const def = path.join(planningDir, 'graphs', 'graph.json');
+    fs.writeFileSync(def, JSON.stringify(SAMPLE_GRAPH), 'utf8');
+
+    const result = graphifyStatus(tmpDir);
+    assert.strictEqual(result.exists, true);
+    assert.strictEqual(result.graph_path, def);
+  });
+
+  test('unset + missing → graph_path is the default path', () => {
+    const result = graphifyStatus(tmpDir);
+    assert.strictEqual(result.exists, false);
+    assert.strictEqual(result.graph_path, path.join(planningDir, 'graphs', 'graph.json'));
+  });
+
+  // #4836 review Minor 1: a present-but-unparseable graph.json hits neither the
+  // `exists:false` nor the `exists:true` branch, so the CLI-first prompt gate
+  // ("if exists is false, skip") does not catch it and the CLI call would
+  // interpolate the literal `<graph>` placeholder without a real path to
+  // substitute. graph_path must be present here too.
+  test('present + unparseable → error response still names graph_path', () => {
+    const def = path.join(planningDir, 'graphs', 'graph.json');
+    fs.mkdirSync(path.dirname(def), { recursive: true });
+    fs.writeFileSync(def, '{not valid json', 'utf8');
+
+    const result = graphifyStatus(tmpDir);
+    assert.strictEqual(result.exists, undefined);
+    assert.ok(result.error, 'must report the parse failure');
+    assert.strictEqual(result.graph_path, def);
+  });
 });
 
 // ─── diff + writeSnapshot (snapshot travels with the configured graph) ────────

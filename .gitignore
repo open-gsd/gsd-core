@@ -213,6 +213,7 @@ build/
 /gsd-core/bin/lib/planning-workspace.cjs
 /gsd-core/bin/lib/planning-scope.cjs
 /gsd-core/bin/lib/planning-snapshot.cjs
+/gsd-core/bin/lib/planning-document.cjs
 /gsd-core/bin/lib/planning-inspect.cjs
 /gsd-core/bin/lib/planning-command-router.cjs
 /gsd-core/bin/lib/plan-document.cjs

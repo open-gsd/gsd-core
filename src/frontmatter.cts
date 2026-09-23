@@ -1597,4 +1597,9 @@ export = {
   cmdFrontmatterMerge,
   cmdFrontmatterValidate,
   propagateCommentChannel,
+  // #4917 / ADR-4910 Decision 1: additive-only export so `planning-document.cts`
+  // can COMPOSE this seam's fence-detection grammar (byte-0 rule, BOM strip,
+  // CR handling) instead of reimplementing it. No behavior change — same
+  // function `extractFrontmatter`/`frontmatterListEntries` already call.
+  frontmatterRegion,
 };

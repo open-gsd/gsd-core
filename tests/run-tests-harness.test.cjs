@@ -409,6 +409,15 @@ test('ambient GSD workstream vars are stripped by the runner', () => {
       const r = runHarness(tmpDir, [], {
         RUN_TESTS_MAX_CMDLINE_CHARS: '100000',
         RUN_TESTS_MAX_FILES_PER_CHUNK: '3',
+        // #4434: without this, these tiny-*.test.cjs names fall through to the
+        // REAL committed tests/test-timings.json as unmeasured entries, and on
+        // win32 an unmeasured entry in a loaded table now weighs
+        // WINDOWS_UNMEASURED_COST_MULTIPLIER (2.2), not 1 — breaking the exact
+        // {3,2,2} count-based split this test asserts. Point at a path that
+        // cannot exist so the harness takes the no-table branch (uniform
+        // weight 1 on every platform), matching this test's actual intent:
+        // pure file-count chunking, independent of any cost table.
+        RUN_TESTS_TIMINGS_FILE: path.join(tmpDir, 'no-such-timings-4434.json'),
       });
       assert.strictEqual(
         r.status,
@@ -2294,6 +2303,7 @@ describe('bug #969 C — ensureBuiltHooks populates hooks/dist before concurrent
 const {
   packChunks,
   makeFileWeigher,
+  WINDOWS_UNMEASURED_COST_MULTIPLIER,
   loadTestTimings,
   positiveNumberEnv,
   DEFAULT_TIMINGS_PATH,
@@ -2428,11 +2438,97 @@ describe('chunk packing weights measured cost (#2456)', () => {
       // not 20/30 (the median) — see #2456 follow-up, red-next 2026-09-14.
       const t = tableFrom({ 'a.test.cjs': 10000, 'b.test.cjs': 20000, 'c.test.cjs': 60000 });
       try {
-        const weigh = makeFileWeigher(loadTestTimings(t.path));
+        const weigh = makeFileWeigher(loadTestTimings(t.path), 'linux');
         assert.strictEqual(weigh('brand-new-test.test.cjs'), 1);
       } finally {
         cleanup(t.dir);
       }
+    });
+
+    test('#4434: on win32, a file missing from the table falls back to the documented Windows multiplier (2.2), not the mean', () => {
+      const t = tableFrom({ 'a.test.cjs': 10000, 'b.test.cjs': 20000, 'c.test.cjs': 60000 });
+      try {
+        const weigh = makeFileWeigher(loadTestTimings(t.path), 'win32');
+        assert.strictEqual(weigh('brand-new-test.test.cjs'), WINDOWS_UNMEASURED_COST_MULTIPLIER);
+      } finally {
+        cleanup(t.dir);
+      }
+    });
+
+    test('#4434: on linux/darwin, a file missing from the table still falls back to the plain mean (1)', () => {
+      const t = tableFrom({ 'a.test.cjs': 10000, 'b.test.cjs': 20000, 'c.test.cjs': 60000 });
+      try {
+        assert.strictEqual(makeFileWeigher(loadTestTimings(t.path), 'linux')('brand-new-test.test.cjs'), 1);
+        assert.strictEqual(makeFileWeigher(loadTestTimings(t.path), 'darwin')('brand-new-test.test.cjs'), 1);
+      } finally {
+        cleanup(t.dir);
+      }
+    });
+
+    test('#4434: on win32, a MEASURED file is unaffected by the unmeasured-file multiplier', () => {
+      const t = tableFrom({ 'a.test.cjs': 10000, 'b.test.cjs': 20000, 'c.test.cjs': 60000 });
+      try {
+        const weighWin = makeFileWeigher(loadTestTimings(t.path), 'win32');
+        const weighLinux = makeFileWeigher(loadTestTimings(t.path), 'linux');
+        assert.strictEqual(
+          weighWin('b.test.cjs'),
+          weighLinux('b.test.cjs'),
+          'a measured file must weigh identically regardless of platform',
+        );
+      } finally {
+        cleanup(t.dir);
+      }
+    });
+
+    test('#4434: a completely missing table still degrades to uniform weight 1 on win32 — the Windows multiplier only applies to a file absent FROM an otherwise-loaded table', () => {
+      const weigh = makeFileWeigher(null, 'win32');
+      assert.strictEqual(
+        weigh('anything.test.cjs'),
+        1,
+        'no table at all must keep the pre-#2456 uniform-weight invariant on every platform, including win32',
+      );
+    });
+
+    test('property: an unmeasured file weighs exactly the Windows multiplier on win32, and exactly 1 on every other platform, for any measured table', () => {
+      const fc = require('fast-check');
+      fc.assert(
+        fc.property(
+          fc.array(fc.integer({ min: 1, max: 500000 }), { minLength: 1, maxLength: 30 }),
+          fc.constantFrom('win32', 'linux', 'darwin', 'freebsd', 'sunos'),
+          (mss, platform) => {
+            const timingsMap = Object.fromEntries(
+              mss.map((ms, i) => [`p${String(i).padStart(3, '0')}.test.cjs`, ms]),
+            );
+            const mean = mss.reduce((a, b) => a + b, 0) / mss.length;
+            const timings = { timings: timingsMap, mean, medianWeight: 1 };
+            const weigh = makeFileWeigher(timings, platform);
+            const expected = platform === 'win32' ? WINDOWS_UNMEASURED_COST_MULTIPLIER : 1;
+            assert.strictEqual(weigh('never-measured.test.cjs'), expected);
+          },
+        ),
+        { numRuns: 200, seed: 44340 },
+      );
+    });
+
+    test('property: a MEASURED file weighs identically regardless of platform, for any measured table', () => {
+      const fc = require('fast-check');
+      fc.assert(
+        fc.property(
+          fc.array(fc.integer({ min: 1, max: 500000 }), { minLength: 1, maxLength: 30 }),
+          fc.constantFrom('win32', 'linux', 'darwin', 'freebsd', 'sunos'),
+          (mss, platform) => {
+            const timingsMap = Object.fromEntries(
+              mss.map((ms, i) => [`p${String(i).padStart(3, '0')}.test.cjs`, ms]),
+            );
+            const mean = mss.reduce((a, b) => a + b, 0) / mss.length;
+            const timings = { timings: timingsMap, mean, medianWeight: 1 };
+            const weighPlatform = makeFileWeigher(timings, platform);
+            const weighLinux = makeFileWeigher(timings, 'linux');
+            assert.strictEqual(weighPlatform('p000.test.cjs'), weighLinux('p000.test.cjs'));
+          },
+        ),
+        { numRuns: 200, seed: 44341 },
+      );
     });
 
     test('an unknown file packs without error rather than failing the run', () => {
@@ -2496,7 +2592,7 @@ describe('chunk packing weights measured cost (#2456)', () => {
         assert.ok(table.medianWeight < 0.05, 'fixture must actually be right-skewed');
         const files = Array.from({ length: 30 }, (_, i) => `unmeasured-${i}.test.cjs`);
         const chunks = packChunks(files, {
-          weightOf: makeFileWeigher(table),
+          weightOf: makeFileWeigher(table, 'linux'),
           maxWeight: 6,
           maxChars: ROOMY_CHARS,
           fixedOverhead: FIXED_OVERHEAD,
@@ -2542,7 +2638,7 @@ describe('chunk packing weights measured cost (#2456)', () => {
           table.medianWeight < 0.2,
           `fixture must be right-skewed; got medianWeight=${table.medianWeight}`,
         );
-        const weigh = makeFileWeigher(table);
+        const weigh = makeFileWeigher(table, 'linux');
         assert.strictEqual(weigh('never-measured.test.cjs'), 1);
       } finally {
         cleanup(t.dir);
@@ -2552,7 +2648,7 @@ describe('chunk packing weights measured cost (#2456)', () => {
     test('that matches what a MISSING table already does — both mean "unknown"', () => {
       const t = tableFrom(SKEWED_MS);
       try {
-        const weigh = makeFileWeigher(loadTestTimings(t.path));
+        const weigh = makeFileWeigher(loadTestTimings(t.path), 'linux');
         const weighNull = makeFileWeigher(null);
         assert.strictEqual(weighNull('anything.test.cjs'), 1);
         assert.strictEqual(weighNull('anything.test.cjs'), weigh('never-measured.test.cjs'));
@@ -2772,7 +2868,7 @@ describe('chunk packing weights measured cost (#2456)', () => {
       // present in the table weighs 1 (the mean), whatever it resolves to.
       const t = tableFrom({ 'a.test.cjs': 10000, 'b.test.cjs': 20000, 'c.test.cjs': 60000 });
       try {
-        const weigh = makeFileWeigher(loadTestTimings(t.path));
+        const weigh = makeFileWeigher(loadTestTimings(t.path), 'linux');
         for (const name of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']) {
           const w = weigh(name);
           assert.strictEqual(typeof w, 'number', `${name} must weigh a number, not a function`);

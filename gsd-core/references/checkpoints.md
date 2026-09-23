@@ -8,14 +8,14 @@ Plans execute autonomously. Checkpoints formalize interaction points where human
 2. **Claude sets up the verification environment** - Start dev servers, seed databases, configure env vars
 3. **User only does what requires human judgment** - Visual checks, UX evaluation, "does this feel right?"
 4. **Secrets come from user, automation comes from Claude** - Ask for API keys, then Claude uses them via CLI
-5. **Auto-mode bypasses verification/decision checkpoints** — When `workflow._auto_chain_active` or `workflow.auto_advance` is true in config: human-verify auto-approves, decision auto-selects first option, human-action still stops (auth gates cannot be automated)
+5. **Auto-mode bypasses verification checkpoints, and decision checkpoints with a declared `auto_select`** — When `workflow._auto_chain_active` or `workflow.auto_advance` is true in config: human-verify auto-approves; a `checkpoint:decision` carrying `auto_select="<option-id>"` auto-selects that named option; a `checkpoint:decision` with NO `auto_select` escalates to a human instead of guessing by position (#4095); human-action still stops (auth gates cannot be automated)
 6. **`gate="blocking-human"` is never auto-approved** — a checkpoint carrying this gate stops for a human in *every* mode, including auto-mode, regardless of its type. Rule 5 does not apply to it. The executor's precondition-unmet checkpoint (a task's `<precondition>` evaluated false — unmet `user_setup` step, missing env var, absent prior-phase artifact) reports this gate (#3210).
 
 **The `gate` attribute:**
 
 | Value | Auto-mode behavior | Use for |
 |-------|--------------------|---------|
-| `gate="blocking"` | Bypassed per rule 5 (human-verify auto-approves, decision auto-selects) | The default. Post-hoc verification and implementation choices that are safe to take the recommended path on when unattended. |
+| `gate="blocking"` | Bypassed per rule 5 (human-verify auto-approves; decision auto-selects only when `auto_select` names an option, else escalates) | The default. Post-hoc verification and implementation choices that are safe to take the recommended path on when unattended. |
 | `gate="blocking-human"` | **Never bypassed.** Stops for a human in auto-mode too. | Irreversible or trust-establishing steps a human must actually see: package-legitimacy verification before install, any decision whose default answer would be wrong to assume, and unmet `<precondition>` facts the executor cannot establish on its own (#3210). |
 
 Reach for `gate="blocking-human"` whenever auto-approving the checkpoint would defeat its purpose. If the checkpoint exists because a human must *decide* something, `blocking` is the wrong gate — auto-mode will decide it for them.
@@ -147,7 +147,7 @@ HUMAN_VERIFY_MODE=$(gsd_run query config-get workflow.human_verify_mode --defaul
 
 **Structure:**
 ```xml
-<task type="checkpoint:decision" gate="blocking">
+<task type="checkpoint:decision" gate="blocking" auto_select="option-a">
   <decision>[What's being decided]</decision>
   <context>[Why this decision matters]</context>
   <options>
@@ -165,6 +165,8 @@ HUMAN_VERIFY_MODE=$(gsd_run query config-get workflow.human_verify_mode --defaul
   <resume-signal>[How to indicate choice]</resume-signal>
 </task>
 ```
+
+`auto_select` is optional and names the `id` of the `<option>` auto-mode should pick when this checkpoint is reached unattended. Omit it and auto-mode escalates to a human instead of guessing from option order — the same treatment `gate="blocking-human"` already gets. An `auto_select` value that doesn't match any `<option id="…">` fails `verify plan-structure` at plan-parse time rather than silently falling back to the first option.
 
 **Example: Auth Provider Selection**
 ```xml

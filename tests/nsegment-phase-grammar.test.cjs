@@ -336,6 +336,9 @@ const EXECUTE_PHASE = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execu
 const COMPLETION_RECONCILIATION = path.join(
   __dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'completion-reconciliation.md',
 );
+const CODE_REVIEW_DISPOSITION = path.join(
+  __dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'code-review-disposition.md',
+);
 const TDD_REF = path.join(__dirname, '..', 'gsd-core', 'references', 'tdd.md');
 const AUTONOMOUS = path.join(__dirname, '..', 'gsd-core', 'workflows', 'autonomous.md');
 const PLAN_REVIEW_CONVERGENCE = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-review-convergence.md');
@@ -456,55 +459,88 @@ describe('#4748 — the $((10#$PHASE_INT)) split sites carry a letter suffix int
   }
 });
 
-describe('#4748 — execute-phase.md resolves the REVIEW.md path from init\'s padded_phase, not a shell re-pad', () => {
-  const lines = splitLines(fs.readFileSync(EXECUTE_PHASE, 'utf8'));
-  const [i] = findAnchoredLineIndexes(lines, 'REVIEW_FILE="${PHASE_DIR}/${PADDED}-REVIEW.md"', 1);
-  const paddedLine = lines[i - 1].trim();
+describe('#4748 — the code-review gate resolves the REVIEW.md path from a letter-safe padded phase, not a shell re-pad', () => {
+  // #3829 moved this lookup out of `execute-phase.md` and into the lazily-read step file below.
+  // The inline block did not fit under ADR-857's frozen pre-phase-6 ceiling (93600), which the
+  // parent now clears by 139 bytes, so it cannot be restored in place. #4748's property is
+  // unchanged and is asserted here against the site that now performs the lookup.
+  //
+  // ONE of this block's original four assertions was a property of the INLINE site rather than of
+  // the lookup, and does not survive the move: the `PADDED="{padded_phase}"` literal binding. The
+  // step derives PADDED itself — validating PHASE_NUMBER for shape and traversal, then padding the
+  // digit run as a STRING and carrying the letter and dot segments verbatim — so there is no
+  // literal binding left to pin, and agreement with the canonical normalizer is what replaces it.
+  //
+  // The composition run DID come back, below, and an earlier cut of this block was wrong to drop it
+  // on the grounds that mirroring would duplicate the PR's own coverage. A STATIC assertion cannot
+  // hold a BEHAVIOURAL property; at the original site it could, because the property was a literal
+  // binding. So this block keeps deterministic ownership of #4748 by EXECUTING the step's own
+  // derivation over a fixed id list. The PR's fast-check property in
+  // `tests/code-review-pipeline-regression.test.cjs` is a different instrument over the same
+  // contract — generated ids rather than a fixed list — and it reaches divergences this one does
+  // not: a letter outside the fixed list leaves this block green.
+  const stepLines = splitLines(fs.readFileSync(CODE_REVIEW_DISPOSITION, 'utf8'));
+  const lookupIdx = findAnchoredLineIndexes(stepLines, 'REVIEW_FILE="${_pd}/${PADDED}-REVIEW.md"', 2);
 
-  test('the PADDED binding directly above the lookup reads {padded_phase} (fails before the fix)', () => {
-    // `printf "%02d"` cannot pad `03A` (prints `03`, exits 1) — and cannot
-    // even re-pad an already-padded `08` (bash reads it as octal, prints
-    // `00`). `init execute-phase` now emits `padded_phase` through the
-    // canonical normalizer, so the workflow binds it instead of re-deriving.
-    assert.ok(paddedLine.startsWith('PADDED='), `line above the lookup must bind PADDED: ${paddedLine}`);
-    assert.equal(paddedLine, 'PADDED="{padded_phase}"');
+  test('no fence pads the raw phase number with printf (fails before the fix)', () => {
+    // `printf "%02d"` cannot pad `03A` (prints `03`, exits 1) — and cannot even re-pad an
+    // already-padded `08` (bash reads it as octal, prints `00`). Every binding must pad the
+    // DIGIT RUN, never PHASE_NUMBER itself.
+    const offenders = stepLines
+      .map((l, n) => [n + 1, l])
+      .filter(([, l]) => !/^\s*#/.test(l) && /printf\s+"%0\d*d"\s+"?\$\{?PHASE_NUMBER/.test(l));
+    assert.deepEqual(offenders, [], `no fence may printf-pad PHASE_NUMBER: ${JSON.stringify(offenders)}`);
   });
 
-  test('regression control: the lookup line itself is unchanged', () => {
-    assert.equal(lines[i].trim(), 'REVIEW_FILE="${PHASE_DIR}/${PADDED}-REVIEW.md"');
-  });
-
-  test('composition: the value init emits, substituted into the live lookup lines, resolves the letter phase\'s own REVIEW.md', (t) => {
-    // The model substitutes `{padded_phase}` from the init JSON, which is
-    // `normalizePhaseName(phase_number)` (src/init.cts). Do that substitution
-    // here and run the three live lines against a fixture, so the emitted
-    // value, the binding, the path construction and the status extraction are
-    // exercised together — the executable half of a `{template}` site.
-    const { normalizePhaseName } = require('../gsd-core/bin/lib/phase-id.cjs');
-    const { createTempDir, cleanup } = require('./helpers.cjs');
-    const dir = createTempDir();
-    t.after(() => cleanup(dir));
-    for (const [id, status] of [['3A', 'clean'], ['8', 'issues'], ['9', 'skipped']]) {
-      const emitted = normalizePhaseName(id);
-      fs.writeFileSync(path.join(dir, `${emitted}-REVIEW.md`), `---\nstatus: ${status}\n---\n# review\n`);
-      const script = [
-        'set -e',
-        paddedLine.replace('{padded_phase}', emitted),
-        lines[i].trim(),
-        lines[i + 1].trim(),
-        'printf \'%s %s\' "$PADDED" "$REVIEW_STATUS"',
-      ].join('\n');
-      assert.ok(lines[i + 1].includes('REVIEW_STATUS='), `line after the lookup must extract REVIEW_STATUS: ${lines[i + 1]}`);
-      const r = runBash(script, { PHASE_DIR: dir });
-      assert.equal(r.status, 0, `bash exited ${r.status}: ${r.stderr}`);
-      assert.equal(r.stdout, `${emitted} ${status}`);
+  test('no lookup pads the phase through arithmetic (fails before the fix)', () => {
+    // THE DEFECT SHAPE, which is what a static gate can actually hold. The canonical normalizer
+    // left-pads the digit run to a MINIMUM of two and otherwise PRESERVES it (`008` -> `008`), so an
+    // arithmetic pad is wrong by construction -- `$((10#$_dig))` collapses every longer leading-zero
+    // run. Deliberately NOT a pin on one spelling of the remedy: an equivalent multi-line string pad
+    // must pass here, and correctness is asserted by execution below rather than by shape.
+    for (const i of lookupIdx) {
+      const bound = stepLines.slice(0, i).reverse()
+        .find((l) => /PADDED=/.test(l) && !/PADDED=""/.test(l));
+      assert.ok(bound, `the lookup at line ${i + 1} has no PADDED binding above it`);
+      assert.doesNotMatch(bound, /printf|\$\(\(/,
+        `the pad must not be arithmetic -- arithmetic collapses 008 to 08: ${bound.trim()}`);
     }
   });
 
-  test('the workflow\'s init parse list names padded_phase, so the binding is not a literal (fails before the fix)', () => {
-    // A `{field}` token is substituted from the init JSON only for fields the
-    // workflow tells the model to parse; `phase_number` is on that list and
-    // `padded_phase` was not (adversarial review, claim 2).
+  test('composition: each fence\'s live derivation resolves the id init would emit', () => {
+    // #4748's property, asserted the way it has to be at THIS site. At the original site the gate
+    // could be static because the property was a literal binding of init's own `{padded_phase}`;
+    // here the step derives the value, so the property is behavioural and only execution can hold
+    // it. Runs the SHIPPED derivation slice of BOTH fences against the canonical normalizer.
+    const { normalizePhaseName } = require('../gsd-core/bin/lib/phase-id.cjs');
+    const starts = [];
+    stepLines.forEach((l, n) => { if (l.includes('_pd="${PHASE_DIR:-}"')) starts.push(n); });
+    assert.equal(starts.length, lookupIdx.length, 'each lookup must have its own derivation slice');
+    const derivations = starts.map((d, n) => stepLines.slice(d, lookupIdx[n] + 1).join('\n'));
+    // `008` is the case the arithmetic pad got wrong and no prior fixture covered.
+    for (const id of ['3A', '8', '9', '08', '008', '0008A', '23A.1.2']) {
+      for (const deriv of derivations) {
+        const out = execFileSync('bash', [], {
+          input: `set -e\n${deriv}\nprintf '%s' "$PADDED"`,
+          encoding: 'utf8',
+          timeout: TIMEOUT,
+          env: { ...process.env, PHASE_DIR: '/tmp', PHASE_NUMBER: id },
+        });
+        assert.equal(out, normalizePhaseName(id), `the step disagreed with the normalizer on ${id}`);
+      }
+    }
+  });
+
+  test('regression control: the lookup lines themselves are unchanged', () => {
+    for (const i of lookupIdx) {
+      assert.equal(stepLines[i].trim(), 'REVIEW_FILE="${_pd}/${PADDED}-REVIEW.md"');
+    }
+  });
+
+  test('the workflow\'s init parse list still names padded_phase (fails before the fix)', () => {
+    // A `{field}` token is substituted from the init JSON only for fields the workflow tells the
+    // model to parse. This one is a property of `execute-phase.md` and the move does not touch it.
+    const lines = splitLines(fs.readFileSync(EXECUTE_PHASE, 'utf8'));
     const [p] = findAnchoredLineIndexes(lines, 'Parse JSON for: `executor_model`', 1);
     assert.match(lines[p], /`phase_number`, `padded_phase`,/);
   });

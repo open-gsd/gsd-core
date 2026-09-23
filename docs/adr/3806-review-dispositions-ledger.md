@@ -137,3 +137,19 @@ construction the moment a new capability ships one.
 - #724 / #728 — established the content requirement this decision only gives a canonical shape to.
 - [ADR-766](766-claude-code-plugin-manifest-module.md) — precedent for an ADR and its full
   implementation landing in the same PR.
+
+## Amendment (2026-09-14): not the code-review disposition ledger
+
+A second artifact with an adjacent name and the opposite durability rule now exists, and neither
+document mentioned the other. `<NN>-REVIEW-DISPOSITION.md` (#3829, PR #3861 —
+[`docs/features/code-review-pipeline.md`](../features/code-review-pipeline.md)) records a
+per-finding disposition (`open` / `fixed` / `skipped` / `deferred`) for the **code-review
+pipeline's** `REVIEW.md` findings, written by `execute-phase`'s `code_review_gate` and by
+`code-review-fix`'s `record_disposition`. It is a sibling file beside `REVIEW.md`, rewritten
+idempotently on every run, with rows carried forward and a human hand-editing `deferred` in place.
+
+This ADR's ledger is the **reviews-mode planning** one: a `## Review Dispositions Ledger` section
+inside `PLAN.md`, append-only per round, over `REVIEWS.md` findings. The two share the word
+"disposition" and nothing else — different inputs, different writers, different files, and opposite
+rules for what a later run may change. Neither governs the other; a `recall_decision` hit on either
+name is not evidence about the other. This section is the cross-reference the adjacency warranted.
