@@ -65,7 +65,7 @@ const {
   GSD_CODEX_MARKER: _GSD_CODEX_MARKER,
   deriveCodexSandboxMode: _deriveCodexSandboxMode,
   // #3897 rung 3 (ADR-3473 §8.3, option 2 — HALT.md): anticipated new export
-  // holding the 17 explicit read-only pins for roles whose tool contract would
+  // which held the 17 explicit read-only pins until #4770 lifted them (now an empty frozen map) for roles whose tool contract would
   // otherwise derive workspace-write (16 measured by HALT.md + gsd-nyquist-auditor,
   // surfaced by the list-form parse fix). Does not exist on the current tree —
   // destructuring a non-existent key is `undefined`, not a throw, so requiring
