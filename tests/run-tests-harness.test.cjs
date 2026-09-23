@@ -439,6 +439,39 @@ test('ambient GSD workstream vars are stripped by the runner', () => {
       );
     });
 
+    test('the unmeasured-file cap has no effect when no timings table loads at all', () => {
+      // Same 7-file seed and file-count-chunking env as the sibling test above,
+      // but with RUN_TESTS_MAX_UNMEASURED_PER_CHUNK set to 1 — lower than any
+      // chunk's file count under plain {3,2,2} file-count chunking. If the
+      // unmeasured cap wrongly applied when no table loads (main() deriving it
+      // unconditionally instead of gating on loadedTimings()), a cap of 1 would
+      // force 7 single-file chunks instead of 3. Proves the cap genuinely has
+      // NO effect in the no-table case, not just that it happens not to bind.
+      const names = Array.from({ length: 7 }, (_, i) => `tiny-${String(i).padStart(2, '0')}.test.cjs`);
+      seed(tmpDir, names);
+      const r = runHarness(tmpDir, [], {
+        RUN_TESTS_MAX_CMDLINE_CHARS: '100000',
+        RUN_TESTS_MAX_FILES_PER_CHUNK: '3',
+        RUN_TESTS_MAX_UNMEASURED_PER_CHUNK: '1',
+        RUN_TESTS_TIMINGS_FILE: path.join(tmpDir, 'no-such-timings-4434.json'),
+      });
+      assert.strictEqual(
+        r.status,
+        0,
+        `expected zero exit; got status=${r.status} signal=${r.signal}\nSTDERR:\n${r.stderr}`,
+      );
+      assert.match(
+        r.stderr,
+        /run-tests: chunk 1\/3 — 3 files/,
+        `expected file-count chunking marker (unaffected by unmeasured cap) in stderr; STDERR:\n${r.stderr}`,
+      );
+      assert.match(
+        r.stderr,
+        /run-tests: chunk 3\/3 — 2 files/,
+        `expected final file-count chunking marker (unaffected by unmeasured cap) in stderr; STDERR:\n${r.stderr}`,
+      );
+    });
+
     // #2088: expensive files must never all land in one chunk — otherwise the
     // unsharded targeted lane packs the whole install surface into a single chunk
     // that blows the 600s per-chunk backstop on the slow Windows runner. #2088

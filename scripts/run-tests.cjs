@@ -1539,10 +1539,26 @@ function main() {
   // definition) and defaultMaxUnmeasuredPerChunk (above) for the incident and
   // rationale. RUN_TESTS_MAX_UNMEASURED_PER_CHUNK overrides for operators/tests,
   // same pattern as every other *_PER_CHUNK knob in this file.
-  const MAX_UNMEASURED_PER_CHUNK = positiveNumberEnv(
-    process.env.RUN_TESTS_MAX_UNMEASURED_PER_CHUNK,
-    defaultMaxUnmeasuredPerChunk(process.platform),
-  );
+  //
+  // Gated on loadedTimings() itself (not just deferring to isMeasured's
+  // per-file answer): makeMeasuredPredicate(null) — a completely missing or
+  // corrupt table — returns `false` for EVERY file, which is a different fact
+  // than "a loaded table exists but doesn't cover this file." The cap exists
+  // to bound uncertainty among files a mostly-reliable table failed to cover,
+  // not to re-litigate the no-table case, which has its own long-standing
+  // contract (makeFileWeigher's `if (!timings) return () => 1`): uniform
+  // weight 1, pure count-based packing, unaffected by this cap. Caught live
+  // (red conformance test (windows-latest, 24, shard 1/3), PR #4950): with no
+  // table loaded, every one of 7 files in
+  // "chunks by file count even when argv length is below the ceiling" was
+  // "unmeasured", and the win32 cap of 2 split them into 4 chunks instead of
+  // the 3 that test — and the uniform-weight-1 contract — require.
+  const MAX_UNMEASURED_PER_CHUNK = loadedTimings()
+    ? positiveNumberEnv(
+        process.env.RUN_TESTS_MAX_UNMEASURED_PER_CHUNK,
+        defaultMaxUnmeasuredPerChunk(process.platform),
+      )
+    : Infinity;
   // #2088 established that file COUNT is a poor proxy for a chunk's wall-clock:
   // install-heavy files (real installs) cost ~10x a unit file, and when several
   // land in the SAME chunk it blows the 600s backstop while unit-only chunks
