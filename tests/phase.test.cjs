@@ -11697,6 +11697,228 @@ describe('issue #1159 (Defect B): deferred/future requirement IDs must not trigg
     },
   );
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #4906 Phase 2 (.gsd/phase/feat-4906-phase2-field-writes/50-test-matrix.md):
+// cmdPhaseComplete's `**Plans:**` write migrated onto the PlanningDoc
+// parse -> setFieldValue -> serialize seam (src/planning-document.cjs). Reuses
+// createFixture/capturePhaseComplete (site-1 helpers, defined earlier in this
+// same folded scope) rather than hand-rolling a new invocation path. Row
+// numbers refer to the locked matrix; row 6 (bracketed human annotation vs
+// template placeholder) is a site-2-only row and is already covered at
+// tests/phase.test.cjs's "case 11" test (bug #3584 describe block above,
+// "a bracketed human annotation is preserved verbatim, not mistaken for the
+// template placeholder") — not duplicated here.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('#4906 Phase 2: cmdPhaseComplete Plans-line seam migration (site 1)', () => {
+  function fixtureWithPlansLines(phase1PlansLine, phase2PlansLine = '**Plans:** 0/1 plans') {
+    const tmpDir = createFixture('gsd-4906-phase-');
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+    const before = fs.readFileSync(roadmapPath, 'utf-8');
+    const after = before
+      .replace('**Plans:** 1 plans', phase1PlansLine)
+      .replace('**Goal:** Build the API', `**Goal:** Build the API\n${phase2PlansLine}`);
+    fs.writeFileSync(roadmapPath, after);
+    return { tmpDir, roadmapPath };
+  }
+
+  function plansLines(content) {
+    return content.split(/\r?\n/).filter((l) => l.trim().startsWith('**Plans:**'));
+  }
+
+  test('row 1 (#4852 regression): trailing prose on the Plans line survives a count bump', (t) => {
+    const annotation = '— replanned per review';
+    const { tmpDir, roadmapPath } = fixtureWithPlansLines(`**Plans:** 1 plans ${annotation}`);
+    t.after(() => cleanup(tmpDir));
+    capturePhaseComplete(t, tmpDir, '1');
+    const [line] = plansLines(fs.readFileSync(roadmapPath, 'utf-8'));
+    assert.equal(line, `**Plans:** 1/1 plans complete ${annotation}`,
+      'annotation must survive byte-for-byte after the count bump');
+  });
+
+  test('row 3: a Plans line with a real count and no trailing content updates cleanly', (t) => {
+    const { tmpDir, roadmapPath } = fixtureWithPlansLines('**Plans:** 1 plans');
+    t.after(() => cleanup(tmpDir));
+    capturePhaseComplete(t, tmpDir, '1');
+    const [line] = plansLines(fs.readFileSync(roadmapPath, 'utf-8'));
+    assert.equal(line, '**Plans:** 1/1 plans complete');
+  });
+
+  test('row 7: a missing Plans field does not crash phase.complete', (t) => {
+    const tmpDir = createFixture('gsd-4906-row7-');
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+    const before = fs.readFileSync(roadmapPath, 'utf-8');
+    // Drop the `**Plans:**` line from Phase 01's own section entirely.
+    const after = before.replace('**Plans:** 1 plans\n', '');
+    fs.writeFileSync(roadmapPath, after);
+    t.after(() => cleanup(tmpDir));
+    // Must not throw — capturePhaseComplete throws on a non-zero exit.
+    assert.doesNotThrow(() => capturePhaseComplete(t, tmpDir, '1'));
+  });
+
+  test('row 8: an unreadable sibling node in the confined window is surfaced, not silently dropped', (t) => {
+    // Ragged table shape reused verbatim from tests/planning-document.test.cjs's
+    // raggedTableSource() (row 8 there): a data row with fewer cells than the
+    // header and no valid delimiter row for that mismatch — parsePlanningDoc
+    // accepts it as a table NODE but marks it unreadable, so `serialize`
+    // refuses the whole section splice (ADR-4910 amendment).
+    const { tmpDir, roadmapPath } = fixtureWithPlansLines('**Plans:** 1 plans');
+    const before = fs.readFileSync(roadmapPath, 'utf-8');
+    const ragged = ['', '| A | B |', '|---|---|', '| onlyone |', ''].join('\n');
+    fs.writeFileSync(roadmapPath, before.replace('**Plans:** 1 plans\n', `**Plans:** 1 plans\n${ragged}`));
+    t.after(() => cleanup(tmpDir));
+    const stdout = capturePhaseComplete(t, tmpDir, '1');
+    const result = JSON.parse(stdout);
+    assert.deepEqual(result.preservation_warnings, [{ field: 'Plans', reason: 'unreadable-nodes' }],
+      'the refusal must be surfaced via preservation_warnings, not silently swallowed');
+    const [line] = plansLines(fs.readFileSync(roadmapPath, 'utf-8'));
+    assert.equal(line, '**Plans:** 1 plans', 'the Plans field itself must stay unchanged, not corrupted');
+  });
+
+  test('row 9: the write does not escape its confinement window into a sibling phase', (t) => {
+    const annotation = '— do not touch';
+    const { tmpDir, roadmapPath } = fixtureWithPlansLines('**Plans:** 1 plans', `**Plans:** 0/1 plans ${annotation}`);
+    t.after(() => cleanup(tmpDir));
+    capturePhaseComplete(t, tmpDir, '1');
+    const [phase1Line, phase2Line] = plansLines(fs.readFileSync(roadmapPath, 'utf-8'));
+    assert.equal(phase1Line, '**Plans:** 1/1 plans complete', 'phase 1 (the target) is rewritten');
+    assert.equal(phase2Line, `**Plans:** 0/1 plans ${annotation}`,
+      "phase 2's own Plans line must stay untouched by phase 1's write");
+  });
+
+  test('row 10: a migrated Plans write round-trips identically through the seam\'s own read path', (t) => {
+    const { tmpDir, roadmapPath } = fixtureWithPlansLines('**Plans:** 1 plans');
+    t.after(() => cleanup(tmpDir));
+    capturePhaseComplete(t, tmpDir, '1');
+    const written = fs.readFileSync(roadmapPath, 'utf-8');
+    const { parsePlanningDoc, findField, readNode } = require('../gsd-core/bin/lib/planning-document.cjs');
+    const parsed = parsePlanningDoc(written, 'ROADMAP.md');
+    assert.ok(parsed.ok, 'the written ROADMAP.md must remain parseable by the same seam');
+    const fieldId = findField(parsed.value, 'Plans');
+    assert.ok(fieldId, 'the Plans field must still be locatable');
+    const read = readNode(parsed.value, fieldId);
+    assert.ok(read.ok, 'the Plans field must remain readable');
+    assert.equal(read.value, '1/1 plans complete', 'round-tripped value matches exactly what was computed');
+  });
+
+  test('row 12: the Plans-line migration is CRLF-safe', (t) => {
+    const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+    const annotation = '— crlf annotation';
+    const { tmpDir, roadmapPath } = fixtureWithPlansLines(`**Plans:** 1 plans ${annotation}`);
+    const lf = fs.readFileSync(roadmapPath, 'utf-8');
+    fs.writeFileSync(roadmapPath, splitLines(lf).join('\r\n'));
+    t.after(() => cleanup(tmpDir));
+    capturePhaseComplete(t, tmpDir, '1');
+    const written = fs.readFileSync(roadmapPath, 'utf-8');
+    const [line] = splitLines(written).filter((l) => l.trim().startsWith('**Plans:**'));
+    assert.equal(line, `**Plans:** 1/1 plans complete ${annotation}`,
+      'CRLF source must not corrupt the offset or strand/duplicate the annotation');
+  });
+
+  test('row 13: phase.cts and roadmap.cts write identical Plans-line text for the same inputs', (t) => {
+    // Parity proof (Decision 2): both sites route through the same
+    // planning-document seam and must produce byte-identical text for the
+    // same summaryCount/planCount/isComplete inputs — never asserted by
+    // grepping for the deleted regex literals.
+    const { tmpDir, roadmapPath } = fixtureWithPlansLines('**Plans:** 1 plans');
+    t.after(() => cleanup(tmpDir));
+    capturePhaseComplete(t, tmpDir, '1');
+    const [phaseSiteLine] = plansLines(fs.readFileSync(roadmapPath, 'utf-8'));
+
+    const roadmapMod = require('../gsd-core/bin/lib/roadmap.cjs');
+    const rmTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4906-row13-roadmap-'));
+    t.after(() => cleanup(rmTmp));
+    const planningDir = path.join(rmTmp, '.planning');
+    fs.mkdirSync(planningDir, { recursive: true });
+    fs.writeFileSync(path.join(planningDir, 'config.json'), JSON.stringify({ project_code: 'TEST' }));
+    fs.writeFileSync(
+      path.join(planningDir, 'ROADMAP.md'),
+      [
+        '# Roadmap', '',
+        '- [ ] **Phase 10: Test Phase**', '',
+        '### Phase 10: Test Phase',
+        '**Goal:** goal',
+        '**Plans:** 1 plans', '',
+        '## Progress', '',
+        '| Phase | Plans Complete | Status | Completed |',
+        '|-------|----------------|--------|-----------|',
+        '| 10 Test Phase | 0/1 | Not started | - |', '',
+      ].join('\n'),
+    );
+    const rmPhaseDir = path.join(planningDir, 'phases', '10-test-phase');
+    fs.mkdirSync(rmPhaseDir, { recursive: true });
+    fs.writeFileSync(path.join(rmPhaseDir, '10-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(rmPhaseDir, '10-01-SUMMARY.md'), '# Summary\n');
+    fs.writeFileSync(path.join(rmPhaseDir, '10-VERIFICATION.md'), '---\nstatus: passed\n---\n\n# Verification\n');
+    let captured = '';
+    const origWriteSync = fs.writeSync;
+    t.mock.method(fs, 'writeSync', (fd, ...args) => {
+      if (fd === 1) {
+        const buf = args[0];
+        captured += Buffer.isBuffer(buf) ? buf.toString('utf-8') : String(buf);
+        return Buffer.isBuffer(buf) ? buf.length : Buffer.byteLength(String(buf));
+      }
+      if (fd === 2) return Buffer.isBuffer(args[0]) ? args[0].length : Buffer.byteLength(String(args[0]));
+      return origWriteSync.call(fs, fd, ...args);
+    });
+    roadmapMod.cmdRoadmapUpdatePlanProgress(rmTmp, '10', false);
+    void captured;
+    const [roadmapSiteLine] = fs.readFileSync(path.join(planningDir, 'ROADMAP.md'), 'utf-8')
+      .split(/\r?\n/)
+      .filter((l) => l.trim().startsWith('**Plans:**'));
+
+    assert.equal(phaseSiteLine, '**Plans:** 1/1 plans complete');
+    assert.equal(roadmapSiteLine, '**Plans:** 1/1 plans complete',
+      'both sites must produce byte-identical Plans-line text for the same 1/1-complete inputs');
+    assert.equal(phaseSiteLine, roadmapSiteLine);
+  });
+
+  test('row 6 (site-1 arm 3, review finding): a bracketed human annotation is left untouched, not overwritten', (t) => {
+    // Isolated adversarial review (#4906 Phase 2) caught that this site's
+    // migration preserved its OLD unconditional-overwrite behavior instead
+    // of adopting arm 3 from roadmap.cts's sibling classification — a
+    // freeform/bracketed annotation with no count-token prefix must stay
+    // untouched, exactly as the design doc's Behavior table row 4 requires
+    // and exactly as roadmap.cts's own "case 11" (#3584 Finding A) already
+    // proves for site 2.
+    const { tmpDir, roadmapPath } = fixtureWithPlansLines('**Plans:** [Deferred pending re-scope]');
+    t.after(() => cleanup(tmpDir));
+    capturePhaseComplete(t, tmpDir, '1');
+    const [line] = plansLines(fs.readFileSync(roadmapPath, 'utf-8'));
+    assert.equal(line, '**Plans:** [Deferred pending re-scope]',
+      'a bracketed human annotation is arm 3 (freeform), never a template placeholder or a count token, and must not be overwritten');
+  });
+
+  test('row 6 (site-1 arm 2): the fresh-template placeholder wording is still replaced with the computed count', (t) => {
+    const { tmpDir, roadmapPath } = fixtureWithPlansLines('**Plans:** [Number of plans, e.g., "3 plans" or "TBD"]');
+    t.after(() => cleanup(tmpDir));
+    capturePhaseComplete(t, tmpDir, '1');
+    const [line] = plansLines(fs.readFileSync(roadmapPath, 'utf-8'));
+    assert.equal(line, '**Plans:** 1/1 plans complete',
+      'the template placeholder is arm 2 and must still be replaced with the real count');
+  });
+
+  test('#1163 parity: a plain (non-bold) Plans: line still gets its count updated', (t) => {
+    // roadmap.cts's sibling site has a real, pre-existing regression test
+    // for this exact legacy shape (tests/roadmap.test.cjs, "regressions:
+    // insert missing plan rows (#1163)") — caught missing here by gsd-test,
+    // since this migration's first version only handled the BOLD_FIELD_RE
+    // grammar and silently no-op'd on a plain `Plans:` line. Fixed in
+    // src/phase.cts's writePlansField with the same caller-side fallback
+    // roadmap.cts uses, kept in parity per Decision 2.
+    const tmpDir = createFixture('gsd-4906-plain-plans-');
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+    const before = fs.readFileSync(roadmapPath, 'utf-8');
+    const after = before.replace('**Plans:** 1 plans', 'Plans: 0/1 plans executed');
+    fs.writeFileSync(roadmapPath, after);
+    t.after(() => cleanup(tmpDir));
+    capturePhaseComplete(t, tmpDir, '1');
+    const written = fs.readFileSync(roadmapPath, 'utf-8');
+    const line = written.split(/\r?\n/).find((l) => l.trim().startsWith('Plans:'));
+    assert.equal(line, 'Plans: 1/1 plans complete',
+      'a plain (non-bold) Plans: line must still be updated, not silently skipped');
+  });
+});
   });
 }
 
@@ -16083,3 +16305,4 @@ describe('phase complete skips already-complete phases as next_phase (#4699)', (
       'without the fix scope change: an unchecked phase 3 stays a valid candidate (disk spelling wins)');
   });
 });
+

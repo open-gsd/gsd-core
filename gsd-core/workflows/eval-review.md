@@ -47,7 +47,13 @@ EVAL_REVIEW_FILE=$(ls "${PHASE_DIR}"/*-EVAL-REVIEW.md 2>/dev/null | head -1)
 **State C** — No SUMMARY.md: Exit — "Phase {N} not executed. Run /gsd:execute-phase {N} first."
 
 **Text mode (`workflow.text_mode: true` in config or `--text` flag):** Set `TEXT_MODE=true` if `--text` is present in `$ARGUMENTS` OR `text_mode` from init JSON is `true`. When TEXT_MODE is active, replace every `AskUserQuestion` call with a plain-text numbered list and ask the user to type their choice number. This is required for non-Claude runtimes (OpenAI Codex, Antigravity, etc.) where `AskUserQuestion` is not available.
-**If `EVAL_REVIEW_FILE` non-empty:** Use AskUserQuestion:
+**If `EVAL_REVIEW_FILE` non-empty:**
+
+**If `--auto`:** Auto-select "View" — keep the existing EVAL-REVIEW.md untouched and exit without
+re-auditing. Log: `[auto] EVAL-REVIEW.md exists — reusing as-is.` "Re-audit" is the regenerating
+choice; an unattended run reuses an existing artifact instead (#4776).
+
+**Otherwise:** Use AskUserQuestion:
 - header: "Existing Eval Review"
 - question: "EVAL-REVIEW.md already exists for Phase {N}."
 - options:

@@ -50,6 +50,9 @@ const { extractFrontmatter, parseMustHavesBlock } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verificationMod = require('./verification.cjs');
 const { isPhaseComplete } = verificationMod;
+// #4906 Phase 2 (#4917/ADR-4910): the PlanningDoc parse -> mutate -> serialize
+// seam, mirroring phase.cts's already-migrated `writePlansField` site.
+import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from './planning-document.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1082,7 +1085,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     let roadmapContent = originalContent;
     const phasePattern = phaseMarkdownRegexSource(phaseNum);
     // #4247: ONE local source for the ATX phase-heading anchor that every
-    // section-scoped writer below (`planCountPattern`,
+    // section-scoped writer below (`planSectionPattern`,
     // `insertRowsPatternA|B`) starts with — extracted so the target-detection
     // gate below reads the SAME grammar the writers anchor on, and a future
     // edit to one cannot drift from the other three copies.
@@ -1095,7 +1098,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     const gateActiveRegion = gateDetailsClose === -1
       ? originalContent
       : originalContent.slice(gateDetailsClose + '</details>'.length);
-    // Heading target: the exact grammar `planCountPattern` /
+    // Heading target: the exact grammar `planSectionPattern` /
     // `insertRowsPatternA|B` anchor on (an ATX phase heading for this phase).
     const headingTargetFound = new RegExp(phaseHeadingAnchor, 'i').test(gateActiveRegion);
     // Checklist target: when the phase is complete, its own checklist bullet
@@ -1193,9 +1196,16 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     //      `_match` unchanged. An untouched first line cannot orphan its own
     //      continuation on the next line, since the pattern never spans past
     //      `\n` in the first place.
-    const planCountPattern = new RegExp(
-      `(${phaseHeadingAnchor}(?:(?!\\n#{1,4}\\s)[\\s\\S])*?(?:\\*\\*Plans\\*\\*:|\\*\\*Plans:\\*\\*|(?:^|\\n)Plans:)\\s*)(\\d+\\s*\\/\\s*\\d+\\s+plans(?:\\s+(?:complete|executed))?|\\d+\\s+plans?)?([^\\r\\n]*)`,
-      'i'
+    // #4906 Phase 2 (#4917/ADR-4910): migrated off the one-capture-group
+    // regex that replaced to end of line onto the PlanningDoc `boldField`
+    // write seam. `planSectionPattern` scopes the match to phase N's OWN
+    // detail section (heading + body up to the next heading) — the same
+    // window `phaseHeadingAnchor`'s siblings anchor on — and the callback
+    // below runs parse -> classify -> (maybe) mutate -> serialize entirely
+    // within that section text, mirroring phase.cts's `writePlansField`.
+    const planSectionPattern = new RegExp(
+      `${phaseHeadingAnchor}(?:(?!\\n#{1,4}\\s)[\\s\\S])*`,
+      'i',
     );
     const planCountText = isComplete
       ? `${summaryCount}/${planCount} plans complete`
@@ -1205,24 +1215,107 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // gsd-core/templates/roadmap.md actually ships, not to "anything in
     // brackets" — a bracketed human annotation like `[Deferred pending
     // re-scope]` is structurally bracketed too but carries none of this
-    // wording, so it correctly falls through to arm 3 untouched.
+    // wording, so it correctly falls through to arm 3 untouched. Kept as a
+    // caller-side classifier (NOT seam grammar) reused below against the
+    // `boldField` node's own parsed `value`.
     const isTemplatePlaceholder = (value: string): boolean => {
       const trimmed = value.trim();
       return /^\[\s*Number of plans\b[\s\S]*\]$/i.test(trimmed);
     };
-    roadmapContent = replaceInCurrentMilestone(roadmapContent, planCountPattern, (_match, label, existingCount, trailing) => {
-      if (existingCount) {
-        // Arm 1: real count token — rewrite it, preserve the trailing annotation.
-        return `${label}${planCountText}${trailing}`;
+    // Positive detectors for the two "real count token" shapes (#2853 /
+    // #3584 Finding B): a fraction count (`N/M plans complete|executed`) or a
+    // bare singular/plural count (`N plan`/`N plans`, the fresh single-plan
+    // template shape at gsd-core/templates/roadmap.md:62). Either one is an
+    // existing count token to overwrite (arm 1), never template placeholder
+    // (arm 2) or freeform prose (arm 3).
+    // #4906 regression fix: PREFIX match (not full-string) — a real count
+    // token may have a glued-on annotation with no ` — ` separator (e.g.
+    // `0/1 plans executed (11-16 are gap closure from VERIFICATION)`), which
+    // `parseBoldFieldLine`'s em-dash-only trailing-content split leaves
+    // entirely inside `value` (TRAILING_SEPARATOR_RE in planning-document.cts
+    // is unchanged and correct — this is a caller-side classification fix,
+    // not a seam fix). Returns the matched prefix length, or -1 if no match.
+    const fractionCountPrefixLength = (value: string): number => {
+      const m = value.match(/^\d+\s*\/\s*\d+\s+plans(?:\s+(?:complete|executed))?/i);
+      return m ? m[0].length : -1;
+    };
+    const bareCountPrefixLength = (value: string): number => {
+      const m = value.match(/^\d+\s+plans?/i);
+      return m ? m[0].length : -1;
+    };
+    roadmapContent = replaceInCurrentMilestone(roadmapContent, planSectionPattern, (sectionText: string): string => {
+      const parsed = parsePlanningDoc(sectionText, 'ROADMAP.md');
+      if (!parsed.ok) {
+        // Unreadable section (e.g. an unterminated frontmatter fence) —
+        // leave it byte-identical rather than throwing.
+        return sectionText;
       }
-      if (isTemplatePlaceholder(trailing)) {
-        // Arm 2: fresh-template placeholder — replace with the count.
-        return `${label}${planCountText}`;
+      const fieldId = findField(parsed.value, 'Plans');
+      if (!fieldId) {
+        // #4906 regression (#1163, caught by gsd-test): a hand-edited or
+        // pre-template ROADMAP.md may carry a PLAIN (non-bold) `Plans:` line
+        // rather than the canonical `**Plans**:`/`**Plans:**` bold field.
+        // BOLD_FIELD_RE is deliberately bold-only (widening it to any bare
+        // `Label:` would register ordinary prose like "Note: see below" as a
+        // spurious field seam-wide) — this is domain knowledge about ONE
+        // field's legacy tolerated shape, the same class of thing
+        // `isTemplatePlaceholder` above already keeps caller-side rather
+        // than seam grammar, so the fallback lives here, not in
+        // planning-document.cts.
+        const plainMatch = sectionText.match(/^([ \t]*)Plans:([ \t]*)([^\r\n]*)$/m);
+        if (!plainMatch) {
+          // No `**Plans:**`/`**Plans**:`/plain `Plans:` line in this phase's
+          // own section — nothing to write; not a failure (mirrors the old
+          // regex's silent no-match no-op).
+          return sectionText;
+        }
+        const [whole, indent, spacing, plainValue] = plainMatch;
+        const plainFractionLen = fractionCountPrefixLength(plainValue);
+        const plainBareLen = bareCountPrefixLength(plainValue);
+        const plainCountPrefixLen = plainFractionLen >= 0 ? plainFractionLen : plainBareLen;
+        if (plainCountPrefixLen < 0 && !isTemplatePlaceholder(plainValue)) {
+          // Arm 3: freeform prose, TBD, a bracketed human annotation, or an
+          // empty value — leave the section exactly as it was.
+          return sectionText;
+        }
+        const plainSuffix = plainCountPrefixLen >= 0 ? plainValue.slice(plainCountPrefixLen) : '';
+        const newPlainLine = `${indent}Plans:${spacing}${planCountText}${plainSuffix}`;
+        const start = plainMatch.index ?? sectionText.indexOf(whole);
+        return sectionText.slice(0, start) + newPlainLine + sectionText.slice(start + whole.length);
       }
-      // Arm 3: freeform prose, TBD, a bracketed human annotation, a wrapped
-      // sentence's first line, or an empty value — leave the line exactly as
-      // it was.
-      return _match;
+      const current = readNode(parsed.value, fieldId);
+      if (!current.ok) {
+        return sectionText;
+      }
+      const currentValue = current.value;
+      const fractionPrefixLen = fractionCountPrefixLength(currentValue);
+      const barePrefixLen = bareCountPrefixLength(currentValue);
+      const countPrefixLen = fractionPrefixLen >= 0 ? fractionPrefixLen : barePrefixLen;
+      if (countPrefixLen < 0 && !isTemplatePlaceholder(currentValue)) {
+        // Arm 3: freeform prose, TBD, a bracketed human annotation, or an
+        // empty value — leave the section exactly as it was.
+        return sectionText;
+      }
+      // Arm 1 (real count token, possibly with a glued-on no-separator
+      // annotation re-attached verbatim as `suffix`) or arm 2 (fresh-template
+      // placeholder, whole value replaced): write the computed count.
+      // `setFieldValue`'s valueSpan/trailingSpan split additionally preserves
+      // any EM-DASH-separated trailing annotation (#2853) automatically — no
+      // separate "preserve trailing" branch needed for that shape.
+      const suffix = countPrefixLen >= 0 ? currentValue.slice(countPrefixLen) : '';
+      const newValueToWrite = planCountText + suffix;
+      const staged = setFieldValue(parsed.value, fieldId, newValueToWrite);
+      if (!staged.ok) {
+        return sectionText;
+      }
+      const out = serialize(staged.value);
+      if (!out.ok) {
+        // `hasUnreadableNodes` refusal (ADR-4910 amendment) — a ragged
+        // SIBLING node elsewhere in this same section refuses the whole
+        // splice. Never throw; leave the section unchanged.
+        return sectionText;
+      }
+      return out.value;
     });
 
     // If complete: check checkbox
