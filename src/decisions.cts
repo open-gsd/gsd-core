@@ -163,18 +163,23 @@ const bulletEmDashRe = new RegExp(
  * bulletColonRe fails, and there is no em-dash for bulletEmDashRe). This is a strict
  * superset of the colon-immediate form, so it MUST be checked AFTER bulletColonRe and
  * bulletEmDashRe — it only catches bullets those two miss. The title runs are code-span-aware
- * (#4788) but still exclude BARE colons and `*`, so a genuinely-malformed bullet with a bare
- * colon in the pre-separator run (e.g. `D-07 ratio 3:1:**` — the `:**` supplies the second
- * colon) still fails the anchor and falls through to the parse-miss guard — the #1639
- * fail-loud discipline: the separator must be the only BARE colon before `**`. A code span's
+ * (#4788) but still exclude `*`, so a genuinely-malformed bullet with no bare colon at all
+ * before `**` still fails the anchor and falls through to the parse-miss guard — the #1639
+ * fail-loud discipline: the separator must be a BARE colon before `**`. A code span's
  * `:`/`*` is data, never grammar; an UNTERMINATED backtick now fails loud (previously it was
  * an ordinary character) — the deliberate cost of span opacity.
+ *
+ * #4793: the pre-separator run now tolerates additional bare colons, so a title with
+ * plain-prose colons (e.g. `D-02: Two managers … same pair: the second is rejected.`) parses
+ * instead of being rejected. Only the pre-separator plain-character branch was widened
+ * (`[^:*`]` → `[^*`]`); the post-separator branch still excludes colons, so normal greedy
+ * backtracking selects the LAST bare colon before the closing `**` as the true separator.
  *
  * The ID is consumed atomically `(?=(…))\1` like the other forms — the
  * hardening note above the constants explains why (#4130 follow-up).
  */
 const bulletTitledColonRe = new RegExp(
-  `^\\s*-\\s+\\*\\*(?=(${DECISION_ID_SOURCE}))\\1(?:\\s*\\[([^\\]]+)\\])?(?:\\u0060[^\\u0060]*\\u0060|[^:*\\u0060])*:(?:\\u0060[^\\u0060]*\\u0060|[^:*\\u0060])*\\*\\*\\s*(.*)$`,
+  `^\\s*-\\s+\\*\\*(?=(${DECISION_ID_SOURCE}))\\1(?:\\s*\\[([^\\]]+)\\])?(?:\\u0060[^\\u0060]*\\u0060|[^*\\u0060])*:(?:\\u0060[^\\u0060]*\\u0060|[^:*\\u0060])*\\*\\*\\s*(.*)$`,
 );
 
 /**
