@@ -11872,6 +11872,31 @@ describe('#4906 Phase 2: cmdPhaseComplete Plans-line seam migration (site 1)', (
       'both sites must produce byte-identical Plans-line text for the same 1/1-complete inputs');
     assert.equal(phaseSiteLine, roadmapSiteLine);
   });
+
+  test('row 6 (site-1 arm 3, review finding): a bracketed human annotation is left untouched, not overwritten', (t) => {
+    // Isolated adversarial review (#4906 Phase 2) caught that this site's
+    // migration preserved its OLD unconditional-overwrite behavior instead
+    // of adopting arm 3 from roadmap.cts's sibling classification — a
+    // freeform/bracketed annotation with no count-token prefix must stay
+    // untouched, exactly as the design doc's Behavior table row 4 requires
+    // and exactly as roadmap.cts's own "case 11" (#3584 Finding A) already
+    // proves for site 2.
+    const { tmpDir, roadmapPath } = fixtureWithPlansLines('**Plans:** [Deferred pending re-scope]');
+    t.after(() => cleanup(tmpDir));
+    capturePhaseComplete(t, tmpDir, '1');
+    const [line] = plansLines(fs.readFileSync(roadmapPath, 'utf-8'));
+    assert.equal(line, '**Plans:** [Deferred pending re-scope]',
+      'a bracketed human annotation is arm 3 (freeform), never a template placeholder or a count token, and must not be overwritten');
+  });
+
+  test('row 6 (site-1 arm 2): the fresh-template placeholder wording is still replaced with the computed count', (t) => {
+    const { tmpDir, roadmapPath } = fixtureWithPlansLines('**Plans:** [Number of plans, e.g., "3 plans" or "TBD"]');
+    t.after(() => cleanup(tmpDir));
+    capturePhaseComplete(t, tmpDir, '1');
+    const [line] = plansLines(fs.readFileSync(roadmapPath, 'utf-8'));
+    assert.equal(line, '**Plans:** 1/1 plans complete',
+      'the template placeholder is arm 2 and must still be replaced with the real count');
+  });
 });
   });
 }

@@ -3815,22 +3815,37 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // `0/1 plans executed (11-16 are gap closure from VERIFICATION)`)
           // lives entirely inside `value` (`TRAILING_SEPARATOR_RE` in
           // planning-document.cts only splits on ` — `, unchanged/correct),
-          // so overwriting `value` outright previously destroyed it. When no
-          // recognised count-token prefix is present, preserve this site's
-          // existing unconditional-overwrite behavior (mirrors roadmap.cts's
-          // fractionCount/bareCount prefix detectors).
+          // so overwriting `value` outright previously destroyed it.
+          //
+          // #4906 review finding (isolated adversarial pass): the prior
+          // version of this migration preserved this site's OLD
+          // unconditional-overwrite behavior for the no-count-prefix case,
+          // which clobbers arm 3 (freeform prose / TBD / a bracketed human
+          // annotation like `[Deferred pending re-scope]`) — a real
+          // regression against the design doc's own Behavior table row 4,
+          // not an accepted trade-off. Fixed here by adopting the SAME
+          // template-placeholder / arm-3-untouched classification
+          // roadmap.cts's sibling site already uses (isTemplatePlaceholder +
+          // "no count prefix and not a placeholder => leave untouched"),
+          // rather than letting the two migrated sites diverge on this.
           const newCountText = `${summaryCount}/${planCount} plans complete`;
           const current = readNode(parsed.value, fieldId);
-          let newValueToWrite = newCountText;
-          if (current.ok) {
-            const currentValue = current.value;
-            const countPrefixMatch = currentValue.match(
-              /^(?:\d+\s*\/\s*\d+\s+plans(?:\s+(?:complete|executed))?|\d+\s+plans?)/i,
-            );
-            if (countPrefixMatch) {
-              newValueToWrite = newCountText + currentValue.slice(countPrefixMatch[0].length);
-            }
+          if (!current.ok) {
+            return body;
           }
+          const currentValue = current.value;
+          const countPrefixMatch = currentValue.match(
+            /^(?:\d+\s*\/\s*\d+\s+plans(?:\s+(?:complete|executed))?|\d+\s+plans?)/i,
+          );
+          const isTemplatePlaceholder = /^\[\s*Number of plans\b[\s\S]*\]$/i.test(currentValue.trim());
+          if (!countPrefixMatch && !isTemplatePlaceholder) {
+            // Arm 3: freeform prose, TBD, a bracketed human annotation, or an
+            // empty value — leave the field exactly as it was.
+            return body;
+          }
+          const newValueToWrite = countPrefixMatch
+            ? newCountText + currentValue.slice(countPrefixMatch[0].length)
+            : newCountText;
           const staged = setFieldValue(parsed.value, fieldId, newValueToWrite);
           if (!staged.ok) {
             preservationWarnings.push({ field: 'Plans', reason: staged.reason });
