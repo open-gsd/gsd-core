@@ -439,6 +439,39 @@ test('ambient GSD workstream vars are stripped by the runner', () => {
       );
     });
 
+    test('the unmeasured-file cap has no effect when no timings table loads at all', () => {
+      // Same 7-file seed and file-count-chunking env as the sibling test above,
+      // but with RUN_TESTS_MAX_UNMEASURED_PER_CHUNK set to 1 — lower than any
+      // chunk's file count under plain {3,2,2} file-count chunking. If the
+      // unmeasured cap wrongly applied when no table loads (main() deriving it
+      // unconditionally instead of gating on loadedTimings()), a cap of 1 would
+      // force 7 single-file chunks instead of 3. Proves the cap genuinely has
+      // NO effect in the no-table case, not just that it happens not to bind.
+      const names = Array.from({ length: 7 }, (_, i) => `tiny-${String(i).padStart(2, '0')}.test.cjs`);
+      seed(tmpDir, names);
+      const r = runHarness(tmpDir, [], {
+        RUN_TESTS_MAX_CMDLINE_CHARS: '100000',
+        RUN_TESTS_MAX_FILES_PER_CHUNK: '3',
+        RUN_TESTS_MAX_UNMEASURED_PER_CHUNK: '1',
+        RUN_TESTS_TIMINGS_FILE: path.join(tmpDir, 'no-such-timings-4434.json'),
+      });
+      assert.strictEqual(
+        r.status,
+        0,
+        `expected zero exit; got status=${r.status} signal=${r.signal}\nSTDERR:\n${r.stderr}`,
+      );
+      assert.match(
+        r.stderr,
+        /run-tests: chunk 1\/3 — 3 files/,
+        `expected file-count chunking marker (unaffected by unmeasured cap) in stderr; STDERR:\n${r.stderr}`,
+      );
+      assert.match(
+        r.stderr,
+        /run-tests: chunk 3\/3 — 2 files/,
+        `expected final file-count chunking marker (unaffected by unmeasured cap) in stderr; STDERR:\n${r.stderr}`,
+      );
+    });
+
     // #2088: expensive files must never all land in one chunk — otherwise the
     // unsharded targeted lane packs the whole install surface into a single chunk
     // that blows the 600s per-chunk backstop on the slow Windows runner. #2088
@@ -2307,6 +2340,7 @@ const {
   loadTestTimings,
   positiveNumberEnv,
   DEFAULT_TIMINGS_PATH,
+  defaultMaxUnmeasuredPerChunk,
 } = require('../scripts/run-tests.cjs');
 
 describe('chunk packing weights measured cost (#2456)', () => {
@@ -2908,6 +2942,191 @@ describe('chunk packing weights measured cost (#2456)', () => {
         .filter(([, value]) => typeof value !== 'number' || !Number.isFinite(value) || value < 0)
         .map(([file, value]) => `${file}=${value}`);
       assert.deepStrictEqual(invalid, [], 'every timing-table entry must be a finite non-negative number');
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// packChunks unmeasured-file cap — red `next` @ccfed6335 (2026-09-20, shard
+// 3/3 chunk 6/8) and @af822a80 (2026-09-23, shard 2/3 chunk 7/9). Both chunks
+// were killed at 600000ms+ with zero failing tests, each holding 5-6 files
+// absent from tests/test-timings.json (new conformance-tier files, never
+// profiled) packed alongside the chunk's measured files: each unmeasured
+// file's GUESSED weight looked affordable alone, the chunk's total weight
+// still cleared the existing budget, and the chunk still blew the 600s
+// backstop because several guesses compounded. See packChunks'
+// isMeasured/maxUnmeasuredPerChunk comment for the fix rationale.
+// ---------------------------------------------------------------------------
+
+describe('packChunks unmeasured-file cap (red next @ccfed6335, @af822a80, 2026-09-20/23)', () => {
+  const UC_FIXED_OVERHEAD = 120;
+  const UC_ROOMY_CHARS = 100000;
+
+  // Trivial, uniform weight model — this suite is about the COUNT cap, not
+  // weight — so any weight-driven splitting is ruled out by a generous
+  // maxWeight.
+  const weightOf = () => 1;
+  const isNewFile = (file) => /^new-\d+\.test\.cjs$/.test(file);
+
+  const countUnmeasured = (chunk) => chunk.filter((f) => isNewFile(f)).length;
+
+  test('reproduces the incident shape and proves the fix', () => {
+    const unmeasured = Array.from({ length: 6 }, (_, i) => `new-${i}.test.cjs`);
+    const measured = ['heavy-a.test.cjs', 'heavy-b.test.cjs'];
+    const files = [...unmeasured, ...measured];
+
+    const capped = packChunks(files, {
+      weightOf,
+      maxWeight: 100, // roomy — weight alone would never force a split
+      maxChars: UC_ROOMY_CHARS,
+      fixedOverhead: UC_FIXED_OVERHEAD,
+      isMeasured: (f) => !isNewFile(f),
+      maxUnmeasuredPerChunk: 2,
+    });
+    assert.ok(capped.length >= 3, `expected at least 3 chunks with the cap applied, got ${capped.length}`);
+    for (const [i, chunk] of capped.entries()) {
+      assert.ok(countUnmeasured(chunk) <= 2, `chunk ${i} holds ${countUnmeasured(chunk)} unmeasured files, cap is 2`);
+    }
+    assert.strictEqual(capped.flat().length, files.length, 'no file may be dropped or duplicated');
+
+    // Without the cap (omitted), all 8 files pack into a single chunk — this
+    // is the pre-fix behavior the cap must change.
+    const uncapped = packChunks(files, {
+      weightOf,
+      maxWeight: 100,
+      maxChars: UC_ROOMY_CHARS,
+      fixedOverhead: UC_FIXED_OVERHEAD,
+      isMeasured: (f) => !isNewFile(f),
+      // maxUnmeasuredPerChunk intentionally omitted
+    });
+    assert.strictEqual(uncapped.length, 1, 'without a cap, weight/chars alone keep all 8 files in one chunk');
+  });
+
+  describe('boundary (cap-1 / cap / cap+1)', () => {
+    const CAP = 3;
+
+    test('cap-1 unmeasured files fit one chunk', () => {
+      const files = Array.from({ length: CAP - 1 }, (_, i) => `new-${i}.test.cjs`);
+      const chunks = packChunks(files, {
+        weightOf,
+        maxWeight: 100,
+        maxChars: UC_ROOMY_CHARS,
+        fixedOverhead: UC_FIXED_OVERHEAD,
+        isMeasured: (f) => !isNewFile(f),
+        maxUnmeasuredPerChunk: CAP,
+      });
+      assert.strictEqual(chunks.length, 1, `${CAP - 1} unmeasured files under cap ${CAP} must fit one chunk`);
+    });
+
+    test('exactly cap unmeasured files fit one chunk', () => {
+      const files = Array.from({ length: CAP }, (_, i) => `new-${i}.test.cjs`);
+      const chunks = packChunks(files, {
+        weightOf,
+        maxWeight: 100,
+        maxChars: UC_ROOMY_CHARS,
+        fixedOverhead: UC_FIXED_OVERHEAD,
+        isMeasured: (f) => !isNewFile(f),
+        maxUnmeasuredPerChunk: CAP,
+      });
+      assert.strictEqual(chunks.length, 1, `${CAP} unmeasured files at cap ${CAP} must fit one chunk`);
+    });
+
+    test('cap+1 unmeasured files require a second chunk', () => {
+      const files = Array.from({ length: CAP + 1 }, (_, i) => `new-${i}.test.cjs`);
+      const chunks = packChunks(files, {
+        weightOf,
+        maxWeight: 100,
+        maxChars: UC_ROOMY_CHARS,
+        fixedOverhead: UC_FIXED_OVERHEAD,
+        isMeasured: (f) => !isNewFile(f),
+        maxUnmeasuredPerChunk: CAP,
+      });
+      assert.strictEqual(chunks.length, 2, `${CAP + 1} unmeasured files over cap ${CAP} must split into 2 chunks`);
+      for (const [i, chunk] of chunks.entries()) {
+        assert.ok(countUnmeasured(chunk) <= CAP, `chunk ${i} holds ${countUnmeasured(chunk)} unmeasured, cap is ${CAP}`);
+      }
+    });
+  });
+
+  test('backward compatible: isMeasured omitted treats every file as measured, cap is a no-op', () => {
+    const files = Array.from({ length: 8 }, (_, i) => `new-${i}.test.cjs`);
+    const withoutIsMeasured = packChunks(files, {
+      weightOf,
+      maxWeight: 100,
+      maxChars: UC_ROOMY_CHARS,
+      fixedOverhead: UC_FIXED_OVERHEAD,
+      maxUnmeasuredPerChunk: 2, // has no effect: nothing is "unmeasured" without isMeasured
+    });
+    const noCapAtAll = packChunks(files, {
+      weightOf,
+      maxWeight: 100,
+      maxChars: UC_ROOMY_CHARS,
+      fixedOverhead: UC_FIXED_OVERHEAD,
+    });
+    assert.deepStrictEqual(withoutIsMeasured, noCapAtAll, 'omitting isMeasured must reproduce the no-cap packing exactly');
+    assert.strictEqual(withoutIsMeasured.length, 1, 'all 8 files land in one chunk, matching pre-fix behavior');
+  });
+
+  describe('maxUnmeasuredPerChunk degrades safely', () => {
+    test('no-op when zero files are unmeasured', () => {
+      const files = ['measured-a.test.cjs', 'measured-b.test.cjs', 'measured-c.test.cjs'];
+      const chunks = packChunks(files, {
+        weightOf,
+        maxWeight: 100,
+        maxChars: UC_ROOMY_CHARS,
+        fixedOverhead: UC_FIXED_OVERHEAD,
+        isMeasured: () => true,
+        maxUnmeasuredPerChunk: 2,
+      });
+      assert.strictEqual(chunks.length, 1, 'a cap with nothing unmeasured must not affect packing');
+    });
+
+    test('a NaN override degrades to no cap rather than throwing', () => {
+      const files = Array.from({ length: 8 }, (_, i) => `new-${i}.test.cjs`);
+      assert.doesNotThrow(() => {
+        const chunks = packChunks(files, {
+          weightOf,
+          maxWeight: 100,
+          maxChars: UC_ROOMY_CHARS,
+          fixedOverhead: UC_FIXED_OVERHEAD,
+          isMeasured: (f) => !isNewFile(f),
+          maxUnmeasuredPerChunk: NaN,
+        });
+        assert.strictEqual(chunks.length, 1, 'NaN cap must degrade to unbounded, all 8 files in one chunk');
+      });
+    });
+
+    test('a negative override degrades to no cap rather than throwing', () => {
+      const files = Array.from({ length: 8 }, (_, i) => `new-${i}.test.cjs`);
+      assert.doesNotThrow(() => {
+        const chunks = packChunks(files, {
+          weightOf,
+          maxWeight: 100,
+          maxChars: UC_ROOMY_CHARS,
+          fixedOverhead: UC_FIXED_OVERHEAD,
+          isMeasured: (f) => !isNewFile(f),
+          maxUnmeasuredPerChunk: -1,
+        });
+        assert.strictEqual(chunks.length, 1, 'negative cap must degrade to unbounded, all 8 files in one chunk');
+      });
+    });
+  });
+
+  describe('defaultMaxUnmeasuredPerChunk platform behavior', () => {
+    test('win32 default is 2', () => {
+      assert.strictEqual(defaultMaxUnmeasuredPerChunk('win32'), 2);
+    });
+
+    test('linux and darwin defaults are Infinity (unbounded)', () => {
+      assert.strictEqual(defaultMaxUnmeasuredPerChunk('linux'), Infinity);
+      assert.strictEqual(defaultMaxUnmeasuredPerChunk('darwin'), Infinity);
+    });
+
+    test('the default is still overridable by RUN_TESTS_MAX_UNMEASURED_PER_CHUNK', () => {
+      const def = defaultMaxUnmeasuredPerChunk('win32');
+      const override = positiveNumberEnv('7', def);
+      assert.strictEqual(override, 7);
+      assert.notStrictEqual(override, def);
     });
   });
 });

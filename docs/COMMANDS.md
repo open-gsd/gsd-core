@@ -118,7 +118,7 @@ Clarify WHAT a phase delivers through Socratic questioning with quantitative amb
 
 | Flag | Description |
 |------|-------------|
-| `--auto` | Skip interactive questions; Claude selects recommended defaults and writes SPEC.md |
+| `--auto` | Skip interactive questions; Claude selects recommended defaults and writes SPEC.md. An existing SPEC.md is **reused as-is**, never regenerated |
 | `--text` | Use plain-text numbered lists instead of TUI menus (required for `/rc` remote sessions) |
 
 **Position in workflow:** `spec-phase → discuss-phase → plan-phase → execute-phase → verify`
@@ -178,11 +178,17 @@ Generate UI design contract for frontend phases.
 |----------|----------|-------------|
 | `N` | No | Phase number (defaults to current phase) |
 
+| Flag | Description |
+|------|-------------|
+| `--auto` | Skip interactive questions. An existing UI-SPEC.md is **reused as-is** and sent straight to the checker, never re-researched |
+| `--text` | Use plain-text numbered lists instead of TUI menus |
+
 **Prerequisites:** `.planning/ROADMAP.md` exists, phase has frontend/UI work
 **Produces:** `{phase}-UI-SPEC.md`
 
 ```bash
 /gsd-ui-phase 2                     # Design contract for phase 2
+/gsd-ui-phase 2 --auto              # Non-interactive; reuses an existing UI-SPEC
 ```
 
 ---
@@ -426,9 +432,14 @@ Retroactive 6-pillar visual audit of implemented frontend.
 
 For richer visual evidence, pair this with `gsd-browser` or another browser MCP server so the audit can capture screenshots, state, console/network context, and reproducible interaction steps.
 
+| Flag | Description |
+|------|-------------|
+| `--auto` | Skip interactive questions. An existing UI-REVIEW.md is **reused as-is**, never re-audited |
+
 ```bash
 /gsd-ui-review                      # Audit current phase
 /gsd-ui-review 3                    # Audit phase 3
+/gsd-ui-review 3 --auto             # Non-interactive; reuses an existing UI-REVIEW
 ```
 
 ---
@@ -1659,9 +1670,14 @@ Generate an AI-SPEC.md design contract for phases that involve building AI syste
 
 **Spawns:** 3 parallel specialist agents: domain-researcher, framework-selector, ai-researcher, and eval-planner
 
+| Flag | Description |
+|------|-------------|
+| `--auto` | Skip interactive questions. An existing AI-SPEC.md is **reused as-is**, never regenerated |
+
 ```bash
 /gsd-ai-integration-phase              # Wizard for the current phase
 /gsd-ai-integration-phase 3           # Wizard for a specific phase
+/gsd-ai-integration-phase 3 --auto    # Non-interactive; reuses an existing AI-SPEC
 ```
 
 ---
@@ -1673,9 +1689,14 @@ Audit an executed AI phase's evaluation coverage and produce an EVAL-REVIEW.md r
 **Prerequisites:** Phase has been executed and has an `AI-SPEC.md`
 **Produces:** `{phase}-EVAL-REVIEW.md` with findings, gaps, and remediation guidance
 
+| Flag | Description |
+|------|-------------|
+| `--auto` | Skip interactive questions. An existing EVAL-REVIEW.md is **reused as-is**, never re-audited |
+
 ```bash
 /gsd-eval-review                       # Audit current phase
 /gsd-eval-review 3                     # Audit a specific phase
+/gsd-eval-review 3 --auto              # Non-interactive; reuses an existing EVAL-REVIEW
 ```
 
 ---
