@@ -2210,8 +2210,15 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * record exactly as before this fix. Never throws.
    */
   function baseCheckDegrades(cwd, isolationMode) {
-    if (isolationMode !== 'harness-worktree' && isolationMode !== 'orchestrator-worktree') return false;
     try {
+      // #4630 child 1 — the base-check subset is READ FROM THE OWNER, not
+      // re-stated here. Required inside this existing `try`, beside
+      // worktree-base-ref.cjs, so an unbuilt runtime lib takes the same
+      // warn-and-`false` fallback the evaluation itself does; there is
+      // deliberately no catch-side literal, which would be a fresh copy of
+      // the very thing the seam removes.
+      const { isBaseCheckIsolationMode } = require('./lib/dispatch-isolation.cjs');
+      if (!isBaseCheckIsolationMode(isolationMode)) return false;
       const { evaluateWorktreeBaseDegradeForCwd } = require('./lib/worktree-base-ref.cjs');
       return evaluateWorktreeBaseDegradeForCwd(cwd, isolationMode).shouldDegrade === true;
     } catch {
