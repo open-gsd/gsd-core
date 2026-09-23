@@ -292,6 +292,7 @@ Decided in principle, not yet ratified. Do not cite as settled architecture.
 | [ADR-3942](3942-emitted-drift-ack-commit-trailer.md) | The emitted-drift acknowledgment is PR-lifetime data — it belongs in a commit trailer, not the working tree | Proposed | — |
 | [ADR-4629](4629-state-write-intent-beyond-frontmatter.md) | STATE.md write intent beyond frontmatter — bounded, verified writes | Proposed | — |
 | [ADR-4650](4650-path-containment-and-filename-classification-seam.md) | One path-containment predicate and one filename-classification helper | Proposed | — |
+| [ADR-4910](4910-planning-document-seam.md) | Planning documents are read and written through one parse → mutate → serialize seam | Proposed | — |
 
 ### Superseded, Retired, and Legacy
 

@@ -30,7 +30,7 @@ import frontmatter = require('./frontmatter.cjs');
 // does not require this module, so the edge is acyclic.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import commandsModule = require('./commands.cjs');
-const { extractFrontmatter, spliceFrontmatter } = frontmatter;
+const { extractFrontmatter, FRONTMATTER_UNPARSEABLE, spliceFrontmatter } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const { PHASE_NUMBER_TOKEN_SOURCE, scopeToPhase } = phaseIdMod;
@@ -1711,6 +1711,13 @@ function cmdAuditAcknowledge(cwd: string, args: string[], raw: boolean): void {
 
     const content = fs.readFileSync(safeFilePath, 'utf-8');
     const fm = extractFrontmatter(content, safeFilePath);
+    // #4802: an unparseable frontmatter block is NOT an empty one — splicing
+    // the marker-marked object over the file would discard every field the
+    // author actually wrote. Refuse and name the file (the write-path
+    // counterpart of the read-side FRONTMATTER_UNPARSEABLE contract).
+    if ((fm as unknown as Record<symbol, unknown>)[FRONTMATTER_UNPARSEABLE] === true) {
+      ioError(`refusing to acknowledge — the frontmatter of "${file as string}" is not parseable YAML (splicing would discard every other frontmatter field); fix the YAML syntax error first, then re-run`);
+    }
     // Mixed-frame fix (security review, 4th instance on this branch): the
     // splice above and below stays keyed to RAW `content` (raw byte offsets
     // must not shift), but `scanUatGaps`/`scanContextQuestions` now derive
@@ -1853,6 +1860,13 @@ function cmdAuditAcknowledge(cwd: string, args: string[], raw: boolean): void {
 
   const presenceOnly = category === 'todos';
   const fm = createIfMissing ? fmForCreate : extractFrontmatter(fs.readFileSync(safeFilePath, 'utf-8'), safeFilePath);
+  // #4802: same unparseable-frontmatter refusal as the phase-scoped branch —
+  // createIfMissing never reaches this extract (it only fires when the file is
+  // absent), so an existing file with broken YAML refuses instead of splicing
+  // a near-empty object over every field the author wrote.
+  if (!createIfMissing && (fm as unknown as Record<symbol, unknown>)[FRONTMATTER_UNPARSEABLE] === true) {
+    ioError(`refusing to acknowledge — the frontmatter of "${safeFilePath}" is not parseable YAML (splicing would discard every other frontmatter field); fix the YAML syntax error first, then re-run`);
+  }
   fm.audit_acknowledged = presenceOnly ? { ...markerBase } : { ...markerBase, [snapshotKey]: currentValue };
   const newContent = createIfMissing
     ? spliceFrontmatter('', fm)

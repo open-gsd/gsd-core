@@ -356,6 +356,20 @@ function defaultMaxFilesPerChunk(platform) {
   return platform === 'win32' ? 22 : 60;
 }
 
+// Per-chunk UNMEASURED-file-count budget default, by platform. See the
+// isMeasured/maxUnmeasuredPerChunk comment above packChunks's definition for
+// the incident this guards (red next @ccfed6335 2026-09-20, @af822a80
+// 2026-09-23 — both windows conformance shards, chunks killed at 600000ms+
+// with zero failing tests) and why the bound is a COUNT of unmeasured files,
+// not a weight: an unmeasured file's weight is a guess, and this cap exists
+// precisely because several guesses compounding is what blew the budget, not
+// because any individual guess was too large. win32-only — the failure has
+// only ever been observed there; every other platform stays unbounded
+// (Infinity), unchanged from today's behavior.
+function defaultMaxUnmeasuredPerChunk(platform) {
+  return platform === 'win32' ? 2 : Infinity;
+}
+
 // ── #4020: run-scoped temp root ─────────────────────────────────────────────
 //
 // Fixture trees leak under os.tmpdir() on the SUCCESS path (the untouched half
@@ -535,12 +549,36 @@ function loadTestTimings(timingsPath) {
   return { timings, mean, medianWeight: median / mean };
 }
 
+// #4434: the table's own `sources` are Linux-only (test-events-linux-node22/24
+// .jsonl — never a Windows event stream), and this runner's own chunk-kill
+// diagnostic already tells operators "real Windows cost runs ~2.2x the
+// recorded figure, so treat every number as a floor" (see the catch block
+// around the per-chunk timeout, below). That string was, until this fix,
+// advisory text ONLY — nothing in the weigher actually applied it. Verified
+// live: `next` @ ccfed6335 (unrelated to the chunk's own diff — see #4434)
+// killed Windows conformance shard 3/3 chunk 6/8 at 600016ms; 6 of that
+// chunk's 17 files were wholly absent from the table and were packed at the
+// table's plain mean, identically to how a Linux/macOS chunk would price
+// them. A MEASURED file does not get this multiplier: #4733 already
+// calibrates measured-file packing against a real Windows wall-clock via
+// MAX_FILES_PER_CHUNK, so inflating measured weights again here would
+// double-apply the correction. An unmeasured file has no real data at all —
+// it is exactly the "floor, not a verdict" case the diagnostic already warns
+// about, so only its fallback gets the multiplier, and only on win32.
+const WINDOWS_UNMEASURED_COST_MULTIPLIER = 2.2;
+
 // Build the packer's weight function from a loaded timing table.
 //
 // A file present in the table weighs its measured duration relative to the
 // table mean. A file ABSENT from it weighs 1 — the table MEAN, the same
 // value a null table (missing or unparseable file) yields for every file,
-// because both states mean the same thing: cost unknown.
+// because both states mean the same thing: cost unknown. On win32 the
+// fallback is WINDOWS_UNMEASURED_COST_MULTIPLIER instead of 1 (see #4434,
+// above) — but ONLY for a file absent from an otherwise-loaded table; a
+// completely missing/corrupt/empty timings file (`timings` is `null`) still
+// degrades to uniform weight 1 on every platform, matching the pre-#2456
+// count-based-packing invariant many existing tests depend on. Every other
+// platform keeps the plain mean.
 //
 // This was previously `timings.medianWeight`, on the claim that an absent
 // file "costs chunk balance, never a red build." That claim is false. In a
@@ -550,11 +588,14 @@ function loadTestTimings(timingsPath) {
 // cause a red build: Windows conformance shard 2/3, chunk 4/6 was killed at
 // 600018ms with ZERO failing tests, because files absent from the table
 // packed as if they were nearly free and the chunk blew the 600s cap.
-// Empirically, mean is the right estimate for an unknown file: 9 unmeasured
-// files that caused the incident averaged 6659ms against a table mean of
-// 7152ms — within 7%.
-function makeFileWeigher(timings) {
+// Empirically, mean is the right estimate for an unknown file on the
+// platform the table was MEASURED on: 9 unmeasured files that caused the
+// incident averaged 6659ms against a table mean of 7152ms — within 7%. That
+// equivalence does not hold on win32, where the table's own sources are
+// Linux-only (#4434).
+function makeFileWeigher(timings, platform = process.platform) {
   if (!timings) return () => 1;
+  const unmeasuredWeight = platform === 'win32' ? WINDOWS_UNMEASURED_COST_MULTIPLIER : 1;
   return (f) => {
     const key = basename(f);
     // Own-property check before the lookup. This is defense-in-depth, NOT a
@@ -567,7 +608,9 @@ function makeFileWeigher(timings) {
     // keeps the lookup correct for arbitrary input, since this function is
     // exported and does not control its caller's strings.
     const ms = Object.hasOwn(timings.timings, key) ? timings.timings[key] : undefined;
-    return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? ms / timings.mean : 1;
+    return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0
+      ? ms / timings.mean
+      : unmeasuredWeight;
   };
 }
 
@@ -611,10 +654,31 @@ function makeMeasuredPredicate(timings) {
 // that file; when no chunk has room, the chunk count grows and packing restarts.
 // A single file longer than the budget lands alone rather than looping forever.
 //
+// `isMeasured`/`maxUnmeasuredPerChunk` (2026-09-23, red `next` @ccfed6335 and
+// @af822a80, both windows conformance shards, chunks killed at 600000ms+) add a
+// THIRD, independent budget alongside weight and chars, for the same reason
+// #4434 gave an unmeasured file its own windows multiplier instead of trusting
+// its weight: an unmeasured file's weight is a GUESS, not a measurement, and
+// several guesses landing in the same chunk let their individual uncertainty
+// compound into a real failure no single file's weight predicted. Both
+// incidents killed a chunk holding 5-6 files absent from tests/test-timings.json
+// (new conformance-tier files added since the table was last regenerated) packed
+// alongside the chunk's measured files — each guess looked affordable alone, the
+// chunk's TOTAL weight still cleared the budget, and it still blew the 600s
+// backstop. Isolation (partitionIsolatedFiles, above) cannot help here — it only
+// pulls out a file PROVEN heavy, and an unmeasured file has no proof either way.
+// Capping how many unmeasured files ANY one chunk may hold bounds the compounding
+// directly, independent of what their guessed weight happens to be, using the
+// exact same "skip this bin, try the next; grow the chunk count if none has
+// room" mechanism already proven safe for the char budget below. `isMeasured` is
+// optional (omitted callers/tests get today's behavior unchanged — no cap), and
+// `maxUnmeasuredPerChunk` degrades to "no cap" for any non-finite or negative
+// value, matching `maxWeight`/`maxChars`'s own degrade-safely contract.
+//
 // Ordering is fully deterministic — ties break on the separator-normalized file
 // path, and each chunk's files are emitted in their original selection order —
 // so the packing is byte-identical across Windows/macOS/Linux.
-function packChunks(files, { weightOf, maxWeight, maxChars, fixedOverhead }) {
+function packChunks(files, { weightOf, maxWeight, maxChars, fixedOverhead, isMeasured, maxUnmeasuredPerChunk }) {
   if (files.length === 0) return [];
   // packChunks is exported, so it cannot assume its caller normalized these.
   // A non-finite or non-positive budget makes the chunk-count arithmetic
@@ -624,6 +688,10 @@ function packChunks(files, { weightOf, maxWeight, maxChars, fixedOverhead }) {
   const weightBudget = Number.isFinite(maxWeight) && maxWeight > 0 ? maxWeight : files.length;
   const charBudget = Number.isFinite(maxChars) && maxChars > 0 ? maxChars : Number.MAX_SAFE_INTEGER;
   const overhead = Number.isFinite(fixedOverhead) && fixedOverhead >= 0 ? fixedOverhead : 0;
+  const unmeasuredBudget =
+    Number.isFinite(maxUnmeasuredPerChunk) && maxUnmeasuredPerChunk >= 0
+      ? maxUnmeasuredPerChunk
+      : Infinity;
   const safeWeight = (file) => {
     const w = weightOf(file);
     return Number.isFinite(w) && w >= 0 ? w : 0;
@@ -633,6 +701,7 @@ function packChunks(files, { weightOf, maxWeight, maxChars, fixedOverhead }) {
     index,
     weight: safeWeight(file),
     chars: file.length + 1, // +1 for the inter-arg separator
+    measured: isMeasured ? !!isMeasured(file) : true,
   }));
   const totalWeight = entries.reduce((sum, e) => sum + e.weight, 0);
   // Ties break on a SEPARATOR-NORMALIZED path so a subdir file orders the same
@@ -664,14 +733,18 @@ function packChunks(files, { weightOf, maxWeight, maxChars, fixedOverhead }) {
       entries: [],
       weight: 0,
       chars: overhead,
+      unmeasuredCount: 0,
     }));
     let overflowed = false;
     for (const entry of heaviestFirst) {
       let target = null;
       for (const bin of bins) {
         // An empty bin always accepts, so an over-long single file lands alone
-        // instead of growing the chunk count forever.
+        // instead of growing the chunk count forever. Same rule for the
+        // unmeasured-count budget below — it exists to spread uncertainty
+        // across chunks, not to make a lone unmeasured file unplaceable.
         if (bin.entries.length > 0 && bin.chars + entry.chars > charBudget) continue;
+        if (bin.entries.length > 0 && !entry.measured && bin.unmeasuredCount >= unmeasuredBudget) continue;
         if (target === null || bin.weight < target.weight) target = bin;
       }
       if (target === null) {
@@ -681,6 +754,7 @@ function packChunks(files, { weightOf, maxWeight, maxChars, fixedOverhead }) {
       target.entries.push(entry);
       target.weight += entry.weight;
       target.chars += entry.chars;
+      if (!entry.measured) target.unmeasuredCount += 1;
     }
     if (!overflowed) {
       return bins
@@ -1192,7 +1266,7 @@ function main() {
   let weigherMemo = null;
   const fileWeightOf = () => {
     if (weigherMemo === null) {
-      weigherMemo = makeFileWeigher(loadedTimings());
+      weigherMemo = makeFileWeigher(loadedTimings(), process.platform);
     }
     return weigherMemo;
   };
@@ -1461,6 +1535,30 @@ function main() {
     process.env.RUN_TESTS_MAX_FILES_PER_CHUNK,
     DEFAULT_MAX_FILES_PER_CHUNK,
   );
+  // See packChunks' isMeasured/maxUnmeasuredPerChunk comment (above its
+  // definition) and defaultMaxUnmeasuredPerChunk (above) for the incident and
+  // rationale. RUN_TESTS_MAX_UNMEASURED_PER_CHUNK overrides for operators/tests,
+  // same pattern as every other *_PER_CHUNK knob in this file.
+  //
+  // Gated on loadedTimings() itself (not just deferring to isMeasured's
+  // per-file answer): makeMeasuredPredicate(null) — a completely missing or
+  // corrupt table — returns `false` for EVERY file, which is a different fact
+  // than "a loaded table exists but doesn't cover this file." The cap exists
+  // to bound uncertainty among files a mostly-reliable table failed to cover,
+  // not to re-litigate the no-table case, which has its own long-standing
+  // contract (makeFileWeigher's `if (!timings) return () => 1`): uniform
+  // weight 1, pure count-based packing, unaffected by this cap. Caught live
+  // (red conformance test (windows-latest, 24, shard 1/3), PR #4950): with no
+  // table loaded, every one of 7 files in
+  // "chunks by file count even when argv length is below the ceiling" was
+  // "unmeasured", and the win32 cap of 2 split them into 4 chunks instead of
+  // the 3 that test — and the uniform-weight-1 contract — require.
+  const MAX_UNMEASURED_PER_CHUNK = loadedTimings()
+    ? positiveNumberEnv(
+        process.env.RUN_TESTS_MAX_UNMEASURED_PER_CHUNK,
+        defaultMaxUnmeasuredPerChunk(process.platform),
+      )
+    : Infinity;
   // #2088 established that file COUNT is a poor proxy for a chunk's wall-clock:
   // install-heavy files (real installs) cost ~10x a unit file, and when several
   // land in the SAME chunk it blows the 600s backstop while unit-only chunks
@@ -1603,6 +1701,8 @@ function main() {
       maxWeight: MAX_FILES_PER_CHUNK,
       maxChars: MAX_CMDLINE_CHARS,
       fixedOverhead: FIXED_OVERHEAD,
+      isMeasured: fileMeasuredOf(),
+      maxUnmeasuredPerChunk: MAX_UNMEASURED_PER_CHUNK,
     }),
   ];
 
@@ -1852,8 +1952,10 @@ module.exports = {
   selectShard,
   positiveNumberEnv,
   defaultMaxFilesPerChunk,
+  defaultMaxUnmeasuredPerChunk,
   loadTestTimings,
   makeFileWeigher,
+  WINDOWS_UNMEASURED_COST_MULTIPLIER,
   makeMeasuredPredicate,
   packChunks,
   // 2026-09-07 (PR #4497): the codex-config.test.cjs chunk-isolation fix —

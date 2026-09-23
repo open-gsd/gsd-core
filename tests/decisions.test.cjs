@@ -761,9 +761,13 @@ describe('FIX B gate-level: parse-miss → passed:false regardless of covered de
       msg.includes('could not') || msg.includes('format') || msg.includes('mismatch') || msg.includes('parse'),
       `Message must indicate parse/format issue, not D-01 coverage gap. Got: "${parsed.message}"`
     );
-    // Confirm D-01 is NOT in uncovered[] — the failure is parse-miss, not a coverage gap
-    assert.deepStrictEqual(parsed.uncovered, [],
-      `uncovered must be empty (D-01 is covered; failure is parse-miss). Got: ${JSON.stringify(parsed.uncovered)}`);
+    // Confirm the answer is UNMEASURED (#4794): no covered/uncovered fields —
+    // the failure is parse-miss, not a coverage measurement.
+    assert.strictEqual(parsed.covered, null, 'covered must be null — nothing was measured');
+    assert.strictEqual(parsed.total, null, 'total must be null — nothing was measured');
+    assert.ok(!('uncovered' in parsed), 'uncovered must be OMITTED — the list was never built');
+    assert.ok(Array.isArray(parsed.unreadable) && parsed.unreadable.includes('D-02'),
+      `unreadable must carry the malformed bullet's id, got: ${JSON.stringify(parsed.unreadable)}`);
   });
 
   test('verify-side: valid D-01 covered + malformed D-02 → verify advisory surfaces could-not-parse', () => {
@@ -2795,8 +2799,14 @@ describe('parseDecisions hardening — regex lattice pins the mechanism (#4130 f
     // `[^*—–]*[—–]` has exactly one. The narrowing is behavior-preserving
     // because every candidate dash lies before the first `*` and the second
     // `[^*]*` scan reaches that same first star from any candidate.
-    assert.ok(emDashSrc.includes('[^*—–]*[—–]'),
-      `bulletEmDashRe must use the narrowed first separator:\n${emDashSrc}`);
+    //
+    // #4788 makes the leading run code-span-aware (`\u0060` = escaped backtick
+    // in the template): the class-only branch keeps the dash exclusion, so a
+    // dash-laden title WITHOUT spans still has exactly one viable split, and a
+    // span-internal dash is never a separator candidate — the span branch
+    // consumes it atomically. The #4130 no-re-split property is preserved.
+    assert.ok(emDashSrc.includes('[^*—–\\u0060])*[—–]'),
+      `bulletEmDashRe must use the span-aware narrowed first separator:\n${emDashSrc}`);
     assert.ok(!emDashSrc.includes('[^*]*[—–]'),
       `bulletEmDashRe must not retain the overlapping first separator:\n${emDashSrc}`);
   });
@@ -3039,5 +3049,191 @@ describe('parseDecisions hardening — pathological single bullets terminate cor
     const r = extractDecisions(md);
     assert.strictEqual(r.outcome, 'parsed');
     assert.strictEqual(r.decisions[0].text, text);
+  });
+});
+
+// ─── #4786 sibling family: code spans in the bold lead-in are opaque to the separator grammar (#4788) ──
+
+describe('#4788: code spans in the bold lead-in are opaque to the separator grammar', () => {
+  // Decision titles name modules, paths and globs — `node:http`, `*-UAT.md` —
+  // and inside backticks a `:` is not a separator and a `*` is not emphasis.
+  // The `[^:*]*` runs treated both as grammar characters, so the bullet fell
+  // to the parse-miss guard and a single miss forced outcome:"could-not-parse"
+  // (which blocks check.decision-coverage-plan during plan-phase).
+  const contentWith = (bullets) => `<decisions>\n${bullets.map((b) => '- ' + b).join('\n')}\n</decisions>`;
+
+  test('colon-immediate form: a code span containing a colon sits in the pre-separator run', () => {
+    const md = contentWith([
+      '**D-12 `cfg:a`:** does the thing',
+    ]);
+    const ds = parseDecisions(md);
+    assert.strictEqual(ds.length, 1, `expected the bullet to parse, got: ${JSON.stringify(ds)}`);
+    assert.strictEqual(ds[0].id, 'D-12');
+  });
+
+  test('titled-colon form: a code span containing a colon parses (the D-91 shape)', () => {
+    const md = contentWith([
+      '**D-91: Serve the hub over `node:http` with no framework.** Dropped: colon inside a code span.',
+    ]);
+    const ds = parseDecisions(md);
+    assert.strictEqual(ds.length, 1);
+    assert.strictEqual(ds[0].id, 'D-91');
+    assert.ok(ds[0].text.includes('Dropped: colon inside a code span'), 'body after the closing ** must be preserved');
+  });
+
+  test('titled-colon form: a code span containing an asterisk parses (the D-119 shape)', () => {
+    const md = contentWith([
+      '**D-119: UAT reports are named `*-UAT.md` beside the plan.** Dropped: asterisk inside a code span.',
+    ]);
+    const ds = parseDecisions(md);
+    assert.strictEqual(ds.length, 1);
+    assert.strictEqual(ds[0].id, 'D-119');
+  });
+
+  test('em-dash form: a code span containing an asterisk parses', () => {
+    const md = contentWith([
+      '**D-13 `*-UAT.md` — the naming rule** body text',
+    ]);
+    const ds = parseDecisions(md);
+    assert.strictEqual(ds.length, 1);
+    assert.strictEqual(ds[0].id, 'D-13');
+  });
+
+  test('#1639 negative: a bare second colon before the closing ** still fails loud', () => {
+    const r = extractDecisions(contentWith([
+      '**D-07 ratio 3:1:** body',
+    ]));
+    assert.strictEqual(r.outcome, 'could-not-parse', 'the genuinely-malformed bullet must still fail loud');
+  });
+
+  test('an unterminated backtick in the lead-in now fails loud (pinned trade-off)', () => {
+    // Before the span-aware runs, a lone backtick was an ordinary character and
+    // the bullet parsed. The span-aware grammar treats an unterminated ` as the
+    // start of an opaque span that never closes — the bullet fails to the
+    // parse-miss guard. Deliberate: fail-loud beats mis-parsing prose as grammar.
+    const r = extractDecisions(contentWith([
+      '**D-11: see `docs.** body',
+    ]));
+    assert.strictEqual(r.outcome, 'could-not-parse');
+  });
+
+  test('a safe code span (no :/* inside) keeps parsing (control)', () => {
+    const md = contentWith([
+      '**D-14: Title with `code`.** body',
+    ]);
+    const ds = parseDecisions(md);
+    assert.strictEqual(ds.length, 1);
+    assert.strictEqual(ds[0].id, 'D-14');
+  });
+
+  test('a real mixed block parses end to end (the issue measured 2 of 36 missing)', () => {
+    const r = extractDecisions(contentWith([
+      '**D-01: Single-line title with no code span.** Parses fine.',
+      '**D-91: Serve the hub over `node:http` with no framework.** Dropped: colon inside a code span.',
+      '**D-119: UAT reports are named `*-UAT.md` beside the plan.** Dropped: asterisk inside a code span.',
+      '**D-92: Serve the hub with no framework.** Uses `node:http`. Parses: the same token in the body.',
+    ]));
+    assert.strictEqual(r.outcome, 'parsed');
+    assert.deepEqual(r.decisions.map((d) => d.id), ['D-01', 'D-91', 'D-119', 'D-92']);
+  });
+});
+
+// ─── #4794: a gate that measured nothing must not emit the fields of one that did ──
+
+describe('#4794: decision-coverage answers an unmeasured shape on could-not-parse and a non-file context', () => {
+  let tmpDir;
+  let planningDir;
+  let phaseDir;
+  const contentWith = (bullets) => `<decisions>\n${bullets.map((b) => '- ' + b).join('\n')}\n</decisions>`;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-4794-');
+    planningDir = path.join(tmpDir, '.planning');
+    phaseDir = path.join(planningDir, 'phases', '01-init');
+    fs.mkdirSync(phaseDir, { recursive: true });
+  });
+
+  afterEach(() => cleanup(tmpDir));
+
+  function writePlanFile4794(name, body) {
+    fs.writeFileSync(path.join(phaseDir, `${name}-PLAN.md`), body);
+  }
+
+  test('#4794: could-not-parse answers an unmeasured shape — null counts, unreadable ids, no uncovered', () => {
+    // The issue's repro: D-01 parses; D-02's title carries a second colon in
+    // plain prose → parse-miss. The gate used to answer covered:0/uncovered:[]
+    // — the fields of a measurement that never happened.
+    writeContextFile(phaseDir, [
+      '# Context',
+      '',
+      '<decisions>',
+      '',
+      '- **D-01: The list shows one row per contact.** Nothing else changes.',
+      '- **D-02: Two managers creating a card for the same pair: the second is rejected.** One pair, one card.',
+      '',
+      '</decisions>',
+    ].join('\n'));
+    writePlanFile4794('01', '# Plan\n## Objective\nImplement feature.\n');
+
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+    const parsed = JSON.parse(result.output || '{}');
+
+    assert.strictEqual(parsed.passed, false, 'the gate must still block');
+    assert.strictEqual(parsed.reason, 'could-not-parse');
+    assert.strictEqual(parsed.total, null, 'total must be null — nothing was measured');
+    assert.strictEqual(parsed.covered, null, 'covered must be null — nothing was measured');
+    assert.ok(!('uncovered' in parsed), 'uncovered must be OMITTED — the list was never built');
+    assert.ok(
+      Array.isArray(parsed.unreadable) && parsed.unreadable.includes('D-02'),
+      `the ids that failed to parse must be carried as unreadable, got: ${JSON.stringify(parsed.unreadable)}`,
+    );
+    assert.ok(
+      (parsed.message || '').includes('D-02'),
+      'the message must name the unreadable id',
+    );
+  });
+
+  test('#4794: a directory as the context path fails closed naming the path', () => {
+    // The issue's repro 2: the adjacent same-looking positionals swapped.
+    // fs.existsSync is true for a directory; the read yields nothing; the gate
+    // used to certify passed:true on a phase full of decisions.
+    writeContextFile(phaseDir, [
+      '# Context',
+      '',
+      '<decisions>',
+      '',
+      '- **D-01: The list shows one row per contact.** Nothing else changes.',
+      '',
+      '</decisions>',
+    ].join('\n'));
+    writePlanFile4794('01', '# Plan\n## Objective\nImplement feature.\n');
+
+    const contextPath = phaseDir; // the DIRECTORY, swapped for the file
+    const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+    const parsed = JSON.parse(result.output || '{}');
+
+    assert.strictEqual(parsed.passed, false, 'must fail closed');
+    assert.strictEqual(parsed.skipped, false, 'must not be a green skip');
+    assert.ok(
+      (parsed.message || '').includes(contextPath) || (parsed.reason || '').includes('not a file'),
+      `the answer must name the path and what it is, got: ${JSON.stringify(parsed)}`,
+    );
+  });
+
+  test('#4794: extractDecisions surfaces the ids of bullets that failed to parse', () => {
+    const { extractDecisions: extract } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'decisions.cjs'));
+    const md = contentWith([
+      '**D-01: The list shows one row per contact.** Nothing else changes.',
+      '**D-02: Two managers creating a card for the same pair: the second is rejected.** One pair, one card.',
+      '**D4x-01** ratio 3:1',
+    ]);
+    const r = extract(md);
+    assert.strictEqual(r.outcome, 'could-not-parse');
+    assert.ok(Array.isArray(r.unreadableIds) && r.unreadableIds.includes('D-02'),
+      `unreadableIds must carry the failed bullet's id, got: ${JSON.stringify(r.unreadableIds)}`);
+    // #4130's phase-prefixed ID_ATTEMPT shape must be captured too.
+    assert.ok(r.unreadableIds.includes('D4x-01'), `phase-prefixed id must be captured, got: ${JSON.stringify(r.unreadableIds)}`);
+    assert.ok(!r.unreadableIds.includes('D-01'), 'the parsed bullet is not unreadable');
   });
 });

@@ -844,7 +844,7 @@ For the full audit, harness reference, and the composition note with `model_prof
 
 > **Codex CLI minimum supported version: `0.130.0`** (issue [#3562](https://github.com/open-gsd/gsd-core/issues/3562)).
 
-If you installed GSD for a non-Claude runtime, the installer already configured model resolution. No manual setup is needed — `resolve_model_ids: "omit"` is set automatically, which tells GSD to skip Anthropic model ID resolution and let the runtime choose its own default model.
+If you installed GSD for a non-Claude runtime, the installer already configured model resolution. No manual setup is needed — `resolve_model_ids: "omit"` is set automatically as a Claude protection, and your install's recorded runtime identity tells GSD to skip Anthropic model ID resolution and resolve from the runtime's own model tiers instead.
 
 To assign different models on a non-Claude runtime:
 

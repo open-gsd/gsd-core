@@ -603,13 +603,19 @@ function resolveModelInternal(cwd: string, agentType: string): string {
   //   #2517  `runtime:"codex"` + resolve_model_ids:"omit"  -> the codex tier
   //          model. "Explicit non-Claude opt-in wins" — the operator naming a
   //          runtime in the project config outranks an omit.
-  //   #2297  GSD_RUNTIME/marker = codex + a GLOBAL (defaults-poisoned) omit
-  //          -> "" (acceptance #4). A merely DETECTED runtime does not
-  //          constitute that opt-in, so the omit still wins.
+  //   #4717 (user-sanctioned decision a — supersedes #2297 acceptance #4):
+  //          a DETECTED runtime now constitutes that opt-in too. The identity
+  //          fill in config-loader materializes GSD_RUNTIME / the per-install
+  //          marker into `config.runtime` when it is empty, so a genuinely
+  //          installed non-Claude runtime resolves its own tier map instead of
+  //          the omit's "". The shared "omit" remains a Claude protection:
+  //          marker/env = claude still ignores it (native aliases), and
+  //          garbage runtime values still fail safe to "" (guard below).
   //
-  // So the opt-in signal is specifically the `runtime` KEY, not the resolved
-  // runtime: step 3 reads the active runtime's tier map, but only outranks the
-  // omit gate when the operator wrote that key. Both contracts hold unchanged.
+  // So the opt-in signal is the `runtime` KEY — written by the operator or
+  // materialized by the #4717 fill: step 3 reads the active runtime's tier
+  // map, but only outranks the omit gate when that key canonicalizes to a
+  // recognised non-Claude runtime.
   const omitApplies = config['resolve_model_ids'] === 'omit'
     && (projectExplicitlySetsOmit(cwd) || !RUNTIMES_WITH_NATIVE_ALIASES.has(activeRuntime));
   // CANONICALIZED, not the raw field. Comparing the raw value against the literal

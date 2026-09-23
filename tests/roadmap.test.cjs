@@ -969,6 +969,54 @@ describe('roadmap update-plan-progress command', () => {
     assert.ok(roadmapContent.includes('1/2'), 'roadmap should contain updated plan count');
   });
 
+  test('#4725: leaves surrounding prose byte-identical (bold paragraph above a tight list)', () => {
+    const fixture = [
+      '# Roadmap',
+      '',
+      '### Phase 654: Stream Consumer',
+      '',
+      '**Goal:** bind the evidence HMAC key in production',
+      '',
+      '**Scope narrowed 2026-09-14, round `663-DISPOSITION` Q7 (3/3)** (`.planning/decisions/663-disposition.md`):',
+      '- The "for retry" javadoc correction moved to Phase 663',
+      '- Per Q6 (3/3), crash and failed-XACK residue stay this phase\'s population',
+      '',
+      '**Plans:** 2 plans',
+      '',
+      'Plans:',
+      '',
+      '- [ ] 654-01-PLAN.md — (wave 1) the evidence HMAC key binds in production',
+      '- [ ] 654-02-PLAN.md — (wave 2) consumer hardening',
+      '',
+    ].join('\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), fixture);
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '654-stream');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '654-01-PLAN.md'), '# Plan 1');
+    fs.writeFileSync(path.join(phaseDir, '654-02-PLAN.md'), '# Plan 2');
+    fs.writeFileSync(path.join(phaseDir, '654-01-SUMMARY.md'), '# Summary 1');
+
+    const result = runGsdTools('roadmap update-plan-progress 654', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.updated, true, 'should update');
+
+    // Whole-file assertion per the issue's Expected: ONLY the **Plans:**
+    // count line and the matching checkbox row change; every other byte —
+    // the bold paragraph and its tight list included — is untouched.
+    const expected = fixture
+      .replace('**Plans:** 2 plans', '**Plans:** 1/2 plans executed')
+      .replace('- [ ] 654-01-PLAN.md', '- [x] 654-01-PLAN.md');
+    const written = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.strictEqual(
+      written,
+      expected,
+      `the file must differ from the input by exactly the two intended edits; written:\n${written}`
+    );
+  });
+
   test('counts plans and summaries from plans/ subdirectory layout (#3053)', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
@@ -5067,5 +5115,564 @@ describe('#3957 (epic #3473 B9): no-op decline reports the real condition', () =
       assert.strictEqual(out.reason, 'could not read plan frontmatter');
       assert.match(stderr, /^\[gsd-tools\] WARNING: roadmap annotate-dependencies skipped — could not read plan frontmatter/);
     });
+  });
+});
+
+// ─── #4741: a superseded plan must not be ticked from its SUMMARY ────────────
+
+describe('roadmap update-plan-progress — superseded plans (#4741)', () => {
+  // The issue's self-contained fixture: phase 1 with an active plan (01-01)
+  // and a superseded plan (01-02, `status: superseded` in the PLAN
+  // frontmatter), each with a SUMMARY file. The count excludes the superseded
+  // plan (#2349) while the checkbox tick iterated the raw summaries — so the
+  // ROADMAP read "1/1 plans executed" above two checked rows.
+  function write4741World(tmpDir, opts = {}) {
+    const {
+      supersededPlanStatus = 'superseded',
+      supersededSummaryStatus = 'halted',
+      includeSupersededSummary = true,
+      activeSummaryStatus = 'complete',
+      roadmap = null,
+    } = opts;
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-demo'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      roadmap ?? [
+        '# Roadmap',
+        '',
+        '### Phase 1: Demo',
+        '',
+        '**Goal:** demo',
+        '',
+        '**Plans:** 2 plans',
+        '',
+        'Plans:',
+        '',
+        '- [ ] 01-01-PLAN.md — first',
+        '- [ ] 01-02-PLAN.md — second',
+        '',
+      ].join('\n'),
+    );
+    const plan = (num, extra) =>
+      `---\nphase: 01-demo\nplan: ${num}\ntype: execute\nwave: 1\ndepends_on: []\nfiles_modified: []\nautonomous: true${extra ? `\n${extra}` : ''}\n---\n`;
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '01-demo', '01-01-PLAN.md'), plan('01'));
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'phases', '01-demo', '01-02-PLAN.md'),
+      plan('02', `status: ${supersededPlanStatus}`),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'phases', '01-demo', '01-01-SUMMARY.md'),
+      `---\nphase: 01-demo\nplan: 01\nstatus: ${activeSummaryStatus}\n---\n`,
+    );
+    if (includeSupersededSummary) {
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'phases', '01-demo', '01-02-SUMMARY.md'),
+        `---\nphase: 01-demo\nplan: 02\nstatus: ${supersededSummaryStatus}\n---\n`,
+      );
+    }
+  }
+
+  function runUpdate(tmpDir) {
+    const result = runGsdTools('roadmap update-plan-progress 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    return JSON.parse(result.output);
+  }
+
+  test('#4741: a superseded plan is not ticked even when its SUMMARY exists', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    write4741World(tmpDir);
+
+    const output = runUpdate(tmpDir);
+    assert.strictEqual(output.plan_count, 1, 'the superseded plan is excluded from the count');
+    assert.strictEqual(output.summary_count, 1);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(roadmap.includes('- [x] 01-01-PLAN.md'), 'the active executed plan ticks');
+    assert.ok(
+      roadmap.includes('- [ ] 01-02-PLAN.md'),
+      'the superseded plan must stay unchecked — a plan the tool does not count must not read as executed',
+    );
+    assert.ok(roadmap.includes('1/1 plans executed'), 'the count line agrees with the checkboxes');
+  });
+
+  test('#4741: the superseded filter ignores the SUMMARY\'s own status', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    write4741World(tmpDir, { supersededSummaryStatus: 'complete' });
+
+    runUpdate(tmpDir);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(
+      roadmap.includes('- [ ] 01-02-PLAN.md'),
+      'a superseded plan with a COMPLETE summary still must not read as executed',
+    );
+  });
+
+  test('#4741: the inserted-rows tick path respects the superseded filter too', (t) => {
+    // Loop 2 fires when a countable plan's row is MISSING (insertion path):
+    // pre-existing superseded row + missing countable row. Before the fix the
+    // insertion path's tick loop iterated the raw summaries and ticked the
+    // pre-existing superseded row as well.
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    write4741World(tmpDir, {
+      roadmap: [
+        '# Roadmap',
+        '',
+        '### Phase 1: Demo',
+        '',
+        '**Goal:** demo',
+        '',
+        '**Plans:** 2 plans',
+        '',
+        'Plans:',
+        '',
+        '- [ ] 01-02-PLAN.md — second',
+        '',
+      ].join('\n'),
+    });
+
+    const output = runUpdate(tmpDir);
+    assert.strictEqual(output.plan_count, 1);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(roadmap.includes('- [x] 01-01-PLAN.md'), 'the inserted countable row is ticked (it has a summary)');
+    assert.ok(
+      roadmap.includes('- [ ] 01-02-PLAN.md'),
+      'the pre-existing superseded row must stay unchecked even on the insertion path',
+    );
+  });
+
+  test('#4741 negative space: a superseded plan without a summary stays unchecked', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    write4741World(tmpDir, { includeSupersededSummary: false });
+
+    const output = runUpdate(tmpDir);
+    assert.strictEqual(output.plan_count, 1);
+    assert.strictEqual(output.summary_count, 1);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(roadmap.includes('- [ ] 01-02-PLAN.md'), 'no summary → no tick (existing behavior preserved)');
+  });
+
+  test('#4741 negative space: a halted summary on an ACTIVE plan still ticks (#2830)', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    // #2830: `status: halted` on a plan that still COUNTS is executed-by-design.
+    // The active plan's SUMMARY carries `halted` here; the superseded plan's
+    // row must still stay unchecked in the same document.
+    write4741World(tmpDir, { activeSummaryStatus: 'halted' });
+
+    const output = runUpdate(tmpDir);
+    assert.strictEqual(output.plan_count, 1, 'only the superseded plan is excluded');
+    assert.strictEqual(output.summary_count, 1);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(roadmap.includes('- [x] 01-01-PLAN.md'), 'a halted summary on an ACTIVE plan ticks (#2830)');
+    assert.ok(
+      roadmap.includes('- [ ] 01-02-PLAN.md'),
+      'and the superseded plan stays unchecked in the same document',
+    );
+    assert.ok(roadmap.includes('1/1 plans executed'), 'numbers and checkboxes agree');
+  });
+});
+
+// ─── #4786: suffix-less hand-written plan lists tick in place, never duplicated ──
+
+describe('#4786: suffix-less hand-written plan lists are recognized, not duplicated', () => {
+  let tmpDir;
+  let roadmapPath;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-4786-');
+    roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function writtenAfter() {
+    return fs.readFileSync(roadmapPath, 'utf-8');
+  }
+
+  test('#4786: a suffix-less hand-written plan list is ticked in place, never duplicated', () => {
+    // The issue's measured shape: a hand-written list WITHOUT the -PLAN.md
+    // suffix, carrying em-dash descriptions. The old detection keyed on the
+    // full plan filename, counted every plan "missing", and inserted a
+    // canonical list above the hand-written one (32 checkbox lines for 16
+    // plans, exit 0).
+    fs.writeFileSync(roadmapPath, [
+      '# ROADMAP',
+      '',
+      '### Phase 5: test phase',
+      '',
+      '**Plans:** 2/3 plans executed',
+      '',
+      'Plans:',
+      '',
+      '- [x] 5-01 — first: does the thing with a long hand-written description',
+      '- [x] 5-02 — second: does the other thing through submit(true)',
+      '- [ ] 5-03 — union run, redeploy and demo rebuild, live measurement',
+      '',
+    ].join('\n'));
+    createPhaseWithPlans(tmpDir, '5', [
+      '5-01-PLAN.md',
+      '5-02-PLAN.md',
+      '5-03-PLAN.md',
+    ]);
+    // All three plans have summaries (the issue's shape: the call lands the
+    // last summary, 15/16 → 16/16). #4741: only plans the count counts are
+    // tickable — a summary-less row is correctly left alone.
+    for (const n of ['5-01', '5-02', '5-03']) {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '05-test-phase', `${n}-SUMMARY.md`), '# Summary\n');
+    }
+
+    const result = runGsdTools(['roadmap', 'update-plan-progress', '5'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.equal(parsed.updated, true, 'the unchecked plan must be ticked');
+    assert.ok(
+      writtenAfter(result).includes('**Plans:** 3/3 plans executed'),
+      'the count line must update to 3/3',
+    );
+
+    const written = fs.readFileSync(roadmapPath, 'utf-8');
+    // The damage was the INSERTION — none may appear.
+    assert.ok(!written.includes('5-01-PLAN.md'), 'no canonical row may be inserted beside a recognized suffix-less list');
+    assert.ok(!written.includes('5-02-PLAN.md'), 'no canonical row may be inserted beside a recognized suffix-less list');
+    assert.ok(!written.includes('5-03-PLAN.md'), 'no canonical row may be inserted beside a recognized suffix-less list');
+    // The tick happened IN PLACE, with the hand-written description byte-identical.
+    assert.ok(
+      written.includes('- [x] 5-03 — union run, redeploy and demo rebuild, live measurement'),
+      `the unchecked suffix-less row must be ticked in place with its description intact; ROADMAP:\n${written}`,
+    );
+    assert.ok(
+      written.includes('- [x] 5-01 — first: does the thing with a long hand-written description'),
+      'already-ticked rows must be byte-identical',
+    );
+    assert.equal(
+      (written.match(/- \[.\] 5-0/g) || []).length,
+      3,
+      `exactly three checkbox rows must remain (no duplication); ROADMAP:\n${written}`,
+    );
+  });
+
+  test('#4786: a stem does not match a longer plan id', () => {
+    // Boundary: the new stem recognition must not let `- [x] 5-011` satisfy
+    // plan 5-01 (5-011 is a different plan). 5-01 carries no recognizable row,
+    // so the #1163 fresh-template insertion still fires for it — that is the
+    // documented contract; the pin is that 5-011 is not treated as 5-01.
+    fs.writeFileSync(roadmapPath, [
+      '# ROADMAP',
+      '',
+      '### Phase 5: test phase',
+      '',
+      'Plans:',
+      '',
+      '- [x] 5-011 — bogus longer id, not plan 5-01',
+      '',
+    ].join('\n'));
+    createPhaseWithPlans(tmpDir, '5', [
+      '5-01-PLAN.md',
+      '5-02-PLAN.md',
+      '5-03-PLAN.md',
+    ]);
+
+    const result = runGsdTools(['roadmap', 'update-plan-progress', '5'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const written = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(written.includes('- [ ] 5-01-PLAN.md'), '5-01 must still count as missing (5-011 is a different plan)');
+    assert.ok(written.includes('- [ ] 5-02-PLAN.md') && written.includes('- [ ] 5-03-PLAN.md'),
+      'all genuinely absent plans still insert');
+    assert.equal(
+      (written.match(/- \[.\] 5-0/g) || []).length,
+      4,
+      `3 inserted rows + the hand-written 5-011 row; ROADMAP:\n${written}`,
+    );
+  });
+});
+
+// ─── #4801: archived phase directories resolve in init.manager ──────────────
+
+describe('#4801: init.manager resolves archived phase directories', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-4801-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function writeState4801() {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nstatus: active\n---\n# State\n');
+  }
+
+  function writeRoadmap4801() {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), [
+      '# Roadmap',
+      '',
+      '### Phase 3: shipped',
+      '',
+      'Goal: shipped before archive',
+      '',
+      '### Phase 5: live',
+      '',
+      'Goal: in progress',
+      '',
+      '### Phase 7: never started',
+      '',
+      'Goal: not started',
+      '',
+    ].join('\n'));
+  }
+
+  function seedArchivedPhase() {
+    // An archived, shipped phase: PLAN + SUMMARY + a NEWER passing VERIFICATION
+    // (mtime discipline per the #3057 fixture — the verification must postdate
+    // the summary for the completion projection to read it as fresh).
+    const arch = path.join(tmpDir, '.planning', 'milestones', 'v0.1-phases', '03-shipped');
+    fs.mkdirSync(arch, { recursive: true });
+    fs.writeFileSync(path.join(arch, '03-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(arch, '03-01-SUMMARY.md'), '# Summary\n');
+    fs.writeFileSync(path.join(arch, '03-VERIFICATION.md'), '---\nstatus: passed\n---\n\n# Verification\n');
+    const older = new Date('2026-01-01T00:00:00.000Z');
+    const newer = new Date('2026-01-01T00:01:00.000Z');
+    fs.utimesSync(path.join(arch, '03-01-SUMMARY.md'), older, older);
+    fs.utimesSync(path.join(arch, '03-VERIFICATION.md'), newer, newer);
+  }
+
+  test('#4801: an archived phase directory resolves and reports complete', () => {
+    writeState4801();
+    writeRoadmap4801();
+    seedArchivedPhase();
+    // A live in-progress phase and a never-started phase for contrast.
+    const live = path.join(tmpDir, '.planning', 'phases', '05-live');
+    fs.mkdirSync(live, { recursive: true });
+    fs.writeFileSync(path.join(live, '05-01-PLAN.md'), '# Plan\n');
+
+    const output = JSON.parse(runGsdTools(['query', 'init.manager'], tmpDir).output);
+    const rows = new Map(output.phases.map((p) => [String(p.number), p]));
+
+    const archived = rows.get('3');
+    assert.ok(archived, 'the archived phase must appear in the enumeration');
+    assert.notStrictEqual(archived.disk_status, 'no_directory',
+      'an archived phase directory must resolve — no_directory means never started');
+    assert.strictEqual(archived.phase_complete, true,
+      'an archived phase with a passed verification reports complete');
+    const neverStarted = rows.get('7');
+    assert.strictEqual(neverStarted.disk_status, 'no_directory',
+      'a never-started phase still reports no_directory');
+  });
+
+  test('#4801: a live in-progress phase is unchanged by the archived-resolution swap', () => {
+    writeState4801();
+    writeRoadmap4801();
+    seedArchivedPhase();
+    const live = path.join(tmpDir, '.planning', 'phases', '05-live');
+    fs.mkdirSync(live, { recursive: true });
+    fs.writeFileSync(path.join(live, '05-01-PLAN.md'), '# Plan\n');
+
+    const output = JSON.parse(runGsdTools(['query', 'init.manager'], tmpDir).output);
+    const row = output.phases.find((p) => String(p.number) === '5');
+    assert.strictEqual(row.phase_complete, false);
+    assert.ok(['planned', 'empty', 'no_directory'].includes(row.disk_status),
+      `live plan-less phase stays incomplete; got ${row.disk_status}`);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #4906 Phase 2 (.gsd/phase/feat-4906-phase2-field-writes/50-test-matrix.md):
+// cmdRoadmapUpdatePlanProgress's `**Plans:**` write migrated onto the
+// PlanningDoc parse -> setFieldValue -> serialize seam (src/planning-document.
+// cjs). Row numbers refer to the locked matrix.
+//
+// Row 6 (a bracketed HUMAN annotation, e.g. `[Deferred pending re-scope]`,
+// must not be mistaken for the fresh-template placeholder) is #3584 Finding
+// A's own regression fixture and is already covered — see tests/phase.test.
+// cjs's "case 11 — a bracketed human annotation is preserved verbatim, not
+// mistaken for the template placeholder" in the `bug #3584` describe block —
+// not duplicated here per the fixture-provenance rule.
+//
+// Row 13 (parity between phase.cts and roadmap.cts for identical numeric
+// inputs) is asserted once, at tests/phase.test.cjs's "row 13" test above;
+// not duplicated here.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('#4906 Phase 2: cmdRoadmapUpdatePlanProgress Plans-line seam migration (site 2)', () => {
+  let tmpDir;
+  let roadmapPath;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-4906-roadmap-');
+    roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function seedPhase10(plansLine, { verified = true } = {}) {
+    fs.writeFileSync(
+      roadmapPath,
+      [
+        '# Roadmap', '',
+        '- [ ] **Phase 10: Test Phase**', '',
+        '### Phase 10: Test Phase',
+        '**Goal:** goal',
+        plansLine, '',
+        '## Progress', '',
+        '| Phase | Plans Complete | Status | Completed |',
+        '|-------|----------------|--------|-----------|',
+        '| 10 Test Phase | 0/1 | Not started | - |', '',
+      ].join('\n'),
+    );
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '10-test-phase');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '10-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '10-01-SUMMARY.md'), '# Summary\n');
+    if (verified) {
+      fs.writeFileSync(path.join(phaseDir, '10-VERIFICATION.md'), '---\nstatus: passed\n---\n\n# Verification\n');
+    }
+    return phaseDir;
+  }
+
+  function plansLineIn(content) {
+    // Recognizes both BOLD_FIELD_RE spellings (colon inside `**Plans:**` and
+    // colon outside `**Plans**:`, the canonical templates/roadmap.md shape) —
+    // rows 4/5 below seed the colon-outside spelling, and a finder anchored
+    // to only one spelling silently reports "field not found" (`undefined`)
+    // rather than a real assertion failure, masking whichever bug is actually
+    // present. Caught by gsd-test (#4906 Phase 2 verification run).
+    return content.split(/\r?\n/).find((l) => /^\*\*Plans(?::\*\*|\*\*:)/.test(l.trim()));
+  }
+
+  test('row 2 (non-regression of #2853/#3584): trailing prose survives migration', () => {
+    const annotation = '— replanned per review';
+    seedPhase10(`**Plans:** 1 plans ${annotation}`);
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    const line = plansLineIn(fs.readFileSync(roadmapPath, 'utf-8'));
+    assert.equal(line, `**Plans:** 1/1 plans complete ${annotation}`,
+      'annotation must survive byte-for-byte after the count bump');
+  });
+
+  test('row 3: a Plans line with a real count and no trailing content updates cleanly', () => {
+    seedPhase10('**Plans:** 1 plans');
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    const line = plansLineIn(fs.readFileSync(roadmapPath, 'utf-8'));
+    assert.equal(line, '**Plans:** 1/1 plans complete');
+  });
+
+  test('row 4: the fresh-template placeholder is replaced with the real count', () => {
+    seedPhase10('**Plans**: [Number of plans, e.g., "3 plans" or "TBD"]');
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    const line = plansLineIn(fs.readFileSync(roadmapPath, 'utf-8'));
+    assert.equal(line, '**Plans**: 1/1 plans complete');
+  });
+
+  test('row 5: freeform prose (not the template placeholder, not a real count) is left untouched', () => {
+    seedPhase10('**Plans**: TBD — annotation');
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    const line = plansLineIn(fs.readFileSync(roadmapPath, 'utf-8'));
+    assert.equal(line, '**Plans**: TBD — annotation', 'freeform prose must never be classified as a writable count');
+  });
+
+  test('row 7: a missing Plans field does not crash roadmap.update-plan-progress', () => {
+    fs.writeFileSync(
+      roadmapPath,
+      [
+        '# Roadmap', '',
+        '- [ ] **Phase 10: Test Phase**', '',
+        '### Phase 10: Test Phase',
+        '**Goal:** goal', '',
+        '## Progress', '',
+        '| Phase | Plans Complete | Status | Completed |',
+        '|-------|----------------|--------|-----------|',
+        '| 10 Test Phase | 0/1 | Not started | - |', '',
+      ].join('\n'),
+    );
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '10-test-phase');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '10-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '10-01-SUMMARY.md'), '# Summary\n');
+    fs.writeFileSync(path.join(phaseDir, '10-VERIFICATION.md'), '---\nstatus: passed\n---\n\n# Verification\n');
+
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `must not crash on a missing Plans field: ${result.error}`);
+  });
+
+  test('row 9: the write does not escape its confinement window into a sibling phase', () => {
+    const annotation = '— do not touch';
+    fs.writeFileSync(
+      roadmapPath,
+      [
+        '# Roadmap', '',
+        '- [ ] **Phase 10: Test Phase**',
+        '- [ ] **Phase 11: Sibling Phase**', '',
+        '### Phase 10: Test Phase',
+        '**Goal:** goal',
+        '**Plans:** 1 plans', '',
+        '### Phase 11: Sibling Phase',
+        '**Goal:** sibling goal',
+        `**Plans:** 0/1 plans ${annotation}`, '',
+        '## Progress', '',
+        '| Phase | Plans Complete | Status | Completed |',
+        '|-------|----------------|--------|-----------|',
+        '| 10 Test Phase | 0/1 | Not started | - |',
+        '| 11 Sibling Phase | 0/1 | Not started | - |', '',
+      ].join('\n'),
+    );
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '10-test-phase');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '10-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '10-01-SUMMARY.md'), '# Summary\n');
+    fs.writeFileSync(path.join(phaseDir, '10-VERIFICATION.md'), '---\nstatus: passed\n---\n\n# Verification\n');
+
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    const lines = fs.readFileSync(roadmapPath, 'utf-8')
+      .split(/\r?\n/)
+      .filter((l) => l.trim().startsWith('**Plans:**'));
+    assert.equal(lines[0], '**Plans:** 1/1 plans complete', 'phase 10 (the target) is rewritten');
+    assert.equal(lines[1], `**Plans:** 0/1 plans ${annotation}`,
+      "phase 11's own Plans line must stay untouched by phase 10's write");
+  });
+
+  test('row 10: a migrated Plans write round-trips identically through the seam\'s own read path', () => {
+    seedPhase10('**Plans:** 1 plans');
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    const written = fs.readFileSync(roadmapPath, 'utf-8');
+    const { parsePlanningDoc, findField, readNode } = require('../gsd-core/bin/lib/planning-document.cjs');
+    const parsed = parsePlanningDoc(written, 'ROADMAP.md');
+    assert.ok(parsed.ok, 'the written ROADMAP.md must remain parseable by the same seam');
+    const fieldId = findField(parsed.value, 'Plans');
+    assert.ok(fieldId, 'the Plans field must still be locatable');
+    const read = readNode(parsed.value, fieldId);
+    assert.ok(read.ok, 'the Plans field must remain readable');
+    assert.equal(read.value, '1/1 plans complete', 'round-tripped value matches exactly what was computed');
+  });
+
+  test('row 12: the Plans-line migration is CRLF-safe', () => {
+    const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+    const annotation = '— crlf annotation';
+    seedPhase10(`**Plans:** 1 plans ${annotation}`);
+    const lf = fs.readFileSync(roadmapPath, 'utf-8');
+    fs.writeFileSync(roadmapPath, splitLines(lf).join('\r\n'));
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    const written = fs.readFileSync(roadmapPath, 'utf-8');
+    const line = splitLines(written).find((l) => l.trim().startsWith('**Plans:**'));
+    assert.equal(line, `**Plans:** 1/1 plans complete ${annotation}`,
+      'CRLF source must not corrupt the offset or strand/duplicate the annotation');
   });
 });

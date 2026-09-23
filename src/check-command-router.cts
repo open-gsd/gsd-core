@@ -292,11 +292,12 @@ function buildVerifyMessage(notHonored: UncoveredItem[]): string {
   ].join('\n');
 }
 
-function loadDecisionExtraction(contextPath: string): { trackable: Decision[]; outcome: 'parsed' | 'none-present' | 'could-not-parse' } {
+function loadDecisionExtraction(contextPath: string): { trackable: Decision[]; outcome: 'parsed' | 'none-present' | 'could-not-parse'; unreadableIds: string[] } {
   const extraction = extractDecisions(readIfExists(contextPath));
   return {
     trackable: extraction.decisions.filter((d) => d.trackable),
     outcome: extraction.outcome,
+    unreadableIds: extraction.unreadableIds ?? [],
   };
 }
 
@@ -347,23 +348,48 @@ function cmdDecisionCoveragePlan(projectDir: string, args: string[], raw: boolea
     output({ passed: true, skipped: true, reason: 'CONTEXT.md missing', total: 0, covered: 0, uncovered: [], message: 'No CONTEXT.md - nothing to check.' }, raw, undefined);
     return;
   }
+  // #4794: a NON-FILE path (a directory — the adjacent same-looking positional
+  // swapped, the issue's repro 2) is a caller error like #2770's empty argument:
+  // fs.existsSync is true, the read yields nothing, and the gate used to
+  // certify passed:true on a phase full of decisions. Fail closed, naming it.
+  // The stat is wrapped: a path that vanishes between existsSync and statSync
+  // (or any stat failure) must answer the SAME fail-closed JSON, never a throw.
+  let contextIsFile = false;
+  let contextKind = 'non-file entry';
+  try {
+    const st = fs.statSync(contextPath);
+    contextIsFile = st.isFile();
+    if (st.isDirectory()) contextKind = 'directory';
+  } catch {
+    contextIsFile = false;
+    contextKind = 'unreadable path';
+  }
+  if (!contextIsFile) {
+    output({ passed: false, skipped: false, reason: 'context path is not a file', total: null, covered: null, message: `Decision coverage gate: the context path "${contextArg}" is not a readable file (${contextKind}). Swap the adjacent positionals or pass --context <path-to-CONTEXT.md>.` }, raw, undefined);
+    return;
+  }
 
-  const { trackable: decisions, outcome } = loadDecisionExtraction(contextPath);
+  const { trackable: decisions, outcome, unreadableIds } = loadDecisionExtraction(contextPath);
 
   // #1365 fail-loud gate: any could-not-parse outcome must NOT silently pass —
   // even when some decisions were extracted (e.g. D-01 valid but D-02 malformed).
   // A parse-miss on ANY bullet means the gate cannot certify full coverage.
   // Fire independent of decisions.length so a partial-parse still blocks.
   if (outcome === 'could-not-parse') {
+    // #4794: nothing was measured — the answer must not carry the fields of a
+    // gate that did. total/covered are null (a type change is the point:
+    // 0 reads as data, null does not), `uncovered` is OMITTED (the list was
+    // never built), and the ids that failed to parse are carried so a caller
+    // capturing stdout knows which decision to fix.
     const partialParse = decisions.length > 0;
     output({
       passed: false,
       skipped: false,
       reason: 'could-not-parse',
-      total: decisions.length,
-      covered: 0,
-      uncovered: [],
-      message: partialParse
+      total: null,
+      covered: null,
+      unreadable: unreadableIds,
+      message: (partialParse
         ? 'Decision coverage gate: decisions could not be fully parsed — one or more ' +
           '`- **D-NN ...**` bullets appear malformed (missing `:` or ` — ` separator, or a phase ' +
           'prefix that is not a digit run, e.g. `D4x-01`). Fix the bullet format so all decisions ' +
@@ -373,7 +399,8 @@ function cmdDecisionCoveragePlan(projectDir: string, args: string[], raw: boolea
           'or D- tokens) but no decision bullets could be extracted. Check the formatting of the decisions ' +
           'block and ensure bullets follow the `- **D-NN:** text`, `- **D4-NN:** text` (phase-prefixed), ' +
           'or `- **D-NN — title** body` form. An ID grammar the parser does not support (e.g. `DEC-01`) ' +
-          'also lands here.',
+          'also lands here.')
+        + (unreadableIds.length > 0 ? ' Unreadable ids: ' + unreadableIds.join(', ') + '.' : ''),
     }, raw, undefined);
     return;
   }

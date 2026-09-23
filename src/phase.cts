@@ -75,6 +75,7 @@ import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- state.cjs is an export= CommonJS module
 import stateMod = require('./state.cjs');
 import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync, contentChangedAfterNormalize } from './shell-command-projection.cjs';
+import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from './planning-document.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
@@ -3728,7 +3729,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // whole-slice `.replace()` onto the seam. Applied per single physical
         // line by updateBullet, so the pattern no longer needs the `m` flag
         // (it never sees more than one line at a time); see
-        // planCountBodyPattern below for the sites that were migrated onto
+        // writePlansField below for the sites that were migrated onto
         // withPhaseSection instead.
         //
         // #2245 review Fix 6: this is behaviour-preserving for GSD-GENERATED
@@ -3787,12 +3788,109 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
 
         // ADR-2143 §4: the plan-count write is now routed through
         // withPhaseSection (see mutateMilestonePhase below), which hands this
-        // pattern ONLY phase N's own detail-section body — so the pattern no
-        // longer needs its own `#{2,4}\s*Phase\s+N` anchor + skip-ahead-past-
-        // interior-headings lookahead; the section boundary itself confines
-        // the match (the #2067/#2200 boundary-crossing class is now
-        // structurally impossible for this site rather than regex-enforced).
-        const planCountBodyPattern = /(\*\*Plans:\*\*\s*)[^\n]+/i;
+        // seam call ONLY phase N's own detail-section body — the section
+        // boundary itself confines the write (the #2067/#2200 boundary-
+        // crossing class is structurally impossible for this site).
+        //
+        // #4906 Phase 2 (#4917/ADR-4910): migrated off the one-capture-group
+        // regex that replaced to end of line, dropping any hand-written
+        // trailing prose after the count (#4852) — onto the PlanningDoc
+        // `boldField` write seam, whose `valueSpan`/`trailingSpan` split
+        // never touches the trailing annotation.
+        const writePlansField = (body: string): string => {
+          const parsed = parsePlanningDoc(body, 'ROADMAP.md');
+          if (!parsed.ok) {
+            preservationWarnings.push({ field: 'Plans', reason: parsed.reason });
+            return body;
+          }
+          const fieldId = findField(parsed.value, 'Plans');
+          if (!fieldId) {
+            // #4906 regression (#1163 parity, caught by gsd-test against
+            // roadmap.cts's sibling site): a hand-edited or pre-template
+            // ROADMAP.md may carry a PLAIN (non-bold) `Plans:` line rather
+            // than the canonical `**Plans**:`/`**Plans:**` bold field.
+            // BOLD_FIELD_RE stays bold-only (widening it would register
+            // ordinary prose as a spurious field seam-wide) — this fallback
+            // mirrors roadmap.cts's identical one, kept in parity per
+            // Decision 2 rather than letting the two sites diverge on which
+            // legacy shapes they tolerate.
+            const plainMatch = body.match(/^([ \t]*)Plans:([ \t]*)([^\r\n]*)$/m);
+            if (!plainMatch) {
+              // No `**Plans:**`/`**Plans**:`/plain `Plans:` line in this
+              // phase's section — nothing to write; not a failure (mirrors
+              // the old regex's silent no-match no-op).
+              return body;
+            }
+            const [whole, indent, spacing, plainValue] = plainMatch;
+            const plainCountPrefixMatch = plainValue.match(
+              /^(?:\d+\s*\/\s*\d+\s+plans(?:\s+(?:complete|executed))?|\d+\s+plans?)/i,
+            );
+            const plainIsTemplatePlaceholder = /^\[\s*Number of plans\b[\s\S]*\]$/i.test(plainValue.trim());
+            if (!plainCountPrefixMatch && !plainIsTemplatePlaceholder) {
+              // Arm 3: freeform prose, TBD, a bracketed human annotation, or
+              // an empty value — leave the field exactly as it was.
+              return body;
+            }
+            const plainNewCountText = `${summaryCount}/${planCount} plans complete`;
+            const plainSuffix = plainCountPrefixMatch ? plainValue.slice(plainCountPrefixMatch[0].length) : '';
+            const newPlainLine = `${indent}Plans:${spacing}${plainNewCountText}${plainSuffix}`;
+            const start = plainMatch.index ?? body.indexOf(whole);
+            return body.slice(0, start) + newPlainLine + body.slice(start + whole.length);
+          }
+          // #4906 regression fix: PREFIX-match the existing value's count
+          // token and re-glue whatever follows it VERBATIM — a glued-on
+          // annotation with no ` — ` separator (e.g. a parenthetical like
+          // `0/1 plans executed (11-16 are gap closure from VERIFICATION)`)
+          // lives entirely inside `value` (`TRAILING_SEPARATOR_RE` in
+          // planning-document.cts only splits on ` — `, unchanged/correct),
+          // so overwriting `value` outright previously destroyed it.
+          //
+          // #4906 review finding (isolated adversarial pass): the prior
+          // version of this migration preserved this site's OLD
+          // unconditional-overwrite behavior for the no-count-prefix case,
+          // which clobbers arm 3 (freeform prose / TBD / a bracketed human
+          // annotation like `[Deferred pending re-scope]`) — a real
+          // regression against the design doc's own Behavior table row 4,
+          // not an accepted trade-off. Fixed here by adopting the SAME
+          // template-placeholder / arm-3-untouched classification
+          // roadmap.cts's sibling site already uses (isTemplatePlaceholder +
+          // "no count prefix and not a placeholder => leave untouched"),
+          // rather than letting the two migrated sites diverge on this.
+          const newCountText = `${summaryCount}/${planCount} plans complete`;
+          const current = readNode(parsed.value, fieldId);
+          if (!current.ok) {
+            return body;
+          }
+          const currentValue = current.value;
+          const countPrefixMatch = currentValue.match(
+            /^(?:\d+\s*\/\s*\d+\s+plans(?:\s+(?:complete|executed))?|\d+\s+plans?)/i,
+          );
+          const isTemplatePlaceholder = /^\[\s*Number of plans\b[\s\S]*\]$/i.test(currentValue.trim());
+          if (!countPrefixMatch && !isTemplatePlaceholder) {
+            // Arm 3: freeform prose, TBD, a bracketed human annotation, or an
+            // empty value — leave the field exactly as it was.
+            return body;
+          }
+          const newValueToWrite = countPrefixMatch
+            ? newCountText + currentValue.slice(countPrefixMatch[0].length)
+            : newCountText;
+          const staged = setFieldValue(parsed.value, fieldId, newValueToWrite);
+          if (!staged.ok) {
+            preservationWarnings.push({ field: 'Plans', reason: staged.reason });
+            return body;
+          }
+          const out = serialize(staged.value);
+          if (!out.ok) {
+            // `hasUnreadableNodes` refusal (ADR-4910 amendment) — a ragged
+            // SIBLING node elsewhere in this same section refuses the whole
+            // splice. Never throw / crash the phase-complete transaction over
+            // a node unrelated to this write; surface it and leave `body`
+            // unchanged, same as any other preservation warning.
+            preservationWarnings.push({ field: 'Plans', reason: out.reason });
+            return body;
+          }
+          return out.value;
+        };
 
         const phaseInfoSummaries = phaseInfo['summaries'] as string[];
 
@@ -3839,7 +3937,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // section's body, so neither regex can escape into a sibling
           // phase's section, a shipped milestone, or a Backlog entry.
           s = withPhaseSection(s, phaseNum, (body) => {
-            let b = body.replace(planCountBodyPattern, `$1${summaryCount}/${planCount} plans complete`);
+            let b = writePlansField(body);
             for (const summaryFile of phaseInfoSummaries) {
               const planId = summaryFile.replace('-SUMMARY.md', '').replace('SUMMARY.md', '');
               if (!planId) continue;

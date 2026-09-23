@@ -4602,9 +4602,26 @@ function runWithTimeout(argv) {
   // cap's process-group kill (the wrapped child escapes reap → exit 124 never
   // fires) and risks cmd.exe mis-parsing an arg like `-e "setTimeout(()=>{})"`.
   // Only .cmd/.bat are the CVE-2024-27980 EINVAL cases that require mediation.
+  // #4797: the mediation is NOT hand-rolled here — the private `/d /s /c <cmd>
+  // ...args` copy broke on any shim path containing a space (Node quotes the
+  // argv token; `/s` strips the FIRST and LAST quote of the /c string, so
+  // cmd.exe took the pre-space fragment as the program). projectSpawnInvocation
+  // (the declared single owner, #3411/#3617) wraps the WHOLE command line in
+  // one extra quote pair with windowsVerbatimArguments — the shape that
+  // survives spaces. One behavior delta, accepted: the seam DECLINES mediation
+  // when the target or an arg carries CR/LF (the old block mediated anyway) —
+  // the unmediated spawn of a .cmd then fails EINVAL, loud, at the catch below.
   const winShim = isWin && /\.(cmd|bat)$/i.test(path.basename(cmd));
-  const spawnCmd = winShim ? (process.env.ComSpec || 'cmd.exe') : cmd;
-  const spawnArgs = winShim ? ['/d', '/s', '/c', cmd, ...cmdArgs] : cmdArgs;
+  let spawnCmd = cmd;
+  let spawnArgs = cmdArgs;
+  let spawnOpts;
+  if (winShim) {
+    const { projectSpawnInvocation } = require('./lib/shell-command-projection.cjs');
+    const inv = projectSpawnInvocation(cmd, cmdArgs);
+    spawnCmd = inv.command;
+    spawnArgs = inv.args;
+    if (inv.windowsVerbatimArguments) spawnOpts = { windowsVerbatimArguments: true };
+  }
   // Node's setTimeout delay is a 32-bit signed ms int; a larger value silently
   // clamps to 1ms → a spurious immediate timeout. Cap the budget (~24.8 days).
   const timerMs = Math.min(Math.round(secs * 1000), 2 ** 31 - 1);
@@ -4615,11 +4632,13 @@ function runWithTimeout(argv) {
   return new Promise((resolve) => {
     let child;
     try {
-      // #2667: on win32 `.cmd`/`.bat`/`.exe`, spawn cmd.exe with an explicit argv
-      // array (spawnCmd/spawnArgs) rather than the shim directly — preserves the
-      // array-only, no-shell-string argv contract. `detached` is always false on
-      // win32, so it never co-occurs with the cmd.exe mediation.
-      child = spawn(spawnCmd, spawnArgs, { stdio: 'inherit', detached });
+      // #2667: on win32 `.cmd`/`.bat` shims, spawn cmd.exe with an explicit
+      // argv ARRAY rather than the shim directly — preserves the array-only,
+      // no-shell-string argv contract. #4797: the exact argv shape (quote
+      // wrapping, verbatim arguments) is projected by projectSpawnInvocation —
+      // see the block above. `detached` is always false on win32, so it never
+      // co-occurs with the cmd.exe mediation.
+      child = spawn(spawnCmd, spawnArgs, { stdio: 'inherit', detached, ...spawnOpts });
     } catch (err) {
       process.stderr.write(`run-with-timeout: ${cmd}: ${err && err.message ? err.message : 'failed to start'}\n`);
       resolve(spawnFailureCode(err));

@@ -345,13 +345,26 @@ describe('release-tarball-smoke', () => {
       assert.equal(fs.readFileSync(path.join(upgradedConfigDir, '.gsd-surface.json'), 'utf8'), selectedState);
       assert.equal(fs.readFileSync(path.join(upgradedConfigDir, 'user-owned.txt'), 'utf8'), 'preserve me\n');
       assert.equal(fs.readFileSync(path.join(upgradeCwd, '.planning', 'config.json'), 'utf8'), priorGates);
+      // #4667 (sanctioned baseline change): the deployed codex corpus is a
+      // CONVERTED projection of the package source — @ includes are rewritten
+      // to the codex install root — so the no-drift baseline for an upgrade is
+      // the previously-DEPLOYED tree (the fresh codex install from the same
+      // package), not the raw package bytes. Comparing against packageRoot
+      // would pin the pre-#4667 leak (codex artifacts carrying Claude-rooted
+      // @ includes) as required output.
+      const deployedCodexCommands = path.join(
+        installs.find((entry) => entry.runtime === 'codex').configDir, 'gsd-core', 'commands', 'gsd',
+      );
+      const deployedCodexAgents = path.join(
+        installs.find((entry) => entry.runtime === 'codex').configDir, 'gsd-core', 'agents',
+      );
       assert.deepStrictEqual(
         hashTree(path.join(upgradedConfigDir, 'gsd-core', 'commands', 'gsd')),
-        hashTree(path.join(packageRoot, 'commands', 'gsd')),
+        hashTree(deployedCodexCommands),
       );
       assert.deepStrictEqual(
         hashTree(path.join(upgradedConfigDir, 'gsd-core', 'agents')),
-        hashTree(path.join(packageRoot, 'agents')),
+        hashTree(deployedCodexAgents),
       );
       const upgradedSkillRoot = path.join(upgradedHome, '.agents', 'skills');
       const upgradedSkillCount = fs.readdirSync(upgradedSkillRoot).filter((name) => name.startsWith('gsd-')).length;

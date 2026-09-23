@@ -69,6 +69,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 
 **Capabilities:**
 - Reads CONTEXT.md to focus research on user's decisions
+- Queries the project knowledge graph through the `graphify` CLI when it is on `PATH` (IDF-ranked, fuzzy-matched, context-filtered seeding), falling back to the built-in substring-seeded reader otherwise (#4836)
 - Investigates implementation patterns for the specific phase domain
 - Detects test infrastructure for Nyquist validation mapping
 - Tags in-repo discrete values (enums, schema unions, error codes, status constants, paths) `[VERIFIED]` only after reading the source-of-truth file that run, citing path and line range, and quoting the values verbatim
@@ -173,6 +174,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 
 **Key behaviors:**
 - Reads PROJECT.md, REQUIREMENTS.md, CONTEXT.md, RESEARCH.md
+- Queries the project knowledge graph through the `graphify` CLI when it is on `PATH`, adding `graphify affected` for reverse traversal, and falls back to the built-in substring-seeded reader otherwise (#4836)
 - Creates 2-3 atomic task plans sized for single context windows
 - Uses XML structure with `<task>` elements
 - Emits a `<fails_when>` sibling for every runnable `<automated>` verify command, naming what output constitutes failure (#3172)
@@ -378,6 +380,7 @@ Three further dimensions carry no number: **Verify Command Format Sanity**,
 | **Model (balanced)** | Sonnet |
 | **Color** | Pink |
 | **Produces** | `{phase}-UI-REVIEW.md` with scores |
+| **Interaction capture** | `workflow.ui_interaction_capture` (default `false`) |
 
 **6 Audit Pillars (scored 1-4):**
 1. Copywriting
@@ -386,6 +389,19 @@ Three further dimensions carry no number: **Verify Command Format Sanity**,
 4. Typography
 5. Spacing
 6. Experience Design
+
+**Interaction capture (default-off).** The static screenshots are three viewport captures of
+the first paint, taken with `npx playwright screenshot`, which has no interaction verb — so a
+hover state, an open menu, a focus ring or a form's validation state never appears in them.
+With `workflow.ui_interaction_capture` on, `/gsd-ui-review` passes `interaction_capture: true`
+in the auditor's `<config>` block and the auditor adds post-interaction captures through the
+`chrome-devtools` CLI (the second binary in the `chrome-devtools-mcp` package), driven from
+`Bash` against a throwaway `--isolated` profile: no MCP server, no `tools:` change. It needs an
+installed Chrome (`CHROME_BIN` overrides discovery). With the key off, or no Chrome resolved,
+the section prints one line and the Playwright-only path runs exactly as before. The report's
+`**Interaction captures:**` field carries the outcome — off, skipped with its reason, or the
+number of states captured — and an interaction state that was not captured is never reported as
+observed. See [Enable UI interaction capture](how-to/enable-ui-interaction-capture.md).
 
 ---
 

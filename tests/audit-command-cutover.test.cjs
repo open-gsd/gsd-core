@@ -2189,11 +2189,13 @@ describe('bug #950: quick-task SUMMARY must carry status: complete', () => {
       const criticalBlock = lines.slice(criticalIdx, criticalEndIdx).join('\n');
       assert.doesNotMatch(criticalBlock, /status: acknowledged/, 'the CRITICAL entry (and its continuation line) must NEVER be touched');
       assert.match(criticalBlock, /see also: - minor typo/, 'the CRITICAL entry continuation line is preserved verbatim');
-      // Measured: the write seam's `_normalizeMd` (src/shell-command-projection.cts:837)
-      // inserts a blank line before a list item whose predecessor is a non-blank, non-list
-      // line — so a blank line appears between the CRITICAL continuation line and the
-      // "- minor typo" bullet after this write. That is repo-wide `.md`-write normalization
-      // (50 callers through the single write seam), not something specific to this feature.
+      // The write seam's `_normalizeMd` carries no before-a-bullet insertion
+      // rule: #3854 guarded the indented-continuation predecessor, #4725
+      // removed the prose-predecessor case outright. No blank line is
+      // injected between the CRITICAL continuation line and the "- minor
+      // typo" bullet by this write — repo-wide `.md`-write normalization
+      // (50 callers through the single write seam), not something specific
+      // to this feature.
       assert.match(content, /- minor typo\n {2}status: acknowledged/, 'the standalone "minor typo" entry (its OWN span) now carries the marker');
 
       const after = audit(tmpDir);
@@ -2671,3 +2673,69 @@ describe('bug #950: quick-task SUMMARY must carry status: complete', () => {
     });
   });
 }
+
+// ─── #4802: an unparseable frontmatter block must not be spliced over ──────
+
+describe('#4802: acknowledge refuses targets whose frontmatter fails to parse', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject('gsd-4802-'); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  function planningPath(...segs) {
+    return path.join(tmpDir, '.planning', ...segs);
+  }
+
+  // A real YAML SYNTAX error (the issue's second shape: an invalid backslash
+  // escape inside a double-quoted value). Note the issue's first shape
+  // (unescaped colons inside a double-quoted value) is actually LEGAL YAML —
+  // double-quoted scalars may contain colons — so the fixture uses a shape
+  // that genuinely fails to parse. Empirically verified against the built
+  // frontmatter.cjs: this content returns an object marked
+  // FRONTMATTER_UNPARSEABLE.
+  const UNPARSEABLE_FM = [
+    '---',
+    'status: complete',
+    'ref: "bad\\q escape"',
+    'key-decisions:',
+    '  - decision one',
+    '---',
+  ].join('\n');
+
+  function ack(tmpDir, args) {
+    return runGsdTools(['audit-open', 'acknowledge', ...args, '--json'], tmpDir);
+  }
+
+  test('threads: an unparseable-frontmatter target is refused, file byte-identical', () => {
+    const threadsDir = planningPath('threads');
+    fs.mkdirSync(threadsDir, { recursive: true });
+    const filePath = path.join(threadsDir, 'broken-yaml.md');
+    const before = UNPARSEABLE_FM + '\n# Thread\n';
+    fs.writeFileSync(filePath, before, 'utf-8');
+
+    const result = ack(tmpDir, ['--category', 'threads', '--slug', 'broken-yaml', '--milestone', 'v1.0']);
+    assert.ok(!result.success, `acknowledge must refuse; stdout: ${result.output}\nstderr: ${result.error}`);
+    assert.ok(
+      (result.error || '').includes('not parseable YAML') && (result.error || '').includes('broken-yaml.md'),
+      `the refusal must name the file and the unparseable frontmatter; stderr: ${result.error}`,
+    );
+    assert.strictEqual(fs.readFileSync(filePath, 'utf-8'), before,
+      'the file must be byte-identical — no splice may discard frontmatter');
+  });
+
+  test('uat_gaps (phase-scoped): an unparseable-frontmatter target is refused, file byte-identical', () => {
+    const ctxDir = planningPath('phases', '01-init');
+    fs.mkdirSync(ctxDir, { recursive: true });
+    const filePath = path.join(ctxDir, 'CONTEXT.md');
+    const before = UNPARSEABLE_FM + '\n# Context\n';
+    fs.writeFileSync(filePath, before, 'utf-8');
+    fs.writeFileSync(path.join(ctxDir, '01-01-PLAN.md'), '# Plan\n');
+
+    const result = ack(tmpDir, ['--category', 'uat_gaps', '--phase', '01', '--file', 'CONTEXT.md', '--milestone', 'v1.0']);
+    assert.ok(!result.success, `acknowledge must refuse; stdout: ${result.output}\nstderr: ${result.error}`);
+    assert.strictEqual(fs.readFileSync(filePath, 'utf-8'), before,
+      'the file must be byte-identical — no splice may discard frontmatter');
+  });
+});

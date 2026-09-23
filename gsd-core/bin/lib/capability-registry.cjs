@@ -2988,8 +2988,7 @@ const capabilities = {
         },
         "skipHomePrefixSubstitution": true,
         "skipSettingsUi": true,
-        "skipUpdateBannerCommand": true,
-        "skipCodexSkillsManifest": true
+        "skipUpdateBannerCommand": true
       }
     },
     "reviewer": {
@@ -3859,6 +3858,11 @@ const capabilities = {
         "type": "boolean",
         "default": true,
         "description": "Block execution on unmet UI-SPEC contracts."
+      },
+      "workflow.ui_interaction_capture": {
+        "type": "boolean",
+        "default": false,
+        "description": "Default-off. Let gsd-ui-auditor add post-interaction captures (hover, focus, open menus, filled forms) through the chrome-devtools CLI, driven from Bash — no MCP server and no tools: change (#4223). Requires an installed Chrome; when off, or when none resolves, the auditor's Playwright-only static capture is unchanged."
       }
     },
     "steps": [
@@ -4897,7 +4901,8 @@ const configKeys = {
   "workflow.tdd_mode": "tdd",
   "workflow.ui_phase": "ui",
   "workflow.ui_review": "ui",
-  "workflow.ui_safety_gate": "ui"
+  "workflow.ui_safety_gate": "ui",
+  "workflow.ui_interaction_capture": "ui"
 };
 
 const configSchema = {
@@ -5447,6 +5452,12 @@ const configSchema = {
     "type": "boolean",
     "default": true,
     "description": "Block execution on unmet UI-SPEC contracts."
+  },
+  "workflow.ui_interaction_capture": {
+    "owner": "ui",
+    "type": "boolean",
+    "default": false,
+    "description": "Default-off. Let gsd-ui-auditor add post-interaction captures (hover, focus, open menus, filled forms) through the chrome-devtools CLI, driven from Bash — no MCP server and no tools: change (#4223). Requires an installed Chrome; when off, or when none resolves, the auditor's Playwright-only static capture is unchanged."
   }
 };
 
@@ -7213,8 +7224,7 @@ const runtimes = {
         },
         "skipHomePrefixSubstitution": true,
         "skipSettingsUi": true,
-        "skipUpdateBannerCommand": true,
-        "skipCodexSkillsManifest": true
+        "skipUpdateBannerCommand": true
       }
     },
     "reviewer": {

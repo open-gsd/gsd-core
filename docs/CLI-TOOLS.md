@@ -1301,7 +1301,7 @@ node gsd-tools.cjs worktree set-baseref
 | `head-matches-fork` | `false` | HEAD and `origin/HEAD` are the same commit |
 | `head-diverged-from-fork` | `true` | Branch is ahead of or diverged from `origin/HEAD` |
 | `fork-ref-unknown` | `true` | `origin/HEAD` could not be resolved |
-| `no-head` | `false` | Not in a git repo (no `HEAD`) — `git rev-parse HEAD` exited 128 (definitive), or exited 0 with empty stdout |
+| `no-head` | `true` for exit 128, `false` for exit 0 with empty stdout | Exit 128 is git's definitive "no resolvable HEAD here" answer — not a git repository, or a repository with no commits; no harness worktree can be created, so the check degrades to sequential (#4734), with a `message` explaining why. Exit 0 with empty stdout is ambiguous (git completed without a definitive answer) and stays non-degrading (`headAbsenceVerified` distinguishes the two: `true` / `false`) |
 | `head-unresolvable` | `true` | `git rev-parse HEAD` did not return a definitive answer (timed out, `git` missing, or any other non-128 failure) — fails closed rather than being treated as `no-head` |
 
 **`worktree set-baseref`** applies a no-clobber write of `worktree.baseRef:"head"` to `.claude/settings.local.json`. If the file already contains an explicit `baseRef` value other than `"head"`, the existing value is preserved and `skipped:"explicit-other"` is returned. Malformed JSON causes an error rather than a silent overwrite. Both fresh installs and upgrades of GSD Core run this automatically when `workflow.use_worktrees` is enabled (the default); the command is also available for manual use — for example, to apply the setting when worktrees were toggled on after installation, or to re-apply it after a settings change.

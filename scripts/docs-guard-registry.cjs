@@ -174,6 +174,7 @@ const DOCS_GUARD_TESTS = {
   // entry).
   'tests/learnings.test.cjs': ['docs/FEATURES.md'],
   'tests/analyze-dependencies.test.cjs': ['docs/COMMANDS.md'],
+  'tests/auto-select-attribute.test.cjs': ['docs/reference/plan-md.md'],
   'tests/autonomous-converge.test.cjs': [
     'docs/COMMANDS.md',
     'docs/how-to/run-phases-autonomously.md',
@@ -402,6 +403,7 @@ const DOCS_GUARD_TESTS = {
     'docs/how-to/plan-a-phase.md',
     'docs/AGENTS.md',
   ],
+  'tests/ui-interaction-capture.test.cjs': ['docs/CONFIGURATION.md'],
   'tests/ui-spec-inventory-provenance.test.cjs': [
     'docs/FEATURES.md',
     'docs/how-to/design-a-ui-phase.md',

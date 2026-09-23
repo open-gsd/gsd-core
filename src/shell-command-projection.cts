@@ -1156,11 +1156,15 @@ function _normalizeMd(content: string): string {
     if (isFenceLine && i > 0 && prevTrimmed !== '' && !insideFence[i] && (i === 0 || !insideFence[i - 1] || isFenceLine)) {
       if (i === 0 || !insideFence[i - 1]) result.push('');
     }
-    // #3854: the `!/^\s/.test(prev)` guard mirrors the after-a-bullet rule below —
-    // an indented non-bullet line is a CONTINUATION of the previous list item, not a
-    // preceding paragraph, so no separating blank may be injected before this bullet
-    // (that injection converted every tight multi-line list to a loose one on write).
-    if (/^(\s*[-*+]\s|\s*\d+\.\s)/.test(line) && i > 0 && prevTrimmed !== '' && !/^(\s*[-*+]\s|\s*\d+\.\s)/.test(prev) && !/^\s/.test(prev) && prevTrimmed !== '---') result.push('');
+    // No "separate a list from a preceding paragraph" rule (#3854, #4725).
+    // This pass re-normalizes the ENTIRE document on every .md write, so an
+    // inserted blank before a bullet whose previous line is ordinary prose
+    // reflowed text the command never touched (converting tight lists to
+    // loose ones); #3854 first guarded the indented-continuation predecessor,
+    // #4725 removed the rule outright. A paragraph→list transition stays
+    // exactly as the author wrote it; a heading→list separation still comes
+    // from the after-heading rule below. The after-a-bullet rule at the end
+    // of this loop is a different transition (list→prose) and is unaffected.
     result.push(line);
     if (/^#{1,6}\s/.test(trimmed) && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '') result.push('');
     if (/^```\s*$/.test(trimmed) && i > 0 && insideFence[i - 1] && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '') result.push('');

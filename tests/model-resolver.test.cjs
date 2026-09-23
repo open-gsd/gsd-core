@@ -4635,6 +4635,15 @@ describe('#2229 PROPERTY: resolveTierFromConfig never throws and always returns 
  * Active-runtime precedence: `process.env.GSD_RUNTIME` -> `config.runtime` ->
  * per-install `.gsd-runtime` marker -> `'claude'` (all canonicalized).
  *
+ * #4717 (user-sanctioned decision a) ADDENDUM: with the runtime-identity fill
+ * in config-loader, an empty `config.runtime` is materialized from
+ * GSD_RUNTIME/the marker — so a genuinely installed non-Claude runtime now
+ * counts as the opt-in and resolves its own tier map past a GLOBAL or
+ * project omit. The #2297 Claude-protection cases are unchanged: a claude
+ * runtime still ignores the shared omit, garbage runtime values still fail
+ * safe to "", and an explicit project omit still applies when no runtime
+ * identity is known.
+ *
  * NOTE: the global-defaults merge path in config-loader.cjs (branch D: "no
  * .planning/ at all") only fires when the project dir has NO `.planning/`
  * whatsoever — the moment `.planning/` exists, `~/.gsd/defaults.json` is not
@@ -4757,12 +4766,17 @@ describe('#2297: global-defaults resolve_model_ids:"omit" is scoped to the activ
     assert.strictEqual(resolveModelInternal(projDir, 'gsd-executor'), 'sonnet');
   });
 
-  test('GSD_RUNTIME="codex": a non-alias runtime still honors the global omit (acceptance #4)', () => {
+  test('GSD_RUNTIME="codex": the env-detected runtime opts into its tier map past the global omit (#4717 decision a)', () => {
     writeGlobalDefaults({ resolve_model_ids: 'omit' });
     projDir = mkProjNoPlanning();
     process.env.GSD_RUNTIME = 'codex';
 
-    assert.strictEqual(resolveModelInternal(projDir, 'gsd-executor'), '');
+    // #4717 (user-sanctioned semantics change): the fill materializes the env
+    // runtime into config.runtime, and a recognised non-Claude runtime there
+    // counts as an opt-in — the shared "omit" stays a Claude protection, not a
+    // codex directive. Supersedes the #2297 acceptance-#4 reading for
+    // detected runtimes.
+    assert.strictEqual(resolveModelInternal(projDir, 'gsd-executor'), 'gpt-5.6-terra');
   });
 
   // #2297 correctness-review BLOCKER: resolveActiveRuntime() must canonicalize
@@ -4980,12 +4994,13 @@ describe('#2297: install-marker precedence rung (GSD_RUNTIME and config.runtime 
     _resetInstallRuntimeMarkerCacheForTests();
   });
 
-  test('marker="codex" (non-alias runtime): honors the poisoned global omit -> ""', () => {
+  test('marker="codex" (non-alias runtime): the marker-detected runtime opts into its tier map (#4717 decision a)', () => {
     writeGlobalDefaults({ resolve_model_ids: 'omit' });
     projDir = mkProjNoPlanning();
     _setInstallRuntimeMarkerForTests('codex');
 
-    assert.strictEqual(resolveModelInternal(projDir, 'gsd-executor'), '');
+    // #4717 (decision a): the marker-filled runtime counts as opt-in.
+    assert.strictEqual(resolveModelInternal(projDir, 'gsd-executor'), 'gpt-5.6-terra');
   });
 
   test('marker="claude": ignores the poisoned global omit -> "sonnet"', () => {
@@ -6830,17 +6845,20 @@ describe('#4192 model_overrides: fully-qualified claude IDs resolve as configure
 
     const DR = { enabled: true, tier_models: { light: 'haiku', standard: 'DR-STANDARD', heavy: 'opus' } };
 
-    // REGRESSION for the blocker: with a non-Claude runtime and an omit, the gate
-    // returned "" before this PR and must keep doing so. The earlier cut handed
-    // out a model id here.
-    test('resolve_model_ids:"omit" still wins over the tier table', () => {
+    // #4717 (user-sanctioned semantics change, decision a): with the runtime
+    // identity fill, a detected codex runtime materializes config.runtime and
+    // counts as an opt-in — the runtime tier map (step 3) now resolves before
+    // the omit gate would, so the omit no longer yields "" for a genuinely
+    // installed non-Claude runtime. The gate's canonicalization guard rows
+    // below still fail safe to "" for garbage runtime values.
+    test('a detected codex runtime resolves its tier map; the global omit no longer wins (#4717 decision a)', () => {
       dir = project({ model_profile: 'quality', resolve_model_ids: 'omit', dynamic_routing: DR });
-      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), '');
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'gpt-5.6-sol');
     });
 
-    test('the omit gate wins in the init payload a real spawn reads, too', () => {
+    test('the init payload a real spawn reads resolves the tier map too (#4717 decision a)', () => {
       dir = project({ model_profile: 'quality', resolve_model_ids: 'omit', dynamic_routing: DR });
-      assert.strictEqual(initQuick(dir, 'codex').executor_model, '');
+      assert.strictEqual(initQuick(dir, 'codex').executor_model, 'gpt-5.6-sol');
     });
 
     test('the runtime tier map (step 3) outranks the tier table', () => {
@@ -6966,16 +6984,19 @@ describe('#4192 model_overrides: fully-qualified claude IDs resolve as configure
     // that is the "poisoned global" #2297 acceptance #4 is actually about. An
     // earlier cut of this row wrote it into the project config, which is the
     // #2517 project-explicit path and exercises a different branch entirely.
-    test('#2297 acceptance #4: a merely DETECTED runtime still honors a GLOBAL omit', () => {
+    test('#4717 (decision a): a DETECTED runtime opts into its tier map past a GLOBAL omit', () => {
       // No project config at all — see the `project` docblock: that is the only
-      // shape in which the shared defaults layer is consulted.
+      // shape in which the shared defaults layer is consulted. #4717's
+      // user-sanctioned semantics change supersedes the #2297 acceptance-#4
+      // reading: the fill materializes the detected runtime into config.runtime
+      // and a recognised non-Claude runtime there opts into its own tier map.
       dir = project(null, { resolve_model_ids: 'omit' });
-      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), '');
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'gpt-5.6-terra');
     });
 
-    test('a project-explicit omit is honored for a detected runtime too', () => {
+    test('#4717 (decision a): a project-explicit omit also yields to a detected runtime\'s tier map', () => {
       dir = project({ resolve_model_ids: 'omit' });
-      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), '');
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'gpt-5.6-terra');
     });
 
     // The opt-in signal is CANONICALIZED. An earlier cut of this fix compared the

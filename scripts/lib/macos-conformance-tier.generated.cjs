@@ -198,6 +198,7 @@ module.exports = {
   "tests/tracer-bullet.test.cjs",
   "tests/uat-predicate.test.cjs",
   "tests/uat.test.cjs",
+  "tests/ui-interaction-capture.test.cjs",
   "tests/ui-safety-gate.test.cjs",
   "tests/ui-spec-inventory-provenance.test.cjs",
   "tests/unreachable-guard-drift.test.cjs",

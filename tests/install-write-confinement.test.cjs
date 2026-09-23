@@ -3636,6 +3636,21 @@ describe('#3712 in-process home confinement', () => {
       t.after(() => { cleanup(a); cleanup(b); });
       const sa = fs.statSync(a);
       const sb = fs.statSync(b);
+      // #4794 fold-in (windows conformance lane, 2 consecutive runs): a runner
+      // image whose temp volume reports an identical synthesized (dev, ino) for
+      // two distinct directories cannot discriminate at all. On such a platform
+      // the guard's identity containment degrades to refuse-everything (fail-
+      // closed, documented) — there is no behavior this probe can assert, only
+      // capability to report. Measured evidence rides in the skip reason (the
+      // ADR-2719 §6 explicit-skip discipline: reported as skipped, never a bare
+      // return that scores a PASS). When the platform CAN discriminate, the
+      // original assertions run unchanged.
+      if (sa.dev === sb.dev && sa.ino === sb.ino) {
+        t.skip(`this platform reports an identical identity for two distinct directories ` +
+          `(dev=${sa.dev}, ino=${sa.ino}) — identity-based containment would refuse ` +
+          'everything here; the guard remains fail-closed but this probe has nothing to assert');
+        return;
+      }
       assert.ok(sa.dev !== sb.dev || sa.ino !== sb.ino,
         `two distinct directories share an identity (dev=${sa.dev}/${sb.dev}, ino=${sa.ino}/${sb.ino}) — ` +
         'isInside() would then match its first ancestor and refuse everything');

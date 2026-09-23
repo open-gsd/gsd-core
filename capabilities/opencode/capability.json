@@ -129,8 +129,7 @@
       },
       "skipHomePrefixSubstitution": true,
       "skipSettingsUi": true,
-      "skipUpdateBannerCommand": true,
-      "skipCodexSkillsManifest": true
+      "skipUpdateBannerCommand": true
     }
   },
   "reviewer": {

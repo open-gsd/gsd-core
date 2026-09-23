@@ -25,6 +25,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execGit, platformWriteSync, platformReadSync } from './shell-command-projection.cjs';
+// #4717: runtime-identity fill — env rung + per-install marker rung.
+import { readInstallRuntimeMarker } from './runtime-slash.cjs';
+import { canonicalizeRuntimeName, resolveRuntimeNameFromCandidates } from './runtime-name-policy.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir, planningRoot } = planningWorkspace;
@@ -159,8 +162,21 @@ const CONFIG_DEFAULTS = {
   research_before_questions: _getNestedConfigDefault('workflow', 'research_before_questions'), // #3894
   smart_zone_tokens: _getNestedConfigDefault('workflow', 'smart_zone_tokens'),
   inline_plan_threshold: _getNestedConfigDefault('workflow', 'inline_plan_threshold'), // #3801
+  planner_stall_detection_enabled: _getNestedConfigDefault('planner', 'stall_detection_enabled'),
   max_prompt_tokens: _getNestedConfigDefault('review', 'max_prompt_tokens'),
 };
+
+/**
+ * Resolve the planner watchdog policy from hand-edited configuration.
+ * Only a real JSON boolean may override the default; strings/numbers/null
+ * fail safe to the manifest-owned default-on behavior (#4570).
+ */
+function resolvePlannerStallDetectionEnabled(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  // A missing or skewed manifest must never convert an absent override into
+  // permission to disable the watchdog. The documented contract is default-on.
+  return true;
+}
 
 /**
  * Deep-merge two plain config objects. `overlay` wins on key conflict.
@@ -669,7 +685,7 @@ function _warnUnusableConfig(fault: ConfigFault): void {
  * cannot dirty the working tree; the ~30 callers that omit it keep persisting, so
  * a legacy config is still migrated exactly once by ordinary use.
  */
-function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}): ConfigResolution {
+function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown> = {}): ConfigResolution {
   // Opt-OUT, not opt-in: omitting the option must preserve the historical
   // write-back for every existing caller.
   const persist = options['persist'] !== false;
@@ -929,6 +945,9 @@ function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}):
       phase_naming: get('phase_naming') ?? defaults.phase_naming,
       project_code: get('project_code') ?? defaults.project_code,
       subagent_timeout: get('subagent_timeout', { section: 'workflow', field: 'subagent_timeout' }) ?? defaults.subagent_timeout,
+      planner_stall_detection_enabled: resolvePlannerStallDetectionEnabled(
+        getNested('planner', 'stall_detection_enabled'),
+      ),
       model_overrides: (parsed['model_overrides']) || null,
       agent_tools: (parsed['agent_tools']) || null,
       models: (parsed['models']) || null,
@@ -1033,7 +1052,7 @@ function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}):
     // `workstream: null` still wins the `hasOwnProperty` check at the top of this
     // function, so spreading cannot let `workstreamContext` reintroduce a workstream.
     if (wsRequested && rootParsed) {
-      const fb = loadConfigResolved(cwd, { ...options, workstream: null });
+      const fb = loadConfigResolvedInternal(cwd, { ...options, workstream: null });
       return fallback({ config: fb.config, source: 'root', degraded: true });
     }
 
@@ -1042,7 +1061,7 @@ function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}):
       if (rootParsed) {
         // Branch B: workstream requested but ws config.json absent; root config present.
         // (Only reached when wsRequested is false — e.g. ws='' with .planning/workstreams//config.json)
-        const fb = loadConfigResolved(cwd, { ...options, workstream: null });
+        const fb = loadConfigResolvedInternal(cwd, { ...options, workstream: null });
         return fallback({ config: fb.config, source: 'root', degraded: true });
       }
       // Branch C: .planning/ exists but no config.json and no root config — federated/builtin defaults
@@ -1088,6 +1107,9 @@ function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}):
         resolve_model_ids: (globalDefaults['resolve_model_ids']) ?? defaults.resolve_model_ids,
         context_window: (globalDefaults['context_window']) ?? defaults.context_window,
         subagent_timeout: (globalDefaults['subagent_timeout']) ?? defaults.subagent_timeout,
+        planner_stall_detection_enabled: resolvePlannerStallDetectionEnabled(
+          (globalDefaults['planner'] as Record<string, unknown> | undefined)?.['stall_detection_enabled'],
+        ),
         model_overrides: (globalDefaults['model_overrides']) || null,
         models: (globalDefaults['models']) || null,
         granularity: (globalDefaults['granularity']) !== undefined ? globalDefaults['granularity'] : null,
@@ -1125,6 +1147,51 @@ function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}):
 }
 
 /**
+ * #4717 — fill an empty `runtime` from the environment, then the per-install
+ * marker. writeNonClaudeDefaults stamps `runtime` into the SHARED
+ * ~/.gsd/defaults.json with whichever non-Claude runtime installed first, so
+ * direct readers of config.runtime saw another runtime's identity (or
+ * nothing) on a multi-runtime machine. Copy-on-write: the builtin-defaults
+ * branch returns a shared object, so never assign into it. An explicit
+ * config.runtime is never overridden.
+ */
+function fillRuntimeIdentity(resolved: ConfigResolution): ConfigResolution {
+  const cfg = resolved?.config;
+  if (!cfg) return resolved;
+  const runtime = resolveRuntimeNameFromCandidates(
+    process.env['GSD_RUNTIME'],
+    readInstallRuntimeMarker(),
+  );
+  // Only a runtime the name policy can canonicalize is an identity. Unknown
+  // tokens pass THROUGH resolveRuntimeNameFromCandidates (future-runtime
+  // tolerance) and must not be materialized into config.runtime, where ~30
+  // consumers would read them — fail safe to no identity (#4717 review).
+  const canonicalRuntime = runtime ? canonicalizeRuntimeName(runtime) : null;
+  if (!canonicalRuntime) return resolved;
+  // Rung 1 — empty runtime: materialize THIS install's identity (env, then
+  // the per-install marker). An explicit runtime is never overridden.
+  if (!cfg['runtime']) {
+    return { ...resolved, config: { ...cfg, runtime: canonicalRuntime } };
+  }
+  // Rung 2 (#4717 stamped-defaults leg): the global-defaults branch forwards
+  // the SHARED ~/.gsd/defaults.json's runtime verbatim — whichever non-Claude
+  // runtime installed FIRST stamped that machine-wide file, and every other
+  // runtime's resolution inherited its identity (the issue's second failure
+  // shape). When THIS install carries its own identity (GSD_RUNTIME or the
+  // marker), the stamp — not the operator — is speaking: correct it. Project
+  // and workstream configs are explicit operator intent and are never touched;
+  // with no install identity of its own the stamped value stays (status quo).
+  if (resolved.source === 'global-defaults') {
+    return { ...resolved, config: { ...cfg, runtime: canonicalRuntime } };
+  }
+  return resolved;
+}
+
+function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}): ConfigResolution {
+  return fillRuntimeIdentity(loadConfigResolvedInternal(cwd, options));
+}
+
+/**
  * loadConfig — backwards-compatible config loading, now a thin wrapper over loadConfigResolved.
  * Returns the config object only; for provenance metadata use loadConfigResolved.
  */
@@ -1143,6 +1210,7 @@ export = {
   _getNestedConfigDefault,
   _getConfigValue,
   _getConfigNested,
+  resolvePlannerStallDetectionEnabled,
   _deepMergeConfig,
   _warnedUnknownConfigKeys,
   _warnedShadowedGlobalKeys,

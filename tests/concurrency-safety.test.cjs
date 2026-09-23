@@ -420,7 +420,9 @@ describe('normalizeMd behavioral equivalence', () => {
     assert.ok(result.includes('\n\n## Section One\n\n'), 'Section One heading needs blank lines');
     assert.ok(result.includes('\n\n## Section Two\n\n'), 'Section Two heading needs blank lines');
     assert.ok(result.includes('\n\n## Section Three\n\n'), 'Section Three heading needs blank lines');
-    assert.ok(result.includes('Paragraph text.\n\n- item 1'), 'list should have blank line before');
+    // #4725: paragraph→list is preserved byte-identical — the removed
+    // before-a-bullet rule used to inject a blank here (tight list turned loose).
+    assert.ok(result.includes('Paragraph text.\n- item 1'), 'tight paragraph→list stays byte-identical');
     assert.ok(result.includes('\n\n```bash'), 'code block should have blank line before');
     assert.ok(result.includes('```\n\nAfter code.'), 'code block should have blank line after');
     assert.ok(result.includes('echo hello'), 'code content should be preserved');
@@ -458,7 +460,10 @@ describe('normalizeMd snapshot tests', () => {
 
   test('snapshot - list spacing', () => {
     const input = 'Paragraph\n- item 1\n- item 2\nAnother paragraph';
-    const expected = 'Paragraph\n\n- item 1\n- item 2\n\nAnother paragraph\n';
+    // #4725: the paragraph→list transition is preserved byte-identical (the
+    // removed before-a-bullet rule used to inject a blank there); the
+    // list→prose separation below is the after-a-bullet rule and stays.
+    const expected = 'Paragraph\n- item 1\n- item 2\n\nAnother paragraph\n';
     const result = normalizeMd(input);
     assert.strictEqual(result, expected,
       `List spacing snapshot mismatch.\nGot:      ${JSON.stringify(result)}\nExpected: ${JSON.stringify(expected)}`
