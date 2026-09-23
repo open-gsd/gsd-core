@@ -3805,9 +3805,37 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           }
           const fieldId = findField(parsed.value, 'Plans');
           if (!fieldId) {
-            // No `**Plans:**` line in this phase's section — nothing to write;
-            // not a failure (mirrors the old regex's silent no-match no-op).
-            return body;
+            // #4906 regression (#1163 parity, caught by gsd-test against
+            // roadmap.cts's sibling site): a hand-edited or pre-template
+            // ROADMAP.md may carry a PLAIN (non-bold) `Plans:` line rather
+            // than the canonical `**Plans**:`/`**Plans:**` bold field.
+            // BOLD_FIELD_RE stays bold-only (widening it would register
+            // ordinary prose as a spurious field seam-wide) — this fallback
+            // mirrors roadmap.cts's identical one, kept in parity per
+            // Decision 2 rather than letting the two sites diverge on which
+            // legacy shapes they tolerate.
+            const plainMatch = body.match(/^([ \t]*)Plans:([ \t]*)([^\r\n]*)$/m);
+            if (!plainMatch) {
+              // No `**Plans:**`/`**Plans**:`/plain `Plans:` line in this
+              // phase's section — nothing to write; not a failure (mirrors
+              // the old regex's silent no-match no-op).
+              return body;
+            }
+            const [whole, indent, spacing, plainValue] = plainMatch;
+            const plainCountPrefixMatch = plainValue.match(
+              /^(?:\d+\s*\/\s*\d+\s+plans(?:\s+(?:complete|executed))?|\d+\s+plans?)/i,
+            );
+            const plainIsTemplatePlaceholder = /^\[\s*Number of plans\b[\s\S]*\]$/i.test(plainValue.trim());
+            if (!plainCountPrefixMatch && !plainIsTemplatePlaceholder) {
+              // Arm 3: freeform prose, TBD, a bracketed human annotation, or
+              // an empty value — leave the field exactly as it was.
+              return body;
+            }
+            const plainNewCountText = `${summaryCount}/${planCount} plans complete`;
+            const plainSuffix = plainCountPrefixMatch ? plainValue.slice(plainCountPrefixMatch[0].length) : '';
+            const newPlainLine = `${indent}Plans:${spacing}${plainNewCountText}${plainSuffix}`;
+            const start = plainMatch.index ?? body.indexOf(whole);
+            return body.slice(0, start) + newPlainLine + body.slice(start + whole.length);
           }
           // #4906 regression fix: PREFIX-match the existing value's count
           // token and re-glue whatever follows it VERBATIM — a glued-on

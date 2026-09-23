@@ -5543,7 +5543,13 @@ describe('#4906 Phase 2: cmdRoadmapUpdatePlanProgress Plans-line seam migration 
   }
 
   function plansLineIn(content) {
-    return content.split(/\r?\n/).find((l) => l.trim().startsWith('**Plans:**'));
+    // Recognizes both BOLD_FIELD_RE spellings (colon inside `**Plans:**` and
+    // colon outside `**Plans**:`, the canonical templates/roadmap.md shape) —
+    // rows 4/5 below seed the colon-outside spelling, and a finder anchored
+    // to only one spelling silently reports "field not found" (`undefined`)
+    // rather than a real assertion failure, masking whichever bug is actually
+    // present. Caught by gsd-test (#4906 Phase 2 verification run).
+    return content.split(/\r?\n/).find((l) => /^\*\*Plans(?::\*\*|\*\*:)/.test(l.trim()));
   }
 
   test('row 2 (non-regression of #2853/#3584): trailing prose survives migration', () => {

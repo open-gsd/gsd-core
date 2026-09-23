@@ -11897,6 +11897,27 @@ describe('#4906 Phase 2: cmdPhaseComplete Plans-line seam migration (site 1)', (
     assert.equal(line, '**Plans:** 1/1 plans complete',
       'the template placeholder is arm 2 and must still be replaced with the real count');
   });
+
+  test('#1163 parity: a plain (non-bold) Plans: line still gets its count updated', (t) => {
+    // roadmap.cts's sibling site has a real, pre-existing regression test
+    // for this exact legacy shape (tests/roadmap.test.cjs, "regressions:
+    // insert missing plan rows (#1163)") — caught missing here by gsd-test,
+    // since this migration's first version only handled the BOLD_FIELD_RE
+    // grammar and silently no-op'd on a plain `Plans:` line. Fixed in
+    // src/phase.cts's writePlansField with the same caller-side fallback
+    // roadmap.cts uses, kept in parity per Decision 2.
+    const tmpDir = createFixture('gsd-4906-plain-plans-');
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+    const before = fs.readFileSync(roadmapPath, 'utf-8');
+    const after = before.replace('**Plans:** 1 plans', 'Plans: 0/1 plans executed');
+    fs.writeFileSync(roadmapPath, after);
+    t.after(() => cleanup(tmpDir));
+    capturePhaseComplete(t, tmpDir, '1');
+    const written = fs.readFileSync(roadmapPath, 'utf-8');
+    const line = written.split(/\r?\n/).find((l) => l.trim().startsWith('Plans:'));
+    assert.equal(line, 'Plans: 1/1 plans complete',
+      'a plain (non-bold) Plans: line must still be updated, not silently skipped');
+  });
 });
   });
 }

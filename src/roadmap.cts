@@ -1252,10 +1252,36 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       }
       const fieldId = findField(parsed.value, 'Plans');
       if (!fieldId) {
-        // No `**Plans:**` line in this phase's own section — nothing to
-        // write; not a failure (mirrors the old regex's silent no-match
-        // no-op).
-        return sectionText;
+        // #4906 regression (#1163, caught by gsd-test): a hand-edited or
+        // pre-template ROADMAP.md may carry a PLAIN (non-bold) `Plans:` line
+        // rather than the canonical `**Plans**:`/`**Plans:**` bold field.
+        // BOLD_FIELD_RE is deliberately bold-only (widening it to any bare
+        // `Label:` would register ordinary prose like "Note: see below" as a
+        // spurious field seam-wide) — this is domain knowledge about ONE
+        // field's legacy tolerated shape, the same class of thing
+        // `isTemplatePlaceholder` above already keeps caller-side rather
+        // than seam grammar, so the fallback lives here, not in
+        // planning-document.cts.
+        const plainMatch = sectionText.match(/^([ \t]*)Plans:([ \t]*)([^\r\n]*)$/m);
+        if (!plainMatch) {
+          // No `**Plans:**`/`**Plans**:`/plain `Plans:` line in this phase's
+          // own section — nothing to write; not a failure (mirrors the old
+          // regex's silent no-match no-op).
+          return sectionText;
+        }
+        const [whole, indent, spacing, plainValue] = plainMatch;
+        const plainFractionLen = fractionCountPrefixLength(plainValue);
+        const plainBareLen = bareCountPrefixLength(plainValue);
+        const plainCountPrefixLen = plainFractionLen >= 0 ? plainFractionLen : plainBareLen;
+        if (plainCountPrefixLen < 0 && !isTemplatePlaceholder(plainValue)) {
+          // Arm 3: freeform prose, TBD, a bracketed human annotation, or an
+          // empty value — leave the section exactly as it was.
+          return sectionText;
+        }
+        const plainSuffix = plainCountPrefixLen >= 0 ? plainValue.slice(plainCountPrefixLen) : '';
+        const newPlainLine = `${indent}Plans:${spacing}${planCountText}${plainSuffix}`;
+        const start = plainMatch.index ?? sectionText.indexOf(whole);
+        return sectionText.slice(0, start) + newPlainLine + sectionText.slice(start + whole.length);
       }
       const current = readNode(parsed.value, fieldId);
       if (!current.ok) {
