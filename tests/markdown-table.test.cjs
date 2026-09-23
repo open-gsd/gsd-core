@@ -571,6 +571,48 @@ describe('CLI: quick-tasks-append (#3356)', () => {
     assert.ok(stateContent.includes('| 260811-gfl | Fix thing |'), 'STATE.md itself must carry the same canonical row');
   });
 
+  /** STATE.md variant whose Quick Tasks table already has a Status column. */
+  function writeStateWithStatus(tmpDir, totalPhases) {
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), [
+      '---',
+      'progress:',
+      `  total_phases: ${totalPhases}`,
+      '  completed_phases: 3',
+      '  total_plans: ' + totalPhases,
+      '  completed_plans: 3',
+      '  percent: 12',
+      '---',
+      '',
+      '### Blockers/Concerns',
+      '',
+      '### Quick Tasks Completed',
+      '',
+      '| # | Description | Date | Commit | Status | Directory |',
+      '|---|-------------|------|--------|--------|-----------|',
+      '',
+    ].join('\n'));
+  }
+
+  test('#4906 Phase 3 (#4958): --status writes the Status column for quick.md VALIDATE_MODE rows', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    writeStateWithStatus(tmpDir, 25);
+
+    const r = runGsdTools(
+      ['quick-tasks-append', '--task', 'Fix thing', '--quick-id', '260811-gfl', '--slug', 'fix-thing', '--status', 'PASS'],
+      tmpDir,
+    );
+    assert.ok(r.success, `quick-tasks-append should succeed: ${r.error}`);
+    const out = JSON.parse(r.output);
+
+    assert.ok(out.row.includes('| PASS |'), `expected the Status cell to carry PASS, got: ${out.row}`);
+    assert.ok(out.row.startsWith('| 260811-gfl | Fix thing |'), `expected the '#' cell to carry the quick id, got: ${out.row}`);
+
+    const stateContent = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8');
+    assert.ok(stateContent.includes('| PASS |'), 'STATE.md itself must carry the Status cell');
+  });
+
   test('bare --task (no id) keeps the fast.md-compatible ordinal + \'—\' row, unchanged', (t) => {
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
