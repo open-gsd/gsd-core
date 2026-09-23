@@ -99,7 +99,16 @@ UI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-UI-SPEC.md 2>/dev/null | head -1)
 ```
 
 **Text mode (`workflow.text_mode: true` in config or `--text` flag):** Set `TEXT_MODE=true` if `--text` is present in `$ARGUMENTS` OR `text_mode` from init JSON is `true`. When TEXT_MODE is active, replace every `AskUserQuestion` call with a plain-text numbered list and ask the user to type their choice number. This is required for non-Claude runtimes (OpenAI Codex, Antigravity, etc.) where `AskUserQuestion` is not available.
-**If exists:** Use AskUserQuestion:
+**If exists:**
+
+**If `--auto`:** Auto-select "Skip" — keep the existing UI-SPEC untouched and proceed to step 7
+(checker). Log: `[auto] UI-SPEC exists — reusing as-is, proceeding to verification.` Skip is the
+auto choice because it is the only non-destructive one: "Update" re-runs the researcher, which
+rewrites the whole contract and drops answers a person already recorded in it, and "View" exits
+without verifying anything. A `--auto` run most often meets this file as an unverified draft from
+a run that ended before its checker ran, which is exactly the state the checker should now see.
+
+**Otherwise:** Use AskUserQuestion:
 - header: "Existing UI-SPEC"
 - question: "UI-SPEC.md already exists for Phase {N}. What would you like to do?"
 - options:

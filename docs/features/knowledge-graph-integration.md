@@ -13,6 +13,7 @@ group: v1.37.0 Features
 - REQ-GRAPH-04: `graphify.cjs` falls back to `graph.links` when `graph.edges` is absent so older graph artifacts keep rendering.
 - REQ-GRAPH-05: Graphify is invoked through `gsd-tools.cjs graphify ...` command handlers.
 - REQ-GRAPH-06: The knowledge-graph location is configurable via `graphify.graph_path` (issue #1825) so one umbrella-level cross-repo graph can serve multiple sibling projects; `query`/`status`/`diff` read the configured graph (relative to project root), with a byte-identical `.planning/graphs/` default when unset.
+- REQ-GRAPH-07: `status` reports the resolved graph location as `graph_path` — the same absolute path `query`/`diff` read, after the `graphify.graph_path` override is applied — so a caller shelling out to the `graphify` CLI passes it as `--graph` instead of re-deriving the default location (issue #4836).
 
 **Configuration:** `graphify.enabled`, `graphify.build_timeout`, `graphify.graph_path`
 **Reference files:** `commands/gsd/graphify.md`, `bin/lib/graphify.cjs`
