@@ -21799,3 +21799,176 @@ describe('#4823: Current Plan reset is scoped to the Current Position section', 
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// C2 of epic #4629 (#4866) — ADR-4629 §8.2 (verified post-state) + §8.3
+// (bounded mutation): the verifying executor. Positive controls: each failure
+// arm is driven red by a seeded intent, and each is paired with the passing
+// twin that differs by exactly the defect, so a verifier that failed on
+// everything could not pass this block. Documents are the SHIPPED template
+// (`gsd-core/templates/state.md`), never a hand fixture (#4564/#4316).
+describe('C2 (ADR-4629 §8.2/§8.3): StateWriteIntent verifying executor', () => {
+  const { createStateWriteIntent, openStateTransaction, rebuildStateTransaction } = stateTransitionMod;
+  const { _verifyStateWriteIntent: verify, applyStateWriteIntent, STATE_WRITE_INTENT_FAILURE } = stateLib;
+  const STATE_PATH = '/virtual/.planning/STATE.md';
+  const PRE = readShippedStateTemplateBody([]);
+  const STATUS_LINE = 'Status: [Ready to plan / Planning / Ready to execute / In progress / Phase complete]';
+  const BLOCKERS_LINE = '[Issues that affect future work]';
+  const LAST_ACTIVITY_LINE = 'Last activity: [YYYY-MM-DD] — [What happened]';
+  const setStatus = (content) => content.replace(STATUS_LINE, 'Status: In progress');
+  const narrowStatus = (extra = {}) => createStateWriteIntent(openStateTransaction({ snapshot: {} }), {
+    assertions: [{ field: 'Status', requirement: 'required', ...extra }],
+    scope: 'narrow',
+  });
+
+  test('§8.3 positive control: a narrow write that also edits an undeclared section fails loud', () => {
+    const post = setStatus(PRE).replace(BLOCKERS_LINE, 'Blocked on vendor API');
+    const result = verify(narrowStatus(), PRE, post, STATE_PATH);
+    assert.strictEqual(result.ok, false);
+    assert.deepStrictEqual(result.reasons, [STATE_WRITE_INTENT_FAILURE.OUT_OF_SCOPE]);
+    assert.deepStrictEqual(result.outOfScope, [{ region: 'section', name: 'Blockers/Concerns' }]);
+    // Twin: the same write without the stray edit passes.
+    const clean = verify(narrowStatus(), PRE, setStatus(PRE), STATE_PATH);
+    assert.strictEqual(clean.ok, true, JSON.stringify(clean));
+  });
+
+  test('§8.3: a second, undeclared edit inside the SAME section as a declared field is still caught', () => {
+    const post = setStatus(PRE).replace(LAST_ACTIVITY_LINE, 'Last activity: 2026-09-22 — something else');
+    const result = verify(narrowStatus(), PRE, post, STATE_PATH);
+    assert.deepStrictEqual(result.outOfScope, [{ region: 'section', name: 'Current Position' }]);
+  });
+
+  test('§8.3: a frontmatter leaf the narrow intent never named is out of scope (the #4629 progress.percent shape)', () => {
+    const post = PRE.replace('  percent: 0', '  percent: 50');
+    const result = verify(narrowStatus({ requirement: 'best-effort' }), PRE, post, STATE_PATH);
+    assert.deepStrictEqual(result.outOfScope, [{ region: 'frontmatter', name: 'progress.percent' }]);
+    const named = createStateWriteIntent(openStateTransaction({ snapshot: {} }), {
+      assertions: [{ field: 'progress.percent', requirement: 'required' }],
+    });
+    assert.strictEqual(verify(named, PRE, post, STATE_PATH).ok, true);
+  });
+
+  test('§8.3: broad scope admits the whole frontmatter but keeps the body bounded (audited, not exempted)', () => {
+    const broad = createStateWriteIntent(openStateTransaction({ snapshot: {} }), { scope: 'broad' });
+    const fmOnly = PRE.replace('status: planning', 'status: executing').replace('  percent: 0', '  percent: 40');
+    assert.strictEqual(verify(broad, PRE, fmOnly, STATE_PATH).ok, true);
+    const withBody = fmOnly.replace(BLOCKERS_LINE, 'Blocked on vendor API');
+    assert.deepStrictEqual(verify(broad, PRE, withBody, STATE_PATH).outOfScope, [{ region: 'section', name: 'Blockers/Concerns' }]);
+  });
+
+  test('§8.3: a rebuild intent is unbounded by contract, but §8.2 still applies to it', () => {
+    const rebuild = createStateWriteIntent(rebuildStateTransaction({ snapshot: {} }), {
+      assertions: [{ field: 'Status', requirement: 'required', value: 'In progress' }],
+    });
+    const post = setStatus(PRE).replace(BLOCKERS_LINE, 'x').replace('  percent: 0', '  percent: 9');
+    assert.strictEqual(verify(rebuild, PRE, post, STATE_PATH).ok, true);
+    const missed = verify(rebuild, PRE, PRE.replace(BLOCKERS_LINE, 'x'), STATE_PATH);
+    assert.deepStrictEqual(missed.missedRequired, ['Status']);
+    assert.deepStrictEqual(missed.outOfScope, []);
+  });
+
+  test('§8.2 positive control: a required assertion that did not land fails loud', () => {
+    const wrong = verify(narrowStatus({ value: 'Complete' }), PRE, setStatus(PRE), STATE_PATH);
+    assert.deepStrictEqual(wrong.reasons, [STATE_WRITE_INTENT_FAILURE.REQUIRED_ASSERTION_MISSED]);
+    assert.deepStrictEqual(wrong.missedRequired, ['Status']);
+    assert.strictEqual(verify(narrowStatus({ value: 'In progress' }), PRE, setStatus(PRE), STATE_PATH).ok, true);
+    // No declared value: "landed" means measurably changed, so an untouched target is missed.
+    assert.deepStrictEqual(verify(narrowStatus(), PRE, PRE, STATE_PATH).missedRequired, ['Status']);
+    // A best-effort assertion is not judged by §8.2 (its bucket is §8.4, decided in Phase 3).
+    assert.strictEqual(verify(narrowStatus({ requirement: 'best-effort' }), PRE, PRE, STATE_PATH).ok, true);
+  });
+
+  test('§8.2/§8.3: a declared section assertion covers edits inside that section and its landing is verified', () => {
+    const sectionIntent = createStateWriteIntent(openStateTransaction({ snapshot: {} }), {
+      assertions: [{ field: 'Blockers/Concerns', target: 'section', requirement: 'required' }],
+    });
+    const post = PRE.replace(BLOCKERS_LINE, 'Blocked on vendor API');
+    assert.strictEqual(verify(sectionIntent, PRE, post, STATE_PATH).ok, true);
+    assert.deepStrictEqual(verify(sectionIntent, PRE, PRE, STATE_PATH).missedRequired, ['Blockers/Concerns']);
+    // Declaring the parent covers the child through its heading lineage.
+    const parent = createStateWriteIntent(openStateTransaction({ snapshot: {} }), {
+      assertions: [{ field: 'Accumulated Context', target: 'section', requirement: 'best-effort' }],
+    });
+    assert.strictEqual(verify(parent, PRE, post, STATE_PATH).ok, true);
+  });
+
+  // Adversarial-review regressions (each was a live false negative/positive in the first cut).
+  test('§8.2: a required target that was DELETED has not landed', () => {
+    const cp = createStateWriteIntent(openStateTransaction({ snapshot: {} }), {
+      assertions: [{ field: 'Status', requirement: 'required' }, { field: 'Current Position', requirement: 'best-effort' }],
+    });
+    const deleted = verify(cp, PRE, PRE.replace(STATUS_LINE + '\n', ''), STATE_PATH);
+    assert.deepStrictEqual(deleted.missedRequired, ['Status']);
+    assert.deepStrictEqual(deleted.outOfScope, [], 'Current Position is read as a whole section in §8.3 too');
+  });
+
+  test('§8.3: a declared field covers only the line the seam reads, not the same label in another section', () => {
+    const pre = PRE.replace(BLOCKERS_LINE, 'Status: blocked');
+    const post = setStatus(pre).replace('Status: blocked', 'Status: unblocked');
+    assert.deepStrictEqual(verify(narrowStatus(), pre, post, STATE_PATH).outOfScope, [{ region: 'section', name: 'Blockers/Concerns' }]);
+  });
+
+  test('§8.3: reordering sections is out of scope even when every section body is unchanged', () => {
+    const cut = PRE.indexOf('## Deferred Items');
+    const tail = PRE.indexOf('## Session Continuity');
+    const post = PRE.slice(0, cut) + PRE.slice(tail) + '\n' + PRE.slice(cut, tail);
+    assert.ok(verify(narrowStatus({ requirement: 'best-effort' }), PRE, post, STATE_PATH).outOfScope.some((o) => o.region === 'order'));
+  });
+
+  test('the seam normalization (CRLF, blank-line runs) is not counted as the write delta', () => {
+    const crlf = PRE.split('\n').join('\r\n');
+    assert.strictEqual(verify(narrowStatus(), crlf, setStatus(PRE), STATE_PATH).ok, true);
+  });
+
+  test('createStateWriteIntent rejects an unknown assertion target', () => {
+    assert.throws(
+      () => createStateWriteIntent(openStateTransaction({ snapshot: {} }), { assertions: [{ field: 'X', requirement: 'required', target: 'sections' }] }),
+      { code: 'STATE_WRITE_INTENT_TARGET_INVALID' },
+    );
+  });
+
+  describe('applyStateWriteIntent (disk)', () => {
+    let tmpDir;
+    let statePath;
+    beforeEach(() => {
+      tmpDir = createTempProject('gsd-4866-');
+      statePath = path.join(tmpDir, '.planning', 'STATE.md');
+      fs.writeFileSync(statePath, PRE);
+    });
+    afterEach(() => cleanup(tmpDir));
+
+    test('an out-of-scope transform is refused before the write: ok=false, written=false, bytes unchanged', () => {
+      const result = applyStateWriteIntent(statePath, narrowStatus(), (c) => setStatus(c).replace(BLOCKERS_LINE, 'x'), tmpDir);
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(result.written, false);
+      assert.ok(result.outOfScope.some((o) => o.region === 'section' && o.name === 'Blockers/Concerns'), JSON.stringify(result));
+      assert.strictEqual(fs.readFileSync(statePath, 'utf-8'), PRE);
+    });
+
+    test('an in-scope transform is written and reports the measured delta', () => {
+      // The realistic C3 shape: narrow scope, default resync (sync + preservation both run).
+      const intent = createStateWriteIntent(openStateTransaction({ snapshot: {}, resync: true }), {
+        assertions: [{ field: 'Status', requirement: 'required', value: 'In progress' }],
+        scope: 'narrow',
+      });
+      const result = applyStateWriteIntent(statePath, intent, setStatus, tmpDir);
+      assert.strictEqual(result.ok, true, JSON.stringify(result));
+      assert.strictEqual(result.written, true);
+      assert.ok(result.updated.includes('Status'), JSON.stringify(result.updated));
+      assert.ok(fs.readFileSync(statePath, 'utf-8').includes('Status: In progress'));
+    });
+
+    test('a no-op transform writes nothing and a required change-assertion reports as missed', () => {
+      const result = applyStateWriteIntent(statePath, narrowStatus(), (c) => c, tmpDir);
+      assert.strictEqual(result.written, false);
+      assert.deepStrictEqual(result.missedRequired, ['Status']);
+      assert.strictEqual(fs.readFileSync(statePath, 'utf-8'), PRE);
+    });
+
+    test('a rebuild intent is a construction error on this path (rebuild writers stay on writeStateMd)', () => {
+      const rebuild = createStateWriteIntent(rebuildStateTransaction({ snapshot: {} }), {});
+      assert.throws(() => applyStateWriteIntent(statePath, rebuild, setStatus, tmpDir), { code: 'STATE_TRANSACTION_KIND_INVALID' });
+      assert.throws(() => applyStateWriteIntent(statePath, null, setStatus, tmpDir), { code: 'STATE_WRITE_INTENT_REQUIRED' });
+    });
+  });
+});

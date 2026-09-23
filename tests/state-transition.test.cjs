@@ -4868,4 +4868,21 @@ describe('C1 (ADR-4629 §8.1): StateWriteIntent type surface', () => {
   test('createStateWriteIntent rejects an absent base transaction (construction failure, per §8.6 posture)', () => {
     assert.throws(() => createStateWriteIntent(null, { scope: 'narrow' }), /transaction/i);
   });
+
+  // C2 (#4866, ADR-4629 §8.2): an assertion may name a whole body SECTION and carry
+  // its intended post-value. Both are optional, so a C1-shaped assertion stays
+  // exactly { field, requirement } (no undefined keys leak into the frozen shape).
+  test('createStateWriteIntent carries C2 target/value only when set', () => {
+    const intent = createStateWriteIntent(openStateTransaction({ snapshot: {} }), {
+      assertions: [
+        { field: 'Status', requirement: 'required' },
+        { field: 'Blockers/Concerns', requirement: 'required', target: 'section', value: 'None yet.' },
+      ],
+    });
+    assert.deepStrictEqual(Object.keys(intent.assertions[0]), ['field', 'requirement']);
+    assert.deepStrictEqual({ ...intent.assertions[1] }, {
+      field: 'Blockers/Concerns', requirement: 'required', target: 'section', value: 'None yet.',
+    });
+    assert.ok(Object.isFrozen(intent.assertions[1]));
+  });
 });
