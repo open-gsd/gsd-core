@@ -2969,8 +2969,21 @@ describe('packChunks unmeasured-file cap (red next @ccfed6335, @af822a80, 2026-0
     assert.strictEqual(uncapped.length, 1, 'without a cap, weight/chars alone keep all 8 files in one chunk');
   });
 
-  describe('boundary (cap / cap+1)', () => {
+  describe('boundary (cap-1 / cap / cap+1)', () => {
     const CAP = 3;
+
+    test('cap-1 unmeasured files fit one chunk', () => {
+      const files = Array.from({ length: CAP - 1 }, (_, i) => `new-${i}.test.cjs`);
+      const chunks = packChunks(files, {
+        weightOf,
+        maxWeight: 100,
+        maxChars: UC_ROOMY_CHARS,
+        fixedOverhead: UC_FIXED_OVERHEAD,
+        isMeasured: (f) => !isNewFile(f),
+        maxUnmeasuredPerChunk: CAP,
+      });
+      assert.strictEqual(chunks.length, 1, `${CAP - 1} unmeasured files under cap ${CAP} must fit one chunk`);
+    });
 
     test('exactly cap unmeasured files fit one chunk', () => {
       const files = Array.from({ length: CAP }, (_, i) => `new-${i}.test.cjs`);
