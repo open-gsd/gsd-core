@@ -1577,7 +1577,8 @@ describe('verify artifacts command', () => {
     ]);
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(result.success, false);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.all_passed, false, 'Expected all_passed false');
@@ -1595,7 +1596,8 @@ describe('verify artifacts command', () => {
     fs.writeFileSync(path.join(tmpDir, 'src', 'app.js'), 'const x = 1;\n');
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(result.success, false);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.all_passed, false, 'Expected all_passed false');
@@ -1613,7 +1615,8 @@ describe('verify artifacts command', () => {
     fs.writeFileSync(path.join(tmpDir, 'src', 'app.js'), 'const x = 1;\n');
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(result.success, false);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.all_passed, false, 'Expected all_passed false');
@@ -1632,7 +1635,8 @@ describe('verify artifacts command', () => {
     fs.writeFileSync(path.join(tmpDir, 'src', 'app.js'), 'const x = 1;\nexport const POST = () => {};\n');
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(result.success, false);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.all_passed, false, 'Expected all_passed false');
@@ -1684,7 +1688,8 @@ describe('verify artifacts command', () => {
     ]);
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(result.success, false);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.total, 0, `Expected zero checked artifacts: ${JSON.stringify(output)}`);
@@ -1714,7 +1719,8 @@ describe('verify artifacts command', () => {
     ]);
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command crashed instead of reporting: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(result.success, false);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.total, 2, `both artifacts must be checked: ${JSON.stringify(output)}`);
@@ -1751,7 +1757,8 @@ describe('verify artifacts command', () => {
     ]);
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command crashed instead of reporting: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(result.success, false);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.total, 1);
@@ -1819,7 +1826,8 @@ if (${JSON.stringify(mode)} === 'enoent-read') {
         tmpDir,
         withInjection('enoent-read', target),
       );
-      assert.ok(result.success, `Command failed: ${result.error}`);
+      assert.strictEqual(result.exitCode, 1);
+      assert.strictEqual(result.success, false);
 
       const output = JSON.parse(result.output);
       const check = output.artifacts[0];
@@ -1844,7 +1852,8 @@ if (${JSON.stringify(mode)} === 'enoent-read') {
         tmpDir,
         withInjection('eacces-stat', target),
       );
-      assert.ok(result.success, `Command failed: ${result.error}`);
+      assert.strictEqual(result.exitCode, 1);
+      assert.strictEqual(result.success, false);
 
       const output = JSON.parse(result.output);
       const check = output.artifacts[0];
@@ -1877,6 +1886,64 @@ if (${JSON.stringify(mode)} === 'enoent-read') {
     const output = JSON.parse(result.output);
     assert.strictEqual(output.total, 1, `Expected exactly the one checkable entry: ${JSON.stringify(output)}`);
     assert.strictEqual(output.all_passed, true, `Expected all_passed true from the real entry: ${JSON.stringify(output)}`);
+  });
+
+  // #4686: verify artifacts and query verify.artifacts must exit non-zero (exit code 1)
+  // on a negative verdict under both default contract (v1) and --exit-contract=v2.
+  describe('#4686: negative verdict exits non-zero under both v1 and v2', () => {
+    test('verify artifacts exits 1 on failing artifact check under default contract (v1)', () => {
+      writePlanWithArtifacts(tmpDir, ['- path: "src/nonexistent.js"']);
+      const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
+      assert.strictEqual(result.exitCode, 1);
+      assert.strictEqual(result.success, false);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.all_passed, false);
+    });
+
+    test('verify artifacts exits 1 on failing artifact check under --exit-contract=v2', () => {
+      writePlanWithArtifacts(tmpDir, ['- path: "src/nonexistent.js"']);
+      const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md --exit-contract=v2', tmpDir);
+      assert.strictEqual(result.exitCode, 1);
+      assert.strictEqual(result.success, false);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.all_passed, false);
+    });
+
+    test('query verify.artifacts exits 1 on failing artifact check under default contract (v1)', () => {
+      writePlanWithArtifacts(tmpDir, ['- path: "src/nonexistent.js"']);
+      const result = runGsdTools('query verify.artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
+      assert.strictEqual(result.exitCode, 1);
+      assert.strictEqual(result.success, false);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.all_passed, false);
+    });
+
+    test('query verify.artifacts exits 1 on failing artifact check under --exit-contract=v2', () => {
+      writePlanWithArtifacts(tmpDir, ['- path: "src/nonexistent.js"']);
+      const result = runGsdTools('query verify.artifacts .planning/phases/01-test/01-01-PLAN.md --exit-contract=v2', tmpDir);
+      assert.strictEqual(result.exitCode, 1);
+      assert.strictEqual(result.success, false);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.all_passed, false);
+    });
+
+    test('query verify.artifacts exits 0 on passing artifact check under both v1 and v2', () => {
+      fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, 'src', 'app.js'), 'export default 1;\n');
+      writePlanWithArtifacts(tmpDir, [
+        '- path: "src/app.js"',
+        '  contains: "export"',
+      ]);
+      const r1 = runGsdTools('query verify.artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
+      assert.strictEqual(r1.exitCode, 0);
+      assert.strictEqual(r1.success, true);
+      assert.strictEqual(JSON.parse(r1.output).all_passed, true);
+
+      const r2 = runGsdTools('query verify.artifacts .planning/phases/01-test/01-01-PLAN.md --exit-contract=v2', tmpDir);
+      assert.strictEqual(r2.exitCode, 0);
+      assert.strictEqual(r2.success, true);
+      assert.strictEqual(JSON.parse(r2.output).all_passed, true);
+    });
   });
 });
 

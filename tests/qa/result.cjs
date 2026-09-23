@@ -158,6 +158,22 @@ function classify(raw, io = {}) {
 
   const stderrLines = stderr.split('\n').map((l) => l.trim()).filter((l) => l !== '');
 
+/**
+ * Identify CLI commands whose exit 1 represents a negative domain verdict
+ * (ADR-3889 §1, #4686) rather than an execution crash.
+ *
+ * @param {string[]} argv
+ * @returns {boolean}
+ */
+function isGatePredicate(argv) {
+  const tokens = (argv || []).filter((a) => typeof a === 'string' && !a.startsWith('-'));
+  return (
+    (tokens[0] === 'phase' && tokens[1] === 'uat-passed') ||
+    (tokens[0] === 'verify' && tokens[1] === 'artifacts') ||
+    (tokens[0] === 'query' && tokens[1] === 'verify.artifacts')
+  );
+}
+
   if (raw.exitCode === 1) {
     // Warnings are every stderr line except the last: the last line is
     // consumed below as the candidate structured-error envelope, so it is
@@ -166,9 +182,32 @@ function classify(raw, io = {}) {
     const parsed = tryParseJson(lastNonEmptyLine(stderr));
     const envelope = parsed.ok && parsed.value !== null && typeof parsed.value === 'object'
       && parsed.value.ok === false && typeof parsed.value.reason === 'string';
-    return envelope
-      ? { ...base, kind: KIND.STRUCTURED_ERROR, err: parsed.value, warnings }
-      : { ...base, kind: KIND.UNSTRUCTURED_ERROR, warnings };
+    if (envelope) {
+      return { ...base, kind: KIND.STRUCTURED_ERROR, err: parsed.value, warnings };
+    }
+
+    // Gate predicates (ADR-3889 §1, #4686) exit 1 on a negative domain verdict
+    // while still printing a valid JSON verdict on stdout (and nothing on stderr).
+    // An exit 1 with valid JSON on stdout from a gate predicate is a domain result,
+    // not an unstructured crash.
+    if (isGatePredicate(argv)) {
+      const resolved = resolveFilePointer(raw.stdout, io);
+      if (!resolved.unreadable) {
+        const text = typeof resolved.text === 'string' ? resolved.text : '';
+        const parsedStdout = tryParseJson(text);
+        if (parsedStdout.ok) {
+          const isPlainObject = parsedStdout.value !== null
+            && typeof parsedStdout.value === 'object'
+            && !Array.isArray(parsedStdout.value);
+          const kind = isPlainObject && Object.prototype.hasOwnProperty.call(parsedStdout.value, 'error')
+            ? KIND.SOFT_ERROR
+            : KIND.JSON;
+          return { ...base, kind, json: parsedStdout.value, pointer: resolved.pointer, warnings };
+        }
+      }
+    }
+
+    return { ...base, kind: KIND.UNSTRUCTURED_ERROR, warnings };
   }
 
   // exit 0: no envelope is ever parsed out of stderr, so every stderr line is
