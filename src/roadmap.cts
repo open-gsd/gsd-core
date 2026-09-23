@@ -1228,9 +1228,21 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // template shape at gsd-core/templates/roadmap.md:62). Either one is an
     // existing count token to overwrite (arm 1), never template placeholder
     // (arm 2) or freeform prose (arm 3).
-    const isFractionCount = (value: string): boolean =>
-      /^\d+\s*\/\s*\d+\s+plans(?:\s+(?:complete|executed))?$/i.test(value.trim());
-    const isBareCount = (value: string): boolean => /^\d+\s+plans?$/i.test(value.trim());
+    // #4906 regression fix: PREFIX match (not full-string) — a real count
+    // token may have a glued-on annotation with no ` — ` separator (e.g.
+    // `0/1 plans executed (11-16 are gap closure from VERIFICATION)`), which
+    // `parseBoldFieldLine`'s em-dash-only trailing-content split leaves
+    // entirely inside `value` (TRAILING_SEPARATOR_RE in planning-document.cts
+    // is unchanged and correct — this is a caller-side classification fix,
+    // not a seam fix). Returns the matched prefix length, or -1 if no match.
+    const fractionCountPrefixLength = (value: string): number => {
+      const m = value.match(/^\d+\s*\/\s*\d+\s+plans(?:\s+(?:complete|executed))?/i);
+      return m ? m[0].length : -1;
+    };
+    const bareCountPrefixLength = (value: string): number => {
+      const m = value.match(/^\d+\s+plans?/i);
+      return m ? m[0].length : -1;
+    };
     roadmapContent = replaceInCurrentMilestone(roadmapContent, planSectionPattern, (sectionText: string): string => {
       const parsed = parsePlanningDoc(sectionText, 'ROADMAP.md');
       if (!parsed.ok) {
@@ -1250,17 +1262,23 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
         return sectionText;
       }
       const currentValue = current.value;
-      const hasExistingCount = isFractionCount(currentValue) || isBareCount(currentValue);
-      if (!hasExistingCount && !isTemplatePlaceholder(currentValue)) {
+      const fractionPrefixLen = fractionCountPrefixLength(currentValue);
+      const barePrefixLen = bareCountPrefixLength(currentValue);
+      const countPrefixLen = fractionPrefixLen >= 0 ? fractionPrefixLen : barePrefixLen;
+      if (countPrefixLen < 0 && !isTemplatePlaceholder(currentValue)) {
         // Arm 3: freeform prose, TBD, a bracketed human annotation, or an
         // empty value — leave the section exactly as it was.
         return sectionText;
       }
-      // Arm 1 (real count token) or arm 2 (fresh-template placeholder):
-      // write the computed count. `setFieldValue`'s valueSpan/trailingSpan
-      // split preserves any hand-written trailing annotation (#2853)
-      // automatically — no separate "preserve trailing" branch needed here.
-      const staged = setFieldValue(parsed.value, fieldId, planCountText);
+      // Arm 1 (real count token, possibly with a glued-on no-separator
+      // annotation re-attached verbatim as `suffix`) or arm 2 (fresh-template
+      // placeholder, whole value replaced): write the computed count.
+      // `setFieldValue`'s valueSpan/trailingSpan split additionally preserves
+      // any EM-DASH-separated trailing annotation (#2853) automatically — no
+      // separate "preserve trailing" branch needed for that shape.
+      const suffix = countPrefixLen >= 0 ? currentValue.slice(countPrefixLen) : '';
+      const newValueToWrite = planCountText + suffix;
+      const staged = setFieldValue(parsed.value, fieldId, newValueToWrite);
       if (!staged.ok) {
         return sectionText;
       }

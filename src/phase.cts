@@ -75,7 +75,7 @@ import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- state.cjs is an export= CommonJS module
 import stateMod = require('./state.cjs');
 import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync, contentChangedAfterNormalize } from './shell-command-projection.cjs';
-import { parsePlanningDoc, findField, setFieldValue, serialize } from './planning-document.cjs';
+import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from './planning-document.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
@@ -3809,7 +3809,29 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             // not a failure (mirrors the old regex's silent no-match no-op).
             return body;
           }
-          const staged = setFieldValue(parsed.value, fieldId, `${summaryCount}/${planCount} plans complete`);
+          // #4906 regression fix: PREFIX-match the existing value's count
+          // token and re-glue whatever follows it VERBATIM — a glued-on
+          // annotation with no ` — ` separator (e.g. a parenthetical like
+          // `0/1 plans executed (11-16 are gap closure from VERIFICATION)`)
+          // lives entirely inside `value` (`TRAILING_SEPARATOR_RE` in
+          // planning-document.cts only splits on ` — `, unchanged/correct),
+          // so overwriting `value` outright previously destroyed it. When no
+          // recognised count-token prefix is present, preserve this site's
+          // existing unconditional-overwrite behavior (mirrors roadmap.cts's
+          // fractionCount/bareCount prefix detectors).
+          const newCountText = `${summaryCount}/${planCount} plans complete`;
+          const current = readNode(parsed.value, fieldId);
+          let newValueToWrite = newCountText;
+          if (current.ok) {
+            const currentValue = current.value;
+            const countPrefixMatch = currentValue.match(
+              /^(?:\d+\s*\/\s*\d+\s+plans(?:\s+(?:complete|executed))?|\d+\s+plans?)/i,
+            );
+            if (countPrefixMatch) {
+              newValueToWrite = newCountText + currentValue.slice(countPrefixMatch[0].length);
+            }
+          }
+          const staged = setFieldValue(parsed.value, fieldId, newValueToWrite);
           if (!staged.ok) {
             preservationWarnings.push({ field: 'Plans', reason: staged.reason });
             return body;
