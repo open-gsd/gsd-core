@@ -224,6 +224,15 @@ function readSentinelAt(root, { clock = Date } = {}) {
   // treats a plan/phase MISMATCH (both sides present and disagreeing) as "no
   // applicable sentinel", not an allow.
   const plan = typeof parsed.plan === 'string' && parsed.plan.length > 0 ? parsed.plan : null;
+  // #4630 ADR Phase 2: WHO decided this isolation, so a re-query can tell a
+  // decision it may re-derive (`resolver`) from one it must honour
+  // (`caller` — a --force-isolation degrade computed at a dispatch site the
+  // resolver cannot see into). Anything that is not exactly `resolver` reads
+  // as `caller`, which covers a record written by a pre-#4630 gsd-tools. That
+  // default is the safe direction, not the lenient one: holding a degrade that
+  // could have been re-derived costs one sequential run, while clobbering one
+  // the caller owns makes the guard refuse the dispatch entirely (#4222).
+  const decidedBy = parsed.decided_by === 'resolver' ? 'resolver' : 'caller';
 
   const now = clock.now();
   const age = now - parsed.written_at;
@@ -240,6 +249,7 @@ function readSentinelAt(root, { clock = Date } = {}) {
     harnessFlag,
     phase,
     plan,
+    decidedBy,
     writtenAt: parsed.written_at,
   };
 }

@@ -2246,3 +2246,140 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
     assert.equal(readSentinelRaw(dir).plan, 'plan-a', 'an empty --plan must not be read as a differing scope');
   });
 });
+
+// ─── #4630 ADR Phase 2 — one vocabulary owner, and a recorded decision that
+// says who made it ───────────────────────────────────────────────────────────
+//
+// Carried from closed PRs #4620 (#4561, the vocabulary owner + the hold) and
+// #4232 (#4222, the in-resolver base-check re-derivation). Folded together the
+// two contradict: the degrade #4222 re-derives is written as a fresh, in-scope
+// `none`, which is exactly the shape #4561's hold protects — so the next plain
+// query held the resolver's OWN previous answer and "#4222 reads live git
+// state" quietly stopped being true. The record now states WHO decided, and
+// the hold keys on that instead of on value-plus-freshness.
+describe('#4630 — the isolation record states who decided it, so a re-query knows what it may re-derive', () => {
+  function git(args, cwd) {
+    return gitOrThrow(args, { cwd });
+  }
+  const env = (dir) => ({ GSD_RUNTIME: 'claude', HOME: dir });
+
+  function writeClaudeConfig(dir) {
+    fs.writeFileSync(
+      path.join(dir, '.planning', 'config.json'),
+      JSON.stringify({ runtime: 'claude', workflow: { use_worktrees: true } }),
+    );
+  }
+
+  function divergedProject(t, prefix) {
+    const dir = createTempGitProject(prefix);
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}origin-`));
+    t.after(() => { cleanup(dir); cleanup(bare); });
+    git(['init', '--bare'], bare);
+    git(['remote', 'add', 'origin', bare], dir);
+    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], dir).trim();
+    git(['push', '-u', 'origin', branch], dir);
+    git(['symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/origin/${branch}`], dir);
+    writeClaudeConfig(dir);
+    fs.appendFileSync(path.join(dir, 'README.md'), 'local divergence\n');
+    git(['add', '-A'], dir);
+    git(['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-m', 'diverge'], dir);
+    return dir;
+  }
+
+  test('the base check reads the subset from the shared owner — `none` and an out-of-vocabulary mode are both outside it', () => {
+    // The whole point of the seam: this subset has ONE definition. Driving a
+    // mode outside it must answer false through the shared guard rather than
+    // through a pair of string comparisons re-stated at the call site.
+    //
+    // NEGATIVE CONTROL: this test is GREEN against pre-adoption code, because
+    // the owner already existed on the #4561 half — what changed is only WHO
+    // baseCheckDegrades asks. A behavioural test cannot separate those: the
+    // inline pair and the owner agree on every input, which is precisely why
+    // the duplicate was safe to keep and therefore dangerous. This is a PIN on
+    // the owner's semantics, not a regression for the adoption. The adoption's
+    // own oracle is structural — no `isolationMode !== '...'` literal survives
+    // in gsd-tools.cjs (1 before, 0 after) — and the drift lint that makes a
+    // reintroduced copy fail loudly is ADR Phase 3, child 2.
+    const { isBaseCheckIsolationMode, BASE_CHECK_ISOLATION_VOCABULARY } =
+      require('../gsd-core/bin/lib/dispatch-isolation.cjs');
+    assert.equal(isBaseCheckIsolationMode('none'), false);
+    assert.equal(isBaseCheckIsolationMode('definitely-not-an-isolation-mode'), false);
+    assert.equal(isBaseCheckIsolationMode(''), false);
+    assert.equal(isBaseCheckIsolationMode(undefined), false);
+    assert.equal(isBaseCheckIsolationMode('harness-worktree'), true);
+    assert.equal(isBaseCheckIsolationMode('orchestrator-worktree'), true);
+    assert.equal(BASE_CHECK_ISOLATION_VOCABULARY.has('none'), false);
+  });
+
+  test('a degrade the RESOLVER re-derived is recorded as `resolver` — the provenance that lets a later query re-evaluate it', (t) => {
+    const dir = divergedProject(t, 'gsd-4630-prov-resolver-');
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    const rec = readSentinelRaw(dir);
+    assert.equal(rec.isolation, 'none', 'precondition: the diverged repo degraded');
+    assert.equal(rec.decided_by, 'resolver', 'the resolver derived this from live git state');
+  });
+
+  test('a FORCED degrade is recorded as `caller` and a plain re-query holds it — #4561 unchanged', (t) => {
+    const dir = createTempProject('gsd-4630-prov-caller-');
+    t.after(() => cleanup(dir));
+    const forced = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', '--phase', '7', '--force-isolation', 'none'],
+      dir, env(dir),
+    );
+    assert.equal(forced.success, true, forced.error);
+    assert.equal(readSentinelRaw(dir).decided_by, 'caller', 'a force is the caller\'s decision, not a re-derivation');
+
+    const written = readSentinelRaw(dir).written_at;
+    const requery = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7'], dir, env(dir));
+    assert.equal(requery.success, true, requery.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'none', 'the caller\'s degrade is held');
+    assert.equal(readSentinelRaw(dir).written_at, written, 'held means NOT rewritten');
+  });
+
+  test('record-dispatch-isolation stamps `caller` — the verb the three unrederivable dispatch sites call', (t) => {
+    const dir = createTempProject('gsd-4630-prov-recordverb-');
+    t.after(() => cleanup(dir));
+    const r = runGsdTools(
+      ['record-dispatch-isolation', '--isolation', 'none', '--phase', '7', '--plan', 'plan-a'],
+      dir, env(dir),
+    );
+    assert.equal(r.success, true, r.error);
+    assert.equal(readSentinelRaw(dir).decided_by, 'caller');
+  });
+
+  test('a record with NO provenance (written by a pre-#4630 gsd-tools) is HELD, not clobbered — the default is the safe direction', (t) => {
+    const dir = createTempProject('gsd-4630-prov-legacy-');
+    t.after(() => cleanup(dir));
+    // writeSentinel emits exactly the pre-#4630 shape: no decided_by at all.
+    //
+    // NEGATIVE CONTROL: also GREEN pre-fix, where every fresh in-scope `none`
+    // was held unconditionally — so it does not discriminate this change. It
+    // is kept as a FORWARD guard: it reds if the unknown-provenance default is
+    // ever flipped to `resolver`, which would silently reopen #4222's failure
+    // (the guard refusing a dispatch the degrade mandated) for every record
+    // written by an older gsd-tools still in flight during an upgrade.
+    writeSentinel(dir, { isolation: 'none', phase: '7', plan: 'plan-a' });
+    const raw = readSentinelRaw(dir);
+    assert.equal('decided_by' in raw, false, 'precondition: the fixture really is fieldless');
+
+    const requery = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7'], dir, env(dir));
+    assert.equal(requery.success, true, requery.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'none',
+      'an unknown provenance reads as the caller\'s: holding costs a sequential run, clobbering makes the guard refuse the dispatch');
+  });
+
+  test('#4734 stays the guard\'s: a non-git root records the capability, and the resolver re-derives no base-check degrade there', (t) => {
+    // A non-git root has no HEAD to compare against a fork base, so the base
+    // check has derived nothing. #4734's own guard fallback already allows the
+    // flag-less dispatch; recording `none` here would make the resolver a
+    // second owner of that decision.
+    const dir = createTempProject('gsd-4630-nogit-');
+    t.after(() => cleanup(dir));
+    writeClaudeConfig(dir);
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'harness-worktree',
+      'the resolver records the host capability; the non-git degrade belongs to the guard');
+  });
+});
