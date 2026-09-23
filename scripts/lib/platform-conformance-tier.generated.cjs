@@ -138,7 +138,6 @@ module.exports = {
   "tests/hook-activation-probe.test.cjs",
   "tests/hooks-crash-policy.test.cjs",
   "tests/hooks-opt-in.test.cjs",
-  "tests/host-integration-validator-parity.test.cjs",
   "tests/host-integration.test.cjs",
   "tests/in-tier-msys-fork-stress.test.cjs",
   "tests/in-tier-sh-pipeline-timing.test.cjs",
