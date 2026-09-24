@@ -1433,9 +1433,43 @@ describe('#4222 — the #683 base-check degrade is re-derived by the resolver, s
     assert.equal(codex.output.trim(), 'orchestrator-worktree', 'precondition: codex resolves to orchestrator-worktree');
     assert.equal(readSentinelRaw(dir).isolation, 'orchestrator-worktree', 'baseRef "head" suppresses the check where GSD creates the worktree');
 
+    // Since #4588 the Claude Code harness is measured to honour baseRef "head"
+    // too, so with no WorktreeCreate hook the same repo keeps the capability
+    // under harness-worktree (the #48 "harness ignores it" premise is retired).
     const claude = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
     assert.equal(claude.success, true, claude.error);
-    assert.equal(readSentinelRaw(dir).isolation, 'none', 'the harness ignores baseRef "head", so the same repo degrades under harness-worktree');
+    assert.equal(readSentinelRaw(dir).isolation, 'harness-worktree', 'the harness honours baseRef "head" where no WorktreeCreate hook replaces it (#4588)');
+  });
+
+  test('#4630: a WorktreeCreate hook host re-derives the #4881 interlock — the resolver records none and the CLI base-check agrees', (t) => {
+    // #4881: a WorktreeCreate hook replaces the harness's worktree creation, so
+    // baseRef "head" says nothing about the fork base there and the base-check
+    // compares against origin/HEAD. That interlock is derived from settings the
+    // resolver reads on every call, so it belongs to the shared derivation
+    // (evaluateWorktreeBaseDegradeForCwd), not the CLI wrapper: had it stayed in
+    // cmdWorktreeBaseCheck, this repo would degrade on the CLI and record
+    // harness-worktree from the resolver — the disagreement #4222's extraction
+    // exists to rule out.
+    const { dir } = projectWithOrigin(t, 'gsd-4630-hookhost-');
+    diverge(dir);
+    fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.claude', 'settings.local.json'),
+      JSON.stringify({
+        worktree: { baseRef: 'head' },
+        hooks: { WorktreeCreate: [{ hooks: [{ type: 'command', command: 'true' }] }] },
+      }),
+    );
+
+    const cli = runGsdTools(['query', 'worktree.base-check', '--mode', 'harness-worktree', '--pick', 'reason'], dir, env(dir));
+    assert.equal(cli.success, true, cli.error);
+    assert.equal(cli.output.trim(), 'baseref-head-bypassed-by-hook', 'precondition: the CLI base-check degrades on the hook host');
+
+    const resolved = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(resolved.success, true, resolved.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'none', 'the resolver must reach the same verdict the CLI base-check emits');
+    assert.equal(sentinel.decided_by, 'resolver', 'a settings-derived degrade is re-derivable, so a later plain query re-evaluates it');
   });
 
   test('#4222: end-to-end — after a plain re-query on a diverged repo the guard ALLOWS the sequential dispatch', (t) => {
