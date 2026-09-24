@@ -5181,6 +5181,14 @@ function stateFieldOwnerUnit(units: Map<string, StateBodyUnit>, field: string): 
  *    applies. A key already present that the seam re-derives to a new value
  *    (for example `progress.*` under `resync`) IS counted: §8.3 bounds what the
  *    write changed, whoever computed it.
+ *  - A frontmatter key is declared when an assertion names it exactly, or when
+ *    it is one of the schema-declared leaves (`declaredLeavesOf`) of a key an
+ *    assertion names. Declaring `progress` therefore covers the closed set of
+ *    `progress.*` rows `FIELD_CLASSIFICATION` lists, the frontmatter analogue of
+ *    a `target: 'section'` assertion covering its child sections. Nothing else
+ *    widens: a declared leaf (`progress.percent`) never covers a sibling leaf,
+ *    and a dotted key outside the schema's leaf set is never covered by its
+ *    prefix.
  *  - `scope: 'broad'` puts the WHOLE frontmatter in scope. That is ADR-4629
  *    §8.3's own worked case (`milestoneSwitch` declares a whole-frontmatter
  *    scope). The body stays bounded: broad is audited, not exempted.
@@ -5230,7 +5238,13 @@ function verifyStateWriteIntent(
   const outOfScope: StateOutOfScopeRegion[] = [];
   if (intent.kind !== 'rebuild') {
     if (intent.scope !== 'broad') {
-      const declared = (key: string): boolean => fieldTargets.has(key) || fieldTargets.has(key.split('.')[0]);
+      const declared = (key: string): boolean => {
+        if (fieldTargets.has(key)) return true;
+        const dot = key.indexOf('.');
+        if (dot <= 0) return false;
+        const parent = key.slice(0, dot);
+        return fieldTargets.has(parent) && declaredLeavesOf(parent).includes(key);
+      };
       if (isUnparseableFrontmatter(preFm) || isUnparseableFrontmatter(postFm)) {
         // An unparseable block has no keys to diff; judge the raw region.
         if (stateFrontmatterRegion(pre) !== stateFrontmatterRegion(post)) {

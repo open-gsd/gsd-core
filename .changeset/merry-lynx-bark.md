@@ -1,5 +1,5 @@
 ---
-type: Changed
+type: Added
 pr: 4935
 ---
 <!-- docs-exempt: internal verifying-executor capability only; no caller migrated and no user-facing behavior. ADR-4629 section 8.2/8.3 Phase-2 step, same posture as C1 (#4676). -->

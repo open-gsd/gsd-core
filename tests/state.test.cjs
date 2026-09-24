@@ -21927,6 +21927,157 @@ describe('C2 (ADR-4629 §8.2/§8.3): StateWriteIntent verifying executor', () =>
     );
   });
 
+  // #4935 review: a bare parent declaration covers only the schema-declared leaves
+  // of that parent (`declaredLeavesOf`), and a declared leaf never covers a sibling.
+  test('§8.3: declaring `progress` covers its schema-declared leaves; a declared leaf does not cover a sibling leaf', () => {
+    const post = PRE.replace('  percent: 0', '  percent: 50').replace('  total_plans: 0', '  total_plans: 4');
+    const intentFor = (field) => createStateWriteIntent(openStateTransaction({ snapshot: {} }), {
+      assertions: [{ field, requirement: 'best-effort' }],
+      scope: 'narrow',
+    });
+    assert.strictEqual(verify(intentFor('progress'), PRE, post, STATE_PATH).ok, true);
+    assert.deepStrictEqual(
+      verify(intentFor('progress.percent'), PRE, post, STATE_PATH).outOfScope,
+      [{ region: 'frontmatter', name: 'progress.total_plans' }],
+    );
+    // A prefix that is not a declared parent key covers nothing.
+    assert.deepStrictEqual(
+      verify(intentFor('prog'), PRE, post, STATE_PATH).outOfScope,
+      [{ region: 'frontmatter', name: 'progress.total_plans' }, { region: 'frontmatter', name: 'progress.percent' }],
+    );
+    // A top-level key that merely CONTAINS a dot is not a schema leaf of its prefix:
+    // declaring `foo` does not cover `foo.bar` (the old `split('.')[0]` rule did).
+    const dottedPre = PRE.replace('status: planning', 'status: planning\nfoo.bar: 1');
+    const dottedPost = dottedPre.replace('foo.bar: 1', 'foo.bar: 2');
+    assert.deepStrictEqual(
+      verify(intentFor('foo'), dottedPre, dottedPost, STATE_PATH).outOfScope,
+      [{ region: 'frontmatter', name: 'foo.bar' }],
+    );
+    assert.strictEqual(verify(intentFor('foo.bar'), dottedPre, dottedPost, STATE_PATH).ok, true);
+  });
+
+  // #4935 review: fast-check properties for the §8.3 diff/replay contract. Each
+  // generated case edits a random subset of the template's body fields to random
+  // values, and the intent declares exactly that subset. Inputs are built with a
+  // plain line setter (`setField`), NOT the seam's `stateReplaceField` that the
+  // verifier replays with, so a writer defect cannot hide inside its own oracle
+  // (CONTRIBUTING, #2371). Edits touch the BODY only.
+  describe('§8.3 properties (fast-check)', () => {
+    const FC_OPTS = { seed: 4866, numRuns: 200 };
+    const BODY_FIELDS = [
+      ['Phase', 'Current Position'], ['Plan', 'Current Position'], ['Status', 'Current Position'],
+      ['Last activity', 'Current Position'], ['Core value', 'Project Reference'], ['Current focus', 'Project Reference'],
+      ['Last session', 'Session Continuity'], ['Stopped at', 'Session Continuity'], ['Resume file', 'Session Continuity'],
+    ];
+    // One line from each template section that owns no declarable field.
+    const STRAY_LINES = [
+      [BLOCKERS_LINE, 'Blockers/Concerns'],
+      ['- [Phase X]: [Decision summary]', 'Decisions'],
+      ['[From .planning/todos/pending/ — ideas captured during sessions]', 'Pending Todos'],
+      ['*Updated after each plan completion*', 'Performance Metrics'],
+      ['Items acknowledged and deferred at milestone close, most recent first:', 'Deferred Items'],
+    ];
+    // Values include `$` and `&` so a string-replacement special pattern would surface.
+    const fieldValue = fc.stringMatching(/^[A-Za-z0-9][A-Za-z0-9 .,:()/$&*|'[\]-]{0,24}[A-Za-z0-9)]$/);
+    const fieldEdits = fc
+      .uniqueArray(fc.tuple(fc.constantFrom(...BODY_FIELDS), fieldValue), {
+        minLength: 1, maxLength: BODY_FIELDS.length, selector: ([[field]]) => field,
+      })
+      .filter((edits) => edits.every(([[field], value]) => stateExtractField(PRE, field).trim() !== value));
+    const bodyStart = PRE.indexOf('\n---\n', 4) + 5;
+    const onBody = (content, fn) => content.slice(0, bodyStart) + fn(content.slice(bodyStart));
+    // Rewrite the first body line labelled `Field:` or `**Field:**`, the line the seam reads.
+    const setField = (body, field, value) => {
+      const lines = body.split('\n');
+      const i = lines.findIndex((l) => l.startsWith(`${field}: `) || l.startsWith(`**${field}:** `));
+      assert.ok(i >= 0, `the template body must carry a ${field} line`);
+      lines[i] = `${lines[i].startsWith('**') ? `**${field}:**` : `${field}:`} ${value}`;
+      return lines.join('\n');
+    };
+    const editBody = (content, edits) =>
+      onBody(content, (body) => edits.reduce((acc, [[field], value]) => setField(acc, field, value), body));
+    const applyEdits = (edits) => editBody(PRE, edits);
+    const intentFor = (edits) => createStateWriteIntent(openStateTransaction({ snapshot: {} }), {
+      assertions: edits.map(([[field], value]) => ({ field, requirement: 'required', value })),
+      scope: 'narrow',
+    });
+
+    test('property: editing exactly the declared fields verifies clean (no false out-of-scope, every required lands)', () => {
+      let checked = 0;
+      fc.assert(fc.property(fieldEdits, (edits) => {
+        const result = verify(intentFor(edits), PRE, applyEdits(edits), STATE_PATH);
+        assert.deepStrictEqual(
+          { ok: result.ok, outOfScope: result.outOfScope, missedRequired: result.missedRequired },
+          { ok: true, outOfScope: [], missedRequired: [] },
+        );
+        checked++;
+      }), FC_OPTS);
+      assert.strictEqual(checked, FC_OPTS.numRuns, 'every generated case must reach the assertion');
+    });
+
+    test('property: one stray edit in a field-free section is reported as exactly that section', () => {
+      let checked = 0;
+      fc.assert(fc.property(fieldEdits, fc.constantFrom(...STRAY_LINES), fieldValue, (edits, [line, section], stray) => {
+        const post = applyEdits(edits).replace(line, () => stray);
+        const result = verify(intentFor(edits), PRE, post, STATE_PATH);
+        assert.deepStrictEqual(result.reasons, [STATE_WRITE_INTENT_FAILURE.OUT_OF_SCOPE]);
+        assert.deepStrictEqual(result.outOfScope, [{ region: 'section', name: section }]);
+        checked++;
+      }), FC_OPTS);
+      assert.strictEqual(checked, FC_OPTS.numRuns, 'every generated case must reach the assertion');
+    });
+
+    test('property: an undeclared field edited beside a declared one in the same section is caught', () => {
+      let checked = 0;
+      fc.assert(fc.property(fieldEdits, fieldValue, fc.nat(), (edits, value, pick) => {
+        const declaredFields = new Set(edits.map(([[field]]) => field));
+        const siblings = BODY_FIELDS.filter(([field, section]) =>
+          !declaredFields.has(field) && edits.some(([[, s]]) => s === section));
+        fc.pre(siblings.length > 0);
+        const sibling = siblings[pick % siblings.length];
+        fc.pre(stateExtractField(PRE, sibling[0]).trim() !== value);
+        const post = editBody(applyEdits(edits), [[sibling, value]]);
+        const result = verify(intentFor(edits), PRE, post, STATE_PATH);
+        assert.strictEqual(result.ok, false);
+        assert.ok(result.outOfScope.some((o) => o.region === 'section' && o.name === sibling[1]), JSON.stringify(result));
+        checked++;
+      }), FC_OPTS);
+      assert.strictEqual(checked, FC_OPTS.numRuns, 'every generated case must reach the assertion');
+    });
+
+    test('property: a declared label repeated in another section covers only the line the seam reads', () => {
+      let checked = 0;
+      fc.assert(fc.property(fieldEdits, fc.constantFrom(...STRAY_LINES), fieldValue, (edits, [line, section], value) => {
+        // The seeded copy must sit AFTER the field's owning section: the seam reads the
+        // first match, so a copy placed earlier would itself be the declared line.
+        const early = edits.find(([[, s]]) => s === 'Current Position' || s === 'Project Reference');
+        fc.pre(early !== undefined && value !== 'seeded');
+        const [[field]] = early;
+        const pre = PRE.replace(line, () => `${field}: seeded`);
+        const post = editBody(pre, edits)
+          .replace(`${field}: seeded`, () => `${field}: ${value}`);
+        const result = verify(intentFor(edits), pre, post, STATE_PATH);
+        assert.deepStrictEqual(result.outOfScope, [{ region: 'section', name: section }]);
+        checked++;
+      }), FC_OPTS);
+      assert.strictEqual(checked, FC_OPTS.numRuns, 'every generated case must reach the assertion');
+    });
+
+    test('property: the verdict is invariant under CRLF line endings on either side', () => {
+      const crlf = (s) => s.split('\n').join('\r\n');
+      let checked = 0;
+      fc.assert(fc.property(fieldEdits, fc.option(fc.constantFrom(...STRAY_LINES)), (edits, stray) => {
+        const post = stray === null ? applyEdits(edits) : applyEdits(edits).replace(stray[0], () => 'x');
+        const lf = verify(intentFor(edits), PRE, post, STATE_PATH);
+        // Mixed endings: a side the verifier failed to normalize would read as every section changed.
+        assert.deepStrictEqual(verify(intentFor(edits), crlf(PRE), post, STATE_PATH), lf);
+        assert.deepStrictEqual(verify(intentFor(edits), PRE, crlf(post), STATE_PATH), lf);
+        checked++;
+      }), FC_OPTS);
+      assert.strictEqual(checked, FC_OPTS.numRuns, 'every generated case must reach the assertion');
+    });
+  });
+
   describe('applyStateWriteIntent (disk)', () => {
     let tmpDir;
     let statePath;
