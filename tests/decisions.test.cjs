@@ -2899,11 +2899,17 @@ describe('parseDecisions hardening — byte-identical vs the pre-hardening refer
    * this reference on match/no-match AND all capture groups for every input
    * the generator can produce. If the reference and the module ever disagree,
    * behavior drifted — this is the "pure hardening" contract.
+   *
+   * `refTitled` was updated for #4793's follow-up (#4958, this phase) to reflect an
+   * intentional, narrow behavior change: the pre-separator run now tolerates a bare
+   * colon only when immediately followed by whitespace (a natural sentence colon),
+   * never a compact/ratio-style colon like `3:1`. `refColon` and `refEmDash` are
+   * untouched and still reflect the original #4357 baseline exactly.
    */
   const REF_ID = 'D[0-9]*-[A-Za-z0-9][A-Za-z0-9_-]*';
   const refColon = new RegExp(`^\\s*-\\s+\\*\\*(${REF_ID})(?:\\s*\\[([^\\]]+)\\])?[^:*]*:\\*\\*\\s*(.*)$`);
   const refEmDash = new RegExp(`^\\s*-\\s+\\*\\*(${REF_ID})(?:\\s*\\[([^\\]]+)\\])?[^*]*[—–][^*]*\\*\\*\\s*(.*)$`);
-  const refTitled = new RegExp(`^\\s*-\\s+\\*\\*(${REF_ID})(?:\\s*\\[([^\\]]+)\\])?[^:*]*:[^:*]*\\*\\*\\s*(.*)$`);
+  const refTitled = new RegExp(`^\\s*-\\s+\\*\\*(${REF_ID})(?:\\s*\\[([^\\]]+)\\])?(?::(?=\\s)|[^:*])*:[^:*]*\\*\\*\\s*(.*)$`);
   const refGuard = /^\s*-\s+\*\*D(?:[0-9][A-Za-z0-9]*)?-/;
   const refBoldLeadIn = /^\s*-\s+\*\*[A-Z]+[0-9]*-[A-Za-z0-9]/m;
   const refToken = /\bD[0-9]*-[A-Za-z0-9]/m;
