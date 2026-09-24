@@ -71,7 +71,7 @@ Act on `severity`, not on `status` — a row can be `status: ok` and still carry
 | `no_manifest` | blocker | The directory exists but has no `package.json` / `Makefile`. You are almost certainly one level off — this is the #2401 case. |
 | `script_missing` | warning | The manifest has no such script. Fine if this phase adds it; otherwise a typo. |
 | `dynamic_path` | warning | The path uses a variable, glob, substitution, or `~`. The probe refuses to guess. Replace it with a literal if you can. |
-| `outside_root` | warning | A bare ancestor climb (`cd ../..`). Under parallel worktree execution the base differs, so this cannot be checked. Anchor it instead. |
+| `outside_root` | warning | A bare ancestor climb (`cd ../..`), or an absolute target outside the project root (#4767). Under parallel worktree execution the base differs, so this cannot be checked — and an absolute target runs against whichever checkout it names, not the executor's. Make it root-relative instead. |
 | `manifest_unreadable` | warning | `package.json` is unparseable, not a JSON object, or over 512 KB. Fix the manifest. |
 
 ## When the report says nothing
