@@ -2284,6 +2284,13 @@ function extractPhaseFieldMultiline(section: string, label: string): string | nu
   const startIdx = match.index ?? 0;
   const after = section.slice(startIdx + match[0].length);
   const firstLine = match[1].trim();
+  // #4837 (isolated-review finding): the continuation loop's fence-stop check
+  // only ever sees lines AFTER the label's own line — a fence opener on the
+  // SAME line as the label (`**Requirements:** ```js`) was invisible to it,
+  // leaking one line of fence content before the closing fence line
+  // coincidentally matched the same stop check. Checked here too, so a fence
+  // opening on the label's own line is caught just as conservatively.
+  if (/^(?:`{3,}|~{3,})/.test(firstLine)) return null;
   const contLines = [];
   const lines = after.split('\n');
   for (let li = 0; li < lines.length; li++) {

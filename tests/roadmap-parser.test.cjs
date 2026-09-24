@@ -3872,6 +3872,17 @@ describe('roadmap-parser: extractPhaseFieldMultiline — #4837 structural bounda
     assert.strictEqual(result, 'Do the thing');
   });
 
+  test('#4837 defect 4c (isolated-review finding): a fence opening on the label\'s own line is caught too', () => {
+    // The continuation loop's fence-stop check only ever sees lines AFTER the
+    // label's own line -- a fence opener glued to the label itself
+    // (`**Requirements:** ```js`) was invisible to it, leaking one line of
+    // fence content before the closing fence coincidentally matched the same
+    // stop check.
+    const section = '**Requirements:** ```js\nfoo()\n```\nmore\n';
+    const result = extractPhaseFieldMultiline(section, 'Requirements');
+    assert.strictEqual(result, null, `a same-line fence opener must yield no content, got: ${JSON.stringify(result)}`);
+  });
+
   test('#4837 regression guard: existing single-line and wrap behavior is unchanged', () => {
     assert.strictEqual(
       extractPhaseFieldMultiline('**Goal:** What this phase delivers\n', 'Goal'),
