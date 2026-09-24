@@ -169,17 +169,20 @@ const bulletEmDashRe = new RegExp(
  * `:`/`*` is data, never grammar; an UNTERMINATED backtick now fails loud (previously it was
  * an ordinary character) — the deliberate cost of span opacity.
  *
- * #4793: the pre-separator run now tolerates additional bare colons, so a title with
- * plain-prose colons (e.g. `D-02: Two managers … same pair: the second is rejected.`) parses
- * instead of being rejected. Only the pre-separator plain-character branch was widened
- * (`[^:*`]` → `[^*`]`); the post-separator branch still excludes colons, so normal greedy
- * backtracking selects the LAST bare colon before the closing `**` as the true separator.
+ * #4793/#4958: the pre-separator run tolerates a bare colon as prose ONLY when it is
+ * immediately followed by whitespace (`:(?=\s)`), e.g. a natural sentence colon in
+ * `D-02: Two managers … same pair: the second is rejected.`. A colon with no following
+ * whitespace (a compact/ratio-style colon like `3:1`) is never consumed by this branch, so
+ * it still hard-caps the pre-separator run and the #1639/#4130/#1343 negative-space fixtures
+ * (e.g. `D-07 ratio 3:1:**`) still fail loud. The post-separator branch is unchanged and
+ * still excludes colons, so normal greedy backtracking selects the LAST valid split (a bare
+ * colon followed by whitespace, or the anchor colon itself) before the closing `**`.
  *
  * The ID is consumed atomically `(?=(…))\1` like the other forms — the
  * hardening note above the constants explains why (#4130 follow-up).
  */
 const bulletTitledColonRe = new RegExp(
-  `^\\s*-\\s+\\*\\*(?=(${DECISION_ID_SOURCE}))\\1(?:\\s*\\[([^\\]]+)\\])?(?:\\u0060[^\\u0060]*\\u0060|[^*\\u0060])*:(?:\\u0060[^\\u0060]*\\u0060|[^:*\\u0060])*\\*\\*\\s*(.*)$`,
+  `^\\s*-\\s+\\*\\*(?=(${DECISION_ID_SOURCE}))\\1(?:\\s*\\[([^\\]]+)\\])?(?:\\u0060[^\\u0060]*\\u0060|:(?=\\s)|[^:*\\u0060])*:(?:\\u0060[^\\u0060]*\\u0060|[^:*\\u0060])*\\*\\*\\s*(.*)$`,
 );
 
 /**
