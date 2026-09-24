@@ -2271,9 +2271,13 @@ export = {
  */
 function extractPhaseFieldMultiline(section: string, label: string): string | null {
   // #2769 label shapes: `**X:**`, `**X**:`, and the spaced `**X** :`.
+  // #4837: anchored to line start (`^[ \t]*`, `m` flag) so an inline
+  // `**Label**` mention embedded in an EARLIER field's own body text cannot
+  // shadow the real field's own declaration line. `[ \t]*` (not `\s*`) keeps
+  // the anchor scoped to same-line leading whitespace under the `m` flag.
   const labelRe = new RegExp(
-    '\\*\\*' + label + '(?::\\*\\*|\\*\\*\\s*:?)\\s*([^\\n]+)',
-    'i',
+    '^[ \\t]*\\*\\*' + label + '(?::\\*\\*|\\*\\*\\s*:?)\\s*([^\\n]+)',
+    'im',
   );
   const match = section.match(labelRe);
   if (!match) return null;
@@ -2289,9 +2293,19 @@ function extractPhaseFieldMultiline(section: string, label: string): string | nu
     // continuation line.
     if (li === 0 && !raw.trim()) continue;
     if (!raw.trim()) break;
-    if (/^\s*\*\*[A-Z][A-Za-z ]*:?(\*\*)?:?\s/.test(raw)) break;
+    // #4837: a list item is a structural boundary — the real corruption
+    // vector (a `- Deferred to Phase N: OTHER-ID` bullet folding a foreign
+    // REQ-ID into this field's citation-scan input).
+    if (/^\s*[-*+]\s/.test(raw)) break;
+    // #4837: case-insensitive label-start character class — a
+    // lowercase-first-letter label (`**requirements:**`) is as much a field
+    // boundary as a capitalized one.
+    if (/^\s*\*\*[A-Za-z][A-Za-z ]*:?(\*\*)?:?\s/.test(raw)) break;
     if (/^\s*#{1,4}\s/.test(raw)) break;
     if (/^\s*\|/.test(raw)) break;
+    // #4837: a fenced code block opener stops the scan — folding fence
+    // content is never safe, and stopping early is conservative.
+    if (/^\s*(?:`{3,}|~{3,})/.test(raw)) break;
     contLines.push(raw.trim());
   }
   return [firstLine, ...contLines].join(' ').trim() || null;
