@@ -7,6 +7,7 @@ const path = require('node:path');
 const {
   findNameValidityDrift,
   findBranchSlugFallbackDrift,
+  findPhaseHeadingScanLiteralDrift,
   findShellPhaseArithDrift,
   findSingleSegmentPhaseRegexDrift,
   scanMarkdownSingleSegmentPhaseRegex,
@@ -76,6 +77,30 @@ test('findBranchSlugFallbackDrift does NOT flag a sanctioned site', () => {
     "  .replace('{slug}', (phaseInfo['phase_slug'] as string) || 'phase');",
   ].join('\n');
   assert.deepEqual(findBranchSlugFallbackDrift(text), []);
+});
+
+test('findPhaseHeadingScanLiteralDrift flags the hand-rolled #{2,4}\\s*Phase\\s+ heading-scan literal', () => {
+  const text =
+    '    const phasePattern = new RegExp(`#{2,4}\\\\s*Phase\\\\s+(${PHASE_NUMBER_TOKEN_SOURCE})`, \'gi\');';
+  const found = findPhaseHeadingScanLiteralDrift(text);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].line, 1);
+});
+
+test('findPhaseHeadingScanLiteralDrift does NOT flag a site already built from the owner', () => {
+  const text = [
+    'const { regex } = buildPhaseHeadingScanRegex(PHASE_HEADING_BASELINE.ANY_BRACKET, convention);',
+    'const other = new RegExp(`#{2,4}\\\\s*${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.ANY_BRACKET, convention)}`, \'gi\');',
+  ].join('\n');
+  assert.deepEqual(findPhaseHeadingScanLiteralDrift(text), []);
+});
+
+test('findPhaseHeadingScanLiteralDrift does NOT flag a sanctioned site', () => {
+  const text = [
+    '// phase-id-owner: deliberate local copy, tracked in #4984',
+    '    const phasePattern = new RegExp(`#{2,4}\\\\s*Phase\\\\s+(\\\\d+)`, \'gi\');',
+  ].join('\n');
+  assert.deepEqual(findPhaseHeadingScanLiteralDrift(text), []);
 });
 
 test('findShellPhaseArithDrift flags $((10#...)) base-10-forced arithmetic', () => {

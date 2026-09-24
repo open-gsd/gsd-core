@@ -19,6 +19,10 @@
  *   state signal-resume                Remove WAITING.json signal
  *   resolve-model <agent-type>         Get model for agent based on profile
  *   find-phase <phase>                 Find phase directory by number
+ *   select-revert-commits (--phase P | --plan NN-MM) --range R
+ *                                       List commits within R whose DECLARED conventional-commit
+ *                                       scope identifies P or NN-MM (exact match; phase mode also
+ *                                       accepts a NN-MM-scoped commit). Used by /gsd:undo (#4661).
  *   commit <message> [--files f1 f2] [--no-verify]   Commit planning docs
  *   commit-docs-guard enable|disable   Opt-in .git/hooks/pre-commit guard
  *                                       that refuses a commit staging
@@ -947,6 +951,219 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             output: output,
           });
           if (!handled) phase.cmdFindPhase(cwd, args[1], raw);
+  }
+
+  /**
+   * #4906 Phase 5 (issue #4661, absorbed from the original bug report):
+   * `gsd-tools.cjs query select-revert-commits --phase <id>|--plan <id>
+   * --range <git-revision-range>`.
+   *
+   * Replaces the two `git log --oneline | grep -E ...` pipelines
+   * `gsd-core/workflows/undo.md` used to run for `/gsd:undo --phase`/`--plan`
+   * selection. `--range` is the ALREADY-COMPUTED `$UNDO_RANGE` the workflow's
+   * own phase-directory anchor logic derives — this subcommand changes only
+   * the subject-matching step, never the ranging behavior.
+   *
+   * Validates `--phase`/`--range <id>` via `validatePhaseNumber`
+   * (src/security.cts) BEFORE running any git command — an invalid id is
+   * refused here, never reaching git or the selection regex (closes bug
+   * class 1 of #4661 by construction). A `--plan NN-MM` id is two
+   * phase-number-shaped segments joined by the FIRST `-`: `validatePhaseNumber`'s
+   * bracket-style alternative requires a leading letter, so a plain numeric
+   * plan id never matches it whole — each segment is validated on its own
+   * instead of forking a second grammar.
+   *
+   * Selection itself is delegated to `selectCommitsByDeclaredScope`
+   * (src/undo-commit-selection.cts), which parses each commit subject
+   * through the SAME anchored conventional-commit header regex the
+   * changelog/PR-title gate uses and compares the declared scope to the
+   * validated id by exact string equality — no regex is ever built from
+   * user input.
+   *
+   * Output: JSON `{selected, classified}` by default; with `--raw`, one
+   * `<full-sha> <subject>` line per selected commit (preserves the visual
+   * shape `git log --oneline` produced, so the workflow's downstream
+   * confirm-screen display, >50 truncation count, and `git revert
+   * --no-commit` loop over COMMITS are unchanged).
+   */
+  function routeSelectRevertCommits({ args, cwd, raw, error, invokingCwd }) {
+    // #4906/#4465 review fix: `cwd` here has already been remapped to the
+    // MAIN worktree root by `resolveMainWorktreeCwd` (main(), applied
+    // BLANKET to every command before dispatch — correct for a router that
+    // reads `.planning/`, e.g. `find-phase`, but wrong for this one). This
+    // command reads NO `.planning/` content — it only runs `git log` — and
+    // that git operation must see the CALLER's own worktree: its HEAD, its
+    // branch, its reachable commit range. Using the remapped `cwd` instead
+    // silently resolves `--range` against a DIFFERENT repository checkout
+    // (reproduced: from a linked worktree with no local `.planning/`, a
+    // `--range HEAD~3..HEAD` that succeeds when run directly in that
+    // worktree fails with "ambiguous argument" through this command,
+    // because it silently ran against main's shorter HEAD instead —
+    // tests/undo-commit-selection-4465.test.cjs, "linked worktree: the main
+    // worktree's planning is the same repository, and is not refused").
+    // `invokingCwd` (threaded from main() through dispatchHostCommand) is
+    // the pre-remap value; falling back to `cwd` keeps direct callers that
+    // omit it (e.g. `dispatchHostCommand` invoked without the new field)
+    // working exactly as before rather than crashing on `undefined`.
+    const gitCwd = invokingCwd || cwd;
+    const { validatePhaseNumber } = require('./lib/security.cjs');
+    const { normalizePhaseName } = require('./lib/phase-id.cjs');
+    const { selectCommitsByDeclaredScope } = require('./lib/undo-commit-selection.cjs');
+    const { execGit } = require('./lib/shell-command-projection.cjs');
+
+    // #4906 Phase 5 review fix: the RETIRED phase-mode grep's `0*` prefix
+    // (`\(0*${TARGET_PHASE}(-[0-9]+)?\):`) tolerated an UNPADDED user-supplied
+    // phase number against a zero-padded commit scope — `--phase 3` matched
+    // `feat(03-01): ...` because `0*3` matches the literal text `03`.
+    // `selectCommitsByDeclaredScope` compares by exact string equality, and
+    // `gsd-core/workflows/undo.md`'s parse_arguments step passes `TARGET_PHASE`
+    // through with NO normalization, so without this, `--phase 3` would
+    // silently select nothing against real (zero-padded) commit scopes — a
+    // behavior regression, not just a documented known-limit. Zero-pad via
+    // `normalizePhaseName` (src/phase-id.cts), the canonical owner of this
+    // exact operation (confirmed: `normalizePhaseName('3') === '03'`).
+    //
+    // GUARDED to digit-first ids only: `normalizePhaseName` also runs
+    // `stripProjectCodePrefix`, which strips a leading `LETTERS-`-shaped
+    // prefix UNCONDITIONALLY — `normalizePhaseName('PROJ-42') === '42'`,
+    // discarding the "PROJ-" entirely (confirmed by direct call). That is
+    // exactly the shape `validatePhaseNumber`'s bracket-style alternative
+    // legitimately accepts as a phase id in ITS OWN right (`PROJ-42`,
+    // `AUTH-101` — see tests/security.test.cjs). Running a letter-first id
+    // through it would silently widen the match (a wildcard-style
+    // over-match reintroducing bug classes 1/2). The old grep's `0*` was
+    // never meaningful for a letter-first target anyway — `0*` before a
+    // non-'0' character matches zero repetitions, a no-op — so a
+    // letter-first id needs neither padding nor this normalization.
+    // `PROJECT_CODE_PREFIX_STRIP_RE_I` (`src/phase-id.cts:33`) itself
+    // requires `^[A-Z]`, so it can never fire on a digit-first id — the
+    // guard below is therefore exactly the safe/unsafe boundary.
+    const normalizePaddedPhase = (id) => (/^\d/.test(id) ? normalizePhaseName(id) : id);
+
+    const parsed = parseNamedArgsOrExit(
+      args,
+      { valueFlags: ['phase', 'plan', 'range'], positionals: 1 },
+      error,
+    );
+    const rawPhase = parsed.phase;
+    const rawPlan = parsed.plan;
+    const range = parsed.range;
+
+    if ((rawPhase && rawPlan) || (!rawPhase && !rawPlan)) {
+      error('select-revert-commits requires exactly one of --phase <id> or --plan <id>', ERROR_REASON.USAGE);
+      return;
+    }
+    if (!range) {
+      error('select-revert-commits requires --range <git-revision-range>', ERROR_REASON.USAGE);
+      return;
+    }
+    // Belt-and-suspenders alongside the --end-of-options guard below (mirrors
+    // src/git-base-branch.cts's isSafeRevisionRef posture for the same class
+    // of argument): refuse an option-shaped range before it ever reaches git.
+    if (typeof range !== 'string' || range.startsWith('-')) {
+      error(`Invalid --range: ${JSON.stringify(range)}`, ERROR_REASON.USAGE);
+      return;
+    }
+
+    let mode;
+    let normalizedId;
+    if (rawPhase) {
+      mode = 'phase';
+      const check = validatePhaseNumber(rawPhase);
+      if (!check.valid) {
+        error(`Invalid --phase: ${check.error}`, ERROR_REASON.USAGE);
+        return;
+      }
+      normalizedId = normalizePaddedPhase(check.normalized);
+    } else {
+      mode = 'plan';
+      // Split on the FIRST `-` only, giving exactly two segments (phase,
+      // plan). This is deliberately NOT a general N-segment composite-id
+      // parser: checked against docs/reference/plan-md.md (frontmatter
+      // `plan` field + `.planning/phases/<NN>-<slug>/<NN>-<PP>-PLAN.md`
+      // layout) and every `--plan` usage in gsd-core/workflows/*.md, the only
+      // plan-id shape this repo documents or emits is the plain two-segment
+      // `NN-MM`. A THREE-segment purely-numeric shape (`NN-MM-PP`) does exist
+      // elsewhere in the codebase, but as a MILESTONE-phase-plan composite
+      // under the (already-deprecated-forward) `milestone-prefixed`
+      // `phase_id_convention` — a different id space than phase-plan, which
+      // `docs/adr/612-bracket-phase-id-convention.md:15` itself documents as
+      // having "no deterministic parse" once a token carries both a
+      // milestone-joined phase AND a plan (the exact ambiguity that
+      // motivated bracket's own `[PROJECT.MM] PP-PP` grammar). No function in
+      // `src/phase-id.cts` validates the phase-PLAN grammar end-to-end
+      // either: `parsePhaseId` explicitly REJECTS a bare `NN-MM` token by
+      // design (its own doc comment lists `02-04` as a rejected "ambiguous /
+      // bare token"), and `getPhaseDirFromPhaseId`'s N-segment dash grammar
+      // is a MILESTONE-phase(-subphase) directory-name constructor — a
+      // structurally similar but semantically different id space (first
+      // segment = milestone, not phase) whose return value doesn't map back
+      // to (phase, plan) anyway. Given no suitable whole-string validator
+      // exists and no real usage needs more than two segments, a `NN-MM-PP`
+      // id is refused today (see
+      // tests/undo-commit-selection.test.cjs "refuses a 3-segment plan id"),
+      // not silently mis-parsed — extending this to N segments is a product
+      // decision for whichever future issue actually needs it. The same
+      // "only the plain two-segment shape is supported" standard applies to
+      // a bracket-style PHASE segment here too: `--plan PROJ-42-01` splits
+      // on the first `-` into phase segment `PROJ` (no internal dash) and
+      // plan segment `42-01`, and `validatePhaseNumber`'s bracket branch
+      // requires the internal dash on ITS side (`PROJ-42`, not bare `PROJ`),
+      // so the phase segment fails and the whole id is refused — bracket-style
+      // ids are supported for `--phase` only, never as a `--plan` segment (no
+      // real usage found; see tests/undo-commit-selection.test.cjs "bracket-
+      // style phase segment in --plan is refused").
+      const dashIdx = rawPlan.indexOf('-');
+      if (dashIdx === -1) {
+        error(`Invalid --plan: "${rawPlan}" (expected NN-MM)`, ERROR_REASON.USAGE);
+        return;
+      }
+      const phasePart = rawPlan.slice(0, dashIdx);
+      const planPart = rawPlan.slice(dashIdx + 1);
+      const phaseCheck = validatePhaseNumber(phasePart);
+      if (!phaseCheck.valid) {
+        error(`Invalid --plan: "${rawPlan}" (phase segment: ${phaseCheck.error})`, ERROR_REASON.USAGE);
+        return;
+      }
+      const planCheck = validatePhaseNumber(planPart);
+      if (!planCheck.valid) {
+        error(`Invalid --plan: "${rawPlan}" (plan segment: ${planCheck.error})`, ERROR_REASON.USAGE);
+        return;
+      }
+      normalizedId = `${normalizePaddedPhase(phaseCheck.normalized)}-${normalizePaddedPhase(planCheck.normalized)}`;
+    }
+
+    const GIT_LOG_TIMEOUT_MS = 15000;
+    const gitResult = execGit(
+      ['log', '--format=%H%x00%s', '--no-merges', '--no-decorate', '--end-of-options', range],
+      { cwd: gitCwd, timeout: GIT_LOG_TIMEOUT_MS },
+    );
+    if (gitResult.exitCode !== 0) {
+      // `execGit` (src/shell-command-projection.cts) exposes `timedOut` on
+      // its SpawnResultOutput — thread it through so a hung `git log` reads
+      // distinctly from an ordinary non-zero exit with no stderr, which
+      // otherwise both surfaced as the same unhelpful "(no stderr)" message.
+      const gitFailureDetail = gitResult.timedOut
+        ? `git log timed out after ${GIT_LOG_TIMEOUT_MS}ms`
+        : `git log failed: ${gitResult.stderr || '(no stderr)'}`;
+      error(
+        `select-revert-commits: ${gitFailureDetail} for range "${range}"`,
+        ERROR_REASON.USAGE,
+      );
+      return;
+    }
+
+    const commits = (gitResult.stdout ? gitResult.stdout.split('\n') : [])
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const nulIdx = line.indexOf('\0');
+        return nulIdx === -1 ? null : { sha: line.slice(0, nulIdx), subject: line.slice(nulIdx + 1) };
+      })
+      .filter((c) => c !== null);
+
+    const result = selectCommitsByDeclaredScope(commits, normalizedId, mode);
+    const rawLines = result.selected.map((c) => `${c.sha} ${c.subject}`).join('\n');
+    output(result, raw, rawLines);
   }
 
   function routeCommit({ args, cwd, raw, error }) {
@@ -4438,6 +4655,8 @@ const HOST_COMMAND_ROUTERS = {
     'smart-entry': routeSmartEntry,
     'check': routeCheck,
     'find-phase': routeFindPhase,
+    // #4906 Phase 5 (#4661): commit-scope selection for /gsd:undo --phase/--plan.
+    'select-revert-commits': routeSelectRevertCommits,
     'commit': routeCommit,
     'check-commit': routeCheckCommit,
     'commit-docs-guard': routeCommitDocsGuard,
@@ -4515,7 +4734,7 @@ const HOST_COMMAND_ROUTERS = {
 // through. Prototype-pollution-safe: own-property lookup rejects
 // `__proto__`/`constructor`/`prototype` command keys (same guard as
 // dispatchCapabilityCommand).
-async function dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext }) {
+async function dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd }) {
   if (
     command === '__proto__' ||
     command === 'constructor' ||
@@ -4530,7 +4749,13 @@ async function dispatchHostCommand({ command, args, cwd, raw, error, defaultValu
   if (typeof router !== 'function') return false;
   // `await` so async host routers (e.g. capability's install/upgrade ops)
   // complete before runCommand returns; sync routers pass through unchanged.
-  await router({ args, cwd, raw, error, defaultValue, workstreamContext });
+  // `invokingCwd` (#4906/#4465): the pre-worktree-remap cwd, for the rare
+  // router (currently only `select-revert-commits`) whose own git operation
+  // must see the INVOKING worktree's HEAD, never the main-worktree remap
+  // every other router legitimately wants via `cwd`. Optional — callers/tests
+  // that omit it (every existing one) leave routers that don't read it
+  // byte-unaffected.
+  await router({ args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd });
   return true; // consumed — don't emit "Unknown command"
 }
 
@@ -4767,7 +4992,7 @@ const TOP_LEVEL_USAGE = 'Usage: gsd-tools <command> [args] [--raw] [--pick <fiel
   'capability, classify-confidence, git, learnings, list-seeds, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, planning, profile-questionnaire, ' +
   'profile-sample, progress, project-instruction-file, prompt-budget, quick-batch, quick-tasks-append, quick-tasks-migrate, requirements, research-plan, research-store, resolve-granularity, resolve-model, restore-custom-files, roadmap, runtime-identity, scaffold, smart-entry, state, ' +
   'config-set-model-profile, dispatch-capacity, dispatch-isolation, dispatch-should-flatten, inspect-dispatch-isolation, record-dispatch-isolation, estimate-calibrate, estimate-calibration, estimate-check, resolve-agent, resolve-dispatch-type, ' +
-  'resolve-execution, review-lane, skill-manifest, skills-root, stamp-codebase-map, state-snapshot, stats, summary-extract, teams-status, todo, uat, update-context, verification, websearch, windows, ' +
+  'resolve-execution, review-lane, select-revert-commits, skill-manifest, skills-root, stamp-codebase-map, state-snapshot, stats, summary-extract, teams-status, todo, uat, update-context, verification, websearch, windows, ' +
   'task, template, user-story, validate, verify, verify-path-exists, verify-summary, eval, workstream, worktree\n\n' +
   'Global flags:\n' +
   '  --raw              Emit raw output without post-processing\n' +
@@ -4993,6 +5218,17 @@ async function main() {
   // Resolve worktree root: in a linked worktree, .planning/ lives in the main worktree.
   // However, in monorepo worktrees where the subdirectory itself owns .planning/,
   // skip worktree resolution — the CWD is already the correct project root.
+  //
+  // #4906/#4465: this remap is a BLANKET rewrite applied to every command, before
+  // `command` is even known — most commands need it (they read `.planning/`, which
+  // in a linked worktree lives only in the main one). A command whose own git
+  // operation must run against the INVOKING worktree's OWN HEAD/branch (never the
+  // main worktree's) needs the PRE-remap value instead — preserved here so it can be
+  // threaded through dispatchHostCommand as `invokingCwd` (see routeSelectRevertCommits,
+  // the first consumer: its `git log` must see the caller's own reachable history, not
+  // main's, or a linked-worktree revert range silently resolves against the wrong repo
+  // state — reproduced in tests/undo-commit-selection-4465.test.cjs's linked-worktree case).
+  const preWorktreeRemapCwd = cwd;
   cwd = resolveMainWorktreeCwd(cwd);
 
   // Optional workstream override for parallel milestone work.
@@ -5118,7 +5354,7 @@ async function main() {
   // false "output was not JSON" (negative space N8).
   if (pickField) {
     const captured = await captureStdoutSyncWrites(async () => {
-      await runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext);
+      await runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext, preWorktreeRemapCwd);
     });
     const resolved = resolveAtFileOutput(captured);
     let obj;
@@ -5150,7 +5386,7 @@ async function main() {
   // every workflow to have a bash-specific `if [[ "$INIT" == @file:* ]]` check
   // that breaks on PowerShell and other non-bash shells.
   const captured = await captureStdoutSyncWrites(async () => {
-    await runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext);
+    await runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext, preWorktreeRemapCwd);
   });
   fs.writeSync(1, resolveAtFileOutput(captured));
 }
@@ -5266,7 +5502,7 @@ function extractField(obj, fieldPath) {
   return { found: true, value: current };
 }
 
-async function runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext = null) {
+async function runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext = null, invokingCwd) {
   switch (command) {
 
     default: {
@@ -5287,7 +5523,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // commands (state, …) routed via their `route*Command` router instead of
       // a hardcoded `case` arm. Tried after capability/overlay dispatch and
       // before the unknown-command error.
-      if (await dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext })) break;
+      if (await dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd })) break;
 
       // #3243: if the caller passed a dotted form (e.g. "foo.bar"), the shim
       // above split it so `command` here is the head ("foo"). Use

@@ -68,6 +68,7 @@ const {
   parseWorkflow,
   readWorkflow,
   extractPickLoop,
+  extractBashBlockContaining,
   forbiddenRegex,
   forbiddenPaths,
   structuralPaths,
@@ -377,8 +378,19 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         'CURRENT_BRANCH=feature',
         'PR_BRANCH=prbranch',
         'TARGET=main',
+        // FORBIDDEN_RE/STRUCTURAL_RE are referenced by the #4606 third-bucket
+        // conflict-resolution block inside the extracted loop; this layer
+        // only exercises the filter recipe (rm/checkout/conflict-halt/empty-
+        // skip), so an always-false pattern is enough — no fixture here
+        // constructs a third-bucket conflict.
+        'FORBIDDEN_RE="^\\.planning/NEVER_MATCH_4606_TEST_SENTINEL$"',
+        'STRUCTURAL_RE="^\\.planning/NEVER_MATCH_4606_TEST_SENTINEL$"',
         'INCLUDED_COMMITS=$(git rev-list --reverse main..feature)',
-        `FILTER_PATHS="${filterPaths.join(' ')}"`,
+        // Newline-joined (#4605) — the real loop reads $FILTER_PATHS one path
+        // per LINE via `while IFS= read -r`, not space-split, so a fixture
+        // that space-joined this (the pre-#4605 test-side form) would feed
+        // the whole list as a single bogus path.
+        `FILTER_PATHS="${filterPaths.join('\n')}"`,
         extractPickLoop(readWorkflowText()),
       ].join('\n');
     }
@@ -892,6 +904,153 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
           + 'assignment (PLANNING_COUNT=$(...)) so the classification arms can distinguish '
           + '"only structural" planning commits from "structural plus transient/other" ones',
       );
+    });
+  });
+
+  // ── L7: #4605/#4606 real bash execution over the full extracted recipe ──
+  describe('L7: #4605 MILESTONE_PHASES_RE discovery + #4606 third-bucket conflict resolution (real git + real bash)', () => {
+    const activeDirs = [];
+    function trackDir(dir) {
+      activeDirs.push(dir);
+      return dir;
+    }
+    function teardown() {
+      while (activeDirs.length) cleanup(activeDirs.pop());
+    }
+
+    function readWorkflowText() {
+      return fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+    }
+
+    // The canonical declarations block: TRANSIENT_DIRS/STRUCTURAL_RE/
+    // MILESTONE_PHASES_RE, extracted verbatim — not hand-copied — so this
+    // layer runs the ACTUAL shipped values, not a mirror of them.
+    function declarationsBlock() {
+      return extractBashBlockContaining(readWorkflowText(), 'MILESTONE_PHASES_RE=');
+    }
+
+    // The mode-derivation block (FILTER_PATHS/FORBIDDEN_RE/MILESTONE_PHASE_DIRS),
+    // extracted verbatim.
+    function derivationBlock() {
+      return extractBashBlockContaining(readWorkflowText(), 'MILESTONE_PHASE_DIRS=');
+    }
+
+    test('52: #4605 MILESTONE_PHASE_DIRS discovers a nested <slug>-phases/ dir, including one whose slug contains a space, as its own FILTER_PATHS line', () => {
+      const dir = trackDir(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-prbranch-milestone-')));
+      fs.mkdirSync(path.join(dir, '.planning', 'milestones', 'v1.0-phases', '03-live'), { recursive: true });
+      writeFile(dir, '.planning/milestones/v1.0-phases/03-live/PLAN.md', '# plan\n');
+      fs.mkdirSync(path.join(dir, '.planning', 'milestones', 'My Milestone-phases'), { recursive: true });
+      writeFile(dir, '.planning/milestones/My Milestone-phases/PLAN.md', '# plan\n');
+      // A non-`-phases` milestone directory must NOT be swept up by MILESTONE_PHASE_DIRS.
+      fs.mkdirSync(path.join(dir, '.planning', 'milestones', 'v1.0-notes'), { recursive: true });
+      try {
+        const script = [
+          'set -u',
+          'PR_STRICT=false',
+          declarationsBlock(),
+          derivationBlock(),
+          'printf \'%s\' "$FILTER_PATHS"',
+        ].join('\n');
+        const stdout = execFileSync('sh', ['-c', script], { cwd: dir, encoding: 'utf8', timeout: CHERRY_PICK_RECIPE_TIMEOUT_MS });
+        const lines = stdout.split('\n').filter(Boolean);
+        assert.ok(
+          lines.includes('.planning/milestones/v1.0-phases/'),
+          `expected .planning/milestones/v1.0-phases/ in FILTER_PATHS lines: ${JSON.stringify(lines)}`,
+        );
+        assert.ok(
+          lines.includes('.planning/milestones/My Milestone-phases/'),
+          `expected the space-slug milestone-phases dir in FILTER_PATHS lines: ${JSON.stringify(lines)}`,
+        );
+        assert.ok(
+          !lines.some((l) => l.includes('v1.0-notes')),
+          `a non-"-phases" milestones/ subdirectory must not appear in FILTER_PATHS lines: ${JSON.stringify(lines)}`,
+        );
+      } finally {
+        teardown();
+      }
+    });
+
+    test('53: #4605 a nested <slug>-phases/ file is NOT structural (STRUCTURAL_RE), so it falls to MILESTONE_PHASES_RE/FILTER_PATHS instead', () => {
+      const dir = trackDir(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-prbranch-milestone-structural-')));
+      try {
+        const script = [
+          'set -u',
+          declarationsBlock(),
+          'printf \'structural=\' ; echo ".planning/milestones/v1.0-phases/03-live/PLAN.md" | grep -Ec "$STRUCTURAL_RE" || true',
+          'printf \'phases=\'     ; echo ".planning/milestones/v1.0-phases/03-live/PLAN.md" | grep -Ec "$MILESTONE_PHASES_RE" || true',
+          'printf \'topfile=\'    ; echo ".planning/milestones/v1.0-ROADMAP.md" | grep -Ec "$STRUCTURAL_RE" || true',
+        ].join('\n');
+        const stdout = execFileSync('sh', ['-c', script], { cwd: dir, encoding: 'utf8', timeout: CHERRY_PICK_RECIPE_TIMEOUT_MS });
+        assert.ok(stdout.includes('structural=0'), `expected structural=0, got: ${stdout}`);
+        assert.ok(stdout.includes('phases=1'), `expected phases=1, got: ${stdout}`);
+        assert.ok(stdout.includes('topfile=1'), `expected topfile=1 (a direct milestones/ file stays structural), got: ${stdout}`);
+      } finally {
+        teardown();
+      }
+    });
+
+    // #4606: a commit touching ONLY a third-bucket path (.planning/config.json
+    // — neither transient nor structural) is excluded from the PR branch, so
+    // when a LATER included commit reuses that same path, cherry-pick's 3-way
+    // merge sees a base state (the excluded commit's edit) the PR branch never
+    // received, and reports a genuine content conflict on a path this command
+    // was never asked to filter. Pins the fix: the conflict is resolved via
+    // `git checkout --theirs`, not the unconditional halt.
+    test('54: #4606 a third-bucket conflict from an excluded intervening commit resolves via checkout --theirs, not a halt', () => {
+      const dir = trackDir(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-prbranch-4606-')));
+      initRepo(dir);
+      writeFile(dir, 'code.txt', 'line1\n');
+      writeFile(dir, '.planning/config.json', '{"v":1}\n');
+      commitAll(dir, 'chore: base');
+      git(['branch', 'feature'], dir);
+
+      git(['checkout', '-q', 'feature'], dir);
+      // c1: EXCLUDED — touches only the third-bucket path.
+      writeFile(dir, '.planning/config.json', '{"v":2}\n');
+      commitAll(dir, 'chore: c1 planning-only (excluded)');
+      const c1 = git(['rev-parse', 'HEAD'], dir).trim();
+      // c2: INCLUDED — mixed code + the same third-bucket path.
+      writeFile(dir, 'code.txt', 'line1\nline2\n');
+      writeFile(dir, '.planning/config.json', '{"v":3}\n');
+      commitAll(dir, 'feat: c2 (includes third-bucket edit)');
+      const c2 = git(['rev-parse', 'HEAD'], dir).trim();
+
+      git(['checkout', '-q', 'main'], dir);
+      git(['checkout', '-q', '-b', 'prbranch', 'main'], dir);
+
+      try {
+        const script = [
+          'set -u',
+          'CURRENT_BRANCH=feature',
+          'PR_BRANCH=prbranch',
+          'TARGET=main',
+          'PR_STRICT=false',
+          declarationsBlock(),
+          derivationBlock(),
+          `INCLUDED_COMMITS="${c2}"`,
+          extractPickLoop(readWorkflowText()),
+        ].join('\n');
+        execFileSync('sh', ['-c', script], { cwd: dir, encoding: 'utf8', timeout: CHERRY_PICK_RECIPE_TIMEOUT_MS });
+
+        const count = parseInt(git(['rev-list', '--count', 'main..prbranch'], dir).trim(), 10);
+        assert.strictEqual(count, 1, 'exactly c2 must land on prbranch (c1 was never even attempted)');
+        const prbranchLog = git(['rev-list', 'prbranch'], dir);
+        assert.ok(!prbranchLog.includes(c1), 'the excluded c1 must not be an ancestor of prbranch');
+        const configContent = git(['show', 'prbranch:.planning/config.json'], dir);
+        assert.strictEqual(
+          configContent.trim(), '{"v":3}',
+          `expected c2's own (theirs) content to win the third-bucket conflict, got: ${configContent}`,
+        );
+        const codeContent = fs.readFileSync(path.join(dir, 'code.txt'), 'utf-8');
+        assert.ok(codeContent.includes('line2'), `expected c2's code change to land, got: ${codeContent}`);
+      } catch (err) {
+        assert.fail(
+          `expected the #4606 third-bucket conflict to resolve via checkout --theirs, not halt: `
+            + `status=${err.status} stdout=${err.stdout} stderr=${err.stderr}`,
+        );
+      } finally {
+        teardown();
+      }
     });
   });
 });

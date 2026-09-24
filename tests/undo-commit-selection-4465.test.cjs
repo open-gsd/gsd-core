@@ -161,17 +161,19 @@ describe('#4465: undo commit selection is bounded', () => {
     );
   });
 
-  test('K: selection pipelines tolerate an empty match', () => {
-    // grep exits 1 on no match. The removed `| head -50` used to mask that rc, so the
-    // pipelines must not now abort before the workflow's own Empty check runs.
+  test('K: selection pipelines tolerate an empty match (assertion now targets the select-revert-commits CLI-subcommand shape, not the retired grep)', () => {
+    // grep used to exit 1 on no match; `select-revert-commits` exits non-zero on ANY refusal
+    // (invalid id, empty --range) or simply selecting nothing. Either way the workflow's own
+    // Empty check, not a crashed substitution, must be what reports "nothing selected" — so
+    // the command substitution must still tolerate that non-zero exit.
     const selectionBlocks = extractBashBlocks(content).filter(
-      (b) => /git log --oneline --no-merges "\$\{UNDO_RANGE\}"/.test(b),
+      (b) => /COMMITS=\$\(gsd_run query select-revert-commits/.test(b),
     );
     assert.equal(selectionBlocks.length, 2, 'expected one bounded selection pipeline per mode');
     for (const block of selectionBlocks) {
       assert.ok(
-        /\|\| true/.test(block),
-        `every selection pipeline must tolerate grep's no-match exit (#4465). Block:\n${block}`,
+        /--raw \|\| true\)/.test(block),
+        `every selection pipeline must tolerate select-revert-commits' non-zero exit (#4465). Block:\n${block}`,
       );
     }
   });
@@ -197,13 +199,21 @@ describe('#4465: undo commit selection is bounded', () => {
     );
   });
 
-  test('F: selection greps run against the bounded range, not the whole repo', () => {
-    const selectionBlocks = extractBashBlocks(content).filter((b) => /grep -E/.test(b));
-    assert.ok(selectionBlocks.length >= 2, 'expected a selection grep for each of --phase and --plan');
+  test('F: selection is bounded to the range, not the whole repo (assertion now targets the select-revert-commits CLI-subcommand shape, not the retired grep)', () => {
+    // #4661 moved subject-matching out of a raw `grep -E` pipeline into `select-revert-commits`,
+    // so the #4465 bounding guarantee now lives in the `--range` argument threaded to that
+    // subcommand rather than in a grep pattern. Both modes must pass the SAME bounded range
+    // (`${UNDO_RANGE}`) #4465 introduced, and neither may widen with `--all`.
+    const selectionBlocks = extractBashBlocks(content).filter((b) => /select-revert-commits/.test(b));
+    assert.ok(selectionBlocks.length >= 2, 'expected a select-revert-commits call for each of --phase and --plan');
     for (const block of selectionBlocks) {
       assert.ok(
-        /\$\{UNDO_RANGE\}/.test(block),
-        `every commit-selection grep must run over \${UNDO_RANGE} (#4465). Block:\n${block}`,
+        /select-revert-commits\s+(?:--phase|--plan)\s+"\$\{TARGET_(?:PHASE|PLAN)\}"\s+--range\s+"\$\{UNDO_RANGE\}"/.test(block),
+        `every select-revert-commits call must be bounded by \${UNDO_RANGE} (#4465). Block:\n${block}`,
+      );
+      assert.ok(
+        !/--all\b/.test(block),
+        `select-revert-commits must never widen with --all (#4465). Block:\n${block}`,
       );
     }
   });
@@ -365,12 +375,12 @@ describe('#4465: undo commit selection — executed against a git fixture', { sk
   const phaseAnchor = fenceWhere(bodies, 'phase anchor',
     (b) => b.includes('PHASE_START=$(') && !b.includes('PLAN_PHASE'));
   const phaseSelect = fenceWhere(bodies, 'phase select',
-    (b) => b.includes('grep -E "\\(0*${TARGET_PHASE}'));
+    (b) => b.includes('select-revert-commits --phase "${TARGET_PHASE}"'));
   // gather_commits, MODE=plan: resolve+anchor → select
   const planAnchor = fenceWhere(bodies, 'plan resolve+anchor',
     (b) => b.includes('PLAN_PHASE="${TARGET_PLAN%%-*}"'));
   const planSelect = fenceWhere(bodies, 'plan select',
-    (b) => b.includes('grep -E "\\(${TARGET_PLAN}\\):"'));
+    (b) => b.includes('select-revert-commits --plan "${TARGET_PLAN}"'));
   // dependency_check: planning-root resolution
   const planningRoot = fenceWhere(bodies, 'planning root',
     (b) => b.includes('PLANNING_DIR=$(gsd_run query planning inspect'));
@@ -386,7 +396,13 @@ describe('#4465: undo commit selection — executed against a git fixture', { sk
   // `runIn` is the directory the shell starts in, when it is not the fixture root: the user
   // can invoke /gsd:undo from anywhere inside the project.
   function runFences(cwd, seed, fences, tail = '', extraEnv = {}, runIn = cwd) {
-    const script = [seed, GSD_RUN, ...fences, tail].join('\n');
+    // `select-revert-commits` captures its result into $COMMITS (a bash variable) instead of
+    // printing directly, the way the retired `git log | grep` pipeline did. Surface it at the
+    // same position in the stream the old pipeline's own stdout occupied — right after the
+    // fences replay, before any custom tail — so every fixture assertion below (written
+    // against the old grep's direct-stdout shape) keeps working unchanged against the new
+    // CLI-subcommand shape. `${COMMITS-}` is unset-safe for fence sets that never assign it.
+    const script = [seed, GSD_RUN, ...fences, 'printf \'%s\\n\' "${COMMITS-}"', tail].join('\n');
     const env = { ...process.env, GSD_TOOLS_BIN, HOME: cwd };
     // A developer's active workstream must not leak into the fixture; a test that wants
     // one names it through `extraEnv`, applied after the scrub.
@@ -701,6 +717,10 @@ describe('#4465: undo commit selection — executed against a git fixture', { sk
     // Activate by env, the same route find-phase honours for an active workstream.
     const script = [
       'TARGET_PHASE=03', GSD_RUN, phaseResolve, phaseArchivedGuard, phaseAnchor, phaseSelect,
+      // select-revert-commits captures into $COMMITS rather than printing directly (see
+      // runFences above) — this test builds its own script rather than going through
+      // runFences (it needs a custom GSD_WORKSTREAM env), so it must surface it the same way.
+      'printf \'%s\\n\' "${COMMITS-}"',
       'echo "ARCHIVED=[${PHASE_DIR_ARCHIVED}]"',
     ].join('\n');
     const env = { ...process.env, GSD_TOOLS_BIN, HOME: cwd, GSD_WORKSTREAM: 'milestones' };
@@ -802,7 +822,12 @@ describe('#4465: undo commit selection — executed against a git fixture', { sk
     // would run forward from it -- the exact contamination the refusal exists for.
     const cwd = workstreamArchiveFixture({ recreate: false });
     t.after(() => cleanup(cwd));
-    const stub = 'gsd_run() { echo ".planning/milestones/ws-feat-2026-09-01/phases/03-auth"; }';
+    // Scoped to `query find-phase` only: selection now ALSO calls `gsd_run` (the
+    // select-revert-commits subcommand), where the retired grep pipeline never did, so an
+    // unconditional stub here would answer every gsd_run call with this literal path — including
+    // the selection step's own call — instead of only the resolver's.
+    const stub = 'gsd_run() { if [ "$1 $2" = "query find-phase" ]; then '
+      + 'echo ".planning/milestones/ws-feat-2026-09-01/phases/03-auth"; else node "$GSD_TOOLS_BIN" "$@"; fi; }';
     const report = 'printf "ARCHIVED=[%s]\\nPHASE_DIR=[%s]\\nUNDO_RANGE=[%s]\\n" "$PHASE_DIR_ARCHIVED" "$PHASE_DIR" "$UNDO_RANGE"';
     for (const [seed, fences] of [
       ['TARGET_PHASE=03', [stub, phaseResolve, phaseArchivedGuard, phaseAnchor, phaseSelect]],

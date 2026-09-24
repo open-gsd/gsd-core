@@ -225,10 +225,22 @@ Select within the window. **No `--all`:** only commits reachable from `HEAD` may
 reverted, because reverting a commit that is not in the current branch's history stages a
 change the branch never received.
 
+**Selection is a structural parse, not a substring grep (#4661).** The old
+`grep -E "\(0*${TARGET_PHASE}(-[0-9]+)?\):"` interpolated the id straight into a live ERE
+(`.`/`+` in the id became wildcard/quantifier metacharacters), was unanchored (a commit that
+only MENTIONED a scope was wrongly selected as a DECLARATION of it), and disagreed with
+plan mode's own grep on a breaking-change subject (`feat(03-01)!: ...`). `select-revert-commits`
+closes all three: it validates `${TARGET_PHASE}` (refusing before any git command runs on an
+invalid id), then parses each candidate commit's subject through the SAME anchored
+`type(scope)!:` conventional-commit header the changelog/PR-title gate uses and compares the
+DECLARED scope to `${TARGET_PHASE}` by exact string equality — plus a `${TARGET_PHASE}-` prefix,
+so a plan-scoped commit within this phase still selects, matching the old grep's `-NN` tolerance.
+It also zero-pads a plain unpadded `${TARGET_PHASE}` (e.g. `3` → `03`) before comparing, matching
+the old grep's `0*` tolerance for a digit-first id — never for a letter-first custom id
+(`PROJ-42`), where zero-padding would strip the meaningful prefix instead of matching it.
+
 ```bash
-# `|| true`: grep exits 1 on no match. The former `| head -50` masked that rc; the empty
-# case is handled by the Empty check step below, so the pipeline must not abort here.
-git log --oneline --no-merges "${UNDO_RANGE}" | grep -E "\(0*${TARGET_PHASE}(-[0-9]+)?\):" || true
+COMMITS=$(gsd_run query select-revert-commits --phase "${TARGET_PHASE}" --range "${UNDO_RANGE}" --raw || true)
 ```
 
 Use matching commits as COMMITS.
@@ -299,11 +311,20 @@ fi
 
 Apply the same fail-closed rule as MODE=phase when `PHASE_DIR` or `UNDO_RANGE` is empty —
 and the same three refusals, each with its own message, when `PHASE_DIR_ARCHIVED`,
-`PHASE_DIR_FOREIGN` or `PHASE_DIR_REUSED` is non-empty — then select within the window:
+`PHASE_DIR_FOREIGN` or `PHASE_DIR_REUSED` is non-empty — then select within the window.
+
+**Same structural parse as MODE=phase (#4661), in plan mode:** the DECLARED scope must
+equal `${TARGET_PLAN}` EXACTLY — no phase-prefix tolerance. This is what makes
+`feat(03-01)!: breaking change` select identically in both modes, closing the disagreement
+the old phase-mode/plan-mode grep pair had on a breaking-change subject. `${TARGET_PLAN}`
+is validated (as two phase-number-shaped segments joined by the first `-`) before any git
+command runs, and each segment is zero-padded the same way as `${TARGET_PHASE}` above (e.g.
+`3-1` → `03-01`) — the old plan-mode grep never had this tolerance, so this is a deliberate
+widening, not a preserved behavior; it makes an unpadded `--plan` argument match a
+canonically-padded commit scope instead of silently matching nothing.
 
 ```bash
-# `|| true` for the same reason as MODE=phase: an empty selection is not an error here.
-git log --oneline --no-merges "${UNDO_RANGE}" | grep -E "\(${TARGET_PLAN}\):" || true
+COMMITS=$(gsd_run query select-revert-commits --plan "${TARGET_PLAN}" --range "${UNDO_RANGE}" --raw || true)
 ```
 
 Use matching commits as COMMITS.

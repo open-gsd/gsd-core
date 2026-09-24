@@ -399,6 +399,7 @@ function getRoadmapModeForPhase(cwd: string, phaseNum: string): string | null {
   const milestoneContent = extractCurrentMilestone(rawContent, cwd);
   const fullContent = stripShippedMilestones(rawContent);
   const escapedPhase = phaseMarkdownRegexSource(phaseNum);
+  // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
   const phaseHeader = new RegExp(`#{2,4}\\s*Phase\\s+${escapedPhase}${OPTIONAL_PHASE_TAG_SOURCE}\\s*:`, 'i');
 
   for (const content of [milestoneContent, fullContent]) {
@@ -1316,6 +1317,7 @@ function collectSiblingWorktreePhaseNums(cwd: string, used: Set<number>): void {
   const siblingPlanningDir = (wt: string): string => planningDir(wt, ws);
   const dirNumPattern = /^(?:[A-Z][A-Z0-9]*-)?(\d+)-/;
   // Same header shape the allocators scan locally (#1729 tag tolerance).
+  // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
   const headerPattern = /#{2,4}\s*Phase\s+(\d+)[A-Z]?(?:\.\d+)*(?:\s*\([^)\n]{0,200}\))?:/gi;
   for (const line of porcelain.split('\n')) {
     if (!line.startsWith('worktree ')) continue;
@@ -1380,6 +1382,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
 
       // 1) Section headers: ### Phase N: / ## Phase N: / #### Phase N:
       // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+      // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
       const headerPattern = /#{2,4}\s*Phase\s+(\d+)[A-Z]?(?:\.\d+)*(?:\s*\([^)\n]{0,200}\))?:/gi;
       // 2) Roadmap bullet entries: - [ ] **Phase N: ...** (all checkbox variants)
       // The lookahead accepts colon, decimal-dot, whitespace, bold-close asterisk,
@@ -1503,6 +1506,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
       // bullets, on-disk dirs. The bullet scan was missing here — a bullet-only
       // `Phase N` row was invisible to batch allocation (#3849 secondary).
       // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+      // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
       const phasePattern = /#{2,4}\s*Phase\s+(\d+)[A-Z]?(?:\.\d+)*(?:\s*\([^)\n]{0,200}\))?:/gi;
       const bulletPattern = /^[ \t]*-[ \t]*\[[^\]]{0,200}\][ \t]*\*{0,2}Phase[ \t]+(\d+)(?=[:.\s*]|$)/gim;
       let m: RegExpExecArray | null;
@@ -1629,6 +1633,7 @@ function scanExistingDecimalPhaseNumbers(phasesDir: string, rawContent: string, 
   }
 
   const rmPhasePattern = new RegExp(
+    // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
     `#{2,4}\\s*Phase\\s+${phaseMarkdownRegexSource(base)}\\.(\\d+)${OPTIONAL_PHASE_TAG_SOURCE}\\s*:`,
     'gi',
   );
@@ -1674,6 +1679,7 @@ function cmdPhaseInsert(
 
     const normalizedAfter = normalizePhaseName(afterPhase);
     const afterPhaseEscaped = phaseMarkdownRegexSource(normalizedAfter);
+    // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
     const targetPattern = new RegExp(`#{2,4}\\s*Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:`, 'i');
     const headingMatch = targetPattern.test(content);
 
@@ -1681,6 +1687,7 @@ function cmdPhaseInsert(
       `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
       'i',
     );
+    // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
     const anyHeadingPattern = /#{2,4}\s*Phase\s+\d/i;
     const roadmapHasHeadingPhases = anyHeadingPattern.test(content);
     const isBulletStyle = !headingMatch && bulletPattern.test(content) && !roadmapHasHeadingPhases;
@@ -1781,6 +1788,7 @@ function cmdPhaseInsert(
         `\n### Phase ${_decimalPhase}: ${description} (INSERTED)\n\n**Goal:** [Urgent work - to be planned]\n**Requirements**: TBD\n**Depends on:** Phase ${afterPhase}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_decimalPhase} to break down)\n`;
 
       const headerPattern = new RegExp(
+        // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
         `(#{2,4}\\s*Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:[^\\n]*\\n)`,
         'i',
       );
@@ -2168,6 +2176,7 @@ function updateRoadmapAfterPhaseRemoval(
       // #1729: fold an optional pre-colon ( ) tag into the suffix capture so it
       // is re-emitted verbatim — a tagged later phase still gets renumbered.
       content = content.replace(
+        // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
         /(#{2,4}\s*Phase\s+)(\d+(?:\.\d+)?)((?:\s*\([^)\r\n]{0,200}\))?\s*:)/gi,
         (_match, prefix: string, num: string, suffix: string) =>
           `${prefix}${decrementRoadmapPhaseToken(num, removedInt)}${suffix}`,
@@ -2577,6 +2586,7 @@ function writePlanningFileSet(writes: WriteSpec[]): number {
 function phaseDisplayNameFromRoadmap(roadmapContent: string | null, phaseNum: string | null): string | null {
   if (!roadmapContent || !phaseNum) return null;
   const phaseEscaped = phaseMarkdownRegexSource(phaseNum);
+  // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
   const heading = roadmapContent.match(new RegExp(`^#{2,4}\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}\\s*:\\s*([^\\n]+)`, 'im'));
   if (!heading) return null;
   const name = heading[1].replace(/\(INSERTED\)/i, '').trim();
@@ -3988,6 +3998,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           const currentMilestoneRoadmap = extractCurrentMilestone(roadmapContent, cwd);
           const phaseSectionMatch = currentMilestoneRoadmap.match(
             new RegExp(
+              // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
               `(#{2,4}\\s*Phase\\s+${phaseEsc}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][\\s\\S]*?)(?=#{2,4}\\s*Phase\\s+|$)`,
               'i',
             ),

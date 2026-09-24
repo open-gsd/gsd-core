@@ -262,6 +262,7 @@ module.exports = {
   "tests/todos-workstream-scope.test.cjs",
   "tests/ui-interaction-capture.test.cjs",
   "tests/undo-commit-selection-4465.test.cjs",
+  "tests/undo-commit-selection.test.cjs",
   "tests/unreachable-guard-drift.test.cjs",
   "tests/unreachable-shell-guard.test.cjs",
   "tests/unusable-input.test.cjs",

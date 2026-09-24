@@ -351,6 +351,46 @@ function phaseHeadingPrefixSrcFor(
   return `(?:${bracketAlt}|${base})`;
 }
 
+/** Group layout for a `buildPhaseHeadingScanRegex` match, so a caller never computes its own offset. */
+interface PhaseHeadingScanPattern {
+  /** Anchored, multiline, global — one `.exec()` loop call per scan, same as every current call site. */
+  regex: RegExp;
+  /** `1` when `convention === 'bracket'` (the bracket id capture), else `null` — never present. */
+  bracketGroup: number | null;
+  /** The phase-number token capture (`PHASE_NUMBER_TOKEN_SOURCE`). */
+  phaseNumGroup: number;
+  /** The heading-title capture (everything after the colon on the heading line). */
+  phaseNameGroup: number;
+}
+
+/**
+ * The single owner of the "scan a whole document for every phase heading"
+ * pattern (#4865 / ADR-4910 §8) — anchored (`^ {0,3}#{2,4}`, so indentation up
+ * to 3 spaces is tolerated but a heading is never matched mid-line), global,
+ * multiline, convention-aware via `phaseHeadingPrefixSrcFor`. Returns the
+ * capture-group layout alongside the regex so a caller never re-derives the
+ * bracket-convention offset (`const G = convention === 'bracket' ? 1 : 0`)
+ * itself — a second, independently-computed offset is exactly the kind of
+ * drift `scripts/lint-phase-id-drift.cjs` exists to catch structurally, not
+ * just by pattern text.
+ *
+ * Distinct from `buildPhaseHeadingRegex` (`src/roadmap.cts`), which searches
+ * for ONE already-known phase number (anchored `^`, no `g` flag, phase number
+ * interpolated literally) — a different contract for a different question.
+ * This function answers "which phases exist in this content", not "does this
+ * specific phase exist".
+ */
+function buildPhaseHeadingScanRegex(baseline: string, convention?: string | null): PhaseHeadingScanPattern {
+  const bracketGroup = convention === 'bracket' ? 1 : null;
+  const phaseNumGroup = bracketGroup ? 2 : 1;
+  const phaseNameGroup = phaseNumGroup + 1;
+  const regex = new RegExp(
+    `^ {0,3}#{2,4}\\s*${phaseHeadingPrefixSrcFor(baseline, convention, true)}(${PHASE_NUMBER_TOKEN_SOURCE})${OPTIONAL_PHASE_TAG_SOURCE}:\\s*([^\\n]+)`,
+    'gim',
+  );
+  return { regex, bracketGroup, phaseNumGroup, phaseNameGroup };
+}
+
 function stripProjectCodePrefix(value: unknown, caseInsensitive = true): string {
   const input = String(value);
   const re = caseInsensitive ? PROJECT_CODE_PREFIX_STRIP_RE_I : PROJECT_CODE_PREFIX_STRIP_RE;
@@ -1665,6 +1705,7 @@ export = {
   BASE_PHASE_LABEL_PREFIX_SRC,
   PHASE_HEADING_BASELINE,
   phaseHeadingPrefixSrcFor,
+  buildPhaseHeadingScanRegex,
   foldBracketId,
   bracketQualifiedKey,
   stripProjectCodePrefix,

@@ -1170,6 +1170,15 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // `insertRowsPatternA|B`) starts with — extracted so the target-detection
     // gate below reads the SAME grammar the writers anchor on, and a future
     // edit to one cannot drift from the other three copies.
+    // #4906 Phase 5 (#4984): NOT migrated onto the heading-baseline selector —
+    // this write-path anchor was never one of the five ADR-4910 §8 call sites
+    // this phase owns (init.cts/milestone.cts's buildPhaseHeadingScanRegex
+    // sites); a direct any-bracket selector call here would have added a
+    // fourth uncounted ANY_BRACKET consumer to roadmap.cts's pinned
+    // tests/adr-612-bracket-heading-selection.test.cjs census. Left
+    // bracket-blind deliberately, matching this call's pre-#4984 behavior;
+    // folding it into the census is Phase 6 work.
+    // phase-id-owner: deliberately unmigrated (#4984 revert) — see comment above.
     const phaseHeadingAnchor = `#{2,4}\\s*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])`;
     // #4247: target detection runs against the ORIGINAL content's active
     // (post-</details>) region — the same milestone scoping every writer
@@ -1716,6 +1725,15 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
     // #3537: padding-tolerant fragment so the caller's resolved padded id
     // matches un-padded ROADMAP headings.
     const phaseEscaped = phaseMarkdownRegexSource(phaseNum);
+    // #4906 Phase 5 (#4984): NOT migrated onto the heading-baseline selector —
+    // this site was never one of the five ADR-4910 §8 call sites this phase
+    // owns (init.cts/milestone.cts's buildPhaseHeadingScanRegex sites); a
+    // direct any-bracket selector call here would have added a fifth
+    // uncounted ANY_BRACKET consumer to roadmap.cts's pinned
+    // tests/adr-612-bracket-heading-selection.test.cjs census. Left
+    // bracket-blind deliberately, matching this call's pre-#4984 behavior;
+    // folding it into the census is Phase 6 work.
+    // phase-id-owner: deliberately unmigrated (#4984 revert) — see comment above.
     const phaseHeaderPattern = new RegExp(`(#{2,4}\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:[^\\n]*)`, 'i');
     const phaseMatch = content.match(phaseHeaderPattern);
     if (!phaseMatch) return;

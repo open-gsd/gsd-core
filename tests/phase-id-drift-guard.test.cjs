@@ -264,7 +264,7 @@ describe('#2761 M3 bracket grammar: one owner, byte-identical to the sites it re
 });
 
 describe('#2128 phase-id drift scanner: the live repo is clean', () => {
-  test('scanRepo finds zero unsanctioned re-derivations (token, bracket, name-validity, and branch-slug-fallback)', () => {
+  test('scanRepo finds zero unsanctioned re-derivations (token, bracket, name-validity, branch-slug-fallback, and phase-heading-scan-literal)', () => {
     const violations = scanRepo(ROOT);
     assert.deepEqual(
       violations,
@@ -336,6 +336,31 @@ describe('#2128 phase-id drift scanner: the live repo is clean', () => {
       const found = scanRepo(tmp);
       assert.equal(found.length, 1, 'scanRepo must report the planted branch-slug-fallback literal');
       assert.equal(found[0].kind, 'branch-slug-fallback');
+      assert.equal(found[0].file, path.join('src', 'planted.cts'));
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('scanRepo actually runs the phase-heading-scan-literal rule (coverage, not just a clean result)', () => {
+    // Same proof shape again, for #4906 Phase 5 (#4984)'s new heading-scan
+    // detector: plant a fresh, unsanctioned hand-rolled `#{2,4}\s*Phase\s+`
+    // heading-scan literal (the exact shape init.cts/milestone.cts used to
+    // hand-roll) into a temp tree and require the real scanRepo() to catch it
+    // end-to-end — proving the guard is now ACTIVE (ADR-4910 §8), not merely
+    // exported.
+    const os = require('node:os');
+    const { cleanup } = require('./helpers.cjs');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'phase-id-drift-'));
+    try {
+      fs.mkdirSync(path.join(tmp, 'src'));
+      fs.writeFileSync(
+        path.join(tmp, 'src', 'planted.cts'),
+        'const phasePattern = new RegExp(`#{2,4}\\\\s*Phase\\\\s+(${PHASE_NUMBER_TOKEN_SOURCE})`, \'gi\');\n',
+      );
+      const found = scanRepo(tmp);
+      assert.equal(found.length, 1, 'scanRepo must report the planted phase-heading-scan literal');
+      assert.equal(found[0].kind, 'phase-heading-scan-literal');
       assert.equal(found[0].file, path.join('src', 'planted.cts'));
     } finally {
       cleanup(tmp);

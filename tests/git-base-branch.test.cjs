@@ -2825,7 +2825,16 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       `CURRENT_BRANCH=feature`,
       'TARGET=main',
       `INCLUDED_COMMITS="${hash}"`,
-      'FILTER_PATHS=".planning/phases/ .planning/quick/ .planning/research/ .planning/threads/ .planning/todos/ .planning/debug/ .planning/seeds/ .planning/codebase/ .planning/ui-reviews/ "',
+      // Newline-joined (#4605) — the shipped consumption loop is
+      // `while IFS= read -r P; do ... done <<FILTER_PATHS_EOF`, which reads
+      // $FILTER_PATHS one path per LINE, not one path per space-separated
+      // word. A single space-joined line (the pre-#4605 format) is read as
+      // ONE literal path containing spaces, matches nothing, and silently
+      // filters zero paths — masking the exact bug this fixture exists to
+      // catch. Mirrors the real production derivation in pr-branch.md's
+      // analyze_commits step and the fixture in
+      // pr-branch-planning-filter.test.cjs:393.
+      'FILTER_PATHS=".planning/phases/\n.planning/quick/\n.planning/research/\n.planning/threads/\n.planning/todos/\n.planning/debug/\n.planning/seeds/\n.planning/codebase/\n.planning/ui-reviews/"',
       createBash,
     ].join('\n');
     fs.writeFileSync(path.join(repo, 'create.sh'), script + '\n');
@@ -2871,7 +2880,9 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       'CURRENT_BRANCH=feature',
       'TARGET=main',
       `INCLUDED_COMMITS="${hash}"`,
-      'FILTER_PATHS=".planning/phases/ .planning/quick/ .planning/research/ .planning/threads/ .planning/todos/ .planning/debug/ .planning/seeds/ .planning/codebase/ .planning/ui-reviews/ "',
+      // See the sibling #3720 test above: newline-joined, matching the shipped
+      // `while IFS= read -r P ... <<FILTER_PATHS_EOF` consumption loop (#4605).
+      'FILTER_PATHS=".planning/phases/\n.planning/quick/\n.planning/research/\n.planning/threads/\n.planning/todos/\n.planning/debug/\n.planning/seeds/\n.planning/codebase/\n.planning/ui-reviews/"',
       createBash,
     ].join('\n');
     fs.writeFileSync(path.join(repo, 'create.sh'), script + '\n');

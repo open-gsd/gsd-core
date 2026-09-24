@@ -37,6 +37,22 @@
  *   over markdown, not `.cts` source, so its sanction is an HTML comment on the
  *   nearest preceding non-blank line: `<!-- phase-id-owner: <reason> -->`.
  *
+ * - phase-heading-scan literal drift (#4906 Phase 5 / #4984): `findPhaseHeadingScanLiteralDrift`
+ *   detects a hand-rolled `#{2,4}\s*Phase\s+` heading-SCAN literal, which bypasses
+ *   `buildPhaseHeadingScanRegex` / `phaseHeadingPrefixSrcFor` (both in
+ *   `src/phase-id.cts`) and so silently fails to recognize bracket-convention
+ *   headings. Sanctioned the same way as the token/bracket/name-validity rules
+ *   (`// phase-id-owner:` on the nearest preceding non-blank line), with a
+ *   line-level escape for a line that already names either owner function.
+ *   Wired into `scanRepo` (ADR-4910 §8): every pre-existing site this phase
+ *   could not migrate (src/phase.cts x11, src/roadmap-parser.cts x3,
+ *   src/planning-snapshot.cts x1) is grandfathered with a dedicated
+ *   `// phase-id-owner:` sanction comment rather than a separate allowlist —
+ *   the guard is ACTIVE from this phase forward: a fresh unsanctioned copy
+ *   fails CI immediately, and each grandfathered comment is deleted as its
+ *   site migrates in a later phase (ADR-4910 §8's census/grandfather/delete
+ *   sequence, never renewed).
+ *
  * - branch-slug fallback drift: a `.replace('{slug}', ... || 'phase')` call
  *   silently substitutes the literal string `'phase'` when a phase's slug
  *   can't be derived, producing a non-identifying branch name like
@@ -228,6 +244,39 @@ function findBranchSlugFallbackDrift(text) {
     const m = BRANCH_SLUG_FALLBACK_DRIFT_RE.exec(line);
     if (!m) continue;
     if (line.includes(BRANCH_SLUG_FALLBACK_CANON_REF)) continue;
+    if (isSanctionedByPrecedingComment(lines, i, OWNER_RE)) continue;
+    out.push({ line: i + 1, found: m[0] });
+  }
+  return out;
+}
+
+// #4906 Phase 5 (#4984): a hand-rolled heading-SCAN literal `#{2,4}\s*Phase\s+`
+// (in either regex-literal `\s` or template `\\s` escaping, mirroring
+// TOKEN_DRIFT_RE's tolerance) bypasses `buildPhaseHeadingScanRegex` /
+// `phaseHeadingPrefixSrcFor` (both in `src/phase-id.cts`) entirely, so it
+// silently fails to recognize bracket-convention headings (`[GSD.03] Phase
+// 03:`) — the exact defect this phase fixed at five call sites in init.cts
+// and milestone.cts. A line naming either owner function counts as "built
+// from the owner" and is not flagged, mirroring the token rule's
+// `line.includes(CANON_REF)` escape.
+const PHASE_HEADING_SCAN_LITERAL_DRIFT_RE = /#\{2,4\}\\{1,2}s\*Phase\\{1,2}s\+/;
+const PHASE_HEADING_SCAN_LITERAL_CANON_REFS = ['buildPhaseHeadingScanRegex', 'phaseHeadingPrefixSrcFor'];
+
+/**
+ * Pure: find every unsanctioned hand-rolled `#{2,4}\s*Phase\s+` heading-scan
+ * literal in `text`. Sanctioned when the line already names either owner
+ * function (`buildPhaseHeadingScanRegex(` / `phaseHeadingPrefixSrcFor(`), or
+ * by a `// phase-id-owner:` comment on the nearest preceding non-blank line
+ * (same mechanism as every other rule in this file). Returns [{ line, found }].
+ */
+function findPhaseHeadingScanLiteralDrift(text) {
+  const out = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = PHASE_HEADING_SCAN_LITERAL_DRIFT_RE.exec(line);
+    if (!m) continue;
+    if (PHASE_HEADING_SCAN_LITERAL_CANON_REFS.some((ref) => line.includes(ref))) continue;
     if (isSanctionedByPrecedingComment(lines, i, OWNER_RE)) continue;
     out.push({ line: i + 1, found: m[0] });
   }
@@ -724,6 +773,16 @@ function scanRepo(root) {
       for (const d of findBranchSlugFallbackDrift(text)) {
         violations.push({ file: rel, kind: 'branch-slug-fallback', ...d });
       }
+      // #4906 Phase 5 (#4984): heading-scan literal drift, owner file exempt
+      // via the shared `EXEMPT` check above. Pre-existing sites this phase
+      // could not reach (src/phase.cts, src/roadmap-parser.cts,
+      // src/planning-snapshot.cts) are grandfathered with a `// phase-id-owner:`
+      // sanction each, per ADR-4910 §8's census/grandfather/delete Phase 6 plan
+      // — the allowlist is those sanction comments, not a separate list here,
+      // and it is deleted entry-by-entry as each site migrates.
+      for (const d of findPhaseHeadingScanLiteralDrift(text)) {
+        violations.push({ file: rel, kind: 'phase-heading-scan-literal', ...d });
+      }
     }
   }
   return violations;
@@ -780,6 +839,9 @@ function main() {
   process.stderr.write('only an `_INT` via `$((10#…))`) — or sanction with `<!-- phase-id-owner: <reason> -->`.\n');
   process.stderr.write('A `.replace(\'{slug}\', ... || \'phase\')` fallback is banned outright (#4126) —\n');
   process.stderr.write('use `renderPhaseBranchName(` or sanction with\n');
+  process.stderr.write('`// phase-id-owner: <reason>` on the line directly above.\n');
+  process.stderr.write('A hand-rolled `#{2,4}\\s*Phase\\s+` heading-scan literal is banned (#4906 Phase 5) —\n');
+  process.stderr.write('use `buildPhaseHeadingScanRegex(` / `phaseHeadingPrefixSrcFor(` or sanction with\n');
   process.stderr.write('`// phase-id-owner: <reason>` on the line directly above:\n');
   for (const d of violations) {
     process.stderr.write(`  [${d.kind}] ${d.file}:${d.line}  ${d.found}\n`);
@@ -794,6 +856,7 @@ module.exports = {
   findBracketGrammarDrift,
   findNameValidityDrift,
   findBranchSlugFallbackDrift,
+  findPhaseHeadingScanLiteralDrift,
   findShellPhaseArithDrift,
   findSingleSegmentPhaseRegexDrift,
   findLetterlessPhaseMirrorDrift,
@@ -812,6 +875,7 @@ module.exports = {
   BRACKET_CODE_DRIFT_RE,
   NAME_VALIDITY_DRIFT_RE,
   BRANCH_SLUG_FALLBACK_DRIFT_RE,
+  PHASE_HEADING_SCAN_LITERAL_DRIFT_RE,
   SHELL_PHASE_ARITH_DRIFT_RE,
   SINGLE_SEGMENT_PHASE_DRIFT_RE,
   LETTERLESS_PHASE_MIRROR_DRIFT_RE,

@@ -232,6 +232,7 @@ interface PlanningSnapshot {
   // CURRENT milestone via `extractCurrentMilestone(roadmapRaw, cwd)` — the
   // same shared, `<details>`/`<summary>`-tolerant scoping owner every other
   // milestone-aware consumer uses (`roadmap-parser.cts`) — then scans
+  // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
   // `#{2,4}\s*Phase\s+(TOKEN)...` headings within that scoped slice.
   // `roadmapDeclaredPhases`'s `milestone` attribution (above) is NOT a fit
   // here even though it looks adjacent: it exists to relocate

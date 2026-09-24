@@ -1582,3 +1582,104 @@ describe('renderPhaseBranchName — shared branch-name template renderer', () =>
     );
   });
 });
+
+// ─── buildPhaseHeadingScanRegex (#4906 Phase 5 / #4984) ─────────────────────
+//
+// The single owner of "scan a whole document for every phase heading" — the
+// pattern five call sites in init.cts/milestone.cts used to hand-roll as a
+// literal `Phase\s+`, silently blind to bracket-convention headings.
+describe('buildPhaseHeadingScanRegex — the heading-scan pattern owner', () => {
+  const { ANY_BRACKET, LABEL_ONLY } = phaseId.PHASE_HEADING_BASELINE;
+
+  test('recognizes a plain heading under LABEL_ONLY baseline, non-bracket convention', () => {
+    const { regex, phaseNumGroup, phaseNameGroup, bracketGroup } = phaseId.buildPhaseHeadingScanRegex(LABEL_ONLY, null);
+    const m = regex.exec('### Phase 03: Foundation');
+    assert.ok(m, 'expected a match');
+    assert.strictEqual(m[phaseNumGroup], '03');
+    assert.strictEqual(m[phaseNameGroup], 'Foundation');
+    assert.strictEqual(bracketGroup, null);
+  });
+
+  test('recognizes a plain heading under ANY_BRACKET baseline, non-bracket convention', () => {
+    const { regex, phaseNumGroup, phaseNameGroup } = phaseId.buildPhaseHeadingScanRegex(ANY_BRACKET, null);
+    const m = regex.exec('### Phase 03: Foundation');
+    assert.ok(m, 'expected a match');
+    assert.strictEqual(m[phaseNumGroup], '03');
+    assert.strictEqual(m[phaseNameGroup], 'Foundation');
+  });
+
+  test('recognizes a bracket-convention heading under ANY_BRACKET baseline, capturing the bracket id', () => {
+    const { regex, bracketGroup, phaseNumGroup, phaseNameGroup } = phaseId.buildPhaseHeadingScanRegex(ANY_BRACKET, 'bracket');
+    assert.strictEqual(bracketGroup, 1);
+    const m = regex.exec('### [GSD.03] Phase 03: Foundation');
+    assert.ok(m, 'expected a match');
+    assert.strictEqual(m[bracketGroup], 'GSD.03');
+    assert.strictEqual(m[phaseNumGroup], '03');
+    assert.strictEqual(m[phaseNameGroup], 'Foundation');
+  });
+
+  test('tolerates 1-3 spaces of leading indentation', () => {
+    const { regex, phaseNumGroup } = phaseId.buildPhaseHeadingScanRegex(ANY_BRACKET, null);
+    for (const indent of ['', ' ', '  ', '   ']) {
+      regex.lastIndex = 0;
+      const m = regex.exec(`${indent}### Phase 03: Foundation`);
+      assert.ok(m, `expected a match at indent ${JSON.stringify(indent)}`);
+      assert.strictEqual(m[phaseNumGroup], '03');
+    }
+  });
+
+  test('does NOT recognize a 4-space indented heading (outside ^ {0,3})', () => {
+    const { regex } = phaseId.buildPhaseHeadingScanRegex(ANY_BRACKET, null);
+    assert.strictEqual(regex.exec('    ### Phase 03: Foundation'), null);
+  });
+
+  test('rejects 1 hash (below the #{2,4} lower bound)', () => {
+    const { regex } = phaseId.buildPhaseHeadingScanRegex(ANY_BRACKET, null);
+    assert.strictEqual(regex.exec('# Phase 03: Foundation'), null);
+  });
+
+  test('rejects 5 hashes (above the #{2,4} upper bound)', () => {
+    const { regex } = phaseId.buildPhaseHeadingScanRegex(ANY_BRACKET, null);
+    assert.strictEqual(regex.exec('##### Phase 03: Foundation'), null);
+  });
+
+  test('preserves parenthetical-tag tolerance without leaking the tag into the name capture', () => {
+    const { regex, phaseNumGroup, phaseNameGroup } = phaseId.buildPhaseHeadingScanRegex(ANY_BRACKET, null);
+    const m = regex.exec('### Phase 03 (rework): Foundation');
+    assert.ok(m, 'expected a match');
+    assert.strictEqual(m[phaseNumGroup], '03');
+    assert.strictEqual(m[phaseNameGroup], 'Foundation');
+  });
+
+  test('beforeAfterFixtureParityAcrossRealRoadmapShapes: matches the same phase set as the pre-migration inline pattern', () => {
+    const fixture = [
+      '## Milestone 1',
+      '',
+      '### Phase 01: Bootstrap',
+      '',
+      '### Phase 02 (rework): Second Pass',
+      '',
+      '  ### Phase 03: Indented Heading',
+      '',
+    ].join('\n');
+
+    // The OLD hand-rolled literal every migrated call site used before this
+    // phase (src/init.cts, src/milestone.cts) — duplicated here deliberately
+    // to prove the migration is regression-safe, not to assert against itself.
+    const oldPattern = new RegExp(
+      `#{2,4}\\s*Phase\\s+(${phaseId.PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`,
+      'gi',
+    );
+    const oldNums = [];
+    let om;
+    while ((om = oldPattern.exec(fixture)) !== null) oldNums.push(om[1]);
+
+    const { regex, phaseNumGroup } = phaseId.buildPhaseHeadingScanRegex(phaseId.PHASE_HEADING_BASELINE.ANY_BRACKET, null);
+    const newNums = [];
+    let nm;
+    while ((nm = regex.exec(fixture)) !== null) newNums.push(nm[phaseNumGroup]);
+
+    assert.deepEqual(newNums, oldNums);
+    assert.deepEqual(newNums, ['01', '02', '03']);
+  });
+});
