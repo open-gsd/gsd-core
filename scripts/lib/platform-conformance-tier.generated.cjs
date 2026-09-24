@@ -252,6 +252,7 @@ module.exports = {
   "tests/shell-command-projection-dispatch.test.cjs",
   "tests/shell-command-projection-path-sep.test.cjs",
   "tests/ship-notes-wedged-pr.test.cjs",
+  "tests/shipped-reference-cites.test.cjs",
   "tests/skill-manifest.test.cjs",
   "tests/slug-derivation-drift-guard.test.cjs",
   "tests/state-todos-render.test.cjs",

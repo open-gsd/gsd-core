@@ -66,6 +66,7 @@ const CANONICAL_HEADERS: Record<CanonicalHeader, string[]> = {
     'recommendation',
     'strategy',
     'decision outcome',
+    'locked decisions',
   ],
   considered_options: [
     'considered options',
@@ -207,7 +208,8 @@ function normalizeAdrHeader(raw: unknown): string {
     .toLowerCase()
     .replace(/[\s:._-]+/g, ' ')
     .replace(/[^\w\s]/g, '')
-    .trim();
+    .trim()
+    .replace(/^\d+(?:\s+\d+)*\s+/, '');
 }
 
 // Normalized synonym index (audit M7). classifyHeader receives an ALREADY-normalized

@@ -613,9 +613,29 @@ describe('#4767: step 0c <automated> guard executes against a real worktree', { 
   });
   after(() => { if (tmp) cleanup(tmp); });
 
-  // Driven under `bash -eu`: an executor's shell may have both on, and the guard must neither
-  // abort on an unset expansion nor be short-circuited by errexit inside its own helpers.
-  const run = (cmd) => spawnSync('bash', ['-eu', '-c', guard], { cwd: wt, encoding: 'utf8', timeout: SPAWN_TIMEOUT_MS, env: { ...process.env, AUTOMATED_CMD: cmd } });
+  // Some hosts/containers (this repo's Debian-based gsd-test Tester Image, confirmed via a live
+  // diagnostic run on that bench) source /etc/bash.bashrc UNCONDITIONALLY for every bash
+  // invocation, interactive or not — a Debian-specific patch, not something gated by an
+  // environment variable. That file's own non-interactive no-op guard is its line 7,
+  // `[ -z "$PS1" ] && return`, which assumes $PS1 is either set (interactive) or tolerably unset.
+  //
+  // Passing `-u` (nounset) as one of BASH's OWN INVOCATION FLAGS makes it active during bash's own
+  // startup — including this unconditional bashrc sourcing — so referencing the never-inherited
+  // (confirmed: bash discards an inherited PS1 for non-interactive shells entirely, even when
+  // explicitly set in the spawned environment — `declare -p PS1` reports "not found" regardless)
+  // $PS1 there is a hard "unbound variable" error, printed to stderr. This broke every "must be
+  // silent" assertion in this file (39 subtests) and is bash's own startup noise, unrelated to the
+  // guard under test.
+  //
+  // Fix: `set -eu` as the FIRST STATEMENT of the `-c` script body, instead of `-eu` as bash's own
+  // CLI flags. Bash's startup (and its unconditional bashrc sourcing) runs to completion under
+  // bash's normal, non-nounset default BEFORE the `-c` script body's first line ever executes — so
+  // the crash never happens — while the GUARD SCRIPT ITSELF (everything after `set -eu;`) still
+  // runs under the exact same errexit+nounset semantics this suite intends to verify (an
+  // executor's real shell may have both on). Verified directly against a real sourced file
+  // carrying the exact `[ -z "$PS1" ] && return` idiom: the old `-eu` CLI-flag form leaks the
+  // error, the new `set -eu;`-as-first-statement form does not.
+  const run = (cmd) => spawnSync('bash', ['-c', `set -eu; ${guard}`], { cwd: wt, encoding: 'utf8', timeout: SPAWN_TIMEOUT_MS, env: { ...process.env, AUTOMATED_CMD: cmd } });
   const realMain = () => fs.realpathSync(main);
   const realWt = () => fs.realpathSync(wt);
 
@@ -909,4 +929,58 @@ describe('#4767: step 0c <automated> guard executes against a real worktree', { 
       assert.equal(r.stderr.trim(), '', 'a passing command must be silent');
     });
   }
+
+  test('the guard invocation tolerates a sourced startup file using the standard non-interactive guard idiom, even under -u with PS1 unset (regression: this exact idiom, as shipped in Debian\'s /etc/bash.bashrc, broke every "must be silent" assertion in this suite on the CI bench)', (t) => {
+    // /etc/bash.bashrc on this repo's Debian-based CI bench is sourced unconditionally for every
+    // bash invocation (not gated on interactivity — confirmed via a live diagnostic run on that
+    // bench), and its own non-interactive no-op guard is exactly this idiom (its real line 7):
+    //   [ -z "$PS1" ] && return
+    // BASH_ENV is used here as a portable, cross-platform way to inject a sourced startup file for
+    // this test; it is not the actual mechanism Debian's bash uses to reach /etc/bash.bashrc (which
+    // sources it unconditionally, with no environment variable involved at all — confirmed on the
+    // real bench), but it reliably exercises the identical failure mode (a sourced file's
+    // `[ -z "$PS1" ]` idiom erroring under `-u` when PS1 is unset).
+    const rcFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4767-bashenv-')), 'noninteractive-guard.sh');
+    fs.writeFileSync(rcFile, '[ -z "$PS1" ] && return\necho "SHOULD NOT REACH HERE" >&2\n');
+    t.after(() => cleanup(path.dirname(rcFile)));
+
+    // CONTROL: reproduce the exact real-world failure. With PS1 truly unset and the startup file
+    // sourced under -u, the guard idiom itself must error — proves the failure mode is real on
+    // this platform's bash, not hypothetical, before trusting the row below.
+    const controlEnv = { ...process.env, BASH_ENV: rcFile };
+    delete controlEnv.PS1;
+    const unfiltered = spawnSync('bash', ['-eu', '-c', guard], {
+      cwd: wt,
+      encoding: 'utf8',
+      timeout: SPAWN_TIMEOUT_MS,
+      env: { ...controlEnv, AUTOMATED_CMD: 'echo hi' },
+    });
+    assert.match(
+      `${unfiltered.stdout}${unfiltered.stderr}`,
+      /PS1: unbound variable/,
+      'CONTROL: the standard [ -z "$PS1" ] guard idiom must actually fail under -u when PS1 is unset ' +
+      'on this platform, or this regression test proves nothing',
+    );
+
+    // FIX: the hermetic `run` helper moves `-eu` off bash's own invocation flags and into the
+    // script body (`bash -c 'set -eu; ...'`), so bash's own startup — including sourcing this
+    // BASH_ENV file — completes under bash's normal, non-nounset default before the guard script's
+    // first line ever runs. The same sourced file must therefore return cleanly with no error, even
+    // though BASH_ENV is set in the ambient environment this test just injected, and regardless of
+    // whether PS1 is set.
+    const prevBashEnv = process.env.BASH_ENV;
+    process.env.BASH_ENV = rcFile;
+    try {
+      const res = run('echo hi');
+      assert.doesNotMatch(
+        `${res.stdout}${res.stderr}`,
+        /PS1: unbound variable|SHOULD NOT REACH HERE/,
+        'the guard invocation must run -eu from within the script body so a sourced startup file\'s ' +
+        '[ -z "$PS1" ] guard does not error during bash\'s own startup, and must not execute past its ' +
+        'own return',
+      );
+    } finally {
+      if (prevBashEnv === undefined) delete process.env.BASH_ENV; else process.env.BASH_ENV = prevBashEnv;
+    }
+  });
 });

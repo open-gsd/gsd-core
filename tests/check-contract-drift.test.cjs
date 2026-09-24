@@ -844,6 +844,71 @@ describe('contract-drift: end-to-end via check-contract-drift.cjs --root', () =>
     assert.deepEqual(r.report.violations, []);
   });
 
+  // #4841: referenceIncludes() is what lets an agent DELEGATE its completion marker to a reference
+  // doc, so "which pointer spellings does it follow" is behaviour, not trivia. These pin it end to end
+  // rather than through the matcher: the marker lives ONLY in the reference, so the fixture is clean
+  // exactly when the pointer was followed and reports `no_consumer` exactly when it was not.
+  //
+  // The gate in tests/shipped-reference-cites.test.cjs pins the same spellings on its own half. Both
+  // halves need their own pin — the live corpus carries zero project-relative pointers, so a reversion
+  // that touched only THIS regex would otherwise be silent.
+  const DELEGATED_REGISTRY = [
+    '| Agent | Role | Completion Markers | Consumed by | Kind |',
+    '|-------|------|--------------------|--------------|------|',
+    '| gsd-alpha | Fixture | `## ALPHA COMPLETE` | `gsd-core/workflows/w.md` | sentinel-match |',
+  ].join('\n');
+  const DELEGATED_REF = ['# Ref', '', '```markdown', '## ALPHA COMPLETE', 'done', '```', ''].join('\n');
+  function delegatedFixture(dir, pointer) {
+    writeFixture(dir, {
+      registryBody: DELEGATED_REGISTRY,
+      agents: { 'gsd-alpha.md': `# Alpha\n\nProcedure: ${pointer}\n\nGate: \`<required_reading>\` MUST be Read.\n` },
+      extraFiles: {
+        'gsd-core/workflows/w.md': 'Dispatch on `## ALPHA COMPLETE`.\n\n<required_reading>\n- x.md\n</required_reading>\n',
+        'gsd-core/references/ref.md': DELEGATED_REF,
+      },
+    });
+  }
+
+  for (const [label, pointer] of [
+    ['the installed tilde form', '@~/.claude/gsd-core/references/ref.md'],
+    ['the installed $HOME form', '@$HOME/.claude/gsd-core/references/ref.md'],
+    ['the bare repo-relative form', '@gsd-core/references/ref.md'],
+    ['a project-relative prefix', '@.claude/gsd-core/references/ref.md'],
+    ['a NESTED project-relative prefix', '@config/nested/gsd-core/references/ref.md'],
+  ]) {
+    test(`#4841: referenceIncludes follows ${label}`, (t) => {
+      const dir = createTempDir('gsd-4841-follow-');
+      t.after(() => cleanup(dir));
+      delegatedFixture(dir, pointer);
+      const r = runCheckJson(dir);
+      assert.equal(r.exitCode, 0, `${pointer} was not followed; stderr: ${r.stderr}`);
+      assert.deepEqual(r.report.violations, []);
+    });
+  }
+
+  for (const [label, pointer] of [
+    ['a dot prefix segment', '@./gsd-core/references/ref.md'],
+    ['a dot-dot prefix segment', '@../gsd-core/references/ref.md'],
+    ['a dot-dot segment in a NON-FIRST position', '@a/../gsd-core/references/ref.md'],
+    ['a token continuing past the name', '@~/.claude/gsd-core/references/ref.md/xx?'],
+    ['a trailing traversal', '@~/.claude/gsd-core/references/ref.md/../../ref.md'],
+  ]) {
+    test(`#4841: referenceIncludes does NOT follow ${label}`, (t) => {
+      const dir = createTempDir('gsd-4841-nofollow-');
+      t.after(() => cleanup(dir));
+      delegatedFixture(dir, pointer);
+      const r = runCheckJson(dir);
+      assert.equal(r.exitCode, 1, `${pointer} was followed and should not have been`);
+      // `declared_marker_not_emitted`, not `no_consumer`: the registry declares the marker and the
+      // agent no longer appears to emit it, because the text carrying it was never folded in. That is
+      // the check reporting the unfollowed pointer through the mechanism it actually has.
+      assert.ok(
+        r.report.violations.some((x) => x.kind === 'declared_marker_not_emitted'),
+        `expected the delegated marker to go unfound, got: ${JSON.stringify(r.report.violations)}`,
+      );
+    });
+  }
+
   test('planted unmatched sentinel fails and names the producer', (t) => {
     const dir = createTempDir('gsd-3565-orphan-');
     t.after(() => cleanup(dir));

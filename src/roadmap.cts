@@ -26,7 +26,7 @@ const { SCOPE } = planningScopeMod;
 type Scope = planningScopeMod.Scope;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserModule = require('./roadmap-parser.cjs');
-const { stripShippedMilestones, extractCurrentMilestone, extractCurrentMilestoneScoped, replaceInCurrentMilestone, listMilestoneHeadings, scanMilestonePhaseIds, collectTablePhaseRows } = roadmapParserModule;
+const { stripShippedMilestones, extractCurrentMilestone, extractCurrentMilestoneScoped, replaceInCurrentMilestone, listMilestoneHeadings, scanMilestonePhaseIds, collectTablePhaseRows, hasPhaseListingTableHeader } = roadmapParserModule;
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
 import { updateTableCell } from './markdown-table.cjs';
 import { clampPercent } from './phase-lifecycle.cjs';
@@ -779,7 +779,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   // `missing_phase_details`; written below it, the same document reported it.
   // Dedupe still happens — it is now per PHASE rather than per token, which is
   // what makes the classification order-independent.
-  const checklistOccurrences: Array<{ token: string; bracketId?: string }> = [];
+  const checklistOccurrences: Array<{ token: string; bracketId?: string; checked: boolean }> = [];
   const seenChecklistKeys = new Set<string>();
   let checklistMatch: RegExpExecArray | null;
   while ((checklistMatch = checklistPattern.exec(effectiveContent)) !== null) {
@@ -788,7 +788,88 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
     const key = occurrenceKey(token, bracketId);
     if (seenChecklistKeys.has(key)) continue;
     seenChecklistKeys.add(key);
-    checklistOccurrences.push({ token, bracketId });
+    // #4899: the checkbox state (`[x]` vs `[ ]`) isn't a capturing group in
+    // `checklistPattern` — adding one would shift every downstream `1 + G` /
+    // `G` index this loop and `missingDetails` below already depend on.
+    // Reading it off the full match text instead is index-safe.
+    checklistOccurrences.push({ token, bracketId, checked: /\[x\]/i.test(checklistMatch[0]) });
+  }
+
+  // #4899: `collectAnalyzePhases` only recognises `### Phase N:` headings and
+  // progress-table rows — the shape `templates/roadmap.md` itself emits
+  // (checklist entries only, no detail sections yet) produces `phases: []`
+  // even though `checklistOccurrences` above just proved real phases exist.
+  // That evidence was computed and then discarded on the way to the final
+  // `phases: []` output (ADR-4910 §5/Phase 4). When the heading/table scan
+  // found nothing but the checklist did, synthesize a minimal `AnalyzePhase`
+  // per non-sentinel checklist occurrence — same enrichment calls
+  // (`matchPhaseDirs`, `countPhasePlansAndSummaries`, `isPhaseComplete`) the
+  // heading branch of `collectAnalyzePhases` already uses, so a synthesized
+  // phase's on-disk status is derived identically, not approximated.
+  //
+  // `missing_phase_details` is intentionally left untouched by this branch:
+  // its contract is "this checklist token has no `### Phase N:` heading or
+  // progress-table row", and that remains true for every synthesized token —
+  // synthesis fills in `phases[]` from the checklist itself, it does not
+  // manufacture a detail section. Removing these tokens from
+  // `missing_phase_details` would hide the very malformed-ROADMAP signal
+  // ADR-4910 (#4899) treats as evidence to surface, not evidence to launder.
+  //
+  // Gated on `!hasPhaseListingTableHeader(effectiveContent)` (found by the
+  // pre-existing #4480 regression "a status table cannot hide missing phase
+  // details"): a `| Phase | Status |`-shaped table with no Name column
+  // correctly declares no phases via `collectAnalyzePhases`, but its mere
+  // presence signals this roadmap has already moved to table-based tracking —
+  // synthesizing phantom phases from checklist entries alongside a
+  // deliberately thin tracking table would manufacture phase_count where the
+  // roadmap's own structure says "not yet detailed", the same laundering this
+  // branch exists to avoid for `missing_phase_details`. #4899's actual target
+  // shape (`templates/roadmap.md`: checklist only, no Progress section at
+  // all) has no such table and is unaffected.
+  if (phases.length === 0 && checklistOccurrences.length > 0 && !hasPhaseListingTableHeader(effectiveContent)) {
+    for (const occ of checklistOccurrences) {
+      if (isSentinelPhase(occ.token, occ.bracketId)) continue;
+      const normalized = normalizePhaseName(occ.token);
+      const dirMatch = matchPhaseDirs(_phaseDirNames, normalized, convention).matches[0];
+      let diskStatus = 'no_directory';
+      let planCount = 0;
+      let summaryCount = 0;
+      let hasContext = false;
+      let hasResearch = false;
+      let contextReadError: string | null = null;
+      let contextScope: Scope = SCOPE.COMPLETE;
+      if (dirMatch) {
+        const counts = countPhasePlansAndSummaries(path.join(phasesDir, dirMatch), convention);
+        planCount = counts.planCount;
+        summaryCount = counts.summaryCount;
+        hasContext = counts.hasContext;
+        hasResearch = counts.hasResearch;
+        contextReadError = counts.contextReadError;
+        contextScope = counts.scope;
+        const completionResult = isPhaseComplete(path.join(phasesDir, dirMatch), { convention });
+        if (completionResult.value.complete) diskStatus = 'complete';
+        else if (summaryCount > 0) diskStatus = 'partial';
+        else if (planCount > 0) diskStatus = 'planned';
+        else if (hasResearch) diskStatus = 'researched';
+        else if (hasContext) diskStatus = 'discussed';
+        else diskStatus = 'empty';
+      }
+      phases.push({
+        number: occ.token,
+        name: `Phase ${occ.token}`,
+        goal: null,
+        mode: null,
+        depends_on: null,
+        plan_count: planCount,
+        summary_count: summaryCount,
+        has_context: hasContext,
+        has_research: hasResearch,
+        disk_status: diskStatus,
+        roadmap_complete: occ.checked,
+        context_read_error: contextReadError,
+        context_scope: contextScope,
+      });
+    }
   }
   // The EMITTED value stays the bare token, unchanged: `phases[].number` is a
   // token under every convention, and `missing_phase_details` is read against

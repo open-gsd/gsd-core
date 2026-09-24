@@ -12741,6 +12741,103 @@ describe('#4731 review follow-up: Requirements citation scan stops at the sectio
   );
 });
 
+// ── #4837: a list-item continuation after **Requirements:** must not fold a ────
+// foreign phase's REQ-ID into the citation scan. This is the real-world
+// corruption #4837 reported: extractPhaseFieldMultiline's #4826 continuation
+// scan had no list-item stop condition, so a `- Deferred to Phase 2: AUTH-03`
+// bullet directly under Phase 1's **Requirements:** field was folded into
+// Phase 1's citation scan and phase.complete silently ticked AUTH-03 (Phase
+// 2's own requirement) as done. End-to-end through the real `phase complete`
+// CLI path — not a unit test on the extractor alone — because the corruption
+// happens in `src/phase.cts`'s consumer of extractPhaseFieldMultiline's
+// output, not in the extractor's return value in isolation.
+test('#4837: a list-item bullet after **Requirements:** must not complete another phase\'s requirement', () => {
+  const tmpDir = createTempProject();
+  try {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+- [ ] Phase 1: Auth
+
+### Phase 1: Auth
+**Goal:** User authentication
+**Requirements:** AUTH-01, AUTH-02
+- Deferred to Phase 2: AUTH-03
+**Plans:** 1 plans
+
+### Phase 2: API
+**Goal:** Build API
+**Requirements:** API-01
+`
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'REQUIREMENTS.md'),
+      `# Requirements
+
+## v1 Requirements
+
+### Authentication
+
+- [ ] **AUTH-01**: User can sign up with email
+- [ ] **AUTH-02**: User can log in
+- [ ] **AUTH-03**: User can reset password
+
+### API
+
+- [ ] **API-01**: REST endpoints
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| AUTH-01 | Phase 1 | Pending |
+| AUTH-02 | Phase 1 | Pending |
+| AUTH-03 | Phase 2 | Pending |
+| API-01 | Phase 2 | Pending |
+`
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      `# State\n\n**Current Phase:** 01\n**Current Phase Name:** Auth\n**Status:** In progress\n**Current Plan:** 01-01\n**Last Activity:** 2025-01-01\n**Last Activity Description:** Working\n`
+    );
+
+    const p1 = path.join(tmpDir, '.planning', 'phases', '01-auth');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '02-api'), { recursive: true });
+
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
+    assert.ok(result.success, `#4837 FAILED (fixture invariant): phase complete command failed: ${result.error}`);
+
+    const req = fs.readFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), 'utf-8');
+
+    // Phase 1's own requirements are ticked (fixture invariant — the scan
+    // still works for the real citations).
+    assert.ok(req.includes('- [x] **AUTH-01**'), '#4837 FAILED (fixture invariant): AUTH-01 checkbox should be checked');
+    assert.ok(req.includes('- [x] **AUTH-02**'), '#4837 FAILED (fixture invariant): AUTH-02 checkbox should be checked');
+
+    // The discriminator: AUTH-03 is Phase 2's requirement, only mentioned in
+    // the bullet BELOW Phase 1's Requirements field. It must remain untouched.
+    assert.ok(
+      req.includes('- [ ] **AUTH-03**'),
+      `#4837 FAILED: AUTH-03 belongs to Phase 2 and must remain unchecked — the list-item bullet ` +
+      `under Phase 1's Requirements field must not have been folded into the citation scan.\n${req}`,
+    );
+    assert.ok(req.includes('- [ ] **API-01**'), 'API-01 should remain unchecked');
+
+    assert.ok(
+      req.includes('| AUTH-03 | Phase 2 | Pending |'),
+      `#4837 FAILED: AUTH-03's Traceability row must stay Pending — the citation scan bled a foreign phase's ` +
+      `REQ-ID out of a list-item continuation.\n${req}`,
+    );
+    assert.ok(req.includes('| API-01 | Phase 2 | Pending |'), 'API-01 should remain Pending');
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Regressions: issue #3697 — the `**Requirements**:` tokenizer UNDER-selects
 // silently. #2339 fixed OVER-selection (the shape filter) and added the
