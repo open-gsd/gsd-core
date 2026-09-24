@@ -18,7 +18,7 @@ commands.html
 hooks/dist/
 
 # Per-process atomic-write staging dirs used by scripts/build-hooks.js (see comment there)
-hooks/.dist-staging-*/
+/.dist-staging-*/
 
 # Coverage artifacts
 coverage/
