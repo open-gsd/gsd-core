@@ -2899,11 +2899,17 @@ describe('parseDecisions hardening — byte-identical vs the pre-hardening refer
    * this reference on match/no-match AND all capture groups for every input
    * the generator can produce. If the reference and the module ever disagree,
    * behavior drifted — this is the "pure hardening" contract.
+   *
+   * `refTitled` was updated for #4793's follow-up (#4958, this phase) to reflect an
+   * intentional, narrow behavior change: the pre-separator run now tolerates a bare
+   * colon only when immediately followed by whitespace (a natural sentence colon),
+   * never a compact/ratio-style colon like `3:1`. `refColon` and `refEmDash` are
+   * untouched and still reflect the original #4357 baseline exactly.
    */
   const REF_ID = 'D[0-9]*-[A-Za-z0-9][A-Za-z0-9_-]*';
   const refColon = new RegExp(`^\\s*-\\s+\\*\\*(${REF_ID})(?:\\s*\\[([^\\]]+)\\])?[^:*]*:\\*\\*\\s*(.*)$`);
   const refEmDash = new RegExp(`^\\s*-\\s+\\*\\*(${REF_ID})(?:\\s*\\[([^\\]]+)\\])?[^*]*[—–][^*]*\\*\\*\\s*(.*)$`);
-  const refTitled = new RegExp(`^\\s*-\\s+\\*\\*(${REF_ID})(?:\\s*\\[([^\\]]+)\\])?[^:*]*:[^:*]*\\*\\*\\s*(.*)$`);
+  const refTitled = new RegExp(`^\\s*-\\s+\\*\\*(${REF_ID})(?:\\s*\\[([^\\]]+)\\])?(?::(?=\\s)|[^:*])*:[^:*]*\\*\\*\\s*(.*)$`);
   const refGuard = /^\s*-\s+\*\*D(?:[0-9][A-Za-z0-9]*)?-/;
   const refBoldLeadIn = /^\s*-\s+\*\*[A-Z]+[0-9]*-[A-Za-z0-9]/m;
   const refToken = /\bD[0-9]*-[A-Za-z0-9]/m;
@@ -3169,7 +3175,7 @@ describe('#4794: decision-coverage answers an unmeasured shape on could-not-pars
       '<decisions>',
       '',
       '- **D-01: The list shows one row per contact.** Nothing else changes.',
-      '- **D-02: Two managers creating a card for the same pair: the second is rejected.** One pair, one card.',
+      '- **D-02 no colon in this title at all.** One pair, one card.',
       '',
       '</decisions>',
     ].join('\n'));
@@ -3225,7 +3231,7 @@ describe('#4794: decision-coverage answers an unmeasured shape on could-not-pars
     const { extractDecisions: extract } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'decisions.cjs'));
     const md = contentWith([
       '**D-01: The list shows one row per contact.** Nothing else changes.',
-      '**D-02: Two managers creating a card for the same pair: the second is rejected.** One pair, one card.',
+      '**D-02 no colon in this title at all.** One pair, one card.',
       '**D4x-01** ratio 3:1',
     ]);
     const r = extract(md);
@@ -3235,5 +3241,32 @@ describe('#4794: decision-coverage answers an unmeasured shape on could-not-pars
     // #4130's phase-prefixed ID_ATTEMPT shape must be captured too.
     assert.ok(r.unreadableIds.includes('D4x-01'), `phase-prefixed id must be captured, got: ${JSON.stringify(r.unreadableIds)}`);
     assert.ok(!r.unreadableIds.includes('D-01'), 'the parsed bullet is not unreadable');
+  });
+});
+
+// ─── #4906 Phase 3 (#4958, #4793): a second plain-prose colon in a decision title ─
+// no longer causes could-not-parse — the separator is the LAST bare colon before
+// the closing **. A colon-less bullet must still be rejected (#1639 discipline).
+
+describe('#4906 Phase 3 (#4958, #4793): a second plain-prose colon in a decision title no longer causes could-not-parse', () => {
+  test('a title with two colons (one being the id separator, one plain prose) parses both decisions', () => {
+    const md = '<decisions>\n'
+      + '- **D-01: The list shows one row per contact.** Nothing else changes.\n'
+      + '- **D-02: Two managers creating a card for the same pair: the second is rejected.** One pair, one card.\n'
+      + '</decisions>\n';
+    const ds = parseDecisions(md);
+    assert.deepStrictEqual(ds.map(d => d.id), ['D-01', 'D-02'],
+      `both decisions must parse despite D-02's second plain-prose colon, got: ${JSON.stringify(ds)}`);
+    assert.strictEqual(ds[1].text, 'One pair, one card.');
+  });
+
+  test('a decision title with no colon at all before the closing ** is still reported as unparseable (#1639 discipline preserved)', () => {
+    const md = '<decisions>\n- **D-03 no colon here.** body\n</decisions>\n';
+    const result = extractDecisions(md);
+    assert.strictEqual(result.outcome, 'could-not-parse',
+      `a colon-less bullet must still fail loud (#1639), got outcome: ${result.outcome}`);
+    assert.deepStrictEqual(result.decisions, []);
+    assert.ok(result.unreadableIds.includes('D-03'),
+      `unreadableIds must carry D-03, got: ${JSON.stringify(result.unreadableIds)}`);
   });
 });

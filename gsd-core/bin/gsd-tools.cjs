@@ -1263,9 +1263,21 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // claims. `--directory` wins outright when given explicitly;
           // otherwise a supplied `--quick-id` + `--slug` pair derives the
           // canonical permalink the same way `workflows/quick.md` renders it.
+          // #4906 Phase 3 (#4958, evidence #4736): `--status` is the OPTIONAL
+          // widening that closes the last gap between this CLI and
+          // `workflows/quick.md`'s own Step 7c row shapes. `appendQuickTaskRow`
+          // (markdown-table.cjs) has always accepted `status` — the schema's
+          // `Status` column exists precisely for `$VALIDATE_MODE` runs — but
+          // nothing on this CLI surface could set it, so quick.md's
+          // VALIDATE_MODE branch had no escaping-safe path and kept
+          // interpolating `${DESCRIPTION}` into raw markdown (#4736 D1: an
+          // unescaped `|` in a task description permanently rags the table).
+          // Omitted, `status` stays undefined and `appendQuickTaskRow` falls
+          // back to its own `'—'` default — unchanged for every existing
+          // caller (fast.md, quick.md's non-VALIDATE_MODE branch).
           const qtaParsed = parseNamedArgsOrExit(
             qtaArgs,
-            { valueFlags: ['task', 'quick-id', 'slug', 'directory'], positionals: 'rest' },
+            { valueFlags: ['task', 'quick-id', 'slug', 'directory', 'status'], positionals: 'rest' },
             error,
           );
           const qtaTask = qtaParsed.task || args[1];
@@ -1276,6 +1288,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           const qtaSlug = qtaParsed['slug'] || undefined;
           const qtaDirectory = qtaParsed['directory']
             || (qtaQuickId && qtaSlug ? `[${qtaQuickId}-${qtaSlug}](./quick/${qtaQuickId}-${qtaSlug}/)` : undefined);
+          const qtaStatus = qtaParsed['status'] || undefined;
 
           const statePath = path.join(cwd, '.planning', 'STATE.md');
           if (!fs.existsSync(statePath)) {
@@ -1313,6 +1326,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               description: qtaTask,
               date,
               commit,
+              status: qtaStatus,
               quickId: qtaQuickId,
               directory: qtaDirectory,
             });
