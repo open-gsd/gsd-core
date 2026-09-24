@@ -26,7 +26,7 @@ const { SCOPE } = planningScopeMod;
 type Scope = planningScopeMod.Scope;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserModule = require('./roadmap-parser.cjs');
-const { stripShippedMilestones, extractCurrentMilestone, extractCurrentMilestoneScoped, replaceInCurrentMilestone, listMilestoneHeadings, scanMilestonePhaseIds, collectTablePhaseRows } = roadmapParserModule;
+const { stripShippedMilestones, extractCurrentMilestone, extractCurrentMilestoneScoped, replaceInCurrentMilestone, listMilestoneHeadings, scanMilestonePhaseIds, collectTablePhaseRows, hasPhaseListingTableHeader } = roadmapParserModule;
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
 import { updateTableCell } from './markdown-table.cjs';
 import { clampPercent } from './phase-lifecycle.cjs';
@@ -814,7 +814,19 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   // manufacture a detail section. Removing these tokens from
   // `missing_phase_details` would hide the very malformed-ROADMAP signal
   // ADR-4910 (#4899) treats as evidence to surface, not evidence to launder.
-  if (phases.length === 0 && checklistOccurrences.length > 0) {
+  //
+  // Gated on `!hasPhaseListingTableHeader(effectiveContent)` (found by the
+  // pre-existing #4480 regression "a status table cannot hide missing phase
+  // details"): a `| Phase | Status |`-shaped table with no Name column
+  // correctly declares no phases via `collectAnalyzePhases`, but its mere
+  // presence signals this roadmap has already moved to table-based tracking —
+  // synthesizing phantom phases from checklist entries alongside a
+  // deliberately thin tracking table would manufacture phase_count where the
+  // roadmap's own structure says "not yet detailed", the same laundering this
+  // branch exists to avoid for `missing_phase_details`. #4899's actual target
+  // shape (`templates/roadmap.md`: checklist only, no Progress section at
+  // all) has no such table and is unaffected.
+  if (phases.length === 0 && checklistOccurrences.length > 0 && !hasPhaseListingTableHeader(effectiveContent)) {
     for (const occ of checklistOccurrences) {
       if (isSentinelPhase(occ.token, occ.bracketId)) continue;
       const normalized = normalizePhaseName(occ.token);

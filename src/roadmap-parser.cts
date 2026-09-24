@@ -687,6 +687,24 @@ function collectTablePhaseRows(window: string): Array<{ id: string; name: string
 }
 
 /**
+ * True when `content` contains a GFM table whose header row is phase-listing
+ * SHAPED (`| Phase | ... |`), regardless of whether it also declares a `Name`
+ * column. `collectTablePhaseRows` correctly refuses to mint a phase from a
+ * `| Phase | Status |`-shaped table (no name column, so no declaration) —
+ * but that table's mere presence still signals this roadmap has moved to
+ * table-based tracking, not checklist-based tracking. Callers that decide
+ * whether to treat bare checklist entries as phase declarations (#4899's
+ * roadmap.cts synthesis fallback) must see this signal even when
+ * `collectTablePhaseRows` itself returns nothing for the same content —
+ * otherwise a thin, name-less Progress table cannot suppress a checklist
+ * synthesis it was never meant to coexist with.
+ */
+function hasPhaseListingTableHeader(content: string): boolean {
+  const unfenced = stripFencedCode(content).text;
+  return unfenced.split(/\r?\n/).some((line) => PHASE_LISTING_HEADER_RE.test(line));
+}
+
+/**
  * #3262: the sole owner of "which phase ids does THIS milestone window
  * declare". Extracted verbatim from `getMilestonePhaseFilter`'s former inline
  * heading scan + bullet scan so the new `roadmap milestone-scope` probe (the
@@ -2251,6 +2269,7 @@ export = {
   // guards and the edit-phase workflow's pre/post capture are built on.
   scanMilestonePhaseIds,
   collectTablePhaseRows,
+  hasPhaseListingTableHeader,
   findMilestoneScopeHeadingLines,
   // #3641: the scope axis's phase-ENTRY predicate, exported so roadmap
   // validate's V004 document-level check routes through the same single
