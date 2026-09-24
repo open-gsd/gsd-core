@@ -29,6 +29,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { extractTaggedBlocks, stripTaggedBlocks } from './markdown-sectionizer.cjs';
+import { tryWithinRootLexical } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
 import phaseIdMod = require('./phase-id.cjs');
 const { stripProjectCodePrefix, extractPhaseToken, comparePhaseNum } = phaseIdMod;
@@ -613,6 +614,16 @@ function stripLeadingDotSlash(s: string): string {
  * without touching the filesystem. A climb that names a concrete sibling (e.g.
  * `cd ../../frontend`, the exact #2401 shape) still names something checkable
  * and falls through to the normal filesystem probe below.
+ *
+ * An ABSOLUTE target outside the project root takes the same `outside_root`
+ * exit (#4767). It is more ambiguous across worktrees, not less: it is pinned
+ * to exactly one checkout, and when a planner copies the orchestrator's cwd
+ * into `<automated>` that checkout is the main tree — so under worktree
+ * isolation the command exists, runs, and passes against code the worktree
+ * changed and the main tree did not. Existence is therefore not evidence for
+ * an absolute target outside the root, and the filesystem is not consulted.
+ * Containment goes through `tryWithinRootLexical` (#4636) — lexical because the
+ * probe is read-only and must not depend on the target existing.
  */
 function isPureAncestorClimb(rel: string): boolean {
   if (rel.length === 0) return false;
@@ -732,7 +743,17 @@ function resolveVerifyCommandTarget(command: unknown, options?: ResolveOptions):
   result.rawTarget = rawTarget;
   result.target = target;
 
-  if (!isAbs) {
+  if (isAbs) {
+    // #4767: an absolute target outside projectRoot is `outside_root`, same
+    // as the bare climb — see isPureAncestorClimb's doc for why existence is
+    // not evidence here and the filesystem is deliberately not consulted.
+    if (tryWithinRootLexical(target, base) === null) {
+      result.status = 'ok';
+      result.severity = 'warning';
+      result.reason = 'outside_root';
+      return result;
+    }
+  } else {
     const rel = path.relative(base, target);
     if (isPureAncestorClimb(rel)) {
       result.status = 'ok';

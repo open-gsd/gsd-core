@@ -3782,7 +3782,7 @@ See [Archiving quick tasks](how-to/handle-quick-and-fast-tasks.md#archiving-quic
 **Behavior:** A planner authoring a per-task `<automated>` verify command has no line of sight to whether the path it just wrote actually resolves, and `gsd-plan-checker` had no deterministic way to check — so it hand-reasoned the filesystem and, in the motivating case, prescribed two successively-wrong replacement paths (the second citing a `package.json` that did not exist). Two changes close that:
 
 1. **Prior-command inheritance.** The nearest prior phase's `<automated>` commands are surfaced to the planner as `prior_verify_commands`, **at every context window**. Cross-phase enrichment was previously gated on `context_window >= 500000`; at 200k the planner re-invented the command and got it wrong. This payload is a handful of one-liners, so it is never gated.
-2. **A deterministic probe.** `gsd-tools check verify-command-paths <N>` resolves each `<automated>` command's target directory and reports whether it exists and holds the manifest the command needs. `/gsd-plan-phase` runs it before the plan-check pass and hands the JSON to the checker, which acts on `severity` instead of guessing.
+2. **A deterministic probe.** `gsd-tools check verify-command-paths <N>` resolves each `<automated>` command's target directory and reports whether it exists and holds the manifest the command needs. `/gsd-plan-phase` runs it before the plan-check pass and hands the JSON to the checker, which acts on `severity` instead of guessing. `/gsd-quick --validate` runs the same probe over its own plan directory via `--dir` (#4767).
 
 **It never executes command text.** PLAN.md is model-authored, so running it from the checker would be arbitrary code execution — and would trigger the real lint/build as a side effect. The probe only resolves paths and stats directories; a `package.json` it finds is read for script names only.
 
@@ -3794,7 +3794,7 @@ See [Archiving quick tasks](how-to/handle-quick-and-fast-tasks.md#archiving-quic
 
 **Known limits:**
 - Only `cd <literal>` and `npm --prefix <literal>` are recognized. `pushd`, `make -C`, `yarn --cwd`, `pnpm -C`, and `cargo --manifest-path` report `unresolvable`.
-- Verdicts are relative to the *checker's* project root. Under parallel worktree execution the executor's root differs, so a bare ancestor climb (`cd ../..`) is reported `outside_root` as a warning rather than asserted about.
+- Verdicts are relative to the *checker's* project root. Under parallel worktree execution the executor's root differs, so a bare ancestor climb (`cd ../..`) and an absolute target outside that root (#4767) are both reported `outside_root` as a warning rather than asserted about — an absolute target is pinned to one checkout, so its existence proves nothing. An absolute path *inside* the checker's root still passes the probe and still misfires under isolation; the planner's root-relative authoring rule and the executor's pre-`<automated>` containment guard cover that case.
 - `script_missing` is advisory only — this phase may be adding the script — so a genuinely mistyped npm script still reaches the executor.
 
 See [Resolve verify-command path findings](how-to/resolve-verify-command-path-findings.md) and [`gsd-tools check verify-command-paths`](COMMANDS.md#gsd-tools-check-verify-command-paths).
