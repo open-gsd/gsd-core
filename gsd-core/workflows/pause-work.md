@@ -17,7 +17,7 @@ Determine what kind of work is being paused and set the handoff destination acco
 
 ```bash
 # Check for active phase
-phase=$(ls -t .planning/phases/*/PLAN.md 2>/dev/null | head -1 || true)
+phase=$(ls -t .planning/phases/*/*-PLAN.md 2>/dev/null | head -1 || true)
 phase=${phase:+$(basename "$(dirname "$phase")")}
 
 # Check for active spike

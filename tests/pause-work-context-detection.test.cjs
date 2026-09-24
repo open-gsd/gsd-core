@@ -172,7 +172,9 @@ describe('regression #4112: pause-work.md Context Detection block', () => {
     const result = runBlock((tmpDir) => {
       const dir = path.join(tmpDir, '.planning', 'phases', '03-foo');
       fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'PLAN.md'), '# plan\n');
+      // Canonical plan name (#4954). The earlier bare PLAN.md fixture matched
+      // the broken glob too, so this case proved nothing about phase detection.
+      fs.writeFileSync(path.join(dir, '03-01-PLAN.md'), '# plan\n');
     });
     assert.equal(result.phase, '03-foo');
     assert.equal(result.spike, '');
@@ -202,5 +204,41 @@ describe('regression #4112: pause-work.md Context Detection block', () => {
     });
     assert.equal(result.phase, '');
     assert.match(result.deliberation, /\.planning\/deliberations\/topic\.md$/);
+  });
+});
+
+describe('regression #4954: phase detection matches the canonical plan file name', () => {
+  // GSD names plans {phase}-{plan}-PLAN.md (templates/phase-prompt.md,
+  // templates/roadmap.md, templates/README.md), and execute-phase.md already
+  // enumerates them as {phase_dir}/*-PLAN.md. The shipped detect block globbed
+  // a literal PLAN.md, matched nothing, and silently wrote the phase handoff to
+  // .planning/.continue-here.md — where execute-phase never looks for it.
+
+  test('the most recently modified plan selects its own phase directory', () => {
+    const result = runBlock((tmpDir) => {
+      const older = path.join(tmpDir, '.planning', 'phases', '01-older');
+      const newer = path.join(tmpDir, '.planning', 'phases', '02-newer');
+      fs.mkdirSync(older, { recursive: true });
+      fs.mkdirSync(newer, { recursive: true });
+      const olderPlan = path.join(older, '01-01-PLAN.md');
+      const newerPlan = path.join(newer, '02-03-PLAN.md');
+      fs.writeFileSync(olderPlan, '# older plan\n');
+      fs.writeFileSync(newerPlan, '# newer plan\n');
+      // Pin mtimes rather than rely on write order: same-tick writes make ls -t
+      // ordering non-deterministic on coarse-granularity filesystems.
+      const now = Date.now() / 1000;
+      fs.utimesSync(olderPlan, now - 600, now - 600);
+      fs.utimesSync(newerPlan, now, now);
+    });
+    assert.equal(result.phase, '02-newer');
+  });
+
+  test('a phase directory holding no plan file resolves no phase', () => {
+    const result = runBlock((tmpDir) => {
+      const dir = path.join(tmpDir, '.planning', 'phases', '04-no-plans-yet');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'RESEARCH.md'), '# research\n');
+    });
+    assert.equal(result.phase, '');
   });
 });
