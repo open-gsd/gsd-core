@@ -608,24 +608,39 @@ function verifyBackmergeContent({ nextParent, mainParent, mergeCommit, head, cwd
 }
 
 /**
- * Identify the back-merge merge commit reachable from `head` BY ITS
- * EXPECTED SHAPE — review fix (MEDIUM, code#4): the prior identification
- * method, `git log --merges --max-count=1 <head>`, walks `head`'s ENTIRE
- * history looking for the most recent merge commit anywhere in it, which
- * could just as easily find an unrelated merge commit buried in `main`'s
- * own history (pulled in transitively) rather than THE specific commit
- * whose two direct parents are the next/main tips this PR back-merges.
+ * Identify the back-merge merge commit reachable from `head` BY ANCESTRY,
+ * never by parent COUNT alone.
  *
- * The expected shape is exactly one of:
- *   - `head` itself has 2 parents -> `head` IS the merge commit, no extra
- *     commit on top.
- *   - `head` has exactly 1 parent, and THAT parent has 2 parents -> the
- *     parent is the merge commit; `head` is the one allowed extra
- *     (version-sync) commit.
- * Anything else (0 parents, head has 2 parents but so does its "extra"
- * concept not applying, head's single parent doesn't itself have 2
- * parents, etc.) does not match the shape at all and is refused —
- * `verifyBackmergeContent` must never be called with guessed shas.
+ * Round-9 review fix (correcting a round-8 regression): a round-8 "fix" here
+ * rejected any 2-parent commit whose own parent was ITSELF a merge commit —
+ * that is WRONG and rejects GENUINE back-merges: `main`'s tip is routinely a
+ * merge commit (release.yml merges release -> main with `gh pr merge
+ * --merge`), and `next`'s tip can be one too (a prior back-merge). Parent
+ * COUNT was never the right signal; ANCESTRY is. A commit `M` is the
+ * genuine back-merge merge commit if and only if:
+ *   - `M` has exactly two parents, `M^1` and `M^2`;
+ *   - `M^1` is `origin/next` or an ancestor of it (the "next" side);
+ *   - `M^2` is `origin/main` or an ancestor of it (the "main" side).
+ * `head` matches the expected shape iff:
+ *   - `head` itself is such an `M` (no extra commit on top), or
+ *   - `head` has exactly one parent, and that parent is such an `M` (the
+ *     one allowed extra/version-sync commit on top).
+ *
+ * This correctly REFUSES a `gh pr update-branch`-style merge-of-a-merge `U`
+ * laid on top of a genuine `M`: `U`'s first parent is `M` itself (or a
+ * descendant of it), which is NOT an ancestor of `origin/next` (only `M`'s
+ * OWN first parent is), so `U` fails the ancestry test as a candidate `M`;
+ * and `U` is not a single-parent commit sitting on top of a genuine `M`
+ * either (it has two parents) — `head` therefore matches neither shape and
+ * is refused as `unrecognized-shape`.
+ *
+ * Requires `origin/next` and `origin/main` to already be present as
+ * remote-tracking refs in `cwd` (both call sites fetch them before invoking
+ * this: backmerge-merge-when-green.yml's "Fetch main and next into the
+ * trusted checkout" step, and auto-backmerge.yml's push job's own
+ * `git fetch --no-tags origin main next` in its verify step — worktrees
+ * share their parent repository's refs, so a scratch `git worktree add`
+ * checkout sees them too without fetching again).
  *
  * @returns {{ok:true, mergeCommit:string, nextParent:string, mainParent:string, extraCommit:string|null}|{ok:false, reason:string}}
  */
@@ -638,67 +653,50 @@ function identifyMergeCommit({ head, cwd }) {
     return parts.slice(1); // drop the commit itself (first field)
   }
 
+  /**
+   * True iff `commit` matches the genuine back-merge merge-commit shape:
+   * exactly two parents, first an ancestor-or-self of origin/next, second
+   * an ancestor-or-self of origin/main. `isAncestor` (`git merge-base
+   * --is-ancestor`) already treats a commit as its own ancestor, so this
+   * also accepts `commit` itself being exactly the tip of either branch.
+   */
+  function matchesMergeCommitShape(commit) {
+    const parents = parentsOf(commit);
+    if (parents.length !== 2) return null;
+    const [p1, p2] = parents;
+    if (!isAncestor(p1, 'origin/next', opts)) return null;
+    if (!isAncestor(p2, 'origin/main', opts)) return null;
+    return { mergeCommit: commit, nextParent: p1, mainParent: p2 };
+  }
+
   // Review fix (MAJOR, code#8): a bounded git call can still time out; that
   // must resolve to the same {ok:false} shape every other rejection in this
-  // function uses, never an uncaught crash.
-  let headParents;
+  // function uses, never an uncaught crash. `isAncestor` itself already
+  // fails closed (swallows to `false`, per its own doc comment) rather than
+  // throwing, so only the `rev-list`/`parentsOf` calls need this guard here.
   try {
-    headParents = parentsOf(head);
+    const direct = matchesMergeCommitShape(head);
+    if (direct) {
+      return { ok: true, mergeCommit: direct.mergeCommit, nextParent: direct.nextParent, mainParent: direct.mainParent, extraCommit: null };
+    }
+
+    const headParents = parentsOf(head);
+    if (headParents.length === 1) {
+      const viaParent = matchesMergeCommitShape(headParents[0]);
+      if (viaParent) {
+        return {
+          ok: true,
+          mergeCommit: viaParent.mergeCommit,
+          nextParent: viaParent.nextParent,
+          mainParent: viaParent.mainParent,
+          extraCommit: head,
+        };
+      }
+    }
   } catch (err) {
     return isGitTimeoutError(err)
       ? { ok: false, reason: 'git-timeout', message: err.message }
       : { ok: false, reason: 'git-command-failed', message: err.message };
-  }
-  if (headParents.length === 2) {
-    // Round-8 review fix (root cause of a failing regression test): a
-    // `gh pr update-branch`-style operation merges the current base INTO an
-    // already-existing genuine back-merge commit, producing a NEW commit
-    // whose parents are [the real merge commit, the new base tip] — which,
-    // by parent COUNT alone, is indistinguishable from a genuine 2-parent
-    // back-merge commit (this is exactly what the module header's "Review
-    // fix (MEDIUM, code#4)" note already warns `gh pr update-branch` can
-    // produce). `identify` has no ref context (no `origin/next`/
-    // `origin/main` to compare against — that is `verify`'s job), so it
-    // cannot check WHICH commit is genuinely at each tip; it CAN check
-    // structural well-formedness: a genuine back-merge commit's own two
-    // parents (next's tip, main's tip) are never themselves merge commits
-    // FROM THIS WORKFLOW's perspective (this workflow is the only source of
-    // merge commits onto `next`), so if EITHER parent is itself a 2-parent
-    // commit, this is a merge-of-a-merge — refused outright as
-    // unrecognized, never silently accepted as "0 extra commits on top".
-    let firstParentParents;
-    let secondParentParents;
-    try {
-      firstParentParents = parentsOf(headParents[0]);
-      secondParentParents = parentsOf(headParents[1]);
-    } catch (err) {
-      return isGitTimeoutError(err)
-        ? { ok: false, reason: 'git-timeout', message: err.message }
-        : { ok: false, reason: 'git-command-failed', message: err.message };
-    }
-    if (firstParentParents.length === 2 || secondParentParents.length === 2) {
-      return { ok: false, reason: 'unrecognized-shape' };
-    }
-    return { ok: true, mergeCommit: head, nextParent: headParents[0], mainParent: headParents[1], extraCommit: null };
-  }
-  if (headParents.length === 1) {
-    let grandParents;
-    try {
-      grandParents = parentsOf(headParents[0]);
-    } catch (err) {
-      return isGitTimeoutError(err)
-        ? { ok: false, reason: 'git-timeout', message: err.message }
-        : { ok: false, reason: 'git-command-failed', message: err.message };
-    }
-    if (grandParents.length === 2) {
-      return {
-        ok: true,
-        mergeCommit: headParents[0],
-        nextParent: grandParents[0],
-        mainParent: grandParents[1],
-        extraCommit: head,
-      };
-    }
   }
   return { ok: false, reason: 'unrecognized-shape' };
 }

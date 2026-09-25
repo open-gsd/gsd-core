@@ -572,8 +572,42 @@ describe('backmerge-tree: stage (build)', () => {
 });
 
 describe('backmerge-tree: identify', () => {
-  function buildMergeCommit() {
+  // Round-9 review fix (correcting a round-8 regression): identify() now
+  // matches the back-merge merge-commit shape by ANCESTRY (each parent is
+  // an ancestor-or-self of origin/next / origin/main), never by parent
+  // COUNT — a round-8 "fix" wrongly rejected any 2-parent head whose own
+  // parent was itself a merge commit, which rejects GENUINE back-merges:
+  // main's tip is routinely a merge commit (release.yml merges release into
+  // main with `gh pr merge --merge`), and next's tip can be one too (a
+  // prior back-merge). `mainTipIsMerge`/`nextTipIsMerge` build exactly
+  // those shapes so the fixture can prove identify() still accepts them.
+  function refreshOriginRefs(g) {
+    const nextSha = g(['rev-parse', 'next']).trim();
+    const mainSha = g(['rev-parse', 'main']).trim();
+    g(['update-ref', 'refs/remotes/origin/next', nextSha]);
+    g(['update-ref', 'refs/remotes/origin/main', mainSha]);
+  }
+
+  function buildMergeCommit(opts = {}) {
     const { repoDir, g } = buildFixtureRepo();
+    if (opts.mainTipIsMerge) {
+      g(['checkout', '-q', '-b', 'release-side', 'main']);
+      fs.writeFileSync(path.join(repoDir, 'release.txt'), 'r\n');
+      g(['add', 'release.txt']);
+      g(['commit', '-q', '-m', 'release side work']);
+      g(['checkout', '-q', 'main']);
+      g(['merge', '-q', '--no-ff', '--no-edit', 'release-side']);
+      refreshOriginRefs(g);
+    }
+    if (opts.nextTipIsMerge) {
+      g(['checkout', '-q', '-b', 'prior-side', 'next']);
+      fs.writeFileSync(path.join(repoDir, 'prior.txt'), 'p\n');
+      g(['add', 'prior.txt']);
+      g(['commit', '-q', '-m', 'prior side work']);
+      g(['checkout', '-q', 'next']);
+      g(['merge', '-q', '--no-ff', '--no-edit', 'prior-side']);
+      refreshOriginRefs(g);
+    }
     g(['checkout', '-q', '-b', 'backmerge', 'next']);
     const stageResult = runScript(['stage', '--main', 'main'], repoDir);
     assert.equal(stageResult.exitCode, 0, stageResult.stderr);
@@ -583,6 +617,45 @@ describe('backmerge-tree: identify', () => {
     const mainParent = g(['rev-parse', `${mergeCommit}^2`]).trim();
     return { repoDir, g, mergeCommit, nextParent, mainParent };
   }
+
+  test('identifies a genuine back-merge whose MAIN parent is itself a merge commit (release -> main via gh pr merge --merge)', (t) => {
+    const { repoDir, mergeCommit, nextParent, mainParent, g } = buildMergeCommit({ mainTipIsMerge: true });
+    t.after(() => cleanup(repoDir));
+    const mainParentParentCount = g(['rev-list', '--parents', '--max-count=1', mainParent]).trim().split(/\s+/).length - 1;
+    assert.equal(mainParentParentCount, 2, 'fixture sanity check: mainParent really is a merge commit');
+    const result = runScript(['identify', '--head', mergeCommit, '--cwd', repoDir], repoDir);
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { ok: true, mergeCommit, nextParent, mainParent, extraCommit: null });
+  });
+
+  test('identifies a genuine back-merge whose NEXT parent is itself a merge commit (a prior back-merge)', (t) => {
+    const { repoDir, mergeCommit, nextParent, mainParent, g } = buildMergeCommit({ nextTipIsMerge: true });
+    t.after(() => cleanup(repoDir));
+    const nextParentParentCount = g(['rev-list', '--parents', '--max-count=1', nextParent]).trim().split(/\s+/).length - 1;
+    assert.equal(nextParentParentCount, 2, 'fixture sanity check: nextParent really is a merge commit');
+    const result = runScript(['identify', '--head', mergeCommit, '--cwd', repoDir], repoDir);
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { ok: true, mergeCommit, nextParent, mainParent, extraCommit: null });
+  });
+
+  // A 2-parent commit is refused when its FIRST parent is not really on
+  // `next` at all (forged via commit-tree) — the ancestry check, not parent
+  // count, is what makes this the correct rejection.
+  test('a 2-parent head whose first parent is not an ancestor of origin/next is rejected', (t) => {
+    const { repoDir, g, mainParent } = buildMergeCommit();
+    t.after(() => cleanup(repoDir));
+    g(['checkout', '-q', '-b', 'rogue-root']);
+    fs.writeFileSync(path.join(repoDir, 'rogue.txt'), 'rogue\n');
+    g(['add', 'rogue.txt']);
+    g(['commit', '-q', '-m', 'a commit with no relation to next']);
+    const rogue = g(['rev-parse', 'HEAD']).trim();
+    const tree = g(['rev-parse', 'HEAD^{tree}']).trim();
+    const forged = g(['commit-tree', tree, '-p', rogue, '-p', mainParent, '-m', 'forged']).trim();
+
+    const result = runScript(['identify', '--head', forged, '--cwd', repoDir], repoDir);
+    assert.equal(result.exitCode, 1);
+    assert.deepEqual(JSON.parse(result.stdout), { ok: false, reason: 'unrecognized-shape' });
+  });
 
   test('identifies a bare merge commit (no extra commit on top)', (t) => {
     const { repoDir, mergeCommit, nextParent, mainParent } = buildMergeCommit();
