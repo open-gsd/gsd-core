@@ -172,22 +172,36 @@ function readStateFileOrNull(statePath) {
 
 /**
 /**
+ * The env vars Claude Code itself consults to switch auto-compaction off, and
+ * the values it accepts as true. Both are taken from the shipped binary's own
+ * resolution — `Boolean(truthy(DISABLE_COMPACT) || DISABLE_AUTO_COMPACT)`, and
+ * only when that is false does `autoCompactEnabled` decide — rather than
+ * guessed: an invented name reads as "not disabled" forever, which is exactly
+ * the defect this gate exists to close.
+ */
+const AUTO_COMPACT_DISABLE_ENV_KEYS = ['DISABLE_AUTO_COMPACT', 'DISABLE_COMPACT'];
+const AUTO_COMPACT_ENV_TRUTHY = ['1', 'true', 'yes', 'on'];
+
+/**
  * Is Claude Code's auto-compact switched off for this session? When it is,
  * the ~16.5% "compact buffer" is ordinary usable context, so the meter must
  * not subtract it — otherwise the bar pins at 100% from raw 83.5% onward and
  * the last sixth of the window is invisible.
  *
- * Sources, first definitive answer wins:
- *   1. env: DISABLE_AUTOCOMPACT / CLAUDE_CODE_DISABLE_AUTO_COMPACT ("1"/"true")
+ * The sources and their precedence mirror Claude Code's own resolution —
+ * either env var wins over the setting, and only then does the setting decide:
+ *   1. env: DISABLE_AUTO_COMPACT, or DISABLE_COMPACT (which switches off
+ *      manual `/compact` as well). Truthy is `1` / `true` / `yes` / `on`,
+ *      trimmed and case-insensitive — Claude Code's own accepted set.
  *   2. <dir>/.claude/settings.local.json, <dir>/.claude/settings.json
  *   3. (CLAUDE_CONFIG_DIR || ~/.claude)/settings.local.json, settings.json
  * reading the boolean `autoCompactEnabled`. Fail-soft: anything unreadable
  * or absent means "not disabled" (current behaviour).
  */
 function isAutoCompactDisabled(dir, env = process.env) {
-  for (const key of ['DISABLE_AUTOCOMPACT', 'CLAUDE_CODE_DISABLE_AUTO_COMPACT']) {
+  for (const key of AUTO_COMPACT_DISABLE_ENV_KEYS) {
     const v = env[key];
-    if (typeof v === 'string' && /^(1|true|yes)$/i.test(v.trim())) return true;
+    if (typeof v === 'string' && AUTO_COMPACT_ENV_TRUTHY.includes(v.trim().toLowerCase())) return true;
   }
   const candidates = [];
   if (dir) {
@@ -888,9 +902,12 @@ function runStatusline() {
     // (a token count). When the env var is set, compute the buffer % dynamically so
     // the meter correctly reflects early-compaction configurations (#2219).
     // With auto-compact disabled (settings autoCompactEnabled:false or the
-    // DISABLE_AUTOCOMPACT env) there is no reserved buffer at all — the bar
+    // DISABLE_AUTO_COMPACT / DISABLE_COMPACT env) there is no reserved buffer — the bar
     // shows the raw used% (100 - remaining), matching CC's own /context.
-    const totalCtx = data.context_window?.total_tokens || 1_000_000;
+    // `context_window_size` is the documented field name
+    // (code.claude.com/docs/en/statusline); it is absent early in a session,
+    // before the first API response, hence the fallback.
+    const totalCtx = data.context_window?.context_window_size || 1_000_000;
     const acw = parseInt(process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || '0', 10);
     const AUTO_COMPACT_BUFFER_PCT = isAutoCompactDisabled(dir)
       ? 0
@@ -1146,7 +1163,8 @@ module.exports = {
   STATE_HEAD_ADVISORY_COMMITS, isValidStateHeadStamp,
   readStateHeadCommits, parseRevListCounts, deriveStateFreshness,
   formatStateFreshness, resolveStatuslineOptions,
-  renderBracketPhaseDisplay, renderBracketMilestoneDisplay, isAutoCompactDisabled,
+  renderBracketPhaseDisplay, renderBracketMilestoneDisplay,
+  isAutoCompactDisabled, AUTO_COMPACT_DISABLE_ENV_KEYS, AUTO_COMPACT_ENV_TRUTHY,
 };
 
 /**
