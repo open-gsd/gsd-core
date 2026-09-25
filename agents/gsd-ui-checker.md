@@ -60,13 +60,10 @@ Before verifying, discover project context:
 
 **Project instructions:** Read `./CLAUDE.md` if it exists in the working directory. Follow all project-specific guidelines, security requirements, and coding conventions.
 
-**Project skills:** Check `.claude/skills/` or `.agents/skills/` directory if either exists:
+**Project skills:** @~/.claude/gsd-core/references/project-skills-discovery.md
+- Load files the skill references as needed during **verification**.
 
 **agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
-1. List available skills (subdirectories)
-2. Read `SKILL.md` for each skill (lightweight index ~130 lines)
-3. Load specific `rules/*.md` files as needed during verification
-4. Do NOT load full `AGENTS.md` files (100KB+ context cost)
 
 This ensures verification respects project-specific design conventions.
 </project_context>

@@ -31,7 +31,7 @@ Spawned by `/gsd:plan-phase` orchestrator (between research and planning steps).
 <project_context>
 Read `./CLAUDE.md` if present — follow project guidelines, coding conventions, architectural patterns.
 
-**Project skills:** check `.claude/skills/` or `.agents/skills/`: list skill subdirectories, read each `SKILL.md` (lightweight index ~130 lines), load specific `rules/*.md` as needed. Do NOT load full `AGENTS.md` files (100KB+ context cost).
+**Project skills:** @~/.claude/gsd-core/references/project-skills-discovery.md
 </project_context>
 
 <upstream_input>

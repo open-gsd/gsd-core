@@ -526,10 +526,11 @@ describe('neutralizeAgentReferences', () => {
     assert.ok(neutralizeAgentReferences(input, 'AGENTS.md').includes('AGENTS.md'));
   });
 
-  test('removes AGENTS.md load-blocking instruction', () => {
-    const input = 'Do NOT load full `AGENTS.md` files — they contain agent definitions.';
-    const result = neutralizeAgentReferences(input, 'AGENTS.md');
-    assert.ok(!result.includes('Do NOT load full'), 'blocking instruction removed');
+  test('keeps every line instead of deleting instructions (#4649)', () => {
+    // Deleting a matched line left an empty numbered item ("5. ") in the
+    // project-skills discovery steps on every AGENTS.md-based runtime.
+    const input = '1. List skills.\n2. Do NOT load full `AGENTS.md` files — example.\n3. Apply them.';
+    assert.strictEqual(neutralizeAgentReferences(input, 'AGENTS.md'), input);
   });
 
   test('preserves claude- prefixes (CSS classes, package names)', () => {

@@ -1164,6 +1164,8 @@ a git repo — "unknown" is reported as unknown, not as fresh.
 
 **Cross-scope install shadowing (`W028`).** When a runtime is installed at both `global` and `local` scope and the host's trigger-resolution rules make one scope's `/gsd-*` surface unreachable — the Claude Code case: personal skill always beats project command — health adds a WARNING-severity advisory naming the shadowed triggers, the winning scope, and the losing scope. It never changes health's pass/fail status and is never auto-fixable (there is no single correct scope to remove), so `--repair` never touches it. Identical to the same advisory GSD Core prints at install time. See [Interpret install-shadow warnings](how-to/interpret-install-shadow-warnings.md).
 
+**Project skill index (`W030`).** GSD's discovery agents read only the frontmatter of each project skill (`.claude/skills/`, `.agents/skills/`, and the other project roots of the [skill discovery contract](skills/discovery-contract.md)) and read a full `SKILL.md` only when its `description` fits the task. Health adds a WARNING-severity advisory for a project skill whose `SKILL.md` has no frontmatter `description` (it is then read in full on every discovery-agent spawn) or has more than 500 lines, the [Agent Skills](https://agentskills.io/specification) guideline for `SKILL.md`. GSD's own `gsd-*` skills are not checked. Like any warning, a W030 finding reports health as `degraded`, never `broken`; it is never auto-fixable, so `--repair` never touches it.
+
 **`--repair` does not apply destructive fixes.** Resetting config.json
 (`resetConfig`) and regenerating STATE.md (`regenerateState`) are destructive
 — the former loses custom settings, the latter loses session history — so

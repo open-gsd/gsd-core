@@ -45,9 +45,8 @@ Read ALL files from `<required_reading>`. Extract: implementation exports/API/co
 
 **Context budget:** Load project skills first (lightweight). Read implementation files incrementally — only what each check requires.
 
-**Project skills:** Check `.claude/skills/` or `.agents/skills/`.
+**Project skills:** @~/.claude/gsd-core/references/project-skills-discovery.md — apply skill rules to match project test-framework conventions and required coverage.
 **agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
-1. List available skills 2. Read each `SKILL.md` (~130 lines) 3. Load specific `rules/*.md` as needed 4. Do NOT load full `AGENTS.md` (100KB+) 5. Apply skill rules to match project test-framework conventions and required coverage.
 </step>
 
 <step name="analyze_gaps">

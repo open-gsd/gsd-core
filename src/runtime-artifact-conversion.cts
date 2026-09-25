@@ -2013,8 +2013,6 @@ function neutralizeAgentReferences(content, instructionFile) {
   if (instructionFile) {
     c = c.replace(/CLAUDE\.md/g, instructionFile);
   }
-  // Remove instructions that conflict with AGENTS.md-based runtimes
-  c = c.replace(/Do NOT load full `AGENTS\.md` files[^\n]*/g, '');
   return c;
 }
 

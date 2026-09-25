@@ -1,0 +1,5 @@
+---
+type: Changed
+pr: 4955
+---
+**GSD's discovery agents now read only the project skills that fit their task** — 21 agents and their compact variants read every project `SKILL.md` in full on every spawn, following steps written for one skill pack (#672): a `rules/*.md` layout and an instruction not to load `AGENTS.md`, which the converters for AGENTS.md-based runtimes deleted, leaving an empty numbered step. The steps now live only in `references/project-skills-discovery.md` (16 agents and 15 compact variants had drifted inline copies) and follow the Agent Skills progressive-disclosure model: each skill's frontmatter first, the full `SKILL.md` only when its `description` fits the task, and the files that `SKILL.md` references only when the task needs them. A skill skipped at the index level stays available for a later read, a `SKILL.md` without a `description` is still read in full, and agents that self-load `agent_skills` skip the skills configured for their type instead of reading them twice. (#4649)

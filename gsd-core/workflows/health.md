@@ -249,6 +249,7 @@ Report final status.
 | W027 | warning | Stale git worktree (not modified in a long time) | No |
 | W028 | warning | A GSD-owned install scope shadows another on this machine | No |
 | W029 | warning | .planning/ matches a gitignore rule but is still tracked by git (gitignore has no effect on already-tracked files) | No |
+| W030 | warning | Project skill SKILL.md has no frontmatter description or exceeds the Agent Skills 500-line guideline | No |
 | I001 | info | Plan without SUMMARY (may be in progress) | No |
 | I010 | info | Resolved CWD reported alongside the E010 home-directory guard | No |
 

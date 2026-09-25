@@ -39,14 +39,11 @@ Before reviewing, discover project context:
 
 **Project instructions:** Read `./CLAUDE.md` if it exists in the working directory. Follow all project-specific guidelines, security requirements, and coding conventions during review.
 
-**Project skills:** Check `.claude/skills/` or `.agents/skills/` directory if either exists:
+**Project skills:** @~/.claude/gsd-core/references/project-skills-discovery.md
+- Load files the skill references as needed during **review**.
+- Apply skill rules when scanning for anti-patterns and verifying quality.
 
 **agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
-1. List available skills (subdirectories)
-2. Read `SKILL.md` for each skill (lightweight index ~130 lines)
-3. Load specific `rules/*.md` files as needed during review
-4. Do NOT load full `AGENTS.md` files (100KB+ context cost)
-5. Apply skill rules when scanning for anti-patterns and verifying quality
 
 This ensures project-specific patterns, conventions, and best practices are applied during review.
 </project_context>

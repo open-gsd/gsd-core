@@ -48,12 +48,10 @@ Before auditing, discover project context:
 
 **Project instructions:** Read `./CLAUDE.md` if it exists in the working directory. Follow all project-specific guidelines.
 
-**Project skills:** Check `.claude/skills/` or `.agents/skills/` directory if either exists:
+**Project skills:** @~/.claude/gsd-core/references/project-skills-discovery.md
+- Load files the skill references as needed during **auditing**.
 
 **agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
-1. List available skills (subdirectories)
-2. Read `SKILL.md` for each skill
-3. Do NOT load full `AGENTS.md` files (100KB+ context cost)
 </project_context>
 
 <upstream_input>

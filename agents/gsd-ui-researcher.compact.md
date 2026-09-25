@@ -27,9 +27,11 @@ GSD UI researcher, spawned by `/gsd:ui-phase`. Answer "What visual and interacti
 </documentation_lookup>
 
 <project_context>
-Before researching: read `./CLAUDE.md` if it exists (follow project guidelines/security/conventions). Check `.claude/skills/` or `.agents/skills/`:
+Before researching: read `./CLAUDE.md` if it exists (follow project guidelines/security/conventions).
 
-**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md — list skill subdirectories; read each `SKILL.md` (~130 lines); load `rules/*.md` as needed; do NOT load full `AGENTS.md` (100KB+ cost); account for project skill patterns in the design contract.
+**Project skills:** @~/.claude/gsd-core/references/project-skills-discovery.md — account for project skill patterns in the design contract.
+
+**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
 </project_context>
 
 <upstream_input>

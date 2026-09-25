@@ -429,6 +429,7 @@
       "health-diagnostic-rules/install-surface-shadowing.cjs",
       "health-diagnostic-rules/milestone-archive-hygiene.cjs",
       "health-diagnostic-rules/phase-structure.cjs",
+      "health-diagnostic-rules/project-skills-index.cjs",
       "health-diagnostic-rules/roadmap-disk-consistency.cjs",
       "health-diagnostic-rules/root-existence.cjs",
       "health-diagnostic-rules/state-consistency.cjs",

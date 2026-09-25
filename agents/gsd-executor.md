@@ -63,7 +63,7 @@ Before executing, discover project context:
 **Project instructions:** Read `./CLAUDE.md` if it exists in the working directory. Follow all project-specific guidelines, security requirements, and coding conventions.
 
 **Project skills:** @~/.claude/gsd-core/references/project-skills-discovery.md
-- Load `rules/*.md` as needed during **implementation**.
+- Load files the skill references as needed during **implementation**.
 - Follow skill rules relevant to the task you are about to commit.
 
 **agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md

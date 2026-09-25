@@ -274,23 +274,23 @@ describe('evaluateRuleTable — duplicate-code guard (row 13)', () => {
 
 // ─── RULES — the fully wired table ──────────────────────────────────────────
 //
-// 33 rule entries. Counted directly from each rule-group file's own exported
+// 34 rule entries. Counted directly from each rule-group file's own exported
 // `RULES` array: root-existence (4: E002/E003/E004/W001) + state-consistency
 // (5: W024/W002/W011/W021/W026) + config-validation (11: W003/E005/W004/
 // W008/W016/W012/W013/W014/W015/W022/W029) + phase-structure (4: W005/W023/
 // I001/W009) + agent-install (1: W010) + roadmap-disk-consistency (2: W006/
 // W007) + worktree-health (3: W020/W017/W027) + milestone-archive-hygiene
 // (2: W018/W019) + install-surface-shadowing (1: W028, #2873 epic #2866
-// Phase 4a) = 33. config-validation.cts's W029 (#3586, epic #2292) is
+// Phase 4a) + project-skills-index (1: W030, #4649) = 34. config-validation.cts's W029 (#3586, epic #2292) is
 // registered there per this batch's brief even though its subject
 // (`.planning/` tracked-but-ignored) is not config.json-sourced. E001 and
 // the home-directory guard (E010/I010) are deliberately NOT rows (design
 // doc, "Two guards that stay OUTSIDE the rule table entirely").
 
 describe('RULES', () => {
-  test('is the full, frozen 33-rule table with every code unique', () => {
+  test('is the full, frozen 34-rule table with every code unique', () => {
     assert.equal(Array.isArray(RULES), true);
-    assert.equal(RULES.length, 33);
+    assert.equal(RULES.length, 34);
     const codes = RULES.map((r) => r.code);
     assert.equal(new Set(codes).size, codes.length, 'every rule code must be unique');
   });

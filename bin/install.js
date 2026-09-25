@@ -7235,7 +7235,6 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
  *   Preserves: "Claude Code" (product), "Claude Opus/Sonnet/Haiku" (models),
  *   "claude-" (prefixes), "CLAUDE.md" (handled separately)
  * - "CLAUDE.md" → runtime-appropriate instruction file
- * - "Do NOT load full AGENTS.md" → removed (harmful for AGENTS.md runtimes)
  *
  * @param {string} content - File content to neutralize
  * @param {string} instructionFile - Runtime's instruction file ('AGENTS.md', 'GEMINI.md', etc.)
@@ -7250,8 +7249,6 @@ function neutralizeAgentReferences(content, instructionFile) {
   if (instructionFile) {
     c = c.replace(/CLAUDE\.md/g, instructionFile);
   }
-  // Remove instructions that conflict with AGENTS.md-based runtimes
-  c = c.replace(/Do NOT load full `AGENTS\.md` files[^\n]*/g, '');
   return c;
 }
 

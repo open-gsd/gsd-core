@@ -61,12 +61,9 @@ are not concrete fixes.
 <project_context>
 Before verifying: read `./CLAUDE.md` if present, follow project-specific guidelines.
 
-Check `.claude/skills/` or `.agents/skills/` if either exists.
+**Project skills:** @~/.claude/gsd-core/references/project-skills-discovery.md — this ensures verification respects project-specific design conventions.
 
-**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md — list
-skills, read each `SKILL.md` (~130 lines), load `rules/*.md` as needed during verification. Do
-NOT load full `AGENTS.md` (100KB+ cost). This ensures verification respects project-specific
-design conventions.
+**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
 </project_context>
 
 <upstream_input>
