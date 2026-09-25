@@ -650,6 +650,35 @@ function identifyMergeCommit({ head, cwd }) {
       : { ok: false, reason: 'git-command-failed', message: err.message };
   }
   if (headParents.length === 2) {
+    // Round-8 review fix (root cause of a failing regression test): a
+    // `gh pr update-branch`-style operation merges the current base INTO an
+    // already-existing genuine back-merge commit, producing a NEW commit
+    // whose parents are [the real merge commit, the new base tip] — which,
+    // by parent COUNT alone, is indistinguishable from a genuine 2-parent
+    // back-merge commit (this is exactly what the module header's "Review
+    // fix (MEDIUM, code#4)" note already warns `gh pr update-branch` can
+    // produce). `identify` has no ref context (no `origin/next`/
+    // `origin/main` to compare against — that is `verify`'s job), so it
+    // cannot check WHICH commit is genuinely at each tip; it CAN check
+    // structural well-formedness: a genuine back-merge commit's own two
+    // parents (next's tip, main's tip) are never themselves merge commits
+    // FROM THIS WORKFLOW's perspective (this workflow is the only source of
+    // merge commits onto `next`), so if EITHER parent is itself a 2-parent
+    // commit, this is a merge-of-a-merge — refused outright as
+    // unrecognized, never silently accepted as "0 extra commits on top".
+    let firstParentParents;
+    let secondParentParents;
+    try {
+      firstParentParents = parentsOf(headParents[0]);
+      secondParentParents = parentsOf(headParents[1]);
+    } catch (err) {
+      return isGitTimeoutError(err)
+        ? { ok: false, reason: 'git-timeout', message: err.message }
+        : { ok: false, reason: 'git-command-failed', message: err.message };
+    }
+    if (firstParentParents.length === 2 || secondParentParents.length === 2) {
+      return { ok: false, reason: 'unrecognized-shape' };
+    }
     return { ok: true, mergeCommit: head, nextParent: headParents[0], mainParent: headParents[1], extraCommit: null };
   }
   if (headParents.length === 1) {

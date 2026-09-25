@@ -841,9 +841,18 @@ describe('#4990: backmerge-merge-when-green.yml (event-driven back-merge PR merg
     assert.match(allRunText, /already merged at the verified sha|already MERGED at the verified sha/i);
   });
 
+  // Round-6 review fix (MINOR, code#7 / SEC LOW): the staleness age
+  // threshold is still computed in `evaluate` (BACKMERGE_PR_STALENESS_AGE_HOURS),
+  // but the alarm itself (the ::error:: that fails the job) moved to `act`'s
+  // `stale` case — evaluate holds no bot identity, so it can only RECORD a
+  // `stale` candidate; only `act` (which re-verifies real authorship) is
+  // authoritative enough to raise the alarm. See the dedicated "round-6
+  // review fixes" describe block below for the full ordering/author-check
+  // assertions on this behavior.
   test('a staleness backstop fails the job loudly for an open back-merge PR past the documented age', () => {
     assert.match(allRunText, /BACKMERGE_PR_STALENESS_AGE_HOURS/);
-    assert.match(allRunText, /::error::[^\n]*open for over/);
+    assert.match(allRunText, /printf 'stale\\t%s\\t%s\\n' "\$PR" "\$CREATED_AT" >> actions\.txt/);
+    assert.match(allRunText, /::error::[^\n]*past the documented staleness age[^\n]*not merged/);
   });
 
   // Review fix (MINOR, code#11): cheap eligibility work (candidate listing,
@@ -1091,13 +1100,16 @@ describe('#4990 round-3: auto-backmerge.yml bot-token push + superseded-PR clean
     assert.equal(checkoutStep.with && checkoutStep.with['persist-credentials'], false);
   });
 
-  // Round-4 review fix (NIT 7): the push now authenticates via `-c
-  // http.extraheader`, never a token embedded in the push URL — see the
-  // dedicated "the push authenticates via -c http.extraheader..." test in
-  // the build/push job-split describe block above for the full assertion;
-  // this test locks in the surrounding no-fallback / force-with-lease shape
-  // from the SAME step, now named "Push the built branch".
-  test('the push uses the bot token only (no GITHUB_TOKEN fallback), with force-with-lease against an expected sha (BLOCKER 1, NIT 10)', () => {
+  // Round-6 review fix (SEC LOW, code#7): the push authenticates via
+  // GIT_CONFIG_COUNT/KEY_0/VALUE_0 env vars, never `-c http.extraheader`
+  // (visible on argv) and never a token embedded in the push URL. Round-5
+  // review fix (NIT, code#5): force-with-lease now leases on `build`'s OWN
+  // observed `existing_sha` job output (never a fresh local
+  // `git rev-parse`), using git's create-only lease form when empty — see
+  // the dedicated "round-5 review fixes" describe block above for the full
+  // assertion; this test locks in the surrounding no-GITHUB_TOKEN-fallback
+  // shape on the SAME step, "Push the built branch".
+  test('the push uses the bot token only (no GITHUB_TOKEN fallback), with force-with-lease against build\'s existing_sha output (BLOCKER 1, NIT 10)', () => {
     const pushStep = findStep(steps, 'Push the built branch').step;
     assert.ok(pushStep, 'expected a "Push the built branch" step');
     assert.equal(pushStep.env && pushStep.env.BOT_TOKEN, '${{ secrets.GSD_BOT_PR_TOKEN }}');
@@ -1111,8 +1123,10 @@ describe('#4990 round-3: auto-backmerge.yml bot-token push + superseded-PR clean
       /secrets\.GITHUB_TOKEN|GSD_BOT_PR_TOKEN\s*\|\|/,
       'the push must not fall back to GITHUB_TOKEN when the bot token is unset (the step already hard-fails via exit 1 above instead)',
     );
-    assert.match(pushStep.run, /EXISTING_REMOTE_SHA=\$\(git rev-parse -q --verify "refs\/remotes\/origin\/\$BR"/);
-    assert.match(pushStep.run, /--force-with-lease="refs\/heads\/\$BR:\$EXISTING_REMOTE_SHA"/);
+    assert.equal(pushStep.env && pushStep.env.EXISTING_SHA, '${{ needs.build.outputs.existing_sha }}');
+    assert.match(pushStep.run, /force-with-lease="refs\/heads\/\$BR:\$EXISTING_SHA"/);
+    assert.match(pushStep.run, /force-with-lease="refs\/heads\/\$BR:"/, 'expected the create-only lease form when existing_sha is empty');
+    assert.doesNotMatch(pushStep.run, /git push --force\s+origin/, 'must never fall back to a bare --force');
   });
 
   test('opening/updating a PR closes older open bot-authored same-repo chore/backmerge-* PRs with a comment naming the superseding PR (MAJOR 3)', () => {
@@ -1186,10 +1200,15 @@ describe('#4990 round-3: bot-token exposure (sec HIGH) — environment gating ac
     );
   });
 
+  // Round-4 review fix (MEDIUM, code#4) renamed auto-backmerge.yml's single
+  // `backmerge` job to `build`/`push` (only `push` holds the token); round-5
+  // review fix (MINOR, code#3) removed backmerge-merge-when-green.yml's
+  // `merge-if-green` job in favor of `evaluate`/`act` (only `act` holds the
+  // token).
   test('no other job in any of the 5 bot-token workflows references GSD_BOT_PR_TOKEN outside its documented job(s)', () => {
     const expected = {
-      'auto-backmerge.yml': ['backmerge'],
-      'backmerge-merge-when-green.yml': ['merge-if-green'],
+      'auto-backmerge.yml': ['push'],
+      'backmerge-merge-when-green.yml': ['act'],
       'ci-timeout-report.yml': ['report'],
       'release.yml': ['rc', 'finalize'],
       'dependabot-vendor-refresh.yml': ['refresh-vendor'],

@@ -620,7 +620,14 @@ describe('backmerge-tree: identify', () => {
     const otherSide = g(['rev-parse', 'HEAD']).trim();
 
     g(['checkout', '-q', '-b', 'update-branch-style', mergeCommit]);
-    g(['merge', '-q', '--no-edit', otherSide]);
+    // Round-8 review fix (root cause, part 1 of 2): `otherSide` was built
+    // directly on top of `mergeCommit`, so `mergeCommit` is a direct
+    // ancestor of `otherSide` — a plain `git merge` here FAST-FORWARDS
+    // instead of creating a real merge commit, silently collapsing this
+    // fixture down to the SAME 1-parent shape the "one version-sync commit
+    // on top" test already covers. `--no-ff` forces the real 2-parent
+    // merge-of-a-merge commit this test's name and comment describe.
+    g(['merge', '-q', '--no-ff', '--no-edit', otherSide]);
     const updateBranchHead = g(['rev-parse', 'HEAD']).trim();
 
     const result = runScript(['identify', '--head', updateBranchHead, '--cwd', repoDir], repoDir);
