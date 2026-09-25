@@ -3244,6 +3244,69 @@ describe('#4794: decision-coverage answers an unmeasured shape on could-not-pars
   });
 });
 
+// ─── #4939: a phase dir that does not exist is a caller error, not covered: 0 ──
+
+describe('#4939: decision-coverage with a phase directory that does not exist answers a caller error', () => {
+  let tmpDir;
+  let phaseDir;
+  let contextPath;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-4939-');
+    phaseDir = path.join(tmpDir, '.planning', 'phases', '01-init');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    writeContextFile(phaseDir, [
+      '# Context',
+      '',
+      '<decisions>',
+      '',
+      '- **D-01: The list shows one row per contact.** Nothing else changes.',
+      '- **D-02: Contacts render as cards.** One pair, one card.',
+      '',
+      '</decisions>',
+    ].join('\n'));
+    writePlanFile(phaseDir, '01', '# Plan\n## Objective\nImplement D-01 and D-02.\n');
+    contextPath = path.join(phaseDir, 'CONTEXT.md');
+  });
+
+  afterEach(() => cleanup(tmpDir));
+
+  test('#4939: control — the phase DIRECTORY measures full coverage', () => {
+    const parsed = JSON.parse(runDecisionCoveragePlan(phaseDir, contextPath, tmpDir).output || '{}');
+    assert.strictEqual(parsed.passed, true, `control must pass, got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.covered, 2);
+  });
+
+  test('#4939: plan gate — the phase NUMBER in the phase-dir slot fails closed as a caller error, not covered: 0', () => {
+    // The issue's repro: `check decision-coverage-plan 01 <context>`. The plans
+    // exist and cite both decisions; nothing was scanned because "01" is not a
+    // directory. The gate used to answer covered: 0 with every decision uncovered.
+    const parsed = JSON.parse(runDecisionCoveragePlan('01', contextPath, tmpDir).output || '{}');
+
+    assert.strictEqual(parsed.passed, false, 'the gate must still block');
+    assert.strictEqual(parsed.skipped, false, 'must not be a green skip');
+    assert.strictEqual(parsed.reason, 'phase directory not found', `got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.total, null, 'total must be null — nothing was measured');
+    assert.strictEqual(parsed.covered, null, 'covered must be null — nothing was measured');
+    assert.ok(!('uncovered' in parsed), 'uncovered must be OMITTED — the list was never built');
+    assert.ok((parsed.message || '').includes('01'), 'the message must name the argument it could not find');
+  });
+
+  test('#4939: verify gate — the phase NUMBER in the phase-dir slot answers a non-blocking caller-error warning', () => {
+    const parsed = JSON.parse(
+      runGsdTools(['query', 'check.decision-coverage-verify', '01', contextPath], tmpDir).output || '{}',
+    );
+
+    assert.strictEqual(parsed.blocking, false, 'verify stays non-blocking');
+    assert.strictEqual(parsed.skipped, false, 'must not be a silent skip');
+    assert.strictEqual(parsed.reason, 'phase directory not found', `got: ${JSON.stringify(parsed)}`);
+    assert.ok(
+      !Array.isArray(parsed.not_honored) || parsed.not_honored.length === 0,
+      `no decision may be reported not-honored from a scan that never happened, got: ${JSON.stringify(parsed.not_honored)}`,
+    );
+  });
+});
+
 // ─── #4906 Phase 3 (#4958, #4793): a second plain-prose colon in a decision title ─
 // no longer causes could-not-parse — the separator is the LAST bare colon before
 // the closing **. A colon-less bullet must still be rejected (#1639 discipline).
