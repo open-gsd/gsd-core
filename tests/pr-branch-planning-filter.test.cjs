@@ -922,6 +922,34 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       return fs.readFileSync(WORKFLOW_PATH, 'utf-8');
     }
 
+    // Windows: `execFileSync('sh', ['-c', script], ...)` passes a large,
+    // multi-line, quote-heavy `script` as a single argv element. POSIX hands
+    // that straight to execve with no re-parsing, but Windows processes only
+    // ever receive ONE command-line string, so Node's uv layer must serialize
+    // argv into it using the MS CRT backslash-quote quoting convention. Git
+    // for Windows' `sh.exe` is an MSYS2/Cygwin binary: it decodes that
+    // command line with Cygwin's OWN argv parser, not the CRT one Node
+    // assumes, and the two diverge on long arguments containing many nested
+    // double quotes and heredoc markers (test 54's extracted recipe carries
+    // ~9.5KB, 170 lines, 82 double quotes, and 2 heredoc markers vs. test 53's
+    // ~1.4KB/22-line script, the smallest of the three — see investigation
+    // notes). That divergence is exactly what CI observed: an `if`/`fi`
+    // pairing broken mid-script on Windows only, with `bash -n` clean on the
+    // identical LF-only text. Routing the script through the filesystem
+    // instead of argv sidesteps the whole encode/decode mismatch: the only
+    // thing that reaches Windows' command-line serialization is a short
+    // temp-file path with no embedded quotes or newlines to mis-escape.
+    function runShScript(script, cwd) {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-prbranch-script-'));
+      const scriptPath = path.join(tmpDir, 'recipe.sh');
+      try {
+        fs.writeFileSync(scriptPath, script);
+        return execFileSync('sh', [scriptPath], { cwd, encoding: 'utf8', timeout: CHERRY_PICK_RECIPE_TIMEOUT_MS });
+      } finally {
+        cleanup(tmpDir);
+      }
+    }
+
     // The canonical declarations block: TRANSIENT_DIRS/STRUCTURAL_RE/
     // MILESTONE_PHASES_RE, extracted verbatim — not hand-copied — so this
     // layer runs the ACTUAL shipped values, not a mirror of them.
@@ -951,7 +979,7 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
           derivationBlock(),
           'printf \'%s\' "$FILTER_PATHS"',
         ].join('\n');
-        const stdout = execFileSync('sh', ['-c', script], { cwd: dir, encoding: 'utf8', timeout: CHERRY_PICK_RECIPE_TIMEOUT_MS });
+        const stdout = runShScript(script, dir);
         const lines = stdout.split('\n').filter(Boolean);
         assert.ok(
           lines.includes('.planning/milestones/v1.0-phases/'),
@@ -980,7 +1008,7 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
           'printf \'phases=\'     ; echo ".planning/milestones/v1.0-phases/03-live/PLAN.md" | grep -Ec "$MILESTONE_PHASES_RE" || true',
           'printf \'topfile=\'    ; echo ".planning/milestones/v1.0-ROADMAP.md" | grep -Ec "$STRUCTURAL_RE" || true',
         ].join('\n');
-        const stdout = execFileSync('sh', ['-c', script], { cwd: dir, encoding: 'utf8', timeout: CHERRY_PICK_RECIPE_TIMEOUT_MS });
+        const stdout = runShScript(script, dir);
         assert.ok(stdout.includes('structural=0'), `expected structural=0, got: ${stdout}`);
         assert.ok(stdout.includes('phases=1'), `expected phases=1, got: ${stdout}`);
         assert.ok(stdout.includes('topfile=1'), `expected topfile=1 (a direct milestones/ file stays structural), got: ${stdout}`);
@@ -1030,7 +1058,7 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
           `INCLUDED_COMMITS="${c2}"`,
           extractPickLoop(readWorkflowText()),
         ].join('\n');
-        execFileSync('sh', ['-c', script], { cwd: dir, encoding: 'utf8', timeout: CHERRY_PICK_RECIPE_TIMEOUT_MS });
+        runShScript(script, dir);
 
         const count = parseInt(git(['rev-list', '--count', 'main..prbranch'], dir).trim(), 10);
         assert.strictEqual(count, 1, 'exactly c2 must land on prbranch (c1 was never even attempted)');
