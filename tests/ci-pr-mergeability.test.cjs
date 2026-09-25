@@ -998,6 +998,55 @@ describe('merge queue readiness (#4990)', () => {
     'pr-template-format.yml',
   ]);
 
+  /**
+   * Round-11 review fix: the real invariant is "on a merge_group event, NO
+   * STEP of this job ever executes" — satisfied by EITHER a job-level `if:`
+   * excluding merge_group, OR every one of the job's own steps individually
+   * having an `if:` that excludes it. A job-level exclusion and step-level
+   * exclusions are both genuine fixes for the same hazard (crashing on
+   * undefined `github.event.pull_request.*` fields); requiring literally
+   * one specific placement (job-level only) is not the actual invariant —
+   * require-issue-link.yml legitimately uses the step-level form so the
+   * job itself never reports "skipped" (the #1389 branch-protection
+   * convention tests/workflow-maintainer-skip.test.cjs also enforces).
+   */
+  function jobExcludesMergeGroup(job) {
+    const jobCond = typeof job.if === 'string' ? job.if : '';
+    if (/event_name\s*!=\s*'merge_group'/.test(jobCond)) return true;
+    const steps = job.steps || [];
+    if (steps.length === 0) return false; // no job-level guard and nothing to individually guard either
+    return steps.every((s) => /event_name\s*!=\s*'merge_group'/.test(typeof s.if === 'string' ? s.if : ''));
+  }
+
+  // Self-test (not vacuous): a job with no job-level guard and at least one
+  // UNGUARDED step must be flagged as a violation.
+  test('jobExcludesMergeGroup itself catches an unguarded step (self-test, not vacuous)', () => {
+    assert.equal(
+      jobExcludesMergeGroup({
+        steps: [
+          { name: 'guarded', if: "github.event_name != 'merge_group'" },
+          { name: 'unguarded' }, // no if: at all
+        ],
+      }),
+      false,
+      'a job with even one unguarded step must be flagged — merge_group would still execute that step',
+    );
+    // Sanity: the all-guarded and job-level-guarded shapes are both accepted.
+    assert.equal(
+      jobExcludesMergeGroup({
+        steps: [
+          { name: 'a', if: "github.event_name != 'merge_group'" },
+          { name: 'b', if: "github.event_name != 'merge_group'" },
+        ],
+      }),
+      true,
+    );
+    assert.equal(
+      jobExcludesMergeGroup({ if: "github.event_name != 'merge_group'", steps: [{ name: 'a' }, { name: 'b' }] }),
+      true,
+    );
+  });
+
   /** Every {file, jobId, job, doc} whose effective name (job.name, else the job id) equals `context`. */
   function findProducingJobs(context) {
     const matches = [];
@@ -1042,17 +1091,19 @@ describe('merge queue readiness (#4990)', () => {
       );
     });
 
-    test(`required context "${context}": if produced by a PR-metadata workflow, the job skips on merge_group`, () => {
+    test(`required context "${context}": if produced by a PR-metadata workflow, no step of the job executes on merge_group`, () => {
       const [found] = findProducingJobs(context);
       assert.ok(found, `no job produces required context "${context}"`);
       if (!PR_METADATA_WORKFLOWS.has(found.file)) return; // test.yml: #4241 already handles this differently.
-      const condition = typeof found.job.if === 'string' ? found.job.if : '';
-      assert.match(
-        condition,
-        /event_name\s*!=\s*'merge_group'/,
-        `${found.file}: job "${found.jobId}" (required context "${context}") must gate on `
-          + `github.event_name != 'merge_group' — it reads github.event.pull_request.* fields that `
-          + `are undefined on a merge_group event`,
+      assert.ok(
+        jobExcludesMergeGroup(found.job),
+        `${found.file}: job "${found.jobId}" (required context "${context}") must ensure NO step executes on `
+          + `merge_group — satisfied by EITHER a job-level if: excluding github.event_name != 'merge_group', OR `
+          + `every one of its steps individually having an if: excluding it (round-9 review fix, #4990: `
+          + `require-issue-link.yml moved this from job-level to step-level to also satisfy the #1389 `
+          + `branch-protection convention in tests/workflow-maintainer-skip.test.cjs — either placement is a real `
+          + `fix, an UNGUARDED step is not). The job reads github.event.pull_request.* fields that are undefined `
+          + `on a merge_group event.`,
       );
     });
   }

@@ -1360,6 +1360,12 @@ describe('backmerge-tree: GIT_TIMEOUT_MS / timeout handling (review fix, code#8)
     test('a timed-out fileExistsAtRef inside verify resolves ok:false, reason git-timeout — never ok:true', () => {
       const impl = (cmd, args) => {
         if (args[0] === 'merge-base') return ''; // both ancestor checks succeed
+        // Round-11 review fix: verifyBackmergeContent now also requires
+        // mainParent to equal origin/main's CURRENT tip exactly (round-10) —
+        // this must match `mainParent` below or the function returns
+        // 'main-parent-not-current' before ever reaching the cat-file call
+        // this test exists to exercise.
+        if (args[0] === 'rev-parse') return 'b'.repeat(40); // origin/main's current tip == mainParent
         if (args[0] === 'rev-list') return ''; // empty range, no foreign commits
         if (args[0] === 'checkout') return ''; // detach onto nextParent
         if (args[0] === 'merge') return ''; // -s ours merge succeeds
@@ -1408,7 +1414,12 @@ describe('backmerge-tree: GIT_TIMEOUT_MS / timeout handling (review fix, code#8)
           if (args[0] === 'merge') return ''; // -s ours merge succeeds
           if (args[0] === 'cat-file') return ''; // CHANGELOG.md exists at mainRef
           if (args[0] === 'write-tree') return 'c'.repeat(40); // matches mergeCommit's own tree below
-          if (args[0] === 'rev-parse') return 'c'.repeat(40); // mergeCommit^{tree}
+          // Round-11 review fix: two DIFFERENT rev-parse calls now happen —
+          // origin/main's current tip (round-10, must equal mainParent
+          // below or verify returns 'main-parent-not-current' before ever
+          // reaching ls-tree) and mergeCommit^{tree} (matched against
+          // write-tree's result above) — distinguished by their own arg.
+          if (args[0] === 'rev-parse') return args[1] === 'origin/main' ? 'b'.repeat(40) : 'c'.repeat(40);
           if (args[0] === 'diff') return 'capabilities/foo/capability.json\n'; // one extra file
           if (args[0] === 'show') return '{"version":"1.2.3"}\n'; // isReleaseVersion-passing target
           if (args[0] === 'ls-tree') throw makeTimeoutError('git ls-tree timed out');
