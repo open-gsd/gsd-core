@@ -42,6 +42,32 @@ describe('parseStateMd reads the frontmatter block the one fence owner finds', (
 });
 
 /**
+ * The documented fields of the statusline payload's `context_window` object
+ * (code.claude.com/docs/en/statusline). Every fixture below builds its
+ * `context_window` through `contextWindow()`, which rejects anything else.
+ *
+ * That guard exists because these fixtures carried `total_tokens`, which the
+ * host does not send: `totalCtx` therefore always took its 1M fallback in a
+ * real session while the tests exercised a code path that could never run
+ * (PR #4959 review). A fixture that invents a field now fails loudly here
+ * instead of quietly asserting fiction.
+ */
+const CONTEXT_WINDOW_FIELDS = Object.freeze([
+  'total_input_tokens', 'total_output_tokens', 'context_window_size',
+  'used_percentage', 'remaining_percentage', 'current_usage',
+]);
+function contextWindow(fields) {
+  for (const key of Object.keys(fields)) {
+    if (!CONTEXT_WINDOW_FIELDS.includes(key)) {
+      throw new Error(
+        'context_window.' + key + ' is not a documented statusline field (' + CONTEXT_WINDOW_FIELDS.join(', ') + ')',
+      );
+    }
+  }
+  return fields;
+}
+
+/**
  * A single hooks/gsd-statusline.js spawn, no fan-out -- the "long-lived
  * status renderer" class (renders context-window percentage, git
  * branch/status, active-teams state), a distinct and heavier operation
@@ -661,7 +687,7 @@ describe('context meter respects CLAUDE_CODE_AUTO_COMPACT_WINDOW (#2219)', () =>
   // CLAUDE_CONFIG_DIR to a scratch dir (optionally seeded with settings) —
   // otherwise the developer's real ~/.claude/settings.json would steer the
   // expected percentages below.
-  function runHook(remainingPct, totalTokens, acwEnv, settings) {
+  function runHook(remainingPct, contextWindowSize, acwEnv, settings) {
     const sessionId = `test-2219-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-statusline-cfg-'));
     if (settings) fs.writeFileSync(path.join(configDir, 'settings.json'), JSON.stringify(settings));
@@ -669,15 +695,15 @@ describe('context meter respects CLAUDE_CODE_AUTO_COMPACT_WINDOW (#2219)', () =>
       model: { display_name: 'Claude' },
       workspace: { current_dir: os.tmpdir() },
       session_id: sessionId,
-      context_window: {
+      context_window: contextWindow({
         remaining_percentage: remainingPct,
-        total_tokens: totalTokens,
-      },
+        context_window_size: contextWindowSize,
+      }),
     });
 
     const env = { ...process.env, CLAUDE_CONFIG_DIR: configDir };
-    delete env.DISABLE_AUTOCOMPACT;
-    delete env.CLAUDE_CODE_DISABLE_AUTO_COMPACT;
+    delete env.DISABLE_AUTO_COMPACT;
+    delete env.DISABLE_COMPACT;
     if (acwEnv != null) {
       env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(acwEnv);
     } else {
@@ -749,14 +775,31 @@ describe('context meter respects CLAUDE_CODE_AUTO_COMPACT_WINDOW (#2219)', () =>
   });
 
   test('isAutoCompactDisabled: env switches and settings precedence, fail-soft', () => {
-    const { isAutoCompactDisabled } = require('../hooks/gsd-statusline.js');
+    const { isAutoCompactDisabled, AUTO_COMPACT_DISABLE_ENV_KEYS, AUTO_COMPACT_ENV_TRUTHY } = require('../hooks/gsd-statusline.js');
     const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-statusline-cfg-'));
     const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-statusline-proj-'));
     try {
       const env = { CLAUDE_CONFIG_DIR: cfg };
       assert.equal(isAutoCompactDisabled(proj, env), false, 'nothing configured');
-      assert.equal(isAutoCompactDisabled(proj, { ...env, DISABLE_AUTOCOMPACT: '1' }), true);
-      assert.equal(isAutoCompactDisabled(proj, { ...env, CLAUDE_CODE_DISABLE_AUTO_COMPACT: 'true' }), true);
+      // The env names and accepted values are Claude Code's own
+      // (`Boolean(truthy(DISABLE_COMPACT) || DISABLE_AUTO_COMPACT)`), not invented:
+      // an invented name reads as 'not disabled' forever (PR #4959 review).
+      assert.deepEqual([...AUTO_COMPACT_DISABLE_ENV_KEYS], ['DISABLE_AUTO_COMPACT', 'DISABLE_COMPACT']);
+      assert.deepEqual([...AUTO_COMPACT_ENV_TRUTHY], ['1', 'true', 'yes', 'on']);
+      for (const key of AUTO_COMPACT_DISABLE_ENV_KEYS) {
+        for (const value of ['1', 'true', 'yes', 'on', ' TRUE ', 'On']) {
+          assert.equal(isAutoCompactDisabled(proj, { ...env, [key]: value }), true, `${key}=${JSON.stringify(value)}`);
+        }
+        for (const value of ['0', 'false', '', 'no', 'off']) {
+          assert.equal(isAutoCompactDisabled(proj, { ...env, [key]: value }), false, `${key}=${JSON.stringify(value)}`);
+        }
+      }
+      assert.equal(isAutoCompactDisabled(proj, { ...env, DISABLE_AUTOCOMPACT: '1' }), false,
+        'DISABLE_AUTOCOMPACT is not a Claude Code variable and must not be honoured');
+      // Positive control for the fixture guard itself: without this, a future
+      // fixture could reintroduce an invented field and nothing would notice.
+      assert.throws(() => contextWindow({ total_tokens: 200000 }), /not a documented statusline field/);
+      assert.deepEqual(contextWindow({ context_window_size: 200000 }), { context_window_size: 200000 });
       fs.writeFileSync(path.join(cfg, 'settings.json'), '{ not json');
       assert.equal(isAutoCompactDisabled(proj, env), false, 'unparseable settings are ignored');
       fs.writeFileSync(path.join(cfg, 'settings.json'), JSON.stringify({ autoCompactEnabled: false }));
@@ -792,24 +835,24 @@ describe('context meter boundary: acw at/near totalCtx does not pin used at 100%
    * Run the hook with a given acw and totalTokens; remaining fixed at 50%.
    * Returns the normalizedUsed percentage shown in the statusline bar.
    */
-  function runBoundaryHook(remainingPct, totalTokens, acwEnv) {
+  function runBoundaryHook(remainingPct, contextWindowSize, acwEnv) {
     const sessionId = `test-1194-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const payload = JSON.stringify({
       model: { display_name: 'Claude' },
       workspace: { current_dir: os.tmpdir() },
       session_id: sessionId,
-      context_window: {
+      context_window: contextWindow({
         remaining_percentage: remainingPct,
-        total_tokens: totalTokens,
-      },
+        context_window_size: contextWindowSize,
+      }),
     });
 
     // Pin CLAUDE_CONFIG_DIR to an empty scratch dir so the developer's real
     // ~/.claude/settings.json (autoCompactEnabled) cannot steer the buffer.
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-statusline-cfg-'));
     const env = { ...process.env, CLAUDE_CONFIG_DIR: configDir };
-    delete env.DISABLE_AUTOCOMPACT;
-    delete env.CLAUDE_CODE_DISABLE_AUTO_COMPACT;
+    delete env.DISABLE_AUTO_COMPACT;
+    delete env.DISABLE_COMPACT;
     if (acwEnv != null) {
       env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(acwEnv);
     } else {
@@ -955,7 +998,7 @@ describe('todo-resolution: resolves in_progress task from the newest matching to
       model: { display_name: 'Claude' },
       workspace: { current_dir: os.tmpdir() },
       session_id: session,
-      context_window: { remaining_percentage: 80, total_tokens: 1_000_000 },
+      context_window: contextWindow({ remaining_percentage: 80, context_window_size: 1_000_000 }),
     });
 
     const env = { ...process.env, CLAUDE_CONFIG_DIR: tempDir };
@@ -1734,15 +1777,15 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
         model: { display_name: 'Claude' },
         workspace: { current_dir: dir },
         session_id: `test-tokens-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        context_window: {
+        context_window: contextWindow({
           remaining_percentage: 70,
-          total_tokens: 200000,
+          context_window_size: 200000,
           current_usage: {
             input_tokens: 1000,
             cache_read_input_tokens: 150000,
             output_tokens: 5000,
           },
-        },
+        }),
       });
       const r = runHookSeam(hookPath, [], { input: payload, timeoutMs: STATUSLINE_HOOK_TIMEOUT_MS });
       // eslint-disable-next-line no-control-regex -- stripping ANSI SGR sequences from captured CLI output
@@ -3139,7 +3182,7 @@ describe('evaluateUpdateCache lineage guard', () => {
           model: { display_name: 'Claude' },
           workspace: { current_dir: dir },
           session_id: session,
-          context_window: { remaining_percentage: 80, total_tokens: 1_000_000 },
+          context_window: contextWindow({ remaining_percentage: 80, context_window_size: 1_000_000 }),
         });
         const r = runHookSeam(hookPath, [], {
           input: payload,
