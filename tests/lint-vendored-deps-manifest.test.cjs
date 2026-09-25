@@ -50,6 +50,27 @@ function re2jsRow() {
   return row;
 }
 
+for (const name of ['tap-parser', 'saxes']) {
+  test(`#4692: ${name} bundle and license notices are reproducible and drift is rejected`, () => {
+    const row = VENDORED.find((entry) => entry.name === name);
+    assert.ok(row);
+    assert.deepEqual(checkRow(row), []);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'parser-vendor-'));
+    try {
+      const copy = path.join(dir, `${name}.cjs`);
+      fs.copyFileSync(resolvePath(row.vendoredCjs), copy);
+      fs.copyFileSync(resolvePath(`${row.vendoredCjs}.LICENSE.txt`), `${copy}.LICENSE.txt`);
+      const scratch = { ...row, vendoredCjs: copy };
+      fs.appendFileSync(copy, '\n// accidental edit\n');
+      assert.ok(checkRow(scratch).some((finding) => finding.includes(`${copy} !=`)));
+      assert.deepEqual(fixRow(scratch), []);
+      fs.writeFileSync(`${copy}.LICENSE.txt`, 'missing upstream notices\n');
+      assert.ok(checkRow(scratch).some((finding) => finding.includes('.LICENSE.txt !=')));
+      assert.deepEqual(fixRow(scratch), []);
+    } finally { cleanup(dir); }
+  });
+}
+
 describe('resolvePath: absolute-input safety does not change repo-relative resolution', () => {
   test('a repo-relative input still resolves under REPO_ROOT (unchanged behavior)', () => {
     const row = jsYamlRow();

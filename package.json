@@ -69,6 +69,7 @@
     "@stryker-mutator/tap-runner": "^9.6.1",
     "@types/node": "^22.19.19",
     "c8": "^11.0.0",
+    "esbuild": "0.28.2",
     "eslint": "^9.39.4",
     "eslint-plugin-n": "^17.24.0",
     "eslint-plugin-no-only-tests": "^3.4.0",
@@ -79,6 +80,8 @@
     "js-yaml": "^4.3.2",
     "mutation-testing-metrics": "^3.7.3",
     "re2js": "^2.8.6",
+    "saxes": "6.0.0",
+    "tap-parser": "18.3.4",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.60.0"
   },
@@ -161,9 +164,11 @@
     "test:coverage:all": "npm run test:coverage",
     "test:mutation": "stryker run",
     "gen:features": "node scripts/gen-features.cjs",
-    "gen:state-md-docs": "node scripts/gen-state-md-docs.cjs"
+    "gen:state-md-docs": "node scripts/gen-state-md-docs.cjs",
+    "lint:vendored-deps": "node scripts/lint-vendored-deps.cjs"
   },
   "allowScripts": {
-    "fallow@2.70.0": true
+    "fallow@2.70.0": true,
+    "esbuild@0.28.2": true
   }
 }

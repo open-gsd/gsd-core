@@ -139,7 +139,7 @@ describe('classifyRedEvidence (#3770)', () => {
   });
 
   test('row 4 — classifyRedEvidence rejects nonzero exit without a failing test', () => {
-    const result = classifyRedEvidence(validRedInput({ output: TARGET_FAILURE_TAP.replace('# fail 1', '# fail 0') }));
+    const result = classifyRedEvidence(validRedInput({ output: 'TAP version 13\nok 1 - rejects empty email\n1..1\n' }));
     assert.equal(result.verdict, 'INVALID_RED');
     assert.equal(result.reason, 'nonzero_exit_without_test_failure');
   });
@@ -231,20 +231,45 @@ describe('check tdd-red-evidence verb (#3770)', () => {
 
 // ─── Spec surfaces (#3770 acceptance: gate must require evidence before GREEN) ─
 
-describe('executor spec requires intentional RED evidence before GREEN (#3770)', () => {
+describe('executor requires format-based RED evidence (#4692)', () => {
   const read = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
+  const canonical = read('gsd-core/references/tdd.md');
+  const runtime = read('gsd-core/references/execute-mvp-tdd.md');
 
-  test('row 11 — executor spec names INVALID_RED and blocks GREEN without evidence', () => {
-    const agent = read('agents/gsd-executor.md');
-    const tddRef = read('gsd-core/references/tdd.md');
-    const mvpRef = read('gsd-core/references/execute-mvp-tdd.md');
-    for (const [name, content] of [['gsd-executor.md', agent], ['tdd.md', tddRef], ['execute-mvp-tdd.md', mvpRef]]) {
-      assert.match(content, /INVALID_RED/, `${name} must name the INVALID_RED verdict`);
-      assert.match(content, /tdd-red-evidence/, `${name} must wire the check tdd-red-evidence gate`);
+  test('#4692: TAP and JUnit share mandatory classification, with no Vitest exemption', () => {
+    assert.match(canonical, /report format/);
+    assert.match(canonical, /shared TAP adapter[^\n]*Node[^\n]*Vitest/);
+    assert.match(canonical, /JUnit XML adapter[^\n]*Surefire\/Failsafe/);
+    assert.match(canonical, /`gsd_run check tdd-red-evidence <record\.json> --raw`[^\n]*require `RED_EVIDENCE_OK` before GREEN/);
+    assert.match(canonical, /unsupported format requires a supported reporter or a parser adapter before GREEN/);
+    assert.match(canonical, /Classifier rejection never authorizes a fallback to self-attestation/);
+    assert.doesNotMatch(canonical + runtime, /other identified runners|runner-aware|For either supported branch|no deterministic backstop/);
+  });
+
+  test('#4692: reruns and current Maven reports retain evidence provenance', () => {
+    assert.match(canonical, /reporter is incompatible[^\n]*rerun the planned target[^\n]*submit the rerun's record to the classifier/);
+    assert.match(canonical, /unmodified report/);
+    assert.match(canonical, /target\/surefire-reports\/TEST-\*\.xml[^\n]*target\/failsafe-reports\/TEST-\*\.xml/);
+    assert.match(canonical, /require the report to be newer than the run start/);
+    assert.match(canonical, /Missing, stale, or ambiguous reports require STOP/);
+  });
+
+  test('#4692: a parser pass still requires the intended target assertion to fail', () => {
+    assert.match(canonical, /After machine validation[^\n]*target actually executed[^\n]*planned assertion[^\n]*intended reason/);
+    for (const stop of ['zero tests', 'skipped', 'setup', 'collection', 'import', 'syntax', 'fixture', 'unrelated', 'unexpected green', 'incomplete', 'ambiguous']) {
+      assert.match(canonical, new RegExp(stop, 'i'));
     }
-    // The gate must block GREEN on invalid RED, not merely warn.
-    assert.match(mvpRef, /INVALID_RED[^\n]{0,120}(block|halt|trip|STOP)/i,
-      'execute-mvp-tdd.md must halt GREEN on INVALID_RED');
+    for (const reason of ['unexpected_green', 'zero_tests_discovered', 'nonzero_exit_without_test_failure', 'fixture_or_load_failure', 'no_target_test_failure', 'invalid_record', 'unreadable_record']) {
+      assert.ok(canonical.includes('`' + reason + '`'), reason);
+    }
+  });
+
+  test('#4692: the runtime gate loads the canonical evidence contract before GREEN', () => {
+    assert.match(runtime, /Read `gsd-core\/references\/tdd\.md`, "Red-Green-Refactor Cycle", RED step 4/);
+    assert.match(runtime, /follow its complete evidence contract before GREEN/);
+    assert.match(runtime, /`INVALID_RED` verdict[^\n]*trips this gate/);
+    assert.match(runtime, /self-attestation cannot substitute for machine validation/);
+    assert.match(read('agents/gsd-executor.md'), /references\/tdd\.md[^\n]*"Gate Enforcement Rules"/);
   });
 });
 
@@ -389,6 +414,7 @@ test('#4724: a TAP red whose message quotes <testsuite> stays on the TAP path', 
     '    error: |-',
     '      expected <testsuite> was 2',
     '  ...',
+    '1..1',
     '# tests 1',
     '# pass 0',
     '# fail 1',
@@ -408,7 +434,7 @@ test('#4724: a TAP red whose message quotes <testsuite> stays on the TAP path', 
 test('#4724: CDATA sections in a passing case are never scanned as failures', () => {
   // A passing case whose captured System.out (CDATA) echoes an <error .../>
   // literal must not count as failing — CDATA is verbatim content.
-  const cd = '<testcase name="prints" classname="com.example.AppTest"><system-out><![CDATA[echo <error x/></system-out>]]></testcase>';
+  const cd = '<testcase name="prints" classname="com.example.AppTest"><system-out><![CDATA[echo <error x/></system-out>]]></system-out></testcase>';
   const fl = '<testcase name="x" classname="com.other.Unrelated"><failure message="e">1 != 2</failure></testcase>';
   const result = classifyRedEvidence({
     command: 'mvn test',

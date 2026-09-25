@@ -1,0 +1,56 @@
+TAP version 13
+# Subtest: email validation
+    # Subtest: rejects empty email
+    not ok 1 - rejects empty email
+      ---
+      duration_ms: 0.845058
+      type: 'test'
+      location: '/tmp/gsd-4701-parser-tools/evidence.node.cjs:2:34'
+      failureType: 'testCodeFailure'
+      error: |-
+        Expected values to be strictly equal:
+        
+        1 !== 2
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: 2
+      actual: 1
+      operator: 'strictEqual'
+      stack: |-
+        TestContext.<anonymous> (/tmp/gsd-4701-parser-tools/evidence.node.cjs:2:70)
+        Test.runInAsyncScope (node:async_hooks:227:14)
+        Test.run (node:internal/test_runner/test:1397:25)
+        Test.start (node:internal/test_runner/test:1257:17)
+        node:internal/test_runner/test:1887:71
+        node:internal/per_context/primordials:504:82
+        new Promise (<anonymous>)
+        new SafePromise (node:internal/per_context/primordials:478:3)
+        node:internal/per_context/primordials:504:9
+        Array.map (<anonymous>)
+      ...
+    # Subtest: accepts valid email
+    ok 2 - accepts valid email
+      ---
+      duration_ms: 0.105632
+      type: 'test'
+      ...
+    1..2
+not ok 1 - email validation
+  ---
+  duration_ms: 1.60956
+  type: 'suite'
+  location: '/tmp/gsd-4701-parser-tools/evidence.node.cjs:2:1'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 2
+# suites 1
+# pass 1
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 44.678299

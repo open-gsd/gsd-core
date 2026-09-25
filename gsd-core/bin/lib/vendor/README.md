@@ -1,7 +1,7 @@
 # vendor/
 
-This directory holds **verbatim, unmodified** copies of third-party build
-artifacts that `gsd-core/bin/**` needs at runtime.
+This directory holds third-party artifacts that `gsd-core/bin/**` needs at
+runtime: verbatim upstream builds or reproducible bundles of unmodified upstream code.
 
 ## Why
 
@@ -14,6 +14,19 @@ in-tree instead of depending on it being installed as an npm package.
 `eslint-rules/no-external-require-in-bin.cjs` enforces this at lint time.
 
 ## Contents
+
+- `tap-parser.cjs` and `saxes.cjs` — standalone CJS bundles built with pinned
+  esbuild from the exact devDependency versions and their lockfile dependencies.
+  The TAP and JUnit adapters use these for report grammar and diagnostics.
+  `scripts/lib/vendor-bundle.cjs` rejects external imports other than Node
+  builtins; `lint-vendored-deps.cjs` rebuilds in memory and byte-compares both
+  code and companion `.LICENSE.txt` notices. Refresh with
+  `npm run lint:vendored-deps -- --fix`.
+  `tap-parser`'s npm metadata says BlueOak-1.0.0 while its shipped LICENSE says
+  MIT; the notices preserve both the metadata and the actual license text.
+  saxes 6.0.0 omits LICENSE from npm, so the tagged upstream license is preserved
+  verbatim in `scripts/lib/vendor-licenses/saxes-6.0.0.txt` and included in the
+  generated notices. Neither package's source is patched.
 
 - `re2js.cjs` — verbatim copy of `node_modules/re2js/build/index.cjs`
   (upstream package `re2js`, pinned version see `package.json`
@@ -30,7 +43,13 @@ in-tree instead of depending on it being installed as an npm package.
   `require()` calls of its own, and exposes `load`/`dump`/`FAILSAFE_SCHEMA`/
   `YAMLException`.
 
-## Two kinds of type twin
+## Type twins
+
+The bundled parsers use **upstream-reference** twins: declaration-only
+`export * from '<package>';` files under `src/vendor/`. TypeScript reads the
+actual upstream declarations during the build, with no hand-maintained API
+copy and no bare runtime import. The vendoring guard checks the exact forwarding
+declaration. The installed runtime needs only the bundled JavaScript.
 
 Each vendored package needs a `.d.cts` under `src/vendor/` so TypeScript can
 resolve types for a relative `./vendor/<pkg>.cjs` import from `src/**`
@@ -54,8 +73,8 @@ compiled output dir). There are two kinds:
 
 ## Do not hand-edit
 
-These files are **verbatim** copies of upstream build output. Never edit
-them directly — refresh them from `node_modules` instead:
+Never edit these artifacts directly. Refresh bundled packages through the
+vendoring command above. Refresh the prebuilt upstream artifacts as follows:
 
 ```
 cp node_modules/re2js/build/index.cjs gsd-core/bin/lib/vendor/re2js.cjs
