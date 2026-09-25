@@ -127,6 +127,16 @@ function findDrift(opts) {
 // regression guard (issue #844) treats every swept capability manifest as
 // registered.
 
+// Round-6 review fix (BLOCKER, code#2): the shape rule for "is this path a
+// registered native capability manifest" — `capabilities/<id>/capability.json`,
+// exactly one directory level under `capabilities/`, no further nesting.
+// Exported so scripts/backmerge-tree.cjs's independent `git ls-tree`-based
+// discovery (over a MERGE COMMIT's own tree, not any checkout) filters on
+// the SAME predicate this glob-based discovery encodes structurally via
+// `fs.readdirSync` — one shape rule, not two hand-kept copies that could
+// silently diverge (CLAUDE.md "Generative Fix Divergence").
+const CAPABILITY_MANIFEST_PATH_RE = /^capabilities\/[^/]+\/capability\.json$/;
+
 // Discover capabilities/<id>/capability.json under `root`, sorted for stable
 // staging order. Returns [] when there is no capabilities/ directory.
 function listCapabilityManifests(opts) {
@@ -145,7 +155,7 @@ function listCapabilityManifests(opts) {
     // platform — path.join would emit backslashes on Windows and break the
     // issue-844 regression guard's ALLOWED-set comparison.
     .map((e) => 'capabilities/' + e.name + '/capability.json')
-    .filter((rel) => fs.existsSync(path.join(root, rel)))
+    .filter((rel) => CAPABILITY_MANIFEST_PATH_RE.test(rel) && fs.existsSync(path.join(root, rel)))
     .sort();
 }
 
@@ -212,6 +222,7 @@ module.exports = {
   getPackageVersion,
   stageManifests,
   // ADR-1244 D6: native capability version sweep
+  CAPABILITY_MANIFEST_PATH_RE,
   listCapabilityManifests,
   syncCapabilityVersions,
   findCapabilityDrift,

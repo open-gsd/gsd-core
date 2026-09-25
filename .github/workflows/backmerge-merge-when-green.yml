@@ -1,0 +1,720 @@
+name: Backmerge — merge when required checks are green
+
+# #4990: THE COMPLETE GATE for the automated main -> next back-merge PR.
+#
+# Live branch protection on `next` today is CLASSIC branch protection with
+# enforce_admins=false, and the repository ruleset at
+# .github/rulesets/main-protection.json is NOT active server-side
+# (`gh api repos/<repo>/rules/branches/next` returns `[]`). `gh pr merge
+# --admin` therefore bypasses every server-side check that ruleset would
+# otherwise enforce — this workflow IS the entire gate. `--admin` is used
+# only because the bot account cannot approve its own pull request; every
+# other condition (identity, content, required-check state) is verified
+# HERE, in-process, before the merge command runs.
+#
+# auto-backmerge.yml only opens/labels the back-merge PR — nothing else in
+# the repo admin-merges it.
+#
+# TRIGGERS: `workflow_run` for all 7 required-check workflows (review fix,
+# MAJOR, code#6 — corrects an EARLIER, WRONG finding in this file's own
+# history: a prior revision excluded the 3 `pull_request_target`-triggered
+# workflows on the theory that their workflow_run payload reports the base
+# repo's context. Verified LIVE: `pull_request_target` workflow_run events
+# DO report the PR's actual head_branch/head_sha, same as `pull_request`
+# ones — so all 7 are restored here). `schedule` (every 30 minutes) +
+# `workflow_dispatch` remain as a backstop sweep/staleness check — not
+# because pull_request_target completions are uncorrelatable (they are
+# correlatable), but because a workflow_run completion can still race a
+# label edit, a concurrent merge, or simply not fire (a cancelled run, an
+# infra hiccup) — the sweep is what turns "eventually" into a bounded,
+# alarmed SLA (see the staleness check near the end of the evaluate step).
+#
+# ARCHITECTURE — two hard boundaries, enforced by STRUCTURE, not just review:
+#
+#   1. TRUST BOUNDARY (review fix, CRITICAL, code#3). The only git checkout
+#      of the default branch lives at `trusted/` and is NEVER modified after
+#      checkout — every node/git invocation of
+#      scripts/ci-required-checks-verdict.cjs, scripts/backmerge-tree.cjs,
+#      and .github/rulesets/main-protection.json reads from that exact copy.
+#      All content-binding replay/verify work (which DOES need to checkout/
+#      reset/merge PR-adjacent commits) happens in a throwaway `git worktree
+#      add` SCRATCH checkout, created fresh per candidate PR and passed to
+#      scripts/backmerge-tree.cjs exclusively via `--cwd` — `trusted/` itself
+#      is never checked out to, reset, or merged into.
+#
+#   2. BOT-TOKEN ISOLATION (review fix, CRITICAL, code#3 sec; round-4 review
+#      fix, MINOR, code#3, superseded by round-5 review fix, MINOR, code#3
+#      below). The bot token (GSD_BOT_PR_TOKEN) is NEVER present in the
+#      environment of any step that runs `node`/`git` against PR-derived
+#      content. Two jobs:
+#        - `evaluate` (NO environment, GITHUB_TOKEN only): candidate listing,
+#          eligibility, the trusted checkout/fetch, content-binding replay
+#          (scripts/backmerge-tree.cjs against a scratch worktree),
+#          required-checks verdict. This is the job that runs `node`/`git`
+#          against PR-derived content, so it must never be able to see the
+#          bot token even in principle. It pre-filters candidates using ONLY
+#          token-free, structural properties: same-repo, `baseRefName ==
+#          'next'`, and `headRefName` starting with the deterministic
+#          `chore/backmerge-main-to-next-` prefix auto-backmerge.yml itself
+#          controls — no bot-identity lookup, and therefore no token, is
+#          needed at all in this job.
+#        - `act` (environment: gsd-bot, `needs: evaluate`, only runs `if:`
+#          there is at least one merge/rebuild action): resolves the bot's
+#          OWN login itself (the one call in this job that uses the token —
+#          `gh api user`), then, immediately before acting on ANY recorded
+#          action, re-reads the PR fresh and AUTHORITATIVELY re-verifies
+#          `author.login == <that login>`, `isCrossRepository == false`, and
+#          `baseRefName == 'next'` — never trusting `evaluate`'s own
+#          (token-free, therefore login-blind) pre-filter for the actual
+#          write decision. `gh pr merge`/`gh workflow run`/`gh pr view` — API
+#          calls only; no code from the PR is ever checked out or executed
+#          here.
+#      Round-5 review fix (MINOR, code#3; also closes security LOW "act
+#      trusts evaluate"): the round-4 design had a THIRD job, `identity`
+#      (environment: gsd-bot, resolving the login and handing it to
+#      `evaluate` as a job output) specifically so `evaluate` could filter by
+#      real author identity without holding the token. That design had two
+#      problems: (a) `evaluate`'s own "Evaluate every candidate" step
+#      referenced `steps.identity.outputs.login` — a STEP id that only
+#      existed in the SEPARATE `identity` JOB, which GitHub Actions resolves
+#      to an empty string with no error (BLOCKER, code#1) — the exact
+#      "nothing ever merges" regression this round fixes; and (b) even with
+#      that reference corrected to the job-output form
+#      (`needs.identity.outputs.login`), `act` never independently re-checked
+#      authorship itself — it fully trusted whatever `evaluate` had already
+#      decided using a login `evaluate` received as a plain, unverified data
+#      value (sec LOW). Folding identity resolution directly into `act`, as
+#      the IMMEDIATE PRE-ACTION check right before the one job that actually
+#      writes anything, removes both problems at once: there is no
+#      cross-job step-id reference to get wrong, and the job holding the
+#      token is now also the job that authoritatively verifies who it is
+#      about to act on behalf of — nothing upstream is trusted blindly.
+#      Round-4 review fix (MINOR, code#7): the `environment: gsd-bot` on
+#      `act` below only GATES `GSD_BOT_PR_TOKEN` once the maintainer has
+#      actually MOVED that secret out of repository-level secrets and into
+#      the `gsd-bot` environment's own secrets, with that environment's
+#      deployment branches restricted to `next` (the only branch context
+#      this workflow ever runs in — workflow_run resolves to the
+#      repository's default branch, and so do schedule/workflow_dispatch
+#      here). Until that migration happens, `secrets.GSD_BOT_PR_TOKEN` still
+#      resolves via ordinary repository-secret inheritance in EVERY job of
+#      EVERY workflow in this repo, `environment:` or not — declaring the
+#      job-level `environment:` is necessary but not sufficient; the
+#      protection takes effect only once the secret itself has moved. No job
+#      in this workflow other than `act` (and, symmetrically, auto-
+#      backmerge.yml's `push` job) references `environment: gsd-bot` or the
+#      bot token at all.
+#
+# MERGE COMMIT: `--merge` (never squash/rebase) is required to keep `main`
+# an ancestor of `next`. .github/rulesets/main-protection.json (currently
+# disabled) lists `allowed_merge_methods: [squash, rebase]`, which would
+# REJECT this merge method if that ruleset is ever activated without an
+# explicit carve-out for back-merge PRs — flagged here for whoever activates
+# it; this file does not change main-protection.json.
+
+on:
+  workflow_run:
+    workflows:
+      - Tests
+      - Validate Branch Name
+      - Changeset Required
+      - Docs Required
+      - PR Target Validator
+      - Require Issue Link
+      - PR Template Format
+    types: [completed]
+  schedule:
+    # Sweep cadence, not a request timeout — how often the staleness/backstop
+    # pass runs, independent of any single workflow_run completion.
+    - cron: '*/30 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  statuses: read
+  # Round-4 review fix (MAJOR, code#2): `actions: read` — needed by
+  # `evaluate`'s in-flight-rebuild guard (`gh run list --workflow
+  # auto-backmerge.yml`), read-only.
+  actions: read
+
+jobs:
+  # Round-5 review fix (MINOR, code#3): NO `environment:` here — this job
+  # runs `node`/`git` against PR-derived content (the trusted checkout/fetch,
+  # the scratch-worktree content-binding replay) with GITHUB_TOKEN only. It
+  # never sees GSD_BOT_PR_TOKEN even in principle — the login-based author
+  # check that used to require a bot-identity job now lives entirely in
+  # `act`'s own immediate pre-action re-check instead (see the module
+  # header's BOT-TOKEN ISOLATION section).
+  evaluate:
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'pull_request_target') &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      count: ${{ steps.emit.outputs.count }}
+      actions: ${{ steps.emit.outputs.actions }}
+    steps:
+      - name: Build the candidate PR list
+        id: candidates
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+        run: |
+          set -euo pipefail
+          : > candidates.txt
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            # Populated only when the run's head branch belongs to a PR in
+            # THIS repo (review fix, MEDIUM: never `gh pr list --head
+            # <branch>` + `.[0]`, which can resolve the wrong PR on a branch
+            # name collision or a closed/reopened history).
+            if [ -n "${WORKFLOW_RUN_PR_NUMBER:-}" ] && [ "$WORKFLOW_RUN_PR_NUMBER" != "null" ]; then
+              echo "$WORKFLOW_RUN_PR_NUMBER" >> candidates.txt
+            fi
+          else
+            # schedule / workflow_dispatch sweep. Round-5 review fix (MINOR,
+            # code#3): no `--author` filter here anymore — this job holds no
+            # bot identity to filter by (GITHUB_TOKEN only). Every OPEN PR
+            # targeting next is listed, then narrowed to the deterministic
+            # `chore/backmerge-main-to-next-` head-branch prefix
+            # auto-backmerge.yml itself controls — a token-free, structural
+            # pre-filter. `act`'s own immediate pre-action re-check (below)
+            # is what AUTHORITATIVELY re-verifies real bot authorship before
+            # any write; this is optimistic pre-filtering only. --limit 1000
+            # so pagination can never silently truncate the list.
+            gh pr list --repo "$GITHUB_REPOSITORY" --base next --state open --limit 1000 \
+              --json number,headRefName \
+              --jq '.[] | select(.headRefName | startswith("chore/backmerge-main-to-next-")) | .number' >> candidates.txt
+          fi
+          echo "count=$(wc -l < candidates.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+      # ---- everything below only runs when there is at least one candidate ----
+
+      - name: Checkout the TRUSTED default branch (never modified after this)
+        if: steps.candidates.outputs.count != '0'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          path: trusted
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch main and next into the trusted checkout
+        if: steps.candidates.outputs.count != '0'
+        run: git -C trusted fetch --no-tags origin main next
+
+      - name: Evaluate every candidate (GITHUB_TOKEN only — no bot token in this step)
+        id: evaluate
+        if: steps.candidates.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          # A staleness AGE, not a request timeout — see the module header.
+          BACKMERGE_PR_STALENESS_AGE_HOURS: '6'
+        run: |
+          set -euo pipefail
+
+          : > actions.txt
+          FAILED=0
+          NOW_EPOCH=$(date -u +%s)
+          STALE_SECONDS=$((BACKMERGE_PR_STALENESS_AGE_HOURS * 3600))
+
+          while IFS= read -r PR; do
+            [ -n "$PR" ] || continue
+            echo "::group::PR #$PR"
+
+            # Review fix (MINOR, code#6): per-PR failure isolation — a
+            # transient `gh pr view` failure for ONE candidate (API hiccup,
+            # PR deleted mid-run) must not abort the whole loop under
+            # `set -euo pipefail`. Recorded and skipped; the job still fails
+            # at the END if this happened.
+            # Round-5 review fix (MINOR, code#3): `author` dropped from this
+            # --json field list — this job never holds a bot identity to
+            # compare it against (see the head-branch-prefix check below);
+            # `act`'s own re-check reads `author` fresh, with the token,
+            # right before acting.
+            if ! PR_JSON=$(gh pr view "$PR" --repo "$REPO" \
+              --json number,isCrossRepository,baseRefName,headRefName,headRefOid,mergeStateStatus,reviewDecision,state,labels,createdAt); then
+              echo "::error::PR #$PR: gh pr view failed — skipping this candidate this round"
+              FAILED=1
+              echo "::endgroup::"; continue
+            fi
+            IS_CROSS_REPO=$(printf '%s' "$PR_JSON" | jq -r '.isCrossRepository')
+            BASE_REF=$(printf '%s' "$PR_JSON" | jq -r '.baseRefName')
+            HEAD_REF_NAME=$(printf '%s' "$PR_JSON" | jq -r '.headRefName')
+            STATE=$(printf '%s' "$PR_JSON" | jq -r '.state')
+            HEAD_SHA=$(printf '%s' "$PR_JSON" | jq -r '.headRefOid')
+            MERGE_STATE=$(printf '%s' "$PR_JSON" | jq -r '.mergeStateStatus')
+            REVIEW_DECISION=$(printf '%s' "$PR_JSON" | jq -r '.reviewDecision')
+            CREATED_AT=$(printf '%s' "$PR_JSON" | jq -r '.createdAt')
+            HAS_NEEDS_REVIEW=$(printf '%s' "$PR_JSON" | jq -r '([.labels[].name] | index("needs-manual-review")) != null')
+
+            # --- CHEAP ELIGIBILITY (before any checkout/worktree work) ------
+            # Round-5 review fix (MINOR, code#3): this job holds no bot
+            # identity (GITHUB_TOKEN only) — the author-login check moved to
+            # `act`'s own immediate pre-action re-check (with the token,
+            # right before any write). This structural check (the
+            # deterministic head-branch prefix auto-backmerge.yml itself
+            # produces) is a token-free stand-in pre-filter only, never the
+            # authoritative identity check.
+            case "$HEAD_REF_NAME" in
+              chore/backmerge-main-to-next-*) : ;;
+              *) echo "head branch ($HEAD_REF_NAME) is not a back-merge branch — skipping"; echo "::endgroup::"; continue ;;
+            esac
+            if [ "$IS_CROSS_REPO" != "false" ]; then
+              echo "cross-repository PR — skipping"
+              echo "::endgroup::"; continue
+            fi
+            if [ "$BASE_REF" != "next" ]; then
+              echo "base is $BASE_REF, not next — skipping"
+              echo "::endgroup::"; continue
+            fi
+            if [ "$STATE" != "OPEN" ]; then
+              # Review fix (MAJOR, code#3, sec LOW): this ALSO covers
+              # "superseded" back-merge PRs — auto-backmerge.yml now closes
+              # any older open back-merge PR for a since-superseded main sha
+              # (comment naming the superseding PR#) the moment it opens a
+              # newer one. A closed PR fails this SAME check, so it is
+              # skipped here too — neither rebuilt nor staleness-alarmed on —
+              # with no separate "is this superseded" logic needed.
+              echo "PR is $STATE, not OPEN — skipping"
+              echo "::endgroup::"; continue
+            fi
+            if [ "$HAS_NEEDS_REVIEW" = "true" ]; then
+              echo "labeled needs-manual-review — leaving for a human"
+              echo "::endgroup::"; continue
+            fi
+            # Review fix (MINOR, code#4, sec LOW): refuse CHANGES_REQUESTED
+            # here too — not just in the immediate-pre-merge re-check below.
+            # KNOWN GAP, documented rather than silently worked around:
+            # neither this REST-shaped `gh pr view` field nor the merge
+            # step's re-check can see UNRESOLVED REVIEW CONVERSATIONS
+            # (main-protection.json's `required_review_thread_resolution`,
+            # inert today since that ruleset is not server-side active). The
+            # GraphQL API exposes it via `PullRequest.reviewThreads(first: N)
+            # { nodes { isResolved } }`, paginated — not implemented here;
+            # this back-merge PR is bot-authored with no human review
+            # workflow attached, so an unresolved thread is not an expected
+            # real-world shape for it, but a human-initiated back-merge
+            # review (rare) could leave one. Flagged for anyone adding
+            # required review to this PR class.
+            if [ "$REVIEW_DECISION" = "CHANGES_REQUESTED" ]; then
+              echo "reviewDecision is CHANGES_REQUESTED — leaving for a human"
+              echo "::endgroup::"; continue
+            fi
+
+            # --- MERGE STATE -------------------------------------------------
+            # mergeStateStatus values: CLEAN, DIRTY, BLOCKED, BEHIND, DRAFT,
+            # UNSTABLE, HAS_HOOKS, UNKNOWN. BLOCKED here almost always means
+            # "branch protection requires a review the bot cannot give
+            # itself" — this workflow does NOT trust GitHub's own checks
+            # determination either way; the required-checks verdict step
+            # below is the independent, authoritative check-state read.
+            #
+            # Review fix (BLOCKER, MEDIUM, code#4): BEHIND no longer runs
+            # `gh pr update-branch` — that command creates a MERGE commit on
+            # the branch, which breaks the exact two-parent shape
+            # content-binding depends on. Instead, dispatch a REBUILD:
+            # auto-backmerge.yml, re-run via workflow_dispatch, reconstructs
+            # this exact branch name from CURRENT origin/next + origin/main
+            # and force-pushes it (its own job body already does this
+            # unconditionally on every run — no new logic was needed there
+            # beyond adding the workflow_dispatch trigger). Recorded as
+            # action=rebuild; the actual `gh workflow run` call happens in
+            # the merge step below, where the bot token lives.
+            if [ "$MERGE_STATE" = "BEHIND" ]; then
+              # Review fix (BLOCKER, code#2): two guards before recording a
+              # rebuild dispatch —
+              #   (a) `git merge-base --is-ancestor origin/next origin/<BR>`
+              #       may already hold (GitHub's own `mergeStateStatus` can
+              #       lag a just-completed rebuild by a few seconds) — a
+              #       redundant dispatch is wasted work, not incorrect, but
+              #       the ancestor check is a free, authoritative re-check
+              #       against the trusted checkout's own fresh fetch of the
+              #       PR's actual branch (never a guessed name).
+              #   (b) an auto-backmerge run may already be queued/in_progress
+              #       (a previous round's dispatch, or a real `main` push
+              #       racing this evaluation) — dispatching another would
+              #       pile up redundant, possibly conflicting rebuilds.
+              git -C trusted fetch --no-tags origin "$HEAD_REF_NAME" 2>/dev/null || true
+              if git -C trusted rev-parse -q --verify "refs/remotes/origin/$HEAD_REF_NAME" >/dev/null 2>&1 &&
+                 git -C trusted merge-base --is-ancestor origin/next "refs/remotes/origin/$HEAD_REF_NAME" 2>/dev/null; then
+                echo "PR is reported BEHIND but origin/next is already an ancestor of $HEAD_REF_NAME — no rebuild needed, a fresher evaluation will re-check"
+                echo "::endgroup::"; continue
+              fi
+              # Round-4 review fix (MAJOR, code#2): FAIL CLOSED — a `gh run
+              # list` failure (API hiccup, rate limit) must be treated as
+              # UNKNOWN in-flight status, never as "0 running" (the old
+              # `|| echo "0"` fallback silently defaulted to the DISPATCH-
+              # PERMITTING answer on a failed read, the wrong direction for
+              # an inconclusive result). Not dispatching this round is the
+              # safe side: a missed/delayed rebuild is retried on the next
+              # evaluation; a pile-up of redundant/conflicting dispatches is
+              # not. Every NON-completed run status counts (queued,
+              # in_progress, waiting, pending, requested, and any future
+              # status GitHub adds) via `status != "completed"` — a
+              # structural exclusion, not a hand-enumerated allowlist that
+              # could silently miss a new non-terminal status later.
+              if ! RUNNING_JSON=$(gh run list --repo "$REPO" --workflow auto-backmerge.yml --json status 2>/dev/null); then
+                echo "::warning::gh run list failed — treating in-flight rebuild status as UNKNOWN, not dispatching a rebuild this round"
+                echo "::endgroup::"; continue
+              fi
+              RUNNING=$(printf '%s' "$RUNNING_JSON" | jq -r '[.[] | select(.status != "completed")] | length')
+              if [ "${RUNNING:-0}" -gt 0 ]; then
+                echo "an auto-backmerge run is already queued/in_progress (or otherwise not completed) — not dispatching another rebuild this round"
+                echo "::endgroup::"; continue
+              fi
+              echo "PR is BEHIND next — recording a rebuild dispatch"
+              printf 'rebuild\t%s\t%s\n' "$PR" "$HEAD_SHA" >> actions.txt
+              echo "::endgroup::"; continue
+            fi
+            if [ "$MERGE_STATE" != "CLEAN" ] && [ "$MERGE_STATE" != "BLOCKED" ]; then
+              echo "mergeStateStatus is $MERGE_STATE — not yet mergeable, skipping this round"
+              echo "::endgroup::"; continue
+            fi
+
+            # --- HEAVY WORK: scratch worktree, content-binding, verdict -----
+            # #4990 review fix (CRITICAL, code#3): a fresh, disposable git
+            # worktree per candidate — the trusted/ checkout above is NEVER
+            # checked out to, reset, or merged into. scripts/backmerge-tree.cjs
+            # only ever receives this scratch path via --cwd.
+            #
+            # Review fix (sec LOW, LFS): the scratch worktree checks out the
+            # PR's UNVERIFIED head — GIT_LFS_SKIP_SMUDGE=1 stops git-lfs from
+            # running arbitrary smudge filters against PR-controlled content
+            # before content-binding has even run.
+            #
+            # Review fix (MINOR, code#6): `worktree add` itself is now
+            # guarded — a failure (corrupt ref, disk pressure, a stale
+            # leftover scratch dir from a killed prior run) is recorded and
+            # this candidate is skipped, not an abort of the whole loop.
+            SCRATCH="scratch-$PR"
+            if ! GIT_LFS_SKIP_SMUDGE=1 git -C trusted worktree add -q --detach "../$SCRATCH" "$HEAD_SHA"; then
+              echo "::error::PR #$PR: git worktree add failed — skipping this candidate this round"
+              FAILED=1
+              echo "::endgroup::"; continue
+            fi
+
+            IDENTIFY_JSON=$(node trusted/scripts/backmerge-tree.cjs identify --head "$HEAD_SHA" --cwd "$SCRATCH" || echo '{"ok":false}')
+            IDENTIFY_OK=$(printf '%s' "$IDENTIFY_JSON" | jq -r '.ok // false')
+            if [ "$IDENTIFY_OK" != "true" ]; then
+              echo "::error::PR #$PR: could not identify the back-merge commit by its expected shape — $IDENTIFY_JSON"
+              FAILED=1
+              git -C trusted worktree remove --force "../$SCRATCH" 2>/dev/null || true
+              echo "::endgroup::"; continue
+            fi
+            MERGE_COMMIT=$(printf '%s' "$IDENTIFY_JSON" | jq -r '.mergeCommit')
+            NEXT_PARENT=$(printf '%s' "$IDENTIFY_JSON" | jq -r '.nextParent')
+            MAIN_PARENT=$(printf '%s' "$IDENTIFY_JSON" | jq -r '.mainParent')
+
+            set +e
+            VERIFY_JSON=$(node trusted/scripts/backmerge-tree.cjs verify \
+              --next "$NEXT_PARENT" --main "$MAIN_PARENT" \
+              --merge-commit "$MERGE_COMMIT" --head "$HEAD_SHA" --cwd "$SCRATCH")
+            VERIFY_STATUS=$?
+            set -e
+            git -C trusted worktree remove --force "../$SCRATCH" 2>/dev/null || true
+            if [ "$VERIFY_STATUS" -ne 0 ]; then
+              echo "::error::PR #$PR: content-binding FAILED, refusing to merge — $VERIFY_JSON"
+              FAILED=1
+              echo "::endgroup::"; continue
+            fi
+
+            set +e
+            node trusted/scripts/ci-required-checks-verdict.cjs \
+              --sha "$HEAD_SHA" --repo "$REPO" \
+              --required-from trusted/.github/rulesets/main-protection.json --pr "$PR"
+            VERDICT_STATUS=$?
+            set -e
+            if [ "$VERDICT_STATUS" -eq 2 ]; then
+              echo "required checks not all green yet for PR #$PR — skipping this round"
+              echo "::endgroup::"; continue
+            fi
+            if [ "$VERDICT_STATUS" -ne 0 ]; then
+              echo "::error::required checks are red (or unreadable) for PR #$PR — leaving it open"
+              FAILED=1
+              echo "::endgroup::"; continue
+            fi
+
+            printf 'merge\t%s\t%s\n' "$PR" "$HEAD_SHA" >> actions.txt
+            echo "::endgroup::"
+          done < candidates.txt
+
+          # --- STALENESS BACKSTOP (schedule/workflow_dispatch sweep only) ----
+          # Acceptance criterion: a back-merge PR open longer than the
+          # documented staleness age must fail loudly, not sit silently.
+          # Round-6 review fix (MINOR, code#7 / SEC LOW): this job holds no
+          # bot identity (GITHUB_TOKEN only) — `candidates.txt` is scoped
+          # only to the token-free, structural head-branch-prefix pre-filter
+          # (see "Build the candidate PR list" above), NEVER real
+          # authorship. Recording a `stale` action here (rather than
+          # alarming directly) lets `act` — which resolves the bot's own
+          # login and re-verifies author.login immediately before acting —
+          # apply the AUTHORITATIVE author check before ever raising the
+          # alarm, so a same-named-but-not-actually-ours PR (opened by
+          # someone else, coincidentally matching the deterministic prefix)
+          # can never trigger a false alarm. No FAILED=1 here anymore — the
+          # alarm itself, and the job failure it causes, now live in `act`.
+          if [ "$EVENT_NAME" != "workflow_run" ]; then
+            while IFS= read -r PR; do
+              [ -n "$PR" ] || continue
+              STALE_JSON=$(gh pr view "$PR" --repo "$REPO" --json state,createdAt 2>/dev/null || echo '{"state":"UNKNOWN"}')
+              STALE_STATE=$(printf '%s' "$STALE_JSON" | jq -r '.state')
+              [ "$STALE_STATE" = "OPEN" ] || continue
+              CREATED_AT=$(printf '%s' "$STALE_JSON" | jq -r '.createdAt')
+              CREATED_EPOCH=$(date -u -d "$CREATED_AT" +%s 2>/dev/null || echo 0)
+              AGE_SECONDS=$((NOW_EPOCH - CREATED_EPOCH))
+              if [ "$CREATED_EPOCH" -gt 0 ] && [ "$AGE_SECONDS" -gt "$STALE_SECONDS" ]; then
+                printf 'stale\t%s\t%s\n' "$PR" "$CREATED_AT" >> actions.txt
+              fi
+            done < candidates.txt
+          fi
+
+          if [ "$FAILED" -ne 0 ]; then
+            exit 1
+          fi
+
+      # Round-4 review fix (MINOR, code#3): emit actions.txt as a JOB OUTPUT
+      # (never an artifact — this is small, plain-text, and non-secret) so
+      # the `act` job (below, environment: gsd-bot) can act on it without
+      # ever needing to run node/git against PR content itself. `always()`:
+      # this must run even when the evaluate step above exited 1 (a
+      # staleness alarm, or a content-binding failure on ONE candidate) —
+      # other candidates may still have recorded a legitimate merge/rebuild
+      # action before that failure.
+      - name: Emit actions for the act job (job output, never a secret)
+        id: emit
+        if: always() && steps.candidates.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          if [ -f actions.txt ]; then
+            COUNT=$(wc -l < actions.txt | tr -d ' ')
+          else
+            COUNT=0
+            : > actions.txt
+          fi
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          {
+            echo "actions<<BACKMERGE_ACTIONS_EOF"
+            cat actions.txt
+            echo "BACKMERGE_ACTIONS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  # Round-4 review fix (MINOR, code#3): the ONLY job with the bot token in
+  # its environment — and it never runs node/git against PR-derived CONTENT,
+  # only `gh` API calls (view/merge/workflow run) driven by the plain
+  # {action, pr, sha} lines `evaluate` (GITHUB_TOKEN only, above) already
+  # decided. `if:` requires identity to have SUCCEEDED AND at least one
+  # merge/rebuild action to exist — so this job (and the `gsd-bot`
+  # environment's deployment-branch policy / any future reviewer gate) is
+  # evaluated only when a privileged action is actually about to happen, not
+  # on every ordinary workflow_run completion or sweep tick.
+  act:
+    needs: evaluate
+    # (needs.evaluate.result == 'success' || == 'failure') — never
+    # 'cancelled' or 'skipped' — mirrors the old (success() || failure())
+    # step-level condition: still runs even if evaluate exited non-zero (a
+    # staleness alarm or a content-binding failure on ONE candidate), since
+    # OTHER candidates may still be legitimately mergeable/rebuildable.
+    # Round-6 review fix (MINOR, code#7): `count` (and therefore this `if:`)
+    # covers BOTH real merge/rebuild actions AND `stale` staleness-alarm
+    # candidates — both are recorded into the SAME actions.txt/count by
+    # `evaluate`, so this job runs whenever there is at least one of either.
+    if: >-
+      (needs.evaluate.result == 'success' || needs.evaluate.result == 'failure') &&
+      needs.evaluate.outputs.count != '0' && needs.evaluate.outputs.count != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Round-4 review fix (MINOR, code#7): see the module header — this
+    # environment only actually gates GSD_BOT_PR_TOKEN once the maintainer
+    # has moved that secret into the `gsd-bot` environment's own secrets,
+    # deployment branch `next` only.
+    environment: gsd-bot
+    steps:
+      # Round-5 review fix (MINOR, code#3): identity resolution now lives
+      # HERE, as a step in the SAME job that acts — never a separate job
+      # whose output a different job has to reference across a `needs:`
+      # boundary (the exact BLOCKER, code#1 shape this round fixes). This is
+      # the only step in this workflow that resolves the bot's own login.
+      - name: Resolve the bot identity (no token fallback)
+        id: identity
+        env:
+          GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::GSD_BOT_PR_TOKEN is not set — this workflow cannot verify PR authorship or merge without it. Refusing to fall back to GITHUB_TOKEN (it cannot admin-merge anyway)."
+            exit 1
+          fi
+          LOGIN=$(gh api user --jq .login)
+          if [ -z "$LOGIN" ]; then
+            echo "::error::gh api user returned an empty login for the bot token"
+            exit 1
+          fi
+          echo "login=$LOGIN" >> "$GITHUB_OUTPUT"
+
+      - name: Reconstruct actions.txt from the evaluate job's output
+        env:
+          ACTIONS: ${{ needs.evaluate.outputs.actions }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$ACTIONS" > actions.txt
+
+      - name: Merge eligible PRs / dispatch rebuilds (bot token only)
+        env:
+          GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN }}
+          REPO: ${{ github.repository }}
+          LOGIN: ${{ steps.identity.outputs.login }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::GSD_BOT_PR_TOKEN is not set — cannot merge or dispatch a rebuild."
+            exit 1
+          fi
+          [ -f actions.txt ] || exit 0
+
+          MERGE_FAILED=0
+          while IFS="$(printf '\t')" read -r ACTION PR SHA; do
+            [ -n "${ACTION:-}" ] || continue
+
+            # Round-5 review fix (MINOR, code#3; closes security LOW "act
+            # trusts evaluate"): the IMMEDIATE PRE-ACTION re-check, shared by
+            # every action type below — `evaluate` never held the bot token,
+            # so it could only pre-filter on structural properties (a
+            # head-branch-prefix match); this is the ONE authoritative
+            # identity/ownership check, re-read fresh right before any write,
+            # never trusted from an earlier job.
+            # Round-6 review fix (MINOR, code#8): per-PR failure isolation —
+            # a transient `gh pr view` failure for ONE recorded action must
+            # not abort the whole loop (under `set -euo pipefail`, a failed
+            # command substitution would otherwise exit the entire step,
+            # silently leaving every LATER candidate in actions.txt
+            # unprocessed). Recorded and skipped; the job still fails at the
+            # END if this happened — mirrors evaluate's own per-PR isolation
+            # pattern for `gh pr view`.
+            if ! RECHECK=$(gh pr view "$PR" --repo "$REPO" --json author,isCrossRepository,baseRefName,state,headRefOid,mergeStateStatus,reviewDecision,labels); then
+              echo "::error::PR #$PR: gh pr view failed during the immediate pre-action re-check — skipping this action this round"
+              MERGE_FAILED=1
+              continue
+            fi
+            RECHECK_AUTHOR=$(printf '%s' "$RECHECK" | jq -r '.author.login')
+            RECHECK_CROSS=$(printf '%s' "$RECHECK" | jq -r '.isCrossRepository')
+            RECHECK_BASE=$(printf '%s' "$RECHECK" | jq -r '.baseRefName')
+            RECHECK_STATE=$(printf '%s' "$RECHECK" | jq -r '.state')
+            RECHECK_HEAD=$(printf '%s' "$RECHECK" | jq -r '.headRefOid')
+            RECHECK_MERGE_STATE=$(printf '%s' "$RECHECK" | jq -r '.mergeStateStatus')
+            RECHECK_REVIEW_DECISION=$(printf '%s' "$RECHECK" | jq -r '.reviewDecision')
+            # Round-6 review fix (NIT, code#9): labels are re-read HERE, not
+            # trusted from evaluate's earlier read — a human could have
+            # added needs-manual-review in the window between evaluation and
+            # this immediate pre-action check.
+            RECHECK_HAS_NEEDS_REVIEW=$(printf '%s' "$RECHECK" | jq -r '([.labels[].name] | index("needs-manual-review")) != null')
+            if [ "$RECHECK_AUTHOR" != "$LOGIN" ]; then
+              echo "PR #$PR author ($RECHECK_AUTHOR) is not the bot ($LOGIN) — refusing to act"
+              continue
+            fi
+            if [ "$RECHECK_CROSS" != "false" ]; then
+              echo "PR #$PR is cross-repository — refusing to act"
+              continue
+            fi
+            if [ "$RECHECK_BASE" != "next" ]; then
+              echo "PR #$PR base is $RECHECK_BASE, not next — refusing to act"
+              continue
+            fi
+            # Round-7 review fix (MINOR): needs-manual-review refuses ONLY
+            # merge/rebuild actions (below, inside their own case branches) —
+            # NOT `stale`. A bot back-merge PR sitting on a human-review
+            # label is EXACTLY the case the staleness alarm exists to catch;
+            # applying this refusal before the `case` statement (as it did
+            # previously) silently suppressed the alarm for the one PR class
+            # most likely to actually need it.
+
+            case "$ACTION" in
+              stale)
+                # Round-6 review fix (MINOR, code#7 / SEC LOW): the shared
+                # pre-check above already re-verified RECHECK_AUTHOR ==
+                # $LOGIN (real bot authorship, with the token) before
+                # reaching here — evaluate's own candidate list could only
+                # ever pre-filter on the token-free head-branch prefix. Only
+                # raise the alarm if the PR is STILL open (it may have been
+                # merged/closed in the window since evaluate's own read).
+                if [ "$RECHECK_STATE" = "OPEN" ]; then
+                  echo "::error::back-merge PR #$PR (created $SHA) has been open past the documented staleness age and is still not merged — needs human attention"
+                  MERGE_FAILED=1
+                else
+                  echo "PR #$PR is no longer OPEN ($RECHECK_STATE) — stale alarm no longer applies"
+                fi
+                ;;
+              rebuild)
+                # Round-7 review fix (MINOR): needs-manual-review re-checked
+                # HERE, not before the case statement — see the comment
+                # above the case statement for why `stale` must never be
+                # suppressed by this same check.
+                if [ "$RECHECK_HAS_NEEDS_REVIEW" = "true" ]; then
+                  echo "PR #$PR is now labeled needs-manual-review — refusing to dispatch a rebuild, leaving for a human"
+                  continue
+                fi
+                echo "dispatching a rebuild for PR #$PR (BEHIND)"
+                if ! gh workflow run auto-backmerge.yml --repo "$REPO"; then
+                  echo "::warning::gh workflow run auto-backmerge.yml failed for PR #$PR — a later sweep will retry"
+                fi
+                ;;
+              merge)
+                # Round-7 review fix (MINOR): needs-manual-review re-checked
+                # HERE — see the rebuild branch's comment above.
+                if [ "$RECHECK_HAS_NEEDS_REVIEW" = "true" ]; then
+                  echo "PR #$PR is now labeled needs-manual-review — refusing to merge, leaving for a human"
+                  continue
+                fi
+                # Idempotent re-check immediately before merging: another run
+                # (or a human) may have already merged/closed this PR since
+                # the evaluation step ran.
+                # Review fix (MINOR, code#4, sec LOW): re-check ALSO includes
+                # mergeStateStatus and reviewDecision — a review could have
+                # requested changes, or the merge state could have gone
+                # DIRTY/BEHIND, in the window between evaluation and this
+                # merge step. Same documented gap as the evaluation step's own
+                # check: unresolved review CONVERSATIONS are not visible via
+                # this REST-shaped field (GraphQL's `reviewThreads` would be
+                # needed; not implemented here — see the evaluation step's
+                # comment for the full reasoning).
+                if [ "$RECHECK_STATE" = "MERGED" ] && [ "$RECHECK_HEAD" = "$SHA" ]; then
+                  echo "PR #$PR already merged at the verified sha — nothing to do"
+                  continue
+                fi
+                if [ "$RECHECK_STATE" != "OPEN" ] || [ "$RECHECK_HEAD" != "$SHA" ]; then
+                  echo "PR #$PR changed state/head since evaluation ($RECHECK_STATE, $RECHECK_HEAD) — a later run will re-evaluate"
+                  continue
+                fi
+                if [ "$RECHECK_MERGE_STATE" != "CLEAN" ] && [ "$RECHECK_MERGE_STATE" != "BLOCKED" ]; then
+                  echo "PR #$PR mergeStateStatus changed to $RECHECK_MERGE_STATE since evaluation — a later run will re-evaluate"
+                  continue
+                fi
+                if [ "$RECHECK_REVIEW_DECISION" = "CHANGES_REQUESTED" ]; then
+                  echo "PR #$PR now has reviewDecision CHANGES_REQUESTED — leaving for a human"
+                  continue
+                fi
+                echo "merging PR #$PR at $SHA"
+                if ! gh pr merge --admin --merge --match-head-commit "$SHA" "$PR" --repo "$REPO"; then
+                  POST_JSON=$(gh pr view "$PR" --repo "$REPO" --json state,headRefOid)
+                  POST_STATE=$(printf '%s' "$POST_JSON" | jq -r '.state')
+                  POST_HEAD=$(printf '%s' "$POST_JSON" | jq -r '.headRefOid')
+                  if [ "$POST_STATE" = "MERGED" ] && [ "$POST_HEAD" = "$SHA" ]; then
+                    echo "merge command failed but PR #$PR is already MERGED at the verified sha — treating as success (idempotent)"
+                  else
+                    echo "::error::gh pr merge failed for PR #$PR and it is not merged at the verified sha (state=$POST_STATE)"
+                    MERGE_FAILED=1
+                  fi
+                fi
+                ;;
+            esac
+          done < actions.txt
+
+          if [ "$MERGE_FAILED" -ne 0 ]; then
+            exit 1
+          fi

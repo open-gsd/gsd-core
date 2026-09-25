@@ -463,6 +463,22 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: npm run test:coverage:report
 
+  # Review finding (sec HIGH, pre-existing, #4990 round-3) — NOT changed here,
+  # reported instead of guessed: this job (and `finalize` below) already
+  # carries `environment: npm-publish` and also uses GSD_BOT_PR_TOKEN.
+  # GitHub Actions allows exactly ONE `environment:` per job, so it cannot
+  # ALSO be put behind a distinct `gsd-bot` environment without either (a)
+  # replacing `npm-publish` — which would stop gating the npm-publish
+  # secret's own deployment-branch policy, a regression this fix must not
+  # introduce silently — or (b) the maintainer instead granting the
+  # `npm-publish` environment access to GSD_BOT_PR_TOKEN too (i.e. keep one
+  # environment, add the bot token as one of ITS secrets), which is a
+  # GitHub-settings decision left to the maintainer per this task's own
+  # instruction not to change GitHub settings. `workflow_dispatch` is this
+  # workflow's ONLY trigger (`on:` has no push/PR/schedule at all) — its
+  # `--ref` defaults to whatever ref the dispatcher names, so the ALREADY
+  # SEPARATE `npm-publish` environment's own deployment-branch policy is the
+  # thing actually protecting this secret today, not left ungated.
   rc:
     needs: [validate-version, install-smoke-rc, rc-coverage-gate]
     if: inputs.action == 'rc'

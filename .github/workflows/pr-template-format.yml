@@ -3,6 +3,17 @@ name: PR Template Format
 on:
   pull_request_target:
     types: [opened, edited, reopened, synchronize, ready_for_review]
+  # #4990: `Pull request template format` is a required status check on
+  # `next`; a merge queue requires every required context to also report on
+  # `merge_group`, or the queue deadlocks waiting on a check nothing ever
+  # produces.
+  #
+  # #4990 (NIT 13): on a `merge_group` event, GitHub Actions loads this
+  # workflow FILE from the queued merge ref, not from any individual PR's
+  # head — and the job below is skipped on that event (see its `if:`
+  # condition), so no PR-supplied step ever executes here regardless.
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -16,6 +27,12 @@ permissions:
 jobs:
   check-template-format:
     name: Pull request template format
+    # #4990: `github.event.pull_request` is undefined on `merge_group` (that
+    # event carries no PR payload) — the template format was already
+    # validated on the `pull_request_target` event that queued this run, so
+    # skip rather than reading fields the event doesn't carry. A job skipped
+    # by `if:` still reports Success for required-status-check purposes.
+    if: github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

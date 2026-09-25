@@ -23,9 +23,23 @@ name: PR Target Validator
 on:
   pull_request_target:
     types: [opened, edited, reopened, synchronize]
+  # #4990: `validate-target` is a required status check on `next`; a merge
+  # queue requires every required context to also report on `merge_group`, or
+  # the queue deadlocks waiting on a check nothing ever produces.
+  #
+  # #4990 (NIT 13): on a `merge_group` event, GitHub Actions loads this
+  # workflow FILE from the queued merge ref, not from any individual PR's
+  # head — and the job below is skipped on that event (see its `if:`
+  # condition), so no PR-supplied step ever executes here regardless.
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  # #4990: `|| github.ref` fallback — a merge_group run carries no
+  # `pull_request.number`, so without the fallback every merge_group run in
+  # the repo would collapse into ONE concurrency group and cancel each other.
+  # merge_group refs are unique (refs/heads/gh-readonly-queue/...).
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 # Scope unchanged by #2331 — see the note in pr-title-validator.yml. This
@@ -38,8 +52,15 @@ permissions:
 
 jobs:
   validate-target:
-    # Maintainers may open internal release/backport coordination PRs against main.
+    # Maintainers may open internal release/backport coordination PRs against
+    # main. #4990: `github.event.pull_request` is undefined on `merge_group`
+    # (that event carries no PR payload) — the target was already validated
+    # on the `pull_request_target` event that queued this run, so skip rather
+    # than evaluate a predicate over fields the event doesn't carry. A job
+    # skipped by `if:` still reports Success for required-status-check
+    # purposes.
     if: >-
+      github.event_name != 'merge_group' &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) == false
     runs-on: ubuntu-latest
     timeout-minutes: 2

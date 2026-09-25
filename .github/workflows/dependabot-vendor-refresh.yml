@@ -55,8 +55,37 @@ permissions:
 
 jobs:
   refresh-vendor:
-    # Defense-in-depth: check both the triggering actor and the PR author,
-    # same rationale as dependabot-auto-merge.yml.
+    # Review finding (sec HIGH, pre-existing, #4990 round-3) — investigated
+    # and REPORTED here rather than changed, per explicit instruction not to
+    # alter this workflow's behavior blindly:
+    #
+    # This job is triggered by `pull_request` (opened/synchronize), never
+    # `pull_request_target`. GitHub's documented behavior for a `pull_request`
+    # run whose TRIGGERING ACTOR is Dependabot: the run receives a READ-ONLY
+    # default GITHUB_TOKEN AND NO REPOSITORY/ORGANIZATION ACTIONS SECRETS AT
+    # ALL (a hard platform restriction, separate from — and in addition to —
+    # the fork-PR secret restriction; see GitHub's "Troubleshooting Dependabot
+    # on GitHub Actions" docs). Since the `if:` below requires
+    # `github.actor == 'dependabot[bot]'` for this job to run in the first
+    # place, EVERY run that actually executes this job's GSD_BOT_PR_TOKEN
+    # step is, by construction, exactly the case GitHub withholds secrets
+    # from — meaning `secrets.GSD_BOT_PR_TOKEN || secrets.GITHUB_TOKEN` most
+    # likely evaluates to EMPTY on a genuine Dependabot-triggered run today,
+    # independent of any environment gating, and the push step this env var
+    # feeds has likely never actually authenticated as the bot (or possibly
+    # fails outright) in production. This is a PRE-EXISTING functional gap
+    # unrelated to the "any writer can read the secret" finding this review
+    # round is otherwise fixing — adding `environment: gsd-bot` here would
+    # NOT restore secret access for a genuine Dependabot run (environment
+    # secrets are Actions secrets too, subject to the same restriction), so
+    # it was deliberately NOT added. The `if:` guard (actor + PR-author,
+    # matching dependabot-auto-merge.yml's own hardening pattern) already
+    # means `github.actor` cannot be spoofed by another writer to reach this
+    # job at all, which is the specific "any writer, their own branch" attack
+    # the broader finding describes — so this file was not a live instance of
+    # that vulnerability class to begin with, only (separately) a workflow
+    # whose bot-token step may already be silently inert. Flagged for the
+    # maintainer to confirm/fix in a dedicated follow-up, not guessed at here.
     if: |
       github.actor == 'dependabot[bot]' &&
       github.event.pull_request.user.login == 'dependabot[bot]'
