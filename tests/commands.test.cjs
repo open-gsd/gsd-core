@@ -4751,6 +4751,47 @@ describe('feat-3251: generated aliases dispatch through real gsd-tools behavior'
     }
   });
 
+  test('phase.mvp-mode resolves persisted ROADMAP mode under a bracket heading without mutating files', () => {
+    const projectDir = createProject();
+    try {
+      fs.writeFileSync(
+        path.join(projectDir, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'CK', phase_id_convention: 'bracket' }, null, 2) + '\n',
+      );
+      fs.writeFileSync(
+        path.join(projectDir, '.planning', 'STATE.md'),
+        '---\nmilestone: v2.0\n---\n',
+      );
+      fs.writeFileSync(
+        path.join(projectDir, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## [CK.02] v2.0 — Current',
+          '',
+          '### [CK.02] 02: MVP feature',
+          '**Goal:** Ship the slice.',
+          '**Mode:** mvp',
+          '',
+        ].join('\n'),
+      );
+      const beforeFiles = snapshotProjectState(projectDir);
+
+      const result = runGsdTools(['phase', 'mvp-mode', '2'], projectDir);
+      assert.equal(result.status, 0, result.stderr);
+
+      const output = JSON.parse(result.stdout);
+      assert.equal(output.active, true);
+      assert.equal(output.source, 'roadmap');
+      assert.equal(output.roadmap_mode, 'mvp');
+      assert.equal(output.config_mvp_mode, false);
+      assert.equal(output.cli_flag_present, false);
+      assert.deepEqual(snapshotProjectState(projectDir), beforeFiles);
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
   test('phase.mvp-mode ROADMAP lookup stops before custom-id next phase', () => {
     const projectDir = createProject();
     try {

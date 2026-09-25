@@ -54,6 +54,8 @@ const BASE_SITES = [
     baseline: B.ANY_BRACKET, src: '(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+' },
   { file: 'commands.cts', site: 'cmdStats headingPattern',
     baseline: B.ANY_BRACKET, src: '(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+' },
+  { file: 'phase.cts', site: 'scanExistingBracketDecimalPhaseNumbers entryPattern',
+    baseline: B.ANY_BRACKET, src: '(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+' },
   // #2761 B2: BRACKET_PHASE_TAIL_RE (isBracketMilestoneBoundary's phase-tail
   // discriminator) always passes the literal 'bracket' convention — it is not
   // itself convention-gated (the CALLER, isBracketMilestoneBoundary, is only
@@ -117,6 +119,14 @@ const BASE_SITES = [
     baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
   { file: 'state.cts', site: 'cmdStateSync roadmapPhaseCount', baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
   { file: 'state.cts', site: 'extractRetiredPhaseNumbers phaseRef',
+    baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
+  // #4304 PR-4: phase insert now selects the convention-gated heading intro
+  // before locating its target phase's heading.
+  { file: 'phase.cts', site: 'cmdPhaseInsert headingIntro',
+    baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
+  { file: 'phase.cts', site: 'getRoadmapModeForPhase headingIntro',
+    baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
+  { file: 'phase.cts', site: 'bracket phase-remove owned-line classifier',
     baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
   // #3309/#3310 moved the health reads out of verify.cts and into the parsed
   // planning snapshot consumed by the diagnostic rule table. Pin the same two
@@ -689,6 +699,7 @@ describe('#612 PR-2: every selector call site declares the right baseline (live 
   const EXPECTED = {
     'commands.cts': [1, 0],
     'init.cts': [0, 2],
+    'phase.cts': [1, 3],
     'roadmap.cts': [3, 3],
     'validate.cts': [1, 2],
     'state.cts': [0, 3],

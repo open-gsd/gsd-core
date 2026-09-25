@@ -71,6 +71,15 @@ export interface CollectSectionOptions {
   stripFences?: boolean;
 }
 
+/** Options specific to `deleteSection`; legacy callers omit `endOffset`. */
+export interface DeleteSectionOptions extends CollectSectionOptions {
+  /**
+   * Maximum exclusive character offset for the deleted range. The ordinary
+   * heading-level boundary still applies, and the earlier boundary wins.
+   */
+  endOffset?: number;
+}
+
 /** Recognised bullet markers. */
 export type BulletMarker = 'dash' | 'checkbox-unchecked' | 'checkbox-checked' | 'numbered';
 
@@ -1069,13 +1078,15 @@ export function withSection(
  * double-blank gap accumulates where the section used to sit. Content
  * elsewhere in the document is never touched.
  *
+ * `endOffset` adds an optional caller-owned maximum boundary. It never widens
+ * the heading-level range, and callers that omit it retain the legacy bytes.
  * Returns `content` unchanged when no heading matches `headingPredicate`
  * (bounded no-op, mirroring `withSection`'s miss behaviour).
  */
 export function deleteSection(
   content: string,
   headingPredicate: (heading: HeadingToken) => boolean,
-  opts: CollectSectionOptions = {},
+  opts: DeleteSectionOptions = {},
 ): string {
   if (typeof content !== 'string') return content;
 
@@ -1114,7 +1125,12 @@ export function deleteSection(
   const eofOffset = acc;
 
   const sectionStart = lineOffsets[target.line - 1]; // start of the target heading LINE itself
-  const sectionEnd = stopLine <= lines.length ? lineOffsets[stopLine - 1] : eofOffset;
+  const headingBoundedEnd = stopLine <= lines.length ? lineOffsets[stopLine - 1] : eofOffset;
+  const explicitEnd = typeof opts.endOffset === 'number' && Number.isFinite(opts.endOffset)
+    ? Math.max(0, Math.min(content.length, opts.endOffset))
+    : headingBoundedEnd;
+  const sectionEnd = Math.min(headingBoundedEnd, explicitEnd);
+  if (sectionEnd <= sectionStart) return content;
 
   const before = content.slice(0, sectionStart);
   const after = content.slice(sectionEnd);

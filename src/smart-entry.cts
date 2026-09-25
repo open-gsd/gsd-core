@@ -42,7 +42,7 @@ import ioMod = require('./io.cjs');
 const { output } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
-const { planningPaths } = planningWorkspace;
+const { planningPaths, resolvePhaseIdConvention } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
 const { extractFrontmatter } = frontmatter;
@@ -54,10 +54,13 @@ import stateDocument = require('./state-document.cjs');
 const { stateFieldValue } = stateDocument;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseId = require('./phase-id.cjs');
-const { comparePhaseNum, extractPhaseToken, matchPhaseDirs, normalizePhaseName, parsePhaseFromProse, stripProjectCodePrefix } = phaseId;
+const { comparePhaseNum, extractPhaseToken, parsePhaseFromProse, stripProjectCodePrefix } = phaseId;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateMod = require('./state.cjs');
 const { readStateHeadFreshness } = stateMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseLocatorMod = require('./phase-locator.cjs');
+const { resolvePhaseDirectoryLookup, matchPhaseDirsForLookup } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import unusableInput = require('./unusable-input.cjs');
 const { warnUnusableInput, UNUSABLE_REASON } = unusableInput;
@@ -175,8 +178,8 @@ function parseIntOrNull(s: string | null): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function phaseTokenFromDirName(name: string): string | null {
-  const token = extractPhaseToken(name);
+function phaseTokenFromDirName(name: string, convention?: string): string | null {
+  const token = extractPhaseToken(name, convention);
   // #2528: the shape probe runs on the PROJECT-CODE-STRIPPED token. A prefixed
   // directory tokenizes to `MEM-05-80-20`, which does not start with a digit,
   // so the unstripped probe rejected it and the entry was dropped before any
@@ -317,10 +320,13 @@ function phaseTokenFromState(raw: string | null): string | null {
  */
 function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolean {
   const phasesDir = path.join(planningPaths(cwd).phases);
+  // #4304: both the directory admission scan and the later selector must read
+  // the same current-checkout grammar. Bracket is the only opt-in widening.
+  const convention = resolvePhaseIdConvention(cwd) === 'bracket' ? 'bracket' : undefined;
   let entries: string[] = [];
   try {
     entries = fs.readdirSync(phasesDir)
-      .map((name) => ({ name, phaseToken: phaseTokenFromDirName(name) }))
+      .map((name) => ({ name, phaseToken: phaseTokenFromDirName(name, convention) }))
       .filter((entry): entry is { name: string; phaseToken: string } => entry.phaseToken !== null)
       .sort((a, b) => comparePhaseNum(a.phaseToken, b.phaseToken) || a.name.localeCompare(b.name))
       .map((entry) => entry.name);
@@ -332,7 +338,7 @@ function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolea
   const phaseToken = phaseTokenFromState(currentPhaseRaw);
   let targetDir: string | undefined;
   if (phaseToken) {
-    const normalized = normalizePhaseName(phaseToken);
+    const lookup = resolvePhaseDirectoryLookup(cwd, phaseToken);
     // #2528: the fourth directory-resolution site, and the one where a miss is
     // silent — a phase whose directory cannot be found reports "not failed",
     // which reads identically to a healthy phase. It must therefore apply the
@@ -341,7 +347,7 @@ function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolea
     // surfaces its own failed verification. `entries` is already sorted, and
     // `matchPhaseDirs` filters without reordering, so taking the first match
     // preserves the previous `.find()` selection exactly.
-    const { matches } = matchPhaseDirs(entries, normalized);
+    const { matches } = matchPhaseDirsForLookup(entries, lookup);
     targetDir = matches[0];
     if (!targetDir) return false;
   } else {

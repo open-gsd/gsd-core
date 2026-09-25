@@ -82,4 +82,6 @@ function renderBracketMilestoneDisplay(
 export = {
   renderBracketPhaseDisplay,
   renderBracketMilestoneDisplay,
+  milestoneToken,
+  phaseToken,
 };

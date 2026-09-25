@@ -48,7 +48,7 @@ import planningSnapshotMod = require('./planning-snapshot.cjs');
 const { buildPlanningSnapshot, worstScope } = planningSnapshotMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspaceMod = require('./planning-workspace.cjs');
-const { planningPaths } = planningWorkspaceMod;
+const { planningPaths, resolvePhaseIdConvention } = planningWorkspaceMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planScan = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -72,7 +72,7 @@ import verificationMod = require('./verification.cjs');
 const { readVerificationStatus } = verificationMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { phaseKeyFromDir, phaseKeyFromToken, phaseMarkdownRegexSource } = phaseIdMod;
+const { phaseKeyFromDir, phaseKeyFromToken, phaseMarkdownRegexSource, extractPhaseDependencyTokens } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { extractCurrentMilestone } = roadmapParserMod;
@@ -1056,26 +1056,15 @@ function extractGoalProse(sectionBody: string): string | null {
  * token scan above), never a document-wide scan. `[]` when the line is
  * absent.
  */
-function extractDependencyTokens(sectionBody: string): string[] {
+function extractDependencyTokens(sectionBody: string, phaseIdConvention: string | null): string[] {
   const m = DEPENDS_ON_LINE_RE.exec(sectionBody);
   if (!m) return [];
-  // #4764: phase REFERENCES, not digit runs — the same prose-anchored grammar
-  // init.manager's dep_phases extraction uses (owner: phase-id.cts's
-  // PHASE_DEP_REF_SOURCE). The whole-field token scrape this replaces pulled
-  // calendar dates, git shas and ledger ids in as dependencies. The grammar's
-  // capture group 1 already excludes the "Phase(s)" anchor word, so no
-  // prefix-strip literal is needed here. Self-exclusion (init.manager drops
-  // the row's own number) is deliberately NOT applied: this reader has no row
-  // context at the extraction site and reports informationally, it does not
-  // gate.
-  const refRe = new RegExp(phaseIdMod.PHASE_DEP_REF_SOURCE, 'gi');
-  const tokenRe = new RegExp(phaseIdMod.PHASE_NUMBER_TOKEN_SOURCE, 'g');
-  const tokens: string[] = [];
-  let refMatch: RegExpExecArray | null;
-  while ((refMatch = refRe.exec(m[1])) !== null) {
-    for (const t of refMatch[1].matchAll(tokenRe)) tokens.push(t[0]);
-  }
-  return sortedUnique(tokens);
+  // #4764/#4304: phase REFERENCES, not digit runs. Both this informational
+  // reader and init.manager consume phase-id.cts's convention-aware owner, so
+  // bracket milestone digits never surface as dependencies. Self-exclusion is
+  // deliberately NOT applied here: this site has no row context and does not
+  // gate readiness.
+  return sortedUnique(extractPhaseDependencyTokens(m[1], phaseIdConvention));
 }
 
 /**
@@ -1125,6 +1114,7 @@ function buildPhaseGoalAndDependencies(
   roadmapDoc: { text: string | null; readable: boolean },
   phaseId: string | null,
   phaseDirLabel: string,
+  phaseIdConvention: string | null,
   diagnostics: Diagnostic[],
 ): { goal: ScopedText; dependencies: ScopedTextList } {
   if (!roadmapDoc.readable || roadmapDoc.text === null) {
@@ -1163,7 +1153,7 @@ function buildPhaseGoalAndDependencies(
   }
   return {
     goal: { value: extractGoalProse(sectionBody), scope: SCOPE.COMPLETE },
-    dependencies: { value: extractDependencyTokens(sectionBody), scope: SCOPE.COMPLETE },
+    dependencies: { value: extractDependencyTokens(sectionBody, phaseIdConvention), scope: SCOPE.COMPLETE },
   };
 }
 
@@ -1172,6 +1162,7 @@ function buildPhaseGoalAndDependencies(
 function buildPlanningInspect(cwd: string): Record<string, unknown> {
   const diagnostics: Diagnostic[] = [];
   const paths = planningPaths(cwd);
+  const phaseIdConvention = resolvePhaseIdConvention(cwd);
   const planningExists = fs.existsSync(paths.planning);
   if (!planningExists) {
     diagnostics.push({
@@ -1269,7 +1260,14 @@ function buildPlanningInspect(cwd: string): Record<string, unknown> {
 
     const token = /^(\d+(?:\.\d+)*)/.exec(phase.dir);
     const phaseId = token ? token[1] : null;
-    const { goal, dependencies } = buildPhaseGoalAndDependencies(cwd, roadmapDoc, phaseId, phase.dir, diagnostics);
+    const { goal, dependencies } = buildPhaseGoalAndDependencies(
+      cwd,
+      roadmapDoc,
+      phaseId,
+      phase.dir,
+      phaseIdConvention,
+      diagnostics,
+    );
 
     // `uat.foldScope`, NOT `uat.scope` (#3078 round-8). The two currently
     // agree at every call site — see `buildUatRows` for why the field is

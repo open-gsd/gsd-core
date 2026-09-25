@@ -30,6 +30,86 @@ const core = require('../gsd-core/bin/lib/phase-id.cjs');
 
 const p2 = (n) => String(n).padStart(2, '0');
 
+describe('bracket grammar: dependency references preserve qualified identity', () => {
+  test('keeps qualified display, dash, and labeled-display identities while bare stays bare', () => {
+    assert.equal(typeof core.extractPhaseDependencyTokens, 'function');
+    for (const [input, expected] of [
+      ['[CK.02] 01', ['[CK.02] 01']],
+      ['CK.02-01', ['[CK.02] 01']],
+      ['[CK.02] Phase 01', ['[CK.02] 01']],
+      ['01', ['01']],
+    ]) {
+      assert.deepStrictEqual(core.extractPhaseDependencyTokens(input, 'bracket'), expected, input);
+    }
+  });
+
+  test('keeps one qualifier on every token in its dependency list', () => {
+    for (const [input, expected] of [
+      ['[CK.02] Phase 01 and 02', ['[CK.02] 01', '[CK.02] 02']],
+      ['[CK.02] 01, 02', ['[CK.02] 01', '[CK.02] 02']],
+      ['[CK.01] 01 and [CK.02] 02', ['[CK.01] 01', '[CK.02] 02']],
+      ['[CK.02] Phase 1', ['[CK.02] 01']],
+      ['[CK.02] 1', ['[CK.02] 01']],
+      ['[CK.02] Phase 1 and 2', ['[CK.02] 01', '[CK.02] 02']],
+      ['[CK.02] 01, 2, 003', ['[CK.02] 01', '[CK.02] 02', '[CK.02] 03']],
+      ['[CK.02] Phase 1A', ['1A']],
+    ]) {
+      assert.deepStrictEqual(core.extractPhaseDependencyTokens(input, 'bracket'), expected, input);
+    }
+  });
+
+  test('keeps an unqualified legacy Phase reference unchanged in bracket mode', () => {
+    assert.deepStrictEqual(core.extractPhaseDependencyTokens('Phase 1', 'bracket'), ['1']);
+  });
+
+  test('keeps the Phase-prefixed legacy grammar unchanged outside bracket mode', () => {
+    assert.equal(typeof core.extractPhaseDependencyTokens, 'function');
+    const cases = [
+      ['Phase 1a', ['1']],
+      ['Phase 1A', ['1A']],
+      ['Phase 1 and 2', ['1', '2']],
+      ['Phase 1, Phase 2', ['1', '2']],
+      ['Phases 1-3', ['1', '3']],
+      ['[CK.02] 01', []],
+    ];
+    for (const convention of [null, 'sequential', 'milestone-prefixed']) {
+      for (const [input, expected] of cases) {
+        assert.deepStrictEqual(
+          core.extractPhaseDependencyTokens(input, convention),
+          expected,
+          `${String(convention)}: ${input}`,
+        );
+      }
+    }
+  });
+});
+
+describe('phase checklist grammar preserves the legacy greedy match outside bracket mode', () => {
+  const line = '- [x] Phase 1: Prepare Phase 2: handoff';
+
+  function upstreamNextParse(checklistLine) {
+    const match = /-\s*\[([xX ])\]\s*.*Phase\s+(\d+(?:\.\d+)?)(?=[:\s])/i.exec(checklistLine);
+    return match
+      ? { checked: match[1].toLowerCase() === 'x', bracketId: undefined, phaseToken: match[2] }
+      : null;
+  }
+
+  test('null, sequential, and milestone-prefixed return upstream/next phase 2', () => {
+    const expected = upstreamNextParse(line);
+    assert.deepStrictEqual(expected, { checked: true, bracketId: undefined, phaseToken: '2' });
+    for (const convention of [null, 'sequential', 'milestone-prefixed']) {
+      assert.deepStrictEqual(core.parsePhaseChecklistLine(line, convention), expected, String(convention));
+    }
+  });
+
+  test('bracket mode keeps the lazy identity-aware checklist match', () => {
+    assert.deepStrictEqual(
+      core.parsePhaseChecklistLine('- [x] [CK.02] 01: Prepare Phase 02: handoff', 'bracket'),
+      { checked: true, bracketId: 'CK.02', phaseToken: '01' },
+    );
+  });
+});
+
 // ─── ADR §3 round-trip example table (doc-parity) ───────────────────────────
 const TABLE = [
   { display: '[GSD.02] 05.03-01', dir: 'GSD.02-05.03-feature' },

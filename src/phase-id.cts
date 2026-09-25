@@ -64,7 +64,7 @@ const OPTIONAL_PHASE_TAG_SOURCE = '(?:\\s*\\([^)\\n]{0,200}\\))?';
 // introduced outside this module without a `// phase-id-owner:` justification.
 const PHASE_NUMBER_TOKEN_SOURCE = '\\d+[A-Z]?(?:\\.\\d+)*';
 
-// #4764: a phase REFERENCE in depends-on PROSE — the token in context, directly
+// #4764: a legacy phase REFERENCE in depends-on PROSE — the token in context, directly
 // following "Phase"/"Phases", with bare-token list continuation ("Phases 1 and 2",
 // "Phase 1, 2, and 3", "Phase 1-3"). Built HERE, beside the token grammar it is
 // anchored on, because two readers consume Depends-on prose (init.manager's
@@ -77,8 +77,9 @@ const PHASE_NUMBER_TOKEN_SOURCE = '\\d+[A-Z]?(?:\\.\\d+)*';
 // dependencies. The `-` separator deliberately extracts range ENDPOINTS only
 // ("Phase 1-3" → 1, 3) — the pre-#4764 behavior; interior enumeration stays
 // out (a range's middle is not written as a reference).
-const PHASE_DEP_REF_SOURCE =
-  `\\bphases?\\s+(${PHASE_NUMBER_TOKEN_SOURCE}(?:(?:\\s*,\\s*(?:and\\s+)?|\\s+and\\s+|\\s*&\\s*|\\s+(?:to|through)\\s+|\\s*-\\s*)${PHASE_NUMBER_TOKEN_SOURCE})*)`;
+const PHASE_DEP_TOKEN_LIST_SOURCE =
+  `${PHASE_NUMBER_TOKEN_SOURCE}(?:(?:\\s*,\\s*(?:and\\s+)?|\\s+and\\s+|\\s*&\\s*|\\s+(?:to|through)\\s+|\\s*-\\s*)${PHASE_NUMBER_TOKEN_SOURCE})*`;
+const PHASE_DEP_REF_SOURCE = `\\bphases?\\s+(${PHASE_DEP_TOKEN_LIST_SOURCE})`;
 
 // #2528 review: the CASE-FLEXIBLE renderings of the two sources above, for call
 // sites that scan directory names (where a project code or a variant suffix may
@@ -328,6 +329,46 @@ const PHASE_HEADING_BASELINE = Object.freeze({
  *
  * Pure: takes the resolved convention, never reads config.
  */
+// #4304 (B1): `bracketAlt`'s own alternation, factored out to a named
+// function so every write-side consumer that needs "this bracket, optionally
+// followed by the literal Phase label, then a digit" derives from the SAME
+// expression the read grammar compiles — never a hand-retyped `[ \t]+` /
+// case-sensitive copy. `idSrc` is the regex SOURCE for the bracket's
+// `{CODE}.{MM}` interior: the generic `BRACKET_ID_SRC` class (capturing or
+// not) for a classifier that must recognize ANY bracket identity, or one
+// escaped, already-known project/milestone pair (via
+// `bracketQualifiedIntroSrcFor` below) for a rewriter/detector that already
+// knows exactly which identity it means. Returns only the regex SOURCE —
+// every caller compiles it themselves (every reader uses the `i` flag), so
+// this composes with `g`, an outer capturing group, or a trailing literal
+// number.
+function bracketAltIntroSrcFor(idSrc: string): string {
+  // `[ \t]*` not `\s*`: `\s` spans newlines, so a bracket-terminated heading
+  // followed by a blank line and a digit-leading prose line read as one phase.
+  return `\\[${idSrc}\\][ \\t]*(?:Phase\\s+|(?=\\d))`;
+}
+
+/**
+ * #4304 (B1): the qualified-mention intro for ONE already-known
+ * bracket identity — `[{PROJECT}.{MM}]` (both escaped literals, not a
+ * class), optionally followed by the `Phase` label — built from
+ * `bracketAltIntroSrcFor` so a rewriter or detector anchoring a specific
+ * phase-number token right after it accepts exactly the spellings
+ * `phaseHeadingPrefixSrcFor`'s bracket alternative does: any case (compile
+ * with `i`), zero-or-more spaces, an optional `Phase` label. phase.cts's
+ * write-side bracket-identity regexes (the qualified-reference replacer, the
+ * qualified-mention detector) build their intro through this instead of
+ * re-typing `[ \t]+` / case-sensitive brackets independently of the read
+ * grammar — the exact drift B1 found (an earlier revision shipped hand-composed,
+ * case-sensitive, `[ \t]+`-spaced copies that silently rejected
+ * `[ck.02] 02:`, `[CK.02] PHASE 02:`, and the no-space `[CK.02]02:`, all of
+ * which `roadmap get-phase` / `roadmap analyze` / this PR's own `phase
+ * insert` and `phase add` already accept as real phases).
+ */
+function bracketQualifiedIntroSrcFor(project: unknown, milestone: unknown): string {
+  return bracketAltIntroSrcFor(`${escapeRegex(String(project))}\\.${escapeRegex(String(milestone))}`);
+}
+
 function phaseHeadingPrefixSrcFor(
   baseline: string,
   convention?: string | null,
@@ -338,8 +379,6 @@ function phaseHeadingPrefixSrcFor(
     : BASE_PHASE_LABEL_PREFIX_SRC;
   if (convention !== 'bracket') return base;
   const id = capturing ? `(${BRACKET_ID_SRC})` : BRACKET_ID_SRC;
-  // `[ \t]*` not `\s*`: `\s` spans newlines, so a bracket-terminated heading
-  // followed by a blank line and a digit-leading prose line read as one phase.
   // BOTH bracket forms are admitted at both baselines, and both CAPTURE. The
   // any-bracket base already matches `[GSD.999] Phase 07:` on its own — but
   // through the base alternative, which captures nothing, so the reader saw
@@ -347,8 +386,49 @@ function phaseHeadingPrefixSrcFor(
   // counted a labeled icebox heading as a real phase while the label-less form
   // beside it was excluded. Two derivations of one ROADMAP disagreed. The
   // bracket alternative is tried FIRST so it wins the capture.
-  const bracketAlt = `\\[${id}\\][ \\t]*(?:Phase\\s+|(?=\\d))`;
+  const bracketAlt = bracketAltIntroSrcFor(id);
   return `(?:${bracketAlt}|${base})`;
+}
+
+type PhaseChecklistLine = {
+  checked: boolean;
+  bracketId?: string;
+  phaseToken: string;
+};
+
+/**
+ * Parse one roadmap phase-checkbox row through the same grammar used by the
+ * manager and destructive writers. The historical manager spelling permits
+ * arbitrary presentation text (including bold markers) between the checkbox
+ * and phase intro and greedily selects the last Phase-shaped intro on the row.
+ * Bracket mode uses the lazy identity-aware match so title prose cannot replace
+ * the leading `[CODE.MM] PP` identity. Both paths treat whitespace or a colon
+ * immediately after the phase token as the boundary. Returning semantic fields
+ * keeps consumers from depending on capture-group offsets.
+ */
+function parsePhaseChecklistLine(
+  line: string,
+  convention?: string | null,
+): PhaseChecklistLine | null {
+  const capturesBracketId = convention === 'bracket';
+  const intro = phaseHeadingPrefixSrcFor(
+    PHASE_HEADING_BASELINE.LABEL_ONLY,
+    convention,
+    capturesBracketId,
+  );
+  const presentation = capturesBracketId ? '.*?' : '.*';
+  const pattern = new RegExp(
+    `-\\s*\\[([xX ])\\]\\s*${presentation}${intro}(${PHASE_NUMBER_TOKEN_SOURCE})`
+      + `${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])`,
+    'i',
+  );
+  const match = pattern.exec(line);
+  if (!match) return null;
+  return {
+    checked: match[1].toLowerCase() === 'x',
+    bracketId: capturesBracketId ? match[2] : undefined,
+    phaseToken: capturesBracketId ? match[3] : match[2],
+  };
 }
 
 function stripProjectCodePrefix(value: unknown, caseInsensitive = true): string {
@@ -529,6 +609,147 @@ function parsePhaseId(input: string): PhaseId {
   // normalizePhaseName and every other legacy reader keep accepting those
   // tokens unchanged.
   throw new Error(`parsePhaseId: not a bracket phase id: ${JSON.stringify(input)}`);
+}
+
+/**
+ * Phase tokens referenced by one already-addressed Depends-on value.
+ *
+ * The non-bracket branch is planning-inspect's #4764 extractor byte-for-byte:
+ * its reference regex is case-insensitive but its token regex is not, so
+ * `Phase 1a` remains `1` while `Phase 1A` remains `1A`. The manager keeps its
+ * own pre-#4304 non-bracket extractor because that surface historically made
+ * both regexes case-insensitive. Only bracket mode shares the widened grammar.
+ * Bracket repositories additionally accept the four identity spellings their
+ * readers and writers expose: `[CODE.MM] NN`, `CODE.MM-NN`,
+ * `[CODE.MM] Phase NN`, and a value consisting only of bare `NN`. Qualified
+ * spellings retain project+milestone+phase identity in canonical display form,
+ * including every continuation token in one qualified list; bare tokens remain
+ * bare for active-milestone resolution by the consumer.
+ * Bracket identity recognition is composed from phaseHeadingPrefixSrcFor and
+ * parsePhaseId; this function owns no second bracket-id regex.
+ */
+type PhaseDependencyToken = {
+  kind: 'legacy' | 'qualified' | 'qualified-fallback' | 'identity' | 'bare';
+  referenceStart?: number;
+  start: number;
+  end: number;
+  token: string;
+};
+
+/**
+ * Tokenize dependency references with source spans. Bracket-qualified lists
+ * canonicalize every numeric segment before strict identity parsing. If the
+ * qualified identity still cannot be parsed, the reader keeps the original
+ * token as a legacy dependency instead of silently dropping it.
+ */
+function tokenizePhaseDependencyReferences(
+  prose: string,
+  convention?: string | null,
+): PhaseDependencyToken[] {
+  const input = prose;
+  const found: PhaseDependencyToken[] = [];
+  const qualifiedTokenSpans: { start: number; end: number }[] = [];
+  const legacyRefRe = new RegExp(`${PHASE_DEP_REF_SOURCE}`, 'gi');
+  const tokenRe = new RegExp(PHASE_NUMBER_TOKEN_SOURCE, convention === 'bracket' ? 'gi' : 'g');
+  let refMatch: RegExpExecArray | null;
+  while ((refMatch = legacyRefRe.exec(input)) !== null) {
+    const referenceStart = refMatch.index + refMatch[0].length - refMatch[1].length;
+    tokenRe.lastIndex = 0;
+    let tokenMatch: RegExpExecArray | null;
+    while ((tokenMatch = tokenRe.exec(refMatch[1])) !== null) {
+      const start = referenceStart + tokenMatch.index;
+      found.push({ kind: 'legacy', start, end: start + tokenMatch[0].length, token: tokenMatch[0] });
+    }
+  }
+
+  if (convention !== 'bracket') {
+    return found;
+  }
+
+  const bracketDisplayRe = new RegExp(
+    `${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, 'bracket', true)}(${PHASE_DEP_TOKEN_LIST_SOURCE})`,
+    'gi',
+  );
+  let displayMatch: RegExpExecArray | null;
+  while ((displayMatch = bracketDisplayRe.exec(input)) !== null) {
+    if (!displayMatch[1]) continue;
+    const tokenList = displayMatch[2];
+    const tokenListStart = displayMatch.index + displayMatch[0].length - tokenList.length;
+    tokenRe.lastIndex = 0;
+    let tokenMatch: RegExpExecArray | null;
+    while ((tokenMatch = tokenRe.exec(tokenList)) !== null) {
+      const start = tokenListStart + tokenMatch.index;
+      const end = start + tokenMatch[0].length;
+      qualifiedTokenSpans.push({ start, end });
+      const numeric = tokenMatch[0].split('.').every((part) => /^\d+$/.test(part))
+        ? tokenMatch[0].split('.').map(pad2).join('.')
+        : null;
+      try {
+        if (numeric === null) throw new Error('not a numeric bracket phase token');
+        const id = parsePhaseId(`[${foldBracketId(displayMatch[1])}] ${numeric}`);
+        found.push({
+          kind: 'qualified',
+          referenceStart: displayMatch.index,
+          start,
+          end,
+          token: renderPhaseId(id),
+        });
+      } catch {
+        found.push({
+          kind: 'qualified-fallback',
+          referenceStart: displayMatch.index,
+          start,
+          end,
+          token: tokenMatch[0],
+        });
+      }
+    }
+  }
+
+  const chunks = input.matchAll(/\S+/g);
+  for (const chunk of chunks) {
+    const candidate = chunk[0]
+      .replace(/^[`*_([{]+/, '')
+      .replace(/[`*_\])}.:,;]+$/, '');
+    try {
+      const id = parsePhaseId(candidate);
+      const sub = id.subphase ? `.${id.subphase}` : '';
+      const canonicalDash = `${id.project}.${id.milestone}-${id.phase}${sub}`;
+      if (id.plan || candidate !== canonicalDash) continue;
+      found.push({
+        kind: 'identity',
+        start: chunk.index ?? 0,
+        end: (chunk.index ?? 0) + candidate.length,
+        token: renderPhaseId(id),
+      });
+    } catch {
+      // Most prose chunks are not identities. parsePhaseId is the classifier.
+    }
+  }
+
+  const trimmed = input.trim();
+  if (new RegExp(`^${PHASE_NUMBER_TOKEN_SOURCE}$`, 'i').test(trimmed)) {
+    const start = input.indexOf(trimmed);
+    found.push({ kind: 'bare', start, end: start + trimmed.length, token: trimmed });
+  }
+
+  const identityAware = found.filter(({ kind, start, end }) => {
+    if (kind !== 'legacy') return true;
+    return !qualifiedTokenSpans.some((span) => start === span.start && end === span.end);
+  });
+  identityAware.sort((a, b) => a.start - b.start);
+  return identityAware;
+}
+
+function extractPhaseDependencyTokens(prose: string, convention?: string | null): string[] {
+  const found = tokenizePhaseDependencyReferences(prose, convention);
+  const seen = new Set<string>();
+  return found.flatMap(({ token }) => {
+    const key = token.toUpperCase();
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [token];
+  });
 }
 
 function renderMilestoneId(id: { project: string; milestone: string }): string {
@@ -1277,6 +1498,11 @@ function phaseTokenMatches(dirName: string, normalized: string, convention?: str
   return false;
 }
 
+type BracketPhaseLookupContext = {
+  project: string;
+  milestone: string;
+};
+
 /**
  * #2528: the LEADING DIGIT RUN of a directory name — the fragment the
  * bare-integer fallback selects on, and the one `phaseNumberForMatch` then
@@ -1348,31 +1574,49 @@ const unpad = (digits: string): string => digits.replace(/^0+(?=\d)/, '');
  *
  *   TAKE `matches[0]` — `cmdPhasesList`, `cmdInitManager`, `cmdRoadmapAnalyze`,
  *   `cmdVerifySchemaDrift`, `detectVerifyFailed`. Each read a directory to
- *   DECORATE a row they are already emitting; each used `.find()` before this
- *   PR, so first-match is their prior behavior preserved verbatim, and each is
- *   order-stable because the directory list is sorted and this function filters
- *   without reordering.
+ *   DECORATE a row they are already emitting. In bracket mode those current-
+ *   checkout callers pass the active project+milestone context: an exact
+ *   qualified match wins, and bracket directories from other milestones are
+ *   excluded before any first-match policy can run. Legacy selection order is
+ *   unchanged.
  *
- * The honest caveat on that second tier: the bare-number fallback makes
- * multi-match newly REACHABLE for inputs that previously found nothing, so those
- * five can now silently pick one of several candidates where they used to report
- * not-found. That is a widening of an existing first-match rule, not a new rule
- * — but it is a widening, and promoting any of them to refusal is a UX decision
- * about their own output, not a change to selection, so it does not belong here.
+ * Without an active bracket context the historical first-match/ambiguity policy
+ * remains the caller's responsibility. With a context, only migration-window
+ * legacy names can participate in fallback when the exact bracket identity is
+ * absent; a prior milestone's qualified directory can never mask the active one.
  *
  * `usedBareFallback` tells callers to derive the displayed phase number from
  * the directory's leading digit run instead of `extractPhaseToken` (whose
  * token for these dirs is the mis-absorbed multi-segment form).
  */
-function matchPhaseDirs(dirs: string[], normalized: string, convention?: string | null): { matches: string[]; usedBareFallback: boolean } {
-  const primary = dirs.filter(d => phaseTokenMatches(d, normalized, convention));
+function matchPhaseDirs(
+  dirs: string[],
+  normalized: string,
+  convention?: string | null,
+  bracketContext?: BracketPhaseLookupContext | null,
+): { matches: string[]; usedBareFallback: boolean } {
+  let candidates = dirs;
+
+  // #4304: a bare phase number from STATE/ROADMAP names the active bracket
+  // identity, not every physical directory left behind by prior milestones.
+  // Prefer the exact qualified directory. If it is absent, retain only
+  // migration-window legacy names; a differently-qualified bracket directory
+  // must never win merely because it sorts first.
+  if (convention === 'bracket' && bracketContext && !bracketQualifiedKey(normalized, convention)) {
+    const qualified = `${bracketContext.project}.${bracketContext.milestone}-${normalized}`;
+    const exact = dirs.filter(d => phaseTokenMatches(d, qualified, convention));
+    if (exact.length > 0) return { matches: exact, usedBareFallback: false };
+    candidates = dirs.filter(d => bracketQualifiedKey(d, convention) === null);
+  }
+
+  const primary = candidates.filter(d => phaseTokenMatches(d, normalized, convention));
   if (primary.length > 0) return { matches: primary, usedBareFallback: false };
 
   const bare = String(normalized);
   if (!BARE_INTEGER_RE.test(bare)) return { matches: primary, usedBareFallback: false };
   const want = unpad(bare);
 
-  const fallback = dirs.filter(d => {
+  const fallback = candidates.filter(d => {
     const m = stripProjectCodePrefix(d).match(LEADING_DIGIT_RUN_RE);
     return m !== null && unpad(m[1]) === want;
   });
@@ -1385,8 +1629,8 @@ function matchPhaseDirs(dirs: string[], normalized: string, convention?: string 
  * directory's leading digit run (the whole point of the fallback is that the
  * extracted token is wrong for these dirs).
  */
-function phaseNumberForMatch(dirName: string, usedBareFallback: boolean): string {
-  if (!usedBareFallback) return extractPhaseToken(dirName);
+function phaseNumberForMatch(dirName: string, usedBareFallback: boolean, convention?: string | null): string {
+  if (!usedBareFallback) return extractPhaseToken(dirName, convention);
   const stripped = stripProjectCodePrefix(dirName);
   const prefix = dirName.slice(0, dirName.length - stripped.length);
   const m = stripped.match(LEADING_DIGIT_RUN_PREFIX_RE);
@@ -1649,6 +1893,8 @@ export = {
   OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,
   PHASE_DEP_REF_SOURCE,
+  tokenizePhaseDependencyReferences,
+  extractPhaseDependencyTokens,
   CASE_FLEXIBLE_PROJECT_CODE_PREFIX_SOURCE,
   CASE_FLEXIBLE_PHASE_NUMBER_TOKEN_SOURCE,
   PHASE_CONTINUATION_SEGMENT_SOURCE,
@@ -1665,6 +1911,8 @@ export = {
   BASE_PHASE_LABEL_PREFIX_SRC,
   PHASE_HEADING_BASELINE,
   phaseHeadingPrefixSrcFor,
+  parsePhaseChecklistLine,
+  bracketQualifiedIntroSrcFor,
   foldBracketId,
   bracketQualifiedKey,
   stripProjectCodePrefix,

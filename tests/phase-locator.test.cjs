@@ -135,6 +135,18 @@ describe('findPhaseInternal: decimal and complex phase ids (adversarial)', () =>
   let tmpDir;
   afterEach(() => { if (tmpDir) { cleanup(tmpDir); tmpDir = null; } });
 
+  function configureBracketLookup() {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ project_code: 'CK', phase_id_convention: 'bracket' }, null, 2) + '\n',
+    );
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n## [CK.02] v2.0 — Current\n',
+    );
+  }
+
   test('finds decimal sub-phase (e.g. 01.1)', () => {
     tmpDir = createTempProject('gsd-pl-test-');
     // normalizePhaseName('1.1') = '01.1'
@@ -145,6 +157,34 @@ describe('findPhaseInternal: decimal and complex phase ids (adversarial)', () =>
     assert.strictEqual(result.found, true);
     assert.strictEqual(result.phase_number, '01.1');
   });
+
+  test('bracket lookup prefers the canonical decimal directory when both spellings exist', () => {
+    tmpDir = createTempProject('gsd-pl-bracket-canonical-first-');
+    configureBracketLookup();
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    fs.mkdirSync(path.join(phasesDir, 'CK.02-01.01-hotfix'), { recursive: true });
+    fs.mkdirSync(path.join(phasesDir, 'CK-01.1-child'), { recursive: true });
+
+    const result = phaseLocator.findPhaseInternal(tmpDir, '1.1');
+
+    assert.ok(result !== null);
+    assert.equal(result.directory, '.planning/phases/CK.02-01.01-hotfix');
+    assert.equal(result.phase_number, '01.01');
+  });
+
+  for (const legacyDir of ['01.1-child', 'CK-01.1-child']) {
+    test(`bracket lookup falls back to legacy decimal directory ${legacyDir} when canonical is absent`, () => {
+      tmpDir = createTempProject('gsd-pl-bracket-legacy-fallback-');
+      configureBracketLookup();
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', legacyDir), { recursive: true });
+
+      const result = phaseLocator.findPhaseInternal(tmpDir, '1.1');
+
+      assert.ok(result !== null);
+      assert.equal(result.directory, `.planning/phases/${legacyDir}`);
+      assert.equal(result.phase_number, legacyDir.startsWith('CK-') ? 'CK-01.1' : '01.1');
+    });
+  }
 
   test('decimal sub-phase dir is not matched by integer-only search', () => {
     tmpDir = createTempProject('gsd-pl-test-');

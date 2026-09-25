@@ -1775,6 +1775,64 @@ describe('#4764 dep_phases extracts only Phase-prefixed references', () => {
     assert.strictEqual(row.deps_satisfied, false, '3 is incomplete — a real blocker must not be dropped');
   });
 
+  test('keeps merge-base dependency token bytes under every non-bracket convention', () => {
+    const cases = [
+      ['Phase 1a', ['1a']],
+      ['Phase 1A', ['1A']],
+      ['Phase 1, Phase 2', ['1', '2']],
+      ['Phases 1-3', ['1', '3']],
+    ];
+    for (const convention of [null, 'sequential', 'milestone-prefixed']) {
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'config.json'),
+        JSON.stringify({ project_code: null, phase_id_convention: convention }, null, 2) + '\n',
+      );
+      writeState(tmpDir);
+      for (const [dependsOn, expected] of cases) {
+        writeRoadmap(tmpDir, [{ number: '9', name: 'Reader', depends_on: dependsOn }]);
+        const output = JSON.parse(runGsdTools('init manager', tmpDir).output);
+        const row = output.phases.find((phase) => phase.number === '9');
+        assert.deepStrictEqual(row.dep_phases, expected, `${String(convention)}: ${dependsOn}`);
+      }
+    }
+  });
+
+  test('keeps upstream/next greedy checklist selection under every non-bracket convention', () => {
+    for (const convention of [null, 'sequential', 'milestone-prefixed']) {
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'config.json'),
+        JSON.stringify({ project_code: null, phase_id_convention: convention }, null, 2) + '\n',
+      );
+      writeState(tmpDir);
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## Progress',
+          '',
+          '- [x] Phase 1: Prepare Phase 2: handoff',
+          '',
+          '### Phase 1: Foundation',
+          '',
+          '**Goal:** First',
+          '',
+          '### Phase 2: Handoff',
+          '',
+          '**Goal:** Second',
+          '',
+        ].join('\n'),
+      );
+
+      const output = JSON.parse(runGsdTools('init manager', tmpDir).output);
+      assert.deepStrictEqual(
+        output.phases.map((phase) => [phase.number, phase.roadmap_complete]),
+        [['1', false], ['2', true]],
+        String(convention),
+      );
+    }
+  });
+
   test('#4764 property: extraction pulls exactly the Phase-prefixed references out of arbitrary prose', () => {
     // House fast-check config (seed 42); per-call numRuns caps the cost — each
     // run spawns the real CLI (runGsdTools), unlike the pure-function properties.

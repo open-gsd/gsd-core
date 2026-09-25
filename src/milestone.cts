@@ -36,7 +36,7 @@ import stateContract = require('./state-contract.cjs');
 const { publishStateContract } = stateContract;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { normalizePhaseName, matchPhaseDirs, PHASE_NUMBER_TOKEN_SOURCE, isSentinelPhaseId, isSentinelPhaseDir } = phaseIdMod;
+const { PHASE_NUMBER_TOKEN_SOURCE, isSentinelPhaseId, isSentinelPhaseDir } = phaseIdMod;
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
@@ -57,7 +57,7 @@ import planScanMod = require('./plan-scan.cjs');
 const { scanPhasePlans } = planScanMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { listMilestonePhaseDirs } = phaseLocatorMod;
+const { listMilestonePhaseDirs, resolvePhaseDirectoryLookup, matchPhaseDirsForLookup } = phaseLocatorMod;
 const { planningPaths, resolvePhaseIdConvention } = planningWorkspace;
 const { extractFrontmatter } = frontmatterMod;
 // ADR-3408 §8.3 / #3469: `writeStateMd` gets sync and NO preservation — the
@@ -663,6 +663,11 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
     );
   }
 
+  // #2761/#4304: resolve once for every phase-directory consumer in this
+  // command. The matcher opts in only for bracket; the milestone enumerator
+  // retains the full resolved value it already accepted.
+  const phaseConvention = resolvePhaseIdConvention(cwd);
+
   // Guard: prevent marking complete when ROADMAP still lists phases that have
   // no directory on disk (disk_status: no_directory). This catches the case
   // where the active milestone was erroneously marked complete before phases
@@ -755,12 +760,14 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
         // the #1445 /^999/ progress filters). (#1580)
         // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this local check already covered both 0 and 999; now delegates to the single canonical owner.
         if (isSentinelPhaseId(phaseNum)) continue;
-        const normalized = normalizePhaseName(phaseNum);
+        const lookup = resolvePhaseDirectoryLookup(cwd, phaseNum);
         // A phase has disk_status: 'no_directory' when no phase directory
         // with a matching token exists on disk. Use the same matchPhaseDirs
         // owner that roadmap.analyze uses to avoid false positives on decimal
-        // (2.1) and letter-suffix (12A) phase IDs. (#2528)
-        const hasDirectory = matchPhaseDirs(phaseDirEntries, normalized).matches.length > 0;
+        // (2.1) and letter-suffix (12A) phase IDs. (#2528) Under #4304 the
+        // current checkout's bracket convention and migration-window legacy
+        // fallback are both owned by the shared lookup adapter.
+        const hasDirectory = matchPhaseDirsForLookup(phaseDirEntries, lookup).matches.length > 0;
         if (!hasDirectory) {
           noDirectoryPhases.push(phaseNum);
         }
@@ -791,7 +798,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   let totalTasks = 0;
   const accomplishments: string[] = [];
 
-  // #2761 (round-11 BLOCKER): resolved ONCE, ambiently (no explicit `ws` —
+  // #2761 (round-11 BLOCKER): resolved ONCE above, ambiently (no explicit `ws` —
   // this function has none of its own and already resolves everything else
   // off `cwd` via planningPaths(cwd), matching the ambient-workstream
   // contract `resolvePhaseIdConvention`/`planningDir` share), and threaded
@@ -806,8 +813,6 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   // the silent-inherit path without changing behavior for `null` /
   // `milestone-prefixed` projects, whose resolved convention is the same
   // value `undefined` would have lazily produced anyway.
-  const phaseConvention = resolvePhaseIdConvention(cwd);
-
   // #3597 (ADR-3180 Decision 2): SINGLE resolution of "which phase
   // directories belong to the current milestone" AND the SCOPE discriminator
   // that resolution came from — shared verbatim by the read-only stats loop

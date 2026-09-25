@@ -18,6 +18,7 @@ import fs from 'node:fs';
 // at load time and become un-mockable.
 import childProcess from 'node:child_process';
 import { escapeRegex } from './pattern.cjs';
+import { scanFencedBlocks } from './markdown-sectionizer.cjs';
 
 /**
  * Convert a filesystem path to POSIX form (forward slashes) by translating the
@@ -1125,13 +1126,20 @@ export function probeTty(opts: { platform?: string } = {}): string | null {
 
 // ─── Platform file I/O ────────────────────────────────────────────────────────
 
-function _normalizeMd(content: string): string {
+export interface ContentNormalizationOptions {
+  encoding?: BufferEncoding;
+  /** Bracket ROADMAP writers preserve heading/list-shaped fenced examples. */
+  preserveFencedMarkdownStructure?: boolean;
+}
+
+function _normalizeMd(content: string, preserveFencedStructure = false): string {
   if (!content || typeof content !== 'string') return content;
   let text = content.replace(/\r\n/g, '\n');
   const lines = text.split('\n');
   const result: string[] = [];
   const fenceRegex = /^```/;
   const insideFence = new Array<boolean>(lines.length);
+  const insideSharedFence = new Array<boolean>(lines.length).fill(false);
   let fenceOpen = false;
   for (let i = 0; i < lines.length; i++) {
     if (fenceRegex.test(lines[i].trimEnd())) {
@@ -1146,13 +1154,23 @@ function _normalizeMd(content: string): string {
       insideFence[i] = fenceOpen;
     }
   }
+  if (preserveFencedStructure) {
+    for (const block of scanFencedBlocks(lines)) {
+      const end = block.closeLineIdx === -1 ? lines.length : block.closeLineIdx;
+      for (let i = block.openLineIdx + 1; i < end; i++) insideSharedFence[i] = true;
+    }
+  }
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const prev = i > 0 ? lines[i - 1] : '';
     const prevTrimmed = prev.trimEnd();
     const trimmed = line.trimEnd();
     const isFenceLine = fenceRegex.test(trimmed);
-    if (/^#{1,6}\s/.test(trimmed) && i > 0 && prevTrimmed !== '' && prevTrimmed !== '---') result.push('');
+    // Bracket ROADMAP writers opt into preserving heading- or list-shaped
+    // literal examples. The default deliberately retains upstream/next's
+    // legacy normalization bytes for every non-bracket caller.
+    const normalizeStructuralLine = !preserveFencedStructure || !insideSharedFence[i];
+    if (normalizeStructuralLine && /^#{1,6}\s/.test(trimmed) && i > 0 && prevTrimmed !== '' && prevTrimmed !== '---') result.push('');
     if (isFenceLine && i > 0 && prevTrimmed !== '' && !insideFence[i] && (i === 0 || !insideFence[i - 1] || isFenceLine)) {
       if (i === 0 || !insideFence[i - 1]) result.push('');
     }
@@ -1166,9 +1184,9 @@ function _normalizeMd(content: string): string {
     // from the after-heading rule below. The after-a-bullet rule at the end
     // of this loop is a different transition (list→prose) and is unaffected.
     result.push(line);
-    if (/^#{1,6}\s/.test(trimmed) && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '') result.push('');
+    if (normalizeStructuralLine && /^#{1,6}\s/.test(trimmed) && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '') result.push('');
     if (/^```\s*$/.test(trimmed) && i > 0 && insideFence[i - 1] && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '') result.push('');
-    if (/^(\s*[-*+]\s|\s*\d+\.\s)/.test(line) && i < lines.length - 1) {
+    if (normalizeStructuralLine && /^(\s*[-*+]\s|\s*\d+\.\s)/.test(line) && i < lines.length - 1) {
       const next = lines[i + 1];
       if (next !== undefined && next.trimEnd() !== '' && !/^(\s*[-*+]\s|\s*\d+\.\s)/.test(next) && !/^\s/.test(next)) result.push('');
     }
@@ -1179,12 +1197,12 @@ function _normalizeMd(content: string): string {
   return text;
 }
 
-export function normalizeContent(filePath: string, content: string, opts: { encoding?: BufferEncoding } = {}): { content: string; encoding: BufferEncoding } {
+export function normalizeContent(filePath: string, content: string, opts: ContentNormalizationOptions = {}): { content: string; encoding: BufferEncoding } {
   const encoding = opts.encoding ?? 'utf-8';
   const isMd = path.extname(filePath).toLowerCase() === '.md';
   let normalized: string;
   if (isMd) {
-    normalized = _normalizeMd(content);
+    normalized = _normalizeMd(content, opts.preserveFencedMarkdownStructure === true);
   } else {
     normalized = (content ?? '').replace(/\r\n/g, '\n').replace(/\n*$/, '\n');
   }
@@ -1205,8 +1223,13 @@ export function normalizeContent(filePath: string, content: string, opts: { enco
  * post-write re-read of the actual on-disk bytes) instead of a raw `!==` —
  * do not simplify this back to a direct string comparison.
  */
-export function contentChangedAfterNormalize(filePath: string, before: string, after: string): boolean {
-  return normalizeContent(filePath, after).content !== normalizeContent(filePath, before).content;
+export function contentChangedAfterNormalize(
+  filePath: string,
+  before: string,
+  after: string,
+  opts: ContentNormalizationOptions = {},
+): boolean {
+  return normalizeContent(filePath, after, opts).content !== normalizeContent(filePath, before, opts).content;
 }
 
 // Rename errnos that are transient on Windows: a concurrent reader (or an AV
@@ -1260,7 +1283,7 @@ export function retryRenameSync(fromPath: string, toPath: string): void {
   if (err !== null) throw err;
 }
 
-export function platformWriteSync(filePath: string, content: string, opts: { encoding?: BufferEncoding } = {}): void {
+export function platformWriteSync(filePath: string, content: string, opts: ContentNormalizationOptions = {}): void {
   const { content: normalized, encoding } = normalizeContent(filePath, content, opts);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmpPath = filePath + '.tmp.' + process.pid;

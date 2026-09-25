@@ -2550,6 +2550,24 @@ describe('phase add allocation vs sibling git worktrees (#3849)', () => {
     git(['commit', '-m', 'init'], repoDir);
   }
 
+  function initBracketRepo(repoDir) {
+    fs.mkdirSync(path.join(repoDir, '.planning', 'phases'), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoDir, '.planning', 'config.json'),
+      JSON.stringify({ project_code: 'CK', phase_id_convention: 'bracket' }, null, 2) + '\n',
+    );
+    fs.writeFileSync(path.join(repoDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(
+      path.join(repoDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n## [CK.02] v2.0 — Foundation\n',
+    );
+    git(['init', '-b', 'main'], repoDir);
+    git(['config', 'user.email', 'test@example.com'], repoDir);
+    git(['config', 'user.name', 'Test'], repoDir);
+    git(['add', '-A'], repoDir);
+    git(['commit', '-m', 'init'], repoDir);
+  }
+
   /** Materialize the issue's repro: a sibling worktree branch holding Phase 441. */
   function addSiblingHolding441(repoDir) {
     const sha = git(['rev-parse', 'HEAD'], repoDir).trim();
@@ -2624,6 +2642,28 @@ describe('phase add allocation vs sibling git worktrees (#3849)', () => {
       442,
       '#3849: the batch allocator must widen its horizon the same way the single-add allocator does'
     );
+  });
+
+  test('bracket allocation reserves reader-resolvable legacy directory and ROADMAP numbers in a sibling', () => {
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-bracket-'));
+    activeDirs.push(repoDir);
+    initBracketRepo(repoDir);
+    const sha = git(['rev-parse', 'HEAD'], repoDir).trim();
+    const sibling = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-bracket-sib-'));
+    git(['worktree', 'add', '--detach', sibling, sha], repoDir);
+    activeWorktrees.push({ repoDir, worktreeDir: sibling });
+    fs.mkdirSync(path.join(sibling, '.planning', 'phases', 'CK-01-legacy'), { recursive: true });
+    fs.appendFileSync(
+      path.join(sibling, '.planning', 'ROADMAP.md'),
+      '\n### Phase 02: sibling roadmap reservation\n\n**Goal:** taken\n',
+    );
+
+    const result = runGsdTools(['phase', 'add', 'After Sibling'], repoDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_number, 3);
+    assert.strictEqual(output.directory, '.planning/phases/CK.02-03-after-sibling');
   });
 
   test('a sibling worktree without .planning/ changes nothing (fail open)', () => {

@@ -1993,6 +1993,24 @@ describe('deleteSection', () => {
     const result = deleteSection(content, (h) => h.text === 'Phase 2');
     assert.equal(result, '### Phase 1\nBody 1\n');
   });
+
+  test('an explicit maximum end offset bounds deletion before a deeper-heading container', () => {
+    const content = [
+      '### Phase 2',
+      'Body 2',
+      '<details>',
+      '<summary>History</summary>',
+      '#### Archived phase',
+      'Historical body',
+      '</details>',
+      '',
+    ].join('\n');
+    const boundary = content.indexOf('<details>');
+
+    const result = deleteSection(content, (h) => h.text === 'Phase 2', { endOffset: boundary });
+
+    assert.equal(result, content.slice(boundary));
+  });
 });
 
 // Parity guard removed in T5 (ADR-1372): uat-predicate now imports stripFencedCode
