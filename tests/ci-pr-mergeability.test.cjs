@@ -953,3 +953,127 @@ describe('ci-pr-mergeability: ci-test-scope protection', () => {
     assert.deepEqual(missing, [], `PROTECTED_WORKFLOWS names files that do not exist: ${missing.join(', ')}`);
   });
 });
+
+// ---------------------------------------------------------------------------
+// G. Merge queue readiness (#4990) — every required status check on `next`
+// must also report on a `merge_group` event, or a GitHub merge queue
+// deadlocks the instant it is enabled: GitHub waits forever for a context no
+// workflow run ever produces. This guard fails if:
+//   (a) a required context (per .github/rulesets/main-protection.json) has
+//       NO producing job anywhere under .github/workflows/, or
+//   (b) that job's workflow does not trigger on merge_group, or
+//   (c) for the six PR-metadata workflows (branch-naming, changeset-required,
+//       docs-required, pr-target-validator, require-issue-link,
+//       pr-template-format — everything except test.yml, which #4241
+//       already wired), the producing job's own `if:` does not exclude
+//       merge_group — required so it doesn't crash reading
+//       `github.event.pull_request.*` fields the merge_group event omits.
+// ---------------------------------------------------------------------------
+
+describe('merge queue readiness (#4990)', () => {
+  const RULESET_PATH = path.join(ROOT, '.github', 'rulesets', 'main-protection.json');
+
+  function loadRuleset() {
+    return JSON.parse(fs.readFileSync(RULESET_PATH, 'utf8'));
+  }
+
+  function requiredContexts() {
+    const ruleset = loadRuleset();
+    const rule = (ruleset.rules || []).find((r) => r.type === 'required_status_checks');
+    assert.ok(rule, 'expected a required_status_checks rule in .github/rulesets/main-protection.json');
+    const contexts = (rule.parameters.required_status_checks || []).map((c) => c.context);
+    assert.ok(contexts.length > 0, 'expected at least one required status check context');
+    return contexts;
+  }
+
+  const ALL_WORKFLOW_FILES = fs.readdirSync(WORKFLOWS_DIR).filter((f) => f.endsWith('.yml'));
+
+  /** The six PR-metadata workflows #4990 wires; test.yml is excluded — #4241 already wired it. */
+  const PR_METADATA_WORKFLOWS = new Set([
+    'branch-naming.yml',
+    'changeset-required.yml',
+    'docs-required.yml',
+    'pr-target-validator.yml',
+    'require-issue-link.yml',
+    'pr-template-format.yml',
+  ]);
+
+  /** Every {file, jobId, job, doc} whose effective name (job.name, else the job id) equals `context`. */
+  function findProducingJobs(context) {
+    const matches = [];
+    for (const file of ALL_WORKFLOW_FILES) {
+      let doc;
+      try {
+        doc = loadWorkflow(file);
+      } catch {
+        continue;
+      }
+      for (const [jobId, job] of Object.entries(doc.jobs || {})) {
+        const effectiveName = job && typeof job.name === 'string' ? job.name : jobId;
+        if (effectiveName === context) matches.push({ file, jobId, job, doc });
+      }
+    }
+    return matches;
+  }
+
+  for (const context of requiredContexts()) {
+    test(`required context "${context}" resolves to exactly one producing job`, () => {
+      const matches = findProducingJobs(context);
+      assert.equal(
+        matches.length,
+        1,
+        `required context "${context}" must resolve to exactly one job (a missing producer means the `
+          + `check can never report; more than one is ambiguous). Found: `
+          + `${matches.map((m) => `${m.file}:${m.jobId}`).join(', ') || '(none)'}`,
+      );
+    });
+
+    test(`required context "${context}"'s workflow triggers on merge_group`, () => {
+      const [found] = findProducingJobs(context);
+      assert.ok(found, `no job produces required context "${context}" — see the "resolves to exactly one" test`);
+      // `on: merge_group` parses to a plain key; `on:` itself parses to the
+      // key `true` under YAML 1.1 unless quoted (see the sibling assertion
+      // above in this file for the same quirk).
+      const triggers = found.doc.on || found.doc[true];
+      assert.ok(
+        triggers && Object.prototype.hasOwnProperty.call(triggers, 'merge_group'),
+        `${found.file}: must trigger on merge_group, or a merge queue deadlocks waiting on required `
+          + `context "${context}", which nothing would ever produce on that event`,
+      );
+    });
+
+    test(`required context "${context}": if produced by a PR-metadata workflow, the job skips on merge_group`, () => {
+      const [found] = findProducingJobs(context);
+      assert.ok(found, `no job produces required context "${context}"`);
+      if (!PR_METADATA_WORKFLOWS.has(found.file)) return; // test.yml: #4241 already handles this differently.
+      const condition = typeof found.job.if === 'string' ? found.job.if : '';
+      assert.match(
+        condition,
+        /event_name\s*!=\s*'merge_group'/,
+        `${found.file}: job "${found.jobId}" (required context "${context}") must gate on `
+          + `github.event_name != 'merge_group' — it reads github.event.pull_request.* fields that `
+          + `are undefined on a merge_group event`,
+      );
+    });
+  }
+
+  test('sibling jobs in the six PR-metadata workflows that a required-context job needs are also merge_group-safe', () => {
+    // Belt-and-suspenders: a job the context-producer `needs:` (e.g. the
+    // shared `preflight` "PR mergeability" caller) must not itself crash
+    // reading PR-only fields on merge_group either, even though GitHub's own
+    // needs-skip-cascade would already skip a dependent job once its
+    // dependency is skipped.
+    for (const file of PR_METADATA_WORKFLOWS) {
+      const doc = loadWorkflow(file);
+      for (const [jobId, job] of Object.entries(doc.jobs || {})) {
+        if (job.uses !== PREFLIGHT_USES) continue; // only the reusable preflight caller job
+        const condition = typeof job.if === 'string' ? job.if : '';
+        assert.match(
+          condition,
+          /event_name\s*!=\s*'merge_group'/,
+          `${file}: preflight-calling job "${jobId}" must also gate on github.event_name != 'merge_group'`,
+        );
+      }
+    }
+  });
+});
