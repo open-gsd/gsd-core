@@ -190,6 +190,7 @@ module.exports = {
   "tests/settings-jsonc.test.cjs",
   "tests/shared-hooks-dir-resolution.test.cjs",
   "tests/shell-command-projection-dispatch.test.cjs",
+  "tests/shipped-reference-cites.test.cjs",
   "tests/spawn-liveness-banner.test.cjs",
   "tests/state-document.test.cjs",
   "tests/state-transition.test.cjs",

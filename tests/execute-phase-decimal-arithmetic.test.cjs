@@ -82,6 +82,32 @@ describe('#4619 — execute-phase decimal/N-segment phase-number arithmetic', ()
     assert.doesNotThrow(() => runFixed('01.1'));
   });
 
+  // Run every (subject, expected) case for one regex in a SINGLE bash subprocess
+  // instead of one execFileSync per case. This repo's own timeout-vs-cost rule
+  // (never widen a timeout to paper over the real cost) applies here: the
+  // real cost was N real process forks per test, which is what made this test
+  // flaky under a loaded CI runner (each case's spawn+pipe competing for the
+  // same fork/exec budget as every other subprocess-heavy test running
+  // concurrently in the same chunk) -- observed as one case's execFileSync
+  // landing almost exactly on TIMEOUT (5054ms vs the file's 5000ms constant)
+  // while sibling cases ran in single-digit milliseconds, on a run where no
+  // case's grep logic was actually wrong (verified independently against real
+  // macOS bash 3.2 + BSD grep). One spawn evaluating all cases removes every
+  // opportunity for cross-test contention to land on any ONE case's timeout,
+  // without touching TIMEOUT itself.
+  function matchAll(re, cases) {
+    const script = cases
+      .map(([subject], i) => `echo ${JSON.stringify(subject)} | grep -qE ${JSON.stringify(re)} && echo ${i}:1 || echo ${i}:0`)
+      .join('\n');
+    const output = execFileSync('bash', [], { input: script, encoding: 'utf8', timeout: TIMEOUT });
+    const results = new Array(cases.length).fill(null);
+    for (const line of output.trim().split('\n')) {
+      const [idx, flag] = line.split(':');
+      results[Number(idx)] = flag === '1';
+    }
+    return results;
+  }
+
   test('the resulting anchored ERE matches decimal commit scopes and rejects near-miss scopes', () => {
     const phaseN = runFixed('01.1'); // '1\.1'
     const planN = '3';
@@ -94,17 +120,10 @@ describe('#4619 — execute-phase decimal/N-segment phase-number arithmetic', ()
       ['feat(011-03):', false],
       ['feat(12-03):', false],
     ];
-    for (const [subject, expected] of cases) {
-      const script = `echo ${JSON.stringify(subject)} | grep -qE ${JSON.stringify(re)}`;
-      let matched;
-      try {
-        execFileSync('bash', [], { input: script, encoding: 'utf8', timeout: TIMEOUT });
-        matched = true;
-      } catch {
-        matched = false;
-      }
-      assert.equal(matched, expected, `expected ${subject} match=${expected} against ${re}`);
-    }
+    const results = matchAll(re, cases);
+    cases.forEach(([subject, expected], i) => {
+      assert.equal(results[i], expected, `expected ${subject} match=${expected} against ${re}`);
+});
   });
 
   test('the resulting anchored ERE matches a plain padded-integer phase and rejects near-miss scopes', () => {
@@ -117,17 +136,10 @@ describe('#4619 — execute-phase decimal/N-segment phase-number arithmetic', ()
       ['feat(011-03):', false],
       ['feat(12-03):', false],
     ];
-    for (const [subject, expected] of cases) {
-      const script = `echo ${JSON.stringify(subject)} | grep -qE ${JSON.stringify(re)}`;
-      let matched;
-      try {
-        execFileSync('bash', [], { input: script, encoding: 'utf8', timeout: TIMEOUT });
-        matched = true;
-      } catch {
-        matched = false;
-      }
-      assert.equal(matched, expected, `expected ${subject} match=${expected} against ${re}`);
-    }
+    const results = matchAll(re, cases);
+    cases.forEach(([subject, expected], i) => {
+      assert.equal(results[i], expected, `expected ${subject} match=${expected} against ${re}`);
+});
   });
 
   describe('source parity — each of the 4 production sites carries the fixed logic', () => {

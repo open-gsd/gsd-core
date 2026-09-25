@@ -84,6 +84,14 @@ describe('normalizeAdrHeader', () => {
     assert.equal(normalizeAdrHeader(''), '');
   });
 
+  test('strips a leading numbered-section token', () => {
+    assert.equal(normalizeAdrHeader('11. Locked decisions'), 'locked decisions');
+  });
+
+  test('strips a leading nested numbered-section token', () => {
+    assert.equal(normalizeAdrHeader('11.2. Locked Decisions'), 'locked decisions');
+  });
+
   test('whitespace-only returns empty string', () => {
     assert.equal(normalizeAdrHeader('   '), '');
   });
@@ -547,6 +555,23 @@ describe('parseAdrMarkdown: decisions section', () => {
   test('"Decision Outcome" maps to decisions', () => {
     const out = parseAdrMarkdown('## Decision Outcome\n- Ship it.');
     assert.deepEqual(out.decisions, ['Ship it.']);
+  });
+
+  test('"Locked Decisions" maps to decisions', () => {
+    const out = parseAdrMarkdown('## Locked Decisions\n- Ship it.');
+    assert.deepEqual(out.decisions, ['Ship it.']);
+  });
+
+  test('numbered heading "11. Locked decisions" maps to decisions, not unmapped_headers', () => {
+    const md = [
+      '# ADR',
+      '',
+      '## 11. Locked decisions',
+      '- Use TypeScript for the new module.',
+    ].join('\n');
+    const out = parseAdrMarkdown(md);
+    assert.deepEqual(out.decisions, ['Use TypeScript for the new module.']);
+    assert.ok(!out.unmapped_headers.includes('11. Locked decisions'));
   });
 
   test('bullet items stripped of marker characters', () => {

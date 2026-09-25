@@ -170,7 +170,7 @@ try {
 
 ## Technique Catalog
 
-Full step-by-step bodies for every technique below: @gsd-core/references/debugger-techniques.md
+Full step-by-step bodies for every technique below: @~/.claude/gsd-core/references/debugger-techniques.md
 
 - **Binary Search / Divide and Conquer** — halve the search space until the fault localizes.
 - **Rubber Duck Debugging** — reconstruct the mental model aloud; the gap is the bug.

@@ -737,6 +737,62 @@ describe('roadmap analyze missing phase details', () => {
       'milestone-prefixed phases with matching detail sections should report no missing details'
     );
   });
+
+  // #4899: checklist-only ROADMAP.md (the exact shape `templates/roadmap.md`
+  // itself emits before any `### Phase N:` heading or progress-table row
+  // exists) used to report `phases: []` / `phase_count: 0` even though
+  // `missing_phase_details` — built from the SAME checklist scan — proved
+  // real phases exist. `collectAnalyzePhases` finds nothing (no headings, no
+  // table), so the checklist-derived fallback must populate `phases` instead
+  // of discarding that evidence.
+  test('#4899: checklist-only ROADMAP with no detail headings/table populates phases, not phases: []', () => {
+    // Exact repro shape from #4899: checklist entries under a milestone
+    // heading, no `### Phase N:` detail sections and no progress table.
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+## Milestones
+
+- v1.0 Example Milestone
+
+## Phases
+
+### v1.0 Example Milestone (Phases 1-3) — ACTIVE
+
+- [ ] **Phase 1: First Phase** - Set things up
+- [x] **Phase 2: Second Phase** - Ship it
+- [ ] **Phase 3: Third Phase** - Wrap up
+`
+    );
+
+    const result = runGsdTools('roadmap analyze', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_count, 3, `expected 3 synthesized phases, got ${output.phase_count}`);
+    assert.deepStrictEqual(
+      output.phases.map((p) => p.number),
+      ['1', '2', '3'],
+      'phases should carry one synthesized entry per checklist token, in document order'
+    );
+    const second = output.phases.find((p) => p.number === '2');
+    assert.strictEqual(second.roadmap_complete, true, 'checked checklist entry should synthesize roadmap_complete: true');
+    const first = output.phases.find((p) => p.number === '1');
+    assert.strictEqual(first.roadmap_complete, false, 'unchecked checklist entry should synthesize roadmap_complete: false');
+
+    // Decision (ADR-4910 §5 / Phase 4 of #4906): missing_phase_details still
+    // means "this checklist token has no ### Phase N: heading or
+    // progress-table row" — a fact that stays true for every synthesized
+    // phase, since synthesis fills phases[] from the checklist itself rather
+    // than manufacturing a detail section. It must NOT be cleared just
+    // because phases[] is no longer empty.
+    assert.deepStrictEqual(
+      output.missing_phase_details,
+      ['1', '2', '3'],
+      'missing_phase_details should still flag every checklist token as lacking a detail section'
+    );
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

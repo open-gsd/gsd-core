@@ -3816,3 +3816,82 @@ describe('#1881 unreadable ROADMAP vs absent ROADMAP', () => {
     });
   });
 }
+
+// ─── #4837: extractPhaseFieldMultiline structural-boundary regressions ────────
+//
+// #4826 (#4731 follow-up) added continuation-scanning to extractPhaseFieldMultiline
+// but left four structural boundaries unguarded: list items, lowercase-first-letter
+// bold labels, an unanchored label match that an earlier field's own inline
+// `**mention**` could shadow, and fenced code blocks. Defect 1 (list items) is the
+// real corruption vector reported in #4837 — see the end-to-end regression in
+// tests/phase.test.cjs.
+describe('roadmap-parser: extractPhaseFieldMultiline — #4837 structural boundaries', () => {
+  const { extractPhaseFieldMultiline } = roadmapParser;
+
+  test('#4837 defect 1: a list item after the field stops the continuation scan', () => {
+    const section = '**Requirements**: REQ-01, REQ-02\n- Deferred to Phase 2: REQ-99\n';
+    const result = extractPhaseFieldMultiline(section, 'Requirements');
+    assert.strictEqual(result, 'REQ-01, REQ-02');
+    assert.ok(!/REQ-99/.test(result), `list item text must not be folded in, got: ${result}`);
+  });
+
+  test('#4837 defect 1b: a `*` or `+` list item also stops the continuation scan', () => {
+    assert.strictEqual(
+      extractPhaseFieldMultiline('**Goal**: Ship it\n* a bullet\n', 'Goal'),
+      'Ship it',
+    );
+    assert.strictEqual(
+      extractPhaseFieldMultiline('**Goal**: Ship it\n+ a bullet\n', 'Goal'),
+      'Ship it',
+    );
+  });
+
+  test('#4837 defect 2: a lowercase-first-letter bold label stops the continuation scan', () => {
+    const section = '**Requirements**: REQ-01, REQ-02\n**depends on**: Phase 0\n';
+    const result = extractPhaseFieldMultiline(section, 'Requirements');
+    assert.strictEqual(result, 'REQ-01, REQ-02');
+    assert.ok(!/depends on/.test(result), `lowercase label line must not be folded in, got: ${result}`);
+  });
+
+  test('#4837 defect 3: an anchored label match skips an earlier field\'s inline **mention**', () => {
+    const section = '**Goal:** Document `**Requirements**` handling end to end.\n\n**Requirements:** REQ-01, REQ-02\n';
+    const result = extractPhaseFieldMultiline(section, 'Requirements');
+    assert.strictEqual(result, 'REQ-01, REQ-02');
+  });
+
+  test('#4837 defect 4: a fenced code block opener stops the continuation scan', () => {
+    const section = '**Goal:** Do the thing\n```\n**Goal:** not this\n```\n';
+    const result = extractPhaseFieldMultiline(section, 'Goal');
+    assert.strictEqual(result, 'Do the thing');
+    assert.ok(!result.includes('```'), `fence marker must not be folded in, got: ${result}`);
+  });
+
+  test('#4837 defect 4b: a `~~~` fence opener also stops the continuation scan', () => {
+    const section = '**Goal:** Do the thing\n~~~\nnot this\n~~~\n';
+    const result = extractPhaseFieldMultiline(section, 'Goal');
+    assert.strictEqual(result, 'Do the thing');
+  });
+
+  test('#4837 defect 4c (isolated-review finding): a fence opening on the label\'s own line is caught too', () => {
+    // The continuation loop's fence-stop check only ever sees lines AFTER the
+    // label's own line -- a fence opener glued to the label itself
+    // (`**Requirements:** ```js`) was invisible to it, leaking one line of
+    // fence content before the closing fence coincidentally matched the same
+    // stop check.
+    const section = '**Requirements:** ```js\nfoo()\n```\nmore\n';
+    const result = extractPhaseFieldMultiline(section, 'Requirements');
+    assert.strictEqual(result, null, `a same-line fence opener must yield no content, got: ${JSON.stringify(result)}`);
+  });
+
+  test('#4837 regression guard: existing single-line and wrap behavior is unchanged', () => {
+    assert.strictEqual(
+      extractPhaseFieldMultiline('**Goal:** What this phase delivers\n', 'Goal'),
+      'What this phase delivers',
+    );
+    assert.strictEqual(
+      extractPhaseFieldMultiline('**Requirements**: REQ-01,\nREQ-02\n', 'Requirements'),
+      'REQ-01, REQ-02',
+    );
+    assert.strictEqual(extractPhaseFieldMultiline('no field here\n', 'Goal'), null);
+  });
+});

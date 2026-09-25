@@ -518,16 +518,16 @@ issue:
 
 ## Dimension 8: Nyquist Compliance
 
-**Question:** Is every task's completion decided by an automated check that can actually fail?
+**Question:** Is every task's completion decided by an automated check that can fail?
 
 Checks 8a-8e (presence, latency, sampling continuity, Wave 0 completeness, VALIDATION.md gate),
-their skip condition and the Dimension 8 output table: @gsd-core/references/nyquist-compliance.md
+skip condition and Dimension 8 output table: @~/.claude/gsd-core/references/nyquist-compliance.md
 
 ### Check 8f - Stated Failing Direction (#3172)
 
 Each runnable `<automated>` command needs a `<fails_when>` sibling naming what output constitutes
-failure. Consume the supplied `{FAILING_DIRECTIONS}` probe, never re-derive it:
-@gsd-core/references/failing-direction.md
+failure. Consume the `{FAILING_DIRECTIONS}` probe, never re-derive it:
+@~/.claude/gsd-core/references/failing-direction.md
 
 ## Dimension 9: Cross-Plan Data Contracts
 
@@ -698,8 +698,8 @@ issue:
 
 ## Dimension: Verify Command Path Resolvability (#2401)
 
-**Question:** Does each `<automated>` command's target resolve? Consume the supplied
-`{VERIFY_PATHS}` probe, never re-run/hand-reason it: @gsd-core/references/verify-command-path-resolvability.md
+**Question:** Does each `<automated>` command's target resolve? Consume the
+`{VERIFY_PATHS}` probe, never re-run/hand-reason it: @~/.claude/gsd-core/references/verify-command-path-resolvability.md
 
 ## Dimension: Numeric/Factual Claim Authority (#1480)
 
