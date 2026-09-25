@@ -420,6 +420,24 @@ jobs:
             set -e
             git -C trusted worktree remove --force "../$SCRATCH" 2>/dev/null || true
             if [ "$VERIFY_STATUS" -ne 0 ]; then
+              # Round-10 review fix (SEC LOW): `main-parent-not-current` is
+              # NOT a content-binding attack — it fires the moment a NEW
+              # push to main lands while this PR's branch was built from an
+              # OLDER main. That is an expected, self-resolving race: the
+              # new push's own auto-backmerge.yml run opens a fresh PR for
+              # the new main sha and closes THIS PR as superseded (see
+              # auto-backmerge.yml's "Close superseded back-merge PRs"
+              # step) — by the time this candidate is next evaluated it is
+              # either already closed (skipped by the STATE != OPEN check
+              # above) or has been rebuilt against the new main tip. Treat
+              # it as a soft skip, never the hard alarm every OTHER
+              # content-binding failure (a genuinely forged/tampered
+              # commit) correctly raises.
+              VERIFY_REASON=$(printf '%s' "$VERIFY_JSON" | jq -r '.reason // empty')
+              if [ "$VERIFY_REASON" = "main-parent-not-current" ]; then
+                echo "PR #$PR: main has moved since this branch was built ($VERIFY_JSON) — a newer auto-backmerge run will supersede or rebuild it; skipping this round"
+                echo "::endgroup::"; continue
+              fi
               echo "::error::PR #$PR: content-binding FAILED, refusing to merge — $VERIFY_JSON"
               FAILED=1
               echo "::endgroup::"; continue

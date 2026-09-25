@@ -1081,6 +1081,35 @@ describe('#4990: backmerge-merge-when-green.yml (event-driven back-merge PR merg
       assert.match(mergeBlock, /RECHECK_HAS_NEEDS_REVIEW[\s\S]{0,20}=[\s\S]{0,10}"true"/, 'merge must refuse on needs-manual-review');
     });
   });
+
+  // Round-10 review fix (SEC LOW): a stale mainParent (main moved since the
+  // branch was built) is an expected, self-resolving race — the newer main
+  // push's own auto-backmerge.yml run supersedes/rebuilds this PR — never a
+  // hard content-binding alarm.
+  describe('round-10 review fix (SEC LOW): a stale main-parent is a soft skip, not a hard alarm', () => {
+    test('evaluate treats VERIFY_JSON.reason == "main-parent-not-current" as a soft skip (no FAILED=1, no ::error::)', () => {
+      const evaluateStep = stepByName(/^Evaluate every candidate/);
+      assert.ok(evaluateStep, 'expected an "Evaluate every candidate" step');
+      const verifyIdx = evaluateStep.run.indexOf('backmerge-tree.cjs verify');
+      const contentBindingFailedIdx = evaluateStep.run.indexOf('content-binding FAILED');
+      assert.ok(verifyIdx !== -1 && contentBindingFailedIdx !== -1 && verifyIdx < contentBindingFailedIdx);
+      const betweenVerifyAndHardFail = evaluateStep.run.slice(verifyIdx, contentBindingFailedIdx);
+      assert.match(betweenVerifyAndHardFail, /VERIFY_REASON[\s\S]{0,60}jq -r '\.reason \/\/ empty'/);
+      // Anchored on the actual `if [ "$VERIFY_REASON" = ... ]` CODE line,
+      // never the doc comment above it (which also mentions the same
+      // string in prose and would otherwise mis-anchor the slice below).
+      const condIdx = betweenVerifyAndHardFail.indexOf('if [ "$VERIFY_REASON" = "main-parent-not-current" ]');
+      assert.notEqual(condIdx, -1, 'expected an `if [ "$VERIFY_REASON" = "main-parent-not-current" ]` check');
+      // The soft-skip branch must `continue` WITHOUT setting FAILED=1 and
+      // WITHOUT the ::error:: prefix the genuine hard-alarm path uses.
+      const closingFiIdx = betweenVerifyAndHardFail.indexOf('\n    fi', condIdx);
+      assert.notEqual(closingFiIdx, -1, 'expected a closing `fi` for the soft-skip branch');
+      const softSkipBlock = betweenVerifyAndHardFail.slice(condIdx, closingFiIdx);
+      assert.doesNotMatch(softSkipBlock, /FAILED=1/);
+      assert.doesNotMatch(softSkipBlock, /::error::/);
+      assert.match(softSkipBlock, /continue/);
+    });
+  });
 });
 
 describe('#4990 round-3: auto-backmerge.yml bot-token push + superseded-PR cleanup', () => {

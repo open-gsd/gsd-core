@@ -441,16 +441,29 @@ function stageBackmergeTree({ mainRef, cwd }) {
  * freely; it must never be a tree anything else depends on being stable.
  *
  * Review fix (HIGH, code#2 / code#3): before trusting the merge commit's
- * recorded parents at all, both are proven to be REAL ancestors of the
- * trusted branches they claim to descend from
- * (`merge-base --is-ancestor nextParent origin/next` and `mainParent
- * origin/main`) — a forged merge commit naming two arbitrary shas as
- * parents fails here before any tree comparison even runs. Then every
- * commit in `origin/next..head` is required to be EITHER reachable from
- * `origin/main` (i.e. legitimately pulled in via the -s ours merge's own
- * ancestry), OR the merge commit itself, OR the one allowed extra
- * (version-sync) commit on top — anything else is a foreign commit smuggled
- * into the branch and is rejected.
+ * recorded parents at all, `nextParent` is proven to be a REAL ancestor of
+ * the trusted branch it claims to descend from (`merge-base --is-ancestor
+ * nextParent origin/next`) — a forged merge commit naming an arbitrary sha
+ * as its next-side parent fails here before any tree comparison even runs.
+ *
+ * Round-10 review fix (SEC LOW): `mainParent` must be EXACTLY
+ * `origin/main`'s CURRENT tip — not merely an ancestor of it. A mere
+ * ancestor check would accept a back-merge branch built from a STALE main
+ * (main has since moved), which can silently RE-ADD `.changeset` fragments
+ * (or other release-engineering content) a NEWER release already consumed —
+ * the overlay in `stageBackmergeTree` is diffed against `mainParent`, not
+ * against main's real current state, so a stale `mainParent` reintroduces
+ * exactly what the newer release already removed. `nextParent` stays an
+ * ancestor check (not exact-tip) because `next` legitimately keeps moving
+ * with unrelated work between when a back-merge branch is built and when it
+ * is verified — only `main`'s content is replayed into the tree, so only
+ * `main` needs to be pinned to its current tip.
+ *
+ * Then every commit in `origin/next..head` is required to be EITHER
+ * reachable from `origin/main` (i.e. legitimately pulled in via the -s ours
+ * merge's own ancestry), OR the merge commit itself, OR the one allowed
+ * extra (version-sync) commit on top — anything else is a foreign commit
+ * smuggled into the branch and is rejected.
  *
  * Review fix (MAJOR, code#8): every git call this function makes is bounded
  * by GIT_TIMEOUT_MS. A timeout (or any other uncaught git failure) is caught
@@ -488,8 +501,15 @@ function verifyBackmergeContent({ nextParent, mainParent, mergeCommit, head, cwd
     if (!isAncestor(nextParent, 'origin/next', opts)) {
       return { ok: false, reason: 'next-parent-not-ancestor-of-origin-next', nextParent };
     }
-    if (!isAncestor(mainParent, 'origin/main', opts)) {
-      return { ok: false, reason: 'main-parent-not-ancestor-of-origin-main', mainParent };
+    // Round-10 review fix (SEC LOW): exact-tip, not merely ancestor — see
+    // the function's own doc comment above for why a stale mainParent is a
+    // real content-smuggling hazard (a since-consumed .changeset fragment
+    // could be silently re-added). `git rev-parse` itself can time out; that
+    // is caught by this function's own top-level try/catch below, same as
+    // every other git call here.
+    const currentMainSha = git(['rev-parse', 'origin/main'], opts).trim();
+    if (mainParent !== currentMainSha) {
+      return { ok: false, reason: 'main-parent-not-current', mainParent, currentMainSha };
     }
 
     const rangeCommits = splitNonEmptyLines(git(['rev-list', `origin/next..${head}`], opts));

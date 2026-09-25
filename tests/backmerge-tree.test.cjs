@@ -908,7 +908,11 @@ describe('backmerge-tree: verify (always via a scratch git worktree, per product
       assert.equal(parsed.reason, 'next-parent-not-ancestor-of-origin-next');
     });
 
-    test('a main-parent that is not an ancestor of origin/main is rejected', (t) => {
+    // Round-10 review fix (SEC LOW): mainParent must be EXACTLY origin/main's
+    // current tip, not merely an ancestor of it — so a commit with no
+    // relation to main at all (the old "rogue" fixture) is rejected the
+    // same way, just under the new, more precise reason string.
+    test('a main-parent unrelated to origin/main entirely is rejected (main-parent-not-current)', (t) => {
       const { repoDir, g, mergeCommit, nextParent } = buildMergeCommit();
       g(['checkout', '-q', '-b', 'rogue-main-root']);
       fs.writeFileSync(path.join(repoDir, 'rogue2.txt'), 'rogue\n');
@@ -925,7 +929,52 @@ describe('backmerge-tree: verify (always via a scratch git worktree, per product
       );
       assert.equal(result.exitCode, 1);
       const parsed = JSON.parse(result.stdout);
-      assert.equal(parsed.reason, 'main-parent-not-ancestor-of-origin-main');
+      assert.equal(parsed.reason, 'main-parent-not-current');
+    });
+
+    // Round-10 review fix (SEC LOW): the primary new hazard this check
+    // closes — a back-merge branch built from an OLDER main commit, where
+    // main has SINCE moved (a genuine ancestor, just not the current tip).
+    // A mere ancestor check would have accepted this and silently replayed
+    // stale main content (e.g. a since-consumed .changeset fragment) back
+    // in — must be rejected.
+    test('a main-parent that is a genuine ancestor of origin/main, but NOT its current tip, is rejected (main-parent-not-current)', (t) => {
+      const { repoDir, g, mergeCommit, nextParent, mainParent } = buildMergeCommit();
+      // Advance main with a further commit AFTER the branch was built,
+      // without rebuilding the branch — mainParent is now stale.
+      g(['checkout', '-q', 'main']);
+      fs.writeFileSync(path.join(repoDir, 'release2.txt'), 'r2\n');
+      g(['add', 'release2.txt']);
+      g(['commit', '-q', '-m', 'main: a second release landed after the branch was built']);
+      const newMainSha = g(['rev-parse', 'HEAD']).trim();
+      g(['update-ref', 'refs/remotes/origin/main', newMainSha]);
+
+      const { scratchDir, remove } = addScratchWorktree(repoDir, g, nextParent, 'stalemain');
+      t.after(() => { remove(); cleanup(repoDir); });
+
+      const result = runScript(
+        ['verify', '--next', nextParent, '--main', mainParent, '--merge-commit', mergeCommit, '--head', mergeCommit, '--cwd', scratchDir],
+        repoDir,
+      );
+      assert.equal(result.exitCode, 1);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.reason, 'main-parent-not-current');
+      assert.equal(parsed.mainParent, mainParent);
+      assert.equal(parsed.currentMainSha, newMainSha);
+    });
+
+    // The accepted (happy) path: mainParent IS origin/main's current tip.
+    test('a main-parent that IS origin/main\'s current tip is accepted', (t) => {
+      const { repoDir, g, mergeCommit, nextParent, mainParent } = buildMergeCommit();
+      const { scratchDir, remove } = addScratchWorktree(repoDir, g, nextParent, 'currentmain');
+      t.after(() => { remove(); cleanup(repoDir); });
+
+      const result = runScript(
+        ['verify', '--next', nextParent, '--main', mainParent, '--merge-commit', mergeCommit, '--head', mergeCommit, '--cwd', scratchDir],
+        repoDir,
+      );
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), { ok: true });
     });
 
     test('a foreign commit BEFORE the final head (not caught by the single-extra-commit file-scope check) is rejected by the range check', (t) => {
