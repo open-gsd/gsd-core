@@ -171,6 +171,10 @@ ALLOWLIST=(
   # allowlist cannot reach it either, because the literal `child_process` is
   # not adjacent to `.exec`. See the note at the pattern itself.
   'tests/continuation-grammar-parity.test.cjs'
+  # #4906 Phase 5 — regex.exec('### Phase 03: ...') fixtures.
+  # Same DEFECT.PROMPT-INJECTION-SCAN-COLLISION class as above:
+  # RegExp.prototype.exec, not code execution.
+  'tests/phase-id.test.cjs'
   # #3676 row 11b — quick-batch's task-list parser must treat a
   # prompt-injection-shaped task description as inert data, never
   # interpreted. The fixture has to be a real "ignore all previous
