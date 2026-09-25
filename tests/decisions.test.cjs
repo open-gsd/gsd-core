@@ -3289,7 +3289,7 @@ describe('#4939: decision-coverage with a phase directory that does not exist an
     assert.strictEqual(parsed.total, null, 'total must be null — nothing was measured');
     assert.strictEqual(parsed.covered, null, 'covered must be null — nothing was measured');
     assert.ok(!('uncovered' in parsed), 'uncovered must be OMITTED — the list was never built');
-    assert.ok((parsed.message || '').includes('01'), 'the message must name the argument it could not find');
+    assert.ok((parsed.message || '').includes('"01"'), 'the message must name the argument it could not find');
   });
 
   test('#4939: verify gate — the phase NUMBER in the phase-dir slot answers a non-blocking caller-error warning', () => {
@@ -3304,6 +3304,16 @@ describe('#4939: decision-coverage with a phase directory that does not exist an
       !Array.isArray(parsed.not_honored) || parsed.not_honored.length === 0,
       `no decision may be reported not-honored from a scan that never happened, got: ${JSON.stringify(parsed.not_honored)}`,
     );
+    assert.ok((parsed.message || '').includes('"01"'), 'the message must name the argument it could not find');
+  });
+
+  test('#4939: plan gate — a FILE in the phase-dir slot is the same caller error', () => {
+    // fs.existsSync is true for a file, so the guard must ask for a directory.
+    const parsed = JSON.parse(runDecisionCoveragePlan(contextPath, contextPath, tmpDir).output || '{}');
+
+    assert.strictEqual(parsed.passed, false, 'the gate must still block');
+    assert.strictEqual(parsed.reason, 'phase directory not found', `got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.covered, null, 'covered must be null — nothing was measured');
   });
 });
 
