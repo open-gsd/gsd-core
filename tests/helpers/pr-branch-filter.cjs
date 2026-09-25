@@ -35,6 +35,7 @@
 const fs = require('fs');
 const path = require('path');
 const { escapeRegex: escapeRe } = require('../../gsd-core/bin/lib/pattern.cjs');
+const { normalizeEol } = require('../../gsd-core/bin/lib/text-lines.cjs');
 
 const WORKFLOW_PATH = path.join(__dirname, '..', '..', 'gsd-core', 'workflows', 'pr-branch.md');
 
@@ -95,6 +96,19 @@ const PICK_LOOP_MARKER = 'for HASH in $(printf \'%s\' "$INCLUDED_COMMITS")';
  * canonical form. Generic version of the original `extractPickLoop`
  * (#4605/#4606): used both for the cherry-pick loop and for the canonical
  * declarations / mode-derivation blocks that precede it.
+ *
+ * The returned body is run through `normalizeEol` (`src/text-lines.cts`,
+ * the repo's sole `\r?\n`/CRLF-normalization owner) before it is handed
+ * back: `text.split('\n')` above leaves a trailing `\r` on every line when
+ * the source was checked out CRLF (e.g. a Windows `git` checkout without an
+ * enforcing `.gitattributes` `eol` rule for the path in question), and a
+ * caller that feeds that body straight into `bash -c`/heredocs sees an
+ * embedded `\r` corrupt heredoc terminator matching (the shell never sees
+ * the literal closing line, reads to EOF still inside the recipe's open
+ * `if`/`done`, and fails with a `syntax error: unexpected end of file`).
+ * Normalizing here, at the single extraction seam, fixes every caller
+ * (`extractPickLoop`, the declarations block, the derivation block) at
+ * once rather than requiring each call site to remember to do it.
  */
 const extractBashBlockContaining = (text, marker) => {
   if (typeof text !== 'string') {
@@ -112,7 +126,7 @@ const extractBashBlockContaining = (text, marker) => {
         bodyLines.push(lines[j]);
         j += 1;
       }
-      const body = bodyLines.join('\n');
+      const body = normalizeEol(bodyLines.join('\n'));
       if (body.includes(marker)) {
         matches.push(body);
       }
