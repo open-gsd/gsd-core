@@ -1577,7 +1577,7 @@ describe('verify artifacts command', () => {
     ]);
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `negative verdict must exit 1 (#4686): ${result.output}`);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.all_passed, false, 'Expected all_passed false');
@@ -1595,7 +1595,7 @@ describe('verify artifacts command', () => {
     fs.writeFileSync(path.join(tmpDir, 'src', 'app.js'), 'const x = 1;\n');
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `negative verdict must exit 1 (#4686): ${result.output}`);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.all_passed, false, 'Expected all_passed false');
@@ -1613,7 +1613,7 @@ describe('verify artifacts command', () => {
     fs.writeFileSync(path.join(tmpDir, 'src', 'app.js'), 'const x = 1;\n');
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `negative verdict must exit 1 (#4686): ${result.output}`);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.all_passed, false, 'Expected all_passed false');
@@ -1632,7 +1632,7 @@ describe('verify artifacts command', () => {
     fs.writeFileSync(path.join(tmpDir, 'src', 'app.js'), 'const x = 1;\nexport const POST = () => {};\n');
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `negative verdict must exit 1 (#4686): ${result.output}`);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.all_passed, false, 'Expected all_passed false');
@@ -1684,7 +1684,7 @@ describe('verify artifacts command', () => {
     ]);
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `negative verdict must exit 1 (#4686): ${result.output}`);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.total, 0, `Expected zero checked artifacts: ${JSON.stringify(output)}`);
@@ -1714,7 +1714,7 @@ describe('verify artifacts command', () => {
     ]);
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command crashed instead of reporting: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `the structured negative verdict must exit 1 (#4686): ${result.output}`);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.total, 2, `both artifacts must be checked: ${JSON.stringify(output)}`);
@@ -1751,7 +1751,7 @@ describe('verify artifacts command', () => {
     ]);
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command crashed instead of reporting: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `the structured negative verdict must exit 1 (#4686): ${result.output}`);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.total, 1);
@@ -1819,7 +1819,7 @@ if (${JSON.stringify(mode)} === 'enoent-read') {
         tmpDir,
         withInjection('enoent-read', target),
       );
-      assert.ok(result.success, `Command failed: ${result.error}`);
+      assert.strictEqual(result.exitCode, 1, `negative verdict must exit 1 (#4686): ${result.output}`);
 
       const output = JSON.parse(result.output);
       const check = output.artifacts[0];
@@ -1844,7 +1844,7 @@ if (${JSON.stringify(mode)} === 'enoent-read') {
         tmpDir,
         withInjection('eacces-stat', target),
       );
-      assert.ok(result.success, `Command failed: ${result.error}`);
+      assert.strictEqual(result.exitCode, 1, `negative verdict must exit 1 (#4686): ${result.output}`);
 
       const output = JSON.parse(result.output);
       const check = output.artifacts[0];
@@ -1877,6 +1877,87 @@ if (${JSON.stringify(mode)} === 'enoent-read') {
     const output = JSON.parse(result.output);
     assert.strictEqual(output.total, 1, `Expected exactly the one checkable entry: ${JSON.stringify(output)}`);
     assert.strictEqual(output.all_passed, true, `Expected all_passed true from the real entry: ${JSON.stringify(output)}`);
+  });
+
+  // #4686 (ADR-3889 §1): the 0/1 band is unversioned — 0 means "the operation
+  // ran and its verdict is affirmative", 1 means "it ran and the verdict is
+  // negative". This verb computed a domain verdict but never declared it to the
+  // exit-contract seam, so a failing check printed all_passed:false and still
+  // exited 0 (under v1 AND v2): a `$?` / `set -e` / `&&` caller could not tell
+  // a failed gate from a passed one. The JSON verdict itself is unchanged.
+  describe('#4686: a computed verdict must project onto the exit code', () => {
+    test('failing verdict exits 1 while the JSON verdict keeps reporting why', () => {
+      writePlanWithArtifacts(tmpDir, [
+        '- path: "src/app.js"',
+        '  contains: "export"',
+      ]);
+      fs.writeFileSync(path.join(tmpDir, 'src', 'app.js'), 'const x = 1;\n'); // no "export"
+
+      const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
+      assert.strictEqual(result.exitCode, 1,
+        `a negative verdict must exit 1, got ${result.exitCode}: ${result.output}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.all_passed, false);
+      assert.strictEqual(output.passed, 0);
+      assert.strictEqual(output.total, 1);
+      assert.ok(
+        output.artifacts[0].issues.some((i) => i.includes('Missing pattern')),
+        `the verdict payload must keep reporting why: ${JSON.stringify(output.artifacts[0].issues)}`,
+      );
+    });
+
+    test('failing verdict exits 1 under --exit-contract=v2 as well', () => {
+      writePlanWithArtifacts(tmpDir, [
+        '- path: "src/app.js"',
+        '  contains: "export"',
+      ]);
+      fs.writeFileSync(path.join(tmpDir, 'src', 'app.js'), 'const x = 1;\n');
+
+      const result = runGsdTools(
+        ['--exit-contract=v2', 'verify', 'artifacts', '.planning/phases/01-test/01-01-PLAN.md'],
+        tmpDir,
+      );
+      assert.strictEqual(result.exitCode, 1,
+        `v2 must not soften the 0/1 verdict band, got ${result.exitCode}: ${result.output}`);
+      assert.strictEqual(JSON.parse(result.output).all_passed, false);
+    });
+
+    test('affirmative verdict still exits 0', () => {
+      writePlanWithArtifacts(tmpDir, [
+        '- path: "src/app.js"',
+        '  contains: "export"',
+      ]);
+      fs.writeFileSync(path.join(tmpDir, 'src', 'app.js'), 'export const x = 1;\n');
+
+      const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
+      assert.strictEqual(result.exitCode, 0, `a passing verdict must stay exit 0: ${result.output}`);
+      assert.strictEqual(JSON.parse(result.output).all_passed, true);
+    });
+
+    test('precondition arm unchanged: a missing plan file keeps the payload-carried-error behavior', () => {
+      const result = runGsdTools('verify artifacts .planning/phases/01-test/NOPE-PLAN.md', tmpDir);
+      // The `{error: ...}` payload declares DEGRADED, which projects to 0 under
+      // v1 — pinned as-is. #4686 changes only the verdict arm; the precondition
+      // arm's exit behavior is out of scope and must not drift silently.
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.error, 'File not found');
+      assert.strictEqual(result.exitCode, 0,
+        `the {error} arm is a different contract path (DEGRADED, not FAIL): ${result.exitCode}`);
+    });
+
+    test('precondition arm unchanged under --exit-contract=v2: the {error} payload still projects DEGRADED (80), not FAIL', () => {
+      const result = runGsdTools(
+        ['--exit-contract=v2', 'verify', 'artifacts', '.planning/phases/01-test/NOPE-PLAN.md'],
+        tmpDir,
+      );
+      // DEGRADED's projection is versioned (0 under v1, 80 under v2); FAIL's
+      // is not. Pinning both edges proves the precondition arm stayed on its
+      // own contract path instead of being swept onto the new verdict band.
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.error, 'File not found');
+      assert.strictEqual(result.exitCode, 80,
+        `DEGRADED projects to 80 under v2: ${result.exitCode}`);
+    });
   });
 });
 

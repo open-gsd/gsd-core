@@ -4851,6 +4851,12 @@ function cmdPhaseUatPassed(
   const report = evaluateUatPassed(phaseFullDir, { policy: opts.policy });
 
   output({ phase: phaseNum, ...report }, raw);
+  // #4686 (ADR-3889 §1): a negative verdict must exit 1 — the 0/1 band is
+  // unversioned. Set directly per json-errors.md precedence rule 2 (the
+  // `state validate --strict` pattern, src/state.cts): this verdict payload
+  // is clean, so no declaration pending from output() can compete with or
+  // lower it, and runMain's projection may only set a code, never lower one.
+  if (!report.passed) process.exitCode = 1;
 }
 
 // #1437 — phase.list-plans: list plan files for a given phase number.

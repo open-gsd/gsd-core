@@ -204,10 +204,69 @@ describe('RunResult classification', () => {
     assert.strictEqual(result.json, true);
   });
 
-  test('exit 1 with a healthy JSON-looking stdout still classifies as an error (exit code outranks payload)', () => {
-    const raw = { exitCode: 1, stdout: JSON.stringify({ ok: true, total_plans: 5 }), stderr: '', argv: ['progress'] };
+  // #4686 (ADR-3889 §1): exit 1 with a JSON-object stdout and no stderr
+  // envelope is a declared FAIL verdict, not an invocation error — the matrix
+  // rule "exit code outranks payload" narrowed to "a stderr envelope outranks
+  // an incidental payload": an explicit error still wins, but a verdict
+  // payload with nothing contradicting it must surface as VERDICT_FAIL with
+  // `json` populated, or scenario expectations could never assert on it.
+  test('exit 1 with a JSON-object stdout and no envelope classifies as VERDICT_FAIL carrying the payload (#4686)', () => {
+    const raw = { exitCode: 1, stdout: JSON.stringify({ passed: false, blockers: ['x'] }), stderr: '', argv: ['phase', 'uat-passed', '1'] };
     const result = classify(raw);
-    assert.notStrictEqual(result.kind, KIND.JSON);
+    assert.strictEqual(result.kind, KIND.VERDICT_FAIL);
+    assert.deepStrictEqual(result.json, { passed: false, blockers: ['x'] });
+  });
+
+  // The substrate a verdict step actually runs through: loop-walk's run()
+  // synthesizes a single `Command failed: …` stderr line on a non-zero exit
+  // (the child's own stderr was empty). That lone line is not a warning and
+  // not an envelope, so the verdict shape must survive it.
+  test('exit 1 with a single synthesized stderr line still classifies as VERDICT_FAIL (#4686)', () => {
+    const raw = {
+      exitCode: 1,
+      stdout: JSON.stringify({ all_passed: false }),
+      stderr: 'Command failed: node gsd-tools.cjs verify artifacts p.md [stderr: (empty) exit:1]',
+      argv: ['verify', 'artifacts', 'p.md'],
+    };
+    const result = classify(raw);
+    assert.strictEqual(result.kind, KIND.VERDICT_FAIL);
+    assert.deepStrictEqual(result.json, { all_passed: false });
+  });
+
+  // Adversarial: a real crash dumps multi-line diagnostics (a stack trace) to
+  // stderr. Even if stdout happens to hold a JSON object printed before the
+  // crash, that is an error wearing a payload, not a verdict — it must stay
+  // UNSTRUCTURED_ERROR so the oracle violation fires.
+  test('exit 1 with multi-line stderr diagnostics is NOT washed into VERDICT_FAIL by a JSON-object stdout (#4686)', () => {
+    const raw = {
+      exitCode: 1,
+      stdout: JSON.stringify({ total_plans: 5 }),
+      stderr: ['Error: EACCES: permission denied, open \'/etc/shadow\'', '    at readFileSync (node:fs:455:20)', '    at cmdX (verify.cjs:100:5)'].join('\n'),
+      argv: ['x'],
+    };
+    const result = classify(raw);
+    assert.strictEqual(result.kind, KIND.UNSTRUCTURED_ERROR);
+    assert.strictEqual(result.json, null, 'a crash must not surface a verdict payload');
+  });
+
+  test('exit 1 with a stderr envelope still classifies as STRUCTURED_ERROR even when stdout carries a JSON object', () => {
+    const stderr = JSON.stringify({ ok: false, reason: 'bad-config', message: 'config invalid' });
+    const raw = { exitCode: 1, stdout: JSON.stringify({ ok: true, total_plans: 5 }), stderr, argv: ['review-lane'] };
+    const result = classify(raw);
+    assert.strictEqual(result.kind, KIND.STRUCTURED_ERROR);
+    assert.strictEqual(result.err.reason, 'bad-config');
+  });
+
+  test('exit 1 with an {error:...} object stdout still classifies as UNSTRUCTURED_ERROR (soft-failure idiom, not a verdict)', () => {
+    const raw = { exitCode: 1, stdout: JSON.stringify({ error: 'File not found' }), stderr: '', argv: ['x'] };
+    const result = classify(raw);
+    assert.strictEqual(result.kind, KIND.UNSTRUCTURED_ERROR);
+    assert.strictEqual(result.json, null, 'an {error:...} payload is the soft-failure idiom, not a verdict');
+  });
+
+  test('exit 1 with a scalar JSON stdout still classifies as UNSTRUCTURED_ERROR (verdict payloads are objects)', () => {
+    const raw = { exitCode: 1, stdout: '5', stderr: '', argv: ['x'] };
+    const result = classify(raw);
     assert.strictEqual(result.kind, KIND.UNSTRUCTURED_ERROR);
   });
 
