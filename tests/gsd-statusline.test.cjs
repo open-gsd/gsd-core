@@ -25,6 +25,32 @@ const {
 const { cleanup, saveSessionEnv, restoreSessionEnv, clearSessionEnv } = require('./helpers.cjs');
 
 /**
+ * The documented fields of the statusline payload's `context_window` object
+ * (code.claude.com/docs/en/statusline). Every fixture below builds its
+ * `context_window` through `contextWindow()`, which rejects anything else.
+ *
+ * That guard exists because these fixtures carried `total_tokens`, which the
+ * host does not send: `totalCtx` therefore always took its 1M fallback in a
+ * real session while the tests exercised a code path that could never run
+ * (PR #4959 review). A fixture that invents a field now fails loudly here
+ * instead of quietly asserting fiction.
+ */
+const CONTEXT_WINDOW_FIELDS = Object.freeze([
+  'total_input_tokens', 'total_output_tokens', 'context_window_size',
+  'used_percentage', 'remaining_percentage', 'current_usage',
+]);
+function contextWindow(fields) {
+  for (const key of Object.keys(fields)) {
+    if (!CONTEXT_WINDOW_FIELDS.includes(key)) {
+      throw new Error(
+        'context_window.' + key + ' is not a documented statusline field (' + CONTEXT_WINDOW_FIELDS.join(', ') + ')',
+      );
+    }
+  }
+  return fields;
+}
+
+/**
  * A single hooks/gsd-statusline.js spawn, no fan-out -- the "long-lived
  * status renderer" class (renders context-window percentage, git
  * branch/status, active-teams state), a distinct and heavier operation
@@ -640,19 +666,27 @@ describe('context meter respects CLAUDE_CODE_AUTO_COMPACT_WINDOW (#2219)', () =>
    *   - rawUsedPct: the raw value written to the bridge file (100 - remaining,
    *     CC-consistent per #2451 fix)
    */
-  function runHook(remainingPct, totalTokens, acwEnv) {
+  // The meter now consults settings.json for autoCompactEnabled, so pin
+  // CLAUDE_CONFIG_DIR to a scratch dir (optionally seeded with settings) —
+  // otherwise the developer's real ~/.claude/settings.json would steer the
+  // expected percentages below.
+  function runHook(remainingPct, contextWindowSize, acwEnv, settings) {
     const sessionId = `test-2219-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-statusline-cfg-'));
+    if (settings) fs.writeFileSync(path.join(configDir, 'settings.json'), JSON.stringify(settings));
     const payload = JSON.stringify({
       model: { display_name: 'Claude' },
       workspace: { current_dir: os.tmpdir() },
       session_id: sessionId,
-      context_window: {
+      context_window: contextWindow({
         remaining_percentage: remainingPct,
-        total_tokens: totalTokens,
-      },
+        context_window_size: contextWindowSize,
+      }),
     });
 
-    const env = { ...process.env };
+    const env = { ...process.env, CLAUDE_CONFIG_DIR: configDir };
+    delete env.DISABLE_AUTO_COMPACT;
+    delete env.DISABLE_COMPACT;
     if (acwEnv != null) {
       env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(acwEnv);
     } else {
@@ -660,6 +694,7 @@ describe('context meter respects CLAUDE_CODE_AUTO_COMPACT_WINDOW (#2219)', () =>
     }
 
     const r = runHookSeam(hookPath, [], { input: payload, env, timeoutMs: STATUSLINE_HOOK_TIMEOUT_MS });
+    cleanup(configDir);
     const stdout = r.stdout;
 
     // Parse normalized used% from the statusline bar output (e.g. "60%")
@@ -711,6 +746,58 @@ describe('context meter respects CLAUDE_CODE_AUTO_COMPACT_WINDOW (#2219)', () =>
     assert.strictEqual(normalizedUsed, 50);
   });
 
+  test('autoCompactEnabled:false in settings.json → no buffer, bar shows raw used%', () => {
+    // 16.5% is ordinary usable context when auto-compact is off: raw 40% used
+    // must read 40 (was 48), and raw 83.5% used must not pin the bar at 100.
+    assert.strictEqual(runHook(60, 1_000_000, null, { autoCompactEnabled: false }).normalizedUsed, 40);
+    assert.strictEqual(runHook(16.5, 1_000_000, null, { autoCompactEnabled: false }).normalizedUsed, 84);
+    // …and it overrides CLAUDE_CODE_AUTO_COMPACT_WINDOW too (no compaction → no window).
+    assert.strictEqual(runHook(50, 1_000_000, 400_000, { autoCompactEnabled: false }).normalizedUsed, 50);
+    // autoCompactEnabled:true keeps the default buffer.
+    assert.strictEqual(runHook(50, 1_000_000, null, { autoCompactEnabled: true }).normalizedUsed, 60);
+  });
+
+  test('isAutoCompactDisabled: env switches and settings precedence, fail-soft', () => {
+    const { isAutoCompactDisabled, AUTO_COMPACT_DISABLE_ENV_KEYS, AUTO_COMPACT_ENV_TRUTHY } = require('../hooks/gsd-statusline.js');
+    const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-statusline-cfg-'));
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-statusline-proj-'));
+    try {
+      const env = { CLAUDE_CONFIG_DIR: cfg };
+      assert.equal(isAutoCompactDisabled(proj, env), false, 'nothing configured');
+      // The env names and accepted values are Claude Code's own
+      // (`Boolean(truthy(DISABLE_COMPACT) || DISABLE_AUTO_COMPACT)`), not invented:
+      // an invented name reads as 'not disabled' forever (PR #4959 review).
+      assert.deepEqual([...AUTO_COMPACT_DISABLE_ENV_KEYS], ['DISABLE_AUTO_COMPACT', 'DISABLE_COMPACT']);
+      assert.deepEqual([...AUTO_COMPACT_ENV_TRUTHY], ['1', 'true', 'yes', 'on']);
+      for (const key of AUTO_COMPACT_DISABLE_ENV_KEYS) {
+        for (const value of ['1', 'true', 'yes', 'on', ' TRUE ', 'On']) {
+          assert.equal(isAutoCompactDisabled(proj, { ...env, [key]: value }), true, `${key}=${JSON.stringify(value)}`);
+        }
+        for (const value of ['0', 'false', '', 'no', 'off']) {
+          assert.equal(isAutoCompactDisabled(proj, { ...env, [key]: value }), false, `${key}=${JSON.stringify(value)}`);
+        }
+      }
+      assert.equal(isAutoCompactDisabled(proj, { ...env, DISABLE_AUTOCOMPACT: '1' }), false,
+        'DISABLE_AUTOCOMPACT is not a Claude Code variable and must not be honoured');
+      // Positive control for the fixture guard itself: without this, a future
+      // fixture could reintroduce an invented field and nothing would notice.
+      assert.throws(() => contextWindow({ total_tokens: 200000 }), /not a documented statusline field/);
+      assert.deepEqual(contextWindow({ context_window_size: 200000 }), { context_window_size: 200000 });
+      fs.writeFileSync(path.join(cfg, 'settings.json'), '{ not json');
+      assert.equal(isAutoCompactDisabled(proj, env), false, 'unparseable settings are ignored');
+      fs.writeFileSync(path.join(cfg, 'settings.json'), JSON.stringify({ autoCompactEnabled: false }));
+      assert.equal(isAutoCompactDisabled(proj, env), true, 'global settings');
+      fs.mkdirSync(path.join(proj, '.claude'));
+      fs.writeFileSync(path.join(proj, '.claude', 'settings.json'), JSON.stringify({ autoCompactEnabled: true }));
+      assert.equal(isAutoCompactDisabled(proj, env), false, 'project settings outrank global');
+      fs.writeFileSync(path.join(proj, '.claude', 'settings.local.json'), JSON.stringify({ autoCompactEnabled: false }));
+      assert.equal(isAutoCompactDisabled(proj, env), true, 'settings.local.json outranks settings.json');
+    } finally {
+      cleanup(cfg);
+      cleanup(proj);
+    }
+  });
+
   test('bridge used_pct is raw (CC-consistent) regardless of ACW setting (#2451)', () => {
     // Fix for #2451: bridge used_pct must be raw (100 - remaining), not normalized.
     // This ensures gsd-context-monitor warning messages match CC native /context.
@@ -731,19 +818,24 @@ describe('context meter boundary: acw at/near totalCtx does not pin used at 100%
    * Run the hook with a given acw and totalTokens; remaining fixed at 50%.
    * Returns the normalizedUsed percentage shown in the statusline bar.
    */
-  function runBoundaryHook(remainingPct, totalTokens, acwEnv) {
+  function runBoundaryHook(remainingPct, contextWindowSize, acwEnv) {
     const sessionId = `test-1194-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const payload = JSON.stringify({
       model: { display_name: 'Claude' },
       workspace: { current_dir: os.tmpdir() },
       session_id: sessionId,
-      context_window: {
+      context_window: contextWindow({
         remaining_percentage: remainingPct,
-        total_tokens: totalTokens,
-      },
+        context_window_size: contextWindowSize,
+      }),
     });
 
-    const env = { ...process.env };
+    // Pin CLAUDE_CONFIG_DIR to an empty scratch dir so the developer's real
+    // ~/.claude/settings.json (autoCompactEnabled) cannot steer the buffer.
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-statusline-cfg-'));
+    const env = { ...process.env, CLAUDE_CONFIG_DIR: configDir };
+    delete env.DISABLE_AUTO_COMPACT;
+    delete env.DISABLE_COMPACT;
     if (acwEnv != null) {
       env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(acwEnv);
     } else {
@@ -760,6 +852,8 @@ describe('context meter boundary: acw at/near totalCtx does not pin used at 100%
       });
     } catch (e) {
       stdout = e.stdout || '';
+    } finally {
+      cleanup(configDir);
     }
 
     // Strip ANSI escape codes then extract the percentage digit(s) before "%"
@@ -887,7 +981,7 @@ describe('todo-resolution: resolves in_progress task from the newest matching to
       model: { display_name: 'Claude' },
       workspace: { current_dir: os.tmpdir() },
       session_id: session,
-      context_window: { remaining_percentage: 80, total_tokens: 1_000_000 },
+      context_window: contextWindow({ remaining_percentage: 80, context_window_size: 1_000_000 }),
     });
 
     const env = { ...process.env, CLAUDE_CONFIG_DIR: tempDir };
@@ -1666,15 +1760,15 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
         model: { display_name: 'Claude' },
         workspace: { current_dir: dir },
         session_id: `test-tokens-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        context_window: {
+        context_window: contextWindow({
           remaining_percentage: 70,
-          total_tokens: 200000,
+          context_window_size: 200000,
           current_usage: {
             input_tokens: 1000,
             cache_read_input_tokens: 150000,
             output_tokens: 5000,
           },
-        },
+        }),
       });
       const r = runHookSeam(hookPath, [], { input: payload, timeoutMs: STATUSLINE_HOOK_TIMEOUT_MS });
       // eslint-disable-next-line no-control-regex -- stripping ANSI SGR sequences from captured CLI output
@@ -3071,7 +3165,7 @@ describe('evaluateUpdateCache lineage guard', () => {
           model: { display_name: 'Claude' },
           workspace: { current_dir: dir },
           session_id: session,
-          context_window: { remaining_percentage: 80, total_tokens: 1_000_000 },
+          context_window: contextWindow({ remaining_percentage: 80, context_window_size: 1_000_000 }),
         });
         const r = runHookSeam(hookPath, [], {
           input: payload,

@@ -1276,7 +1276,7 @@ fix(03-01): correct auth token expiry
 - REQ-HOOK-04: All hooks MUST respect `CLAUDE_CONFIG_DIR` env var
 - REQ-HOOK-05: All hooks MUST include 3-second stdin timeout guard
 - REQ-HOOK-06: All hooks MUST fail silently on any error
-- REQ-HOOK-07: Context usage MUST normalize for autocompact buffer (16.5% reserved)
+- REQ-HOOK-07: Context usage MUST normalize for autocompact buffer (16.5% reserved, or the `CLAUDE_CODE_AUTO_COMPACT_WINDOW` share) — and MUST skip the buffer entirely when auto-compact is off (`autoCompactEnabled: false` in settings, or `DISABLE_AUTOCOMPACT` / `CLAUDE_CODE_DISABLE_AUTO_COMPACT`), so the bar shows the raw used%
 - REQ-HOOK-08: Update banner MUST be opt-in and silent unless an update is available (PR #2795)
 
 **Statusline Display:**
