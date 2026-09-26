@@ -958,6 +958,10 @@ describe('issue #3210: execute-phase auto-mode carve-out exempts precondition-un
 // update_roadmap when the marker is unticked, without redoing verification.
 
 describe('execute-phase workflow: #3684 verified-unmarked resume', () => {
+  const PASSED_RESUME_PATH = path.join(
+    __dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'passed-resume.md',
+  );
+
   function stepText() {
     const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
     const start = content.indexOf('<step name="discover_and_group_plans">');
@@ -986,7 +990,9 @@ describe('execute-phase workflow: #3684 verified-unmarked resume', () => {
 
   test('verified-unmarked resume continues at update_roadmap', () => {
     const step = stepText();
-    const branch = step.slice(step.indexOf('VERIFY_STATUS` ≠ `missing` + `PHASE_MARKED` not `true`'));
+    // #4765 narrowed this arm from "≠ missing" to the one status it was
+    // written for; the branch it guards is otherwise untouched.
+    const branch = step.slice(step.indexOf('VERIFY_STATUS == passed` + `PHASE_MARKED` not `true`'));
     assert.ok(
       branch.includes('update_roadmap'),
       'the unmarked-resume branch must continue at update_roadmap',
@@ -999,6 +1005,20 @@ describe('execute-phase workflow: #3684 verified-unmarked resume', () => {
       branch.includes('#3684'),
       'the branch must cite #3684',
     );
+    assert.ok(
+      branch.includes('execute-phase/steps/passed-resume.md'),
+      'the compact host arm must route to the part that owns the preserved behavior',
+    );
+  });
+
+  test('passed-resume part preserves the user-facing report and tail route', () => {
+    const part = fs.readFileSync(PASSED_RESUME_PATH, 'utf-8');
+    assert.match(part, /Phase \{X\} is verified but never marked complete/,
+      'the extracted part must preserve the verified-but-unmarked report');
+    assert.match(part, /Continue directly at `update_roadmap`/,
+      'the extracted part must preserve the tail route');
+    assert.match(part, /do not rerun it or any gate/,
+      'the extracted part must forbid repeating verification and prior gates');
   });
 
   test('genuinely-finished exit and the 2868 branch are unchanged', () => {
@@ -1265,6 +1285,116 @@ describe('execute-phase: stall surveillance must not steer a working executor (#
     // pins them there.
     for (const option of ['continue waiting', 'kill and retry', 'kill and switch to inline execution']) {
       assert.ok(workflow.includes(option), `the host must still offer "${option}"`);
+    }
+  });
+});
+
+// ─── #4765 — a report that is not a pass is not a pass ───────────────────────
+//
+// Condition 3's ladder branched on `VERIFY_STATUS ≠ missing`, but
+// `verification status` emits six values. `gaps_found`, `human_needed` and
+// `unknown` therefore took the #3684 arm — the one written for a `passed`
+// verdict whose roadmap write never happened — so the run announced "Phase {X}
+// is verified but never marked complete", skipped `verify_phase_goal`, and then
+// hit `phase.complete`, which refuses a non-`passed` verdict. The only possible
+// outcome was an error contradicting the message that produced it.
+//
+// `stale` was the same defect and was fixed first (#4682); these three are what
+// the binary branch still collapsed.
+
+describe('execute-phase workflow: #4765 not-passed verification resume', () => {
+  const PART_PATH = path.join(
+    __dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'unpassed-resume.md',
+  );
+
+  function stepText() {
+    const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+    const start = content.indexOf('<step name="discover_and_group_plans">');
+    const end = content.indexOf('</step>', start);
+    return content.slice(start, end);
+  }
+
+  test('the ladder no longer routes every non-missing status to update_roadmap', () => {
+    const step = stepText();
+    assert.ok(
+      !step.includes('`VERIFY_STATUS` ≠ `missing` + `PHASE_MARKED` not `true`'),
+      'the collapsed "≠ missing" resume arm must be gone — it is what swallowed the other statuses',
+    );
+    assert.ok(
+      step.includes('`VERIFY_STATUS == passed` + `PHASE_MARKED` not `true`'),
+      'the #3684 arm must name the ONE status it was written for',
+    );
+  });
+
+  test('the three not-passed statuses get their own arm, and it cites the issue', () => {
+    const step = stepText();
+    const idx = step.indexOf('`gaps_found`, `human_needed` or `unknown`');
+    assert.notEqual(idx, -1, 'the ladder must name the statuses it now routes separately');
+    const arm = step.slice(idx, idx + 400);
+    assert.match(arm, /#4765/, 'the arm must cite #4765');
+    assert.match(arm, /unpassed-resume\.md/, 'the arm must route to its steps/ part');
+    assert.match(arm, /never route to `update_roadmap`/,
+      'the arm must forbid the route that produced the false "verified" claim');
+  });
+
+  test('the new arm follows every prior resume route', () => {
+    const step = stepText();
+    const stale = step.indexOf('`VERIFY_STATUS == stale`');
+    const missing = step.indexOf('`VERIFY_STATUS == missing`');
+    const marked = step.indexOf('**`PHASE_MARKED` is `true`**');
+    const passed = step.indexOf('`VERIFY_STATUS == passed` + `PHASE_MARKED` not `true`');
+    const unpassed = step.indexOf('`gaps_found`, `human_needed` or `unknown`');
+    assert.ok(stale !== -1 && missing !== -1 && marked !== -1 && passed !== -1 && unpassed !== -1,
+      'all five resume arms must be present');
+    assert.ok(stale < missing, 'stale stays first');
+    assert.ok(missing < marked, 'missing stays ahead of the marked-complete exit');
+    assert.ok(marked < passed, 'the marked-complete exit stays ahead of the passed resume');
+    assert.ok(passed < unpassed, 'the unpassed route follows the #3684 passed route');
+  });
+
+  test('the part fails loudly when verification does not provide a next action', () => {
+    const part = fs.readFileSync(PART_PATH, 'utf-8');
+    assert.match(part, /gsd_run query verification\.status "\$\{PHASE_DIR\}" 2>\/dev\/null/,
+      'the verification query should tolerate a read failure');
+    assert.match(part, /jq -r '.next_action \/\/ ""' 2>\/dev\/null \|\| echo ""/,
+      'next_action extraction should tolerate malformed verification output');
+    assert.match(part, /Verification did not provide a next action\. Inspect the report before continuing\./,
+      'an absent next_action must be explicit rather than rendering a blank line');
+  });
+
+  test('the part presents the status\'s own next action instead of restating it', () => {
+    const part = fs.readFileSync(PART_PATH, 'utf-8');
+    assert.match(part, /next_action/, 'it must read next_action from verification.status');
+    assert.match(part, /next_command/, 'it must read next_command from verification.status');
+    assert.match(part, /do NOT continue at `update_roadmap`/,
+      'the part must state the route it exists to prevent');
+    assert.doesNotMatch(part, /is verified but never marked/,
+      'the false "verified" message must not reach this path');
+  });
+
+  test('every not-passed status the query can emit is routed by name', (t) => {
+    // Driven against the real verb rather than asserted from the vocabulary in
+    // prose: if `verification status` grows a seventh status, this fails and
+    // the ladder is updated with it, instead of the new value silently
+    // inheriting whatever arm happens to match.
+    const proj = createTempProject('gsd-4765-');
+    t.after(() => cleanup(proj));
+    const phaseDir = path.join(proj, '.planning', 'phases', '01-alpha');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const reportPath = path.join(phaseDir, '01-alpha-VERIFICATION.md');
+
+    const step = stepText();
+    for (const [written, expected] of [
+      ['gaps_found', 'gaps_found'],
+      ['human_needed', 'human_needed'],
+      ['hand_set_marker', 'unknown'],
+    ]) {
+      fs.writeFileSync(reportPath, `---\nstatus: ${written}\n---\n\n# Verification\n`);
+      const result = runGsdTools(`verification status ${phaseDir} --pick status`, proj);
+      assert.equal(result.output.trim(), expected,
+        `verification status should report ${expected} for a "${written}" report`);
+      assert.ok(step.includes(`\`${expected}\``),
+        `the resume ladder must name \`${expected}\` explicitly (#4765)`);
     }
   });
 });
