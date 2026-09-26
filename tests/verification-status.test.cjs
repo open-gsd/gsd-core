@@ -3189,3 +3189,97 @@ describe('#4806: unparseable VERIFICATION.md frontmatter reports a parse error, 
     assert.equal(result.status, 'passed');
   });
 });
+
+// ─── #4987: a path that is not a directory is not a phase with no report ─────
+//
+// `verification.status` and `verification.resolve-file` used to fold a
+// readdirSync failure on the phase directory into the "no report" answer, so a
+// stale PHASE_DIR (most commonly a phase `/gsd-complete-milestone` has moved to
+// `.planning/milestones/v<X.Y>-phases/`), a path that cannot exist, and a
+// regular file all read `missing` → `/gsd-execute-phase` at exit 0. The verbs
+// now answer those with a distinct status that routes nowhere; a directory that
+// exists and holds no report keeps its `missing` answer unchanged.
+describe('#4987: verification query verbs distinguish a non-directory path from a missing report', () => {
+  const { runGsdTools } = require('./helpers.cjs');
+
+  function status(cwd, target) {
+    const res = runGsdTools(['query', 'verification.status', target], cwd);
+    assert.equal(res.success, true, `verification.status must exit 0: ${res.error}`);
+    return JSON.parse(res.output);
+  }
+
+  function resolveFile(cwd, target, raw = false) {
+    const res = runGsdTools(['query', 'verification.resolve-file', target, ...(raw ? ['--raw'] : [])], cwd);
+    assert.equal(res.success, true, `verification.resolve-file must exit 0: ${res.error}`);
+    return raw ? res.output.trimEnd() : JSON.parse(res.output);
+  }
+
+  // Tmp roots are realpath'd: the CLI resolves a relative argument against
+  // process.cwd(), which is the realpath (macOS /var → /private/var).
+  function assertNotFound(result, expectedPath) {
+    assert.equal(result.status, 'phase_dir_not_found', 'a non-directory path must not read as missing');
+    assert.equal(result.next_command, '', 'a non-directory path must not route to execute-phase (or anywhere)');
+    assert.ok(result.next_action.includes(expectedPath), `next_action must name the resolved path ${expectedPath}`);
+  }
+
+  test('an archived phase read at its old path is phase_dir_not_found, not missing (the issue repro)', (t) => {
+    const projectDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4987-archive-')));
+    t.after(() => cleanup(projectDir));
+    const oldDir = path.join(projectDir, '.planning', 'phases', '03-auth');
+    fs.mkdirSync(oldDir, { recursive: true });
+    fs.writeFileSync(path.join(oldDir, '03-VERIFICATION.md'), '---\nphase: 03-auth\nstatus: passed\n---\n');
+    assert.equal(status(projectDir, '.planning/phases/03-auth').status, 'passed', 'precondition: passed before archiving');
+
+    const archiveParent = path.join(projectDir, '.planning', 'milestones', 'v1.0-phases');
+    fs.mkdirSync(archiveParent, { recursive: true });
+    fs.renameSync(oldDir, path.join(archiveParent, '03-auth'));
+
+    assert.equal(status(projectDir, '.planning/milestones/v1.0-phases/03-auth').status, 'passed');
+    assertNotFound(status(projectDir, '.planning/phases/03-auth'), oldDir);
+  });
+
+  test('a path that does not exist is phase_dir_not_found', (t) => {
+    const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4987-absent-')));
+    t.after(() => cleanup(parent));
+    const absent = path.join(parent, 'no-such-phase');
+    assertNotFound(status(parent, absent), absent);
+  });
+
+  test('a regular file is phase_dir_not_found', (t) => {
+    const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4987-file-')));
+    t.after(() => cleanup(parent));
+    const file = path.join(parent, 'notes.txt');
+    fs.writeFileSync(file, '');
+    assertNotFound(status(parent, 'notes.txt'), file);
+  });
+
+  test('a directory that exists and holds no report still reads missing → execute-phase (unchanged)', (t) => {
+    const dir = mkPhaseDir('4987-control', '04-empty');
+    t.after(() => cleanup(path.dirname(dir)));
+    const result = status(dir, dir);
+    assert.equal(result.status, 'missing');
+    assert.equal(result.next_command, '/gsd-execute-phase 04');
+  });
+
+  test('resolve-file tells an absent phase directory apart from an empty one', (t) => {
+    const dir = mkPhaseDir('4987-resolve', '05-empty');
+    t.after(() => cleanup(path.dirname(dir)));
+    const absent = path.join(path.dirname(dir), 'no-such-phase');
+
+    assert.deepStrictEqual(resolveFile(dir, dir), { verification_file: '', phase_dir_found: true });
+    assert.deepStrictEqual(resolveFile(dir, absent), { verification_file: '', phase_dir_found: false });
+    // --raw stays a directly-assignable path: empty in both cases, never a sentinel string.
+    assert.equal(resolveFile(dir, absent, true), '');
+  });
+
+  test('phase_dir_not_found is an internal sentinel: a report whose frontmatter says it routes as unknown', (t) => {
+    const route = VERIFICATION_ROUTING_TABLE['phase_dir_not_found'];
+    assert.ok(route, 'the routing table must carry the sentinel');
+    assert.equal(route.next_command, '');
+
+    const dir = mkPhaseDir('4987-literal', '06-lit');
+    t.after(() => cleanup(path.dirname(dir)));
+    writeVerificationMd(dir, '06-VERIFICATION.md', 'phase_dir_not_found');
+    assert.equal(readVerificationStatus(dir).status, 'unknown');
+  });
+});

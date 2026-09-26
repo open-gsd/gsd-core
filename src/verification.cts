@@ -137,6 +137,18 @@ const VERIFICATION_ROUTING_TABLE: Record<string, VerificationRoute> = {
     next_action: "The *-VERIFICATION.md frontmatter is not parseable YAML — fix the syntax error in the report itself. Re-running execute-phase cannot fix a YAML typo in an existing report.",
     next_command: '',
   },
+  // INTERNAL SENTINEL (#4987): constructed by the `verification.status` verb
+  // when its argument does not exist or is not a directory — "could not look",
+  // which is a different fact from "looked, and the verify step never ran"
+  // (`missing`). The most common cause is a stale PHASE_DIR for a phase that
+  // complete-milestone has archived. Routes nowhere: re-executing a phase at a
+  // path that is not there cannot help. next_action is filled in with the
+  // resolved path by phaseDirNotFoundResult().
+  phase_dir_not_found: {
+    status: 'phase_dir_not_found',
+    next_action: '',
+    next_command: '',
+  },
   // INTERNAL SENTINEL: constructed when the file has a status value not in
   // VERIFIER_STATUSES. Never emitted by the verifier.
   unknown: {
@@ -594,6 +606,37 @@ function missingResult(runtime: string, phaseArg: string): VerificationStatusRes
     status: route.status,
     next_action: route.next_action,
     next_command: projectNextCommand(route.next_command, runtime, phaseArg),
+  };
+}
+
+/**
+ * True when `phaseDir` does not exist or is not a directory (#4987).
+ *
+ * Keyed on ENOENT / ENOTDIR only. Any other stat failure (EACCES on a parent,
+ * say) returns false, so the caller falls through to the pre-#4987 read and
+ * its existing degradation — this probe answers "is it not there?", never
+ * "could it not be read?".
+ */
+function isPhaseDirAbsent(phaseDir: string): boolean {
+  try {
+    return !fs.statSync(phaseDir).isDirectory();
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR';
+  }
+}
+
+/**
+ * Build the `phase_dir_not_found` result for a phase directory that is not
+ * there (#4987). `next_action` names the resolved path so the caller can see
+ * which path was read; `next_command` stays empty.
+ */
+function phaseDirNotFoundResult(phaseDir: string): VerificationStatusResult {
+  const route = VERIFICATION_ROUTING_TABLE['phase_dir_not_found'];
+  return {
+    status: route.status,
+    next_action: `No phase directory at ${phaseDir} — the path does not exist or is not a directory, so no verification state can be read from it. A phase archived by complete-milestone lives under .planning/milestones/v<X.Y>-phases/: resolve its current directory (find-phase <N>) and query that. Re-running execute-phase against this path cannot help.`,
+    next_command: route.next_command,
   };
 }
 
@@ -1152,6 +1195,7 @@ function readVerificationStatus(
   if (
     rawStatus in VERIFICATION_ROUTING_TABLE &&
     rawStatus !== 'missing' &&
+    rawStatus !== 'phase_dir_not_found' &&
     rawStatus !== 'unknown' &&
     rawStatus !== 'stale' &&
     rawStatus !== 'gaps_found'
@@ -1268,7 +1312,14 @@ function cmdVerificationStatus(cwd: string, phaseDirArg: string | undefined, raw
     return;
   }
   const phaseDir = path.resolve(cwd, phaseDirArg);
-  const result = readVerificationStatus(phaseDir, { runtime: resolveRuntime(cwd) });
+  // #4987: a path that is not a directory is answered here, before the read.
+  // readVerificationStatus's own no-throw contract folds a readdir failure into
+  // `missing`, which its internal callers rely on (init passes '' for a phase
+  // with no directory yet); this verb is the one surface handed arbitrary paths.
+  // Exit 0 either way — workflow callers read `--pick status 2>/dev/null`.
+  const result = isPhaseDirAbsent(phaseDir)
+    ? phaseDirNotFoundResult(phaseDir)
+    : readVerificationStatus(phaseDir, { runtime: resolveRuntime(cwd) });
   output(result, raw);
 }
 
@@ -1282,8 +1333,10 @@ function cmdVerificationStatus(cwd: string, phaseDirArg: string | undefined, raw
  * head -1` / an awk glob scan — both of which pick alphabetically-first and so
  * diverge from every JS reader now pinned to the phase's own token.
  *
- * Emits `{ verification_file: "<absolute path>" | "" }` (empty when no
- * candidate resolves, including an unreadable directory). `raw` emits the
+ * Emits `{ verification_file: "<absolute path>" | "", phase_dir_found: boolean }`
+ * (`verification_file` is empty when no candidate resolves, including an
+ * unreadable directory; `phase_dir_found` is false only when the path does not
+ * exist or is not a directory — #4987). `raw` emits the
  * bare path string (possibly empty) so `VAR=$(gsd_run query
  * verification.resolve-file "$PHASE_DIR" --raw)` is directly assignable.
  *
@@ -1297,6 +1350,13 @@ function cmdVerificationResolveFile(cwd: string, phaseDirArg: string | undefined
     return;
   }
   const phaseDir = path.resolve(cwd, phaseDirArg);
+  // #4987: `phase_dir_found: false` separates "no directory there" from "the
+  // directory holds no report", which both emit an empty verification_file.
+  // --raw stays the bare, directly-assignable path (empty in both cases).
+  if (isPhaseDirAbsent(phaseDir)) {
+    output({ verification_file: '', phase_dir_found: false }, raw, '');
+    return;
+  }
   let verificationPath = '';
   try {
     const entries = fs.readdirSync(phaseDir);
@@ -1309,7 +1369,7 @@ function cmdVerificationResolveFile(cwd: string, phaseDirArg: string | undefined
   } catch {
     verificationPath = '';
   }
-  output({ verification_file: verificationPath }, raw, verificationPath);
+  output({ verification_file: verificationPath, phase_dir_found: true }, raw, verificationPath);
 }
 
 /**
