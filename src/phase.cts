@@ -671,6 +671,8 @@ interface RawPlan {
   halted: boolean;
   /** #1689: optional per-plan specialist executor hint (frontmatter `agent_hint:`). null when unset. */
   agentHint: string | null;
+  /** #4924: frontmatter `gap_closure: true` — the field execute-phase `--gaps-only` selects on. */
+  gapClosure: boolean;
 }
 
 /**
@@ -969,6 +971,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
       filesModified: planDoc.filesModified,
       filesDeleted: planDoc.filesDeleted,
       agentHint: planDoc.agentHint,
+      gapClosure: planDoc.gapClosure,
       taskCount: planDoc.taskCount,
       hasSummary,
       halted,
@@ -1129,6 +1132,10 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
         return planMap.has(lower) ? (planMap.get(lower) as RawPlan).id : dep;
       }),
       autonomous: rawPlan.autonomous,
+      // #4924: execute-phase's `--gaps-only` filter reads this field off the
+      // index. Before it was emitted, every plan read as non-gap-closure and the
+      // filter selected nothing — a silent, successful-looking empty run.
+      gap_closure: rawPlan.gapClosure,
       objective: rawPlan.objective,
       files_modified: rawPlan.filesModified,
       files_deleted: rawPlan.filesDeleted,

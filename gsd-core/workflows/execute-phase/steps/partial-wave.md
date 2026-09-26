@@ -8,7 +8,7 @@ POST_PLAN_INDEX=$(gsd_run query phase-plan-index "${PHASE_NUMBER}")
 
 Apply the same "incomplete" filtering rules as earlier:
 - ignore plans with `has_summary: true`
-- if `--gaps-only`, only consider `gap_closure: true` plans
+- if `--gaps-only`, only consider `gap_closure: true` plans (a plan object with no `gap_closure` key is the same STOP as in `discover_and_group_plans`, never an empty selection)
 
 **If incomplete plans still remain anywhere in the phase:**
 - STOP here

@@ -516,7 +516,7 @@ const COVERED = {
   'plan-document': {
     cjs: 'gsd-core/bin/lib/plan-document.cjs',
     extraTests: ['planning-inspect.unit.test.cjs'],
-    minScore: 75,
+    minScore: 79,
   },
   'planning-command-router': {
     cjs: 'gsd-core/bin/lib/planning-command-router.cjs',

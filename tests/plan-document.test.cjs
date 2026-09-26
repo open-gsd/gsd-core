@@ -154,6 +154,25 @@ type: standard
   });
 });
 
+describe('plan-document: frontmatter gap_closure (#4924)', () => {
+  test('gap_closure: true is read as gapClosure: true', () => {
+    const doc = parsePlanDocument('---\nwave: 1\ngap_closure: true\n---\n<objective>Gap.</objective>\n');
+    assert.equal(doc.gapClosure, true);
+  });
+
+  test('absent gap_closure yields gapClosure: false', () => {
+    const doc = parsePlanDocument('---\nwave: 1\n---\n<objective>Standard.</objective>\n');
+    assert.equal(doc.gapClosure, false);
+  });
+
+  test('gap_closure: false and off-contract spellings yield gapClosure: false', () => {
+    for (const value of ['false', 'True', 'yes']) {
+      const doc = parsePlanDocument(`---\nwave: 1\ngap_closure: ${value}\n---\n<objective>x</objective>\n`);
+      assert.equal(doc.gapClosure, false, `gap_closure: ${value} must not read as a gap-closure plan`);
+    }
+  });
+});
+
 describe('plan-document: regression — legacy behaviour unchanged', () => {
   test('legacy `## Task N` markdown fallback still parses with trackerId: null', () => {
     const doc = parsePlanDocument(`

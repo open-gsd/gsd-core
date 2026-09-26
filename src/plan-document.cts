@@ -5,7 +5,7 @@
  * the legacy `## Task N` heading fallback — including the optional `tracker-id`
  * attribute, ADR-3646 Phase 1, read verbatim and never split here), planned-file
  * extraction, and the frontmatter-derived scheduling metadata (`wave`,
- * `depends_on`, `autonomous`, `agent_hint`, `files_modified`).
+ * `depends_on`, `autonomous`, `agent_hint`, `files_modified`, `gap_closure`).
  *
  * WHY THIS IS A LEAF MODULE. This logic was written inline inside
  * `cmdPhasePlanIndex` (`src/phase.cts`). Two commands in two different families
@@ -105,6 +105,13 @@ interface PlanDocument {
    * unconditional block.
    */
   filesDeleted: string[];
+  /**
+   * #4924: frontmatter `gap_closure` — true iff the value is exactly `true`, the
+   * same strict equality the `plan-gap-closure` schema enforces (#2847) and
+   * execute-phase's `--gaps-only` filter selects on. Absent, `false`, or an
+   * off-contract spelling (`True`, `yes`) is false.
+   */
+  gapClosure: boolean;
   tasks: PlanTask[];
   /**
    * Legacy count. Invariant: `taskCount === tasks.length`, always. Exposed as
@@ -352,6 +359,8 @@ function parsePlanDocument(content: string, planPath = ''): PlanDocument {
     agentHint,
     filesModified,
     filesDeleted,
+    // extractFrontmatter yields every scalar as a string, so YAML `true` is 'true'.
+    gapClosure: fm['gap_closure'] === 'true',
     tasks,
     taskCount: tasks.length,
   };

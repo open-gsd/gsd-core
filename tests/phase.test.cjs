@@ -1133,6 +1133,51 @@ objective: Manual review needed
     // Both independent plans land in the same wave
     assert.deepStrictEqual(output.waves['1'], ['25-01', '25-02'], 'both no-dep plans should be in wave 1');
   });
+
+  // #4924 — execute-phase's `--gaps-only` rule ("also skip non-gap_closure
+  // plans") reads gap_closure off this index. The field was never emitted, so
+  // every plan read as non-gap-closure and the filter selected zero plans while
+  // the run reported "No matching incomplete plans" and exited cleanly.
+  test('#4924: surfaces gap_closure so --gaps-only selects exactly the gap-closure plans', () => {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '34-e8-backup');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    // An executed standard plan (no gap_closure key).
+    fs.writeFileSync(path.join(phaseDir, '34-01-PLAN.md'), '---\nwave: 1\n---\n<objective>Original plan.</objective>\n');
+    fs.writeFileSync(path.join(phaseDir, '34-01-SUMMARY.md'), '---\nphase: 34\nplan: 01\n---\n# Summary\n');
+    // An executed gap-closure plan: gap_closure must survive has_summary
+    // flipping true (the issue saw it null both before and after the run).
+    fs.writeFileSync(path.join(phaseDir, '34-21-PLAN.md'), '---\nwave: 1\ngap_closure: true\n---\n<objective>Executed gap.</objective>\n');
+    fs.writeFileSync(path.join(phaseDir, '34-21-SUMMARY.md'), '---\nphase: 34\nplan: 21\n---\n# Summary\n');
+    // Two ready gap-closure plans, as `/gsd-plan-phase 34 --gaps` writes them.
+    fs.writeFileSync(path.join(phaseDir, '34-22-PLAN.md'), '---\nwave: 1\ngap_closure: true\n---\n<objective>Gap A.</objective>\n');
+    fs.writeFileSync(path.join(phaseDir, '34-23-PLAN.md'), '---\nwave: 1\ngap_closure: true\n---\n<objective>Gap B.</objective>\n');
+    // Counter-cases: incomplete plans that are NOT gap closure — an explicit
+    // `false`, and an off-contract spelling the plan-gap-closure schema rejects.
+    fs.writeFileSync(path.join(phaseDir, '34-24-PLAN.md'), '---\nwave: 1\ngap_closure: false\n---\n<objective>Not a gap.</objective>\n');
+    fs.writeFileSync(path.join(phaseDir, '34-25-PLAN.md'), '---\nwave: 1\ngap_closure: True\n---\n<objective>Off-contract.</objective>\n');
+
+    const result = runGsdTools('phase-plan-index 34', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+
+    const gapClosureById = Object.fromEntries(output.plans.map((p) => [p.id, p.gap_closure]));
+    assert.deepStrictEqual(gapClosureById, {
+      '34-01': false,
+      '34-21': true,
+      '34-22': true,
+      '34-23': true,
+      '34-24': false,
+      '34-25': false,
+    });
+
+    // The documented --gaps-only selection over this payload: incomplete plans
+    // whose gap_closure is true. Before the fix this was [].
+    const byId = new Map(output.plans.map((p) => [p.id, p]));
+    assert.strictEqual(byId.get('34-21').has_summary, true);
+    const gapsOnly = output.incomplete.filter((id) => byId.get(id).gap_closure === true);
+    assert.deepStrictEqual(gapsOnly, ['34-22', '34-23']);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
