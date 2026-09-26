@@ -612,6 +612,7 @@ jobs:
 
       - name: Verify publish
         if: ${{ !inputs.dry_run }}
+        timeout-minutes: 15
         env:
           PRE_VERSION: ${{ steps.prerelease.outputs.pre_version }}
         run: node scripts/verify-npm-publish.cjs --package @opengsd/gsd-core --version "$PRE_VERSION" --dist-tag next
@@ -898,6 +899,7 @@ jobs:
 
       - name: Verify publish
         if: ${{ !inputs.dry_run }}
+        timeout-minutes: 15
         env:
           VERSION: ${{ inputs.version }}
         run: node scripts/verify-npm-publish.cjs --package @opengsd/gsd-core --version "$VERSION" --dist-tag latest

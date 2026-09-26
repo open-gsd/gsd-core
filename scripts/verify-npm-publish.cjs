@@ -17,24 +17,43 @@ const REASON = Object.freeze({
   FAIL_VERSION_NOT_FOUND: 'fail_version_not_found',
 });
 
+// #5021: v1.15.0 published fine (npm accepted it and reported it was
+// "processing") but took ~6.5 min (390s) to become resolvable via `npm view`
+// — well past the old 20 x 5s (~100s) window, which failed the job and
+// skipped the release->main merge and next-version sync. The window bounds
+// wall-clock time (not attempt count) so slow/hung `npm view` calls can't
+// stretch the step: worst case is approximately window + one
+// NPM_VIEW_TIMEOUT_MS + the dist-tag window.
+const DEFAULT_WINDOW_MS = 10 * 60_000;
+const DEFAULT_INTERVAL_MS = 10_000;
+// The dist-tag lookup is informational only (it never affects `ok`), so once
+// the version is live it must not spend another full window on top — cap its
+// retries with BOTH an attempt count and a wall-clock cap so it never spends
+// a second full window.
+const DIST_TAG_MAX_ATTEMPTS = 6;
+const DIST_TAG_WINDOW_MS = 60_000;
+// repo convention: npm subprocesses bounded at 60s; a timeout degrades to
+// "not found yet"
+const NPM_VIEW_TIMEOUT_MS = 60_000;
+
 // ---- Sleep -------------------------------------------------------------------
 
 const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ---- npm fetchers ------------------------------------------------------------
 
-function defaultFetchVersion(pkg, version) {
+function defaultFetchVersion(pkg, version, { exec = cp.execFileSync } = {}) {
   try {
-    const out = cp.execFileSync('npm', ['view', `${pkg}@${version}`, 'version'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const out = exec('npm', ['view', `${pkg}@${version}`, 'version'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: NPM_VIEW_TIMEOUT_MS }).trim();
     return out || null;
   } catch { return null; }
 }
 
-function defaultFetchDistTag(pkg, distTag) {
+function defaultFetchDistTag(pkg, distTag, { exec = cp.execFileSync } = {}) {
   try {
-    const out = cp.execFileSync('npm', ['view', pkg, 'dist-tags', '--json'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const out = exec('npm', ['view', pkg, 'dist-tags', '--json'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: NPM_VIEW_TIMEOUT_MS });
     const tags = JSON.parse(out);
     return (tags && typeof tags === 'object' && tags[distTag]) || null;
   } catch { return null; }
@@ -48,11 +67,14 @@ async function verifyPublish({
   distTag = null,
   fetchVersion = defaultFetchVersion,
   fetchDistTag = defaultFetchDistTag,
-  maxAttempts = 20,
-  intervalMs = 5000,
+  windowMs = DEFAULT_WINDOW_MS,
+  intervalMs = DEFAULT_INTERVAL_MS,
+  maxAttempts = Infinity,
   sleep = defaultSleep,
+  now = Date.now,
 }) {
   let attempts = 0;
+  const start = now();
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const found = fetchVersion(pkg, version);
@@ -64,16 +86,20 @@ async function verifyPublish({
 
       if (distTag && typeof distTag === 'string' && distTag.length > 0) {
         let pointsTo = null;
+        const tagStart = now();
+        const distTagAttempts = Math.min(maxAttempts, DIST_TAG_MAX_ATTEMPTS);
+        const distTagWindowMs = Math.min(DIST_TAG_WINDOW_MS, windowMs);
 
-        for (let dt = 1; dt <= maxAttempts; dt++) {
+        for (let dt = 1; dt <= distTagAttempts; dt++) {
           const tagVal = fetchDistTag(pkg, distTag);
           if (tagVal !== null) {
             pointsTo = tagVal;
             break;
           }
-          if (dt < maxAttempts) {
-            await sleep(intervalMs);
+          if (dt >= distTagAttempts || now() - tagStart + intervalMs > distTagWindowMs) {
+            break;
           }
+          await sleep(intervalMs);
         }
 
         distTagResult = {
@@ -90,13 +116,16 @@ async function verifyPublish({
         version,
         attempts,
         distTag: distTagResult,
+        elapsedMs: now() - start,
       };
     }
 
-    // Not found yet — sleep before retry (but not after the final attempt)
-    if (attempt < maxAttempts) {
-      await sleep(intervalMs);
+    // Not found yet — stop once the next sleep would carry us past the
+    // window (or the attempt cap), otherwise sleep before retrying.
+    if (attempt >= maxAttempts || now() - start + intervalMs > windowMs) {
+      break;
     }
+    await sleep(intervalMs);
   }
 
   return {
@@ -106,6 +135,7 @@ async function verifyPublish({
     version,
     attempts,
     distTag: null,
+    elapsedMs: now() - start,
   };
 }
 
@@ -116,8 +146,9 @@ function parseArgs(argv) {
     pkg: null,
     version: null,
     distTag: null,
-    maxAttempts: 20,
-    intervalMs: 5000,
+    windowMs: DEFAULT_WINDOW_MS,
+    intervalMs: DEFAULT_INTERVAL_MS,
+    maxAttempts: Infinity,
     json: false,
   };
 
@@ -133,8 +164,9 @@ function parseArgs(argv) {
         '  --package <s>       npm package name (required)\n' +
         '  --version <s>       version to verify (required)\n' +
         '  --dist-tag <s>      dist-tag to report (optional, informational only)\n' +
-        '  --max-attempts <n>  max retry attempts (default: 20)\n' +
-        '  --interval-ms <n>   ms between retries (default: 5000)\n' +
+        `  --window-ms <n>     total wall-clock ms to keep retrying (default: ${DEFAULT_WINDOW_MS})\n` +
+        `  --max-attempts <n>  optional cap on attempts (default: unlimited within the window)\n` +
+        `  --interval-ms <n>   ms between retries (default: ${DEFAULT_INTERVAL_MS})\n` +
         '  --json              emit structured JSON output\n' +
         '  --help, -h          show this help\n'
       );
@@ -157,6 +189,16 @@ function parseArgs(argv) {
         throw new ExitError(2, 'error: --dist-tag requires a value');
       }
       opts.distTag = val;
+    } else if (arg === '--window-ms') {
+      const val = args.shift();
+      if (!val || val.startsWith('-')) {
+        throw new ExitError(2, 'error: --window-ms requires a value');
+      }
+      const n = parseInt(val, 10);
+      if (isNaN(n) || n < 1) {
+        throw new ExitError(2, 'error: --window-ms must be a positive integer');
+      }
+      opts.windowMs = n;
     } else if (arg === '--max-attempts') {
       const val = args.shift();
       if (!val || val.startsWith('-')) {
@@ -202,6 +244,7 @@ async function main() {
     pkg: opts.pkg,
     version: opts.version,
     distTag: opts.distTag,
+    windowMs: opts.windowMs,
     maxAttempts: opts.maxAttempts,
     intervalMs: opts.intervalMs,
   });
@@ -223,7 +266,7 @@ async function main() {
       }
     } else {
       process.stdout.write(
-        `::error::Published version verification failed. ${result.pkg}@${result.version} not found after ${result.attempts} attempt(s)\n`
+        `::error::Published version verification failed. ${result.pkg}@${result.version} not found after ${result.attempts} attempt(s) over ${Math.round(result.elapsedMs / 1000)}s\n`
       );
     }
   }
@@ -237,4 +280,15 @@ if (require.main === module) {
   runMain(main);
 }
 
-module.exports = { verifyPublish, parseArgs, REASON, defaultFetchVersion, defaultFetchDistTag };
+module.exports = {
+  verifyPublish,
+  parseArgs,
+  REASON,
+  defaultFetchVersion,
+  defaultFetchDistTag,
+  DEFAULT_WINDOW_MS,
+  DEFAULT_INTERVAL_MS,
+  DIST_TAG_MAX_ATTEMPTS,
+  DIST_TAG_WINDOW_MS,
+  NPM_VIEW_TIMEOUT_MS,
+};
