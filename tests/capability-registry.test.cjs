@@ -6173,6 +6173,7 @@ describe('#1747: new-project config emits only schema-recognized provider keys',
     'ref_search',
     'perplexity',
     'jina',
+    'serply_search',
   ];
 
   test('the four previously-missing provider keys are in VALID_CONFIG_KEYS', () => {

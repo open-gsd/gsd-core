@@ -64,7 +64,7 @@ describe('research-provider property: classifyConfidence never throws', () => {
 //   3. authority === 'official' (context7, ref) → MEDIUM  (no legitimacyVerdict)
 //   4. authority === 'scrape'   (jina, firecrawl) → MEDIUM (no legitimacyVerdict)
 //   5. legitimacyVerdict 'OK' + unknown provider  → MEDIUM (groundTruth but no authority)
-//   6. authority === 'web' (exa/tavily/brave/perplexity/websearch)
+//   6. authority === 'web' (exa/tavily/brave/perplexity/serply/websearch)
 //        + verifiedAgainstOfficial === true  → MEDIUM
 //   7. everything else (web without verification, unknown provider)  → LOW
 // ---------------------------------------------------------------------------
@@ -102,6 +102,13 @@ describe('research-provider boundary: HIGH classification', () => {
   test('tavily (web) + OK verdict → HIGH', () => {
     assert.equal(
       classifyConfidence({ provider: 'tavily', legitimacyVerdict: 'OK' }),
+      'HIGH'
+    );
+  });
+
+  test('serply (web) + OK verdict → HIGH', () => {
+    assert.equal(
+      classifyConfidence({ provider: 'serply', legitimacyVerdict: 'OK' }),
       'HIGH'
     );
   });
@@ -164,6 +171,13 @@ describe('research-provider boundary: MEDIUM classification', () => {
   test('tavily + verifiedAgainstOfficial:true (no verdict) → MEDIUM', () => {
     assert.equal(
       classifyConfidence({ provider: 'tavily', verifiedAgainstOfficial: true }),
+      'MEDIUM'
+    );
+  });
+
+  test('serply + verifiedAgainstOfficial:true (no verdict) → MEDIUM', () => {
+    assert.equal(
+      classifyConfidence({ provider: 'serply', verifiedAgainstOfficial: true }),
       'MEDIUM'
     );
   });
@@ -232,6 +246,13 @@ describe('research-provider boundary: LOW classification', () => {
   test('brave, no verdict → LOW', () => {
     assert.equal(
       classifyConfidence({ provider: 'brave' }),
+      'LOW'
+    );
+  });
+
+  test('serply, no verdict → LOW', () => {
+    assert.equal(
+      classifyConfidence({ provider: 'serply' }),
       'LOW'
     );
   });

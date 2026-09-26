@@ -34,6 +34,7 @@ interface ProviderAvailabilityConfig {
   ref_search?: unknown;
   perplexity?: unknown;
   jina?: unknown;
+  serply_search?: unknown;
   [key: string]: unknown;
 }
 
@@ -103,7 +104,7 @@ interface PlanResearchResult {
 
 const PROVIDER_WATERFALL: ProviderWaterfall = {
   docs: ['context7', 'ref', 'jina', 'websearch'],
-  web: ['exa', 'tavily', 'perplexity', 'brave', 'websearch'],
+  web: ['exa', 'tavily', 'perplexity', 'brave', 'serply', 'websearch'],
   scrape: ['firecrawl', 'jina'],
 };
 
@@ -140,6 +141,7 @@ function authorityOf(provider: unknown): ProviderAuthority {
     case 'tavily':
     case 'perplexity':
     case 'brave':
+    case 'serply':
     case 'websearch':
       return 'web';
     default:
@@ -198,6 +200,7 @@ function providerAvailability(config?: ProviderAvailabilityConfig): Record<strin
     firecrawl: Boolean(cfg.firecrawl),
     ref: Boolean(cfg.ref_search),
     perplexity: Boolean(cfg.perplexity),
+    serply: Boolean(cfg.serply_search),
   };
 }
 

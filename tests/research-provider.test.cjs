@@ -35,6 +35,7 @@ const FULL_CONFIG = {
   firecrawl: true,
   ref_search: true,
   perplexity: true,
+  serply_search: true,
 };
 
 // ---------------------------------------------------------------------------
@@ -193,6 +194,19 @@ describe('research-provider: providerAvailability', () => {
     const item = result.items[0];
     assert.equal(item.fetch.provider, 'tavily');
   });
+
+  test('planResearch web question with only serply enabled picks serply', async () => {
+    const result = await planResearch({
+      questions: [{ text: 'latest trends in AI', kind: 'web' }],
+      ecosystem: 'npm',
+      cwd: '/tmp',
+      config: { serply_search: true },
+      store: makeFakeStore({ hit: false, stale: false }),
+    });
+
+    const item = result.items[0];
+    assert.equal(item.fetch.provider, 'serply');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -208,6 +222,12 @@ describe('research-provider: PROVIDER_WATERFALL shape', () => {
   test('web array exists and contains exa', () => {
     assert.ok(Array.isArray(PROVIDER_WATERFALL.web));
     assert.ok(PROVIDER_WATERFALL.web.includes('exa'));
+  });
+
+  test('serply sits after brave and before the websearch terminal', () => {
+    const web = PROVIDER_WATERFALL.web;
+    assert.equal(web.indexOf('serply'), web.indexOf('brave') + 1);
+    assert.equal(web.indexOf('websearch'), web.indexOf('serply') + 1);
   });
 
   test('scrape array exists and contains firecrawl', () => {
@@ -242,6 +262,7 @@ describe('research-provider: terminal fallback to websearch', () => {
       firecrawl: false,
       ref_search: false,
       perplexity: false,
+      serply_search: false,
     };
 
     const result = await planResearch({

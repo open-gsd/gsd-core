@@ -306,6 +306,34 @@ describe('config-ensure-section command', () => {
     assert.strictEqual(config.jina, true);
   });
 
+  test('detects Serply Search from env var', () => {
+    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir, SERPLY_API_KEY: 'test-key' });
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.serply_search, true);
+  });
+
+  test('serply_search is false when env var absent and no key file', () => {
+    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir, SERPLY_API_KEY: '' });
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.serply_search, false);
+  });
+
+  test('detects Serply Search from file-based key', () => {
+    const gsdDir = path.join(tmpDir, '.gsd');
+    fs.mkdirSync(gsdDir, { recursive: true });
+    fs.writeFileSync(path.join(gsdDir, 'serply_api_key'), 'test-key', 'utf-8');
+
+    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir, SERPLY_API_KEY: '' });
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.serply_search, true);
+  });
+
   test('merges user defaults from defaults.json', () => {
     // runGsdTools sandboxes HOME=tmpDir, so defaults.json is written there —
     // no real filesystem side effects, cleanup happens via afterEach.

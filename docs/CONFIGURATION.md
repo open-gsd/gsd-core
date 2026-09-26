@@ -261,6 +261,7 @@ derived from the shipped agent declaration.
 | `ref_search` | boolean | `true`/`false` | auto-detected | Override auto-detection of Ref search API availability. When unset, GSD checks for `REF_API_KEY` env var or `~/.gsd/ref_api_key` file |
 | `perplexity` | boolean | `true`/`false` | auto-detected | Override auto-detection of Perplexity API availability. When unset, GSD checks for `PERPLEXITY_API_KEY` env var or `~/.gsd/perplexity_api_key` file |
 | `jina` | boolean | `true`/`false` | `true` | Override auto-detection of Jina API availability. Jina is a terminal fallback in the docs waterfall and defaults to available (`true`); GSD checks for `JINA_API_KEY` env var or `~/.gsd/jina_api_key` file when an explicit override is needed |
+| `serply_search` | boolean | `true`/`false` | auto-detected | Override auto-detection of Serply search API availability. When unset, GSD checks for `SERPLY_API_KEY` env var or `~/.gsd/serply_api_key` file |
 | `search_gitignored` | boolean | `true`/`false` | `false` | Legacy top-level alias for `planning.search_gitignored`. Prefer the namespaced form; this alias is accepted for backward compatibility |
 
 > **Note:** `granularity` was renamed from `depth` in v1.22.3. Existing configs are auto-migrated.
