@@ -108,9 +108,15 @@ node gsd-tools.cjs state update-progress
 node gsd-tools.cjs state add-decision --summary "..." [--phase N] [--rationale "..."]
 # Or from files:
 node gsd-tools.cjs state add-decision --summary-file path [--rationale-file path]
+# Text-file inputs (--summary-file, --rationale-file, --text-file, --note-file) are
+# read once and copied into STATE.md, so any readable file is accepted, including one
+# in a temp/scratch directory outside the project; a relative path resolves against
+# the project root. A file that cannot be read is refused on stderr with a non-zero
+# exit (reason "usage") and STATE.md is not touched.
 
 # Add/resolve blockers
 node gsd-tools.cjs state add-blocker --text "..."
+node gsd-tools.cjs state add-blocker --text-file path
 node gsd-tools.cjs state resolve-blocker --text "..."
 
 # Record session continuity (at least one of --stopped-at / --resume-file is required)
