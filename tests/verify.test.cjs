@@ -1944,6 +1944,31 @@ if (${JSON.stringify(mode)} === 'enoent-read') {
       assert.strictEqual(r2.success, true);
       assert.strictEqual(JSON.parse(r2.output).all_passed, true);
     });
+
+    test('precondition arm unchanged: a missing plan file keeps the payload-carried-error behavior', () => {
+      const result = runGsdTools('verify artifacts .planning/phases/01-test/NOPE-PLAN.md', tmpDir);
+      // The `{error: ...}` payload declares DEGRADED, which projects to 0 under
+      // v1 — pinned as-is. #4686 changes only the verdict arm; the precondition
+      // arm's exit behavior is out of scope and must not drift silently.
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.error, 'File not found');
+      assert.strictEqual(result.exitCode, 0,
+        `the {error} arm is a different contract path (DEGRADED, not FAIL): ${result.exitCode}`);
+    });
+
+    test('precondition arm unchanged under --exit-contract=v2: the {error} payload still projects DEGRADED (80), not FAIL', () => {
+      const result = runGsdTools(
+        ['--exit-contract=v2', 'verify', 'artifacts', '.planning/phases/01-test/NOPE-PLAN.md'],
+        tmpDir,
+      );
+      // DEGRADED's projection is versioned (0 under v1, 80 under v2); FAIL's
+      // is not. Pinning both edges proves the precondition arm stayed on its
+      // own contract path instead of being swept onto the new verdict band.
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.error, 'File not found');
+      assert.strictEqual(result.exitCode, 80,
+        `DEGRADED projects to 80 under v2: ${result.exitCode}`);
+    });
   });
 });
 
