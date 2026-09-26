@@ -1330,6 +1330,26 @@ node gsd-tools.cjs worktree create \
 
 **`worktree create`** validates and records the manifest entry BEFORE running any git command, then runs `git worktree add` for the validated `{path, branch, base}`, and only on success finalizes the manifest write — a rejected entry or a failed `git worktree add` never leaves a partially-recorded manifest or an unmanifested worktree on disk. `--root` is **mandatory** (#3050): the fail-closed root-confinement check resolves `--path` and `--root` and rejects (`reason:"path_outside_root"`) unless `--path` resolves strictly inside `--root` — this closes a prior gap where an unconfined `--path` (no `--root` check at all) could point a spawned executor's worktree anywhere on the filesystem. Omitting `--root` fails closed with `reason:"root_required"` rather than silently skipping confinement. All other flags share `worktree record-agent`'s validation rules above (`--branch` namespace, non-empty/non-whitespace `--path`/`--branch`/`--base`, `--agent-id` required). It also accepts the same optional `--files` as `record-agent` (#2596).
 
+### Wave-manifest path derivation & discovery (#4853)
+
+Wave manifests coordinate parallel and isolated executor worktrees during phase execution. Rather than residing in ephemeral `$TMPDIR` locations that are lost when an execution session ends unexpectedly, wave manifests use a deterministic, phase-scoped path: `{phase_dir}/wave-{N}-manifest.json`.
+
+If a wave is interrupted mid-flight (crash, turn timeout, interrupt), the manifest remains in place and is fully discoverable by inspecting `{phase_dir}` or using the `worktree manifest-path` verb. When wave cleanup completes successfully, the manifest file is removed.
+
+```bash
+# Derive the wave manifest path for a given phase directory and wave number
+node gsd-tools.cjs worktree manifest-path --phase-dir <dir> --wave <n> [--raw]
+
+# Or resolve via phase ID
+node gsd-tools.cjs worktree manifest-path --phase <phase-id> --wave <n> [--raw]
+
+# Discover all existing wave manifests in a phase directory (sorted by wave number)
+node gsd-tools.cjs worktree manifest-path --phase-dir <dir> [--raw]
+node gsd-tools.cjs worktree manifest-path --phase <phase-id> [--raw]
+```
+
+Passing `--raw` returns bare path string(s) (one per line) suitable for shell assignment (e.g. `WAVE_WORKTREE_MANIFEST=$(...)`). Without `--raw`, structured JSON is returned (`{ ok: true, path, ... }` or `{ ok: true, manifests: [...] }`).
+
 ### Wave-manifest recording
 
 The execute-phase orchestrator records each spawned executor's worktree identity into a wave cleanup manifest so the matching `cleanup-wave` reader can later merge and remove exactly those worktrees.

@@ -371,3 +371,6 @@ qa-report.json
 
 # Scratch PR body files (gh pr create --body-file); never committed
 .pr-body-*.md
+
+# In-flight wave worktree manifests (#4853) — transient coordination files
+.planning/**/wave-*-manifest.json

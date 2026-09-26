@@ -91,6 +91,9 @@ WAVE_PARAM=""; if [[ "$ARGUMENTS" =~ (^|[[:space:]])--wave[[:space:]]+([^[:space
 INIT=$(gsd_run query init.execute-phase "${PHASE_ARG}" $WAVE_PARAM)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 AGENT_SKILLS=$(gsd_run query agent-skills gsd-executor)
+PHASE_DIR=$(printf '%s' "$INIT" | jq -r '.phase_dir // empty')
+PHASE_NUMBER=$(printf '%s' "$INIT" | jq -r '.phase_number // empty')
+export PHASE_DIR PHASE_NUMBER
 ```
 
 Parse JSON for: `executor_model`, `verifier_model`, `commit_docs`, `parallelization`, `branching_strategy`, `branch_name`, `phase_found`, `phase_dir`, `phase_number`, `padded_phase`, `phase_name`, `phase_slug`, `plans`, `incomplete_plans`, `plan_count`, `incomplete_count`, `state_exists`, `roadmap_exists`, `phase_req_ids`, `response_language`, `requirements_path`, `section_manifest`, `threat_id_duplicate_count`.
@@ -567,6 +570,8 @@ increases monotonically across waves. `{status}` is `complete` (success),
    [checkpoint] phase {PHASE_NUMBER} wave {N}/{M} starting, {wave_plan_count} plan(s), {P}/{Q} plans done
    ```
 
+   Set `CURRENT_WAVE={N}` in your shell environment.
+
    Then read each plan's `<objective>`. Extract what's being built and why.
 
    ```
@@ -622,15 +627,20 @@ increases monotonically across waves. `{status}` is `complete` (success),
    DISPATCH_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
    EXPECTED_BRANCH=$(git rev-parse --abbrev-ref HEAD)
     if [ "${USE_WORKTREES:-true}" != "false" ] && [ "${USE_WORKTREES_FOR_PLAN:-true}" != "false" ] && [ -z "${WAVE_WORKTREE_MANIFEST:-}" ]; then
-     M=$(mktemp "${TMPDIR:-/tmp}/gsd-worktree-wave-XXXXXX") && mv "$M" "$M.json" && WAVE_WORKTREE_MANIFEST="$M.json" || exit 1  # XXXXXX must be path-final on BSD/macOS (#1520)
-     # Persist the dispatch-time orchestrator worktree root so wave-cleanup can pin back to the
-     # orchestrator's OWN worktree — NOT `git worktree list`'s first entry (always the main
-     # checkout), which pins a non-primary (per-phase lane) orchestrator off its branch (#630).
-     # Dispatch runs from the orchestrator's lane, so show-toplevel here is the correct root.
-     ORCH_ROOT=$(git rev-parse --show-toplevel)
-     ORCH_ROOT="$ORCH_ROOT" MANIFEST="$WAVE_WORKTREE_MANIFEST" node -e 'const fs=require("fs");fs.writeFileSync(process.env.MANIFEST,JSON.stringify({orchestrator_root:process.env.ORCH_ROOT||null,worktrees:[]})+"\n")'
-     export WAVE_WORKTREE_MANIFEST
-   fi
+      WAVE_NUM="${CURRENT_WAVE:-${WAVE_NUM:-${WAVE:-1}}}"
+      if [ -n "${PHASE_DIR:-}" ]; then
+        WAVE_WORKTREE_MANIFEST=$(gsd_run query worktree.manifest-path --phase-dir "$PHASE_DIR" --wave "$WAVE_NUM" --raw)
+      else
+        WAVE_WORKTREE_MANIFEST=$(gsd_run query worktree.manifest-path --phase "${PHASE_ARG:-${PHASE_NUMBER:-1}}" --wave "$WAVE_NUM" --raw)
+      fi
+      # Persist the dispatch-time orchestrator worktree root so wave-cleanup can pin back to the
+      # orchestrator's OWN worktree — NOT `git worktree list`'s first entry (always the main
+      # checkout), which pins a non-primary (per-phase lane) orchestrator off its branch (#630).
+      # Dispatch runs from the orchestrator's lane, so show-toplevel here is the correct root.
+      ORCH_ROOT=$(git rev-parse --show-toplevel)
+      ORCH_ROOT="$ORCH_ROOT" MANIFEST="$WAVE_WORKTREE_MANIFEST" node -e 'const fs=require("fs");fs.writeFileSync(process.env.MANIFEST,JSON.stringify({orchestrator_root:process.env.ORCH_ROOT||null,worktrees:[]})+"\n")'
+      export WAVE_WORKTREE_MANIFEST
+    fi
    ```
 
    **Isolation model.** The block below is the **`harness-worktree`** path. For `orchestrator-worktree` use the dispatch below it; for `none` use sequential mode. Both are detailed in `execute-phase/steps/executor-isolation-dispatch.md`.
@@ -855,6 +865,8 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    # Fail closed: SDK refusal (safety guard #3174/#3384) must surface — do not swallow exit 1.
    gsd_run query worktree.cleanup-wave --manifest "$WAVE_WORKTREE_MANIFEST" || exit 1
+   rm -f "$WAVE_WORKTREE_MANIFEST"
+   unset WAVE_WORKTREE_MANIFEST
    ```
 
    **Cleanup-tail snippet (use after any wave whose merges did not flow through the templated path above):**
@@ -891,6 +903,8 @@ increases monotonically across waves. `{status}` is `complete` (success),
      fi
    done < "$WT_PATHS_FILE"
    git worktree prune
+   rm -f "$WAVE_WORKTREE_MANIFEST" "$WT_PATHS_FILE"
+   unset WAVE_WORKTREE_MANIFEST
    ```
 
    **When to skip step 5.5:**

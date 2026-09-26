@@ -1750,3 +1750,49 @@ describe('bug #48: orchestrator cwd-drift guard — executable e2e', () => {
 });
   });
 }
+
+describe('durable wave worktree manifest contract (#4853)', () => {
+  const executePhaseContent = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf8');
+
+  test('execute-phase.md initializes WAVE_WORKTREE_MANIFEST using worktree.manifest-path query', () => {
+    assert.match(
+      executePhaseContent,
+      /WAVE_WORKTREE_MANIFEST=\$\(gsd_run query worktree\.manifest-path/,
+      'execute-phase.md must assign WAVE_WORKTREE_MANIFEST using worktree.manifest-path query (#4853)',
+    );
+  });
+
+  test('execute-phase.md removes WAVE_WORKTREE_MANIFEST after cleanup-wave in step 5.5', () => {
+    assert.match(
+      executePhaseContent,
+      /gsd_run query worktree\.cleanup-wave[^\n]*\n\s*rm -f "\$WAVE_WORKTREE_MANIFEST"/,
+      'execute-phase.md must remove $WAVE_WORKTREE_MANIFEST after cleanup-wave in step 5.5 (#4853)',
+    );
+  });
+
+  test('execute-phase.md removes WAVE_WORKTREE_MANIFEST in cleanup-tail snippet', () => {
+    assert.match(
+      executePhaseContent,
+      /rm -f "\$WAVE_WORKTREE_MANIFEST" "\$WT_PATHS_FILE"/,
+      'execute-phase.md must clean up $WAVE_WORKTREE_MANIFEST in cleanup-tail (#4853)',
+    );
+  });
+
+  test('negative control: execute-phase.md does not use literal placeholder text or mktemp for WAVE_WORKTREE_MANIFEST', () => {
+    assert.doesNotMatch(
+      executePhaseContent,
+      /WAVE_WORKTREE_MANIFEST="?\{phase_dir\}/,
+      'execute-phase.md must not assign literal placeholder {phase_dir} to WAVE_WORKTREE_MANIFEST (#4853)',
+    );
+    assert.doesNotMatch(
+      executePhaseContent,
+      /mktemp[^\n]*WAVE_WORKTREE_MANIFEST/,
+      'execute-phase.md must not assign mktemp to WAVE_WORKTREE_MANIFEST (#4853)',
+    );
+    assert.doesNotMatch(
+      executePhaseContent,
+      /WAVE_WORKTREE_MANIFEST=[^\n]*mktemp/,
+      'execute-phase.md must not assign mktemp to WAVE_WORKTREE_MANIFEST (#4853)',
+    );
+  });
+});

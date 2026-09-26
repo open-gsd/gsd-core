@@ -3047,6 +3047,119 @@ function cmdWorktreeWorkerComplete(cwd: string, args: string[] = [], deps: Recor
   write(`${JSON.stringify({ ok: true, alreadyComplete, record }, null, 2)}\n`);
 }
 
+// ─── Durable wave worktree manifests (#4853) ─────────────────────────────────
+// Wave worktree manifests coordinate parallel/isolated executor worktrees
+// during execute-phase. Placing them at a stable, phase-scoped path
+// ({phase_dir}/wave-{N}-manifest.json) rather than a random $TMPDIR file ensures
+// that an interrupted wave (crash, turn end, interrupt) remains reconcilable
+// by subsequent GSD commands (/gsd-health, cleanup-wave) or operators.
+
+/**
+ * #4853: Derives the durable, phase-scoped wave worktree manifest path for a given phase directory and wave.
+ * Schema: `<phaseDir>/wave-<wave>-manifest.json`
+ */
+function resolveWaveManifestPath(phaseDir: string, wave: number | string): string {
+  const normalizedWave = String(wave).trim();
+  return posixNormalize(path.join(phaseDir, `wave-${normalizedWave}-manifest.json`));
+}
+
+/**
+ * #4853: Finds all durable wave worktree manifests left in a phase directory (e.g. from an interrupted wave).
+ * Returns sorted file paths in ascending wave order.
+ */
+function findPhaseWaveManifests(
+  phaseDir: string,
+  deps: { existsSync?: (p: string) => boolean; readdirSync?: (p: string) => string[] } = {}
+): string[] {
+  const existsSync = deps.existsSync || fs.existsSync;
+  const readdirSync = deps.readdirSync || fs.readdirSync;
+  try {
+    if (!existsSync(phaseDir)) return [];
+    const files = readdirSync(phaseDir);
+    return files
+      .filter((file) => /^wave-\d+-manifest\.json$/.test(file))
+      .sort((a, b) => {
+        const matchA = a.match(/^wave-(\d+)-manifest\.json$/);
+        const matchB = b.match(/^wave-(\d+)-manifest\.json$/);
+        const numA = matchA ? parseInt(matchA[1], 10) : 0;
+        const numB = matchB ? parseInt(matchB[1], 10) : 0;
+        return numA - numB;
+      })
+      .map((file) => posixNormalize(path.join(phaseDir, file)));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * #4853: CLI verb: derive or locate durable wave worktree manifest(s).
+ * Usage: worktree manifest-path (--phase-dir <dir> | --phase <phase-id>) [--wave <n>] [--raw]
+ */
+function cmdWorktreeManifestPath(cwd: string, args: string[] = [], deps: Record<string, unknown> = {}): void {
+  const flag = (name: string): string => {
+    const i = args.indexOf(name);
+    if (i < 0 || i + 1 >= args.length) return '';
+    return args[i + 1];
+  };
+  const isRaw = args.includes('--raw');
+  const write = (deps.write as ((s: string) => void)) || ((s: string) => process.stdout.write(s));
+  const writeErr = (deps.writeErr as ((s: string) => void)) || ((s: string) => process.stderr.write(s));
+
+  let phaseDir = flag('--phase-dir');
+  const phaseArg = flag('--phase');
+  const waveArg = flag('--wave');
+
+  if (!phaseDir && !phaseArg) {
+    writeErr('Usage: worktree manifest-path (--phase-dir <dir> | --phase <phase-id>) [--wave <n>] [--raw]\n');
+    process.exitCode = 2;
+    return;
+  }
+
+  if (!phaseDir && phaseArg) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- internal circular-safe lazy load
+      const phaseLocator = require('./phase-locator.cjs') as { findPhaseInternal: (cwd: string, phase: unknown) => { directory?: string } | null };
+      const phaseInfo = phaseLocator.findPhaseInternal(cwd, phaseArg);
+      if (phaseInfo && phaseInfo.directory) {
+        phaseDir = phaseInfo.directory;
+      } else {
+        const hint = `Phase "${phaseArg}" not found under .planning/phases/`;
+        writeErr(`[gsd] worktree.manifest-path: phase_not_found — ${hint}\n`);
+        write(`${JSON.stringify({ ok: false, reason: 'phase_not_found', hint }, null, 2)}\n`);
+        process.exitCode = 1;
+        return;
+      }
+    } catch (err) {
+      writeErr(`[gsd] worktree.manifest-path: phase_lookup_failed — ${(err as Error).message}\n`);
+      write(`${JSON.stringify({ ok: false, reason: 'phase_lookup_failed', error: (err as Error).message }, null, 2)}\n`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  if (waveArg) {
+    const manifestPath = resolveWaveManifestPath(phaseDir, waveArg);
+    if (isRaw) {
+      write(`${manifestPath}\n`);
+    } else {
+      write(`${JSON.stringify({ ok: true, path: manifestPath, phase_dir: phaseDir, wave: waveArg }, null, 2)}\n`);
+    }
+    return;
+  }
+
+  const manifests = findPhaseWaveManifests(phaseDir, {
+    existsSync: deps.existsSync as ((p: string) => boolean) | undefined,
+    readdirSync: deps.readdirSync as ((p: string) => string[]) | undefined,
+  });
+  if (isRaw) {
+    if (manifests.length > 0) {
+      write(`${manifests.join('\n')}\n`);
+    }
+  } else {
+    write(`${JSON.stringify({ ok: true, phase_dir: phaseDir, manifests }, null, 2)}\n`);
+  }
+}
+
 // Unused exports kept for API compatibility
 void parseWorktreeListPaths;
 
@@ -3139,4 +3252,7 @@ export = {
   cmdWorktreeWorkerComplete,
   resolveWorktreeRoot,
   pruneOrphanedWorktrees,
+  resolveWaveManifestPath,
+  findPhaseWaveManifests,
+  cmdWorktreeManifestPath,
 };
