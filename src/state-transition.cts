@@ -543,10 +543,28 @@ export function rebuildStateTransaction(init: StateTransactionInit): StateTransa
 export type StateAssertionRequirement = 'required' | 'best-effort';
 export type StateMutationScope = 'narrow' | 'broad';
 
+/**
+ * What an assertion's `field` names (ADR-4629 §8.2, epic #4629 child C2).
+ * `'field'` (the default when absent — C1's shape) is the vocabulary
+ * `reconcileReportedFields` (src/state.cts) already resolves: a body `Label:`
+ * line, a frontmatter key, or a dotted frontmatter leaf. `'section'` names a
+ * whole body section by its heading text (e.g. `Blockers/Concerns`), because
+ * §8.2 verifies body/section writes and a section is not a `Label:` line.
+ */
+export type StateAssertionTarget = 'field' | 'section';
+
 /** One declared post-state assertion: a frontmatter field or a body section. */
 export type StateFieldAssertion = {
   readonly field: string;
   readonly requirement: StateAssertionRequirement;
+  /** Absent = `'field'` (C1's shape). */
+  readonly target?: StateAssertionTarget;
+  /**
+   * The intended post-write value (trimmed compare against the re-read file).
+   * Absent = the assertion is met only when the write measurably CHANGED the
+   * target — the same measured-delta test `updated[]` uses.
+   */
+  readonly value?: string;
 };
 
 export type StateWriteIntentInit = {
@@ -585,8 +603,27 @@ export function createStateWriteIntent(
     err.code = 'STATE_WRITE_INTENT_TRANSACTION_REQUIRED';
     throw err;
   }
+  // C2 (ADR-4629 §8.2): an unknown `target` is a construction error, never a
+  // silent fall-back to field semantics (a JS caller passing `'sections'`).
+  for (const a of init.assertions ?? []) {
+    if (a.target !== undefined && a.target !== 'field' && a.target !== 'section') {
+      const err = new Error(
+        `createStateWriteIntent: assertion ${JSON.stringify(a.field)} has unknown target ` +
+        `${JSON.stringify(a.target)}; expected 'field' or 'section' (ADR-4629 §8.2).`,
+      ) as Error & { code: string };
+      err.code = 'STATE_WRITE_INTENT_TARGET_INVALID';
+      throw err;
+    }
+  }
+  // C2 (ADR-4629 §8.2): `target` / `value` are copied only when the caller set
+  // them, so a C1-shaped assertion stays exactly `{ field, requirement }`.
   const assertions: ReadonlyArray<StateFieldAssertion> = Object.freeze(
-    (init.assertions ?? []).map((a) => Object.freeze({ field: a.field, requirement: a.requirement })),
+    (init.assertions ?? []).map((a) => Object.freeze({
+      field: a.field,
+      requirement: a.requirement,
+      ...(a.target !== undefined ? { target: a.target } : {}),
+      ...(a.value !== undefined ? { value: a.value } : {}),
+    })),
   );
   return Object.freeze({
     ...transaction,
