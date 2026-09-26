@@ -722,6 +722,8 @@ When `sub_repos` is set and `gsd-tools.cjs` or `gsd-tools query` is invoked from
 
 If none match, the starting directory is returned unchanged. Explicit `--project-dir /path/to/workspace` is idempotent under this resolution.
 
+An explicit `--project-dir` is also the project root for `verification.fingerprint` and the staleness check behind `verification.status` / `phase.complete`, which otherwise derive their root from the phase directory's own ancestor walk-up. This matters when the phase directory is addressed by a path that does not lead back to the project — for example the real path of an externally git-managed `.planning` store. Without the flag the walk-up is unchanged.
+
 ### Auto-Detection
 
 If `.planning/` is in `.gitignore`, `commit_docs` is automatically `false` regardless of config.json. This prevents git errors.

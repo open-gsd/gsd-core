@@ -30,7 +30,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { findProjectRoot } from './project-root.cjs';
+import { resolveProjectRoot } from './project-root.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- io.cjs is an export= CommonJS module
 import io = require('./io.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
@@ -388,7 +388,7 @@ function computeCoveredDigest(
   // Canonicalize the root ONCE — every candidate's realpath is checked against
   // this, not the possibly-symlinked `projectRoot` argument itself. Always via
   // the REAL fs, never fsImpl: `projectRoot` is a trusted anchor the CALLER
-  // derived (findProjectRoot), not attacker-influenced covered-input data —
+  // derived (resolveProjectRoot), not attacker-influenced covered-input data —
   // routing it through a caller-scoped containment seam (e.g. #4155's
   // containmentEnforcingVerificationFs, confined to `.planning/`, a proper
   // SUBSET of `projectRoot`) would reject the root itself and fail every
@@ -1118,7 +1118,7 @@ function readVerificationStatus(
     isStale =
       !hasWellFormedFingerprint ||
       storedVersion === null ||
-      computeCoveredDigest(findProjectRoot(phaseDir), coveredFilesVal, storedVersion, { phaseDir }) !== coveredDigestVal ||
+      computeCoveredDigest(resolveProjectRoot(phaseDir), coveredFilesVal, storedVersion, { phaseDir }) !== coveredDigestVal ||
       !allCurrentArtifactsCovered(phaseDir, coveredFilesVal);
   } else {
     const staleCheck = findStaleVerificationSummary(
@@ -1434,7 +1434,7 @@ function cmdVerificationFingerprint(
     error('at least one covered file required for verification.fingerprint');
     return;
   }
-  const projectRoot = findProjectRoot(phaseDir);
+  const projectRoot = resolveProjectRoot(phaseDir);
   // canonicalizeCoveredFiles here is for the emitted `covered_files` field —
   // computeCoveredDigest canonicalizes its own `coveredFiles` argument
   // internally too (it must, for callers like readVerificationStatus that

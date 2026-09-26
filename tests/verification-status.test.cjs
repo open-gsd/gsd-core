@@ -3189,3 +3189,135 @@ describe('#4806: unparseable VERIFICATION.md frontmatter reports a parse error, 
     assert.equal(result.status, 'passed');
   });
 });
+
+// ─── #4894: --project-dir reaches verification root resolution ───────────────
+//
+// `--project-dir` is validated and honored by the dispatcher, but verification
+// derives its root from a PHASE DIRECTORY — `verification.fingerprint` and the
+// staleness recompute behind `verification.status` / `phase.complete` — and
+// never saw it. Fixture: a project with its own `.git`, `.planning` symlinked
+// to a sibling externally git-managed store, and the phase directory addressed
+// by its REAL store path (the phase-dir walk-up alone lands on the wrong root).
+// Kept in this file, not a new one: lint-test-file-count caps verification.cjs
+// at two test files.
+
+const symlinkType = process.platform === 'win32' ? 'junction' : 'dir';
+
+function fingerprintDigest(result) {
+  assert.ok(result.success, `fingerprint should succeed: ${result.error}`);
+  return JSON.parse(result.output).covered_digest;
+}
+
+describe('#4894 --project-dir reaches verification root resolution', () => {
+  const { runGsdTools } = require('./helpers.cjs');
+  let base;
+  let proj;
+  let store;
+  let realPhaseDir;
+
+  beforeEach(() => {
+    base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4894-')));
+    proj = path.join(base, 'proj');
+    store = path.join(base, 'store');
+    realPhaseDir = path.join(store, 'phases', '01-x');
+    fs.mkdirSync(path.join(proj, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(proj, '.git'));
+    fs.mkdirSync(realPhaseDir, { recursive: true });
+    fs.mkdirSync(path.join(store, '.git'));
+    fs.writeFileSync(path.join(store, 'config.json'), '{}');
+    fs.writeFileSync(path.join(proj, 'src', 'a.txt'), 'hi\n');
+    fs.writeFileSync(path.join(base, 'outside.txt'), 'not in the project\n');
+    fs.symlinkSync(store, path.join(proj, '.planning'), symlinkType);
+  });
+
+  afterEach(() => {
+    cleanup(base);
+  });
+
+  // The reference digest: the equivalent invocation from INSIDE the correct
+  // root, no flag, phase dir addressed through the `.planning` symlink.
+  function referenceDigest() {
+    return fingerprintDigest(
+      runGsdTools(['verification.fingerprint', '.planning/phases/01-x', 'src/a.txt'], proj),
+    );
+  }
+
+  function writeReport(frontmatterBody) {
+    fs.writeFileSync(path.join(realPhaseDir, '01-VERIFICATION.md'), `---\n${frontmatterBody}\n---\n`);
+  }
+
+  function status(args) {
+    const res = runGsdTools(['query', 'verification.status', realPhaseDir, ...args, '--raw'], base);
+    assert.ok(res.success, `verification.status should run: ${res.error}`);
+    return JSON.parse(res.output).status;
+  }
+
+  test('criterion 1: fingerprint under --project-dir (unrelated cwd) matches the in-root, no-flag digest', () => {
+    const digest = fingerprintDigest(
+      runGsdTools(['verification.fingerprint', realPhaseDir, 'src/a.txt', '--project-dir', proj], base),
+    );
+    assert.equal(digest, referenceDigest());
+  });
+
+  test('criterion 2: a report carrying that digest reads passed under --project-dir', () => {
+    const digest = referenceDigest();
+    writeReport(`status: passed\ncovered_files:\n  - src/a.txt\ncovered_digest: "${digest}"`);
+    assert.equal(status(['--project-dir', proj]), 'passed');
+  });
+
+  test('criterion 3: with no --project-dir, the same real-path invocations behave exactly as before', () => {
+    const fp = runGsdTools(['verification.fingerprint', realPhaseDir, 'src/a.txt'], proj);
+    assert.equal(fp.success, false, 'no flag: the phase-dir walk-up still lands on the wrong root');
+    assert.match(fp.error, /could not compute fingerprint/);
+
+    writeReport(`status: passed\ncovered_files:\n  - src/a.txt\ncovered_digest: "${referenceDigest()}"`);
+    assert.equal(status([]), 'stale', 'no flag: the same well-formed report still reads stale');
+  });
+
+  test('criterion 4a: covered-file containment still rejects a path outside the explicit root', () => {
+    const fp = runGsdTools(
+      ['verification.fingerprint', realPhaseDir, '../outside.txt', '--project-dir', proj],
+      base,
+    );
+    assert.equal(fp.success, false);
+    assert.match(fp.error, /escapes the project root|could not compute fingerprint/);
+  });
+
+  test('criterion 4b: a malformed digest pair still fails closed to stale under --project-dir', () => {
+    writeReport('status: passed\ncovered_files:\n  - src/a.txt');
+    assert.equal(status(['--project-dir', proj]), 'stale', 'covered_files without covered_digest');
+
+    writeReport(`status: passed\ncovered_files:\n  - src/a.txt\ncovered_digest: "v2:sha256:${'0'.repeat(64)}"`);
+    assert.equal(status(['--project-dir', proj]), 'stale', 'a digest that does not match the files');
+  });
+
+  // The MCP server never calls setExplicitProjectRoot itself: `gsd_invoke_command`
+  // reaches `dispatchGsdCommand`, which runs each command as a gsd-tools.cjs
+  // SUBPROCESS, so the flag is honored by that child's main(). Pin it through
+  // the real JSON-RPC surface so a future in-process dispatcher cannot silently
+  // drop the flag on this path.
+  test('criterion 5: --project-dir reaches verification through the MCP server (gsd_invoke_command)', () => {
+    const { handleMessage } = require('../gsd-core/bin/lib/mcp-server.cjs');
+    const invoke = (family, subcommand, args) => handleMessage(
+      { jsonrpc: '2.0', id: 1, method: 'tools/call',
+        params: { name: 'gsd_invoke_command', arguments: { family, subcommand, args } } },
+      { cwd: base },
+    ).result;
+
+    const reference = referenceDigest();
+    const fp = invoke('verification', 'fingerprint', [realPhaseDir, 'src/a.txt', '--project-dir', proj]);
+    assert.ok(!fp.isError, `MCP fingerprint should succeed: ${fp.content[0].text}`);
+    assert.equal(fp.content[0].text.trim(), reference, 'MCP --raw digest == in-root CLI digest');
+    assert.ok(invoke('verification', 'fingerprint', [realPhaseDir, 'src/a.txt']).isError,
+      'no flag over MCP: still the wrong root, as before');
+
+    writeReport(`status: passed\ncovered_files:\n  - src/a.txt\ncovered_digest: "${reference}"`);
+    const mcpStatus = (args) => {
+      const r = invoke('query', 'verification.status', [realPhaseDir, ...args]);
+      assert.ok(!r.isError, `MCP verification.status should run: ${r.content[0].text}`);
+      return JSON.parse(r.content[0].text).status;
+    };
+    assert.equal(mcpStatus(['--project-dir', proj]), 'passed');
+    assert.equal(mcpStatus([]), 'stale', 'no flag over MCP: unchanged');
+  });
+});

@@ -5214,6 +5214,10 @@ async function main() {
     cwd = resolvedProjectDir;
     projectDirExplicit = true;
   }
+  // #4894: verification derives its root from a phase directory, not `cwd`, so
+  // hand it the validated explicit root. Always (re)set — `null` when the flag is
+  // absent — so a prior in-process main() call can never leak an override.
+  projectRoot.setExplicitProjectRoot(projectDirExplicit ? cwd : null);
 
   // Resolve worktree root: in a linked worktree, .planning/ lives in the main worktree.
   // However, in monorepo worktrees where the subdirectory itself owns .planning/,

@@ -161,6 +161,7 @@ module.exports = {
   "tests/process-seam.test.cjs",
   "tests/profile-output.test.cjs",
   "tests/profile-pipeline.test.cjs",
+  "tests/project-root.test.cjs",
   "tests/quick-batch.test.cjs",
   "tests/quick-branching.test.cjs",
   "tests/quick-research.test.cjs",

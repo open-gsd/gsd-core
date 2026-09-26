@@ -19,6 +19,23 @@ import os from 'node:os';
 
 const FIND_PROJECT_ROOT_MAX_DEPTH = 10;
 
+// #4894: an operator-supplied `--project-dir` IS the project root — the
+// dispatcher validates it and skips the ancestor walk-up for `cwd`, but code
+// that derives a root from a PHASE DIRECTORY (verification) never sees `cwd`.
+// The dispatcher records the validated root here, once per process, and those
+// callers resolve through `resolveProjectRoot`. `null` (the default, and what
+// the dispatcher sets when the flag is absent) leaves `findProjectRoot`'s
+// walk-up as the only source of truth, so no-flag behavior is unchanged.
+let explicitProjectRoot: string | null = null;
+
+export function setExplicitProjectRoot(root: string | null): void {
+  explicitProjectRoot = root;
+}
+
+export function resolveProjectRoot(startDir: string): string {
+  return explicitProjectRoot ?? findProjectRoot(startDir);
+}
+
 export function findProjectRoot(startDir: string): string {
   let resolvedStart: string;
   try {
@@ -40,12 +57,34 @@ export function findProjectRoot(startDir: string): string {
     // fall through
   }
 
+  // A `.planning` that is itself a symlink is a deliberate hop into a separate
+  // tree (the documented "keep planning content out of the tracked repo"
+  // convention: `.planning -> ~/.gsd-external-planning/<project>/`, its own git
+  // repo). `fs.existsSync(d + '/.git')` DEREFERENCES `d`, so at `d ===
+  // <the .planning symlink path>` it finds the EXTERNAL store's `.git`, and
+  // both isInsideGitRepo/nearestGitRoot misread it as a crossed nested-child-
+  // repo boundary (#2843's guard). `fs.lstatSync` does not dereference its
+  // final path component, so it answers "is `d` ITSELF a symlink" (#4815).
+  //
+  // Deliberately scoped to a symlink named `.planning`, NOT any symlinked
+  // directory: a nested child repo reached through some other symlinked
+  // ancestor is still a real repo boundary, and skipping it would reopen
+  // #2843 through a different trigger.
+  function isSymlinkedPlanningDir(d: string): boolean {
+    if (path.basename(d) !== '.planning') return false;
+    try {
+      return fs.lstatSync(d).isSymbolicLink();
+    } catch {
+      return false;
+    }
+  }
+
   // Walk upward, mirroring isInsideGitRepo from the CJS reference.
   function isInsideGitRepo(candidateParent: string): boolean {
     let d = resolvedStart;
     while (d !== fsRoot) {
       try {
-        if (fs.existsSync(d + path.sep + '.git')) return true;
+        if (!isSymlinkedPlanningDir(d) && fs.existsSync(d + path.sep + '.git')) return true;
       } catch {
         // ignore
       }
@@ -70,7 +109,7 @@ export function findProjectRoot(startDir: string): string {
     while (d !== fsRoot) {
       if (d === upTo) break;
       try {
-        if (fs.existsSync(d + path.sep + '.git')) return d;
+        if (!isSymlinkedPlanningDir(d) && fs.existsSync(d + path.sep + '.git')) return d;
       } catch {
         // ignore
       }
