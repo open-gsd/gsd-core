@@ -164,6 +164,18 @@ function loadPlanContents(phaseDir: string): string[] {
     .map((entry) => readIfExists(path.join(phaseDir, entry)));
 }
 
+// #4939: loadPlanContents answers [] for a path that is not there, and [] reads
+// as "no plan cites anything" — so a phase-dir argument that names no directory
+// (the phase NUMBER in the phase-dir slot) must be told apart BEFORE the scan.
+// A stat failure answers false, the same as a missing path.
+function isExistingDirectory(dirPath: string): boolean {
+  try {
+    return fs.statSync(dirPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 const DESIGNATED_HEADINGS_RE = /^#{1,6}\s+(?:must[_ ]haves?|truths?|tasks?|objective)\b/i;
 // #2372: scanned-tag set must match the planner-canonical surfaces where a D-NN citation
 // is meaningful. `<objective>`/`<tasks>`/`<task>`/`<action>` are the historical core. The
@@ -410,6 +422,16 @@ function cmdDecisionCoveragePlan(projectDir: string, args: string[], raw: boolea
     return;
   }
 
+  // #4939: a phase-dir argument that was GIVEN but is not a directory is a caller
+  // error like #2770's empty context argument and #4794's non-file context path:
+  // no plan was scanned, so nothing was measured. Fail closed with total/covered
+  // null and `uncovered` omitted. An OMITTED phase dir is left to the scan below —
+  // the #4130 `--context <path>` alone tests pin that as a coverage gap.
+  if (phaseDir && !isExistingDirectory(phaseDir)) {
+    output({ passed: false, skipped: false, reason: 'phase directory not found', total: null, covered: null, message: `Decision coverage gate: the phase directory "${positionals[0]}" does not exist or is not a directory, so no plans were scanned. Pass the phase DIRECTORY (e.g. .planning/phases/01-slug), not the phase number.` }, raw, undefined);
+    return;
+  }
+
   const sections = loadPlanContents(phaseDir).map(extractPlanDesignatedSections);
   const uncovered: UncoveredItem[] = [];
   let covered = 0;
@@ -511,6 +533,14 @@ function cmdDecisionCoverageVerify(projectDir: string, args: string[], raw: bool
 
   if (decisions.length === 0) {
     output({ skipped: true, blocking: false, reason: 'no trackable decisions', total: 0, honored: 0, not_honored: [], message: 'No trackable decisions in CONTEXT.md.' }, raw, undefined);
+    return;
+  }
+
+  // #4939: mirror the plan gate. A phase-dir argument that names no directory
+  // means no plan or summary was scanned, so no decision can be reported
+  // not-honored. Warn (verify stays non-blocking) rather than list every decision.
+  if (phaseDir && !isExistingDirectory(phaseDir)) {
+    output({ skipped: false, blocking: false, reason: 'phase directory not found', total: decisions.length, honored: 0, not_honored: [], message: `Decision coverage verify (warning): the phase directory "${args[2]}" does not exist or is not a directory, so no plans or summaries were scanned. Pass the phase DIRECTORY (e.g. .planning/phases/01-slug), not the phase number.` }, raw, undefined);
     return;
   }
 
