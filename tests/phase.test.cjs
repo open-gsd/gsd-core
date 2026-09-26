@@ -9083,7 +9083,8 @@ describe('phase uat-passed — basic pass/fail', () => {
   test('pending UAT → passed:false', () => {
     writeUatFile(phaseDir, 'feature-UAT.md', makePendingUat());
     const result = runGsdTools('phase uat-passed 1', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(result.success, false);
 
     const out = JSON.parse(result.output);
     assert.strictEqual(out.passed, false);
@@ -9094,7 +9095,8 @@ describe('phase uat-passed — basic pass/fail', () => {
   test('false-positive only (fenced block) → passed:false', () => {
     writeUatFile(phaseDir, 'feature-UAT.md', makeFencedFalsePositiveUat());
     const result = runGsdTools('phase uat-passed 1', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(result.success, false);
 
     const out = JSON.parse(result.output);
     assert.strictEqual(out.passed, false,
@@ -9104,7 +9106,8 @@ describe('phase uat-passed — basic pass/fail', () => {
   test('no UAT files → passed:false + no_uat_artifacts:true (fail-closed, no vacuous pass)', () => {
     // Phase directory exists but has no UAT files — fail-closed: absence is NOT a pass
     const result = runGsdTools('phase uat-passed 1', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(result.success, false);
 
     const out = JSON.parse(result.output);
     assert.strictEqual(out.passed, false,
@@ -9132,7 +9135,8 @@ describe('phase uat-passed — --require-verification flag', () => {
   test('--require-verification with no verification file → passed:false', () => {
     writeUatFile(phaseDir, 'feature-UAT.md', makePassingUat());
     const result = runGsdTools('phase uat-passed 1 --require-verification', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(result.success, false);
 
     const out = JSON.parse(result.output);
     assert.strictEqual(out.passed, false,
@@ -9164,7 +9168,8 @@ describe('phase uat-passed — --require-verification flag', () => {
     setMtime(summaryPath, now);
 
     const result = runGsdTools('phase uat-passed 1 --require-verification', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(result.success, false);
 
     const out = JSON.parse(result.output);
     assert.strictEqual(out.passed, false);
@@ -9178,12 +9183,93 @@ describe('phase uat-passed — --require-verification flag', () => {
     writeUatFile(phaseDir, 'feature-UAT.md', makePassingUat());
     writeUatFile(phaseDir, 'feature-VERIFICATION.md', '---\nstatus: complete\n---\n\nLegacy OK.');
     const result = runGsdTools('phase uat-passed 1 --require-verification', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(result.success, false);
 
     const out = JSON.parse(result.output);
     assert.strictEqual(out.passed, false);
     assert.ok(out.blockers.some(b => /verification required/i.test(b)),
       `Expected verification-required blocker, got: ${JSON.stringify(out.blockers)}`);
+  });
+});
+
+// ─── #4686: phase uat-passed exit codes under v1 and v2 ───────────────────────
+
+describe('#4686: phase uat-passed exit code aligns with domain verdict under v1 and v2', () => {
+  let tmpDir;
+  let phaseDir;
+
+  beforeEach(() => {
+    ({ tmpDir, phaseDir } = setupProject('01-feature'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('failing UAT exits 1 under default contract (v1)', () => {
+    writeUatFile(phaseDir, 'feature-UAT.md', makePendingUat());
+    const result = runGsdTools('phase uat-passed 1', tmpDir);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(result.success, false);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.passed, false);
+  });
+
+  test('failing UAT exits 1 under --exit-contract=v2', () => {
+    writeUatFile(phaseDir, 'feature-UAT.md', makePendingUat());
+    const result = runGsdTools('phase uat-passed 1 --exit-contract=v2', tmpDir);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(result.success, false);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.passed, false);
+  });
+
+  test('--require-verification with stale verification exits 1 under default contract (v1)', () => {
+    writeUatFile(phaseDir, 'feature-UAT.md', makePassingUat());
+    const verificationPath = path.join(phaseDir, 'feature-VERIFICATION.md');
+    const summaryPath = path.join(phaseDir, 'feature-SUMMARY.md');
+    writeUatFile(phaseDir, 'feature-VERIFICATION.md', '---\nstatus: passed\n---\n\nVerified OK.');
+    writeUatFile(phaseDir, 'feature-SUMMARY.md', '# Summary\n\nImplementation changed after verification.\n');
+    const now = new Date();
+    setMtime(verificationPath, new Date(now.getTime() - 60_000));
+    setMtime(summaryPath, now);
+
+    const result = runGsdTools('phase uat-passed 1 --require-verification', tmpDir);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(result.success, false);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.passed, false);
+  });
+
+  test('--require-verification with stale verification exits 1 under --exit-contract=v2', () => {
+    writeUatFile(phaseDir, 'feature-UAT.md', makePassingUat());
+    const verificationPath = path.join(phaseDir, 'feature-VERIFICATION.md');
+    const summaryPath = path.join(phaseDir, 'feature-SUMMARY.md');
+    writeUatFile(phaseDir, 'feature-VERIFICATION.md', '---\nstatus: passed\n---\n\nVerified OK.');
+    writeUatFile(phaseDir, 'feature-SUMMARY.md', '# Summary\n\nImplementation changed after verification.\n');
+    const now = new Date();
+    setMtime(verificationPath, new Date(now.getTime() - 60_000));
+    setMtime(summaryPath, now);
+
+    const result = runGsdTools('phase uat-passed 1 --require-verification --exit-contract=v2', tmpDir);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(result.success, false);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.passed, false);
+  });
+
+  test('passing UAT exits 0 under both v1 and v2 contracts', () => {
+    writeUatFile(phaseDir, 'feature-UAT.md', makePassingUat());
+    const r1 = runGsdTools('phase uat-passed 1', tmpDir);
+    assert.strictEqual(r1.exitCode, 0);
+    assert.strictEqual(r1.success, true);
+    assert.strictEqual(JSON.parse(r1.output).passed, true);
+
+    const r2 = runGsdTools('phase uat-passed 1 --exit-contract=v2', tmpDir);
+    assert.strictEqual(r2.exitCode, 0);
+    assert.strictEqual(r2.success, true);
+    assert.strictEqual(JSON.parse(r2.output).passed, true);
   });
 });
 

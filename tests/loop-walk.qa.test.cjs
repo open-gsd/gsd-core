@@ -211,6 +211,51 @@ describe('RunResult classification', () => {
     assert.strictEqual(result.kind, KIND.UNSTRUCTURED_ERROR);
   });
 
+  test('classifies gate predicate exit 1 with a JSON verdict as JSON (#4686)', () => {
+    const rawPhase = {
+      exitCode: 1,
+      stdout: JSON.stringify({ phase: '1', passed: false }),
+      stderr: '',
+      argv: ['phase', 'uat-passed', '1'],
+    };
+    const rPhase = classify(rawPhase);
+    assert.strictEqual(rPhase.kind, KIND.JSON);
+    assert.deepStrictEqual(rPhase.json, { phase: '1', passed: false });
+
+    const rawVerify = {
+      exitCode: 1,
+      stdout: JSON.stringify({ all_passed: false, artifacts: [] }),
+      stderr: '',
+      argv: ['verify', 'artifacts', '01-01-PLAN.md'],
+    };
+    const rVerify = classify(rawVerify);
+    assert.strictEqual(rVerify.kind, KIND.JSON);
+    assert.deepStrictEqual(rVerify.json, { all_passed: false, artifacts: [] });
+  });
+
+  test('gate predicate exit 1 with structured error envelope on stderr classifies as STRUCTURED_ERROR (#4686 control)', () => {
+    const raw = {
+      exitCode: 1,
+      stdout: '',
+      stderr: JSON.stringify({ ok: false, reason: 'missing-phase', message: 'phase number required' }),
+      argv: ['phase', 'uat-passed'],
+    };
+    const result = classify(raw);
+    assert.strictEqual(result.kind, KIND.STRUCTURED_ERROR);
+    assert.strictEqual(result.err.reason, 'missing-phase');
+  });
+
+  test('gate predicate exit 1 with unparseable stdout classifies as UNSTRUCTURED_ERROR (#4686 control)', () => {
+    const raw = {
+      exitCode: 1,
+      stdout: 'Internal error: corrupt file',
+      stderr: '',
+      argv: ['phase', 'uat-passed', '1'],
+    };
+    const result = classify(raw);
+    assert.strictEqual(result.kind, KIND.UNSTRUCTURED_ERROR);
+  });
+
   test('warnings array captures all stderr lines except the last', () => {
     const stderr = ['line1', 'line2', JSON.stringify({ ok: false, reason: 'r', message: 'm' })].join('\n');
     const raw = { exitCode: 1, stdout: '', stderr, argv: ['x'] };

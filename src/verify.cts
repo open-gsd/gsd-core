@@ -47,6 +47,9 @@ const { checkAgentsInstalled, checkCodexModelPosture, checkCodexSandboxPosture }
 import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+import cliExitMod = require('./cli-exit.cjs');
+const { setPendingOutcome } = cliExitMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const { normalizePhaseName, matchPhaseDirs } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1577,6 +1580,12 @@ function cmdVerifyArtifacts(cwd: string, planFilePath: string, raw: boolean): vo
     raw,
     allPassed ? 'valid' : 'invalid',
   );
+  // #4686: negative computed verdict must exit non-zero (exit code 1) and
+  // declare outcome FAIL to the exit-contract seam under both v1 and v2.
+  if (!allPassed) {
+    setPendingOutcome('FAIL');
+    process.exitCode = 1;
+  }
 }
 
 /**

@@ -22,6 +22,9 @@ import { execFileSync } from 'node:child_process';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- io.cjs is an export= CommonJS module
 import ioMod = require('./io.cjs');
 const { output, error, ERROR_REASON, formatDiagnosticToken } = ioMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- cli-exit.cjs is an export= CommonJS module
+import cliExitMod = require('./cli-exit.cjs');
+const { setPendingOutcome } = cliExitMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateContract = require('./state-contract.cjs');
 const { publishStateContract } = stateContract;
@@ -4862,6 +4865,12 @@ function cmdPhaseUatPassed(
   const report = evaluateUatPassed(phaseFullDir, { policy: opts.policy });
 
   output({ phase: phaseNum, ...report }, raw);
+  // #4686: negative computed verdict must exit non-zero (exit code 1) and
+  // declare outcome FAIL to the exit-contract seam under both v1 and v2.
+  if (!report.passed) {
+    setPendingOutcome('FAIL');
+    process.exitCode = 1;
+  }
 }
 
 // #1437 — phase.list-plans: list plan files for a given phase number.
