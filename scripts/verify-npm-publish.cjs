@@ -22,8 +22,10 @@ const REASON = Object.freeze({
 // — well past the old 20 x 5s (~100s) window, which failed the job and
 // skipped the release->main merge and next-version sync. The window bounds
 // wall-clock time (not attempt count) so slow/hung `npm view` calls can't
-// stretch the step: worst case is approximately window + one
-// NPM_VIEW_TIMEOUT_MS + the dist-tag window.
+// stretch the step: worst case is window + DIST_TAG_WINDOW_MS + 2 x
+// NPM_VIEW_TIMEOUT_MS (~13 min: the last version fetch and the last
+// dist-tag fetch can each run to their timeout), under release.yml's
+// 15-min step timeout-minutes.
 const DEFAULT_WINDOW_MS = 10 * 60_000;
 const DEFAULT_INTERVAL_MS = 10_000;
 // The dist-tag lookup is informational only (it never affects `ok`), so once
