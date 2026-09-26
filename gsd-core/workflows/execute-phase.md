@@ -671,15 +671,14 @@ increases monotonically across waves. `{status}` is `complete` (success),
        </worktree_branch_check>
 
        <parallel_execution>
-       You are running as a PARALLEL executor agent in a git worktree. Worktree path safety (cwd-drift, absolute-path guards) is in `worktree-path-safety.md` (loaded below).
+       You are running as a PARALLEL executor agent in a git worktree (ISOLATION=harness-worktree). Worktree path safety (cwd-drift, absolute-path guards) is in `worktree-path-safety.md` (loaded below).
        Run `git commit` normally — hooks run by default. Do NOT pass `--no-verify`
        unless the orchestrator surfaces `workflow.worktree_skip_hooks=true` in this
        prompt; silent bypass violates project CLAUDE.md guidance (#2924).
 
        IMPORTANT: Do NOT modify STATE.md or ROADMAP.md. execute-plan.md
-       auto-detects worktree mode (`.git` is a file, not a directory) and skips
-       shared file updates automatically. The orchestrator updates them centrally
-       after merge.
+       checks worktree isolation mode and skips shared file updates automatically.
+       The orchestrator updates them centrally after merge.
 
        REQUIRED: SUMMARY.md MUST be committed before you return. In worktree mode the
        git_commit_metadata step in execute-plan.md commits SUMMARY.md and REQUIREMENTS.md
@@ -746,7 +745,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    **Sequential mode** (`USE_WORKTREES_FOR_PLAN` is `false` — either project-level `USE_WORKTREES=false`, or per-plan submodule intersection forced it false in step 2.5):
 
-   Omit `isolation="worktree"` from the Agent call. Before composing the prompt, read and execute
+   Omit `isolation="worktree"` from the Agent call. Omit `<worktree_branch_check>` entirely (#4799 — the spawn-time branch guard applies only to harness-isolated worktrees). Before composing the prompt, read and execute
    `execute-phase/steps/sequential-root-pin.md` (#4254) — it owns the sequential root-pin build-time
    embed and the wave serialization rules.
 
@@ -754,7 +753,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    ```
        <sequential_execution>
-       You are running as a SEQUENTIAL executor agent on the main working tree.
+       You are running as a SEQUENTIAL executor agent on the main working tree (ISOLATION=none).
        Use normal git commits (with hooks). Do NOT use --no-verify.
        Run the `<project_root_pin>` guard before your first Edit/Write and before every commit (#4254).
        REQUIRED ORDER: Write SUMMARY.md → commit → only then any narration. No text between Write and commit (truncation risk; #2070 rescue is not primary defense).

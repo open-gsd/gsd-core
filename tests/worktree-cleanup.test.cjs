@@ -410,7 +410,6 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
     test('task_commit_protocol block exists', () => {
       assert.ok(block, 'gsd-executor.md must contain a <task_commit_protocol> block');
     });
-
     test('step 0 enforces positive worktree-agent-* allow-list (#2924 hardening)', () => {
       const codeBlocks = extractFencedCodeBlocks(block);
       const scripts = codeBlocks.map(({ body }) => body).join('\n');
@@ -418,6 +417,19 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
       assert.ok(
         allowListRe.test(scripts),
         'task_commit_protocol step 0 must enforce a positive allow-list matching ^((worktree-)?agent-|worktree-wf_) in addition to the protected-ref deny-list (#2924/#3021 hardening)'
+      );
+    });
+
+    test('step 0 does not gate allow-list on [ -f .git ] alone (#4799)', () => {
+      const codeBlocks = extractFencedCodeBlocks(block);
+      const scripts = codeBlocks.map(({ body }) => body).join('\n');
+      assert.ok(
+        !/if\s+\[\s+-f\s+\.git\s+\];\s*then\s*#\s*worktree/.test(scripts),
+        'task_commit_protocol step 0 must not condition the allow-list on [ -f .git ] alone (#4799)'
+      );
+      assert.ok(
+        scripts.includes('ISOLATION'),
+        'task_commit_protocol step 0 must check negotiated ISOLATION mode (#4799)'
       );
     });
   });

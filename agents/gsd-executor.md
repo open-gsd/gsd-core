@@ -503,7 +503,12 @@ if [ "$IS_PROTECTED" != "false" ]; then
   echo "Re-home onto a phase/agent branch (#2924, #3819); override: git.allow_default_branch_commits:true in .planning/config.json." >&2
   exit 1
 fi
-if [ -f .git ]; then  # worktree
+# Worktree-isolation allow-list (#2924, #4799): applies ONLY to agent-isolated
+# worktree dispatches (harness-worktree or orchestrator-worktree), NOT when running
+# sequentially (ISOLATION=none) where commits to non-protected phase branches are allowed.
+# Do NOT condition on [ -f .git ] alone (#4799) — linked phase worktrees have .git files too.
+ISOLATION="${ISOLATION:-$(gsd_run query dispatch-isolation --raw 2>/dev/null || echo "none")}"
+if [ "$ISOLATION" = "harness-worktree" ] || [ "$ISOLATION" = "orchestrator-worktree" ]; then
   # Positive allow-list: HEAD must be on a per-agent branch (`agent-<id>` or
   # legacy `worktree-agent-<id>`). This catches feature/* and any other
   # arbitrary branch that the deny-list would silently allow (#2924, #1995).

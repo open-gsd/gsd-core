@@ -1242,7 +1242,8 @@ function extractExecutorPreCommitBash() {
  * branch reads this from the script's cwd, so the test runs the script with
  * `cwd: scriptDir`.
  */
-function writeExecutorGuardScript(prefix, bash, { branch, headRef, isWorktree, queryResult, queryExit = 0 }) {
+function writeExecutorGuardScript(prefix, bash, { branch, headRef, isWorktree, queryResult, queryExit = 0, isolation }) {
+  const resolvedIsolation = isolation !== undefined ? isolation : (isWorktree ? 'harness-worktree' : 'none');
   const scriptDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   const gitPath = path.join(scriptDir, '.git');
   if (isWorktree) {
@@ -1253,6 +1254,7 @@ function writeExecutorGuardScript(prefix, bash, { branch, headRef, isWorktree, q
   const scriptPath = path.join(scriptDir, 'guard.sh');
   fs.writeFileSync(scriptPath, [
     '#!/usr/bin/env bash',
+    resolvedIsolation ? `export ISOLATION="${resolvedIsolation}"` : '',
     'git() {',
     '  if [ "$1" = symbolic-ref ]; then',
     headRef === 'DETACHED'
@@ -1267,6 +1269,10 @@ function writeExecutorGuardScript(prefix, bash, { branch, headRef, isWorktree, q
     '  fi',
     '}',
     'gsd_run() {',
+    '  if [ "$1" = query ] && [ "$2" = dispatch-isolation ]; then',
+    `    printf "%s\\n" "${resolvedIsolation}"`,
+    '    return 0',
+    '  fi',
     `  if [ "$#" -ne 4 ] || [ "$1" != query ] || [ "$2" != git.base-branch ] || ` +
       `[ "$3" != --is-protected ] || [ "$4" != "${branch}" ]; then`,
     '    printf "unexpected gsd_run invocation: %s\\n" "$*" >&2',
@@ -1278,7 +1284,7 @@ function writeExecutorGuardScript(prefix, bash, { branch, headRef, isWorktree, q
     '}',
     bash,
     'printf "GUARD_PASSED\\n"',
-  ].join('\n'), { mode: 0o755 });
+  ].filter(Boolean).join('\n'), { mode: 0o755 });
   return { scriptDir, scriptPath };
 }
 
@@ -1461,6 +1467,110 @@ describe('#3819: gsd-executor.md pre-commit protected-branch guard', () => {
 
     assert.match(excerpt, /re-run the Step 0/);
     assert.match(excerpt, /#3819/);
+  });
+});
+
+// ─── #4799: gsd-executor.md pre-commit isolation allow-list ─────────────────
+
+describe('#4799: gsd-executor.md pre-commit isolation allow-list', () => {
+  const bash = extractExecutorPreCommitBash();
+
+  test('#4799 sequential linked worktree, branch is non-protected phase branch → continues, GUARD_PASSED', (t) => {
+    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-4799-guard-seq-linked-wt-phase-', bash, {
+      branch: 'feature/phase-48',
+      headRef: 'feature/phase-48',
+      isWorktree: true,
+      isolation: 'none',
+      queryResult: 'false',
+    });
+    t.after(() => cleanup(scriptDir));
+
+    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
+
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.match(result.stdout, /GUARD_PASSED/);
+  });
+
+  test('#4799 negative control: sequential linked worktree on protected branch still halts with exit 1', (t) => {
+    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-4799-guard-seq-linked-wt-protected-', bash, {
+      branch: 'main',
+      headRef: 'main',
+      isWorktree: true,
+      isolation: 'none',
+      queryResult: 'true',
+    });
+    t.after(() => cleanup(scriptDir));
+
+    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
+
+    assert.strictEqual(result.exitCode, 1, result.stderr);
+    assert.match(result.stderr, /protected\/default branch/);
+    assert.doesNotMatch(result.stdout, /GUARD_PASSED/);
+  });
+
+  test('#4799 negative control: isolated worktree on non-agent phase branch still halts with exit 1', (t) => {
+    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-4799-guard-isolated-wt-phase-', bash, {
+      branch: 'feature/phase-48',
+      headRef: 'feature/phase-48',
+      isWorktree: true,
+      isolation: 'harness-worktree',
+      queryResult: 'false',
+    });
+    t.after(() => cleanup(scriptDir));
+
+    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
+
+    assert.strictEqual(result.exitCode, 1, result.stderr);
+    assert.match(result.stderr, /not in the agent-\* \/ worktree-agent-\* \/ worktree-wf_\* namespace/);
+    assert.doesNotMatch(result.stdout, /GUARD_PASSED/);
+  });
+
+  test('#4799 orchestrator-worktree isolation on non-agent branch still halts with exit 1', (t) => {
+    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-4799-guard-orch-wt-nonagent-', bash, {
+      branch: 'feature/phase-48',
+      headRef: 'feature/phase-48',
+      isWorktree: true,
+      isolation: 'orchestrator-worktree',
+      queryResult: 'false',
+    });
+    t.after(() => cleanup(scriptDir));
+
+    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
+
+    assert.strictEqual(result.exitCode, 1, result.stderr);
+    assert.match(result.stderr, /not in the agent-\* \/ worktree-agent-\* \/ worktree-wf_\* namespace/);
+    assert.doesNotMatch(result.stdout, /GUARD_PASSED/);
+  });
+
+  test('#4799 isolated worktree on agent-* branch → continues, GUARD_PASSED', (t) => {
+    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-4799-guard-isolated-wt-agent-', bash, {
+      branch: 'agent-42',
+      headRef: 'agent-42',
+      isWorktree: true,
+      isolation: 'harness-worktree',
+      queryResult: 'false',
+    });
+    t.after(() => cleanup(scriptDir));
+
+    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
+
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.match(result.stdout, /GUARD_PASSED/);
+  });
+
+  // allow-test-rule: source-text-is-the-product
+  // Justification: structural verification that gsd-executor.md does not gate allow-list on [ -f .git ] alone.
+  test('#4799 structural: step 0 does not condition allow-list on [ -f .git ] alone', () => {
+    assert.doesNotMatch(
+      bash,
+      /if\s+\[\s+-f\s+\.git\s+\];\s*then\s*#\s*worktree/m,
+      'step 0 must not gate the agent allow-list on [ -f .git ] alone (#4799)',
+    );
+    assert.match(
+      bash,
+      /ISOLATION=.*harness-worktree.*orchestrator-worktree/s,
+      'step 0 must gate the allow-list on negotiated ISOLATION mode (#4799)',
+    );
   });
 });
 

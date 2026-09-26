@@ -424,7 +424,7 @@ Spawn gsd-executor with plan reference:
 ```
 Agent(
   prompt="
-Execute quick task ${quick_id}.
+Execute quick task ${quick_id} (ISOLATION="${ISOLATION}").
 
 ${ISOLATION === "harness-worktree" ? `
 <worktree_branch_check>

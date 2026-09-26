@@ -436,8 +436,13 @@ merge conflicts).
 Update STATE.md using gsd_run query (or legacy gsd-tools) state mutations:
 
 ```bash
-# Auto-detect parallel mode: .git is a file in worktrees, a directory in main repo
-IS_WORKTREE=$([ -f .git ] && echo "true" || echo "false")
+# Check negotiated isolation mode (#4799): worktree isolation vs sequential execution
+ISOLATION="${ISOLATION:-$(gsd_run query dispatch-isolation --raw 2>/dev/null || echo "none")}"
+if [ "$ISOLATION" = "harness-worktree" ] || [ "$ISOLATION" = "orchestrator-worktree" ]; then
+  IS_WORKTREE="true"
+else
+  IS_WORKTREE="false"
+fi
 
 # Skip in parallel mode — orchestrator handles STATE.md centrally
 if [ "$IS_WORKTREE" != "true" ]; then
@@ -493,9 +498,13 @@ across siblings; the orchestrator owns the post-merge sync centrally
 (see execute-phase.md §5.7, single-writer contract from #1486 / dcb50396).
 
 ```bash
-# Auto-detect worktree mode: .git is a file in worktrees, a directory in main repo.
-# This mirrors the use_worktrees config flag for the executing handler.
-IS_WORKTREE=$([ -f .git ] && echo "true" || echo "false")
+# Check negotiated isolation mode (#4799): worktree isolation vs sequential execution
+ISOLATION="${ISOLATION:-$(gsd_run query dispatch-isolation --raw 2>/dev/null || echo "none")}"
+if [ "$ISOLATION" = "harness-worktree" ] || [ "$ISOLATION" = "orchestrator-worktree" ]; then
+  IS_WORKTREE="true"
+else
+  IS_WORKTREE="false"
+fi
 
 if [ "$IS_WORKTREE" != "true" ]; then
   # use_worktrees: false → this handler is the sole post-plan sync point (#2661)
@@ -532,8 +541,13 @@ execute-phase.md step 5.5).
 Task code already committed per-task. Commit plan metadata:
 
 ```bash
-# Auto-detect parallel mode: .git is a file in worktrees, a directory in main repo
-IS_WORKTREE=$([ -f .git ] && echo "true" || echo "false")
+# Check negotiated isolation mode (#4799): worktree isolation vs sequential execution
+ISOLATION="${ISOLATION:-$(gsd_run query dispatch-isolation --raw 2>/dev/null || echo "none")}"
+if [ "$ISOLATION" = "harness-worktree" ] || [ "$ISOLATION" = "orchestrator-worktree" ]; then
+  IS_WORKTREE="true"
+else
+  IS_WORKTREE="false"
+fi
 
 # In parallel mode: exclude STATE.md and ROADMAP.md (orchestrator commits these)
 if [ "$IS_WORKTREE" = "true" ]; then
