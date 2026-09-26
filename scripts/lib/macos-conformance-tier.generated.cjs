@@ -61,6 +61,7 @@ module.exports = {
   "tests/default-flip-documentation-lint.test.cjs",
   "tests/discuss-phase-power.test.cjs",
   "tests/docs-parity-live-registry.test.cjs",
+  "tests/drift-detection.test.cjs",
   "tests/effort-surface-axis.test.cjs",
   "tests/effort-sync-installed-runtime.test.cjs",
   "tests/emitted-attribution.test.cjs",

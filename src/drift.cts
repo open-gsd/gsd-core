@@ -4,7 +4,7 @@
  * Detects structural drift between a committed codebase and the
  * `.planning/codebase/STRUCTURE.md` map produced by `gsd-codebase-mapper`.
  *
- * Four categories of drift element:
+ * Six categories of drift element:
  *   - new_dir    → a newly-added file whose directory prefix does not appear
  *                  in STRUCTURE.md
  *   - barrel     → a newly-added barrel export at
@@ -12,9 +12,20 @@
  *   - migration  → a newly-added migration file under one of the recognized
  *                  migration directories (supabase, prisma, drizzle, src/migrations, …)
  *   - route      → a newly-added route module under a `routes/` or `api/` dir
+ *   - modified   → a modified file whose directory prefix DOES appear in
+ *                  STRUCTURE.md — the map describes it, and what it describes
+ *                  has changed (#4886)
+ *   - deleted    → a deleted file whose directory prefix appears in
+ *                  STRUCTURE.md — the map describes something that is gone (#4886)
  *
  * Each file is counted at most once; when a file matches multiple categories
- * the most specific category wins (migration > route > barrel > new_dir).
+ * the most specific category wins (migration > route > barrel > new_dir >
+ * modified = deleted). The added-file categories and the modified/deleted
+ * categories are mirror images of one rule: drift is divergence between the
+ * map and the tree. An ordinary added file diverges when the map does NOT
+ * know its directory (a barrel, migration or route addition is drift wherever
+ * it lands); a modified or deleted file diverges when the map DOES. An edit
+ * in territory the map never described was never covered, so it is not drift.
  *
  * Design decisions (see PR for full rubber-duck):
  *   - The library is pure. It takes parsed git diff output and returns a
@@ -40,11 +51,13 @@ import { formatGsdSlash } from './runtime-slash.cjs';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const DRIFT_CATEGORIES = Object.freeze(['new_dir', 'barrel', 'migration', 'route']);
+const DRIFT_CATEGORIES: readonly DriftCategory[] = Object.freeze(
+  ['new_dir', 'barrel', 'migration', 'route', 'modified', 'deleted'] as const,
+);
 
 // Category priority when a single file matches multiple rules.
 // Higher index = more specific = wins.
-const CATEGORY_PRIORITY: Record<string, number> = { new_dir: 0, barrel: 1, route: 2, migration: 3 };
+const CATEGORY_PRIORITY: Record<DriftCategory, number> = { modified: 0, deleted: 0, new_dir: 1, barrel: 2, route: 3, migration: 4 };
 
 const BARREL_RE = /^(packages|apps)\/[^/]+\/src\/index\.(ts|tsx|js|mjs|cjs)$/;
 
@@ -72,7 +85,20 @@ const SAFE_PATH_RE = /^(?!.*\.\.)(?:[A-Za-z0-9_.][A-Za-z0-9_.\-]*)(?:\/[A-Za-z0-
 
 // ─── Classification ──────────────────────────────────────────────────────────
 
-type DriftCategory = 'barrel' | 'migration' | 'route' | 'new_dir';
+// The category set is mirrored at four sites in this file — DRIFT_CATEGORIES,
+// CATEGORY_PRIORITY, the `labels` map, and this union. #4886 added `modified`
+// and `deleted` to three of them and missed this one, which compiled because
+// `DriftElement.category` was `string` and the two maps were `Record<string, _>`
+// — the union documented the set without governing it. Keying both maps by this
+// union makes a seventh category a compile error at every mirror rather than a
+// silent omission at one.
+type DriftCategory =
+  | 'new_dir'
+  | 'barrel'
+  | 'migration'
+  | 'route'
+  | 'modified'
+  | 'deleted';
 
 /**
  * Classify a single file path into a drift category or null.
@@ -111,7 +137,7 @@ function isPathMapped(file: string, structureMd: string): boolean {
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface DriftElement {
-  category: string;
+  category: DriftCategory;
   path: string;
 }
 
@@ -132,6 +158,8 @@ interface DetectDriftResult {
   directive: string;
   spawnMapper: boolean;
   affectedPaths: string[];
+  // Derived prefixes the path allowlist withheld from `affectedPaths` (#4923).
+  droppedPaths: string[];
   threshold: number;
   action: string;
   message: string;
@@ -150,6 +178,7 @@ interface SkippedResult {
   directive: string;
   spawnMapper: false;
   affectedPaths: string[];
+  droppedPaths: string[];
   message: string;
 }
 
@@ -183,17 +212,17 @@ function detectDrift(input: unknown): DetectDriftResult | SkippedResult {
     }
 
     const added = Array.isArray(addedFiles) ? addedFiles.filter((x): x is string => typeof x === 'string') : [];
-    const modified = Array.isArray(modifiedFiles) ? modifiedFiles : [];
-    const deleted = Array.isArray(deletedFiles) ? deletedFiles : [];
+    const modified = Array.isArray(modifiedFiles) ? modifiedFiles.filter((x): x is string => typeof x === 'string') : [];
+    const deleted = Array.isArray(deletedFiles) ? deletedFiles.filter((x): x is string => typeof x === 'string') : [];
 
     // Build elements. One element per file, highest-priority category wins.
     const elements: DriftElement[] = [];
-    const seen = new Map<string, string>();
+    const seen = new Map<string, DriftCategory>();
 
     for (const rawFile of added) {
       const file = posixNormalize(rawFile);
       const specific = classifyFile(file);
-      let category: string | null = specific;
+      let category: DriftCategory | null = specific;
       if (!category) {
         if (!isPathMapped(file, structureMd)) {
           category = 'new_dir';
@@ -205,6 +234,25 @@ function detectDrift(input: unknown): DetectDriftResult | SkippedResult {
       const prior = seen.get(file);
       if (prior && CATEGORY_PRIORITY[prior] >= CATEGORY_PRIORITY[category]) continue;
       seen.set(file, category);
+    }
+
+    // #4886: until this loop existed, `modified` and `deleted` reached only
+    // `counts`, so a map could go arbitrarily stale through edits — the common
+    // change class on a mature repo — and never be flagged at any threshold.
+    // The qualifying predicate is the inverse of the added-file rule above:
+    // an ordinary added file is drift when the map does NOT know its directory
+    // (barrel / migration / route additions count wherever they land); a
+    // modified or deleted file is drift when the map DOES, because the map's
+    // description of it is now unverified. A change in territory the map
+    // never described is not divergence from the map and stays out, as before.
+    for (const [list, category] of [[modified, 'modified'], [deleted, 'deleted']] as const) {
+      for (const rawFile of list) {
+        const file = posixNormalize(rawFile);
+        if (!isPathMapped(file, structureMd)) continue;
+        const prior = seen.get(file);
+        if (prior && CATEGORY_PRIORITY[prior] >= CATEGORY_PRIORITY[category]) continue;
+        seen.set(file, category);
+      }
     }
 
     for (const [file, category] of seen.entries()) {
@@ -222,15 +270,60 @@ function detectDrift(input: unknown): DetectDriftResult | SkippedResult {
     let directive = 'none';
     let spawnMapper = false;
     let affectedPaths: string[] = [];
+    let droppedPaths: string[] = [];
     let message = '';
 
     if (actionRequired) {
       directive = action;
-      affectedPaths = chooseAffectedPaths(elements.map((e) => e.path));
-      if (action === 'auto-remap') {
+      // #4922 review (Major): `sanitizePaths` shipped with zero production callers, so every
+      // consumer of `affectedPaths` received unfiltered repo paths — this result field, which
+      // `cmdVerifyCodebaseDrift` emits as `affected_paths`, AND the `--paths` argument
+      // `buildMessage` splices below. This PR widened the reachable input set for that gap: a
+      // mapped directory whose name carries a shell metacharacter previously reached `--paths`
+      // only via an added file, and now reaches it via an edit or deletion inside it too.
+      // Filtering at this single producer covers both consumers with one call. An unsafe prefix
+      // is dropped from the remediation command only; `elements` still reports every drifted
+      // path (posix-normalized, as it always has been), so the operator is told what drifted
+      // even when it cannot be auto-remapped.
+      const derivedPaths = chooseAffectedPaths(elements.map((e) => e.path));
+      affectedPaths = sanitizePaths(derivedPaths);
+      // #4923: a withheld prefix must be NAMED, not silently subtracted. `elements` lists
+      // the drifted files, but nothing there says which directories were left out of the
+      // remediation command, so a shorter `--paths` list reads as the whole of it.
+      droppedPaths = derivedPaths.filter((p) => !affectedPaths.includes(p));
+      // An EMPTY `affectedPaths` alongside `actionRequired: true` has TWO causes, and
+      // they are not interchangeable. Filtering is the new one. The other predates it:
+      // `chooseAffectedPaths` skips a falsy path, so an empty-string entry CAN yield an
+      // element with no derivable prefix — only where the map does not already count it
+      // as mapped, since `isPathMapped('', md)` is true for any `md` containing a slash
+      // — unreachable from `cmdVerifyCodebaseDrift`,
+      // which drops blank `git diff --name-status` lines, but reachable through this
+      // exported function. Either way there is nothing to scope a remap to, so the
+      // degrade keys on the RESULT being empty rather than on the reason.
+      //
+      // The degrade is on `directive`, not on `spawnMapper`, because that is what the
+      // consumer reads: the execute-phase gate branches on `directive` being
+      // `auto-remap` and then splices `affected_paths` into the mapper's `--paths`
+      // argument. Withholding only `spawnMapper` would leave it spawning a mapper with
+      // an EMPTY `--paths` — an unscoped remap of the whole tree, which is not what the
+      // directive asked for. Drift is still detected and still reported; only the
+      // automation is withheld, and `action` still records what was requested.
+      //
+      // #4923: the degrade fires on ANY withheld prefix, not only when none survives. A
+      // partial remap is not a smaller correct remap: on success the gate stamps
+      // STRUCTURE.md and ARCHITECTURE.md at HEAD, and the next drift check diffs from
+      // that stamp, so a withheld directory's drift would be recorded as mapped without
+      // ever being remapped, and never reported again.
+      if (action === 'auto-remap' && (affectedPaths.length === 0 || droppedPaths.length > 0)) {
+        directive = 'warn';
+      }
+      if (directive === 'auto-remap') {
         spawnMapper = true;
       }
-      message = buildMessage(elements, affectedPaths, action, inp.runtime);
+      // The RESOLVED directive decides the remediation line — otherwise a degraded
+      // auto-remap would still render "Auto-remap scheduled for paths:". The requested
+      // action is passed too, so a degrade can say that it happened.
+      message = buildMessage(elements, affectedPaths, droppedPaths, directive, action, inp.runtime);
     }
 
     return {
@@ -240,6 +333,7 @@ function detectDrift(input: unknown): DetectDriftResult | SkippedResult {
       directive,
       spawnMapper,
       affectedPaths,
+      droppedPaths,
       threshold,
       action,
       message,
@@ -265,11 +359,23 @@ function skipped(reason: string): SkippedResult {
     directive: 'none',
     spawnMapper: false,
     affectedPaths: [],
+    droppedPaths: [],
     message: '',
   };
 }
 
-function buildMessage(elements: DriftElement[], affectedPaths: string[], action: string, runtime: string | undefined): string {
+function buildMessage(
+  elements: DriftElement[],
+  affectedPaths: string[],
+  // Prefixes the allowlist withheld. On the empty-`affectedPaths` branch it is also what
+  // separates "derived, then all withheld" from "none derivable at all".
+  droppedPaths: string[],
+  // The RESOLVED directive. `requestedAction` is what the config asked for; they differ
+  // exactly when a requested auto-remap was degraded.
+  action: string,
+  requestedAction: string,
+  runtime: string | undefined,
+): string {
   const byCat: Record<string, string[]> = {};
   for (const e of elements) {
     if (!byCat[e.category]) byCat[e.category] = [];
@@ -279,32 +385,106 @@ function buildMessage(elements: DriftElement[], affectedPaths: string[], action:
     `Codebase drift detected: ${elements.length} structural element(s) since last mapping.`,
     '',
   ];
-  const labels: Record<string, string> = {
+  const labels: Record<DriftCategory, string> = {
     new_dir: 'New directories',
     barrel: 'New barrel exports',
     migration: 'New migrations',
     route: 'New route modules',
+    modified: 'Modified mapped files',
+    deleted: 'Deleted mapped files',
   };
-  for (const cat of ['new_dir', 'barrel', 'migration', 'route']) {
+  for (const cat of DRIFT_CATEGORIES) {
     if (byCat[cat]) {
       lines.push(`${labels[cat]}:`);
-      for (const p of byCat[cat]) lines.push(`  - ${p}`);
+      for (const p of byCat[cat]) lines.push(`  - ${renderPathForMessage(p)}`);
     }
   }
   lines.push('');
-  if (action === 'auto-remap') {
-    lines.push(`Auto-remap scheduled for paths: ${affectedPaths.join(', ')}`);
-  } else {
-    // drift.cts is a pure library — it must never read env/config. The
-    // caller (verify.cmdVerifyCodebaseDrift) resolves the runtime once and
-    // passes it in via input.runtime so emitted commands match the project
-    // the caller is targeting, not the current process directory.
-    const mapCmd = formatGsdSlash('map-codebase', runtime || 'claude');
+  if (affectedPaths.length > 0) {
+    if (action === 'auto-remap') {
+      lines.push(`Auto-remap scheduled for paths: ${affectedPaths.join(', ')}`);
+    } else {
+      // drift.cts is a pure library — it must never read env/config. The
+      // caller (verify.cmdVerifyCodebaseDrift) resolves the runtime once and
+      // passes it in via input.runtime so emitted commands match the project
+      // the caller is targeting, not the current process directory.
+      const mapCmd = formatGsdSlash('map-codebase', runtime || 'claude');
+      lines.push(
+        `Run ${String(mapCmd)} --paths ${affectedPaths.join(',')} to refresh planning context.`,
+      );
+    }
+  } else if (droppedPaths.length === 0) {
+    // Nothing was withheld, so the cause is that no prefix could be derived at all.
+    // Saying "unsafe" here would send the operator looking for a hostile directory
+    // name that is not there.
     lines.push(
-      `Run ${String(mapCmd)} --paths ${affectedPaths.join(',')} to refresh planning context.`,
+      'No affected path could be derived for the mapper from the elements above. '
+        + 'Refresh planning context by hand.',
+    );
+  }
+  if (droppedPaths.length > 0) {
+    // #4923: name every withheld prefix, whether or not any other survived. Each is
+    // quoted by `quoteForMessage` so a space, a control character or a Unicode line
+    // separator is visible and cannot break the line. The line carries no `--paths`
+    // token: it is a report, not a command.
+    lines.push(
+      `Withheld from the mapper as unsafe to pass: ${droppedPaths.map(quoteForMessage).join(', ')}. `
+        + `Refresh planning context for ${droppedPaths.length === 1 ? 'it' : 'them'} by hand.`,
+    );
+  }
+  if (requestedAction === 'auto-remap' && action !== 'auto-remap') {
+    // An operator who configured auto-remap and got a warn needs to know the automation
+    // was withheld on purpose, and why — otherwise it reads as auto-remap being broken.
+    lines.push(
+      affectedPaths.length > 0
+        ? 'Auto-remap was not run: remapping only the other paths would record the map as '
+          + 'current past the withheld ones.'
+        : 'Auto-remap was not run: no affected path can be passed to the mapper.',
     );
   }
   return lines.join('\n');
+}
+
+// JSON.stringify escapes only the C0 controls, `"`, `\` and lone surrogates. It leaves
+// U+2028 and U+2029 literal, and many renderers break a line on them. It also leaves every
+// other invisible or look-alike character literal: the C1 controls (U+0085 is NEL),
+// zero-width and soft-hyphen break opportunities, the bidirectional marks and overrides,
+// the BOM, and the non-ASCII spaces (U+00A0, U+3000, ...) that render as a space while
+// being a different character. An enumerated escape list misses members, so escape by
+// general category instead: every control (Cc), format (Cf) and separator (Z*) code point
+// except the ASCII space is escaped. JSON.stringify has already escaped the C0 controls,
+// a few in short forms such as `\n`; every other match becomes `\uXXXX`. So a withheld
+// prefix renders as one token that cannot break or reorder the line. An astral code point
+// is written as its UTF-16 surrogate pair, so every token stays valid JSON and reads back
+// exactly. Combining marks (Mn/Me) are left alone on purpose. Some are invisible (U+034F,
+// the variation selectors), but none breaks or reorders the line, and escaping marks would
+// mangle a decomposed accented name.
+const INVISIBLE_IN_MESSAGE_RE = /(?! )[\p{Cc}\p{Cf}\p{Z}]/gu;
+
+// Non-global twin of INVISIBLE_IN_MESSAGE_RE for a presence test: `.test()` on a /g regex
+// carries `lastIndex` between calls and would skip matches on alternate paths.
+const HAS_INVISIBLE_IN_MESSAGE_RE = /(?! )[\p{Cc}\p{Cf}\p{Z}]/u;
+
+// The element list prints drifted paths as they are, which is what an operator wants to
+// read. A path carrying a newline, another control or format character, or a non-ASCII
+// space would then inject lines into, reorder, or disguise the message the gate prints
+// verbatim. That was reachable through an added file before #4886, and the modified/deleted
+// categories widen it to any edit or deletion in mapped territory. So a path carrying a
+// Cc, Cf or Z* code point other than the ASCII space is quoted and escaped by
+// `quoteForMessage`; every other path, combining marks included, prints byte-identical to
+// before.
+function renderPathForMessage(p: string): string {
+  return HAS_INVISIBLE_IN_MESSAGE_RE.test(p) ? quoteForMessage(p) : p;
+}
+
+function quoteForMessage(p: string): string {
+  return JSON.stringify(p).replace(INVISIBLE_IN_MESSAGE_RE, (c) => {
+    let out = '';
+    for (let i = 0; i < c.length; i++) {
+      out += '\\u' + c.charCodeAt(i).toString(16).padStart(4, '0');
+    }
+    return out;
+  });
 }
 
 // ─── Affected paths ──────────────────────────────────────────────────────────
@@ -342,6 +522,15 @@ function sanitizePaths(paths: unknown): string[] {
   for (const p of paths) {
     if (typeof p !== 'string') continue;
     if (p.startsWith('/')) continue;
+    // A path made only of `.` components clears SAFE_PATH_RE — each is shell-safe and
+    // none is traversal — but it denotes the whole repository, so splicing it into
+    // `--paths` produces exactly the unscoped remap this filter and the auto-remap
+    // degrade exist to prevent. It is reachable: `chooseAffectedPaths` takes the first
+    // component, so any `./x` path derives the prefix `.`. Tested component-wise rather
+    // than against the literal `.`, because `./.` and `././.` are the same request
+    // spelled differently and an exact compare admits both. Dropping them here lets the
+    // empty-list degrade take over. `./src` is unaffected — not every component is `.`.
+    if (p.split('/').every((seg) => seg === '.')) continue;
     if (!SAFE_PATH_RE.test(p)) continue;
     out.push(p);
   }

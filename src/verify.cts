@@ -2611,9 +2611,21 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
       // ASCII common case — passes through untouched. Both capture groups are
       // decoded: R/C lines carry old AND new paths, either may be quoted.
       const file = decodeGitQuotedPath(m[3] || m[2]);
+      // A rename is a deletion of its old path as well as an addition of its
+      // new one: git pairs the two into a single R line (at any similarity
+      // score, so a move plus an edit too), and without this the old path never
+      // reached deletedFiles — a `git mv` inside mapped directories left the map
+      // naming files that no longer exist, with no element (#4886). A copy (C)
+      // leaves its source in place, so only its new path counts.
+      if (status === 'R' && m[3]) {
+        const oldPath = decodeGitQuotedPath(m[2]);
+        if (!isPlanningArtifact(oldPath)) deleted.push(oldPath);
+      }
       if (isPlanningArtifact(file)) continue;
       if (status === 'A' || status === 'R' || status === 'C') added.push(file);
-      else if (status === 'M') modified.push(file);
+      // T is a type change at the same path (a file replaced by a symlink or a
+      // submodule): the path survives, but what the map describes there does not.
+      else if (status === 'M' || status === 'T') modified.push(file);
       else if (status === 'D') deleted.push(file);
     }
 
@@ -2655,6 +2667,9 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
       directive: driftResult['directive'],
       spawn_mapper: !!driftResult['spawnMapper'],
       affected_paths: driftResult['affectedPaths'] || [],
+      // #4923: the prefixes withheld from affected_paths. Mapped explicitly like every
+      // field here — a result field this list does not name is never emitted.
+      dropped_paths: driftResult['droppedPaths'] || [],
       elements: driftResult['elements'] || [],
       threshold,
       action,

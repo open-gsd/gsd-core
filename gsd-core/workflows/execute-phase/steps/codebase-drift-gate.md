@@ -22,8 +22,8 @@ DRIFT=$(gsd_run verify codebase-drift 2>/dev/null || echo '{"skipped":true,"reas
 ```
 
 Parse JSON for: `skipped`, `reason`, `action_required`, `directive`,
-`spawn_mapper`, `affected_paths`, `elements`, `threshold`, `action`,
-`last_mapped_commit`, `message`.
+`spawn_mapper`, `affected_paths`, `dropped_paths`, `elements`, `threshold`,
+`action`, `last_mapped_commit`, `message`.
 
 **If `skipped` is true (no STRUCTURE.md, missing git, or any internal error):**
 Log one line — `Codebase drift check skipped: {reason}` — and continue to
@@ -45,13 +45,49 @@ New migrations:
   - {path}
 New route modules:
   - {path}
+Modified mapped files:
+  - {path}
+Deleted mapped files:
+  - {path}
 
 Run /gsd:map-codebase --paths {affected_paths} to refresh planning context.
 ```
 
+A listed path that carries a line break, another control or format character, or a
+non-ASCII space is printed quoted and escaped, so it cannot add lines to the message or
+reorder it; every other path prints as-is.
+
+`affected_paths` is filtered before it is emitted (REQ-DRIFT-04), so a directory
+prefix that is absolute, contains traversal, carries a shell metacharacter, or names
+the repository root (`.`) is withheld from that command and listed in `dropped_paths`
+instead. Whenever any prefix is withheld, the message carries one more line naming
+each, quoted so a space or control character is visible:
+
+```text
+Withheld from the mapper as unsafe to pass: "{prefix}". Refresh planning context for it by hand.
+```
+
+When every prefix is withheld, that line takes the place of the `Run …` line. When no
+prefix could be derived at all, so nothing was withheld and nothing can be passed,
+the last line reads instead:
+
+```text
+No affected path could be derived for the mapper from the elements above. Refresh planning context by hand.
+```
+
+A requested `auto-remap` arrives on this branch whenever any prefix is withheld or
+none can be passed: `directive` degrades to `warn` (`action` still reports
+`auto-remap`) and the message ends `Auto-remap was not run: …`, giving the reason.
+Remapping only the surviving prefixes would let the stamp below record the map as
+current past the withheld ones; the next drift check diffs from that stamp, so their
+drift would never be reported again.
+
 Then continue to `verify_phase_goal`. Do NOT block. Do NOT spawn anything.
 
 **If `action_required` is true AND `directive` is `auto-remap`:**
+
+This branch is reached only when no prefix was withheld (`dropped_paths` is empty),
+so `affected_paths` is every prefix derived from the drift and the stamp below is honest.
 
 First load the mapper agent's skill bundle (the executor's `AGENT_SKILLS`
 from step `init_context` is for `gsd-executor`, not the mapper):

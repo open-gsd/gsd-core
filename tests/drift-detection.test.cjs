@@ -6,7 +6,8 @@
  * GSD Tools Tests — Codebase Drift Detection (#2003)
  *
  * Unit tests for bin/lib/drift.cjs plus CLI surface via verify codebase-drift.
- * Exercises the four drift categories (new dir, barrel, migration, route),
+ * Exercises the six drift categories (new dir, barrel, migration, route,
+ * modified, deleted — the last two since #4886),
  * threshold gating, warn vs. auto-remap, last_mapped_commit round-trip,
  * config validation, mapper --paths passthrough, and graceful failure paths.
  */
@@ -253,6 +254,196 @@ describe('detectDrift — threshold gating', () => {
   });
 });
 
+// ─── Unit: modified / deleted files in mapped territory (#4886) ──────────────
+//
+// Before #4886 the only element-producing loop in detectDrift iterated
+// `addedFiles`; `modifiedFiles` and `deletedFiles` reached the `counts` object
+// and nothing else. A map could go arbitrarily stale through edits — the common
+// change class on a mature repo — and the gate reported `actionRequired: false`
+// at every threshold. Every test below except the over-reach guard ("a change
+// in territory the map never described is not drift") fails on the pre-fix
+// module; that one passes both ways by design and pins the boundary.
+
+describe('detectDrift — modified and deleted files in mapped territory (#4886)', () => {
+  // The normal state of a mapped repo: STRUCTURE.md lists the directories the
+  // changes land in. Verbatim from the issue's reproduction.
+  const structureMd = [
+    '# Structure',
+    '',
+    '- `src/app/` — application modules',
+    '- `src/lib/` — shared helpers',
+    '- `docs/` — documentation',
+    '',
+  ].join('\n');
+
+  test('modified files inside a mapped directory register as drift', () => {
+    const result = detectDrift({
+      addedFiles: [],
+      modifiedFiles: ['src/app/main.py', 'src/lib/util.py'],
+      deletedFiles: [],
+      structureMd,
+      threshold: 1,
+    });
+    assert.strictEqual(result.skipped, false);
+    assert.deepStrictEqual(result.elements, [
+      { category: 'modified', path: 'src/app/main.py' },
+      { category: 'modified', path: 'src/lib/util.py' },
+    ]);
+    assert.strictEqual(result.actionRequired, true);
+    assert.strictEqual(result.directive, 'warn');
+    assert.deepStrictEqual(result.affectedPaths, ['src'],
+      'the remap hint must point the mapper at the subtree the edits landed in');
+  });
+
+  test('deleted files inside a mapped directory register as drift', () => {
+    const result = detectDrift({
+      addedFiles: [],
+      modifiedFiles: [],
+      deletedFiles: ['src/app/old.py'],
+      structureMd,
+      threshold: 1,
+    });
+    assert.deepStrictEqual(result.elements, [{ category: 'deleted', path: 'src/app/old.py' }]);
+    assert.strictEqual(result.actionRequired, true);
+    assert.deepStrictEqual(result.affectedPaths, ['src']);
+  });
+
+  test("the issue's scenario A: three edits and one deletion in mapped dirs at threshold 1", () => {
+    // Reported: elements [] / actionRequired false. `.planning/codebase/…` is
+    // not in the map's territory (the CLI caller filters planning artifacts
+    // before the library ever sees them), so it must not count either way.
+    const result = detectDrift({
+      addedFiles: [],
+      modifiedFiles: ['src/app/main.py', 'src/lib/util.py', '.planning/codebase/ARCHITECTURE.md'],
+      deletedFiles: ['src/app/old.py'],
+      structureMd,
+      threshold: 1,
+    });
+    assert.deepStrictEqual(
+      result.elements.map((e) => `${e.category}:${e.path}`).sort(),
+      ['deleted:src/app/old.py', 'modified:src/app/main.py', 'modified:src/lib/util.py'],
+    );
+    assert.strictEqual(result.actionRequired, true);
+    assert.deepStrictEqual(result.counts, { added: 0, modified: 3, deleted: 1 },
+      'counts stay per-list and unfiltered — they report the diff, not the drift');
+  });
+
+  test("the issue's scenario D: 100 edits and 50 additions inside mapped dirs at the default threshold", () => {
+    // Reported: elements [] / actionRequired false with counts {50, 100, 0}.
+    // The 50 ordinary additions land in mapped directories, so they are still
+    // not drift — the added-file rule is untouched. The 100 edits now are.
+    const modifiedFiles = Array.from({ length: 100 }, (_, i) => `src/app/m${i}.py`);
+    const addedFiles = Array.from({ length: 50 }, (_, i) => `src/lib/a${i}.py`);
+    const result = detectDrift({ addedFiles, modifiedFiles, deletedFiles: [], structureMd, threshold: 3 });
+    assert.strictEqual(result.elements.length, 100);
+    assert.ok(result.elements.every((e) => e.category === 'modified'));
+    assert.strictEqual(result.actionRequired, true);
+    assert.deepStrictEqual(result.counts, { added: 50, modified: 100, deleted: 0 });
+  });
+
+  test('a change in territory the map never described is not drift', () => {
+    // The map never covered these directories, so their edits are not a
+    // divergence from the map. Symmetric with the added-file rule: an
+    // addition is drift OUTSIDE mapped territory, an edit is drift INSIDE it.
+    const result = detectDrift({
+      addedFiles: [],
+      modifiedFiles: ['scratch/notes.txt', 'tools/gen.py'],
+      deletedFiles: ['tools/old.py'],
+      structureMd,
+      threshold: 1,
+    });
+    assert.deepStrictEqual(result.elements, []);
+    assert.strictEqual(result.actionRequired, false);
+    assert.deepStrictEqual(result.counts, { added: 0, modified: 2, deleted: 1 });
+  });
+
+  test('the threshold gates modified elements like any other', () => {
+    const under = detectDrift({
+      addedFiles: [],
+      modifiedFiles: ['src/app/a.py', 'src/app/b.py'],
+      deletedFiles: [],
+      structureMd,
+      threshold: 3,
+    });
+    assert.strictEqual(under.elements.length, 2);
+    assert.strictEqual(under.actionRequired, false, '2 < 3: reported, not actioned');
+    assert.strictEqual(under.directive, 'none');
+
+    const at = detectDrift({
+      addedFiles: [],
+      modifiedFiles: ['src/app/a.py', 'src/app/b.py'],
+      deletedFiles: ['src/lib/c.py'],
+      structureMd,
+      threshold: 3,
+    });
+    assert.strictEqual(at.actionRequired, true, '2 modified + 1 deleted = 3 ≥ 3');
+  });
+
+  test('added-file classification is unchanged when edits are present in the same diff', () => {
+    const result = detectDrift({
+      addedFiles: ['newpkg/thing.py', 'src/lib/added.py', 'prisma/migrations/0001_init/migration.sql'],
+      modifiedFiles: ['src/app/main.py'],
+      deletedFiles: [],
+      structureMd,
+      threshold: 1,
+    });
+    assert.deepStrictEqual(
+      result.elements.map((e) => `${e.category}:${e.path}`).sort(),
+      [
+        'migration:prisma/migrations/0001_init/migration.sql',
+        'modified:src/app/main.py',
+        'new_dir:newpkg/thing.py',
+      ],
+      'src/lib/added.py is an ordinary addition in mapped territory and stays out, as before',
+    );
+  });
+
+  test('the warn message lists modified and deleted files under their own headings and names the affected paths', () => {
+    const result = detectDrift({
+      addedFiles: [],
+      modifiedFiles: ['src/app/main.py'],
+      deletedFiles: ['src/lib/gone.py'],
+      structureMd,
+      threshold: 1,
+      action: 'warn',
+    });
+    assert.match(result.message, /^Codebase drift detected: 2 structural element\(s\) since last mapping\./);
+    assert.match(result.message, /Modified mapped files:\n {2}- src\/app\/main\.py/);
+    assert.match(result.message, /Deleted mapped files:\n {2}- src\/lib\/gone\.py/);
+    assert.match(result.message, /--paths src /);
+  });
+
+  test('auto-remap scopes the mapper to the subtrees the edits landed in', () => {
+    const result = detectDrift({
+      addedFiles: [],
+      modifiedFiles: ['src/app/main.py', 'docs/guide.md'],
+      deletedFiles: [],
+      structureMd,
+      threshold: 1,
+      action: 'auto-remap',
+    });
+    assert.strictEqual(result.spawnMapper, true);
+    assert.deepStrictEqual(result.affectedPaths, ['docs', 'src']);
+    assert.deepStrictEqual(sanitizePaths(result.affectedPaths), ['docs', 'src']);
+  });
+
+  test('non-string entries in modifiedFiles / deletedFiles are ignored, never thrown on', () => {
+    const result = detectDrift({
+      addedFiles: [],
+      modifiedFiles: [null, 42, 'src/app/main.py', undefined],
+      deletedFiles: [{}, 'src/lib/gone.py'],
+      structureMd,
+      threshold: 1,
+    });
+    assert.strictEqual(result.skipped, false);
+    assert.deepStrictEqual(
+      result.elements.map((e) => `${e.category}:${e.path}`).sort(),
+      ['deleted:src/lib/gone.py', 'modified:src/app/main.py'],
+    );
+    assert.deepStrictEqual(result.counts, { added: 0, modified: 1, deleted: 1 });
+  });
+});
+
 // ─── Unit: action routing ────────────────────────────────────────────────────
 
 describe('detectDrift — action routing', () => {
@@ -353,6 +544,379 @@ describe('sanitizePaths', () => {
       ['apps/web', 'packages/ui'],
     );
   });
+
+  // `.` is shell-safe and carries no traversal, so the allowlist regex admits it — but it
+  // names the whole repository, and a mapper scoped to `.` is the unscoped remap the
+  // filter exists to prevent. It is reachable: chooseAffectedPaths takes the first
+  // component, so any `./x` input derives the prefix `.`.
+  test('rejects the repo-root scope, however it is spelled', () => {
+    // Tested component-wise, not against the literal: `./.` and `././.` are the same
+    // request and an exact compare against '.' admits both.
+    assert.deepStrictEqual(sanitizePaths(['.']), []);
+    assert.deepStrictEqual(sanitizePaths(['./.']), []);
+    assert.deepStrictEqual(sanitizePaths(['././.']), []);
+  });
+
+  test('still accepts paths that merely CONTAIN dots', () => {
+    assert.deepStrictEqual(
+      sanitizePaths(['.github', 'a.b', 'src/app.config.js', './src']),
+      ['.github', 'a.b', 'src/app.config.js', './src'],
+    );
+  });
+});
+
+// ─── Regression #4922 review: affectedPaths is sanitized at the producer ─────
+//
+// `sanitizePaths` shipped with zero production callers, so `affectedPaths`
+// reached BOTH of its consumers unfiltered: `cmdVerifyCodebaseDrift`'s
+// `affected_paths` field and the `--paths <list>` command `buildMessage`
+// splices into the warn text. #4886 widened the reachable input set — a mapped
+// directory whose name carries a shell metacharacter previously reached that
+// list only via an ADDED file, and now reaches it via an edit or deletion
+// inside it too. Both tests below fail on the pre-fix module.
+
+describe('detectDrift — affectedPaths is sanitized before it reaches a command', () => {
+  // The unsafe top-level directory is named in STRUCTURE.md, so a file edited
+  // or deleted inside it is "mapped territory" and takes the #4886 loop.
+  const structureMd = [
+    '# Structure',
+    '',
+    '- `we;rm -rf /` — a directory whose name is a shell metacharacter',
+    '- `src/` — ordinary modules',
+    '',
+  ].join('\n');
+
+  test('an unsafe prefix reached via a MODIFIED file is dropped from affectedPaths and from the warn command', () => {
+    const result = detectDrift({
+      addedFiles: [],
+      modifiedFiles: ['we;rm -rf /main.py', 'src/app/main.py'],
+      deletedFiles: [],
+      structureMd,
+      threshold: 1,
+      action: 'warn',
+    });
+    assert.strictEqual(result.skipped, false);
+    assert.deepStrictEqual(result.affectedPaths, ['src'],
+      'the unsafe prefix must not reach affected_paths');
+    // Scope the assertion to the SPLICE SITE. The message also lists the drifted
+    // elements under their category headings; that is a report of what changed,
+    // not a command, and it must keep naming the path verbatim.
+    const pathsLine = result.message.split('\n').find((l) => l.includes('--paths'));
+    assert.ok(pathsLine, 'the warn message carries a --paths remediation command');
+    assert.ok(!pathsLine.includes('rm -rf'),
+      'the unsafe prefix must not be spliced into the --paths argument');
+    assert.match(pathsLine, /--paths src /);
+    assert.ok(
+      result.elements.some((e) => e.category === 'modified' && e.path.startsWith('we;')),
+      'the element list still names the drifted path verbatim',
+    );
+  });
+
+  // Under auto-remap an unsafe prefix no longer reaches a SHORTER remap: any withheld
+  // prefix degrades the directive (#4923), so what must hold is that it reaches neither
+  // the mapper's path list nor the command the degraded warn prints.
+  test('an unsafe prefix reached via a DELETED file reaches no mapper path list', () => {
+    const result = detectDrift({
+      addedFiles: [],
+      modifiedFiles: [],
+      deletedFiles: ['we;rm -rf /gone.py', 'src/lib/gone.py'],
+      structureMd,
+      threshold: 1,
+      action: 'auto-remap',
+    });
+    assert.deepStrictEqual(result.affectedPaths, ['src']);
+    assert.deepStrictEqual(result.droppedPaths, ['we;rm -rf ']);
+    assert.strictEqual(result.directive, 'warn');
+    assert.strictEqual(result.spawnMapper, false);
+    assert.ok(!result.message.includes('Auto-remap scheduled'));
+    const pathsLine = result.message.split('\n').find((l) => l.includes('--paths'));
+    assert.ok(!pathsLine.includes('rm -rf'),
+      'the unsafe prefix must not reach the --paths argument');
+    assert.match(pathsLine, /--paths src /);
+  });
+
+  // Filtering made an EMPTY affectedPaths reachable for the first time: before it was
+  // wired in, chooseAffectedPaths returned at least one prefix per element and nothing
+  // removed any. The execute-phase gate branches on `directive` and splices
+  // `affected_paths` into the mapper's `--paths`, so an undegraded auto-remap here
+  // would spawn an UNSCOPED mapper.
+  const allUnsafeMd = ['# Structure', '', '- `we;rm -rf /` — a hostile directory name', ''].join('\n');
+
+  test('auto-remap degrades to warn when every affected prefix is filtered', () => {
+    const result = detectDrift({
+      addedFiles: [],
+      modifiedFiles: ['we;rm -rf /a.py', 'we;rm -rf /b.py'],
+      deletedFiles: [],
+      structureMd: allUnsafeMd,
+      threshold: 1,
+      action: 'auto-remap',
+    });
+    assert.strictEqual(result.actionRequired, true, 'the drift is still reported');
+    assert.deepStrictEqual(result.affectedPaths, []);
+    assert.strictEqual(result.directive, 'warn',
+      'the gate branches on directive — leaving it auto-remap spawns an unscoped mapper');
+    assert.strictEqual(result.spawnMapper, false);
+    assert.strictEqual(result.action, 'auto-remap',
+      'the REQUESTED action is still reported; only the resolved directive degrades');
+    assert.ok(!result.message.includes('--paths'),
+      'no mapper command is emitted when no path can be passed safely');
+    assert.ok(!result.message.includes('Auto-remap scheduled'));
+    assert.deepStrictEqual(result.droppedPaths, ['we;rm -rf '],
+      'the withheld prefix is reported on the result, not subtracted silently (#4923)');
+    assert.ok(
+      result.message.split('\n').includes(
+        'Withheld from the mapper as unsafe to pass: "we;rm -rf ". Refresh planning context for it by hand.',
+      ),
+      'the explanation must name the cause that actually applies, and the prefix it applies to',
+    );
+    assert.ok(!result.message.includes('could be derived'),
+      'the no-derivable-prefix explanation must not be used for the filtered route');
+    assert.ok(
+      result.message.split('\n').includes(
+        'Auto-remap was not run: no affected path can be passed to the mapper.',
+      ),
+      'a degraded auto-remap says so, rather than reading as auto-remap being broken',
+    );
+    assert.strictEqual(result.elements.length, 2, 'the drifted paths are still enumerated');
+  });
+
+  test('warn with every affected prefix filtered emits no empty --paths command', () => {
+    const result = detectDrift({
+      addedFiles: [],
+      modifiedFiles: ['we;rm -rf /a.py'],
+      deletedFiles: ['we;rm -rf /b.py'],
+      structureMd: allUnsafeMd,
+      threshold: 1,
+      action: 'warn',
+    });
+    assert.strictEqual(result.directive, 'warn');
+    assert.deepStrictEqual(result.affectedPaths, []);
+    assert.ok(!result.message.includes('--paths'));
+    assert.match(result.message, /Refresh planning context for it by hand/);
+  });
+
+  // The SAME degraded state is reachable without any filtering at all: an empty-string
+  // entry is skipped by chooseAffectedPaths, so it yields an element with no prefix.
+  // That route predates the filter — `cmdVerifyCodebaseDrift` cannot produce it, because
+  // it drops blank `git diff --name-status` lines, but `detectDrift` is exported and the
+  // pre-filter module answered it with directive 'auto-remap' and spawnMapper true.
+  test('an element with no usable prefix degrades too — the pre-existing empty-path route', () => {
+    const result = detectDrift({
+      addedFiles: [''],
+      modifiedFiles: [],
+      deletedFiles: [],
+      structureMd: '',
+      threshold: 1,
+      action: 'auto-remap',
+    });
+    assert.strictEqual(result.actionRequired, true);
+    assert.deepStrictEqual(result.affectedPaths, []);
+    assert.strictEqual(result.directive, 'warn');
+    assert.strictEqual(result.spawnMapper, false);
+    assert.ok(!result.message.includes('Auto-remap scheduled'));
+    // The two empty-list causes get DIFFERENT explanations. Nothing was filtered here —
+    // chooseAffectedPaths discarded the empty path before the allowlist saw it — so
+    // telling the operator a prefix was "withheld as unsafe" would send them hunting
+    // for a hostile directory name that does not exist.
+    assert.match(result.message, /No affected path could be derived for the mapper/);
+    assert.deepStrictEqual(result.droppedPaths, []);
+    assert.ok(!result.message.includes('Withheld from the mapper'));
+  });
+
+  test('a repo-root prefix degrades rather than remapping the whole tree', () => {
+    const result = detectDrift({
+      addedFiles: ['./evil.js'],
+      modifiedFiles: [],
+      deletedFiles: [],
+      structureMd: 'x',
+      threshold: 1,
+      action: 'auto-remap',
+    });
+    assert.strictEqual(result.actionRequired, true);
+    assert.deepStrictEqual(result.affectedPaths, [],
+      'chooseAffectedPaths derives "." from a ./ path; it must not survive filtering');
+    assert.strictEqual(result.directive, 'warn');
+    assert.strictEqual(result.spawnMapper, false);
+  });
+
+  // The boundary: the degrade keys on a WITHHELD prefix, never on drift as such. When
+  // every derived prefix survives, auto-remap is scheduled exactly as before.
+  test('nothing withheld keeps auto-remap intact — the degrade is not a blanket', () => {
+    const structureMd = [
+      '# Structure', '', '- `docs/` — documentation', '- `src/` — ordinary modules', '',
+    ].join('\n');
+    const result = detectDrift({
+      addedFiles: [],
+      modifiedFiles: ['docs/guide.md', 'src/app/main.py'],
+      deletedFiles: [],
+      structureMd,
+      threshold: 1,
+      action: 'auto-remap',
+    });
+    assert.strictEqual(result.directive, 'auto-remap');
+    assert.strictEqual(result.spawnMapper, true);
+    assert.deepStrictEqual(result.affectedPaths, ['docs', 'src']);
+    assert.deepStrictEqual(result.droppedPaths, []);
+    assert.ok(result.message.split('\n').includes('Auto-remap scheduled for paths: docs, src'));
+    assert.ok(!result.message.includes('Auto-remap was not run'));
+  });
+});
+
+// ─── Regression #4923: a withheld prefix is named, never silently subtracted ─
+//
+// Filtering at the producer closed the splice, but when SOME prefixes survived and
+// some were dropped, nothing said which were dropped: no field carried them, and the
+// remediation line simply got shorter. The element list above it prints the drifted
+// files, not which directories the command leaves out, so a partial `--paths` read as
+// the whole of it.
+
+describe('detectDrift — a withheld prefix is named in the result and the message (#4923)', () => {
+  const structureMd = '# S\n- `src/`\n';
+  const withheldLine = (msg) => msg.split('\n').find((l) => l.startsWith('Withheld from the mapper'));
+
+  test('warn with one prefix withheld and one surviving names the withheld one', () => {
+    const result = detectDrift({
+      addedFiles: ['bad name/x.ts', 'lib2/a.ts', 'lib2/b.ts'],
+      modifiedFiles: [],
+      deletedFiles: [],
+      structureMd,
+      threshold: 1,
+      action: 'warn',
+    });
+    assert.deepStrictEqual(result.affectedPaths, ['lib2']);
+    assert.deepStrictEqual(result.droppedPaths, ['bad name']);
+    const runLine = result.message.split('\n').find((l) => l.includes('--paths'));
+    assert.match(runLine, /--paths lib2 /);
+    assert.ok(!runLine.includes('bad name'), 'the withheld prefix never reaches the command');
+    assert.strictEqual(
+      withheldLine(result.message),
+      'Withheld from the mapper as unsafe to pass: "bad name". Refresh planning context for it by hand.',
+    );
+  });
+
+  test('every withheld prefix is quoted, so a control character cannot break the line', () => {
+    const result = detectDrift({
+      addedFiles: ['a\nb/x.ts', 'c;d/y.ts', 'lib2/a.ts'],
+      modifiedFiles: [],
+      deletedFiles: [],
+      structureMd,
+      threshold: 1,
+      action: 'warn',
+    });
+    assert.deepStrictEqual(result.droppedPaths, ['a\nb', 'c;d']);
+    assert.strictEqual(
+      withheldLine(result.message),
+      'Withheld from the mapper as unsafe to pass: "a\\nb", "c;d". Refresh planning context for them by hand.',
+    );
+  });
+
+  // JSON.stringify alone leaves U+2028/U+2029 literal, along with the other control,
+  // format and separator code points: C1 controls (NEL), zero-width and soft-hyphen break
+  // opportunities, bidi marks and overrides, the BOM, non-ASCII spaces, and astral format
+  // characters. Each Cc/Cf/Z* code point other than the ASCII space must render as an
+  // escape, and every token must read back. Combining marks are out of scope by design.
+  test('control, format and non-ASCII separator code points are escaped, and each token reads back', () => {
+    const result = detectDrift({
+      addedFiles: [
+        'a\u2028b/x.ts', 'c\u2029d/x.ts', 'e\u0085f/x.ts', 'g\u202eh/x.ts',
+        'i\u200bj/x.ts', 'k\u00adl/x.ts', 'm\u061cn/x.ts', 'o\ufeffp/x.ts', 'q\u2060r/x.ts',
+        's\u3000t/x.ts', 'u\u00a0v/x.ts', 'w\u{e0001}x/x.ts', 'y z/x.ts',
+        'lib2/a.ts',
+      ],
+      modifiedFiles: [],
+      deletedFiles: [],
+      structureMd,
+      threshold: 1,
+      action: 'warn',
+    });
+    assert.strictEqual(result.droppedPaths.length, 13);
+    const line = withheldLine(result.message);
+    assert.ok(!/(?! )[\p{Cc}\p{Cf}\p{Z}]/u.test(line), 'no raw Cc, Cf or non-ASCII Z* code point survives');
+    // Every quoted token is valid JSON and parses back to exactly the withheld prefix,
+    // astral code points included (a `\u{...}` escape would not parse).
+    const tokens = line.match(/"(?:[^"\\]|\\.)*"/g).map((tok) => JSON.parse(tok));
+    assert.deepStrictEqual(tokens, result.droppedPaths);
+    assert.ok(line.includes('"y z"'), 'an ASCII space stays a plain space');
+    for (const esc of [
+      '"a\\u2028b"', '"c\\u2029d"', '"e\\u0085f"', '"g\\u202eh"',
+      '"i\\u200bj"', '"k\\u00adl"', '"m\\u061cn"', '"o\\ufeffp"', '"q\\u2060r"',
+      '"s\\u3000t"', '"u\\u00a0v"', '"w\\udb40\\udc01x"',
+    ]) {
+      assert.ok(line.includes(esc), `the line carries ${esc}`);
+    }
+  });
+
+  // The element list used to print every drifted path raw. A modified file under a mapped
+  // directory whose name carries a newline reached it only through the #4886 categories,
+  // and printed raw it injected a line of its own into the message the gate prints
+  // verbatim. A path carrying any Cc, Cf or non-ASCII Z* code point is now quoted and
+  // escaped; a path without one, a plain space included, still prints raw.
+  test('an element path carrying a newline is escaped in the message; ordinary paths are not', () => {
+    const result = detectDrift({
+      addedFiles: [],
+      modifiedFiles: ['src/evil\nInjected line/b.py', 'src/bad name/c.py', 'src/app/main.py'],
+      deletedFiles: [],
+      structureMd,
+      threshold: 1,
+      action: 'warn',
+    });
+    const lines = result.message.split('\n');
+    assert.ok(!lines.some((l) => l.startsWith('Injected line')), 'no path injects a line of its own');
+    assert.ok(lines.includes('  - "src/evil\\nInjected line/b.py"'), 'the unsafe path is quoted and escaped');
+    assert.ok(lines.includes('  - src/bad name/c.py'), 'a space alone does not trigger quoting');
+    assert.ok(lines.includes('  - src/app/main.py'), 'an ordinary path prints unchanged');
+    assert.ok(result.elements.some((e) => e.path === 'src/evil\nInjected line/b.py'),
+      'the elements data keeps the raw path; only the printed message escapes it');
+  });
+
+  test('nothing withheld: droppedPaths is empty and no withheld line is emitted', () => {
+    const result = detectDrift({
+      addedFiles: ['lib2/a.ts', 'lib3/b.ts'],
+      modifiedFiles: [],
+      deletedFiles: [],
+      structureMd,
+      threshold: 1,
+      action: 'warn',
+    });
+    assert.deepStrictEqual(result.droppedPaths, []);
+    assert.strictEqual(withheldLine(result.message), undefined);
+  });
+
+  // The half that is not cosmetic. On a successful remap the execute-phase gate stamps
+  // STRUCTURE.md and ARCHITECTURE.md at HEAD, and the next check diffs from that stamp.
+  // Remapping only `lib2` would therefore record `bad name/` as mapped without remapping
+  // it, and its drift would never be reported again. The gate never prints `message` on
+  // this branch, so naming the drop there would not reach anyone either.
+  test('auto-remap with one prefix withheld degrades to warn rather than remapping the rest', () => {
+    const result = detectDrift({
+      addedFiles: ['bad name/x.ts', 'lib2/a.ts', 'lib2/b.ts'],
+      modifiedFiles: [],
+      deletedFiles: [],
+      structureMd,
+      threshold: 1,
+      action: 'auto-remap',
+    });
+    assert.strictEqual(result.actionRequired, true);
+    assert.strictEqual(result.directive, 'warn',
+      'a partial auto-remap would be stamped as covering the withheld directory');
+    assert.strictEqual(result.spawnMapper, false);
+    assert.strictEqual(result.action, 'auto-remap', 'the requested action is still reported');
+    assert.deepStrictEqual(result.affectedPaths, ['lib2']);
+    assert.deepStrictEqual(result.droppedPaths, ['bad name']);
+    assert.ok(!result.message.includes('Auto-remap scheduled'));
+    assert.strictEqual(
+      withheldLine(result.message),
+      'Withheld from the mapper as unsafe to pass: "bad name". Refresh planning context for it by hand.',
+    );
+    assert.ok(result.message.split('\n').includes(
+      'Auto-remap was not run: remapping only the other paths would record the map as '
+        + 'current past the withheld ones.',
+    ));
+  });
+
+  test('a skipped result carries an empty droppedPaths', () => {
+    assert.deepStrictEqual(detectDrift({ structureMd: null }).droppedPaths, []);
+  });
 });
 
 // ─── Unit: last_mapped_commit frontmatter round-trip ─────────────────────────
@@ -452,7 +1016,7 @@ describe('detectDrift — defensive paths', () => {
     assert.ok(Array.isArray(DRIFT_CATEGORIES));
     assert.deepStrictEqual(
       [...DRIFT_CATEGORIES].sort(),
-      ['barrel', 'migration', 'new_dir', 'route'],
+      ['barrel', 'deleted', 'migration', 'modified', 'new_dir', 'route'],
     );
   });
 });
@@ -1378,5 +1942,211 @@ describe('verify codebase-drift: an absent baseline is not total drift (#3418)',
     assert.strictEqual(data.block, false);
     assert.strictEqual(data.last_mapped_commit, tree);
     assert.deepStrictEqual(data.elements, []);
+  });
+});
+
+describe('verify codebase-drift: a map that goes stale through edits is flagged (#4886)', () => {
+  let tmp;
+  let structure;
+
+  beforeEach(() => {
+    tmp = createTempGitProject('gsd-drift-4886-');
+    fs.mkdirSync(path.join(tmp, '.planning', 'codebase'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'src', 'app'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'src', 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'src', 'app', 'main.py'), 'print(1)\n');
+    fs.writeFileSync(path.join(tmp, 'src', 'app', 'old.py'), 'print(0)\n');
+    fs.writeFileSync(path.join(tmp, 'src', 'lib', 'util.py'), 'x = 1\n');
+    fs.writeFileSync(path.join(tmp, 'src', 'lib', 'more.py'), 'y = 2\n');
+    structure = path.join(tmp, '.planning', 'codebase', 'STRUCTURE.md');
+    fs.writeFileSync(structure, '# Codebase Structure\n\n- `src/app/` — application modules\n- `src/lib/` — shared helpers\n');
+    fs.writeFileSync(
+      path.join(tmp, '.planning', 'config.json'),
+      JSON.stringify({ workflow: { drift_threshold: 3, drift_action: 'warn' } }),
+    );
+    git(tmp, 'add', '-A');
+    git(tmp, 'commit', '-m', 'map codebase');
+    writeMappedCommit(structure, git(tmp, 'rev-parse', 'HEAD'), '2026-09-20');
+    git(tmp, 'add', '-A');
+    git(tmp, 'commit', '-m', 'stamp the map');
+  });
+  afterEach(() => cleanup(tmp));
+
+  test('edits and a deletion inside mapped directories, no additions, reach the threshold', () => {
+    // Nothing is added and no directory appears — the change class the
+    // detector could not see before #4886.
+    fs.writeFileSync(path.join(tmp, 'src', 'app', 'main.py'), 'print(2)\n');
+    fs.writeFileSync(path.join(tmp, 'src', 'lib', 'util.py'), 'x = 2\n');
+    fs.unlinkSync(path.join(tmp, 'src', 'app', 'old.py'));
+    git(tmp, 'add', '-A');
+    git(tmp, 'commit', '-m', 'edit two files, delete one');
+
+    const r = runGsdTools(['verify', 'codebase-drift'], tmp);
+    assert.strictEqual(r.success, true, r.error);
+    const data = JSON.parse(r.output);
+
+    assert.strictEqual(data.skipped, false);
+    assert.strictEqual(data.action_required, true,
+      'action_required:false here is the reported bug — a stale map read as current (#4886)');
+    assert.strictEqual(data.block, true);
+    assert.strictEqual(data.directive, 'warn');
+    assert.strictEqual(data.spawn_mapper, false);
+    assert.deepStrictEqual(
+      data.elements.map((e) => `${e.category}:${e.path}`).sort(),
+      ['deleted:src/app/old.py', 'modified:src/app/main.py', 'modified:src/lib/util.py'],
+    );
+    assert.deepStrictEqual(data.affected_paths, ['src']);
+    assert.match(data.message, /Modified mapped files:/);
+    assert.match(data.message, /Deleted mapped files:/);
+  });
+
+  test('a single edit stays under the default threshold — reported as an element, not actioned', () => {
+    fs.writeFileSync(path.join(tmp, 'src', 'lib', 'more.py'), 'y = 3\n');
+    git(tmp, 'add', '-A');
+    git(tmp, 'commit', '-m', 'edit one file');
+
+    const data = JSON.parse(runGsdTools(['verify', 'codebase-drift'], tmp).output);
+    assert.strictEqual(data.skipped, false);
+    assert.deepStrictEqual(data.elements, [{ category: 'modified', path: 'src/lib/more.py' }]);
+    assert.strictEqual(data.action_required, false);
+    assert.strictEqual(data.block, false);
+  });
+
+  // `git diff --name-status` reports a moved file as one R line, not D + A, so the
+  // old path never reached deletedFiles and a `git mv` inside mapped directories
+  // left the map describing files that no longer exist. Rename detection is pinned
+  // on for both the precondition diff and the CLI's own diff: a contributor's
+  // `diff.renames=false` would otherwise turn these R lines into D + A, and the
+  // tests would stop exercising the arm they exist for. GIT_CONFIG_PARAMETERS is
+  // cleared too: an outer `git -c diff.renames=false …` exports it, and it outranks
+  // GIT_CONFIG_COUNT, so an inherited value would quietly undo the pin.
+  const RENAMES_ON = {
+    GIT_CONFIG_PARAMETERS: '',
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'diff.renames',
+    GIT_CONFIG_VALUE_0: 'true',
+  };
+
+  test('files renamed inside mapped directories register their old paths as deleted (R100)', () => {
+    git(tmp, 'mv', 'src/app/old.py', 'src/app/older.py');
+    git(tmp, 'mv', 'src/app/main.py', 'src/app/entry.py');
+    git(tmp, 'mv', 'src/lib/util.py', 'src/lib/helpers.py');
+    git(tmp, 'commit', '-m', 'rename three mapped files');
+    // Precondition: git paired all three as pure renames, so this drives the R arm.
+    assert.strictEqual(
+      (git(tmp, '-c', 'diff.renames=true', 'diff', '--name-status', 'HEAD~1', 'HEAD').match(/^R100\t/gm) || []).length, 3);
+
+    const r = runGsdTools(['verify', 'codebase-drift'], tmp, RENAMES_ON);
+    assert.strictEqual(r.success, true, r.error);
+    const data = JSON.parse(r.output);
+    assert.deepStrictEqual(
+      data.elements.map((e) => `${e.category}:${e.path}`).sort(),
+      ['deleted:src/app/main.py', 'deleted:src/app/old.py', 'deleted:src/lib/util.py'],
+    );
+    assert.strictEqual(data.action_required, true,
+      'three moved files left STRUCTURE.md naming paths that no longer exist');
+    assert.deepStrictEqual(data.affected_paths, ['src']);
+  });
+
+  test('a file renamed and edited inside a mapped directory registers its old path as deleted (R<100)', () => {
+    const body = Array.from({ length: 20 }, (_, i) => `line_${i} = ${i}\n`).join('');
+    fs.writeFileSync(path.join(tmp, 'src', 'lib', 'big.py'), body);
+    git(tmp, 'add', '-A');
+    git(tmp, 'commit', '-m', 'add a larger mapped file');
+    const stamp = runGsdTools(['stamp-codebase-map', '--files', 'STRUCTURE.md'], tmp);
+    assert.strictEqual(stamp.success, true, stamp.error);
+    git(tmp, 'add', '-A');
+    git(tmp, 'commit', '-m', 'restamp the map');
+
+    git(tmp, 'mv', 'src/lib/big.py', 'src/lib/large.py');
+    fs.writeFileSync(path.join(tmp, 'src', 'lib', 'large.py'), body.replace('line_0 = 0', 'line_0 = 100'));
+    git(tmp, 'add', '-A');
+    git(tmp, 'commit', '-m', 'rename and edit');
+    // Precondition: a rename with a similarity score below 100, not a pure R100.
+    assert.match(git(tmp, '-c', 'diff.renames=true', 'diff', '--name-status', 'HEAD~1', 'HEAD'), /^R0\d\d\tsrc\/lib\/big\.py\tsrc\/lib\/large\.py$/m);
+
+    const data = JSON.parse(runGsdTools(['verify', 'codebase-drift'], tmp, RENAMES_ON).output);
+    assert.strictEqual(data.skipped, false);
+    assert.deepStrictEqual(data.elements, [{ category: 'deleted', path: 'src/lib/big.py' }]);
+  });
+
+  // A T line is a type change at the same path — a mapped file replaced by a symlink
+  // (or a submodule). The path survives, so it was neither added nor deleted, and
+  // the loop dropped it. The symlink is recorded in the index only (mode 120000), so
+  // the test needs no symlink privilege on Windows.
+  test('a mapped file replaced by a symlink registers as modified (T)', () => {
+    const target = path.join(tmp, 'link-target.txt');
+    fs.writeFileSync(target, 'util.py');
+    const blob = git(tmp, 'hash-object', '-w', target);
+    fs.unlinkSync(target);
+    git(tmp, 'update-index', '--cacheinfo', `120000,${blob},src/lib/more.py`);
+    git(tmp, 'commit', '-m', 'replace a mapped file with a symlink');
+    // Precondition: git reports a type change, the arm under test.
+    assert.match(git(tmp, 'diff', '--name-status', 'HEAD~1', 'HEAD'), /^T\tsrc\/lib\/more\.py$/m);
+
+    const data = JSON.parse(runGsdTools(['verify', 'codebase-drift'], tmp).output);
+    assert.strictEqual(data.skipped, false);
+    assert.deepStrictEqual(data.elements, [{ category: 'modified', path: 'src/lib/more.py' }]);
+  });
+
+  // #4923: cmdVerifyCodebaseDrift builds its payload by naming each field, so a result
+  // field it does not name is never emitted. This drives the real CLI over a real tree.
+  test('a withheld prefix is emitted as dropped_paths, beside the affected_paths it left', () => {
+    fs.mkdirSync(path.join(tmp, 'bad name'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'lib2'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'bad name', 'a.py'), 'a = 1\n');
+    fs.writeFileSync(path.join(tmp, 'lib2', 'b.py'), 'b = 1\n');
+    fs.writeFileSync(path.join(tmp, 'lib2', 'c.py'), 'c = 1\n');
+    git(tmp, 'add', '-A');
+    git(tmp, 'commit', '-m', 'add two unmapped directories, one with an unsafe name');
+
+    const r = runGsdTools(['verify', 'codebase-drift'], tmp);
+    assert.strictEqual(r.success, true, r.error);
+    const data = JSON.parse(r.output);
+    assert.strictEqual(data.action_required, true);
+    assert.deepStrictEqual(data.affected_paths, ['lib2']);
+    assert.deepStrictEqual(data.dropped_paths, ['bad name']);
+    assert.match(data.message, /Withheld from the mapper as unsafe to pass: "bad name"\./);
+  });
+
+  test('under drift_action auto-remap, a withheld prefix degrades the directive the gate branches on', () => {
+    fs.writeFileSync(
+      path.join(tmp, '.planning', 'config.json'),
+      JSON.stringify({ workflow: { drift_threshold: 3, drift_action: 'auto-remap' } }),
+    );
+    fs.mkdirSync(path.join(tmp, 'bad name'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'lib2'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'bad name', 'a.py'), 'a = 1\n');
+    fs.writeFileSync(path.join(tmp, 'lib2', 'b.py'), 'b = 1\n');
+    fs.writeFileSync(path.join(tmp, 'lib2', 'c.py'), 'c = 1\n');
+    git(tmp, 'add', '-A');
+    git(tmp, 'commit', '-m', 'add two unmapped directories, one with an unsafe name');
+
+    const data = JSON.parse(runGsdTools(['verify', 'codebase-drift'], tmp).output);
+    assert.strictEqual(data.action, 'auto-remap');
+    // Both keys the two execute-phase consumers spawn on must be off.
+    assert.strictEqual(data.directive, 'warn');
+    assert.strictEqual(data.spawn_mapper, false);
+    assert.deepStrictEqual(data.affected_paths, ['lib2']);
+    assert.deepStrictEqual(data.dropped_paths, ['bad name']);
+  });
+
+  test('re-stamping the map after a remap returns the gate to quiet', () => {
+    fs.writeFileSync(path.join(tmp, 'src', 'app', 'main.py'), 'print(2)\n');
+    fs.writeFileSync(path.join(tmp, 'src', 'lib', 'util.py'), 'x = 2\n');
+    fs.unlinkSync(path.join(tmp, 'src', 'app', 'old.py'));
+    git(tmp, 'add', '-A');
+    git(tmp, 'commit', '-m', 'edit two files, delete one');
+    assert.strictEqual(JSON.parse(runGsdTools(['verify', 'codebase-drift'], tmp).output).action_required, true);
+
+    const r = runGsdTools(['stamp-codebase-map', '--files', 'STRUCTURE.md'], tmp);
+    assert.strictEqual(r.success, true, r.error);
+    git(tmp, 'add', '-A');
+    git(tmp, 'commit', '-m', 'remap');
+
+    const data = JSON.parse(runGsdTools(['verify', 'codebase-drift'], tmp).output);
+    assert.strictEqual(data.skipped, false);
+    assert.deepStrictEqual(data.elements, []);
+    assert.strictEqual(data.action_required, false);
   });
 });
