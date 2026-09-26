@@ -4767,6 +4767,53 @@ describe('progress counters correct after plan execution (#1589)', () => {
   });
 });
 
+// #4967: the ROADMAP floor on completed_phases (#4129) reads each Progress-table
+// Status cell by its leading status token, so operator prose kept after the
+// token (#4925) no longer drops a complete phase out of the count.
+describe('state json counts a Progress-table Status cell by its leading token (#4967)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createFixture();
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-alpha'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '02-beta'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '# Project State\n\n## Current Position\n\nPhase: 2 of 2 (Beta)\n');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function progressFor(phase1Status) {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), [
+      '# Roadmap',
+      '',
+      '## Progress',
+      '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|----------------|--------|-----------|',
+      `| 1. Alpha | 1/1 | ${phase1Status} | 2026-09-20 |`,
+      '| 2. Beta | 1/2 | In Progress — gap closure 1/2, see 02-VERIFICATION.md | - |',
+      '',
+    ].join('\n'));
+    const result = runGsdTools('state json', tmpDir);
+    assert.ok(result.success, `state json failed: ${result.error}`);
+    return JSON.parse(result.output).progress;
+  }
+
+  test('a Complete cell with prose after the token counts exactly like a bare Complete', () => {
+    const withProse = progressFor('Complete — shipped with gate results recorded');
+
+    assert.strictEqual(withProse.completed_phases, 1);
+    assert.strictEqual(withProse.percent, 50);
+    assert.deepStrictEqual(withProse, progressFor('Complete'));
+  });
+
+  test('a cell with no leading status token is still not counted', () => {
+    assert.strictEqual(progressFor('Deferred — pushed to v2').completed_phases, 0);
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // updatePerformanceMetricsSection (Step 1)
 // ─────────────────────────────────────────────────────────────────────────────

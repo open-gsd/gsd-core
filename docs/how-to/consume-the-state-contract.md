@@ -125,6 +125,12 @@ Note one deliberate fold: a roadmap phase marked **`Deferred`** is reported as
 and inventing a fourth wire value would break every existing reader. If you need
 to distinguish deferred work, read the roadmap.
 
+A phase's `status` comes from the leading status word of its Status cell in the
+roadmap's `## Progress` table, so a note after that word does not change it:
+`Complete — shipped with gate results recorded` is `"complete"`, and
+`In Progress — gap closure 1/2` is `"in_progress"`. A cell that does not start
+with a status word is `"pending"`.
+
 ### Treat every string as untrusted text
 
 `name`, `milestone` and `reason` come from a project's own markdown. They can

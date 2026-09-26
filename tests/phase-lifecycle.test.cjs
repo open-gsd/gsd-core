@@ -4,7 +4,7 @@
  * Behavioral tests for phase-lifecycle.cjs
  *
  * Module: gsd-core/bin/lib/phase-lifecycle.cjs
- * Exports: deriveProgressFromRoadmap, clampPercent, progressBarFilledCells, renderProgressBar
+ * Exports: deriveProgressFromRoadmap, progressStatusToken, clampPercent, progressBarFilledCells, renderProgressBar
  *
  * ADR-2143 (epic #2143) migrated deriveProgressFromRoadmap from position-based
  * regexes to the markdown-table schema registry (collectSection + parseMarkdownTable
@@ -23,6 +23,7 @@ const assert = require('node:assert/strict');
 
 const {
   deriveProgressFromRoadmap,
+  progressStatusToken,
   clampPercent,
   progressBarFilledCells,
   renderProgressBar,
@@ -171,6 +172,63 @@ describe('deriveProgressFromRoadmap', () => {
     assert.equal(result.completedPhases, 1, `expected 1 completed phase (non-null), got ${result.completedPhases}`);
     assert.equal(result.totalPhases, 1, `expected 1 total phase (non-null), got ${result.totalPhases}`);
     assert.equal(result.totalPlans, 2, `expected totalPlans 2, got ${result.totalPlans}`);
+  });
+
+  test('#4967: a Complete cell with prose after the token counts as completed; an untokened cell does not', () => {
+    const roadmap = [
+      '## Progress',
+      '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '| --- | --- | --- | --- |',
+      '| 1. Alpha | 1/1 | Complete — shipped with gate results recorded | 2026-09-20 |',
+      '| 2. Beta | 1/2 | In Progress — gap closure 1/2, see 02-VERIFICATION.md | - |',
+      '| 3. Gamma | 0/1 | Deferred — pushed to v2 | - |',
+      '| 4. Delta | 2/2 | Completed | 2026-09-21 |',
+    ].join('\n');
+
+    const result = deriveProgressFromRoadmap(roadmap);
+    assert.equal(result.completedPhases, 1, `only Phase 1 leads with the Complete token, got ${result.completedPhases}`);
+    assert.equal(result.totalPhases, 4);
+  });
+});
+
+describe('progressStatusToken (#4967 — a Status cell is read by its leading token)', () => {
+  const cases = [
+    ['Complete', 'complete'],
+    ['  cOmPlEtE  ', 'complete'],
+    ['Complete — shipped with gate results recorded', 'complete'],
+    ['Complete (verified 2026-09-20)', 'complete'],
+    ['In Progress', 'in progress'],
+    ['In  progress — gap closure 1/2', 'in progress'],
+    ['Planned — 3 plans', 'planned'],
+    ['Not started', 'not started'],
+    ['Completed', null],
+    ['Deferred — pushed to v2', null],
+    ['Blocked', null],
+    ['✅ Complete', null],
+    ['', null],
+    [undefined, null],
+  ];
+
+  for (const [cell, expected] of cases) {
+    test(`${JSON.stringify(cell)} -> ${JSON.stringify(expected)}`, () => {
+      assert.equal(progressStatusToken(cell), expected);
+    });
+  }
+
+  test('property: prose after a leading token never changes the reading, in any letter case', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom('Complete', 'In Progress', 'Planned', 'Not started'),
+        fc.boolean(),
+        fc.constantFrom(' — ', ' - ', ': ', ' (', ', ', ' '),
+        fc.string({ maxLength: 40 }).filter((s) => !/[\r\n|]/.test(s)),
+        (token, upper, separator, prose) => {
+          const cased = upper ? token.toUpperCase() : token.toLowerCase();
+          assert.equal(progressStatusToken(`${cased}${separator}${prose}`), token.toLowerCase());
+        },
+      ),
+    );
   });
 });
 

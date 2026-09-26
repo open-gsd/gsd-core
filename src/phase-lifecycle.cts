@@ -11,6 +11,7 @@
  *
  * Scope:
  *   - deriveProgressFromRoadmap(roadmapContent): count Complete rows => idempotent
+ *   - progressStatusToken(cell): a Progress-table Status cell's leading status token
  *   - clampPercent(completed, total): percent with 100 ceiling
  *
  * These two functions are the root-cause fix for issue #4.
@@ -69,6 +70,34 @@ export function locateProgressTable(roadmapContent: string): MarkdownTable | nul
 }
 
 /**
+ * The status tokens a Progress-table Status cell leads with: the tokens
+ * `roadmap update-plan-progress` and `phase complete` write, plus the roadmap
+ * template's initial `Not started`. `(?!\w)` keeps `Completed` from reading as
+ * `Complete`.
+ */
+const PROGRESS_STATUS_TOKEN_RE = /^(not started|planned|in progress|complete)(?!\w)/i;
+
+/** A Progress-table Status cell's leading status token, lowercased. */
+export type ProgressStatusToken = 'not started' | 'planned' | 'in progress' | 'complete';
+
+/**
+ * #4967: the single owner of "what status does this Progress-table Status cell
+ * carry". The cell is classified by its LEADING status token, so operator prose
+ * kept after the token (`Complete — shipped with gate results recorded`, the
+ * token-vs-prose split #4925 gives the writer) does not change the reading.
+ * Both readers used to demand an exact whole-cell match, so such a cell read as
+ * pending and `completed_phases` / `percent` undercounted.
+ *
+ * Case-insensitive, and internal whitespace is collapsed (`In  progress`). A
+ * cell with no recognized leading token (`Deferred`, `Blocked`, empty) returns
+ * `null`, which every caller folds to pending exactly as before.
+ */
+export function progressStatusToken(cell: string | undefined): ProgressStatusToken | null {
+  const m = PROGRESS_STATUS_TOKEN_RE.exec((cell ?? '').trim().replace(/\s+/g, ' '));
+  return m ? (m[1].toLowerCase() as ProgressStatusToken) : null;
+}
+
+/**
  * Derive completed_phases, total_phases, and total_plans from ROADMAP content.
  * Root cause fix for issue #4 — see gen-phase-lifecycle.mjs for full documentation.
  *
@@ -99,7 +128,7 @@ export function deriveProgressFromRoadmap(roadmapContent: string): RoadmapProgre
   if (table) {
     const allRows = table.rows;
 
-    const completed = allRows.filter((r) => /^complete$/i.test((r['Status'] ?? '').trim())).length;
+    const completed = allRows.filter((r) => progressStatusToken(r['Status']) === 'complete').length;
     completedPhases = completed > 0 ? completed : null;
 
     // Data rows only (exclude sentinel phases 0 and 999.x).

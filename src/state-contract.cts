@@ -125,6 +125,7 @@ interface Owners {
   platformReadSync: typeof import('./shell-command-projection.cjs')['platformReadSync'];
   platformWriteSync: typeof import('./shell-command-projection.cjs')['platformWriteSync'];
   locateProgressTable: typeof import('./phase-lifecycle.cjs')['locateProgressTable'];
+  progressStatusToken: typeof import('./phase-lifecycle.cjs')['progressStatusToken'];
   isSentinelPhaseId: typeof import('./phase-id.cjs')['isSentinelPhaseId'];
   parsePhaseFromProse: typeof import('./phase-id.cjs')['parsePhaseFromProse'];
   getMilestoneInfo: typeof import('./roadmap-parser.cjs')['getMilestoneInfo'];
@@ -162,6 +163,7 @@ function owners(): Owners {
     platformReadSync: shellCommandProjectionMod.platformReadSync,
     platformWriteSync: shellCommandProjectionMod.platformWriteSync,
     locateProgressTable: phaseLifecycleMod.locateProgressTable,
+    progressStatusToken: phaseLifecycleMod.progressStatusToken,
     isSentinelPhaseId: phaseIdMod.isSentinelPhaseId,
     parsePhaseFromProse: phaseIdMod.parsePhaseFromProse,
     getMilestoneInfo: roadmapParserMod.getMilestoneInfo,
@@ -193,11 +195,13 @@ function buildMilestone(cwd: string): string | null {
 const PHASE_CELL_RE = /^(\d+(?:\.\d+)*)\s*[.:)–—-]?\s*(.*)$/;
 
 function statusFromProgressCell(raw: string | undefined): string {
-  const normalized = (raw ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
-  if (normalized === 'complete') return PHASE_STATUS.COMPLETE;
-  if (normalized === 'in progress') return PHASE_STATUS.IN_PROGRESS;
-  // Everything else — 'not started', 'deferred' (design row 12, lossy by
-  // design), '', and any unrecognized word — folds to pending. An
+  // #4967: classified by the cell's LEADING status token (phase-lifecycle owns
+  // the vocabulary), so `Complete — shipped …` is complete, not pending.
+  const token = owners().progressStatusToken(raw);
+  if (token === 'complete') return PHASE_STATUS.COMPLETE;
+  if (token === 'in progress') return PHASE_STATUS.IN_PROGRESS;
+  // Everything else — 'not started', 'planned', 'deferred' (design row 12,
+  // lossy by design), '', and any unrecognized word — folds to pending. An
   // unrecognized status must never reach the wire as a 4th value.
   return PHASE_STATUS.PENDING;
 }

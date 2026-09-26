@@ -334,6 +334,32 @@ describe('state contract — status mapping', () => {
     assert.strictEqual(status, PHASE_STATUS.PENDING);
     assert.notStrictEqual(status, 'Blocked');
   });
+
+  // #4967: the cell is read by its LEADING status token, so operator prose kept
+  // after the token (#4925) does not demote the phase to pending.
+  test('mapsCompleteWithTrailingProseToComplete', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    assert.strictEqual(statusFor(tmpDir, 'Complete — shipped with gate results recorded'), PHASE_STATUS.COMPLETE);
+  });
+
+  test('mapsInProgressWithTrailingProseToInProgress', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    assert.strictEqual(statusFor(tmpDir, 'In Progress — gap closure 1/2, see 02-VERIFICATION.md'), PHASE_STATUS.IN_PROGRESS);
+  });
+
+  test('foldsUntokenedCellWithTrailingProseToPending', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    assert.strictEqual(statusFor(tmpDir, 'Deferred — pushed to v2'), PHASE_STATUS.PENDING);
+  });
+
+  test('doesNotReadCompletedAsTheCompleteToken', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    assert.strictEqual(statusFor(tmpDir, 'Completed'), PHASE_STATUS.PENDING);
+  });
 });
 
 // ─── 4. Phase cell parsing ──────────────────────────────────────────────────────
