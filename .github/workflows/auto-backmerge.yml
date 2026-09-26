@@ -18,83 +18,34 @@ name: Auto Back-Merge main → next
 # creates `next` and flips the default branch, flip the `if:` to true.
 #
 # See: docs/adr/230-introduce-next-integration-branch.md
-#
-# Round-4 review fix (MEDIUM, code#4): split into two jobs so the bot token
-# never shares a job/runner with `npm ci` / `build:lib` / the version-sync's
-# `npm`-adjacent tooling:
-#   - `build` (no environment; GITHUB_TOKEN read-only): checkout, npm ci,
-#     build:lib, the tree reconciliation (scripts/backmerge-tree.cjs stage)
-#     and the version-sync commit — all committed LOCALLY, never pushed.
-#     Produces a `git bundle` of the resulting branch head and uploads it as
-#     a build artifact.
-#   - `push` (environment: gsd-bot; no npm ci, no node run against PR/main
-#     content beyond trusted `gh`/`git` plumbing): downloads the bundle,
-#     verifies its head sha matches what `build` declared, pushes it with
-#     `--force-with-lease` authenticated via `-c http.extraheader` (never a
-#     URL argument — round-4 review fix, NIT, code#7: a token embedded in a
-#     URL is visible in `ps`/process-listing for the life of the git process
-#     and in git's own "insteadOf"/remote-url diagnostics; an HTTP extra
-#     header is never echoed by git itself and is not exposed to `ps`), then
-#     opens/updates the PR and closes any superseded one.
-# A compromised dependency or malicious `main`-side lifecycle script can
-# therefore not reach GSD_BOT_PR_TOKEN even in principle in the `build` job —
-# it is not present there.
 
 on:
   push:
     branches:
       - main
-  # #4990: no new rebuild logic was needed here — every run reconstructs
-  # "chore/backmerge-main-to-next-<short-sha-of-current-main>" from CURRENT
-  # origin/next + origin/main, no-opping the push when it is already
-  # up to date (round-4 review fix, MAJOR, code#2 — see the `build` job's
-  # "Reconcile main → next" step) and otherwise force-pushing it. This
-  # trigger is what lets backmerge-merge-when-green.yml dispatch a rebuild
-  # (via `gh workflow run auto-backmerge.yml`, bot token) when a back-merge
-  # PR is BEHIND `next` — see that workflow's BEHIND handling for why it
-  # dispatches a rebuild here instead of `gh pr update-branch` (that command
-  # creates a merge commit which breaks the two-parent shape content-binding
-  # depends on).
-  workflow_dispatch: {}
 
 concurrency:
   group: auto-backmerge-main-to-next
   cancel-in-progress: false
 
+permissions:
+  contents: write
+  pull-requests: write
+
 env:
   NODE_VERSION: 24
 
 jobs:
-  # Round-4 review fix (MEDIUM, code#4): no `environment:` here and no
-  # secrets beyond the ambient read-only GITHUB_TOKEN checkout — this job
-  # runs `npm ci`, `build:lib`, and the version-sync's node tooling against
-  # `main`'s (and `next`'s) own committed content. GSD_BOT_PR_TOKEN is not
-  # present anywhere in this job.
-  build:
+  backmerge:
     # Phase-1 gate: leave false until `next` exists. Flip to `true` in Phase 2.
     if: true
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions:
-      contents: read
-    outputs:
-      next_exists: ${{ steps.check.outputs.next_exists }}
-      branch: ${{ steps.branch.outputs.branch }}
-      noop: ${{ steps.branch.outputs.noop }}
-      needs_review: ${{ steps.branch.outputs.needs_review }}
-      dropped_oneline: ${{ steps.branch.outputs.dropped_oneline }}
-      head_sha: ${{ steps.branch.outputs.noop == 'true' && steps.branch.outputs.head_sha || steps.bundle.outputs.final_head_sha }}
-      # Round-5 review fix (NIT, code#5): the remote branch's sha AS BUILD
-      # OBSERVED IT — passed to `push` so its --force-with-lease leases on
-      # this exact observed value (empty when the branch did not exist yet
-      # at build time, in which case `push` uses git's CREATE-ONLY lease
-      # form) rather than `push` re-deriving its own expectation.
-      existing_sha: ${{ steps.branch.outputs.existing_sha }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           fetch-depth: 0
-          persist-credentials: false
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
         with:
@@ -116,7 +67,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Reconcile main → next (builds the branch locally; never pushes)
+      - name: Create back-merge branch (reconcile main → next)
         if: steps.check.outputs.next_exists == 'true'
         id: branch
         run: |
@@ -126,43 +77,29 @@ jobs:
           BR="chore/backmerge-main-to-next-${SHORT_SHA}"
           echo "branch=$BR" >> "$GITHUB_OUTPUT"
 
-          # Round-4 review fix (MAJOR, code#2): no-op when the existing
-          # remote branch (if any) already has origin/next as an ancestor —
-          # exactly the shape a REBUILD dispatch (from a BEHIND back-merge
-          # PR) hits when a prior run already caught it up. Force-pushing a
-          # byte-different-but-content-equivalent commit in that case would
-          # needlessly re-trigger every required-check workflow again for no
-          # behavioral change.
-          git fetch --no-tags origin "$BR" 2>/dev/null || true
-          EXISTING_SHA=$(git rev-parse -q --verify "refs/remotes/origin/$BR" 2>/dev/null || true)
-          # Round-5 review fix (NIT, code#5): emitted in BOTH the no-op and
-          # rebuild paths below — `push` leases its force-push on this exact
-          # observed value.
-          echo "existing_sha=$EXISTING_SHA" >> "$GITHUB_OUTPUT"
-          if [ -n "$EXISTING_SHA" ] && git merge-base --is-ancestor origin/next "refs/remotes/origin/$BR" 2>/dev/null; then
-            echo "origin/next is already an ancestor of $BR (@ $EXISTING_SHA) — nothing to rebuild"
-            echo "head_sha=$EXISTING_SHA" >> "$GITHUB_OUTPUT"
-            echo "noop=true" >> "$GITHUB_OUTPUT"
-            echo "needs_review=false" >> "$GITHUB_OUTPUT"
-            echo "dropped_oneline=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "noop=false" >> "$GITHUB_OUTPUT"
-
           git checkout -B "$BR" origin/next
           BASE=$(git merge-base HEAD origin/main)
 
-          # #4990: the tree construction itself (merge -s ours + CHANGELOG.md
-          # overlay + .changeset replay) lives in ONE shared script,
-          # scripts/backmerge-tree.cjs — the SAME script
-          # backmerge-merge-when-green.yml calls to independently reproduce
-          # and verify this exact construction from the merge commit's own
-          # recorded parents (CLAUDE.md "Generative Fix Divergence": one
-          # source, not two hand-kept copies). -s ours never conflicts —
-          # next's tree is kept wholesale and main's second-parent ancestry
-          # is what stops the back-merge backlog recurring; only CHANGELOG.md
-          # and .changeset are explicitly overlaid from main.
-          node scripts/backmerge-tree.cjs stage --main origin/main
+          # Keep next's tree wholesale and record main as a second parent so main
+          # becomes an ancestor of next (stops the back-merge backlog recurring).
+          # -s ours never conflicts; next already has main's code.
+          git merge -s ours --no-commit --no-ff origin/main
+
+          # Overlay main's rendered CHANGELOG.md (the release promotions).
+          if git cat-file -e "origin/main:CHANGELOG.md" 2>/dev/null; then
+            git checkout origin/main -- CHANGELOG.md
+            git add CHANGELOG.md
+          fi
+
+          # Replay main's .changeset changes vs the merge-base: prune fragments
+          # main consumed at release (D); bring any main-authored fragment (A/M).
+          while IFS="$(printf '\t')" read -r status file; do
+            [ -n "${file:-}" ] || continue
+            case "$status" in
+              D)   git rm --quiet --ignore-unmatch -- "$file" ;;
+              A|M) git checkout origin/main -- "$file" && git add -- "$file" ;;
+            esac
+          done < <(git diff --name-status "$BASE" origin/main -- .changeset)
 
           # Safety net: -s ours silently drops anything existing ONLY on main.
           # List code files (excluding CHANGELOG/.changeset) that main changed
@@ -193,6 +130,7 @@ jobs:
           done | grep -v '^$' || true)
 
           git commit -m "chore: back-merge main into next (${SHORT_SHA})"
+          git push --force origin "$BR"
 
           if [ -n "$DROPPED" ]; then
             echo "needs_review=true" >> "$GITHUB_OUTPUT"
@@ -211,12 +149,9 @@ jobs:
       # the sync. Build the ledger first so fragments materialize.
       #
       # BLAST-RADIUS CONTAINMENT (#2504): version-sync is best-effort and MUST
-      # NOT be able to abort the job. The job's load-bearing purpose is to
-      # OPEN the back-merge PR (#4990: a separate, event-driven workflow,
-      # backmerge-merge-when-green.yml, does the admin-merge once it is
-      # independently verified safe) so `main` eventually becomes an ancestor
-      # of `next` — the invariant that keeps the next `release → main` merge
-      # clean.
+      # NOT be able to abort the job. The job's load-bearing purpose is to open
+      # and admin-merge the back-merge PR so `main` becomes an ancestor of
+      # `next` — the invariant that keeps the next `release → main` merge clean.
       # Historically a failure here (missing build:lib after a workflow-copy
       # regression, or any `npm version` lifecycle hiccup) skipped "Open PR" and
       # left `main` diverged, breaking the following release. `continue-on-error`
@@ -225,12 +160,12 @@ jobs:
       # which is trivially re-synced — never a broken back-merge. Do not remove;
       # a required-steps test (release-backmerge-invariants.test.cjs) enforces it.
       - name: Install dependencies and build (required by the version-sync hook)
-        if: steps.check.outputs.next_exists == 'true' && steps.branch.outputs.noop != 'true'
+        if: steps.check.outputs.next_exists == 'true'
         continue-on-error: true
         run: npm ci --silent && npm run build:lib
 
       - name: Sync next's version to main's released version
-        if: steps.check.outputs.next_exists == 'true' && steps.branch.outputs.noop != 'true'
+        if: steps.check.outputs.next_exists == 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -255,287 +190,22 @@ jobs:
             node scripts/sync-next-version.cjs "$VERSION" --in-place
             git add -u
             git diff --cached --quiet || git commit -m "chore: sync next package version to ${VERSION}"
+            git push origin HEAD
           else
             echo "next ($NEXT_VERSION) is at or ahead of main ($VERSION); leaving next version unchanged."
           fi
 
-      # Round-4 review fix (MEDIUM, code#4): the ONLY thing that crosses the
-      # `build` -> `push` job boundary is this bundle (plus the declared
-      # `head_sha` output `push` verifies it against) — never the checkout
-      # itself, never the bot token. `origin/next..BR` keeps the bundle small
-      # (typically the merge commit plus, at most, one version-sync commit);
-      # `push` re-fetches `origin/next` itself before unbundling, so the
-      # bundle's prerequisite commits are satisfied there too.
-      - name: Create a git bundle of the resulting branch head
-        if: steps.check.outputs.next_exists == 'true' && steps.branch.outputs.noop != 'true'
-        id: bundle
-        env:
-          BR: ${{ steps.branch.outputs.branch }}
-        run: |
-          set -euo pipefail
-          echo "final_head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          git bundle create backmerge.bundle origin/next.."$BR"
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        if: steps.check.outputs.next_exists == 'true' && steps.branch.outputs.noop != 'true'
-        with:
-          name: backmerge-bundle
-          path: backmerge.bundle
-          retention-days: 1
-          # Round-5 review fix (MINOR, code#4): without this, GitHub's "Re-run
-          # all jobs" on an already-completed run fails the upload with a
-          # 409/name-conflict against the still-live artifact from the first
-          # attempt (the artifact name is fixed, not per-attempt-unique).
-          overwrite: true
-
-  # Round-4 review fix (MEDIUM, code#4): the ONLY job with GSD_BOT_PR_TOKEN —
-  # no `npm ci`, no `npm version`, and no node execution against PR/main
-  # content beyond the trusted `gh pr`/`gh api` calls below. A compromised
-  # dependency or malicious lifecycle script pulled in by `build`'s `npm ci`
-  # cannot reach this token even in principle — it is not present in that
-  # job at all.
-  push:
-    needs: build
-    if: needs.build.outputs.next_exists == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
-      pull-requests: write
-    # Round-4 review fix (MINOR, code#7): this environment only actually
-    # gates GSD_BOT_PR_TOKEN once the maintainer has moved that secret out of
-    # repository-level secrets into the `gsd-bot` environment's own secrets,
-    # with deployment branches restricted to `main` (push-triggered runs) and
-    # `next` (workflow_dispatch runs — no `--ref` is given by
-    # backmerge-merge-when-green.yml's dispatch, which resolves to the
-    # repository's default branch). Until that migration happens,
-    # `secrets.GSD_BOT_PR_TOKEN` still resolves via ordinary repository-secret
-    # inheritance regardless of this declaration.
-    environment: gsd-bot
-    # Round-6 review fix (BLOCKER, code#1): `gh` normally infers the target
-    # repository from the git remote in the CURRENT WORKING DIRECTORY — but
-    # on the no-op path (build reported the branch already up to date), this
-    # job's checkout step is SKIPPED entirely, so "Open or update PR" and
-    # "Close superseded back-merge PRs" (both now unconditional — round-5
-    # review fix, MAJOR, code#2) would run with no git remote to infer from
-    # at all. Setting GH_REPO at JOB level (gh's own documented env var)
-    # makes every `gh` call in this job repo-explicit regardless of whether a
-    # checkout happened, without having to thread `--repo` onto every
-    # individual call.
-    env:
-      GH_REPO: ${{ github.repository }}
-    steps:
-      - name: Nothing to push (build reported a no-op rebuild)
-        if: needs.build.outputs.noop == 'true'
-        env:
-          BR: ${{ needs.build.outputs.branch }}
-        run: echo "origin/next was already an ancestor of $BR — nothing to push this run"
-
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-        if: needs.build.outputs.noop != 'true'
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      # Round-7 review fix (NIT): the trusted verify step below runs `node
-      # scripts/backmerge-tree.cjs` directly — same pinned action and
-      # NODE_VERSION source as the build job's own setup-node, kept in sync
-      # rather than relying on whatever Node happens to be preinstalled on
-      # the runner image. Still no `npm ci` anywhere in this job (see the
-      # dedicated invariant test) — this is only the Node RUNTIME itself,
-      # not a dependency install.
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
-        if: needs.build.outputs.noop != 'true'
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        if: needs.build.outputs.noop != 'true'
-        with:
-          name: backmerge-bundle
-          # Round-6 review fix (SEC MEDIUM, code#1): downloaded OUTSIDE the
-          # trusted checkout entirely (runner.temp, a dedicated scratch
-          # directory) — never into the repo working tree the `Verify...`
-          # step's own trusted `scripts/backmerge-tree.cjs` runs from. The
-          # `Verify...` step below independently validates this download's
-          # SHAPE (exactly one entry, a regular file, one bundle head)
-          # before ever trusting its bytes.
-          path: ${{ runner.temp }}/backmerge-artifact
-
-      # Round-5 review fix (SEC INFO, code#8): before ANY push, independently
-      # re-derive and verify the bundle's content-binding shape via the
-      # SAME trusted, unmodified `scripts/backmerge-tree.cjs` this repo's own
-      # checkout carries (fetched above, never from the bundle) — a
-      # subverted `build` job (compromised dependency, malicious `main`-side
-      # lifecycle script during `npm ci`/`build:lib`) can put ANYTHING in the
-      # bundle it hands off; without this step, `push` would blindly publish
-      # it under the bot's identity. `identify`/`verify` run against a
-      # throwaway scratch worktree (never the trusted checkout itself — same
-      # trust-boundary discipline as backmerge-merge-when-green.yml's
-      # evaluate job) and require the bundle's head to match the exact
-      # two-parent back-merge SHAPE, with any extra commit restricted to a
-      # version-only sync. No `npm ci`, no `npm install` of bundle content,
-      # no node execution beyond this one trusted script — see the dedicated
-      # test asserting this step precedes "Push the built branch".
-      - name: Verify the bundle is a genuine back-merge (trusted script, no npm/install of bundle content)
-        if: needs.build.outputs.noop != 'true'
-        id: verifybundle
-        env:
-          BR: ${{ needs.build.outputs.branch }}
-          EXPECTED_HEAD_SHA: ${{ needs.build.outputs.head_sha }}
-          ARTIFACT_DIR: ${{ runner.temp }}/backmerge-artifact
-        run: |
-          set -euo pipefail
-
-          # Round-6 review fix (SEC MEDIUM, code#1): validate the downloaded
-          # artifact's SHAPE before trusting it at all — exactly one entry,
-          # a regular file (never a symlink or directory) named
-          # backmerge.bundle. `download-artifact` unpacks into a scratch dir
-          # OUTSIDE the trusted checkout (see that step's `path:`); nothing
-          # here reads/executes anything from it until these checks pass.
-          ENTRY_COUNT=$(find "$ARTIFACT_DIR" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
-          if [ "$ENTRY_COUNT" != "1" ]; then
-            echo "::error::expected exactly one entry in the downloaded artifact, found $ENTRY_COUNT"
-            exit 1
-          fi
-          BUNDLE_PATH="$ARTIFACT_DIR/backmerge.bundle"
-          if [ -L "$BUNDLE_PATH" ]; then
-            echo "::error::$BUNDLE_PATH is a symlink, refusing to trust it"
-            exit 1
-          fi
-          if [ ! -f "$BUNDLE_PATH" ]; then
-            echo "::error::expected a regular file at $BUNDLE_PATH (not present, or not a regular file/is a directory)"
-            exit 1
-          fi
-
-          git bundle verify "$BUNDLE_PATH"
-
-          # Round-6 review fix (SEC MEDIUM, code#1): the bundle must carry
-          # EXACTLY one head, and it must be the exact branch `build`
-          # declared — a bundle smuggling extra refs, or a head under a
-          # different name, is refused before it is ever fetched into this
-          # checkout.
-          HEADS_OUTPUT=$(git bundle list-heads "$BUNDLE_PATH")
-          HEAD_LINE_COUNT=$(printf '%s\n' "$HEADS_OUTPUT" | grep -c . || true)
-          if [ "$HEAD_LINE_COUNT" != "1" ]; then
-            echo "::error::expected exactly one head in the bundle, found $HEAD_LINE_COUNT: $HEADS_OUTPUT"
-            exit 1
-          fi
-          HEAD_REF=$(printf '%s\n' "$HEADS_OUTPUT" | awk '{print $2}')
-          if [ "$HEAD_REF" != "refs/heads/$BR" ]; then
-            echo "::error::bundle's head ref ($HEAD_REF) does not match the expected branch (refs/heads/$BR)"
-            exit 1
-          fi
-
-          git fetch --no-tags origin main next
-          git fetch --no-tags "$BUNDLE_PATH" "$BR:refs/heads/${BR}-incoming"
-          ACTUAL_SHA=$(git rev-parse "refs/heads/${BR}-incoming")
-          if [ "$ACTUAL_SHA" != "$EXPECTED_HEAD_SHA" ]; then
-            echo "::error::bundle head ($ACTUAL_SHA) does not match the build job's declared head ($EXPECTED_HEAD_SHA) — refusing to push a mismatched artifact"
-            exit 1
-          fi
-
-          SCRATCH="verify-scratch"
-          git worktree add -q --detach "../$SCRATCH" "$ACTUAL_SHA"
-
-          IDENTIFY_JSON=$(node scripts/backmerge-tree.cjs identify --head "$ACTUAL_SHA" --cwd "../$SCRATCH" || echo '{"ok":false}')
-          IDENTIFY_OK=$(printf '%s' "$IDENTIFY_JSON" | jq -r '.ok // false')
-          if [ "$IDENTIFY_OK" != "true" ]; then
-            echo "::error::could not identify the back-merge commit by its expected shape — $IDENTIFY_JSON"
-            git worktree remove --force "../$SCRATCH" 2>/dev/null || true
-            exit 1
-          fi
-          MERGE_COMMIT=$(printf '%s' "$IDENTIFY_JSON" | jq -r '.mergeCommit')
-          NEXT_PARENT=$(printf '%s' "$IDENTIFY_JSON" | jq -r '.nextParent')
-          MAIN_PARENT=$(printf '%s' "$IDENTIFY_JSON" | jq -r '.mainParent')
-
-          set +e
-          VERIFY_JSON=$(node scripts/backmerge-tree.cjs verify \
-            --next "$NEXT_PARENT" --main "$MAIN_PARENT" \
-            --merge-commit "$MERGE_COMMIT" --head "$ACTUAL_SHA" --cwd "../$SCRATCH")
-          VERIFY_STATUS=$?
-          set -e
-          git worktree remove --force "../$SCRATCH" 2>/dev/null || true
-          if [ "$VERIFY_STATUS" -ne 0 ]; then
-            echo "::error::content-binding FAILED, refusing to push — $VERIFY_JSON"
-            exit 1
-          fi
-          echo "the bundle's head is a verified, genuine back-merge — safe to push"
-
-      - name: Push the built branch (bot token only; no npm/node against PR content)
-        if: needs.build.outputs.noop != 'true'
-        id: pushit
-        env:
-          # Review fix (BLOCKER, code#1, sec MEDIUM, carried from round-3):
-          # pushes authenticated by the default GITHUB_TOKEN never
-          # re-trigger workflows (GitHub's own loop-prevention rule) — a
-          # GITHUB_TOKEN-pushed rebuild of an ALREADY-OPEN PR's branch would
-          # never fire `synchronize`. No fallback (round-4 review fix, LOW,
-          # code#6: the dead `|| GITHUB_TOKEN` fallback this replaced could
-          # never actually re-trigger required checks, so it was pure
-          # complexity with no real behavior — removed rather than kept as
-          # an unreachable branch).
-          BOT_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN }}
-          BR: ${{ needs.build.outputs.branch }}
-          # Round-5 review fix (NIT, code#5): lease on the value `build`
-          # ITSELF observed — empty means the branch did not exist yet at
-          # build time, in which case the CREATE-ONLY lease form below is
-          # used instead of re-deriving/trusting a fresh local read.
-          EXISTING_SHA: ${{ needs.build.outputs.existing_sha }}
-        run: |
-          set -euo pipefail
-          if [ -z "${BOT_TOKEN:-}" ]; then
-            echo "::error::GSD_BOT_PR_TOKEN is not set — a GITHUB_TOKEN-authenticated push would not trigger required-check workflows on an already-open PR (no fallback; see #4990)."
-            exit 1
-          fi
-
-          # Round-5 review fix (SEC LOW, code#7): the credential is passed
-          # via GIT_CONFIG_COUNT/GIT_CONFIG_KEY_0/GIT_CONFIG_VALUE_0 env
-          # vars, NEVER `git -c key=value` (that form places the value on
-          # the process ARGV, which — despite the round-4 comment's claim —
-          # is visible for the life of the git process to anything reading
-          # `ps`/`/proc/<pid>/cmdline` on the runner; env vars are not listed
-          # by `ps` and are the documented git mechanism for exactly this).
-          # `::add-mask::` is issued BEFORE the header is ever assigned to an
-          # env var, so if the raw base64 value is ever accidentally echoed
-          # by a later step it is scrubbed from the log.
-          B64=$(printf 'x-access-token:%s' "$BOT_TOKEN" | base64 -w0)
-          echo "::add-mask::$B64"
-          export GIT_CONFIG_COUNT=1
-          export GIT_CONFIG_KEY_0=http.extraheader
-          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $B64"
-
-          # Round-5 review fix (NIT, code#5): git's CREATE-ONLY lease form
-          # (empty <expect>) when the branch did not exist at build time —
-          # never a bare --force.
-          if [ -n "$EXISTING_SHA" ]; then
-            git push --force-with-lease="refs/heads/$BR:$EXISTING_SHA" origin "refs/heads/${BR}-incoming:refs/heads/$BR"
-          else
-            git push --force-with-lease="refs/heads/$BR:" origin "refs/heads/${BR}-incoming:refs/heads/$BR"
-          fi
-
       - name: Open or update PR
-        # Round-5 review fix (MAJOR, code#2): runs regardless of `noop` — a
-        # previously failed PR-creation attempt (this step is idempotent;
-        # `gh pr list --head` above finds an existing PR, or creates one)
-        # must still be able to recover even when there is nothing new to
-        # bundle/push this round. Only the bundle+push machinery above is
-        # skipped on a no-op rebuild.
+        if: steps.check.outputs.next_exists == 'true'
         id: openpr
         env:
-          GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN }}
-          # Round-5 review fix (NIT, code#6): SHORT_SHA is derived from the
-          # branch name `build` ACTUALLY produced, not a fresh
-          # `git rev-parse --short origin/main` — this step no longer checks
-          # out anything (it never needed to; every call here is `gh`), and
-          # a fresh read could in principle race a newer `main` push landing
-          # between `build` and this step.
-          BR: ${{ needs.build.outputs.branch }}
-          NEEDS_REVIEW: ${{ needs.build.outputs.needs_review }}
-          DROPPED_ONELINE: ${{ needs.build.outputs.dropped_oneline }}
+          GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          BR: ${{ steps.branch.outputs.branch }}
+          NEEDS_REVIEW: ${{ steps.branch.outputs.needs_review }}
+          DROPPED_ONELINE: ${{ steps.branch.outputs.dropped_oneline }}
         run: |
           set -euo pipefail
-          SHORT_SHA=${BR#chore/backmerge-main-to-next-}
+          SHORT_SHA=$(git rev-parse --short origin/main)
           REVIEW_NOTE=""
           if [ "${NEEDS_REVIEW:-false}" = "true" ]; then
             REVIEW_NOTE="
@@ -552,17 +222,7 @@ jobs:
           Generated by \`.github/workflows/auto-backmerge.yml\`.
           EOF
           )
-          # Round-6 review fix (BLOCKER, code#1): distinguish a real API
-          # failure from a genuinely empty result — the prior `2>/dev/null
-          # || echo ""` swallowed BOTH into the same "no PR found" branch,
-          # which on a transient `gh pr list` failure would proceed straight
-          # to `gh pr create` and risk opening a DUPLICATE PR for a branch
-          # that already has one.
-          if ! LIST_JSON=$(gh pr list --base next --head "$BR" --state open --json number); then
-            echo "::error::gh pr list failed — cannot determine whether a back-merge PR already exists for $BR; refusing to risk opening a duplicate"
-            exit 1
-          fi
-          PR=$(printf '%s' "$LIST_JSON" | jq -r '.[0].number // empty')
+          PR=$(gh pr list --base next --head "$BR" --state open --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
           if [ -z "$PR" ]; then
             PR_URL=$(gh pr create \
               --base next \
@@ -575,83 +235,19 @@ jobs:
             echo "::error::back-merge PR was not created"
             exit 1
           fi
-          # Review fix (MAJOR): no `|| true` — the merger workflow's
-          # eligibility check depends on these labels (identity + review
-          # gating), so a failure to apply them must fail this job loudly
-          # rather than silently leave an unlabeled PR nothing will ever
-          # merge. Re-labeling on a re-run of this step (`Open or update PR`
-          # is idempotent) also re-triggers `labeled`-typed workflow
-          # listeners; any SUPERSEDED run of those shows `cancelled`, which
-          # scripts/ci-required-checks-verdict.cjs's classifier already
-          # treats as pending (a newer run follows), not red — see its
-          # `normalizeCheckRunState` and the "cancelled -> pending" test.
-          gh pr edit "$PR" --add-label automation --add-label backmerge
+          gh pr edit "$PR" --add-label automation --add-label backmerge || true
           if [ "${NEEDS_REVIEW:-false}" = "true" ]; then
-            gh pr edit "$PR" --add-label needs-manual-review
+            gh pr edit "$PR" --add-label needs-manual-review || true
           fi
           echo "pr=$PR" >> "$GITHUB_OUTPUT"
 
-      # Review fix (MAJOR, code#3, sec LOW): a NEWER main push opens a NEW PR
-      # for its own SHORT_SHA-named branch (the branch-naming scheme never
-      # reuses a name across two different main commits), leaving any
-      # earlier back-merge PR open and stale forever — a human has to notice
-      # and close it by hand, and until then it sits in the merger's sweep as
-      # an alarm-eligible "stuck" PR. Close every OTHER open, bot-authored,
-      # same-repo `chore/backmerge-main-to-next-*` PR targeting `next`,
-      # commenting with the superseding PR number. backmerge-merge-when-
-      # green.yml's sweep needs NO corresponding change: a closed PR already
-      # fails its own `state == OPEN` eligibility check, so it is skipped —
-      # neither rebuilt nor staleness-alarmed — for free.
-      #
-      # Round-4 review fix (MINOR, code#5): a PR labeled `needs-manual-review`
-      # is NEVER auto-closed here, even if it is technically "superseded" by
-      # branch name — that label is a human-review marker (set above when the
-      # safety net detected a main-only drop); closing it out from under a
-      # maintainer who hasn't looked at it yet would silently drop the exact
-      # review this workflow itself asked for.
-      # Round-5 review fix (MAJOR, code#2): also runs regardless of `noop` —
-      # see "Open or update PR" above for the same reasoning (recovery for a
-      # previously failed run; this step is itself idempotent/best-effort).
-      - name: Close superseded back-merge PRs
+      - name: Admin-merge the back-merge PR
+        # Skip auto-merge when the back-merge dropped main-only changes — a human
+        # must review those before this lands.
+        if: steps.check.outputs.next_exists == 'true' && steps.branch.outputs.needs_review != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN }}
-          CURRENT_PR: ${{ steps.openpr.outputs.pr }}
-          CURRENT_BR: ${{ needs.build.outputs.branch }}
+          GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.openpr.outputs.pr }}
         run: |
-          set -euo pipefail
-          BOT_LOGIN=$(gh api user --jq .login 2>/dev/null || echo "")
-          if [ -z "$BOT_LOGIN" ]; then
-            echo "::warning::could not resolve the bot's own login — skipping superseded-PR cleanup this run"
-            exit 0
-          fi
-          gh pr list --repo "$GITHUB_REPOSITORY" --author "$BOT_LOGIN" --base next --state open --limit 1000 \
-            --json number,headRefName,isCrossRepository,labels \
-            --jq '.[] | select(.isCrossRepository == false) | select(([.labels[].name] | index("needs-manual-review")) == null) | [.number, .headRefName] | @tsv' |
-          while IFS="$(printf '\t')" read -r OLD_PR OLD_BR; do
-            [ -n "${OLD_PR:-}" ] || continue
-            [ "$OLD_PR" != "$CURRENT_PR" ] || continue
-            case "$OLD_BR" in
-              chore/backmerge-main-to-next-*) : ;;
-              *) continue ;;
-            esac
-            [ "$OLD_BR" != "$CURRENT_BR" ] || continue
-            echo "closing superseded back-merge PR #$OLD_PR ($OLD_BR), superseded by #$CURRENT_PR"
-            gh pr close "$OLD_PR" --repo "$GITHUB_REPOSITORY" \
-              --comment "Superseded by #$CURRENT_PR (a newer \`main\` push). Closing automatically." || \
-              echo "::warning::could not close superseded PR #$OLD_PR — a later run will retry"
-          done
-
-      # #4990: this job USED TO admin-merge immediately after "Open or update
-      # PR" — #4707/#4708 landed 3-4s after creation, before a single required
-      # check had even started. The merge is now handled by a SEPARATE,
-      # event-driven workflow, .github/workflows/backmerge-merge-when-green.yml,
-      # which triggers on `workflow_run` for all 7 required-check workflows
-      # completing, PLUS a `schedule`/`workflow_dispatch` sweep, and admin-
-      # merges only once every required check on this PR's current head is
-      # independently verified green, its identity and content are verified,
-      # and it is not BEHIND `next` (a BEHIND branch instead gets a rebuild
-      # dispatched back to THIS workflow via `workflow_dispatch` — see that
-      # workflow's own header for the full architecture). This job's only
-      # remaining responsibility is opening/labeling the PR — and, via its
-      # `workflow_dispatch` trigger, rebuilding/force-pushing this exact
-      # branch on demand from whatever `next`/`main` currently are.
+          # Merge commit (not squash) preserves main as an ancestor of next.
+          gh pr merge --admin --merge "$PR"

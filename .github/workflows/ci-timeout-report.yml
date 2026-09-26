@@ -24,16 +24,6 @@ jobs:
   report:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Review fix (sec HIGH, pre-existing, #4990 round-3; reworded round-4,
-    # MINOR, code#7): `environment: gsd-bot` only actually gates
-    # GSD_BOT_PR_TOKEN once the maintainer has moved that secret out of
-    # repository-level secrets into the `gsd-bot` environment's own secrets.
-    # Both triggers (`schedule`, `workflow_dispatch` with no ref override)
-    # resolve `github.ref` to the repository DEFAULT branch (`next`) — that
-    # environment's deployment branches need to allow `next` only. Until the
-    # secret is actually moved, `secrets.GSD_BOT_PR_TOKEN` still resolves via
-    # ordinary repository-secret inheritance regardless of this declaration.
-    environment: gsd-bot
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:

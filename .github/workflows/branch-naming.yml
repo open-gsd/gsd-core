@@ -3,17 +3,6 @@ name: Validate Branch Name
 on:
   pull_request:
     types: [opened, synchronize]
-  # #4990: `check-branch` is a required status check on `next`; a merge queue
-  # requires every required context to also report on `merge_group`, or the
-  # queue deadlocks waiting on a check nothing ever produces.
-  #
-  # #4990 (NIT 13): on a `merge_group` event, GitHub Actions loads this
-  # workflow FILE from the queued merge ref (the ephemeral
-  # `gh-readonly-queue/...` commit), not from any individual PR's head — and
-  # the jobs below are skipped on that event (see the `if:` conditions), so
-  # no PR-supplied step ever executes here regardless.
-  merge_group:
-    types: [checks_requested]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -27,13 +16,7 @@ jobs:
   # explicitly — a calling job's permissions REPLACE the workflow default
   # rather than merging with it, so an implicit inherit would hand the
   # preflight a token with nothing on it.
-  #
-  # #4990: `merge_group` carries no `pull_request` payload — mergeability was
-  # already resolved on the `pull_request` event that queued this run, so
-  # skip rather than reading fields the event doesn't carry. A job skipped by
-  # `if:` still reports Success for required-status-check purposes.
   preflight:
-    if: github.event_name != 'merge_group'
     name: PR mergeability
     uses: ./.github/workflows/pr-mergeable-preflight.yml
     permissions:
@@ -41,10 +24,6 @@ jobs:
       pull-requests: read
 
   check-branch:
-    # #4990: same reasoning as `preflight` above — `context.payload.pull_request`
-    # is undefined on `merge_group`, and the branch was already validated on
-    # the `pull_request` event.
-    if: github.event_name != 'merge_group'
     needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 1
