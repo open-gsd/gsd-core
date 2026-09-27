@@ -104,18 +104,9 @@ O GSD armazena as configurações do projeto em `.planning/config.json`. Criado 
     "quick_branch_template": null
   },
   "gates": {
-    "confirm_project": true,
-    "confirm_phases": true,
-    "confirm_roadmap": true,
-    "confirm_breakdown": true,
-    "confirm_plan": true,
     "execute_next_plan": true,
-    "issues_review": true,
-    "confirm_transition": true
-  },
-  "safety": {
-    "always_confirm_destructive": true,
-    "always_confirm_external_services": true
+    "confirm_transition": true,
+    "confirm_milestone_scope": true
   },
   "project_code": null,
   "agent_skills": {},
@@ -599,27 +590,16 @@ Exemplo de ramificação para task rápida:
 
 ## Configurações de Gate
 
-Controla prompts de confirmação durante os fluxos de trabalho.
+Controla prompts de confirmação durante os fluxos de trabalho. Cada gate só se aplica sob
+`mode: "interactive"` — `"yolo"` sempre aprova automaticamente, independentemente dessas
+configurações (não existe um terceiro modo `"custom"`). Defina um gate como `false` para
+pular apenas aquela confirmação, mantendo o modo interactive para o resto.
 
 | Configuração | Tipo | Padrão | Descrição |
 |---------|------|---------|-------------|
-| `gates.confirm_project` | boolean | `true` | Confirma detalhes do projeto antes de finalizar |
-| `gates.confirm_phases` | boolean | `true` | Confirma a divisão de fases |
-| `gates.confirm_roadmap` | boolean | `true` | Confirma o roadmap antes de prosseguir |
-| `gates.confirm_breakdown` | boolean | `true` | Confirma a divisão de tasks |
-| `gates.confirm_plan` | boolean | `true` | Confirma cada plano antes da execução |
-| `gates.execute_next_plan` | boolean | `true` | Confirma antes de executar o próximo plano |
-| `gates.issues_review` | boolean | `true` | Revisa issues antes de criar planos de correção |
-| `gates.confirm_transition` | boolean | `true` | Confirma a transição de fase |
-
----
-
-## Configurações de Segurança (Safety)
-
-| Configuração | Tipo | Padrão | Descrição |
-|---------|------|---------|-------------|
-| `safety.always_confirm_destructive` | boolean | `true` | Confirma operações destrutivas (exclusões, sobrescritas) |
-| `safety.always_confirm_external_services` | boolean | `true` | Confirma interações com serviços externos |
+| `gates.execute_next_plan` | boolean | `true` | Confirma antes de executar o próximo plano (`execute-plan.md`) |
+| `gates.confirm_transition` | boolean | `true` | Confirma a transição de fase (`transition.md`) |
+| `gates.confirm_milestone_scope` | boolean | `true` | Confirma o escopo do milestone antes do lançamento (`complete-milestone.md`) |
 
 ---
 

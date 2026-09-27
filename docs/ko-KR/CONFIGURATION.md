@@ -55,18 +55,9 @@ GSD는 프로젝트 설정을 `.planning/config.json`에 저장합니다. `/gsd-
     "quick_branch_template": null
   },
   "gates": {
-    "confirm_project": true,
-    "confirm_phases": true,
-    "confirm_roadmap": true,
-    "confirm_breakdown": true,
-    "confirm_plan": true,
     "execute_next_plan": true,
-    "issues_review": true,
-    "confirm_transition": true
-  },
-  "safety": {
-    "always_confirm_destructive": true,
-    "always_confirm_external_services": true
+    "confirm_transition": true,
+    "confirm_milestone_scope": true
   }
 }
 ```
@@ -212,27 +203,15 @@ quick 태스크 브랜칭 예시:
 
 ## Gate 설정
 
-워크플로우 중 확인 프롬프트를 제어합니다.
+워크플로우 중 확인 프롬프트를 제어합니다. 각 게이트는 `mode: "interactive"`일 때만 적용됩니다 —
+`"yolo"`는 이 설정과 관계없이 항상 자동 승인합니다(세 번째 `"custom"` 모드는 존재하지 않습니다).
+특정 확인만 건너뛰려면 해당 게이트를 `false`로 설정하세요.
 
 | 설정 | 타입 | 기본값 | 설명 |
 |------|------|--------|------|
-| `gates.confirm_project` | boolean | `true` | 확정 전 프로젝트 세부사항 확인 |
-| `gates.confirm_phases` | boolean | `true` | 단계 분류 확인 |
-| `gates.confirm_roadmap` | boolean | `true` | 진행 전 로드맵 확인 |
-| `gates.confirm_breakdown` | boolean | `true` | 태스크 분류 확인 |
-| `gates.confirm_plan` | boolean | `true` | 실행 전 각 플랜 확인 |
-| `gates.execute_next_plan` | boolean | `true` | 다음 플랜 실행 전 확인 |
-| `gates.issues_review` | boolean | `true` | 수정 플랜 생성 전 이슈 검토 |
-| `gates.confirm_transition` | boolean | `true` | 단계 전환 확인 |
-
----
-
-## 안전성 설정
-
-| 설정 | 타입 | 기본값 | 설명 |
-|------|------|--------|------|
-| `safety.always_confirm_destructive` | boolean | `true` | 파괴적 작업(삭제, 덮어쓰기) 확인 |
-| `safety.always_confirm_external_services` | boolean | `true` | 외부 서비스 상호작용 확인 |
+| `gates.execute_next_plan` | boolean | `true` | 다음 플랜 실행 전 확인 (`execute-plan.md`) |
+| `gates.confirm_transition` | boolean | `true` | 단계 전환 확인 (`transition.md`) |
+| `gates.confirm_milestone_scope` | boolean | `true` | 출시 전 milestone 범위 확인 (`complete-milestone.md`) |
 
 ---
 

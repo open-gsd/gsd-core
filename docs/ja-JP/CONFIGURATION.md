@@ -55,18 +55,9 @@ GSD はプロジェクト設定を `.planning/config.json` に保存します。
     "quick_branch_template": null
   },
   "gates": {
-    "confirm_project": true,
-    "confirm_phases": true,
-    "confirm_roadmap": true,
-    "confirm_breakdown": true,
-    "confirm_plan": true,
     "execute_next_plan": true,
-    "issues_review": true,
-    "confirm_transition": true
-  },
-  "safety": {
-    "always_confirm_destructive": true,
-    "always_confirm_external_services": true
+    "confirm_transition": true,
+    "confirm_milestone_scope": true
   }
 }
 ```
@@ -212,27 +203,15 @@ quick タスクのブランチ設定例：
 
 ## ゲート設定
 
-ワークフロー中の確認プロンプトを制御します。
+ワークフロー中の確認プロンプトを制御します。各ゲートは `mode: "interactive"` の場合のみ適用されます —
+`"yolo"` はこれらの設定に関係なく常に自動承認します（3つ目の `"custom"` モードは存在しません）。
+特定の確認だけをスキップしたい場合は、そのゲートを `false` に設定してください。
 
 | 設定 | 型 | デフォルト | 説明 |
 |------|-----|-----------|------|
-| `gates.confirm_project` | boolean | `true` | 確定前にプロジェクトの詳細を確認 |
-| `gates.confirm_phases` | boolean | `true` | フェーズの分割を確認 |
-| `gates.confirm_roadmap` | boolean | `true` | 続行前にロードマップを確認 |
-| `gates.confirm_breakdown` | boolean | `true` | タスクの分割を確認 |
-| `gates.confirm_plan` | boolean | `true` | 実行前に各プランを確認 |
-| `gates.execute_next_plan` | boolean | `true` | 次のプラン実行前に確認 |
-| `gates.issues_review` | boolean | `true` | 修正プラン作成前に課題をレビュー |
-| `gates.confirm_transition` | boolean | `true` | フェーズ遷移を確認 |
-
----
-
-## セーフティ設定
-
-| 設定 | 型 | デフォルト | 説明 |
-|------|-----|-----------|------|
-| `safety.always_confirm_destructive` | boolean | `true` | 破壊的操作（削除、上書き）の確認 |
-| `safety.always_confirm_external_services` | boolean | `true` | 外部サービ��とのやり取りの確認 |
+| `gates.execute_next_plan` | boolean | `true` | 次のプラン実行前に確認（`execute-plan.md`） |
+| `gates.confirm_transition` | boolean | `true` | フェーズ遷移を確認（`transition.md`） |
+| `gates.confirm_milestone_scope` | boolean | `true` | 出荷前にマイルストーンの範囲を確認（`complete-milestone.md`） |
 
 ---
 
