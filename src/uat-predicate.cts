@@ -343,9 +343,10 @@ interface GapEntry {
  * Fields are matched per line, first-match-wins, bounded to the entry's OWN
  * top-level indentation — either the bullet-opener line itself (0 leading
  * spaces once `BULLET_OPENER_RE` has stripped the `"- "` marker) or a
- * continuation line indented by exactly the template's 2 spaces
- * (`FIELD_INDENT_RE`). A candidate line indented deeper than that (4+ spaces)
- * is a nested sub-list's body or a multi-line scalar VALUE, never a sibling
+ * continuation line indented by exactly the template's 2 spaces (each field
+ * regex below is anchored `^[ ]{0,2}key:`). A candidate line indented deeper
+ * than that (4+ spaces) is a nested sub-list's body or a multi-line scalar
+ * VALUE, never a sibling
  * field declaration, and is deliberately NOT trimmed-and-matched the way an
  * earlier revision of this function did (#4983 review round 1, MEDIUM): a
  * block-scalar value line that happens to read "status: resolved" after
@@ -395,11 +396,10 @@ function parseGapsEntries(cleanContent: string): GapEntry[] {
   // the template's own two-space-indented shape has exactly 2. Anything
   // indented deeper (a scalar body, a nested `artifacts:`/`missing:` list
   // item) is excluded by construction, not merely by accident of key name.
-  const FIELD_INDENT_RE = '^[ ]{0,2}';
-  const TEST_FIELD_RE = new RegExp(FIELD_INDENT_RE + 'test:[ \\t]*(.*)$', 'i');
-  const STATUS_FIELD_RE = new RegExp(FIELD_INDENT_RE + 'status:[ \\t]*(.*)$', 'i');
-  const RESOLVED_BY_FIELD_RE = new RegExp(FIELD_INDENT_RE + 'resolved_by:[ \\t]*(.*)$', 'i');
-  const GAP_ID_FIELD_RE = new RegExp(FIELD_INDENT_RE + 'gap_id:[ \\t]*(.*)$', 'i');
+  const TEST_FIELD_RE = /^[ ]{0,2}test:[ \t]*(.*)$/i;
+  const STATUS_FIELD_RE = /^[ ]{0,2}status:[ \t]*(.*)$/i;
+  const RESOLVED_BY_FIELD_RE = /^[ ]{0,2}resolved_by:[ \t]*(.*)$/i;
+  const GAP_ID_FIELD_RE = /^[ ]{0,2}gap_id:[ \t]*(.*)$/i;
 
   const entries: GapEntry[] = [];
   for (const block of entryBlocks) {
