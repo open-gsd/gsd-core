@@ -594,11 +594,18 @@ jobs:
     defaults:
       run:
         shell: ${{ matrix.shell }}
-    # No LANE_COSTS entry exists yet for this brand-new job — see
-    # tests/ci-test-job-timeout-budget.test.cjs's own header: "no unit test
-    # can prove a lane fits its budget — only a real CI run measures that."
-    # Generous until a real measurement exists; the smaller file count
-    # should comfortably undercut this ceiling.
+    # This cap is deliberately NOT raised. #5029: the Windows lane was
+    # cancelled at the cap with zero failing tests, and the remedy for a lane
+    # that outgrew its budget is a finer split, not a bigger ceiling — raising
+    # it would only move the same cliff further out (ADR-4641 records 45m as
+    # the cliff #869 and #3057 were both filed about).
+    #
+    # Still no LANE_COSTS entry in tests/ci-test-job-timeout-budget.test.cjs —
+    # see that file's header: "no unit test can prove a lane fits its budget —
+    # only a real CI run measures that." A 3-shard measurement now exists (run
+    # 36322513056, `next` @19a7b1fe6: 21m47s / 34m24s / 29m46s), but it prices
+    # the layout this commit replaces; the entry lands once a real 4-shard run
+    # measures the layout below.
     timeout-minutes: 45
     env:
       GSD_PLUGIN_ROOT: .ci-gsd-plugin-root-disabled
@@ -609,18 +616,51 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # #5029: four Windows shards, not three. Sizing, from run 36322513056
+          # (`next` @19a7b1fe6) — the per-shard TEST STEP costs 1249s / 2012s /
+          # 1728s over ~52s of fixed per-job overhead, so the tier is ~4989s of
+          # real Windows test work.
+          #
+          #   worst shard ~= 60s + skew * (4989s / N)
+          #
+          # `skew` is measured, not assumed, and it is why N=3 fails: selectShard
+          # balances these shards PERFECTLY in its own weight units (206.2 each),
+          # yet they run 0.75x / 1.21x / 1.04x of an equal split. The timings
+          # table that feeds the packer is Linux-measured, and #4434's win32
+          # correction only reprices files ABSENT from it — the ~190 files
+          # present carry Linux-relative weights, and Windows does not scale
+          # uniformly. The packer therefore cannot see this imbalance at all.
+          # (Not fixable by retuning WINDOWS_UNMEASURED_COST_MULTIPLIER: the
+          # shards get near-identical measured/unmeasured splits, so the implied
+          # multiplier would have to be 0.49 on shard 1 and 3.64 on shard 2 at
+          # once. A Windows-measured table is the real cure and its own change.)
+          #
+          # At N=3 a typical skew of 1.21 already costs 34m24s of a 45m cap, and
+          # the #4935 cancellation puts the bad-runner skew above 1.62, which the
+          # formula lands at 45.9m — past the cap, which is exactly what happened.
+          # N=4 holds on both readings: 26m at skew 1.21 (x1.5 headroom = 39m,
+          # inside the cap) and 35m at skew 1.62, ~10m clear. N=5 buys margin the
+          # measurements do not ask for, at another 2x-billed Windows runner.
+          #
+          # Fewer files per shard (70, from 93) also relaxes the per-chunk 600s
+          # cap and maxUnmeasuredPerChunk, both of which have drawn red builds
+          # here before (#4936, #4733).
           - os: windows-latest
             node-version: 24
             shell: pwsh
-            shard: 1/3
+            shard: 1/4
           - os: windows-latest
             node-version: 24
             shell: pwsh
-            shard: 2/3
+            shard: 2/4
           - os: windows-latest
             node-version: 24
             shell: pwsh
-            shard: 3/3
+            shard: 3/4
+          - os: windows-latest
+            node-version: 24
+            shell: pwsh
+            shard: 4/4
           - os: macos-latest
             node-version: 24
             shell: 'zsh {0}'
