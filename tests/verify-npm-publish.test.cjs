@@ -373,7 +373,7 @@ describe('#5021: verify window covers npm processing delay (wall-clock, not atte
     const calls = [];
     const spy = (cmd, args, opts) => { calls.push({ cmd, args, opts }); return '1.15.0\n'; };
 
-    const version = defaultFetchVersion('@opengsd/gsd-core', '1.15.0', { exec: spy });
+    const version = defaultFetchVersion('@opengsd/gsd-core', '1.15.0', { execFileSync: spy });
 
     assert.equal(version, '1.15.0');
     assert.equal(calls.length, 1);
@@ -386,14 +386,14 @@ describe('#5021: verify window covers npm processing delay (wall-clock, not atte
       err.code = 'ETIMEDOUT';
       throw err;
     };
-    assert.equal(defaultFetchVersion('@opengsd/gsd-core', '1.15.0', { exec: timingOutSpy }), null);
+    assert.equal(defaultFetchVersion('@opengsd/gsd-core', '1.15.0', { execFileSync: timingOutSpy }), null);
   });
 
   test('defaultFetchDistTag bounds its npm subprocess and degrades on timeout', () => {
     const calls = [];
     const spy = (cmd, args, opts) => { calls.push({ cmd, args, opts }); return '{"latest":"1.15.0"}'; };
 
-    const distTag = defaultFetchDistTag('@opengsd/gsd-core', 'latest', { exec: spy });
+    const distTag = defaultFetchDistTag('@opengsd/gsd-core', 'latest', { execFileSync: spy });
 
     assert.equal(distTag, '1.15.0');
     assert.equal(calls.length, 1);
@@ -406,7 +406,7 @@ describe('#5021: verify window covers npm processing delay (wall-clock, not atte
       err.code = 'ETIMEDOUT';
       throw err;
     };
-    assert.equal(defaultFetchDistTag('@opengsd/gsd-core', 'latest', { exec: timingOutSpy }), null);
+    assert.equal(defaultFetchDistTag('@opengsd/gsd-core', 'latest', { execFileSync: timingOutSpy }), null);
   });
 
   test('fc: ok is a pure function of appearAtMs vs the window, and the clock never passes it', async () => {

@@ -44,17 +44,17 @@ const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ---- npm fetchers ------------------------------------------------------------
 
-function defaultFetchVersion(pkg, version, { exec = cp.execFileSync } = {}) {
+function defaultFetchVersion(pkg, version, { execFileSync = cp.execFileSync } = {}) {
   try {
-    const out = exec('npm', ['view', `${pkg}@${version}`, 'version'],
+    const out = execFileSync('npm', ['view', `${pkg}@${version}`, 'version'],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: NPM_VIEW_TIMEOUT_MS }).trim();
     return out || null;
   } catch { return null; }
 }
 
-function defaultFetchDistTag(pkg, distTag, { exec = cp.execFileSync } = {}) {
+function defaultFetchDistTag(pkg, distTag, { execFileSync = cp.execFileSync } = {}) {
   try {
-    const out = exec('npm', ['view', pkg, 'dist-tags', '--json'],
+    const out = execFileSync('npm', ['view', pkg, 'dist-tags', '--json'],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: NPM_VIEW_TIMEOUT_MS });
     const tags = JSON.parse(out);
     return (tags && typeof tags === 'object' && tags[distTag]) || null;
