@@ -55,8 +55,10 @@ Then continue to `present_test` with it.
 
 ## § 3 — diagnose_issues, plan_gap_closure, verify_gap_plans, revision_loop (the gap-closure sub-flow)
 
-This whole sub-flow only runs when UAT testing found issues (`complete_session` routes here); a
-session with zero issues never reaches it.
+This whole sub-flow only runs when UAT testing found UNRESOLVED issues (`complete_session` routes
+here based on `unresolved_issues`, not the raw `issues` count — #4983, see § 4); a session with
+zero unresolved issues never reaches it, including a resumed session whose issues were all
+verified-resolved by an executed gap-closure plan.
 
 ### diagnose_issues
 
@@ -227,4 +229,42 @@ the binding/non-binding contract and REVISION_CONFLICT handling stated above thi
   model="{planner_model}",
   description="Revise Phase {phase} plans"
 )
+```
+
+## § 4 — complete_session's `unresolved_issues` count (#4983)
+
+**Why this exists:** `reconcile_gaps` (§ 1) updates a resolved gap's YAML in the UAT file's
+`## Gaps` section, but it never touches the matching `### N.` test block's `result: issue` line —
+by design, that line is the historical record of what the user reported. Before #4983,
+`complete_session` counted raw `result: issue` tests and routed into `diagnose_issues` whenever
+that count was nonzero, so a resumed session whose issues had ALL been verified-resolved by an
+executed gap-closure plan still fell straight back into diagnosis — the terminal sub-flow (§ 3)
+has no path back to promotion. This is the sibling of #4546 (which fixed the same
+misroute-forever shape for a deliberately deferred `skipped` test) for the `issue`-plus-resolved
+case.
+
+**`unresolved_issues` definition:** a test counts toward `unresolved_issues` when its
+`result: issue` AND it is NOT a verified resolution. A `result: issue` test is a verified
+resolution only when its `## Gaps` entry (matched by `test:`) has ALL of:
+- `status: resolved` (case-insensitive);
+- a non-empty `resolved_by`;
+- `resolved_by`, as a bare basename (no path separators), names a `*-PLAN.md` file that exists in
+  this phase directory;
+- that plan has a matching `*-SUMMARY.md` sibling in the same directory (proof it actually ran).
+
+This is the EXACT criterion `phase uat-passed` uses (`src/uat-predicate.cts`'s
+`isTestGapResolved`) — apply it the same way here, by reading the phase directory's files
+directly, not by trusting the Gaps entry's own text alone. A `status: resolved` entry whose
+`resolved_by` names no such plan (missing, wrong suffix, or no matching SUMMARY) does NOT count as
+a verified resolution — the test stays in `unresolved_issues` and still routes to
+`diagnose_issues`, exactly as an unresolved issue always has. If a test has more than one `## Gaps`
+entry (a later regression re-opens the same test number with a fresh `gap_id`, per § 1), it only
+counts as resolved when EVERY entry for that test number is a verified resolution — one open
+regression is enough to keep the test unresolved.
+
+**Where this plugs in:** `complete_session`'s "Count results" step computes `unresolved_issues`
+alongside `pending_count`/`blocked_count`/`skipped_no_reason`, and its issues-routing decision
+(`diagnose_issues` vs. proceeding toward promotion) reads `unresolved_issues`, not the raw
+`issues` count from `## Summary`. The raw `issues` count is unchanged and still drives the
+presented summary numbers.
 ```

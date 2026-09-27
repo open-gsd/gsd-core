@@ -529,6 +529,9 @@ Count results:
 - `pending_count`: tests with `result: [pending]`
 - `blocked_count`: tests with `result: blocked`
 - `skipped_no_reason`: tests with `result: skipped` and no `reason` field
+- `unresolved_issues`: tests with `result: issue` that are NOT a verified gap resolution (#4983) —
+  same criterion `phase uat-passed` uses (`src/uat-predicate.cts`). Exact definition:
+  `gsd-core/workflows/verify-work/detail/elaboration.md` § 4.
 
 ```
 if pending_count > 0 OR blocked_count > 0 OR skipped_no_reason > 0:
@@ -601,15 +604,16 @@ Present summary:
 | Issues | {N}   |
 | Skipped| {N}   |
 
-[If issues > 0:]
+[If unresolved_issues > 0:]
 ### Issues Found
 
 [List from Issues section]
 ```
 
-**If issues > 0:** Proceed to `diagnose_issues`
+**If unresolved_issues > 0:** Proceed to `diagnose_issues`
 
-**If issues == 0:**
+**If unresolved_issues == 0:** (including when raw `issues` > 0 but every one is a verified gap
+resolution, #4983)
 
 ```bash
 VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
