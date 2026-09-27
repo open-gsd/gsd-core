@@ -2,6 +2,9 @@
   "_comment": "Canonical schema manifest for valid config key paths. This manifest is the single CJS source of truth for valid config keys; dynamicKeyPatterns source strings are recompiled to RegExp at runtime by config-schema.cjs. runtimeStateKeys mirrors RUNTIME_STATE_KEYS.",
   "validKeys": [
     "mode",
+    "gates.execute_next_plan",
+    "gates.confirm_transition",
+    "gates.confirm_milestone_scope",
     "granularity",
     "parallelization",
     "commit_docs",

@@ -152,7 +152,7 @@ Proceed directly to cleanup_handoff step.
 
 </if>
 
-<if mode="interactive" OR="custom with gates.confirm_transition true">
+<if mode="interactive" AND="gates.confirm_transition != false">
 
 Ask: "Phase [X] complete — all [Y] plans finished. Ready to mark done and move to Phase [X+1]?"
 
@@ -162,8 +162,7 @@ Wait for confirmation before proceeding.
 
 **If plans incomplete:**
 
-**SAFETY RAIL: always_confirm_destructive applies here.**
-Skipping incomplete plans is destructive — ALWAYS prompt regardless of mode.
+**SAFETY RAIL.** Skipping incomplete plans is destructive — ALWAYS prompt regardless of mode.
 
 Present:
 
@@ -511,7 +510,7 @@ Exit skill and invoke SlashCommand("/gsd:discuss-phase [X+1] --auto ${GSD_WS}")
 
 </if>
 
-<if mode="interactive" OR="custom with gates.confirm_transition true">
+<if mode="interactive" AND="gates.confirm_transition != false">
 
 **If CONTEXT.md does NOT exist:**
 
@@ -646,7 +645,7 @@ Exit skill and invoke SlashCommand("/gsd:complete-milestone {version} ${GSD_WS}"
 
 </if>
 
-<if mode="interactive" OR="custom with gates.confirm_transition true">
+<if mode="interactive" AND="gates.confirm_transition != false">
 
 ```
 ## ✓ Phase {X}: {Phase Name} Complete

@@ -14,6 +14,11 @@
   "phase_id_convention": null,
   "mode": "interactive",
   "claude_md_path": "./.claude/CLAUDE.md",
+  "gates": {
+    "execute_next_plan": true,
+    "confirm_transition": true,
+    "confirm_milestone_scope": true
+  },
   "git": {
     "branching_strategy": "none",
     "create_tag": true,

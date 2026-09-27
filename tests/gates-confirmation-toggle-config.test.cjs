@@ -180,21 +180,57 @@ describe('#4974 — boundary: a same-shaped but unregistered gate key stays reje
 });
 
 describe('#4974 — loader no longer warns "will be ignored" for a gates block', () => {
-  test('loading a config.json with only a gates block produces no unknown-key warning', () => {
+  // `config-get` reads config.json directly and does NOT walk loadConfig's
+  // unknown-top-level-key check; `loadConfigResolved` (src/config-loader.cts)
+  // is the actual code path that emits "unknown config key(s) ... will be
+  // ignored", so exercise it directly rather than through a CLI verb that
+  // happens not to reach it.
+  const { loadConfigResolved, _resetRuntimeWarningCacheForTests } = require('../gsd-core/bin/lib/config-loader.cjs');
+
+  function loadWithCapturedStderr(cwd) {
+    const origWrite = process.stderr.write.bind(process.stderr);
+    let captured = '';
+    process.stderr.write = (chunk) => {
+      captured += chunk;
+      return true;
+    };
+    try {
+      loadConfigResolved(cwd);
+    } finally {
+      process.stderr.write = origWrite;
+    }
+    return captured;
+  }
+
+  test('a gates block produces no "unknown config key" warning', () => {
     const proj = createTempProject();
     try {
       const cfgPath = path.join(proj, '.planning', 'config.json');
       fs.writeFileSync(cfgPath, JSON.stringify({ gates: { execute_next_plan: false } }, null, 2));
+      if (typeof _resetRuntimeWarningCacheForTests === 'function') _resetRuntimeWarningCacheForTests();
 
-      // init.execute-phase is a cheap loadConfig-exercising path used elsewhere
-      // in this suite (config-get also loads/validates the file, but does not
-      // walk the unknown-top-level-key warning path the same way loadConfig does).
-      const res = runGsdTools(['config-get', 'gates.execute_next_plan'], proj);
-      assert.ok(res.success, `config-get should succeed: ${res.output || res.error || ''}`);
-      const combined = `${res.output || ''}${res.error || ''}`;
+      const captured = loadWithCapturedStderr(proj);
       assert.ok(
-        !/unknown config key\(s\).*gates/i.test(combined),
-        `must not warn that "gates" is an unknown/ignored top-level key: ${combined}`,
+        !/unknown config key\(s\)/i.test(captured),
+        `must not warn about an unknown config key for a gates block: ${captured}`,
+      );
+    } finally {
+      cleanup(proj);
+    }
+  });
+
+  test('negative control: a genuinely unknown top-level key still warns (proves the mechanism fires)', () => {
+    const proj = createTempProject();
+    try {
+      const cfgPath = path.join(proj, '.planning', 'config.json');
+      fs.writeFileSync(cfgPath, JSON.stringify({ totallyBogusKeyXYZ: { a: 1 } }, null, 2));
+      if (typeof _resetRuntimeWarningCacheForTests === 'function') _resetRuntimeWarningCacheForTests();
+
+      const captured = loadWithCapturedStderr(proj);
+      assert.match(
+        captured,
+        /unknown config key\(s\) in \.planning\/config\.json: totallyBogusKeyXYZ/,
+        `expected the unknown-key warning for a genuinely bogus top-level key: ${captured}`,
       );
     } finally {
       cleanup(proj);
