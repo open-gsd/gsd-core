@@ -46,7 +46,7 @@ export interface RedEvidenceInput {
   command: unknown;
   /** The command's exit code. */
   exitCode: unknown;
-  /** The command's combined stdout (TAP for node --test; Surefire/Failsafe XML for Maven). */
+  /** The command's combined stdout (TAP for node --test; Surefire/Failsafe XML for Maven; swift-testing console summary for `swift test`, #4957). */
   output: unknown;
   /**
    * Identity of the target the plan named: the `test('...')` name for
@@ -146,6 +146,48 @@ function parseSurefireSummary(output: string): {
   return { tests, pass: tests - fail, fail, failing_tests };
 }
 
+/**
+ * #4957 — swift-testing console summary. Detection requires the anchored
+ * aggregate marker `Test run with N tests in M suites (passed|failed)` —
+ * this is the ONLY structurally reliable signal that the output is
+ * swift-testing at all (a TAP or Surefire report does not spontaneously
+ * contain this exact phrase). The `tests` count comes from THIS aggregate
+ * line, never inferred from per-test lines, so a report with the aggregate
+ * line but NO per-test lines (e.g. a truncated capture) still reports the
+ * real test count instead of lying that zero tests ran.
+ *
+ * `fail`/`pass` and `failing_tests` come ONLY from observed per-test lines
+ * (`Test "name" failed/passed after ...`) — an "issues" count on the
+ * aggregate line is NOT 1:1 with a failing-test count (one test can record
+ * multiple issues), so it is never used to fabricate a fail count. When no
+ * per-test lines are present, `fail` stays 0 and `failing_tests` stays
+ * empty — an honest "no named failing test observed", which the caller
+ * (classifyRedEvidence) already routes to `nonzero_exit_without_test_failure`
+ * rather than a false `zero_tests_discovered`.
+ */
+function isSwiftTestingSummary(output: string): boolean {
+  return /Test run with \d+ tests? in \d+ suites?\s+(?:passed|failed)/.test(output);
+}
+
+function parseSwiftTestingSummary(output: string): {
+  tests: number;
+  pass: number;
+  fail: number;
+  failing_tests: string[];
+} {
+  const aggregate = /Test run with (\d+) tests? in \d+ suites?\s+(?:passed|failed)/.exec(output);
+  const tests = aggregate ? Number(aggregate[1]) : 0;
+  const failing_tests: string[] = [];
+  const passing_tests: string[] = [];
+  const lineRe = /Test "([^"]+)" (failed|passed) after [\d.]+ seconds?(?: with \d+ issues?)?\.?/g;
+  let m: RegExpExecArray | null;
+  while ((m = lineRe.exec(output)) !== null) {
+    if (m[2] === 'failed') failing_tests.push(m[1]);
+    else passing_tests.push(m[1]);
+  }
+  return { tests, pass: passing_tests.length, fail: failing_tests.length, failing_tests };
+}
+
 /** Coerce and validate the raw record's scalar fields. Returns null exit_code only when absent/non-numeric. */
 function readInput(input: RedEvidenceInput): {
   command: string;
@@ -196,12 +238,17 @@ export function classifyRedEvidence(input: RedEvidenceInput): RedEvidenceResult 
   // merely quotes "<testsuite>" (e.g. "expected <testsuite> was 2") must not
   // flip a genuine TAP red into the XML path.
   const isSurefireXml = output.includes('<testsuite') && output.includes('<testcase');
+  const isSwiftTesting = !isSurefireXml && isSwiftTestingSummary(output);
   let summary: { tests: number; pass: number; fail: number };
   let failing: string[];
   if (isSurefireXml) {
     const sf = parseSurefireSummary(output);
     summary = { tests: sf.tests, pass: sf.pass, fail: sf.fail };
     failing = sf.failing_tests;
+  } else if (isSwiftTesting) {
+    const st = parseSwiftTestingSummary(output);
+    summary = { tests: st.tests, pass: st.pass, fail: st.fail };
+    failing = st.failing_tests;
   } else {
     summary = parseNodeTestSummary(output);
     failing = tapFailedTestNames(output);
