@@ -589,7 +589,7 @@ describe('#4957 — swift-testing RED evidence', () => {
   });
 
   test('concatenated swift-testing blocks report a consistent summed test count (review finding)', () => {
-    const block1 = swiftTesting([failLine('A')], { tests: 2 });
+    const block1 = swiftTesting([passLine('A0'), failLine('A1')], { tests: 2 });
     const block2 = swiftTesting([passLine('B'), passLine('C'), failLine('D')], { tests: 3 });
     const result = classifyRedEvidence({
       command: 'swift test',
