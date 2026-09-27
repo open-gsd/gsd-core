@@ -573,6 +573,83 @@ Some unrelated notes with no Current Position section.
   });
 });
 
+// ── Phase Status Module consumers (#5060) ───────────────────────────────────
+
+describe('drift-guard phase-status — Phase Status Module consumers (#5060)', () => {
+  let tmpDir;
+  let planningDir;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5060-drift-guard-'));
+    planningDir = path.join(tmpDir, '.planning');
+    fs.mkdirSync(planningDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  const PHASE = 3;
+  const PHASE_NAME = 'Convergence';
+
+  function writeState(stateStatus) {
+    fs.writeFileSync(
+      path.join(planningDir, 'STATE.md'),
+      `---
+gsd_state_version: '1.0'
+status: planning
+---
+
+# Project State
+
+## Current Position
+
+Phase: ${PHASE} of 8 (${PHASE_NAME})
+Plan: 1 of 1 in current phase
+Status: ${stateStatus}
+Last activity: 2026-08-09 — test fixture
+
+Progress: [░░░░░░░░░░] 0%
+`,
+    );
+  }
+
+  function writeRoadmap(roadmapStatus) {
+    fs.writeFileSync(
+      path.join(planningDir, 'ROADMAP.md'),
+      buildRoadmapProgressContent(PHASE, PHASE_NAME, roadmapStatus),
+    );
+  }
+
+  test('STATE "Ready to execute" vs ROADMAP "Planned" → consistent, roadmapRank 1', () => {
+    writeState('Ready to execute');
+    writeRoadmap('Planned');
+    const res = runGsdTools(['drift-guard', 'phase-status', '--phase', String(PHASE)], tmpDir);
+    assert.ok(res.success, `Expected success, got: ${res.error}`);
+    const result = JSON.parse(res.output);
+    assert.equal(result.verdict, 'consistent');
+    assert.equal(result.roadmapRank, 1);
+  });
+
+  test('STATE "Phase complete" vs ROADMAP "Complete — shipped with gate results recorded" → consistent, raw roadmapStatus preserved', () => {
+    writeState('Phase complete');
+    writeRoadmap('Complete — shipped with gate results recorded');
+    const res = runGsdTools(['drift-guard', 'phase-status', '--phase', String(PHASE)], tmpDir);
+    assert.ok(res.success, `Expected success, got: ${res.error}`);
+    const result = JSON.parse(res.output);
+    assert.equal(result.verdict, 'consistent');
+    assert.equal(result.roadmapStatus, 'Complete — shipped with gate results recorded');
+  });
+
+  test('parity: every ROADMAP_STATUS_TOKEN resolves a non-null roadmapRank via comparePhaseStatus', () => {
+    const { ROADMAP_STATUS_TOKEN } = require('../gsd-core/bin/lib/phase-status.cjs');
+    for (const token of Object.values(ROADMAP_STATUS_TOKEN)) {
+      const result = comparePhaseStatus({ stateStatus: 'In progress', roadmapStatus: token.toLowerCase() });
+      assert.notEqual(result.roadmapRank, null, `token ${token} must resolve a non-null roadmapRank`);
+    }
+  });
+});
+
 // ── 8. #1956/#2012 parity — findRoadmapProgressTable vs deriveProgressFromRoadmap ──
 //
 // Two SEPARATE implementations locate "the" ROADMAP Progress table:

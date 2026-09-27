@@ -160,6 +160,26 @@ describe('init manager', () => {
     assert.strictEqual(output.phases[0].disk_status, 'partial');
   });
 
+  // #5060 (ADR-3180 §7.5, row 25): a stray unpaired *-SUMMARY.md that does
+  // not match any plan must not inflate summary_count — the raw summary-list
+  // length previously read the count too high and reported an in-progress
+  // disk_status for a phase with zero matched summaries.
+  test('#5060: a stray unpaired *-GAPCLOSURE-SUMMARY.md does not inflate summary_count or flip disk_status', () => {
+    writeState(tmpDir);
+    writeRoadmap(tmpDir, [
+      { number: '1', name: 'Stray Summary Phase' },
+    ]);
+    const phaseDir = scaffoldPhase(tmpDir, 1, { slug: 'stray-summary-phase', plans: 1 });
+    fs.writeFileSync(path.join(phaseDir, '01-GAPCLOSURE-SUMMARY.md'), '# gap closure summary');
+
+    const result = runGsdTools('init manager', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phases[0].summary_count, 0, 'the unpaired stray summary must not be matched to the plan');
+    assert.strictEqual(output.phases[0].disk_status, 'planned', 'zero matched summaries against one plan is planned, not executed/partial');
+  });
+
   test('dependency satisfaction: deps on complete phases = satisfied', () => {
     writeState(tmpDir);
     writeRoadmap(tmpDir, [

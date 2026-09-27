@@ -3205,26 +3205,138 @@ describe('stats command', () => {
     assert.strictEqual(phase05.status, 'Complete', 'folded status must be Complete, not Not Started');
   });
 
-  test('#2408: foldPhaseStatus is commutative and order-independent (property)', () => {
-    // Direct unit test of the fold: a Complete colliding with a Not Started
-    // must yield Complete regardless of argument order. This is the property
-    // that makes the merge-site fix correct independent of fs read order.
-    const { foldPhaseStatus, PHASE_STATUS_PRECEDENCE } = require('../gsd-core/bin/lib/commands.cjs');
-    assert.strictEqual(foldPhaseStatus('Complete', 'Not Started'), 'Complete');
-    assert.strictEqual(foldPhaseStatus('Not Started', 'Complete'), 'Complete');
-    assert.strictEqual(foldPhaseStatus('Complete', 'Complete'), 'Complete');
-    // Every recognized status folded with a lower-precedence one wins.
-    for (let i = 0; i < PHASE_STATUS_PRECEDENCE.length - 1; i++) {
-      const higher = PHASE_STATUS_PRECEDENCE[i];
-      const lower = PHASE_STATUS_PRECEDENCE[i + 1];
-      assert.strictEqual(foldPhaseStatus(higher, lower), higher, `${higher} should beat ${lower}`);
-      assert.strictEqual(foldPhaseStatus(lower, higher), higher, `${higher} should beat ${lower} (commutative)`);
-    }
-    // Unrecognized status never beats a recognized one.
-    assert.strictEqual(foldPhaseStatus('Complete', '???'), 'Complete');
-    assert.strictEqual(foldPhaseStatus('???', 'Complete'), 'Complete');
-    // Two unrecognized → returns first arg (deterministic).
-    assert.strictEqual(foldPhaseStatus('foo', 'bar'), 'foo');
+});
+
+// ─── Phase Status Module consumers (#5060) ──────────────────────────────────
+//
+// Consumer regression tests for the single-owner phase status ladder
+// (ADR-5057 Phase 1, src/phase-status.cts). These pin the fixed defects the
+// module is required to close: a stale-passed verification (covered_digest
+// mismatch) must read Executed, never Complete; a zero-plan phase with a
+// fresh passed report is disk-strict Complete; and a fold collision must
+// never drop a declared phase row.
+describe('Phase Status Module consumers (#5060)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('progress json: stale-passed phase 01 reads Executed, not Complete', () => {
+    const p1 = path.join(tmpDir, '.planning', 'phases', '01-auth');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
+    // Written last: covered_digest never matches the plan's real digest, so
+    // the report is stale despite `status: passed`.
+    fs.writeFileSync(
+      path.join(p1, '01-VERIFICATION.md'),
+      [
+        '---',
+        'status: passed',
+        'covered_files:',
+        '  - 01-01-PLAN.md',
+        'covered_digest: sha256-v2:0000000000000000',
+        '---',
+        '# Verification',
+        '',
+      ].join('\n')
+    );
+
+    const result = runGsdTools('progress json', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phases[0].status, 'Executed', 'stale-passed verification must not read Complete');
+  });
+
+  test('stats: stale-passed phase 01 reads Executed and does not count toward phases_completed', () => {
+    const p1 = path.join(tmpDir, '.planning', 'phases', '01-auth');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
+    fs.writeFileSync(
+      path.join(p1, '01-VERIFICATION.md'),
+      [
+        '---',
+        'status: passed',
+        'covered_files:',
+        '  - 01-01-PLAN.md',
+        'covered_digest: sha256-v2:0000000000000000',
+        '---',
+        '# Verification',
+        '',
+      ].join('\n')
+    );
+
+    const result = runGsdTools('stats', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const stats = JSON.parse(result.output);
+    const phase = stats.phases.find((p) => p.number === '01' || p.number === '1');
+    assert.strictEqual(phase.status, 'Executed', 'stale-passed verification must not read Complete');
+    assert.strictEqual(stats.phases_completed, 0, 'a stale-passed phase must not count as completed');
+  });
+
+  test('stats: zero-plan phase with a fresh passed report is Complete (disk-strict)', () => {
+    const p1 = path.join(tmpDir, '.planning', 'phases', '01-auth');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-VERIFICATION.md'), '---\nstatus: passed\n---\n# Verification');
+
+    const result = runGsdTools('stats', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const stats = JSON.parse(result.output);
+    const phase = stats.phases.find((p) => p.number === '01' || p.number === '1');
+    assert.strictEqual(phase.status, 'Complete', 'a zero-plan phase with a fresh passed report is disk-strict Complete');
+  });
+
+  test('stats: colliding dirs fold to furthest-along status without dropping a sibling declared phase', () => {
+    const realDir = path.join(tmpDir, '.planning', 'phases', '05-real');
+    fs.mkdirSync(realDir, { recursive: true });
+    fs.writeFileSync(path.join(realDir, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(realDir, '01-01-SUMMARY.md'), '# Summary');
+    fs.writeFileSync(path.join(realDir, 'VERIFICATION.md'), '---\nstatus: passed\n---\n# Verified');
+
+    const strayDir = path.join(tmpDir, '.planning', 'phases', '05-real-stray');
+    fs.mkdirSync(strayDir, { recursive: true });
+
+    const p6 = path.join(tmpDir, '.planning', 'phases', '06-next');
+    fs.mkdirSync(p6, { recursive: true });
+    fs.writeFileSync(path.join(p6, '06-01-PLAN.md'), '# Plan');
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## Milestone v1',
+        '',
+        '### Phase 5: Real',
+        '**Goal:** The real phase',
+        '',
+        '### Phase 6: Next',
+        '**Goal:** The next phase',
+      ].join('\n')
+    );
+
+    const result = runGsdTools('stats', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const stats = JSON.parse(result.output);
+    assert.strictEqual(stats.phases_total, 2, 'phase 05 collision merges to one row; phase 06 is a second row');
+    assert.strictEqual(stats.phases_completed, 1);
+    const phase05 = stats.phases.find((p) => p.number === '05');
+    assert.ok(phase05, 'phase 05 must appear in stats output');
+    assert.strictEqual(phase05.status, 'Complete', 'folded status must be Complete, not Not Started');
+    const phase06 = stats.phases.find((p) => p.number === '06');
+    assert.ok(phase06, 'phase 06 must not be dropped by the phase-05 collision fold');
+    assert.strictEqual(phase06.status, 'Planned');
   });
 });
 

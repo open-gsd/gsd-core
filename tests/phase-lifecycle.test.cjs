@@ -174,6 +174,24 @@ describe('deriveProgressFromRoadmap', () => {
   });
 });
 
+describe('Phase Status Module consumers (#5060)', () => {
+  test('deriveProgressFromRoadmap counts a prose-bearing Complete row and excludes the 999.1 sentinel row', () => {
+    const roadmap = [
+      '## Progress',
+      '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '| --- | --- | --- | --- |',
+      '| 1. A | 1/1 | Complete — shipped | 2026-09-20 |',
+      '| 2. B | 0/1 | Not started | - |',
+      '| 999.1. Backlog | 0/0 | Complete | - |',
+    ].join('\n');
+
+    const result = deriveProgressFromRoadmap(roadmap);
+    assert.equal(result.completedPhases, 1, `prose-bearing Complete row must be counted, got ${result.completedPhases}`);
+    assert.equal(result.totalPhases, 2, `sentinel row must not be counted, got ${result.totalPhases}`);
+  });
+});
+
 describe('clampPercent', () => {
   test('computes a normal percentage', () => {
     assert.equal(clampPercent(1, 2), 50);

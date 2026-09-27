@@ -600,6 +600,71 @@ describe('roadmap analyze disk status variants', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Phase Status Module consumers (#5060)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('roadmap analyze — Phase Status Module consumers (#5060)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('a heading-declared phase with summaries=plans and no verification is disk_status executed, and is current_phase', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+### Phase 1: Foo
+**Goal:** Do the thing
+`
+    );
+    const p1 = path.join(tmpDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
+
+    const result = runGsdTools('roadmap analyze', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phases[0].disk_status, 'executed', 'an unverified summaries=plans phase must read executed, not partial');
+    assert.strictEqual(output.current_phase, '1', 'current_phase must recognize the executed rung');
+  });
+
+  test('a phase declared only via a Phase/Name table row is disk_status complete when verified', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '| Phase | Name |',
+        '|-------|------|',
+        '| 5 | Real |',
+        '',
+      ].join('\n')
+    );
+    const p5 = path.join(tmpDir, '.planning', 'phases', '05-real');
+    fs.mkdirSync(p5, { recursive: true });
+    fs.writeFileSync(path.join(p5, '05-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p5, '05-01-SUMMARY.md'), '# Summary');
+    fs.writeFileSync(path.join(p5, 'VERIFICATION.md'), '---\nstatus: passed\n---\n# Verification');
+
+    const result = runGsdTools('roadmap analyze', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    const phase5 = output.phases.find((p) => p.number === '5' || p.number === '05');
+    assert.ok(phase5, 'the table-declared phase must appear in output.phases');
+    assert.strictEqual(phase5.disk_status, 'complete', 'a verified table-only phase must read complete, not "ok"');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // roadmap analyze milestone extraction
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1985,6 +2050,45 @@ describe('#4925: roadmap update-plan-progress — Status-cell prose and the Comp
     );
     assert.ok(written.includes('| 67. Waves | v1.3 | 2/2 | Complete | 2026-09-01 |'), 'sibling row untouched');
     assert.ok(written.includes('| 69. Packhouse | v1.3 | 0/2 | Not started | - |'), 'sibling row untouched');
+  });
+
+  // #5060 — the shared owner's matcher must not treat 'Deferred' as a
+  // lifecycle token for the writer (design.md's rejection of a DEFERRED rung):
+  // a Deferred cell is left byte-identical apart from the Plans count.
+  test('#5060: a Deferred Status cell is left untouched (not a lifecycle token for the writer)', () => {
+    const roadmap = progressRoadmap('| 68. Scheduler | v1.3 | 0/5 | Deferred | - |');
+    seedPhase68WithPlans(tmpDir, { roadmap });
+
+    const result = runGsdTools('roadmap update-plan-progress 68', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const expected = roadmap.replace(
+      '| 68. Scheduler | v1.3 | 0/5 | Deferred | - |',
+      '| 68. Scheduler | v1.3 | 1/5 | Deferred | - |',
+    );
+    assert.strictEqual(fs.readFileSync(roadmapPath, 'utf-8'), expected, 'Deferred cell must be left untouched apart from the Plans count');
+  });
+
+  // #5060 — a lifecycle token spelled with a whitespace run is now recognized
+  // (the reader already collapsed whitespace); the writer normalizes it to
+  // the canonical spelling while keeping the trailing prose.
+  test('#5060: a whitespace-run token (`in  progress`) is normalized to `In Progress`, prose kept', () => {
+    const roadmap = progressRoadmap('| 68. Scheduler | v1.3 | 1/2 | in  progress — see notes | - |');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), roadmap);
+    const p68 = path.join(tmpDir, '.planning', 'phases', '68-scheduler');
+    fs.mkdirSync(p68, { recursive: true });
+    fs.writeFileSync(path.join(p68, '68-01-PLAN.md'), '# Plan 1\n');
+    fs.writeFileSync(path.join(p68, '68-02-PLAN.md'), '# Plan 2\n');
+    fs.writeFileSync(path.join(p68, '68-01-SUMMARY.md'), '# Summary\n');
+
+    const result = runGsdTools('roadmap update-plan-progress 68', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const written = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(
+      written.includes('| 68. Scheduler | v1.3 | 1/2 | In Progress — see notes | - |'),
+      `expected the whitespace-run token normalized to 'In Progress', prose kept; got:\n${written}`,
+    );
   });
 });
 

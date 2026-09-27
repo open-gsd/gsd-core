@@ -1346,6 +1346,67 @@ describe('init plan-phase zero-padded phase number (bug #2391)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// init plan-phase — Phase Status Module consumers (#5060)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('init plan-phase — Phase Status Module consumers (#5060)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = fs.realpathSync(createFixture());
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('a stale-passed phase 1 reports phase_status Executed, not Complete', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n### Phase 1: Foo\n**Goal**: do the thing\n'
+    );
+    seedPhase(tmpDir, '01-foo', {
+      '01-01-PLAN.md': '# Plan',
+      '01-01-SUMMARY.md': '# Summary',
+      // Written last: covered_digest never matches, so the report is stale
+      // despite `status: passed`.
+      '01-VERIFICATION.md': [
+        '---',
+        'status: passed',
+        'covered_files:',
+        '  - 01-01-PLAN.md',
+        'covered_digest: sha256-v2:0000000000000000',
+        '---',
+        '# Verification',
+        '',
+      ].join('\n'),
+    });
+
+    const result = runGsdTools('init plan-phase 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_status, 'Executed', 'a stale-passed verification must not report Complete');
+  });
+
+  test('a zero-plan phase with a fresh passed report reports phase_status Complete', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n### Phase 1: Foo\n**Goal**: do the thing\n'
+    );
+    seedPhase(tmpDir, '01-foo', {
+      '01-VERIFICATION.md': '---\nstatus: passed\n---\n# Verification',
+    });
+
+    const result = runGsdTools('init plan-phase 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_status, 'Complete', 'a zero-plan phase with a fresh passed report is disk-strict Complete');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // cmdInitTodos (INIT-01)
 // ─────────────────────────────────────────────────────────────────────────────
 

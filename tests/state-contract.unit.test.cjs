@@ -336,6 +336,42 @@ describe('state contract — status mapping', () => {
   });
 });
 
+// ─── Phase Status Module consumers (#5060) ───────────────────────────────────
+
+describe('state contract — Phase Status Module consumers (#5060)', () => {
+  function statusFor(cwd, statusCell) {
+    writeProgressRoadmap(cwd, [
+      { Phase: '1. Foo', 'Plans Complete': '0/1', Status: statusCell, Completed: '-' },
+    ]);
+    const snapshot = buildStateContract(cwd, fixedDeps());
+    return snapshot.phases[0].status;
+  }
+
+  test('mapsProseBearingCompleteCellToComplete', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    assert.strictEqual(statusFor(tmpDir, 'Complete — shipped 2026-09-20'), PHASE_STATUS.COMPLETE);
+  });
+
+  test('mapsPlannedCellToInProgress', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    assert.strictEqual(statusFor(tmpDir, 'Planned'), PHASE_STATUS.IN_PROGRESS);
+  });
+
+  test('mapsProseBearingDeferredCellToPending', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    assert.strictEqual(statusFor(tmpDir, 'Deferred — v2'), PHASE_STATUS.PENDING);
+  });
+
+  test('mapsCompletedWithoutTrailingEToPending', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    assert.strictEqual(statusFor(tmpDir, 'Completed'), PHASE_STATUS.PENDING);
+  });
+});
+
 // ─── 4. Phase cell parsing ──────────────────────────────────────────────────────
 
 describe('state contract — phase cell parsing', () => {
