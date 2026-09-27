@@ -34,7 +34,7 @@ import { isCanonicalPlanningFile, CANONICAL_EXACT } from './artifacts.cjs';
 import frontmatterModule from './frontmatter.cjs';
 import type { Result } from './write-set.cjs';
 
-const { frontmatterRegion } = frontmatterModule;
+const { frontmatterRegion, extractFrontmatter, FRONTMATTER_UNPARSEABLE } = frontmatterModule;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -114,7 +114,25 @@ export interface PlanningDoc {
   readonly staged: ReadonlyMap<NodeId, string>;
 }
 
-export type NodeRead = { ok: true; value: string } | { ok: false; reason: string; span: Span };
+/**
+ * Generic over the success `value` shape. Defaults to `string` — every
+ * pre-existing caller (`readNode`, always a `boldField`/section/table/
+ * checklist span's own text) is unaffected by this widening. #5026's
+ * `readFrontmatterField` is the first caller to need a non-string value
+ * (`frontmatter.cts`'s `FrontmatterValue`: a scalar string, a string array,
+ * or a nested object) and instantiates the parameter explicitly.
+ */
+export type NodeRead<T = string> = { ok: true; value: T } | { ok: false; reason: string; span: Span };
+
+/**
+ * The value shapes `frontmatter.cts`'s `extractFrontmatter` can produce for a
+ * single top-level key: a scalar string, a string array, or (rarely) a
+ * still-nested object. Mirrors that module's own internal `FrontmatterValue`
+ * type structurally — `frontmatter.cts` uses `export =` with no exported
+ * named type, so this is redeclared rather than imported (TS structural
+ * typing makes the two interchangeable at the call site).
+ */
+export type FrontmatterFieldValue = string | string[] | Record<string, unknown>;
 
 export type SerializeOutcome =
   | { ok: true; value: string }
@@ -486,6 +504,107 @@ export function readNode(doc: PlanningDoc, id: NodeId): NodeRead {
     return { ok: true, value: doc.staged.get(id) ?? node.value };
   }
   return { ok: true, value: doc.source.slice(node.span.start, node.span.end) };
+}
+
+/**
+ * Shared core of `readFrontmatterField` / `readFrontmatterFieldFromSource`:
+ * given a frontmatter block's own span TEXT (fences included) and the `Span`
+ * to report on failure, look up `key` via `frontmatter.cts`'s
+ * `extractFrontmatter` and shape the result as a `NodeRead`. The two public
+ * functions differ only in HOW they locate the span (a `PlanningDoc`'s
+ * `FrontmatterNode` vs a direct `frontmatterRegion` scan of raw `source`) —
+ * neither may duplicate this lookup-and-shape step (the exact
+ * `DEFECT.GENERATIVE-FIX` class this epic exists to close).
+ *
+ * A region that fails to parse as YAML (`extractFrontmatter` reports this by
+ * returning `{}` carrying the `FRONTMATTER_UNPARSEABLE` Symbol, per that
+ * module's own documented contract) → `{ ok: false, reason:
+ * 'unparseable-frontmatter', span }`. A parseable region whose key is simply
+ * absent → `{ ok: false, reason: 'field-not-found', span }` —
+ * `extractFrontmatter` itself has no notion of "field not found" (a missing
+ * key just reads `undefined` off its returned object), so this reason string
+ * is this seam's own, not a passthrough of an upstream contract.
+ */
+function lookupFrontmatterField(regionText: string, span: Span, key: string): NodeRead<FrontmatterFieldValue> {
+  const fm = extractFrontmatter(regionText);
+  if ((fm as unknown as Record<symbol, unknown>)[FRONTMATTER_UNPARSEABLE] === true) {
+    return { ok: false, reason: 'unparseable-frontmatter', span };
+  }
+
+  const value = (fm as Record<string, FrontmatterFieldValue>)[key];
+  if (value === undefined) {
+    return { ok: false, reason: 'field-not-found', span };
+  }
+  return { ok: true, value };
+}
+
+/**
+ * Read one top-level frontmatter key off an already-parsed `PlanningDoc`,
+ * composing `frontmatter.cts`'s `extractFrontmatter` rather than
+ * reimplementing YAML parsing (ADR-4910 Decision 1's precedent — the same
+ * composition `frontmatterRegion` already uses).
+ *
+ * No `FrontmatterNode` in `doc.nodes` (there is at most one per document) →
+ * `{ ok: false, reason: 'no-frontmatter', span: {0,0} }`, mirroring
+ * `findField`'s own not-found span convention (`readNode`'s unknown-id case).
+ *
+ * A `FrontmatterNode` is only ever pushed onto `doc.nodes` when its fence was
+ * terminated (`parsePlanningDoc` fails the whole document, before any node
+ * exists, on an unterminated fence) — so the "opened but never closed" case
+ * `extractFrontmatter` also handles is never reachable from an already-parsed
+ * `PlanningDoc` through this function. See `lookupFrontmatterField` for the
+ * unparseable-frontmatter / field-not-found / present result shapes.
+ */
+export function readFrontmatterField(doc: PlanningDoc, key: string): NodeRead<FrontmatterFieldValue> {
+  const node = doc.nodes.find((n): n is FrontmatterNode => n.kind === 'frontmatter');
+  if (!node) {
+    return { ok: false, reason: 'no-frontmatter', span: { start: 0, end: 0 } };
+  }
+  const raw = doc.source.slice(node.span.start, node.span.end);
+  return lookupFrontmatterField(raw, node.span, key);
+}
+
+/**
+ * Read one top-level frontmatter key directly off raw `source` text, with no
+ * `PlanningDoc`/artifact-kind gate involved (#5026). `parsePlanningDoc`'s
+ * artifact-kind gate exists to distinguish "this document records nothing"
+ * from "wrong kind entirely" for a caller that might hand it any
+ * `.planning/`-root file, including a non-markdown one (config.json,
+ * state.json, …) — a risk that does not exist for a caller (`plan-document.
+ * cts`) that is ONLY ever invoked on real `*-PLAN.md` content, never on
+ * anything else, and is never given a canonical root-artifact basename to
+ * gate on in the first place (`*-PLAN.md` lives nested under
+ * `.planning/phase/*\/plans/`, never at the `.planning/` root
+ * `PLANNING_ARTIFACTS` enumerates — confirmed by execution:
+ * `isCanonicalPlanningFile('01-PLAN.md')` is `false`). This entry point
+ * routes around that gate rather than through it, for exactly that caller
+ * shape: content in hand, no filename to check, no need for any other
+ * `PlanningDoc` capability (sections/tables/checklists) this seam offers.
+ *
+ * Locates the frontmatter span via `findFrontmatterSpan` — the SAME
+ * `frontmatterRegion`-composing helper `parsePlanningDoc` itself uses to
+ * build a `FrontmatterNode` — so this is not a second detection mechanism,
+ * only a bypass of the node-parsing pipeline neither this caller nor its
+ * content needs.
+ *
+ * No frontmatter fence at byte 0 at all → `{ ok: false, reason:
+ * 'no-frontmatter', span: {0,0} }`, the same shape `readFrontmatterField`
+ * returns for its own not-found case. An OPENED-but-never-closed fence is
+ * reachable here (unlike `readFrontmatterField`, which can only ever see an
+ * already-terminated frontmatter node): `extractFrontmatter` treats that
+ * region as if it had none (`{}`, no `FRONTMATTER_UNPARSEABLE` marker), so
+ * every key on it comes back `field-not-found` — matching exactly what a
+ * direct `extractFrontmatter(source)[key] === undefined` check already
+ * produces for that same input today. See `lookupFrontmatterField` for the
+ * unparseable-frontmatter / field-not-found / present result shapes.
+ */
+export function readFrontmatterFieldFromSource(source: string, key: string): NodeRead<FrontmatterFieldValue> {
+  const found = findFrontmatterSpan(source);
+  if (!found) {
+    return { ok: false, reason: 'no-frontmatter', span: { start: 0, end: 0 } };
+  }
+  const raw = source.slice(found.span.start, found.span.end);
+  return lookupFrontmatterField(raw, found.span, key);
 }
 
 /**

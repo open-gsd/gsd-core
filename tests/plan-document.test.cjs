@@ -219,6 +219,148 @@ Some body text.
   });
 });
 
+describe('plan-document: frontmatter field absorption (#5026) — before/after parity', () => {
+  // #5026: parsePlanDocument's 7 frontmatter-derived fields (wave, depends_on,
+  // autonomous, agent_hint, files_modified, files_deleted, type) migrated from
+  // a direct frontmatter.cjs#extractFrontmatter call onto
+  // planning-document.cjs#readFrontmatterFieldFromSource. Every expected
+  // value below is the value the PRE-migration direct-extractFrontmatter call
+  // produced for the same fixture (per the module's own documented field
+  // semantics: dependsOn defaults `[]`, autonomous defaults `true`,
+  // agentHint/type default `null`, filesModified/filesDeleted default `[]`,
+  // declaredWave defaults `null` on absence or non-numeric input) — this is
+  // the primary safety net proving the migration is behavior-preserving.
+
+  test('no frontmatter at all: every field takes its documented default', () => {
+    const doc = parsePlanDocument('<task type="auto"><name>x</name></task>');
+    assert.equal(doc.declaredWave, null);
+    assert.deepEqual(doc.dependsOn, []);
+    assert.equal(doc.autonomous, true);
+    assert.equal(doc.agentHint, null);
+    assert.deepEqual(doc.filesModified, []);
+    assert.deepEqual(doc.filesDeleted, []);
+    assert.equal(doc.type, null);
+  });
+
+  test('every field present with scalar values reads verbatim/coerced per field', () => {
+    const doc = parsePlanDocument(`---
+wave: 2
+depends_on: 01-first
+autonomous: false
+agent_hint: sonnet-coder
+files_modified: src/a.cts
+files_deleted: src/old.cts
+type: standard
+---
+<task type="auto"><name>x</name></task>
+`);
+    assert.equal(doc.declaredWave, 2);
+    assert.deepEqual(doc.dependsOn, ['01-first']);
+    assert.equal(doc.autonomous, false);
+    assert.equal(doc.agentHint, 'sonnet-coder');
+    assert.deepEqual(doc.filesModified, ['src/a.cts']);
+    assert.deepEqual(doc.filesDeleted, ['src/old.cts']);
+    assert.equal(doc.type, 'standard');
+  });
+
+  test('array-valued depends_on / files_modified / files_deleted read as string arrays', () => {
+    const doc = parsePlanDocument(`---
+depends_on: [01-first, 02-second]
+files_modified: [src/a.cts, src/b.cts]
+files_deleted: [src/c.cts]
+---
+<task type="auto"><name>x</name></task>
+`);
+    assert.deepEqual(doc.dependsOn, ['01-first', '02-second']);
+    assert.deepEqual(doc.filesModified, ['src/a.cts', 'src/b.cts']);
+    assert.deepEqual(doc.filesDeleted, ['src/c.cts']);
+  });
+
+  test('hyphenated alternate keys (files-modified / files-deleted) are honoured', () => {
+    const doc = parsePlanDocument(`---
+files-modified: src/hyphen-modified.cts
+files-deleted: src/hyphen-deleted.cts
+---
+<task type="auto"><name>x</name></task>
+`);
+    assert.deepEqual(doc.filesModified, ['src/hyphen-modified.cts']);
+    assert.deepEqual(doc.filesDeleted, ['src/hyphen-deleted.cts']);
+  });
+
+  test('an empty depends_on string does not produce a single empty-string entry', () => {
+    const doc = parsePlanDocument(`---
+depends_on: ""
+---
+<task type="auto"><name>x</name></task>
+`);
+    assert.deepEqual(doc.dependsOn, []);
+  });
+
+  test('a whitespace-only agent_hint normalises to null', () => {
+    const doc = parsePlanDocument(`---
+agent_hint: "   "
+---
+<task type="auto"><name>x</name></task>
+`);
+    assert.equal(doc.agentHint, null);
+  });
+
+  test('autonomous: any non-"true" string value (not just "false") is false', () => {
+    const doc = parsePlanDocument(`---
+autonomous: maybe
+---
+<task type="auto"><name>x</name></task>
+`);
+    assert.equal(doc.autonomous, false);
+  });
+
+  test('a non-numeric wave value yields declaredWave: null', () => {
+    const doc = parsePlanDocument(`---
+wave: not-a-number
+---
+<task type="auto"><name>x</name></task>
+`);
+    assert.equal(doc.declaredWave, null);
+  });
+
+  test('malformed (unparseable) frontmatter: every field falls back to its default, exactly as absent frontmatter', () => {
+    const doc = parsePlanDocument(`---
+wave: [1, 2
+depends_on: 01-first
+---
+<task type="auto"><name>x</name></task>
+`);
+    assert.equal(doc.declaredWave, null);
+    assert.deepEqual(doc.dependsOn, []);
+    assert.equal(doc.autonomous, true);
+    assert.equal(doc.agentHint, null);
+    assert.deepEqual(doc.filesModified, []);
+    assert.deepEqual(doc.filesDeleted, []);
+    assert.equal(doc.type, null);
+  });
+
+  test('objective frontmatter fallback still reads when no <objective> tag is present', () => {
+    const doc = parsePlanDocument(`---
+objective: Ship the thing
+---
+<task type="auto"><name>x</name></task>
+`);
+    assert.equal(doc.objective, 'Ship the thing');
+  });
+
+  test('an <objective> tag still wins over a frontmatter objective fallback', () => {
+    const doc = parsePlanDocument(`---
+objective: frontmatter objective
+---
+<objective>
+tag objective wins
+</objective>
+<task type="auto"><name>x</name></task>
+`);
+    assert.equal(doc.objective, 'tag objective wins');
+  });
+});
+
 describe('plan-document: extractThreatRegisterIds (#4683)', () => {
   const { extractThreatRegisterIds } = require('../gsd-core/bin/lib/plan-document.cjs');
 

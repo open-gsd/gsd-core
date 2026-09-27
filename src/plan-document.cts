@@ -32,9 +32,17 @@
  * gsd-core/bin/lib/plan-document.cjs (gitignored).
  */
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import frontmatterMod = require('./frontmatter.cjs');
-const { extractFrontmatter } = frontmatterMod;
+// #5026 / ADR-4910 §1 absorption: the 7 frontmatter-derived fields below read
+// through `planning-document.cts`'s seam (`readFrontmatterFieldFromSource`)
+// rather than calling `frontmatter.cts`'s `extractFrontmatter` directly. This
+// module has no canonical `.planning/`-root artifact basename to gate
+// `parsePlanningDoc` on (`*-PLAN.md` lives nested under
+// `.planning/phase/*/plans/`, and two of the five real callers hold only
+// in-memory content with no path at all), so it uses the entry point shaped
+// for exactly that: content in hand, no filename, no other `PlanningDoc`
+// capability (sections/tables/checklists) this module needs. See that
+// function's docblock for the full reasoning.
+import { readFrontmatterFieldFromSource } from './planning-document.cjs';
 
 // ─── Frozen vocabularies ──────────────────────────────────────────────────────
 
@@ -290,25 +298,52 @@ function planIdFromFile(planFile: string): string {
 }
 
 /**
+ * Read one top-level frontmatter key via the `planning-document.cts` seam
+ * (#5026), unwrapped to the SAME shape a direct `fm[key]` object-property
+ * read would give: the field's value, or `undefined` when it is absent, the
+ * document has no frontmatter, or the frontmatter is unparseable —
+ * `readFrontmatterFieldFromSource` reports all three of those as an
+ * `ok: false` result, and `extractFrontmatter`'s own object would likewise
+ * simply lack the key in every one of those cases. `objective` is
+ * deliberately NOT read through this helper — it is outside the 7-field
+ * absorption scope and stays untouched.
+ */
+function frontmatterField(content: string, key: string): FrontmatterValueLike | undefined {
+  const read = readFrontmatterFieldFromSource(content, key);
+  return read.ok ? read.value : undefined;
+}
+
+/** Redeclared structurally from `frontmatter.cts`'s internal `FrontmatterValue`
+ * (that module has no exported name for it — see `planning-document.cts`'s
+ * own `FrontmatterFieldValue`, which this mirrors) so `frontmatterField`'s
+ * return type stays as permissive as the seam it wraps. */
+type FrontmatterValueLike = string | string[] | Record<string, unknown>;
+
+/**
  * Parse one plan document.
  *
  * @param content  Raw `*-PLAN.md` text.
- * @param planPath Optional path, used only to name the file in `extractFrontmatter`'s
- *                 truncated-frontmatter diagnostic (#1882). Callers that do not have
- *                 one omit it — this default IS the shape production uses from the
- *                 read-only query path.
+ * @param planPath Historically the path passed to `extractFrontmatter`'s
+ *                 truncated-frontmatter diagnostic (#1882) — a stderr-only
+ *                 side channel, never part of this function's return value.
+ *                 #5026: the 7 frontmatter fields below now read through
+ *                 `readFrontmatterFieldFromSource`, which has no path
+ *                 parameter, so this diagnostic's file-naming/dedup key is a
+ *                 documented, accepted side-effect-only regression (falls
+ *                 back to content-digest dedup, the same fallback
+ *                 `extractFrontmatter` already uses for the two real callers
+ *                 that never had a path to give it). Kept for call-site
+ *                 signature compatibility only.
  */
-function parsePlanDocument(content: string, planPath = ''): PlanDocument {
-  const fm = extractFrontmatter(content, planPath);
-
+function parsePlanDocument(content: string, _planPath = ''): PlanDocument {
   const xmlTasks = parseXmlTasks(content);
   const tasks = xmlTasks.length > 0 ? xmlTasks : parseMarkdownTasks(content);
 
-  const parsedWave = parseInt(fm['wave'] as string, 10);
+  const parsedWave = parseInt(frontmatterField(content, 'wave') as string, 10);
   const declaredWave = Number.isNaN(parsedWave) ? null : parsedWave;
 
   let dependsOn: string[] = [];
-  const fmDeps = fm['depends_on'];
+  const fmDeps = frontmatterField(content, 'depends_on');
   if (Array.isArray(fmDeps)) {
     dependsOn = fmDeps.map(String);
   } else if (typeof fmDeps === 'string' && fmDeps.trim() !== '') {
@@ -316,27 +351,28 @@ function parsePlanDocument(content: string, planPath = ''): PlanDocument {
   }
 
   let autonomous = true;
-  if (fm['autonomous'] !== undefined) {
+  const fmAutonomous = frontmatterField(content, 'autonomous');
+  if (fmAutonomous !== undefined) {
     // eslint-disable-next-line @typescript-eslint/no-base-to-string -- FrontmatterValue comparison
-    autonomous = fm['autonomous'] === 'true' || String(fm['autonomous']) === 'true';
+    autonomous = fmAutonomous === 'true' || String(fmAutonomous) === 'true';
   }
 
   let filesModified: string[] = [];
-  const fmFiles = fm['files_modified'] || fm['files-modified'];
+  const fmFiles = frontmatterField(content, 'files_modified') || frontmatterField(content, 'files-modified');
   if (fmFiles) {
     // eslint-disable-next-line @typescript-eslint/no-base-to-string -- FrontmatterValue scalar-to-string
     filesModified = Array.isArray(fmFiles) ? fmFiles.map(String) : [String(fmFiles)];
   }
 
   let filesDeleted: string[] = [];
-  const fmDeleted = fm['files_deleted'] || fm['files-deleted'];
+  const fmDeleted = frontmatterField(content, 'files_deleted') || frontmatterField(content, 'files-deleted');
   if (fmDeleted) {
     // eslint-disable-next-line @typescript-eslint/no-base-to-string -- FrontmatterValue scalar-to-string
     filesDeleted = Array.isArray(fmDeleted) ? fmDeleted.map(String) : [String(fmDeleted)];
   }
 
   let agentHint: string | null = null;
-  const fmAgentHint = fm['agent_hint'];
+  const fmAgentHint = frontmatterField(content, 'agent_hint');
   if (fmAgentHint !== undefined) {
     // eslint-disable-next-line @typescript-eslint/no-base-to-string -- FrontmatterValue scalar-to-string
     const hintStr = String(fmAgentHint).trim();
@@ -344,14 +380,14 @@ function parsePlanDocument(content: string, planPath = ''): PlanDocument {
   }
 
   let planType: string | null = null;
-  const fmType = fm['type'];
+  const fmType = frontmatterField(content, 'type');
   if (fmType !== undefined) {
     // eslint-disable-next-line @typescript-eslint/no-base-to-string -- FrontmatterValue scalar-to-string
     planType = String(fmType);
   }
 
   return {
-    objective: extractObjective(content) || (fm['objective'] as string | null) || null,
+    objective: extractObjective(content) || (frontmatterField(content, 'objective') as string | null) || null,
     type: planType,
     declaredWave,
     dependsOn,
