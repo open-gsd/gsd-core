@@ -366,7 +366,8 @@ type FrontmatterValueLike = string | string[] | Record<string, unknown>;
  * @param planPath Historically the path passed to `extractFrontmatter`'s
  *                 truncated-frontmatter diagnostic (#1882) — a stderr-only
  *                 side channel, never part of this function's return value.
- *                 #5026: the 7 frontmatter fields below now read through
+ *                 #5026: the 9 frontmatter fields below (7 scheduling fields,
+ *                 plus `objective` and `gap_closure`) now read through
  *                 `readFrontmatterFieldFromSource`, which has no path
  *                 parameter, so this diagnostic's file-naming/dedup key is a
  *                 documented, accepted side-effect-only regression (falls
