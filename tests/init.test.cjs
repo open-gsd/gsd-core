@@ -5118,6 +5118,47 @@ describe('#4982: init.progress ROADMAP checkbox projection anchoring', () => {
     assert.strictEqual(three.roadmap_complete, true,
       "Phase 3's own anchored [x] line must win even though a later anchored line ('Phase 3 regression sweep') also mentions Phase 3 — first anchored match wins, not last");
   });
+
+  // #4982 review finding: the anchor fix above must not regress a checklist
+  // line that combines a bracket tag with the literal "Phase N" wording (the
+  // old unanchored `.*` absorbed the bracket text and still matched); this
+  // site stays deliberately non-bracket-convention-aware otherwise (#4984).
+  test('#4982 (review fold-in): a bracket-tagged checklist line combined with literal "Phase N" wording still resolves its own checkbox', (t) => {
+    const tmpDir = createTempProject('gsd-4982-brackethybrid-');
+    t.after(() => cleanup(tmpDir));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), [
+      '# Roadmap',
+      '',
+      '## Milestone v1.1.0',
+      '',
+      '- [x] **[GSD.02] Phase 3: Foo**',
+      '- [ ] **[GSD.02] Phase 4: Bar**',
+      '',
+      '### Phase 3: Foo',
+      '**Goal:** foo',
+      '',
+      '### Phase 4: Bar',
+      '**Goal:** bar',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), [
+      '---', 'gsd_state_version: 1.0', 'milestone: v1.1.0', 'milestone_name: Active',
+      'status: executing', 'current_phase: 3', 'progress:', '  total_phases: 2',
+      '  completed_phases: 1', '  percent: 50', '---', '', '# Project State', '',
+      '## Current Position', '', 'Phase: 3', 'Status: Executing', '',
+    ].join('\n'));
+
+    const result = runGsdTools(['init', 'progress', '--raw'], tmpDir);
+    assert.ok(result.success, `init progress failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    const three = out.phases.find((p) => String(p.number).replace(/^0+/, '') === '3');
+    const four = out.phases.find((p) => String(p.number).replace(/^0+/, '') === '4');
+    assert.ok(three, 'Phase 3 present');
+    assert.ok(four, 'Phase 4 present');
+    assert.strictEqual(three.roadmap_complete, true,
+      'a bracket tag before the literal "Phase N" wording must not prevent the anchor from matching');
+    assert.strictEqual(four.roadmap_complete, false);
+  });
 });
 
 // ─── #3749: project_exists must follow project_path under GSD_PROJECT ───────

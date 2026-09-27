@@ -3744,7 +3744,16 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     // self-titled "Phase N ...") overwriting an already-recorded phase's own
     // (first) checkbox — anchoring alone does not fully close that
     // "last-match-wins" composition defect.
-    const cbPattern = new RegExp(`^[ \\t]*-[ \\t]*\\[(x| )\\][ \\t]*(?:\\*\\*)?Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`, 'gim');
+    // `(?:\[[^\]\n]{0,200}\]\s*)?` tolerates an optional leading bracket tag
+    // (literal mirror of BASE_ANY_BRACKET_HEADING_PREFIX_SRC, phase-id.cts)
+    // BEFORE the literal "Phase" word — decoration tolerance only, no capture
+    // group, no convention gating. Without it the anchor fix above regresses
+    // a checklist line combining a bracket tag with literal "Phase N" wording
+    // (e.g. `**[GSD.02] Phase 3: ...**`), which the old unanchored `.*`
+    // matched (by absorbing the bracket text). This does NOT migrate the site
+    // onto phaseHeadingPrefixSrcFor / the bracket convention — that stays
+    // out of scope per the comment above (#4984 revert, pinned census).
+    const cbPattern = new RegExp(`^[ \\t]*-[ \\t]*\\[(x| )\\][ \\t]*(?:\\*\\*)?(?:\\[[^\\]\\n]{0,200}\\]\\s*)?Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`, 'gim');
     let cbm: RegExpExecArray | null;
     while ((cbm = cbPattern.exec(roadmapContent)) !== null) {
       const cbKey = cbm[2];
