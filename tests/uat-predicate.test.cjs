@@ -20,6 +20,8 @@ const {
   parseUatResultItems,
   analyzeMarkdown,
   evaluateUatPassed,
+  parseGapsEntries,
+  isTestGapResolved,
 } = require('../gsd-core/bin/lib/uat-predicate.cjs');
 const { parseUatItemsWithStats } = require('../gsd-core/bin/lib/uat.cjs');
 const { cleanup } = require('./helpers.cjs');
@@ -1852,5 +1854,257 @@ describe('#4546 — deferred follow-up skips', () => {
       ),
       { numRuns: 120, seed: 4546 }
     );
+  });
+});
+
+// ─── #4983 — resolved `result: issue` tests are non-blocking ──────────────────
+
+describe('#4983 — resolved issue skips', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+  });
+
+  afterEach(() => {
+    rmDir(tmpDir);
+  });
+
+  function gapsBlock(entries) {
+    return ['## Gaps', '', ...entries.flatMap((e) => e)].join('\n');
+  }
+
+  function gapEntry({ test, status, resolvedBy, resolvedAt }) {
+    const lines = [
+      `- truth: "Something works"`,
+      `  status: ${status}`,
+      `  reason: "User reported: it broke"`,
+      `  severity: major`,
+      `  test: ${test}`,
+    ];
+    if (resolvedBy !== undefined) lines.push(`  resolved_by: ${resolvedBy}`);
+    if (resolvedAt !== undefined) lines.push(`  resolved_at: ${resolvedAt}`);
+    return lines;
+  }
+
+  test('an issue with a properly resolved gap (existing PLAN+SUMMARY) does not block (#4983)', () => {
+    fs.writeFileSync(path.join(tmpDir, '01-01-PLAN.md'), '---\ngap_ids: [G-01-1]\n---\n');
+    fs.writeFileSync(path.join(tmpDir, '01-01-SUMMARY.md'), '# done');
+    const content = [
+      '---', 'status: complete', '---', '',
+      '### 1. Test A', 'expected: A', 'result: issue', 'reported: "crashes"', '',
+      gapsBlock([gapEntry({ test: 1, status: 'resolved', resolvedBy: '01-01-PLAN.md', resolvedAt: '2026-09-27' })]),
+      '',
+    ].join('\n');
+    writeFile(tmpDir, 'phase-UAT.md', content);
+    const report = evaluateUatPassed(tmpDir);
+    assert.strictEqual(report.passed, true,
+      `a verified-resolved issue must not block: ${JSON.stringify(report.blockers)}`);
+    assert.deepStrictEqual(report.blockers, []);
+    const check = report.checks.find((c) => c.test === 1);
+    assert.strictEqual(check.passing, true, 'resolved issue counts as passing');
+    assert.strictEqual(check.resolved, true, 'resolved issue is flagged resolved in the report');
+  });
+
+  test('an unresolved issue (no Gaps entry at all) still blocks (#4983 negative space)', () => {
+    const content = [
+      '---', 'status: partial', '---', '',
+      '### 1. Test A', 'expected: A', 'result: issue', 'reported: "crashes"', '',
+    ].join('\n');
+    writeFile(tmpDir, 'phase-UAT.md', content);
+    const report = evaluateUatPassed(tmpDir);
+    assert.strictEqual(report.passed, false, 'an issue with no recorded gap must still block');
+    assert.ok(report.blockers.some((b) => /test 1/.test(b)));
+  });
+
+  test('status: failed gap still blocks (#4983 negative space)', () => {
+    const content = [
+      '---', 'status: partial', '---', '',
+      '### 1. Test A', 'expected: A', 'result: issue', 'reported: "crashes"', '',
+      gapsBlock([gapEntry({ test: 1, status: 'failed' })]),
+      '',
+    ].join('\n');
+    writeFile(tmpDir, 'phase-UAT.md', content);
+    const report = evaluateUatPassed(tmpDir);
+    assert.strictEqual(report.passed, false, 'an open (failed) gap must still block');
+  });
+
+  test('status: resolved with no resolved_by (partial resolution) still blocks (#4983 fail-closed)', () => {
+    const content = [
+      '---', 'status: partial', '---', '',
+      '### 1. Test A', 'expected: A', 'result: issue', 'reported: "crashes"', '',
+      gapsBlock([gapEntry({ test: 1, status: 'resolved' })]),
+      '',
+    ].join('\n');
+    writeFile(tmpDir, 'phase-UAT.md', content);
+    const report = evaluateUatPassed(tmpDir);
+    assert.strictEqual(report.passed, false,
+      'a status:resolved entry with no resolved_by attribution must still block');
+  });
+
+  test('resolved_by naming a plan that does not exist on disk still blocks (#4983 false-green guard)', () => {
+    const content = [
+      '---', 'status: partial', '---', '',
+      '### 1. Test A', 'expected: A', 'result: issue', 'reported: "crashes"', '',
+      gapsBlock([gapEntry({ test: 1, status: 'resolved', resolvedBy: '99-99-PLAN.md' })]),
+      '',
+    ].join('\n');
+    writeFile(tmpDir, 'phase-UAT.md', content);
+    const report = evaluateUatPassed(tmpDir);
+    assert.strictEqual(report.passed, false,
+      'resolved_by naming no executed (or even existing) plan must still block');
+  });
+
+  test('resolved_by naming a plan that exists but was never executed (no SUMMARY) still blocks (#4983 false-green guard)', () => {
+    fs.writeFileSync(path.join(tmpDir, '01-01-PLAN.md'), '---\ngap_ids: [G-01-1]\n---\n');
+    // Deliberately NO 01-01-SUMMARY.md — the plan exists but never ran.
+    const content = [
+      '---', 'status: partial', '---', '',
+      '### 1. Test A', 'expected: A', 'result: issue', 'reported: "crashes"', '',
+      gapsBlock([gapEntry({ test: 1, status: 'resolved', resolvedBy: '01-01-PLAN.md' })]),
+      '',
+    ].join('\n');
+    writeFile(tmpDir, 'phase-UAT.md', content);
+    const report = evaluateUatPassed(tmpDir);
+    assert.strictEqual(report.passed, false,
+      'a resolved_by plan with no matching SUMMARY (never executed) must still block');
+  });
+
+  test('resolved_by with a path separator (traversal attempt) still blocks (#4983 false-green guard)', () => {
+    fs.mkdirSync(path.join(tmpDir, 'evil'));
+    fs.writeFileSync(path.join(tmpDir, 'evil', '01-01-PLAN.md'), '---\n---\n');
+    fs.writeFileSync(path.join(tmpDir, 'evil', '01-01-SUMMARY.md'), '# done');
+    const content = [
+      '---', 'status: partial', '---', '',
+      '### 1. Test A', 'expected: A', 'result: issue', 'reported: "crashes"', '',
+      gapsBlock([gapEntry({ test: 1, status: 'resolved', resolvedBy: '../evil/01-01-PLAN.md' })]),
+      '',
+    ].join('\n');
+    writeFile(tmpDir, 'phase-UAT.md', content);
+    const report = evaluateUatPassed(tmpDir);
+    assert.strictEqual(report.passed, false,
+      'a resolved_by value containing a path separator must be rejected, not traversed');
+  });
+
+  test('a later regression (second unresolved Gaps entry for the same test) still blocks (#4983 fail-closed)', () => {
+    fs.writeFileSync(path.join(tmpDir, '01-01-PLAN.md'), '---\ngap_ids: [G-01-1]\n---\n');
+    fs.writeFileSync(path.join(tmpDir, '01-01-SUMMARY.md'), '# done');
+    const content = [
+      '---', 'status: partial', '---', '',
+      '### 1. Test A', 'expected: A', 'result: issue', 'reported: "regressed again"', '',
+      gapsBlock([
+        gapEntry({ test: 1, status: 'resolved', resolvedBy: '01-01-PLAN.md', resolvedAt: '2026-09-01' }),
+        gapEntry({ test: 1, status: 'failed' }),
+      ]),
+      '',
+    ].join('\n');
+    writeFile(tmpDir, 'phase-UAT.md', content);
+    const report = evaluateUatPassed(tmpDir);
+    assert.strictEqual(report.passed, false,
+      'an open regression on a previously resolved test must still block — one open entry is enough');
+  });
+
+  test('a resolved issue does not mask other blockers (#4983 independence)', () => {
+    fs.writeFileSync(path.join(tmpDir, '01-01-PLAN.md'), '---\ngap_ids: [G-01-1]\n---\n');
+    fs.writeFileSync(path.join(tmpDir, '01-01-SUMMARY.md'), '# done');
+    const content = [
+      '---', 'status: partial', '---', '',
+      '### 1. Test A', 'expected: A', 'result: issue', 'reported: "crashes"', '',
+      '### 2. Test B', 'expected: B', 'result: pending', '',
+      '### 3. Test C', 'expected: C', 'result: issue', 'reported: "still broken"', '',
+      gapsBlock([gapEntry({ test: 1, status: 'resolved', resolvedBy: '01-01-PLAN.md' })]),
+      '',
+    ].join('\n');
+    writeFile(tmpDir, 'phase-UAT.md', content);
+    const report = evaluateUatPassed(tmpDir);
+    assert.strictEqual(report.passed, false, 'test 2 and 3 must still block');
+    assert.ok(!report.blockers.some((b) => /test 1/.test(b)), 'resolved test 1 must not appear as a blocker');
+    assert.ok(report.blockers.some((b) => /test 2/.test(b)), 'pending test 2 still blocks');
+    assert.ok(report.blockers.some((b) => /test 3/.test(b)), 'unresolved issue test 3 still blocks');
+  });
+
+  test('#4546 deferred-skip and #4983 resolved-issue coexist without interaction', () => {
+    fs.writeFileSync(path.join(tmpDir, '01-01-PLAN.md'), '---\ngap_ids: [G-01-1]\n---\n');
+    fs.writeFileSync(path.join(tmpDir, '01-01-SUMMARY.md'), '# done');
+    const content = [
+      '---', 'status: complete', '---', '',
+      '### 1. Test A', 'expected: A', 'result: issue', 'reported: "crashes"', '',
+      '### 2. Test B', 'expected: B', 'result: skipped', 'reason: "Deferred follow-up: next version"', '',
+      gapsBlock([gapEntry({ test: 1, status: 'resolved', resolvedBy: '01-01-PLAN.md' })]),
+      '',
+    ].join('\n');
+    writeFile(tmpDir, 'phase-UAT.md', content);
+    const report = evaluateUatPassed(tmpDir);
+    assert.strictEqual(report.passed, true, `both must be non-blocking: ${JSON.stringify(report.blockers)}`);
+    const resolved = report.checks.find((c) => c.test === 1);
+    const deferred = report.checks.find((c) => c.test === 2);
+    assert.strictEqual(resolved.resolved, true);
+    assert.strictEqual(resolved.deferred, false);
+    assert.strictEqual(deferred.deferred, true);
+    assert.strictEqual(deferred.resolved, false);
+  });
+
+  describe('parseGapsEntries — direct unit tests', () => {
+    test('no ## Gaps section returns []', () => {
+      assert.deepStrictEqual(parseGapsEntries('### 1. Test\nresult: issue\n'), []);
+    });
+
+    test('parses test/status/resolved_by, tolerating bracketed test numbers and quotes', () => {
+      const content = [
+        '## Gaps', '',
+        '- truth: "x"',
+        '  status: "Resolved"',
+        '  resolved_by: \'01-01-PLAN.md\'',
+        '  test: [3]',
+      ].join('\n');
+      const entries = parseGapsEntries(content);
+      assert.strictEqual(entries.length, 1);
+      assert.strictEqual(entries[0].test, 3);
+      assert.strictEqual(entries[0].status, 'resolved');
+      assert.strictEqual(entries[0].resolvedBy, '01-01-PLAN.md');
+    });
+
+    test('a quoted value containing "status:" text does not create a false field match', () => {
+      const content = [
+        '## Gaps', '',
+        '- truth: "the status: resolved workflow should trigger"',
+        '  status: failed',
+        '  test: 1',
+      ].join('\n');
+      const entries = parseGapsEntries(content);
+      assert.strictEqual(entries.length, 1);
+      assert.strictEqual(entries[0].status, 'failed',
+        'the real status: line must win, not the decoy inside the quoted truth value');
+    });
+
+    test('stops at the next ## heading (does not swallow a following section)', () => {
+      const content = [
+        '## Gaps', '',
+        '- truth: "x"',
+        '  status: resolved',
+        '  test: 1',
+        '## Notes',
+        '- status: failed',
+      ].join('\n');
+      const entries = parseGapsEntries(content);
+      assert.strictEqual(entries.length, 1, 'the ## Notes section must not be parsed as a Gaps entry');
+    });
+  });
+
+  describe('isTestGapResolved — direct unit tests', () => {
+    test('empty entries list is not resolved (no gap recorded)', () => {
+      assert.strictEqual(isTestGapResolved([], 1, []), false);
+    });
+
+    test('resolved + valid resolved_by + PLAN + SUMMARY on disk is resolved', () => {
+      const entries = [{ test: 1, status: 'resolved', resolvedBy: '01-01-PLAN.md' }];
+      const dirEntries = ['01-01-PLAN.md', '01-01-SUMMARY.md'];
+      assert.strictEqual(isTestGapResolved(entries, 1, dirEntries), true);
+    });
+
+    test('resolved_by not ending in -PLAN.md is rejected', () => {
+      const entries = [{ test: 1, status: 'resolved', resolvedBy: 'notes.md' }];
+      assert.strictEqual(isTestGapResolved(entries, 1, ['notes.md']), false);
+    });
   });
 });
