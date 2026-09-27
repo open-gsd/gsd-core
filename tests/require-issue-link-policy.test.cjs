@@ -497,4 +497,10 @@ describe('require-issue-link policy — .out-of-scope/ knowledge-base entries (#
   test('a Windows-separated .out-of-scope path is recognized', () => {
     assert.strictEqual(allPathsAreTestsOrDocs(['.out-of-scope\\a.md']), true);
   });
+
+  test('a non-markdown file under .out-of-scope/ does not qualify', () => {
+    for (const p of ['.out-of-scope/x.cjs', '.out-of-scope/a.md.js', '.out-of-scope/sub/run.sh']) {
+      assert.strictEqual(allPathsAreTestsOrDocs([p]), false, `path: ${p}`);
+    }
+  });
 });

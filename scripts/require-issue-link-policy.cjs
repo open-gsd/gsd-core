@@ -54,7 +54,8 @@ const DEPENDABOT_LOGIN = 'dependabot[bot]';
 // allowed to skip the closing keyword when every changed file is a test or
 // doc file — i.e. it cannot be the PR that actually implements the fix.
 // #5061: .out-of-scope/ knowledge-base entries are informational documents,
-// already doc-only in pre-pr-gate.sh's DOC_ONLY_RE — same shape as docs/.
+// already doc-only in pre-pr-gate.sh's DOC_ONLY_RE. Only `*.md` entries
+// qualify there (see allPathsAreTestsOrDocs): the KB holds nothing else.
 const EXEMPT_PATH_PREFIXES = ['tests/', 'docs/', '.out-of-scope/'];
 
 // Root-level markdown is documentation — this mirrors the repo's own doc-only
@@ -128,6 +129,7 @@ function allPathsAreTestsOrDocs(changedFiles) {
   if (!Array.isArray(changedFiles) || changedFiles.length === 0) return false;
   return changedFiles.every((file) => {
     const normalized = normalizePath(file);
+    if (normalized.startsWith('.out-of-scope/')) return /\.md$/i.test(normalized);
     if (EXEMPT_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix))) return true;
     return isRootLevelDoc(normalized);
   });
