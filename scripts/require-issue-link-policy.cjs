@@ -53,7 +53,9 @@ const DEPENDABOT_LOGIN = 'dependabot[bot]';
 // A follow-up-only PR (references an issue without closing it) is only
 // allowed to skip the closing keyword when every changed file is a test or
 // doc file — i.e. it cannot be the PR that actually implements the fix.
-const EXEMPT_PATH_PREFIXES = ['tests/', 'docs/'];
+// #5061: .out-of-scope/ knowledge-base entries are informational documents,
+// already doc-only in pre-pr-gate.sh's DOC_ONLY_RE — same shape as docs/.
+const EXEMPT_PATH_PREFIXES = ['tests/', 'docs/', '.out-of-scope/'];
 
 // Root-level markdown is documentation — this mirrors the repo's own doc-only
 // classifier (.claude/hooks/pre-pr-gate.sh:111), whose `[^/]+\.md` anchor is
@@ -115,7 +117,7 @@ function normalizePath(p) {
 /**
  * Returns true iff every changed file qualifies as a test/doc file, i.e. each
  * one is one of:
- *   1. under one of EXEMPT_PATH_PREFIXES (`tests/`, `docs/`) — the trailing
+ *   1. under one of EXEMPT_PATH_PREFIXES (`tests/`, `docs/`, `.out-of-scope/`) — the trailing
  *      slash on each prefix makes this directory-boundary aware, so
  *      lookalikes like `tests-e2e/`, `testsuite/`, or `docsite/` are
  *      correctly rejected (they are not `tests/` or `docs/`); or
