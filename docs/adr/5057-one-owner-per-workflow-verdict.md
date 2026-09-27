@@ -96,7 +96,7 @@ The project-root arm of #4907 (#4894) shipped on its own and is closed; phases u
 
 ### 4. Arm C — a gate is a module that returns a verdict
 
-- **Gate modules.** Each gate in `src/check-command-router.cts` moves to its own module, which returns a `GateVerdict` object and never calls `output()`. The router keeps argv parsing and output formatting only — the shape [ADR-2346](2346-command-dispatch-completion.md) already gives every other host router. This is a move with no behaviour change, and it is the precondition for the next three bullets: they are unmeasurable while gates live in a router. The router's private `extractYamlBlock` / `extractXmlTagBodies` are deleted in favour of the Frontmatter Module and the `PlanningDoc` seam.
+- **Gate modules.** Each gate in `src/check-command-router.cts` moves to its own module, which returns a `GateVerdict` object and never calls `output()`. The router keeps argv parsing and output formatting only — the shape [ADR-2346](2346-command-dispatch-completion.md) already gives every other host router. This is a move with no behaviour change, and it is the precondition for the next three bullets: they are unmeasurable while gates live in a router. The router's private `extractYamlBlock` / `extractXmlTagBodies` are deleted in favour of the Frontmatter Module and the `PlanningDoc` seam, and its private `readWorkflowConfig` (`:113`) is deleted in favour of the Configuration Module. A gate reads config the way every other surface does, so it cannot honour a key that `config-get` and the loader reject (#4978).
 - **One scope resolver.** `resolveEvaluationScope(unit)` answers *which commit range and file set does this gate evaluate for this plan, wave or phase*, including workstream scope. It returns only commits reachable from the branch under evaluation, never repo-wide (`git log --all` is removed), and matches plan subjects anchored. The derivation starts from the SUMMARY `## Task Commits` mechanism and its byte-parity guard on the closed PR #4127 branch `fix/3926-tier3-diff-tip-bound`, generalized rather than copied.
 - **Evidence through the document seams, as a typed result.** `Evidence<T> = { kind: 'found', value: T } | { kind: 'none' } | { kind: 'unreadable', reason, span? }`. `unreadable` never produces a passing verdict. Structured plan and document content is read through the Frontmatter Module, `markdown-sectionizer`, `markdown-table` and `PlanningDoc`, never through a per-gate regex.
 - **The exit code is a function of the verdict.** A gate verb's exit status is derived from its `GateVerdict` through the process exit contract ([ADR-3889](3889-process-exit-contract.md), `src/cli-exit.cts`), not chosen per verb (#4686).
@@ -122,8 +122,8 @@ The project-root arm of #4907 (#4894) shipped on its own and is closed; phases u
 
 ### 7. Ordering, and in-flight work
 
-- **Census is taken from the tree as it stands when each phase opens.** Point fixes that land earlier reduce the count and do not change the obligation to reach zero.
-- Open PRs that touch these arms on 2026-09-27: #5003 (#4987) and #4835 (#4765) in Arm B; #5014 (#4978) and #4507 (#4483) in Arm C. #4701 (#4692) and #5055 (#4957) are the narrow-evidence-model class that §4 leaves out of scope.
+- **Census is taken from the tree as it stands when each phase opens.** Five point-fix PRs against this epic's arms were closed unmerged on 2026-09-27, along with their issues, so each census starts from the real tree (see *The point fixes were closed, deliberately*).
+- **Left open, deliberately:** #5041 fixes #4869 (Phase 7 evidence) but also #5011 (`/gsd-debug list`), which is not a gate and no phase here covers. #4507 (#4483) belongs with the approved typed-phase-context feature #4030 (PR #4393). #4701 (#4692) and #5055 (#4957) are the narrow-evidence-model class that §4 leaves out of scope. If #5041 lands first, Phase 7 cites #4869 with `Refs`.
 
 ## What makes a phase done
 
@@ -167,17 +167,19 @@ Each phase is one `chore(#5056): … — Phase N` sub-issue and one PR, gated on
   - *Deletion:* the second reading of `stale` in `execute-phase.md` and the empty `next_command` for `stale` are removed; one routing table remains.
   - *Unrepresentable:* the enum is imported by `gsd-verifier`'s contract and `verification.cts`; a status outside it is a hard error. The two-cycle acceptance test (green phase → verify-work twice → `passed`) is the ratchet.
   - *Wired surface:* a user can run `/gsd-verify-work` on a stale phase and the single `stale` route dispatches to the command that regenerates the report; the run ends `passed`.
-  - *Evidence:* #4765, #4887, #4817 (status outside `VERIFIER_STATUSES`), #4987.
-- **Phase 5 — `detectDrift` sees the whole change set** (#4907 item 5). Independent of Phases 2–4.
+  - *Evidence (`Refs` for #4765, #4987):* #4765, #4887, #4817 (status outside `VERIFIER_STATUSES`), #4987.
+- **Phase 5 — `detectDrift` sees the whole change set, and its output is sanitized** (#4907 item 5). Independent of Phases 2–4.
   - *Census:* change classes and generated documents outside the detector's input (today: modified, deleted; six of seven documents).
   - *Unrepresentable:* a property over generated change sets: every added, modified or deleted file under a mapped directory yields an element.
-  - *Evidence:* #4886.
+  - *Output seam:* `detectDrift`'s `affected_paths` leave the module only through `sanitizePaths` (`src/drift.cts`), which today has no production caller (#4923). No unsanitized path reaches the warn message or the mapper's `--paths` argument. A property over generated paths (absolute, `..`, shell metacharacters) asserts that none survives.
+  - *Evidence (`Refs`):* #4886, #4923.
 
 **Arm C**
 
-- **Phase 6 — no gate lives in a command router** (§4, first bullet). No behaviour change. Must precede Phases 7–9.
+- **Phase 6 — no gate lives in a command router** (§4, first bullet). No behaviour change, with one exception: config is read through the Configuration Module, so the unsupported top-level `context_coverage_gate` fallback stops being honoured (#4978). Must precede Phases 7–9.
   - *Census:* gate-verdict logic and `output()` calls inside `src/check-command-router.cts`. Driven to argv parsing and formatting only.
-  - *Deletion:* `extractYamlBlock`, `extractXmlTagBodies` and the router-local helpers are removed in favour of the Frontmatter Module and `PlanningDoc`.
+  - *Deletion:* `extractYamlBlock`, `extractXmlTagBodies`, `readWorkflowConfig` and the other router-local helpers are removed in favour of the Frontmatter Module, `PlanningDoc` and the Configuration Module.
+  - *Evidence (fail-first, `Refs`):* #4978 — a config holding only a top-level `context_coverage_gate: false` must leave the decision-coverage gate enabled, as `plan-phase` already assumes.
   - *Unrepresentable:* each gate module's tests assert on its `GateVerdict`; a cutover-equivalence test per gate pins the router's stdout byte-for-byte across the move, as [ADR-2346](2346-command-dispatch-completion.md) did for its cutovers.
 - **Phase 7 — one evaluation-scope resolver** (§4, second bullet). Depends on Phase 6.
   - *Census:* every gate or workflow step that computes its own commit range or file set (`HEAD~1..HEAD`, `DIFF_BASE..HEAD`, basename re-resolution, `git log --all --grep`).
@@ -187,7 +189,7 @@ Each phase is one `chore(#5056): … — Phase N` sub-issue and one PR, gated on
   - *Census:* per-gate regex parsers of structured content, gate return paths that cannot distinguish `none` from `unreadable`, and gate verbs whose exit code is chosen per verb.
   - *Unrepresentable:* the `Evidence` type does not admit a passing verdict on `unreadable`; gate verbs obtain their exit code only through `cli-exit`.
   - *Wired surface:* a shell caller of a gate verb (`phase uat-passed --require-verification`, `verify.artifacts`) gets a non-zero exit status whenever the verdict fails.
-  - *Evidence (`Refs` where closed):* #4562, #4541, #4259, #4686, #4031, #4176.
+  - *Evidence (`Refs` — all closed):* #4562, #4541, #4259, #4686, #4031, #4176.
 - **Phase 9 — every gate has a positive control** (§4, ratchet). Lands last in Arm C.
   - *Census:* the allowlist of gates without a red-driving test; ends empty.
 
@@ -219,6 +221,22 @@ Each phase is one `chore(#5056): … — Phase N` sub-issue and one PR, gated on
 - **Phase 14 — ratify.** Verify §1 per arm (one owner, a closed enum, a positive control) and that every phase PR published its census at zero (§7); re-run `/adr-phase-coverage` against the shipped state; ratify this ADR to `Accepted` with a dated Ratification section citing each phase's PR; close #5056. Lands last.
 
 **Ordering constraints.** Within Arm B, Phase 2 precedes Phase 4. Within Arm C, Phase 6 precedes Phases 7 and 8, which may run in parallel, and Phase 9 lands last. Within Arm D, Phase 10 precedes Phases 11 and 12. Phases 1, 5 and 13 are independent. **Across arms:** Arm A has no dependency on Arm B, because the Phase Status Module reads verification only through `isPhaseComplete` / `readVerificationStatus`, whose contracts Phases 2–4 preserve. Phase 4 must update the module's enum import in the same PR that closes the enum. Phase 14 is last.
+
+## The point fixes were closed, deliberately
+
+Five open community PRs were doing point fixes at call sites a phase of this epic deletes or replaces. **All five were closed unmerged on 2026-09-27**, with thanks and an explanation, along with their issues:
+
+| PR | Issue | Contributor | Owning phase | What the phase does to that code path |
+|---|---|---|---|---|
+| #5003 | #4987 | @0xdhx | 4 | `phase_dir_not_found` becomes a member of the closed `VerificationStatus` enum (§3 amendment 2) — the PR's own answer, adopted |
+| #4835 | #4765 | @drungrin | 4 | the second reading of `stale` in `execute-phase.md` is deleted; one routing table, and no branch transitions a stale phase |
+| #4922 | #4886, #4923 | @0xdhx | 5 | `detectDrift` takes the full change set and all seven generated documents, and its `affected_paths` leave only through `sanitizePaths` |
+| #4938 | #4686 | @denniyahh | 8 | every gate verb's exit code is derived from its verdict through `cli-exit`, not chosen per verb |
+| #5014 | #4978 | @ScalingMBA | 6 | `readWorkflowConfig` is deleted; gate modules read config through the Configuration Module |
+
+Landing five correct point fixes would have left the missing owners missing, and would have made each phase's census start from a tree that looks healthier than it is. This is not a quality judgement: several of these diagnoses are cited above as the evidence for their arm. #5003's `phase_dir_not_found` is adopted as the design.
+
+- **A closed issue changes the link form, not the evidence obligation.** Phase PRs reference these six issues with `Refs #NNNN`; `CONTRIBUTING.md` forbids a closing keyword against a closed issue. Each still owes its fail-first regression.
 
 ## Consequences
 
