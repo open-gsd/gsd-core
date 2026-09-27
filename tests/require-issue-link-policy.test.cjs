@@ -452,3 +452,49 @@ describe('require-issue-link policy — the workflow guidance matches the rule',
     assert.ok(script.includes('Refs #'), 'guidance script missing "Refs #"');
   });
 });
+
+describe('require-issue-link policy — .out-of-scope/ knowledge-base entries (#5061)', () => {
+  // A triage sweep records the DENIED half of a partially-approved request as
+  // an .out-of-scope/ entry while the source issue stays open for the approved
+  // half, so the KB PR can only reference that issue, never close it. The
+  // entries are informational documents (no code, no runtime-loaded text) and
+  // are already doc-only in pre-pr-gate.sh's DOC_ONLY_RE.
+  test('an .out-of-scope/-only PR qualifies with a non-closing reference', () => {
+    const result = evaluateIssueLink(forkPr({
+      prBody: 'Refs #5036',
+      changedFiles: ['.out-of-scope/claude-md-direct-edit-carve-out.md'],
+      changedFilesTotal: 1,
+    }));
+    assert.strictEqual(result.reason, ISSUE_LINK_REASON.OK_FOLLOWUP_REFERENCE);
+  });
+
+  test('.out-of-scope/ mixed with docs/ and tests/ still qualifies', () => {
+    const result = evaluateIssueLink(forkPr({
+      prBody: 'Refs #5036',
+      changedFiles: ['.out-of-scope/a.md', 'docs/b.md', 'tests/c.test.cjs'],
+      changedFilesTotal: 3,
+    }));
+    assert.strictEqual(result.reason, ISSUE_LINK_REASON.OK_FOLLOWUP_REFERENCE);
+  });
+
+  test('.out-of-scope/ mixed with a source file still needs a closing keyword', () => {
+    const result = evaluateIssueLink(forkPr({
+      prBody: 'Refs #5036',
+      changedFiles: ['.out-of-scope/a.md', 'src/init.cts'],
+      changedFilesTotal: 2,
+    }));
+    assert.strictEqual(result.reason, ISSUE_LINK_REASON.FAIL_REFERENCE_NEEDS_CLOSING);
+  });
+
+  // Directory-boundary: only the exact `.out-of-scope/` directory is exempt.
+  test('lookalike directories are not .out-of-scope/', () => {
+    const paths = ['.out-of-scope-x/a.md', 'out-of-scope/a.md', 'src/.out-of-scope/a.md', '.out-of-scopex/a.cjs'];
+    for (const p of paths) {
+      assert.strictEqual(allPathsAreTestsOrDocs([p]), false, `path: ${p}`);
+    }
+  });
+
+  test('a Windows-separated .out-of-scope path is recognized', () => {
+    assert.strictEqual(allPathsAreTestsOrDocs(['.out-of-scope\\a.md']), true);
+  });
+});
