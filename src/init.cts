@@ -2892,14 +2892,26 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   // getMilestonePhaseFilter window check (which also never excluded
   // sentinels, unlike the owner).
   const _checkboxStates = new Map<string, boolean>();
+  // #4982: anchored (`^`, `m`) so the phase label must be the FIRST thing
+  // after the checkbox (tolerating only an optional `**` bold marker) —
+  // the prior unanchored `\s*.*` let the greedy `.*` bind to the LAST
+  // "Phase N" mentioned anywhere in the line's prose instead of the line's
+  // own phase. First-match-wins (`if (!_checkboxStates.has(...))` below)
+  // additionally guards against a later anchored line (e.g. a per-plan
+  // sub-entry self-titled "Phase N ...") overwriting an already-recorded
+  // phase's own (first) checkbox — anchoring alone does not fully close
+  // that "last-match-wins" composition defect.
   const _cbPattern = new RegExp(
-    `-\\s*\\[(x| )\\]\\s*.*${phaseHeadingPrefix}(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`,
-    'gi',
+    `^[ \\t]*-[ \\t]*\\[(x| )\\][ \\t]*(?:\\*\\*)?${phaseHeadingPrefix}(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`,
+    'gim',
   );
   let _cbMatch: RegExpExecArray | null;
   while ((_cbMatch = _cbPattern.exec(content)) !== null) {
     const phaseGroup = capturesBracketId ? 3 : 2;
-    _checkboxStates.set(_cbMatch[phaseGroup], _cbMatch[1].toLowerCase() === 'x');
+    const _cbKey = _cbMatch[phaseGroup];
+    if (!_checkboxStates.has(_cbKey)) {
+      _checkboxStates.set(_cbKey, _cbMatch[1].toLowerCase() === 'x');
+    }
   }
 
   // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
@@ -3720,10 +3732,25 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     // uncounted LABEL_ONLY consumer to init.cts's pinned
     // tests/adr-612-bracket-heading-selection.test.cjs census.
     // phase-id-owner: deliberately unmigrated (#4984 revert) — see comment above.
-    const cbPattern = new RegExp(`-\\s*\\[(x| )\\]\\s*.*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`, 'gi');
+    // #4982: anchored (`^`, `m`) — the phase label must be the FIRST thing
+    // after the checkbox (tolerating only an optional `**` bold marker) — so
+    // the greedy `.*` this replaces can no longer bind a line's checkbox to
+    // the LAST "Phase N" mentioned anywhere in that line's prose. This value
+    // feeds `roadmap_complete` AND directly gates next_phase/current_phase
+    // selection below, so getting the wrong phase here is load-bearing, not
+    // metadata-only (contrast the `_cbPattern` site in cmdInitManager).
+    // First-match-wins (`if (!roadmapCheckboxStates.has(...))`) additionally
+    // guards against a later anchored line (e.g. a per-plan sub-entry
+    // self-titled "Phase N ...") overwriting an already-recorded phase's own
+    // (first) checkbox — anchoring alone does not fully close that
+    // "last-match-wins" composition defect.
+    const cbPattern = new RegExp(`^[ \\t]*-[ \\t]*\\[(x| )\\][ \\t]*(?:\\*\\*)?Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`, 'gim');
     let cbm: RegExpExecArray | null;
     while ((cbm = cbPattern.exec(roadmapContent)) !== null) {
-      roadmapCheckboxStates.set(cbm[2], cbm[1].toLowerCase() === 'x');
+      const cbKey = cbm[2];
+      if (!roadmapCheckboxStates.has(cbKey)) {
+        roadmapCheckboxStates.set(cbKey, cbm[1].toLowerCase() === 'x');
+      }
     }
   } catch {
     /* intentionally empty */
