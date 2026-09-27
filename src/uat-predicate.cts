@@ -27,7 +27,10 @@ import phaseIdMod = require('./phase-id.cjs');
 const { scopeToPhase } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtils = require('./core-utils.cjs');
-const { normalizeLineEndings } = coreUtils;
+const { normalizeLineEndings, countMatchedSummaries } = coreUtils;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planScanMod = require('./plan-scan.cjs');
+const { isRootPlanFile } = planScanMod;
 
 // Two CommonMark-legal line terminators (LINE SEPARATOR, PARAGRAPH SEPARATOR)
 // that a naive `split('\n')`-only scan would not treat as line breaks.
@@ -489,10 +492,16 @@ function isTestGapResolved(entries: GapEntry[], testNum: number, dirEntries: str
     if (e.status !== 'resolved') return false;
     if (!e.resolvedBy) return false;
     if (path.basename(e.resolvedBy) !== e.resolvedBy) return false;
-    if (!/-PLAN\.md$/i.test(e.resolvedBy)) return false;
+    // Canonical plan-filename predicate (src/plan-scan.cts) rather than a
+    // hand-rolled `-PLAN.md$` regex — one owner for "what is a plan file"
+    // across the codebase (lint-plan-count-drift.cjs enforces this).
+    if (!isRootPlanFile(e.resolvedBy)) return false;
     if (!dirEntries.includes(e.resolvedBy)) return false;
-    const summaryName = e.resolvedBy.replace(/-PLAN\.md$/i, '-SUMMARY.md');
-    if (!dirEntries.includes(summaryName)) return false;
+    // Canonical plan→summary pairing (src/core-utils.cts), same reason: a
+    // single-plan/single-candidate-set query reuses the exact matching rules
+    // scanPhasePlans's own summaryCount is built from, rather than a
+    // hand-rolled `-PLAN.md` → `-SUMMARY.md` suffix swap.
+    if (countMatchedSummaries([e.resolvedBy], dirEntries) !== 1) return false;
     // Fail closed on an entry with no gap_id to cross-reference — there is
     // nothing to verify the named plan actually resolved THIS gap against.
     if (!e.gapId) return false;
