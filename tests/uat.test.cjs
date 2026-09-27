@@ -8963,9 +8963,12 @@ describe('#4983: a resolved ## Gaps entry hides its matching ### N. issue row', 
       '  test: 1',
     ].join('\n');
     const { items } = parseUatItemsWithStats(content);
-    assert.strictEqual(items.length, 1, 'an unresolved issue row must still be surfaced');
-    assert.strictEqual(items[0].test, 1);
-    assert.strictEqual(items[0].result, 'issue');
+    // Pre-existing behavior, unrelated to #4983: an unresolved `## Gaps` entry
+    // is ALSO unioned in as its own item by parseGapsItems (below), alongside
+    // the `### 1.` test-block row itself — so 2 items are expected here, not 1.
+    assert.strictEqual(items.length, 2, 'both the test-block row and the still-open Gaps entry must surface');
+    const testRow = items.find((i) => i.test === 1 && i.result === 'issue');
+    assert.ok(testRow, 'an unresolved issue row must still be surfaced');
   });
 
   test('an issue row with NO Gaps entry at all is still surfaced (fail-closed)', () => {

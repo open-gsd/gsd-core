@@ -610,10 +610,11 @@ Present summary:
 [List from Issues section]
 ```
 
-**If unresolved_issues > 0:** Proceed to `diagnose_issues`
+**If issues > 0:** (reads `unresolved_issues` from "Count results" above, #4983 — not the raw
+`issues` count) Proceed to `diagnose_issues`
 
-**If unresolved_issues == 0:** (including when raw `issues` > 0 but every one is a verified gap
-resolution, #4983)
+**If issues == 0:** (again `unresolved_issues == 0` — including when the raw `issues` count is
+nonzero but every one is a verified gap resolution, #4983)
 
 ```bash
 VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)

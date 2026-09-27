@@ -518,7 +518,7 @@ function planClaimsGapId(phaseFullDir: string, planBasename: string, gapId: stri
   }
   let fm: Record<string, unknown>;
   try {
-    fm = extractFrontmatter(raw, planBasename) as Record<string, unknown>;
+    fm = extractFrontmatter(raw, planBasename);
   } catch {
     return false;
   }
