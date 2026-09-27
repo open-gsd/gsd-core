@@ -530,7 +530,7 @@ only supported runtime.
 |---|---|---|---|
 | `test` | `ubuntu-latest` (1 targeted + 3-shard full) | `product_changed == 'true'` | The default, always-scoped PR signal — the full `unit`/`integration`/`security` suites run once, sharded, on Linux. **Linux only**: its three `scope: windows` shards were deleted in #4641 (ADR-4641), which found them a second, redundant Windows selector alongside `test-conformance` |
 | `test-inert` | `ubuntu-latest` | `code_changed == 'true' && product_changed != 'true'` | A lightweight lane for PRs that touch only administrative/policy workflow files (code changed, but nothing that needs the real matrix) |
-| `test-conformance` | `windows-latest` (3-shard) + `macos-latest` (unsharded) | `code_changed == 'true' && full_matrix == 'true'` | Runs only the **platform-conformance-tier** file list (`scripts/lib/platform-conformance-tier.generated.cjs`, epic #4589 Phase 2/#4591) on real Windows/macOS — since #4641 the **sole** Windows and macOS selector in CI, not merely the sole gating one. Retired the parallel legacy full-suite matrix in #4603; #4641 removed the second Windows selector in `test` and narrowed the tier from 548 to 266 of 932 eligible unit-suite files (58.8% → 28.5%, measured 2026-09-11; the absolute counts track `next`'s test count, the percentages are what the ceiling test binds on). |
+| `test-conformance` | `windows-latest` (4-shard) + `macos-latest` (unsharded) | `code_changed == 'true' && full_matrix == 'true'` | Runs only the **platform-conformance-tier** file list (`scripts/lib/platform-conformance-tier.generated.cjs`, epic #4589 Phase 2/#4591) on real Windows/macOS — since #4641 the **sole** Windows and macOS selector in CI, not merely the sole gating one. Retired the parallel legacy full-suite matrix in #4603; #4641 removed the second Windows selector in `test` and narrowed the tier from 548 to 266 of 932 eligible unit-suite files (58.8% → 28.5%, measured 2026-09-11; the absolute counts track `next`'s test count, the percentages are what the ceiling test binds on). |
 | `coverage-gate` | `ubuntu-latest` | `product_changed == 'true' && test.result == 'success'` | Merges every `test` shard's coverage dumps and evaluates the threshold once (sharding moved this out of the `test` job itself — #2952) |
 | `qa-loop-walk` | `ubuntu-latest` | `product_changed == 'true'` | The QA smell-ratchet scenario walk (see "The QA smell ratchet" below) |
 | `required-tests` | `ubuntu-latest` | `always()` | Aggregates every job above into the one branch-protection-required check |
@@ -638,14 +638,15 @@ hand-measured cost for that job — now all three of the jobs above, not just
 
 `test-conformance` in `test.yml` (#4591, epic #4589 Phase 2) runs the
 `scripts/lib/platform-conformance-tier.generated.cjs` file list on
-`windows-latest` (sharded three ways) and `macos-latest` (unsharded) — the
-sole gating signal for real-OS coverage (#4603 retired the parallel
-legacy full-matrix safety-net job). It
+`windows-latest` (sharded four ways since #5029) and `macos-latest`
+(unsharded) — the sole gating signal for real-OS coverage (#4603 retired the
+parallel legacy full-matrix safety-net job). It
 also declares a `timeout-minutes` cap and runs the same in-job near-cap check
-described below, but it has no `LANE_COSTS` entry in
-`tests/ci-test-job-timeout-budget.test.cjs` yet — no real, completed
-(non-cancelled) per-shard measurement exists — so the headroom-factor gate
-does not cover it until one lands.
+described below, but it still has no `LANE_COSTS` entry in
+`tests/ci-test-job-timeout-budget.test.cjs`, so the headroom-factor gate does
+not cover it yet. A completed 3-shard measurement does now exist (run
+36322513056), but #5029 resharded the lane four ways in response to it, so the
+entry waits on a real 4-shard run rather than repricing the old layout.
 
 **`.platform.test.cjs` siblings (#5074).** The tier selects whole files, so a large file whose
 platform signal sits in a few tests can be split: those tests move to
