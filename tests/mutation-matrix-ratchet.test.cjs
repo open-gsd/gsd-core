@@ -211,7 +211,10 @@ const RATCHET_BASELINE = {
   'active-workstream-store': 86,  // CI run 33012034388 (2026-08-25): measured 87.42%; floor(87.42)-1
   'core-utils':              75,
   'planning-inspect':        56,  // CI run 32392791843: 57.03% (unit shard); ratchet candidate vs TARGET 80
-  'plan-document':           79,  // #4924: CI run 35804622980 (2026-09-24): measured 80.07%; floor(80.07)-1
+  'plan-document':           80,  // #5026: measured 81.16% (unit shard); floor(81.16)-1.
+                                   // Supersedes CI run 32392791843's 76.58% measurement and
+                                   // #4924's CI run 35804622980 (2026-09-24) 80.07%/floor-79
+                                   // measurement — 80 is the higher, more recent floor.
   'planning-command-router': 94,  // CI run 32392791843: 95.65% (unit shard); already exceeds TARGET 80
   'model-catalog':           74,  // CI run 33029755081 (2026-08-27, #3915): measured 75.26%;
                                    // floor(75.26)-1. Supersedes the #3007 59.62% measurement
