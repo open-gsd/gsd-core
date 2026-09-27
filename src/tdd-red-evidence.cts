@@ -164,9 +164,20 @@ function parseSurefireSummary(output: string): {
  * empty — an honest "no named failing test observed", which the caller
  * (classifyRedEvidence) already routes to `nonzero_exit_without_test_failure`
  * rather than a false `zero_tests_discovered`.
+ *
+ * Anchoring (review finding, round 1): requires the line to START with
+ * (only leading whitespace, then) the swift-testing checkmark glyph
+ * (✘/✔) immediately before "Test run with" — mirrors the Surefire
+ * detector's "require BOTH `<testsuite` and `<testcase`" defense against
+ * a DIFFERENT format's diagnostic merely quoting the phrase (e.g. a TAP
+ * `actual:` block asserting on rendered CLI text). `tests` sums EVERY
+ * aggregate-line match found, not just the first, so concatenated
+ * multi-block output (multiple targets/suites in one combined stdout)
+ * reports an honest total instead of an internally inconsistent record
+ * where `pass + fail` could exceed `tests`.
  */
 function isSwiftTestingSummary(output: string): boolean {
-  return /Test run with \d+ tests? in \d+ suites?\s+(?:passed|failed)/.test(output);
+  return /^[ \t]*[✘✔][ \t]*Test run with \d+ tests? in \d+ suites?\s+(?:passed|failed)/m.test(output);
 }
 
 function parseSwiftTestingSummary(output: string): {
@@ -175,11 +186,15 @@ function parseSwiftTestingSummary(output: string): {
   fail: number;
   failing_tests: string[];
 } {
-  const aggregate = /Test run with (\d+) tests? in \d+ suites?\s+(?:passed|failed)/.exec(output);
-  const tests = aggregate ? Number(aggregate[1]) : 0;
+  const aggregateRe = /^[ \t]*[✘✔][ \t]*Test run with (\d+) tests? in \d+ suites?\s+(?:passed|failed)/gm;
+  let tests = 0;
+  let am: RegExpExecArray | null;
+  while ((am = aggregateRe.exec(output)) !== null) {
+    tests += Number(am[1]);
+  }
   const failing_tests: string[] = [];
   const passing_tests: string[] = [];
-  const lineRe = /Test "([^"]+)" (failed|passed) after [\d.]+ seconds?(?: with \d+ issues?)?\.?/g;
+  const lineRe = /^[ \t]*[✘✔][ \t]*Test "([^"]+)" (failed|passed) after [\d.]+ seconds?(?: with \d+ issues?)?\.?$/gm;
   let m: RegExpExecArray | null;
   while ((m = lineRe.exec(output)) !== null) {
     if (m[2] === 'failed') failing_tests.push(m[1]);

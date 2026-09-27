@@ -561,4 +561,44 @@ describe('#4957 — swift-testing RED evidence', () => {
       { numRuns: 200, seed: 4957 },
     );
   });
+
+  test('a TAP diagnostic merely quoting the swift-testing summary phrase stays on the TAP path (review finding)', () => {
+    // The phrase appears mid-line, indented, quoted inside a TAP diagnostic's
+    // `actual:` block — NOT at line-start with a checkmark glyph. Must NOT
+    // hijack format detection away from the real TAP failure.
+    const tap = [
+      'TAP version 13',
+      '# Subtest: renders a CLI summary',
+      'not ok 1 - renders a CLI summary',
+      '  ---',
+      '  actual: |-',
+      '    Got: "Test run with 2 tests in 1 suite passed after 0.02 seconds."',
+      '  ...',
+      '# tests 1',
+      '# pass 0',
+      '# fail 1',
+    ].join('\n');
+    const result = classifyRedEvidence({
+      command: 'node --test',
+      exitCode: 1,
+      targetTest: 'renders a CLI summary',
+      output: tap,
+    });
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK', 'the real TAP failure must still be classified correctly');
+    assert.equal(result.evidence.tests, 1, 'tests must come from the real TAP summary, not the quoted phrase');
+  });
+
+  test('concatenated swift-testing blocks report a consistent summed test count (review finding)', () => {
+    const block1 = swiftTesting([failLine('A')], { tests: 2 });
+    const block2 = swiftTesting([passLine('B'), passLine('C'), failLine('D')], { tests: 3 });
+    const result = classifyRedEvidence({
+      command: 'swift test',
+      exitCode: 1,
+      targetTest: 'D',
+      output: `${block1}\n${block2}`,
+    });
+    assert.equal(result.evidence.tests, 5, 'tests must be the sum of every aggregate block, not just the first');
+    assert.equal(result.evidence.pass + result.evidence.fail, 5, 'pass+fail must never exceed the reported tests');
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+  });
 });
