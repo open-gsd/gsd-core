@@ -5868,3 +5868,107 @@ describe('#4906 Phase 2: cmdRoadmapUpdatePlanProgress Plans-line seam migration 
       'CRLF source must not corrupt the offset or strand/duplicate the annotation');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #4965 — roadmap_complete must read each phase's OWN checklist checkbox
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// collectAnalyzePhases's checkboxPattern used an unanchored `-\s*\[(x| )\]\s*.*<label>`
+// fragment: the `.*` let "Phase N" match anywhere in ANY checklist line's free-form
+// description, and `content.match()` returns only the FIRST hit in the whole
+// document — so an earlier, unrelated line whose prose merely mentions "Phase N"
+// shadowed that phase's own checkbox line. Fix: anchor to line start and require
+// the label to be the first thing after the checkbox (tolerating only an optional
+// `**` bold marker), never `.*` free-form prose.
+describe('#4965: roadmap analyze checkbox regex must not read another phase\'s line', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+});
+
+  afterEach(() => {
+    cleanup(tmpDir);
+});
+
+  function writeRoadmapWithChecklist(checklistLines) {
+    const body = [
+      '# Roadmap',
+      '',
+      ...checklistLines,
+      '',
+      '### Phase 1: Alpha',
+      '',
+      '**Goal:** alpha',
+      '',
+      '### Phase 2: Beta',
+      '',
+      '**Goal:** beta',
+      '',
+    ].join('\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), body);
+}
+
+  function analyze() {
+    const result = runGsdTools('roadmap analyze', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    return JSON.parse(result.output);
+}
+
+  function phase(output, number) {
+    const p = output.phases.find((ph) => ph.number === number);
+    assert.ok(p, `phase ${number} must appear in analyze output; got: ${JSON.stringify(output.phases)}`);
+    return p;
+}
+
+  // Issue #4965 repro A (false negative): phase 1's own line is UNCHECKED but
+  // mentions "Phase 2" in its description; phase 2's own line is CHECKED.
+  // Buggy behavior: phase 2 reads false (shadowed by phase 1's unticked line,
+  // matched first by the unanchored `.*` pattern).
+  test('#4965 repro A: an earlier unticked line mentioning this phase does not shadow its own ticked line', () => {
+    writeRoadmapWithChecklist([
+      '- [ ] **Phase 1: Alpha** — Extends the Phase 2 store',
+      '- [x] **Phase 2: Beta** — done',
+    ]);
+    const output = analyze();
+    assert.strictEqual(phase(output, '1').roadmap_complete, false, "phase 1's own line is unticked");
+    assert.strictEqual(phase(output, '2').roadmap_complete, true, "phase 2's own line is ticked — must not be shadowed by phase 1's mention of it");
+});
+
+  // Issue #4965 repro B (false positive): phase 1's own line is CHECKED and
+  // mentions "Phase 2" in its description; phase 2's own line is UNCHECKED.
+  // Buggy behavior: phase 2 reads true (shadowed by phase 1's ticked line).
+  test('#4965 repro B: an earlier ticked line mentioning this phase does not shadow its own unticked line', () => {
+    writeRoadmapWithChecklist([
+      '- [x] **Phase 1: Alpha** — Lands before Phase 2 Beta',
+      '- [ ] **Phase 2: Beta** — not started',
+    ]);
+    const output = analyze();
+    assert.strictEqual(phase(output, '1').roadmap_complete, true, "phase 1's own line is ticked");
+    assert.strictEqual(phase(output, '2').roadmap_complete, false, "phase 2's own line is unticked — must not be shadowed by phase 1's mention of it");
+});
+
+  // No-decoration checklist bullet (no bold markers) must still match.
+  test('#4965: an undecorated checklist bullet (no ** bold marker) still resolves roadmap_complete', () => {
+    writeRoadmapWithChecklist([
+      '- [x] Phase 1: Alpha',
+      '- [ ] Phase 2: Beta',
+    ]);
+    const output = analyze();
+    assert.strictEqual(phase(output, '1').roadmap_complete, true, 'plain (unbolded) ticked checklist line must still match');
+    assert.strictEqual(phase(output, '2').roadmap_complete, false, 'plain (unbolded) unticked checklist line must still match');
+});
+
+  // Boundary: two phases on adjacent lines with no blank line between them —
+  // the anchor must still resolve each phase to its OWN line, not bleed into
+  // the neighboring line.
+  test('#4965: adjacent checklist lines with no blank line between them each resolve independently', () => {
+    writeRoadmapWithChecklist([
+      '- [x] **Phase 1: Alpha** — first',
+      '- [x] **Phase 2: Beta** — second, mentions Phase 1 nowhere',
+    ]);
+    const output = analyze();
+    assert.strictEqual(phase(output, '1').roadmap_complete, true);
+    assert.strictEqual(phase(output, '2').roadmap_complete, true);
+});
+});
