@@ -507,16 +507,35 @@ export function readNode(doc: PlanningDoc, id: NodeId): NodeRead {
 }
 
 /**
- * Shared core of `readFrontmatterField` / `readFrontmatterFieldFromSource`:
- * given a frontmatter block's own span TEXT (fences included) and the `Span`
- * to report on failure, look up `key` via `frontmatter.cts`'s
- * `extractFrontmatter` and shape the result as a `NodeRead`. The two public
- * functions differ only in HOW they locate the span (a `PlanningDoc`'s
- * `FrontmatterNode` vs a direct `frontmatterRegion` scan of raw `source`) —
- * neither may duplicate this lookup-and-shape step (the exact
+ * Parse a frontmatter block's own span TEXT (fences included) via
+ * `frontmatter.cts`'s `extractFrontmatter`, exactly ONCE, returning either the
+ * parsed object or a `{ ok: false }` marker for the `FRONTMATTER_UNPARSEABLE`
+ * case. Split out of the single-key lookup below (#5026 follow-up) so a
+ * caller reading MULTIPLE keys off the SAME region
+ * (`readFrontmatterFieldsFromSource`) detects the span and parses its YAML
+ * once, not once per key — this function is the one and only place that
+ * detect-then-parse step happens; every reader (single-key or bulk) composes
+ * it rather than re-deriving it.
+ */
+function parseFrontmatterRegion(
+  regionText: string,
+): { ok: true; value: Record<string, FrontmatterFieldValue> } | { ok: false } {
+  const fm = extractFrontmatter(regionText);
+  if ((fm as unknown as Record<symbol, unknown>)[FRONTMATTER_UNPARSEABLE] === true) {
+    return { ok: false };
+  }
+  return { ok: true, value: fm };
+}
+
+/**
+ * Shared core of `readFrontmatterField` / `readFrontmatterFieldFromSource` /
+ * `readFrontmatterFieldsFromSource`: given an ALREADY-PARSED frontmatter
+ * result (`parseFrontmatterRegion`'s output) and the `Span` to report on
+ * failure, shape one `key`'s lookup as a `NodeRead`. Every reader composes
+ * this SAME shaping step — neither may duplicate it (the exact
  * `DEFECT.GENERATIVE-FIX` class this epic exists to close).
  *
- * A region that fails to parse as YAML (`extractFrontmatter` reports this by
+ * A region that failed to parse as YAML (`extractFrontmatter` reports this by
  * returning `{}` carrying the `FRONTMATTER_UNPARSEABLE` Symbol, per that
  * module's own documented contract) → `{ ok: false, reason:
  * 'unparseable-frontmatter', span }`. A parseable region whose key is simply
@@ -525,17 +544,29 @@ export function readNode(doc: PlanningDoc, id: NodeId): NodeRead {
  * key just reads `undefined` off its returned object), so this reason string
  * is this seam's own, not a passthrough of an upstream contract.
  */
-function lookupFrontmatterField(regionText: string, span: Span, key: string): NodeRead<FrontmatterFieldValue> {
-  const fm = extractFrontmatter(regionText);
-  if ((fm as unknown as Record<symbol, unknown>)[FRONTMATTER_UNPARSEABLE] === true) {
+function shapeFrontmatterField(
+  parsed: { ok: true; value: Record<string, FrontmatterFieldValue> } | { ok: false },
+  span: Span,
+  key: string,
+): NodeRead<FrontmatterFieldValue> {
+  if (!parsed.ok) {
     return { ok: false, reason: 'unparseable-frontmatter', span };
   }
-
-  const value = (fm as Record<string, FrontmatterFieldValue>)[key];
+  const value = parsed.value[key];
   if (value === undefined) {
     return { ok: false, reason: 'field-not-found', span };
   }
   return { ok: true, value };
+}
+
+/** Single-key lookup: parse `regionText` once (`parseFrontmatterRegion`) and
+ * shape `key`'s result (`shapeFrontmatterField`). Used by `readFrontmatterField`
+ * and `readFrontmatterFieldFromSource`, which each already have the region's
+ * own text and span in hand; a caller reading several keys off one region
+ * should use `readFrontmatterFieldsFromSource` instead, to avoid re-parsing
+ * once per key. */
+function lookupFrontmatterField(regionText: string, span: Span, key: string): NodeRead<FrontmatterFieldValue> {
+  return shapeFrontmatterField(parseFrontmatterRegion(regionText), span, key);
 }
 
 /**
@@ -605,6 +636,43 @@ export function readFrontmatterFieldFromSource(source: string, key: string): Nod
   }
   const raw = source.slice(found.span.start, found.span.end);
   return lookupFrontmatterField(raw, found.span, key);
+}
+
+/**
+ * Read MULTIPLE top-level frontmatter keys off raw `source` text in ONE pass
+ * — the bulk sibling of `readFrontmatterFieldFromSource`, for a caller (added
+ * for `plan-document.cts`'s `parsePlanDocument`, #5026 follow-up) that needs
+ * several keys off the SAME document. Calling `readFrontmatterFieldFromSource`
+ * once per key each independently re-detects the frontmatter span AND
+ * re-parses the full frontmatter YAML from scratch (`findFrontmatterSpan` +
+ * `parseFrontmatterRegion`, both non-trivial scans) — this function detects
+ * the span and parses the YAML exactly ONCE, then shapes every requested key
+ * off that SAME parsed result.
+ *
+ * This is a second ENTRY POINT into the one shared detect-span +
+ * parse-YAML + shape-a-key pipeline (`findFrontmatterSpan` /
+ * `parseFrontmatterRegion` / `shapeFrontmatterField`), never a second parser:
+ * per-key result shapes are byte-identical to calling
+ * `readFrontmatterFieldFromSource` once per key (same `no-frontmatter` /
+ * `unparseable-frontmatter` / `field-not-found` / present shapes, same span).
+ */
+export function readFrontmatterFieldsFromSource(
+  source: string,
+  keys: readonly string[],
+): Record<string, NodeRead<FrontmatterFieldValue>> {
+  const found = findFrontmatterSpan(source);
+  const out: Record<string, NodeRead<FrontmatterFieldValue>> = {};
+
+  if (!found) {
+    const span: Span = { start: 0, end: 0 };
+    for (const key of keys) out[key] = { ok: false, reason: 'no-frontmatter', span };
+    return out;
+  }
+
+  const raw = source.slice(found.span.start, found.span.end);
+  const parsed = parseFrontmatterRegion(raw);
+  for (const key of keys) out[key] = shapeFrontmatterField(parsed, found.span, key);
+  return out;
 }
 
 /**

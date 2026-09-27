@@ -157,9 +157,10 @@ extends that rather than inventing a second notion of what a planning document i
 > Until that lands, the two names are close enough to confuse, and this note is the warning.
 >
 > **Landed 2026-09-27, per Amendment below.** `src/plan-document.cts`'s 7 frontmatter-derived
-> fields now read through this seam's `readFrontmatterField`/`readFrontmatterFieldFromSource`
-> rather than calling `frontmatter.cts`'s `extractFrontmatter` directly. See the
-> "Amendment (2026-09-27)" section for the evidence.
+> scheduling fields, plus `objective` as an 8th, now read through this seam's
+> `readFrontmatterField`/`readFrontmatterFieldFromSource` rather than calling
+> `frontmatter.cts`'s `extractFrontmatter` directly. See the "Amendment (2026-09-27)" section
+> for the evidence.
 
 ### 2. A structural write replaces a node. There is no span, because there is no regex.
 
@@ -794,7 +795,7 @@ the `.planning/` root `PLANNING_ARTIFACTS` enumerates (confirmed by execution:
 `isCanonicalPlanningFile('01-PLAN.md')` is `false`), and two of its five real callers
 (`src/planning-inspect.cts`, `src/quick-batch-dispatch.cts`) hold only in-memory plan content with no
 filename to gate on at all. Routing through `parsePlanningDoc` as originally planned would have made
-every one of `plan-document.cts`'s 7 frontmatter fields silently go blank for every real plan
+every one of `plan-document.cts`'s 8 frontmatter fields silently go blank for every real plan
 document — the opposite of the required byte-identical migration. `src/planning-document.cts` gained
 a second, narrower reader, `readFrontmatterFieldFromSource(source, key)`, which locates the
 frontmatter span directly via the same `frontmatterRegion`-composing primitive `parsePlanningDoc`
@@ -814,13 +815,17 @@ epic exists to close.
   its own `FRONTMATTER_UNPARSEABLE` marker; `{ok:false, reason:'field-not-found', ...}` for an absent
   key — proven against `extractFrontmatter` directly in `tests/planning-document.test.cjs`'s new
   `#5026` describe blocks.
-- `src/plan-document.cts`'s `parsePlanDocument` migrated its 7 frontmatter-derived fields (`wave`,
-  `depends_on`, `autonomous`, `agent_hint`, `files_modified`, `files_deleted`, `type`) onto
-  `readFrontmatterFieldFromSource`, unwrapped to the same `value-or-undefined` shape a direct
-  `fm[key]` read gave; the `<task>`/`<objective>`/`<threat_model>` parsing is untouched.
-- `tests/plan-document.test.cjs`'s full 27-test pre-existing suite (including its "legacy behaviour
+- `src/plan-document.cts`'s `parsePlanDocument` migrated its 7 frontmatter-derived scheduling
+  fields (`wave`, `depends_on`, `autonomous`, `agent_hint`, `files_modified`, `files_deleted`,
+  `type`) onto `readFrontmatterFieldFromSource`, unwrapped to the same `value-or-undefined` shape
+  a direct `fm[key]` read gave. `objective` is migrated too, as an 8th field — it reads through
+  the same `frontmatterField` helper, as a fallback used only when the `<objective>` XML tag
+  (`extractObjective`, unrelated and untouched) is absent — included because it is the exact same
+  frontmatter-key-read pattern as the other seven, not a deliberate scope decision to exclude it.
+  The `<task>`/`<objective>`-tag/`<threat_model>` parsing itself is untouched.
+- `tests/plan-document.test.cjs`'s full 27-test pre-existing suite (including its "legacy behavior
   unchanged" regression block) passes unmodified, plus 11 new before/after parity tests covering
-  every one of the 7 fields across present/absent/array/hyphenated-alt-key/malformed-frontmatter
+  every one of the 7 scheduling fields across present/absent/array/hyphenated-alt-key/malformed-frontmatter
   shapes. Every real caller's own test suite
   (`tests/phase.test.cjs`, `tests/planning-inspect.test.cjs`, `tests/planning-inspect.unit.test.cjs`,
   `tests/task-command-router-resolve-content.test.cjs`, `tests/quick-batch-dispatch.test.cjs`,

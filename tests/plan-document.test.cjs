@@ -276,7 +276,7 @@ files_deleted: [src/c.cts]
     assert.deepEqual(doc.filesDeleted, ['src/c.cts']);
   });
 
-  test('hyphenated alternate keys (files-modified / files-deleted) are honoured', () => {
+  test('hyphenated alternate keys (files-modified / files-deleted) are honored', () => {
     const doc = parsePlanDocument(`---
 files-modified: src/hyphen-modified.cts
 files-deleted: src/hyphen-deleted.cts
@@ -296,7 +296,7 @@ depends_on: ""
     assert.deepEqual(doc.dependsOn, []);
   });
 
-  test('a whitespace-only agent_hint normalises to null', () => {
+  test('a whitespace-only agent_hint normalizes to null', () => {
     const doc = parsePlanDocument(`---
 agent_hint: "   "
 ---

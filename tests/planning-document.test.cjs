@@ -861,7 +861,7 @@ describe('row 32: setFieldValue has no way to accept a separator-containing valu
 // ADR-4910 §1 absorption seam: a frontmatter-key reader composing
 // `frontmatter.cts`'s `extractFrontmatter` rather than reimplementing YAML
 // parsing. Two entry points share one lookup-and-shape helper internally
-// (`lookupFrontmatterField`, not exported — its behaviour is asserted only
+// (`lookupFrontmatterField`, not exported — its behavior is asserted only
 // through these two public functions, which is the point: one owner, two
 // doors) — `readFrontmatterField` locates the frontmatter span via an
 // already-parsed `PlanningDoc`'s `FrontmatterNode`; `readFrontmatterFieldFromSource`
@@ -975,5 +975,58 @@ describe('#5026: readFrontmatterFieldFromSource — same contract, no PlanningDo
     const read = readFrontmatterFieldFromSource(source, 'wave');
     assert.strictEqual(read.ok, true);
     assert.strictEqual(read.value, '3');
+  });
+});
+
+describe('#5026 follow-up: readFrontmatterField / readFrontmatterFieldFromSource parity', () => {
+  // Both entry points are two doors onto one shared lookup-and-shape owner
+  // (`lookupFrontmatterField`) — this pins that they can never silently
+  // diverge (CLAUDE.md's "Generative Fix Divergence" defect class) by parsing
+  // the SAME underlying document both ways: once via `parsePlanningDoc` into a
+  // `doc` (read through `readFrontmatterField`), once passed raw as `source`
+  // (read through `readFrontmatterFieldFromSource`) — and asserting both
+  // agree, key by key, across present/array/absent/malformed shapes.
+  const source = [
+    '---',
+    'wave: 3',
+    'depends_on: [01-first, 02-second]',
+    'autonomous: true',
+    '---',
+    '',
+    '**Alpha:** one',
+    '',
+  ].join('\n');
+  const malformed = ['---', 'wave: [1, 2', 'depends_on: 01-first', '---', '', '**Alpha:** one', ''].join('\n');
+  const noFrontmatter = '**Alpha:** one\n';
+
+  function assertParity(text, key) {
+    const doc = parseOk(text);
+    const viaDoc = readFrontmatterField(doc, key);
+    const viaSource = readFrontmatterFieldFromSource(text, key);
+    assert.deepStrictEqual(
+      viaDoc,
+      viaSource,
+      `readFrontmatterField(doc, ${JSON.stringify(key)}) and readFrontmatterFieldFromSource(source, ${JSON.stringify(key)}) diverged`,
+    );
+  }
+
+  test('present scalar key: both entry points agree', () => {
+    assertParity(source, 'wave');
+  });
+
+  test('present array-valued key: both entry points agree', () => {
+    assertParity(source, 'depends_on');
+  });
+
+  test('absent key: both entry points agree (field-not-found)', () => {
+    assertParity(source, 'nonexistent');
+  });
+
+  test('no frontmatter at all: both entry points agree (no-frontmatter)', () => {
+    assertParity(noFrontmatter, 'wave');
+  });
+
+  test('malformed/unparseable frontmatter: both entry points agree (unparseable-frontmatter)', () => {
+    assertParity(malformed, 'wave');
   });
 });
