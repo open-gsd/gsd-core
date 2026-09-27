@@ -23,6 +23,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+const fc = require('fast-check');
+
 const { cleanup, runGsdTools } = require('./helpers.cjs');
 const {
   classifyRedEvidence,
@@ -419,4 +421,144 @@ test('#4724: CDATA sections in a passing case are never scanned as failures', ()
   assert.equal(result.reason, 'no_target_test_failure',
     'the CDATA phantom must not flip the unrelated failure into a target match');
   assert.equal(result.evidence.fail, 1, 'only the real failing case counts');
+});
+
+// ── #4957 — swift-testing RED evidence ────────────────────────────────────────
+// Same class as #4692 (Vitest) and #4724 (Surefire, fixed by #4825): swift-testing's
+// console summary (`✘ Test run with N tests in M suites failed after T seconds with
+// K issues.` plus per-test lines `✘ Test "name" failed after T seconds with K issues.`)
+// matched neither the TAP nor the Surefire detector, so a genuine Swift red silently
+// fell through to the TAP parser, which found nothing and reported zero tests.
+
+describe('#4957 — swift-testing RED evidence', () => {
+  const INPUT = {
+    command: 'swift test',
+    exitCode: 1,
+    targetTest: 'X',
+  };
+
+  function swiftTesting(perTestLines, { tests, passed = false } = {}) {
+    const failCount = perTestLines.filter((l) => l.includes('failed')).length;
+    const agg = passed
+      ? `✔ Test run with ${tests} tests in 1 suite passed after 0.02 seconds.`
+      : `✘ Test run with ${tests} tests in 1 suite failed after 0.02 seconds with ${failCount} issues.`;
+    return [agg, ...perTestLines].join('\n');
+  }
+  const failLine = (name) => `✘ Test "${name}" failed after 0.01 seconds with 1 issue.`;
+  const passLine = (name) => `✔ Test "${name}" passed after 0.01 seconds.`;
+
+  test('a genuine swift-testing red with the target test failing classifies RED_EVIDENCE_OK (#4957)', () => {
+    const result = classifyRedEvidence({
+      ...INPUT,
+      output: swiftTesting([passLine('Y'), failLine('X')], { tests: 2 }),
+    });
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(result.reason, 'target_test_failed');
+    assert.equal(result.evidence.tests, 2);
+    assert.equal(result.evidence.fail, 1);
+  });
+
+  test("the issue's literal aggregate-only repro reports the real test count, not zero_tests_discovered (#4957)", () => {
+    // The issue's exact repro JSON: only the aggregate summary line, no per-test
+    // lines at all. We cannot identify which named test failed, so this must NOT
+    // reach RED_EVIDENCE_OK — but it must also never lie that zero tests ran.
+    const result = classifyRedEvidence({
+      ...INPUT,
+      output: '✘ Test run with 3 tests in 1 suite failed after 0.004 seconds with 6 issues.\n',
+    });
+    assert.equal(result.evidence.tests, 3, 'the real test count must be reported, never zero');
+    assert.notEqual(result.reason, 'zero_tests_discovered');
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'nonzero_exit_without_test_failure');
+  });
+
+  test('an unrelated swift-testing failure is not the target test', () => {
+    const result = classifyRedEvidence({
+      ...INPUT,
+      output: swiftTesting([failLine('Y')], { tests: 1 }),
+    });
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'no_target_test_failure');
+  });
+
+  test('an all-passed swift-testing report at exit 0 is unexpected_green', () => {
+    const result = classifyRedEvidence({
+      ...INPUT,
+      exitCode: 0,
+      output: swiftTesting([passLine('X'), passLine('Y')], { tests: 2, passed: true }),
+    });
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'unexpected_green');
+  });
+
+  test('exactly one failing swift-testing test (boundary: fail=1) still matches the target', () => {
+    const result = classifyRedEvidence({
+      ...INPUT,
+      output: swiftTesting([failLine('X')], { tests: 1 }),
+    });
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(result.evidence.fail, 1);
+  });
+
+  test('a target failing among several passing swift-testing tests still matches', () => {
+    const result = classifyRedEvidence({
+      ...INPUT,
+      output: swiftTesting(
+        [passLine('A'), passLine('B'), passLine('C'), passLine('D'), failLine('X')],
+        { tests: 5 },
+      ),
+    });
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(result.evidence.tests, 5);
+    assert.equal(result.evidence.fail, 1);
+  });
+
+  test('a stray swift-testing-looking per-test line with no aggregate marker stays on the TAP path', () => {
+    // No "Test run with N tests in M suites ..." aggregate line present at all —
+    // must not be confidently classified as swift-testing off a per-test line alone.
+    const result = classifyRedEvidence({
+      ...INPUT,
+      output: failLine('X'),
+    });
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'zero_tests_discovered');
+  });
+
+  test('property: swift-testing target matching is exactly failing-set membership (#4957)', () => {
+    const arb = fc.integer({ min: 1, max: 12 }).chain((n) =>
+      fc.record({
+        n: fc.constant(n),
+        failingIdx: fc.subarray(
+          Array.from({ length: n }, (_, i) => i),
+          { minLength: 1 },
+        ),
+        targetIdx: fc.integer({ min: 0, max: n - 1 }),
+      }),
+    );
+    fc.assert(
+      fc.property(arb, ({ n, failingIdx, targetIdx }) => {
+        const failingSet = new Set(failingIdx);
+        const lines = [];
+        for (let i = 0; i < n; i++) {
+          lines.push(failingSet.has(i) ? failLine(`test${i}`) : passLine(`test${i}`));
+        }
+        const result = classifyRedEvidence({
+          command: 'swift test',
+          exitCode: 1,
+          targetTest: `test${targetIdx}`,
+          output: swiftTesting(lines, { tests: n }),
+        });
+        assert.equal(result.evidence.tests, n);
+        assert.equal(result.evidence.fail, failingSet.size);
+        if (failingSet.has(targetIdx)) {
+          assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+          assert.equal(result.reason, 'target_test_failed');
+        } else {
+          assert.equal(result.verdict, 'INVALID_RED');
+          assert.equal(result.reason, 'no_target_test_failure');
+        }
+      }),
+      { numRuns: 200, seed: 4957 },
+    );
+  });
 });
