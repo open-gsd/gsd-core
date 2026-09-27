@@ -4,7 +4,7 @@ Every matrixed CI job (`test`, `test-conformance` in `.github/workflows/test.yml
 `mutate` in `mutation.yml`; `smoke` in `install-smoke.yml`) now reports how close it ran to its
 `timeout-minutes` cap. This page is for a maintainer trying to answer: *is a lane drifting
 toward its cap, and where do I look?* (`test-conformance` runs the platform-conformance-tier file
-list — `scripts/lib/platform-conformance-tier.generated.cjs` — on `windows-latest`, sharded three
+list — `scripts/lib/platform-conformance-tier.generated.cjs` — on `windows-latest`, sharded four
 ways, and `macos-latest`, unsharded; it is the sole gating signal for real-OS coverage.)
 
 ## 1. A single run crossed 90% of its budget
@@ -63,7 +63,11 @@ cap. That is a maintainer call among three options, each with real tradeoffs:
 - **Raise the `timeout-minutes` cap** for that job.
 - **Rebalance the shard split** so no single shard carries a disproportionate share of the
   suite (see `scripts/run-tests.cjs`'s `selectShard`, which packs shards by measured cost from
-  `tests/test-timings.json`).
+  `tests/test-timings.json`). On the **Windows** lane, do not read a balanced packing as a
+  balanced runtime: that table is Linux-measured, and #4434's win32 correction reprices only the
+  files absent from it. #5029 found shards the packer scored identically (206.2 weight each)
+  running 0.75x / 1.21x / 1.04x of an equal split, so adding a shard is the lever that actually
+  moves the long pole there — retuning weights cannot, until a Windows-measured table exists.
 - **Trim what runs on the long-pole shard** — for the `test` job, shard 1 also carries the
   unsharded aux suites (integration/security/install/slow); moving one elsewhere changes what
   shard 1 costs.
