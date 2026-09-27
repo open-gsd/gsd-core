@@ -230,12 +230,16 @@ function isUnittestSummary(output: string): boolean {
  * existing `nonzero_exit_without_test_failure` reason rather than fabricating
  * a match (same fail-closed posture as `parseSurefireSummary`, which also
  * counts an `<error>` child as failing — here an `ERROR:` header counts the
- * same as a `FAIL:` header). A `unittest.loader._FailedTest` entry (the
- * issue's explicit carve-out) is excluded: unittest synthesizes one when a
- * module fails to IMPORT or COLLECT, giving it whatever method name the
- * loader happened to be looking for — which can coincidentally equal the
- * plan's target test name and would otherwise fabricate a target match for a
- * load/collection crash rather than a real assertion failure.
+ * same as a `FAIL:` header).
+ *
+ * `unittest.loader._FailedTest` entries (the issue's explicit carve-out) are
+ * excluded from `failing_tests`: unittest synthesizes one when a module fails
+ * to IMPORT or COLLECT, giving it whatever method name the loader happened to
+ * be looking for — which can coincidentally equal the plan's target test name
+ * and would otherwise fabricate a target match for a load/collection crash
+ * rather than a real assertion failure. Excluding it drops `fail` for that
+ * entry, correctly falling through to the existing
+ * `nonzero_exit_without_test_failure` reason instead.
  */
 function parseUnittestSummary(output: string): {
   tests: number;
