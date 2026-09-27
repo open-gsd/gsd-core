@@ -316,7 +316,9 @@ function planIdFromFile(planFile: string): string {
  * whenever the `<objective>` XML tag (`extractObjective`, unrelated and
  * untouched by this absorption) is absent; it is included here simply
  * because reading it is the exact same pattern as the other seven, and the
- * migration below naturally covers it.
+ * migration below naturally covers it. `gap_closure` (#4924) is a 9th field,
+ * absorbed onto this same bulk-read seam by this fix rather than left on the
+ * removed `fm[key]` object-property read it was rebased in against.
  */
 const FRONTMATTER_READ_KEYS = [
   'wave',
@@ -329,6 +331,7 @@ const FRONTMATTER_READ_KEYS = [
   'agent_hint',
   'type',
   'objective',
+  'gap_closure',
 ] as const;
 
 /**
@@ -440,7 +443,7 @@ function parsePlanDocument(content: string, _planPath = ''): PlanDocument {
     filesModified,
     filesDeleted,
     // extractFrontmatter yields every scalar as a string, so YAML `true` is 'true'.
-    gapClosure: fm['gap_closure'] === 'true',
+    gapClosure: frontmatterField(fields, 'gap_closure') === 'true',
     tasks,
     taskCount: tasks.length,
   };
