@@ -18,7 +18,7 @@ Ratified per `docs/adr/README.md`'s ["Ratifying a stale `Proposed`"](README.md#r
 - **The positive-control lint exists, per §7.** `scripts/lint-planning-document-positive-control.cjs` (commit `eee40bc38d`) asserts one fixture per declared-accepted `PlanningDoc` grammar, modelled on `scripts/lint-table-schema-drift.cjs`'s registry mechanism, and is wired into `lint:ci` — a parser declaring an accepted grammar with no control now fails the build.
 - **Governance on track to close.** Phase sub-issues [#4910](https://github.com/open-gsd/gsd-core/issues/4910)/[#4917](https://github.com/open-gsd/gsd-core/issues/4917)/[#4932](https://github.com/open-gsd/gsd-core/issues/4932)/[#4958](https://github.com/open-gsd/gsd-core/issues/4958)/[#4961](https://github.com/open-gsd/gsd-core/issues/4961)/[#4984](https://github.com/open-gsd/gsd-core/issues/4984) are closed `COMPLETED`; [#5007](https://github.com/open-gsd/gsd-core/issues/5007) (Phase 6) and epic [#4906](https://github.com/open-gsd/gsd-core/issues/4906) close when this PR merges.
 
-Three Amendments (2026-09-21, 2026-09-22, 2026-09-24) narrowed or corrected specific claims along the way — the write-refusal rule, the STATE.md re-scope, and the Phase 3 table/checklist-writer correction — and none of them is reopened by this ratification; they stand as recorded.
+Three Amendments (2026-09-21, 2026-09-22, 2026-09-24) narrowed or corrected specific claims along the way — the write-refusal rule, the STATE.md re-scope, and the Phase 3 table/checklist-writer correction — and none of them is reopened by this ratification; they stand as recorded. A fourth Amendment (2026-09-27), landing after ratification, closes §1's still-live naming risk (Consequences' "Risk — naming") by absorbing `src/plan-document.cts`'s frontmatter reads onto this seam; see that Amendment below.
 
 ## Context
 
@@ -155,6 +155,12 @@ extends that rather than inventing a second notion of what a planning document i
 > `*-PLAN.md` **body**. The ambiguity is resolved by **absorption** — that module becomes a typed
 > field reader beneath this seam — not by a naming convention every future author must be told.
 > Until that lands, the two names are close enough to confuse, and this note is the warning.
+>
+> **Landed 2026-09-27, per Amendment below.** `src/plan-document.cts`'s 7 frontmatter-derived
+> scheduling fields, plus `objective` as an 8th, now read through this seam's
+> `readFrontmatterField`/`readFrontmatterFieldFromSource` rather than calling
+> `frontmatter.cts`'s `extractFrontmatter` directly. See the "Amendment (2026-09-27)" section
+> for the evidence.
 
 ### 2. A structural write replaces a node. There is no span, because there is no regex.
 
@@ -472,7 +478,8 @@ Two consequences for the phases:
   test, the fail-first regression per absorbed issue, §7's positive controls, and the per-phase
   `gsd-test` gate. [ADR-2143](2143-markdown-table-and-mutation-consolidation.md)'s own Phase 5 exists because a coverage re-check found a seam its
   Phase 0 had left unowned; `/adr-phase-coverage` runs again at epic closeout for that reason.
-- **Risk — naming.** `planning-document` beside `plan-document` (§1). Live until absorption lands.
+- **Risk — naming.** `planning-document` beside `plan-document` (§1). Live until absorption
+  lands — landed 2026-09-27, see "Amendment (2026-09-27)" below.
 - **Non-goals.** Repairing the twelve at their existing call sites (the pattern that produced them
   — three times for #4852 alone). Replacing markdown as the storage format; the artifacts stay
   human-readable and hand-editable. Rewriting `markdown-sectionizer` or `markdown-table`.
@@ -762,3 +769,71 @@ to call `quick-tasks-append` instead of authoring the row via the Edit tool; and
 `bulletTitledColonRe` is widened to treat the LAST bare colon before the closing `**` as the title
 separator, so a plain-prose second colon no longer forces `could-not-parse`, while a title with zero
 bare colons still does (the #1639 discipline, unweakened — pinned by a negative-control test).
+
+## Amendment (2026-09-27): `src/plan-document.cts` absorption lands — closing §1's naming risk
+
+[#5026](https://github.com/open-gsd/gsd-core/issues/5026), surfaced by a post-epic
+`/adr-phase-coverage` run rather than a new report: §1's "Naming, recorded as a live risk" and its
+Consequences echo ("Risk — naming... Live until absorption lands") both name absorption, not a
+naming convention, as the resolution — and no phase of epic #4906 (Phases 0-6, ratified above) ever
+did it. This amendment lands that absorption.
+
+`src/plan-document.cts`'s frontmatter-derived fields already delegated to `frontmatter.cts`'s
+`extractFrontmatter` — no duplicated YAML parsing ever existed. The gap was only that the call
+happened directly, bypassing this seam. Its actual distinctive content — the `<task>` XML-ish block
+grammar (including the deliberately fence-blind legacy `## Task N` heading fallback), the
+`<objective>` tag, and the `<threat_model>` table — are domain-specific micro-grammars this seam's
+five node kinds (`frontmatter`/`section`/`boldField`/`table`/`checklist`) do not express, and stay
+exactly as they were; only the frontmatter-field-reading portion moved.
+
+**A second, narrower entry point was needed, not the one this ADR's design docs first assumed.**
+`parsePlanningDoc`'s artifact-kind gate (`PLANNING_ARTIFACTS`/`isCanonicalPlanningFile`) exists to
+distinguish "this document records nothing" from "wrong kind entirely" for a caller that might hand
+it any `.planning/`-root file, including a non-markdown one. That risk does not exist for
+`plan-document.cts`: every real `*-PLAN.md` lives nested under `.planning/phase/*/plans/`, never at
+the `.planning/` root `PLANNING_ARTIFACTS` enumerates (confirmed by execution:
+`isCanonicalPlanningFile('01-PLAN.md')` is `false`), and two of its five real callers
+(`src/planning-inspect.cts`, `src/quick-batch-dispatch.cts`) hold only in-memory plan content with no
+filename to gate on at all. Routing through `parsePlanningDoc` as originally planned would have made
+every one of `plan-document.cts`'s 8 frontmatter fields silently go blank for every real plan
+document — the opposite of the required byte-identical migration. `src/planning-document.cts` gained
+a second, narrower reader, `readFrontmatterFieldFromSource(source, key)`, which locates the
+frontmatter span directly via the same `frontmatterRegion`-composing primitive `parsePlanningDoc`
+itself uses (`findFrontmatterSpan`), with no `PlanningDoc`/artifact-kind gate at all — alongside
+`readFrontmatterField(doc, key)`, which reads the same way off an already-parsed `PlanningDoc`'s
+`FrontmatterNode`. Both share one internal lookup-and-shape helper rather than duplicating the
+extractFrontmatter-call-plus-result-shaping logic — the same `DEFECT.GENERATIVE-FIX` class this
+epic exists to close.
+
+**Evidence:**
+
+- `src/planning-document.cts` exports `readFrontmatterField(doc: PlanningDoc, key: string)` and
+  `readFrontmatterFieldFromSource(source: string, key: string)`, both returning the seam's
+  `NodeRead` shape (widened to `NodeRead<T = string>`, default-compatible with every pre-existing
+  caller) — `{ok:true, value}` on a present key; `{ok:false, reason:'no-frontmatter', ...}` with no
+  fence at all; `{ok:false, reason:'unparseable-frontmatter', ...}` when `extractFrontmatter` reports
+  its own `FRONTMATTER_UNPARSEABLE` marker; `{ok:false, reason:'field-not-found', ...}` for an absent
+  key — proven against `extractFrontmatter` directly in `tests/planning-document.test.cjs`'s new
+  `#5026` describe blocks.
+- `src/plan-document.cts`'s `parsePlanDocument` migrated its 7 frontmatter-derived scheduling
+  fields (`wave`, `depends_on`, `autonomous`, `agent_hint`, `files_modified`, `files_deleted`,
+  `type`) onto `readFrontmatterFieldFromSource`, unwrapped to the same `value-or-undefined` shape
+  a direct `fm[key]` read gave. `objective` is migrated too, as an 8th field — it reads through
+  the same `frontmatterField` helper, as a fallback used only when the `<objective>` XML tag
+  (`extractObjective`, unrelated and untouched) is absent — included because it is the exact same
+  frontmatter-key-read pattern as the other seven, not a deliberate scope decision to exclude it.
+  The `<task>`/`<objective>`-tag/`<threat_model>` parsing itself is untouched.
+- `tests/plan-document.test.cjs`'s full 27-test pre-existing suite (including its "legacy behavior
+  unchanged" regression block) passes unmodified, plus 11 new before/after parity tests covering
+  every one of the 7 scheduling fields across present/absent/array/hyphenated-alt-key/malformed-frontmatter
+  shapes. Every real caller's own test suite
+  (`tests/phase.test.cjs`, `tests/planning-inspect.test.cjs`, `tests/planning-inspect.unit.test.cjs`,
+  `tests/task-command-router-resolve-content.test.cjs`, `tests/quick-batch-dispatch.test.cjs`,
+  `tests/init.test.cjs`) passes with no regressions.
+- Known, accepted side-effect-only divergence: `extractFrontmatter`'s optional `sourcePath`
+  parameter (used only to name a file in its truncated-frontmatter stderr diagnostic, #1882) has no
+  equivalent on `readFrontmatterFieldFromSource`. `parsePlanDocument`'s own `planPath` parameter is
+  therefore no longer threaded into that diagnostic; the diagnostic falls back to its own documented
+  content-digest dedup (the same fallback `extractFrontmatter` already used for the two callers that
+  never had a path to give it). This affects only an out-of-band stderr message, never
+  `parsePlanDocument`'s return value.

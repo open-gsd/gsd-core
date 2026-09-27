@@ -484,7 +484,7 @@ const COVERED = {
   // PASSED — not a local run; mutation shards run `node --test`, hard-blocked
   // in this repo's local environment):
   //   planning-command-router 95.65% → floor 94  (already exceeds TARGET_MUTATION_SCORE (80))
-  //   plan-document            76.58% → floor 75
+  //   plan-document            76.58% → floor 75; then 81.16% → floor 80 (#5026 parity tests)
   //   planning-inspect         57.03% → floor 56  (well below TARGET (80) — ratchet
   //     candidate; comfortably clears its own floor but has real room to grow.
   //     Raise as its tests improve, never lower it.)
@@ -516,7 +516,7 @@ const COVERED = {
   'plan-document': {
     cjs: 'gsd-core/bin/lib/plan-document.cjs',
     extraTests: ['planning-inspect.unit.test.cjs'],
-    minScore: 79,
+    minScore: 80,
   },
   'planning-command-router': {
     cjs: 'gsd-core/bin/lib/planning-command-router.cjs',

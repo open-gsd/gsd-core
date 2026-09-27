@@ -32,9 +32,24 @@
  * gsd-core/bin/lib/plan-document.cjs (gitignored).
  */
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import frontmatterMod = require('./frontmatter.cjs');
-const { extractFrontmatter } = frontmatterMod;
+// #5026 / ADR-4910 §1 absorption: the 7 frontmatter-derived scheduling fields
+// below, plus `objective` as an 8th (see `frontmatterField`'s own docblock),
+// read through `planning-document.cts`'s seam
+// (`readFrontmatterFieldsFromSource`) rather than calling `frontmatter.cts`'s
+// `extractFrontmatter` directly. This module has no canonical `.planning/`-root
+// artifact basename to gate `parsePlanningDoc` on (`*-PLAN.md` lives nested
+// under `.planning/phase/*/plans/`, and two of the five real callers hold only
+// in-memory content with no path at all), so it uses the entry point shaped
+// for exactly that: content in hand, no filename, no other `PlanningDoc`
+// capability (sections/tables/checklists) this module needs. The BULK form
+// (`readFrontmatterFieldsFromSource`, not the single-key
+// `readFrontmatterFieldFromSource`) is used deliberately: `parsePlanDocument`
+// reads several keys off the SAME document, and the single-key entry point
+// would independently re-detect the frontmatter span and re-parse the full
+// YAML once per key. See both functions' docblocks in `planning-document.cts`
+// for the full reasoning.
+import { readFrontmatterFieldsFromSource } from './planning-document.cjs';
+import type { NodeRead } from './planning-document.cjs';
 
 // ─── Frozen vocabularies ──────────────────────────────────────────────────────
 
@@ -290,25 +305,93 @@ function planIdFromFile(planFile: string): string {
 }
 
 /**
+ * The frontmatter keys `parsePlanDocument` reads: the 7 scheduling fields
+ * this absorption originally scoped (`wave`, `depends_on`, `autonomous`,
+ * `files_modified`/`files-modified`, `files_deleted`/`files-deleted`,
+ * `agent_hint`, `type` — 9 key spellings across those 7 fields), PLUS
+ * `objective` as an 8th field. `objective` is read through this SAME
+ * frontmatter-key-read path — not a deliberate exclusion, as an earlier
+ * revision of this comment claimed — because `parsePlanDocument`'s return
+ * statement below falls back to `frontmatterField(content, 'objective')`
+ * whenever the `<objective>` XML tag (`extractObjective`, unrelated and
+ * untouched by this absorption) is absent; it is included here simply
+ * because reading it is the exact same pattern as the other seven, and the
+ * migration below naturally covers it. `gap_closure` (#4924) is a 9th field,
+ * absorbed onto this same bulk-read seam by this fix rather than left on the
+ * removed `fm[key]` object-property read it was rebased in against.
+ */
+const FRONTMATTER_READ_KEYS = [
+  'wave',
+  'depends_on',
+  'autonomous',
+  'files_modified',
+  'files-modified',
+  'files_deleted',
+  'files-deleted',
+  'agent_hint',
+  'type',
+  'objective',
+  'gap_closure',
+] as const;
+
+/**
+ * Read one top-level frontmatter key out of an already-bulk-read
+ * `Record<string, NodeRead>` (`readFrontmatterFieldsFromSource`'s return
+ * value, computed ONCE per `parsePlanDocument` call — see
+ * `FRONTMATTER_READ_KEYS`), unwrapped to the SAME shape a direct `fm[key]`
+ * object-property read would give: the field's value, or `undefined` when it
+ * is absent, the document has no frontmatter, or the frontmatter is
+ * unparseable — `readFrontmatterFieldsFromSource` reports all three of those
+ * as an `ok: false` result per key, and `extractFrontmatter`'s own object
+ * would likewise simply lack the key in every one of those cases.
+ */
+function frontmatterField(
+  fields: Record<string, NodeRead<FrontmatterValueLike>>,
+  key: string,
+): FrontmatterValueLike | undefined {
+  const read = fields[key];
+  return read?.ok ? read.value : undefined;
+}
+
+/** Redeclared structurally from `frontmatter.cts`'s internal `FrontmatterValue`
+ * (that module has no exported name for it — see `planning-document.cts`'s
+ * own `FrontmatterFieldValue`, which this mirrors) so `frontmatterField`'s
+ * return type stays as permissive as the seam it wraps. */
+type FrontmatterValueLike = string | string[] | Record<string, unknown>;
+
+/**
  * Parse one plan document.
  *
  * @param content  Raw `*-PLAN.md` text.
- * @param planPath Optional path, used only to name the file in `extractFrontmatter`'s
- *                 truncated-frontmatter diagnostic (#1882). Callers that do not have
- *                 one omit it — this default IS the shape production uses from the
- *                 read-only query path.
+ * @param planPath Historically the path passed to `extractFrontmatter`'s
+ *                 truncated-frontmatter diagnostic (#1882) — a stderr-only
+ *                 side channel, never part of this function's return value.
+ *                 #5026: the 9 frontmatter fields below (7 scheduling fields,
+ *                 plus `objective` and `gap_closure`) now read through
+ *                 `readFrontmatterFieldFromSource`, which has no path
+ *                 parameter, so this diagnostic's file-naming/dedup key is a
+ *                 documented, accepted side-effect-only regression (falls
+ *                 back to content-digest dedup, the same fallback
+ *                 `extractFrontmatter` already uses for the two real callers
+ *                 that never had a path to give it). Kept for call-site
+ *                 signature compatibility only.
  */
-function parsePlanDocument(content: string, planPath = ''): PlanDocument {
-  const fm = extractFrontmatter(content, planPath);
-
+function parsePlanDocument(content: string, _planPath = ''): PlanDocument {
   const xmlTasks = parseXmlTasks(content);
   const tasks = xmlTasks.length > 0 ? xmlTasks : parseMarkdownTasks(content);
 
-  const parsedWave = parseInt(fm['wave'] as string, 10);
+  // Detect the frontmatter span and parse its YAML ONCE (#5026 follow-up: the
+  // prior per-key `frontmatterField(content, key)` calls each independently
+  // re-detected the span and re-parsed the full YAML from scratch — 10x
+  // redundant detection+parse per call). Every `frontmatterField` read below
+  // shares this SAME parsed result.
+  const fields = readFrontmatterFieldsFromSource(content, FRONTMATTER_READ_KEYS);
+
+  const parsedWave = parseInt(frontmatterField(fields, 'wave') as string, 10);
   const declaredWave = Number.isNaN(parsedWave) ? null : parsedWave;
 
   let dependsOn: string[] = [];
-  const fmDeps = fm['depends_on'];
+  const fmDeps = frontmatterField(fields, 'depends_on');
   if (Array.isArray(fmDeps)) {
     dependsOn = fmDeps.map(String);
   } else if (typeof fmDeps === 'string' && fmDeps.trim() !== '') {
@@ -316,27 +399,28 @@ function parsePlanDocument(content: string, planPath = ''): PlanDocument {
   }
 
   let autonomous = true;
-  if (fm['autonomous'] !== undefined) {
+  const fmAutonomous = frontmatterField(fields, 'autonomous');
+  if (fmAutonomous !== undefined) {
     // eslint-disable-next-line @typescript-eslint/no-base-to-string -- FrontmatterValue comparison
-    autonomous = fm['autonomous'] === 'true' || String(fm['autonomous']) === 'true';
+    autonomous = fmAutonomous === 'true' || String(fmAutonomous) === 'true';
   }
 
   let filesModified: string[] = [];
-  const fmFiles = fm['files_modified'] || fm['files-modified'];
+  const fmFiles = frontmatterField(fields, 'files_modified') || frontmatterField(fields, 'files-modified');
   if (fmFiles) {
     // eslint-disable-next-line @typescript-eslint/no-base-to-string -- FrontmatterValue scalar-to-string
     filesModified = Array.isArray(fmFiles) ? fmFiles.map(String) : [String(fmFiles)];
   }
 
   let filesDeleted: string[] = [];
-  const fmDeleted = fm['files_deleted'] || fm['files-deleted'];
+  const fmDeleted = frontmatterField(fields, 'files_deleted') || frontmatterField(fields, 'files-deleted');
   if (fmDeleted) {
     // eslint-disable-next-line @typescript-eslint/no-base-to-string -- FrontmatterValue scalar-to-string
     filesDeleted = Array.isArray(fmDeleted) ? fmDeleted.map(String) : [String(fmDeleted)];
   }
 
   let agentHint: string | null = null;
-  const fmAgentHint = fm['agent_hint'];
+  const fmAgentHint = frontmatterField(fields, 'agent_hint');
   if (fmAgentHint !== undefined) {
     // eslint-disable-next-line @typescript-eslint/no-base-to-string -- FrontmatterValue scalar-to-string
     const hintStr = String(fmAgentHint).trim();
@@ -344,14 +428,14 @@ function parsePlanDocument(content: string, planPath = ''): PlanDocument {
   }
 
   let planType: string | null = null;
-  const fmType = fm['type'];
+  const fmType = frontmatterField(fields, 'type');
   if (fmType !== undefined) {
     // eslint-disable-next-line @typescript-eslint/no-base-to-string -- FrontmatterValue scalar-to-string
     planType = String(fmType);
   }
 
   return {
-    objective: extractObjective(content) || (fm['objective'] as string | null) || null,
+    objective: extractObjective(content) || (frontmatterField(fields, 'objective') as string | null) || null,
     type: planType,
     declaredWave,
     dependsOn,
@@ -360,7 +444,7 @@ function parsePlanDocument(content: string, planPath = ''): PlanDocument {
     filesModified,
     filesDeleted,
     // extractFrontmatter yields every scalar as a string, so YAML `true` is 'true'.
-    gapClosure: fm['gap_closure'] === 'true',
+    gapClosure: frontmatterField(fields, 'gap_closure') === 'true',
     tasks,
     taskCount: tasks.length,
   };
