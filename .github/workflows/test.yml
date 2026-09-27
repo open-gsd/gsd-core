@@ -578,9 +578,10 @@ jobs:
   # ubuntu-latest in the `test` job above. Gated on product code changed AND
   # full_matrix (#4591); this is the sole gating signal for windows/macos
   # coverage (#4603 retired the parallel legacy full-matrix job). Windows is
-  # sharded 3 ways, for the same reason a prior full-suite windows lane
-  # needed 3-way sharding (#3057, since retired — #4603), after the first
-  # real CI run measured it: unsharded, windows-latest hit its 45-minute
+  # sharded 4 ways (3 until #5029 — see the matrix comment below for the
+  # measurement that resized it), for the same reason a prior full-suite
+  # windows lane needed sharding at all (#3057, since retired — #4603), after
+  # the first real CI run measured it: unsharded, windows-latest hit its 45-minute
   # timeout and was CANCELLED (started 03:41:19Z, cancelled 04:26:25Z, run
   # 34434252144) while macos-latest finished the identical file set in
   # 26m58s — this conformance tier is dominated by subprocess-spawning tests
@@ -761,7 +762,13 @@ jobs:
         if: always()
         continue-on-error: true
         env:
-          CI_JOB_LABEL: "conformance test (${{ matrix.os }}, ${{ matrix.node-version }})"
+          # #5029: the shard suffix matters now that Windows is split four
+          # ways — without it a near-cap warning and its job summary cannot
+          # say WHICH shard is drifting, which is the one thing
+          # docs/how-to/read-ci-timeout-signals.md sends a maintainer here to
+          # find. Same expression as the job `name:` above and the parallel
+          # `test` lane's label, so the three agree on one spelling.
+          CI_JOB_LABEL: "conformance test (${{ matrix.os }}, ${{ matrix.node-version }}${{ matrix.shard && format(', shard {0}', matrix.shard) || '' }})"
           CI_JOB_TIMEOUT_MINUTES: '45'
         run: node scripts/ci-check-job-near-cap.cjs
 
