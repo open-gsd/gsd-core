@@ -587,10 +587,18 @@ function collectAnalyzePhases(
       else diskStatus = 'empty';
     }
 
-    // Check ROADMAP checkbox status. #3537: padding-tolerant fragment — the
-    // heading discovered above may use a different padding than the
-    // summary-bullet checkbox below it (mixed padding inside one ROADMAP is
-    // legal and seen in real projects).
+    // Check ROADMAP checkbox status. #4965: line-anchored, label-first — the
+    // old fragment allowed `\s*.*` between the checkbox and the label, which
+    // let "Phase N" match ANYWHERE in any checklist line's free-form
+    // description (not just this phase's own line), and `content.match`
+    // returns only the first hit in the document — so an earlier, unrelated
+    // line whose prose merely mentioned "Phase N" shadowed that phase's own
+    // checkbox state (both a false negative and a false positive were
+    // reported against real ROADMAPs). The label must now be the first thing
+    // after the checkbox, tolerating only an optional `**` bold marker and
+    // horizontal whitespace — matching this same function's `checklistPattern`
+    // below, which already hard-requires `\*\*` immediately after the
+    // checkbox for the same reason.
     //
     // ADR-3180 §7.4 (disk-strict, #2957, maintainer decision 2026-08-08):
     // `roadmapComplete` is reported below as metadata ONLY — it carries NO
@@ -601,7 +609,7 @@ function collectAnalyzePhases(
     // checkbox — no passing `*-VERIFICATION.md`, plans outstanding — now
     // reports incomplete; this is the deliberate Tier-2 break (ADR-3180 §7.4
     // Decision 3).
-    const checkboxPattern = new RegExp(`-\\s*\\[(x| )\\]\\s*.*${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention)}${phaseMarkdownRegexSource(phaseNum)}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`, 'i');
+    const checkboxPattern = new RegExp(`^[ \\t]*-[ \\t]*\\[(x| )\\][ \\t]*(?:\\*\\*)?${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention)}${phaseMarkdownRegexSource(phaseNum)}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`, 'im');
     const checkboxMatch = content.match(checkboxPattern);
     const roadmapComplete = checkboxMatch ? checkboxMatch[1] === 'x' : false;
 
