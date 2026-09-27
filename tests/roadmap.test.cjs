@@ -5885,11 +5885,11 @@ describe('#4965: roadmap analyze checkbox regex must not read another phase\'s l
 
   beforeEach(() => {
     tmpDir = createTempProject();
-});
+  });
 
   afterEach(() => {
     cleanup(tmpDir);
-});
+  });
 
   function writeRoadmapWithChecklist(checklistLines) {
     const body = [
@@ -5907,19 +5907,19 @@ describe('#4965: roadmap analyze checkbox regex must not read another phase\'s l
       '',
     ].join('\n');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), body);
-}
+  }
 
   function analyze() {
     const result = runGsdTools('roadmap analyze', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
     return JSON.parse(result.output);
-}
+  }
 
   function phase(output, number) {
     const p = output.phases.find((ph) => ph.number === number);
     assert.ok(p, `phase ${number} must appear in analyze output; got: ${JSON.stringify(output.phases)}`);
     return p;
-}
+  }
 
   // Issue #4965 repro A (false negative): phase 1's own line is UNCHECKED but
   // mentions "Phase 2" in its description; phase 2's own line is CHECKED.
@@ -5933,7 +5933,7 @@ describe('#4965: roadmap analyze checkbox regex must not read another phase\'s l
     const output = analyze();
     assert.strictEqual(phase(output, '1').roadmap_complete, false, "phase 1's own line is unticked");
     assert.strictEqual(phase(output, '2').roadmap_complete, true, "phase 2's own line is ticked — must not be shadowed by phase 1's mention of it");
-});
+  });
 
   // Issue #4965 repro B (false positive): phase 1's own line is CHECKED and
   // mentions "Phase 2" in its description; phase 2's own line is UNCHECKED.
@@ -5946,7 +5946,7 @@ describe('#4965: roadmap analyze checkbox regex must not read another phase\'s l
     const output = analyze();
     assert.strictEqual(phase(output, '1').roadmap_complete, true, "phase 1's own line is ticked");
     assert.strictEqual(phase(output, '2').roadmap_complete, false, "phase 2's own line is unticked — must not be shadowed by phase 1's mention of it");
-});
+  });
 
   // No-decoration checklist bullet (no bold markers) must still match.
   test('#4965: an undecorated checklist bullet (no ** bold marker) still resolves roadmap_complete', () => {
@@ -5957,7 +5957,7 @@ describe('#4965: roadmap analyze checkbox regex must not read another phase\'s l
     const output = analyze();
     assert.strictEqual(phase(output, '1').roadmap_complete, true, 'plain (unbolded) ticked checklist line must still match');
     assert.strictEqual(phase(output, '2').roadmap_complete, false, 'plain (unbolded) unticked checklist line must still match');
-});
+  });
 
   // Boundary: two phases on adjacent lines with no blank line between them —
   // the anchor must still resolve each phase to its OWN line, not bleed into
@@ -5970,5 +5970,45 @@ describe('#4965: roadmap analyze checkbox regex must not read another phase\'s l
     const output = analyze();
     assert.strictEqual(phase(output, '1').roadmap_complete, true);
     assert.strictEqual(phase(output, '2').roadmap_complete, true);
-});
+  });
+
+  // Parity check (isolated-review finding): the fix reuses
+  // phaseHeadingPrefixSrcFor(LABEL_ONLY, convention) unchanged, so a bracket-
+  // convention project's checklist bullet (`[GSD.02] Phase N: ...`) must still
+  // resolve roadmap_complete correctly — the anchor narrows what comes AFTER
+  // the checkbox, it does not touch the bracket-tolerance the prefix builder
+  // already provides.
+  test('#4965: bracket-convention checklist bullet ([GSD.02] Phase N:) still resolves roadmap_complete', () => {
+    writeRoadmapWithChecklist([
+      '- [x] **[GSD.02] Phase 1: Alpha** — first',
+      '- [ ] **[GSD.02] Phase 2: Beta** — second',
+    ]);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ phase_id_convention: 'bracket' }),
+      'utf-8',
+    );
+    const output = analyze();
+    assert.strictEqual(phase(output, '1').roadmap_complete, true, 'bracket-prefixed ticked bullet must still match');
+    assert.strictEqual(phase(output, '2').roadmap_complete, false, 'bracket-prefixed unticked bullet must still match');
+  });
+
+  // Negative space (isolated-review finding, recorded decision — see
+  // 10-diagnosis.md): the old unanchored `.*` accidentally tolerated
+  // decorations between the checkbox and the label — a blockquote marker, an
+  // emoji/badge, non-bold prose padding. The anchor deliberately does NOT
+  // preserve that tolerance (only whitespace + one optional `**` are
+  // allowed) — this is intentional narrowing, matching `cmdRoadmapAnalyze`'s
+  // own already-`**`-only `checklistPattern`, not a new gap. A ticked bullet
+  // decorated this way now resolves to `roadmap_complete: false` instead of
+  // matching by accident.
+  test('#4965: a checklist line decorated beyond an optional ** bold marker no longer matches (intentional)', () => {
+    writeRoadmapWithChecklist([
+      '- [x] \u{1F680} Phase 1: Alpha — emoji before the label, no bold marker',
+      '- [ ] Phase 2: Beta',
+    ]);
+    const output = analyze();
+    assert.strictEqual(phase(output, '1').roadmap_complete, false,
+      'a ticked line decorated with anything beyond an optional ** must NOT match — this is the deliberate narrowing, not a regression');
+  });
 });

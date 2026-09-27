@@ -596,9 +596,14 @@ function collectAnalyzePhases(
     // checkbox state (both a false negative and a false positive were
     // reported against real ROADMAPs). The label must now be the first thing
     // after the checkbox, tolerating only an optional `**` bold marker and
-    // horizontal whitespace — matching this same function's `checklistPattern`
-    // below, which already hard-requires `\*\*` immediately after the
-    // checkbox for the same reason.
+    // horizontal whitespace — matching `cmdRoadmapAnalyze`'s own
+    // `checklistPattern` (the missing-detail-section scan a bit further down
+    // in this file), which already hard-requires `\*\*` immediately after the
+    // checkbox for the same reason. A decoration the old `.*` used to tolerate
+    // by accident — a blockquoted bullet, an emoji/badge before the label —
+    // now resolves to `roadmap_complete: false` instead of matching; this is
+    // the deliberate, precedent-consistent narrowing (see 10-diagnosis.md's
+    // "Negative space" note), not a new gap.
     //
     // ADR-3180 §7.4 (disk-strict, #2957, maintainer decision 2026-08-08):
     // `roadmapComplete` is reported below as metadata ONLY — it carries NO
