@@ -1543,10 +1543,16 @@ describe('stripFrontmatter', () => {
     assert.strictEqual(stripFrontmatter(doc, { once: true }), '# T\n\n---\n\nmore');
   });
 
-  test('only a whole `---` line closes the block — `----` and `--- x` are block content', () => {
+  test('a whole `---` line closes the block — `----` before it and `--- x` are block content', () => {
     assert.strictEqual(stripFrontmatter('---\n----\nfoo: 1\n---\nbody'), 'body');
     assert.strictEqual(stripFrontmatter('---\na: 1\n--- x\nb\n---\nBody'), 'Body');
     assert.strictEqual(stripFrontmatter('---\na: 1\n--- \t\nBody'), 'Body');
+  });
+
+  test('with no whole `---` line, the first `----` line closes the block (the #1882 lenient parse)', () => {
+    assert.strictEqual(stripFrontmatter('---\na: 1\n----\nBody'), 'Body');
+    assert.strictEqual(stripFrontmatter('---\na: 1\n--- x\n----\nBody'), 'Body');
+    assert.strictEqual(stripFrontmatter('---\na: 1\n---- x\nBody'), '---\na: 1\n---- x\nBody');
   });
 });
 

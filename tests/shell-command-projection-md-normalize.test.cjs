@@ -304,8 +304,9 @@ describe('#5105: write normalization leaves the frontmatter block untouched', ()
   // directions are now checked against the normalizer's whole output: a closed block is
   // published as written and everything from its closing fence on is normalized as an
   // unskipped document would be; an unterminated document is normalized exactly as if it had
-  // no frontmatter at all. Only a whole `---` line closes a block (`locateFrontmatterFence`),
-  // so `----` and `--- x` stay block content.
+  // no frontmatter at all. A whole `---` line closes a block (`locateFrontmatterFence`), so
+  // `--- x` and a `----` ahead of it stay block content; with no whole `---` line the first
+  // `----` closes it (the #1882 lenient parse).
   //
   // Normalizing `x\n` + text and dropping the `x\n` is normalizing `text` with no frontmatter
   // skip: `x` is inert to every normalizer rule, and the line after it keeps the same

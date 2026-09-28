@@ -16,11 +16,10 @@
  * The rules: a leading UTF-8 BOM is tolerated; the opening fence is exactly `---` followed
  * by `\n` or `\r\n` at byte 0; the closing fence is the first later WHOLE line that is
  * `---` plus optional trailing spaces/tabs, ended by `\n`, `\r\n` or the end of the text
- * (`----`, `--- x` and `--` are not closers); a closer on the very next line is a closed,
- * empty block.
- *
- * TDD RED: `src/frontmatter-fence.cts` does not exist yet, so the require below throws
- * MODULE_NOT_FOUND until the implementing commit adds it.
+ * (`--- x` and `--` are not closers); a closer on the very next line is a closed, empty
+ * block. When no such line follows the opener, the first WHOLE line of four or more dashes
+ * (plus optional trailing spaces/tabs) closes the block — the pre-existing lenient `----`
+ * parse pinned by #1882 (`tests/unusable-input.test.cjs`).
  */
 
 const { test, describe } = require('node:test');
@@ -76,6 +75,15 @@ describe('locateFrontmatterFence', () => {
     ['a `--` line before the real closer', '---\na: 1\n--\nb: 2\n---', closed('', '\n', 4, 17, 20, 16)],
     ['a `----` line before the real closer', '---\n----\nfoo: 1\n---\nbody', closed('', '\n', 4, 16, 19, 15)],
     ['a `--- x` line before the real closer', '---\na: 1\n--- x\n---\n', closed('', '\n', 4, 15, 18, 14)],
+    // The lenient `----` closer (#1882's pre-existing parse): a run of four or more dashes
+    // closes the block only when no exact `---` closer follows the opening fence.
+    ['a `----` closer with no exact closer', '---\ntitle: x\n----\n', closed('', '\n', 4, 13, 17, 12)],
+    ['a `-----` closer with no exact closer', '---\na: 1\n-----\nbody', closed('', '\n', 4, 9, 14, 8)],
+    ['a `----` closer with trailing spaces and a tab', '---\na: 1\n---- \t\nbody', closed('', '\n', 4, 9, 15, 8)],
+    ['a CRLF `----` closer', '---\r\na: 1\r\n----\r\nbody', closed('', '\r\n', 5, 11, 15, 9)],
+    ['the first of two lenient closers', '---\na: 1\n----\nb: 2\n-----\n', closed('', '\n', 4, 9, 13, 8)],
+    ['an exact closer after a lenient one wins', '---\na: 1\n----\nb: 2\n---\n', closed('', '\n', 4, 19, 22, 18)],
+    ['a `----` line right after the opener, with no exact closer, is an empty block', '---\n----\n--- x\n', closed('', '\n', 4, 4, 8, 4)],
   ]) {
     test(`${label}`, () => {
       assert.deepStrictEqual(locateFrontmatterFence(text), expected);
@@ -84,7 +92,8 @@ describe('locateFrontmatterFence', () => {
 
   for (const [label, text, expected] of [
     ['an opened, never-closed LF block', '---\na: 1\n', open('', '\n', 4, 9)],
-    ['a block whose only dash lines are look-alikes', '---\n----\n--- x\n', open('', '\n', 4, 15)],
+    ['a block whose only dash-led lines are `--- x` and `-- `', '---\n--- x\n-- \n', open('', '\n', 4, 14)],
+    ['a `---- x` line is not even a lenient closer', '---\na: 1\n---- x\n', open('', '\n', 4, 16)],
     ['a `---` line ended by a lone CR at the end of the text', '---\na: 1\n---\r', open('', '\n', 4, 13)],
     ['a BOM opener with nothing after it', '﻿---\n', open('﻿', '\n', 5, 5)],
   ]) {
@@ -160,6 +169,20 @@ describe('every fence consumer agrees on pinned documents', () => {
     assert.deepStrictEqual(frontmatterBlock(doc), { bom: '', block: '---\na: 1\n--- x\n# h\n---', rest: '\n# Body\ntext\n' });
     assert.strictEqual(normalizeContent(MD, doc).content, '---\na: 1\n--- x\n# h\n---\n# Body\n\ntext\n');
     assert.strictEqual(stripFrontmatter(doc), '# Body\ntext\n');
+  });
+
+  test('`---\\ntitle: x\\n----\\nBody` is one block closed by the lenient `----` line, for every consumer', () => {
+    const doc = '---\ntitle: x\n----\nBody';
+    assert.deepStrictEqual(frontmatterBlock(doc), { bom: '', block: '---\ntitle: x\n----', rest: '\nBody' });
+    assert.strictEqual(frontmatterRegion(doc).region, 'title: x');
+    assert.deepStrictEqual(extractFrontmatter(doc), { title: 'x' });
+    assert.strictEqual(stripFrontmatter(doc), 'Body');
+    assert.strictEqual(normalizeContent(MD, `${doc}\n`).content, `${doc}\n`);
+    const parsed = parsePlanningDoc(doc, 'STATE.md');
+    assert.ok(parsed.ok);
+    assert.deepStrictEqual(parsed.value.nodes.find((n) => n.kind === 'frontmatter').span, { start: 0, end: 17 });
+    // A writer keeps the key it read and re-emits the block with an exact closer.
+    assert.strictEqual(spliceFrontmatter(doc, { title: 'y' }), '---\ntitle: y\n---\nBody');
   });
 });
 
