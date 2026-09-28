@@ -290,7 +290,7 @@ function restoreNullBytesDeep(value: unknown): unknown {
  * produced four different strings for those four spellings (ADR-3473 40-design.md §0.1). No
  * adapter over a tree can recover a distinction the tree does not carry, so this renders a single
  * canonical string per object-list item instead, keeping the existing value SHAPE (an array of
- * strings) that `sliceTopLevelFrontmatterSegments`, the `[object Object]` guard and
+ * strings) that `sliceFrontmatterLayout`, the `[object Object]` guard and
  * `noOpObjectListSetError` all depend on. Choosing structured (non-string) values is fork (b) —
  * out of scope for this phase.
  */
@@ -1073,30 +1073,78 @@ function propagateCommentChannel(source: Frontmatter, target: Frontmatter): void
 }
 
 /**
- * Slice a frontmatter YAML body into per-top-level-key raw text segments. Each segment
- * runs from a column-0 `key:` line through the line before the next column-0 key (or the
- * end), capturing all nested indented content. Used by `spliceFrontmatter` for per-key
- * identity preservation (#1572): a structurally-unchanged key keeps its original raw
- * text, so the lossy `reconstructFrontmatter` never touches object-lists the caller did
- * not modify (e.g. must_haves.artifacts / .prohibitions).
+ * One top-level key's raw text inside a frontmatter block. `raw` is every line from the
+ * column-0 key line up to the next column-0 key line. It splits into `body` (the key line
+ * and the value text under it) and `tail`: the trailing blank lines, full-line comments
+ * and any other column-0 lines that are not part of the value (typically the comments
+ * leading the NEXT key). `plain` is true for the historical bare-ASCII key shape
+ * (`[A-Za-z0-9_-]+:`, which includes the no-space `key:value` spelling).
  */
-function sliceTopLevelFrontmatterSegments(yaml: string): Array<{ key: string; raw: string }> {
-  const lines = splitLines(yaml);
-  const segments: Array<{ key: string; raw: string }> = [];
-  let current: { key: string; raw: string[] } | null = null;
-  for (const line of lines) {
-    // A column-0 `key:` (no leading whitespace) starts a new top-level segment.
-    if (/^[A-Za-z0-9_-]+:/.test(line)) {
-      if (current) segments.push({ key: current.key, raw: current.raw.join('\n') });
-      const keyName = (line.match(/^([A-Za-z0-9_-]+):/) as RegExpMatchArray)[1];
-      current = { key: keyName, raw: [line] };
-    } else if (current) {
-      current.raw.push(line);
-    }
-    // Stray lines before the first top-level key (rare in frontmatter) are dropped.
+type FrontmatterSegment = { key: string; plain: boolean; raw: string; body: string[]; tail: string[] };
+
+/**
+ * Column-0 top-level key line: a double- or single-quoted key, the bare-ASCII shape
+ * (colon need not be followed by a space: `updated:2026-01-01`), or any other plain key
+ * (Unicode, embedded spaces) whose colon is followed by whitespace or end of line. A
+ * comment, a list item, an indented line and a line opening with a YAML indicator never
+ * start a key.
+ */
+const SEGMENT_KEY_RE = /^(?:"((?:[^"\\]|\\.)*)"\s*:|'((?:[^']|'')*)'\s*:|([A-Za-z0-9_-]+):|([^\s#\-?:,[\]{}&*!|>'"%@`][^:]*?):(?:\s|$))/;
+
+function segmentKeyOf(line: string): { key: string; plain: boolean } | null {
+  const m = SEGMENT_KEY_RE.exec(line);
+  if (!m) return null;
+  if (m[1] !== undefined) {
+    try { return { key: JSON.parse(`"${m[1]}"`) as string, plain: false }; } catch { return { key: m[1], plain: false }; }
   }
-  if (current) segments.push({ key: current.key, raw: current.raw.join('\n') });
-  return segments;
+  if (m[2] !== undefined) return { key: m[2].replace(/''/g, "'"), plain: false };
+  if (m[3] !== undefined) return { key: m[3], plain: true };
+  return { key: m[4].trimEnd(), plain: false };
+}
+
+/** A line that can sit after a key's value without belonging to it (see `FrontmatterSegment`). */
+function isSegmentTailLine(line: string): boolean {
+  return line.trim() === '' || (!/^\s/.test(line) && !/^-(?:\s|$)/.test(line));
+}
+
+/**
+ * Slice a frontmatter YAML body into its `preamble` (lines before the first top-level key,
+ * e.g. a leading comment) and per-top-level-key raw text segments. Each segment runs from a
+ * column-0 key line through the line before the next column-0 key (or the end), capturing
+ * all nested indented content. Used by `spliceFrontmatter` for per-key identity
+ * preservation (#1572): a structurally-unchanged key keeps its original raw text, so the
+ * lossy `reconstructFrontmatter` never touches object-lists the caller did not modify (e.g.
+ * must_haves.artifacts / .prohibitions). Every input line lands in exactly one of
+ * `preamble`, a segment `body` or a segment `tail` — nothing is discarded here.
+ */
+function sliceFrontmatterLayout(yaml: string): { preamble: string[]; segments: FrontmatterSegment[] } {
+  const preamble: string[] = [];
+  const segments: FrontmatterSegment[] = [];
+  let current: { key: string; plain: boolean; lines: string[] } | null = null;
+  const close = (seg: { key: string; plain: boolean; lines: string[] }): void => {
+    let cut = seg.lines.length;
+    while (cut > 1 && isSegmentTailLine(seg.lines[cut - 1])) cut--;
+    segments.push({
+      key: seg.key,
+      plain: seg.plain,
+      raw: seg.lines.join('\n'),
+      body: seg.lines.slice(0, cut),
+      tail: seg.lines.slice(cut),
+    });
+  };
+  for (const line of splitLines(yaml)) {
+    const key = segmentKeyOf(line);
+    if (key) {
+      if (current) close(current);
+      current = { key: key.key, plain: key.plain, lines: [line] };
+    } else if (current) {
+      current.lines.push(line);
+    } else {
+      preamble.push(line);
+    }
+  }
+  if (current) close(current);
+  return { preamble, segments };
 }
 
 /**
@@ -1152,13 +1200,18 @@ function spliceFrontmatter(content: string, newObj: Frontmatter): string {
     let originalParsed: Frontmatter;
     try { originalParsed = extractFrontmatter(fmBlock); } catch { originalParsed = {}; }
 
-    const segments = sliceTopLevelFrontmatterSegments(inner);
-    const emitted: string[] = [];
+    // A write never silently drops a line it did not parse: the preamble (e.g. a comment
+    // above the first key) and every segment's tail (blank lines, full-line comments, or
+    // lines the parser could not read) are re-emitted in place whatever happens to the
+    // key they sit next to.
+    const { preamble, segments } = sliceFrontmatterLayout(inner);
+    const emitted: string[] = [...preamble];
     const seen: Set<string> = new Set();
+    const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
 
     for (const seg of segments) {
       seen.add(seg.key);
-      if (Object.prototype.hasOwnProperty.call(newObj, seg.key)) {
+      if (hasOwn(newObj, seg.key)) {
         // Key is in newObj: preserve original raw text if structurally unchanged,
         // otherwise regenerate. The key SET is defined by newObj — keys that were in
         // the original but are absent from newObj are intentionally dropped (the real
@@ -1168,10 +1221,18 @@ function spliceFrontmatter(content: string, newObj: Frontmatter): string {
         if (frontmatterDeepEqual(newObj[seg.key], originalParsed[seg.key])) {
           emitted.push(seg.raw); // unchanged → preserve original raw text verbatim
         } else {
-          emitted.push(regenerateFrontmatterKey(seg.key, newObj[seg.key])); // changed → regenerate (fail-closed on object-lists)
+          // changed → regenerate (fail-closed on object-lists), keeping the tail
+          emitted.push(regenerateFrontmatterKey(seg.key, newObj[seg.key]), ...seg.tail);
         }
+      } else if (!hasOwn(originalParsed, seg.key)) {
+        // The parser never produced this key (an unparseable block, or a line such as
+        // `updated:2026-01-01` that is not valid YAML), so the caller could not have
+        // meant to delete it — preserve its raw text verbatim.
+        emitted.push(seg.raw);
+      } else {
+        // Parsed key absent from newObj → drop its body; its tail is not its value.
+        emitted.push(...seg.tail);
       }
-      // else: key absent from newObj → drop (not emitted).
     }
     // Append genuinely-new keys not present in the original frontmatter.
     for (const k of Object.keys(newObj)) {
@@ -1480,7 +1541,9 @@ function objectListFieldWouldLoseData(content: string, field: string, newValue: 
 
   const fmMatch = content.match(/^---\r?\n([\s\S]+?)\r?\n---/);
   if (!fmMatch) return null;
-  const original = sliceTopLevelFrontmatterSegments(fmMatch[1]).find((s) => s.key === field);
+  // Only the bare-ASCII key shape is text-compared: a quoted or Unicode key's regeneration
+  // differs from its source by quoting alone, which is not data loss.
+  const original = sliceFrontmatterLayout(fmMatch[1]).segments.find((s) => s.plain && s.key === field);
   if (!original) return null;
 
   let regeneratedOriginal: string;
@@ -1491,7 +1554,7 @@ function objectListFieldWouldLoseData(content: string, field: string, newValue: 
       `(e.g. must_haves.artifacts) the frontmatter writer cannot faithfully represent, and this change ` +
       `would silently discard data. Edit the file directly instead of using frontmatter set/merge.`;
   }
-  if (regeneratedOriginal.trim() === original.raw.trim()) return null;
+  if (regeneratedOriginal.trim() === original.body.join('\n').trim()) return null;
 
   return `frontmatter set refused — the existing "${field}" field cannot be faithfully round-tripped by ` +
     `the frontmatter writer (its structure would be flattened and data, such as a nested object-list ` +
