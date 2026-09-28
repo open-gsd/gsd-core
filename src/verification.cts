@@ -222,11 +222,301 @@ function normalizeRel(p: string): string {
   return path.posix.normalize(toPosix(p));
 }
 
-/** Canonicalize a covered-files list: normalize, de-duplicate, sort — the SAME
- *  transform computeCoveredDigest and cmdVerificationFingerprint both need
- *  (the digest's own key order; the CLI's own `covered_files` JSON output). */
-function canonicalizeCoveredFiles(files: readonly string[]): string[] {
-  return Array.from(new Set(files.map(normalizeRel))).sort();
+/**
+ * Canonicalize a covered-files list: normalize, de-duplicate, sort — the SAME
+ * transform computeCoveredDigest and cmdVerificationFingerprint both need
+ * (the digest's own key order; the CLI's own `covered_files` JSON output).
+ *
+ * #5095 (ADR-5057 Phase 2): `opts.version >= 3` additionally drops any
+ * report-shaped path (`isVerificationReportPath`) — a report is never an
+ * input to its own digest (#4857). Versionless callers (the default) keep
+ * the pre-#5095 behaviour: normalize/dedupe/sort only, no filtering.
+ */
+function canonicalizeCoveredFiles(files: readonly string[], opts: { version?: number } = {}): string[] {
+  const normalized = files.map(normalizeRel);
+  const filtered = opts.version !== undefined && opts.version >= 3
+    ? normalized.filter((f) => !isVerificationReportPath(f))
+    : normalized;
+  return Array.from(new Set(filtered)).sort();
+}
+
+/**
+ * #5095 (ADR-5057 Phase 2, #4857): a covered-input path names a verification
+ * REPORT — basename `VERIFICATION.md` or ending `-VERIFICATION.md`
+ * (case-sensitive, as `resolveVerificationFile` is) — as opposed to any other
+ * evidence. `computeCoveredDigest(projectRoot, coveredFiles)` never receives
+ * the report's OWN path as a distinguished value — the report writes its own
+ * digest into its own frontmatter, so a comparison inside that function is
+ * structurally impossible (it would need to know, while computing a value,
+ * what that value is about to become). The filter therefore lives here, one
+ * function up from the digest, as a PATTERN match on shape, not a path
+ * identity check. Matches `docs/VERIFICATION.md` (same basename) but not
+ * `VERIFICATION-NOTES.md` or `07-VERIFICATION.md.bak` (different basename).
+ */
+function isVerificationReportPath(rel: string): boolean {
+  const basename = path.posix.basename(toPosix(rel));
+  return basename === 'VERIFICATION.md' || basename.endsWith('-VERIFICATION.md');
+}
+
+/**
+ * #5095 (ADR-5057 Phase 2, amendment 1 / R4, revised R7): the real filesystem
+ * scopes a covered-input path may be confined to. `realRoot` is the checkout
+ * itself. `planningScopes` is every ANCHORED planning scope the Planning
+ * Workspace Module's layout admits (`planning-workspace.cts`'s
+ * `planningDir`: `.planning`, `.planning/<project>`,
+ * `.planning/workstreams/<ws>`, `.planning/<project>/workstreams/<ws>`) —
+ * derived from the PROJECT ROOT alone, NEVER from a caller's `phaseDir`, so a
+ * symlinked `.planning/workstreams/<ws>/phases`, `.planning/<project>/phases`,
+ * or the whole `.planning/<project>` / `.planning/workstreams/<ws>` scope
+ * maps its artifacts to that scope's OWN spelling — never collapsing onto, or
+ * being dropped from, the top-level `.planning/phases/<phase>/…` shape the
+ * pre-R7 single scope root only recognised (see `enumeratePlanningScopes`
+ * for the enumeration and its security refusal of a dangerous scope root).
+ * Each scope carries its lexical, project-root-relative spelling (`lexRel`,
+ * posix) and its realpath (`real`, `null` when the directory does not exist
+ * or was refused). Real `fs.realpathSync` throughout — never the
+ * caller-injected `FsLike` seam (see computeCoveredDigest's own doc for why:
+ * these are trusted anchors the caller derived, not attacker-influenced
+ * covered-input data).
+ */
+interface PlanningScope {
+  /** Project-root-relative, posix-normalized spelling, e.g. `.planning/workstreams/ws1`. */
+  lexRel: string;
+  /** Realpath of `lexRel`, or `null` when it does not exist or was refused as dangerous. */
+  real: string | null;
+}
+
+interface ContainmentRoots {
+  realRoot: string | null;
+  planningScopes: PlanningScope[];
+}
+
+/**
+ * #5095 (R7): enumerate every anchored planning scope the Planning Workspace
+ * Module's layout admits, by walking the REAL directory tree rooted at
+ * `<projectRoot>/.planning` — never the caller's `phaseDir` (the pre-R7 bug:
+ * admitting a scope root on `basename(phaseDir's parent) === 'phases'` alone
+ * made any directory named `phases` anywhere an admissible root). Only
+ * directories are admitted, and a project/workstream segment failing
+ * `planningDir`'s own `BAD_SEGMENT` rule (a path separator or `..`) is
+ * skipped — the identical validation `planningDir` itself enforces, so every
+ * scope this function admits is one `planningDir` could also resolve to.
+ * `workstreams` is reserved as a layout segment (never itself a project
+ * name), so the walk cannot derive the same scope twice under two labels.
+ * Each planning BASE contributes two scopes — the base itself, and its own
+ * `phases/` subdirectory — since `phases/` may be independently symlinked to
+ * a per-project/per-workstream store while the base directory stays real
+ * (the #4894 layout, generalized to every base shape); the longest-`lexRel`
+ * -wins rule in `mapRealPathToRootRelative` / `bestPlanningScopeForRel` then
+ * prefers the `phases` scope for anything living under it.
+ *
+ * Security: a scope whose realpath is the filesystem root, or an ANCESTOR of
+ * `realRoot` itself, is refused outright (`real: null`) — an
+ * attacker-controlled `.planning -> /` (or `-> ..`) symlink must never become
+ * an admissible containment root.
+ */
+
+function enumeratePlanningScopes(projectRoot: string, realRoot: string | null): PlanningScope[] {
+  const BAD_SEGMENT = /[/\\]|\.\./;
+  const listDirs = (dirAbs: string): string[] => {
+    try {
+      return fs
+        .readdirSync(dirAbs, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !BAD_SEGMENT.test(e.name))
+        .map((e) => e.name);
+    } catch {
+      return [];
+    }
+  };
+  const realOf = (p: string): string | null => {
+    let real: string;
+    try {
+      real = fs.realpathSync(p);
+    } catch {
+      return null;
+    }
+    if (path.dirname(real) === real) return null; // filesystem root
+    if (realRoot !== null && real !== realRoot && isContainedIn(realRoot, real)) return null; // ancestor of realRoot
+    return real;
+  };
+
+  // Every planning BASE (a directory `planningDir` itself would resolve to)
+  // contributes TWO scopes: the base itself (for a direct child like
+  // `ROADMAP.md`/`config.json`) and its OWN `phases/` subdirectory (for phase
+  // artifacts) — kept separate because `phases/` may be independently
+  // symlinked to a per-project/per-workstream store while the base directory
+  // stays real (the #4894 layout, generalized to every base shape). The
+  // longest-`lexRel`-wins rule elsewhere then prefers the `phases` scope for
+  // anything under it.
+  const addBase = (lexRel: string, baseAbs: string): void => {
+    scopes.push({ lexRel, real: realOf(baseAbs) });
+    scopes.push({ lexRel: `${lexRel}/phases`, real: realOf(path.join(baseAbs, 'phases')) });
+  };
+
+  const scopes: PlanningScope[] = [];
+  const planningAbs = path.join(projectRoot, '.planning');
+  const planningBaseReal = realOf(planningAbs);
+  scopes.push({ lexRel: '.planning', real: planningBaseReal });
+  scopes.push({ lexRel: '.planning/phases', real: realOf(path.join(planningAbs, 'phases')) });
+
+  // #5095 (R7(c) follow-up, security): when `.planning` itself was refused as
+  // a dangerous root (filesystem root, or an ancestor of `realRoot` — see
+  // `realOf` above), NEVER walk its `workstreams`/project subdirectories to
+  // mint further scopes. `listDirs`/`path.join` operate on the LEXICAL,
+  // still-symlinked `planningAbs`, so with `.planning -> /` every entry of
+  // the real filesystem root (`/etc`, `/usr`, ...) would otherwise surface as
+  // an admissible `.planning/<project>` scope — legitimizing an attacker- or
+  // container-controlled root-filesystem directory as a containment root the
+  // instant it happens to share a name with something reachable from `/`.
+  // Each such child is realpath-resolved on its OWN merits (not an ancestor
+  // of `realRoot`, not the filesystem root itself), so it silently passes the
+  // per-scope refusal check even though its only claim to legitimacy is
+  // having been discovered by listing a root the outer check already
+  // rejected. Refusing to enumerate here is what makes that refusal actually
+  // stick.
+  if (planningBaseReal === null) return scopes;
+
+  for (const ws of listDirs(path.join(planningAbs, 'workstreams'))) {
+    addBase(`.planning/workstreams/${ws}`, path.join(planningAbs, 'workstreams', ws));
+  }
+
+  for (const project of listDirs(planningAbs)) {
+    if (project === 'workstreams') continue;
+    const projectAbs = path.join(planningAbs, project);
+    addBase(`.planning/${project}`, projectAbs);
+    for (const ws of listDirs(path.join(projectAbs, 'workstreams'))) {
+      addBase(`.planning/${project}/workstreams/${ws}`, path.join(projectAbs, 'workstreams', ws));
+    }
+  }
+
+  return scopes;
+}
+
+function resolveContainmentRoots(projectRoot: string): ContainmentRoots {
+  let realRoot: string | null;
+  try {
+    realRoot = fs.realpathSync(projectRoot);
+  } catch {
+    realRoot = null;
+  }
+  return { realRoot, planningScopes: enumeratePlanningScopes(projectRoot, realRoot) };
+}
+
+function bestPlanningScopeForRel(rel: string, planningScopes: readonly PlanningScope[]): PlanningScope | null {
+  let best: PlanningScope | null = null;
+  for (const scope of planningScopes) {
+    if (
+      (rel === scope.lexRel || rel.startsWith(`${scope.lexRel}/`)) && // allow-handrolled-containment: lexical PREFIX selection among candidate scope spellings (posix segment-boundary), not a resolved-path containment decision — the realpath check happens separately via isContainedIn on scope.real
+      (best === null || scope.lexRel.length > best.lexRel.length)
+    ) {
+      best = scope;
+    }
+  }
+  return best;
+}
+
+/**
+ * #5095 (R7): map an already-`realpathSync`-resolved target back to a
+ * root-relative, posix-normalized spelling. The ANCHORED scope with the
+ * LONGEST `lexRel` whose `real` contains the target wins — so a nested scope
+ * (e.g. `.planning/workstreams/ws1`) is preferred over the top-level
+ * `.planning` scope for a target reachable through both, and a
+ * same-named-but-different-store phase under the nested scope is never
+ * mapped onto the root scope's spelling. Falls back to a bare
+ * project-root-relative path when the target lives inside `realRoot` but no
+ * scope's real claims it; else `null` (fail closed — the caller must not
+ * guess a spelling for a path it cannot place).
+ */
+function mapRealPathToRootRelative(
+  real: string,
+  realRoot: string,
+  planningScopes: readonly PlanningScope[],
+): string | null {
+  let best: PlanningScope | null = null;
+  for (const scope of planningScopes) {
+    if (
+      scope.real !== null &&
+      isContainedIn(real, scope.real) &&
+      (best === null || scope.lexRel.length > best.lexRel.length)
+    ) {
+      best = scope;
+    }
+  }
+  if (best !== null) {
+    const rel = normalizeRel(path.relative(best.real as string, real));
+    return rel === '' || rel === '.' ? best.lexRel : `${best.lexRel}/${rel}`;
+  }
+  if (isContainedIn(real, realRoot)) {
+    return normalizeRel(path.relative(realRoot, real));
+  }
+  return null;
+}
+
+/**
+ * #5095 (R2/R3): the single owner of "which artifacts a fingerprint must
+ * cover" — every live `*-PLAN.md`/`*-SUMMARY.md` in `phaseDir`
+ * (`scanPhasePlans`'s `allPlanFiles` + `summaryFiles`, BEFORE the
+ * `status:superseded` exclusion — row 17: a superseded plan still needs a
+ * matching digest entry, the same set `allCurrentArtifactsCovered` checks),
+ * minus anything report-shaped (R3: a plan-scan match that is ALSO
+ * report-shaped, e.g. `07-PLAN-01-VERIFICATION.md`, must never enter the
+ * covered set on either side). Each surviving candidate is realpath-resolved
+ * and mapped back to a root-relative spelling via `mapRealPathToRootRelative`
+ * — NEVER a literal `../`-relative path — so the #4894 `--project-dir` shape
+ * (the phase directory passed as its OWN real path, inside an out-of-repo
+ * store) still produces sensible `.planning/…` covered_files.
+ *
+ * Fails closed: an incomplete/unreadable phase-dir scan, an unreadable
+ * artifact, or an artifact whose realpath escapes both known roots make the
+ * WHOLE result unusable (`{ ok: false, reason }`) — a caller must not vouch
+ * for a fingerprint over a set it could not fully resolve.
+ */
+type PhaseArtifactPathsResult =
+  | { ok: true; paths: string[]; scope: Scope; mappedPhaseDir: string | null }
+  | { ok: false; reason: string };
+
+function phaseArtifactPaths(phaseDir: string, projectRoot: string): PhaseArtifactPathsResult {
+  const roots = resolveContainmentRoots(projectRoot);
+  if (roots.realRoot === null) {
+    return { ok: false, reason: `project root is unreadable: ${projectRoot}` };
+  }
+  const scan = scanPhasePlans(phaseDir) as { allPlanFiles: string[]; summaryFiles: string[]; scope: Scope };
+  // Fail closed on a non-COMPLETE scan (unreadable phase dir, or an
+  // unreadable nested plans/ dir) — a partial scan's invisible contents can
+  // never be proven covered (mirrors allCurrentArtifactsCovered's own
+  // fail-closed contract).
+  if (scan.scope !== SCOPE.COMPLETE) {
+    return { ok: false, reason: `phase directory scan is incomplete (scope: ${scan.scope}): ${phaseDir}` };
+  }
+  const candidates = [...scan.allPlanFiles, ...scan.summaryFiles].filter(
+    (f) => !isVerificationReportPath(f),
+  );
+  const paths: string[] = [];
+  for (const f of candidates) {
+    let real: string;
+    try {
+      real = fs.realpathSync(path.join(phaseDir, f));
+    } catch {
+      return { ok: false, reason: `phase artifact is unreadable: ${f}` };
+    }
+    const mapped = mapRealPathToRootRelative(real, roots.realRoot, roots.planningScopes);
+    if (mapped === null) {
+      return { ok: false, reason: `phase artifact escapes the project root: ${f}` };
+    }
+    paths.push(mapped);
+  }
+  // #5095 (R2): the phase dir's own mapped spelling, fed to `sharedRootsFor`
+  // so a workstream/project ROADMAP under an out-of-repo store is still
+  // recognized as a shared planning document even when `phaseDir` itself was
+  // addressed by its real (non-`.planning`-spelled) path.
+  let mappedPhaseDir: string | null = null;
+  try {
+    const realPhaseDir = fs.realpathSync(phaseDir);
+    mappedPhaseDir = mapRealPathToRootRelative(realPhaseDir, roots.realRoot, roots.planningScopes);
+  } catch {
+    mappedPhaseDir = null;
+  }
+  return { ok: true, paths, scope: scan.scope, mappedPhaseDir };
 }
 
 // ─── #4155: covered-input fingerprint ──────────────────────────────────────────
@@ -240,16 +530,34 @@ function canonicalizeCoveredFiles(files: readonly string[]): string[] {
  *   v1 (#4155) — every covered path's whole bytes, uniformly.
  *   v2 (#4623) — repo-wide planning documents (`isSharedPlanningDoc`) are
  *                excluded from the hash by construction.
+ *   v3 (#5095, ADR-5057 Phase 2) — v2 PLUS: (a) report-shaped declared paths
+ *                (`isVerificationReportPath`) are filtered before hashing — a
+ *                report is never an input to its own digest (#4857); (b) the
+ *                hashed set is the declared list UNIONED with the phase's own
+ *                live `*-PLAN.md`/`*-SUMMARY.md` artifacts
+ *                (`phaseArtifactPaths`), computed identically on both the
+ *                emit (`cmdVerificationFingerprint`) and check
+ *                (`readVerificationStatus`) sides — a plan/summary added
+ *                after fingerprinting moves the digest itself, with no
+ *                separate live-directory rescan needed (#4817); (c)
+ *                containment additionally admits a `.planning`-spelled path
+ *                whose realpath sits in one of the anchored planning scopes
+ *                `resolveContainmentRoots` enumerates (`.planning`,
+ *                `.planning/<project>`, `.planning/workstreams/<ws>`,
+ *                `.planning/<project>/workstreams/<ws>`), covering a
+ *                per-project/per-workstream store symlink (amendment 1,
+ *                revised R7).
  *
  * A stored digest names its own version (`v<N>:sha256:…`), and
  * `readVerificationStatus` recomputes under the STORED version rather than
  * this constant — so bumping it does not flip every already-verified phase
- * to `stale` on upgrade. A legacy v1 report keeps v1 semantics, shared
- * documents included, until it is re-fingerprinted; only a version outside
+ * to `stale` on upgrade. A legacy v1/v2 report keeps its own semantics
+ * (shared documents included for v1; no report filter or artifact union for
+ * either) until it is re-fingerprinted; only a version outside
  * `KNOWN_FINGERPRINT_VERSIONS` is unrecomputable and fails closed.
  */
-const FINGERPRINT_VERSION = 2;
-const KNOWN_FINGERPRINT_VERSIONS: ReadonlySet<number> = new Set([1, 2]);
+const FINGERPRINT_VERSION = 3;
+const KNOWN_FINGERPRINT_VERSIONS: ReadonlySet<number> = new Set([1, 2, 3]);
 
 /**
  * #4623: the planning roots whose DIRECT children are repo-wide planning
@@ -316,6 +624,38 @@ function isSharedPlanningDoc(rel: string, roots: readonly string[] = ['.planning
 }
 
 /**
+ * #5095 (R2): `sharedPlanningRoots` extended with the phase's own MAPPED
+ * (root-relative, posix) directory when one is available —
+ * `phaseArtifactPaths`'s `mappedPhaseDir` — so a workstream/project ROADMAP
+ * under an out-of-repo store is still recognized as shared even when
+ * `phaseDir` was addressed by its real, non-`.planning`-spelled path (the
+ * #4894 `--project-dir` shape). Falls back to the existing absolute-path
+ * derivation (`sharedPlanningRoots(projectRoot, phaseDir)`) when no mapped
+ * spelling is available — byte-for-behaviour identical to the pre-#5095
+ * seam for every caller that has no artifact-derivation step of its own.
+ */
+function sharedRootsFor(
+  projectRoot: string,
+  phaseDir: string | null | undefined,
+  mappedPhaseDir: string | null,
+): string[] {
+  const roots = sharedPlanningRoots(projectRoot, phaseDir);
+  if (mappedPhaseDir) {
+    const phasesDir = path.posix.dirname(mappedPhaseDir);
+    const planningDir = path.posix.dirname(phasesDir);
+    if (
+      path.posix.basename(phasesDir) === 'phases' &&
+      (planningDir === '.planning' || planningDir.startsWith('.planning/')) &&
+      !planningDir.includes('/../') &&
+      !roots.includes(planningDir)
+    ) {
+      roots.push(planningDir);
+    }
+  }
+  return roots;
+}
+
+/**
  * #4623: the fingerprint version a stored `covered_digest` was computed
  * under, or `null` when the prefix is absent, malformed, or names a version
  * this build cannot recompute (an unknown version is a mismatch by
@@ -364,67 +704,116 @@ function parseFingerprintVersion(digest: string): number | null {
  * confined to `.planning/`) would reject every implementation-file read and
  * report EVERY fingerprinted phase permanently `stale` regardless of actual
  * drift — the bug this comment now documents against regressing. The
- * `realRel`-vs-`realRoot` re-check a few lines below already does the real
- * confinement work (against `projectRoot`, the correct boundary for this
- * data), so no security property is lost by bypassing a narrower seam here.
+ * per-file re-check a few lines below already does the real confinement
+ * work — against `projectRoot` for an implementation path, and against the
+ * ANCHORED planning scope `bestPlanningScopeForRel` selects for a
+ * `.planning`-spelled one (`resolveContainmentRoots`'s `planningScopes`,
+ * #5095 R7) — so no security property is lost by bypassing a narrower seam
+ * here.
+ *
+ * #5095 (R7): `computeCoveredDigest` delegates to `deriveCoveredDigest`,
+ * which additionally returns the exact canonical `files` set it hashed
+ * over (declared ∪ the phase's own live artifacts) — the single derivation
+ * both `computeCoveredDigest`'s callers and `cmdVerificationFingerprint`'s
+ * emitted `covered_files` now share, closing the double-derivation race
+ * window where the emitted list and the hashed set were computed by two
+ * separate `phaseArtifactPaths` calls.
  */
-function computeCoveredDigest(
+type CoveredDigestDerivation =
+  | { ok: true; digest: string | null; files: string[]; mappedPhaseDir: string | null }
+  | { ok: false; reason: string };
+
+function deriveCoveredDigest(
   projectRoot: string,
   coveredFiles: readonly string[],
   version: number = FINGERPRINT_VERSION,
   opts: { phaseDir?: string | null } = {},
-): string | null {
+): CoveredDigestDerivation {
   // #4623: `version` selects the input shape to hash under — the CURRENT
   // one for a fresh fingerprint (the CLI verb), or the STORED one when
   // `readVerificationStatus` recomputes against a report's own digest.
-  // `opts.phaseDir` lets v2 recognise the phase's own planning root
+  // `opts.phaseDir` lets v2+ recognise the phase's own planning root
   // (`sharedPlanningRoots`); without it only `.planning/` itself is shared.
-  if (!KNOWN_FINGERPRINT_VERSIONS.has(version)) return null;
-  const uniqueSorted = canonicalizeCoveredFiles(coveredFiles);
-  if (uniqueSorted.length === 0) return null;
-  const sharedRoots = version >= 2 ? sharedPlanningRoots(projectRoot, opts.phaseDir) : [];
+  if (!KNOWN_FINGERPRINT_VERSIONS.has(version)) return { ok: true, digest: null, files: [], mappedPhaseDir: null };
+
+  // #5095 (R1, ADR-5057 Phase 2): for v3+ with a known phaseDir, the hashed
+  // set is the declared list UNIONED with the phase's own live artifacts —
+  // computed here, ONCE, on BOTH the emit and check sides, rather than
+  // separately in the CLI emitter and again in here (#5095 R7: the prior
+  // shape ran `phaseArtifactPaths` twice on the emit path — once in
+  // `cmdVerificationFingerprint` to build the emitted `covered_files`, again
+  // in here to hash — a race window where a plan/summary added between the
+  // two calls could make the emitted list and the hashed set disagree). A
+  // plan/summary added after fingerprinting therefore moves the digest
+  // directly; `--raw` / MCP callers that write their own declared list
+  // (without enumerating plans/summaries) still match, because the checker
+  // adds the identical union. An artifact-resolution failure makes the WHOLE
+  // fingerprint unresolvable (fail closed).
+  let declared = canonicalizeCoveredFiles(coveredFiles, { version });
+  let artifactMappedPhaseDir: string | null = null;
+  if (version >= 3 && opts.phaseDir) {
+    const artifacts = phaseArtifactPaths(opts.phaseDir, projectRoot);
+    if (!artifacts.ok) return { ok: false, reason: artifacts.reason };
+    artifactMappedPhaseDir = artifacts.mappedPhaseDir;
+    declared = canonicalizeCoveredFiles([...declared, ...artifacts.paths], { version });
+  }
+  if (declared.length === 0) return { ok: true, digest: null, files: declared, mappedPhaseDir: artifactMappedPhaseDir };
+
+  const sharedRoots = version >= 2 ? sharedRootsFor(projectRoot, opts.phaseDir, artifactMappedPhaseDir) : [];
   let hashed = 0;
 
-  // Canonicalize the root ONCE — every candidate's realpath is checked against
-  // this, not the possibly-symlinked `projectRoot` argument itself. Always via
-  // the REAL fs, never fsImpl: `projectRoot` is a trusted anchor the CALLER
-  // derived (resolveProjectRoot), not attacker-influenced covered-input data —
-  // routing it through a caller-scoped containment seam (e.g. #4155's
+  // Canonicalize the roots ONCE — every candidate's realpath is checked
+  // against these, not the possibly-symlinked `projectRoot`/`.planning`
+  // arguments themselves. Always via the REAL fs, never fsImpl: `projectRoot`
+  // is a trusted anchor the CALLER derived (resolveProjectRoot), not
+  // attacker-influenced covered-input data — routing it through a
+  // caller-scoped containment seam (e.g. #4155's
   // containmentEnforcingVerificationFs, confined to `.planning/`, a proper
   // SUBSET of `projectRoot`) would reject the root itself and fail every
   // lookup regardless of whether the covered files are legitimate.
-  let realRoot: string;
-  try {
-    realRoot = fs.realpathSync(projectRoot);
-  } catch {
-    return null;
-  }
+  const roots = resolveContainmentRoots(projectRoot);
+  if (roots.realRoot === null) return { ok: true, digest: null, files: declared, mappedPhaseDir: artifactMappedPhaseDir };
 
   const parts: string[] = [];
-  for (const rel of uniqueSorted) {
+  for (const rel of declared) {
     // `normalizeRel` (already applied by `canonicalizeCoveredFiles` above)
     // collapses internal `..` segments before `rel` ever reaches here
     // (`a/../../b` → `../b`), so this start-of-string check is already the
     // full lexical confinement test — no separate post-`path.resolve`
     // re-check can observe a different answer.
-    if (rel === '' || rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) return null;
+    if (rel === '' || rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) {
+      return { ok: true, digest: null, files: declared, mappedPhaseDir: artifactMappedPhaseDir };
+    }
+    // #5095 (R7): a `.planning`-spelled path may resolve inside the checkout
+    // root OR the LONGEST-prefix anchored planning scope that claims it
+    // (`bestPlanningScopeForRel`) — every other path is confined to the
+    // checkout root alone, exactly as before.
+    const firstSegment = rel.split('/')[0];
+    const admissibleRoots =
+      firstSegment === '.planning'
+        ? [roots.realRoot, bestPlanningScopeForRel(rel, roots.planningScopes)?.real ?? null].filter(
+            (r): r is string => r !== null,
+          )
+        : [roots.realRoot];
     const resolved = path.resolve(projectRoot, rel);
     let bytes: Buffer;
     try {
-      // A regular file INSIDE projectRoot can still be a symlink whose TARGET
-      // escapes it — statSync/readFileSync follow symlinks, so the lexical
-      // confinement check above is not enough. realpathSync resolves the
-      // actual target; re-confining against realRoot closes that gap.
+      // A regular file INSIDE a known root can still be a symlink whose
+      // TARGET escapes every known root — statSync/readFileSync follow
+      // symlinks, so the lexical confinement check above is not enough.
+      // realpathSync resolves the actual target; re-confining against the
+      // admissible roots closes that gap.
       const real = fs.realpathSync(resolved);
-      // Both operands are already realpath-resolved (this fn's own realpathSync calls
-      // above), so the shared containment comparison applies directly (ADR-4650) —
-      // no re-resolution through assertWithinRoot/tryWithinRoot, which would redo work
-      // this function already owns for its exists-vs-escaped tri-state.
-      if (!isContainedIn(real, realRoot)) {
-        return null;
+      // Every operand is already realpath-resolved (this fn's own
+      // realpathSync calls above), so the shared containment comparison
+      // applies directly (ADR-4650) — no re-resolution through
+      // assertWithinRoot/tryWithinRoot, which would redo work this function
+      // already owns for its exists-vs-escaped tri-state.
+      if (!admissibleRoots.some((root) => isContainedIn(real, root))) {
+        return { ok: true, digest: null, files: declared, mappedPhaseDir: artifactMappedPhaseDir };
       }
       const st = fs.statSync(real);
-      if (!st.isFile()) return null;
+      if (!st.isFile()) return { ok: true, digest: null, files: declared, mappedPhaseDir: artifactMappedPhaseDir };
       // #4623 (v2+): a repo-wide planning document is VALIDATED exactly as
       // every other covered path — confined, present, a regular file; the
       // fail-closed contract above is unchanged — but its bytes contribute
@@ -435,7 +824,7 @@ function computeCoveredDigest(
       if (isSharedPlanningDoc(rel, sharedRoots)) continue;
       bytes = fs.readFileSync(real);
     } catch {
-      return null;
+      return { ok: true, digest: null, files: declared, mappedPhaseDir: artifactMappedPhaseDir };
     }
     const fileHash = crypto.createHash('sha256').update(bytes).digest('hex');
     parts.push(`${rel}\n${fileHash}\n`);
@@ -445,13 +834,33 @@ function computeCoveredDigest(
   // evidence in it at all — a constant digest over the header would satisfy
   // the fingerprint pair while grounding the verification in nothing. Fail
   // closed, the same way an empty declaration does.
-  if (version >= 2 && hashed === 0) return null;
+  if (version >= 2 && hashed === 0) {
+    return { ok: true, digest: null, files: declared, mappedPhaseDir: artifactMappedPhaseDir };
+  }
 
   const aggregate = crypto
     .createHash('sha256')
     .update(`v${version}\n${parts.join('')}`, 'utf-8')
     .digest('hex');
-  return `v${version}:sha256:${aggregate}`;
+  return { ok: true, digest: `v${version}:sha256:${aggregate}`, files: declared, mappedPhaseDir: artifactMappedPhaseDir };
+}
+
+/**
+ * #4155/#5095: recompute the deterministic content fingerprint over a
+ * verifier's declared covered-input set, returning JUST the digest string
+ * (or `null` if unresolvable) — the signature every existing caller
+ * (`readVerificationStatus`, tests) already depends on. Thin wrapper over
+ * `deriveCoveredDigest`, collapsing its `{ ok: false, reason }` arm to `null`
+ * exactly as the pre-#5095 single-function shape did.
+ */
+function computeCoveredDigest(
+  projectRoot: string,
+  coveredFiles: readonly string[],
+  version: number = FINGERPRINT_VERSION,
+  opts: { phaseDir?: string | null } = {},
+): string | null {
+  const result = deriveCoveredDigest(projectRoot, coveredFiles, version, opts);
+  return result.ok ? result.digest : null;
 }
 
 /**
@@ -1109,19 +1518,32 @@ function readVerificationStatus(
     // runs once the digest itself has already matched.
     //
     // #4623: recompute under the STORED digest's own version, not the
-    // current constant — a v1 report written before the shared-document
-    // exclusion keeps v1 semantics rather than going stale on upgrade. An
+    // current constant — a v1/v2 report written before a later semantics
+    // change keeps its own semantics rather than going stale on upgrade. An
     // unknown version parses to `null`, which `computeCoveredDigest`
     // refuses (returns `null`), so the compare below fails closed.
+    const projectRoot = resolveProjectRoot(phaseDir);
     const storedVersion =
       hasWellFormedFingerprint && typeof coveredDigestVal === 'string'
         ? parseFingerprintVersion(coveredDigestVal)
         : null;
-    isStale =
-      !hasWellFormedFingerprint ||
-      storedVersion === null ||
-      computeCoveredDigest(resolveProjectRoot(phaseDir), coveredFilesVal, storedVersion, { phaseDir }) !== coveredDigestVal ||
-      !allCurrentArtifactsCovered(phaseDir, coveredFilesVal);
+    if (!hasWellFormedFingerprint || storedVersion === null) {
+      isStale = true;
+    } else if (storedVersion >= 3) {
+      // #5095 (R1): v3's digest is computed over the declared set UNIONED
+      // with the phase's own live artifacts — a plan/summary added after
+      // fingerprinting already moves the digest itself, so the separate
+      // live-directory re-scan (`allCurrentArtifactsCovered`) is redundant
+      // for v3 and is not run.
+      isStale =
+        computeCoveredDigest(projectRoot, coveredFilesVal, storedVersion, { phaseDir }) !== coveredDigestVal;
+    } else {
+      // v1/v2: unchanged — the digest alone cannot see a plan/summary that
+      // was never declared, so the live-directory re-scan still runs.
+      isStale =
+        computeCoveredDigest(projectRoot, coveredFilesVal, storedVersion, { phaseDir }) !== coveredDigestVal ||
+        !allCurrentArtifactsCovered(phaseDir, coveredFilesVal);
+    }
   } else {
     const staleCheck = findStaleVerificationSummary(
       phaseDir,
@@ -1399,9 +1821,16 @@ function parseFingerprintFileArgs(tokens: readonly string[]): { files: string[] 
  * @param raw         - Whether to emit raw (non-JSON) output: just the
  *                       `covered_digest` string, so `VAR=$(gsd_run query
  *                       verification.fingerprint "$PHASE_DIR" ... --raw)` is
- *                       directly assignable. `covered_files` is unambiguous
- *                       from the caller's own input list in that mode, so
- *                       only the computed digest needs a raw form.
+ *                       directly assignable. #5095 (ADR-5057 Phase 2): `raw`
+ *                       returning only the digest is safe even though the
+ *                       emitted `covered_files` is a SUPERSET of the caller's
+ *                       declared list — the v3 digest is computed over
+ *                       `canonicalize(declared ∪ phaseArtifactPaths)` on BOTH
+ *                       the emit side (here) and the check side
+ *                       (`readVerificationStatus`), so a `--raw` caller that
+ *                       writes its OWN declared list (without enumerating
+ *                       plans/summaries) alongside the raw digest still
+ *                       matches — the checker adds the identical union.
  */
 function cmdVerificationFingerprint(
   cwd: string,
@@ -1437,26 +1866,48 @@ function cmdVerificationFingerprint(
     return;
   }
   const projectRoot = resolveProjectRoot(phaseDir);
-  // canonicalizeCoveredFiles here is for the emitted `covered_files` field —
-  // computeCoveredDigest canonicalizes its own `coveredFiles` argument
-  // internally too (it must, for callers like readVerificationStatus that
-  // pass raw, un-canonicalized frontmatter values), so passing an
-  // already-canonical list keeps that internal pass a cheap no-op rather
-  // than a second meaningfully different canonicalization.
-  const uniqueSorted = canonicalizeCoveredFiles(files);
-  const digest = computeCoveredDigest(projectRoot, uniqueSorted, FINGERPRINT_VERSION, { phaseDir });
+  // canonicalizeCoveredFiles here is for `deriveCoveredDigest`'s
+  // `coveredFiles` argument — it canonicalizes internally too (it must, for
+  // callers like readVerificationStatus that pass raw, un-canonicalized
+  // frontmatter values), so passing an already-canonical list keeps that
+  // internal pass a cheap no-op rather than a second meaningfully different
+  // canonicalization.
+  const declaredCanonical = canonicalizeCoveredFiles(files, { version: FINGERPRINT_VERSION });
+  // #5095 (R1/R2/R7, ADR-5057 Phase 2): ONE call derives both the emitted
+  // `covered_files` (`.files`, the declared set unioned with the phase's own
+  // live artifacts) and the hashed digest (`.digest`) — the CLI no longer
+  // runs `phaseArtifactPaths` itself and again inside the digest computation,
+  // which used to leave a race window where the two calls could see a
+  // different phase directory and disagree. An artifact-resolution failure
+  // fails the WHOLE command (fail closed: the emitter cannot vouch for a set
+  // it could not fully see).
+  const derivation = deriveCoveredDigest(projectRoot, declaredCanonical, FINGERPRINT_VERSION, { phaseDir });
+  if (!derivation.ok) {
+    error(`could not compute fingerprint — ${derivation.reason}`);
+    return;
+  }
+  const unionSorted = derivation.files;
+  if (unionSorted.length === 0) {
+    error('at least one covered file required for verification.fingerprint');
+    return;
+  }
+  const digest = derivation.digest;
   if (digest === null) {
     // #4623: name the one null that is NOT a bad path — a declaration made
-    // only of shared planning documents hashes nothing under v2, and the
-    // generic message below would send the caller looking for a missing file
-    // that is not missing. Discriminated AFTER the v2 attempt, and only when a
-    // v1 pass over the same list (which hashes, and therefore validates, every
-    // path) succeeds: an all-shared list with a missing or directory member is
-    // a bad path first, and gets the generic message.
-    const sharedRoots = sharedPlanningRoots(projectRoot, phaseDir);
+    // only of shared planning documents (with no other evidence) hashes
+    // nothing under v2+, and the generic message below would send the caller
+    // looking for a missing file that is not missing. Discriminated AFTER
+    // the versioned attempt, and only when a v1 pass over the same list
+    // (which hashes, and therefore validates, every path) succeeds: an
+    // all-shared list with a missing or directory member is a bad path
+    // first, and gets the generic message. #5095 (R5): a phase WITH real
+    // artifacts never reaches this branch — the union above already supplied
+    // evidence — so this error is reachable only when every declared path is
+    // a shared planning doc AND the phase has no plans/summaries of its own.
+    const sharedRoots = sharedRootsFor(projectRoot, phaseDir, derivation.mappedPhaseDir);
     if (
-      uniqueSorted.every((f) => isSharedPlanningDoc(f, sharedRoots)) &&
-      computeCoveredDigest(projectRoot, uniqueSorted, 1) !== null
+      unionSorted.every((f) => isSharedPlanningDoc(f, sharedRoots)) &&
+      computeCoveredDigest(projectRoot, unionSorted, 1) !== null
     ) {
       error(
         `could not compute fingerprint — every covered file is a repo-wide planning document (direct children of ${sharedRoots.join(', ')} never enter the digest); declare the phase's own artifacts and implementation files`,
@@ -1466,7 +1917,7 @@ function cmdVerificationFingerprint(
     error('could not compute fingerprint — a covered file is missing, unreadable, or escapes the project root');
     return;
   }
-  output({ covered_files: uniqueSorted, covered_digest: digest }, raw, digest);
+  output({ covered_files: unionSorted, covered_digest: digest }, raw, digest);
 }
 
 export = {

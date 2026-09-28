@@ -88,6 +88,7 @@ const DOCS_GUARD_EXEMPT_BASELINE = [
   'security-prompt-injection.security.test.cjs',
   'shipped-reference-cites.test.cjs',
   'state.test.cjs',
+  'verification-status.test.cjs',
   'worktree-safety.test.cjs',
 ];
 
@@ -236,6 +237,15 @@ const DOCS_GUARD_EXEMPT_DOCS_PATHS = {
   // #4186: the record-session usage-contract test cites the documented
   // signature in docs/CLI-TOOLS.md in its explanatory comment.
   'state.test.cjs': ['docs/CLI-TOOLS.md', 'docs/CONFIGURATION.md', 'docs/reference/state-md.md'],
+  // #5095: 'docs/VERIFICATION.md' is a tmpdir fixture basename (proving the
+  // report-shaped filter matches basename, not full path); 'docs/planning'
+  // and its two nested PLAN/SUMMARY children are an in-repo `.planning ->
+  // docs/planning` symlink-alias fixture. All are WRITTEN into a throwaway
+  // mkdtemp/createTempGitProject tree; none reads real shipped docs/ content.
+  'verification-status.test.cjs': [
+    'docs/VERIFICATION.md', 'docs/planning', 'docs/planning/phases',
+    'docs/planning/phases/01-foo/01-01-PLAN.md', 'docs/planning/phases/01-foo/01-01-SUMMARY.md',
+  ],
   'worktree-safety.test.cjs': ['docs/SUMMARY.md'],
 };
 
