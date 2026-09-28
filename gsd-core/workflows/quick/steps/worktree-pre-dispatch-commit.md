@@ -21,27 +21,29 @@ if [ "${USE_WORKTREES}" != "false" ]; then
   if [ "$COMMIT_DOCS" != "false" ]; then
     # pre-dispatch plan commit — PLAN.md is always in scope. CONTEXT.md/RESEARCH.md
     # join it only when their phase actually ran AND actually produced a file — a
-    # mode flag alone is not proof the file exists (#4996).
-    QUICK_PREDISPATCH_PATHS="${QUICK_DIR}/${quick_id}-PLAN.md"
+    # mode flag alone is not proof the file exists (#4996). An array (not a
+    # space-joined string) keeps each path a single git argument under `set -u`
+    # word-splitting rules (ShellCheck SC2086).
+    QUICK_PREDISPATCH_PATHS=("${QUICK_DIR}/${quick_id}-PLAN.md")
     if [ "${DISCUSS_MODE}" = "true" ] && [ -f "${QUICK_DIR}/${quick_id}-CONTEXT.md" ]; then
-      QUICK_PREDISPATCH_PATHS="${QUICK_PREDISPATCH_PATHS} ${QUICK_DIR}/${quick_id}-CONTEXT.md"
+      QUICK_PREDISPATCH_PATHS+=("${QUICK_DIR}/${quick_id}-CONTEXT.md")
     fi
     if [ "${RESEARCH_MODE}" = "true" ] && [ -f "${QUICK_DIR}/${quick_id}-RESEARCH.md" ]; then
-      QUICK_PREDISPATCH_PATHS="${QUICK_PREDISPATCH_PATHS} ${QUICK_DIR}/${quick_id}-RESEARCH.md"
+      QUICK_PREDISPATCH_PATHS+=("${QUICK_DIR}/${quick_id}-RESEARCH.md")
     fi
-    git add ${QUICK_PREDISPATCH_PATHS}
+    git add "${QUICK_PREDISPATCH_PATHS[@]}"
     # No-op skip if nothing actually staged (idempotent re-runs).
-    if git diff --cached --quiet -- ${QUICK_PREDISPATCH_PATHS}; then
+    if git diff --cached --quiet -- "${QUICK_PREDISPATCH_PATHS[@]}"; then
       echo "ℹ Pre-dispatch artifact commit skipped (no staged changes)"
     else
       # Run hooks normally (#2924). If a project opts out via
       # workflow.worktree_skip_hooks=true, honor that opt-in only.
       SKIP_HOOKS=$(gsd_run query config-get workflow.worktree_skip_hooks --raw 2>/dev/null || echo "false")
       if [ "$SKIP_HOOKS" = "true" ]; then
-        git commit --no-verify -m "docs(${quick_id}): pre-dispatch artifacts for ${DESCRIPTION}" -- ${QUICK_PREDISPATCH_PATHS} \
+        git commit --no-verify -m "docs(${quick_id}): pre-dispatch artifacts for ${DESCRIPTION}" -- "${QUICK_PREDISPATCH_PATHS[@]}" \
           || { echo "ERROR: pre-dispatch artifact commit failed (--no-verify path). Aborting before executor dispatch." >&2; exit 1; }
       else
-        git commit -m "docs(${quick_id}): pre-dispatch artifacts for ${DESCRIPTION}" -- ${QUICK_PREDISPATCH_PATHS} \
+        git commit -m "docs(${quick_id}): pre-dispatch artifacts for ${DESCRIPTION}" -- "${QUICK_PREDISPATCH_PATHS[@]}" \
           || { echo "ERROR: pre-dispatch artifact commit failed — likely a pre-commit hook failure. Fix the hook output above (or set workflow.worktree_skip_hooks=true to bypass) and re-run." >&2; exit 1; }
       fi
       QUICK_PLAN_COMMIT=$(git rev-parse HEAD)
