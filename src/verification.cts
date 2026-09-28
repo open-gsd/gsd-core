@@ -45,8 +45,11 @@ import coreUtilsMod = require('./core-utils.cjs');
 import planningScopeMod = require('./planning-scope.cjs');
 import { execGit } from './shell-command-projection.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
-import { isContainedIn } from './security.cjs';
+import { isContainedIn, requireSafePath, PathAcceptance } from './security.cjs';
 import { escapeRegex } from './pattern.cjs';
+import { tokenizeHeadings, collectSection } from './markdown-sectionizer.cjs';
+import { parseMarkdownTable } from './markdown-table.cjs';
+import { parseNamedArgsOrExit } from './command-arg-projection.cjs';
 
 const { output, error } = io;
 const { extractPhaseToken, scopeToPhase } = phaseId;
@@ -1940,42 +1943,81 @@ interface AuditAppendResult {
 }
 
 /**
+ * #5105 (S4): parse a block body's `| Metric | Count |`-shaped table into a
+ * plain metric→count string map, addressed by the table's ACTUAL first/second
+ * column (never a hard-coded `Metric`/`Count` name) so a legacy block with
+ * different header text still compares. Whitespace/separator-width tolerant
+ * by construction — `parseMarkdownTable` trims every cell and accepts any
+ * `-{1,}` delimiter width. Returns `null` when the body carries no parseable
+ * 2+-column table (no prior block to compare against).
+ */
+function parseAuditTableRows(bodyText: string): Record<string, string> | null {
+  const parsed = parseMarkdownTable(bodyText);
+  if (!parsed.ok || parsed.value.columns.length < 2) return null;
+  const [metricCol, countCol] = parsed.value.columns;
+  const map: Record<string, string> = {};
+  for (const row of parsed.value.rows) {
+    map[row[metricCol]] = String(row[countCol]).trim();
+  }
+  return map;
+}
+
+/** Order-insensitive equality over two metric→count maps. */
+function auditRowsEqual(live: Record<string, string> | null, candidate: Record<string, string>): boolean {
+  if (!live) return false;
+  const liveKeys = Object.keys(live);
+  const candidateKeys = Object.keys(candidate);
+  if (liveKeys.length !== candidateKeys.length) return false;
+  return liveKeys.every((k) => Object.prototype.hasOwnProperty.call(candidate, k) && live[k] === candidate[k]);
+}
+
+/**
  * #5105 R3 — pure core of `verification.append-audit`.
  *
- * Finds the LAST `## <heading> <date>` block in `content` (a heading whose
- * text matches `heading` exactly, followed by any single non-whitespace date
- * token). Deny-by-default comparison: the whole block except the date on the
- * heading line — i.e. its `| Metric | Count |` rows. Identical rows on the
- * last block → `{ appended: false }`, no write. Different (or no prior
- * block) → appends the new block at the end and returns `{ appended: true }`.
+ * Finds the LAST `## <heading> <date>` block in `content` — a level-2
+ * heading whose text matches `^<heading> (\d{4}-\d{2}-\d{2})\b` — via the
+ * shared, fence-aware `tokenizeHeadings`/`collectSection` primitives (#5105
+ * S6) instead of a hand-rolled `^## ` scan: a `## <heading> <date>`-looking
+ * line inside a fenced code block is not a heading and cannot be selected,
+ * and a heading whose trailing word ISN'T a date (e.g. the template's bare
+ * `## Security Audit Trail`) is not matched either (#5105 S4 — the anchored
+ * heading date shape, not `(\S+)`, is what excludes it).
+ *
+ * Comparison (#5105 S4) is over the block's PARSED table rows
+ * (`parseAuditTableRows`/`auditRowsEqual`) — whitespace/separator-width
+ * insensitive, order-insensitive, and tolerant of an optional blank line
+ * after the heading — never a byte-for-byte body string compare. Identical
+ * rows on the last block → `{ appended: false }`, no write. Different rows
+ * (or no prior block) → appends the new block at the end and returns
+ * `{ appended: true }`.
  *
  * Deliberately compares against the LAST block only, never any earlier one —
  * a re-audit that regresses back to an earlier count must still append.
+ *
+ * `date` defaults through the `clock` seam (default: the global `Date`
+ * constructor) rather than a bare `new Date()` call, so a caller can pin the
+ * date deterministically — directly (pass `clock`) or via `node:test`
+ * `mock.timers` (which replaces global `Date`, picked up automatically since
+ * the default is evaluated per call).
  */
 function planAuditAppend(
   content: string,
-  { heading, rows, date }: { heading: string; rows: Record<string, unknown>; date: string },
+  { heading, rows, date, clock = Date }: { heading: string; rows: Record<string, unknown>; date?: string; clock?: DateConstructor },
 ): AuditAppendResult {
+  const resolvedDate = date ?? new clock().toISOString().slice(0, 10);
   const escapedHeading = escapeRegex(heading);
-  const headingRe = new RegExp(`^## ${escapedHeading} (\\S+)[ \\t]*$`, 'gm');
-  let lastMatch: RegExpExecArray | null = null;
-  let m: RegExpExecArray | null;
-  while ((m = headingRe.exec(content)) !== null) {
-    lastMatch = m;
-  }
-  const newBlock = renderAuditBlock(heading, date, rows);
+  const headingRe = new RegExp(`^${escapedHeading} (\\d{4}-\\d{2}-\\d{2})\\b`);
+  const matchingHeadings = tokenizeHeadings(content).filter((h) => h.level === 2 && headingRe.test(h.text));
+  const newBlock = renderAuditBlock(heading, resolvedDate, rows);
 
-  if (lastMatch) {
-    const headingEnd = lastMatch.index + lastMatch[0].length;
-    const anyHeadingRe = /^## /gm;
-    anyHeadingRe.lastIndex = Math.min(headingEnd + 1, content.length);
-    const nextHeadingMatch = anyHeadingRe.exec(content);
-    const blockEnd = nextHeadingMatch ? nextHeadingMatch.index : content.length;
-    const bodyStart = Math.min(headingEnd + 1, content.length);
-    const liveBody = content.slice(bodyStart, blockEnd).replace(/\s+$/, '');
-    const candidateBodyStart = newBlock.indexOf('\n') + 1;
-    const candidateBody = newBlock.slice(candidateBodyStart).replace(/\s+$/, '');
-    if (liveBody === candidateBody) {
+  const newRowsMap: Record<string, string> = {};
+  for (const [k, v] of Object.entries(rows)) newRowsMap[k] = String(v);
+
+  if (matchingHeadings.length > 0) {
+    const last = matchingHeadings[matchingHeadings.length - 1];
+    const section = collectSection(content, (h) => h.offset === last.offset);
+    const liveRows = section ? parseAuditTableRows(section.body) : null;
+    if (auditRowsEqual(liveRows, newRowsMap)) {
       return { appended: false, content };
     }
   }
@@ -1985,15 +2027,67 @@ function planAuditAppend(
   return { appended: true, content: appendedContent };
 }
 
-function parseAuditAppendArgs(tokens: readonly string[]): { heading?: string; rows?: string; date?: string } {
-  const result: { heading?: string; rows?: string; date?: string } = {};
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i];
-    if (t === '--heading') { result.heading = tokens[++i]; }
-    else if (t === '--rows') { result.rows = tokens[++i]; }
-    else if (t === '--date') { result.date = tokens[++i]; }
+/** Reject a `\r`, `\n`, or `|` — any of the three would corrupt the rendered heading/table shape. */
+function hasForbiddenAuditChar(s: string): boolean {
+  return /[\r\n|]/.test(s);
+}
+
+/** `rows` values must be a non-negative integer, as either a JSON number or an all-digit string. */
+function isNonNegativeIntegerValue(v: unknown): boolean {
+  if (typeof v === 'number') return Number.isInteger(v) && v >= 0;
+  if (typeof v === 'string') return /^\d+$/.test(v);
+  return false;
+}
+
+/**
+ * #5105 S3 — validate `verification.append-audit` input shape before it ever
+ * reaches `planAuditAppend`/the file. `--rows` being valid JSON (checked by
+ * the caller before this runs) is necessary but not sufficient: a newline,
+ * `\r`, or `|` in the heading or any row key/value would corrupt the
+ * rendered `## heading date` line or `| key | value |` row, and a non-integer
+ * or negative count is not a countable metric.
+ */
+function validateAuditAppendInput(
+  heading: string,
+  rows: Record<string, unknown>,
+  date: string | undefined,
+): { ok: true } | { ok: false; reason: string } {
+  if (hasForbiddenAuditChar(heading)) {
+    return { ok: false, reason: '--heading must not contain a newline, carriage return, or |' };
   }
-  return result;
+  for (const [key, value] of Object.entries(rows)) {
+    if (hasForbiddenAuditChar(key)) {
+      return { ok: false, reason: `--rows key ${JSON.stringify(key)} must not contain a newline, carriage return, or |` };
+    }
+    if (typeof value === 'string' && hasForbiddenAuditChar(value)) {
+      return { ok: false, reason: `--rows value for ${JSON.stringify(key)} must not contain a newline, carriage return, or |` };
+    }
+    if (!isNonNegativeIntegerValue(value)) {
+      return { ok: false, reason: `--rows value for ${JSON.stringify(key)} must be a non-negative integer` };
+    }
+  }
+  if (date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return { ok: false, reason: '--date must match YYYY-MM-DD' };
+  }
+  return { ok: true };
+}
+
+/**
+ * #5105 S2 — case-insensitive re-implementation of `isVerificationReportPath`'s
+ * shape. That helper is deliberately case-SENSITIVE (matching
+ * `resolveVerificationFile`'s own convention — see its doc comment), so it
+ * cannot be reused directly for a containment refusal that must catch a
+ * lowercase `07-verification.md` too.
+ */
+function isVerificationReportBasenameCI(basename: string): boolean {
+  const lower = basename.toLowerCase();
+  return lower === 'verification.md' || lower.endsWith('-verification.md');
+}
+
+/** #5105 S2 — the only two shapes `verification.append-audit` may target. */
+function isAllowedAuditTargetBasenameCI(basename: string): boolean {
+  const lower = basename.toLowerCase();
+  return lower.endsWith('-security.md') || lower.endsWith('-validation.md');
 }
 
 /**
@@ -2003,6 +2097,17 @@ function parseAuditAppendArgs(tokens: readonly string[]): { heading?: string; ro
  * Never reads or writes `covered_files`/`covered_digest` (#4981 invariant
  * 5) — a genuinely changed count publishes and stales any report that covers
  * `file`; nothing here ever restamps it.
+ *
+ * #5105 S2: `file` is resolved through the same `requireSafePath(...,
+ * PathAcceptance.AbsoluteInsideRoot)` seam `uat.complete-session` uses —
+ * refusing an absolute-outside-root target or a `../` escape by throwing
+ * before any read/write is attempted (uncaught here, matching every other
+ * `requireSafePath` call site in this codebase — a top-level command
+ * dispatcher turns the throw into a failed exit). The REAL (symlink-resolved)
+ * basename is then checked twice, case-insensitively: it must not be a
+ * verification report itself, and it must be a `*-SECURITY.md` or
+ * `*-VALIDATION.md` file — the only two artifact kinds this command may
+ * mutate.
  */
 function cmdVerificationAppendAudit(
   cwd: string,
@@ -2014,18 +2119,22 @@ function cmdVerificationAppendAudit(
     error('file required for verification.append-audit');
     return;
   }
-  const parsed = parseAuditAppendArgs(argTokens);
-  if (!parsed.heading) {
+  const { heading, rows: rowsArg, date: dateArg } = parseNamedArgsOrExit(
+    argTokens as string[],
+    { valueFlags: ['heading', 'rows', 'date'], positionals: 0 },
+    error,
+  );
+  if (!heading) {
     error('--heading required for verification.append-audit');
     return;
   }
-  if (!parsed.rows) {
+  if (!rowsArg) {
     error('--rows required for verification.append-audit');
     return;
   }
   let rows: Record<string, unknown>;
   try {
-    const parsedRows: unknown = JSON.parse(parsed.rows);
+    const parsedRows: unknown = JSON.parse(rowsArg as string);
     if (!parsedRows || typeof parsedRows !== 'object' || Array.isArray(parsedRows)) {
       throw new Error('not an object');
     }
@@ -2034,23 +2143,34 @@ function cmdVerificationAppendAudit(
     error('--rows must be a JSON object for verification.append-audit');
     return;
   }
-  const filePath = path.resolve(cwd, fileArg);
-  const relToCwd = toPosix(path.relative(cwd, filePath));
-  if (isVerificationReportPath(relToCwd)) {
+  const date = (dateArg as string | null) ?? undefined;
+  const validation = validateAuditAppendInput(heading as string, rows, date);
+  if (!validation.ok) {
+    error(validation.reason);
+    return;
+  }
+
+  const resolvedPath = requireSafePath(fileArg, cwd, 'verification.append-audit file', PathAcceptance.AbsoluteInsideRoot);
+  const realBasename = path.basename(resolvedPath);
+  if (isVerificationReportBasenameCI(realBasename)) {
     error('verification.append-audit refuses a verification report path');
     return;
   }
+  if (!isAllowedAuditTargetBasenameCI(realBasename)) {
+    error('verification.append-audit target must be a *-SECURITY.md or *-VALIDATION.md file');
+    return;
+  }
+
   let content: string;
   try {
-    content = fs.readFileSync(filePath, 'utf-8');
+    content = fs.readFileSync(resolvedPath, 'utf-8');
   } catch {
     error(`file not found: ${fileArg}`);
     return;
   }
-  const date = parsed.date || new Date().toISOString().slice(0, 10);
-  const result = planAuditAppend(content, { heading: parsed.heading, rows, date });
+  const result = planAuditAppend(content, { heading: heading as string, rows, date });
   if (result.appended) {
-    fs.writeFileSync(filePath, result.content);
+    fs.writeFileSync(resolvedPath, result.content);
   }
   output({ appended: result.appended }, raw);
 }
