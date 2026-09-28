@@ -50,7 +50,7 @@ Issues found so far: {issues count}
 Continuing from Test {N}...
 ```
 
-Update Current Test section with the pending test.
+Update the `## Current Test` section with the pending test IN MEMORY ONLY (#5105 C2) — do not write the UAT file here. The next batched write (`process_response`'s `update_rules`) persists it alongside the test's actual result, so a resume that finds a pending row and stops without answering it performs zero writes.
 Then continue to `present_test` with it.
 
 ## § 3 — diagnose_issues, plan_gap_closure, verify_gap_plans, revision_loop (the gap-closure sub-flow)

@@ -142,15 +142,13 @@ Handle return:
 3. Write to `${PHASE_DIR}/${PADDED_PHASE}-SECURITY.md`
 
 **State A (update):**
-1. Update threat register statuses, append to audit trail:
+1. Update threat register statuses.
+2. Append to the audit trail through the owning verb — it compares against the LAST `## Security Audit` block and skips the write entirely when nothing material changed (#5105 R3; #4887 Defect 2: an unchanged register no longer grows a new identical row on every re-run):
 
-```markdown
-## Security Audit {date}
-| Metric | Count |
-|--------|-------|
-| Threats found | {N} |
-| Closed | {M} |
-| Open | {K} |
+```bash
+gsd_run query verification.append-audit "${PHASE_DIR}/${PADDED_PHASE}-SECURITY.md" \
+  --heading "Security Audit" \
+  --rows "{\"Threats found\": {N}, \"Closed\": {M}, \"Open\": {K}}"
 ```
 
 **ENFORCING GATE:** If `threats_open > 0` after all options exhausted (user did not accept, not all verified closed):

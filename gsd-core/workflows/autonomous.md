@@ -559,10 +559,10 @@ Resolve the active post-verification hooks and the UI-SPEC gate:
 
 ```bash
 UI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-UI-SPEC.md 2>/dev/null | head -1)
-HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
+HOOKS_JSON=$(gsd_run loop render-hooks verify:post --after-fingerprint "${PHASE_DIR}" --raw)
 ```
 
-Read the `activeHooks` array directly from the `HOOKS_JSON` value already in context (do not invoke a shell `jq` pipeline — parse as the JSON object it is). **If `activeHooks` is empty or absent:** skip silently to the iterate step.
+Read the `activeHooks` array directly from the `HOOKS_JSON` value already in context (do not invoke a shell `jq` pipeline — parse as the JSON object it is). **If `activeHooks` is empty or absent:** skip silently to the iterate step. `--after-fingerprint "${PHASE_DIR}"` (#5105) moves a step whose declared artifact already exists in `PHASE_DIR` into `skippedHooks` instead of `activeHooks` — execute-phase already ran it before its own fingerprint, so this re-dispatch is not repeated for it here.
 
 For each entry in `activeHooks` in array order where `kind == "step"` and `ref.skill` is set:
 

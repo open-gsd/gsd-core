@@ -138,15 +138,12 @@ Handle return:
 
 **State A (update):**
 1. Update Per-Task Map statuses, add escalated to Manual-Only, update frontmatter (**set `status: validated`**)
-2. Append audit trail:
+2. Append to the audit trail through the owning verb — it compares against the LAST `## Validation Audit` block and skips the write entirely when nothing material changed (#5105 R3; #4981: idempotence alone is insufficient for VALIDATION, whose content legitimately changes with the plan/SUMMARY set, so this call is made AFTER the Per-Task Map update above, not instead of it):
 
-```markdown
-## Validation Audit {date}
-| Metric | Count |
-|--------|-------|
-| Gaps found | {N} |
-| Resolved | {M} |
-| Escalated | {K} |
+```bash
+gsd_run query verification.append-audit "${PHASE_DIR}/${PADDED_PHASE}-VALIDATION.md" \
+  --heading "Validation Audit" \
+  --rows "{\"Gaps found\": {N}, \"Resolved\": {M}, \"Escalated\": {K}}"
 ```
 
 ## 7. Commit
