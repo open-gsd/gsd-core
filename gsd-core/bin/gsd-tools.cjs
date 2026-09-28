@@ -278,7 +278,7 @@ try {
 
 const { ExitError, runMain, resolveContractVersion } = require('./lib/cli-exit.cjs');
 const io = require('./lib/io.cjs');
-const { error, ERROR_REASON, setJsonErrorMode, output, formatDiagnosticToken, captureStdoutSyncWrites } = io;
+const { error, ERROR_REASON, setJsonErrorMode, output, formatDiagnosticToken, captureStdoutSyncWrites, resolveAtFileOutput } = io;
 const projectRoot = require('./lib/project-root.cjs');
 // Resolve findProjectRoot lazily at call time rather than binding it at module
 // load. It is sourced from project-root.cjs; a call-time lookup is robust
@@ -5431,13 +5431,9 @@ async function main() {
   fs.writeSync(1, resolveAtFileOutput(captured));
 }
 
-// captureStdoutSyncWrites moved to src/io.cts (gsd-core/bin/lib/io.cjs) — the
-// ONE shared helper (#5105 S9), also used by uat.cts's cmdUatCompleteSession.
-
-function resolveAtFileOutput(captured) {
-  if (!captured.startsWith('@file:')) return captured;
-  return fs.readFileSync(captured.slice(6), 'utf-8');
-}
+// captureStdoutSyncWrites and resolveAtFileOutput moved to src/io.cts
+// (gsd-core/bin/lib/io.cjs) — the ONE shared pair (#5105 S9, review finding
+// 7), also used by uat.cts's cmdUatCompleteSession.
 
 // A plain object root/intermediate value — everything else (null, an array,
 // a number, a string, a boolean) is treated as non-object for NAMED-key

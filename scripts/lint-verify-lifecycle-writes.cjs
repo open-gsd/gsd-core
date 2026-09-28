@@ -160,13 +160,18 @@ function scanForMissingGating(file, lines) {
  * Every pathspec token following `--files`/`git add` is checked, not just
  * the first (#5105 S11) — the run stops at the next flag (a token starting
  * with `-`), an operator, or a redirection.
+ *
+ * Runs over `joinContinuations`' logical lines, same as L1/L3 (#5105 finding
+ * 8), so a backslash-continued invocation — e.g. `git add \` on one physical
+ * line with its pathspec on the next — is joined before tokenizing and
+ * cannot dodge the scan by wrapping across lines.
  */
 function scanForRawWrites(file, lines) {
   const violations = [];
-  const flag = (i, pathspecRaw) => {
+  const flag = (line, text, pathspecRaw) => {
     const p = stripQuotes(pathspecRaw);
     if (isVerificationReportPath(p) || isSharedPlanningDoc(p)) return;
-    violations.push({ rule: 'L2', file, line: i + 1, target: p, text: lines[i].trim() });
+    violations.push({ rule: 'L2', file, line, target: p, text: text.trim() });
   };
   const collectPathTokens = (tokens, startIdx) => {
     const paths = [];
@@ -180,30 +185,30 @@ function scanForRawWrites(file, lines) {
     }
     return { paths, nextIdx: ti };
   };
-  for (let i = 0; i < lines.length; i++) {
-    const tokens = tokenize(lines[i]);
+  for (const { text: logicalText, line } of joinContinuations(lines)) {
+    const tokens = tokenize(logicalText);
     for (let ti = 0; ti < tokens.length; ti++) {
       const t = tokens[ti];
       if (t.op || t.redir) continue;
       if (t.value === '--files' || t.value === '--files=') {
         const { paths, nextIdx } = collectPathTokens(tokens, ti + 1);
-        for (const p of paths) flag(i, p);
+        for (const p of paths) flag(line, logicalText, p);
         ti = nextIdx - 1;
         continue;
       }
       if (t.value.startsWith('--files=') && t.value.length > '--files='.length) {
-        flag(i, t.value.slice('--files='.length));
+        flag(line, logicalText, t.value.slice('--files='.length));
         continue;
       }
       if (t.value === 'add' && ti > 0 && bareCommandName(tokens[ti - 1]) === 'git') {
         const { paths, nextIdx } = collectPathTokens(tokens, ti + 1);
-        for (const p of paths) flag(i, p);
+        for (const p of paths) flag(line, logicalText, p);
         ti = nextIdx - 1;
         continue;
       }
       if (t.value === 'frontmatter.set') {
         const next = tokens[ti + 1];
-        if (next && !next.op && !next.redir) flag(i, next.value);
+        if (next && !next.op && !next.redir) flag(line, logicalText, next.value);
       }
     }
   }

@@ -122,7 +122,15 @@ const GIT_SUBPROCESS_TIMEOUT_MS = 10_000;
 /** git log --format=%H output cap; 100 full shas are ~4 KB, this is headroom. */
 const GIT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
-function isCleanRelativePosixPath(relPath: string): boolean {
+/**
+ * #5105 review finding 1/4: shared containment guard AND the shared
+ * non-trimming `git` subprocess runner, exported so `uat.cts`'s
+ * `readBaselineAtHead` (byte-exact `git show HEAD:<path>` read) can route
+ * through the same bounded, `windowsHide`d, stderr-discarding call this
+ * module already uses, rather than maintaining a second private
+ * `execFileSync` wrapper that can drift from this one's timeout/maxBuffer.
+ */
+export function isCleanRelativePosixPath(relPath: string): boolean {
   if (!relPath || relPath.startsWith('/') || relPath.includes('\\') || relPath.includes('\0')) {
     return false;
   }
@@ -130,7 +138,7 @@ function isCleanRelativePosixPath(relPath: string): boolean {
   return segments.every((seg) => seg.length > 0 && seg !== '.' && seg !== '..');
 }
 
-function gitExec(gitDir: string, args: string[]): string {
+export function gitExec(gitDir: string, args: string[]): string {
   return execFileSync('git', args, {
     cwd: gitDir,
     encoding: 'utf8',

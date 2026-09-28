@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
-const { output, error, captureStdoutSyncWrites } = io;
+const { output, error, captureStdoutSyncWrites, resolveAtFileOutput } = io;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import markdownSectionizer = require('./markdown-sectionizer.cjs');
 const { collectSection, withSection, tokenizeHeadings, stripFencedCode, scanFencedBlocks } = markdownSectionizer;
@@ -38,6 +38,9 @@ const { listMilestonePhaseDirs, getAllArchivedPhaseDirs } = phaseLocator;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import auditMod = require('./audit.cjs');
 const { isAuditItemAcknowledged, deriveUatGapSnapshotValue } = auditMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import pristineBaseline = require('./pristine-baseline.cjs');
+const { gitExec, isCleanRelativePosixPath } = pristineBaseline;
 import { requireSafePath, sanitizeForDisplay, PathAcceptance } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
 import configLoader = require('./config-loader.cjs');
@@ -553,6 +556,15 @@ interface CompleteUatSessionResult {
   changed: boolean;
   content: string;
   status: 'complete' | 'partial';
+  /**
+   * #5105 review finding 2: set when the candidate matched the committed
+   * `baseline` materially, but the LIVE `content` still differed from the
+   * byte-exact restored form (a re-opened session that left stray, already-
+   * committed-equivalent state on disk). `content` is that restored form —
+   * the caller writes it WITHOUT committing, so the file ends up matching
+   * HEAD rather than staying needlessly dirty.
+   */
+  restored?: boolean;
 }
 
 /**
@@ -619,6 +631,23 @@ function completeUatSession(
 
   const changed = stripUpdatedForCompare(candidate) !== stripUpdatedForCompare(baseline ?? '');
   if (!changed) {
+    // #5105 review finding 2: a material match against `baseline` does not
+    // mean `content` (the LIVE file) is already clean — a re-opened session
+    // can leave `status: testing` plus a pending `## Current Test` with no
+    // row changes, which normalizes to the SAME material candidate but is
+    // not byte-identical to what is already committed. Restore the byte-exact
+    // committed form (adopting baseline's own `updated:` value) so a no-op
+    // completion also leaves `git status` clean, rather than leaving the stray
+    // uncommitted state sitting on disk.
+    if (baseline !== null) {
+      const baselineUpdated = frontmatterUpdatedValue(baseline);
+      const restoredContent = baselineUpdated !== null
+        ? setFrontmatterUpdated(candidate, baselineUpdated)
+        : candidate;
+      if (restoredContent !== content) {
+        return { changed: false, content: restoredContent, status, restored: true };
+      }
+    }
     return { changed: false, content, status };
   }
 
@@ -628,26 +657,39 @@ function completeUatSession(
 }
 
 /**
- * Bounded, byte-exact read of `relPath` at git HEAD — the #5105 R1 `baseline`
- * input. `execFileSync` (not the trimming `execGit` shell projection): the
- * comparison this feeds is byte-sensitive (a trailing newline IS material),
- * so the read must not trim anything. Returns `null` on any failure (git
- * absent, not a repository, unborn HEAD, or the path untracked/absent at
- * HEAD) — never throws, matching the "no baseline" posture every other
- * git-history reader in this codebase uses (`pristine-baseline.cts`).
+ * Bounded, byte-exact read of `absPath` at git HEAD — the #5105 R1 `baseline`
+ * input. Routes through `pristine-baseline.cts`'s shared `gitExec` (not the
+ * trimming `execGit` shell projection, and not a second private
+ * `execFileSync` wrapper — #5105 review finding 4): the comparison this
+ * feeds is byte-sensitive (a trailing newline IS material), so the read must
+ * not trim anything.
+ *
+ * #5105 review finding 1: `git show HEAD:<path>` resolves its pathspec from
+ * the repository TOPLEVEL, not from `cwd` — a project whose `.planning` sits
+ * in a subdirectory of the git repo (`projectRoot !== toplevel`) would
+ * otherwise resolve the wrong blob, or none, for a `relPath` computed
+ * relative to `cwd`. This resolves the real toplevel via a bounded
+ * `git rev-parse --show-toplevel`, realpath's BOTH sides (so a symlinked
+ * `--cwd` and a symlinked repo checkout still line up), and recomputes the
+ * pathspec relative to that toplevel — guarded by the same
+ * `isCleanRelativePosixPath` containment check `pristine-baseline.cts` uses
+ * for every other git-history pathspec, so a `..`-escaping or absolute
+ * result is refused rather than fed to `git show`.
+ *
+ * Returns `null` on any failure (git absent, not a repository, unborn HEAD,
+ * the path untracked/absent at HEAD, or a containment refusal) — never
+ * throws, matching the "no baseline" posture every other git-history reader
+ * in this codebase uses.
  */
-function readBaselineAtHead(cwd: string, relPath: string): string | null {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { execFileSync } = require('node:child_process') as typeof import('node:child_process');
+function readBaselineAtHead(cwd: string, absPath: string): string | null {
   try {
-    return execFileSync('git', ['show', `HEAD:${relPath}`], {
-      cwd,
-      encoding: 'utf-8',
-      timeout: 10_000,
-      maxBuffer: 16 * 1024 * 1024,
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
+    const toplevelRaw = gitExec(cwd, ['rev-parse', '--show-toplevel']).trim();
+    if (!toplevelRaw) return null;
+    const realToplevel = fs.realpathSync(toplevelRaw);
+    const realAbsPath = fs.realpathSync(absPath);
+    const relFromToplevel = toPosixPath(path.relative(realToplevel, realAbsPath));
+    if (!isCleanRelativePosixPath(relFromToplevel)) return null;
+    return gitExec(realToplevel, ['show', `HEAD:${relFromToplevel}`]);
   } catch {
     return null;
   }
@@ -680,10 +722,16 @@ async function cmdUatCompleteSession(
   }
   const content = fs.readFileSync(resolvedPath, 'utf-8');
   const relPath = toPosixPath(path.relative(cwd, resolvedPath));
-  const baseline = readBaselineAtHead(cwd, relPath);
+  const baseline = readBaselineAtHead(cwd, resolvedPath);
   const result = completeUatSession(content, { baseline });
   if (!result.changed) {
-    output({ changed: false, status: result.status }, raw);
+    // #5105 review finding 2: a `restored` result still writes (byte-exact
+    // restore to HEAD's own committed form) but never commits — this is a
+    // no-op from git's perspective, not a new change.
+    if (result.restored) {
+      fs.writeFileSync(resolvedPath, result.content);
+    }
+    output({ changed: false, status: result.status, ...(result.restored ? { restored: true } : {}) }, raw);
     return;
   }
   fs.writeFileSync(resolvedPath, result.content);
@@ -708,10 +756,10 @@ async function cmdUatCompleteSession(
   try {
     // io.cjs's output() redirects a >50KB JSON payload to a tmpfile and emits
     // `@file:<path>` instead (never the case for a commit result in practice,
-    // but resolved defensively rather than assumed).
-    const capturedJson = captured.startsWith('@file:')
-      ? fs.readFileSync(captured.slice('@file:'.length), 'utf-8')
-      : captured;
+    // but resolved defensively rather than assumed) — via the shared
+    // `resolveAtFileOutput` helper (#5105 review finding 7), the same one
+    // gsd-tools.cjs uses for its own `@file:` resolution.
+    const capturedJson = resolveAtFileOutput(captured);
     const commitResult = JSON.parse(capturedJson) as { committed?: unknown; reason?: unknown };
     committed = commitResult.committed === true;
     if (!committed && typeof commitResult.reason === 'string') reason = commitResult.reason;

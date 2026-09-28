@@ -2039,6 +2039,29 @@ function isNonNegativeIntegerValue(v: unknown): boolean {
   return false;
 }
 
+/** Reject a value carrying leading/trailing whitespace — a heading or row key
+ * with padding would not match `parseMarkdownTable`'s trimmed reads on a
+ * later append, so the same key would silently fail to be recognized as the
+ * "already present" row (re-review finding 6). */
+function hasLeadingOrTrailingWhitespace(s: string): boolean {
+  return s !== s.trim();
+}
+
+/** True calendar-date check for `--date` (re-review finding 9): rejects an
+ * out-of-range month/day (e.g. `2026-99-99`) or a day that does not exist in
+ * that month (e.g. `2026-02-30`), which `/^\d{4}-\d{2}-\d{2}$/` alone lets
+ * through — `Date.UTC` normalizes overflow instead of raising, so the parsed
+ * fields must be compared back against the input. */
+function isRealCalendarDate(date: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!m) return false;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const d = new Date(Date.UTC(year, month - 1, day));
+  return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day;
+}
+
 /**
  * #5105 S3 — validate `verification.append-audit` input shape before it ever
  * reaches `planAuditAppend`/the file. `--rows` being valid JSON (checked by
@@ -2055,9 +2078,15 @@ function validateAuditAppendInput(
   if (hasForbiddenAuditChar(heading)) {
     return { ok: false, reason: '--heading must not contain a newline, carriage return, or |' };
   }
+  if (hasLeadingOrTrailingWhitespace(heading)) {
+    return { ok: false, reason: '--heading must not have leading or trailing whitespace' };
+  }
   for (const [key, value] of Object.entries(rows)) {
     if (hasForbiddenAuditChar(key)) {
       return { ok: false, reason: `--rows key ${JSON.stringify(key)} must not contain a newline, carriage return, or |` };
+    }
+    if (hasLeadingOrTrailingWhitespace(key)) {
+      return { ok: false, reason: `--rows key ${JSON.stringify(key)} must not have leading or trailing whitespace` };
     }
     if (typeof value === 'string' && hasForbiddenAuditChar(value)) {
       return { ok: false, reason: `--rows value for ${JSON.stringify(key)} must not contain a newline, carriage return, or |` };
@@ -2066,8 +2095,8 @@ function validateAuditAppendInput(
       return { ok: false, reason: `--rows value for ${JSON.stringify(key)} must be a non-negative integer` };
     }
   }
-  if (date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return { ok: false, reason: '--date must match YYYY-MM-DD' };
+  if (date !== undefined && !isRealCalendarDate(date)) {
+    return { ok: false, reason: '--date must be a real calendar date in YYYY-MM-DD form' };
   }
   return { ok: true };
 }

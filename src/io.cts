@@ -190,6 +190,25 @@ function captureStdoutSyncWrites(run: () => unknown): Promise<string> {
 }
 
 /**
+ * Resolve `output()`'s `@file:<path>` redirection (emitted for a >50KB JSON
+ * payload) back to the real content, or return `captured` unchanged when it
+ * is not that shape.
+ *
+ * #5105 review finding 7: the ONE definition, shared by gsd-tools.cjs's
+ * `--pick`/CLI-passthrough resolution and by `uat.cts`'s
+ * `cmdUatCompleteSession` (which reads `cmdCommit`'s captured result back
+ * without emitting cmdCommit's own envelope as a second stdout line) — same
+ * reasoning as `captureStdoutSyncWrites` just below: one definition means
+ * both callers agree on the trailing-newline-free prefix and the read
+ * encoding, rather than two hand-rolled `startsWith('@file:')` checks
+ * drifting apart.
+ */
+function resolveAtFileOutput(captured: string): string {
+  if (!captured.startsWith('@file:')) return captured;
+  return fs.readFileSync(captured.slice('@file:'.length), 'utf-8');
+}
+
+/**
  * The wire form of a JSON result: the exact bytes `output()` emits for it.
  *
  * Exported because a caller that has to reason about the size of its own
@@ -529,4 +548,5 @@ export = {
   error,
   formatDiagnosticToken,
   captureStdoutSyncWrites,
+  resolveAtFileOutput,
 };
