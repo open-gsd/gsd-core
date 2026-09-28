@@ -1077,29 +1077,57 @@ function propagateCommentChannel(source: Frontmatter, target: Frontmatter): void
  * column-0 key line up to the next column-0 key line. It splits into `body` (the key line
  * and the value text under it) and `tail`: the trailing blank lines, full-line comments
  * and any other column-0 lines that are not part of the value (typically the comments
- * leading the NEXT key). `plain` is true for the historical bare-ASCII key shape
- * (`[A-Za-z0-9_-]+:`, which includes the no-space `key:value` spelling).
+ * leading the NEXT key). `valueStart` is the offset in the key line where the value text
+ * begins (just past the key's `:`).
  */
-type FrontmatterSegment = { key: string; plain: boolean; raw: string; body: string[]; tail: string[] };
+type FrontmatterSegment = { key: string; valueStart: number; raw: string; body: string[]; tail: string[] };
+
+/** Column-0 quoted key: `"…":` (JSON-style escapes) or `'…':` (`''` escapes a quote). */
+const QUOTED_SEGMENT_KEY_RE = /^(?:"((?:[^"\\]|\\.)*)"|'((?:[^']|'')*)')[ \t]*:/;
 
 /**
- * Column-0 top-level key line: a double- or single-quoted key, the bare-ASCII shape
- * (colon need not be followed by a space: `updated:2026-01-01`), or any other plain key
- * (Unicode, embedded spaces) whose colon is followed by whitespace or end of line. A
- * comment, a list item, an indented line and a line opening with a YAML indicator never
- * start a key.
+ * First character of a plain (unquoted) top-level key. A comment, an indented line, a
+ * quote and a YAML indicator (`-`/`?`/`:` followed by whitespace or end of line, or any
+ * of `,[]{}&*!|>%@` and backtick) never start one — those lines are never a key line, so
+ * a key the parser reads from them (an explicit `? k` key, a flow mapping) has no segment
+ * and `spliceFrontmatter` refuses rather than duplicating it.
  */
-const SEGMENT_KEY_RE = /^(?:"((?:[^"\\]|\\.)*)"\s*:|'((?:[^']|'')*)'\s*:|([A-Za-z0-9_-]+):|([^\s#\-?:,[\]{}&*!|>'"%@`][^:]*?):(?:\s|$))/;
+const PLAIN_KEY_START_RE = /^(?:[^\s#,[\]{}&*!|>'"%@`\-?:]|[-?:](?=[^\s]))/;
 
-function segmentKeyOf(line: string): { key: string; plain: boolean } | null {
-  const m = SEGMENT_KEY_RE.exec(line);
-  if (!m) return null;
-  if (m[1] !== undefined) {
-    try { return { key: JSON.parse(`"${m[1]}"`) as string, plain: false }; } catch { return { key: m[1], plain: false }; }
+/**
+ * Where the key of a column-0 line ends, agreeing with the YAML parser: the key is
+ * everything before the FIRST `:` followed by whitespace or end of line (so `a:b: 1` is
+ * key `a:b` and `http://x: 1` is key `http://x`, exactly as js-yaml reads them). Only when
+ * no such colon exists does the no-space `key:value` spelling (`updated:2026-01-01`) fall
+ * back to the bare-ASCII key before the first `:`. Returns null for a line that is not a
+ * top-level key line.
+ */
+function segmentKeyOf(line: string): { key: string; valueStart: number } | null {
+  const q = QUOTED_SEGMENT_KEY_RE.exec(line);
+  if (q) {
+    const valueStart = q[0].length;
+    if (q[1] !== undefined) {
+      try { return { key: JSON.parse(`"${q[1]}"`) as string, valueStart }; } catch { return { key: q[1], valueStart }; }
+    }
+    return { key: q[2].replace(/''/g, "'"), valueStart };
   }
-  if (m[2] !== undefined) return { key: m[2].replace(/''/g, "'"), plain: false };
-  if (m[3] !== undefined) return { key: m[3], plain: true };
-  return { key: m[4].trimEnd(), plain: false };
+  if (!PLAIN_KEY_START_RE.test(line)) return null;
+  const spaced = /:(?:[ \t]|$)/.exec(line);
+  if (spaced) return { key: line.slice(0, spaced.index).trimEnd(), valueStart: spaced.index + 1 };
+  const bare = /^([A-Za-z0-9_-]+):/.exec(line);
+  return bare ? { key: bare[1], valueStart: bare[0].length } : null;
+}
+
+/**
+ * The value text of a key's lines — the first line from just past its key's `:`, plus
+ * every following line — so two spellings of the same key (`must_haves:` vs
+ * `"must_haves":`) compare on their values alone.
+ */
+function segmentValueText(lines: string[]): string {
+  if (lines.length === 0) return '';
+  const key = segmentKeyOf(lines[0]);
+  const first = key ? lines[0].slice(key.valueStart) : lines[0];
+  return [first, ...lines.slice(1)].join('\n').trim();
 }
 
 /** A line that can sit after a key's value without belonging to it (see `FrontmatterSegment`). */
@@ -1120,13 +1148,13 @@ function isSegmentTailLine(line: string): boolean {
 function sliceFrontmatterLayout(yaml: string): { preamble: string[]; segments: FrontmatterSegment[] } {
   const preamble: string[] = [];
   const segments: FrontmatterSegment[] = [];
-  let current: { key: string; plain: boolean; lines: string[] } | null = null;
-  const close = (seg: { key: string; plain: boolean; lines: string[] }): void => {
+  let current: { key: string; valueStart: number; lines: string[] } | null = null;
+  const close = (seg: { key: string; valueStart: number; lines: string[] }): void => {
     let cut = seg.lines.length;
     while (cut > 1 && isSegmentTailLine(seg.lines[cut - 1])) cut--;
     segments.push({
       key: seg.key,
-      plain: seg.plain,
+      valueStart: seg.valueStart,
       raw: seg.lines.join('\n'),
       body: seg.lines.slice(0, cut),
       tail: seg.lines.slice(cut),
@@ -1136,7 +1164,7 @@ function sliceFrontmatterLayout(yaml: string): { preamble: string[]; segments: F
     const key = segmentKeyOf(line);
     if (key) {
       if (current) close(current);
-      current = { key: key.key, plain: key.plain, lines: [line] };
+      current = { key: key.key, valueStart: key.valueStart, lines: [line] };
     } else if (current) {
       current.lines.push(line);
     } else {
@@ -1165,22 +1193,74 @@ function regenerateFrontmatterKey(key: string, value: FrontmatterValue): string 
         `emit "[object Object]". Edit the file directly instead of using frontmatter set/merge.`,
     );
   }
+  // `reconstructFrontmatter` emits keys bare. A key the parser would not read back as
+  // itself when bare (`a:b`, `a: b`, `#x`, `- k`, a trailing space) is emitted double-quoted
+  // instead, so a regenerated or appended key never re-parses as a different key.
+  if (rendered.startsWith(`${key}:`) && !/^[\p{L}\p{N}_][\p{L}\p{N}_.-]*$/u.test(key)) {
+    return `"${escapeDoubleQuotedScalar(key)}"` + rendered.slice(key.length);
+  }
   return rendered;
 }
 
+/**
+ * Why `spliceFrontmatter` refused to write. `FRONTMATTER_UNPARSEABLE`: the existing block
+ * is not parseable YAML (or not a mapping), so a regenerated block would either discard
+ * the author's unparsed keys or leave them in a block no reader can see (#4802). The same
+ * decision every write-path caller surfaces — there is one owner of it, here.
+ * `FRONTMATTER_KEYS_UNRECONCILABLE`: the block parses, but its top-level key lines cannot
+ * be matched one-to-one to the parsed keys (a duplicate key, an explicit `? k` key, a
+ * flow-mapping block, a quoted key with a YAML-only escape), so a per-key splice could
+ * duplicate or drop a key.
+ */
+type FrontmatterWriteRefusalCode = 'FRONTMATTER_UNPARSEABLE' | 'FRONTMATTER_KEYS_UNRECONCILABLE';
+
+class FrontmatterWriteRefusedError extends Error {
+  readonly code: FrontmatterWriteRefusalCode;
+  constructor(code: FrontmatterWriteRefusalCode, message: string) {
+    super(message);
+    this.name = 'FrontmatterWriteRefusedError';
+    this.code = code;
+  }
+}
+
+function isFrontmatterWriteRefusal(err: unknown): err is FrontmatterWriteRefusedError {
+  return err instanceof FrontmatterWriteRefusedError;
+}
+
+/** Does a closed frontmatter block's parse mean "unparseable" for a writer? */
+function frontmatterBlockUnparseable(parsed: Frontmatter, innerYaml: string): boolean {
+  if ((parsed as unknown as Record<symbol, unknown>)[FRONTMATTER_UNPARSEABLE] === true) return true;
+  if (Object.keys(parsed).length > 0) return false;
+  // `{}` from a block that still carries content: a bare scalar (`status:complete`) or a
+  // sequence at the top level. Only blank lines and comments make a genuinely empty block.
+  return splitLines(innerYaml).some((line) => line.trim() !== '' && !line.trim().startsWith('#'));
+}
+
 function spliceFrontmatter(content: string, newObj: Frontmatter): string {
+  // #2977 parity with `frontmatterRegion`: a leading BOM is not content before the fence.
+  if (content.charCodeAt(0) === 0xFEFF) return '﻿' + spliceFrontmatter(content.slice(1), newObj);
   const match = content.match(/^---\r?\n[\s\S]+?\r?\n---/);
   if (match) {
     const fmBlock = match[0];
+    const fmLines = splitLines(fmBlock);
+    const inner = fmLines.slice(1, -1).join('\n'); // drop the opening `---` and closing `---`
+    let originalParsed: Frontmatter;
+    try { originalParsed = extractFrontmatter(fmBlock); } catch { originalParsed = unparseableResult(); }
+
+    // Fail closed on an unparseable block BEFORE anything else — never regenerate over it.
+    if (frontmatterBlockUnparseable(originalParsed, inner)) {
+      throw new FrontmatterWriteRefusedError(
+        'FRONTMATTER_UNPARSEABLE',
+        'frontmatter: refusing to write — the existing frontmatter block is not parseable YAML, so ' +
+          'rewriting it would discard or hide the fields the author wrote. Fix the YAML syntax error in ' +
+          'the frontmatter block first, then re-run.',
+      );
+    }
 
     // Whole-document no-op guard: a true no-op returns content verbatim (byte-exact,
     // including any formatting the lossy serializer would normalize).
-    try {
-      if (frontmatterDeepEqual(extractFrontmatter(content), newObj)) {
-        return content;
-      }
-    } catch {
-      /* fall through to regeneration on any comparison hiccup */
+    if (frontmatterDeepEqual(originalParsed, newObj)) {
+      return content;
     }
 
     // Per-key identity preservation (#1572). `reconstructFrontmatter` is a deliberately
@@ -1195,19 +1275,32 @@ function spliceFrontmatter(content: string, newObj: Frontmatter): string {
     // unrelated `must_haves` block. Keys absent from the original (genuinely new) are
     // regenerated and appended; keys absent from `newObj` are preserved (never silently
     // deleted by a set/merge).
-    const fmLines = splitLines(fmBlock);
-    const inner = fmLines.slice(1, -1).join('\n'); // drop the opening `---` and closing `---`
-    let originalParsed: Frontmatter;
-    try { originalParsed = extractFrontmatter(fmBlock); } catch { originalParsed = {}; }
-
+    //
     // A write never silently drops a line it did not parse: the preamble (e.g. a comment
-    // above the first key) and every segment's tail (blank lines, full-line comments, or
-    // lines the parser could not read) are re-emitted in place whatever happens to the
-    // key they sit next to.
+    // above the first key) and every segment's tail (blank lines, full-line comments) are
+    // re-emitted in place whatever happens to the key they sit next to.
     const { preamble, segments } = sliceFrontmatterLayout(inner);
+    const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
+
+    // Every parsed key must own exactly one key line, and every key line must be a parsed
+    // key — otherwise a per-key splice could emit a key twice or lose one. Refuse instead.
+    const parsedKeys = Object.keys(originalParsed);
+    const segmentKeys = segments.map((s) => s.key);
+    if (
+      new Set(segmentKeys).size !== segmentKeys.length ||
+      segmentKeys.length !== parsedKeys.length ||
+      !segmentKeys.every((k) => hasOwn(originalParsed, k))
+    ) {
+      throw new FrontmatterWriteRefusedError(
+        'FRONTMATTER_KEYS_UNRECONCILABLE',
+        'frontmatter: refusing to write — the frontmatter block\'s top-level key lines cannot be matched ' +
+          'one-to-one to its parsed keys (a duplicate key, an explicit "? key", a flow mapping, or a quoted ' +
+          'key using a YAML-only escape), so rewriting it could duplicate or drop a key. Edit the file directly.',
+      );
+    }
+
     const emitted: string[] = [...preamble];
     const seen: Set<string> = new Set();
-    const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
 
     for (const seg of segments) {
       seen.add(seg.key);
@@ -1224,11 +1317,6 @@ function spliceFrontmatter(content: string, newObj: Frontmatter): string {
           // changed → regenerate (fail-closed on object-lists), keeping the tail
           emitted.push(regenerateFrontmatterKey(seg.key, newObj[seg.key]), ...seg.tail);
         }
-      } else if (!hasOwn(originalParsed, seg.key)) {
-        // The parser never produced this key (an unparseable block, or a line such as
-        // `updated:2026-01-01` that is not valid YAML), so the caller could not have
-        // meant to delete it — preserve its raw text verbatim.
-        emitted.push(seg.raw);
       } else {
         // Parsed key absent from newObj → drop its body; its tail is not its value.
         emitted.push(...seg.tail);
@@ -1241,8 +1329,11 @@ function spliceFrontmatter(content: string, newObj: Frontmatter): string {
       }
     }
 
-    const yamlStr = emitted.join('\n');
-    return `---\n${yamlStr}\n---` + content.slice(fmBlock.length);
+    // Re-emit the whole block with the document's own line ending (taken from the opening
+    // fence), so a CRLF document never gains LF-only lines.
+    const eol = fmBlock.startsWith('---\r\n') ? '\r\n' : '\n';
+    const block = ['---', ...emitted, '---'].join('\n').split('\n').join(eol);
+    return block + content.slice(fmBlock.length);
   }
   // No existing frontmatter — generate from scratch, fail-closed on unrepresentable values.
   const yamlStr = reconstructFrontmatter(newObj);
@@ -1456,6 +1547,22 @@ function cmdFrontmatterGet(cwd: string, filePath: string, field: string | undefi
   }
 }
 
+/**
+ * `spliceFrontmatter` for the set/merge commands: a write refusal (unparseable block,
+ * unreconcilable keys) is reported as `{ error, code, path }` and nothing is written —
+ * the same shape `cmdFrontmatterGet` uses for an unparseable block. Returns null when
+ * refused; any other error propagates as before.
+ */
+function spliceOrReportRefusal(content: string, fm: Frontmatter, filePath: string, raw: boolean): string | null {
+  try {
+    return spliceFrontmatter(content, fm);
+  } catch (err) {
+    if (!isFrontmatterWriteRefusal(err)) throw err;
+    output({ error: err.message, code: err.code, path: filePath }, raw, undefined);
+    return null;
+  }
+}
+
 function cmdFrontmatterSet(cwd: string, filePath: string, field: string | undefined, value: string | undefined, raw: boolean): void {
   if (!filePath || !field || value === undefined) { error('file, field, and value required'); }
   // Path traversal guard: reject null bytes
@@ -1477,7 +1584,8 @@ function cmdFrontmatterSet(cwd: string, filePath: string, field: string | undefi
     return;
   }
   fm[field as string] = parsedValue as FrontmatterValue;
-  const newContent = spliceFrontmatter(content, fm);
+  const newContent = spliceOrReportRefusal(content, fm, filePath, raw);
+  if (newContent === null) return;
   // #1660: a no-op set (newContent unchanged) with a dict-valued field means the lossy
   // frontmatter parser made the new value's projection equal the original's — the change
   // did not apply (bites object-list fields like must_haves). Detection lives in the pure
@@ -1541,9 +1649,10 @@ function objectListFieldWouldLoseData(content: string, field: string, newValue: 
 
   const fmMatch = content.match(/^---\r?\n([\s\S]+?)\r?\n---/);
   if (!fmMatch) return null;
-  // Only the bare-ASCII key shape is text-compared: a quoted or Unicode key's regeneration
-  // differs from its source by quoting alone, which is not data loss.
-  const original = sliceFrontmatterLayout(fmMatch[1]).segments.find((s) => s.plain && s.key === field);
+  // Any key spelling (bare, quoted, Unicode) is compared: only the VALUE lines are
+  // text-compared, so a key whose regeneration differs from its source by quoting alone is
+  // not mistaken for data loss, and a quoted key holding an object-list is refused too.
+  const original = sliceFrontmatterLayout(fmMatch[1]).segments.find((s) => s.key === field);
   if (!original) return null;
 
   let regeneratedOriginal: string;
@@ -1554,7 +1663,7 @@ function objectListFieldWouldLoseData(content: string, field: string, newValue: 
       `(e.g. must_haves.artifacts) the frontmatter writer cannot faithfully represent, and this change ` +
       `would silently discard data. Edit the file directly instead of using frontmatter set/merge.`;
   }
-  if (regeneratedOriginal.trim() === original.body.join('\n').trim()) return null;
+  if (segmentValueText(splitLines(regeneratedOriginal)) === segmentValueText(original.body)) return null;
 
   return `frontmatter set refused — the existing "${field}" field cannot be faithfully round-tripped by ` +
     `the frontmatter writer (its structure would be flattened and data, such as a nested object-list ` +
@@ -1572,7 +1681,8 @@ function cmdFrontmatterMerge(cwd: string, filePath: string, data: string | undef
   let mergeData: Record<string, FrontmatterValue>;
   try { mergeData = JSON.parse(data as string) as Record<string, FrontmatterValue>; } catch { error('Invalid JSON for --data'); return; }
   Object.assign(fm, mergeData);
-  const newContent = spliceFrontmatter(content, fm);
+  const newContent = spliceOrReportRefusal(content, fm, filePath, raw);
+  if (newContent === null) return;
   platformWriteSync(fullPath, newContent);
   output({ merged: true, fields: Object.keys(mergeData) }, raw, 'true');
 }
@@ -1644,6 +1754,10 @@ export = {
   parseFrontmatter: extractFrontmatter,
   reconstructFrontmatter,
   spliceFrontmatter,
+  // The one owner of "may a writer splice this frontmatter block?" — callers catch
+  // `isFrontmatterWriteRefusal(err)` and surface `err.message`/`err.code`.
+  FrontmatterWriteRefusedError,
+  isFrontmatterWriteRefusal,
   stripFrontmatter,
   noOpObjectListSetError,
   parseMustHavesBlock,
