@@ -648,12 +648,14 @@ describe('#4429 follow-up — makeHookLayout must survive a concurrently-deleted
     // of a container's default of ~1M. It must be the HARD limit: Node raises
     // its SOFT nofile limit to the hard limit at startup, so a soft-only
     // `ulimit -S` is silently undone (observed on the Linux bench: 524270
-    // descriptors held, then a timeout). A current hard limit below 256 makes
-    // `ulimit` fail — reported as a marker, never as a silent non-run.
+    // descriptors held, then a timeout). If `ulimit` cannot set the limit it
+    // is reported as a marker, never as a silent non-run.
     const limiter = path.join(fixtureRoot, 'limit-fds.sh');
     fs.writeFileSync(limiter, [
       'if [ "$GSD_4429_INJECTION" = emfile ]; then',
-      '  ulimit -H -n 256 && ulimit -S -n 256 || { printf \'{"phase":"ulimit-failed"}\\n\'; exit 97; }',
+      // Soft FIRST: setrlimit rejects a hard limit below the current soft one
+      // with EINVAL (dash on the Linux bench), so lower soft, then hard.
+      '  ulimit -S -n 256 && ulimit -H -n 256 || { printf \'{"phase":"ulimit-failed"}\\n\'; exit 97; }',
       'fi',
       'exec "$@"',
       '',
@@ -671,7 +673,7 @@ describe('#4429 follow-up — makeHookLayout must survive a concurrently-deleted
       + `signal=${res.signal} markers=${JSON.stringify(markers)} stderr=${res.stderr.slice(0, 600)}`;
     // Anti-vacuous: the injection really happened before the copy started.
     assert.notEqual(markers[0]?.phase, 'ulimit-failed',
-      `the descriptor limit could not be lowered to 256 (hard limit too low), so the EMFILE injection cannot run. ${detail}`);
+      `the descriptor limit could not be lowered to 256 (see the ulimit error in stderr), so the EMFILE injection cannot run. ${detail}`);
     assert.notEqual(markers[0]?.phase, 'limit-not-applied',
       `the child could open over 1024 descriptors, so the 256 hard limit did not reach it. ${detail}`);
     assert.equal(markers[0]?.phase, 'ready', `the ${injection} injection never completed. ${detail}`);
