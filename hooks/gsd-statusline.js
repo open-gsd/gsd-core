@@ -171,7 +171,6 @@ function readStateFileOrNull(statePath) {
 }
 
 /**
-/**
  * The env vars Claude Code itself consults to switch auto-compaction off, and
  * the values it accepts as true. Both are taken from the shipped binary's own
  * resolution — `Boolean(truthy(DISABLE_COMPACT) || DISABLE_AUTO_COMPACT)`, and
