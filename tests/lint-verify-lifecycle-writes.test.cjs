@@ -214,3 +214,61 @@ describe('T23: positive control — planted minimal pre-fix shapes go red', () =
     assert.ok(violations.some((v) => v.rule === 'L2'), 'the pre-fix raw UAT commit shape must be flagged by L2');
   });
 });
+
+describe('T24: L3 — secure-phase enablement phrasing must reference skippedHooks (#5105 S1)', () => {
+  test('a gated host with the bare "active secure-phase step hook exists" phrase is red', () => {
+    const { scanText } = loadLint();
+    const text = [
+      '```bash',
+      'HOOKS_JSON=$(gsd_run loop render-hooks verify:post --after-fingerprint "$PHASE_DIR")',
+      '```',
+      '',
+      'If an active secure-phase step hook exists AND `SECURITY_FILE` is empty, dispatch it.',
+    ].join('\n');
+    const violations = scanText('gsd-core/workflows/verify-work.md', text, { postFingerprint: true });
+    const l3 = violations.filter((v) => v.rule === 'L3');
+    assert.strictEqual(l3.length, 1, `expected exactly one L3 violation; got: ${JSON.stringify(violations)}`);
+  });
+
+  test('a gated host with the bare "no active secure-phase step hook" phrase is red', () => {
+    const { scanText } = loadLint();
+    const text = [
+      '```bash',
+      'HOOKS_JSON=$(gsd_run loop render-hooks verify:post --after-fingerprint "$PHASE_DIR")',
+      '```',
+      '',
+      'If no active secure-phase step hook exists OR (`SECURITY_FILE` exists AND `threats_open` is `0`):',
+    ].join('\n');
+    const violations = scanText('gsd-core/workflows/verify-work.md', text, { postFingerprint: true });
+    assert.ok(violations.some((v) => v.rule === 'L3'), 'the "no active secure-phase step hook" phrase must also be flagged');
+  });
+
+  test('the same phrase, with skippedHooks referenced on the same line, is NOT flagged', () => {
+    const { scanText } = loadLint();
+    const text = [
+      '```bash',
+      'HOOKS_JSON=$(gsd_run loop render-hooks verify:post --after-fingerprint "$PHASE_DIR")',
+      '```',
+      '',
+      'If an active secure-phase step hook exists (in `activeHooks`, not `skippedHooks`) AND `SECURITY_FILE` is empty, dispatch it.',
+    ].join('\n');
+    const violations = scanText('gsd-core/workflows/verify-work.md', text, { postFingerprint: true });
+    assert.deepStrictEqual(violations.filter((v) => v.rule === 'L3'), []);
+  });
+
+  test('the phrase in a host with NO --after-fingerprint invocation at all is not flagged (self-gated)', () => {
+    const { scanText } = loadLint();
+    const text = [
+      '```bash',
+      'HOOKS_JSON=$(gsd_run loop render-hooks verify:post --cwd "$PROJECT_ROOT")',
+      '```',
+      '',
+      'If an active secure-phase step hook exists AND `SECURITY_FILE` is empty, dispatch it.',
+    ].join('\n');
+    // Note: this text alone would also fire L1 (missing --after-fingerprint) —
+    // the point here is narrowly that L3 does not fire when no gated
+    // invocation is present anywhere in the file.
+    const violations = scanText('gsd-core/workflows/verify-work.md', text, { postFingerprint: true });
+    assert.deepStrictEqual(violations.filter((v) => v.rule === 'L3'), []);
+  });
+});

@@ -79,6 +79,11 @@ describe('T5-T9: loop render-hooks verify:post --after-fingerprint (#5105 R2)', 
     assert.ok(securitySkip, `expected security step in skippedHooks; got: ${JSON.stringify(envelope.skippedHooks)}`);
     assert.strictEqual(securitySkip.reason, 'produces-present');
     assert.deepStrictEqual(securitySkip.artifacts, ['SECURITY.md']);
+    // #5105 S1: verify-work.md's secure-phase enablement check reads
+    // skippedHooks (not just activeHooks) — each entry must carry enough to
+    // resolve `kind == "step"` and `ref.skill == "secure-phase"` from it.
+    assert.strictEqual(securitySkip.kind, 'step');
+    assert.strictEqual(securitySkip.ref && securitySkip.ref.skill, 'secure-phase');
 
     const nyquistActive = envelope.activeHooks.find((h) => h.capId === 'nyquist');
     const uiActive = envelope.activeHooks.find((h) => h.capId === 'ui' && h.kind === 'step');
