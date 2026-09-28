@@ -7,7 +7,9 @@
 // binary on PATH) — every such instruction must use the `gsd_run` resolver the
 // same files already define. #725 fixed this only for the Codex install-
 // conversion pipeline; the Claude-facing SOURCE shipped the bare calls verbatim
-// until #2751 normalized them.
+// until #2751 normalized them. #4995 extends this to skills/*/SKILL.md, the
+// generated Claude Code plugin-skill mirror of commands/gsd/*.md — see the
+// SCAN_DIRS comment below for why it was excluded before and is not anymore.
 //
 // A pure regex cannot perfectly distinguish an imperative ("Use `gsd-tools query
 // commit` to commit") from a descriptive mention ("`gsd-tools query commit`
@@ -50,14 +52,23 @@ const ROUTER_PATH = path.join(ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
 // `gsd-tools query workstream.list`. Bringing commands/ under this guard therefore
 // needs those two contracts reconciled first; it is not a scan-set widening.
 //
-// skills/ is absent for a different reason: it is generated from commands/ by
-// scripts/gen-plugin-skills.cjs and pinned by lint:generated-sync, so guarding the
-// source guards both, and scanning the generated mirror would double-report every
-// future offender.
+// skills/ WAS excluded on the theory that "it is generated from commands/ ...
+// so guarding the source guards both, and scanning the mirror would
+// double-report every future offender" (#2751/#3809). That theory doesn't
+// hold: commands/ was reverted back OUT of this guard's scan set (see above),
+// so nothing was guarding the skills/ source, and scripts/gen-plugin-skills.cjs
+// performed no bare-command rewrite of its own — 11 sites across 4 files
+// (workstreams.md, quick.md, review-backlog.md, config.md) shipped bare
+// `gsd-tools` straight into skills/*/SKILL.md unseen (#4995). gen-plugin-skills.cjs
+// now rewrites bare gsd-tools -> gsd_run (+ resolver preamble in fenced blocks)
+// at generation time, the same way the Codex conversion pipeline (#725) rewrites
+// its own generated artifact rather than the shared source, so skills/ is
+// included here directly rather than relying on the (never-guarded) source.
 const SCAN_DIRS = [
   'agents',
   path.join('gsd-core', 'workflows'),
   path.join('gsd-core', 'references'),
+  'skills',
 ];
 
 // Derive the verb set the bare-call guard matches against. Most top-level
@@ -179,13 +190,13 @@ test('verb set was derived from the router (guards against a silent extraction r
   }
 });
 
-test('no command-position bare gsd-tools <verb> survives in agents/ or workflows/ (#2751)', () => {
+test('no command-position bare gsd-tools <verb> survives in agents/, workflows/, references/, or skills/ (#2751, #4995)', () => {
   const offenders = findBareCommandPositionCalls();
   assert.strictEqual(
     offenders.length,
     0,
     'Bare `gsd-tools <verb> <args>` command-position calls must use the `gsd_run` ' +
-      'resolver (they fail with "command not found" on a shim-only install — #2751). ' +
+      'resolver (they fail with "command not found" on a shim-only install — #2751, #4995). ' +
       `Found ${offenders.length} offender(s):\n` +
       offenders.map((o) => `  ${o.loc} [${o.verb}] ${o.text}`).join('\n') +
       '\n\nIf a hit is a descriptive prose mention (not an instruction to run the bare ' +
