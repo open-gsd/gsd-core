@@ -997,6 +997,18 @@ describe('spliceFrontmatter: exact delimiter handling', () => {
     const result = spliceFrontmatter(input, { k: 'v' });
     assert.equal(result, '---\nk: v\n---\nbody line');
   });
+
+  // Found while implementing #5105: an adjacent empty block has no line between its fences,
+  // but it was laid out as if it held one blank line, so the first key landed below a blank.
+  for (const [label, nl] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+    test(`an adjacent empty block gains the key with no blank line (${label})`, () => {
+      assert.equal(spliceFrontmatter(`---${nl}---${nl}Body`, { a: 1 }), `---${nl}a: 1${nl}---${nl}Body`);
+    });
+  }
+
+  test('a block holding one blank line keeps it', () => {
+    assert.equal(spliceFrontmatter('---\n\n---\nBody', { a: 1 }), '---\n\na: 1\n---\nBody');
+  });
 });
 
 // spliceFrontmatter per-key identity preservation + fail-closed (#1572). These exercise
