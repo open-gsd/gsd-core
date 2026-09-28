@@ -613,6 +613,39 @@ one-liner: Absolute path summary
     const output = JSON.parse(result.output);
     assert.strictEqual(output.one_liner, 'Absolute path summary', 'absolute summaryPath must resolve to the literal file');
   });
+
+  // #5013 orthogonal-review finding: making an absolute summaryPath resolve
+  // (above) must not also make it escape the project. An absolute path outside
+  // tmpDir, or a relative path that walks out via `..`, must be refused rather
+  // than silently read and echoed back.
+  test('absolute summaryPath outside the project root is refused, not read (#5013)', () => {
+    const outsideDir = createTempDir();
+    try {
+      const outsideFile = path.join(outsideDir, 'OUTSIDE-SUMMARY.md');
+      fs.writeFileSync(outsideFile, '---\none-liner: Should never be readable\n---\n');
+
+      const result = runGsdTools(['summary-extract', outsideFile], tmpDir);
+      assert.strictEqual(result.success, false, 'an absolute path outside the project root must be refused, not resolved');
+      assert.doesNotMatch(result.output || '', /Should never be readable/, 'refused content must never be echoed back');
+    } finally {
+      cleanup(outsideDir);
+    }
+  });
+
+  test('relative summaryPath escaping the project root via ".." is refused (#5013)', () => {
+    const outsideDir = createTempDir();
+    try {
+      const outsideFile = path.join(outsideDir, 'OUTSIDE-SUMMARY.md');
+      fs.writeFileSync(outsideFile, '---\none-liner: Should never be readable\n---\n');
+      const relEscape = path.relative(tmpDir, outsideFile);
+
+      const result = runGsdTools(['summary-extract', relEscape], tmpDir);
+      assert.strictEqual(result.success, false, 'a relative path that walks outside the project root must be refused, not resolved');
+      assert.doesNotMatch(result.output || '', /Should never be readable/, 'refused content must never be echoed back');
+    } finally {
+      cleanup(outsideDir);
+    }
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

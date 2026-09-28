@@ -3170,10 +3170,20 @@ function cmdSummaryExtract(cwd: string, summaryPath: string | undefined, fields:
     error('summary-path required for summary-extract');
   }
 
-  // #5013: path.resolve (not path.join) so an absolute summaryPath resolves to
-  // that literal path instead of being concatenated onto cwd — path.join has
-  // no special case for an absolute second argument the way path.resolve does.
-  const fullPath = path.resolve(cwd, summaryPath);
+  // #5013: requireSafePath (not path.join) so an absolute summaryPath resolves to
+  // that literal path instead of being concatenated onto cwd — path.join has no
+  // special case for an absolute second argument the way path.resolve does. Uses
+  // requireSafePath (the same PathAcceptance.AbsoluteInsideRoot pattern
+  // cmdAuditAcknowledge's write-side counterpart already uses in audit.cts)
+  // rather than a bare path.resolve: a plain path.resolve would also have made
+  // an absolute summaryPath anywhere on the filesystem resolve and have its
+  // content echoed back (this command reads and returns file content, unlike
+  // cmdVerifyPathExists's exists-only check) — an orthogonal-review finding on
+  // this same fix. requireSafePath keeps the acceptance criterion (an absolute
+  // path within the project resolves correctly) while refusing one that
+  // escapes cwd, and rejects relative `../` escapes the same way (pre-existing
+  // in this function, closed as a direct consequence, not separately in scope).
+  const fullPath = requireSafePath(summaryPath, cwd, 'summary-extract target', PathAcceptance.AbsoluteInsideRoot);
 
   if (!fs.existsSync(fullPath)) {
     output({ error: 'File not found', path: summaryPath }, raw, undefined);
