@@ -262,3 +262,79 @@ test('buildReportLines', async (t) => {
     }
   });
 });
+
+// #5088: GitHub's jobs API reports `completed_at` one second BEFORE
+// `started_at` for a job that never executed (every observed case was
+// `skipped` or `cancelled`), and a skipped job also carries a `completed_at`.
+// parseJobRecord used to hand those timestamps to computeElapsedPct, which
+// throws on negative elapsed time — and nothing above it catches, so ONE
+// such job discarded the whole scheduled report. A job that never ran has no
+// duration to report; a cancelled job that DID run (the timeout-killed case
+// this report exists to catch) must still be recorded.
+test('parseJobRecord skips jobs that never executed (#5088)', async (t) => {
+  const yamlText = 'jobs:\n  test:\n    timeout-minutes: 45\n';
+  const parse = (job) => parseJobRecord({
+    job: { name: 'test (ubuntu-latest, 24, shard 1/3)', run_id: 7, head_sha: 'abc', runEvent: 'push', ...job },
+    workflowFile: 'test.yml',
+    workflowYamlText: yamlText,
+    covered: null,
+  });
+
+  await t.test('skipped job with completed_at 1s before started_at returns null', () => {
+    assert.equal(parse({ conclusion: 'skipped', started_at: '2026-09-28T11:19:38Z', completed_at: '2026-09-28T11:19:37Z' }), null);
+  });
+
+  await t.test('cancelled-before-start job with inverted timestamps returns null', () => {
+    assert.equal(parse({ conclusion: 'cancelled', started_at: '2026-09-28T11:18:56Z', completed_at: '2026-09-28T11:18:55Z' }), null);
+  });
+
+  await t.test('skipped job with non-inverted timestamps still returns null', () => {
+    assert.equal(parse({ conclusion: 'skipped', started_at: '2026-09-28T11:19:38Z', completed_at: '2026-09-28T11:19:38Z' }), null);
+  });
+
+  await t.test('missing or unparseable started_at returns null instead of throwing', () => {
+    for (const started_at of [null, undefined, '', 'not-a-date']) {
+      assert.equal(parse({ conclusion: 'cancelled', started_at, completed_at: '2026-09-28T11:18:55Z' }), null, String(started_at));
+    }
+  });
+
+  await t.test('unparseable completed_at returns null instead of throwing', () => {
+    assert.equal(parse({ conclusion: 'success', started_at: '2026-09-28T11:00:00Z', completed_at: 'garbage' }), null);
+  });
+
+  await t.test('boundary: completed_at == started_at is a real zero-length record', () => {
+    const rec = parse({ conclusion: 'success', started_at: '2026-09-28T11:00:00Z', completed_at: '2026-09-28T11:00:00Z' });
+    assert.ok(rec);
+    assert.equal(rec.pct, 0);
+  });
+
+  await t.test('boundary: completed_at 1s after started_at is recorded', () => {
+    const rec = parse({ conclusion: 'success', started_at: '2026-09-28T11:00:00Z', completed_at: '2026-09-28T11:00:01Z' });
+    assert.ok(rec);
+    assert.equal(rec.pct, 1000 / (45 * 60000));
+  });
+
+  await t.test('a cancelled job that ran to its cap is still recorded (the timeout-killed case)', () => {
+    const rec = parse({ conclusion: 'cancelled', started_at: '2026-09-28T10:00:00Z', completed_at: '2026-09-28T10:45:00Z' });
+    assert.ok(rec);
+    assert.equal(rec.pct, 1);
+  });
+});
+
+test('buildReportLines keeps every real record when one job never executed (#5088)', () => {
+  const yamlText = 'jobs:\n  test:\n    timeout-minutes: 45\n';
+  const jobs = [
+    { name: 'test (ubuntu-latest, 24, shard 1/3)', conclusion: 'success', started_at: '2026-09-28T10:00:00Z', completed_at: '2026-09-28T10:10:00Z' },
+    { name: 'test (ubuntu-latest, 24, shard 2/3)', conclusion: 'skipped', started_at: '2026-09-28T10:00:01Z', completed_at: '2026-09-28T10:00:00Z' },
+    { name: 'test (ubuntu-latest, 24, shard 3/3)', conclusion: 'failure', started_at: '2026-09-28T10:00:00Z', completed_at: '2026-09-28T10:20:00Z' },
+  ];
+  const records = buildReportLines([{ run: { id: 36393086320, head_sha: '9ebd2b006', event: 'schedule' }, jobs }], {
+    workflowFile: 'test.yml',
+    workflowYamlText: yamlText,
+    covered: null,
+  });
+  assert.deepEqual(records.map((r) => r.jobName), [
+    'test (ubuntu-latest, 24, shard 1/3)',
+    'test (ubuntu-latest, 24, shard 3/3)',
+  ]);
+});
