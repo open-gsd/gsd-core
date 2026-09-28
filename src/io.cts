@@ -131,6 +131,65 @@ function writeAllSync(fd: number, data: string): void {
 }
 
 /**
+ * Temporarily patch `fs.writeSync` so everything written to fd 1 (stdout) is
+ * captured into a string instead of reaching the real stdout, run `run`, then
+ * restore the original `fs.writeSync` and resolve with what was captured.
+ *
+ * The ONE shared helper (#5105 S9) for "run a nested command and read its own
+ * JSON envelope back as data instead of letting it reach the real stdout" —
+ * used by gsd-tools.cjs's `--pick`/`@file:` resolution and by `uat.cts`'s
+ * `cmdUatCompleteSession` (which needs `cmdCommit`'s result object without
+ * emitting cmdCommit's own envelope as a second line of output). A single
+ * definition means both callers see the same Buffer/string/encoding handling
+ * and the same throw-mid-write flush behavior, rather than two hand-rolled
+ * monkeypatches drifting apart.
+ *
+ * On a throw from `run`, whatever was captured before the throw is flushed to
+ * the REAL stdout — the wrapped command may have already written its own
+ * JSON envelope and THEN thrown to set a non-zero exit code (e.g. a
+ * capability set/disable on an unknown id); without this flush that output
+ * would be silently discarded, since the success-path flush at the call site
+ * never runs on a throw. The error still propagates so the exit code is
+ * preserved.
+ */
+function captureStdoutSyncWrites(run: () => unknown): Promise<string> {
+  const originalWriteSync = fs.writeSync;
+  let captured = '';
+
+  fs.writeSync = ((fd: number, data: unknown, ...rest: unknown[]): number => {
+    if (fd === 1) {
+      if (Buffer.isBuffer(data)) {
+        captured += data.toString('utf-8');
+        return data.length;
+      }
+      const text = String(data);
+      captured += text;
+      let encoding: BufferEncoding = 'utf-8';
+      if (typeof rest[1] === 'string') encoding = rest[1] as BufferEncoding;
+      return Buffer.byteLength(text, encoding);
+    }
+    return (originalWriteSync as (...a: unknown[]) => number).call(fs, fd, data, ...rest);
+  });
+
+  const restore = (): void => {
+    fs.writeSync = originalWriteSync;
+  };
+
+  return Promise.resolve()
+    .then(() => run())
+    .then(() => {
+      restore();
+      return captured;
+    }, (err: unknown) => {
+      restore();
+      if (captured) {
+        try { (originalWriteSync as (...a: unknown[]) => number).call(fs, 1, captured); } catch { /* best-effort flush */ }
+      }
+      throw err;
+    });
+}
+
+/**
  * The wire form of a JSON result: the exact bytes `output()` emits for it.
  *
  * Exported because a caller that has to reason about the size of its own
@@ -469,4 +528,5 @@ export = {
   getJsonErrorMode,
   error,
   formatDiagnosticToken,
+  captureStdoutSyncWrites,
 };

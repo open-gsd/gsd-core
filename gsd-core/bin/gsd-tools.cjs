@@ -278,7 +278,7 @@ try {
 
 const { ExitError, runMain, resolveContractVersion } = require('./lib/cli-exit.cjs');
 const io = require('./lib/io.cjs');
-const { error, ERROR_REASON, setJsonErrorMode, output, formatDiagnosticToken } = io;
+const { error, ERROR_REASON, setJsonErrorMode, output, formatDiagnosticToken, captureStdoutSyncWrites } = io;
 const projectRoot = require('./lib/project-root.cjs');
 // Resolve findProjectRoot lazily at call time rather than binding it at module
 // load. It is sourced from project-root.cjs; a call-time lookup is robust
@@ -3082,7 +3082,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             const uat = require('./lib/uat.cjs');
             const uatPath = args[2];
             const options = parseNamedArgsOrExit(args, { valueFlags: ['message'], positionals: 3 }, error);
-            uat.cmdUatCompleteSession(cwd, uatPath, { message: options.message }, raw);
+            return uat.cmdUatCompleteSession(cwd, uatPath, { message: options.message }, raw);
           } else {
             error('Unknown uat subcommand. Available: render-checkpoint, classify-coverage, complete-session', ERROR_REASON.SDK_UNKNOWN_COMMAND);
           }
@@ -5431,47 +5431,8 @@ async function main() {
   fs.writeSync(1, resolveAtFileOutput(captured));
 }
 
-function captureStdoutSyncWrites(run) {
-  const originalWriteSync = fs.writeSync;
-  let captured = '';
-
-  fs.writeSync = function patchedWriteSync(fd, data, ...rest) {
-    if (fd === 1) {
-      if (Buffer.isBuffer(data)) {
-        captured += data.toString('utf-8');
-        return data.length;
-      }
-      const text = String(data);
-      captured += text;
-      let encoding = 'utf-8';
-      if (typeof rest[1] === 'string') encoding = rest[1];
-      return Buffer.byteLength(text, encoding);
-    }
-    return originalWriteSync.call(fs, fd, data, ...rest);
-  };
-
-  const restore = () => {
-    fs.writeSync = originalWriteSync;
-  };
-
-  return Promise.resolve()
-    .then(() => run())
-    .then(() => {
-      restore();
-      return captured;
-    }, (err) => {
-      restore();
-      // The wrapped command may have written to stdout BEFORE it threw — e.g. a --raw
-      // command that emits a JSON result/error envelope and THEN throws ExitError to set a
-      // non-zero exit code (capability set/disable on an unknown id). Without this flush that
-      // captured output is silently discarded (the success-path flush at the call site never
-      // runs on a throw). Emit it now; the error still propagates so the exit code is preserved.
-      if (captured) {
-        try { originalWriteSync.call(fs, 1, resolveAtFileOutput(captured)); } catch { /* best-effort flush */ }
-      }
-      throw err;
-    });
-}
+// captureStdoutSyncWrites moved to src/io.cts (gsd-core/bin/lib/io.cjs) — the
+// ONE shared helper (#5105 S9), also used by uat.cts's cmdUatCompleteSession.
 
 function resolveAtFileOutput(captured) {
   if (!captured.startsWith('@file:')) return captured;
