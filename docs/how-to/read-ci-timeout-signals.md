@@ -32,6 +32,11 @@ polls GitHub's Actions REST API directly — independent of whether any individu
 near-cap step ran — so it also catches jobs that were actually cancelled by a timeout breach
 (GitHub's Jobs API still reports `started_at`/`completed_at` for a cancelled job).
 
+A job that never ran has no row. That covers a `skipped` job, and any job whose `completed_at` is
+missing, unparseable, or earlier than its `started_at`. GitHub reports skipped jobs, and jobs
+cancelled before they started, with `completed_at` one second before `started_at`. A cancelled job
+that did run, such as one killed at its `timeout-minutes` cap, is still recorded (#5088).
+
 Each run's new rows land in `tests/ci-timeout-budget-history.jsonl`, one JSON object per line:
 
 ```json
