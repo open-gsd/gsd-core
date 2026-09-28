@@ -49,14 +49,24 @@ export interface FrontmatterFence {
 const CLOSING_FENCE_LINE = /^---[ \t]*$/;
 
 /**
+ * The lenient closer: a WHOLE line of four or more dashes, then only spaces or tabs. It closes
+ * a block only when no exact closer follows the opening fence — the pre-existing lenient parse
+ * of a `----`-closed block (#1882, `tests/unusable-input.test.cjs`), kept so such a document
+ * still reads its keys instead of reading as unterminated.
+ */
+const LENIENT_CLOSING_FENCE_LINE = /^-{4,}[ \t]*$/;
+
+/**
  * Locate the frontmatter fences of `text`, or null when it has none.
  *
  * The rules: a single leading BOM is tolerated (#2977); the opening fence is exactly `---`
  * followed by `\n` or `\r\n`, at byte 0 after the BOM — a `---` later in the document (a YAML
  * example, a thematic break) is never frontmatter; the closing fence is the first later line
  * that is `---` plus optional trailing spaces or tabs, ended by `\n`, `\r\n` or the end of the
- * text — `----`, `--- x`, `--` and a `---` ended by a lone CR at the end of the text are
- * content, not closers. A closer on the very next line is a closed, EMPTY block.
+ * text — `--- x`, `--` and a `---` ended by a lone CR at the end of the text are content, not
+ * closers. A closer on the very next line is a closed, EMPTY block. A line of four or more
+ * dashes is content while an exact closer follows it, and closes the block when none does
+ * (the pre-existing lenient `----` parse, #1882).
  *
  * An opened fence with no closer is reported (`closed: false`) rather than refused: readers
  * differ on what that means (the #1882 truncation probe warns, a writer refuses).
@@ -73,21 +83,27 @@ export function locateFrontmatterFence(text: string): FrontmatterFence | null {
   else return null;
   const openEnd = start + 3 + eol.length;
 
+  const closedAt = (lineStart: number, lineEnd: number): FrontmatterFence => {
+    let bodyEnd = openEnd;
+    if (lineStart > openEnd) {
+      // Back over the line ending that ends the last content line.
+      bodyEnd = lineStart - 1;
+      if (bodyEnd > openEnd && text[bodyEnd - 1] === '\r') bodyEnd -= 1;
+    }
+    return { bom, eol, openEnd, closed: true, closingStart: lineStart, closingFenceEnd: lineEnd, bodyEnd };
+  };
+
+  let lenient: [number, number] | null = null;
   let lineStart = openEnd;
   while (lineStart <= text.length) {
     const newline = text.indexOf('\n', lineStart);
     const lineEnd = newline === -1 ? text.length : newline > lineStart && text[newline - 1] === '\r' ? newline - 1 : newline;
-    if (CLOSING_FENCE_LINE.test(text.slice(lineStart, lineEnd))) {
-      let bodyEnd = openEnd;
-      if (lineStart > openEnd) {
-        // Back over the line ending that ends the last content line.
-        bodyEnd = lineStart - 1;
-        if (bodyEnd > openEnd && text[bodyEnd - 1] === '\r') bodyEnd -= 1;
-      }
-      return { bom, eol, openEnd, closed: true, closingStart: lineStart, closingFenceEnd: lineEnd, bodyEnd };
-    }
+    const line = text.slice(lineStart, lineEnd);
+    if (CLOSING_FENCE_LINE.test(line)) return closedAt(lineStart, lineEnd);
+    if (lenient === null && LENIENT_CLOSING_FENCE_LINE.test(line)) lenient = [lineStart, lineEnd];
     if (newline === -1) break;
     lineStart = newline + 1;
   }
+  if (lenient !== null) return closedAt(lenient[0], lenient[1]);
   return { bom, eol, openEnd, closed: false, closingStart: -1, closingFenceEnd: -1, bodyEnd: text.length };
 }
