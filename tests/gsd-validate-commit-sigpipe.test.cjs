@@ -32,7 +32,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
-const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { HOOK_FANOUT_TIMEOUT_MS, PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { cleanup } = require('./helpers.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
@@ -530,42 +530,97 @@ describe('#4429 follow-up — makeHookLayout must survive a concurrently-deleted
   // What the defect actually is, read off Node's source (lib/internal/fs/cp/
   // cp-sync.js `copyDir`, src/node_file.cc `CpSyncCopyDir`): an fs.cpSync with
   // NO filter hands the whole walk to the native `cpSyncCopyDir`, which opens
-  // every listed subdirectory with the THROWING form of
-  // `std::filesystem::directory_iterator`. Any failure to open a directory it
-  // has just listed — ENOENT because a concurrent build deleted it, or any
-  // other errno — escapes as an uncaught C++ exception and aborts the process
-  // (SIGABRT); no JS try/catch can intercept it. Passing ANY filter moves the
-  // walk onto the JS implementation, whose errors are ordinary, catchable
-  // Errors — which is why a deletion driven from a filter callback cannot
-  // reproduce this, and why the fix (a filter) works.
+  // every directory it walks with the THROWING form of
+  // `std::filesystem::directory_iterator`. Any failure to open one — ENOENT
+  // because a concurrent build deleted it, or any other errno — escapes as an
+  // uncaught C++ exception; Node is built without C++ exception support, so
+  // the process aborts (SIGABRT) and no JS try/catch can intercept it. Passing
+  // ANY filter moves the walk onto the JS implementation, whose errors are
+  // ordinary, catchable Errors — which is why a deletion driven from a filter
+  // callback cannot reproduce this, and why the fix (a filter) works.
   //
-  // So the injection point is that exact call, made to fail deterministically
-  // instead of by timing: the child leaves itself exactly ONE free file
-  // descriptor. The parent directory's opendir takes it; the staging
-  // directory's opendir then fails with EMFILE — every run, on every host.
-  // The same fixture copied WITH the shipped filter, under the identical
-  // injection, never enters the staging directory and completes.
+  // Two deterministic injections make that exact call fail — no timing:
+  //   ENOENT — a REAL deletion at a controlled point. cp-sync.js captures
+  //     fs.statSync when it is lazily loaded, so the child wraps fs.statSync
+  //     BEFORE its first cpSync; the wrapper deletes the source directory on
+  //     the copy's own pre-walk stat of it and returns the (real) stats. The
+  //     native walk then opens a directory that no longer exists.
+  //   EMFILE — the SUBDIRECTORY case (the staging dir inside hooks/). The
+  //     child leaves itself exactly one free file descriptor: the parent
+  //     directory's opendir takes it, the staging directory's opendir fails.
+  // Both rows pin the abort to the directory_iterator constructor by its own
+  // message and path: create_directory and the symlink branch of the same
+  // native walk ALSO abort, and a bare SIGABRT cannot tell them apart.
+  // Companion rows run the same injections WITH the shipped filter.
   const STAGING = '.dist-staging-999999';
 
+  // The native walker exists only in Node >= 22.17.0 (22.x) and >= 24.2.0
+  // (24.x) — cp-sync.js has no `fsBinding.cpSyncCopyDir(` call before those
+  // tags — and Node's main branch has since moved `CpSyncCopyDir` to the
+  // non-throwing `error_code` overloads. `true`/`false` where the source was
+  // checked, `null` for a release line nobody has checked yet.
+  function nativeAbortExpected(version = process.versions.node) {
+    const [major, minor] = version.split('.').map(Number);
+    if (major === 22) return minor >= 17;
+    if (major === 24) return minor >= 2;
+    if (major < 22) return false;
+    return null;
+  }
+
+  // The directory_iterator constructor's what() text: libstdc++ (Linux)
+  // first, libc++ (macOS) second. The ABORT'S OWN message is the only
+  // evidence of which native call threw — see the block comment above.
+  const ITERATOR_OPEN_FAILED = /directory iterator cannot open directory|directory_iterator::directory_iterator/;
+
   /**
-   * Copy a hooks-shaped fixture in a throwaway child that has exactly one free
-   * fd when the copy starts. Returns the seam result plus the JSON markers the
-   * child wrote (synchronously, so they survive an abort).
+   * Run one cpSync of a hooks-shaped fixture in a throwaway child with one
+   * injected failure. `injection` is 'enoent' or 'emfile'. Returns the seam
+   * result, the JSON markers the child wrote (synchronously, so they survive
+   * an abort), and the paths involved.
    */
-  function copyWithOneFreeFd(t, filtered) {
+  function copyWithInjectedFailure(t, injection, filtered) {
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4429-control-'));
     t.after(() => cleanup(fixtureRoot));
     const srcHooks = path.join(fixtureRoot, 'hooks');
+    const stagingPath = path.join(srcHooks, STAGING);
     // The staging directory is the ONLY entry: a regular file visited first
-    // would need fds of its own and fail catchably, before the walk ever
-    // reached the directory this control is about.
-    fs.mkdirSync(path.join(srcHooks, STAGING), { recursive: true });
-    fs.writeFileSync(path.join(srcHooks, STAGING, 'gsd-validate-commit.sh.123'), 'partial\n');
+    // would need fds of its own and fail catchably under the EMFILE injection,
+    // before the walk ever reached the directory this control is about.
+    fs.mkdirSync(stagingPath, { recursive: true });
+    fs.writeFileSync(path.join(stagingPath, 'gsd-validate-commit.sh.123'), 'partial\n');
     const dest = path.join(fixtureRoot, 'out');
 
-    // The filtered run uses the SHIPPED filter, re-hosted in the child with
+    const inject = injection === 'enoent'
+      ? [
+        // Installed before the FIRST cpSync in this process, so cp-sync.js
+        // captures the wrapper when it lazily loads.
+        'const realStatSync = fs.statSync;',
+        'let removed = false;',
+        'fs.statSync = function statSyncThatDeletes(p, o) {',
+        '  const stats = realStatSync.call(this, p, o);',
+        '  if (p === HOOKS_DIR && !removed) {',
+        '    removed = true;',
+        '    fs.rmSync(HOOKS_DIR, { recursive: true, force: true });',
+        '    fs.writeSync(1, JSON.stringify({ phase: "ready", removed: !fs.existsSync(HOOKS_DIR) }) + "\\n");',
+        '  }',
+        '  return stats;',
+        '};',
+      ]
+      : [
+        // Warm-up with descriptors to spare, so no lazy load happens later.
+        `fs.cpSync(HOOKS_DIR, ${JSON.stringify(`${dest}-warm`)}, opts);`,
+        'const held = [];',
+        'for (;;) {',
+        '  try { held.push(fs.openSync(os.devNull, "r")); }',
+        '  catch (e) { if (e.code === "EMFILE") break; throw e; }',
+        '}',
+        'fs.closeSync(held.pop());',
+        'fs.writeSync(1, JSON.stringify({ phase: "ready", held: held.length }) + "\\n");',
+      ];
+
+    // The filtered runs use the SHIPPED filter, re-hosted in the child with
     // HOOKS_DIR bound to this fixture — not a look-alike.
-    const child = path.join(fixtureRoot, 'copy-with-one-free-fd.cjs');
+    const child = path.join(fixtureRoot, 'copy-with-injected-failure.cjs');
     fs.writeFileSync(child, [
       "'use strict';",
       "const fs = require('node:fs');",
@@ -574,58 +629,114 @@ describe('#4429 follow-up — makeHookLayout must survive a concurrently-deleted
       `const HOOKS_DIR = ${JSON.stringify(srcHooks)};`,
       isSafeHooksCopyEntry.toString(),
       `const opts = { recursive: true, dereference: true${filtered ? ', filter: isSafeHooksCopyEntry' : ''} };`,
-      // Warm-up with descriptors to spare, so no lazy load happens later.
-      `fs.cpSync(HOOKS_DIR, ${JSON.stringify(`${dest}-warm`)}, opts);`,
-      'const held = [];',
-      'for (;;) {',
-      '  try { held.push(fs.openSync(os.devNull, "r")); }',
-      '  catch (e) { if (e.code === "EMFILE") break; throw e; }',
-      '}',
-      'fs.closeSync(held.pop());',
-      'fs.writeSync(1, JSON.stringify({ phase: "ready", held: held.length }) + "\\n");',
+      ...inject,
       'let phase;',
       `try { fs.cpSync(HOOKS_DIR, ${JSON.stringify(dest)}, opts); phase = "copied"; }`,
       'catch (e) { phase = "threw:" + e.code; }',
-      'for (const fd of held) fs.closeSync(fd);',
       'fs.writeSync(1, JSON.stringify({ phase }) + "\\n");',
     ].join('\n'));
-    // A soft descriptor limit keeps the fill loop to ~256 opens instead of a
-    // container's default of ~1M.
+
+    // EMFILE: a soft descriptor limit keeps the fill loop to ~256 opens
+    // instead of a container's default of ~1M. A hard limit below 256 makes
+    // `ulimit` fail — reported as a marker, never as a silent non-run.
     const limiter = path.join(fixtureRoot, 'limit-fds.sh');
-    fs.writeFileSync(limiter, 'ulimit -S -n 256 && exec "$@"\n');
+    fs.writeFileSync(limiter, [
+      'if [ "$GSD_4429_INJECTION" = emfile ]; then',
+      '  ulimit -S -n 256 || { printf \'{"phase":"ulimit-failed"}\\n\'; exit 97; }',
+      'fi',
+      'exec "$@"',
+      '',
+    ].join('\n'));
 
     const res = runHook(limiter, [process.execPath, child], {
       interpreter: 'sh',
-      timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
+      env: { ...process.env, GSD_4429_INJECTION: injection },
+      timeoutMs: PROBE_TIMEOUT_MS,
     });
     const markers = res.stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line));
-    return { res, markers, dest };
+    const detail = `node=${process.versions.node} outcome=${res.outcome} exitCode=${res.exitCode} `
+      + `signal=${res.signal} markers=${JSON.stringify(markers)} stderr=${res.stderr.slice(0, 600)}`;
+    // Anti-vacuous: the injection really happened before the copy started.
+    assert.notEqual(markers[0]?.phase, 'ulimit-failed',
+      `the descriptor limit could not be lowered to 256 (hard limit too low), so the EMFILE injection cannot run. ${detail}`);
+    assert.equal(markers[0]?.phase, 'ready', `the ${injection} injection never completed. ${detail}`);
+    if (injection === 'enoent') {
+      assert.equal(markers[0].removed, true, `the source directory still existed after the injected deletion. ${detail}`);
+    } else {
+      assert.ok(markers[0].held > 0, `no descriptors were held, so nothing was injected. ${detail}`);
+    }
+    return { res, markers, detail, srcHooks, stagingPath, dest };
   }
 
-  test('CONTROL: without the filter, a staging directory the native walk cannot open aborts the whole process (proves the defect is real)', (t) => {
-    const { res, markers } = copyWithOneFreeFd(t, false);
-    const detail = `outcome=${res.outcome} exitCode=${res.exitCode} signal=${res.signal} `
-      + `markers=${JSON.stringify(markers)} stderr=${res.stderr.slice(0, 400)}`;
-    // Anti-vacuous: the injection really happened — the fill loop reached
-    // EMFILE and the copy started with one descriptor free.
-    assert.equal(markers[0]?.phase, 'ready', `the fd injection never completed. ${detail}`);
-    assert.ok(markers[0].held > 0, `no descriptors were held, so nothing was injected. ${detail}`);
-    assert.equal(
-      res.outcome,
-      OUTCOME.KILLED,
-      'the unfiltered copy did not abort when the staging directory could not be opened, so this CONTROL '
-      + `does not reproduce the defect — re-derive it before trusting the fixed-copy rows. ${detail}`,
+  /**
+   * The behavior gate. The CONTROL claims "the unfiltered native walk ABORTS
+   * on a directory it cannot open". When the observed behavior stops matching
+   * that claim — or matches it on a Node this file says has no native walker —
+   * fail loudly with what changed, never skip.
+   */
+  function assertNativeAbort(res, markers, detail) {
+    const aborted = res.outcome === OUTCOME.KILLED && res.signal === 'SIGABRT';
+    const expected = nativeAbortExpected();
+    if (!aborted) {
+      assert.fail(
+        `Node ${process.versions.node}: the unfiltered cpSync did NOT abort — it `
+        + (markers[1]?.phase ? `returned to JS (${markers[1].phase})` : 'ended some other way')
+        + '. '
+        + (expected === false
+          ? 'This Node predates the native cpSyncCopyDir walker (added in 22.17.0 / 24.2.0), so the #4968 abort cannot occur here.'
+          : 'Either this Node has no native walker, or upstream moved CpSyncCopyDir to the non-throwing error_code overloads.')
+        + ' The #4968 defect as this CONTROL states it no longer reproduces: re-derive the CONTROL and '
+        + `re-evaluate whether isSafeHooksCopyEntry is still needed. ${detail}`,
+      );
+    }
+    assert.notEqual(
+      expected,
+      false,
+      `Node ${process.versions.node} aborted, but nativeAbortExpected() says this version has no native walker — `
+      + `the version window in this file is stale; correct it. ${detail}`,
     );
-    assert.equal(res.signal, 'SIGABRT', `expected an uncaught C++ exception (SIGABRT). ${detail}`);
     // The child's own try/catch never ran: the abort bypassed JS entirely.
     assert.equal(markers.length, 1, `the copy returned to JS instead of aborting. ${detail}`);
+  }
+
+  test('nativeAbortExpected encodes the checked Node release window', () => {
+    assert.equal(nativeAbortExpected('22.16.0'), false);
+    assert.equal(nativeAbortExpected('22.17.0'), true);
+    assert.equal(nativeAbortExpected('22.20.0'), true);
+    assert.equal(nativeAbortExpected('24.1.0'), false);
+    assert.equal(nativeAbortExpected('24.2.0'), true);
+    assert.equal(nativeAbortExpected('24.14.0'), true);
+    assert.equal(nativeAbortExpected('20.19.0'), false);
+    assert.equal(nativeAbortExpected('26.0.0'), null);
   });
 
-  test('the fixed copy (with the shipped filter) completes under the identical injection and never enters the staging directory', (t) => {
-    const { res, markers, dest } = copyWithOneFreeFd(t, true);
-    const detail = `outcome=${res.outcome} exitCode=${res.exitCode} signal=${res.signal} `
-      + `markers=${JSON.stringify(markers)} stderr=${res.stderr.slice(0, 400)}`;
-    assert.equal(markers[0]?.phase, 'ready', `the fd injection never completed. ${detail}`);
+  test('CONTROL (ENOENT): without the filter, a source directory deleted before the native walk opens it aborts the whole process (proves the defect is real)', (t) => {
+    const { res, markers, detail, srcHooks } = copyWithInjectedFailure(t, 'enoent', false);
+    assertNativeAbort(res, markers, detail);
+    // Maintainer decision on #5068: the abort's what() text is the ONLY record of which native call threw.
+    assert.match(res.stderr, ITERATOR_OPEN_FAILED, `the abort did not come from the directory_iterator constructor. ${detail}`);
+    assert.ok(res.stderr.includes('No such file or directory'), `the abort's errno is not ENOENT. ${detail}`);
+    assert.ok(res.stderr.includes(srcHooks), `the abort does not name the deleted directory. ${detail}`);
+  });
+
+  test('CONTROL (EMFILE): without the filter, a staging SUBDIRECTORY the native walk cannot open aborts the whole process', (t) => {
+    const { res, markers, detail, stagingPath } = copyWithInjectedFailure(t, 'emfile', false);
+    assertNativeAbort(res, markers, detail);
+    // Maintainer decision on #5068: the abort's what() text is the ONLY record of which native call threw.
+    assert.match(res.stderr, ITERATOR_OPEN_FAILED, `the abort did not come from the directory_iterator constructor. ${detail}`);
+    assert.ok(res.stderr.includes('Too many open files'), `the abort's errno is not EMFILE. ${detail}`);
+    assert.ok(res.stderr.includes(stagingPath), `the abort does not name the staging subdirectory. ${detail}`);
+  });
+
+  test('the fixed copy (with the shipped filter) turns the same ENOENT into a catchable error instead of an abort', (t) => {
+    const { res, markers, detail } = copyWithInjectedFailure(t, 'enoent', true);
+    assert.equal(res.outcome, OUTCOME.EXITED, detail);
+    assert.equal(res.exitCode, 0, detail);
+    assert.equal(markers[1]?.phase, 'threw:ENOENT', `the filtered copy did not surface a catchable ENOENT. ${detail}`);
+  });
+
+  test('the fixed copy (with the shipped filter) completes under the EMFILE injection and never enters the staging directory', (t) => {
+    const { res, markers, detail, dest } = copyWithInjectedFailure(t, 'emfile', true);
     assert.equal(res.outcome, OUTCOME.EXITED, detail);
     assert.equal(res.exitCode, 0, detail);
     assert.equal(markers[1]?.phase, 'copied', `the filtered copy did not complete. ${detail}`);
