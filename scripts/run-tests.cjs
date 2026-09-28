@@ -35,7 +35,7 @@
 // See docs/TESTING-SUITES.md for full grouping policy.
 'use strict';
 
-const { readdirSync, readFileSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } = require('fs');
+const { appendFileSync, readdirSync, readFileSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } = require('fs');
 const { join, basename } = require('path');
 const { tmpdir } = require('os');
 const { pathToFileURL } = require('url');
@@ -495,6 +495,16 @@ const DEFAULT_TIMINGS_PATH = join(__dirname, '..', 'tests', 'test-timings.json')
 // Must track SCHEMA_VERSION in scripts/gen-test-timings.cjs.
 const SUPPORTED_TIMINGS_SCHEMA = 1;
 
+// #5071: a per-platform table measured ON that platform (CI's Windows
+// conformance shards export per-file durations; `gen-test-timings.cjs
+// --platform win32` turns them into tests/test-timings.win32.json). Same
+// schema as the Linux table. Loaded only for the platform the runner is on,
+// and only alongside the DEFAULT Linux table — see loadedPlatformTimings in
+// main() for why an injected RUN_TESTS_TIMINGS_FILE does not pick it up.
+function platformTimingsPath(platform) {
+  return join(__dirname, '..', 'tests', `test-timings.${platform}.json`);
+}
+
 // Load the timing table and reduce it to what the packer needs.
 //
 // Weights are normalized by the table's MEAN duration, so an average-cost file
@@ -593,11 +603,53 @@ const WINDOWS_UNMEASURED_COST_MULTIPLIER = 2.2;
 // incident averaged 6659ms against a table mean of 7152ms — within 7%. That
 // equivalence does not hold on win32, where the table's own sources are
 // Linux-only (#4434).
-function makeFileWeigher(timings, platform = process.platform) {
+//
+// #5071: `platformTimings` (optional) is a table measured on `platform`
+// itself. A file it covers is weighed by THAT duration, because the Linux
+// table's relative ordering is exactly what mispredicts Windows cost (the
+// win32 conformance shards ran 25.2 / 29.0 / 31.6 min medians from one LPT
+// partition). Its milliseconds are CALIBRATED into this function's existing
+// unit — Linux-table weight — rather than normalized by their own mean:
+// MAX_FILES_PER_CHUNK, the isolation threshold and RUN_TESTS_SHARD_RESERVE
+// are all denominated in that unit, and the platform table covers a
+// different population (the conformance tier only) with a different mean, so
+// own-mean normalization would silently rescale all three. The scale factor
+// keeps the files BOTH tables measured at their combined Linux weight: the
+// pool's aggregate weight — and with it the chunk count — is unchanged, and
+// only its distribution moves to follow real platform cost. With no usable
+// overlap the scale falls back to 1 / the platform table's own mean. A file
+// the platform table does not cover keeps today's behavior exactly (its Linux
+// weight, else the unmeasured fallback), and a missing Linux table still
+// means uniform weight 1 — the Linux table is the unit anchor.
+function validMs(table, key) {
+  // Own-property lookup, for the reason given in makeFileWeigher below.
+  const ms = Object.hasOwn(table.timings, key) ? table.timings[key] : undefined;
+  return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? ms : undefined;
+}
+
+function platformScale(timings, platformTimings) {
+  let baseWeight = 0;
+  let platformMs = 0;
+  for (const key of Object.keys(platformTimings.timings)) {
+    const p = validMs(platformTimings, key);
+    const b = validMs(timings, key);
+    if (p === undefined || b === undefined) continue;
+    baseWeight += b / timings.mean;
+    platformMs += p;
+  }
+  return baseWeight > 0 && platformMs > 0 ? baseWeight / platformMs : 1 / platformTimings.mean;
+}
+
+function makeFileWeigher(timings, platform = process.platform, platformTimings = null) {
   if (!timings) return () => 1;
   const unmeasuredWeight = platform === 'win32' ? WINDOWS_UNMEASURED_COST_MULTIPLIER : 1;
+  const scale = platformTimings ? platformScale(timings, platformTimings) : 0;
   return (f) => {
     const key = basename(f);
+    if (platformTimings) {
+      const platformMs = validMs(platformTimings, key);
+      if (platformMs !== undefined) return platformMs * scale;
+    }
     // Own-property check before the lookup. This is defense-in-depth, NOT a
     // behavior change: the table is JSON-parsed, so a bare `timings[key]` would
     // walk the prototype chain, but the only keys that resolve there are
@@ -620,13 +672,66 @@ function makeFileWeigher(timings, platform = process.platform) {
 // balance). Isolation (partitionIsolatedFiles) needs the stronger fact: a
 // file must never be isolated on the strength of the unknown-file fallback
 // weight alone, only on a weight it actually earned.
-function makeMeasuredPredicate(timings) {
+//
+// #5071: a file measured only in the platform table has a real measurement
+// too, so it counts — but only when the Linux table loaded, matching
+// makeFileWeigher's "no Linux table means uniform weight" anchor.
+function makeMeasuredPredicate(timings, platformTimings = null) {
   if (!timings) return () => false;
   return (f) => {
     const key = basename(f);
-    const ms = Object.hasOwn(timings.timings, key) ? timings.timings[key] : undefined;
-    return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0;
+    return validMs(timings, key) !== undefined
+      || (platformTimings ? validMs(platformTimings, key) !== undefined : false);
   };
+}
+
+// #5071: reduce one chunk's companion-reporter events file (see
+// scripts/lib/ndjson-reporter.cjs) to its per-file durations. Only a
+// `test:summary` carrying a string `file` is a per-file measurement — the
+// run-level summary has no file, and a nesting-0 `test:pass` repeats a file's
+// duration under a different event, so neither may be counted. Lines are
+// independent: a truncated line from a killed chunk, or anything that is not
+// a JSON object, is skipped without affecting the rest.
+function extractFileSummaries(text) {
+  const out = [];
+  for (const line of String(text).split('\n')) {
+    if (line.trim() === '') continue;
+    let evt;
+    try {
+      evt = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!evt || typeof evt !== 'object' || evt.type !== 'test:summary') continue;
+    const { file, duration_ms: ms } = evt;
+    if (typeof file !== 'string' || typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) continue;
+    out.push({ file, duration_ms: ms });
+  }
+  return out;
+}
+
+// #5071: append one chunk's per-file durations to the run's export file, in
+// the node:test reporter-stream shape scripts/gen-test-timings.cjs already
+// folds (`{type:'test:summary', data:{file, duration_ms}}`). Advisory like the
+// table it feeds: a missing events file yields nothing, and a write failure is
+// RETURNED for the caller to report, never thrown into the chunk loop.
+function appendTimingExport(eventsPath, exportPath) {
+  let text;
+  try {
+    text = readFileSync(eventsPath, 'utf8');
+  } catch {
+    return { appended: 0, error: null };
+  }
+  const lines = extractFileSummaries(text).map(
+    (s) => `${JSON.stringify({ type: 'test:summary', data: { file: s.file, duration_ms: s.duration_ms } })}\n`,
+  );
+  if (lines.length === 0) return { appended: 0, error: null };
+  try {
+    appendFileSync(exportPath, lines.join(''));
+  } catch (err) {
+    return { appended: 0, error: err };
+  }
+  return { appended: lines.length, error: null };
 }
 
 // Pack `files` into chunks using LPT (longest-processing-time-first): sort by
@@ -817,12 +922,16 @@ function packChunks(files, { weightOf, maxWeight, maxChars, fixedOverhead, isMea
 // `isolationThresholdWeight` below converts that ms bar into the packer's
 // weight units by dividing by the LIVE timings table's own mean duration —
 // the same normalization `makeFileWeigher` already applies to every file, so
-// isolation and packing share one scale. This is platform-independent BY
-// CONSTRUCTION: the timings table is not sharded by OS, so every platform
-// computes the identical threshold weight and therefore the identical
-// isolated set (pinned by
-// "the isolated set is identical across win32, linux, darwin" in
-// tests/run-tests-harness.test.cjs). Isolating a file into its own chunk,
+// isolation and packing share one scale. With only the Linux table loaded
+// this is platform-independent BY CONSTRUCTION: every platform computes the
+// identical threshold weight and therefore the identical isolated set (pinned
+// by "the isolated set is identical across win32, linux, darwin" in
+// tests/run-tests-harness.test.cjs). #5071: where a platform-measured table
+// is committed (tests/test-timings.win32.json), makeFileWeigher calibrates
+// its files into the SAME weight unit, so the threshold is unchanged but a
+// file's weight on that platform follows its measured cost there — a file
+// that is heavy on Windows but not on Linux is isolated on Windows only,
+// which is the point. Isolating a file into its own chunk,
 // unconditionally, on every platform, removes the gamble at its source
 // rather than tuning a shared per-platform budget again around a moving
 // target: an isolated file never enters the shared pool `packChunks`
@@ -1148,12 +1257,16 @@ function analyzeChunkEvents(eventsPath) {
 // happens to be cheap) — an unmeasured file is an unknown quantity, not a
 // known-light one, and the table itself is advisory/stale (see the
 // loadTestTimings header), so this is presented as a hint, never a verdict.
-function rankChunkFilesByWeight(files, weightOf, timingsTable) {
+//
+// #5071: `platformTable` (optional) is the platform-measured table; a file it
+// covers is measured too, so it must not be labeled UNMEASURED.
+function rankChunkFilesByWeight(files, weightOf, timingsTable, platformTable = null) {
   return [...files]
     .map((f) => ({ base: basename(f), weight: weightOf(f) }))
     .sort((a, b) => b.weight - a.weight)
     .map(({ base, weight }, idx) => {
-      const measured = timingsTable ? Object.hasOwn(timingsTable.timings, base) : false;
+      const measured = (timingsTable ? Object.hasOwn(timingsTable.timings, base) : false)
+        || (platformTable ? Object.hasOwn(platformTable.timings, base) : false);
       return `  ${idx + 1}. ${base} (weight=${weight.toFixed(2)}${
         measured ? '' : ', UNMEASURED — absent from tests/test-timings.json (table is advisory'
           + ' and stale; treat this file as an unknown cost, not a cheap one)'
@@ -1399,17 +1512,35 @@ async function main() {
     }
     return timingsMemo;
   };
+  // #5071: the table measured on THIS platform, when one is committed
+  // (tests/test-timings.win32.json). RUN_TESTS_PLATFORM_TIMINGS_FILE
+  // overrides its path. Without that override the platform table is only
+  // consulted alongside the DEFAULT Linux table: a caller that injects its own
+  // RUN_TESTS_TIMINGS_FILE (every synthetic-table test in
+  // tests/run-tests-harness.test.cjs) gets exactly the cost profile it
+  // injected, not that profile silently blended with the real Windows one.
+  let platformTimingsMemo; // undefined = not loaded yet; null = loaded-but-absent
+  const loadedPlatformTimings = () => {
+    if (platformTimingsMemo === undefined) {
+      const override = process.env.RUN_TESTS_PLATFORM_TIMINGS_FILE;
+      let platformPath = null;
+      if (override) platformPath = override;
+      else if (!process.env.RUN_TESTS_TIMINGS_FILE) platformPath = platformTimingsPath(process.platform);
+      platformTimingsMemo = platformPath ? loadTestTimings(platformPath) : null;
+    }
+    return platformTimingsMemo;
+  };
   let weigherMemo = null;
   const fileWeightOf = () => {
     if (weigherMemo === null) {
-      weigherMemo = makeFileWeigher(loadedTimings(), process.platform);
+      weigherMemo = makeFileWeigher(loadedTimings(), process.platform, loadedPlatformTimings());
     }
     return weigherMemo;
   };
   let measuredMemo = null;
   const fileMeasuredOf = () => {
     if (measuredMemo === null) {
-      measuredMemo = makeMeasuredPredicate(loadedTimings());
+      measuredMemo = makeMeasuredPredicate(loadedTimings(), loadedPlatformTimings());
     }
     return measuredMemo;
   };
@@ -1586,6 +1717,15 @@ async function main() {
       + `weight=${myWeight.toFixed(2)} table=${table ? 'loaded' : 'absent'} `
       + `sig=${sig.toString(16)}`,
     );
+    // #5071: its own line, so the one above keeps its established format —
+    // how much of this shard the platform-measured table priced.
+    const platformTable = loadedPlatformTimings();
+    if (platformTable) {
+      const platformWeighed = mine.filter(n => Object.hasOwn(platformTable.timings, n)).length;
+      console.error(
+        `run-tests: platform-timings=${process.platform} weighed=${platformWeighed}/${mine.length}`,
+      );
+    }
   }
 
   // Default concurrency: 4 on Linux/macOS, 2 on Windows.
@@ -1769,6 +1909,17 @@ async function main() {
   // races with, or is polluted by, another chunk's events. Deleted on the
   // success path; kept only long enough to read back on a timeout.
   const eventsDir = mkdtempSync(join(tmpdir(), 'gsd-run-tests-events-'));
+
+  // #5071: when set, each chunk's per-file `test:summary` durations are
+  // appended here (CI uploads the file per Windows shard; gen-test-timings
+  // --platform turns it into the platform table). Removed from this process's
+  // environment BEFORE any chunk is spawned: chunks inherit process.env, and a
+  // test that itself spawns run-tests.cjs (the harness tests do, with
+  // synthetic fixtures) would otherwise append those fixtures' durations to
+  // the real export.
+  const timingExportPath = process.env.RUN_TESTS_TIMING_EVENTS_FILE || null;
+  delete process.env.RUN_TESTS_TIMING_EVENTS_FILE;
+  let timingExportWarned = false;
   // #3889: Node documents `--test-reporter`'s value as "a string similar to
   // those used in import() statements" (https://nodejs.org/api/test.html#--test-reporter),
   // NOT a bare filesystem path — a bare absolute path is not a portable
@@ -1956,7 +2107,7 @@ async function main() {
                 `completed. This diagnostic could not identify an in-flight file.`;
 
       const table = loadTestTimings(process.env.RUN_TESTS_TIMINGS_FILE || DEFAULT_TIMINGS_PATH);
-      const ranked = rankChunkFilesByWeight(chunks[i], fileWeightOf(), table).join('\n');
+      const ranked = rankChunkFilesByWeight(chunks[i], fileWeightOf(), table, loadedPlatformTimings()).join('\n');
 
       console.error(
         `run-tests: chunk ${i + 1}/${chunks.length} exceeded the per-chunk timeout ` +
@@ -1987,6 +2138,20 @@ async function main() {
       },
     );
     const elapsedMs = Number(process.hrtime.bigint() - chunkStartedAt) / 1e6;
+    // #5071: on every outcome — a failed or killed chunk's COMPLETED files
+    // are still genuine measurements — and before the success path below
+    // deletes the events file.
+    if (timingExportPath) {
+      const { error: exportError } = appendTimingExport(chunkEventsPath, timingExportPath);
+      if (exportError && !timingExportWarned) {
+        timingExportWarned = true;
+        console.error(
+          'run-tests: WARNING: could not append per-file durations to RUN_TESTS_TIMING_EVENTS_FILE='
+            + `"${timingExportPath}" (${exportError.code || exportError.message}); the timing `
+            + 'export is advisory, so the run continues.',
+        );
+      }
+    }
     if (!result.timedOut && result.code === 0 && !result.signal && !result.error) {
       console.error(
         `run-tests: chunk ${i + 1}/${chunks.length} completed in ${elapsedMs.toFixed(0)}ms`,
@@ -2113,7 +2278,10 @@ module.exports = {
   defaultMaxFilesPerChunk,
   defaultMaxUnmeasuredPerChunk,
   loadTestTimings,
+  platformTimingsPath,
   makeFileWeigher,
+  extractFileSummaries,
+  appendTimingExport,
   WINDOWS_UNMEASURED_COST_MULTIPLIER,
   makeMeasuredPredicate,
   packChunks,

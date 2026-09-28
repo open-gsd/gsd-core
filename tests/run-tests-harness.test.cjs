@@ -3952,3 +3952,423 @@ describe('runChunk per-chunk watchdog (#4936)', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// #5071 — per-platform (win32) timing table.
+//
+// The win32 conformance shards were packed from Linux-measured durations
+// (tests/test-timings.json, Linux containers only) with a 2.2x guess for
+// files the table never saw. These tests pin the three halves of the fix:
+// the runner EXPORTS each chunk's per-file `test:summary` durations when
+// RUN_TESTS_TIMING_EVENTS_FILE is set (CI uploads that file per Windows
+// shard), gen-test-timings --platform turns those exports into
+// tests/test-timings.<platform>.json, and makeFileWeigher PREFERS that table
+// on its platform — calibrated into the Linux table's weight units so
+// MAX_FILES_PER_CHUNK, the isolation threshold and RUN_TESTS_SHARD_RESERVE
+// keep their meaning.
+// ---------------------------------------------------------------------------
+
+const {
+  makeMeasuredPredicate: makeMeasuredPredicate5071,
+  extractFileSummaries,
+  platformTimingsPath,
+  defaultMaxFilesPerChunk: defaultMaxFilesPerChunk5071,
+  CHUNK_WORKING_BUDGET_MS: CHUNK_WORKING_BUDGET_MS_5071,
+} = require('../scripts/run-tests.cjs');
+const genTimings5071 = require('../scripts/gen-test-timings.cjs');
+const { PROBE_TIMEOUT_MS: PROBE_TIMEOUT_MS_5071 } = require('./helpers/timeouts.cjs');
+
+describe('per-platform timing table (#5071)', () => {
+  // Written through loadTestTimings so every table below has the exact shape
+  // main() hands the weigher in production, not a hand-built stand-in.
+  function loadTable(t, timings) {
+    const dir = createTempDir('gsd-5071-timings-');
+    t.after(() => cleanup(dir));
+    const p = path.join(dir, 'timings.json');
+    fs.writeFileSync(p, JSON.stringify({ schema_version: 1, unit: 'ms', timings }), 'utf8');
+    return loadTestTimings(p);
+  }
+
+  // Linux: a 10s, b 20s, c 60s  → mean 30s, weights 1/3, 2/3, 2.
+  const LINUX = { 'a.test.cjs': 10000, 'b.test.cjs': 20000, 'c.test.cjs': 60000 };
+  // Windows inverts a and c's ORDER — the misprediction this issue is about —
+  // and measures a file Linux never saw (w-only).
+  const WIN = { 'a.test.cjs': 90000, 'b.test.cjs': 40000, 'c.test.cjs': 50000, 'w-only.test.cjs': 30000 };
+
+  describe('makeFileWeigher with a platform table', () => {
+    test('win32: a file measured on windows is weighed by its windows duration', (t) => {
+      const weigh = makeFileWeigher(loadTable(t, LINUX), 'win32', loadTable(t, WIN));
+      // Linux ranks c heaviest; Windows measured a heaviest. The platform
+      // table must win.
+      assert.ok(weigh('a.test.cjs') > weigh('c.test.cjs'), 'windows ordering must replace linux ordering');
+      // Overlap {a,b,c}: linux weight sum = 3; windows ms sum = 180000 →
+      // scale 3/180000 per ms. a = 90000 * 3/180000 = 1.5.
+      assert.strictEqual(weigh('a.test.cjs'), 1.5);
+      assert.strictEqual(weigh('w-only.test.cjs'), 0.5);
+    });
+
+    test('win32: a file only in the linux table keeps its linux weight', (t) => {
+      const linux = loadTable(t, { ...LINUX, 'l-only.test.cjs': 30000 });
+      const withPlatform = makeFileWeigher(linux, 'win32', loadTable(t, WIN));
+      const without = makeFileWeigher(linux, 'win32');
+      assert.strictEqual(withPlatform('l-only.test.cjs'), without('l-only.test.cjs'));
+      assert.strictEqual(withPlatform('l-only.test.cjs'), 1);
+    });
+
+    test('win32: a file in neither table keeps the 2.2 fallback', (t) => {
+      const weigh = makeFileWeigher(loadTable(t, LINUX), 'win32', loadTable(t, WIN));
+      assert.strictEqual(weigh('never-measured.test.cjs'), WINDOWS_UNMEASURED_COST_MULTIPLIER);
+    });
+
+    test('calibration: total weight over the overlap is preserved', (t) => {
+      const linux = loadTable(t, LINUX);
+      const withPlatform = makeFileWeigher(linux, 'win32', loadTable(t, WIN));
+      const without = makeFileWeigher(linux, 'win32');
+      const overlap = Object.keys(LINUX);
+      const sum = (w) => overlap.reduce((s, f) => s + w(f), 0);
+      assert.ok(Math.abs(sum(withPlatform) - sum(without)) < 1e-9);
+      // …while the distribution DOES move: a weigher that ignored the platform
+      // table would preserve the total trivially.
+      // Windows ms x (3 / 180000): 90000 -> 1.5, 40000 -> 2/3, 50000 -> 5/6.
+      const expected = [1.5, 2 / 3, 5 / 6];
+      overlap.forEach((f, i) => {
+        assert.ok(Math.abs(withPlatform(f) - expected[i]) < 1e-12, `${f}: ${withPlatform(f)} vs ${expected[i]}`);
+      });
+      assert.notDeepStrictEqual(overlap.map((f) => withPlatform(f)), overlap.map((f) => without(f)));
+    });
+
+    test('property: calibration preserves the overlap total for any pair of tables', () => {
+      const fc = require('fast-check');
+      fc.assert(
+        fc.property(
+          fc.array(fc.tuple(fc.integer({ min: 1, max: 500000 }), fc.integer({ min: 1, max: 900000 })), { minLength: 1, maxLength: 25 }),
+          fc.array(fc.integer({ min: 0, max: 500000 }), { maxLength: 5 }),
+          (pairs, winOnly) => {
+            const linuxMap = {};
+            const winMap = {};
+            pairs.forEach(([l, w], i) => {
+              linuxMap[`o${i}.test.cjs`] = l;
+              winMap[`o${i}.test.cjs`] = w;
+            });
+            winOnly.forEach((w, i) => { winMap[`w${i}.test.cjs`] = w; });
+            const toTable = (m) => {
+              const vals = Object.values(m);
+              return { timings: m, mean: vals.reduce((a, b) => a + b, 0) / vals.length, medianWeight: 1 };
+            };
+            const linux = toTable(linuxMap);
+            const withPlatform = makeFileWeigher(linux, 'win32', toTable(winMap));
+            const without = makeFileWeigher(linux, 'win32');
+            const keys = Object.keys(linuxMap);
+            const a = keys.reduce((s, f) => s + withPlatform(f), 0);
+            const b = keys.reduce((s, f) => s + without(f), 0);
+            assert.ok(Math.abs(a - b) <= 1e-9 * Math.max(1, b), `overlap total drifted: ${a} vs ${b}`);
+          },
+        ),
+        { numRuns: 200, seed: 50710 },
+      );
+    });
+
+    test('calibration: no overlap falls back to the platform table\'s own mean', (t) => {
+      const weigh = makeFileWeigher(
+        loadTable(t, LINUX),
+        'win32',
+        loadTable(t, { 'x.test.cjs': 10000, 'y.test.cjs': 30000 }),
+      );
+      assert.strictEqual(weigh('x.test.cjs'), 0.5);
+      assert.strictEqual(weigh('y.test.cjs'), 1.5);
+    });
+
+    test('calibration: a zero-sum overlap falls back to the platform mean', (t) => {
+      const weigh = makeFileWeigher(
+        loadTable(t, { 'z.test.cjs': 0, 'a.test.cjs': 10000 }),
+        'win32',
+        loadTable(t, { 'z.test.cjs': 20000, 'q.test.cjs': 60000 }),
+      );
+      // Overlap {z}: linux weight 0 → no usable scale. Platform mean 40000.
+      assert.strictEqual(weigh('z.test.cjs'), 0.5);
+      assert.strictEqual(weigh('q.test.cjs'), 1.5);
+    });
+
+    test('property: omitting the platform table reproduces the two-arg weigher on every platform', () => {
+      const fc = require('fast-check');
+      fc.assert(
+        fc.property(
+          fc.array(fc.integer({ min: 0, max: 500000 }), { minLength: 1, maxLength: 20 }),
+          fc.constantFrom('win32', 'linux', 'darwin'),
+          fc.constantFrom(undefined, null),
+          (mss, platform, absent) => {
+            const m = Object.fromEntries(mss.map((ms, i) => [`p${i}.test.cjs`, ms]));
+            const mean = mss.reduce((a, b) => a + b, 0) / mss.length || 1;
+            const table = { timings: m, mean, medianWeight: 1 };
+            const two = makeFileWeigher(table, platform);
+            const three = makeFileWeigher(table, platform, absent);
+            for (const f of [...Object.keys(m), 'absent.test.cjs']) {
+              assert.strictEqual(three(f), two(f));
+            }
+          },
+        ),
+        { numRuns: 200, seed: 50711 },
+      );
+    });
+
+    test('a missing linux table still degrades to uniform weight 1 even with a platform table', (t) => {
+      const weigh = makeFileWeigher(null, 'win32', loadTable(t, WIN));
+      assert.strictEqual(weigh('a.test.cjs'), 1);
+      assert.strictEqual(weigh('never-measured.test.cjs'), 1);
+    });
+
+    test('a non-numeric platform entry falls back to the linux weight', (t) => {
+      const linux = loadTable(t, LINUX);
+      const platform = { timings: { 'a.test.cjs': 'slow', 'b.test.cjs': -5, 'c.test.cjs': Number.NaN }, mean: 1, medianWeight: 1 };
+      const weigh = makeFileWeigher(linux, 'win32', platform);
+      const base = makeFileWeigher(linux, 'win32');
+      for (const f of Object.keys(LINUX)) assert.strictEqual(weigh(f), base(f), f);
+    });
+
+    test('own-property lookup: prototype keys are never treated as measured', (t) => {
+      const weigh = makeFileWeigher(loadTable(t, LINUX), 'win32', loadTable(t, WIN));
+      const measured = makeMeasuredPredicate5071(loadTable(t, LINUX), loadTable(t, WIN));
+      for (const name of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+        assert.strictEqual(weigh(name), WINDOWS_UNMEASURED_COST_MULTIPLIER, name);
+        assert.strictEqual(measured(name), false, name);
+      }
+    });
+  });
+
+  test('makeMeasuredPredicate counts a file measured in either table', (t) => {
+    const linux = loadTable(t, LINUX);
+    const measured = makeMeasuredPredicate5071(linux, loadTable(t, WIN));
+    assert.strictEqual(measured('w-only.test.cjs'), true);
+    assert.strictEqual(measured('a.test.cjs'), true);
+    assert.strictEqual(measured('never-measured.test.cjs'), false);
+    assert.strictEqual(makeMeasuredPredicate5071(linux)('w-only.test.cjs'), false);
+    assert.strictEqual(makeMeasuredPredicate5071(null, loadTable(t, WIN))('w-only.test.cjs'), false);
+  });
+
+  test('platformTimingsPath names tests/test-timings.<platform>.json', () => {
+    const p = platformTimingsPath('win32');
+    assert.strictEqual(path.basename(p), 'test-timings.win32.json');
+    assert.strictEqual(path.dirname(p), path.dirname(DEFAULT_TIMINGS_PATH));
+  });
+
+  describe('extractFileSummaries', () => {
+    test('keeps only per-file summaries with a finite, non-negative duration', () => {
+      const text = [
+        JSON.stringify({ type: 'reporter:init', ts: 1 }),
+        JSON.stringify({ type: 'test:summary', file: 'C:\\w\\tests\\a.test.cjs', duration_ms: 12.5, ts: 2 }),
+        JSON.stringify({ type: 'test:summary', file: '/w/tests/b.test.cjs', duration_ms: 0, ts: 3 }),
+      ].join('\n');
+      assert.deepStrictEqual(extractFileSummaries(text), [
+        { file: 'C:\\w\\tests\\a.test.cjs', duration_ms: 12.5 },
+        { file: '/w/tests/b.test.cjs', duration_ms: 0 },
+      ]);
+    });
+
+    test('skips non-file, malformed, and hostile lines without throwing', () => {
+      const text = [
+        JSON.stringify({ type: 'test:summary', duration_ms: 99 }), // run-level total: no file
+        JSON.stringify({ type: 'test:pass', file: '/w/a.test.cjs', nesting: 0, duration_ms: 5 }),
+        JSON.stringify({ type: 'test:summary', file: '/w/n.test.cjs', duration_ms: -1 }),
+        JSON.stringify({ type: 'test:summary', file: '/w/s.test.cjs', duration_ms: '7' }),
+        JSON.stringify({ type: 'test:summary', file: 42, duration_ms: 7 }),
+        '0', '"str"', '[]', 'null', 'true', '',
+        '{"type":"test:summary","file":"/w/ok.test.cjs","duration_ms":3}\r',
+        '{"type":"test:summary","file":"/w/trunc',
+      ].join('\n');
+      assert.deepStrictEqual(extractFileSummaries(text), [{ file: '/w/ok.test.cjs', duration_ms: 3 }]);
+      assert.deepStrictEqual(extractFileSummaries(''), []);
+    });
+  });
+
+  test('the ndjson reporter records per-file test:summary with duration_ms', async (t) => {
+    const reporter = require('../scripts/lib/ndjson-reporter.cjs');
+    const dir = createTempDir('gsd-5071-reporter-');
+    t.after(() => cleanup(dir));
+    const eventsFile = path.join(dir, 'events.ndjson');
+    const saved = process.env.GSD_RUN_TESTS_EVENTS_FILE;
+    process.env.GSD_RUN_TESTS_EVENTS_FILE = eventsFile;
+    t.after(() => {
+      if (saved === undefined) delete process.env.GSD_RUN_TESTS_EVENTS_FILE;
+      else process.env.GSD_RUN_TESTS_EVENTS_FILE = saved;
+    });
+    async function* fakeEvents() {
+      yield { type: 'test:summary', data: { file: '/w/a.test.cjs', duration_ms: 41.5, success: true, counts: {} } };
+      yield { type: 'test:summary', data: { duration_ms: 50, success: true, counts: {} } };
+    }
+    await reporter(fakeEvents());
+    assert.deepStrictEqual(extractFileSummaries(fs.readFileSync(eventsFile, 'utf8')), [
+      { file: '/w/a.test.cjs', duration_ms: 41.5 },
+    ]);
+  });
+
+  describe('RUN_TESTS_TIMING_EVENTS_FILE export (end to end)', () => {
+    let dir;
+    beforeEach(() => { dir = createTempDir('gsd-5071-export-'); });
+    afterEach(() => { cleanup(dir); });
+
+    const ENV_PROBE_BODY = `'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+test('export env var is not inherited by chunk children', () => {
+  assert.strictEqual(process.env.RUN_TESTS_TIMING_EVENTS_FILE, undefined);
+});
+`;
+    const FAIL_BODY = `'use strict';
+const { test } = require('node:test');
+test('boom', () => { throw new Error('intentional'); });
+`;
+
+    function readExport(p) {
+      return splitLines(fs.readFileSync(p, 'utf8')).filter((l) => l.trim() !== '').map((l) => JSON.parse(l));
+    }
+
+    test('exports one test:summary per file, across chunks, in the reporter-stream shape', () => {
+      const tests = path.join(dir, 'tests');
+      seed(tests, ['one.test.cjs']);
+      fs.writeFileSync(path.join(tests, 'probe.test.cjs'), ENV_PROBE_BODY, 'utf8');
+      const out = path.join(dir, 'timing-events.jsonl');
+      const r = runHarness(tests, [], { RUN_TESTS_TIMING_EVENTS_FILE: out, RUN_TESTS_MAX_FILES_PER_CHUNK: '1' });
+      assert.strictEqual(r.status, 0, `harness must pass (the probe asserts the env var is not inherited):\n${r.stderr}`);
+      const events = readExport(out);
+      assert.deepStrictEqual(
+        events.map((e) => path.basename(e.data.file.replace(/\\/g, '/'))).sort(),
+        ['one.test.cjs', 'probe.test.cjs'],
+      );
+      for (const e of events) {
+        assert.strictEqual(e.type, 'test:summary');
+        assert.ok(Number.isFinite(e.data.duration_ms) && e.data.duration_ms >= 0);
+      }
+      // The export must be exactly what gen-test-timings consumes.
+      const acc = new Map();
+      const folded = genTimings5071.foldStream(fs.readFileSync(out, 'utf8'), acc);
+      assert.strictEqual(folded.files, 2);
+      assert.deepStrictEqual([...acc.keys()].sort(), ['one.test.cjs', 'probe.test.cjs']);
+    });
+
+    test('a failing chunk still exports its measured files', () => {
+      const tests = path.join(dir, 'tests');
+      seed(tests, ['ok.test.cjs']);
+      fs.writeFileSync(path.join(tests, 'bad.test.cjs'), FAIL_BODY, 'utf8');
+      const out = path.join(dir, 'timing-events.jsonl');
+      const r = runHarness(tests, [], { RUN_TESTS_TIMING_EVENTS_FILE: out, RUN_TESTS_MAX_FILES_PER_CHUNK: '1' });
+      assert.notStrictEqual(r.status, 0, 'the failing fixture must fail the run');
+      assert.deepStrictEqual(
+        readExport(out).map((e) => path.basename(e.data.file.replace(/\\/g, '/'))).sort(),
+        ['bad.test.cjs', 'ok.test.cjs'],
+      );
+    });
+
+    test('no export file is created when RUN_TESTS_TIMING_EVENTS_FILE is unset', () => {
+      const tests = path.join(dir, 'tests');
+      seed(tests, ['one.test.cjs']);
+      const r = runHarness(tests, [], { RUN_TESTS_TIMING_EVENTS_FILE: '' });
+      assert.strictEqual(r.status, 0, r.stderr);
+      assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['tests']);
+    });
+
+    test('an unwritable export path never changes the run\'s exit code', () => {
+      const tests = path.join(dir, 'tests');
+      seed(tests, ['one.test.cjs']);
+      const out = path.join(dir, 'no-such-dir', 'timing-events.jsonl');
+      const r = runHarness(tests, [], { RUN_TESTS_TIMING_EVENTS_FILE: out });
+      assert.strictEqual(r.status, 0, r.stderr);
+      assert.strictEqual(fs.existsSync(out), false);
+    });
+  });
+
+  describe('gen-test-timings --platform', () => {
+    test('selects the per-platform table and records the platform', () => {
+      const parsed = genTimings5071.parseArgs(['--platform', 'win32', 'events.jsonl']);
+      assert.strictEqual(parsed.error, undefined);
+      assert.strictEqual(parsed.platform, 'win32');
+      assert.strictEqual(parsed.out, platformTimingsPath('win32'));
+      const eq = genTimings5071.parseArgs(['--platform=win32', 'events.jsonl']);
+      assert.strictEqual(eq.platform, 'win32');
+      const withOut = genTimings5071.parseArgs(['--platform', 'win32', '--out', 'x.json', 'events.jsonl']);
+      assert.strictEqual(withOut.out, 'x.json');
+      assert.strictEqual(withOut.platform, 'win32');
+      const outFirst = genTimings5071.parseArgs(['--out', 'x.json', '--platform', 'win32', 'events.jsonl']);
+      assert.strictEqual(outFirst.out, 'x.json');
+      const none = genTimings5071.parseArgs(['events.jsonl']);
+      assert.strictEqual(none.platform, null);
+      assert.strictEqual(none.out, DEFAULT_TIMINGS_PATH);
+    });
+
+    test('rejects missing, empty, unknown, flag-looking and duplicate values', () => {
+      for (const argv of [
+        ['--platform'],
+        ['--platform', '--out', 'x.json', 'e.jsonl'],
+        ['--platform=', 'e.jsonl'],
+        ['--platform', 'solaris', 'e.jsonl'],
+        ['--platform', 'WIN32', 'e.jsonl'],
+        ['--platform', '../../x', 'e.jsonl'],
+        ['--platform', 'win32', '--platform', 'darwin', 'e.jsonl'],
+      ]) {
+        assert.ok(genTimings5071.parseArgs(argv).error, `expected an error for ${JSON.stringify(argv)}`);
+      }
+    });
+
+    test('builds a win32 table from an exported stream with windows paths', (t) => {
+      const dir = createTempDir('gsd-5071-gen-');
+      t.after(() => cleanup(dir));
+      const events = path.join(dir, 'test-timings-windows-shard1.jsonl');
+      fs.writeFileSync(events, [
+        JSON.stringify({ type: 'test:summary', data: { file: 'D:\\a\\gsd\\tests\\a.test.cjs', duration_ms: 1500.4 } }),
+        JSON.stringify({ type: 'test:summary', data: { file: 'D:\\a\\gsd\\tests\\installer-migrations\\m.test.cjs', duration_ms: 20 } }),
+      ].join('\n'), 'utf8');
+      const out = path.join(dir, 'test-timings.win32.json');
+      const r = runNode([path.join(__dirname, '..', 'scripts', 'gen-test-timings.cjs'), '--platform', 'win32', '--out', out, events], {
+        cwd: path.join(__dirname, '..'),
+        timeoutMs: PROBE_TIMEOUT_MS_5071,
+      });
+      assert.strictEqual(r.exitCode, 0, r.stderr);
+      const written = JSON.parse(fs.readFileSync(out, 'utf8'));
+      assert.strictEqual(written.platform, 'win32');
+      assert.strictEqual(written.schema_version, 1);
+      assert.deepStrictEqual(written.timings, { 'a.test.cjs': 1500, 'm.test.cjs': 20 });
+      assert.ok(loadTestTimings(out) !== null, 'the generated table must load through the runner\'s own loader');
+    });
+  });
+
+  describe('the checked-in win32 timing table', () => {
+    test('loads, records its platform, and keys only real test files', () => {
+      const p = platformTimingsPath('win32');
+      const table = loadTestTimings(p);
+      assert.ok(table !== null, `${p} must parse into a usable timing table`);
+      assert.strictEqual(JSON.parse(fs.readFileSync(p, 'utf8')).platform, 'win32');
+      const onDisk = new Set();
+      (function walk(d) {
+        for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+          if (e.isDirectory()) { if (e.name !== 'node_modules') walk(path.join(d, e.name)); } else if (e.name.endsWith('.test.cjs')) onDisk.add(e.name);
+        }
+      })(path.dirname(DEFAULT_TIMINGS_PATH));
+      const invalid = Object.entries(table.timings)
+        .filter(([f, v]) => !onDisk.has(f) || typeof v !== 'number' || !Number.isFinite(v) || v < 0)
+        .map(([f, v]) => `${f}=${v}`);
+      assert.deepStrictEqual(invalid, [], 'every win32 entry must name an existing test file with a finite non-negative cost');
+    });
+
+    // Spec-review finding on #5071: calibration preserves the pool's TOTAL
+    // weight but changes which files share a chunk, so the win32 weight
+    // budget (defaultMaxFilesPerChunk) must still be affordable when priced in
+    // real Windows cost. One weight unit is worth (win32 ms / weight) for any
+    // win32-measured file; a full chunk budget of summed in-child Windows time
+    // must fit CHUNK_WORKING_BUDGET_MS. Deliberately conservative: it ignores
+    // --test-concurrency=2, which roughly halves wall-clock, as headroom for
+    // the per-file spawn cost no table measures (~0.95s/file, fitted from the
+    // #5071 measurement run). Regenerating the table re-checks this.
+    test('the win32 chunk budget, priced by the committed win32 table, fits the working budget', () => {
+      const base = loadTestTimings(DEFAULT_TIMINGS_PATH);
+      const win = loadTestTimings(platformTimingsPath('win32'));
+      const weigh = makeFileWeigher(base, 'win32', win);
+      const probe = Object.keys(win.timings).find((f) => win.timings[f] > 0);
+      const msPerWeight = win.timings[probe] / weigh(probe);
+      const budgetMs = defaultMaxFilesPerChunk5071('win32') * msPerWeight;
+      assert.ok(
+        budgetMs <= CHUNK_WORKING_BUDGET_MS_5071,
+        `win32 chunk budget ${defaultMaxFilesPerChunk5071('win32')} x ${msPerWeight.toFixed(0)}ms/weight = ` +
+          `${budgetMs.toFixed(0)}ms exceeds CHUNK_WORKING_BUDGET_MS=${CHUNK_WORKING_BUDGET_MS_5071}`,
+      );
+    });
+  });
+});
