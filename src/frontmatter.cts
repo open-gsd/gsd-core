@@ -95,9 +95,37 @@ function isFrontmatterShaped(region: string): boolean {
  * are attached to the top-level key that follows them; comments after the last
  * key go to `trailing`. Only set when a comment is actually seen, so comment-less
  * frontmatter parses byte-identically to before.
+ *
+ * `leading` (and `inline`) are keyed by `commentPathKey` of the key path the comment belongs
+ * to — `["status"]` for a top-level key, `["progress","total"]` for a nested one — so a
+ * top-level key literally named `a.b` never shares an entry with sub-key `b` of map `a`.
+ * `inline` holds a comment that sits on its key's own line (`a: 1  # note`), verbatim from
+ * the whitespace before its `#`; only `spliceFrontmatter` sets it, for the one key it
+ * regenerates (see `segmentComments`).
  */
 const FULL_LINE_COMMENTS = Symbol('fullLineComments');
-type FullLineCommentChannel = { leading: Record<string, string[]>; trailing: string[] };
+type FullLineCommentChannel = { leading: Record<string, string[]>; trailing: string[]; inline?: Record<string, string> };
+
+/**
+ * The comment-channel entry name of a key path: the JSON array of its key segments, which no
+ * two different paths share whatever characters a key holds (found while implementing #5105 —
+ * a dot-joined path read a top-level key named `a.b` as sub-key `b` of map `a`).
+ */
+function commentPathKey(segments: readonly string[]): string {
+  return JSON.stringify(segments);
+}
+
+/**
+ * The mapping key a line opens and the line's indentation, or null for a line that opens no
+ * key (a list item, a flow or scalar continuation, a comment). The key is read exactly as
+ * `segmentKeyOf` reads a top-level one — a quoted key unescaped, a plain key ending at the
+ * first `:` followed by whitespace — at any indentation.
+ */
+function channelKeyLine(line: string): { indent: number; key: string } | null {
+  const indent = /^\s*/.exec(line)?.[0].length ?? 0;
+  const k = segmentKeyOf(line.slice(indent));
+  return k ? { indent, key: k.key } : null;
+}
 
 /**
  * ADR-3473 §8.1 §0.3 (#3881, consequence 2): a Symbol-keyed marker carried on the `{}`
@@ -359,25 +387,22 @@ function extractCommentChannel(yaml: string, orderedKeys: string[]): FullLineCom
   const lines = splitLines(yaml);
   // #3742: pending full-line comments carry their indentation so an INDENTED
   // comment (`  # note` above a nested key) can attach to the nested key that
-  // follows it — recorded under a dotted path key (`progress.total_phases`)
-  // that reconstructFrontmatter re-emits at the same nesting depth. Column-0
-  // comments keep the exact pre-#3742 behavior (top-level key attachment).
+  // follows it — recorded under its key path (`["progress","total_phases"]`,
+  // see `commentPathKey`) that reconstructFrontmatter re-emits at the same
+  // nesting depth. Column-0 comments keep the exact pre-#3742 behavior
+  // (top-level key attachment).
   let pending: Array<{ indent: number; line: string }> = [];
   let channel: FullLineCommentChannel | undefined;
   let keyIdx = 0;
-  // Stack of enclosing mapping keys with their indentation, for dotted-path
+  // Stack of enclosing mapping keys with their indentation, for key-path
   // construction on nested key lines. Only indented keys push here.
   const pathStack: Array<{ indent: number; key: string }> = [];
 
-  const attach = (pathKey: string, comments: Array<{ indent: number; line: string }>): void => {
+  const attach = (segments: string[], comments: Array<{ indent: number; line: string }>): void => {
     if (!channel) channel = { leading: Object.create(null) as Record<string, string[]>, trailing: [] };
-    // Null-prototype `leading` (post-#3881-review, finding 3): the path key is
-    // derived from arbitrary user-authored YAML keys — `constructor`,
-    // `__proto__`, `toString`, `valueOf`, `hasOwnProperty` all round-trip
-    // through here. On an ordinary `{}` those resolve to inherited
-    // Object.prototype members; the null prototype makes every lookup an
-    // own-property-or-undefined read.
-    channel.leading[pathKey] = comments.map((c) => c.line);
+    // Null-prototype `leading` (post-#3881-review, finding 3): every lookup is an
+    // own-property-or-undefined read, whatever key text a user-authored path holds.
+    channel.leading[commentPathKey(segments)] = comments.map((c) => c.line);
   };
 
   for (const line of lines) {
@@ -387,22 +412,17 @@ function extractCommentChannel(yaml: string, orderedKeys: string[]): FullLineCom
       pending.push({ indent: commentMatch[1].length, line });
       continue;
     }
-    // A list item (`- foo: bar`) is not a mapping key: its `- ` prefix would
-    // otherwise register as a key named `- foo` and corrupt the path stack
-    // (#3742 review). List items fall through to the pending-drop below.
-    const isListItem = /^\s*-\s/.test(line);
-    const keyLineMatch = isListItem
-      ? null
-      : /^(\s*)(?:"([^"]+)"|'([^']+)'|([^:\s][^:]*)):(?:\s|$)/.exec(line);
-    if (keyLineMatch) {
-      const indent = keyLineMatch[1].length;
-      const key = keyLineMatch[2] ?? keyLineMatch[3] ?? keyLineMatch[4];
+    // A list item (`- foo: bar`) is not a mapping key (#3742 review): `channelKeyLine`
+    // reads no key from it, so it falls through to the pending-drop below.
+    const keyLine = channelKeyLine(line);
+    if (keyLine) {
+      const { indent, key } = keyLine;
       if (indent === 0) {
         // Top-level: keep the pre-#3742 orderedKeys walk — the comment
         // attaches only to the next EXPECTED top-level key.
         if (keyIdx < orderedKeys.length && key === orderedKeys[keyIdx]) {
           const col0 = pending.filter((c) => c.indent === 0);
-          if (col0.length) attach(key, col0);
+          if (col0.length) attach([key], col0);
           keyIdx++;
           // A top-level mapping key opens a nesting context for the indented
           // keys that follow it (#3742 dotted-path attachment).
@@ -413,13 +433,13 @@ function extractCommentChannel(yaml: string, orderedKeys: string[]): FullLineCom
         }
       } else {
         // Nested key line: a pending comment at the SAME indentation attaches
-        // to this key under its dotted path. Deeper/misaligned pending
+        // to this key under its key path. Deeper/misaligned pending
         // comments were not leading this key — drop them, matching the
         // top-level rule's "attach only when a key follows" discipline.
         while (pathStack.length > 0 && pathStack[pathStack.length - 1].indent >= indent) pathStack.pop();
         const sameIndent = pending.filter((c) => c.indent === indent);
         if (sameIndent.length && key.length > 0) {
-          attach([...pathStack.map((e) => e.key), key].join('.'), sameIndent);
+          attach([...pathStack.map((e) => e.key), key], sameIndent);
         }
         pathStack.push({ indent, key });
         pending = [];
@@ -992,72 +1012,78 @@ function reconstructFrontmatter(obj: Frontmatter): string {
   // #3257: read the full-line-comment channel (set by parseGuardedYamlRegion when comments
   // were present). Object.entries skips the Symbol key, so the data loop is unchanged.
   const commentChannel = (obj as Record<symbol, unknown>)[FULL_LINE_COMMENTS as unknown as symbol] as FullLineCommentChannel | undefined;
+  // A key's leading full-line comments and its inline comment, by exact key path.
+  const leadingOf = (segments: string[]): string[] | undefined => commentChannel?.leading[commentPathKey(segments)];
+  const inlineOf = (segments: string[]): string => commentChannel?.inline?.[commentPathKey(segments)] ?? '';
   for (const [key, value] of Object.entries(obj)) {
     if (value === null || value === undefined) continue;
     // #3257: re-emit this key's leading full-line comments before the key itself.
-    const leading = commentChannel?.leading[key];
+    const leading = leadingOf([key]);
     if (leading) for (const c of leading) lines.push(c);
+    const inline = inlineOf([key]);
     if (Array.isArray(value)) {
       if (value.length === 0) {
-        lines.push(`${key}: []`);
+        lines.push(`${key}: []${inline}`);
       } else if (value.every(isPlainFlowSequenceItem) && value.length <= 3 && (value).join(', ').length < 60) {
-        lines.push(`${key}: [${(value).join(', ')}]`);
+        lines.push(`${key}: [${(value).join(', ')}]${inline}`);
       } else {
-        lines.push(`${key}:`);
+        lines.push(`${key}:${inline}`);
         for (const item of value) {
           lines.push(`  - ${blockSequenceItem(item)}`);
         }
       }
     } else if (typeof value === 'object') {
-      lines.push(`${key}:`);
+      lines.push(`${key}:${inline}`);
       for (const [subkey, subval] of Object.entries(value)) {
         if (subval === null || subval === undefined) continue;
         // #3742: re-emit a nested key's leading full-line comments (channel
-        // path key `parent.subkey`) at the subkey's own indentation.
-        const nestedLeading = commentChannel?.leading[`${key}.${subkey}`];
+        // path `[parent, subkey]`) at the subkey's own indentation.
+        const nestedLeading = leadingOf([key, subkey]);
         if (nestedLeading) for (const c of nestedLeading) lines.push(`  ${c.trimStart()}`);
+        const subInline = inlineOf([key, subkey]);
         if (Array.isArray(subval)) {
           if (subval.length === 0) {
-            lines.push(`  ${subkey}: []`);
+            lines.push(`  ${subkey}: []${subInline}`);
           } else if (subval.every(isPlainFlowSequenceItem) && subval.length <= 3 && (subval).join(', ').length < 60) {
-            lines.push(`  ${subkey}: [${(subval).join(', ')}]`);
+            lines.push(`  ${subkey}: [${(subval).join(', ')}]${subInline}`);
           } else {
-            lines.push(`  ${subkey}:`);
+            lines.push(`  ${subkey}:${subInline}`);
             for (const item of subval) {
               lines.push(`    - ${blockSequenceItem(item)}`);
             }
           }
         } else if (typeof subval === 'object') {
-          lines.push(`  ${subkey}:`);
+          lines.push(`  ${subkey}:${subInline}`);
           for (const [subsubkey, subsubval] of Object.entries(subval as Record<string, unknown>)) {
             if (subsubval === null || subsubval === undefined) continue;
             // #3742: same nested-comment re-emission one level deeper
-            // (`parent.sub.subsub`).
-            const deepLeading = commentChannel?.leading[`${key}.${subkey}.${subsubkey}`];
+            // (`[parent, sub, subsub]`).
+            const deepLeading = leadingOf([key, subkey, subsubkey]);
             if (deepLeading) for (const c of deepLeading) lines.push(`    ${c.trimStart()}`);
+            const deepInline = inlineOf([key, subkey, subsubkey]);
             if (Array.isArray(subsubval)) {
               if (subsubval.length === 0) {
-                lines.push(`    ${subsubkey}: []`);
+                lines.push(`    ${subsubkey}: []${deepInline}`);
               } else {
-                lines.push(`    ${subsubkey}:`);
+                lines.push(`    ${subsubkey}:${deepInline}`);
                 for (const item of subsubval) {
                   lines.push(`      - ${blockSequenceItem(item)}`);
                 }
               }
             } else {
-              lines.push(`    ${subsubkey}: ${nestedScalar(subsubval)}`);
+              lines.push(`    ${subsubkey}: ${nestedScalar(subsubval)}${deepInline}`);
             }
           }
         } else {
-          lines.push(`  ${subkey}: ${nestedScalar(subval)}`);
+          lines.push(`  ${subkey}: ${nestedScalar(subval)}${subInline}`);
         }
       }
     } else {
       const sv = String(value);
       if (sv.includes(':') || sv.includes('#') || sv.startsWith('[') || sv.startsWith('{') || scalarNeedsDoubleQuoting(sv) || generalScalarNeedsNumericQuoting(sv)) {
-        lines.push(`${key}: "${escapeDoubleQuotedScalar(sv)}"`);
+        lines.push(`${key}: "${escapeDoubleQuotedScalar(sv)}"${inline}`);
       } else {
-        lines.push(`${key}: ${sv}`);
+        lines.push(`${key}: ${sv}${inline}`);
       }
     }
   }
@@ -1082,8 +1108,8 @@ function propagateCommentChannel(source: Frontmatter, target: Frontmatter): void
   if (!channel) return;
   // #3742: two changes, both about a target that is a PARTIAL rebuild.
   //
-  // (a) Root-segment membership: a comment keyed by a dotted path
-  //     (`progress.total_plans`) survives while its root section survives —
+  // (a) Root-segment membership: a comment keyed by a nested path
+  //     (`["progress","total_plans"]`) survives while its root section survives —
   //     requiring the full path to resolve inside `target` would drop every
   //     nested comment the moment the rebuild reconstructed the section
   //     object (a fresh object with the same leaf keys still matches at
@@ -1094,8 +1120,10 @@ function propagateCommentChannel(source: Frontmatter, target: Frontmatter): void
   //     concatenate (source first, mirroring document order when the source
   //     is the earlier snapshot).
   const hasOwn = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
+  // The root is the path's first segment (`commentPathKey`), never text before a `.` — a
+  // top-level key named `a.b` is its own root (found while implementing #5105).
   const rootAlive = (k: string): boolean => {
-    const root = k.split('.')[0];
+    const root = (JSON.parse(k) as string[])[0];
     return hasOwn(target, root);
   };
   // Null-prototype `leading` (post-#3881-review, finding 3) — same rationale as
@@ -1267,21 +1295,12 @@ function sliceFrontmatterLayout(yaml: string): { preamble: string[]; segments: F
 function regenerateFrontmatterKey(key: string, value: FrontmatterValue, comments?: FullLineCommentChannel): string {
   // Computed key: a key named `__proto__` is an own data property here, never the prototype.
   const single: Frontmatter = { [key]: value };
-  // The comments nested inside this key's value (#3742 dotted paths `key.sub`,
-  // `key.sub.subsub`) ride along, so `reconstructFrontmatter` re-emits each beside the
-  // sub-key it leads. The key's own leading comment (`leading[key]`) and the block's
-  // trailing comments are not part of the value: they sit in the splice's preamble or a
-  // neighbour's tail, which is re-emitted verbatim, so they are left out here.
-  if (comments) {
-    const nested: Record<string, string[]> = Object.create(null) as Record<string, string[]>;
-    for (const [path, lines] of Object.entries(comments.leading)) {
-      if (path.startsWith(`${key}.`)) nested[path] = lines;
-    }
-    if (Object.keys(nested).length > 0) {
-      const scoped: FullLineCommentChannel = { leading: nested, trailing: [] };
-      (single as Record<symbol, unknown>)[FULL_LINE_COMMENTS as unknown as symbol] = scoped;
-    }
-  }
+  // `comments` are the comments written inside this key's own value lines, keyed by exact
+  // key path (`segmentComments`), so `reconstructFrontmatter` re-emits each beside the key it
+  // belongs to. The key's own leading comment and the block's trailing comments are not part
+  // of the value: they sit in the splice's preamble or a neighbour's tail, which is re-emitted
+  // verbatim.
+  if (comments) (single as Record<symbol, unknown>)[FULL_LINE_COMMENTS as unknown as symbol] = comments;
   const rendered = reconstructFrontmatter(single);
   if (/\[object Object\]/.test(rendered)) {
     throw new Error(
@@ -1310,10 +1329,11 @@ function regenerateFrontmatterKey(key: string, value: FrontmatterValue, comments
  * duplicate or drop a key. `FRONTMATTER_SPLICE_VERIFY_FAILED`: the block the writer built
  * does not read back as the intended object (a value or nested key the serializer cannot
  * represent), so writing it would store something other than what the caller asked for.
- * `FRONTMATTER_COMMENT_WOULD_BE_LOST`: a changed key's value holds a full-line comment the
- * regenerated value cannot carry (its sub-key was removed, the value is no longer a map, the
- * comment sits between list items or trails the value), so writing would silently drop text
- * the author wrote (#3257/#3742 treat those comments as preserved data).
+ * `FRONTMATTER_COMMENT_WOULD_BE_LOST`: a changed key's value holds a comment — full-line or
+ * inline — the regenerated value cannot carry (the key it belongs to was removed or is no
+ * longer a key, the comment sits on or between list items or trails the value), so writing
+ * would silently drop text the author wrote (#3257/#3742 treat those comments as preserved
+ * data).
  */
 type FrontmatterWriteRefusalCode =
   | 'FRONTMATTER_UNPARSEABLE'
@@ -1390,46 +1410,122 @@ function verifyReadsBackAs(out: string, newObj: Frontmatter): string {
 }
 
 /**
- * The full-line comments inside one key's value lines (`body`, key line first): each `#`
- * line the parser ignores — the key's lines parse to the same value without it. A `#` line
- * inside a block scalar or a multi-line quoted scalar is value text, not a comment. When the
- * lines do not parse on their own every `#` line counts, so the check below fails closed.
+ * Is `lines[i]` a full-line comment the parser ignores — do the key's lines parse to the
+ * same value without it? A `#` line inside a block scalar or a multi-line quoted scalar is
+ * value text, not a comment. When the lines do not parse on their own (`whole` null) every
+ * `#` line counts, so the comment post-condition fails closed.
  */
-function segmentBodyComments(body: string[]): string[] {
-  const whole = loadSegmentValue(body);
-  const comments: string[] = [];
-  for (let i = 1; i < body.length; i++) {
-    if (!/^\s*#/.test(body[i])) continue;
-    const without = whole ? loadSegmentValue([...body.slice(0, i), ...body.slice(i + 1)]) : null;
-    if (!whole || (without !== null && frontmatterDeepEqual(without.value, whole.value))) comments.push(body[i].trim());
-  }
-  return comments;
+function isSegmentComment(lines: string[], i: number, whole: { value: unknown } | null): boolean {
+  if (!/^\s*#/.test(lines[i])) return false;
+  if (!whole) return true;
+  const without = loadSegmentValue([...lines.slice(0, i), ...lines.slice(i + 1)]);
+  return without !== null && frontmatterDeepEqual(without.value, whole.value);
 }
 
 /**
- * The comment post-condition of regenerating a changed key: every full-line comment its
- * original value held appears in the regenerated text exactly as often (compared trimmed —
- * `reconstructFrontmatter` re-indents a nested comment to its sub-key's depth). A comment
- * that could not be re-attached is refused, never silently dropped (found while
- * implementing #5105).
+ * Where the inline comment on `lines[i]` starts (the whitespace before its `#`), or -1. A
+ * ` #` is a comment only when the key's lines parse to the same value with the line cut
+ * there, so a `#` inside a quoted scalar or a block scalar never counts. When the lines do
+ * not parse on their own (`whole` null) the first ` #` counts.
  */
-function assertCommentsKept(key: string, originalBody: string[], regenerated: string): void {
-  const counts = new Map<string, number>();
-  for (const c of segmentBodyComments(originalBody)) counts.set(c, (counts.get(c) ?? 0) + 1);
-  for (const line of splitLines(regenerated)) {
-    const t = line.trim();
-    if (t.startsWith('#')) counts.set(t, (counts.get(t) ?? 0) - 1);
+function inlineCommentStart(lines: string[], i: number, whole: { value: unknown } | null): number {
+  const line = lines[i];
+  const hashes = /[ \t]#/g;
+  for (let m = hashes.exec(line); m !== null; m = hashes.exec(line)) {
+    let start = m.index;
+    while (start > 0 && (line[start - 1] === ' ' || line[start - 1] === '\t')) start--;
+    if (!whole) return start;
+    const cut = loadSegmentValue([...lines.slice(0, i), line.slice(0, start), ...lines.slice(i + 1)]);
+    if (cut !== null && frontmatterDeepEqual(cut.value, whole.value)) return start;
   }
-  const lost = [...counts].filter(([, n]) => n !== 0).map(([c]) => c);
-  if (lost.length > 0) {
-    throw new FrontmatterWriteRefusedError(
-      'FRONTMATTER_COMMENT_WOULD_BE_LOST',
-      `frontmatter: refusing to write — the new value of "${key}" cannot keep the full-line comment(s) ` +
-        `written inside it (${lost.map((c) => JSON.stringify(c)).join(', ')}): a comment on a sub-key that ` +
-        'is removed, between list items, or after the last line of the value has nowhere to go. Edit the ' +
-        'file directly.',
-    );
+  return -1;
+}
+
+/**
+ * The comments inside one top-level key's value lines (`lines`, key line first), by the key
+ * path they belong to — the same attachment `extractCommentChannel` uses: a full-line
+ * comment leads the key line that follows it at the same indentation, and an inline comment
+ * belongs to the key on its own line. `channel` is what `reconstructFrontmatter` re-emits
+ * when this key is regenerated; `unattached` is every comment with no key to belong to (on
+ * or between list items, misindented, after the last line of the value), trimmed.
+ */
+type SegmentComments = { channel: FullLineCommentChannel & { inline: Record<string, string> }; unattached: string[] };
+
+function segmentComments(key: string, lines: string[]): SegmentComments {
+  const whole = loadSegmentValue(lines);
+  const leading = Object.create(null) as Record<string, string[]>;
+  const inline = Object.create(null) as Record<string, string>;
+  const unattached: string[] = [];
+  const stack: Array<{ indent: number; key: string }> = [];
+  let pending: Array<{ indent: number; line: string }> = [];
+  const loosen = (comments: Array<{ line: string }>): void => { for (const c of comments) unattached.push(c.line.trim()); };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (i > 0 && line.trim() === '') continue;
+    if (i > 0 && isSegmentComment(lines, i, whole)) {
+      pending.push({ indent: /^\s*/.exec(line)?.[0].length ?? 0, line });
+      continue;
+    }
+    const at = inlineCommentStart(lines, i, whole);
+    let owner: string[] | null = i === 0 ? [key] : null;
+    if (i > 0) {
+      const k = channelKeyLine(at === -1 ? line : line.slice(0, at));
+      if (k && k.indent > 0 && k.key.length > 0) {
+        while (stack.length > 0 && stack[stack.length - 1].indent >= k.indent) stack.pop();
+        owner = [key, ...stack.map((e) => e.key), k.key];
+        const same = pending.filter((c) => c.indent === k.indent);
+        if (same.length > 0) leading[commentPathKey(owner)] = same.map((c) => c.line);
+        loosen(pending.filter((c) => c.indent !== k.indent));
+        stack.push({ indent: k.indent, key: k.key });
+      } else {
+        loosen(pending);
+      }
+      pending = [];
+    }
+    if (at !== -1) {
+      // A ` #` on lines that do not parse on their own may be value text: never re-emit it.
+      if (owner && whole) inline[commentPathKey(owner)] = line.slice(at);
+      else unattached.push(line.slice(at).trim());
+    }
   }
+  loosen(pending);
+  return { channel: { leading, trailing: [], inline }, unattached };
+}
+
+/**
+ * The comment post-condition of regenerating a changed key: every comment its original value
+ * lines held — full-line or inline — appears in the regenerated text beside the SAME key path
+ * (compared trimmed — `reconstructFrontmatter` re-indents a nested comment to its key's
+ * depth). Compared per exact path, never as a global count, so a comment dropped in one place
+ * can never be balanced by an identical one elsewhere. A comment that could not be re-attached
+ * is refused, never silently dropped (found while implementing #5105).
+ */
+function assertCommentsKept(key: string, original: SegmentComments, regenerated: string): void {
+  const placed = (c: SegmentComments): Map<string, number> => {
+    const counts = new Map<string, number>();
+    const add = (entry: string): void => { counts.set(entry, (counts.get(entry) ?? 0) + 1); };
+    for (const [path, lines] of Object.entries(c.channel.leading)) for (const l of lines) add(JSON.stringify(['above', path, l.trim()]));
+    for (const [path, text] of Object.entries(c.channel.inline)) add(JSON.stringify(['beside', path, text.trim()]));
+    for (const text of c.unattached) add(JSON.stringify(['loose', '', text]));
+    return counts;
+  };
+  const before = placed(original);
+  const after = placed(segmentComments(key, splitLines(regenerated)));
+  const differs = (entry: string): boolean => (before.get(entry) ?? 0) !== (after.get(entry) ?? 0);
+  const lost = [...before.keys()].filter(differs);
+  if (lost.length === 0 && ![...after.keys()].some(differs)) return;
+  const describe = (entry: string): string => {
+    const [where, path, text] = JSON.parse(entry) as [string, string, string];
+    const keyPath = path === '' ? '' : (JSON.parse(path) as string[]).map((s) => JSON.stringify(s)).join(' › ');
+    return where === 'loose' ? `${JSON.stringify(text)} (not beside any key)` : `${JSON.stringify(text)} ${where} ${keyPath}`;
+  };
+  throw new FrontmatterWriteRefusedError(
+    'FRONTMATTER_COMMENT_WOULD_BE_LOST',
+    `frontmatter: refusing to write — the new value of "${key}" cannot keep the comment(s) written ` +
+      `inside it (${(lost.length > 0 ? lost : [...after.keys()].filter(differs)).map(describe).join(', ')}): a ` +
+      'comment above or beside a key the new value removes or no longer holds as a key, on or between list ' +
+      'items, or after the last line of the value has nowhere to go. Edit the file directly.',
+  );
 }
 
 function spliceFrontmatter(content: string, newObj: Frontmatter): string {
@@ -1498,8 +1594,6 @@ function spliceFrontmatter(content: string, newObj: Frontmatter): string {
 
     const emitted: string[] = [...preamble];
     const seen: Set<string> = new Set();
-    // The #3257/#3742 full-line-comment channel the parse attached to the original block.
-    const commentChannel = (originalParsed as Record<symbol, unknown>)[FULL_LINE_COMMENTS as unknown as symbol] as FullLineCommentChannel | undefined;
 
     for (const seg of segments) {
       seen.add(seg.key);
@@ -1516,10 +1610,11 @@ function spliceFrontmatter(content: string, newObj: Frontmatter): string {
           // changed → regenerate (fail-closed on object-lists), keeping the tail. A value
           // that is not written at all (null) regenerates to '' — no line, only the tail:
           // the key is deleted, and the comments inside its value go with it (#3257 AC5).
-          // Otherwise every comment inside the value is re-emitted beside its sub-key or
-          // the write is refused.
-          const regenerated = regenerateFrontmatterKey(seg.key, newObj[seg.key], commentChannel);
-          if (regenerated !== '') assertCommentsKept(seg.key, seg.body, regenerated);
+          // Otherwise every comment inside the value — full-line or inline — is re-emitted
+          // beside the key it belongs to or the write is refused.
+          const comments = segmentComments(seg.key, seg.body);
+          const regenerated = regenerateFrontmatterKey(seg.key, newObj[seg.key], comments.channel);
+          if (regenerated !== '') assertCommentsKept(seg.key, comments, regenerated);
           emitted.push(...(regenerated === '' ? [] : [regenerated]), ...seg.tail);
         }
       } else {
@@ -1762,12 +1857,6 @@ function cmdFrontmatterGet(cwd: string, filePath: string, field: string | undefi
 }
 
 /**
- * `spliceFrontmatter` for the set/merge commands: a write refusal (unparseable block,
- * unreconcilable keys) is reported as `{ error, code, path }` and nothing is written —
- * the same shape `cmdFrontmatterGet` uses for an unparseable block. Returns null when
- * refused; any other error propagates as before.
- */
-/**
  * A field name is one line of a YAML key: a line break, NUL or other control character in it
  * is never an intended key name. The one check `frontmatter set` and `frontmatter merge`
  * share (found while implementing #5105).
@@ -1787,6 +1876,13 @@ function setOwnField(fm: Frontmatter, field: string, value: FrontmatterValue): v
   Object.defineProperty(fm, field, { value, writable: true, enumerable: true, configurable: true });
 }
 
+/**
+ * `spliceFrontmatter` for the set/merge commands: a write refusal (`FrontmatterWriteRefusedError`
+ * — unparseable block, unreconcilable keys, a block that would not read back, a comment that
+ * would be lost) is reported as `{ error, code, path }` and nothing is written — the same
+ * shape `cmdFrontmatterGet` uses for an unparseable block. Returns null when refused; any
+ * other error propagates as before.
+ */
 function spliceOrReportRefusal(content: string, fm: Frontmatter, filePath: string, raw: boolean): string | null {
   try {
     return spliceFrontmatter(content, fm);
