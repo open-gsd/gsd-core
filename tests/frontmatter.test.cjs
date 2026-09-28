@@ -425,30 +425,23 @@ describe('reconstructFrontmatter', () => {
   // refused at indent > 0 (only the spaced-colon / end-of-line form opens a nested key there); a
   // genuinely nested key is unaffected, since it is always written `key: value` (spaced).
   //
-  // The comment channel is read via its own module-private Symbol (mirroring how
-  // `propagateCommentChannel`, above, is the only OTHER consumer of it outside this module) —
-  // there is no other way to observe a comment that (pre-fix) attached to a key that does not
-  // exist in the parsed object at all, so `reconstructFrontmatter` never re-emits it either way
-  // and the final serialized text is unchanged; the misattribution is only visible on the raw
-  // channel data itself.
-  const commentChannelOf = (parsed) => {
-    const sym = Object.getOwnPropertySymbols(parsed).find((s) => String(s) === 'Symbol(fullLineComments)');
-    return sym ? parsed[sym] : undefined;
-  };
-
-  test('an inline comment on a continuation line of a multi-line value is not misattributed to it', () => {
+  // Observed the way a writer observes it: the channel is carried onto a target that DOES hold
+  // the fabricated key path (`notes.https`), and the serialized target shows where the comment
+  // landed. A misattributed comment is re-emitted above `https`; a correctly unattached one is
+  // not carried at all.
+  test('a comment inside a multi-line value is not carried onto a key its continuation line resembles', () => {
     // `notes` is a plain (scalar) multi-line value — it has no nested keys at all. Its second
     // line, `https://x`, is bare-fallback-shaped (`word:rest`, no space after the colon) but is
     // plainly value text, not a key.
-    const parsed = extractFrontmatter('---\nnotes: |\n  # z\n  https://x\n---\nbody\n');
-    assert.strictEqual(commentChannelOf(parsed), undefined, 'comment must not attach to a fabricated "https" key');
+    const source = extractFrontmatter('---\nnotes: |\n  # z\n  https://x\n---\nbody\n');
+    const target = { notes: { https: '//x' } };
+    propagateCommentChannel(source, target);
+    assert.strictEqual(reconstructFrontmatter(target), 'notes:\n  https: //x');
   });
 
   test('a real nested key (spaced colon) at the same indentation still keeps its leading comment', () => {
     const parsed = extractFrontmatter('---\ntop:\n  # note\n  child: 1\n---\nbody\n');
-    const channel = commentChannelOf(parsed);
-    assert.deepStrictEqual(channel.trailing, []);
-    assert.deepStrictEqual(Object.entries(channel.leading), [['["top","child"]', ['  # note']]]);
+    assert.strictEqual(reconstructFrontmatter(parsed), 'top:\n  # note\n  child: 1');
   });
 });
 
