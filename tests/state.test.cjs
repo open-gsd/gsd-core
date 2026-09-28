@@ -21768,3 +21768,57 @@ describe('#4823: Current Plan reset is scoped to the Current Position section', 
     );
   });
 });
+
+// ─── STATE.md writers on an adjacent empty frontmatter block ─────────────────
+//
+// Found while implementing #5105: `stripFrontmatter` could not see an adjacent empty block
+// (`---\n---\n`), so every STATE.md writer kept it as body and prepended its own
+// frontmatter above it — a second block, and the empty one left as two `---` body lines.
+
+describe('#5105: STATE.md writers replace an adjacent empty frontmatter block', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5105-state-'));
+    fs.mkdirSync(path.join(tmpDir, '.planning'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  const body = [
+    '# Project State',
+    '',
+    '## Current Position',
+    '',
+    'Phase: 2',
+    'Plan: 1 of 3',
+    'Status: Ready to execute',
+    'Last activity: 2026-01-01',
+    '',
+  ];
+
+  for (const [label, nl] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+    for (const args of [['state', 'update', 'Status', 'Executing'], ['state', 'record-session', '--stopped-at', 'x']]) {
+      test(`${args.slice(0, 2).join(' ')} writes exactly one frontmatter block (${label})`, () => {
+        const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+        fs.writeFileSync(statePath, ['---', '---', ...body].join(nl));
+
+        const result = runGsdTools(args, tmpDir);
+        assert.ok(result.success, `${args.join(' ')} failed: ${result.error}`);
+
+        const after = fs.readFileSync(statePath, 'utf-8');
+        assert.match(after, /^---\r?\n[^-]/, 'the written block is the writer\'s own, not the empty one');
+        const afterBody = frontmatterLib.stripFrontmatter(after, { once: true });
+        assert.ok(afterBody.startsWith('# Project State'), `a second block was left in the body:\n${after}`);
+        assert.strictEqual(
+          after.split(/\r?\n/).filter((l) => l === '---').length,
+          2,
+          `exactly one fence pair expected:\n${after}`,
+        );
+        assert.strictEqual(frontmatterLib.extractFrontmatter(after).current_phase, '2');
+      });
+    }
+  }
+});

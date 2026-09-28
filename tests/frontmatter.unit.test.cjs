@@ -1512,6 +1512,30 @@ describe('stripFrontmatter', () => {
   test('empty string round-trips', () => {
     assert.strictEqual(stripFrontmatter(''), '');
   });
+
+  // Found while implementing #5105: the strip regex needed a line ending BEFORE the closing
+  // `---` that the opening fence's own line ending could not supply, so an adjacent empty
+  // block (`---\n---\n`) was invisible to it. It then either kept the block (and every STATE.md
+  // writer re-prepended a second one) or matched the first `---` in the BODY and stripped the
+  // heading and prose above it. The block is located by the one fence owner now.
+  for (const [label, nl] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+    test(`an adjacent empty block is stripped (${label})`, () => {
+      assert.strictEqual(stripFrontmatter(`---${nl}---${nl}Body`), 'Body');
+      assert.strictEqual(stripFrontmatter(`---${nl}---${nl}Body`, { once: true }), 'Body');
+    });
+  }
+
+  test('an adjacent empty block followed by a thematic break strips only the empty block', () => {
+    const doc = '---\n---\n# T\n\n---\n\nmore';
+    assert.strictEqual(stripFrontmatter(doc), '# T\n\n---\n\nmore');
+    assert.strictEqual(stripFrontmatter(doc, { once: true }), '# T\n\n---\n\nmore');
+  });
+
+  test('only a whole `---` line closes the block — `----` and `--- x` are block content', () => {
+    assert.strictEqual(stripFrontmatter('---\n----\nfoo: 1\n---\nbody'), 'body');
+    assert.strictEqual(stripFrontmatter('---\na: 1\n--- x\nb\n---\nBody'), 'Body');
+    assert.strictEqual(stripFrontmatter('---\na: 1\n--- \t\nBody'), 'Body');
+  });
 });
 
 // ─── agentScalarNeedsDoubleQuoting (#3706) ────────────────────────────────────

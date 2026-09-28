@@ -300,12 +300,18 @@ describe('#5105: write normalization leaves the frontmatter block untouched', ()
   // (`${fm.join('\n')}\n---\n${body...}`), so `frontmatterBlock` was GUARANTEED non-null and
   // the check ran in one direction only: "the block this template always produces is
   // preserved". It never generated a document whose only closing-shaped line is a look-alike
-  // ('----', '--- x') rather than an exact `---`, and it never exercised CRLF at all — so a
-  // mutant version of `leadingFrontmatterLineCount` requiring an EXACT `\n---\n` (rejecting
-  // `----`/`--- x` as closers, where the real `frontmatterRegion`/`frontmatterBlock` match any
-  // line merely STARTING with `---`) would under-count the skip and still pass: the extra,
-  // wrongly-unskipped lines just run through ordinary markdown rules, which is exactly the
-  // divergence the `startsWith` check below is built to catch.
+  // ('----', '--- x') rather than an exact `---`, and it never exercised CRLF at all. Both
+  // directions are now checked against the normalizer's whole output: a closed block is
+  // published as written and everything from its closing fence on is normalized as an
+  // unskipped document would be; an unterminated document is normalized exactly as if it had
+  // no frontmatter at all. Only a whole `---` line closes a block (`locateFrontmatterFence`),
+  // so `----` and `--- x` stay block content.
+  //
+  // Normalizing `x\n` + text and dropping the `x\n` is normalizing `text` with no frontmatter
+  // skip: `x` is inert to every normalizer rule, and the line after it keeps the same
+  // predecessor-sensitive context.
+  const normalizeUnskipped = (text) => normalizeContent(MD, `x\n${text}`).content.slice(2);
+
   test('property: every closed frontmatter block frontmatterBlock finds is published byte-identical', () => {
     const word = fc.stringMatching(/^[a-z]{1,6}$/);
     const dashLookalikes = fc.constantFrom('----', '--- x', '---');
@@ -342,25 +348,21 @@ describe('#5105: write normalization leaves the frontmatter block untouched', ()
           const located = frontmatterBlock(doc);
           const { content } = normalizeContent(MD, doc);
           if (located) {
-            // Non-null direction (unchanged from before, now reachable via a look-alike
-            // closer and/or CRLF too): the block `frontmatterBlock` finds — LF-published,
-            // as `_normalizeMd` always LF-publishes — is untouched.
-            assert.ok(
-              content.startsWith(located.bom + located.block.replace(/\r\n/g, '\n')),
+            // Non-null direction: the block `frontmatterBlock` finds is published as written
+            // (LF, as `_normalizeMd` always LF-publishes), and the closing fence line and
+            // everything after it are normalized as an unskipped document would be.
+            const closingStart = located.bom.length + located.block.lastIndexOf('\n') + 1;
+            assert.strictEqual(
+              content,
+              located.bom + doc.slice(located.bom.length, closingStart).replace(/\r\n/g, '\n') +
+                normalizeUnskipped(doc.slice(closingStart)),
               `frontmatter block changed:\n${JSON.stringify(doc)}\n=> ${JSON.stringify(content)}`,
             );
           } else {
-            // Null direction: no line anywhere in the document starts with `---`, so the
-            // opening fence is unterminated and the reader treats the WHOLE document as
-            // plain body (#5105's pinned "an unterminated block..." case above pins the
-            // exact expected transformation for one such document by hand — there is no
-            // exported seam to independently recompute "normalize with no skip" for an
-            // arbitrary generated document here, since `_normalizeMd` is not exported).
-            // What this branch still guarantees is that a genuinely unterminated document
-            // no longer FAILS the fixture assertion the old one-directional version made
-            // (`assert.ok(located, 'fixture must hold a closed block...')`) — it is an
-            // expected, asserted-reachable outcome now, not an excluded one.
-            assert.ok(!lines.some((line) => line.startsWith('---')), 'a dash-prefixed line must always close the block');
+            // Null direction: no line is a whole `---` line, so the opening fence is
+            // unterminated and the document is normalized exactly as if it had no frontmatter.
+            assert.ok(!lines.some((line) => /^---[ \t]*$/.test(line)), 'a whole `---` line always closes the block');
+            assert.strictEqual(content, normalizeUnskipped(doc));
           }
         },
       ),
