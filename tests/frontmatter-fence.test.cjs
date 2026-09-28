@@ -163,6 +163,30 @@ describe('every fence consumer agrees on pinned documents', () => {
   });
 });
 
+// stripFrontmatter is a WRITER's primitive: `state update` strips the old block and writes a new
+// one, so a block preceded by whitespace must still go, or the write stacks a second block above
+// it. Readers do not skip leading whitespace; this one writer-side step heals the document.
+describe('stripFrontmatter heals whitespace before the opening fence', () => {
+  for (const [label, doc, expected] of [
+    ['a leading blank line', '\n---\na: 1\n---\n\nBody', 'Body'],
+    ['leading spaces', '   ---\na: 1\n---\nBody', 'Body'],
+    ['a leading CRLF', '\r\n---\r\na: 1\r\n---\r\nBody', 'Body'],
+    ['leading whitespace before a BOM block', '\n﻿---\na: 1\n---\nBody', 'Body'],
+    ['leading whitespace and two stacked blocks', '\n---\na: 1\n---\n---\nb: 2\n---\nBody', 'Body'],
+    ['leading whitespace and no block', '\n# Body\n---\n', '\n# Body\n---\n'],
+    ['leading whitespace and an unterminated block', '\n---\na: 1\n', '\n---\na: 1\n'],
+    ['leading whitespace before a non-fence `----`', '\n----\na: 1\n---\nBody', '\n----\na: 1\n---\nBody'],
+  ]) {
+    test(label, () => {
+      assert.strictEqual(stripFrontmatter(doc), expected);
+    });
+  }
+
+  test('`{ once: true }` also heals, and stops after the first block', () => {
+    assert.strictEqual(stripFrontmatter('\n---\na: 1\n---\n---\nb: 2\n---\nBody', { once: true }), '---\nb: 2\n---\nBody');
+  });
+});
+
 // Every consumer against the one owner, for generated documents. The body alphabet mixes
 // real closers, closer look-alikes, markdown lines the normalizer rewrites, and blank lines,
 // under LF/CRLF and with or without a BOM, so both "closed" and "unterminated" are reached.
@@ -185,6 +209,9 @@ describe('property: every fence consumer agrees with locateFrontmatterFence', ()
   // Normalizing `x\n` + text and dropping the `x\n` is normalizing `text` with no
   // frontmatter skip: `x` is inert to every normalizer rule, and the line after it keeps the
   // same predecessor-sensitive context.
+  // Every whitespace character the generator can put after a closing fence.
+  const WHITESPACE = [' ', '\t', '\r', '\n'];
+
   const normalizeUnskipped = (text) => normalizeContent(MD, `x\n${text}`).content.slice(2);
 
   test('frontmatterRegion/frontmatterBlock, the planning-document span, stripFrontmatter and the normalizer skip', () => {
@@ -221,7 +248,13 @@ describe('property: every fence consumer agrees with locateFrontmatterFence', ()
           planning.value.nodes.find((n) => n.kind === 'frontmatter').span,
           { start: fence.bom.length, end: fence.closingFenceEnd + crAfter },
         );
-        assert.strictEqual(stripped, doc.slice(fence.closingFenceEnd).replace(/^\s*/, ''));
+        // What is stripped is exactly the block plus the whitespace after its closing fence: the
+        // result is a suffix of the text after the fence, the dropped prefix is drawn only from the
+        // generator's whitespace alphabet, and the result does not open with one of those.
+        const rest = doc.slice(fence.closingFenceEnd);
+        assert.ok(rest.endsWith(stripped), 'the result is a suffix of the text after the closing fence');
+        for (const ch of rest.slice(0, rest.length - stripped.length)) assert.ok(WHITESPACE.includes(ch), `dropped a non-whitespace ${JSON.stringify(ch)}`);
+        assert.ok(!WHITESPACE.includes(stripped[0]), 'the result does not open with whitespace');
         // The block's lines are published as written (LF); the closing fence line and
         // everything after it are normalized exactly as an unskipped document would be.
         const beforeCloser = lf(doc.slice(fence.bom.length, fence.closingStart));

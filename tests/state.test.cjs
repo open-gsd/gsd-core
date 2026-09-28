@@ -891,6 +891,29 @@ describe('STATE.md frontmatter sync', () => {
     assert.ok(content.includes('status: paused'), 'frontmatter should reflect latest status');
   });
 
+  // A STATE.md whose frontmatter is preceded by whitespace (a hand edit, a botched merge) is
+  // healed by the writer: `state update` replaces that block rather than stacking a second one
+  // above it. Found while implementing #5105.
+  for (const [label, lead] of [['a leading blank line', '\n'], ['leading spaces', '   '], ['leading spaces and a tab on their own line', '  \t\n']]) {
+    test(`state update on a STATE.md with ${label} before its frontmatter writes exactly one block`, () => {
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'STATE.md'),
+        `${lead}---\ngsd_state_version: 1.0\nstatus: executing\n---\n\n# Project State\n\n**Current Phase:** 01\n**Status:** executing\n`,
+      );
+
+      const result = runGsdTools('state update Status planning', tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const content = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(content.startsWith('---\n'), `the block opens at byte 0: ${JSON.stringify(content)}`);
+      assert.strictEqual((content.match(/^---$/gm) || []).length, 2, `exactly one frontmatter block: ${JSON.stringify(content)}`);
+      assert.ok(content.includes('\nstatus: planning\n'), 'the frontmatter carries the updated status');
+      assert.ok(!content.includes('status: executing'), 'the stale block is gone');
+      assert.ok(content.includes('**Status:** planning'), 'the body field is updated');
+      assert.ok(content.includes('\n# Project State\n'), 'the body is kept');
+    });
+  }
+
   test('#2956 write-then-read does not rewind current_phase past an archive Phase line', () => {
     // The write seam (buildStateFrontmatter) and the read seam (cmdStateSnapshot)
     // must agree: a state write that re-syncs frontmatter must not pick up the
