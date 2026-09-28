@@ -60,6 +60,18 @@ gsd-tools capability state --config-dir ~/.claude --raw
 
 In that output, `configured` reflects config/default resolution, while `active` reflects final participation after install and surface state. Disabling a migrated Capability at the runtime surface removes its active hooks even when the project config default is `true`.
 
+### Dispatch after the verification fingerprint
+
+`/gsd-execute-phase` runs the `verify:post` steps before its verifier fingerprints the phase. Any workflow that dispatches `verify:post` again after that point (`/gsd-verify-work`, and `/gsd-autonomous` after it transitions a phase) passes the phase directory:
+
+```bash
+VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw --after-fingerprint "$PHASE_DIR")
+```
+
+A `step` hook with a non-empty `produces` list, every entry of which already exists in the phase directory (for example `01-SECURITY.md` for `SECURITY.md`), moves from `activeHooks` to `skippedHooks` with `reason: "produces-present"`. Re-running it would rewrite a file the verification report may cover and leave the report `stale` against the workflow's own write. Hooks with `produces: []`, gates, and contributions are unaffected. A phase directory that does not exist is an error. The direct commands (`/gsd-secure-phase`, `/gsd-validate-phase`, `/gsd-ui-review`) still re-audit on demand; a re-audit whose counts match the previous audit block appends nothing (`gsd_run query verification.append-audit`).
+
+`scripts/lint-verify-lifecycle-writes.cjs` (part of `npm run lint:ci`) fails when a workflow calls `loop render-hooks verify:post` without `--after-fingerprint`, or when post-fingerprint `/gsd-verify-work` text commits a phase artifact directly. Exceptions live in `scripts/lint-verify-lifecycle-writes.allowlist.json`, and each one cites an issue.
+
 Direct command workflows self-gate the same way:
 
 - `/gsd-code-review` resolves the active `execute:post` hook whose `ref.skill == "code-review"`.
@@ -72,7 +84,7 @@ When adding a review or verification capability:
 
 1. Declare owned skills, agents, config keys, and hooks in `capabilities/<id>/capability.json`.
 2. Use unprefixed skill stems in `ref.skill`; workflows add the `gsd-` prefix when invoking skills.
-3. Declare `produces` and `consumes` arrays for every step and contribution hook.
+3. Declare `produces` and `consumes` arrays for every step and contribution hook. For a `verify:post` step, `produces` must name every phase artifact the step writes: it is what keeps the step from re-running after the verification fingerprint (see above).
 4. Use `onError: "halt"` for verification work that must stop advancement when it fails.
 5. Use a blocking `gate` for ship-time predicates that must prevent release.
 6. Regenerate `gsd-core/bin/lib/capability-registry.cjs` with `npm run gen:capability-registry`.
