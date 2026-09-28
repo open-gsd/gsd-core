@@ -1,5 +1,13 @@
 'use strict';
 
+// allow-test-rule: source-text-is-the-product — the workflow-file readFileSync
+// calls in the "doc/workflow content parity" block below read execute-plan.md /
+// transition.md / complete-milestone.md, whose text IS what the runtime loads
+// (per CONTRIBUTING.md's no-source-grep exemption table).
+// allow-test-rule: docs-parity — the docs/CONFIGURATION.md readFileSync in that
+// same block asserts the public doc's Gate/Safety Settings tables stay in sync
+// with the schema manifest; there is no runtime API to enumerate them.
+
 /**
  * #4974 — `gates.*` confirmation toggles never take effect.
  *
@@ -57,34 +65,30 @@ describe('#4974 — gates.* schema registration (happy path)', () => {
     });
   }
 
-  test('config-set gates.execute_next_plan false is accepted and round-trips', () => {
+  test('config-set gates.execute_next_plan false is accepted and round-trips', (t) => {
     const proj = createTempProject();
-    try {
-      const res = runGsdTools(['config-set', 'gates.execute_next_plan', 'false'], proj);
-      assert.ok(res.success, `config-set should succeed: ${res.output || res.error || ''}`);
+    t.after(() => cleanup(proj));
 
-      const cfg = JSON.parse(fs.readFileSync(path.join(proj, '.planning', 'config.json'), 'utf8'));
-      assert.equal(cfg.gates.execute_next_plan, false, 'must persist nested gates.execute_next_plan');
-      assert.equal(cfg['gates.execute_next_plan'], undefined, 'must NOT persist a flat dotted key');
+    const res = runGsdTools(['config-set', 'gates.execute_next_plan', 'false'], proj);
+    assert.ok(res.success, `config-set should succeed: ${res.output || res.error || ''}`);
 
-      const get = runGsdTools(['config-get', 'gates.execute_next_plan'], proj);
-      assert.ok(get.success, `config-get should succeed: ${get.output || get.error || ''}`);
-      assert.match(String(get.output || ''), /false/, 'config-get should read back false');
-    } finally {
-      cleanup(proj);
-    }
+    const cfg = JSON.parse(fs.readFileSync(path.join(proj, '.planning', 'config.json'), 'utf8'));
+    assert.equal(cfg.gates.execute_next_plan, false, 'must persist nested gates.execute_next_plan');
+    assert.equal(cfg['gates.execute_next_plan'], undefined, 'must NOT persist a flat dotted key');
+
+    const get = runGsdTools(['config-get', 'gates.execute_next_plan'], proj);
+    assert.ok(get.success, `config-get should succeed: ${get.output || get.error || ''}`);
+    assert.match(String(get.output || ''), /false/, 'config-get should read back false');
   });
 
-  test('config-set gates.confirm_transition true and gates.confirm_milestone_scope false both accepted', () => {
+  test('config-set gates.confirm_transition true and gates.confirm_milestone_scope false both accepted', (t) => {
     const proj = createTempProject();
-    try {
-      const r1 = runGsdTools(['config-set', 'gates.confirm_transition', 'true'], proj);
-      assert.ok(r1.success, `config-set confirm_transition should succeed: ${r1.output || r1.error || ''}`);
-      const r2 = runGsdTools(['config-set', 'gates.confirm_milestone_scope', 'false'], proj);
-      assert.ok(r2.success, `config-set confirm_milestone_scope should succeed: ${r2.output || r2.error || ''}`);
-    } finally {
-      cleanup(proj);
-    }
+    t.after(() => cleanup(proj));
+
+    const r1 = runGsdTools(['config-set', 'gates.confirm_transition', 'true'], proj);
+    assert.ok(r1.success, `config-set confirm_transition should succeed: ${r1.output || r1.error || ''}`);
+    const r2 = runGsdTools(['config-set', 'gates.confirm_milestone_scope', 'false'], proj);
+    assert.ok(r2.success, `config-set confirm_milestone_scope should succeed: ${r2.output || r2.error || ''}`);
   });
 });
 
@@ -99,58 +103,48 @@ describe('#4974 — gates.* defaults (regression: unset key preserves documented
       );
     });
 
-    test(`config-get ${key} on a fresh project (no gates block) resolves to the default, not "Key not found"`, () => {
+    test(`config-get ${key} on a fresh project (no gates block) resolves to the default, not "Key not found"`, (t) => {
       const proj = createTempProject();
-      try {
-        const get = runGsdTools(['config-get', key], proj);
-        assert.ok(get.success, `config-get ${key} should succeed on an absent key: ${get.output || get.error || ''}`);
-        assert.match(String(get.output || ''), /true/, `config-get ${key} should resolve to the documented default (true)`);
-      } finally {
-        cleanup(proj);
-      }
+      t.after(() => cleanup(proj));
+
+      const get = runGsdTools(['config-get', key], proj);
+      assert.ok(get.success, `config-get ${key} should succeed on an absent key: ${get.output || get.error || ''}`);
+      assert.match(String(get.output || ''), /true/, `config-get ${key} should resolve to the documented default (true)`);
     });
   }
 });
 
 describe('#4974 — mode is now enum-validated', () => {
-  test('config-set mode interactive succeeds', () => {
+  test('config-set mode interactive succeeds', (t) => {
     const proj = createTempProject();
-    try {
-      const res = runGsdTools(['config-set', 'mode', 'interactive'], proj);
-      assert.ok(res.success, `config-set mode interactive should succeed: ${res.output || res.error || ''}`);
-    } finally {
-      cleanup(proj);
-    }
+    t.after(() => cleanup(proj));
+
+    const res = runGsdTools(['config-set', 'mode', 'interactive'], proj);
+    assert.ok(res.success, `config-set mode interactive should succeed: ${res.output || res.error || ''}`);
   });
 
-  test('config-set mode yolo succeeds', () => {
+  test('config-set mode yolo succeeds', (t) => {
     const proj = createTempProject();
-    try {
-      const res = runGsdTools(['config-set', 'mode', 'yolo'], proj);
-      assert.ok(res.success, `config-set mode yolo should succeed: ${res.output || res.error || ''}`);
-    } finally {
-      cleanup(proj);
-    }
+    t.after(() => cleanup(proj));
+
+    const res = runGsdTools(['config-set', 'mode', 'yolo'], proj);
+    assert.ok(res.success, `config-set mode yolo should succeed: ${res.output || res.error || ''}`);
   });
 
-  test('config-set mode custom is REJECTED (previously silently accepted)', () => {
+  test('config-set mode custom is REJECTED (previously silently accepted)', (t) => {
     const proj = createTempProject();
-    try {
-      const res = runGsdTools(['config-set', 'mode', 'custom'], proj);
-      assert.ok(!res.success, 'config-set mode custom must be rejected — "custom" is not a documented mode value');
-    } finally {
-      cleanup(proj);
-    }
+    t.after(() => cleanup(proj));
+
+    const res = runGsdTools(['config-set', 'mode', 'custom'], proj);
+    assert.ok(!res.success, 'config-set mode custom must be rejected — "custom" is not a documented mode value');
   });
 
-  test('config-set mode banana is REJECTED (previously silently accepted)', () => {
+  test('config-set mode banana is REJECTED (previously silently accepted)', (t) => {
     const proj = createTempProject();
-    try {
-      const res = runGsdTools(['config-set', 'mode', 'banana'], proj);
-      assert.ok(!res.success, 'config-set mode banana must be rejected');
-    } finally {
-      cleanup(proj);
-    }
+    t.after(() => cleanup(proj));
+
+    const res = runGsdTools(['config-set', 'mode', 'banana'], proj);
+    assert.ok(!res.success, 'config-set mode banana must be rejected');
   });
 });
 
@@ -164,14 +158,12 @@ describe('#4974 — boundary: a same-shaped but unregistered gate key stays reje
     assert.ok(!isValidConfigKey('gates.confirm_project'), 'gates.confirm_project must stay rejected (unread key)');
   });
 
-  test('config-set gates.confirm_project true is REJECTED', () => {
+  test('config-set gates.confirm_project true is REJECTED', (t) => {
     const proj = createTempProject();
-    try {
-      const res = runGsdTools(['config-set', 'gates.confirm_project', 'true'], proj);
-      assert.ok(!res.success, 'config-set gates.confirm_project must be rejected — not a registered key');
-    } finally {
-      cleanup(proj);
-    }
+    t.after(() => cleanup(proj));
+
+    const res = runGsdTools(['config-set', 'gates.confirm_project', 'true'], proj);
+    assert.ok(!res.success, 'config-set gates.confirm_project must be rejected — not a registered key');
   });
 
   test('bare "gates" is not a settable leaf key', () => {
@@ -202,39 +194,35 @@ describe('#4974 — loader no longer warns "will be ignored" for a gates block',
     return captured;
   }
 
-  test('a gates block produces no "unknown config key" warning', () => {
+  test('a gates block produces no "unknown config key" warning', (t) => {
     const proj = createTempProject();
-    try {
-      const cfgPath = path.join(proj, '.planning', 'config.json');
-      fs.writeFileSync(cfgPath, JSON.stringify({ gates: { execute_next_plan: false } }, null, 2));
-      if (typeof _resetRuntimeWarningCacheForTests === 'function') _resetRuntimeWarningCacheForTests();
+    t.after(() => cleanup(proj));
 
-      const captured = loadWithCapturedStderr(proj);
-      assert.ok(
-        !/unknown config key\(s\)/i.test(captured),
-        `must not warn about an unknown config key for a gates block: ${captured}`,
-      );
-    } finally {
-      cleanup(proj);
-    }
+    const cfgPath = path.join(proj, '.planning', 'config.json');
+    fs.writeFileSync(cfgPath, JSON.stringify({ gates: { execute_next_plan: false } }, null, 2));
+    if (typeof _resetRuntimeWarningCacheForTests === 'function') _resetRuntimeWarningCacheForTests();
+
+    const captured = loadWithCapturedStderr(proj);
+    assert.ok(
+      !/unknown config key\(s\)/i.test(captured),
+      `must not warn about an unknown config key for a gates block: ${captured}`,
+    );
   });
 
-  test('negative control: a genuinely unknown top-level key still warns (proves the mechanism fires)', () => {
+  test('negative control: a genuinely unknown top-level key still warns (proves the mechanism fires)', (t) => {
     const proj = createTempProject();
-    try {
-      const cfgPath = path.join(proj, '.planning', 'config.json');
-      fs.writeFileSync(cfgPath, JSON.stringify({ totallyBogusKeyXYZ: { a: 1 } }, null, 2));
-      if (typeof _resetRuntimeWarningCacheForTests === 'function') _resetRuntimeWarningCacheForTests();
+    t.after(() => cleanup(proj));
 
-      const captured = loadWithCapturedStderr(proj);
-      assert.match(
-        captured,
-        /unknown config key\(s\) in \.planning\/config\.json: totallyBogusKeyXYZ/,
-        `expected the unknown-key warning for a genuinely bogus top-level key: ${captured}`,
-      );
-    } finally {
-      cleanup(proj);
-    }
+    const cfgPath = path.join(proj, '.planning', 'config.json');
+    fs.writeFileSync(cfgPath, JSON.stringify({ totallyBogusKeyXYZ: { a: 1 } }, null, 2));
+    if (typeof _resetRuntimeWarningCacheForTests === 'function') _resetRuntimeWarningCacheForTests();
+
+    const captured = loadWithCapturedStderr(proj);
+    assert.match(
+      captured,
+      /unknown config key\(s\) in \.planning\/config\.json: totallyBogusKeyXYZ/,
+      `expected the unknown-key warning for a genuinely bogus top-level key: ${captured}`,
+    );
   });
 });
 
