@@ -8,6 +8,7 @@ const {
   TEST_ENV_BASE,
   CONFIG_LOCATION_ENV_KEYS,
   scrubConfigLocationEnv,
+  homeSandboxEnv,
 } = require('./helpers.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -50,6 +51,24 @@ describe('#2665: the built-lib require is deferred', () => {
   test('reading TEST_ENV_BASE is what loads it', () => {
     const touch = `require(${JSON.stringify(path.join(__dirname, 'helpers.cjs'))}).TEST_ENV_BASE;`;
     assert.strictEqual(probe(touch), true, 'reading the scrub set must resolve the built lib');
+  });
+});
+
+// ─── #5074 row 15: homeSandboxEnv centralizes the { HOME, USERPROFILE }
+// hermeticity sandbox fixture (design:
+// .gsd/phase/chore-5074-test-run-only-platform-sensitive-tests-o/40-design.md)
+describe('homeSandboxEnv', () => {
+  test('redirects both HOME and USERPROFILE', () => {
+    const dir = '/tmp/gsd-5074-home-sandbox-fixture';
+    assert.deepEqual(homeSandboxEnv(dir), { HOME: dir, USERPROFILE: dir });
+  });
+
+  test('returns a fresh object on every call', () => {
+    const dir = '/tmp/gsd-5074-home-sandbox-fixture';
+    const first = homeSandboxEnv(dir);
+    const second = homeSandboxEnv(dir);
+    assert.notStrictEqual(first, second, 'each call must return a distinct object, not a shared reference');
+    assert.deepEqual(first, second);
   });
 });
 
