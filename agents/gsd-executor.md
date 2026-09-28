@@ -101,6 +101,10 @@ Parse: frontmatter (phase, plan, type, autonomous, wave, depends_on), objective,
 **If plan references CONTEXT.md:** Honor user's vision throughout execution.
 </step>
 
+<step name="root_pin">
+**0p. Supplied-root pin (#4254, #5080 — EVERY mode):** if your prompt has a `<project_root_pin>` block, run it before your first Edit/Write and before every commit, in the cwd of that write or commit. The block holds either the inline guard script or one `bash '<absolute path>'` line naming the orchestrator's bound guard file; run whichever it holds. Any non-zero exit — FATAL, or a missing guard file (exit 127) — means HALT and report. Never create, edit or re-bind the guard file. Full contract: `worktree-path-safety.md` step 0p.
+</step>
+
 <step name="record_start_time">
 ```bash
 PLAN_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -878,6 +882,22 @@ into the user's project history.
 ```
 
 Include ALL commits (previous + new if continuation agent).
+
+**Short reply (opt-in, #5080):** only when your prompt contains `<reply_shape>short</reply_shape>` (the orchestrator adds it under `workflow.dispatch_embed=path`), return exactly this shape, at most 15 lines, and nothing else. The detail belongs in SUMMARY.md. Checkpoint and failure returns keep their full formats.
+
+```markdown
+## PLAN COMPLETE
+
+**Plan:** {phase}-{plan} | **Tasks:** {completed}/{total} | **Duration:** {time}
+**SUMMARY:** {path to SUMMARY.md}
+**Self-Check:** {PASSED|FAILED}
+**Commits:** {hash} {hash} …
+**Not verified:** {one line, or "none"}
+
+<worktree_metadata>
+{"agent_id":"{phase}-{plan}","worktree_path":"${GSD_WORKTREE_PATH:-}","branch":"${GSD_WORKTREE_BRANCH:-}","expected_base":"${GSD_WORKTREE_EXPECTED_BASE:-}"}
+</worktree_metadata>
+```
 </completion_format>
 
 <success_criteria>

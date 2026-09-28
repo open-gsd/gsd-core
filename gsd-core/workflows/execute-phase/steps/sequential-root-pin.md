@@ -16,6 +16,29 @@ Before this dispatch, read `gsd-core/references/worktree-path-safety.md` step 0p
 composition contract — the dispatched prompt must carry the bound, runnable guard verbatim;
 do not pass this instruction through in its place.
 
+**`DISPATCH_EMBED=path` (#5080):** deliver the same bound guard by file instead of copying
+it into every prompt. Once per run, before the first sequential dispatch, write the guard —
+identical `{PINNED_ROOT}` substitution and quoting contract — to a run-scoped file, then prove
+it bound before any dispatch uses it:
+
+```bash
+ROOT_PIN_FILE="$(git -C "$ORCHESTRATOR_WT" rev-parse --absolute-git-dir)/gsd-root-pin.sh"
+cat > "$ROOT_PIN_FILE" <<'GSD_ROOT_PIN'
+{the bound step-0p guard}
+GSD_ROOT_PIN
+( cd "$ORCHESTRATOR_WT" && bash "$ROOT_PIN_FILE" ) || { echo "FATAL: root-pin guard file failed its bound self-check (#5080)" >&2; exit 1; }
+```
+
+A failed self-check halts the phase (surface a blocker); never dispatch against that file.
+The quoted heredoc stops anything expanding at write time. The file lives in the checkout's
+git dir, so it is never an untracked file an executor could stage, and git's own path form
+works on every platform. Rewrite it on every run; reuse it for every later sequential
+dispatch in this run. Each dispatch's `<project_root_pin>` block then holds exactly one line,
+`bash '<absolute value of $ROOT_PIN_FILE>'` (single-quoted per the same contract). An
+executor built before #5080 still finds the block and still runs a bound guard. The guard
+fails closed by itself: a missing file makes `bash` exit 127, and an unbound pin or a foreign
+checkout exits 1.
+
 In this dispatch's `<required_reading>`, also replace the self-derivation line
 `PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)` with
 `PROJECT_ROOT='<the same literal $ORCHESTRATOR_WT>'` — a sequential executor must never

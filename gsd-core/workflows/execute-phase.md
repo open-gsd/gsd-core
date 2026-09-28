@@ -110,6 +110,8 @@ RUNTIME=$(gsd_run query config-get runtime --default claude --raw 2>/dev/null ||
 USE_WORKTREES=$(gsd_run query config-get workflow.use_worktrees --raw 2>/dev/null || echo "true")
 EXECUTOR_STALL_INTERVAL_MINUTES=$(gsd_run query config-get executor.stall_detect_interval_minutes --raw 2>/dev/null || echo "5")
 EXECUTOR_STALL_THRESHOLD_MINUTES=$(gsd_run query config-get executor.stall_threshold_minutes --raw 2>/dev/null || echo "10")
+DISPATCH_EMBED=$(gsd_run query config-get workflow.dispatch_embed --raw 2>/dev/null || echo "inline")
+[ "$DISPATCH_EMBED" = "path" ] || DISPATCH_EMBED=inline
 
 # Resolve ISOLATION + apply its guards: read and execute the "Resolve ISOLATION"
 # section of execute-phase/steps/executor-isolation-dispatch.md. It sets
@@ -691,7 +693,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
        </parallel_execution>
 
        <execution_context>
-       ORCHESTRATOR build-time embed (NOT a sub-agent runtime step): before this dispatch, read each file listed below and replace this note with those files' contents, inlined verbatim in this block in the listed order. Never leave `@`-include lines in the dispatched prompt — `@path` never expands inside an Agent() `prompt="..."` string (#3324), so an include arrives as literal text the executor never sees.
+       ORCHESTRATOR build-time embed (NOT a sub-agent runtime step): `DISPATCH_EMBED=inline` — before this dispatch, read each file listed below and replace this note with those files' contents, inlined verbatim in this block in the listed order. `DISPATCH_EMBED=path` (#5080) — replace this note with `Read each file below IN FULL with the Read tool before starting.` plus the list with `~` expanded to absolute paths, and add `<reply_shape>short</reply_shape>` after this block. Never leave `@`-include lines in the dispatched prompt — `@path` never expands inside an Agent() `prompt="..."` string (#3324), so an include arrives as literal text the executor never sees.
        - `~/.claude/gsd-core/workflows/execute-plan.md`
        - `~/.claude/gsd-core/templates/summary.md`
        - `~/.claude/gsd-core/references/checkpoints.md`

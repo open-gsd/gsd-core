@@ -28,13 +28,26 @@ not fail closed on dispatches that never carried a pin. **Never bind
 reference prose, not your pin — only the orchestrator's build-time
 substitution produces a valid guard.
 
+**By-path guard (#5080):** the block may instead hold one line,
+`bash '<absolute path>'`, naming a guard file the orchestrator wrote and bound
+for this run (`workflow.dispatch_embed=path`). Run that line exactly as you
+would the inline script, at the same points and in the same cwd. Any non-zero
+exit is FATAL, including a missing or unreadable file (`bash` exits 127) and an
+unbound pin inside the file (`Guard stage: pin-unbound`): halt and report.
+Never create, edit, re-bind or replace the guard file, and never fall back to
+the warn-and-continue path because the file is absent — the block was present,
+so the pin applies.
+
 **Composition contract (orchestrator — build time, NOT a sub-agent runtime
 step):** copy the guard below into the dispatched prompt inside a
 `<project_root_pin>` block, substituting `{PINNED_ROOT}` with the literal value
 of `$ORCHESTRATOR_WT` captured at execute_waves entry, shell-single-quoted:
 wrap the path in `'…'` and escape any embedded `'` as `'\''`. A path that
 cannot be quoted this way must halt the phase (surface a blocker) rather than
-ship a pin that could mis-parse. The comparison is git-vs-git on BOTH sides —
+ship a pin that could mis-parse. In `workflow.dispatch_embed=path` mode the
+same bound guard is written once per run to a file and the block carries only
+its `bash '<path>'` line, path quoted the same way — see
+`execute-phase/steps/sequential-root-pin.md`. The comparison is git-vs-git on BOTH sides —
 `git -C` resolves the pinned path to its repo's canonical toplevel in git's
 own path representation, so symlink aliases, trailing slashes, `/var` vs
 `/private/var` spellings, and Windows drive-letter forms — forward- or

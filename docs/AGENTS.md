@@ -227,6 +227,8 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 - Handles task types: auto, tracer, checkpoint (human-verify, decision, human-action)
 - Tracer feedback gate: after a `tracer` slice, verifies it end-to-end before expansion tasks — autonomous runs halt on failure; interactive runs honor `workflow.human_verify_mode` (under the `end-of-phase` default an automated-only `<verify>` continues with no checkpoint; otherwise a human-verify checkpoint is emitted, #3299)
 - Reports deviations from plan in SUMMARY.md
+- Runs the supplied-root pin before its first write and every commit, whether the `<project_root_pin>` block carries the inline guard or a `bash '<path>'` line naming the orchestrator's bound guard file (`workflow.dispatch_embed: "path"`, #5080); any non-zero exit halts
+- Returns a fixed completion reply of at most 15 lines when the prompt carries `<reply_shape>short</reply_shape>` (added under `workflow.dispatch_embed: "path"`); detail stays in SUMMARY.md
 - Invokes node repair on verification failure
 
 ---

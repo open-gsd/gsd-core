@@ -295,6 +295,7 @@ Set via `workflow.*` namespace in config.json (e.g., `"workflow": { "research": 
 | `workflow.discuss_mode` | string | `"discuss"` | `"discuss"`, `"assumptions"` | Default mode for discuss-phase: `"discuss"` runs interactive questioning; `"assumptions"` analyzes codebase and surfaces assumptions instead |
 | `workflow.skip_discuss` | boolean | `false` | `true`, `false` | Skip discuss phase entirely |
 | `workflow.use_worktrees` | boolean | `true` | `true`, `false` | Run executor agents in isolated git worktrees |
+| `workflow.dispatch_embed` | string | `"inline"` | `"inline"`, `"path"` | How `/gsd:execute-phase` delivers static procedure files and the sequential root-pin guard to executors. `inline` copies them into every dispatch prompt. `path` lists the procedure files by absolute path for the executor to Read in full, writes the bound root-pin guard once per run to a file in the checkout's git dir, and asks for the short completion reply (#5080) |
 | `workflow.subagent_timeout` | number | `300000` | Any positive integer (ms) | Timeout for parallel subagent tasks (default: 5 minutes) |
 | `workflow.inline_plan_threshold` | number | `2` | `0`–`10` | Plans with ≤N tasks execute inline instead of spawning a subagent |
 | `workflow.test_command` | string\|null | `null` | Any shell command | Regression/test gate command run by execute-phase, audit-fix, and post-merge-gate. Unset → GSD auto-detects (Makefile / package.json / Cargo.toml / go.mod / pyproject.toml). |

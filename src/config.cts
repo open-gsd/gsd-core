@@ -114,6 +114,9 @@ const SCHEMA_DEFAULTS: Record<string, unknown> = {
   // #1689: per-plan agent_hint executor routing — default-on. A no-op for plans
   // without an agent_hint field, so existing dispatch is byte-identical.
   'workflow.agent_hint_routing': true,
+  // #5080: execute-phase executor-prompt embed mode — `inline` keeps the
+  // verbatim build-time embeds; `path` is the opt-in by-path delivery.
+  'workflow.dispatch_embed': 'inline',
   // #4401: Compact Content mode gate — derived from the defaults manifest via
   // CONFIG_DEFAULTS (added in config-loader.cts) so the manifest stays the
   // single source of truth, matching workflow.smart_zone_tokens /
@@ -983,6 +986,10 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
   if (kp === 'ship.pr_body_sections') {
     validateShipPrBodySections(parsedValue);
   }
+
+  // execute-phase executor-prompt embed mode (#5080)
+  const VALID_DISPATCH_EMBED_MODES = ['inline', 'path'];
+  if (kp === 'workflow.dispatch_embed') assertEnumValue(parsedValue, val, VALID_DISPATCH_EMBED_MODES, 'workflow.dispatch_embed');
 
   // Human verification checkpoint mode (#3309)
   const VALID_HUMAN_VERIFY_MODES = ['mid-flight', 'end-of-phase'];
