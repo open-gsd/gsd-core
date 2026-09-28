@@ -585,6 +585,18 @@ described below, but it has no `LANE_COSTS` entry in
 (non-cancelled) per-shard measurement exists — so the headroom-factor gate
 does not cover it until one lands.
 
+**`.platform.test.cjs` siblings (#5074).** The tier selects whole files, so a large file whose
+platform signal sits in a few tests can be split: those tests move to
+`tests/<name>.platform.test.cjs`, which the tier selects, and `tests/<name>.test.cjs` runs on
+Linux only. A sibling is a unit-suite file (`suiteOf` returns `null`), so Linux shards run both
+halves. `gen-platform-conformance-tier.cjs` fails with `platform split invariant violated` when a
+split base regains a platform signal (`base-has-signal`), a sibling carries none
+(`sibling-without-signal`), or a split base is listed in `ALWAYS_REAL_OS`
+(`base-always-real-os`). Split so far: `state`, `commands`, `phase`, `config` (`init` needed no
+sibling — its residual matches were fixture idioms and comments). See
+[Split platform-sensitive tests](how-to/split-platform-sensitive-tests.md) and the #5074 amendment
+to [ADR-4641](adr/4641-windows-selector-consolidation.md).
+
 Two runtime mechanisms sit on top of that static gate, both new in #4036:
 
 - **In-job near-cap check** (`scripts/ci-check-job-near-cap.cjs`) — the last

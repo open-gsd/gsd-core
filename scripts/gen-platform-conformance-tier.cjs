@@ -97,6 +97,22 @@
  * point the CLI at a small temp fixture tree instead of this repo's real,
  * 900+-file tests/ tree. Production usage (package.json's lint:generated-sync
  * / regen:derived chains) passes no flags and gets the real repo paths.
+ *
+ * #5074 — the `.platform` sibling rule. A handful of the heaviest tier files
+ * carry their real Windows signal in only a few tests out of hundreds; the
+ * fix is to move those tests into a same-directory `X.platform.test.cjs`
+ * sibling of `X.test.cjs`, so only the sibling (not the whole base) needs
+ * real-OS coverage. That split is enforced here as a FAILING invariant
+ * (`findPlatformSplitViolations`, wired into `classifyTree`) rather than as a
+ * silent filename-based exclusion rule, for two reasons: epic #4589 Phase 2
+ * requires real-OS overrides to be centrally enumerated, not implied by a
+ * naming convention (a bare "base excluded whenever a sibling exists" rule
+ * would BE such a convention); and a platform-sensitive test later added
+ * back into a split base must not silently re-admit the whole base to
+ * Linux-only — it must fail generation loudly instead, at the same
+ * `lint:generated-sync` gate this module already backs. See
+ * docs/how-to/split-platform-sensitive-tests.md for the authoring rules this
+ * invariant enforces.
  */
 
 const fs = require('node:fs');
@@ -317,6 +333,140 @@ function classifyMacosContent(content) {
 }
 
 /**
+ * The `.platform` sibling suffix (#5074). A sibling of `X.test.cjs` is a file
+ * whose basename ENDS with this suffix and has a non-empty stem before it —
+ * `foo.platform.test.cjs` is a sibling of `foo.test.cjs`, but a bare
+ * `platform.test.cjs` (empty stem) is not, and neither is a hyphenated name
+ * like `x-platform.test.cjs` or `platform-conformance-tier.test.cjs` (this
+ * module's own test file) — the rule keys on the literal dotted suffix, not
+ * on the substring "platform" appearing anywhere in the name.
+ */
+const PLATFORM_SIBLING_SUFFIX = '.platform.test.cjs';
+
+/**
+ * Parse `rel` (a POSIX `tests/...`-relative path) as a `.platform` sibling.
+ * Returns `{ dir, stem }` when it is one (dir is the POSIX dirname, stem is
+ * the basename with `PLATFORM_SIBLING_SUFFIX` stripped), or `null` when it is
+ * not — either because the basename does not end with the suffix, or because
+ * the stem would be empty (the `platform.test.cjs` negative-space case).
+ *
+ * @param {string} rel
+ * @returns {{ dir: string, stem: string } | null}
+ */
+function parsePlatformSibling(rel) {
+  const dir = path.posix.dirname(rel);
+  const base = path.posix.basename(rel);
+  if (!base.endsWith(PLATFORM_SIBLING_SUFFIX)) return null;
+  const stem = base.slice(0, -PLATFORM_SIBLING_SUFFIX.length);
+  if (stem.length === 0) return null;
+  return { dir, stem };
+}
+
+/** Resolve `X.test.cjs`'s rel path for a `.platform` sibling's `{ dir, stem }`. */
+function baseRelFor({ dir, stem }) {
+  return (dir === '.' ? '' : dir + '/') + stem + '.test.cjs';
+}
+
+/** Resolve `X.platform.test.cjs`'s rel path for a base rel path (inverse of baseRelFor). */
+function siblingRelForBase(baseRel) {
+  const dir = path.posix.dirname(baseRel);
+  const stem = path.posix.basename(baseRel).slice(0, -'.test.cjs'.length);
+  return (dir === '.' ? '' : dir + '/') + stem + PLATFORM_SIBLING_SUFFIX;
+}
+
+/**
+ * The `.platform` sibling invariant (#5074), pure over an explicit `entries`
+ * array so it can be driven directly against fixtures (and against the real
+ * `ALWAYS_REAL_OS` map, which no temp fixture tree can key into) without
+ * touching the filesystem. `entries` is the ELIGIBLE (unit-suite) test-file
+ * set — a suite-tagged base is never a member, which is what makes it
+ * "never eligible" per the design doc's negative space rather than something
+ * this function has to special-case.
+ *
+ * For every `.platform` sibling present in `entries` (see
+ * `parsePlatformSibling`), checks three independent things against its base
+ * (`X.test.cjs`, same directory):
+ *   - `base-has-signal`   — the base IS in `entries` and still carries a
+ *     genuine Windows signal (`classifyContent` on its own content) — the
+ *     split did not actually remove the signal from the base.
+ *   - `sibling-without-signal` — the sibling's OWN content carries no
+ *     Windows signal, regardless of whether its base exists — a `.platform`
+ *     file whose header claims a platform reason the classifier cannot see
+ *     in its own text.
+ *   - `base-always-real-os` — the base is a key of `alwaysRealOs`: the
+ *     escape hatch says the WHOLE base needs real-OS coverage, which
+ *     contradicts splitting only some of its tests into a sibling.
+ *
+ * A base that is absent from `entries` (suite-tagged, deleted, or renamed)
+ * never triggers `base-has-signal` — there is nothing to read.
+ *
+ * @param {{rel: string, content: string}[]} entries
+ * @param {Map<string, string>} [alwaysRealOs]
+ * @returns {{file: string, kind: 'base-has-signal'|'sibling-without-signal'|'base-always-real-os', signals: string[]}[]}
+ *   sorted by file, then kind.
+ */
+function findPlatformSplitViolations(entries, alwaysRealOs = ALWAYS_REAL_OS) {
+  const byRel = new Map(entries.map((entry) => [entry.rel, entry]));
+  const violations = [];
+
+  for (const entry of entries) {
+    const parsed = parsePlatformSibling(entry.rel);
+    if (!parsed) continue;
+    const baseRel = baseRelFor(parsed);
+
+    const base = byRel.get(baseRel);
+    if (base !== undefined) {
+      const { signals } = classifyContent(base.content);
+      if (signals.length > 0) {
+        violations.push({ file: baseRel, kind: 'base-has-signal', signals });
+      }
+    }
+
+    const { signals: siblingSignals } = classifyContent(entry.content);
+    if (siblingSignals.length === 0) {
+      violations.push({ file: entry.rel, kind: 'sibling-without-signal', signals: [] });
+    }
+
+    if (alwaysRealOs.has(baseRel)) {
+      violations.push({ file: baseRel, kind: 'base-always-real-os', signals: [] });
+    }
+  }
+
+  violations.sort((a, b) => {
+    if (a.file !== b.file) return a.file < b.file ? -1 : 1;
+    if (a.kind !== b.kind) return a.kind < b.kind ? -1 : 1;
+    return 0;
+  });
+  return violations;
+}
+
+/**
+ * Render `findPlatformSplitViolations`' result as the Error message
+ * `classifyTree` throws: starts with the literal phrase callers/tests grep
+ * for, lists one line per violation (file, kind, residual signal names, and
+ * — for `base-has-signal` only — the sibling path those tests belong in),
+ * and points at the how-to doc for the authoring rules.
+ *
+ * @param {ReturnType<typeof findPlatformSplitViolations>} violations
+ * @returns {string}
+ */
+function formatPlatformSplitViolations(violations) {
+  const lines = violations.map((v) => {
+    let line = `  - ${v.file} [${v.kind}]`;
+    if (v.signals.length > 0) line += ` residual signal(s): ${v.signals.join(', ')}`;
+    if (v.kind === 'base-has-signal') {
+      line += ` — move these tests into ${siblingRelForBase(v.file)}`;
+    }
+    return line;
+  });
+  return (
+    `platform split invariant violated (#5074) — ${violations.length} file(s):\n` +
+    lines.join('\n') +
+    '\nSee docs/how-to/split-platform-sensitive-tests.md for the split-invariant rules.\n'
+  );
+}
+
+/**
  * Recursively collect every `*.test.cjs` file beneath `dir`.
  * @param {string} dir
  * @returns {string[]} absolute paths
@@ -355,10 +505,15 @@ function classifyTree(testsDir) {
   // tier — see the header doc-comment for why suite-tagged files are excluded
   // entirely rather than merely deprioritized.
   const unitFiles = absoluteFiles.filter((absPath) => suiteOf(absPath) === null);
+  const entries = [];
   const flagged = [];
   for (const absPath of unitFiles) {
     const rel = 'tests/' + path.relative(testsDir, absPath).replace(/\\/g, '/');
     const content = fs.readFileSync(absPath, 'utf8');
+    // Read once, reused below both for this file's own flagging AND (via
+    // `entries`) for the #5074 split-invariant check — a second read of the
+    // same file for that check would double the I/O for no reason.
+    entries.push({ rel, content });
     const { needsRealOs } = classifyContent(content);
     // The ALWAYS_REAL_OS escape hatch (Windows tier only — see its doc
     // comment) is unioned in HERE, keyed off a file that this walk actually
@@ -369,6 +524,16 @@ function classifyTree(testsDir) {
       flagged.push(rel);
     }
   }
+
+  // #5074: a `.platform` sibling pair that violates the split invariant
+  // (residual signal left in the base, a sibling with no signal of its own,
+  // or a base that ALWAYS_REAL_OS says needs the whole file on real OS) fails
+  // generation loudly rather than being silently included or excluded.
+  const violations = findPlatformSplitViolations(entries, ALWAYS_REAL_OS);
+  if (violations.length > 0) {
+    throw new Error(formatPlatformSplitViolations(violations));
+  }
+
   const result = [...new Set(flagged)].sort();
   return { total: absoluteFiles.length, files: result };
 }
@@ -484,7 +649,19 @@ function main() {
   const isMacos = target === 'macos';
   const label = isMacos ? 'gen-platform-conformance-tier --target macos' : 'gen-platform-conformance-tier';
   const exportKey = isMacos ? 'MACOS_CONFORMANCE_TIER_FILES' : 'CONFORMANCE_TIER_FILES';
-  const { total, files } = isMacos ? classifyMacosTree(testsDir) : classifyTree(testsDir);
+  // classifyTree throws a plain Error on a #5074 split-invariant violation
+  // (it has no ExitError/exit-code opinion of its own — it is also called
+  // in-process by tests). runMain only special-cases ExitError (stderr gets
+  // err.message; anything else gets the full err.stack); wrapping it here
+  // keeps the CLI's stderr output to the clean, purpose-built violation
+  // report instead of a raw stack trace.
+  let total, files;
+  try {
+    ({ total, files } = isMacos ? classifyMacosTree(testsDir) : classifyTree(testsDir));
+  } catch (err) {
+    if (err instanceof ExitError) throw err;
+    throw new ExitError(1, err && err.message ? err.message : String(err));
+  }
 
   if (mode === 'write') {
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
@@ -554,4 +731,6 @@ module.exports = {
   MACOS_CATEGORIES,
   classifyMacosTree,
   renderMacosGeneratedFile,
+  PLATFORM_SIBLING_SUFFIX,
+  findPlatformSplitViolations,
 };

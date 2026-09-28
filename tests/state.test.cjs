@@ -18145,37 +18145,6 @@ const HEX_RE = /^[0-9a-f]{4,40}$/i;
       'distance measured against an unrelated repo is not a meaningful count');
   });
 
-  test('(h) a SYMLINKED project path still resolves — repo pinning compares identity, not spelling', () => {
-    // Guard against over-tightening (g). `git rev-parse --show-toplevel` reports
-    // the REAL path while the project root arrives as the caller spelled it, and
-    // those differ routinely: macOS temp dirs (/var/folders → /private/var/folders),
-    // any symlinked checkout, Windows casing. A raw string compare would report a
-    // perfectly normal project as unknown — the inverse of the bug (g) fixes, and
-    // exactly what broke the macOS and Windows CI shards.
-    const realDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2573-symreal-'));
-    propDirs.push(realDir);
-    const g = (argv) => runGit(argv, { cwd: realDir }).stdout;
-    g(['init', '-q']); g(['config', 'user.email', 't@t.com']); g(['config', 'user.name', 'T']);
-    g(['config', 'commit.gpgsign', 'false']);
-    fs.mkdirSync(path.join(realDir, '.planning'), { recursive: true });
-    fs.writeFileSync(path.join(realDir, 'a.txt'), 'a\n');
-    g(['add', '-A']); g(['commit', '-q', '-m', 'base']);
-    const head = g(['rev-parse', 'HEAD']).trim();
-
-    const linkDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2573-symlink-')), 'proj');
-    propDirs.push(path.dirname(linkDir));
-    try {
-      fs.symlinkSync(realDir, linkDir, 'dir');
-    } catch {
-      return; // symlink creation unavailable (e.g. unprivileged Windows) — nothing to assert
-    }
-
-    const r = readStateHeadFreshness(linkDir, head);
-    assert.strictEqual(r.commit_stale, false,
-      'a symlinked project path is the SAME repo — it must resolve, not degrade to unknown');
-    assert.strictEqual(r.commits_behind, 0);
-  });
-
   test('(i) a sub_repos workspace resolves to unknown even though it owns its own repo', () => {
     // #2573 D5, sub_repos flavor. (g) covers the case where the project owns NO
     // .git. This is the harder one: the outer workspace owns BOTH .planning/ and

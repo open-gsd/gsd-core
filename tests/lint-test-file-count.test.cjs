@@ -20,6 +20,7 @@ const {
   Verdict,
   evaluateLint,
   testEffectivePrefix,
+  isSplitSibling,
   _buildTestMap,
 } = require(LINT_SCRIPT);
 
@@ -260,6 +261,127 @@ describe('evaluateLint — allowlist behaviour (identity-based)', () => {
     );
     assert.deepStrictEqual(result.novel, ['phase-brand-new.test.cjs']);
     assert.deepStrictEqual(result.stale, ['phase-regression.test.cjs']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #5074: .platform.test.cjs split siblings are excluded from the count
+// ---------------------------------------------------------------------------
+
+describe('evaluateLint — #5074 .platform.test.cjs split siblings', () => {
+  test('module at cap with x.test.cjs + x.platform.test.cjs + integration stays OK_UNDER_LIMIT', () => {
+    const result = evaluateLint({
+      prefix: 'my-module',
+      testFiles: makeFiles('my-module', [
+        'my-module.test.cjs',
+        'my-module.platform.test.cjs',
+        'my-module.integration.test.cjs',
+      ]),
+      allowlist: {},
+    });
+    assert.strictEqual(result.verdict, Verdict.OK_UNDER_LIMIT);
+    assert.strictEqual(result.count, 2);
+  });
+
+  test('allowlisted over-cap module gaining x.platform.test.cjs for allowlisted x.test.cjs stays OK_IN_ALLOWLIST', () => {
+    const result = evaluateLint({
+      prefix: 'phase',
+      testFiles: makeFiles('phase', [
+        'phase.test.cjs',
+        'phase-edge.test.cjs',
+        'phase-regression.test.cjs',
+        'phase.platform.test.cjs',   // split sibling of phase.test.cjs — excluded
+      ]),
+      allowlist: {
+        phase: {
+          files: ['phase.test.cjs', 'phase-edge.test.cjs', 'phase-regression.test.cjs'],
+          issue: 'TBD',
+        },
+      },
+    });
+    assert.strictEqual(result.verdict, Verdict.OK_IN_ALLOWLIST);
+    assert.strictEqual(result.count, 3);
+    assert.deepStrictEqual(result.novel, []);
+    assert.deepStrictEqual(result.stale, []);
+  });
+
+  test('orphan y.platform.test.cjs with no y.test.cjs in the same dir still counts (FAIL_EXCEEDS_LIMIT)', () => {
+    const result = evaluateLint({
+      prefix: 'orphan',
+      testFiles: makeFiles('orphan', [
+        'orphan.test.cjs',
+        'orphan-edge.test.cjs',
+        'orphan.platform.test.cjs',   // no base file present — not a sibling
+      ]),
+      allowlist: {},
+    });
+    assert.strictEqual(result.verdict, Verdict.FAIL_EXCEEDS_LIMIT);
+    assert.strictEqual(result.count, 3);
+  });
+
+  test('orphan y.platform.test.cjs added to an allowlisted module is a novel file (FAIL_NOVEL_FILES)', () => {
+    const result = evaluateLint({
+      prefix: 'phase',
+      testFiles: makeFiles('phase', [
+        'phase.test.cjs',
+        'phase-edge.test.cjs',
+        'phase-regression.test.cjs',
+        'phase-orphan.platform.test.cjs',   // no phase-orphan.test.cjs base — counts
+      ]),
+      allowlist: {
+        phase: {
+          files: ['phase.test.cjs', 'phase-edge.test.cjs', 'phase-regression.test.cjs'],
+          issue: 'TBD',
+        },
+      },
+    });
+    assert.strictEqual(result.verdict, Verdict.FAIL_NOVEL_FILES);
+    assert.deepStrictEqual(result.novel, ['phase-orphan.platform.test.cjs']);
+  });
+
+  test('bare platform.test.cjs (empty stem) is not treated as a sibling', () => {
+    assert.strictEqual(isSplitSibling('platform.test.cjs', ['platform.test.cjs']), false);
+
+    const result = evaluateLint({
+      prefix: 'my-module',
+      testFiles: makeFiles('my-module', [
+        'my-module.test.cjs',
+        'platform.test.cjs',   // bare, empty stem — not a sibling of anything
+      ]),
+      allowlist: {},
+    });
+    assert.strictEqual(result.verdict, Verdict.OK_UNDER_LIMIT);
+    assert.strictEqual(result.count, 2);
+  });
+});
+
+describe('isSplitSibling — pure helper', () => {
+  test('recognizes a sibling when the base .test.cjs is present', () => {
+    assert.strictEqual(
+      isSplitSibling('state.platform.test.cjs', ['state.test.cjs', 'state.platform.test.cjs']),
+      true
+    );
+  });
+
+  test('recognizes a sibling when the base .test.ts is present', () => {
+    assert.strictEqual(
+      isSplitSibling('state.platform.test.cjs', ['state.test.ts', 'state.platform.test.cjs']),
+      true
+    );
+  });
+
+  test('does not recognize an orphan with no base file', () => {
+    assert.strictEqual(
+      isSplitSibling('state.platform.test.cjs', ['state.platform.test.cjs']),
+      false
+    );
+  });
+
+  test('non-platform test file is never a sibling', () => {
+    assert.strictEqual(
+      isSplitSibling('state.test.cjs', ['state.test.cjs', 'state.platform.test.cjs']),
+      false
+    );
   });
 });
 
