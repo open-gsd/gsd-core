@@ -161,7 +161,7 @@ Proceed to gather_stats.
 
 </if>
 
-<if mode="interactive" OR="custom with gates.confirm_milestone_scope true">
+<if mode="interactive" AND="gates.confirm_milestone_scope != false">
 
 ```
 Ready to mark this milestone as shipped?

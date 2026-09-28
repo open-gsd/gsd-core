@@ -1575,6 +1575,19 @@ function parseUatItemsWithStats(content: string): { items: UatItem[]; headingsSe
     const testNumber = headingParts.number;
     const testName = headingParts.name;
 
+    // #4983: an `issue` test whose `## Gaps` entry has been reconciled to
+    // `status: resolved` (verify-work.md's reconcile_gaps step, #1921) is a
+    // fixed-and-verified issue — skip it exactly like a PASS token above so
+    // the read-side/audit view stops surfacing it as an open row forever.
+    // Scoped to `result === 'issue'` only, mirroring the #4983 gate fix's own
+    // scope (src/uat-predicate.cts's isTestGapResolved). Trusts the `status:`
+    // text the same way `parseGapsItems` below already trusts it for a Gaps
+    // entry viewed on its own (this is the informational read layer, not the
+    // gate — the filesystem-verified "resolved_by names an executed plan"
+    // check lives only in the GATE, which is what actually blocks
+    // `phase uat-passed`).
+    if (result === 'issue' && isTestIssueResolvedInGaps(content, testNumber)) continue;
+
     // Reuse the existing block-scalar/inline `expected:` grammar rather than
     // re-deriving a second one (#3707 defect 2). #3078 blocker: the block is
     // CLIPPED at its first top-level fence opener first — still raw text (a
@@ -1706,6 +1719,37 @@ function parseGapsItems(content: string): UatItem[] {
   items.push(...parseGapsTableItems(gapsSection.body));
 
   return items;
+}
+
+/**
+ * #4983: true when the UAT file's `## Gaps` section records `testNum` as
+ * `status: resolved` (case-insensitive). Reuses the same `collectSection` /
+ * `splitGapsEntries` / `extractGapEntryFields` seam `parseGapsItems` above
+ * already uses to find and read a Gaps entry, so this reader stays in
+ * lockstep with that entry's own fence/nesting/quoting hardening rather than
+ * re-deriving it.
+ *
+ * This is the READ-SIDE / audit view: it trusts the entry's `status:` text
+ * exactly the way `parseGapsItems` already trusts it to skip a resolved Gaps
+ * entry on its own — no filesystem check that `resolved_by` names an
+ * executed plan. That stricter, filesystem-verified check belongs to the
+ * GATE that actually blocks `phase uat-passed` (src/uat-predicate.cts's
+ * `isTestGapResolved`), not to this informational listing.
+ */
+function isTestIssueResolvedInGaps(content: string, testNum: number): boolean {
+  const gapsSection = collectSection(
+    content,
+    (h) => /^gaps$/i.test(h.text) && h.level === 2,
+    { levelBounded: true },
+  );
+  if (!gapsSection) return false;
+
+  return splitGapsEntries(gapsSection.body).some((entryLines) => {
+    const fields = extractGapEntryFields(entryLines);
+    if (!fields.status || fields.status.toLowerCase() !== 'resolved') return false;
+    const entryTest = fields.test;
+    return !!entryTest && /^\d+$/.test(entryTest) && parseInt(entryTest, 10) === testNum;
+  });
 }
 
 /**

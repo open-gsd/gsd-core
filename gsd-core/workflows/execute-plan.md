@@ -76,7 +76,7 @@ PHASE=$(echo "$PLAN_PATH" | grep -oE '[0-9]+[A-Z]?(\.[0-9]+)*-[0-9]+')
 Auto-approve: `⚡ Execute {phase}-{plan}-PLAN.md [Plan X of Y for Phase Z]` → parse_segments.
 </if>
 
-<if mode="interactive" OR="custom with gates.execute_next_plan true">
+<if mode="interactive" AND="gates.execute_next_plan != false">
 Present plan identification, wait for confirmation.
 </if>
 </step>

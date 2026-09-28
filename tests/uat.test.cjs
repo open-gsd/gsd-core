@@ -8924,3 +8924,76 @@ gaps:
     });
   });
 });
+
+// ─── #4983: a resolved `result: issue` ### N. test row is no longer surfaced ──
+
+describe('#4983: a resolved ## Gaps entry hides its matching ### N. issue row', () => {
+  test('a result: issue row whose Gaps entry is status: resolved yields no item', () => {
+    const content = [
+      '### 1. Test A',
+      'expected: A works',
+      'result: issue',
+      'reported: "crashed"',
+      '',
+      '## Gaps',
+      '',
+      '- truth: "A works"',
+      '  status: resolved',
+      '  reason: "Fixed"',
+      '  test: 1',
+      '  resolved_by: 01-01-PLAN.md',
+      '  resolved_at: 2026-09-27',
+    ].join('\n');
+    const { items } = parseUatItemsWithStats(content);
+    assert.deepStrictEqual(items, [], 'the resolved issue must not be surfaced as an open row');
+  });
+
+  test('a result: issue row whose Gaps entry is still status: failed is still surfaced', () => {
+    const content = [
+      '### 1. Test A',
+      'expected: A works',
+      'result: issue',
+      'reported: "crashed"',
+      '',
+      '## Gaps',
+      '',
+      '- truth: "A works"',
+      '  status: failed',
+      '  reason: "Fixed"',
+      '  test: 1',
+    ].join('\n');
+    const { items } = parseUatItemsWithStats(content);
+    // Pre-existing behavior, unrelated to #4983: an unresolved `## Gaps` entry
+    // is ALSO unioned in as its own item by parseGapsItems (below), alongside
+    // the `### 1.` test-block row itself — so 2 items are expected here, not 1.
+    assert.strictEqual(items.length, 2, 'both the test-block row and the still-open Gaps entry must surface');
+    const testRow = items.find((i) => i.test === 1 && i.result === 'issue');
+    assert.ok(testRow, 'an unresolved issue row must still be surfaced');
+  });
+
+  test('an issue row with NO Gaps entry at all is still surfaced (fail-closed)', () => {
+    const content = [
+      '### 1. Test A',
+      'expected: A works',
+      'result: issue',
+      'reported: "crashed"',
+    ].join('\n');
+    const { items } = parseUatItemsWithStats(content);
+    assert.strictEqual(items.length, 1, 'an issue with nothing recording its resolution must still surface');
+  });
+
+  test('the resolved-issue skip is scoped to result: issue — a resolved-looking Gaps entry never masks other result kinds', () => {
+    const content = [
+      '### 1. Test A', 'expected: A', 'result: pending', '',
+      '### 2. Test B', 'expected: B', 'result: blocked', 'blocked_by: server', '',
+      '## Gaps', '',
+      '- truth: "A"', '  status: resolved', '  test: 1',
+      '- truth: "B"', '  status: resolved', '  test: 2',
+    ].join('\n');
+    const { items } = parseUatItemsWithStats(content);
+    // pending/blocked test rows are unaffected by Gaps resolution (#4983 only
+    // reaches `result: issue`); both rows must still surface.
+    assert.ok(items.some((i) => i.test === 1 && i.result === 'pending'));
+    assert.ok(items.some((i) => i.test === 2 && i.result === 'blocked'));
+  });
+});

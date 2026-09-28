@@ -27,7 +27,21 @@ import phaseIdMod = require('./phase-id.cjs');
 const { scopeToPhase } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtils = require('./core-utils.cjs');
-const { normalizeLineEndings } = coreUtils;
+const { normalizeLineEndings, countMatchedSummaries } = coreUtils;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planScanMod = require('./plan-scan.cjs');
+const { isRootPlanFile } = planScanMod;
+
+// Two CommonMark-legal line terminators (LINE SEPARATOR, PARAGRAPH SEPARATOR)
+// that a naive `split('\n')`-only scan would not treat as line breaks.
+// Built via String.fromCharCode rather than written as a regex-literal escape
+// sequence, deliberately: this source file is round-tripped through tooling
+// that decodes a literal backslash-u escape into the real character, which
+// would leave an ACTUAL U+2028/U+2029 sitting inside a regex literal — and
+// both are themselves JS/TS source line terminators, so the regex literal
+// containing one would be truncated at that point and fail to parse at all.
+const EXOTIC_LINE_SEPARATORS = String.fromCharCode(0x2028) + String.fromCharCode(0x2029);
+const LINE_SPLIT_RE = new RegExp('[\\n' + EXOTIC_LINE_SEPARATORS + ']');
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -44,6 +58,15 @@ interface UatCheckItem {
    * report field: consumers read `passed`/`blockers`.
    */
   deferred: boolean;
+  /**
+   * #4983: true when this item is an `issue` whose `## Gaps` entry (matched
+   * by `test:`) has been reconciled to `status: resolved` by an executed
+   * gap-closure plan (#1921's reconcile_gaps step) — a resolved issue counts
+   * as passing and never blocks. See `isTestGapResolved` for the fail-closed
+   * validity criteria. Additive report field: consumers read
+   * `passed`/`blockers`.
+   */
+  resolved: boolean;
 }
 
 interface UatPassedReport {
@@ -114,6 +137,19 @@ const DEFERRED_REASON_RE = /^["']?deferred follow-up\b/i;
 // section also bypasses the complete_session promotion offer; the section is
 // the durable project-level record. Variant spellings that do not match
 // ("Deferred follow-ups:", "followup") block — fail-closed by design.
+
+// #4983 — the sibling case #4546 left unfixed: a `result: issue` test whose
+// `## Gaps` entry (templates/UAT.md) has been reconciled to `status: resolved`
+// by an executed gap-closure plan (verify-work.md's reconcile_gaps step,
+// #1921) is a genuinely fixed-and-verified issue: non-blocking. Unlike the
+// deferred-skip case above, this signal is NOT trusted on the entry's
+// `status:`/`resolved_by:` text alone — `isTestGapResolved` below also
+// requires `resolved_by` to name a `*-PLAN.md` file that actually exists in
+// this phase directory with a matching `*-SUMMARY.md` (mirroring
+// reconcile_gaps' own criterion: a plan whose `gap_ids` names the gap AND has
+// a SUMMARY was actually executed) — so a `resolved_by` naming no executed
+// plan still blocks, closing the false-green risk a text-only trust model
+// would leave open for a status this predicate gate is not free to bypass.
 
 // ─── stripFalsePositiveContexts ───────────────────────────────────────────────
 
@@ -194,19 +230,19 @@ function parseUatResultItems(cleanContent: string): Array<{ test: number; name: 
   // #3078-CR MEDIUM (security review follow-up): STRUCTURE and ATTRIBUTION
   // need different split frames. This is a STRUCTURE scan — finding where a
   // heading block begins — and there is no attribution distinction to
-  // preserve, so split on any of `\n`, U+2028, U+2029: a heading delimited by
-  // an exotic line separator (origin/next's `/m`-anchored scan found these;
-  // a naive `split('\n')`-only port silently stopped finding them, making the
-  // gate MORE permissive than origin/next) is found exactly like a
-  // `\n`-delimited one. Contrast the `result:` scan below, which is an
-  // ATTRIBUTION scan and must NOT do this.
+  // preserve, so split on any of the two exotic line separators alongside
+  // ordinary `\n` (LINE_SPLIT_RE, above): a heading delimited by one of them
+  // (origin/next's `/m`-anchored scan found these; a naive `split('\n')`-only
+  // port silently stopped finding them, making the gate MORE permissive than
+  // origin/next) is found exactly like a `\n`-delimited one. Contrast the
+  // `result:` scan below, which is an ATTRIBUTION scan and must NOT do this.
   const HEADING_LINE_RE = /^###\s*(\d+)\.\s*(.+)$/;
   const headings: Array<{ index: number; lineStart: number; test: number; name: string }> = [];
   {
     // All three separators are exactly one UTF-16 code unit, so the
     // `line.length + 1` offset arithmetic below stays valid regardless of
     // which separator terminated a given line.
-    const lines = cleanContent.split(/[\n\u2028\u2029]/);
+    const lines = cleanContent.split(LINE_SPLIT_RE);
     let offset = 0;
     for (const line of lines) {
       const hMatch = line.match(HEADING_LINE_RE);
@@ -228,8 +264,8 @@ function parseUatResultItems(cleanContent: string): Array<{ test: number; name: 
     // A block spans until the START of the next heading's line (tracked
     // directly from the same split-frame scan above), not a re-search for a
     // literal '\n###' over unsplit text -- the latter would silently miss a
-    // next heading delimited by U+2028/U+2029 instead of '\n' and swallow
-    // every subsequent block into this one.
+    // next heading delimited by an exotic separator instead of '\n' and
+    // swallow every subsequent block into this one.
     const blockContent = i + 1 < headings.length
       ? cleanContent.slice(blockStart, headings[i + 1].lineStart)
       : cleanContent.slice(blockStart);
@@ -238,9 +274,9 @@ function parseUatResultItems(cleanContent: string): Array<{ test: number; name: 
     // the heading scan above): test each already-split line individually
     // against a single-line (no `/m` anchor) pattern instead of anchoring
     // over unsplit `blockContent`, so a `result:`-shaped line reachable only
-    // via a U+2028/U+2029 separator inside an `expected: |` scalar body can
-    // never register as a fake column-0 match. FIRST MATCH WINS — no
-    // ambiguity counting, matching src/uat.cts's contract.
+    // via an exotic separator inside an `expected: |` scalar body can never
+    // register as a fake column-0 match. FIRST MATCH WINS — no ambiguity
+    // counting, matching src/uat.cts's contract.
     // Uses [ \t]* (not \s*) so the captured value must sit on the SAME line as result:.
     // A result: key with the value on a subsequent line yields no match → 'missing' (blocker).
     // #4546: the `reason:` line is captured with the same frame and FIRST-match
@@ -278,6 +314,226 @@ function parseUatResultItems(cleanContent: string): Array<{ test: number; name: 
   }
 
   return items;
+}
+
+// ─── parseGapsEntries ───────────────────────────────────────────────────────
+
+interface GapEntry {
+  test: number | null;
+  status: string;
+  resolvedBy: string;
+  gapId: string;
+}
+
+/**
+ * #4983: parse the UAT file's `## Gaps` bullet list (templates/UAT.md) for
+ * the four scalar fields the predicate needs to decide whether a resolved
+ * `result: issue` test still blocks — `test`, `status`, `resolved_by`,
+ * `gap_id`.
+ *
+ * Deliberately a separate, minimal parser from src/uat.cts's `parseGapsItems`
+ * (the read-side/audit parser): this module hardens independently, on the
+ * ALREADY-CLEANED body (stripFalsePositiveContexts has already removed
+ * frontmatter/HTML comments/fenced code/blockquotes), and only needs these
+ * four fields — never the nested `artifacts:`/`missing:` sub-lists the
+ * read-side parser also handles.
+ *
+ * Entries are split on column-0 `- ` bullet openers (the template's shape);
+ * a nested sub-list item (e.g. a `  artifacts:` key followed by an indented
+ * `    - path: "..."` line) is indented and never matches the column-0
+ * opener, so it can never be mistaken for a new top-level entry.
+ *
+ * Fields are matched per line, first-match-wins, bounded to the entry's OWN
+ * top-level indentation — either the bullet-opener line itself (0 leading
+ * spaces once `BULLET_OPENER_RE` has stripped the `"- "` marker) or a
+ * continuation line indented by exactly the template's 2 spaces (each field
+ * regex below is anchored `^[ ]{0,2}key:`). A candidate line indented deeper
+ * than that (4+ spaces) is a nested sub-list's body or a multi-line scalar
+ * VALUE, never a sibling
+ * field declaration, and is deliberately NOT trimmed-and-matched the way an
+ * earlier revision of this function did (#4983 review round 1, MEDIUM): a
+ * block-scalar value line that happens to read "status: resolved" after
+ * trimming (e.g. embedded free text) could otherwise be mistaken for a real
+ * field at the wrong indentation, the same false-positive class
+ * `parseUatResultItems` above already guards against via column-0 anchoring
+ * for `result:`/`reason:`.
+ */
+function parseGapsEntries(cleanContent: string): GapEntry[] {
+  const GAPS_HEADING_RE = /^##\s*Gaps\s*$/i;
+  const OTHER_HEADING_RE = /^##\s+\S/;
+  const lines = cleanContent.split('\n');
+
+  let sectionStart = -1;
+  let sectionEnd = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    if (sectionStart === -1) {
+      if (GAPS_HEADING_RE.test(lines[i])) sectionStart = i + 1;
+    } else if (OTHER_HEADING_RE.test(lines[i])) {
+      sectionEnd = i;
+      break;
+    }
+  }
+  if (sectionStart === -1) return [];
+
+  // Split the section body into entries at column-0 `- ` bullet openers.
+  // The opener line's own field (if any) is stored with a synthetic 0-space
+  // prefix removed — see FIELD_INDENT_RE below, which accepts both 0 and 2
+  // leading spaces as "this entry's own top level".
+  const BULLET_OPENER_RE = /^-\s?(.*)$/;
+  const entryBlocks: string[][] = [];
+  for (const line of lines.slice(sectionStart, sectionEnd)) {
+    const m = line.match(BULLET_OPENER_RE);
+    if (m) {
+      entryBlocks.push([m[1]]);
+    } else if (entryBlocks.length > 0) {
+      entryBlocks[entryBlocks.length - 1].push(line);
+    }
+    // Lines before the first bullet (blank lines, the template's own
+    // `<!-- YAML format ... -->` comment — already stripped by the caller)
+    // carry no entry and are simply ignored.
+  }
+
+  const stripQuotes = (v: string): string => v.trim().replace(/^["']+|["']+$/g, '').trim();
+  // Bounded to 0-2 leading spaces: the bullet-opener line's stored text has
+  // 0 (its `- ` marker already stripped), and a real continuation line in
+  // the template's own two-space-indented shape has exactly 2. Anything
+  // indented deeper (a scalar body, a nested `artifacts:`/`missing:` list
+  // item) is excluded by construction, not merely by accident of key name.
+  const TEST_FIELD_RE = /^[ ]{0,2}test:[ \t]*(.*)$/i;
+  const STATUS_FIELD_RE = /^[ ]{0,2}status:[ \t]*(.*)$/i;
+  const RESOLVED_BY_FIELD_RE = /^[ ]{0,2}resolved_by:[ \t]*(.*)$/i;
+  const GAP_ID_FIELD_RE = /^[ ]{0,2}gap_id:[ \t]*(.*)$/i;
+
+  const entries: GapEntry[] = [];
+  for (const block of entryBlocks) {
+    let test: number | null = null;
+    let status = '';
+    let resolvedBy = '';
+    let gapId = '';
+    for (const rawLine of block) {
+      if (test === null) {
+        const tm = rawLine.match(TEST_FIELD_RE);
+        if (tm) {
+          const n = parseInt(stripQuotes(tm[1]).replace(/[[\]]/g, ''), 10);
+          if (!Number.isNaN(n)) test = n;
+          continue;
+        }
+      }
+      if (!status) {
+        const sm = rawLine.match(STATUS_FIELD_RE);
+        if (sm) { status = stripQuotes(sm[1]).toLowerCase(); continue; }
+      }
+      if (!resolvedBy) {
+        const rm = rawLine.match(RESOLVED_BY_FIELD_RE);
+        if (rm) { resolvedBy = stripQuotes(rm[1]); continue; }
+      }
+      if (!gapId) {
+        const gm = rawLine.match(GAP_ID_FIELD_RE);
+        if (gm) { gapId = stripQuotes(gm[1]); continue; }
+      }
+    }
+    entries.push({ test, status, resolvedBy, gapId });
+  }
+  return entries;
+}
+
+// ─── isTestGapResolved ────────────────────────────────────────────────────────
+
+/**
+ * #4983: true only when EVERY `## Gaps` entry recorded against `testNum` is a
+ * verified resolution — never on the presence of just one resolved entry,
+ * since a later regression re-opens the SAME test number with a fresh
+ * `gap_id` (per verify-work.md's reconcile_gaps contract) while a prior entry
+ * for it stays `resolved`; an unresolved regression must still block.
+ *
+ * A single entry only counts as a verified resolution when ALL of:
+ *  - `status` is `resolved` (an entry with no gap recorded, or `status:
+ *    failed`/blank, is not a resolution — fails closed);
+ *  - `resolved_by` is non-empty (a partial resolution missing the writer's
+ *    attribution fails closed, per #4983's acceptance criteria);
+ *  - `resolved_by`, taken as a bare basename (rejecting any path separator —
+ *    no directory traversal), names a `*-PLAN.md` file that actually exists
+ *    in this phase directory;
+ *  - that plan has a matching `*-SUMMARY.md` sibling in the same directory —
+ *    the same "plan executed" evidence verify-work.md's own reconcile_gaps
+ *    step requires (elaboration.md §1) before it ever writes `resolved_by`;
+ *  - the entry's own `gap_id` is present, AND the named plan's frontmatter
+ *    `gap_ids` array includes it — proof the plan resolved THIS gap, not
+ *    some other one.
+ *
+ * The `gap_id` cross-check (#4983 review round 1, CRITICAL) closes a false-
+ * green a plan-existence-only check leaves wide open: `resolved_by` naming a
+ * real, executed plan is not proof that plan addressed THIS gap. Concretely,
+ * a phase with a legitimately-resolved gap on test 3 (`resolved_by:
+ * 05-02-PLAN.md`, `05-02-PLAN.md`'s own `gap_ids: [G-05-3]`) could otherwise
+ * have an UNRELATED, still-broken test 7 marked `status: resolved,
+ * resolved_by: 05-02-PLAN.md` (copy-pasted or mis-attributed) and the prior
+ * checks alone would accept it — `05-02-PLAN.md` and its SUMMARY genuinely
+ * exist, they just never touched gap 7. Reading the plan's own `gap_ids` and
+ * requiring it to name this entry's `gap_id` closes that: a resolution claim
+ * this gate cannot independently verify against the phase directory's own
+ * files, cross-referenced back to the SPECIFIC gap, is not trusted. An entry
+ * with no `gap_id` at all (an older, hand-written entry predating the
+ * `gap_id` convention) fails closed — there is nothing to cross-reference,
+ * so it cannot be verified.
+ *
+ * This is deliberately MORE than a text-only trust check (contrast the
+ * `DEFERRED_REASON_RE` deferred-skip case above, an accepted authoring
+ * contract, not a security boundary): #4983's acceptance criteria explicitly
+ * requires that "a `resolved_by` that names no executed plan still blocks" —
+ * reading this as "no plan that executed AND resolved THIS gap" is the
+ * reading that actually closes the false-green risk, not merely "some plan
+ * ran somewhere in this phase."
+ */
+function isTestGapResolved(entries: GapEntry[], testNum: number, dirEntries: string[], phaseFullDir: string): boolean {
+  const forTest = entries.filter((e) => e.test === testNum);
+  if (forTest.length === 0) return false;
+  return forTest.every((e) => {
+    if (e.status !== 'resolved') return false;
+    if (!e.resolvedBy) return false;
+    if (path.basename(e.resolvedBy) !== e.resolvedBy) return false;
+    // Canonical plan-filename predicate (src/plan-scan.cts) rather than a
+    // hand-rolled `-PLAN.md$` regex — one owner for "what is a plan file"
+    // across the codebase (lint-plan-count-drift.cjs enforces this).
+    if (!isRootPlanFile(e.resolvedBy)) return false;
+    if (!dirEntries.includes(e.resolvedBy)) return false;
+    // Canonical plan→summary pairing (src/core-utils.cts), same reason: a
+    // single-plan/single-candidate-set query reuses the exact matching rules
+    // scanPhasePlans's own summaryCount is built from, rather than a
+    // hand-rolled `-PLAN.md` → `-SUMMARY.md` suffix swap.
+    if (countMatchedSummaries([e.resolvedBy], dirEntries) !== 1) return false;
+    // Fail closed on an entry with no gap_id to cross-reference — there is
+    // nothing to verify the named plan actually resolved THIS gap against.
+    if (!e.gapId) return false;
+    return planClaimsGapId(phaseFullDir, e.resolvedBy, e.gapId);
+  });
+}
+
+/**
+ * #4983 (review round 1, CRITICAL follow-up): read the named plan's own
+ * frontmatter `gap_ids` array and confirm it includes `gapId` — the
+ * cross-reference `isTestGapResolved` needs to confirm a plan that exists
+ * and has a SUMMARY actually claims to resolve THIS gap, not merely that it
+ * ran. Any failure to read or parse the plan (missing file, unreadable,
+ * malformed frontmatter, `gap_ids` absent or not an array) returns `false` —
+ * fail-closed, matching this module's convention throughout.
+ */
+function planClaimsGapId(phaseFullDir: string, planBasename: string, gapId: string): boolean {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(path.join(phaseFullDir, planBasename), 'utf-8');
+  } catch {
+    return false;
+  }
+  let fm: Record<string, unknown>;
+  try {
+    fm = extractFrontmatter(raw, planBasename);
+  } catch {
+    return false;
+  }
+  const gapIds = fm['gap_ids'];
+  if (!Array.isArray(gapIds)) return false;
+  return gapIds.some((id) => typeof id === 'string' && id.trim() === gapId.trim());
 }
 
 // ─── evaluateUatPassed ────────────────────────────────────────────────────────
@@ -381,6 +637,10 @@ function evaluateUatPassed(
     // Parse test items from the cleaned body (hardened against false positives)
     const cleanContent = stripFalsePositiveContexts(raw);
     const items = parseUatResultItems(cleanContent);
+    // #4983: parsed once per file — `evaluateUatPassed` already has `dirEntries`
+    // from the readdir above, so `isTestGapResolved` can verify `resolved_by`
+    // against this phase directory's own files.
+    const gapEntries = parseGapsEntries(cleanContent);
 
     for (const item of items) {
       // #4546: a `skipped` item whose reason matches the verify-work writer's
@@ -389,7 +649,10 @@ function evaluateUatPassed(
       // reason WITH its wrapping quotes. Everything else — pending, blocked,
       // issue, missing, and a plain or non-deferral skipped — still blocks.
       const deferred = item.result === 'skipped' && DEFERRED_REASON_RE.test(item.reason);
-      const passing = PASSING_RESULTS.has(item.result) || deferred;
+      // #4983: an `issue` item whose `## Gaps` entry has been verified-resolved
+      // (see isTestGapResolved) is a genuinely fixed issue — non-blocking.
+      const resolved = item.result === 'issue' && isTestGapResolved(gapEntries, item.test, dirEntries, phaseFullDir);
+      const passing = PASSING_RESULTS.has(item.result) || deferred || resolved;
       checks.push({
         file,
         test: item.test,
@@ -397,6 +660,7 @@ function evaluateUatPassed(
         result: item.result,
         passing,
         deferred,
+        resolved,
       });
       if (!passing) {
         blockers.push(`${file}: test ${item.test} (${item.result})`);
@@ -476,4 +740,8 @@ export = {
   parseUatResultItems,
   analyzeMarkdown,
   evaluateUatPassed,
+  // #4983: exported for direct unit-testability of the Gaps-resolution
+  // parser/validator, independent of a full evaluateUatPassed round-trip.
+  parseGapsEntries,
+  isTestGapResolved,
 };

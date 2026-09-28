@@ -109,18 +109,9 @@ GSD stores project settings in `.planning/config.json`. Created during `/gsd-new
     "quick_branch_template": null
   },
   "gates": {
-    "confirm_project": true,
-    "confirm_phases": true,
-    "confirm_roadmap": true,
-    "confirm_breakdown": true,
-    "confirm_plan": true,
     "execute_next_plan": true,
-    "issues_review": true,
-    "confirm_transition": true
-  },
-  "safety": {
-    "always_confirm_destructive": true,
-    "always_confirm_external_services": true
+    "confirm_transition": true,
+    "confirm_milestone_scope": true
   },
   "security": {
     "injection_blocking": false
@@ -1356,27 +1347,16 @@ Example quick-task branching:
 
 ## Gate Settings
 
-Control confirmation prompts during workflows.
+Control confirmation prompts during workflows. Each gate only applies under
+`mode: "interactive"` — `"yolo"` always auto-approves regardless of these
+settings (there is no third `"custom"` mode). Set a gate to `false` to skip
+that one confirmation while staying in interactive mode for everything else.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `gates.confirm_project` | boolean | `true` | Confirm project details before finalizing |
-| `gates.confirm_phases` | boolean | `true` | Confirm phase breakdown |
-| `gates.confirm_roadmap` | boolean | `true` | Confirm roadmap before proceeding |
-| `gates.confirm_breakdown` | boolean | `true` | Confirm task breakdown |
-| `gates.confirm_plan` | boolean | `true` | Confirm each plan before execution |
-| `gates.execute_next_plan` | boolean | `true` | Confirm before executing next plan |
-| `gates.issues_review` | boolean | `true` | Review issues before creating fix plans |
-| `gates.confirm_transition` | boolean | `true` | Confirm phase transition |
-
----
-
-## Safety Settings
-
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `safety.always_confirm_destructive` | boolean | `true` | Confirm destructive operations (deletes, overwrites) |
-| `safety.always_confirm_external_services` | boolean | `true` | Confirm external service interactions |
+| `gates.execute_next_plan` | boolean | `true` | Confirm before executing next plan (`execute-plan.md`) |
+| `gates.confirm_transition` | boolean | `true` | Confirm phase transition (`transition.md`) |
+| `gates.confirm_milestone_scope` | boolean | `true` | Confirm milestone scope before shipping (`complete-milestone.md`) |
 
 ---
 
