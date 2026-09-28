@@ -490,6 +490,12 @@ async function checkShardBalance({
   try {
     const { owner, repo } = context.repo;
 
+    const runLimit = config.windowRuns * 2;
+    // The Actions API returns runs newest-first, so stopping paging once
+    // `runLimit` runs are collected keeps the newest ones and bounds API
+    // cost regardless of how far back `config.since` reaches (Octokit
+    // paginate's documented `done()` early exit).
+    let fetched = 0;
     const runsList = await github.paginate(github.rest.actions.listWorkflowRuns, {
       owner,
       repo,
@@ -498,13 +504,17 @@ async function checkShardBalance({
       event: config.event,
       status: 'completed',
       created: `>=${config.since}`,
-      per_page: 50,
+      per_page: Math.min(100, runLimit),
+    }, (response, done) => {
+      fetched += response.data.length;
+      if (fetched >= runLimit) done();
+      return response.data;
     });
 
     const sortedRuns = [...runsList].sort(
       (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at),
     );
-    const candidateRuns = sortedRuns.slice(0, config.windowRuns * 2);
+    const candidateRuns = sortedRuns.slice(0, runLimit);
 
     const runsWithJobs = [];
     for (const run of candidateRuns) {

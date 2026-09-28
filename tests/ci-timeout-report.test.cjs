@@ -784,4 +784,64 @@ test('shard balance (#5101)', async (t) => {
     assert.equal(result.status, 'error');
     assert.equal(warnings.length >= 1, true);
   });
+
+  await t.test('run listing stops paging once enough runs are collected', async () => {
+    const totalRuns = 200;
+    const allRuns = [];
+    const jobsByRunId = {};
+    for (let k = 0; k < totalRuns; k += 1) {
+      const id = totalRuns - k;
+      const createdAt = addMs(SHARD_BALANCE.since, (totalRuns - k) * 3600000);
+      allRuns.push({ id, created_at: createdAt, head_sha: `sha${id}`, event: 'push' });
+      jobsByRunId[id] = [
+        winJobFromMs(1, 3, 1200000, { start: createdAt }),
+        winJobFromMs(2, 3, 1200000, { start: createdAt }),
+        winJobFromMs(3, 3, 1200000, { start: createdAt }),
+      ];
+    }
+    // allRuns is newest-first (highest id / latest created_at first).
+
+    let runListingPages = 0;
+    const github = {
+      paginate: async (fn, params, mapFn) => {
+        const out = [];
+        let stopped = false;
+        const done = () => { stopped = true; };
+        for (let page = 0; !stopped; page += 1) {
+          const data = await fn({ ...params, page });
+          if (data.length === 0) break;
+          out.push(...(mapFn ? mapFn({ data }, done) : data));
+        }
+        return out;
+      },
+      rest: {
+        actions: {
+          listWorkflowRuns: async (p) => {
+            runListingPages += 1;
+            const page = p.page || 0;
+            return allRuns.slice(page * p.per_page, (page + 1) * p.per_page);
+          },
+          listJobsForWorkflowRun: async (p) => (
+            (p.page || 0) === 0 ? jobsByRunId[p.run_id] : []
+          ),
+        },
+        search: {
+          issuesAndPullRequests: async () => ({ data: { items: [] } }),
+        },
+        issues: {
+          create: async () => ({ data: { number: 999 } }),
+          createComment: async () => ({ data: {} }),
+        },
+      },
+    };
+    const { core } = makeCore();
+
+    const result = await checkShardBalance({ github, context, core, config: SHARD_BALANCE });
+
+    const runLimit = SHARD_BALANCE.windowRuns * 2;
+    const expectedPages = Math.ceil(runLimit / Math.min(100, runLimit));
+    assert.equal(runListingPages, expectedPages);
+    assert.equal(result.status, 'ok');
+    assert.equal(result.runs, SHARD_BALANCE.windowRuns);
+  });
 });
