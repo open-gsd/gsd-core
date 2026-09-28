@@ -19,6 +19,9 @@
 //   node scripts/gen-test-timings.cjs <events.jsonl> [<events.jsonl> ...]
 //   node scripts/gen-test-timings.cjs ~/.local/state/gsd-test/runs/*/test-events-*.jsonl
 //   node scripts/gen-test-timings.cjs events.jsonl --out tests/test-timings.json
+//   node scripts/gen-test-timings.cjs --platform win32 test-timings-windows-shard*.jsonl
+//     (#5071: the per-shard exports CI uploads from its Windows conformance
+//     jobs -> tests/test-timings.win32.json, preferred by run-tests.cjs on win32)
 //
 // When several streams are supplied (multiple lanes, e.g. node22 + node24), a
 // file's recorded time is the MAX across them, not the mean: the packer exists
@@ -28,9 +31,9 @@
 // The table is ADVISORY and deliberately un-gated — there is no `--check` mode
 // and no CI lint that fails on staleness, because timing data legitimately
 // varies run to run. A file missing from the table falls back to the table's
-// median weight, so a stale table degrades chunk BALANCE gracefully instead of
-// failing the build. Regenerate it when the suite's cost profile has visibly
-// drifted, not on a schedule.
+// mean weight (see makeFileWeigher in run-tests.cjs), so a stale table
+// degrades chunk BALANCE gracefully instead of failing the build. Regenerate
+// it when the suite's cost profile has visibly drifted, not on a schedule.
 'use strict';
 
 const fs = require('fs');
@@ -40,12 +43,32 @@ const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 const DEFAULT_OUT = join(__dirname, '..', 'tests', 'test-timings.json');
 const SCHEMA_VERSION = 1;
 
+// #5071: `--platform <p>` writes the table measured ON that platform, which
+// scripts/run-tests.cjs prefers there (see its makeFileWeigher). The default
+// path must match run-tests.cjs's platformTimingsPath() —
+// tests/run-tests-harness.test.cjs pins the two together. A closed set, in
+// exactly Node's own `process.platform` spelling, because the value becomes
+// part of a filename the runner looks up by that spelling.
+const PLATFORMS = ['win32', 'darwin', 'linux'];
+function platformOut(platform) {
+  return join(__dirname, '..', 'tests', `test-timings.${platform}.json`);
+}
+
 function parseArgs(argv) {
   const inputs = [];
-  let out = DEFAULT_OUT;
+  let out = null;
+  let platform = null;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === '--out') {
+    if (arg === '--platform' || arg.startsWith('--platform=')) {
+      if (platform !== null) return { error: 'duplicate --platform flag' };
+      const value = arg === '--platform' ? argv[++i] : arg.slice('--platform='.length);
+      if (!value || value.startsWith('-')) return { error: `--platform requires one of: ${PLATFORMS.join(', ')}` };
+      if (!PLATFORMS.includes(value)) {
+        return { error: `unknown --platform "${value}" (expected one of: ${PLATFORMS.join(', ')})` };
+      }
+      platform = value;
+    } else if (arg === '--out') {
       const value = argv[++i];
       if (!value) return { error: '--out requires a path' };
       out = value;
@@ -60,9 +83,10 @@ function parseArgs(argv) {
     }
   }
   if (inputs.length === 0) {
-    return { error: 'usage: gen-test-timings.cjs <reporter-events.jsonl> [...] [--out <path>]' };
+    return { error: 'usage: gen-test-timings.cjs <reporter-events.jsonl> [...] [--platform <win32|darwin|linux>] [--out <path>]' };
   }
-  return { inputs, out };
+  if (out === null) out = platform ? platformOut(platform) : DEFAULT_OUT;
+  return { inputs, out, platform };
 }
 
 // Fold one reporter event stream into `acc`, keeping the MAX duration seen for
@@ -180,6 +204,7 @@ function main() {
   const payload = {
     schema_version: SCHEMA_VERSION,
     generated_by: 'scripts/gen-test-timings.cjs',
+    ...(parsed.platform ? { platform: parsed.platform } : {}),
     unit: 'ms',
     sources: sources.sort(),
     file_count: acc.size,

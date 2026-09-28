@@ -50,8 +50,9 @@
 // repo's `engines.node` requires >=24.0.0 (package.json), where both
 // contracts have been stable since Node 20.
 //
-// Kept intentionally tiny: only the five event types run-tests.cjs needs are
-// handled — `test:enqueue`/`test:dequeue` (emitted by the RUNNER as it queues
+// Kept intentionally tiny: only the event types run-tests.cjs needs are
+// handled — per-file `test:summary` (#5071, see the loop) plus these five:
+// `test:enqueue`/`test:dequeue` (emitted by the RUNNER as it queues
 // and begins each spawned test-file child, independent of whether anything
 // inside that file ever completes) plus `test:start`/`test:pass`/`test:fail`
 // (emitted per-subtest, once the child reports it). `test:dequeue` is the
@@ -108,6 +109,24 @@ module.exports = async function ndjsonEventReporter(source) {
       } catch {
         // Best-effort: a write failure here (e.g. the events dir vanished)
         // must never crash the test run this reporter is only observing.
+      }
+    } else if (event.type === 'test:summary' && typeof (event.data || {}).file === 'string') {
+      // #5071: node:test emits one `test:summary` per test FILE (its
+      // `duration_ms` is that file's wall-clock) plus a run-level one with no
+      // `file`. Only the per-file ones are recorded: run-tests.cjs exports
+      // them, when asked, as the raw input for a per-platform timing table
+      // (scripts/gen-test-timings.cjs --platform). The run-level summary is
+      // not a file measurement and is skipped here.
+      const line = `${JSON.stringify({
+        type: event.type,
+        file: event.data.file,
+        duration_ms: event.data.duration_ms,
+        ts: Date.now(),
+      })}\n`;
+      try {
+        require('fs').appendFileSync(eventsPath, line);
+      } catch {
+        // Best-effort, as above.
       }
     }
   }

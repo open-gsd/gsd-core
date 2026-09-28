@@ -518,6 +518,8 @@ mis-ranked files badly enough that the slowest chunk ran ~3.9x the lightest.
 | `RUN_TESTS_MAX_FILES_PER_CHUNK` | `60` (`22` on win32) | Per-chunk weight budget. Weights are normalized so an **average-cost** file weighs 1, so this still reads as "about 60 average files" (about 22 on win32). Windows gets a lower cap than Linux/macOS because the weight table's calibration does not transfer 1:1 to the Windows runner for install/subprocess-heavy work — see the derivation comment above `DEFAULT_MAX_FILES_PER_CHUNK` in `scripts/run-tests.cjs`. |
 | `RUN_TESTS_MAX_CMDLINE_CHARS` | `28000` | argv ceiling per chunk, with headroom under the Windows 32,767 limit. |
 | `RUN_TESTS_TIMINGS_FILE` | `tests/test-timings.json` | Path to the timing table. Tests override it to inject a synthetic cost profile. |
+| `RUN_TESTS_PLATFORM_TIMINGS_FILE` | `tests/test-timings.<platform>.json` | Path to the table measured on the platform the runner is on (`process.platform` spelling: `win32`, `darwin`, `linux`). Only `tests/test-timings.win32.json` is committed. When `RUN_TESTS_TIMINGS_FILE` is overridden and this variable is not, no platform table is loaded, so an injected cost profile is used exactly as given. |
+| `RUN_TESTS_TIMING_EVENTS_FILE` | unset | When set, every chunk appends its per-file `test:summary` durations to this file (the input `gen-test-timings.cjs` reads). Written after every chunk, including failed and killed ones. The runner removes the variable from its own environment before spawning chunks, so a nested `run-tests.cjs` never writes to it. A write failure prints one warning and never changes the exit code. |
 | `RUN_TESTS_CHUNK_TIMEOUT_MS` | `600000` | Per-chunk timeout. When it fires, the runner kills the chunk (on Windows it first attempts a whole-tree kill) and prints the in-flight-file diagnostic immediately, without waiting for the child's exit to be reported. |
 | `RUN_TESTS_CHUNK_KILL_GRACE_MS` | `30000` | Once a chunk times out, how long the runner waits for the child's exit to be observed before it stops waiting, reports that the exit was never confirmed, and aborts the remaining chunks. |
 
@@ -528,6 +530,40 @@ weight (1), and a missing or unparseable table falls back to uniform weight — 
 drift costs chunk *balance*, never a red build. A count-based floor additionally
 guarantees the packer never produces fewer chunks than plain count-based packing
 would, so a badly stale table cannot collapse the suite into a few fat chunks.
+
+### Platform-measured timings (win32)
+
+`tests/test-timings.json` is measured in Linux containers. Windows runs the same
+files at a different, and differently *ordered*, cost, so on `win32` the runner
+also loads `tests/test-timings.win32.json` (#5071) and weighs each file this way:
+
+| File is in… | Weight on win32 |
+|---|---|
+| the win32 table | its Windows duration, converted into Linux-table weight units |
+| only the Linux table | its Linux weight (unchanged) |
+| neither table | `2.2` (`WINDOWS_UNMEASURED_COST_MULTIPLIER`, #4434) |
+
+The conversion keeps the weight *unit* unchanged. It scales Windows milliseconds
+so that the files both tables measured keep their combined Linux weight. The
+total pool weight, and so the chunk count, `RUN_TESTS_MAX_FILES_PER_CHUNK`, the
+isolation threshold and `RUN_TESTS_SHARD_RESERVE`, all keep their meaning. Only
+the distribution of weight across files changes, to follow what each file really
+costs on Windows. With no file in common, Windows durations are divided by the
+win32 table's own mean.
+
+A file present in the win32 table counts as measured for the unmeasured-files
+chunk cap, even when the Linux table has never seen it. A missing Linux table
+still means uniform weight 1 on every platform.
+
+Each shard prints a second line after its `run-tests: shard=` line, reporting how
+many of its files the win32 table priced:
+
+```text
+run-tests: platform-timings=win32 weighed=91/94
+```
+
+No line means no win32 table loaded, and the shard was packed from Linux weights
+exactly as before.
 
 ### CI job timeout budgets: report + near-cap warning (#4036)
 
@@ -593,6 +629,48 @@ Pass every lane you have. A file's recorded time is the **max** across the
 supplied streams, not the mean: the packer exists to keep the *slowest* lane's
 slowest chunk away from the timeout, so the conservative bound is the right one.
 Keys are sorted so a regeneration diff shows only the files whose cost moved.
+
+### How-to: regenerate the win32 timing table
+
+Like the Linux table, the win32 table is advisory and un-gated. Regenerate it
+when the Windows conformance shards drift apart again, or after the conformance
+tier gains or loses expensive files.
+
+Every `conformance test (windows-latest, …)` job in `test.yml` writes its
+per-file durations to a `test-timings-windows-latest-job<N>` artifact, on red
+runs too (the macOS job uploads `test-timings-macos-latest-job<N>` the same
+way). Artifacts are kept for 14 days.
+
+1. Pick one recent, fully completed `Tests` run that ran the conformance jobs: a
+   push to `next`, or a `workflow_dispatch` of `test.yml`. Pull-request runs
+   skip these jobs unless the change needs the full matrix.
+2. Download the three Windows artifacts:
+
+   ```bash
+   gh run download <run-id> --repo open-gsd/gsd-core \
+     --pattern 'test-timings-windows-latest-*' --dir /tmp/win-timings
+   ```
+
+3. Build the table:
+
+   ```bash
+   node scripts/gen-test-timings.cjs --platform win32 /tmp/win-timings/*/*.jsonl
+   ```
+
+   `--platform win32` writes `tests/test-timings.win32.json` and records
+   `"platform": "win32"` in it. `--out` still overrides the path.
+4. Commit the regenerated file.
+
+Use all three shards of **one** run. Each shard runs a disjoint slice of the
+tier, so together they price every file once. The generator keeps the max for a
+file seen more than once, so mixing runs biases the table toward each file's
+slowest run.
+
+| What you see | What it means |
+|---|---|
+| `gen-test-timings: no \`test:summary\` events…` and exit 2 | The files are empty or not run-tests exports. A shard that died before its first chunk finished uploads an empty or missing file. |
+| An artifact missing for one shard | That job never reached the upload step (cancelled before it started). Pick another run. |
+| `run-tests: WARNING: could not append per-file durations…` in a job log | The export path was not writable. That job's artifact is incomplete. |
 
 ## Best practices for forward-compat (Node 24/26)
 
