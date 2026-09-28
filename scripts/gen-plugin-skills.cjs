@@ -79,9 +79,16 @@ const BARE_GSD_TOOLS_STEMS = new Set(['workstreams', 'quick', 'review-backlog', 
 // row above the real operative site, and rewriting that cell too would be a
 // change nobody asked for. (`&&`/`;` are kept: two-character or dedicated
 // separators, not also a Markdown table delimiter.) Only applied to
-// BARE_GSD_TOOLS_STEMS files (see above) -- within those 4 files every
-// command-position match under this narrower pattern is a real operative
-// call (verified against the issue's own 11-site census).
+// BARE_GSD_TOOLS_STEMS files (see above). Within those 4 files this narrower
+// pattern still matches one site beyond the issue's 11-site census --
+// gsd-quick/SKILL.md's <security_notes> line ("Status fields read via
+// `gsd-tools query frontmatter.get`") is a backtick-wrapped DESCRIPTIVE
+// mention, not a `Run:` instruction, but it has the identical command-
+// position shape and gets swapped too. That's harmless (the sentence reads
+// the same with `gsd_run` in it) and left as-is rather than special-cased,
+// but the true count this generator fixes is 12 operative-shaped sites, not
+// 11 -- the 12th just wasn't literal-command "operative" in the issue's own
+// sense.
 function rewriteBareGsdToolsCommandsToGsdRun(content) {
   return content
     .replace(/(^[ \t]*)gsd-tools(?=\s)/gm, '$1gsd_run')
