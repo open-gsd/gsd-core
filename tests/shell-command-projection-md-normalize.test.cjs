@@ -249,3 +249,80 @@ describe('#4725: write normalization must not reflow untouched prose', () => {
     );
   });
 });
+
+// Found while implementing #5105: the markdown rules ran over the YAML frontmatter block
+// too, so every .md write re-shaped frontmatter lines no writer touched — a blank line
+// around each column-0 `# comment` (read as a heading) and after a column-0 `- item`, and
+// the blank-run collapse shortened a block scalar. Inside a multi-line double-quoted scalar
+// an inserted blank line changes the VALUE: `frontmatter set status` silently rewrote an
+// unrelated `title`. The closed frontmatter block — located exactly as the frontmatter
+// reader locates it (`frontmatterBlock`) — is published byte-identical; only the body is
+// normalized.
+describe('#5105: write normalization leaves the frontmatter block untouched', () => {
+  const { frontmatterBlock, extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
+
+  for (const [label, doc] of [
+    ['a column-0 comment between keys', '---\na: 1\n# note\nb: 2\n---\nbody\n'],
+    ['a column-0 block list followed by a key', '---\ntags:\n- a\n- b\nstatus: t\n---\nbody\n'],
+    ['a column-0 `#` line inside a multi-line quoted scalar', '---\ntitle: "foo\n# bar\nbaz"\nstatus: t\n---\nbody\n'],
+    ['a block scalar holding a run of blank lines', '---\nd: |\n  x\n\n\n\n  y\nstatus: t\n---\nbody\n'],
+    ['a column-0 fence line inside a multi-line quoted scalar', '---\nt: "a\n```\nb"\n---\n# H\n\ntext\n'],
+  ]) {
+    test(`${label} is published byte-identical and reads back the same`, () => {
+      const { content } = normalizeContent(MD, doc);
+      assert.strictEqual(content, doc);
+      assert.deepStrictEqual(extractFrontmatter(content), extractFrontmatter(doc));
+    });
+  }
+
+  test('the body after the block is still normalized', () => {
+    const { content } = normalizeContent(MD, '---\n# c\na: 1\n---\n# Heading\ntext\n\n\n\nmore\n');
+    assert.strictEqual(content, '---\n# c\na: 1\n---\n# Heading\n\ntext\n\nmore\n');
+  });
+
+  for (const [label, shape, published] of [
+    ['CRLF', (d) => d.replace(/\n/g, '\r\n'), (d) => d],
+    ['BOM', (d) => `﻿${d}`, (d) => `﻿${d}`],
+  ]) {
+    test(`a ${label} document keeps its frontmatter lines (LF-published)`, () => {
+      const doc = '---\na: 1\n# note\nb: 2\n---\nbody\n';
+      assert.strictEqual(normalizeContent(MD, shape(doc)).content, published(doc));
+    });
+  }
+
+  test('an unterminated block is not frontmatter to the reader, so it is normalized as body', () => {
+    const doc = '---\na: 1\n# note\nb: 2\n';
+    assert.strictEqual(frontmatterBlock(doc), null);
+    assert.strictEqual(normalizeContent(MD, doc).content, '---\na: 1\n\n# note\n\nb: 2\n');
+  });
+
+  test('property: every closed frontmatter block frontmatterBlock finds is published byte-identical', () => {
+    const word = fc.stringMatching(/^[a-z]{1,6}$/);
+    const fmLine = fc.oneof(
+      word.map((w) => `${w}: 1`),
+      word.map((w) => `# ${w}`),
+      word.map((w) => `- ${w}`),
+      word.map((w) => `  ${w}`),
+      fc.constantFrom('', '```', '## x', '* y', '1. z'),
+    );
+    const bodyLine = fc.oneof(word, word.map((w) => `# ${w}`), word.map((w) => `- ${w}`), fc.constant(''));
+    fc.assert(
+      fc.property(
+        fc.array(fmLine, { maxLength: 12 }),
+        fc.array(bodyLine, { maxLength: 8 }),
+        fc.boolean(),
+        (fm, body, bom) => {
+          const doc = `${bom ? '﻿' : ''}---\n${fm.join('\n')}\n---\n${body.join('\n')}\n`;
+          const located = frontmatterBlock(doc);
+          assert.ok(located, `fixture must hold a closed block: ${JSON.stringify(doc)}`);
+          const { content } = normalizeContent(MD, doc);
+          assert.ok(
+            content.startsWith(located.bom + located.block),
+            `frontmatter block changed:\n${JSON.stringify(doc)}\n=> ${JSON.stringify(content)}`,
+          );
+        },
+      ),
+      { seed: 5105, numRuns: 300, endOnFailure: true },
+    );
+  });
+});

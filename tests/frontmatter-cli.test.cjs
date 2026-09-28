@@ -1082,6 +1082,17 @@ describe('frontmatter set/merge — write refusal', () => {
     assert.strictEqual(fs.readFileSync(file, 'utf-8'), '---\nm:\n  a: "x # y"\n  b: 3\nstatus: t\n---\nbody\n');
   });
 
+  // The published file, not only the spliced text: the .md write normalizer used to insert
+  // blank lines around a column-0 `#` line inside the block, which changed an unrelated
+  // multi-line quoted value (found while implementing #5105).
+  test('set of one key leaves an unrelated multi-line quoted value holding a `#` line byte-identical', (t) => {
+    const file = fileIn(t, 'plan.md', '---\ntitle: "foo\n# bar\nbaz"\n# note\nstatus: t\n---\nbody\n');
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'status', '--value', 'u']);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).updated, true, result.output);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), '---\ntitle: "foo\n# bar\nbaz"\n# note\nstatus: u\n---\nbody\n');
+  });
+
   test('control: an inline comment on an unchanged top-level key stays byte-identical', (t) => {
     const file = fileIn(t, 'state.md', '---\nstatus: t   # keep  me\nm: 1\n---\nbody\n');
     const result = runGsdTools(['frontmatter', 'set', file, '--field', 'm', '--value', '2']);
