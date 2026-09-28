@@ -63,6 +63,21 @@ function resolveJobTimeoutMinutes({ jobName, workflowFile, workflowYamlText, cov
  */
 function parseJobRecord({ job, workflowFile, workflowYamlText, covered }) {
   if (!job.completed_at) return null;
+  // #5088: a job that never executed has no duration to report. GitHub's jobs
+  // API marks it two ways: `conclusion: 'skipped'` (it still carries a
+  // `completed_at`), and — for skipped AND cancelled-before-start jobs alike —
+  // a `completed_at` one second BEFORE `started_at`. Passing either shape to
+  // computeElapsedPct throws, and nothing above this catches, so one such job
+  // used to discard the whole scheduled report. Skip it here, at the API
+  // boundary; computeElapsedPct stays strict because the in-job near-cap check
+  // feeds it a live job's own clock, where a negative span is a real error. A
+  // `cancelled` job with a real span is NOT skipped: a job killed at its
+  // timeout-minutes cap is reported as cancelled, and is exactly what this
+  // report exists to record.
+  if (job.conclusion === 'skipped') return null;
+  const startMs = Date.parse(job.started_at);
+  const endMs = Date.parse(job.completed_at);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return null;
 
   const timeoutMinutes = resolveJobTimeoutMinutes({ jobName: job.name, workflowFile, workflowYamlText, covered });
   if (timeoutMinutes == null) return null;
