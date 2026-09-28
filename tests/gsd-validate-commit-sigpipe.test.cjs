@@ -31,7 +31,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { runHook } = require('./helpers/process-seam.cjs');
+const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
 const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { cleanup } = require('./helpers.cjs');
 
@@ -519,97 +519,121 @@ describe('#4429 follow-up — makeHookLayout must survive a concurrently-deleted
     );
   });
 
-  test('CONTROL: without the filter, a REAL concurrently-deleted staging directory crashes the process (proves the defect is real)', (t) => {
-    // A synchronous, single-process, filter-callback-driven deletion (the
-    // first approach tried here) CANNOT reproduce this defect: passing
-    // *any* `filter` to fs.cpSync makes Node take its slow per-entry JS
-    // walk (internal/fs/cp/cp-sync's copyDir/onDir, built on plain
-    // fs.statSync), where a vanished directory surfaces as a normal,
-    // catchable ENOENT Error — verified empirically, not assumed. The
-    // process-aborting native path — `fsBinding.cpSyncCopyDir`, built on
-    // std::filesystem::directory_iterator — is only reachable with NO
-    // filter at all, i.e. exactly the shipped pre-fix call in this file.
-    // That path is also genuinely racy: deleting the directory between two
-    // calls to it sometimes surfaces as a catchable ENOENT and sometimes as
-    // an uncaught std::filesystem::filesystem_error -> SIGABRT, depending on
-    // exactly which native call loses the race. So this control drives a
-    // REAL concurrent deletion (a worker_thread churning a staging
-    // directory while the main thread repeatedly calls the unfiltered,
-    // pre-fix-shaped fs.cpSync) and retries through any catchable errors
-    // until the crash actually happens, bounded by a generous timeout.
-    // Both threads run inside one throwaway child process (spawnSync) so
-    // the SIGABRT takes down only that child, never this test process.
-    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4429-control-src-'));
+  // #5068 — this CONTROL used to depend on winning a REAL race: a worker
+  // thread churned a staging directory while the main thread looped an
+  // unfiltered fs.cpSync for up to 15 s, hoping the directory would vanish in
+  // the microsecond window between the parent's readdir and the child's
+  // opendir. On a loaded bench it lost that race 136 times in a row, and the
+  // churn itself was a 15-second IO storm on the shared tmpdir. Real-race
+  // tests are deleted and replaced (RULESET.TESTS.delete-bad-tests).
+  //
+  // What the defect actually is, read off Node's source (lib/internal/fs/cp/
+  // cp-sync.js `copyDir`, src/node_file.cc `CpSyncCopyDir`): an fs.cpSync with
+  // NO filter hands the whole walk to the native `cpSyncCopyDir`, which opens
+  // every listed subdirectory with the THROWING form of
+  // `std::filesystem::directory_iterator`. Any failure to open a directory it
+  // has just listed — ENOENT because a concurrent build deleted it, or any
+  // other errno — escapes as an uncaught C++ exception and aborts the process
+  // (SIGABRT); no JS try/catch can intercept it. Passing ANY filter moves the
+  // walk onto the JS implementation, whose errors are ordinary, catchable
+  // Errors — which is why a deletion driven from a filter callback cannot
+  // reproduce this, and why the fix (a filter) works.
+  //
+  // So the injection point is that exact call, made to fail deterministically
+  // instead of by timing: the child leaves itself exactly ONE free file
+  // descriptor. The parent directory's opendir takes it; the staging
+  // directory's opendir then fails with EMFILE — every run, on every host.
+  // The same fixture copied WITH the shipped filter, under the identical
+  // injection, never enters the staging directory and completes.
+  const STAGING = '.dist-staging-999999';
+
+  /**
+   * Copy a hooks-shaped fixture in a throwaway child that has exactly one free
+   * fd when the copy starts. Returns the seam result plus the JSON markers the
+   * child wrote (synchronously, so they survive an abort).
+   */
+  function copyWithOneFreeFd(t, filtered) {
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4429-control-'));
     t.after(() => cleanup(fixtureRoot));
     const srcHooks = path.join(fixtureRoot, 'hooks');
-    fs.mkdirSync(srcHooks, { recursive: true });
-    fs.writeFileSync(path.join(srcHooks, 'gsd-validate-commit.sh'), '#!/bin/sh\necho ok\n');
-    for (let i = 0; i < 20; i++) {
-      fs.writeFileSync(path.join(srcHooks, `f${i}.js`), 'x'.repeat(1000));
-    }
-    const destRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4429-control-dest-'));
-    t.after(() => cleanup(destRoot));
+    // The staging directory is the ONLY entry: a regular file visited first
+    // would need fds of its own and fail catchably, before the walk ever
+    // reached the directory this control is about.
+    fs.mkdirSync(path.join(srcHooks, STAGING), { recursive: true });
+    fs.writeFileSync(path.join(srcHooks, STAGING, 'gsd-validate-commit.sh.123'), 'partial\n');
+    const dest = path.join(fixtureRoot, 'out');
 
-    const BUDGET_MS = 15000;
-    const childScript = [
+    // The filtered run uses the SHIPPED filter, re-hosted in the child with
+    // HOOKS_DIR bound to this fixture — not a look-alike.
+    const child = path.join(fixtureRoot, 'copy-with-one-free-fd.cjs');
+    fs.writeFileSync(child, [
+      "'use strict';",
       "const fs = require('node:fs');",
+      "const os = require('node:os');",
       "const path = require('node:path');",
-      "const { Worker } = require('node:worker_threads');",
-      `const hooks = ${JSON.stringify(srcHooks)};`,
-      `const destRoot = ${JSON.stringify(destRoot)};`,
-      // Real concurrent churn, on its own OS thread — a JS-level setImmediate
-      // loop on the SAME thread as the synchronous fs.cpSync calls below
-      // would never actually overlap with them (verified: it never crashed
-      // in ~6000 iterations, because the synchronous call blocks the loop
-      // that would schedule the next churn step).
-      'const worker = new Worker(`',
-      '  const fs = require("node:fs");',
-      '  const path = require("node:path");',
-      '  const hooks = ${JSON.stringify(hooks)};',
-      '  function loop() {',
-      '    const staging = path.join(hooks, ".dist-staging-" + process.pid);',
-      '    try {',
-      '      fs.mkdirSync(staging, { recursive: true });',
-      '      for (let j = 0; j < 30; j++) fs.writeFileSync(path.join(staging, "f" + j + ".js"), "x".repeat(2000));',
-      '      fs.rmSync(staging, { recursive: true, force: true });',
-      '    } catch (e) {}',
-      '    setImmediate(loop);',
-      '  }',
-      '  loop();',
-      '`, { eval: true });',
-      `const start = Date.now();`,
-      'let iterations = 0;',
-      `while (Date.now() - start < ${BUDGET_MS}) {`,
-      '  const dest = path.join(destRoot, `out-${iterations}`);',
-      '  try {',
-      // Deliberately the PRE-FIX form: the shipped-before-this-change call,
-      // no filter — the only shape that can reach the native crashing path.
-      '    fs.cpSync(hooks, dest, { recursive: true, dereference: true });',
-      '  } catch (e) { /* a catchable ENOENT from the same race; keep retrying */ }',
-      '  try { fs.rmSync(dest, { recursive: true, force: true }); } catch (e) {}',
-      '  iterations++;',
+      `const HOOKS_DIR = ${JSON.stringify(srcHooks)};`,
+      isSafeHooksCopyEntry.toString(),
+      `const opts = { recursive: true, dereference: true${filtered ? ', filter: isSafeHooksCopyEntry' : ''} };`,
+      // Warm-up with descriptors to spare, so no lazy load happens later.
+      `fs.cpSync(HOOKS_DIR, ${JSON.stringify(`${dest}-warm`)}, opts);`,
+      'const held = [];',
+      'for (;;) {',
+      '  try { held.push(fs.openSync(os.devNull, "r")); }',
+      '  catch (e) { if (e.code === "EMFILE") break; throw e; }',
       '}',
-      "console.log('UNEXPECTED_SUCCESS iterations=' + iterations);",
-      'worker.terminate();',
-    ].join('\n');
+      'fs.closeSync(held.pop());',
+      'fs.writeSync(1, JSON.stringify({ phase: "ready", held: held.length }) + "\\n");',
+      'let phase;',
+      `try { fs.cpSync(HOOKS_DIR, ${JSON.stringify(dest)}, opts); phase = "copied"; }`,
+      'catch (e) { phase = "threw:" + e.code; }',
+      'for (const fd of held) fs.closeSync(fd);',
+      'fs.writeSync(1, JSON.stringify({ phase }) + "\\n");',
+    ].join('\n'));
+    // A soft descriptor limit keeps the fill loop to ~256 opens instead of a
+    // container's default of ~1M.
+    const limiter = path.join(fixtureRoot, 'limit-fds.sh');
+    fs.writeFileSync(limiter, 'ulimit -S -n 256 && exec "$@"\n');
 
-    const result = require('node:child_process').spawnSync(process.execPath, ['-e', childScript], {
-      encoding: 'utf-8',
-      timeout: BUDGET_MS + 15000,
+    const res = runHook(limiter, [process.execPath, child], {
+      interpreter: 'sh',
+      timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
     });
+    const markers = res.stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    return { res, markers, dest };
+  }
 
-    assert.notEqual(
-      result.stdout.includes('UNEXPECTED_SUCCESS'),
-      true,
-      'the pre-fix (unfiltered) copy did NOT crash within the budget, so this CONTROL does not reproduce ' +
-      `the defect — re-derive it before trusting the fixed-copy row above. stdout=${result.stdout} ` +
-      `stderr=${(result.stderr || '').slice(0, 400)}`,
+  test('CONTROL: without the filter, a staging directory the native walk cannot open aborts the whole process (proves the defect is real)', (t) => {
+    const { res, markers } = copyWithOneFreeFd(t, false);
+    const detail = `outcome=${res.outcome} exitCode=${res.exitCode} signal=${res.signal} `
+      + `markers=${JSON.stringify(markers)} stderr=${res.stderr.slice(0, 400)}`;
+    // Anti-vacuous: the injection really happened — the fill loop reached
+    // EMFILE and the copy started with one descriptor free.
+    assert.equal(markers[0]?.phase, 'ready', `the fd injection never completed. ${detail}`);
+    assert.ok(markers[0].held > 0, `no descriptors were held, so nothing was injected. ${detail}`);
+    assert.equal(
+      res.outcome,
+      OUTCOME.KILLED,
+      'the unfiltered copy did not abort when the staging directory could not be opened, so this CONTROL '
+      + `does not reproduce the defect — re-derive it before trusting the fixed-copy rows. ${detail}`,
     );
-    assert.ok(
-      result.signal === 'SIGABRT' || /terminate called|filesystem_error/i.test(result.stderr || ''),
-      `expected the unfiltered copy to abort on a concurrently-deleted staging dir (SIGABRT or a ` +
-      `filesystem_error message). status=${result.status} signal=${result.signal} ` +
-      `stderr=${(result.stderr || '').slice(0, 400)}`,
+    assert.equal(res.signal, 'SIGABRT', `expected an uncaught C++ exception (SIGABRT). ${detail}`);
+    // The child's own try/catch never ran: the abort bypassed JS entirely.
+    assert.equal(markers.length, 1, `the copy returned to JS instead of aborting. ${detail}`);
+  });
+
+  test('the fixed copy (with the shipped filter) completes under the identical injection and never enters the staging directory', (t) => {
+    const { res, markers, dest } = copyWithOneFreeFd(t, true);
+    const detail = `outcome=${res.outcome} exitCode=${res.exitCode} signal=${res.signal} `
+      + `markers=${JSON.stringify(markers)} stderr=${res.stderr.slice(0, 400)}`;
+    assert.equal(markers[0]?.phase, 'ready', `the fd injection never completed. ${detail}`);
+    assert.equal(res.outcome, OUTCOME.EXITED, detail);
+    assert.equal(res.exitCode, 0, detail);
+    assert.equal(markers[1]?.phase, 'copied', `the filtered copy did not complete. ${detail}`);
+    assert.equal(fs.statSync(dest).isDirectory(), true, 'the destination directory must exist');
+    assert.equal(
+      fs.existsSync(path.join(dest, STAGING)),
+      false,
+      'the filtered-out staging dir must not appear in the destination',
     );
   });
 });

@@ -507,10 +507,16 @@ describe('quick-batch merge routing — advisory scope drift merges but warns (S
 describe('quick-batch merge routing — real .gitmodules submodule integration (Scheduling AC)', () => {
   /**
    * Builds `<repoDir>/vendor/sub` as a REAL git submodule (local file://
-   * remote, no network) pinned at `pinnedCommit`, committed on repoDir's
-   * primary branch. Returns the two submodule commits so a test can bump
-   * between them inside a worktree branch — the real "submodule-touch"
-   * scenario #3344's AC names.
+   * remote, no network) pinned at `sub1`, committed on repoDir's primary
+   * branch. Returns the two submodule commits so a test can bump between
+   * them inside a worktree branch — the real "submodule-touch" scenario
+   * #3344's AC names.
+   *
+   * #5068: the fixture spawns only the git calls the assertions need. sub2 is
+   * committed AFTER the `submodule add`, so the add itself pins sub1 and no
+   * re-pinning `git checkout` is required — that checkout was the call that
+   * timed out on a starved bench, and a 3 ms operation spends nothing of its
+   * own there: every avoidable spawn is simply one more exposure to host load.
    */
   function buildRepoWithSubmodule(tmpBase) {
     const subDir = path.join(tmpBase, 'subsrc');
@@ -523,21 +529,41 @@ describe('quick-batch merge routing — real .gitmodules submodule integration (
     git(['add', '-A'], subDir);
     git(['commit', '-m', 'sub commit 1'], subDir);
     const sub1 = git(['rev-parse', 'HEAD'], subDir).trim();
+
+    const repoDir = path.join(tmpBase, 'repo');
+    initRepo(repoDir);
+    git(['-c', 'protocol.file.allow=always', 'submodule', 'add', subDir, 'vendor/sub'], repoDir);
+    git(['add', 'vendor/sub', '.gitmodules'], repoDir);
+    git(['commit', '-m', 'add submodule pinned at sub1'], repoDir);
+    assert.equal(gitlinkAt(repoDir, 'HEAD'), sub1, 'the superproject must pin vendor/sub at sub1');
+
     fs.appendFileSync(path.join(subDir, 'f.txt'), 'world\n');
     git(['add', '-A'], subDir);
     git(['commit', '-m', 'sub commit 2'], subDir);
     const sub2 = git(['rev-parse', 'HEAD'], subDir).trim();
 
-    const repoDir = path.join(tmpBase, 'repo');
-    initRepo(repoDir);
-    git(['-c', 'protocol.file.allow=always', 'submodule', 'add', subDir, 'vendor/sub'], repoDir);
-    // Pin the just-added submodule checkout to sub1 so the worktree branch
-    // below has a REAL pointer bump (sub1 -> sub2) to commit, not a no-op.
-    git(['checkout', sub1], path.join(repoDir, 'vendor', 'sub'));
-    git(['add', 'vendor/sub', '.gitmodules'], repoDir);
-    git(['commit', '-m', 'add submodule pinned at sub1'], repoDir);
-
     return { repoDir, sub1, sub2 };
+  }
+
+  /** The commit `vendor/sub` points at in `rev`'s tree (a mode-160000 gitlink). */
+  function gitlinkAt(dir, rev) {
+    // `ls-tree --format` needs git >= 2.36; `rev-parse <rev>:<path>` resolves
+    // a gitlink entry to the pinned commit id on every supported git.
+    return git(['rev-parse', `${rev}:vendor/sub`], dir).trim();
+  }
+
+  /**
+   * Commit a REAL pointer bump of `vendor/sub` to `sha` on the worktree's
+   * branch. `update-index --cacheinfo 160000,…` writes the exact index entry
+   * that `git add vendor/sub` records after checking the submodule out at
+   * `sha` — without cloning the submodule into the worktree and checking it
+   * out first (a full clone plus a checkout the merge never looks at: the
+   * cleanup primitive merges commits, not working trees).
+   */
+  function commitGitlinkBump(wtDir, sha, message) {
+    git(['update-index', '--cacheinfo', `160000,${sha},vendor/sub`], wtDir);
+    git(['commit', '-m', message], wtDir);
+    assert.equal(gitlinkAt(wtDir, 'HEAD'), sha, 'the branch must carry the bumped gitlink before the merge runs');
   }
 
   test('a repo with .gitmodules and a plan that never touches the submodule merges cleanly through the cleanup primitive', () => {
@@ -584,10 +610,7 @@ describe('quick-batch merge routing — real .gitmodules submodule integration (
       addWorktree(repoDir, wtDir, branchName);
       const baseCommit = git(['merge-base', 'HEAD', branchName], repoDir).trim();
 
-      git(['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init'], wtDir);
-      git(['checkout', sub2], path.join(wtDir, 'vendor', 'sub'));
-      git(['add', 'vendor/sub'], wtDir);
-      git(['commit', '-m', 'bump vendor/sub to sub2'], wtDir);
+      commitGitlinkBump(wtDir, sub2, 'bump vendor/sub to sub2');
 
       const plan = {
         ok: true,
@@ -611,7 +634,7 @@ describe('quick-batch merge routing — real .gitmodules submodule integration (
       // the concrete, diagnosable outcome of a "submodule-touch" merge.
       const treeEntry = git(['ls-tree', 'HEAD', 'vendor/sub'], repoDir).trim();
       assert.match(treeEntry, /^160000 commit /, 'vendor/sub must remain a gitlink (mode 160000), never mis-parsed as a regular file');
-      assert.match(treeEntry, new RegExp(sub2), 'the merged tree must point at the bumped submodule commit');
+      assert.equal(gitlinkAt(repoDir, 'HEAD'), sub2, 'the merged tree must point at the bumped submodule commit');
     } finally {
       cleanup(tmpBase);
     }
@@ -626,10 +649,7 @@ describe('quick-batch merge routing — real .gitmodules submodule integration (
       addWorktree(repoDir, wtDir, branchName);
       const baseCommit = git(['merge-base', 'HEAD', branchName], repoDir).trim();
 
-      git(['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init'], wtDir);
-      git(['checkout', sub2], path.join(wtDir, 'vendor', 'sub'));
-      git(['add', 'vendor/sub'], wtDir);
-      git(['commit', '-m', 'bump vendor/sub to sub2, undeclared'], wtDir);
+      commitGitlinkBump(wtDir, sub2, 'bump vendor/sub to sub2, undeclared');
 
       const plan = {
         ok: true,
