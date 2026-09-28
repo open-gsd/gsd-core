@@ -28,7 +28,7 @@ import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
-const { extractFrontmatter, spliceFrontmatter, frontmatterListEntries, flattenObjectListItem, isFrontmatterWriteRefusal } = frontmatter;
+const { extractFrontmatter, spliceFrontmatter, frontmatterListEntries, flattenObjectListItem, isFrontmatterWriteRefusal, frontmatterBlock } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const { PHASE_NUMBER_TOKEN_SOURCE, scopeToPhase } = phaseIdMod;
@@ -501,14 +501,14 @@ function setFrontmatterStatus(content: string, status: 'complete' | 'partial'): 
 
 /**
  * The `---`…`---` frontmatter block's `[start, end)` character bounds in
- * `content` (the exact fence regex `spliceFrontmatter` itself matches), or
- * `null` if there is none.
+ * `content` — located by `frontmatterBlock`, the same fence owner
+ * `spliceFrontmatter` and every reader use — or `null` if there is none.
  */
 function frontmatterBlockBounds(content: string): { start: number; end: number } | null {
-  // A leading BOM (#2977) is not content before the fence — same as
-  // `spliceFrontmatter`, which carries it through unchanged.
-  const match = /^﻿?---\r?\n[\s\S]+?\r?\n---/.exec(content);
-  return match ? { start: match.index, end: match.index + match[0].length } : null;
+  // A leading BOM (#2977) is not content before the fence — it sits before
+  // `start`, carried through unchanged.
+  const located = frontmatterBlock(content);
+  return located ? { start: located.bom.length, end: located.bom.length + located.block.length } : null;
 }
 
 /**
