@@ -30,6 +30,21 @@ jobs:
           persist-credentials: true
           token: ${{ github.token }}
 
+      # The github-script step below require()s scripts/ci-timeout-report.cjs,
+      # which require()s js-yaml (a devDependency) to read each job's
+      # `timeout-minutes` out of the workflow YAML. github-script runs its
+      # script from the action's own directory but resolves that absolute
+      # require against the WORKSPACE, so the workspace needs node_modules/ —
+      # without these two steps every run died in `Cannot find module 'js-yaml'`
+      # before polling anything (#5006). `--ignore-scripts` matches test.yml:
+      # devDependencies are installed by default, lifecycle scripts are not
+      # needed here.
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
+        with:
+          node-version: 24
+      - name: Install dev dependencies
+        run: npm ci --ignore-scripts
+
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         id: poll
         with:

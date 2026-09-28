@@ -19,8 +19,8 @@ name: Require Issue Link
 # only green path was a knowingly-inert `Closes #N` against an already-closed
 # issue. The verdict now lives in scripts/require-issue-link-policy.cjs, which
 # additionally accepts a non-closing reference (`Refs #N`, `Follow-up to #N`, …)
-# but ONLY when every changed file is under tests/, under docs/, or a root-level
-# *.md — the same doc-only shape pre-pr-gate.sh:111 already recognizes, minus
+# but ONLY when every changed file is under tests/, under docs/, under
+# .out-of-scope/ (#5061), or a root-level *.md — the same doc-only shape pre-pr-gate.sh:111 already recognizes, minus
 # CHANGELOG.md, which changeset/lint.cjs classes as user-facing. Ordinary
 # source-touching PRs still require a closing keyword, so gate strength is
 # unchanged. The exemption is keyed on the server-computed diff shape, which a
@@ -156,7 +156,7 @@ jobs:
             const reason = process.env.REASON || 'fail_no_issue_reference';
             const explanation = {
               fail_reference_needs_closing: [
-                'This PR references an issue without a closing keyword, but its diff touches files outside `tests/`, `docs/`, and root-level `*.md`.',
+                'This PR references an issue without a closing keyword, but its diff touches files outside `tests/`, `docs/`, `.out-of-scope/`, and root-level `*.md`.',
                 '',
                 'The non-closing reference form is accepted **only** for test-only or docs-only follow-up PRs. Because this PR changes other files, it needs a closing keyword:',
               ],
@@ -183,7 +183,7 @@ jobs:
                 '',
                 'Accepted closing keywords are `Closes #NNN`, `Fixes #NNN`, and `Resolves #NNN`.',
                 '',
-                '**Test-only or docs-only follow-up PR?** If every file your PR changes is under `tests/`, under `docs/`, or a root-level `*.md` (`README.md`, `CONTRIBUTING.md`, … but not `CHANGELOG.md`), and there is no open issue for it to close, reference the related issue without closing it:',
+                '**Test-only or docs-only follow-up PR?** If every file your PR changes is under `tests/`, under `docs/`, under `.out-of-scope/`, or a root-level `*.md` (`README.md`, `CONTRIBUTING.md`, … but not `CHANGELOG.md`), and there is no open issue for it to close, reference the related issue without closing it:',
                 '',
                 '```',
                 'Refs #123',
