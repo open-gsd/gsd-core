@@ -166,7 +166,31 @@ If $ARGUMENTS provided OR user describes new issue:
 
 ## 2. Gather Symptoms (if new issue, SUBCMD=debug)
 
-Use AskUserQuestion for each. **TEXT_MODE fallback:** when `workflow.text_mode` is true, replace AskUserQuestion calls with plain-text numbered prompts and wait for typed replies.
+**Check `$ARGUMENTS` for pre-supplied values first (#5012).** A user pasting details, or a
+command wrapping `/gsd:debug`, may pass some or all of the five fields inline as
+semicolon-separated `label: value` pairs, e.g. `expected: mean() returns 5; actual: returns
+NaN; error: none; timeline: since last commit; repro: node run.js`. Recognized labels per
+field (case-insensitive): expected / expected behavior; actual / actual behavior; error /
+errors / error messages; timeline / when / started; repro / reproduction / steps to
+reproduce.
+
+Split only on a semicolon that immediately precedes the next recognized label, not on every
+semicolon — a value like `error: TypeError: x is not a function; retry also failed` is one
+field, not two. A label present with an empty or whitespace-only value (e.g. `error:` followed
+by nothing or only the next semicolon) counts as NOT supplied: ask that field's open question
+rather than silently confirming a blank value.
+
+For each of the five fields, independently:
+- If `$ARGUMENTS` supplies a recognized label with a value, show it back
+  (`{field}: {value} (from $ARGUMENTS)`) and confirm via AskUserQuestion (accept as-is or
+  edit) instead of asking the open question below.
+- If that field is missing from `$ARGUMENTS`, ask the corresponding open question via
+  AskUserQuestion as before.
+
+If `$ARGUMENTS` supplies none of the five fields, this step is unchanged: all five are
+asked from scratch via AskUserQuestion. **TEXT_MODE fallback:** when `workflow.text_mode`
+is true, replace AskUserQuestion calls — both the confirmation and the open-question forms
+— with plain-text numbered prompts and wait for typed replies.
 
 1. **Expected behavior** - What should happen?
 2. **Actual behavior** - What happens instead?
@@ -174,7 +198,7 @@ Use AskUserQuestion for each. **TEXT_MODE fallback:** when `workflow.text_mode` 
 4. **Timeline** - When did this start? Ever worked?
 5. **Reproduction** - How do you trigger it?
 
-After all gathered, confirm ready to investigate.
+After all gathered (confirmed from `$ARGUMENTS` or asked), confirm ready to investigate.
 
 Generate slug from user input description:
 - Lowercase all text
