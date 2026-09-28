@@ -306,12 +306,25 @@ describe('evaluateLint — #5074 .platform.test.cjs split siblings', () => {
   });
 
   test('orphan y.platform.test.cjs with no y.test.cjs in the same dir still counts (FAIL_EXCEEDS_LIMIT)', () => {
+    // Base fixture (no 'orphan.test.cjs' at all — the platform file's own
+    // base is genuinely absent) sits at the MAX_FILES=2 cap and must pass on
+    // its own; that's the control that proves the orphan file itself is what
+    // tips this over, not some other file in the set.
+    const baseFiles = ['orphan-a.test.cjs', 'orphan-edge.test.cjs'];
+    const controlResult = evaluateLint({
+      prefix: 'orphan',
+      testFiles: makeFiles('orphan', baseFiles),
+      allowlist: {},
+    });
+    assert.strictEqual(controlResult.verdict, Verdict.OK_UNDER_LIMIT,
+      `precondition: base fixture without the orphan must be OK_UNDER_LIMIT, got ${controlResult.verdict}`);
+    assert.strictEqual(controlResult.count, 2);
+
     const result = evaluateLint({
       prefix: 'orphan',
       testFiles: makeFiles('orphan', [
-        'orphan.test.cjs',
-        'orphan-edge.test.cjs',
-        'orphan.platform.test.cjs',   // no base file present — not a sibling
+        ...baseFiles,
+        'orphan.platform.test.cjs',   // no 'orphan.test.cjs' base present — not a sibling
       ]),
       allowlist: {},
     });
