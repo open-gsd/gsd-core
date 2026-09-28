@@ -3525,6 +3525,60 @@ describe('#3712 in-process home confinement', () => {
       );
     });
 
+    // Windows NTFS/ReFS file IDs exceed Number.MAX_SAFE_INTEGER (2^53); Node's
+    // plain (non-bigint) fs.statSync() rounds `ino`/`dev` to the nearest
+    // representable double past that point, so two DISTINCT directories can
+    // report the SAME numeric ino. identify() must call statSync with
+    // `{ bigint: true }` and compare bigints, or this collapses two unrelated
+    // sandboxes into one and the marker branch's `isInside` check fails OPEN:
+    // with numeric identity, walking `otherHome/.agents` up to `otherHome`
+    // finds its rounded ino equal to `sandbox`'s rounded ino, `isInside` returns
+    // true, "stale" is never set, and the guard returns without throwing —
+    // silently vouching for a destination that does not derive from the
+    // sandbox. This mocks fs.statSync so the two real temp dirs below produce
+    // real bigint values that differ only above 2^53 (and identical numeric
+    // values once rounded), reproducing that exact collision deterministically
+    // without depending on actually being on NTFS.
+    test('bigint bug: an ino collision above 2^53 must not let a stale marker destination pass', (t) => {
+      const sandbox = createTempDir('gsd-3712-bigint-sandbox-');
+      const otherHome = createTempDir('gsd-3712-bigint-other-');
+      t.after(() => { cleanup(sandbox); cleanup(otherHome); });
+
+      const sandboxIno = 2n ** 60n + 1n;
+      const otherIno = 2n ** 60n + 2n;
+      assert.equal(
+        Number(sandboxIno), Number(otherIno),
+        'precondition: the two bigint inos must round to the SAME double — that is the defect',
+      );
+
+      const realStatSync = fs.statSync;
+      t.mock.method(fs, 'statSync', (p, options) => {
+        const resolved = path.resolve(p);
+        const isSandbox = resolved === path.resolve(sandbox) || resolved.startsWith(path.resolve(sandbox) + path.sep);
+        const isOther = resolved === path.resolve(otherHome) || resolved.startsWith(path.resolve(otherHome) + path.sep);
+        if (!isSandbox && !isOther) return realStatSync(p, options);
+        const ino = isSandbox ? sandboxIno : otherIno;
+        if (options && options.bigint) {
+          const real = realStatSync(p, { bigint: true });
+          return Object.assign(Object.create(Object.getPrototypeOf(real)), real, { dev: 1n, ino });
+        }
+        const real = realStatSync(p);
+        return Object.assign(Object.create(Object.getPrototypeOf(real)), real, { dev: 1, ino: Number(ino) });
+      });
+
+      assert.throws(
+        () => testHomeGuard.assertTestHomeSandboxed('applySurface', 'codex',
+          escapingKinds(path.join(otherHome, '.agents')),
+          {
+            os: { homedir: () => sandbox, userInfo: () => { throw new Error('no passwd entry'); } },
+            env: { ...underTest, [testHomeGuard.SANDBOX_MARKER]: sandbox },
+          }),
+        /NOT beneath that sandbox/,
+        'a marker naming "sandbox" must not vouch for a destination under the DISTINCT "otherHome" ' +
+        'just because their inodes collide once rounded to plain JS numbers',
+      );
+    });
+
     // Codex review of #3725. resolveThroughLinks swallowed EVERY realpathSync
     // error and fell back to the LEXICAL spelling. That is a fail-open, and it
     // inverts the function's whole purpose: an aliased `<sandbox>/.agents` that

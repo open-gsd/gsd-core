@@ -106,6 +106,14 @@ const SANDBOX_MARKER = 'GSD_TEST_HOME_SANDBOX';
  * `statSync` follows symlinks and reports the inode itself, so a case-variant
  * HOME, a symlinked HOME, and a bind-mounted HOME all compare equal.
  *
+ * `identify` calls `fs.statSync(p, { bigint: true })`, not the plain numeric
+ * form. Node documents that the default numeric `dev`/`ino` lose precision past
+ * `Number.MAX_SAFE_INTEGER` (2^53), and NTFS/ReFS file IDs routinely exceed
+ * that — so on Windows two DISTINCT directories can round to the same numeric
+ * `ino` and compare equal here, which is a fail-OPEN in a module whose whole
+ * job is refusing writes into the real home. `{ bigint: true }` reports the
+ * true 64-bit values with no precision loss.
+ *
  * Fails CLOSED, and "closed" here means returning FALSE. The sole caller is the
  * passwd-less marker branch, which READS a true as permission to proceed:
  *
@@ -129,13 +137,13 @@ function sameDirectory(a: string, b: string): boolean {
 }
 
 type Identity =
-  | { kind: 'ok'; dev: number; ino: number }
+  | { kind: 'ok'; dev: bigint; ino: bigint }
   | { kind: 'absent' }
   | { kind: 'unknown' };
 
 function identify(p: string): Identity {
   try {
-    const st = fs.statSync(p);
+    const st = fs.statSync(p, { bigint: true });
     return { kind: 'ok', dev: st.dev, ino: st.ino };
   } catch (err) {
     const code = (err as NodeJS.ErrnoException | undefined)?.code;
@@ -407,7 +415,7 @@ function resolveThroughLinks(dest: string): string {
 function derivesFromSandboxedHome(
   dest: string,
   effectiveHome: string | null,
-  realHome: { dev: number; ino: number },
+  realHome: { dev: bigint; ino: bigint },
   passwdHome: string,
 ): boolean {
   if (effectiveHome === null) return false;
@@ -435,7 +443,7 @@ function derivesFromSandboxedHome(
  * case-variant or symlinked spelling of the same ancestor, which is the exact
  * class this guard exists to catch.
  */
-function isInside(child: string, rootId: { dev: number; ino: number }): boolean {
+function isInside(child: string, rootId: { dev: bigint; ino: bigint }): boolean {
   let cur = path.resolve(child);
   for (;;) {
     const id = identify(cur);
