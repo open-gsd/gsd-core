@@ -3323,3 +3323,803 @@ describe('#4894 --project-dir reaches verification root resolution', () => {
     assert.equal(mcpStatus([]), 'stale', 'no flag over MCP: unchanged');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// #5095 / ADR-5057 Phase 2: the fingerprint's input set is closed and
+// idempotent. Rows below follow .gsd/phase/refactor-5095-fingerprint-input-set/
+// 50-test-matrix.md's numbering (1-21). Targets the design's v3 API:
+//   - FINGERPRINT_VERSION === 3, digest prefix v3:sha256: for fresh fingerprints
+//   - computeCoveredDigest(projectRoot, coveredFiles, version, {phaseDir}):
+//     unchanged signature; v3 filters report-shaped declared paths
+//   - CLI `verification.fingerprint <phaseDir> <files...>` emits covered_files
+//     as a superset of the declared list, including every live
+//     *-PLAN.md/*-SUMMARY.md (root-relative posix), plus a v3 digest
+//   - two containment roots: `.planning/...` paths confined to
+//     realpath(<projectRoot>/.planning); other paths to realpath(projectRoot)
+// Rows explicitly marked fail-first below are expected to fail against
+// today's (v2, single-root, non-filtering, non-unioning) code.
+// ═══════════════════════════════════════════════════════════════════════════
+describe('fingerprint input set is closed and idempotent (#5095, ADR-5057 Phase 2)', () => {
+  const { runGsdTools, createTempGitProject } = require('./helpers.cjs');
+
+  function fpCli(projectDir, phaseDir, files) {
+    return runGsdTools(['verification', 'fingerprint', phaseDir, ...files], projectDir);
+  }
+
+  function statusCli(projectDir, phaseDir) {
+    const res = runGsdTools(['verification', 'status', phaseDir, '--pick', 'status'], projectDir);
+    assert.ok(res.success, `verification status should run: ${res.error}`);
+    return res.output;
+  }
+
+  function writeReportFrom(phaseDir, reportName, fpResult) {
+    assert.equal(fpResult.success, true, `fingerprint should succeed: ${fpResult.output}${fpResult.error}`);
+    const parsed = JSON.parse(fpResult.output);
+    fs.writeFileSync(
+      path.join(phaseDir, reportName),
+      `---\nstatus: passed\ncovered_files:\n${parsed.covered_files.map((f) => `  - ${f}`).join('\n')}\ncovered_digest: "${parsed.covered_digest}"\n---\n`,
+    );
+    return parsed;
+  }
+
+  // Amendment 1 fixture: a project whose `.planning` is a symlink to an
+  // out-of-repo store, mirroring the documented "keep planning content out of
+  // the tracked repo" layout. `dir`/`junction` per platform (#5095 brief).
+  function mkSymlinkedPlanningProject(prefix) {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-proj-`));
+    const store = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-store-`));
+    const gitOpts = { cwd: projectDir, timeoutMs: GIT_TIMEOUT_MS };
+    gitOrThrow(['init', '-q'], gitOpts);
+    gitOrThrow(['config', 'user.email', 'test@test.com'], gitOpts);
+    gitOrThrow(['config', 'user.name', 'Test'], gitOpts);
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], gitOpts);
+    gitOrThrow(['commit', '--allow-empty', '-q', '-m', 'init'], gitOpts);
+    fs.mkdirSync(path.join(store, 'phases'), { recursive: true });
+    fs.symlinkSync(store, path.join(projectDir, '.planning'), process.platform === 'win32' ? 'junction' : 'dir');
+    return { projectDir, store };
+  }
+
+  // ── Row 1: happy path, v3 digest ──────────────────────────────────────────
+  test('row 1: declared [plan, summary, impl], fresh → v3 digest; status passed', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    fs.mkdirSync(path.join(projectDir, 'src'));
+    fs.writeFileSync(path.join(projectDir, 'src', 'impl.ts'), 'export const x = 1;\n');
+
+    const files = [
+      '.planning/phases/01-foo/01-01-PLAN.md',
+      '.planning/phases/01-foo/01-01-SUMMARY.md',
+      'src/impl.ts',
+    ];
+    const digest = computeCoveredDigest(projectDir, files);
+    assert.match(digest, /^v3:sha256:[0-9a-f]{64}$/, 'default fingerprint version must be v3 (#5095)');
+
+    const fp = fpCli(projectDir, phaseDir, files);
+    writeReportFrom(phaseDir, '01-VERIFICATION.md', fp);
+    assert.equal(statusCli(projectDir, phaseDir), 'passed');
+  });
+
+  // ── Row 2 (CLI, fail-first #4857): a report is never an input to its own digest ──
+  test('row 2: declared includes the report itself → digest unaffected; compute → write → recompute stable', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    const planRel = '.planning/phases/01-foo/01-01-PLAN.md';
+    const summaryRel = '.planning/phases/01-foo/01-01-SUMMARY.md';
+    const reportRel = '.planning/phases/01-foo/01-VERIFICATION.md'; // does not exist yet
+
+    const fpWithout = fpCli(projectDir, phaseDir, [planRel, summaryRel]);
+    assert.equal(fpWithout.success, true, `expected success: ${fpWithout.error}`);
+    const fpWith = fpCli(projectDir, phaseDir, [planRel, summaryRel, reportRel]);
+    assert.equal(
+      fpWith.success, true,
+      `declaring the not-yet-written report must not fail the fingerprint (filtered before the existence check): ${fpWith.error}`,
+    );
+    assert.equal(
+      JSON.parse(fpWith.output).covered_digest,
+      JSON.parse(fpWithout.output).covered_digest,
+      'a report path in the declared set must not change the digest',
+    );
+
+    writeReportFrom(phaseDir, '01-VERIFICATION.md', fpWith);
+    assert.equal(statusCli(projectDir, phaseDir), 'passed');
+    assert.equal(statusCli(projectDir, phaseDir), 'passed', 'recompute must stay stable');
+  });
+
+  // ── Row 3 restated (R5): report-only declaration is evidence when the
+  // phase HAS plans (digest over the plans/summaries), and fails closed only
+  // when there is no other evidence to fall back on. ─────────────────────
+  test('row 3a: report-only declared set on a phase WITH plans → digest computed over the plans (R5, fail-first)', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5095-report-only-with-plans-'));
+    t.after(() => cleanup(root));
+    const phaseDir = path.join(root, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    const reportRel = '.planning/phases/01-foo/01-VERIFICATION.md';
+    fs.writeFileSync(path.join(root, reportRel), '---\nstatus: passed\n---\n');
+    const digest = computeCoveredDigest(root, [reportRel], 3, { phaseDir });
+    assert.ok(
+      digest,
+      'a report-only declared set on a phase with real plans is evidence, not empty (R5)',
+    );
+  });
+
+  test('row 3b: report-only declared set on a phase with NO plans → null (fail closed, kept)', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5095-report-only-no-plans-'));
+    t.after(() => cleanup(root));
+    const phaseDir = path.join(root, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const reportRel = '.planning/phases/01-foo/01-VERIFICATION.md';
+    // Exists on disk with real content — proves the null comes from the
+    // report-path FILTER, not a missing-file coincidence (today's v2
+    // default would hash it and return non-null).
+    fs.writeFileSync(path.join(root, reportRel), '---\nstatus: passed\n---\n');
+    assert.equal(
+      computeCoveredDigest(root, [reportRel], 3, { phaseDir }), null,
+      'v3: a report-only declared set with no plans/summaries to fall back on filters to empty → null',
+    );
+    assert.notEqual(
+      computeCoveredDigest(root, [reportRel], 2), null,
+      'sanity: v2 still hashes the report (proves the v3 null is the filter, not a missing file)',
+    );
+  });
+
+  test('row 3 (CLI): fingerprinting only the report fails closed with no plans, succeeds when plans exist (R5, fail-first)', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const reportRel = '.planning/phases/01-foo/01-VERIFICATION.md';
+
+    const withoutPlans = fpCli(projectDir, phaseDir, [reportRel]);
+    assert.equal(
+      withoutPlans.success, false,
+      'a declared set that is only the report, with no plans in the phase, must fail the CLI',
+    );
+
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    const withPlans = fpCli(projectDir, phaseDir, [reportRel]);
+    assert.equal(
+      withPlans.success, true,
+      `declaring only the report must still succeed once the phase has real plans/summaries: ${withPlans.error}`,
+    );
+  });
+
+  // ── Row 4 (fail-first, negative): report-shaped files are filtered ───────
+  test('row 4: -CORRECTION-VERIFICATION.md, bare VERIFICATION.md, docs/VERIFICATION.md are filtered', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5095-report-shaped-'));
+    t.after(() => cleanup(root));
+    fs.writeFileSync(path.join(root, 'impl.txt'), 'implementation content');
+    fs.mkdirSync(path.join(root, 'docs'));
+    fs.writeFileSync(path.join(root, '07-CORRECTION-VERIFICATION.md'), '# worksheet\n');
+    fs.writeFileSync(path.join(root, 'VERIFICATION.md'), '# bare report\n');
+    fs.writeFileSync(path.join(root, 'docs', 'VERIFICATION.md'), '# doc report\n');
+
+    const baseline = computeCoveredDigest(root, ['impl.txt']);
+    const withReportShaped = computeCoveredDigest(root, [
+      'impl.txt',
+      '07-CORRECTION-VERIFICATION.md',
+      'VERIFICATION.md',
+      'docs/VERIFICATION.md',
+    ]);
+    assert.equal(
+      withReportShaped, baseline,
+      'report-shaped files (basename VERIFICATION.md or *-VERIFICATION.md) must not enter the v3 digest',
+    );
+  });
+
+  // ── Row 5 (negative space): only report-shaped BASENAMES are filtered ────
+  test('row 5: VERIFICATION-NOTES.md, X-VERIFICATION.md.bak, verification.md (lowercase) are NOT filtered', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5095-not-report-shaped-'));
+    t.after(() => cleanup(root));
+    fs.writeFileSync(path.join(root, 'impl.txt'), 'implementation content');
+    fs.writeFileSync(path.join(root, 'VERIFICATION-NOTES.md'), 'notes');
+    fs.writeFileSync(path.join(root, '07-VERIFICATION.md.bak'), 'backup');
+    fs.writeFileSync(path.join(root, 'verification.md'), 'lowercase');
+
+    const baseline = computeCoveredDigest(root, ['impl.txt']);
+    const withNonReport = computeCoveredDigest(root, [
+      'impl.txt', 'VERIFICATION-NOTES.md', '07-VERIFICATION.md.bak', 'verification.md',
+    ]);
+    assert.ok(withNonReport, 'must produce a real digest, not null');
+    assert.notEqual(withNonReport, baseline, 'these basenames must still be hashed — they are not report-shaped');
+  });
+
+  // ── Row 6 (CLI, fail-first #4817): the emitter covers what the checker requires ──
+  test('row 6: emitted covered_files ⊇ every live plan/summary even when the declared set omits them', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    fs.mkdirSync(path.join(projectDir, 'src'));
+    fs.writeFileSync(path.join(projectDir, 'src', 'impl.ts'), 'export const x = 1;\n');
+
+    const fp = fpCli(projectDir, phaseDir, ['src/impl.ts']);
+    assert.equal(fp.success, true, `expected success, got: ${fp.output}${fp.error}`);
+    const parsed = JSON.parse(fp.output);
+    assert.ok(
+      parsed.covered_files.includes('.planning/phases/01-foo/01-01-PLAN.md'),
+      `emitted covered_files must include the live PLAN even when undeclared; got: ${JSON.stringify(parsed.covered_files)}`,
+    );
+    assert.ok(
+      parsed.covered_files.includes('.planning/phases/01-foo/01-01-SUMMARY.md'),
+      `emitted covered_files must include the live SUMMARY even when undeclared; got: ${JSON.stringify(parsed.covered_files)}`,
+    );
+
+    writeReportFrom(phaseDir, '01-VERIFICATION.md', fp);
+    assert.equal(statusCli(projectDir, phaseDir), 'passed', 'zero drift once the emitter self-completes the covered set');
+  });
+
+  // ── Row 7 (negative, regression-lock — R1(b)): a plan added after a v3
+  // fingerprint changes the input set, so the digest → stale. ─────────────
+  test('row 7: a plan added after fingerprinting → stale', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+
+    const fp = fpCli(projectDir, phaseDir, [
+      '.planning/phases/01-foo/01-01-PLAN.md',
+      '.planning/phases/01-foo/01-01-SUMMARY.md',
+    ]);
+    writeReportFrom(phaseDir, '01-VERIFICATION.md', fp);
+    assert.equal(statusCli(projectDir, phaseDir), 'passed');
+
+    fs.writeFileSync(path.join(phaseDir, '01-02-PLAN.md'), '# A new plan, never fingerprinted\n');
+    assert.equal(statusCli(projectDir, phaseDir), 'stale');
+  });
+
+  // ── Row 8 (positive control, regression-lock) ─────────────────────────────
+  test('row 8: covered impl file edited after fingerprinting → stale (positive control)', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    fs.mkdirSync(path.join(projectDir, 'src'));
+    fs.writeFileSync(path.join(projectDir, 'src', 'impl.ts'), 'export const x = 1;\n');
+    const files = [
+      '.planning/phases/01-foo/01-01-PLAN.md',
+      '.planning/phases/01-foo/01-01-SUMMARY.md',
+      'src/impl.ts',
+    ];
+
+    const fp = fpCli(projectDir, phaseDir, files);
+    writeReportFrom(phaseDir, '01-VERIFICATION.md', fp);
+    assert.equal(statusCli(projectDir, phaseDir), 'passed');
+
+    fs.writeFileSync(path.join(projectDir, 'src', 'impl.ts'), 'export const x = 2;\n');
+    assert.equal(statusCli(projectDir, phaseDir), 'stale');
+  });
+
+  // ── R1(a) (CLI, fail-first): --raw returns only the digest, and a caller
+  // that writes its OWN declared list (no plans/summaries) plus that raw
+  // digest still reads passed — the checker adds the same union on both
+  // sides, so the caller never has to enumerate plans/summaries itself. ────
+  test('R1(a): --raw digest + a self-written declared list omitting plans/summaries → status passed', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    fs.mkdirSync(path.join(projectDir, 'src'));
+    fs.writeFileSync(path.join(projectDir, 'src', 'impl.ts'), 'export const x = 1;\n');
+    const declared = ['src/impl.ts'];
+
+    const raw = runGsdTools(['verification', 'fingerprint', phaseDir, ...declared, '--raw'], projectDir);
+    assert.equal(raw.success, true, `--raw fingerprint should succeed: ${raw.error}`);
+    assert.match(raw.output.trim(), /^v3:sha256:[0-9a-f]{64}$/, '--raw must emit only the digest, no JSON envelope');
+
+    // The caller declares ONLY its own list — no plans/summaries — and pairs
+    // it with the raw digest. The checker's own union (stored ∪ live
+    // plans/summaries) must still match.
+    fs.writeFileSync(
+      path.join(phaseDir, '01-VERIFICATION.md'),
+      `---\nstatus: passed\ncovered_files:\n${declared.map((f) => `  - ${f}`).join('\n')}\ncovered_digest: "${raw.output.trim()}"\n---\n`,
+    );
+    assert.equal(statusCli(projectDir, phaseDir), 'passed');
+  });
+
+  // ── Row 9 (CLI, fail-first — amendment 1) ─────────────────────────────────
+  test('row 9: .planning symlinked to an out-of-repo store; phase artifacts declared → digest computed, status passed', (t) => {
+    const { projectDir, store } = mkSymlinkedPlanningProject('gsd-5095-row9');
+    t.after(() => { cleanup(projectDir); cleanup(store); });
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    const files = [
+      '.planning/phases/01-foo/01-01-PLAN.md',
+      '.planning/phases/01-foo/01-01-SUMMARY.md',
+    ];
+
+    const fp = fpCli(projectDir, phaseDir, files);
+    assert.equal(
+      fp.success, true,
+      `an out-of-repo .planning store must be its own containment root, not rejected as escaping projectRoot: ${fp.error}`,
+    );
+    writeReportFrom(phaseDir, '01-VERIFICATION.md', fp);
+    assert.equal(statusCli(projectDir, phaseDir), 'passed');
+  });
+
+  // ── Row 10 (regression-lock): impl files stay confined to the checkout ───
+  test('row 10: src/x.cts stays confined to the checkout root even with an out-of-repo .planning store', (t) => {
+    const { projectDir, store } = mkSymlinkedPlanningProject('gsd-5095-row10');
+    t.after(() => { cleanup(projectDir); cleanup(store); });
+    fs.mkdirSync(path.join(projectDir, 'src'));
+    fs.writeFileSync(path.join(projectDir, 'src', 'x.cts'), 'export const x = 1;\n');
+    const digest = computeCoveredDigest(projectDir, ['src/x.cts']);
+    assert.ok(digest, 'an ordinary checkout-relative file must still hash');
+    assert.match(digest, /^v3:sha256:/);
+  });
+
+  // ── Row 11 (hostile, regression-lock) ─────────────────────────────────────
+  test('row 11: .planning/phases/07/evil → a target outside the planning store is refused', (t) => {
+    const { projectDir, store } = mkSymlinkedPlanningProject('gsd-5095-row11');
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5095-row11-outside-'));
+    t.after(() => { cleanup(projectDir); cleanup(store); cleanup(outside); });
+    fs.mkdirSync(path.join(store, 'phases', '07'), { recursive: true });
+    const outsideFile = path.join(outside, 'secret.txt');
+    fs.writeFileSync(outsideFile, 'not covered by this project');
+    fs.symlinkSync(outsideFile, path.join(store, 'phases', '07', 'evil'));
+
+    assert.equal(
+      computeCoveredDigest(projectDir, ['.planning/phases/07/evil']),
+      null,
+      'a planning-rooted path whose target escapes the planning store must fail closed',
+    );
+  });
+
+  // ── Row 12 (hostile, regression-lock) ─────────────────────────────────────
+  test('row 12: src/link → a file inside the out-of-repo planning store must stay confined to the checkout, not the store', (t) => {
+    const { projectDir, store } = mkSymlinkedPlanningProject('gsd-5095-row12');
+    t.after(() => { cleanup(projectDir); cleanup(store); });
+    fs.mkdirSync(path.join(projectDir, 'src'));
+    const storeFile = path.join(store, 'leaked.txt');
+    fs.writeFileSync(storeFile, 'store content, not checkout content');
+    fs.symlinkSync(storeFile, path.join(projectDir, 'src', 'link'));
+
+    assert.equal(
+      computeCoveredDigest(projectDir, ['src/link']),
+      null,
+      'a non-planning path must be confined to the checkout root, even if its target sits inside the planning store',
+    );
+  });
+
+  // Row 13 (`../x`, absolute, `''` → null) is already covered by the #4155
+  // describe block above ('an escape via ".."', 'an absolute covered path',
+  // 'an empty covered-files array') — matrix marks it "existing, kept".
+
+  // ── Row 14 (independence — upgrade, regression-lock) ──────────────────────
+  test('row 14: a stored v2 digest recomputes fresh under v2 semantics, unaffected by the v3 upgrade', (t) => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5095-v2-independence-'));
+    t.after(() => cleanup(baseDir));
+    const dir = path.join(baseDir, '01-foo');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'impl.txt'), 'content');
+    const v2Digest = computeCoveredDigest(dir, ['impl.txt'], 2);
+    fs.writeFileSync(
+      path.join(dir, '01-VERIFICATION.md'),
+      `---\nstatus: passed\ncovered_files:\n  - impl.txt\ncovered_digest: "${v2Digest}"\n---\n`,
+    );
+    const result = readVerificationStatus(dir, { phaseCleanCommitTimesMs: () => new Map() });
+    assert.equal(result.status, 'passed', 'a v2-pinned report must recompute under v2 semantics, not v3');
+  });
+
+  // ── Row 15 (CLI, independence): a self-covering v2 report heals with one v3 restamp ──
+  test('row 15: a stored v2 digest that covered the report stays stale; a v3 restamp is stable', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    const reportPath = path.join(phaseDir, '01-VERIFICATION.md');
+    const planRel = '.planning/phases/01-foo/01-01-PLAN.md';
+    const summaryRel = '.planning/phases/01-foo/01-01-SUMMARY.md';
+    const reportRel = '.planning/phases/01-foo/01-VERIFICATION.md';
+
+    // Seed the report file so it exists to be hashed as a v2 covered input.
+    fs.writeFileSync(reportPath, '---\nstatus: passed\n---\n');
+    const v2Digest = computeCoveredDigest(projectDir, [planRel, summaryRel, reportRel], 2, { phaseDir });
+    // Overwriting the report to embed that digest changes the report's own
+    // bytes — the exact #4857 self-covering trap.
+    fs.writeFileSync(
+      reportPath,
+      `---\nstatus: passed\ncovered_files:\n  - ${planRel}\n  - ${summaryRel}\n  - ${reportRel}\ncovered_digest: "${v2Digest}"\n---\n`,
+    );
+    assert.equal(statusCli(projectDir, phaseDir), 'stale', 'a v2 report that covers itself never stabilizes');
+
+    // Restamp via the v3 CLI (report excluded by construction).
+    const fp = fpCli(projectDir, phaseDir, [planRel, summaryRel]);
+    writeReportFrom(phaseDir, '01-VERIFICATION.md', fp);
+    assert.equal(statusCli(projectDir, phaseDir), 'passed', 'v3 restamp must heal it');
+    assert.equal(statusCli(projectDir, phaseDir), 'passed', 'and stay stable on a second recompute');
+  });
+
+  // ── Row 16 (CLI, fail-first, boundary): nested plans/ and a superseded plan ──
+  test('row 16: emitter includes nested plans/ files and a superseded plan; checker passes', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    fs.writeFileSync(path.join(phaseDir, '01-02-PLAN.md'), '---\nstatus: superseded\n---\n# old plan\n');
+    const nestedDir = path.join(phaseDir, 'plans');
+    fs.mkdirSync(nestedDir);
+    fs.writeFileSync(path.join(nestedDir, 'PLAN-01.md'), '# nested plan\n');
+    fs.writeFileSync(path.join(nestedDir, 'SUMMARY-01.md'), '# nested summary\n');
+    fs.mkdirSync(path.join(projectDir, 'src'));
+    fs.writeFileSync(path.join(projectDir, 'src', 'thing.cts'), 'export const x = 1;\n');
+
+    const fp = fpCli(projectDir, phaseDir, ['src/thing.cts']);
+    assert.equal(fp.success, true, `expected success, got: ${fp.output}${fp.error}`);
+    const parsed = JSON.parse(fp.output);
+    for (const expected of [
+      '.planning/phases/01-foo/01-01-PLAN.md',
+      '.planning/phases/01-foo/01-01-SUMMARY.md',
+      '.planning/phases/01-foo/01-02-PLAN.md',
+      '.planning/phases/01-foo/plans/PLAN-01.md',
+      '.planning/phases/01-foo/plans/SUMMARY-01.md',
+    ]) {
+      assert.ok(
+        parsed.covered_files.includes(expected),
+        `covered_files must include ${expected}; got: ${JSON.stringify(parsed.covered_files)}`,
+      );
+    }
+
+    writeReportFrom(phaseDir, '01-VERIFICATION.md', fp);
+    assert.equal(statusCli(projectDir, phaseDir), 'passed');
+  });
+
+  // ── Row 17 (boundary, regression-lock): spelling normalization ───────────
+  test('row 17: "./.planning/…" and ".planning//phases/…" normalize to the same v3 digest', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+
+    const canonical = computeCoveredDigest(projectDir, ['.planning/phases/01-foo/01-01-PLAN.md']);
+    const dotPrefixed = computeCoveredDigest(projectDir, ['./.planning/phases/01-foo/01-01-PLAN.md']);
+    const doubleSlash = computeCoveredDigest(projectDir, ['.planning//phases/01-foo/01-01-PLAN.md']);
+    assert.equal(dotPrefixed, canonical);
+    assert.equal(doubleSlash, canonical);
+  });
+
+  // ── Row 21 (cross-platform, regression-lock): backslash spelling ─────────
+  test('row 21: a backslash-spelled declared path hashes the same file as its forward-slash spelling', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), 'line1\r\nline2\r\n');
+
+    const forward = computeCoveredDigest(projectDir, ['.planning/phases/01-foo/01-01-PLAN.md']);
+    const backslash = computeCoveredDigest(projectDir, ['.planning\\phases\\01-foo\\01-01-PLAN.md']);
+    assert.equal(backslash, forward, 'a backslash-spelled path must normalize to the same posix key');
+  });
+
+  // ── R2 (CLI, fail-first): the #4894 --project-dir layout, now WITH plans ──
+  // in the store's real phase dir — the digest and status must both see them
+  // once artifact paths are mapped to the root they actually live in.
+  test('R2: #4894 --project-dir layout with plans in the store phase dir → fingerprint then status passed', (t) => {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5095-r2-')));
+    t.after(() => cleanup(base));
+    const proj = path.join(base, 'proj');
+    const store = path.join(base, 'store');
+    const realPhaseDir = path.join(store, 'phases', '01-x');
+    fs.mkdirSync(path.join(proj, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(proj, '.git'));
+    fs.mkdirSync(realPhaseDir, { recursive: true });
+    fs.mkdirSync(path.join(store, '.git'));
+    fs.writeFileSync(path.join(store, 'config.json'), '{}');
+    fs.writeFileSync(path.join(proj, 'src', 'a.txt'), 'hi\n');
+    fs.symlinkSync(store, path.join(proj, '.planning'), symlinkType);
+    fs.writeFileSync(path.join(realPhaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(realPhaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+
+    const fp = runGsdTools(
+      ['verification', 'fingerprint', realPhaseDir, 'src/a.txt', '--project-dir', proj],
+      base,
+    );
+    assert.equal(fp.success, true, `fingerprint under --project-dir with plans present should succeed: ${fp.error}`);
+    const parsed = JSON.parse(fp.output);
+    fs.writeFileSync(
+      path.join(realPhaseDir, '01-VERIFICATION.md'),
+      `---\nstatus: passed\ncovered_files:\n${parsed.covered_files.map((f) => `  - ${f}`).join('\n')}\ncovered_digest: "${parsed.covered_digest}"\n---\n`,
+    );
+    const res = runGsdTools(['query', 'verification.status', realPhaseDir, '--project-dir', proj, '--raw'], base);
+    assert.ok(res.success, `verification.status should run: ${res.error}`);
+    assert.equal(JSON.parse(res.output).status, 'passed');
+  });
+
+  // ── R3 (CLI, fail-first): a plan-scan match that is ALSO report-shaped ────
+  // (`07-PLAN-01-VERIFICATION.md` matches the plan-scan pattern for phase 07
+  // AND `isVerificationReportPath`) must never enter covered_files, while
+  // the phase's real plan/summary still do — one report predicate on both
+  // sides (R3).
+  test('R3: 07-PLAN-01-VERIFICATION.md is both plan-shaped and report-shaped → excluded from covered_files; status passed', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '07-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '07-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '07-01-SUMMARY.md'), '# Summary\n');
+    fs.writeFileSync(
+      path.join(phaseDir, '07-PLAN-01-VERIFICATION.md'),
+      '---\nstatus: passed\n---\n# report-shaped plan-scan overlap\n',
+    );
+
+    const fp = fpCli(projectDir, phaseDir, [
+      '.planning/phases/07-foo/07-01-PLAN.md',
+      '.planning/phases/07-foo/07-01-SUMMARY.md',
+    ]);
+    assert.equal(fp.success, true, `expected success, got: ${fp.output}${fp.error}`);
+    const parsed = JSON.parse(fp.output);
+    assert.ok(
+      !parsed.covered_files.includes('.planning/phases/07-foo/07-PLAN-01-VERIFICATION.md'),
+      `report-shaped plan-scan overlap must never enter covered_files; got: ${JSON.stringify(parsed.covered_files)}`,
+    );
+
+    writeReportFrom(phaseDir, '07-VERIFICATION.md', fp);
+    assert.equal(statusCli(projectDir, phaseDir), 'passed');
+  });
+
+  // ── R4 (CLI, fail-first): a per-scope store — `.planning` is a REAL dir,
+  // but `.planning/phases` is symlinked to a separate store dir holding the
+  // phase (the phase's own planning root, per sharedPlanningRoots/R4). ─────
+  test('R4: .planning is real, .planning/phases symlinks to a separate phase store → fingerprint + status passed', (t) => {
+    const projectDir = createTempGitProject();
+    const phasesStore = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5095-r4-phases-store-'));
+    t.after(() => { cleanup(projectDir); cleanup(phasesStore); });
+    fs.mkdirSync(path.join(projectDir, '.planning'));
+    fs.mkdirSync(path.join(phasesStore, '01-foo'), { recursive: true });
+    fs.symlinkSync(phasesStore, path.join(projectDir, '.planning', 'phases'), symlinkType);
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    const files = [
+      '.planning/phases/01-foo/01-01-PLAN.md',
+      '.planning/phases/01-foo/01-01-SUMMARY.md',
+    ];
+
+    const fp = fpCli(projectDir, phaseDir, files);
+    assert.equal(
+      fp.success, true,
+      `a per-scope store (.planning real, .planning/phases symlinked) must resolve, not be rejected as escaping: ${fp.error}`,
+    );
+    writeReportFrom(phaseDir, '01-VERIFICATION.md', fp);
+    assert.equal(statusCli(projectDir, phaseDir), 'passed');
+  });
+
+  // ── R4/R1 upgrade safety (a), regression-lock: an in-repo `.planning ->
+  // docs/planning` alias. A stored v2 digest built directly via
+  // computeCoveredDigest(root, files, 2, {phaseDir}) with files declared
+  // using the ALIAS spelling (`docs/planning/phases/...`) must still read
+  // passed after the v3 upgrade — v1/v2 recomputation is version-pinned and
+  // untouched by the v3 union/filter changes. ──────────────────────────────
+  test('R4/R1(a): in-repo .planning -> docs/planning alias; stored v2 digest built with alias spelling stays passed', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const realPhaseDir = path.join(projectDir, 'docs', 'planning', 'phases', '01-foo');
+    fs.mkdirSync(realPhaseDir, { recursive: true });
+    fs.symlinkSync(path.join(projectDir, 'docs', 'planning'), path.join(projectDir, '.planning'), symlinkType);
+    fs.writeFileSync(path.join(realPhaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(realPhaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    const aliasFiles = [
+      'docs/planning/phases/01-foo/01-01-PLAN.md',
+      'docs/planning/phases/01-foo/01-01-SUMMARY.md',
+    ];
+
+    const v2Digest = computeCoveredDigest(projectDir, aliasFiles, 2, { phaseDir: realPhaseDir });
+    assert.ok(v2Digest, 'the alias spelling must still hash under v2');
+    fs.writeFileSync(
+      path.join(realPhaseDir, '01-VERIFICATION.md'),
+      `---\nstatus: passed\ncovered_files:\n${aliasFiles.map((f) => `  - ${f}`).join('\n')}\ncovered_digest: "${v2Digest}"\n---\n`,
+    );
+    assert.equal(statusCli(projectDir, realPhaseDir), 'passed');
+  });
+
+  // ── R4/R1 upgrade safety (b), regression-lock: a stored v2 report whose
+  // covered_files use a redundant `./`-prefixed (still root-relative) spelling
+  // — the phase-relative-suffix-matchable form `allCurrentArtifactsCovered`
+  // already accepted before the v3 upgrade — must stay passed. ─────────────
+  test('R4/R1(b): stored v2 report with a redundant dot-prefixed spelling stays passed (suffix path)', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    const dotFiles = [
+      './.planning/phases/01-foo/01-01-PLAN.md',
+      './.planning/phases/01-foo/01-01-SUMMARY.md',
+    ];
+
+    const v2Digest = computeCoveredDigest(projectDir, dotFiles, 2, { phaseDir });
+    assert.ok(v2Digest, 'a dot-prefixed but still root-relative spelling must hash under v2');
+    fs.writeFileSync(
+      path.join(phaseDir, '01-VERIFICATION.md'),
+      `---\nstatus: passed\ncovered_files:\n${dotFiles.map((f) => `  - ${f}`).join('\n')}\ncovered_digest: "${v2Digest}"\n---\n`,
+    );
+    assert.equal(statusCli(projectDir, phaseDir), 'passed');
+  });
+
+  // ── Rows 18-20: properties (ADR ratchet) ──────────────────────────────────
+  describe('properties (rows 18-20)', () => {
+    const fc = require('./helpers/fast-check-setup.cjs');
+
+    // Build a phase with a generated shape and fingerprint it via the real
+    // CLI (the shipping call shape). Each case lives in its own subdir (its
+    // own createTempGitProject / mkSymlinkedPlanningProject call).
+    function buildAndFingerprint({ nPlans, nSummaries, nImpl, declareReport, symlinked }) {
+      let projectDir;
+      let store = null;
+      if (symlinked) {
+        const built = mkSymlinkedPlanningProject('gsd-5095-prop');
+        projectDir = built.projectDir;
+        store = built.store;
+      } else {
+        projectDir = createTempGitProject();
+      }
+      const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+      fs.mkdirSync(phaseDir, { recursive: true });
+      for (let i = 0; i < nPlans; i++) {
+        fs.writeFileSync(path.join(phaseDir, `01-0${i + 1}-PLAN.md`), `# Plan ${i}\n`);
+      }
+      for (let i = 0; i < nSummaries; i++) {
+        fs.writeFileSync(path.join(phaseDir, `01-0${i + 1}-SUMMARY.md`), `# Summary ${i}\n`);
+      }
+      fs.mkdirSync(path.join(projectDir, 'src'), { recursive: true });
+      const implFiles = [];
+      for (let i = 0; i < nImpl; i++) {
+        const rel = `src/impl${i}.ts`;
+        fs.writeFileSync(path.join(projectDir, rel), `export const x = ${i};\n`);
+        implFiles.push(rel);
+      }
+      const declared = [...implFiles];
+      if (declareReport) declared.push('.planning/phases/01-foo/01-VERIFICATION.md');
+      if (declared.length === 0) {
+        // computeCoveredDigest fails closed on an empty declared set — every
+        // generated case must declare at least one real file.
+        if (nPlans > 0) declared.push('.planning/phases/01-foo/01-01-PLAN.md');
+        else if (nSummaries > 0) declared.push('.planning/phases/01-foo/01-01-SUMMARY.md');
+        else {
+          fs.writeFileSync(path.join(projectDir, 'src', 'fallback.ts'), 'export const y = 0;\n');
+          declared.push('src/fallback.ts');
+        }
+      }
+
+      const fp = runGsdTools(['verification', 'fingerprint', phaseDir, ...declared], projectDir);
+      return { projectDir, store, phaseDir, fp };
+    }
+
+    // `try/finally` here is confined to a standalone helper with no access to
+    // test context (CONTRIBUTING.md's carve-out) — every property callback
+    // below calls this instead of holding its own try/finally.
+    function withBuiltCase(shape, fn) {
+      const built = buildAndFingerprint(shape);
+      try {
+        return fn(built);
+      } finally {
+        cleanup(built.projectDir);
+        if (built.store) cleanup(built.store);
+      }
+    }
+
+    test('row 18: compute → write → recompute is stable (fingerprint idempotence)', () => {
+      fc.assert(
+        fc.property(
+          fc.record({
+            nPlans: fc.integer({ min: 0, max: 3 }),
+            nSummaries: fc.integer({ min: 0, max: 2 }),
+            nImpl: fc.integer({ min: 0, max: 2 }),
+            declareReport: fc.boolean(),
+            symlinked: fc.boolean(),
+          }),
+          (shape) => {
+            withBuiltCase(shape, ({ projectDir, phaseDir, fp }) => {
+              assert.equal(fp.success, true, `fingerprint must succeed for shape ${JSON.stringify(shape)}: ${fp.output}${fp.error}`);
+              const parsed = JSON.parse(fp.output);
+              fs.writeFileSync(
+                path.join(phaseDir, '01-VERIFICATION.md'),
+                `---\nstatus: passed\ncovered_files:\n${parsed.covered_files.map((f) => `  - ${f}`).join('\n')}\ncovered_digest: "${parsed.covered_digest}"\n---\n`,
+              );
+              const res1 = runGsdTools(['verification', 'status', phaseDir, '--pick', 'status'], projectDir);
+              assert.equal(res1.success, true);
+              assert.equal(res1.output, 'passed', `shape ${JSON.stringify(shape)} must read passed after restamping`);
+              const res2 = runGsdTools(['verification', 'status', phaseDir, '--pick', 'status'], projectDir);
+              assert.equal(res2.output, 'passed', 'recompute must stay stable');
+            });
+          },
+        ),
+        { numRuns: 25 },
+      );
+    });
+
+    test('row 19: mutating one covered impl byte after fingerprinting → stale (property positive control)', () => {
+      fc.assert(
+        fc.property(
+          fc.record({
+            nPlans: fc.integer({ min: 0, max: 3 }),
+            nSummaries: fc.integer({ min: 0, max: 2 }),
+            declareReport: fc.boolean(),
+            symlinked: fc.boolean(),
+          }),
+          (partial) => {
+            const shape = { ...partial, nImpl: 1 }; // guarantee a mutation target
+            withBuiltCase(shape, ({ projectDir, phaseDir, fp }) => {
+              assert.equal(fp.success, true, `fingerprint must succeed for shape ${JSON.stringify(shape)}: ${fp.output}${fp.error}`);
+              const parsed = JSON.parse(fp.output);
+              fs.writeFileSync(
+                path.join(phaseDir, '01-VERIFICATION.md'),
+                `---\nstatus: passed\ncovered_files:\n${parsed.covered_files.map((f) => `  - ${f}`).join('\n')}\ncovered_digest: "${parsed.covered_digest}"\n---\n`,
+              );
+              assert.equal(
+                runGsdTools(['verification', 'status', phaseDir, '--pick', 'status'], projectDir).output,
+                'passed',
+              );
+              fs.appendFileSync(path.join(projectDir, 'src', 'impl0.ts'), '// mutated\n');
+              assert.equal(
+                runGsdTools(['verification', 'status', phaseDir, '--pick', 'status'], projectDir).output,
+                'stale',
+                `shape ${JSON.stringify(shape)} must go stale after a covered-byte mutation`,
+              );
+            });
+          },
+        ),
+        { numRuns: 25 },
+      );
+    });
+
+    test('row 20: emitted covered_files is always a superset of every live plan/summary (emitter/checker parity)', () => {
+      fc.assert(
+        fc.property(
+          fc.record({
+            nPlans: fc.integer({ min: 0, max: 3 }),
+            nSummaries: fc.integer({ min: 0, max: 2 }),
+            nImpl: fc.integer({ min: 1, max: 2 }), // always at least one real declared file
+            declareReport: fc.boolean(),
+            symlinked: fc.boolean(),
+          }),
+          (shape) => {
+            withBuiltCase(shape, ({ fp }) => {
+              assert.equal(fp.success, true, `fingerprint must succeed for shape ${JSON.stringify(shape)}: ${fp.output}${fp.error}`);
+              const parsed = JSON.parse(fp.output);
+              for (let i = 0; i < shape.nPlans; i++) {
+                assert.ok(
+                  parsed.covered_files.includes(`.planning/phases/01-foo/01-0${i + 1}-PLAN.md`),
+                  `plan ${i} missing from covered_files for shape ${JSON.stringify(shape)}`,
+                );
+              }
+              for (let i = 0; i < shape.nSummaries; i++) {
+                assert.ok(
+                  parsed.covered_files.includes(`.planning/phases/01-foo/01-0${i + 1}-SUMMARY.md`),
+                  `summary ${i} missing from covered_files for shape ${JSON.stringify(shape)}`,
+                );
+              }
+            });
+          },
+        ),
+        { numRuns: 25 },
+      );
+    });
+  });
+});
