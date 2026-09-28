@@ -80,6 +80,41 @@ export const ROADMAP_STATUS_TOKEN = Object.freeze({
 
 export type RoadmapStatusToken = (typeof ROADMAP_STATUS_TOKEN)[keyof typeof ROADMAP_STATUS_TOKEN];
 
+/** `roadmap analyze` / `init manager`'s `disk_status` vocabulary (ADR-5057 §1.2). */
+export const DISK_STATUS = Object.freeze({
+  COMPLETE: 'complete',
+  EXECUTED: 'executed',
+  PARTIAL: 'partial',
+  PLANNED: 'planned',
+  RESEARCHED: 'researched',
+  DISCUSSED: 'discussed',
+  EMPTY: 'empty',
+  NO_DIRECTORY: 'no_directory',
+} as const);
+
+export type DiskStatus = (typeof DISK_STATUS)[keyof typeof DISK_STATUS];
+
+/** `init progress`'s per-phase `status` vocabulary (ADR-5057 §1.2). */
+export const PROGRESS_STATUS = Object.freeze({
+  COMPLETE: 'complete',
+  EXECUTED: 'executed',
+  IN_PROGRESS: 'in_progress',
+  RESEARCHED: 'researched',
+  PENDING: 'pending',
+  NOT_STARTED: 'not_started',
+} as const);
+
+export type ProgressStatus = (typeof PROGRESS_STATUS)[keyof typeof PROGRESS_STATUS];
+
+/** `init`'s `completion_status` vocabulary (ADR-5057 §1.2). */
+export const COMPLETION_STATUS = Object.freeze({
+  COMPLETE: 'complete',
+  EXECUTED: 'executed',
+  INCOMPLETE: 'incomplete',
+} as const);
+
+export type CompletionStatus = (typeof COMPLETION_STATUS)[keyof typeof COMPLETION_STATUS];
+
 const LADDER: readonly PhaseStatus[] = Object.freeze([
   PHASE_STATUS.NOT_STARTED,
   PHASE_STATUS.PLANNED,
@@ -287,39 +322,39 @@ export function toRoadmapStatusCell(status: PhaseStatus): RoadmapStatusToken {
  * word records which pre-planning artifacts exist. (`no_directory` is the
  * callers' own word for "no directory matched" — there is no phase to ask.)
  */
-export function toDiskStatus(status: PhaseStatus, artifacts: { hasResearch: boolean; hasContext: boolean }): string {
+export function toDiskStatus(status: PhaseStatus, artifacts: { hasResearch: boolean; hasContext: boolean }): DiskStatus {
   assertPhaseStatus(status, 'toDiskStatus');
   switch (status) {
-    case PHASE_STATUS.COMPLETE: return 'complete';
+    case PHASE_STATUS.COMPLETE: return DISK_STATUS.COMPLETE;
     case PHASE_STATUS.NEEDS_REVIEW:
-    case PHASE_STATUS.EXECUTED: return 'executed';
-    case PHASE_STATUS.IN_PROGRESS: return 'partial';
-    case PHASE_STATUS.PLANNED: return 'planned';
+    case PHASE_STATUS.EXECUTED: return DISK_STATUS.EXECUTED;
+    case PHASE_STATUS.IN_PROGRESS: return DISK_STATUS.PARTIAL;
+    case PHASE_STATUS.PLANNED: return DISK_STATUS.PLANNED;
     default:
-      if (artifacts.hasResearch) return 'researched';
-      if (artifacts.hasContext) return 'discussed';
-      return 'empty';
+      if (artifacts.hasResearch) return DISK_STATUS.RESEARCHED;
+      if (artifacts.hasContext) return DISK_STATUS.DISCUSSED;
+      return DISK_STATUS.EMPTY;
   }
 }
 
 /** `init`'s `completion_status`: complete / executed / incomplete. */
-export function toCompletionStatus(status: PhaseStatus): 'complete' | 'executed' | 'incomplete' {
+export function toCompletionStatus(status: PhaseStatus): CompletionStatus {
   assertPhaseStatus(status, 'toCompletionStatus');
-  if (status === PHASE_STATUS.COMPLETE) return 'complete';
-  if (status === PHASE_STATUS.EXECUTED || status === PHASE_STATUS.NEEDS_REVIEW) return 'executed';
-  return 'incomplete';
+  if (status === PHASE_STATUS.COMPLETE) return COMPLETION_STATUS.COMPLETE;
+  if (status === PHASE_STATUS.EXECUTED || status === PHASE_STATUS.NEEDS_REVIEW) return COMPLETION_STATUS.EXECUTED;
+  return COMPLETION_STATUS.INCOMPLETE;
 }
 
 /** `init progress`'s per-phase `status`. */
-export function toProgressStatus(status: PhaseStatus, artifacts: { hasResearch: boolean }): string {
+export function toProgressStatus(status: PhaseStatus, artifacts: { hasResearch: boolean }): ProgressStatus {
   assertPhaseStatus(status, 'toProgressStatus');
   switch (status) {
-    case PHASE_STATUS.COMPLETE: return 'complete';
+    case PHASE_STATUS.COMPLETE: return PROGRESS_STATUS.COMPLETE;
     case PHASE_STATUS.NEEDS_REVIEW:
-    case PHASE_STATUS.EXECUTED: return 'executed';
+    case PHASE_STATUS.EXECUTED: return PROGRESS_STATUS.EXECUTED;
     case PHASE_STATUS.IN_PROGRESS:
-    case PHASE_STATUS.PLANNED: return 'in_progress';
-    default: return artifacts.hasResearch ? 'researched' : 'pending';
+    case PHASE_STATUS.PLANNED: return PROGRESS_STATUS.IN_PROGRESS;
+    default: return artifacts.hasResearch ? PROGRESS_STATUS.RESEARCHED : PROGRESS_STATUS.PENDING;
   }
 }
 

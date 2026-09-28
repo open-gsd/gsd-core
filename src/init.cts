@@ -52,8 +52,11 @@ import frontmatterMod = require('./frontmatter.cjs');
 import verificationMod = require('./verification.cjs');
 // #5060: Phase Status Module — the single owner of "what state is phase P
 // in?" (ADR-5057 §1/§2). Replaces this file's own determinePhaseStatus/
-// projectCompletionStatus/listPhasePlanFiles/listPhaseSummaryFiles derivations.
-import { phaseStatus, phaseStatusFromFacts, toDisplayLabel, toCompletionStatus, toDiskStatus, toProgressStatus } from './phase-status.cjs';
+// projectCompletionStatus derivations, and cmdInitMilestoneOp's
+// summary-count-only completion check (the former listPhaseSummaryFiles
+// helper, since removed). listPhasePlanFiles (below) is unrelated — it backs
+// only the STATE.md disk-plan-count validation, not a completion verdict.
+import { phaseStatus, phaseStatusFromFacts, toDisplayLabel, toCompletionStatus, toDiskStatus, toProgressStatus, DISK_STATUS, PROGRESS_STATUS, PHASE_STATUS } from './phase-status.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicateMod = require('./uat-predicate.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- agent-install-check.cjs is an export= CommonJS module
@@ -255,10 +258,6 @@ function applyRoadmapFallback(
   return phaseInfo;
 }
 
-function listPhaseSummaryFiles(phaseDir: string): string[] {
-  return (scanPhasePlans(phaseDir) as unknown as Record<string, string[]>)['summaryFiles'];
-}
-
 function listPhasePlanFiles(phaseDir: string): string[] {
   return (scanPhasePlans(phaseDir) as unknown as Record<string, string[]>)['planFiles'];
 }
@@ -293,6 +292,7 @@ function buildPhaseCompletionProjection(
   planCount: number,
   summaryCount: number,
   slashRuntime: string,
+  convention?: string | null,
 ): PhaseCompletionProjection {
   // ADR-3180 §7.4 (issue #3186) / DO-NOT-MIGRATE exemption
   // (scripts/lint-completion-predicate-drift.cjs FUNCTION_SCOPED_EXEMPTIONS,
@@ -313,7 +313,7 @@ function buildPhaseCompletionProjection(
   // #2617: the router still owns both the message content and the runtime
   // projection; init passes the phase number it already knows (its phaseDir
   // is unresolved in some branches, where the router could not derive one).
-  const completionResult = isPhaseComplete(phaseFullDir, { runtime: slashRuntime, phaseNumber });
+  const completionResult = isPhaseComplete(phaseFullDir, { runtime: slashRuntime, phaseNumber, convention });
   const verificationStatus = completionResult.value.verification;
   const projectedVerificationStatus = verificationStatus.status;
   const projectedVerificationAction = verificationStatus.next_action;
@@ -1920,8 +1920,20 @@ function cmdInitVerifyWork(cwd: string, phase: string, raw: boolean): void {
   });
 
   const phaseDir = (phaseInfo?.['directory'] as string | null | undefined) || null;
-  const planCount = (phaseInfo?.['plans'] as unknown[] | undefined)?.length || 0;
-  const summaryCount = (phaseInfo?.['summaries'] as unknown[] | undefined)?.length || 0;
+  // #5060: Phase Status Module — matched counts from the §7.5 owner
+  // (scanPhasePlans via phaseStatus), not phaseInfo's raw plans/summaries
+  // arrays, so this projection's counts agree with buildPhaseCompletionProjection's
+  // own isPhaseComplete call below (see the convention thread there).
+  const verifyWorkConvention = resolvePhaseIdConvention(cwd);
+  const verifyWorkPs = phaseDir
+    ? phaseStatus(path.join(cwd, phaseDir), { convention: verifyWorkConvention })
+    : null;
+  const planCount = verifyWorkPs
+    ? verifyWorkPs.value.planCount
+    : (phaseInfo?.['plans'] as unknown[] | undefined)?.length || 0;
+  const summaryCount = verifyWorkPs
+    ? verifyWorkPs.value.summaryCount
+    : (phaseInfo?.['summaries'] as unknown[] | undefined)?.length || 0;
   const completion = buildPhaseCompletionProjection(
     cwd,
     (phaseInfo?.['phase_number'] as string | undefined) || phase,
@@ -1929,6 +1941,7 @@ function cmdInitVerifyWork(cwd: string, phase: string, raw: boolean): void {
     planCount,
     summaryCount,
     _slashRuntime,
+    verifyWorkConvention,
   );
   const uatReport = phaseDir
     ? evaluateUatPassed(path.join(cwd, phaseDir), {
@@ -2691,6 +2704,12 @@ function cmdInitTodos(cwd: string, area: string | undefined, raw: boolean): void
 function cmdInitMilestoneOp(cwd: string, raw: boolean): void {
   const config = loadConfig(cwd);
   const milestone = milestoneRecord(cwd);
+  // #5060: Phase Status Module — the single owner of "what state is phase P
+  // in?" (ADR-5057 §1/§2). A phase counts as completed only when the ladder
+  // itself says COMPLETE, not "has any *-SUMMARY.md" (a counts-only verdict
+  // that bypasses isPhaseComplete and disagrees with every other completion
+  // consumer on a stale `passed` report).
+  const milestoneOpConvention = resolvePhaseIdConvention(cwd);
 
   let phaseCount = 0;
   let completedPhases = 0;
@@ -2705,7 +2724,7 @@ function cmdInitMilestoneOp(cwd: string, raw: boolean): void {
     // buildPhaseHeadingScanRegex (phase-id.cts) so this scan also recognizes
     // bracket-convention headings instead of hand-rolling a literal `Phase\s+`.
     const { regex: phasePattern, phaseNumGroup } = buildPhaseHeadingScanRegex(
-      PHASE_HEADING_BASELINE.ANY_BRACKET, resolvePhaseIdConvention(cwd),
+      PHASE_HEADING_BASELINE.ANY_BRACKET, milestoneOpConvention,
     );
     let m: RegExpExecArray | null;
     while ((m = phasePattern.exec(currentSection)) !== null) {
@@ -2745,8 +2764,8 @@ function cmdInitMilestoneOp(cwd: string, raw: boolean): void {
       const dirName = diskPhaseDirs.get(canonicalizePhase(num));
       if (!dirName) continue;
       try {
-        const hasSummary = listPhaseSummaryFiles(path.join(phasesDir, dirName)).length > 0;
-        if (hasSummary) completedPhases++;
+        const isComplete = phaseStatus(path.join(phasesDir, dirName), { convention: milestoneOpConvention }).value.status === PHASE_STATUS.COMPLETE;
+        if (isComplete) completedPhases++;
       } catch {
         /* intentionally empty */
       }
@@ -2762,8 +2781,8 @@ function cmdInitMilestoneOp(cwd: string, raw: boolean): void {
       phaseCount = dirs.length;
       for (const dir of dirs) {
         try {
-          const hasSummary = listPhaseSummaryFiles(path.join(phasesDir, dir)).length > 0;
-          if (hasSummary) completedPhases++;
+          const isComplete = phaseStatus(path.join(phasesDir, dir), { convention: milestoneOpConvention }).value.status === PHASE_STATUS.COMPLETE;
+          if (isComplete) completedPhases++;
         } catch {
           /* intentionally empty */
         }
@@ -2941,7 +2960,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     const dependsMatch = section.match(/\*\*Depends on(?::\*\*|\*\*:)\s*([^\n]+)/i);
     const depends_on = dependsMatch ? dependsMatch[1].trim() : null;
 
-    let diskStatus = 'no_directory';
+    let diskStatus: string = DISK_STATUS.NO_DIRECTORY;
     let planCount = 0;
     let summaryCount = 0;
     let hasContext = false;
@@ -2958,6 +2977,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
       planCount,
       summaryCount,
       _slashRuntime,
+      phaseIdConvention,
     );
 
     try {
@@ -3012,6 +3032,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
           planCount,
           summaryCount,
           _slashRuntime,
+          phaseIdConvention,
         );
 
         diskStatus = toDiskStatus(ps.value.status, { hasResearch, hasContext });
@@ -3182,7 +3203,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
 
   for (const phase of phases) {
     phase['is_next_to_discuss'] =
-      (phase['disk_status'] === 'empty' || phase['disk_status'] === 'no_directory') &&
+      (phase['disk_status'] === DISK_STATUS.EMPTY || phase['disk_status'] === DISK_STATUS.NO_DIRECTORY) &&
       phase['deps_satisfied'];
   }
 
@@ -3205,11 +3226,11 @@ function cmdInitManager(cwd: string, raw: boolean): void {
 
   const recommendedActions: Record<string, unknown>[] = [];
   for (const phase of phases) {
-    if (phase['disk_status'] === 'complete') continue;
+    if (phase['disk_status'] === DISK_STATUS.COMPLETE) continue;
     // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
     if (isSentinelPhaseId(phase['number'])) continue;
 
-    if (phase['disk_status'] === 'executed') {
+    if (phase['disk_status'] === DISK_STATUS.EXECUTED) {
       recommendedActions.push({
         phase: phase['number'],
         phase_name: phase['name'],
@@ -3217,7 +3238,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
         reason: `Implementation complete; verification ${phase['verification_status'] as string}`,
         command: phase['verification_next_command'],
       });
-    } else if (phase['disk_status'] === 'planned' && phase['deps_satisfied']) {
+    } else if (phase['disk_status'] === DISK_STATUS.PLANNED && phase['deps_satisfied']) {
       recommendedActions.push({
         phase: phase['number'],
         phase_name: phase['name'],
@@ -3226,8 +3247,8 @@ function cmdInitManager(cwd: string, raw: boolean): void {
         command: `${formatGsdSlash('execute-phase', _slashRuntime) as string} ${phase['number'] as string}`,
       });
     } else if (
-      phase['disk_status'] === 'discussed' ||
-      phase['disk_status'] === 'researched'
+      phase['disk_status'] === DISK_STATUS.DISCUSSED ||
+      phase['disk_status'] === DISK_STATUS.RESEARCHED
     ) {
       recommendedActions.push({
         phase: phase['number'],
@@ -3237,7 +3258,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
         command: `${formatGsdSlash('plan-phase', _slashRuntime) as string} ${phase['number'] as string}`,
       });
     } else if (
-      (phase['disk_status'] === 'empty' || phase['disk_status'] === 'no_directory') &&
+      (phase['disk_status'] === DISK_STATUS.EMPTY || phase['disk_status'] === DISK_STATUS.NO_DIRECTORY) &&
       phase['is_next_to_discuss']
     ) {
       recommendedActions.push({
@@ -3252,13 +3273,13 @@ function cmdInitManager(cwd: string, raw: boolean): void {
 
   const activeExecuting = phases.filter(
     (p) =>
-      p['disk_status'] === 'partial' ||
-      (p['disk_status'] === 'planned' && p['is_active']),
+      p['disk_status'] === DISK_STATUS.PARTIAL ||
+      (p['disk_status'] === DISK_STATUS.PLANNED && p['is_active']),
   );
   const activePlanning = phases.filter(
     (p) =>
       p['is_active'] &&
-      (p['disk_status'] === 'discussed' || p['disk_status'] === 'researched'),
+      (p['disk_status'] === DISK_STATUS.DISCUSSED || p['disk_status'] === DISK_STATUS.RESEARCHED),
   );
 
   const filteredActions = recommendedActions.filter((action) => {
@@ -3315,7 +3336,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     phase_count: phases.length,
     completed_count: completedCount,
     in_progress_count: phases.filter((p) =>
-      ['executed', 'partial', 'planned', 'discussed', 'researched'].includes(p['disk_status'] as string),
+      ([DISK_STATUS.EXECUTED, DISK_STATUS.PARTIAL, DISK_STATUS.PLANNED, DISK_STATUS.DISCUSSED, DISK_STATUS.RESEARCHED] as string[]).includes(p['disk_status'] as string),
     ).length,
     recommended_actions: filteredActions,
     waiting_signal: waitingSignal,
@@ -3766,6 +3787,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
         ps.value.planCount,
         ps.value.summaryCount,
         _slashRuntime,
+        resolvePhaseIdConvention(cwd),
       );
 
       const status = toProgressStatus(ps.value.status, { hasResearch });
@@ -3786,10 +3808,10 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
 
       phases.push(phaseInfo);
 
-      if (!currentPhase && (status === 'executed' || status === 'in_progress' || status === 'researched')) {
+      if (!currentPhase && (status === PROGRESS_STATUS.EXECUTED || status === PROGRESS_STATUS.IN_PROGRESS || status === PROGRESS_STATUS.RESEARCHED)) {
         currentPhase = phaseInfo;
       }
-      if (!nextPhase && status === 'pending') {
+      if (!nextPhase && status === PROGRESS_STATUS.PENDING) {
         nextPhase = phaseInfo;
       }
     }
@@ -3810,8 +3832,12 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
         0,
         0,
         _slashRuntime,
+        resolvePhaseIdConvention(cwd),
       );
-      const status = 'not_started';
+      // #5060: this synthetic row has no phase directory at all — the
+      // roadmap heading exists but no `seenPhaseNums` disk match was found —
+      // so it is the ladder's own NOT_STARTED word, not a derived guess.
+      const status: string = PROGRESS_STATUS.NOT_STARTED;
       const phaseInfo: Record<string, unknown> = {
         number: num,
         // #3883 (ADR-3473 §8.3): delegate to the canonical slug formula
@@ -3850,7 +3876,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
   {
     const frontier = phases.find((p) => {
       const st = p['status'];
-      return (st === 'pending' || st === 'not_started') && p['roadmap_complete'] !== true;
+      return (st === PROGRESS_STATUS.PENDING || st === PROGRESS_STATUS.NOT_STARTED) && p['roadmap_complete'] !== true;
     });
     if (frontier) nextPhase = frontier;
   }
@@ -3891,9 +3917,9 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
 
     phases,
     phase_count: phases.length,
-    completed_count: phases.filter((p) => p['status'] === 'complete').length,
+    completed_count: phases.filter((p) => p['status'] === PROGRESS_STATUS.COMPLETE).length,
     in_progress_count: phases.filter((p) =>
-      ['executed', 'in_progress'].includes(p['status'] as string),
+      ([PROGRESS_STATUS.EXECUTED, PROGRESS_STATUS.IN_PROGRESS] as string[]).includes(p['status'] as string),
     ).length,
 
     current_phase: currentPhase,

@@ -54,7 +54,7 @@ const { isPhaseComplete } = verificationMod;
 // seam, mirroring phase.cts's already-migrated `writePlansField` site.
 import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from './planning-document.cjs';
 // #5060: the Phase Status Module owns the ladder; roadmap.cts is a consumer.
-import { phaseStatus, phaseStatusFromFacts, toDiskStatus, toRoadmapStatusCell, matchRoadmapStatusCell, ROADMAP_STATUS_TOKEN } from './phase-status.cjs';
+import { phaseStatus, phaseStatusFromFacts, toDiskStatus, toRoadmapStatusCell, matchRoadmapStatusCell, ROADMAP_STATUS_TOKEN, DISK_STATUS } from './phase-status.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -524,7 +524,7 @@ function collectAnalyzePhases(
 
     // Check completion on disk
     const normalized = normalizePhaseName(phaseNum);
-    let diskStatus = 'no_directory';
+    let diskStatus: string = DISK_STATUS.NO_DIRECTORY;
     let planCount = 0;
     let summaryCount = 0;
     let hasContext = false;
@@ -635,7 +635,7 @@ function collectAnalyzePhases(
     // #4014 (epic #3473 B4): additive sibling, same default rule as the
     // heading-declared branch above.
     let tContextScope: Scope = SCOPE.COMPLETE;
-    let tDiskStatus = 'no_directory';
+    let tDiskStatus: string = DISK_STATUS.NO_DIRECTORY;
     if (dirMatchA) {
       const counts = countPhasePlansAndSummaries(path.join(phasesDir, dirMatchA), convention);
       tPlanCount = counts.planCount;
@@ -750,13 +750,13 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   }));
 
   // Find current and next phase
-  const currentPhase = phases.find(p => p.disk_status === 'planned' || p.disk_status === 'partial' || p.disk_status === 'executed') || null;
-  const nextPhase = phases.find(p => p.disk_status === 'empty' || p.disk_status === 'no_directory' || p.disk_status === 'discussed' || p.disk_status === 'researched') || null;
+  const currentPhase = phases.find(p => p.disk_status === DISK_STATUS.PLANNED || p.disk_status === DISK_STATUS.PARTIAL || p.disk_status === DISK_STATUS.EXECUTED) || null;
+  const nextPhase = phases.find(p => p.disk_status === DISK_STATUS.EMPTY || p.disk_status === DISK_STATUS.NO_DIRECTORY || p.disk_status === DISK_STATUS.DISCUSSED || p.disk_status === DISK_STATUS.RESEARCHED) || null;
 
   // Aggregated stats
   const totalPlans = phases.reduce((sum, p) => sum + p.plan_count, 0);
   const totalSummaries = phases.reduce((sum, p) => sum + p.summary_count, 0);
-  const completedPhases = phases.filter(p => p.disk_status === 'complete').length;
+  const completedPhases = phases.filter(p => p.disk_status === DISK_STATUS.COMPLETE).length;
 
   // Detect phases in summary list without detail sections (malformed ROADMAP).
   // The char class must allow `-` (not just `.`) so dash-separated milestone-prefixed

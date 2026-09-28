@@ -599,9 +599,10 @@ function missingResult(runtime: string, phaseArg: string): VerificationStatusRes
 
 interface ResolveVerificationFileOptions {
   /**
-   * #3473 F2: three OTHER hand-rolled selection sites (`src/commands.cts`
-   * determinePhaseStatus and two `verification_path` projectors in
-   * `src/init.cts`) additionally accept a BARE `VERIFICATION.md` — a form
+   * #3473 F2: three OTHER hand-rolled selection sites (`src/commands.cts`'s
+   * phase-status ladder — since folded into the Phase Status Module, #5060 —
+   * and two `verification_path` projectors in `src/init.cts`) additionally
+   * accept a BARE `VERIFICATION.md` — a form
    * this module's own two callers (`findStaleVerificationSummary`,
    * `readVerificationStatus`) had never accepted, because a bare filename
    * carries no phase token and `.endsWith('-VERIFICATION.md')` structurally
@@ -611,7 +612,8 @@ interface ResolveVerificationFileOptions {
    *
    * #4187: that historical asymmetry was drift, not contract. Six call sites
    * grew around the shared resolver and four opted in
-   * (`cmdVerificationResolveFile`, `determinePhaseStatus`, both init
+   * (`cmdVerificationResolveFile`, `src/commands.cts`'s phase-status ladder —
+   * since folded into the Phase Status Module, #5060 — and both init
    * `verification_path` projectors) — the two module-internal status-path
    * call sites (`readVerificationStatus`, `findStaleVerificationSummary`)
    * did not, so `query verification.resolve-file` resolved a bare report in
