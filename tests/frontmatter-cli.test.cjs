@@ -925,10 +925,11 @@ describe('frontmatter set/merge — write refusal', () => {
   });
 
   // The lossy refusal protects only data the caller's parse could not see (a flattened
-  // object-list item) — a field merely written in another style is not lossy.
+  // object-list item) — a field merely written in another style is not lossy. The trailing
+  // comment stays on the key's line with the new value (the inline-comment guarantee).
   for (const [label, doc, field, value, expected] of [
     ['single-quoted scalar', "---\ntitle: 'x'\nstatus: t\n---\nbody\n", 'title', 'Y', '---\ntitle: Y\nstatus: t\n---\nbody\n'],
-    ['scalar with a trailing comment', '---\ntitle: x # c\nstatus: t\n---\nbody\n', 'title', 'Y', '---\ntitle: Y\nstatus: t\n---\nbody\n'],
+    ['scalar with a trailing comment', '---\ntitle: x # c\nstatus: t\n---\nbody\n', 'title', 'Y', '---\ntitle: Y # c\nstatus: t\n---\nbody\n'],
     ['block list', '---\ntags:\n  - a\n  - b\nstatus: t\n---\nbody\n', 'tags', '["c"]', '---\ntags: [c]\nstatus: t\n---\nbody\n'],
   ]) {
     for (const cmd of ['set', 'merge']) {
@@ -984,15 +985,109 @@ describe('frontmatter set/merge — write refusal', () => {
   // the sub-key it leads; where it cannot be, the write is refused — never silently dropped.
   const NESTED_COMMENT_DOC = '---\nprogress:\n  # hand note: keep\n  done: 1\n  total: 2\nstatus: t\n---\nbody\n';
 
-  test('set of a map keeps a full-line comment leading a surviving sub-key', (t) => {
-    const file = fileIn(t, 'state.md', NESTED_COMMENT_DOC);
-    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'progress', '--value', JSON.stringify({ done: 2, total: 2 })]);
+  // The same document as LF, as CRLF and behind a BOM: the comment guarantee holds for each.
+  // `written` is what lands on disk — `platformWriteSync` publishes every file with LF endings.
+  const LINE_ENDING_VARIANTS = [
+    ['LF', (doc) => doc, (doc) => doc],
+    ['CRLF', (doc) => doc.replace(/\n/g, '\r\n'), (doc) => doc],
+    ['BOM', (doc) => `\uFEFF${doc}`, (doc) => `\uFEFF${doc}`],
+  ];
+
+  for (const [variant, shape, written] of LINE_ENDING_VARIANTS) {
+    test(`set of a map keeps a full-line comment leading a surviving sub-key (${variant})`, (t) => {
+      const file = fileIn(t, 'state.md', shape(NESTED_COMMENT_DOC));
+      const result = runGsdTools(['frontmatter', 'set', file, '--field', 'progress', '--value', JSON.stringify({ done: 2, total: 2 })]);
+      assert.ok(result.success, `command failed: ${result.error}`);
+      assert.strictEqual(JSON.parse(result.output).updated, true);
+      assert.strictEqual(
+        fs.readFileSync(file, 'utf-8'),
+        written('---\nprogress:\n  # hand note: keep\n  done: 2\n  total: 2\nstatus: t\n---\nbody\n'),
+      );
+    });
+
+    test(`set that would drop the comment leading a removed sub-key is refused and writes nothing (${variant})`, (t) => {
+      const doc = shape(NESTED_COMMENT_DOC);
+      const file = fileIn(t, 'state.md', doc);
+      const result = runGsdTools(['frontmatter', 'set', file, '--field', 'progress', '--value', JSON.stringify({ total: 3 })]);
+      assert.ok(result.success, `command failed: ${result.error}`);
+      assert.strictEqual(JSON.parse(result.output).code, 'FRONTMATTER_COMMENT_WOULD_BE_LOST', result.output);
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), doc);
+    });
+  }
+
+  // A comment belongs to the exact key path it leads: a top-level key literally named `a.b`
+  // is not the sub-key `b` of map `a` (found while implementing #5105).
+  test('set of map "a" leaves the comment of a top-level key named "a.b" where it is', (t) => {
+    const file = fileIn(t, 'state.md', '---\na:\n  b: 1\n  c: 2\n# top-level a.b note\na.b: 3\nstatus: t\n---\nbody\n');
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'a', '--value', JSON.stringify({ b: 1, c: 5 })]);
     assert.ok(result.success, `command failed: ${result.error}`);
-    assert.strictEqual(JSON.parse(result.output).updated, true);
+    assert.strictEqual(JSON.parse(result.output).updated, true, result.output);
     assert.strictEqual(
       fs.readFileSync(file, 'utf-8'),
-      '---\nprogress:\n  # hand note: keep\n  done: 2\n  total: 2\nstatus: t\n---\nbody\n',
+      '---\na:\n  b: 1\n  c: 5\n# top-level a.b note\na.b: 3\nstatus: t\n---\nbody\n',
     );
+  });
+
+  test('set that removes a sub-key is refused even when a top-level "a.b" carries an identical comment', (t) => {
+    const doc = '---\na:\n  # x\n  c: 2\n  b: 1\n# x\na.b: 3\nstatus: t\n---\nbody\n';
+    const file = fileIn(t, 'state.md', doc);
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'a', '--value', JSON.stringify({ b: 1 })]);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).code, 'FRONTMATTER_COMMENT_WOULD_BE_LOST', result.output);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), doc);
+  });
+
+  // An inline comment (`a: 1  # note`) inside a changed value is kept on the line of the key it
+  // sits beside when that key survives, and the write is refused when it does not.
+  for (const [label, doc, value, expected] of [
+    ['a surviving sub-key whose value is unchanged', '---\nm:\n  a: 1  # note a\n  b: 2\nstatus: t\n---\nbody\n', { a: 1, b: 3 },
+      '---\nm:\n  a: 1  # note a\n  b: 3\nstatus: t\n---\nbody\n'],
+    ['a surviving sub-key whose value changed', '---\nm:\n  a: 1  # note a\n  b: 2\nstatus: t\n---\nbody\n', { a: 5, b: 2 },
+      '---\nm:\n  a: 5  # note a\n  b: 2\nstatus: t\n---\nbody\n'],
+    ['the line opening the changed map', '---\nm:  # opener note\n  a: 1\nstatus: t\n---\nbody\n', { a: 2 },
+      '---\nm:  # opener note\n  a: 2\nstatus: t\n---\nbody\n'],
+    ['a surviving nested map opener two levels deep', '---\nm:\n  x:  # x note\n    y: 1\nstatus: t\n---\nbody\n', { x: { y: 2 } },
+      '---\nm:\n  x:  # x note\n    y: 2\nstatus: t\n---\nbody\n'],
+    ['a changed top-level scalar', '---\nm: draft  # one of draft|done\nstatus: t\n---\nbody\n', 'done',
+      '---\nm: done  # one of draft|done\nstatus: t\n---\nbody\n'],
+  ]) {
+    test(`set keeps an inline comment on ${label}`, (t) => {
+      const file = fileIn(t, 'state.md', doc);
+      const result = runGsdTools(['frontmatter', 'set', file, '--field', 'm', '--value', JSON.stringify(value)]);
+      assert.ok(result.success, `command failed: ${result.error}`);
+      assert.strictEqual(JSON.parse(result.output).updated, true, result.output);
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), expected);
+    });
+  }
+
+  for (const [label, doc, value] of [
+    ['a removed sub-key', '---\nm:\n  a: 1  # note a\n  b: 2\nstatus: t\n---\nbody\n', { b: 3 }],
+    ['an item of a changed block list', '---\nm:\n  - a  # why a\n  - b\nstatus: t\n---\nbody\n', ['a', 'c']],
+    ['a sub-key of a map replaced by a scalar', '---\nm:\n  a: 1  # note a\nstatus: t\n---\nbody\n', 'flat'],
+  ]) {
+    test(`set that would drop an inline comment on ${label} is refused and writes nothing`, (t) => {
+      const file = fileIn(t, 'state.md', doc);
+      const result = runGsdTools(['frontmatter', 'set', file, '--field', 'm', '--value', JSON.stringify(value)]);
+      assert.ok(result.success, `command failed: ${result.error}`);
+      assert.strictEqual(JSON.parse(result.output).code, 'FRONTMATTER_COMMENT_WOULD_BE_LOST', result.output);
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), doc);
+    });
+  }
+
+  test('control: a `#` inside a quoted sub-key value is value text, not an inline comment', (t) => {
+    const file = fileIn(t, 'state.md', '---\nm:\n  a: "x # y"\n  b: 2\nstatus: t\n---\nbody\n');
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'm', '--value', JSON.stringify({ a: 'x # y', b: 3 })]);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).updated, true, result.output);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), '---\nm:\n  a: "x # y"\n  b: 3\nstatus: t\n---\nbody\n');
+  });
+
+  test('control: an inline comment on an unchanged top-level key stays byte-identical', (t) => {
+    const file = fileIn(t, 'state.md', '---\nstatus: t   # keep  me\nm: 1\n---\nbody\n');
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'm', '--value', '2']);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).updated, true, result.output);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), '---\nstatus: t   # keep  me\nm: 2\n---\nbody\n');
   });
 
   test('merge of a map keeps a full-line comment leading a sub-key two levels deep', (t) => {

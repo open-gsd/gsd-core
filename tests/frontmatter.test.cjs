@@ -17,6 +17,7 @@ const {
   spliceFrontmatter,
   stripFrontmatter,
   parseMustHavesBlock,
+  propagateCommentChannel,
 } = require('../gsd-core/bin/lib/frontmatter.cjs');
 
 const { normalizePhaseName } = require('../gsd-core/bin/lib/phase-id.cjs');
@@ -395,6 +396,24 @@ describe('reconstructFrontmatter', () => {
     const firstIdx = reconstructed.indexOf('# first note');
     const secondIdx = reconstructed.indexOf('# second note');
     assert.ok(aIdx < firstIdx && firstIdx < secondIdx, `order wrong (a:${aIdx} first:${firstIdx} second:${secondIdx})`);
+  });
+
+  // Found while implementing #5105: the comment channel keyed a nested sub-key by its
+  // dot-joined path, so a top-level key literally named `a.b` and the sub-key `b` of map `a`
+  // shared one entry — one comment overwrote the other and was re-emitted in both places.
+  test('a top-level key named "a.b" and sub-key "b" of map "a" each keep their own comment', () => {
+    const extracted = extractFrontmatter('---\na:\n  # nested note\n  b: 1\n# top-level note\na.b: 2\n---');
+    assert.strictEqual(
+      reconstructFrontmatter(extracted),
+      'a:\n  # nested note\n  b: 1\n# top-level note\na.b: 2',
+    );
+  });
+
+  test('propagating the comment channel keeps the comment of a top-level key named "a.b" when no key "a" exists', () => {
+    const source = extractFrontmatter('---\n# dotted note\na.b: 1\n---');
+    const target = { 'a.b': '2' };
+    propagateCommentChannel(source, target);
+    assert.strictEqual(reconstructFrontmatter(target), '# dotted note\na.b: 2');
   });
 });
 

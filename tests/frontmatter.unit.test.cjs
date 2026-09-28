@@ -1759,16 +1759,18 @@ describe('#3742: extractCommentChannel — indented comments attach by dotted pa
     return sym ? e[sym] : null;
   };
 
+  // Keyed by the JSON-array form of the path (`commentPathKey`, #5105: a dot-joined path read
+  // a top-level key literally named `a.b` as sub-key `b` of map `a`), not a dot-joined string.
   test('an indented comment above a nested key attaches to parent.key', () => {
     const ch = channelOf(['---','a:','  # note','  b: 1','---'].join('\n'));
     assert.ok(ch, 'channel must exist');
-    assert.deepEqual(ch.leading['a.b'], ['  # note']);
+    assert.deepEqual(ch.leading['["a","b"]'], ['  # note']);
     assert.equal(ch.leading['b'], undefined, 'no top-level key named b exists');
   });
 
   test('two levels deep: parent.sub.subsub path', () => {
     const ch = channelOf(['---','a:','  b:','    # deep','    c: 1','---'].join('\n'));
-    assert.deepEqual(ch.leading['a.b.c'], ['    # deep']);
+    assert.deepEqual(ch.leading['["a","b","c"]'], ['    # deep']);
   });
 
   test('a MISALIGNED indent comment before a shallower key is dropped, not misattached', () => {
@@ -1788,12 +1790,12 @@ describe('#3742: extractCommentChannel — indented comments attach by dotted pa
 
   test('column-0 semantics unchanged: attach to next top-level key, drop on non-key', () => {
     const ch = channelOf(['---','a: 1','# c1','# c2','b: 2','---'].join('\n'));
-    assert.deepEqual(ch.leading['b'], ['# c1', '# c2']);
+    assert.deepEqual(ch.leading['["b"]'], ['# c1', '# c2']);
   });
 
   test('quoted top-level keys still walk orderedKeys', () => {
     const ch = channelOf(['---','"a b": 1','# q','c: 2','---'].join('\n'));
-    assert.deepEqual(ch.leading['c'], ['# q']);
+    assert.deepEqual(ch.leading['["c"]'], ['# q']);
   });
 });
 
@@ -1820,12 +1822,13 @@ describe('#3742: reconstructFrontmatter — nested comments re-emit at their ind
 describe('#3742: propagateCommentChannel — merge, root filter, trailing dedupe', () => {
   const symOf = (o) => Object.getOwnPropertySymbols(o).find((x) => String(x).includes('fullLineComments'));
 
+  // Keyed by the JSON-array form of the path (`commentPathKey`, #5105), not a dot-joined string.
   test('a dotted-path key survives while its root section exists in the target', () => {
     const src = extractFrontmatter(['---','p:','  # n','  q: 1','---'].join('\n'));
     const target = { p: { q: 9 } };
     propagateCommentChannel(src, target);
     const ch = target[symOf(target)];
-    assert.deepEqual(ch.leading['p.q'], ['  # n']);
+    assert.deepEqual(ch.leading['["p","q"]'], ['  # n']);
   });
 
   test('a dotted-path key is DROPPED when the root section is absent from the target', () => {
@@ -1833,7 +1836,7 @@ describe('#3742: propagateCommentChannel — merge, root filter, trailing dedupe
     const target = { other: 1 };
     propagateCommentChannel(src, target);
     const ch = target[symOf(target)];
-    assert.ok(!ch || !ch.leading['p.q'], 'comment must die with its section');
+    assert.ok(!ch || !ch.leading['["p","q"]'], 'comment must die with its section');
   });
 
   test('target channel wins per key; source fills gaps (merge, not clobber)', () => {
@@ -1841,8 +1844,8 @@ describe('#3742: propagateCommentChannel — merge, root filter, trailing dedupe
     const target = extractFrontmatter(['---','# from-target','a: 1','b: 2','---'].join('\n'));
     propagateCommentChannel(src, target);
     const ch = target[symOf(target)];
-    assert.deepEqual(ch.leading['a'], ['# from-target'], 'target entry wins');
-    assert.deepEqual(ch.leading['b'], ['# from-source-2'], 'source fills the gap for a key the target owns but has no comment for');
+    assert.deepEqual(ch.leading['["a"]'], ['# from-target'], 'target entry wins');
+    assert.deepEqual(ch.leading['["b"]'], ['# from-source-2'], 'source fills the gap for a key the target owns but has no comment for');
   });
 
   test('trailing list comes from the target when it has a channel (no duplication)', () => {
