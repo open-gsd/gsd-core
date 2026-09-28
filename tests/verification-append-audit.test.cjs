@@ -288,24 +288,42 @@ describe('S3: verification.append-audit input validation (#5105 review)', () => 
     const { projectDir, filePath } = setupFixture(t);
     const result = callAppendAudit(projectDir, filePath, { heading: ' H', rows: { a: 1 } });
     assert.ok(!result.success, 'must refuse a heading with leading whitespace');
+    assert.match(result.error, /--heading must not have leading or trailing whitespace/, 'the refusal reason text must name the actual violated rule');
+  });
+
+  test('#5105 review finding 6: a --heading with TRAILING whitespace is refused', (t) => {
+    const { projectDir, filePath } = setupFixture(t);
+    const result = callAppendAudit(projectDir, filePath, { heading: 'Security Audit ', rows: { a: 1 } });
+    assert.ok(!result.success, 'must refuse a heading with trailing whitespace');
+    assert.match(result.error, /--heading must not have leading or trailing whitespace/);
   });
 
   test('#5105 review finding 6: a --rows key with leading/trailing whitespace is refused', (t) => {
     const { projectDir, filePath } = setupFixture(t);
     const result = callAppendAudit(projectDir, filePath, { heading: 'H', rows: { ' Open': 1 } });
     assert.ok(!result.success, 'must refuse a row key with leading whitespace, so it cannot silently fail to match an existing trimmed "Open" row');
+    assert.match(result.error, /--rows key " Open" must not have leading or trailing whitespace/, 'the refusal reason text must name the offending key');
+  });
+
+  test('#5105 review finding 6: a --rows key with TRAILING whitespace is refused', (t) => {
+    const { projectDir, filePath } = setupFixture(t);
+    const result = callAppendAudit(projectDir, filePath, { heading: 'H', rows: { 'Open ': 1 } });
+    assert.ok(!result.success, 'must refuse a row key with trailing whitespace');
+    assert.match(result.error, /--rows key "Open " must not have leading or trailing whitespace/);
   });
 
   test('#5105 review finding 9: --date with an out-of-range month/day (2026-99-99) is refused', (t) => {
     const { projectDir, filePath } = setupFixture(t);
     const result = callAppendAudit(projectDir, filePath, { heading: 'H', rows: { a: 1 }, date: '2026-99-99' });
     assert.ok(!result.success, 'must refuse a date whose month/day are out of calendar range');
+    assert.match(result.error, /--date must be a real calendar date in YYYY-MM-DD form/, 'the refusal reason text must name the actual violated rule');
   });
 
   test('#5105 review finding 9: --date for a day that does not exist in that month (2026-02-30) is refused', (t) => {
     const { projectDir, filePath } = setupFixture(t);
     const result = callAppendAudit(projectDir, filePath, { heading: 'H', rows: { a: 1 }, date: '2026-02-30' });
     assert.ok(!result.success, 'must refuse a day that overflows its month (2026 is not a leap year in February)');
+    assert.match(result.error, /--date must be a real calendar date in YYYY-MM-DD form/);
   });
 
   test('#5105 review finding 9: a real calendar date (2026-02-28) is accepted', (t) => {

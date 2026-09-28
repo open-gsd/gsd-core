@@ -141,7 +141,7 @@ describe('T2: uat.complete-session with every row passed but status testing and 
 });
 
 describe('T3: boundary — candidate differs from baseline only in `updated:` value', () => {
-  test('pure core: changed:false when only `updated` differs from baseline', () => {
+  test('pure core: changed:false, no restore, content is the untouched live bytes', () => {
     const completeUatSession = loadCompleteUatSession();
     assert.strictEqual(typeof completeUatSession, 'function', 'completeUatSession must be exported by uat.cjs (R1)');
     const live = completeUatContent({ updated: '2020-01-01T00:00:00Z' });
@@ -149,6 +149,99 @@ describe('T3: boundary — candidate differs from baseline only in `updated:` va
     const mockClock = () => new Date('2026-05-05T00:00:00Z');
     const result = completeUatSession(live, { clock: mockClock, baseline });
     assert.strictEqual(result.changed, false, 'an updated-only diff against baseline is not material');
+    assert.strictEqual(result.restored, undefined, 'an updated-only diff must never trigger a restore write (the #5105 R1 decision)');
+    assert.strictEqual(result.content, live, 'content must be the untouched live bytes, never re-rendered');
+  });
+});
+
+describe('#5105 M1/m1: restore is restricted to a live-vs-candidate diff beyond `updated:`, and is byte-exact to baseline', () => {
+  test('(i) pure core: baseline complete, live is the "testing" variant of the same rows → restored:true, content === baseline bytes', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const baseline = completeUatContent();
+    const live = testingCompleteUatContent();
+    const result = completeUatSession(live, { clock: () => new Date('2026-05-05T00:00:00Z'), baseline });
+    assert.strictEqual(result.changed, false);
+    assert.strictEqual(result.restored, true, 'live differs from the normalized candidate in status/Current Test, not just updated');
+    assert.strictEqual(result.content, baseline, 'restored content must be byte-identical to the committed baseline');
+  });
+
+  test('(ii) pure core: live differs from baseline/candidate ONLY in `updated:` → no restore, content untouched (already covered by T3, asserted again here for the M1 grouping)', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const baseline = completeUatContent({ updated: '2019-06-06T00:00:00Z' });
+    const live = completeUatContent({ updated: '2020-01-01T00:00:00Z' });
+    const result = completeUatSession(live, { clock: () => new Date('2026-05-05T00:00:00Z'), baseline });
+    assert.strictEqual(result.changed, false);
+    assert.strictEqual(result.restored, undefined);
+    assert.strictEqual(result.content, live);
+  });
+
+  test('(iii) pure core: baseline `updated:X` with no space is restored byte-exact (not re-rendered as `updated: X`)', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const baseline = completeUatContent().replace('updated: 2026-01-01T00:00:00Z', 'updated:2026-01-01T00:00:00Z');
+    const live = testingCompleteUatContent();
+    const result = completeUatSession(live, { clock: () => new Date('2026-05-05T00:00:00Z'), baseline });
+    assert.strictEqual(result.changed, false);
+    assert.strictEqual(result.restored, true);
+    assert.strictEqual(result.content, baseline, 'restored content must preserve baseline\'s exact `updated:` spacing byte-for-byte');
+    assert.match(result.content, /^updated:2026-01-01T00:00:00Z$/m, 'no space must be introduced after the colon');
+  });
+
+  test('CLI (i): restored case — file bytes equal `git show HEAD:<path>`, tree clean, HEAD unchanged, output restored:true', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const uatPath = path.join(phaseDir, '01-UAT.md');
+    const { execFileSync } = require('child_process');
+    fs.writeFileSync(uatPath, completeUatContent());
+    execFileSync('git', ['add', '-A'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+    execFileSync('git', ['commit', '-q', '-m', 'seed complete UAT'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+    const headBefore = gitHeadCount(projectDir);
+
+    // Re-open the session on disk without committing: status flips back to
+    // testing with a pending Current Test, but every row is still resolved —
+    // completeUatSession will normalize this back to the committed baseline.
+    fs.writeFileSync(uatPath, testingCompleteUatContent());
+
+    const result = runGsdTools(['query', 'uat.complete-session', '.planning/phases/01-foo/01-UAT.md'], projectDir);
+    assert.ok(result.success, `expected success: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.changed, false);
+    assert.strictEqual(parsed.restored, true);
+
+    const headBlob = execFileSync('git', ['show', `HEAD:.planning/phases/01-foo/01-UAT.md`], { cwd: projectDir, encoding: 'utf-8', timeout: GIT_TIMEOUT_MS });
+    assert.strictEqual(fs.readFileSync(uatPath, 'utf-8'), headBlob, 'restored file bytes must equal the HEAD blob exactly');
+    const statusOut = execFileSync('git', ['status', '--porcelain', '.'], { cwd: projectDir, encoding: 'utf-8', timeout: GIT_TIMEOUT_MS });
+    assert.strictEqual(statusOut.trim(), '', 'a byte-exact restore must leave the tree clean');
+    assert.strictEqual(gitHeadCount(projectDir), headBefore, 'a restore is not a commit');
+  });
+
+  test('CLI (ii): updated-only diff against baseline — file bytes/mtime unchanged, no commit', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const uatPath = path.join(phaseDir, '01-UAT.md');
+    const before = completeUatContent({ updated: '2020-01-01T00:00:00Z' });
+    fs.writeFileSync(uatPath, before);
+    const { execFileSync } = require('child_process');
+    execFileSync('git', ['add', '-A'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+    execFileSync('git', ['commit', '-q', '-m', 'seed UAT with an updated timestamp'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+    const headBefore = gitHeadCount(projectDir);
+
+    // Live differs from the committed baseline ONLY in `updated:`.
+    fs.writeFileSync(uatPath, completeUatContent({ updated: '2021-02-02T00:00:00Z' }));
+    const liveBytesBefore = fs.readFileSync(uatPath, 'utf-8');
+    const mtimeBefore = fs.statSync(uatPath).mtimeMs;
+
+    const result = runGsdTools(['query', 'uat.complete-session', '.planning/phases/01-foo/01-UAT.md'], projectDir);
+    assert.ok(result.success, `expected success: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.changed, false);
+    assert.strictEqual(parsed.restored, undefined, 'must never restore/write on an updated-only diff');
+    assert.strictEqual(fs.readFileSync(uatPath, 'utf-8'), liveBytesBefore, 'file bytes must be unchanged');
+    assert.strictEqual(fs.statSync(uatPath).mtimeMs, mtimeBefore, 'file must not be re-written (mtime unchanged)');
+    assert.strictEqual(gitHeadCount(projectDir), headBefore, 'no commit on an updated-only diff');
   });
 });
 

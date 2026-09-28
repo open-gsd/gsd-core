@@ -571,12 +571,6 @@ describe('bug #1008: io.error() tolerates a full non-blocking stderr pipe', () =
 {
   const { describe: __foldDescribe } = require('node:test');
   __foldDescribe("folded:bug-1891-file-resolution (consolidation epic #1969 B5 #1974)", () => {
-// allow-test-rule: structural-implementation-guard (see #1891)
-// gsd-tools.cjs @file: resolution is a low-level stdout interception that cannot be
-// exercised end-to-end via runGsdTools without a real workflow that emits @file: output.
-// These structural tests guard the interception wiring until a behavioral integration
-// test suite for the full @file: path is added.
-
 /**
  * Regression tests for bug #1891
  *
@@ -588,38 +582,23 @@ describe('bug #1008: io.error() tolerates a full non-blocking stderr pipe', () =
 
 'use strict';
 
-const { describe, test, before } = require('node:test');
+const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const GSD_TOOLS_SRC = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
-
 describe('bug #1891: @file: resolution in gsd-tools.cjs', () => {
-  let src;
-
-  before(() => {
-    // allow-test-rule: structural-implementation-guard (see #1891) — gsd-tools.cjs's
-    // stdout @file: interception has no exported symbol to assert on directly; every
-    // src.includes()/indexOf()/match() call in this describe block traces back to this
-    // read (#3545)
-    src = fs.readFileSync(GSD_TOOLS_SRC, 'utf-8');
-  });
-
   // The @file: check + read live in ONE shared helper, `resolveAtFileOutput`
   // (src/io.cts, #5105 review finding 7), which gsd-tools.cjs's main() calls on
   // both the --pick and the non-pick path — asserted behaviorally here.
-  test('resolveAtFileOutput replaces an @file: reference with the file content', () => {
+  test('resolveAtFileOutput replaces an @file: reference with the file content', (t) => {
     const { createTempDir, cleanup } = require('./helpers.cjs');
     const dir = createTempDir('gsd-1891-');
-    try {
-      const file = path.join(dir, 'payload.json');
-      const content = '{"big":"héllo"}\n';
-      fs.writeFileSync(file, content, 'utf-8');
-      assert.strictEqual(io.resolveAtFileOutput(`@file:${file}`), content);
-    } finally {
-      cleanup(dir);
-    }
+    t.after(() => cleanup(dir));
+    const file = path.join(dir, 'payload.json');
+    const content = '{"big":"héllo"}\n';
+    fs.writeFileSync(file, content, 'utf-8');
+    assert.strictEqual(io.resolveAtFileOutput(`@file:${file}`), content);
   });
 
   test('resolveAtFileOutput leaves non-@file: output untouched', () => {
@@ -628,16 +607,45 @@ describe('bug #1891: @file: resolution in gsd-tools.cjs', () => {
     }
   });
 
-  test('stdout interception wraps runCommand in the non-pick path', () => {
-    // The main function should resolve @file: output in BOTH --pick and
-    // non-pick paths. This can be either two inline checks or a shared helper.
-    const mainFunc = src.slice(src.indexOf('async function main()'));
-    const resolveCalls = (mainFunc.match(/resolveAtFileOutput\(/g) || []).length;
-    const inlineAtFileChecks = (mainFunc.match(/@file:/g) || []).length;
-    assert.ok(
-      resolveCalls >= 2 || inlineAtFileChecks >= 2,
-      'Both --pick and normal paths should resolve @file: references'
-    );
+  // m3 (#5105): replaces a source-grep test that inspected gsd-tools.cjs's
+  // TEXT (`src.match(/resolveAtFileOutput\(/g)`) to guess whether main()'s
+  // non-pick path resolves an @file: reference. That never proved the
+  // interception actually WORKS — only that the string appeared somewhere.
+  // This drives the exact same shared primitives gsd-tools.cjs's main() calls
+  // in its non-pick path (captureStdoutSyncWrites → output → resolveAtFileOutput
+  // → fs.writeSync(1, ...), see gsd-core/bin/gsd-tools.cjs's own comment at its
+  // `captureStdoutSyncWrites` call above `fs.writeSync(1, resolveAtFileOutput(captured))`),
+  // over a real >50KB payload, and asserts the FINAL bytes a caller would see:
+  // never a literal `@file:` prefix, and the fully resolved JSON content.
+  test('behavioral: the non-pick @file: interception resolves a >50KB payload to its real content, never leaking the @file: prefix', async () => {
+    const big = 'x'.repeat(60000);
+    const captured = await io.captureStdoutSyncWrites(() => {
+      io.output({ big }, false);
+    });
+    // Sanity: prove the overflow protocol actually engaged, so a regression
+    // that stopped redirecting large payloads would not silently pass this
+    // test by never producing an `@file:` prefix in the first place.
+    assert.match(captured, /^@file:/, 'a >50KB payload must trigger the @file: redirection (io.output, >50000 chars)');
+
+    const resolved = io.resolveAtFileOutput(captured);
+    assert.doesNotMatch(resolved, /^@file:/, 'the non-pick path must resolve @file: before it reaches the real caller');
+    assert.deepStrictEqual(JSON.parse(resolved), { big }, 'resolved content must be the exact original payload');
+  });
+
+  // Mirrors the --pick path's own resolve-then-JSON.parse sequence (gsd-tools.cjs's
+  // main(): `resolveAtFileOutput(captured)` runs BEFORE `JSON.parse`, because an
+  // unresolved `@file:<path>` string is not itself JSON — parsing the RAW
+  // captured output must fail while parsing the resolved output must succeed.
+  test('behavioral: the --pick path\'s resolve-before-parse sequence — raw @file: text is not JSON, resolved content is', async () => {
+    const rows = Array.from({ length: 2000 }, (_, i) => ({ id: i, note: 'row'.repeat(20) }));
+    const captured = await io.captureStdoutSyncWrites(() => {
+      io.output({ rows }, false);
+    });
+    assert.match(captured, /^@file:/, 'sanity: this fixture must also overflow the 50KB threshold');
+    assert.throws(() => JSON.parse(captured), 'the raw @file: pointer must not itself be parseable as JSON');
+    const resolved = io.resolveAtFileOutput(captured);
+    const parsed = JSON.parse(resolved);
+    assert.strictEqual(parsed.rows.length, 2000, 'the --pick path must recover the FULL payload, not a truncated one');
   });
 });
   });

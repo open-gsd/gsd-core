@@ -291,26 +291,19 @@ describe('bug #224: --pick stdout capture contract', () => {
     assert.strictEqual(fs.writeSync, originalWriteSync, 'fs.writeSync must be restored after capture');
   });
 
-  test('writes to fds other than 1 pass through with the real byte count', async () => {
+  test('writes to fds other than 1 pass through with the real byte count', async (t) => {
     const dir = createTempDir('gsd-224-');
+    t.after(() => cleanup(dir));
     const file = path.join(dir, 'out.txt');
-    try {
-      const fd = fs.openSync(file, 'w');
-      let n;
-      let captured;
-      try {
-        captured = await captureStdoutSyncWrites(() => {
-          n = fs.writeSync(fd, 'passthrough');
-        });
-      } finally {
-        fs.closeSync(fd);
-      }
-      assert.strictEqual(n, 'passthrough'.length);
-      assert.strictEqual(captured, '');
-      assert.strictEqual(fs.readFileSync(file, 'utf-8'), 'passthrough');
-    } finally {
-      cleanup(dir);
-    }
+    const fd = fs.openSync(file, 'w');
+    t.after(() => fs.closeSync(fd));
+    let n;
+    const captured = await captureStdoutSyncWrites(() => {
+      n = fs.writeSync(fd, 'passthrough');
+    });
+    assert.strictEqual(n, 'passthrough'.length);
+    assert.strictEqual(captured, '');
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), 'passthrough');
   });
 });
   });
