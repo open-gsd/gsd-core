@@ -42,9 +42,13 @@ describe('parseStateMd reads the frontmatter block the one fence owner finds', (
 });
 
 /**
- * The documented fields of the statusline payload's `context_window` object
- * (code.claude.com/docs/en/statusline). Every fixture below builds its
- * `context_window` through `contextWindow()`, which rejects anything else.
+ * The documented fields of the statusline payload's context_window object
+ * (Claude Code's "Customize your status line" reference). Every fixture below
+ * builds its context_window through contextWindow(), which rejects anything
+ * else. The URL is spelled without its path segment on purpose:
+ * lint-docs-guard-registration.cjs reads a docs/ path between two backticks
+ * anywhere in a test file as a template literal, and a comment is enough to
+ * trip it.
  *
  * That guard exists because these fixtures carried `total_tokens`, which the
  * host does not send: `totalCtx` therefore always took its 1M fallback in a
