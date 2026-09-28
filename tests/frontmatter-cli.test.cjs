@@ -185,6 +185,19 @@ describe('frontmatter merge', () => {
     assert.ok(!result.success, 'Command should fail with non-zero exit code');
     assert.ok(result.error.includes('Invalid JSON'), 'Error should mention invalid JSON');
   });
+
+  // Found while implementing #5105: `Object.assign` spread a JSON array or string into
+  // index-named keys (`0: q`) and reported success.
+  for (const data of ['["q"]', '"q"', '7', 'null']) {
+    test(`rejects --data ${data} that is not a JSON object and writes nothing`, () => {
+      const doc = '---\nphase: 01\n---\nbody';
+      const file = writeTempFile(doc);
+      const result = runGsdTools(['frontmatter', 'merge', file, '--data', data]);
+      assert.ok(!result.success, `expected a rejection, got ${result.output}`);
+      assert.match(result.error, /--data must be a JSON object/);
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), doc);
+    });
+  }
 });
 
 // ─── frontmatter validate ───────────────────────────────────────────────────
@@ -878,7 +891,7 @@ describe('frontmatter set/merge — write refusal', () => {
 
   // The lossy object-list refusal locates the block through the one fence owner, so a
   // BOM document is refused exactly like an LF or CRLF one (found while implementing #5105).
-  for (const [label, prefix, eol] of [['LF', '', '\n'], ['CRLF', '', '\r\n'], ['BOM', '﻿', '\n']]) {
+  for (const [label, prefix, eol] of [['LF', '', '\n'], ['CRLF', '', '\r\n'], ['BOM', '\uFEFF', '\n']]) {
     test(`set that would flatten an object-list in a ${label} document is refused and writes nothing`, (t) => {
       const doc = prefix + ['---', 'must_haves:', '  artifacts:', '    - path: a.md', '      provides: X', 'status: t', '---', 'body', ''].join(eol);
       const file = fileIn(t, 'plan.md', doc);
@@ -965,4 +978,95 @@ describe('frontmatter set/merge — write refusal', () => {
     assert.strictEqual(JSON.parse(result.output).updated, true);
     assert.strictEqual(fs.readFileSync(file, 'utf-8'), '---\nwave: 2\nstatus: t\n---\nbody\n');
   });
+
+  // Found while implementing #5105: a changed key is regenerated, and a full-line comment
+  // nested inside its value is data the author wrote (#3257/#3742). It is re-emitted beside
+  // the sub-key it leads; where it cannot be, the write is refused — never silently dropped.
+  const NESTED_COMMENT_DOC = '---\nprogress:\n  # hand note: keep\n  done: 1\n  total: 2\nstatus: t\n---\nbody\n';
+
+  test('set of a map keeps a full-line comment leading a surviving sub-key', (t) => {
+    const file = fileIn(t, 'state.md', NESTED_COMMENT_DOC);
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'progress', '--value', JSON.stringify({ done: 2, total: 2 })]);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).updated, true);
+    assert.strictEqual(
+      fs.readFileSync(file, 'utf-8'),
+      '---\nprogress:\n  # hand note: keep\n  done: 2\n  total: 2\nstatus: t\n---\nbody\n',
+    );
+  });
+
+  test('merge of a map keeps a full-line comment leading a sub-key two levels deep', (t) => {
+    const doc = '---\nm:\n  x:\n    # deep note\n    y: 1\n  # z note\n  z: 3\nstatus: t\n---\nbody\n';
+    const file = fileIn(t, 'state.md', doc);
+    const result = runGsdTools(['frontmatter', 'merge', file, '--data', JSON.stringify({ m: { x: { y: '2' }, z: '3' } })]);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).merged, true);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), '---\nm:\n  x:\n    # deep note\n    y: 2\n  # z note\n  z: 3\nstatus: t\n---\nbody\n');
+  });
+
+  for (const [label, doc, field, value] of [
+    ['a sub-key removed together with the comment leading it', NESTED_COMMENT_DOC, 'progress', { total: 3 }],
+    ['a map replaced by a scalar', NESTED_COMMENT_DOC, 'progress', 'done'],
+    ['a comment between the items of a changed block list', '---\ntags:\n  - a\n  # why b\n  - b\nstatus: t\n---\nbody\n', 'tags', ['a', 'c']],
+    ['a comment trailing inside a changed map', '---\np:\n  a: 1\n  # tail note\nstatus: t\n---\nbody\n', 'p', { a: '2' }],
+  ]) {
+    for (const cmd of ['set', 'merge']) {
+      test(`${cmd} that would drop ${label} is refused with FRONTMATTER_COMMENT_WOULD_BE_LOST and writes nothing`, (t) => {
+        const file = fileIn(t, 'state.md', doc);
+        const args = cmd === 'set'
+          ? ['frontmatter', 'set', file, '--field', field, '--value', JSON.stringify(value)]
+          : ['frontmatter', 'merge', file, '--data', JSON.stringify({ [field]: value })];
+        const result = runGsdTools(args);
+        assert.ok(result.success, `command failed: ${result.error}`);
+        const parsed = JSON.parse(result.output);
+        assert.strictEqual(parsed.code, 'FRONTMATTER_COMMENT_WOULD_BE_LOST', result.output);
+        assert.strictEqual(fs.readFileSync(file, 'utf-8'), doc);
+      });
+    }
+  }
+
+  test('control: a `#` line inside a block scalar is value text, not a comment — replacing it writes', (t) => {
+    const file = fileIn(t, 'plan.md', '---\nd: |\n  # heading\n  text\nstatus: t\n---\nbody\n');
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'd', '--value', 'new']);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).updated, true);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), '---\nd: new\nstatus: t\n---\nbody\n');
+  });
+
+  test('control: deleting a whole key takes the comments inside its value with it (#3257 AC5)', (t) => {
+    const file = fileIn(t, 'state.md', NESTED_COMMENT_DOC);
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'progress', '--value', 'null']);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).updated, true);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), '---\nstatus: t\n---\nbody\n');
+  });
+
+  test('merge with a control character in a field name is rejected and writes nothing', (t) => {
+    const doc = '---\nstatus: t\n---\nbody\n';
+    const file = fileIn(t, 'plan.md', doc);
+    const result = runGsdTools(['frontmatter', 'merge', file, '--data', JSON.stringify({ 'a\nb': 'v', 'c\u001bd': 'w' })]);
+    assert.ok(!result.success, `expected a rejection, got ${result.output}`);
+    assert.match(result.error, /field name contains a control character/);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), doc);
+  });
+
+  // `Object.assign` / `fm[field] =` treat `__proto__` as the prototype setter: the key was
+  // never written while the command reported success (found while implementing #5105).
+  for (const cmd of ['set', 'merge']) {
+    test(`${cmd} of a field named __proto__ writes the key and it reads back`, (t) => {
+      const file = fileIn(t, 'plan.md', '---\nstatus: t\n---\nbody\n');
+      const args = cmd === 'set'
+        ? ['frontmatter', 'set', file, '--field', '__proto__', '--value', '{"x":"1"}']
+        : ['frontmatter', 'merge', file, '--data', '{"__proto__":{"x":"1"}}'];
+      const result = runGsdTools(args);
+      assert.ok(result.success, `command failed: ${result.error}`);
+      assert.ok(!JSON.parse(result.output).error, result.output);
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), '---\nstatus: t\n__proto__:\n  x: 1\n---\nbody\n');
+      const got = runGsdTools(['frontmatter', 'get', file]);
+      assert.ok(got.success, `get failed: ${got.error}`);
+      const reread = JSON.parse(got.output);
+      assert.ok(Object.prototype.hasOwnProperty.call(reread, '__proto__'), got.output);
+      assert.deepStrictEqual(Object.getOwnPropertyDescriptor(reread, '__proto__').value, { x: '1' });
+    });
+  }
 });

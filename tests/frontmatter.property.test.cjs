@@ -300,18 +300,28 @@ describe('frontmatter: spliceFrontmatter properties', () => {
   // scalar or a flow collection whose continuation lines sit at column 0, or an indented
   // block scalar — belongs whole to its key. Changing or adding one key must re-parse to
   // exactly the intended object, keep every other key's lines byte-identical, and keep the
-  // blank and full-line comment lines between keys in place.
+  // blank and full-line comment lines between keys in place. A full-line comment nested
+  // inside the changed value stays beside the sub-key it leads when that sub-key survives;
+  // when it cannot be re-attached (the value became a scalar, a comment between list items)
+  // the splice refuses with FRONTMATTER_COMMENT_WOULD_BE_LOST rather than drop it.
   test('property: multi-line values, block scalars and comments survive a one-key splice', () => {
     const word = fc.stringMatching(/^[a-z]{1,6}$/);
     const words = fc.array(word, { minLength: 1, maxLength: 3 });
+    const plain = (arb) => arb.map((lines) => ({ kind: 'plain', lines }));
     const valueLines = fc.oneof(
-      fc.tuple(word, words).map(([k, ws]) => [`KEY: "${k}`, ...ws.slice(0, -1), `${ws[ws.length - 1]}"`]),
-      fc.tuple(word, words).map(([k, ws]) => [`KEY: "${k}`, `# ${ws.join(' ')}"`]),
-      fc.tuple(word, words).map(([k, ws]) => [`KEY: '${k}`, ...ws.slice(0, -1), `${ws[ws.length - 1]}'`]),
-      fc.tuple(word, words).map(([k, ws]) => [`KEY: [${k},`, ...ws.slice(0, -1).map((w) => `${w},`), `${ws[ws.length - 1]}]`]),
-      fc.tuple(word, words).map(([k, ws]) => [`KEY: {a: ${k},`, ...ws.slice(0, -1).map((w) => `${w},`), `${ws[ws.length - 1]}}`]),
-      fc.tuple(fc.constantFrom('|', '>', '|-', '>-'), words).map(([ind, ws]) => [`KEY: ${ind}`, ...ws.map((w) => `  ${w}`)]),
-      word.map((w) => [`KEY: ${w}`]),
+      plain(fc.tuple(word, words).map(([k, ws]) => [`KEY: "${k}`, ...ws.slice(0, -1), `${ws[ws.length - 1]}"`])),
+      plain(fc.tuple(word, words).map(([k, ws]) => [`KEY: "${k}`, `# ${ws.join(' ')}"`])),
+      plain(fc.tuple(word, words).map(([k, ws]) => [`KEY: '${k}`, ...ws.slice(0, -1), `${ws[ws.length - 1]}'`])),
+      plain(fc.tuple(word, words).map(([k, ws]) => [`KEY: [${k},`, ...ws.slice(0, -1).map((w) => `${w},`), `${ws[ws.length - 1]}]`])),
+      plain(fc.tuple(word, words).map(([k, ws]) => [`KEY: {a: ${k},`, ...ws.slice(0, -1).map((w) => `${w},`), `${ws[ws.length - 1]}}`])),
+      plain(fc.tuple(fc.constantFrom('|', '>', '|-', '>-'), words).map(([ind, ws]) => [`KEY: ${ind}`, ...ws.map((w) => `  ${w}`)])),
+      // A `#` line inside a block scalar is value text, never a comment to preserve.
+      plain(fc.tuple(word, word).map(([c, w]) => ['KEY: |', `  # ${c}`, `  ${w}`])),
+      plain(word.map((w) => [`KEY: ${w}`])),
+      // A nested map whose first sub-key is led by a full-line comment.
+      fc.tuple(word, word, word).map(([c, a, b]) => ({ kind: 'nested', comment: `# ${c}`, a, b, lines: ['KEY:', `  # ${c}`, `  a: ${a}`, `  b: ${b}`] })),
+      // A block list with a full-line comment between its items.
+      fc.tuple(word, word, word).map(([c, a, b]) => ({ kind: 'listComment', lines: ['KEY:', `  - ${a}`, `  # ${c}`, `  - ${b}`] })),
     );
     const gapLine = fc.oneof(fc.constant(''), word.map((w) => `# ${w}`));
     const gap = fc.array(gapLine, { maxLength: 2 });
@@ -321,10 +331,12 @@ describe('frontmatter: spliceFrontmatter properties', () => {
         fc.array(fc.tuple(valueLines, gap), { minLength: 5, maxLength: 5 }),
         fc.nat(),
         fc.stringMatching(/^[a-z0-9]{1,8}$/),
-        (keys, specs, pick, newValue) => {
+        fc.boolean(),
+        (keys, specs, pick, newScalar, keepShape) => {
           const segments = keys.map((k, i) => ({
             key: k,
-            lines: specs[i][0].map((l) => l.replace('KEY', k)),
+            spec: specs[i][0],
+            lines: specs[i][0].lines.map((l) => l.replace('KEY', k)),
             gap: specs[i][1],
           }));
           const doc = ['---', ...segments.flatMap((s) => [...s.lines, ...s.gap]), '---', 'body'].join('\n');
@@ -332,10 +344,23 @@ describe('frontmatter: spliceFrontmatter properties', () => {
           assert.equal(Object.keys(parsed).length, keys.length, `fixture must parse: ${JSON.stringify(doc)}`);
 
           const target = pick % (keys.length + 1) === keys.length ? 'zz_new' : keys[pick % (keys.length + 1)];
-          const regenerated = reconstructFrontmatter({ [target]: newValue });
+          const targetSpec = segments.find((s) => s.key === target)?.spec;
+          // A nested map keeping its sub-keys takes the new value on `a`; otherwise the new
+          // value is a scalar replacing whatever was there.
+          const keepsNested = targetSpec?.kind === 'nested' && keepShape;
+          const newValue = keepsNested ? { a: newScalar, b: targetSpec.b } : newScalar;
+          const intended = { ...Object.fromEntries(Object.entries(parsed)), [target]: newValue };
+
+          if (targetSpec && (targetSpec.kind === 'listComment' || (targetSpec.kind === 'nested' && !keepsNested))) {
+            assert.throws(() => spliceFrontmatter(doc, intended), (err) => err.code === 'FRONTMATTER_COMMENT_WOULD_BE_LOST');
+            return;
+          }
+
+          const regenerated = keepsNested
+            ? [`${target}:`, `  ${targetSpec.comment}`, ...reconstructFrontmatter(newValue).split('\n').map((l) => `  ${l}`)].join('\n')
+            : reconstructFrontmatter({ [target]: newValue });
           const expectedInner = segments.flatMap((s) => (s.key === target ? [regenerated, ...s.gap] : [...s.lines, ...s.gap]));
           if (!keys.includes(target)) expectedInner.push(regenerated);
-          const intended = { ...Object.fromEntries(Object.entries(parsed)), [target]: newValue };
 
           const out = spliceFrontmatter(doc, intended);
 

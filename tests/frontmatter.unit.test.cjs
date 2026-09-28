@@ -572,10 +572,10 @@ describe('spliceFrontmatter: existing frontmatter', () => {
 
   // The block is re-emitted with the document's own line ending (found while implementing
   // #5105): a CRLF document never gains bare-LF frontmatter lines.
-  test('rewritten frontmatter keeps CRLF when the original was CRLF', () => {
+  test('a key appended to a CRLF block is written with CRLF', () => {
     const input = '---\r\ntitle: Old\r\n---\r\nBody';
-    const result = spliceFrontmatter(input, { title: 'New' });
-    assert.ok(result.startsWith('---\r\ntitle: New\r\n---'));
+    const result = spliceFrontmatter(input, { title: 'Old', status: 'new' });
+    assert.equal(result, '---\r\ntitle: Old\r\nstatus: new\r\n---\r\nBody');
   });
 
   test('return type is always string', () => {

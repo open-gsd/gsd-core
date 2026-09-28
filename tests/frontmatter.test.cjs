@@ -572,8 +572,8 @@ describe('spliceFrontmatter', () => {
 
     test('a leading BOM is carried through, not treated as a document without frontmatter', () => {
       assert.strictEqual(
-        spliceFrontmatter('﻿---\nstatus: t\n---\nbody', { status: 'complete' }),
-        '﻿---\nstatus: complete\n---\nbody',
+        spliceFrontmatter('\uFEFF---\nstatus: t\n---\nbody', { status: 'complete' }),
+        '\uFEFF---\nstatus: complete\n---\nbody',
       );
     });
   });
@@ -681,7 +681,7 @@ function crlf(s) {
 // fence regex that missed a leading BOM, so a BOM PLAN.md read as having no must_haves.
 describe('parseMustHavesBlock: fence location', () => {
   const PLAN = '---\nphase: 01\nmust_haves:\n  artifacts:\n    - path: a.md\n      provides: X\n---\nbody\n';
-  for (const [label, doc] of [['LF', PLAN], ['CRLF', crlf(PLAN)], ['BOM', '﻿' + PLAN]]) {
+  for (const [label, doc] of [['LF', PLAN], ['CRLF', crlf(PLAN)], ['BOM', '\uFEFF' + PLAN]]) {
     test(`reads must_haves from a ${label} document`, () => {
       assert.deepStrictEqual(parseMustHavesBlock(doc, 'artifacts'), [{ path: 'a.md', provides: 'X' }]);
     });
@@ -3136,7 +3136,7 @@ describe('extractFrontmatter BOM tolerance (#2977)', () => {
       { label: 'NBSP', ch: ' ', escaped: '\\_' },
       { label: 'LINE SEPARATOR', ch: ' ', escaped: '\\L' },
       { label: 'PARAGRAPH SEPARATOR', ch: ' ', escaped: '\\P' },
-      { label: 'BOM', ch: '﻿', escaped: '\\uFEFF' },
+      { label: 'BOM', ch: '\uFEFF', escaped: '\\uFEFF' },
       { label: 'lone high surrogate', ch: '\uD800', escaped: '\\uD800' },
     ];
 
