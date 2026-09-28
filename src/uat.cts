@@ -28,7 +28,7 @@ import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
-const { extractFrontmatter, spliceFrontmatter, frontmatterListEntries, flattenObjectListItem } = frontmatter;
+const { extractFrontmatter, spliceFrontmatter, frontmatterListEntries, flattenObjectListItem, isFrontmatterWriteRefusal } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const { PHASE_NUMBER_TOKEN_SOURCE, scopeToPhase } = phaseIdMod;
@@ -466,11 +466,15 @@ function setCurrentTestComplete(content: string): string {
   // required for idempotence: when the section already reads exactly this,
   // `withSection`'s own `newBody === section.body` no-op guard must fire, or
   // every already-complete document would gain a spurious extra blank line on
-  // each pass (a real, if invisible-looking, material byte change).
+  // each pass (a real, if invisible-looking, material byte change). The line
+  // break is the document's own (its first line's terminator), so a CRLF
+  // document's already-canonical section is recognized as unchanged and a
+  // rewritten one never gains a bare-LF line.
+  const eol = /^[^\n]*\r\n/.test(content) ? '\r\n' : '\n';
   return withSection(
     content,
     (h) => /^current\s+test$/i.test(h.text) && h.level === 2,
-    () => '\n[testing complete]',
+    () => `${eol}[testing complete]`,
     { levelBounded: true },
   );
 }
@@ -484,6 +488,11 @@ function setCurrentTestComplete(content: string): string {
  * colon-bearing scalars never fires — see `withFrontmatterUpdated`'s doc
  * comment for why `updated:` (an ISO-8601 timestamp, which ALWAYS contains a
  * `:`) is deliberately NOT routed through this same round-trip.
+ *
+ * Throws `spliceFrontmatter`'s write refusal (`isFrontmatterWriteRefusal`)
+ * when the frontmatter block is not parseable YAML — a block like
+ * `status:complete` (no space) is never "repaired" by regeneration;
+ * `cmdUatCompleteSession` surfaces the refusal and writes/commits nothing.
  */
 function setFrontmatterStatus(content: string, status: 'complete' | 'partial'): string {
   const fm = extractFrontmatter(content);
@@ -496,12 +505,14 @@ function setFrontmatterStatus(content: string, status: 'complete' | 'partial'): 
  * `null` if there is none.
  */
 function frontmatterBlockBounds(content: string): { start: number; end: number } | null {
-  const match = /^---\r?\n[\s\S]+?\r?\n---/.exec(content);
+  // A leading BOM (#2977) is not content before the fence — same as
+  // `spliceFrontmatter`, which carries it through unchanged.
+  const match = /^﻿?---\r?\n[\s\S]+?\r?\n---/.exec(content);
   return match ? { start: match.index, end: match.index + match[0].length } : null;
 }
 
 /**
- * Read or write the frontmatter `updated:` line, SCOPED to the matched
+ * Write the frontmatter `updated:` line, SCOPED to the matched
  * `---`…`---` block only (#5105 review S8) — deliberately NOT routed through
  * `extractFrontmatter`/`spliceFrontmatter`'s generic re-serializer the way
  * `setFrontmatterStatus` is: `reconstructFrontmatter` double-quotes any
@@ -514,22 +525,12 @@ function frontmatterBlockBounds(content: string): { start: number; end: number }
  * frontmatter block gets the same "body text is never touched" guarantee
  * without that regression.
  *
- * `mode: 'read'` returns the existing value's raw text (trimmed), or `null`
- * when the block or the key is absent. `mode: 'write'` returns the whole
- * document with `updated:` set to `value` — appending the key just before the
- * closing `---` when the block exists but the key does not (S8: "a
- * frontmatter lacking `updated:` gains one when changed"), or returning
- * `content` unchanged when there is no frontmatter block at all (never
- * manufacturing one here).
+ * Returns the whole document with `updated:` set to `value` — appending the
+ * key just before the closing `---` (with the block's own line ending) when
+ * the block exists but the key does not (S8: "a frontmatter lacking
+ * `updated:` gains one when changed"), or returning `content` unchanged when
+ * there is no frontmatter block at all (never manufacturing one here).
  */
-function frontmatterUpdatedValue(content: string): string | null {
-  const bounds = frontmatterBlockBounds(content);
-  if (!bounds) return null;
-  const block = content.slice(bounds.start, bounds.end);
-  const m = /^updated:(.*)$/m.exec(block);
-  return m ? m[1].trim() : null;
-}
-
 function setFrontmatterUpdated(content: string, value: string): string {
   const bounds = frontmatterBlockBounds(content);
   if (!bounds) return content;
@@ -537,19 +538,27 @@ function setFrontmatterUpdated(content: string, value: string): string {
   const keyLineRe = /^updated:.*$/m;
   const newBlock = keyLineRe.test(block)
     ? block.replace(keyLineRe, `updated: ${value}`)
-    : block.replace(/\r?\n---$/, `\nupdated: ${value}\n---`);
+    : block.replace(/(\r?\n)---$/, (_m, eol: string) => `${eol}updated: ${value}${eol}---`);
   return content.slice(0, bounds.start) + newBlock + content.slice(bounds.end);
 }
 
 /**
  * The MATERIAL projection of a document for #5105 R1's comparison: every byte
- * except the frontmatter `updated:` value (deny-by-default — everything else
- * counts). A document with no frontmatter block, or frontmatter with no
- * `updated` key, is returned unchanged.
+ * except the frontmatter `updated:` line (deny-by-default — everything else
+ * counts). The whole line, terminator included, is dropped, so a document
+ * LACKING an `updated:` line projects the same as one carrying any `updated:`
+ * value — presence is not material either, and "differs only in `updated`"
+ * holds when one side has no such line. A document with no frontmatter block,
+ * or frontmatter with no `updated` key, is returned unchanged.
  */
 function stripUpdatedForCompare(content: string): string {
-  if (frontmatterUpdatedValue(content) === null) return content;
-  return setFrontmatterUpdated(content, '');
+  const bounds = frontmatterBlockBounds(content);
+  if (!bounds) return content;
+  const block = content.slice(bounds.start, bounds.end);
+  // The block always ends with `<eol>---`, so an `updated:` line always has
+  // its own terminator to drop with it.
+  const newBlock = block.replace(/^updated:.*\r?\n/m, '');
+  return content.slice(0, bounds.start) + newBlock + content.slice(bounds.end);
 }
 
 /**
@@ -581,7 +590,7 @@ function spliceBaselineUpdatedVerbatim(candidate: string, baseline: string): str
   if (baselineLineMatch) {
     newBlock = keyLineRe.test(block)
       ? block.replace(keyLineRe, baselineLineMatch[0])
-      : block.replace(/\r?\n---$/, `\n${baselineLineMatch[0]}\n---`);
+      : block.replace(/(\r?\n)---$/, (_m, eol: string) => `${eol}${baselineLineMatch[0]}${eol}---`);
   } else {
     // Baseline has no `updated:` line at all — the restored block must not
     // have one either.
@@ -633,7 +642,8 @@ interface CompleteUatSessionResult {
  * this core stays pure) — and the comparison is candidate-vs-baseline, not
  * candidate-vs-live: `changed` means "does the candidate MATERIALLY differ
  * from what is already committed", where MATERIAL excludes only the
- * frontmatter `updated:` value (`stripUpdatedForCompare`, deny-by-default,
+ * frontmatter `updated:` line — its value and its presence
+ * (`stripUpdatedForCompare`, deny-by-default,
  * #5105 R1 "F10"). No material change → `{ changed: false, content }` returns
  * the ORIGINAL `content` UNTOUCHED (not the candidate) — even a live document
  * that differs from baseline ONLY in `updated:` is never written, and the
@@ -779,7 +789,17 @@ async function cmdUatCompleteSession(
   const content = fs.readFileSync(resolvedPath, 'utf-8');
   const relPath = toPosixPath(path.relative(cwd, resolvedPath));
   const baseline = readBaselineAtHead(cwd, resolvedPath);
-  const result = completeUatSession(content, { baseline });
+  let result: CompleteUatSessionResult;
+  try {
+    result = completeUatSession(content, { baseline });
+  } catch (err) {
+    // An unparseable (or key-unreconcilable) frontmatter block: fail closed —
+    // nothing is written and nothing is committed (`spliceFrontmatter` owns
+    // the refusal decision; this surfaces it).
+    if (!isFrontmatterWriteRefusal(err)) throw err;
+    error(`uat.complete-session: ${uatPathArg} — ${err.message}`);
+    return;
+  }
   if (!result.changed) {
     // #5105 review finding 2: a `restored` result still writes (byte-exact
     // restore to HEAD's own committed form) but never commits — this is a
