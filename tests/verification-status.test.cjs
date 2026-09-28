@@ -2646,27 +2646,42 @@ describe('#4623: verification.fingerprint CLI — --files forms and the phase-di
     const positional = expectJson(run(projectDir, a.phaseDir, 'fastlane/Fastfile'));
     const flagged = expectJson(run(projectDir, a.phaseDir, '--files', 'fastlane/Fastfile'));
     assert.deepEqual(flagged, positional);
-    assert.deepEqual(positional.covered_files, ['fastlane/Fastfile']);
+    // #5095: under v3 (ADR-5057 Phase 2 R1) covered_files is the declared set
+    // UNIONED with the phase's own PLAN/SUMMARY artifacts, not the declared
+    // list alone — the pin here is that both invocation forms agree.
+    assert.deepEqual(positional.covered_files, [...a.ownFiles, 'fastlane/Fastfile'].sort());
   });
 
   test('AC3: --files "a,b" and --files a --files b both resolve to covered_files [a, b], canonicalized like the bare form (AC4)', (t) => {
     const { projectDir, a } = setup();
     t.after(() => cleanup(projectDir));
     const positional = expectJson(run(projectDir, a.phaseDir, 'b.rb', 'a.rb'));
-    assert.deepEqual(positional.covered_files, ['a.rb', 'b.rb']);
+    // #5095: covered_files is the declared set unioned with the phase's own
+    // PLAN/SUMMARY artifacts under v3 (ADR-5057 Phase 2 R1) — the pin is that
+    // every equivalent invocation form produces the identical, canonical set.
+    assert.deepEqual(positional.covered_files, [...a.ownFiles, 'a.rb', 'b.rb'].sort());
     assert.deepEqual(expectJson(run(projectDir, a.phaseDir, '--files', 'a.rb,b.rb')), positional);
     assert.deepEqual(expectJson(run(projectDir, a.phaseDir, '--files', 'a.rb', '--files', 'b.rb')), positional);
     assert.deepEqual(expectJson(run(projectDir, a.phaseDir, '--files=b.rb,a.rb')), positional);
     assert.deepEqual(expectJson(run(projectDir, a.phaseDir, 'a.rb', '--files', 'b.rb')), positional);
-    assert.equal(positional.covered_digest, computeCoveredDigest(projectDir, ['a.rb', 'b.rb']));
+    // #5095: the digest must cover the SAME unioned set the CLI reports, not
+    // the declared list alone — pass phaseDir so the direct call matches.
+    assert.equal(
+      positional.covered_digest,
+      computeCoveredDigest(projectDir, ['a.rb', 'b.rb'], undefined, { phaseDir: a.phaseDir }),
+    );
   });
 
   test('--raw with --files prints just the digest', (t) => {
     const { projectDir, a } = setup();
     t.after(() => cleanup(projectDir));
+    // #5095: --raw must print exactly the `covered_digest` the SAME command
+    // would emit as JSON (which, under v3, is the declared+artifact union) —
+    // not a digest recomputed over the declared list alone.
+    const json = expectJson(run(projectDir, a.phaseDir, '--files', 'a.rb,b.rb'));
     const res = run(projectDir, a.phaseDir, '--files', 'a.rb,b.rb', '--raw');
     assert.equal(res.success, true, `expected success, got: ${res.output}${res.error}`);
-    assert.equal(res.output.trim(), computeCoveredDigest(projectDir, ['a.rb', 'b.rb']));
+    assert.equal(res.output.trim(), json.covered_digest);
   });
 
   test('AC5: a phase directory with zero covered files still fails closed with the existing error', (t) => {
@@ -4105,6 +4120,39 @@ describe('fingerprint input set is closed and idempotent (#5095, ADR-5057 Phase 
       digest,
       null,
       'a .planning -> filesystem-root symlink must be refused as a containment root, not silently admitted',
+    );
+  });
+
+  // #5095: the filesystem-root construction above depends on `/etc/hosts`
+  // existing and on being able to symlink to the literal root — true on every
+  // dev machine and CI runner, but not guaranteed in every sandbox. This
+  // variant exercises the identical refusal rule ("a scope that is an
+  // ancestor of the checkout is refused") with a shape that needs nothing
+  // outside a plain tmpdir, so it is deterministic on macOS AND on a
+  // root-in-Linux bench alike. It is also the ACTUAL regression case: running
+  // as root, `enumeratePlanningScopes` used to `listDirs` the (lexically
+  // symlinked) `.planning` directory and mint a fresh, individually-legitimate
+  // `.planning/<name>` scope for every entry it found there — so a `.planning`
+  // refused as an ancestor of the checkout could still leak a SIBLING
+  // directory's file back in through a scope minted from its own listing, as
+  // long as that sibling directory's own realpath was neither the filesystem
+  // root nor an ancestor of the checkout. Fixed by never walking a refused
+  // `.planning` base's children into further scopes.
+  test('R7(c\'): .planning symlinked to an ancestor of the checkout is refused, and its sibling directories do not leak in as scopes', (t) => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5095-r7c-ancestor-'));
+    t.after(() => cleanup(base));
+    const checkout = path.join(base, 'checkout');
+    fs.mkdirSync(checkout);
+    // A sibling of `checkout`, OUTSIDE it, that `.planning`'s own directory
+    // listing would surface as a would-be `.planning/outside` scope.
+    fs.mkdirSync(path.join(base, 'outside'));
+    fs.writeFileSync(path.join(base, 'outside', 'secret.txt'), 'not part of the checkout\n');
+    fs.symlinkSync(base, path.join(checkout, '.planning'), symlinkType);
+
+    assert.equal(
+      computeCoveredDigest(checkout, ['.planning/outside/secret.txt']),
+      null,
+      'a file reachable only through an ancestor-of-checkout .planning symlink must never be hashed',
     );
   });
 
