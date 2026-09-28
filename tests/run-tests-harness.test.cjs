@@ -3972,6 +3972,8 @@ const {
   makeMeasuredPredicate: makeMeasuredPredicate5071,
   extractFileSummaries,
   platformTimingsPath,
+  defaultMaxFilesPerChunk: defaultMaxFilesPerChunk5071,
+  CHUNK_WORKING_BUDGET_MS: CHUNK_WORKING_BUDGET_MS_5071,
 } = require('../scripts/run-tests.cjs');
 const genTimings5071 = require('../scripts/gen-test-timings.cjs');
 const { PROBE_TIMEOUT_MS: PROBE_TIMEOUT_MS_5071 } = require('./helpers/timeouts.cjs');
@@ -4325,6 +4327,48 @@ test('boom', () => { throw new Error('intentional'); });
       assert.strictEqual(written.schema_version, 1);
       assert.deepStrictEqual(written.timings, { 'a.test.cjs': 1500, 'm.test.cjs': 20 });
       assert.ok(loadTestTimings(out) !== null, 'the generated table must load through the runner\'s own loader');
+    });
+  });
+
+  describe('the checked-in win32 timing table', () => {
+    test('loads, records its platform, and keys only real test files', () => {
+      const p = platformTimingsPath('win32');
+      const table = loadTestTimings(p);
+      assert.ok(table !== null, `${p} must parse into a usable timing table`);
+      assert.strictEqual(JSON.parse(fs.readFileSync(p, 'utf8')).platform, 'win32');
+      const onDisk = new Set();
+      (function walk(d) {
+        for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+          if (e.isDirectory()) { if (e.name !== 'node_modules') walk(path.join(d, e.name)); } else if (e.name.endsWith('.test.cjs')) onDisk.add(e.name);
+        }
+      })(path.dirname(DEFAULT_TIMINGS_PATH));
+      const invalid = Object.entries(table.timings)
+        .filter(([f, v]) => !onDisk.has(f) || typeof v !== 'number' || !Number.isFinite(v) || v < 0)
+        .map(([f, v]) => `${f}=${v}`);
+      assert.deepStrictEqual(invalid, [], 'every win32 entry must name an existing test file with a finite non-negative cost');
+    });
+
+    // Spec-review finding on #5071: calibration preserves the pool's TOTAL
+    // weight but changes which files share a chunk, so the win32 weight
+    // budget (defaultMaxFilesPerChunk) must still be affordable when priced in
+    // real Windows cost. One weight unit is worth (win32 ms / weight) for any
+    // win32-measured file; a full chunk budget of summed in-child Windows time
+    // must fit CHUNK_WORKING_BUDGET_MS. Deliberately conservative: it ignores
+    // --test-concurrency=2, which roughly halves wall-clock, as headroom for
+    // the per-file spawn cost no table measures (~0.95s/file, fitted from the
+    // #5071 measurement run). Regenerating the table re-checks this.
+    test('the win32 chunk budget, priced by the committed win32 table, fits the working budget', () => {
+      const base = loadTestTimings(DEFAULT_TIMINGS_PATH);
+      const win = loadTestTimings(platformTimingsPath('win32'));
+      const weigh = makeFileWeigher(base, 'win32', win);
+      const probe = Object.keys(win.timings).find((f) => win.timings[f] > 0);
+      const msPerWeight = win.timings[probe] / weigh(probe);
+      const budgetMs = defaultMaxFilesPerChunk5071('win32') * msPerWeight;
+      assert.ok(
+        budgetMs <= CHUNK_WORKING_BUDGET_MS_5071,
+        `win32 chunk budget ${defaultMaxFilesPerChunk5071('win32')} x ${msPerWeight.toFixed(0)}ms/weight = ` +
+          `${budgetMs.toFixed(0)}ms exceeds CHUNK_WORKING_BUDGET_MS=${CHUNK_WORKING_BUDGET_MS_5071}`,
+      );
     });
   });
 });

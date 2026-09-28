@@ -671,6 +671,7 @@ slowest run.
 | `gen-test-timings: no \`test:summary\` events…` and exit 2 | The files are empty or not run-tests exports. A shard that died before its first chunk finished uploads an empty or missing file. |
 | An artifact missing for one shard | That job never reached the upload step (cancelled before it started). Pick another run. |
 | `run-tests: WARNING: could not append per-file durations…` in a job log | The export path was not writable. That job's artifact is incomplete. |
+| `the win32 chunk budget, priced by the committed win32 table, fits the working budget` fails after regenerating | Windows has become slow enough that 22 weight units (`RUN_TESTS_MAX_FILES_PER_CHUNK` on win32) now cost more than the 400s working budget. Re-derive the win32 cap from the new table before committing it. |
 
 ## Best practices for forward-compat (Node 24/26)
 
