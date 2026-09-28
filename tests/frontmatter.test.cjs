@@ -446,6 +446,61 @@ describe('spliceFrontmatter', () => {
     const resultBody = result.slice(closingIdx + 4); // skip \n---
     assert.strictEqual(resultBody, body, 'body content after frontmatter should be exactly preserved');
   });
+
+  // A frontmatter write must never silently drop a line it could not parse (found while
+  // implementing #5105: uat.complete-session's status splice erased `updated:2026-01-01`).
+  describe('never drops a line it did not parse', () => {
+    const setStatus = (content) => spliceFrontmatter(content, { ...extractFrontmatter(content), status: 'complete' });
+
+    test('a no-space `key:value` line survives a splice of another key', () => {
+      assert.strictEqual(
+        setStatus('---\nstatus: testing\nupdated:2026-01-01\n---\nbody'),
+        '---\nstatus: complete\nupdated:2026-01-01\n---\nbody',
+      );
+    });
+
+    test('a single no-space line (region parses as a bare scalar) survives', () => {
+      assert.strictEqual(
+        spliceFrontmatter('---\nupdated:2026-01-01\n---\nbody', { status: 'complete' }),
+        '---\nupdated:2026-01-01\nstatus: complete\n---\nbody',
+      );
+    });
+
+    test('a blank line and a full-line comment after a regenerated key survive in place', () => {
+      assert.strictEqual(
+        setStatus('---\nstatus: testing\n\n# about updated\nupdated: 2026-01-01\n---\nbody'),
+        '---\nstatus: complete\n\n# about updated\nupdated: 2026-01-01\n---\nbody',
+      );
+    });
+
+    test('a comment before the first key survives when that key is regenerated', () => {
+      assert.strictEqual(
+        setStatus('---\n# header note\nstatus: testing\nphase: 01\n---\nbody'),
+        '---\n# header note\nstatus: complete\nphase: 01\n---\nbody',
+      );
+    });
+
+    test('an unrecognized line in an unparseable block survives, as does every other key', () => {
+      assert.strictEqual(
+        setStatus('---\nstatus: testing\n!!weird line\nupdated: x\n---\nbody'),
+        '---\nstatus: complete\n!!weird line\nupdated: x\n---\nbody',
+      );
+    });
+
+    test('a quoted key after a regenerated key is kept once, not duplicated', () => {
+      assert.strictEqual(
+        setStatus('---\nstatus: testing\n"quoted key": v\n---\nbody'),
+        '---\nstatus: complete\n"quoted key": v\n---\nbody',
+      );
+    });
+
+    test('control: a parsed key absent from newObj is still dropped, its trailing comment kept', () => {
+      assert.strictEqual(
+        spliceFrontmatter('---\nstatus: testing\nwave: 1\n# note\nphase: 01\n---\nbody', { status: 'testing', phase: '01' }),
+        '---\nstatus: testing\n# note\nphase: 01\n---\nbody',
+      );
+    });
+  });
 });
 
 // ─── parseMustHavesBlock ────────────────────────────────────────────────────

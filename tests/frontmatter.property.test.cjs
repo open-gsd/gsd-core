@@ -197,6 +197,47 @@ describe('frontmatter: spliceFrontmatter properties', () => {
       )
     );
   });
+
+  // A frontmatter write never silently drops a line it could not parse (found while
+  // implementing #5105). Documents mix spaced `key: value` lines, no-space `key:value`
+  // lines (which make the region unparseable YAML), full-line comments and blank lines;
+  // splicing only `status` must leave every other line byte-identical and in place.
+  test('property: splicing one key preserves every other line verbatim and in order', () => {
+    const otherKey = fc.stringMatching(/^[a-z][a-z0-9_]{0,9}$/).filter((k) => k !== 'status');
+    const scalar = fc.stringMatching(/^[a-z0-9]{1,8}$/);
+    const lineSpec = fc.oneof(
+      fc.record({ kind: fc.constant('spaced'), value: scalar }),
+      fc.record({ kind: fc.constant('nospace'), value: scalar }),
+      fc.record({ kind: fc.constant('comment'), value: fc.stringMatching(/^[a-z ]{0,10}$/) }),
+      fc.record({ kind: fc.constant('blank') }),
+    );
+    fc.assert(
+      fc.property(
+        fc.uniqueArray(otherKey, { maxLength: 6 }),
+        fc.array(lineSpec, { maxLength: 10 }),
+        scalar,
+        fc.nat(),
+        (keys, specs, statusValue, statusAt) => {
+          let keyIdx = 0;
+          const others = specs.map((spec) => {
+            if (spec.kind === 'comment') return `# ${spec.value}`;
+            if (spec.kind === 'blank') return '';
+            if (keyIdx >= keys.length) return '';
+            const key = keys[keyIdx++];
+            return spec.kind === 'spaced' ? `${key}: ${spec.value}` : `${key}:${spec.value}`;
+          });
+          const at = statusAt % (others.length + 1);
+          const inner = [...others.slice(0, at), `status: ${statusValue}`, ...others.slice(at)];
+          const expectedInner = [...others.slice(0, at), 'status: complete', ...others.slice(at)];
+          const doc = `---\n${inner.join('\n')}\n---\nbody`;
+
+          const out = spliceFrontmatter(doc, { ...extractFrontmatter(doc), status: 'complete' });
+
+          assert.equal(out, `---\n${expectedInner.join('\n')}\n---\nbody`);
+        },
+      ),
+    );
+  });
 });
 
 // ─── (f) prohibitions bijection (#644) ────────────────────────────────────────
