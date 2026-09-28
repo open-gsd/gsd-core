@@ -1833,11 +1833,17 @@ const FRONTMATTER_SCHEMAS: Record<string, { required: string[]; requiredValues?:
  * implementing #5105: the previous regex needed a line ending before the closing `---` that
  * the opening fence's own line ending could not supply, so it could not see an adjacent empty
  * block (`---\n---\n`) and stripped through the first `---` in the BODY instead; it also
- * closed on any line merely starting with `---` and skipped whitespace before the opening
- * fence, neither of which any reader of the block agreed with.
+ * closed on any line merely starting with `---`, which no reader of the block agreed with.
+ *
+ * Whitespace BEFORE the opening fence is skipped here, and only here: readers see no block in
+ * such a document, but this is the writer's strip step (`state update` strips the old block and
+ * writes a new one), and not skipping it would stack a second block above the stale one. The
+ * whitespace goes only when a closed block follows it; otherwise `content` is returned as is.
  */
 function stripFrontmatter(content: string, opts: { once?: boolean } = {}): string {
   let result = content;
+  const unindented = content.replace(/^\s+/, '');
+  if (unindented !== content && locateFrontmatterFence(unindented)?.closed) result = unindented;
   for (;;) {
     const fence = locateFrontmatterFence(result);
     if (!fence || !fence.closed) break;
