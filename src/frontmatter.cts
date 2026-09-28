@@ -119,11 +119,13 @@ function commentPathKey(segments: readonly string[]): string {
  * The mapping key a line opens and the line's indentation, or null for a line that opens no
  * key (a list item, a flow or scalar continuation, a comment). The key is read exactly as
  * `segmentKeyOf` reads a top-level one — a quoted key unescaped, a plain key ending at the
- * first `:` followed by whitespace — at any indentation.
+ * first `:` followed by whitespace — at any indentation. At indent > 0 the no-space bare-key
+ * fallback is disabled (see `segmentKeyOf`'s docblock): a nested continuation line like
+ * `  https://x` is not misread as opening key `https`.
  */
 function channelKeyLine(line: string): { indent: number; key: string } | null {
   const indent = /^\s*/.exec(line)?.[0].length ?? 0;
-  const k = segmentKeyOf(line.slice(indent));
+  const k = segmentKeyOf(line.slice(indent), indent);
   return k ? { indent, key: k.key } : null;
 }
 
@@ -709,7 +711,7 @@ function countTopLevelKeyShapedLines(region: string): number {
  */
 function frontmatterRegion(
   content: string,
-): { region: string; terminated: boolean; content: string } | null {
+): { region: string; terminated: boolean; content: string; closingFenceEnd?: number } | null {
   // #2977: tolerate a single leading UTF-8 BOM (U+FEFF), which Windows tooling
   // (PowerShell `>`/`Out-File` on PS 5.1, several editors) writes by default.
   // Without this strip, the byte-0 `startsWith('---')` fence check below fails
@@ -725,12 +727,26 @@ function frontmatterRegion(
   const headerEnd = content.startsWith('---\r\n') ? 5 : content.startsWith('---\n') ? 4 : -1;
   if (headerEnd === -1) return null;
 
-  const closingLineStart = content.indexOf('\n---', headerEnd);
+  // Search from `headerEnd - 1`, not `headerEnd` (found while strengthening #5105's
+  // `frontmatterBlock` property test): the opening fence's own trailing newline sits at
+  // `headerEnd - 1`, and a closing `---` that is the very NEXT line — a genuinely empty
+  // frontmatter block, `---\n---\n` — has no OTHER newline before it to pair with. Searching
+  // from `headerEnd` alone excludes that newline from the match window and reports the
+  // block as unterminated (open, never closed) even though it is the shortest possible
+  // valid one. Including position `headerEnd - 1` costs nothing for every non-adjacent
+  // document — the pattern still fails to match there and `indexOf` proceeds to the same
+  // later match it always found — but lets an adjacent closer match at all.
+  const closingLineStart = content.indexOf('\n---', headerEnd - 1);
   if (closingLineStart === -1) {
     return { region: content.slice(headerEnd), terminated: false, content };
   }
   const yamlEnd = content[closingLineStart - 1] === '\r' ? closingLineStart - 1 : closingLineStart;
-  return { region: content.slice(headerEnd, yamlEnd), terminated: true, content };
+  // `closingFenceEnd`: the position right after the closing fence's three dashes, i.e. the
+  // end of the BLOCK a writer publishes verbatim (`frontmatterBlock`) — one `\n` (the line
+  // ending `closingLineStart` starts) plus the three dashes, always exactly 4 characters
+  // past `closingLineStart`, whether that newline is the last content line's own terminator
+  // or (the adjacent-block case above) the opening fence's terminator doing double duty.
+  return { region: content.slice(headerEnd, yamlEnd), terminated: true, content, closingFenceEnd: closingLineStart + 4 };
 }
 
 /**
@@ -744,12 +760,16 @@ function frontmatterRegion(
  */
 function frontmatterBlock(content: string): { bom: string; block: string; rest: string } | null {
   const found = frontmatterRegion(content);
-  if (!found || !found.terminated) return null;
+  if (!found || !found.terminated || found.closingFenceEnd === undefined) return null;
   const bom = content.slice(0, content.length - found.content.length);
   const body = found.content;
-  const yamlEnd = (body.startsWith('---\r\n') ? 5 : 4) + found.region.length;
-  const closingLineStart = body[yamlEnd] === '\r' ? yamlEnd + 1 : yamlEnd;
-  const blockEnd = closingLineStart + 4; // the `\n---` of the closing fence
+  // `closingFenceEnd` comes straight from `frontmatterRegion` (found while strengthening
+  // #5105's property test): re-deriving it here from `region.length` — as a prior revision
+  // did — silently mis-locates the closing fence on a genuinely empty, adjacent block
+  // (`---\n---\n`), since there is no separate "line before the closer" to measure from.
+  // Sharing one computation is what the module's own docstring already promises ("a writer
+  // and every reader agree on where the block is").
+  const blockEnd = found.closingFenceEnd;
   return { bom, block: body.slice(0, blockEnd), rest: body.slice(blockEnd) };
 }
 
@@ -1184,8 +1204,19 @@ const PLAIN_KEY_START_RE = /^(?:[^\s#,[\]{}&*!|>'"%@`\-?:]|[-?:](?=[^\s]))/;
  * no such colon exists does the no-space `key:value` spelling (`updated:2026-01-01`) fall
  * back to the bare-ASCII key before the first `:`. Returns null for a line that is not a
  * top-level key line.
+ *
+ * `indent` is the caller's indentation of `line` (0 for the genuinely column-0 callers —
+ * `sliceFrontmatterLayout` — which never see a nonzero value since a real indented line
+ * already fails `PLAIN_KEY_START_RE` there). `channelKeyLine` (#5105 follow-up) calls this
+ * on an INDENT-STRIPPED nested line instead, to read nested keys like `total_phases: 5` —
+ * but the no-space bare-ASCII fallback exists only for the top-level `key:value` shorthand a
+ * document author actually writes; on a nested continuation line (a URL, a path, or any
+ * other value line of a multi-line scalar that happens to contain an ASCII word immediately
+ * followed by `:`, e.g. `https://x`) it misreads the line as opening a key. Restricting the
+ * fallback to `indent === 0` keeps the top-level shorthand working while a nested line only
+ * ever opens a key when the colon is unambiguously followed by whitespace or end of line.
  */
-function segmentKeyOf(line: string): { key: string; valueStart: number } | null {
+function segmentKeyOf(line: string, indent = 0): { key: string; valueStart: number } | null {
   const q = QUOTED_SEGMENT_KEY_RE.exec(line);
   if (q) {
     const valueStart = q[0].length;
@@ -1197,6 +1228,7 @@ function segmentKeyOf(line: string): { key: string; valueStart: number } | null 
   if (!PLAIN_KEY_START_RE.test(line)) return null;
   const spaced = /:(?:[ \t]|$)/.exec(line);
   if (spaced) return { key: line.slice(0, spaced.index).trimEnd(), valueStart: spaced.index + 1 };
+  if (indent > 0) return null;
   const bare = /^([A-Za-z0-9_-]+):/.exec(line);
   return bare ? { key: bare[1], valueStart: bare[0].length } : null;
 }

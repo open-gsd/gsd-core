@@ -1137,7 +1137,13 @@ export function probeTty(opts: { platform?: string } = {}): string | null {
 function leadingFrontmatterLineCount(text: string): number {
   const start = text.charCodeAt(0) === 0xFEFF ? 1 : 0;
   if (!text.startsWith('---\n', start)) return 0;
-  const closingNewline = text.indexOf('\n---', start + 4);
+  // Search from `start + 3`, not `start + 4` (parity fix, found while strengthening
+  // #5105's `frontmatterBlock` property test): the opening fence's own newline sits at
+  // `start + 3`, and a closing `---` that is the very NEXT line — a genuinely empty
+  // frontmatter block, `---\n---\n` — has no OTHER newline before it to match against.
+  // `frontmatterRegion` in `frontmatter.cts` makes the same correction for the same reason;
+  // this function cannot import it, so the fix is mirrored here to keep the two agreeing.
+  const closingNewline = text.indexOf('\n---', start + 3);
   if (closingNewline === -1) return 0;
   return text.slice(0, closingNewline + 1).split('\n').length;
 }
