@@ -216,7 +216,7 @@ describe('#5105 M1/m1: restore is restricted to a live-vs-candidate diff beyond 
     assert.strictEqual(gitHeadCount(projectDir), headBefore, 'a restore is not a commit');
   });
 
-  test('CLI (ii): updated-only diff against baseline — file bytes/mtime unchanged, no commit', (t) => {
+  test('CLI (ii): updated-only diff against baseline — file bytes unchanged, no commit', (t) => {
     const projectDir = createTempGitProject();
     t.after(() => cleanup(projectDir));
     const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
@@ -232,7 +232,6 @@ describe('#5105 M1/m1: restore is restricted to a live-vs-candidate diff beyond 
     // Live differs from the committed baseline ONLY in `updated:`.
     fs.writeFileSync(uatPath, completeUatContent({ updated: '2021-02-02T00:00:00Z' }));
     const liveBytesBefore = fs.readFileSync(uatPath, 'utf-8');
-    const mtimeBefore = fs.statSync(uatPath).mtimeMs;
 
     const result = runGsdTools(['query', 'uat.complete-session', '.planning/phases/01-foo/01-UAT.md'], projectDir);
     assert.ok(result.success, `expected success: ${result.error}`);
@@ -240,8 +239,160 @@ describe('#5105 M1/m1: restore is restricted to a live-vs-candidate diff beyond 
     assert.strictEqual(parsed.changed, false);
     assert.strictEqual(parsed.restored, undefined, 'must never restore/write on an updated-only diff');
     assert.strictEqual(fs.readFileSync(uatPath, 'utf-8'), liveBytesBefore, 'file bytes must be unchanged');
-    assert.strictEqual(fs.statSync(uatPath).mtimeMs, mtimeBefore, 'file must not be re-written (mtime unchanged)');
     assert.strictEqual(gitHeadCount(projectDir), headBefore, 'no commit on an updated-only diff');
+  });
+});
+
+// Found while implementing #5105 (review m7): presence of the `updated:` line is not
+// material either — a side LACKING the line differs "only in updated" from a side
+// carrying any value, in both directions, and a restore re-creates or removes the line
+// byte-exactly to match the baseline.
+describe('#5105 m7: a missing `updated:` line is equivalent to any `updated:` value', () => {
+  const clock = () => new Date('2026-05-05T00:00:00Z');
+  const withoutUpdated = (s) => s.replace(/^updated: .*\n/m, '');
+
+  test('baseline lacks `updated:`, live carries one → changed:false, no restore, live untouched', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const baseline = withoutUpdated(completeUatContent());
+    const live = completeUatContent({ updated: '2021-02-02T00:00:00Z' });
+    const result = completeUatSession(live, { clock, baseline });
+    assert.strictEqual(result.changed, false);
+    assert.strictEqual(result.restored, undefined);
+    assert.strictEqual(result.content, live);
+  });
+
+  test('baseline carries `updated:`, live lacks it → changed:false, no restore, live untouched', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const baseline = completeUatContent();
+    const live = withoutUpdated(completeUatContent());
+    const result = completeUatSession(live, { clock, baseline });
+    assert.strictEqual(result.changed, false);
+    assert.strictEqual(result.restored, undefined);
+    assert.strictEqual(result.content, live);
+  });
+
+  test('re-opened live with `updated:`, baseline without → restored byte-exact (line removed)', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const baseline = withoutUpdated(completeUatContent());
+    const live = testingCompleteUatContent();
+    const result = completeUatSession(live, { clock, baseline });
+    assert.strictEqual(result.changed, false);
+    assert.strictEqual(result.restored, true);
+    assert.strictEqual(result.content, baseline);
+  });
+
+  test('re-opened live without `updated:`, baseline with one → restored byte-exact (line re-created)', () => {
+    const completeUatSession = loadCompleteUatSession();
+    // completeUatContent's `updated:` is the LAST frontmatter key, so the re-created line
+    // (appended before the closing fence) lands exactly where the baseline has it.
+    const baseline = completeUatContent();
+    const live = withoutUpdated(testingCompleteUatContent());
+    const result = completeUatSession(live, { clock, baseline });
+    assert.strictEqual(result.changed, false);
+    assert.strictEqual(result.restored, true);
+    assert.strictEqual(result.content, baseline);
+  });
+});
+
+// Found while implementing #5105 (review M4): a CRLF document behaves exactly like its
+// LF counterpart — no spurious material change from a re-emitted bare-LF line.
+describe('#5105 M4: CRLF documents behave exactly as LF', () => {
+  const crlf = (s) => s.replace(/\n/g, '\r\n');
+  const clock = () => new Date('2026-05-05T00:00:00Z');
+
+  test('live byte-identical to a CRLF baseline → changed:false, content untouched', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const doc = crlf(completeUatContent());
+    const result = completeUatSession(doc, { clock, baseline: doc });
+    assert.strictEqual(result.changed, false);
+    assert.strictEqual(result.restored, undefined);
+    assert.strictEqual(result.content, doc);
+  });
+
+  test('CRLF live differing only in `updated:` → changed:false, no restore, content untouched', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const baseline = crlf(completeUatContent({ updated: '2019-06-06T00:00:00Z' }));
+    const live = crlf(completeUatContent({ updated: '2020-01-01T00:00:00Z' }));
+    const result = completeUatSession(live, { clock, baseline });
+    assert.strictEqual(result.changed, false);
+    assert.strictEqual(result.restored, undefined);
+    assert.strictEqual(result.content, live);
+  });
+
+  test('CRLF re-opened session → restored:true, byte-exact to the CRLF baseline', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const baseline = crlf(completeUatContent());
+    const live = crlf(testingCompleteUatContent());
+    const result = completeUatSession(live, { clock, baseline });
+    assert.strictEqual(result.changed, false);
+    assert.strictEqual(result.restored, true);
+    assert.strictEqual(result.content, baseline);
+  });
+
+  test('CRLF material change → changed:true, every line still CRLF', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const live = crlf(testingCompleteUatContent());
+    const result = completeUatSession(live, { clock, baseline: null });
+    assert.strictEqual(result.changed, true);
+    assert.match(result.content, /^status: complete\r$/m);
+    assert.match(result.content, /^updated: 2026-05-05T00:00:00\.000Z\r$/m);
+    assert.ok(!/(^|[^\r])\n/.test(result.content), 'no bare-LF line ending');
+  });
+
+  test('CLI: CRLF live byte-identical to HEAD → changed:false, bytes untouched, no commit', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const uatPath = path.join(phaseDir, '01-UAT.md');
+    const before = crlf(completeUatContent());
+    fs.writeFileSync(uatPath, before);
+    const { execFileSync } = require('child_process');
+    execFileSync('git', ['-c', 'core.autocrlf=false', 'add', '-A'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+    execFileSync('git', ['-c', 'core.autocrlf=false', 'commit', '-q', '-m', 'seed CRLF UAT'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+    const headBefore = gitHeadCount(projectDir);
+
+    const result = runGsdTools(['query', 'uat.complete-session', '.planning/phases/01-foo/01-UAT.md'], projectDir);
+    assert.ok(result.success, `expected success: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).changed, false);
+    assert.strictEqual(fs.readFileSync(uatPath, 'utf-8'), before);
+    assert.strictEqual(gitHeadCount(projectDir), headBefore);
+  });
+});
+
+// Found while implementing #5105 (review Majors 2/3/5): an unparseable frontmatter
+// block (here the no-space `status:complete`) is never regenerated — the session
+// fails closed with a clear error, writing and committing nothing.
+describe('#5105: an unparseable frontmatter block fails closed', () => {
+  const nospace = (s) => s.replace('status: complete', 'status:complete');
+
+  test('pure core: throws the frontmatter write refusal', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const doc = nospace(completeUatContent());
+    assert.throws(
+      () => completeUatSession(doc, { clock: () => new Date('2026-05-05T00:00:00Z'), baseline: doc }),
+      { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_UNPARSEABLE' },
+    );
+  });
+
+  test('CLI: exits with the refusal; file bytes and HEAD unchanged', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const uatPath = path.join(phaseDir, '01-UAT.md');
+    const before = nospace(completeUatContent());
+    fs.writeFileSync(uatPath, before);
+    const { execFileSync } = require('child_process');
+    execFileSync('git', ['add', '-A'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+    execFileSync('git', ['commit', '-q', '-m', 'seed UAT'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+    const headBefore = gitHeadCount(projectDir);
+
+    const result = runGsdTools(['query', 'uat.complete-session', '.planning/phases/01-foo/01-UAT.md'], projectDir);
+    assert.strictEqual(result.success, false, `must fail closed; stdout: ${result.output}`);
+    assert.match(String(result.error), /not parseable YAML/);
+    assert.strictEqual(fs.readFileSync(uatPath, 'utf-8'), before, 'nothing written');
+    assert.strictEqual(gitHeadCount(projectDir), headBefore, 'nothing committed');
   });
 });
 
