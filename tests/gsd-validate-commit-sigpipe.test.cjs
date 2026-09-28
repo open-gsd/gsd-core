@@ -558,7 +558,8 @@ describe('#4429 follow-up — makeHookLayout must survive a concurrently-deleted
   // (24.x) — cp-sync.js has no `fsBinding.cpSyncCopyDir(` call before those
   // tags — and Node's main branch has since moved `CpSyncCopyDir` to the
   // non-throwing `error_code` overloads. `true`/`false` where the source was
-  // checked, `null` for a release line nobody has checked yet.
+  // checked, `null` for a release line nobody has checked yet — which the
+  // behavior gate below FAILS on, loudly, rather than passing unclassified.
   function nativeAbortExpected(version = process.versions.node) {
     const [major, minor] = version.split('.').map(Number);
     if (major === 22) return minor >= 17;
@@ -695,6 +696,16 @@ describe('#4429 follow-up — makeHookLayout must survive a concurrently-deleted
   function assertNativeAbort(res, markers, detail) {
     const aborted = res.outcome === OUTCOME.KILLED && res.signal === 'SIGABRT';
     const expected = nativeAbortExpected();
+    if (expected === null) {
+      assert.fail(
+        `Node ${process.versions.node} is on a release line this CONTROL was never checked against `
+        + '(checked: 22.x >= 22.17.0 and 24.x >= 24.2.0 abort; 22.x < 22.17 and 24.x < 24.2 do not). '
+        + `On this Node the unfiltered cpSync ${aborted ? 'DID' : 'did NOT'} abort. Confirm whether this `
+        + "release line's lib/internal/fs/cp/cp-sync.js calls fsBinding.cpSyncCopyDir with the throwing "
+        + 'directory_iterator, then extend nativeAbortExpected() to classify it. '
+        + detail,
+      );
+    }
     if (!aborted) {
       assert.fail(
         `Node ${process.versions.node}: the unfiltered cpSync did NOT abort — it `
