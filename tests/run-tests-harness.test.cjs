@@ -4025,6 +4025,14 @@ describe('per-platform timing table (#5071)', () => {
       const overlap = Object.keys(LINUX);
       const sum = (w) => overlap.reduce((s, f) => s + w(f), 0);
       assert.ok(Math.abs(sum(withPlatform) - sum(without)) < 1e-9);
+      // …while the distribution DOES move: a weigher that ignored the platform
+      // table would preserve the total trivially.
+      // Windows ms x (3 / 180000): 90000 -> 1.5, 40000 -> 2/3, 50000 -> 5/6.
+      const expected = [1.5, 2 / 3, 5 / 6];
+      overlap.forEach((f, i) => {
+        assert.ok(Math.abs(withPlatform(f) - expected[i]) < 1e-12, `${f}: ${withPlatform(f)} vs ${expected[i]}`);
+      });
+      assert.notDeepStrictEqual(overlap.map((f) => withPlatform(f)), overlap.map((f) => without(f)));
     });
 
     test('property: calibration preserves the overlap total for any pair of tables', () => {
