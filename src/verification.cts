@@ -2059,6 +2059,7 @@ export = {
   VERIFIER_STATUSES,
   VERIFICATION_ROUTING_TABLE,
   defaultPhaseCleanCommitTimesMs,
+  resolvePhaseArtifactFile,
   resolveVerificationFile,
   resolveUatFile,
   findStaleVerificationSummary,

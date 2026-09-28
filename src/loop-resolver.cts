@@ -29,10 +29,14 @@
  */
 
 import fs from 'node:fs';
-import { escapeRegex } from './pattern.cjs';
+import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output: coreOutput, error: coreError } = ioMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import verificationMod = require('./verification.cjs');
+const { resolvePhaseArtifactFile } = verificationMod;
+import { requireSafePath, PathAcceptance } from './security.cjs';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderModule = require('./config-loader.cjs');
@@ -622,17 +626,18 @@ interface SkippedHook {
 }
 
 /**
- * #5105 R2: a `produces` entry `p` "exists" in `phaseDir` when a REGULAR file
- * named exactly `p`, or `<anything>-p`, sits directly in `phaseDir` — never a
- * directory of that name, and never a suffixed near-miss (`p.bak`, `p.tmp`).
+ * #5105 R2: a `produces` entry `p` "exists" in `phaseDir` when it resolves via
+ * the SAME phase-artifact selection core `resolveVerificationFile`/
+ * `resolveUatFile` delegate to (`resolvePhaseArtifactFile`, `verification.cts`)
+ * — no second derivation of "which file counts as this phase's artifact"
+ * (#3473 F2's generative-divergence class). That core is pure and takes an
+ * already-read directory listing of REGULAR-file names only, so a directory
+ * of the same name, or a suffixed near-miss (`p.bak`, `p.tmp`), never counts,
+ * and `phaseDirName` scoping rejects a stray cross-phase file (`02-SECURITY.md`
+ * inside a `01-foo` phase dir) exactly as the aggregate scans do.
  */
-function producesEntryPresent(fileNames: ReadonlySet<string>, p: string): boolean {
-  const escaped = escapeRegex(p);
-  const re = new RegExp(`^(?:.*-)?${escaped}$`);
-  for (const name of fileNames) {
-    if (re.test(name)) return true;
-  }
-  return false;
+function producesEntryPresent(fileNames: readonly string[], phaseDirName: string, p: string): boolean {
+  return resolvePhaseArtifactFile([...fileNames], p, { phaseDirName, allowBare: true }) !== null;
 }
 
 /**
@@ -649,7 +654,8 @@ function partitionHooksByFingerprint(
   phaseDir: string,
 ): { activeHooks: ActiveHook[]; skippedHooks: SkippedHook[] } {
   const entries = fs.readdirSync(phaseDir, { withFileTypes: true });
-  const fileNames = new Set(entries.filter((e) => e.isFile()).map((e) => e.name));
+  const fileNames = entries.filter((e) => e.isFile()).map((e) => e.name);
+  const phaseDirName = path.basename(phaseDir);
 
   const kept: ActiveHook[] = [];
   const skipped: SkippedHook[] = [];
@@ -658,7 +664,7 @@ function partitionHooksByFingerprint(
       kept.push(hook);
       continue;
     }
-    const everyProduced = hook.produces.every((p) => producesEntryPresent(fileNames, p));
+    const everyProduced = hook.produces.every((p) => producesEntryPresent(fileNames, phaseDirName, p));
     if (everyProduced) {
       skipped.push({
         capId: hook.capId,
@@ -708,9 +714,21 @@ function cmdLoopRenderHooks(
   const afterFingerprintDir = typeof options['afterFingerprint'] === 'string' ? options['afterFingerprint'] : undefined;
   let skippedHooks: SkippedHook[] | undefined;
   if (afterFingerprintDir !== undefined) {
+    // #5105 S10: resolve relative to the handler's own cwd (never the
+    // process cwd) and fail closed if it escapes the project root — the same
+    // `requireSafePath` seam `uat.cts`'s `cmdUatCompleteSession` uses for its
+    // own path argument.
+    let safePhaseDir: string;
+    try {
+      safePhaseDir = requireSafePath(afterFingerprintDir, cwd, '--after-fingerprint directory', PathAcceptance.AbsoluteInsideRoot);
+    } catch (err: unknown) {
+      const msg = (err instanceof Error) ? err.message : String(err);
+      coreError(`--after-fingerprint directory is unsafe: ${msg}`);
+      return;
+    }
     let partition: { activeHooks: ActiveHook[]; skippedHooks: SkippedHook[] };
     try {
-      partition = partitionHooksByFingerprint(result.activeHooks, afterFingerprintDir);
+      partition = partitionHooksByFingerprint(result.activeHooks, safePhaseDir);
     } catch (err: unknown) {
       const msg = (err instanceof Error) ? err.message : String(err);
       coreError(`--after-fingerprint phase directory not found or unreadable: ${afterFingerprintDir} (${msg})`);
