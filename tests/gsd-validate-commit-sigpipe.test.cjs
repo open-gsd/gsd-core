@@ -613,6 +613,13 @@ describe('#4429 follow-up — makeHookLayout must survive a concurrently-deleted
         'for (;;) {',
         '  try { held.push(fs.openSync(os.devNull, "r")); }',
         '  catch (e) { if (e.code === "EMFILE") break; throw e; }',
+        // The 256 limit did not hold: report it instead of filling (and later
+        // closing) hundreds of thousands of descriptors into a timeout.
+        '  if (held.length > 1024) {',
+        '    for (const fd of held) fs.closeSync(fd);',
+        '    fs.writeSync(1, JSON.stringify({ phase: "limit-not-applied" }) + "\\n");',
+        '    process.exit(98);',
+        '  }',
         '}',
         'fs.closeSync(held.pop());',
         'fs.writeSync(1, JSON.stringify({ phase: "ready", held: held.length }) + "\\n");',
@@ -637,13 +644,16 @@ describe('#4429 follow-up — makeHookLayout must survive a concurrently-deleted
       'fs.writeSync(1, JSON.stringify({ phase }) + "\\n");',
     ].join('\n'));
 
-    // EMFILE: a soft descriptor limit keeps the fill loop to ~256 opens
-    // instead of a container's default of ~1M. A hard limit below 256 makes
+    // EMFILE: a 256-descriptor limit keeps the fill loop to ~256 opens instead
+    // of a container's default of ~1M. It must be the HARD limit: Node raises
+    // its SOFT nofile limit to the hard limit at startup, so a soft-only
+    // `ulimit -S` is silently undone (observed on the Linux bench: 524270
+    // descriptors held, then a timeout). A current hard limit below 256 makes
     // `ulimit` fail — reported as a marker, never as a silent non-run.
     const limiter = path.join(fixtureRoot, 'limit-fds.sh');
     fs.writeFileSync(limiter, [
       'if [ "$GSD_4429_INJECTION" = emfile ]; then',
-      '  ulimit -S -n 256 || { printf \'{"phase":"ulimit-failed"}\\n\'; exit 97; }',
+      '  ulimit -H -n 256 && ulimit -S -n 256 || { printf \'{"phase":"ulimit-failed"}\\n\'; exit 97; }',
       'fi',
       'exec "$@"',
       '',
@@ -662,11 +672,14 @@ describe('#4429 follow-up — makeHookLayout must survive a concurrently-deleted
     // Anti-vacuous: the injection really happened before the copy started.
     assert.notEqual(markers[0]?.phase, 'ulimit-failed',
       `the descriptor limit could not be lowered to 256 (hard limit too low), so the EMFILE injection cannot run. ${detail}`);
+    assert.notEqual(markers[0]?.phase, 'limit-not-applied',
+      `the child could open over 1024 descriptors, so the 256 hard limit did not reach it. ${detail}`);
     assert.equal(markers[0]?.phase, 'ready', `the ${injection} injection never completed. ${detail}`);
     if (injection === 'enoent') {
       assert.equal(markers[0].removed, true, `the source directory still existed after the injected deletion. ${detail}`);
     } else {
       assert.ok(markers[0].held > 0, `no descriptors were held, so nothing was injected. ${detail}`);
+      assert.ok(markers[0].held < 256, `the fill ran past the 256 limit, so the limit is not the one injected. ${detail}`);
     }
     return { res, markers, detail, srcHooks, stagingPath, dest };
   }
