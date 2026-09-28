@@ -355,7 +355,26 @@ function enumeratePlanningScopes(projectRoot: string, realRoot: string | null): 
 
   const scopes: PlanningScope[] = [];
   const planningAbs = path.join(projectRoot, '.planning');
-  addBase('.planning', planningAbs);
+  const planningBaseReal = realOf(planningAbs);
+  scopes.push({ lexRel: '.planning', real: planningBaseReal });
+  scopes.push({ lexRel: '.planning/phases', real: realOf(path.join(planningAbs, 'phases')) });
+
+  // #5095 (R7(c) follow-up, security): when `.planning` itself was refused as
+  // a dangerous root (filesystem root, or an ancestor of `realRoot` — see
+  // `realOf` above), NEVER walk its `workstreams`/project subdirectories to
+  // mint further scopes. `listDirs`/`path.join` operate on the LEXICAL,
+  // still-symlinked `planningAbs`, so with `.planning -> /` every entry of
+  // the real filesystem root (`/etc`, `/usr`, ...) would otherwise surface as
+  // an admissible `.planning/<project>` scope — legitimizing an attacker- or
+  // container-controlled root-filesystem directory as a containment root the
+  // instant it happens to share a name with something reachable from `/`.
+  // Each such child is realpath-resolved on its OWN merits (not an ancestor
+  // of `realRoot`, not the filesystem root itself), so it silently passes the
+  // per-scope refusal check even though its only claim to legitimacy is
+  // having been discovered by listing a root the outer check already
+  // rejected. Refusing to enumerate here is what makes that refusal actually
+  // stick.
+  if (planningBaseReal === null) return scopes;
 
   for (const ws of listDirs(path.join(planningAbs, 'workstreams'))) {
     addBase(`.planning/workstreams/${ws}`, path.join(planningAbs, 'workstreams', ws));
