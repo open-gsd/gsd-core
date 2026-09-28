@@ -1928,6 +1928,57 @@ describe('#3911: the --check guards for the new hooks/lib artifacts can actually
   });
 });
 
+// #5068: the cli-exit generators' compile must stay scoped to
+// src/cli-exit.cts's import closure. A whole-project compile to read back one
+// file ran past COMPILE_TIMEOUT_MS on a contended bench and turned the --check
+// rows above into fail_build_failed (fixed by #5060's shared compileToTemp).
+// These rows pin that scope, so a regression to a whole-project compile fails
+// here by construction instead of intermittently under load.
+describe('#5068: the cli-exit generators compile only src/cli-exit.cts and its import closure', () => {
+  const REPO_ROOT = path.resolve(__dirname, '..');
+  const GEN_SCRIPTS_PATH = path.join(REPO_ROOT, 'scripts', 'gen-scripts-cli-exit.cjs');
+  const GEN_HOOKS_PATH = path.join(REPO_ROOT, 'scripts', 'gen-hooks-cli-exit.cjs');
+
+  test('compileToTemp emits cli-exit.cjs and nothing else — its program is cli-exit.cts\'s import closure, not the project', (t) => {
+    const { compileToTemp } = require(GEN_SCRIPTS_PATH);
+    const build = compileToTemp();
+    if (build.ok) t.after(() => cleanup(build.dir));
+    assert.equal(build.ok, true, `the scoped compile failed: ${build.detail}`);
+    // Its one import, exit-code-registry, is a .d.cts declaration and emits
+    // nothing; a whole-project compile would emit every src/*.cts module.
+    assert.deepEqual(fs.readdirSync(build.dir), ['cli-exit.cjs']);
+  });
+
+  test('gen-hooks-cli-exit builds through the same compileToTemp gen-scripts-cli-exit exports', (t) => {
+    const Module = require('node:module');
+    const scriptsKey = require.resolve(GEN_SCRIPTS_PATH);
+    const hooksKey = require.resolve(GEN_HOOKS_PATH);
+    const saved = { scripts: require.cache[scriptsKey], hooks: require.cache[hooksKey] };
+    t.after(() => {
+      for (const [key, entry] of [[scriptsKey, saved.scripts], [hooksKey, saved.hooks]]) {
+        if (entry) require.cache[key] = entry;
+        else delete require.cache[key];
+      }
+    });
+
+    // A stand-in emit carrying the one import the hooks generator rewrites.
+    const stubDir = createTempDir('gsd-5068-compile-stub-');
+    t.after(() => cleanup(stubDir));
+    fs.writeFileSync(path.join(stubDir, 'cli-exit.cjs'), 'const r = require("./exit-code-registry.cjs");\n');
+    let calls = 0;
+    const stub = new Module(scriptsKey);
+    stub.filename = scriptsKey;
+    stub.loaded = true;
+    stub.exports = { compileToTemp: () => { calls += 1; return { ok: true, dir: stubDir }; } };
+    require.cache[scriptsKey] = stub;
+    delete require.cache[hooksKey];
+
+    const result = require(GEN_HOOKS_PATH).buildExpectedContent();
+    assert.equal(calls, 1, 'gen-hooks-cli-exit must compile through gen-scripts-cli-exit\'s compileToTemp, not a copy of its own');
+    assert.equal(result.ok, true, `buildExpectedContent failed on the stubbed compile: ${result.reason}`);
+  });
+});
+
 // ─── #3912 (ADR-3889 §4, P8): the pending-outcome cell ──────────────────────
 //
 // output()'s payload-carried-error detection lives in io.cts and is tested
