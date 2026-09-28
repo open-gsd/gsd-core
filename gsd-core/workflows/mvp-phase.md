@@ -51,7 +51,7 @@ DISK_STATUS=$(echo "$ANALYZE" | jq -r --arg p "$PHASE" '.phases[] | select((.pha
 # and write paths both use.
 if [[ "$DISK_STATUS" == "complete" ]]; then
   STATUS="completed"
-elif [[ "$DISK_STATUS" == "planned" || "$DISK_STATUS" == "partial" ]]; then
+elif [[ "$DISK_STATUS" == "planned" || "$DISK_STATUS" == "partial" || "$DISK_STATUS" == "executed" ]]; then
   STATUS="in_progress"
 else
   STATUS="not_started"

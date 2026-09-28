@@ -4510,7 +4510,19 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             }
 
             const roadmapStatus = matchedRow.Status;
-            const result = comparePhaseStatus({ stateStatus, roadmapStatus });
+            // #5060: normalize the raw Status cell through the Phase Status
+            // Module's `matchRoadmapStatusCell` owner before comparing ranks —
+            // this recognizes a cell with trailing operator prose after its
+            // leading token (e.g. "Complete — shipped") the same way the
+            // ROADMAP writers/readers already do, rather than requiring the
+            // WHOLE cell to equal a bare token. The raw `roadmapStatus` in the
+            // output stays untouched — only the comparison input changes.
+            const { matchRoadmapStatusCell } = require('./lib/phase-status.cjs');
+            const matched = matchRoadmapStatusCell(roadmapStatus);
+            const result = comparePhaseStatus({
+              stateStatus,
+              roadmapStatus: matched ? matched.token.toLowerCase() : roadmapStatus,
+            });
             output({
               verdict: result.verdict,
               phase,

@@ -43,7 +43,7 @@ const { loadConfig: loadConfigForScope } = configLoaderForScope;
 import scanPhasePlans = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtils = require('./core-utils.cjs');
-const { countMatchedSummaries, findUnsummarizedPlans } = coreUtils;
+const { findUnsummarizedPlans } = coreUtils;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
 const { extractFrontmatter, parseMustHavesBlock } = frontmatter;
@@ -53,6 +53,8 @@ const { isPhaseComplete } = verificationMod;
 // #4906 Phase 2 (#4917/ADR-4910): the PlanningDoc parse -> mutate -> serialize
 // seam, mirroring phase.cts's already-migrated `writePlansField` site.
 import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from './planning-document.cjs';
+// #5060: the Phase Status Module owns the ladder; roadmap.cts is a consumer.
+import { phaseStatus, phaseStatusFromFacts, toDiskStatus, toRoadmapStatusCell, matchRoadmapStatusCell, ROADMAP_STATUS_TOKEN } from './phase-status.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -569,22 +571,13 @@ function collectAnalyzePhases(
       contextReadError = counts.contextReadError;
       contextScope = counts.scope;
 
-      // ADR-3180 §7.4 (issue #3186, disk-strict, #3168 fix): route "is this
-      // phase complete" through the canonical owner (`isPhaseComplete`),
-      // which calls readVerificationStatus UNCONDITIONALLY — plan count is
-      // NOT a precondition, so a zero-plan phase with a passing
-      // `*-VERIFICATION.md` reports complete here too, not just via
-      // `phase.complete`.
-      // #612: `convention` (a parameter of this function, same thread as
-      // matchPhaseDirs above) rides into completion so a bracket phase dir
-      // resolves and scopes its verification report like its legacy twin.
-      const completionResult = isPhaseComplete(path.join(phasesDir, dirMatch), { convention });
-      if (completionResult.value.complete) diskStatus = 'complete';
-      else if (summaryCount > 0) diskStatus = 'partial';
-      else if (planCount > 0) diskStatus = 'planned';
-      else if (hasResearch) diskStatus = 'researched';
-      else if (hasContext) diskStatus = 'discussed';
-      else diskStatus = 'empty';
+      // #5060: route the disk-status ladder through the Phase Status Module's
+      // single owner (`phaseStatus`/`toDiskStatus`) rather than a local
+      // if/else re-derivation. `convention` still threads through so a
+      // bracket phase's verification report resolves and scopes like its
+      // legacy twin (#612).
+      const ps = phaseStatus(path.join(phasesDir, dirMatch), { convention });
+      diskStatus = toDiskStatus(ps.value.status, { hasResearch, hasContext });
     }
 
     // Check ROADMAP checkbox status. #3537: padding-tolerant fragment — the
@@ -633,7 +626,7 @@ function collectAnalyzePhases(
     // Preserve that behavior while heading occurrences gain bracket identity.
     detailKeys.add(occurrenceKey(tr.id));
     if (seen.has(stripPadA(tr.id))) continue;
-    const dirMatchA = matchPhaseDirs(phaseDirNames, normalizePhaseName(tr.id)).matches[0];
+    const dirMatchA = matchPhaseDirs(phaseDirNames, normalizePhaseName(tr.id), convention).matches[0];
     let tPlanCount = 0;
     let tSummaryCount = 0;
     let tHasContext = false;
@@ -642,8 +635,9 @@ function collectAnalyzePhases(
     // #4014 (epic #3473 B4): additive sibling, same default rule as the
     // heading-declared branch above.
     let tContextScope: Scope = SCOPE.COMPLETE;
+    let tDiskStatus = 'no_directory';
     if (dirMatchA) {
-      const counts = countPhasePlansAndSummaries(path.join(phasesDir, dirMatchA));
+      const counts = countPhasePlansAndSummaries(path.join(phasesDir, dirMatchA), convention);
       tPlanCount = counts.planCount;
       tSummaryCount = counts.summaryCount;
       tHasContext = fs.existsSync(path.join(phasesDir, dirMatchA, 'CONTEXT.md'));
@@ -654,6 +648,9 @@ function collectAnalyzePhases(
       // an unreadable phase directory is still surfaced via the sibling call.
       tContextReadError = counts.contextReadError;
       tContextScope = counts.scope;
+      // #5060: route through the Phase Status Module's owner rather than the
+      // fixed 'ok' sentinel this row used to emit.
+      tDiskStatus = toDiskStatus(phaseStatus(path.join(phasesDir, dirMatchA), { convention }).value.status, { hasResearch: tHasResearch, hasContext: tHasContext });
     }
     phases.push({
       number: tr.id,
@@ -665,7 +662,7 @@ function collectAnalyzePhases(
       summary_count: tSummaryCount,
       has_context: tHasContext,
       has_research: tHasResearch,
-      disk_status: dirMatchA ? 'ok' : 'no_directory',
+      disk_status: tDiskStatus,
       roadmap_complete: false,
       context_read_error: tContextReadError,
       context_scope: tContextScope,
@@ -753,7 +750,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   }));
 
   // Find current and next phase
-  const currentPhase = phases.find(p => p.disk_status === 'planned' || p.disk_status === 'partial') || null;
+  const currentPhase = phases.find(p => p.disk_status === 'planned' || p.disk_status === 'partial' || p.disk_status === 'executed') || null;
   const nextPhase = phases.find(p => p.disk_status === 'empty' || p.disk_status === 'no_directory' || p.disk_status === 'discussed' || p.disk_status === 'researched') || null;
 
   // Aggregated stats
@@ -846,13 +843,9 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
         hasResearch = counts.hasResearch;
         contextReadError = counts.contextReadError;
         contextScope = counts.scope;
-        const completionResult = isPhaseComplete(path.join(phasesDir, dirMatch), { convention });
-        if (completionResult.value.complete) diskStatus = 'complete';
-        else if (summaryCount > 0) diskStatus = 'partial';
-        else if (planCount > 0) diskStatus = 'planned';
-        else if (hasResearch) diskStatus = 'researched';
-        else if (hasContext) diskStatus = 'discussed';
-        else diskStatus = 'empty';
+        // #5060: same owner call as the heading branch above.
+        const ps = phaseStatus(path.join(phasesDir, dirMatch), { convention });
+        diskStatus = toDiskStatus(ps.value.status, { hasResearch, hasContext });
       }
       phases.push({
         number: occ.token,
@@ -1066,11 +1059,20 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     error(`Phase ${phaseNum} not found`);
   }
 
-  const planCount = phaseInfo!.plans.length;
-  // Count only summaries that pair with a real plan (#1988): stray non-plan
-  // summaries (30-FIX-CR02-SUMMARY.md, 30-GAPCLOSURE-SUMMARY.md, …) must not
-  // inflate summary_count and silently flip the phase to Complete.
-  const summaryCount = countMatchedSummaries(phaseInfo!.plans, phaseInfo!.summaries);
+  const phaseDir = path.join(cwd, phaseInfo!.directory);
+  // #5060: ONE count source for this verb — `scanPhasePlans` (the ADR-3180
+  // §7.5 count owner) — rather than `phaseInfo.plans.length` /
+  // `countMatchedSummaries(phaseInfo.plans, phaseInfo.summaries)`. The two
+  // diverge when a plan's frontmatter declares `status: superseded`:
+  // scanPhasePlans excludes it (and its summary) from both counts (#2349),
+  // the phaseInfo-based counts do not. Using scanPhasePlans everywhere in
+  // this verb — the `planCount === 0` decline, the `Plans Complete` cell,
+  // the `Plans:` line, the checkbox gate, and the JSON output — keeps every
+  // one of those in agreement with the Status-cell ladder below, which
+  // already read scanPhasePlans's counts.
+  const coverageScan = scanPhasePlans(phaseDir);
+  const planCount = coverageScan.planCount;
+  const summaryCount = coverageScan.summaryCount;
 
   if (planCount === 0) {
     declineNoOp(
@@ -1095,7 +1097,6 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
   // agrees with `roadmap analyze` / `init manager` / `phase complete` for
   // the same phase (ADR-3180 §7.4's headline: one predicate for the read
   // path and the write path).
-  const phaseDir = path.join(cwd, phaseInfo!.directory);
   // ADR-3180 §7.4 read/write-path symmetry with the threaded site at ~583:
   // thread convention here too, so this write path's completion reading
   // agrees with the read path's under the bracket convention.
@@ -1116,14 +1117,29 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
   // (phase.cts:~1995, #2648: "a coverage gate that passes when it cannot
   // read the plans is no gate at all"), composed explicitly here rather than
   // folded into the predicate: complete AND all plans executed.
-  const coverageScan = scanPhasePlans(phaseDir);
+  // #5060: `coverageScan` (declared above, before the `planCount === 0`
+  // decline) is now this verb's ONE count source — the `Plans Complete`
+  // cell, the `Plans:` line, the checkbox gate, the JSON output, and the
+  // Status-cell ladder below all read `planCount`/`summaryCount` from it, so
+  // a phase with a `status: superseded` plan (#2349) reports the same
+  // counts everywhere instead of diverging between the ladder and the rest
+  // of this verb's output.
   const unsummarizedPlans = findUnsummarizedPlans(coverageScan.planFiles, coverageScan.summaryFiles);
   const isComplete = completionResult.value.complete && unsummarizedPlans.length === 0;
   // #3057 B3: routing above is unchanged (an indeterminate staleness check
   // still routes as if nothing were stale) — this only makes the fact visible
   // to whatever reads this command's JSON output.
   const verificationStaleCheckIndeterminate = verificationResult.staleCheckIndeterminate === true;
-  const status = isComplete ? 'Complete' : summaryCount > 0 ? 'In Progress' : 'Planned';
+  // #5060: route the Status-cell token through the Phase Status Module's
+  // owner ladder rather than a local if/else, over the same `planCount`/
+  // `summaryCount` (from `coverageScan`) every other output in this verb
+  // uses.
+  const status = toRoadmapStatusCell(phaseStatusFromFacts({
+    planCount,
+    summaryCount,
+    complete: isComplete,
+    verificationStatus: verificationResult.status,
+  }));
   const today = realClock.localToday();
 
   if (!fs.existsSync(roadmapPath)) {
@@ -1219,9 +1235,6 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     const phaseCellRe = new RegExp(`^${phasePattern}\\.?(?:\\s|$)`, 'i');
     const rowMatch = (row: Record<string, string>): boolean => phaseCellRe.test((row['Phase'] ?? '').trim());
     const dateShape = /^\d{4}-\d{2}-\d{2}$/;
-    // The status tokens this verb and the roadmap template write into the
-    // Status cell (`Not started` is the template's initial value).
-    const statusTokenRe = /^(?:not started|planned|in progress|complete)(?!\w)/i;
 
     roadmapContent = editProgressTableSlice(roadmapContent, (scoped) => {
       let text = scoped;
@@ -1238,11 +1251,16 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       //   2. a leading status token → rewrite the token only and keep the prose
       //      after it; an unchanged token leaves the cell byte-identical.
       //   3. freeform prose with no leading token → operator-owned, untouched.
+      // #5060: routed through the Phase Status Module's `matchRoadmapStatusCell`
+      // owner rather than a local statusTokenRe. `ROADMAP_STATUS_TOKEN.DEFERRED`
+      // is now a recognized token (the old regex never matched "deferred" at
+      // all, so a Deferred cell fell through to arm 3 unchanged) — the DEFERRED
+      // guard below preserves that same "leave it alone" outcome explicitly.
       const statusResult = updateTableCell(text, rowMatch, 'Status', (current) => {
         if (current === '' || /^[-–—]$/.test(current)) return ` ${status.padEnd(11)} `;
-        const token = statusTokenRe.exec(current);
-        if (!token || token[0] === status) return current;
-        const rest = current.slice(token[0].length);
+        const m = matchRoadmapStatusCell(current);
+        if (!m || m.token === ROADMAP_STATUS_TOKEN.DEFERRED || m.text === status) return current;
+        const rest = current.slice(m.text.length);
         return rest === '' ? ` ${status.padEnd(11)} ` : ` ${escapeCell(status + rest)} `;
       });
       if (statusResult.ok) { text = statusResult.value; tableRowFound = true; }

@@ -120,10 +120,24 @@ fourth under `1.x`. Write your switch with a default arm anyway — a `2.0`
 contract could widen it, and your version check should be what rejects that, not
 a crash three layers down.
 
+`status` comes from the roadmap's `## Progress` table Status cell, read by its
+**leading word**: anything a person wrote after the word (`Complete — shipped
+with gate results recorded`) is ignored. The roadmap has five words for this
+cell and the contract has three values:
+
+| Status cell starts with | `status` |
+|---|---|
+| `Complete` | `"complete"` |
+| `In Progress`, `Planned` | `"in_progress"` |
+| `Not started`, `Deferred` | `"pending"` |
+| anything else, or an empty cell | `"pending"` |
+
+`"pending"` means nothing is planned for the phase yet. A phase with plans that
+have not all run — `Planned` or `In Progress` — is `"in_progress"`.
+
 Note one deliberate fold: a roadmap phase marked **`Deferred`** is reported as
-`"pending"`. The roadmap vocabulary has four values and this contract has three,
-and inventing a fourth wire value would break every existing reader. If you need
-to distinguish deferred work, read the roadmap.
+`"pending"`. Inventing a fourth wire value would break every existing reader. If
+you need to distinguish deferred work, read the roadmap.
 
 ### Treat every string as untrusted text
 

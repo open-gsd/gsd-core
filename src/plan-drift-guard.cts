@@ -182,6 +182,11 @@ const PHASE_STATUS_RANKS: Readonly<Record<string, number>> = Object.freeze({
   'phase complete':   2,
   // ROADMAP.md "## Progress" table Status column vocabulary
   'not started':      0,
+  // #5060: `roadmap update-plan-progress`'s own written token (Phase Status
+  // Module's `toRoadmapStatusCell`) for a phase with plans but no summaries
+  // yet — rank 1, the same "work has started" rank as STATE's "ready to
+  // execute" / "in progress".
+  'planned':          1,
   'complete':         2,
   'deferred':         0,
 } as const);

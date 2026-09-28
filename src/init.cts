@@ -44,14 +44,16 @@ import planDocument = require('./plan-document.cjs');
 import { stateExtractField } from './state-document.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { resolveReportedRuntime } from './host-runtime-detection.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- commands.cjs is an export= CommonJS module
-import commandsMod = require('./commands.cjs');
 import { tryWithinRoot, loadTrustedGlobalRoots, PathAcceptance } from './security.cjs';
 import { getGlobalSkillDir, getGlobalSkillDisplayPath, getGlobalSkillsBase, getGlobalConfigDir } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
 import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- verification.cjs is an export= CommonJS module
 import verificationMod = require('./verification.cjs');
+// #5060: Phase Status Module — the single owner of "what state is phase P
+// in?" (ADR-5057 §1/§2). Replaces this file's own determinePhaseStatus/
+// projectCompletionStatus/listPhasePlanFiles/listPhaseSummaryFiles derivations.
+import { phaseStatus, phaseStatusFromFacts, toDisplayLabel, toCompletionStatus, toDiskStatus, toProgressStatus } from './phase-status.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicateMod = require('./uat-predicate.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- agent-install-check.cjs is an export= CommonJS module
@@ -132,7 +134,6 @@ const {
   resolvePhaseIdConvention,
 } = planningWorkspace;
 
-const { determinePhaseStatus } = commandsMod;
 const { extractFrontmatter } = frontmatterMod;
 const { isPhaseComplete, resolveVerificationFile, resolveUatFile } = verificationMod;
 const { evaluateUatPassed } = uatPredicateMod;
@@ -285,15 +286,6 @@ interface PhaseCompletionProjection {
 }
 
 
-function projectCompletionStatus(
-  implementationComplete: boolean,
-  phaseComplete: boolean,
-): string {
-  if (phaseComplete) return 'complete';
-  if (implementationComplete) return 'executed';
-  return 'incomplete';
-}
-
 function buildPhaseCompletionProjection(
   cwd: string,
   phaseNumber: string,
@@ -333,7 +325,14 @@ function buildPhaseCompletionProjection(
     verification_status: projectedVerificationStatus,
     verification_passed: verificationPassed,
     phase_complete: phaseComplete,
-    completion_status: projectCompletionStatus(implementationComplete, phaseComplete),
+    // #5060: Phase Status Module — the single owner of "what state is phase P
+    // in?" (ADR-5057 §1/§2).
+    completion_status: toCompletionStatus(phaseStatusFromFacts({
+      planCount,
+      summaryCount,
+      complete: phaseComplete,
+      verificationStatus: projectedVerificationStatus,
+    })),
     verification_next_action: projectedVerificationAction,
     verification_next_command: verificationStatus.next_command,
     // #3057 B3: readVerificationStatus's result carries this flag when its
@@ -1261,12 +1260,12 @@ function cmdInitPlanPhase(
     padded_phase: phaseNumberPlan ? normalizePhaseName(phaseNumberPlan) : null,
     phase_req_ids,
 
+    // #5060: Phase Status Module — the single owner of "what state is phase P
+    // in?" (ADR-5057 §1/§2).
     phase_status: phaseDirPlan
-      ? determinePhaseStatus(
-          (phaseInfo?.['plans'] as unknown[] | undefined)?.length || 0,
-          (phaseInfo?.['summaries'] as unknown[] | undefined)?.length || 0,
-          path.join(cwd, phaseDirPlan),
-          'Pending',
+      ? toDisplayLabel(
+          phaseStatus(path.join(cwd, phaseDirPlan), { convention: resolvePhaseIdConvention(cwd) }).value.status,
+          { pendingWord: 'Pending' },
         )
       : 'Pending',
 
@@ -2992,8 +2991,11 @@ function cmdInitManager(cwd: string, raw: boolean): void {
         // only, the failure control-flow is untouched.
         contextScope = findContextMdIn(fullDir).scope;
         const phaseFiles = fs.readdirSync(fullDir);
-        planCount = listPhasePlanFiles(fullDir).length;
-        summaryCount = listPhaseSummaryFiles(fullDir).length;
+        // #5060: Phase Status Module — the single owner of "what state is
+        // phase P in?" (ADR-5057 §1/§2).
+        const ps = phaseStatus(fullDir, { convention: phaseIdConvention });
+        planCount = ps.value.planCount;
+        summaryCount = ps.value.summaryCount;
         // #3511-class: scope the raw listing to THIS phase's own artifacts
         // before the hasContext/hasResearch predicates run, so a stray
         // cross-phase `-CONTEXT.md`/`-RESEARCH.md` sitting in this directory
@@ -3012,13 +3014,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
           _slashRuntime,
         );
 
-        if (completion.phase_complete) diskStatus = 'complete';
-        else if (completion.implementation_complete) diskStatus = 'executed';
-        else if (summaryCount > 0) diskStatus = 'partial';
-        else if (planCount > 0) diskStatus = 'planned';
-        else if (hasResearch) diskStatus = 'researched';
-        else if (hasContext) diskStatus = 'discussed';
-        else diskStatus = 'empty';
+        diskStatus = toDiskStatus(ps.value.status, { hasResearch, hasContext });
 
         const nowMs = realClock.now();
         let newestMtime = 0;
@@ -3749,8 +3745,9 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
       const phasePath = path.join(phasesDir, dir);
       const phaseFiles = fs.readdirSync(phasePath);
 
-      const plans = listPhasePlanFiles(phasePath);
-      const summaries = listPhaseSummaryFiles(phasePath);
+      // #5060: Phase Status Module — the single owner of "what state is
+      // phase P in?" (ADR-5057 §1/§2).
+      const ps = phaseStatus(phasePath, { convention: resolvePhaseIdConvention(cwd) });
       // #3511-class: scope the raw listing to THIS phase's own artifacts
       // before the hasResearch predicate runs, so a stray cross-phase
       // `-RESEARCH.md` sitting in this directory cannot win this phase's
@@ -3766,21 +3763,12 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
         cwd,
         phaseNumber,
         phaseDirRel,
-        plans.length,
-        summaries.length,
+        ps.value.planCount,
+        ps.value.summaryCount,
         _slashRuntime,
       );
 
-      const status =
-        completion.phase_complete
-          ? 'complete'
-          : completion.implementation_complete
-            ? 'executed'
-            : plans.length > 0
-              ? 'in_progress'
-              : hasResearch
-                ? 'researched'
-                : 'pending';
+      const status = toProgressStatus(ps.value.status, { hasResearch });
 
       const phaseInfo: Record<string, unknown> = {
         number: phaseNumber,
@@ -3790,8 +3778,8 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
         // above still joins it against cwd.
         directory: toPosixPath(path.join(cwd, phaseDirRel)),
         status,
-        plan_count: plans.length,
-        summary_count: summaries.length,
+        plan_count: ps.value.planCount,
+        summary_count: ps.value.summaryCount,
         has_research: hasResearch,
         ...completion,
       };

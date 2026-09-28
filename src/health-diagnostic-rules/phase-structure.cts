@@ -14,25 +14,14 @@
  *   phases.value[i]` exposes only `planCount`/`summaryCount`, not per-plan
  *   filenames) — this rule reports a coarser per-PHASE message instead.
  * - W023's original "described" list called `determinePhaseStatus`
- *   (`commands.cts:154`), a SIX-way status string ('Not Started'/'Planned'/
- *   'In Progress'/'Executed'/'Needs Review'/'Complete') computed from its own
- *   raw `readdirSync` + `*-VERIFICATION.md` frontmatter read of `phaseDir`.
- *   This rule cannot re-run that raw read (§8.1 rule 1 forbids ambient I/O in
- *   `check`), so `derivePhaseStatusLabel` below reconstructs the same
- *   six-way label from fields `PlanningSnapshot` already exposes —
- *   `PhaseSnapshot.planCount`/`summaryCount` (the plan/no-plan and
- *   in-progress/planned branches, identical inputs to the original) and
- *   `PhaseSnapshot.complete`/`verificationStatus` (`isPhaseComplete`'s own
- *   §7.4 disk-strict routing of the SAME `*-VERIFICATION.md` file) for the
- *   verification-gated branches. This is a disclosed fidelity reduction, not
- *   a byte-for-byte guarantee: `verificationStatus` is the DIFFERENT,
- *   `readVerificationStatus`-routed vocabulary ('passed'/'gaps_found'/
- *   'human_needed'/'stale'/'unknown'/'missing') and can disagree with a raw
- *   frontmatter re-read in edge cases (e.g. a stale-but-frontmatter-"passed"
- *   VERIFICATION.md routes to 'stale', not 'passed', under §7.4's staleness
- *   handling — this rule reports 'Executed' there, not 'Complete'). No new
- *   ambient I/O and no new `PlanningSnapshot` field were needed — every input
- *   was already on `PhaseSnapshot`.
+ *   (`commands.cts:154`, since deleted, #5060). The label now comes from the
+ *   Phase Status Module's pure ladder (`phaseStatusFromFacts` +
+ *   `toDisplayLabel`, `../phase-status.cjs`) over the same `PhaseSnapshot`
+ *   facts this rule already had — `planCount`/`summaryCount`,
+ *   `complete`/`verificationStatus` (`isPhaseComplete`'s §7.4 disk-strict
+ *   routing of the SAME `*-VERIFICATION.md` file). §8.1 rule 1 (no ambient
+ *   I/O in `check`) still holds: the module's ladder is a pure function of
+ *   facts already on the snapshot, no new I/O or snapshot field is needed.
  *
  * W009's original message interpolates `${slash('plan-phase')}`
  * (`verify.cts:1982`, ``Re-run ${slash('plan-phase')} with --research to
@@ -76,6 +65,9 @@ const { isPhaseDirName } = validateMod;
 import phaseIdMod = require('../phase-id.cjs');
 const { extractPhaseToken, normalizePhaseName, comparePhaseNum } = phaseIdMod;
 
+// #5060: the Phase Status Module owns the status-label ladder.
+import { phaseStatusFromFacts, toDisplayLabel } from '../phase-status.cjs';
+
 // ─── W005 — phase directory doesn't follow NN-name format (verify.cts:1893-1902) ─
 
 function checkW005(snapshot: PlanningSnapshot): Diagnostic[] {
@@ -102,32 +94,6 @@ function checkW005(snapshot: PlanningSnapshot): Diagnostic[] {
 // `verify.cts:1930-1932`'s deterministic-output rationale. See the file-level
 // comment for the disclosed "described" fidelity reduction.
 
-/**
- * Reconstruct `commands.cts:154`'s `determinePhaseStatus` six-way label from
- * fields `PhaseSnapshot` already exposes (no ambient I/O, no new snapshot
- * field — see file-level comment). `complete`/`verificationStatus` come from
- * `isPhaseComplete`'s §7.4 disk-strict routing of the same `*-VERIFICATION.md`
- * file the original raw read targeted.
- */
-function derivePhaseStatusLabel(
-  planCount: number,
-  summaryCount: number,
-  complete: boolean,
-  verificationStatus: string,
-): string {
-  if (planCount === 0) return 'Not Started';
-  if (summaryCount < planCount && summaryCount > 0) return 'In Progress';
-  if (summaryCount < planCount) return 'Planned';
-  // summaryCount >= planCount > 0 — verification-gated, same as the original's
-  // post-count fall-through.
-  if (complete) return 'Complete';
-  if (verificationStatus === 'human_needed') return 'Needs Review';
-  // gaps_found / stale / missing / unknown all land here, same as the
-  // original's "verification exists but unrecognized" and "no verification
-  // file" branches both returning 'Executed'.
-  return 'Executed';
-}
-
 function checkW023(snapshot: PlanningSnapshot): Diagnostic[] {
   const groups = new Map<string, string[]>();
   for (const name of snapshot.phaseDirs.value) {
@@ -152,7 +118,10 @@ function checkW023(snapshot: PlanningSnapshot): Diagnostic[] {
         const summaries = phase ? phase.summaryCount : 0;
         const complete = phase ? phase.complete : false;
         const verificationStatus = phase ? phase.verificationStatus : 'missing';
-        const status = derivePhaseStatusLabel(plans, summaries, complete, verificationStatus);
+        const status = toDisplayLabel(
+          phaseStatusFromFacts({ planCount: plans, summaryCount: summaries, complete, verificationStatus }),
+          { pendingWord: 'Not Started' },
+        );
         return `${d} (${status})`;
       })
       .join(', ');

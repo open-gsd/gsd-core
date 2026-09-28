@@ -142,6 +142,7 @@ module.exports = {
   "tests/phase-id-drift-guard.test.cjs",
   "tests/phase-id.test.cjs",
   "tests/phase-locator.test.cjs",
+  "tests/phase-status.test.cjs",
   "tests/phase.test.cjs",
   "tests/plan-count-single-owner.test.cjs",
   "tests/plan-document.test.cjs",

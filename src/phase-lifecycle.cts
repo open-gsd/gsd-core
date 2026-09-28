@@ -25,6 +25,9 @@ import type { MarkdownTable } from './markdown-table.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
 import phaseIdMod = require('./phase-id.cjs');
 const { isSentinelPhaseId } = phaseIdMod;
+// #5060: `phase-status.cjs` is a load-time leaf (no top-level requires), safe
+// to import here for the ROADMAP Status-cell reader.
+import { WIRE_STATUS, parseRoadmapStatusCell } from './phase-status.cjs';
 
 /** Result of deriveProgressFromRoadmap. */
 export interface RoadmapProgress {
@@ -99,9 +102,6 @@ export function deriveProgressFromRoadmap(roadmapContent: string): RoadmapProgre
   if (table) {
     const allRows = table.rows;
 
-    const completed = allRows.filter((r) => /^complete$/i.test((r['Status'] ?? '').trim())).length;
-    completedPhases = completed > 0 ? completed : null;
-
     // Data rows only (exclude sentinel phases 0 and 999.x).
     // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
     const dataRows = allRows.filter((r) => {
@@ -109,6 +109,13 @@ export function deriveProgressFromRoadmap(roadmapContent: string): RoadmapProgre
       return /^\d/.test(phase) && !isSentinelPhaseId(phase);
     });
     totalPhases = dataRows.length > 0 ? dataRows.length : null;
+
+    // #5060: routed through the Phase Status Module's `parseRoadmapStatusCell`
+    // owner (rather than a local `/^complete$/i` regex) and counted over
+    // `dataRows` (not `allRows`) — a sentinel row's Status cell must never
+    // contribute to `completedPhases`.
+    const completed = dataRows.filter((r) => parseRoadmapStatusCell(r['Status']) === WIRE_STATUS.COMPLETE).length;
+    completedPhases = completed > 0 ? completed : null;
 
     let totalPlansSum = 0;
     for (const r of allRows) {

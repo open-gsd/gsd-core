@@ -186,6 +186,7 @@ build/
 /gsd-core/bin/lib/shell-command-projection.cjs
 /gsd-core/bin/lib/security.cjs
 /gsd-core/bin/lib/verification.cjs
+/gsd-core/bin/lib/phase-status.cjs
 /gsd-core/bin/lib/verification-command-router.cjs
 /gsd-core/bin/lib/command-aliases.cjs
 /gsd-core/bin/lib/config-schema.cjs

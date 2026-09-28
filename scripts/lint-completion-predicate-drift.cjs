@@ -805,17 +805,17 @@ const OWNER_FILE = path.join('src', 'verification.cts');
 //     one (the owner consumes plan counts, never the reverse). Left as its
 //     own, differently-scoped answer, per design's "Rejected" list item 1.
 //
-//   - `buildWorkstreamInventory` (src/workstream-inventory-builder.cts) — a
-//     PURE, I/O-free projection (see the module's own header) over
-//     PRE-COLLECTED `planCount`/`summaryCount`/`verificationStatus` inputs.
-//     `summariesMeetPlans = summaryCount >= planCount && planCount > 0`
-//     answers "are all plans summarized?" (combined with the caller-supplied
-//     verification verdict for its own `status` projection) — it cannot call
+//   - `buildWorkstreamInventory` (src/workstream-inventory-builder.cts) —
+//     formerly exempted here (a PURE, I/O-free projection that hand-rolled
+//     `summaryCount >= planCount && planCount > 0` locally, unable to call
 //     the I/O-bound `isPhaseComplete` without breaking its "No I/O. No
-//     async." contract, and re-plumbing its callers to pass a pre-computed
-//     `complete` boolean instead of raw counts is a larger architectural
-//     change than this phase's declared 6 call sites. Declared deviation —
-//     see the Phase 4 migration PR for the full reasoning.
+//     async." contract). #5060 (Phase Status Module, epic #5056) gave this
+//     exact "pure function over pre-collected facts" shape a real owner —
+//     `phaseStatusFromFacts` (`src/phase-status.cts`) — which is itself
+//     import-free at load time and does no I/O, so this function now calls
+//     it instead of re-deriving the comparison locally. The local textual
+//     shapes this guard matches are gone; the exemption entry was removed
+//     rather than left dead.
 //
 //   - `buildPhaseCompletionProjection` (src/init.cts) — MIGRATED onto
 //     `isPhaseComplete` for `phase_complete`/`verification_status` (shape
@@ -832,17 +832,17 @@ const OWNER_FILE = path.join('src', 'verification.cts');
 //
 // SHAPE (d) reuses this exact map (`findScanPhasePlansCompletedReadDrift`
 // takes the same `exemptFunctions` set every other shape's finder does). The
-// four entries above were entered for shapes (a)/(b)/(c); of them, only
+// entries above were entered for shapes (a)/(b)/(c); of them, only
 // `scanPhasePlans` (src/plan-scan.cts) also legitimately reads its OWN
 // `completed` field for shape (d)'s purposes (building the return value it
 // itself defines — not a call-then-read of another `scanPhasePlans(`
-// invocation). `isPhaseComplete`, `buildWorkstreamInventory`, and
-// `buildPhaseCompletionProjection` do not read `.completed` off a
-// `scanPhasePlans(` call result at all (verified by direct inspection of
-// each function's body as of this guard's shape-(d) addition — they consume
-// `planCount`/`summaryCount`/`summaryFiles`, never `.completed`), so their
-// presence in this map exempts nothing NEW for shape (d); they are listed
-// here only because the map is shared. As of this addition, a whole-repo
+// invocation). `isPhaseComplete` and `buildPhaseCompletionProjection` do not
+// read `.completed` off a `scanPhasePlans(` call result at all (verified by
+// direct inspection of each function's body as of this guard's shape-(d)
+// addition — they consume `planCount`/`summaryCount`/`summaryFiles`, never
+// `.completed`), so their presence in this map exempts nothing NEW for shape
+// (d); they are listed here only because the map is shared. As of this
+// addition, a whole-repo
 // scan found ZERO live shape-(d) sites needing a fresh exemption entry — the
 // one real instance this shape exists to catch (`cmdStateSync`,
 // src/state.cts) was fixed by routing through `isPhaseComplete` rather than
@@ -852,7 +852,6 @@ const OWNER_FILE = path.join('src', 'verification.cts');
 const FUNCTION_SCOPED_EXEMPTIONS = new Map([
   [OWNER_FILE, new Set(['isPhaseComplete'])],
   [path.join('src', 'plan-scan.cts'), new Set(['scanPhasePlans'])],
-  [path.join('src', 'workstream-inventory-builder.cts'), new Set(['buildWorkstreamInventory'])],
   [path.join('src', 'init.cts'), new Set(['buildPhaseCompletionProjection'])],
 ]);
 

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "count": 286,
+  "count": 288,
   "classes": {
     "ARCH": 1,
     "CI": 2,
@@ -19,7 +19,7 @@
     "PROHIB": 10,
     "RELEASE-NOTES": 31,
     "RULESET": 60,
-    "SEAM": 14,
+    "SEAM": 16,
     "SESSION": 9,
     "WAVE": 5,
     "WORKSTREAM": 5,
@@ -1270,6 +1270,16 @@
       "id": "SEAM.phase-locator-milestone-enum.owns",
       "klass": "SEAM",
       "value": "listMilestonePhaseDirs(phasesDir, opts) is the single canonical owner of milestone-scoped phase-directory enumeration (ADR-3180 Decision 1, Phase 3, #3185)"
+    },
+    {
+      "id": "SEAM.phase-status-owner.enforced-by",
+      "klass": "SEAM",
+      "value": "test:tests/phase-status.test.cjs"
+    },
+    {
+      "id": "SEAM.phase-status-owner.owns",
+      "klass": "SEAM",
+      "value": "phaseStatus(phaseDir, deps?) / phaseStatusFromFacts(...) is the single canonical owner of \"what state is phase P in?\" (ADR-5057 §2, epic #5056)"
     },
     {
       "id": "SEAM.shellcmdproj-win-binary-resolution.enforced-by",

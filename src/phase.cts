@@ -83,6 +83,8 @@ import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
 import { updateTableCell, deleteTableRow, escapeCell } from './markdown-table.cjs';
+// #5060: the Phase Status Module owns the ROADMAP Status-cell token vocabulary.
+import { PHASE_STATUS, toRoadmapStatusCell } from './phase-status.cjs';
 import { deleteSection, updateBullet, tokenizeHeadings } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap.cjs is an export= CommonJS module
 import roadmapMod = require('./roadmap.cjs');
@@ -4096,7 +4098,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             const plansResult = updateTableCell(text, rowMatch, 'Plans Complete', ` ${summaryCount}/${planCount} `);
             if (plansResult.ok) text = plansResult.value;
 
-            const statusResult = updateTableCell(text, rowMatch, 'Status', ' Complete    ');
+            const statusResult = updateTableCell(text, rowMatch, 'Status', ` ${toRoadmapStatusCell(PHASE_STATUS.COMPLETE).padEnd(11)} `);
             if (statusResult.ok) text = statusResult.value;
 
             // Preserve only a valid ISO date (#1161: idempotent; self-heal

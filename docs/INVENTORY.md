@@ -633,6 +633,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `phase-id.cjs` | Pure phase-id parsing/matching helpers — normalize, token match, milestone/phase-dir id parsing, phase-markdown regex builders (extracted from `core.cjs`, ADR-857) |
 | `phase-lifecycle.cjs` | Pure-computation phase lifecycle helpers extracted from the phase-lifecycle SDK handler |
 | `phase-locator.cjs` | Phase-directory search/location — active + archived phase-dir discovery, phase-id matching against the filesystem (extracted from `core.cjs`, ADR-857) |
+| `phase-status.cjs` | Phase Status Module — single owner of "what state is phase P in?": the pure `phaseStatusFromFacts` ladder over ADR-3180 §7 owner facts, the `phaseStatus(phaseDir)` I/O entry point composing `scanPhasePlans`/`isPhaseComplete`, and every display/wire/ROADMAP/disk-status/completion-status projection (ADR-5057 §1/§2, #5060) |
 | `health-diagnostic-rules/phase-structure.cjs` | Health-diagnostic rules: phase directory structure checks (W005, W023, I001, W009), ported behavior-preserving from `cmdValidateHealth` (ADR-3180 §8.2/§8.3/§8.5, Phase 11, #3309) |
 | `phase.cjs` | Phase directory operations, decimal numbering, plan indexing |
 | `phases-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools phases` |

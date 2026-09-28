@@ -10,6 +10,11 @@
 
 import path from 'node:path';
 import { clampPercent } from './phase-lifecycle.cjs';
+// #5060: `phase-status.cjs` is a load-time leaf (no top-level requires) — its
+// `phaseStatusFromFacts`/`toWireStatus` are pure functions of facts, so
+// importing them here does not violate this module's "No I/O. No async."
+// contract.
+import { phaseStatusFromFacts, toWireStatus } from './phase-status.cjs';
 
 // Internal helpers
 function toPosixPath(p: string): string {
@@ -315,12 +320,14 @@ export function buildWorkstreamInventory(inputs: BuildWorkstreamInventoryInputs)
     // read `pending` instead of `complete`. `complete` defaults to `false`
     // when absent so a caller that has not been updated to pass it never
     // silently reads as complete.
-    const status: 'complete' | 'in_progress' | 'pending' =
-      (counts?.complete ?? false)
-        ? 'complete'
-        : planCount > 0
-          ? 'in_progress'
-          : 'pending';
+    // #5060: routed through the Phase Status Module's owner ladder rather
+    // than a local re-derivation of the same complete/planCount branches.
+    const status: 'complete' | 'in_progress' | 'pending' = toWireStatus(phaseStatusFromFacts({
+      planCount,
+      summaryCount,
+      complete: counts?.complete ?? false,
+      verificationStatus: counts?.verificationStatus ?? null,
+    }));
     // #2562: only current-milestone phases feed the rollup when scoping is on,
     // and only one directory per phase key (see rollupDirs above).
     const countsTowardMilestone = (!scoped || counts?.inMilestone !== false) && rollupDirs.has(dir);

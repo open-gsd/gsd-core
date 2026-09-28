@@ -497,6 +497,7 @@
       "phase-id.cjs",
       "phase-lifecycle.cjs",
       "phase-locator.cjs",
+      "phase-status.cjs",
       "phase.cjs",
       "phases-command-router.cjs",
       "plan-dependency-graph.cjs",

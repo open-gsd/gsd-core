@@ -39,4 +39,4 @@ EOF
 fi
 ```
 
-The gate fires only on `Complete`. `Executed` and `Needs Review` are not gated — those states mean planning was finished but verification did not pass, and replanning is a legitimate next step.
+The gate fires only when `init plan-phase`'s `phase_status` is `Complete` — the Phase Status Module's COMPLETE rung, i.e. `isPhaseComplete` reports complete (a fresh `passed` VERIFICATION.md; a stale one reads `Executed` and does not trip the gate). `Executed` and `Needs Review` are not gated — those states mean planning was finished but verification did not pass (or has gone stale), and replanning is a legitimate next step.

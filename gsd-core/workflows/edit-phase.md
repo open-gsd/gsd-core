@@ -88,7 +88,7 @@ Find the phase entry in the `phases` array. Extract `disk_status`.
 
 Map disk_status to a user-friendly status:
 - `complete` → status = `completed`
-- `planned` or `partial` → status = `in_progress`
+- `planned`, `partial`, or `executed` → status = `in_progress`
 - `empty`, `no_directory`, `discussed`, `researched` → status = `future`
 
 If status is `in_progress` or `completed` AND `--force` was NOT passed:
