@@ -282,7 +282,7 @@ describe('#5105: write normalization leaves the frontmatter block untouched', ()
 
   for (const [label, shape, published] of [
     ['CRLF', (d) => d.replace(/\n/g, '\r\n'), (d) => d],
-    ['BOM', (d) => `﻿${d}`, (d) => `﻿${d}`],
+    ['BOM', (d) => `\uFEFF${d}`, (d) => `\uFEFF${d}`],
   ]) {
     test(`a ${label} document keeps its frontmatter lines (LF-published)`, () => {
       const doc = '---\na: 1\n# note\nb: 2\n---\nbody\n';
@@ -312,7 +312,7 @@ describe('#5105: write normalization leaves the frontmatter block untouched', ()
         fc.array(bodyLine, { maxLength: 8 }),
         fc.boolean(),
         (fm, body, bom) => {
-          const doc = `${bom ? '﻿' : ''}---\n${fm.join('\n')}\n---\n${body.join('\n')}\n`;
+          const doc = `${bom ? '\uFEFF' : ''}---\n${fm.join('\n')}\n---\n${body.join('\n')}\n`;
           const located = frontmatterBlock(doc);
           assert.ok(located, `fixture must hold a closed block: ${JSON.stringify(doc)}`);
           const { content } = normalizeContent(MD, doc);
