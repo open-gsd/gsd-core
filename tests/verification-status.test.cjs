@@ -4002,6 +4002,112 @@ describe('fingerprint input set is closed and idempotent (#5095, ADR-5057 Phase 
     assert.equal(statusCli(projectDir, phaseDir), 'passed');
   });
 
+  // ── R7 (a) (CLI, fail-first): a symlinked workstream `phases/` directory —
+  // `.planning/workstreams/ws1` is REAL but its own `phases/` is symlinked to
+  // a separate store. The anchored `.planning/workstreams/ws1` scope must be
+  // recognised (never only the top-level `.planning` scope), so the emitted
+  // covered_files/containment spelling is
+  // `.planning/workstreams/ws1/phases/<phase>/…`, not dropped (null) and not
+  // silently re-hashed under a same-named root-scope phase. ────────────────
+  test('R7(a): .planning/workstreams/ws1/phases symlinked to a separate store → spelled under the workstream scope; status passed', (t) => {
+    const projectDir = createTempGitProject();
+    const store = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5095-r7a-store-'));
+    t.after(() => { cleanup(projectDir); cleanup(store); });
+    fs.mkdirSync(path.join(projectDir, '.planning', 'workstreams', 'ws1'), { recursive: true });
+    fs.mkdirSync(path.join(store, '01-foo'), { recursive: true });
+    fs.symlinkSync(store, path.join(projectDir, '.planning', 'workstreams', 'ws1', 'phases'), symlinkType);
+    const phaseDir = path.join(projectDir, '.planning', 'workstreams', 'ws1', 'phases', '01-foo');
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+
+    const env = { GSD_WORKSTREAM: 'ws1' };
+    const planRel = '.planning/workstreams/ws1/phases/01-foo/01-01-PLAN.md';
+    const summaryRel = '.planning/workstreams/ws1/phases/01-foo/01-01-SUMMARY.md';
+    const fp = runGsdTools(['verification', 'fingerprint', phaseDir, planRel, summaryRel], projectDir, env);
+    assert.equal(fp.success, true, `fingerprint over a symlinked workstream phases/ dir must succeed: ${fp.output}${fp.error}`);
+    const parsed = JSON.parse(fp.output);
+    for (const expected of [planRel, summaryRel]) {
+      assert.ok(
+        parsed.covered_files.includes(expected),
+        `covered_files must be spelled under the workstream scope; got: ${JSON.stringify(parsed.covered_files)}`,
+      );
+    }
+    fs.writeFileSync(
+      path.join(phaseDir, '01-VERIFICATION.md'),
+      `---\nstatus: passed\ncovered_files:\n${parsed.covered_files.map((f) => `  - ${f}`).join('\n')}\ncovered_digest: "${parsed.covered_digest}"\n---\n`,
+    );
+    const res = runGsdTools(['verification', 'status', phaseDir, '--pick', 'status'], projectDir, env);
+    assert.ok(res.success, `verification status should run: ${res.error}`);
+    assert.equal(res.output, 'passed');
+  });
+
+  // ── R7 (b) (CLI, fail-first, hostile): the same-name trap — a REAL
+  // root-scope `.planning/phases/07-x/07-01-PLAN.md` and a DIFFERENT plan
+  // under a workstream store also named `07-x`. Fingerprinting the
+  // workstream phase must hash the WORKSTREAM's own plan bytes, never the
+  // same-named root-scope phase's — proven by mutating only the workstream
+  // store's plan and observing `stale`. ────────────────────────────────────
+  test('R7(b): same-name phase in root scope and workstream scope → the workstream file is hashed, not the root one', (t) => {
+    const projectDir = createTempGitProject();
+    const wsStore = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5095-r7b-store-'));
+    t.after(() => { cleanup(projectDir); cleanup(wsStore); });
+
+    // Root-scope phase '07-x' with its own plan (createTempGitProject already
+    // made .planning/phases real).
+    const rootPhaseDir = path.join(projectDir, '.planning', 'phases', '07-x');
+    fs.mkdirSync(rootPhaseDir, { recursive: true });
+    fs.writeFileSync(path.join(rootPhaseDir, '07-01-PLAN.md'), '# root-scope plan\n');
+
+    // Workstream-scope phase, SAME name '07-x', DIFFERENT plan content, via a
+    // symlinked workstream phases/ dir.
+    fs.mkdirSync(path.join(projectDir, '.planning', 'workstreams', 'ws1'), { recursive: true });
+    fs.mkdirSync(path.join(wsStore, '07-x'), { recursive: true });
+    fs.symlinkSync(wsStore, path.join(projectDir, '.planning', 'workstreams', 'ws1', 'phases'), symlinkType);
+    const wsPhaseDir = path.join(projectDir, '.planning', 'workstreams', 'ws1', 'phases', '07-x');
+    fs.writeFileSync(path.join(wsPhaseDir, '07-01-PLAN.md'), '# workstream-scope plan\n');
+
+    const env = { GSD_WORKSTREAM: 'ws1' };
+    const planRel = '.planning/workstreams/ws1/phases/07-x/07-01-PLAN.md';
+    const fp = runGsdTools(['verification', 'fingerprint', wsPhaseDir, planRel], projectDir, env);
+    assert.equal(fp.success, true, `fingerprint should succeed: ${fp.output}${fp.error}`);
+    const parsed = JSON.parse(fp.output);
+    fs.writeFileSync(
+      path.join(wsPhaseDir, '07-VERIFICATION.md'),
+      `---\nstatus: passed\ncovered_files:\n${parsed.covered_files.map((f) => `  - ${f}`).join('\n')}\ncovered_digest: "${parsed.covered_digest}"\n---\n`,
+    );
+    const statusRes = () => runGsdTools(['verification', 'status', wsPhaseDir, '--pick', 'status'], projectDir, env);
+    assert.equal(statusRes().output, 'passed', 'freshly fingerprinted workstream phase must read passed');
+
+    // Mutate ONLY the workstream store's plan — the root-scope '07-x' plan is
+    // untouched. If the digest had hashed the root-scope file instead, this
+    // mutation would be invisible and status would stay 'passed'.
+    fs.appendFileSync(path.join(wsPhaseDir, '07-01-PLAN.md'), '// mutated\n');
+    assert.equal(
+      statusRes().output,
+      'stale',
+      'mutating the workstream plan must stale the phase — proves the workstream file, not the root file, was hashed',
+    );
+  });
+
+  // ── R7 (c) (hostile, security): `.planning -> /` must never become an
+  // admissible containment root — the scope is refused outright, not merely
+  // ignored, so a covered path spelled under it fails closed rather than
+  // silently gaining root-filesystem containment (every path is "inside"
+  // `/`). ────────────────────────────────────────────────────────────────
+  test('R7(c): .planning symlinked to the filesystem root is refused, not admitted', (t) => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5095-r7c-'));
+    t.after(() => cleanup(projectDir));
+    const fsRoot = path.parse(projectDir).root;
+    fs.symlinkSync(fsRoot, path.join(projectDir, '.planning'), symlinkType);
+
+    const digest = computeCoveredDigest(projectDir, ['.planning/etc/hosts']);
+    assert.equal(
+      digest,
+      null,
+      'a .planning -> filesystem-root symlink must be refused as a containment root, not silently admitted',
+    );
+  });
+
   // ── Rows 18-20: properties (ADR ratchet) ──────────────────────────────────
   describe('properties (rows 18-20)', () => {
     const fc = require('./helpers/fast-check-setup.cjs');
