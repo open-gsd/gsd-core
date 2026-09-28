@@ -18,6 +18,17 @@
  * target (`.js`, not `.cjs`, to match the hooks/lib/*.js convention) would
  * tangle a script that is otherwise simple and single-purpose.
  *
+ * compileToTemp() itself IS shared (required from ./gen-scripts-cli-exit.cjs)
+ * rather than duplicated: it compiles only src/cli-exit.cts (via a throwaway
+ * tsconfig that extends tsconfig.build.json with files/include scoped to
+ * that one module) rather than the whole project, since the emit this
+ * script needs depends only on cli-exit.cts's own import closure. A
+ * whole-project `-p tsconfig.build.json` type-check of every .cts file under
+ * a fixed COMPILE_TIMEOUT_MS ceiling can get killed by that timeout on a
+ * CPU-contended shared bench even though the one file this script needs
+ * compiles in a fraction of the time — and the compile strategy itself has
+ * nothing sibling-specific to fork.
+ *
  * Usage:
  *   node scripts/gen-hooks-cli-exit.cjs            # same as --write
  *   node scripts/gen-hooks-cli-exit.cjs --write     # write hooks/lib/cli-exit.js
@@ -35,14 +46,12 @@
 
 'use strict';
 
-const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
+const { compileToTemp } = require('./gen-scripts-cli-exit.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const OUTPUT_PATH = path.join(REPO_ROOT, 'hooks', 'lib', 'cli-exit.js');
-const COMPILE_TIMEOUT_MS = 60_000;
 
 /** Frozen reason codes so tests assert on structure, not prose. */
 const REASON = Object.freeze({
@@ -77,31 +86,6 @@ const BANNER = [
   '',
   '',
 ].join('\n');
-
-/** Compile the whole project to a throwaway outDir so the work tree is untouched. */
-function compileToTemp() {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-hooks-cli-exit-'));
-  try {
-    execFileSync(
-      process.execPath,
-      [
-        path.join(REPO_ROOT, 'node_modules', 'typescript', 'bin', 'tsc'),
-        '-p', path.join(REPO_ROOT, 'tsconfig.build.json'),
-        '--outDir', tmp,
-        // A throwaway outDir must not reuse the in-tree incremental state, or
-        // tsc skips emit for files it believes are already current.
-        '--incremental', 'false',
-        '--tsBuildInfoFile', 'null',
-      ],
-      { cwd: REPO_ROOT, encoding: 'utf8', stdio: 'pipe', timeout: COMPILE_TIMEOUT_MS },
-    );
-    return { ok: true, dir: tmp };
-  } catch (err) {
-    fs.rmSync(tmp, { recursive: true, force: true });
-    const detail = [err.stdout, err.stderr].filter(Boolean).join('\n').trim();
-    return { ok: false, detail };
-  }
-}
 
 /**
  * Compile src/cli-exit.cts to a throwaway outDir and return the expected

@@ -65,15 +65,40 @@ const BANNER = [
   '',
 ].join('\n');
 
-/** Compile the whole project to a throwaway outDir so the work tree is untouched. */
+/**
+ * Compile ONLY src/cli-exit.cts (and whatever it imports — tsc follows
+ * `./exit-code-registry.cjs` on its own) to a throwaway outDir, so the work
+ * tree is untouched. A whole-project `-p tsconfig.build.json` type-checks and
+ * emits every .cts file in src/ under a fixed COMPILE_TIMEOUT_MS ceiling; on a
+ * CPU-contended shared bench that whole-project compile can exceed the
+ * ceiling and get killed even though the one file this script actually needs
+ * compiles in a fraction of the time. A throwaway tsconfig that `extends`
+ * tsconfig.build.json but overrides `files`/`include` to name only
+ * cli-exit.cts keeps every compiler option (target, strict, rootDir, etc.)
+ * while scoping the type-check + emit to that file's own import closure.
+ */
 function compileToTemp() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scripts-cli-exit-'));
+  const scopedTsconfigPath = path.join(tmp, 'tsconfig.scoped.json');
   try {
+    const scopedTsconfig = {
+      extends: path.join(REPO_ROOT, 'tsconfig.build.json'),
+      // typeRoots must be pinned to the real repo's node_modules/@types: tsc
+      // resolves a bare "types": ["node"] by walking up from the config
+      // file's own directory, and our scoped tsconfig lives outside the repo
+      // tree (in the throwaway tmp dir), so without this it cannot find
+      // @types/node at all.
+      compilerOptions: { typeRoots: [path.join(REPO_ROOT, 'node_modules', '@types')] },
+      files: [path.join(REPO_ROOT, 'src', 'cli-exit.cts')],
+      include: [],
+    };
+    fs.writeFileSync(scopedTsconfigPath, JSON.stringify(scopedTsconfig, null, 2), 'utf8');
+
     execFileSync(
       process.execPath,
       [
         path.join(REPO_ROOT, 'node_modules', 'typescript', 'bin', 'tsc'),
-        '-p', path.join(REPO_ROOT, 'tsconfig.build.json'),
+        '-p', scopedTsconfigPath,
         '--outDir', tmp,
         // A throwaway outDir must not reuse the in-tree incremental state, or
         // tsc skips emit for files it believes are already current.
@@ -87,6 +112,8 @@ function compileToTemp() {
     fs.rmSync(tmp, { recursive: true, force: true });
     const detail = [err.stdout, err.stderr].filter(Boolean).join('\n').trim();
     return { ok: false, detail };
+  } finally {
+    fs.rmSync(scopedTsconfigPath, { force: true });
   }
 }
 
@@ -182,4 +209,4 @@ function main() {
 
 if (require.main === module) process.exitCode = main();
 
-module.exports = { REASON, buildExpectedContent, OUTPUT_PATH, BANNER };
+module.exports = { REASON, buildExpectedContent, compileToTemp, OUTPUT_PATH, BANNER };

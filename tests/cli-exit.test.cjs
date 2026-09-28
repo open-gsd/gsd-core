@@ -1845,9 +1845,10 @@ describe('#3911: the --check guards for the new hooks/lib artifacts can actually
   const GEN_HOOKS_CLI_EXIT = path.join(REPO_ROOT, 'scripts', 'gen-hooks-cli-exit.cjs');
   const GEN_EXIT_CODE_REGISTRY = path.join(REPO_ROOT, 'scripts', 'gen-exit-code-registry.cjs');
   const registryGenerator = require(GEN_EXIT_CODE_REGISTRY);
-  // gen-hooks-cli-exit.cjs --check runs a real tsc compile of the whole
-  // project to a throwaway outDir (see its own COMPILE_TIMEOUT_MS=60000) —
-  // this needs a longer bound than a plain probe.
+  // gen-hooks-cli-exit.cjs --check runs a real tsc compile, scoped to
+  // src/cli-exit.cts and its own import closure, to a throwaway outDir (see
+  // gen-scripts-cli-exit.cjs's shared compileToTemp(), COMPILE_TIMEOUT_MS=60000)
+  // — this needs a longer bound than a plain probe.
   const CHECK_TIMEOUT_MS = 90000;
 
   test('gen-hooks-cli-exit.cjs --check fails on a corrupted TMPDIR copy of hooks/lib/cli-exit.js, names the file, and clears on restore', (t) => {
