@@ -633,6 +633,7 @@ describe('#4429 follow-up — makeHookLayout must survive a concurrently-deleted
       'let phase;',
       `try { fs.cpSync(HOOKS_DIR, ${JSON.stringify(dest)}, opts); phase = "copied"; }`,
       'catch (e) { phase = "threw:" + e.code; }',
+      'if (typeof held !== "undefined") for (const fd of held) fs.closeSync(fd);',
       'fs.writeSync(1, JSON.stringify({ phase }) + "\\n");',
     ].join('\n'));
 
@@ -648,6 +649,8 @@ describe('#4429 follow-up — makeHookLayout must survive a concurrently-deleted
       '',
     ].join('\n'));
 
+    // PROBE class: one child, no fan-out — a sh `exec` into a single node
+    // process copying a one-directory fixture, not a hook spawning others.
     const res = runHook(limiter, [process.execPath, child], {
       interpreter: 'sh',
       env: { ...process.env, GSD_4429_INJECTION: injection },
@@ -707,6 +710,7 @@ describe('#4429 follow-up — makeHookLayout must survive a concurrently-deleted
     assert.equal(nativeAbortExpected('24.2.0'), true);
     assert.equal(nativeAbortExpected('24.14.0'), true);
     assert.equal(nativeAbortExpected('20.19.0'), false);
+    assert.equal(nativeAbortExpected('23.11.0'), null);
     assert.equal(nativeAbortExpected('26.0.0'), null);
   });
 
