@@ -46,6 +46,7 @@ import planningScopeMod = require('./planning-scope.cjs');
 import { execGit } from './shell-command-projection.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { isContainedIn } from './security.cjs';
+import { escapeRegex } from './pattern.cjs';
 
 const { output, error } = io;
 const { extractPhaseToken, scopeToPhase } = phaseId;
@@ -1920,6 +1921,140 @@ function cmdVerificationFingerprint(
   output({ covered_files: unionSorted, covered_digest: digest }, raw, digest);
 }
 
+// ─── verification.append-audit (#5105 R3) ──────────────────────────────────
+
+/**
+ * Render a single `## <heading> <date>` block followed by a `| Metric |
+ * Count |` table over `rows` — the exact shape `secure-phase.md` /
+ * `validate-phase.md` compose by hand today (#4887 Defect 2, #4981).
+ */
+function renderAuditBlock(heading: string, date: string, rows: Record<string, unknown>): string {
+  const lines = [`## ${heading} ${date}`, '', '| Metric | Count |', '|---|---|'];
+  for (const [k, v] of Object.entries(rows)) lines.push(`| ${k} | ${String(v)} |`);
+  return lines.join('\n') + '\n';
+}
+
+interface AuditAppendResult {
+  appended: boolean;
+  content: string;
+}
+
+/**
+ * #5105 R3 — pure core of `verification.append-audit`.
+ *
+ * Finds the LAST `## <heading> <date>` block in `content` (a heading whose
+ * text matches `heading` exactly, followed by any single non-whitespace date
+ * token). Deny-by-default comparison: the whole block except the date on the
+ * heading line — i.e. its `| Metric | Count |` rows. Identical rows on the
+ * last block → `{ appended: false }`, no write. Different (or no prior
+ * block) → appends the new block at the end and returns `{ appended: true }`.
+ *
+ * Deliberately compares against the LAST block only, never any earlier one —
+ * a re-audit that regresses back to an earlier count must still append.
+ */
+function planAuditAppend(
+  content: string,
+  { heading, rows, date }: { heading: string; rows: Record<string, unknown>; date: string },
+): AuditAppendResult {
+  const escapedHeading = escapeRegex(heading);
+  const headingRe = new RegExp(`^## ${escapedHeading} (\\S+)[ \\t]*$`, 'gm');
+  let lastMatch: RegExpExecArray | null = null;
+  let m: RegExpExecArray | null;
+  while ((m = headingRe.exec(content)) !== null) {
+    lastMatch = m;
+  }
+  const newBlock = renderAuditBlock(heading, date, rows);
+
+  if (lastMatch) {
+    const headingEnd = lastMatch.index + lastMatch[0].length;
+    const anyHeadingRe = /^## /gm;
+    anyHeadingRe.lastIndex = Math.min(headingEnd + 1, content.length);
+    const nextHeadingMatch = anyHeadingRe.exec(content);
+    const blockEnd = nextHeadingMatch ? nextHeadingMatch.index : content.length;
+    const bodyStart = Math.min(headingEnd + 1, content.length);
+    const liveBody = content.slice(bodyStart, blockEnd).replace(/\s+$/, '');
+    const candidateBodyStart = newBlock.indexOf('\n') + 1;
+    const candidateBody = newBlock.slice(candidateBodyStart).replace(/\s+$/, '');
+    if (liveBody === candidateBody) {
+      return { appended: false, content };
+    }
+  }
+
+  const trimmed = content.replace(/\s+$/, '');
+  const appendedContent = (trimmed.length > 0 ? trimmed + '\n\n' : '') + newBlock;
+  return { appended: true, content: appendedContent };
+}
+
+function parseAuditAppendArgs(tokens: readonly string[]): { heading?: string; rows?: string; date?: string } {
+  const result: { heading?: string; rows?: string; date?: string } = {};
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === '--heading') { result.heading = tokens[++i]; }
+    else if (t === '--rows') { result.rows = tokens[++i]; }
+    else if (t === '--date') { result.date = tokens[++i]; }
+  }
+  return result;
+}
+
+/**
+ * CLI command handler (#5105 R3): `verification.append-audit <file>
+ * --heading <H> --rows '<json {metric:count}>' [--date <YYYY-MM-DD>]`.
+ *
+ * Never reads or writes `covered_files`/`covered_digest` (#4981 invariant
+ * 5) — a genuinely changed count publishes and stales any report that covers
+ * `file`; nothing here ever restamps it.
+ */
+function cmdVerificationAppendAudit(
+  cwd: string,
+  fileArg: string | undefined,
+  argTokens: readonly string[],
+  raw: boolean,
+): void {
+  if (!fileArg) {
+    error('file required for verification.append-audit');
+    return;
+  }
+  const parsed = parseAuditAppendArgs(argTokens);
+  if (!parsed.heading) {
+    error('--heading required for verification.append-audit');
+    return;
+  }
+  if (!parsed.rows) {
+    error('--rows required for verification.append-audit');
+    return;
+  }
+  let rows: Record<string, unknown>;
+  try {
+    const parsedRows: unknown = JSON.parse(parsed.rows);
+    if (!parsedRows || typeof parsedRows !== 'object' || Array.isArray(parsedRows)) {
+      throw new Error('not an object');
+    }
+    rows = parsedRows as Record<string, unknown>;
+  } catch {
+    error('--rows must be a JSON object for verification.append-audit');
+    return;
+  }
+  const filePath = path.resolve(cwd, fileArg);
+  const relToCwd = toPosix(path.relative(cwd, filePath));
+  if (isVerificationReportPath(relToCwd)) {
+    error('verification.append-audit refuses a verification report path');
+    return;
+  }
+  let content: string;
+  try {
+    content = fs.readFileSync(filePath, 'utf-8');
+  } catch {
+    error(`file not found: ${fileArg}`);
+    return;
+  }
+  const date = parsed.date || new Date().toISOString().slice(0, 10);
+  const result = planAuditAppend(content, { heading: parsed.heading, rows, date });
+  if (result.appended) {
+    fs.writeFileSync(filePath, result.content);
+  }
+  output({ appended: result.appended }, raw);
+}
+
 export = {
   VERIFIER_STATUSES,
   VERIFICATION_ROUTING_TABLE,
@@ -1934,7 +2069,10 @@ export = {
   computeCoveredDigest,
   sharedPlanningRoots,
   isSharedPlanningDoc,
+  isVerificationReportPath,
   parseFingerprintVersion,
   parseFingerprintFileArgs,
   cmdVerificationFingerprint,
+  planAuditAppend,
+  cmdVerificationAppendAudit,
 };

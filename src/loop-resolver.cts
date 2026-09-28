@@ -28,6 +28,8 @@
  *   - capability-state.cjs (resolveCapabilityRuntimeState — for capabilities list)
  */
 
+import fs from 'node:fs';
+import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output: coreOutput, error: coreError } = ioMod;
@@ -609,6 +611,67 @@ function resolveActiveHooksForPoint(
   return { point: resolved.point, activeHooks: resolved.activeHooks, warnings: combinedWarnings };
 }
 
+// ─── #5105 R2: post-fingerprint hook gating ────────────────────────────────
+
+interface SkippedHook {
+  capId: string;
+  skill?: string;
+  reason: 'produces-present';
+  artifacts: string[];
+}
+
+/**
+ * #5105 R2: a `produces` entry `p` "exists" in `phaseDir` when a REGULAR file
+ * named exactly `p`, or `<anything>-p`, sits directly in `phaseDir` — never a
+ * directory of that name, and never a suffixed near-miss (`p.bak`, `p.tmp`).
+ */
+function producesEntryPresent(fileNames: ReadonlySet<string>, p: string): boolean {
+  const escaped = escapeRegex(p);
+  const re = new RegExp(`^(?:.*-)?${escaped}$`);
+  for (const name of fileNames) {
+    if (re.test(name)) return true;
+  }
+  return false;
+}
+
+/**
+ * #5105 R2: partition `activeHooks` by whether every one of a `kind:"step"`
+ * hook's declared `produces` artifacts already exists (as a regular file)
+ * directly in `phaseDir`. A hook with `produces: []` (e.g. mempalace-capture),
+ * and every gate/contribution, passes through unchanged in `activeHooks`.
+ *
+ * Throws when `phaseDir` cannot be read (fail closed — the caller converts
+ * this to a `coreError` exit, never a silent pass-everything-through).
+ */
+function partitionHooksByFingerprint(
+  activeHooks: readonly ActiveHook[],
+  phaseDir: string,
+): { activeHooks: ActiveHook[]; skippedHooks: SkippedHook[] } {
+  const entries = fs.readdirSync(phaseDir, { withFileTypes: true });
+  const fileNames = new Set(entries.filter((e) => e.isFile()).map((e) => e.name));
+
+  const kept: ActiveHook[] = [];
+  const skipped: SkippedHook[] = [];
+  for (const hook of activeHooks) {
+    if (hook.kind !== 'step' || !hook.produces || hook.produces.length === 0) {
+      kept.push(hook);
+      continue;
+    }
+    const everyProduced = hook.produces.every((p) => producesEntryPresent(fileNames, p));
+    if (everyProduced) {
+      skipped.push({
+        capId: hook.capId,
+        skill: hook.ref?.skill,
+        reason: 'produces-present',
+        artifacts: [...hook.produces],
+      });
+    } else {
+      kept.push(hook);
+    }
+  }
+  return { activeHooks: kept, skippedHooks: skipped };
+}
+
 function cmdLoopRenderHooks(
   cwd: string,
   point: string,
@@ -636,6 +699,25 @@ function cmdLoopRenderHooks(
     return;
   }
 
+  // #5105 R2: --after-fingerprint <phaseDir> — gate out verify:post steps
+  // whose declared artifact(s) already exist in phaseDir (execute-phase
+  // already dispatched them before its own fingerprint; a re-dispatch here
+  // would write a post-fingerprint covered path for no reason, #4981/#4887).
+  const afterFingerprintDir = typeof options['afterFingerprint'] === 'string' ? options['afterFingerprint'] : undefined;
+  let skippedHooks: SkippedHook[] | undefined;
+  if (afterFingerprintDir !== undefined) {
+    let partition: { activeHooks: ActiveHook[]; skippedHooks: SkippedHook[] };
+    try {
+      partition = partitionHooksByFingerprint(result.activeHooks, afterFingerprintDir);
+    } catch (err: unknown) {
+      const msg = (err instanceof Error) ? err.message : String(err);
+      coreError(`--after-fingerprint phase directory not found or unreadable: ${afterFingerprintDir} (${msg})`);
+      return;
+    }
+    result = { point: result.point, activeHooks: partition.activeHooks, warnings: result.warnings };
+    skippedHooks = partition.skippedHooks;
+  }
+
   if (activeCapId !== undefined) {
     const isActive = result.activeHooks.some((h) => h.capId === activeCapId);
     process.stdout.write(isActive ? 'true\n' : 'false\n');
@@ -648,6 +730,7 @@ function cmdLoopRenderHooks(
     activeHooks: ActiveHook[];
     rendered: string;
     warnings?: string[];
+    skippedHooks?: SkippedHook[];
   } = {
     point: result.point,
     activeHooks: result.activeHooks,
@@ -655,6 +738,9 @@ function cmdLoopRenderHooks(
   };
   if (result.warnings.length > 0) {
     envelope.warnings = result.warnings;
+  }
+  if (skippedHooks !== undefined) {
+    envelope.skippedHooks = skippedHooks;
   }
 
   coreOutput(envelope, raw);
@@ -665,6 +751,7 @@ export = {
   renderLoopHooks,
   cmdLoopRenderHooks,
   resolveActiveHooksForPoint,
+  partitionHooksByFingerprint,
   // Exported for tests
   _getNestedConfigValue,
   _resolveActivationValue,

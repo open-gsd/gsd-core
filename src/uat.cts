@@ -426,6 +426,152 @@ function cmdRenderCheckpoint(cwd: string, options: { file?: string } = {}, raw: 
   }, raw, checkpoint);
 }
 
+// ─── completeUatSession ─────────────────────────────────────────────────────
+// #5105 R1: the ONE owner for "does completing this UAT session change
+// anything material". Pure core; the CLI handler below writes/commits only
+// when `changed` is true (ADR-5057 §3, #4981 UAT self-stale offender C1/C2).
+
+/**
+ * Replace the `## Current Test` section body with `[testing complete]`,
+ * leaving every other line of the document untouched. Mirrors the section
+ * boundary convention `parseCurrentTest` reads (a level-2 `## Current Test`
+ * heading; the section body runs to the next `## ` heading or EOF).
+ *
+ * A document missing the heading altogether is returned unchanged — that is
+ * a malformed-input case `completeUatSession`'s caller already never
+ * produces, and this function fails soft rather than throwing so the pure
+ * core stays total.
+ */
+function setCurrentTestComplete(content: string): string {
+  const headingMatch = /^## Current Test[ \t]*$/m.exec(content);
+  if (!headingMatch) return content;
+  const headingEnd = headingMatch.index + headingMatch[0].length;
+  const nextHeadingRe = /^## /gm;
+  nextHeadingRe.lastIndex = Math.min(headingEnd + 1, content.length);
+  const nextMatch = nextHeadingRe.exec(content);
+  const sectionEnd = nextMatch ? nextMatch.index : content.length;
+  const before = content.slice(0, headingEnd);
+  const after = content.slice(sectionEnd);
+  return `${before}\n\n[testing complete]\n\n${after}`;
+}
+
+/** UAT test-item `result` values that count as passing (mirrors uat-predicate.cjs's PASSING_RESULTS). */
+const UAT_COMPLETE_SESSION_PASSING_RESULTS = new Set(['passed', 'pass']);
+
+/**
+ * Strip only the VALUE of the frontmatter `updated:` line — the one field
+ * #5105 R1 declares non-material (deny-by-default: everything else counts).
+ */
+function stripUpdatedValue(content: string): string {
+  return content.replace(/^updated:.*$/m, 'updated:');
+}
+
+interface CompleteUatSessionResult {
+  changed: boolean;
+  content: string;
+  status: 'complete' | 'partial';
+}
+
+/**
+ * #5105 R1 — pure core of `uat.complete-session`.
+ *
+ * Computes the resulting `status` (`complete` when every parsed test item is
+ * passing; `partial` otherwise — the same passing criterion
+ * `uat-predicate.cjs`'s `evaluateUatPassed` uses for its own PASSING_RESULTS
+ * set), sets `## Current Test` to `[testing complete]`, and compares the
+ * MATERIAL projection of the live document against the candidate — every
+ * byte except the frontmatter `updated:` value (deny-by-default, #5105 R1
+ * "F10"). Equal → `{ changed: false }`, the caller performs zero writes and
+ * zero commits. Different → this function ALSO stamps `updated` from
+ * `clock()`; the caller writes + commits.
+ */
+function completeUatSession(content: string, options: { clock?: () => Date } = {}): CompleteUatSessionResult {
+  const clock = options.clock || (() => new Date());
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const uatPredicate = require('./uat-predicate.cjs') as {
+    stripFalsePositiveContexts(content: string): string;
+    parseUatResultItems(cleanContent: string): Array<{ result: string }>;
+  };
+  // Scoped to the `## Tests` section body ONLY — the `## Current Test`
+  // section can itself contain a `### N. Name` heading with no `result:`
+  // line (a still-pending test's own description), which would otherwise be
+  // mis-parsed as a 'missing' (blocking) item and poison the status
+  // computation for a session that is, in fact, fully complete.
+  const testsSection = collectSection(content, (h) => /^tests$/i.test(h.text) && h.level === 2, { levelBounded: true });
+  const cleaned = uatPredicate.stripFalsePositiveContexts(testsSection ? testsSection.body : '');
+  const items = uatPredicate.parseUatResultItems(cleaned);
+  const allPassing = items.length > 0 && items.every((i) => UAT_COMPLETE_SESSION_PASSING_RESULTS.has(i.result));
+  const status: 'complete' | 'partial' = allPassing ? 'complete' : 'partial';
+
+  let candidate = content.replace(/^status:.*$/m, `status: ${status}`);
+  candidate = setCurrentTestComplete(candidate);
+
+  const changed = stripUpdatedValue(content) !== stripUpdatedValue(candidate);
+  if (!changed) {
+    return { changed: false, content, status };
+  }
+
+  const updatedIso = clock().toISOString();
+  candidate = candidate.replace(/^updated:.*$/m, `updated: ${updatedIso}`);
+  return { changed: true, content: candidate, status };
+}
+
+/**
+ * CLI command handler (#5105 R1): `uat.complete-session <uatPath> [--message <m>]`.
+ * Deny-by-default no-op on an unchanged session — zero writes, zero commits
+ * (closes C1 in the #5105 census). On a material change, writes the file and
+ * commits through the existing `cmdCommit` internals (honoring `commit_docs`),
+ * with `cmdCommit`'s own stdout suppressed so this command's own JSON
+ * envelope (`{ changed, status }`) is the only output emitted.
+ */
+function cmdUatCompleteSession(
+  cwd: string,
+  uatPathArg: string | undefined,
+  options: { message?: string } = {},
+  raw: boolean,
+): void {
+  if (!uatPathArg) {
+    error('UAT file required: use uat.complete-session <uatPath>');
+    return;
+  }
+  const resolvedPath = requireSafePath(uatPathArg, cwd, 'UAT file', PathAcceptance.AbsoluteInsideRoot);
+  if (!fs.existsSync(resolvedPath)) {
+    error(`UAT file not found: ${uatPathArg}`);
+    return;
+  }
+  const content = fs.readFileSync(resolvedPath, 'utf-8');
+  const result = completeUatSession(content);
+  if (!result.changed) {
+    output({ changed: false, status: result.status }, raw);
+    return;
+  }
+  fs.writeFileSync(resolvedPath, result.content);
+  const relPath = toPosixPath(path.relative(cwd, resolvedPath));
+  const message = options.message || `test: complete UAT session (${relPath})`;
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const commandsMod = require('./commands.cjs') as {
+    cmdCommit(cwd: string, message: string | undefined, files: string[] | undefined, raw: boolean, amend: boolean, noVerify: boolean): void;
+  };
+  const originalWriteSync = fs.writeSync.bind(fs);
+  // Suppress cmdCommit's own JSON envelope from reaching stdout — this
+  // command's envelope (with `changed`/`status`) is the only one that should
+  // be emitted. Mirrors gsd-tools.cjs's captureStdoutSyncWrites pattern.
+  fs.writeSync = ((fd: number, data: string | Uint8Array, ...rest: unknown[]) => {
+    if (fd === 1) {
+      return Buffer.isBuffer(data) ? data.length : String(data).length;
+    }
+    return (originalWriteSync as (...a: unknown[]) => number)(fd, data, ...rest);
+  }) as typeof fs.writeSync;
+  try {
+    commandsMod.cmdCommit(cwd, message, [relPath], true, false, false);
+  } finally {
+    fs.writeSync = originalWriteSync;
+  }
+
+  output({ changed: true, status: result.status }, raw);
+}
+
 // ─── parseCurrentTest ─────────────────────────────────────────────────────────
 
 function parseCurrentTest(content: string): CurrentTest {
@@ -4044,6 +4190,8 @@ function categorizeItem(rawResult: string, reason?: string, blockedBy?: string):
 export = {
   cmdAuditUat,
   cmdRenderCheckpoint,
+  completeUatSession,
+  cmdUatCompleteSession,
   parseCurrentTest,
   parseUatItems,
   parseUatItemsWithStats,
