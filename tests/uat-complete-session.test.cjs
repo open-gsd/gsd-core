@@ -140,14 +140,15 @@ describe('T2: uat.complete-session with every row passed but status testing and 
   });
 });
 
-describe('T3: boundary — live differs from result only in `updated:` value', () => {
-  test('pure core: changed:false when only `updated` differs', () => {
+describe('T3: boundary — candidate differs from baseline only in `updated:` value', () => {
+  test('pure core: changed:false when only `updated` differs from baseline', () => {
     const completeUatSession = loadCompleteUatSession();
     assert.strictEqual(typeof completeUatSession, 'function', 'completeUatSession must be exported by uat.cjs (R1)');
     const live = completeUatContent({ updated: '2020-01-01T00:00:00Z' });
+    const baseline = completeUatContent({ updated: '2019-06-06T00:00:00Z' });
     const mockClock = () => new Date('2026-05-05T00:00:00Z');
-    const result = completeUatSession(live, { clock: mockClock });
-    assert.strictEqual(result.changed, false, 'an updated-only diff is not material');
+    const result = completeUatSession(live, { clock: mockClock, baseline });
+    assert.strictEqual(result.changed, false, 'an updated-only diff against baseline is not material');
   });
 });
 
@@ -244,7 +245,8 @@ describe('T4: property — idempotence and non-updated-byte sensitivity (seed pi
           ].join('\n');
           const clock = () => new Date('2026-06-01T00:00:00Z');
           const first = completeUatSession(content, { clock });
-          const second = completeUatSession(first.content, { clock });
+          // Idempotence: baseline = live = the first call's own result content.
+          const second = completeUatSession(first.content, { clock, baseline: first.content });
           assert.strictEqual(second.changed, false, 'second call over the first result must be a no-op');
         },
       ),
@@ -255,10 +257,150 @@ describe('T4: property — idempotence and non-updated-byte sensitivity (seed pi
     const completeUatSession = loadCompleteUatSession();
     const clock = () => new Date('2026-06-01T00:00:00Z');
     const live = completeUatContent();
-    const first = completeUatSession(live, { clock });
-    assert.strictEqual(first.changed, false, 'sanity: already-complete doc is a no-op');
-    const mutated = first.content.replace('result: pass\n\n### 2. Submit Button', 'result: [issue]\n\n### 2. Submit Button');
-    const second = completeUatSession(mutated, { clock });
+    const first = completeUatSession(live, { clock, baseline: live });
+    assert.strictEqual(first.changed, false, 'sanity: already-complete doc is a no-op against its own baseline');
+    // baseline = the original complete doc; live = the same doc with one
+    // non-`updated` byte mutated.
+    const mutated = live.replace('result: pass\n\n### 2. Submit Button', 'result: [issue]\n\n### 2. Submit Button');
+    const second = completeUatSession(mutated, { clock, baseline: live });
     assert.strictEqual(second.changed, true, 'a material byte change must be detected');
+  });
+});
+
+describe('S7: `## Current Test` replacement is fence-aware (#5105 review)', () => {
+  test('a `## `-looking line inside a fenced code block does not end the section early', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const content = [
+      '---',
+      'status: testing',
+      'phase: 01-foo',
+      'started: 2026-01-01T00:00:00Z',
+      'updated: 2026-01-01T00:00:00Z',
+      '---',
+      '',
+      '## Current Test',
+      '',
+      '```',
+      'some code',
+      '## not a real heading',
+      '```',
+      '',
+      '### 2. Submit Button',
+      'expected: Submitting shows loading state',
+      '',
+      '## Tests',
+      '',
+      '### 1. Login Form',
+      'expected: Form displays correctly',
+      'result: pass',
+      '',
+      '### 2. Submit Button',
+      'expected: Submitting shows loading state',
+      'result: pass',
+      '',
+    ].join('\n');
+    const result = completeUatSession(content, { clock: () => new Date('2026-05-05T00:00:00Z') });
+    assert.strictEqual(result.changed, true);
+    assert.match(result.content, /\[testing complete\]/);
+    const testsHeadingCount = (result.content.match(/^## Tests$/gm) || []).length;
+    assert.strictEqual(testsHeadingCount, 1, 'the real ## Tests heading must survive exactly once');
+    assert.doesNotMatch(
+      result.content,
+      /not a real heading/,
+      'a hand-rolled `^## ` scanner would stop at the fenced fake heading, leaving it (and the ' +
+      'orphaned real content past it) in the output instead of replacing through to ## Tests',
+    );
+  });
+});
+
+describe('S8: frontmatter-scoped status/updated writes (#5105 review)', () => {
+  test('a body line `status: foo` (outside frontmatter) is untouched', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const content = completeUatContent().replace(
+      'expected: Submitting shows loading state',
+      'expected: Submitting shows loading state\nstatus: foo',
+    );
+    const result = completeUatSession(content, { clock: () => new Date('2026-05-05T00:00:00Z'), baseline: null });
+    assert.match(result.content, /^status: foo$/m, 'the body line must survive verbatim');
+    // The frontmatter's own status line is the only one this call may alter.
+    const frontmatterBlock = result.content.slice(0, result.content.indexOf('\n---', 4) + 4);
+    assert.match(frontmatterBlock, /^status: complete$/m);
+  });
+
+  test('frontmatter lacking `updated:` gains one when changed', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const content = [
+      '---',
+      'status: testing',
+      'phase: 01-foo',
+      'started: 2026-01-01T00:00:00Z',
+      '---',
+      '',
+      '## Current Test',
+      '',
+      '### 2. Submit Button',
+      'expected: Submitting shows loading state',
+      '',
+      '## Tests',
+      '',
+      '### 1. Login Form',
+      'expected: Form displays correctly',
+      'result: pass',
+      '',
+      '### 2. Submit Button',
+      'expected: Submitting shows loading state',
+      'result: pass',
+      '',
+    ].join('\n');
+    const result = completeUatSession(content, { clock: () => new Date('2026-05-05T12:00:00Z'), baseline: null });
+    assert.strictEqual(result.changed, true);
+    assert.match(result.content, /^updated: 2026-05-05T12:00:00\.000Z$/m, 'a gained `updated:` key must be stamped from the clock');
+  });
+});
+
+describe('S9: committed/reason reporting (#5105 review — no fs.writeSync monkeypatch)', () => {
+  test('a normal material change reports committed:true', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const uatPath = path.join(phaseDir, '01-UAT.md');
+    fs.writeFileSync(uatPath, testingCompleteUatContent());
+    const { execFileSync } = require('child_process');
+    execFileSync('git', ['add', '-A'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+    execFileSync('git', ['commit', '-q', '-m', 'seed UAT'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+
+    const result = runGsdTools(['query', 'uat.complete-session', '.planning/phases/01-foo/01-UAT.md'], projectDir);
+    assert.ok(result.success, `expected success: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.changed, true);
+    assert.strictEqual(parsed.committed, true, 'a real commit must be reported, not assumed');
+    assert.strictEqual(parsed.reason, undefined, 'no reason is reported on a successful commit');
+  });
+
+  test('commit_docs:false reports committed:false with the skip reason', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const uatPath = path.join(phaseDir, '01-UAT.md');
+    fs.writeFileSync(uatPath, testingCompleteUatContent());
+    const configPath = path.join(projectDir, '.planning', 'config.json');
+    const config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : {};
+    config.commit_docs = false;
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    const { execFileSync } = require('child_process');
+    execFileSync('git', ['add', '-A'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+    execFileSync('git', ['commit', '-q', '-m', 'seed UAT + commit_docs:false'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+    const headBefore = gitHeadCount(projectDir);
+
+    const result = runGsdTools(['query', 'uat.complete-session', '.planning/phases/01-foo/01-UAT.md'], projectDir);
+    assert.ok(result.success, `expected success: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.changed, true, 'the session status/Current Test change is still material');
+    assert.match(fs.readFileSync(uatPath, 'utf-8'), /status: complete/, 'the file is still written even when the commit is skipped');
+    assert.strictEqual(parsed.committed, false);
+    assert.strictEqual(parsed.reason, 'skipped_commit_docs_false');
+    assert.strictEqual(gitHeadCount(projectDir), headBefore, 'no commit was made');
   });
 });
