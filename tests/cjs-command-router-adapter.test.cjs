@@ -249,47 +249,68 @@ describe('cjs-command-router-adapter routeCjsCommandFamily', () => {
 {
   const { describe: __foldDescribe } = require('node:test');
   __foldDescribe("folded:bug-224-pick-stdout-capture (consolidation epic #1969 B2 #1971)", () => {
-// allow-test-rule: structural-implementation-guard (see #224)
 // Bug #224 is a platform-specific (Node 24 + Windows) flake in `--pick` where
-// stdout interception can produce non-deterministic failures. We lock the seam
-// contract structurally until we have a deterministic Windows reproduction
-// harness in CI.
+// stdout interception could return `undefined` from the patched fs.writeSync
+// instead of a written-byte count. The interception lives in ONE shared helper,
+// `captureStdoutSyncWrites` (src/io.cts, #5105 S9), used by gsd-tools.cjs's
+// `--pick`/@file: path and by uat.cts — so the contract is asserted
+// behaviorally against that helper, not by grepping gsd-tools.cjs's main().
 
 'use strict';
 
-const { describe, test, before } = require('node:test');
+const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools } = require('./helpers.cjs');
-
-const GSD_TOOLS_SRC = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+const { runGsdTools, createTempDir, cleanup } = require('./helpers.cjs');
+const { captureStdoutSyncWrites } = require('../gsd-core/bin/lib/io.cjs');
 
 describe('bug #224: --pick stdout capture contract', () => {
-  let src;
-
-  before(() => {
-    // allow-test-rule: structural-implementation-guard (see #224) — locks the
-    // main()-body byte-length seam contract structurally (no deterministic
-    // Windows repro harness yet); see block header above.
-    src = fs.readFileSync(GSD_TOOLS_SRC, 'utf-8');
-  });
-
   test('--pick output still succeeds for current-timestamp command', () => {
     const result = runGsdTools(['current-timestamp', '--pick', 'timestamp']);
     assert.strictEqual(result.success, true, result.error || 'expected command to succeed');
     assert.match(result.output, /^\d{4}-\d{2}-\d{2}T/, 'expected ISO timestamp output');
   });
 
-  test('stdout interception for fd=1 returns a byte count (never undefined)', () => {
-    const mainStart = src.indexOf('async function main()');
-    assert.ok(mainStart !== -1, 'main() must exist');
-    const mainSrc = src.slice(mainStart);
-
-    assert.ok(
-      mainSrc.includes('Buffer.byteLength(') || mainSrc.includes('return data.length'),
+  test('stdout interception for fd=1 returns a byte count (never undefined)', async () => {
+    const originalWriteSync = fs.writeSync;
+    const counts = [];
+    const captured = await captureStdoutSyncWrites(() => {
+      counts.push(fs.writeSync(1, ''));
+      counts.push(fs.writeSync(1, 'a'));
+      counts.push(fs.writeSync(1, 'h\u00e9\u20ac'));
+      counts.push(fs.writeSync(1, Buffer.from('xyz', 'utf-8')));
+      counts.push(fs.writeSync(1, 'ab', null, 'utf16le'));
+    });
+    assert.deepStrictEqual(
+      counts,
+      [0, 1, Buffer.byteLength('h\u00e9\u20ac', 'utf-8'), 3, 4],
       'stdout interception must return written-byte counts for fd=1 captures'
     );
+    assert.strictEqual(captured, 'ah\u00e9\u20acxyzab');
+    assert.strictEqual(fs.writeSync, originalWriteSync, 'fs.writeSync must be restored after capture');
+  });
+
+  test('writes to fds other than 1 pass through with the real byte count', async () => {
+    const dir = createTempDir('gsd-224-');
+    const file = path.join(dir, 'out.txt');
+    try {
+      const fd = fs.openSync(file, 'w');
+      let n;
+      let captured;
+      try {
+        captured = await captureStdoutSyncWrites(() => {
+          n = fs.writeSync(fd, 'passthrough');
+        });
+      } finally {
+        fs.closeSync(fd);
+      }
+      assert.strictEqual(n, 'passthrough'.length);
+      assert.strictEqual(captured, '');
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), 'passthrough');
+    } finally {
+      cleanup(dir);
+    }
   });
 });
   });

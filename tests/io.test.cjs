@@ -606,22 +606,26 @@ describe('bug #1891: @file: resolution in gsd-tools.cjs', () => {
     src = fs.readFileSync(GSD_TOOLS_SRC, 'utf-8');
   });
 
-  test('main() intercepts stdout and resolves @file: references', () => {
-    // The non-pick path should have @file: resolution, just like the --pick path
-    assert.ok(
-      src.includes("captured.startsWith('@file:')") ||
-      src.includes('captured.startsWith(\'@file:\')'),
-      'main() should check for @file: prefix in captured output'
-    );
+  // The @file: check + read live in ONE shared helper, `resolveAtFileOutput`
+  // (src/io.cts, #5105 review finding 7), which gsd-tools.cjs's main() calls on
+  // both the --pick and the non-pick path — asserted behaviorally here.
+  test('resolveAtFileOutput replaces an @file: reference with the file content', () => {
+    const { createTempDir, cleanup } = require('./helpers.cjs');
+    const dir = createTempDir('gsd-1891-');
+    try {
+      const file = path.join(dir, 'payload.json');
+      const content = '{"big":"héllo"}\n';
+      fs.writeFileSync(file, content, 'utf-8');
+      assert.strictEqual(io.resolveAtFileOutput(`@file:${file}`), content);
+    } finally {
+      cleanup(dir);
+    }
   });
 
-  test('@file: resolution reads file content via readFileSync', () => {
-    // Verify the resolution reads the actual file
-    assert.ok(
-      src.includes("readFileSync(captured.slice(6)") ||
-      src.includes('readFileSync(captured.slice(6)'),
-      '@file: resolution should read file at the path after the prefix'
-    );
+  test('resolveAtFileOutput leaves non-@file: output untouched', () => {
+    for (const captured of ['', '@file', '@fil:x', ' @file:/x', '{"ok":true}', 'x@file:/y']) {
+      assert.strictEqual(io.resolveAtFileOutput(captured), captured, JSON.stringify(captured));
+    }
   });
 
   test('stdout interception wraps runCommand in the non-pick path', () => {
