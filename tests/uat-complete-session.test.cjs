@@ -151,15 +151,63 @@ describe('T3: boundary — live differs from result only in `updated:` value', (
   });
 });
 
-describe('T3b: boundary — live complete, one row flips to an issue', () => {
+describe('T3b: boundary — live complete, one row flips to blocked', () => {
   test('pure core: changed:true, status:partial', () => {
     const completeUatSession = loadCompleteUatSession();
     const live = completeUatContent().replace(
       'result: pass\n\n### 2. Submit Button',
-      'result: [issue]\n\n### 2. Submit Button',
+      'result: blocked\n\n### 2. Submit Button',
     );
     const result = completeUatSession(live, { clock: () => new Date('2026-05-05T00:00:00Z') });
     assert.strictEqual(result.changed, true);
+    assert.strictEqual(result.status, 'partial');
+  });
+});
+
+describe('T3c: boundary — an `issue` row with everything else resolved is a definitive result', () => {
+  test('pure core: status:complete (issue never blocks completion on its own)', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const live = completeUatContent().replace(
+      'result: pass\n\n### 2. Submit Button',
+      'result: issue\n\n### 2. Submit Button',
+    );
+    const result = completeUatSession(live, { clock: () => new Date('2026-05-05T00:00:00Z') });
+    assert.strictEqual(result.status, 'complete');
+  });
+});
+
+describe('T3d: boundary — a `skipped` row WITH a reason is a definitive result', () => {
+  test('pure core: status:complete', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const live = completeUatContent().replace(
+      'result: pass\n\n### 2. Submit Button',
+      'result: skipped\nreason: not applicable on this platform\n\n### 2. Submit Button',
+    );
+    const result = completeUatSession(live, { clock: () => new Date('2026-05-05T00:00:00Z') });
+    assert.strictEqual(result.status, 'complete');
+  });
+});
+
+describe('T3e: boundary — a `skipped` row with NO reason is partial', () => {
+  test('pure core: status:partial', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const live = completeUatContent().replace(
+      'result: pass\n\n### 2. Submit Button',
+      'result: skipped\n\n### 2. Submit Button',
+    );
+    const result = completeUatSession(live, { clock: () => new Date('2026-05-05T00:00:00Z') });
+    assert.strictEqual(result.status, 'partial');
+  });
+});
+
+describe('T3f: boundary — a `[pending]` row is partial', () => {
+  test('pure core: status:partial', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const live = completeUatContent().replace(
+      'result: pass\n\n### 2. Submit Button',
+      'result: [pending]\n\n### 2. Submit Button',
+    );
+    const result = completeUatSession(live, { clock: () => new Date('2026-05-05T00:00:00Z') });
     assert.strictEqual(result.status, 'partial');
   });
 });
