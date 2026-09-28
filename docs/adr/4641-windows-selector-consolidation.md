@@ -356,3 +356,43 @@ why this narrowing rests on an enforced invariant rather than on optimism.
   a return shape, template-literal code fixtures fed to an ESLint rule under test, and the
   search-anchor string literals described above. There is no false negative. The precondition stays
   exactly as written, and this paragraph exists so the same apparent bug is not "fixed" next time.
+
+## Amendment (#5074): split platform-sensitive tests into `.platform` siblings
+
+- **Date:** 2026-09-28
+- **Issue:** [#5074](https://github.com/open-gsd/gsd-core/issues/5074)
+
+The tier grew from 255 to 280 files in the sixteen days after this ADR, and Windows runner-minutes
+grew with it. Every change so far altered which files run, never how much of a file runs. The
+heaviest tier files carried their platform signal in a handful of tests: `tests/state.test.cjs`
+put 654 tests on Windows for one symlink test.
+
+**Decision.** A test file may be split into `tests/<name>.test.cjs` and a
+`tests/<name>.platform.test.cjs` sibling holding the tests that need a real OS. Selection stays a
+pure function of content: the sibling carries the signals, so it is in the tier; the base carries
+none, so it is not. The generator adds an invariant on top of that, and fails rather than
+excluding anything:
+
+- a base with a sibling must carry no Windows signal (`base-has-signal`), so a platform test added
+  to the wrong file is caught at `lint:generated-sync` instead of quietly putting the whole base
+  back on Windows;
+- a sibling must carry a signal (`sibling-without-signal`);
+- a base listed in `ALWAYS_REAL_OS` cannot be split (`base-always-real-os`).
+
+`suiteOf('<name>.platform.test.cjs')` is `null`, so a sibling is a unit-suite file and every Linux
+shard runs both halves.
+
+**The five heaviest files were split in the same change** (state, commands, phase, config, init).
+Most of what kept a base in the tier was not a platform test: CLI and `git` fixtures called
+through raw `child_process` (moved to the process seam, which Decision 2 already ruled is not a
+platform signal), `{ HOME, USERPROFILE }` hermeticity objects (now `homeSandboxEnv(dir)` in
+`tests/helpers.cjs`), and comments that mention a signal word.
+
+**Rejected.** Excluding a base whenever a sibling exists, as the issue first proposed: that turns
+a file name into an exclusion override, which epic #4589 Phase 2 rules out ("centrally-enumerated,
+not a naming convention"), and a platform test later written into the base would lose Windows
+coverage silently. A per-base allowlist of residual signal categories: category-granular, so
+allowing `raw-child-process` for one file exempts every future raw spawn in it. Per-test filtering
+on Windows (`--test-name-pattern`): a second selector, which this ADR removed.
+
+How to split a file: [docs/how-to/split-platform-sensitive-tests.md](../how-to/split-platform-sensitive-tests.md).

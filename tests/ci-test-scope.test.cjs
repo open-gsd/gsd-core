@@ -318,10 +318,19 @@ describe('ci-test-scope superset invariant (#494, rescinded by #4421)', () => {
   });
 
   test('A2: a changed test file with no windows hint still triggers full_matrix, with no side lane (#4641)', () => {
-    // commands.test.cjs matches none of the WINDOWS_HINTS substrings — under
-    // the old #494/#4421 behavior it still joined the windows lane. Post-#4641
-    // there is no windows lane to join; full_matrix is the sole signal.
-    const result = scopeFor(['tests/commands.test.cjs']);
+    // commands.platform.test.cjs matches none of the WINDOWS_HINTS substrings
+    // — under the old #494/#4421 behavior it still joined the windows lane.
+    // Post-#4641 there is no windows lane to join; full_matrix is the sole
+    // signal. #5074 split tests/commands.test.cjs's platform-sensitive tests
+    // out into tests/commands.platform.test.cjs, so the conformance-tier
+    // membership (and therefore this example) moved with them — asserted as a
+    // precondition below so a future re-split fails loudly here instead of
+    // silently flipping this test's expected outcome.
+    const { CONFORMANCE_TIER_FILES } = require('../scripts/lib/platform-conformance-tier.generated.cjs');
+    const file = 'tests/commands.platform.test.cjs';
+    assert.ok(CONFORMANCE_TIER_FILES.includes(file),
+      `precondition: ${file} must be in CONFORMANCE_TIER_FILES for this test to discriminate`);
+    const result = scopeFor([file]);
     assert.strictEqual(result.full_matrix, true,
       `expected full_matrix=true (rescinded #494 carve-out, see #4421), got: ${JSON.stringify(result)}`);
     assert.strictEqual(Object.hasOwn(result, 'windows_tests'), false,

@@ -141,6 +141,38 @@ function buildTestMap(prodPrefixes, allTestFiles) {
   return map;
 }
 
+// #5074: a `<stem>.platform.test.cjs` alongside `<stem>.test.cjs` (or
+// `.test.ts`) in the SAME directory is the other half of that primary file —
+// the platform-sensitive slice extracted so the Windows CI selector runs
+// only the small sibling — not an additional test file. Exclude it from the
+// per-module count and from the allowlist identity comparison. A
+// `.platform.test.cjs` with no base file in the same directory counts
+// normally, so the rule cannot be used to smuggle in new standalone files.
+// An empty stem (bare `platform.test.cjs`) is never treated as a sibling.
+const PLATFORM_SIBLING_RE = /^(.+)\.platform\.test\.(cjs|ts)$/;
+
+function isSplitSibling(fileBasename, siblingBasenamesInDir) {
+  const m = fileBasename.match(PLATFORM_SIBLING_RE);
+  if (!m) return false;
+  const stem = m[1];
+  if (!stem) return false;
+  return siblingBasenamesInDir.includes(`${stem}.test.cjs`) ||
+         siblingBasenamesInDir.includes(`${stem}.test.ts`);
+}
+
+function excludeSplitSiblings(testFiles) {
+  const basenamesByDir = new Map();
+  for (const f of testFiles) {
+    const dir = path.dirname(f);
+    if (!basenamesByDir.has(dir)) basenamesByDir.set(dir, []);
+    basenamesByDir.get(dir).push(path.basename(f));
+  }
+  return testFiles.filter(f => {
+    const dir = path.dirname(f);
+    return !isSplitSibling(path.basename(f), basenamesByDir.get(dir));
+  });
+}
+
 function loadAllowlist() {
   try { return JSON.parse(fs.readFileSync(ALLOWLIST_PATH, 'utf-8')).modules || {}; }
   catch (_) { return {}; }
@@ -160,6 +192,7 @@ function loadAllowlist() {
  * Returns { verdict, prefix, count, knownFiles, novel, stale, files }
  */
 function evaluateLint({ prefix, testFiles, allowlist }) {
+  testFiles = excludeSplitSiblings(testFiles);
   const count = testFiles.length;
   const entry = allowlist[prefix];
   const currentNames = testFiles.map(f => path.basename(f));
@@ -258,7 +291,7 @@ function run() {
 }
 
 module.exports = {
-  Verdict, evaluateLint, testEffectivePrefix, prodPrefix,
+  Verdict, evaluateLint, testEffectivePrefix, prodPrefix, isSplitSibling,
   _collectProdPrefixes: collectProdPrefixes,
   _collectAllTestFiles: collectAllTestFiles,
   _buildTestMap: buildTestMap,

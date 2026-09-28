@@ -358,6 +358,21 @@ function runGsdTools(args, cwd = process.cwd(), env = {}) {
   return toLegacyShape(first);
 }
 
+/**
+ * Build a hermeticity env override that redirects the home directory for a
+ * CHILD gsd-tools process portably: `os.homedir()` reads `HOME` on POSIX and
+ * `USERPROFILE` on Windows, so passing `{ HOME }` alone is not hermetic on
+ * Windows — a child there still falls back to the real `USERPROFILE` and can
+ * read a developer's `~/.gsd/defaults.json` or key files. Returns a NEW
+ * object each call so callers can safely spread it into a larger env literal.
+ *
+ * @param {string} dir - directory to use as the sandboxed home.
+ * @returns {{HOME: string, USERPROFILE: string}}
+ */
+function homeSandboxEnv(dir) {
+  return { HOME: dir, USERPROFILE: dir };
+}
+
 // Create a bare temp directory (no .planning/ structure)
 function createTempDir(prefix = 'gsd-test-') {
   return fs.mkdtempSync(path.join(require('os').tmpdir(), prefix));
@@ -1294,7 +1309,7 @@ function withAmbientCapabilityHome(t, prefix, id, point) {
   return home;
 }
 
-module.exports = { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, tmpRootCandidates, readFileNormalized, readWorkflowCombined, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, SESSION_ENV_KEYS, saveSessionEnv, restoreSessionEnv, clearSessionEnv, isolateWorkstreamEnv, restoreWorkstreamEnv, TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS, scrubConfigLocationEnv, installSpawnEnv, installSpawnHome, sandboxHome, writePackageSourceMarkerFixture, writeAmbientCapabilityGate, withAmbientCapabilityHome, TEST_HOME_SANDBOX_MARKER, mockPartialWriteThenThrow, captureFdSync, suppressFdAsync };
+module.exports = { runGsdTools, homeSandboxEnv, createTempDir, createTempProject, createTempGitProject, cleanup, tmpRootCandidates, readFileNormalized, readWorkflowCombined, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, SESSION_ENV_KEYS, saveSessionEnv, restoreSessionEnv, clearSessionEnv, isolateWorkstreamEnv, restoreWorkstreamEnv, TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS, scrubConfigLocationEnv, installSpawnEnv, installSpawnHome, sandboxHome, writePackageSourceMarkerFixture, writeAmbientCapabilityGate, withAmbientCapabilityHome, TEST_HOME_SANDBOX_MARKER, mockPartialWriteThenThrow, captureFdSync, suppressFdAsync };
 
 // Lazy, for the reason builtLib() is lazy: reading either of these is what
 // forces the built-lib require, so a test file that needs neither can still

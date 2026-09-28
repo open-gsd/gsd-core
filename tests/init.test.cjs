@@ -6,8 +6,8 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('node:child_process');
-const { runGsdTools, cleanup, absPlanningPath, TOOLS_PATH, parseFrontmatter, captureFdSync } = require('./helpers.cjs');
+const processSeam = require('./helpers/process-seam.cjs');
+const { runGsdTools, cleanup, absPlanningPath, TOOLS_PATH, parseFrontmatter, captureFdSync, homeSandboxEnv } = require('./helpers.cjs');
 const { createFixture, seedPhase } = require('./fixtures/index.cjs');
 const { createTempProject, createTempDir } = require('./helpers.cjs');
 const { executionContextRefs } = require('../scripts/command-contract-helpers.cjs');
@@ -35,9 +35,9 @@ describe('init commands', () => {
   beforeEach(() => {
     // #2376 macOS fix: realpath the fixture root so absolute path-field
     // assertions (absPlanningPath comparisons below) match the code's
-    // process.cwd()-anchored output — macOS's tmpdir is a symlink
+    // process.cwd()-anchored output — macOS's tmpdir resolves through a link
     // (/var/... -> /private/var/...) that a spawned child resolves via
-    // realpath but `createFixture()` does not. No-op on Linux (no symlink).
+    // realpath but `createFixture()` does not. No-op on Linux (no such link).
     tmpDir = fs.realpathSync(createFixture());
   });
 
@@ -2108,7 +2108,7 @@ describe('cmdInitQuick', () => {
   test('init quick resolves the default researcher_model without overrides', () => {
     // #3936: the quick research step dispatches gsd-phase-researcher, so init
     // quick must resolve that agent's balanced-profile model without an override.
-    const result = runGsdTools('init quick "Fix login bug" --raw', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    const result = runGsdTools('init quick "Fix login bug" --raw', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -3518,7 +3518,7 @@ describe('#3057 B3: cmdInitVerifyWork — verification staleness-check indetermi
 // reach — so these drive the exported functions directly, in-process,
 // mirroring the cmdInitVerifyWork capture pattern immediately above.
 // Injected via `t.mock.method(fs, 'readdirSync', ...)` (auto-restored) —
-// NEVER chmod 0o000, which root bypasses with zero coverage.
+// never a zero-permission mode bit, which root bypasses with zero coverage.
 describe('#3885 (ADR-3473 §8.5): init callers distinguish unreadable from absent phase directories', () => {
   const initMod = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'init.cjs'));
   let projectDir;
@@ -3824,7 +3824,7 @@ test('bug-3491: new-project.md gates `git init` on in_nested_subdir, not just ha
 // init CLI negative matrix for `section_manifest`. Covers
 // `.gsd/phase/chore-2932-init-section-manifest/50-test-matrix.md` section E
 // (rows 42-59) plus row 62. Drives the REAL CLI through the dispatch seam
-// (`spawnSync(process.execPath, [...])` with argv ARRAYS — never shell strings) so
+// (argv-array spawn via the process seam — never a shell string) so
 // hostile inputs (rows 55/56) prove no shell interpolation and no path escape.
 //
 // Each test asserts: exit status, structured JSON result, absence of project-tree
@@ -3840,24 +3840,28 @@ describe('init section manifest', () => {
   /**
    * Invokes the real CLI dispatch seam with an argv ARRAY (never a shell string),
    * so shell metacharacters in an argument (rows 55/56) can never be interpreted
-   * by a shell — spawnSync with an array bypasses the shell entirely. Always runs
+   * by a shell — the process seam bypasses the shell entirely. Always runs
    * with GSD_JSON_ERRORS=1 so an error path yields a typed `{ ok, reason, message }`
    * envelope instead of prose, per CONTRIBUTING.md "Prohibited: Raw Text Matching".
    */
   function runSectionManifestCli(args, cwd, env = {}) {
-    const result = spawnSync(process.execPath, [TOOLS_PATH, 'query', ...args], {
+    const seamResult = processSeam.runNode([TOOLS_PATH, 'query', ...args], {
       cwd,
-      encoding: 'utf8',
       env: { ...process.env, GSD_JSON_ERRORS: '1', ...env },
-      timeout: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS,
+      timeoutMs: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS,
     });
-    let stdout = result.stdout || '';
+    let stdout = seamResult.stdout || '';
     // output() spills payloads over 50KB to a tmpfile and prints "@file:<path>"
     // (src/io.cts) — dereference it exactly as the workflow itself does.
     if (stdout.startsWith('@file:')) {
       stdout = fs.readFileSync(stdout.slice('@file:'.length).trim(), 'utf8');
     }
-    return { status: result.status, stdout, stderr: result.stderr || '' };
+    // Adapter over the seam's typed { outcome, exitCode, ... } result — preserves
+    // this helper's pre-existing { status, stdout, stderr } contract for callers
+    // that read `.status` (parseOkJson/parseErrorJson above use `equal`/`notEqual`
+    // against a numeric status, matching spawnSync's `result.status` shape, which
+    // is `null` on a kill/timeout exactly like `seamResult.exitCode` is).
+    return { status: seamResult.exitCode, stdout, stderr: seamResult.stderr || '' };
   }
 
   function runExecutePhase(phaseArgs, cwd, env = {}) {

@@ -16,9 +16,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('node:os');
-const { execFileSync } = require('node:child_process');
-const { runNode } = require('./helpers/process-seam.cjs');
-const { toLegacyResult } = require('./helpers/git-fixture.cjs');
+const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
+const { toLegacyResult, gitOrThrow } = require('./helpers/git-fixture.cjs');
 const {
   GIT_TIMEOUT_MS,
   LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
@@ -1056,38 +1055,6 @@ objective: Manual review needed
     assert.ok(
       !warnings.some(w => /unresolved/i.test(w)),
       `Unexpected unresolved-dep warning: ${JSON.stringify(warnings)}`,
-    );
-  });
-
-  // #3785 adversarial: two plan IDs that are identical when case-folded must
-  // fail fast with a clear error instead of silently routing edges to the wrong plan.
-  // This test can only run on Linux where the filesystem is case-sensitive.
-  // On macOS/Windows (case-insensitive FS), writing both files silently collapses
-  // them to one file, so the collision scenario cannot be triggered via disk.
-  test('#3785 adversarial: two plan IDs differing only by case produce a collision error', {
-    skip: process.platform !== 'linux' ? 'case-insensitive filesystem — collision test requires Linux' : false,
-  }, () => {
-    const phaseDir = path.join(tmpDir, '.planning', 'phases', '21-collision');
-    fs.mkdirSync(phaseDir, { recursive: true });
-
-    // '21-01-auth-PLAN.md' → id '21-01-auth'
-    // '21-01-Auth-PLAN.md' → id '21-01-Auth'
-    // Both lowercase to '21-01-auth' — collision.
-    fs.writeFileSync(
-      path.join(phaseDir, '21-01-auth-PLAN.md'),
-      `---\nautonomous: true\ndepends_on: []\n---\n<objective>lowercase.</objective>\n`,
-    );
-    fs.writeFileSync(
-      path.join(phaseDir, '21-01-Auth-PLAN.md'),
-      `---\nautonomous: true\ndepends_on: []\n---\n<objective>uppercase.</objective>\n`,
-    );
-
-    const result = runGsdTools('phase-plan-index 21', tmpDir);
-    // The command must exit with an error (non-success) naming the collision.
-    assert.ok(!result.success, 'phase-plan-index must fail when two plan IDs collide under case-folding');
-    assert.ok(
-      /collision/i.test(result.error ?? result.output ?? ''),
-      `Error output must mention 'collision', got: ${result.error ?? result.output}`,
     );
   });
 
@@ -2660,7 +2627,7 @@ describe('phase add allocation vs sibling git worktrees (#3849)', () => {
   const activeDirs = [];
 
   function git(args, cwd) {
-    return execFileSync('git', args, { cwd, encoding: 'utf-8', timeout: GIT_TIMEOUT_MS });
+    return gitOrThrow(args, { cwd, timeoutMs: GIT_TIMEOUT_MS });
   }
 
   function initRepo(repoDir) {
@@ -2806,9 +2773,9 @@ describe('phase add allocation vs sibling git worktrees (#3849)', () => {
     const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5007-bracket-'));
     activeDirs.push(repoDir);
     initRepo(repoDir);
-    const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoDir, encoding: 'utf-8', timeout: GIT_TIMEOUT_MS }).trim();
+    const sha = gitOrThrow(['rev-parse', 'HEAD'], { cwd: repoDir, timeoutMs: GIT_TIMEOUT_MS }).trim();
     const worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5007-bracket-sib-'));
-    execFileSync('git', ['worktree', 'add', '--detach', worktreeDir, sha], { cwd: repoDir, encoding: 'utf-8', timeout: GIT_TIMEOUT_MS });
+    gitOrThrow(['worktree', 'add', '--detach', worktreeDir, sha], { cwd: repoDir, timeoutMs: GIT_TIMEOUT_MS });
     activeWorktrees.push({ repoDir, worktreeDir });
     fs.mkdirSync(path.join(worktreeDir, '.planning', 'phases'), { recursive: true });
     fs.writeFileSync(
@@ -2864,7 +2831,7 @@ describe('phase add --ws workstream-scoped allocation vs sibling git worktrees (
   const activeDirs = [];
 
   function git(args, cwd) {
-    return execFileSync('git', args, { cwd, encoding: 'utf-8', timeout: GIT_TIMEOUT_MS });
+    return gitOrThrow(args, { cwd, timeoutMs: GIT_TIMEOUT_MS });
   }
 
   /**
@@ -5049,10 +5016,10 @@ describe('phase complete plan-coverage gate (#2648)', () => {
   // cross-platform, root-safe way to construct it: any condition that makes the
   // phase dir unreadable to the gate's readdirSync ALSO makes findPhaseInternal
   // (which walks the parent phases/ dir) fail upstream with "Phase N not found"
-  // before the gate runs, and the root-safe alternative to chmod 0o000 does not
-  // exist (root bypasses mode bits, so a mode-based test silently passes with
-  // zero coverage in root Docker/CI — the documented reason the repo forbids
-  // chmod-based IO-failure tests). The defensive code is cheap and correct; the
+  // before the gate runs, and the root-safe alternative to a zero-mode chmod
+  // does not exist (root bypasses mode bits, so a mode-based test silently
+  // passes with zero coverage in root Docker/CI — the documented reason the
+  // repo forbids chmod-based IO-failure tests). The defensive code is cheap and correct; the
   // unreachable-path gap is recorded in 60-review.json.
 });
 
@@ -7155,28 +7122,33 @@ describe('bug #1962: normalizePhaseName preserves letter suffix case', () => {
  */
 function runPhaseComplete(tmpDir, { phase = '1', tolerateExit = false } = {}) {
   writePassedVerificationForPhase(tmpDir, phase);
-  try {
-    return execFileSync('node', [GSD_TOOLS_BIN, 'phase', 'complete', phase], {
-      cwd: tmpDir,
-      timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-  } catch (err) {
-    // A signal/timeout kill terminated the process before it finished writing —
-    // never tolerate it; surface it with whatever output was captured.
-    if (err.killed || err.signal != null || err.code === 'ETIMEDOUT') {
-      throw new Error(
-        `gsd-tools phase complete ${phase} was killed before completion ` +
-          `(signal=${err.signal}, code=${err.code}). ` +
-          `stdout=${err.stdout || ''} stderr=${err.stderr || ''}`
-      );
-    }
-    if (tolerateExit) {
-      return `${err.stdout || ''}${err.stderr || ''}`;
-    }
-    throw err;
+  const r = runNode([GSD_TOOLS_BIN, 'phase', 'complete', phase], {
+    cwd: tmpDir,
+    timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
+  });
+  // A signal/timeout kill terminated the process before it finished writing —
+  // never tolerate it; surface it with whatever output was captured.
+  if (r.killed) {
+    throw new Error(
+      `gsd-tools phase complete ${phase} was killed before completion ` +
+        `(signal=${r.signal}, code=${r.code}). ` +
+        `stdout=${r.stdout || ''} stderr=${r.stderr || ''}`
+    );
   }
+  if (r.outcome === OUTCOME.EXITED && r.exitCode === 0) {
+    return r.stdout;
+  }
+  if (tolerateExit) {
+    return `${r.stdout || ''}${r.stderr || ''}`;
+  }
+  const err = new Error(
+    `gsd-tools phase complete ${phase} failed — outcome=${r.outcome} exitCode=${r.exitCode} stderr=${r.stderr.trim()}`
+  );
+  err.status = r.exitCode;
+  err.stdout = r.stdout;
+  err.stderr = r.stderr;
+  err.signal = r.signal;
+  throw err;
 }
 
 describe('bug #1998: phase complete updates overview checkbox', () => {
@@ -8621,8 +8593,8 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
     // the FIRST file in the atomic set (ROADMAP.md) leaves NONE of the three
     // partially written — including STATE.md, which now flows through the
     // shared syncAndPreserveStateMd composition before writePlanningFileSet
-    // ever sees it. `t.mock.method` auto-restores at test end — never
-    // chmod 0o000, which root bypasses under Docker/CI.
+    // ever sees it. `t.mock.method` auto-restores at test end — never a
+    // zero-mode chmod, which root bypasses under Docker/CI.
     test('A7: a failure writing ROADMAP.md (first in the atomic set) leaves STATE.md and REQUIREMENTS.md untouched', (t) => {
       setupPhase3517Project(tmpDir);
       const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
@@ -9979,31 +9951,23 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { execFileSync } = require('node:child_process');
+const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 
 const { cleanup } = require('./helpers.cjs');
 
 const gsdTools = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
 function run(args, cwd) {
-  try {
-    return {
-      stdout: execFileSync('node', [gsdTools, ...args], {
-        cwd,
-        timeout: PROBE_TIMEOUT_MS,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      }),
-      ok: true,
-    };
-  } catch (e) {
-    return {
-      stdout: (e.stdout && e.stdout.toString()) || '',
-      stderr: (e.stderr && e.stderr.toString()) || '',
-      ok: false,
-      code: e.status,
-    };
+  const r = runNode([gsdTools, ...args], { cwd, timeoutMs: PROBE_TIMEOUT_MS });
+  if (r.outcome === OUTCOME.EXITED && r.exitCode === 0) {
+    return { stdout: r.stdout, ok: true };
   }
+  return {
+    stdout: r.stdout || '',
+    stderr: r.stderr || '',
+    ok: false,
+    code: r.exitCode,
+  };
 }
 
 /**
@@ -10351,26 +10315,21 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { execFileSync } = require('node:child_process');
+const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { cleanup } = require('./helpers.cjs');
 
 const gsdTools2853 = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
 function run2853(args, cwd) {
-  try {
-    return {
-      stdout: execFileSync('node', [gsdTools2853, ...args], {
-        cwd, timeout: PROBE_TIMEOUT_MS, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
-      }),
-      ok: true,
-    };
-  } catch (e) {
-    return {
-      stdout: (e.stdout && e.stdout.toString()) || '',
-      stderr: (e.stderr && e.stderr.toString()) || '',
-      ok: false, code: e.status,
-    };
+  const r = runNode([gsdTools2853, ...args], { cwd, timeoutMs: PROBE_TIMEOUT_MS });
+  if (r.outcome === OUTCOME.EXITED && r.exitCode === 0) {
+    return { stdout: r.stdout, ok: true };
   }
+  return {
+    stdout: r.stdout || '',
+    stderr: r.stderr || '',
+    ok: false, code: r.exitCode,
+  };
 }
 
 /**
@@ -11374,41 +11333,6 @@ describe('#3057 B3: cmdPhaseComplete — verification staleness-check indetermin
     cleanup(tmpDir);
   });
 
-  test(
-    'an fs failure inside the staleness check adds a warning; completion routing is unchanged',
-    { skip: process.platform === 'win32' ? 'symlink creation needs privilege on Windows' : false },
-    (t) => {
-    const phase01Dir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
-    const summaryPath = path.join(phase01Dir, '01-01-SUMMARY.md');
-
-    // Real, on-disk fault instead of an in-process fs.statSync mock: this now
-    // runs cmdPhaseComplete in a subprocess (via capturePhaseComplete), which
-    // cannot see a mock installed in this process. findStaleVerificationSummary
-    // (verification.cjs) calls fs.statSync on each summary file to compare
-    // mtimes, and statSync follows symlinks — so pointing the summary at a
-    // target that does not exist reproduces a genuine ENOENT there, degrading
-    // the staleness check to {determined:false} exactly like the removed
-    // injected statSync throw did. scanPhasePlans only matches summary
-    // *filenames* (never stats them), so the plan-coverage gate still sees
-    // the summary as present.
-    fs.unlinkSync(summaryPath);
-    fs.symlinkSync(path.join(phase01Dir, '.does-not-exist'), summaryPath);
-
-    const output = JSON.parse(capturePhaseComplete(t, tmpDir, '1'));
-
-    // Pre-existing no-throw fail-open routing is UNCHANGED: the phase still
-    // completes exactly as it would have before #3057 B3.
-    assert.strictEqual(output.completed_phase, '1');
-    assert.ok(Array.isArray(output.warnings), 'result must carry a warnings array');
-    assert.strictEqual(
-      output.verification_stale_check_indeterminate,
-      true,
-      `result must surface the indeterminate staleness check as a typed field; got ${JSON.stringify(output.warnings)}`,
-    );
-    assert.strictEqual(output.has_warnings, true);
-    },
-  );
-
   test('a completed staleness check that finds nothing stale does NOT add an indeterminate warning', (t) => {
     const output = JSON.parse(capturePhaseComplete(t, tmpDir, '1'));
 
@@ -11420,42 +11344,6 @@ describe('#3057 B3: cmdPhaseComplete — verification staleness-check indetermin
     );
   });
 
-  test(
-    'a BLOCKED completion (status=human_needed) with an indeterminate staleness check still blocks, but the error note says so',
-    { skip: process.platform === 'win32' ? 'symlink creation needs privilege on Windows' : false },
-    () => {
-    const phase02Dir = path.join(tmpDir, '.planning', 'phases', '02-api');
-    fs.writeFileSync(path.join(phase02Dir, '02-01-PLAN.md'), '# Plan\nDo the work.\n');
-    fs.writeFileSync(path.join(phase02Dir, '02-VERIFICATION.md'), [
-      '---',
-      'status: human_needed',
-      '---',
-      '',
-      '# Verification',
-      '',
-    ].join('\n'));
-
-    // Real, on-disk fault — see the note in the sibling test above. The
-    // summary is a dangling symlink so fs.statSync (inside
-    // findStaleVerificationSummary, running in the subprocess) throws ENOENT.
-    const summaryPath = path.join(phase02Dir, '02-01-SUMMARY.md');
-    fs.symlinkSync(path.join(phase02Dir, '.does-not-exist'), summaryPath);
-
-    // Routing is UNCHANGED — status !== 'passed' already blocked before #3057
-    // B3; the note is purely additive to the message text. Assert the fact
-    // structurally (via --json-errors) rather than regexing the human-
-    // readable note — CONTRIBUTING requires a typed surface alongside any
-    // text a caller might otherwise only match on, and once that typed
-    // surface exists the test must assert on IT, not also on the rendered
-    // prose (src/phase.cts's human message wording is out of scope for this
-    // test — operators read it, but the test must not lock its exact text).
-    const result = runGsdTools(['--json-errors', 'phase', 'complete', '2'], tmpDir);
-    assert.equal(result.success, false, 'phase complete must fail when verification is blocked');
-    const errorPayload = JSON.parse(result.error);
-    assert.equal(errorPayload.reason, 'phase_verification_incomplete');
-    assert.equal(errorPayload.verification_stale_check_indeterminate, true);
-    },
-  );
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

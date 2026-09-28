@@ -13,6 +13,12 @@
  * suite-exclusion fix (#4591 CI incident): a suite-tagged file must never
  * enter the conformance-tier pool even when its content would otherwise
  * qualify, and the committed generated file must contain zero such files.
+ *
+ * #5074's `.platform` sibling rule (design:
+ * .gsd/phase/chore-5074-test-run-only-platform-sensitive-tests-o/40-design.md,
+ * matrix: .gsd/phase/chore-5074-test-run-only-platform-sensitive-tests-o/
+ * 50-test-matrix.md) adds rows 1-15 of that matrix in the
+ * `#5074 platform split — .platform sibling rule` describe block below.
  */
 
 const { describe, test } = require('node:test');
@@ -32,6 +38,8 @@ const {
   MACOS_CATEGORIES,
   walkTestFiles,
   ALWAYS_REAL_OS,
+  PLATFORM_SIBLING_SUFFIX,
+  findPlatformSplitViolations,
 } = require('../scripts/gen-platform-conformance-tier.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -355,6 +363,39 @@ describe('gen-platform-conformance-tier.cjs — real repo tree (regression)', ()
       fresh.files.slice().sort(),
       'the committed list must match a fresh sweep exactly, not just in length',
     );
+  });
+
+  // ─── #5074 row 14: every real .platform sibling is in the tier and its base
+  // is not — the split-pair invariant checked against the actual committed
+  // list, not a fixture.
+  test('every real .platform sibling is in the tier and its base is not', () => {
+    const realTestsDir = path.join(ROOT, 'tests');
+    const absoluteFiles = walkTestFiles(realTestsDir);
+    const siblingRels = absoluteFiles
+      .map((absPath) => 'tests/' + path.relative(realTestsDir, absPath).replace(/\\/g, '/'))
+      .filter((rel) => rel.endsWith(PLATFORM_SIBLING_SUFFIX))
+      .filter((rel) => {
+        const stem = path.posix.basename(rel).slice(0, -PLATFORM_SIBLING_SUFFIX.length);
+        return stem.length > 0;
+      });
+
+    assert.ok(
+      siblingRels.length > 0,
+      'expected at least one real tests/**/*.platform.test.cjs — the split files this PR introduces',
+    );
+
+    delete require.cache[require.resolve(GENERATED_PATH)];
+    const { CONFORMANCE_TIER_FILES } = require(GENERATED_PATH);
+    const tierSet = new Set(CONFORMANCE_TIER_FILES);
+
+    for (const siblingRel of siblingRels) {
+      assert.ok(tierSet.has(siblingRel), `expected ${siblingRel} in CONFORMANCE_TIER_FILES`);
+      const dir = path.posix.dirname(siblingRel);
+      const stem = path.posix.basename(siblingRel).slice(0, -PLATFORM_SIBLING_SUFFIX.length);
+      const baseRel = (dir === '.' ? '' : dir + '/') + stem + '.test.cjs';
+      if (tierSet.has(baseRel) === false) continue;
+      assert.fail(`base ${baseRel} of split sibling ${siblingRel} must not be in the tier`);
+    }
   });
 
   // ─── Row 21: no suite-tagged file ever reaches the committed conformance
@@ -844,5 +885,275 @@ describe('ALWAYS_REAL_OS escape hatch (#4641)', () => {
       'tests/external-descriptor-confinement.test.cjs must be absent from MACOS_CONFORMANCE_TIER_FILES ' +
         '(the ALWAYS_REAL_OS entry is Windows-only)',
     );
+  });
+});
+
+// ─── #5074: the .platform sibling rule ─────────────────────────────────────
+//
+// Rows 1-15, .gsd/phase/chore-5074-test-run-only-platform-sensitive-tests-o/
+// 50-test-matrix.md. `classifyTree`/`classifyMacosTree` are called the same
+// way `main()` calls them (bare `testsDir`) per that matrix's shape note.
+
+describe('#5074 platform split — .platform sibling rule', () => {
+  test('PLATFORM_SIBLING_SUFFIX is the .platform.test.cjs suffix', () => {
+    assert.equal(PLATFORM_SIBLING_SUFFIX, '.platform.test.cjs');
+  });
+
+  // ─── Rows 1-2: unchanged behavior for a file with no sibling ─────────────
+  test('a file with no .platform sibling is classified exactly as before', () => {
+    const tmpDir = createTempDir('gen-platform-split-nosib-');
+    try {
+      const testsDir = path.join(tmpDir, 'tests');
+      fs.mkdirSync(testsDir, { recursive: true });
+      fs.writeFileSync(path.join(testsDir, 'flagged.test.cjs'), "if (process.platform === 'win32') {}\n");
+      fs.writeFileSync(path.join(testsDir, 'clean.test.cjs'), 'assert.equal(1 + 1, 2);\n');
+
+      const { files } = classifyTree(testsDir);
+      assert.deepEqual(files, ['tests/flagged.test.cjs']);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // ─── Row 3: clean base + signal-bearing sibling — only the sibling is IN ──
+  test('a clean base with a signal-bearing .platform sibling: only the sibling is in the tier', () => {
+    const tmpDir = createTempDir('gen-platform-split-clean-sib-');
+    try {
+      const testsDir = path.join(tmpDir, 'tests');
+      fs.mkdirSync(testsDir, { recursive: true });
+      fs.writeFileSync(path.join(testsDir, 'x.test.cjs'), 'assert.equal(1 + 1, 2);\n');
+      fs.writeFileSync(path.join(testsDir, 'x.platform.test.cjs'), "if (process.platform === 'win32') {}\n");
+
+      const { files } = classifyTree(testsDir);
+      assert.deepEqual(files, ['tests/x.platform.test.cjs']);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // ─── Row 4: split base that still carries a residual signal — throws ─────
+  test('a split base that still carries a Windows signal fails classification and names the residual signal', () => {
+    const tmpDir = createTempDir('gen-platform-split-residual-');
+    try {
+      const testsDir = path.join(tmpDir, 'tests');
+      fs.mkdirSync(testsDir, { recursive: true });
+      fs.writeFileSync(path.join(testsDir, 'x.test.cjs'), 'fs.symlinkSync(target, link);\n');
+      fs.writeFileSync(path.join(testsDir, 'x.platform.test.cjs'), "if (process.platform === 'win32') {}\n");
+
+      assert.throws(
+        () => classifyTree(testsDir),
+        (err) => {
+          assert.match(err.message, /platform split/);
+          assert.match(err.message, /tests\/x\.test\.cjs/);
+          assert.match(err.message, /symlink-keyword/);
+          assert.match(err.message, /tests\/x\.platform\.test\.cjs/);
+          return true;
+        },
+      );
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // ─── Row 4b: same violation, driven through the real CLI --check path ────
+  test('--check fails loudly on a split-invariant violation', () => {
+    const tmpDir = createTempDir('gen-platform-split-cli-');
+    try {
+      const testsDir = path.join(tmpDir, 'tests');
+      fs.mkdirSync(testsDir, { recursive: true });
+      fs.writeFileSync(path.join(testsDir, 'x.test.cjs'), 'fs.symlinkSync(target, link);\n');
+      fs.writeFileSync(path.join(testsDir, 'x.platform.test.cjs'), "if (process.platform === 'win32') {}\n");
+      const outPath = path.join(tmpDir, 'platform-conformance-tier.generated.cjs');
+
+      const check = runGen(['--check', '--tests-dir', testsDir, '--out', outPath]);
+      assert.equal(check.exitCode, 1);
+      assert.match(check.stderr, /platform split/);
+      assert.match(check.stderr, /tests\/x\.test\.cjs/);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // ─── Row 5/5b: a .platform sibling with no signal always fails, base present or not
+  test('a .platform sibling that carries no Windows signal fails classification', () => {
+    const tmpDir = createTempDir('gen-platform-split-sib-clean-');
+    try {
+      const testsDir = path.join(tmpDir, 'tests');
+      fs.mkdirSync(testsDir, { recursive: true });
+      fs.writeFileSync(path.join(testsDir, 'x.test.cjs'), 'assert.equal(1 + 1, 2);\n');
+      fs.writeFileSync(path.join(testsDir, 'x.platform.test.cjs'), 'assert.equal(2 + 2, 4);\n');
+
+      assert.throws(
+        () => classifyTree(testsDir),
+        (err) => {
+          assert.match(err.message, /platform split/);
+          assert.match(err.message, /tests\/x\.platform\.test\.cjs/);
+          return true;
+        },
+      );
+    } finally {
+      cleanup(tmpDir);
+    }
+
+    const tmpDir2 = createTempDir('gen-platform-split-sib-clean-orphan-');
+    try {
+      const testsDir2 = path.join(tmpDir2, 'tests');
+      fs.mkdirSync(testsDir2, { recursive: true });
+      fs.writeFileSync(path.join(testsDir2, 'y.platform.test.cjs'), 'assert.equal(2 + 2, 4);\n');
+
+      assert.throws(
+        () => classifyTree(testsDir2),
+        (err) => {
+          assert.match(err.message, /platform split/);
+          assert.match(err.message, /tests\/y\.platform\.test\.cjs/);
+          return true;
+        },
+      );
+    } finally {
+      cleanup(tmpDir2);
+    }
+  });
+
+  // ─── Row 6: an orphan .platform file (no base) with a genuine signal ─────
+  test('an orphan .platform file is classified on its own content', () => {
+    const tmpDir = createTempDir('gen-platform-split-orphan-');
+    try {
+      const testsDir = path.join(tmpDir, 'tests');
+      fs.mkdirSync(testsDir, { recursive: true });
+      fs.writeFileSync(path.join(testsDir, 'y.platform.test.cjs'), 'fs.symlinkSync(target, link);\n');
+
+      const { files } = classifyTree(testsDir);
+      assert.deepEqual(files, ['tests/y.platform.test.cjs']);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // ─── Row 7: ALWAYS_REAL_OS base + sibling — throws. A fixture tree cannot
+  // contain a real ALWAYS_REAL_OS key, so this drives the pure helper
+  // directly with an injected map, per the matrix's "pure-function row" note.
+  test('a base in ALWAYS_REAL_OS paired with a .platform sibling fails classification', () => {
+    const entries = [
+      { rel: 'tests/fake-always-real.test.cjs', content: 'assert.equal(1 + 1, 2);\n' },
+      { rel: 'tests/fake-always-real.platform.test.cjs', content: 'fs.symlinkSync(target, link);\n' },
+    ];
+    const injectedAlwaysRealOs = new Map([['tests/fake-always-real.test.cjs', 'fixture reason']]);
+
+    const violations = findPlatformSplitViolations(entries, injectedAlwaysRealOs);
+    assert.deepEqual(violations, [
+      { file: 'tests/fake-always-real.test.cjs', kind: 'base-always-real-os', signals: [] },
+    ]);
+  });
+
+  // ─── Rows 8-9: hostile filenames that are NOT a sibling ──────────────────
+  test('a bare platform.test.cjs is not a sibling', () => {
+    const tmpDir = createTempDir('gen-platform-split-bare-');
+    try {
+      const testsDir = path.join(tmpDir, 'tests');
+      fs.mkdirSync(testsDir, { recursive: true });
+      fs.writeFileSync(path.join(testsDir, 'platform.test.cjs'), 'assert.equal(1 + 1, 2);\n');
+
+      const { files } = classifyTree(testsDir);
+      assert.deepEqual(files, [], 'platform.test.cjs has an empty stem, so it is not a sibling and stays clean');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('platform-conformance-tier.test.cjs-shaped filenames (hyphen, not dot) are not a sibling', () => {
+    const tmpDir = createTempDir('gen-platform-split-hyphen-');
+    try {
+      const testsDir = path.join(tmpDir, 'tests');
+      fs.mkdirSync(testsDir, { recursive: true });
+      fs.writeFileSync(path.join(testsDir, 'x-platform.test.cjs'), 'assert.equal(1 + 1, 2);\n');
+      fs.writeFileSync(
+        path.join(testsDir, 'platform-conformance-tier.test.cjs'),
+        'assert.equal(1 + 1, 2);\n',
+      );
+
+      assert.doesNotThrow(() => classifyTree(testsDir));
+      const { files } = classifyTree(testsDir);
+      assert.deepEqual(files, []);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // ─── Row 10: siblings resolve per directory, not flattened ───────────────
+  test('siblings are resolved per directory', () => {
+    const tmpDir = createTempDir('gen-platform-split-subdir-');
+    try {
+      const testsDir = path.join(tmpDir, 'tests');
+      const subDir = path.join(testsDir, 'sub');
+      fs.mkdirSync(subDir, { recursive: true });
+      fs.writeFileSync(path.join(subDir, 'x.test.cjs'), 'assert.equal(1 + 1, 2);\n');
+      fs.writeFileSync(path.join(subDir, 'x.platform.test.cjs'), "if (process.platform === 'win32') {}\n");
+
+      const { files } = classifyTree(testsDir);
+      assert.deepEqual(files, ['tests/sub/x.platform.test.cjs']);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // ─── Row 11: a suite-tagged base is ineligible before this rule runs ─────
+  test('a suite-tagged base is not paired with a .platform sibling', () => {
+    const tmpDir = createTempDir('gen-platform-split-suite-');
+    try {
+      const testsDir = path.join(tmpDir, 'tests');
+      fs.mkdirSync(testsDir, { recursive: true });
+      // x.install.test.cjs is suite-tagged (suiteOf -> 'install') and never
+      // eligible, even though it carries a genuine signal.
+      fs.writeFileSync(path.join(testsDir, 'x.install.test.cjs'), 'fs.symlinkSync(target, link);\n');
+      // x.install.platform.test.cjs is a unit-suite file (suiteOf reads only
+      // the last dot-segment, 'platform') and IS a sibling of x.install.test.cjs;
+      // its own content carries a signal, so rule 5 does not fire either.
+      fs.writeFileSync(path.join(testsDir, 'x.install.platform.test.cjs'), 'fs.symlinkSync(target, link);\n');
+
+      assert.doesNotThrow(() => classifyTree(testsDir));
+      const { files } = classifyTree(testsDir);
+      assert.deepEqual(files, ['tests/x.install.platform.test.cjs']);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // ─── Row 12: CRLF independence — same outcome as LF, both line endings ───
+  for (const eol of ['\n', '\r\n']) {
+    test(`a clean base with a signal-bearing .platform sibling under ${JSON.stringify(eol)} line endings`, () => {
+      const tmpDir = createTempDir('gen-platform-split-crlf-');
+      try {
+        const testsDir = path.join(tmpDir, 'tests');
+        fs.mkdirSync(testsDir, { recursive: true });
+        fs.writeFileSync(path.join(testsDir, 'x.test.cjs'), `assert.equal(1 + 1, 2);${eol}`);
+        fs.writeFileSync(
+          path.join(testsDir, 'x.platform.test.cjs'),
+          `if (process.platform === 'win32') {}${eol}`,
+        );
+
+        const { files } = classifyTree(testsDir);
+        assert.deepEqual(files, ['tests/x.platform.test.cjs']);
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+  }
+
+  // ─── Row 13: the macOS tier ignores the Windows-only split invariant ─────
+  test('the macOS tier is unaffected by the Windows split invariant', () => {
+    const tmpDir = createTempDir('gen-platform-split-macos-');
+    try {
+      const testsDir = path.join(tmpDir, 'tests');
+      fs.mkdirSync(testsDir, { recursive: true });
+      // The base's residual signal (process.env.PATHEXT) is Windows-only —
+      // not a MACOS_CATEGORIES member — so classifyMacosTree must not throw
+      // even though classifyTree (Windows) would.
+      fs.writeFileSync(path.join(testsDir, 'x.test.cjs'), 'const p = process.env.PATHEXT;\n');
+      fs.writeFileSync(path.join(testsDir, 'x.platform.test.cjs'), 'fs.symlinkSync(target, link);\n');
+
+      assert.doesNotThrow(() => classifyMacosTree(testsDir));
+    } finally {
+      cleanup(tmpDir);
+    }
   });
 });
