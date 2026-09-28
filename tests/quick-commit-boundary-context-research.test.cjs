@@ -143,4 +143,55 @@ describe('#4996: quick.md executor materializes and reads CONTEXT.md/RESEARCH.md
       'PLAN.md materialization via git show <plan-commit>:<plan-path> must remain (#1265, #4996)'
     );
   });
+
+  test('planner and executor required_reading carry the SAME CONTEXT.md/RESEARCH.md lines (parity, anti-drift)', () => {
+    // #4996 happened because the planner's required_reading already listed
+    // CONTEXT.md/RESEARCH.md conditionally and the executor's did not — two
+    // "parallel surfaces sharing text" (repo convention: "Generative Fix
+    // Divergence") that silently diverged. Pin them to the SAME literal lines
+    // so a future edit to one that isn't mirrored to the other fails loudly,
+    // instead of quietly reintroducing the #4996 asymmetry.
+    const plannerBlockStart = content.indexOf('<required_reading>');
+    const plannerBlockEnd = content.indexOf('</required_reading>', plannerBlockStart);
+    assert.ok(
+      plannerBlockStart !== -1 && plannerBlockEnd !== -1,
+      'planner required_reading block must exist'
+    );
+    const plannerContent = content.slice(plannerBlockStart, plannerBlockEnd);
+
+    const executorTaskIdx = content.indexOf('subagent_type="gsd-executor"');
+    const executorBlockStart = content.lastIndexOf('<required_reading>', executorTaskIdx);
+    const executorBlockEnd = content.indexOf('</required_reading>', executorBlockStart);
+    const executorContent = content.slice(executorBlockStart, executorBlockEnd);
+
+    assert.notEqual(
+      plannerBlockStart,
+      executorBlockStart,
+      'planner and executor required_reading blocks must be distinct blocks (sanity check on the locators above)'
+    );
+
+    const contextLine =
+      "${DISCUSS_MODE ? '- ' + QUICK_DIR + '/' + quick_id + '-CONTEXT.md (User decisions — locked, do not revisit)' : ''}";
+    const researchLine =
+      "${RESEARCH_MODE ? '- ' + QUICK_DIR + '/' + quick_id + '-RESEARCH.md (Research findings — use to inform implementation choices)' : ''}";
+
+    assert.ok(
+      plannerContent.includes(contextLine),
+      'planner required_reading must carry the canonical CONTEXT.md conditional line (fixture assumption changed?)'
+    );
+    assert.ok(
+      plannerContent.includes(researchLine),
+      'planner required_reading must carry the canonical RESEARCH.md conditional line (fixture assumption changed?)'
+    );
+    assert.ok(
+      executorContent.includes(contextLine),
+      'executor required_reading must carry the IDENTICAL CONTEXT.md conditional line as the planner — ' +
+        'drift here is exactly how #4996 happened'
+    );
+    assert.ok(
+      executorContent.includes(researchLine),
+      'executor required_reading must carry the IDENTICAL RESEARCH.md conditional line as the planner — ' +
+        'drift here is exactly how #4996 happened'
+    );
+  });
 });
