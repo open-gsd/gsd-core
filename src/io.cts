@@ -306,6 +306,11 @@ const ERROR_REASON = Object.freeze({
   // exit 0. See .gsd/phase/feat-3884-failure-is-a-value/40-design.md.
   PICK_FIELD_ABSENT: 'pick_field_absent',
   PICK_OUTPUT_NOT_JSON: 'pick_output_not_json',
+  // summary-extract (#5013): the SUMMARY's frontmatter fence exists but failed
+  // to parse (extractFrontmatter's FRONTMATTER_UNPARSEABLE marker) — a
+  // distinct failure from "no frontmatter"/"field absent", never a silent
+  // demotion to empty fields at exit 0.
+  SUMMARY_EXTRACT_UNPARSEABLE: 'summary_extract_unparseable',
   // generic
   USAGE: 'usage',
   UNKNOWN: 'unknown',

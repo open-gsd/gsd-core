@@ -70,7 +70,7 @@ import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir, planningPaths, todosDir, resolvePhaseIdConvention } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
-const { extractFrontmatter, agentScalarNeedsDoubleQuoting, escapeDoubleQuotedScalar } = frontmatter;
+const { extractFrontmatter, agentScalarNeedsDoubleQuoting, escapeDoubleQuotedScalar, FRONTMATTER_UNPARSEABLE } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES, VALID_PHASE_TYPES } = modelProfiles;
@@ -3170,7 +3170,10 @@ function cmdSummaryExtract(cwd: string, summaryPath: string | undefined, fields:
     error('summary-path required for summary-extract');
   }
 
-  const fullPath = path.join(cwd, summaryPath);
+  // #5013: path.resolve (not path.join) so an absolute summaryPath resolves to
+  // that literal path instead of being concatenated onto cwd — path.join has
+  // no special case for an absolute second argument the way path.resolve does.
+  const fullPath = path.resolve(cwd, summaryPath);
 
   if (!fs.existsSync(fullPath)) {
     output({ error: 'File not found', path: summaryPath }, raw, undefined);
@@ -3179,6 +3182,23 @@ function cmdSummaryExtract(cwd: string, summaryPath: string | undefined, fields:
 
   const content = fs.readFileSync(fullPath, 'utf-8');
   const fm = extractFrontmatter(content, fullPath) as Record<string, unknown>;
+
+  // #5013: an unparseable frontmatter block (malformed YAML in the fence) is
+  // NOT the same as an absent/empty one — extractFrontmatter marks it with
+  // FRONTMATTER_UNPARSEABLE (mirrors state.cts's isUnparseableFrontmatter /
+  // state-transition.cts's identical helper). Left unchecked, every field
+  // below silently falls back to its empty default and this command exits 0,
+  // so a milestone audit reading requirements_completed through it would
+  // report "zero requirements completed" for a plan that completed several,
+  // with nothing on stderr. Refuse instead, naming the file, the same way
+  // cmdAuditAcknowledge (audit.cts) refuses on the write-side counterpart.
+  if ((fm as unknown as Record<symbol, unknown>)[FRONTMATTER_UNPARSEABLE] === true) {
+    error(
+      `summary-extract: the frontmatter of "${summaryPath}" is not parseable YAML — fix the syntax error in the file (e.g. an unquoted ": " inside a block-sequence item) before re-running; every field would otherwise silently read as empty`,
+      ERROR_REASON.SUMMARY_EXTRACT_UNPARSEABLE,
+      { path: summaryPath }
+    );
+  }
 
   // Parse key-decisions into structured format
   const parseDecisions = (decisionsList: unknown) => {
