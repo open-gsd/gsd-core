@@ -151,7 +151,21 @@ describe('#4996: quick.md executor materializes and reads CONTEXT.md/RESEARCH.md
     // Divergence") that silently diverged. Pin them to the SAME literal lines
     // so a future edit to one that isn't mirrored to the other fails loudly,
     // instead of quietly reintroducing the #4996 asymmetry.
-    const plannerBlockStart = content.indexOf('<required_reading>');
+    // quick.md contains multiple <required_reading> occurrences — a generic
+    // "read all referenced files" block near the top, a bare prose mention
+    // of the tag name in backticks ("Only the `<required_reading>` inputs
+    // above are absolute"), the planner's own block, and the executor's own
+    // block. `lastIndexOf` anchored on a spawn marker is NOT reliable here:
+    // the prose mention sits between the planner's real block and the
+    // planner's own Task() spawn, so it wins `lastIndexOf` and the "block"
+    // extracted is actually everything from that stray mention through to
+    // whatever `</required_reading>` happens to follow (in practice, the
+    // EXECUTOR's own closing tag) — a false pass, since it "finds" the
+    // executor's lines and reports them as the planner's. Anchor on each
+    // block's own known FIRST bullet line instead, which is unique per role.
+    const plannerBlockStart = content.indexOf(
+      '<required_reading>\n- ${STATE_PATH} (Project State)'
+    );
     const plannerBlockEnd = content.indexOf('</required_reading>', plannerBlockStart);
     assert.ok(
       plannerBlockStart !== -1 && plannerBlockEnd !== -1,
@@ -159,9 +173,14 @@ describe('#4996: quick.md executor materializes and reads CONTEXT.md/RESEARCH.md
     );
     const plannerContent = content.slice(plannerBlockStart, plannerBlockEnd);
 
-    const executorTaskIdx = content.indexOf('subagent_type="gsd-executor"');
-    const executorBlockStart = content.lastIndexOf('<required_reading>', executorTaskIdx);
+    const executorBlockStart = content.indexOf(
+      '<required_reading>\n- ${QUICK_DIR}/${quick_id}-PLAN.md (Plan)'
+    );
     const executorBlockEnd = content.indexOf('</required_reading>', executorBlockStart);
+    assert.ok(
+      executorBlockStart !== -1 && executorBlockEnd !== -1,
+      'executor required_reading block must exist'
+    );
     const executorContent = content.slice(executorBlockStart, executorBlockEnd);
 
     assert.notEqual(
