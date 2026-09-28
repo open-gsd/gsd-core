@@ -632,46 +632,7 @@ Keys are sorted so a regeneration diff shows only the files whose cost moved.
 
 ### How-to: regenerate the win32 timing table
 
-Like the Linux table, the win32 table is advisory and un-gated. Regenerate it
-when the Windows conformance shards drift apart again, or after the conformance
-tier gains or loses expensive files.
-
-Every `conformance test (windows-latest, …)` job in `test.yml` writes its
-per-file durations to a `test-timings-windows-latest-job<N>` artifact, on red
-runs too (the macOS job uploads `test-timings-macos-latest-job<N>` the same
-way). Artifacts are kept for 14 days.
-
-1. Pick one recent, fully completed `Tests` run that ran the conformance jobs: a
-   push to `next`, or a `workflow_dispatch` of `test.yml`. Pull-request runs
-   skip these jobs unless the change needs the full matrix.
-2. Download the three Windows artifacts:
-
-   ```bash
-   gh run download <run-id> --repo open-gsd/gsd-core \
-     --pattern 'test-timings-windows-latest-*' --dir /tmp/win-timings
-   ```
-
-3. Build the table:
-
-   ```bash
-   node scripts/gen-test-timings.cjs --platform win32 /tmp/win-timings/*/*.jsonl
-   ```
-
-   `--platform win32` writes `tests/test-timings.win32.json` and records
-   `"platform": "win32"` in it. `--out` still overrides the path.
-4. Commit the regenerated file.
-
-Use all three shards of **one** run. Each shard runs a disjoint slice of the
-tier, so together they price every file once. The generator keeps the max for a
-file seen more than once, so mixing runs biases the table toward each file's
-slowest run.
-
-| What you see | What it means |
-|---|---|
-| `gen-test-timings: no \`test:summary\` events…` and exit 2 | The files are empty or not run-tests exports. A shard that died before its first chunk finished uploads an empty or missing file. |
-| An artifact missing for one shard | That job never reached the upload step (cancelled before it started). Pick another run. |
-| `run-tests: WARNING: could not append per-file durations…` in a job log | The export path was not writable. That job's artifact is incomplete. |
-| `the win32 chunk budget, priced by the committed win32 table, fits the working budget` fails after regenerating | Windows has become slow enough that 22 weight units (`RUN_TESTS_MAX_FILES_PER_CHUNK` on win32) now cost more than the 400s working budget. Re-derive the win32 cap from the new table before committing it. |
+See [Regenerate the win32 timing table](how-to/regenerate-the-win32-timing-table.md).
 
 ## Best practices for forward-compat (Node 24/26)
 
