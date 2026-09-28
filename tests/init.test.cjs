@@ -5131,6 +5131,130 @@ describe('#3581: init.progress next_phase prefers the roadmap frontier', () => {
   });
 });
 
+// ─── #4982: cmdInitProgress's `cbPattern` checkbox->phase scan must be
+// line-anchored (no greedy `.*` binding to the LAST "Phase N" mentioned in a
+// checklist line's prose) and must resolve each phase from its own FIRST
+// anchored line, not the last one seen by the global scan (last-match-wins).
+describe('#4982: init.progress ROADMAP checkbox projection anchoring', () => {
+  test('#4982: a checklist line whose prose mentions a later phase does not bind its checkbox to that phase (greedy binding)', (t) => {
+    const tmpDir = createTempProject('gsd-4982-greedy-');
+    t.after(() => cleanup(tmpDir));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), [
+      '# Roadmap',
+      '',
+      '## Milestone v1.1.0',
+      '',
+      '- [x] **Phase 1: Foundation** — extends the Phase 2 store',
+      '- [ ] **Phase 2: Hardening**',
+      '  - [x] 1-03-PLAN — scaffolding for Phase 2 hardening',
+      '',
+      '### Phase 1: Foundation',
+      '**Goal:** foundation',
+      '',
+      '### Phase 2: Hardening',
+      '**Goal:** hardening',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), [
+      '---', 'gsd_state_version: 1.0', 'milestone: v1.1.0', 'milestone_name: Active',
+      'status: executing', 'current_phase: 1', 'progress:', '  total_phases: 2',
+      '  completed_phases: 1', '  percent: 50', '---', '', '# Project State', '',
+      '## Current Position', '', 'Phase: 1', 'Status: Executing', '',
+    ].join('\n'));
+
+    const result = runGsdTools(['init', 'progress', '--raw'], tmpDir);
+    assert.ok(result.success, `init progress failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    const one = out.phases.find((p) => String(p.number).replace(/^0+/, '') === '1');
+    const two = out.phases.find((p) => String(p.number).replace(/^0+/, '') === '2');
+    assert.ok(one, 'Phase 1 present');
+    assert.ok(two, 'Phase 2 present');
+    assert.strictEqual(one.roadmap_complete, true,
+      "Phase 1's own [x] must be attributed to Phase 1, not the 'Phase 2' mentioned in its prose");
+    assert.strictEqual(two.roadmap_complete, false,
+      "Phase 2's own [ ] must not be overwritten by a later line's incidental 'Phase 2' mention");
+    assert.ok(out.next_phase, 'next_phase present');
+    assert.strictEqual(String(out.next_phase.number).replace(/^0+/, ''), '2',
+      'Phase 2 (the real incomplete phase) is the frontier, not Phase 1');
+  });
+
+  test('#4982: a self-titled nested sub-entry line must not overwrite its parent phase\'s own (first) checkbox — anchoring alone is not enough', (t) => {
+    const tmpDir = createTempProject('gsd-4982-lastwins-');
+    t.after(() => cleanup(tmpDir));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), [
+      '# Roadmap',
+      '',
+      '## Milestone v1.1.0',
+      '',
+      '- [x] **Phase 3: Foo**',
+      '- [ ] **Phase 4: Bar**',
+      '  - [ ] Phase 3 regression sweep (extra verification pass)',
+      '',
+      '### Phase 3: Foo',
+      '**Goal:** foo',
+      '',
+      '### Phase 4: Bar',
+      '**Goal:** bar',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), [
+      '---', 'gsd_state_version: 1.0', 'milestone: v1.1.0', 'milestone_name: Active',
+      'status: executing', 'current_phase: 3', 'progress:', '  total_phases: 2',
+      '  completed_phases: 1', '  percent: 50', '---', '', '# Project State', '',
+      '## Current Position', '', 'Phase: 3', 'Status: Executing', '',
+    ].join('\n'));
+
+    const result = runGsdTools(['init', 'progress', '--raw'], tmpDir);
+    assert.ok(result.success, `init progress failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    const three = out.phases.find((p) => String(p.number).replace(/^0+/, '') === '3');
+    assert.ok(three, 'Phase 3 present');
+    assert.strictEqual(three.roadmap_complete, true,
+      "Phase 3's own anchored [x] line must win even though a later anchored line ('Phase 3 regression sweep') also mentions Phase 3 — first anchored match wins, not last");
+  });
+
+  // #4982 review finding: the anchor fix above must not regress a checklist
+  // line that combines a bracket tag with the literal "Phase N" wording (the
+  // old unanchored `.*` absorbed the bracket text and still matched); this
+  // site stays deliberately non-bracket-convention-aware otherwise (#4984).
+  test('#4982 (review fold-in): a bracket-tagged checklist line combined with literal "Phase N" wording still resolves its own checkbox', (t) => {
+    const tmpDir = createTempProject('gsd-4982-brackethybrid-');
+    t.after(() => cleanup(tmpDir));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), [
+      '# Roadmap',
+      '',
+      '## Milestone v1.1.0',
+      '',
+      '- [x] **[GSD.02] Phase 3: Foo**',
+      '- [ ] **[GSD.02] Phase 4: Bar**',
+      '',
+      '### Phase 3: Foo',
+      '**Goal:** foo',
+      '',
+      '### Phase 4: Bar',
+      '**Goal:** bar',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), [
+      '---', 'gsd_state_version: 1.0', 'milestone: v1.1.0', 'milestone_name: Active',
+      'status: executing', 'current_phase: 3', 'progress:', '  total_phases: 2',
+      '  completed_phases: 1', '  percent: 50', '---', '', '# Project State', '',
+      '## Current Position', '', 'Phase: 3', 'Status: Executing', '',
+    ].join('\n'));
+
+    const result = runGsdTools(['init', 'progress', '--raw'], tmpDir);
+    assert.ok(result.success, `init progress failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    const three = out.phases.find((p) => String(p.number).replace(/^0+/, '') === '3');
+    const four = out.phases.find((p) => String(p.number).replace(/^0+/, '') === '4');
+    assert.ok(three, 'Phase 3 present');
+    assert.ok(four, 'Phase 4 present');
+    assert.strictEqual(three.roadmap_complete, true,
+      'a bracket tag before the literal "Phase N" wording must not prevent the anchor from matching');
+    assert.strictEqual(four.roadmap_complete, false);
+  });
+});
+
 // ─── #3749: project_exists must follow project_path under GSD_PROJECT ───────
 describe('init.new-project — GSD_PROJECT scoping (#3749)', () => {
   test('project_exists tracks the namespaced PROJECT.md, not the root one', (t) => {
