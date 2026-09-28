@@ -1642,7 +1642,7 @@ describe('migrated exemptions behave identically (#3882 rows E1/E2)', () => {
     }
   }
 
-  /** Build a ROADMAP.md + two colliding phase-01 directories (only one carries a SUMMARY). */
+  /** Build a ROADMAP.md + two colliding phase-01 directories (only one is complete). */
   function buildCollidingPhaseFixture(prefix) {
     const tmpDir = createTempProject(prefix);
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), [
@@ -1659,6 +1659,16 @@ describe('migrated exemptions behave identically (#3882 rows E1/E2)', () => {
     // SUMMARY that pairs with an existing PLAN, so both files are required.
     fs.writeFileSync(path.join(realDir, '01-PLAN.md'), '---\nphase: 01-real\n---\nplan\n');
     fs.writeFileSync(path.join(realDir, '01-SUMMARY.md'), '---\nphase: 01-real\n---\ndone\n');
+    // #5060: cmdInitMilestoneOp no longer treats "has a SUMMARY" as complete —
+    // it now asks the Phase Status Module (phaseStatus(dir).value.status ===
+    // PHASE_STATUS.COMPLETE / isPhaseComplete), which requires a
+    // '*-VERIFICATION.md' with frontmatter `status: passed`, written AFTER
+    // the SUMMARY. Add it here so '01-real' is genuinely COMPLETE and this
+    // fixture still discriminates first-wins vs last-wins selection;
+    // '01-duplicate' is left with no PLAN/SUMMARY/VERIFICATION at all, so it
+    // stays incomplete.
+    fs.writeFileSync(path.join(realDir, '01-VERIFICATION.md'),
+      ['---', 'status: passed', '---', '# Verification', ''].join('\n'));
     return { tmpDir, phasesDir };
   }
 
@@ -1691,7 +1701,7 @@ describe('migrated exemptions behave identically (#3882 rows E1/E2)', () => {
         'cmdRoadmapAnalyze must select the FIRST directory in tie order (01-duplicate, no summary) — matches[0] first-wins');
 
       assert.equal(initOut.completed_phases, 1,
-        'cmdInitMilestoneOp must select the LAST directory in tie order (01-real, has a summary) — Map.set last-wins, ' +
+        'cmdInitMilestoneOp must select the LAST directory in tie order (01-real, verified complete) — Map.set last-wins, ' +
         'the OPPOSITE selection from cmdRoadmapAnalyze given the identical input order');
     } finally {
       cleanup(tmpDir);
