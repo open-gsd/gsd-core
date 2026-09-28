@@ -455,9 +455,6 @@ function setCurrentTestComplete(content: string): string {
   return `${before}\n\n[testing complete]\n\n${after}`;
 }
 
-/** UAT test-item `result` values that count as passing (mirrors uat-predicate.cjs's PASSING_RESULTS). */
-const UAT_COMPLETE_SESSION_PASSING_RESULTS = new Set(['passed', 'pass']);
-
 /**
  * Strip only the VALUE of the frontmatter `updated:` line — the one field
  * #5105 R1 declares non-material (deny-by-default: everything else counts).
@@ -475,10 +472,18 @@ interface CompleteUatSessionResult {
 /**
  * #5105 R1 — pure core of `uat.complete-session`.
  *
- * Computes the resulting `status` (`complete` when every parsed test item is
- * passing; `partial` otherwise — the same passing criterion
- * `uat-predicate.cjs`'s `evaluateUatPassed` uses for its own PASSING_RESULTS
- * set), sets `## Current Test` to `[testing complete]`, and compares the
+ * Computes the resulting `status` using verify-work.md's `complete_session`
+ * criterion (the workflow step this command replaces, pinned at
+ * 518ccb0061:gsd-core/workflows/verify-work.md:522-545): `partial` when ANY
+ * row is `result: [pending]` (including a genuine parse gap — a row missing
+ * its `result:` line entirely counts the same as an explicit pending token),
+ * `result: blocked`, or a `result: skipped` row with no `reason:` field;
+ * `complete` otherwise. An `issue` row — resolved or not — is a DEFINITIVE
+ * result and never blocks completion on its own ("All tests have a
+ * definitive result (pass, issue, or skipped-with-reason)"); this is a
+ * deliberately looser criterion than `uat-predicate.cjs`'s `evaluateUatPassed`
+ * (the `phase uat-passed` gate), which does still block on an unresolved
+ * issue. Sets `## Current Test` to `[testing complete]`, and compares the
  * MATERIAL projection of the live document against the candidate — every
  * byte except the frontmatter `updated:` value (deny-by-default, #5105 R1
  * "F10"). Equal → `{ changed: false }`, the caller performs zero writes and
@@ -487,21 +492,24 @@ interface CompleteUatSessionResult {
  */
 function completeUatSession(content: string, options: { clock?: () => Date } = {}): CompleteUatSessionResult {
   const clock = options.clock || (() => new Date());
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const uatPredicate = require('./uat-predicate.cjs') as {
-    stripFalsePositiveContexts(content: string): string;
-    parseUatResultItems(cleanContent: string): Array<{ result: string }>;
-  };
   // Scoped to the `## Tests` section body ONLY — the `## Current Test`
   // section can itself contain a `### N. Name` heading with no `result:`
   // line (a still-pending test's own description), which would otherwise be
   // mis-parsed as a 'missing' (blocking) item and poison the status
-  // computation for a session that is, in fact, fully complete.
+  // computation for a session that is, in fact, fully complete. Reuses the
+  // module's own row parser (`parseUatItemsWithStats`) rather than
+  // `uat-predicate.cjs`'s independent one — `uat-predicate.cjs` encodes a
+  // DIFFERENT (stricter) passing criterion for a different gate, so re-using
+  // its parser without its criterion would still be re-deriving.
   const testsSection = collectSection(content, (h) => /^tests$/i.test(h.text) && h.level === 2, { levelBounded: true });
-  const cleaned = uatPredicate.stripFalsePositiveContexts(testsSection ? testsSection.body : '');
-  const items = uatPredicate.parseUatResultItems(cleaned);
-  const allPassing = items.length > 0 && items.every((i) => UAT_COMPLETE_SESSION_PASSING_RESULTS.has(i.result));
-  const status: 'complete' | 'partial' = allPassing ? 'complete' : 'partial';
+  const { items, headingsSeen } = parseUatItemsWithStats(testsSection ? testsSection.body : '');
+  const hasBlockingRow = items.some((item) => {
+    const result = item.result.toLowerCase();
+    if (result === 'pending' || result === 'blocked') return true;
+    if (result === 'skipped') return !item.reason;
+    return false;
+  });
+  const status: 'complete' | 'partial' = (headingsSeen > 0 || hasBlockingRow) ? 'partial' : 'complete';
 
   let candidate = content.replace(/^status:.*$/m, `status: ${status}`);
   candidate = setCurrentTestComplete(candidate);
