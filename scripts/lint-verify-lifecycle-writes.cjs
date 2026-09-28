@@ -6,7 +6,7 @@
  *
  * Design: `.gsd/phase/fix-5105-verify-lifecycle-writes/40-design.md` §R "R4".
  *
- * Two rules, both deny-by-default:
+ * Three rules, all deny-by-default:
  *
  *   L1 (gating) — every `loop render-hooks verify:post` invocation anywhere
  *   under `gsd-core/workflows/**\/*.md` must carry `--after-fingerprint`,
@@ -21,6 +21,18 @@
  *   verification report path, or a `.planning/`-root shared planning doc) is
  *   flagged — including an unresolvable variable pathspec, which fails closed
  *   rather than being treated as safe.
+ *
+ *   L3 (secure-phase enablement phrasing, #5105 S1) — in a file that
+ *   somewhere invokes `loop render-hooks verify:post ... --after-fingerprint`
+ *   (i.e. is subject to L1's post-fingerprint `skippedHooks` split), a prose
+ *   line matching "active secure-phase step hook exists" or "no active
+ *   secure-phase step hook" that does NOT also mention `skippedHooks` on that
+ *   same line is flagged. `--after-fingerprint` moves an already-satisfied
+ *   secure-phase hook out of `activeHooks` into `skippedHooks` — prose that
+ *   tests only `activeHooks` membership for this hook silently stops gating
+ *   `threats_open` once the phase dir already holds a SECURITY.md. Narrow by
+ *   design: it does not try to parse the surrounding shell/JSON logic, only
+ *   catches the specific phrase resurfacing without its required caveat.
  *
  * Commands are extracted with the ONE shipped-command tokenizer
  * (`tests/helpers/shipped-command-scan.cjs`'s `tokenize`) — no second
@@ -43,6 +55,7 @@ const ALLOWLIST_PATH = path.join(__dirname, 'lint-verify-lifecycle-writes.allowl
 
 const RENDER_HOOKS_VERIFY_POST_RE = /loop render-hooks verify:post\b/;
 const ISSUE_REF_RE = /#\d+|https?:\/\//;
+const SECURE_PHASE_ENABLEMENT_PHRASE_RE = /active secure-phase step hook exists|no active secure-phase step hook/i;
 
 // #5105 R4: post-fingerprint text — verify-work.md (the raw commits census
 // found in it, #4887/#4981) and everything under its `verify-work/` detail
@@ -143,13 +156,43 @@ function scanForRawWrites(file, lines) {
 }
 
 /**
- * Scan a single host's text. `opts.postFingerprint` gates L2 only — L1 is
- * always checked (the allowlist, not this option, is what exempts a
- * pre-fingerprint host like execute-phase.md).
+ * L3 — a "(no) active secure-phase step hook (exists)" prose line, in a file
+ * that carries at least one `--after-fingerprint`-gated
+ * `loop render-hooks verify:post` invocation, which does not also mention
+ * `skippedHooks` on the SAME line (#5105 S1). Narrow and line-scoped by
+ * design — see the module docblock's L3 section.
+ */
+function scanForSecurePhaseEnablementPhrasing(file, lines) {
+  const violations = [];
+  const hasGatedInvocation = lines.some(
+    (line) => RENDER_HOOKS_VERIFY_POST_RE.test(line) && line.includes('--after-fingerprint'),
+  );
+  if (!hasGatedInvocation) return violations;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (SECURE_PHASE_ENABLEMENT_PHRASE_RE.test(line) && !line.includes('skippedHooks')) {
+      violations.push({
+        rule: 'L3',
+        file,
+        line: i + 1,
+        target: 'secure-phase enablement phrasing',
+        text: line.trim(),
+      });
+    }
+  }
+  return violations;
+}
+
+/**
+ * Scan a single host's text. `opts.postFingerprint` gates L2 only — L1 and L3
+ * are always checked (the allowlist, not this option, is what exempts a
+ * pre-fingerprint host like execute-phase.md from L1; L3 self-gates on the
+ * presence of a `--after-fingerprint`-carrying invocation in the same text).
  */
 function scanText(file, text, opts = {}) {
   const lines = text.split('\n');
   const violations = scanForMissingGating(file, lines);
+  violations.push(...scanForSecurePhaseEnablementPhrasing(file, lines));
   if (opts.postFingerprint === true) {
     violations.push(...scanForRawWrites(file, lines));
   }
@@ -289,4 +332,5 @@ module.exports = {
   isPostFingerprintHost,
   isReportPathspec,
   isSharedPlanningDocPathspec,
+  scanForSecurePhaseEnablementPhrasing,
 };

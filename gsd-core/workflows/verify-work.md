@@ -604,9 +604,9 @@ SECURITY_FILE=$(ls "${PHASE_DIR}"/*-SECURITY.md 2>/dev/null | head -1)
 
 **Generic step dispatch:** dispatch every `kind == "step"` hook from `VERIFY_POST_HOOKS_JSON` per @gsd-core/references/loop-hook-dispatch.md (skip silently when none). Each step is advisory and best-effort — honor `onError` and continue. The secure-phase handling below is an additional specialization of one such hook, not a replacement for the generic dispatch. `--after-fingerprint "$PHASE_DIR"` (#5105) moves a step whose declared artifact already exists in `$PHASE_DIR` into `skippedHooks` instead of `activeHooks` — execute-phase already dispatched it before its own fingerprint (`execute-phase.md:1202`), so this re-dispatch is a no-op for that step and is not repeated here.
 
-Resolve active step hooks from `VERIFY_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "secure-phase"`.
+Resolve whether the secure-phase step hook is enabled: an entry with `kind == "step"` and `ref.skill == "secure-phase"` present in `activeHooks` OR `skippedHooks` of `VERIFY_POST_HOOKS_JSON` both count as enabled. `--after-fingerprint` moves this hook into `skippedHooks` once its declared artifact (`SECURITY.md`) already exists in `$PHASE_DIR` (#5105) — the hook is still enabled, only its re-dispatch is skipped. Each `skippedHooks` entry carries `capId`, `kind`, and `ref.skill` for exactly this resolution.
 
-If an active secure-phase step hook exists AND `SECURITY_FILE` is empty, dispatch the registry-provided skill stem:
+If the secure-phase step hook is enabled AND `SECURITY_FILE` is empty, dispatch the registry-provided skill stem:
 
 ```
 Skill(skill="gsd-${ref.skill}", args="{phase}")
@@ -630,13 +630,13 @@ All tests passed, but phase advancement is blocked until security review produce
 - `/gsd:ui-review {phase}` — visual quality audit (if frontend files were modified)
 ```
 
-If an active secure-phase step hook exists AND `SECURITY_FILE` exists: check frontmatter `threats_open`. If > 0:
+If `SECURITY_FILE` exists — regardless of whether the secure-phase step hook shows up in `activeHooks` or `skippedHooks` — always check frontmatter `threats_open`. If > 0:
 ```
 ⚠ Security gate: {threats_open} threats open
   /gsd:secure-phase {phase} — resolve before advancing
 ```
 
-If no active secure-phase step hook exists OR (`SECURITY_FILE` exists AND `threats_open` is `0`):
+If the secure-phase step hook is not enabled (absent from both `activeHooks` and `skippedHooks`) OR (`SECURITY_FILE` exists AND `threats_open` is `0`):
 
 If execution verification is waiting only on human UAT and this session recorded zero issues, canonicalize the report before the shared completion predicate. (#4663) Zero issues is NOT pass evidence on its own — blocked rows are not issues by this workflow's own rule, so a session that observed nothing (0 passed / 0 issues / N blocked) must NOT flip the report. The flip runs the SAME UAT-row predicate the phase-close uses, in its `--uat-only` form: it skips the verification-status blockers (the report still reads `human_needed` at this point — the full predicate could never pass here), and `passed` means at least one UAT check passed with no row pending/blocked/failed or skipped without a reason. The flagged transition-gate call below stays the final say on canonical verification:
 

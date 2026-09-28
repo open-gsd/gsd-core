@@ -615,7 +615,8 @@ function resolveActiveHooksForPoint(
 
 interface SkippedHook {
   capId: string;
-  skill?: string;
+  kind: 'step';
+  ref?: HookRef;
   reason: 'produces-present';
   artifacts: string[];
 }
@@ -661,7 +662,8 @@ function partitionHooksByFingerprint(
     if (everyProduced) {
       skipped.push({
         capId: hook.capId,
-        skill: hook.ref?.skill,
+        kind: 'step',
+        ref: hook.ref,
         reason: 'produces-present',
         artifacts: [...hook.produces],
       });
