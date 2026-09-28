@@ -33,7 +33,7 @@ near-cap step ran — so it also catches jobs that were actually cancelled by a 
 (GitHub's Jobs API still reports `started_at`/`completed_at` for a cancelled job).
 
 A job that never ran has no row. That covers a `skipped` job, and any job whose `completed_at` is
-missing, unparseable, or earlier than its `started_at`. GitHub reports skipped jobs, and jobs
+missing, unparseable, or not later than its `started_at`. GitHub reports skipped jobs, and jobs
 cancelled before they started, with `completed_at` one second before `started_at`. A cancelled job
 that did run, such as one killed at its `timeout-minutes` cap, is still recorded (#5088).
 

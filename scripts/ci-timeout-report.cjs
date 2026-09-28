@@ -74,10 +74,15 @@ function parseJobRecord({ job, workflowFile, workflowYamlText, covered }) {
   // `cancelled` job with a real span is NOT skipped: a job killed at its
   // timeout-minutes cap is reported as cancelled, and is exactly what this
   // report exists to record.
-  if (job.conclusion === 'skipped') return null;
+  // A zero-length span is treated the same way: GitHub's timestamps have
+  // one-second resolution and no job that actually ran is provisioned, run and
+  // torn down within the same second. A record without a string `name` is
+  // skipped too — resolveJobTimeoutMinutes would throw on it the same way, and
+  // lose the whole report for one malformed entry.
+  if (typeof job.name !== 'string' || job.conclusion === 'skipped') return null;
   const startMs = Date.parse(job.started_at);
   const endMs = Date.parse(job.completed_at);
-  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return null;
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
 
   const timeoutMinutes = resolveJobTimeoutMinutes({ jobName: job.name, workflowFile, workflowYamlText, covered });
   if (timeoutMinutes == null) return null;

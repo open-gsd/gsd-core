@@ -302,10 +302,15 @@ test('parseJobRecord skips jobs that never executed (#5088)', async (t) => {
     assert.equal(parse({ conclusion: 'success', started_at: '2026-09-28T11:00:00Z', completed_at: 'garbage' }), null);
   });
 
-  await t.test('boundary: completed_at == started_at is a real zero-length record', () => {
-    const rec = parse({ conclusion: 'success', started_at: '2026-09-28T11:00:00Z', completed_at: '2026-09-28T11:00:00Z' });
-    assert.ok(rec);
-    assert.equal(rec.pct, 0);
+  await t.test('boundary: completed_at == started_at is treated as never executed', () => {
+    // One-second timestamp resolution: no job that ran starts and ends in the same second.
+    assert.equal(parse({ conclusion: 'cancelled', started_at: '2026-09-28T11:00:00Z', completed_at: '2026-09-28T11:00:00Z' }), null);
+  });
+
+  await t.test('a record without a string name returns null instead of throwing', () => {
+    for (const name of [undefined, null, 42]) {
+      assert.equal(parse({ name, conclusion: 'success', started_at: '2026-09-28T10:00:00Z', completed_at: '2026-09-28T10:10:00Z' }), null, String(name));
+    }
   });
 
   await t.test('boundary: completed_at 1s after started_at is recorded', () => {
