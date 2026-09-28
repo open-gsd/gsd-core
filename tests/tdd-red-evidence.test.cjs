@@ -24,8 +24,6 @@ const os = require('node:os');
 const path = require('node:path');
 const fc = require('fast-check');
 
-const fc = require('fast-check');
-
 const { cleanup, runGsdTools } = require('./helpers.cjs');
 const {
   classifyRedEvidence,
