@@ -2,31 +2,31 @@
   {
     "file": "gsd-core/workflows/execute-phase.md",
     "rule": "L1",
-    "target": "loop render-hooks verify:post",
+    "command": "VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)",
     "reason": "#5105: execute-phase.md dispatches verify:post hooks BEFORE its own verification.fingerprint call (execute-phase.md:1202), so gating on --after-fingerprint would be a no-op there by construction, not a defect."
   },
   {
     "file": "gsd-core/workflows/secure-phase.md",
     "rule": "L1",
-    "target": "loop render-hooks verify:post",
+    "command": "VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)",
     "reason": "#5105: secure-phase.md's own dispatch is a standalone activation self-check (\"is the secure-phase step active\"), not a post-fingerprint re-dispatch. Gating it would move the secure-phase hook into skippedHooks whenever SECURITY.md already exists, breaking the documented standalone re-audit path."
   },
   {
     "file": "gsd-core/workflows/validate-phase.md",
     "rule": "L1",
-    "target": "loop render-hooks verify:post",
+    "command": "VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)",
     "reason": "#5105: validate-phase.md's own dispatch is a standalone activation self-check, symmetric with secure-phase.md's — gating it would break the documented standalone re-audit path when VALIDATION.md already exists."
   },
   {
     "file": "gsd-core/workflows/audit-milestone.md",
     "rule": "L1",
-    "target": "loop render-hooks verify:post",
+    "command": "VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)",
     "reason": "#5105 design census §1b: audit-milestone.md:162 is read-only discovery (§5.5) — it never dispatches a step or writes an artifact, so gating is not applicable."
   },
   {
     "file": "gsd-core/workflows/verify-work.md",
     "rule": "L2",
-    "target": "$VERIFICATION_FILE",
+    "command": "gsd_run query frontmatter.set \"$VERIFICATION_FILE\" --field status --value passed",
     "reason": "#5105 design census §1b: $VERIFICATION_FILE is always the phase's own *-VERIFICATION.md report path (resolved via verification.resolve-file) — this is the canonicalization write to the report's own status, which is filtered from the covered-file set (v3) and therefore inert by construction."
   }
 ]
