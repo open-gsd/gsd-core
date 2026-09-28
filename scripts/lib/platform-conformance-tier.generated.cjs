@@ -270,6 +270,7 @@ module.exports = {
   "tests/unusable-input.test.cjs",
   "tests/update-custom-backup.test.cjs",
   "tests/user-artifact-staging.test.cjs",
+  "tests/verification-append-audit.test.cjs",
   "tests/verification-status.test.cjs",
   "tests/verify-archive-dirs-live-path.test.cjs",
   "tests/verify-command-grounding.test.cjs",

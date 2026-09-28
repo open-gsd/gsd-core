@@ -15,6 +15,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { runGsdTools, createTempGitProject, cleanup } = require('./helpers.cjs');
 
@@ -163,5 +164,259 @@ describe('T10-T14: verification.append-audit (#5105 R3)', () => {
       ),
       { numRuns: 15 },
     );
+  });
+});
+
+describe('S2: verification.append-audit containment refusals (#5105 review)', () => {
+  test('S2a: absolute path outside the project root is refused, bytes unchanged', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5105-outside-'));
+    t.after(() => cleanup(outside));
+    const outsideFile = path.join(outside, 'x-SECURITY.md');
+    const before = '# Security\n';
+    fs.writeFileSync(outsideFile, before);
+
+    const result = callAppendAudit(projectDir, outsideFile, { heading: 'H', rows: { a: 1 } });
+    assert.ok(!result.success, 'must refuse an absolute path outside the project root');
+    assert.strictEqual(fs.readFileSync(outsideFile, 'utf-8'), before);
+  });
+
+  test('S2b: a `../` escape is refused', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    const result = callAppendAudit(projectDir, '../../../../etc/passwd-SECURITY.md', { heading: 'H', rows: { a: 1 } });
+    assert.ok(!result.success, 'must refuse a `../` escape');
+  });
+
+  test('S2c: a symlink whose real target is a *-VERIFICATION.md is refused', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-VERIFICATION.md'), '# V\n');
+    try {
+      fs.symlinkSync('01-VERIFICATION.md', path.join(phaseDir, 'link-SECURITY.md'));
+    } catch {
+      t.skip('this host cannot create symlinks (unprivileged Windows)');
+      return;
+    }
+
+    const result = callAppendAudit(projectDir, '.planning/phases/01-foo/link-SECURITY.md', { heading: 'H', rows: { a: 1 } });
+    assert.ok(!result.success, 'must refuse a symlink resolving to a verification report');
+  });
+
+  test('S2d: a lowercase `07-verification.md` basename is refused (case-insensitive)', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const filePath = path.join(phaseDir, '07-verification.md');
+    fs.writeFileSync(filePath, '# v\n');
+
+    const result = callAppendAudit(projectDir, '.planning/phases/01-foo/07-verification.md', { heading: 'H', rows: { a: 1 } });
+    assert.ok(!result.success, 'must refuse a lowercase verification-report-shaped basename');
+  });
+
+  test('S2e: a `README.md` target (neither -SECURITY.md nor -VALIDATION.md) is refused', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const filePath = path.join(projectDir, 'README.md');
+    const before = '# hi\n';
+    fs.writeFileSync(filePath, before);
+
+    const result = callAppendAudit(projectDir, 'README.md', { heading: 'H', rows: { a: 1 } });
+    assert.ok(!result.success, 'must refuse a target that is not *-SECURITY.md / *-VALIDATION.md');
+    assert.strictEqual(fs.readFileSync(filePath, 'utf-8'), before);
+  });
+});
+
+describe('S3: verification.append-audit input validation (#5105 review)', () => {
+  function setupFixture(t) {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const filePath = path.join(phaseDir, '01-SECURITY.md');
+    fs.writeFileSync(filePath, '# Security\n\nNo audit trail yet.\n');
+    return { projectDir, filePath: '.planning/phases/01-foo/01-SECURITY.md' };
+  }
+
+  test('S3a: a newline in --heading is refused', (t) => {
+    const { projectDir, filePath } = setupFixture(t);
+    const result = callAppendAudit(projectDir, filePath, { heading: 'H\nX', rows: { a: 1 } });
+    assert.ok(!result.success, 'must refuse a heading containing a newline');
+  });
+
+  test('S3b: a `|` in a row key is refused', (t) => {
+    const { projectDir, filePath } = setupFixture(t);
+    const result = callAppendAudit(projectDir, filePath, { heading: 'H', rows: { 'a|b': 1 } });
+    assert.ok(!result.success, 'must refuse a row key containing |');
+  });
+
+  test('S3c: a negative row value is refused', (t) => {
+    const { projectDir, filePath } = setupFixture(t);
+    const result = callAppendAudit(projectDir, filePath, { heading: 'H', rows: { a: -1 } });
+    assert.ok(!result.success, 'must refuse a negative row value');
+  });
+
+  test('S3d: a non-integer row value is refused', (t) => {
+    const { projectDir, filePath } = setupFixture(t);
+    const result = callAppendAudit(projectDir, filePath, { heading: 'H', rows: { a: 1.5 } });
+    assert.ok(!result.success, 'must refuse a non-integer row value');
+  });
+
+  test('S3e: --date not matching YYYY-MM-DD is refused', (t) => {
+    const { projectDir, filePath } = setupFixture(t);
+    const result = callAppendAudit(projectDir, filePath, { heading: 'H', rows: { a: 1 }, date: '2026/01/01' });
+    assert.ok(!result.success, 'must refuse a malformed --date');
+  });
+
+  test('S3f: --rows that is not a JSON object (an array) is refused', (t) => {
+    const { projectDir, filePath } = setupFixture(t);
+    const result = runGsdTools(
+      ['query', 'verification.append-audit', filePath, '--heading', 'H', '--rows', '[1,2]'],
+      projectDir,
+    );
+    assert.ok(!result.success, 'must refuse a non-object --rows value');
+  });
+});
+
+describe('S4: verification.append-audit table comparison robustness (#5105 review)', () => {
+  test('S4a: legacy block (no blank line, wide `|--------|` separator), identical counts → appended:false', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const filePath = path.join(phaseDir, '01-SECURITY.md');
+    fs.writeFileSync(
+      filePath,
+      '# Security\n\n## Security Audit 2026-01-01\n'
+        + '| Metric | Count |\n|--------|-------|\n'
+        + '| Threats found | 3 |\n| Closed | 3 |\n| Open | 0 |\n',
+    );
+
+    const result = callAppendAudit(projectDir, '.planning/phases/01-foo/01-SECURITY.md', {
+      heading: 'Security Audit',
+      rows: { 'Threats found': 3, Closed: 3, Open: 0 },
+      date: '2026-02-01',
+    });
+    assert.ok(result.success, `expected success: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).appended, false);
+  });
+
+  test('S4b: only the template\'s bare "## Security Audit Trail" heading is present → appended:true', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const filePath = path.join(phaseDir, '01-SECURITY.md');
+    fs.writeFileSync(filePath, '# Security\n\n## Security Audit Trail\n\nNo entries yet.\n');
+
+    const result = callAppendAudit(projectDir, '.planning/phases/01-foo/01-SECURITY.md', {
+      heading: 'Security Audit',
+      rows: { 'Threats found': 1 },
+      date: '2026-01-01',
+    });
+    assert.ok(result.success, `expected success: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).appended, true, '"Security Audit Trail" is not a dated block');
+  });
+
+  test('S4c: reordered keys, same values → appended:false (order-insensitive compare)', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const filePath = path.join(phaseDir, '01-SECURITY.md');
+    fs.writeFileSync(
+      filePath,
+      '# Security\n\n'
+        + auditBlock('Security Audit', '2026-01-01', { 'Threats found': 3, Closed: 3, Open: 0 }),
+    );
+
+    const result = callAppendAudit(projectDir, '.planning/phases/01-foo/01-SECURITY.md', {
+      heading: 'Security Audit',
+      rows: { Open: 0, Closed: 3, 'Threats found': 3 },
+      date: '2026-02-01',
+    });
+    assert.ok(result.success, `expected success: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).appended, false);
+  });
+
+  test('S4d: one count differs (order also reshuffled) → appended:true', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const filePath = path.join(phaseDir, '01-SECURITY.md');
+    fs.writeFileSync(
+      filePath,
+      '# Security\n\n'
+        + auditBlock('Security Audit', '2026-01-01', { 'Threats found': 3, Closed: 3, Open: 0 }),
+    );
+
+    const result = callAppendAudit(projectDir, '.planning/phases/01-foo/01-SECURITY.md', {
+      heading: 'Security Audit',
+      rows: { Open: 1, Closed: 3, 'Threats found': 3 },
+      date: '2026-02-01',
+    });
+    assert.ok(result.success, `expected success: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).appended, true);
+  });
+});
+
+describe('S6: verification.append-audit fence-aware block detection (#5105 review)', () => {
+  test('S6a: a `## <heading> <date>`-shaped line inside a fenced code block is not a block', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const filePath = path.join(phaseDir, '01-SECURITY.md');
+    fs.writeFileSync(
+      filePath,
+      '# Security\n\n'
+        + '```\n## Security Audit 2026-01-01\n| Metric | Count |\n|---|---|\n| Threats found | 3 |\n```\n',
+    );
+
+    const result = callAppendAudit(projectDir, '.planning/phases/01-foo/01-SECURITY.md', {
+      heading: 'Security Audit',
+      rows: { 'Threats found': 3 },
+      date: '2026-02-01',
+    });
+    assert.ok(result.success, `expected success: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).appended, true, 'a fenced heading must never be selected as a real block');
+  });
+});
+
+describe('#5105 review: planAuditAppend default-date clock seam (pure core, no subprocess)', () => {
+  test('omitting `date` defaults through the injectable `clock` seam, never a bare `new Date()`', () => {
+    const { planAuditAppend } = require('../gsd-core/bin/lib/verification.cjs');
+    class FixedClock extends Date {
+      constructor() {
+        super('2027-03-04T00:00:00.000Z');
+      }
+    }
+    const result = planAuditAppend('# Security\n\nNo audit trail yet.\n', {
+      heading: 'Security Audit',
+      rows: { a: 1 },
+      clock: FixedClock,
+    });
+    assert.strictEqual(result.appended, true);
+    assert.match(result.content, /## Security Audit 2027-03-04/);
+  });
+
+  test('omitting `date` and `clock` picks up node:test mock.timers on global Date', (t) => {
+    const { planAuditAppend } = require('../gsd-core/bin/lib/verification.cjs');
+    t.mock.timers.enable({ apis: ['Date'], now: new Date('2027-05-06T00:00:00.000Z') });
+    t.after(() => t.mock.timers.reset());
+    const result = planAuditAppend('# Security\n\nNo audit trail yet.\n', {
+      heading: 'Security Audit',
+      rows: { a: 1 },
+    });
+    assert.strictEqual(result.appended, true);
+    assert.match(result.content, /## Security Audit 2027-05-06/);
   });
 });
