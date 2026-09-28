@@ -1264,8 +1264,25 @@ function sliceFrontmatterLayout(yaml: string): { preamble: string[]; segments: F
  * user to edit the file directly. The reported #1572 case (mutating an UNRELATED field)
  * is unaffected: unchanged keys preserve their original raw text and never reach here.
  */
-function regenerateFrontmatterKey(key: string, value: FrontmatterValue): string {
-  const rendered = reconstructFrontmatter({ [key]: value });
+function regenerateFrontmatterKey(key: string, value: FrontmatterValue, comments?: FullLineCommentChannel): string {
+  // Computed key: a key named `__proto__` is an own data property here, never the prototype.
+  const single: Frontmatter = { [key]: value };
+  // The comments nested inside this key's value (#3742 dotted paths `key.sub`,
+  // `key.sub.subsub`) ride along, so `reconstructFrontmatter` re-emits each beside the
+  // sub-key it leads. The key's own leading comment (`leading[key]`) and the block's
+  // trailing comments are not part of the value: they sit in the splice's preamble or a
+  // neighbour's tail, which is re-emitted verbatim, so they are left out here.
+  if (comments) {
+    const nested: Record<string, string[]> = Object.create(null) as Record<string, string[]>;
+    for (const [path, lines] of Object.entries(comments.leading)) {
+      if (path.startsWith(`${key}.`)) nested[path] = lines;
+    }
+    if (Object.keys(nested).length > 0) {
+      const scoped: FullLineCommentChannel = { leading: nested, trailing: [] };
+      (single as Record<symbol, unknown>)[FULL_LINE_COMMENTS as unknown as symbol] = scoped;
+    }
+  }
+  const rendered = reconstructFrontmatter(single);
   if (/\[object Object\]/.test(rendered)) {
     throw new Error(
       `frontmatter: cannot faithfully serialize key "${key}" — it contains a nested object-list ` +
@@ -1293,8 +1310,16 @@ function regenerateFrontmatterKey(key: string, value: FrontmatterValue): string 
  * duplicate or drop a key. `FRONTMATTER_SPLICE_VERIFY_FAILED`: the block the writer built
  * does not read back as the intended object (a value or nested key the serializer cannot
  * represent), so writing it would store something other than what the caller asked for.
+ * `FRONTMATTER_COMMENT_WOULD_BE_LOST`: a changed key's value holds a full-line comment the
+ * regenerated value cannot carry (its sub-key was removed, the value is no longer a map, the
+ * comment sits between list items or trails the value), so writing would silently drop text
+ * the author wrote (#3257/#3742 treat those comments as preserved data).
  */
-type FrontmatterWriteRefusalCode = 'FRONTMATTER_UNPARSEABLE' | 'FRONTMATTER_KEYS_UNRECONCILABLE' | 'FRONTMATTER_SPLICE_VERIFY_FAILED';
+type FrontmatterWriteRefusalCode =
+  | 'FRONTMATTER_UNPARSEABLE'
+  | 'FRONTMATTER_KEYS_UNRECONCILABLE'
+  | 'FRONTMATTER_SPLICE_VERIFY_FAILED'
+  | 'FRONTMATTER_COMMENT_WOULD_BE_LOST';
 
 class FrontmatterWriteRefusedError extends Error {
   readonly code: FrontmatterWriteRefusalCode;
@@ -1364,6 +1389,49 @@ function verifyReadsBackAs(out: string, newObj: Frontmatter): string {
   return out;
 }
 
+/**
+ * The full-line comments inside one key's value lines (`body`, key line first): each `#`
+ * line the parser ignores — the key's lines parse to the same value without it. A `#` line
+ * inside a block scalar or a multi-line quoted scalar is value text, not a comment. When the
+ * lines do not parse on their own every `#` line counts, so the check below fails closed.
+ */
+function segmentBodyComments(body: string[]): string[] {
+  const whole = loadSegmentValue(body);
+  const comments: string[] = [];
+  for (let i = 1; i < body.length; i++) {
+    if (!/^\s*#/.test(body[i])) continue;
+    const without = whole ? loadSegmentValue([...body.slice(0, i), ...body.slice(i + 1)]) : null;
+    if (!whole || (without !== null && frontmatterDeepEqual(without.value, whole.value))) comments.push(body[i].trim());
+  }
+  return comments;
+}
+
+/**
+ * The comment post-condition of regenerating a changed key: every full-line comment its
+ * original value held appears in the regenerated text exactly as often (compared trimmed —
+ * `reconstructFrontmatter` re-indents a nested comment to its sub-key's depth). A comment
+ * that could not be re-attached is refused, never silently dropped (found while
+ * implementing #5105).
+ */
+function assertCommentsKept(key: string, originalBody: string[], regenerated: string): void {
+  const counts = new Map<string, number>();
+  for (const c of segmentBodyComments(originalBody)) counts.set(c, (counts.get(c) ?? 0) + 1);
+  for (const line of splitLines(regenerated)) {
+    const t = line.trim();
+    if (t.startsWith('#')) counts.set(t, (counts.get(t) ?? 0) - 1);
+  }
+  const lost = [...counts].filter(([, n]) => n !== 0).map(([c]) => c);
+  if (lost.length > 0) {
+    throw new FrontmatterWriteRefusedError(
+      'FRONTMATTER_COMMENT_WOULD_BE_LOST',
+      `frontmatter: refusing to write — the new value of "${key}" cannot keep the full-line comment(s) ` +
+        `written inside it (${lost.map((c) => JSON.stringify(c)).join(', ')}): a comment on a sub-key that ` +
+        'is removed, between list items, or after the last line of the value has nowhere to go. Edit the ' +
+        'file directly.',
+    );
+  }
+}
+
 function spliceFrontmatter(content: string, newObj: Frontmatter): string {
   // The block is located through `frontmatterBlock` (composing `frontmatterRegion`), so the
   // writer and every reader agree on where it is: BOM (#2977), CRLF, an empty block.
@@ -1430,6 +1498,8 @@ function spliceFrontmatter(content: string, newObj: Frontmatter): string {
 
     const emitted: string[] = [...preamble];
     const seen: Set<string> = new Set();
+    // The #3257/#3742 full-line-comment channel the parse attached to the original block.
+    const commentChannel = (originalParsed as Record<symbol, unknown>)[FULL_LINE_COMMENTS as unknown as symbol] as FullLineCommentChannel | undefined;
 
     for (const seg of segments) {
       seen.add(seg.key);
@@ -1444,8 +1514,12 @@ function spliceFrontmatter(content: string, newObj: Frontmatter): string {
           emitted.push(seg.raw); // unchanged → preserve original raw text verbatim
         } else {
           // changed → regenerate (fail-closed on object-lists), keeping the tail. A value
-          // that is not written at all (null) regenerates to '' — no line, only the tail.
-          const regenerated = regenerateFrontmatterKey(seg.key, newObj[seg.key]);
+          // that is not written at all (null) regenerates to '' — no line, only the tail:
+          // the key is deleted, and the comments inside its value go with it (#3257 AC5).
+          // Otherwise every comment inside the value is re-emitted beside its sub-key or
+          // the write is refused.
+          const regenerated = regenerateFrontmatterKey(seg.key, newObj[seg.key], commentChannel);
+          if (regenerated !== '') assertCommentsKept(seg.key, seg.body, regenerated);
           emitted.push(...(regenerated === '' ? [] : [regenerated]), ...seg.tail);
         }
       } else {
@@ -1693,6 +1767,26 @@ function cmdFrontmatterGet(cwd: string, filePath: string, field: string | undefi
  * the same shape `cmdFrontmatterGet` uses for an unparseable block. Returns null when
  * refused; any other error propagates as before.
  */
+/**
+ * A field name is one line of a YAML key: a line break, NUL or other control character in it
+ * is never an intended key name. The one check `frontmatter set` and `frontmatter merge`
+ * share (found while implementing #5105).
+ */
+function rejectControlCharacterFieldName(field: string): void {
+  if (/[\u0000-\u001f\u007f]/.test(field)) {
+    error('field name contains a control character (a line break, tab, NUL or other C0/DEL character) — use a plain key name');
+  }
+}
+
+/**
+ * Write one field as an own data property. `fm[field] =` and `Object.assign` treat a field
+ * named `__proto__` as the prototype setter, so the key was never written while the command
+ * reported success (found while implementing #5105).
+ */
+function setOwnField(fm: Frontmatter, field: string, value: FrontmatterValue): void {
+  Object.defineProperty(fm, field, { value, writable: true, enumerable: true, configurable: true });
+}
+
 function spliceOrReportRefusal(content: string, fm: Frontmatter, filePath: string, raw: boolean): string | null {
   try {
     return spliceFrontmatter(content, fm);
@@ -1707,11 +1801,7 @@ function cmdFrontmatterSet(cwd: string, filePath: string, field: string | undefi
   if (!filePath || !field || value === undefined) { error('file, field, and value required'); }
   // Path traversal guard: reject null bytes
   if (filePath.includes('\0')) { error('file path contains null bytes'); }
-  // A field name is one line of a YAML key: a line break, NUL or other control character in
-  // it is never an intended key name (found while implementing #5105).
-  if (/[\u0000-\u001f\u007f]/.test(field as string)) {
-    error('field name contains a control character (a line break, tab, NUL or other C0/DEL character) — use a plain key name');
-  }
+  rejectControlCharacterFieldName(field as string);
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
   if (!fs.existsSync(fullPath)) { output({ error: 'File not found', path: filePath }, raw, undefined); return; }
   const content = fs.readFileSync(fullPath, 'utf-8');
@@ -1728,7 +1818,7 @@ function cmdFrontmatterSet(cwd: string, filePath: string, field: string | undefi
     output({ error: lossyErr, field }, raw, undefined);
     return;
   }
-  fm[field as string] = parsedValue as FrontmatterValue;
+  setOwnField(fm, field as string, parsedValue as FrontmatterValue);
   const newContent = spliceOrReportRefusal(content, fm, filePath, raw);
   if (newContent === null) return;
   // #1660: a no-op set (newContent unchanged) with a dict-valued field means the lossy
@@ -1826,19 +1916,24 @@ function cmdFrontmatterMerge(cwd: string, filePath: string, data: string | undef
   const fm = extractFrontmatter(content, fullPath);
   let mergeData: Record<string, FrontmatterValue>;
   try { mergeData = JSON.parse(data as string) as Record<string, FrontmatterValue>; } catch { error('Invalid JSON for --data'); return; }
+  // Only a JSON object names fields: an array or a string would spread into index-named
+  // keys (`0: q`) and `null` crashed (found while implementing #5105).
+  if (mergeData === null || typeof mergeData !== 'object' || Array.isArray(mergeData)) {
+    error('--data must be a JSON object of field names to values');
+    return;
+  }
+  for (const key of Object.keys(mergeData)) rejectControlCharacterFieldName(key);
   // #1660 parity with `cmdFrontmatterSet`: a merged key that would flatten a lossy object-list
   // field is refused before anything is written, reported in set's `{ error, field }` shape
   // (found while implementing #5105).
-  if (mergeData && typeof mergeData === 'object' && !Array.isArray(mergeData)) {
-    for (const [key, value] of Object.entries(mergeData)) {
-      const lossyErr = objectListFieldWouldLoseData(content, key, value);
-      if (lossyErr) {
-        output({ error: lossyErr, field: key }, raw, undefined);
-        return;
-      }
+  for (const [key, value] of Object.entries(mergeData)) {
+    const lossyErr = objectListFieldWouldLoseData(content, key, value);
+    if (lossyErr) {
+      output({ error: lossyErr, field: key }, raw, undefined);
+      return;
     }
   }
-  Object.assign(fm, mergeData);
+  for (const [key, value] of Object.entries(mergeData)) setOwnField(fm, key, value);
   const newContent = spliceOrReportRefusal(content, fm, filePath, raw);
   if (newContent === null) return;
   platformWriteSync(fullPath, newContent);
