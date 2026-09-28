@@ -19,9 +19,9 @@ if [ "${USE_WORKTREES}" != "false" ]; then
   QUICK_PLAN_PARENT=$(git rev-parse HEAD)
   COMMIT_DOCS=$(gsd_run query config-get commit_docs --raw 2>/dev/null || echo "true")
   if [ "$COMMIT_DOCS" != "false" ]; then
-    # PLAN.md is always in scope. CONTEXT.md/RESEARCH.md join it only when their
-    # phase actually ran AND actually produced a file — a mode flag alone is not
-    # proof the file exists (#4996).
+    # pre-dispatch plan commit — PLAN.md is always in scope. CONTEXT.md/RESEARCH.md
+    # join it only when their phase actually ran AND actually produced a file — a
+    # mode flag alone is not proof the file exists (#4996).
     QUICK_PREDISPATCH_PATHS="${QUICK_DIR}/${quick_id}-PLAN.md"
     if [ "${DISCUSS_MODE}" = "true" ] && [ -f "${QUICK_DIR}/${quick_id}-CONTEXT.md" ]; then
       QUICK_PREDISPATCH_PATHS="${QUICK_PREDISPATCH_PATHS} ${QUICK_DIR}/${quick_id}-CONTEXT.md"
