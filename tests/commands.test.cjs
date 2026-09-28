@@ -510,6 +510,142 @@ key-decisions:
     assert.strictEqual(output.decisions[1].summary, 'JWT tokens', 'second decision summary');
     assert.strictEqual(output.decisions[1].rationale, 'Stateless auth for scalability', 'second decision rationale');
   });
+
+  // #5013: an unparseable frontmatter block was silently treated as an empty one —
+  // every field fell back to its default and the command exited 0, so a milestone
+  // audit reading requirements_completed through this command reported "zero
+  // requirements completed" for a plan that actually completed several, with
+  // nothing printed to stderr.
+  test('unparseable frontmatter (block-sequence item with unquoted colon) exits non-zero with a parse error (#5013)', () => {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-setup');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    // Issue's literal repro: an unquoted `key: value`-shaped colon inside a
+    // block-sequence item under `provides:` — js-yaml rejects this with
+    // "bad indentation of a mapping entry".
+    fs.writeFileSync(
+      path.join(phaseDir, '01-01-SUMMARY.md'),
+      `---
+phase: 01-setup
+plan: 01
+provides:
+  - src/a.ts — model: x, effort: high
+requirements-completed: [REQ-01, REQ-02]
+---
+
+# Summary
+`
+    );
+
+    const full = runGsdTools('summary-extract .planning/phases/01-setup/01-01-SUMMARY.md', tmpDir);
+    assert.strictEqual(full.success, false, 'unparseable frontmatter must exit non-zero, not report empty fields at exit 0');
+    assert.match(full.error, /01-01-SUMMARY\.md/, 'error must name the file');
+    assert.match(full.error, /pars/i, 'error must say the frontmatter did not parse');
+
+    const picked = runGsdTools(
+      'summary-extract .planning/phases/01-setup/01-01-SUMMARY.md --pick requirements_completed',
+      tmpDir
+    );
+    assert.strictEqual(picked.success, false, '--pick must also surface the parse failure, not print an empty string at exit 0');
+  });
+
+  test('control: same fixture with the ambiguous provides item quoted still extracts normally (#5013)', () => {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-setup');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(phaseDir, '01-01-SUMMARY.md'),
+      `---
+phase: 01-setup
+plan: 01
+provides:
+  - "src/a.ts — model: x, effort: high"
+requirements-completed: [REQ-01, REQ-02]
+---
+
+# Summary
+`
+    );
+
+    const result = runGsdTools('summary-extract .planning/phases/01-setup/01-01-SUMMARY.md', tmpDir);
+    assert.ok(result.success, `well-formed frontmatter must be unaffected by the #5013 fix: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.deepStrictEqual(output.requirements_completed, ['REQ-01', 'REQ-02'], 'requirements_completed still extracted');
+  });
+
+  test('genuinely empty (well-formed) frontmatter still reports zero requirements at exit 0 (#5013)', () => {
+    // Distinct from the unparseable case: no frontmatter fence content that fails
+    // to parse — just an absent field. Must NOT be misclassified as a parse failure.
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-setup');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(phaseDir, '01-01-SUMMARY.md'),
+      `---
+phase: 01-setup
+plan: 01
+---
+
+# Summary
+`
+    );
+
+    const result = runGsdTools('summary-extract .planning/phases/01-setup/01-01-SUMMARY.md', tmpDir);
+    assert.ok(result.success, `genuinely empty frontmatter must still succeed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.deepStrictEqual(output.requirements_completed, [], 'a real absence of the field is a legitimate zero, not a parse failure');
+  });
+
+  test('absolute summaryPath resolves to the literal path instead of being mangled by path.join (#5013)', () => {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const absPath = path.join(phaseDir, '01-01-SUMMARY.md');
+    fs.writeFileSync(
+      absPath,
+      `---
+one-liner: Absolute path summary
+---
+`
+    );
+
+    const result = runGsdTools(['summary-extract', absPath], tmpDir);
+    assert.ok(result.success, `absolute path must resolve, not be concatenated onto cwd: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.one_liner, 'Absolute path summary', 'absolute summaryPath must resolve to the literal file');
+  });
+
+  // #5013 orthogonal-review finding: making an absolute summaryPath resolve
+  // (above) must not also make it escape the project. An absolute path outside
+  // tmpDir, or a relative path that walks out via `..`, must be refused rather
+  // than silently read and echoed back.
+  test('absolute summaryPath outside the project root is refused, not read (#5013)', () => {
+    const outsideDir = createTempDir();
+    try {
+      const outsideFile = path.join(outsideDir, 'OUTSIDE-SUMMARY.md');
+      fs.writeFileSync(outsideFile, '---\none-liner: Should never be readable\n---\n');
+
+      const result = runGsdTools(['summary-extract', outsideFile], tmpDir);
+      assert.strictEqual(result.success, false, 'an absolute path outside the project root must be refused, not resolved');
+      assert.doesNotMatch(result.output || '', /Should never be readable/, 'refused content must never be echoed back');
+    } finally {
+      cleanup(outsideDir);
+    }
+  });
+
+  test('relative summaryPath escaping the project root via ".." is refused (#5013)', () => {
+    const outsideDir = createTempDir();
+    try {
+      const outsideFile = path.join(outsideDir, 'OUTSIDE-SUMMARY.md');
+      fs.writeFileSync(outsideFile, '---\none-liner: Should never be readable\n---\n');
+      const relEscape = path.relative(tmpDir, outsideFile);
+
+      const result = runGsdTools(['summary-extract', relEscape], tmpDir);
+      assert.strictEqual(result.success, false, 'a relative path that walks outside the project root must be refused, not resolved');
+      assert.doesNotMatch(result.output || '', /Should never be readable/, 'refused content must never be echoed back');
+    } finally {
+      cleanup(outsideDir);
+    }
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

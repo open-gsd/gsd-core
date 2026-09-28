@@ -632,7 +632,13 @@ describe('regressions', () => {
       // rows B6/B11). 23 -> 25 is an intentional, documented growth of the
       // enum, not drift; bump the golden count rather than treat this as a
       // Hyrum violation.
-      assert.strictEqual(seen.reasonCount, 25, 'ERROR_REASON must keep all 25 members (23 + #3884 PICK_FIELD_ABSENT/PICK_OUTPUT_NOT_JSON)');
+      //
+      // #5013 legitimately added a 26th code — SUMMARY_EXTRACT_UNPARSEABLE —
+      // for cmdSummaryExtract's frontmatter-unparseable refusal (mirrors the
+      // FRONTMATTER_UNPARSEABLE marker state.cts/audit.cts/verification.cts
+      // already gate on). 25 -> 26 is the same kind of intentional,
+      // documented growth as the #3884 bump above.
+      assert.strictEqual(seen.reasonCount, 26, 'ERROR_REASON must keep all 26 members (25 + #5013 SUMMARY_EXTRACT_UNPARSEABLE)');
       assert.ok(
         seen.keys.includes('SDK_FAIL_FAST'),
         `ERROR_REASON must still include SDK_FAIL_FAST, got: ${JSON.stringify(seen.keys)}`,

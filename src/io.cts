@@ -306,6 +306,11 @@ const ERROR_REASON = Object.freeze({
   // exit 0. See .gsd/phase/feat-3884-failure-is-a-value/40-design.md.
   PICK_FIELD_ABSENT: 'pick_field_absent',
   PICK_OUTPUT_NOT_JSON: 'pick_output_not_json',
+  // summary-extract (#5013): the SUMMARY's frontmatter fence exists but failed
+  // to parse (extractFrontmatter's FRONTMATTER_UNPARSEABLE marker) — a
+  // distinct failure from "no frontmatter"/"field absent", never a silent
+  // demotion to empty fields at exit 0.
+  SUMMARY_EXTRACT_UNPARSEABLE: 'summary_extract_unparseable',
   // generic
   USAGE: 'usage',
   UNKNOWN: 'unknown',
@@ -361,8 +366,8 @@ function formatDiagnosticToken(value: string): string {
 
 /**
  * Map an ERROR_REASON wire value onto a declared outcome name (#3912,
- * ADR-3889 §4). Closed over the 25-member enum: every reason gets an
- * explicit entry below, so a 26th member added without a mapping falls
+ * ADR-3889 §4). Closed over the 26-member enum: every reason gets an
+ * explicit entry below, so a 27th member added without a mapping falls
  * through to the `?? 'FAIL'` default rather than silently mis-projecting —
  * and tests/A1 iterates `Object.values(ERROR_REASON)`, so that default is
  * exactly what makes an unmapped addition visible instead of invisible.
@@ -412,6 +417,10 @@ const REASON_TO_OUTCOME: Readonly<Record<string, string>> = Object.freeze({
   // supposed to be there and was not; a prerequisite of the query failed.
   [ERROR_REASON.PICK_FIELD_ABSENT]: 'UNAVAILABLE',
   [ERROR_REASON.PICK_OUTPUT_NOT_JSON]: 'UNAVAILABLE',
+  // #5013: the SUMMARY's frontmatter fence exists but failed to parse — the
+  // prerequisite of the query (readable frontmatter) is what's broken, same
+  // shape as PICK_FIELD_ABSENT/PICK_OUTPUT_NOT_JSON just above.
+  [ERROR_REASON.SUMMARY_EXTRACT_UNPARSEABLE]: 'UNAVAILABLE',
 
   // Self-failure: the run itself broke, not its inputs.
   [ERROR_REASON.SDK_FAIL_FAST]: 'INTERNAL',
