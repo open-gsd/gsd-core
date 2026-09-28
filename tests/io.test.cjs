@@ -877,7 +877,7 @@ describe('#3912 A3-A5: output({error}) records DEGRADED — shape-exhaustive plu
   // doc's per-file breakdown (frontmatter 7, phase 4, roadmap 3, state 25,
   // verify 8, workstream 7, commands 5, template 3, gsd2-import 2 = 64),
   // which is itself the corrected count over ADR-2980's stale 60.
-  test('A3 census: exactly 64 output({error}) call sites exist in src/, across the 9 modules the design measured', () => {
+  test('A3 census: exactly 69 output({error}) call sites exist in src/, across the 9 modules the design measured', () => {
     const SRC_ROOT = path.resolve(__dirname, '../src');
 
     function listCtsFiles(dir) {
@@ -927,12 +927,15 @@ describe('#3912 A3-A5: output({error}) records DEGRADED — shape-exhaustive plu
     assert.deepStrictEqual(
       perFile,
       {
-        'commands.cts': 5, 'frontmatter.cts': 8, 'gsd2-import.cts': 2, 'phase.cts': 4,
+        'commands.cts': 5, 'frontmatter.cts': 10, 'gsd2-import.cts': 2, 'phase.cts': 4,
+        // frontmatter.cts +2 #5105: spliceOrReportRefusal's write-refusal report (shared by
+        // set/merge) and cmdFrontmatterMerge's #1660 lossy-object-list-field refusal (parity
+        // with cmdFrontmatterSet's existing site) — 8 -> 10.
         'roadmap.cts': 3, 'state.cts': 27, 'template.cts': 3, 'verify.cts': 8, 'workstream.cts': 7,  // +1 #3807: advance-plan's ambiguous-position error; +1 #3784: advance-plan's ambiguous-PLAN-position error (two plan spellings, different numbers); +1 #4806: cmdFrontmatterGet's unparseable-frontmatter error
       },
       `per-file output({error}) census drifted: ${JSON.stringify(perFile)}`,
     );
-    assert.strictEqual(total, 67, `enumerated output({error}) population drifted from the measured 67 (66 + #4806's cmdFrontmatterGet unparseable-frontmatter error): got ${total}`);
+    assert.strictEqual(total, 69, `enumerated output({error}) population drifted from the measured 69 (67 + #5105's 2 new frontmatter write-refusal sites): got ${total}`);
   });
 });
 
