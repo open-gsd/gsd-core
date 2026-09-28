@@ -1125,15 +1125,40 @@ export function probeTty(opts: { platform?: string } = {}): string | null {
 
 // ─── Platform file I/O ────────────────────────────────────────────────────────
 
+/**
+ * How many leading lines of LF-only `text` are its closed YAML frontmatter block (opening
+ * fence through closing fence), or 0 when there is none. The same byte-0 rule the
+ * frontmatter reader uses (`frontmatterRegion` / `frontmatterBlock` in `frontmatter.cts`,
+ * which cannot be imported here — it imports this module): an optional leading BOM, `---`
+ * as the first line, closed by the first later line starting `---`; an unterminated block is
+ * not frontmatter. Parity with `frontmatterBlock` is pinned by
+ * `tests/shell-command-projection-md-normalize.test.cjs`.
+ */
+function leadingFrontmatterLineCount(text: string): number {
+  const start = text.charCodeAt(0) === 0xFEFF ? 1 : 0;
+  if (!text.startsWith('---\n', start)) return 0;
+  const closingNewline = text.indexOf('\n---', start + 4);
+  if (closingNewline === -1) return 0;
+  return text.slice(0, closingNewline + 1).split('\n').length;
+}
+
 function _normalizeMd(content: string): string {
   if (!content || typeof content !== 'string') return content;
   let text = content.replace(/\r\n/g, '\n');
   const lines = text.split('\n');
+  // The frontmatter block is YAML, not markdown: its lines are published exactly as written.
+  // A `# comment` is not a heading, and a blank line inserted into a multi-line quoted scalar
+  // or removed from a block scalar changes the value (found while implementing #5105).
+  const frontmatterLines = leadingFrontmatterLineCount(text);
   const result: string[] = [];
   const fenceRegex = /^```/;
   const insideFence = new Array<boolean>(lines.length);
   let fenceOpen = false;
   for (let i = 0; i < lines.length; i++) {
+    if (i < frontmatterLines) {
+      insideFence[i] = false;
+      continue;
+    }
     if (fenceRegex.test(lines[i].trimEnd())) {
       if (fenceOpen) {
         insideFence[i] = false;
@@ -1148,6 +1173,10 @@ function _normalizeMd(content: string): string {
   }
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (i < frontmatterLines) {
+      result.push(line);
+      continue;
+    }
     const prev = i > 0 ? lines[i - 1] : '';
     const prevTrimmed = prev.trimEnd();
     const trimmed = line.trimEnd();
@@ -1173,8 +1202,11 @@ function _normalizeMd(content: string): string {
       if (next !== undefined && next.trimEnd() !== '' && !/^(\s*[-*+]\s|\s*\d+\.\s)/.test(next) && !/^\s/.test(next)) result.push('');
     }
   }
+  // The frontmatter lines are `result`'s first entries, unchanged; the blank-run collapse
+  // applies from the line ending that closes the block onward.
+  const head = result.slice(0, frontmatterLines).join('\n');
   text = result.join('\n');
-  text = text.replace(/\n{3,}/g, '\n\n');
+  text = head + text.slice(head.length).replace(/\n{3,}/g, '\n\n');
   text = text.replace(/\n*$/, '\n');
   return text;
 }
