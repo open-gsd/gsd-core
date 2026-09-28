@@ -151,3 +151,53 @@ describe('T5-T9: loop render-hooks verify:post --after-fingerprint (#5105 R2)', 
     );
   });
 });
+
+describe('#5105 S10: producesEntryPresent shares resolvePhaseArtifactFile; --after-fingerprint is a confined path', () => {
+  let projectDir;
+
+  before(() => { projectDir = makeProjectDir(); });
+  after(() => { if (projectDir) cleanup(projectDir); });
+
+  test('a stray 02-SECURITY.md inside a phase dir named 01-foo does NOT count as present', () => {
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo-wrongprefix');
+    cleanup(phaseDir);
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '02-SECURITY.md'), '# Security\n');
+
+    const result = renderHooks(projectDir, phaseDir, ['--after-fingerprint', phaseDir]);
+    assert.strictEqual(result.exitCode, 0, `expected exit 0: ${result.stderr}`);
+    const envelope = JSON.parse(result.stdout.trim());
+    assert.deepStrictEqual(
+      envelope.skippedHooks, [],
+      'a cross-phase-numbered stray artifact must not count as this phase\'s own',
+    );
+  });
+
+  test('--after-fingerprint <relative-path> resolves against --cwd, not process cwd', () => {
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '05-relative');
+    cleanup(phaseDir);
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '05-SECURITY.md'), '# Security\n');
+
+    const relPhaseDir = path.relative(projectDir, phaseDir);
+    const result = renderHooks(projectDir, phaseDir, ['--after-fingerprint', relPhaseDir]);
+    assert.strictEqual(result.exitCode, 0, `expected exit 0: ${result.stderr}`);
+    const envelope = JSON.parse(result.stdout.trim());
+    const securitySkip = envelope.skippedHooks.find((s) => s.capId === 'security');
+    assert.ok(securitySkip, `relative --after-fingerprint must resolve against --cwd; got: ${JSON.stringify(envelope.skippedHooks)}`);
+  });
+
+  test('--after-fingerprint <path outside the project root> is refused (fail closed)', () => {
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '06-outside');
+    cleanup(phaseDir);
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-after-fp-outside-'));
+    try {
+      const result = renderHooks(projectDir, phaseDir, ['--after-fingerprint', outsideDir]);
+      assert.notStrictEqual(result.exitCode, 0, 'a phase dir outside the project root must be refused, not silently accepted');
+    } finally {
+      cleanup(outsideDir);
+    }
+  });
+});
