@@ -1,12 +1,12 @@
 'use strict';
 
-// allow-test-rule: source-text-is-the-product — the workflow-file readFileSync
-// calls in the "doc/workflow content parity" block below read execute-plan.md /
-// transition.md / complete-milestone.md, whose text IS what the runtime loads
-// (per CONTRIBUTING.md's no-source-grep exemption table).
-// allow-test-rule: docs-parity — the docs/CONFIGURATION.md readFileSync in that
-// same block asserts the public doc's Gate/Safety Settings tables stay in sync
-// with the schema manifest; there is no runtime API to enumerate them.
+// NOTE: this file's readFileSync calls target .md/.json paths (workflow files,
+// docs/CONFIGURATION.md, templates/config.json), never a .cjs/.js/.ts source
+// path — the no-source-grep ESLint rule's trigger scope — so no
+// `allow-test-rule:` marker applies here. `scripts/lint-allow-test-rule-refs.cjs`
+// (its "unverified marker-bearing files" ratchet) rejects a marker with no
+// detectable violation to suppress, which is exactly what a marker on this file
+// would be.
 
 /**
  * #4974 — `gates.*` confirmation toggles never take effect.
