@@ -296,33 +296,75 @@ describe('#5105: write normalization leaves the frontmatter block untouched', ()
     assert.strictEqual(normalizeContent(MD, doc).content, '---\na: 1\n\n# note\n\nb: 2\n');
   });
 
+  // The prior version of this property forced a real `---` closer between `fm` and `body`
+  // (`${fm.join('\n')}\n---\n${body...}`), so `frontmatterBlock` was GUARANTEED non-null and
+  // the check ran in one direction only: "the block this template always produces is
+  // preserved". It never generated a document whose only closing-shaped line is a look-alike
+  // ('----', '--- x') rather than an exact `---`, and it never exercised CRLF at all \u2014 so a
+  // mutant version of `leadingFrontmatterLineCount` requiring an EXACT `\n---\n` (rejecting
+  // `----`/`--- x` as closers, where the real `frontmatterRegion`/`frontmatterBlock` match any
+  // line merely STARTING with `---`) would under-count the skip and still pass: the extra,
+  // wrongly-unskipped lines just run through ordinary markdown rules, which is exactly the
+  // divergence the `startsWith` check below is built to catch.
   test('property: every closed frontmatter block frontmatterBlock finds is published byte-identical', () => {
     const word = fc.stringMatching(/^[a-z]{1,6}$/);
+    const dashLookalikes = fc.constantFrom('----', '--- x', '---');
     const fmLine = fc.oneof(
       word.map((w) => `${w}: 1`),
       word.map((w) => `# ${w}`),
       word.map((w) => `- ${w}`),
       word.map((w) => `  ${w}`),
       fc.constantFrom('', '```', '## x', '* y', '1. z'),
+      dashLookalikes,
     );
-    const bodyLine = fc.oneof(word, word.map((w) => `# ${w}`), word.map((w) => `- ${w}`), fc.constant(''));
+    const bodyLine = fc.oneof(
+      word,
+      word.map((w) => `# ${w}`),
+      word.map((w) => `- ${w}`),
+      fc.constant(''),
+      dashLookalikes,
+    );
     fc.assert(
       fc.property(
         fc.array(fmLine, { maxLength: 12 }),
         fc.array(bodyLine, { maxLength: 8 }),
         fc.boolean(),
-        (fm, body, bom) => {
-          const doc = `${bom ? '\uFEFF' : ''}---\n${fm.join('\n')}\n---\n${body.join('\n')}\n`;
+        // Whether a real `---` closer is force-appended between `fm` and `body` (the old,
+        // one-directional shape) or `fm`/`body` are simply concatenated and left to close
+        // (or not) on whatever dash-shaped line they happen to contain \u2014 the only way a
+        // genuinely UNTERMINATED document (frontmatterBlock === null) is reachable here.
+        fc.boolean(),
+        fc.boolean(), // CRLF shape \u2014 `frontmatterRegion` handles CRLF natively, `_normalizeMd` LF-publishes.
+        (fm, body, bom, forceCloser, crlf) => {
+          const nl = crlf ? '\r\n' : '\n';
+          const lines = forceCloser ? [...fm, '---', ...body] : [...fm, ...body];
+          const doc = `${bom ? '\uFEFF' : ''}---${nl}${lines.join(nl)}${nl}`;
           const located = frontmatterBlock(doc);
-          assert.ok(located, `fixture must hold a closed block: ${JSON.stringify(doc)}`);
           const { content } = normalizeContent(MD, doc);
-          assert.ok(
-            content.startsWith(located.bom + located.block),
-            `frontmatter block changed:\n${JSON.stringify(doc)}\n=> ${JSON.stringify(content)}`,
-          );
+          if (located) {
+            // Non-null direction (unchanged from before, now reachable via a look-alike
+            // closer and/or CRLF too): the block `frontmatterBlock` finds \u2014 LF-published,
+            // as `_normalizeMd` always LF-publishes \u2014 is untouched.
+            assert.ok(
+              content.startsWith(located.bom + located.block.replace(/\r\n/g, '\n')),
+              `frontmatter block changed:\n${JSON.stringify(doc)}\n=> ${JSON.stringify(content)}`,
+            );
+          } else {
+            // Null direction: no line anywhere in the document starts with `---`, so the
+            // opening fence is unterminated and the reader treats the WHOLE document as
+            // plain body (#5105's pinned "an unterminated block..." case above pins the
+            // exact expected transformation for one such document by hand \u2014 there is no
+            // exported seam to independently recompute "normalize with no skip" for an
+            // arbitrary generated document here, since `_normalizeMd` is not exported).
+            // What this branch still guarantees is that a genuinely unterminated document
+            // no longer FAILS the fixture assertion the old one-directional version made
+            // (`assert.ok(located, 'fixture must hold a closed block...')`) \u2014 it is an
+            // expected, asserted-reachable outcome now, not an excluded one.
+            assert.ok(!lines.some((line) => line.startsWith('---')), 'a dash-prefixed line must always close the block');
+          }
         },
       ),
-      { seed: 5105, numRuns: 300, endOnFailure: true },
+      { seed: 5105, numRuns: 500, endOnFailure: true },
     );
   });
 });
