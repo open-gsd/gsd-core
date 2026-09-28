@@ -109,10 +109,14 @@
  * naming convention (a bare "base excluded whenever a sibling exists" rule
  * would BE such a convention); and a platform-sensitive test later added
  * back into a split base must not silently re-admit the whole base to
- * Linux-only — it must fail generation loudly instead, at the same
- * `lint:generated-sync` gate this module already backs. See
- * docs/how-to/split-platform-sensitive-tests.md for the authoring rules this
- * invariant enforces.
+ * Linux-only on the Windows tier — it must fail generation loudly instead, at
+ * the same `lint:generated-sync` gate this module already backs. This
+ * invariant is scoped to the Windows CATEGORIES and wired only into
+ * `classifyTree`; `classifyMacosTree` stays pure content selection by design,
+ * so a macOS-only signal (e.g. case-sensitivity wording) left in a split base
+ * re-admits that base to the macOS tier instead of failing — over-inclusion,
+ * the safe direction. See docs/how-to/split-platform-sensitive-tests.md for
+ * the authoring rules this invariant enforces.
  */
 
 const fs = require('node:fs');
@@ -528,7 +532,10 @@ function classifyTree(testsDir) {
   // #5074: a `.platform` sibling pair that violates the split invariant
   // (residual signal left in the base, a sibling with no signal of its own,
   // or a base that ALWAYS_REAL_OS says needs the whole file on real OS) fails
-  // generation loudly rather than being silently included or excluded.
+  // generation loudly rather than being silently included or excluded. This
+  // check is Windows-CATEGORIES-only and wired here, not into
+  // classifyMacosTree below — a macOS-only signal in a split base is handled
+  // there by ordinary content selection (over-inclusion), not this invariant.
   const violations = findPlatformSplitViolations(entries, ALWAYS_REAL_OS);
   if (violations.length > 0) {
     throw new Error(formatPlatformSplitViolations(violations));

@@ -431,6 +431,14 @@ describe('config-get command', () => {
     cleanup(tmpDir);
   });
 
+  test('gets a top-level value', () => {
+    const result = runGsdTools('config-get model_profile', tmpDir, homeSandboxEnv(tmpDir));
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output, 'balanced');
+  });
+
   test('gets a nested value via dot-notation', () => {
     const result = runGsdTools('config-get workflow.research', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
@@ -516,6 +524,103 @@ describe('config-new-project command', () => {
 
   afterEach(() => {
     cleanup(tmpDir);
+  });
+
+  test('creates full config with all expected keys', () => {
+    const choices = JSON.stringify({
+      mode: 'interactive',
+      granularity: 'standard',
+      parallelization: true,
+      commit_docs: true,
+      model_profile: 'balanced',
+      workflow: { research: true, plan_check: true, verifier: true, nyquist_validation: true },
+    });
+    const result = runGsdTools(['config-new-project', choices], tmpDir, homeSandboxEnv(tmpDir));
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const config = readConfig(tmpDir);
+
+    // User choices present
+    assert.strictEqual(config.mode, 'interactive');
+    assert.strictEqual(config.granularity, 'standard');
+    assert.strictEqual(config.parallelization, true);
+    assert.strictEqual(config.commit_docs, true);
+    assert.strictEqual(config.model_profile, 'balanced');
+
+    // Defaults materialized — these were silently missing before
+    assert.strictEqual(typeof config.search_gitignored, 'boolean');
+    assert.strictEqual(typeof config.brave_search, 'boolean');
+
+    // git section present with all three keys
+    assert.ok(config.git && typeof config.git === 'object', 'git section should exist');
+    assert.strictEqual(config.git.branching_strategy, 'none');
+    assert.strictEqual(config.git.phase_branch_template, 'gsd/phase-{phase}-{slug}');
+    assert.strictEqual(config.git.milestone_branch_template, 'gsd/{milestone}-{slug}');
+
+    // workflow section present with all keys
+    assert.ok(config.workflow && typeof config.workflow === 'object', 'workflow section should exist');
+    assert.strictEqual(config.workflow.research, true);
+    assert.strictEqual(config.workflow.plan_check, true);
+    assert.strictEqual(config.workflow.verifier, true);
+    assert.strictEqual(config.workflow.nyquist_validation, true);
+    assert.strictEqual(config.workflow.auto_advance, false);
+    assert.strictEqual(config.workflow.node_repair, true);
+    assert.strictEqual(config.workflow.node_repair_budget, 2);
+    assert.strictEqual(config.workflow.ui_phase, true);
+    assert.strictEqual(config.workflow.ui_safety_gate, true);
+
+    // hooks section present
+    assert.ok(config.hooks && typeof config.hooks === 'object', 'hooks section should exist');
+    assert.strictEqual(config.hooks.context_warnings, true);
+  });
+
+  test('user choices override defaults', () => {
+    const choices = JSON.stringify({
+      mode: 'yolo',
+      granularity: 'coarse',
+      parallelization: false,
+      commit_docs: false,
+      model_profile: 'quality',
+      workflow: { research: false, plan_check: false, verifier: true, nyquist_validation: false },
+    });
+    const result = runGsdTools(['config-new-project', choices], tmpDir, homeSandboxEnv(tmpDir));
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.mode, 'yolo');
+    assert.strictEqual(config.granularity, 'coarse');
+    assert.strictEqual(config.parallelization, false);
+    assert.strictEqual(config.commit_docs, false);
+    assert.strictEqual(config.model_profile, 'quality');
+    assert.strictEqual(config.workflow.research, false);
+    assert.strictEqual(config.workflow.plan_check, false);
+    assert.strictEqual(config.workflow.verifier, true);
+    assert.strictEqual(config.workflow.nyquist_validation, false);
+    // Defaults still present for non-chosen keys
+    assert.strictEqual(config.git.branching_strategy, 'none');
+    assert.strictEqual(typeof config.search_gitignored, 'boolean');
+  });
+
+  test('works with empty choices — all defaults materialized', () => {
+    const result = runGsdTools(['config-new-project', '{}'], tmpDir, homeSandboxEnv(tmpDir));
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.model_profile, 'balanced');
+    assert.strictEqual(config.commit_docs, true);
+    assert.strictEqual(config.parallelization, true);
+    assert.strictEqual(config.search_gitignored, false);
+    assert.ok(config.git && typeof config.git === 'object');
+    assert.strictEqual(config.git.branching_strategy, 'none');
+    assert.ok(config.workflow && typeof config.workflow === 'object');
+    assert.strictEqual(config.workflow.nyquist_validation, true);
+    assert.strictEqual(config.workflow.auto_advance, false);
+    assert.strictEqual(config.workflow.node_repair, true);
+    assert.strictEqual(config.workflow.node_repair_budget, 2);
+    assert.strictEqual(config.workflow.ui_phase, true);
+    assert.strictEqual(config.workflow.ui_safety_gate, true);
+    assert.ok(config.hooks && typeof config.hooks === 'object');
+    assert.strictEqual(config.hooks.context_warnings, true);
   });
 
   test('is idempotent — returns already_exists if config exists', () => {
@@ -1025,6 +1130,15 @@ describe('config-set-model-profile command', () => {
     assert.strictEqual(config.model_profile, 'quality');
   });
 
+  test('reports previous profile in output', () => {
+    const result = runGsdTools('config-set-model-profile budget', tmpDir, homeSandboxEnv(tmpDir));
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.previousProfile, 'balanced'); // default was balanced
+    assert.strictEqual(out.profile, 'budget');
+  });
+
   test('setting the same profile is a no-op on config but still succeeds', () => {
     // Set to quality first, then set to quality again
     runGsdTools('config-set-model-profile quality', tmpDir);
@@ -1113,6 +1227,37 @@ describe('config-set workflow.skip_discuss', () => {
 
     const config = readConfig(tmpDir);
     assert.strictEqual(config.workflow.skip_discuss, false);
+  });
+
+  describe('skip_discuss in config-new-project', () => {
+    let emptyDir;
+
+    beforeEach(() => {
+      emptyDir = createTempProject();
+    });
+
+    afterEach(() => {
+      cleanup(emptyDir);
+    });
+
+    test('skip_discuss is present in config-new-project output', () => {
+      const result = runGsdTools(['config-new-project', '{}'], emptyDir, homeSandboxEnv(emptyDir));
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const config = readConfig(emptyDir);
+      assert.strictEqual(config.workflow.skip_discuss, false, 'skip_discuss should default to false');
+    });
+
+    test('skip_discuss can be set via config-new-project choices', () => {
+      const choices = JSON.stringify({
+        workflow: { skip_discuss: true },
+      });
+      const result = runGsdTools(['config-new-project', choices], emptyDir, homeSandboxEnv(emptyDir));
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const config = readConfig(emptyDir);
+      assert.strictEqual(config.workflow.skip_discuss, true);
+    });
   });
 
   test('config-get workflow.skip_discuss returns the set value', () => {

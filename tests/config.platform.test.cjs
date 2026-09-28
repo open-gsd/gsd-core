@@ -10,34 +10,41 @@
  * base file — the generator fails if a split base regains a platform signal.
  *
  * Moved tests and why each needs a real OS:
- * - "detects Brave Search from file-based key" — asserts API-key detection resolved
- *   under a fabricated HOME/USERPROFILE home directory (windows-env-var)
- * - "detects Tavily Search from env var" — same home-directory resolution (windows-env-var)
- * - "tavily_search is false when env var absent and no key file" — same (windows-env-var)
- * - "detects Tavily Search from file-based key" — same (windows-env-var)
- * - "detects Ref Search from env var" — same (windows-env-var)
- * - "ref_search is false when env var absent and no key file" — same (windows-env-var)
- * - "detects Ref Search from file-based key" — same (windows-env-var)
- * - "detects Perplexity from env var" — same (windows-env-var)
- * - "perplexity is false when env var absent and no key file" — same (windows-env-var)
- * - "detects Perplexity from file-based key" — same (windows-env-var)
- * - "detects Jina from env var" — same (windows-env-var)
- * - "jina is false when env var absent and no key file" — same (windows-env-var)
- * - "detects Jina from file-based key" — same (windows-env-var)
- * - "merges user defaults from defaults.json" — asserts defaults.json merge resolved
- *   under the fabricated home directory (windows-env-var)
- * - "merges nested workflow keys from defaults.json preserving unset keys" — same (windows-env-var)
- * - "gets a top-level value" — asserts a config value resolved via a config seeded
- *   under the fabricated home directory (windows-env-var)
- * - "creates full config with all expected keys" — asserts config-new-project output
- *   resolved under the fabricated home directory (windows-env-var)
- * - "user choices override defaults" — same (windows-env-var)
- * - "works with empty choices — all defaults materialized" — same (windows-env-var)
- * - "reports previous profile in output" — asserts previous-profile detection resolved
- *   under the fabricated home directory (windows-env-var)
- * - "skip_discuss is present in config-new-project output" — asserts config-new-project
- *   output resolved under the fabricated home directory (windows-env-var)
- * - "skip_discuss can be set via config-new-project choices" — same (windows-env-var)
+ * - "detects Brave Search from file-based key" — reads brave_api_key from the
+ *   sandboxed home directory, resolved via USERPROFILE on Windows (windows-env-var)
+ * - "detects Tavily Search from env var" — asserts TAVILY_API_KEY detection resolved
+ *   against the sandboxed home directory (windows-env-var)
+ * - "tavily_search is false when env var absent and no key file" — asserts absence
+ *   against the sandboxed home — on Windows only USERPROFILE keeps a real key file
+ *   from leaking in (windows-env-var)
+ * - "detects Tavily Search from file-based key" — reads tavily_api_key from the
+ *   sandboxed home directory, resolved via USERPROFILE on Windows (windows-env-var)
+ * - "detects Ref Search from env var" — asserts REF_API_KEY detection resolved
+ *   against the sandboxed home directory (windows-env-var)
+ * - "ref_search is false when env var absent and no key file" — asserts absence
+ *   against the sandboxed home — on Windows only USERPROFILE keeps a real key file
+ *   from leaking in (windows-env-var)
+ * - "detects Ref Search from file-based key" — reads ref_api_key from the sandboxed
+ *   home directory, resolved via USERPROFILE on Windows (windows-env-var)
+ * - "detects Perplexity from env var" — asserts PERPLEXITY_API_KEY detection resolved
+ *   against the sandboxed home directory (windows-env-var)
+ * - "perplexity is false when env var absent and no key file" — asserts absence
+ *   against the sandboxed home — on Windows only USERPROFILE keeps a real key file
+ *   from leaking in (windows-env-var)
+ * - "detects Perplexity from file-based key" — reads perplexity_api_key from the
+ *   sandboxed home directory, resolved via USERPROFILE on Windows (windows-env-var)
+ * - "detects Jina from env var" — asserts JINA_API_KEY detection resolved against
+ *   the sandboxed home directory (windows-env-var)
+ * - "jina is false when env var absent and no key file" — asserts absence against
+ *   the sandboxed home — on Windows only USERPROFILE keeps a real key file from
+ *   leaking in (windows-env-var)
+ * - "detects Jina from file-based key" — reads jina_api_key from the sandboxed home
+ *   directory, resolved via USERPROFILE on Windows (windows-env-var)
+ * - "merges user defaults from defaults.json" — reads defaults.json from the
+ *   sandboxed home directory, resolved via USERPROFILE on Windows (windows-env-var)
+ * - "merges nested workflow keys from defaults.json preserving unset keys" — same
+ *   defaults.json read from the sandboxed home directory, resolved via USERPROFILE
+ *   on Windows (windows-env-var)
  */
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
@@ -229,194 +236,3 @@ describe('config-ensure-section command', () => {
   });
 });
 
-// ─── config-get (home-resolved value) ──────────────────────────────────────────
-
-describe('config-get command', () => {
-  let tmpDir;
-
-  beforeEach(() => {
-    tmpDir = createTempProject();
-    // Create config with known values — sandbox HOME to avoid global defaults
-    runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
-  });
-
-  afterEach(() => {
-    cleanup(tmpDir);
-  });
-
-  test('gets a top-level value', () => {
-    const result = runGsdTools('config-get model_profile', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const output = JSON.parse(result.output);
-    assert.strictEqual(output, 'balanced');
-  });
-});
-
-// ─── config-new-project (home-resolved defaults) ───────────────────────────────
-
-describe('config-new-project command', () => {
-  let tmpDir;
-
-  beforeEach(() => {
-    tmpDir = createTempProject();
-  });
-
-  afterEach(() => {
-    cleanup(tmpDir);
-  });
-
-  test('creates full config with all expected keys', () => {
-    const choices = JSON.stringify({
-      mode: 'interactive',
-      granularity: 'standard',
-      parallelization: true,
-      commit_docs: true,
-      model_profile: 'balanced',
-      workflow: { research: true, plan_check: true, verifier: true, nyquist_validation: true },
-    });
-    const result = runGsdTools(['config-new-project', choices], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const config = readConfig(tmpDir);
-
-    // User choices present
-    assert.strictEqual(config.mode, 'interactive');
-    assert.strictEqual(config.granularity, 'standard');
-    assert.strictEqual(config.parallelization, true);
-    assert.strictEqual(config.commit_docs, true);
-    assert.strictEqual(config.model_profile, 'balanced');
-
-    // Defaults materialized — these were silently missing before
-    assert.strictEqual(typeof config.search_gitignored, 'boolean');
-    assert.strictEqual(typeof config.brave_search, 'boolean');
-
-    // git section present with all three keys
-    assert.ok(config.git && typeof config.git === 'object', 'git section should exist');
-    assert.strictEqual(config.git.branching_strategy, 'none');
-    assert.strictEqual(config.git.phase_branch_template, 'gsd/phase-{phase}-{slug}');
-    assert.strictEqual(config.git.milestone_branch_template, 'gsd/{milestone}-{slug}');
-
-    // workflow section present with all keys
-    assert.ok(config.workflow && typeof config.workflow === 'object', 'workflow section should exist');
-    assert.strictEqual(config.workflow.research, true);
-    assert.strictEqual(config.workflow.plan_check, true);
-    assert.strictEqual(config.workflow.verifier, true);
-    assert.strictEqual(config.workflow.nyquist_validation, true);
-    assert.strictEqual(config.workflow.auto_advance, false);
-    assert.strictEqual(config.workflow.node_repair, true);
-    assert.strictEqual(config.workflow.node_repair_budget, 2);
-    assert.strictEqual(config.workflow.ui_phase, true);
-    assert.strictEqual(config.workflow.ui_safety_gate, true);
-
-    // hooks section present
-    assert.ok(config.hooks && typeof config.hooks === 'object', 'hooks section should exist');
-    assert.strictEqual(config.hooks.context_warnings, true);
-  });
-
-  test('user choices override defaults', () => {
-    const choices = JSON.stringify({
-      mode: 'yolo',
-      granularity: 'coarse',
-      parallelization: false,
-      commit_docs: false,
-      model_profile: 'quality',
-      workflow: { research: false, plan_check: false, verifier: true, nyquist_validation: false },
-    });
-    const result = runGsdTools(['config-new-project', choices], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const config = readConfig(tmpDir);
-    assert.strictEqual(config.mode, 'yolo');
-    assert.strictEqual(config.granularity, 'coarse');
-    assert.strictEqual(config.parallelization, false);
-    assert.strictEqual(config.commit_docs, false);
-    assert.strictEqual(config.model_profile, 'quality');
-    assert.strictEqual(config.workflow.research, false);
-    assert.strictEqual(config.workflow.plan_check, false);
-    assert.strictEqual(config.workflow.verifier, true);
-    assert.strictEqual(config.workflow.nyquist_validation, false);
-    // Defaults still present for non-chosen keys
-    assert.strictEqual(config.git.branching_strategy, 'none');
-    assert.strictEqual(typeof config.search_gitignored, 'boolean');
-  });
-
-  test('works with empty choices — all defaults materialized', () => {
-    const result = runGsdTools(['config-new-project', '{}'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const config = readConfig(tmpDir);
-    assert.strictEqual(config.model_profile, 'balanced');
-    assert.strictEqual(config.commit_docs, true);
-    assert.strictEqual(config.parallelization, true);
-    assert.strictEqual(config.search_gitignored, false);
-    assert.ok(config.git && typeof config.git === 'object');
-    assert.strictEqual(config.git.branching_strategy, 'none');
-    assert.ok(config.workflow && typeof config.workflow === 'object');
-    assert.strictEqual(config.workflow.nyquist_validation, true);
-    assert.strictEqual(config.workflow.auto_advance, false);
-    assert.strictEqual(config.workflow.node_repair, true);
-    assert.strictEqual(config.workflow.node_repair_budget, 2);
-    assert.strictEqual(config.workflow.ui_phase, true);
-    assert.strictEqual(config.workflow.ui_safety_gate, true);
-    assert.ok(config.hooks && typeof config.hooks === 'object');
-    assert.strictEqual(config.hooks.context_warnings, true);
-  });
-});
-
-// ─── config-set-model-profile (home-resolved previous-profile detection) ──────
-
-describe('config-set-model-profile command', () => {
-  let tmpDir;
-
-  beforeEach(() => {
-    tmpDir = createTempProject();
-    runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
-  });
-
-  afterEach(() => {
-    cleanup(tmpDir);
-  });
-
-  test('reports previous profile in output', () => {
-    const result = runGsdTools('config-set-model-profile budget', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const out = JSON.parse(result.output);
-    assert.strictEqual(out.previousProfile, 'balanced'); // default was balanced
-    assert.strictEqual(out.profile, 'budget');
-  });
-});
-
-// ─── skip_discuss in config-new-project (home-resolved defaults) ──────────────
-
-describe('skip_discuss in config-new-project', () => {
-  let emptyDir;
-
-  beforeEach(() => {
-    emptyDir = createTempProject();
-  });
-
-  afterEach(() => {
-    cleanup(emptyDir);
-  });
-
-  test('skip_discuss is present in config-new-project output', () => {
-    const result = runGsdTools(['config-new-project', '{}'], emptyDir, { HOME: emptyDir, USERPROFILE: emptyDir });
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const config = readConfig(emptyDir);
-    assert.strictEqual(config.workflow.skip_discuss, false, 'skip_discuss should default to false');
-  });
-
-  test('skip_discuss can be set via config-new-project choices', () => {
-    const choices = JSON.stringify({
-      workflow: { skip_discuss: true },
-    });
-    const result = runGsdTools(['config-new-project', choices], emptyDir, { HOME: emptyDir, USERPROFILE: emptyDir });
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const config = readConfig(emptyDir);
-    assert.strictEqual(config.workflow.skip_discuss, true);
-  });
-});
