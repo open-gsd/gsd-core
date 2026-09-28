@@ -283,6 +283,36 @@ describe('S3: verification.append-audit input validation (#5105 review)', () => 
     );
     assert.ok(!result.success, 'must refuse a non-object --rows value');
   });
+
+  test('#5105 review finding 6: a --heading with leading/trailing whitespace is refused', (t) => {
+    const { projectDir, filePath } = setupFixture(t);
+    const result = callAppendAudit(projectDir, filePath, { heading: ' H', rows: { a: 1 } });
+    assert.ok(!result.success, 'must refuse a heading with leading whitespace');
+  });
+
+  test('#5105 review finding 6: a --rows key with leading/trailing whitespace is refused', (t) => {
+    const { projectDir, filePath } = setupFixture(t);
+    const result = callAppendAudit(projectDir, filePath, { heading: 'H', rows: { ' Open': 1 } });
+    assert.ok(!result.success, 'must refuse a row key with leading whitespace, so it cannot silently fail to match an existing trimmed "Open" row');
+  });
+
+  test('#5105 review finding 9: --date with an out-of-range month/day (2026-99-99) is refused', (t) => {
+    const { projectDir, filePath } = setupFixture(t);
+    const result = callAppendAudit(projectDir, filePath, { heading: 'H', rows: { a: 1 }, date: '2026-99-99' });
+    assert.ok(!result.success, 'must refuse a date whose month/day are out of calendar range');
+  });
+
+  test('#5105 review finding 9: --date for a day that does not exist in that month (2026-02-30) is refused', (t) => {
+    const { projectDir, filePath } = setupFixture(t);
+    const result = callAppendAudit(projectDir, filePath, { heading: 'H', rows: { a: 1 }, date: '2026-02-30' });
+    assert.ok(!result.success, 'must refuse a day that overflows its month (2026 is not a leap year in February)');
+  });
+
+  test('#5105 review finding 9: a real calendar date (2026-02-28) is accepted', (t) => {
+    const { projectDir, filePath } = setupFixture(t);
+    const result = callAppendAudit(projectDir, filePath, { heading: 'H', rows: { a: 1 }, date: '2026-02-28' });
+    assert.ok(result.success, `a real calendar date must be accepted: ${result.error}`);
+  });
 });
 
 describe('S4: verification.append-audit table comparison robustness (#5105 review)', () => {

@@ -97,6 +97,23 @@ describe('T19: L2 — raw commit of a coverable phase artifact in post-fingerpri
   });
 });
 
+describe('#5105 review finding 8: L2 runs over backslash-continued lines, same as L1/L3', () => {
+  test('`git add \\` on one physical line with its UAT pathspec on the next is flagged', () => {
+    const { scanText } = loadLint();
+    const text = [
+      '```bash',
+      'git add \\',
+      '  "${PHASE_DIR}/${PADDED_PHASE}-UAT.md"',
+      '```',
+      '',
+    ].join('\n');
+    const violations = scanText('gsd-core/workflows/verify-work.md', text, { postFingerprint: true });
+    const l2 = violations.filter((v) => v.rule === 'L2');
+    assert.strictEqual(l2.length, 1, `expected a backslash-continued git add pathspec to be flagged; got: ${JSON.stringify(violations)}`);
+    assert.match(l2[0].target, /UAT\.md/);
+  });
+});
+
 describe('T20: L2 fail-closed — an unresolvable variable pathspec', () => {
   test('`--files "$X"` is flagged (fail-closed on an unresolvable pathspec)', () => {
     const { scanText } = loadLint();

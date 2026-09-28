@@ -187,17 +187,20 @@ describe('#5105 S10: producesEntryPresent shares resolvePhaseArtifactFile; --aft
     assert.ok(securitySkip, `relative --after-fingerprint must resolve against --cwd; got: ${JSON.stringify(envelope.skippedHooks)}`);
   });
 
-  test('--after-fingerprint <path outside the project root> is refused (fail closed)', () => {
+  test('--after-fingerprint <path outside the project root> is refused (fail closed)', (t) => {
     const phaseDir = path.join(projectDir, '.planning', 'phases', '06-outside');
     cleanup(phaseDir);
     fs.mkdirSync(phaseDir, { recursive: true });
 
     const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-after-fp-outside-'));
-    try {
-      const result = renderHooks(projectDir, phaseDir, ['--after-fingerprint', outsideDir]);
-      assert.notStrictEqual(result.exitCode, 0, 'a phase dir outside the project root must be refused, not silently accepted');
-    } finally {
-      cleanup(outsideDir);
-    }
+    t.after(() => cleanup(outsideDir));
+
+    const result = renderHooks(projectDir, phaseDir, ['--after-fingerprint', outsideDir]);
+    assert.notStrictEqual(result.exitCode, 0, 'a phase dir outside the project root must be refused, not silently accepted');
+    assert.match(
+      result.stderr,
+      /--after-fingerprint directory is unsafe/,
+      `expected the fail-closed refusal message; got: ${result.stderr}`,
+    );
   });
 });

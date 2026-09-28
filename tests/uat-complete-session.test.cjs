@@ -358,6 +358,89 @@ describe('S8: frontmatter-scoped status/updated writes (#5105 review)', () => {
   });
 });
 
+describe('#5105 review findings 1/2/3: HEAD baseline wiring end-to-end', () => {
+  test('(a) committed complete UAT + a changed row in the live file: committed:true, clean tree, HEAD carries the change', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const uatPath = path.join(phaseDir, '01-UAT.md');
+    const { execFileSync } = require('child_process');
+    fs.writeFileSync(uatPath, completeUatContent());
+    execFileSync('git', ['add', '-A'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+    execFileSync('git', ['commit', '-q', '-m', 'seed UAT'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+
+    // Live already reads status: complete / [testing complete] (unchanged
+    // from HEAD in that respect), but one row's result was edited afterward
+    // — a genuine material change the HEAD-baseline comparison must catch.
+    const changedRowContent = completeUatContent().replace(
+      'result: pass\n\n### 2. Submit Button',
+      'result: issue\n\n### 2. Submit Button',
+    );
+    fs.writeFileSync(uatPath, changedRowContent);
+
+    const result = runGsdTools(['query', 'uat.complete-session', '.planning/phases/01-foo/01-UAT.md'], projectDir);
+    assert.ok(result.success, `expected success: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.changed, true, 'a changed row vs the committed HEAD baseline is material');
+    assert.strictEqual(parsed.committed, true);
+
+    const statusOut = execFileSync('git', ['status', '--porcelain', '.'], { cwd: projectDir, encoding: 'utf-8', timeout: GIT_TIMEOUT_MS });
+    assert.strictEqual(statusOut.trim(), '', 'the commit must leave the tree clean');
+
+    const headBlob = execFileSync('git', ['show', 'HEAD:.planning/phases/01-foo/01-UAT.md'], { cwd: projectDir, encoding: 'utf-8', timeout: GIT_TIMEOUT_MS });
+    assert.match(headBlob, /result: issue/, 'the committed HEAD blob must carry the changed row');
+  });
+
+  test('(b) an untracked (never-committed) UAT file: committed:true on first completion', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const uatPath = path.join(phaseDir, '01-UAT.md');
+    fs.writeFileSync(uatPath, testingCompleteUatContent());
+    // No `git add`/`git commit` — the UAT file is untracked; HEAD has no blob
+    // for it, so readBaselineAtHead must return null (not throw), and the
+    // pure core must treat that as "no baseline" (material change).
+
+    const result = runGsdTools(['query', 'uat.complete-session', '.planning/phases/01-foo/01-UAT.md'], projectDir);
+    assert.ok(result.success, `expected success: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.changed, true);
+    assert.strictEqual(parsed.committed, true, 'an untracked UAT must still commit cleanly on first completion');
+  });
+
+  test('(c) project root is a subdirectory of the git toplevel: baseline still resolves; a second unchanged run is a no-op', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    // Nest an independent "project root" a level below the git toplevel
+    // (`createTempGitProject`'s own root) — #5105 review finding 1's
+    // reproduction: `git show HEAD:<path>` resolves from the TOPLEVEL, not
+    // from this nested cwd, so a `relPath` computed relative to the nested
+    // cwd must be re-anchored to the toplevel before use.
+    const subRoot = path.join(projectDir, 'nested-project');
+    const phaseDir = path.join(subRoot, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const uatPath = path.join(phaseDir, '01-UAT.md');
+    const before = completeUatContent();
+    fs.writeFileSync(uatPath, before);
+    const { execFileSync } = require('child_process');
+    execFileSync('git', ['add', '-A'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+    execFileSync('git', ['commit', '-q', '-m', 'seed nested UAT'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+    const headBefore = gitHeadCount(projectDir);
+
+    const result = runGsdTools(['query', 'uat.complete-session', '.planning/phases/01-foo/01-UAT.md'], subRoot);
+    assert.ok(result.success, `expected success: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.changed, false, 'an already-complete doc against its own correctly-resolved HEAD baseline is a no-op');
+    assert.strictEqual(fs.readFileSync(uatPath, 'utf-8'), before, 'bytes must be untouched');
+    assert.strictEqual(gitHeadCount(projectDir), headBefore, 'no spurious commit from a mis-resolved (toplevel-relative) baseline path');
+
+    const statusOut = execFileSync('git', ['status', '--porcelain', '.'], { cwd: projectDir, encoding: 'utf-8', timeout: GIT_TIMEOUT_MS });
+    assert.strictEqual(statusOut.trim(), '', 'the nested-project tree must stay clean');
+  });
+});
+
 describe('S9: committed/reason reporting (#5105 review — no fs.writeSync monkeypatch)', () => {
   test('a normal material change reports committed:true', (t) => {
     const projectDir = createTempGitProject();
