@@ -552,16 +552,56 @@ function stripUpdatedForCompare(content: string): string {
   return setFrontmatterUpdated(content, '');
 }
 
+/**
+ * #5105 review finding 2 / m1 — byte-exact restore helper: splice
+ * `baseline`'s own `updated:` LINE verbatim into `candidate`'s frontmatter
+ * block, in place of `setFrontmatterUpdated(candidate, frontmatterUpdatedValue(baseline))`.
+ * `setFrontmatterUpdated` always RE-RENDERS as `updated: <value>` (one space,
+ * unconditionally) — a baseline line with different spacing (`updated:X`, no
+ * space) would round-trip to `updated: X`, which is a byte DIFFERENCE from
+ * baseline, not a restore. This function instead copies baseline's raw
+ * `updated:.*` line text (whatever it is) into candidate's block, and when
+ * baseline has NO `updated:` line at all, removes candidate's — so the
+ * restored frontmatter block is byte-identical to baseline's own, key-for-key
+ * and space-for-space. Scoped to the matched `---`…`---` blocks only, same as
+ * every other frontmatter helper here (#5105 review S8); a `candidate` with no
+ * frontmatter block is returned unchanged.
+ */
+function spliceBaselineUpdatedVerbatim(candidate: string, baseline: string): string {
+  const bounds = frontmatterBlockBounds(candidate);
+  if (!bounds) return candidate;
+  const block = candidate.slice(bounds.start, bounds.end);
+  const keyLineRe = /^updated:.*$/m;
+
+  const baselineBounds = frontmatterBlockBounds(baseline);
+  const baselineBlock = baselineBounds ? baseline.slice(baselineBounds.start, baselineBounds.end) : '';
+  const baselineLineMatch = keyLineRe.exec(baselineBlock);
+
+  let newBlock: string;
+  if (baselineLineMatch) {
+    newBlock = keyLineRe.test(block)
+      ? block.replace(keyLineRe, baselineLineMatch[0])
+      : block.replace(/\r?\n---$/, `\n${baselineLineMatch[0]}\n---`);
+  } else {
+    // Baseline has no `updated:` line at all — the restored block must not
+    // have one either.
+    newBlock = block.replace(/\r?\n^updated:.*$/m, '');
+  }
+  return candidate.slice(0, bounds.start) + newBlock + candidate.slice(bounds.end);
+}
+
 interface CompleteUatSessionResult {
   changed: boolean;
   content: string;
   status: 'complete' | 'partial';
   /**
-   * #5105 review finding 2: set when the candidate matched the committed
-   * `baseline` materially, but the LIVE `content` still differed from the
-   * byte-exact restored form (a re-opened session that left stray, already-
-   * committed-equivalent state on disk). `content` is that restored form —
-   * the caller writes it WITHOUT committing, so the file ends up matching
+   * #5105 review finding 2, M1-restricted: set when the candidate matched the
+   * committed `baseline` materially AND the LIVE `content` differed from the
+   * candidate in something OTHER than the frontmatter `updated:` value (a
+   * re-opened session that left stray, already-committed-equivalent state on
+   * disk — e.g. `status: testing` plus a pending `## Current Test` with no
+   * row changes). `content` is the byte-exact restored form — the caller
+   * writes it WITHOUT committing, so the file ends up matching
    * HEAD rather than staying needlessly dirty.
    */
   restored?: boolean;
@@ -597,9 +637,21 @@ interface CompleteUatSessionResult {
  * #5105 R1 "F10"). No material change → `{ changed: false, content }` returns
  * the ORIGINAL `content` UNTOUCHED (not the candidate) — even a live document
  * that differs from baseline ONLY in `updated:` is never written, and the
- * caller performs zero writes and zero commits. A material change → this
- * function ALSO stamps `updated` from `clock()` on the candidate; the caller
- * writes + commits.
+ * caller performs zero writes and zero commits (the stated #5105 R1 decision:
+ * a live UAT that differs from the committed baseline ONLY in the frontmatter
+ * `updated:` value is never written). A material change → this function ALSO
+ * stamps `updated` from `clock()` on the candidate; the caller writes + commits.
+ *
+ * #5105 review finding 2 / M1: when the candidate is NOT materially changed
+ * from `baseline`, but the LIVE `content` differs from that candidate in
+ * something OTHER than `updated:` (e.g. a re-opened session left
+ * `status: testing` plus a pending `## Current Test` with no row changes),
+ * the byte-exact `baseline` form is restored (`restored: true`) — `content`
+ * splices baseline's own `updated:` LINE verbatim (whatever its exact
+ * spacing, or its absence) rather than re-rendering it, so the restored bytes
+ * match `baseline` exactly. This restore path is DENIED (no write, `content`
+ * is the untouched live bytes, no `restored` flag) when live differs from the
+ * candidate ONLY in `updated:` — that case is covered by the decision above.
  */
 function completeUatSession(
   content: string,
@@ -631,19 +683,18 @@ function completeUatSession(
 
   const changed = stripUpdatedForCompare(candidate) !== stripUpdatedForCompare(baseline ?? '');
   if (!changed) {
-    // #5105 review finding 2: a material match against `baseline` does not
-    // mean `content` (the LIVE file) is already clean — a re-opened session
-    // can leave `status: testing` plus a pending `## Current Test` with no
-    // row changes, which normalizes to the SAME material candidate but is
-    // not byte-identical to what is already committed. Restore the byte-exact
-    // committed form (adopting baseline's own `updated:` value) so a no-op
-    // completion also leaves `git status` clean, rather than leaving the stray
-    // uncommitted state sitting on disk.
-    if (baseline !== null) {
-      const baselineUpdated = frontmatterUpdatedValue(baseline);
-      const restoredContent = baselineUpdated !== null
-        ? setFrontmatterUpdated(candidate, baselineUpdated)
-        : candidate;
+    // #5105 review finding 2 / M1: a material match against `baseline` does
+    // not mean `content` (the LIVE file) is already clean — a re-opened
+    // session can leave `status: testing` plus a pending `## Current Test`
+    // with no row changes, which normalizes to the SAME material candidate
+    // but is not byte-identical to what is already committed. Restore the
+    // byte-exact committed form ONLY when the live document differs from the
+    // candidate in something OTHER than `updated:` — a live document that
+    // differs from baseline/candidate ONLY in `updated:` must never be
+    // written (the stated decision above), so that case falls through to the
+    // untouched-`content` return below instead.
+    if (baseline !== null && stripUpdatedForCompare(content) !== stripUpdatedForCompare(candidate)) {
+      const restoredContent = spliceBaselineUpdatedVerbatim(candidate, baseline);
       if (restoredContent !== content) {
         return { changed: false, content: restoredContent, status, restored: true };
       }
@@ -698,12 +749,17 @@ function readBaselineAtHead(cwd: string, absPath: string): string | null {
 /**
  * CLI command handler (#5105 R1): `uat.complete-session <uatPath> [--message <m>]`.
  * Deny-by-default no-op on an unchanged session — zero writes, zero commits
- * (closes C1 in the #5105 census). On a material change, writes the file and
+ * (closes C1 in the #5105 census); a live document differing from the
+ * committed baseline ONLY in the frontmatter `updated:` value is one such
+ * no-op and is never written. On a material change, writes the file and
  * commits through the existing `cmdCommit` internals (honoring `commit_docs`),
  * reading `cmdCommit`'s own result back via the shared `captureStdoutSyncWrites`
  * helper (#5105 review S9 — the ONE such helper, also used by gsd-tools.cjs)
  * instead of a hand-rolled `fs.writeSync` monkeypatch, so this command can
  * report the real `committed`/`reason` outcome rather than assuming success.
+ * A third `changed:false, restored:true` outcome (M1) writes the file — a
+ * byte-exact restore to the committed baseline — but never commits: this is
+ * still a no-op from git's perspective (see `completeUatSession`'s own doc).
  */
 async function cmdUatCompleteSession(
   cwd: string,
