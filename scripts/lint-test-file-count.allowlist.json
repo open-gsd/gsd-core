@@ -142,6 +142,7 @@
       "files": [
         "verify-archive-dirs-live-path.test.cjs",
         "verify-health.test.cjs",
+        "verify-lifecycle-writes-e2e.test.cjs",
         "verify-mvp-uat.test.cjs",
         "verify-npm-publish.test.cjs",
         "verify-test-quality.test.cjs",
@@ -150,7 +151,7 @@
         "verify.test.cjs"
       ],
       "issue": "#3813 — the live-path #1883 suite drives buildPlanningSnapshot in-process with an fs fault; the verify module suites are CLI-driving and cannot host an fs monkeypatch",
-      "justification": "verify-command-grounding added by #2401/#3678; allowlist follow-up landed with #3606 (base was red on this lane). #4546 adds verify-work-deferred-promotion (deferred-follow-up promotion writer contract + parity)."
+      "justification": "verify-command-grounding added by #2401/#3678; allowlist follow-up landed with #3606 (base was red on this lane). #4546 adds verify-work-deferred-promotion (deferred-follow-up promotion writer contract + parity). #5105 adds verify-lifecycle-writes-e2e.test.cjs (Phase 3 of #5056: end-to-end fixture proving the fixed post-fingerprint verbs leave an unchanged re-run fresh, plus its own pre-fix CONTROL — a distinct end-to-end concern from the existing per-verb unit suites)."
     },
     "install": {
       "files": [
@@ -293,6 +294,15 @@
       ],
       "issue": "4657",
       "justification": "The ui-consideration-probe cluster gains its workflow-prose contract file (tests/ui-consideration-probe-ui-phase-contract.test.cjs, #4657), mirroring the edge probe's split (edge-probe.test.cjs / edge-probe-docs-fixtures.test.cjs / edge-probe-spec-phase-contract.test.cjs). The contract file reads shipped gsd-core/workflows/ui-phase.md under the source-text-is-the-product exception, which the unit file deliberately does not carry (it asserts typed returns only)."
+    },
+    "verification": {
+      "files": [
+        "verification-append-audit.test.cjs",
+        "verification-overrides.test.cjs",
+        "verification-status.test.cjs"
+      ],
+      "issue": "5105",
+      "justification": "#5105 (Phase 3 of #5056) adds verification-append-audit.test.cjs for the new `verification.append-audit` verb (deny-by-default audit-block append/no-op, #4887) — a distinct concern from verification-status.test.cjs's status/fingerprint suite and verification-overrides.test.cjs's override handling."
     }
   }
 }
