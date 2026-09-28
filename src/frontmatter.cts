@@ -1532,13 +1532,14 @@ function assertCommentsKept(key: string, original: SegmentComments, regenerated:
 }
 
 function spliceFrontmatter(content: string, newObj: Frontmatter): string {
-  // The block is located through `frontmatterBlock` (composing `frontmatterRegion`), so the
+  // The block is located through `frontmatterBlock` (the one fence owner's block), so the
   // writer and every reader agree on where it is: BOM (#2977), CRLF, an empty block.
   const located = frontmatterBlock(content);
   if (located) {
     const { bom, block: fmBlock, rest } = located;
     const fmLines = splitLines(fmBlock);
-    const inner = fmLines.slice(1, -1).join('\n'); // drop the opening `---` and closing `---`
+    const innerLines = fmLines.slice(1, -1); // drop the opening `---` and closing `---`
+    const inner = innerLines.join('\n');
     let originalParsed: Frontmatter;
     try { originalParsed = extractFrontmatter(fmBlock); } catch { originalParsed = unparseableResult(); }
 
@@ -1575,7 +1576,13 @@ function spliceFrontmatter(content: string, newObj: Frontmatter): string {
     // A write never silently drops a line it did not parse: the preamble (e.g. a comment
     // above the first key) and every segment's tail (blank lines, full-line comments) are
     // re-emitted in place whatever happens to the key they sit next to.
-    const { preamble, segments } = sliceFrontmatterLayout(inner);
+    // An adjacent empty block (`---\n---`) has NO lines between its fences, while a block
+    // holding one blank line has one empty line: both join to ''. Laying out '' yields that one
+    // blank line, so the empty block would gain a blank line above its first key (found while
+    // implementing #5105).
+    const { preamble, segments } = innerLines.length === 0
+      ? { preamble: [] as string[], segments: [] as ReturnType<typeof sliceFrontmatterLayout>['segments'] }
+      : sliceFrontmatterLayout(inner);
     const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
 
     // Every parsed key must own exactly one key line, and every key line must be a parsed
