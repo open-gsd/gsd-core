@@ -24,6 +24,7 @@ const { output, error } = ioMod;
 import { platformReadSync as safeReadFile, platformWriteSync } from './shell-command-projection.cjs';
 import { textEncodingError } from './validate.cjs';
 import { splitLines } from './text-lines.cjs';
+import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import unusableInputMod = require('./unusable-input.cjs');
 const { UNUSABLE_REASON, warnUnusableInput } = unusableInputMod;
@@ -711,66 +712,36 @@ function countTopLevelKeyShapedLines(region: string): number {
  */
 function frontmatterRegion(
   content: string,
-): { region: string; terminated: boolean; content: string; closingFenceEnd?: number } | null {
-  // #2977: tolerate a single leading UTF-8 BOM (U+FEFF), which Windows tooling
-  // (PowerShell `>`/`Out-File` on PS 5.1, several editors) writes by default.
-  // Without this strip, the byte-0 `startsWith('---')` fence check below fails
-  // on the BOM and the whole parse collapses — every frontmatter field silently
-  // disappears, and the engine proceeds as though the file had no frontmatter
-  // at all. The BOM is a single codepoint; stripping it here restores byte-0
-  // alignment. Scope: BOM only. Arbitrary non-BOM content before the fence
-  // (leading whitespace/blank line/comment) is a separate product-intent
-  // decision (tolerate vs diagnose) left to a future change.
-  if (content.charCodeAt(0) === 0xFEFF) content = content.slice(1);
-  // Match frontmatter only at byte 0 — a `---` block later in the document body
-  // (YAML examples, horizontal rules) must never be treated as frontmatter.
-  const headerEnd = content.startsWith('---\r\n') ? 5 : content.startsWith('---\n') ? 4 : -1;
-  if (headerEnd === -1) return null;
-
-  // Search from `headerEnd - 1`, not `headerEnd` (found while strengthening #5105's
-  // `frontmatterBlock` property test): the opening fence's own trailing newline sits at
-  // `headerEnd - 1`, and a closing `---` that is the very NEXT line — a genuinely empty
-  // frontmatter block, `---\n---\n` — has no OTHER newline before it to pair with. Searching
-  // from `headerEnd` alone excludes that newline from the match window and reports the
-  // block as unterminated (open, never closed) even though it is the shortest possible
-  // valid one. Including position `headerEnd - 1` costs nothing for every non-adjacent
-  // document — the pattern still fails to match there and `indexOf` proceeds to the same
-  // later match it always found — but lets an adjacent closer match at all.
-  const closingLineStart = content.indexOf('\n---', headerEnd - 1);
-  if (closingLineStart === -1) {
-    return { region: content.slice(headerEnd), terminated: false, content };
+): { region: string; terminated: boolean; content: string } | null {
+  // The fence rules — BOM tolerance (#2977), the byte-0 opening fence, the whole-line closing
+  // fence, an adjacent empty block — live in `locateFrontmatterFence`, the one owner every
+  // fence consumer reads (found while implementing #5105: four copies of this answer disagreed).
+  const fence = locateFrontmatterFence(content);
+  if (!fence) return null;
+  const stripped = content.slice(fence.bom.length);
+  if (!fence.closed) {
+    return { region: content.slice(fence.openEnd), terminated: false, content: stripped };
   }
-  const yamlEnd = content[closingLineStart - 1] === '\r' ? closingLineStart - 1 : closingLineStart;
-  // `closingFenceEnd`: the position right after the closing fence's three dashes, i.e. the
-  // end of the BLOCK a writer publishes verbatim (`frontmatterBlock`) — one `\n` (the line
-  // ending `closingLineStart` starts) plus the three dashes, always exactly 4 characters
-  // past `closingLineStart`, whether that newline is the last content line's own terminator
-  // or (the adjacent-block case above) the opening fence's terminator doing double duty.
-  return { region: content.slice(headerEnd, yamlEnd), terminated: true, content, closingFenceEnd: closingLineStart + 4 };
+  return { region: content.slice(fence.openEnd, fence.bodyEnd), terminated: true, content: stripped };
 }
 
 /**
  * The closed frontmatter BLOCK of a document for a writer: `bom` (the leading BOM, or ''),
  * `block` (from the opening `---` through the closing `---`, both fences included, no line
  * ending after the closing fence) and `rest` (everything after it), so
- * `bom + block + rest === content`. Composes `frontmatterRegion`, so a writer and every
+ * `bom + block + rest === content`. Read from `locateFrontmatterFence`, so a writer and every
  * reader agree on where the block is — BOM, CRLF and an empty block included (found while
  * implementing #5105: two private fence regexes disagreed with the reader on a BOM document
  * and on a block holding only a blank line). Null when there is no block or it is unterminated.
  */
 function frontmatterBlock(content: string): { bom: string; block: string; rest: string } | null {
-  const found = frontmatterRegion(content);
-  if (!found || !found.terminated || found.closingFenceEnd === undefined) return null;
-  const bom = content.slice(0, content.length - found.content.length);
-  const body = found.content;
-  // `closingFenceEnd` comes straight from `frontmatterRegion` (found while strengthening
-  // #5105's property test): re-deriving it here from `region.length` — as a prior revision
-  // did — silently mis-locates the closing fence on a genuinely empty, adjacent block
-  // (`---\n---\n`), since there is no separate "line before the closer" to measure from.
-  // Sharing one computation is what the module's own docstring already promises ("a writer
-  // and every reader agree on where the block is").
-  const blockEnd = found.closingFenceEnd;
-  return { bom, block: body.slice(0, blockEnd), rest: body.slice(blockEnd) };
+  const fence = locateFrontmatterFence(content);
+  if (!fence || !fence.closed) return null;
+  return {
+    bom: fence.bom,
+    block: content.slice(fence.bom.length, fence.closingFenceEnd),
+    rest: content.slice(fence.closingFenceEnd),
+  };
 }
 
 function extractFrontmatter(content: string, sourcePath?: string): Frontmatter {
@@ -1849,13 +1820,21 @@ const FRONTMATTER_SCHEMAS: Record<string, { required: string[]; requiredValues?:
  *
  * Canonical home for this primitive (#2143 audit dedup): previously
  * duplicated byte-identically in both `state.cts` and `state-transition.cts`.
+ *
+ * Each block is the one `locateFrontmatterFence` finds — the same block every reader and
+ * writer sees — and the whitespace after its closing fence goes with it. Found while
+ * implementing #5105: the previous regex needed a line ending before the closing `---` that
+ * the opening fence's own line ending could not supply, so it could not see an adjacent empty
+ * block (`---\n---\n`) and stripped through the first `---` in the BODY instead; it also
+ * closed on any line merely starting with `---` and skipped whitespace before the opening
+ * fence, neither of which any reader of the block agreed with.
  */
 function stripFrontmatter(content: string, opts: { once?: boolean } = {}): string {
   let result = content;
-  while (true) {
-    const stripped = result.replace(/^\s*---\r?\n[\s\S]*?\r?\n---\s*/, '');
-    if (stripped === result) break;
-    result = stripped;
+  for (;;) {
+    const fence = locateFrontmatterFence(result);
+    if (!fence || !fence.closed) break;
+    result = result.slice(fence.closingFenceEnd).replace(/^\s*/, '');
     if (opts.once) break;
   }
   return result;

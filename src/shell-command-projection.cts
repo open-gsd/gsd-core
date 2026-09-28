@@ -18,6 +18,7 @@ import fs from 'node:fs';
 // at load time and become un-mockable.
 import childProcess from 'node:child_process';
 import { escapeRegex } from './pattern.cjs';
+import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 
 /**
  * Convert a filesystem path to POSIX form (forward slashes) by translating the
@@ -1127,25 +1128,17 @@ export function probeTty(opts: { platform?: string } = {}): string | null {
 
 /**
  * How many leading lines of LF-only `text` are its closed YAML frontmatter block (opening
- * fence through closing fence), or 0 when there is none. The same byte-0 rule the
- * frontmatter reader uses (`frontmatterRegion` / `frontmatterBlock` in `frontmatter.cts`,
- * which cannot be imported here — it imports this module): an optional leading BOM, `---`
- * as the first line, closed by the first later line starting `---`; an unterminated block is
- * not frontmatter. Parity with `frontmatterBlock` is pinned by
- * `tests/shell-command-projection-md-normalize.test.cjs`.
+ * fence through closing fence), or 0 when there is none (an unterminated block is not
+ * frontmatter). The fence is `locateFrontmatterFence`'s — the one owner the frontmatter reader
+ * and writer (`frontmatter.cts`) also read — so the normalizer skips exactly the block every
+ * reader sees (found while implementing #5105: this was a private mirror of the reader's
+ * fence rule, because `frontmatter.cts` imports this module, and the two drifted).
  */
 function leadingFrontmatterLineCount(text: string): number {
-  const start = text.charCodeAt(0) === 0xFEFF ? 1 : 0;
-  if (!text.startsWith('---\n', start)) return 0;
-  // Search from `start + 3`, not `start + 4` (parity fix, found while strengthening
-  // #5105's `frontmatterBlock` property test): the opening fence's own newline sits at
-  // `start + 3`, and a closing `---` that is the very NEXT line — a genuinely empty
-  // frontmatter block, `---\n---\n` — has no OTHER newline before it to match against.
-  // `frontmatterRegion` in `frontmatter.cts` makes the same correction for the same reason;
-  // this function cannot import it, so the fix is mirrored here to keep the two agreeing.
-  const closingNewline = text.indexOf('\n---', start + 3);
-  if (closingNewline === -1) return 0;
-  return text.slice(0, closingNewline + 1).split('\n').length;
+  const fence = locateFrontmatterFence(text);
+  if (!fence || !fence.closed) return 0;
+  // The lines before the closing fence, plus the closing fence line itself.
+  return text.slice(0, fence.closingStart).split('\n').length;
 }
 
 function _normalizeMd(content: string): string {
