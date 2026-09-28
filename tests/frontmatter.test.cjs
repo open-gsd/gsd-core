@@ -452,18 +452,38 @@ describe('spliceFrontmatter', () => {
   describe('never drops a line it did not parse', () => {
     const setStatus = (content) => spliceFrontmatter(content, { ...extractFrontmatter(content), status: 'complete' });
 
-    test('a no-space `key:value` line survives a splice of another key', () => {
+    const UNPARSEABLE = { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_UNPARSEABLE' };
+    const UNRECONCILABLE = { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_KEYS_UNRECONCILABLE' };
+
+    // An unparseable block is never regenerated: a regenerated key's indented lines, a
+    // no-space `status:complete` line and every key the parser could not read would be
+    // lost or left in a block no reader can see. Every splice-based write fails closed.
+    test('a no-space `key:value` line (block unparseable) refuses the write, after or before the key', () => {
+      assert.throws(() => setStatus('---\nstatus: testing\nupdated:2026-01-01\n---\nbody'), UNPARSEABLE);
+      assert.throws(() => setStatus('---\nupdated:2026-01-01\nstatus: testing\n---\nbody'), UNPARSEABLE);
+    });
+
+    test('a no-space `status:complete` block is refused, never treated as a changed key', () => {
+      assert.throws(() => setStatus('---\nstatus:complete\nphase: 01\n---\nbody'), UNPARSEABLE);
+    });
+
+    test('a single no-space line (region parses as a bare scalar) refuses the write', () => {
+      assert.throws(() => spliceFrontmatter('---\nupdated:2026-01-01\n---\nbody', { status: 'complete' }), UNPARSEABLE);
+    });
+
+    test('a block holding a top-level sequence refuses the write', () => {
+      assert.throws(() => spliceFrontmatter('---\n- a\n---\nbody', { status: 'complete' }), UNPARSEABLE);
+    });
+
+    test('a comment-only block is empty, not unparseable: the key is appended after the comment', () => {
       assert.strictEqual(
-        setStatus('---\nstatus: testing\nupdated:2026-01-01\n---\nbody'),
-        '---\nstatus: complete\nupdated:2026-01-01\n---\nbody',
+        spliceFrontmatter('---\n# only a note\n---\nbody', { status: 'complete' }),
+        '---\n# only a note\nstatus: complete\n---\nbody',
       );
     });
 
-    test('a single no-space line (region parses as a bare scalar) survives', () => {
-      assert.strictEqual(
-        spliceFrontmatter('---\nupdated:2026-01-01\n---\nbody', { status: 'complete' }),
-        '---\nupdated:2026-01-01\nstatus: complete\n---\nbody',
-      );
+    test('an unparseable block is refused even when the write would be a no-op on its parse', () => {
+      assert.throws(() => spliceFrontmatter('---\nstatus: "x\n---\nbody', {}), UNPARSEABLE);
     });
 
     test('a blank line and a full-line comment after a regenerated key survive in place', () => {
@@ -480,11 +500,8 @@ describe('spliceFrontmatter', () => {
       );
     });
 
-    test('an unrecognized line in an unparseable block survives, as does every other key', () => {
-      assert.strictEqual(
-        setStatus('---\nstatus: testing\n!!weird line\nupdated: x\n---\nbody'),
-        '---\nstatus: complete\n!!weird line\nupdated: x\n---\nbody',
-      );
+    test('an unrecognized line in an unparseable block refuses the write', () => {
+      assert.throws(() => setStatus('---\nstatus: testing\n!!weird line\nupdated: x\n---\nbody'), UNPARSEABLE);
     });
 
     test('a quoted key after a regenerated key is kept once, not duplicated', () => {
@@ -498,6 +515,65 @@ describe('spliceFrontmatter', () => {
       assert.strictEqual(
         spliceFrontmatter('---\nstatus: testing\nwave: 1\n# note\nphase: 01\n---\nbody', { status: 'testing', phase: '01' }),
         '---\nstatus: testing\n# note\nphase: 01\n---\nbody',
+      );
+    });
+
+    // Segment key detection agrees with the parser: the key is everything before the
+    // first `: ` (js-yaml reads `a:b: 1` as key `a:b`), so a kept key is never re-appended.
+    test('`a:b: 1` is key `a:b` — kept once, never duplicated as a regenerated `a:b`', () => {
+      assert.strictEqual(setStatus('---\na:b: 1\nstatus: t\n---\n'), '---\na:b: 1\nstatus: complete\n---\n');
+    });
+
+    test('`http://x: 1` is key `http://x` — kept once', () => {
+      assert.strictEqual(setStatus('---\nhttp://x: 1\nstatus: t\n---\n'), '---\nhttp://x: 1\nstatus: complete\n---\n');
+    });
+
+    test('a changed or appended key the parser would misread bare is emitted double-quoted', () => {
+      const changed = spliceFrontmatter('---\na:b: 1\nstatus: t\n---\n', { 'a:b': '2', status: 't' });
+      assert.strictEqual(changed, '---\n"a:b": 2\nstatus: t\n---\n');
+      assert.deepStrictEqual({ ...extractFrontmatter(changed) }, { 'a:b': '2', status: 't' });
+      const appended = spliceFrontmatter('---\nstatus: t\n---\n', { status: 't', 'a: b': 'v', '#x': 'w' });
+      assert.strictEqual(appended, '---\nstatus: t\n"a: b": v\n"#x": w\n---\n');
+      assert.deepStrictEqual({ ...extractFrontmatter(appended) }, { status: 't', 'a: b': 'v', '#x': 'w' });
+    });
+
+    test('an explicit `? k` / `: v` key cannot be matched to a key line — refused, not duplicated', () => {
+      assert.throws(() => setStatus('---\n? k\n: v\nstatus: t\n---\n'), UNRECONCILABLE);
+    });
+
+    test('a duplicate top-level key cannot be matched one-to-one — refused', () => {
+      assert.throws(() => setStatus('---\nstatus: a\nstatus: b\n---\n'), UNRECONCILABLE);
+    });
+
+    test('a flow-mapping block has no key lines — refused', () => {
+      assert.throws(() => setStatus('---\n{status: a, phase: 1}\n---\n'), UNRECONCILABLE);
+    });
+  });
+
+  // The frontmatter block is re-emitted with the document's own line ending — a CRLF
+  // document never gains a bare-LF line (found while implementing #5105).
+  describe('line endings', () => {
+    test('a CRLF document keeps CRLF on regenerated, kept, tail and appended lines', () => {
+      const doc = '---\r\nstatus: t\r\n\r\n# c\r\nx: 1\r\n---\r\nbody\r\n';
+      const out = spliceFrontmatter(doc, { ...extractFrontmatter(doc), status: 'complete', tags: ['a', 'b', 'c', 'd'] });
+      assert.strictEqual(
+        out,
+        '---\r\nstatus: complete\r\n\r\n# c\r\nx: 1\r\ntags:\r\n  - a\r\n  - b\r\n  - c\r\n  - d\r\n---\r\nbody\r\n',
+      );
+      assert.ok(!/(^|[^\r])\n/.test(out), 'no bare-LF line ending');
+    });
+
+    test('an LF document stays LF', () => {
+      assert.strictEqual(
+        spliceFrontmatter('---\nstatus: t\n---\nbody\n', { status: 'complete' }),
+        '---\nstatus: complete\n---\nbody\n',
+      );
+    });
+
+    test('a leading BOM is carried through, not treated as a document without frontmatter', () => {
+      assert.strictEqual(
+        spliceFrontmatter('﻿---\nstatus: t\n---\nbody', { status: 'complete' }),
+        '﻿---\nstatus: complete\n---\nbody',
       );
     });
   });

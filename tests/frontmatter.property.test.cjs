@@ -140,16 +140,22 @@ describe('frontmatter: reconstructFrontmatter properties', () => {
 });
 
 describe('frontmatter: spliceFrontmatter properties', () => {
-  // (d) Never throws on any combination
-  test('property: spliceFrontmatter never throws on arbitrary content + object', () => {
+  // (d) Never throws on any combination — except its own documented write refusal for a
+  // block it may not splice (unparseable, or key lines it cannot match to parsed keys).
+  test('property: spliceFrontmatter throws nothing but a write refusal on arbitrary content + object', () => {
     fc.assert(
       fc.property(
-        fc.string({ maxLength: 300 }),
+        fc.oneof(
+          fc.string({ maxLength: 300 }),
+          fc.string({ maxLength: 200 }).map((s) => `---\n${s}\n---\nbody`),
+        ),
         fc.dictionary(yamlKey, yamlScalarValue, { maxKeys: 8 }),
         (content, obj) => {
-          assert.doesNotThrow(
-            () => spliceFrontmatter(content, obj),
-            `spliceFrontmatter threw on content=${JSON.stringify(content.slice(0, 30))}`
+          let thrown = null;
+          try { spliceFrontmatter(content, obj); } catch (err) { thrown = err; }
+          assert.ok(
+            thrown === null || thrown.name === 'FrontmatterWriteRefusedError',
+            `spliceFrontmatter threw a non-refusal on content=${JSON.stringify(content.slice(0, 30))}: ${thrown && thrown.message}`
           );
         }
       )
@@ -201,8 +207,9 @@ describe('frontmatter: spliceFrontmatter properties', () => {
   // A frontmatter write never silently drops a line it could not parse (found while
   // implementing #5105). Documents mix spaced `key: value` lines, no-space `key:value`
   // lines (which make the region unparseable YAML), full-line comments and blank lines;
-  // splicing only `status` must leave every other line byte-identical and in place.
-  test('property: splicing one key preserves every other line verbatim and in order', () => {
+  // splicing only `status` must leave every other line byte-identical and in place — or,
+  // when a no-space line makes the block unparseable, refuse the write outright.
+  test('property: splicing one key preserves every other line verbatim and in order, or refuses an unparseable block', () => {
     const otherKey = fc.stringMatching(/^[a-z][a-z0-9_]{0,9}$/).filter((k) => k !== 'status');
     const scalar = fc.stringMatching(/^[a-z0-9]{1,8}$/);
     const lineSpec = fc.oneof(
@@ -219,21 +226,71 @@ describe('frontmatter: spliceFrontmatter properties', () => {
         fc.nat(),
         (keys, specs, statusValue, statusAt) => {
           let keyIdx = 0;
+          let hasNoSpaceLine = false;
           const others = specs.map((spec) => {
             if (spec.kind === 'comment') return `# ${spec.value}`;
             if (spec.kind === 'blank') return '';
             if (keyIdx >= keys.length) return '';
             const key = keys[keyIdx++];
+            if (spec.kind === 'nospace') hasNoSpaceLine = true;
             return spec.kind === 'spaced' ? `${key}: ${spec.value}` : `${key}:${spec.value}`;
           });
           const at = statusAt % (others.length + 1);
           const inner = [...others.slice(0, at), `status: ${statusValue}`, ...others.slice(at)];
           const expectedInner = [...others.slice(0, at), 'status: complete', ...others.slice(at)];
           const doc = `---\n${inner.join('\n')}\n---\nbody`;
+          const write = () => spliceFrontmatter(doc, { ...extractFrontmatter(doc), status: 'complete' });
 
-          const out = spliceFrontmatter(doc, { ...extractFrontmatter(doc), status: 'complete' });
+          if (hasNoSpaceLine) {
+            assert.throws(write, { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_UNPARSEABLE' });
+          } else {
+            assert.equal(write(), `---\n${expectedInner.join('\n')}\n---\nbody`);
+          }
+        },
+      ),
+    );
+  });
 
-          assert.equal(out, `---\n${expectedInner.join('\n')}\n---\nbody`);
+  // M1 (found while implementing #5105): segment-key detection must agree with the parser
+  // for keys containing `:` and for quoted and Unicode keys. Whatever key is changed or
+  // added, the output has no duplicate top-level key (js-yaml's non-json mode throws on
+  // one), re-parses to exactly the intended object, and keeps the document's line ending.
+  test('property: keys containing `:`, quoted and Unicode keys never duplicate and re-parse to the intended object', () => {
+    const key = fc.oneof(
+      fc.stringMatching(/^[a-z][a-z0-9]{0,5}$/),
+      fc.stringMatching(/^[a-z]{1,3}:[a-z0-9]{1,3}$/),
+      fc.stringMatching(/^[a-z]{1,3}: [a-z]{1,3}$/),
+      fc.constantFrom('http://x', 'naïve', 'mușt', 'x y', '#h', '- d', 'ключ', 'a"b', "a'b"),
+    );
+    const scalar = fc.stringMatching(/^[a-z0-9]{1,8}$/);
+    // A spelling the parser reads back as `k`: bare when bare is unambiguous, else quoted.
+    const bareOk = (k) => /^[\p{L}\p{N}_][\p{L}\p{N}_ ./-]*$/u.test(k) || /^[a-z]{1,3}:[a-z0-9]{1,3}$/.test(k) || k === 'http://x';
+    const spell = (k, style) => {
+      if (style === 'bare' && bareOk(k)) return k;
+      if (style === 'single' && !k.includes("'")) return `'${k}'`;
+      return JSON.stringify(k);
+    };
+    fc.assert(
+      fc.property(
+        fc.uniqueArray(fc.tuple(key, scalar, fc.constantFrom('bare', 'single', 'double')), { minLength: 1, maxLength: 6, selector: (t) => t[0] }),
+        key,
+        scalar,
+        fc.boolean(),
+        (entries, targetKey, newValue, crlf) => {
+          const eol = crlf ? '\r\n' : '\n';
+          const lines = entries.map(([k, v, style]) => `${spell(k, style)}: ${v}`);
+          const doc = ['---', ...lines, '---', 'body'].join(eol);
+          const intended = Object.fromEntries(entries.map(([k, v]) => [k, v]));
+          assert.deepStrictEqual({ ...extractFrontmatter(doc) }, intended, 'fixture must parse to its own entries');
+          intended[targetKey] = newValue;
+
+          const out = spliceFrontmatter(doc, { ...extractFrontmatter(doc), [targetKey]: newValue });
+
+          const block = out.slice(0, out.indexOf(`${eol}---${eol}body`));
+          assert.doesNotThrow(() => yaml.load(block.slice(`---${eol}`.length), { schema: yaml.FAILSAFE_SCHEMA }), 'no duplicate top-level key');
+          assert.deepStrictEqual({ ...extractFrontmatter(out) }, intended);
+          if (crlf) assert.ok(!/(^|[^\r])\n/.test(out), 'no bare-LF line ending in a CRLF document');
+          else assert.ok(!out.includes('\r'), 'no CR in an LF document');
         },
       ),
     );

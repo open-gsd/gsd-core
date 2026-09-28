@@ -21,7 +21,7 @@ const os = require('os');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { toLegacyResult } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { runGsdTools, parseFrontmatter } = require('./helpers.cjs');
+const { runGsdTools, parseFrontmatter, cleanup } = require('./helpers.cjs');
 
 // Track temp files for cleanup
 let tempFiles = [];
@@ -811,5 +811,76 @@ describe('#4806 frontmatter get — unparseable frontmatter', () => {
     assert.ok(result.success, `command failed: ${result.error}`);
     const parsed = JSON.parse(result.output);
     assert.strictEqual(parsed.status, 'passed');
+  });
+});
+
+// ─── set/merge fail closed on a block the writer may not splice ──────────────
+// Found while implementing #5105: an unparseable block was regenerated (losing a
+// changed key's indented lines, or leaving the block unparseable so no reader saw the
+// write). set/merge now report the writer's refusal and leave the file byte-identical.
+
+describe('frontmatter set/merge — write refusal', () => {
+  function fileIn(t, name, content) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-fm-refusal-'));
+    t.after(() => cleanup(dir));
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, content, 'utf-8');
+    return file;
+  }
+
+  const UNPARSEABLE_DOC = '---\nstatus:testing\nphase: 01\n---\n\n# UAT\n';
+
+  test('set on an unparseable block reports FRONTMATTER_UNPARSEABLE and writes nothing', (t) => {
+    const file = fileIn(t, 'uat.md', UNPARSEABLE_DOC);
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'status', '--value', 'complete']);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.code, 'FRONTMATTER_UNPARSEABLE');
+    assert.ok(parsed.error.includes('not parseable YAML'), parsed.error);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), UNPARSEABLE_DOC);
+  });
+
+  test('merge on an unparseable block reports FRONTMATTER_UNPARSEABLE and writes nothing', (t) => {
+    const file = fileIn(t, 'uat.md', UNPARSEABLE_DOC);
+    const result = runGsdTools(['frontmatter', 'merge', file, '--data', JSON.stringify({ status: 'complete' })]);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.code, 'FRONTMATTER_UNPARSEABLE');
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), UNPARSEABLE_DOC);
+  });
+
+  test('set on a block with a duplicate key reports FRONTMATTER_KEYS_UNRECONCILABLE and writes nothing', (t) => {
+    const doc = '---\nstatus: a\nstatus: b\nphase: 01\n---\n';
+    const file = fileIn(t, 'dup.md', doc);
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'phase', '--value', '02']);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).code, 'FRONTMATTER_KEYS_UNRECONCILABLE');
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), doc);
+  });
+
+  // M6: the lossy-object-list refusal compares VALUE lines, so any key spelling holding
+  // object-list items is refused — not only the bare-ASCII one.
+  for (const [label, keyLine, field] of [
+    ['bare', 'must_haves:', 'must_haves'],
+    ['double-quoted', '"must_haves":', 'must_haves'],
+    ['Unicode', 'mușt:', 'mușt'],
+  ]) {
+    test(`set that would flatten a ${label}-key object-list is refused and writes nothing`, (t) => {
+      const doc = `---\n${keyLine}\n  artifacts:\n    - path: a.md\n      provides: X\nstatus: t\n---\nbody\n`;
+      const file = fileIn(t, 'plan.md', doc);
+      const result = runGsdTools(['frontmatter', 'set', file, '--field', field, '--value', JSON.stringify({ artifacts: ['path: a.md'] })]);
+      assert.ok(result.success, `command failed: ${result.error}`);
+      const parsed = JSON.parse(result.output);
+      assert.ok((parsed.error || '').includes('frontmatter set refused'), `expected a refusal, got ${result.output}`);
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), doc);
+    });
+  }
+
+  test('control: a quoted scalar key is still settable (value comparison, not key spelling)', (t) => {
+    const file = fileIn(t, 'plan.md', '---\n"wave": 1\nstatus: t\n---\nbody\n');
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'wave', '--value', '"2"']);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).updated, true);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), '---\nwave: 2\nstatus: t\n---\nbody\n');
   });
 });
