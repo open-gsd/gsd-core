@@ -29,6 +29,9 @@ const {
   PHASE_STATUS,
   WIRE_STATUS,
   ROADMAP_STATUS_TOKEN,
+  DISK_STATUS,
+  PROGRESS_STATUS,
+  COMPLETION_STATUS,
   phaseStatusFromFacts,
   phaseStatus,
   foldPhaseStatuses,
@@ -98,6 +101,80 @@ describe('closed vocabularies', () => {
       COMPLETE: 'Complete',
       DEFERRED: 'Deferred',
     });
+  });
+
+  // #5060 review finding (ADR-5057 §1.2): DISK_STATUS/PROGRESS_STATUS/
+  // COMPLETION_STATUS are frozen, closed vocabularies imported by every
+  // producer AND every consumer — not hand-spelled literals at call sites.
+  test('DISK_STATUS is frozen and holds every toDiskStatus word', () => {
+    assert.ok(Object.isFrozen(DISK_STATUS));
+    assert.deepEqual({ ...DISK_STATUS }, {
+      COMPLETE: 'complete',
+      EXECUTED: 'executed',
+      PARTIAL: 'partial',
+      PLANNED: 'planned',
+      RESEARCHED: 'researched',
+      DISCUSSED: 'discussed',
+      EMPTY: 'empty',
+      NO_DIRECTORY: 'no_directory',
+    });
+  });
+
+  test('PROGRESS_STATUS is frozen and holds every toProgressStatus word', () => {
+    assert.ok(Object.isFrozen(PROGRESS_STATUS));
+    assert.deepEqual({ ...PROGRESS_STATUS }, {
+      COMPLETE: 'complete',
+      EXECUTED: 'executed',
+      IN_PROGRESS: 'in_progress',
+      RESEARCHED: 'researched',
+      PENDING: 'pending',
+      NOT_STARTED: 'not_started',
+    });
+  });
+
+  test('COMPLETION_STATUS is frozen and holds every toCompletionStatus word', () => {
+    assert.ok(Object.isFrozen(COMPLETION_STATUS));
+    assert.deepEqual({ ...COMPLETION_STATUS }, {
+      COMPLETE: 'complete',
+      EXECUTED: 'executed',
+      INCOMPLETE: 'incomplete',
+    });
+  });
+
+  test('toDiskStatus never returns a word outside DISK_STATUS, across every rung and artifact combo', () => {
+    const diskVocab = new Set(Object.values(DISK_STATUS));
+    for (const s of LADDER) {
+      for (const hasResearch of [false, true]) {
+        for (const hasContext of [false, true]) {
+          assert.ok(
+            diskVocab.has(toDiskStatus(s, { hasResearch, hasContext })),
+            `toDiskStatus(${s}, {hasResearch:${hasResearch}, hasContext:${hasContext}}) left DISK_STATUS`,
+          );
+        }
+      }
+    }
+  });
+
+  test('toProgressStatus never returns a word outside PROGRESS_STATUS, across every rung and artifact combo', () => {
+    const progressVocab = new Set(Object.values(PROGRESS_STATUS));
+    for (const s of LADDER) {
+      for (const hasResearch of [false, true]) {
+        assert.ok(
+          progressVocab.has(toProgressStatus(s, { hasResearch })),
+          `toProgressStatus(${s}, {hasResearch:${hasResearch}}) left PROGRESS_STATUS`,
+        );
+      }
+    }
+  });
+
+  test('toCompletionStatus never returns a word outside COMPLETION_STATUS, across every rung', () => {
+    const completionVocab = new Set(Object.values(COMPLETION_STATUS));
+    for (const s of LADDER) {
+      assert.ok(
+        completionVocab.has(toCompletionStatus(s)),
+        `toCompletionStatus(${s}) left COMPLETION_STATUS`,
+      );
+    }
   });
 });
 

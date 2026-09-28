@@ -2851,9 +2851,10 @@ describe('stats command', () => {
     assert.strictEqual(stats.plan_percent, 67);
   });
 
-  // #3473 F2 (companion to #3357): determinePhaseStatus now resolves its
-  // *-VERIFICATION.md via the shared resolveVerificationFile resolver instead
-  // of a hand-rolled `.find()` over unsorted readdir() order. Before this fix,
+  // #3473 F2 (companion to #3357): the phase-status ladder (now the Phase
+  // Status Module, #5060) resolves its *-VERIFICATION.md via the shared
+  // resolveVerificationFile resolver instead of a hand-rolled `.find()` over
+  // unsorted readdir() order. Before this fix,
   // which of a canonical report and an ad-hoc `-CORRECTION-VERIFICATION.md`
   // worksheet "won" was filesystem-dependent; the canonical report must now
   // win deterministically regardless of directory-listing order.

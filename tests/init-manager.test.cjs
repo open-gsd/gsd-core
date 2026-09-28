@@ -1849,4 +1849,54 @@ describe('#4764 dep_phases extracts only Phase-prefixed references', () => {
       { numRuns: 20 },
     );
   });
+
+  // #5060 review finding: buildPhaseCompletionProjection's own isPhaseComplete
+  // call used to omit `convention`, while `disk_status`/`status` already came
+  // from `phaseStatus(..., { convention })` — under the bracket convention the
+  // two owners could disagree (the completion read cannot resolve the phase's
+  // own bracket-qualified `-VERIFICATION.md`, so `phase_complete`/
+  // `completion_status` stay stuck below `disk_status`). Threading the same
+  // resolved convention into both calls makes them agree.
+  test('#5060: bracket convention — disk_status, phase_complete and completion_status agree on a passed report', () => {
+    const planning = path.join(tmpDir, '.planning');
+    fs.writeFileSync(
+      path.join(planning, 'config.json'),
+      JSON.stringify({ phase_id_convention: 'bracket', project_code: 'GSD' }),
+    );
+    fs.writeFileSync(
+      path.join(planning, 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## [GSD.02] v2.0: Verify',
+        '',
+        '- [ ] **[GSD.02] 01: Verify Fix**',
+        '',
+        '### [GSD.02] 01: Verify Fix',
+        '',
+        '**Goal:** Confirm the convention thread',
+        '',
+      ].join('\n'),
+    );
+    writeState(tmpDir);
+    const phaseDir = path.join(planning, 'phases', 'GSD.02-01-verify-fix');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    writePassedVerification(phaseDir, '01');
+
+    const result = runGsdTools('init manager', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    const row = output.phases.find((p) => p.number === '01');
+    assert.ok(row, 'the bracket phase must be reported');
+    assert.deepEqual(
+      {
+        disk_status: row.disk_status,
+        phase_complete: row.phase_complete,
+        completion_status: row.completion_status,
+      },
+      { disk_status: 'complete', phase_complete: true, completion_status: 'complete' },
+    );
+  });
 });
