@@ -69,3 +69,37 @@ cap. That is a maintainer call among three options, each with real tradeoffs:
 `timeout-minutes` beneath 1.5x whatever `LANE_COSTS`/`COVERED[*].timeoutMinutes` records as that
 job's last measured cost — raising the cap back down is not something either mechanism will
 silently allow.
+
+## 4. The Windows conformance shards drift apart
+
+The same daily workflow runs a second, separate step, `shard-balance` (#5101). It checks the
+Windows conformance shards against each other, which the per-job cap check above never does. The
+thresholds are the #5071 acceptance criteria, kept in one place: `SHARD_BALANCE` in
+`scripts/ci-timeout-report.cjs`.
+
+**What it reads.** Completed `next` push runs of `test.yml` created after 2026-09-28T14:17:51Z
+(the #5097 merge), newest 20 first. From each, it reads the durations of the
+`conformance test (windows-latest, …, shard i/n)` jobs. A job that never ran is left out, and a
+shard cancelled after it ran (killed at its cap) counts.
+
+**What it checks.**
+
+- The gap between the slowest and fastest shard's median must be at most 2 minutes.
+- No shard's p90 may be above its baseline: shard 1/3 30.4 min, shard 2/3 34.1 min, shard 3/3
+  36.8 min.
+
+**Where you see it.** Every run writes a table to the `shard-balance` step's summary. A breach, or
+a baseline mismatch, also opens an issue titled **CI: Windows conformance shard balance
+regressed**. If that issue is already open, the check comments on it instead, once per daily run,
+until someone closes it.
+
+| Status | What it means | What to do |
+|---|---|---|
+| `insufficient-data` | Fewer than 10 qualifying runs so far, or fewer than two shards have data. | Nothing. It reports once enough `next` pushes land. |
+| `ok` | Both criteria hold. | Nothing. |
+| `breach` | The median gap is over 2 minutes, or a shard's p90 is over its baseline. The issue lists which. | Regenerate the win32 timing table ([Regenerate the win32 timing table](regenerate-the-win32-timing-table.md)). A new heavy conformance file, or a stale table, is the usual cause. If the gap persists with a fresh table, look at per-chunk overhead: the shard with more, smaller chunks pays more process startup. |
+| `baseline-mismatch` | The newest run's Windows shard count differs from the baseline's (3). The lane was re-sharded. | Measure the new layout and update `baselineShardTotal` and `baselineP90Ms` in `SHARD_BALANCE`. Until then, no gap or p90 verdict is given. |
+| `error` | The GitHub API could not be read. The step logs a warning. | Re-run the workflow once the API is reachable. The per-job report step is unaffected. |
+
+The check never fails the workflow and never changes how shards are packed; it only reports.
+Closing the tracking issue after a fix is up to you. A later breach opens a new one.

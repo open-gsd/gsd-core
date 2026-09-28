@@ -725,6 +725,22 @@ test('shard balance (#5101)', async (t) => {
     assert.equal(result.issue.number, 555);
   });
 
+  await t.test('a near-miss search hit or a PR is not treated as the tracking issue', async () => {
+    const { runs, jobsByRunId } = breachFixture();
+    const existingIssues = [
+      { number: 1, title: `${SHARD_BALANCE.issueTitle} (old)` },
+      { number: 2, title: SHARD_BALANCE.issueTitle, pull_request: {} },
+    ];
+    const { github, calls } = makeGithub({ runs, jobsByRunId, existingIssues });
+    const { core } = makeCore();
+
+    const result = await checkShardBalance({ github, context, core, config: SHARD_BALANCE });
+
+    assert.equal(calls.create.length, 1);
+    assert.equal(calls.comment.length, 0);
+    assert.equal(result.issue.action, 'created');
+  });
+
   await t.test('ok and insufficient-data write no issue', async () => {
     const okRuns = [];
     const okJobsByRunId = {};

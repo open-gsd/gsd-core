@@ -16,6 +16,13 @@
  * Invoked from a GitHub Actions workflow via actions/github-script, e.g.:
  *   const report = require(`${process.env.GITHUB_WORKSPACE}/scripts/ci-timeout-report.cjs`);
  *   const result = await report.main({ github, context, core });
+ *
+ * Also exports a second, independent check (#5101): `checkShardBalance`
+ * evaluates the #5071 Windows conformance shard-balance criteria (median gap
+ * and per-shard p90 vs. frozen baselines) from live `next` push runs and
+ * opens/comments on one tracking issue when the shards drift out of balance.
+ * It is wired into ci-timeout-report.yml as its own workflow step, not into
+ * `main()`.
  */
 
 const yaml = require('js-yaml');
@@ -237,6 +244,319 @@ async function main({
   return { added: deduped.length, nearCap: nearCapCount };
 }
 
+// #5101 — Windows conformance shard-balance check (#5071 criteria), frozen.
+// baselineP90Ms is keyed by `shard` string ("i/n") and frozen independently
+// so a future edit cannot mutate it via the outer object being frozen only
+// shallowly.
+const SHARD_BALANCE = Object.freeze({
+  workflowFile: 'test.yml',
+  branch: 'next',
+  event: 'push',
+  since: '2026-09-28T14:17:51Z', // #5097 merge
+  minRuns: 10,
+  windowRuns: 20,
+  maxMedianGapMs: 120000,
+  baselineShardTotal: 3,
+  baselineP90Ms: Object.freeze({
+    '1/3': 1824000,
+    '2/3': 2046000,
+    '3/3': 2208000,
+  }),
+  issueTitle: 'CI: Windows conformance shard balance regressed',
+});
+
+const WINDOWS_SHARD_JOB_RE = /^conformance test \(windows-latest, [^,)]+, shard (\d+)\/(\d+)\)$/;
+
+/**
+ * ms elapsed for a job, or `null` when the job never actually executed
+ * (skipped; missing/unparseable start or completion timestamp; completed at
+ * or before started). These are the same never-executed rules #5088 puts in
+ * `parseJobRecord`; once #5102 merges, `parseJobRecord` should call this
+ * helper once so the rule lives in exactly one place.
+ *
+ * @param {{name?: string, conclusion?: string, started_at?: ?string, completed_at?: ?string}} job
+ * @returns {?number}
+ */
+function jobSpanMs(job) {
+  if (typeof job.name !== 'string') return null;
+  if (job.conclusion === 'skipped') return null;
+
+  const started = Date.parse(job.started_at);
+  const completed = Date.parse(job.completed_at);
+  if (!Number.isFinite(started) || !Number.isFinite(completed)) return null;
+  if (completed <= started) return null;
+
+  return completed - started;
+}
+
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const n = sorted.length;
+  const mid = Math.floor(n / 2);
+  return n % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+// Nearest-rank percentile: sorted ascending, index Math.ceil(p*n)-1, clamped.
+function percentile(values, p) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const n = sorted.length;
+  const idx = Math.max(0, Math.ceil(p * n) - 1);
+  return sorted[idx];
+}
+
+/**
+ * @param {Array<{run: object, jobs: object[]}>} runsWithJobs
+ * @param {object} config
+ * @returns {Array<{runId: number, createdAt: string, index: number, total: number, shard: string, elapsedMs: number}>}
+ */
+function extractShardSamples(runsWithJobs, config) {
+  const samples = [];
+  for (const { run, jobs } of runsWithJobs) {
+    if (Date.parse(run.created_at) < Date.parse(config.since)) continue;
+
+    for (const job of jobs) {
+      const m = typeof job.name === 'string' ? job.name.match(WINDOWS_SHARD_JOB_RE) : null;
+      if (!m) continue;
+
+      const elapsedMs = jobSpanMs(job);
+      if (elapsedMs == null) continue;
+
+      samples.push({
+        runId: run.id,
+        createdAt: run.created_at,
+        index: Number(m[1]),
+        total: Number(m[2]),
+        shard: `${m[1]}/${m[2]}`,
+        elapsedMs,
+      });
+    }
+  }
+  return samples;
+}
+
+/**
+ * @param {Array<ReturnType<typeof extractShardSamples>[number]>} samples
+ * @param {object} config
+ * @returns {{status: string, runs: number, total: ?number, window: number, perShard: object[], gapMs: ?number, breaches: object[]}}
+ */
+function evaluateShardBalance(samples, config) {
+  if (samples.length === 0) {
+    return {
+      status: 'insufficient-data', runs: 0, total: null, window: config.windowRuns, perShard: [], gapMs: null, breaches: [],
+    };
+  }
+
+  // Newest layout = the `total` of the sample belonging to the run with the
+  // latest createdAt.
+  let newestSample = samples[0];
+  for (const s of samples) {
+    if (Date.parse(s.createdAt) > Date.parse(newestSample.createdAt)) newestSample = s;
+  }
+  const newestTotal = newestSample.total;
+  const sameLayout = samples.filter((s) => s.total === newestTotal);
+
+  // Group by runId, keep the newest config.windowRuns runs by createdAt.
+  const runsByIdMap = new Map();
+  for (const s of sameLayout) {
+    if (!runsByIdMap.has(s.runId)) runsByIdMap.set(s.runId, { createdAt: s.createdAt, samples: [] });
+    runsByIdMap.get(s.runId).samples.push(s);
+  }
+  const runEntries = [...runsByIdMap.entries()].sort(
+    (a, b) => Date.parse(b[1].createdAt) - Date.parse(a[1].createdAt),
+  );
+  const keptRunEntries = runEntries.slice(0, config.windowRuns);
+  const keptRunIds = new Set(keptRunEntries.map(([runId]) => runId));
+  const keptSamples = sameLayout.filter((s) => keptRunIds.has(s.runId));
+
+  const runsCount = keptRunIds.size;
+
+  if (newestTotal !== config.baselineShardTotal) {
+    const perShard = buildPerShard(keptSamples, newestTotal, config);
+    return {
+      status: 'baseline-mismatch', runs: runsCount, total: newestTotal, window: config.windowRuns, perShard, gapMs: null, breaches: [],
+    };
+  }
+
+  const perShard = buildPerShard(keptSamples, newestTotal, config);
+  const populated = perShard.filter((s) => s.n > 0);
+
+  if (runsCount < config.minRuns || populated.length < 2) {
+    return {
+      status: 'insufficient-data', runs: runsCount, total: newestTotal, window: config.windowRuns, perShard, gapMs: null, breaches: [],
+    };
+  }
+
+  let slowest = populated[0];
+  let fastest = populated[0];
+  for (const s of populated) {
+    if (s.medianMs > slowest.medianMs) slowest = s;
+    if (s.medianMs < fastest.medianMs) fastest = s;
+  }
+  const gapMs = slowest.medianMs - fastest.medianMs;
+
+  const breaches = [];
+  if (gapMs > config.maxMedianGapMs) {
+    breaches.push({
+      kind: 'gap', slowest: slowest.shard, fastest: fastest.shard, gapMs, limitMs: config.maxMedianGapMs,
+    });
+  }
+  for (const s of perShard) {
+    if (s.p90Ms != null && s.baselineP90Ms != null && s.p90Ms > s.baselineP90Ms) {
+      breaches.push({
+        kind: 'p90', shard: s.shard, p90Ms: s.p90Ms, baselineP90Ms: s.baselineP90Ms,
+      });
+    }
+  }
+
+  return {
+    status: breaches.length > 0 ? 'breach' : 'ok',
+    runs: runsCount,
+    total: newestTotal,
+    window: config.windowRuns,
+    perShard,
+    gapMs,
+    breaches,
+  };
+}
+
+function buildPerShard(samples, total, config) {
+  const byShard = new Map();
+  for (const s of samples) {
+    if (!byShard.has(s.shard)) byShard.set(s.shard, []);
+    byShard.get(s.shard).push(s.elapsedMs);
+  }
+
+  const perShard = [];
+  for (let index = 1; index <= total; index += 1) {
+    const shard = `${index}/${total}`;
+    const values = byShard.get(shard) || [];
+    if (values.length === 0) {
+      perShard.push({
+        shard, n: 0, medianMs: null, p90Ms: null, baselineP90Ms: config.baselineP90Ms[shard] ?? null,
+      });
+      continue;
+    }
+    perShard.push({
+      shard,
+      n: values.length,
+      medianMs: median(values),
+      p90Ms: percentile(values, 0.9),
+      baselineP90Ms: config.baselineP90Ms[shard] ?? null,
+    });
+  }
+  return perShard;
+}
+
+function msToMinutes(ms) {
+  return (ms / 60000).toFixed(1);
+}
+
+/**
+ * Pure markdown formatter for a shard-balance evaluation result.
+ * @param {ReturnType<typeof evaluateShardBalance>} result
+ * @returns {string}
+ */
+function formatShardBalanceSummary(result) {
+  const lines = [];
+  lines.push('### Windows conformance shard balance (#5071)');
+  lines.push('');
+  lines.push(`Status: **${result.status}** (${result.runs}/${result.window} runs evaluated)`);
+  lines.push('');
+  lines.push('| shard | runs | median (min) | p90 (min) | baseline p90 (min) |');
+  lines.push('|---|---|---|---|---|');
+  for (const s of result.perShard) {
+    lines.push(`| ${s.shard} | ${s.n} | ${s.medianMs == null ? '—' : msToMinutes(s.medianMs)} | ${s.p90Ms == null ? '—' : msToMinutes(s.p90Ms)} | ${s.baselineP90Ms == null ? '—' : msToMinutes(s.baselineP90Ms)} |`);
+  }
+  for (const b of result.breaches) {
+    if (b.kind === 'gap') {
+      lines.push(`- gap breach: shard ${b.slowest} vs ${b.fastest} — ${msToMinutes(b.gapMs)} min gap (limit ${msToMinutes(b.limitMs)} min)`);
+    } else if (b.kind === 'p90') {
+      lines.push(`- p90 breach: shard ${b.shard} — ${msToMinutes(b.p90Ms)} min (baseline ${msToMinutes(b.baselineP90Ms)} min)`);
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Orchestration entry point for the #5101 shard-balance check — impure,
+ * invoked from actions/github-script as an independent workflow step.
+ *
+ * @param {{github: object, context: object, core: object, config?: object}} args
+ * @returns {Promise<object>}
+ */
+async function checkShardBalance({
+  github, context, core, config = SHARD_BALANCE,
+}) {
+  try {
+    const { owner, repo } = context.repo;
+
+    const runsList = await github.paginate(github.rest.actions.listWorkflowRuns, {
+      owner,
+      repo,
+      workflow_id: config.workflowFile,
+      branch: config.branch,
+      event: config.event,
+      status: 'completed',
+      created: `>=${config.since}`,
+      per_page: 50,
+    });
+
+    const sortedRuns = [...runsList].sort(
+      (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at),
+    );
+    const candidateRuns = sortedRuns.slice(0, config.windowRuns * 2);
+
+    const runsWithJobs = [];
+    for (const run of candidateRuns) {
+      const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+        owner,
+        repo,
+        run_id: run.id,
+        per_page: 100,
+      });
+      runsWithJobs.push({ run, jobs });
+    }
+
+    const samples = extractShardSamples(runsWithJobs, config);
+    const result = evaluateShardBalance(samples, config);
+
+    const summary = formatShardBalanceSummary(result);
+    if (core.summary) {
+      core.summary.addRaw(summary);
+      await core.summary.write();
+    }
+
+    let issue = { action: 'none' };
+
+    if (result.status === 'breach' || result.status === 'baseline-mismatch') {
+      const breachKinds = result.breaches.map((b) => b.kind).join(', ');
+      core.warning(`ci-timeout-report shard-balance: status=${result.status}${breachKinds ? ` breaches=${breachKinds}` : ''}`);
+
+      const body = `${summary}\n\nSee #5071 / #5101 and docs/how-to/read-ci-timeout-signals.md for background on this check.`;
+
+      const searchResult = await github.rest.search.issuesAndPullRequests({
+        q: `repo:${owner}/${repo} is:issue is:open in:title "${config.issueTitle}"`,
+      });
+      const existing = (searchResult.data.items || []).find(
+        (item) => item.title === config.issueTitle && !item.pull_request,
+      );
+
+      if (existing) {
+        await github.rest.issues.createComment({ owner, repo, issue_number: existing.number, body });
+        issue = { action: 'commented', number: existing.number };
+      } else {
+        const created = await github.rest.issues.create({ owner, repo, title: config.issueTitle, body });
+        issue = { action: 'created', number: created.data.number };
+      }
+    }
+
+    return { ...result, issue };
+  } catch (err) {
+    core.warning(`ci-timeout-report: shard-balance check failed: ${err.message}`);
+    return { status: 'error', error: err.message, issue: { action: 'none' } };
+  }
+}
+
 module.exports = {
   HISTORY_PATH,
   WORKFLOWS_DIR,
@@ -247,4 +567,13 @@ module.exports = {
   dedupeAgainstHistory,
   formatHistoryLine,
   main,
+  SHARD_BALANCE,
+  WINDOWS_SHARD_JOB_RE,
+  jobSpanMs,
+  median,
+  percentile,
+  extractShardSamples,
+  evaluateShardBalance,
+  formatShardBalanceSummary,
+  checkShardBalance,
 };

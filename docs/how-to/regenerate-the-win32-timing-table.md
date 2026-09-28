@@ -6,7 +6,10 @@ Windows CI runners (#5071). This page shows how to rebuild that table from a
 fresh CI run. For what the table does and how its weights relate to the Linux
 table, see [Platform-measured timings (win32)](../TESTING-SUITES.md#platform-measured-timings-win32).
 
-**When:** the three `conformance test (windows-latest, …)` shards drift apart
+**When:** the daily shard-balance check opens or comments on its **CI: Windows
+conformance shard balance regressed** issue (see
+[Read CI timeout signals §4](read-ci-timeout-signals.md#4-the-windows-conformance-shards-drift-apart)),
+the three `conformance test (windows-latest, …)` shards otherwise drift apart
 again (a gap of more than a couple of minutes between their durations), or the
 conformance tier gains or loses expensive files. Not on a schedule.
 

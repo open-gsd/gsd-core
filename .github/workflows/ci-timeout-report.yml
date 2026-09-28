@@ -9,6 +9,11 @@ name: CI timeout budget report
 # a small, uniquely-branched, data-only PR carrying just that run's new rows,
 # rather than force-pushing one long-lived branch. Small PRs merge easily and
 # never go stale enough to need a rebase.
+#
+# A separate `shard-balance` step (#5101) evaluates the #5071 Windows
+# conformance shard-balance criteria (median gap, per-shard p90 vs. frozen
+# baselines) from live `next` push runs and opens/updates one tracking issue
+# on a breach. It runs independently of the report step above.
 
 on:
   schedule:
@@ -18,6 +23,7 @@ on:
 permissions:
   actions: read
   contents: write
+  issues: write
   pull-requests: write
 
 jobs:
@@ -53,6 +59,19 @@ jobs:
             const result = await report.main({ github, context, core });
             core.info(`ci-timeout-report: added ${result.added} record(s), ${result.nearCap} near-cap`);
             return result;
+
+      # #5101: evaluates the #5071 Windows conformance shard-balance criteria
+      # from live `next` push runs and opens/updates one tracking issue on a
+      # breach. A separate step so it runs even if the per-job report above fails.
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        id: shard-balance
+        if: always()
+        with:
+          script: |
+            const report = require(`${process.env.GITHUB_WORKSPACE}/scripts/ci-timeout-report.cjs`);
+            const result = await report.checkShardBalance({ github, context, core });
+            core.info(`shard-balance: ${result.status}`);
+            return result.status;
 
       - name: Open a small PR with this run's new records, if any
         if: always()
