@@ -2090,6 +2090,37 @@ describe('#4925: roadmap update-plan-progress — Status-cell prose and the Comp
       `expected the whitespace-run token normalized to 'In Progress', prose kept; got:\n${written}`,
     );
   });
+
+  // #5060: one count source. Before this fix, the `Plans Complete` cell and
+  // `plan_count`/`summary_count` output read `phaseInfo.plans.length` /
+  // `countMatchedSummaries(phaseInfo.plans, phaseInfo.summaries)`, which do
+  // NOT exclude a plan marked `status: superseded` (#2349) — only the
+  // Status-cell ladder's `coverageScan` (`scanPhasePlans`) did. A phase with
+  // one superseded plan therefore reported `1/2` in the Plans Complete cell
+  // while the Status token (derived from the excluding scan) already agreed
+  // the phase was done. Now every output in this verb reads from the same
+  // `scanPhasePlans` count.
+  test('#5060: a superseded plan is excluded from the Plans Complete cell and plan_count, matching the Status-cell ladder', () => {
+    const roadmap = progressRoadmap('| 68. Scheduler | v1.3 | 0/2 | Planned | - |');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), roadmap);
+    const p68 = path.join(tmpDir, '.planning', 'phases', '68-scheduler');
+    fs.mkdirSync(p68, { recursive: true });
+    fs.writeFileSync(path.join(p68, '68-01-PLAN.md'), '# Plan 1\n');
+    fs.writeFileSync(path.join(p68, '68-02-PLAN.md'), '---\nstatus: superseded\n---\n# Plan 2\n');
+    fs.writeFileSync(path.join(p68, '68-01-SUMMARY.md'), '# Summary\n');
+
+    const result = runGsdTools('roadmap update-plan-progress 68', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.plan_count, 1, 'the superseded plan must not count toward plan_count');
+    assert.strictEqual(output.summary_count, 1);
+
+    const written = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(
+      /\| 68\. Scheduler \| v1\.3 \| 1\/1 \|/.test(written),
+      `expected the Plans Complete cell to read 1/1 (not 1/2); got:\n${written}`,
+    );
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

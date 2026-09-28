@@ -470,7 +470,7 @@ describe('CONSUMER identity (ADR-3180 Decision 4c): percent fields match the can
     // phase enumeration + phase completion's derivation (§7.3/§7.4 — a
     // SEPARATE ADR-3180 phase, not owned by this guard; §7.6's own status
     // note says numerator/denominator SAME-SCOPE-SET enforcement is Phase 7,
-    // not yet shipped). Re-deriving `determinePhaseStatus` locally in this
+    // not yet shipped). Re-deriving the Phase Status Module's ladder locally in this
     // test to independently compute completedPhases/phasesTotal would
     // duplicate PRODUCTION status logic rather than exercise this
     // derivation's owner. What THIS guard (§7.6, completion-ratio

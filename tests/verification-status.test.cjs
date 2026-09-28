@@ -889,7 +889,8 @@ describe('verification-status', () => {
 //   ['03-CORRECTION-VERIFICATION.md', '04-VERIFICATION.md'] resolves to
 //     '04-VERIFICATION.md' for phase token '04' (was '03-CORRECTION-…').
 // resolveVerificationFile is the single resolver findStaleVerificationSummary,
-// readVerificationStatus, commands.cts's determinePhaseStatus, and both
+// readVerificationStatus, the Phase Status Module's `phaseStatus()` (#5060,
+// consumed by commands.cts's cmdProgressRender/cmdStats), and both
 // init.cts verification_path projectors all call, every one pinned to its own
 // phaseDir's token (#3473 F2 / #3492).
 //
@@ -1219,7 +1220,8 @@ describe('#3357/#3492: phase-pinned *-VERIFICATION.md resolution when multiple c
 
 // ─── #3473 F2: resolveVerificationFile allowBare option ──────────────────────
 //
-// commands.cts (determinePhaseStatus) and two verification_path projectors in
+// the Phase Status Module's `phaseStatus()` (#5060, commands.cts's phase-status
+// surface) and two verification_path projectors in
 // init.cts each hand-rolled a fourth variant of this same selection: they
 // additionally accept a BARE `VERIFICATION.md`, which this module's own two
 // callers (findStaleVerificationSummary, readVerificationStatus) originally
@@ -1285,7 +1287,7 @@ describe('#3473 F2: resolveVerificationFile allowBare option', () => {
 // ─── #4187: a bare VERIFICATION.md is a first-class report on the status surface ──
 //
 // `query verification.resolve-file` (cmdVerificationResolveFile), the phase-status
-// surface (commands.cts determinePhaseStatus) and both init verification_path
+// surface (the Phase Status Module's `phaseStatus()`, #5060) and both init verification_path
 // projectors all resolve a BARE `VERIFICATION.md` — but readVerificationStatus
 // (the reader behind `query verification.status`, isPhaseComplete, and the state/
 // roadmap completion projections) called the same shared resolver WITHOUT
