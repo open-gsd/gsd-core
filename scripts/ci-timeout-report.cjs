@@ -81,15 +81,10 @@ function parseJobRecord({ job, workflowFile, workflowYamlText, covered }) {
   // `cancelled` job with a real span is NOT skipped: a job killed at its
   // timeout-minutes cap is reported as cancelled, and is exactly what this
   // report exists to record.
-  // A zero-length span is treated the same way: GitHub's timestamps have
-  // one-second resolution and no job that actually ran is provisioned, run and
-  // torn down within the same second. A record without a string `name` is
-  // skipped too — resolveJobTimeoutMinutes would throw on it the same way, and
-  // lose the whole report for one malformed entry.
-  if (typeof job.name !== 'string' || job.conclusion === 'skipped') return null;
-  const startMs = Date.parse(job.started_at);
-  const endMs = Date.parse(job.completed_at);
-  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
+  // The exact rules (skipped, missing/unparseable timestamps, zero-or-negative
+  // span, non-string name) live in jobSpanMs, shared with the #5101
+  // shard-balance check.
+  if (jobSpanMs(job) === null) return null;
 
   const timeoutMinutes = resolveJobTimeoutMinutes({ jobName: job.name, workflowFile, workflowYamlText, covered });
   if (timeoutMinutes == null) return null;
@@ -270,9 +265,13 @@ const WINDOWS_SHARD_JOB_RE = /^conformance test \(windows-latest, [^,)]+, shard 
 /**
  * ms elapsed for a job, or `null` when the job never actually executed
  * (skipped; missing/unparseable start or completion timestamp; completed at
- * or before started). These are the same never-executed rules #5088 puts in
- * `parseJobRecord`; once #5102 merges, `parseJobRecord` should call this
- * helper once so the rule lives in exactly one place.
+ * or before started). The single definition of "never executed" for this
+ * file: parseJobRecord (#5088) and extractShardSamples (#5101) both call it.
+ * A zero-length span counts as never executed because GitHub's timestamps
+ * have one-second resolution and no job that ran is provisioned, run and
+ * torn down within the same second; a record without a string `name` is
+ * skipped because resolveJobTimeoutMinutes would throw on it and lose the
+ * whole report.
  *
  * @param {{name?: string, conclusion?: string, started_at?: ?string, completed_at?: ?string}} job
  * @returns {?number}
