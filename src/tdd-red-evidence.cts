@@ -315,7 +315,10 @@ export function classifyRedEvidence(input: RedEvidenceInput): RedEvidenceResult 
   // #4970: Python stdlib unittest emits neither TAP nor Surefire/Failsafe XML
   // nor swift-testing's console summary — checked only once none of those
   // matched, so a report that happens to also contain "Ran N tests" text
-  // stays on whichever earlier format it actually is.
+  // stays on whichever earlier format it actually is. The `!isSwiftTesting`
+  // term is redundant with the if/else-if chain below (each arm is already
+  // reached only when every earlier condition is false) but is kept here so
+  // this line documents precedence on its own, without relying on chain order.
   const isUnittest = !isSurefireXml && !isSwiftTesting && isUnittestSummary(output);
   let summary: { tests: number; pass: number; fail: number };
   let failing: string[];
