@@ -295,6 +295,56 @@ describe('frontmatter: spliceFrontmatter properties', () => {
       ),
     );
   });
+
+  // Found while implementing #5105: a value spanning several lines — a multi-line quoted
+  // scalar or a flow collection whose continuation lines sit at column 0, or an indented
+  // block scalar — belongs whole to its key. Changing or adding one key must re-parse to
+  // exactly the intended object, keep every other key's lines byte-identical, and keep the
+  // blank and full-line comment lines between keys in place.
+  test('property: multi-line values, block scalars and comments survive a one-key splice', () => {
+    const word = fc.stringMatching(/^[a-z]{1,6}$/);
+    const words = fc.array(word, { minLength: 1, maxLength: 3 });
+    const valueLines = fc.oneof(
+      fc.tuple(word, words).map(([k, ws]) => [`KEY: "${k}`, ...ws.slice(0, -1), `${ws[ws.length - 1]}"`]),
+      fc.tuple(word, words).map(([k, ws]) => [`KEY: "${k}`, `# ${ws.join(' ')}"`]),
+      fc.tuple(word, words).map(([k, ws]) => [`KEY: '${k}`, ...ws.slice(0, -1), `${ws[ws.length - 1]}'`]),
+      fc.tuple(word, words).map(([k, ws]) => [`KEY: [${k},`, ...ws.slice(0, -1).map((w) => `${w},`), `${ws[ws.length - 1]}]`]),
+      fc.tuple(word, words).map(([k, ws]) => [`KEY: {a: ${k},`, ...ws.slice(0, -1).map((w) => `${w},`), `${ws[ws.length - 1]}}`]),
+      fc.tuple(fc.constantFrom('|', '>', '|-', '>-'), words).map(([ind, ws]) => [`KEY: ${ind}`, ...ws.map((w) => `  ${w}`)]),
+      word.map((w) => [`KEY: ${w}`]),
+    );
+    const gapLine = fc.oneof(fc.constant(''), word.map((w) => `# ${w}`));
+    const gap = fc.array(gapLine, { maxLength: 2 });
+    fc.assert(
+      fc.property(
+        fc.uniqueArray(fc.stringMatching(/^[a-z][a-z0-9_]{0,7}$/), { minLength: 1, maxLength: 5 }),
+        fc.array(fc.tuple(valueLines, gap), { minLength: 5, maxLength: 5 }),
+        fc.nat(),
+        fc.stringMatching(/^[a-z0-9]{1,8}$/),
+        (keys, specs, pick, newValue) => {
+          const segments = keys.map((k, i) => ({
+            key: k,
+            lines: specs[i][0].map((l) => l.replace('KEY', k)),
+            gap: specs[i][1],
+          }));
+          const doc = ['---', ...segments.flatMap((s) => [...s.lines, ...s.gap]), '---', 'body'].join('\n');
+          const parsed = extractFrontmatter(doc);
+          assert.equal(Object.keys(parsed).length, keys.length, `fixture must parse: ${JSON.stringify(doc)}`);
+
+          const target = pick % (keys.length + 1) === keys.length ? 'zz_new' : keys[pick % (keys.length + 1)];
+          const regenerated = reconstructFrontmatter({ [target]: newValue });
+          const expectedInner = segments.flatMap((s) => (s.key === target ? [regenerated, ...s.gap] : [...s.lines, ...s.gap]));
+          if (!keys.includes(target)) expectedInner.push(regenerated);
+          const intended = { ...Object.fromEntries(Object.entries(parsed)), [target]: newValue };
+
+          const out = spliceFrontmatter(doc, intended);
+
+          assert.equal(out, ['---', ...expectedInner, '---', 'body'].join('\n'));
+          assert.deepStrictEqual(Object.fromEntries(Object.entries(extractFrontmatter(out))), intended);
+        },
+      ),
+    );
+  });
 });
 
 // ─── (f) prohibitions bijection (#644) ────────────────────────────────────────

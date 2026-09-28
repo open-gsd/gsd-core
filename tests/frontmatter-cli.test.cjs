@@ -876,6 +876,88 @@ describe('frontmatter set/merge — write refusal', () => {
     });
   }
 
+  // The lossy object-list refusal locates the block through the one fence owner, so a
+  // BOM document is refused exactly like an LF or CRLF one (found while implementing #5105).
+  for (const [label, prefix, eol] of [['LF', '', '\n'], ['CRLF', '', '\r\n'], ['BOM', '﻿', '\n']]) {
+    test(`set that would flatten an object-list in a ${label} document is refused and writes nothing`, (t) => {
+      const doc = prefix + ['---', 'must_haves:', '  artifacts:', '    - path: a.md', '      provides: X', 'status: t', '---', 'body', ''].join(eol);
+      const file = fileIn(t, 'plan.md', doc);
+      const result = runGsdTools(['frontmatter', 'set', file, '--field', 'must_haves', '--value', JSON.stringify({ artifacts: ['path: a.md'] })]);
+      assert.ok(result.success, `command failed: ${result.error}`);
+      const parsed = JSON.parse(result.output);
+      assert.ok((parsed.error || '').includes('frontmatter set refused'), `expected a refusal, got ${result.output}`);
+      assert.strictEqual(parsed.field, 'must_haves');
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), doc);
+    });
+  }
+
+  test('merge that would flatten an object-list is refused with the same shape as set and writes nothing', (t) => {
+    const doc = '---\nmust_haves:\n  artifacts:\n    - path: a.md\n      provides: X\nstatus: t\n---\nbody\n';
+    const file = fileIn(t, 'plan.md', doc);
+    const result = runGsdTools(['frontmatter', 'merge', file, '--data', JSON.stringify({ status: 'done', must_haves: { artifacts: ['path: a.md'] } })]);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.ok((parsed.error || '').includes('frontmatter set refused'), `expected a refusal, got ${result.output}`);
+    assert.strictEqual(parsed.field, 'must_haves');
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), doc);
+  });
+
+  test('control: merge of an unrelated field beside an object-list still writes', (t) => {
+    const doc = '---\nmust_haves:\n  artifacts:\n    - path: a.md\n      provides: X\nstatus: t\n---\nbody\n';
+    const file = fileIn(t, 'plan.md', doc);
+    const result = runGsdTools(['frontmatter', 'merge', file, '--data', JSON.stringify({ status: 'done' })]);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).merged, true);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), doc.replace('status: t', 'status: done'));
+  });
+
+  // The lossy refusal protects only data the caller's parse could not see (a flattened
+  // object-list item) — a field merely written in another style is not lossy.
+  for (const [label, doc, field, value, expected] of [
+    ['single-quoted scalar', "---\ntitle: 'x'\nstatus: t\n---\nbody\n", 'title', 'Y', '---\ntitle: Y\nstatus: t\n---\nbody\n'],
+    ['scalar with a trailing comment', '---\ntitle: x # c\nstatus: t\n---\nbody\n', 'title', 'Y', '---\ntitle: Y\nstatus: t\n---\nbody\n'],
+    ['block list', '---\ntags:\n  - a\n  - b\nstatus: t\n---\nbody\n', 'tags', '["c"]', '---\ntags: [c]\nstatus: t\n---\nbody\n'],
+  ]) {
+    for (const cmd of ['set', 'merge']) {
+      test(`${cmd} over a ${label} is not refused as lossy`, (t) => {
+        const file = fileIn(t, 'plan.md', doc);
+        const args = cmd === 'set'
+          ? ['frontmatter', 'set', file, '--field', field, '--value', value]
+          : ['frontmatter', 'merge', file, '--data', JSON.stringify({ [field]: field === 'tags' ? JSON.parse(value) : value })];
+        const result = runGsdTools(args);
+        assert.ok(result.success, `command failed: ${result.error}`);
+        assert.ok(!JSON.parse(result.output).error, result.output);
+        assert.strictEqual(fs.readFileSync(file, 'utf-8'), expected);
+      });
+    }
+  }
+
+  test('merge over a multi-line quoted scalar replaces the whole value and the file reads back', (t) => {
+    const file = fileIn(t, 'plan.md', '---\ntitle: "foo\nbar baz"\nstatus: t\n---\nbody\n');
+    const result = runGsdTools(['frontmatter', 'merge', file, '--data', JSON.stringify({ title: 'X' })]);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).merged, true);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), '---\ntitle: X\nstatus: t\n---\nbody\n');
+  });
+
+  for (const [label, field] of [['LF', 'a\nb'], ['CR', 'a\rb'], ['TAB', 'a\tb'], ['DEL', 'a\u007fb'], ['ESC', 'a\u001bb']]) {
+    test(`set with a ${label} control character in the field name is rejected and writes nothing`, (t) => {
+      const doc = '---\nstatus: t\n---\nbody\n';
+      const file = fileIn(t, 'plan.md', doc);
+      const result = runGsdTools(['frontmatter', 'set', file, '--field', field, '--value', 'v']);
+      assert.ok(!result.success, `expected a rejection, got ${result.output}`);
+      assert.match(result.error, /field name contains a control character/);
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), doc);
+    });
+  }
+
+  test('control: a field name with a space and a colon is still settable and reads back', (t) => {
+    const file = fileIn(t, 'plan.md', '---\nstatus: t\n---\nbody\n');
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'a: b', '--value', 'v']);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), '---\nstatus: t\n"a: b": v\n---\nbody\n');
+  });
+
   test('control: a quoted scalar key is still settable (value comparison, not key spelling)', (t) => {
     const file = fileIn(t, 'plan.md', '---\n"wave": 1\nstatus: t\n---\nbody\n');
     const result = runGsdTools(['frontmatter', 'set', file, '--field', 'wave', '--value', '"2"']);

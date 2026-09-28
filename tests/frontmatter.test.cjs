@@ -577,6 +577,96 @@ describe('spliceFrontmatter', () => {
       );
     });
   });
+
+  // A column-0 continuation line (a multi-line quoted scalar, a flow collection split
+  // across lines) is part of its key's value, not a tail line to re-emit after a
+  // regenerated value (found while implementing #5105).
+  describe('multi-line values', () => {
+    const setKey = (content, key, value) => spliceFrontmatter(content, { ...extractFrontmatter(content), [key]: value });
+
+    for (const [label, doc] of [
+      ['double-quoted scalar', '---\ntitle: "foo\nbar baz"\nstatus: t\n---\nbody'],
+      ['single-quoted scalar', "---\ntitle: 'foo\nbar baz'\nstatus: t\n---\nbody"],
+      ['flow sequence', '---\ntitle: [a,\nb]\nstatus: t\n---\nbody'],
+      ['flow mapping', '---\ntitle: {a: x,\nc}\nstatus: t\n---\nbody'],
+      ['block scalar', '---\ntitle: |\n  one\n  two\nstatus: t\n---\nbody'],
+    ]) {
+      test(`a changed ${label} spanning column-0 lines is replaced whole`, () => {
+        const out = setKey(doc, 'title', 'X');
+        assert.strictEqual(out, '---\ntitle: X\nstatus: t\n---\nbody');
+        assert.deepStrictEqual({ ...extractFrontmatter(out) }, { title: 'X', status: 't' });
+      });
+    }
+
+    test('a full-line comment after a multi-line value stays in place when the value changes', () => {
+      assert.strictEqual(
+        setKey('---\ntags: [a,\nb]\n\n# about status\nstatus: t\n---\nbody', 'tags', ['c']),
+        '---\ntags: [c]\n\n# about status\nstatus: t\n---\nbody',
+      );
+    });
+
+    test('a `#` line inside a multi-line quoted scalar is value text, not a tail comment', () => {
+      assert.strictEqual(
+        setKey('---\ntitle: "foo\n# bar"\nstatus: t\n---\nbody', 'title', 'X'),
+        '---\ntitle: X\nstatus: t\n---\nbody',
+      );
+    });
+
+    test('an unchanged multi-line value is kept byte-identical when another key changes', () => {
+      assert.strictEqual(
+        setKey('---\ntitle: "foo\nbar baz"\nstatus: t\n---\nbody', 'status', 'complete'),
+        '---\ntitle: "foo\nbar baz"\nstatus: complete\n---\nbody',
+      );
+    });
+  });
+
+  // spliceFrontmatter re-parses the block it is about to return and refuses unless it
+  // reads back as exactly the intended object (found while implementing #5105).
+  describe('read-back post-condition', () => {
+    const VERIFY_FAILED = { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_SPLICE_VERIFY_FAILED' };
+
+    test('a nested key the writer cannot represent is refused on an existing block', () => {
+      assert.throws(() => spliceFrontmatter('---\nstatus: t\n---\nbody', { status: 't', meta: { 'a: b': 'x' } }), VERIFY_FAILED);
+    });
+
+    test('a nested key the writer cannot represent is refused when generating a new block', () => {
+      assert.throws(() => spliceFrontmatter('body', { meta: { 'a: b': 'x' } }), VERIFY_FAILED);
+    });
+
+    test('numbers and booleans read back as their string spelling and are accepted', () => {
+      const out = spliceFrontmatter('---\nstatus: t\n---\nbody', { status: 't', wave: 2, autonomous: true, meta: { n: 3 } });
+      assert.deepStrictEqual({ ...extractFrontmatter(out) }, { status: 't', wave: '2', autonomous: 'true', meta: { n: '3' } });
+    });
+
+    test('a nested value holding `: ` or ` #` at every depth reads back verbatim', () => {
+      const intended = { status: 't', meta: { a: 'x: y', deep: { b: 'p #q', list: ['r: s', 'u'] } } };
+      const out = spliceFrontmatter('---\nstatus: t\n---\nbody', intended);
+      assert.deepStrictEqual({ ...extractFrontmatter(out) }, intended);
+    });
+
+    test('an inline-list item holding a comma or bracket reads back as one item', () => {
+      const out = spliceFrontmatter('---\nstatus: t\n---\nbody', { status: 't', tags: ['a, b', 'c]'] });
+      assert.deepStrictEqual({ ...extractFrontmatter(out) }, { status: 't', tags: ['a, b', 'c]'] });
+    });
+  });
+
+  // The writer locates the block through the same fence owner as every reader, so a block
+  // holding only a blank line is spliced in place (the blank line kept), never shadowed by a
+  // second block prepended above it.
+  test('a block holding only a blank line is spliced in place', () => {
+    const doc = '---\n\n---\nbody';
+    assert.deepStrictEqual({ ...extractFrontmatter(doc) }, {});
+    assert.strictEqual(spliceFrontmatter(doc, { status: 'complete' }), '---\n\nstatus: complete\n---\nbody');
+  });
+
+  // The no-frontmatter path quotes keys the same way the existing-block path does.
+  describe('generating a new block', () => {
+    test('a key the parser would misread bare is emitted double-quoted', () => {
+      const out = spliceFrontmatter('body', { 'a: b': 'v', '#x': 'w', 'n\nl': 'z' });
+      assert.strictEqual(out, '---\n"a: b": v\n"#x": w\n"n\\nl": z\n---\n\nbody');
+      assert.deepStrictEqual({ ...extractFrontmatter(out) }, { 'a: b': 'v', '#x': 'w', 'n\nl': 'z' });
+    });
+  });
 });
 
 // ─── parseMustHavesBlock ────────────────────────────────────────────────────
@@ -586,6 +676,17 @@ describe('spliceFrontmatter', () => {
 function crlf(s) {
   return s.replace(/\n/g, '\r\n');
 }
+
+// Found while implementing #5105: parseMustHavesBlock located the block with a private
+// fence regex that missed a leading BOM, so a BOM PLAN.md read as having no must_haves.
+describe('parseMustHavesBlock: fence location', () => {
+  const PLAN = '---\nphase: 01\nmust_haves:\n  artifacts:\n    - path: a.md\n      provides: X\n---\nbody\n';
+  for (const [label, doc] of [['LF', PLAN], ['CRLF', crlf(PLAN)], ['BOM', '﻿' + PLAN]]) {
+    test(`reads must_haves from a ${label} document`, () => {
+      assert.deepStrictEqual(parseMustHavesBlock(doc, 'artifacts'), [{ path: 'a.md', provides: 'X' }]);
+    });
+  }
+});
 
 describe('parseMustHavesBlock', () => {
   test('extracts truths as string array', () => {
