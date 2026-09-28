@@ -1,5 +1,11 @@
 'use strict';
 
+// docs-guard-exempt: #5095 fixtures use 'docs/VERIFICATION.md' (a fixture
+// basename proving the report-shaped filter matches on basename, not path)
+// and 'docs/planning/...' (an in-repo `.planning -> docs/planning` symlink
+// alias fixture) — both are tmpdir fixture paths this file WRITES, never a
+// read of real shipped docs/ content.
+
 /**
  * Tests for verification-status module (issue #651).
  *
@@ -2360,11 +2366,12 @@ describe('#4623: parseFingerprintFileArgs — every --files form the issue tried
 });
 
 describe('#4623: computeCoveredDigest v2 — shared planning documents do not enter the digest', () => {
-  test('defaults to v2 and names the version in the digest', (t) => {
+  test('defaults to v3 and names the version in the digest', (t) => {
+    // #5095: the default fingerprint version bumped v2 -> v3 (ADR-5057 Phase 2).
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4623-version-'));
     t.after(() => cleanup(root));
     fs.writeFileSync(path.join(root, 'impl.txt'), 'x');
-    assert.match(computeCoveredDigest(root, ['impl.txt']), /^v2:sha256:[0-9a-f]{64}$/);
+    assert.match(computeCoveredDigest(root, ['impl.txt']), /^v3:sha256:[0-9a-f]{64}$/);
     assert.match(computeCoveredDigest(root, ['impl.txt'], 1), /^v1:sha256:[0-9a-f]{64}$/);
     assert.notEqual(computeCoveredDigest(root, ['impl.txt']), computeCoveredDigest(root, ['impl.txt'], 1));
   });
@@ -2552,9 +2559,10 @@ describe('#4623: readVerificationStatus — shared planning documents no longer 
     assert.equal(readVerificationStatus(a.phaseDir, NO_GIT_TIMES).status, 'stale', 'v1 hashed the shared docs; honour that');
 
     // The documented remedy: recompute through the CLI, paste the result.
-    const v2 = fingerprintViaCli(projectDir, a, covered);
-    assert.match(v2, /^v2:/);
-    writeReport4623(a, covered, v2);
+    // #5095: the CLI's default fingerprint version bumped v2 -> v3.
+    const v3 = fingerprintViaCli(projectDir, a, covered);
+    assert.match(v3, /^v3:/);
+    writeReport4623(a, covered, v3);
     assert.equal(readVerificationStatus(a.phaseDir, NO_GIT_TIMES).status, 'passed');
     writeSharedDocs4623(projectDir, { roadmapDone: true, reqDone: true });
     assert.equal(readVerificationStatus(a.phaseDir, NO_GIT_TIMES).status, 'passed', 'and it lasts');
@@ -2687,11 +2695,30 @@ describe('#4623: verification.fingerprint CLI — --files forms and the phase-di
     assert.doesNotMatch(res.output, /^v\d+:sha256:/);
   });
 
-  test('a declaration made only of shared planning documents is a named error, not "file missing"', (t) => {
+  // #5095 (R5): a phase WITH plans has its own artifacts unioned in by the
+  // emitter, so an all-shared DECLARED set is no longer empty evidence — it
+  // succeeds, hashing the phase's own plan/summary. The named all-shared
+  // error is reachable only when the phase has no plans/summaries at all
+  // (see the following test).
+  test('R5: an all-shared declared set on a phase WITH plans succeeds — the emitter unions in the phase artifacts', (t) => {
     const { projectDir, a } = setup();
     t.after(() => cleanup(projectDir));
     writeSharedDocs4623(projectDir);
     const res = run(projectDir, a.phaseDir, '--files', SHARED_DOCS_4623.join(','));
+    assert.equal(res.success, true, `expected success: ${res.output}${res.error}`);
+    const parsed = JSON.parse(res.output);
+    for (const own of a.ownFiles) {
+      assert.ok(parsed.covered_files.includes(own), `expected ${own} in ${JSON.stringify(parsed.covered_files)}`);
+    }
+  });
+
+  test('a declaration made only of shared planning documents, on a phase with NO plans, is a named error, not "file missing"', (t) => {
+    const { projectDir } = setup();
+    t.after(() => cleanup(projectDir));
+    writeSharedDocs4623(projectDir);
+    const emptyPhaseDir = path.join(projectDir, '.planning', 'phases', '02-empty');
+    fs.mkdirSync(emptyPhaseDir, { recursive: true });
+    const res = run(projectDir, emptyPhaseDir, '--files', SHARED_DOCS_4623.join(','));
     assert.equal(res.success, false);
     assert.match(`${res.output}${res.error}`, /every covered file is a repo-wide planning document/);
     assert.doesNotMatch(`${res.output}${res.error}`, /missing, unreadable/);
@@ -2710,14 +2737,18 @@ describe('#4623: verification.fingerprint CLI — --files forms and the phase-di
     assert.match(`${dir.output}${dir.error}`, /missing, unreadable/);
   });
 
-  test('a declared shared document stays listed in covered_files, and the emitted v2 digest survives its rewrite', (t) => {
+  test('a declared shared document stays listed in covered_files, and the emitted v3 digest survives its rewrite', (t) => {
+    // #5095: default fingerprint version bumped v2 -> v3; `covered` here
+    // already equals the phase's own artifact set (a.ownFiles), so the v3
+    // union contributes nothing new and the digest is byte-identical to a
+    // direct computeCoveredDigest call over the same declared list.
     const { projectDir, a } = setup();
     t.after(() => cleanup(projectDir));
     writeSharedDocs4623(projectDir);
     const covered = [...a.ownFiles, ...SHARED_DOCS_4623];
     const first = expectJson(run(projectDir, a.phaseDir, '--files', covered.join(',')));
     assert.deepEqual(first.covered_files, [...covered].sort());
-    assert.match(first.covered_digest, /^v2:/);
+    assert.match(first.covered_digest, /^v3:/);
     assert.equal(first.covered_digest, computeCoveredDigest(projectDir, covered));
 
     writeSharedDocs4623(projectDir, { roadmapDone: true, reqDone: true });
@@ -3889,7 +3920,11 @@ describe('fingerprint input set is closed and idempotent (#5095, ADR-5057 Phase 
     const projectDir = createTempGitProject();
     const phasesStore = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5095-r4-phases-store-'));
     t.after(() => { cleanup(projectDir); cleanup(phasesStore); });
-    fs.mkdirSync(path.join(projectDir, '.planning'));
+    // createTempGitProject() already created a real `.planning/phases`; this
+    // fixture needs `.planning` to stay real but `.planning/phases` to be a
+    // symlink to a separate store, so the pre-created real `phases` dir must
+    // be removed before the symlink is created in its place.
+    cleanup(path.join(projectDir, '.planning', 'phases'));
     fs.mkdirSync(path.join(phasesStore, '01-foo'), { recursive: true });
     fs.symlinkSync(phasesStore, path.join(projectDir, '.planning', 'phases'), symlinkType);
     const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
@@ -3919,6 +3954,11 @@ describe('fingerprint input set is closed and idempotent (#5095, ADR-5057 Phase 
     const projectDir = createTempGitProject();
     t.after(() => cleanup(projectDir));
     const realPhaseDir = path.join(projectDir, 'docs', 'planning', 'phases', '01-foo');
+    // createTempGitProject() already created a real `.planning` dir; the
+    // fixture here needs `docs/planning` to be the REAL directory and
+    // `.planning` to be a symlink pointing at it, so the pre-created real
+    // dir must be removed before the symlink is created in its place.
+    cleanup(path.join(projectDir, '.planning'));
     fs.mkdirSync(realPhaseDir, { recursive: true });
     fs.symlinkSync(path.join(projectDir, 'docs', 'planning'), path.join(projectDir, '.planning'), symlinkType);
     fs.writeFileSync(path.join(realPhaseDir, '01-01-PLAN.md'), '# Plan\n');
