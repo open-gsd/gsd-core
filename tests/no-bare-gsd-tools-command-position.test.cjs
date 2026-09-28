@@ -124,6 +124,24 @@ const PROSE_ALLOWLIST = [
   // number in a different file.
   { file: 'agents/gsd-intel-updater.compact.md', line: 32, reason: 'compact variant of the already-allowlisted gsd-intel-updater.md:40 cross-platform note; same descriptive mention' },
   { file: 'agents/gsd-roadmapper.compact.md', line: 363, reason: 'compact variant of the already-allowlisted gsd-roadmapper.md:660 parenthetical; same descriptive mention' },
+  // #4995: skills/*/SKILL.md is generated from commands/gsd/*.md and now
+  // scanned directly (see SCAN_DIRS comment above). These 10 sites are
+  // descriptive mentions carried over unchanged from their commands/gsd/
+  // source -- none instruct an agent to run the bare word; the census in
+  // #4995 itself identified 8 of them as prose-only, and this widened guard
+  // additionally caught 2 more of the same shape (gsd-config's routing
+  // TABLE row and gsd-graphify's MVP-mode parenthetical) that the issue's
+  // manual grep methodology did not surface.
+  { file: 'skills/gsd-autonomous/SKILL.md', line: 44, reason: 'parenthetical naming init-command examples ("resolved inside the workflow using..."); not an instruction to run the bare word' },
+  { file: 'skills/gsd-code-review/SKILL.md', line: 45, reason: 'describes how context files are resolved inside the workflow and delegated via <required_reading>; descriptive, not an instruction' },
+  { file: 'skills/gsd-config/SKILL.md', line: 31, reason: 'routing TABLE cell naming which SDK query a flag maps to, one row above the real operative site (line 49, already fixed to gsd_run); descriptive reference, not an instruction' },
+  { file: 'skills/gsd-execute-phase/SKILL.md', line: 58, reason: 'describes how context files are resolved inside the workflow; descriptive, not an instruction' },
+  { file: 'skills/gsd-graphify/SKILL.md', line: 188, reason: 'parenthetical naming how MVP-mode is resolved ("resolved via..."); descriptive, not an instruction. gsd-graphify keeps its own load-bearing per-block gsd_run definitions (tests/graphify-visualization.test.cjs extracts and runs each block standalone) and is intentionally NOT one of the #4995 BARE_GSD_TOOLS_STEMS rewrite targets' },
+  { file: 'skills/gsd-health/SKILL.md', line: 16, reason: 'describes what the workflow calls internally ("calls `gsd-tools query validate.context`"); descriptive, not an instruction' },
+  { file: 'skills/gsd-manager/SKILL.md', line: 36, reason: 'parenthetical naming an init-command example; descriptive, not an instruction' },
+  { file: 'skills/gsd-next/SKILL.md', line: 16, reason: 'describes what the launcher reads internally ("reads project + workflow state via `gsd-tools smart-entry --json`"); descriptive, not an instruction' },
+  { file: 'skills/gsd-quick-batch/SKILL.md', line: 104, reason: 'security note naming which query fields are read; descriptive, not an instruction' },
+  { file: 'skills/gsd-workstreams/SKILL.md', line: 70, reason: 'describes formatting the JSON output "from gsd-tools query"; descriptive, not an instruction (the 6 real operative sites above it in this same file are the ones #4995 fixed to gsd_run)' },
 ];
 
 // Resolver-snippet definition lines / probes that must never be flagged. A line

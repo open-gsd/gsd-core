@@ -447,4 +447,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { transformFile };
+module.exports = { transformFile, loadPreamble };
