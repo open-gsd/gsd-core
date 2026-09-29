@@ -243,6 +243,60 @@ describe('#5105 M1/m1: restore is restricted to a live-vs-candidate diff beyond 
   });
 });
 
+// Found while implementing #5105 (review security finding 1): the baseline's `updated:` line
+// is committed file content, so the restore must splice it as literal text — a
+// String.prototype.replace replacement string would expand `$'`, `` $` ``, `$&`, `$$` (and
+// `$1` when a group exists), writing an early `---` fence or duplicated keys. And the restore's
+// post-condition: its frontmatter block must equal the baseline's block byte-for-byte, or the
+// session refuses instead of writing a "restore" that is not one.
+describe('#5105: the restore splices the baseline `updated:` line literally and verifies it', () => {
+  const clock = () => new Date('2026-05-05T00:00:00Z');
+
+  for (const value of ["$'", '$`', '$&', '$1', '$$', "x$'y$`z$&"]) {
+    test(`baseline \`updated: ${value}\` → restored byte-exact to the baseline`, () => {
+      const completeUatSession = loadCompleteUatSession();
+      const baseline = completeUatContent({ updated: value });
+      const live = testingCompleteUatContent();
+      const result = completeUatSession(live, { clock, baseline });
+      assert.strictEqual(result.changed, false);
+      assert.strictEqual(result.restored, true);
+      assert.strictEqual(result.content, baseline, 'the restored bytes must be the baseline bytes, not a `$`-pattern expansion');
+    });
+  }
+
+  test('a restore whose block cannot match the baseline block (baseline `updated:` mid-block, live lacks it) is refused', () => {
+    const completeUatSession = loadCompleteUatSession();
+    const midBlock = (s) => s.replace('status: complete\nphase: 01-foo\n', 'status: complete\nupdated: 2026-01-01T00:00:00Z\nphase: 01-foo\n');
+    const baseline = midBlock(completeUatContent().replace(/^updated: .*\n/m, ''));
+    const live = testingCompleteUatContent().replace(/^updated: .*\n/m, '');
+    assert.throws(
+      () => completeUatSession(live, { clock, baseline }),
+      { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_SPLICE_VERIFY_FAILED' },
+    );
+  });
+
+  test('CLI: a refused restore writes nothing and commits nothing', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const uatPath = path.join(phaseDir, '01-UAT.md');
+    const { execFileSync } = require('child_process');
+    fs.writeFileSync(uatPath, completeUatContent().replace(/^updated: .*\n/m, '').replace('status: complete\nphase: 01-foo\n', 'status: complete\nupdated: 2026-01-01T00:00:00Z\nphase: 01-foo\n'));
+    execFileSync('git', ['add', '-A'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+    execFileSync('git', ['commit', '-q', '-m', 'seed UAT with updated mid-block'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+    const headBefore = gitHeadCount(projectDir);
+    const live = testingCompleteUatContent().replace(/^updated: .*\n/m, '');
+    fs.writeFileSync(uatPath, live);
+
+    const result = runGsdTools(['query', 'uat.complete-session', '.planning/phases/01-foo/01-UAT.md'], projectDir);
+    assert.strictEqual(result.success, false, `must fail closed; stdout: ${result.output}`);
+    assert.match(String(result.error), /refusing to restore/);
+    assert.strictEqual(fs.readFileSync(uatPath, 'utf-8'), live, 'nothing written');
+    assert.strictEqual(gitHeadCount(projectDir), headBefore, 'nothing committed');
+  });
+});
+
 // Found while implementing #5105 (review m7): presence of the `updated:` line is not
 // material either — a side LACKING the line differs "only in updated" from a side
 // carrying any value, in both directions, and a restore re-creates or removes the line
