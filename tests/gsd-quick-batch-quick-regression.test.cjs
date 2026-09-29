@@ -130,11 +130,11 @@ describe('quick-batch: /gsd:quick command + workflow stay byte-identical (row 48
     // Same reading on both sides of the row: a directive-only edit is the
     // coverage contract every workflow carries, not a quick-batch edit.
     assert.ok(
-      !(changed.includes('commands/gsd/quick.md') && isPhaseWork('commands/gsd/quick.md')),
+      !quickWholeFileViolation(changed, isPhaseWork, 'commands/gsd/quick.md'),
       'commands/gsd/quick.md must stay untouched by the #3676 quick-batch phase',
     );
     assert.ok(
-      !(changed.includes('gsd-core/workflows/quick.md') && isPhaseWork('gsd-core/workflows/quick.md')),
+      !quickWholeFileViolation(changed, isPhaseWork, 'gsd-core/workflows/quick.md'),
       'gsd-core/workflows/quick.md must stay untouched by the #3676 quick-batch phase',
     );
     // The step fragments under quick/steps/ are likewise untouched — quick-batch
@@ -147,10 +147,58 @@ describe('quick-batch: /gsd:quick command + workflow stay byte-identical (row 48
     // revision-loop contract applies (same pattern as ui-phase.md/verify-work.md). A branch
     // fixing that contract in both independent copies is not the regression row 48 exists to
     // catch; same false-positive class already scoped away twice above (#3730, #2529 round 40).
-    const touchedQuickSteps = changed
-      .filter((p) => p.startsWith('gsd-core/workflows/quick/steps/'))
-      .filter((p) => !p.endsWith('/plan-checker-loop.md'))
-      .filter(isPhaseWork);
+    const touchedQuickSteps = unexpectedQuickStepChanges(changed, isPhaseWork);
     assert.deepEqual(touchedQuickSteps, [], `unexpected changes under gsd-core/workflows/quick/steps/: ${touchedQuickSteps.join(', ')}`);
   });
+
+  test('positive control: the #5118 allowance exempts exactly one path; every other quick path in the same branch shape still trips row 48', () => {
+    // The live check above can only prove the row passes on THIS branch. Run
+    // the same predicates over a synthetic branch of the exact shape that
+    // needed the allowance (a quick-batch edit beside the quick-verification
+    // edit), plus sibling quick paths, and prove the check still fails for them.
+    const everyPathIsPhaseWork = () => true;
+    const changed = [
+      'gsd-core/workflows/quick-batch/steps/verification-wave.md',
+      QUICK_VERIFICATION_STEP_5118,
+      'gsd-core/workflows/quick/steps/quick-execution.md',
+      // Lookalikes of the allowed path are NOT the allowed path (exact match only).
+      'gsd-core/workflows/quick/steps/quick-verification.md.orig',
+      'gsd-core/workflows/quick/steps/sub/quick-verification.md',
+    ];
+    assert.deepEqual(
+      unexpectedQuickStepChanges(changed, everyPathIsPhaseWork),
+      [
+        'gsd-core/workflows/quick/steps/quick-execution.md',
+        'gsd-core/workflows/quick/steps/quick-verification.md.orig',
+        'gsd-core/workflows/quick/steps/sub/quick-verification.md',
+      ],
+    );
+    // The two whole-file rows are untouched by the allowance.
+    for (const wholeFile of ['commands/gsd/quick.md', 'gsd-core/workflows/quick.md']) {
+      assert.equal(quickWholeFileViolation([...changed, wholeFile], everyPathIsPhaseWork, wholeFile), true, wholeFile);
+    }
+  });
 });
+
+/**
+ * #5118 (ADR-5057 Phase 4, §R3): the ONE allowed ordinary-quick step edit.
+ * `quick-verification.md`'s status read stops discarding stderr and names
+ * `phase_dir_not_found` in its terminal arm — the closed VerificationStatus
+ * contract every verification.status reader follows, not #3676 quick-batch
+ * phase work. Exact path only: every other quick path stays covered.
+ */
+const QUICK_VERIFICATION_STEP_5118 = 'gsd-core/workflows/quick/steps/quick-verification.md';
+
+/** Row 48's step-fragment predicate, shared by the live check and its positive control. */
+function unexpectedQuickStepChanges(changed, isPhaseWork) {
+  return changed
+    .filter((p) => p.startsWith('gsd-core/workflows/quick/steps/'))
+    .filter((p) => !p.endsWith('/plan-checker-loop.md'))
+    .filter((p) => p !== QUICK_VERIFICATION_STEP_5118)
+    .filter(isPhaseWork);
+}
+
+/** Row 48's whole-file predicate (commands/gsd/quick.md, workflows/quick.md). */
+function quickWholeFileViolation(changed, isPhaseWork, filePath) {
+  return changed.includes(filePath) && isPhaseWork(filePath);
+}
