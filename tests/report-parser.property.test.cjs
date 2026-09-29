@@ -193,29 +193,39 @@ test('#4692 property: malformed XML and mismatched suite counts cannot authorize
 // swift-testing and unittest print their aggregate summary last, so a
 // truncated capture loses it before any usable failure can be proved.
 const plainCases = cases(['passed', 'failed']).map(rows => [{ name: 'target', status: 'failed' }, ...rows]);
+const swiftCases = cases(['passed', 'failed', 'skipped']).map(rows => [{ name: 'target', status: 'failed' }, ...rows]);
 
 function swiftReport(rows) {
-  const lines = rows.map(row => row.status === 'failed'
-    ? `✘ Test "${row.name}" failed after 0.01 seconds with 1 issue.`
-    : `✔ Test "${row.name}" passed after 0.01 seconds.`);
+  const lines = rows.map(row => ({
+    failed: `✘ Test "${row.name}" failed after 0.01 seconds with 1 issue.`,
+    passed: `✔ Test "${row.name}" passed after 0.01 seconds.`,
+    skipped: [
+      `➜ Test "${row.name}" skipped.`,
+      `➜ Test "${row.name}" skipped: "reason"`,
+      `➜ Test "${row.name}" was cancelled after 0.01 seconds.`,
+    ][row.name.length % 3],
+  })[row.status]);
   const failures = rows.filter(row => row.status === 'failed').length;
   return [...lines, `✘ Test run with ${rows.length} tests in 1 suite failed after 0.02 seconds with ${failures} issues.`, ''].join('\n');
 }
 
+// A failing subTest repeats its method's header and adds to failures=, while
+// Ran still counts the method once.
 function unittestReport(rows) {
   const failed = rows.filter(row => row.status === 'failed');
-  const blocks = failed.flatMap(row => [
+  const blocks = failed.flatMap(row => Array.from({ length: 1 + (row.name.length % 3) }, (_, i) => [
     '======================================================================',
-    `FAIL: ${row.name} (test_demo.AppTest.${row.name})`,
+    `FAIL: ${row.name} (test_demo.AppTest.${row.name}) (i=${i})`,
     '----------------------------------------------------------------------',
     'AssertionError: boom',
     '',
-  ]);
-  return [...blocks, `Ran ${rows.length} tests in 0.010s`, '', `FAILED (failures=${failed.length})`, ''].join('\n');
+  ]).flat());
+  const headers = blocks.filter(line => line.startsWith('FAIL:')).length;
+  return [...blocks, `Ran ${rows.length} tests in 0.010s`, '', `FAILED (failures=${headers})`, ''].join('\n');
 }
 
 test('#4692 property: swift-testing round-trips result lines and truncation before the summary is blocked', () => {
-  fc.assert(fc.property(plainCases, fc.nat(), (rows, cut) => {
+  fc.assert(fc.property(swiftCases, fc.nat(), (rows, cut) => {
     const output = swiftReport(rows);
     const report = parseTestReport(output);
     assert.equal(report.format, 'swift-testing');
@@ -240,6 +250,6 @@ test('#4692 property: unittest failures must all be headed and truncation before
     assert.equal(classifyRedEvidence(evidence(output)).verdict, 'RED_EVIDENCE_OK');
     assertBlocked(output.slice(0, cut % output.lastIndexOf(')')));
     assertBlocked(output.replace('FAIL: target (', 'FAIL: target (unittest.loader._FailedTest.'));
-    assertBlocked(output.replace(`failures=${failed.length}`, `failures=${failed.length + 1}`));
+    assertBlocked(output.replace(/failures=(\d+)/, (_, n) => `failures=${Number(n) + 1}`));
   }));
 });

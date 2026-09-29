@@ -540,6 +540,68 @@ describe('#4957 — swift-testing RED evidence', () => {
     assert.equal(result.evidence.fail, 1);
   });
 
+  test('skipped, cancelled, known-issue and parameterized siblings count toward the aggregate', () => {
+    // swift-testing counts started AND skipped tests in "Test run with N tests",
+    // and a parameterized test ends with "with N test cases" before its verb.
+    // Line shapes come from swiftlang/swift-testing
+    // Sources/Testing/Events/Recorder/Event.HumanReadableOutputRecorder.swift
+    // (testEnded, testSkipped, _issueCounts) and Event.Symbol.swift (➜ skip, ━ known-issue pass).
+    const result = classifyRedEvidence({
+      ...INPUT,
+      output: swiftTesting([
+        '➜ Test "S" skipped.',
+        '➜ Test "R" skipped: "needs network"',
+        '➜ Test "C" was cancelled after 0.01 seconds.',
+        '━ Test "K" passed after 0.01 seconds with 1 known issue.',
+        '✔ Test "P" with 3 test cases passed after 0.01 seconds.',
+        failLine('X'),
+      ], { tests: 6 }),
+    });
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(result.reason, 'target_test_failed');
+    assert.deepEqual(result.evidence.report_errors, []);
+    assert.equal(result.evidence.tests, 6);
+    assert.equal(result.evidence.pass, 2);
+    assert.equal(result.evidence.fail, 1);
+  });
+
+  test('a skipped or cancelled target is never RED evidence', () => {
+    for (const line of ['➜ Test "X" skipped.', '➜ Test "X" was cancelled after 0.01 seconds: "timeout"']) {
+      const result = classifyRedEvidence({ ...INPUT, output: swiftTesting([line, failLine('Y')], { tests: 2 }) });
+      assert.equal(result.verdict, 'INVALID_RED', line);
+      assert.equal(result.reason, 'no_target_test_failure', line);
+      assert.deepEqual(result.evidence.report_errors, [], line);
+    }
+  });
+
+  test('a known-issue run summary is still swift-testing, and a result line with trailing text is not a result', () => {
+    const knownIssueRun = [
+      '━ Test "X" passed after 0.01 seconds with 1 known issue.',
+      '━ Test run with 1 test in 1 suite passed after 0.02 seconds with 1 known issue.',
+    ].join('\n');
+    const green = classifyRedEvidence({ ...INPUT, exitCode: 0, output: knownIssueRun });
+    assert.equal(green.evidence.format, 'swift-testing');
+    assert.equal(green.reason, 'unexpected_green');
+    const trailing = classifyRedEvidence({
+      ...INPUT,
+      output: swiftTesting([`${failLine('X')} (retried)`], { tests: 1 }),
+    });
+    assert.equal(trailing.reason, 'invalid_record');
+    assert.deepEqual(trailing.evidence.report_errors, ['Incomplete swift-testing report']);
+  });
+
+  test('a failing parameterized target classifies RED_EVIDENCE_OK', () => {
+    const result = classifyRedEvidence({
+      ...INPUT,
+      output: swiftTesting([
+        passLine('Y'),
+        '✘ Test "X" with 3 test cases failed after 0.01 seconds with 2 issues.',
+      ], { tests: 2 }),
+    });
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.deepEqual(result.evidence.failing_tests, ['X']);
+  });
+
   test('a stray swift-testing-looking per-test line with no aggregate marker is not a swift-testing report', () => {
     // No "Test run with N tests in M suites ..." aggregate line present at all —
     // must not be confidently classified as swift-testing off a per-test line alone.
@@ -813,6 +875,73 @@ describe('#4970 — Python unittest RED evidence', () => {
     assert.deepEqual(result.evidence.report_errors, ['unittest module failed to load']);
     assert.equal(result.evidence.fail, 0, '_FailedTest must not be counted as a real failure');
     assert.deepEqual(result.evidence.failing_tests, []);
+  });
+
+  test('a target failing in several subTests is one failing test, not an ambiguous or overcounted report', () => {
+    // Real Python 3.14 `-m unittest -v` output: each failing subTest prints its
+    // own identical FAIL: header, and failures= counts subTests while Ran
+    // counts methods (3 subTest failures > Ran 2).
+    const output = [
+      'test_ok (test_demo.AddTest.test_ok) ... ok',
+      'test_adds_two_numbers (test_demo.AddTest.test_adds_two_numbers) ... ',
+      '  test_adds_two_numbers (test_demo.AddTest.test_adds_two_numbers) (i=0) ... FAIL',
+      '  test_adds_two_numbers (test_demo.AddTest.test_adds_two_numbers) (i=1) ... FAIL',
+      '  test_adds_two_numbers (test_demo.AddTest.test_adds_two_numbers) (i=2) ... FAIL',
+      '',
+      ...[0, 1, 2].flatMap((i) => [
+        '======================================================================',
+        `FAIL: test_adds_two_numbers (test_demo.AddTest.test_adds_two_numbers) (i=${i})`,
+        '----------------------------------------------------------------------',
+        'Traceback (most recent call last):',
+        '  File "tests/test_demo.py", line 10, in test_adds_two_numbers',
+        '    self.assertEqual(add(i, 2), i + 2)',
+        `AssertionError: 0 != ${i + 2}`,
+        '',
+      ]),
+      '----------------------------------------------------------------------',
+      'Ran 2 tests in 0.001s',
+      '',
+      'FAILED (failures=3)',
+      '',
+    ].join('\n');
+    const result = classifyRedEvidence({ ...INPUT, output });
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(result.reason, 'target_test_failed');
+    assert.deepEqual(result.evidence.report_errors, []);
+    assert.equal(result.evidence.tests, 2);
+    assert.equal(result.evidence.pass, 1);
+    assert.equal(result.evidence.fail, 1);
+    assert.deepEqual(result.evidence.failing_tests, ['test_adds_two_numbers']);
+  });
+
+  test('subTest headers must still account exactly for the counted failures', () => {
+    const header = 'FAIL: test_adds_two_numbers (test_demo.AddTest.test_adds_two_numbers) (i=0)\nAssertionError: boom\n';
+    for (const [headers, failures, ran] of [[2, 1, 1], [1, 2, 1], [2, 2, 0]]) {
+      const output = `${header.repeat(headers)}\nRan ${ran} tests in 0.001s\n\nFAILED (failures=${failures})\n`;
+      const result = classifyRedEvidence({ ...INPUT, output });
+      assert.equal(result.reason, 'invalid_record', `${headers} headers, failures=${failures}, Ran ${ran}`);
+      assert.deepEqual(result.evidence.report_errors, ['Incomplete unittest report']);
+    }
+  });
+
+  test('subTest failures of an unrelated method still do not satisfy the target', () => {
+    const output = [
+      ...[0, 1].flatMap((i) => [
+        `FAIL: test_other (test_demo.AddTest.test_other) (i=${i})`,
+        '----------------------------------------------------------------------',
+        'AssertionError: boom',
+        '',
+      ]),
+      'Ran 2 tests in 0.001s',
+      '',
+      'FAILED (failures=2)',
+      '',
+    ].join('\n');
+    const result = classifyRedEvidence({ ...INPUT, output });
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'no_target_test_failure');
+    assert.equal(result.evidence.fail, 1);
+    assert.equal(result.evidence.pass, 1);
   });
 
   test('property: fail count and failing_tests always match the FAIL/ERROR headers actually present (#4970)', () => {

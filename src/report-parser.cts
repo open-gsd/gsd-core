@@ -151,10 +151,11 @@ function parseJunit(output: string): TestReport {
 
 /**
  * swift-testing console output (#4957). Only the anchored aggregate line marks
- * the format; every declared test must have its own result line.
+ * the format; every declared test must have its own result line. The aggregate
+ * counts skipped tests too, and a parameterized test names its case count.
  */
-const SWIFT_AGGREGATE = /^[ \t]*[✘✔][ \t]*Test run with (\d+) tests? in \d+ suites? (passed|failed)\b/gm;
-const SWIFT_RESULT = /^[ \t]*[✘✔][ \t]*Test "([^"]+)" (failed|passed) after [\d.]+ seconds?(?: with \d+ issues?)?\.?$/gm;
+const SWIFT_AGGREGATE = /^[ \t]*[✘✔━][ \t]*Test run with (\d+) tests? in \d+ suites? (passed|failed)\b/gm;
+const SWIFT_RESULT = /^[ \t]*[✘✔━➜][ \t]*Test "([^"]+)"(?: with \d+ test cases?)? (?:(failed|passed|was cancelled) after [\d.]+ seconds?(?: with \d+ [^\n]*?)?(?:\.|: "[^\n]*")|(skipped)(?:\.|: "[^\n]*"))$/gm;
 
 function parseSwiftTesting(output: string): TestReport {
   const report: TestReport = { format: ReportFormat.SwiftTesting, valid: true, tests: [], issues: [] };
@@ -170,7 +171,7 @@ function parseSwiftTesting(output: string): TestReport {
       identities: [match[1]],
       group: null,
       groupIdentities: [],
-      status: match[2] === 'failed' ? TestStatus.Failed : TestStatus.Passed,
+      status: match[2] === 'failed' ? TestStatus.Failed : match[2] === 'passed' ? TestStatus.Passed : TestStatus.Skipped,
     });
   }
   if (report.tests.length !== declared) report.issues.push('Incomplete swift-testing report');
@@ -184,7 +185,9 @@ function parseSwiftTesting(output: string): TestReport {
 /**
  * Python stdlib unittest text output (#4970). Passing tests are unnamed unless
  * verbose, so they are counted from the summary; failures are named by their
- * FAIL:/ERROR: headers, which must account for every counted failure.
+ * FAIL:/ERROR: headers, which must account for every counted failure. Each
+ * failing subTest repeats its method's header and counts as a failure, while
+ * Ran counts methods, so identical headers collapse into one failed test.
  */
 const UNITTEST_RAN = /^Ran (\d+) tests? in [\d.]+s$/gm;
 const UNITTEST_HEADER = /^(?:FAIL|ERROR): (\S+)(?: \(([^)]*)\))?/gm;
@@ -208,9 +211,13 @@ function parseUnittest(output: string): TestReport {
     report.issues.push('Unsupported unittest outcome');
   }
   let headers = 0;
+  const failedIds = new Set<string>();
   for (const match of output.matchAll(UNITTEST_HEADER)) {
     headers++;
     const id = match[2] ?? '';
+    const key = `${match[1]} ${id}`;
+    if (failedIds.has(key)) continue;
+    failedIds.add(key);
     // unittest synthesizes _FailedTest for an import/collection crash; its
     // method name can equal the target, so it is a load failure, never RED.
     if (id.includes('_FailedTest')) {
@@ -227,12 +234,12 @@ function parseUnittest(output: string): TestReport {
   }
   const failed = (counts['failures'] ?? 0) + (counts['errors'] ?? 0);
   const skipped = counts['skipped'] ?? 0;
-  if (headers !== failed || (outcome?.[1] === 'FAILED') !== (failed > 0) || failed + skipped > ran) {
+  if (headers !== failed || (outcome?.[1] === 'FAILED') !== (failed > 0) || failedIds.size + skipped > ran) {
     report.issues.push('Incomplete unittest report');
   }
   const unnamed = (status: TestStatus): TestReportCase => ({ name: '', identities: [], group: null, groupIdentities: [], status });
   for (let i = 0; i < skipped; i++) report.tests.push(unnamed(TestStatus.Skipped));
-  for (let i = Math.max(ran - failed - skipped, 0); i > 0; i--) report.tests.push(unnamed(TestStatus.Passed));
+  for (let i = Math.max(ran - failedIds.size - skipped, 0); i > 0; i--) report.tests.push(unnamed(TestStatus.Passed));
   report.valid = report.issues.length === 0;
   return report;
 }

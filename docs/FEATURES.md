@@ -2979,10 +2979,11 @@ and report validity. A new format needs an adapter and regression evidence;
 the RED policy in `src/tdd-red-evidence.cts` stays independent of the format.
 No runner-specific TAP summary counters are required.
 
-The gate rejects incomplete plans/documents, bailouts, skipped/TODO targets,
+The gate rejects incomplete plans/documents, bailouts, skipped/TODO/cancelled targets,
 and ambiguous names. Qualify repeated TAP names with their suite path, and
 repeated JUnit class names with their package. Evidence counts are individual
-test cases, excluding suite-closing TAP points. `evidence.matched_test` and the
+tests, excluding suite-closing TAP points; a `unittest` method with failing
+subTests or a parameterized swift-testing test counts once. `evidence.matched_test` and the
 persisted `failing_test` identify the target failure rather than an unrelated
 first failure. Report freshness and whether the assertion tests the intended
 behavior still require executor inspection; the parser cannot establish them.
