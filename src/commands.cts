@@ -11,7 +11,10 @@ import path from 'node:path';
 import { normalizeEol } from './text-lines.cjs';
 import { execGit, platformWriteSync, platformReadSync, platformEnsureDir, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
 import { escapeRegex } from './pattern.cjs';
-import { locateFrontmatterFence } from './frontmatter-fence.cjs';
+import { locateFrontmatterFence, type LocateFrontmatterFenceOptions } from './frontmatter-fence.cjs';
+
+/** The effort-sync line editors' fence reading: a block behind a preamble is still edited (#3706). */
+const EFFORT_SYNC_FENCE: LocateFrontmatterFenceOptions = Object.freeze({ allowPreamble: true });
 import { requireSafePath, sanitizeForDisplay, tryWithinRoot, assertWithinRoot, PathAcceptance } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
@@ -738,11 +741,13 @@ function effortSurfaceForHost(cwd: string, host: string): string {
  * The leading frontmatter block of an installed agent file, as the one fence owner
  * (`locateFrontmatterFence`) finds it: `body` is the text between the two fences (the last
  * content line's line ending included), `bodyStart`/`closingStart` bound it, and `eol` is the
- * opening fence's line ending. Null when the file has no closed block — a block that does not
- * open at byte 0 is not one, exactly as the runtime that loads the agent reads it.
+ * opening fence's line ending. Null when the file has no closed block. By default a block that
+ * does not open at byte 0 is not one, exactly as the runtime that loads the agent reads it;
+ * the effort-sync line editors pass `EFFORT_SYNC_FENCE` to edit a block behind a preamble too
+ * (#3706 pinned that).
  */
-function agentFrontmatterSpan(content: string): { body: string; bodyStart: number; closingStart: number; eol: '\n' | '\r\n' } | null {
-  const fence = locateFrontmatterFence(content);
+function agentFrontmatterSpan(content: string, options?: LocateFrontmatterFenceOptions): { body: string; bodyStart: number; closingStart: number; eol: '\n' | '\r\n' } | null {
+  const fence = locateFrontmatterFence(content, options);
   if (!fence?.closed) return null;
   return { body: content.slice(fence.openEnd, fence.closingStart), bodyStart: fence.openEnd, closingStart: fence.closingStart, eol: fence.eol };
 }
@@ -756,7 +761,7 @@ function agentFrontmatterSpan(content: string): { body: string; bodyStart: numbe
  * existing-key replace is scoped to the frontmatter span only.
  */
 function setFrontmatterKeyLine(content: string, key: string, value: string): string {
-  const span = agentFrontmatterSpan(content);
+  const span = agentFrontmatterSpan(content, EFFORT_SYNC_FENCE);
   if (!span) return content;
   const fmBody = span.body;
   // Both writers of these frontmatter keys — this sync path and the
@@ -810,10 +815,10 @@ function setFrontmatterKeyLine(content: string, key: string, value: string): str
  * block `agentFrontmatterSpan` found.
  */
 function removeFrontmatterKeyLine(content: string, key: string): string {
-  // Scoped to the leading frontmatter block (not a whole-file /m match): a
-  // body line starting with `<key>:` (a fenced config example, a
-  // thematic-break flanked fragment) must never be the line removed.
-  const span = agentFrontmatterSpan(content);
+  // Scoped to the FIRST frontmatter block (not a whole-file /m match): a
+  // preamble or body line starting with `<key>:` (a fenced config example,
+  // a thematic-break flanked fragment) must never be the line removed.
+  const span = agentFrontmatterSpan(content, EFFORT_SYNC_FENCE);
   if (!span) return content;
   const fmBody = span.body;
   // #3706: same generic-key escape as setFrontmatterKeyLine above.
@@ -956,7 +961,7 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
     // drift and the sync re-added a hand-stripped key on every apply. A
     // present key under inherit is stripped, reported as {from, to: null}.
     if (universalEffort === 'inherit') {
-      const fmMatchInherit = agentFrontmatterSpan(content);
+      const fmMatchInherit = agentFrontmatterSpan(content, EFFORT_SYNC_FENCE);
       if (!fmMatchInherit) { skipped++; continue; }
       // Presence and value are distinct questions: `effort:` with an EMPTY
       // value is a key that IS present but whose captured value is null (the
@@ -1024,7 +1029,7 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
     const rendered = renderEffortForRuntime(runtime, universalEffort);
     const newEffortValue = rendered.value as string;
 
-    const fmMatch = agentFrontmatterSpan(content);
+    const fmMatch = agentFrontmatterSpan(content, EFFORT_SYNC_FENCE);
     if (!fmMatch) { skipped++; continue; }
 
     // Presence and value are distinct questions here too: `currentEffort`
@@ -1340,7 +1345,7 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
     const universal = effortCfg ? resolveInstallTimeEffort(effortCfg, agentName) : null;
     const target = universal ? clampEffortForHost('opencode', universal) : null;
 
-    const fmMatch = agentFrontmatterSpan(content);
+    const fmMatch = agentFrontmatterSpan(content, EFFORT_SYNC_FENCE);
     if (!fmMatch) { skipped++; continue; }
 
     // Presence and value are distinct questions: `variant:` with an EMPTY

@@ -74,17 +74,42 @@ const LENIENT_CLOSING_FENCE_LINE = /^-{4,}[ \t]*$/;
  *
  * An opened fence with no closer is reported (`closed: false`) rather than refused: readers
  * differ on what that means (the #1882 truncation probe warns, a writer refuses).
+ *
+ * `{ allowPreamble: true }` is the effort-sync line editors' reading (#3706 pinned it, and
+ * `tests/effort-sync-installed-runtime.test.cjs` holds it): when there is no opening fence at
+ * byte 0, the opening fence is the first later WHOLE line that is exactly `---` followed by
+ * `\n` or `\r\n` — so a block behind a preamble is still the one they edit. Only where the
+ * opening fence may sit changes; the closing rules above are unchanged. No other consumer
+ * passes it: to every reader, and to the runtime that loads the file, a block that does not
+ * open at byte 0 is not frontmatter.
  */
-export function locateFrontmatterFence(text: string): FrontmatterFence | null {
+export interface LocateFrontmatterFenceOptions {
+  allowPreamble?: boolean;
+}
+
+export function locateFrontmatterFence(text: string, options: LocateFrontmatterFenceOptions = {}): FrontmatterFence | null {
   if (typeof text !== 'string') {
     throw new TypeError(`locateFrontmatterFence: expected a string, got ${typeof text}`);
   }
   const bom = text.charCodeAt(0) === 0xFEFF ? '﻿' : '';
-  const start = bom.length;
-  let eol: '\n' | '\r\n';
-  if (text.startsWith('---\r\n', start)) eol = '\r\n';
-  else if (text.startsWith('---\n', start)) eol = '\n';
-  else return null;
+  const openingEolAt = (at: number): '\n' | '\r\n' | null => {
+    if (text.startsWith('---\r\n', at)) return '\r\n';
+    if (text.startsWith('---\n', at)) return '\n';
+    return null;
+  };
+  let start = bom.length;
+  let found = openingEolAt(start);
+  if (found === null && options.allowPreamble === true) {
+    for (let newline = text.indexOf('\n', start); newline !== -1; newline = text.indexOf('\n', newline + 1)) {
+      found = openingEolAt(newline + 1);
+      if (found !== null) {
+        start = newline + 1;
+        break;
+      }
+    }
+  }
+  if (found === null) return null;
+  const eol: '\n' | '\r\n' = found;
   const openEnd = start + 3 + eol.length;
 
   const closedAt = (lineStart: number, lineEnd: number): FrontmatterFence => {
