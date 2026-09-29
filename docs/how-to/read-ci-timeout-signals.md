@@ -4,7 +4,7 @@ Every matrixed CI job (`test`, `test-conformance` in `.github/workflows/test.yml
 `mutate` in `mutation.yml`; `smoke` in `install-smoke.yml`) now reports how close it ran to its
 `timeout-minutes` cap. This page is for a maintainer trying to answer: *is a lane drifting
 toward its cap, and where do I look?* (`test-conformance` runs the platform-conformance-tier file
-list — `scripts/lib/platform-conformance-tier.generated.cjs` — on `windows-latest`, sharded four
+list — `scripts/lib/platform-conformance-tier.generated.cjs` — on `windows-latest`, sharded six
 ways, and `macos-latest`, unsharded; it is the sole gating signal for real-OS coverage.)
 
 ## 1. A single run crossed 90% of its budget
