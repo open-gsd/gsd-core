@@ -168,3 +168,35 @@ describe('roadmap upgrade — hub contract + --convention parsing (#1538)', () =
     assert.ok(applyCalls.every((c) => c.opts.dryRun === true), 'no --apply ⇒ dryRun');
   });
 });
+
+// Found while implementing #5105: `roadmap validate` (V003, and its `phase_id_convention`
+// fallback) and `roadmap milestone-scope` read ROADMAP.md's frontmatter through the one fence
+// owner, so they agree with each other and with every other reader. The old copies missed a BOM
+// block, closed on a `--- x` line, capped the block at 4000 characters, and flagged a block
+// closed by the lenient `----` (#1882) as unterminated.
+describe('roadmap validate / milestone-scope read the frontmatter the one fence owner finds', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+  const BODY = '# Roadmap\n\n## v1.0 First (Active)\n\n### [GSD.04] 01: Setup\n**Goal:** x\n\n### [GSD.04] 02: Feature\n**Goal:** y\n';
+
+  for (const [label, frontmatter, phases, codes] of [
+    ['a BOM block', '\uFEFF---\nphase_id_convention: bracket\n---\n\n', ['01', '02'], []],
+    ['a block with a `--- x` line', '---\nnote: x\n--- x\nphase_id_convention: bracket\n---\n\n', ['01', '02'], []],
+    ['a block longer than 4000 characters', `---\nnote: ${'x'.repeat(4100)}\nphase_id_convention: bracket\n---\n\n`, ['01', '02'], []],
+    ['a block closed by the lenient `----`', '---\nphase_id_convention: bracket\n----\n\n', ['01', '02'], []],
+    ['an unterminated block', '---\nphase_id_convention: bracket\n\n', [], ['V003', 'V004']],
+  ]) {
+    test(`${label}`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), frontmatter + BODY);
+      const scope = runGsdTools('roadmap milestone-scope', tmpDir);
+      assert.ok(scope.success, scope.error);
+      assert.deepStrictEqual(JSON.parse(scope.output).phases, phases);
+      const validate = runGsdTools('roadmap validate', tmpDir);
+      const out = validate.output || validate.error;
+      assert.deepStrictEqual(out ? JSON.parse(out).warnings.map((w) => w.code) : [], codes);
+    });
+  }
+});

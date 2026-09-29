@@ -4,14 +4,16 @@
  * Tests for `src/frontmatter-fence.cts` — the one owner of frontmatter fence detection.
  *
  * Found while implementing #5105: "where does the frontmatter block start and stop" was
- * answered in four places that disagreed — `frontmatterRegion`/`frontmatterBlock`
- * (`frontmatter.cts`), `leadingFrontmatterLineCount` (`shell-command-projection.cts`, a
- * private copy because of a circular import), `findFrontmatterSpan`
- * (`planning-document.cts`, which re-derived the closing fence's end and was one character
- * long on an adjacent empty block) and `stripFrontmatter` (`frontmatter.cts`, a regex that
- * could not see an adjacent empty block at all and so stripped through the first `---` in
- * the body). `locateFrontmatterFence` is now the single answer, and every consumer is
- * pinned to agree with it on generated documents.
+ * answered some thirty times across `src/`, and the copies disagreed — among them
+ * `frontmatterRegion`/`frontmatterBlock` and `stripFrontmatter` (`frontmatter.cts`),
+ * `leadingFrontmatterLineCount` (`shell-command-projection.cts`), `findFrontmatterSpan`
+ * (`planning-document.cts`), and the planning-document readers, agent/skill-file parsers and
+ * installer converters that each carried a private regex. `locateFrontmatterFence` is now the
+ * single answer for every reader and writer in `src/`, in the runtime hooks, and in the two
+ * entry points that load `bin/lib`; the core consumers are pinned below to agree with it on
+ * generated documents,
+ * every other site pins its own behavior in its module's test file, and
+ * `scripts/lint-frontmatter-fence-drift.cjs` (last describe) keeps a new copy from appearing.
  *
  * The rules: a leading UTF-8 BOM is tolerated; the opening fence is exactly `---` followed
  * by `\n` or `\r\n` at byte 0; the closing fence is the first later WHOLE line that is
@@ -38,6 +40,11 @@ const {
 } = require('../gsd-core/bin/lib/frontmatter.cjs');
 const { normalizeContent } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 const { parsePlanningDoc, readFrontmatterField, readFrontmatterFieldFromSource } = require('../gsd-core/bin/lib/planning-document.cjs');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { findFrontmatterFenceDrift, scanRepo } = require('../scripts/lint-frontmatter-fence-drift.cjs');
+const { cleanup } = require('./helpers.cjs');
 
 const MD = 'roadmap.md';
 const closed = (bom, eol, openEnd, closingStart, closingFenceEnd, bodyEnd) =>
@@ -194,7 +201,7 @@ describe('stripFrontmatter heals whitespace before the opening fence', () => {
     ['a leading blank line', '\n---\na: 1\n---\n\nBody', 'Body'],
     ['leading spaces', '   ---\na: 1\n---\nBody', 'Body'],
     ['a leading CRLF', '\r\n---\r\na: 1\r\n---\r\nBody', 'Body'],
-    ['leading whitespace before a BOM block', '\n﻿---\na: 1\n---\nBody', 'Body'],
+    ['leading whitespace before a BOM block', '\n\uFEFF---\na: 1\n---\nBody', 'Body'],
     ['leading whitespace and two stacked blocks', '\n---\na: 1\n---\n---\nb: 2\n---\nBody', 'Body'],
     ['leading whitespace and no block', '\n# Body\n---\n', '\n# Body\n---\n'],
     ['leading whitespace and an unterminated block', '\n---\na: 1\n', '\n---\na: 1\n'],
@@ -285,5 +292,60 @@ describe('property: every fence consumer agrees with locateFrontmatterFence', ()
       }),
       { seed: 5105, numRuns: 600, endOnFailure: true },
     );
+  });
+});
+
+// The owner stays the only fence derivation: `scripts/lint-frontmatter-fence-drift.cjs` (run by
+// `lint:ci`) flags a hand-rolled fence anywhere in `src/` outside `locateFrontmatterFence`.
+describe('lint-frontmatter-fence-drift: a hand-rolled fence cannot reappear', () => {
+  for (const [label, line] of [
+    ['a byte-0 fence regex', '  const m = content.match(/^---\\r?\\n([\\s\\S]*?)\\r?\\n---/);'],
+    ['a multiline fence regex', '  const m = /^---\\r?\\n([\\s\\S]*?)^---\\r?$/m.exec(content);'],
+    ['a closer-before-EOF regex', "  block.replace(/(\\r?\\n)---$/, 'x');"],
+    ['a `new RegExp` fence source', "  const re = new RegExp('^---\\\\r?\\\\n');"],
+    ['an `indexOf` closer scan', "  const closeIdx = raw.indexOf('\\n---', headerEnd);"],
+    ['a `startsWith` opener check', "  if (!text.startsWith('---\\n')) return null;"],
+    ['a trimmed-line fence comparison', "  if (lines[0].trim() === '---') {"],
+    ['a reversed fence comparison', "  if ('---' !== lines[0]) return content;"],
+    ['a `lastIndexOf` closer scan', "  const at = content.lastIndexOf('\\n---');"],
+    ['an `includes` of a line-anchored fence', "  if (content.includes('\\n---\\n')) return true;"],
+  ]) {
+    test(`${label} is flagged`, () => {
+      const found = findFrontmatterFenceDrift(`function readIt(content) {\n${line}\n}\n`, 'src/fake.cts');
+      assert.deepStrictEqual(found.map((d) => [d.line, d.fn]), [[2, 'readIt']]);
+    });
+  }
+
+  for (const [label, line] of [
+    ['a template literal that writes a block', '  return `---\\n${yaml}\\n---\\n\\n${body}`;'],
+    ['an array of fence lines joined by a writer', "  const block = ['---', ...lines, '---'].join('\\n').split('\\n').join(eol);"],
+    ['a pushed fence line', "  lines.push('---');"],
+    ['a Markdown table-separator filter', "  rows.filter((l) => !l.includes('---'));"],
+    ['a comment quoting a fence regex', '  // the old /^---\\r?\\n/ regex could not see a BOM'],
+    ['a JSDoc line quoting a fence check', "   * `lines[0].trim() === '---'` accepted a BOM"],
+  ]) {
+    test(`${label} is not flagged`, () => {
+      assert.deepStrictEqual(findFrontmatterFenceDrift(`function writeIt() {\n${line}\n}\n`, 'src/fake.cts'), []);
+    });
+  }
+
+  test('exemptions are function-scoped: the same shape elsewhere in the owner file is flagged', () => {
+    const text = "export function locateFrontmatterFence(text) {\n  if (text.startsWith('---\\n', 0)) return 1;\n}\nfunction another(text) {\n  return text.startsWith('---\\n');\n}\n";
+    assert.deepStrictEqual(findFrontmatterFenceDrift(text, path.join('src', 'frontmatter-fence.cts')).map((d) => [d.line, d.fn]), [[5, 'another']]);
+  });
+
+  test('the real src/ tree has no hand-rolled fence', () => {
+    assert.deepStrictEqual(scanRepo(path.join(__dirname, '..')), []);
+  });
+
+  test('a planted hand-rolled fence in a src/ tree turns the scan red', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-fence-drift-'));
+    try {
+      fs.mkdirSync(path.join(root, 'src'));
+      fs.writeFileSync(path.join(root, 'src', 'planted.cts'), "export function planted(c: string) {\n  return c.indexOf('\\n---', 4);\n}\n");
+      assert.deepStrictEqual(scanRepo(root).map((d) => [d.file, d.line, d.fn]), [[path.join('src', 'planted.cts'), 2, 'planted']]);
+    } finally {
+      cleanup(root);
+    }
   });
 });

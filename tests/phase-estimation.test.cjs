@@ -318,6 +318,23 @@ describe('parseEstimate', () => {
   });
 });
 
+// Found while implementing #5105: the block is the one the one fence owner finds. The old
+// byte-0 regex could not see a BOM block or the lenient `----` closer, and read an adjacent
+// empty block's BODY as frontmatter.
+describe('extractFrontmatterBlock — the frontmatter block is the one fence owner finds', () => {
+  for (const [label, text, expected] of [
+    ['a BOM block', '\uFEFF---\nestimate:\n  tokens: 5\n---\n', { tokens: 5 }],
+    ['a block closed by the lenient `----`', '---\nestimate:\n  tokens: 5\n----\n', { tokens: 5 }],
+    ['a CRLF block', '---\r\nestimate:\r\n  tokens: 5\r\n---\r\n', { tokens: 5 }],
+    ['an adjacent empty block (the key is body text)', '---\n---\nestimate:\n  tokens: 5\n', null],
+  ]) {
+    test(`${label}`, () => {
+      const got = est.extractFrontmatterBlock(text, 'estimate');
+      assert.deepStrictEqual(got === null ? null : { ...got }, expected);
+    });
+  }
+});
+
 describe('parseActuals', () => {
   test('accepts zero commits but not zero tokens or tasks', () => {
     assert.deepEqual(

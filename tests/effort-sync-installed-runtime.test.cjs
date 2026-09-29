@@ -1145,48 +1145,54 @@ describe('#3706: frontmatter line editors are scoped to the matched block', () =
     );
   }
 
-  test('a CRLF document with a preamble keeps its opening fence intact', () => {
-    // Pre-fix: openLen was derived from `/^---\r\n/.test(content)` (start of
-    // file, which here is "Preamble line", not CRLF) rather than from the
-    // matched frontmatter block, so the CRLF fence misaligned by one byte.
+  test('a CRLF document keeps its opening fence intact when its key is removed', () => {
+    // #3706: every offset comes from the block itself, so a CRLF fence never
+    // misaligns by one byte.
     const { root, cwd, configDir, agentsDir, home } = makeSandbox();
     try {
       writeProjectEffortConfig(cwd, 'inherit');
       const filePath = path.join(agentsDir, 'gsd-executor.md');
-      const before = 'Preamble line\r\n\r\n---\r\nname: x\r\neffort: high\r\n---\r\n\r\nBody.\r\n';
-      fs.writeFileSync(filePath, before);
+      fs.writeFileSync(filePath, '---\r\nname: x\r\neffort: high\r\n---\r\n\r\nBody.\r\n');
       runEffortSync({ cwd, home, configDir });
-      const after = fs.readFileSync(filePath, 'utf8');
-      assert.strictEqual(after, 'Preamble line\r\n\r\n---\r\nname: x\r\n---\r\n\r\nBody.\r\n');
-      assert.ok(after.includes('---\r\nname: x\r\n'), 'the CRLF opening fence must survive intact');
-      assert.ok(after.startsWith('Preamble line\r\n\r\n'), 'preamble must survive untouched');
-      assert.ok(after.endsWith('\r\n\r\nBody.\r\n'), 'body must survive untouched');
-      assert.doesNotMatch(after, /^-{1,2}\r?\n/m, 'no truncated/stray fence');
+      assert.strictEqual(fs.readFileSync(filePath, 'utf8'), '---\r\nname: x\r\n---\r\n\r\nBody.\r\n');
     } finally {
       cleanup(root);
     }
   });
 
-  test('a preamble line starting with the key is not the line rewritten', () => {
-    // Pre-fix: `content.replace(keyLineRe, ...)` was a whole-file /m replace
-    // gated only on the key being present in fmBody, so the FIRST matching
-    // line in the whole file (the preamble) was rewritten instead of the
-    // frontmatter line.
+  // Found while implementing #5105: a `---` pair that does not open at byte 0 is not
+  // frontmatter — not to the one fence owner, and not to the runtime that loads the agent —
+  // so the sync leaves such a file byte-identical instead of editing a block no reader sees.
+  // (#3706 used to edit the first `---` pair anywhere in the file.)
+  for (const [label, override, before] of [
+    ['a CRLF document with a preamble', 'inherit', 'Preamble line\r\n\r\n---\r\nname: x\r\neffort: high\r\n---\r\n\r\nBody.\r\n'],
+    ['a document with a preamble line starting with the key', 'xhigh', 'effort: not-the-frontmatter\n\n---\nname: x\neffort: high\n---\n\nBody.\n'],
+    ['a document with a blank line before its block', 'xhigh', '\n---\nname: x\neffort: high\n---\n\nBody.\n'],
+  ]) {
+    test(`${label} is not frontmatter and is left byte-identical`, () => {
+      const { root, cwd, configDir, agentsDir, home } = makeSandbox();
+      try {
+        writeProjectEffortConfig(cwd, override);
+        const filePath = path.join(agentsDir, 'gsd-executor.md');
+        fs.writeFileSync(filePath, before);
+        runEffortSync({ cwd, home, configDir });
+        assert.strictEqual(fs.readFileSync(filePath, 'utf8'), before);
+      } finally {
+        cleanup(root);
+      }
+    });
+  }
+
+  test('a body line starting with the key is not the line rewritten', () => {
+    // Bytes-based scoping (not a whole-file regex): only the frontmatter line
+    // may change, never a body line that happens to start with the key.
     const { root, cwd, configDir, agentsDir, home } = makeSandbox();
     try {
       writeProjectEffortConfig(cwd, 'xhigh');
       const filePath = path.join(agentsDir, 'gsd-executor.md');
-      const before = 'effort: not-the-frontmatter\n\n---\nname: x\neffort: high\n---\n\nBody.\n';
-      fs.writeFileSync(filePath, before);
+      fs.writeFileSync(filePath, '---\nname: x\neffort: high\n---\n\neffort: not-the-frontmatter\n');
       runEffortSync({ cwd, home, configDir });
-      const after = fs.readFileSync(filePath, 'utf8');
-      assert.strictEqual(after, 'effort: not-the-frontmatter\n\n---\nname: x\neffort: xhigh\n---\n\nBody.\n');
-      // Bytes-based scoping (not a whole-file regex): the preamble line must
-      // precede the first `---` fence, and only the line AFTER that fence may
-      // read `effort: xhigh`.
-      const firstFence = after.indexOf('---');
-      assert.ok(after.slice(0, firstFence).includes('effort: not-the-frontmatter'), 'preamble line must be untouched');
-      assert.ok(after.slice(firstFence).includes('effort: xhigh'), 'frontmatter line must carry the new value');
+      assert.strictEqual(fs.readFileSync(filePath, 'utf8'), '---\nname: x\neffort: xhigh\n---\n\neffort: not-the-frontmatter\n');
     } finally {
       cleanup(root);
     }

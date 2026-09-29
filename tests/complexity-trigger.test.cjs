@@ -994,3 +994,38 @@ describe('complexity-trigger: proposal fence-width tolerant read (#3657)', () =>
     assert.equal(parsed3.candidates[0].name, 'handleThing');
   });
 });
+
+// Found while implementing #5105: parseProposal reads the frontmatter the one fence owner
+// finds, so a BOM and the lenient `----` closer read like everywhere else, and a `--- x` line
+// is block content — which this strict reader refuses rather than closing on it.
+describe('complexity-trigger: proposal frontmatter is the block the one fence owner finds', () => {
+  const { renderProposal, parseProposal } = require('../gsd-core/bin/lib/complexity-trigger.cjs');
+  const rendered = renderProposal({
+    schema_version: 1,
+    status: 'proposed',
+    phase: '2',
+    target_file: 'src/a.ts',
+    target_function: 'handleThing',
+    score: 7,
+    baseline: 5,
+    delta: 2,
+    metric: 'decision-points',
+    recorded_at: '2026-07-19T00:00:00Z',
+    resolved_at: null,
+    reason: 'score above threshold',
+    candidates: [{ name: 'handleThing', score: 7 }],
+  });
+
+  test('a BOM before the proposal parses like the proposal without it', () => {
+    assert.notEqual(parseProposal(rendered), null);
+    assert.deepStrictEqual(parseProposal(`\uFEFF${rendered}`), parseProposal(rendered));
+  });
+
+  test('a proposal block closed by the lenient `----` parses like one closed by `---`', () => {
+    assert.deepStrictEqual(parseProposal(rendered.replace('\n---\n', '\n----\n')), parseProposal(rendered));
+  });
+
+  test('a `--- x` line inside the frontmatter fails closed', () => {
+    assert.equal(parseProposal(rendered.replace('\nstatus: proposed\n', '\nstatus: proposed\n--- x\n')), null);
+  });
+});

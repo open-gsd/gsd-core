@@ -398,6 +398,27 @@ describe('last_mapped_commit frontmatter', () => {
     );
   });
 
+  // Found while implementing #5105: the frontmatter is the block the one fence owner finds. The
+  // old regex missed a BOM block, so a write stacked a second block above it; it also closed on
+  // a `--- x` line, leaving the rest of the block in the body.
+  for (const [label, before] of [
+    ['a BOM before the block', '\uFEFF---\nlast_mapped_commit: aaaa\nother: keep-me\n---\n# body\n'],
+    ['a `--- x` line inside the block', '---\nlast_mapped_commit: aaaa\n--- x\nother: keep-me\n---\n# body\n'],
+  ]) {
+    test(`writeMappedCommit on ${label} rewrites that one block`, () => {
+      const file = path.join(tmp, '.planning', 'codebase', 'STRUCTURE.md');
+      fs.writeFileSync(file, before);
+      assert.strictEqual(readMappedCommit(file), 'aaaa', 'the existing value is read');
+      writeMappedCommit(file, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', '2026-04-22');
+      const content = fs.readFileSync(file, 'utf8');
+      assert.ok(content.startsWith('---\n'), `opens with the fence: ${JSON.stringify(content)}`);
+      assert.strictEqual((content.match(/^last_mapped_commit:/gm) || []).length, 1, 'exactly one block');
+      assert.strictEqual(readMappedCommit(file), 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+      assert.ok(content.includes('other: keep-me'), 'preserves other keys');
+      assert.ok(content.endsWith('# body\n'), 'the body is kept');
+    });
+  }
+
   test('readMappedCommit returns null when file missing', () => {
     assert.strictEqual(readMappedCommit('/nonexistent/path.md'), null);
   });

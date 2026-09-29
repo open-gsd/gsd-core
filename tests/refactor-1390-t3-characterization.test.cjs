@@ -29,6 +29,25 @@ const {
 
 // ─── extractPlanDesignatedSections ───────────────────────────────────────────
 
+// Found while implementing #5105: the plan's frontmatter is the block the one fence owner
+// finds. The old regex missed a BOM block (its `objective:` read as absent) and closed on a
+// `--- x` line (hiding every key after it).
+describe('extractPlanDesignatedSections — the frontmatter block is the one fence owner finds', () => {
+  for (const [label, content] of [
+    ['a BOM block', '\uFEFF---\nobjective: Ship it\n---\n\n## Tasks\n\nx\n'],
+    ['a block with a `--- x` line before the key', '---\nnote: x\n--- x\nobjective: Ship it\n---\n\nbody\n'],
+    ['a block closed by the lenient `----`', '---\nobjective: Ship it\n----\n\nbody\n'],
+  ]) {
+    test(`${label}: the frontmatter objective is extracted`, () => {
+      assert.ok(extractPlanDesignatedSections(content).includes('Ship it'));
+    });
+  }
+
+  test('an adjacent empty block: the body heading after it is scanned as body', () => {
+    assert.ok(extractPlanDesignatedSections('---\n---\n## Objective\n\nDo it\n').includes('## Objective\n\nDo it'));
+  });
+});
+
 describe('extractPlanDesignatedSections — characterization (T3 pre-migration contract)', () => {
 
   // ── HTML comment stripping (CALLER-SIDE: must survive migration) ──────────

@@ -37,7 +37,24 @@ const {
   readInstalledCapabilitySkill,
   capabilityClusterStems,
   CAPABILITY_SKILL_MARKER,
+  parseRequires,
 } = require('../gsd-core/bin/lib/install-profiles.cjs');
+
+// Found while implementing #5105: `requires:` is read from the frontmatter the one fence owner
+// finds. The old `/^---…---/m` regex matched a `---` pair ANYWHERE in the file (a thematic-break
+// flanked section of a skill body), closed on a `--- x` line, and missed a BOM block.
+describe('parseRequires — the frontmatter block is the one fence owner finds', () => {
+  for (const [label, content, expected] of [
+    ['a BOM block', '\uFEFF---\nrequires: [a, b]\n---\n', ['a', 'b']],
+    ['a block with a `--- x` line before the key', '---\nname: x\n--- x\nrequires: [a, b]\n---\n', ['a', 'b']],
+    ['a block closed by the lenient `----`', '---\nrequires: [a, b]\n----\n', ['a', 'b']],
+    ['a `---` pair later in the body (not frontmatter)', '# Title\n\n---\nrequires: [a, b]\n---\n', []],
+  ]) {
+    test(`${label}`, () => {
+      assert.deepStrictEqual(parseRequires(content), expected);
+    });
+  }
+});
 const { createTempDir, cleanup, writePackageSourceMarkerFixture } = require('./helpers.cjs');
 const { resolveRuntimeArtifactLayout: resolveLayout } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
 

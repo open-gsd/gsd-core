@@ -6420,3 +6420,41 @@ describe('#4055: merged-and-deleted phase branch must not be resurrected', () =>
     assert.strictEqual(createdBranch, false, 'no phase branch may be created off a non-base branch');
   });
 });
+
+// Found while implementing #5105: `todo complete` upserts its keys into the block the one fence
+// owner finds. Its old `trim() === '---'` scan missed a block closed by the lenient `----`
+// (#1882) and wrapped the whole file in a second block; a BOM on a block-less todo landed
+// between the new block and the body instead of staying the file's first character.
+describe('todo complete writes into the frontmatter block the one fence owner finds', () => {
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'todos', 'pending'), { recursive: true });
+  });
+  afterEach(() => cleanup(tmpDir));
+
+  const BOM = String.fromCharCode(0xFEFF);
+
+  /** The completed todo's lines, with the completion date masked. */
+  function complete(content) {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'todos', 'pending', 'fix-it.md'), content);
+    const result = runGsdTools('todo complete fix-it.md', tmpDir);
+    assert.ok(result.success, `todo complete failed: ${result.error}`);
+    const written = fs.readFileSync(path.join(tmpDir, '.planning', 'todos', 'completed', 'fix-it.md'), 'utf-8');
+    return splitLines(written).map((l) => l.replace(/^completed: \d{4}-\d{2}-\d{2}$/, 'completed: DATE'));
+  }
+
+  test('a block closed by the lenient `----` gains the keys in place, not a second block', () => {
+    assert.deepStrictEqual(
+      complete('---\ntitle: Fix it\narea: core\n----\n\nBody line\n'),
+      ['---', 'title: Fix it', 'area: core', 'completed: DATE', 'status: completed', '----', '', 'Body line', ''],
+    );
+  });
+
+  test('a block-less todo with a BOM keeps the BOM ahead of the new block', () => {
+    assert.deepStrictEqual(
+      complete(`${BOM}# Fix it\n\nBody line\n`),
+      [`${BOM}---`, 'completed: DATE', 'status: completed', '---', '', '# Fix it', '', 'Body line', ''],
+    );
+  });
+});

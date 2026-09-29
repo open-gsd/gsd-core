@@ -551,5 +551,21 @@ test('link mode falls back to embed when source file is missing (hasFallback)', 
   const content = fs.readFileSync(path.join(dir, 'CLAUDE.md'), 'utf-8');
   assert.ok(!content.includes('@.planning/codebase/ARCHITECTURE.md'), 'fallback section should not write @-reference');
 });
+
+// Found while implementing #5105: a project skill's name/description are read from the block
+// the one fence owner finds. The old regex closed on a `--- x` line (and missed a BOM block),
+// so the skills table lost the description.
+for (const [label, skillMd] of [
+  ['a `--- x` line inside the block', '---\nname: my-skill\n--- x\ndescription: Does the thing\n---\n\nBody\n'],
+  ['a BOM before the block', '\uFEFF---\nname: my-skill\ndescription: Does the thing\n---\n\nBody\n'],
+  ['a block closed by the lenient `----`', '---\nname: my-skill\ndescription: Does the thing\n----\n\nBody\n'],
+]) {
+  test(`project skill with ${label}: the skills table carries its description`, () => {
+    const dir = makeTempProject({ '.claude/skills/my-skill/SKILL.md': skillMd });
+    cmdGenerateClaudeMd(dir, { output: path.join(dir, 'CLAUDE.md') }, false);
+    const content = fs.readFileSync(path.join(dir, 'CLAUDE.md'), 'utf-8');
+    assert.match(content, /^\| my-skill \| Does the thing \| `\.claude\/skills\/my-skill\/SKILL\.md` \|$/m);
+  });
+}
   });
 }

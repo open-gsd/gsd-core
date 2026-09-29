@@ -57,6 +57,22 @@ function classify(tmpDir, rel) {
   return JSON.parse(result.output);
 }
 
+// Found while implementing #5105: the `coverage:` block is read from the frontmatter the one
+// fence owner finds. The old `indexOf('\n---')` scan closed on a `--- x` line and missed a BOM
+// block, so a present `coverage:` key read as absent (legacy mode).
+describe('coverage parse — the frontmatter block is the one fence owner finds', () => {
+  for (const [label, doc, found] of [
+    ['a BOM block', '\uFEFF---\ncoverage: []\n---\n', true],
+    ['a block with a `--- x` line before the key', '---\nname: x\n--- x\ncoverage: []\n---\n', true],
+    ['a block closed by the lenient `----`', '---\ncoverage: []\n----\n', true],
+    ['an adjacent empty block (the key is body text)', '---\n---\ncoverage: []\n', false],
+  ]) {
+    test(`${label}: found is ${found}`, () => {
+      assert.deepStrictEqual(coverage.parseCoverage(doc), { found, entries: [], malformed: false });
+    });
+  }
+});
+
 describe('coverage classify — happy path', () => {
   test('auto-passes an entry with human_judgment:false and all-pass verification', (t) => {
     const tmpDir = createTempProject();
