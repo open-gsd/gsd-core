@@ -43,7 +43,7 @@ const { parsePlanningDoc, readFrontmatterField, readFrontmatterFieldFromSource }
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { findFrontmatterFenceDrift, scanRepo } = require('../scripts/lint-frontmatter-fence-drift.cjs');
+const { findFrontmatterFenceDrift, scanRepo, TOP_LEVEL, OWNER_FILE } = require('../scripts/lint-frontmatter-fence-drift.cjs');
 const { cleanup } = require('./helpers.cjs');
 
 const MD = 'roadmap.md';
@@ -516,6 +516,29 @@ describe('lint-frontmatter-fence-drift: a hand-rolled fence cannot reappear', ()
 
   test('the real src/ tree has no hand-rolled fence', () => {
     assert.deepStrictEqual(scanRepo(path.join(__dirname, '..')), []);
+  });
+
+  test('#5105: a top-level statement the tracker does not recognize does not inherit the prior exempted function', () => {
+    // Before the fix, `currentFunction` only reset to TOP_LEVEL on a fixed keyword
+    // list (const/let/var/class/interface/type/import). A `module.exports =` line
+    // after an exempted function matched none of them, so it silently inherited
+    // that function's name and its fence literal went unscanned.
+    const text = "function phaseEntryInsertOffset(text) {\n  return text.lastIndexOf('\\n---');\n}\nmodule.exports = { x: (c) => c.startsWith('---') };\n";
+    assert.deepStrictEqual(
+      findFrontmatterFenceDrift(text, path.join('src', 'phase.cts')).map((d) => [d.line, d.fn]),
+      [[4, TOP_LEVEL]],
+    );
+  });
+
+  test('#5105: the owner file no longer exempts every top-level helper', () => {
+    // Before the fix, OWNER_FILE's FUNCTION_SCOPED_EXEMPTIONS carried a blanket
+    // TOP_LEVEL entry, so ANY new top-level helper in frontmatter-fence.cts — not
+    // just the two canonical fence-literal constants — went unscanned.
+    const text = "export const helper = (t) => t.startsWith('---');\n";
+    assert.deepStrictEqual(
+      findFrontmatterFenceDrift(text, OWNER_FILE).map((d) => [d.line, d.fn]),
+      [[1, TOP_LEVEL]],
+    );
   });
 
   // #5105: the scan also covers scripts/, eslint-rules/ and the two plugin adapters.
