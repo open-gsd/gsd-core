@@ -3321,15 +3321,19 @@ describe('#2376 — init.* path fields resolve when process cwd differs from --c
   });
 
   // allow-test-rule: source-text-is-the-product (see #2376)
-  test('gsd-core/workflows/execute-phase.md verify_phase_goal step references {requirements_path}, not a bare .planning literal', () => {
-    const wfPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
+  // #5118: the verifier dispatch prompt moved out of execute-phase.md's
+  // verify_phase_goal step into the shared step it includes
+  // (execute-phase/steps/verify-phase-goal.md, also included by verify-work).
+  // The #2376 contract is about the prompt, wherever it lives.
+  test('the verifier dispatch prompt (execute-phase/steps/verify-phase-goal.md) references {requirements_path}, not a bare .planning literal', () => {
+    const wfPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'verify-phase-goal.md');
     const content = fs.readFileSync(wfPath, 'utf8');
     // eslint-disable-next-line local/no-unbounded-quantifier -- parses this repo's own workflow .md content, fixed-size author-controlled content
-    const stepMatch = content.match(/<step name="verify_phase_goal">[\s\S]*?<\/step>/);
-    assert.ok(stepMatch, 'verify_phase_goal step should exist in execute-phase.md');
+    const stepMatch = content.match(/<step name="verifier_dispatch">[\s\S]*?<\/step>/);
+    assert.ok(stepMatch, 'verifier_dispatch step should exist in the shared verification step');
     const step = stepMatch[0];
-    assert.ok(step.includes('{requirements_path}'), 'verify_phase_goal must reference {requirements_path} from init JSON, not a bare literal');
-    assert.ok(!step.includes('.planning/REQUIREMENTS.md'), 'verify_phase_goal must not hardcode .planning/REQUIREMENTS.md (#2376)');
+    assert.ok(step.includes('{requirements_path}'), 'the verifier prompt must reference {requirements_path} from init JSON, not a bare literal');
+    assert.ok(!step.includes('.planning/REQUIREMENTS.md'), 'the verifier prompt must not hardcode .planning/REQUIREMENTS.md (#2376)');
   });
 
   // allow-test-rule: source-text-is-the-product (see #2376)

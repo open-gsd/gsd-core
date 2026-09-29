@@ -348,11 +348,16 @@ describe('response-language workflow coverage lint (#2529)', () => {
   // so the lint cannot see it and this test is now the only thing holding the two
   // halves together. Asserted against the REAL tree, not a fixture: a fixture
   // would only prove the assertion can pass.
+  //
+  // #5118: the dispatch prompt moved from execute-phase.md into the ONE shared
+  // verification step both execute-phase and verify-work include
+  // (execute-phase/steps/verify-phase-goal.md); the anchor moved with it, and
+  // the prompt now carries the directive line inline right after it.
   const VERIFIER_DISPATCH_CONTRACT = {
     reference: '../references/execute-phase-response-language.md',
     directive: 'Use response_language {response_language} for all user-facing prose — narration between tool calls, status updates, progress notes, and findings included; preserve code and paths.',
     anchor: 'Create VERIFICATION.md.',
-    anchorIn: 'execute-phase.md',
+    anchorIn: 'execute-phase/steps/verify-phase-goal.md',
   };
 
   test('the gsd-verifier dispatch contract still has both of its halves', () => {
@@ -380,6 +385,13 @@ describe('response-language workflow coverage lint (#2529)', () => {
       referenceFile.includes(anchor),
       `${reference} no longer names the anchor "${anchor}"`,
     );
+
+    // #5118: the shared prompt carries the directive immediately after the
+    // anchor, so verify-work (which does not load the reference) injects it too.
+    const promptLines = fs.readFileSync(anchorPath, 'utf8').split(/\r?\n/);
+    const at = promptLines.findIndex((line) => line === anchor);
+    assert.ok(at !== -1, `${anchorIn}: the anchor is a line of its own`);
+    assert.equal(promptLines[at + 1], directive, `${anchorIn}: the directive follows the anchor`);
   });
 
   test('inheritance reaches fragment directories only, never a nested workflow tree', () => {

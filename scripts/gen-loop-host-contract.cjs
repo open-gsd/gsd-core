@@ -37,7 +37,16 @@ const STEP_WORKFLOWS = [
       { file: 'quick.md', point: 'plan:pre', kinds: ['contribution'], into: 'planner' },
     ],
   },
-  { file: 'execute-phase.md', step: 'execute' },
+  {
+    file: 'execute-phase.md',
+    step: 'execute',
+    // #5118: execute:post's step AND gate dispatch (code_review_gate with
+    // its TDD escalation) lives in the ONE shared verification step that
+    // execute-phase includes (and verify-work includes too) — no per-caller copy.
+    auxiliaryHosts: [
+      { file: 'execute-phase/steps/verify-phase-goal.md', point: 'execute:post', kinds: ['step', 'gate'] },
+    ],
+  },
   { file: 'verify-work.md',   step: 'verify' },
   { file: 'ship.md',          step: 'ship' },
 ];

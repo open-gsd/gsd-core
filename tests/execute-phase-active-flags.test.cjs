@@ -524,7 +524,11 @@ describe('#3177: execute-phase.md states Claude Code dispatch truthfully', () =>
   test('the Codex orchestrator rule is not swept by the Claude Code correction', () => {
     // Row 5 — negative space. Codex dispatch IS synchronous. A regex sweep for
     // "return its result" would introduce a NEW falsehood here; this catches that.
-    const text = workflowText();
+    // #5118: the verifier dispatch (and its Codex wait rule) moved into the
+    // shared step execute-phase includes (execute-phase/steps/verify-phase-goal.md);
+    // the #3177 contract is about every Codex wait rule the orchestrator
+    // follows, wherever it lives — read the workflow with its steps.
+    const text = require('./helpers.cjs').readWorkflowCombined(WORKFLOW);
     const codexRules = text
       .split('\n')
       .filter((l) => l.includes('ORCHESTRATOR RULE — CODEX RUNTIME'));

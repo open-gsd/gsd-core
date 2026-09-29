@@ -1067,8 +1067,9 @@ describe('CR-INTEGRATION: workflow integration points', () => {
   });
 
   test('execute-phase.md resolves code-review capability hook', () => {
-    const content = fs.readFileSync(path.join(WORKFLOWS_DIR, 'execute-phase.md'), 'utf-8');
-    // eslint-disable-next-line local/no-unbounded-quantifier -- parses maintainer-authored workflow markdown, bounded prose, not adversarial input
+    // #5118: code_review_gate moved into the shared verification step that
+    // execute-phase (and verify-work) include — read the workflow with its steps.
+    const content = require('./helpers.cjs').readWorkflowCombined(path.join(WORKFLOWS_DIR, 'execute-phase.md'));
     const gateMatch = content.match(/<step name="code_review_gate"[^>]*>([\s\S]*?)<\/step>/);
     assert.ok(gateMatch, 'execute-phase.md missing code_review_gate step');
     const gateContent = gateMatch[1];

@@ -87,7 +87,8 @@ const WORKFLOW_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'code-review.md')
 const PRE_PASS_STEP_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'code-review', 'steps', 'structural-pre-pass.md');
 const FIXER_PATH = path.join(ROOT, 'agents', 'gsd-code-fixer.md');
 const REVIEWER_PATH = path.join(ROOT, 'agents', 'gsd-code-reviewer.md');
-const EXECUTE_PHASE_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase.md');
+// #5118: code_review_gate lives in the shared verification step execute-phase includes.
+const SHARED_VERIFY_STEP_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'verify-phase-goal.md');
 const DISPOSITION_STEP_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'code-review-disposition.md');
 
 // ---------------------------------------------------------------------------
@@ -2013,7 +2014,9 @@ describe('#3829 — code_review_gate per-finding disposition record', () => {
   test('docs-parity: code_review_gate actually reaches the extracted step', () => {
     // The step is only reachable because the parent says to read and execute it. Without this,
     // every other docs-parity assertion here could pass against a file nothing loads.
-    const parent = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf8');
+    // #5118: code_review_gate lives in the shared verification step execute-phase
+    // includes (execute-phase/steps/verify-phase-goal.md) — that step is the parent now.
+    const parent = fs.readFileSync(SHARED_VERIFY_STEP_PATH, 'utf8');
     assert.ok(
       /Read and execute\s+`gsd-core\/workflows\/execute-phase\/steps\/code-review-disposition\.md`/.test(parent),
       'code_review_gate must read and execute the disposition step'

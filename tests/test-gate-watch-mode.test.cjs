@@ -78,8 +78,12 @@ describe('#1857: test gates normalize to one-shot and bound with a timeout', () 
   });
 
   test('execute-phase.md delegates the regression gate to the extracted step (size-frozen file stays lean)', () => {
-    const c = read(EXECUTE_PHASE);
-    assert.match(c, /steps\/regression-gate\.md/, 'execute-phase.md must reference the extracted regression-gate step');
+    // #5118: the delegation now runs through the ONE shared verification step
+    // execute-phase includes (execute-phase/steps/verify-phase-goal.md), which
+    // reads regression-gate.md — execute-phase.md itself stays lean.
+    assert.match(read(EXECUTE_PHASE), /steps\/verify-phase-goal\.md/, 'execute-phase.md must include the shared verification step');
+    const shared = read(path.join(path.dirname(REGRESSION_GATE), 'verify-phase-goal.md'));
+    assert.match(shared, /steps\/regression-gate\.md/, 'the shared verification step must reference the extracted regression-gate step');
   });
 
   test('the gates share ONE normalizer — the helper is a single source of truth', () => {

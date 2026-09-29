@@ -353,8 +353,8 @@ are done. Blocked-and-incomplete must never be reported as finished.
 ```bash
 # #5118: the owner's answer — `status` and the bare command it routes to. A non-zero exit
 # (an out-of-set report status) is a hard error: surface it, never read it as "no status".
-VERIFY_STATUS=$(gsd_run query verification status "${PHASE_DIR}" --pick status) || { echo "verification status failed for ${PHASE_DIR} — see the error above" >&2; exit 1; }
-VERIFY_ROUTE=$(gsd_run query verification status "${PHASE_DIR}" --pick route) || { echo "verification status failed for ${PHASE_DIR} — see the error above" >&2; exit 1; }
+VERIFY_STATUS=$(gsd_run query verification status "${PHASE_DIR}" --pick status) || { echo "verification status failed — see the error above" >&2; exit 1; }
+VERIFY_ROUTE=$(gsd_run query verification status "${PHASE_DIR}" --pick route) || { echo "verification status failed — see the error above" >&2; exit 1; }
 # #3684: checkbox = marked-complete; report fields can claim a no-op write (#3685).
 ANALYZE=$(gsd_run query roadmap.analyze)
 if [[ "$ANALYZE" == @file:* ]]; then ANALYZE=$(cat "${ANALYZE#@file:}"); fi
@@ -387,12 +387,12 @@ later conditions once one matches:
      exclusively from on-disk `${PHASE_DIR}` artifacts (`*-SUMMARY.md`, `*-SECURITY.md` via `ls`) and
      independent `gsd_run` calls — nothing it reads is produced only by `execute_waves` or
      `checkpoint_handling` — so it tolerates having executed no plans in this run. From there the
-     run proceeds exactly as a normal one: `aggregate_results` → `code_review_gate` →
-     `close_parent_artifacts` → `regression_gate` → `verify_phase_goal` → `update_roadmap`. Never
-     skip `aggregate_results`, `code_review_gate` or `regression_gate` on this path — the manual
-     workaround this replaces skipped all three, and that gap is the reason this route exists
-     rather than telling users to spawn the verifier by hand. `verify_phase_goal` runs the shared
-     regeneration step (`execute-phase/steps/verify-phase-goal.md`).
+     run proceeds exactly as a normal one: `aggregate_results` → `verify_phase_goal` (the shared
+     verification step: `code_review_gate` → `regression_gate` → verifier) →
+     `close_parent_artifacts` → `update_roadmap`. Never skip `aggregate_results`,
+     `code_review_gate` or `regression_gate` on this path — the manual workaround this replaces
+     skipped all three, and that gap is the reason this route exists rather than telling users to
+     spawn the verifier by hand.
    - **`VERIFY_STATUS == passed` + `PHASE_MARKED` is `true`**: genuinely finished.
      Report "No matching incomplete plans" → exit, unchanged.
    - **`VERIFY_STATUS == passed` + `PHASE_MARKED` not `true`** — the run died between
@@ -972,7 +972,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    **Contribution dispatch:** inject every `kind == "contribution"` fragment per @gsd-core/references/loop-hook-dispatch.md (skip when none), before the gates below.
 
-   **Step dispatch:** dispatch every `kind == "step"` hook per @gsd-core/references/loop-hook-dispatch.md (skip when none) — not one shape of one. A step here is advisory: it never blocks wave completion. ⚠ **Validate `ref.command` in-context before any shell use** (third-party manifest input) — loop-hook-dispatch.md § `step`. **`ref.skill == "code-review"` (#3661):** the generic contract's bare skill dispatch carries no phase argument, but `code-review.md`'s `initialize` step requires one (`PHASE_ARG="${1}"`) or it reports "Phase not found" and exits — pass it explicitly, mirroring step `code_review_gate` below: `Skill(skill="gsd-code-review", args="${PHASE_NUMBER}")`.
+   **Step dispatch:** dispatch every `kind == "step"` hook per @gsd-core/references/loop-hook-dispatch.md (skip when none) — not one shape of one. A step here is advisory: it never blocks wave completion. ⚠ **Validate `ref.command` in-context before any shell use** (third-party manifest input) — loop-hook-dispatch.md § `step`. **`ref.skill == "code-review"` (#3661):** the generic contract's bare skill dispatch carries no phase argument, but `code-review.md`'s `initialize` step requires one (`PHASE_ARG="${1}"`) or it reports "Phase not found" and exits — pass it explicitly, mirroring step `code_review_gate` in `execute-phase/steps/verify-phase-goal.md`: `Skill(skill="gsd-code-review", args="${PHASE_NUMBER}")`.
 
    **For each active entry where `kind == "gate"`** (process in array order): read and execute `gsd-core/workflows/execute-phase/steps/wave-post-gate-hooks.md` for the full evaluation contract (check validation, `onError`, blocking semantics, mapper spawn). When all active gates are processed without a blocking halt, continue to step 5.8.
 
@@ -1153,67 +1153,15 @@ If an active secure-phase step hook exists AND SECURITY.md exists: check frontma
 If `section_manifest` is `null` or `"partial-wave"` is in its `included` list: read and execute `gsd-core/workflows/execute-phase/steps/partial-wave.md`. Otherwise skip — do not read the file.
 <!-- /gsd:section -->
 
-<step name="code_review_gate" required="true">
-**This step is REQUIRED to evaluate the capability hook.** When the code-review capability is active, auto-invoke code review on the phase's source changes. Advisory only — never blocks execution flow. Also dispatches advisory execute:post gate hooks (e.g. tdd.review-checkpoint).
-
-**Capability gate:**
-```bash
-EXECUTE_POST_HOOKS_JSON=${EXECUTE_POST_HOOKS_JSON:-$(gsd_run loop render-hooks execute:post --raw)}
-```
-
-Dispatch `kind == "step"` hooks per @gsd-core/references/loop-hook-dispatch.md. `ref.skill == "code-review"`:
-
-If no active code-review step hook exists: display "Code review skipped (code-review capability inactive)" and proceed to gate dispatch.
-
-**Invoke review:**
-```
-Skill(skill="gsd-${ref.skill}", args="${PHASE_NUMBER}")
-```
-
-**Report the review, and record what happened to each finding.** Read and execute `gsd-core/workflows/execute-phase/steps/code-review-disposition.md`.
-It parses REVIEW.md's frontmatter, states the per-severity counts, and writes
-`<NN>-REVIEW-DISPOSITION.md` — one row per finding, defaulting to `open` — so a triaged finding is
-distinguishable downstream from a forgotten one. It consumes `PHASE_DIR` and `PHASE_NUMBER`, and is
-advisory throughout: it never blocks.
-
-**Error handling:** If the Skill invocation fails or throws, catch the error, display "Code review encountered an error (non-blocking): {error}" and proceed to gate dispatch. Review failures must never block execution.
-
-**Execute:post gate hook dispatch.** After code review, dispatch all active gate hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "gate"`. ⚠ **Validate `check` before shell use** (third-party manifest input) — `loop-hook-dispatch.md` § `gate`. For each, run the form below, or — for a `predicate` gate (ADR-2008 / #2008) — `gsd_run check predicate --predicate '<predicate JSON>' --phase-number "${PHASE_NUMBER}" --raw`:
-
-```bash
-GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw)
-CHECK_EXIT=$?
-```
-
-**Gate evaluation** uses the same two-step contract as `execute:wave:post` above.
-
-**TDD review escalation (overrides the advisory default for the `tdd.review-checkpoint` gate only).** The tdd `execute:post` gate is declared `blocking: false`, so by the generic contract above it displays its `message`/table and continues. There is ONE documented exception (see `~/.claude/gsd-core/references/execute-mvp-tdd.md`): when `TDD_MODE=true` AND `GATE_RESULT.block == true` (one or more TDD plans miss a RED or GREEN gate commit; #4011 — no MVP condition), the end-of-phase TDD review escalates from advisory to **blocking under TDD** — refuse to mark the phase complete and present:
-
-```
-Phase blocked: {N} TDD plan(s) violate the RED→GREEN gate sequence under TDD.
-Resolve and re-run /gsd execute-phase, or override with /gsd execute-phase {phase} --force-mvp-gate to ship anyway.
-```
-
-(`--force-mvp-gate` is the documented, not-yet-implemented escape hatch.) Outside TDD mode, TDD-review violations remain advisory (table shown, execution continues).
-
-**Proceed rule:** If `TDD_MODE && GATE_RESULT.block == true` for `tdd.review-checkpoint`: STOP — do NOT proceed to `close_parent_artifacts`, `regression_gate`, `verify_phase_goal`, or `phase.complete`. Otherwise proceed normally.
-</step>
-
-<!-- gsd:section id="gap-closure-artifacts" when="state:gap-closure-phase" -->
-If `section_manifest` is `null` or `"gap-closure-artifacts"` is in its `included` list: read and execute `gsd-core/workflows/execute-phase/steps/gap-closure-artifacts.md`. Otherwise skip — do not read the file.
-<!-- /gsd:section -->
-
-<!-- gsd:section id="regression-gate" when="state:has-prior-phases" -->
-If `section_manifest` is `null` or `"regression-gate"` is in its `included` list: read and execute `gsd-core/workflows/execute-phase/steps/regression-gate.md`. Otherwise skip — do not read the file.
-<!-- /gsd:section -->
-
 <step name="verify_phase_goal">
 Verify phase achieved its GOAL, not just completed tasks: read and execute
-`gsd-core/workflows/execute-phase/steps/verify-phase-goal.md` — the ONE regeneration action
-(verifier dispatch, fingerprint, and the owner's `verification.status` read with stderr kept),
-shared with verify-work's stale arm (#5118). The gates it expects before it already ran above.
+`gsd-core/workflows/execute-phase/steps/verify-phase-goal.md` — the ONE verification action
+(`code_review_gate` with its TDD escalation, the manifest-gated `regression_gate`, the verifier
+dispatch, the fingerprint, and the owner's `verification.status` read with stderr kept), shared
+with verify-work (#5118). If it stopped (TDD block, regression abort, refused report), stop here.
 
-Route on `$STATUS`: if `passed`, proceed to update_roadmap. Otherwise keep the phase pending — present `$NEXT_ACTION` to the user and, when `$NEXT_COMMAND` is non-empty, show it as the next command to run. The query covers every case — including no report (`missing`) and no phase directory (`phase_dir_not_found`) — and a status outside the closed set is a hard error the shared step already halted on, so no per-status arm needs to be listed here.
+Route on `$STATUS`: if `passed`, proceed to `close_parent_artifacts` (the gap-closure section below)
+and then update_roadmap. Otherwise keep the phase pending — present `$NEXT_ACTION` to the user and, when `$NEXT_COMMAND` is non-empty, show it as the next command to run. The query covers every case — including no report (`missing`) and no phase directory (`phase_dir_not_found`) — and a status outside the closed set is a hard error the shared step already halted on, so no per-status arm needs to be listed here.
 
 **If human_needed:**
 
@@ -1311,6 +1259,15 @@ Also: `/gsd:verify-work {X} ${GSD_WS}` — manual testing first
 
 Gap closure cycle: `/gsd:plan-phase {X} --gaps ${GSD_WS}` reads VERIFICATION.md → creates gap plans with `gap_closure: true` → user runs `/gsd:execute-phase {X} --gaps-only ${GSD_WS}` → verifier re-runs.
 </step>
+
+<!-- gsd:section id="gap-closure-artifacts" when="state:gap-closure-phase" -->
+If `section_manifest` is `null` or `"gap-closure-artifacts"` is in its `included` list: read and execute `gsd-core/workflows/execute-phase/steps/gap-closure-artifacts.md`. Otherwise skip — do not read the file.
+<!-- /gsd:section -->
+
+<!-- gsd:section id="regression-gate" when="state:has-prior-phases" -->
+The `regression-gate` section is evaluated inside the shared verification step (`verify_phase_goal`
+above), which gates it on this id exactly as every section here is gated (#5118).
+<!-- /gsd:section -->
 
 <step name="update_roadmap">
 **Mark phase complete and update all tracking files:**

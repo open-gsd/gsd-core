@@ -663,13 +663,22 @@ fi
 ```
 
 If `PHASE_VERIFICATION_STATUS` is not `passed` and `VERIFICATION_ROUTE` is `execute-phase` (a
-`stale` or `missing` report, #4682/#5118), run the owner's one regeneration action here — this
-workflow never rewrites VERIFICATION.md itself (its only write is the canonicalization, #4663).
-Load its inputs from `gsd_run query init.execute-phase "{phase}"` (forward `${GSD_WS}`; dereference
-`@file:` as `initialize` does): `verifier_model`, `phase_req_ids`, `requirements_path`. Then read
-and execute `gsd-core/workflows/execute-phase/steps/verify-phase-goal.md`, re-read
-`verification.status` with the fence above, and continue at the completion predicate below. If
-the step halted, stop and present its error.
+`stale` or `missing` report, #4682/#5118), run the owner's route — the ONE verification action — here;
+this workflow never rewrites VERIFICATION.md itself (its only write is the canonicalization, #4663).
+Load the step's inputs through the SAME bundle execute-phase loads, then include the step:
+
+```bash
+EXECUTE_INIT=$(gsd_run query init.execute-phase "{phase}" ${GSD_WS:+--ws} ${GSD_WS:+"${GSD_WS##*[[:space:]]}"})
+if [[ "$EXECUTE_INIT" == @file:* ]]; then EXECUTE_INIT=$(cat "${EXECUTE_INIT#@file:}"); fi
+for _k in phase_dir phase_number verifier_model phase_req_ids requirements_path section_manifest response_language; do
+  printf '%s=%s\n' "$_k" "$(printf '%s' "$EXECUTE_INIT" | jq -c ".${_k}")"
+done
+PHASE_NUMBER=$(printf '%s' "$EXECUTE_INIT" | jq -r '.phase_number')
+```
+
+Read and execute `gsd-core/workflows/execute-phase/steps/verify-phase-goal.md`. If it stopped,
+stop and present its reason; otherwise its `STATUS` / `NEXT_COMMAND` are current — continue at the
+completion predicate below.
 
 Otherwise, check the shared UAT-plus-verification completion predicate before transition:
 

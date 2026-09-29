@@ -1,33 +1,83 @@
 Apply response_language to all user-facing prose — narration between tool calls, status updates, progress notes, and findings included; preserve code, paths, and identifiers.
 
 <step name="verify_phase_goal_regeneration">
-**The one regeneration action for a phase's VERIFICATION.md (#5118, ADR-5057 Phase 4).** The
-verification owner routes `stale` (and `missing`) to `execute-phase`; this file is what that route
-runs. It is included by BOTH surfaces that regenerate a report, so there is one route and one action:
+**The one verification action for a phase (#5118, ADR-5057 Phase 4).** The verification owner
+routes `stale` (and `missing`) to `execute-phase`; this file is what that route runs, and it is the
+ONLY place the verification sequence is written: the gates execute-phase runs before its verifier,
+the verifier dispatch, the covered-input fingerprint, and the owner's status read. Two workflows
+include it — `execute-phase.md` step `verify_phase_goal` and `verify-work.md` step
+`complete_session` (a report routed to `execute-phase`) — and both run every step below, in order,
+identically. There is no per-caller branch.
 
-- `execute-phase.md` step `verify_phase_goal` — reached after `aggregate_results` →
-  `code_review_gate` → `regression_gate` in that workflow's own step order. Skip the entry gates
-  below and start at **Dispatch the verifier**.
-- `verify-work.md` step `complete_session`, stale arm — the security gate already ran in
-  `complete_session`; run the entry gates below first.
-
-**Inputs.** `PHASE_DIR`, `PHASE_NUMBER`, the phase goal (ROADMAP.md), and from
-`gsd_run query init.execute-phase "${PHASE_NUMBER}"`: `verifier_model`, `phase_req_ids`,
-`requirements_path`; `CONTEXT_WINDOW` from `gsd_run query config-get context_window` (default
-`200000`).
-
-**Entry gates (verify-work's stale arm only).** The gates execute-phase runs before its verifier,
-in the same order — never skip one on this path:
-1. Code review: run the `code_review_gate` step of `gsd-core/workflows/execute-phase.md` exactly as
-   written (execute:post hooks; advisory, except the TDD escalation it documents).
-2. Regression gate: read and execute `gsd-core/workflows/execute-phase/steps/regression-gate.md`
-   (it skips itself when there are no prior phases).
-
-**Dispatch the verifier.** Verify the phase achieved its GOAL, not just completed tasks.
+**Inputs — one bundle for both callers.** The `gsd_run query init.execute-phase "${PHASE_NUMBER}"`
+bundle (execute-phase loaded it in `initialize`; verify-work loads the same query before including
+this file). From it: `phase_dir` (`PHASE_DIR`), `phase_number` (`PHASE_NUMBER`),
+`verifier_model`, `phase_req_ids`, `requirements_path`, `section_manifest`, `response_language`.
+The phase goal is the `**Goal**` of this phase in ROADMAP.md. Resolve the rest the same way:
 
 ```bash
+_GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; GSD_TOOLS="${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}"; _gsd_at() { for _p; do if [ -f "$_p" ]; then GSD_TOOLS="$_p"; return 0; fi; done; return 1; }; _gsd_id_ok() { case "$("$1" runtime-identity --raw 2>/dev/null || true)" in '{"packageName":"@opengsd/gsd-core"'*'}') return 0;; *) return 1;; esac; }; _gsd_homes() { _gsd_at "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/${_GSD_SHIM_NAME}" "${HERMES_HOME:-$HOME/.hermes}/gsd-core/bin/${_GSD_SHIM_NAME}" "${CURSOR_CONFIG_DIR:-$HOME/.cursor}/gsd-core/bin/${_GSD_SHIM_NAME}" "${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/${_GSD_SHIM_NAME}" "${GEMINI_CONFIG_DIR:-$HOME/.gemini}/gsd-core/bin/${_GSD_SHIM_NAME}" "${COPILOT_CONFIG_DIR:-$HOME/.copilot}/gsd-core/bin/${_GSD_SHIM_NAME}" "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}/gsd-core/bin/${_GSD_SHIM_NAME}" "${AUGMENT_CONFIG_DIR:-$HOME/.augment}/gsd-core/bin/${_GSD_SHIM_NAME}" "${TRAE_CONFIG_DIR:-$HOME/.trae}/gsd-core/bin/${_GSD_SHIM_NAME}" "${QWEN_CONFIG_DIR:-$HOME/.qwen}/gsd-core/bin/${_GSD_SHIM_NAME}" "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}/gsd-core/bin/${_GSD_SHIM_NAME}" "${CLINE_CONFIG_DIR:-$HOME/.cline}/gsd-core/bin/${_GSD_SHIM_NAME}" "${GROK_AGENTS_HOME:-$HOME/.agents}/gsd-core/bin/${_GSD_SHIM_NAME}" "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}/gsd-core/bin/${_GSD_SHIM_NAME}" "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}/gsd-core/bin/${_GSD_SHIM_NAME}" "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}/gsd-core/bin/${_GSD_SHIM_NAME}"; }; if _gsd_at "${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.codex/gsd-core/bin/${_GSD_SHIM_NAME}"; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif _gsd_homes; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif unset -f gsd_run; _G="$(command -v gsd_run)"; [ -n "$_G" ] && _gsd_id_ok "$_G"; then GSD_TOOLS="$_G"; gsd_run() { "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and no identity-proving gsd_run is on PATH. Run: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi; GSD_IDENTITY_STATUS=unverified; _gsd_id_ok gsd_run && GSD_IDENTITY_STATUS=ok; export GSD_IDENTITY_STATUS; [ "$GSD_IDENTITY_STATUS" = ok ] || echo "WARNING: \"$GSD_TOOLS\" did not prove it is @opengsd/gsd-core - it is either a different package or an @opengsd/gsd-core older than the runtime-identity verb. See docs/how-to/diagnose-a-foreign-gsd-tools.md" >&2; if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "${GSD_TOOLS:-}" ]; then printf "export PATH='%s':\"\$PATH\"\n" "${GSD_TOOLS%/*}" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true; fi
+TDD_MODE=${TDD_MODE:-$(gsd_run loop render-hooks execute:post --active-cap tdd)}
 VERIFIER_SKILLS=$(gsd_run query agent-skills gsd-verifier)
+CONTEXT_WINDOW=$(gsd_run query config-get context_window --raw 2>/dev/null || echo "200000")
 ```
+</step>
+
+<step name="code_review_gate" required="true">
+**This step is REQUIRED to evaluate the capability hook.** When the code-review capability is active, auto-invoke code review on the phase's source changes. Advisory only — never blocks execution flow. Also dispatches advisory execute:post gate hooks (e.g. tdd.review-checkpoint).
+
+**Capability gate:**
+```bash
+EXECUTE_POST_HOOKS_JSON=${EXECUTE_POST_HOOKS_JSON:-$(gsd_run loop render-hooks execute:post --raw)}
+```
+
+Dispatch `kind == "step"` hooks per @gsd-core/references/loop-hook-dispatch.md. `ref.skill == "code-review"`:
+
+If no active code-review step hook exists: display "Code review skipped (code-review capability inactive)" and proceed to gate dispatch.
+
+**Invoke review:**
+```
+Skill(skill="gsd-${ref.skill}", args="${PHASE_NUMBER}")
+```
+
+**Report the review, and record what happened to each finding.** Read and execute `gsd-core/workflows/execute-phase/steps/code-review-disposition.md`.
+It parses REVIEW.md's frontmatter, states the per-severity counts, and writes
+`<NN>-REVIEW-DISPOSITION.md` — one row per finding, defaulting to `open` — so a triaged finding is
+distinguishable downstream from a forgotten one. It consumes `PHASE_DIR` and `PHASE_NUMBER`, and is
+advisory throughout: it never blocks.
+
+**Error handling:** If the Skill invocation fails or throws, catch the error, display "Code review encountered an error (non-blocking): {error}" and proceed to gate dispatch. Review failures must never block execution.
+
+**Execute:post gate hook dispatch.** After code review, dispatch all active gate hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "gate"`. ⚠ **Validate `check` before shell use** (third-party manifest input) — `loop-hook-dispatch.md` § `gate`. For each, run the form below, or — for a `predicate` gate (ADR-2008 / #2008) — `gsd_run check predicate --predicate '<predicate JSON>' --phase-number "${PHASE_NUMBER}" --raw`:
+
+```bash
+GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw)
+CHECK_EXIT=$?
+```
+
+**Gate evaluation** uses the same two-step contract as the `execute:wave:post` gates (`execute-phase/steps/wave-post-gate-hooks.md`).
+
+**TDD review escalation (overrides the advisory default for the `tdd.review-checkpoint` gate only).** The tdd `execute:post` gate is declared `blocking: false`, so by the generic contract above it displays its `message`/table and continues. There is ONE documented exception (see `~/.claude/gsd-core/references/execute-mvp-tdd.md`): when `TDD_MODE=true` AND `GATE_RESULT.block == true` (one or more TDD plans miss a RED or GREEN gate commit; #4011 — no MVP condition), the end-of-phase TDD review escalates from advisory to **blocking under TDD** — refuse to mark the phase complete and present:
+
+```
+Phase blocked: {N} TDD plan(s) violate the RED→GREEN gate sequence under TDD.
+Resolve and re-run /gsd execute-phase, or override with /gsd execute-phase {phase} --force-mvp-gate to ship anyway.
+```
+
+(`--force-mvp-gate` is the documented, not-yet-implemented escape hatch.) Outside TDD mode, TDD-review violations remain advisory (table shown, execution continues).
+
+**Proceed rule:** If `TDD_MODE && GATE_RESULT.block == true` for `tdd.review-checkpoint`: STOP — do NOT proceed to `regression_gate`, the verifier, `close_parent_artifacts`, or `phase.complete`. Otherwise proceed normally.
+</step>
+
+<step name="regression_gate_dispatch">
+**Regression gate, gated by the section manifest (#2932).** If `section_manifest` is `null` or
+`"regression-gate"` is in its `included` list: read and execute
+`gsd-core/workflows/execute-phase/steps/regression-gate.md`. Otherwise skip — do not read the file.
+On `REGRESSION GATE ABORTED`, HALT — do not dispatch the verifier.
+</step>
+
+<step name="verifier_dispatch">
+**Dispatch the verifier.** Verify the phase achieved its GOAL, not just completed tasks.
 
 ```
 Agent(
@@ -39,6 +89,7 @@ Phase requirement IDs: {phase_req_ids}
 Check must_haves against actual codebase.
 Cross-reference requirement IDs from PLAN frontmatter against REQUIREMENTS.md — every ID MUST be accounted for.
 Create VERIFICATION.md.
+Use response_language {response_language} for all user-facing prose — narration between tool calls, status updates, progress notes, and findings included; preserve code and paths.
 
 <required_reading>
 Read these files before verification:
@@ -56,6 +107,8 @@ ${VERIFIER_SKILLS}",
   model="{verifier_model}"
 )
 ```
+
+(When `response_language` is unset, omit the `Use response_language …` line.)
 
 > **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling Agent() above, stop working on this task immediately. Do not read more files, edit code, or run tests related to this task while the subagent is active. Wait for the subagent to return its result. This prevents duplicate work, conflicting edits, and wasted context. Only resume when the subagent result is available. If the session ends abnormally (`turn_aborted`), reconcile via the `verification.status` query below — the session's terminal state is not evidence of failure (#4217).
 
@@ -85,6 +138,5 @@ Never silently proceed past a stale gate: if `STATUS` is still `stale` after the
 stop and present `$NEXT_ACTION` (#4623 covers what the digest hashes).
 
 Otherwise return to the including step with `STATUS`, `ROUTE`, `NEXT_ACTION` and `NEXT_COMMAND`
-set: execute-phase presents the per-status outcome; verify-work continues at its completion
-predicate.
+set.
 </step>

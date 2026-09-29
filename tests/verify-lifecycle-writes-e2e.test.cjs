@@ -259,11 +259,45 @@ const WORKFLOWS_5118 = path.join(ROOT_5118, 'gsd-core', 'workflows');
 const EXEC_STEPS_5118 = path.join(WORKFLOWS_5118, 'execute-phase', 'steps');
 const SHARED_STEP_5118 = 'verify-phase-goal.md';
 
+// The shared verification step's deterministic CLI sequence (review F, V46):
+// the step's own bash fences must run `verification.fingerprint` and then read
+// `verification.status` — asserted from the shipped file, then performed.
+// The verifier AGENT's report write is the one non-deterministic action in the
+// step; it is SIMULATED here as the stand-in for the LLM (clearly labeled
+// below): it copies the real fingerprint command's output verbatim, exactly as
+// agents/gsd-verifier.md instructs. The fingerprint and the status read are the
+// real CLI calls. Code review / regression gates are skills with no fixture
+// effect and are not simulated.
+function runSharedVerificationStep(projectDir, phaseDir, declared) {
+  const step = bashFenceText(fs.readFileSync(path.join(EXEC_STEPS_5118, SHARED_STEP_5118), 'utf-8'));
+  const fpAt = step.search(/verification[. ]fingerprint\b/);
+  const readAt = step.search(/verification[. ]status\b/);
+  assert.ok(fpAt !== -1 && readAt !== -1 && fpAt < readAt, 'the shared step fingerprints, then reads the owner');
+
+  // REAL: the fingerprint command the verifier runs over the covered set.
+  const fp = runGsdTools(['verification', 'fingerprint', phaseDir, ...declared], projectDir);
+  assert.ok(fp.success, `fingerprint must succeed: ${fp.error}`);
+  const parsed = JSON.parse(fp.output);
+  // SIMULATED (stand-in for the gsd-verifier LLM agent): write the report from
+  // the command's own output, verbatim.
+  fs.writeFileSync(
+    path.join(phaseDir, '01-VERIFICATION.md'),
+    `---\nstatus: passed\ncovered_files:\n${parsed.covered_files.map((f) => `  - ${f}`).join('\n')}\ncovered_digest: "${parsed.covered_digest}"\n---\n`,
+  );
+  // REAL: the step's read of the regenerated verdict (stderr kept, exit 0).
+  const read = runGsdTools(['verification', 'status', phaseDir], projectDir);
+  assert.ok(read.success, `the step's status read must succeed: ${read.error}`);
+  return JSON.parse(read.output);
+}
+
 // One verify-work cycle: the CLI verbs verify-work's complete_session runs
-// after fingerprint time, in order (40-design.md §3.4). The human_needed
-// canonicalization branch is not reached by these fixtures (every report is
-// written `passed`), so it is not simulated.
-function verifyWorkCycle(projectDir, phaseDir) {
+// after fingerprint time, in order (40-design.md §3.4), including its read of
+// the owner's answer. `followRoute` (the declared covered set) makes the cycle
+// do what complete_session instructs when the owner routes to execute-phase:
+// run the shared step. The route is ALWAYS read first — no cycle regenerates
+// before reading it. The human_needed canonicalization branch is not reached by
+// these fixtures (every report is written `passed`), so it is not simulated.
+function verifyWorkCycle(projectDir, phaseDir, { followRoute = null } = {}) {
   const { runNode } = require('./helpers/process-seam.cjs');
   const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
   const gsdTools = path.join(ROOT_5118, 'gsd-core', 'bin', 'gsd-tools.cjs');
@@ -284,10 +318,25 @@ function verifyWorkCycle(projectDir, phaseDir) {
     projectDir,
   );
   assert.ok(audit.success, `append-audit must succeed: ${audit.error}`);
+  // complete_session reads the owner's answer — status AND route — first.
+  const owner = runGsdTools(['verification', 'status', phaseDir], projectDir);
+  assert.ok(owner.success, `verification.status must answer: ${owner.error}`);
+  const read = JSON.parse(owner.output);
+  let regenerated = null;
+  if (followRoute && read.status !== 'passed' && read.route === 'execute-phase') {
+    regenerated = runSharedVerificationStep(projectDir, phaseDir, followRoute);
+  }
   const gate = runGsdTools(['phase', 'uat-passed', '01', '--require-verification'], projectDir);
   assert.ok(gate.success, `uat-passed must run: ${gate.error}`);
   const verdict = JSON.parse(gate.output);
-  return { status: statusOf(projectDir, phaseDir), uatPassed: verdict.passed, blockers: verdict.blockers };
+  return {
+    statusRead: read.status,
+    routeRead: read.route,
+    regenerated,
+    status: statusOf(projectDir, phaseDir),
+    uatPassed: verdict.passed,
+    blockers: verdict.blockers,
+  };
 }
 
 function bashFenceText(markdown) {
@@ -321,6 +370,37 @@ describe('#5118 C3: one stale route — the regeneration step is ONE file includ
     );
   });
 
+  // Review D: the shared step is the ONLY place the verification sequence is
+  // written. Through the step-include resolver: every verification-gate step
+  // file (code-review disposition, regression gate + its runner) is reached by
+  // BOTH workflows, and by neither once the shared step is taken away — so no
+  // workflow holds a gate include of its own outside the step.
+  test('V42b: both workflows reach the verification gates ONLY through the shared step (step-include resolver)', (t) => {
+    const GATE_FILES = ['code-review-disposition.md', 'regression-gate.md', 'regression-gate-run.md'];
+    const withoutShared = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'gsd-5118-steps-'));
+    t.after(() => cleanup(withoutShared));
+    for (const f of fs.readdirSync(EXEC_STEPS_5118)) {
+      if (f.endsWith('.md') && f !== SHARED_STEP_5118) fs.copyFileSync(path.join(EXEC_STEPS_5118, f), path.join(withoutShared, f));
+    }
+    for (const wf of ['execute-phase.md', 'verify-work.md']) {
+      const text = fs.readFileSync(path.join(WORKFLOWS_5118, wf), 'utf-8');
+      const reachedWith = findOrphanStepFiles(text, EXEC_STEPS_5118);
+      for (const gate of GATE_FILES) {
+        assert.equal(reachedWith.includes(gate), false, `${wf} must reach ${gate} (through the shared step)`);
+      }
+      const reachedWithout = findOrphanStepFiles(text, withoutShared);
+      for (const gate of GATE_FILES) {
+        assert.equal(reachedWithout.includes(gate), true, `${wf} reaches ${gate} OUTSIDE the shared step`);
+      }
+    }
+    // The gate STEPS themselves live in the shared file, not in either workflow.
+    for (const wf of ['execute-phase.md', 'verify-work.md']) {
+      const text = fs.readFileSync(path.join(WORKFLOWS_5118, wf), 'utf-8');
+      assert.equal(/<step name="code_review_gate"/.test(text), false, `${wf} holds its own code_review_gate step`);
+    }
+    assert.ok(/<step name="code_review_gate"/.test(fs.readFileSync(path.join(EXEC_STEPS_5118, SHARED_STEP_5118), 'utf-8')));
+  });
+
   test('V43: the second reading of stale is deleted — no stale-reverification step, and the inventory manifest does not list it', () => {
     assert.ok(!fs.existsSync(path.join(EXEC_STEPS_5118, 'stale-reverification.md')), 'the second reading of stale is deleted');
     const manifest = fs.readFileSync(path.join(ROOT_5118, 'docs', 'INVENTORY-MANIFEST.json'), 'utf-8');
@@ -348,48 +428,38 @@ describe('#5118 C1 (T15 extension): a green phase run through verify-work twice 
   });
 });
 
-describe('#5118 C2: stale → the one route → the shared step regenerates → verify-work twice ends passed', () => {
-  // The regeneration the route names, at the CLI boundary it owns: the
-  // verifier re-runs `verification.fingerprint` over the covered set and the
-  // report is rewritten from that command's own output (gsd-verifier.md
-  // "copy the command's covered_files and covered_digest output verbatim").
-  function regenerateThroughTheRoute(projectDir, phaseDir, declared) {
-    const step = fs.readFileSync(path.join(EXEC_STEPS_5118, SHARED_STEP_5118), 'utf-8');
-    assert.match(bashFenceText(step), /verification[. ]fingerprint\b/, 'the shared step must re-fingerprint (it is the regenerating command)');
-    const fp = runGsdTools(['verification', 'fingerprint', phaseDir, ...declared], projectDir);
-    assert.ok(fp.success, `fingerprint must succeed: ${fp.error}`);
-    const parsed = JSON.parse(fp.output);
-    fs.writeFileSync(
-      path.join(phaseDir, '01-VERIFICATION.md'),
-      `---\nstatus: passed\ncovered_files:\n${parsed.covered_files.map((f) => `  - ${f}`).join('\n')}\ncovered_digest: "${parsed.covered_digest}"\n---\n`,
-    );
-  }
-
-  test('V46: covered source drift reads stale with route execute-phase; after the route regenerates, two cycles end passed', (t) => {
+describe('#5118 C2 (wired surface): stale → verify-work reads the route → follows it through the shared step → passed', () => {
+  test('V46: cycle 1 reads stale/execute-phase and follows the route; cycle 2 reads passed and does nothing; both end passed', (t) => {
     const { projectDir, phaseDir, declared } = buildFingerprintedPhase(t, { withImpl: true });
     assert.strictEqual(statusOf(projectDir, phaseDir), 'passed', 'sanity: freshly fingerprinted phase is passed');
     fs.writeFileSync(path.join(projectDir, 'src', 'impl.ts'), 'export const x = 2;\n');
     assert.strictEqual(statusOf(projectDir, phaseDir), 'stale');
-
-    const route = runGsdTools(['verification', 'status', phaseDir, '--pick', 'route'], projectDir);
-    assert.ok(route.success, `--pick route must resolve on every result: ${route.error}`);
-    assert.strictEqual(route.output, 'execute-phase', 'stale has one route');
     const next = runGsdTools(['verification', 'status', phaseDir, '--pick', 'next_command'], projectDir);
-    assert.strictEqual(next.output, '/gsd-execute-phase 01');
+    assert.strictEqual(next.output, '/gsd-execute-phase 01', 'the one stale route, projected');
 
-    regenerateThroughTheRoute(projectDir, phaseDir, declared);
-    for (const cycle of [1, 2]) {
-      const result = verifyWorkCycle(projectDir, phaseDir);
-      assert.strictEqual(result.status, 'passed', `cycle ${cycle} after the route`);
-      assert.strictEqual(result.uatPassed, true, `cycle ${cycle}: blockers ${JSON.stringify(result.blockers)}`);
-    }
+    const first = verifyWorkCycle(projectDir, phaseDir, { followRoute: declared });
+    assert.strictEqual(first.statusRead, 'stale', 'cycle 1 read the owner BEFORE any regeneration');
+    assert.strictEqual(first.routeRead, 'execute-phase', 'stale has one route');
+    assert.ok(first.regenerated, 'cycle 1 followed the route through the shared step');
+    assert.strictEqual(first.regenerated.status, 'passed', 'the step\'s own status read sees the regenerated verdict');
+    assert.strictEqual(first.status, 'passed');
+    assert.strictEqual(first.uatPassed, true, `cycle 1: blockers ${JSON.stringify(first.blockers)}`);
+
+    const second = verifyWorkCycle(projectDir, phaseDir, { followRoute: declared });
+    assert.strictEqual(second.statusRead, 'passed');
+    assert.strictEqual(second.routeRead, '');
+    assert.strictEqual(second.regenerated, null, 'a passed report routes nowhere — nothing regenerates');
+    assert.strictEqual(second.status, 'passed');
+    assert.strictEqual(second.uatPassed, true, `cycle 2: blockers ${JSON.stringify(second.blockers)}`);
   });
 
-  test('V47 CONTROL: the same stale fixture through two verify-work cycles WITHOUT the route stays stale (#4887 Defect 1)', (t) => {
+  test('V47 CONTROL: the same stale fixture through two verify-work cycles NOT following the route stays stale (#4887 Defect 1)', (t) => {
     const { projectDir, phaseDir } = buildFingerprintedPhase(t, { withImpl: true });
     fs.writeFileSync(path.join(projectDir, 'src', 'impl.ts'), 'export const x = 2;\n');
     for (const cycle of [1, 2]) {
       const result = verifyWorkCycle(projectDir, phaseDir);
+      assert.strictEqual(result.routeRead, 'execute-phase', `cycle ${cycle}: the route is there to follow`);
+      assert.strictEqual(result.regenerated, null);
       assert.strictEqual(result.status, 'stale', `cycle ${cycle}: verify-work alone cannot clear stale`);
       assert.strictEqual(result.uatPassed, false);
       assert.ok(result.blockers.some((b) => String(b).includes('stale')), `blockers name stale: ${JSON.stringify(result.blockers)}`);

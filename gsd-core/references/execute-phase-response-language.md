@@ -2,7 +2,7 @@
 
 **If `response_language` is set:** User-facing orchestrator output (questions, narration, report-template prose) in `{response_language}`; technical terms, code, file paths, and subagent prompts stay in English. Pass `response_language: {value}` into every spawned subagent prompt so any user-facing output they produce stays in the configured language.
 
-**The `gsd-verifier` subagent has no workflow file of its own (#2529):** the `verify_phase_goal` step reaches it by dispatch, not by reading a workflow, so there is no file in which to place a directive — the dispatch prompt is the only place its coverage can live. That prompt MUST carry this line verbatim, immediately after `Create VERIFICATION.md.`:
+**The `gsd-verifier` subagent has no workflow file of its own (#2529):** the shared verification step (`workflows/execute-phase/steps/verify-phase-goal.md`, included by execute-phase's `verify_phase_goal` and by verify-work, #5118) reaches it by dispatch, not by reading a workflow, so there is no file in which to place a directive — the dispatch prompt is the only place its coverage can live. That prompt MUST carry this line verbatim, immediately after `Create VERIFICATION.md.` (the shared step's prompt carries it inline, so both callers inject it):
 
 `Use response_language {response_language} for all user-facing prose — narration between tool calls, status updates, progress notes, and findings included; preserve code and paths.`
 

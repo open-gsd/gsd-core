@@ -385,11 +385,6 @@
     "message": "Double quote to prevent globbing and word splitting."
   },
   {
-    "file": "gsd-core/workflows/execute-phase.md",
-    "code": "2086",
-    "message": "Double quote to prevent globbing and word splitting."
-  },
-  {
     "file": "gsd-core/workflows/execute-phase/detail/elaboration.md",
     "code": "2086",
     "message": "Double quote to prevent globbing and word splitting."
@@ -411,6 +406,11 @@
   },
   {
     "file": "gsd-core/workflows/execute-phase/steps/gap-closure-artifacts.md",
+    "code": "2086",
+    "message": "Double quote to prevent globbing and word splitting."
+  },
+  {
+    "file": "gsd-core/workflows/execute-phase/steps/verify-phase-goal.md",
     "code": "2086",
     "message": "Double quote to prevent globbing and word splitting."
   },

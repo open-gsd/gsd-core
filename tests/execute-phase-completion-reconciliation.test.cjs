@@ -190,7 +190,14 @@ describe('execute-phase completion reconciliation (#4217 — split A of #3754)',
   // ── Row 6: the Codex wait rule is bounded and linked ─────────────────────
   describe('row 6 — the Codex orchestrator wait rule is bound to the reconciliation', () => {
     test('every CODEX RUNTIME wait rule references the reconciliation/surveillance surface', () => {
-      const content = readWorkflow();
+      // #5118: the verify-dispatch wait rule moved, with the verifier dispatch,
+      // into the shared step execute-phase includes
+      // (execute-phase/steps/verify-phase-goal.md). The #4217 contract binds
+      // every wait rule the orchestrator follows — read the host workflow plus
+      // that step.
+      const content = readWorkflow() + '\n' + fs.readFileSync(
+        path.join(path.dirname(FRAGMENT_PATH), 'verify-phase-goal.md'), 'utf-8',
+      );
       const blocks = [...content.matchAll(/ORCHESTRATOR RULE — CODEX RUNTIME([\s\S]{0,700}?)(?=\n\s*\n)/g)];
       assert.ok(blocks.length >= 2, 'both CODEX RUNTIME wait rules must exist (dispatch + verify dispatch)');
       for (const [, body] of blocks) {

@@ -465,6 +465,7 @@ Skill(skill="gsd-code-review", args="${PHASE_NUM} --fix --auto")
 After execute, read canonical verification:
 
 ```bash
+VERIFY_ERROR=""  # reset every loop iteration — a prior phase's refusal must not leak into this one
 VERIFY_STATUS=$(gsd_run query verification.status "${PHASE_DIR}" --pick status) || VERIFY_ERROR=1
 ```
 
@@ -523,6 +524,7 @@ Skill(skill="gsd-execute-phase", args="${PHASE_NUM} --no-transition")
 
 Re-read verification status:
 ```bash
+VERIFY_ERROR=""  # reset every loop iteration — a prior phase's refusal must not leak into this one
 VERIFY_STATUS=$(gsd_run query verification.status "${PHASE_DIR}" --pick status) || VERIFY_ERROR=1
 ```
 

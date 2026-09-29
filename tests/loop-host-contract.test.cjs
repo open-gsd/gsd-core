@@ -42,6 +42,9 @@ const CONTRACT_PATH = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'loop-host-contr
 function makeTempWorkflowsDir(files) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lhc-test-'));
   for (const [name, content] of Object.entries(files)) {
+    // Auxiliary hosts may live in a step subdirectory (#5118:
+    // execute-phase/steps/verify-phase-goal.md).
+    fs.mkdirSync(path.dirname(path.join(tmpDir, name)), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, name), content, 'utf8');
   }
   return tmpDir;
@@ -88,6 +91,13 @@ function makeValidWorkflowFiles() {
       ['SUMMARY.md'], ['PLAN.md'],
       'gsd-executor gsd-verifier',
     ),
+    // #5118: the shared verification step hosts execute:post step/gate dispatch.
+    'execute-phase/steps/verify-phase-goal.md': [
+      'EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)',
+      'For each active entry where `kind == "step"`: dispatch.',
+      'For each active entry where `kind == "gate"`: evaluate.',
+      '',
+    ].join('\n'),
     'verify-work.md': makeWorkflow('verify', ['verify:pre', 'verify:post'], ['orchestrator'], ['UAT.md'], ['SUMMARY.md']),
     'ship.md': makeWorkflow('ship', ['ship:pre', 'ship:post'], ['orchestrator'], [], ['UAT.md']),
   };
