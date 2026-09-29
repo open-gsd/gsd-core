@@ -456,7 +456,10 @@ const COVERED = {
   },
   'core-utils': {
     cjs: 'gsd-core/bin/lib/core-utils.cjs',
-    minScore: 75,  // measured 77.52% (2026-06-14, issue #1187); floor = 77 - 2
+    // measured 77.52% (2026-06-14, issue #1187); floor = 77 - 2.
+    // CI job 109435636183 (PR #5114, #5105): measured 81.13%. Floor =
+    // floor(81.13) - 1 = 80.
+    minScore: 80,
   },
   // planning-inspect / plan-document / planning-command-router: net-new modules
   // added by #2790. Registered here so the Stryker gate stops SKIPPING them
