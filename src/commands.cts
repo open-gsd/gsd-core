@@ -648,12 +648,10 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
       // input feeding a real read → realpath family (ADR-4650 decision 6).
       const agentPath = assertWithinRoot(`${agentType}.md`, agentsDirEff, 'agent file');
       const agentContent = fs.readFileSync(agentPath, 'utf8');
-      // #5105: effort-sync writes `effort:` through EFFORT_SYNC_FENCE (allowPreamble),
-      // so a synced agent file whose frontmatter sits behind a preamble is still
-      // synced. Reading with the byte-0-only default here would silently report
-      // effortEffectiveSource: 'resolved' for a file effort-sync DID update —
-      // read with the same fence so resolve-execution and effort-sync agree.
-      const fmSpanEff = agentFrontmatterSpan(agentContent, EFFORT_SYNC_FENCE);
+      // Byte-0 read: the runtime only honors a frontmatter block that opens at
+      // byte 0, so a block behind a preamble is not frontmatter to the loader
+      // and this reports what the installed agent will actually run at (#5105).
+      const fmSpanEff = agentFrontmatterSpan(agentContent);
       if (fmSpanEff) {
         const effortLine = /^effort:[ \t]*(.+?)[ \t]*$/m.exec(fmSpanEff.body);
         if (effortLine) {

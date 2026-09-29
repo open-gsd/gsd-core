@@ -169,20 +169,19 @@ describe('#3534 resolve-execution reports resolved AND effective effort', () => 
     assert.equal(out.effort_effective_source, 'frontmatter');
   });
 
-  test('#5105: a preambled agent file (effort-sync\'s own fence) is still read as frontmatter', (t) => {
-    // effort-sync writes `effort:` through EFFORT_SYNC_FENCE (allowPreamble: true,
-    // #3706) — a block behind a preamble is still the one it edits. Before the
-    // fix, cmdResolveExecution read the installed file with the byte-0-only
-    // default, so a synced file whose frontmatter sits behind a preamble
-    // silently reported effort_effective_source: 'resolved' instead of the
-    // value effort-sync actually wrote there.
+  test('#5105: a preambled agent file is not frontmatter to the runtime, so its block is not reported', (t) => {
+    // effort_effective is what the installed agent will actually run at, and the
+    // runtime only honors a frontmatter block at byte 0. A block behind a
+    // preamble (which effort-sync's allowPreamble fence still edits) is not
+    // frontmatter to the loader, so resolve-execution reports the resolved
+    // cascade value with source 'resolved' — never the preamble block's `low`.
     const dir = projectWithEffort('high');
     t.after(() => cleanup(dir));
     const home = agentHome(t, 'Preamble line\n\n---\nname: gsd-executor\neffort: low\ndescription: x\n---\nBody.\n');
     const out = resolveExecution(dir, 'gsd-executor', [], { CLAUDE_CONFIG_DIR: home });
     assert.equal(out.effort, 'high', 'resolved cascade value unchanged');
-    assert.equal(out.effort_effective, 'low', 'the preambled frontmatter value');
-    assert.equal(out.effort_effective_source, 'frontmatter');
+    assert.equal(out.effort_effective, 'high', 'echoes the resolved value, not the preamble block');
+    assert.equal(out.effort_effective_source, 'resolved');
   });
 
   test('10a: frontmatter-less agent file degrades to resolved', (t) => {
