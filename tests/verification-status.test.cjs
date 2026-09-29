@@ -4317,3 +4317,622 @@ describe('fingerprint input set is closed and idempotent (#5095, ADR-5057 Phase 
     });
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// #5118 / ADR-5057 Phase 4: `VerificationStatus` is a closed enum with ONE
+// owner (src/verification.cts), a status outside it is a hard error, `stale`
+// has one route, and a missing phase directory reads `phase_dir_not_found`.
+// Rows follow .gsd/phase/fix-5118-verification-status-enum/50-test-matrix.md
+// (V1–V37, V48–V50). Every row is red against `next` @ 582cb382ea except the
+// ones the matrix marks as regression locks / controls.
+// Kept in this file, not a new one: lint-test-file-count caps verification.cjs.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const { createTempProject } = require('./helpers.cjs');
+
+const WRITER_5118 = ['passed', 'gaps_found', 'human_needed'];
+const MEMBERS_5118 = ['passed', 'gaps_found', 'human_needed', 'stale', 'missing', 'unparseable', 'phase_dir_not_found'];
+
+/** Late-bound read of the owner module so a not-yet-exported name reads as undefined, not a load-time crash. */
+function owner5118() {
+  return require('../gsd-core/bin/lib/verification.cjs');
+}
+
+/**
+ * Write `<tmp>/<dirName>/01-VERIFICATION.md` carrying `status: <status>` and
+ * register cleanup on the test context.
+ */
+function writeReport5118(t, status, { dirName = '01-foo', extraFm = '' } = {}) {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5118-'));
+  t.after(() => cleanup(parent));
+  const dir = path.join(parent, dirName);
+  fs.mkdirSync(dir);
+  const file = path.join(dir, '01-VERIFICATION.md');
+  fs.writeFileSync(file, `---\nstatus: ${status}\n${extraFm}---\n\n# Verification\n`);
+  return { parent, dir, file };
+}
+
+/** Assert `fn` throws the owner's typed out-of-set error and return it. */
+function expectOutOfSet5118(fn, { raw, file } = {}) {
+  const { VerificationStatusError } = owner5118();
+  assert.equal(typeof VerificationStatusError, 'function', 'VerificationStatusError must be exported by the owner');
+  let caught = null;
+  assert.throws(fn, (err) => {
+    caught = err;
+    return true;
+  }, 'an out-of-set status must be a hard error, not a routed value');
+  assert.ok(caught instanceof VerificationStatusError, `expected VerificationStatusError, got ${caught && caught.name}`);
+  assert.ok(caught instanceof Error);
+  assert.equal(caught.code, 'ERR_VERIFICATION_STATUS_OUT_OF_SET');
+  assert.equal(caught.reason, 'verification_status_invalid');
+  assert.deepEqual([...caught.accepted].sort(), [...WRITER_5118].sort(), 'the error carries the accepted values (#4817)');
+  if (raw !== undefined) assert.deepEqual(caught.rawStatus, raw);
+  if (file !== undefined) assert.equal(path.resolve(caught.file), path.resolve(file));
+  return caught;
+}
+
+describe('#5118 A: the closed VerificationStatus enum and its one routing table', () => {
+  test('V1: VERIFICATION_STATUS is frozen and holds exactly the seven members — no `unknown`', () => {
+    const { VERIFICATION_STATUS } = owner5118();
+    assert.ok(VERIFICATION_STATUS && typeof VERIFICATION_STATUS === 'object', 'VERIFICATION_STATUS must be exported');
+    assert.ok(Object.isFrozen(VERIFICATION_STATUS));
+    assert.deepEqual(Object.values(VERIFICATION_STATUS).sort(), [...MEMBERS_5118].sort());
+    assert.equal(Object.values(VERIFICATION_STATUS).includes('unknown'), false);
+  });
+
+  test('V2: VERIFIER_STATUSES is a frozen Set holding exactly the writer set, a subset of the enum', () => {
+    const { VERIFIER_STATUSES: writerSet, VERIFICATION_STATUS } = owner5118();
+    assert.ok(writerSet instanceof Set, 'VERIFIER_STATUSES must be a Set (the writer contract), not an array');
+    assert.ok(Object.isFrozen(writerSet));
+    assert.deepEqual([...writerSet].sort(), [...WRITER_5118].sort());
+    const members = new Set(Object.values(VERIFICATION_STATUS || {}));
+    for (const s of writerSet) {
+      assert.ok(members.has(s), `writer status ${JSON.stringify(s)} must be a VERIFICATION_STATUS member`);
+    }
+  });
+
+  test('V3: VERIFICATION_ROUTES is keyed by exactly the enum (7 keys, no 8th), carries no per-entry status, and names one stale route', () => {
+    const { VERIFICATION_ROUTES: routes } = owner5118();
+    assert.ok(routes && typeof routes === 'object', 'VERIFICATION_ROUTES must be exported');
+    assert.ok(Object.isFrozen(routes));
+    assert.deepEqual(Object.keys(routes).sort(), [...MEMBERS_5118].sort());
+    const commands = new Set(['', 'execute-phase', 'plan-phase', 'verify-work']);
+    for (const [status, route] of Object.entries(routes)) {
+      assert.equal(Object.prototype.hasOwnProperty.call(route, 'status'), false, `${status}: the key is the status`);
+      assert.ok(commands.has(route.command), `${status}: command ${JSON.stringify(route.command)} is not a routable command`);
+      assert.equal(typeof route.next_action, 'string', `${status}: next_action`);
+    }
+    assert.equal(routes.stale.command, 'execute-phase', 'the single stale route regenerates through execute-phase');
+    assert.equal(routes.missing.command, 'execute-phase');
+    assert.equal(routes.gaps_found.command, 'plan-phase');
+    assert.equal(routes.gaps_found.tail, ' --gaps', 'the gaps tail is table data, not a hard-coded return');
+    assert.equal(routes.human_needed.command, 'verify-work');
+    assert.equal(routes.passed.command, '');
+    assert.equal(routes.unparseable.command, '');
+    assert.equal(routes.phase_dir_not_found.command, '', 'a missing phase dir is a usage error, never execute-phase');
+  });
+
+  test('V4: isVerificationStatus accepts every member and nothing else', () => {
+    const { isVerificationStatus } = owner5118();
+    assert.equal(typeof isVerificationStatus, 'function', 'isVerificationStatus must be exported');
+    for (const m of MEMBERS_5118) assert.equal(isVerificationStatus(m), true, m);
+    for (const bad of ['unknown', 'verified', 'Passed', ' passed', '', 5, true, null, undefined, ['passed'], {}]) {
+      assert.equal(isVerificationStatus(bad), false, JSON.stringify(bad));
+    }
+  });
+
+  test('V5: assertVerificationStatus returns for a member and throws a TypeError naming the call site otherwise', () => {
+    const { assertVerificationStatus } = owner5118();
+    assert.equal(typeof assertVerificationStatus, 'function', 'assertVerificationStatus must be exported');
+    assert.doesNotThrow(() => assertVerificationStatus('stale', 'V5'));
+    assert.throws(() => assertVerificationStatus('verified', 'V5-site'), (err) => err instanceof TypeError && err.message.includes('V5-site'));
+  });
+
+  test('V6: property — isVerificationStatus(s) holds exactly when s is an enum value', () => {
+    const fc = require('./helpers/fast-check-setup.cjs');
+    const { isVerificationStatus, VERIFICATION_STATUS } = owner5118();
+    assert.equal(typeof isVerificationStatus, 'function', 'isVerificationStatus must be exported');
+    const values = Object.values(VERIFICATION_STATUS || {});
+    fc.assert(fc.property(fc.oneof(fc.string(), fc.constantFrom(...MEMBERS_5118)), (s) => {
+      assert.equal(isVerificationStatus(s), values.includes(s), JSON.stringify(s));
+    }), { numRuns: 300 });
+  });
+
+  // The writer contract "imports" the enum the only way a prose agent can:
+  // its template's status tokens are parity-locked to VERIFIER_STATUSES.
+  function templateStatusTokens(text) {
+    const tokens = new Set();
+    for (const line of text.split(/\r?\n/)) {
+      const m = /^status:\s+([a-z_]+(?:\s*\|\s*[a-z_]+)+)\s*$/.exec(line);
+      if (m) for (const token of m[1].split('|')) tokens.add(token.trim());
+    }
+    return tokens;
+  }
+
+  function statusValueBullets(text) {
+    const lines = text.split(/\r?\n/);
+    const start = lines.findIndex((line) => line.startsWith('**Status values (overall'));
+    const tokens = new Set();
+    if (start === -1) return tokens;
+    for (let i = start + 1; i < lines.length; i += 1) {
+      const m = /^- `([a-z_]+)` — /.exec(lines[i]);
+      if (!m) break;
+      tokens.add(m[1]);
+    }
+    return tokens;
+  }
+
+  test('V7: gsd-verifier.md and templates/verification-report.md spell exactly VERIFIER_STATUSES', () => {
+    const writer = [...owner5118().VERIFIER_STATUSES].sort();
+    const agent = fs.readFileSync(path.join(__dirname, '..', 'agents', 'gsd-verifier.md'), 'utf-8');
+    const template = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'templates', 'verification-report.md'), 'utf-8');
+    assert.deepEqual([...templateStatusTokens(agent)].sort(), writer, 'agent <output> frontmatter template');
+    assert.deepEqual([...templateStatusTokens(template)].sort(), writer, 'report template frontmatter line');
+    assert.deepEqual([...statusValueBullets(template)].sort(), writer, 'report template "Status values" bullets');
+  });
+
+  test('V7c CONTROL: the parity extractor sees an extra template token (not a pass-always check)', () => {
+    const template = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'templates', 'verification-report.md'), 'utf-8');
+    const drifted = template.replace(/^status: passed \| gaps_found \| human_needed$/m, 'status: passed | gaps_found | human_needed | verified');
+    assert.notEqual(drifted, template, 'control precondition: the template line was rewritten');
+    assert.notDeepEqual([...templateStatusTokens(drifted)].sort(), [...WRITER_5118].sort());
+  });
+});
+
+describe('#5118 B: an out-of-set report status is a hard error in the reader', () => {
+  test('V8: status: verified (#4817) throws VerificationStatusError naming the value, the file and the accepted set', (t) => {
+    const { dir, file } = writeReport5118(t, 'verified');
+    const err = expectOutOfSet5118(() => readVerificationStatus(dir, NO_GIT_TIMES), { raw: 'verified', file });
+    for (const token of ['verified', ...WRITER_5118]) {
+      assert.ok(err.message.includes(token), `the message must name ${token}: ${err.message}`);
+    }
+  });
+
+  test('V9: status: Passed is out of set — exact match, no case folding', (t) => {
+    const { dir } = writeReport5118(t, 'Passed');
+    expectOutOfSet5118(() => readVerificationStatus(dir, NO_GIT_TIMES), { raw: 'Passed' });
+  });
+
+  test('V10: a reader-only member written into a report is out of set (stale, missing, unparseable, phase_dir_not_found, unknown)', (t) => {
+    for (const status of ['stale', 'missing', 'unparseable', 'phase_dir_not_found', 'unknown']) {
+      const { dir } = writeReport5118(t, status);
+      expectOutOfSet5118(() => readVerificationStatus(dir, NO_GIT_TIMES), { raw: status });
+    }
+  });
+
+  test('V11: a non-string status (5, true, a list) is out of set, never folded to missing', (t) => {
+    for (const scalar of ['5', 'true', '[passed]']) {
+      const { dir } = writeReport5118(t, scalar);
+      expectOutOfSet5118(() => readVerificationStatus(dir, NO_GIT_TIMES));
+    }
+  });
+
+  test('V12: boundary around a member — passe (limit-1) throws, passed (limit) routes, passedx (limit+1) throws', (t) => {
+    const short = writeReport5118(t, 'passe');
+    expectOutOfSet5118(() => readVerificationStatus(short.dir, NO_GIT_TIMES), { raw: 'passe' });
+    const exact = writeReport5118(t, 'passed');
+    const result = readVerificationStatus(exact.dir, NO_GIT_TIMES);
+    assert.equal(result.status, 'passed');
+    assert.equal(result.route, '');
+    const long = writeReport5118(t, 'passedx');
+    expectOutOfSet5118(() => readVerificationStatus(long.dir, NO_GIT_TIMES), { raw: 'passedx' });
+  });
+
+  test('V13: the hard error is not masked by staleness — out-of-set status plus a drifted fingerprint throws, never reads stale', (t) => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5118-masked-'));
+    t.after(() => cleanup(parent));
+    const dir = path.join(parent, '01-foo');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'impl.txt'), 'original');
+    const digest = computeCoveredDigest(dir, ['impl.txt']);
+    const report = (status) => `---\nstatus: ${status}\ncovered_files:\n  - impl.txt\ncovered_digest: "${digest}"\n---\n`;
+    fs.writeFileSync(path.join(dir, 'impl.txt'), 'drifted');
+
+    fs.writeFileSync(path.join(dir, '01-VERIFICATION.md'), report('passed'));
+    assert.equal(readVerificationStatus(dir, NO_GIT_TIMES).status, 'stale', 'control: this drift stales a passed report');
+
+    fs.writeFileSync(path.join(dir, '01-VERIFICATION.md'), report('verified'));
+    expectOutOfSet5118(() => readVerificationStatus(dir, NO_GIT_TIMES), { raw: 'verified' });
+  });
+
+  test('V14: regression lock — an empty status and an absent status key still read missing', (t) => {
+    const empty = writeReport5118(t, '""');
+    assert.equal(readVerificationStatus(empty.dir, NO_GIT_TIMES).status, 'missing');
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5118-nokey-'));
+    t.after(() => cleanup(parent));
+    const dir = path.join(parent, '01-foo');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, '01-VERIFICATION.md'), '---\nphase: 01-foo\n---\n');
+    assert.equal(readVerificationStatus(dir, NO_GIT_TIMES).status, 'missing');
+  });
+
+  test('V15: every result carries `route`, projected from the same table entry as next_command', (t) => {
+    const { VERIFICATION_ROUTES: routes } = owner5118();
+    assert.ok(routes, 'VERIFICATION_ROUTES must be exported');
+    const cases = [];
+
+    for (const status of WRITER_5118) {
+      const { dir } = writeReport5118(t, status);
+      cases.push({ status, result: readVerificationStatus(dir, NO_GIT_TIMES) });
+    }
+
+    const stale = writeReport5118(t, 'passed');
+    const summaryPath = path.join(stale.dir, '01-01-SUMMARY.md');
+    fs.writeFileSync(summaryPath, '# Summary\n');
+    setMtime(stale.file, '2026-01-01T00:00:00.000Z');
+    setMtime(summaryPath, '2026-01-01T00:01:00.000Z');
+    cases.push({ status: 'stale', result: readVerificationStatus(stale.dir, NO_GIT_TIMES) });
+
+    const emptyParent = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5118-route-missing-'));
+    t.after(() => cleanup(emptyParent));
+    const emptyDir = path.join(emptyParent, '01-foo');
+    fs.mkdirSync(emptyDir);
+    cases.push({ status: 'missing', result: readVerificationStatus(emptyDir, NO_GIT_TIMES) });
+
+    const unparseable = writeReport5118(t, '"passed');
+    cases.push({ status: 'unparseable', result: readVerificationStatus(unparseable.dir, NO_GIT_TIMES) });
+
+    const expectedNext = {
+      passed: '',
+      gaps_found: '/gsd-plan-phase 01 --gaps',
+      human_needed: '/gsd-verify-work 01',
+      stale: '/gsd-execute-phase 01',
+      missing: '/gsd-execute-phase 01',
+      unparseable: '',
+    };
+    for (const { status, result } of cases) {
+      assert.equal(result.status, status);
+      assert.ok(Object.prototype.hasOwnProperty.call(result, 'route'), `${status}: every result carries route`);
+      assert.equal(result.route, routes[status].command, `${status}: route is the table's command`);
+      assert.equal(result.next_command, expectedNext[status], `${status}: next_command`);
+    }
+  });
+
+  test('V16: property — every non-member status string throws; every writer member routes through the one table', (t) => {
+    const fc = require('./helpers/fast-check-setup.cjs');
+    const { VerificationStatusError, VERIFICATION_ROUTES: routes } = owner5118();
+    assert.equal(typeof VerificationStatusError, 'function', 'VerificationStatusError must be exported');
+    assert.ok(routes, 'VERIFICATION_ROUTES must be exported');
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5118-prop-'));
+    t.after(() => cleanup(parent));
+    const dir = path.join(parent, '01-foo');
+    fs.mkdirSync(dir);
+    const file = path.join(dir, '01-VERIFICATION.md');
+
+    // YAML `null` is "no value", not an out-of-set value — excluded by construction.
+    const nonMember = fc.stringMatching(/^[A-Za-z0-9_]{1,24}$/)
+      .filter((s) => !WRITER_5118.includes(s) && !/^(null|Null|NULL)$/.test(s));
+    fc.assert(fc.property(nonMember, (s) => {
+      fs.writeFileSync(file, `---\nstatus: ${s}\n---\n`);
+      assert.throws(() => readVerificationStatus(dir, NO_GIT_TIMES), VerificationStatusError, JSON.stringify(s));
+    }), { numRuns: 150 });
+
+    for (const m of WRITER_5118) {
+      fs.writeFileSync(file, `---\nstatus: ${m}\n---\n`);
+      const result = readVerificationStatus(dir, NO_GIT_TIMES);
+      assert.equal(result.status, m);
+      assert.equal(result.route, routes[m].command, m);
+    }
+  });
+
+  test('V17: isPhaseComplete keeps its no-throw contract — an out-of-set report degrades to an unreadable scope', (t) => {
+    const { dir } = writeReport5118(t, 'verified');
+    let completion = null;
+    assert.doesNotThrow(() => {
+      completion = isPhaseComplete(dir, NO_GIT_TIMES);
+    });
+    assert.equal(completion.scope, 'unreadable', 'the owner answers "could not read", never a confident verdict');
+    assert.equal(completion.value.complete, false);
+  });
+});
+
+describe('#5118 C: a missing phase directory reads phase_dir_not_found and routes to a usage error', () => {
+  const { runGsdTools } = require('./helpers.cjs');
+
+  function assertDirNotFound(result, label) {
+    assert.equal(result.status, 'phase_dir_not_found', label);
+    assert.equal(result.route, '', `${label}: route`);
+    assert.equal(result.next_command, '', `${label}: never /gsd-execute-phase`);
+    assert.equal(typeof result.message, 'string', `${label}: message`);
+    assert.ok(result.message.length > 0, `${label}: the usage error is named`);
+    assert.equal(Object.prototype.hasOwnProperty.call(result, 'error'), false, `${label}: an error field would declare DEGRADED`);
+    assert.doesNotMatch(result.next_action, /execute-phase/, `${label}: next_action`);
+  }
+
+  function tmpParent(t, tag) {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), `gsd-5118-${tag}-`));
+    t.after(() => cleanup(parent));
+    return parent;
+  }
+
+  test('V18: ENOENT — a nonexistent path', (t) => {
+    const parent = tmpParent(t, 'enoent');
+    assertDirNotFound(readVerificationStatus(path.join(parent, '03-gone'), NO_GIT_TIMES), 'ENOENT');
+  });
+
+  test('V19: ENOTDIR — a path whose parent is a regular file', (t) => {
+    const parent = tmpParent(t, 'enotdir');
+    fs.writeFileSync(path.join(parent, 'a-file'), 'x');
+    assertDirNotFound(readVerificationStatus(path.join(parent, 'a-file', '01-foo'), NO_GIT_TIMES), 'ENOTDIR');
+  });
+
+  test('V20: a regular file where the phase directory should be', (t) => {
+    const parent = tmpParent(t, 'isfile');
+    const notADir = path.join(parent, '01-foo');
+    fs.writeFileSync(notADir, '---\nstatus: passed\n---\n');
+    assertDirNotFound(readVerificationStatus(notADir, NO_GIT_TIMES), 'regular file');
+  });
+
+  test('V21: a dangling symlink is not found; a symlink to a real phase dir reads normally', {
+    skip: process.platform === 'win32' ? 'symlink creation needs elevated privilege on Windows' : false,
+  }, (t) => {
+    const parent = tmpParent(t, 'symlink');
+    const dangling = path.join(parent, '01-dangling');
+    fs.symlinkSync(path.join(parent, 'nowhere'), dangling);
+    assertDirNotFound(readVerificationStatus(dangling, NO_GIT_TIMES), 'dangling symlink');
+
+    const target = path.join(parent, 'store');
+    fs.mkdirSync(target);
+    fs.writeFileSync(path.join(target, '01-VERIFICATION.md'), '---\nstatus: passed\n---\n');
+    const linked = path.join(parent, '01-foo');
+    fs.symlinkSync(target, linked, 'dir');
+    assert.equal(readVerificationStatus(linked, NO_GIT_TIMES).status, 'passed');
+  });
+
+  test('V22: a containment-error FsLike (code-less Error) stays missing — never phase_dir_not_found', () => {
+    const containment = () => {
+      throw new Error('planning-inspect: path escapes planning root');
+    };
+    const fsLike = { readdirSync: containment, readFileSync: containment, statSync: containment };
+    const result = readVerificationStatus(path.join(os.tmpdir(), 'gsd-5118-contained', '01-foo'), { fs: fsLike, ...NO_GIT_TIMES });
+    assert.equal(result.status, 'missing');
+  });
+
+  test('V23: EACCES on an existing directory (FsLike with isDirectory) stays missing with an unreadable completion scope', () => {
+    const fsLike = {
+      statSync: () => ({ mtimeMs: 0, isFile: () => false, isDirectory: () => true }),
+      readdirSync: () => {
+        throw Object.assign(new Error('EACCES: permission denied (injected)'), { code: 'EACCES' });
+      },
+      readFileSync: () => {
+        throw Object.assign(new Error('EACCES: permission denied (injected)'), { code: 'EACCES' });
+      },
+    };
+    const phaseDir = path.join(os.tmpdir(), 'gsd-5118-eacces', '01-foo');
+    assert.equal(readVerificationStatus(phaseDir, { fs: fsLike, ...NO_GIT_TIMES }).status, 'missing');
+    assert.equal(isPhaseComplete(phaseDir, { fs: fsLike, ...NO_GIT_TIMES }).scope, 'unreadable');
+  });
+
+  test('V24: boundary with V18 — an existing empty directory is missing and routes to execute-phase', (t) => {
+    const parent = tmpParent(t, 'empty');
+    const dir = path.join(parent, '01-foo');
+    fs.mkdirSync(dir);
+    const result = readVerificationStatus(dir, NO_GIT_TIMES);
+    assert.equal(result.status, 'missing');
+    assert.equal(result.route, 'execute-phase');
+    assert.equal(result.next_command, '/gsd-execute-phase 01');
+  });
+
+  test('V25: CLI — exit 0 under both exit contracts, --pick status prints phase_dir_not_found, no error field', (t) => {
+    const parent = tmpParent(t, 'cli');
+    const gone = path.join(parent, '.planning', 'phases', '03-gone');
+    for (const contract of ['v1', 'v2']) {
+      const res = runGsdTools(['verification', 'status', gone], parent, { GSD_EXIT_CONTRACT: contract });
+      assert.equal(res.exitCode, 0, `${contract}: a usage answer is not a degraded run: ${res.error}`);
+      const json = JSON.parse(res.output);
+      assertDirNotFound(json, `CLI ${contract}`);
+    }
+    const picked = runGsdTools(['verification', 'status', gone, '--pick', 'status'], parent);
+    assert.equal(picked.output, 'phase_dir_not_found');
+  });
+
+  test('V26: #4987 repro — an archived phase: the old path is not found, the milestones path reads passed', (t) => {
+    const projectDir = createTempProject('gsd-5118-archived-');
+    t.after(() => cleanup(projectDir));
+    const archived = path.join(projectDir, '.planning', 'milestones', 'v1.0-phases', '03-x');
+    fs.mkdirSync(archived, { recursive: true });
+    fs.writeFileSync(path.join(archived, '03-VERIFICATION.md'), '---\nstatus: passed\n---\n');
+    const old = runGsdTools(['verification', 'status', path.join(projectDir, '.planning', 'phases', '03-x'), '--pick', 'status'], projectDir);
+    assert.equal(old.output, 'phase_dir_not_found');
+    const moved = runGsdTools(['verification', 'status', archived, '--pick', 'status'], projectDir);
+    assert.equal(moved.output, 'passed');
+  });
+
+  test('V27: verification.resolve-file distinguishes a nonexistent directory from an existing empty one', (t) => {
+    const parent = tmpParent(t, 'resolve');
+    const empty = path.join(parent, '01-foo');
+    fs.mkdirSync(empty);
+    const gone = path.join(parent, '02-gone');
+    const a = runGsdTools(['query', 'verification.resolve-file', empty], parent);
+    const b = runGsdTools(['query', 'verification.resolve-file', gone], parent);
+    assert.equal(a.exitCode, 0, a.error);
+    assert.equal(b.exitCode, 0, b.error);
+    assert.notDeepEqual(JSON.parse(b.output), JSON.parse(a.output), 'a missing directory must not read as "exists, no report"');
+  });
+
+  test('V28: init progress — a roadmap-only phase (no directory) reads phase_dir_not_found with no next command', (t) => {
+    const projectDir = createTempProject('gsd-5118-roadmap-only-');
+    t.after(() => cleanup(projectDir));
+    writeSurfaceFixture5118(projectDir, 'passed');
+    const res = runGsdTools(['init', 'progress'], projectDir);
+    assert.equal(res.exitCode, 0, res.error);
+    const phase2 = JSON.parse(res.output).phases.find((p) => String(p.number).replace(/^0+/, '') === '2');
+    assert.ok(phase2, 'fixture precondition: ROADMAP phase 2 is listed');
+    assert.equal(phase2.verification_status, 'phase_dir_not_found');
+    assert.equal(phase2.verification_next_command, '');
+    assert.equal(phase2.verification_route, '');
+  });
+});
+
+/**
+ * ROADMAP (phases 1 and 2, progress table), STATE, PROJECT, config, and a
+ * phase-01 directory with one plan, one summary and a report carrying
+ * `status: <status>`. Phase 2 has no directory (roadmap-only).
+ */
+function writeSurfaceFixture5118(projectDir, status) {
+  const planningDir = path.join(projectDir, '.planning');
+  const phaseDir = path.join(planningDir, 'phases', '01-foundation');
+  fs.mkdirSync(phaseDir, { recursive: true });
+  fs.writeFileSync(path.join(planningDir, 'PROJECT.md'), '# Project\n\nA fixture project.\n');
+  fs.writeFileSync(path.join(planningDir, 'config.json'), '{}\n');
+  fs.writeFileSync(path.join(planningDir, 'ROADMAP.md'), [
+    '# Roadmap', '',
+    '- [ ] Phase 1: Foundation', '- [ ] Phase 2: API', '',
+    '### Phase 1: Foundation', '**Goal:** Setup', '**Plans:** 1 plans', '',
+    '### Phase 2: API', '**Goal:** Build API', '',
+    '## Progress', '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '|-------|----------------|--------|-----------|',
+    '| 01. Foundation | 0/1 | Not started | - |',
+    '| 02. API | 0/1 | Not started | - |', '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(planningDir, 'STATE.md'), [
+    '# State', '',
+    '**Current Phase:** 01', '**Current Phase Name:** Foundation', '**Status:** In progress',
+    '**Current Plan:** 01-01', '**Last Activity:** 2025-01-01', '**Last Activity Description:** Working on phase 1', '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+  fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+  const reportPath = path.join(phaseDir, '01-VERIFICATION.md');
+  fs.writeFileSync(reportPath, `---\nstatus: ${status}\n---\n\n# Verification\n`);
+  return { phaseDir, reportPath };
+}
+
+/** The structured `--json-errors` envelope: the last stderr line that parses as `{ ok: false }`. */
+function errorEnvelope5118(stderr) {
+  const lines = String(stderr || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    try {
+      const parsed = JSON.parse(lines[i]);
+      if (parsed && parsed.ok === false) return parsed;
+    } catch {
+      // not the envelope line
+    }
+  }
+  return null;
+}
+
+describe('#5118 D: every CLI surface translates the out-of-set error once, centrally', () => {
+  const { runGsdTools } = require('./helpers.cjs');
+
+  function project(t, status) {
+    const projectDir = createTempProject('gsd-5118-surface-');
+    t.after(() => cleanup(projectDir));
+    return { projectDir, ...writeSurfaceFixture5118(projectDir, status) };
+  }
+
+  const SURFACES = [
+    { row: 'V29', name: 'verification status', argv: (phaseDir) => ['verification', 'status', phaseDir] },
+    { row: 'V30', name: 'phase uat-passed', argv: () => ['phase', 'uat-passed', '1', '--require-verification'] },
+    { row: 'V32', name: 'roadmap analyze', argv: () => ['roadmap', 'analyze'] },
+    { row: 'V33', name: 'state sync', argv: () => ['state', 'sync'] },
+    { row: 'V34', name: 'planning inspect', argv: () => ['planning', 'inspect'] },
+    { row: 'V35', name: 'init progress', argv: () => ['init', 'progress'] },
+    { row: 'V36', name: 'smart-entry', argv: () => ['smart-entry'] },
+  ];
+
+  for (const { row, name, argv } of SURFACES) {
+    test(`${row}: ${name} exits non-zero with reason verification_status_invalid (control: the same fixture with passed exits 0)`, (t) => {
+      const control = project(t, 'passed');
+      const ok = runGsdTools(['--json-errors', ...argv(control.phaseDir)], control.projectDir);
+      assert.equal(ok.exitCode, 0, `control: ${name} must succeed on an in-set report: ${ok.error}`);
+
+      const bad = project(t, 'verified');
+      const res = runGsdTools(['--json-errors', ...argv(bad.phaseDir)], bad.projectDir);
+      assert.notEqual(res.exitCode, 0, `${name} must not answer on an out-of-set report: ${res.output}`);
+      const envelope = errorEnvelope5118(res.error);
+      assert.ok(envelope, `${name}: expected a --json-errors envelope on stderr, got: ${res.error}`);
+      assert.equal(envelope.reason, 'verification_status_invalid');
+    });
+  }
+
+  test('V29 (message): verification status names the offending value and the accepted set, with nothing on stdout', (t) => {
+    const bad = project(t, 'verified');
+    const res = runGsdTools(['--json-errors', 'verification', 'status', bad.phaseDir], bad.projectDir);
+    assert.notEqual(res.exitCode, 0);
+    assert.equal(res.output, '', '--pick callers must see no status, and the non-zero exit');
+    const envelope = errorEnvelope5118(res.error);
+    assert.ok(envelope, res.error);
+    for (const token of ['verified', ...WRITER_5118]) {
+      assert.ok(envelope.message.includes(token), `message must name ${token} (#4817): ${envelope.message}`);
+    }
+  });
+
+  test('V31: phase complete exits with verification_status_invalid, releases the planning lock, and completes once the report is fixed', (t) => {
+    const bad = project(t, 'verified');
+    const res = runGsdTools(['--json-errors', 'phase', 'complete', '1'], bad.projectDir);
+    assert.notEqual(res.exitCode, 0);
+    const envelope = errorEnvelope5118(res.error);
+    assert.ok(envelope, res.error);
+    assert.equal(envelope.reason, 'verification_status_invalid');
+    assert.equal(fs.existsSync(path.join(bad.projectDir, '.planning', '.lock')), false, 'the planning lock must be released on throw');
+
+    fs.writeFileSync(bad.reportPath, '---\nstatus: passed\n---\n\n# Verification\n');
+    const retry = runGsdTools(['phase', 'complete', '1'], bad.projectDir);
+    assert.equal(retry.exitCode, 0, `a corrected report must complete without waiting on a stale lock: ${retry.error}`);
+  });
+
+  test('V37: validate health survives the out-of-set report and reports the file as a finding', (t) => {
+    const bad = project(t, 'verified');
+    const res = runGsdTools(['validate', 'health'], bad.projectDir);
+    assert.equal(res.exitCode, 0, `health must not crash on the defect it diagnoses: ${res.error}`);
+    const report = JSON.parse(res.output);
+    const findings = [...(report.errors || []), ...(report.warnings || []), ...(report.info || [])];
+    assert.ok(
+      findings.some((f) => JSON.stringify(f).includes('01-VERIFICATION.md')),
+      `a finding must name the offending report: ${JSON.stringify(findings)}`,
+    );
+  });
+});
+
+describe('#5118 G: workflows surface verification-status errors instead of reading them as "no result"', () => {
+  const { readWorkflowCombined } = require('./helpers.cjs');
+  const WORKFLOWS = path.join(__dirname, '..', 'gsd-core', 'workflows');
+
+  function bashFenceLines(text) {
+    const lines = text.split(/\r?\n/);
+    const out = [];
+    for (const block of scanFencedBlocks(lines)) {
+      if (block.closeLineIdx === -1) continue;
+      if (!['bash', 'sh'].includes((block.infoString || '').trim())) continue;
+      for (let i = block.openLineIdx + 1; i < block.closeLineIdx; i += 1) out.push(lines[i]);
+    }
+    return out;
+  }
+
+  const STATUS_READ_RE = /gsd_run\s+(?:query\s+)?(?:verification[. ]status|phase\s+uat-passed)\b/;
+
+  test('V48: every verification.status / uat-passed read keeps stderr and never coerces a failure to "no result" (§R3)', () => {
+    for (const rel of [
+      'verify-work.md',
+      'autonomous.md',
+      'progress.md',
+      'ship.md',
+      path.join('quick', 'steps', 'quick-verification.md'),
+      path.join('quick-batch', 'steps', 'verification-wave.md'),
+      'execute-phase.md',
+    ]) {
+      const reads = bashFenceLines(readWorkflowCombined(path.join(WORKFLOWS, rel))).filter((line) => STATUS_READ_RE.test(line));
+      assert.ok(reads.length > 0, `${rel}: expected at least one status read in a bash fence (non-vacuous)`);
+      for (const line of reads) {
+        assert.doesNotMatch(line, /2>\s*\/dev\/null/, `${rel}: stderr discarded: ${line.trim()}`);
+        assert.doesNotMatch(line, /\|\|\s*true\b/, `${rel}: failure coerced to success: ${line.trim()}`);
+      }
+    }
+  });
+
+  test('V49: progress.md reads the resolved phase directory, not a hard-coded .planning/phases literal (§R4)', () => {
+    const lines = bashFenceLines(readWorkflowCombined(path.join(WORKFLOWS, 'progress.md')));
+    const literal = lines.filter((line) => /^\s*PHASE_DIR=["']?\.planning\/phases\//.test(line));
+    assert.deepEqual(literal, [], 'workstream projects do not live under .planning/phases');
+  });
+
+  test('V50: gsd-verifier runs the write-time self-check — verification.status on its own report, stderr kept (§2.3b, §R6)', () => {
+    const agent = fs.readFileSync(path.join(__dirname, '..', 'agents', 'gsd-verifier.md'), 'utf-8');
+    const checks = bashFenceLines(agent).filter((line) => /gsd_run\s+query\s+verification\.status\b/.test(line));
+    assert.ok(checks.length > 0, 'the verifier <output> must run verification.status after writing the report');
+    for (const line of checks) {
+      assert.doesNotMatch(line, /2>\s*\/dev\/null/, `the self-check must surface the hard error: ${line.trim()}`);
+    }
+  });
+});

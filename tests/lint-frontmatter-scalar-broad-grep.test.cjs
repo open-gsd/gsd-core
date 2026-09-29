@@ -172,3 +172,81 @@ describe('frontmatter-scalar-broad-grep lint: main() end-to-end wiring', () => {
     assert.equal(result.exitCode, 0, `expected exit 0, got ${result.exitCode}: ${result.stderr}`);
   });
 });
+
+// ─── #5118: a raw read of a VERIFICATION report's `status` is red ──────────
+//
+// ADR-5057 Phase 4 / 40-design.md §R7: the verification status has ONE owner
+// (`gsd_run query verification.status`). A workflow that reads a
+// VERIFICATION report's frontmatter `status` itself — awk, sed or grep, scoped
+// to the frontmatter or not — bypasses the owner's enum, staleness check and
+// routing (transition.md's awk read, W15). The old fix-forward this lint used
+// to recommend (sed-scoped `grep -m1 "^status:"`) is exactly such a read, so
+// it is red too. Rows V51–V55 of
+// .gsd/phase/fix-5118-verification-status-enum/50-test-matrix.md; V56 is the
+// live-tree test above (`scan()` finds zero offenders).
+
+describe('#5118: verification-status-raw-read (positive controls)', () => {
+  const lintModule = require(LINT_SCRIPT);
+
+  function rawReads(lines) {
+    assert.equal(
+      typeof lintModule.findRawVerificationStatusReadsInBlock, 'function',
+      'findRawVerificationStatusReadsInBlock must be exported',
+    );
+    return lintModule.findRawVerificationStatusReadsInBlock(lines);
+  }
+
+  const TRANSITION_AWK = [
+    "VERIFY_STATUS=$(awk 'FNR==1&&/^---$/{in_fm=1;next}in_fm&&/^---$/{exit}in_fm&&/^status: /{print $2}' \\",
+    '  "$VERIFICATION_FILE" 2>/dev/null | head -1)',
+  ];
+
+  test('V51: the transition.md awk read, split across a backslash continuation, is one finding', () => {
+    const findings = rawReads(TRANSITION_AWK);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].rule, 'verification-status-raw-read');
+  });
+
+  test('V52: the old fix-forward (sed-scoped, grep -m1) on a VERIFICATION report is red', () => {
+    const findings = rawReads([
+      "STATUS=$(sed -n '/^---$/,/^---$/p' \"${PHASE_DIR}\"/*-VERIFICATION.md | grep -m1 \"^status:\" | cut -d: -f2 | tr -d ' ')",
+    ]);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].rule, 'verification-status-raw-read');
+  });
+
+  test('V53: a head -1 guarded grep of a VERIFICATION path is red', () => {
+    const findings = rawReads(['S=$(grep "^status:" "$VERIFICATION_PATH" | head -1)']);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].rule, 'verification-status-raw-read');
+  });
+
+  test('V54 LOOKALIKES: the owner query, a UAT status read, and a SECURITY status read are not flagged', () => {
+    assert.deepEqual(rawReads(['STATUS=$(gsd_run query verification.status "$PHASE_DIR" --pick status)']), []);
+    assert.deepEqual(rawReads(["U=$(awk '/^status: /{print $2}' \"$UAT_FILE\")"]), []);
+    assert.deepEqual(rawReads([
+      "S=$(sed -n '/^---$/,/^---$/p' \"${PHASE_DIR}/${P}-SECURITY.md\" | grep -m1 \"^status:\")",
+    ]), []);
+  });
+
+  test('V55: scan() reports the rule on a fixture workflow, and main() exits 1', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5118-raw-read-'));
+    t.after(() => cleanup(tmpDir));
+    const workflowsDir = path.join(tmpDir, 'gsd-core', 'workflows');
+    fs.mkdirSync(workflowsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(workflowsDir, 'transition.md'),
+      ['# Transition', '```bash', ...TRANSITION_AWK, '```'].join('\n'),
+    );
+
+    const offenders = scan([workflowsDir]);
+    assert.ok(
+      offenders.some((o) => o.rule === 'verification-status-raw-read'),
+      `expected a verification-status-raw-read offender, got: ${JSON.stringify(offenders)}`,
+    );
+
+    const scriptCopy = copyScriptWithDeps(ROOT, tmpDir, LINT_SCRIPT_REL);
+    const result = runNode([scriptCopy]);
+    assert.equal(result.exitCode, 1, `expected exit 1, got ${result.exitCode}`);
+  });
+});

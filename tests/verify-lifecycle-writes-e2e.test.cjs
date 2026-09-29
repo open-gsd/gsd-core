@@ -77,7 +77,10 @@ function validationContent(rows, date = '2026-01-01') {
 // Build a phase directory with UAT/SECURITY/VALIDATION, fingerprint it via the
 // real `verification.fingerprint` command declaring all three, and write the
 // v3 report. Returns { projectDir, phaseDir, uatPath, securityPath, validationPath }.
-function buildFingerprintedPhase(t) {
+// #5118: `withImpl` also declares a covered implementation file (`src/impl.ts`)
+// so a covered-source drift can stale the report, and `declared` is returned so
+// the stale route's regeneration re-fingerprints the same set.
+function buildFingerprintedPhase(t, { withImpl = false } = {}) {
   const projectDir = createTempGitProject();
   t.after(() => cleanup(projectDir));
   const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
@@ -98,6 +101,11 @@ function buildFingerprintedPhase(t) {
     '.planning/phases/01-foo/01-SECURITY.md',
     '.planning/phases/01-foo/01-VALIDATION.md',
   ];
+  if (withImpl) {
+    fs.mkdirSync(path.join(projectDir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'src', 'impl.ts'), 'export const x = 1;\n');
+    declared.push('src/impl.ts');
+  }
   const fp = runGsdTools(['verification', 'fingerprint', phaseDir, ...declared], projectDir);
   assert.ok(fp.success, `fingerprint must succeed: ${fp.error}`);
   const parsed = JSON.parse(fp.output);
@@ -110,7 +118,7 @@ function buildFingerprintedPhase(t) {
   execFileSync('git', ['add', '-A'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
   execFileSync('git', ['commit', '-q', '-m', 'seed fingerprinted phase'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
 
-  return { projectDir, phaseDir, uatPath, securityPath, validationPath, covered_digest: parsed.covered_digest };
+  return { projectDir, phaseDir, uatPath, securityPath, validationPath, covered_digest: parsed.covered_digest, declared };
 }
 
 function statusOf(projectDir, phaseDir) {
@@ -236,5 +244,155 @@ describe('T16: a genuine change still publishes and stales the report (invariant
     assert.strictEqual(JSON.parse(uatResult.output).changed, true, 'a real row flip is material');
 
     assert.strictEqual(statusOf(projectDir, phaseDir), 'stale', 'a material UAT change must publish and stale the report');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// #5118 (Phase 4 of #5056): `stale` has ONE route, that route's step is the
+// one regeneration action shared by execute-phase and verify-work, and the
+// two-cycle ratchet holds. Rows V41–V47 of
+// .gsd/phase/fix-5118-verification-status-enum/50-test-matrix.md.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const ROOT_5118 = path.resolve(__dirname, '..');
+const WORKFLOWS_5118 = path.join(ROOT_5118, 'gsd-core', 'workflows');
+const EXEC_STEPS_5118 = path.join(WORKFLOWS_5118, 'execute-phase', 'steps');
+const SHARED_STEP_5118 = 'verify-phase-goal.md';
+
+// One verify-work cycle: the CLI verbs verify-work's complete_session runs
+// after fingerprint time, in order (40-design.md §3.4). The human_needed
+// canonicalization branch is not reached by these fixtures (every report is
+// written `passed`), so it is not simulated.
+function verifyWorkCycle(projectDir, phaseDir) {
+  const { runNode } = require('./helpers/process-seam.cjs');
+  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const gsdTools = path.join(ROOT_5118, 'gsd-core', 'bin', 'gsd-tools.cjs');
+  const hooks = runNode(
+    [gsdTools, 'loop', 'render-hooks', 'verify:post', '--cwd', projectDir, '--raw', '--after-fingerprint', phaseDir],
+    { cwd: ROOT_5118, timeoutMs: PROBE_TIMEOUT_MS },
+  );
+  assert.strictEqual(hooks.exitCode, 0, `render-hooks must succeed: ${hooks.stderr}`);
+  const uat = runGsdTools(['query', 'uat.complete-session', '.planning/phases/01-foo/01-UAT.md'], projectDir);
+  assert.ok(uat.success, `uat.complete-session must succeed: ${uat.error}`);
+  const audit = runGsdTools(
+    [
+      'query', 'verification.append-audit', '.planning/phases/01-foo/01-SECURITY.md',
+      '--heading', 'Security Audit',
+      '--rows', JSON.stringify({ 'Threats found': 1, Closed: 1, Open: 0 }),
+      '--date', '2026-01-02',
+    ],
+    projectDir,
+  );
+  assert.ok(audit.success, `append-audit must succeed: ${audit.error}`);
+  const gate = runGsdTools(['phase', 'uat-passed', '01', '--require-verification'], projectDir);
+  assert.ok(gate.success, `uat-passed must run: ${gate.error}`);
+  const verdict = JSON.parse(gate.output);
+  return { status: statusOf(projectDir, phaseDir), uatPassed: verdict.passed, blockers: verdict.blockers };
+}
+
+function bashFenceText(markdown) {
+  const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+  const lines = markdown.split(/\r?\n/);
+  const out = [];
+  for (const block of scanFencedBlocks(lines)) {
+    if (block.closeLineIdx === -1) continue;
+    if (!['bash', 'sh'].includes((block.infoString || '').trim())) continue;
+    out.push(lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n'));
+  }
+  return out.join('\n');
+}
+
+describe('#5118 C3: one stale route — the regeneration step is ONE file included by execute-phase and verify-work', () => {
+  const { findOrphanStepFiles } = require('../scripts/gen-section-manifest.cjs');
+
+  test('V41: execute-phase/steps/verify-phase-goal.md exists and execute-phase.md reaches it (step-include resolver)', () => {
+    assert.ok(fs.existsSync(path.join(EXEC_STEPS_5118, SHARED_STEP_5118)), 'the shared regeneration step must exist');
+    const orphans = findOrphanStepFiles(fs.readFileSync(path.join(WORKFLOWS_5118, 'execute-phase.md'), 'utf-8'), EXEC_STEPS_5118);
+    assert.equal(orphans.includes(SHARED_STEP_5118), false, 'execute-phase.md must include the shared step');
+  });
+
+  test('V42: verify-work.md reaches the SAME step file (no copy under verify-work/steps)', () => {
+    assert.ok(fs.existsSync(path.join(EXEC_STEPS_5118, SHARED_STEP_5118)), 'precondition: the shared step exists (else the orphan check is vacuous)');
+    const orphans = findOrphanStepFiles(fs.readFileSync(path.join(WORKFLOWS_5118, 'verify-work.md'), 'utf-8'), EXEC_STEPS_5118);
+    assert.equal(orphans.includes(SHARED_STEP_5118), false, 'verify-work.md must include the shared step');
+    assert.equal(
+      fs.existsSync(path.join(WORKFLOWS_5118, 'verify-work', 'steps', SHARED_STEP_5118)), false,
+      'one step file, not a second copy',
+    );
+  });
+
+  test('V43: the second reading of stale is deleted — no stale-reverification step, and the inventory manifest does not list it', () => {
+    assert.equal(fs.existsSync(path.join(EXEC_STEPS_5118, 'stale-reverification.md')), false);
+    const manifest = fs.readFileSync(path.join(ROOT_5118, 'docs', 'INVENTORY-MANIFEST.json'), 'utf-8');
+    assert.equal(manifest.includes('execute-phase/steps/stale-reverification.md'), false);
+  });
+
+  test('V44: no workflow branches on the status word `stale` — execute-phase has no stale arm, progress has no Route V.stale / V.unknown', () => {
+    const { readWorkflowCombined } = require('./helpers.cjs');
+    const execute = readWorkflowCombined(path.join(WORKFLOWS_5118, 'execute-phase.md')).split(/\r?\n/);
+    assert.deepEqual(execute.filter((line) => /VERIFY_STATUS\s*==\s*`?stale\b/.test(line)), []);
+    const progress = readWorkflowCombined(path.join(WORKFLOWS_5118, 'progress.md')).split(/\r?\n/);
+    assert.deepEqual(progress.filter((line) => /Route V\.(stale|unknown)\b/.test(line)), []);
+  });
+});
+
+describe('#5118 C1 (T15 extension): a green phase run through verify-work twice ends passed', () => {
+  test('V45: two verify-work cycles on a freshly fingerprinted phase → passed after each, uat-passed true', (t) => {
+    const { projectDir, phaseDir } = buildFingerprintedPhase(t);
+    assert.strictEqual(statusOf(projectDir, phaseDir), 'passed', 'sanity: freshly fingerprinted phase is passed');
+    for (const cycle of [1, 2]) {
+      const result = verifyWorkCycle(projectDir, phaseDir);
+      assert.strictEqual(result.status, 'passed', `cycle ${cycle}: verification must stay passed`);
+      assert.strictEqual(result.uatPassed, true, `cycle ${cycle}: blockers ${JSON.stringify(result.blockers)}`);
+    }
+  });
+});
+
+describe('#5118 C2: stale → the one route → the shared step regenerates → verify-work twice ends passed', () => {
+  // The regeneration the route names, at the CLI boundary it owns: the
+  // verifier re-runs `verification.fingerprint` over the covered set and the
+  // report is rewritten from that command's own output (gsd-verifier.md
+  // "copy the command's covered_files and covered_digest output verbatim").
+  function regenerateThroughTheRoute(projectDir, phaseDir, declared) {
+    const step = fs.readFileSync(path.join(EXEC_STEPS_5118, SHARED_STEP_5118), 'utf-8');
+    assert.match(bashFenceText(step), /verification[. ]fingerprint\b/, 'the shared step must re-fingerprint (it is the regenerating command)');
+    const fp = runGsdTools(['verification', 'fingerprint', phaseDir, ...declared], projectDir);
+    assert.ok(fp.success, `fingerprint must succeed: ${fp.error}`);
+    const parsed = JSON.parse(fp.output);
+    fs.writeFileSync(
+      path.join(phaseDir, '01-VERIFICATION.md'),
+      `---\nstatus: passed\ncovered_files:\n${parsed.covered_files.map((f) => `  - ${f}`).join('\n')}\ncovered_digest: "${parsed.covered_digest}"\n---\n`,
+    );
+  }
+
+  test('V46: covered source drift reads stale with route execute-phase; after the route regenerates, two cycles end passed', (t) => {
+    const { projectDir, phaseDir, declared } = buildFingerprintedPhase(t, { withImpl: true });
+    assert.strictEqual(statusOf(projectDir, phaseDir), 'passed', 'sanity: freshly fingerprinted phase is passed');
+    fs.writeFileSync(path.join(projectDir, 'src', 'impl.ts'), 'export const x = 2;\n');
+    assert.strictEqual(statusOf(projectDir, phaseDir), 'stale');
+
+    const route = runGsdTools(['verification', 'status', phaseDir, '--pick', 'route'], projectDir);
+    assert.ok(route.success, `--pick route must resolve on every result: ${route.error}`);
+    assert.strictEqual(route.output, 'execute-phase', 'stale has one route');
+    const next = runGsdTools(['verification', 'status', phaseDir, '--pick', 'next_command'], projectDir);
+    assert.strictEqual(next.output, '/gsd-execute-phase 01');
+
+    regenerateThroughTheRoute(projectDir, phaseDir, declared);
+    for (const cycle of [1, 2]) {
+      const result = verifyWorkCycle(projectDir, phaseDir);
+      assert.strictEqual(result.status, 'passed', `cycle ${cycle} after the route`);
+      assert.strictEqual(result.uatPassed, true, `cycle ${cycle}: blockers ${JSON.stringify(result.blockers)}`);
+    }
+  });
+
+  test('V47 CONTROL: the same stale fixture through two verify-work cycles WITHOUT the route stays stale (#4887 Defect 1)', (t) => {
+    const { projectDir, phaseDir } = buildFingerprintedPhase(t, { withImpl: true });
+    fs.writeFileSync(path.join(projectDir, 'src', 'impl.ts'), 'export const x = 2;\n');
+    for (const cycle of [1, 2]) {
+      const result = verifyWorkCycle(projectDir, phaseDir);
+      assert.strictEqual(result.status, 'stale', `cycle ${cycle}: verify-work alone cannot clear stale`);
+      assert.strictEqual(result.uatPassed, false);
+      assert.ok(result.blockers.some((b) => String(b).includes('stale')), `blockers name stale: ${JSON.stringify(result.blockers)}`);
+    }
   });
 });
