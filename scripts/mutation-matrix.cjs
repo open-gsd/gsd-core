@@ -415,7 +415,9 @@ const COVERED = {
       'frontmatter-splice.property.test.cjs',
       'frontmatter.test.cjs',
     ],
-    minScore: 65,
+    // 87.72% in CI run 36590493522 on PR #5114 (#5105 added in-process command tests).
+    // Floor = floor(87.72) - 1 = 86.
+    minScore: 86,
     // MEASUREMENT, not a projection. Under the tap runner with coverageAnalysis: 'perTest'
     // (#3915), Stryker now re-runs only the test files that cover each mutated line instead
     // of all six files for every one of ~1900 mutants. Measured result: the frontmatter shard
