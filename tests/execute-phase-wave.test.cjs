@@ -986,7 +986,11 @@ describe('execute-phase workflow: #3684 verified-unmarked resume', () => {
 
   test('verified-unmarked resume continues at update_roadmap', () => {
     const step = stepText();
-    const branch = step.slice(step.indexOf('VERIFY_STATUS` ≠ `missing` + `PHASE_MARKED` not `true`'));
+    // #5118: the arm is keyed on `passed` — the old `≠ missing` arm collapsed
+    // gaps_found / human_needed / unparseable into "verified" (#4765).
+    const anchor = 'VERIFY_STATUS == passed` + `PHASE_MARKED` not `true`';
+    assert.ok(step.includes(anchor), 'the verified-unmarked arm must be keyed on VERIFY_STATUS == passed');
+    const branch = step.slice(step.indexOf(anchor));
     assert.ok(
       branch.includes('update_roadmap'),
       'the unmarked-resume branch must continue at update_roadmap',

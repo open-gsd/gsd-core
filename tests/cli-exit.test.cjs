@@ -638,7 +638,11 @@ describe('regressions', () => {
       // FRONTMATTER_UNPARSEABLE marker state.cts/audit.cts/verification.cts
       // already gate on). 25 -> 26 is the same kind of intentional,
       // documented growth as the #3884 bump above.
-      assert.strictEqual(seen.reasonCount, 26, 'ERROR_REASON must keep all 26 members (25 + #5013 SUMMARY_EXTRACT_UNPARSEABLE)');
+      //
+      // #5118 legitimately added a 27th code — VERIFICATION_STATUS_INVALID —
+      // for a *-VERIFICATION.md status outside the closed VerificationStatus
+      // set (ADR-5057 Phase 4), the same kind of documented growth.
+      assert.strictEqual(seen.reasonCount, 27, 'ERROR_REASON must keep all 27 members (26 + #5118 VERIFICATION_STATUS_INVALID)');
       assert.ok(
         seen.keys.includes('SDK_FAIL_FAST'),
         `ERROR_REASON must still include SDK_FAIL_FAST, got: ${JSON.stringify(seen.keys)}`,

@@ -86,13 +86,14 @@ test('overall-status enum in verification.cts is unchanged (no per-truth leak)',
   // immune to source formatting changes.
   const verificationLib = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'verification.cjs'));
   const { VERIFIER_STATUSES } = verificationLib;
-  assert.ok(Array.isArray(VERIFIER_STATUSES), 'VERIFIER_STATUSES array must be present');
+  // #5118: VERIFIER_STATUSES is the closed enum's frozen writer Set.
+  assert.ok(VERIFIER_STATUSES instanceof Set, 'VERIFIER_STATUSES set must be present');
   assert.ok(
-    !VERIFIER_STATUSES.includes('present_behavior_unverified'),
+    !VERIFIER_STATUSES.has('present_behavior_unverified'),
     'VERIFIER_STATUSES must not leak the per-truth present_behavior_unverified state',
   );
   for (const s of ['passed', 'gaps_found', 'human_needed']) {
-    assert.ok(VERIFIER_STATUSES.includes(s), `VERIFIER_STATUSES must contain ${s}`);
+    assert.ok(VERIFIER_STATUSES.has(s), `VERIFIER_STATUSES must contain ${s}`);
   }
 });
 

@@ -9714,16 +9714,16 @@ describe('phase uat-passed — --require-verification flag', () => {
     );
   });
 
-  test('--require-verification with non-canonical complete verification → passed:false', () => {
+  // #5118: `complete` is outside the closed VerificationStatus writer set —
+  // a hard error from the owner (verification_status_invalid), never a
+  // routed "not passed" answer.
+  test('--require-verification with non-canonical complete verification → verification_status_invalid (#5118)', () => {
     writeUatFile(phaseDir, 'feature-UAT.md', makePassingUat());
     writeUatFile(phaseDir, 'feature-VERIFICATION.md', '---\nstatus: complete\n---\n\nLegacy OK.');
-    const result = runGsdTools('phase uat-passed 1 --require-verification', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const out = JSON.parse(result.output);
-    assert.strictEqual(out.passed, false);
-    assert.ok(out.blockers.some(b => /verification required/i.test(b)),
-      `Expected verification-required blocker, got: ${JSON.stringify(out.blockers)}`);
+    const result = runGsdTools(['--json-errors', 'phase', 'uat-passed', '1', '--require-verification'], tmpDir);
+    assert.strictEqual(result.success, false, `an out-of-set report status must not answer: ${result.output}`);
+    const envelope = JSON.parse(String(result.error).trim().split(/\r?\n/).filter(Boolean).pop());
+    assert.strictEqual(envelope.reason, 'verification_status_invalid');
   });
 });
 
@@ -10360,7 +10360,9 @@ function setupFixture2853(tmpDir, plansSummaryLine, opts = {}) {
   fs.writeFileSync(
     path.join(phaseDir, '10-VERIFICATION.md'),
     incomplete
-      ? '---\nstatus: pending\n---\n# Verification\nPending.\n'
+      // #5118: an incomplete verdict is an in-set, non-passed status —
+      // `pending` is outside the closed set and would be a hard error.
+      ? '---\nstatus: gaps_found\n---\n# Verification\nGaps found.\n'
       : '---\nstatus: passed\nscore: "1/1"\n---\n# Verification\nPassed.\n'
   );
 

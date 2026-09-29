@@ -108,9 +108,10 @@ describe('verify-work.md — auto-transition after UAT passes with 0 issues', ()
     assert.ok(setPassedIdx < predicateIdx, 'verification must be canonicalized before the required predicate runs');
   });
 
+  // #5118: the stale arm is keyed on the owner's route, not the status word.
   test('stale verification blocks before phase transition', () => {
     const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
-    const staleIdx = content.indexOf('If `PHASE_VERIFICATION_STATUS` is `stale`');
+    const staleIdx = content.indexOf('If `PHASE_VERIFICATION_STATUS` is not `passed` and `VERIFICATION_ROUTE` is `execute-phase`');
     const predicateIdx = content.indexOf('PHASE_COMPLETE=$(gsd_run phase uat-passed "{phase}" --require-verification)');
     const transitionIdx = content.indexOf('transition.md');
 
@@ -140,7 +141,8 @@ describe('verify-work.md — canonicalize flip is gated by the UAT predicate (#4
   test('canonicalize flips to passed only when the uat-passed predicate reports passed (#4663)', () => {
     const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
     const humanNeededIdx = content.indexOf('if [ "$VERIFICATION_STATUS_VALUE" = "human_needed" ]; then');
-    const precheckIdx = content.indexOf('UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}" --uat-only 2>/dev/null)');
+    // #5118: stderr is kept (no 2>/dev/null) — a hard error must surface.
+    const precheckIdx = content.indexOf('UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}" --uat-only)');
     const flipGuardIdx = content.indexOf('if [ "$UAT_PRECHECK_PASSED" = "true" ]; then');
     const setPassedIdx = content.indexOf('gsd_run query frontmatter.set "$VERIFICATION_FILE" --field status --value passed');
 
@@ -153,7 +155,7 @@ describe('verify-work.md — canonicalize flip is gated by the UAT predicate (#4
 
   test('the canonicalize pre-check runs uat-passed without --require-verification (#4663)', () => {
     const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
-    const precheckIdx = content.indexOf('UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}" --uat-only 2>/dev/null)');
+    const precheckIdx = content.indexOf('UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}" --uat-only)');
     const flaggedIdx = content.indexOf('PHASE_COMPLETE=$(gsd_run phase uat-passed "{phase}" --require-verification)');
 
     assert.ok(precheckIdx !== -1, 'the --uat-only pre-check must exist');
@@ -294,13 +296,18 @@ describe('bug #3381: verify-work forwards workstream context', () => {
 // the only remedy is re-running the verifier. /gsd-verify-work never rewrites
 // VERIFICATION.md, so advising it from its own stale block is an advice loop.
 describe('verify-work.md — stale stop routes to the verifier (#4682)', () => {
+  // #5118: the stale arm runs the ONE regeneration step execute-phase runs
+  // (execute-phase/steps/verify-phase-goal.md, which dispatches gsd-verifier)
+  // instead of an inline second copy of the verifier spawn.
   test('the stale stop instructs re-running the verifier, not verify-work (#4682)', () => {
     const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
-    const staleIdx = content.indexOf('If `PHASE_VERIFICATION_STATUS` is `stale`');
+    const staleIdx = content.indexOf('If `PHASE_VERIFICATION_STATUS` is not `passed` and `VERIFICATION_ROUTE` is `execute-phase`');
     assert.ok(staleIdx !== -1, 'the stale stop must exist');
     const block = content.slice(staleIdx, staleIdx + 1600);
 
-    assert.match(block, /gsd-verifier/, 'the stale stop must route to the gsd-verifier agent');
+    assert.match(block, /execute-phase\/steps\/verify-phase-goal\.md/, 'the stale stop must run the shared regeneration step');
+    const step = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'verify-phase-goal.md'), 'utf-8');
+    assert.match(step, /subagent_type="gsd-verifier"/, 'the shared step dispatches the gsd-verifier agent');
     assert.match(block, /verification\.status/, 'it must re-check verification.status afterwards');
     assert.doesNotMatch(
       block, /`\/gsd:verify-work \{phase\}` — re-run verification/,

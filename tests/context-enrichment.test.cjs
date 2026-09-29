@@ -60,8 +60,12 @@ describe('execute-phase.md context enrichment', () => {
     );
   });
 
+  // #5118: the verifier dispatch moved into the ONE regeneration step shared
+  // by execute-phase and verify-work (execute-phase/steps/verify-phase-goal.md).
   test('verifier prompt includes files_to_read block', () => {
-    const content = fs.readFileSync(EXECUTE_WORKFLOW_PATH, 'utf-8');
+    const content = fs.readFileSync(
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'verify-phase-goal.md'), 'utf-8',
+    );
     assert.ok(
       content.includes('<required_reading>'),
       'execute-phase.md should contain <required_reading> opening tag'
@@ -79,9 +83,11 @@ describe('execute-phase.md context enrichment', () => {
       verifierSection.includes('SUMMARY.md'),
       'verifier files_to_read should reference SUMMARY.md'
     );
+    // The requirements file is read through the init-resolved path
+    // (`{requirements_path}` — REQUIREMENTS.md, workstream-aware).
     assert.ok(
-      verifierSection.includes('REQUIREMENTS.md'),
-      'verifier files_to_read should reference REQUIREMENTS.md'
+      verifierSection.includes('{requirements_path}'),
+      'verifier files_to_read should reference the REQUIREMENTS.md path'
     );
   });
 

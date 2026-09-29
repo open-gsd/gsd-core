@@ -312,8 +312,9 @@ describe('autonomous verification deferral contract', () => {
     // #2589: the verification read uses the native --pick flag (no jq dependency).
     // String-based check (not a regex literal) so the assertion stays robust to
     // shell metacharacters in the snippet and parses cleanly under espree.
+    // #5118: stderr kept, and a failed read is a blocker — never `|| true`.
     assert.ok(
-      section.includes('VERIFY_STATUS=$(gsd_run query verification.status "${PHASE_DIR}" --pick status 2>/dev/null || true)'),
+      section.includes('VERIFY_STATUS=$(gsd_run query verification.status "${PHASE_DIR}" --pick status) || VERIFY_ERROR=1'),
       'autonomous must route human validation through canonical verification.status via the native --pick flag',
     );
     assert.doesNotMatch(

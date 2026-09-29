@@ -121,3 +121,16 @@ describe('no-verification-status-literal config wiring', () => {
     assert.ok(severity === 2 || severity === 'error', `expected severity error, got ${JSON.stringify(setting)}`);
   });
 });
+
+describe('no-verification-status-literal member parity', () => {
+  // The rule cannot import the compiled owner at lint time, so it carries the
+  // enum's values; this pins them to the owner so the two cannot diverge
+  // (CLAUDE.md "Generative Fix Divergence").
+  test('the rule\'s member list equals the owner\'s VERIFICATION_STATUS values', () => {
+    const { VERIFICATION_STATUS } = require('../gsd-core/bin/lib/verification.cjs');
+    assert.deepEqual(
+      [...noVerificationStatusLiteral.VERIFICATION_STATUS_MEMBERS].sort(),
+      Object.values(VERIFICATION_STATUS).sort(),
+    );
+  });
+});

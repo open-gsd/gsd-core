@@ -157,28 +157,25 @@ describe('#1107: progress routing consults verification.status before reporting 
     );
   });
 
-  test('routing table has gaps_found and human_needed rows BEFORE the generic complete row', () => {
+  // #5118: the per-status rows for missing / unknown / stale collapsed into
+  // ONE non-passed row (Route V) that presents the owner's next_action /
+  // next_command — `unknown` left the closed enum and `stale` has one route.
+  test('routing table has gaps_found, human_needed and the non-passed row BEFORE the generic complete row', () => {
     const workflow = readWorkflow();
-    const missingIdx = workflow.indexOf('verification_status = missing');
-    const unknownIdx = workflow.indexOf('verification_status = unknown');
-    const staleIdx = workflow.indexOf('verification_status = stale');
     const gapsIdx = workflow.indexOf('verification_status = gaps_found');
     const humanIdx = workflow.indexOf('verification_status = human_needed');
+    const notPassedIdx = workflow.indexOf('verification_status ≠ passed');
     const completeIdx = workflow.indexOf('Phase complete (verification passed)');
-    assert.ok(missingIdx > -1, 'routing table must have a missing verification row');
-    assert.ok(unknownIdx > -1, 'routing table must have an unknown verification row');
-    assert.ok(staleIdx > -1, 'routing table must have a stale verification row');
     assert.ok(gapsIdx > -1, 'routing table must have a gaps_found row');
     assert.ok(humanIdx > -1, 'routing table must have a human_needed row');
+    assert.ok(notPassedIdx > -1, 'routing table must have one non-passed verification row (Route V)');
     assert.ok(completeIdx > -1, 'routing table must keep a generic complete row');
     assert.ok(
-      missingIdx < completeIdx &&
-        unknownIdx < completeIdx &&
-        staleIdx < completeIdx &&
-        gapsIdx < completeIdx &&
-        humanIdx < completeIdx,
-      'verification rows must precede the generic "summaries = plans" complete row (first-match-wins)'
+      gapsIdx < notPassedIdx && humanIdx < notPassedIdx && notPassedIdx < completeIdx,
+      'the specific rows precede the non-passed row, which precedes the generic complete row (first-match-wins)'
     );
+    assert.equal(workflow.indexOf('verification_status = unknown'), -1, 'unknown is no longer a status (#5118)');
+    assert.equal(workflow.indexOf('verification_status = stale'), -1, 'stale is routed by the owner, not a row of its own (#5118)');
   });
 
   test('gaps_found routes to plan-phase --gaps (Route V.gaps)', () => {
@@ -209,17 +206,19 @@ describe('#1107: progress routing consults verification.status before reporting 
     );
   });
 
-  test('stale verification routes to verify-work (Route V.stale)', () => {
+  // #5118: Route V.stale named /gsd-verify-work, disagreeing with the owner
+  // (verify-work alone cannot refresh a stale report). It is deleted; the
+  // single Route V presents the owner's next_command instead.
+  test('a non-passed verification presents the owner\'s next_command (Route V), never a hand-named command', () => {
     const workflow = readWorkflow();
-    assert.ok(workflow.includes('**Route V.stale:'), 'must define a Route V.stale section');
+    assert.ok(!workflow.includes('**Route V.stale:'), 'Route V.stale is deleted (#5118)');
+    assert.ok(workflow.includes('**Route V:'), 'must define the single non-passed Route V');
     const route = workflow.slice(
-      workflow.indexOf('**Route V.stale:'),
+      workflow.indexOf('**Route V:'),
       workflow.indexOf('**Route V.gaps:')
     );
-    assert.ok(
-      route.includes('verify-work'),
-      'Route V.stale must route to /gsd:verify-work {phase}'
-    );
+    assert.ok(route.includes('VERIFICATION_NEXT_COMMAND'), 'Route V presents the owner\'s next_command');
+    assert.ok(!/\/gsd[:-](verify-work|execute-phase)/.test(route), 'Route V names no command of its own');
   });
 
   test('missing and unknown verification do not route as complete', () => {

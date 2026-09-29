@@ -165,14 +165,13 @@ describe('#1955: coincidental-reliance advisory — the invariants', () => {
     }
   });
 
+  // #5118: asserted on the built module's runtime value (the closed enum's
+  // frozen writer Set), not by regexing the .cts source text.
   test('overall-status enum in verification.cts is unchanged', () => {
-    const cts = read('src', 'verification.cts');
-    const m = cts.match(/VERIFIER_STATUSES[^=]*=\s*\[([^\]]*)\]/);
-    assert.ok(m, 'VERIFIER_STATUSES array must be present');
-    assert.doesNotMatch(m[1], /coincidental/i);
-    for (const s of ['passed', 'gaps_found', 'human_needed']) {
-      assert.match(m[1], new RegExp(`'${s}'`));
-    }
+    const { VERIFIER_STATUSES } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'verification.cjs'));
+    assert.ok(VERIFIER_STATUSES instanceof Set, 'VERIFIER_STATUSES set must be present');
+    assert.deepEqual([...VERIFIER_STATUSES].sort(), ['gaps_found', 'human_needed', 'passed']);
+    for (const s of VERIFIER_STATUSES) assert.doesNotMatch(s, /coincidental/i);
   });
 
   test('qualifier suffixes VERIFIED, never replaces it (Hyrum)', () => {

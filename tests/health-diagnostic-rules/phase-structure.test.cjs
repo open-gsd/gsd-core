@@ -289,3 +289,41 @@ describe('rule/severity 1:1 (§8.2 rule 1)', () => {
     }
   });
 });
+
+// ─── W030 — verification report status outside the closed set (#5118) ─────
+//
+// MECHANICAL MUTATION of the rule's own positive fixture: the passing report
+// `makeCompletePhaseDir` writes, with its `status: passed` token replaced by
+// `verified` (#4817's real-world value). The owner (`isPhaseComplete`) keeps
+// its no-throw contract and the snapshot carries the typed error, so the rule
+// reports the file instead of health failing on the defect it diagnoses.
+
+describe('W030 — verification report status outside the closed set', () => {
+  test('MECHANICAL MUTATION: a report whose status is `verified` fires W030 naming the file and the accepted set', (t) => {
+    const cwd = createTempDir('gsd-5118-w030-');
+    t.after(() => cleanup(cwd));
+    baseFixture(cwd);
+    makeCompletePhaseDir(cwd, '.planning/phases/01-foo');
+    writeFile(cwd, '.planning/phases/01-foo/01-VERIFICATION.md', '---\nstatus: verified\n---\n');
+
+    const snap = buildPlanningSnapshot(cwd);
+    const diagnostics = ruleByCode['W030'].check(snap);
+    assert.deepEqual(diagnostics.map((d) => d.code), ['W030']);
+    assert.match(diagnostics[0].message, /01-VERIFICATION\.md/);
+    assert.match(diagnostics[0].message, /"verified"/);
+    assert.match(diagnostics[0].message, /passed \| gaps_found \| human_needed/);
+    assert.equal(diagnostics[0].severity, 'warning');
+    assert.equal(diagnostics[0].remedy.action, 'advise');
+  });
+
+  test('baseline: an in-set status (passed / gaps_found / human_needed) produces no W030', (t) => {
+    for (const status of ['passed', 'gaps_found', 'human_needed']) {
+      const cwd = createTempDir(`gsd-5118-w030-neg-${status}-`);
+      t.after(() => cleanup(cwd));
+      baseFixture(cwd);
+      makeCompletePhaseDir(cwd, '.planning/phases/01-foo');
+      writeFile(cwd, '.planning/phases/01-foo/01-VERIFICATION.md', `---\nstatus: ${status}\n---\n`);
+      assert.deepEqual(ruleByCode['W030'].check(buildPlanningSnapshot(cwd)), [], status);
+    }
+  });
+});

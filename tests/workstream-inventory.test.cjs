@@ -708,7 +708,7 @@ describe('#2562 — milestone scoping boundaries (one phase-key derivation)', ()
   // `complete: verification.status === 'passed'`), mirrored here for every
   // verifier status other than 'passed'.
   test('parity: every verifier status other than passed blocks completeness', () => {
-    const nonPassing = VERIFIER_STATUSES.filter(s => s !== 'passed');
+    const nonPassing = [...VERIFIER_STATUSES].filter(s => s !== 'passed');
     assert.ok(nonPassing.length > 0, 'guard: the verifier must emit a non-passing status');
     for (const status of nonPassing) {
       const inv = buildWorkstreamInventory({

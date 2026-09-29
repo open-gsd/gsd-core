@@ -143,12 +143,13 @@ test('PARITY: advisory never leaks into the overall-status vocabulary', () => {
 test('PARITY: overall-status enum in verification.cts does not gain an "advisory" status', () => {
   const verificationLib = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'verification.cjs'));
   const { VERIFIER_STATUSES } = verificationLib;
-  assert.ok(Array.isArray(VERIFIER_STATUSES), 'VERIFIER_STATUSES array must be present');
+  // #5118: VERIFIER_STATUSES is the closed enum's frozen writer Set.
+  assert.ok(VERIFIER_STATUSES instanceof Set, 'VERIFIER_STATUSES set must be present');
   assert.ok(
-    !VERIFIER_STATUSES.includes('advisory'),
+    !VERIFIER_STATUSES.has('advisory'),
     'VERIFIER_STATUSES must not gain a per-finding "advisory" state — it stays a per-finding annotation',
   );
   for (const s of ['passed', 'gaps_found', 'human_needed']) {
-    assert.ok(VERIFIER_STATUSES.includes(s), `VERIFIER_STATUSES must still contain ${s}`);
+    assert.ok(VERIFIER_STATUSES.has(s), `VERIFIER_STATUSES must still contain ${s}`);
   }
 });

@@ -474,30 +474,24 @@ describe('evaluateUatPassed — VERIFICATION files', () => {
       `Expected gaps_found blocker, got: ${JSON.stringify(report.blockers)}`);
   });
 
-  test('VERIFICATION with status pending → passed:false', () => {
-    writeFile(tmpDir, 'phase-UAT.md', makePassingUat(1));
-    writeFile(tmpDir, 'phase-VERIFICATION.md', '---\nstatus: pending\n---\n');
-    const report = evaluateUatPassed(tmpDir);
-    assert.strictEqual(report.passed, false);
-  });
-
-  test('VERIFICATION with status failed → passed:false (blocking)', () => {
-    writeFile(tmpDir, 'phase-UAT.md', makePassingUat(1));
-    writeFile(tmpDir, 'phase-VERIFICATION.md', '---\nstatus: failed\n---\n');
-    const report = evaluateUatPassed(tmpDir);
-    assert.strictEqual(report.passed, false);
-    assert.ok(report.blockers.some(b => /failed/i.test(b)),
-      `Expected failed blocker, got: ${JSON.stringify(report.blockers)}`);
-  });
-
-  test('VERIFICATION with status in_progress → passed:false (blocking)', () => {
-    writeFile(tmpDir, 'phase-UAT.md', makePassingUat(1));
-    writeFile(tmpDir, 'phase-VERIFICATION.md', '---\nstatus: in_progress\n---\n');
-    const report = evaluateUatPassed(tmpDir);
-    assert.strictEqual(report.passed, false);
-    assert.ok(report.blockers.some(b => /in_progress/i.test(b)),
-      `Expected in_progress blocker, got: ${JSON.stringify(report.blockers)}`);
-  });
+  // #5118 (E19): `pending|blocked|partial|failed|in_progress` were never
+  // written by the verifier, and uat-predicate no longer keeps its own
+  // status vocabulary. Every value outside the closed writer set is a hard
+  // error from the owner's report reader — never a blocker, never a pass —
+  // with or without the requireVerification policy.
+  for (const outOfSet of ['pending', 'blocked', 'partial', 'failed', 'in_progress', 'complete', 'verified', 'human_passed', 'Passed', 'some_unknown_status']) {
+    for (const requireVerification of [false, true]) {
+      test(`VERIFICATION with out-of-set status ${outOfSet} throws VerificationStatusError (requireVerification=${requireVerification}) (#5118)`, () => {
+        writeFile(tmpDir, 'phase-UAT.md', makePassingUat(1));
+        writeFile(tmpDir, 'phase-VERIFICATION.md', `---\nstatus: ${outOfSet}\n---\n\nAll good.`);
+        const { VerificationStatusError } = require('../gsd-core/bin/lib/verification.cjs');
+        assert.throws(
+          () => evaluateUatPassed(tmpDir, { policy: { requireVerification } }),
+          (err) => err instanceof VerificationStatusError && err.rawStatus === outOfSet,
+        );
+      });
+    }
+  }
 
   test('VERIFICATION with missing status does NOT satisfy --require-verification', () => {
     writeFile(tmpDir, 'phase-UAT.md', makePassingUat(1));
@@ -505,16 +499,6 @@ describe('evaluateUatPassed — VERIFICATION files', () => {
     const report = evaluateUatPassed(tmpDir, { policy: { requireVerification: true } });
     assert.strictEqual(report.passed, false,
       'Missing verification status must not satisfy requireVerification');
-    assert.ok(report.blockers.some(b => /verification required/i.test(b)),
-      `Expected verification-required blocker, got: ${JSON.stringify(report.blockers)}`);
-  });
-
-  test('VERIFICATION with unknown status does NOT satisfy --require-verification', () => {
-    writeFile(tmpDir, 'phase-UAT.md', makePassingUat(1));
-    writeFile(tmpDir, 'phase-VERIFICATION.md', '---\nstatus: some_unknown_status\n---\n');
-    const report = evaluateUatPassed(tmpDir, { policy: { requireVerification: true } });
-    assert.strictEqual(report.passed, false,
-      'Unknown verification status must not satisfy requireVerification');
     assert.ok(report.blockers.some(b => /verification required/i.test(b)),
       `Expected verification-required blocker, got: ${JSON.stringify(report.blockers)}`);
   });
@@ -527,54 +511,6 @@ describe('evaluateUatPassed — VERIFICATION files', () => {
     assert.strictEqual(report.verification_files.length, 1);
   });
 
-  test('VERIFICATION with status complete → does not block', () => {
-    writeFile(tmpDir, 'phase-UAT.md', makePassingUat(1));
-    writeFile(tmpDir, 'phase-VERIFICATION.md', '---\nstatus: complete\n---\n\nAll good.');
-    const report = evaluateUatPassed(tmpDir);
-    assert.strictEqual(report.passed, true);
-  });
-
-  test('VERIFICATION with status verified → does not block', () => {
-    writeFile(tmpDir, 'phase-UAT.md', makePassingUat(1));
-    writeFile(tmpDir, 'phase-VERIFICATION.md', '---\nstatus: verified\n---\n\nAll good.');
-    const report = evaluateUatPassed(tmpDir);
-    assert.strictEqual(report.passed, true);
-  });
-
-  test('VERIFICATION with status human_passed → does not block', () => {
-    writeFile(tmpDir, 'phase-UAT.md', makePassingUat(1));
-    writeFile(tmpDir, 'phase-VERIFICATION.md', '---\nstatus: human_passed\n---\n\nAll good.');
-    const report = evaluateUatPassed(tmpDir);
-    assert.strictEqual(report.passed, true);
-  });
-
-  test('VERIFICATION status complete does NOT satisfy --require-verification', () => {
-    writeFile(tmpDir, 'phase-UAT.md', makePassingUat(1));
-    writeFile(tmpDir, 'phase-VERIFICATION.md', '---\nstatus: complete\n---\n\nAll good.');
-    const report = evaluateUatPassed(tmpDir, { policy: { requireVerification: true } });
-    assert.strictEqual(report.passed, false);
-    assert.strictEqual(report.policy.require_verification, true);
-    assert.ok(report.blockers.some(b => /verification required/i.test(b)),
-      `Expected verification-required blocker, got: ${JSON.stringify(report.blockers)}`);
-  });
-
-  test('VERIFICATION status verified does NOT satisfy --require-verification', () => {
-    writeFile(tmpDir, 'phase-UAT.md', makePassingUat(1));
-    writeFile(tmpDir, 'phase-VERIFICATION.md', '---\nstatus: verified\n---\n\nAll good.');
-    const report = evaluateUatPassed(tmpDir, { policy: { requireVerification: true } });
-    assert.strictEqual(report.passed, false);
-    assert.ok(report.blockers.some(b => /verification required/i.test(b)),
-      `Expected verification-required blocker, got: ${JSON.stringify(report.blockers)}`);
-  });
-
-  test('VERIFICATION status human_passed does NOT satisfy --require-verification', () => {
-    writeFile(tmpDir, 'phase-UAT.md', makePassingUat(1));
-    writeFile(tmpDir, 'phase-VERIFICATION.md', '---\nstatus: human_passed\n---\n\nAll good.');
-    const report = evaluateUatPassed(tmpDir, { policy: { requireVerification: true } });
-    assert.strictEqual(report.passed, false);
-    assert.ok(report.blockers.some(b => /verification required/i.test(b)),
-      `Expected verification-required blocker, got: ${JSON.stringify(report.blockers)}`);
-  });
 });
 
 // ─── evaluateUatPassed — policy.requireVerification ───────────────────────────
