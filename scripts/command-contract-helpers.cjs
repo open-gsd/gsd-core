@@ -12,6 +12,12 @@
  * enforced by both consumers.
  */
 
+const path = require('node:path');
+// The one frontmatter fence owner (src/frontmatter-fence.cts, built to bin/lib by
+// build:lib). Every consumer of this module runs after the build: lint:ci (CI builds
+// bin/lib first) and the test suite (pretest).
+const { locateFrontmatterFence } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'frontmatter-fence.cjs'));
+
 const CANONICAL_TOOLS = new Set([
   'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',
   'Task', 'Agent', 'Skill', 'SlashCommand',
@@ -22,16 +28,15 @@ const CANONICAL_TOOLS = new Set([
 ]);
 
 function parseFrontmatter(content) {
-  // CRLF-tolerant split: Windows checkouts (autocrlf=true) leave a trailing
-  // \r on every line, making lines.indexOf('---', 1) return -1 (the value
-  // would be '---\r', not '---') → returns {} → every field appears missing.
-  const lines = content.split(/\r?\n/);
-  if (lines[0].trim() !== '---') return {};
-  const end = lines.indexOf('---', 1);
-  if (end === -1) return {};
+  // The block is the one the one fence owner finds (found while implementing
+  // #5105) — BOM, CRLF (a Windows autocrlf checkout), an adjacent empty block
+  // and a `----` look-alike all read exactly as every runtime reader sees them.
+  // Its lines are split CRLF-tolerantly so a trailing \r never leaks into a value.
+  const fence = locateFrontmatterFence(content);
+  if (!fence || !fence.closed) return {};
   const fm = {};
   let key = null;
-  for (const line of lines.slice(1, end)) {
+  for (const line of content.slice(fence.openEnd, fence.bodyEnd).split(/\r?\n/)) {
     const kv = line.match(/^([a-zA-Z0-9_-]+):\s*(.*)/);
     if (kv) { key = kv[1]; fm[key] = kv[2].trim(); }
     else if (key && line.match(/^\s+-\s+/)) {

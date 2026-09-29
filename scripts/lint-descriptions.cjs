@@ -16,6 +16,9 @@
 const fs = require('fs');
 const path = require('path');
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
+// The one frontmatter fence owner (src/frontmatter-fence.cts, built by build:lib).
+// This dev-time script runs after the build (`npm run lint:descriptions`, the tests).
+const { locateFrontmatterFence } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'frontmatter-fence.cjs'));
 
 const MAX_LENGTH = 100;
 const COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
@@ -25,9 +28,10 @@ const COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
  * Returns null if no description is found.
  */
 function parseDescription(content) {
-  const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!fmMatch) return null;
-  const fm = fmMatch[1];
+  // The block is the one the one fence owner finds (found while implementing #5105).
+  const fence = locateFrontmatterFence(content);
+  if (!fence || !fence.closed) return null;
+  const fm = content.slice(fence.openEnd, fence.bodyEnd);
 
   const quoted = fm.match(/^description:\s+"((?:[^"\\]|\\.)*)"\s*$/m);
   if (quoted) return quoted[1];

@@ -16,11 +16,29 @@
  *
  * Mechanism: the shared `scripts/lib/drift-scan.cjs` tree walk and regex-literal
  * tokenizer (ADR-3180 Decision 4), scanning the WHOLE `src/` and `hooks/` trees
- * (the hooks load the built `bin/lib` behind `ensureRuntimeBuild`) plus the two
- * hand-written entry points that load `bin/lib` (`bin/install.js`,
- * `gsd-core/bin/gsd-tools.cjs`), with FUNCTION-SCOPED exemptions carrying a
- * written reason — never a bare file allowlist — exactly as
- * `lint-milestone-window-drift.cjs` does.
+ * (the hooks load the built `bin/lib` behind `ensureRuntimeBuild`), the dev-time
+ * `scripts/` and `eslint-rules/` trees (every one of them that runs after
+ * `build:lib` requires the owner from `gsd-core/bin/lib/frontmatter-fence.cjs`),
+ * the two hand-written entry points that load `bin/lib` (`bin/install.js`,
+ * `gsd-core/bin/gsd-tools.cjs`), and the two native plugin adapters
+ * (`.opencode/plugins/gsd-core.js`, `.kilo/plugins/gsd-core.js`), with
+ * FUNCTION-SCOPED exemptions carrying a written reason — never a bare file
+ * allowlist — exactly as `lint-milestone-window-drift.cjs` does.
+ *
+ * KEPT COPIES (found while implementing #5105). A file that must run where the
+ * built owner may not exist keeps a self-contained copy of `locateFrontmatterFence`,
+ * and only that one function is allowlisted: `scripts/changeset/parse.cjs` (the
+ * `changeset-lint` CI job runs it with no `npm ci` and no build) and the two plugin
+ * adapters (a package/git-spec tree may carry no built `bin/lib`). Each copy is
+ * pinned to the owner by tests/frontmatter-fence.test.cjs ("kept frontmatter fence
+ * copies agree with the owner") over a fixture corpus and a property test.
+ *
+ * DETECTORS. Three files carry a regex that recognizes a fence idiom in OTHER
+ * text — this guard itself, `lint-frontmatter-scalar-broad-grep.cjs` (workflow
+ * shell snippets) and the `no-crlf-fragile-split` ESLint rule (regex literals in
+ * source). None of them locates a frontmatter block; each is exempt only for its
+ * exact fragment (`DETECTOR_EXEMPTIONS`), so any other fence code in the same
+ * file is still flagged.
  *
  * A line (comment text stripped) is a fence re-derivation when it carries:
  *   (a) a regex literal whose text contains `---` (`/^---/`, `/\n---/`,
@@ -52,8 +70,14 @@ const { readRegexLiteralAt, MAX_REGEX_LITERAL_LEN, sanitizeForReport, scanTree }
 const SCAN_TREES = [
   { dirs: ['src'], ext: new Set(['.cts', '.ts', '.mts']) },
   { dirs: ['hooks'], ext: new Set(['.js', '.cjs']) },
+  { dirs: ['scripts', 'eslint-rules'], ext: new Set(['.js', '.cjs', '.mjs']) },
 ];
-const SCAN_FILES = [path.join('bin', 'install.js'), path.join('gsd-core', 'bin', 'gsd-tools.cjs')];
+const SCAN_FILES = [
+  path.join('bin', 'install.js'),
+  path.join('gsd-core', 'bin', 'gsd-tools.cjs'),
+  path.join('.opencode', 'plugins', 'gsd-core.js'),
+  path.join('.kilo', 'plugins', 'gsd-core.js'),
+];
 
 const OWNER_FILE = path.join('src', 'frontmatter-fence.cts');
 
@@ -71,10 +95,35 @@ const TOP_LEVEL = '<top-level>';
 //     the Markdown normalizer's "no blank line after a thematic break" rule,
 //     applied line by line to BODY text; that normalizer's frontmatter skip
 //     (`leadingFrontmatterLineCount`) reads the owner.
+//   - scripts/changeset/parse.cjs `locateFrontmatterFence`: a kept copy of the
+//     owner (#5105) — the `changeset-lint` job in changeset-required.yml runs it
+//     with no `npm ci` and no `build:lib`. Pinned to the owner by the parity test
+//     tests/frontmatter-fence.test.cjs "kept frontmatter fence copies agree with the owner".
+//   - .opencode/plugins/gsd-core.js and .kilo/plugins/gsd-core.js
+//     `locateFrontmatterFence`: kept copies of the owner (#5105) — the plugin loads
+//     from a package/git-spec tree that may carry no built bin/lib. Pinned to the
+//     owner by the same parity test.
 const FUNCTION_SCOPED_EXEMPTIONS = new Map([
   [OWNER_FILE, new Set(['locateFrontmatterFence', TOP_LEVEL])],
   [path.join('src', 'phase.cts'), new Set(['phaseEntryInsertOffset'])],
   [path.join('src', 'shell-command-projection.cts'), new Set(['_normalizeMd'])],
+  [path.join('scripts', 'changeset', 'parse.cjs'), new Set(['locateFrontmatterFence'])],
+  [path.join('.opencode', 'plugins', 'gsd-core.js'), new Set(['locateFrontmatterFence'])],
+  [path.join('.kilo', 'plugins', 'gsd-core.js'), new Set(['locateFrontmatterFence'])],
+]);
+
+// FRAGMENT-SCOPED exemptions for DETECTORS (#5105), each pinned to the exact
+// reported fragment (the literal's source text) — a regex that recognizes a fence
+// idiom in other text, never one that locates a frontmatter block:
+//   - this guard's own fence-literal matcher (`FENCE_LITERAL_CONTENT_RE`);
+//   - lint-frontmatter-scalar-broad-grep.cjs `FRONTMATTER_SCOPE_RE`, which finds a
+//     `^---`-scoped extraction in a workflow's shell snippet;
+//   - the no-crlf-fragile-split ESLint rule's `^---` probe, which classifies a
+//     regex literal in linted source as frontmatter-shaped.
+const DETECTOR_EXEMPTIONS = new Map([
+  [path.join('scripts', 'lint-frontmatter-fence-drift.cjs'), new Set(['/^(?:\\\\r)?(?:\\\\n)?---(?:\\\\r)?(?:\\\\n)?$/'])],
+  [path.join('scripts', 'lint-frontmatter-scalar-broad-grep.cjs'), new Set(['/\\^---[\\s\\S]{0,300}?---/'])],
+  [path.join('eslint-rules', 'no-crlf-fragile-split.cjs'), new Set(['/\\^---/'])],
 ]);
 
 // Only a column-0 top-level `function` declaration updates the current-function
@@ -176,6 +225,7 @@ function findFrontmatterFenceDrift(text, relPath) {
   const out = [];
   const lines = text.split('\n');
   const exemptFunctions = FUNCTION_SCOPED_EXEMPTIONS.get(relPath) || null;
+  const exemptFragments = DETECTOR_EXEMPTIONS.get(relPath) || null;
   let currentFunction = TOP_LEVEL;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -188,6 +238,7 @@ function findFrontmatterFenceDrift(text, relPath) {
     const found = fenceFragment(code);
     if (found === null) continue;
     if (exemptFunctions && exemptFunctions.has(currentFunction)) continue;
+    if (exemptFragments && exemptFragments.has(found)) continue;
     out.push({ line: i + 1, fn: currentFunction, found });
   }
   return out;
@@ -245,4 +296,5 @@ module.exports = {
   OWNER_FILE,
   TOP_LEVEL,
   FUNCTION_SCOPED_EXEMPTIONS,
+  DETECTOR_EXEMPTIONS,
 };
