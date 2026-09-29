@@ -246,9 +246,10 @@ describe('#5105 M1/m1: restore is restricted to a live-vs-candidate diff beyond 
 // Found while implementing #5105 (review security finding 1): the baseline's `updated:` line
 // is committed file content, so the restore must splice it as literal text — a
 // String.prototype.replace replacement string would expand `$'`, `` $` ``, `$&`, `$$` (and
-// `$1` when a group exists), writing an early `---` fence or duplicated keys. And the restore's
-// post-condition: its frontmatter block must equal the baseline's block byte-for-byte, or the
-// session refuses instead of writing a "restore" that is not one.
+// `$1` when a group exists), writing an early `---` fence or duplicated keys. The restore now
+// writes the baseline bytes themselves (no splice, so no replacement pattern is evaluated); the
+// `$` cases stay as regression locks, and the restore target is the baseline wherever its
+// `updated:` line sits.
 describe('#5105: the restore splices the baseline `updated:` line literally and verifies it', () => {
   const clock = () => new Date('2026-05-05T00:00:00Z');
 
@@ -264,36 +265,40 @@ describe('#5105: the restore splices the baseline `updated:` line literally and 
     });
   }
 
-  test('a restore whose block cannot match the baseline block (baseline `updated:` mid-block, live lacks it) is refused', () => {
+  test('baseline `updated:` mid-block, live lacks it → restored byte-exact to the baseline', () => {
     const completeUatSession = loadCompleteUatSession();
     const midBlock = (s) => s.replace('status: complete\nphase: 01-foo\n', 'status: complete\nupdated: 2026-01-01T00:00:00Z\nphase: 01-foo\n');
     const baseline = midBlock(completeUatContent().replace(/^updated: .*\n/m, ''));
     const live = testingCompleteUatContent().replace(/^updated: .*\n/m, '');
-    assert.throws(
-      () => completeUatSession(live, { clock, baseline }),
-      { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_SPLICE_VERIFY_FAILED' },
-    );
+    const result = completeUatSession(live, { clock, baseline });
+    assert.strictEqual(result.changed, false);
+    assert.strictEqual(result.restored, true);
+    assert.strictEqual(result.content, baseline, 'the restore target is the baseline bytes, wherever its `updated:` line sits');
   });
 
-  test('CLI: a refused restore writes nothing and commits nothing', (t) => {
+  test('CLI: baseline `updated:` mid-block, live lacks it → restored to HEAD, nothing committed, tree clean', (t) => {
     const projectDir = createTempGitProject();
     t.after(() => cleanup(projectDir));
     const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
     fs.mkdirSync(phaseDir, { recursive: true });
     const uatPath = path.join(phaseDir, '01-UAT.md');
     const { execFileSync } = require('child_process');
-    fs.writeFileSync(uatPath, completeUatContent().replace(/^updated: .*\n/m, '').replace('status: complete\nphase: 01-foo\n', 'status: complete\nupdated: 2026-01-01T00:00:00Z\nphase: 01-foo\n'));
+    const seeded = completeUatContent().replace(/^updated: .*\n/m, '').replace('status: complete\nphase: 01-foo\n', 'status: complete\nupdated: 2026-01-01T00:00:00Z\nphase: 01-foo\n');
+    fs.writeFileSync(uatPath, seeded);
     execFileSync('git', ['add', '-A'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
     execFileSync('git', ['commit', '-q', '-m', 'seed UAT with updated mid-block'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
     const headBefore = gitHeadCount(projectDir);
-    const live = testingCompleteUatContent().replace(/^updated: .*\n/m, '');
-    fs.writeFileSync(uatPath, live);
+    fs.writeFileSync(uatPath, testingCompleteUatContent().replace(/^updated: .*\n/m, ''));
 
     const result = runGsdTools(['query', 'uat.complete-session', '.planning/phases/01-foo/01-UAT.md'], projectDir);
-    assert.strictEqual(result.success, false, `must fail closed; stdout: ${result.output}`);
-    assert.match(String(result.error), /refusing to restore/);
-    assert.strictEqual(fs.readFileSync(uatPath, 'utf-8'), live, 'nothing written');
+    assert.ok(result.success, `expected success: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.changed, false);
+    assert.strictEqual(parsed.restored, true);
+    assert.strictEqual(fs.readFileSync(uatPath, 'utf-8'), seeded, 'restored bytes equal the HEAD bytes');
     assert.strictEqual(gitHeadCount(projectDir), headBefore, 'nothing committed');
+    const statusOut = execFileSync('git', ['status', '--porcelain', '.'], { cwd: projectDir, encoding: 'utf-8', timeout: GIT_TIMEOUT_MS });
+    assert.strictEqual(statusOut.trim(), '', 'the restore leaves the tree clean');
   });
 });
 

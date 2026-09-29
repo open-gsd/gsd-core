@@ -29,6 +29,7 @@ const {
   spliceFrontmatter,
   parseFrontmatter,
   parseMustHavesBlock,
+  isFrontmatterWriteRefusal,
 } = require('../gsd-core/bin/lib/frontmatter.cjs');
 
 // ─── Arbitraries ─────────────────────────────────────────────────────────────
@@ -443,6 +444,7 @@ describe('frontmatter: spliceFrontmatter parse budget', () => {
           try {
             spliceFrontmatter(doc, { ...extractFrontmatter(doc), [target]: 'changed' });
           } catch (err) {
+            if (!isFrontmatterWriteRefusal(err)) throw err;
             assert.notEqual(err.code, 'FRONTMATTER_TOO_COMPLEX', `a planning-sized block reached the parse budget: ${JSON.stringify(doc)}`);
           }
         },
