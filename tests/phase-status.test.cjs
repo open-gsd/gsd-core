@@ -209,7 +209,9 @@ describe('phaseStatusFromFacts — the ladder', () => {
   });
 
   test('all summaries with any other non-passing verdict is EXECUTED', () => {
-    for (const v of ['gaps_found', 'missing', 'unknown', 'stale', 'unparseable', 'passed', null]) {
+    // #5118: `unknown` left the closed enum (it is a TypeError now — see V38);
+    // `phase_dir_not_found` joined it.
+    for (const v of ['gaps_found', 'missing', 'phase_dir_not_found', 'stale', 'unparseable', 'passed', null]) {
       assert.equal(
         phaseStatusFromFacts(facts({ planCount: 2, summaryCount: 2, verificationStatus: v })),
         PHASE_STATUS.EXECUTED,

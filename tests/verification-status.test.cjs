@@ -14,12 +14,12 @@
  *  2. status: gaps_found with phase token extraction
  *  3. status: human_needed → routing
  *  4. No *-VERIFICATION.md → 'missing'
- *  5. Frontmatter status present but unknown value → 'unknown'
+ *  5. Frontmatter status present but out of the closed set → VerificationStatusError (#5118)
  *  6. BROAD-GREP REGRESSION: body `status:` lines ignored, frontmatter wins
  *  7. PARITY: VERIFIER_STATUSES covered by routing table; gsd-verifier.md emitted statuses covered
  *  8. CRLF line endings in frontmatter
  *  9. Body-only file (no frontmatter block) → missing
- * 10. Nonexistent phase directory → missing
+ * 10. Nonexistent phase directory → phase_dir_not_found (#5118)
  * 11. Multiple *-VERIFICATION.md files, none matching the phase's own token →
  *     alphabetically-first FALLBACK wins (the phase-pinned rule's #2 tier —
  *     see #3492 below for the primary, phase-pinned tier)
@@ -52,7 +52,7 @@ const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.c
 
 const {
   VERIFIER_STATUSES,
-  VERIFICATION_ROUTING_TABLE,
+  VERIFICATION_ROUTES,
   defaultPhaseCleanCommitTimesMs,
   resolveVerificationFile,
   resolveUatFile,
@@ -192,27 +192,16 @@ describe('verification-status', () => {
     }
   });
 
-  // ── Case 5: unknown frontmatter status value ──────────────────────────────
-  test("frontmatter status 'bogus' → status unknown, next_command execute-phase", () => {
-    // Non-numeric dir basename: next_command asserts no phase-number argument
-    // is appended — see the human_needed test above for the same rationale.
+  // ── Case 5: out-of-set frontmatter status value (#5118) ───────────────────
+  // Was: routed as 'unknown' → execute-phase. VerificationStatus is closed now:
+  // a value outside the writer set is a hard error where it is read.
+  test("frontmatter status 'bogus' is out of the closed set → VerificationStatusError (#5118)", (t) => {
     const dir = mkPhaseDir('unknown', 'unknown');
-    try {
-      writeVerificationMd(dir, '01-u-VERIFICATION.md', 'bogus');
-      const result = readVerificationStatus(dir);
-      assert.equal(result.status, 'unknown');
-      assert.equal(result.next_command, '/gsd-execute-phase');
-      assert.ok(
-        result.next_action.includes('bogus'),
-        `next_action should mention the raw value; got: ${result.next_action}`,
-      );
-      assert.ok(
-        result.next_action.includes('intentional non-standard marker'),
-        `next_action must acknowledge an unrecognized status may be an intentional marker (#1762); got: ${result.next_action}`,
-      );
-    } finally {
-      cleanup(path.dirname(dir));
-    }
+    t.after(() => cleanup(path.dirname(dir)));
+    writeVerificationMd(dir, '01-u-VERIFICATION.md', 'bogus');
+    const { VerificationStatusError } = require('../gsd-core/bin/lib/verification.cjs');
+    assert.equal(typeof VerificationStatusError, 'function', 'VerificationStatusError must be exported');
+    assert.throws(() => readVerificationStatus(dir), VerificationStatusError);
   });
 
   // ── Case 6: BROAD-GREP REGRESSION (critical) ──────────────────────────────
@@ -263,15 +252,15 @@ describe('verification-status', () => {
 
   // ── Case 7: PARITY ASSERTION ──────────────────────────────────────────────
   //
-  // (a) Every value in VERIFIER_STATUSES has a corresponding key in VERIFICATION_ROUTING_TABLE.
+  // (a) Every value in VERIFIER_STATUSES has a corresponding key in VERIFICATION_ROUTES (#5118: the one table).
   // (b) Parse agents/gsd-verifier.md for emitted statuses via /→ \*\*status:\s*([a-z_]+)\*\*/g,
   //     collect the set, and assert every emitted status is a routing key.
   //
   test('PARITY: VERIFIER_STATUSES covered by routing table', () => {
     for (const s of VERIFIER_STATUSES) {
       assert.ok(
-        s in VERIFICATION_ROUTING_TABLE,
-        `VERIFIER_STATUS '${s}' has no entry in VERIFICATION_ROUTING_TABLE`,
+        s in VERIFICATION_ROUTES,
+        `VERIFIER_STATUS '${s}' has no entry in VERIFICATION_ROUTES`,
       );
     }
   });
@@ -310,8 +299,8 @@ describe('verification-status', () => {
 
     for (const s of emittedStatuses) {
       assert.ok(
-        s in VERIFICATION_ROUTING_TABLE,
-        `gsd-verifier.md emits status '${s}' but VERIFICATION_ROUTING_TABLE has no entry for it. ` +
+        s in VERIFICATION_ROUTES,
+        `gsd-verifier.md emits status '${s}' but VERIFICATION_ROUTES has no entry for it. ` +
           'Add a route or remove/rename the status in gsd-verifier.md.',
       );
     }
@@ -352,12 +341,15 @@ describe('verification-status', () => {
     }
   });
 
-  // Missing / nonexistent phase directory → missing
-  test('nonexistent phase directory → missing', () => {
-    const nonexistent = path.join(os.tmpdir(), 'gsd-651-nonexistent-' + Date.now());
-    const result = readVerificationStatus(nonexistent);
-    assert.equal(result.status, 'missing', 'unreadable/nonexistent dir must return missing');
-    assert.equal(result.next_command, '/gsd-execute-phase');
+  // Nonexistent phase directory → phase_dir_not_found (#5118, ADR-5057 amendment 2).
+  // Was 'missing' → /gsd-execute-phase: there was nothing to look in, which is a
+  // usage error, not a verify step that never ran (#4987).
+  test('nonexistent phase directory → phase_dir_not_found, never execute-phase', (t) => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-651-nonexistent-'));
+    t.after(() => cleanup(parent));
+    const result = readVerificationStatus(path.join(parent, 'gone'));
+    assert.equal(result.status, 'phase_dir_not_found', 'a nonexistent dir is a usage error, not a missing report');
+    assert.equal(result.next_command, '');
   });
 
   // Multiple *-VERIFICATION.md files, NEITHER matching the phase dir's own
@@ -2862,11 +2854,9 @@ for (const { id, prefix } of RUNTIMES) {
       assert.equal(read(id).next_command, `${prefix}execute-phase 01`);
     });
 
-    test('unknown status value', () => {
+    test('an out-of-set status value is a hard error, not a routed command (#5118, was unknown)', () => {
       writeStatus('not-a-real-status');
-      const result = read(id);
-      assert.equal(result.status, 'unknown');
-      assert.equal(result.next_command, `${prefix}execute-phase 01`);
+      assert.throws(() => read(id), (err) => Boolean(err) && err.code === 'ERR_VERIFICATION_STATUS_OUT_OF_SET');
     });
 
     test('gaps_found carries the phase number and --gaps flag through the projection', () => {
@@ -2914,7 +2904,9 @@ describe('#2617: no verification output suggests the deprecated colon form', () 
       removeVerification();
       const cases = [readVerificationStatus(projPhaseDir, opts)];
 
-      for (const status of ['not-a-real-status', 'gaps_found', 'passed', 'human_needed']) {
+      // #5118: an out-of-set status now throws (covered above), so it has no
+      // next_command to inspect here.
+      for (const status of ['gaps_found', 'passed', 'human_needed']) {
         writeStatus(status);
         cases.push(readVerificationStatus(projPhaseDir, opts));
       }
@@ -2931,8 +2923,8 @@ describe('#2617: no verification output suggests the deprecated colon form', () 
       }
     }
 
-    // Non-vacuity: 3 runtimes x 6 states.
-    assert.equal(checked, 18, 'expected every runtime x state combination to be checked');
+    // Non-vacuity: 3 runtimes x 5 states.
+    assert.equal(checked, 15, 'expected every runtime x state combination to be checked');
   });
 
   test('the default runtime yields the canonical hyphen form, not the colon form', () => {
@@ -3190,7 +3182,7 @@ describe('#2868: verification status CLI drives the execute-phase stranded-phase
     assert.ok(!/\|\s*jq\b/.test(statusFence), 'the status-read fence must not pipe through jq');
   });
 
-  test('the routing table carries a terminal arm for missing / unknown / stale', () => {
+  test('the routing table carries a terminal arm for missing / stale / phase_dir_not_found — never unknown (#5118)', () => {
     const content = fs.readFileSync(QUICK_VERIFICATION, 'utf-8');
     const gapsIdx = content.indexOf('| `gaps_found` |');
     const fallbackIdx = content.indexOf('| anything else');
@@ -3199,12 +3191,13 @@ describe('#2868: verification status CLI drives the execute-phase stranded-phase
     assert.ok(fallbackIdx > gapsIdx, 'a terminal arm must follow the verifier-status arms');
 
     const fallbackRow = content.slice(fallbackIdx, content.indexOf('\n', fallbackIdx));
-    for (const sentinel of ['missing', 'unknown', 'stale']) {
+    for (const sentinel of ['missing', 'stale', 'phase_dir_not_found']) {
       assert.ok(
         fallbackRow.includes(sentinel),
         `the terminal arm must name the ${sentinel} sentinel the query can return`,
       );
     }
+    assert.ok(!fallbackRow.includes('unknown'), 'unknown is no longer a status the query can return (#5118)');
     assert.ok(
       fallbackRow.includes('VERIFICATION_STATUS'),
       'the terminal arm must set the display string consumed by the quick index row and banner',
