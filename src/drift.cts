@@ -37,6 +37,7 @@
 import fs from 'node:fs';
 import { platformWriteSync, posixNormalize } from './shell-command-projection.cjs';
 import { formatGsdSlash } from './runtime-slash.cjs';
+import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -350,24 +351,26 @@ function sanitizePaths(paths: unknown): string[] {
 
 // ─── Frontmatter helpers ─────────────────────────────────────────────────────
 
-const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
-
 interface FrontmatterResult {
   data: Record<string, string>;
   body: string;
 }
 
+/**
+ * The block is the one the one fence owner finds (`locateFrontmatterFence`); `body` is
+ * everything after the closing fence line and its line ending.
+ */
 function parseFrontmatter(content: unknown): FrontmatterResult {
   if (typeof content !== 'string') return { data: {}, body: '' };
-  const m = content.match(FRONTMATTER_RE);
-  if (!m) return { data: {}, body: content };
+  const fence = locateFrontmatterFence(content);
+  if (!fence?.closed) return { data: {}, body: content };
   const data: Record<string, string> = {};
-  for (const line of m[1].split(/\r?\n/)) {
+  for (const line of content.slice(fence.openEnd, fence.bodyEnd).split(/\r?\n/)) {
     const kv = line.match(/^([A-Za-z0-9_][A-Za-z0-9_-]*):\s*(.*)$/);
     if (!kv) continue;
     data[kv[1]] = kv[2];
   }
-  return { data, body: content.slice(m[0].length) };
+  return { data, body: content.slice(fence.closingFenceEnd).replace(/^\r?\n/, '') };
 }
 
 function serializeFrontmatter(data: Record<string, string>, body: string): string {

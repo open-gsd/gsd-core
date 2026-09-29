@@ -137,7 +137,7 @@ const {
   resolvePhaseIdConvention,
 } = planningWorkspace;
 
-const { extractFrontmatter } = frontmatterMod;
+const { extractFrontmatter, frontmatterBlock } = frontmatterMod;
 const { isPhaseComplete, resolveVerificationFile, resolveUatFile } = verificationMod;
 const { evaluateUatPassed } = uatPredicateMod;
 const { resolveLoopHooks } = loopResolverMod;
@@ -4683,10 +4683,11 @@ function buildSkillManifest(cwd: string, skillsDir: string | null = null): Skill
 
       const description = (frontmatter['description'] as string) || '';
       const triggers: string[] = [];
-      const bodyMatch = content.match(/^---[\s\S]*?---\s*\r?\n([\s\S]*)$/);
-      if (bodyMatch) {
-        const body = bodyMatch[1];
-        const triggerLines = body.match(/^TRIGGER\s+when:\s*(.+)$/gmi);
+      // TRIGGER lines are read from the body after the block `extractFrontmatter` read (the
+      // one fence owner), so a `---` inside a frontmatter value cannot start the body early.
+      const block = frontmatterBlock(content);
+      if (block) {
+        const triggerLines = block.rest.match(/^TRIGGER\s+when:\s*(.+)$/gmi);
         if (triggerLines) {
           for (const line of triggerLines) {
             const m = line.match(/^TRIGGER\s+when:\s*(.+)$/i);

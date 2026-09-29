@@ -19,6 +19,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- io.cjs is an export= CommonJS module
 import ioMod = require('./io.cjs');
 const { output, error, ERROR_REASON, formatDiagnosticToken } = ioMod;
@@ -2485,21 +2486,22 @@ interface PhaseRemoveOptions {
  * phase, a stray 'Total Phases: 0' between fences). A file with no leading
  * frontmatter is all body: the field goes to content start, preserving the
  * former behavior for that shape.
+ *
+ * The block is the one `locateFrontmatterFence` finds (the one fence owner), so this writer
+ * and every STATE.md reader agree on where the body starts. The blank line and the field go
+ * right after the closing fence line, ended by that line's own line ending — so a CRLF file
+ * gains CRLF lines only (#3572 review: a blanket re-join on '\r\n' doubled every carriage
+ * return; joining the new lines on a bare '\n' mixed line endings).
  */
 function insertStateBodyFieldAtTop(content: string, fieldLine: string): string {
-  // Split AND join on bare '\n' so CRLF line endings stay attached to their
-  // own lines — each '\r' remains the tail of the line it terminated, where
-  // the trimmed fence compare still matches it. (#3572 review: splitting on
-  // '\n' but re-joining on a detected '\r\n' doubled every carriage return.)
-  const lines = content.split('\n');
-  if ((lines[0] ?? '').trim() === '---') {
-    const closeIdx = lines.findIndex((l: string, i: number) => i > 0 && l.trim() === '---');
-    if (closeIdx !== -1) {
-      lines.splice(closeIdx + 1, 0, '', fieldLine);
-      return lines.join('\n');
-    }
+  const fence = locateFrontmatterFence(content);
+  if (fence?.closed) {
+    const nl = content[fence.closingFenceEnd] === '\r' ? '\r\n' : '\n';
+    return `${content.slice(0, fence.closingFenceEnd)}${nl}${nl}${fieldLine}${content.slice(fence.closingFenceEnd)}`;
   }
-  return fieldLine + '\n' + content;
+  // All body: the field is the new first line, ended like the document's first line.
+  const firstNewline = content.indexOf('\n');
+  return fieldLine + (firstNewline > 0 && content[firstNewline - 1] === '\r' ? '\r\n' : '\n') + content;
 }
 
 function cmdPhaseRemove(

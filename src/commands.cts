@@ -11,6 +11,7 @@ import path from 'node:path';
 import { normalizeEol } from './text-lines.cjs';
 import { execGit, platformWriteSync, platformReadSync, platformEnsureDir, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
 import { escapeRegex } from './pattern.cjs';
+import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { requireSafePath, sanitizeForDisplay, tryWithinRoot, assertWithinRoot, PathAcceptance } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
@@ -644,10 +645,9 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
       // input feeding a real read → realpath family (ADR-4650 decision 6).
       const agentPath = assertWithinRoot(`${agentType}.md`, agentsDirEff, 'agent file');
       const agentContent = fs.readFileSync(agentPath, 'utf8');
-      // eslint-disable-next-line local/no-unbounded-quantifier -- same lazy `*?` bounded by the `^---$/m` closing anchor as the sibling frontmatter regexes in this file
-      const fmMatchEff = /^---\r?\n([\s\S]*?)^---\r?$/m.exec(agentContent);
-      if (fmMatchEff) {
-        const effortLine = /^effort:[ \t]*(.+?)[ \t]*$/m.exec(fmMatchEff[1]);
+      const fmSpanEff = agentFrontmatterSpan(agentContent);
+      if (fmSpanEff) {
+        const effortLine = /^effort:[ \t]*(.+?)[ \t]*$/m.exec(fmSpanEff.body);
         if (effortLine) {
           effortEffective = effortLine[1];
           effortEffectiveSource = 'frontmatter';
@@ -735,31 +735,38 @@ function effortSurfaceForHost(cwd: string, host: string): string {
 }
 
 /**
+ * The leading frontmatter block of an installed agent file, as the one fence owner
+ * (`locateFrontmatterFence`) finds it: `body` is the text between the two fences (the last
+ * content line's line ending included), `bodyStart`/`closingStart` bound it, and `eol` is the
+ * opening fence's line ending. Null when the file has no closed block — a block that does not
+ * open at byte 0 is not one, exactly as the runtime that loads the agent reads it.
+ */
+function agentFrontmatterSpan(content: string): { body: string; bodyStart: number; closingStart: number; eol: '\n' | '\r\n' } | null {
+  const fence = locateFrontmatterFence(content);
+  if (!fence?.closed) return null;
+  return { body: content.slice(fence.openEnd, fence.closingStart), bodyStart: fence.openEnd, closingStart: fence.closingStart, eol: fence.eol };
+}
+
+/**
  * #488 — Replace or inject the `<key>:` value in YAML frontmatter.
  * Unlike injectEffortFrontmatter (install.js), this overwrites an existing value.
  * #3706: key-parameterised so the same line-editor serves both claude's
- * `effort:` and OpenCode's `variant:`. #3706: all offsets (eol, openLen,
- * closingStart) are derived from the MATCHED BLOCK, not the start of the
- * file, and the existing-key replace is scoped to the frontmatter span only.
+ * `effort:` and OpenCode's `variant:`. #3706: all offsets (eol, bodyStart,
+ * closingStart) come from the block `agentFrontmatterSpan` found, and the
+ * existing-key replace is scoped to the frontmatter span only.
  */
 function setFrontmatterKeyLine(content: string, key: string, value: string): string {
-  const fmRe = /^---\r?\n([\s\S]*?)^---\r?$/m;
-  const match = fmRe.exec(content);
-  if (!match) return content;
-  const fmBody = match[1];
+  const span = agentFrontmatterSpan(content);
+  if (!span) return content;
+  const fmBody = span.body;
   // Both writers of these frontmatter keys — this sync path and the
   // install-side `frontmatterScalar` in runtime-artifact-conversion.cts —
   // now share one escaping rule: quote via `agentScalarNeedsDoubleQuoting` +
   // `escapeDoubleQuotedScalar` (both from frontmatter.cts) rather than each
   // interpolating `value` raw/differently.
   const renderedValue = agentScalarNeedsDoubleQuoting(value) ? `"${escapeDoubleQuotedScalar(value)}"` : value;
-  // EOL comes from the MATCHED BLOCK, not the start of the file. With a
-  // preamble the two can disagree, and on a CRLF document that misaligns every
-  // offset below by one byte and mangles the opening fence.
-  const eol = /^---\r\n/.test(match[0]) ? '\r\n' : '\n';
-  const openLen = 3 + eol.length;
-  const bodyStart = match.index + openLen;
-  const closingStart = bodyStart + fmBody.length;
+  // Every offset and the EOL come from the block the fence owner found (#3706).
+  const { eol, bodyStart, closingStart } = span;
   // #3706: key is now generic (not just the literal 'effort'/'variant'
   // callers happen to pass today) — escape it before interpolating into the
   // RegExp so a future caller can't have its key metacharacters reinterpreted.
@@ -799,18 +806,16 @@ function setFrontmatterKeyLine(content: string, key: string, value: string): str
  * codex-agent-toml strip discipline: targeted line removal, EOL-aware, every
  * other byte (comments, sibling keys, the body) untouched.
  * #3706: key-parameterised so the same line-editor serves both claude's
- * `effort:` and OpenCode's `variant:`. #3706: openLen is derived from the
- * MATCHED BLOCK, not the start of the file — a preamble on a CRLF document
- * would otherwise misalign every offset below.
+ * `effort:` and OpenCode's `variant:`. #3706: every offset comes from the
+ * block `agentFrontmatterSpan` found.
  */
 function removeFrontmatterKeyLine(content: string, key: string): string {
-  // Scoped to the FIRST frontmatter block (not a whole-file /m match): a
-  // preamble or body line starting with `<key>:` (a fenced config example,
-  // a thematic-break flanked fragment) must never be the line removed.
-  const fmRe = /^---\r?\n([\s\S]*?)^---\r?$/m;
-  const match = fmRe.exec(content);
-  if (!match) return content;
-  const fmBody = match[1];
+  // Scoped to the leading frontmatter block (not a whole-file /m match): a
+  // body line starting with `<key>:` (a fenced config example, a
+  // thematic-break flanked fragment) must never be the line removed.
+  const span = agentFrontmatterSpan(content);
+  if (!span) return content;
+  const fmBody = span.body;
   // #3706: same generic-key escape as setFrontmatterKeyLine above.
   const lineRe = new RegExp(`^${escapeRegex(key)}:[ \\t]*.*\\r?\\n?`, 'm');
   if (!lineRe.test(fmBody)) return content;
@@ -824,12 +829,7 @@ function removeFrontmatterKeyLine(content: string, key: string): string {
   // is removed in one pass.
   const stripAllRe = new RegExp(`^${escapeRegex(key)}:[ \\t]*.*\\r?\\n?`, 'gm');
   const strippedFm = fmBody.replace(stripAllRe, '');
-  // Same rule as setFrontmatterKeyLine: the EOL must come from the matched
-  // block, not the start of the file, or a preambled CRLF document misaligns.
-  const eol = /^---\r\n/.test(match[0]) ? '\r\n' : '\n';
-  const openLen = 3 + eol.length;
-  const closingStart = match.index + openLen + fmBody.length;
-  return content.slice(0, match.index + openLen) + strippedFm + content.slice(closingStart);
+  return content.slice(0, span.bodyStart) + strippedFm + content.slice(span.closingStart);
 }
 
 /** #488 — Replace or inject the `effort:` value in YAML frontmatter. */
@@ -956,7 +956,7 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
     // drift and the sync re-added a hand-stripped key on every apply. A
     // present key under inherit is stripped, reported as {from, to: null}.
     if (universalEffort === 'inherit') {
-      const fmMatchInherit = /^---\r?\n([\s\S]*?)^---\r?$/m.exec(content);
+      const fmMatchInherit = agentFrontmatterSpan(content);
       if (!fmMatchInherit) { skipped++; continue; }
       // Presence and value are distinct questions: `effort:` with an EMPTY
       // value is a key that IS present but whose captured value is null (the
@@ -964,9 +964,9 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
       // from a null value alone is wrong here — it would leave an
       // unresolvable `effort: null` key on disk forever. Test presence with
       // its own regex, and only compare values once presence is known.
-      const effortPresentInherit = /^effort:/m.test(fmMatchInherit[1]);
+      const effortPresentInherit = /^effort:/m.test(fmMatchInherit.body);
       if (!effortPresentInherit) { skipped++; continue; }
-      const effortMatchInherit = /^effort:[ \t]*(.+?)[ \t]*$/m.exec(fmMatchInherit[1]);
+      const effortMatchInherit = /^effort:[ \t]*(.+?)[ \t]*$/m.exec(fmMatchInherit.body);
       // `effortPresentInherit` is guaranteed true here (checked above), so a
       // failed value match means the key is present with an EMPTY value —
       // report `''`, not `null`, so "present-but-empty" is never conflated
@@ -1024,7 +1024,7 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
     const rendered = renderEffortForRuntime(runtime, universalEffort);
     const newEffortValue = rendered.value as string;
 
-    const fmMatch = /^---\r?\n([\s\S]*?)^---\r?$/m.exec(content);
+    const fmMatch = agentFrontmatterSpan(content);
     if (!fmMatch) { skipped++; continue; }
 
     // Presence and value are distinct questions here too: `currentEffort`
@@ -1035,8 +1035,8 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
     // never null on this path (guarded above), so an absent key already
     // yields `currentEffort === null !== newEffortValue` without consulting
     // presence separately.
-    const effortPresent = /^effort:/m.test(fmMatch[1]);
-    const effortMatch = /^effort:[ \t]*(.+?)[ \t]*$/m.exec(fmMatch[1]);
+    const effortPresent = /^effort:/m.test(fmMatch.body);
+    const effortMatch = /^effort:[ \t]*(.+?)[ \t]*$/m.exec(fmMatch.body);
     // `null` (key absent) and `''` (key present, value empty) are distinct
     // states `effortPresent` deliberately disambiguates — collapsing both to
     // `null` here would make the reported `from` lie about which case fired.
@@ -1340,7 +1340,7 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
     const universal = effortCfg ? resolveInstallTimeEffort(effortCfg, agentName) : null;
     const target = universal ? clampEffortForHost('opencode', universal) : null;
 
-    const fmMatch = /^---\r?\n([\s\S]*?)^---\r?$/m.exec(content);
+    const fmMatch = agentFrontmatterSpan(content);
     if (!fmMatch) { skipped++; continue; }
 
     // Presence and value are distinct questions: `variant:` with an EMPTY
@@ -1350,8 +1350,8 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
     // null — it would leave an unresolvable `variant: null` key on disk
     // forever. Test presence with its own regex, and only compare values
     // once presence is known.
-    const variantPresent = /^variant:/m.test(fmMatch[1]);
-    const variantMatch = /^variant:[ \t]*(.+?)[ \t]*$/m.exec(fmMatch[1]);
+    const variantPresent = /^variant:/m.test(fmMatch.body);
+    const variantMatch = /^variant:[ \t]*(.+?)[ \t]*$/m.exec(fmMatch.body);
     // `null` (key absent) and `''` (key present, value empty) are distinct
     // states this code deliberately tracks via `variantPresent` above — a
     // reported `from` that collapses both to `null` would make "no key" and
@@ -3559,31 +3559,36 @@ function cmdTodoMatchPhase(cwd: string, phase: string | undefined, raw: boolean)
 // #4096: upsert completion keys INSIDE the leading frontmatter block. Never a
 // bare prefix line above the opening `---` (that displaces the fence to line 2
 // and breaks every fence-locating reader). A file with no well-formed block
-// (absent, or an unterminated opening fence) gains a complete block.
+// (absent, or an unterminated opening fence) gains a complete block. The block is
+// the one the one fence owner (`locateFrontmatterFence`) finds, so this writer and
+// every todo reader agree on where it is.
 function upsertTodoCompletionFields(content: string, today: string): string {
-  const lines = content.split('\n');
   const fields = [`completed: ${today}`, 'status: completed'];
 
-  const hasOpeningFence = lines[0] !== undefined && lines[0].trim() === '---';
-  const closeIdx = hasOpeningFence ? lines.findIndex((l, i) => i > 0 && l.trim() === '---') : -1;
-
-  if (!hasOpeningFence || closeIdx === -1) {
+  const fence = locateFrontmatterFence(content);
+  if (!fence?.closed) {
     // No parseable frontmatter: wrap the whole content in a complete block
-    // rather than prefixing bare keys (#4096 fix 2).
-    return `---\n${fields.join('\n')}\n---\n\n${content}`;
+    // rather than prefixing bare keys (#4096 fix 2). A leading BOM (#2977) stays
+    // the document's first character, ahead of the new fence.
+    const bom = content.charCodeAt(0) === 0xFEFF ? content.slice(0, 1) : '';
+    return `${bom}---\n${fields.join('\n')}\n---\n\n${content.slice(bom.length)}`;
   }
 
-  const block = lines.slice(1, closeIdx);
+  // The block's lines, split on a bare '\n' so a CRLF line keeps its '\r' — and a
+  // written field line carries one too, so a CRLF block never gains LF-only lines.
+  const inner = content.slice(fence.openEnd, fence.closingStart);
+  const block = inner === '' ? [] : inner.slice(0, -1).split('\n');
+  const cr = fence.eol === '\r\n' ? '\r' : '';
   for (const field of fields) {
     const key = `${field.slice(0, field.indexOf(':'))}:`;
     const idx = block.findIndex(l => l.startsWith(key));
     if (idx === -1) {
-      block.push(field);
+      block.push(field + cr);
     } else {
-      block[idx] = field;
+      block[idx] = field + cr;
     }
   }
-  return [...lines.slice(0, 1), ...block, ...lines.slice(closeIdx)].join('\n');
+  return `${content.slice(0, fence.openEnd)}${block.join('\n')}\n${content.slice(fence.closingStart)}`;
 }
 
 interface TodoCompleteOptions {

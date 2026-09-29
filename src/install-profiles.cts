@@ -24,6 +24,7 @@ import os from 'node:os';
 import installFsAdapter = require('./install-fs-adapter.cjs');
 const { installFs, mkInstallTempDir } = installFsAdapter;
 import { platformWriteSync } from './shell-command-projection.cjs';
+import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 // #2322: reuse the existing pure path-containment seam (ADR-1239 Phase C-2)
 // instead of hand-rolling a new traversal check for capability skill stems.
 import { isPathConfined } from './external-descriptor-trust.cjs';
@@ -120,12 +121,14 @@ type ProfileName = keyof typeof PROFILES;
  * Returns string[] — empty array if no requires: field.
  *
  * No external YAML parser dependency — hand-parse the single line
- * since GSD enforces flow-style arrays for requires:.
+ * since GSD enforces flow-style arrays for requires:. The block is the one the
+ * one fence owner (`locateFrontmatterFence`) finds — a `---` pair later in the
+ * body (a thematic break, a YAML example) is never frontmatter.
  */
 function parseRequires(content: string): string[] {
-  const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/m);
-  if (!fmMatch) return [];
-  const fm = fmMatch[1];
+  const fence = locateFrontmatterFence(content);
+  if (!fence?.closed) return [];
+  const fm = content.slice(fence.openEnd, fence.bodyEnd);
   const line = fm.match(/^requires:\s*(.+)$/m);
   if (!line) return [];
   const val = line[1].trim();

@@ -30,7 +30,7 @@ import frontmatter = require('./frontmatter.cjs');
 // does not require this module, so the edge is acyclic.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import commandsModule = require('./commands.cjs');
-const { extractFrontmatter, spliceFrontmatter, isFrontmatterWriteRefusal } = frontmatter;
+const { extractFrontmatter, frontmatterBlock, spliceFrontmatter, isFrontmatterWriteRefusal } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const { PHASE_NUMBER_TOKEN_SOURCE, scopeToPhase } = phaseIdMod;
@@ -785,9 +785,11 @@ function scanTodos(todosBase: string): ScanOutcome<TodoItem> {
 
   const displayFiles = openFiles.slice(0, 5);
   for (const { entry, content, fm } of displayFiles) {
-    // Extract first line of body after frontmatter
-    const bodyMatch = content.replace(/^---[\s\S]*?---\r?\n?/, '');
-    const firstLine = splitLines(bodyMatch.trim())[0] || '';
+    // Extract first line of body after frontmatter — the block `extractFrontmatter` read above
+    // (the one fence owner), so a `---` inside a value cannot end it early.
+    const block = frontmatterBlock(content);
+    const todoBody = block ? block.rest : content;
+    const firstLine = splitLines(todoBody.trim())[0] || '';
     const summary = sanitizeForDisplay(firstLine.slice(0, 100));
 
     results.push({

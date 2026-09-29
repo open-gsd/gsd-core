@@ -5,13 +5,17 @@
  * Source in src/frontmatter-fence.cts, compiled to gsd-core/bin/lib/frontmatter-fence.cjs
  * (gitignored), per the repo's ADR-457 build-at-publish convention.
  *
- * Before this module the answer was derived four times, and the copies disagreed:
- * `frontmatterRegion`/`frontmatterBlock` (`frontmatter.cts`), `leadingFrontmatterLineCount`
- * (`shell-command-projection.cts`, a private mirror because `frontmatter.cts` imports that
- * module), `findFrontmatterSpan` (`planning-document.cts`, which re-derived the closing
- * fence's end from the region length) and `stripFrontmatter` (`frontmatter.cts`, a regex that
- * could not see an adjacent empty block and stripped through the first `---` in the body).
- * Every one of them now reads the fence from `locateFrontmatterFence`.
+ * Before this module the answer was re-derived some thirty times across `src/` — regexes such
+ * as `/^---\r?\n([\s\S]*?)\r?\n---/`, `indexOf('\n---', 4)` scans, `lines[0].trim() === '---'`
+ * checks — and the copies disagreed on a BOM, CRLF, an adjacent empty block, `----`, `--- x`,
+ * a `---` inside a value and leading whitespace. Every frontmatter reader and writer in `src/`
+ * (planning documents, agent/skill/command files, the installer's converters and injectors),
+ * in the runtime hooks, and in the two hand-written entry points that load `bin/lib`
+ * (`bin/install.js`, `gsd-core/bin/gsd-tools.cjs`) now reads the fence from
+ * `locateFrontmatterFence` — directly for offsets, or through `frontmatterRegion`/
+ * `frontmatterBlock`/`extractFrontmatter`/`stripFrontmatter` (`frontmatter.cts`) for content.
+ * `scripts/lint-frontmatter-fence-drift.cjs` (run by `lint:ci`) fails on a new hand-rolled
+ * fence in any of them.
  *
  * A "genuine leaf" module (CONTEXT.md's term): zero I/O, zero imports, so both
  * `frontmatter.cts` and `shell-command-projection.cts` — which import each other's side of a

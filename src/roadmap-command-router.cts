@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROADMAP_SUBCOMMANDS } from './command-aliases.cjs';
+import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import cjsCommandRouterAdapter = require('./cjs-command-router-adapter.cjs');
 const { routeCjsCommandFamily } = cjsCommandRouterAdapter;
@@ -181,14 +182,13 @@ function routeRoadmapCommand({ roadmap, args, cwd, raw, error }: RouteRoadmapCom
           warnings.push({ code: 'V002', message: 'ROADMAP.md is empty' });
         }
 
-        // Malformed frontmatter — a `---` opener with no matching closer.
-        // Tolerate a leading BOM (#3057) before the fence.
-        const contentAfterBom = roadmapContent.replace(/^\uFEFF/, '');
-        if (contentAfterBom.startsWith('---')) {
-          const closeMatch = contentAfterBom.slice(3).match(/\r?\n---\s*(\r?\n|$)/);
-          if (!closeMatch) {
-            warnings.push({ code: 'V003', message: 'ROADMAP.md frontmatter is malformed (unterminated --- fence)' });
-          }
+        // Malformed frontmatter — a `---` opener with no matching closer, as the one fence
+        // owner reads it (a leading BOM, #3057, is tolerated there).
+        const roadmapFence = locateFrontmatterFence(roadmapContent);
+        // The milestone-window read below sees the document without its leading BOM (#3057).
+        const contentAfterBom = roadmapContent.charCodeAt(0) === 0xFEFF ? roadmapContent.slice(1) : roadmapContent;
+        if (roadmapFence && !roadmapFence.closed) {
+          warnings.push({ code: 'V003', message: 'ROADMAP.md frontmatter is malformed (unterminated --- fence)' });
         }
 
         // #3641: resolve phase_id_convention ONCE, ahead of every consumer in
@@ -205,13 +205,11 @@ function routeRoadmapCommand({ roadmap, args, cwd, raw, error }: RouteRoadmapCom
           convention = undefined;
         }
         if (convention === undefined || convention === null) {
-          // Fallback: read from ROADMAP.md frontmatter. Bounded to match
-          // cmdRoadmapMilestoneScope's copy exactly (#3641 review NEW-1: an
-          // unbounded capture here read past 4KB frontmatters the probe's
-          // bounded copy could not, diverging validate from the probe).
-          const fmMatch = roadmapContent.match(/^---\r?\n([\s\S]{0,4000}?)\r?\n---/);
-          if (fmMatch) {
-            const kvMatch = fmMatch[1].match(/^phase_id_convention:\s*(.*)$/m);
+          // Fallback: read from ROADMAP.md frontmatter — the block the one fence owner finds,
+          // exactly as cmdRoadmapMilestoneScope reads it (#3641 review NEW-1: two copies of
+          // this read disagreed on long frontmatter, diverging validate from the probe).
+          if (roadmapFence?.closed) {
+            const kvMatch = roadmapContent.slice(roadmapFence.openEnd, roadmapFence.bodyEnd).match(/^phase_id_convention:\s*(.*)$/m);
             if (kvMatch) {
               const val = kvMatch[1].trim();
               if (val !== 'null' && val !== '') {

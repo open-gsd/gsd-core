@@ -46,7 +46,7 @@ import coreUtils = require('./core-utils.cjs');
 const { findUnsummarizedPlans } = coreUtils;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
-const { extractFrontmatter, parseMustHavesBlock } = frontmatter;
+const { extractFrontmatter, frontmatterRegion, parseMustHavesBlock } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verificationMod = require('./verification.cjs');
 const { isPhaseComplete } = verificationMod;
@@ -1002,11 +1002,11 @@ function cmdRoadmapMilestoneScope(cwd: string, raw: boolean): void {
     phaseIdConvention = undefined;
   }
   if (phaseIdConvention === undefined || phaseIdConvention === null) {
-    // Bounded per local/no-unbounded-quantifier (#2128): frontmatter is a
-    // short header block — 4KB is orders of magnitude beyond any real one.
-    const fmMatch = rawContent.match(/^---\r?\n([\s\S]{0,4000}?)\r?\n---/);
-    if (fmMatch) {
-      const kvMatch = fmMatch[1].match(/^phase_id_convention:\s*(.*)$/m);
+    // The block is the one the one fence owner finds (`frontmatterRegion`), the same one
+    // `roadmap validate` reads, so the two cannot disagree on where it ends (#3641 NEW-1).
+    const found = frontmatterRegion(rawContent);
+    if (found?.terminated) {
+      const kvMatch = found.region.match(/^phase_id_convention:\s*(.*)$/m);
       if (kvMatch) {
         const val = kvMatch[1].trim();
         if (val !== 'null' && val !== '') {

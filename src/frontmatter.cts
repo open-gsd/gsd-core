@@ -1640,9 +1640,9 @@ function spliceFrontmatter(content: string, newObj: Frontmatter): string {
       }
     }
 
-    // Re-emit the whole block with the document's own line ending (taken from the opening
-    // fence), so a CRLF document never gains LF-only lines.
-    const eol = fmBlock.startsWith('---\r\n') ? '\r\n' : '\n';
+    // Re-emit the whole block with the document's own line ending (the opening fence's, as
+    // the one fence owner reads it), so a CRLF document never gains LF-only lines.
+    const eol = locateFrontmatterFence(content)?.eol ?? '\n';
     const block = ['---', ...emitted, '---'].join('\n').split('\n').join(eol);
     return bom + verifyReadsBackAs(block + rest, newObj);
   }

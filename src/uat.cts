@@ -28,7 +28,8 @@ import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
-const { extractFrontmatter, spliceFrontmatter, frontmatterListEntries, flattenObjectListItem, isFrontmatterWriteRefusal, frontmatterBlock } = frontmatter;
+const { extractFrontmatter, spliceFrontmatter, frontmatterListEntries, flattenObjectListItem, isFrontmatterWriteRefusal } = frontmatter;
+import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const { PHASE_NUMBER_TOKEN_SOURCE, scopeToPhase } = phaseIdMod;
@@ -501,14 +502,26 @@ function setFrontmatterStatus(content: string, status: 'complete' | 'partial'): 
 
 /**
  * The `---`…`---` frontmatter block's `[start, end)` character bounds in
- * `content` — located by `frontmatterBlock`, the same fence owner
- * `spliceFrontmatter` and every reader use — or `null` if there is none.
+ * `content`, and where its closing fence line starts — located by
+ * `locateFrontmatterFence`, the one fence owner `spliceFrontmatter` and every
+ * reader use — or `null` if there is none.
  */
-function frontmatterBlockBounds(content: string): { start: number; end: number } | null {
+function frontmatterBlockBounds(content: string): { start: number; end: number; closingStart: number } | null {
   // A leading BOM (#2977) is not content before the fence — it sits before
   // `start`, carried through unchanged.
-  const located = frontmatterBlock(content);
-  return located ? { start: located.bom.length, end: located.bom.length + located.block.length } : null;
+  const fence = locateFrontmatterFence(content);
+  return fence?.closed ? { start: fence.bom.length, end: fence.closingFenceEnd, closingStart: fence.closingStart } : null;
+}
+
+/**
+ * `line` inserted into `block` (the bounds' slice) as a new last line, just
+ * before its closing fence line — whatever that line is (`---`, `--- `, the
+ * lenient `----`) — with the line ending of the line before it.
+ */
+function insertBeforeClosingFence(block: string, bounds: { start: number; closingStart: number }, line: string): string {
+  const closingOffset = bounds.closingStart - bounds.start;
+  const eol = block[closingOffset - 2] === '\r' ? '\r\n' : '\n';
+  return `${block.slice(0, closingOffset)}${line}${eol}${block.slice(closingOffset)}`;
 }
 
 /**
@@ -538,7 +551,7 @@ function setFrontmatterUpdated(content: string, value: string): string {
   const keyLineRe = /^updated:.*$/m;
   const newBlock = keyLineRe.test(block)
     ? block.replace(keyLineRe, `updated: ${value}`)
-    : block.replace(/(\r?\n)---$/, (_m, eol: string) => `${eol}updated: ${value}${eol}---`);
+    : insertBeforeClosingFence(block, bounds, `updated: ${value}`);
   return content.slice(0, bounds.start) + newBlock + content.slice(bounds.end);
 }
 
@@ -590,7 +603,7 @@ function spliceBaselineUpdatedVerbatim(candidate: string, baseline: string): str
   if (baselineLineMatch) {
     newBlock = keyLineRe.test(block)
       ? block.replace(keyLineRe, baselineLineMatch[0])
-      : block.replace(/(\r?\n)---$/, (_m, eol: string) => `${eol}${baselineLineMatch[0]}${eol}---`);
+      : insertBeforeClosingFence(block, bounds, baselineLineMatch[0]);
   } else {
     // Baseline has no `updated:` line at all — the restored block must not
     // have one either.
