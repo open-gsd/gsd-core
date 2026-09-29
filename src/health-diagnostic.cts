@@ -109,6 +109,10 @@ const RULES: Rule[] = [
  */
 const CONSISTENCY_RULES: Rule[] = [
   ...roadmapDiskConsistencyMod.RULES.filter((r) => ['W006', 'W007'].includes(r.code)),
+  // #5118: W030 (a verification report status outside the closed set) is
+  // REUSED too — the snapshot carries the error, and a diagnostics surface
+  // reports it as a finding instead of failing on the defect it diagnoses.
+  ...phaseStructureMod.RULES.filter((r) => r.code === 'W030'),
   ...consistencyMod.RULES,
 ];
 
@@ -169,7 +173,7 @@ function evaluateRules(snapshot: PlanningSnapshot): Diagnostic[] {
 }
 
 /**
- * Evaluate `CONSISTENCY_RULES` (W006/W007 + C001-C004) against `snapshot` —
+ * Evaluate `CONSISTENCY_RULES` (W006/W007/W030 + C001-C004) against `snapshot` —
  * `validate.consistency`'s evaluator entry point, mirroring `evaluateRules`
  * exactly but over the smaller, command-specific rule subset.
  */

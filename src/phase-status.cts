@@ -219,8 +219,14 @@ export interface PhaseStatusValue {
   status: PhaseStatus;
   planCount: number;
   summaryCount: number;
-  /** `isPhaseComplete`'s full verification routing result. */
+  /** `isPhaseComplete`'s full verification routing result (`status: null` for an out-of-set report). */
   verification: PhaseCompletion['value']['verification'];
+  /**
+   * #5118: carried from `isPhaseComplete` when the report's `status` is
+   * outside the closed set (the phase then reads not-complete, scope
+   * UNREADABLE). A command built on this value fails with it.
+   */
+  statusError?: PhaseCompletion['value']['statusError'];
 }
 
 const SCOPE_SEVERITY: Readonly<Record<string, number>> = Object.freeze({
@@ -269,6 +275,7 @@ export function phaseStatus(phaseDir: string, deps: PhaseStatusDeps = {}): { val
       planCount: scan.planCount,
       summaryCount: scan.summaryCount,
       verification: completion.value.verification,
+      ...(completion.value.statusError ? { statusError: completion.value.statusError } : {}),
     },
     scope,
   };

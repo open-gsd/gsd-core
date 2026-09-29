@@ -205,8 +205,8 @@ function computeSpawnPlan(input: SpawnPlanInput): SpawnPlanResult {
 
 // #5118: the verifier's writer set is the closed enum's subset owned by
 // src/verification.cts — imported as a TYPE (erased), so this pure module
-// stays free of the owner's I/O dependencies while every `case` below is
-// checked against the one vocabulary.
+// stays free of the owner's I/O dependencies while the routing table below
+// is keyed by the one vocabulary (a missing or extra key is a `tsc` error).
 type VerifierStatus = verificationTypes.VerifierStatus;
 
 type VerificationRouting =
@@ -215,20 +215,24 @@ type VerificationRouting =
   | { action: 'fail'; failureReason: string };
 
 /**
+ * #5118: one routing entry per writer-set status, keyed by the owner's type —
+ * no status literal is compared (local/no-verification-status-literal's
+ * type-aware arm), and `Record<VerifierStatus, …>` makes the table total.
+ */
+const VERIFICATION_OUTCOME_ROUTES: Readonly<Record<VerifierStatus, VerificationRouting>> = Object.freeze({
+  passed: { action: 'complete' },
+  human_needed: { action: 'human_needed' },
+  gaps_found: { action: 'fail', failureReason: 'verification reported gaps_found (no automatic gap-fix retry in v1)' },
+});
+
+/**
  * Route a verifier's status to an item action. `human_needed` is terminal
  * for the item — the caller must NOT call `completeQuickItem` (row 30, no
  * STATE row appended). `gaps_found` fails the item WITHOUT rollback and
  * WITHOUT an automatic gap-fix retry (row 31,34). `passed` completes it.
  */
 function routeVerificationOutcome(status: VerifierStatus): VerificationRouting {
-  switch (status) {
-    case 'passed':
-      return { action: 'complete' };
-    case 'human_needed':
-      return { action: 'human_needed' };
-    case 'gaps_found':
-      return { action: 'fail', failureReason: 'verification reported gaps_found (no automatic gap-fix retry in v1)' };
-  }
+  return VERIFICATION_OUTCOME_ROUTES[status];
 }
 
 type MergeOutcomeKind =

@@ -61,13 +61,10 @@ const { readStateHeadFreshness } = stateMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import unusableInput = require('./unusable-input.cjs');
 const { warnUnusableInput, UNUSABLE_REASON } = unusableInput;
-// #5118: the verification-status owner's report reader.
+// #5118: the verification-status owner's frontmatter-only report check.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verificationMod = require('./verification.cjs');
-const { reportStatusOf, isVerificationReportPath } = verificationMod;
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module
-import coreUtilsMod = require('./core-utils.cjs');
-const { normalizeLineEndings } = coreUtilsMod;
+const { findVerificationStatusError } = verificationMod;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -362,6 +359,13 @@ function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolea
   } catch {
     return false;
   }
+  // #5118: this phase's VERIFICATION report `status` is judged by its owner
+  // (src/verification.cts, the same frontmatter-only, containment-checked
+  // locator every reader shares) — an out-of-set value is the owner's hard
+  // error here as at every other reader, never a silent "not failed". The
+  // body `STATUS:` marker scan below is this probe's own signal.
+  const statusError = findVerificationStatusError([latestDir]);
+  if (statusError) throw statusError;
   const candidates = files.filter((f) => /summary|verif(?:y|ication)|uat/i.test(f));
   for (const name of candidates) {
     let content = '';
@@ -370,13 +374,6 @@ function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolea
       content = fs.readFileSync(filePath, 'utf-8');
     } catch {
       continue;
-    }
-    // #5118: a VERIFICATION report's frontmatter `status` is judged by its
-    // owner (src/verification.cts) — an out-of-set value is a hard error here
-    // as at every other reader, never a silent "not failed". The body
-    // `STATUS:` marker scan below is this probe's own signal.
-    if (isVerificationReportPath(name)) {
-      reportStatusOf(extractFrontmatter(normalizeLineEndings(content), filePath), filePath);
     }
     const statusMatch = content.match(/STATUS:\s*([A-Za-z_-]+)/i);
     if (statusMatch && /\b(blocked|fail(ed)?)\b/i.test(statusMatch[1])) {

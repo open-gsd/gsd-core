@@ -68,7 +68,7 @@ const { REQUIRED_CODEBASE_MAP_FILES } = onboardProjectionMod;
 import { realClock } from './clock.cjs';
 
 const { planningDir, planningRoot, withPlanningLock } = planningWorkspace;
-const { defaultPhaseCleanCommitTimesMs, takePendingVerificationStatusError } = verificationMod;
+const { defaultPhaseCleanCommitTimesMs } = verificationMod;
 const { extractFrontmatter, parseMustHavesBlock } = frontmatterMod;
 const { readStateHeadFreshness } = stateMod;
 
@@ -1992,12 +1992,9 @@ function cmdValidateHealth(
   // Diagnostic -> IssueEntry mapping contract this reproduces.
   const snapshot = buildPlanningSnapshot(cwd);
   const diagnostics = evaluateRules(snapshot);
-  // #5118: health reports an out-of-set verification report status as a
-  // finding (W030, from the snapshot) — a diagnostics surface survives the
-  // defect it diagnoses. Taking the parked error here is what keeps the CLI
-  // seam (gsd-tools.cjs) from turning this run into
-  // `verification_status_invalid`; every query surface still fails.
-  takePendingVerificationStatusError();
+  // #5118: an out-of-set verification report status is carried by the
+  // snapshot (`verificationStatusError`) and reported as the W030 finding — a
+  // diagnostics surface survives the defect it diagnoses, so this run exits 0.
 
   const errors: IssueEntry[] = [];
   const warnings: IssueEntry[] = [];

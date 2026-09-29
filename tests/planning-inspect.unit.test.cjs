@@ -510,7 +510,9 @@ describe('planning-inspect — healthy two-phase project', () => {
     assert.strictEqual(foo.scope, 'complete');
     assert.deepStrictEqual(foo.goal, { value: 'Ship the foo module end to end.', scope: 'complete' });
     assert.deepStrictEqual(foo.dependencies, { value: ['0'], scope: 'complete' });
-    assert.deepStrictEqual(foo.verification, { status: 'passed', next_action: 'Verification passed — continue.' });
+    // #5118: `route` is ADDITIVE (the bare command the owner routes the status
+    // to; '' for passed) — the two pre-existing fields are unchanged.
+    assert.deepStrictEqual(foo.verification, { status: 'passed', next_action: 'Verification passed — continue.', route: '' });
     assert.deepStrictEqual(foo.roadmap_acceptance, { checkbox: true, authoritative: false });
 
     assert.strictEqual(bar.dir, '02-bar');

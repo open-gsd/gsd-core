@@ -86,6 +86,10 @@ const { scanPhasePlans } = planScanMod;
 // determinePhaseStatus derivation.
 import { phaseStatus, toDisplayLabel, foldPhaseStatuses, PHASE_STATUS } from './phase-status.cjs';
 import type { PhaseStatus } from './phase-status.cjs';
+// #5118: an aggregate over a refused verification report fails through the owner.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import verificationMod = require('./verification.cjs');
+const { failOnVerificationStatusError } = verificationMod;
 
 /** The effort-sync line editors' fence reading: a block behind a preamble is still edited (#3706). */
 const EFFORT_SYNC_FENCE: LocateFrontmatterFenceOptions = Object.freeze({ allowPreamble: true });
@@ -3324,6 +3328,8 @@ function cmdProgressRender(cwd: string, format: string | undefined, raw: boolean
   let totalPlans = 0;
   let totalSummaries = 0;
   let phaseScope: string | null = null;
+  // #5118: carried out of the scan below and failed on after it.
+  let statusError: ReturnType<typeof phaseStatus>['value']['statusError'];
 
   try {
     // #3185 (ADR-3180 Decision 1): the single owner applies the milestone
@@ -3364,6 +3370,7 @@ function cmdProgressRender(cwd: string, format: string | undefined, raw: boolean
       // (root+nested, superseded-excluded, canonical pairing) from the
       // single owner (Phase Status Module, ADR-5057).
       const ps = phaseStatus(path.join(phasesDir, dir), { convention: phaseIdConvention });
+      if (ps.value.statusError && !statusError) statusError = ps.value.statusError;
       const plans = ps.value.planCount;
       const summaries = ps.value.summaryCount;
 
@@ -3382,6 +3389,8 @@ function cmdProgressRender(cwd: string, format: string | undefined, raw: boolean
       });
     }
   } catch { /* intentionally empty */ }
+  // #5118: a read-only aggregate over a refused report prints nothing.
+  if (statusError) failOnVerificationStatusError(statusError);
 
   // #3217 (ADR-3180 §7.6 rule 4): `phaseScope` was already computed above
   // (Phase 3, #3222) but never consulted before rendering — a percentage was
@@ -3854,6 +3863,9 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
     }
   } catch { /* intentionally empty */ }
 
+  // #5118: the first phase whose verification report `status` is outside the
+  // closed set — carried out of the scan below and failed on after it.
+  let statusError: ReturnType<typeof phaseStatus>['value']['statusError'];
   try {
     // #3185 (ADR-3180 Decision 1): route through the single owner. This
     // previously applied the milestone window but NOT a directory-level
@@ -3893,6 +3905,7 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
       // (root+nested, superseded-excluded, canonical pairing) from the
       // single owner (Phase Status Module, ADR-5057).
       const ps = phaseStatus(path.join(phasesDir, dir), { convention: phaseIdConvention });
+      if (ps.value.statusError && !statusError) statusError = ps.value.statusError;
       const plans = ps.value.planCount;
       const summaries = ps.value.summaryCount;
 
@@ -3918,6 +3931,8 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
       });
     }
   } catch { /* intentionally empty */ }
+  // #5118: a read-only aggregate over a refused report prints nothing.
+  if (statusError) failOnVerificationStatusError(statusError);
 
   const internalPhases = [...phasesByNumber.values()].sort((a, b) => comparePhaseNum(a.number, b.number));
   const completedPhases = internalPhases.filter(p => p.phaseStatus === PHASE_STATUS.COMPLETE).length;

@@ -139,8 +139,9 @@ const {
 } = planningWorkspace;
 
 const { extractFrontmatter, frontmatterBlock } = frontmatterMod;
-const { isPhaseComplete, resolveVerificationFile, resolveUatFile, VERIFICATION_STATUS } = verificationMod;
+const { isPhaseComplete, resolveVerificationFile, resolveUatFile, VERIFICATION_STATUS, VerificationStatusError } = verificationMod;
 type VerificationStatus = verificationMod.VerificationStatus;
+type VerificationStatusResult = verificationMod.VerificationStatusResult;
 const { evaluateUatPassed } = uatPredicateMod;
 const { resolveLoopHooks } = loopResolverMod;
 const { loadRegistry } = capabilityLoaderMod;
@@ -322,7 +323,13 @@ function buildPhaseCompletionProjection(
   // projection; init passes the phase number it already knows (its phaseDir
   // is unresolved in some branches, where the router could not derive one).
   const completionResult = isPhaseComplete(phaseFullDir, { runtime: slashRuntime, phaseNumber, convention });
-  const verificationStatus = completionResult.value.verification;
+  // #5118: the owner carried an out-of-set report status in its result
+  // (`statusError`, `verification.status: null`); an init bundle is never
+  // assembled over a report the owner refused — the carried error is raised
+  // here and every `init *` surface built on this projection fails with the
+  // error's own reason (the CLI entry seam), printing nothing.
+  if (completionResult.value.statusError) throw completionResult.value.statusError;
+  const verificationStatus = completionResult.value.verification as VerificationStatusResult;
   const projectedVerificationStatus = verificationStatus.status;
   const projectedVerificationAction = verificationStatus.next_action;
   const verificationPassed = projectedVerificationStatus === VERIFICATION_STATUS.PASSED;
@@ -3867,8 +3874,11 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
         nextPhase = phaseInfo;
       }
     }
-  } catch {
-    /* intentionally empty */
+  } catch (err) {
+    // #5118: the owner's out-of-set report error is not a scan failure to
+    // degrade over — the bundle is never assembled over a refused report.
+    if (err instanceof VerificationStatusError) throw err;
+    /* otherwise intentionally empty */
   }
 
   for (const [num, name] of roadmapPhaseNames) {

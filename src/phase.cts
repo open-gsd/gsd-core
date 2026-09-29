@@ -100,7 +100,7 @@ import verificationMod = require('./verification.cjs');
 // cycle (the reverse edge, `state.cts → verify.cjs`, would).
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- verify.cjs is an export= CommonJS module
 import verifyMod = require('./verify.cjs');
-const { readVerificationStatus, VERIFICATION_STATUS } = verificationMod;
+const { readVerificationStatus, VERIFICATION_STATUS, findVerificationStatusError } = verificationMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- plan-dependency-graph.cjs is an export= CommonJS module
 import planDependencyGraphMod = require('./plan-dependency-graph.cjs');
 const { computeHaltPropagation, buildSummaryFileIndex, isSummaryFileHalted, isSummaryFileBlocked } = planDependencyGraphMod;
@@ -3872,6 +3872,27 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
     if (verificationStatus.status !== VERIFICATION_STATUS.PASSED) {
       return verificationStatus;
     }
+
+    // #5118 (no write before the error): the transaction below writes ROADMAP,
+    // REQUIREMENTS and STATE, and the STATE frontmatter rebuild reads EVERY
+    // phase's report (buildStateFrontmatter → isPhaseComplete). Validate every
+    // sibling phase's report here, BEFORE the first write, so a report in
+    // ANOTHER phase whose `status` is outside the closed set fails this
+    // command having written nothing (withPlanningLock releases the lock).
+    const phasesRoot = path.dirname(phaseFullDir);
+    let siblingPhaseDirs: string[] = [];
+    try {
+      siblingPhaseDirs = fs.readdirSync(phasesRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.join(phasesRoot, entry.name))
+        .sort();
+    } catch {
+      /* no sibling listing → nothing further to validate; the gate above read this phase */
+    }
+    const siblingStatusError = findVerificationStatusError(siblingPhaseDirs, {
+      convention: resolvePhaseIdConvention(cwd),
+    });
+    if (siblingStatusError) throw siblingStatusError;
 
     const runPhaseCompleteTransaction = () => {
       const writes: WriteSpec[] = [];

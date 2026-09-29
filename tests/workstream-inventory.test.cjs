@@ -1384,6 +1384,46 @@ describe('#2645 — deleting a verification report must not raise completeness',
     assert.equal(inv.completed_phases, 0, 'the percentage must not rise just because the ledger became unreadable');
   });
 
+  // #5118 review G: the ledger-local `unrecorded` state was deleted — its only
+  // reader (phaseStatusFromFacts) never told it apart from `missing`. An
+  // adopted ledger with no entry for a phase reads exactly like a never-adopted
+  // one: the SAME wire status (never complete under disk-strict).
+  test('#5118: an adopted ledger with no entry for this phase reads the same as no ledger at all', () => {
+    const makeWs = (name, adopt) => {
+      const wsDir = seedWorkstream(tmpDir, { name });
+      fs.writeFileSync(path.join(wsDir, 'STATE.md'), FLAT_STATE);
+      fs.writeFileSync(path.join(wsDir, 'ROADMAP.md'), flatRoadmap(['| 1. Foo | 1/1 | In Progress | - |']));
+      writePhase(wsDir, '1-foo', { plans: 1, summaries: 1 });
+      if (adopt) fs.writeFileSync(path.join(wsDir, '.verification-ledger.json'), JSON.stringify({ '99': 'passed' }));
+      return inspectWorkstream(tmpDir, name, { active: null });
+    };
+    const adopted = makeWs('ws-5118-adopted', true);
+    const pristine = makeWs('ws-5118-pristine', false);
+    assert.deepEqual(adopted.phases.map((p) => p.status), pristine.phases.map((p) => p.status));
+    assert.equal(adopted.completed_phases, 0);
+  });
+
+  // #5118 review B: this inspection WRITES the ledger, so a report whose
+  // `status` is outside the closed set fails it before the write.
+  test('#5118: an out-of-set report fails the inspection before the ledger is written', () => {
+    const wsDir = seedWorkstream(tmpDir, { name: 'ws-5118-out-of-set' });
+    fs.writeFileSync(path.join(wsDir, 'STATE.md'), FLAT_STATE);
+    fs.writeFileSync(path.join(wsDir, 'ROADMAP.md'), flatRoadmap([
+      '| 1. Foo | 1/1 | In Progress | - |',
+      '| 2. Bar | 1/1 | In Progress | - |',
+    ]));
+    writePhase(wsDir, '1-foo', { plans: 1, summaries: 1, verification: 'gaps_found' });
+    writePhase(wsDir, '2-bar', { plans: 1, summaries: 1, verification: 'verified' });
+    const ledgerPath = path.join(wsDir, '.verification-ledger.json');
+    assert.throws(() => inspectWorkstream(tmpDir, 'ws-5118-out-of-set', { active: null }));
+    assert.equal(fs.existsSync(ledgerPath), false, 'nothing persisted — not even phase 1\'s real verdict');
+
+    // CONTROL: the same workstream with the report fixed inspects and writes.
+    fs.writeFileSync(path.join(wsDir, 'phases', '2-bar', '02-VERIFICATION.md'), '---\nstatus: passed\n---\n');
+    assert.doesNotThrow(() => inspectWorkstream(tmpDir, 'ws-5118-out-of-set', { active: null }));
+    assert.equal(fs.existsSync(ledgerPath), true);
+  });
+
   // Row 13 — "delete the ledger" case #1: the ledger file is removed, but
   // the phase's report is STILL PRESENT and still fails verification. This
   // must never raise completeness (the live read governs regardless of

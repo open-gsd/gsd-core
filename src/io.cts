@@ -442,9 +442,39 @@ type ErrorReasonValue = typeof ERROR_REASON[keyof typeof ERROR_REASON];
  * more than one line or introduce an unescaped `"`. Callers embedding the
  * result MUST NOT add their own surrounding quotes — that would
  * double-quote it.
+ *
+ * #5118 security review: `JSON.stringify` leaves characters that render
+ * invisibly or reorder the text around them untouched — DEL and the C1
+ * controls (U+007F–U+009F), the line/paragraph separators (U+2028–U+2029),
+ * zero-width and directional marks (U+200B–U+200F), the bidi embeddings and
+ * overrides (U+202A–U+202E), the bidi isolates (U+2066–U+2069) and the BOM
+ * (U+FEFF). Each is escaped as `\uXXXX` so the token reads exactly as its
+ * code points are, whoever renders it.
  */
+const INVISIBLE_OR_BIDI_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [0x7f, 0x9f],
+  [0x2028, 0x2029],
+  [0x200b, 0x200f],
+  [0x202a, 0x202e],
+  [0x2066, 0x2069],
+  [0xfeff, 0xfeff],
+];
+
+/** Code points as `\uXXXX` escape text (source stays ASCII; no literal invisible characters). */
+function toUnicodeEscape(codePoint: number): string {
+  return `\\u${codePoint.toString(16).padStart(4, '0')}`;
+}
+
+const INVISIBLE_OR_BIDI_RE = new RegExp(
+  `[${INVISIBLE_OR_BIDI_RANGES.map(([lo, hi]) => `${toUnicodeEscape(lo)}-${toUnicodeEscape(hi)}`).join('')}]`,
+  'g',
+);
+
 function formatDiagnosticToken(value: string): string {
-  return JSON.stringify(value);
+  return JSON.stringify(value).replace(
+    INVISIBLE_OR_BIDI_RE,
+    (ch) => toUnicodeEscape(ch.charCodeAt(0)),
+  );
 }
 
 /**

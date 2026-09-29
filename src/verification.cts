@@ -78,11 +78,14 @@ type Scope = planningScopeMod.Scope;
  *   - `missing`             the phase directory exists and holds no report, or
  *                           the report has no `status` (the verify step never ran)
  *   - `unparseable`         the report exists but its frontmatter is not YAML
- *                           (#4806); also `isPhaseComplete`'s no-throw
- *                           projection of an out-of-set report status
+ *                           (#4806) — this one meaning only
  *   - `phase_dir_not_found` there was no phase directory to look in (ADR-5057
  *                           amendment 2, #4987) — a usage error, never
  *                           `execute-phase`
+ *
+ * An out-of-set report status is NOT a member either: the reader throws, and
+ * `isPhaseComplete`'s no-throw projection of it is `status: null` with scope
+ * UNREADABLE and `statusError` set (never `unparseable`).
  */
 const VERIFICATION_STATUS = Object.freeze({
   PASSED: 'passed',
@@ -128,17 +131,37 @@ function assertVerificationStatus(v: unknown, where: string): asserts v is Verif
   }
 }
 
-/** Render an untrusted status value as one quoted, control-free token (io.formatDiagnosticToken). */
+/** The rendered raw-status token is cut to this many characters (#5118 security review). */
+const RAW_STATUS_TOKEN_LIMIT = 120;
+
+/**
+ * Render an untrusted status value as one quoted, control-free token
+ * (io.formatDiagnosticToken escapes C0/C1 controls, line/paragraph
+ * separators, zero-width and bidi-override characters and the BOM as
+ * `\uXXXX`), truncated to RAW_STATUS_TOKEN_LIMIT characters plus
+ * `…(N more)` — a report is agent-written text, and its echo reaches every
+ * workflow's LLM context through the error message.
+ */
 function describeRawStatus(raw: unknown): string {
-  if (typeof raw === 'string') return io.formatDiagnosticToken(raw);
-  let json: string | undefined;
-  try {
-    json = JSON.stringify(raw);
-  } catch {
-    json = undefined;
+  let text: string;
+  if (typeof raw === 'string') {
+    text = raw;
+  } else {
+    let json: string | undefined;
+    try {
+      json = JSON.stringify(raw);
+    } catch {
+      json = undefined;
+    }
+    text = json ?? String(raw);
   }
-  return io.formatDiagnosticToken(json ?? String(raw));
+  const rendered = io.formatDiagnosticToken(text);
+  if (rendered.length <= RAW_STATUS_TOKEN_LIMIT) return rendered;
+  return `${rendered.slice(0, RAW_STATUS_TOKEN_LIMIT)}…(${rendered.length - RAW_STATUS_TOKEN_LIMIT} more)`;
 }
+
+/** `VerificationStatusError.code` — import this constant wherever the code is matched. */
+const VERIFICATION_STATUS_ERROR_CODE = 'ERR_VERIFICATION_STATUS_OUT_OF_SET';
 
 /**
  * A report whose frontmatter `status` is outside the writer set
@@ -146,12 +169,14 @@ function describeRawStatus(raw: unknown): string {
  * a reader-only member such as `stale`), or a non-string value (`5`, `true`,
  * a list). Thrown by the reader, never folded into another status (#4817).
  *
- * The CLI translates it once, centrally (gsd-tools.cjs), into ERROR_REASON
- * `verification_status_invalid`; `isPhaseComplete` maps it to its UNREADABLE
- * scope so its no-throw contract holds.
+ * It carries its own ERROR_REASON (`reason`, `verification_status_invalid`) —
+ * the one owner of that mapping: a CLI surface fails with `error(err.message,
+ * err.reason)`, and the command-routing hub returns it as a pure Result whose
+ * `kind` is that reason. `isPhaseComplete` maps it to its UNREADABLE scope
+ * (`status: null`, `statusError`) so its no-throw contract holds.
  */
 class VerificationStatusError extends Error {
-  readonly code = 'ERR_VERIFICATION_STATUS_OUT_OF_SET';
+  readonly code = VERIFICATION_STATUS_ERROR_CODE;
   readonly reason = io.ERROR_REASON.VERIFICATION_STATUS_INVALID;
   readonly rawStatus: unknown;
   readonly file: string;
@@ -169,6 +194,16 @@ class VerificationStatusError extends Error {
     this.file = file;
     this.accepted = accepted;
   }
+}
+
+/**
+ * The CLI projection of a VerificationStatusError — its own message and its
+ * own `.reason` (the one owner of the reason mapping). Every CLI surface that
+ * refuses a report (a thrown error at the entry seam, or an aggregate
+ * carrying one in its result) fails through here; nothing restates the reason.
+ */
+function failOnVerificationStatusError(err: VerificationStatusError): never {
+  return error(err.message, err.reason);
 }
 
 /**
@@ -1129,8 +1164,6 @@ interface RouteResultContext {
   /** ` <N>` (leading space) or `''` — see readVerificationStatus's derivation. */
   phaseArg: string;
   staleCheckIndeterminate?: boolean;
-  /** Overrides the table's `next_action` (isPhaseComplete's out-of-set projection). */
-  nextAction?: string;
   /** A usage-error message (`phase_dir_not_found` names the path it looked at). */
   message?: string;
 }
@@ -1145,7 +1178,7 @@ function routeResult(status: VerificationStatus, ctx: RouteResultContext): Verif
   const entry = VERIFICATION_ROUTES[status];
   return {
     status,
-    next_action: ctx.nextAction ?? entry.next_action,
+    next_action: entry.next_action,
     next_command: projectNextCommand(entry.command, ctx.runtime, `${ctx.phaseArg}${entry.tail}`),
     route: entry.command,
     ...(ctx.message !== undefined ? { message: ctx.message } : {}),
@@ -1174,6 +1207,114 @@ function isPhaseDirNotFound(fsImpl: FsLike, phaseDir: string): boolean {
 
 function phaseDirNotFoundMessage(phaseDir: string): string {
   return `Usage error: phase directory not found at ${io.formatDiagnosticToken(phaseDir)}`;
+}
+
+/**
+ * True when `filePath` resolves (symlinks followed) inside `phaseDir`'s own
+ * resolved directory. Unresolvable → false (the caller reads `missing`).
+ */
+function isReportContained(phaseDir: string, filePath: string): boolean {
+  try {
+    return isContainedIn(fs.realpathSync(filePath), fs.realpathSync(phaseDir));
+  } catch {
+    return false;
+  }
+}
+
+/** What the frontmatter-only locator found for a phase directory. */
+type LocatedReport =
+  | { kind: 'phase_dir_not_found' }
+  | { kind: 'missing' }
+  | { kind: 'unparseable' }
+  | { kind: 'status'; status: VerifierStatus; filePath: string; fm: Record<string, unknown> };
+
+/**
+ * #5118: steps 0-2 of `readVerificationStatus` — no phase directory
+ * (`phase_dir_not_found`), no report or no `status` (`missing`), a report
+ * whose frontmatter is not YAML (`unparseable`), or the report's writer-set
+ * status. Reads only the report's frontmatter (no staleness check, no git).
+ * THROWS `VerificationStatusError` for a status outside the writer set — the
+ * one judgement (`reportStatusOf`) every reader shares.
+ */
+function locatePhaseReport(phaseDir: string, fsImpl: FsLike, convention?: string | null): LocatedReport {
+  if (isPhaseDirNotFound(fsImpl, phaseDir)) return { kind: 'phase_dir_not_found' };
+
+  const baseName = path.basename(phaseDir);
+  let verificationFile: string | null = null;
+  try {
+    const entries = fsImpl.readdirSync(phaseDir);
+    // #3492: pin selection to THIS phase's own token so a stray cross-phase
+    // or sentinel-numbered canonically-shaped file cannot outrank this phase's
+    // own report. #612: bracket directories resolve with the convention-aware
+    // token. #4187: keep the bare report tier aligned with every other reader.
+    const resolutionToken = convention === 'bracket'
+      ? extractPhaseToken(baseName, convention)
+      : extractPhaseToken(baseName);
+    verificationFile = resolveVerificationFile(entries, {
+      allowBare: true,
+      phaseToken: resolutionToken,
+      phaseDirName: baseName,
+      convention,
+    });
+  } catch {
+    // Directory unreadable → treat as missing
+    verificationFile = null;
+  }
+  if (!verificationFile) return { kind: 'missing' };
+
+  // extractFrontmatter anchors at byte 0, so body `status:` lines are ignored.
+  const filePath = path.join(phaseDir, verificationFile);
+  // #5118 security review (containment): a report whose real path escapes its
+  // own phase directory (a symlink out of the project) is refused BEFORE a
+  // byte of it is read — it reads `missing`, and no value from it can ever
+  // reach a message (the out-of-set error echoes the report's `status`). An
+  // injected FsLike (planning-inspect's containment seam) enforces its own
+  // containment by throwing, which the read below folds to `missing` too.
+  if (fsImpl === defaultFsImpl && !isReportContained(phaseDir, filePath)) return { kind: 'missing' };
+  let fm: Record<string, unknown> = {};
+  try {
+    // #3707-CR: normalize line endings at this read boundary so a lone-CR
+    // report's `---\r…\r---` fence still matches extractFrontmatter's check.
+    const content = normalizeLineEndings(fsImpl.readFileSync(filePath, 'utf-8'));
+    fm = extractFrontmatter(content, filePath);
+    // #4806: an unparseable frontmatter block is NOT "missing" — the file
+    // exists and verification ran; the caller is sent to fix the YAML.
+    if ((fm as unknown as Record<symbol, unknown>)[FRONTMATTER_UNPARSEABLE] === true) {
+      return { kind: 'unparseable' };
+    }
+  } catch {
+    // An unreadable report reads as carrying no status (`missing`).
+    fm = {};
+  }
+
+  // #5118: judged OUTSIDE the parse `try`, so an out-of-set value can never be
+  // swallowed into `missing`.
+  const status = reportStatusOf(fm, filePath);
+  if (status === null) return { kind: 'missing' };
+  return { kind: 'status', status, filePath, fm };
+}
+
+/**
+ * #5118 (ADR-5057 Phase 4, "no write before the error"): the first report
+ * among `phaseDirs` whose `status` is outside the closed set, or `null`.
+ * Frontmatter-only (the same locator `readVerificationStatus` runs), so a
+ * command that WRITES validates every report it will read BEFORE its first
+ * write and fails having written nothing.
+ */
+function findVerificationStatusError(
+  phaseDirs: readonly string[],
+  deps: { fs?: FsLike; convention?: string | null } = {},
+): VerificationStatusError | null {
+  const fsImpl: FsLike = deps.fs ?? defaultFsImpl;
+  for (const phaseDir of phaseDirs) {
+    try {
+      locatePhaseReport(phaseDir, fsImpl, deps.convention);
+    } catch (err) {
+      if (err instanceof VerificationStatusError) return err;
+      throw err;
+    }
+  }
+  return null;
 }
 
 interface ResolveVerificationFileOptions {
@@ -1593,75 +1734,19 @@ function readVerificationStatus(
   const route = (status: VerificationStatus, extra: Partial<RouteResultContext> = {}): VerificationStatusResult =>
     routeResult(status, { runtime, phaseArg, ...extra });
 
-  // 0. #5118 / ADR-5057 amendment 2: nothing to look in → a usage error.
-  if (isPhaseDirNotFound(fsImpl, phaseDir)) {
+  // Steps 0-2 (no phase dir → usage error; find the report; parse its
+  // frontmatter and judge `status`) are the frontmatter-only locator shared
+  // with the pre-write validator (`findVerificationStatusError`). An
+  // out-of-set status THROWS VerificationStatusError out of the locator —
+  // before the gaps_found short-circuit and the staleness check below, so
+  // `stale` can never mask it (#4817 Part 2).
+  const located = locatePhaseReport(phaseDir, fsImpl, opts.convention);
+  if (located.kind === 'phase_dir_not_found') {
     return route(VERIFICATION_STATUS.PHASE_DIR_NOT_FOUND, { message: phaseDirNotFoundMessage(phaseDir) });
   }
-
-  // 1. Find *-VERIFICATION.md
-  let verificationFile: string | null = null;
-  try {
-    const entries = fsImpl.readdirSync(phaseDir);
-    // #3492: pin selection to THIS phase's own token so a stray cross-phase
-    // or sentinel-numbered canonically-shaped file cannot outrank this phase's
-    // own report. #612: derive a separate convention-aware RESOLUTION token
-    // for bracket directories while the routed command argument above stays
-    // convention-less and milestone-unambiguous. #4187: keep the bare report
-    // tier aligned with every other verification reader.
-    const resolutionToken = opts.convention === 'bracket'
-      ? extractPhaseToken(baseName, opts.convention)
-      : phaseToken;
-    verificationFile = resolveVerificationFile(entries, {
-      allowBare: true,
-      phaseToken: resolutionToken,
-      phaseDirName: baseName,
-      convention: opts.convention,
-    });
-  } catch {
-    // Directory unreadable → treat as missing
-    verificationFile = null;
-  }
-
-  if (!verificationFile) {
-    return route(VERIFICATION_STATUS.MISSING);
-  }
-
-  // 2. Read and parse frontmatter using the shared parser.
-  // extractFrontmatter anchors at byte 0, so body `status:` lines are ignored.
-  const filePath = path.join(phaseDir, verificationFile);
-  let fm: ReturnType<typeof extractFrontmatter> = {};
-  try {
-    // #3707-CR follow-up MINOR 1: normalize line endings at this read
-    // boundary — this function's own `readFileSync` is the equivalent seam
-    // `planning.inspect`'s `buildUatRows`/`readDocument` route through for
-    // UAT/REQUIREMENTS documents, but `readVerificationStatus` had no such
-    // normalization of its own. A lone-CR VERIFICATION.md's `---\r...\r---`
-    // frontmatter fence never matched `extractFrontmatter`'s byte-0
-    // `---\n`/`---\r\n` check, so `status: passed` was read as absent and
-    // this function reported 'missing' — under-reporting a completed
-    // verification as if the step never ran, the fail-safe direction but the
-    // same root cause as the false-clean class fixed elsewhere in #3707-CR.
-    const content = normalizeLineEndings(fsImpl.readFileSync(filePath, 'utf-8'));
-    fm = extractFrontmatter(content, filePath);
-    // #4806: an unparseable frontmatter block is NOT "missing" — the file
-    // exists and verification ran. Report a distinct status so the caller is
-    // sent to fix the YAML, not to re-run execute-phase.
-    if ((fm as unknown as Record<symbol, unknown>)[FRONTMATTER_UNPARSEABLE] === true) {
-      return route(VERIFICATION_STATUS.UNPARSEABLE);
-    }
-  } catch {
-    // An unreadable report reads as carrying no status (`missing`, below).
-    fm = {};
-  }
-
-  // #5118: judged OUTSIDE the parse `try` so an out-of-set value can never be
-  // swallowed into `missing`, and BEFORE the gaps_found short-circuit and the
-  // staleness check so `stale` can never mask it (#4817 Part 2). Throws
-  // VerificationStatusError for anything outside VERIFIER_STATUSES.
-  const reportStatus = reportStatusOf(fm, filePath);
-  if (reportStatus === null) {
-    return route(VERIFICATION_STATUS.MISSING);
-  }
+  if (located.kind === 'missing') return route(VERIFICATION_STATUS.MISSING);
+  if (located.kind === 'unparseable') return route(VERIFICATION_STATUS.UNPARSEABLE);
+  const { status: reportStatus, fm } = located;
 
   // gaps_found takes priority over stale — gap closure is the correct next
   // step regardless of whether summaries are newer than the verification file.
@@ -1754,25 +1839,6 @@ function readVerificationStatus(
   return route(reportStatus, { staleCheckIndeterminate });
 }
 
-/**
- * #5118: the out-of-set error `isPhaseComplete` absorbed (to keep its no-throw
- * contract) is parked here so the CLI can still fail with ERROR_REASON
- * `verification_status_invalid` — the aggregate surfaces (`roadmap analyze`,
- * `state sync`, `init *`, `planning inspect`, `smart-entry`) reach the report
- * only through `isPhaseComplete`. The FIRST error of a run wins (it names the
- * first offending file). gsd-tools.cjs clears the cell before dispatch and
- * takes it after; `validate health`, which reports the file as a finding
- * instead, takes (and so clears) it itself.
- */
-let pendingVerificationStatusError: VerificationStatusError | null = null;
-
-/** Return the parked out-of-set error (if any) and clear the cell. */
-function takePendingVerificationStatusError(): VerificationStatusError | null {
-  const err = pendingVerificationStatusError;
-  pendingVerificationStatusError = null;
-  return err;
-}
-
 interface IsPhaseCompleteDeps {
   fs?: FsLike;
   /** Injectable per-phase clean-commit-time resolver, threaded through to readVerificationStatus. */
@@ -1789,14 +1855,30 @@ interface IsPhaseCompleteDeps {
   convention?: string | null;
 }
 
+/**
+ * #5118: `isPhaseComplete`'s projection of a report whose `status` is outside
+ * the closed set — NOT a VerificationStatus (`unparseable` keeps its one
+ * meaning: the frontmatter does not parse). `status: null`, no route, and the
+ * error's own message as `next_action`.
+ */
+interface InvalidVerificationReading {
+  status: null;
+  next_action: string;
+  next_command: '';
+  route: '';
+}
+
+/** What `isPhaseComplete` read: a routed VerificationStatus, or the out-of-set projection. */
+type PhaseVerificationReading = VerificationStatusResult | InvalidVerificationReading;
+
 interface PhaseCompletionValue {
   complete: boolean;
-  verification: VerificationStatusResult;
+  verification: PhaseVerificationReading;
   /**
-   * #5118: set when the report's `status` is outside the closed set. The
-   * owner kept its no-throw contract (scope UNREADABLE, `verification` read as
-   * `unparseable` with the error's own message as `next_action`); a caller
-   * that must refuse — `phase complete`'s gate — rethrows this.
+   * #5118: set exactly when `verification.status` is `null` — the report's
+   * `status` is outside the closed set. The owner keeps its no-throw contract
+   * (scope UNREADABLE); every aggregate carries this error in its own result
+   * and its CLI surface fails with the error's own `.reason`.
    */
   statusError?: VerificationStatusError;
 }
@@ -1821,9 +1903,9 @@ interface PhaseCompletionValue {
  *
  * #5118: a report whose `status` is outside the closed set does NOT throw
  * out of here (ADR-5057 :223 — the no-throw contract Phases 2–4 preserve): it
- * degrades to scope UNREADABLE, `verification` reads `unparseable` carrying
- * the error's message, `value.statusError` holds the typed error, and the
- * error is parked for the CLI seam (`takePendingVerificationStatusError`).
+ * degrades to scope UNREADABLE, `verification.status` is `null` (route `''`,
+ * the error's message as `next_action`), `complete` is false, and
+ * `value.statusError` holds the typed error for the caller to carry.
  *
  * `scope` is UNREADABLE when `phaseDir` itself could not be listed — this is
  * INDEPENDENT of readVerificationStatus's own no-throw fail-open contract for
@@ -1849,7 +1931,7 @@ function isPhaseComplete(
     readable = false;
   }
 
-  let verification: VerificationStatusResult;
+  let verification: PhaseVerificationReading;
   let statusError: VerificationStatusError | undefined;
   try {
     verification = readVerificationStatus(phaseDir, {
@@ -1862,13 +1944,8 @@ function isPhaseComplete(
   } catch (err) {
     if (!(err instanceof VerificationStatusError)) throw err;
     statusError = err;
-    if (pendingVerificationStatusError === null) pendingVerificationStatusError = err;
     readable = false;
-    verification = routeResult(VERIFICATION_STATUS.UNPARSEABLE, {
-      runtime: deps.runtime ?? 'claude',
-      phaseArg: '',
-      nextAction: err.message,
-    });
+    verification = { status: null, next_action: err.message, next_command: '', route: '' };
   }
 
   return {
@@ -2434,9 +2511,11 @@ const verificationModule = {
   isVerificationStatus,
   assertVerificationStatus,
   VerificationStatusError,
+  VERIFICATION_STATUS_ERROR_CODE,
+  failOnVerificationStatusError,
   reportStatusOf,
   routeResult,
-  takePendingVerificationStatusError,
+  findVerificationStatusError,
   defaultPhaseCleanCommitTimesMs,
   resolvePhaseArtifactFile,
   resolveVerificationFile,
@@ -2462,7 +2541,7 @@ const verificationModule = {
 // `v.VerificationStatus`.
 // eslint-disable-next-line @typescript-eslint/no-namespace
 declare namespace verificationModule {
-  export { VerificationStatus, VerifierStatus, VerificationStatusResult, RouteCommand };
+  export { VerificationStatus, VerifierStatus, VerificationStatusResult, RouteCommand, PhaseVerificationReading };
 }
 
 export = verificationModule;

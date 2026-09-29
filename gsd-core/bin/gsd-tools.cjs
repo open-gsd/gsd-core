@@ -5131,43 +5131,26 @@ function resolveMainWorktreeCwd(cwd, deps = {}) {
   return worktreeRoot;
 }
 
-// ─── #5118: the ONE translation of an out-of-set verification status ──────────
+// ─── #5118: an out-of-set verification status thrown past a command ─────────
 // ADR-5057 Phase 4 closed the verification-status vocabulary: a
 // *-VERIFICATION.md whose frontmatter `status` is outside `passed |
 // gaps_found | human_needed` is a hard error (verification.cjs's
-// VerificationStatusError). It reaches this seam two ways, and is translated
-// here, once, for every CLI surface, into ERROR_REASON
-// `verification_status_invalid` (with the owner's message: the file, the
-// quoted value, and the accepted values):
-//   1. thrown — `verification status`, `phase uat-passed`, `phase complete`
-//      and `planning inspect` read the report through `readVerificationStatus`;
-//   2. parked — the aggregate surfaces (`roadmap analyze`, `state sync`,
-//      `init *`, `smart-entry`, …) reach it only through `isPhaseComplete`,
-//      whose no-throw contract maps it to an UNREADABLE scope and parks the
-//      error (`takePendingVerificationStatusError`). `validate health` takes
-//      the parked error itself and reports the file as W030 instead.
-// Captured stdout is discarded on a parked error: the command's answer was
-// computed over a report the owner refused.
+// VerificationStatusError). A command that reads one report directly
+// (`verification status`, `phase uat-passed`, `phase complete`) lets it throw;
+// aggregates carry it in their own results and fail themselves. Either way
+// the CLI fails through the owner's `failOnVerificationStatusError` — the
+// error's own message and its own `.reason`; nothing here restates either.
 function isVerificationStatusError(err) {
   return err instanceof verification.VerificationStatusError;
 }
 
-function failOnVerificationStatusError(err) {
-  error(err.message, ERROR_REASON.VERIFICATION_STATUS_INVALID);
-}
-
 async function captureTranslatingVerificationStatus(run) {
-  verification.takePendingVerificationStatusError(); // start this run with an empty cell
-  let captured;
   try {
-    captured = await captureStdoutSyncWrites(run);
+    return await captureStdoutSyncWrites(run);
   } catch (err) {
-    if (isVerificationStatusError(err)) failOnVerificationStatusError(err);
+    if (isVerificationStatusError(err)) verification.failOnVerificationStatusError(err);
     throw err;
   }
-  const parked = verification.takePendingVerificationStatusError();
-  if (parked) failOnVerificationStatusError(parked);
-  return captured;
 }
 
 async function main() {

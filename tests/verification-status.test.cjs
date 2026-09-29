@@ -4616,6 +4616,131 @@ describe('#5118 B: an out-of-set report status is a hard error in the reader', (
     });
     assert.equal(completion.scope, 'unreadable', 'the owner answers "could not read", never a confident verdict');
     assert.equal(completion.value.complete, false);
+    // Review decision C: `unparseable` keeps ONE meaning (the frontmatter does
+    // not parse). The out-of-set projection is status null, no route, and the
+    // typed error carried in the value.
+    assert.equal(completion.value.verification.status, null, 'an out-of-set report is not `unparseable`');
+    assert.equal(completion.value.verification.route, '');
+    assert.equal(completion.value.verification.next_command, '');
+    assert.ok(completion.value.statusError instanceof owner5118().VerificationStatusError, 'the value carries the typed error');
+    assert.ok(completion.value.verification.next_action.includes('verified'), 'next_action is the error message naming the value');
+  });
+
+  test('V17b: an in-set report carries no statusError (boundary with V17)', (t) => {
+    const { dir } = writeReport5118(t, 'passed');
+    const completion = isPhaseComplete(dir, NO_GIT_TIMES);
+    assert.equal(completion.value.statusError, undefined);
+    assert.equal(completion.value.verification.status, 'passed');
+  });
+
+  test('V17c: the parked-error cell is gone — no module-level channel carries the error past its caller', () => {
+    assert.equal(owner5118().takePendingVerificationStatusError, undefined, 'the error travels in results, never in module state');
+    assert.equal(owner5118().VERIFICATION_STATUS_ERROR_CODE, 'ERR_VERIFICATION_STATUS_OUT_OF_SET', 'the code constant is exported for every matcher');
+  });
+});
+
+describe('#5118 review H: the echoed raw status is sanitized and bounded', () => {
+  const { formatDiagnosticToken } = require('../gsd-core/bin/lib/io.cjs');
+  const hex4 = (cp) => cp.toString(16).padStart(4, '0');
+
+  test('H1: every invisible / bidi range endpoint is escaped as \\uXXXX, never emitted raw', () => {
+    const endpoints = [0x7f, 0x9f, 0x2028, 0x2029, 0x200b, 0x200f, 0x202a, 0x202e, 0x2066, 0x2069, 0xfeff];
+    for (const cp of endpoints) {
+      const token = formatDiagnosticToken(`a${String.fromCharCode(cp)}b`);
+      assert.equal(token, `"a\\u${hex4(cp)}b"`, `U+${hex4(cp).toUpperCase()}`);
+      assert.equal(token.includes(String.fromCharCode(cp)), false);
+    }
+  });
+
+  test('H1b: neighbours just outside each range pass through unchanged (boundary)', () => {
+    for (const cp of [0x7e, 0xa0, 0x200a, 0x2010, 0x2027, 0x202f, 0x2065, 0x206a, 0xfefe, 0xff00]) {
+      const token = formatDiagnosticToken(`a${String.fromCharCode(cp)}b`);
+      assert.equal(token, JSON.stringify(`a${String.fromCharCode(cp)}b`), `U+${hex4(cp).toUpperCase()}`);
+    }
+  });
+
+  test('H2: the raw status token is cut at 120 characters — limit-1 / limit / limit+1', (t) => {
+    const { VerificationStatusError } = owner5118();
+    // A plain ASCII string of length L renders as L + 2 characters (its quotes).
+    const render = (raw) => new VerificationStatusError(raw, '/p/01-VERIFICATION.md').message;
+    const at119 = 'a'.repeat(117);
+    const at120 = 'a'.repeat(118);
+    const at121 = 'a'.repeat(119);
+    assert.ok(render(at119).includes(`"${at119}"`), 'limit-1: whole');
+    assert.ok(render(at120).includes(`"${at120}"`), 'limit: whole');
+    assert.equal(render(at120).includes('more)'), false);
+    assert.ok(render(at121).includes(`"${'a'.repeat(119)}…(1 more)`), 'limit+1: cut with the remainder count');
+    t.diagnostic('rendered token length is bounded by RAW_STATUS_TOKEN_LIMIT');
+  });
+
+  test('H3: a 200k-character status with a bidi override is bounded and escaped in the error message', (t) => {
+    const { VerificationStatusError } = owner5118();
+    const hostile = `${String.fromCharCode(0x202e)}${'x'.repeat(200000)}`;
+    const { dir, file } = writeReport5118(t, 'placeholder');
+    fs.writeFileSync(file, `---\nstatus: ${hostile}\n---\n`);
+    const err = expectOutOfSet5118(() => readVerificationStatus(dir, NO_GIT_TIMES));
+    assert.ok(err instanceof VerificationStatusError);
+    assert.ok(err.message.length < 2000, `message must be bounded, got ${err.message.length} chars`);
+    assert.equal(err.message.includes(String.fromCharCode(0x202e)), false, 'the bidi override never reaches the message raw');
+    assert.ok(err.message.includes('\\u202e'), 'it is escaped');
+    assert.match(err.message, /…\(\d+ more\)/);
+  });
+});
+
+describe('#5118 review (security): a report outside its phase directory is never read into a message', () => {
+  test('S1: a VERIFICATION symlink escaping the phase dir reads `missing` and discloses nothing', {
+    skip: process.platform === 'win32' ? 'symlink semantics differ on win32' : false,
+  }, (t) => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5118-escape-'));
+    t.after(() => cleanup(parent));
+    const outside = path.join(parent, 'outside.md');
+    fs.writeFileSync(outside, '---\nstatus: TOP_SECRET_5118_VALUE\n---\n');
+    const dir = path.join(parent, '01-foo');
+    fs.mkdirSync(dir);
+    fs.symlinkSync(outside, path.join(dir, '01-VERIFICATION.md'));
+
+    const result = readVerificationStatus(dir, NO_GIT_TIMES);
+    assert.equal(result.status, 'missing', 'refused before any byte is read');
+    assert.equal(JSON.stringify(result).includes('TOP_SECRET_5118_VALUE'), false);
+    const completion = isPhaseComplete(dir, NO_GIT_TIMES);
+    assert.equal(completion.value.statusError, undefined);
+    assert.equal(owner5118().findVerificationStatusError([dir]), null);
+  });
+
+  test('S1 CONTROL: the same report inside the phase dir IS read (and judged out of set)', (t) => {
+    const { dir } = writeReport5118(t, 'TOP_SECRET_5118_VALUE');
+    expectOutOfSet5118(() => readVerificationStatus(dir, NO_GIT_TIMES));
+  });
+});
+
+describe('#5118 review A: the command-routing hub returns the out-of-set error as a pure Result', () => {
+  test('A1: a handler that throws VerificationStatusError yields {ok:false, kind:verification_status_invalid, message, reason, file}', () => {
+    const { createHub, ERROR_KINDS } = require('../gsd-core/bin/lib/command-routing-hub.cjs');
+    const { VerificationStatusError } = owner5118();
+    const thrown = new VerificationStatusError('verified', '/p/01-foo/01-VERIFICATION.md');
+    const hub = createHub({
+      cjsRegistry: { fam: { sub: () => { throw thrown; } } },
+      manifest: { fam: ['sub'] },
+    });
+    const result = hub.dispatch({ family: 'fam', subcommand: 'sub' });
+    assert.deepEqual({ ...result }, {
+      ok: false,
+      kind: 'verification_status_invalid',
+      message: thrown.message,
+      reason: 'verification_status_invalid',
+      file: '/p/01-foo/01-VERIFICATION.md',
+    });
+    assert.equal(ERROR_KINDS.VerificationStatusInvalid, thrown.reason, 'the kind IS the error\'s own reason');
+  });
+
+  test('A1 CONTROL: any other thrown Error stays a HandlerFailure', () => {
+    const { createHub } = require('../gsd-core/bin/lib/command-routing-hub.cjs');
+    const hub = createHub({
+      cjsRegistry: { fam: { sub: () => { throw new Error('boom'); } } },
+      manifest: { fam: ['sub'] },
+    });
+    const result = hub.dispatch({ family: 'fam', subcommand: 'sub' });
+    assert.equal(result.kind, 'HandlerFailure');
   });
 });
 
@@ -4814,6 +4939,20 @@ describe('#5118 D: every CLI surface translates the out-of-set error once, centr
     return { projectDir, ...writeSurfaceFixture5118(projectDir, status) };
   }
 
+  // Every planning file a surface could write — compared byte for byte
+  // before/after a refused run (review decision B: no write before the error).
+  function planningBytes(projectDir) {
+    const planning = path.join(projectDir, '.planning');
+    const out = {};
+    for (const name of ['STATE.md', 'ROADMAP.md', 'REQUIREMENTS.md', 'state.json']) {
+      const file = path.join(planning, name);
+      out[name] = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : null;
+    }
+    return out;
+  }
+
+  // Review decision A: read-only aggregates CARRY the owner's error in their
+  // own result and fail with its reason; writers fail before their first write.
   const SURFACES = [
     { row: 'V29', name: 'verification status', argv: (phaseDir) => ['verification', 'status', phaseDir] },
     { row: 'V30', name: 'phase uat-passed', argv: () => ['phase', 'uat-passed', '1', '--require-verification'] },
@@ -4822,22 +4961,72 @@ describe('#5118 D: every CLI surface translates the out-of-set error once, centr
     { row: 'V34', name: 'planning inspect', argv: () => ['planning', 'inspect'] },
     { row: 'V35', name: 'init progress', argv: () => ['init', 'progress'] },
     { row: 'V36', name: 'smart-entry', argv: () => ['smart-entry'] },
+    { row: 'V36b', name: 'progress', argv: () => ['progress'] },
+    { row: 'V36c', name: 'stats', argv: () => ['stats'] },
   ];
 
   for (const { row, name, argv } of SURFACES) {
-    test(`${row}: ${name} exits non-zero with reason verification_status_invalid (control: the same fixture with passed exits 0)`, (t) => {
+    test(`${row}: ${name} exits non-zero with reason verification_status_invalid and writes nothing (control: the same fixture with passed exits 0)`, (t) => {
       const control = project(t, 'passed');
       const ok = runGsdTools(['--json-errors', ...argv(control.phaseDir)], control.projectDir);
       assert.equal(ok.exitCode, 0, `control: ${name} must succeed on an in-set report: ${ok.error}`);
 
       const bad = project(t, 'verified');
+      const before = planningBytes(bad.projectDir);
       const res = runGsdTools(['--json-errors', ...argv(bad.phaseDir)], bad.projectDir);
       assert.notEqual(res.exitCode, 0, `${name} must not answer on an out-of-set report: ${res.output}`);
+      assert.equal(res.output, '', `${name}: nothing on stdout — no answer computed over a refused report`);
       const envelope = errorEnvelope5118(res.error);
       assert.ok(envelope, `${name}: expected a --json-errors envelope on stderr, got: ${res.error}`);
       assert.equal(envelope.reason, 'verification_status_invalid');
+      assert.deepEqual(planningBytes(bad.projectDir), before, `${name}: no planning file changed`);
     });
   }
+
+  test('B1: phase complete with a bad report in ANOTHER phase fails before its first write — STATE.md and ROADMAP.md byte-identical, no commit, lock released', (t) => {
+    const { createTempGitProject } = require('./helpers.cjs');
+    const { execFileSync } = require('node:child_process');
+    const projectDir = createTempGitProject('gsd-5118-b1-');
+    t.after(() => cleanup(projectDir));
+    writeSurfaceFixture5118(projectDir, 'passed');
+    const otherPhase = path.join(projectDir, '.planning', 'phases', '02-api');
+    fs.mkdirSync(otherPhase, { recursive: true });
+    fs.writeFileSync(path.join(otherPhase, '02-VERIFICATION.md'), '---\nstatus: verified\n---\n');
+    const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+    const git = (...args) => execFileSync('git', args, { cwd: projectDir, encoding: 'utf-8', timeout: GIT_TIMEOUT_MS }).trim();
+    git('add', '-A');
+    git('commit', '-q', '-m', 'seed');
+    const head = git('rev-parse', 'HEAD');
+    const before = planningBytes(projectDir);
+
+    const res = runGsdTools(['--json-errors', 'phase', 'complete', '1'], projectDir);
+    assert.notEqual(res.exitCode, 0, `phase complete must refuse: ${res.output}`);
+    const envelope = errorEnvelope5118(res.error);
+    assert.ok(envelope, res.error);
+    assert.equal(envelope.reason, 'verification_status_invalid');
+    assert.ok(envelope.message.includes('02-VERIFICATION.md'), 'the error names the OTHER phase\'s report');
+    assert.deepEqual(planningBytes(projectDir), before, 'no planning file changed');
+    assert.equal(git('rev-parse', 'HEAD'), head, 'no commit');
+    assert.equal(git('status', '--porcelain'), '', 'the working tree is untouched');
+    assert.equal(fs.existsSync(path.join(projectDir, '.planning', '.lock')), false, 'the planning lock is released');
+
+    // CONTROL: the same fixture with the other report in set completes.
+    fs.writeFileSync(path.join(otherPhase, '02-VERIFICATION.md'), '---\nstatus: gaps_found\n---\n');
+    const ok = runGsdTools(['phase', 'complete', '1'], projectDir);
+    assert.equal(ok.exitCode, 0, `control: an in-set sibling report does not block phase 1: ${ok.error}`);
+  });
+
+  test('B2: state sync with a bad report in another phase writes nothing (STATE.md byte-identical)', (t) => {
+    const control = project(t, 'passed');
+    const other = path.join(control.projectDir, '.planning', 'phases', '02-api');
+    fs.mkdirSync(other, { recursive: true });
+    fs.writeFileSync(path.join(other, '02-VERIFICATION.md'), '---\nstatus: Passed\n---\n');
+    const before = planningBytes(control.projectDir);
+    const res = runGsdTools(['--json-errors', 'state', 'sync'], control.projectDir);
+    assert.notEqual(res.exitCode, 0);
+    assert.equal(errorEnvelope5118(res.error)?.reason, 'verification_status_invalid');
+    assert.deepEqual(planningBytes(control.projectDir), before);
+  });
 
   test('V29 (message): verification status names the offending value and the accepted set, with nothing on stdout', (t) => {
     const bad = project(t, 'verified');
@@ -4865,16 +5054,28 @@ describe('#5118 D: every CLI surface translates the out-of-set error once, centr
     assert.equal(retry.exitCode, 0, `a corrected report must complete without waiting on a stale lock: ${retry.error}`);
   });
 
-  test('V37: validate health survives the out-of-set report and reports the file as a finding', (t) => {
+  test('V37: validate health survives the out-of-set report, exits 0, and reports the file as W030', (t) => {
     const bad = project(t, 'verified');
     const res = runGsdTools(['validate', 'health'], bad.projectDir);
     assert.equal(res.exitCode, 0, `health must not crash on the defect it diagnoses: ${res.error}`);
     const report = JSON.parse(res.output);
     const findings = [...(report.errors || []), ...(report.warnings || []), ...(report.info || [])];
-    assert.ok(
-      findings.some((f) => JSON.stringify(f).includes('01-VERIFICATION.md')),
-      `a finding must name the offending report: ${JSON.stringify(findings)}`,
-    );
+    const w030 = findings.filter((f) => f.code === 'W030');
+    assert.equal(w030.length, 1, `exactly one W030 finding: ${JSON.stringify(findings)}`);
+    assert.ok(JSON.stringify(w030[0]).includes('01-VERIFICATION.md'), 'W030 names the offending report');
+  });
+
+  test('V37b: validate consistency survives the out-of-set report, exits 0, and reports W030', (t) => {
+    const bad = project(t, 'verified');
+    const res = runGsdTools(['validate', 'consistency'], bad.projectDir);
+    assert.equal(res.exitCode, 0, `consistency must not crash on the defect it diagnoses: ${res.error}`);
+    const report = JSON.parse(res.output);
+    assert.ok((report.warnings || []).some((w) => w.code === 'W030' && w.message.includes('01-VERIFICATION.md')),
+      `W030 must name the report: ${JSON.stringify(report.warnings)}`);
+
+    const control = project(t, 'passed');
+    const clean = JSON.parse(runGsdTools(['validate', 'consistency'], control.projectDir).output);
+    assert.equal((clean.warnings || []).some((w) => w.code === 'W030'), false, 'control: no W030 on an in-set report');
   });
 });
 
@@ -4926,6 +5127,39 @@ describe('#5118 G: workflows surface verification-status errors instead of readi
     assert.ok(checks.length > 0, 'the verifier <output> must run verification.status after writing the report');
     for (const line of checks) {
       assert.doesNotMatch(line, /2>\s*\/dev\/null/, `the self-check must surface the hard error: ${line.trim()}`);
+    }
+  });
+
+  // Review E: a flag set by `|| VERIFY_ERROR=1` inside a per-phase / per-item
+  // loop must be reset in the SAME fence before the read, or one phase's
+  // refusal leaks into every later iteration's routing.
+  test('V48b: every `|| VERIFY_ERROR=1` read is preceded in its own fence by a `VERIFY_ERROR=""` reset (review E)', () => {
+    let seen = 0;
+    for (const rel of ['autonomous.md', path.join('quick-batch', 'steps', 'verification-wave.md')]) {
+      const lines = fs.readFileSync(path.join(WORKFLOWS, rel), 'utf-8').split(/\r?\n/);
+      for (const block of scanFencedBlocks(lines)) {
+        if (block.closeLineIdx === -1) continue;
+        const body = lines.slice(block.openLineIdx + 1, block.closeLineIdx);
+        body.forEach((line, i) => {
+          if (!/\|\|\s*VERIFY_ERROR=1\b/.test(line)) return;
+          seen += 1;
+          const resetBefore = body.slice(0, i).some((l) => /^\s*VERIFY_ERROR=""/.test(l));
+          assert.ok(resetBefore, `${rel}: the flag is not reset before this read: ${line.trim()}`);
+        });
+      }
+    }
+    assert.ok(seen >= 3, `non-vacuous: expected the two autonomous reads and the wave read, saw ${seen}`);
+  });
+
+  // Review H: the CLI error already names the report (sanitized); a workflow
+  // echo must not re-print the raw, unsanitized phase path.
+  test('V48c: execute-phase status-read failure echoes do not interpolate PHASE_DIR (review H)', () => {
+    const lines = bashFenceLines(fs.readFileSync(path.join(WORKFLOWS, 'execute-phase.md'), 'utf-8'))
+      .filter((line) => /gsd_run\s+query\s+verification[. ]status\b/.test(line) && /\|\|\s*\{\s*echo\b/.test(line));
+    assert.ok(lines.length >= 2, 'non-vacuous: the resume ladder reads status and route');
+    for (const line of lines) {
+      const echoPart = line.slice(line.indexOf('|| {'));
+      assert.doesNotMatch(echoPart, /\$\{?PHASE_DIR\}?/, `echo re-prints the raw path: ${line.trim()}`);
     }
   });
 });

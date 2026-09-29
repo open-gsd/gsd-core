@@ -187,6 +187,13 @@ function routeHubCommandFamily({
     error((result as { reason: string }).reason);
     return;
   }
+  if (result.kind === ERROR_KINDS.VerificationStatusInvalid) {
+    // #5118: the Result carries the VerificationStatusError's own message and
+    // reason — the error owns its ERROR_REASON; nothing here restates it.
+    const invalid = result as { message: string; reason: string };
+    error(invalid.message, invalid.reason);
+    return;
+  }
   error((result as { message: string }).message);
 }
 

@@ -30,7 +30,7 @@ const { extractFrontmatter, stripFrontmatter } = frontmatterMod;
 import { findTableWithColumns } from './markdown-table.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- verification.cjs is an export= CommonJS module
 import verificationMod = require('./verification.cjs');
-const { isPhaseComplete, isVerificationStatus, VERIFICATION_STATUS } = verificationMod;
+const { isPhaseComplete, isVerificationStatus, VERIFICATION_STATUS, failOnVerificationStatusError } = verificationMod;
 type VerificationStatus = verificationMod.VerificationStatus;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
 import phaseIdMod = require('./phase-id.cjs');
@@ -292,20 +292,18 @@ function countPhaseFiles(phaseDir: string): PhaseFileCounts {
 //      an unreadable file is evidence something existed. Treated identically
 //      to "present, no entry for this phase" below — fails CLOSED, not open.
 //   3. `'ok'`      — the file exists and parsed. A phase with an entry uses
-//      it; a phase WITHOUT one is "present, no entry" — this workstream has
-//      adopted the ledger (some phase in it has a real verdict on record),
-//      so an unobserved phase can no longer default to the pre-adoption
-//      "ungated" behavior, or the same evidence-erasure hole reopens for
-//      THIS phase specifically. Fails CLOSED: resolves to the ledger-local
-//      `'unrecorded'` state (`LedgerVerificationStatus`), not `'missing'`.
+//      it; a phase WITHOUT one reads its live `missing`.
+//
+// #5118: the ledger-local `'unrecorded'` state that states 2/3 used to fail
+// closed to is deleted. Its one reader (`phaseStatusFromFacts`, via the
+// builder) treats it exactly like `missing` — only `human_needed` changes the
+// ladder — and disk-strict completion (#2957) makes neither complete, so the
+// fail-closed branch no longer changed any answer.
 //
 // Corrupt-ledger recovery: a corrupt ledger is NOT a permanent wedge. Any
 // phase with a REAL live verdict on disk still writes/repairs the ledger on
 // this same call (the corrupt content is fully overwritten, never patched),
-// so re-running the verifier for even one phase heals the file. A phase with
-// no live report and no way to re-verify stays `'unrecorded'` (gated) until
-// someone re-verifies it — a deliberate, disclosed cost of failing closed,
-// not an accidental one.
+// so re-running the verifier for even one phase heals the file.
 //
 // Disclosed, ACCEPTED residual gap (not closed by this fix, and not closable
 // by ledger design alone): deleting the ledger FILE ITSELF (not just the
@@ -319,14 +317,7 @@ function countPhaseFiles(phaseDir: string): PhaseFileCounts {
 // is PROSPECTIVE ONLY: a phase verified and its report deleted BEFORE this
 // fix ships has no ledger entry to fall back on and cannot be retroactively
 // recovered.
-/**
- * #5118: a ledger entry is a closed-enum verdict. `unrecorded` is a LEDGER
- * state ("this workstream adopted the ledger, this phase was never
- * recorded"), not a verification verdict, so it lives here and never reaches
- * the enum's consumers (`phaseStatusFromFacts` receives `null` for it).
- */
-type LedgerVerificationStatus = VerificationStatus | 'unrecorded';
-
+/** #5118: a ledger entry is a closed-enum verdict. */
 interface VerificationLedger { [phaseKey: string]: VerificationStatus; }
 
 interface VerificationLedgerRead {
@@ -684,7 +675,7 @@ function inspectWorkstream(cwd: string, name: string, options: InspectWorkstream
     // unverified-fallback diagnostic (#3057 B4) — the closest existing idiom,
     // since `WorkstreamInventory`'s aggregate return shape carries no
     // per-phase verification detail for this to attach to.
-    if (verificationResult.staleCheckIndeterminate) {
+    if ('staleCheckIndeterminate' in verificationResult && verificationResult.staleCheckIndeterminate) {
       writeDiagnostic(
         `⚠ workstream-inventory: verification staleness check could not complete for phase directory '${dir}' in workstream '${name}' — routed as not-stale, but this was not actually verified. See #3057.\n`,
         { phaseDir: dir, reason: 'staleCheckIndeterminate' },
@@ -698,14 +689,22 @@ function inspectWorkstream(cwd: string, name: string, options: InspectWorkstream
       summaryCount: counts.summaryCount,
       inMilestone: isDirInCurrentMilestone(dir),
       liveVerificationStatus: verificationResult.status,
+      // #5118: the owner's out-of-set report error, carried to the check below.
+      statusError: completionResult.value.statusError,
       // ADR-3180 §7.4 (#3186): the owner's verdict, read live off disk — never
       // ledger-adjusted (see the phaseFilesCounts map below; the ledger only
       // ever substitutes a 'missing' status with a remembered one, and under
-      // disk-strict neither 'missing' nor 'unrecorded' is ever complete, so
-      // there is nothing for the ledger to override here).
+      // disk-strict 'missing' is never complete, so there is nothing for the
+      // ledger to override here).
       complete: completionResult.value.complete,
     };
   });
+
+  // #5118 (no write before the error): this inspection WRITES the ledger
+  // below, so a report whose `status` is outside the closed set fails it
+  // first — the owner's error, its own reason, nothing persisted.
+  const firstStatusError = rawPhaseEntries.find((entry) => entry.statusError)?.statusError;
+  if (firstStatusError) failOnVerificationStatusError(firstStatusError);
 
   // #2645: only the directory Bug #2445's de-dup rollup would actually pick
   // for a phase key may read or write that key's ledger entry. Letting every
@@ -743,9 +742,10 @@ function inspectWorkstream(cwd: string, name: string, options: InspectWorkstream
   const verificationLedger = ledgerRead.entries;
   let ledgerDirty = false;
   for (const winner of ledgerWinnerByKey.values()) {
-    if (winner.liveVerificationStatus === VERIFICATION_STATUS.MISSING) continue;
-    if (verificationLedger[winner.phaseKey] !== winner.liveVerificationStatus) {
-      verificationLedger[winner.phaseKey] = winner.liveVerificationStatus;
+    const live = winner.liveVerificationStatus;
+    if (live === null || live === VERIFICATION_STATUS.MISSING) continue;
+    if (verificationLedger[winner.phaseKey] !== live) {
+      verificationLedger[winner.phaseKey] = live;
       ledgerDirty = true;
     }
   }
@@ -758,18 +758,15 @@ function inspectWorkstream(cwd: string, name: string, options: InspectWorkstream
 
   const phaseFilesCounts = rawPhaseEntries.map(entry => {
     const isLedgerWinner = ledgerWinnerByKey.get(entry.phaseKey) === entry;
-    let verificationStatus: LedgerVerificationStatus = entry.liveVerificationStatus;
+    // A live `missing` on the ledger winner reads the remembered verdict when
+    // there is one. #5118: the former `unrecorded` state ("adopted, never
+    // recorded") is deleted — its only reader, phaseStatusFromFacts, treats it
+    // exactly like `missing` (only `human_needed` changes the ladder, and under
+    // disk-strict neither is ever complete), so it was a dead distinction.
+    let verificationStatus = entry.liveVerificationStatus;
     if (entry.liveVerificationStatus === VERIFICATION_STATUS.MISSING && isLedgerWinner) {
-      if (ledgerRead.state === 'absent') {
-        // State 1: pre-adoption. Exactly today's behavior — a live `missing`.
-        verificationStatus = VERIFICATION_STATUS.MISSING;
-      } else {
-        // States 2/3 ('corrupt' or 'ok'): this workstream has adopted the
-        // ledger. A remembered entry wins; no entry fails CLOSED to the
-        // ledger-local 'unrecorded' state rather than falling open to 'missing'.
-        const remembered = verificationLedger[entry.phaseKey];
-        verificationStatus = remembered !== undefined ? remembered : 'unrecorded';
-      }
+      const remembered = verificationLedger[entry.phaseKey];
+      if (remembered !== undefined) verificationStatus = remembered;
     }
     return {
       directory: entry.directory,
@@ -778,9 +775,7 @@ function inspectWorkstream(cwd: string, name: string, options: InspectWorkstream
       planCount: entry.planCount,
       summaryCount: entry.summaryCount,
       inMilestone: entry.inMilestone,
-      // #5118: the builder hands this to phaseStatusFromFacts, which accepts
-      // only the closed enum — the ledger-local 'unrecorded' is "no verdict".
-      verificationStatus: verificationStatus === 'unrecorded' ? null : verificationStatus,
+      verificationStatus,
       complete: entry.complete,
     };
   });

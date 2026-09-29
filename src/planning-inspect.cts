@@ -69,7 +69,8 @@ const { SCOPE } = planningScopeMod;
 type Scope = planningScopeMod.Scope;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verificationMod = require('./verification.cjs');
-const { readVerificationStatus } = verificationMod;
+const { readVerificationStatus, VerificationStatusError, failOnVerificationStatusError } = verificationMod;
+type VerificationStatusErrorT = InstanceType<typeof VerificationStatusError>;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const { phaseKeyFromDir, phaseKeyFromToken, phaseMarkdownRegexSource } = phaseIdMod;
@@ -1172,6 +1173,21 @@ function buildPhaseGoalAndDependencies(
 // ─── Entry points ─────────────────────────────────────────────────────────────
 
 function buildPlanningInspect(cwd: string): Record<string, unknown> {
+  return buildPlanningInspectResult(cwd).payload;
+}
+
+/**
+ * #5118: the inspect payload plus the first verification report whose
+ * `status` is outside the closed set (`statusError`, or `null`) — the
+ * aggregate CARRIES the owner's error in its own result, and `planning
+ * inspect` fails with it instead of printing an answer computed over a
+ * report the owner refused.
+ */
+function buildPlanningInspectResult(cwd: string): {
+  payload: Record<string, unknown>;
+  statusError: VerificationStatusErrorT | null;
+} {
+  let statusError: VerificationStatusErrorT | null = null;
   const diagnostics: Diagnostic[] = [];
   const paths = planningPaths(cwd);
   const planningExists = fs.existsSync(paths.planning);
@@ -1225,7 +1241,7 @@ function buildPlanningInspect(cwd: string): Record<string, unknown> {
   const phaseSnapshots = snapshot.phases.value as {
     dir: string;
     complete: boolean;
-    verificationStatus: string;
+    verificationStatus: string | null;
     planCount: number;
     summaryCount: number;
     scope: Scope;
@@ -1265,9 +1281,19 @@ function buildPlanningInspect(cwd: string): Record<string, unknown> {
     // (`superseded`) rather than document text, and GAP 1's directory
     // containment check already covers the escaped-DIRECTORY case for it —
     // so it needs no fix of its own.
-    const verification = readVerificationStatus(phaseDir, {
-      fs: containmentEnforcingVerificationFs(paths.planning),
-    });
+    // #5118: an out-of-set report status is carried, not thrown past the
+    // other phases — the row reads `status: null` and the command fails with
+    // the first such error once the payload is built.
+    let verification: { status: string | null; next_action: string | null; route: string };
+    try {
+      verification = readVerificationStatus(phaseDir, {
+        fs: containmentEnforcingVerificationFs(paths.planning),
+      });
+    } catch (err) {
+      if (!(err instanceof VerificationStatusError)) throw err;
+      if (statusError === null) statusError = err;
+      verification = { status: null, next_action: err.message, route: '' };
+    }
 
     const token = /^(\d+(?:\.\d+)*)/.exec(phase.dir);
     const phaseId = token ? token[1] : null;
@@ -1345,7 +1371,7 @@ function buildPlanningInspect(cwd: string): Record<string, unknown> {
     diagnostics,
   );
 
-  return {
+  const payload = {
     schema_version: PLANNING_INSPECT_SCHEMA_VERSION,
     generated_from: {
       cwd: toPosix(cwd),
@@ -1373,6 +1399,7 @@ function buildPlanningInspect(cwd: string): Record<string, unknown> {
     },
     diagnostics,
   };
+  return { payload, statusError };
 }
 
 /**
@@ -1383,7 +1410,11 @@ function buildPlanningInspect(cwd: string): Record<string, unknown> {
  * transparently on stdout. Bypassing `output()` would lose that for free.
  */
 function cmdPlanningInspect(cwd: string, raw: boolean): void {
-  output(buildPlanningInspect(cwd), raw);
+  const { payload, statusError } = buildPlanningInspectResult(cwd);
+  // #5118: a read-only aggregate over a refused report prints nothing and
+  // fails with the error's own reason (`verification_status_invalid`).
+  if (statusError) failOnVerificationStatusError(statusError);
+  output(payload, raw);
 }
 
 const planningInspect = {

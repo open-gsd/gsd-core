@@ -68,7 +68,7 @@ import coreUtilsMod = require('./core-utils.cjs');
 import planDependencyGraphMod = require('./plan-dependency-graph.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verificationMod = require('./verification.cjs');
-const { isPhaseComplete } = verificationMod;
+const { isPhaseComplete, VerificationStatusError } = verificationMod;
 // #4129: the single owner of "count the ROADMAP's milestone Complete rows"
 // (phase-lifecycle.cts) — reused for the completed-phases numerator floor so
 // this scan cannot grow a second ROADMAP parser. Pure computation module (no
@@ -2987,7 +2987,14 @@ function buildStateFrontmatter(
             // #612: `phaseConvention` threaded so a bracket phase dir resolves
             // and scopes its verification report like its legacy twin — the
             // read-side half of the same thread cmdStateSync gets below.
-            if (isPhaseComplete(phaseDir, { convention: phaseConvention }).value.complete) diskCompletedPhases++;
+            const completion = isPhaseComplete(phaseDir, { convention: phaseConvention });
+            // #5118 (no write before the error): every STATE.md write rebuilds
+            // this frontmatter BEFORE its write, so a report whose `status` is
+            // outside the closed set fails the write here — the owner's error,
+            // rethrown past the best-effort catch below, nothing persisted and
+            // nothing cached.
+            if (completion.value.statusError) throw completion.value.statusError;
+            if (completion.value.complete) diskCompletedPhases++;
           }
           // Count phase headings from ROADMAP — single source of truth for
           // total_phases (#549). #612 round-4: shared with cmdStateSync's
@@ -3187,8 +3194,11 @@ function buildStateFrontmatter(
        * crash `state show`; on failure this simply keeps whatever
        * frontmatter-derived totals/completedPhases/etc. were already set
        * above, a graceful degrade rather than a corrupted write (nothing is
-       * persisted from this block). */
-    } catch { /* intentionally empty */ }
+       * persisted from this block). #5118: an out-of-set verification
+       * report status is not a read failure to degrade over — rethrown. */
+    } catch (err) {
+      if (err instanceof VerificationStatusError) throw err;
+    }
   }
 
   // Derive percent from disk counts when available (ground truth).
@@ -6115,7 +6125,12 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
     // #612: `syncConvention` threaded — the write-side half of
     // buildStateFrontmatter's thread above, so `state sync` and `state json`
     // keep agreeing on completed_phases under the bracket convention.
-    if (isPhaseComplete(dirPath, { convention: syncConvention }).value.complete) diskCompletedPhases++;
+    // #5118 (no write before the error): `state sync` writes STATE.md only
+    // after this scan, so an out-of-set report status fails it here, having
+    // written nothing.
+    const completion = isPhaseComplete(dirPath, { convention: syncConvention });
+    if (completion.value.statusError) throw completion.value.statusError;
+    if (completion.value.complete) diskCompletedPhases++;
 
     // Track the highest phase with incomplete plans (or any plans)
     const phaseMatch = dir.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})`, 'i'));

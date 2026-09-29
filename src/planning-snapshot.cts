@@ -131,12 +131,13 @@ function worstScope(...scopes: Scope[]): Scope {
 interface PhaseSnapshot {
   dir: string;
   complete: boolean;
-  verificationStatus: VerificationStatus;
+  /** `null` exactly when `verificationStatusError` is set (#5118). */
+  verificationStatus: VerificationStatus | null;
   /**
    * #5118: the report whose `status` is outside the closed set, when there is
    * one — `isPhaseComplete` absorbed its VerificationStatusError (scope
-   * UNREADABLE). The health surface reports it as a finding (W030) instead of
-   * crashing on the defect it diagnoses.
+   * UNREADABLE) and the snapshot CARRIES it. Diagnostic surfaces report it as
+   * the W030 finding; a query surface built on the snapshot fails with it.
    */
   verificationStatusError: { file: string; message: string } | null;
   planCount: number;

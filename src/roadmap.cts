@@ -49,7 +49,7 @@ import frontmatter = require('./frontmatter.cjs');
 const { extractFrontmatter, frontmatterRegion, parseMustHavesBlock } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verificationMod = require('./verification.cjs');
-const { isPhaseComplete } = verificationMod;
+const { isPhaseComplete, failOnVerificationStatusError } = verificationMod;
 // #4906 Phase 2 (#4917/ADR-4910): the PlanningDoc parse -> mutate -> serialize
 // seam, mirroring phase.cts's already-migrated `writePlansField` site.
 import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from './planning-document.cjs';
@@ -418,9 +418,18 @@ type AnalyzePhase = {
   context_scope: Scope;
 };
 
+type PhaseStatusError = ReturnType<typeof phaseStatus>['value']['statusError'];
+
 type AnalyzePhaseCollection = {
   phases: AnalyzePhase[];
   detailKeys: Set<string>;
+  /**
+   * #5118: the first phase whose verification report `status` is outside the
+   * closed set — carried here (never thrown past the other phases) so
+   * `roadmap analyze` fails with it instead of printing an answer computed
+   * over a report the owner refused.
+   */
+  statusError: PhaseStatusError;
 };
 
 // #612 composes the convention-qualified sentinel reading with upstream's
@@ -491,6 +500,7 @@ function collectAnalyzePhases(
   // The caller needs the exact occurrence identities from the same scan that
   // built `phases`; returning them together also keeps fallback rescans atomic.
   const detailKeys = new Set<string>();
+  let statusError: PhaseStatusError;
   while ((match = phasePattern.exec(content)) !== null) {
     const bracketId = G ? match[1] : undefined;
     const phaseNum = match[1 + G];
@@ -577,6 +587,7 @@ function collectAnalyzePhases(
       // bracket phase's verification report resolves and scopes like its
       // legacy twin (#612).
       const ps = phaseStatus(path.join(phasesDir, dirMatch), { convention });
+      if (ps.value.statusError && !statusError) statusError = ps.value.statusError;
       diskStatus = toDiskStatus(ps.value.status, { hasResearch, hasContext });
     }
 
@@ -663,7 +674,9 @@ function collectAnalyzePhases(
       tContextScope = counts.scope;
       // #5060: route through the Phase Status Module's owner rather than the
       // fixed 'ok' sentinel this row used to emit.
-      tDiskStatus = toDiskStatus(phaseStatus(path.join(phasesDir, dirMatchA), { convention }).value.status, { hasResearch: tHasResearch, hasContext: tHasContext });
+      const tps = phaseStatus(path.join(phasesDir, dirMatchA), { convention });
+      if (tps.value.statusError && !statusError) statusError = tps.value.statusError;
+      tDiskStatus = toDiskStatus(tps.value.status, { hasResearch: tHasResearch, hasContext: tHasContext });
     }
     phases.push({
       number: tr.id,
@@ -681,7 +694,7 @@ function collectAnalyzePhases(
       context_scope: tContextScope,
     });
   }
-  return { phases, detailKeys };
+  return { phases, detailKeys, statusError };
 }
 
 function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
@@ -722,6 +735,8 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   let collected = collectAnalyzePhases(content, phasesDir, _phaseDirNames, convention);
   let phases = collected.phases;
   let detailKeys = collected.detailKeys;
+  // #5118: carried from every phaseStatus read this command makes.
+  let statusError: PhaseStatusError = collected.statusError;
   // `effectiveContent` is what the downstream checklist scan (missing_details)
   // iterates. Defaults to the scoped window; switched to the fallback document
   // when the recovery path below fires, so a phase found via fallback is not
@@ -749,6 +764,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
       collected = fallbackCollection;
       phases = collected.phases;
       detailKeys = collected.detailKeys;
+      statusError = statusError ?? collected.statusError;
       effectiveContent = fallbackContent;
     }
   }
@@ -858,6 +874,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
         contextScope = counts.scope;
         // #5060: same owner call as the heading branch above.
         const ps = phaseStatus(path.join(phasesDir, dirMatch), { convention });
+        if (ps.value.statusError && !statusError) statusError = ps.value.statusError;
         diskStatus = toDiskStatus(ps.value.status, { hasResearch, hasContext });
       }
       phases.push({
@@ -956,6 +973,9 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
     scope,
   };
 
+  // #5118: a read-only aggregate over a refused report prints nothing and
+  // fails with the error's own reason.
+  if (statusError) failOnVerificationStatusError(statusError);
   output(result, raw, undefined);
 }
 
@@ -1115,6 +1135,9 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
   // agrees with the read path's under the bracket convention.
   const convention = resolvePhaseIdConvention(cwd);
   const completionResult = isPhaseComplete(phaseDir, { convention });
+  // #5118: no write before the error — a report whose `status` is outside the
+  // closed set fails this writer before ROADMAP.md is touched.
+  if (completionResult.value.statusError) failOnVerificationStatusError(completionResult.value.statusError);
   const verificationResult = completionResult.value.verification;
   // #2648 precedent, applied at this write site (ADR-3180 §7.4 / #3186):
   // `isPhaseComplete` deliberately carries NO plan-count precondition — the
@@ -1142,7 +1165,8 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
   // #3057 B3: routing above is unchanged (an indeterminate staleness check
   // still routes as if nothing were stale) — this only makes the fact visible
   // to whatever reads this command's JSON output.
-  const verificationStaleCheckIndeterminate = verificationResult.staleCheckIndeterminate === true;
+  const verificationStaleCheckIndeterminate =
+    'staleCheckIndeterminate' in verificationResult && verificationResult.staleCheckIndeterminate === true;
   // #5060: route the Status-cell token through the Phase Status Module's
   // owner ladder rather than a local if/else, over the same `planCount`/
   // `summaryCount` (from `coverageScan`) every other output in this verb
