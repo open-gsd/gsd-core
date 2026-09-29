@@ -91,7 +91,7 @@ export function locateFrontmatterFence(text: string, options: LocateFrontmatterF
   if (typeof text !== 'string') {
     throw new TypeError(`locateFrontmatterFence: expected a string, got ${typeof text}`);
   }
-  const bom = text.charCodeAt(0) === 0xFEFF ? '﻿' : '';
+  const bom = text.charCodeAt(0) === 0xfeff ? String.fromCharCode(0xfeff) : '';
   const openingEolAt = (at: number): '\n' | '\r\n' | null => {
     if (text.startsWith('---\r\n', at)) return '\r\n';
     if (text.startsWith('---\n', at)) return '\n';

@@ -70,7 +70,7 @@ describe('locateFrontmatterFence', () => {
   for (const [label, text, expected] of [
     ['an LF block', '---\na: 1\n---\nbody', closed('', '\n', 4, 9, 12, 8)],
     ['a CRLF block', '---\r\na: 1\r\n---\r\nbody', closed('', '\r\n', 5, 11, 14, 9)],
-    ['a BOM block', '﻿---\na: 1\n---', closed('﻿', '\n', 5, 10, 13, 9)],
+    ['a BOM block', '\uFEFF---\na: 1\n---', closed('\uFEFF', '\n', 5, 10, 13, 9)],
     ['a CRLF opener closed by an LF line', '---\r\na: 1\n---\n', closed('', '\r\n', 5, 10, 13, 9)],
     ['an adjacent empty LF block', '---\n---\nBody', closed('', '\n', 4, 4, 7, 4)],
     ['an adjacent empty CRLF block', '---\r\n---\r\nBody', closed('', '\r\n', 5, 5, 8, 5)],
@@ -102,7 +102,7 @@ describe('locateFrontmatterFence', () => {
     ['a block whose only dash-led lines are `--- x` and `-- `', '---\n--- x\n-- \n', open('', '\n', 4, 14)],
     ['a `---- x` line is not even a lenient closer', '---\na: 1\n---- x\n', open('', '\n', 4, 16)],
     ['a `---` line ended by a lone CR at the end of the text', '---\na: 1\n---\r', open('', '\n', 4, 13)],
-    ['a BOM opener with nothing after it', '﻿---\n', open('﻿', '\n', 5, 5)],
+    ['a BOM opener with nothing after it', '\uFEFF---\n', open('\uFEFF', '\n', 5, 5)],
   ]) {
     test(`${label} is unterminated`, () => {
       assert.deepStrictEqual(locateFrontmatterFence(text), expected);
@@ -127,7 +127,7 @@ describe('locateFrontmatterFence with { allowPreamble: true }', () => {
     ['an LF block after a preamble key line (#3706)', 'effort: not-the-frontmatter\n\n---\nname: x\neffort: high\n---\n\nBody.\n', closed('', '\n', 33, 54, 57, 53)],
     ['a block after one blank line', '\n---\na: 1\n---\n', closed('', '\n', 5, 10, 13, 9)],
     ['a block after a line holding `---` mid-line', 'a---b\n---\na: 1\n---\n', closed('', '\n', 10, 15, 18, 14)],
-    ['a BOM, a preamble, then a block', '﻿x\n---\na: 1\n---\n', closed('﻿', '\n', 7, 12, 15, 11)],
+    ['a BOM, a preamble, then a block', '\uFEFFx\n---\na: 1\n---\n', closed('\uFEFF', '\n', 7, 12, 15, 11)],
     ['a byte-0 block is read exactly as without the option', '---\na: 1\n---\nbody', closed('', '\n', 4, 9, 12, 8)],
   ]) {
     test(label, () => {
@@ -301,7 +301,7 @@ describe('property: every fence consumer agrees with locateFrontmatterFence', ()
   const docArb = fc.tuple(fc.array(line, { maxLength: 14 }), fc.boolean(), fc.boolean(), fc.boolean())
     .map(([lines, bom, crlf, finalEol]) => {
       const nl = crlf ? '\r\n' : '\n';
-      return `${bom ? '﻿' : ''}---${nl}${lines.join(nl)}${finalEol ? nl : ''}`;
+      return `${bom ? '\uFEFF' : ''}---${nl}${lines.join(nl)}${finalEol ? nl : ''}`;
     });
 
   // Normalizing `x\n` + text and dropping the `x\n` is normalizing `text` with no
@@ -383,7 +383,7 @@ describe('kept frontmatter fence copies agree with the owner', () => {
   const CORPUS = [
     ['an LF block', '---\ntype: Fixed\npr: 1\n---\nbody\n'],
     ['a CRLF block', '---\r\ntype: Fixed\r\npr: 1\r\n---\r\nbody\r\n'],
-    ['a BOM block', '﻿---\ntype: Fixed\npr: 1\n---\nbody\n'],
+    ['a BOM block', '\uFEFF---\ntype: Fixed\npr: 1\n---\nbody\n'],
     ['an adjacent empty block', '---\n---\nbody\n'],
     ['an adjacent empty CRLF block', '---\r\n---\r\nbody\r\n'],
     ['a `----` look-alike before the real closer', '---\n----\ntype: Fixed\n---\nbody\n'],
@@ -419,7 +419,7 @@ describe('kept frontmatter fence copies agree with the owner', () => {
     fc.constantFrom('', '---', '--- ', '---\t', '----', '-----', '--- x', '--', 'a---b', ' ---'),
   );
   const docArb = fc.tuple(
-    fc.constantFrom('', '﻿', '\n', ' ', 'x\n'),
+    fc.constantFrom('', '\uFEFF','\n', ' ', 'x\n'),
     fc.boolean(),
     fc.array(line, { maxLength: 10 }),
     fc.boolean(),
@@ -461,7 +461,7 @@ describe('kept frontmatter fence copies agree with the owner', () => {
   test('a CRLF fragment and a BOM fragment parse like their LF twin', () => {
     const lf = changesetParse.parseFragment('---\ntype: Fixed\npr: 7\n---\nfix.\n');
     assert.deepStrictEqual(changesetParse.parseFragment('---\r\ntype: Fixed\r\npr: 7\r\n---\r\nfix.\r\n'), lf);
-    assert.deepStrictEqual(changesetParse.parseFragment('﻿---\ntype: Fixed\npr: 7\n---\nfix.\n'), lf);
+    assert.deepStrictEqual(changesetParse.parseFragment('\uFEFF---\ntype: Fixed\npr: 7\n---\nfix.\n'), lf);
   });
 
   test('a plugin reads a CRLF block\'s keys without a trailing CR', () => {
