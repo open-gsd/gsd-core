@@ -18,7 +18,7 @@ const path = require('path');
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 // The one frontmatter fence owner (src/frontmatter-fence.cts, built by build:lib).
 // This dev-time script runs after the build (`npm run lint:descriptions`, the tests).
-const { locateFrontmatterFence } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'frontmatter-fence.cjs'));
+const { locateFrontmatterFence } = require('../gsd-core/bin/lib/frontmatter-fence.cjs');
 
 const MAX_LENGTH = 100;
 const COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');

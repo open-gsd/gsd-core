@@ -30,7 +30,7 @@ const { runMain } = require('./lib/cli-exit.cjs');
 const PROFILES_MODULE = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'install-profiles.cjs');
 const { PROFILES, loadSkillsManifest, resolveProfile } = require(PROFILES_MODULE);
 // The one frontmatter fence owner, from the same build:lib output as install-profiles.
-const { locateFrontmatterFence } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'frontmatter-fence.cjs'));
+const { locateFrontmatterFence } = require('../gsd-core/bin/lib/frontmatter-fence.cjs');
 
 // ---------------------------------------------------------------------------
 // Argument parsing

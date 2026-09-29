@@ -12,11 +12,10 @@
  * enforced by both consumers.
  */
 
-const path = require('node:path');
 // The one frontmatter fence owner (src/frontmatter-fence.cts, built to bin/lib by
 // build:lib). Every consumer of this module runs after the build: lint:ci (CI builds
 // bin/lib first) and the test suite (pretest).
-const { locateFrontmatterFence } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'frontmatter-fence.cjs'));
+const { locateFrontmatterFence } = require('../gsd-core/bin/lib/frontmatter-fence.cjs');
 
 const CANONICAL_TOOLS = new Set([
   'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',

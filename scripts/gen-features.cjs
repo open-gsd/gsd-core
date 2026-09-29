@@ -69,7 +69,7 @@ const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 // The one frontmatter fence owner (src/frontmatter-fence.cts, built by build:lib).
 // Every entry point runs after the build: lint:generated-sync inside lint:ci (CI
 // builds bin/lib first), regen:derived (`npm run build` first), and the tests.
-const { locateFrontmatterFence } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'frontmatter-fence.cjs'));
+const { locateFrontmatterFence } = require('../gsd-core/bin/lib/frontmatter-fence.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const FEATURES_DIR = path.join(ROOT, 'docs', 'features');

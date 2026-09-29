@@ -27,7 +27,7 @@ const { PROFILES } = require('./research-profiles.cjs');
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 // The one frontmatter fence owner (src/frontmatter-fence.cts, built by build:lib).
 // This dev-time script runs after the build (manually, and from the tests).
-const { locateFrontmatterFence } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'frontmatter-fence.cjs'));
+const { locateFrontmatterFence } = require('../gsd-core/bin/lib/frontmatter-fence.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const AGENTS_DIR = path.join(ROOT, 'agents');
