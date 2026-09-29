@@ -34,6 +34,7 @@ const {
   evaluateRollingPrApproval,
   subtractHistoryText,
   matchesApiJob,
+  parseJobRecord,
   seedFromRollingPr,
   ROLLING_PR,
 } = require('../scripts/ci-timeout-report.cjs');
@@ -368,19 +369,10 @@ describe('subtractHistoryText', () => {
 });
 
 const SHA = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
-const apiRec = (overrides = {}) => ({
-  runId: 900,
-  jobName: 'test (ubuntu-latest, 24)',
-  workflowFile: 'test.yml',
-  sha: SHA,
-  runEvent: 'push',
-  completedAt: '2026-09-28T22:00:00Z',
-  elapsedMs: 60000,
-  timeoutMinutes: 45,
-  pct: 60000 / 2700000,
-  ...overrides,
+const YAML_TEXT = 'jobs:\n  test:\n    timeout-minutes: 15\n';
+const apiRun = (overrides = {}) => ({
+  id: 900, path: '.github/workflows/test.yml', head_sha: SHA, event: 'push', ...overrides,
 });
-const apiRun = (overrides = {}) => ({ id: 900, path: '.github/workflows/test.yml', head_sha: SHA, ...overrides });
 const apiJob = (overrides = {}) => ({
   name: 'test (ubuntu-latest, 24)',
   conclusion: 'success',
@@ -388,39 +380,82 @@ const apiJob = (overrides = {}) => ({
   completed_at: '2026-09-28T22:00:00Z',
   ...overrides,
 });
+// The record main() would write for apiRun()/apiJob(), as it reads back from the file.
+const expectedRec = (run = apiRun(), job = apiJob()) => JSON.parse(JSON.stringify(parseJobRecord({
+  job: {
+    ...job, run_id: run.id, head_sha: run.head_sha, runEvent: run.event,
+  },
+  workflowFile: String(run.path).split('/').pop(),
+  workflowYamlText: YAML_TEXT,
+  covered: null,
+})));
+const apiRec = (overrides = {}) => ({ ...expectedRec(), ...overrides });
+const verify = (rec, { run = apiRun(), job = apiJob() } = {}) => matchesApiJob(rec, {
+  run, job, workflowYamlText: YAML_TEXT, covered: null,
+});
 
 describe('matchesApiJob', () => {
-  test('exact match → true', () => {
-    assert.equal(matchesApiJob(apiRec(), { run: apiRun(), job: apiJob() }), true);
+  test('the record parseJobRecord builds from the same inputs → true', () => {
+    assert.equal(verify(apiRec()), true);
   });
 
-  test('each single-field mismatch → false', () => {
+  test('each single stored field that differs from the API-derived record → false', () => {
+    const cases = {
+      timeoutMinutes: { timeoutMinutes: 45 },
+      pct: { pct: 0.5 },
+      runEvent: { runEvent: 'pull_request' },
+      'sha different': { sha: 'b'.repeat(40) },
+      elapsedMs: { elapsedMs: 61000 },
+      completedAt: { completedAt: '2026-09-28T22:00:01Z' },
+      jobName: { jobName: 'test (macos-latest, 24)' },
+      runId: { runId: 901 },
+      workflowFile: { workflowFile: 'mutation.yml' },
+    };
+    for (const [field, override] of Object.entries(cases)) {
+      assert.equal(verify(apiRec(override)), false, field);
+    }
+  });
+
+  test('sha omitted, an extra key, or a missing key → false', () => {
+    const noSha = apiRec();
+    delete noSha.sha;
+    assert.equal(verify(noSha), false, 'sha omitted');
+    assert.equal(verify(apiRec({ evil: 1 })), false, 'extra key');
+    const noPct = apiRec();
+    delete noPct.pct;
+    assert.equal(verify(noPct), false, 'missing key');
+  });
+
+  test('the API side changing after the record was built → false', () => {
     const rec = apiRec();
-    assert.equal(matchesApiJob(rec, { run: apiRun({ id: 901 }), job: apiJob() }), false, 'run.id');
-    assert.equal(matchesApiJob(rec, { run: apiRun({ path: '.github/workflows/mutation.yml' }), job: apiJob() }), false, 'run.path');
-    assert.equal(matchesApiJob(rec, { run: apiRun(), job: apiJob({ name: 'other' }) }), false, 'job.name');
-    assert.equal(matchesApiJob(rec, { run: apiRun(), job: apiJob({ completed_at: '2026-09-28T22:00:01Z' }) }), false, 'completed_at');
-    assert.equal(matchesApiJob(rec, { run: apiRun(), job: apiJob({ started_at: '2026-09-28T21:59:00.001Z' }) }), false, 'span -1ms');
-    assert.equal(matchesApiJob(rec, { run: apiRun(), job: apiJob({ started_at: '2026-09-28T21:58:59.999Z' }) }), false, 'span +1ms');
-    assert.equal(matchesApiJob(rec, { run: apiRun({ head_sha: 'b'.repeat(40) }), job: apiJob() }), false, 'head_sha');
+    assert.equal(verify(rec, { run: apiRun({ head_sha: 'b'.repeat(40) }) }), false, 'head_sha');
+    assert.equal(verify(rec, { run: apiRun({ event: 'pull_request' }) }), false, 'event');
+    assert.equal(verify(rec, { job: apiJob({ started_at: '2026-09-28T21:59:00.001Z' }) }), false, 'span -1ms');
+    assert.equal(verify(rec, { job: apiJob({ started_at: '2026-09-28T21:58:59.999Z' }) }), false, 'span +1ms');
   });
 
-  test('a record without a sha ignores head_sha', () => {
-    const noSha = apiRec({ sha: null });
-    assert.equal(matchesApiJob(noSha, { run: apiRun({ head_sha: 'b'.repeat(40) }), job: apiJob() }), true);
-    const absent = apiRec();
-    delete absent.sha;
-    assert.equal(matchesApiJob(absent, { run: apiRun({ head_sha: undefined }), job: apiJob() }), true);
+  test('a run without a head sha yields a record without one; matching is exact on that', () => {
+    const run = apiRun({ head_sha: undefined });
+    const rec = expectedRec(run, apiJob());
+    assert.equal('sha' in rec, false);
+    assert.equal(verify(rec, { run }), true);
+    assert.equal(verify({ ...rec, sha: null }, { run }), false);
   });
 
   test('run.path is compared by basename (nested or bare)', () => {
-    assert.equal(matchesApiJob(apiRec(), { run: apiRun({ path: '.github/workflows/test.yml' }), job: apiJob() }), true);
-    assert.equal(matchesApiJob(apiRec(), { run: apiRun({ path: 'test.yml' }), job: apiJob() }), true);
-    assert.equal(matchesApiJob(apiRec(), { run: apiRun({ path: undefined }), job: apiJob() }), false);
+    assert.equal(verify(apiRec(), { run: apiRun({ path: 'test.yml' }) }), true);
+    assert.equal(verify(apiRec(), { run: apiRun({ path: undefined }) }), false);
+  });
+
+  test('a workflow file outside WORKFLOW_FILES → false even when the record matches', () => {
+    const run = apiRun({ path: '.github/workflows/release.yml' });
+    assert.equal(matchesApiJob(apiRec({ workflowFile: 'release.yml' }), {
+      run, job: apiJob(), workflowYamlText: YAML_TEXT, covered: null,
+    }), false);
   });
 
   test('a skipped or never-executed API job cannot confirm a row', () => {
-    assert.equal(matchesApiJob(apiRec(), { run: apiRun(), job: apiJob({ conclusion: 'skipped' }) }), false);
+    assert.equal(verify(apiRec(), { job: apiJob({ conclusion: 'skipped' }) }), false);
   });
 
   test('missing run or job → false', () => {
@@ -429,6 +464,7 @@ describe('matchesApiJob', () => {
     assert.equal(matchesApiJob(apiRec(), {}), false);
     assert.equal(matchesApiJob(apiRec()), false);
     assert.equal(matchesApiJob(apiRec(), { run: null, job: null }), false);
+    assert.equal(matchesApiJob(null, { run: apiRun(), job: apiJob() }), false);
   });
 });
 
@@ -447,11 +483,13 @@ describe('seedFromRollingPr', () => {
 
   // apis: Map<runId, { run, jobs } | 404 | Error>
   function makeEnv({
-    prs = [ownPr()], branchText = '', baseText = null, apis = new Map(), contentError = null,
+    prs = [ownPr()], branchText = '', baseText = null, apis = new Map(), contentError = null, contentPayload,
   }) {
     const files = new Map();
     if (baseText !== null) files.set(historyPath, baseText);
-    const calls = { getWorkflowRun: [], listJobs: [], writes: 0 };
+    const calls = {
+      getWorkflowRun: [], listJobs: [], writes: 0, pullsList: [], getContent: [], workflowContext: [],
+    };
     const httpError = (status) => Object.assign(new Error(`HTTP ${status}`), { status });
     const listJobsForWorkflowRun = async (params) => {
       calls.listJobs.push(params.run_id);
@@ -461,13 +499,17 @@ describe('seedFromRollingPr', () => {
     };
     const github = {
       rest: {
-        pulls: { list: async () => ({ data: prs }) },
+        pulls: {
+          list: async (params) => {
+            calls.pullsList.push(params);
+            return { data: prs };
+          },
+        },
         repos: {
           getContent: async (params) => {
-            assert.equal(params.ref, PR_HEAD_SHA);
-            assert.equal(params.path, ROLLING_PR.historyFile);
+            calls.getContent.push(params);
             if (contentError) throw contentError;
-            return { data: branchText };
+            return { data: contentPayload === undefined ? branchText : contentPayload };
           },
         },
         actions: {
@@ -501,8 +543,12 @@ describe('seedFromRollingPr', () => {
         files.set(p, text);
       },
     };
+    const workflowContext = (workflowFile) => {
+      calls.workflowContext.push(workflowFile);
+      return { workflowYamlText: YAML_TEXT, covered: null };
+    };
     const run = (extra = {}) => seedFromRollingPr({
-      github, context, core, historyPath, fs: fsStub, ...extra,
+      github, context, core, historyPath, fs: fsStub, workflowContext, ...extra,
     });
     return {
       run, files, calls, logged,
@@ -514,6 +560,20 @@ describe('seedFromRollingPr', () => {
     run: apiRun({ id: r.runId }),
     jobs: [apiJob({ name: r.jobName })],
   }]));
+
+  test('queries only the open rolling PR and reads the history file at that PR head as raw text', async () => {
+    const p1 = apiRec({ runId: 901 });
+    const env = makeEnv({ baseText: baseRows, branchText: baseRows + line(p1), apis: apiFor(p1) });
+    await env.run();
+    assert.equal(env.calls.pullsList.length, 1);
+    assert.equal(env.calls.pullsList[0].state, 'open');
+    assert.equal(env.calls.pullsList[0].base, ROLLING_PR.base);
+    assert.equal(env.calls.pullsList[0].head, `${OWNER}:${ROLLING_PR.branch}`);
+    assert.equal(env.calls.getContent.length, 1);
+    assert.equal(env.calls.getContent[0].path, ROLLING_PR.historyFile);
+    assert.equal(env.calls.getContent[0].ref, PR_HEAD_SHA);
+    assert.equal(env.calls.getContent[0].mediaType.format, 'raw');
+  });
 
   test('no open PR → no-pr, nothing written', async () => {
     const env = makeEnv({ prs: [], baseText: baseRows });
@@ -548,7 +608,7 @@ describe('seedFromRollingPr', () => {
 
   test('two pending rows both confirmed by the API are seeded after the base', async () => {
     const p1 = apiRec({ runId: 901 });
-    const p2 = apiRec({ runId: 902, jobName: 'smoke (ubuntu-latest, 24)', workflowFile: 'test.yml' });
+    const p2 = apiRec({ runId: 902, jobName: 'test (macos-latest, 24)' });
     const env = makeEnv({
       baseText: baseRows, branchText: baseRows + line(p1) + line(p2), apis: apiFor(p1, p2),
     });
@@ -571,6 +631,56 @@ describe('seedFromRollingPr', () => {
     assert.equal(env.files.get(historyPath), baseRows + line(real));
     assert.equal(env.logged.warning.length, 1);
     assert.match(env.logged.warning[0], /dropped 1 pending row/);
+  });
+
+  test('a forged timeoutMinutes or pct on a real job is dropped', async () => {
+    const real = apiRec({ runId: 901 });
+    const forgedTimeout = apiRec({ runId: 902, timeoutMinutes: 45 });
+    const forgedPct = apiRec({ runId: 903, pct: 0.01 });
+    const env = makeEnv({
+      baseText: baseRows,
+      branchText: baseRows + line(real) + line(forgedTimeout) + line(forgedPct),
+      apis: apiFor(real, apiRec({ runId: 902 }), apiRec({ runId: 903 })),
+    });
+    assert.deepEqual(await env.run(), {
+      status: 'seeded', pr: 77, candidate: 3, verified: 1, dropped: 2,
+    });
+    assert.equal(env.files.get(historyPath), baseRows + line(real));
+  });
+
+  test('rows of a run whose workflow is not tracked are dropped', async () => {
+    const rec = apiRec({ runId: 901, workflowFile: 'release.yml' });
+    const apis = new Map([[901, { run: apiRun({ id: 901, path: '.github/workflows/release.yml' }), jobs: [apiJob()] }]]);
+    const env = makeEnv({ baseText: baseRows, branchText: baseRows + line(rec), apis });
+    const result = await env.run();
+    assert.deepEqual([result.verified, result.dropped], [0, 1]);
+    assert.equal(env.calls.writes, 0);
+    assert.deepEqual(env.calls.workflowContext, []);
+  });
+
+  test('workflow context is loaded once per workflow file', async () => {
+    const p1 = apiRec({ runId: 901 });
+    const p2 = apiRec({ runId: 902 });
+    const env = makeEnv({ baseText: baseRows, branchText: baseRows + line(p1) + line(p2), apis: apiFor(p1, p2) });
+    await env.run();
+    assert.deepEqual(env.calls.workflowContext, ['test.yml']);
+  });
+
+  test('a Uint8Array getContent payload is decoded as UTF-8 text', async () => {
+    const p1 = apiRec({ runId: 901 });
+    const env = makeEnv({
+      baseText: baseRows,
+      contentPayload: new Uint8Array(Buffer.from(baseRows + line(p1), 'utf8')),
+      apis: apiFor(p1),
+    });
+    assert.equal((await env.run()).verified, 1);
+    assert.equal(env.files.get(historyPath), baseRows + line(p1));
+  });
+
+  test('a non-text getContent payload (plain object) rejects', async () => {
+    const env = makeEnv({ baseText: baseRows, contentPayload: { type: 'file', content: 'eA==' } });
+    await assert.rejects(env.run(), /unexpected getContent payload type \(expected raw text\)/);
+    assert.equal(env.calls.writes, 0);
   });
 
   test('a pending row whose run 404s is dropped with a warning', async () => {

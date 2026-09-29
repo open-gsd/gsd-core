@@ -350,24 +350,53 @@ function subtractHistoryText(text, baseText) {
 }
 
 /**
- * True only when the Actions API's run and job confirm every claim a history
- * record makes: run id, workflow file, job name, completion time, span (the
- * same jobSpanMs parseJobRecord records) and, when present, the head sha.
+ * True only when `rec` equals, field for field, the record parseJobRecord
+ * would emit from the Actions API's run and job (the exact shape
+ * buildReportLines passes), so every stored field is verified and only jobs
+ * main() itself would record are accepted.
  *
  * @param {object} rec
- * @param {{run?: object, job?: object}} [api]
+ * @param {{run?: object, job?: object, workflowYamlText?: ?string, covered?: ?object}} [api]
  * @returns {boolean}
  */
-function matchesApiJob(rec, { run, job } = {}) {
+function matchesApiJob(rec, {
+  run, job, workflowYamlText, covered,
+} = {}) {
   if (!rec || typeof rec !== 'object') return false;
   if (!run || typeof run !== 'object' || !job || typeof job !== 'object') return false;
-  if (run.id !== rec.runId) return false;
-  if (String(run.path || '').split('/').pop() !== rec.workflowFile) return false;
-  if (job.name !== rec.jobName) return false;
-  if (job.completed_at !== rec.completedAt) return false;
-  if (jobSpanMs(job) !== rec.elapsedMs) return false;
-  if (typeof rec.sha === 'string' && run.head_sha !== rec.sha) return false;
-  return true;
+  const workflowFile = String(run.path || '').split('/').pop();
+  if (!WORKFLOW_FILES.includes(workflowFile)) return false;
+  const built = parseJobRecord({
+    job: {
+      ...job, run_id: run.id, head_sha: run.head_sha, runEvent: run.event,
+    },
+    workflowFile,
+    workflowYamlText,
+    covered,
+  });
+  if (built === null) return false;
+  const expected = JSON.parse(JSON.stringify(built));
+  const expectedKeys = Object.keys(expected);
+  const recKeys = Object.keys(rec);
+  if (expectedKeys.length !== recKeys.length) return false;
+  return expectedKeys.every((k) => Object.prototype.hasOwnProperty.call(rec, k) && Object.is(expected[k], rec[k]));
+}
+
+/**
+ * Per-workflow inputs parseJobRecord needs, loaded exactly as main() does.
+ *
+ * @param {string} workflowFile
+ * @param {{readFileSync: Function}} fsImpl
+ * @returns {{workflowYamlText: ?string, covered: ?object}}
+ */
+function loadWorkflowContext(workflowFile, fsImpl) {
+  if (workflowFile === 'mutation.yml') {
+    return { workflowYamlText: null, covered: require('./mutation-matrix.cjs').COVERED };
+  }
+  return {
+    workflowYamlText: fsImpl.readFileSync(path.join(WORKFLOWS_DIR, workflowFile), 'utf8'),
+    covered: null,
+  };
 }
 
 /**
@@ -382,8 +411,14 @@ function matchesApiJob(rec, { run, job } = {}) {
  */
 async function seedFromRollingPr({
   github, context, core, historyPath = HISTORY_PATH, fs: fsImpl = fs, maxRuns = 200,
+  workflowContext = (workflowFile) => loadWorkflowContext(workflowFile, fsImpl),
 }) {
   const { owner, repo } = context.repo;
+  const contextCache = new Map();
+  const contextFor = (workflowFile) => {
+    if (!contextCache.has(workflowFile)) contextCache.set(workflowFile, workflowContext(workflowFile));
+    return contextCache.get(workflowFile);
+  };
   const zeros = { candidate: 0, verified: 0, dropped: 0 };
 
   const listed = await github.rest.pulls.list({
@@ -402,7 +437,8 @@ async function seedFromRollingPr({
     if (typeof data === 'string') branchText = data;
     else if (Buffer.isBuffer(data)) branchText = data.toString('utf8');
     else if (data instanceof ArrayBuffer) branchText = Buffer.from(data).toString('utf8');
-    else branchText = String(data);
+    else if (data instanceof Uint8Array) branchText = Buffer.from(data).toString('utf8');
+    else throw new Error('ci-timeout-report: unexpected getContent payload type (expected raw text)');
   } catch (err) {
     if (err && err.status === 404) return { status: 'no-file', pr: pr.number, ...zeros };
     throw err;
@@ -447,8 +483,16 @@ async function seedFromRollingPr({
       }
       throw err;
     }
+    const workflowFile = String((run && run.path) || '').split('/').pop();
+    if (!WORKFLOW_FILES.includes(workflowFile)) {
+      rowsDropped += rows.length;
+      continue;
+    }
+    const { workflowYamlText, covered } = contextFor(workflowFile);
     for (const row of rows) {
-      if (jobs.some((job) => matchesApiJob(row.rec, { run, job }))) verifiedLines.push(row.line);
+      if (jobs.some((job) => matchesApiJob(row.rec, {
+        run, job, workflowYamlText, covered,
+      }))) verifiedLines.push(row.line);
       else rowsDropped += 1;
     }
   }
