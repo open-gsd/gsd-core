@@ -229,6 +229,19 @@ describe('#5118: verification-status-raw-read (positive controls)', () => {
     ]), []);
   });
 
+  // #5118 review G: the path match is case-INsensitive — a lower-case
+  // `$verification_file` / `*-verification.md` read is the same bypass.
+  // Boundary on the path token (limit = the full word `verification`):
+  // limit-1 (`verificatio`) is not a VERIFICATION path; limit and limit+1
+  // (`verifications`) are.
+  test('V53b: case-insensitive path match — limit-1 / limit / limit+1 on the path token', () => {
+    const read = (pathToken) => rawReads([`S=$(grep "^status:" "${pathToken}" | head -1)`]);
+    assert.deepEqual(read('$verificatio_file'), [], 'limit-1: not a verification path');
+    assert.equal(read('$verification_file').length, 1, 'limit: lower-case variable is flagged');
+    assert.equal(read('./01-Verification.md').length, 1, 'limit: mixed-case filename is flagged');
+    assert.equal(read('$verifications_dir/x.md').length, 1, 'limit+1: still names verification');
+  });
+
   test('V55: scan() reports the rule on a fixture workflow, and main() exits 1', (t) => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5118-raw-read-'));
     t.after(() => cleanup(tmpDir));

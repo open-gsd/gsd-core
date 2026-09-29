@@ -85,8 +85,9 @@ const RULE_VERIFICATION_RAW_READ = 'verification-status-raw-read';
 
 // #5118: a VERIFICATION report path or variable (`*-VERIFICATION.md`,
 // `$VERIFICATION_FILE`, `${VERIFICATION_PATH}`), a raw `^status` pattern, and
-// the text tool doing the read.
-const VERIFICATION_PATH_RE = /VERIFICATION/;
+// the text tool doing the read. Case-INsensitive (#5118 review): a lower-case
+// `$verification_file` / `*-verification.md` read is the same bypass.
+const VERIFICATION_PATH_RE = /verification/i;
 const RAW_STATUS_PATTERN_RE = /\^status\b/;
 const RAW_READ_TOOL_RE = /(^|[\s|;&(`$])(awk|gawk|sed|grep|egrep)\s/;
 

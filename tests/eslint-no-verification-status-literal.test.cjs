@@ -122,6 +122,65 @@ describe('no-verification-status-literal config wiring', () => {
   });
 });
 
+describe('no-verification-status-literal — type-aware arm (#5118 review G)', () => {
+  // The name heuristics cannot see `result.status === 'passed'` over a
+  // VerificationStatusResult (no verification-shaped name). The typed lint
+  // config (eslint.config.mjs's src/** block carries parserOptions.project)
+  // gives the rule the TypeScript program; the rule then flags any operand
+  // whose type is a >= 2-member union drawn only from the enum.
+  const fs = require('node:fs');
+  const os = require('node:os');
+
+  function lintTyped(t, code) {
+    const ts = require('typescript');
+    const tsParser = require('@typescript-eslint/parser');
+    const { Linter } = require('eslint');
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5118-typed-')));
+    t.after(() => require('./helpers.cjs').cleanup(dir));
+    fs.mkdirSync(path.join(dir, 'src'));
+    const file = path.join(dir, 'src', 'fixture.cts');
+    fs.writeFileSync(file, code);
+    const program = ts.createProgram([file], {
+      strict: true, noEmit: true, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
+    });
+    const linter = new Linter({ configType: 'flat', cwd: dir });
+    return linter.verify(code, [{
+      files: ['**/*.cts'],
+      languageOptions: { parser: tsParser, parserOptions: { programs: [program] } },
+      plugins: { local: { rules: { 'no-verification-status-literal': noVerificationStatusLiteral } } },
+      rules: { 'local/no-verification-status-literal': 'error' },
+    }], { filename: file });
+  }
+
+  const PRELUDE = [
+    "type VerificationStatus = 'passed' | 'gaps_found' | 'human_needed' | 'stale' | 'missing' | 'unparseable' | 'phase_dir_not_found';",
+    "type VerifierStatus = 'passed' | 'gaps_found' | 'human_needed';",
+  ].join('\n');
+
+  test('G1: an unnamed operand typed as the enum (or a subset, or | null) is flagged', (t) => {
+    const messages = lintTyped(t, `${PRELUDE}
+export function f(result: { status: VerificationStatus | null }, w: { status: VerifierStatus }): number {
+  if (result.status === 'passed') return 1;
+  switch (w.status) { case 'gaps_found': return 2; default: return 0; }
+}
+`);
+    assert.deepEqual(messages.map((m) => [m.line, m.messageId]), [[4, 'verificationStatusLiteral'], [5, 'verificationStatusLiteral']]);
+  });
+
+  test('G2: a union with a non-member, and a one-literal type (boundary: 1 member < 2), are not flagged', (t) => {
+    const messages = lintTyped(t, `${PRELUDE}
+export function f(uat: { status: 'passed' | 'failed' }, one: { status: 'passed' }, two: { status: 'passed' | 'stale' }): number {
+  if (uat.status === 'passed') return 1;
+  if (one.status === 'passed') return 2;
+  if (two.status === 'passed') return 3;
+  return 0;
+}
+`);
+    // limit-1 (one member) and a non-member union: silent; limit (two members): flagged.
+    assert.deepEqual(messages.map((m) => [m.line, m.messageId]), [[6, 'verificationStatusLiteral']]);
+  });
+});
+
 describe('no-verification-status-literal member parity', () => {
   // The rule cannot import the compiled owner at lint time, so it carries the
   // enum's values; this pins them to the owner so the two cannot diverge

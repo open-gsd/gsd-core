@@ -24,7 +24,16 @@
  *     `verStatus` (/^(?:verif\w*status|v(?:er)?status)$/i);
  *   - a `.status` member whose object is named like a verification value
  *     (`verification.status`, `result.verification.status`,
- *     `verificationResult.status`).
+ *     `verificationResult.status`);
+ *   - TYPE-AWARE (#5118 review): when the lint run carries type information
+ *     (`parserServices.program`, as eslint.config.mjs's typed `src/**` block
+ *     does), ANY expression whose static type is a union of two or more
+ *     string-literal types all drawn from the enum (`VerificationStatus`,
+ *     `VerifierStatus`, `VerificationStatus | null`) — whatever it is named.
+ *     This closes the name heuristic's gap: `result.status === 'passed'`
+ *     over a `VerificationStatusResult` has no verification-shaped name. A
+ *     union with any non-member (a UAT `'passed' | 'failed'`) is not flagged;
+ *     without type information only the name heuristics above run.
  *
  * Not flagged: the owner itself; an unrelated vocabulary that shares a word
  * (`uatResult === 'passed'`, a UAT `result`); a comparison against the
@@ -83,6 +92,28 @@ function isVerificationStatusExpression(node) {
   return false;
 }
 
+/**
+ * Type-aware reading (only when the parser supplied a TypeScript program):
+ * true when `node`'s static type, minus null/undefined, is a union of >= 2
+ * string-literal types that are all VERIFICATION_STATUS members.
+ */
+function hasVerificationStatusType(services, node) {
+  if (!services || !services.program || !services.esTreeNodeToTSNodeMap) return false;
+  const tsNode = services.esTreeNodeToTSNodeMap.get(node);
+  if (!tsNode) return false;
+  const checker = services.program.getTypeChecker();
+  const type = checker.getTypeAtLocation(tsNode);
+  const parts = typeof type.isUnion === 'function' && type.isUnion() ? type.types : [type];
+  const literals = [];
+  for (const part of parts) {
+    const flagsText = checker.typeToString(part);
+    if (flagsText === 'null' || flagsText === 'undefined') continue;
+    if (typeof part.isStringLiteral !== 'function' || !part.isStringLiteral()) return false;
+    literals.push(part.value);
+  }
+  return literals.length >= 2 && literals.every((value) => MEMBER_SET.has(value));
+}
+
 function memberLiteral(node) {
   return Boolean(node && node.type === 'Literal' && typeof node.value === 'string' && MEMBER_SET.has(node.value));
 }
@@ -121,14 +152,18 @@ const rule = {
       });
     }
 
+    const sourceCode = context.sourceCode || (context.getSourceCode ? context.getSourceCode() : null);
+    const services = (sourceCode && sourceCode.parserServices) || context.parserServices || null;
+    const readsStatus = (node) => isVerificationStatusExpression(node) || hasVerificationStatusType(services, node);
+
     return {
       BinaryExpression(node) {
         if (!['===', '!==', '==', '!='].includes(node.operator)) return;
-        if (memberLiteral(node.right) && isVerificationStatusExpression(node.left)) report(node.right);
-        else if (memberLiteral(node.left) && isVerificationStatusExpression(node.right)) report(node.left);
+        if (memberLiteral(node.right) && readsStatus(node.left)) report(node.right);
+        else if (memberLiteral(node.left) && readsStatus(node.right)) report(node.left);
       },
       SwitchStatement(node) {
-        if (!isVerificationStatusExpression(node.discriminant)) return;
+        if (!readsStatus(node.discriminant)) return;
         for (const switchCase of node.cases) {
           if (memberLiteral(switchCase.test)) report(switchCase.test);
         }
