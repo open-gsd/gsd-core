@@ -790,3 +790,55 @@ describe('S9: committed/reason reporting (#5105 review — no fs.writeSync monke
     assert.strictEqual(gitHeadCount(projectDir), headBefore, 'no commit was made');
   });
 });
+
+// #5105 (Windows CI, PR #5114 windows-latest shards 2/3 + 3/3): every CLI
+// row expecting changed:false got changed:true because `readBaselineAtHead`
+// canonicalized `git rev-parse --show-toplevel` (LONG, forward-slash form:
+// `C:/Users/runneradmin/...`) and the caller's path (8.3 SHORT form:
+// `C:\Users\RUNNER~1\...`) through `fs.realpathSync`, which never expands 8.3
+// names — the relative pathspec climbed out, containment refused it, and the
+// baseline was null. The Windows shape is driven here off-Windows by
+// injecting `path.win32` and an OS-style (short→long expanding) realpath.
+describe('#5105 Windows: HEAD pathspec for git show resolves across 8.3 / separator / drive-case shapes', () => {
+  const lib = () => require('../gsd-core/bin/lib/uat.cjs');
+  const LONG = 'C:\\Users\\runneradmin\\AppData\\Local\\Temp\\gsd-x';
+  // Models GetFinalPathNameByHandleW: expands the 8.3 segment, normalizes
+  // separators and the drive letter to upper case.
+  function nativeLikeRealpath(p) {
+    return path.win32.normalize(p)
+      .replace(/^[a-z]:/, (d) => d.toUpperCase())
+      .replace(/\\RUNNER~1\\/i, '\\runneradmin\\');
+  }
+  const deps = { realpath: nativeLikeRealpath, pathMod: path.win32 };
+
+  test('git-form toplevel (forward slashes, long name) vs 8.3 short-name file path → toplevel-relative POSIX pathspec', () => {
+    const got = lib().headPathspecFor(
+      'C:/Users/runneradmin/AppData/Local/Temp/gsd-x',
+      'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gsd-x\\.planning\\phases\\01-foo\\01-UAT.md',
+      deps,
+    );
+    assert.strictEqual(got, '.planning/phases/01-foo/01-UAT.md');
+  });
+
+  test('lower-case drive letter on one side, subdirectory project root → pathspec is still toplevel-relative', () => {
+    const got = lib().headPathspecFor(
+      'C:/Users/runneradmin/AppData/Local/Temp/gsd-x',
+      'c:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gsd-x\\nested-project\\.planning\\01-UAT.md',
+      deps,
+    );
+    assert.strictEqual(got, 'nested-project/.planning/01-UAT.md');
+  });
+
+  test('a file on a different drive is refused (cross-root relative is absolute), never fed to git show as `D:/...`', () => {
+    assert.strictEqual(lib().headPathspecFor(LONG, 'D:\\elsewhere\\01-UAT.md', deps), null);
+  });
+
+  test('a file outside the toplevel is refused', () => {
+    assert.strictEqual(lib().headPathspecFor(LONG, 'C:\\Users\\runneradmin\\other\\01-UAT.md', deps), null);
+  });
+
+  test('the production resolver is the OS realpath (fs.realpathSync.native), which expands 8.3 names; the JS realpath does not', () => {
+    assert.strictEqual(lib().HEAD_PATHSPEC_DEFAULT_DEPS.realpath, fs.realpathSync.native);
+    assert.strictEqual(lib().HEAD_PATHSPEC_DEFAULT_DEPS.pathMod, path);
+  });
+});
