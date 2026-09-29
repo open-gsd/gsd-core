@@ -85,8 +85,11 @@ const OWNER_FILE = path.join('src', 'frontmatter-fence.cts');
 const TOP_LEVEL = '<top-level>';
 
 // FUNCTION-SCOPED exemptions, each with its reason:
-//   - frontmatter-fence.cts `locateFrontmatterFence` and its module-scope fence
-//     constants: this IS the owner.
+//   - frontmatter-fence.cts `locateFrontmatterFence`: this IS the owner. Its
+//     module-scope fence constants (`CLOSING_FENCE_LINE`, `LENIENT_CLOSING_FENCE_LINE`)
+//     sit OUTSIDE this function, at TOP_LEVEL, and are exempted by exact fragment
+//     in DETECTOR_EXEMPTIONS below instead — a blanket TOP_LEVEL pass here would
+//     let any new top-level helper in this file go unscanned (#5105 fix).
 //   - phase.cts `phaseEntryInsertOffset`: its `lastIndexOf('\n---')` finds the
 //     ROADMAP's trailing section SEPARATOR (a thematic break closing the phase
 //     list) so a new phase entry is appended before it — it never asks where a
@@ -104,7 +107,7 @@ const TOP_LEVEL = '<top-level>';
 //     from a package/git-spec tree that may carry no built bin/lib. Pinned to the
 //     owner by the same parity test.
 const FUNCTION_SCOPED_EXEMPTIONS = new Map([
-  [OWNER_FILE, new Set(['locateFrontmatterFence', TOP_LEVEL])],
+  [OWNER_FILE, new Set(['locateFrontmatterFence'])],
   [path.join('src', 'phase.cts'), new Set(['phaseEntryInsertOffset'])],
   [path.join('src', 'shell-command-projection.cts'), new Set(['_normalizeMd'])],
   [path.join('scripts', 'changeset', 'parse.cjs'), new Set(['locateFrontmatterFence'])],
@@ -124,13 +127,23 @@ const DETECTOR_EXEMPTIONS = new Map([
   [path.join('scripts', 'lint-frontmatter-fence-drift.cjs'), new Set(['/^(?:\\\\r)?(?:\\\\n)?---(?:\\\\r)?(?:\\\\n)?$/'])],
   [path.join('scripts', 'lint-frontmatter-scalar-broad-grep.cjs'), new Set(['/\\^---[\\s\\S]{0,300}?---/'])],
   [path.join('eslint-rules', 'no-crlf-fragile-split.cjs'), new Set(['/\\^---/'])],
+  // The owner's own module-scope fence-literal constants (#5105 fix): these ARE
+  // the canonical closing-fence patterns, not a re-derivation — exempted by their
+  // exact fragment rather than by a blanket TOP_LEVEL pass, so a NEW top-level
+  // helper in this file (one that merely happens to sit outside a function) is
+  // still caught.
+  [OWNER_FILE, new Set(['/^---[ \\t]*$/', '/^-{4,}[ \\t]*$/'])],
 ]);
 
 // Only a column-0 top-level `function` declaration updates the current-function
-// tracker (mirrors lint-milestone-window-drift.cjs); a module-scope `const` line
-// after a function body resets it to TOP_LEVEL.
+// tracker (mirrors lint-milestone-window-drift.cjs); ANY OTHER non-blank,
+// non-`}` column-0 line — a `const`, a `module.exports =`, an `export const`
+// arrow, anything — resets it to TOP_LEVEL. (#5105 fix: the previous version
+// only reset on a fixed keyword list, so a top-level statement it didn't
+// recognize — e.g. `module.exports = { ... }` — silently inherited the LAST
+// exempted function's name and went unscanned.)
 const TOP_LEVEL_FUNCTION_RE = /^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*\(/;
-const TOP_LEVEL_STATEMENT_RE = /^(?:export\s+)?(?:const|let|var|class|interface|type|import)\b/;
+const COLUMN_ZERO_RESET_RE = /^[^\s}]/;
 
 const NEW_REGEXP_RE = /new\s+RegExp\s*\(/;
 
@@ -231,7 +244,7 @@ function findFrontmatterFenceDrift(text, relPath) {
     const line = lines[i];
     const fnMatch = TOP_LEVEL_FUNCTION_RE.exec(line);
     if (fnMatch) currentFunction = fnMatch[1];
-    else if (TOP_LEVEL_STATEMENT_RE.test(line)) currentFunction = TOP_LEVEL;
+    else if (COLUMN_ZERO_RESET_RE.test(line)) currentFunction = TOP_LEVEL;
 
     const code = stripComments(line);
     if (!code.includes('---')) continue;
