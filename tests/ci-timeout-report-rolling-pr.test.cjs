@@ -12,6 +12,8 @@
  *   - evaluateRollingPrApproval (the approve-or-refuse gate)
  *   - recordKey / isValidHistoryRecord / sanitizeHistoryText (the rolling branch
  *     is untrusted input; only in-schema, bounded rows are seeded)
+ *   - subtractHistoryText / matchesApiJob / seedFromRollingPr (a pending row is
+ *     seeded only when the Actions API confirms it)
  *   - ROLLING_PR title/body/branch pass the real PR validators
  */
 
@@ -30,6 +32,9 @@ const {
   HISTORY_RECORD_LIMITS,
   dedupeAgainstHistory,
   evaluateRollingPrApproval,
+  subtractHistoryText,
+  matchesApiJob,
+  seedFromRollingPr,
   ROLLING_PR,
 } = require('../scripts/ci-timeout-report.cjs');
 const { evaluatePrTitle } = require('../scripts/release-notes/conventional-title.cjs');
@@ -273,13 +278,36 @@ describe('sanitizeHistoryText', () => {
     assert.equal(Object.isFrozen(HISTORY_RECORD_LIMITS), true);
   });
 
-  test('property: every output line is a valid record and sanitizing is idempotent', () => {
+  test('property: valid rows mixed with junk keep exactly the distinct valid keys, all valid, idempotent', () => {
+    const validRecordLineArb = fc.record({
+      runId: fc.integer({ min: 1, max: 6 }),
+      jobName: fc.constantFrom('a', 'b', 'c'),
+      workflowFile: fc.constantFrom('test.yml', 'mutation.yml'),
+      elapsedMs: fc.integer({ min: 0, max: 100000 }),
+      timeoutMinutes: fc.integer({ min: 1, max: 60 }),
+      pct: fc.integer({ min: 0, max: 100 }),
+    }).map((rec) => JSON.stringify(rec));
+    const linesArb = fc.array(fc.oneof(validRecordLineArb, fc.string()), { maxLength: 12 });
     fc.assert(
-      fc.property(fc.string(), (s) => {
-        const out = sanitizeHistoryText(s).text;
-        for (const l of out.split('\n').filter(Boolean)) {
+      fc.property(linesArb, (lines) => {
+        const input = lines.join('\n');
+        const out = sanitizeHistoryText(input).text;
+        const outLines = out.split('\n').filter(Boolean);
+        for (const l of outLines) {
           assert.equal(isValidHistoryRecord(JSON.parse(l)), true);
         }
+        const validKeys = new Set();
+        for (const raw of input.split(/\r?\n/)) {
+          let rec;
+          try {
+            rec = JSON.parse(raw);
+          } catch {
+            continue;
+          }
+          if (isValidHistoryRecord(rec)) validKeys.add(recordKey(rec));
+        }
+        assert.ok(lines.length < HISTORY_RECORD_LIMITS.maxLines);
+        assert.equal(outLines.length, validKeys.size);
         assert.equal(sanitizeHistoryText(out).text, out);
       }),
     );
@@ -299,6 +327,336 @@ describe('sanitizeHistoryText', () => {
         }
       }),
     );
+  });
+});
+
+describe('subtractHistoryText', () => {
+  test('removes rows present in the base, keeps the rest in order', () => {
+    assert.equal(subtractHistoryText(line(recA) + line(recB) + line(recC), line(recB)), line(recA) + line(recC));
+  });
+
+  test('identity is the record key, not the exact text', () => {
+    assert.equal(subtractHistoryText(line({ ...recA, pct: 99 }), line(recA)), '');
+  });
+
+  test('CRLF input is normalized and matched against an LF base', () => {
+    const crlf = `${JSON.stringify(recA)}\r\n${JSON.stringify(recB)}\r\n`;
+    assert.equal(subtractHistoryText(crlf, line(recA)), line(recB));
+  });
+
+  test('malformed lines are identified by exact text', () => {
+    const bad = '{"runId":3,"jobName"';
+    const other = '{"runId":4,"jobName"';
+    assert.equal(subtractHistoryText(`${bad}\n${other}\n`, `${bad}\n`), `${other}\n`);
+  });
+
+  test('empty and non-string inputs → empty string or the deduped text', () => {
+    assert.equal(subtractHistoryText('', line(recA)), '');
+    assert.equal(subtractHistoryText(undefined, undefined), '');
+    assert.equal(subtractHistoryText(null, 5), '');
+    assert.equal(subtractHistoryText(line(recA), undefined), line(recA));
+    assert.equal(subtractHistoryText(line(recA), {}), line(recA));
+  });
+
+  test('duplicates within the text are emitted once', () => {
+    assert.equal(subtractHistoryText(line(recA) + line(recA) + line(recB), ''), line(recA) + line(recB));
+  });
+
+  test('everything already in the base → empty string', () => {
+    assert.equal(subtractHistoryText(line(recA) + line(recB), line(recB) + line(recA)), '');
+  });
+});
+
+const SHA = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
+const apiRec = (overrides = {}) => ({
+  runId: 900,
+  jobName: 'test (ubuntu-latest, 24)',
+  workflowFile: 'test.yml',
+  sha: SHA,
+  runEvent: 'push',
+  completedAt: '2026-09-28T22:00:00Z',
+  elapsedMs: 60000,
+  timeoutMinutes: 45,
+  pct: 60000 / 2700000,
+  ...overrides,
+});
+const apiRun = (overrides = {}) => ({ id: 900, path: '.github/workflows/test.yml', head_sha: SHA, ...overrides });
+const apiJob = (overrides = {}) => ({
+  name: 'test (ubuntu-latest, 24)',
+  conclusion: 'success',
+  started_at: '2026-09-28T21:59:00Z',
+  completed_at: '2026-09-28T22:00:00Z',
+  ...overrides,
+});
+
+describe('matchesApiJob', () => {
+  test('exact match → true', () => {
+    assert.equal(matchesApiJob(apiRec(), { run: apiRun(), job: apiJob() }), true);
+  });
+
+  test('each single-field mismatch → false', () => {
+    const rec = apiRec();
+    assert.equal(matchesApiJob(rec, { run: apiRun({ id: 901 }), job: apiJob() }), false, 'run.id');
+    assert.equal(matchesApiJob(rec, { run: apiRun({ path: '.github/workflows/mutation.yml' }), job: apiJob() }), false, 'run.path');
+    assert.equal(matchesApiJob(rec, { run: apiRun(), job: apiJob({ name: 'other' }) }), false, 'job.name');
+    assert.equal(matchesApiJob(rec, { run: apiRun(), job: apiJob({ completed_at: '2026-09-28T22:00:01Z' }) }), false, 'completed_at');
+    assert.equal(matchesApiJob(rec, { run: apiRun(), job: apiJob({ started_at: '2026-09-28T21:59:00.001Z' }) }), false, 'span -1ms');
+    assert.equal(matchesApiJob(rec, { run: apiRun(), job: apiJob({ started_at: '2026-09-28T21:58:59.999Z' }) }), false, 'span +1ms');
+    assert.equal(matchesApiJob(rec, { run: apiRun({ head_sha: 'b'.repeat(40) }), job: apiJob() }), false, 'head_sha');
+  });
+
+  test('a record without a sha ignores head_sha', () => {
+    const noSha = apiRec({ sha: null });
+    assert.equal(matchesApiJob(noSha, { run: apiRun({ head_sha: 'b'.repeat(40) }), job: apiJob() }), true);
+    const absent = apiRec();
+    delete absent.sha;
+    assert.equal(matchesApiJob(absent, { run: apiRun({ head_sha: undefined }), job: apiJob() }), true);
+  });
+
+  test('run.path is compared by basename (nested or bare)', () => {
+    assert.equal(matchesApiJob(apiRec(), { run: apiRun({ path: '.github/workflows/test.yml' }), job: apiJob() }), true);
+    assert.equal(matchesApiJob(apiRec(), { run: apiRun({ path: 'test.yml' }), job: apiJob() }), true);
+    assert.equal(matchesApiJob(apiRec(), { run: apiRun({ path: undefined }), job: apiJob() }), false);
+  });
+
+  test('a skipped or never-executed API job cannot confirm a row', () => {
+    assert.equal(matchesApiJob(apiRec(), { run: apiRun(), job: apiJob({ conclusion: 'skipped' }) }), false);
+  });
+
+  test('missing run or job → false', () => {
+    assert.equal(matchesApiJob(apiRec(), { job: apiJob() }), false);
+    assert.equal(matchesApiJob(apiRec(), { run: apiRun() }), false);
+    assert.equal(matchesApiJob(apiRec(), {}), false);
+    assert.equal(matchesApiJob(apiRec()), false);
+    assert.equal(matchesApiJob(apiRec(), { run: null, job: null }), false);
+  });
+});
+
+describe('seedFromRollingPr', () => {
+  const OWNER = 'open-gsd';
+  const REPO = 'gsd-core';
+  const PR_HEAD_SHA = 'c'.repeat(40);
+  const context = { repo: { owner: OWNER, repo: REPO } };
+  const historyPath = '/virtual/ci-timeout-budget-history.jsonl';
+
+  const ownPr = (overrides = {}) => ({
+    number: 77,
+    head: { ref: ROLLING_PR.branch, sha: PR_HEAD_SHA, repo: { full_name: `${OWNER}/${REPO}` } },
+    ...overrides,
+  });
+
+  // apis: Map<runId, { run, jobs } | 404 | Error>
+  function makeEnv({
+    prs = [ownPr()], branchText = '', baseText = null, apis = new Map(), contentError = null,
+  }) {
+    const files = new Map();
+    if (baseText !== null) files.set(historyPath, baseText);
+    const calls = { getWorkflowRun: [], listJobs: [], writes: 0 };
+    const httpError = (status) => Object.assign(new Error(`HTTP ${status}`), { status });
+    const listJobsForWorkflowRun = async (params) => {
+      calls.listJobs.push(params.run_id);
+      const api = apis.get(params.run_id);
+      if (typeof api === 'number') throw httpError(api);
+      return { data: { jobs: api.jobs } };
+    };
+    const github = {
+      rest: {
+        pulls: { list: async () => ({ data: prs }) },
+        repos: {
+          getContent: async (params) => {
+            assert.equal(params.ref, PR_HEAD_SHA);
+            assert.equal(params.path, ROLLING_PR.historyFile);
+            if (contentError) throw contentError;
+            return { data: branchText };
+          },
+        },
+        actions: {
+          getWorkflowRun: async (params) => {
+            calls.getWorkflowRun.push(params.run_id);
+            const api = apis.get(params.run_id);
+            if (typeof api === 'number') throw httpError(api);
+            if (api instanceof Error) throw api;
+            return { data: api.run };
+          },
+          listJobsForWorkflowRun,
+        },
+      },
+      paginate: async (fn, params) => {
+        const res = await fn(params);
+        return res.data.jobs || res.data;
+      },
+    };
+    const logged = { info: [], warning: [] };
+    const core = {
+      info: (m) => logged.info.push(m),
+      warning: (m) => logged.warning.push(m),
+    };
+    const fsStub = {
+      readFileSync: (p) => {
+        if (!files.has(p)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        return files.get(p);
+      },
+      writeFileSync: (p, text) => {
+        calls.writes += 1;
+        files.set(p, text);
+      },
+    };
+    const run = (extra = {}) => seedFromRollingPr({
+      github, context, core, historyPath, fs: fsStub, ...extra,
+    });
+    return {
+      run, files, calls, logged,
+    };
+  }
+
+  const baseRows = line(recA) + line(recB);
+  const apiFor = (...recs) => new Map(recs.map((r) => [r.runId, {
+    run: apiRun({ id: r.runId }),
+    jobs: [apiJob({ name: r.jobName })],
+  }]));
+
+  test('no open PR → no-pr, nothing written', async () => {
+    const env = makeEnv({ prs: [], baseText: baseRows });
+    assert.deepEqual(await env.run(), { status: 'no-pr', candidate: 0, verified: 0, dropped: 0 });
+    assert.equal(env.calls.writes, 0);
+  });
+
+  test('PR from a fork (head.repo differs) or another branch → no-pr', async () => {
+    const fork = ownPr({ head: { ref: ROLLING_PR.branch, sha: PR_HEAD_SHA, repo: { full_name: 'evil/gsd-core' } } });
+    const other = ownPr({ head: { ref: 'other', sha: PR_HEAD_SHA, repo: { full_name: `${OWNER}/${REPO}` } } });
+    const gone = ownPr({ head: { ref: ROLLING_PR.branch, sha: PR_HEAD_SHA, repo: null } });
+    for (const pr of [fork, other, gone]) {
+      const env = makeEnv({ prs: [pr] });
+      assert.equal((await env.run()).status, 'no-pr');
+      assert.equal(env.calls.writes, 0);
+    }
+  });
+
+  test('history file missing at the PR head (404) → no-file', async () => {
+    const env = makeEnv({ contentError: Object.assign(new Error('nf'), { status: 404 }) });
+    assert.deepEqual(await env.run(), {
+      status: 'no-file', pr: 77, candidate: 0, verified: 0, dropped: 0,
+    });
+    assert.equal(env.calls.writes, 0);
+  });
+
+  test('any other getContent failure rejects so the step fails', async () => {
+    const env = makeEnv({ contentError: Object.assign(new Error('boom'), { status: 500 }) });
+    await assert.rejects(env.run(), /boom/);
+    assert.equal(env.calls.writes, 0);
+  });
+
+  test('two pending rows both confirmed by the API are seeded after the base', async () => {
+    const p1 = apiRec({ runId: 901 });
+    const p2 = apiRec({ runId: 902, jobName: 'smoke (ubuntu-latest, 24)', workflowFile: 'test.yml' });
+    const env = makeEnv({
+      baseText: baseRows, branchText: baseRows + line(p1) + line(p2), apis: apiFor(p1, p2),
+    });
+    assert.deepEqual(await env.run(), {
+      status: 'seeded', pr: 77, candidate: 2, verified: 2, dropped: 0,
+    });
+    assert.equal(env.files.get(historyPath), baseRows + line(p1) + line(p2));
+    assert.deepEqual(env.logged.warning, []);
+  });
+
+  test('a forged row (span differs from the API job) is dropped, the real one seeded, one warning', async () => {
+    const real = apiRec({ runId: 901 });
+    const forged = apiRec({ runId: 902, elapsedMs: 61000 });
+    const env = makeEnv({
+      baseText: baseRows, branchText: baseRows + line(real) + line(forged), apis: apiFor(real, apiRec({ runId: 902 })),
+    });
+    assert.deepEqual(await env.run(), {
+      status: 'seeded', pr: 77, candidate: 2, verified: 1, dropped: 1,
+    });
+    assert.equal(env.files.get(historyPath), baseRows + line(real));
+    assert.equal(env.logged.warning.length, 1);
+    assert.match(env.logged.warning[0], /dropped 1 pending row/);
+  });
+
+  test('a pending row whose run 404s is dropped with a warning', async () => {
+    const real = apiRec({ runId: 901 });
+    const ghost = apiRec({ runId: 902 });
+    const apis = apiFor(real);
+    apis.set(902, 404);
+    const env = makeEnv({ baseText: baseRows, branchText: baseRows + line(real) + line(ghost), apis });
+    assert.deepEqual(await env.run(), {
+      status: 'seeded', pr: 77, candidate: 2, verified: 1, dropped: 1,
+    });
+    assert.equal(env.files.get(historyPath), baseRows + line(real));
+    assert.equal(env.logged.warning.length, 1);
+  });
+
+  test('a non-404 API failure while verifying rejects', async () => {
+    const real = apiRec({ runId: 901 });
+    const apis = new Map([[901, Object.assign(new Error('rate limited'), { status: 403 })]]);
+    const env = makeEnv({ baseText: baseRows, branchText: baseRows + line(real), apis });
+    await assert.rejects(env.run(), /rate limited/);
+    assert.equal(env.calls.writes, 0);
+  });
+
+  test('an out-of-schema pending row is dropped without ever reaching the API', async () => {
+    const real = apiRec({ runId: 901 });
+    const evil = { ...apiRec({ runId: 903 }), evil: true };
+    const env = makeEnv({ baseText: baseRows, branchText: baseRows + line(evil) + line(real), apis: apiFor(real) });
+    assert.deepEqual(await env.run(), {
+      status: 'seeded', pr: 77, candidate: 1, verified: 1, dropped: 1,
+    });
+    assert.deepEqual(env.calls.getWorkflowRun, [901]);
+    assert.equal(env.logged.warning.length, 1);
+  });
+
+  test('maxRuns boundary: 3 pending runs with maxRuns 2 drop the 3rd; maxRuns 3 verifies all', async () => {
+    const recs = [901, 902, 903].map((runId) => apiRec({ runId }));
+    const branchText = baseRows + recs.map(line).join('');
+
+    const limited = makeEnv({ baseText: baseRows, branchText, apis: apiFor(...recs) });
+    assert.deepEqual(await limited.run({ maxRuns: 2 }), {
+      status: 'seeded', pr: 77, candidate: 3, verified: 2, dropped: 1,
+    });
+    assert.deepEqual(limited.calls.getWorkflowRun, [901, 902]);
+    assert.equal(limited.files.get(historyPath), baseRows + line(recs[0]) + line(recs[1]));
+    assert.equal(limited.logged.warning.length, 1);
+
+    const exact = makeEnv({ baseText: baseRows, branchText, apis: apiFor(...recs) });
+    assert.deepEqual(await exact.run({ maxRuns: 3 }), {
+      status: 'seeded', pr: 77, candidate: 3, verified: 3, dropped: 0,
+    });
+    assert.equal(exact.files.get(historyPath), baseRows + recs.map(line).join(''));
+    assert.deepEqual(exact.logged.warning, []);
+  });
+
+  test('base rows in the branch file are never re-verified; only pending runs hit the API', async () => {
+    const p1 = apiRec({ runId: 901 });
+    const p2 = apiRec({ runId: 902 });
+    const env = makeEnv({ baseText: baseRows, branchText: baseRows + line(p1) + line(p2), apis: apiFor(p1, p2) });
+    await env.run();
+    assert.deepEqual(env.calls.getWorkflowRun, [901, 902]);
+    assert.deepEqual(env.calls.listJobs, [901, 902]);
+  });
+
+  test('newest pending rows survive a large next history (cap applies to pending rows only)', async () => {
+    const pending = apiRec({ runId: 901 });
+    const bigBase = Array.from({ length: 50 }, (_, i) => line({ ...recA, runId: 1000 + i })).join('');
+    const env = makeEnv({ baseText: bigBase, branchText: bigBase + line(pending), apis: apiFor(pending) });
+    const result = await env.run();
+    assert.equal(result.verified, 1);
+    assert.equal(env.files.get(historyPath), bigBase + line(pending));
+  });
+
+  test('nothing verified → history file untouched', async () => {
+    const forged = apiRec({ runId: 901, jobName: 'not-a-real-job' });
+    const env = makeEnv({ baseText: baseRows, branchText: baseRows + line(forged), apis: apiFor(apiRec({ runId: 901 })) });
+    const result = await env.run();
+    assert.deepEqual([result.verified, result.dropped], [0, 1]);
+    assert.equal(env.calls.writes, 0);
+    assert.equal(env.files.get(historyPath), baseRows);
+  });
+
+  test('a missing local history file is treated as empty', async () => {
+    const p1 = apiRec({ runId: 901 });
+    const env = makeEnv({ baseText: null, branchText: line(p1), apis: apiFor(p1) });
+    assert.equal((await env.run()).verified, 1);
+    assert.equal(env.files.get(historyPath), line(p1));
   });
 });
 

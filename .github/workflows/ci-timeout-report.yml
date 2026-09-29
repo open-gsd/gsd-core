@@ -8,8 +8,8 @@ name: CI timeout budget report
 # bot run (see auto-backmerge.yml for the same constraint) — so the records
 # travel in ONE rolling, data-only PR (#5115) on branch
 # chore/4036-ci-timeout-budget-history. Each run seeds the history with the open
-# rolling PR's pending rows (sanitized: the branch is untrusted, so only
-# in-schema, size-bounded rows are kept), appends only unseen records, rebuilds
+# rolling PR's pending rows (the branch is untrusted, so only in-schema rows
+# the Actions API confirms are kept), appends only unseen records, rebuilds
 # the branch on the current `next` tip and force-pushes it, so the PR never
 # conflicts and never goes stale. The workflow approves the PR only when it is
 # provably its own tests-data-only PR (see evaluateRollingPrApproval), then arms
@@ -76,28 +76,19 @@ jobs:
       # #5115: start from the open rolling PR's pending rows so the poll step's
       # dedupe covers them and the rebuilt branch keeps them. A closed,
       # unmerged PR's rows were rejected, so only an OPEN same-repo PR seeds.
-      # The branch is untrusted (anyone with write access can push to it), so
-      # its rows are sanitized against the record schema before being merged.
-      - name: Seed history with the open rolling PR's pending records
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          PR=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$RP_BRANCH" --base "$RP_BASE" --state open --json number,isCrossRepository -q "$RP_OPEN_PR_JQ")
-          if [ -z "$PR" ]; then
-            echo "No open rolling PR — nothing to seed."
-            exit 0
-          fi
-          # Outside any `if`: a failed fetch must fail the step, not silently
-          # drop the pending rows.
-          git fetch --no-tags origin "$RP_BRANCH"
-          if git cat-file -e "FETCH_HEAD:$RP_FILE"; then
-            git show "FETCH_HEAD:$RP_FILE" > "$RUNNER_TEMP/pending-history.jsonl"
-            echo "Seeding history from open PR #$PR"
-            node -e "const fs=require('fs');const {mergeHistoryTexts,sanitizeHistoryText}=require('./scripts/ci-timeout-report.cjs');const read=(p)=>{try{return fs.readFileSync(p,'utf8')}catch{return ''}};const file=process.env.RP_FILE;const s=sanitizeHistoryText(read(process.argv[1]));fs.writeFileSync(file,mergeHistoryTexts(read(file),s.text));console.log('kept '+s.kept+', dropped '+s.dropped);if(s.dropped>0)console.log('::warning title=ci-timeout-report::dropped '+s.dropped+' malformed or out-of-schema row(s) from the rolling branch');" "$RUNNER_TEMP/pending-history.jsonl"
-          else
-            echo "Open rolling PR #$PR has no history file — nothing to seed."
-          fi
+      # The rolling branch is writable by collaborators, so only rows the
+      # Actions API confirms (same run, job name, completion time and span)
+      # are seeded. A seed failure stops the publish step, so pending rows are
+      # never force-pushed away.
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        id: seed
+        name: Seed history with the open rolling PR's verified pending records
+        with:
+          script: |
+            const report = require(`${process.env.GITHUB_WORKSPACE}/scripts/ci-timeout-report.cjs`);
+            const result = await report.seedFromRollingPr({ github, context, core });
+            core.info(`seed: ${result.status}`);
+            return result.status;
 
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         id: poll
@@ -126,13 +117,20 @@ jobs:
       # title/body current, approve it only when the gate says it is ours, and
       # arm auto-merge.
       - name: Update the rolling PR
-        if: always()
+        # A failed or skipped seed must not force-push a branch that is
+        # missing its pending rows; a failed poll may still publish.
+        if: always() && steps.seed.outcome == 'success'
         env:
           PUSH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN || github.token }}
           GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN || github.token }}
           APPROVE_TOKEN: ${{ github.token }}
+          HAS_BOT_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN != '' }}
         run: |
           set -euo pipefail
+
+          if [ "$HAS_BOT_TOKEN" != "true" ]; then
+            echo "::warning title=ci-timeout-report::GSD_BOT_PR_TOKEN is not set — pushes/PRs made with github.token do not trigger required checks and cannot be self-approved; the rolling PR will not merge on its own"
+          fi
 
           find_pr() {
             gh pr list --repo "$GITHUB_REPOSITORY" --head "$RP_BRANCH" --base "$RP_BASE" --state open --json number,isCrossRepository -q "$RP_OPEN_PR_JQ"

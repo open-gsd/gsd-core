@@ -25,9 +25,10 @@
  * `main()`.
  *
  * Rolling-PR helpers: the workflow keeps one PR (`ROLLING_PR`) rebuilt on
- * `next` each run. `mergeHistoryTexts` seeds the history with the open PR's
- * pending rows, first passed through `sanitizeHistoryText` because the branch
- * is untrusted (sharing `historyRecordKey` with dedupeAgainstHistory), and
+ * `next` each run. `seedFromRollingPr` seeds the history with the open PR's
+ * pending rows, but only rows that pass `sanitizeHistoryText` AND that the
+ * Actions API confirms (`matchesApiJob`), because the branch is untrusted
+ * (`mergeHistoryTexts` shares `historyRecordKey` with dedupeAgainstHistory), and
  * `evaluateRollingPrApproval` is the gate deciding whether the workflow may
  * approve that PR.
  */
@@ -317,6 +318,154 @@ function evaluateRollingPrApproval({ pr, expectedHeadOid } = {}) {
     return refuse('unexpected-files');
   }
   return { approve: true, reason: 'ok' };
+}
+
+/**
+ * Lines of `text` whose identity (record key, else exact text — the same rule
+ * as mergeHistoryTexts) is not present in `baseText`, deduped, in input order.
+ *
+ * @param {*} text
+ * @param {*} baseText
+ * @returns {string}
+ */
+function subtractHistoryText(text, baseText) {
+  const identityOf = (line) => {
+    const key = historyRecordKey(line);
+    return key === null ? `raw:${line}` : key;
+  };
+  const linesOf = (value) => (typeof value === 'string' ? value : '')
+    .split(/\r?\n/)
+    .map((raw) => raw.replace(/\r$/, ''))
+    .filter((line) => line.trim());
+
+  const seen = new Set(linesOf(baseText).map(identityOf));
+  const kept = [];
+  for (const line of linesOf(text)) {
+    const identity = identityOf(line);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    kept.push(line);
+  }
+  return kept.length > 0 ? `${kept.join('\n')}\n` : '';
+}
+
+/**
+ * True only when the Actions API's run and job confirm every claim a history
+ * record makes: run id, workflow file, job name, completion time, span (the
+ * same jobSpanMs parseJobRecord records) and, when present, the head sha.
+ *
+ * @param {object} rec
+ * @param {{run?: object, job?: object}} [api]
+ * @returns {boolean}
+ */
+function matchesApiJob(rec, { run, job } = {}) {
+  if (!rec || typeof rec !== 'object') return false;
+  if (!run || typeof run !== 'object' || !job || typeof job !== 'object') return false;
+  if (run.id !== rec.runId) return false;
+  if (String(run.path || '').split('/').pop() !== rec.workflowFile) return false;
+  if (job.name !== rec.jobName) return false;
+  if (job.completed_at !== rec.completedAt) return false;
+  if (jobSpanMs(job) !== rec.elapsedMs) return false;
+  if (typeof rec.sha === 'string' && run.head_sha !== rec.sha) return false;
+  return true;
+}
+
+/**
+ * Seeds the history file with the open rolling PR's pending rows, but only
+ * those the Actions API confirms: the branch is writable by any collaborator,
+ * so a well-formed row is not evidence the job ran. Impure — invoked from
+ * actions/github-script. Any non-404 API failure rejects so the workflow step
+ * fails and the publish step is skipped.
+ *
+ * @param {{github: object, context: object, core: object, historyPath?: string, fs?: object, maxRuns?: number}} args
+ * @returns {Promise<{status: string, pr?: number, candidate: number, verified: number, dropped: number}>}
+ */
+async function seedFromRollingPr({
+  github, context, core, historyPath = HISTORY_PATH, fs: fsImpl = fs, maxRuns = 200,
+}) {
+  const { owner, repo } = context.repo;
+  const zeros = { candidate: 0, verified: 0, dropped: 0 };
+
+  const listed = await github.rest.pulls.list({
+    owner, repo, state: 'open', base: ROLLING_PR.base, head: `${owner}:${ROLLING_PR.branch}`, per_page: 10,
+  });
+  const pr = (listed.data || []).find((p) => (
+    p.head && p.head.repo && p.head.repo.full_name === `${owner}/${repo}` && p.head.ref === ROLLING_PR.branch
+  ));
+  if (!pr) return { status: 'no-pr', ...zeros };
+
+  let branchText;
+  try {
+    const { data } = await github.rest.repos.getContent({
+      owner, repo, path: ROLLING_PR.historyFile, ref: pr.head.sha, mediaType: { format: 'raw' },
+    });
+    if (typeof data === 'string') branchText = data;
+    else if (Buffer.isBuffer(data)) branchText = data.toString('utf8');
+    else if (data instanceof ArrayBuffer) branchText = Buffer.from(data).toString('utf8');
+    else branchText = String(data);
+  } catch (err) {
+    if (err && err.status === 404) return { status: 'no-file', pr: pr.number, ...zeros };
+    throw err;
+  }
+
+  let baseText = '';
+  try {
+    baseText = fsImpl.readFileSync(historyPath, 'utf8');
+  } catch {
+    baseText = '';
+  }
+
+  const s = sanitizeHistoryText(subtractHistoryText(branchText, baseText));
+  const rowsByRun = new Map();
+  for (const rowLine of s.text.split('\n').filter(Boolean)) {
+    const rec = JSON.parse(rowLine);
+    if (!rowsByRun.has(rec.runId)) rowsByRun.set(rec.runId, []);
+    rowsByRun.get(rec.runId).push({ line: rowLine, rec });
+  }
+  const candidate = s.kept;
+
+  const verifiedLines = [];
+  let rowsDropped = 0;
+  let runIndex = 0;
+  for (const [runId, rows] of rowsByRun) {
+    runIndex += 1;
+    if (runIndex > maxRuns) {
+      rowsDropped += rows.length;
+      continue;
+    }
+    let run;
+    let jobs;
+    try {
+      run = (await github.rest.actions.getWorkflowRun({ owner, repo, run_id: runId })).data;
+      jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+        owner, repo, run_id: runId, per_page: 50,
+      });
+    } catch (err) {
+      if (err && err.status === 404) {
+        rowsDropped += rows.length;
+        continue;
+      }
+      throw err;
+    }
+    for (const row of rows) {
+      if (jobs.some((job) => matchesApiJob(row.rec, { run, job }))) verifiedLines.push(row.line);
+      else rowsDropped += 1;
+    }
+  }
+
+  const verified = verifiedLines.length;
+  if (verified > 0) {
+    fsImpl.writeFileSync(historyPath, mergeHistoryTexts(baseText, `${verifiedLines.join('\n')}\n`));
+  }
+
+  const dropped = s.dropped + rowsDropped;
+  if (dropped > 0) {
+    core.warning(`ci-timeout-report: dropped ${dropped} pending row(s) from the rolling PR that failed schema or API verification`);
+  }
+  core.info(`ci-timeout-report: rolling PR #${pr.number}: ${candidate} candidate row(s), ${verified} API-verified, ${dropped} dropped`);
+  return {
+    status: 'seeded', pr: pr.number, candidate, verified, dropped,
+  };
 }
 
 function formatHistoryLine(record) {
@@ -763,6 +912,9 @@ module.exports = {
   sanitizeHistoryText,
   ROLLING_PR,
   evaluateRollingPrApproval,
+  subtractHistoryText,
+  matchesApiJob,
+  seedFromRollingPr,
   formatHistoryLine,
   main,
   SHARD_BALANCE,
