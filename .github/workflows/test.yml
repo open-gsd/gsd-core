@@ -578,8 +578,8 @@ jobs:
   # ubuntu-latest in the `test` job above. Gated on product code changed AND
   # full_matrix (#4591); this is the sole gating signal for windows/macos
   # coverage (#4603 retired the parallel legacy full-matrix job). Windows is
-  # sharded 4 ways (3 until #5029 — see the matrix comment below for the
-  # measurement that resized it), for the same reason a prior full-suite
+  # sharded 6 ways (3 until #5029 — see the matrix comment below for the
+  # measurements that resized it), for the same reason a prior full-suite
   # windows lane needed sharding at all (#3057, since retired — #4603), after
   # the first real CI run measured it: unsharded, windows-latest hit its 45-minute
   # timeout and was CANCELLED (started 03:41:19Z, cancelled 04:26:25Z, run
@@ -603,10 +603,12 @@ jobs:
     #
     # Still no LANE_COSTS entry in tests/ci-test-job-timeout-budget.test.cjs —
     # see that file's header: "no unit test can prove a lane fits its budget —
-    # only a real CI run measures that." A 3-shard measurement now exists (run
-    # 36322513056, `next` @19a7b1fe6: 21m47s / 34m24s / 29m46s), but it prices
-    # the layout this commit replaces; the entry lands once a real 4-shard run
-    # measures the layout below.
+    # only a real CI run measures that." Three measurements now exist (two
+    # 3-shard, one 4-shard — see the matrix comment below), but every one of
+    # them prices a layout this commit replaces, and the 4-shard one is what
+    # ruled N=4 out. The entry lands in this PR from the first real 6-shard
+    # run, citing that run id — a number scaled from a smaller layout would be
+    # exactly the stale measurement that file exists to reject.
     timeout-minutes: 45
     env:
       GSD_PLUGIN_ROOT: .ci-gsd-plugin-root-disabled
@@ -617,51 +619,73 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # #5029: four Windows shards, not three. Sizing, from run 36322513056
-          # (`next` @19a7b1fe6) — the per-shard TEST STEP costs 1249s / 2012s /
-          # 1728s over ~52s of fixed per-job overhead, so the tier is ~4989s of
-          # real Windows test work.
+          # #5029: six Windows shards, not three. Every figure below is MEASURED
+          # job wall-clock, not projected — an earlier revision of this PR shipped
+          # four shards on a projection and the first real 4-shard run falsified it.
           #
-          #   worst shard ~= 60s + skew * (4989s / N)
+          #   layout   run                      per-shard (s)                 long pole  total
+          #   3-shard  36322513056 next         1307 / 2064 / 1786            34m24s     5157s
+          #   3-shard  36357457440 #5035 head   1276 / 2054 / 1982            34m14s     5312s
+          #   4-shard  36349891343 this PR      889 / 1817 / 1416 / 1627      30m17s     5749s
           #
-          # `skew` is measured, not assumed, and it is why N=3 fails: selectShard
-          # balances these shards PERFECTLY in its own weight units (206.2 each),
-          # yet they run 0.75x / 1.21x / 1.04x of an equal split. The timings
+          # The budget gate (tests/ci-test-job-timeout-budget.test.cjs) rounds the
+          # long pole UP and requires ceil(m * 1.5) <= the cap, so a 45m cap admits
+          # m <= 30 EXACTLY. N=3 measures 35m -> 53m required. N=4 measures 31m ->
+          # 47m required: it misses by 17 SECONDS, which is precisely the
+          # "budgeted to finish with seconds to spare" condition HEADROOM_FACTOR
+          # exists to forbid. N=5 projects to 27m -> 41m, but 30m -> 45m under the
+          # +12% bad-runner envelope from #5029's own six-run table: zero slack.
+          # N=6 gives 24m -> 36m, and 27m -> 41m on a bad runner, which is why the
+          # lane sits at six (#5029).
+          #
+          # Sharding is NOT free per shard. Fitting total(N) = N*F + V across the
+          # runs above gives F ~= 515s (8m35s) and V ~= 3691s. Only ~60s of F is
+          # job-level checkout/npm ci; the rest is inside the test step, where
+          # run-tests.cjs rebuilds artifacts per shard and pays harness startup and
+          # per-chunk spawns again. So added shards buy progressively less and cost
+          # a 2x-billed Windows runner each — the long pole cannot go below roughly
+          # 11m at any N. That is why this stops at 6 rather than going higher.
+          #
+          # The reason the long pole is so far above the mean is #5052: selectShard
+          # balances these shards PERFECTLY in its own weight units (206.2 each at
+          # N=3) while they run 0.75x / 1.21x / 1.04x of an equal split. The timings
           # table that feeds the packer is Linux-measured, and #4434's win32
-          # correction only reprices files ABSENT from it — the ~190 files
-          # present carry Linux-relative weights, and Windows does not scale
-          # uniformly. The packer therefore cannot see this imbalance at all.
-          # (Not fixable by retuning WINDOWS_UNMEASURED_COST_MULTIPLIER: the
-          # shards get near-identical measured/unmeasured splits, so the implied
-          # multiplier would have to be 0.49 on shard 1 and 3.64 on shard 2 at
-          # once. A Windows-measured table is the real cure and its own change.)
+          # correction only reprices files ABSENT from it — the ~190 files present
+          # carry Linux-relative weights, and Windows does not scale uniformly. The
+          # packer cannot see this imbalance at all. (Not fixable by retuning
+          # WINDOWS_UNMEASURED_COST_MULTIPLIER: the shards get near-identical
+          # measured/unmeasured splits, so the implied multiplier would have to be
+          # 0.49 on shard 1 and 3.64 on shard 2 at once. A Windows-measured table is
+          # the real cure and is its own change, #5052 — once it lands, this lane
+          # would fit in fewer shards, since N=4's MEAN was already 23m57s.)
           #
-          # At N=3 a typical skew of 1.21 already costs 34m24s of a 45m cap, and
-          # the #4935 cancellation puts the bad-runner skew above 1.62, which the
-          # formula lands at 45.9m — past the cap, which is exactly what happened.
-          # N=4 holds on both readings: 26m at skew 1.21 (x1.5 headroom = 39m,
-          # inside the cap) and 35m at skew 1.62, ~10m clear. N=5 buys margin the
-          # measurements do not ask for, at another 2x-billed Windows runner.
-          #
-          # Fewer files per shard (70, from 93) also relaxes the per-chunk 600s
-          # cap and maxUnmeasuredPerChunk, both of which have drawn red builds
-          # here before (#4936, #4733).
+          # Fewer files per shard (47, from 94) also relaxes the per-chunk 600s cap
+          # and maxUnmeasuredPerChunk, both of which have drawn red builds here
+          # before (#4936, #4733).
           - os: windows-latest
             node-version: 24
             shell: pwsh
-            shard: 1/4
+            shard: 1/6
           - os: windows-latest
             node-version: 24
             shell: pwsh
-            shard: 2/4
+            shard: 2/6
           - os: windows-latest
             node-version: 24
             shell: pwsh
-            shard: 3/4
+            shard: 3/6
           - os: windows-latest
             node-version: 24
             shell: pwsh
-            shard: 4/4
+            shard: 4/6
+          - os: windows-latest
+            node-version: 24
+            shell: pwsh
+            shard: 5/6
+          - os: windows-latest
+            node-version: 24
+            shell: pwsh
+            shard: 6/6
           - os: macos-latest
             node-version: 24
             shell: 'zsh {0}'
