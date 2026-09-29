@@ -363,8 +363,120 @@ describe('property: every fence consumer agrees with locateFrontmatterFence', ()
   });
 });
 
+// Found while implementing #5105: a file that runs where the built owner may not exist keeps a
+// self-contained copy of `locateFrontmatterFence` — scripts/changeset/parse.cjs (the
+// `changeset-lint` CI job runs with no build) and the two plugin adapters (a package/git-spec
+// tree may carry no built bin/lib). Each copy must answer exactly as the owner, and each copy's
+// consumer must read the block and body the owner locates.
+describe('kept frontmatter fence copies agree with the owner', () => {
+  const changesetParse = require('../scripts/changeset/parse.cjs');
+  const COPIES = [
+    ['scripts/changeset/parse.cjs', changesetParse.locateFrontmatterFence],
+    ['.opencode/plugins/gsd-core.js', require('../.opencode/plugins/gsd-core.js').server._internals.locateFrontmatterFence],
+    ['.kilo/plugins/gsd-core.js', require('../.kilo/plugins/gsd-core.js').server._internals.locateFrontmatterFence],
+  ];
+  const PLUGIN_PARSERS = [
+    ['.opencode/plugins/gsd-core.js', require('../.opencode/plugins/gsd-core.js').server._internals.parseFrontmatter],
+    ['.kilo/plugins/gsd-core.js', require('../.kilo/plugins/gsd-core.js').server._internals.parseFrontmatter],
+  ];
+
+  const CORPUS = [
+    ['an LF block', '---\ntype: Fixed\npr: 1\n---\nbody\n'],
+    ['a CRLF block', '---\r\ntype: Fixed\r\npr: 1\r\n---\r\nbody\r\n'],
+    ['a BOM block', '﻿---\ntype: Fixed\npr: 1\n---\nbody\n'],
+    ['an adjacent empty block', '---\n---\nbody\n'],
+    ['an adjacent empty CRLF block', '---\r\n---\r\nbody\r\n'],
+    ['a `----` look-alike before the real closer', '---\n----\ntype: Fixed\n---\nbody\n'],
+    ['a lenient `----` closer', '---\ntype: Fixed\n----\nbody\n'],
+    ['a `--- x` line before the real closer', '---\ntype: Fixed\n--- x\n---\nbody\n'],
+    ['a closer with trailing spaces and a tab', '---\ntype: Fixed\n--- \t\nbody\n'],
+    ['a closer at the end of the text', '---\ntype: Fixed\n---'],
+    ['a `---` ended by a lone CR at the end of the text', '---\ntype: Fixed\n---\r'],
+    ['`a---b` in a value', '---\ntitle: a---b\n---\nbody\n'],
+    ['leading whitespace before the block', '\n---\ntype: Fixed\n---\nbody\n'],
+    ['leading spaces before the opener', '   ---\ntype: Fixed\n---\nbody\n'],
+    ['a preamble before the block', 'Preamble\n---\ntype: Fixed\n---\nbody\n'],
+    ['an unterminated block', '---\ntype: Fixed\npr: 1\n'],
+    ['no block', 'just a body\n'],
+    ['empty text', ''],
+  ];
+
+  for (const [file, copy] of COPIES) {
+    for (const [label, text] of CORPUS) {
+      test(`${file}: ${label}`, () => {
+        assert.deepStrictEqual(copy(text), locateFrontmatterFence(text));
+      });
+    }
+    test(`${file}: a non-string is refused, not coerced`, () => {
+      assert.throws(() => copy(undefined), TypeError);
+    });
+  }
+
+  const word = fc.stringMatching(/^[a-z]{1,6}$/);
+  const line = fc.oneof(
+    word.map((w) => `${w}: 1`),
+    word,
+    fc.constantFrom('', '---', '--- ', '---\t', '----', '-----', '--- x', '--', 'a---b', ' ---'),
+  );
+  const docArb = fc.tuple(
+    fc.constantFrom('', '﻿', '\n', ' ', 'x\n'),
+    fc.boolean(),
+    fc.array(line, { maxLength: 10 }),
+    fc.boolean(),
+    fc.boolean(),
+  ).map(([lead, opens, lines, crlf, finalEol]) => {
+    const nl = crlf ? '\r\n' : '\n';
+    return `${lead}${opens ? `---${nl}` : ''}${lines.join(nl)}${finalEol ? nl : ''}`;
+  });
+
+  test('property: every kept copy returns the owner\'s fence for any document', () => {
+    fc.assert(
+      fc.property(docArb, (doc) => {
+        const expected = locateFrontmatterFence(doc);
+        for (const [file, copy] of COPIES) assert.deepStrictEqual(copy(doc), expected, file);
+      }),
+      { seed: 5105, numRuns: 600, endOnFailure: true },
+    );
+  });
+
+  test('property: parseFragment and the plugin parsers read the block and body the owner locates', () => {
+    fc.assert(
+      fc.property(docArb, (doc) => {
+        const fence = locateFrontmatterFence(doc);
+        const closed = Boolean(fence && fence.closed);
+        const rest = closed ? doc.slice(fence.closingFenceEnd).replace(/^\r?\n/, '') : null;
+        for (const [file, parse] of PLUGIN_PARSERS) {
+          const { frontmatter, body } = parse(doc);
+          assert.strictEqual(body, closed ? rest : doc, file);
+          if (!closed) assert.deepStrictEqual(frontmatter, {}, file);
+        }
+        const fragment = changesetParse.parseFragment(doc);
+        if (!closed) assert.deepStrictEqual(fragment, { ok: false, reason: changesetParse.FRAGMENT_ERROR.MISSING_FRONTMATTER });
+        else assert.notStrictEqual(fragment.reason, changesetParse.FRAGMENT_ERROR.MISSING_FRONTMATTER);
+      }),
+      { seed: 5105, numRuns: 600, endOnFailure: true },
+    );
+  });
+
+  test('a CRLF fragment and a BOM fragment parse like their LF twin', () => {
+    const lf = changesetParse.parseFragment('---\ntype: Fixed\npr: 7\n---\nfix.\n');
+    assert.deepStrictEqual(changesetParse.parseFragment('---\r\ntype: Fixed\r\npr: 7\r\n---\r\nfix.\r\n'), lf);
+    assert.deepStrictEqual(changesetParse.parseFragment('﻿---\ntype: Fixed\npr: 7\n---\nfix.\n'), lf);
+  });
+
+  test('a plugin reads a CRLF block\'s keys without a trailing CR', () => {
+    for (const [file, parse] of PLUGIN_PARSERS) {
+      assert.deepStrictEqual(parse('---\r\ndescription: "A"\r\nmode: primary\r\n---\r\nBody\r\n'), {
+        frontmatter: { description: 'A', mode: 'primary' },
+        body: 'Body\r\n',
+      }, file);
+    }
+  });
+});
+
 // The owner stays the only fence derivation: `scripts/lint-frontmatter-fence-drift.cjs` (run by
-// `lint:ci`) flags a hand-rolled fence anywhere in `src/` outside `locateFrontmatterFence`.
+// `lint:ci`) flags a hand-rolled fence anywhere in `src/`, `hooks/`, `scripts/`, `eslint-rules/`,
+// the bin entry points or the plugin adapters outside `locateFrontmatterFence` and its kept copies.
 describe('lint-frontmatter-fence-drift: a hand-rolled fence cannot reappear', () => {
   for (const [label, line] of [
     ['a byte-0 fence regex', '  const m = content.match(/^---\\r?\\n([\\s\\S]*?)\\r?\\n---/);'],
@@ -404,6 +516,48 @@ describe('lint-frontmatter-fence-drift: a hand-rolled fence cannot reappear', ()
 
   test('the real src/ tree has no hand-rolled fence', () => {
     assert.deepStrictEqual(scanRepo(path.join(__dirname, '..')), []);
+  });
+
+  // #5105: the scan also covers scripts/, eslint-rules/ and the two plugin adapters.
+  for (const [label, rel] of [
+    ['a scripts/ file', path.join('scripts', 'planted.cjs')],
+    ['a nested scripts/ file', path.join('scripts', 'changeset', 'planted.cjs')],
+    ['an eslint-rules/ file', path.join('eslint-rules', 'planted.cjs')],
+    ['the OpenCode plugin adapter', path.join('.opencode', 'plugins', 'gsd-core.js')],
+    ['the Kilo plugin adapter', path.join('.kilo', 'plugins', 'gsd-core.js')],
+  ]) {
+    test(`a planted hand-rolled fence in ${label} turns the scan red`, () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-fence-drift-'));
+      try {
+        fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+        fs.writeFileSync(path.join(root, rel), "function planted(c) {\n  return c.match(/^---\\n([\\s\\S]*?)\\n---/);\n}\n");
+        assert.deepStrictEqual(scanRepo(root).map((d) => [d.file, d.line, d.fn]), [[rel, 2, 'planted']]);
+      } finally {
+        cleanup(root);
+      }
+    });
+  }
+
+  test('a kept copy is exempt only in its own function', () => {
+    const copy = "function locateFrontmatterFence(text) {\n  if (text.startsWith('---\\n', 0)) return 1;\n}\n";
+    const other = "function parseIt(text) {\n  return text.startsWith('---\\n');\n}\n";
+    for (const rel of [path.join('scripts', 'changeset', 'parse.cjs'), path.join('.opencode', 'plugins', 'gsd-core.js'), path.join('.kilo', 'plugins', 'gsd-core.js')]) {
+      assert.deepStrictEqual(findFrontmatterFenceDrift(copy + other, rel).map((d) => [d.line, d.fn]), [[5, 'parseIt']], rel);
+      // The same copy in a file that is not allowlisted is flagged.
+      assert.deepStrictEqual(findFrontmatterFenceDrift(copy, path.join('scripts', 'elsewhere.cjs')).map((d) => [d.line, d.fn]), [[2, 'locateFrontmatterFence']]);
+    }
+  });
+
+  test('a detector is exempt only for its exact fragment', () => {
+    const rule = path.join('eslint-rules', 'no-crlf-fragile-split.cjs');
+    assert.deepStrictEqual(findFrontmatterFenceDrift('module.exports = {\n  a: /\\^---/.test(p),\n};\n', rule), []);
+    assert.deepStrictEqual(
+      findFrontmatterFenceDrift('module.exports = {\n  a: /^---\\n/.test(p),\n};\n', rule).map((d) => [d.line, d.found]),
+      [[2, '/^---\\n/']],
+    );
+    const grep = path.join('scripts', 'lint-frontmatter-scalar-broad-grep.cjs');
+    assert.deepStrictEqual(findFrontmatterFenceDrift('const FRONTMATTER_SCOPE_RE = /\\^---[\\s\\S]{0,300}?---/;\n', grep), []);
+    assert.deepStrictEqual(findFrontmatterFenceDrift("const x = s.indexOf('\\n---');\n", grep).map((d) => d.line), [1]);
   });
 
   test('a planted hand-rolled fence in a src/ tree turns the scan red', () => {
