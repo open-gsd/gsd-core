@@ -56,16 +56,17 @@ Verify the work is ready to ship:
    # The gate decides on ONE read. --pick takes a single field, so the two
    # human-facing fields are read only on the blocking path below — never on the
    # passing path — rather than issuing three queries up front (#2589).
-   STATUS=$(gsd_run query verification.status "${PHASE_DIR}" --pick status 2>/dev/null)
+   # #5118: stderr is kept; a failed read stops shipping — it is never "no status".
+   STATUS=$(gsd_run query verification.status "${PHASE_DIR}" --pick status) || { echo "verification.status refused this phase's report — see the error above. Fix it before shipping." >&2; exit 1; }
    ```
-   Only `passed` may ship. If `$STATUS` is `passed`, verification is complete — continue to the next preflight check; do not read any further verification field.
+   Only `passed` may ship. If `$STATUS` is `passed`, verification is complete — continue to the next preflight check; do not read any further verification field. A non-zero exit above is a hard error (a report `status` outside `passed | gaps_found | human_needed`): present the error and stop.
 
-   Any other value (including `gaps_found`, `human_needed`, `missing`, and `unknown`) blocks with `PHASE_VERIFICATION_INCOMPLETE`. Only then, read the two message fields:
+   Any other value (including `gaps_found`, `human_needed`, `stale`, `missing`, and `phase_dir_not_found`) blocks with `PHASE_VERIFICATION_INCOMPLETE`. Only then, read the two message fields:
    ```bash
-   NEXT_ACTION=$(gsd_run query verification.status "${PHASE_DIR}" --pick next_action 2>/dev/null)
-   NEXT_COMMAND=$(gsd_run query verification.status "${PHASE_DIR}" --pick next_command 2>/dev/null)
+   NEXT_ACTION=$(gsd_run query verification.status "${PHASE_DIR}" --pick next_action) || exit 1
+   NEXT_COMMAND=$(gsd_run query verification.status "${PHASE_DIR}" --pick next_command) || exit 1
    ```
-   Present `$NEXT_ACTION` to the user and, when `$NEXT_COMMAND` is non-empty, show it as the command to run next. These two are message text only — the block/allow decision has already been made from `$STATUS`, so a concurrent write between the reads cannot change the gate's verdict. The query already handles missing files and unexpected values, so no per-status arm is needed.
+   Present `$NEXT_ACTION` to the user and, when `$NEXT_COMMAND` is non-empty, show it as the command to run next. These two are message text only — the block/allow decision has already been made from `$STATUS`, so a concurrent write between the reads cannot change the gate's verdict. The query already covers every status in its closed set, so no per-status arm is needed.
 
 2. **Clean working tree?**
    ```bash

@@ -351,7 +351,10 @@ plans were filtered because they are **blocked** (non-empty `blocked_by`, #2830)
 are done. Blocked-and-incomplete must never be reported as finished.
 
 ```bash
-VERIFY_STATUS=$(gsd_run query verification status "${PHASE_DIR}" --pick status)
+# #5118: the owner's answer — `status` and the bare command it routes to. A non-zero exit
+# (an out-of-set report status) is a hard error: surface it, never read it as "no status".
+VERIFY_STATUS=$(gsd_run query verification status "${PHASE_DIR}" --pick status) || { echo "verification status failed for ${PHASE_DIR} — see the error above" >&2; exit 1; }
+VERIFY_ROUTE=$(gsd_run query verification status "${PHASE_DIR}" --pick route) || { echo "verification status failed for ${PHASE_DIR} — see the error above" >&2; exit 1; }
 # #3684: checkbox = marked-complete; report fields can claim a no-op write (#3685).
 ANALYZE=$(gsd_run query roadmap.analyze)
 if [[ "$ANALYZE" == @file:* ]]; then ANALYZE=$(cat "${ANALYZE#@file:}"); fi
@@ -372,12 +375,12 @@ later conditions once one matches:
    → exit. Do not fall through to condition 3; this is not a completion state.
 2b. **No filter is active, no blocked-plan skip occurred, and at least one filtered plan was skipped because `ready: false` (#4628)** — the phase is WAITING on incomplete predecessors, not finished: report it by name and exit before any completion state (`execute-phase/steps/ready-wave-gate.md`).
 3. **No filter is active, and every filtered plan was filtered by `has_summary` alone** (no
-   blocked-plan skip occurred):
-   - **`VERIFY_STATUS == stale` (#4682)**: covered source changed after the verifier ran —
-     re-verify per `execute-phase/steps/stale-reverification.md`.
-   - **`VERIFY_STATUS == missing`**: the plans are all summarized but the run never reached the
-     tail gates. Report:
+   blocked-plan skip occurred) — branch on the owner's answer, never on a status word (#5118):
+   - **`VERIFY_ROUTE == execute-phase`** — the owner routes here when the verify step never ran
+     (`VERIFY_STATUS == missing`, #2868) and when covered source changed after the verifier ran
+     (#4682); on both sides of `PHASE_MARKED`. Report `$VERIFY_STATUS` with:
      `"All {plan_count} plans are summarized but no VERIFICATION.md exists — resuming at the phase gates (#2868)."`
+     (or, for a stale report, "…verification is stale — resuming at the phase gates to re-run the verifier (#4682).")
      SKIP `cross_ai_delegation`, `execute_waves` and `checkpoint_handling` — there is no wave work
      to do — and continue directly at `aggregate_results`, NOT `code_review_gate`. `aggregate_results`
      is the only step that runs the `SECURITY_FILE` / secure-phase threats-open gate, and it reads
@@ -388,14 +391,19 @@ later conditions once one matches:
      `close_parent_artifacts` → `regression_gate` → `verify_phase_goal` → `update_roadmap`. Never
      skip `aggregate_results`, `code_review_gate` or `regression_gate` on this path — the manual
      workaround this replaces skipped all three, and that gap is the reason this route exists
-     rather than telling users to spawn the verifier by hand.
-   - **`VERIFY_STATUS` ≠ `missing` + `PHASE_MARKED` is `true`**: genuinely finished.
+     rather than telling users to spawn the verifier by hand. `verify_phase_goal` runs the shared
+     regeneration step (`execute-phase/steps/verify-phase-goal.md`).
+   - **`VERIFY_STATUS == passed` + `PHASE_MARKED` is `true`**: genuinely finished.
      Report "No matching incomplete plans" → exit, unchanged.
-   - **`VERIFY_STATUS` ≠ `missing` + `PHASE_MARKED` not `true`** — the run died between
+   - **`VERIFY_STATUS == passed` + `PHASE_MARKED` not `true`** — the run died between
      `verify_phase_goal` and `update_roadmap` (#3684): verification EXISTS — do not redo
      it or the gates already run. Report `"Phase {X} is verified but never marked
      complete — resuming at update_roadmap (#3684)."` and continue directly at
-     `update_roadmap`; the tail steps then run in their normal order.
+     `update_roadmap`; the tail steps then run in their normal order. This is the ONLY arm that
+     reaches `update_roadmap`.
+   - **Anything else** (`gaps_found`, `human_needed`, `unparseable`, `phase_dir_not_found`):
+     present the owner's `next_action` and `next_command` (`gsd_run query verification status
+     "${PHASE_DIR}" --pick next_action` / `--pick next_command`) → exit. Never `update_roadmap`.
 
 Report:
 ```
@@ -1200,51 +1208,12 @@ If `section_manifest` is `null` or `"regression-gate"` is in its `included` list
 <!-- /gsd:section -->
 
 <step name="verify_phase_goal">
-Verify phase achieved its GOAL, not just completed tasks.
+Verify phase achieved its GOAL, not just completed tasks: read and execute
+`gsd-core/workflows/execute-phase/steps/verify-phase-goal.md` — the ONE regeneration action
+(verifier dispatch, fingerprint, and the owner's `verification.status` read with stderr kept),
+shared with verify-work's stale arm (#5118). The gates it expects before it already ran above.
 
-```bash
-VERIFIER_SKILLS=$(gsd_run query agent-skills gsd-verifier)
-```
-
-```
-Agent(
-  description="Verify phase {phase_number} goal achievement",
-  prompt="Verify phase {phase_number} goal achievement.
-Phase directory: {phase_dir}
-Phase goal: {goal from ROADMAP.md}
-Phase requirement IDs: {phase_req_ids}
-Check must_haves against actual codebase.
-Cross-reference requirement IDs from PLAN frontmatter against REQUIREMENTS.md — every ID MUST be accounted for.
-Create VERIFICATION.md.
-
-<required_reading>
-Read these files before verification:
-- {phase_dir}/*-PLAN.md (All plans — understand intent, check must_haves)
-- {phase_dir}/*-SUMMARY.md (All summaries — cross-reference claimed vs actual)
-- {requirements_path} (Requirement traceability)
-${CONTEXT_WINDOW >= 500000 ? `- {phase_dir}/*-CONTEXT.md (User decisions — verify they were honored)
-- {phase_dir}/*-RESEARCH.md (Known pitfalls — check for traps)
-- Prior VERIFICATION.md files from earlier phases (regression check)
-` : ''}
-</required_reading>
-
-${VERIFIER_SKILLS}",
-  subagent_type="gsd-verifier",
-  model="{verifier_model}"
-)
-```
-
-> **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling Agent() above, stop working on this task immediately. Do not read more files, edit code, or run tests related to this task while the subagent is active. Wait for the subagent to return its result. This prevents duplicate work, conflicting edits, and wasted context. Only resume when the subagent result is available. If the session ends abnormally (`turn_aborted`), reconcile via the `verification.status` query below — the session's terminal state is not evidence of failure (#4217).
-
-Read status via the canonical query (scoped to frontmatter, covers missing/unknown cases):
-```bash
-VERIFICATION=$(gsd_run query verification.status "$PHASE_DIR" 2>/dev/null)
-STATUS=$(printf '%s' "$VERIFICATION" | jq -r '.status' 2>/dev/null || echo "")
-NEXT_ACTION=$(printf '%s' "$VERIFICATION" | jq -r '.next_action' 2>/dev/null || echo "")
-NEXT_COMMAND=$(printf '%s' "$VERIFICATION" | jq -r '.next_command' 2>/dev/null || echo "")
-```
-
-Route on `$STATUS`: if `passed`, proceed to update_roadmap. Otherwise keep the phase pending — present `$NEXT_ACTION` to the user and, when `$NEXT_COMMAND` is non-empty, show it as the next command to run. The query covers all cases including missing files (`missing`) and unexpected values (`unknown`), so no per-status arm needs to be listed here.
+Route on `$STATUS`: if `passed`, proceed to update_roadmap. Otherwise keep the phase pending — present `$NEXT_ACTION` to the user and, when `$NEXT_COMMAND` is non-empty, show it as the next command to run. The query covers every case — including no report (`missing`) and no phase directory (`phase_dir_not_found`) — and a status outside the closed set is a hard error the shared step already halted on, so no per-status arm needs to be listed here.
 
 **If human_needed:**
 

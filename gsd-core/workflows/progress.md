@@ -312,16 +312,17 @@ The unparsed row comes from `results` entries with `parse_gap: true` (`summary.p
 
 **Step 1.7: Check verification status for the current phase**
 
-A phase whose verification is missing, unknown, `gaps_found`, or `human_needed` is NOT complete, even when every PLAN.md has a matching SUMMARY.md. The count-based status (`roadmap.analyze`) only sees plans/summaries, so without this check such a phase is reported complete and routing skips straight to the next phase. When the phase appears count-complete (`summaries = plans AND plans > 0`), consult the verification report (the same `verification.status` gate `ship` and `execute-phase` use, from #651):
+A phase whose verification is anything but `passed` is NOT complete, even when every PLAN.md has a matching SUMMARY.md. The count-based status (`roadmap.analyze`) only sees plans/summaries, so without this check such a phase is reported complete and routing skips straight to the next phase. When the phase appears count-complete (`summaries = plans AND plans > 0`), consult the verification report (the same `verification.status` gate `ship` and `execute-phase` use, from #651), on the phase directory the locator resolved (a workstream project does not keep its phases under `.planning/phases/`):
 
 ```bash
-PHASE_DIR=".planning/phases/[current-phase-dir]"
-VERIFICATION=$(gsd_run query verification.status "${PHASE_DIR}" 2>/dev/null)
-VERIFICATION_STATUS=$(printf '%s' "$VERIFICATION" | jq -r '.status' 2>/dev/null || echo "")
-VERIFICATION_NEXT_ACTION=$(printf '%s' "$VERIFICATION" | jq -r '.next_action' 2>/dev/null || echo "")
+PHASE_DIR=$(gsd_run query find-phase "${CURRENT_PHASE}" --pick directory)
+VERIFICATION=$(gsd_run query verification.status "${PHASE_DIR}") || { echo "verification.status refused phase ${CURRENT_PHASE}'s report — see the error above." >&2; exit 1; }
+VERIFICATION_STATUS=$(printf '%s' "$VERIFICATION" | jq -r '.status')
+VERIFICATION_NEXT_ACTION=$(printf '%s' "$VERIFICATION" | jq -r '.next_action')
+VERIFICATION_NEXT_COMMAND=$(printf '%s' "$VERIFICATION" | jq -r '.next_command')
 ```
 
-Track: `verification_status` — the `.status` field (`passed | stale | gaps_found | human_needed | missing | unknown`). The query/projection handles a missing VERIFICATION.md (`missing`), unexpected values, and stale verification (`stale`, when summaries are newer than verification). Only `passed` routes as phase complete (Step 3); every other status routes back to close verification debt (Step 2).
+Track: `verification_status` — the `.status` field of the closed set (#5118); the query projects stale verification (`stale`, covered source changed after the verifier ran) and a missing report (`missing`) itself. A non-zero exit is a hard error (a report `status` outside `passed | gaps_found | human_needed`): surface it, never read it as "no status". Only `passed` routes as phase complete (Step 3); every other status routes back to close verification debt (Step 2) with the owner's `next_action` / `next_command`.
 
 **Step 2: Route based on counts**
 
@@ -330,11 +331,9 @@ Track: `verification_status` — the `.status` field (`passed | stale | gaps_fou
 | uat_partial > 0 | UAT testing incomplete | Go to **Route E.2** |
 | uat_with_gaps > 0 | UAT gaps need fix plans | Go to **Route E** |
 | summaries < plans | Unexecuted plans exist | Go to **Route A** |
-| summaries = plans AND plans > 0 AND verification_status = missing | Phase executed; verification report missing | Go to **Route V.missing** |
-| summaries = plans AND plans > 0 AND verification_status = unknown | Phase executed; verification status unknown | Go to **Route V.unknown** |
-| summaries = plans AND plans > 0 AND verification_status = stale | Phase executed; verification is stale | Go to **Route V.stale** |
 | summaries = plans AND plans > 0 AND verification_status = gaps_found | Phase executed; verification found gaps | Go to **Route V.gaps** |
 | summaries = plans AND plans > 0 AND verification_status = human_needed | Phase executed; awaiting human verification | Go to **Route V.human** |
+| summaries = plans AND plans > 0 AND verification_status ≠ passed | Phase executed; verification not passed | Go to **Route V** |
 | summaries = plans AND plans > 0 AND verification_status = passed | Phase complete (verification passed) | Go to Step 3 |
 | plans = 0 | Phase not yet planned | Go to **Route B** |
 
@@ -490,52 +489,22 @@ UAT.md exists with `status: partial` — testing session ended before all items 
 
 ---
 
-**Route V.missing: verification report missing**
+**Route V: verification not passed**
 
-All plans have summaries, but canonical verification has not passed. The phase is implementation-complete, not phase-complete.
+All plans have summaries, but canonical verification has not passed (`missing`, `stale`, `unparseable`, `phase_dir_not_found` — the owner's closed set, #5118). The phase is implementation-complete, not phase-complete. Present the owner's answer; never name a command of your own for these statuses:
 
 ```
 ---
 
-## Verification Report Missing
+## Verification Not Passed
 
-**Phase {phase}** has all plans summarized, but no canonical `*-VERIFICATION.md` exists yet. ${VERIFICATION_NEXT_ACTION}
+**Phase {phase}** has all plans summarized, but verification reads `${VERIFICATION_STATUS}`. ${VERIFICATION_NEXT_ACTION}
 
 `/clear` then:
 
-`/gsd:execute-phase {phase} ${GSD_WS}` — resumes at the verification gates
+`${VERIFICATION_NEXT_COMMAND}` (omit this line when it is empty)
 
 ---
-```
-
----
-
-**Route V.unknown: verification status unknown**
-
-VERIFICATION.md has an unexpected status. The phase is implementation-complete, not phase-complete.
-
-```
----
-
-## Verification Status Unexpected
-
-**Phase {phase}** has all plans summarized, but its `*-VERIFICATION.md` reports an unexpected status. ${VERIFICATION_NEXT_ACTION}
-
-`/clear` then:
-
-`/gsd:execute-phase {phase} ${GSD_WS}` — regenerate verification
-
----
-```
-
----
-
-**Route V.stale: verification is stale**
-
-VERIFICATION.md has `status: passed`, but one or more SUMMARY.md files are newer than the verification report. The phase is implementation-complete, not phase-complete.
-
-```
-`/gsd:verify-work {phase} ${GSD_WS}` — re-run verification against the latest summaries
 ```
 
 ---
@@ -553,7 +522,7 @@ VERIFICATION.md exists with `status: gaps_found` — verification identified gap
 
 `/clear` then:
 
-`/gsd:plan-phase {phase} --gaps ${GSD_WS}`
+`${VERIFICATION_NEXT_COMMAND} ${GSD_WS}` — plan the gap fixes (the owner's route: plan-phase --gaps)
 
 ---
 ```
@@ -573,7 +542,7 @@ VERIFICATION.md exists with `status: human_needed` — automated checks passed b
 
 `/clear` then:
 
-`/gsd:verify-work {phase} ${GSD_WS}` — resume human verification
+`${VERIFICATION_NEXT_COMMAND} ${GSD_WS}` — resume human verification (the owner's route: verify-work)
 
 ---
 ```

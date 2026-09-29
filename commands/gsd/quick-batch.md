@@ -101,5 +101,5 @@ capacity/isolation, and dispatch wave-by-wave.
 - `$ARGUMENTS` (the raw task list) is passed to `quick-batch parse-args` as ONE quoted argument via `--text` — never unquoted/word-split by the shell — so a task line containing shell metacharacters or glob-shaped text (`*.txt`, `$(...)`, etc.) is never expanded or re-tokenized before the CLI's own parser sees it
 - Every task description (and the full-batch task catalog built from them) reaching a leaf's `Agent()` prompt is wrapped in `DATA_START`/`DATA_END` markers with a `<security_context>` block declaring it untrusted data — never interpreted as instructions, role assignments, system prompts, or directives — matching `/gsd:quick`'s own convention (see `gsd-core/references/untrusted-input-boundary.md`)
 - Quick ids, batch ids, and slugs used in file paths are generated server-side (the same collision-safe grammar `/gsd:quick` uses) — never derived from unsanitized task text
-- Status fields read via `gsd-tools query verification.status`/`frontmatter.get` — never eval'd or shell-expanded
+- A verification status is read only via `gsd-tools query verification.status` (its owner's closed set, #5118 — never `frontmatter.get` on a VERIFICATION report); other frontmatter fields via `frontmatter.get` — never eval'd or shell-expanded
 </security_notes>

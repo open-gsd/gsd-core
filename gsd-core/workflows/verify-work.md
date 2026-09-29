@@ -643,11 +643,14 @@ If execution verification is waiting only on human UAT and this session recorded
 ```bash
 PHASE_DIR=$(printf '%s' "$INIT" | jq -r '.phase_dir // empty')
 VERIFICATION_FILE=$(gsd_run query verification.resolve-file "$PHASE_DIR" --raw 2>/dev/null)
-VERIFICATION_STATUS=$(gsd_run query verification.status "$PHASE_DIR" 2>/dev/null)
-VERIFICATION_STATUS_VALUE=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.status // empty' 2>/dev/null || echo "")
+# #5118: stderr kept; an out-of-set report status is a hard error, never "no result".
+VERIFICATION_STATUS=$(gsd_run query verification.status "$PHASE_DIR") || { echo "verification.status refused this phase's report — see the error above; fix the report before re-running /gsd:verify-work {phase}." >&2; exit 1; }
+VERIFICATION_STATUS_VALUE=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.status')
+VERIFICATION_ROUTE=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.route')
+NEXT_COMMAND=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.next_command')
 PHASE_VERIFICATION_STATUS="$VERIFICATION_STATUS_VALUE"
 if [ "$VERIFICATION_STATUS_VALUE" = "human_needed" ]; then
-  UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}" --uat-only 2>/dev/null)
+  UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}" --uat-only) || { echo "phase uat-passed failed — see the error above." >&2; exit 1; }
   UAT_PRECHECK_PASSED=$(printf '%s' "$UAT_PRECHECK" | jq -r '.passed // false' 2>/dev/null || echo "false")
   if [ "$UAT_PRECHECK_PASSED" = "true" ]; then
     gsd_run query frontmatter.set "$VERIFICATION_FILE" --field status --value passed
@@ -659,29 +662,19 @@ if [ "$VERIFICATION_STATUS_VALUE" = "human_needed" ]; then
 fi
 ```
 
-If `PHASE_VERIFICATION_STATUS` is `stale`, the covered source files changed after the verifier
-last ran — re-run the VERIFIER, not this workflow (`/gsd:verify-work` never rewrites
-VERIFICATION.md; its only write is the human_needed canonicalization, #4663). Spawn the
-verifier for this phase exactly as execute-phase's `verify_phase_goal` step does (subagent
-`gsd-verifier`; phase directory, goal, requirement IDs, and all SUMMARYs in
-`<required_reading>`), then re-read `verification.status` and continue at the fresh/passed
-case below. (#4682)
-
-```
-Verification is stale: covered source files changed after the verifier last ran.
-
-Blocking completion:
-verification is stale
-
-- Re-run the verifier for phase {phase} (dispatch `gsd-verifier` as in execute-phase's
-  verify_phase_goal step) to regenerate VERIFICATION.md with a fresh digest, then re-run
-  `/gsd:verify-work {phase}`
-```
+If `PHASE_VERIFICATION_STATUS` is not `passed` and `VERIFICATION_ROUTE` is `execute-phase` (a
+`stale` or `missing` report, #4682/#5118), run the owner's one regeneration action here — this
+workflow never rewrites VERIFICATION.md itself (its only write is the canonicalization, #4663).
+Load its inputs from `gsd_run query init.execute-phase "{phase}"` (forward `${GSD_WS}`; dereference
+`@file:` as `initialize` does): `verifier_model`, `phase_req_ids`, `requirements_path`. Then read
+and execute `gsd-core/workflows/execute-phase/steps/verify-phase-goal.md`, re-read
+`verification.status` with the fence above, and continue at the completion predicate below. If
+the step halted, stop and present its error.
 
 Otherwise, check the shared UAT-plus-verification completion predicate before transition:
 
 ```bash
-PHASE_COMPLETE=$(gsd_run phase uat-passed "{phase}" --require-verification)
+PHASE_COMPLETE=$(gsd_run phase uat-passed "{phase}" --require-verification) || { echo "phase uat-passed failed — see the error above." >&2; exit 1; }
 PHASE_COMPLETE_PASSED=$(printf '%s' "$PHASE_COMPLETE" | jq -r '.passed' 2>/dev/null || echo "false")
 PHASE_COMPLETE_BLOCKERS=$(printf '%s' "$PHASE_COMPLETE" | jq -r '.blockers[]?' 2>/dev/null || true)
 ```
@@ -694,7 +687,7 @@ All UAT tests passed, but phase advancement is blocked until canonical verificat
 Blocking completion:
 {PHASE_COMPLETE_BLOCKERS}
 
-- `/gsd:execute-phase {phase}` — regenerate execution verification
+- `$NEXT_COMMAND` — the verification owner's next command (when non-empty)
 - `/gsd:verify-work {phase}` — resume UAT if blockers remain
 ```
 

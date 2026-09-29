@@ -465,18 +465,18 @@ Skill(skill="gsd-code-review", args="${PHASE_NUM} --fix --auto")
 After execute, read canonical verification:
 
 ```bash
-VERIFY_STATUS=$(gsd_run query verification.status "${PHASE_DIR}" --pick status 2>/dev/null || true)
+VERIFY_STATUS=$(gsd_run query verification.status "${PHASE_DIR}" --pick status) || VERIFY_ERROR=1
 ```
 
 If `PHASE_DIR` is absent, re-fetch `init.phase-op ${PHASE_NUM}` and parse `phase_dir`.
 
-If `VERIFY_STATUS` is empty, handle_blocker: "No verification results for phase ${PHASE_NUM}."
+If `VERIFY_ERROR` is set, handle_blocker with the error printed above — the report's `status` is outside the closed set (#5118); never read it as "no results".
 
 **If `passed`:**
 
 Display `Phase ${PHASE_NUM} ✅ ${PHASE_NAME} — Verification passed`, run `@~/.claude/gsd-core/workflows/transition.md`, then Proceed to iterate step.
 
-**If `stale`:** handle_blocker: "Stale verification for phase ${PHASE_NUM}."
+**Any status other than `passed`/`human_needed`/`gaps_found`:** execute-phase already ran, so a non-passed route after it is a real blocker — read `gsd_run query verification.status "${PHASE_DIR}" --pick next_action` and handle_blocker with it (#5118: branch on the owner's answer, never on a status word).
 
 **If `human_needed`:**
 
@@ -523,12 +523,14 @@ Skill(skill="gsd-execute-phase", args="${PHASE_NUM} --no-transition")
 
 Re-read verification status:
 ```bash
-VERIFY_STATUS=$(gsd_run query verification.status "${PHASE_DIR}" --pick status 2>/dev/null || true)
+VERIFY_STATUS=$(gsd_run query verification.status "${PHASE_DIR}" --pick status) || VERIFY_ERROR=1
 ```
+
+If `VERIFY_ERROR` is set: handle_blocker with the error printed above (#5118).
 
 If `passed` or `human_needed`: route normally.
 
-If `stale`: handle_blocker: "Stale verification for phase ${PHASE_NUM}."
+Any status other than `passed`/`human_needed`/`gaps_found`: handle_blocker with the owner's `next_action` (`--pick next_action`).
 
 If still `gaps_found` after this retry, display `Gaps persist after closure attempt.` and ask `Continue anyway` / `Stop autonomous mode`.
 
