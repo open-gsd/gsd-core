@@ -13,7 +13,7 @@
  *   - FRONTMATTER_SCHEMAS: exact keys
  */
 
-const { describe, test } = require('node:test');
+const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const yaml = require('js-yaml');
 
@@ -2001,5 +2001,544 @@ describe('flattenObjectListItem (#3850)', () => {
       ''].join('\n')).human_verification[0];
     assert.equal(rendered, viaExtract,
       'a caller naming an item from the parsed object must produce the byte-identical string');
+  });
+});
+
+// ─── Frontmatter CRUD commands and the writer's reader seam, in-process ───────
+//
+// `tests/frontmatter-cli.test.cjs` drives the same commands through a `gsd-tools` subprocess,
+// which the frontmatter Stryker shard excludes (a child process never loads the mutated module),
+// so every command branch was uncovered there. These call the commands directly: `output()` and
+// `error()` write through `fs.writeSync` (fd 1 / fd 2) and `error()` throws `ExitError`, so both
+// are observed in-process with a scoped `fs.writeSync` capture.
+
+describe('frontmatter commands and reader seam (in-process)', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { createTempDir, cleanup } = require('./helpers.cjs');
+  const fm = require('../gsd-core/bin/lib/frontmatter.cjs');
+  const splice = require('../gsd-core/bin/lib/frontmatter-splice.cjs');
+  const { textEncodingError } = require('../gsd-core/bin/lib/validate.cjs');
+  const {
+    cmdFrontmatterGet,
+    cmdFrontmatterSet,
+    cmdFrontmatterMerge,
+    cmdFrontmatterValidate,
+    spliceSeam,
+  } = fm;
+
+  const CONTROL_CHAR_MSG =
+    'field name contains a control character (a line break, tab, NUL or other C0/DEL character) — use a plain key name';
+  const LOSSY_MSG = (field) =>
+    `frontmatter set refused — the existing "${field}" field cannot be faithfully round-tripped by ` +
+    'the frontmatter writer (its structure would be flattened and data, such as a nested object-list ' +
+    'field, silently dropped). Edit the file directly instead of using frontmatter set/merge.';
+  const UNPARSEABLE_REFUSAL =
+    'frontmatter: refusing to write — the existing frontmatter block is not parseable YAML, so ' +
+    'rewriting it would discard or hide the fields the author wrote. Fix the YAML syntax error in ' +
+    'the frontmatter block first, then re-run.';
+  const LOSSY_DOC = '---\nartifacts:\n  - path: a.md\n    provides: thing\n---\nbody\n';
+  const BAD_DOC = '---\ntitle: [unclosed\n---\nbody\n';
+
+  /**
+   * Run `fn` with fd 1 / fd 2 writes captured (and kept off the real streams). Returns the
+   * captured text and the error `fn` threw, if any.
+   */
+  function run(fn) {
+    const orig = fs.writeSync;
+    let out = '';
+    let err = '';
+    fs.writeSync = (fd, data, ...rest) => {
+      if (fd === 1 || fd === 2) {
+        const text = Buffer.isBuffer(data) ? data.toString('utf8') : String(data);
+        if (fd === 1) out += text;
+        else err += text;
+        return Buffer.byteLength(text);
+      }
+      return orig.call(fs, fd, data, ...rest);
+    };
+    let thrown = null;
+    try {
+      fn();
+    } catch (e) {
+      thrown = e;
+    } finally {
+      fs.writeSync = orig;
+    }
+    return { out, err, thrown };
+  }
+
+  /** `run` for a command that must report through `output()` (no throw, nothing on stderr). */
+  function json(fn) {
+    const r = run(fn);
+    assert.equal(r.thrown, null);
+    assert.equal(r.err, '');
+    return JSON.parse(r.out);
+  }
+
+  /** `run` for a command that must fail through `error(message)`. */
+  function exitsWith(fn, message) {
+    const r = run(fn);
+    assert.ok(r.thrown, 'expected the command to throw');
+    assert.equal(r.thrown.name, 'ExitError');
+    assert.equal(r.err, `Error: ${message}\n`);
+    assert.equal(r.out, '');
+  }
+
+  let dir;
+  let seq = 0;
+  /** Write `content` to a fresh file in the fixture dir; returns its relative name. */
+  function file(content) {
+    seq += 1;
+    const name = `f${seq}.md`;
+    fs.writeFileSync(path.join(dir, name), content);
+    return name;
+  }
+  const read = (name) => fs.readFileSync(path.join(dir, name), 'utf8');
+
+  before(() => {
+    dir = createTempDir('gsd-fm-cmd-');
+  });
+  after(() => {
+    cleanup(dir);
+  });
+
+  // ─── cmdFrontmatterGet ────────────────────────────────────────────────────────
+
+  describe('cmdFrontmatterGet', () => {
+    test('missing file path is a usage error', () => {
+      exitsWith(() => cmdFrontmatterGet(dir, '', 'x', false), 'file path required');
+    });
+
+    test('a NUL byte in the path is refused', () => {
+      exitsWith(() => cmdFrontmatterGet(dir, 'a\0b.md', 'x', false), 'file path contains null bytes');
+    });
+
+    test('absent file reports File not found with the given path', () => {
+      assert.deepEqual(json(() => cmdFrontmatterGet(dir, 'nope.md', 'x', false)), {
+        error: 'File not found',
+        path: 'nope.md',
+      });
+    });
+
+    test('unparseable block is reported as such, not as a missing field', () => {
+      const name = file(BAD_DOC);
+      assert.deepEqual(json(() => cmdFrontmatterGet(dir, name, 'title', false)), {
+        error: 'Frontmatter is not parseable YAML — fix the syntax error in the frontmatter block',
+        path: name,
+      });
+    });
+
+    test('present field returns { field: value }; raw prints the JSON of the value', () => {
+      const name = file('---\nwave: 2\nphase: 1\n---\nbody\n');
+      assert.deepEqual(json(() => cmdFrontmatterGet(dir, name, 'wave', false)), { wave: '2' });
+      assert.equal(run(() => cmdFrontmatterGet(dir, name, 'wave', true)).out, '"2"');
+    });
+
+    test('absent field reports Field not found', () => {
+      const name = file('---\nwave: 2\n---\n');
+      assert.deepEqual(json(() => cmdFrontmatterGet(dir, name, 'zzz', false)), {
+        error: 'Field not found',
+        field: 'zzz',
+      });
+    });
+
+    test('no field returns the whole frontmatter', () => {
+      const name = file('---\nwave: 2\nphase: 1\n---\n');
+      assert.deepEqual(json(() => cmdFrontmatterGet(dir, name, undefined, false)), { wave: '2', phase: '1' });
+    });
+  });
+
+  // ─── cmdFrontmatterSet ────────────────────────────────────────────────────────
+
+  describe('cmdFrontmatterSet: argument guards', () => {
+    for (const [label, filePath, field, value] of [
+      ['file', '', 'x', '1'],
+      ['field', 'a.md', '', '1'],
+      ['value', 'a.md', 'x', undefined],
+    ]) {
+      test(`missing ${label} is a usage error`, () => {
+        exitsWith(() => cmdFrontmatterSet(dir, filePath, field, value, false), 'file, field, and value required');
+      });
+    }
+
+    test('an empty-string value is a value, not a missing one', () => {
+      const name = file('---\nwave: 2\n---\n');
+      assert.deepEqual(json(() => cmdFrontmatterSet(dir, name, 'note', '', false)), {
+        updated: true, field: 'note', value: '',
+      });
+    });
+
+    test('a NUL byte in the path is refused', () => {
+      exitsWith(() => cmdFrontmatterSet(dir, 'w\0.md', 'x', '1', false), 'file path contains null bytes');
+    });
+
+    // Boundary rows of the C0/DEL class: \u001f and \u007f are refused,   (space) is not.
+    for (const ch of ['\n', '\u001f', '\u007f']) {
+      test(`field name holding U+${ch.charCodeAt(0).toString(16).padStart(4, '0')} is refused`, () => {
+        const name = file('---\nwave: 2\n---\n');
+        exitsWith(() => cmdFrontmatterSet(dir, name, `a${ch}b`, '1', false), CONTROL_CHAR_MSG);
+        assert.equal(read(name), '---\nwave: 2\n---\n');
+      });
+    }
+
+    test('field name holding a plain space is written (quoted)', () => {
+      const name = file('---\nwave: 2\n---\nbody\n');
+      assert.deepEqual(json(() => cmdFrontmatterSet(dir, name, 'a b', '1', false)), {
+        updated: true, field: 'a b', value: 1,
+      });
+      assert.equal(read(name), '---\nwave: 2\n"a b": 1\n---\nbody\n');
+    });
+
+    test('absent file reports File not found', () => {
+      assert.deepEqual(json(() => cmdFrontmatterSet(dir, 'nope.md', 'x', '1', false)), {
+        error: 'File not found', path: 'nope.md',
+      });
+    });
+  });
+
+  describe('cmdFrontmatterSet: writes', () => {
+    test('changes an existing field; JSON value parsed; raw prints true', () => {
+      const name = file('---\nwave: 2\n---\nbody\n');
+      assert.equal(run(() => cmdFrontmatterSet(dir, name, 'wave', '3', true)).out, 'true');
+      assert.equal(read(name), '---\nwave: 3\n---\nbody\n');
+    });
+
+    test('appends a new field; a non-JSON value is kept as text', () => {
+      const name = file('---\nwave: 2\n---\nbody\n');
+      assert.deepEqual(json(() => cmdFrontmatterSet(dir, name, 'owner', 'alice', false)), {
+        updated: true, field: 'owner', value: 'alice',
+      });
+      assert.equal(read(name), '---\nwave: 2\nowner: alice\n---\nbody\n');
+    });
+
+    test('a changed scalar list is not a lossy field', () => {
+      const name = file('---\ntags:\n  - a\n  - b\n---\n');
+      assert.deepEqual(json(() => cmdFrontmatterSet(dir, name, 'tags', '["c"]', false)), {
+        updated: true, field: 'tags', value: ['c'],
+      });
+      assert.equal(read(name), '---\ntags: [c]\n---\n');
+    });
+  });
+
+  describe('cmdFrontmatterSet: refusals', () => {
+    test('changing an object-list field is refused and nothing is written', () => {
+      const name = file(LOSSY_DOC);
+      assert.deepEqual(json(() => cmdFrontmatterSet(dir, name, 'artifacts', '["path: a.md"]', false)), {
+        error: LOSSY_MSG('artifacts'), field: 'artifacts',
+      });
+      assert.equal(read(name), LOSSY_DOC);
+    });
+
+    test('re-supplying an object-list field\'s own value is not refused (no-op write)', () => {
+      const name = file(LOSSY_DOC);
+      const same = JSON.stringify(extractFrontmatter(LOSSY_DOC).artifacts);
+      assert.deepEqual(json(() => cmdFrontmatterSet(dir, name, 'artifacts', same, false)), {
+        updated: true, field: 'artifacts', value: ['path: a.md, provides: thing'],
+      });
+      assert.equal(read(name), LOSSY_DOC);
+    });
+
+    test('a list holding one mapping item among scalars is lossy', () => {
+      const doc = '---\nartifacts:\n  - plain\n  - path: a\n    provides: b\n---\n';
+      const name = file(doc);
+      assert.deepEqual(json(() => cmdFrontmatterSet(dir, name, 'artifacts', '["plain"]', false)), {
+        error: LOSSY_MSG('artifacts'), field: 'artifacts',
+      });
+      assert.equal(read(name), doc);
+    });
+
+    test('a mapping holding a scalar list and an object list is lossy', () => {
+      const doc = '---\nmust_haves:\n  truths:\n    - t1\n  artifacts:\n    - path: a\n      provides: b\n---\n';
+      const name = file(doc);
+      const value = '{"truths":["t1"],"artifacts":["path: a"]}';
+      assert.deepEqual(json(() => cmdFrontmatterSet(dir, name, 'must_haves', value, false)), {
+        error: LOSSY_MSG('must_haves'), field: 'must_haves',
+      });
+      assert.equal(read(name), doc);
+    });
+
+    test('a nested-object value the writer cannot represent throws (not a refusal) and writes nothing', () => {
+      const name = file(LOSSY_DOC);
+      const r = run(() => cmdFrontmatterSet(dir, name, 'artifacts', '[{"path":"x"}]', false));
+      assert.ok(r.thrown instanceof Error);
+      assert.notEqual(r.thrown.name, 'ExitError');
+      assert.match(r.thrown.message, /^frontmatter: cannot faithfully serialize key "artifacts"/);
+      assert.equal(r.out, '');
+      assert.equal(read(name), LOSSY_DOC);
+    });
+
+    test('an unparseable block is a write refusal reported with its code', () => {
+      const name = file(BAD_DOC);
+      assert.deepEqual(json(() => cmdFrontmatterSet(dir, name, 'title', '"x"', false)), {
+        error: UNPARSEABLE_REFUSAL, code: 'FRONTMATTER_UNPARSEABLE', path: name,
+      });
+      assert.equal(read(name), BAD_DOC);
+    });
+
+    test('a dict value equal to the field under the parser is reported as having no effect', () => {
+      const doc = '---\ntitle:\n  x: y\n---\n';
+      const name = file(doc);
+      assert.deepEqual(json(() => cmdFrontmatterSet(dir, name, 'title', '{"x":"y"}', false)), {
+        error: 'frontmatter set had no effect — the supplied value is equivalent to the existing field under the frontmatter parser, which cannot faithfully round-trip object-list fields like must_haves. Edit the file directly.',
+        field: 'title',
+      });
+      assert.equal(read(name), doc);
+    });
+  });
+
+  // ─── cmdFrontmatterMerge ──────────────────────────────────────────────────────
+
+  describe('cmdFrontmatterMerge', () => {
+    test('missing file or data is a usage error', () => {
+      exitsWith(() => cmdFrontmatterMerge(dir, '', '{}', false), 'file and data required');
+      exitsWith(() => cmdFrontmatterMerge(dir, 'a.md', '', false), 'file and data required');
+    });
+
+    test('absent file reports File not found', () => {
+      assert.deepEqual(json(() => cmdFrontmatterMerge(dir, 'nope.md', '{}', false)), {
+        error: 'File not found', path: 'nope.md',
+      });
+    });
+
+    test('invalid JSON is a usage error', () => {
+      const name = file('---\nwave: 2\n---\n');
+      exitsWith(() => cmdFrontmatterMerge(dir, name, '{x', false), 'Invalid JSON for --data');
+    });
+
+    for (const data of ['null', '[1]', '5', '"s"']) {
+      test(`--data ${data} (not a JSON object) is refused`, () => {
+        const name = file('---\nwave: 2\n---\n');
+        exitsWith(() => cmdFrontmatterMerge(dir, name, data, false), '--data must be a JSON object of field names to values');
+        assert.equal(read(name), '---\nwave: 2\n---\n');
+      });
+    }
+
+    test('a key holding a control character is refused', () => {
+      const name = file('---\nwave: 2\n---\n');
+      exitsWith(() => cmdFrontmatterMerge(dir, name, '{"a\\nb":"x"}', false), CONTROL_CHAR_MSG);
+    });
+
+    test('a lossy key is refused before any key is written', () => {
+      const name = file(LOSSY_DOC);
+      assert.deepEqual(json(() => cmdFrontmatterMerge(dir, name, '{"note":"n","artifacts":["path: a.md"]}', false)), {
+        error: LOSSY_MSG('artifacts'), field: 'artifacts',
+      });
+      assert.equal(read(name), LOSSY_DOC);
+    });
+
+    test('an unparseable block is a write refusal reported with its code', () => {
+      const name = file(BAD_DOC);
+      assert.deepEqual(json(() => cmdFrontmatterMerge(dir, name, '{"title":"x"}', false)), {
+        error: UNPARSEABLE_REFUSAL, code: 'FRONTMATTER_UNPARSEABLE', path: name,
+      });
+      assert.equal(read(name), BAD_DOC);
+    });
+
+    test('merges changed and new keys; raw prints true', () => {
+      const name = file('---\nwave: 2\n---\nbody\n');
+      assert.deepEqual(json(() => cmdFrontmatterMerge(dir, name, '{"wave":"4","phase":"9"}', false)), {
+        merged: true, fields: ['wave', 'phase'],
+      });
+      assert.equal(read(name), '---\nwave: 4\nphase: 9\n---\nbody\n');
+      assert.equal(run(() => cmdFrontmatterMerge(dir, name, '{"wave":"5"}', true)).out, 'true');
+      assert.equal(read(name), '---\nwave: 5\nphase: 9\n---\nbody\n');
+    });
+
+    test('a nested-object value the writer cannot represent throws and writes nothing', () => {
+      const name = file('---\nwave: 2\n---\n');
+      const r = run(() => cmdFrontmatterMerge(dir, name, '{"x":[{"a":"b"}]}', false));
+      assert.ok(r.thrown instanceof Error);
+      assert.match(r.thrown.message, /^frontmatter: cannot faithfully serialize key "x"/);
+      assert.equal(read(name), '---\nwave: 2\n---\n');
+    });
+  });
+
+  // ─── cmdFrontmatterValidate ───────────────────────────────────────────────────
+
+  describe('cmdFrontmatterValidate', () => {
+    const PLAN = 'phase: 1\nplan: 1\ntype: x\nwave: 1\ndepends_on: []\nfiles_modified: []\nautonomous: true\nmust_haves: x\n';
+    const PLAN_FIELDS = ['phase', 'plan', 'type', 'wave', 'depends_on', 'files_modified', 'autonomous', 'must_haves'];
+
+    test('missing file or schema is a usage error', () => {
+      exitsWith(() => cmdFrontmatterValidate(dir, '', 'plan', false), 'file and schema required');
+      exitsWith(() => cmdFrontmatterValidate(dir, 'a.md', '', false), 'file and schema required');
+    });
+
+    test('a NUL byte in the path is refused', () => {
+      exitsWith(() => cmdFrontmatterValidate(dir, 'a\0.md', 'plan', false), 'file path contains null bytes');
+    });
+
+    test('an unknown schema (including a prototype key) lists the available ones', () => {
+      for (const schema of ['bogus', '__proto__']) {
+        exitsWith(
+          () => cmdFrontmatterValidate(dir, 'a.md', schema, false),
+          `Unknown schema: ${schema}. Available: plan, plan-gap-closure, summary, verification`,
+        );
+      }
+    });
+
+    test('absent file reports File not found', () => {
+      assert.deepEqual(json(() => cmdFrontmatterValidate(dir, 'nope.md', 'plan', false)), {
+        error: 'File not found', path: 'nope.md',
+      });
+    });
+
+    test('NUL-corrupted content is invalid with the encoding error; raw prints invalid', () => {
+      const content = '---\nphase: 1\n---\n\0\0';
+      const name = file(content);
+      assert.deepEqual(json(() => cmdFrontmatterValidate(dir, name, 'plan', false)), {
+        valid: false, errors: [textEncodingError(content, name)], schema: 'plan',
+      });
+      assert.equal(run(() => cmdFrontmatterValidate(dir, name, 'plan', true)).out, 'invalid');
+    });
+
+    test('a complete document is valid; raw prints valid', () => {
+      const name = file('---\nphase: 1\nverified: yes\nstatus: ok\nscore: 5\n---\n');
+      assert.deepEqual(json(() => cmdFrontmatterValidate(dir, name, 'verification', false)), {
+        valid: true, missing: [], present: ['phase', 'verified', 'status', 'score'], invalidValue: [], schema: 'verification',
+      });
+      assert.equal(run(() => cmdFrontmatterValidate(dir, name, 'verification', true)).out, 'valid');
+    });
+
+    test('a partial document lists what is missing; raw prints invalid', () => {
+      const name = file('---\nphase: 1\nstatus: ok\n---\n');
+      assert.deepEqual(json(() => cmdFrontmatterValidate(dir, name, 'verification', false)), {
+        valid: false, missing: ['verified', 'score'], present: ['phase', 'status'], invalidValue: [], schema: 'verification',
+      });
+      assert.equal(run(() => cmdFrontmatterValidate(dir, name, 'verification', true)).out, 'invalid');
+    });
+
+    test('a required value that is present but wrong is missing AND invalidValue', () => {
+      const name = file(`---\n${PLAN}gap_closure: false\n---\n`);
+      assert.deepEqual(json(() => cmdFrontmatterValidate(dir, name, 'plan-gap-closure', false)), {
+        valid: false, missing: ['gap_closure'], present: PLAN_FIELDS, invalidValue: ['gap_closure'], schema: 'plan-gap-closure',
+      });
+    });
+
+    test('a required value that is present and right satisfies the schema', () => {
+      const name = file(`---\n${PLAN}gap_closure: true\n---\n`);
+      assert.deepEqual(json(() => cmdFrontmatterValidate(dir, name, 'plan-gap-closure', false)), {
+        valid: true, missing: [], present: [...PLAN_FIELDS, 'gap_closure'], invalidValue: [], schema: 'plan-gap-closure',
+      });
+    });
+
+    test('a schema with no required values accepts any value of a present field', () => {
+      const name = file(`---\n${PLAN}---\n`);
+      assert.deepEqual(json(() => cmdFrontmatterValidate(dir, name, 'plan', false)), {
+        valid: true, missing: [], present: PLAN_FIELDS, invalidValue: [], schema: 'plan',
+      });
+    });
+  });
+
+  // ─── writer re-exports ────────────────────────────────────────────────────────
+
+  describe('writer re-exports resolve to the splice module', () => {
+    test('FrontmatterWriteRefusedError and SPLICE_PARSE_BUDGET_CHARS are the splice module\'s own', () => {
+      assert.equal(fm.FrontmatterWriteRefusedError, splice.FrontmatterWriteRefusedError);
+      assert.equal(typeof fm.FrontmatterWriteRefusedError, 'function');
+      assert.equal(fm.SPLICE_PARSE_BUDGET_CHARS, splice.SPLICE_PARSE_BUDGET_CHARS);
+      assert.equal(typeof fm.SPLICE_PARSE_BUDGET_CHARS, 'number');
+    });
+  });
+
+  // ─── spliceSeam.segmentKeyOf ──────────────────────────────────────────────────
+
+  describe('spliceSeam.segmentKeyOf', () => {
+    const { segmentKeyOf } = spliceSeam;
+    for (const [line, indent, expected] of [
+      // double-quoted: JSON escapes decoded; an escape JSON rejects falls back to the raw text
+      ['"a\\"b": 1', 0, { key: 'a"b', valueStart: 7 }],
+      ['"bad\\x": 1', 0, { key: 'bad\\x', valueStart: 8 }],
+      // single-quoted: '' is one quote
+      ["'it''s': v", 0, { key: "it's", valueStart: 8 }],
+      ["'ab': v", 0, { key: 'ab', valueStart: 5 }],
+      ["'ab' : v", 0, { key: 'ab', valueStart: 6 }],
+      // a quoted segment only opens a key at the start of the line
+      ['x "a": 1', 0, { key: 'x "a"', valueStart: 6 }],
+      // spaced colon: key trimmed at its end, value after the colon
+      ['key : v', 0, { key: 'key', valueStart: 5 }],
+      ['-x: 1', 0, { key: '-x', valueStart: 3 }],
+      // bare `key:value` shorthand: top level only, whole ASCII word only
+      ['ab:c', 0, { key: 'ab', valueStart: 3 }],
+      ['a:b', 0, { key: 'a', valueStart: 2 }],
+      ['a:b', 1, null],
+      ['a:b', 2, null],
+      ['a.b:c', 0, null],
+    ]) {
+      test(`${JSON.stringify(line)} at indent ${indent}`, () => {
+        assert.deepEqual(segmentKeyOf(line, indent), expected);
+      });
+    }
+  });
+
+  // ─── spliceSeam.frontmatterDeepEqual ──────────────────────────────────────────
+
+  describe('spliceSeam.frontmatterDeepEqual', () => {
+    const { frontmatterDeepEqual: eq } = spliceSeam;
+    test('null/undefined rows', () => {
+      assert.equal(eq(null, null), true);
+      assert.equal(eq(null, undefined), false);
+      assert.equal(eq(null, {}), false);
+      assert.equal(eq({}, null), false);
+    });
+    test('an array never equals an index-keyed object', () => {
+      assert.equal(eq(['a'], { 0: 'a' }), false);
+      assert.equal(eq({ 0: 'a' }, ['a']), false);
+      assert.equal(eq(['a'], ['a']), true);
+    });
+    test('a string never equals an object, even an empty one', () => {
+      assert.equal(eq('', {}), false);
+      assert.equal(eq({}, ''), false);
+    });
+  });
+
+  // ─── parseMustHavesBlock ──────────────────────────────────────────────────────
+
+  describe('parseMustHavesBlock: degenerate regions and the unusable-block warning', () => {
+    function withStderr(fn) {
+      const orig = process.stderr.write;
+      let err = '';
+      process.stderr.write = (s) => { err += String(s); return true; };
+      try {
+        return { result: fn(), err };
+      } finally {
+        process.stderr.write = orig;
+      }
+    }
+
+    for (const [label, content] of [
+      ['an anchor (refused before parsing)', '---\nmust_haves:\n  truths:\n    - &a x\n---\n'],
+      ['a scalar region', '---\njust text\n---\n'],
+      ['an empty region', '---\n\n---\n'],
+      ['a null block', '---\nmust_haves:\n  truths:\n  other: 1\n---\n'],
+    ]) {
+      test(`${label} yields [] silently`, () => {
+        assert.deepEqual(withStderr(() => parseMustHavesBlock(content, 'truths')), { result: [], err: '' });
+      });
+    }
+
+    test('a block with content that is not a list yields [] with a warning', () => {
+      assert.deepEqual(withStderr(() => parseMustHavesBlock('---\nmust_haves:\n  truths: nope\n---\n', 'truths')), {
+        result: [],
+        err: '[gsd-tools] WARNING: must_haves.truths block has content but parsed 0 items. ' +
+          'Possible YAML formatting issue — verification will fall back to LLM-derived truths.\n',
+      });
+    });
+
+    test('continuation values are trimmed and coerced only when wholly digits; null items pass through', () => {
+      const content = '---\nmust_haves:\n  artifacts:\n    - path: a\n      count: " 7 "\n      x: a7\n      y: 7a\n' +
+        '  truths:\n    -\n    - x\n---\n';
+      assert.deepEqual(parseMustHavesBlock(content, 'artifacts'), [{ path: 'a', count: 7, x: 'a7', y: '7a' }]);
+      assert.deepEqual(parseMustHavesBlock(content, 'truths'), [null, 'x']);
+    });
+  });
+
+  // ─── stripFrontmatter ─────────────────────────────────────────────────────────
+
+  describe('stripFrontmatter: whitespace after the closing fence', () => {
+    test('blank lines after the block go with it', () => {
+      assert.equal(stripFrontmatter('---\na: 1\n---\n\n\nbody'), 'body');
+    });
   });
 });
