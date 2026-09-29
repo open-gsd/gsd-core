@@ -549,15 +549,12 @@ describe('lint-frontmatter-fence-drift: a hand-rolled fence cannot reappear', ()
     ['the OpenCode plugin adapter', path.join('.opencode', 'plugins', 'gsd-core.js')],
     ['the Kilo plugin adapter', path.join('.kilo', 'plugins', 'gsd-core.js')],
   ]) {
-    test(`a planted hand-rolled fence in ${label} turns the scan red`, () => {
+    test(`a planted hand-rolled fence in ${label} turns the scan red`, (t) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-fence-drift-'));
-      try {
-        fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
-        fs.writeFileSync(path.join(root, rel), "function planted(c) {\n  return c.match(/^---\\n([\\s\\S]*?)\\n---/);\n}\n");
-        assert.deepStrictEqual(scanRepo(root).map((d) => [d.file, d.line, d.fn]), [[rel, 2, 'planted']]);
-      } finally {
-        cleanup(root);
-      }
+      t.after(() => cleanup(root));
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), "function planted(c) {\n  return c.match(/^---\\n([\\s\\S]*?)\\n---/);\n}\n");
+      assert.deepStrictEqual(scanRepo(root).map((d) => [d.file, d.line, d.fn]), [[rel, 2, 'planted']]);
     });
   }
 
@@ -583,14 +580,11 @@ describe('lint-frontmatter-fence-drift: a hand-rolled fence cannot reappear', ()
     assert.deepStrictEqual(findFrontmatterFenceDrift("const x = s.indexOf('\\n---');\n", grep).map((d) => d.line), [1]);
   });
 
-  test('a planted hand-rolled fence in a src/ tree turns the scan red', () => {
+  test('a planted hand-rolled fence in a src/ tree turns the scan red', (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-fence-drift-'));
-    try {
-      fs.mkdirSync(path.join(root, 'src'));
-      fs.writeFileSync(path.join(root, 'src', 'planted.cts'), "export function planted(c: string) {\n  return c.indexOf('\\n---', 4);\n}\n");
-      assert.deepStrictEqual(scanRepo(root).map((d) => [d.file, d.line, d.fn]), [[path.join('src', 'planted.cts'), 2, 'planted']]);
-    } finally {
-      cleanup(root);
-    }
+    t.after(() => cleanup(root));
+    fs.mkdirSync(path.join(root, 'src'));
+    fs.writeFileSync(path.join(root, 'src', 'planted.cts'), "export function planted(c: string) {\n  return c.indexOf('\\n---', 4);\n}\n");
+    assert.deepStrictEqual(scanRepo(root).map((d) => [d.file, d.line, d.fn]), [[path.join('src', 'planted.cts'), 2, 'planted']]);
   });
 });

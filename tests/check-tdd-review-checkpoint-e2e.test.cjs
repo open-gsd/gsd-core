@@ -437,15 +437,12 @@ describe('check tdd.review-checkpoint — CLI subprocess E2E with git fixtures',
     ['a BOM before the block', `\uFEFF${tddPlan(1, '01-01')}`],
     ['a `--- x` line before `type:`', '---\nnote: x\n--- x\ntype: tdd\nphase: 1\nslug: 01-01\n---\n# Task: 01-01\n'],
   ]) {
-    test(`[fence] type:tdd plan with ${label} is detected`, () => {
+    test(`[fence] type:tdd plan with ${label} is detected`, (t) => {
       const { tmpDir } = createTddGitFixture({ planFiles: [{ dir: '01-phase1', filename: '01-01-PLAN.md', content }] });
-      try {
-        const result = runTools('check tdd.review-checkpoint 1 --raw', tmpDir);
-        assert.ok(result.success, `check should succeed. stderr: ${result.error}`);
-        assert.strictEqual(JSON.parse(result.output).tddPlans, 1);
-      } finally {
-        cleanup(tmpDir);
-      }
+      t.after(() => cleanup(tmpDir));
+      const result = runTools('check tdd.review-checkpoint 1 --raw', tmpDir);
+      assert.ok(result.success, `check should succeed. stderr: ${result.error}`);
+      assert.strictEqual(JSON.parse(result.output).tddPlans, 1);
     });
   }
 

@@ -1192,19 +1192,16 @@ describe('#3706: frontmatter line editors are scoped to the matched block', () =
     }
   });
 
-  test('a body line starting with the key is not the line rewritten', () => {
+  test('a body line starting with the key is not the line rewritten', (t) => {
     // Bytes-based scoping (not a whole-file regex): only the frontmatter line
     // may change, never a body line that happens to start with the key.
     const { root, cwd, configDir, agentsDir, home } = makeSandbox();
-    try {
-      writeProjectEffortConfig(cwd, 'xhigh');
-      const filePath = path.join(agentsDir, 'gsd-executor.md');
-      fs.writeFileSync(filePath, '---\nname: x\neffort: high\n---\n\neffort: not-the-frontmatter\n');
-      runEffortSync({ cwd, home, configDir });
-      assert.strictEqual(fs.readFileSync(filePath, 'utf8'), '---\nname: x\neffort: xhigh\n---\n\neffort: not-the-frontmatter\n');
-    } finally {
-      cleanup(root);
-    }
+    t.after(() => cleanup(root));
+    writeProjectEffortConfig(cwd, 'xhigh');
+    const filePath = path.join(agentsDir, 'gsd-executor.md');
+    fs.writeFileSync(filePath, '---\nname: x\neffort: high\n---\n\neffort: not-the-frontmatter\n');
+    runEffortSync({ cwd, home, configDir });
+    assert.strictEqual(fs.readFileSync(filePath, 'utf8'), '---\nname: x\neffort: xhigh\n---\n\neffort: not-the-frontmatter\n');
   });
 
   test('a document whose frontmatter starts at byte 0 is byte-identical to before', () => {
