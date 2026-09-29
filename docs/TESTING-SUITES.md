@@ -617,7 +617,7 @@ Two runtime mechanisms sit on top of that static gate, both new in #4036:
   records to `tests/ci-timeout-budget-history.jsonl`. Unlike the in-job check,
   this also catches jobs killed by an actual timeout breach — GitHub's Jobs
   API still reports `started_at`/`completed_at` for a cancelled job. The new
-  rows travel in one rolling, data-only PR (branch `automation/ci-timeout-report`,
+  rows travel in one rolling, data-only PR (branch `chore/4036-ci-timeout-budget-history`,
   titled `chore(#4036): CI timeout budget history update`), since `next` is a
   protected branch and nothing pushes to it directly — the same constraint
   `auto-backmerge.yml` already works within. Each run rebuilds that branch on

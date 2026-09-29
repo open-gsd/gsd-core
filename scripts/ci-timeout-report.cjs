@@ -26,7 +26,8 @@
  *
  * Rolling-PR helpers: the workflow keeps one PR (`ROLLING_PR`) rebuilt on
  * `next` each run. `mergeHistoryTexts` seeds the history with the open PR's
- * pending rows (sharing `historyRecordKey` with dedupeAgainstHistory), and
+ * pending rows, first passed through `sanitizeHistoryText` because the branch
+ * is untrusted (sharing `historyRecordKey` with dedupeAgainstHistory), and
  * `evaluateRollingPrApproval` is the gate deciding whether the workflow may
  * approve that PR.
  */
@@ -147,6 +148,17 @@ function historyRecordKey(lineText) {
   } catch {
     return null;
   }
+  return recordKey(rec);
+}
+
+/**
+ * `runId::jobName` for a parsed record, or `null` when `rec` is not a
+ * non-null, non-array object carrying both `runId` and `jobName`.
+ *
+ * @param {*} rec
+ * @returns {?string}
+ */
+function recordKey(rec) {
   if (rec === null || typeof rec !== 'object' || Array.isArray(rec)) return null;
   if (rec.runId == null || rec.jobName == null) return null;
   return `${rec.runId}::${rec.jobName}`;
@@ -158,7 +170,7 @@ function dedupeAgainstHistory(newRecords, historyText) {
     const key = historyRecordKey(line);
     if (key !== null) seen.add(key);
   }
-  return newRecords.filter((r) => !seen.has(historyRecordKey(JSON.stringify(r))));
+  return newRecords.filter((r) => !seen.has(recordKey(r)));
 }
 
 /**
@@ -187,9 +199,86 @@ function mergeHistoryTexts(...texts) {
   return kept.length > 0 ? `${kept.join('\n')}\n` : '';
 }
 
+// The rolling branch is untrusted input: anyone with write access can push to
+// it, and its rows are seeded into the history the bot then republishes. Only
+// rows exactly matching what parseJobRecord emits are accepted.
+const HISTORY_RECORD_LIMITS = Object.freeze({ maxLineLength: 1024, maxLines: 20000 });
+
+const HISTORY_RECORD_KEYS = new Set([
+  'runId', 'jobName', 'workflowFile', 'sha', 'runEvent', 'completedAt', 'elapsedMs', 'timeoutMinutes', 'pct',
+]);
+
+const isAbsentOrNull = (v) => v === undefined || v === null;
+
+/**
+ * @param {*} rec
+ * @returns {boolean}
+ */
+function isValidHistoryRecord(rec) {
+  if (rec === null || typeof rec !== 'object' || Array.isArray(rec)) return false;
+  if (!Object.keys(rec).every((k) => HISTORY_RECORD_KEYS.has(k))) return false;
+  if (!Number.isSafeInteger(rec.runId) || rec.runId <= 0) return false;
+  if (typeof rec.jobName !== 'string' || rec.jobName.length < 1 || rec.jobName.length > 200) return false;
+  // Control characters (U+0000-U+001F, U+007F), checked by code unit so the
+  // pattern needs no control-character regex (eslint no-control-regex).
+  for (let i = 0; i < rec.jobName.length; i += 1) {
+    const code = rec.jobName.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return false;
+  }
+  if (typeof rec.workflowFile !== 'string' || !/^[A-Za-z0-9._-]{1,100}\.ya?ml$/.test(rec.workflowFile)) return false;
+  if (!isAbsentOrNull(rec.sha) && !(typeof rec.sha === 'string' && /^[0-9a-f]{40}$/.test(rec.sha))) return false;
+  if (!isAbsentOrNull(rec.runEvent) && !(typeof rec.runEvent === 'string' && /^[a-z_]{1,50}$/.test(rec.runEvent))) return false;
+  if (
+    !isAbsentOrNull(rec.completedAt)
+    && !(typeof rec.completedAt === 'string' && rec.completedAt.length <= 40 && !Number.isNaN(Date.parse(rec.completedAt)))
+  ) {
+    return false;
+  }
+  if (!Number.isFinite(rec.elapsedMs) || rec.elapsedMs < 0) return false;
+  if (!Number.isFinite(rec.timeoutMinutes) || rec.timeoutMinutes <= 0) return false;
+  if (!Number.isFinite(rec.pct) || rec.pct < 0) return false;
+  return true;
+}
+
+/**
+ * Keeps only well-formed, in-schema, size-bounded lines of untrusted history
+ * text, deduped by record key.
+ *
+ * @param {*} text
+ * @param {{maxLineLength?: number, maxLines?: number}} [limits]
+ * @returns {{text: string, kept: number, dropped: number}}
+ */
+function sanitizeHistoryText(text, { maxLineLength, maxLines } = HISTORY_RECORD_LIMITS) {
+  if (typeof text !== 'string') return { text: '', kept: 0, dropped: 0 };
+  const keptLines = [];
+  let dropped = 0;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/\r$/, '');
+    if (!line.trim()) continue;
+    if (keptLines.length >= maxLines || line.length > maxLineLength) {
+      dropped += 1;
+      continue;
+    }
+    let rec;
+    try {
+      rec = JSON.parse(line);
+    } catch {
+      dropped += 1;
+      continue;
+    }
+    if (!isValidHistoryRecord(rec)) {
+      dropped += 1;
+      continue;
+    }
+    keptLines.push(line);
+  }
+  const merged = mergeHistoryTexts(keptLines.length > 0 ? `${keptLines.join('\n')}\n` : '');
+  return { text: merged, kept: merged === '' ? 0 : merged.split('\n').length - 1, dropped };
+}
+
 // The single rolling PR the workflow maintains; the workflow reads these values.
 const ROLLING_PR = Object.freeze({
-  branch: 'automation/ci-timeout-report',
+  branch: 'chore/4036-ci-timeout-budget-history',
   base: 'next',
   historyFile: 'tests/ci-timeout-budget-history.jsonl',
   title: 'chore(#4036): CI timeout budget history update',
@@ -199,6 +288,8 @@ const ROLLING_PR = Object.freeze({
     'Automated, data-only update to `tests/ci-timeout-budget-history.jsonl`: new job/shard wall-clock vs. `timeout-minutes` records collected by `.github/workflows/ci-timeout-report.yml`.',
     '',
     'This is the single rolling PR for these records. Each scheduled run rebuilds the branch on the current `next` tip with every pending record, so it never conflicts with a sibling and is up to date as of the run. It is approved by the workflow only when it is exactly this branch, from this repository, at the commit the workflow pushed, changing only the history file, and then merges through auto-merge once required checks pass.',
+    '',
+    '<!-- pr-template-exempt: automated data-only rolling PR maintained by .github/workflows/ci-timeout-report.yml (#5115) -->',
   ].join('\n'),
 });
 
@@ -665,7 +756,11 @@ module.exports = {
   buildReportLines,
   dedupeAgainstHistory,
   historyRecordKey,
+  recordKey,
   mergeHistoryTexts,
+  HISTORY_RECORD_LIMITS,
+  isValidHistoryRecord,
+  sanitizeHistoryText,
   ROLLING_PR,
   evaluateRollingPrApproval,
   formatHistoryLine,

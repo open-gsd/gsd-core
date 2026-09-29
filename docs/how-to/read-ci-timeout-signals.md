@@ -48,7 +48,7 @@ use a smaller matrix (no `macos-latest` `full_only` row) than its `push` runs, s
 only means the same thing across rows sharing the same `runEvent`.
 
 Because `next` is a protected branch, the report never pushes directly to it — each scheduled
-run updates one rolling, data-only PR on the branch `automation/ci-timeout-report`, titled
+run updates one rolling, data-only PR on the branch `chore/4036-ci-timeout-budget-history`, titled
 `chore(#4036): CI timeout budget history update`. Each run rebuilds that branch on the current
 `next` tip with every pending row, so it never conflicts. The workflow approves the PR when it is
 provably its own data-only PR, then auto-merges it once required checks pass; until the org
