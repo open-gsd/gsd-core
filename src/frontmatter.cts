@@ -1216,10 +1216,40 @@ function isSegmentTailLine(line: string): boolean {
   return line.trim() === '' || line.startsWith('#');
 }
 
-/** Parse one key's lines on their own, or null when they do not parse as YAML. */
-function loadSegmentValue(lines: string[]): { value: unknown } | null {
+/**
+ * The most YAML text, in characters (each parse also counts one for its own line break), one
+ * `spliceFrontmatter` call may parse while classifying lines — `segmentTailStart`,
+ * `isSegmentComment` and `inlineCommentStart` each decide a line by re-parsing the key's lines
+ * without it, so the work grows with (lines × `#`/tail lines × line length). A real planning
+ * document stays far below it (across every tracked `.md` file, splicing any key to a changed
+ * value parses at most ~60,000 characters — 0.3% of it, in the adversarial `huge-bounded.md`
+ * fixture); a pathological block — thousands of blank lines after a `|+` key,
+ * or hundreds of lines each holding many ` #` — is refused instead of stalling the writer
+ * (found while implementing #5105).
+ */
+const SPLICE_PARSE_BUDGET_CHARS = 20_000_000;
+
+/** One `spliceFrontmatter` call's remaining parse allowance (`SPLICE_PARSE_BUDGET_CHARS`). */
+type SpliceParseBudget = { remaining: number };
+
+/**
+ * Parse one key's lines on their own, or null when they do not parse as YAML. Charges the
+ * text to `budget`, refusing with `FRONTMATTER_TOO_COMPLEX` once it is spent.
+ */
+function loadSegmentValue(lines: string[], budget: SpliceParseBudget): { value: unknown } | null {
+  const text = lines.join('\n');
+  budget.remaining -= text.length + 1;
+  if (budget.remaining < 0) {
+    throw new FrontmatterWriteRefusedError(
+      'FRONTMATTER_TOO_COMPLEX',
+      'frontmatter: refusing to write — telling this frontmatter block\'s comments and trailing blank ' +
+        `lines apart from its values would take more than ${SPLICE_PARSE_BUDGET_CHARS} characters of YAML ` +
+        'parsing (a very large block with many `#` or trailing blank lines), so the writer stops rather ' +
+        'than stall. Edit the file directly.',
+    );
+  }
   try {
-    return { value: yamlLoad(escapeNullBytesForParse(lines.join('\n')), YAML_LOAD_OPTS) };
+    return { value: yamlLoad(escapeNullBytesForParse(text), YAML_LOAD_OPTS) };
   } catch {
     return null;
   }
@@ -1233,14 +1263,14 @@ function loadSegmentValue(lines: string[]): { value: unknown } | null {
  * When the key's lines do not parse on their own, the lexical candidate stands; the
  * read-back check in `spliceFrontmatter` still refuses any block that would misread.
  */
-function segmentTailStart(lines: string[]): number {
+function segmentTailStart(lines: string[], budget: SpliceParseBudget): number {
   let cut = lines.length;
   while (cut > 1 && isSegmentTailLine(lines[cut - 1])) cut--;
   if (cut === lines.length) return cut;
-  const whole = loadSegmentValue(lines);
+  const whole = loadSegmentValue(lines, budget);
   if (!whole) return cut;
   while (cut < lines.length) {
-    const body = loadSegmentValue(lines.slice(0, cut));
+    const body = loadSegmentValue(lines.slice(0, cut), budget);
     if (body && frontmatterDeepEqual(body.value, whole.value)) return cut;
     cut++;
   }
@@ -1257,12 +1287,12 @@ function segmentTailStart(lines: string[]): number {
  * must_haves.artifacts / .prohibitions). Every input line lands in exactly one of
  * `preamble`, a segment `body` or a segment `tail` — nothing is discarded here.
  */
-function sliceFrontmatterLayout(yaml: string): { preamble: string[]; segments: FrontmatterSegment[] } {
+function sliceFrontmatterLayout(yaml: string, budget: SpliceParseBudget): { preamble: string[]; segments: FrontmatterSegment[] } {
   const preamble: string[] = [];
   const segments: FrontmatterSegment[] = [];
   let current: { key: string; valueStart: number; lines: string[] } | null = null;
   const close = (seg: { key: string; valueStart: number; lines: string[] }): void => {
-    const cut = segmentTailStart(seg.lines);
+    const cut = segmentTailStart(seg.lines, budget);
     segments.push({
       key: seg.key,
       valueStart: seg.valueStart,
@@ -1336,13 +1366,16 @@ function regenerateFrontmatterKey(key: string, value: FrontmatterValue, comments
  * inline — the regenerated value cannot carry (the key it belongs to was removed or is no
  * longer a key, the comment sits on or between list items or trails the value), so writing
  * would silently drop text the author wrote (#3257/#3742 treat those comments as preserved
- * data).
+ * data). `FRONTMATTER_TOO_COMPLEX`: telling the block's comments and trailing lines apart from
+ * its values would parse more YAML than `SPLICE_PARSE_BUDGET_CHARS` allows, so the writer stops
+ * rather than stall on a pathological block.
  */
 type FrontmatterWriteRefusalCode =
   | 'FRONTMATTER_UNPARSEABLE'
   | 'FRONTMATTER_KEYS_UNRECONCILABLE'
   | 'FRONTMATTER_SPLICE_VERIFY_FAILED'
-  | 'FRONTMATTER_COMMENT_WOULD_BE_LOST';
+  | 'FRONTMATTER_COMMENT_WOULD_BE_LOST'
+  | 'FRONTMATTER_TOO_COMPLEX';
 
 class FrontmatterWriteRefusedError extends Error {
   readonly code: FrontmatterWriteRefusalCode;
@@ -1418,10 +1451,10 @@ function verifyReadsBackAs(out: string, newObj: Frontmatter): string {
  * value text, not a comment. When the lines do not parse on their own (`whole` null) every
  * `#` line counts, so the comment post-condition fails closed.
  */
-function isSegmentComment(lines: string[], i: number, whole: { value: unknown } | null): boolean {
+function isSegmentComment(lines: string[], i: number, whole: { value: unknown } | null, budget: SpliceParseBudget): boolean {
   if (!/^\s*#/.test(lines[i])) return false;
   if (!whole) return true;
-  const without = loadSegmentValue([...lines.slice(0, i), ...lines.slice(i + 1)]);
+  const without = loadSegmentValue([...lines.slice(0, i), ...lines.slice(i + 1)], budget);
   return without !== null && frontmatterDeepEqual(without.value, whole.value);
 }
 
@@ -1431,14 +1464,14 @@ function isSegmentComment(lines: string[], i: number, whole: { value: unknown } 
  * there, so a `#` inside a quoted scalar or a block scalar never counts. When the lines do
  * not parse on their own (`whole` null) the first ` #` counts.
  */
-function inlineCommentStart(lines: string[], i: number, whole: { value: unknown } | null): number {
+function inlineCommentStart(lines: string[], i: number, whole: { value: unknown } | null, budget: SpliceParseBudget): number {
   const line = lines[i];
   const hashes = /[ \t]#/g;
   for (let m = hashes.exec(line); m !== null; m = hashes.exec(line)) {
     let start = m.index;
     while (start > 0 && (line[start - 1] === ' ' || line[start - 1] === '\t')) start--;
     if (!whole) return start;
-    const cut = loadSegmentValue([...lines.slice(0, i), line.slice(0, start), ...lines.slice(i + 1)]);
+    const cut = loadSegmentValue([...lines.slice(0, i), line.slice(0, start), ...lines.slice(i + 1)], budget);
     if (cut !== null && frontmatterDeepEqual(cut.value, whole.value)) return start;
   }
   return -1;
@@ -1454,8 +1487,8 @@ function inlineCommentStart(lines: string[], i: number, whole: { value: unknown 
  */
 type SegmentComments = { channel: FullLineCommentChannel & { inline: Record<string, string> }; unattached: string[] };
 
-function segmentComments(key: string, lines: string[]): SegmentComments {
-  const whole = loadSegmentValue(lines);
+function segmentComments(key: string, lines: string[], budget: SpliceParseBudget): SegmentComments {
+  const whole = loadSegmentValue(lines, budget);
   const leading = Object.create(null) as Record<string, string[]>;
   const inline = Object.create(null) as Record<string, string>;
   const unattached: string[] = [];
@@ -1465,11 +1498,11 @@ function segmentComments(key: string, lines: string[]): SegmentComments {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (i > 0 && line.trim() === '') continue;
-    if (i > 0 && isSegmentComment(lines, i, whole)) {
+    if (i > 0 && isSegmentComment(lines, i, whole, budget)) {
       pending.push({ indent: /^\s*/.exec(line)?.[0].length ?? 0, line });
       continue;
     }
-    const at = inlineCommentStart(lines, i, whole);
+    const at = inlineCommentStart(lines, i, whole, budget);
     let owner: string[] | null = i === 0 ? [key] : null;
     if (i > 0) {
       const k = channelKeyLine(at === -1 ? line : line.slice(0, at));
@@ -1503,7 +1536,7 @@ function segmentComments(key: string, lines: string[]): SegmentComments {
  * can never be balanced by an identical one elsewhere. A comment that could not be re-attached
  * is refused, never silently dropped (found while implementing #5105).
  */
-function assertCommentsKept(key: string, original: SegmentComments, regenerated: string): void {
+function assertCommentsKept(key: string, original: SegmentComments, regenerated: string, budget: SpliceParseBudget): void {
   const placed = (c: SegmentComments): Map<string, number> => {
     const counts = new Map<string, number>();
     const add = (entry: string): void => { counts.set(entry, (counts.get(entry) ?? 0) + 1); };
@@ -1513,7 +1546,7 @@ function assertCommentsKept(key: string, original: SegmentComments, regenerated:
     return counts;
   };
   const before = placed(original);
-  const after = placed(segmentComments(key, splitLines(regenerated)));
+  const after = placed(segmentComments(key, splitLines(regenerated), budget));
   const differs = (entry: string): boolean => (before.get(entry) ?? 0) !== (after.get(entry) ?? 0);
   const lost = [...before.keys()].filter(differs);
   if (lost.length === 0 && ![...after.keys()].some(differs)) return;
@@ -1580,9 +1613,11 @@ function spliceFrontmatter(content: string, newObj: Frontmatter): string {
     // holding one blank line has one empty line: both join to ''. Laying out '' yields that one
     // blank line, so the empty block would gain a blank line above its first key (found while
     // implementing #5105).
+    // One parse allowance for the whole call: every line classification below draws on it.
+    const budget: SpliceParseBudget = { remaining: SPLICE_PARSE_BUDGET_CHARS };
     const { preamble, segments } = innerLines.length === 0
       ? { preamble: [] as string[], segments: [] as ReturnType<typeof sliceFrontmatterLayout>['segments'] }
-      : sliceFrontmatterLayout(inner);
+      : sliceFrontmatterLayout(inner, budget);
     const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
 
     // Every parsed key must own exactly one key line, and every key line must be a parsed
@@ -1622,9 +1657,9 @@ function spliceFrontmatter(content: string, newObj: Frontmatter): string {
           // the key is deleted, and the comments inside its value go with it (#3257 AC5).
           // Otherwise every comment inside the value — full-line or inline — is re-emitted
           // beside the key it belongs to or the write is refused.
-          const comments = segmentComments(seg.key, seg.body);
+          const comments = segmentComments(seg.key, seg.body, budget);
           const regenerated = regenerateFrontmatterKey(seg.key, newObj[seg.key], comments.channel);
-          if (regenerated !== '') assertCommentsKept(seg.key, comments, regenerated);
+          if (regenerated !== '') assertCommentsKept(seg.key, comments, regenerated, budget);
           emitted.push(...(regenerated === '' ? [] : [regenerated]), ...seg.tail);
         }
       } else {
@@ -2131,6 +2166,9 @@ export = {
   // `isFrontmatterWriteRefusal(err)` and surface `err.message`/`err.code`.
   FrontmatterWriteRefusedError,
   isFrontmatterWriteRefusal,
+  // The parse allowance past which `spliceFrontmatter` refuses with FRONTMATTER_TOO_COMPLEX —
+  // exported so its boundary can be exercised exactly.
+  SPLICE_PARSE_BUDGET_CHARS,
   stripFrontmatter,
   noOpObjectListSetError,
   parseMustHavesBlock,
