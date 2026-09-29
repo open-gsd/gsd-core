@@ -41,7 +41,7 @@ import auditMod = require('./audit.cjs');
 const { isAuditItemAcknowledged, deriveUatGapSnapshotValue } = auditMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import pristineBaseline = require('./pristine-baseline.cjs');
-const { gitExec, isCleanRelativePosixPath } = pristineBaseline;
+const { gitExec } = pristineBaseline;
 import { requireSafePath, sanitizeForDisplay, PathAcceptance } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
 import configLoader = require('./config-loader.cjs');
@@ -706,73 +706,24 @@ function completeUatSession(
  * feeds is byte-sensitive (a trailing newline IS material), so the read must
  * not trim anything.
  *
- * #5105 review finding 1: `git show HEAD:<path>` resolves its pathspec from
- * the repository TOPLEVEL, not from `cwd` — a project whose `.planning` sits
- * in a subdirectory of the git repo (`projectRoot !== toplevel`) would
- * otherwise resolve the wrong blob, or none, for a `relPath` computed
- * relative to `cwd`. This resolves the real toplevel via a bounded
- * `git rev-parse --show-toplevel`, realpath's BOTH sides (so a symlinked
- * `--cwd` and a symlinked repo checkout still line up), and recomputes the
- * pathspec relative to that toplevel — guarded by the same
- * `isCleanRelativePosixPath` containment check `pristine-baseline.cts` uses
- * for every other git-history pathspec, so a `..`-escaping or absolute
- * result is refused rather than fed to `git show`.
+ * The pathspec is git-native: `git show HEAD:./<basename>` run from the file's
+ * own directory. A `./`-prefixed tree path is resolved by git relative to the
+ * command's cwd (the form `verify.cts` uses via `rev-parse --show-prefix`), so
+ * git — not JS — canonicalizes it: a symlinked `--cwd`, a project root in a
+ * subdirectory of the repository, and Windows 8.3 / drive-case / forward-slash
+ * toplevel shapes all resolve with no realpath or `path.relative` derivation,
+ * and git itself contains the path inside the repository.
  *
  * Returns `null` on any failure (git absent, not a repository, unborn HEAD,
- * the path untracked/absent at HEAD, or a containment refusal) — never
- * throws, matching the "no baseline" posture every other git-history reader
- * in this codebase uses.
+ * the path untracked/absent at HEAD) — never throws, matching the "no
+ * baseline" posture every other git-history reader in this codebase uses.
  */
-function readBaselineAtHead(cwd: string, absPath: string): string | null {
+function readBaselineAtHead(absPath: string): string | null {
   try {
-    const toplevelRaw = gitExec(cwd, ['rev-parse', '--show-toplevel']).trim();
-    if (!toplevelRaw) return null;
-    const realToplevel = fs.realpathSync.native(toplevelRaw);
-    const pathspec = headPathspecFor(toplevelRaw, absPath);
-    if (pathspec === null) return null;
-    return gitExec(realToplevel, ['show', `HEAD:${pathspec}`]);
+    return gitExec(path.dirname(absPath), ['show', `HEAD:./${path.basename(absPath)}`]);
   } catch {
     return null;
   }
-}
-
-interface HeadPathspecDeps {
-  realpath: (p: string) => string;
-  pathMod: Pick<typeof path, 'relative' | 'isAbsolute' | 'sep'>;
-}
-
-const HEAD_PATHSPEC_DEFAULT_DEPS: HeadPathspecDeps = { realpath: fs.realpathSync.native, pathMod: path };
-
-/**
- * #5105 (Windows CI): the toplevel-relative POSIX pathspec for
- * `git show HEAD:<pathspec>`, or `null` on a containment refusal.
- *
- * Both sides MUST canonicalize through the SAME resolver, and that resolver
- * must be the OS one (`fs.realpathSync.native`): `git rev-parse
- * --show-toplevel` on Windows returns the LONG, forward-slash form
- * (`C:/Users/runneradmin/...`, Git for Windows canonicalizes through
- * `GetFinalPathNameByHandleW`), while a temp/project path handed in by a
- * caller is routinely the 8.3 SHORT form (`C:\Users\RUNNER~1\...`). The JS
- * `fs.realpathSync` resolves symlinks component-by-component but never
- * expands 8.3 names, so the two never shared a prefix, `path.relative`
- * climbed out with `..\..\RUNNER~1\...`, the containment guard refused it,
- * and every Windows run lost its baseline (`changed:true` on an unchanged
- * session). `.native` expands short names and normalizes separators and
- * drive-letter case on both sides.
- *
- * Separator conversion splits on `pathMod.sep` (the `toPosixPath` seam's own
- * rule), and a cross-root result (`path.relative` returns an ABSOLUTE path
- * when the two sides share no root, e.g. different drives) is refused before
- * conversion — `D:/x` would otherwise pass the POSIX containment check.
- * `deps` is injectable so the Windows shape is exercised off-Windows
- * (`path.win32` + a short→long realpath map).
- */
-function headPathspecFor(toplevel: string, absPath: string, deps: HeadPathspecDeps = HEAD_PATHSPEC_DEFAULT_DEPS): string | null {
-  const { realpath, pathMod } = deps;
-  const rel = pathMod.relative(realpath(toplevel), realpath(absPath));
-  if (pathMod.isAbsolute(rel)) return null;
-  const posixRel = rel.split(pathMod.sep).join('/');
-  return isCleanRelativePosixPath(posixRel) ? posixRel : null;
 }
 
 /**
@@ -807,7 +758,7 @@ async function cmdUatCompleteSession(
   }
   const content = fs.readFileSync(resolvedPath, 'utf-8');
   const relPath = toPosixPath(path.relative(cwd, resolvedPath));
-  const baseline = readBaselineAtHead(cwd, resolvedPath);
+  const baseline = readBaselineAtHead(resolvedPath);
   let result: CompleteUatSessionResult;
   try {
     result = completeUatSession(content, { baseline });
@@ -4519,8 +4470,4 @@ export = {
   // branch is asserted directly. It cannot be reached through the two readers —
   // see the alignment note on the function.
   parsedEntriesFor,
-  // #5105 (Windows CI): exported so the 8.3-short-name / forward-slash
-  // toplevel shape is asserted off-Windows via injected `path.win32`.
-  headPathspecFor,
-  HEAD_PATHSPEC_DEFAULT_DEPS,
 };

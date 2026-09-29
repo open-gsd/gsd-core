@@ -430,8 +430,8 @@ function spliceFrontmatter(
   newObj: Frontmatter,
   { parseBudgetChars = SPLICE_PARSE_BUDGET_CHARS }: SpliceFrontmatterOptions = {},
 ): string {
-  if (!Number.isSafeInteger(parseBudgetChars) || parseBudgetChars < 0) {
-    throw new TypeError(`spliceFrontmatter: parseBudgetChars must be a non-negative safe integer, got ${String(parseBudgetChars)}`);
+  if (!Number.isSafeInteger(parseBudgetChars) || parseBudgetChars < 0 || parseBudgetChars > SPLICE_PARSE_BUDGET_CHARS) {
+    throw new TypeError(`spliceFrontmatter: parseBudgetChars must be a non-negative safe integer no greater than ${SPLICE_PARSE_BUDGET_CHARS} (the option can only lower the limit), got ${String(parseBudgetChars)}`);
   }
   // The block is located through `frontmatterBlock` (the one fence owner's block), so the
   // writer and every reader agree on where it is: BOM (#2977), CRLF, an empty block.

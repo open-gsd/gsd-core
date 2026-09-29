@@ -49,7 +49,7 @@ type Frontmatter = Record<string, FrontmatterValue>;
  * which is the documented behavior `tests/fixtures/adversarial/frontmatter/
  * duplicate-keys.md` pins.
  */
-const YAML_LOAD_OPTS = { schema: FAILSAFE_SCHEMA, json: true };
+const YAML_LOAD_OPTS = Object.freeze({ schema: FAILSAFE_SCHEMA, json: true });
 
 /**
  * How many parsed keys an unterminated region must yield before it is reported as a
@@ -1712,7 +1712,7 @@ export = {
   frontmatterBlock,
   // #5105: the reader internals the writer (`frontmatter-splice.cts`) builds on. Not public
   // API — one bag, so the reader's public surface does not grow by eight names.
-  spliceSeam: {
+  spliceSeam: Object.freeze({
     FULL_LINE_COMMENTS,
     YAML_LOAD_OPTS,
     commentPathKey,
@@ -1721,5 +1721,5 @@ export = {
     escapeNullBytesForParse,
     unparseableResult,
     frontmatterDeepEqual,
-  },
+  }),
 };

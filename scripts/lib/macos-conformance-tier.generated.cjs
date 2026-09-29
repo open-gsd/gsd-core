@@ -201,6 +201,7 @@ module.exports = {
   "tests/state.test.cjs",
   "tests/todos-workstream-scope.test.cjs",
   "tests/tracer-bullet.test.cjs",
+  "tests/uat-complete-session.test.cjs",
   "tests/uat-predicate.test.cjs",
   "tests/uat.test.cjs",
   "tests/ui-interaction-capture.test.cjs",
