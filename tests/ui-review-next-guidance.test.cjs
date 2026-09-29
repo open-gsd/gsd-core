@@ -40,10 +40,15 @@ describe('verify-work blocked-state next guidance', () => {
     const blockedStart = content.indexOf(
       'If `SECURITY_FILE` is still empty, stop before phase advancement',
     );
-    const blockedBlock = content.slice(
-      blockedStart,
-      content.indexOf('If an active secure-phase step hook exists', blockedStart),
-    );
+    // The block ends where the SECURITY.md-exists branch (threats_open check)
+    // begins. Both anchors must resolve: a missing anchor makes indexOf return -1
+    // and the slice silently run to end-of-file, pulling in the post-completion
+    // next-phase options and failing for the wrong reason (#5105 renamed the old
+    // "If an active secure-phase step hook exists" end anchor).
+    const blockedEnd = content.indexOf('If `SECURITY_FILE` exists', blockedStart);
+    assert.notEqual(blockedStart, -1, 'security-blocked presentation start anchor must exist');
+    assert.notEqual(blockedEnd, -1, 'security-blocked presentation end anchor must exist');
+    const blockedBlock = content.slice(blockedStart, blockedEnd);
 
     assert.match(
       blockedBlock,

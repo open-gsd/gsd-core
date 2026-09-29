@@ -19,6 +19,7 @@ interface VerificationModule {
   cmdVerificationStatus(cwd: string, phaseDirArg: string | undefined, raw: boolean): void;
   cmdVerificationResolveFile(cwd: string, phaseDirArg: string | undefined, raw: boolean): void;
   cmdVerificationFingerprint(cwd: string, phaseDirArg: string | undefined, files: string[], raw: boolean): void;
+  cmdVerificationAppendAudit(cwd: string, fileArg: string | undefined, argTokens: string[], raw: boolean): void;
 }
 
 interface RouteVerificationCommandOptions {
@@ -31,7 +32,7 @@ interface RouteVerificationCommandOptions {
 
 // ─── Implementation ───────────────────────────────────────────────────────────
 
-const VERIFICATION_SUBCOMMANDS = ['status', 'resolve-file', 'fingerprint'];
+const VERIFICATION_SUBCOMMANDS = ['status', 'resolve-file', 'fingerprint', 'append-audit'];
 
 function routeVerificationCommand({
   verification,
@@ -51,6 +52,7 @@ function routeVerificationCommand({
       status: () => verification.cmdVerificationStatus(cwd, args[2], raw),
       'resolve-file': () => verification.cmdVerificationResolveFile(cwd, args[2], raw),
       fingerprint: () => verification.cmdVerificationFingerprint(cwd, args[2], args.slice(3), raw),
+      'append-audit': () => verification.cmdVerificationAppendAudit(cwd, args[2], args.slice(3), raw),
     },
   });
 }

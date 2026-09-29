@@ -17,6 +17,7 @@ const {
   spliceFrontmatter,
   stripFrontmatter,
   parseMustHavesBlock,
+  propagateCommentChannel,
 } = require('../gsd-core/bin/lib/frontmatter.cjs');
 
 const { normalizePhaseName } = require('../gsd-core/bin/lib/phase-id.cjs');
@@ -396,6 +397,52 @@ describe('reconstructFrontmatter', () => {
     const secondIdx = reconstructed.indexOf('# second note');
     assert.ok(aIdx < firstIdx && firstIdx < secondIdx, `order wrong (a:${aIdx} first:${firstIdx} second:${secondIdx})`);
   });
+
+  // Found while implementing #5105: the comment channel keyed a nested sub-key by its
+  // dot-joined path, so a top-level key literally named `a.b` and the sub-key `b` of map `a`
+  // shared one entry — one comment overwrote the other and was re-emitted in both places.
+  test('a top-level key named "a.b" and sub-key "b" of map "a" each keep their own comment', () => {
+    const extracted = extractFrontmatter('---\na:\n  # nested note\n  b: 1\n# top-level note\na.b: 2\n---');
+    assert.strictEqual(
+      reconstructFrontmatter(extracted),
+      'a:\n  # nested note\n  b: 1\n# top-level note\na.b: 2',
+    );
+  });
+
+  test('propagating the comment channel keeps the comment of a top-level key named "a.b" when no key "a" exists', () => {
+    const source = extractFrontmatter('---\n# dotted note\na.b: 1\n---');
+    const target = { 'a.b': '2' };
+    propagateCommentChannel(source, target);
+    assert.strictEqual(reconstructFrontmatter(target), '# dotted note\na.b: 2');
+  });
+
+  // Found while strengthening #5105's frontmatter-block property test: the comment channel's
+  // nested-key scan (`channelKeyLine`) fell back to the top-level no-space `key:value` shorthand
+  // (`updated:2026-01-01`) at ANY indentation, so an indented CONTINUATION line of a multi-line
+  // scalar that happened to look like `word:rest` — a bare URL (`https://x`) is the common real
+  // case — was misread as opening a nested key. A comment leading such a line then attached to
+  // that fabricated key instead of falling through as unattached value text. The fallback is now
+  // refused at indent > 0 (only the spaced-colon / end-of-line form opens a nested key there); a
+  // genuinely nested key is unaffected, since it is always written `key: value` (spaced).
+  //
+  // Observed the way a writer observes it: the channel is carried onto a target that DOES hold
+  // the fabricated key path (`notes.https`), and the serialized target shows where the comment
+  // landed. A misattributed comment is re-emitted above `https`; a correctly unattached one is
+  // not carried at all.
+  test('a comment inside a multi-line value is not carried onto a key its continuation line resembles', () => {
+    // `notes` is a plain (scalar) multi-line value — it has no nested keys at all. Its second
+    // line, `https://x`, is bare-fallback-shaped (`word:rest`, no space after the colon) but is
+    // plainly value text, not a key.
+    const source = extractFrontmatter('---\nnotes: |\n  # z\n  https://x\n---\nbody\n');
+    const target = { notes: { https: '//x' } };
+    propagateCommentChannel(source, target);
+    assert.strictEqual(reconstructFrontmatter(target), 'notes:\n  https: //x');
+  });
+
+  test('a real nested key (spaced colon) at the same indentation still keeps its leading comment', () => {
+    const parsed = extractFrontmatter('---\ntop:\n  # note\n  child: 1\n---\nbody\n');
+    assert.strictEqual(reconstructFrontmatter(parsed), 'top:\n  # note\n  child: 1');
+  });
 });
 
 // ─── spliceFrontmatter ──────────────────────────────────────────────────────
@@ -446,6 +493,227 @@ describe('spliceFrontmatter', () => {
     const resultBody = result.slice(closingIdx + 4); // skip \n---
     assert.strictEqual(resultBody, body, 'body content after frontmatter should be exactly preserved');
   });
+
+  // A frontmatter write must never silently drop a line it could not parse (found while
+  // implementing #5105: uat.complete-session's status splice erased `updated:2026-01-01`).
+  describe('never drops a line it did not parse', () => {
+    const setStatus = (content) => spliceFrontmatter(content, { ...extractFrontmatter(content), status: 'complete' });
+
+    const UNPARSEABLE = { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_UNPARSEABLE' };
+    const UNRECONCILABLE = { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_KEYS_UNRECONCILABLE' };
+
+    // An unparseable block is never regenerated: a regenerated key's indented lines, a
+    // no-space `status:complete` line and every key the parser could not read would be
+    // lost or left in a block no reader can see. Every splice-based write fails closed.
+    test('a no-space `key:value` line (block unparseable) refuses the write, after or before the key', () => {
+      assert.throws(() => setStatus('---\nstatus: testing\nupdated:2026-01-01\n---\nbody'), UNPARSEABLE);
+      assert.throws(() => setStatus('---\nupdated:2026-01-01\nstatus: testing\n---\nbody'), UNPARSEABLE);
+    });
+
+    test('a no-space `status:complete` block is refused, never treated as a changed key', () => {
+      assert.throws(() => setStatus('---\nstatus:complete\nphase: 01\n---\nbody'), UNPARSEABLE);
+    });
+
+    test('a single no-space line (region parses as a bare scalar) refuses the write', () => {
+      assert.throws(() => spliceFrontmatter('---\nupdated:2026-01-01\n---\nbody', { status: 'complete' }), UNPARSEABLE);
+    });
+
+    test('a block holding a top-level sequence refuses the write', () => {
+      assert.throws(() => spliceFrontmatter('---\n- a\n---\nbody', { status: 'complete' }), UNPARSEABLE);
+    });
+
+    test('a comment-only block is empty, not unparseable: the key is appended after the comment', () => {
+      assert.strictEqual(
+        spliceFrontmatter('---\n# only a note\n---\nbody', { status: 'complete' }),
+        '---\n# only a note\nstatus: complete\n---\nbody',
+      );
+    });
+
+    test('an unparseable block is refused even when the write would be a no-op on its parse', () => {
+      assert.throws(() => spliceFrontmatter('---\nstatus: "x\n---\nbody', {}), UNPARSEABLE);
+    });
+
+    test('a blank line and a full-line comment after a regenerated key survive in place', () => {
+      assert.strictEqual(
+        setStatus('---\nstatus: testing\n\n# about updated\nupdated: 2026-01-01\n---\nbody'),
+        '---\nstatus: complete\n\n# about updated\nupdated: 2026-01-01\n---\nbody',
+      );
+    });
+
+    test('a comment before the first key survives when that key is regenerated', () => {
+      assert.strictEqual(
+        setStatus('---\n# header note\nstatus: testing\nphase: 01\n---\nbody'),
+        '---\n# header note\nstatus: complete\nphase: 01\n---\nbody',
+      );
+    });
+
+    test('an unrecognized line in an unparseable block refuses the write', () => {
+      assert.throws(() => setStatus('---\nstatus: testing\n!!weird line\nupdated: x\n---\nbody'), UNPARSEABLE);
+    });
+
+    test('a quoted key after a regenerated key is kept once, not duplicated', () => {
+      assert.strictEqual(
+        setStatus('---\nstatus: testing\n"quoted key": v\n---\nbody'),
+        '---\nstatus: complete\n"quoted key": v\n---\nbody',
+      );
+    });
+
+    test('control: a parsed key absent from newObj is still dropped, its trailing comment kept', () => {
+      assert.strictEqual(
+        spliceFrontmatter('---\nstatus: testing\nwave: 1\n# note\nphase: 01\n---\nbody', { status: 'testing', phase: '01' }),
+        '---\nstatus: testing\n# note\nphase: 01\n---\nbody',
+      );
+    });
+
+    // Segment key detection agrees with the parser: the key is everything before the
+    // first `: ` (js-yaml reads `a:b: 1` as key `a:b`), so a kept key is never re-appended.
+    test('`a:b: 1` is key `a:b` — kept once, never duplicated as a regenerated `a:b`', () => {
+      assert.strictEqual(setStatus('---\na:b: 1\nstatus: t\n---\n'), '---\na:b: 1\nstatus: complete\n---\n');
+    });
+
+    test('`http://x: 1` is key `http://x` — kept once', () => {
+      assert.strictEqual(setStatus('---\nhttp://x: 1\nstatus: t\n---\n'), '---\nhttp://x: 1\nstatus: complete\n---\n');
+    });
+
+    test('a changed or appended key the parser would misread bare is emitted double-quoted', () => {
+      const changed = spliceFrontmatter('---\na:b: 1\nstatus: t\n---\n', { 'a:b': '2', status: 't' });
+      assert.strictEqual(changed, '---\n"a:b": 2\nstatus: t\n---\n');
+      assert.deepStrictEqual({ ...extractFrontmatter(changed) }, { 'a:b': '2', status: 't' });
+      const appended = spliceFrontmatter('---\nstatus: t\n---\n', { status: 't', 'a: b': 'v', '#x': 'w' });
+      assert.strictEqual(appended, '---\nstatus: t\n"a: b": v\n"#x": w\n---\n');
+      assert.deepStrictEqual({ ...extractFrontmatter(appended) }, { status: 't', 'a: b': 'v', '#x': 'w' });
+    });
+
+    test('an explicit `? k` / `: v` key cannot be matched to a key line — refused, not duplicated', () => {
+      assert.throws(() => setStatus('---\n? k\n: v\nstatus: t\n---\n'), UNRECONCILABLE);
+    });
+
+    test('a duplicate top-level key cannot be matched one-to-one — refused', () => {
+      assert.throws(() => setStatus('---\nstatus: a\nstatus: b\n---\n'), UNRECONCILABLE);
+    });
+
+    test('a flow-mapping block has no key lines — refused', () => {
+      assert.throws(() => setStatus('---\n{status: a, phase: 1}\n---\n'), UNRECONCILABLE);
+    });
+  });
+
+  // The frontmatter block is re-emitted with the document's own line ending — a CRLF
+  // document never gains a bare-LF line (found while implementing #5105).
+  describe('line endings', () => {
+    test('a CRLF document keeps CRLF on regenerated, kept, tail and appended lines', () => {
+      const doc = '---\r\nstatus: t\r\n\r\n# c\r\nx: 1\r\n---\r\nbody\r\n';
+      const out = spliceFrontmatter(doc, { ...extractFrontmatter(doc), status: 'complete', tags: ['a', 'b', 'c', 'd'] });
+      assert.strictEqual(
+        out,
+        '---\r\nstatus: complete\r\n\r\n# c\r\nx: 1\r\ntags:\r\n  - a\r\n  - b\r\n  - c\r\n  - d\r\n---\r\nbody\r\n',
+      );
+      assert.ok(!/(^|[^\r])\n/.test(out), 'no bare-LF line ending');
+    });
+
+    test('an LF document stays LF', () => {
+      assert.strictEqual(
+        spliceFrontmatter('---\nstatus: t\n---\nbody\n', { status: 'complete' }),
+        '---\nstatus: complete\n---\nbody\n',
+      );
+    });
+
+    test('a leading BOM is carried through, not treated as a document without frontmatter', () => {
+      assert.strictEqual(
+        spliceFrontmatter('\uFEFF---\nstatus: t\n---\nbody', { status: 'complete' }),
+        '\uFEFF---\nstatus: complete\n---\nbody',
+      );
+    });
+  });
+
+  // A column-0 continuation line (a multi-line quoted scalar, a flow collection split
+  // across lines) is part of its key's value, not a tail line to re-emit after a
+  // regenerated value (found while implementing #5105).
+  describe('multi-line values', () => {
+    const setKey = (content, key, value) => spliceFrontmatter(content, { ...extractFrontmatter(content), [key]: value });
+
+    for (const [label, doc] of [
+      ['double-quoted scalar', '---\ntitle: "foo\nbar baz"\nstatus: t\n---\nbody'],
+      ['single-quoted scalar', "---\ntitle: 'foo\nbar baz'\nstatus: t\n---\nbody"],
+      ['flow sequence', '---\ntitle: [a,\nb]\nstatus: t\n---\nbody'],
+      ['flow mapping', '---\ntitle: {a: x,\nc}\nstatus: t\n---\nbody'],
+      ['block scalar', '---\ntitle: |\n  one\n  two\nstatus: t\n---\nbody'],
+    ]) {
+      test(`a changed ${label} spanning column-0 lines is replaced whole`, () => {
+        const out = setKey(doc, 'title', 'X');
+        assert.strictEqual(out, '---\ntitle: X\nstatus: t\n---\nbody');
+        assert.deepStrictEqual({ ...extractFrontmatter(out) }, { title: 'X', status: 't' });
+      });
+    }
+
+    test('a full-line comment after a multi-line value stays in place when the value changes', () => {
+      assert.strictEqual(
+        setKey('---\ntags: [a,\nb]\n\n# about status\nstatus: t\n---\nbody', 'tags', ['c']),
+        '---\ntags: [c]\n\n# about status\nstatus: t\n---\nbody',
+      );
+    });
+
+    test('a `#` line inside a multi-line quoted scalar is value text, not a tail comment', () => {
+      assert.strictEqual(
+        setKey('---\ntitle: "foo\n# bar"\nstatus: t\n---\nbody', 'title', 'X'),
+        '---\ntitle: X\nstatus: t\n---\nbody',
+      );
+    });
+
+    test('an unchanged multi-line value is kept byte-identical when another key changes', () => {
+      assert.strictEqual(
+        setKey('---\ntitle: "foo\nbar baz"\nstatus: t\n---\nbody', 'status', 'complete'),
+        '---\ntitle: "foo\nbar baz"\nstatus: complete\n---\nbody',
+      );
+    });
+  });
+
+  // spliceFrontmatter re-parses the block it is about to return and refuses unless it
+  // reads back as exactly the intended object (found while implementing #5105).
+  describe('read-back post-condition', () => {
+    const VERIFY_FAILED = { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_SPLICE_VERIFY_FAILED' };
+
+    test('a nested key the writer cannot represent is refused on an existing block', () => {
+      assert.throws(() => spliceFrontmatter('---\nstatus: t\n---\nbody', { status: 't', meta: { 'a: b': 'x' } }), VERIFY_FAILED);
+    });
+
+    test('a nested key the writer cannot represent is refused when generating a new block', () => {
+      assert.throws(() => spliceFrontmatter('body', { meta: { 'a: b': 'x' } }), VERIFY_FAILED);
+    });
+
+    test('numbers and booleans read back as their string spelling and are accepted', () => {
+      const out = spliceFrontmatter('---\nstatus: t\n---\nbody', { status: 't', wave: 2, autonomous: true, meta: { n: 3 } });
+      assert.deepStrictEqual({ ...extractFrontmatter(out) }, { status: 't', wave: '2', autonomous: 'true', meta: { n: '3' } });
+    });
+
+    test('a nested value holding `: ` or ` #` at every depth reads back verbatim', () => {
+      const intended = { status: 't', meta: { a: 'x: y', deep: { b: 'p #q', list: ['r: s', 'u'] } } };
+      const out = spliceFrontmatter('---\nstatus: t\n---\nbody', intended);
+      assert.deepStrictEqual({ ...extractFrontmatter(out) }, intended);
+    });
+
+    test('an inline-list item holding a comma or bracket reads back as one item', () => {
+      const out = spliceFrontmatter('---\nstatus: t\n---\nbody', { status: 't', tags: ['a, b', 'c]'] });
+      assert.deepStrictEqual({ ...extractFrontmatter(out) }, { status: 't', tags: ['a, b', 'c]'] });
+    });
+  });
+
+  // The writer locates the block through the same fence owner as every reader, so a block
+  // holding only a blank line is spliced in place (the blank line kept), never shadowed by a
+  // second block prepended above it.
+  test('a block holding only a blank line is spliced in place', () => {
+    const doc = '---\n\n---\nbody';
+    assert.deepStrictEqual({ ...extractFrontmatter(doc) }, {});
+    assert.strictEqual(spliceFrontmatter(doc, { status: 'complete' }), '---\n\nstatus: complete\n---\nbody');
+  });
+
+  // The no-frontmatter path quotes keys the same way the existing-block path does.
+  describe('generating a new block', () => {
+    test('a key the parser would misread bare is emitted double-quoted', () => {
+      const out = spliceFrontmatter('body', { 'a: b': 'v', '#x': 'w', 'n\nl': 'z' });
+      assert.strictEqual(out, '---\n"a: b": v\n"#x": w\n"n\\nl": z\n---\n\nbody');
+      assert.deepStrictEqual({ ...extractFrontmatter(out) }, { 'a: b': 'v', '#x': 'w', 'n\nl': 'z' });
+    });
+  });
 });
 
 // ─── parseMustHavesBlock ────────────────────────────────────────────────────
@@ -455,6 +723,17 @@ describe('spliceFrontmatter', () => {
 function crlf(s) {
   return s.replace(/\n/g, '\r\n');
 }
+
+// Found while implementing #5105: parseMustHavesBlock located the block with a private
+// fence regex that missed a leading BOM, so a BOM PLAN.md read as having no must_haves.
+describe('parseMustHavesBlock: fence location', () => {
+  const PLAN = '---\nphase: 01\nmust_haves:\n  artifacts:\n    - path: a.md\n      provides: X\n---\nbody\n';
+  for (const [label, doc] of [['LF', PLAN], ['CRLF', crlf(PLAN)], ['BOM', '\uFEFF' + PLAN]]) {
+    test(`reads must_haves from a ${label} document`, () => {
+      assert.deepStrictEqual(parseMustHavesBlock(doc, 'artifacts'), [{ path: 'a.md', provides: 'X' }]);
+    });
+  }
+});
 
 describe('parseMustHavesBlock', () => {
   test('extracts truths as string array', () => {
@@ -2904,7 +3183,7 @@ describe('extractFrontmatter BOM tolerance (#2977)', () => {
       { label: 'NBSP', ch: ' ', escaped: '\\_' },
       { label: 'LINE SEPARATOR', ch: ' ', escaped: '\\L' },
       { label: 'PARAGRAPH SEPARATOR', ch: ' ', escaped: '\\P' },
-      { label: 'BOM', ch: '﻿', escaped: '\\uFEFF' },
+      { label: 'BOM', ch: '\uFEFF', escaped: '\\uFEFF' },
       { label: 'lone high surrogate', ch: '\uD800', escaped: '\\uD800' },
     ];
 
@@ -3004,3 +3283,42 @@ describe('extractFrontmatter BOM tolerance (#2977)', () => {
     });
   });
 }
+
+// ─── spliceFrontmatter: the shipped parse budget at full size ──────────────
+// tests/frontmatter-splice.property.test.cjs drives the parse-budget boundary with a small
+// `parseBudgetChars` so the frontmatter-splice Stryker shard (which re-runs that file once per covering
+// mutant) stays inside its job budget. These cases pin the DEFAULT — `SPLICE_PARSE_BUDGET_CHARS`,
+// used when no option is passed — at full size; this file runs in the normal suite only.
+describe('spliceFrontmatter: the default parse budget is SPLICE_PARSE_BUDGET_CHARS', () => {
+  const { SPLICE_PARSE_BUDGET_CHARS } = require('../gsd-core/bin/lib/frontmatter.cjs');
+  const TOO_COMPLEX = { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_TOO_COMPLEX' };
+  // `k: <A×n>` changed to `k: B` parses exactly twice: the old value (`k: ` + n, plus one) and
+  // the regenerated one (its length, plus one).
+  const regenerated = reconstructFrontmatter({ k: 'B' });
+  const docParsing = (total) => `---\nk: ${'A'.repeat(total - (3 + 1) - (regenerated.length + 1))}\n---\nbody\n`;
+
+  for (const [label, total, refused] of [
+    ['limit - 1', SPLICE_PARSE_BUDGET_CHARS - 1, false],
+    ['limit', SPLICE_PARSE_BUDGET_CHARS, false],
+    ['limit + 1', SPLICE_PARSE_BUDGET_CHARS + 1, true],
+  ]) {
+    test(`with no option, a splice parsing exactly ${label} characters ${refused ? 'is refused' : 'is written'}`, () => {
+      const write = () => spliceFrontmatter(docParsing(total), { k: 'B' });
+      if (refused) {
+        assert.throws(write, (err) => err.code === 'FRONTMATTER_TOO_COMPLEX' && err.message.includes(`more than ${SPLICE_PARSE_BUDGET_CHARS} characters`));
+      } else {
+        assert.strictEqual(write(), `---\n${regenerated}\n---\nbody\n`);
+      }
+    });
+  }
+
+  test('with no option, a `|+` key followed by 20000 blank lines is refused, not stalled', () => {
+    const doc = `---\na: |+\n  x\n${'\n'.repeat(20000)}b: 1\n---\nbody\n`;
+    assert.throws(() => spliceFrontmatter(doc, { ...extractFrontmatter(doc), b: '2' }), TOO_COMPLEX);
+  });
+
+  test('with no option, a changed 800-item list holding 20 quoted ` #` per item is refused, not stalled', () => {
+    const doc = `---\nl:\n${`  - "v${' #h'.repeat(20)}"\n`.repeat(800)}---\nbody\n`;
+    assert.throws(() => spliceFrontmatter(doc, { ...extractFrontmatter(doc), l: ['a'] }), TOO_COMPLEX);
+  });
+});

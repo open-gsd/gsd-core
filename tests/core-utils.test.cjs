@@ -643,6 +643,20 @@ describe('extractOneLinerFromBody', () => {
     assert.strictEqual(coreUtils.extractOneLinerFromBody(''), null);
   });
 
+  // Found while implementing #5105: the body starts after the block the one fence owner finds.
+  // The old strip regex missed a BOM block and closed on a `--- x` line, so a Summary-shaped
+  // YAML comment inside the frontmatter was read as the body's one-liner.
+  for (const [label, content] of [
+    ['a BOM block', '\uFEFF---\n# Summary\n**Frontmatter comment**\n---\n\n## Summary\n\n**Body one-liner**\n'],
+    ['a block with a `--- x` line', '---\nnote: x\n--- x\n# Summary\n**Frontmatter comment**\n---\n\n## Summary\n\n**Body one-liner**\n'],
+    ['an adjacent empty block', '---\n---\n# Summary\n\n**Body one-liner**\n'],
+    ['a CRLF block', '---\r\n# Summary\r\n**Frontmatter comment**\r\n---\r\n\r\n## Summary\r\n\r\n**Body one-liner**\r\n'],
+  ]) {
+    test(`${label}: the one-liner comes from the body, never the frontmatter`, () => {
+      assert.strictEqual(coreUtils.extractOneLinerFromBody(content), 'Body one-liner');
+    });
+  }
+
   // #3170: extractOneLinerFromBody anchors to a Summary/Overview/Accomplishments
   // heading (the function is summary-specific — both callers extract a SUMMARY
   // deliverable one-liner). These fixtures use Summary-shaped headings; the

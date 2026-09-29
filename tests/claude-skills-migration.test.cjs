@@ -148,7 +148,7 @@ describe('convertClaudeCommandToClaudeSkill', () => {
       'description: Test command',
       '---',
       body,
-    ].join('');
+    ].join('\n');
 
     const result = convertClaudeCommandToClaudeSkill(input, 'gsd-test');
     // Custom structure preserved

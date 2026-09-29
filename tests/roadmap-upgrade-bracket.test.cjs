@@ -1080,6 +1080,56 @@ describe('roadmap upgrade --convention bracket', () => {
       assert.equal(level.get('01-02'), 1);
     });
 
+    // Found while implementing #5105: a PLAN.md whose frontmatter the shared writer
+    // refuses to splice (here a duplicate key) still fails the migration closed, and
+    // the error names the full file path and the writer's refusal code.
+    test('an unreconcilable PLAN.md fails closed naming its path and the refusal code', (t) => {
+      const phaseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-bracket-unreconcilable-'));
+      t.after(() => cleanup(phaseDir));
+      const dependent = '---\nphase: "03A"\nplan: "02"\nplan: "02"\ndepends_on: ["03a-01"]\n---\n\nSecond.\n';
+      fs.writeFileSync(path.join(phaseDir, '03A-01-PLAN.md'), '---\nphase: "03A"\nplan: "01"\n---\n', 'utf8');
+      fs.writeFileSync(path.join(phaseDir, '03A-02-PLAN.md'), dependent, 'utf8');
+
+      assert.throws(
+        () => computeDependsOnRewrites(phaseDir, '03A', '01', [
+          { oldName: '03A-01-PLAN.md', newName: '01-01-PLAN.md' },
+          { oldName: '03A-02-PLAN.md', newName: '01-02-PLAN.md' },
+        ]),
+        (err) => {
+          assert.equal(err.code, 'FRONTMATTER_KEYS_UNRECONCILABLE');
+          assert.ok(err.message.includes(JSON.stringify(path.join(phaseDir, '03A-02-PLAN.md'))), err.message);
+          assert.ok(err.message.includes('FRONTMATTER_KEYS_UNRECONCILABLE'), err.message);
+          return true;
+        },
+      );
+      assert.equal(fs.readFileSync(path.join(phaseDir, '03A-02-PLAN.md'), 'utf8'), dependent);
+    });
+
+    // Found while implementing #5105: a depends_on block list with a comment between its
+    // items cannot be rewritten without dropping that comment, so the migration fails closed
+    // naming the PLAN.md and FRONTMATTER_COMMENT_WOULD_BE_LOST, and leaves the file untouched.
+    test('a PLAN.md whose depends_on list holds a comment between items fails closed naming its path', (t) => {
+      const phaseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-bracket-dep-comment-'));
+      t.after(() => cleanup(phaseDir));
+      const dependent = '---\nphase: "03A"\nplan: "02"\ndepends_on:\n  - "03a-01"\n  # ordering note: keep\n  - "external-01"\n---\n\nSecond.\n';
+      fs.writeFileSync(path.join(phaseDir, '03A-01-PLAN.md'), '---\nphase: "03A"\nplan: "01"\n---\n', 'utf8');
+      fs.writeFileSync(path.join(phaseDir, '03A-02-PLAN.md'), dependent, 'utf8');
+
+      assert.throws(
+        () => computeDependsOnRewrites(phaseDir, '03A', '01', [
+          { oldName: '03A-01-PLAN.md', newName: '01-01-PLAN.md' },
+          { oldName: '03A-02-PLAN.md', newName: '01-02-PLAN.md' },
+        ]),
+        (err) => {
+          assert.equal(err.code, 'FRONTMATTER_COMMENT_WOULD_BE_LOST');
+          assert.ok(err.message.includes(JSON.stringify(path.join(phaseDir, '03A-02-PLAN.md'))), err.message);
+          assert.ok(err.message.includes('FRONTMATTER_COMMENT_WOULD_BE_LOST'), err.message);
+          return true;
+        },
+      );
+      assert.equal(fs.readFileSync(path.join(phaseDir, '03A-02-PLAN.md'), 'utf8'), dependent);
+    });
+
     function setupDependsOnRewriteFixture() {
       const cwd = materializeFixture('legacy-multi-milestone');
       // Replace the roadmap with a single phase ("3") that is the ONLY phase

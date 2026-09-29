@@ -2738,4 +2738,39 @@ describe('#4802: acknowledge refuses targets whose frontmatter fails to parse', 
     assert.strictEqual(fs.readFileSync(filePath, 'utf-8'), before,
       'the file must be byte-identical — no splice may discard frontmatter');
   });
+
+  // Found while implementing #5105: a block that parses to a bare scalar (a lone
+  // no-space `status:open` line) carries no FRONTMATTER_UNPARSEABLE marker, yet is
+  // just as unsplicable — the writer's refusal (its one owner) covers it too.
+  test('threads: a bare-scalar frontmatter block (`status:open`) is refused, file byte-identical', () => {
+    const threadsDir = planningPath('threads');
+    fs.mkdirSync(threadsDir, { recursive: true });
+    const filePath = path.join(threadsDir, 'nospace.md');
+    const before = '---\nstatus:open\n---\n# Thread\n';
+    fs.writeFileSync(filePath, before, 'utf-8');
+
+    const result = ack(tmpDir, ['--category', 'threads', '--slug', 'nospace', '--milestone', 'v1.0']);
+    assert.ok(!result.success, `acknowledge must refuse; stdout: ${result.output}\nstderr: ${result.error}`);
+    assert.ok(
+      (result.error || '').includes('not parseable YAML') && (result.error || '').includes('nospace.md'),
+      `the refusal must name the file and the unparseable frontmatter; stderr: ${result.error}`,
+    );
+    assert.strictEqual(fs.readFileSync(filePath, 'utf-8'), before);
+  });
+
+  test('threads: a duplicate-key frontmatter block is refused as unreconcilable, file byte-identical', () => {
+    const threadsDir = planningPath('threads');
+    fs.mkdirSync(threadsDir, { recursive: true });
+    const filePath = path.join(threadsDir, 'dup-key.md');
+    const before = '---\nstatus: open\nstatus: resolved\n---\n# Thread\n';
+    fs.writeFileSync(filePath, before, 'utf-8');
+
+    const result = ack(tmpDir, ['--category', 'threads', '--slug', 'dup-key', '--milestone', 'v1.0']);
+    assert.ok(!result.success, `acknowledge must refuse; stdout: ${result.output}\nstderr: ${result.error}`);
+    assert.ok(
+      (result.error || '').includes('cannot be matched one-to-one') && (result.error || '').includes('dup-key.md'),
+      `the refusal must name the file and the reason; stderr: ${result.error}`,
+    );
+    assert.strictEqual(fs.readFileSync(filePath, 'utf-8'), before);
+  });
 });

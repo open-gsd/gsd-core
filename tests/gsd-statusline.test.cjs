@@ -24,6 +24,23 @@ const {
 } = require('../hooks/gsd-statusline.js');
 const { cleanup, saveSessionEnv, restoreSessionEnv, clearSessionEnv } = require('./helpers.cjs');
 
+// Found while implementing #5105: the statusline reads STATE.md's frontmatter from the block the
+// one fence owner finds. Its old regex missed a BOM block and closed on a `--- x` line, dropping
+// every key after it.
+describe('parseStateMd reads the frontmatter block the one fence owner finds', () => {
+  for (const [label, content] of [
+    ['a BOM before the block', '\uFEFF---\nstatus: executing\nmilestone: v1.2\n---\n\n# State\n'],
+    ['a `--- x` line before the keys', '---\nnote: x\n--- x\nstatus: executing\nmilestone: v1.2\n---\n\n# State\n'],
+    ['a block closed by the lenient `----`', '---\nstatus: executing\nmilestone: v1.2\n----\n\n# State\n'],
+  ]) {
+    test(`${label}`, () => {
+      const state = parseStateMd(content);
+      assert.strictEqual(state.status, 'executing');
+      assert.strictEqual(state.milestone, 'v1.2');
+    });
+  }
+});
+
 /**
  * A single hooks/gsd-statusline.js spawn, no fan-out -- the "long-lived
  * status renderer" class (renders context-window percentage, git

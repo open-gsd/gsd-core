@@ -223,6 +223,8 @@
  * Loop Extension Point Queries (ADR-857 phase 3c):
  *   loop render-hooks <point>            Resolve + render active Capability hooks at a loop point
  *                                        [--config-dir <path>] [--runtime <r>] [--active-cap <capId>]
+ *                                        [--after-fingerprint <phaseDir>] (#5105: skip verify:post
+ *                                        steps whose declared artifact already exists in phaseDir)
  *                                        Returns JSON envelope { point, activeHooks, rendered }
  *                                        Valid points: discuss:pre/post, plan:pre/post,
  *                                        execute:pre/wave:pre/wave:post/post, verify:pre/post, ship:pre/post
@@ -276,7 +278,7 @@ try {
 
 const { ExitError, runMain, resolveContractVersion } = require('./lib/cli-exit.cjs');
 const io = require('./lib/io.cjs');
-const { error, ERROR_REASON, setJsonErrorMode, output, formatDiagnosticToken } = io;
+const { error, ERROR_REASON, setJsonErrorMode, output, formatDiagnosticToken, captureStdoutSyncWrites, resolveAtFileOutput } = io;
 const projectRoot = require('./lib/project-root.cjs');
 // Resolve findProjectRoot lazily at call time rather than binding it at module
 // load. It is sourced from project-root.cjs; a call-time lookup is robust
@@ -3076,8 +3078,13 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             const coverage = require('./lib/coverage.cjs');
             const options = parseNamedArgsOrExit(args, { valueFlags: ['summary', 'file'], positionals: 2 }, error);
             coverage.cmdClassify(cwd, options, raw);
+          } else if (subcommand === 'complete-session') {
+            const uat = require('./lib/uat.cjs');
+            const uatPath = args[2];
+            const options = parseNamedArgsOrExit(args, { valueFlags: ['message'], positionals: 3 }, error);
+            return uat.cmdUatCompleteSession(cwd, uatPath, { message: options.message }, raw);
           } else {
-            error('Unknown uat subcommand. Available: render-checkpoint, classify-coverage', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+            error('Unknown uat subcommand. Available: render-checkpoint, classify-coverage, complete-session', ERROR_REASON.SDK_UNKNOWN_COMMAND);
           }
   }
 
@@ -3175,10 +3182,27 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               }
               loopRuntime = value;
             }
+            // --after-fingerprint <phaseDir> (#5105 R2): gate out verify:post
+            // steps whose declared artifact already exists in phaseDir.
+            let loopAfterFingerprint = undefined;
+            const afterFpEqArg = args.find(arg => arg.startsWith('--after-fingerprint='));
+            const afterFpIdx = args.indexOf('--after-fingerprint');
+            if (afterFpEqArg) {
+              const value = afterFpEqArg.slice('--after-fingerprint='.length).trim();
+              if (!value) error('Missing value for --after-fingerprint', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+              loopAfterFingerprint = value;
+            } else if (afterFpIdx !== -1) {
+              const value = args[afterFpIdx + 1];
+              if (!value || value.startsWith('--')) {
+                error('Missing value for --after-fingerprint', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+              }
+              loopAfterFingerprint = value;
+            }
             loopResolver.cmdLoopRenderHooks(cwd, args[2], raw, {
               configDir: loopConfigDir ? path.resolve(loopConfigDir) : undefined,
               activeCap: loopActiveCap,
               runtime: loopRuntime,
+              afterFingerprint: loopAfterFingerprint,
             });
           } else {
             error(
@@ -3720,13 +3744,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       || relPath.startsWith('agents/')
       || relPath.startsWith('commands/');
     if (isFrontmatterSurface) {
-      const block = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content);
+      // The block is the one the one fence owner finds (found while implementing #5105).
+      const found = frontmatter.frontmatterRegion(content);
       const missingFields = [];
-      if (!block) {
+      if (!found || !found.terminated) {
         missingFields.push('name', 'description');
       } else {
-        if (!/^name:\s*\S/m.test(block[1])) missingFields.push('name');
-        if (!/^description:\s*\S/m.test(block[1])) missingFields.push('description');
+        if (!/^name:\s*\S/m.test(found.region)) missingFields.push('name');
+        if (!/^description:\s*\S/m.test(found.region)) missingFields.push('description');
       }
       if (missingFields.length > 0) {
         warnings.push({
@@ -5407,52 +5432,9 @@ async function main() {
   fs.writeSync(1, resolveAtFileOutput(captured));
 }
 
-function captureStdoutSyncWrites(run) {
-  const originalWriteSync = fs.writeSync;
-  let captured = '';
-
-  fs.writeSync = function patchedWriteSync(fd, data, ...rest) {
-    if (fd === 1) {
-      if (Buffer.isBuffer(data)) {
-        captured += data.toString('utf-8');
-        return data.length;
-      }
-      const text = String(data);
-      captured += text;
-      let encoding = 'utf-8';
-      if (typeof rest[1] === 'string') encoding = rest[1];
-      return Buffer.byteLength(text, encoding);
-    }
-    return originalWriteSync.call(fs, fd, data, ...rest);
-  };
-
-  const restore = () => {
-    fs.writeSync = originalWriteSync;
-  };
-
-  return Promise.resolve()
-    .then(() => run())
-    .then(() => {
-      restore();
-      return captured;
-    }, (err) => {
-      restore();
-      // The wrapped command may have written to stdout BEFORE it threw — e.g. a --raw
-      // command that emits a JSON result/error envelope and THEN throws ExitError to set a
-      // non-zero exit code (capability set/disable on an unknown id). Without this flush that
-      // captured output is silently discarded (the success-path flush at the call site never
-      // runs on a throw). Emit it now; the error still propagates so the exit code is preserved.
-      if (captured) {
-        try { originalWriteSync.call(fs, 1, resolveAtFileOutput(captured)); } catch { /* best-effort flush */ }
-      }
-      throw err;
-    });
-}
-
-function resolveAtFileOutput(captured) {
-  if (!captured.startsWith('@file:')) return captured;
-  return fs.readFileSync(captured.slice(6), 'utf-8');
-}
+// captureStdoutSyncWrites and resolveAtFileOutput moved to src/io.cts
+// (gsd-core/bin/lib/io.cjs) — the ONE shared pair (#5105 S9, review finding
+// 7), also used by uat.cts's cmdUatCompleteSession.
 
 // A plain object root/intermediate value — everything else (null, an array,
 // a number, a string, a boolean) is treated as non-object for NAMED-key

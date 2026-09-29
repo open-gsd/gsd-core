@@ -28,9 +28,15 @@
  *   - capability-state.cjs (resolveCapabilityRuntimeState — for capabilities list)
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output: coreOutput, error: coreError } = ioMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import verificationMod = require('./verification.cjs');
+const { resolvePhaseArtifactFile } = verificationMod;
+import { requireSafePath, PathAcceptance } from './security.cjs';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderModule = require('./config-loader.cjs');
@@ -609,6 +615,71 @@ function resolveActiveHooksForPoint(
   return { point: resolved.point, activeHooks: resolved.activeHooks, warnings: combinedWarnings };
 }
 
+// ─── #5105 R2: post-fingerprint hook gating ────────────────────────────────
+
+interface SkippedHook {
+  capId: string;
+  kind: 'step';
+  ref?: HookRef;
+  reason: 'produces-present';
+  artifacts: string[];
+}
+
+/**
+ * #5105 R2: a `produces` entry `p` "exists" in `phaseDir` when it resolves via
+ * the SAME phase-artifact selection core `resolveVerificationFile`/
+ * `resolveUatFile` delegate to (`resolvePhaseArtifactFile`, `verification.cts`)
+ * — no second derivation of "which file counts as this phase's artifact"
+ * (#3473 F2's generative-divergence class). That core is pure and takes an
+ * already-read directory listing of REGULAR-file names only, so a directory
+ * of the same name, or a suffixed near-miss (`p.bak`, `p.tmp`), never counts,
+ * and `phaseDirName` scoping rejects a stray cross-phase file (`02-SECURITY.md`
+ * inside a `01-foo` phase dir) exactly as the aggregate scans do.
+ */
+function producesEntryPresent(fileNames: readonly string[], phaseDirName: string, p: string): boolean {
+  return resolvePhaseArtifactFile([...fileNames], p, { phaseDirName, allowBare: true }) !== null;
+}
+
+/**
+ * #5105 R2: partition `activeHooks` by whether every one of a `kind:"step"`
+ * hook's declared `produces` artifacts already exists (as a regular file)
+ * directly in `phaseDir`. A hook with `produces: []` (e.g. mempalace-capture),
+ * and every gate/contribution, passes through unchanged in `activeHooks`.
+ *
+ * Throws when `phaseDir` cannot be read (fail closed — the caller converts
+ * this to a `coreError` exit, never a silent pass-everything-through).
+ */
+function partitionHooksByFingerprint(
+  activeHooks: readonly ActiveHook[],
+  phaseDir: string,
+): { activeHooks: ActiveHook[]; skippedHooks: SkippedHook[] } {
+  const entries = fs.readdirSync(phaseDir, { withFileTypes: true });
+  const fileNames = entries.filter((e) => e.isFile()).map((e) => e.name);
+  const phaseDirName = path.basename(phaseDir);
+
+  const kept: ActiveHook[] = [];
+  const skipped: SkippedHook[] = [];
+  for (const hook of activeHooks) {
+    if (hook.kind !== 'step' || !hook.produces || hook.produces.length === 0) {
+      kept.push(hook);
+      continue;
+    }
+    const everyProduced = hook.produces.every((p) => producesEntryPresent(fileNames, phaseDirName, p));
+    if (everyProduced) {
+      skipped.push({
+        capId: hook.capId,
+        kind: 'step',
+        ref: hook.ref,
+        reason: 'produces-present',
+        artifacts: [...hook.produces],
+      });
+    } else {
+      kept.push(hook);
+    }
+  }
+  return { activeHooks: kept, skippedHooks: skipped };
+}
+
 function cmdLoopRenderHooks(
   cwd: string,
   point: string,
@@ -636,6 +707,37 @@ function cmdLoopRenderHooks(
     return;
   }
 
+  // #5105 R2: --after-fingerprint <phaseDir> — gate out verify:post steps
+  // whose declared artifact(s) already exist in phaseDir (execute-phase
+  // already dispatched them before its own fingerprint; a re-dispatch here
+  // would write a post-fingerprint covered path for no reason, #4981/#4887).
+  const afterFingerprintDir = typeof options['afterFingerprint'] === 'string' ? options['afterFingerprint'] : undefined;
+  let skippedHooks: SkippedHook[] | undefined;
+  if (afterFingerprintDir !== undefined) {
+    // #5105 S10: resolve relative to the handler's own cwd (never the
+    // process cwd) and fail closed if it escapes the project root — the same
+    // `requireSafePath` seam `uat.cts`'s `cmdUatCompleteSession` uses for its
+    // own path argument.
+    let safePhaseDir: string;
+    try {
+      safePhaseDir = requireSafePath(afterFingerprintDir, cwd, '--after-fingerprint directory', PathAcceptance.AbsoluteInsideRoot);
+    } catch (err: unknown) {
+      const msg = (err instanceof Error) ? err.message : String(err);
+      coreError(`--after-fingerprint directory is unsafe: ${msg}`);
+      return;
+    }
+    let partition: { activeHooks: ActiveHook[]; skippedHooks: SkippedHook[] };
+    try {
+      partition = partitionHooksByFingerprint(result.activeHooks, safePhaseDir);
+    } catch (err: unknown) {
+      const msg = (err instanceof Error) ? err.message : String(err);
+      coreError(`--after-fingerprint phase directory not found or unreadable: ${afterFingerprintDir} (${msg})`);
+      return;
+    }
+    result = { point: result.point, activeHooks: partition.activeHooks, warnings: result.warnings };
+    skippedHooks = partition.skippedHooks;
+  }
+
   if (activeCapId !== undefined) {
     const isActive = result.activeHooks.some((h) => h.capId === activeCapId);
     process.stdout.write(isActive ? 'true\n' : 'false\n');
@@ -648,6 +750,7 @@ function cmdLoopRenderHooks(
     activeHooks: ActiveHook[];
     rendered: string;
     warnings?: string[];
+    skippedHooks?: SkippedHook[];
   } = {
     point: result.point,
     activeHooks: result.activeHooks,
@@ -655,6 +758,9 @@ function cmdLoopRenderHooks(
   };
   if (result.warnings.length > 0) {
     envelope.warnings = result.warnings;
+  }
+  if (skippedHooks !== undefined) {
+    envelope.skippedHooks = skippedHooks;
   }
 
   coreOutput(envelope, raw);
@@ -665,6 +771,7 @@ export = {
   renderLoopHooks,
   cmdLoopRenderHooks,
   resolveActiveHooksForPoint,
+  partitionHooksByFingerprint,
   // Exported for tests
   _getNestedConfigValue,
   _resolveActivationValue,

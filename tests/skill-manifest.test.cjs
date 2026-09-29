@@ -51,6 +51,25 @@ describe('skill-manifest', () => {
     cleanup(homeDir);
   });
 
+  // Found while implementing #5105: TRIGGER lines are read from the body after the block the
+  // one fence owner finds. The old regex ended the block at any `---` followed by a line end —
+  // including a value ending in `---` — and saw no block at all behind a BOM.
+  for (const [label, name, skillMd] of [
+    ['a value ending in `---`', 'my-trig', '---\nname: my-trig\ndescription: d\nnote: ends---\nTRIGGER when: frontmatter line\n---\n\nTRIGGER when: body line\n'],
+    ['a BOM before the block', 'my-bom', '\uFEFF---\nname: my-bom\ndescription: d\n---\n\nTRIGGER when: body line\n'],
+  ]) {
+    test(`triggers come from the body only, for ${label}`, () => {
+      const skillDir = path.join(tmpDir, '.claude', 'skills', name);
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skillMd);
+      const result = runGsdTools(['skill-manifest'], tmpDir, { HOME: homeDir, USERPROFILE: homeDir });
+      assert.ok(result.success, `Command should succeed: ${result.error || result.output}`);
+      const skill = JSON.parse(result.output).skills.find((s) => s.name === name);
+      assert.ok(skill, `${name} is listed`);
+      assert.deepStrictEqual(skill.triggers, ['body line']);
+    });
+  }
+
   test('returns normalized inventory across canonical roots', () => {
     // On Windows, os.homedir() reads USERPROFILE (not HOME). The SUT scans
     // global skill roots via os.homedir(), so the test must also override

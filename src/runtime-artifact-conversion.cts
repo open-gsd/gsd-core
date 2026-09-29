@@ -36,6 +36,7 @@ import capabilityRegistry = require('./capability-registry.cjs');
 import hostIntegration = require('./host-integration.cjs');
 import { posixNormalize } from './shell-command-projection.cjs';
 import frontmatterModule = require('./frontmatter.cjs');
+import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { escapeRegex as escapeRegExp } from './pattern.cjs';
 import { scanFencedBlocks } from './markdown-sectionizer.cjs';
 // #2870: install-scope.cts is a leaf-tier sibling (imports only
@@ -754,9 +755,12 @@ function appendAgentTools(content: string, grants: string[]): string {
   if (grants.length === 0) return content;
   const eol = content.includes('\r\n') ? '\r\n' : '\n';
   const lines = content.split(eol);
-  if (lines[0] !== '---') return content;
-  const frontmatterEnd = lines.indexOf('---', 1);
-  if (frontmatterEnd === -1) return content;
+  // The block is the one the one fence owner finds; `frontmatterEnd` is its closing fence's
+  // line index in `lines`.
+  const fence = locateFrontmatterFence(content);
+  if (!fence?.closed) return content;
+  const frontmatterEnd = content.slice(0, fence.closingStart).split(eol).length - 1;
+  if (frontmatterEnd < 1) return content;
   const toolsIndex = lines.findIndex((line, index) => index < frontmatterEnd && /^tools:[ \t]*(.*)$/.test(line));
   if (toolsIndex === -1) return content;
 
@@ -1148,19 +1152,20 @@ function yamlIdentifier(value) {
   return yamlQuote(text);
 }
 
+/**
+ * The frontmatter YAML (trimmed) and everything after the closing fence line's text, for the
+ * block the one fence owner (`locateFrontmatterFence`) finds — so a `---` inside a value (a
+ * description that mentions `a---b`) cannot end the block early.
+ */
 function extractFrontmatterAndBody(content) {
-  if (!content.startsWith('---')) {
-    return { frontmatter: null, body: content };
-  }
-
-  const endIndex = content.indexOf('---', 3);
-  if (endIndex === -1) {
+  const fence = locateFrontmatterFence(content);
+  if (!fence?.closed) {
     return { frontmatter: null, body: content };
   }
 
   return {
-    frontmatter: content.substring(3, endIndex).trim(),
-    body: content.substring(endIndex + 3),
+    frontmatter: content.slice(fence.openEnd, fence.bodyEnd).trim(),
+    body: content.slice(fence.closingFenceEnd),
   };
 }
 
@@ -2074,19 +2079,11 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
   // Runtime-neutral agent name replacement (#766)
   convertedContent = neutralizeAgentReferences(convertedContent, 'AGENTS.md');
 
-  // Check if content has frontmatter
-  if (!convertedContent.startsWith('---')) {
+  // The frontmatter block, as the one fence owner finds it (none → nothing to convert).
+  const { frontmatter, body } = extractFrontmatterAndBody(convertedContent);
+  if (frontmatter === null) {
     return convertedContent;
   }
-
-  // Find the end of frontmatter
-  const endIndex = convertedContent.indexOf('---', 3);
-  if (endIndex === -1) {
-    return convertedContent;
-  }
-
-  const frontmatter = convertedContent.substring(3, endIndex).trim();
-  const body = convertedContent.substring(endIndex + 3);
 
   // Parse frontmatter line by line (simple YAML parsing)
   const lines = frontmatter.split('\n');
@@ -2257,19 +2254,11 @@ function convertClaudeToKiloFrontmatter(content, { isAgent = false, modelOverrid
   // Runtime-neutral agent name replacement (#766)
   convertedContent = neutralizeAgentReferences(convertedContent, 'AGENTS.md');
 
-  // Check if content has frontmatter
-  if (!convertedContent.startsWith('---')) {
+  // The frontmatter block, as the one fence owner finds it (none → nothing to convert).
+  const { frontmatter, body } = extractFrontmatterAndBody(convertedContent);
+  if (frontmatter === null) {
     return convertedContent;
   }
-
-  // Find the end of frontmatter
-  const endIndex = convertedContent.indexOf('---', 3);
-  if (endIndex === -1) {
-    return convertedContent;
-  }
-
-  const frontmatter = convertedContent.substring(3, endIndex).trim();
-  const body = convertedContent.substring(endIndex + 3);
 
   // Parse frontmatter line by line (simple YAML parsing)
   const lines = frontmatter.split('\n');
@@ -2771,16 +2760,13 @@ function convertClaudeAgentToZcodeAgent(content) {
   // present. The unchanged scan below still preserves byte-identical content.
   if (!content.includes('mcp__') && !content.includes('\\')) return content;
 
+  // The block is the one the one fence owner finds; unterminated (or absent) → leave verbatim.
+  // The rewrite below re-joins lines on '\n', so a CRLF block is left verbatim too rather than
+  // given mixed line endings.
+  const fence = locateFrontmatterFence(content);
+  if (!fence?.closed || fence.eol !== '\n') return content;
   const lines = content.split('\n');
-  if (lines[0] !== '---') return content;
-  let fmEnd = -1;
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i] === '---') {
-      fmEnd = i;
-      break;
-    }
-  }
-  if (fmEnd === -1) return content; // unterminated frontmatter — leave verbatim
+  const fmEnd = content.slice(0, fence.closingStart).split('\n').length - 1;
 
   const out = [];
   let changed = false;
@@ -3949,8 +3935,8 @@ function deriveAgentName(fileName: string): string {
  * `applyAgentFrontmatterExtensions` below for the orchestration that calls it.
  *
  * The function:
- *   - Detects the file's EOL (CRLF if the first `---` line ends with \r\n,
- *     otherwise LF).
+ *   - Reads the block the one fence owner (`locateFrontmatterFence`) finds, and
+ *     its EOL (CRLF if the opening `---` line ends with \r\n, otherwise LF).
  *   - Skips injection if an `effort:` key already exists in the frontmatter
  *     (idempotent).
  *   - Inserts `effort: <value>` immediately before the closing `---` delimiter,
@@ -3959,20 +3945,15 @@ function deriveAgentName(fileName: string): string {
  *   - Returns the original content unchanged when no YAML frontmatter is found.
  */
 function injectEffortFrontmatter(content: string, effortValue: string): string {
-  const eol = /^---\r\n/.test(content) ? '\r\n' : '\n';
-  const fmRe = /^---\r?\n([\s\S]*?)^---\r?$/m;
-  const match = fmRe.exec(content);
-  if (!match) return content; // no YAML frontmatter — leave unchanged
+  const fence = locateFrontmatterFence(content);
+  if (!fence?.closed) return content; // no YAML frontmatter — leave unchanged
 
-  const fmBody = match[1]; // content between the two `---` lines
+  const fmBody = content.slice(fence.openEnd, fence.closingStart); // content between the two fences
   if (/^effort:/m.test(fmBody)) return content;
 
-  const openLen = 3 + eol.length; // "---" + eol
-  const closingStart = match.index + openLen + fmBody.length;
-
-  const before = content.slice(0, closingStart);
-  const after = content.slice(closingStart);
-  return `${before}effort: ${effortValue}${eol}${after}`;
+  const before = content.slice(0, fence.closingStart);
+  const after = content.slice(fence.closingStart);
+  return `${before}effort: ${effortValue}${fence.eol}${after}`;
 }
 
 /**
@@ -3983,20 +3964,15 @@ function injectEffortFrontmatter(content: string, effortValue: string): string {
  * frontmatter keys. Relocated verbatim from bin/install.js (#2875 Part 2).
  */
 function injectDisallowedToolsFrontmatter(content: string, disallowedValue: string): string {
-  const eol = /^---\r\n/.test(content) ? '\r\n' : '\n';
-  const fmRe = /^---\r?\n([\s\S]*?)^---\r?$/m;
-  const match = fmRe.exec(content);
-  if (!match) return content; // no YAML frontmatter — leave unchanged
+  const fence = locateFrontmatterFence(content);
+  if (!fence?.closed) return content; // no YAML frontmatter — leave unchanged
 
-  const fmBody = match[1]; // content between the two `---` lines
+  const fmBody = content.slice(fence.openEnd, fence.closingStart); // content between the two fences
   if (/^disallowedTools:/m.test(fmBody)) return content;
 
-  const openLen = 3 + eol.length; // "---" + eol
-  const closingStart = match.index + openLen + fmBody.length;
-
-  const before = content.slice(0, closingStart);
-  const after = content.slice(closingStart);
-  return `${before}disallowedTools: ${disallowedValue}${eol}${after}`;
+  const before = content.slice(0, fence.closingStart);
+  const after = content.slice(fence.closingStart);
+  return `${before}disallowedTools: ${disallowedValue}${fence.eol}${after}`;
 }
 
 // #767 — Read-only verifier/auditor agents get a Claude-Code disallowedTools deny-list.

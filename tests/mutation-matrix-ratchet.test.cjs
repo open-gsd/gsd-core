@@ -205,11 +205,15 @@ const RATCHET_BASELINE = {
   'context-utilization':     91,  // CI run 33012034388 (2026-08-25): measured 92.31%; floor(92.31)-1
   'context-composer':        78,  // CI run 33012034388 (2026-08-25): measured 79.92%; floor(79.92)-1
   'prompt-budget':           87,  // CI run 33012034388 (2026-08-25): measured 88.95%; floor(88.95)-1
-  'frontmatter':             65,  // #3706: raised from 62; measured 66.67 on PR 3867
+  'frontmatter':             86,  // 87.72% in CI run 36590493522 on PR #5114 (#5105 added in-process command tests);
+                                   // floor(87.72)-1
+  'frontmatter-splice':      62,  // #5105: net-new module (the writer, split out of frontmatter);
+                                   // CI run 36586350120 (PR #5114): measured 63.82%;
+                                   // floor(63.82)-1. Replaces the provisional floor of 50.
   'adr-parser':              68,
   'config-schema':           74,  // CI run 33012034388 (2026-08-25): measured 75.51%; floor(75.51)-1
   'active-workstream-store': 86,  // CI run 33012034388 (2026-08-25): measured 87.42%; floor(87.42)-1
-  'core-utils':              75,
+  'core-utils':              80,  // CI job 109435636183 (PR #5114): measured 81.13%; floor(81.13)-1
   'planning-inspect':        56,  // CI run 32392791843: 57.03% (unit shard); ratchet candidate vs TARGET 80
   'plan-document':           80,  // #5026: measured 81.16% (unit shard); floor(81.16)-1.
                                    // Supersedes CI run 32392791843's 76.58% measurement and

@@ -26,6 +26,7 @@ import { platformReadSync as safeReadFile, platformWriteSync, platformEnsureDir 
 import { getGlobalSkillDir, getGlobalConfigDir } from './runtime-homes.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { resolveRuntimeNameFromCandidates, getProjectInstructionFile } from './runtime-name-policy.cjs';
+import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -553,10 +554,11 @@ function generateSkillsSection(cwd: string): SectionResult {
  */
 function extractSkillFrontmatter(content: string): { name: string; description: string } {
   const result = { name: '', description: '' };
-  const fmMatch = content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
-  if (!fmMatch) return result;
+  // The block is the one the one fence owner (`locateFrontmatterFence`) finds.
+  const fence = locateFrontmatterFence(content);
+  if (!fence?.closed) return result;
 
-  const fmBlock = fmMatch[1];
+  const fmBlock = content.slice(fence.openEnd, fence.bodyEnd);
   const lines = fmBlock.split('\n');
 
   let currentKey = '';

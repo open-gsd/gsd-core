@@ -16286,6 +16286,22 @@ describe('bug #3572: phase remove must not corrupt STATE.md into two frontmatter
     assert.match(after, /^Total Phases:\s*\d+\r?$/m, 'count field present in body');
   });
 
+  // Found while implementing #5105: the body field goes after the block the one fence owner
+  // finds. A block closed by the lenient `----` (#1882) used to be missed by this writer's own
+  // `trim() === '---'` scan, so the field was prepended above the opening fence and the resync
+  // stacked a second derived block on top of the original.
+  test('#3572: a STATE.md whose block closes with the lenient `----` stays single-block', (t) => {
+    const tmpDir = setupProject(t, ISSUE_STATE.replace(/\n---\n\n/, '\n----\n\n'));
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '02-feature'), { recursive: true });
+    const r = runGsdTools('phase remove 2', tmpDir);
+    assert.ok(r.success, `phase remove failed: ${r.error}`);
+    const after = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(after.startsWith('---\n'), 'opens with the fence');
+    assert.strictEqual((after.match(/gsd_state_version/g) || []).length, 1, `exactly one block: ${after.slice(0, 400)}`);
+    assert.match(after, /^Total Phases:\s*\d+$/m, 'the count field lives in the body');
+    assert.ok(after.includes('Some prose here that must survive.'), 'body prose preserved');
+  });
+
   test('#3572: ROADMAP-only phase removal leaves STATE.md untouched (issue control)', (t) => {
     const tmpDir = setupProject(t);
     const before = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');

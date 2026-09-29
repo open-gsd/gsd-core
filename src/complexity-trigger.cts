@@ -2,7 +2,9 @@
  * Complexity-triggered refactor extension point — analyzer, evaluator, and
  * baseline persistence (issue #1953).
  *
- * LEAF MODULE — imports ONLY: node:fs, node:path. No other src/ imports.
+ * LEAF MODULE — imports ONLY: node:fs, node:path, and the zero-import leaf
+ * frontmatter-fence.cjs (the one frontmatter fence owner, read by parseProposal). No other
+ * src/ imports.
  *
  * Pipeline: analyzeSource (decision-point complexity per function, via
  * stripLiterals to blank comments/string/regex content while preserving
@@ -34,6 +36,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -940,11 +943,10 @@ export function renderProposal(p: Proposal): string {
  */
 export function parseProposal(text: string): Proposal | null {
   try {
-    if (!text.startsWith('---\n') && !text.startsWith('---\r\n')) return null;
-    const headerEnd = text.startsWith('---\r\n') ? 5 : 4;
-    const closeIdx = text.indexOf('\n---', headerEnd);
-    if (closeIdx === -1) return null;
-    const yamlBody = text.slice(headerEnd, closeIdx);
+    // The block is the one the one fence owner finds (`locateFrontmatterFence`).
+    const fence = locateFrontmatterFence(text);
+    if (!fence?.closed) return null;
+    const yamlBody = text.slice(fence.openEnd, fence.bodyEnd);
     const fm: Record<string, string> = {};
     for (const rawLine of yamlBody.split(/\r?\n/)) {
       const line = rawLine.replace(/\r$/, '');

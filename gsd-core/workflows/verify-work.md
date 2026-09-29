@@ -521,11 +521,9 @@ Exact resume-announcement wording: `gsd-core/workflows/verify-work/detail/elabor
 </step>
 
 <step name="complete_session">
-**Complete testing and commit:**
+**Complete testing:**
 
-**Determine final status:**
-
-Count results:
+**Count results** (for routing below — the completion verb computes the persisted `status` itself, #5105 R1):
 - `pending_count`: tests with `result: [pending]`
 - `blocked_count`: tests with `result: blocked`
 - `skipped_no_reason`: tests with `result: skipped` and no `reason` field
@@ -533,30 +531,13 @@ Count results:
   same criterion `phase uat-passed` uses (`src/uat-predicate.cts`). Exact definition:
   `gsd-core/workflows/verify-work/detail/elaboration.md` § 4.
 
-```
-if pending_count > 0 OR blocked_count > 0 OR skipped_no_reason > 0:
-  status: partial
-  # Session ended but not all tests resolved
-else:
-  status: complete
-  # All tests have a definitive result (pass, issue, or skipped-with-reason)
-```
+Run the completion verb — it independently computes the final status (`complete`/`partial`) from the same rows, clears `## Current Test`, and writes + commits ONLY when something material changed (a session whose UAT was already complete and covered must leave the report fresh, #4981):
 
-Update frontmatter:
-- status: {computed status}
-- updated: [now]
-
-Clear Current Test section:
-```
-## Current Test
-
-[testing complete]
-```
-
-Commit the UAT file:
 ```bash
-gsd_run query commit "test({phase_num}): complete UAT - {passed} passed, {issues} issues" --files ".planning/phases/XX-name/{phase_num}-UAT.md"
+gsd_run query uat.complete-session "$uat_path" --message "test({phase_num}): complete UAT - {passed} passed, {issues} issues"
 ```
+
+`changed: false` → announce that the session was already complete and nothing was written or committed. `changed: true` → the UAT file (frontmatter `status`, `updated`, `## Current Test`) was written and committed in one step.
 
 **If the UAT file has a non-empty `## Deferred Follow-Ups` section,** those items are currently visible only inside this phase's `*-UAT.md` — offer to promote them to the roadmap backlog so they stay visible at the project level (#4546; reuses the exact entry mechanism `next.md`'s `prior_phase_completeness` step uses for plans-without-summaries):
 
@@ -617,15 +598,15 @@ Present summary:
 nonzero but every one is a verified gap resolution, #4983)
 
 ```bash
-VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
+VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --after-fingerprint "$PHASE_DIR" --raw)
 SECURITY_FILE=$(ls "${PHASE_DIR}"/*-SECURITY.md 2>/dev/null | head -1)
 ```
 
-**Generic step dispatch:** dispatch every `kind == "step"` hook from `VERIFY_POST_HOOKS_JSON` per @gsd-core/references/loop-hook-dispatch.md (skip silently when none). Each step is advisory and best-effort — honor `onError` and continue. The secure-phase handling below is an additional specialization of one such hook, not a replacement for the generic dispatch.
+**Generic step dispatch:** dispatch every `kind == "step"` hook from `VERIFY_POST_HOOKS_JSON` per @gsd-core/references/loop-hook-dispatch.md (skip silently when none). Each step is advisory and best-effort — honor `onError` and continue. The secure-phase handling below is an additional specialization of one such hook, not a replacement for the generic dispatch. `--after-fingerprint "$PHASE_DIR"` (#5105) moves a step whose declared artifact already exists in `$PHASE_DIR` into `skippedHooks` instead of `activeHooks` — execute-phase already dispatched it before its own fingerprint (`execute-phase.md:1202`), so this re-dispatch is a no-op for that step and is not repeated here.
 
-Resolve active step hooks from `VERIFY_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "secure-phase"`.
+Resolve whether the secure-phase step hook is enabled: an entry with `kind == "step"` and `ref.skill == "secure-phase"` present in `activeHooks` OR `skippedHooks` of `VERIFY_POST_HOOKS_JSON` both count as enabled. `--after-fingerprint` moves this hook into `skippedHooks` once its declared artifact (`SECURITY.md`) already exists in `$PHASE_DIR` (#5105) — the hook is still enabled, only its re-dispatch is skipped. Each `skippedHooks` entry carries `capId`, `kind`, and `ref.skill` for exactly this resolution.
 
-If an active secure-phase step hook exists AND `SECURITY_FILE` is empty, dispatch the registry-provided skill stem:
+If the secure-phase step hook is enabled AND `SECURITY_FILE` is empty, dispatch the registry-provided skill stem:
 
 ```
 Skill(skill="gsd-${ref.skill}", args="{phase}")
@@ -649,13 +630,13 @@ All tests passed, but phase advancement is blocked until security review produce
 - `/gsd:ui-review {phase}` — visual quality audit (if frontend files were modified)
 ```
 
-If an active secure-phase step hook exists AND `SECURITY_FILE` exists: check frontmatter `threats_open`. If > 0:
+If `SECURITY_FILE` exists — regardless of whether the secure-phase step hook shows up in `activeHooks` or `skippedHooks` — always check frontmatter `threats_open`. If > 0:
 ```
 ⚠ Security gate: {threats_open} threats open
   /gsd:secure-phase {phase} — resolve before advancing
 ```
 
-If no active secure-phase step hook exists OR (`SECURITY_FILE` exists AND `threats_open` is `0`):
+If the secure-phase step hook is not enabled (absent from both `activeHooks` and `skippedHooks`) OR (`SECURITY_FILE` exists AND `threats_open` is `0`):
 
 If execution verification is waiting only on human UAT and this session recorded zero issues, canonicalize the report before the shared completion predicate. (#4663) Zero issues is NOT pass evidence on its own — blocked rows are not issues by this workflow's own rule, so a session that observed nothing (0 passed / 0 issues / N blocked) must NOT flip the report. The flip runs the SAME UAT-row predicate the phase-close uses, in its `--uat-only` form: it skips the verification-status blockers (the report still reads `human_needed` at this point — the full predicate could never pass here), and `passed` means at least one UAT check passed with no row pending/blocked/failed or skipped without a reason. The flagged transition-gate call below stays the final say on canonical verification:
 

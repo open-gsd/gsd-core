@@ -26,7 +26,29 @@ const {
   renderCodexAgentToml,
   stripModel,
   stripReasoningEffort,
+  extractToolsValue,
 } = require('../gsd-core/bin/lib/codex-agent-toml.cjs');
+
+// Found while implementing #5105: the agent's `tools:` is read from the frontmatter the one
+// fence owner finds. The old `indexOf('---', 3)` scan ended the block at the first `---`
+// anywhere — inside a description such as `a---b` — and did not see a BOM block.
+describe('extractToolsValue — the frontmatter block is the one fence owner finds', () => {
+  for (const [label, content] of [
+    ['a `---` inside an earlier value', '---\nname: x\ndescription: a---b\ntools: Read, Write\n---\n'],
+    ['a BOM block', '\uFEFF---\ntools: Read, Write\n---\n'],
+    ['a block closed by the lenient `----`', '---\ntools: Read, Write\n----\n'],
+    ['a block-list `tools:` ended by the closing fence', '---\ntools:\n  - Read\n  - Write\n---\n'],
+  ]) {
+    test(`${label}`, () => {
+      assert.strictEqual(extractToolsValue(content), 'Read, Write');
+    });
+  }
+
+  test('no closed block reads as no tools', () => {
+    assert.strictEqual(extractToolsValue('---\ntools: Read, Write\n'), '');
+    assert.strictEqual(extractToolsValue('tools: Read, Write\n'), '');
+  });
+});
 
 // Row 18a's CRLF fixture (and A12 here) is derived at test runtime, never read
 // from a committed file: `.gitattributes` (`* text=auto eol=lf`, repo-wide) would

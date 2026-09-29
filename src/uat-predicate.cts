@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
-const { extractFrontmatter } = frontmatter;
+const { extractFrontmatter, frontmatterBlock } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import markdownSectionizer = require('./markdown-sectionizer.cjs');
 const { stripFencedCode } = markdownSectionizer;
@@ -164,8 +164,10 @@ const DEFERRED_REASON_RE = /^["']?deferred follow-up\b/i;
  * Returns surviving lines joined by '\n'. Robust to CRLF input.
  */
 function stripFalsePositiveContexts(content: string): string {
-  // Step (a): strip leading frontmatter block only at byte 0
-  let stripped = content.replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, '');
+  // Step (a): strip the leading frontmatter block — the one `frontmatterBlock` (the one fence
+  // owner) finds — with its closing fence line's line ending.
+  const block = frontmatterBlock(content);
+  let stripped = block ? block.rest.replace(/^\r?\n/, '') : content;
 
   // Step (b): remove HTML comments anywhere; unterminated comment swallows to EOF
   stripped = stripped.replace(/<!--[\s\S]*?(?:-->|$)/g, '');

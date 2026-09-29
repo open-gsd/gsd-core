@@ -25,6 +25,9 @@ const path = require('node:path');
 
 const { PROFILES } = require('./research-profiles.cjs');
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
+// The one frontmatter fence owner (src/frontmatter-fence.cts, built by build:lib).
+// This dev-time script runs after the build (manually, and from the tests).
+const { locateFrontmatterFence } = require('../gsd-core/bin/lib/frontmatter-fence.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const AGENTS_DIR = path.join(ROOT, 'agents');
@@ -41,12 +44,13 @@ const AGENTS_DIR = path.join(ROOT, 'agents');
  * We read the CURRENT commented-hooks block from the agent file and preserve it
  * byte-for-byte; only name/description/tools/color are regenerated.
  */
-function buildFrontmatter(profile, existingFrontmatter) {
-  // Extract the commented hooks section from the existing frontmatter, if any.
-  // The hooks block starts at `# hooks:` and runs to (but not including) the
-  // closing `---`. In the committed files there is NO blank line between
-  // `color:` and `# hooks:`, so we append it directly after the color line's `\n`.
-  const hooksMatch = existingFrontmatter.match(/(# hooks:[\s\S]*?)(?=\n---)/);
+function buildFrontmatter(profile, existingRegion) {
+  // Extract the commented hooks section from the existing frontmatter region
+  // (the YAML text between the fences), if any. The hooks block starts at
+  // `# hooks:` and runs to the end of the region — the closing `---` follows it.
+  // In the committed files there is NO blank line between `color:` and
+  // `# hooks:`, so we append it directly after the color line's `\n`.
+  const hooksMatch = existingRegion.match(/(# hooks:[\s\S]*)$/);
   // hooksSuffix: if present, the block followed by a newline so `---` is on its own line;
   // if absent, empty string (the closing `---` follows directly after color's `\n`).
   const hooksSuffix = hooksMatch ? hooksMatch[1] + '\n' : '';
@@ -67,37 +71,26 @@ function buildFrontmatter(profile, existingFrontmatter) {
 /**
  * Parse a .md file and return { frontmatterRaw, body, frontmatterFields }.
  *
- * frontmatterRaw: the raw text between the first and second `---` delimiters (exclusive)
- * body: everything after the closing `---\n`
+ * frontmatterRaw: the YAML text between the opening and closing fences (exclusive)
+ * fullFrontmatter: the block from the opening fence through the closing fence line
+ * body: everything after the closing fence line's line ending
  * frontmatterFields: { name, description, color, tools }
+ *
+ * The block is the one the one fence owner finds (found while implementing #5105):
+ * it opens at byte 0 (after a BOM), exactly as the runtime that loads the agent reads it.
  */
 function parseAgentFile(filePath) {
   const raw = fs.readFileSync(filePath, 'utf8');
 
-  // The frontmatter is between the first `---` line and the next `---` line.
-  const lines = raw.split('\n');
-  let start = -1;
-  let end = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].trim() === '---') {
-      if (start === -1) {
-        start = i;
-      } else {
-        end = i;
-        break;
-      }
-    }
-  }
-
-  if (start === -1 || end === -1) {
+  const fence = locateFrontmatterFence(raw);
+  if (!fence || !fence.closed) {
     throw new Error('No valid frontmatter delimiters found in ' + filePath);
   }
 
-  const frontmatterLines = lines.slice(start + 1, end);
-  const frontmatterRaw = frontmatterLines.join('\n');
-  // body includes the closing `---` line and everything after
-  const fullFrontmatter = lines.slice(start, end + 1).join('\n');
-  const body = lines.slice(end + 1).join('\n');
+  const frontmatterRaw = raw.slice(fence.openEnd, fence.bodyEnd);
+  const frontmatterLines = frontmatterRaw.split(/\r?\n/);
+  const fullFrontmatter = raw.slice(fence.bom.length, fence.closingFenceEnd);
+  const body = raw.slice(fence.closingFenceEnd).replace(/^\r?\n/, '');
 
   const fields = {};
   // Parse simple key: value pairs (not nested YAML, no multi-line values here)
@@ -214,9 +207,9 @@ function runCheck() {
  */
 function writeAgent(profile) {
   const agentPath = path.join(AGENTS_DIR, profile.name + '.md');
-  const { fullFrontmatter, body } = parseAgentFile(agentPath);
+  const { frontmatterRaw, body } = parseAgentFile(agentPath);
 
-  const newFrontmatter = buildFrontmatter(profile, fullFrontmatter);
+  const newFrontmatter = buildFrontmatter(profile, frontmatterRaw);
   const newContent = newFrontmatter + '\n' + body;
 
   fs.writeFileSync(agentPath, newContent, 'utf8');

@@ -332,6 +332,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/docs.cjs',
       'gsd-core/bin/lib/check-command-router.cjs',
       'gsd-core/bin/lib/frontmatter.cjs',
+      'gsd-core/bin/lib/frontmatter-fence.cjs',
+      'gsd-core/bin/lib/frontmatter-splice.cjs',
       'gsd-core/bin/lib/learnings.cjs',
       'gsd-core/bin/lib/gsd2-import.cjs',
       'gsd-core/bin/lib/profile-pipeline.cjs',

@@ -86,6 +86,26 @@ function removeAll() {
 
 // ─── Tests ─────────────────────────────────────────────────────────────────────
 
+// Found while implementing #5105: the STATE.md body is read from after the block the one fence
+// owner finds, so a frontmatter line is never mistaken for a body field. The old
+// `/^---[\s\S]*?---\s*/` strip ended the block at a `---` inside a value and did not see a
+// BOM block at all, leaving `Paused At:` (a frontmatter key here) in the "body".
+describe('smart-entry: the STATE.md body starts after the frontmatter block', () => {
+  afterEach(removeAll);
+
+  for (const [label, stateMd, paused] of [
+    ['a `---` inside a frontmatter value', '---\nnote: a---b\nPaused At: 2026-01-01\n---\n\n# State\n', false],
+    ['a BOM before the block', '\uFEFF---\nPaused At: 2026-01-01\n---\n\n# State\n', false],
+    ['an adjacent empty block, then a body field', '---\n---\nPaused At: 2026-01-01\n', true],
+    ['a body field after an ordinary block', '---\nnote: x\n---\n\nPaused At: 2026-01-01\n', true],
+  ]) {
+    test(`${label}: paused is ${paused}`, () => {
+      const dir = track(makeProject({ state: stateMd }));
+      assert.equal(detectSignals(dir).paused, paused);
+    });
+  }
+});
+
 describe('smart-entry: situation coverage', () => {
   afterEach(removeAll);
 

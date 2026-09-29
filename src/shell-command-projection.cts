@@ -18,6 +18,7 @@ import fs from 'node:fs';
 // at load time and become un-mockable.
 import childProcess from 'node:child_process';
 import { escapeRegex } from './pattern.cjs';
+import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 
 /**
  * Convert a filesystem path to POSIX form (forward slashes) by translating the
@@ -1125,15 +1126,38 @@ export function probeTty(opts: { platform?: string } = {}): string | null {
 
 // ─── Platform file I/O ────────────────────────────────────────────────────────
 
+/**
+ * How many leading lines of LF-only `text` are its closed YAML frontmatter block (opening
+ * fence through closing fence), or 0 when there is none (an unterminated block is not
+ * frontmatter). The fence is `locateFrontmatterFence`'s — the one owner the frontmatter reader
+ * and writer (`frontmatter.cts`) also read — so the normalizer skips exactly the block every
+ * reader sees (found while implementing #5105: this was a private mirror of the reader's
+ * fence rule, because `frontmatter.cts` imports this module, and the two drifted).
+ */
+function leadingFrontmatterLineCount(text: string): number {
+  const fence = locateFrontmatterFence(text);
+  if (!fence || !fence.closed) return 0;
+  // The lines before the closing fence, plus the closing fence line itself.
+  return text.slice(0, fence.closingStart).split('\n').length;
+}
+
 function _normalizeMd(content: string): string {
   if (!content || typeof content !== 'string') return content;
   let text = content.replace(/\r\n/g, '\n');
   const lines = text.split('\n');
+  // The frontmatter block is YAML, not markdown: its lines are published exactly as written.
+  // A `# comment` is not a heading, and a blank line inserted into a multi-line quoted scalar
+  // or removed from a block scalar changes the value (found while implementing #5105).
+  const frontmatterLines = leadingFrontmatterLineCount(text);
   const result: string[] = [];
   const fenceRegex = /^```/;
   const insideFence = new Array<boolean>(lines.length);
   let fenceOpen = false;
   for (let i = 0; i < lines.length; i++) {
+    if (i < frontmatterLines) {
+      insideFence[i] = false;
+      continue;
+    }
     if (fenceRegex.test(lines[i].trimEnd())) {
       if (fenceOpen) {
         insideFence[i] = false;
@@ -1148,6 +1172,10 @@ function _normalizeMd(content: string): string {
   }
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (i < frontmatterLines) {
+      result.push(line);
+      continue;
+    }
     const prev = i > 0 ? lines[i - 1] : '';
     const prevTrimmed = prev.trimEnd();
     const trimmed = line.trimEnd();
@@ -1173,8 +1201,11 @@ function _normalizeMd(content: string): string {
       if (next !== undefined && next.trimEnd() !== '' && !/^(\s*[-*+]\s|\s*\d+\.\s)/.test(next) && !/^\s/.test(next)) result.push('');
     }
   }
+  // The frontmatter lines are `result`'s first entries, unchanged; the blank-run collapse
+  // applies from the line ending that closes the block onward.
+  const head = result.slice(0, frontmatterLines).join('\n');
   text = result.join('\n');
-  text = text.replace(/\n{3,}/g, '\n\n');
+  text = head + text.slice(head.length).replace(/\n{3,}/g, '\n\n');
   text = text.replace(/\n*$/, '\n');
   return text;
 }

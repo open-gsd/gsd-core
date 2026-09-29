@@ -118,3 +118,24 @@ describe('#3817: audit-open counts include the truncation remainder', () => {
     assert.equal(out.counts.total, 3);
   });
 });
+
+// Found while implementing #5105: a todo's summary is the first body line after the block the
+// one fence owner finds. The old `/^---[\s\S]*?---/` strip ended the block at a `---` inside a
+// value (summarizing `b bug`) and did not see a BOM block at all (summarizing `---`).
+describe('audit-open: a todo summary is the first line after its frontmatter block', () => {
+  for (const [label, todo] of [
+    ['a `---` inside a frontmatter value', '---\ntitle: Fix a---b bug\narea: general\n---\n\nBody line\n'],
+    ['a BOM before the block', '\uFEFF---\ntitle: Fix it\narea: general\n---\n\nBody line\n'],
+    ['a block closed by the lenient `----`', '---\ntitle: Fix it\narea: general\n----\n\nBody line\n'],
+  ]) {
+    test(`${label}`, (t) => {
+      const tmpDir = createTempProject('gsd-5105-todo-summary-');
+      t.after(() => cleanup(tmpDir));
+      const pendingDir = path.join(tmpDir, '.planning', 'todos', 'pending');
+      fs.mkdirSync(pendingDir, { recursive: true });
+      fs.writeFileSync(path.join(pendingDir, 'todo-1.md'), todo);
+      const out = runAuditOpen(tmpDir);
+      assert.deepStrictEqual(out.items.todos.map((i) => i.summary), ['Body line']);
+    });
+  }
+});

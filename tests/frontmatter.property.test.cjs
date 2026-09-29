@@ -9,9 +9,8 @@
  * Properties tested:
  *   (a) extractFrontmatter never throws on ANY string input (including binary/unicode)
  *   (b) extractFrontmatter always returns a plain object (not null, not array)
- *   (c) round-trip: reconstructFrontmatter(extractFrontmatter(spliceFrontmatter(content, obj)))
- *       preserves key-value pairs for simple flat string values
- *   (d) spliceFrontmatter never throws on any string/object combination
+ *   (c)/(d) spliceFrontmatter's own properties live in tests/frontmatter-splice.property.test.cjs
+ *       since the writer moved to frontmatter-splice.cts (#5105)
  *   (e) extractFrontmatter returns {} for content without a leading ---...--- block
  *   (f) prohibitions bijection (#644): over a generated must_haves.prohibitions block,
  *       parseMustHavesBlock(spliceFrontmatter(doc, parseFrontmatter(doc)), 'prohibitions')
@@ -136,66 +135,6 @@ describe('frontmatter: reconstructFrontmatter properties', () => {
 
   test('property: reconstructFrontmatter on {} returns empty string', () => {
     assert.equal(reconstructFrontmatter({}), '');
-  });
-});
-
-describe('frontmatter: spliceFrontmatter properties', () => {
-  // (d) Never throws on any combination
-  test('property: spliceFrontmatter never throws on arbitrary content + object', () => {
-    fc.assert(
-      fc.property(
-        fc.string({ maxLength: 300 }),
-        fc.dictionary(yamlKey, yamlScalarValue, { maxKeys: 8 }),
-        (content, obj) => {
-          assert.doesNotThrow(
-            () => spliceFrontmatter(content, obj),
-            `spliceFrontmatter threw on content=${JSON.stringify(content.slice(0, 30))}`
-          );
-        }
-      )
-    );
-  });
-
-  test('property: spliceFrontmatter always returns a string', () => {
-    fc.assert(
-      fc.property(
-        fc.string({ maxLength: 200 }),
-        fc.dictionary(yamlKey, yamlScalarValue, { maxKeys: 5 }),
-        (content, obj) => {
-          const result = spliceFrontmatter(content, obj);
-          assert.ok(typeof result === 'string', `Expected string got ${typeof result}`);
-        }
-      )
-    );
-  });
-
-  // (c) Round-trip: splice then extract preserves flat string keys
-  test('property: splice then extract round-trip preserves flat string values', () => {
-    fc.assert(
-      fc.property(
-        fc.string({ maxLength: 100 }),  // existing document body
-        // Only keys + simple values without colons/hashes that would confuse the minimal parser
-        fc.dictionary(
-          fc.stringMatching(/^[a-z][a-z0-9]{0,14}$/),
-          fc.stringMatching(/^[a-zA-Z0-9]{1,30}$/),
-          { minKeys: 1, maxKeys: 5 }
-        ),
-        (body, obj) => {
-          const spliced = spliceFrontmatter(body, obj);
-          const extracted = extractFrontmatter(spliced);
-
-          for (const [key, value] of Object.entries(obj)) {
-            if (typeof value === 'string' && value.length > 0) {
-              assert.equal(
-                extracted[key],
-                value,
-                `Round-trip failed for key=${key}: expected ${value} got ${extracted[key]}`
-              );
-            }
-          }
-        }
-      )
-    );
   });
 });
 

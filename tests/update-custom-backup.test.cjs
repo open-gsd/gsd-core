@@ -1021,6 +1021,22 @@ describe('restore-custom-files — compatibility pass against the new release', 
     );
   });
 
+  // Found while implementing #5105: the frontmatter checked is the block the one fence owner
+  // finds. The old regex closed on a `--- x` line (hiding the fields after it) and did not see a
+  // BOM block at all.
+  for (const [label, skillMd, warned] of [
+    ['a `--- x` line before its fields', '---\nnote: x\n--- x\nname: gsd-mine\ndescription: mine\n---\nBody\n', false],
+    ['a BOM before its block', '\uFEFF---\nname: gsd-mine\ndescription: mine\n---\nBody\n', false],
+    ['an unterminated block', '---\nname: gsd-mine\ndescription: mine\n', true],
+  ]) {
+    test(`a backed-up skill with ${label}: frontmatter_missing_field is ${warned ? '' : 'not '}raised`, () => {
+      writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Planner\n' });
+      writeBackupEntry(tmpDir, 'skills/gsd-mine/SKILL.md', skillMd);
+      const entry = entryFor(parseRestore(tmpDir), 'skills/gsd-mine/SKILL.md');
+      assert.strictEqual(warningCodes(entry).includes(WARNING.FRONTMATTER_MISSING_FIELD), warned, JSON.stringify(entry.warnings));
+    });
+  }
+
   test('a warned-but-eligible entry still restores — warnings never block', () => {
     writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Planner\n' });
     writeBackupEntry(tmpDir, 'skills/gsd-broken/SKILL.md', '# No frontmatter at all\n');

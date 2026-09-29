@@ -30,6 +30,7 @@
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- prompt-budget.cjs is an export= CommonJS module
 import promptBudget = require('./prompt-budget.cjs');
+import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 
 const { estimateTokens } = promptBudget;
 
@@ -349,11 +350,11 @@ export function applyCalibration(rawTokens: RawTokens, factor: number): Calibrat
 export function extractFrontmatterBlock(text: unknown, key: string): Record<string, unknown> | null {
   if (typeof text !== 'string') return null;
 
-  // Anchor at byte 0 — CRLF-tolerant.
-  const fm = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|\r?$)/.exec(text);
-  if (fm === null) return null;
+  // The block is the one the one fence owner finds (`locateFrontmatterFence`).
+  const fence = locateFrontmatterFence(text);
+  if (!fence?.closed) return null;
 
-  const lines = fm[1].split(/\r?\n/);
+  const lines = text.slice(fence.openEnd, fence.bodyEnd).split(/\r?\n/);
   const startIdx = lines.findIndex((l) => l === `${key}:` || l.startsWith(`${key}:`));
   if (startIdx === -1) return null;
 

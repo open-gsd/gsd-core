@@ -45,7 +45,7 @@ import planningWorkspace = require('./planning-workspace.cjs');
 const { planningPaths } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
-const { extractFrontmatter } = frontmatter;
+const { extractFrontmatter, frontmatterBlock } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-lifecycle.cjs is an export= CommonJS module
 import phaseLifecycle = require('./phase-lifecycle.cjs');
 const { deriveProgressFromRoadmap } = phaseLifecycle;
@@ -383,7 +383,10 @@ function readStateFile(statePath: string): {
     return null;
   }
   const fm = extractFrontmatter(content, statePath) as Record<string, unknown>;
-  const body = content.replace(/^---[\s\S]*?---\s*/, '');
+  // The body starts after the block `extractFrontmatter` just read (the one fence owner), so a
+  // `---` inside a value, a BOM, or an adjacent empty block cannot cut it somewhere else.
+  const block = frontmatterBlock(content);
+  const body = block ? block.rest.replace(/^\s+/, '') : content;
   return { fm, body };
 }
 

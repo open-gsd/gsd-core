@@ -53,6 +53,20 @@ function makePassingUat(n = 1) {
 // ─── stripFalsePositiveContexts ────────────────────────────────────────────────
 
 describe('stripFalsePositiveContexts — frontmatter', () => {
+  // Found while implementing #5105: the stripped block is the one the one fence owner finds.
+  for (const [label, input, expected] of [
+    ['a BOM block', '\uFEFF---\nresult: pending\n---\nReal.', 'Real.'],
+    ['an adjacent empty block (its body line is kept)', '---\n---\nresult: pass\n', 'result: pass\n'],
+    ['a block closed by the lenient `----`', '---\nresult: pending\n----\nReal.', 'Real.'],
+    ['a CRLF block', '---\r\nresult: pending\r\n---\r\nReal.', 'Real.'],
+    ['a `---` inside a value', '---\nnote: a---b\nresult: pending\n---\nReal.', 'Real.'],
+    ['a block that does not open at byte 0 (not frontmatter)', '\n---\nresult: pending\n---\nReal.', '\n---\nresult: pending\n---\nReal.'],
+  ]) {
+    test(`${label}`, () => {
+      assert.strictEqual(stripFalsePositiveContexts(input), expected);
+    });
+  }
+
   test('removes leading frontmatter block', () => {
     const input = '---\nstatus: pending\nresult: pending\n---\n\nReal content here.';
     const out = stripFalsePositiveContexts(input);

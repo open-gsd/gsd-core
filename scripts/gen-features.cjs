@@ -66,6 +66,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
+// The one frontmatter fence owner (src/frontmatter-fence.cts, built by build:lib).
+// Every entry point runs after the build: lint:generated-sync inside lint:ci (CI
+// builds bin/lib first), regen:derived (`npm run build` first), and the tests.
+const { locateFrontmatterFence } = require('../gsd-core/bin/lib/frontmatter-fence.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const FEATURES_DIR = path.join(ROOT, 'docs', 'features');
@@ -255,13 +259,12 @@ function renderFrontmatter(data, body) {
  */
 function parseFrontmatter(text) {
   const normalized = String(text).replace(/\r\n/g, '\n');
-  if (!normalized.startsWith('---\n')) return { data: null, body: normalized };
-
-  const end = normalized.indexOf('\n---\n', 3);
-  if (end === -1) return { data: null, body: normalized };
+  // The block is the one the one fence owner finds (found while implementing #5105).
+  const fence = locateFrontmatterFence(normalized);
+  if (!fence || !fence.closed) return { data: null, body: normalized };
 
   const data = {};
-  for (const line of normalized.slice(4, end + 1).split('\n')) {
+  for (const line of normalized.slice(fence.openEnd, fence.bodyEnd).split('\n')) {
     if (line.trim() === '') continue;
     const sep = line.indexOf(':');
     if (sep === -1) continue;
@@ -270,9 +273,11 @@ function parseFrontmatter(text) {
     data[key] = parseScalar(line.slice(sep + 1).trim());
   }
 
-  // `+5` clears "\n---\n"; the blank line renderFrontmatter emits after the
-  // closing fence is consumed here so body text starts at its first real line.
-  let body = normalized.slice(end + 5);
+  // Past the closing fence line and its line ending; the blank line
+  // renderFrontmatter emits after the closing fence is consumed here so body
+  // text starts at its first real line.
+  let body = normalized.slice(fence.closingFenceEnd);
+  if (body.startsWith('\n')) body = body.slice(1);
   if (body.startsWith('\n')) body = body.slice(1);
   return { data, body };
 }

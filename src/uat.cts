@@ -13,10 +13,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
-const { output, error } = io;
+const { output, error, captureStdoutSyncWrites, resolveAtFileOutput } = io;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import markdownSectionizer = require('./markdown-sectionizer.cjs');
-const { collectSection, tokenizeHeadings, stripFencedCode, scanFencedBlocks } = markdownSectionizer;
+const { collectSection, withSection, tokenizeHeadings, stripFencedCode, scanFencedBlocks } = markdownSectionizer;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import markdownTable = require('./markdown-table.cjs');
 const { splitTableRow, isDelimiterRow } = markdownTable;
@@ -28,7 +28,8 @@ import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
-const { extractFrontmatter, frontmatterListEntries, flattenObjectListItem } = frontmatter;
+const { extractFrontmatter, spliceFrontmatter, frontmatterListEntries, flattenObjectListItem, isFrontmatterWriteRefusal } = frontmatter;
+import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const { PHASE_NUMBER_TOKEN_SOURCE, scopeToPhase } = phaseIdMod;
@@ -38,6 +39,9 @@ const { listMilestonePhaseDirs, getAllArchivedPhaseDirs } = phaseLocator;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import auditMod = require('./audit.cjs');
 const { isAuditItemAcknowledged, deriveUatGapSnapshotValue } = auditMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import pristineBaseline = require('./pristine-baseline.cjs');
+const { gitExec } = pristineBaseline;
 import { requireSafePath, sanitizeForDisplay, PathAcceptance } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
 import configLoader = require('./config-loader.cjs');
@@ -424,6 +428,398 @@ function cmdRenderCheckpoint(cwd: string, options: { file?: string } = {}, raw: 
     test_name: currentTest.name,
     checkpoint,
   }, raw, checkpoint);
+}
+
+// ─── completeUatSession ─────────────────────────────────────────────────────
+// #5105 R1: the ONE owner for "does completing this UAT session change
+// anything material". Pure core; the CLI handler below writes/commits only
+// when `changed` is true (ADR-5057 §3, #4981 UAT self-stale offender C1/C2).
+//
+// #5105 review S7/S8: section edits go through the shared markdown-sectionizer
+// primitives (`withSection`/`collectSection`) rather than a hand-rolled `^## `
+// scanner — a `## ` occurrence inside a fenced code block must not end the
+// section, and `tokenizeHeadings` (which both are built on) is fence-aware.
+// Frontmatter reads/writes are scoped to the `---`…`---` block only, never a
+// whole-document regex — a body line that happens to start with `status:` or
+// `updated:` must never be touched. `status` goes through
+// `extractFrontmatter`/`spliceFrontmatter` (safe: `complete`/`partial` never
+// contain a `:`); `updated` does NOT (see `setFrontmatterUpdated`'s doc
+// comment for why an ISO-8601 timestamp can't round-trip through the same
+// re-serializer without picking up a spurious quoting change).
+
+/**
+ * Replace the `## Current Test` section body with `[testing complete]`,
+ * leaving every other line of the document untouched. Mirrors the section
+ * boundary convention `parseCurrentTest` reads (a level-2 `## Current Test`
+ * heading; the section body runs to the next `## ` heading or EOF) via the
+ * shared `withSection` primitive, which is fence-aware (a `## `-looking line
+ * inside a fenced code block is not a heading and cannot end the section).
+ *
+ * A document missing the heading altogether is returned unchanged (bounded
+ * no-op, `withSection`'s own contract on a heading miss) — that is a
+ * malformed-input case `completeUatSession`'s caller already never produces,
+ * and this function fails soft rather than throwing so the pure core stays
+ * total.
+ */
+function setCurrentTestComplete(content: string): string {
+  // `'\n[testing complete]'` (no trailing newline) mirrors the trimmed shape
+  // `collectSection` itself produces for an ALREADY-canonical section body —
+  // required for idempotence: when the section already reads exactly this,
+  // `withSection`'s own `newBody === section.body` no-op guard must fire, or
+  // every already-complete document would gain a spurious extra blank line on
+  // each pass (a real, if invisible-looking, material byte change). The line
+  // break is the document's own (its first line's terminator), so a CRLF
+  // document's already-canonical section is recognized as unchanged and a
+  // rewritten one never gains a bare-LF line.
+  const eol = /^[^\n]*\r\n/.test(content) ? '\r\n' : '\n';
+  return withSection(
+    content,
+    (h) => /^current\s+test$/i.test(h.text) && h.level === 2,
+    () => `${eol}[testing complete]`,
+    { levelBounded: true },
+  );
+}
+
+/**
+ * Set the frontmatter `status:` value, preserving every other key's raw text
+ * verbatim (`spliceFrontmatter`'s per-key fidelity) — scoped strictly to the
+ * `---`…`---` block, so a body line that happens to start with `status:` is
+ * never touched (#5105 review S8). `status` values here (`complete`/`partial`)
+ * never contain a `:`, so `reconstructFrontmatter`'s double-quoting rule for
+ * colon-bearing scalars never fires — see `withFrontmatterUpdated`'s doc
+ * comment for why `updated:` (an ISO-8601 timestamp, which ALWAYS contains a
+ * `:`) is deliberately NOT routed through this same round-trip.
+ *
+ * Throws `spliceFrontmatter`'s write refusal (`isFrontmatterWriteRefusal`)
+ * when the frontmatter block is not parseable YAML — a block like
+ * `status:complete` (no space) is never "repaired" by regeneration;
+ * `cmdUatCompleteSession` surfaces the refusal and writes/commits nothing.
+ */
+function setFrontmatterStatus(content: string, status: 'complete' | 'partial'): string {
+  const fm = extractFrontmatter(content);
+  return spliceFrontmatter(content, { ...fm, status });
+}
+
+/**
+ * The `---`…`---` frontmatter block's `[start, end)` character bounds in
+ * `content`, and where its closing fence line starts — located by
+ * `locateFrontmatterFence`, the one fence owner `spliceFrontmatter` and every
+ * reader use — or `null` if there is none.
+ */
+function frontmatterBlockBounds(content: string): { start: number; end: number; closingStart: number } | null {
+  // A leading BOM (#2977) is not content before the fence — it sits before
+  // `start`, carried through unchanged.
+  const fence = locateFrontmatterFence(content);
+  return fence?.closed ? { start: fence.bom.length, end: fence.closingFenceEnd, closingStart: fence.closingStart } : null;
+}
+
+/**
+ * `line` inserted into `block` (the bounds' slice) as a new last line, just
+ * before its closing fence line — whatever that line is (`---`, `--- `, the
+ * lenient `----`) — with the line ending of the line before it.
+ */
+function insertBeforeClosingFence(block: string, bounds: { start: number; closingStart: number }, line: string): string {
+  const closingOffset = bounds.closingStart - bounds.start;
+  const eol = block[closingOffset - 2] === '\r' ? '\r\n' : '\n';
+  return `${block.slice(0, closingOffset)}${line}${eol}${block.slice(closingOffset)}`;
+}
+
+/**
+ * Write the frontmatter `updated:` line, SCOPED to the matched
+ * `---`…`---` block only (#5105 review S8) — deliberately NOT routed through
+ * `extractFrontmatter`/`spliceFrontmatter`'s generic re-serializer the way
+ * `setFrontmatterStatus` is: `reconstructFrontmatter` double-quotes any
+ * scalar containing a `:`, and an ISO-8601 timestamp always contains one —
+ * round-tripping `updated` through it would silently reformat every
+ * `updated:`/`started:`-shaped timestamp the first material change touches,
+ * from `updated: 2026-01-01T00:00:00Z` to `updated: "2026-01-01T00:00:00Z"`,
+ * breaking every OTHER reader in the ecosystem that pattern-matches the
+ * historically-unquoted form. A key-line replace confined to the matched
+ * frontmatter block gets the same "body text is never touched" guarantee
+ * without that regression.
+ *
+ * Returns the whole document with `updated:` set to `value` — appending the
+ * key just before the closing `---` (with the block's own line ending) when
+ * the block exists but the key does not (S8: "a frontmatter lacking
+ * `updated:` gains one when changed"), or returning `content` unchanged when
+ * there is no frontmatter block at all (never manufacturing one here).
+ */
+function setFrontmatterUpdated(content: string, value: string): string {
+  const bounds = frontmatterBlockBounds(content);
+  if (!bounds) return content;
+  const block = content.slice(bounds.start, bounds.end);
+  const keyLineRe = /^updated:.*$/m;
+  const line = `updated: ${value}`;
+  // A function replacer: the line is inserted literally, never read as a `$&`/`$'`/`` $` ``
+  // replacement pattern.
+  const newBlock = keyLineRe.test(block)
+    ? block.replace(keyLineRe, () => line)
+    : insertBeforeClosingFence(block, bounds, line);
+  return content.slice(0, bounds.start) + newBlock + content.slice(bounds.end);
+}
+
+/**
+ * The MATERIAL projection of a document for #5105 R1's comparison: every byte
+ * except the frontmatter `updated:` line (deny-by-default — everything else
+ * counts). The whole line, terminator included, is dropped, so a document
+ * LACKING an `updated:` line projects the same as one carrying any `updated:`
+ * value — presence is not material either, and "differs only in `updated`"
+ * holds when one side has no such line. A document with no frontmatter block,
+ * or frontmatter with no `updated` key, is returned unchanged.
+ */
+function stripUpdatedForCompare(content: string): string {
+  const bounds = frontmatterBlockBounds(content);
+  if (!bounds) return content;
+  const block = content.slice(bounds.start, bounds.end);
+  // The block always ends with `<eol>---`, so an `updated:` line always has
+  // its own terminator to drop with it.
+  const newBlock = block.replace(/^updated:.*\r?\n/m, '');
+  return content.slice(0, bounds.start) + newBlock + content.slice(bounds.end);
+}
+
+interface CompleteUatSessionResult {
+  changed: boolean;
+  content: string;
+  status: 'complete' | 'partial';
+  /**
+   * #5105 review finding 2, M1-restricted: set when the candidate matched the
+   * committed `baseline` materially AND the LIVE `content` differed from the
+   * candidate in something OTHER than the frontmatter `updated:` value (a
+   * re-opened session that left stray, already-committed-equivalent state on
+   * disk — e.g. `status: testing` plus a pending `## Current Test` with no
+   * row changes). `content` is the byte-exact restored form — the caller
+   * writes it WITHOUT committing, so the file ends up matching
+   * HEAD rather than staying needlessly dirty.
+   */
+  restored?: boolean;
+}
+
+/**
+ * #5105 R1 — pure core of `uat.complete-session`.
+ *
+ * Computes the resulting `status` using verify-work.md's `complete_session`
+ * criterion (the workflow step this command replaces, pinned at
+ * 518ccb0061:gsd-core/workflows/verify-work.md:522-545): `partial` when ANY
+ * row is `result: [pending]` (including a genuine parse gap — a row missing
+ * its `result:` line entirely counts the same as an explicit pending token),
+ * `result: blocked`, or a `result: skipped` row with no `reason:` field;
+ * `complete` otherwise. An `issue` row — resolved or not — is a DEFINITIVE
+ * result and never blocks completion on its own ("All tests have a
+ * definitive result (pass, issue, or skipped-with-reason)"); this is a
+ * deliberately looser criterion than `uat-predicate.cjs`'s `evaluateUatPassed`
+ * (the `phase uat-passed` gate), which does still block on an unresolved
+ * issue. Sets `## Current Test` to `[testing complete]`.
+ *
+ * #5105 R1 redesign (grilling-pass DESIGN DEFECT): the prior contract compared
+ * the candidate against the LIVE file, which never sees the UAT rows a
+ * verify-work session writes to the file (with the Write tool, uncommitted)
+ * DURING the session — `complete_session` is where those rows were meant to
+ * be committed, so a live-vs-result compare could report `changed: false` and
+ * never commit them. `baseline` is now an explicit second input — the file's
+ * content at git HEAD (`null` when untracked/absent; the caller resolves it,
+ * this core stays pure) — and the comparison is candidate-vs-baseline, not
+ * candidate-vs-live: `changed` means "does the candidate MATERIALLY differ
+ * from what is already committed", where MATERIAL excludes only the
+ * frontmatter `updated:` line — its value and its presence
+ * (`stripUpdatedForCompare`, deny-by-default,
+ * #5105 R1 "F10"). No material change → `{ changed: false, content }` returns
+ * the ORIGINAL `content` UNTOUCHED (not the candidate) — even a live document
+ * that differs from baseline ONLY in `updated:` is never written, and the
+ * caller performs zero writes and zero commits (the stated #5105 R1 decision:
+ * a live UAT that differs from the committed baseline ONLY in the frontmatter
+ * `updated:` value is never written). A material change → this function ALSO
+ * stamps `updated` from `clock()` on the candidate; the caller writes + commits.
+ *
+ * #5105 review finding 2 / M1: when the candidate is NOT materially changed
+ * from `baseline`, but the LIVE `content` differs from that candidate in
+ * something OTHER than `updated:` (e.g. a re-opened session left
+ * `status: testing` plus a pending `## Current Test` with no row changes),
+ * the byte-exact `baseline` form is restored (`restored: true`) — `content`
+ * IS `baseline` itself: `changed === false` means candidate and baseline differ
+ * at most in the `updated:` line, so the exact committed bytes (whatever the
+ * `updated:` line's spacing, position, or absence) are the restore target and
+ * no splice is performed. This restore path is DENIED (no write, `content`
+ * is the untouched live bytes, no `restored` flag) when live differs from the
+ * candidate ONLY in `updated:` — that case is covered by the decision above.
+ */
+function completeUatSession(
+  content: string,
+  options: { clock?: () => Date; baseline?: string | null } = {},
+): CompleteUatSessionResult {
+  const clock = options.clock || (() => new Date());
+  const baseline = options.baseline ?? null;
+  // Scoped to the `## Tests` section body ONLY — the `## Current Test`
+  // section can itself contain a `### N. Name` heading with no `result:`
+  // line (a still-pending test's own description), which would otherwise be
+  // mis-parsed as a 'missing' (blocking) item and poison the status
+  // computation for a session that is, in fact, fully complete. Reuses the
+  // module's own row parser (`parseUatItemsWithStats`) rather than
+  // `uat-predicate.cjs`'s independent one — `uat-predicate.cjs` encodes a
+  // DIFFERENT (stricter) passing criterion for a different gate, so re-using
+  // its parser without its criterion would still be re-deriving.
+  const testsSection = collectSection(content, (h) => /^tests$/i.test(h.text) && h.level === 2, { levelBounded: true });
+  const { items, headingsSeen } = parseUatItemsWithStats(testsSection ? testsSection.body : '');
+  const hasBlockingRow = items.some((item) => {
+    const result = item.result.toLowerCase();
+    if (result === 'pending' || result === 'blocked') return true;
+    if (result === 'skipped') return !item.reason;
+    return false;
+  });
+  const status: 'complete' | 'partial' = (headingsSeen > 0 || hasBlockingRow) ? 'partial' : 'complete';
+
+  let candidate = setFrontmatterStatus(content, status);
+  candidate = setCurrentTestComplete(candidate);
+
+  const changed = stripUpdatedForCompare(candidate) !== stripUpdatedForCompare(baseline ?? '');
+  if (!changed) {
+    // #5105 review finding 2 / M1: a material match against `baseline` does
+    // not mean `content` (the LIVE file) is already clean — a re-opened
+    // session can leave `status: testing` plus a pending `## Current Test`
+    // with no row changes, which normalizes to the SAME material candidate
+    // but is not byte-identical to what is already committed. Restore the
+    // byte-exact committed form ONLY when the live document differs from the
+    // candidate in something OTHER than `updated:` — a live document that
+    // differs from baseline/candidate ONLY in `updated:` must never be
+    // written (the stated decision above), so that case falls through to the
+    // untouched-`content` return below instead.
+    if (baseline !== null && stripUpdatedForCompare(content) !== stripUpdatedForCompare(candidate)) {
+      // `changed === false` means candidate and baseline differ at most in the `updated:` line,
+      // so the byte-exact restore target is `baseline` itself — no splice needed.
+      const restoredContent = baseline;
+      if (restoredContent !== content) {
+        return { changed: false, content: restoredContent, status, restored: true };
+      }
+    }
+    return { changed: false, content, status };
+  }
+
+  const updatedIso = clock().toISOString();
+  candidate = setFrontmatterUpdated(candidate, updatedIso);
+  return { changed: true, content: candidate, status };
+}
+
+/**
+ * Bounded, byte-exact read of `absPath` at git HEAD — the #5105 R1 `baseline`
+ * input. Routes through `pristine-baseline.cts`'s shared `gitExec` (not the
+ * trimming `execGit` shell projection, and not a second private
+ * `execFileSync` wrapper — #5105 review finding 4): the comparison this
+ * feeds is byte-sensitive (a trailing newline IS material), so the read must
+ * not trim anything.
+ *
+ * The pathspec is git-native: `git show HEAD:./<basename>` run from the file's
+ * own directory. A `./`-prefixed tree path is resolved by git relative to the
+ * command's cwd (the form `verify.cts` uses via `rev-parse --show-prefix`), so
+ * git — not JS — canonicalizes it: a symlinked `--cwd`, a project root in a
+ * subdirectory of the repository, and Windows 8.3 / drive-case / forward-slash
+ * toplevel shapes all resolve with no realpath or `path.relative` derivation,
+ * and git itself contains the path inside the repository.
+ *
+ * Returns `null` on any failure (git absent, not a repository, unborn HEAD,
+ * the path untracked/absent at HEAD) — never throws, matching the "no
+ * baseline" posture every other git-history reader in this codebase uses.
+ */
+function readBaselineAtHead(absPath: string): string | null {
+  try {
+    return gitExec(path.dirname(absPath), ['show', `HEAD:./${path.basename(absPath)}`]);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * CLI command handler (#5105 R1): `uat.complete-session <uatPath> [--message <m>]`.
+ * Deny-by-default no-op on an unchanged session — zero writes, zero commits
+ * (closes C1 in the #5105 census); a live document differing from the
+ * committed baseline ONLY in the frontmatter `updated:` value is one such
+ * no-op and is never written. On a material change, writes the file and
+ * commits through the existing `cmdCommit` internals (honoring `commit_docs`),
+ * reading `cmdCommit`'s own result back via the shared `captureStdoutSyncWrites`
+ * helper (#5105 review S9 — the ONE such helper, also used by gsd-tools.cjs)
+ * instead of a hand-rolled `fs.writeSync` monkeypatch, so this command can
+ * report the real `committed`/`reason` outcome rather than assuming success.
+ * A third `changed:false, restored:true` outcome (M1) writes the file — a
+ * byte-exact restore to the committed baseline — but never commits: this is
+ * still a no-op from git's perspective (see `completeUatSession`'s own doc).
+ */
+async function cmdUatCompleteSession(
+  cwd: string,
+  uatPathArg: string | undefined,
+  options: { message?: string } = {},
+  raw: boolean,
+): Promise<void> {
+  if (!uatPathArg) {
+    error('UAT file required: use uat.complete-session <uatPath>');
+    return;
+  }
+  const resolvedPath = requireSafePath(uatPathArg, cwd, 'UAT file', PathAcceptance.AbsoluteInsideRoot);
+  if (!fs.existsSync(resolvedPath)) {
+    error(`UAT file not found: ${uatPathArg}`);
+    return;
+  }
+  const content = fs.readFileSync(resolvedPath, 'utf-8');
+  const relPath = toPosixPath(path.relative(cwd, resolvedPath));
+  const baseline = readBaselineAtHead(resolvedPath);
+  let result: CompleteUatSessionResult;
+  try {
+    result = completeUatSession(content, { baseline });
+  } catch (err) {
+    // An unparseable (or key-unreconcilable) frontmatter block: fail closed —
+    // nothing is written and nothing is committed (`spliceFrontmatter` owns
+    // the refusal decision; this surfaces it).
+    if (!isFrontmatterWriteRefusal(err)) throw err;
+    error(`uat.complete-session: ${uatPathArg} — ${err.message}`);
+    return;
+  }
+  if (!result.changed) {
+    // #5105 review finding 2: a `restored` result still writes (byte-exact
+    // restore to HEAD's own committed form) but never commits — this is a
+    // no-op from git's perspective, not a new change.
+    if (result.restored) {
+      fs.writeFileSync(resolvedPath, result.content);
+    }
+    output({ changed: false, status: result.status, ...(result.restored ? { restored: true } : {}) }, raw);
+    return;
+  }
+  fs.writeFileSync(resolvedPath, result.content);
+  const message = options.message || `test: complete UAT session (${relPath})`;
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const commandsMod = require('./commands.cjs') as {
+    cmdCommit(cwd: string, message: string | undefined, files: string[] | undefined, raw: boolean, amend: boolean, noVerify: boolean): void;
+  };
+  // `raw: false` — cmdCommit's `raw: true` shape emits only a bare hash/reason
+  // STRING (its own `output(result, raw, hash || 'committed')` rawValue arm),
+  // not the structured `{ committed, reason }` object this command needs to
+  // read back; the full JSON envelope is captured here and never reaches the
+  // real stdout (captureStdoutSyncWrites), so suppressing it via `raw` would
+  // only destroy the information this command needs.
+  const captured = await captureStdoutSyncWrites(() => {
+    commandsMod.cmdCommit(cwd, message, [relPath], false, false, false);
+  });
+
+  let committed = false;
+  let reason: string | undefined;
+  try {
+    // io.cjs's output() redirects a >50KB JSON payload to a tmpfile and emits
+    // `@file:<path>` instead (never the case for a commit result in practice,
+    // but resolved defensively rather than assumed) — via the shared
+    // `resolveAtFileOutput` helper (#5105 review finding 7), the same one
+    // gsd-tools.cjs uses for its own `@file:` resolution.
+    const capturedJson = resolveAtFileOutput(captured);
+    const commitResult = JSON.parse(capturedJson) as { committed?: unknown; reason?: unknown };
+    committed = commitResult.committed === true;
+    if (!committed && typeof commitResult.reason === 'string') reason = commitResult.reason;
+  } catch {
+    reason = 'commit_output_unparseable';
+  }
+
+  const envelope: { changed: true; status: 'complete' | 'partial'; committed: boolean; reason?: string } = {
+    changed: true,
+    status: result.status,
+    committed,
+  };
+  if (reason) envelope.reason = reason;
+  output(envelope, raw);
 }
 
 // ─── parseCurrentTest ─────────────────────────────────────────────────────────
@@ -4044,6 +4440,8 @@ function categorizeItem(rawResult: string, reason?: string, blockedBy?: string):
 export = {
   cmdAuditUat,
   cmdRenderCheckpoint,
+  completeUatSession,
+  cmdUatCompleteSession,
   parseCurrentTest,
   parseUatItems,
   parseUatItemsWithStats,

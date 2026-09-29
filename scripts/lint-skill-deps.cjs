@@ -29,6 +29,8 @@ const { runMain } = require('./lib/cli-exit.cjs');
 
 const PROFILES_MODULE = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'install-profiles.cjs');
 const { PROFILES, loadSkillsManifest, resolveProfile } = require(PROFILES_MODULE);
+// The one frontmatter fence owner, from the same build:lib output as install-profiles.
+const { locateFrontmatterFence } = require('../gsd-core/bin/lib/frontmatter-fence.cjs');
 
 // ---------------------------------------------------------------------------
 // Argument parsing
@@ -58,9 +60,11 @@ function extractBodyReferences(body) {
 }
 
 function extractBody(content) {
-  const fmEnd = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/m);
-  if (!fmEnd) return content;
-  return content.slice(fmEnd[0].length);
+  // The block is the one the one fence owner finds (found while implementing #5105);
+  // the body starts past the closing fence line and its line ending.
+  const fence = locateFrontmatterFence(content);
+  if (!fence || !fence.closed) return content;
+  return content.slice(fence.closingFenceEnd).replace(/^\r?\n/, '');
 }
 
 // ---------------------------------------------------------------------------

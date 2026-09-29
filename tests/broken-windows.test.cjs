@@ -396,6 +396,26 @@ describe('broken-windows: parse/render roundtrip property', () => {
 // Pure: parseLedger fail-closed on malformed input
 // ---------------------------------------------------------------------------
 
+// Found while implementing #5105: the ledger's frontmatter is the block the one fence owner
+// finds — a leading BOM and the lenient `----` closer read like everywhere else, and a `--- x`
+// line is block content (so this strict parser refuses it rather than closing on it).
+describe('broken-windows: the ledger frontmatter is the block the one fence owner finds', () => {
+  test('a BOM before the ledger parses like the ledger without it', () => {
+    const rendered = renderLedger(emptyLedger());
+    assert.deepStrictEqual(parseLedger(`\uFEFF${rendered}`), parseLedger(rendered));
+  });
+
+  test('a ledger block closed by the lenient `----` parses like one closed by `---`', () => {
+    const rendered = renderLedger(emptyLedger());
+    assert.deepStrictEqual(parseLedger(rendered.replace('\n---\n', '\n----\n')), parseLedger(rendered));
+  });
+
+  test('a `--- x` line inside the frontmatter is refused, not taken as the closer', () => {
+    const rendered = renderLedger(emptyLedger());
+    assert.throws(() => parseLedger(rendered.replace('open_count: 0\n', 'open_count: 0\n--- x\n')), reasonIs(REASON.WINDOWS_LEDGER_MALFORMED));
+  });
+});
+
 describe('broken-windows: parseLedger fail-closed', () => {
   test('rejects frontmatter with wrong schema_version', () => {
     const raw = [

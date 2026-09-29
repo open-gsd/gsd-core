@@ -249,3 +249,125 @@ describe('#4725: write normalization must not reflow untouched prose', () => {
     );
   });
 });
+
+// Found while implementing #5105: the markdown rules ran over the YAML frontmatter block
+// too, so every .md write re-shaped frontmatter lines no writer touched — a blank line
+// around each column-0 `# comment` (read as a heading) and after a column-0 `- item`, and
+// the blank-run collapse shortened a block scalar. Inside a multi-line double-quoted scalar
+// an inserted blank line changes the VALUE: `frontmatter set status` silently rewrote an
+// unrelated `title`. The closed frontmatter block — located exactly as the frontmatter
+// reader locates it (`frontmatterBlock`) — is published byte-identical; only the body is
+// normalized.
+describe('#5105: write normalization leaves the frontmatter block untouched', () => {
+  const { frontmatterBlock, extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
+
+  for (const [label, doc] of [
+    ['a column-0 comment between keys', '---\na: 1\n# note\nb: 2\n---\nbody\n'],
+    ['a column-0 block list followed by a key', '---\ntags:\n- a\n- b\nstatus: t\n---\nbody\n'],
+    ['a column-0 `#` line inside a multi-line quoted scalar', '---\ntitle: "foo\n# bar\nbaz"\nstatus: t\n---\nbody\n'],
+    ['a block scalar holding a run of blank lines', '---\nd: |\n  x\n\n\n\n  y\nstatus: t\n---\nbody\n'],
+    ['a column-0 fence line inside a multi-line quoted scalar', '---\nt: "a\n```\nb"\n---\n# H\n\ntext\n'],
+  ]) {
+    test(`${label} is published byte-identical and reads back the same`, () => {
+      const { content } = normalizeContent(MD, doc);
+      assert.strictEqual(content, doc);
+      assert.deepStrictEqual(extractFrontmatter(content), extractFrontmatter(doc));
+    });
+  }
+
+  test('the body after the block is still normalized', () => {
+    const { content } = normalizeContent(MD, '---\n# c\na: 1\n---\n# Heading\ntext\n\n\n\nmore\n');
+    assert.strictEqual(content, '---\n# c\na: 1\n---\n# Heading\n\ntext\n\nmore\n');
+  });
+
+  for (const [label, shape, published] of [
+    ['CRLF', (d) => d.replace(/\n/g, '\r\n'), (d) => d],
+    ['BOM', (d) => `\uFEFF${d}`, (d) => `\uFEFF${d}`],
+  ]) {
+    test(`a ${label} document keeps its frontmatter lines (LF-published)`, () => {
+      const doc = '---\na: 1\n# note\nb: 2\n---\nbody\n';
+      assert.strictEqual(normalizeContent(MD, shape(doc)).content, published(doc));
+    });
+  }
+
+  test('an unterminated block is not frontmatter to the reader, so it is normalized as body', () => {
+    const doc = '---\na: 1\n# note\nb: 2\n';
+    assert.strictEqual(frontmatterBlock(doc), null);
+    assert.strictEqual(normalizeContent(MD, doc).content, '---\na: 1\n\n# note\n\nb: 2\n');
+  });
+
+  // The prior version of this property forced a real `---` closer between `fm` and `body`
+  // (`${fm.join('\n')}\n---\n${body...}`), so `frontmatterBlock` was GUARANTEED non-null and
+  // the check ran in one direction only: "the block this template always produces is
+  // preserved". It never generated a document whose only closing-shaped line is a look-alike
+  // ('----', '--- x') rather than an exact `---`, and it never exercised CRLF at all. Both
+  // directions are now checked against the normalizer's whole output: a closed block is
+  // published as written and everything from its closing fence on is normalized as an
+  // unskipped document would be; an unterminated document is normalized exactly as if it had
+  // no frontmatter at all. A whole `---` line closes a block (`locateFrontmatterFence`), so
+  // `--- x` and a `----` ahead of it stay block content; with no whole `---` line the first
+  // `----` closes it (the #1882 lenient parse).
+  //
+  // Normalizing `x\n` + text and dropping the `x\n` is normalizing `text` with no frontmatter
+  // skip: `x` is inert to every normalizer rule, and the line after it keeps the same
+  // predecessor-sensitive context.
+  const normalizeUnskipped = (text) => normalizeContent(MD, `x\n${text}`).content.slice(2);
+
+  test('property: every closed frontmatter block frontmatterBlock finds is published byte-identical', () => {
+    const word = fc.stringMatching(/^[a-z]{1,6}$/);
+    const dashLookalikes = fc.constantFrom('----', '--- x', '---');
+    const fmLine = fc.oneof(
+      word.map((w) => `${w}: 1`),
+      word.map((w) => `# ${w}`),
+      word.map((w) => `- ${w}`),
+      word.map((w) => `  ${w}`),
+      fc.constantFrom('', '```', '## x', '* y', '1. z'),
+      dashLookalikes,
+    );
+    const bodyLine = fc.oneof(
+      word,
+      word.map((w) => `# ${w}`),
+      word.map((w) => `- ${w}`),
+      fc.constant(''),
+      dashLookalikes,
+    );
+    fc.assert(
+      fc.property(
+        fc.array(fmLine, { maxLength: 12 }),
+        fc.array(bodyLine, { maxLength: 8 }),
+        fc.boolean(),
+        // Whether a real `---` closer is force-appended between `fm` and `body` (the old,
+        // one-directional shape) or `fm`/`body` are simply concatenated and left to close
+        // (or not) on whatever dash-shaped line they happen to contain — the only way a
+        // genuinely UNTERMINATED document (frontmatterBlock === null) is reachable here.
+        fc.boolean(),
+        fc.boolean(), // CRLF shape — `frontmatterRegion` handles CRLF natively, `_normalizeMd` LF-publishes.
+        (fm, body, bom, forceCloser, crlf) => {
+          const nl = crlf ? '\r\n' : '\n';
+          const lines = forceCloser ? [...fm, '---', ...body] : [...fm, ...body];
+          const doc = `${bom ? '\uFEFF' : ''}---${nl}${lines.join(nl)}${nl}`;
+          const located = frontmatterBlock(doc);
+          const { content } = normalizeContent(MD, doc);
+          if (located) {
+            // Non-null direction: the block `frontmatterBlock` finds is published as written
+            // (LF, as `_normalizeMd` always LF-publishes), and the closing fence line and
+            // everything after it are normalized as an unskipped document would be.
+            const closingStart = located.bom.length + located.block.lastIndexOf('\n') + 1;
+            assert.strictEqual(
+              content,
+              located.bom + doc.slice(located.bom.length, closingStart).replace(/\r\n/g, '\n') +
+                normalizeUnskipped(doc.slice(closingStart)),
+              `frontmatter block changed:\n${JSON.stringify(doc)}\n=> ${JSON.stringify(content)}`,
+            );
+          } else {
+            // Null direction: no line is a whole `---` line, so the opening fence is
+            // unterminated and the document is normalized exactly as if it had no frontmatter.
+            assert.ok(!lines.some((line) => /^---[ \t]*$/.test(line)), 'a whole `---` line always closes the block');
+            assert.strictEqual(content, normalizeUnskipped(doc));
+          }
+        },
+      ),
+      { seed: 5105, numRuns: 500, endOnFailure: true },
+    );
+  });
+});

@@ -2704,3 +2704,58 @@ Inspect source files.`;
     assert.match(result, /- web_fetch/, 'WebFetch stays granted');
   });
 });
+
+// Found while implementing #5105: every converter and frontmatter injector reads the block the
+// one fence owner (`locateFrontmatterFence`) finds. The old `indexOf('---', 3)` scan ended the
+// block at the first `---` ANYWHERE — inside a description such as `a---b` — splitting the
+// frontmatter mid-value; the `/^---…^---$/m` injectors matched a `---` pair after a preamble,
+// and missed a BOM block and the lenient `----` closer. (The shipped agents/commands carry none
+// of these shapes: every installed file is byte-identical before and after.)
+describe('converters read the frontmatter block the one fence owner finds', () => {
+  const rac = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+  const AGENT = '---\nname: gsd-x\ndescription: Splits a---b inputs\ntools: Read, Bash, mcp__foo\n---\n\nBody\n';
+
+  test('extractFrontmatterAndBody keeps a `---` inside a value in the frontmatter', () => {
+    assert.deepStrictEqual(rac.extractFrontmatterAndBody(AGENT), {
+      frontmatter: 'name: gsd-x\ndescription: Splits a---b inputs\ntools: Read, Bash, mcp__foo',
+      body: '\n\nBody\n',
+    });
+  });
+
+  test('extractFrontmatterAndBody reads a BOM block, and a `---` in unclosed prose is not a closer', () => {
+    assert.deepStrictEqual(rac.extractFrontmatterAndBody('\uFEFF---\nname: x\n---\nBody\n'), { frontmatter: 'name: x', body: '\nBody\n' });
+    const unclosed = '---\ntitle: T\n\nno closing --- line here\n';
+    assert.deepStrictEqual(rac.extractFrontmatterAndBody(unclosed), { frontmatter: null, body: unclosed });
+  });
+
+  test('OpenCode and Kilo agent conversion keep an `a---b` description whole', () => {
+    assert.strictEqual(
+      convertClaudeToOpencodeFrontmatter(AGENT, { isAgent: true }),
+      '---\nname: gsd-x\ndescription: Splits a---b inputs\nmode: subagent\n---\n\nBody\n',
+    );
+    const kilo = convertClaudeToKiloFrontmatter(AGENT, { isAgent: true });
+    assert.ok(kilo.startsWith('---\nname: gsd-x\ndescription: Splits a---b inputs\nmode: subagent\npermission:\n'), kilo);
+    assert.match(kilo, /^ {2}read: allow$/m, 'the Read grant after the `a---b` value is converted');
+    assert.match(kilo, /^ {2}bash: allow$/m, 'the Bash grant after the `a---b` value is converted');
+  });
+
+  test('appendAgentTools extends the tools of a BOM block', () => {
+    assert.strictEqual(rac.appendAgentTools('\uFEFF---\nname: x\ntools: Read\n---\nBody\n', ['Grep']), '\uFEFF---\nname: x\ntools: Read, Grep\n---\nBody\n');
+  });
+
+  test('ZCode drops mcp__ grants after an `a---b` value, and leaves a CRLF agent verbatim', () => {
+    assert.strictEqual(rac.convertClaudeAgentToZcodeAgent(AGENT), '---\nname: gsd-x\ndescription: Splits a---b inputs\ntools: Read, Bash\n---\n\nBody\n');
+    const crlf = AGENT.split('\n').join('\r\n');
+    assert.strictEqual(rac.convertClaudeAgentToZcodeAgent(crlf), crlf);
+  });
+
+  test('the effort/disallowedTools injectors use the owner\'s block: lenient closer, BOM + CRLF, no preamble match', () => {
+    assert.strictEqual(rac.injectEffortFrontmatter('---\nname: x\n----\nBody\n', 'high'), '---\nname: x\neffort: high\n----\nBody\n');
+    assert.strictEqual(
+      rac.injectDisallowedToolsFrontmatter('\uFEFF---\r\nname: x\r\n---\r\nBody\r\n', 'Write'),
+      '\uFEFF---\r\nname: x\r\ndisallowedTools: Write\r\n---\r\nBody\r\n',
+    );
+    const preambled = 'Preamble\n\n---\nname: x\n---\nBody\n';
+    assert.strictEqual(rac.injectEffortFrontmatter(preambled, 'high'), preambled);
+  });
+});
