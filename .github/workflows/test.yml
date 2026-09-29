@@ -646,30 +646,6 @@ jobs:
       - name: Guard — require GitHub-hosted runner
         run: node scripts/ci-guard-runner.cjs
 
-      # #5072: read-only diagnostic — reports whether Microsoft Defender
-      # real-time scanning is active on the hosted Windows image, since the
-      # Windows tier's cost is dominated by process/file churn that real-time
-      # scanning would inspect. Never gates the job: a cmdlet that throws is
-      # printed as "could not read", not treated as "off".
-      - name: Diagnose Defender real-time scanning (windows)
-        if: runner.os == 'Windows'
-        continue-on-error: true
-        run: |
-          Write-Host "ImageOS=$env:ImageOS ImageVersion=$env:ImageVersion NUMBER_OF_PROCESSORS=$env:NUMBER_OF_PROCESSORS"
-          try {
-            Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled, AMServiceEnabled, AntivirusEnabled, BehaviorMonitorEnabled, OnAccessProtectionEnabled, IoavProtectionEnabled, AMRunningMode | Format-List | Out-String | Write-Host
-          } catch {
-            Write-Host "Get-MpComputerStatus could not read Defender status: $($_.Exception.Message)"
-          }
-          try {
-            $pref = Get-MpPreference
-            Write-Host "DisableRealtimeMonitoring=$($pref.DisableRealtimeMonitoring)"
-            Write-Host "ExclusionPath=$($pref.ExclusionPath -join ';')"
-            Write-Host "ExclusionProcess=$($pref.ExclusionProcess -join ';')"
-          } catch {
-            Write-Host "Get-MpPreference could not read Defender preferences: $($_.Exception.Message)"
-          }
-
       - name: Rebase check — merge PR base branch into PR head
         if: github.event_name == 'pull_request'
         env:
