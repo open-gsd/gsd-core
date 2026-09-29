@@ -727,14 +727,52 @@ function readBaselineAtHead(cwd: string, absPath: string): string | null {
   try {
     const toplevelRaw = gitExec(cwd, ['rev-parse', '--show-toplevel']).trim();
     if (!toplevelRaw) return null;
-    const realToplevel = fs.realpathSync(toplevelRaw);
-    const realAbsPath = fs.realpathSync(absPath);
-    const relFromToplevel = toPosixPath(path.relative(realToplevel, realAbsPath));
-    if (!isCleanRelativePosixPath(relFromToplevel)) return null;
-    return gitExec(realToplevel, ['show', `HEAD:${relFromToplevel}`]);
+    const realToplevel = fs.realpathSync.native(toplevelRaw);
+    const pathspec = headPathspecFor(toplevelRaw, absPath);
+    if (pathspec === null) return null;
+    return gitExec(realToplevel, ['show', `HEAD:${pathspec}`]);
   } catch {
     return null;
   }
+}
+
+interface HeadPathspecDeps {
+  realpath: (p: string) => string;
+  pathMod: Pick<typeof path, 'relative' | 'isAbsolute' | 'sep'>;
+}
+
+const HEAD_PATHSPEC_DEFAULT_DEPS: HeadPathspecDeps = { realpath: fs.realpathSync.native, pathMod: path };
+
+/**
+ * #5105 (Windows CI): the toplevel-relative POSIX pathspec for
+ * `git show HEAD:<pathspec>`, or `null` on a containment refusal.
+ *
+ * Both sides MUST canonicalize through the SAME resolver, and that resolver
+ * must be the OS one (`fs.realpathSync.native`): `git rev-parse
+ * --show-toplevel` on Windows returns the LONG, forward-slash form
+ * (`C:/Users/runneradmin/...`, Git for Windows canonicalizes through
+ * `GetFinalPathNameByHandleW`), while a temp/project path handed in by a
+ * caller is routinely the 8.3 SHORT form (`C:\Users\RUNNER~1\...`). The JS
+ * `fs.realpathSync` resolves symlinks component-by-component but never
+ * expands 8.3 names, so the two never shared a prefix, `path.relative`
+ * climbed out with `..\..\RUNNER~1\...`, the containment guard refused it,
+ * and every Windows run lost its baseline (`changed:true` on an unchanged
+ * session). `.native` expands short names and normalizes separators and
+ * drive-letter case on both sides.
+ *
+ * Separator conversion splits on `pathMod.sep` (the `toPosixPath` seam's own
+ * rule), and a cross-root result (`path.relative` returns an ABSOLUTE path
+ * when the two sides share no root, e.g. different drives) is refused before
+ * conversion — `D:/x` would otherwise pass the POSIX containment check.
+ * `deps` is injectable so the Windows shape is exercised off-Windows
+ * (`path.win32` + a short→long realpath map).
+ */
+function headPathspecFor(toplevel: string, absPath: string, deps: HeadPathspecDeps = HEAD_PATHSPEC_DEFAULT_DEPS): string | null {
+  const { realpath, pathMod } = deps;
+  const rel = pathMod.relative(realpath(toplevel), realpath(absPath));
+  if (pathMod.isAbsolute(rel)) return null;
+  const posixRel = rel.split(pathMod.sep).join('/');
+  return isCleanRelativePosixPath(posixRel) ? posixRel : null;
 }
 
 /**
@@ -4481,4 +4519,8 @@ export = {
   // branch is asserted directly. It cannot be reached through the two readers —
   // see the alignment note on the function.
   parsedEntriesFor,
+  // #5105 (Windows CI): exported so the 8.3-short-name / forward-slash
+  // toplevel shape is asserted off-Windows via injected `path.win32`.
+  headPathspecFor,
+  HEAD_PATHSPEC_DEFAULT_DEPS,
 };
