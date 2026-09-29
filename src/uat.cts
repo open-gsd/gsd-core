@@ -28,7 +28,7 @@ import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
-const { extractFrontmatter, spliceFrontmatter, frontmatterListEntries, flattenObjectListItem, isFrontmatterWriteRefusal } = frontmatter;
+const { extractFrontmatter, spliceFrontmatter, frontmatterListEntries, flattenObjectListItem, isFrontmatterWriteRefusal, FrontmatterWriteRefusedError } = frontmatter;
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
@@ -549,9 +549,12 @@ function setFrontmatterUpdated(content: string, value: string): string {
   if (!bounds) return content;
   const block = content.slice(bounds.start, bounds.end);
   const keyLineRe = /^updated:.*$/m;
+  const line = `updated: ${value}`;
+  // A function replacer: the line is inserted literally, never read as a `$&`/`$'`/`` $` ``
+  // replacement pattern.
   const newBlock = keyLineRe.test(block)
-    ? block.replace(keyLineRe, `updated: ${value}`)
-    : insertBeforeClosingFence(block, bounds, `updated: ${value}`);
+    ? block.replace(keyLineRe, () => line)
+    : insertBeforeClosingFence(block, bounds, line);
   return content.slice(0, bounds.start) + newBlock + content.slice(bounds.end);
 }
 
@@ -587,7 +590,9 @@ function stripUpdatedForCompare(content: string): string {
  * restored frontmatter block is byte-identical to baseline's own, key-for-key
  * and space-for-space. Scoped to the matched `---`…`---` blocks only, same as
  * every other frontmatter helper here (#5105 review S8); a `candidate` with no
- * frontmatter block is returned unchanged.
+ * frontmatter block is returned unchanged. Throws a `FrontmatterWriteRefusedError`
+ * (`FRONTMATTER_SPLICE_VERIFY_FAILED`) when the restored block is not byte-identical to
+ * baseline's — `cmdUatCompleteSession` surfaces it and writes nothing.
  */
 function spliceBaselineUpdatedVerbatim(candidate: string, baseline: string): string {
   const bounds = frontmatterBlockBounds(candidate);
@@ -601,13 +606,29 @@ function spliceBaselineUpdatedVerbatim(candidate: string, baseline: string): str
 
   let newBlock: string;
   if (baselineLineMatch) {
+    // The baseline line is committed file content: a function replacer inserts it
+    // literally — a replacement STRING would expand a `$'`, `` $` ``, `$&` or `$$` in it
+    // (`updated: $'` would splice the rest of the block, fence included, into the line).
+    const baselineLine = baselineLineMatch[0];
     newBlock = keyLineRe.test(block)
-      ? block.replace(keyLineRe, baselineLineMatch[0])
-      : insertBeforeClosingFence(block, bounds, baselineLineMatch[0]);
+      ? block.replace(keyLineRe, () => baselineLine)
+      : insertBeforeClosingFence(block, bounds, baselineLine);
   } else {
     // Baseline has no `updated:` line at all — the restored block must not
     // have one either.
     newBlock = block.replace(/\r?\n^updated:.*$/m, '');
+  }
+  // Post-condition: this is a restore, so the block written must BE the baseline's block,
+  // byte for byte — a baseline `updated:` line that cannot be re-created in its own place
+  // (the candidate lacks the line and the baseline's is not the last key) is refused, never
+  // written as a "restore" that differs from HEAD.
+  if (newBlock !== baselineBlock) {
+    throw new FrontmatterWriteRefusedError(
+      'FRONTMATTER_SPLICE_VERIFY_FAILED',
+      'uat: refusing to restore — the restored frontmatter block would not be byte-identical to the ' +
+        'committed (HEAD) block, so writing it would not restore the committed file. Restore it with ' +
+        'git or edit the file directly.',
+    );
   }
   return candidate.slice(0, bounds.start) + newBlock + candidate.slice(bounds.end);
 }
