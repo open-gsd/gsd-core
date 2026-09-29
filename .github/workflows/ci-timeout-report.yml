@@ -141,13 +141,20 @@ jobs:
           # Publish candidate: next's copy first, then this run's rows, so rows
           # that landed on next after checkout are never reverted.
           if git cat-file -e "origin/$RP_BASE:$RP_FILE" 2>/dev/null; then
-            git show "origin/$RP_BASE:$RP_FILE" > "$RUNNER_TEMP/next-history.jsonl"
+            git show "origin/$RP_BASE:$RP_FILE" > "$RUNNER_TEMP/next-raw.jsonl"
           else
-            : > "$RUNNER_TEMP/next-history.jsonl"
+            : > "$RUNNER_TEMP/next-raw.jsonl"
           fi
-          node -e "const fs=require('fs');const {mergeHistoryTexts}=require('./scripts/ci-timeout-report.cjs');const read=(p)=>{try{return fs.readFileSync(p,'utf8')}catch{return ''}};fs.writeFileSync(process.argv[3],mergeHistoryTexts(read(process.argv[1]),read(process.argv[2])));" "$RUNNER_TEMP/next-history.jsonl" "$RP_FILE" "$RUNNER_TEMP/history.jsonl"
+          # Compare normalized content (CRLF, blank lines and a missing trailing
+          # newline never count as a difference), so a formatting-only delta
+          # never publishes a commit.
+          node -e "const fs=require('fs');const {mergeHistoryTexts}=require('./scripts/ci-timeout-report.cjs');const read=(p)=>{try{return fs.readFileSync(p,'utf8')}catch{return ''}};const next=mergeHistoryTexts(read(process.argv[1]));fs.writeFileSync(process.argv[3],next);fs.writeFileSync(process.argv[4],mergeHistoryTexts(next,read(process.argv[2])));" "$RUNNER_TEMP/next-raw.jsonl" "$RP_FILE" "$RUNNER_TEMP/next-history.jsonl" "$RUNNER_TEMP/history.jsonl"
 
           if cmp -s "$RUNNER_TEMP/history.jsonl" "$RUNNER_TEMP/next-history.jsonl"; then
+            OPEN_PR=$(find_pr)
+            if [ -n "$OPEN_PR" ]; then
+              gh pr close "$OPEN_PR" --repo "$GITHUB_REPOSITORY" --comment "Closed by ci-timeout-report: every record in this PR is already on next." --delete-branch
+            fi
             echo "history matches $RP_BASE — nothing to publish"
             exit 0
           fi
@@ -196,13 +203,13 @@ jobs:
 
           # Approve only when the gate proves this is our own data-only PR at
           # the commit we pushed.
-          gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json state,baseRefName,headRefName,headRefOid,isCrossRepository,files,reviewDecision > "$RUNNER_TEMP/pr.json"
+          gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json state,baseRefName,headRefName,headRefOid,isCrossRepository,files >"$RUNNER_TEMP/pr.json"
           DECISION=$(node -e "const {evaluateRollingPrApproval}=require('./scripts/ci-timeout-report.cjs');const pr=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));const d=evaluateRollingPrApproval({pr,expectedHeadOid:process.argv[2]});process.stdout.write(d.approve?'approve':d.reason)" "$RUNNER_TEMP/pr.json" "$HEAD_OID")
-          REVIEW_DECISION=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).reviewDecision || ''" "$RUNNER_TEMP/pr.json")
-          # A push dismisses the prior approval (dismiss_stale_reviews), so an
-          # unpushed, still-approved PR needs no second approval. The approval
-          # is pinned to the commit the gate checked.
-          if [ "$PUSHED" = "0" ] && [ "$REVIEW_DECISION" = "APPROVED" ]; then
+          # An APPROVED review already pinned to the current head commit needs no
+          # second approval; this does not depend on dismiss_stale_reviews. The
+          # approval below is pinned to the commit the gate checked.
+          APPROVED_AT_HEAD=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --paginate --jq "[.[] | select(.state == \"APPROVED\" and .commit_id == \"$HEAD_OID\")] | length" | awk '{s+=$1} END {print s+0}')
+          if [ "$APPROVED_AT_HEAD" -gt 0 ]; then
             echo "PR #$PR already approved at $HEAD_OID — not re-approving"
           elif [ "$DECISION" = "approve" ]; then
             GH_TOKEN="$APPROVE_TOKEN" gh api -X POST "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" -f event=APPROVE -f commit_id="$HEAD_OID" -f body="Auto-approved by ci-timeout-report: this repository's rolling data-only PR at $HEAD_OID, changing only $RP_FILE." >/dev/null \
@@ -211,5 +218,9 @@ jobs:
             echo "::warning title=ci-timeout-report::not approving PR #$PR: $DECISION"
           fi
 
-          gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --auto --squash --match-head-commit "$HEAD_OID" \
-            || echo "::warning title=ci-timeout-report::could not enable auto-merge on #$PR"
+          # Arm auto-merge only for a PR the gate accepts (a refused bot approval
+          # still leaves auto-merge for one human approval).
+          if [ "$DECISION" = "approve" ]; then
+            gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --auto --squash --match-head-commit "$HEAD_OID" \
+              || echo "::warning title=ci-timeout-report::could not enable auto-merge on #$PR"
+          fi

@@ -350,6 +350,17 @@ function subtractHistoryText(text, baseText) {
 }
 
 /**
+ * Workflow file name from an Actions run `path`, which the API may return with
+ * an `@<ref>` suffix (e.g. `.github/workflows/test.yml@refs/heads/next`).
+ *
+ * @param {*} runPath
+ * @returns {string}
+ */
+function workflowFileFromRunPath(runPath) {
+  return String(runPath || '').split('@')[0].split('/').pop();
+}
+
+/**
  * True only when `rec` equals, field for field, the record parseJobRecord
  * would emit from the Actions API's run and job (the exact shape
  * buildReportLines passes), so every stored field is verified and only jobs
@@ -364,7 +375,7 @@ function matchesApiJob(rec, {
 } = {}) {
   if (!rec || typeof rec !== 'object') return false;
   if (!run || typeof run !== 'object' || !job || typeof job !== 'object') return false;
-  const workflowFile = String(run.path || '').split('/').pop();
+  const workflowFile = workflowFileFromRunPath(run.path);
   if (!WORKFLOW_FILES.includes(workflowFile)) return false;
   const built = parseJobRecord({
     job: {
@@ -438,10 +449,16 @@ async function seedFromRollingPr({
     else if (Buffer.isBuffer(data)) branchText = data.toString('utf8');
     else if (data instanceof ArrayBuffer) branchText = Buffer.from(data).toString('utf8');
     else if (data instanceof Uint8Array) branchText = Buffer.from(data).toString('utf8');
-    else throw new Error('ci-timeout-report: unexpected getContent payload type (expected raw text)');
+    else branchText = null;
   } catch (err) {
     if (err && err.status === 404) return { status: 'no-file', pr: pr.number, ...zeros };
     throw err;
+  }
+  if (branchText === null) {
+    // A directory listing or object payload: the path is not a text file on the
+    // branch. The remedy is a clean rebuild from next plus this run's records.
+    core.warning(`ci-timeout-report: rolling PR #${pr.number} history file is not a text file — rebuilding from next and this run's records`);
+    return { status: 'unreadable-file', pr: pr.number, ...zeros };
   }
 
   let baseText = '';
@@ -462,11 +479,13 @@ async function seedFromRollingPr({
 
   const verifiedLines = [];
   let rowsDropped = 0;
+  let rowsBeyondCap = 0;
   let runIndex = 0;
   for (const [runId, rows] of rowsByRun) {
     runIndex += 1;
     if (runIndex > maxRuns) {
       rowsDropped += rows.length;
+      rowsBeyondCap += rows.length;
       continue;
     }
     let run;
@@ -483,7 +502,7 @@ async function seedFromRollingPr({
       }
       throw err;
     }
-    const workflowFile = String((run && run.path) || '').split('/').pop();
+    const workflowFile = workflowFileFromRunPath(run && run.path);
     if (!WORKFLOW_FILES.includes(workflowFile)) {
       rowsDropped += rows.length;
       continue;
@@ -502,6 +521,9 @@ async function seedFromRollingPr({
     fsImpl.writeFileSync(historyPath, mergeHistoryTexts(baseText, `${verifiedLines.join('\n')}\n`));
   }
 
+  if (rowsBeyondCap > 0) {
+    core.warning(`ci-timeout-report: ${rowsBeyondCap} pending row(s) from runs beyond the ${maxRuns}-run verification cap were not carried forward`);
+  }
   const dropped = s.dropped + rowsDropped;
   if (dropped > 0) {
     core.warning(`ci-timeout-report: dropped ${dropped} pending row(s) from the rolling PR that failed schema or API verification`);
@@ -957,6 +979,7 @@ module.exports = {
   ROLLING_PR,
   evaluateRollingPrApproval,
   subtractHistoryText,
+  workflowFileFromRunPath,
   matchesApiJob,
   seedFromRollingPr,
   formatHistoryLine,

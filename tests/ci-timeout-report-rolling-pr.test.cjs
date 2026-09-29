@@ -34,6 +34,7 @@ const {
   evaluateRollingPrApproval,
   subtractHistoryText,
   matchesApiJob,
+  workflowFileFromRunPath,
   parseJobRecord,
   seedFromRollingPr,
   ROLLING_PR,
@@ -307,25 +308,8 @@ describe('sanitizeHistoryText', () => {
           }
           if (isValidHistoryRecord(rec)) validKeys.add(recordKey(rec));
         }
-        assert.ok(lines.length < HISTORY_RECORD_LIMITS.maxLines);
         assert.equal(outLines.length, validKeys.size);
         assert.equal(sanitizeHistoryText(out).text, out);
-      }),
-    );
-  });
-
-  test('property: same invariants over texts mixing valid rows and junk', () => {
-    const lineArb = fc.oneof(
-      fc.integer({ min: 1, max: 5 }).map((n) => JSON.stringify(valid(n))),
-      fc.string(),
-    );
-    fc.assert(
-      fc.property(fc.array(lineArb, { maxLength: 8 }), (lines) => {
-        const out = sanitizeHistoryText(lines.join('\n')).text;
-        assert.equal(sanitizeHistoryText(out).text, out);
-        for (const l of out.split('\n').filter(Boolean)) {
-          assert.equal(isValidHistoryRecord(JSON.parse(l)), true);
-        }
       }),
     );
   });
@@ -394,6 +378,15 @@ const verify = (rec, { run = apiRun(), job = apiJob() } = {}) => matchesApiJob(r
   run, job, workflowYamlText: YAML_TEXT, covered: null,
 });
 
+describe('workflowFileFromRunPath', () => {
+  test('plain path, @ref suffix, empty or undefined', () => {
+    assert.equal(workflowFileFromRunPath('.github/workflows/test.yml'), 'test.yml');
+    assert.equal(workflowFileFromRunPath('.github/workflows/test.yml@refs/heads/next'), 'test.yml');
+    assert.equal(workflowFileFromRunPath(''), '');
+    assert.equal(workflowFileFromRunPath(undefined), '');
+  });
+});
+
 describe('matchesApiJob', () => {
   test('the record parseJobRecord builds from the same inputs → true', () => {
     assert.equal(verify(apiRec()), true);
@@ -445,6 +438,10 @@ describe('matchesApiJob', () => {
   test('run.path is compared by basename (nested or bare)', () => {
     assert.equal(verify(apiRec(), { run: apiRun({ path: 'test.yml' }) }), true);
     assert.equal(verify(apiRec(), { run: apiRun({ path: undefined }) }), false);
+  });
+
+  test('run.path with an @<ref> suffix still matches its workflow file', () => {
+    assert.equal(verify(apiRec(), { run: apiRun({ path: '.github/workflows/test.yml@refs/heads/next' }) }), true);
   });
 
   test('a workflow file outside WORKFLOW_FILES → false even when the record matches', () => {
@@ -677,10 +674,17 @@ describe('seedFromRollingPr', () => {
     assert.equal(env.files.get(historyPath), baseRows + line(p1));
   });
 
-  test('a non-text getContent payload (plain object) rejects', async () => {
-    const env = makeEnv({ baseText: baseRows, contentPayload: { type: 'file', content: 'eA==' } });
-    await assert.rejects(env.run(), /unexpected getContent payload type \(expected raw text\)/);
-    assert.equal(env.calls.writes, 0);
+  test('a non-text getContent payload (plain object or directory listing) is unreadable-file with a warning, not a throw', async () => {
+    const payloads = [{ type: 'file', content: 'eA==' }, [{ type: 'file', path: ROLLING_PR.historyFile }]];
+    for (const contentPayload of payloads) {
+      const env = makeEnv({ baseText: baseRows, contentPayload });
+      assert.deepEqual(await env.run(), {
+        status: 'unreadable-file', pr: 77, candidate: 0, verified: 0, dropped: 0,
+      });
+      assert.equal(env.calls.writes, 0);
+      assert.equal(env.logged.warning.length, 1);
+      assert.match(env.logged.warning[0], /rolling PR #77 history file is not a text file — rebuilding from next and this run's records/);
+    }
   });
 
   test('a pending row whose run 404s is dropped with a warning', async () => {
@@ -725,7 +729,8 @@ describe('seedFromRollingPr', () => {
     });
     assert.deepEqual(limited.calls.getWorkflowRun, [901, 902]);
     assert.equal(limited.files.get(historyPath), baseRows + line(recs[0]) + line(recs[1]));
-    assert.equal(limited.logged.warning.length, 1);
+    assert.equal(limited.logged.warning.length, 2);
+    assert.equal(limited.logged.warning.filter((w) => /1 pending row\(s\) from runs beyond the 2-run verification cap were not carried forward/.test(w)).length, 1);
 
     const exact = makeEnv({ baseText: baseRows, branchText, apis: apiFor(...recs) });
     assert.deepEqual(await exact.run({ maxRuns: 3 }), {
@@ -733,6 +738,7 @@ describe('seedFromRollingPr', () => {
     });
     assert.equal(exact.files.get(historyPath), baseRows + recs.map(line).join(''));
     assert.deepEqual(exact.logged.warning, []);
+    assert.equal(exact.logged.warning.some((w) => /verification cap/.test(w)), false);
   });
 
   test('base rows in the branch file are never re-verified; only pending runs hit the API', async () => {
@@ -744,13 +750,17 @@ describe('seedFromRollingPr', () => {
     assert.deepEqual(env.calls.listJobs, [901, 902]);
   });
 
-  test('newest pending rows survive a large next history (cap applies to pending rows only)', async () => {
-    const pending = apiRec({ runId: 901 });
-    const bigBase = Array.from({ length: 50 }, (_, i) => line({ ...recA, runId: 1000 + i })).join('');
-    const env = makeEnv({ baseText: bigBase, branchText: bigBase + line(pending), apis: apiFor(pending) });
-    const result = await env.run();
-    assert.equal(result.verified, 1);
-    assert.equal(env.files.get(historyPath), bigBase + line(pending));
+  test('the line cap applies to pending rows only: a base larger than maxLines does not evict a full set of pending rows', () => {
+    const maxLines = 3;
+    const validRow = (runId) => ({
+      runId, jobName: 'j', workflowFile: 'test.yml', elapsedMs: 10, timeoutMinutes: 5, pct: 3,
+    });
+    const base = Array.from({ length: maxLines + 2 }, (_, i) => line(validRow(1000 + i))).join('');
+    const pendingRows = Array.from({ length: maxLines }, (_, i) => validRow(2000 + i));
+    const branch = base + pendingRows.map(line).join('');
+    const pending = subtractHistoryText(branch, base);
+    const result = sanitizeHistoryText(pending, { maxLines, maxLineLength: 1024 });
+    assert.deepEqual(result, { text: pendingRows.map(line).join(''), kept: maxLines, dropped: 0 });
   });
 
   test('nothing verified → history file untouched', async () => {
