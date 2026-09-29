@@ -322,7 +322,7 @@ describe('#5118 C3: one stale route — the regeneration step is ONE file includ
   });
 
   test('V43: the second reading of stale is deleted — no stale-reverification step, and the inventory manifest does not list it', () => {
-    assert.equal(fs.existsSync(path.join(EXEC_STEPS_5118, 'stale-reverification.md')), false);
+    assert.ok(!fs.existsSync(path.join(EXEC_STEPS_5118, 'stale-reverification.md')), 'the second reading of stale is deleted');
     const manifest = fs.readFileSync(path.join(ROOT_5118, 'docs', 'INVENTORY-MANIFEST.json'), 'utf-8');
     assert.equal(manifest.includes('execute-phase/steps/stale-reverification.md'), false);
   });
