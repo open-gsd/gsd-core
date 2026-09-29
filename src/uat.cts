@@ -28,7 +28,7 @@ import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
-const { extractFrontmatter, spliceFrontmatter, frontmatterListEntries, flattenObjectListItem, isFrontmatterWriteRefusal, FrontmatterWriteRefusedError } = frontmatter;
+const { extractFrontmatter, spliceFrontmatter, frontmatterListEntries, flattenObjectListItem, isFrontmatterWriteRefusal } = frontmatter;
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
@@ -577,62 +577,6 @@ function stripUpdatedForCompare(content: string): string {
   return content.slice(0, bounds.start) + newBlock + content.slice(bounds.end);
 }
 
-/**
- * #5105 review finding 2 / m1 — byte-exact restore helper: splice
- * `baseline`'s own `updated:` LINE verbatim into `candidate`'s frontmatter
- * block, in place of `setFrontmatterUpdated(candidate, frontmatterUpdatedValue(baseline))`.
- * `setFrontmatterUpdated` always RE-RENDERS as `updated: <value>` (one space,
- * unconditionally) — a baseline line with different spacing (`updated:X`, no
- * space) would round-trip to `updated: X`, which is a byte DIFFERENCE from
- * baseline, not a restore. This function instead copies baseline's raw
- * `updated:.*` line text (whatever it is) into candidate's block, and when
- * baseline has NO `updated:` line at all, removes candidate's — so the
- * restored frontmatter block is byte-identical to baseline's own, key-for-key
- * and space-for-space. Scoped to the matched `---`…`---` blocks only, same as
- * every other frontmatter helper here (#5105 review S8); a `candidate` with no
- * frontmatter block is returned unchanged. Throws a `FrontmatterWriteRefusedError`
- * (`FRONTMATTER_SPLICE_VERIFY_FAILED`) when the restored block is not byte-identical to
- * baseline's — `cmdUatCompleteSession` surfaces it and writes nothing.
- */
-function spliceBaselineUpdatedVerbatim(candidate: string, baseline: string): string {
-  const bounds = frontmatterBlockBounds(candidate);
-  if (!bounds) return candidate;
-  const block = candidate.slice(bounds.start, bounds.end);
-  const keyLineRe = /^updated:.*$/m;
-
-  const baselineBounds = frontmatterBlockBounds(baseline);
-  const baselineBlock = baselineBounds ? baseline.slice(baselineBounds.start, baselineBounds.end) : '';
-  const baselineLineMatch = keyLineRe.exec(baselineBlock);
-
-  let newBlock: string;
-  if (baselineLineMatch) {
-    // The baseline line is committed file content: a function replacer inserts it
-    // literally — a replacement STRING would expand a `$'`, `` $` ``, `$&` or `$$` in it
-    // (`updated: $'` would splice the rest of the block, fence included, into the line).
-    const baselineLine = baselineLineMatch[0];
-    newBlock = keyLineRe.test(block)
-      ? block.replace(keyLineRe, () => baselineLine)
-      : insertBeforeClosingFence(block, bounds, baselineLine);
-  } else {
-    // Baseline has no `updated:` line at all — the restored block must not
-    // have one either.
-    newBlock = block.replace(/\r?\n^updated:.*$/m, '');
-  }
-  // Post-condition: this is a restore, so the block written must BE the baseline's block,
-  // byte for byte — a baseline `updated:` line that cannot be re-created in its own place
-  // (the candidate lacks the line and the baseline's is not the last key) is refused, never
-  // written as a "restore" that differs from HEAD.
-  if (newBlock !== baselineBlock) {
-    throw new FrontmatterWriteRefusedError(
-      'FRONTMATTER_SPLICE_VERIFY_FAILED',
-      'uat: refusing to restore — the restored frontmatter block would not be byte-identical to the ' +
-        'committed (HEAD) block, so writing it would not restore the committed file. Restore it with ' +
-        'git or edit the file directly.',
-    );
-  }
-  return candidate.slice(0, bounds.start) + newBlock + candidate.slice(bounds.end);
-}
-
 interface CompleteUatSessionResult {
   changed: boolean;
   content: string;
@@ -691,9 +635,10 @@ interface CompleteUatSessionResult {
  * something OTHER than `updated:` (e.g. a re-opened session left
  * `status: testing` plus a pending `## Current Test` with no row changes),
  * the byte-exact `baseline` form is restored (`restored: true`) — `content`
- * splices baseline's own `updated:` LINE verbatim (whatever its exact
- * spacing, or its absence) rather than re-rendering it, so the restored bytes
- * match `baseline` exactly. This restore path is DENIED (no write, `content`
+ * IS `baseline` itself: `changed === false` means candidate and baseline differ
+ * at most in the `updated:` line, so the exact committed bytes (whatever the
+ * `updated:` line's spacing, position, or absence) are the restore target and
+ * no splice is performed. This restore path is DENIED (no write, `content`
  * is the untouched live bytes, no `restored` flag) when live differs from the
  * candidate ONLY in `updated:` — that case is covered by the decision above.
  */
@@ -738,7 +683,9 @@ function completeUatSession(
     // written (the stated decision above), so that case falls through to the
     // untouched-`content` return below instead.
     if (baseline !== null && stripUpdatedForCompare(content) !== stripUpdatedForCompare(candidate)) {
-      const restoredContent = spliceBaselineUpdatedVerbatim(candidate, baseline);
+      // `changed === false` means candidate and baseline differ at most in the `updated:` line,
+      // so the byte-exact restore target is `baseline` itself — no splice needed.
+      const restoredContent = baseline;
       if (restoredContent !== content) {
         return { changed: false, content: restoredContent, status, restored: true };
       }

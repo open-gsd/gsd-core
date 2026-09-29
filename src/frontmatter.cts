@@ -1938,7 +1938,7 @@ function setOwnField(fm: Frontmatter, field: string, value: FrontmatterValue): v
 /**
  * `spliceFrontmatter` for the set/merge commands: a write refusal (`FrontmatterWriteRefusedError`
  * — unparseable block, unreconcilable keys, a block that would not read back, a comment that
- * would be lost) is reported as `{ error, code, path }` and nothing is written — the same
+ * would be lost, a block too complex to classify within the parse budget) is reported as `{ error, code, path }` and nothing is written — the same
  * shape `cmdFrontmatterGet` uses for an unparseable block. Returns null when refused; any
  * other error propagates as before.
  */
