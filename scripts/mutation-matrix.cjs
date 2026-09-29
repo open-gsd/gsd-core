@@ -454,12 +454,11 @@ const COVERED = {
   //     bijection.
   //   - frontmatter-fence.test.cjs: the writer's BOM / CRLF / empty-block fence cases.
   //
-  // minScore 50: the provisional floor the ratchet test permits for a newly registered module
-  // whose score has not been measured (tests/mutation-matrix-ratchet.test.cjs:107-116), pending
-  // the first CI measurement, after which it is set to floor(measured) - 1. The shard cannot run
-  // locally (see HOW TO UPDATE above), so the first CI run measures it; scripts/check-mutation-
-  // score-ratchet.cjs then fails that run if the score exceeds 50 + RATCHET_SLACK (5) and names
-  // the floor to set, which lands with its RATCHET_BASELINE entry.
+  // minScore 62: the module was first registered with a provisional floor of 50 (the minimum
+  // the ratchet test permits, tests/mutation-matrix-ratchet.test.cjs:107-116) because the shard
+  // cannot run locally (see HOW TO UPDATE above). The first CI measurement was 63.82% (CI run
+  // 36586350120, PR #5114), so the floor is set to floor(63.82) - 1 = 62, following this file's
+  // convention, together with its RATCHET_BASELINE entry.
   'frontmatter-splice': {
     cjs: 'gsd-core/bin/lib/frontmatter-splice.cjs',
     extraTests: [
@@ -467,7 +466,7 @@ const COVERED = {
       'frontmatter.property.test.cjs',
       'frontmatter.unit.test.cjs',
     ],
-    minScore: 50,
+    minScore: 62,
   },
   // adr-parser / config-schema / active-workstream-store / core-utils: derivation reproduces
   // their prior hand lists exactly (every constraining file's own name already matched the
