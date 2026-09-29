@@ -27,7 +27,7 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const yaml = require('js-yaml');
 
 const { spliceFrontmatter, isFrontmatterWriteRefusal } = require('../gsd-core/bin/lib/frontmatter-splice.cjs');
-const { extractFrontmatter, reconstructFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
+const { extractFrontmatter, reconstructFrontmatter, spliceSeam } = require('../gsd-core/bin/lib/frontmatter.cjs');
 
 // ─── Arbitraries ─────────────────────────────────────────────────────────────
 
@@ -36,6 +36,13 @@ const yamlKey = fc.stringMatching(/^[a-z][a-z0-9_]{0,19}$/);
 
 // Simple YAML scalar value: printable ASCII without : ' " # newlines
 const yamlScalarValue = fc.stringMatching(/^[a-zA-Z0-9 ._/-]{1,40}$/);
+
+describe('frontmatter: spliceSeam hands out immutable internals', () => {
+  test('the seam bag and the shared YAML load options are frozen', () => {
+    assert.equal(Object.isFrozen(spliceSeam), true);
+    assert.equal(Object.isFrozen(spliceSeam.YAML_LOAD_OPTS), true);
+  });
+});
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -315,9 +322,20 @@ describe('frontmatter: spliceFrontmatter parse budget', () => {
   // accepted — an allowance of 0 or 1 refuses any splice that has to parse a key's lines.
   test('parseBudgetChars below 0, fractional or not a number is a TypeError; 0 and 1 are allowances', () => {
     const doc = '---\na: 1\n---\nbody\n';
-    for (const bad of [-1, 1.5, Number.NaN, '5', Number.MAX_SAFE_INTEGER + 1]) {
+    // The option can only LOWER the shipped limit (SPLICE_PARSE_BUDGET_CHARS = 20,000,000): the
+    // limit itself is accepted, limit + 1 and MAX_SAFE_INTEGER (which would disable the guard) are not.
+    const SHIPPED_LIMIT = 20_000_000;
+    for (const bad of [-1, 1.5, Number.NaN, '5', Number.MAX_SAFE_INTEGER + 1, Number.MAX_SAFE_INTEGER, SHIPPED_LIMIT + 1]) {
       assert.throws(() => spliceFrontmatter(doc, { a: '2' }, { parseBudgetChars: bad }), TypeError, String(bad));
     }
+    assert.equal(
+      spliceFrontmatter('body\n', { a: '2' }, { parseBudgetChars: SHIPPED_LIMIT }),
+      spliceFrontmatter('body\n', { a: '2' }),
+    );
+    assert.equal(
+      spliceFrontmatter('body\n', { a: '2' }, { parseBudgetChars: SHIPPED_LIMIT - 1 }),
+      spliceFrontmatter('body\n', { a: '2' }),
+    );
     for (const allowance of [0, 1]) {
       assert.throws(() => spliceFrontmatter(doc, { a: '2' }, { parseBudgetChars: allowance }), TOO_COMPLEX, String(allowance));
     }

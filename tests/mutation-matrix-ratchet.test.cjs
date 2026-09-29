@@ -207,8 +207,9 @@ const RATCHET_BASELINE = {
   'prompt-budget':           87,  // CI run 33012034388 (2026-08-25): measured 88.95%; floor(88.95)-1
   'frontmatter':             65,  // #3706: raised from 62; measured 66.67 on PR 3867
   'frontmatter-splice':      50,  // #5105: net-new module (the writer, split out of frontmatter);
-                                   // unmeasured — the minimum permitted floor, the #3227
-                                   // state-contract precedent. Ratchet from its first CI shard.
+                                   // unmeasured — 50 is the provisional floor this test permits
+                                   // (see the minimum-floor check below); after the first CI
+                                   // measurement set it to floor(measured) - 1.
   'adr-parser':              68,
   'config-schema':           74,  // CI run 33012034388 (2026-08-25): measured 75.51%; floor(75.51)-1
   'active-workstream-store': 86,  // CI run 33012034388 (2026-08-25): measured 87.42%; floor(87.42)-1

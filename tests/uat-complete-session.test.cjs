@@ -791,54 +791,98 @@ describe('S9: committed/reason reporting (#5105 review — no fs.writeSync monke
   });
 });
 
-// #5105 (Windows CI, PR #5114 windows-latest shards 2/3 + 3/3): every CLI
-// row expecting changed:false got changed:true because `readBaselineAtHead`
-// canonicalized `git rev-parse --show-toplevel` (LONG, forward-slash form:
-// `C:/Users/runneradmin/...`) and the caller's path (8.3 SHORT form:
-// `C:\Users\RUNNER~1\...`) through `fs.realpathSync`, which never expands 8.3
-// names — the relative pathspec climbed out, containment refused it, and the
-// baseline was null. The Windows shape is driven here off-Windows by
-// injecting `path.win32` and an OS-style (short→long expanding) realpath.
-describe('#5105 Windows: HEAD pathspec for git show resolves across 8.3 / separator / drive-case shapes', () => {
-  const lib = () => require('../gsd-core/bin/lib/uat.cjs');
-  const LONG = 'C:\\Users\\runneradmin\\AppData\\Local\\Temp\\gsd-x';
-  // Models GetFinalPathNameByHandleW: expands the 8.3 segment, normalizes
-  // separators and the drive letter to upper case.
-  function nativeLikeRealpath(p) {
-    return path.win32.normalize(p)
-      .replace(/^[a-z]:/, (d) => d.toUpperCase())
-      .replace(/\\RUNNER~1\\/i, '\\runneradmin\\');
+// #5105 (Windows CI, PR #5114 windows-latest shards 2/3 + 3/3): every CLI row expecting
+// changed:false got changed:true because the HEAD baseline pathspec was derived in JS from two
+// spellings of the same directory (the LONG forward-slash `rev-parse --show-toplevel` form vs the
+// caller's 8.3 SHORT `C:\Users\RUNNER~1\...` form), which never shared a prefix, so the baseline
+// was null. The baseline is now read git-natively (`git show HEAD:./<basename>` from the file's
+// own directory), so git resolves the path and no JS-side spelling can produce a null baseline.
+// The alternate-spelling scenario is driven on POSIX through a symlinked parent directory.
+describe('#5105: the HEAD baseline resolves however the project path is spelled', () => {
+  const { execFileSync } = require('child_process');
+
+  function seedCompleteUat(repoRoot, subRoot) {
+    const phaseDir = path.join(subRoot, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const uatPath = path.join(phaseDir, '01-UAT.md');
+    fs.writeFileSync(uatPath, completeUatContent());
+    execFileSync('git', ['add', '-A'], { cwd: repoRoot, timeout: GIT_TIMEOUT_MS });
+    execFileSync('git', ['commit', '-q', '-m', 'seed UAT'], { cwd: repoRoot, timeout: GIT_TIMEOUT_MS });
+    return uatPath;
   }
-  const deps = { realpath: nativeLikeRealpath, pathMod: path.win32 };
 
-  test('git-form toplevel (forward slashes, long name) vs 8.3 short-name file path → toplevel-relative POSIX pathspec', () => {
-    const got = lib().headPathspecFor(
-      'C:/Users/runneradmin/AppData/Local/Temp/gsd-x',
-      'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gsd-x\\.planning\\phases\\01-foo\\01-UAT.md',
-      deps,
-    );
-    assert.strictEqual(got, '.planning/phases/01-foo/01-UAT.md');
+  test('project reached through a symlinked parent directory: unchanged session is a no-op', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const uatPath = seedCompleteUat(projectDir, projectDir);
+    const headBefore = gitHeadCount(projectDir);
+
+    const linkParent = fs.mkdtempSync(path.join(require('os').tmpdir(), 'gsd-uat-link-'));
+    t.after(() => cleanup(linkParent));
+    const linked = path.join(linkParent, 'alias');
+    try {
+      fs.symlinkSync(projectDir, linked, 'dir');
+    } catch (err) {
+      // Symlink creation needs a privilege on some Windows hosts; the Windows spelling scenario
+      // is then covered by the OS's own 8.3 short-name path, which the native call also resolves.
+      t.skip(`symlink unavailable: ${err.code}`);
+      return;
+    }
+
+    const result = runGsdTools(['query', 'uat.complete-session', '.planning/phases/01-foo/01-UAT.md'], linked);
+    assert.ok(result.success, `expected success: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.changed, false, 'the baseline must resolve through the alternate spelling');
+    assert.strictEqual(fs.readFileSync(uatPath, 'utf-8'), completeUatContent(), 'bytes must be untouched');
+    assert.strictEqual(gitHeadCount(projectDir), headBefore, 'no spurious commit from a null baseline');
   });
 
-  test('lower-case drive letter on one side, subdirectory project root → pathspec is still toplevel-relative', () => {
-    const got = lib().headPathspecFor(
-      'C:/Users/runneradmin/AppData/Local/Temp/gsd-x',
-      'c:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gsd-x\\nested-project\\.planning\\01-UAT.md',
-      deps,
-    );
-    assert.strictEqual(got, 'nested-project/.planning/01-UAT.md');
+  test('project root in a subdirectory reached through a symlinked parent: unchanged session is a no-op', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const subRoot = path.join(projectDir, 'nested-project');
+    seedCompleteUat(projectDir, subRoot);
+    const headBefore = gitHeadCount(projectDir);
+
+    const linkParent = fs.mkdtempSync(path.join(require('os').tmpdir(), 'gsd-uat-link-'));
+    t.after(() => cleanup(linkParent));
+    const linked = path.join(linkParent, 'alias');
+    try {
+      fs.symlinkSync(projectDir, linked, 'dir');
+    } catch (err) {
+      t.skip(`symlink unavailable: ${err.code}`);
+      return;
+    }
+
+    const result = runGsdTools(['query', 'uat.complete-session', '.planning/phases/01-foo/01-UAT.md'], path.join(linked, 'nested-project'));
+    assert.ok(result.success, `expected success: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).changed, false);
+    assert.strictEqual(gitHeadCount(projectDir), headBefore);
   });
 
-  test('a file on a different drive is refused (cross-root relative is absolute), never fed to git show as `D:/...`', () => {
-    assert.strictEqual(lib().headPathspecFor(LONG, 'D:\\elsewhere\\01-UAT.md', deps), null);
+  test('an untracked UAT file has no baseline: changed:true', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-UAT.md'), completeUatContent());
+
+    const result = runGsdTools(['query', 'uat.complete-session', '.planning/phases/01-foo/01-UAT.md'], projectDir);
+    assert.ok(result.success, `expected success: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).changed, true, 'no HEAD blob → no baseline → material');
   });
 
-  test('a file outside the toplevel is refused', () => {
-    assert.strictEqual(lib().headPathspecFor(LONG, 'C:\\Users\\runneradmin\\other\\01-UAT.md', deps), null);
-  });
+  test('a directory that is not a repository degrades to a null baseline: changed:true, no throw', (t) => {
+    const plainDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'gsd-uat-nogit-'));
+    t.after(() => cleanup(plainDir));
+    const phaseDir = path.join(plainDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-UAT.md'), completeUatContent());
+    // No repository to commit into: skip the commit so the outcome under test is the baseline alone.
+    fs.writeFileSync(path.join(plainDir, '.planning', 'config.json'), JSON.stringify({ commit_docs: false }));
 
-  test('the production resolver is the OS realpath (fs.realpathSync.native), which expands 8.3 names; the JS realpath does not', () => {
-    assert.strictEqual(lib().HEAD_PATHSPEC_DEFAULT_DEPS.realpath, fs.realpathSync.native);
-    assert.strictEqual(lib().HEAD_PATHSPEC_DEFAULT_DEPS.pathMod, path);
+    const result = runGsdTools(['query', 'uat.complete-session', '.planning/phases/01-foo/01-UAT.md'], plainDir);
+    assert.ok(result.success, `expected success: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).changed, true);
   });
 });
