@@ -372,6 +372,85 @@ describe('frontmatter: spliceFrontmatter properties', () => {
   });
 });
 
+// ─── parse budget (found while implementing #5105) ──────────────────────────
+// The splice decides whether a `#` or trailing blank line is value text by re-parsing the
+// key's lines without it, so its work grows with (lines × such lines × line length). One call
+// may parse at most SPLICE_PARSE_BUDGET_CHARS characters (each parse also counts one for its
+// line break); past that it refuses with FRONTMATTER_TOO_COMPLEX instead of stalling. Outcomes
+// only — never elapsed time.
+describe('frontmatter: spliceFrontmatter parse budget', () => {
+  const { SPLICE_PARSE_BUDGET_CHARS } = require('../gsd-core/bin/lib/frontmatter.cjs');
+
+  // `k: <A×n>` changed to `k: B` parses exactly twice: the old value (`k: ` + n, plus one) and
+  // the regenerated one (its length, plus one) — no tail lines, no `#`.
+  const regenerated = reconstructFrontmatter({ k: 'B' });
+  const docParsing = (total) => `---\nk: ${'A'.repeat(total - (3 + 1) - (regenerated.length + 1))}\n---\nbody\n`;
+
+  for (const [label, total, refused] of [
+    ['limit - 1', SPLICE_PARSE_BUDGET_CHARS - 1, false],
+    ['limit', SPLICE_PARSE_BUDGET_CHARS, false],
+    ['limit + 1', SPLICE_PARSE_BUDGET_CHARS + 1, true],
+  ]) {
+    test(`a splice parsing exactly ${label} characters ${refused ? 'is refused' : 'is written'}`, () => {
+      const write = () => spliceFrontmatter(docParsing(total), { k: 'B' });
+      if (refused) assert.throws(write, { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_TOO_COMPLEX' });
+      else assert.equal(write(), `---\n${regenerated}\n---\nbody\n`);
+    });
+  }
+
+  const keepChomp = (blanks) => `---\na: |+\n  x\n${'\n'.repeat(blanks)}b: 1\n---\nbody\n`;
+  const hashList = (lines) => `---\nl:\n${`  - "v${' #h'.repeat(20)}"\n`.repeat(lines)}---\nbody\n`;
+
+  test('a `|+` key followed by 20000 blank lines: splicing another key is refused, not stalled', () => {
+    assert.throws(() => spliceFrontmatter(keepChomp(20000), { ...extractFrontmatter(keepChomp(20000)), b: '2' }),
+      { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_TOO_COMPLEX' });
+  });
+
+  test('the same `|+` shape with 50 blank lines is written, the kept blank lines untouched', () => {
+    const doc = keepChomp(50);
+    assert.equal(spliceFrontmatter(doc, { ...extractFrontmatter(doc), b: '2' }), doc.replace('b: 1', 'b: 2'));
+  });
+
+  test('a changed 800-item list holding 20 quoted ` #` per item is refused, not stalled', () => {
+    const doc = hashList(800);
+    assert.throws(() => spliceFrontmatter(doc, { ...extractFrontmatter(doc), l: ['a'] }),
+      { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_TOO_COMPLEX' });
+  });
+
+  test('the same list shape with 5 items is written', () => {
+    const doc = hashList(5);
+    assert.equal(spliceFrontmatter(doc, { ...extractFrontmatter(doc), l: ['a'] }), `---\n${reconstructFrontmatter({ l: ['a'] })}\n---\nbody\n`);
+  });
+
+  // Planning-document-sized blocks full of comments, inline ` #`, quoted `#` and `|+` tails
+  // never reach the budget: the refusal is reserved for pathological blocks.
+  test('property: comment-heavy planning-sized blocks never reach the parse budget', () => {
+    const word = fc.stringMatching(/^[a-z]{1,8}$/);
+    const segment = fc.oneof(
+      word.map((w) => [`KEY: ${w} # note ${w}`]),
+      fc.array(word, { minLength: 1, maxLength: 12 }).map((ws) => ['KEY:', ...ws.flatMap((w) => [`  # about ${w}`, `  - "${w} #${w}" # ${w}`])]),
+      fc.tuple(word, fc.nat({ max: 12 })).map(([w, n]) => ['KEY: |+', `  ${w} # kept`, ...Array(n).fill('')]),
+      fc.array(word, { minLength: 1, maxLength: 12 }).map((ws) => ['KEY:', ...ws.map((w) => `  ${w}: "${w} # ${w}" # c`)]),
+    );
+    fc.assert(
+      fc.property(
+        fc.uniqueArray(fc.stringMatching(/^[a-z][a-z0-9_]{0,7}$/), { minLength: 1, maxLength: 12 }),
+        fc.array(fc.tuple(segment, fc.array(fc.constantFrom('', '# gap'), { maxLength: 3 })), { minLength: 12, maxLength: 12 }),
+        fc.nat(),
+        (keys, specs, pick) => {
+          const doc = ['---', ...keys.flatMap((k, i) => [...specs[i][0].map((l) => l.replace('KEY', k)), ...specs[i][1]]), '---', 'body'].join('\n');
+          const target = keys[pick % keys.length];
+          try {
+            spliceFrontmatter(doc, { ...extractFrontmatter(doc), [target]: 'changed' });
+          } catch (err) {
+            assert.notEqual(err.code, 'FRONTMATTER_TOO_COMPLEX', `a planning-sized block reached the parse budget: ${JSON.stringify(doc)}`);
+          }
+        },
+      ),
+    );
+  });
+});
+
 // ─── (f) prohibitions bijection (#644) ────────────────────────────────────────
 // Locks the new parseMustHavesBlock(…, 'prohibitions') ↔ spliceFrontmatter path that
 // the prohibition probe adds. The example-based version lives in
