@@ -139,7 +139,8 @@ const {
 } = planningWorkspace;
 
 const { extractFrontmatter, frontmatterBlock } = frontmatterMod;
-const { isPhaseComplete, resolveVerificationFile, resolveUatFile } = verificationMod;
+const { isPhaseComplete, resolveVerificationFile, resolveUatFile, VERIFICATION_STATUS } = verificationMod;
+type VerificationStatus = verificationMod.VerificationStatus;
 const { evaluateUatPassed } = uatPredicateMod;
 const { resolveLoopHooks } = loopResolverMod;
 const { loadRegistry } = capabilityLoaderMod;
@@ -265,12 +266,18 @@ function listPhasePlanFiles(phaseDir: string): string[] {
 
 interface PhaseCompletionProjection {
   implementation_complete: boolean;
-  verification_status: string;
+  verification_status: VerificationStatus;
   verification_passed: boolean;
   phase_complete: boolean;
   completion_status: string;
   verification_next_action: string;
   verification_next_command: string;
+  /**
+   * #5118: the BARE command the verification owner routes this status to
+   * (`''`, `execute-phase`, `plan-phase`, `verify-work`) — the same table entry
+   * `verification_next_command` is projected from. Additive.
+   */
+  verification_route: string;
   /**
    * #3057 B3: true when readVerificationStatus's internal staleness check could
    * NOT run to completion (an fs / scanPhasePlans / clock failure) — routing
@@ -318,7 +325,7 @@ function buildPhaseCompletionProjection(
   const verificationStatus = completionResult.value.verification;
   const projectedVerificationStatus = verificationStatus.status;
   const projectedVerificationAction = verificationStatus.next_action;
-  const verificationPassed = projectedVerificationStatus === 'passed';
+  const verificationPassed = projectedVerificationStatus === VERIFICATION_STATUS.PASSED;
   const phaseComplete = completionResult.value.complete;
 
   return {
@@ -336,6 +343,7 @@ function buildPhaseCompletionProjection(
     })),
     verification_next_action: projectedVerificationAction,
     verification_next_command: verificationStatus.next_command,
+    verification_route: verificationStatus.route,
     // #3057 B3: readVerificationStatus's result carries this flag when its
     // internal staleness check could not run to completion.
     verification_stale_check_indeterminate: 'staleCheckIndeterminate' in verificationStatus

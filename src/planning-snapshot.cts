@@ -30,6 +30,7 @@ const { listMilestonePhaseDirs, listAllPhaseDirs } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verificationMod = require('./verification.cjs');
 const { isPhaseComplete } = verificationMod;
+type VerificationStatus = verificationMod.VerificationStatus;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import scanPhasePlans = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -130,7 +131,14 @@ function worstScope(...scopes: Scope[]): Scope {
 interface PhaseSnapshot {
   dir: string;
   complete: boolean;
-  verificationStatus: string;
+  verificationStatus: VerificationStatus;
+  /**
+   * #5118: the report whose `status` is outside the closed set, when there is
+   * one — `isPhaseComplete` absorbed its VerificationStatusError (scope
+   * UNREADABLE). The health surface reports it as a finding (W030) instead of
+   * crashing on the defect it diagnoses.
+   */
+  verificationStatusError: { file: string; message: string } | null;
   planCount: number;
   summaryCount: number;
   scope: Scope;
@@ -316,10 +324,12 @@ function buildPhaseSnapshot(phasesDir: string, dir: string, convention: string |
   // report exactly like its legacy twin.
   const completionResult = isPhaseComplete(fullPhaseDir, { convention });
   const scanResult = scanPhasePlans(fullPhaseDir);
+  const statusError = completionResult.value.statusError;
   return {
     dir,
     complete: completionResult.value.complete,
     verificationStatus: completionResult.value.verification.status,
+    verificationStatusError: statusError ? { file: statusError.file, message: statusError.message } : null,
     planCount: scanResult.planCount,
     summaryCount: scanResult.summaryCount,
     scope: worstScope(completionResult.scope, scanResult.scope),

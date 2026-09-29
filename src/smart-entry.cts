@@ -61,6 +61,13 @@ const { readStateHeadFreshness } = stateMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import unusableInput = require('./unusable-input.cjs');
 const { warnUnusableInput, UNUSABLE_REASON } = unusableInput;
+// #5118: the verification-status owner's report reader.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import verificationMod = require('./verification.cjs');
+const { reportStatusOf, isVerificationReportPath } = verificationMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module
+import coreUtilsMod = require('./core-utils.cjs');
+const { normalizeLineEndings } = coreUtilsMod;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -358,10 +365,18 @@ function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolea
   const candidates = files.filter((f) => /summary|verif(?:y|ication)|uat/i.test(f));
   for (const name of candidates) {
     let content = '';
+    const filePath = path.join(latestDir, name);
     try {
-      content = fs.readFileSync(path.join(latestDir, name), 'utf-8');
+      content = fs.readFileSync(filePath, 'utf-8');
     } catch {
       continue;
+    }
+    // #5118: a VERIFICATION report's frontmatter `status` is judged by its
+    // owner (src/verification.cts) — an out-of-set value is a hard error here
+    // as at every other reader, never a silent "not failed". The body
+    // `STATUS:` marker scan below is this probe's own signal.
+    if (isVerificationReportPath(name)) {
+      reportStatusOf(extractFrontmatter(normalizeLineEndings(content), filePath), filePath);
     }
     const statusMatch = content.match(/STATUS:\s*([A-Za-z_-]+)/i);
     if (statusMatch && /\b(blocked|fail(ed)?)\b/i.test(statusMatch[1])) {

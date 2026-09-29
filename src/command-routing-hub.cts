@@ -47,6 +47,22 @@ const { createNoOpLogger } = observabilityLogger;
 import cliExitModule = require('./cli-exit.cjs');
 const { ExitError } = cliExitModule;
 
+/**
+ * #5118: `code`s of typed domain errors that gsd-tools.cjs's entry seam
+ * translates into their ERROR_REASON itself. The hub re-throws these like
+ * ExitError instead of flattening them into a HandlerFailure.
+ * `ERR_VERIFICATION_STATUS_OUT_OF_SET` is verification.cts's
+ * VerificationStatusError (a report `status` outside the closed enum →
+ * `verification_status_invalid`).
+ */
+const CLI_SEAM_TRANSLATED_ERROR_CODES: ReadonlySet<string> = new Set(['ERR_VERIFICATION_STATUS_OUT_OF_SET']);
+
+function isCliSeamTranslatedError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = (err as Error & { code?: unknown }).code;
+  return typeof code === 'string' && CLI_SEAM_TRANSLATED_ERROR_CODES.has(code);
+}
+
 // ─── Error kind constants ─────────────────────────────────────────────────────
 
 /**
@@ -352,6 +368,13 @@ function createHub({ cjsRegistry, manifest, logger }: HubOptions = {}): { dispat
       // up to the runMain() at the CLI entrypoint, which is the ONLY place
       // ExitError is meant to be caught.
       if (err instanceof ExitError) {
+        throw err;
+      }
+      // #5118: a typed domain error the CLI entry translates itself (once,
+      // centrally, into its own ERROR_REASON) must reach it intact —
+      // flattening it into a HandlerFailure here would re-emit it as a
+      // reason-less `unknown` error.
+      if (isCliSeamTranslatedError(err)) {
         throw err;
       }
       if (err instanceof Error) {

@@ -15,13 +15,17 @@ import { clampPercent } from './phase-lifecycle.cjs';
 // importing them here does not violate this module's "No I/O. No async."
 // contract.
 import { phaseStatusFromFacts, toWireStatus } from './phase-status.cjs';
+// #5118: type-only (erased) — this module stays I/O- and import-free at load.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import type verificationTypes = require('./verification.cjs');
+type VerificationStatus = verificationTypes.VerificationStatus;
 
 // Internal helpers
 function toPosixPath(p: string): string {
   return p.split('\\').join('/');
 }
 
-// #2562/#2645's FAILING_VERIFICATION_STATUSES set (the verdicts that used to
+// #2562/#2645's former failing-verdict set (the verdicts that used to
 // disqualify a phase from `complete` when combined with a local
 // summary-count-meets-plan-count check) was removed by ADR-3180 §7.4
 // (#3186): `complete` is now the single canonical owner's verdict
@@ -105,11 +109,12 @@ export interface PhaseFilesCount {
    */
   inMilestone?: boolean;
   /**
-   * #2562: the phase's `*-VERIFICATION.md` verdict (`readVerificationStatus`).
+   * #2562: the phase's `*-VERIFICATION.md` verdict (`readVerificationStatus`),
+   * a closed VerificationStatus (#5118) or `null` when there is none.
    * Informational only as of #3186 — see `complete` below for the field this
    * builder actually derives `PhaseStatus.status` from.
    */
-  verificationStatus?: string;
+  verificationStatus?: VerificationStatus | null;
   /**
    * ADR-3180 §7.4 (#3186): the phase's completion verdict from the single
    * canonical owner (`isPhaseComplete`, src/verification.cts), computed by

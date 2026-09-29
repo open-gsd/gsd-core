@@ -21,7 +21,7 @@ import markdownSectionizer = require('./markdown-sectionizer.cjs');
 const { stripFencedCode } = markdownSectionizer;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verification = require('./verification.cjs');
-const { readVerificationStatus } = verification;
+const { readVerificationStatus, reportStatusOf, VERIFICATION_STATUS } = verification;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const { scopeToPhase } = phaseIdMod;
@@ -110,14 +110,11 @@ const BLOCKING_UAT_FM_STATUSES = new Set([
 // UAT file frontmatter `result` values that indicate failure
 const BLOCKING_UAT_FM_RESULTS = new Set(['pending', 'blocked', 'failed']);
 
-// Canonical VERIFICATION frontmatter `status` value that indicates passing.
-const PASSING_VERIFICATION_STATUSES = new Set(['passed']);
-
-// VERIFICATION file frontmatter `status` values that explicitly block
-const BLOCKING_VERIFICATION_FM_STATUSES = new Set([
-  'human_needed', 'gaps_found', 'pending', 'blocked', 'partial',
-  'failed', 'in_progress',
-]);
+// #5118: the VERIFICATION report's `status` vocabulary is the owner's closed
+// enum (src/verification.cts) — this module no longer keeps its own passing /
+// blocking sets. `pending|blocked|partial|failed|in_progress` were never
+// written by the verifier; a report carrying one (or any other out-of-set
+// value) is now a VerificationStatusError from the owner, not a blocker.
 
 // UAT test-item `result` values that count as passing
 const PASSING_RESULTS = new Set(['passed', 'pass']);
@@ -684,16 +681,17 @@ function evaluateUatPassed(
       continue;
     }
 
-    const vfm = extractFrontmatter(raw, verificationFilePath) as Record<string, unknown>;
-    const vStatus = vfm['status'] as string | undefined;
+    // #5118: judged by the owner's report reader — a status outside the
+    // closed writer set throws VerificationStatusError (no silent pass-through).
+    const vStatus = reportStatusOf(extractFrontmatter(raw, verificationFilePath), verificationFilePath);
 
-    if (vStatus && BLOCKING_VERIFICATION_FM_STATUSES.has(vStatus)) {
+    if (vStatus === VERIFICATION_STATUS.HUMAN_NEEDED || vStatus === VERIFICATION_STATUS.GAPS_FOUND) {
       blockers.push(`${file}: verification status=${vStatus}`);
-    } else if (vStatus && PASSING_VERIFICATION_STATUSES.has(vStatus)) {
-      // Allowlist: only explicitly-passing statuses count
+    } else if (vStatus === VERIFICATION_STATUS.PASSED) {
+      // Allowlist: only an explicitly-passing status counts
       hasPassingVerification = true;
     }
-    // Missing or unknown status: does NOT count as passing, does NOT push a blocker
+    // No status: does NOT count as passing, does NOT push a blocker
     // (handled by the requireVerification policy check below if needed)
   }
 
@@ -707,9 +705,9 @@ function evaluateUatPassed(
     const verificationResult = readVerificationStatus(phaseFullDir);
     const verificationStatus = verificationResult.status;
     verificationStaleCheckIndeterminate = verificationResult.staleCheckIndeterminate === true;
-    if (verificationStatus === 'stale') {
-      blockers.push('policy: verification status=stale');
-    } else if (verificationStatus !== 'passed' || !hasPassingVerification) {
+    if (verificationStatus === VERIFICATION_STATUS.STALE) {
+      blockers.push(`policy: verification status=${VERIFICATION_STATUS.STALE}`);
+    } else if (verificationStatus !== VERIFICATION_STATUS.PASSED || !hasPassingVerification) {
       blockers.push('policy: verification required but no passing *-VERIFICATION.md found');
     }
   }

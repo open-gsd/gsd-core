@@ -28,6 +28,8 @@
 
 import type { Result } from './write-set.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+import type verificationTypes = require('./verification.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import planDocumentMod = require('./plan-document.cjs');
 const { parsePlanDocument } = planDocumentMod;
 
@@ -201,7 +203,11 @@ function computeSpawnPlan(input: SpawnPlanInput): SpawnPlanResult {
 
 // ─── Failure/verification routing (design rows 28,30,31,34-35) ─────────────
 
-type VerifierStatus = 'passed' | 'gaps_found' | 'human_needed';
+// #5118: the verifier's writer set is the closed enum's subset owned by
+// src/verification.cts — imported as a TYPE (erased), so this pure module
+// stays free of the owner's I/O dependencies while every `case` below is
+// checked against the one vocabulary.
+type VerifierStatus = verificationTypes.VerifierStatus;
 
 type VerificationRouting =
   | { action: 'complete' }

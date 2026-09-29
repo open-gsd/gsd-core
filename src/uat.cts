@@ -39,6 +39,10 @@ const { listMilestonePhaseDirs, getAllArchivedPhaseDirs } = phaseLocator;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import auditMod = require('./audit.cjs');
 const { isAuditItemAcknowledged, deriveUatGapSnapshotValue } = auditMod;
+// #5118: the verification-status owner's report reader and closed enum.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import verificationMod = require('./verification.cjs');
+const { reportStatusOf, VERIFICATION_STATUS } = verificationMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import pristineBaseline = require('./pristine-baseline.cjs');
 const { gitExec } = pristineBaseline;
@@ -276,12 +280,14 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
       const verificationFilePath = path.join(phaseDir, file);
       const content = readNormalizedDocument(verificationFilePath);
       const verFm = extractFrontmatter(content, verificationFilePath) as Record<string, unknown>;
-      const status = ((verFm.status as string) || 'unknown').toLowerCase();
+      // #5118: the owner's report reader judges `status` (exact match, no case
+      // folding); an out-of-set value throws VerificationStatusError.
+      const status = reportStatusOf(verFm, verificationFilePath);
       // #3805: same marker, same 'status' snapshot key as scanVerificationGaps,
       // and the same ORDERING — the open-status gate runs FIRST (a marker on
       // a file that would never surface is not a suppressed item), then the
       // acknowledgement suppresses what the gate surfaced.
-      if (status === 'human_needed' || status === 'gaps_found') {
+      if (status === VERIFICATION_STATUS.HUMAN_NEEDED || status === VERIFICATION_STATUS.GAPS_FOUND) {
         if (isAuditItemAcknowledged(verFm, { snapshotKey: 'status', currentValue: status })) {
           acknowledgedFiles++;
           continue;
@@ -4163,12 +4169,12 @@ function parseVerificationGapsItems(content: string): UatItem[] {
  */
 function parseVerificationItems(content: string, status: string, sourcePath?: string): UatItem[] {
   const items: UatItem[] = [];
-  if (status === 'gaps_found') {
+  if (status === VERIFICATION_STATUS.GAPS_FOUND) {
     items.push(...parseHumanVerificationItems(content, sourcePath));
     items.push(...parseVerificationGapsItems(content));
     return items;
   }
-  if (status === 'human_needed') {
+  if (status === VERIFICATION_STATUS.HUMAN_NEEDED) {
     return parseHumanVerificationItems(content, sourcePath);
   }
   return items;

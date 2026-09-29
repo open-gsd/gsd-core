@@ -318,7 +318,7 @@ function readDocument(filePath: string, root: string): { text: string | null; ex
 function containmentEnforcingVerificationFs(planningRoot: string): {
   readdirSync(dir: string): string[];
   readFileSync(filePath: string, encoding: 'utf-8'): string;
-  statSync(filePath: string): { mtimeMs: number; isFile(): boolean };
+  statSync(filePath: string): { mtimeMs: number; isFile(): boolean; isDirectory(): boolean };
 } {
   function assertContained(target: string): void {
     if (!isPathContained(target, planningRoot)) {
@@ -334,7 +334,9 @@ function containmentEnforcingVerificationFs(planningRoot: string): {
       assertContained(filePath);
       return fs.readFileSync(filePath, encoding);
     },
-    statSync(filePath: string): { mtimeMs: number; isFile(): boolean } {
+    statSync(filePath: string): { mtimeMs: number; isFile(): boolean; isDirectory(): boolean } {
+      // #5118: a code-less containment throw here is NOT "phase directory
+      // not found" — readVerificationStatus falls through to `missing`.
       assertContained(filePath);
       return fs.statSync(filePath);
     },
@@ -1247,8 +1249,8 @@ function buildPlanningInspect(cwd: string): Record<string, unknown> {
     // GAP 2 (#2790 follow-up security review): `readVerificationStatus`
     // (`src/verification.cts`) is a shared owner with its own unguarded
     // `readFileSync` — a `*-VERIFICATION.md` symlinked outside the planning
-    // root would leak an unrecognized `status:` value verbatim via its
-    // "Unexpected verification status '<value>'" `next_action` string. Fixed
+    // root would leak its unrecognized `status:` value verbatim (today via
+    // the VerificationStatusError message, #5118). Fixed
     // from THIS consumer's side via the injectable `opts.fs` seam that
     // function already exposes, never by touching its signature — see
     // `containmentEnforcingVerificationFs`'s doc comment. This same seam's
@@ -1301,6 +1303,8 @@ function buildPlanningInspect(cwd: string): Record<string, unknown> {
       verification: {
         status: verification.status,
         next_action: verification.next_action ?? null,
+        // #5118: additive — the bare command the owner routes this status to.
+        route: verification.route,
       },
       roadmap_acceptance: {
         checkbox: checkboxByPhaseKey.has(phaseKeyFromDir(phase.dir))

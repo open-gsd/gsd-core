@@ -43,6 +43,10 @@ import { platformWriteSync } from './shell-command-projection.cjs';
 import io = require('./io.cjs');
 const { output, error: ioError } = io;
 import { parseNamedArgsOrExit } from './command-arg-projection.cjs';
+// #5118: the verification-status owner's report reader and closed enum.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import verificationMod = require('./verification.cjs');
+const { reportStatusOf, VERIFICATION_STATUS, VerificationStatusError } = verificationMod;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1132,9 +1136,11 @@ function scanVerificationGaps(planDir: string, cwd: string): ScanOutcome<Verific
       const content = normalizeLineEndings(rawContent);
 
       const fm = extractFrontmatter(content, safeFilePath);
-      const status = ((fm.status as string) || 'unknown').toLowerCase();
+      // #5118: the owner's report reader judges `status` — exact match, no
+      // case folding; an out-of-set value throws VerificationStatusError.
+      const status = reportStatusOf(fm, safeFilePath);
 
-      if (status !== 'gaps_found' && status !== 'human_needed') continue;
+      if (status !== VERIFICATION_STATUS.GAPS_FOUND && status !== VERIFICATION_STATUS.HUMAN_NEEDED) continue;
 
       if (isAuditItemAcknowledged(fm, { snapshotKey: 'status', currentValue: status })) {
         acknowledged++;
@@ -1356,7 +1362,14 @@ function auditOpenArtifacts(cwd: string): AuditResult {
   })();
 
   const verificationGaps = (() => {
-    try { return scanVerificationGaps(planDir, cwd); } catch { return { items: [{ scan_error: true, phase: '', file: '', status: '' }], acknowledged: 0 }; }
+    try {
+      return scanVerificationGaps(planDir, cwd);
+    } catch (err) {
+      // #5118: an out-of-set report status is the owner's hard error, not a
+      // scan failure to fold into a sentinel — let it reach the CLI seam.
+      if (err instanceof VerificationStatusError) throw err;
+      return { items: [{ scan_error: true, phase: '', file: '', status: '' }], acknowledged: 0 };
+    }
   })();
 
   const contextQuestions = (() => {

@@ -35,8 +35,12 @@ import commandRoutingHub = require('./command-routing-hub.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import cjsCommandRouterAdapter = require('./cjs-command-router-adapter.cjs');
 import { safeJsonParse } from './security.cjs';
+// #5118: the writer set is owned by src/verification.cts.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import verificationMod = require('./verification.cjs');
 
 const { output, ERROR_REASON } = io;
+const { VERIFIER_STATUSES } = verificationMod;
 const { makeInvalidArgs } = commandRoutingHub;
 const { routeHubCommandFamily } = cjsCommandRouterAdapter;
 
@@ -254,7 +258,7 @@ function routeQuickBatchCommand({ args, cwd, raw, error, _quickBatch, _quickBatc
       // `quick-batch verification-routing --status <passed|gaps_found|human_needed>`
       'verification-routing': () => {
         const status = argValue(args, '--status');
-        if (status !== 'passed' && status !== 'gaps_found' && status !== 'human_needed') {
+        if (typeof status !== 'string' || !(VERIFIER_STATUSES as ReadonlySet<string>).has(status)) {
           return makeInvalidArgs(
             '--status',
             'Usage: gsd-tools quick-batch verification-routing --status <passed|gaps_found|human_needed>',

@@ -17,9 +17,21 @@
  * `passed+gaps_found+human_needed` instead of `passed` and blocking a
  * passed phase).
  *
- * The fix-forward is to scope the grep to the leading frontmatter block and
- * take only the first match:
+ * The fix-forward for a scalar with no owning query is to scope the grep to
+ * the leading frontmatter block and take only the first match:
  *   sed -n '/^---$/,/^---$/p' "$f" | grep -m1 "^<key>:" | cut -d: -f2 | tr -d ' '
+ *
+ * ## Rule `verification-status-raw-read` (#5118, ADR-5057 Phase 4)
+ *
+ * A VERIFICATION report's `status` HAS an owning query — its closed enum,
+ * staleness check and routing live in src/verification.cts. Reading that
+ * scalar with awk / sed / grep `^status:` (scoped to the frontmatter or not)
+ * bypasses all three (transition.md's awk read was W15 in the #5118 census),
+ * so it is red even when frontmatter-scoped. The fix-forward is the owner:
+ *   gsd_run query verification.status "$PHASE_DIR" --pick status
+ * `findRawVerificationStatusReadsInBlock` flags a logical line (backslash
+ * continuations joined) that names a `*VERIFICATION*` path or variable and
+ * reads `^status` with awk, sed or grep.
  *
  * ## What this scans
  *
@@ -67,6 +79,16 @@ const GREP_KEY_RE = /grep\s+((?:-\S+\s+)*)(["'])\^([A-Za-z_][\w-]*):\2/;
 const FRONTMATTER_SCOPE_RE = /\^---[\s\S]{0,300}?---/;
 
 const ALLOW_RE = /#\s*lint-allow:\s*frontmatter-scalar-broad-grep/;
+
+const RULE_BROAD_GREP = 'frontmatter-scalar-broad-grep';
+const RULE_VERIFICATION_RAW_READ = 'verification-status-raw-read';
+
+// #5118: a VERIFICATION report path or variable (`*-VERIFICATION.md`,
+// `$VERIFICATION_FILE`, `${VERIFICATION_PATH}`), a raw `^status` pattern, and
+// the text tool doing the read.
+const VERIFICATION_PATH_RE = /VERIFICATION/;
+const RAW_STATUS_PATTERN_RE = /\^status\b/;
+const RAW_READ_TOOL_RE = /(^|[\s|;&(`$])(awk|gawk|sed|grep|egrep)\s/;
 
 // `| head -1` / `| head -n 1` immediately after the grep is functionally
 // equivalent to `-m1` for this check: frontmatter always precedes the body
@@ -163,8 +185,59 @@ function findBroadGrepsInBlock(lines) {
     }
 
     if (pipedToTokenTool || comparedLater) {
-      findings.push({ lineIndex: i, key, snippet: line.trim() });
+      findings.push({ lineIndex: i, key, snippet: line.trim(), rule: RULE_BROAD_GREP });
     }
+  }
+  return findings;
+}
+
+/**
+ * Join backslash-continued physical lines into logical lines, remembering the
+ * index of each logical line's FIRST physical line.
+ * @param {string[]} lines
+ * @returns {{ lineIndex: number, text: string }[]}
+ */
+function logicalLines(lines) {
+  const out = [];
+  let current = null;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const continued = /\\\s*$/.test(line);
+    const piece = continued ? line.replace(/\\\s*$/, ' ') : line;
+    if (current === null) current = { lineIndex: i, text: piece };
+    else current.text += piece;
+    if (!continued) {
+      out.push(current);
+      current = null;
+    }
+  }
+  if (current !== null) out.push(current);
+  return out;
+}
+
+/**
+ * Pure (#5118): find every raw read of a VERIFICATION report's `status` in a
+ * single fenced bash/sh block — awk / sed / grep over a `*VERIFICATION*`
+ * path with a `^status` pattern, whether or not it is frontmatter-scoped.
+ * The owner query (`gsd_run query verification.status …`) carries no
+ * `^status` pattern and is never flagged. Returns
+ * `{ lineIndex, key, snippet, rule }[]` (lineIndex = the logical line's first
+ * physical line).
+ * @param {string[]} lines
+ * @returns {{ lineIndex: number, key: string, snippet: string, rule: string }[]}
+ */
+function findRawVerificationStatusReadsInBlock(lines) {
+  const findings = [];
+  for (const { lineIndex, text } of logicalLines(lines)) {
+    if (!VERIFICATION_PATH_RE.test(text)) continue;
+    if (!RAW_STATUS_PATTERN_RE.test(text)) continue;
+    if (!RAW_READ_TOOL_RE.test(text)) continue;
+    findings.push({
+      lineIndex,
+      key: 'status',
+      snippet: text.replace(/\s+/g, ' ').trim(),
+      rule: RULE_VERIFICATION_RAW_READ,
+    });
   }
   return findings;
 }
@@ -198,12 +271,18 @@ function scan(roots = DEFAULT_ROOTS) {
     for (const file of walkMarkdown(abs)) {
       const blocks = extractBashBlocks(fs.readFileSync(file, 'utf8'));
       for (const block of blocks) {
-        for (const finding of findBroadGrepsInBlock(block.lines)) {
+        const rawReads = findRawVerificationStatusReadsInBlock(block.lines);
+        const rawReadLines = new Set(rawReads.map((f) => f.lineIndex));
+        // A raw VERIFICATION `status` read is reported once, under its own
+        // rule, not a second time as a broad grep.
+        const broad = findBroadGrepsInBlock(block.lines).filter((f) => !rawReadLines.has(f.lineIndex));
+        for (const finding of [...rawReads, ...broad]) {
           offenders.push({
             file: path.relative(ROOT, file),
             line: block.startLine + finding.lineIndex,
             key: finding.key,
             snippet: finding.snippet,
+            rule: finding.rule,
           });
         }
       }
@@ -217,21 +296,47 @@ function main() {
   const roots = rootsEnv ? rootsEnv.split(path.delimiter).filter(Boolean) : DEFAULT_ROOTS;
   const offenders = scan(roots);
   if (offenders.length > 0) {
-    const detail = offenders.map((o) => `  ${o.file}:${o.line}  ${o.snippet}`).join('\n');
-    throw new ExitError(
-      1,
-      'lint-frontmatter-scalar-broad-grep: `grep "^key:"` over the whole file, compared to an\n'
-        + 'exact token, with no frontmatter scoping and no -m1 (DEFECT.FRONTMATTER-SCALAR-BROAD-GREP).\n'
-        + 'A body line beginning `key:` is enough to break this. Scope to the frontmatter block:\n'
-        + '  sed -n \'/^---$/,/^---$/p\' "$f" | grep -m1 "^<key>:" | cut -d: -f2 | tr -d \' \'\n'
-        + 'or add `# lint-allow: frontmatter-scalar-broad-grep — <reason>` if this is a genuine\n'
-        + 'whole-body scan:\n'
-        + detail,
-    );
+    const detailFor = (rule) => offenders
+      .filter((o) => o.rule === rule)
+      .map((o) => `  ${o.file}:${o.line}  ${o.snippet}`)
+      .join('\n');
+    const sections = [];
+    const rawReads = detailFor(RULE_VERIFICATION_RAW_READ);
+    if (rawReads) {
+      sections.push(
+        `[${RULE_VERIFICATION_RAW_READ}] a VERIFICATION report's \`status\` read with awk/sed/grep\n`
+          + '(DEFECT.FRONTMATTER-SCALAR-BROAD-GREP, #5118). It bypasses the closed VerificationStatus\n'
+          + 'enum, the staleness check and the routing table. Read it through its owner:\n'
+          + '  gsd_run query verification.status "$PHASE_DIR" --pick status\n'
+          + rawReads,
+      );
+    }
+    const broad = detailFor(RULE_BROAD_GREP);
+    if (broad) {
+      sections.push(
+        `[${RULE_BROAD_GREP}] \`grep "^key:"\` over the whole file, compared to an exact token,\n`
+          + 'with no frontmatter scoping and no -m1 (DEFECT.FRONTMATTER-SCALAR-BROAD-GREP).\n'
+          + 'A body line beginning `key:` is enough to break this. Scope a scalar that has no owning\n'
+          + 'query to the frontmatter block (a VERIFICATION `status` always goes through its owner):\n'
+          + '  sed -n \'/^---$/,/^---$/p\' "$f" | grep -m1 "^<key>:" | cut -d: -f2 | tr -d \' \'\n'
+          + 'or add `# lint-allow: frontmatter-scalar-broad-grep — <reason>` if this is a genuine\n'
+          + 'whole-body scan:\n'
+          + broad,
+      );
+    }
+    throw new ExitError(1, `lint-frontmatter-scalar-broad-grep:\n${sections.join('\n')}`);
   }
   console.log(`ok lint-frontmatter-scalar-broad-grep: no un-scoped frontmatter-scalar greps in ${roots.length} root(s)`);
 }
 
-module.exports = { findBroadGrepsInBlock, extractBashBlocks, scan, DEFAULT_ROOTS };
+module.exports = {
+  findBroadGrepsInBlock,
+  findRawVerificationStatusReadsInBlock,
+  extractBashBlocks,
+  scan,
+  DEFAULT_ROOTS,
+  RULE_BROAD_GREP,
+  RULE_VERIFICATION_RAW_READ,
+};
 
 if (require.main === module) runMain(main);

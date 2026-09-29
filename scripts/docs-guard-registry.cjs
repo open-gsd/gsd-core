@@ -421,6 +421,9 @@ const DOCS_GUARD_TESTS = {
   'tests/verifier-behavior-unverified.test.cjs': ['docs/reference/planning-artifacts.md'],
   'tests/verifier-coincidental-reliance.test.cjs': ['docs/AGENTS.md'],
   'tests/verify.test.cjs': ['docs/reference/plan-md.md'],
+  // #5118 V43: asserts the deleted execute-phase/steps/stale-reverification.md
+  // is absent from the generated inventory manifest.
+  'tests/verify-lifecycle-writes-e2e.test.cjs': ['docs/INVENTORY-MANIFEST.json'],
   'tests/workflow-fragments.test.cjs': ['docs/reference/workflow-fragments.md'],
 };
 

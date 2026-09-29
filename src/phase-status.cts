@@ -147,8 +147,13 @@ export interface PhaseStatusFacts {
   summaryCount: number;
   /** The completion verdict — `isPhaseComplete(...).value.complete` (§7.4), or a caller's stricter write gate built on it. */
   complete: boolean;
-  /** `isPhaseComplete(...).value.verification.status`, or null when the caller has none. Only `human_needed` changes the ladder. */
-  verificationStatus: string | null;
+  /**
+   * `isPhaseComplete(...).value.verification.status`, or null when the caller
+   * has none. Only `human_needed` changes the ladder. #5118: the closed
+   * VerificationStatus enum (ADR-5057 :223 — imported in the same PR that
+   * closes it); a value outside it is a TypeError where it is produced.
+   */
+  verificationStatus: VerificationStatus | null;
 }
 
 /**
@@ -158,7 +163,10 @@ export interface PhaseStatusFacts {
  *   no summaries                 → PLANNED
  *   fewer summaries than plans   → IN_PROGRESS
  *   verification `human_needed`  → NEEDS_REVIEW
- *   otherwise                    → EXECUTED     (gaps_found, stale, missing, unknown, unparseable)
+ *   otherwise                    → EXECUTED     (gaps_found, stale, missing, unparseable, phase_dir_not_found)
+ *
+ * `verificationStatus`, when non-null, must be a VerificationStatus member
+ * (#5118) — the same fail-where-produced rule as `assertPhaseStatus`.
  *
  * Completion comes ONLY from `complete`. The ladder never restates a
  * summary-versus-plan completion comparison (scripts/lint-completion-predicate-drift.cjs shape (c)).
@@ -173,17 +181,25 @@ export function phaseStatusFromFacts(facts: PhaseStatusFacts): PhaseStatus {
   if (typeof complete !== 'boolean') {
     throw new TypeError(`phaseStatusFromFacts: complete must be a boolean, got ${JSON.stringify(complete)}`);
   }
+  const { verification } = owners();
+  if (verificationStatus !== null && verificationStatus !== undefined) {
+    // Called through a plain function type: a lazily-required owner's
+    // assertion signature cannot narrow here (TS2775), and needs not to.
+    const assertMember: (v: unknown, where: string) => void = verification.assertVerificationStatus;
+    assertMember(verificationStatus, 'phaseStatusFromFacts: verificationStatus');
+  }
   if (complete) return PHASE_STATUS.COMPLETE;
   if (planCount === 0) return PHASE_STATUS.NOT_STARTED;
   if (summaryCount === 0) return PHASE_STATUS.PLANNED;
   if (summaryCount < planCount) return PHASE_STATUS.IN_PROGRESS;
-  if (verificationStatus === 'human_needed') return PHASE_STATUS.NEEDS_REVIEW;
+  if (verificationStatus === verification.VERIFICATION_STATUS.HUMAN_NEEDED) return PHASE_STATUS.NEEDS_REVIEW;
   return PHASE_STATUS.EXECUTED;
 }
 
 // ─── The I/O entry point ───────────────────────────────────────────────────
 
 type VerificationMod = typeof import('./verification.cjs');
+type VerificationStatus = import('./verification.cjs').VerificationStatus;
 type PlanScanMod = typeof import('./plan-scan.cjs');
 type Scope = import('./planning-scope.cjs').Scope;
 type PhaseCompletion = ReturnType<VerificationMod['isPhaseComplete']>;

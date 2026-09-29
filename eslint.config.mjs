@@ -41,6 +41,7 @@ import noExactCaseEnvAccess from './eslint-rules/no-exact-case-env-access.cjs';
 import noAdhocTimeoutLiteral from './eslint-rules/no-adhoc-timeout-literal.cjs';
 import noRenderedTextLengthAssert from './eslint-rules/no-rendered-text-length-assert.cjs';
 import noUnconfinedPathJoin from './eslint-rules/no-unconfined-path-join.cjs';
+import noVerificationStatusLiteral from './eslint-rules/no-verification-status-literal.cjs';
 
 const unconfinedPathJoinAllowlist = require('./eslint-rules/no-unconfined-path-join.allowlist.json');
 
@@ -76,6 +77,7 @@ const localPlugin = {
     'no-adhoc-timeout-literal': noAdhocTimeoutLiteral,
     'no-rendered-text-length-assert': noRenderedTextLengthAssert,
     'no-unconfined-path-join': noUnconfinedPathJoin,
+    'no-verification-status-literal': noVerificationStatusLiteral,
   },
 };
 
@@ -488,6 +490,11 @@ export default tseslint.config(
       // #3624 (epic #3411 Phase 4): flag an exact-case env-var read off a
       // non-process.env receiver. See CONTEXT.md DEFECT.WINDOWS-EXACT-CASE-ENV-ACCESS.
       'local/no-exact-case-env-access': 'error',
+      // #5118 (ADR-5057 Phase 4): the verification-status vocabulary is a
+      // closed enum owned by src/verification.cts (VERIFICATION_STATUS); a
+      // literal compared against a verification status elsewhere in src/ is a
+      // re-derivation. The rule exempts the owner by path.
+      'local/no-verification-status-literal': 'error',
     },
   },
 

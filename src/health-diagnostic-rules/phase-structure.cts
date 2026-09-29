@@ -3,7 +3,7 @@
  * ADR-3180 §8.2/§8.3/§8.5).
  *
  * Group: "Phase directory structure" (design doc, "Rule table organization"
- * table) — W005, W023, I001, W009.
+ * table) — W005, W023, I001, W009, and W030 (#5118).
  *
  * Ported behavior-preserving from `cmdValidateHealth`
  * (`src/verify.cts:1893-1990`, the exact call sites for W005/W023/I001/W009),
@@ -117,7 +117,7 @@ function checkW023(snapshot: PlanningSnapshot): Diagnostic[] {
         const plans = phase ? phase.planCount : 0;
         const summaries = phase ? phase.summaryCount : 0;
         const complete = phase ? phase.complete : false;
-        const verificationStatus = phase ? phase.verificationStatus : 'missing';
+        const verificationStatus = phase ? phase.verificationStatus : null;
         const status = toDisplayLabel(
           phaseStatusFromFacts({ planCount: plans, summaryCount: summaries, complete, verificationStatus }),
           { pendingWord: 'Not Started' },
@@ -183,6 +183,31 @@ function checkW009(snapshot: PlanningSnapshot): Diagnostic[] {
   return diagnostics;
 }
 
+// ─── W030 — verification report status outside the closed set (#5118) ─────
+//
+// `isPhaseComplete` absorbs an out-of-set report `status` (its no-throw
+// contract) and the snapshot carries the typed error's file and message. A
+// diagnostics surface must survive the defect it diagnoses, so health reports
+// the file instead of failing with `verification_status_invalid` like the
+// query surfaces do (cmdValidateHealth takes the parked error).
+
+function checkW030(snapshot: PlanningSnapshot): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+  for (const phase of snapshot.phases.value) {
+    const invalid = phase.verificationStatusError;
+    if (!invalid) continue;
+    diagnostics.push({
+      code: 'W030',
+      severity: SEVERITY.WARNING,
+      message: `Phase ${phase.dir}: ${invalid.message}`,
+      remedy: adviseRemedy(
+        'Set the report frontmatter `status` to one of passed | gaps_found | human_needed, or re-run the verifier (/gsd-execute-phase) to regenerate it',
+      ),
+    });
+  }
+  return diagnostics;
+}
+
 // ─── Exports ────────────────────────────────────────────────────────────────
 
 const RULES: Rule[] = [
@@ -213,6 +238,13 @@ const RULES: Rule[] = [
     description: 'Phase has Validation Architecture in RESEARCH.md but no VALIDATION.md',
     repairable: false,
     check: checkW009,
+  },
+  {
+    code: 'W030',
+    severity: SEVERITY.WARNING,
+    description: 'Phase verification report status is outside the closed set',
+    repairable: false,
+    check: checkW030,
   },
 ];
 
