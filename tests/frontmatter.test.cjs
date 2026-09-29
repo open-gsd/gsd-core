@@ -3283,3 +3283,42 @@ describe('extractFrontmatter BOM tolerance (#2977)', () => {
     });
   });
 }
+
+// ─── spliceFrontmatter: the shipped parse budget at full size ──────────────
+// tests/frontmatter.property.test.cjs drives the parse-budget boundary with a small
+// `parseBudgetChars` so the frontmatter Stryker shard (which re-runs that file once per covering
+// mutant) stays inside its job budget. These cases pin the DEFAULT — `SPLICE_PARSE_BUDGET_CHARS`,
+// used when no option is passed — at full size; this file runs in the normal suite only.
+describe('spliceFrontmatter: the default parse budget is SPLICE_PARSE_BUDGET_CHARS', () => {
+  const { SPLICE_PARSE_BUDGET_CHARS } = require('../gsd-core/bin/lib/frontmatter.cjs');
+  const TOO_COMPLEX = { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_TOO_COMPLEX' };
+  // `k: <A×n>` changed to `k: B` parses exactly twice: the old value (`k: ` + n, plus one) and
+  // the regenerated one (its length, plus one).
+  const regenerated = reconstructFrontmatter({ k: 'B' });
+  const docParsing = (total) => `---\nk: ${'A'.repeat(total - (3 + 1) - (regenerated.length + 1))}\n---\nbody\n`;
+
+  for (const [label, total, refused] of [
+    ['limit - 1', SPLICE_PARSE_BUDGET_CHARS - 1, false],
+    ['limit', SPLICE_PARSE_BUDGET_CHARS, false],
+    ['limit + 1', SPLICE_PARSE_BUDGET_CHARS + 1, true],
+  ]) {
+    test(`with no option, a splice parsing exactly ${label} characters ${refused ? 'is refused' : 'is written'}`, () => {
+      const write = () => spliceFrontmatter(docParsing(total), { k: 'B' });
+      if (refused) {
+        assert.throws(write, (err) => err.code === 'FRONTMATTER_TOO_COMPLEX' && err.message.includes(`more than ${SPLICE_PARSE_BUDGET_CHARS} characters`));
+      } else {
+        assert.strictEqual(write(), `---\n${regenerated}\n---\nbody\n`);
+      }
+    });
+  }
+
+  test('with no option, a `|+` key followed by 20000 blank lines is refused, not stalled', () => {
+    const doc = `---\na: |+\n  x\n${'\n'.repeat(20000)}b: 1\n---\nbody\n`;
+    assert.throws(() => spliceFrontmatter(doc, { ...extractFrontmatter(doc), b: '2' }), TOO_COMPLEX);
+  });
+
+  test('with no option, a changed 800-item list holding 20 quoted ` #` per item is refused, not stalled', () => {
+    const doc = `---\nl:\n${`  - "v${' #h'.repeat(20)}"\n`.repeat(800)}---\nbody\n`;
+    assert.throws(() => spliceFrontmatter(doc, { ...extractFrontmatter(doc), l: ['a'] }), TOO_COMPLEX);
+  });
+});

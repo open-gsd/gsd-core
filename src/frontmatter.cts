@@ -1229,8 +1229,19 @@ function isSegmentTailLine(line: string): boolean {
  */
 const SPLICE_PARSE_BUDGET_CHARS = 20_000_000;
 
-/** One `spliceFrontmatter` call's remaining parse allowance (`SPLICE_PARSE_BUDGET_CHARS`). */
-type SpliceParseBudget = { remaining: number };
+/**
+ * One `spliceFrontmatter` call's parse allowance: `limit` is the whole allowance
+ * (`SPLICE_PARSE_BUDGET_CHARS` unless the caller passes `parseBudgetChars`), `remaining` what
+ * is left of it.
+ */
+type SpliceParseBudget = { remaining: number; limit: number };
+
+/**
+ * `spliceFrontmatter`'s options. `parseBudgetChars` replaces `SPLICE_PARSE_BUDGET_CHARS` for
+ * one call, so a test can reach the refusal boundary with a small document instead of a
+ * 20-million-character one; a non-negative safe integer, or the call throws a TypeError.
+ */
+type SpliceFrontmatterOptions = { parseBudgetChars?: number };
 
 /**
  * Parse one key's lines on their own, or null when they do not parse as YAML. Charges the
@@ -1243,7 +1254,7 @@ function loadSegmentValue(lines: string[], budget: SpliceParseBudget): { value: 
     throw new FrontmatterWriteRefusedError(
       'FRONTMATTER_TOO_COMPLEX',
       'frontmatter: refusing to write — telling this frontmatter block\'s comments and trailing blank ' +
-        `lines apart from its values would take more than ${SPLICE_PARSE_BUDGET_CHARS} characters of YAML ` +
+        `lines apart from its values would take more than ${budget.limit} characters of YAML ` +
         'parsing (a very large block with many `#` or trailing blank lines), so the writer stops rather ' +
         'than stall. Edit the file directly.',
     );
@@ -1367,7 +1378,8 @@ function regenerateFrontmatterKey(key: string, value: FrontmatterValue, comments
  * longer a key, the comment sits on or between list items or trails the value), so writing
  * would silently drop text the author wrote (#3257/#3742 treat those comments as preserved
  * data). `FRONTMATTER_TOO_COMPLEX`: telling the block's comments and trailing lines apart from
- * its values would parse more YAML than `SPLICE_PARSE_BUDGET_CHARS` allows, so the writer stops
+ * its values would parse more YAML than `SPLICE_PARSE_BUDGET_CHARS` (or the call's
+ * `parseBudgetChars`) allows, so the writer stops
  * rather than stall on a pathological block.
  */
 type FrontmatterWriteRefusalCode =
@@ -1564,7 +1576,14 @@ function assertCommentsKept(key: string, original: SegmentComments, regenerated:
   );
 }
 
-function spliceFrontmatter(content: string, newObj: Frontmatter): string {
+function spliceFrontmatter(
+  content: string,
+  newObj: Frontmatter,
+  { parseBudgetChars = SPLICE_PARSE_BUDGET_CHARS }: SpliceFrontmatterOptions = {},
+): string {
+  if (!Number.isSafeInteger(parseBudgetChars) || parseBudgetChars < 0) {
+    throw new TypeError(`spliceFrontmatter: parseBudgetChars must be a non-negative safe integer, got ${String(parseBudgetChars)}`);
+  }
   // The block is located through `frontmatterBlock` (the one fence owner's block), so the
   // writer and every reader agree on where it is: BOM (#2977), CRLF, an empty block.
   const located = frontmatterBlock(content);
@@ -1614,7 +1633,7 @@ function spliceFrontmatter(content: string, newObj: Frontmatter): string {
     // blank line, so the empty block would gain a blank line above its first key (found while
     // implementing #5105).
     // One parse allowance for the whole call: every line classification below draws on it.
-    const budget: SpliceParseBudget = { remaining: SPLICE_PARSE_BUDGET_CHARS };
+    const budget: SpliceParseBudget = { remaining: parseBudgetChars, limit: parseBudgetChars };
     const { preamble, segments } = innerLines.length === 0
       ? { preamble: [] as string[], segments: [] as ReturnType<typeof sliceFrontmatterLayout>['segments'] }
       : sliceFrontmatterLayout(inner, budget);

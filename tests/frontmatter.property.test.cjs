@@ -379,8 +379,16 @@ describe('frontmatter: spliceFrontmatter properties', () => {
 // may parse at most SPLICE_PARSE_BUDGET_CHARS characters (each parse also counts one for its
 // line break); past that it refuses with FRONTMATTER_TOO_COMPLEX instead of stalling. Outcomes
 // only — never elapsed time.
+//
+// These cases pass `{ parseBudgetChars: BUDGET }` so the boundary is reached with a
+// 100,000-character document, not a 20-million-character one: this file runs once per covering
+// mutant in the frontmatter Stryker shard, and the full-size cases cost seconds per run there.
+// The shipped default (`SPLICE_PARSE_BUDGET_CHARS`) is pinned at full size in
+// tests/frontmatter.test.cjs, which the mutation shard does not run.
 describe('frontmatter: spliceFrontmatter parse budget', () => {
-  const { SPLICE_PARSE_BUDGET_CHARS } = require('../gsd-core/bin/lib/frontmatter.cjs');
+  const BUDGET = 100_000;
+  const withBudget = { parseBudgetChars: BUDGET };
+  const TOO_COMPLEX = { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_TOO_COMPLEX' };
 
   // `k: <A×n>` changed to `k: B` parses exactly twice: the old value (`k: ` + n, plus one) and
   // the regenerated one (its length, plus one) — no tail lines, no `#`.
@@ -388,39 +396,57 @@ describe('frontmatter: spliceFrontmatter parse budget', () => {
   const docParsing = (total) => `---\nk: ${'A'.repeat(total - (3 + 1) - (regenerated.length + 1))}\n---\nbody\n`;
 
   for (const [label, total, refused] of [
-    ['limit - 1', SPLICE_PARSE_BUDGET_CHARS - 1, false],
-    ['limit', SPLICE_PARSE_BUDGET_CHARS, false],
-    ['limit + 1', SPLICE_PARSE_BUDGET_CHARS + 1, true],
+    ['limit - 1', BUDGET - 1, false],
+    ['limit', BUDGET, false],
+    ['limit + 1', BUDGET + 1, true],
   ]) {
     test(`a splice parsing exactly ${label} characters ${refused ? 'is refused' : 'is written'}`, () => {
-      const write = () => spliceFrontmatter(docParsing(total), { k: 'B' });
-      if (refused) assert.throws(write, { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_TOO_COMPLEX' });
+      const write = () => spliceFrontmatter(docParsing(total), { k: 'B' }, withBudget);
+      if (refused) assert.throws(write, TOO_COMPLEX);
       else assert.equal(write(), `---\n${regenerated}\n---\nbody\n`);
     });
   }
+
+  test('the refusal names the allowance the call was given', () => {
+    assert.throws(() => spliceFrontmatter(docParsing(BUDGET + 1), { k: 'B' }, withBudget),
+      (err) => err.code === 'FRONTMATTER_TOO_COMPLEX' && err.message.includes(`more than ${BUDGET} characters`));
+  });
+
+  // Boundary on the option itself: -1 (limit - 1) is rejected, 0 (limit) and 1 (limit + 1) are
+  // accepted — an allowance of 0 or 1 refuses any splice that has to parse a key's lines.
+  test('parseBudgetChars below 0, fractional or not a number is a TypeError; 0 and 1 are allowances', () => {
+    const doc = '---\na: 1\n---\nbody\n';
+    for (const bad of [-1, 1.5, Number.NaN, '5', Number.MAX_SAFE_INTEGER + 1]) {
+      assert.throws(() => spliceFrontmatter(doc, { a: '2' }, { parseBudgetChars: bad }), TypeError, String(bad));
+    }
+    for (const allowance of [0, 1]) {
+      assert.throws(() => spliceFrontmatter(doc, { a: '2' }, { parseBudgetChars: allowance }), TOO_COMPLEX, String(allowance));
+    }
+    // A document with no frontmatter parses nothing, so even a zero allowance writes it.
+    assert.equal(spliceFrontmatter('body\n', { a: '2' }, { parseBudgetChars: 0 }), spliceFrontmatter('body\n', { a: '2' }));
+  });
 
   const keepChomp = (blanks) => `---\na: |+\n  x\n${'\n'.repeat(blanks)}b: 1\n---\nbody\n`;
   const hashList = (lines) => `---\nl:\n${`  - "v${' #h'.repeat(20)}"\n`.repeat(lines)}---\nbody\n`;
 
   test('a `|+` key followed by 20000 blank lines: splicing another key is refused, not stalled', () => {
-    assert.throws(() => spliceFrontmatter(keepChomp(20000), { ...extractFrontmatter(keepChomp(20000)), b: '2' }),
-      { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_TOO_COMPLEX' });
+    const doc = keepChomp(20000);
+    assert.throws(() => spliceFrontmatter(doc, { ...extractFrontmatter(doc), b: '2' }, withBudget), TOO_COMPLEX);
   });
 
   test('the same `|+` shape with 50 blank lines is written, the kept blank lines untouched', () => {
     const doc = keepChomp(50);
-    assert.equal(spliceFrontmatter(doc, { ...extractFrontmatter(doc), b: '2' }), doc.replace('b: 1', 'b: 2'));
+    assert.equal(spliceFrontmatter(doc, { ...extractFrontmatter(doc), b: '2' }, withBudget), doc.replace('b: 1', 'b: 2'));
   });
 
   test('a changed 800-item list holding 20 quoted ` #` per item is refused, not stalled', () => {
     const doc = hashList(800);
-    assert.throws(() => spliceFrontmatter(doc, { ...extractFrontmatter(doc), l: ['a'] }),
-      { name: 'FrontmatterWriteRefusedError', code: 'FRONTMATTER_TOO_COMPLEX' });
+    assert.throws(() => spliceFrontmatter(doc, { ...extractFrontmatter(doc), l: ['a'] }, withBudget), TOO_COMPLEX);
   });
 
   test('the same list shape with 5 items is written', () => {
     const doc = hashList(5);
-    assert.equal(spliceFrontmatter(doc, { ...extractFrontmatter(doc), l: ['a'] }), `---\n${reconstructFrontmatter({ l: ['a'] })}\n---\nbody\n`);
+    assert.equal(spliceFrontmatter(doc, { ...extractFrontmatter(doc), l: ['a'] }, withBudget), `---\n${reconstructFrontmatter({ l: ['a'] })}\n---\nbody\n`);
   });
 
   // Planning-document-sized blocks full of comments, inline ` #`, quoted `#` and `|+` tails
