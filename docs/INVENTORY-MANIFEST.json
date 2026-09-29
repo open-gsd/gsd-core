@@ -416,6 +416,7 @@
       "federated-config.cjs",
       "file-overlap-partitioner.cjs",
       "frontmatter-fence.cjs",
+      "frontmatter-splice.cjs",
       "frontmatter.cjs",
       "gap-checker.cjs",
       "gate-predicate-evaluator.cjs",
