@@ -187,7 +187,7 @@ caller, byte-identical to pre-#3912 behavior. See
 ### `error(message, reason)`
 
 `error()`'s `reason` argument now maps onto a declared outcome name (`USAGE`, `NO_INPUT`,
-`UNAVAILABLE`, `INTERNAL`, or `FAIL`) via a fixed table over all 25 `ERROR_REASON` members.
+`UNAVAILABLE`, `INTERNAL`, or `FAIL`) via a fixed table over all 27 `ERROR_REASON` members.
 
 - **Under `v1`, the mapping is recorded but never projected.** `error()` still throws
   `ExitError(1)` unconditionally, exactly as before — stderr and the exit code are byte-identical to
@@ -286,6 +286,7 @@ text (unstable).
 |------|-------------|
 | `phase_not_found` | Phase directory lookup returns no match |
 | `summary_no_planning` | Summary operation when no `.planning/` directory exists |
+| `verification_status_invalid` | A phase's `*-VERIFICATION.md` frontmatter `status` is outside the closed set `passed \| gaps_found \| human_needed` (for example `verified`, `Passed`, `stale`, or a non-string value). Emitted, with stdout empty, by every surface that reads the report — `verification status`, `phase uat-passed`, `phase complete`, `roadmap analyze`, `state sync`, `planning inspect`, `init *`, `smart-entry`, `audit-open`, `audit-uat`. The message names the report file, the value, and the accepted values. `validate health` reports the file as warning `W030` instead (#5118) |
 
 ### Estimate errors
 

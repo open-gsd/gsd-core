@@ -1164,6 +1164,8 @@ a git repo — "unknown" is reported as unknown, not as fresh.
 
 **Cross-scope install shadowing (`W028`).** When a runtime is installed at both `global` and `local` scope and the host's trigger-resolution rules make one scope's `/gsd-*` surface unreachable — the Claude Code case: personal skill always beats project command — health adds a WARNING-severity advisory naming the shadowed triggers, the winning scope, and the losing scope. It never changes health's pass/fail status and is never auto-fixable (there is no single correct scope to remove), so `--repair` never touches it. Identical to the same advisory GSD Core prints at install time. See [Interpret install-shadow warnings](how-to/interpret-install-shadow-warnings.md).
 
+**Verification report status outside the closed set (`W030`).** A phase's `*-VERIFICATION.md` may carry only `status: passed`, `gaps_found`, or `human_needed`. Any other value — `verified`, `Passed`, `stale`, a number — is a hard error for every other command that reads the report (`verification_status_invalid`); `/gsd-health` instead reports the file as a WARNING naming the value and the accepted set, so the check itself never fails on the defect it diagnoses. Fix the frontmatter, or re-run the verifier with `/gsd-execute-phase`. Not auto-fixable.
+
 **`--repair` does not apply destructive fixes.** Resetting config.json
 (`resetConfig`) and regenerating STATE.md (`regenerateState`) are destructive
 — the former loses custom settings, the latter loses session history — so
