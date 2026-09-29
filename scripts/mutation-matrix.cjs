@@ -402,8 +402,17 @@ const COVERED = {
     //     extraTests above) rather than deleted, so the mutants they kill stay killed.
     //     frontmatter.test.cjs itself is UNCHANGED and keeps running in the normal
     //     (non-mutation) suite — only the mutation shard drops it.
+    //   - frontmatter-splice.property.test.cjs (#5105): the writer's own property suite,
+    //     moved out of frontmatter.property.test.cjs when spliceFrontmatter moved to
+    //     frontmatter-splice.cts. It requires frontmatter.cjs only as the read-back oracle and
+    //     matches this module's "frontmatter-" prefix, so the derivation would pull it in here;
+    //     it runs in the frontmatter-splice shard instead. Keeping it out of this shard is the
+    //     point of the split: the frontmatter shard was cancelled at its 20-minute cap on PR
+    //     #5114 (1149/1749 mutants tested) with these splice-heavy properties re-run for every
+    //     parser mutant they happened to cover.
     excludeTests: [
       'frontmatter-cli.test.cjs',
+      'frontmatter-splice.property.test.cjs',
       'frontmatter.test.cjs',
     ],
     minScore: 65,
@@ -427,6 +436,38 @@ const COVERED = {
     // covering test FILE, so every file already runs in its own process by construction.
     // The prior audit's 'none' vs 'process' comparison (recorded here before this change)
     // is moot: there is nothing left to opt in or out of.
+  },
+  // frontmatter-splice: net-new module from #5105 — the frontmatter WRITER (spliceFrontmatter
+  // and its layout slicing, comment classification, parse budget, key quoting and read-back
+  // check), split out of frontmatter.cts by module ownership. Before the split the writer grew
+  // frontmatter.cjs from 1249 to 1749 mutants and the frontmatter shard was cancelled at its
+  // 20-minute cap (PR #5114, run 36577087588, job 109435636296: 1149/1749 tested at ~1.34
+  // s/covered mutant). Stryker's instrumenter counts 1267 mutants in frontmatter.cjs and 498 in
+  // frontmatter-splice.cjs after the split. Registered here so the writer is scored at all —
+  // mutation coverage does not migrate with relocated code (the context-composer precedent).
+  //
+  // Tests: frontmatter-splice.property.test.cjs is auto-derived (requires this module, matches
+  // the naming rule). extraTests are the other files that drive spliceFrontmatter directly —
+  // they are named after frontmatter, so the derivation cannot find them for this module:
+  //   - frontmatter.unit.test.cjs: the #1572/#1660/#3257/#3742/#4802 splice cases.
+  //   - frontmatter.property.test.cjs: the #644 prohibitions parse -> splice -> re-parse
+  //     bijection.
+  //   - frontmatter-fence.test.cjs: the writer's BOM / CRLF / empty-block fence cases.
+  //
+  // minScore 50: the ratchet's minimum permitted floor for a newly registered module whose
+  // score has not been measured — the state-contract precedent (#3227: registered at 50, then
+  // ratcheted to floor(66.25) - 1 = 65 from its first CI shard). The shard cannot run locally
+  // (see HOW TO UPDATE above), so the first CI run measures it; scripts/check-mutation-score-
+  // ratchet.cjs then fails that run if the score exceeds 50 + RATCHET_SLACK (5) and names the
+  // floor to set (floor(measured) - 1), which lands with its RATCHET_BASELINE entry.
+  'frontmatter-splice': {
+    cjs: 'gsd-core/bin/lib/frontmatter-splice.cjs',
+    extraTests: [
+      'frontmatter-fence.test.cjs',
+      'frontmatter.property.test.cjs',
+      'frontmatter.unit.test.cjs',
+    ],
+    minScore: 50,
   },
   // adr-parser / config-schema / active-workstream-store / core-utils: derivation reproduces
   // their prior hand lists exactly (every constraining file's own name already matched the

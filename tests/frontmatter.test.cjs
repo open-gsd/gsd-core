@@ -3285,8 +3285,8 @@ describe('extractFrontmatter BOM tolerance (#2977)', () => {
 }
 
 // ─── spliceFrontmatter: the shipped parse budget at full size ──────────────
-// tests/frontmatter.property.test.cjs drives the parse-budget boundary with a small
-// `parseBudgetChars` so the frontmatter Stryker shard (which re-runs that file once per covering
+// tests/frontmatter-splice.property.test.cjs drives the parse-budget boundary with a small
+// `parseBudgetChars` so the frontmatter-splice Stryker shard (which re-runs that file once per covering
 // mutant) stays inside its job budget. These cases pin the DEFAULT — `SPLICE_PARSE_BUDGET_CHARS`,
 // used when no option is passed — at full size; this file runs in the normal suite only.
 describe('spliceFrontmatter: the default parse budget is SPLICE_PARSE_BUDGET_CHARS', () => {
