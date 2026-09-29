@@ -12,9 +12,6 @@ import { normalizeEol } from './text-lines.cjs';
 import { execGit, platformWriteSync, platformReadSync, platformEnsureDir, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
 import { escapeRegex } from './pattern.cjs';
 import { locateFrontmatterFence, type LocateFrontmatterFenceOptions } from './frontmatter-fence.cjs';
-
-/** The effort-sync line editors' fence reading: a block behind a preamble is still edited (#3706). */
-const EFFORT_SYNC_FENCE: LocateFrontmatterFenceOptions = Object.freeze({ allowPreamble: true });
 import { requireSafePath, sanitizeForDisplay, tryWithinRoot, assertWithinRoot, PathAcceptance } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
@@ -89,6 +86,9 @@ const { scanPhasePlans } = planScanMod;
 // determinePhaseStatus derivation.
 import { phaseStatus, toDisplayLabel, foldPhaseStatuses, PHASE_STATUS } from './phase-status.cjs';
 import type { PhaseStatus } from './phase-status.cjs';
+
+/** The effort-sync line editors' fence reading: a block behind a preamble is still edited (#3706). */
+const EFFORT_SYNC_FENCE: LocateFrontmatterFenceOptions = Object.freeze({ allowPreamble: true });
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
