@@ -23,6 +23,12 @@
  * opens/comments on one tracking issue when the shards drift out of balance.
  * It is wired into ci-timeout-report.yml as its own workflow step, not into
  * `main()`.
+ *
+ * Rolling-PR helpers: the workflow keeps one PR (`ROLLING_PR`) rebuilt on
+ * `next` each run. `mergeHistoryTexts` seeds the history with the open PR's
+ * pending rows (sharing `historyRecordKey` with dedupeAgainstHistory), and
+ * `evaluateRollingPrApproval` is the gate deciding whether the workflow may
+ * approve that PR.
  */
 
 const yaml = require('js-yaml');
@@ -124,18 +130,102 @@ function buildReportLines(runs, { workflowFile, workflowYamlText, covered }) {
   return records;
 }
 
+/**
+ * Identity of one history line: `runId::jobName`, or `null` when the line is
+ * blank, unparseable, not a JSON object, or lacks `runId`/`jobName`. Shared by
+ * dedupeAgainstHistory and mergeHistoryTexts so the two cannot drift.
+ *
+ * @param {?string} lineText
+ * @returns {?string}
+ */
+function historyRecordKey(lineText) {
+  const text = String(lineText ?? '').replace(/\r$/, '').trim();
+  if (!text) return null;
+  let rec;
+  try {
+    rec = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (rec === null || typeof rec !== 'object' || Array.isArray(rec)) return null;
+  if (rec.runId == null || rec.jobName == null) return null;
+  return `${rec.runId}::${rec.jobName}`;
+}
+
 function dedupeAgainstHistory(newRecords, historyText) {
   const seen = new Set();
   for (const line of String(historyText || '').split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      const rec = JSON.parse(line);
-      seen.add(`${rec.runId}::${rec.jobName}`);
-    } catch {
-      // Malformed history line — skip it rather than crash the whole report.
+    const key = historyRecordKey(line);
+    if (key !== null) seen.add(key);
+  }
+  return newRecords.filter((r) => !seen.has(historyRecordKey(JSON.stringify(r))));
+}
+
+/**
+ * Union of history texts, first occurrence wins, input order preserved. Lines
+ * without a record key (malformed / incomplete) are kept once by exact text so
+ * no data is silently dropped. Blank lines are dropped; CRLF is normalized.
+ *
+ * @param {...?string} texts
+ * @returns {string}
+ */
+function mergeHistoryTexts(...texts) {
+  const seen = new Set();
+  const kept = [];
+  for (const text of texts) {
+    if (typeof text !== 'string') continue;
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.replace(/\r$/, '');
+      if (!line.trim()) continue;
+      const key = historyRecordKey(line);
+      const identity = key === null ? `raw:${line}` : key;
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      kept.push(line);
     }
   }
-  return newRecords.filter((r) => !seen.has(`${r.runId}::${r.jobName}`));
+  return kept.length > 0 ? `${kept.join('\n')}\n` : '';
+}
+
+// The single rolling PR the workflow maintains; the workflow reads these values.
+const ROLLING_PR = Object.freeze({
+  branch: 'automation/ci-timeout-report',
+  base: 'next',
+  historyFile: 'tests/ci-timeout-budget-history.jsonl',
+  title: 'chore(#4036): CI timeout budget history update',
+  body: [
+    'Refs #4036',
+    '',
+    'Automated, data-only update to `tests/ci-timeout-budget-history.jsonl`: new job/shard wall-clock vs. `timeout-minutes` records collected by `.github/workflows/ci-timeout-report.yml`.',
+    '',
+    'This is the single rolling PR for these records. Each scheduled run rebuilds the branch on the current `next` tip with every pending record, so it never conflicts with a sibling and is up to date as of the run. It is approved by the workflow only when it is exactly this branch, from this repository, at the commit the workflow pushed, changing only the history file, and then merges through auto-merge once required checks pass.',
+  ].join('\n'),
+});
+
+/**
+ * Approve-or-refuse gate for the rolling PR. Strict: approves only an OPEN,
+ * same-repository PR on the rolling branch, targeting the base, at the exact
+ * commit the workflow pushed, changing only the history file.
+ *
+ * @param {{pr?: object, expectedHeadOid?: string}} [args]
+ * @returns {{approve: boolean, reason: string}}
+ */
+function evaluateRollingPrApproval({ pr, expectedHeadOid } = {}) {
+  const refuse = (reason) => ({ approve: false, reason });
+  if (!pr || typeof pr !== 'object' || !expectedHeadOid) return refuse('missing-input');
+  if (pr.state !== 'OPEN') return refuse('not-open');
+  if (pr.isCrossRepository !== false) return refuse('cross-repository');
+  if (pr.headRefName !== ROLLING_PR.branch) return refuse('wrong-branch');
+  if (pr.baseRefName !== ROLLING_PR.base) return refuse('wrong-base');
+  if (pr.headRefOid !== expectedHeadOid) return refuse('head-moved');
+  if (
+    !Array.isArray(pr.files)
+    || pr.files.length !== 1
+    || String(pr.files[0] && pr.files[0].path).replace(/\\/g, '/') !== ROLLING_PR.historyFile
+  ) {
+    return refuse('unexpected-files');
+  }
+  return { approve: true, reason: 'ok' };
 }
 
 function formatHistoryLine(record) {
@@ -574,6 +664,10 @@ module.exports = {
   parseJobRecord,
   buildReportLines,
   dedupeAgainstHistory,
+  historyRecordKey,
+  mergeHistoryTexts,
+  ROLLING_PR,
+  evaluateRollingPrApproval,
   formatHistoryLine,
   main,
   SHARD_BALANCE,

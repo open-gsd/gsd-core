@@ -48,9 +48,12 @@ use a smaller matrix (no `macos-latest` `full_only` row) than its `push` runs, s
 only means the same thing across rows sharing the same `runEvent`.
 
 Because `next` is a protected branch, the report never pushes directly to it — each scheduled
-run opens (or the prior run's already merged, in which case a fresh one opens) a small,
-data-only PR carrying just that run's new rows, titled `chore: CI timeout budget report — run
-<id>`. Merge these like any other PR; there is nothing to review beyond "did the numbers land."
+run updates one rolling, data-only PR on the branch `automation/ci-timeout-report`, titled
+`chore(#4036): CI timeout budget history update`. Each run rebuilds that branch on the current
+`next` tip with every pending row, so it never conflicts. The workflow approves the PR when it is
+provably its own data-only PR, then auto-merges it once required checks pass; until the org
+allows GitHub Actions to approve PRs, it waits for one human approval (the run logs a warning).
+There is nothing to review beyond "did the numbers land."
 
 ## 3. A lane is repeatedly near-cap — what to do
 
