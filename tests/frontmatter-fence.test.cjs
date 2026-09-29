@@ -419,7 +419,7 @@ describe('kept frontmatter fence copies agree with the owner', () => {
     fc.constantFrom('', '---', '--- ', '---\t', '----', '-----', '--- x', '--', 'a---b', ' ---'),
   );
   const docArb = fc.tuple(
-    fc.constantFrom('', '\uFEFF','\n', ' ', 'x\n'),
+    fc.constantFrom('', '\uFEFF', '\n', ' ', 'x\n'),
     fc.boolean(),
     fc.array(line, { maxLength: 10 }),
     fc.boolean(),
