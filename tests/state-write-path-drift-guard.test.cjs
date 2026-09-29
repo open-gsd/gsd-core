@@ -686,3 +686,252 @@ describe('C1 (ADR-4629 §8.1): findOpaqueStateTransforms — opaque readModifyWr
     );
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// F4 — #5104 (epic #4629, ADR-4629 Decision 5: Axis 2 "extended"): a raw
+// write whose call is wrapped over several lines, or whose target is a
+// variable assigned in the same function, is still a raw STATE.md write.
+// Before #5104 the axis scanned one line at a time and matched only the
+// `statePath` identifier or a `STATE.md` literal in the captured argument,
+// so every positive row below reported 0.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('F4 — the raw-write axis sees wrapped calls and same-function variable targets (#5104)', () => {
+  const { MAX_TARGET_RESOLUTION_HOPS } = guard;
+
+  // `lookups` assignments stand between the write target `v0` and the
+  // STATE.md literal: v0 = v1, v1 = v2, ..., v(lookups-1) = path.join(dir, 'STATE.md').
+  function chainFixture(lookups) {
+    const lines = ['function chained(dir, content) {', `  const v${lookups - 1} = path.join(dir, 'STATE.md');`];
+    for (let k = lookups - 2; k >= 0; k--) lines.push(`  const v${k} = v${k + 1};`);
+    lines.push('  fs.writeFileSync(v0, content);', '}');
+    return lines.join('\n');
+  }
+
+  test('guard: a call wrapped over several lines is reported at the line of the call', () => {
+    const text = [
+      'function bogusRawWrite(statePath, content) {',
+      '  fs.writeFileSync(',
+      '    statePath,',
+      '    content,',
+      '  );',
+      '}',
+    ].join('\n');
+
+    const out = findRawStateWrites(OTHER_FILE, text);
+    assert.strictEqual(out.length, 1);
+    assert.strictEqual(out[0].reason, REASON.RAW_STATE_WRITE);
+    assert.strictEqual(out[0].line, 2);
+    assert.strictEqual(out[0].source, 'fs.writeFileSync(');
+  });
+
+  test('guard: a comment between the paren and the target does not hide a wrapped call', () => {
+    const text = [
+      'function bogusRawWrite(statePath, content) {',
+      '  fs.writeFileSync( // the state file',
+      '    statePath, content);',
+      '}',
+    ].join('\n');
+
+    assert.strictEqual(findRawStateWrites(OTHER_FILE, text).length, 1);
+  });
+
+  test('guard: a variable assigned from a STATE.md literal in the same function is reported', () => {
+    const text = [
+      'function bogusRawWrite(dir, content) {',
+      "  const p = path.join(dir, 'STATE.md');",
+      '  fs.writeFileSync(p, content);',
+      '}',
+    ].join('\n');
+
+    const out = findRawStateWrites(OTHER_FILE, text);
+    assert.strictEqual(out.length, 1);
+    assert.strictEqual(out[0].line, 3);
+  });
+
+  test('guard: a variable assigned from statePath is reported', () => {
+    const text = [
+      'function bogusRawWrite(statePath, content) {',
+      '  const target = statePath;',
+      '  fs.writeFileSync(target, content);',
+      '}',
+    ].join('\n');
+
+    assert.strictEqual(findRawStateWrites(OTHER_FILE, text).length, 1);
+  });
+
+  test('guard: a two-hop chain through a file-name constant is reported', () => {
+    const text = [
+      'function bogusRawWrite(dir, content) {',
+      "  const name = 'STATE.md';",
+      '  const p = path.join(dir, name);',
+      '  fs.writeFileSync(p, content);',
+      '}',
+    ].join('\n');
+
+    assert.strictEqual(findRawStateWrites(OTHER_FILE, text).length, 1);
+  });
+
+  test('guard: a wrapped call whose target is a resolved variable is reported', () => {
+    const text = [
+      'function bogusRawWrite(dir, content) {',
+      "  const p = path.join(dir, 'STATE.md');",
+      '  fs.writeFileSync(',
+      '    p,',
+      '    content);',
+      '}',
+    ].join('\n');
+
+    const out = findRawStateWrites(OTHER_FILE, text);
+    assert.strictEqual(out.length, 1);
+    assert.strictEqual(out[0].line, 3);
+  });
+
+  test('bound: a chain of exactly MAX_TARGET_RESOLUTION_HOPS lookups is reported, one more is not', () => {
+    assert.ok(Number.isInteger(MAX_TARGET_RESOLUTION_HOPS) && MAX_TARGET_RESOLUTION_HOPS > 0);
+    assert.strictEqual(findRawStateWrites(OTHER_FILE, chainFixture(MAX_TARGET_RESOLUTION_HOPS)).length, 1);
+    assert.strictEqual(findRawStateWrites(OTHER_FILE, chainFixture(MAX_TARGET_RESOLUTION_HOPS + 1)).length, 0);
+  });
+
+  test('control: a variable assigned from a non-STATE.md literal is NOT reported', () => {
+    const text = [
+      'function writeRoadmap(dir, content) {',
+      "  const p = path.join(dir, 'ROADMAP.md');",
+      '  fs.writeFileSync(p, content);',
+      '}',
+    ].join('\n');
+
+    assert.deepStrictEqual(findRawStateWrites(OTHER_FILE, text), []);
+  });
+
+  test('control: a for...of over an unrelated list is NOT reported', () => {
+    const text = [
+      'function writeAll(files, content) {',
+      '  for (const f of files) {',
+      '    fs.writeFileSync(f, content);',
+      '  }',
+      '}',
+    ].join('\n');
+
+    assert.deepStrictEqual(findRawStateWrites(OTHER_FILE, text), []);
+  });
+
+  test('binding: a for...of binding stops resolution; a same-named const in a sibling block is not picked up', () => {
+    // The real shape (src/roadmap-upgrade.cts rollback loop): without the
+    // binding rule the backward scan skips `for (const [filePath, backup] of …)`
+    // (it has no `=`) and resolves to the sibling block's `const filePath`.
+    const text = [
+      'function upgrade(dir, backups, content) {',
+      '  {',
+      "    const filePath = path.join(dir, 'STATE.md');",
+      '    platformWriteSync(filePath, content);',
+      '  }',
+      '  for (const [filePath, backup] of backups) {',
+      '    fs.writeFileSync(filePath, backup.content);',
+      '  }',
+      '}',
+    ].join('\n');
+
+    assert.deepStrictEqual(findRawStateWrites(OTHER_FILE, text), []);
+  });
+
+  test('binding: a destructuring binding stops resolution the same way', () => {
+    const text = [
+      'function restore(dir, entry, content) {',
+      '  {',
+      "    const filePath = path.join(dir, 'STATE.md');",
+      '    platformWriteSync(filePath, content);',
+      '  }',
+      '  const { filePath, body } = entry;',
+      '  fs.writeFileSync(filePath, body);',
+      '}',
+    ].join('\n');
+
+    assert.deepStrictEqual(findRawStateWrites(OTHER_FILE, text), []);
+  });
+
+  test('scope: resolution stops at the enclosing named function', () => {
+    const text = [
+      'function other(dir) {',
+      "  const p = path.join(dir, 'STATE.md');",
+      '  return p;',
+      '}',
+      'function writer(p, content) {',
+      '  fs.writeFileSync(p, content);',
+      '}',
+    ].join('\n');
+
+    assert.deepStrictEqual(findRawStateWrites(OTHER_FILE, text), []);
+  });
+
+  test('scope: a name inside a string literal or after a dot is not resolved', () => {
+    const text = [
+      'function writer(dir, opts, statePath, content) {',
+      '  const target = statePath;',
+      "  fs.writeFileSync(path.join(dir, 'target'), content);",
+      '  fs.writeFileSync(opts.target, content);',
+      '}',
+    ].join('\n');
+
+    assert.deepStrictEqual(findRawStateWrites(OTHER_FILE, text), []);
+  });
+
+  test('termination: a self-referencing assignment does not loop', () => {
+    const text = [
+      'function writer(dir, content) {',
+      "  let p = path.join(dir, 'notes');",
+      "  p = p + '.md';",
+      '  fs.writeFileSync(p, content);',
+      '}',
+    ].join('\n');
+
+    assert.deepStrictEqual(findRawStateWrites(OTHER_FILE, text), []);
+  });
+
+  test('guard: a reassignment that reads its own earlier value resolves to that earlier assignment', () => {
+    const text = [
+      'function bogusRawWrite(dir, content) {',
+      "  let p = path.join(dir, 'STATE.md');",
+      "  p = p + '.tmp';",
+      '  fs.writeFileSync(p, content);',
+      '}',
+    ].join('\n');
+
+    assert.strictEqual(findRawStateWrites(OTHER_FILE, text).length, 1);
+  });
+
+  test('CLI: --root <synthetic tree> with a wrapped call and a variable target reports both', (t) => {
+    const tmpRoot = createTempDir('state-write-path-drift-guard-5104-');
+    t.after(() => cleanup(tmpRoot));
+
+    const srcDir = path.join(tmpRoot, 'src');
+    fs.mkdirSync(srcDir, { recursive: true });
+    const fixtureContent = [
+      "import * as fs from 'node:fs';",
+      "import * as path from 'node:path';",
+      '',
+      'function wrapped(statePath: string, content: string): void {',
+      '  fs.writeFileSync(',
+      '    statePath,',
+      '    content);',
+      '}',
+      '',
+      'function viaVariable(dir: string, content: string): void {',
+      "  const p = path.join(dir, 'STATE.md');",
+      '  fs.writeFileSync(p, content);',
+      '}',
+    ].join('\n');
+    fs.writeFileSync(path.join(srcDir, 'bogus.cts'), fixtureContent, 'utf8');
+
+    const result = runNode([GUARD_PATH, '--root', tmpRoot, '--json'], { cwd: REPO_ROOT, timeoutMs: PROBE_TIMEOUT_MS });
+    assert.strictEqual(result.outcome, 'exited');
+    assert.strictEqual(result.exitCode, 1);
+
+    const body = JSON.parse(result.stdout);
+    assert.strictEqual(body.ok, false);
+    const lines = body.findings
+      .filter((f) => f.file === 'src/bogus.cts' && f.reason === REASON.RAW_STATE_WRITE)
+      .map((f) => f.line);
+    assert.deepStrictEqual(lines, [5, 12]);
+  });
+});
