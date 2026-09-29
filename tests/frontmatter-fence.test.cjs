@@ -115,6 +115,74 @@ describe('locateFrontmatterFence', () => {
   });
 });
 
+// `{ allowPreamble: true }` — the effort-sync line editors' reading (#3706 pinned it: they edit
+// the first `---` block even when a preamble precedes it). Only the opening fence's position
+// changes: it is the first WHOLE line that is exactly `---` plus `\n`/`\r\n`, at byte 0 (after a
+// BOM) or at any later line start; the closing rules are the owner's.
+describe('locateFrontmatterFence with { allowPreamble: true }', () => {
+  const AP = { allowPreamble: true };
+
+  for (const [label, text, expected] of [
+    ['a CRLF block after a preamble and a blank line (#3706)', 'Preamble line\r\n\r\n---\r\nname: x\r\neffort: high\r\n---\r\n\r\nBody.\r\n', closed('', '\r\n', 22, 45, 48, 43)],
+    ['an LF block after a preamble key line (#3706)', 'effort: not-the-frontmatter\n\n---\nname: x\neffort: high\n---\n\nBody.\n', closed('', '\n', 33, 54, 57, 53)],
+    ['a block after one blank line', '\n---\na: 1\n---\n', closed('', '\n', 5, 10, 13, 9)],
+    ['a block after a line holding `---` mid-line', 'a---b\n---\na: 1\n---\n', closed('', '\n', 10, 15, 18, 14)],
+    ['a BOM, a preamble, then a block', '﻿x\n---\na: 1\n---\n', closed('﻿', '\n', 7, 12, 15, 11)],
+    ['a byte-0 block is read exactly as without the option', '---\na: 1\n---\nbody', closed('', '\n', 4, 9, 12, 8)],
+  ]) {
+    test(label, () => {
+      assert.deepStrictEqual(locateFrontmatterFence(text, AP), expected);
+    });
+  }
+
+  for (const [label, text] of [
+    ['no whole `---` line', 'x\n--- x\n ---\n----\n'],
+    ['empty text', ''],
+  ]) {
+    test(`${label} is not frontmatter`, () => {
+      assert.strictEqual(locateFrontmatterFence(text, AP), null);
+    });
+  }
+
+  test('a preamble opener with no closer is unterminated', () => {
+    assert.deepStrictEqual(locateFrontmatterFence(' ---\na: 1\n---\n', AP), open('', '\n', 14, 14));
+  });
+
+  test('without the option (or with it false) a preamble block is not frontmatter', () => {
+    const doc = 'Preamble\n---\na: 1\n---\n';
+    assert.strictEqual(locateFrontmatterFence(doc), null);
+    assert.strictEqual(locateFrontmatterFence(doc, {}), null);
+    assert.strictEqual(locateFrontmatterFence(doc, { allowPreamble: false }), null);
+  });
+
+  test('property: a preamble of non-fence lines only shifts the fence the owner finds', () => {
+    const preLine = fc.oneof(
+      fc.stringMatching(/^[a-z :]{0,8}$/),
+      fc.constantFrom('--', '----', '--- x', ' ---', 'a---b', '---a'),
+    );
+    const body = fc.array(fc.oneof(fc.stringMatching(/^[a-z]{1,4}: 1$/), fc.constantFrom('---', '----', '--- x', '')), { maxLength: 6 });
+    fc.assert(
+      fc.property(fc.array(preLine, { maxLength: 4 }), body, fc.boolean(), (pre, lines, crlf) => {
+        const nl = crlf ? '\r\n' : '\n';
+        const doc = `---${nl}${lines.join(nl)}${nl}`;
+        const preamble = pre.map((l) => `${l}${nl}`).join('');
+        const base = locateFrontmatterFence(doc);
+        const shifted = locateFrontmatterFence(preamble + doc, AP);
+        const by = preamble.length;
+        const shift = (n) => (n === -1 ? -1 : n + by);
+        assert.deepStrictEqual(shifted, {
+          ...base,
+          openEnd: shift(base.openEnd),
+          closingStart: shift(base.closingStart),
+          closingFenceEnd: shift(base.closingFenceEnd),
+          bodyEnd: shift(base.bodyEnd),
+        });
+      }),
+      { seed: 3706, numRuns: 400, endOnFailure: true },
+    );
+  });
+});
+
 // The same two documents through every consumer, spelled out: an adjacent empty block, and a
 // block whose second line is a `----` look-alike (a YAML body `----\nfoo: 1`, which js-yaml
 // cannot parse — so a writer refuses it, and every reader sees the same block).
