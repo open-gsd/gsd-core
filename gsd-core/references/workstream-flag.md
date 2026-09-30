@@ -99,6 +99,21 @@ that omits the flag fails CI.
 This ensures workstream scope chains automatically through the workflow:
 `new-milestone → discuss-phase → plan-phase → execute-phase → transition`
 
+## Reserved names
+
+`none` (case-insensitive) cannot name a workstream. `--ws none`, `--ws=none`, `GSD_WORKSTREAM=none`
+and a pointer of `none` are all rejected with a "reserved" error, and `workstream create` and
+`workstream set` refuse it unconditionally. The one exception on the read side is a
+`.planning/workstreams/none/` directory that already exists: it stays addressable with `--ws none`
+so projects that used the name before it was reserved keep working (the directory name must match
+exactly; `NONE` is still rejected). Such a grandfathered directory is reachable through `--ws` and
+`GSD_WORKSTREAM` only, because `workstream set none` refuses unconditionally. To force flat mode,
+omit `--ws`, unset `GSD_WORKSTREAM`, or clear the pointer (`workstream set --clear`). The rejection
+happens before any command runs, so a stale `GSD_WORKSTREAM=none` in the environment must be unset
+first. The reserved list has a single owner
+(`RESERVED_WORKSTREAM_NAMES` in `src/workstream-name-policy.cts`); near-misses such as `none1` or
+`nonexistent` are ordinary names.
+
 ## Directory Structure
 
 ```

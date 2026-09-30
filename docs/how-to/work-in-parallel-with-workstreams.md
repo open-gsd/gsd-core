@@ -40,6 +40,8 @@ When a workstream is active, every GSD command — `/gsd-progress`, `/gsd-discus
 
 GSD creates the workstream directory under `.planning/workstreams/backend-api/` and seeds it with a skeleton `STATE.md` and `ROADMAP.md`. The workstream is not automatically activated — you switch to it explicitly.
 
+Workstream names use letters, digits, `.`, `_` and `-`, and must start with a letter or digit. The name `none` (in any letter case) is reserved: `workstream create none`, `workstream set none`, and `--ws none` (or `GSD_WORKSTREAM=none`) are rejected with an error, because `none` reads as "no workstream". To run in flat mode, omit `--ws`, or run `/gsd-workstreams set --clear`. A workstream directory that was already named `none` before this rule keeps working through `--ws none`.
+
 ---
 
 ## List workstreams

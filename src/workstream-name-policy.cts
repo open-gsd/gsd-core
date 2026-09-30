@@ -30,6 +30,40 @@ export const INVALID_ACTIVE_WORKSTREAM_NAME_MESSAGE =
 
 const ACTIVE_WORKSTREAM_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 
+/**
+ * Names that pass the charset check but can never name a workstream (#4772).
+ * `none` reads as "no workstream" to every caller that types it, yet the path
+ * layer treated it as a literal directory, so `--ws none` silently resolved
+ * `.planning/workstreams/none/...` (and fell back to the root config). Single
+ * owner: resolveActiveWorkstream and workstream create/set all consume this list.
+ */
+export const RESERVED_WORKSTREAM_NAMES: ReadonlyArray<string> = Object.freeze(['none']);
+
+/** True when `name` (trimmed, case-insensitive) is a reserved workstream name. */
+export function isReservedWorkstreamName(name: string | null | undefined): boolean {
+  const value = normalizeWorkstreamNameInput(name);
+  return value !== null && RESERVED_WORKSTREAM_NAMES.includes(value.toLowerCase());
+}
+
+/**
+ * The error text shared by every site that rejects a reserved name. `source`
+ * (where the name came from: 'cli' | 'env' | 'store') picks a remedy that can
+ * actually be carried out: the rejection happens in the gsd-tools bootstrap
+ * before any verb runs, so advising `workstream set --clear` would fail too.
+ */
+export function reservedWorkstreamNameMessage(
+  name: string | null | undefined,
+  source: string | null = null,
+): string {
+  const value = normalizeWorkstreamNameInput(name) ?? '';
+  const remedy = source === 'env'
+    ? 'unset GSD_WORKSTREAM for flat mode'
+    : source === 'store'
+      ? 'delete the stale active-workstream pointer for flat mode'
+      : 'omit --ws for flat mode';
+  return `Workstream name '${value}' is reserved and cannot name a workstream; ${remedy}`;
+}
+
 /** Result of validateActiveWorkstreamName. */
 export interface WorkstreamValidationResult {
   ok: boolean;

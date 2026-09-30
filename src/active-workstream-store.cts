@@ -14,7 +14,11 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { probeTty, platformWriteSync, platformReadSync, platformEnsureDir } from './shell-command-projection.cjs';
-import { isValidActiveWorkstreamName } from './workstream-name-policy.cjs';
+import {
+  isValidActiveWorkstreamName,
+  isReservedWorkstreamName,
+  reservedWorkstreamNameMessage,
+} from './workstream-name-policy.cjs';
 
 const WORKSTREAM_SESSION_ENV_KEYS: ReadonlyArray<string> = [
   'GSD_SESSION_KEY',
@@ -451,6 +455,14 @@ interface ResolvedWorkstream {
   args: string[];
 }
 
+function workstreamDirectoryExists(cwd: string, name: string): boolean {
+  try {
+    return fs.readdirSync(path.join(planningRoot(cwd), 'workstreams')).includes(name);
+  } catch {
+    return false;
+  }
+}
+
 function resolveActiveWorkstream(
   cwd: string,
   args: string[],
@@ -476,6 +488,14 @@ function resolveActiveWorkstream(
 
   if (ws && !validateWorkstreamName(ws)) {
     throw new Error('Invalid workstream name: must be alphanumeric, hyphens, underscores, or dots');
+  }
+
+  // #4772: a reserved name (`none`) is rejected from every source (--ws, env,
+  // pointer) unless a directory of that name already exists (grandfathered).
+  // Grandfathering compares the directory listing exactly, so a case-insensitive
+  // filesystem (macOS, Windows) cannot let `NONE` through on the strength of `none`.
+  if (ws && isReservedWorkstreamName(ws) && !workstreamDirectoryExists(cwd, ws)) {
+    throw new Error(reservedWorkstreamNameMessage(ws, source));
   }
 
   return {
