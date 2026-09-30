@@ -19,6 +19,7 @@ const WORKFLOWS_DIR = path.join(__dirname, '..', '.github', 'workflows');
 
 const AUTO_MERGE_CMD = /gh\s+pr\s+merge\b[^\n]*--auto\b/;
 
+const joinLines = (run) => run.replace(/\\\r?\n\s*/g, ' '); // wrapped `gh pr merge \`
 function loadWorkflow(file) {
   return yaml.load(fs.readFileSync(path.join(WORKFLOWS_DIR, file), 'utf8'));
 }
@@ -32,7 +33,7 @@ function effectivePermissions(workflow, job) {
 
 function autoMergeJobs(workflow) {
   return Object.entries(workflow.jobs || {}).filter(([, job]) =>
-    (job.steps || []).some((step) => typeof step.run === 'string' && AUTO_MERGE_CMD.test(step.run)),
+    (job.steps || []).some((s) => typeof s.run === 'string' && AUTO_MERGE_CMD.test(joinLines(s.run))),
   );
 }
 
