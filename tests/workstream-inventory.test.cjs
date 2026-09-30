@@ -13,7 +13,7 @@ const { cleanup } = require('./helpers.cjs');
 const { createFixture, seedWorkstream } = require('./fixtures/index.cjs');
 const { buildWorkstreamInventory, isCompletedInventory, pickRollupWinners } = require('../gsd-core/bin/lib/workstream-inventory-builder.cjs');
 const { inspectWorkstream } = require('../gsd-core/bin/lib/workstream-inventory.cjs');
-const { VERIFIER_STATUSES } = require('../gsd-core/bin/lib/verification.cjs');
+const { VERIFIER_STATUSES, VerificationStatusError } = require('../gsd-core/bin/lib/verification.cjs');
 const { phaseKeyFromDir, phaseKeyFromProse, phaseKeyFromToken, normalizePhaseName } = require('../gsd-core/bin/lib/phase-id.cjs');
 const fc = require('fast-check');
 
@@ -1418,7 +1418,11 @@ describe('#2645 — deleting a verification report must not raise completeness',
     writePhase(wsDir, '1-foo', { plans: 1, summaries: 1, verification: 'gaps_found' });
     writePhase(wsDir, '2-bar', { plans: 1, summaries: 1, verification: 'verified' });
     const ledgerPath = path.join(wsDir, '.verification-ledger.json');
-    assert.throws(() => inspectWorkstream(tmpDir, 'ws-5118-out-of-set', { active: null }));
+    assert.throws(
+      () => inspectWorkstream(tmpDir, 'ws-5118-out-of-set', { active: null }),
+      (err) => err instanceof VerificationStatusError && err.reason === 'verification_status_invalid' && /2-bar/.test(err.file),
+      'the inspection fails with the owner\'s own error, naming the refused report',
+    );
     assert.equal(fs.existsSync(ledgerPath), false, 'nothing persisted — not even phase 1\'s real verdict');
 
     // CONTROL: the same workstream with the report fixed inspects and writes.

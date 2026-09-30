@@ -181,8 +181,7 @@ describe('frontmatter-scalar-broad-grep lint: main() end-to-end wiring', () => {
 // to the frontmatter or not — bypasses the owner's enum, staleness check and
 // routing (transition.md's awk read, W15). The old fix-forward this lint used
 // to recommend (sed-scoped `grep -m1 "^status:"`) is exactly such a read, so
-// it is red too. Rows V51–V55 of
-// .gsd/phase/fix-5118-verification-status-enum/50-test-matrix.md; V56 is the
+// it is red too. Rows V51–V55 (#5118, ADR-5057 §3); V56 is the
 // live-tree test above (`scan()` finds zero offenders).
 
 describe('#5118: verification-status-raw-read (positive controls)', () => {

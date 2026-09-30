@@ -13,6 +13,7 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
+const fc = require('fast-check');
 
 const { transformFile, loadPreamble } = require('../scripts/sync-runtime-launcher.cjs');
 
@@ -53,5 +54,19 @@ describe('sync-runtime-launcher — preamble placement', () => {
     const open = lines.indexOf(FENCE + 'bash');
     const block = lines.slice(open + 1, lines.indexOf(FENCE, open + 1));
     assert.deepEqual(block, [...preamble, ...GUARD, ...CALL]);
+  });
+
+  // Property: the sync is idempotent. Whatever placement of guard lines, call
+  // lines and 0-2 preamble copies a fence starts from, feeding the sync's own
+  // output back through it is a no-op (null) — the same fixpoint the CI sync
+  // check relies on.
+  test('property: sync output re-fed to sync is a no-op', () => {
+    const segment = fc.constantFrom('guard', 'preamble', 'call');
+    fc.assert(fc.property(fc.array(segment, { minLength: 0, maxLength: 6 }), (segments) => {
+      const lines = segments.flatMap((s) => (s === 'guard' ? GUARD : s === 'preamble' ? preamble : CALL));
+      const content = doc(lines);
+      const once = transformFile(content, preamble) ?? content;
+      assert.equal(transformFile(once, preamble), null);
+    }), { numRuns: 200 });
   });
 });

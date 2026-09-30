@@ -4,14 +4,10 @@
  * RuleTester unit tests for `local/no-verification-status-literal`
  * (#5118, ADR-5057 Phase 4).
  *
- * Design:       .gsd/phase/fix-5118-verification-status-enum/40-design.md §R7
- * Test matrix:  .gsd/phase/fix-5118-verification-status-enum/50-test-matrix.md — rows V57–V59
+ * Reference: #5118, ADR-5057 §3 (docs/adr/5057-one-owner-per-workflow-verdict.md,
+ * Phase 4) — rows V57–V59.
  *
- * TDD RED: `eslint-rules/no-verification-status-literal.cjs` does not exist
- * yet — this file's require() throws MODULE_NOT_FOUND until the implementing
- * phase adds it. That is the intended starting state.
- *
- * Contract this file locks for the not-yet-written rule:
+ * Contract this file locks for the rule (eslint-rules/no-verification-status-literal.cjs):
  *   - FIRES in `src/` when a VerificationStatus value is spelled as a string
  *     literal and compared (===, !==, switch case) against a verification
  *     status — `x.verification.status`, or an identifier/property named like

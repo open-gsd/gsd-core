@@ -4315,9 +4315,8 @@ describe('fingerprint input set is closed and idempotent (#5095, ADR-5057 Phase 
 // #5118 / ADR-5057 Phase 4: `VerificationStatus` is a closed enum with ONE
 // owner (src/verification.cts), a status outside it is a hard error, `stale`
 // has one route, and a missing phase directory reads `phase_dir_not_found`.
-// Rows follow .gsd/phase/fix-5118-verification-status-enum/50-test-matrix.md
-// (V1–V37, V48–V50). Every row is red against `next` @ 582cb382ea except the
-// ones the matrix marks as regression locks / controls.
+// Rows V1–V37, V48–V50 (#5118, ADR-5057 §3). Every row is red against `next`
+// @ 582cb382ea except the regression locks / controls.
 // Kept in this file, not a new one: lint-test-file-count caps verification.cjs.
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -4714,7 +4713,7 @@ describe('#5118 review (security): a report outside its phase directory is never
 });
 
 describe('#5118 review A: the command-routing hub returns the out-of-set error as a pure Result', () => {
-  test('A1: a handler that throws VerificationStatusError yields {ok:false, kind:verification_status_invalid, message, reason, file}', () => {
+  test('A1: a handler that throws VerificationStatusError yields {ok:false, kind:ERROR_KINDS.VerificationStatusInvalid, message, reason, file}', () => {
     const { createHub, ERROR_KINDS } = require('../gsd-core/bin/lib/command-routing-hub.cjs');
     const { VerificationStatusError } = owner5118();
     const thrown = new VerificationStatusError('verified', '/p/01-foo/01-VERIFICATION.md');
@@ -4725,12 +4724,12 @@ describe('#5118 review A: the command-routing hub returns the out-of-set error a
     const result = hub.dispatch({ family: 'fam', subcommand: 'sub' });
     assert.deepEqual({ ...result }, {
       ok: false,
-      kind: 'verification_status_invalid',
+      kind: ERROR_KINDS.VerificationStatusInvalid,
       message: thrown.message,
       reason: 'verification_status_invalid',
       file: '/p/01-foo/01-VERIFICATION.md',
     });
-    assert.equal(ERROR_KINDS.VerificationStatusInvalid, thrown.reason, 'the kind IS the error\'s own reason');
+    assert.equal(result.reason, thrown.reason, 'the Result carries the error\'s own ERROR_REASON');
   });
 
   test('A1 CONTROL: any other thrown Error stays a HandlerFailure', () => {
@@ -5076,6 +5075,237 @@ describe('#5118 D: every CLI surface translates the out-of-set error once, centr
     const control = project(t, 'passed');
     const clean = JSON.parse(runGsdTools(['validate', 'consistency'], control.projectDir).output);
     assert.equal((clean.warnings || []).some((w) => w.code === 'W030'), false, 'control: no W030 on an in-set report');
+  });
+});
+
+describe('#5118 round 3: containment before read, no write before the error, and a recovery that works', () => {
+  const { runGsdTools } = require('./helpers.cjs');
+  const SECRET = 'TOP_SECRET_5118_VALUE';
+  const symlinkSkip = process.platform === 'win32' ? 'symlink creation needs elevated privilege on Windows' : false;
+
+  function project(t, status) {
+    const projectDir = createTempProject('gsd-5118-r3-');
+    t.after(() => cleanup(projectDir));
+    return { projectDir, ...writeSurfaceFixture5118(projectDir, status) };
+  }
+
+  /** Every file under `dir`, keyed by relative path — the byte-identical-tree comparison. */
+  function treeBytes(dir, base = dir, acc = {}) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) treeBytes(full, base, acc);
+      else acc[path.relative(base, full)] = fs.readFileSync(full, 'utf-8');
+    }
+    return acc;
+  }
+
+  function outsideDir(t) {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5118-r3-outside-'));
+    t.after(() => cleanup(outside));
+    return outside;
+  }
+
+  function assertNoLeak(argv, cwd, expectExit0 = true) {
+    const res = runGsdTools(argv, cwd);
+    if (expectExit0) assert.equal(res.exitCode, 0, `${argv.join(' ')}: ${res.error}`);
+    assert.equal((`${res.output}${res.error}`).includes(SECRET), false, `${argv.join(' ')}: content of an escaped report reached the output`);
+    return res;
+  }
+
+  // S1 (security): the two readers that used to read `*-VERIFICATION.md` with a
+  // plain readFileSync and echo its status into a thrown message.
+  for (const [label, linkTarget] of [
+    ['an absolute symlink', (p1, secretFile) => secretFile],
+    ['a relative ../ symlink', (p1, secretFile) => path.relative(p1, secretFile)],
+  ]) {
+    test(`S1: ${label} to a report outside the project reads missing through init verify-work, phase uat-passed, audit-uat and verification status — nothing leaks`, { skip: symlinkSkip }, (t) => {
+      const { projectDir, phaseDir, reportPath } = project(t, 'passed');
+      const secretFile = path.join(outsideDir(t), 'secret.md');
+      fs.writeFileSync(secretFile, `---\nstatus: ${SECRET}\n---\n`);
+      fs.unlinkSync(reportPath);
+      fs.symlinkSync(linkTarget(phaseDir, secretFile), reportPath);
+
+      assertNoLeak(['init', 'verify-work', '1'], projectDir);
+      assertNoLeak(['phase', 'uat-passed', '1', '--require-verification'], projectDir);
+      assertNoLeak(['audit-uat'], projectDir);
+      const status = assertNoLeak(['verification', 'status', phaseDir], projectDir);
+      assert.equal(JSON.parse(status.output).status, 'missing', 'the escaped file reads missing');
+    });
+  }
+
+  test('S1 CONTROL: the same status spelled in a regular file inside the phase dir IS read and refused', (t) => {
+    const bad = project(t, SECRET);
+    const res = runGsdTools(['init', 'verify-work', '1'], bad.projectDir);
+    assert.notEqual(res.exitCode, 0, 'the in-project report is read (and judged out of set)');
+    const audit = runGsdTools(['verification', 'status', bad.phaseDir], bad.projectDir);
+    assert.notEqual(audit.exitCode, 0);
+  });
+
+  // S2 (security): a phase directory that is itself a symlink out of the
+  // project — its realpath and the report's realpath both resolve outside, so
+  // containing against the phase dir's own realpath admitted the escape.
+  test('S2: a symlinked phase directory outside the project reads missing through verification status, smart-entry and the aggregates — nothing leaks', { skip: symlinkSkip }, (t) => {
+    const { projectDir, phaseDir } = project(t, 'passed');
+    const outside = outsideDir(t);
+    fs.writeFileSync(path.join(outside, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(outside, '01-01-SUMMARY.md'), '# Summary\n');
+    fs.writeFileSync(path.join(outside, '01-VERIFICATION.md'), `---\nstatus: ${SECRET}\n---\n`);
+    cleanup(phaseDir);
+    fs.symlinkSync(outside, phaseDir, 'dir');
+
+    const status = assertNoLeak(['verification', 'status', phaseDir], projectDir);
+    assert.equal(JSON.parse(status.output).status, 'missing');
+    assertNoLeak(['smart-entry'], projectDir);
+    assertNoLeak(['init', 'verify-work', '1'], projectDir);
+    assertNoLeak(['audit-uat'], projectDir);
+    assertNoLeak(['audit-open'], projectDir);
+    assertNoLeak(['planning', 'inspect'], projectDir);
+    assertNoLeak(['state', 'sync'], projectDir);
+  });
+
+  // D3: no write before the error — every command that writes something
+  // BEFORE the STATE.md rewrite whose frontmatter rebuild throws.
+  function threePhaseProject(t, thirdStatus) {
+    const { projectDir } = project(t, 'passed');
+    const planning = path.join(projectDir, '.planning');
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), [
+      '# Roadmap', '',
+      '- [ ] Phase 1: Foundation', '- [ ] Phase 2: API', '- [ ] Phase 3: Extra', '',
+      '### Phase 1: Foundation', '**Goal:** Setup', '**Plans:** 1 plans', '',
+      '### Phase 2: API', '**Goal:** Build API', '',
+      '### Phase 3: Extra', '**Goal:** More', '',
+      '## Progress', '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|----------------|--------|-----------|',
+      '| 01. Foundation | 0/1 | Not started | - |',
+      '| 02. API | 0/1 | Not started | - |',
+      '| 03. Extra | 0/1 | Not started | - |', '',
+    ].join('\n'));
+    fs.mkdirSync(path.join(planning, 'phases', '02-api'), { recursive: true });
+    const third = path.join(planning, 'phases', '03-extra');
+    fs.mkdirSync(third, { recursive: true });
+    fs.writeFileSync(path.join(third, '03-VERIFICATION.md'), `---\nstatus: ${thirdStatus}\n---\n`);
+    return projectDir;
+  }
+
+  test('D3: phase remove with a bad report in a SURVIVING phase fails before the first write — directories, STATE.md and ROADMAP.md untouched', (t) => {
+    const bad = threePhaseProject(t, 'verified');
+    const before = treeBytes(path.join(bad, '.planning'));
+    const dirsBefore = fs.readdirSync(path.join(bad, '.planning', 'phases')).sort();
+    const res = runGsdTools(['--json-errors', 'phase', 'remove', '2'], bad);
+    assert.notEqual(res.exitCode, 0, `phase remove must refuse: ${res.output}`);
+    assert.equal(errorEnvelope5118(res.error)?.reason, 'verification_status_invalid');
+    assert.deepEqual(treeBytes(path.join(bad, '.planning')), before, 'the tree is byte-identical');
+    assert.deepEqual(fs.readdirSync(path.join(bad, '.planning', 'phases')).sort(), dirsBefore, 'the target phase directory is still present and nothing was renumbered');
+
+    const control = threePhaseProject(t, 'passed');
+    const ok = runGsdTools(['phase', 'remove', '2'], control);
+    assert.equal(ok.exitCode, 0, `control: an in-set report lets the removal proceed: ${ok.error}`);
+    assert.deepEqual(fs.readdirSync(path.join(control, '.planning', 'phases')).sort(), ['01-foundation', '02-extra']);
+  });
+
+  test('D3: phase remove of the phase that CARRIES the bad report is not blocked by it (its report is never read afterwards)', (t) => {
+    const bad = threePhaseProject(t, 'verified');
+    const res = runGsdTools(['phase', 'remove', '3'], bad);
+    assert.equal(res.exitCode, 0, `removing the offending phase is the fix, not a refusal: ${res.error}`);
+    assert.equal(fs.existsSync(path.join(bad, '.planning', 'phases', '03-extra')), false);
+  });
+
+  function quickProject(t, status) {
+    const { projectDir } = project(t, status);
+    const planning = path.join(projectDir, '.planning');
+    fs.writeFileSync(path.join(planning, 'STATE.md'), [
+      '---', 'milestone: v1.0', '---', '# State', '',
+      '**Current Phase:** 01', '**Status:** In progress', '**Total Phases:** 1', '',
+      '## Quick Tasks Completed', '', '| # | Description |', '|---|---|', '| 1 | thing |', '',
+    ].join('\n'));
+    fs.mkdirSync(path.join(planning, 'quick', '260101-abc-thing'), { recursive: true });
+    fs.writeFileSync(path.join(planning, 'quick', '260101-abc-thing', '260101-abc-PLAN.md'), '# q\n');
+    return projectDir;
+  }
+
+  test('D3: milestone archive-quick with a bad report fails before moving any quick task directory', (t) => {
+    const bad = quickProject(t, 'verified');
+    const before = treeBytes(path.join(bad, '.planning'));
+    const res = runGsdTools(['--json-errors', 'milestone', 'archive-quick', 'v1.0'], bad);
+    assert.notEqual(res.exitCode, 0, res.output);
+    assert.equal(errorEnvelope5118(res.error)?.reason, 'verification_status_invalid');
+    assert.deepEqual(treeBytes(path.join(bad, '.planning')), before, 'the quick task directory was not moved');
+
+    const ok = runGsdTools(['milestone', 'archive-quick', 'v1.0'], quickProject(t, 'passed'));
+    assert.equal(ok.exitCode, 0, `control: ${ok.error}`);
+  });
+
+  test('D3: milestone complete with a bad report fails before its first write — no archive directory, tree byte-identical', (t) => {
+    const bad = quickProject(t, 'verified');
+    fs.writeFileSync(path.join(bad, '.planning', 'ROADMAP.md'), [
+      '# Roadmap', '', '## v1.0 Milestone', '', '- [ ] Phase 1: Foundation', '',
+      '### Phase 1: Foundation', '**Goal:** Setup', '**Plans:** 1 plans', '',
+      '## Progress', '', '| Phase | Plans Complete | Status | Completed |', '|---|---|---|---|',
+      '| 01. Foundation | 1/1 | Complete | 2025-01-01 |', '',
+    ].join('\n'));
+    const before = treeBytes(path.join(bad, '.planning'));
+    const res = runGsdTools(['--json-errors', 'milestone', 'complete', 'v1.0', '--name', 'M', '--confirm'], bad);
+    assert.notEqual(res.exitCode, 0, res.output);
+    assert.equal(errorEnvelope5118(res.error)?.reason, 'verification_status_invalid');
+    assert.deepEqual(treeBytes(path.join(bad, '.planning')), before, 'nothing archived, nothing rewritten');
+    assert.equal(fs.existsSync(path.join(bad, '.planning', 'milestones')), false);
+  });
+
+  test('D3: validate health --repair REGENERATE_STATE validates before its backup copy — a failed repair, no .bak file, STATE.md untouched', (t) => {
+    const bad = project(t, 'verified');
+    const healthDiagnostic = require('../gsd-core/bin/lib/health-diagnostic.cjs');
+    const { REMEDY_ACTION, REMEDY_RISK } = healthDiagnostic;
+    const before = treeBytes(path.join(bad.projectDir, '.planning'));
+    // regenerateState is DESTRUCTIVE (the dispatcher refuses it), so the handler
+    // is driven through a fabricated RISK.NONE diagnostic — the only way to reach it.
+    const diagnostics = [{
+      code: 'X001', severity: 'error', message: 'fabricated',
+      remedy: { action: REMEDY_ACTION.REGENERATE_STATE, risk: REMEDY_RISK.NONE, args: {} },
+    }];
+    const out = healthDiagnostic.applyRepairs(bad.projectDir, diagnostics, true, false);
+    assert.equal(out.details.length, 1);
+    assert.equal(out.details[0].success, false);
+    assert.match(out.details[0].error, /outside the closed set/);
+    assert.deepEqual(out.applied, []);
+    assert.deepEqual(treeBytes(path.join(bad.projectDir, '.planning')), before, 'no STATE backup was written, no file changed');
+  });
+
+  test('D3: phase complete pre-validates exactly the set its own STATE rewrite reads — a phase the rewrite never scans (not in the ROADMAP) does not block it', (t) => {
+    const { projectDir } = project(t, 'passed');
+    const orphan = path.join(projectDir, '.planning', 'phases', '05-old');
+    fs.mkdirSync(orphan, { recursive: true });
+    fs.writeFileSync(path.join(orphan, '05-VERIFICATION.md'), '---\nstatus: verified\n---\n');
+    const res = runGsdTools(['phase', 'complete', '1'], projectDir);
+    assert.equal(res.exitCode, 0, `an unscanned phase must not refuse phase complete: ${res.error}`);
+  });
+
+  // D4: the recovery the error text names must be real.
+  test('D4: the out-of-set error names the file, the value, the accepted values and a recovery that works — set `status:` or delete the report', (t) => {
+    const bad = project(t, 'verified');
+    const res = runGsdTools(['--json-errors', 'verification', 'status', bad.phaseDir], bad.projectDir);
+    assert.notEqual(res.exitCode, 0);
+    const { message } = errorEnvelope5118(res.error);
+    assert.ok(message.includes('01-VERIFICATION.md'), 'names the file');
+    assert.ok(message.includes('"verified"'), 'names the value');
+    for (const accepted of WRITER_5118) assert.ok(message.includes(accepted), `names ${accepted}`);
+    assert.match(message, /set the report's frontmatter `status:` to one of/);
+    assert.match(message, /delete the report and re-run the phase's verification/);
+    assert.doesNotMatch(message, /regenerates it/, 'the old text promised a verifier run the failing commands never reach');
+
+    // The named recovery, performed: deleting the report reaches the
+    // regenerating path — `missing`, routed to execute-phase — and the bundles
+    // that failed on the bad report answer again.
+    fs.unlinkSync(bad.reportPath);
+    const after = runGsdTools(['verification', 'status', bad.phaseDir], bad.projectDir);
+    assert.equal(after.exitCode, 0, after.error);
+    const result = JSON.parse(after.output);
+    assert.equal(result.status, 'missing');
+    assert.equal(result.route, 'execute-phase');
+    for (const argv of [['init', 'execute-phase', '1'], ['init', 'verify-work', '1'], ['init', 'progress']]) {
+      const init = runGsdTools(argv, bad.projectDir);
+      assert.equal(init.exitCode, 0, `${argv.join(' ')} must answer once the report is deleted: ${init.error}`);
+    }
   });
 });
 

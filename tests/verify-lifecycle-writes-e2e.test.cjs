@@ -250,8 +250,15 @@ describe('T16: a genuine change still publishes and stales the report (invariant
 // ═══════════════════════════════════════════════════════════════════════════
 // #5118 (Phase 4 of #5056): `stale` has ONE route, that route's step is the
 // one regeneration action shared by execute-phase and verify-work, and the
-// two-cycle ratchet holds. Rows V41–V47 of
-// .gsd/phase/fix-5118-verification-status-enum/50-test-matrix.md.
+// two-cycle ratchet holds (#5118, ADR-5057 §3). Rows V41–V47.
+//
+// HONESTY NOTE (V46/V47): these rows do NOT execute the verify-work WORKFLOW.
+// They run the real CLI verbs the workflow prose names, and they simulate two
+// things in test JS: (1) the workflow's route-following (`verifyWorkCycle`
+// follows the `route` field the way the prose instructs) and (2) the
+// gsd-verifier agent's report write. Live-runtime verification that verify-work
+// actually follows the route is the manual evidence row N3, recorded in the PR
+// body.
 // ═══════════════════════════════════════════════════════════════════════════
 
 const ROOT_5118 = path.resolve(__dirname, '..');
@@ -291,7 +298,7 @@ function runSharedVerificationStep(projectDir, phaseDir, declared) {
 }
 
 // One verify-work cycle: the CLI verbs verify-work's complete_session runs
-// after fingerprint time, in order (40-design.md §3.4), including its read of
+// after fingerprint time, in order (ADR-5057 §3), including its read of
 // the owner's answer. `followRoute` (the declared covered set) makes the cycle
 // do what complete_session instructs when the owner routes to execute-phase:
 // run the shared step. The route is ALWAYS read first — no cycle regenerates
@@ -428,8 +435,8 @@ describe('#5118 C1 (T15 extension): a green phase run through verify-work twice 
   });
 });
 
-describe('#5118 C2 (wired surface): stale → verify-work reads the route → follows it through the shared step → passed', () => {
-  test('V46: cycle 1 reads stale/execute-phase and follows the route; cycle 2 reads passed and does nothing; both end passed', (t) => {
+describe('#5118 C2 (CLI verbs + SIMULATED route-following): stale → route read from the owner → simulated follow through the shared step\'s CLI sequence → passed', () => {
+  test('V46 (route-following and verifier report write simulated in test JS): cycle 1 reads stale/execute-phase and follows the route; cycle 2 reads passed and does nothing; both end passed', (t) => {
     const { projectDir, phaseDir, declared } = buildFingerprintedPhase(t, { withImpl: true });
     assert.strictEqual(statusOf(projectDir, phaseDir), 'passed', 'sanity: freshly fingerprinted phase is passed');
     fs.writeFileSync(path.join(projectDir, 'src', 'impl.ts'), 'export const x = 2;\n');
@@ -453,7 +460,7 @@ describe('#5118 C2 (wired surface): stale → verify-work reads the route → fo
     assert.strictEqual(second.uatPassed, true, `cycle 2: blockers ${JSON.stringify(second.blockers)}`);
   });
 
-  test('V47 CONTROL: the same stale fixture through two verify-work cycles NOT following the route stays stale (#4887 Defect 1)', (t) => {
+  test('V47 CONTROL (CLI verbs only; nothing simulated): the same stale fixture through two verify-work cycles NOT following the route stays stale (#4887 Defect 1)', (t) => {
     const { projectDir, phaseDir } = buildFingerprintedPhase(t, { withImpl: true });
     fs.writeFileSync(path.join(projectDir, 'src', 'impl.ts'), 'export const x = 2;\n');
     for (const cycle of [1, 2]) {

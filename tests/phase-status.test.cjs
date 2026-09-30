@@ -531,8 +531,8 @@ describe('phaseStatus(phaseDir)', () => {
 // Phase 4 closes the verification vocabulary in src/verification.cts, and the
 // Phase Status Module imports it in the same PR. `phaseStatusFromFacts`
 // asserts `verificationStatus` against that enum when non-null — the same
-// fail-where-produced rule as its own `assertPhaseStatus`. Rows V38–V40 of
-// .gsd/phase/fix-5118-verification-status-enum/50-test-matrix.md.
+// fail-where-produced rule as its own `assertPhaseStatus`. Rows V38–V40
+// (#5118, ADR-5057 §3).
 
 describe('#5118: phaseStatusFromFacts accepts exactly the closed VerificationStatus enum', () => {
   const MEMBERS = ['passed', 'gaps_found', 'human_needed', 'stale', 'missing', 'unparseable', 'phase_dir_not_found'];
