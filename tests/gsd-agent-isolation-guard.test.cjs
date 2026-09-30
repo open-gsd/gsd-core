@@ -2416,4 +2416,30 @@ describe('#4630 — the isolation record states who decided it, so a re-query kn
     assert.equal(readSentinelRaw(dir).isolation, 'harness-worktree',
       'the resolver records the host capability; the non-git degrade belongs to the guard');
   });
+
+  test('a force the resolver OVERRULES is recorded as `resolver` — the caller asked for harness-worktree, so the base-check `none` is not the caller\'s to hold', (t) => {
+    // The #4222 degrade is applied AFTER --force-isolation (it wins over a
+    // force, mirroring #3737), so a caller forcing `harness-worktree` on a
+    // diverged repo gets `none` recorded. Stamping that `caller` because a
+    // force was APPLIED would let a later plain query hold a degrade the
+    // resolver itself derived, and #4222's "not sticky" would fail on this
+    // path. Provenance names who produced the recorded VALUE: it is the
+    // caller's only when it is what the caller forced.
+    const dir = divergedProject(t, 'gsd-4630-overrule-');
+    const forced = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', '--phase', '1', '--force-isolation', 'harness-worktree'],
+      dir, env(dir),
+    );
+    assert.equal(forced.success, true, forced.error);
+    const rec = readSentinelRaw(dir);
+    assert.equal(rec.isolation, 'none', 'precondition: the base-check degrade wins over the force');
+    assert.equal(rec.decided_by, 'resolver', 'the caller asked for harness-worktree; the `none` is the resolver\'s');
+
+    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], dir).trim();
+    git(['push', 'origin', branch], dir);
+    const plain = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(plain.success, true, plain.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'harness-worktree',
+      'once HEAD catches up, the resolver re-evaluates a degrade it derived itself');
+  });
 });

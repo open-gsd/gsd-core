@@ -2422,9 +2422,17 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // fresh derivation it is instead of being weighed against the record.
     // Side-effect write (#3045 CORE REDESIGN) — see the doc comment above.
     // Never allowed to affect this query's own stdout contract or throw.
+    // Provenance names who produced the recorded VALUE, not whether a force
+    // was applied. The #3737 opt-out and the #4222 base-check degrade both run
+    // AFTER --force-isolation and can overrule it; a `none` they substitute
+    // for a forced `harness-worktree` is the resolver's own derivation, and
+    // stamping it `caller` would let a later plain query hold it after the
+    // repository caught up. The record is the caller's only when it records
+    // exactly what the caller forced.
+    const decidedBy = forcedApplied && recordedIsolation === forcedIsolation ? 'caller' : 'resolver';
     if (heldDegrade === null) {
       try {
-        writeDispatchIsolationSentinel(cwd, { isolation: recordedIsolation, harnessFlag: recordedHarnessFlag, phase: phaseArg, plan: planArg, decidedBy: forcedApplied ? 'caller' : 'resolver' });
+        writeDispatchIsolationSentinel(cwd, { isolation: recordedIsolation, harnessFlag: recordedHarnessFlag, phase: phaseArg, plan: planArg, decidedBy });
       } catch {
         // writeDispatchIsolationSentinel already swallows its own errors into
         // a { recorded: false } result; this catch is defense in depth only.
