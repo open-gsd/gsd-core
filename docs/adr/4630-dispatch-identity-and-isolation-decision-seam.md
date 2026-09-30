@@ -119,6 +119,16 @@ file (`decidedBy` once read), with exactly two values:
 | `resolver` | the resolver derived the value itself, from state it re-reads on every call — the #3737 opt-out, #4232's base check | re-evaluates it; the record is not held |
 | `caller` | a producer recorded it with `--force-isolation`, from a call site whose reasoning the resolver cannot reconstruct — the three producers in the table above | holds it, when the record is fresh, well-formed, `none`, and in scope for the query |
 
+**Provenance names the writer, not the kind of degrade.** `executor-isolation-dispatch.md` ends by
+forcing the shell's final value (`--force-isolation "$ISOLATION"`), so a base-check `none` that
+reaches that line is recorded as `caller` and held for the rest of the run. That is deliberate. The
+orchestrator has already committed to dispatching that run sequentially; if HEAD catching up
+underneath it flipped the record back to `harness-worktree`, the guard would start refusing the
+very dispatches the degrade mandated, which is #4222 in reverse. The run's next forced re-record,
+which re-runs the base check in shell first, or the sentinel's freshness window ends the hold.
+Live re-evaluation governs the records the resolver writes itself: the plain-query path #4222 was
+reported against.
+
 **An absent field reads as `caller`**, and so does any value other than `resolver`. The
 case this covers is a record written by a pre-Phase-2 `gsd-tools` still in flight during an
 upgrade, and the default is chosen by the cost of being wrong in each direction: holding a
