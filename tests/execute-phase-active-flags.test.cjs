@@ -34,8 +34,8 @@ describe('execute-phase command: active flags are explicit', () => {
       'objective should state that documented flags are not automatically active'
     );
     assert.ok(
-      objectiveMatch[1].includes('appears in `$ARGUMENTS`'),
-      'objective should tie flag activation to literal $ARGUMENTS presence'
+      objectiveMatch[1].includes('appears in the `<arguments>` block'),
+      'objective should tie flag activation to literal presence in the labeled <arguments> block (#4780)'
     );
   });
 
@@ -46,7 +46,7 @@ describe('execute-phase command: active flags are explicit', () => {
       'context should clearly label flags as documentation only'
     );
     assert.ok(
-      content.includes('Active flags must be derived from `$ARGUMENTS`'),
+      content.includes('Active flags must be derived from the `<arguments>` block'),
       'context should have a separate active-flags section'
     );
   });
@@ -58,7 +58,7 @@ describe('execute-phase command: active flags are explicit', () => {
       'context should forbid inferring flags from documentation alone'
     );
     assert.ok(
-      content.includes('`--interactive` is active only if the literal `--interactive` token is present in `$ARGUMENTS`'),
+      content.includes('`--interactive` is active only if the literal `--interactive` token is present in the `<arguments>` block'),
       'context should apply the same active-flag rule to --interactive'
     );
     assert.ok(

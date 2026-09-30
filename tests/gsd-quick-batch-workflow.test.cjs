@@ -97,16 +97,19 @@ describe('quick-batch command: frontmatter and objective', () => {
     const content = fs.readFileSync(COMMAND_PATH, 'utf-8');
     const securityBody = extractTagBody(content, '<security_notes>', '</security_notes>');
     assert.ok(securityBody, 'should have <security_notes> section');
-    assert.match(securityBody, /--text/);
+    assert.match(securityBody, /--stdin/);
+    assert.match(securityBody, /heredoc/);
     assert.match(securityBody, /DATA_START/);
     assert.match(securityBody, /DATA_END/);
   });
 
-  test('$ARGUMENTS is passed to quick-batch parse-args via quoted --text, never unquoted word-splitting', () => {
+  test('the typed text is passed to quick-batch parse-args on stdin via a quoted heredoc, never as a shell argument (#4780)', () => {
     const content = fs.readFileSync(COMMAND_PATH, 'utf-8');
     const processBody = extractTagBody(content, '<process>', '</process>');
     assert.ok(processBody, 'should have <process> section');
-    assert.match(processBody, /--text "\$ARGUMENTS"/);
+    assert.match(processBody, /parse-args --raw --stdin/);
+    assert.match(processBody, /<<'GSD_QUICK_BATCH_ARGS_END'/);
+    assert.doesNotMatch(processBody, /--text\s+"/, 'the typed text must never sit inside a double-quoted shell argument');
   });
 });
 
@@ -134,9 +137,11 @@ describe('quick-batch workflow: byte-size boundary (row 49)', () => {
   // invocation must use quoted --text "$ARGUMENTS", not unquoted -- $ARGUMENTS
   // (shell word-splitting/pathname expansion before the parser sees raw,
   // attacker-influenced task text).
-  test('main workflow passes $ARGUMENTS to quick-batch parse-args via quoted --text', () => {
+  test('main workflow passes the typed text to quick-batch parse-args on stdin via a quoted heredoc (#4780)', () => {
     const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
-    assert.match(content, /quick-batch parse-args --raw --text "\$ARGUMENTS"/);
+    assert.match(content, /quick-batch parse-args --raw --stdin/);
+    assert.match(content, /<<'GSD_QUICK_BATCH_ARGS_END'/);
+    assert.doesNotMatch(content, /quick-batch parse-args --raw --text\s+"/, 'the typed text must never sit inside a double-quoted shell argument');
     assert.doesNotMatch(content, /quick-batch parse-args --raw -- \$ARGUMENTS(?!")/, 'must never pass raw, unquoted $ARGUMENTS to the parser');
   });
 });
