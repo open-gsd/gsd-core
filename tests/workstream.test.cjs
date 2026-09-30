@@ -1216,10 +1216,11 @@ describe('regressions: reserved workstream name none (#4772)', () => {
     assert.equal(fs.existsSync(wsDirOf('none')), false);
   });
 
-  test('workstream set none reports reserved_name and leaves the pointer alone', () => {
+  test('workstream set none reports invalid_name with the reserved message and leaves the pointer alone', () => {
     const r = runGsdTools(['workstream', 'set', 'none'], tmpDir);
     const out = JSON.parse(r.output);
-    assert.equal(out.error, 'reserved_name');
+    assert.equal(out.error, 'invalid_name');
+    assert.match(out.message, /is reserved/);
     assert.equal(out.active, null);
     assert.equal(fs.existsSync(path.join(tmpDir, '.planning', 'active-workstream')), false);
   });

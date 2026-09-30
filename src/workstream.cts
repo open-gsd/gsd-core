@@ -367,13 +367,11 @@ function cmdWorkstreamSet(cwd: string, name: string | null | undefined, raw: boo
     return;
   }
 
-  if (!isValidActiveWorkstreamName(name)) {
-    output({ active: null, error: 'invalid_name', message: 'Workstream name must be alphanumeric, hyphens, underscores, or dots' }, raw, undefined);
-    return;
-  }
-
-  if (isReservedWorkstreamName(name)) {
-    output({ active: null, error: 'reserved_name', message: reservedWorkstreamNameMessage(name) }, raw, undefined);
+  if (!isValidActiveWorkstreamName(name) || isReservedWorkstreamName(name)) {
+    const message = isReservedWorkstreamName(name)
+      ? reservedWorkstreamNameMessage(name)
+      : 'Workstream name must be alphanumeric, hyphens, underscores, or dots';
+    output({ active: null, error: 'invalid_name', message }, raw, undefined);
     return;
   }
 
