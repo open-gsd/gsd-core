@@ -117,12 +117,15 @@ describe('roadmap analyze checkbox_conflict (#4757)', () => {
       [[{ ticked: true, shape: DISK.BACKFILLED }, { ticked: true, shape: DISK.SUMMARIZED }], 2],
     ];
     for (const [phases, expected] of cases) {
-      fs.rmSync(path.join(tmpDir, '.planning', 'phases'), { recursive: true, force: true });
-      fs.mkdirSync(path.join(tmpDir, '.planning', 'phases'), { recursive: true });
-      writeProject(tmpDir, phases);
-      const out = analyze(tmpDir);
-      assert.ok(Array.isArray(out.checkbox_conflict));
-      assert.strictEqual(out.checkbox_conflict.length, expected);
+      const caseDir = createTempProject();
+      try {
+        writeProject(caseDir, phases);
+        const out = analyze(caseDir);
+        assert.ok(Array.isArray(out.checkbox_conflict));
+        assert.strictEqual(out.checkbox_conflict.length, expected);
+      } finally {
+        cleanup(caseDir);
+      }
     }
   });
 

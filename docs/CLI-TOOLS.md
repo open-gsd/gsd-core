@@ -440,6 +440,35 @@ no `### Phase N` detail section, and no checklist bullet this command can update
 `missing_phase_details` reason instead of claiming success, and leaves
 `ROADMAP.md` byte-identical.
 
+### Checkbox conflicts (`roadmap analyze`)
+
+`roadmap analyze` derives `current_phase`, `next_phase`, and `completed_phases`
+from each phase's on-disk status (`disk_status`), not from the ROADMAP
+checkbox: a ticked `[x]` is a human annotation with no machine authority
+(ADR-3180 §7.4, [#2957](https://github.com/open-gsd/gsd-core/issues/2957)).
+The two signals can legitimately disagree, for example a backfilled phase that
+has a `SUMMARY.md` and no `PLAN.md` (`disk_status: empty`) or a phase whose
+plans are all summarized but which has no passing `*-VERIFICATION.md`
+(`disk_status: executed`), both ticked `[x]`.
+
+`checkbox_conflict` lists every such phase so a caller is never handed a
+ticked phase, or withheld an unticked-but-verified one, with no signal. It is
+always an array (empty when every phase agrees). A phase is listed when its
+`roadmap_complete` differs from `disk_status === "complete"`.
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `number` | string | Phase number, as in `phases[].number` |
+| `roadmap_complete` | boolean | The ROADMAP checkbox state (`true` for `[x]`) |
+| `disk_status` | string | The disk-derived status the selectors use |
+| `plan_count` | number | Plans found for the phase |
+| `summary_count` | number | Summaries paired with a plan |
+
+The selectors are unchanged: `checkbox_conflict` only reports the
+disagreement. To treat a phase as done despite its disk status, verify it
+(`verify-phase`) so a passing `*-VERIFICATION.md` exists.
+([#4757](https://github.com/open-gsd/gsd-core/issues/4757))
+
 ### Milestone window scope (`roadmap analyze`)
 
 `roadmap analyze` scopes its phase list to the current milestone's section of

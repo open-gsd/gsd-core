@@ -938,6 +938,26 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
     ? clampPercent(scopedTotalSummaries, scopedTotalPlans)
     : null;
 
+  // #4757: `current_phase` / `next_phase` / `completed_phases` are disk-
+  // authoritative (ADR-3180 §7.4, #2957 — a ticked ROADMAP checkbox carries no
+  // machine authority), so a phase whose checkbox disagrees with its disk
+  // status can be handed back as the phase to work on while the operator has
+  // already ticked it (a backfilled phase with a SUMMARY and no PLAN reads
+  // `empty`; an all-summarized phase with no VERIFICATION reads `partial`), or
+  // withheld from `completed_phases` while ticked-complete. The selectors stay
+  // disk-authoritative; the disagreement is SURFACED here rather than silently
+  // resolved either way. Computed after the heading/table/checklist phase
+  // enumeration is final so synthesized phases are covered too.
+  const checkboxConflict = phases
+    .filter(p => p.roadmap_complete !== (p.disk_status === DISK_STATUS.COMPLETE))
+    .map(p => ({
+      number: p.number,
+      roadmap_complete: p.roadmap_complete,
+      disk_status: p.disk_status,
+      plan_count: p.plan_count,
+      summary_count: p.summary_count,
+    }));
+
   const result = {
     milestones,
     phases,
@@ -965,6 +985,9 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
     progress_scope: progressScope,
     current_phase: currentPhase ? currentPhase.number : null,
     next_phase: nextPhase ? nextPhase.number : null,
+    // #4757: phases whose ROADMAP checkbox disagrees with `disk_status`
+    // (`roadmap_complete` vs `disk_status === "complete"`); always an array.
+    checkbox_conflict: checkboxConflict,
     missing_phase_details: missingDetails.length > 0 ? missingDetails : null,
     // #3184/#3165: distinguishes a genuinely empty milestone (`scope:
     // "complete"`, `phase_count: 0`) from a window that could not be fully
