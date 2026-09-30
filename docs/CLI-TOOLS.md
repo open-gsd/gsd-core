@@ -795,6 +795,32 @@ node gsd-tools.cjs verify key-links <plan-file>
 
 `verify key-links` confines each link's `from:`/`to:` to the project directory (#3493): a path that resolves outside the project (via `../` traversal, an absolute path, or a symlink) is never read. That link's `links[]` entry reports `path_rejected: "from"` or `path_rejected: "to"` (whichever field was rejected) alongside `verified: false`, without echoing the underlying path-confinement error (which would embed an absolute host path). A rejected link fails independently — it does not abort evaluation of the other links in the same plan, and does not set `path_rejected` on links whose paths resolve inside the project.
 
+### `verification status` (the verification verdict, #5118)
+
+```bash
+node gsd-tools.cjs verification status <phase-dir> [--pick <field>]
+```
+
+Reads the phase's `*-VERIFICATION.md` frontmatter and answers with one member of a **closed enum**, projected through **one routing table** (`VERIFICATION_ROUTES` in `src/verification.cts`, ADR-5057 Phase 4). Every workflow that needs the verdict reads this answer; none re-reads the report or branches on a status word of its own.
+
+| `status` | Meaning | `route` (bare command) |
+|----------|---------|------------------------|
+| `passed` | Report says `passed` and its covered-input fingerprint is current | `""` (continue) |
+| `gaps_found` | Report says `gaps_found` | `plan-phase` (`next_command` carries `--gaps`) |
+| `human_needed` | Report says `human_needed` | `verify-work` |
+| `stale` | Covered source changed after the verifier ran | `execute-phase` (its shared verification step re-runs the verifier) |
+| `missing` | Phase directory exists but holds no report, or the report has no `status` | `execute-phase` (resumes at the verification gates) |
+| `unparseable` | The report's frontmatter is not YAML | `""` (fix the report itself) |
+| `phase_dir_not_found` | There is no phase directory at that path | `""` (a usage error — see below) |
+
+The JSON result carries `status`, `next_action`, `next_command` (the route projected for the project's runtime, for example `/gsd-execute-phase 3` or `$gsd-execute-phase 3` on Codex), and — additive since #5118 — `route`, the bare command from the same table entry, so the two can never disagree. `message` is present only where a usage error needs one. `staleCheckIndeterminate` is unchanged. The `init *` bundles expose the same bare command as `verification_route` beside `verification_next_command`, and each `planning inspect` phase carries `verification.route` beside `verification.status`.
+
+- **`phase_dir_not_found`** is a usage error, not a verification state: nothing was there to look in (a dangling symlink and a path that is a regular file both read this way). It has no next command — re-running `execute-phase` could re-run a phase already archived under `.planning/milestones/`. Resolve the directory with `find-phase`.
+- **`unknown` no longer exists.** A `status` outside the set used to route as `unknown` to `execute-phase`; that is now the hard error below, and no command emits `unknown`.
+- **A report may carry only `passed`, `gaps_found`, or `human_needed`.** Any other value — `verified`, `Passed`, `stale` (a reader-only member), a number — fails every command that reads the report with `verification_status_invalid`, stdout empty, naming the file, the value (quoted, control characters escaped, truncated at 120 characters) and the accepted values. Recovery: set the report's frontmatter `status:` to one of the accepted values, or delete the report (it then reads `missing` and routes to `execute-phase`, whose verification step regenerates it). `validate health` reports the same file as warning `W030` instead of failing.
+- **No write before the error.** A command that writes (`phase complete`, `phase remove`, `state sync`, `milestone complete`, `milestone archive-quick`, `validate health --repair`) validates every report it will read before its first write, so a refused report leaves `STATE.md`, `ROADMAP.md` and the phase directories untouched.
+- **Containment.** A report whose real path escapes the phases root (a symlink out of the project) is never read: it reads `missing`, and none of its content reaches any output.
+
 ---
 
 ## Validation Commands
@@ -864,7 +890,7 @@ signal absence, because omission is itself something callers come to depend on.
 | `generated_from` | Resolved `cwd` and `.planning/` root (`null` when there is no planning root) |
 | `milestone` | `version`, `name`, and the `scope` of that answer |
 | `active` | `phase`, `plan`, and `status` — three distinct STATE.md facts, each scoped separately |
-| `phases[]` | Per phase: completion, verification, roadmap acceptance, UAT, plan and task rows |
+| `phases[]` | Per phase: completion, verification (`status`, `next_action`, and the additive `route` — see [`verification status`](#verification-status-the-verification-verdict-5118)), roadmap acceptance, UAT, plan and task rows |
 | `orphan_phase_dirs[]` | Directories under `phases/` that the current milestone window does not declare |
 | `requirements[]` | Requirement rows with mapped-phase traceability |
 | `progress` | `accepted_phases` and `completed_plans`, as independent fractions |

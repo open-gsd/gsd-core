@@ -15,7 +15,7 @@
  *                                     (RFC 4122); invalid values are silently coerced to undefined.
  *   command:       string  — the dispatched verb
  *   args?:         unknown — only present when includeArgs === true
- *   result:        { kind: 'ok' | 'UnknownCommand' | 'InvalidArgs' | 'HandlerRefusal' | 'HandlerFailure', ...payload }
+ *   result:        { kind: 'ok' | 'UnknownCommand' | 'InvalidArgs' | 'HandlerRefusal' | 'HandlerFailure' | 'VerificationStatusInvalid', ...payload }
  *   timestamp:     string  — ISO 8601
  */
 

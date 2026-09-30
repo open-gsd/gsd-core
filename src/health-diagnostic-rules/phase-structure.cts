@@ -189,7 +189,8 @@ function checkW009(snapshot: PlanningSnapshot): Diagnostic[] {
 // contract) and the snapshot carries the typed error's file and message. A
 // diagnostics surface must survive the defect it diagnoses, so health reports
 // the file instead of failing with `verification_status_invalid` like the
-// query surfaces do (cmdValidateHealth takes the parked error).
+// query surfaces do: `validate health` (exit 0) lists each such report as one
+// W030 finding, built from the error the snapshot carries.
 
 function checkW030(snapshot: PlanningSnapshot): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
@@ -201,7 +202,7 @@ function checkW030(snapshot: PlanningSnapshot): Diagnostic[] {
       severity: SEVERITY.WARNING,
       message: `Phase ${phase.dir}: ${invalid.message}`,
       remedy: adviseRemedy(
-        'Set the report frontmatter `status` to one of passed | gaps_found | human_needed, or re-run the verifier (/gsd-execute-phase) to regenerate it',
+        'Set the report frontmatter `status` to one of passed | gaps_found | human_needed, or delete the report and re-run the phase verification (/gsd-execute-phase)',
       ),
     });
   }
