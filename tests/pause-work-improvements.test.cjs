@@ -67,6 +67,38 @@ describe('pause-work improvements', () => {
       'pause-work should document design critique gate for design→execution transitions'
     );
   });
+
+  test('bug #4943: pause-work commit step uses conventional commit prefix docs(pause):', () => {
+    pauseContent = pauseContent || fs.readFileSync(
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'pause-work.md'), 'utf-8'
+    );
+    assert.doesNotMatch(
+      pauseContent,
+      /query commit "wip:/,
+      'pause-work.md must not use non-conventional "wip:" commit prefix (#4943)'
+    );
+    assert.match(
+      pauseContent,
+      /query commit "docs\(pause\):/,
+      'pause-work.md must use conventional "docs(pause):" commit prefix (#4943)'
+    );
+  });
+
+  test('bug #4943: git-integration.md handoff format uses conventional commit prefix docs(pause):', () => {
+    const gitIntContent = fs.readFileSync(
+      path.join(__dirname, '..', 'gsd-core', 'references', 'git-integration.md'), 'utf-8'
+    );
+    assert.doesNotMatch(
+      gitIntContent,
+      /query commit "wip:/,
+      'git-integration.md must not use non-conventional "wip:" commit prefix (#4943)'
+    );
+    assert.match(
+      gitIntContent,
+      /query commit "docs\(pause\):/,
+      'git-integration.md must use conventional "docs(pause):" commit prefix (#4943)'
+    );
+  });
 });
 
 
