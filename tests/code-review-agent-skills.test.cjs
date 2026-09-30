@@ -44,7 +44,7 @@ describe('agent_skills injection — review-family workflows (#991)', () => {
       //    the same `gsd_run query agent-skills <type>` idiom as the ~20
       //    sibling workflows (plan-phase, execute-phase, secure-phase, ...).
       const assignRe = new RegExp(
-        '([A-Z][A-Z0-9_]*)=\\$\\(\\s*gsd_run query agent-skills ' + escapeRe(agentType) + '\\s*\\)',
+        '([A-Z][A-Z0-9_]*)=\\$\\(\\s*gsd_run query agent-skills ' + escapeRe(agentType) + '(?:\\s+\\$\\{GSD_WS:\\+--ws=\\$\\{GSD_WS##\\* \\}\\})?\\s*\\)',
       );
       const m = content.match(assignRe);
       assert.ok(
