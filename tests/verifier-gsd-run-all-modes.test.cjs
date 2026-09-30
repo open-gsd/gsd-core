@@ -51,14 +51,15 @@ describe('gsd-verifier defines gsd_run in every mode (#5004)', () => {
   test('no gsd_run call precedes the resolver', () => {
     const content = readAgent();
     const includeIdx = content.indexOf(RESOLVER_REF);
-    const firstUse = content.search(/\bgsd_run\s+(query|run-with-timeout|loop)\b/);
+    const firstUse = content.search(/^\s*(?:[A-Z_]+=\$\()?gsd_run\s+[a-z]/m);
     assert.ok(firstUse > includeIdx, 'first gsd_run invocation must come after the resolver include');
   });
 
   test('preamble forbids filesystem search and requires the resolver per Bash call', () => {
     const pre = sectionBody(readAgent(), '## Resolver Bootstrap');
     assert.ok(pre.includes(RESOLVER_REF), 'preamble must hold the resolver include');
-    assert.match(pre, /every Bash call/i);
+    assert.match(pre, /fresh shell/i);
+    assert.match(pre, /every Bash snippet/i);
     assert.match(pre, /never search the filesystem/i);
     assert.ok(pre.includes('${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/gsd-tools.cjs'));
   });
