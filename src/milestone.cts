@@ -66,7 +66,7 @@ const { extractFrontmatter } = frontmatterMod;
 // divergence signal). Routed through the single write-seam composition
 // (`syncAndPreserveStateMd`) instead, under `withStateLock` — see
 // `cmdMilestoneComplete`'s own STATE.md-update block for the full rationale.
-const { syncAndPreserveStateMd, withStateLock, readModifyWriteStateMd } = stateMod;
+const { syncAndPreserveStateMd, withStateLock, readModifyWriteStateMd, assertVerificationReportsReadable } = stateMod;
 
 // #2288 security: a milestone version label becomes a filesystem directory
 // component (`milestones/<label>-phases/`) into which phase directories are
@@ -963,6 +963,16 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
     return;
   }
 
+  // #5118 (no write before the error): the STATE.md update further down
+  // rebuilds the frontmatter from every phase's report and throws on a
+  // `status` outside the closed set — AFTER the archive directory, the
+  // archived ROADMAP/REQUIREMENTS copies, MILESTONES.md and the moved audit
+  // and quick-task files. Validate first, so the refusal leaves the tree
+  // untouched.
+  if (fs.existsSync(statePath)) {
+    assertVerificationReportsReadable(platformReadSync(statePath) || '', cwd);
+  }
+
   // Ensure archive directory exists. Deliberately placed AFTER the dry-run
   // early return and every refusal/guard above (missingExplicitVersion, the
   // scope refusal, the unstarted-phase guard) — #3184 review finding: this
@@ -1857,6 +1867,16 @@ function cmdQuickArchive(cwd: string, version: string, options: QuickArchiveOpti
       raw,
     );
     return;
+  }
+
+  // #5118 (no write before the error): the STATE.md reset below goes through
+  // `readModifyWriteStateMd`, whose frontmatter rebuild reads every phase's
+  // report and throws on a `status` outside the closed set — AFTER the quick
+  // task directories have been MOVED. Validate first, so the refusal leaves the
+  // tree untouched. Gated on there being anything to archive: a run that would
+  // move nothing never reaches that rebuild.
+  if (fs.existsSync(statePath) && listQuickTaskDirsForArchive(cwd).length > 0) {
+    assertVerificationReportsReadable(fs.readFileSync(statePath, 'utf-8'), cwd);
   }
 
   const quickArchiveResult = archiveQuickTaskDirectories(cwd, version);

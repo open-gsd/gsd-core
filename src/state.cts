@@ -6789,6 +6789,20 @@ function cmdStateCompletePhase(cwd: string, raw: boolean, overridePhase?: string
   if (wrote) publishStateContract(cwd);
 }
 
+/**
+ * #5118 (no write before the error): throws `VerificationStatusError` when a
+ * verification report in the set every STATE.md write rebuilds its frontmatter
+ * from carries a `status` outside the closed set — and returns having done
+ * nothing else. It runs `buildStateFrontmatter` itself (the SAME disk scan,
+ * milestone scoping and dedupe every write performs), so a caller that writes
+ * OTHER files before STATE.md (`phase complete`, `phase remove`, `quick
+ * archive`, `validate health --repair`) refuses for exactly the phases the
+ * STATE.md write would refuse for — the set cannot drift from a second copy.
+ */
+function assertVerificationReportsReadable(bodyContent: string, cwd: string): void {
+  buildStateFrontmatter(bodyContent, cwd);
+}
+
 export = {
   stateExtractField,
   stateReplaceField,
@@ -6798,6 +6812,7 @@ export = {
   writeStateMd,
   readModifyWriteStateMd,
   syncStateFrontmatter,
+  assertVerificationReportsReadable,
   // #3374: the shared post-sync preservation pass (snapshots + table-driven
   // applyStatePreservation + #2736 re-assert).
   applyPostSyncPreservation,

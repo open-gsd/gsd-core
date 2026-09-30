@@ -132,7 +132,7 @@ import roadmapParserMod = require('./roadmap-parser.cjs');
 const { getMilestoneInfo } = roadmapParserMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateMod = require('./state.cjs');
-const { writeStateMd } = stateMod;
+const { writeStateMd, assertVerificationReportsReadable } = stateMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
 const { extractFrontmatter } = frontmatter;
@@ -331,12 +331,6 @@ function runRepairAction(cwd: string, action: RemedyAction, paths: RepairPaths):
 
     case REMEDY_ACTION.REGENERATE_STATE: {
       const extraDetails: { action: string; success: boolean; path?: string }[] = [];
-      if (fs.existsSync(statePath)) {
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        const backupPath = `${statePath}.bak-${timestamp}`;
-        fs.copyFileSync(statePath, backupPath);
-        extraDetails.push({ action: 'backupState', success: true, path: backupPath });
-      }
       const milestone = getMilestoneInfo(cwd).value;
       const projectRef = path
         .relative(cwd, path.join(rootBase, 'PROJECT.md'))
@@ -359,6 +353,18 @@ function runRepairAction(cwd: string, action: RemedyAction, paths: RepairPaths):
       // STATE.md that had no parseable frontmatter — which is the usual
       // reason this repair fires.
       const priorState = fs.existsSync(statePath) ? (safeReadFile(statePath) ?? '') : '';
+      // #5118 (no write before the error): the write below rebuilds the STATE
+      // frontmatter from every phase's report and throws on a `status`
+      // outside the closed set. Validate FIRST — before the backup copy, the
+      // first write — so the refusal (reported by the dispatcher as a failed
+      // repair, exit 0; the defect itself is W030) leaves the tree untouched.
+      assertVerificationReportsReadable(stateContent, cwd);
+      if (fs.existsSync(statePath)) {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const backupPath = `${statePath}.bak-${timestamp}`;
+        fs.copyFileSync(statePath, backupPath);
+        extraDetails.push({ action: 'backupState', success: true, path: backupPath });
+      }
       writeStateMd(statePath, stateContent, rebuildStateTransaction({
         snapshot: extractFrontmatter(priorState, statePath),
       }), cwd);

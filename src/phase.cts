@@ -122,6 +122,7 @@ const {
   stateExtractField,
   stateReplaceField,
   syncAndPreserveStateMd,
+  assertVerificationReportsReadable,
   withStateLock,
   updatePerformanceMetricsSection,
 } = stateMod;
@@ -2561,6 +2562,21 @@ function cmdPhaseRemove(
     }
   }
 
+  // #5118 (no write before the error): the STATE.md rewrite below rebuilds the
+  // frontmatter from EVERY surviving phase's report (buildStateFrontmatter →
+  // isPhaseComplete), and it runs AFTER the directory removal, the sibling
+  // renames and the ROADMAP rewrite. Validate every surviving phase's report
+  // here, BEFORE the first write, so a report whose `status` is outside the
+  // closed set fails this command having written nothing (the removed phase's
+  // own report is not read afterwards — it is excluded).
+  if (fs.existsSync(path.join(planningDir(cwd), 'STATE.md'))) {
+    const survivorStatusError = findVerificationStatusError(
+      subdirs.filter((d) => d !== targetDir).map((d) => path.join(phasesDir, d)),
+      { convention: resolvePhaseIdConvention(cwd) },
+    );
+    if (survivorStatusError) throw survivorStatusError;
+  }
+
   if (targetDir) fs.rmSync(path.join(phasesDir, targetDir), { recursive: true, force: true });
 
   let renamedDirs: { from: string; to: string }[] = [];
@@ -3875,24 +3891,17 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
 
     // #5118 (no write before the error): the transaction below writes ROADMAP,
     // REQUIREMENTS and STATE, and the STATE frontmatter rebuild reads EVERY
-    // phase's report (buildStateFrontmatter → isPhaseComplete). Validate every
-    // sibling phase's report here, BEFORE the first write, so a report in
-    // ANOTHER phase whose `status` is outside the closed set fails this
-    // command having written nothing (withPlanningLock releases the lock).
-    const phasesRoot = path.dirname(phaseFullDir);
-    let siblingPhaseDirs: string[] = [];
-    try {
-      siblingPhaseDirs = fs.readdirSync(phasesRoot, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => path.join(phasesRoot, entry.name))
-        .sort();
-    } catch {
-      /* no sibling listing → nothing further to validate; the gate above read this phase */
+    // phase's report (buildStateFrontmatter → isPhaseComplete). Validate it
+    // here, BEFORE the first write, over EXACTLY the set that rebuild scans
+    // (the milestone-scoped, deduped phase set — the owner runs
+    // buildStateFrontmatter itself, so `state sync` and this command refuse
+    // for the same phases), so a report whose `status` is outside the closed
+    // set fails this command having written nothing (withPlanningLock
+    // releases the lock).
+    const preflightStatePath = path.join(planningDir(cwd), 'STATE.md');
+    if (fs.existsSync(preflightStatePath)) {
+      assertVerificationReportsReadable(fs.readFileSync(preflightStatePath, 'utf-8'), cwd);
     }
-    const siblingStatusError = findVerificationStatusError(siblingPhaseDirs, {
-      convention: resolvePhaseIdConvention(cwd),
-    });
-    if (siblingStatusError) throw siblingStatusError;
 
     const runPhaseCompleteTransaction = () => {
       const writes: WriteSpec[] = [];
