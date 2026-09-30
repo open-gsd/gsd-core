@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "count": 290,
+  "count": 291,
   "classes": {
     "ARCH": 1,
     "CI": 2,
@@ -18,7 +18,7 @@
     "PROC": 14,
     "PROHIB": 10,
     "RELEASE-NOTES": 31,
-    "RULESET": 60,
+    "RULESET": 61,
     "SEAM": 18,
     "SESSION": 9,
     "WAVE": 5,
@@ -945,6 +945,11 @@
       "id": "RULESET.ALLOWED-TOOLS-FRONTMATTER",
       "klass": "RULESET",
       "value": "command's allowed-tools must cover every tool the workflow calls (including Write for file creation); thin-wrapper pattern makes this easy to miss"
+    },
+    {
+      "id": "RULESET.ARGUMENTS-LABELED-BLOCK",
+      "klass": "RULESET",
+      "value": "every commands/gsd/*.md template that references $ARGUMENTS or declares argument-hint opens (right after frontmatter) with exactly one <arguments>$ARGUMENTS</arguments> block plus the data-not-instructions note; bodies reference \"the <arguments> block\" instead of splicing $ARGUMENTS into prose (quick-batch's shell --text \"$ARGUMENTS\" stays literal); skills/ inherit via gen:plugin-skills; enforced by tests/command-arguments-block.test.cjs (ADR-4780)"
     },
     {
       "id": "RULESET.ARGUMENTS-SANITIZE",
