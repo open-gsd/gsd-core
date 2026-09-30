@@ -540,7 +540,7 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
     // pinned: a fourth mode added to the owner and the hook mirror alone
     // would otherwise leave every other test green while these lists reject
     // it and fail the dispatch closed. Sites are DISCOVERED, not listed, so a
-    // new copy is pinned the day it lands.
+    // new copy that names a worktree mode is pinned the day it lands.
     const fs = require('node:fs');
     const root = path.join(__dirname, '../gsd-core');
     const members = new Set(DISPATCH_ISOLATION_MODES);
