@@ -691,8 +691,24 @@ function workflowFilesWithShellInterpolatedQuery() {
   // allow-test-rule: source-text-is-the-product (#3559)
   // gsd-core/workflows/*.md are shipped content executed by the agent runtime — the text
   // IS the deployed dispatch contract, so the validation instruction only exists here.
-  return fs.readdirSync(WORKFLOWS_DIR)
-    .filter(name => name.endsWith('.md'))
+  //
+  // The family lives in two places: a top-level workflow, and — since #5118 moved
+  // execute-phase's code_review_gate into the shared verification step — a workflow
+  // FRAGMENT under `<workflow>/steps/`. A scan of the top level alone missed the moved
+  // site and would miss any later extraction the same way.
+  const names = [];
+  for (const entry of fs.readdirSync(WORKFLOWS_DIR, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith('.md')) {
+      names.push(entry.name);
+    } else if (entry.isDirectory()) {
+      const stepsDir = path.join(WORKFLOWS_DIR, entry.name, 'steps');
+      if (!fs.existsSync(stepsDir)) continue;
+      for (const step of fs.readdirSync(stepsDir)) {
+        if (step.endsWith('.md')) names.push(`${entry.name}/steps/${step}`);
+      }
+    }
+  }
+  return names
     .map(name => ({ name, body: fs.readFileSync(path.join(WORKFLOWS_DIR, name), 'utf8') }))
     .filter(f => SHELL_INTERPOLATED_QUERY.test(f.body));
 }
@@ -710,7 +726,7 @@ describe('capability gate dispatch — manifest input is validated before shell 
       `${found.length} (${found.join(', ')}). A near-zero count means SHELL_INTERPOLATED_QUERY no ` +
       'longer matches the deployed form and this whole section is passing vacuously.',
     );
-    for (const expected of ['execute-phase.md', 'plan-phase.md', 'ship.md', 'verify-work.md']) {
+    for (const expected of ['execute-phase/steps/verify-phase-goal.md', 'plan-phase.md', 'ship.md', 'verify-work.md']) {
       assert.ok(found.includes(expected), `${expected} must be in the dispatch family, got ${found.join(', ')}`);
     }
   });

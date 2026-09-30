@@ -1296,7 +1296,10 @@ describe('#2645 — deleting a verification report must not raise completeness',
   // "unless the last real verdict was passed/unknown". Disclosed in this
   // phase's changeset.
   test('property: after the report goes missing, the phase is NEVER complete regardless of prior history (disk-strict; #2645 memory retired)', () => {
-    const REAL_STATUSES = ['passed', 'gaps_found', 'human_needed', 'unknown'];
+    // #5118: a report carries only the closed writer subset — a status outside it
+    // (the `unknown` this generator used to draw) is a hard `verification_status_invalid`
+    // error, not an observable verdict, so it is not part of the history space.
+    const REAL_STATUSES = [...VERIFIER_STATUSES];
     fc.assert(fc.property(
       fc.array(fc.constantFrom(...REAL_STATUSES), { minLength: 1, maxLength: 6 }),
       (sequence) => {

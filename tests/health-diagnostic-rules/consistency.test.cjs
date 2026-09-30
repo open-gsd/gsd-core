@@ -300,10 +300,12 @@ describe("C004 — PLAN missing 'wave' in frontmatter", () => {
 // ─── CONSISTENCY_RULES composition (health-diagnostic.cts) ────────────────
 
 describe('CONSISTENCY_RULES composition (matrix row 9)', () => {
-  test('exactly W006, W007, C001-C004 — 6 entries, no duplicates', () => {
+  // #5118: W030 (a verification report `status` outside the closed set) is reused
+  // from phase-structure the same way W006/W007 are reused from roadmap-disk.
+  test('exactly W006, W007, W030, C001-C004 — 7 entries, no duplicates', () => {
     const codes = CONSISTENCY_RULES.map((r) => r.code).sort();
-    assert.deepEqual(codes, ['C001', 'C002', 'C003', 'C004', 'W006', 'W007']);
-    assert.equal(new Set(codes).size, 6);
+    assert.deepEqual(codes, ['C001', 'C002', 'C003', 'C004', 'W006', 'W007', 'W030']);
+    assert.equal(new Set(codes).size, 7);
   });
 });
 
