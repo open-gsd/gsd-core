@@ -62,6 +62,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Work in parallel with workstreams](how-to/work-in-parallel-with-workstreams.md) — run independent lines of work simultaneously using workstreams
 - [Isolate work with workspaces](how-to/isolate-work-with-workspaces.md) — use workspaces to sandbox experimental or risky changes
 - [Debug a failed execution](how-to/debug-a-failed-execution.md) — diagnose and recover from broken or incomplete phase execution
+- [Recover from an invalid verification status](how-to/recover-from-an-invalid-verification-status.md) — get a phase passing again after `verification_status_invalid`, a `W030` health warning, or `phase_dir_not_found`
 - [Interpret scope-conformance warnings](how-to/interpret-scope-conformance-warnings.md) — read the advisory the worktree-wave merge emits when a plan branch commits outside its declared scope
 - [Interpret install-shadow warnings](how-to/interpret-install-shadow-warnings.md) — read the advisory GSD Core emits when a `/gsd-*` trigger is installed at both scopes and one silently wins, and tell "nothing to report" apart from "could not look"
 - [Interpret `state validate` results](how-to/interpret-state-validate-results.md) — read the `scope` reason codes and tell "nothing to report" apart from "could not look"
