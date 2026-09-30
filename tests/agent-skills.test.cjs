@@ -2070,7 +2070,9 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     for (const file of corpus) {
       for (const line of splitLines(fs.readFileSync(file, 'utf-8'))) {
         if (line.startsWith('GSD_WS=$(echo " $ARGUMENTS"')) {
-          variants.set(line, (variants.get(line) || []).concat(path.relative(REPO_ROOT, file)));
+          // A trailing ` # ...` note is allowed (Read-loaded files, and disjointness from their spine).
+          const key = line.replace(/ # .*$/, '');
+          variants.set(key, (variants.get(key) || []).concat(path.relative(REPO_ROOT, file)));
         }
       }
     }

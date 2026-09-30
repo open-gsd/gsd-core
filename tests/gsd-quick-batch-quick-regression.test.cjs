@@ -51,6 +51,27 @@ const looksLikeLauncherPreambleLine = (body) =>
   && body.includes('command -v gsd_run')
   && body.includes('gsd_run()');
 
+// #4772: the workstream-forwarding sweep gives every agent-skills / init.* call in a
+// workflow the same single-token `--ws` flag plus one canonical `GSD_WS=` parse line per
+// fence. Like the launcher sync above, that is a mechanical propagation, not quick-batch
+// phase work: a parse line is recognized structurally, and a call line counts only when
+// the diff pairs it with its flag-free twin (strip the token from the added side and it
+// equals a removed line, or the reverse), so any OTHER edit still trips this row.
+const WS_FORWARD_FLAG = ' ${GSD_WS:+--ws=${GSD_WS##* }}';
+const WS_PARSE_PREFIX = 'GSD_WS=$(echo " $ARGUMENTS"';
+function isWorkstreamForwardingSweepLine(sign, body, addedBodies, removedBodies) {
+  if (sign === '+' && body.startsWith(WS_PARSE_PREFIX)) return true;
+  if (sign === '+' && body.includes(WS_FORWARD_FLAG)) {
+    return removedBodies.has(body.split(WS_FORWARD_FLAG).join(''));
+  }
+  if (sign === '-') {
+    for (const added of addedBodies) {
+      if (added.includes(WS_FORWARD_FLAG) && added.split(WS_FORWARD_FLAG).join('') === body) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Does this path's diff say anything beyond the shared response-language
  * directive (#2529)?
@@ -73,9 +94,16 @@ const looksLikeLauncherPreambleLine = (body) =>
  */
 function editsBeyondSharedDirective(base, file) {
   const diff = git(['diff', '--unified=0', `${base}...HEAD`, '--', file]);
-  return diff.split('\n').some((line) => {
+  const diffLines = diff.split('\n');
+  const bodiesOf = (sign) => diffLines
+    .filter((l) => l.startsWith(sign) && !l.startsWith(sign.repeat(3)))
+    .map((l) => l.slice(1).trim());
+  const addedBodies = new Set(bodiesOf('+'));
+  const removedBodies = new Set(bodiesOf('-'));
+  return diffLines.some((line) => {
     if (!/^[+-]/.test(line) || line.startsWith('+++') || line.startsWith('---')) return false;
     const body = line.slice(1).trim();
+    if (isWorkstreamForwardingSweepLine(line[0], body, addedBodies, removedBodies)) return false;
     if (body === '' || body === INLINE_RESPONSE_LANGUAGE_DIRECTIVE) return false;
     if (body === CANONICAL_LAUNCHER_PREAMBLE.trim()) return false;
     if (looksLikeLauncherPreambleLine(body)) return false;

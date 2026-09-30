@@ -118,7 +118,7 @@ const PROSE_ALLOWLIST = [
   { file: 'agents/gsd-phase-researcher.md', line: 33, reason: 'package-legitimacy provenance rule names the command as the source of an OK verdict; descriptive' },
   { file: 'agents/gsd-roadmapper.md', line: 660, reason: 'parenthetical "e.g." naming SDK queries a user *could* run; not an agent instruction (#4134 shifted it from 647: the H1 template section added above moved the line, the mention is unchanged)' },
   { file: 'agents/gsd-intel-updater.md', line: 40, reason: 'cross-platform note names the `gsd-tools intel <subcommand>` CLI surface descriptively ("CLI invocations go through..."); not an agent instruction' },
-  { file: 'gsd-core/workflows/execute-plan.md', line: 420, reason: 'describes the downstream SDK validation step (`validated downstream by ...`); names the mechanism, does not instruct the agent to type it (#4834 shifted it from 419: the delegation @-include replaced the inline preamble above it, the mention is unchanged)' },
+  { file: 'gsd-core/workflows/execute-plan.md', line: 421, reason: 'describes the downstream SDK validation step (`validated downstream by ...`); names the mechanism, does not instruct the agent to type it (#4834 shifted it from 419: the delegation @-include replaced the inline preamble above it, the mention is unchanged; #4772 shifted it from 420: the init fence gained a --ws parse line above, the mention is unchanged)' },
   // #4407: .compact.md variant siblings carry the same descriptive prose as
   // their already-allowlisted canonical line above, at a different line
   // number in a different file.
