@@ -4,17 +4,31 @@
  * Detects structural drift between a committed codebase and the
  * `.planning/codebase/STRUCTURE.md` map produced by `gsd-codebase-mapper`.
  *
- * Four categories of drift element:
+ * Six categories of drift element:
  *   - new_dir    → a newly-added file whose directory prefix does not appear
- *                  in STRUCTURE.md
+ *                  in any generated document
  *   - barrel     → a newly-added barrel export at
  *                  (packages|apps)/<name>/src/index.(ts|tsx|js|mjs|cjs)
  *   - migration  → a newly-added migration file under one of the recognized
  *                  migration directories (supabase, prisma, drizzle, src/migrations, …)
  *   - route      → a newly-added route module under a `routes/` or `api/` dir
+ *   - modified   → a modified file whose directory prefix IS mapped
+ *   - deleted    → a deleted file whose directory prefix IS mapped
+ *
+ * Inverse-territory rule (#4886, #5134): an addition is drift OUTSIDE mapped
+ * territory (the map cannot describe what did not exist); a modification or
+ * deletion is drift INSIDE mapped territory (the map describes it and it
+ * changed). A rename is a deletion of the old path plus an addition of the new
+ * path; a copy is an addition of the new path. Mapped territory is any
+ * directory prefix named in ANY provided generated document.
  *
  * Each file is counted at most once; when a file matches multiple categories
- * the most specific category wins (migration > route > barrel > new_dir).
+ * the most specific category wins
+ * (deleted > modified > migration > route > barrel > new_dir).
+ *
+ * Every path that leaves this module (`affectedPaths`, the `--paths` argument,
+ * message bullets) passes `sanitizePaths` (#4923); dropped paths are reported
+ * as data in `withheldPaths`, never interpolated into the message.
  *
  * Design decisions (see PR for full rubber-duck):
  *   - The library is pure. It takes parsed git diff output and returns a
@@ -41,11 +55,13 @@ import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const DRIFT_CATEGORIES = Object.freeze(['new_dir', 'barrel', 'migration', 'route']);
+const DRIFT_CATEGORIES = Object.freeze(['new_dir', 'barrel', 'migration', 'route', 'modified', 'deleted']);
 
 // Category priority when a single file matches multiple rules.
 // Higher index = more specific = wins.
-const CATEGORY_PRIORITY: Record<string, number> = { new_dir: 0, barrel: 1, route: 2, migration: 3 };
+const CATEGORY_PRIORITY: Record<string, number> = {
+  new_dir: 0, barrel: 1, route: 2, migration: 3, modified: 4, deleted: 5,
+};
 
 const BARREL_RE = /^(packages|apps)\/[^/]+\/src\/index\.(ts|tsx|js|mjs|cjs)$/;
 
@@ -89,23 +105,24 @@ function classifyFile(file: unknown): DriftCategory | null {
 
 /**
  * True iff any prefix of `file` (dir1, dir1/dir2, …) appears as a substring
- * of `structureMd`. Used to decide whether a file is in "mapped territory".
+ * of `corpus` (the provided generated documents joined). Used to decide
+ * whether a file is in "mapped territory".
  *
- * Matching is deliberately substring-based — STRUCTURE.md is free-form
+ * Matching is deliberately substring-based — the documents are free-form
  * markdown, not a structured manifest. If the map mentions `src/lib/` the
- * check `structureMd.includes('src/lib')` holds.
+ * check `corpus.includes('src/lib')` holds.
  */
-function isPathMapped(file: string, structureMd: string): boolean {
+function isPathMapped(file: string, corpus: string): boolean {
   const norm = posixNormalize(file);
   const parts = norm.split('/');
   // Check prefixes from longest to shortest; any hit means "mapped".
   for (let i = parts.length - 1; i >= 1; i--) {
     const prefix = parts.slice(0, i).join('/');
-    if (structureMd.includes(prefix)) return true;
+    if (corpus.includes(prefix)) return true;
   }
   // Finally, if even the top-level dir is mentioned, count as mapped.
-  if (parts.length > 0 && structureMd.includes(parts[0] + '/')) return true;
-  if (parts.length > 0 && structureMd.includes('`' + parts[0] + '`')) return true;
+  if (parts.length > 0 && corpus.includes(parts[0] + '/')) return true;
+  if (parts.length > 0 && corpus.includes('`' + parts[0] + '`')) return true;
   return false;
 }
 
@@ -120,7 +137,7 @@ interface DetectDriftInput {
   addedFiles?: unknown[];
   modifiedFiles?: unknown[];
   deletedFiles?: unknown[];
-  structureMd?: string | null;
+  documents?: unknown;
   threshold?: number;
   action?: string;
   runtime?: string;
@@ -133,6 +150,7 @@ interface DetectDriftResult {
   directive: string;
   spawnMapper: boolean;
   affectedPaths: string[];
+  withheldPaths: string[];
   threshold: number;
   action: string;
   message: string;
@@ -151,6 +169,7 @@ interface SkippedResult {
   directive: string;
   spawnMapper: false;
   affectedPaths: string[];
+  withheldPaths: string[];
   message: string;
 }
 
@@ -169,19 +188,28 @@ function detectDrift(input: unknown): DetectDriftResult | SkippedResult {
       addedFiles,
       modifiedFiles,
       deletedFiles,
-      structureMd,
+      documents,
     } = inp;
     const threshold = Number.isInteger(inp.threshold) && (inp.threshold as number) >= 1
       ? (inp.threshold as number)
       : 3;
     const action = inp.action === 'auto-remap' ? 'auto-remap' : 'warn';
 
+    // STRUCTURE.md is the one required document; the other six only widen the
+    // mapped territory and are ignored when absent or not text.
+    const docs = documents !== null && typeof documents === 'object'
+      ? (documents as Record<string, unknown>)
+      : {};
+    const structureMd = docs['STRUCTURE.md'];
     if (structureMd === null || structureMd === undefined) {
       return skipped('missing-structure-md');
     }
     if (typeof structureMd !== 'string') {
       return skipped('invalid-structure-md');
     }
+    const corpus = Object.values(docs)
+      .filter((doc): doc is string => typeof doc === 'string')
+      .join('\n');
 
     const added = Array.isArray(addedFiles) ? addedFiles.filter((x): x is string => typeof x === 'string') : [];
     const modified = Array.isArray(modifiedFiles) ? modifiedFiles : [];
@@ -191,21 +219,34 @@ function detectDrift(input: unknown): DetectDriftResult | SkippedResult {
     const elements: DriftElement[] = [];
     const seen = new Map<string, string>();
 
+    const count = (file: string, category: string): void => {
+      // Dedup: if we've already counted this path at higher-or-equal priority, skip
+      const prior = seen.get(file);
+      if (prior && CATEGORY_PRIORITY[prior] >= CATEGORY_PRIORITY[category]) return;
+      seen.set(file, category);
+    };
+
     for (const rawFile of added) {
       const file = posixNormalize(rawFile);
       const specific = classifyFile(file);
       let category: string | null = specific;
       if (!category) {
-        if (!isPathMapped(file, structureMd)) {
+        if (!isPathMapped(file, corpus)) {
           category = 'new_dir';
         } else {
           continue; // mapped, known, ordinary file — not drift
         }
       }
-      // Dedup: if we've already counted this path at higher-or-equal priority, skip
-      const prior = seen.get(file);
-      if (prior && CATEGORY_PRIORITY[prior] >= CATEGORY_PRIORITY[category]) continue;
-      seen.set(file, category);
+      count(file, category);
+    }
+
+    // Inverse territory: an edit is drift only where the map describes the file.
+    for (const [rawFiles, category] of [[modified, 'modified'], [deleted, 'deleted']] as const) {
+      for (const rawFile of rawFiles) {
+        if (typeof rawFile !== 'string') continue;
+        const file = posixNormalize(rawFile);
+        if (file && isPathMapped(file, corpus)) count(file, category);
+      }
     }
 
     for (const [file, category] of seen.entries()) {
@@ -223,15 +264,21 @@ function detectDrift(input: unknown): DetectDriftResult | SkippedResult {
     let directive = 'none';
     let spawnMapper = false;
     let affectedPaths: string[] = [];
+    let withheldPaths: string[] = [];
     let message = '';
 
     if (actionRequired) {
       directive = action;
-      affectedPaths = chooseAffectedPaths(elements.map((e) => e.path));
-      if (action === 'auto-remap') {
-        spawnMapper = true;
-      }
-      message = buildMessage(elements, affectedPaths, action, inp.runtime);
+      // The one egress seam (#4923): `affectedPaths` is the only path list
+      // that reaches the result, the auto-remap line and `--paths`.
+      const elementPaths = elements.map((e) => e.path);
+      const chosen = chooseAffectedPaths(elementPaths);
+      affectedPaths = sanitizePaths(chosen);
+      const kept = new Set([...sanitizePaths(elementPaths), ...affectedPaths]);
+      withheldPaths = [...new Set([...elementPaths, ...chosen].filter((p) => !kept.has(p)))].sort();
+      // An empty `--paths` would remap the whole repo (#3418).
+      spawnMapper = action === 'auto-remap' && affectedPaths.length > 0;
+      message = buildMessage(elements, affectedPaths, withheldPaths.length, action, inp.runtime);
     }
 
     return {
@@ -241,6 +288,7 @@ function detectDrift(input: unknown): DetectDriftResult | SkippedResult {
       directive,
       spawnMapper,
       affectedPaths,
+      withheldPaths,
       threshold,
       action,
       message,
@@ -266,13 +314,22 @@ function skipped(reason: string): SkippedResult {
     directive: 'none',
     spawnMapper: false,
     affectedPaths: [],
+    withheldPaths: [],
     message: '',
   };
 }
 
-function buildMessage(elements: DriftElement[], affectedPaths: string[], action: string, runtime: string | undefined): string {
+function buildMessage(
+  elements: DriftElement[],
+  affectedPaths: string[],
+  withheldCount: number,
+  action: string,
+  runtime: string | undefined,
+): string {
   const byCat: Record<string, string[]> = {};
+  const listable = new Set(sanitizePaths(elements.map((e) => e.path)));
   for (const e of elements) {
+    if (!listable.has(e.path)) continue;
     if (!byCat[e.category]) byCat[e.category] = [];
     byCat[e.category].push(e.path);
   }
@@ -285,15 +342,23 @@ function buildMessage(elements: DriftElement[], affectedPaths: string[], action:
     barrel: 'New barrel exports',
     migration: 'New migrations',
     route: 'New route modules',
+    modified: 'Modified files in mapped directories',
+    deleted: 'Deleted files in mapped directories',
   };
-  for (const cat of ['new_dir', 'barrel', 'migration', 'route']) {
+  for (const cat of DRIFT_CATEGORIES) {
     if (byCat[cat]) {
       lines.push(`${labels[cat]}:`);
       for (const p of byCat[cat]) lines.push(`  - ${p}`);
     }
   }
   lines.push('');
-  if (action === 'auto-remap') {
+  // Dropped paths are counted, never named: the names are data in `withheldPaths`.
+  if (withheldCount > 0) {
+    lines.push(`${withheldCount} path(s) withheld: absolute, traversal or shell-metacharacter paths`);
+  }
+  if (affectedPaths.length === 0) {
+    // Nothing safe to scope a refresh to: an empty `--paths` would remap the whole repo (#3418).
+  } else if (action === 'auto-remap') {
     lines.push(`Auto-remap scheduled for paths: ${affectedPaths.join(', ')}`);
   } else {
     // drift.cts is a pure library — it must never read env/config. The

@@ -2613,11 +2613,42 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
       // git C-quote seam (worktree-safety.cjs); a non-quoted value — the plain
       // ASCII common case — passes through untouched. Both capture groups are
       // decoded: R/C lines carry old AND new paths, either may be quoted.
-      const file = decodeGitQuotedPath(m[3] || m[2]);
-      if (isPlanningArtifact(file)) continue;
-      if (status === 'A' || status === 'R' || status === 'C') added.push(file);
-      else if (status === 'M') modified.push(file);
-      else if (status === 'D') deleted.push(file);
+      // A rename is a deletion of the old path plus an addition of the new
+      // one; a copy leaves its source in place and adds only the new path.
+      const first = decodeGitQuotedPath(m[2]);
+      const second = m[3] ? decodeGitQuotedPath(m[3]) : first;
+      const put = (file: string, into: string[]) => {
+        if (!isPlanningArtifact(file)) into.push(file);
+      };
+      if (status === 'R') {
+        put(first, deleted);
+        put(second, added);
+      } else if (status === 'C') put(second, added);
+      else if (status === 'A') put(second, added);
+      else if (status === 'M') put(second, modified);
+      else if (status === 'D') put(second, deleted);
+    }
+
+    // Every generated document is territory the map describes, so all seven are
+    // read (the one owner of the names is REQUIRED_CODEBASE_MAP_FILES).
+    // STRUCTURE.md was read above; an unreadable other document is omitted and
+    // named rather than sinking the whole check, and an absent one is simply
+    // not part of this map (a `--fast` map writes four of the seven).
+    const documents: Record<string, string> = {};
+    const documentsRead: string[] = [];
+    const documentsUnreadable: string[] = [];
+    for (const name of REQUIRED_CODEBASE_MAP_FILES) {
+      if (name === 'STRUCTURE.md') {
+        documents[name] = structureMd;
+        documentsRead.push(name);
+        continue;
+      }
+      try {
+        documents[name] = fs.readFileSync(path.join(codebaseDir, name), 'utf-8');
+        documentsRead.push(name);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') documentsUnreadable.push(name);
+      }
     }
 
     // loadConfig() returns a flattened object — there is no nested `workflow`
@@ -2642,7 +2673,7 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
       addedFiles: added,
       modifiedFiles: modified,
       deletedFiles: deleted,
-      structureMd,
+      documents,
       threshold,
       action,
       runtime: resolveRuntime(cwd),
@@ -2658,6 +2689,9 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
       directive: driftResult['directive'],
       spawn_mapper: !!driftResult['spawnMapper'],
       affected_paths: driftResult['affectedPaths'] || [],
+      withheld_paths: driftResult['withheldPaths'] || [],
+      documents_read: documentsRead,
+      documents_unreadable: documentsUnreadable,
       elements: driftResult['elements'] || [],
       threshold,
       action,
