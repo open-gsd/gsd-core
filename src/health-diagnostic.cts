@@ -353,12 +353,11 @@ function runRepairAction(cwd: string, action: RemedyAction, paths: RepairPaths):
       // STATE.md that had no parseable frontmatter — which is the usual
       // reason this repair fires.
       const priorState = fs.existsSync(statePath) ? (safeReadFile(statePath) ?? '') : '';
-      // #5118 (no write before the error): the write below rebuilds the STATE
-      // frontmatter from every phase's report and throws on a `status`
-      // outside the closed set. Validate FIRST — before the backup copy, the
-      // first write — so the refusal (reported by the dispatcher as a failed
-      // repair, exit 0; the defect itself is W030) leaves the tree untouched.
-      assertVerificationReportsReadable(stateContent, cwd);
+      // #5118: the write below rebuilds the STATE frontmatter from every
+      // phase's report and throws on a `status` outside the closed set.
+      // `applyRepairs` validates ONCE, before the run's first write
+      // (`assertVerificationReportsReadable`), so this handler is only reached
+      // over readable reports and no earlier repair has written.
       if (fs.existsSync(statePath)) {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
         const backupPath = `${statePath}.bak-${timestamp}`;
@@ -467,6 +466,25 @@ function applyRepairs(
   const details: RepairDetail[] = [];
   const paths = repairPaths(cwd);
 
+  // #5118 (no write before the error): a requested REGENERATE_STATE rewrites
+  // STATE.md from every phase's report and throws on one whose `status` is
+  // outside the closed set — but other repairs in the SAME run (config,
+  // MILESTONES.md) may be ordered before it and would already have written.
+  // Validate once, before the run's first write; on a refusal no repair in the
+  // run is applied (each is reported failed — the dispatcher's exit-0 shape;
+  // the defect itself is W030) and the tree is untouched.
+  const regenerateRequested = repair && diagnostics.some(
+    (d) => d.remedy.action === REMEDY_ACTION.REGENERATE_STATE && d.remedy.risk !== REMEDY_RISK.DESTRUCTIVE,
+  );
+  let abortMessage: string | null = null;
+  if (regenerateRequested) {
+    try {
+      assertVerificationReportsReadable('', cwd);
+    } catch (err) {
+      abortMessage = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   for (const diagnostic of diagnostics) {
     const { remedy, code } = diagnostic;
     if (remedy.action === REMEDY_ACTION.ADVISE) continue;
@@ -482,6 +500,18 @@ function applyRepairs(
         action: remedy.action,
         success: false,
         error: `refused: '${remedy.action}' is a destructive remedy and is not auto-applied by --repair`,
+      });
+      continue;
+    }
+
+    if (abortMessage !== null) {
+      details.push({
+        code,
+        action: remedy.action,
+        success: false,
+        error: remedy.action === REMEDY_ACTION.REGENERATE_STATE
+          ? abortMessage
+          : `not applied: the run stopped before its first write — ${abortMessage}`,
       });
       continue;
     }

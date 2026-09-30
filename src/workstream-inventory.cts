@@ -30,7 +30,7 @@ const { extractFrontmatter, stripFrontmatter } = frontmatterMod;
 import { findTableWithColumns } from './markdown-table.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- verification.cjs is an export= CommonJS module
 import verificationMod = require('./verification.cjs');
-const { isPhaseComplete, isVerificationStatus, VERIFICATION_STATUS, failOnVerificationStatusError } = verificationMod;
+const { isPhaseComplete, isVerificationStatus, VERIFICATION_STATUS } = verificationMod;
 type VerificationStatus = verificationMod.VerificationStatus;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
 import phaseIdMod = require('./phase-id.cjs');
@@ -702,9 +702,11 @@ function inspectWorkstream(cwd: string, name: string, options: InspectWorkstream
 
   // #5118 (no write before the error): this inspection WRITES the ledger
   // below, so a report whose `status` is outside the closed set fails it
-  // first — the owner's error, its own reason, nothing persisted.
+  // first — the owner's own error thrown as-is (like `init *`, `phase *` and
+  // `state *`), which the CLI entry seam projects once into its reason and
+  // message; nothing persisted.
   const firstStatusError = rawPhaseEntries.find((entry) => entry.statusError)?.statusError;
-  if (firstStatusError) failOnVerificationStatusError(firstStatusError);
+  if (firstStatusError) throw firstStatusError;
 
   // #2645: only the directory Bug #2445's de-dup rollup would actually pick
   // for a phase key may read or write that key's ledger entry. Letting every

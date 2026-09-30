@@ -2568,10 +2568,13 @@ function cmdPhaseRemove(
   // renames and the ROADMAP rewrite. Validate every surviving phase's report
   // here, BEFORE the first write, so a report whose `status` is outside the
   // closed set fails this command having written nothing (the removed phase's
-  // own report is not read afterwards — it is excluded).
+  // own report is not read afterwards — it is excluded). The set is the one the
+  // rebuild scans (`statePhaseDirsToScan`: milestone-scoped, deduped), so a
+  // survivor OUTSIDE that set — another milestone's phase directory — does not
+  // block the remove.
   if (fs.existsSync(path.join(planningDir(cwd), 'STATE.md'))) {
     const survivorStatusError = findVerificationStatusError(
-      subdirs.filter((d) => d !== targetDir).map((d) => path.join(phasesDir, d)),
+      stateMod.statePhaseDirsToScan(cwd).filter((d: string) => d !== targetDir).map((d: string) => path.join(phasesDir, d)),
       { convention: resolvePhaseIdConvention(cwd) },
     );
     if (survivorStatusError) throw survivorStatusError;
