@@ -6,6 +6,8 @@
 | **Date** | 2026-09-30 |
 | **Issue** | [#4780](https://github.com/open-gsd/gsd-core/issues/4780) |
 
+Every command or skill template that takes arguments now opens with a standing, always-present `<arguments>$ARGUMENTS</arguments>` block and a data-not-instructions note, so the model can tell what the user typed from template prose and an empty invocation is visibly empty. A parity test enforces it.
+
 ## Context
 
 Claude Code, OpenCode and the other runtimes expand a slash command by substituting the text the user typed after the command name into the literal token `$ARGUMENTS` inside the command template. The loader does no labeling. GSD templates placed the token in the middle of instruction prose:
@@ -17,7 +19,7 @@ Parse the first token of $ARGUMENTS:
 
 After `/gsd-update --reapply` the model saw `Parse the first token of --reapply:`. Every other section of the expanded prompt (`<objective>`, `<flags>`) was unchanged generic text, so nothing identified the flag as user input. The model read the line as ordinary prose, concluded no flag was passed, and began the default workflow (#4780).
 
-Measured against `origin/next` before this change: 64 templates under `commands/gsd/` take arguments (46 reference `$ARGUMENTS`, 18 more declare an `argument-hint` and rely on the runtime's implicit append); 18 bodies carried the exact `Parse the first token of $ARGUMENTS:` idiom; none carried any labeled arguments field. The generated `skills/gsd-*/SKILL.md` files mirror the commands, which is the "92 files" figure in the issue (46 commands + 46 skills that reference the token).
+Measured against `origin/next` before this change: 64 templates under `commands/gsd/` take arguments (46 reference `$ARGUMENTS`; the rest declare an `argument-hint` and rely on the runtime's implicit append); 9 command bodies carried the exact `Parse the first token of $ARGUMENTS:` idiom; none carried any labeled arguments field. The generated `skills/gsd-*/SKILL.md` files mirror the commands, which is where the issue's installed-tree figures (18 idiom files, 92 files referencing the token) come from: 9 + 9 and 46 + 46.
 
 ## Decision
 
@@ -44,5 +46,6 @@ Measured against `origin/next` before this change: 64 templates under `commands/
 - A passed flag is always visible as a delimited field; an empty invocation is visibly empty.
 - The delimiter also marks which tokens are user-supplied data, consistent with `RULESET.ARGUMENTS-SANITIZE` in `CONTEXT.md`: argument text is data, and any path derived from it must still be sanitized by the workflow step that builds the path.
 - **Limit, stated plainly:** the delimiter is hygiene, not a sandbox. The loader substitutes raw text, so a user who types a literal closing tag can end the block early. The data-not-instructions note and the existing argument sanitization remain the controls; the block does not claim to contain hostile input.
-- Every argument-taking template grows by three lines. Emitted-artifact hashes for those commands and their skills move by design; install-tree goldens and `docs/INVENTORY.md` are regenerated in the same change.
+- Every argument-taking template grows by three lines. Emitted-artifact hashes for those commands and their skills move by design. The install-tree goldens list paths only and `docs/INVENTORY.md` lists files, so regenerating them produced no diff.
+- `commands/gsd/quick-batch.md` keeps its one shell substitution (`--text "$ARGUMENTS"`). Because the loader substitutes the typed text before the model composes the shell command, that double-quoted position is itself a pre-existing quoting hazard for text containing `"` or `$(`; it is unchanged by this ADR and is outside the labeled-block convention.
 - New argument-taking commands must add the block; the parity test names the template that lacks it.
