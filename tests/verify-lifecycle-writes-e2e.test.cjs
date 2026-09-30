@@ -473,3 +473,49 @@ describe('#5118 C2 (CLI verbs + SIMULATED route-following): stale → route read
     }
   });
 });
+
+describe('#5118: the duplicate-phase-key warning prints once per command, not once per scan', () => {
+  const DUPLICATE_KEY_WARNING = /both normalize to phase key/g;
+
+  // Two in-scope directories that normalize to phase key 01 (`01-alpha`,
+  // `01-beta`) plus a ROADMAP-only Phase 9 (no directory) to remove: the remove
+  // is not refused as ambiguous (that check is about the TARGET's directories),
+  // and the STATE.md body carries `Total Phases` so the rewrite changes bytes
+  // and the frontmatter rebuild — the second scan — actually runs.
+  function buildDuplicateKeyProject(t) {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const planning = path.join(projectDir, '.planning');
+    fs.writeFileSync(
+      path.join(planning, 'ROADMAP.md'),
+      ['# Roadmap', '', '### Phase 1: Alpha', '**Goal:** A', '', '### Phase 9: Ghost', '**Goal:** G', ''].join('\n'),
+    );
+    fs.writeFileSync(path.join(planning, 'STATE.md'), '# Project State\n\nTotal Phases: 3\n');
+    fs.mkdirSync(path.join(planning, 'phases', '01-alpha'), { recursive: true });
+    fs.mkdirSync(path.join(planning, 'phases', '01-beta'), { recursive: true });
+    return projectDir;
+  }
+
+  function runCli(projectDir, args) {
+    const { runNode } = require('./helpers/process-seam.cjs');
+    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+    const gsdTools = path.join(ROOT_5118, 'gsd-core', 'bin', 'gsd-tools.cjs');
+    return runNode([gsdTools, ...args, '--cwd', projectDir], { cwd: ROOT_5118, timeoutMs: PROBE_TIMEOUT_MS });
+  }
+
+  test('DEFAULT (control): a command that scans once — `state json` — warns exactly once', (t) => {
+    const projectDir = buildDuplicateKeyProject(t);
+    const res = runCli(projectDir, ['state', 'json']);
+    assert.strictEqual(res.exitCode, 0, `state json must succeed: ${res.stderr}`);
+    assert.strictEqual((res.stderr.match(DUPLICATE_KEY_WARNING) || []).length, 1, `stderr: ${res.stderr}`);
+  });
+
+  test('`phase remove` — pre-write validation scan then the STATE rebuild scan — warns exactly once', (t) => {
+    const projectDir = buildDuplicateKeyProject(t);
+    const res = runCli(projectDir, ['phase', 'remove', '9']);
+    assert.strictEqual(res.exitCode, 0, `phase remove must succeed: ${res.stderr}`);
+    assert.strictEqual((res.stderr.match(DUPLICATE_KEY_WARNING) || []).length, 1, `stderr: ${res.stderr}`);
+    // Non-vacuity: the rebuild ran (Total Phases was decremented by the rewrite).
+    assert.match(fs.readFileSync(path.join(projectDir, '.planning', 'STATE.md'), 'utf-8'), /Total Phases:\s*2/);
+  });
+});
