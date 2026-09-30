@@ -66,7 +66,9 @@ from step `init_context` is for `gsd-executor`, not the mapper):
 # here via the workflow's shared shell scope — defining it once keeps the file compliant
 # with the single-canonical-preamble parity invariant (#619). This block only runs on the
 # `auto-remap` directive, which is always reached after the drift check above has run.
-AGENT_SKILLS_MAPPER=$(gsd_run query agent-skills gsd-codebase-mapper)
+# #4772: this file is Read, not textually substituted - write the parent command's original argument string in place of $ARGUMENTS so --ws reaches the query.
+GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+AGENT_SKILLS_MAPPER=$(gsd_run query agent-skills gsd-codebase-mapper ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
 Then spawn `gsd-codebase-mapper` agents with the `--paths` hint (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze):

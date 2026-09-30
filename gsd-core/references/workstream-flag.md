@@ -77,9 +77,22 @@ and broader temp hygiene is left to OS temp cleanup or future maintenance work.
 
 ## Routing Propagation
 
-All workflow routing commands include `${GSD_WS}` which:
-- Expands to `--ws <name>` when a workstream is active
-- Expands to empty string in flat mode (backward compatible)
+Every workstream-scoped workflow parses the `--ws <name>` it was started with out of
+`$ARGUMENTS` in each shell fence that needs it (fences are separate shells, so nothing is
+carried over between them) and sets `GSD_WS`:
+- `GSD_WS` is `--ws <name>` when the command was started with `--ws`, and empty otherwise
+  (flat mode, backward compatible). It is always re-assigned, so a stale value never leaks in.
+- Every `gsd_run query agent-skills <agent>` and `gsd_run query init.*` call in those
+  workflows forwards it as the single token `${GSD_WS:+--ws=${GSD_WS##* }}`. The explicit
+  flag has the highest priority above, so the workstream a command was started for wins over
+  the session pointer and the shared marker. The single-token form is required because zsh
+  does not word-split an unquoted `$GSD_WS`.
+- Routing suggestions (`/gsd:plan-phase {X} ${GSD_WS}`) carry the same value to the next command.
+- Project and workspace lifecycle workflows (`new-project`, `new-workspace`,
+  `list-workspaces`, `remove-workspace`, `update`) are root-scoped and do not forward it.
+
+`tests/agent-skills.test.cjs` scans every fenced call in `gsd-core/workflows/` so a new call
+that omits the flag fails CI.
 
 This ensures workstream scope chains automatically through the workflow:
 `new-milestone → discuss-phase → plan-phase → execute-phase → transition`

@@ -97,7 +97,8 @@ This runs in parallel - all gaps investigated simultaneously.
 **Load agent skills:**
 
 ```bash
-AGENT_SKILLS_DEBUGGER=$(gsd_run query agent-skills gsd-debugger)
+GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+AGENT_SKILLS_DEBUGGER=$(gsd_run query agent-skills gsd-debugger ${GSD_WS:+--ws=${GSD_WS##* }})
 EXPECTED_BASE=$(git rev-parse HEAD)
 ```
 

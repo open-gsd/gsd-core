@@ -157,7 +157,8 @@ Collect phase artifacts for the review prompt:
 
 ```bash
 PHASE_ARG=$(echo "$ARGUMENTS" | sed -nE 's/.*--phase[[:space:]]+([A-Za-z0-9._-]+).*/\1/p')
-INIT=$(gsd_run query init.review "${PHASE_ARG}")
+GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+INIT=$(gsd_run query init.review ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
 # #2358: ONE run-scoped temp dir (portable via ${TMPDIR:-/tmp}) so overlapping

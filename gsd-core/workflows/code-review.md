@@ -47,9 +47,10 @@ FILES_OVERRIDE=$(echo "$FLAGS_JSON" | node -e "process.stdout.write(JSON.parse(r
 FIX_PARAM=""
 if [ "$FIX_FLAG" = "true" ]; then FIX_PARAM="--fix"; fi
 
-INIT=$(gsd_run query init.code-review "${PHASE_ARG}" $FIX_PARAM)
+GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+INIT=$(gsd_run query init.code-review ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_ARG}" $FIX_PARAM)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
-AGENT_SKILLS_REVIEWER=$(gsd_run query agent-skills gsd-code-reviewer)
+AGENT_SKILLS_REVIEWER=$(gsd_run query agent-skills gsd-code-reviewer ${GSD_WS:+--ws=${GSD_WS##* }})
 # #2072: resolve the routed model so model_overrides / models.verification are honored
 # (the resolver maps gsd-code-reviewer → phaseType "verification"); thread it below.
 REVIEWER_MODEL=$(gsd_run query resolve-model gsd-code-reviewer --raw)

@@ -446,7 +446,8 @@ This returns all phases with goals, disk status, and completion info.
 **Section-manifest gate (#2994):** `gsd_run` is already established above (`verify_completion` step) — fetch the dedicated `init.transition` bundle for the workstream-collision-check gate below:
 
 ```bash
-INIT_TRANSITION=$(gsd_run query init.transition)
+GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+INIT_TRANSITION=$(gsd_run query init.transition ${GSD_WS:+--ws=${GSD_WS##* }})
 if [[ "$INIT_TRANSITION" == @file:* ]]; then INIT_TRANSITION=$(cat "${INIT_TRANSITION#@file:}"); fi
 ```
 

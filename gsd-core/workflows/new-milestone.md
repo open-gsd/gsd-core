@@ -52,7 +52,7 @@ RESPONSE_LANGUAGE=$(gsd_run query config-get response_language --raw --default "
 # needed here) so the section manifest — and the shared PROJECT.md write
 # guard it gates — reflects the EXPLICITLY requested workstream, not
 # whatever ambient GSD_WORKSTREAM/session pointer happens to be active.
-INIT_EARLY=$(gsd_run query init.new-milestone $GSD_WS)
+INIT_EARLY=$(gsd_run query init.new-milestone ${GSD_WS:+--ws=${GSD_WS##* }})
 if [[ "$INIT_EARLY" == @file:* ]]; then INIT_EARLY=$(cat "${INIT_EARLY#@file:}"); fi
 ```
 
@@ -269,7 +269,7 @@ Stage the phase archive move + source removal so they land in the same commit as
 ```bash
 COMMIT_DOCS=$(gsd_run query config-get commit_docs --raw 2>/dev/null || echo "true")
 GSD_WS_ARG=$(cat .planning/.gsd-ws-arg 2>/dev/null || true)
-INIT_STAGE=$(gsd_run query init.new-milestone $GSD_WS_ARG)
+INIT_STAGE=$(gsd_run query init.new-milestone ${GSD_WS_ARG:+--ws=${GSD_WS_ARG##* }})
 if [[ "$INIT_STAGE" == @file:* ]]; then INIT_STAGE=$(cat "${INIT_STAGE#@file:}"); fi
 _gsd_field() { node -e "const o=JSON.parse(process.argv[1]); const v=o[process.argv[2]]; process.stdout.write(v==null?'':String(v))" "$1" "$2"; }
 ARCHIVE_DIR=$(_gsd_field "$INIT_STAGE" archive_dir)
@@ -285,7 +285,7 @@ Stage PROJECT.md in both modes. Step 4's Part A guard — not this commit — is
 
 ```bash
 GSD_WS_ARG=$(cat .planning/.gsd-ws-arg 2>/dev/null || true)
-INIT_COMMIT=$(gsd_run query init.new-milestone $GSD_WS_ARG)
+INIT_COMMIT=$(gsd_run query init.new-milestone ${GSD_WS_ARG:+--ws=${GSD_WS_ARG##* }})
 if [[ "$INIT_COMMIT" == @file:* ]]; then INIT_COMMIT=$(cat "${INIT_COMMIT#@file:}"); fi
 _gsd_field() { node -e "const o=JSON.parse(process.argv[1]); const v=o[process.argv[2]]; process.stdout.write(v==null?'':String(v))" "$1" "$2"; }
 STATE_PATH=$(_gsd_field "$INIT_COMMIT" state_path)
@@ -298,11 +298,11 @@ gsd_run query commit "docs: start milestone v[X.Y] [Name]" --files "$PROJECT_PAT
 ```bash
 RESET_PHASE_NUMBERS_PARAM=""; if [[ "$ARGUMENTS" =~ (^|[[:space:]])--reset-phase-numbers([[:space:]]|$) ]]; then RESET_PHASE_NUMBERS_PARAM="--reset-phase-numbers"; fi
 GSD_WS_ARG=$(cat .planning/.gsd-ws-arg 2>/dev/null || true)
-INIT=$(gsd_run query init.new-milestone $RESET_PHASE_NUMBERS_PARAM $GSD_WS_ARG)
+INIT=$(gsd_run query init.new-milestone $RESET_PHASE_NUMBERS_PARAM ${GSD_WS_ARG:+--ws=${GSD_WS_ARG##* }})
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
-AGENT_SKILLS_RESEARCHER=$(gsd_run query agent-skills gsd-project-researcher)
-AGENT_SKILLS_SYNTHESIZER=$(gsd_run query agent-skills gsd-research-synthesizer)
-AGENT_SKILLS_ROADMAPPER=$(gsd_run query agent-skills gsd-roadmapper)
+AGENT_SKILLS_RESEARCHER=$(gsd_run query agent-skills gsd-project-researcher ${GSD_WS_ARG:+--ws=${GSD_WS_ARG##* }})
+AGENT_SKILLS_SYNTHESIZER=$(gsd_run query agent-skills gsd-research-synthesizer ${GSD_WS_ARG:+--ws=${GSD_WS_ARG##* }})
+AGENT_SKILLS_ROADMAPPER=$(gsd_run query agent-skills gsd-roadmapper ${GSD_WS_ARG:+--ws=${GSD_WS_ARG##* }})
 ```
 <!-- #4456: .planning/.gsd-ws-arg is NOT cleaned up here — Steps 9 and 10
 below still need to re-read it (each is its own shell) to resolve
@@ -523,7 +523,7 @@ If "adjust": Return to scoping.
 **Commit requirements:**
 ```bash
 GSD_WS_ARG=$(cat .planning/.gsd-ws-arg 2>/dev/null || true)
-INIT_REQ=$(gsd_run query init.new-milestone $GSD_WS_ARG)
+INIT_REQ=$(gsd_run query init.new-milestone ${GSD_WS_ARG:+--ws=${GSD_WS_ARG##* }})
 if [[ "$INIT_REQ" == @file:* ]]; then INIT_REQ=$(cat "${INIT_REQ#@file:}"); fi
 _gsd_field() { node -e "const o=JSON.parse(process.argv[1]); const v=o[process.argv[2]]; process.stdout.write(v==null?'':String(v))" "$1" "$2"; }
 REQUIREMENTS_PATH=$(_gsd_field "$INIT_REQ" requirements_path)
@@ -612,7 +612,7 @@ Success criteria:
 **Commit roadmap** (after approval):
 ```bash
 GSD_WS_ARG=$(cat .planning/.gsd-ws-arg 2>/dev/null || true)
-INIT_ROADMAP=$(gsd_run query init.new-milestone $GSD_WS_ARG)
+INIT_ROADMAP=$(gsd_run query init.new-milestone ${GSD_WS_ARG:+--ws=${GSD_WS_ARG##* }})
 if [[ "$INIT_ROADMAP" == @file:* ]]; then INIT_ROADMAP=$(cat "${INIT_ROADMAP#@file:}"); fi
 _gsd_field() { node -e "const o=JSON.parse(process.argv[1]); const v=o[process.argv[2]]; process.stdout.write(v==null?'':String(v))" "$1" "$2"; }
 ROADMAP_PATH=$(_gsd_field "$INIT_ROADMAP" roadmap_path)
