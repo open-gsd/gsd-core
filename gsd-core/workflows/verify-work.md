@@ -677,8 +677,15 @@ PHASE_NUMBER=$(printf '%s' "$EXECUTE_INIT" | jq -r '.phase_number')
 ```
 
 Read and execute `gsd-core/workflows/execute-phase/steps/verify-phase-goal.md`. If it stopped,
-stop and present its reason; otherwise its `STATUS` / `NEXT_COMMAND` are current — continue at the
-completion predicate below.
+stop and present its reason; otherwise re-check `verification.status` afterwards — the regenerated
+report is the only authority for the transition — before the completion predicate below:
+
+```bash
+VERIFICATION_STATUS=$(gsd_run query verification.status "$PHASE_DIR") || { echo "verification.status refused the regenerated report — see the error above." >&2; exit 1; }
+PHASE_VERIFICATION_STATUS=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.status')
+VERIFICATION_ROUTE=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.route')
+NEXT_COMMAND=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.next_command')
+```
 
 Otherwise, check the shared UAT-plus-verification completion predicate before transition:
 

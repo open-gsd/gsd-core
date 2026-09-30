@@ -974,7 +974,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    **Step dispatch:** dispatch every `kind == "step"` hook per @gsd-core/references/loop-hook-dispatch.md (skip when none) — not one shape of one. A step here is advisory: it never blocks wave completion. ⚠ **Validate `ref.command` in-context before any shell use** (third-party manifest input) — loop-hook-dispatch.md § `step`. **`ref.skill == "code-review"` (#3661):** the generic contract's bare skill dispatch carries no phase argument, but `code-review.md`'s `initialize` step requires one (`PHASE_ARG="${1}"`) or it reports "Phase not found" and exits — pass it explicitly, mirroring step `code_review_gate` in `execute-phase/steps/verify-phase-goal.md`: `Skill(skill="gsd-code-review", args="${PHASE_NUMBER}")`.
 
-   **For each active entry where `kind == "gate"`** (process in array order): read and execute `gsd-core/workflows/execute-phase/steps/wave-post-gate-hooks.md` for the full evaluation contract (check validation, `onError`, blocking semantics, mapper spawn). When all active gates are processed without a blocking halt, continue to step 5.8.
+   **For each active entry where `kind == "gate"`** (process in array order): read and execute `gsd-core/workflows/execute-phase/steps/wave-post-gate-hooks.md` for the full evaluation contract (check validation, `onError`, blocking semantics, mapper spawn). A gate declared `blocking: false` — the `drift` capability's codebase-drift gate is one — is non-blocking by contract: it reports and the wave continues. When all active gates are processed without a blocking halt, continue to step 5.8.
 
 5.8. **Handle test gate failures (when `WAVE_FAILURE_COUNT > 0`):**
 
@@ -1159,6 +1159,13 @@ Verify phase achieved its GOAL, not just completed tasks: read and execute
 (`code_review_gate` with its TDD escalation, the manifest-gated `regression_gate`, the verifier
 dispatch, the fingerprint, and the owner's `verification.status` read with stderr kept), shared
 with verify-work (#5118). If it stopped (TDD block, regression abort, refused report), stop here.
+
+**TDD review escalation (#4011):** the `tdd.review-checkpoint` gate is advisory (`blocking: false`)
+except when `TDD_MODE=true` AND `GATE_RESULT.block == true` — no MVP condition — where the shared
+step escalates the end-of-phase review to blocking: refuse to mark the phase complete and present
+`Phase blocked: {N} TDD plan(s) violate the RED→GREEN gate sequence under TDD.` Never proceed to
+`close_parent_artifacts`, `verify_phase_goal`'s verifier or `phase.complete` past that block. Full
+contract: `gsd-core/references/execute-mvp-tdd.md` and the step's `code_review_gate`.
 
 Route on `$STATUS`: if `passed`, proceed to `close_parent_artifacts` (the gap-closure section below)
 and then update_roadmap. Otherwise keep the phase pending — present `$NEXT_ACTION` to the user and, when `$NEXT_COMMAND` is non-empty, show it as the next command to run. The query covers every case — including no report (`missing`) and no phase directory (`phase_dir_not_found`) — and a status outside the closed set is a hard error the shared step already halted on, so no per-status arm needs to be listed here.
