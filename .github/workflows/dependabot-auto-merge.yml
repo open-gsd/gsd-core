@@ -17,6 +17,11 @@ on:
 
 permissions:
   pull-requests: write
+  # `gh pr merge --auto` calls the enablePullRequestAutoMerge GraphQL
+  # mutation, which requires contents: write in addition to
+  # pull-requests: write. Without it the step fails with "Resource not
+  # accessible by integration" after the approval has already succeeded.
+  contents: write
 
 concurrency:
   group: dependabot-auto-merge-${{ github.event.pull_request.number }}
