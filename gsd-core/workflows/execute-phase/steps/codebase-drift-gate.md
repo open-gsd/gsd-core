@@ -45,6 +45,11 @@ New migrations:
   - {path}
 New route modules:
   - {path}
+Modified files in mapped directories:
+  - {path}
+Deleted files in mapped directories:
+  - {path}
+{N} path(s) withheld: not passed to the mapper or listed (absolute, traversal, whitespace, non-ASCII or shell-metacharacter characters)
 
 Run /gsd:map-codebase --paths {affected_paths} to refresh planning context.
 ```
