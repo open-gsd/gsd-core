@@ -2340,7 +2340,7 @@ When a dispatch fails, one JSON line is emitted to stderr:
 { "kind": "HandlerFailure", "traceId": "...", "command": "plan", "timestamp": "...", "message": "..." }
 ```
 
-The `kind` field matches one of the Hub's error variants: `UnknownCommand`, `InvalidArgs`, `HandlerRefusal`, `HandlerFailure`, or `verification_status_invalid` (a verification report whose `status` is outside the closed set). Args are omitted by default (privacy); see `GSD_AUDIT_ARGS` below.
+The `kind` field matches one of the Hub's error variants: `UnknownCommand`, `InvalidArgs`, `HandlerRefusal`, `HandlerFailure`, or `VerificationStatusInvalid` (a verification report whose `status` is outside the closed set). Args are omitted by default (privacy); see `GSD_AUDIT_ARGS` below.
 
 ### Audit trail (opt-in)
 

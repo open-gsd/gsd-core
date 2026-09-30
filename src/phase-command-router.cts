@@ -54,7 +54,7 @@ interface RoutePhaseCommandOptions {
   args: string[];
   cwd: string;
   raw: boolean;
-  error: (message: string) => void;
+  error: (message: string, reason?: string) => void;
 }
 
 // ─── Implementation ───────────────────────────────────────────────────────────
@@ -315,6 +315,11 @@ function routePhaseCommand({ phase, args, cwd, raw, error }: RoutePhaseCommandOp
     if (result.kind === ERROR_KINDS.InvalidArgs || result.kind === ERROR_KINDS.HandlerRefusal) {
       // #176: typed payload — reason holds the human-readable message
       error(result.reason);
+      return;
+    }
+    if (result.kind === ERROR_KINDS.VerificationStatusInvalid) {
+      // #5118: typed reason survives to the CLI surface
+      error(result.message, result.reason);
       return;
     }
     // HandlerFailure: message field

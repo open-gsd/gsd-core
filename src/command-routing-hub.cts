@@ -16,6 +16,7 @@
  *           | { ok: false, kind: 'InvalidArgs',     arg: string, reason: string }
  *           | { ok: false, kind: 'HandlerRefusal',  reason: string }
  *           | { ok: false, kind: 'HandlerFailure',  message: string, cause?: Error }
+ *           | { ok: false, kind: 'VerificationStatusInvalid', message: string, reason: string, file: string }
  *
  * Invariants:
  *   - Hub always routes through CJS handlers. There is no SDK path (#175).
@@ -46,10 +47,6 @@ const { createNoOpLogger } = observabilityLogger;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import cliExitModule = require('./cli-exit.cjs');
 const { ExitError } = cliExitModule;
-
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import io = require('./io.cjs');
-const { ERROR_REASON } = io;
 
 type VerificationMod = typeof import('./verification.cjs');
 let _verification: VerificationMod | null = null;
@@ -99,10 +96,11 @@ const ERROR_KINDS = Object.freeze({
   HandlerFailure: 'HandlerFailure',
   /**
    * #5118: a handler read a verification report whose `status` is outside the
-   * closed enum. The kind IS the error's own ERROR_REASON, so the CLI adapter
+   * closed enum. The kind is PascalCase like every other (key === value); the
+   * Result carries the error's own ERROR_REASON in `reason`, so the CLI adapter
    * fails with `error(message, reason)` and restates nothing.
    */
-  VerificationStatusInvalid: ERROR_REASON.VERIFICATION_STATUS_INVALID,
+  VerificationStatusInvalid: 'VerificationStatusInvalid',
 } as const);
 
 // ─── Result types ─────────────────────────────────────────────────────────────

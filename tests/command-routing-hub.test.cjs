@@ -30,11 +30,14 @@ const {
 // ─── Frozen taxonomy lock ─────────────────────────────────────────────────────
 // #175: SdkDispatchFailed and SdkLoadFailed are removed from the closed enum.
 // The set shrinks from 6 to 4 values.
+// #5118: VerificationStatusInvalid joins the closed enum (5 values) — a handler
+// read a verification report whose status is outside the closed set.
 const EXPECTED_ERROR_KINDS = Object.freeze(new Set([
   'UnknownCommand',
   'InvalidArgs',
   'HandlerRefusal',
   'HandlerFailure',
+  'VerificationStatusInvalid',
 ]));
 
 describe('CommandRoutingHub — ERROR_KINDS taxonomy', () => {
@@ -42,7 +45,7 @@ describe('CommandRoutingHub — ERROR_KINDS taxonomy', () => {
     assert.ok(Object.isFrozen(ERROR_KINDS), 'ERROR_KINDS must be frozen');
   });
 
-  test('ERROR_KINDS contains exactly the 4 documented values (SdkDispatchFailed and SdkLoadFailed removed)', () => {
+  test('ERROR_KINDS contains exactly the 5 documented values (SdkDispatchFailed and SdkLoadFailed removed; VerificationStatusInvalid added by #5118)', () => {
     const actual = new Set(Object.values(ERROR_KINDS));
     assert.deepStrictEqual(actual, EXPECTED_ERROR_KINDS);
   });
