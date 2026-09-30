@@ -2409,7 +2409,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // "fresh and well-formed" here is byte-for-byte what the guard will
     // honour at dispatch time — a second definition would let the two drift.
     const forcedApplied = Boolean(forcedIsolation && DISPATCH_ISOLATION_VOCABULARY.has(forcedIsolation));
-    const heldDegrade = !forcedApplied && recordedIsolation !== 'none'
+    const heldDegrade = !forcedApplied
       ? heldDegradeRecord(cwd, { phase: phaseArg, plan: planArg })
       : null;
 
@@ -2418,8 +2418,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // hold). The #4222 re-derivation computes `recordedIsolation` FIRST;
     // the #4561 hold then gates the write of THAT value, not of the
     // pre-#4222 `isolation`. So a hold preserves a recorded degrade rather
-    // than the host capability, and a re-derived `none` is written as the
-    // fresh derivation it is instead of being weighed against the record.
+    // than the host capability. The hold is consulted on EVERY plain query,
+    // including one whose own derivation is also `none`: writing that `none`
+    // as `resolver` would re-own a caller's record, and when HEAD caught up
+    // the next plain query would record the capability over a degrade the
+    // resolver never owned. That overlap (a producer the resolver cannot
+    // reach, on a repo that is also diverged) is where #4561 would return.
     // Side-effect write (#3045 CORE REDESIGN) — see the doc comment above.
     // Never allowed to affect this query's own stdout contract or throw.
     // Provenance names who produced the recorded VALUE, not whether a force

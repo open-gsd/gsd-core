@@ -2442,4 +2442,35 @@ describe('#4630 — the isolation record states who decided it, so a re-query kn
     assert.equal(readSentinelRaw(dir).isolation, 'harness-worktree',
       'once HEAD catches up, the resolver re-evaluates a degrade it derived itself');
   });
+
+  test('a caller `none` recorded while the base check ALSO degrades keeps its provenance — the resolver\'s concurrent `none` does not overwrite it', (t) => {
+    // The overlap: a producer the resolver cannot reach (per-plan submodule
+    // gate, Pattern B, the single-agent fallback) forces `none` on a repo
+    // that is ALSO diverged. A plain query then derives `none` itself. If it
+    // writes that `none` as `resolver`, the caller's decision is silently
+    // re-owned, and when HEAD catches up the next plain query records
+    // harness-worktree: #4561's clobber, reintroduced on exactly the repos
+    // where both degrades apply. The hold must be consulted on every plain
+    // query, not only when the resolver would write something other than none.
+    const dir = divergedProject(t, 'gsd-4630-overlap-');
+    const forced = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', '--phase', '1', '--force-isolation', 'none'],
+      dir, env(dir),
+    );
+    assert.equal(forced.success, true, forced.error);
+    assert.equal(readSentinelRaw(dir).decided_by, 'caller', 'precondition: the forced none is the caller\'s');
+
+    const plainWhileDiverged = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(plainWhileDiverged.success, true, plainWhileDiverged.error);
+    assert.equal(readSentinelRaw(dir).decided_by, 'caller',
+      'a plain query that re-derives none itself must not re-own the caller\'s record');
+
+    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], dir).trim();
+    git(['push', 'origin', branch], dir);
+    const plainAfterCatchUp = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(plainAfterCatchUp.success, true, plainAfterCatchUp.error);
+    const rec = readSentinelRaw(dir);
+    assert.equal(rec.isolation, 'none', 'the caller\'s degrade outlives the divergence: the resolver never owned it');
+    assert.equal(rec.decided_by, 'caller');
+  });
 });
