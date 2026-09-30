@@ -1954,3 +1954,247 @@ describe('#1400 regression: plain agent-skills output survives pipe/file stdout'
     assert.ok(out.includes(`- @${skillPaths[skillPaths.length - 1]}/SKILL.md`), 'last skill ref must be present');
   });
 });
+
+// ─── #4772: workflows forward the workstream they were started for ──────────
+//
+// A bare `gsd_run query agent-skills <agent>` / `gsd_run query init.*` resolves
+// the workstream from the ambient pointer, not from the `--ws <name>` the
+// command was started with. The parity test below is generative: it scans every
+// fenced call in the workflow corpus, so a newly added call that forgets the
+// flag fails here instead of silently reintroducing the defect.
+describe('regressions: workflows forward the started workstream to agent-skills and init.* (#4772)', () => {
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const REPO_ROOT = path.join(__dirname, '..');
+  const WORKFLOWS_DIR = path.join(REPO_ROOT, 'gsd-core', 'workflows');
+  const EXTRA_FILES = [path.join(REPO_ROOT, 'gsd-core', 'references', 'autonomous-smart-discuss.md')];
+
+  // The single parse idiom every workflow fence uses. Always ASSIGNS (an empty
+  // result clears a stale value) and needs no file, so concurrent sessions in
+  // one checkout cannot cross-read each other's workstream.
+  const CANONICAL_PARSE =
+    'GSD_WS=$(echo " $ARGUMENTS" | sed -nE \'s/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \\1/p\' | head -n 1)';
+  // The single-token call-site expansion: `--ws=<name>` or nothing. One token
+  // is what makes it safe under zsh, which does not word-split `$GSD_WS`.
+  const FLAG_EXPANSION = '${GSD_WS:+--ws=${GSD_WS##* }}';
+
+  // Project / workspace lifecycle workflows: no workstream exists yet, or the
+  // workflow manages workspaces themselves.
+  const ROOT_SCOPED = new Set([
+    'new-project.md',
+    'list-workspaces.md',
+    'new-workspace.md',
+    'remove-workspace.md',
+  ]);
+
+  const CALL_RE = /\bgsd_run query (?:agent-skills [A-Za-z0-9-]+|init\.[A-Za-z0-9-]+)(?![A-Za-z0-9-])/;
+
+  function listMarkdown(dir) {
+    const out = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, entry.name);
+      if (entry.isDirectory()) out.push(...listMarkdown(abs));
+      else if (entry.isFile() && entry.name.endsWith('.md')) out.push(abs);
+    }
+    return out.sort();
+  }
+
+  function fences(markdown) {
+    const out = [];
+    let cur = null;
+    splitLines(markdown).forEach((line, idx) => {
+      if (/^\s*```/.test(line)) {
+        if (cur) { out.push(cur); cur = null; } else cur = { start: idx + 1, lines: [] };
+      } else if (cur) cur.lines.push({ text: line, no: idx + 1 });
+    });
+    return out;
+  }
+
+  /** Every fenced agent-skills / init.* call that does not carry a defined workstream flag. */
+  function unforwardedCalls(markdown) {
+    const bad = [];
+    for (const fence of fences(markdown)) {
+      const calls = fence.lines.filter((l) => CALL_RE.test(l.text) && !/^\s*#/.test(l.text));
+      for (const call of calls) {
+        if (!call.text.includes('GSD_WS')) {
+          bad.push(`line ${call.no}: call carries no GSD_WS flag: ${call.text.trim()}`);
+          continue;
+        }
+        const viaFile = call.text.includes('GSD_WS_ARG');
+        const defined = fence.lines.some((l) => (viaFile ? /^\s*GSD_WS_ARG=/ : /^\s*GSD_WS=/).test(l.text));
+        if (!defined) {
+          bad.push(`line ${call.no}: fence never assigns ${viaFile ? 'GSD_WS_ARG' : 'GSD_WS'} before using it: ${call.text.trim()}`);
+        }
+      }
+    }
+    return bad;
+  }
+
+  const corpus = listMarkdown(WORKFLOWS_DIR).concat(EXTRA_FILES);
+
+  test('every fenced agent-skills / init.* call in a workstream-scoped workflow forwards GSD_WS', () => {
+    const failures = [];
+    for (const file of corpus) {
+      if (path.dirname(file) === WORKFLOWS_DIR && ROOT_SCOPED.has(path.basename(file))) continue;
+      for (const msg of unforwardedCalls(fs.readFileSync(file, 'utf-8'))) {
+        failures.push(`${path.relative(REPO_ROOT, file)} ${msg}`);
+      }
+    }
+    assert.deepStrictEqual(failures, []);
+  });
+
+  test('the root-scoped exemptions are not stale: each still has a fenced call', () => {
+    for (const name of ROOT_SCOPED) {
+      const text = fs.readFileSync(path.join(WORKFLOWS_DIR, name), 'utf-8');
+      const calls = fences(text).flatMap((f) => f.lines).filter((l) => CALL_RE.test(l.text));
+      assert.ok(calls.length > 0, `${name} no longer has an agent-skills/init.* call — drop it from ROOT_SCOPED`);
+    }
+  });
+
+  test('the parity check can fail: dropping one flag, or the parse line, is reported', () => {
+    const text = fs.readFileSync(path.join(WORKFLOWS_DIR, 'plan-phase.md'), 'utf-8');
+    assert.deepStrictEqual(unforwardedCalls(text), [], 'plan-phase.md must be clean before mutation');
+    const noFlag = text.replace(` ${FLAG_EXPANSION}`, '');
+    assert.notStrictEqual(noFlag, text, 'mutation 1 must change the file');
+    assert.strictEqual(unforwardedCalls(noFlag).length, 1);
+    const noParse = splitLines(text).filter((l) => !l.startsWith('GSD_WS=')).join('\n');
+    assert.notStrictEqual(noParse, text, 'mutation 2 must change the file');
+    assert.ok(unforwardedCalls(noParse).length >= 4, 'every call in a fence with no GSD_WS assignment is reported');
+  });
+
+  test('every workflow parses --ws with the byte-identical canonical line (no divergent copies)', () => {
+    const variants = new Map();
+    for (const file of corpus) {
+      for (const line of splitLines(fs.readFileSync(file, 'utf-8'))) {
+        if (line.startsWith('GSD_WS=$(echo " $ARGUMENTS"')) {
+          variants.set(line, (variants.get(line) || []).concat(path.relative(REPO_ROOT, file)));
+        }
+      }
+    }
+    assert.deepStrictEqual([...variants.keys()], [CANONICAL_PARSE]);
+    assert.ok([...variants.values()][0].length >= 30, 'the canonical parse must be used across the workflow corpus');
+  });
+
+  test('the parse accepts exactly the names the workstream name policy accepts (first character alphanumeric)', () => {
+    const { validateWorkstreamName } = require('../gsd-core/bin/lib/workstream-name-policy.cjs');
+    for (const name of ['a', 'ws-a', 'backend_api', 'v1.2', 'A9']) {
+      assert.ok(validateWorkstreamName(name), `${name} is valid under the policy`);
+      const r = spawnSync('bash', ['-c', `${CANONICAL_PARSE}\nprintf '%s' "$GSD_WS"`], {
+        env: { ...process.env, ARGUMENTS: `1 --ws ${name}` }, encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS,
+      });
+      assert.strictEqual(r.stdout, `--ws ${name}`);
+    }
+    for (const name of ['-x', '.x', '_x']) {
+      assert.ok(!validateWorkstreamName(name), `${name} is invalid under the policy`);
+      const r = spawnSync('bash', ['-c', `${CANONICAL_PARSE}\nprintf '%s' "$GSD_WS"`], {
+        env: { ...process.env, ARGUMENTS: `1 --ws ${name}` }, encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS,
+      });
+      assert.strictEqual(r.stdout, '', `${name} must not be captured`);
+    }
+  });
+
+  // The call-site expansion is executed, not just matched: flag parsing is where
+  // bash-only constructs silently mis-parse under zsh (the Bash tool's shell).
+  const shells = ['bash', 'zsh'].filter((sh) => {
+    const probe = spawnSync(sh, ['-c', 'exit 0'], { timeout: PROBE_TIMEOUT_MS });
+    return probe.status === 0;
+  });
+
+  for (const sh of shells) {
+    describe(`flag parse and expansion under ${sh}`, () => {
+      function expand(argumentsValue) {
+        const script = `${CANONICAL_PARSE}\nset -- ${FLAG_EXPANSION}\nprintf '%s|%s' "$#" "$*"`;
+        const r = spawnSync(sh, ['-c', script], {
+          env: { ...process.env, ARGUMENTS: argumentsValue },
+          encoding: 'utf-8',
+          timeout: PROBE_TIMEOUT_MS,
+        });
+        assert.strictEqual(r.status, 0, r.stderr);
+        return r.stdout;
+      }
+
+      test('--ws <name> becomes exactly one --ws=<name> token', () => {
+        assert.strictEqual(expand('2 --ws backend-api'), '1|--ws=backend-api');
+        assert.strictEqual(expand('--ws  ws_a.1   --auto 3'), '1|--ws=ws_a.1');
+        assert.strictEqual(expand('2 --skip-research --ws ws-a'), '1|--ws=ws-a');
+      });
+
+      test('no --ws (or a malformed one) expands to zero tokens, never a stray empty argument', () => {
+        assert.strictEqual(expand('2'), '0|');
+        assert.strictEqual(expand(''), '0|');
+        assert.strictEqual(expand('2 --ws'), '0|');
+        assert.strictEqual(expand('2 --wsx foo'), '0|');
+        assert.strictEqual(expand('2 --ws --auto'), '0|');
+        assert.strictEqual(expand('2 --ws -x'), '0|');
+      });
+    });
+  }
+
+  describe('the extracted workflow fences reach the requested workstream with no pointer set', () => {
+    let proj;
+
+    beforeEach(() => {
+      proj = createTempProject();
+      for (const ws of ['ws-a', 'ws-b']) fs.mkdirSync(path.join(proj, '.planning', 'workstreams', ws), { recursive: true });
+      fs.mkdirSync(path.join(proj, 'skills', 's-a'), { recursive: true });
+      fs.writeFileSync(path.join(proj, 'skills', 's-a', 'SKILL.md'), '# s-a\n');
+      fs.writeFileSync(
+        path.join(proj, '.planning', 'workstreams', 'ws-a', 'config.json'),
+        JSON.stringify({ agent_skills: { 'gsd-planner': ['skills/s-a'] } }),
+      );
+    });
+
+    afterEach(() => cleanup(proj));
+
+    /** Run the workflow's own `GSD_WS=` + the lines matching `pick` from its fence. */
+    function runFence(workflow, pick, argumentsValue, extraSetup = '') {
+      const text = fs.readFileSync(path.join(WORKFLOWS_DIR, workflow), 'utf-8');
+      const fence = fences(text).find((f) => f.lines.some((l) => pick.test(l.text)));
+      assert.ok(fence, `${workflow}: no fence matches ${pick}`);
+      const body = fence.lines
+        .map((l) => l.text)
+        .filter((l) => l.startsWith('GSD_WS=') || pick.test(l))
+        .join('\n');
+      const script = `gsd_run() { node "${TOOLS_PATH}" "$@"; }\n${extraSetup}\n${body}\n`;
+      return { script, argumentsValue };
+    }
+
+    function exec(sh, { script, argumentsValue }, printVars) {
+      const r = spawnSync(sh, ['-c', `${script}\n${printVars}`], {
+        cwd: proj,
+        env: { ...process.env, ...TEST_ENV_BASE, GSD_WORKSTREAM: '', ARGUMENTS: argumentsValue, HOME: proj, USERPROFILE: proj },
+        encoding: 'utf-8',
+        timeout: PROBE_TIMEOUT_MS * 4,
+      });
+      assert.strictEqual(r.status, 0, `${sh} failed: ${r.stderr}`);
+      return r.stdout;
+    }
+
+    for (const sh of shells) {
+      test(`plan-phase.md agent-skills resolves ws-a skills under ${sh} (was empty)`, () => {
+        const fence = runFence('plan-phase.md', /^AGENT_SKILLS_PLANNER=/, '1 --ws ws-a');
+        assert.ok(exec(sh, fence, 'printf "%s" "$AGENT_SKILLS_PLANNER"').includes('@skills/s-a/SKILL.md'));
+      });
+
+      test(`a different --ws, or none, yields the empty block under ${sh}`, () => {
+        for (const args of ['1 --ws ws-b', '1']) {
+          const fence = runFence('plan-phase.md', /^AGENT_SKILLS_PLANNER=/, args);
+          assert.strictEqual(exec(sh, fence, 'printf "%s" "$AGENT_SKILLS_PLANNER"'), '', `args: ${args}`);
+        }
+      });
+
+      test(`explicit --ws beats a stale shared pointer to another workstream under ${sh}`, () => {
+        fs.writeFileSync(path.join(proj, '.planning', 'active-workstream'), 'ws-b\n');
+        const fence = runFence('plan-phase.md', /^AGENT_SKILLS_PLANNER=/, '1 --ws ws-a');
+        assert.ok(exec(sh, fence, 'printf "%s" "$AGENT_SKILLS_PLANNER"').includes('@skills/s-a/SKILL.md'));
+      });
+
+      test(`quick.md init.quick lands in the requested workstream under ${sh}`, () => {
+        const fence = runFence('quick.md', /^INIT=\$\(gsd_run query init\.quick /, 'do a thing --ws ws-a',
+          'DESCRIPTION="do a thing"; DISCUSS_PARAM=""; RESEARCH_PARAM=""; VALIDATE_PARAM=""; FULL_PARAM=""');
+        const init = JSON.parse(exec(sh, fence, 'case "$INIT" in @file:*) INIT=$(cat "${INIT#@file:}");; esac; printf "%s" "$INIT"'));
+        const quickDir = String(init.quick_dir).split(path.sep).join('/');
+        assert.ok(quickDir.includes('/workstreams/ws-a/'), `quick_dir should be workstream-scoped, got ${quickDir}`);
+      });
+    }
+  });
+});

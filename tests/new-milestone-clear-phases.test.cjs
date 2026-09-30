@@ -752,7 +752,7 @@ describe('new-milestone.md: workstream-aware PROJECT.md guard (#2308)', () => {
         'gsd_run() {',
         '  if [ "$1" = "query" ] && [ "$2" = "init.new-milestone" ]; then',
         '    case " $* " in',
-        `      *" --ws "*) printf '%s' '${wsJson}' ;;`,
+        `      *" --ws "*|*" --ws="*) printf '%s' '${wsJson}' ;;`,
         `      *) printf '%s' '${rootJson}' ;;`,
         '    esac',
         '  else',
@@ -865,7 +865,7 @@ describe('new-milestone.md: workstream-aware PROJECT.md guard (#2308)', () => {
         const script = `ARGUMENTS="--reset-phase-numbers"\n${gsdRunStub}${step7Fence}`;
         const r = runHookSeam('-c', [script], { interpreter: 'bash', cwd: tmpDir, env: runtimeDirEnv });
         throwIfFailed(r, 'bash <step7 fence>');
-        assert.match(r.stderr, /gsd_run_call:query init\.new-milestone --reset-phase-numbers --ws search\s*$/m,
+        assert.match(r.stderr, /gsd_run_call:query init\.new-milestone --reset-phase-numbers --ws=search\s*$/m,
           `expected --ws to be forwarded alongside --reset-phase-numbers, got: ${r.stderr}`);
       });
 

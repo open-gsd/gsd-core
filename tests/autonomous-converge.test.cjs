@@ -333,7 +333,7 @@ describe('autonomous verification deferral contract', () => {
     const discoverStep = workflow.slice(discoverStart, discoverEnd);
     const iterateStep = workflow.slice(iterateStart, iterateEnd);
 
-    assert.match(discoverStep, /INIT_MANAGER=\$\(gsd_run query init\.manager\)/);
+    assert.match(discoverStep, /INIT_MANAGER=\$\(gsd_run query init\.manager[^)]*\)/);
     assert.ok(
       discoverStep.includes('if [[ "$INIT_MANAGER" == @file:* ]]; then INIT_MANAGER=$(cat "${INIT_MANAGER#@file:}"); fi'),
       'autonomous discovery must dereference large init.manager payloads before parsing',
@@ -357,7 +357,7 @@ describe('autonomous verification deferral contract', () => {
     assert.doesNotMatch(discoverStep, /ROADMAP=\$\(gsd_run query roadmap\.analyze\)/);
     assert.doesNotMatch(discoverStep, /disk_status !== "complete"/);
 
-    assert.match(iterateStep, /INIT_MANAGER=\$\(gsd_run query init\.manager\)/);
+    assert.match(iterateStep, /INIT_MANAGER=\$\(gsd_run query init\.manager[^)]*\)/);
     assert.ok(
       iterateStep.includes('if [[ "$INIT_MANAGER" == @file:* ]]; then INIT_MANAGER=$(cat "${INIT_MANAGER#@file:}"); fi'),
       'autonomous iteration must dereference large init.manager payloads before parsing',

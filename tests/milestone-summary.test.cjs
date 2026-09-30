@@ -425,7 +425,7 @@ describe('complete-milestone workflow has pre-close audit gate (#2158)', () => {
   test('verified closeout uses init.manager canonical verification projection (#1522)', () => {
     const readinessStep = extractStep(completeMilestoneContent, 'verify_readiness');
 
-    assert.match(readinessStep, /INIT_MANAGER=\$\(gsd_run query init\.manager\)/);
+    assert.match(readinessStep, /INIT_MANAGER=\$\(gsd_run query init\.manager[^)]*\)/);
     assert.ok(
       readinessStep.includes('if [[ "$INIT_MANAGER" == @file:* ]]; then INIT_MANAGER=$(cat "${INIT_MANAGER#@file:}"); fi'),
       'complete-milestone readiness must dereference large init.manager payloads before jq',

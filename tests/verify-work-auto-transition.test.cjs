@@ -276,17 +276,17 @@ describe('bug #3381: verify-work forwards workstream context', () => {
     // After #3797 architectural fix, callsites use gsd_run
     assert.match(
       workflow,
-      /gsd_run query init\.verify-work "\$\{PHASE_ARG\}" \$\{GSD_WS\}/,
+      /gsd_run query init\.verify-work "\$\{PHASE_ARG\}" \$\{GSD_WS:\+--ws=\$\{GSD_WS##\* \}\}/,
       'init.verify-work must receive GSD_WS so phase_dir resolves in workstreams',
     );
     assert.match(
       workflow,
-      /gsd_run query phase\.mvp-mode "\$\{phase_number\}" \$\{GSD_WS\} --pick active/,
+      /gsd_run query phase\.mvp-mode "\$\{phase_number\}" \$\{GSD_WS:\+--ws=\$\{GSD_WS##\* \}\} --pick active/,
       'phase.mvp-mode must receive GSD_WS so roadmap mode is workstream-scoped',
     );
     assert.match(
       workflow,
-      /gsd_run query roadmap\.get-phase "\$\{phase_number\}" \$\{GSD_WS\} --pick goal/,
+      /gsd_run query roadmap\.get-phase "\$\{phase_number\}" \$\{GSD_WS:\+--ws=\$\{GSD_WS##\* \}\} --pick goal/,
       'roadmap.get-phase must receive GSD_WS so goals are workstream-scoped',
     );
   });

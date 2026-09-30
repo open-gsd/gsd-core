@@ -139,9 +139,7 @@ describe('quick workflow: research step', () => {
 
     assert.deepStrictEqual(
       {
-        hostSkillBinding: content.includes(
-          'AGENT_SKILLS_RESEARCHER=$(gsd_run query agent-skills gsd-phase-researcher)'
-        ),
+        hostSkillBinding: /AGENT_SKILLS_RESEARCHER=\$\(gsd_run query agent-skills gsd-phase-researcher \$\{GSD_WS:\+--ws=\$\{GSD_WS##\* \}\}\)/.test(content),
         modelParsed: parseList.includes('researcher_model'),
         researcherPersona: researchAgent.includes('${AGENT_SKILLS_RESEARCHER}'),
         researcherSubagent: researchAgent.includes('subagent_type="gsd-phase-researcher"'),
