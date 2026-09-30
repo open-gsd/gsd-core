@@ -5398,6 +5398,93 @@ describe('#5118 round 3: containment before read, no write before the error, and
     assert.ok(truncated >= 40, `non-vacuous: the sweep truncated ${truncated} tokens`);
   });
 
+  // SEC-2b (round 5): JSON escapes of two characters (`\n`, `\\`, `\"`) are
+  // atomic too — a cut may not leave the kept token ending in a lone
+  // backslash (an odd trailing run), which would escape the ellipsis.
+  describe('SEC-2b: the truncated raw-status token never ends in an odd backslash run', () => {
+    const formatDiagnosticToken = (raw) => require('../gsd-core/bin/lib/io.cjs').formatDiagnosticToken(raw);
+    const tokenOf = (raw) => {
+      const { VerificationStatusError } = owner5118();
+      const message = new VerificationStatusError(raw, '/p/01-VERIFICATION.md').message;
+      const start = message.indexOf('has status ') + 'has status '.length;
+      return message.slice(start, message.indexOf(', which is outside the closed set'));
+    };
+    const split =(token) => {
+      const at = token.indexOf('…(');
+      if (at === -1) return null;
+      return { kept: token.slice(0, at), more: Number(/^…\((\d+) more\)$/.exec(token.slice(at))?.[1]) };
+    };
+    const oddTrailingBackslashes = /(?:^|[^\\])(?:\\\\)*\\$/;
+
+    test('a cut right after the backslash of a `\\n` escape drops the backslash', () => {
+      const raw = `${'a'.repeat(118)}\nzzzz`;
+      const rendered = formatDiagnosticToken(raw);
+      assert.equal(rendered.slice(119, 121), '\\n', 'fixture: the escape straddles the cut');
+      const { kept, more } = split(tokenOf(raw));
+      assert.equal(kept.length, 119, 'the trailing backslash was dropped');
+      assert.doesNotMatch(kept, oddTrailingBackslashes);
+      assert.equal(more, rendered.length - 119, 'N counts the dropped backslash');
+    });
+
+    test('a cut between the two backslashes of `\\\\` drops one; a cut after both keeps both', () => {
+      const between = `${'a'.repeat(118)}\\zzzz`;
+      const renderedBetween = formatDiagnosticToken(between);
+      assert.equal(renderedBetween.slice(119, 121), '\\\\', 'fixture: the cut falls between the pair');
+      const cutBetween = split(tokenOf(between));
+      assert.equal(cutBetween.kept.length, 119);
+      assert.doesNotMatch(cutBetween.kept, oddTrailingBackslashes);
+      assert.equal(cutBetween.more, renderedBetween.length - 119);
+
+      const after = `${'a'.repeat(117)}\\zzzz`;
+      const renderedAfter = formatDiagnosticToken(after);
+      assert.equal(renderedAfter.slice(118, 120), '\\\\', 'fixture: the cut falls after both');
+      const cutAfter = split(tokenOf(after));
+      assert.equal(cutAfter.kept.length, 120, 'an even run is kept whole');
+      assert.doesNotMatch(cutAfter.kept, oddTrailingBackslashes);
+      assert.equal(cutAfter.more, renderedAfter.length - 120);
+    });
+
+    test('a cut inside `\\"` drops the backslash', () => {
+      const raw = `${'a'.repeat(118)}"zzzz`;
+      const rendered = formatDiagnosticToken(raw);
+      assert.equal(rendered.slice(119, 121), '\\"', 'fixture: the escape straddles the cut');
+      const { kept, more } = split(tokenOf(raw));
+      assert.equal(kept.length, 119);
+      assert.doesNotMatch(kept, oddTrailingBackslashes);
+      assert.equal(more, rendered.length - 119);
+    });
+
+    test('sweep: every escape shape across limit-1, limit and limit+1 — no odd trailing run, exact count', () => {
+      let truncated = 0;
+      for (let pad = 110; pad <= 125; pad += 1) {
+        for (const unit of ['\n', '\t', '\r', '\b', '\f', '\\', '"', '\\\\\\', '\\"\\']) {
+          const raw = `${'a'.repeat(pad)}${unit}${'b'.repeat(40)}`;
+          const cut = split(tokenOf(raw));
+          if (cut === null) continue;
+          truncated += 1;
+          const rendered = formatDiagnosticToken(raw);
+          assert.ok(rendered.startsWith(cut.kept), 'the kept part is a prefix of the rendered token');
+          assert.equal(cut.kept.length + cut.more, rendered.length, `count is exact (pad=${pad}, unit=${JSON.stringify(unit)})`);
+          assert.doesNotMatch(cut.kept, oddTrailingBackslashes, `pad=${pad}, unit=${JSON.stringify(unit)}: lone trailing backslash`);
+        }
+      }
+      assert.ok(truncated >= 100, `non-vacuous: the sweep truncated ${truncated} tokens`);
+    });
+
+    test('boundary: a rendered token of limit-1 and limit characters is whole; limit+1 is cut with an exact count', () => {
+      // A plain run renders as the run plus two quotes.
+      for (const length of [119, 120]) {
+        const token = tokenOf('a'.repeat(length - 2));
+        assert.equal(token.length, length);
+        assert.equal(split(token), null, `length ${length} is not truncated`);
+      }
+      const token = tokenOf('a'.repeat(119));
+      const cut = split(token);
+      assert.equal(cut.kept.length, 120);
+      assert.equal(cut.more, 1);
+    });
+  });
+
   // D4: the recovery the error text names must be real.
   test('D4: the out-of-set error names the file, the value, the accepted values and a recovery that works — set `status:` or delete the report', (t) => {
     const bad = project(t, 'verified');
