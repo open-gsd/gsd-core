@@ -127,7 +127,9 @@ underneath it flipped the record back to `harness-worktree`, the guard would sta
 very dispatches the degrade mandated, which is #4222 in reverse. The run's next forced re-record,
 which re-runs the base check in shell first, or the sentinel's freshness window ends the hold.
 Live re-evaluation governs the records the resolver writes itself: the plain-query path #4222 was
-reported against.
+reported against. The hold is consulted on every plain query, including one that derives `none`
+itself; writing that `none` as `resolver` would re-own the caller's record, and on a repository
+where both degrades apply the caller's decision would be lost when HEAD caught up.
 
 **An absent field reads as `caller`**, and so does any value other than `resolver`. The
 case this covers is a record written by a pre-Phase-2 `gsd-tools` still in flight during an

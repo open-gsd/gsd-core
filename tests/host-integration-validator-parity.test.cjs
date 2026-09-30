@@ -544,7 +544,8 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
     const fs = require('node:fs');
     const root = path.join(__dirname, '../gsd-core');
     const members = new Set(DISPATCH_ISOLATION_MODES);
-    const alternation = /^\s*([a-z][a-z-]*(?:\|[a-z][a-z-]*)+)\)/;
+    // Whitespace around `|` is legal shell (`a | b)`), so it is allowed here.
+    const alternation = /^\s*\(?\s*([a-z][a-z-]*(?:\s*\|\s*[a-z][a-z-]*)+)\s*\)/;
     const found = [];
     const walk = (dir) => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -554,7 +555,10 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
         fs.readFileSync(full, 'utf8').split(/\r?\n/).forEach((line, i) => {
           const m = alternation.exec(line);
           if (!m) return;
-          const alts = m[1].split('|');
+          const alts = m[1].split(/\s*\|\s*/);
+          // A list is a copy of THIS vocabulary when it names a worktree mode.
+          // `none` alone is too common a shell word to key on (`off|none)`),
+          // so a list naming neither worktree mode is out of scope by design.
           if (!alts.some((a) => members.has(a) && a !== 'none')) return;
           found.push({ site: `${path.relative(root, full)}:${i + 1}`, alts });
         });
