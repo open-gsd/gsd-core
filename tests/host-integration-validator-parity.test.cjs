@@ -532,6 +532,45 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
     );
   });
 
+  test('every shell `case` validity list for the vocabulary in gsd-core/**/*.md === owner (workflow shell cannot import it, so each list is pinned)', () => {
+    // The dispatch sites and diagnostics validate the resolver's output in
+    // shell — `case "$ISOLATION" in harness-worktree|orchestrator-worktree|none) ;;`
+    // — and shell inside workflow markdown has no way to consume the owner.
+    // These are copies that must exist (ADR-4630 Decision 3), so each is
+    // pinned: a fourth mode added to the owner and the hook mirror alone
+    // would otherwise leave every other test green while these lists reject
+    // it and fail the dispatch closed. Sites are DISCOVERED, not listed, so a
+    // new copy is pinned the day it lands.
+    const fs = require('node:fs');
+    const root = path.join(__dirname, '../gsd-core');
+    const members = new Set(DISPATCH_ISOLATION_MODES);
+    const alternation = /^\s*([a-z][a-z-]*(?:\|[a-z][a-z-]*)+)\)/;
+    const found = [];
+    const walk = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) { walk(full); continue; }
+        if (!entry.name.endsWith('.md')) continue;
+        fs.readFileSync(full, 'utf8').split(/\r?\n/).forEach((line, i) => {
+          const m = alternation.exec(line);
+          if (!m) return;
+          const alts = m[1].split('|');
+          if (!alts.some((a) => members.has(a) && a !== 'none')) return;
+          found.push({ site: `${path.relative(root, full)}:${i + 1}`, alts });
+        });
+      }
+    };
+    walk(root);
+    // Positive control: the scan must reach the four sites known at this
+    // commit (dispatch-isolation-gate.md, executor-isolation-dispatch.md,
+    // health.md, settings.md). Fewer means the scan is broken, not clean.
+    assert.ok(found.length >= 4, `expected >= 4 shell validity lists, found ${found.length}: ${found.map((f) => f.site).join(', ')}`);
+    for (const { site, alts } of found) {
+      assert.deepEqual(sorted(alts), sorted(DISPATCH_ISOLATION_MODES),
+        `${site}: this shell validity list has drifted from src/dispatch-isolation.cts`);
+    }
+  });
+
   test('the base-check subset is exactly the owner minus `none` — derived, not a second list', () => {
     assert.ok(Object.isFrozen(BASE_CHECK_ISOLATION_MODES));
     assert.deepEqual(
