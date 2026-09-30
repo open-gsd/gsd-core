@@ -2703,6 +2703,47 @@ describe('bug-967 verify key-links strict file-path contract', () => {
       'It must be a relative file path.',
     );
   });
+
+  // ── 7. Doc-contract guard #4946: gsd-planner.md & planner-guidance.md schema guidance ──
+  //
+  // Planners without explicit schema instructions generate prose or symbols
+  // (e.g. `to: "file.rs::symbol"` or `from: "file.rs description"`) that fail verify key-links.
+  // Both gsd-planner.md and planner-guidance.md must state that from/to are relative file paths only.
+  test('#4946: agents/gsd-planner.md states that key_links from/to must be relative file paths only', () => {
+    const plannerPath = path.join(__dirname, '..', 'agents', 'gsd-planner.md');
+    assert.ok(fs.existsSync(plannerPath), `gsd-planner.md not found at ${plannerPath}`);
+    const content = fs.readFileSync(plannerPath, 'utf-8');
+
+    assert.ok(
+      content.includes('from/to MUST be relative file paths') ||
+      content.includes('`from` and `to` MUST be project-relative file paths only'),
+      'agents/gsd-planner.md must state that key_links from/to must be project-relative file paths only',
+    );
+    assert.ok(
+      content.includes('MUST be placed in `via:`') ||
+      content.includes('symbols/endpoints go in via:'),
+      'agents/gsd-planner.md must instruct that symbols, endpoints, and details belong in via:',
+    );
+  });
+
+  test('#4946: gsd-core/references/planner-guidance.md carries key_links field schema contract table', () => {
+    const guidancePath = path.join(__dirname, '..', 'gsd-core', 'references', 'planner-guidance.md');
+    assert.ok(fs.existsSync(guidancePath), `planner-guidance.md not found at ${guidancePath}`);
+    const content = fs.readFileSync(guidancePath, 'utf-8');
+
+    assert.ok(
+      content.includes('`key_links[].from`') && content.includes('`key_links[].to`'),
+      'planner-guidance.md must include key_links[].from and key_links[].to in its schema table',
+    );
+    assert.ok(
+      content.includes('relative path from project root only'),
+      'planner-guidance.md must specify relative path from project root only for from/to',
+    );
+    assert.ok(
+      content.includes('All symbols, methods, and endpoints belong in `via:`'),
+      'planner-guidance.md must explicitly instruct that symbols and endpoints belong in via:',
+    );
+  });
 });
   });
 }
