@@ -2206,5 +2206,19 @@ describe('regressions: workflows forward the started workstream to agent-skills 
         assert.ok(quickDir.includes('/workstreams/ws-a/'), `quick_dir should be workstream-scoped, got ${quickDir}`);
       });
     }
+
+    test('--ws none is forwarded and fails loudly (reserved name), never resolving workstreams/none', (t) => {
+      if (!shells.includes('bash')) return t.skip('no usable bash on this platform');
+      const fence = buildFenceScript('plan-phase.md', /^AGENT_SKILLS_PLANNER=/, '1 --ws none');
+      const r = spawnSync('bash', ['-c', `${fence.script}\nprintf "%s" "$AGENT_SKILLS_PLANNER"`], {
+        cwd: proj,
+        env: { ...process.env, ...TEST_ENV_BASE, GSD_WORKSTREAM: '', ARGUMENTS: fence.argumentsValue, HOME: proj, USERPROFILE: proj },
+        encoding: 'utf-8',
+        timeout: PROBE_TIMEOUT_MS * 4,
+      });
+      assert.strictEqual(r.stdout, '');
+      assert.match(r.stderr, /Workstream name 'none' is reserved/);
+      assert.strictEqual(fs.existsSync(path.join(proj, '.planning', 'workstreams', 'none')), false);
+    });
   });
 });

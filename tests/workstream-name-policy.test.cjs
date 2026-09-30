@@ -66,3 +66,77 @@ describe('workstream-name-policy', () => {
     assert.equal(slugB, `${'a'.repeat(60)}beta`);
   });
 });
+
+// ─── #4772: `none` is a reserved workstream name ───────────────────────────
+describe('regressions: reserved workstream names (#4772)', () => {
+  const fc = require('fast-check');
+  const {
+    RESERVED_WORKSTREAM_NAMES,
+    isReservedWorkstreamName,
+    reservedWorkstreamNameMessage,
+  } = require('../gsd-core/bin/lib/workstream-name-policy.cjs');
+
+  test('the reserved list is exactly [none] and cannot be mutated by a consumer', () => {
+    assert.deepEqual([...RESERVED_WORKSTREAM_NAMES], ['none']);
+    assert.ok(Object.isFrozen(RESERVED_WORKSTREAM_NAMES));
+  });
+
+  test('none is reserved regardless of case and surrounding whitespace', () => {
+    for (const name of ['none', 'None', 'NONE', '  none  ', 'nOnE']) {
+      assert.equal(isReservedWorkstreamName(name), true, name);
+    }
+  });
+
+  test('near-misses at limit-1 / limit / limit+1 of the reserved name stay usable', () => {
+    assert.equal(isReservedWorkstreamName('non'), false);
+    assert.equal(isReservedWorkstreamName('none'), true);
+    for (const name of ['nonee', 'none1', 'nonexistent', 'no-ne', 'no_ne', 'none.1', 'anone', '_none']) {
+      assert.equal(isReservedWorkstreamName(name), false, name);
+    }
+    for (const name of ['non', 'nonee', 'none1', 'nonexistent']) {
+      assert.equal(isValidActiveWorkstreamName(name), true, name);
+    }
+  });
+
+  test('empty, null and undefined are not reserved (they are invalid, a different rule)', () => {
+    for (const name of ['', '   ', null, undefined]) {
+      assert.equal(isReservedWorkstreamName(name), false);
+    }
+  });
+
+  test('the charset rule is unchanged: a reserved name is still charset-valid', () => {
+    assert.deepEqual(validateActiveWorkstreamName('none'), { ok: true, reason: null, value: 'none' });
+  });
+
+  test('the shared message names the offending value and the flat-mode remedy', () => {
+    const message = reservedWorkstreamNameMessage('None');
+    assert.match(message, /'None' is reserved/);
+    assert.match(message, /omit --ws for flat mode/);
+  });
+
+  test('the remedy follows where the name came from, and never advises a command the bootstrap would also reject', () => {
+    assert.match(reservedWorkstreamNameMessage('none', 'env'), /unset GSD_WORKSTREAM/);
+    assert.match(reservedWorkstreamNameMessage('none', 'store'), /pointer/);
+    assert.match(reservedWorkstreamNameMessage('none', 'cli'), /omit --ws/);
+    for (const source of ['cli', 'env', 'store', null]) {
+      assert.doesNotMatch(reservedWorkstreamNameMessage('none', source), /set --clear/);
+    }
+  });
+
+  test('property: every case/whitespace variant of a reserved word is reserved', () => {
+    const variant = fc.tuple(
+      fc.constantFrom(...RESERVED_WORKSTREAM_NAMES),
+      fc.array(fc.boolean(), { minLength: 8, maxLength: 8 }),
+      fc.constantFrom('', ' ', '\t'),
+    ).map(([word, flips, pad]) => pad + [...word].map((ch, i) => (flips[i % flips.length] ? ch.toUpperCase() : ch)).join('') + pad);
+    fc.assert(fc.property(variant, (name) => { assert.equal(isReservedWorkstreamName(name), true); }), { numRuns: 100 });
+  });
+
+  test('property: any charset-valid name that is not a reserved word is never reserved', () => {
+    const validName = fc.stringMatching(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,20}$/);
+    fc.assert(fc.property(validName, (name) => {
+      const expected = RESERVED_WORKSTREAM_NAMES.includes(name.toLowerCase());
+      assert.equal(isReservedWorkstreamName(name), expected);
+    }), { numRuns: 200 });
+  });
+});

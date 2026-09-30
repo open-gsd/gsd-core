@@ -1171,3 +1171,102 @@ describe('#2562 — a refused shipped marker reaches every workstream command', 
     }
   });
 });
+
+// ─── #4772: `none` is reserved (CLI end to end) ─────────────────────────────
+describe('regressions: reserved workstream name none (#4772)', () => {
+  const { RESERVED_WORKSTREAM_NAMES } = require('../gsd-core/bin/lib/workstream-name-policy.cjs');
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createFixture();
+    seedWorkstream(tmpDir, { name: 'alpha', state: '# State\n' });
+  });
+
+  afterEach(() => cleanup(tmpDir));
+
+  const wsDirOf = (name) => path.join(tmpDir, '.planning', 'workstreams', name);
+
+  test('query init.quick --ws none fails loudly and creates no workstreams/none', () => {
+    const r = runGsdTools(['query', 'init.quick', 'a task', '--ws', 'none'], tmpDir);
+    assert.equal(r.success, false);
+    assert.match(r.error, /Workstream name 'none' is reserved/);
+    assert.equal(fs.existsSync(wsDirOf('none')), false);
+  });
+
+  test('--ws=none and GSD_WORKSTREAM=none are rejected the same way', () => {
+    const viaEquals = runGsdTools(['query', 'init.quick', 'a task', '--ws=none'], tmpDir);
+    assert.equal(viaEquals.success, false);
+    assert.match(viaEquals.error, /is reserved/);
+    const viaEnv = runGsdTools(['query', 'init.quick', 'a task'], tmpDir, { GSD_WORKSTREAM: 'none' });
+    assert.equal(viaEnv.success, false);
+    assert.match(viaEnv.error, /is reserved/);
+    assert.equal(fs.existsSync(wsDirOf('none')), false);
+  });
+
+  test('agent-skills --ws none errors instead of leaking the root config', () => {
+    const r = runGsdTools(['query', 'agent-skills', 'gsd-planner', '--ws', 'none'], tmpDir);
+    assert.equal(r.success, false);
+    assert.match(r.error, /is reserved/);
+  });
+
+  test('workstream create none is rejected and writes nothing', () => {
+    const r = runGsdTools(['workstream', 'create', 'none'], tmpDir);
+    assert.equal(r.success, false);
+    assert.match(r.error, /is reserved/);
+    assert.equal(fs.existsSync(wsDirOf('none')), false);
+  });
+
+  test('workstream set none reports reserved_name and leaves the pointer alone', () => {
+    const r = runGsdTools(['workstream', 'set', 'none'], tmpDir);
+    const out = JSON.parse(r.output);
+    assert.equal(out.error, 'reserved_name');
+    assert.equal(out.active, null);
+    assert.equal(fs.existsSync(path.join(tmpDir, '.planning', 'active-workstream')), false);
+  });
+
+  test('a stale GSD_WORKSTREAM=none names the env var as the remedy', () => {
+    const r = runGsdTools(['query', 'agent-skills', 'gsd-planner'], tmpDir, { GSD_WORKSTREAM: 'none' });
+    assert.equal(r.success, false);
+    assert.match(r.error, /unset GSD_WORKSTREAM/);
+  });
+
+  test('a stale none pointer file with no directory does not brick the CLI', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'active-workstream'), 'none\n');
+    const r = runGsdTools(['workstream', 'get'], tmpDir);
+    assert.equal(r.success, true, r.error);
+    assert.equal(JSON.parse(r.output).active, null);
+  });
+
+  test('workstream create --migrate-name none is reports migration_failed in flat mode without moving files', () => {
+    const flat = createFixture();
+    try {
+      fs.writeFileSync(path.join(flat, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+      const r = runGsdTools(['workstream', 'create', 'alpha2', '--migrate-name', 'none'], flat);
+      const out = JSON.parse(r.output);
+      assert.equal(out.created, false);
+      assert.equal(out.error, 'migration_failed');
+      assert.match(out.message, /is reserved/);
+      assert.equal(fs.existsSync(path.join(flat, '.planning', 'ROADMAP.md')), true);
+      assert.equal(fs.existsSync(path.join(flat, '.planning', 'workstreams', 'none')), false);
+    } finally {
+      cleanup(flat);
+    }
+  });
+
+  test('near-misses still work end to end', () => {
+    seedWorkstream(tmpDir, { name: 'none1', state: '# State\n' });
+    const r = runGsdTools(['query', 'agent-skills', 'gsd-planner', '--ws', 'none1'], tmpDir);
+    assert.equal(r.success, true, r.error);
+  });
+
+  test('parity: every reserved name is rejected by create and by --ws from the one exported list', () => {
+    assert.ok(RESERVED_WORKSTREAM_NAMES.length > 0);
+    for (const name of RESERVED_WORKSTREAM_NAMES) {
+      const create = runGsdTools(['workstream', 'create', name], tmpDir);
+      assert.equal(create.success, false, 'create ' + name);
+      const flag = runGsdTools(['query', 'agent-skills', 'gsd-planner', '--ws', name], tmpDir);
+      assert.equal(flag.success, false, '--ws ' + name);
+      assert.equal(fs.existsSync(wsDirOf(name)), false, name);
+    }
+  });
+});

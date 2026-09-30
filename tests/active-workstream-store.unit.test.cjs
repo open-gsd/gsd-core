@@ -1462,3 +1462,67 @@ describe('#3557 CLAUDE_CODE_SESSION_ID session key', () => {
       'SESSION_IDENTITY_ENV_KEYS must scrub CLAUDE_CODE_SESSION_ID');
   });
 });
+
+// ── #4772: reserved workstream names (resolveActiveWorkstream) ───────────────
+describe('regressions: resolveActiveWorkstream rejects the reserved name none (#4772)', () => {
+  const RESERVED = /Workstream name 'none' is reserved/;
+  let base;
+
+  beforeEach(() => {
+    base = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-ws-reserved-'));
+    makePlanningDir(base, 'alpha');
+  });
+
+  afterEach(() => cleanup(base));
+
+  test('--ws none and --ws=none throw when no workstreams/none directory exists', () => {
+    assert.throws(() => resolveActiveWorkstream(base, ['--ws', 'none'], {}), RESERVED);
+    assert.throws(() => resolveActiveWorkstream(base, ['--ws=none'], {}), RESERVED);
+  });
+
+  test('GSD_WORKSTREAM=none throws', () => {
+    assert.throws(() => resolveActiveWorkstream(base, [], { GSD_WORKSTREAM: 'none' }), RESERVED);
+  });
+
+  // Unit seam only: the real pointer chain drops a pointer whose directory is
+  // missing before this check runs, so this state is reachable via injected deps.
+  test('a stored pointer of none throws', () => {
+    assert.throws(
+      () => resolveActiveWorkstream(base, [], {}, { getStored: () => 'none' }),
+      RESERVED,
+    );
+  });
+
+  test('the remedy in the error matches the source of the name', () => {
+    assert.throws(() => resolveActiveWorkstream(base, ['--ws', 'none'], {}), /omit --ws for flat mode/);
+    assert.throws(() => resolveActiveWorkstream(base, [], { GSD_WORKSTREAM: 'none' }), /unset GSD_WORKSTREAM/);
+  });
+
+  test('grandfathering is exact-case: workstreams/none does not admit NONE, even on a case-insensitive filesystem', () => {
+    makePlanningDir(base, 'none');
+    assert.throws(() => resolveActiveWorkstream(base, ['--ws', 'NONE'], {}), /Workstream name 'NONE' is reserved/);
+  });
+
+  test('mixed-case variants throw, reporting the value as typed', () => {
+    assert.throws(() => resolveActiveWorkstream(base, ['--ws', 'nOnE'], {}), /Workstream name 'nOnE' is reserved/);
+    assert.throws(() => resolveActiveWorkstream(base, [], { GSD_WORKSTREAM: 'None' }), /Workstream name 'None' is reserved/);
+  });
+
+  test('an existing workstreams/none directory is grandfathered on every source', () => {
+    makePlanningDir(base, 'none');
+    assert.equal(resolveActiveWorkstream(base, ['--ws', 'none'], {}).ws, 'none');
+    assert.equal(resolveActiveWorkstream(base, [], { GSD_WORKSTREAM: 'none' }).ws, 'none');
+    assert.equal(resolveActiveWorkstream(base, [], {}, { getStored: () => 'none' }).ws, 'none');
+  });
+
+  test('near-misses resolve without any directory', () => {
+    for (const name of ['none1', 'nonexistent', 'non']) {
+      assert.equal(resolveActiveWorkstream(base, ['--ws', name], {}).ws, name);
+    }
+  });
+
+  test('a non-reserved name and an unset workstream are unaffected', () => {
+    assert.equal(resolveActiveWorkstream(base, ['--ws', 'alpha'], {}).ws, 'alpha');
+    assert.equal(resolveActiveWorkstream(base, [], {}).ws, null);
+  });
+});
