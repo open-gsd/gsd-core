@@ -28,6 +28,8 @@ const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const {
   detectDrift,
   chooseAffectedPaths,
+  sanitizePaths,
+  displaySafePath,
   writeMappedCommit,
   DRIFT_CATEGORIES,
 } = require('../gsd-core/bin/lib/drift.cjs');
@@ -37,7 +39,7 @@ const SEVEN_DOCS = [
   'TESTING.md', 'INTEGRATIONS.md', 'CONCERNS.md',
 ];
 
-const WITHHELD_STATEMENT = 'path(s) withheld: absolute, traversal or shell-metacharacter paths';
+const WITHHELD_STATEMENT = 'path(s) withheld: not passed to the mapper or listed (absolute, traversal, whitespace, non-ASCII or shell-metacharacter characters)';
 
 // Test-side statement of the allowlist policy: repo-relative components of
 // [A-Za-z0-9_.-] (not starting with `-`), separated by `/`, no `..`.
@@ -796,5 +798,471 @@ describe('verify codebase-drift CLI — whole change set (#5134)', () => {
     assert.strictEqual(data.spawn_mapper, false);
     assert.doesNotMatch(data.message, /scheduled for paths:\s*$/m);
     assertWithheldCovers(data.withheld_paths, hostile);
+  });
+});
+
+// ─── Review findings: display safety, boundaries, one-component rules ────────
+
+const escapeOf = (cp) => '\\u' + cp.toString(16).padStart(4, '0');
+
+describe('displaySafePath — escapes what can rewrite a terminal, keeps the rest', () => {
+  const escaped = [
+    0x0000, 0x0007, 0x001b, 0x001f, // C0
+    0x007f, // DEL
+    0x0080, 0x008d, 0x009f, // C1
+    0x061c, // Arabic letter mark
+    0x200e, 0x200f, // LRM / RLM
+    0x202a, 0x202b, 0x202c, 0x202d, 0x202e, // embeddings and overrides
+    0x2066, 0x2067, 0x2068, 0x2069, // isolates
+    0x200b, 0x200c, 0x200d, 0x2060, 0xfeff, // zero-width
+    0x2028, 0x2029, // line / paragraph separators
+  ];
+  for (const cp of escaped) {
+    test(`U+${cp.toString(16).toUpperCase().padStart(4, '0')} becomes its \\u escape`, () => {
+      assert.strictEqual(displaySafePath(`a${String.fromCodePoint(cp)}b`), `a${escapeOf(cp)}b`);
+    });
+  }
+
+  const untouched = [
+    ['space', 'docs/My Notes.md'],
+    ['ordinary ASCII', 'src/lib/a-b_c.d.ts'],
+    ['CJK', 'docs/设计.md'],
+    ['astral emoji (surrogate pair)', 'docs/😀.md'],
+    ['NBSP U+00A0 (first char after C1)', 'a\u00a0b'],
+    ['U+202F narrow no-break space', 'a\u202fb'],
+    ['U+2065 (unassigned, inside the isolate gap)', 'a\u2065b'],
+    ['U+200A hair space (just below zero-width)', 'a\u200ab'],
+    ['U+2061 (just above word joiner)', 'a\u2061b'],
+    ['U+FFFE', 'a\ufffeb'],
+    ['backslash', 'a\\u0000b'],
+  ];
+  for (const [label, input] of untouched) {
+    test(`${label} is left untouched`, () => {
+      assert.strictEqual(displaySafePath(input), input);
+    });
+  }
+
+  test('a hostile path renders as one inert line', () => {
+    assert.strictEqual(
+      displaySafePath('x\r\n  - injected/\u001b[31mred\u202eevil'),
+      'x\\u000d\\u000a  - injected/\\u001b[31mred\\u202eevil',
+    );
+  });
+
+  for (const [units, label] of [[199, 'limit-1'], [200, 'limit']]) {
+    test(`${units} code units (${label}) pass through unchanged`, () => {
+      const input = 'a'.repeat(units);
+      assert.strictEqual(displaySafePath(input), input);
+    });
+  }
+
+  test('201 code units (limit+1) are cut to 199 + ellipsis = 200', () => {
+    const out = displaySafePath('a'.repeat(201));
+    assert.strictEqual(out, 'a'.repeat(199) + '…');
+    assert.strictEqual(out.length, 200);
+  });
+
+  test('an astral character ending exactly at the limit is kept whole', () => {
+    const input = 'a'.repeat(198) + '😀';
+    assert.strictEqual(input.length, 200);
+    assert.strictEqual(displaySafePath(input), input);
+  });
+
+  test('a surrogate pair straddling the cut is dropped whole, never split', () => {
+    assert.strictEqual(displaySafePath('a'.repeat(199) + '😀'), 'a'.repeat(199) + '…');
+    assert.strictEqual(displaySafePath('a'.repeat(198) + '😀b'), 'a'.repeat(198) + '…');
+  });
+
+  test('an escape is never cut in half', () => {
+    const out = displaySafePath('a'.repeat(195) + '\u0000' + 'b'.repeat(10));
+    assert.strictEqual(out, 'a'.repeat(195) + '…');
+  });
+
+  test('the cap applies to the escaped text, not the raw text', () => {
+    const out = displaySafePath('\u0000'.repeat(40));
+    assert.strictEqual(out, '\\u0000'.repeat(33) + '…');
+    assert.strictEqual(out.length, 199);
+  });
+
+  const codePointArb = fc.oneof(
+    fc.integer({ min: 0, max: 0x2100 }),
+    fc.integer({ min: 0, max: 0x10ffff }).filter((cp) => cp < 0xd800 || cp > 0xdfff),
+  );
+  const textArb = fc
+    .array(codePointArb, { maxLength: 300 })
+    .map((cps) => String.fromCodePoint(...cps));
+  const UNSAFE_RANGES = [
+    [0x0000, 0x001f], [0x007f, 0x009f], [0x061c, 0x061c], [0x200b, 0x200f], [0x2028, 0x2029],
+    [0x202a, 0x202e], [0x2060, 0x2060], [0x2066, 0x2069], [0xfeff, 0xfeff],
+  ];
+  const hasUnsafe = (t) => [...t].some((ch) => {
+    const cp = ch.codePointAt(0);
+    return UNSAFE_RANGES.some(([lo, hi]) => cp >= lo && cp <= hi);
+  });
+  const hasLoneSurrogate = (t) => /[\ud800-\udfff]/.test(t.replace(/[\ud800-\udbff][\udc00-\udfff]/g, ''));
+
+  test('property: output has no unsafe character, no split surrogate, is at most 200 units and is idempotent', () => {
+    fc.assert(fc.property(textArb, (t) => {
+      const out = displaySafePath(t);
+      return !hasUnsafe(out)
+        && !hasLoneSurrogate(out)
+        && out.length <= 200
+        && displaySafePath(out) === out;
+    }));
+  });
+
+  test('property: safe text within the cap is returned unchanged', () => {
+    const safeArb = fc
+      .array(fc.constantFrom(...'ab/._- 设计😀'), { maxLength: 200 })
+      .map((chars) => chars.join(''))
+      .filter((t) => t.length <= 200);
+    fc.assert(fc.property(safeArb, (t) => displaySafePath(t) === t));
+  });
+});
+
+describe('isPathMapped boundaries — a mapped prefix matches at path-component boundaries', () => {
+  const structureOnly = (text) => ({ 'STRUCTURE.md': text });
+  const edited = (file, text) => run({ modifiedFiles: [file], documents: structureOnly(text) }).elements;
+
+  const mapped = [
+    ['`api/` on its own', 'api/x.js', '- `api/`'],
+    ['`src/lib/` names src/lib', 'src/lib/a.ts', 'See `src/lib/` for helpers'],
+    ['backticked `src/lib`', 'src/lib/a.ts', 'See `src/lib` for helpers'],
+    ['prefix at the start of the corpus', 'src/lib/a.ts', 'src/lib holds helpers'],
+    ['prefix at the end of the corpus', 'src/lib/a.ts', 'helpers live in src/lib'],
+    ['sentence-final dot after the prefix', 'lib/a.ts', 'helpers live in lib.'],
+    ['a comma after the prefix', 'lib/a.ts', 'lib, bin'],
+    ['a slash before the prefix (nested mention)', 'lib/a.ts', 'see packages/x/lib/ here'],
+    ['a parenthesis before the prefix', 'lib/a.ts', '(lib/)'],
+    ['a deeper prefix maps a deeper file', 'src/lib/deep/a.ts', 'src/lib/deep/'],
+    ['a single-component file via `name/`', 'Makefile', 'the Makefile/ entry'],
+    ['a single-component file via backticks', 'Makefile', 'the `Makefile` entry'],
+  ];
+  for (const [label, file, text] of mapped) {
+    test(`mapped: ${label}`, () => {
+      assert.deepStrictEqual(edited(file, text), [{ category: 'modified', path: file }]);
+    });
+  }
+
+  const unmapped = [
+    ['`api` is not mapped by the word capital', 'api/x.js', 'the capital city'],
+    ['`api` is not mapped by the word therapist', 'api/x.js', 'a therapist'],
+    ['`lib` is not mapped by the word library', 'lib/a.ts', 'the library of things'],
+    ['`lib` is not mapped by `sublib`', 'lib/a.ts', 'the sublib module'],
+    ['`app/lib` is not mapped by `applib`', 'app/lib/a.ts', 'the applib module'],
+    ['`lib` is not mapped by `lib2`', 'lib/a.ts', 'see lib2 here'],
+    ['`lib` is not mapped by `lib_old`', 'lib/a.ts', 'see lib_old here'],
+    ['`lib` is not mapped by `lib-old`', 'lib/a.ts', 'see lib-old here'],
+    ['a dot before the prefix continues a name', 'lib/a.ts', 'see x.lib here'],
+    ['a digit before the prefix continues a name', 'lib/a.ts', 'see 2lib here'],
+    ['an underscore before the prefix continues a name', 'lib/a.ts', 'see my_lib here'],
+    ['a dash before the prefix continues a name', 'lib/a.ts', 'see my-lib here'],
+    ['a root-level file is not mapped by a longer word', 'Makefile', 'the Makefiles/ entry'],
+  ];
+  for (const [label, file, text] of unmapped) {
+    test(`unmapped: ${label}`, () => {
+      assert.deepStrictEqual(edited(file, text), []);
+    });
+  }
+
+  test('an added file under a word-only mention is still new_dir', () => {
+    const r = run({ addedFiles: ['api/x.js'], documents: structureOnly('the capital city') });
+    assert.deepStrictEqual(r.elements, [{ category: 'new_dir', path: 'api/x.js' }]);
+  });
+
+  test('a regex-special prefix is matched literally', () => {
+    const r = run({ modifiedFiles: ['a.b/x.js'], documents: structureOnly('the a-b/ directory and aXb/') });
+    assert.deepStrictEqual(r.elements, []);
+    const r2 = run({ modifiedFiles: ['a.b/x.js'], documents: structureOnly('the `a.b/` directory') });
+    assert.deepStrictEqual(r2.elements, [{ category: 'modified', path: 'a.b/x.js' }]);
+  });
+
+  test('a corpus of 200000 near-miss occurrences is scanned to a definite answer', () => {
+    const r = run({ modifiedFiles: ['lib/a.ts'], documents: structureOnly('lib'.repeat(200000)) });
+    assert.deepStrictEqual(r.elements, []);
+  });
+});
+
+describe('withheld-path accounting is neutral about why a path was withheld (#5134 review)', () => {
+  const structure = '# Structure\n\n- `docs/`\n';
+
+  test('ordinary modified files inside a mapped directory are elements and withheld, described neutrally', () => {
+    const r = run({
+      modifiedFiles: ['docs/My Notes.md', 'docs/设计.md', 'docs/plain.md'],
+      documents: docs(structure),
+    });
+    assert.deepStrictEqual(r.elements.map((e) => e.path), ['docs/My Notes.md', 'docs/plain.md', 'docs/设计.md']);
+    assert.deepStrictEqual(r.withheldPaths, ['docs/My Notes.md', 'docs/设计.md']);
+    assert.deepStrictEqual(r.affectedPaths, ['docs']);
+    assert.ok(
+      r.message.split('\n').includes(`2 ${WITHHELD_STATEMENT}`),
+      `the withheld line is exactly the neutral wording: ${JSON.stringify(r.message)}`,
+    );
+    assert.ok(!r.message.includes('My Notes') && !r.message.includes('设计'));
+  });
+});
+
+describe('chooseAffectedPaths and sanitizePaths — never produce the whole repo', () => {
+  test('a path with an empty first component yields no affected path', () => {
+    assert.deepStrictEqual(chooseAffectedPaths(['/x']), []);
+    assert.deepStrictEqual(chooseAffectedPaths(['/x', 'src/a.ts']), ['src']);
+    assert.deepStrictEqual(chooseAffectedPaths(['/x/apps/y', 'apps/web/z.ts']), ['apps/web']);
+  });
+
+  for (const action of ['warn', 'auto-remap']) {
+    test(`a run whose only path is absolute spawns no mapper and lists no empty --paths (${action})`, () => {
+      const r = run({ addedFiles: ['/x/a.js'], documents: docs('# nothing'), action });
+      assert.strictEqual(r.actionRequired, true);
+      assert.deepStrictEqual(r.affectedPaths, []);
+      assert.strictEqual(r.spawnMapper, false);
+      assert.deepStrictEqual(r.withheldPaths, ['/x/a.js']);
+    });
+  }
+
+  const rejected = ['.', './', './src', 'src/.', 'src/./lib', 'a/./b/.', '..', '.hidden/../x', '...x'];
+  for (const p of rejected) {
+    test(`sanitizePaths rejects ${JSON.stringify(p)}`, () => {
+      assert.deepStrictEqual(sanitizePaths([p]), []);
+    });
+  }
+
+  const kept = ['.github', '.github/workflows', 'src/.hidden', 'a.b', 'src'];
+  for (const p of kept) {
+    test(`sanitizePaths keeps ${JSON.stringify(p)}`, () => {
+      assert.deepStrictEqual(sanitizePaths([p]), [p]);
+    });
+  }
+
+  test('a `.` root file can never become `--paths .`', () => {
+    const r = run({ addedFiles: ['.'], documents: docs('# nothing') });
+    assert.deepStrictEqual(r.affectedPaths, []);
+    assert.doesNotMatch(r.message, /--paths\s+\./);
+  });
+});
+
+describe('verify codebase-drift CLI — display safety and document reads (#5134 review)', () => {
+  let tmp;
+  let codebaseDir;
+  const win = process.platform === 'win32';
+
+  beforeEach(() => {
+    tmp = createTempGitProject('gsd-drift-5134r-');
+    codebaseDir = path.join(tmp, '.planning', 'codebase');
+    fs.mkdirSync(codebaseDir, { recursive: true });
+  });
+  afterEach(() => cleanup(tmp));
+
+  function write(rel, text) {
+    const abs = path.join(tmp, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, text);
+  }
+
+  function commitAll(message) {
+    git(tmp, 'add', '-A');
+    git(tmp, 'commit', '-m', message);
+  }
+
+  function mapCodebase(structureBody, otherDocs = SEVEN_DOCS.filter((d) => d !== 'STRUCTURE.md')) {
+    const structure = path.join(codebaseDir, 'STRUCTURE.md');
+    fs.writeFileSync(structure, structureBody);
+    for (const doc of otherDocs) {
+      fs.writeFileSync(path.join(codebaseDir, doc), `# ${doc}\n\nBody.\n`);
+    }
+    writeMappedCommit(structure, git(tmp, 'rev-parse', 'HEAD'), '2026-09-30');
+    commitAll('map codebase');
+  }
+
+  function configure(workflow) {
+    write('.planning/config.json', JSON.stringify({ workflow }, null, 2));
+  }
+
+  function drift() {
+    const r = runGsdTools(['verify', 'codebase-drift'], tmp);
+    assert.strictEqual(r.success, true, r.error);
+    return { data: JSON.parse(r.output), raw: r.output };
+  }
+
+  // Grows `file` to exactly `size` bytes.
+  function padTo(file, size) {
+    const current = fs.statSync(file).size;
+    assert.ok(current <= size, 'precondition: file not already larger than the target');
+    fs.appendFileSync(file, Buffer.alloc(size - current, 0x78));
+    assert.strictEqual(fs.statSync(file).size, size);
+  }
+
+  const LIMIT = 1048576;
+
+  // A stamped map with one edited mapped file past the stamp; `arrange`
+  // reshapes the documents in the working tree before the check runs.
+  function mappedRepo(arrange) {
+    write('src/f0.js', 'one\n');
+    commitAll('seed');
+    mapCodebase('# Codebase Structure\n\n- `src/`\n');
+    write('src/f0.js', 'two\n');
+    commitAll('edit');
+    arrange();
+    configure({ drift_threshold: 1 });
+  }
+
+  test('STRUCTURE.md at exactly 1048576 bytes is read', () => {
+    mappedRepo(() => padTo(path.join(codebaseDir, 'STRUCTURE.md'), LIMIT));
+    const { data } = drift();
+    assert.strictEqual(data.skipped, false);
+    assert.deepStrictEqual(data.elements, [{ category: 'modified', path: 'src/f0.js' }]);
+  });
+
+  test('STRUCTURE.md at 1048577 bytes is skipped, naming the size limit', () => {
+    mappedRepo(() => padTo(path.join(codebaseDir, 'STRUCTURE.md'), LIMIT + 1));
+    const { data } = drift();
+    assert.strictEqual(data.skipped, true);
+    assert.strictEqual(data.reason, 'cannot-read-structure-md: larger than 1048576 bytes');
+    assert.strictEqual(data.action_required, false);
+    assert.strictEqual(data.block, false);
+    assert.deepStrictEqual(data.elements, []);
+  });
+
+  test('STRUCTURE.md that is a directory is skipped as not a regular file', () => {
+    mappedRepo(() => {
+      fs.unlinkSync(path.join(codebaseDir, 'STRUCTURE.md'));
+      fs.mkdirSync(path.join(codebaseDir, 'STRUCTURE.md'));
+    });
+    const { data } = drift();
+    assert.strictEqual(data.skipped, true);
+    assert.strictEqual(data.reason, 'cannot-read-structure-md: not a regular file');
+  });
+
+  test('a missing STRUCTURE.md keeps its own skip reason', () => {
+    mappedRepo(() => fs.unlinkSync(path.join(codebaseDir, 'STRUCTURE.md')));
+    const { data } = drift();
+    assert.strictEqual(data.skipped, true);
+    assert.strictEqual(data.reason, 'no-structure-md');
+  });
+
+  test('another document at exactly 1048576 bytes is read', () => {
+    mappedRepo(() => padTo(path.join(codebaseDir, 'STACK.md'), LIMIT));
+    const { data } = drift();
+    assert.ok(data.documents_read.includes('STACK.md'));
+    assert.deepStrictEqual(data.documents_unreadable, []);
+  });
+
+  test('another document at 1048577 bytes is named unreadable and the result is still computed', () => {
+    mappedRepo(() => padTo(path.join(codebaseDir, 'STACK.md'), LIMIT + 1));
+    const { data } = drift();
+    assert.strictEqual(data.skipped, false);
+    assert.deepStrictEqual(data.documents_unreadable, ['STACK.md']);
+    assert.ok(!data.documents_read.includes('STACK.md'));
+    assert.deepStrictEqual(data.elements, [{ category: 'modified', path: 'src/f0.js' }]);
+  });
+
+  test('another document that is a directory is named unreadable; an absent one is silently omitted', () => {
+    mappedRepo(() => {
+      fs.unlinkSync(path.join(codebaseDir, 'STACK.md'));
+      fs.mkdirSync(path.join(codebaseDir, 'STACK.md'));
+      fs.unlinkSync(path.join(codebaseDir, 'CONCERNS.md'));
+    });
+    const { data } = drift();
+    assert.deepStrictEqual(data.documents_unreadable, ['STACK.md']);
+    assert.ok(!data.documents_read.includes('CONCERNS.md'));
+  });
+
+  test('a document that is a symlink to a regular file is followed and read', { skip: win }, () => {
+    mappedRepo(() => {
+      fs.writeFileSync(path.join(tmp, 'real-conventions.md'), '# Conventions\n\n`tools/`\n');
+      fs.unlinkSync(path.join(codebaseDir, 'CONVENTIONS.md'));
+      fs.symlinkSync(path.join(tmp, 'real-conventions.md'), path.join(codebaseDir, 'CONVENTIONS.md'));
+    });
+    const { data } = drift();
+    assert.ok(data.documents_read.includes('CONVENTIONS.md'));
+    assert.deepStrictEqual(data.documents_unreadable, []);
+  });
+
+  test('a document that is a symlink to a directory is named unreadable', { skip: win }, () => {
+    mappedRepo(() => {
+      fs.unlinkSync(path.join(codebaseDir, 'CONVENTIONS.md'));
+      fs.symlinkSync(tmp, path.join(codebaseDir, 'CONVENTIONS.md'));
+    });
+    const { data } = drift();
+    assert.deepStrictEqual(data.documents_unreadable, ['CONVENTIONS.md']);
+  });
+
+  test('control and bidi characters in a path are escaped in elements and withheld_paths, never raw in the output', { skip: win }, () => {
+    write('src/f0.js', 'one\n');
+    commitAll('seed');
+    mapCodebase('# Codebase Structure\n\n- `src/`\n');
+    configure({ drift_threshold: 1 });
+    write('ev\u001b[2Jil\u202efdp.js', 'x\n');
+    commitAll('add a hostile top-level file');
+
+    const { data, raw } = drift();
+    const shown = 'ev\\u001b[2Jil\\u202efdp.js';
+    assert.deepStrictEqual(data.elements, [{ category: 'new_dir', path: shown }]);
+    assert.deepStrictEqual(data.withheld_paths, [shown]);
+    assert.strictEqual(data.withheld_count, 1);
+    assert.deepStrictEqual(data.affected_paths, []);
+    assert.ok(!raw.includes('\u001b'), 'no raw ESC in the CLI output');
+    assert.ok(!raw.includes('\u202e'), 'no raw bidi override in the CLI output');
+  });
+
+  test('a path over 200 code units is cut with an ellipsis in elements', { skip: win }, () => {
+    write('src/f0.js', 'one\n');
+    commitAll('seed');
+    mapCodebase('# Codebase Structure\n\n- `src/`\n');
+    configure({ drift_threshold: 1 });
+    write('n'.repeat(210) + '.js', 'x\n');
+    commitAll('add a long name');
+    const { data } = drift();
+    assert.deepStrictEqual(data.elements, [{ category: 'new_dir', path: 'n'.repeat(199) + '…' }]);
+  });
+
+  for (const total of [49, 50, 51]) {
+    test(`withheld_paths is capped at 50 with the true total in withheld_count (${total} withheld)`, () => {
+      write('src/f0.js', 'one\n');
+      commitAll('seed');
+      mapCodebase('# Codebase Structure\n\n- `src/`\n');
+      configure({ drift_threshold: 1 });
+      const names = Array.from({ length: total }, (_, i) => `w ${String(i).padStart(2, '0')}.js`);
+      for (const n of names) write(n, 'x\n');
+      commitAll('add withheld files');
+
+      const { data } = drift();
+      assert.strictEqual(data.withheld_count, total);
+      assert.deepStrictEqual(data.withheld_paths, names.slice(0, Math.min(total, 50)));
+      assert.strictEqual(data.elements.length, total, 'elements are not capped');
+    });
+  }
+
+  test('withheld_count is 0 and withheld_paths empty when nothing is withheld', () => {
+    write('src/f0.js', 'one\n');
+    commitAll('seed');
+    mapCodebase('# Codebase Structure\n\n- `src/`\n');
+    write('src/f0.js', 'two\n');
+    commitAll('edit');
+    configure({ drift_threshold: 1 });
+    const { data } = drift();
+    assert.strictEqual(data.withheld_count, 0);
+    assert.deepStrictEqual(data.withheld_paths, []);
+  });
+
+  test('a mapped file that becomes a symlink (typechange) is a modified element', { skip: win }, () => {
+    for (let i = 0; i < 3; i++) write(`src/f${i}.js`, 'one\n');
+    commitAll('seed');
+    mapCodebase('# Codebase Structure\n\n- `src/`\n');
+    const base = git(tmp, 'rev-parse', 'HEAD');
+    for (let i = 0; i < 3; i++) {
+      fs.unlinkSync(path.join(tmp, `src/f${i}.js`));
+      fs.symlinkSync('elsewhere.js', path.join(tmp, `src/f${i}.js`));
+    }
+    commitAll('turn the files into symlinks');
+    const status = git(tmp, 'diff', '--name-status', base, 'HEAD');
+    assert.match(status, /^T\tsrc\/f0\.js$/m, `precondition: git reported typechange lines, got ${JSON.stringify(status)}`);
+
+    const { data } = drift();
+    assert.strictEqual(data.action_required, true);
+    assert.deepStrictEqual(data.elements, [
+      { category: 'modified', path: 'src/f0.js' },
+      { category: 'modified', path: 'src/f1.js' },
+      { category: 'modified', path: 'src/f2.js' },
+    ]);
   });
 });

@@ -55,7 +55,7 @@ import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const DRIFT_CATEGORIES = Object.freeze(['new_dir', 'barrel', 'migration', 'route', 'modified', 'deleted']);
+const DRIFT_CATEGORIES = Object.freeze(['new_dir', 'barrel', 'migration', 'route', 'modified', 'deleted'] as const);
 
 // Category priority when a single file matches multiple rules.
 // Higher index = more specific = wins.
@@ -89,7 +89,7 @@ const SAFE_PATH_RE = /^(?!.*\.\.)(?:[A-Za-z0-9_.][A-Za-z0-9_.\-]*)(?:\/[A-Za-z0-
 
 // ─── Classification ──────────────────────────────────────────────────────────
 
-type DriftCategory = 'barrel' | 'migration' | 'route' | 'new_dir';
+type DriftCategory = (typeof DRIFT_CATEGORIES)[number];
 
 /**
  * Classify a single file path into a drift category or null.
@@ -103,27 +103,95 @@ function classifyFile(file: unknown): DriftCategory | null {
   return null;
 }
 
+// Characters that continue a path component: a prefix occurrence directly
+// preceded by one of `BEFORE_CONT` or followed by one of `AFTER_CONT` is a
+// fragment of a longer word or name, not the prefix itself.
+const BEFORE_CONT_RE = /[A-Za-z0-9_.-]/;
+const AFTER_CONT_RE = /[A-Za-z0-9_-]/;
+
 /**
- * True iff any prefix of `file` (dir1, dir1/dir2, …) appears as a substring
- * of `corpus` (the provided generated documents joined). Used to decide
- * whether a file is in "mapped territory".
+ * True iff `needle` occurs in `corpus` at path-component boundaries: the
+ * character before it (or the start) is not a path-component character, and
+ * the character after it (or the end) is not one either. `.` may follow (a
+ * sentence end) but may not precede (`x.src`). Linear scan, no regex built
+ * from `needle`.
+ */
+function occursAtBoundary(corpus: string, needle: string): boolean {
+  if (!needle) return false;
+  let from = 0;
+  for (;;) {
+    const at = corpus.indexOf(needle, from);
+    if (at === -1) return false;
+    const end = at + needle.length;
+    const beforeOk = at === 0 || !BEFORE_CONT_RE.test(corpus[at - 1]);
+    const afterOk = end >= corpus.length || !AFTER_CONT_RE.test(corpus[end]);
+    if (beforeOk && afterOk) return true;
+    from = at + 1;
+  }
+}
+
+/**
+ * True iff any prefix of `file` (dir1, dir1/dir2, …) appears in `corpus` (the
+ * provided generated documents joined) at path-component boundaries. Used to
+ * decide whether a file is in "mapped territory".
  *
- * Matching is deliberately substring-based — the documents are free-form
- * markdown, not a structured manifest. If the map mentions `src/lib/` the
- * check `corpus.includes('src/lib')` holds.
+ * The documents are free-form markdown, not a structured manifest, so the
+ * match is textual — but it is component-aware: `src/lib/` and `` `src/lib` ``
+ * map `src/lib`; the word `library` does not map `lib` and `capital` does not
+ * map `api`. The `name/` and `` `name` `` forms of the top-level directory
+ * fall out of the same boundary rule.
  */
 function isPathMapped(file: string, corpus: string): boolean {
   const norm = posixNormalize(file);
   const parts = norm.split('/');
-  // Check prefixes from longest to shortest; any hit means "mapped".
+  // A path with an empty component (`/x`, `a//b`) has no mappable prefix at
+  // that depth; never search for the empty string.
   for (let i = parts.length - 1; i >= 1; i--) {
-    const prefix = parts.slice(0, i).join('/');
-    if (corpus.includes(prefix)) return true;
+    const prefixParts = parts.slice(0, i);
+    if (prefixParts.some((part) => part === '')) continue;
+    if (occursAtBoundary(corpus, prefixParts.join('/'))) return true;
   }
-  // Finally, if even the top-level dir is mentioned, count as mapped.
-  if (parts.length > 0 && corpus.includes(parts[0] + '/')) return true;
-  if (parts.length > 0 && corpus.includes('`' + parts[0] + '`')) return true;
+  // A single-component path (a root-level file) has no directory prefix; the
+  // documented forms name the component itself as a directory.
+  if (parts.length === 1 && parts[0] !== '') {
+    if (occursAtBoundary(corpus, parts[0] + '/')) return true;
+    if (corpus.includes('`' + parts[0] + '`')) return true;
+  }
   return false;
+}
+
+// Characters that would let a path rewrite a terminal or the reader's view of
+// it: C0 controls, DEL, C1 controls, bidi controls, zero-width characters and
+// the line/paragraph separators.
+const DISPLAY_UNSAFE_RE =
+  /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060\u2066-\u2069\ufeff]/;
+
+const DISPLAY_MAX_UNITS = 200;
+
+/**
+ * Render an attacker-controlled path for a display surface. Display-unsafe
+ * characters become `\uXXXX` (lowercase hex); every other character —
+ * including ordinary non-ASCII — is left alone. A result longer than 200
+ * UTF-16 code units is cut on a code-point (and escape) boundary so that the
+ * result, with its trailing `…`, is exactly 200 code units or fewer.
+ */
+function displaySafePath(p: string): string {
+  const pieces: string[] = [];
+  let total = 0;
+  for (const ch of String(p)) {
+    const piece = DISPLAY_UNSAFE_RE.test(ch)
+      ? '\\u' + (ch.codePointAt(0) as number).toString(16).padStart(4, '0')
+      : ch;
+    pieces.push(piece);
+    total += piece.length;
+  }
+  if (total <= DISPLAY_MAX_UNITS) return pieces.join('');
+  let out = '';
+  for (const piece of pieces) {
+    if (out.length + piece.length > DISPLAY_MAX_UNITS - 1) break;
+    out += piece;
+  }
+  return out + '…';
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -354,13 +422,15 @@ function buildMessage(
   lines.push('');
   // Dropped paths are counted, never named: the names are data in `withheldPaths`.
   if (withheldCount > 0) {
-    lines.push(`${withheldCount} path(s) withheld: absolute, traversal or shell-metacharacter paths`);
+    lines.push(
+      `${withheldCount} path(s) withheld: not passed to the mapper or listed (absolute, traversal, whitespace, non-ASCII or shell-metacharacter characters)`,
+    );
   }
-  if (affectedPaths.length === 0) {
-    // Nothing safe to scope a refresh to: an empty `--paths` would remap the whole repo (#3418).
-  } else if (action === 'auto-remap') {
+  // Nothing safe to scope a refresh to (empty `affectedPaths`): an empty
+  // `--paths` would remap the whole repo (#3418), so no command line is emitted.
+  if (affectedPaths.length > 0 && action === 'auto-remap') {
     lines.push(`Auto-remap scheduled for paths: ${affectedPaths.join(', ')}`);
-  } else {
+  } else if (affectedPaths.length > 0) {
     // drift.cts is a pure library — it must never read env/config. The
     // caller (verify.cmdVerifyCodebaseDrift) resolves the runtime once and
     // passes it in via input.runtime so emitted commands match the project
@@ -388,6 +458,7 @@ function chooseAffectedPaths(paths: string[]): string[] {
     const parts = file.split('/');
     if (parts.length === 0) continue;
     const top = parts[0];
+    if (!top) continue; // an empty first component (`/x`) names no directory
     if ((top === 'apps' || top === 'packages') && parts.length >= 2) {
       out.add(`${top}/${parts[1]}`);
     } else {
@@ -409,6 +480,8 @@ function sanitizePaths(paths: unknown): string[] {
     if (typeof p !== 'string') continue;
     if (p.startsWith('/')) continue;
     if (!SAFE_PATH_RE.test(p)) continue;
+    // A `.` component would make `--paths .` (the whole repo) producible (#3418).
+    if (p.split('/').some((component) => component === '.')) continue;
     out.push(p);
   }
   return out;
@@ -492,6 +565,7 @@ export = {
   detectDrift,
   chooseAffectedPaths,
   sanitizePaths,
+  displaySafePath,
   readMappedCommit,
   writeMappedCommit,
   // Exposed for the CLI layer to reuse the same parser.

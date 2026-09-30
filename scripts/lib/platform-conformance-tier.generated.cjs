@@ -74,6 +74,7 @@ module.exports = {
   "tests/dispatch-identity.test.cjs",
   "tests/dispatcher.test.cjs",
   "tests/drift-detection.test.cjs",
+  "tests/drift-whole-change-set.test.cjs",
   "tests/effort-surface-axis.test.cjs",
   "tests/effort-sync-installed-runtime.test.cjs",
   "tests/emitted-ack-trailer.test.cjs",

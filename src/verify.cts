@@ -2478,23 +2478,33 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
   try {
     const codebaseDir = path.join(planningDir(cwd), 'codebase');
     const structurePath = path.join(codebaseDir, 'STRUCTURE.md');
-    if (!fs.existsSync(structurePath)) {
-      emit({
-        // Uniform gate contract: block = action_required (false when skipped).
-        block: false,
-        skipped: true,
-        reason: 'no-structure-md',
-        action_required: false,
-        directive: 'none',
-        elements: [],
-      });
-      return;
-    }
+    // A generated document is read only when it is a regular file (symlinks
+    // followed) no larger than this: a FIFO would block the gate forever and a
+    // huge file would exhaust memory.
+    const MAX_DOCUMENT_BYTES = 1048576;
+    const readDocument = (file: string): string => {
+      const st = fs.statSync(file);
+      if (!st.isFile()) throw new Error('not a regular file');
+      if (st.size > MAX_DOCUMENT_BYTES) throw new Error(`larger than ${MAX_DOCUMENT_BYTES} bytes`);
+      return fs.readFileSync(file, 'utf-8');
+    };
 
     let structureMd: string;
     try {
-      structureMd = fs.readFileSync(structurePath, 'utf-8');
+      structureMd = readDocument(structurePath);
     } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+        emit({
+          // Uniform gate contract: block = action_required (false when skipped).
+          block: false,
+          skipped: true,
+          reason: 'no-structure-md',
+          action_required: false,
+          directive: 'none',
+          elements: [],
+        });
+        return;
+      }
       emit({
         block: false,
         skipped: true,
@@ -2615,18 +2625,18 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
       // decoded: R/C lines carry old AND new paths, either may be quoted.
       // A rename is a deletion of the old path plus an addition of the new
       // one; a copy leaves its source in place and adds only the new path.
-      const first = decodeGitQuotedPath(m[2]);
-      const second = m[3] ? decodeGitQuotedPath(m[3]) : first;
+      const oldPath = decodeGitQuotedPath(m[2]);
+      const newPath = m[3] ? decodeGitQuotedPath(m[3]) : oldPath;
       const put = (file: string, into: string[]) => {
         if (!isPlanningArtifact(file)) into.push(file);
       };
       if (status === 'R') {
-        put(first, deleted);
-        put(second, added);
-      } else if (status === 'C') put(second, added);
-      else if (status === 'A') put(second, added);
-      else if (status === 'M') put(second, modified);
-      else if (status === 'D') put(second, deleted);
+        put(oldPath, deleted);
+        put(newPath, added);
+      } else if (status === 'C') put(newPath, added);
+      else if (status === 'A') put(newPath, added);
+      else if (status === 'M' || status === 'T') put(newPath, modified);
+      else if (status === 'D') put(newPath, deleted);
     }
 
     // Every generated document is territory the map describes, so all seven are
@@ -2644,7 +2654,7 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
         continue;
       }
       try {
-        documents[name] = fs.readFileSync(path.join(codebaseDir, name), 'utf-8');
+        documents[name] = readDocument(path.join(codebaseDir, name));
         documentsRead.push(name);
       } catch (err) {
         if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') documentsUnreadable.push(name);
@@ -2680,6 +2690,13 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
     });
 
     const actionRequired = !!driftResult['actionRequired'];
+    // Paths are attacker-controlled (they come from git); the raw values stay
+    // in the library result, the CLI JSON carries display-safe renderings and
+    // a bounded withheld list with its true size alongside.
+    const display = drift['displaySafePath'] as (p: string) => string;
+    const WITHHELD_LIST_CAP = 50;
+    const withheldAll = (driftResult['withheldPaths'] as string[] | undefined) || [];
+    const elementsRaw = (driftResult['elements'] as { category: string; path: string }[] | undefined) || [];
     emit({
       // Uniform gate contract: block = action_required.
       block: actionRequired,
@@ -2689,10 +2706,11 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
       directive: driftResult['directive'],
       spawn_mapper: !!driftResult['spawnMapper'],
       affected_paths: driftResult['affectedPaths'] || [],
-      withheld_paths: driftResult['withheldPaths'] || [],
+      withheld_paths: withheldAll.slice(0, WITHHELD_LIST_CAP).map((p) => display(p)),
+      withheld_count: withheldAll.length,
       documents_read: documentsRead,
       documents_unreadable: documentsUnreadable,
-      elements: driftResult['elements'] || [],
+      elements: elementsRaw.map((e) => ({ category: e.category, path: display(e.path) })),
       threshold,
       action,
       last_mapped_commit: lastMapped,
