@@ -6,7 +6,7 @@
 - **Absorbs:** [#4222](https://github.com/open-gsd/gsd-core/issues/4222), [#4561](https://github.com/open-gsd/gsd-core/issues/4561), [#4594](https://github.com/open-gsd/gsd-core/issues/4594) — three `confirmed-bug` issues that are the same missing owner reported at two ends of one wire
 - **Framed by:** [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) (host-integration interface — agent dispatch is interface point 2)
 - **Pattern copied from:** [ADR-2121](2121-phase-identifier-parsing-consolidation.md) (phase-identifier consolidation: seam + migration + anti-divergence guard). This ADR reuses its phase-token grammar and its drift-lint shape deliberately.
-- **Amended:** 2026-09-29 by Phase 2 ([#4904](https://github.com/open-gsd/gsd-core/issues/4904)) — Decision 2 defines the `IsolationDecision`'s provenance field, `decided_by` (`resolver` | `caller`, absent reads as `caller`), and states which decisions a re-query holds. Without it, Decision 2's hold and #4232's re-derivation cannot both be true. See *The record states who decided it* under Decision 2.
+- **Amended:** 2026-09-29 by Phase 2 ([#4904](https://github.com/open-gsd/gsd-core/issues/4904)) — Decision 2 defines the `IsolationDecision`'s provenance field, `decided_by` (`resolver` | `caller`, absent reads as `caller`), and states which decisions a re-query holds. Without it, Decision 2's hold and #4232's re-derivation cannot both be true. See *The record states who decided it* under Decision 2. Decision 3 gains the workflow-shell validity lists as a second class of pinned copy.
 - **Scope note:** unlike ADR-2121, this ADR does **not** land as a code-free Phase 0. It ships alongside Phase 1's implementation because the epic's phase sub-issues could not be created in the session that executed it; the decisions below were nonetheless fixed before that implementation was written, and Phases 2 and 3 execute against this file.
 
 ## Context
@@ -116,8 +116,8 @@ file (`decidedBy` once read), with exactly two values:
 
 | `decided_by` | Written when | A later plain re-query |
 |---|---|---|
-| `resolver` | the resolver derived the value itself, from state it re-reads on every call — the #3737 opt-out, #4232's base check | re-evaluates it; the record is not held |
-| `caller` | a producer recorded it with `--force-isolation`, from a call site whose reasoning the resolver cannot reconstruct — the three producers in the table above | holds it, when the record is fresh, well-formed, `none`, and in scope for the query |
+| `resolver` | the resolver derived the value itself, from state it re-reads on every call — the #3737 opt-out, #4232's base check — including when either overrules a `--force-isolation` value | re-evaluates it; the record is not held |
+| `caller` | a producer recorded it with `--force-isolation` (or `record-dispatch-isolation`), from a call site whose reasoning the resolver cannot reconstruct — the three producers in the table above — and the recorded value is the one it forced | holds it, when the record is fresh, well-formed, `none`, and in scope for the query |
 
 **Provenance names the writer, not the kind of degrade.** `executor-isolation-dispatch.md` ends by
 forcing the shell's final value (`--force-isolation "$ISOLATION"`), so a base-check `none` that
@@ -154,6 +154,12 @@ This matters more than it looks. A drifted grammar mirror fails as a **non-match
 throws, no test that only feeds the old shape notices, and the symptom is a guard that
 quietly stops recognizing valid input. That is the failure mode that produced #4594 and it
 is invisible without a pin.
+
+The same holds outside `hooks/lib/`. The dispatch sites and diagnostics validate the resolver's
+output in shell (`case "$ISOLATION" in harness-worktree|orchestrator-worktree|none) ;;`), and shell
+inside workflow markdown cannot import the owner at all. Each such list is pinned to the owner by a
+parity test that discovers the lists by scanning `gsd-core/**/*.md`, so a new copy is pinned the day
+it lands.
 
 A mirror's justification is part of the contract: **do not "clean up" a pinned mirror
 without replacing the reason it exists.**
