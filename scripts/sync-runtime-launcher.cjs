@@ -273,6 +273,36 @@ function insertPreamble(lines, preamble) {
 }
 
 /**
+ * Index of the first line of the exact canonical preamble inside `lines`, or -1.
+ */
+function findPreambleStart(lines, preamble) {
+  for (let k = 0; k + preamble.length <= lines.length; k++) {
+    if (preamble.every((l, p) => lines[k + p] === l)) return k;
+  }
+  return -1;
+}
+
+/**
+ * Place the preamble in a block that ALREADY carried it. A block that opens
+ * with a guard (a status check that must run before any launcher resolution,
+ * e.g. execute-phase/steps/code-review-disposition.md, #3861) keeps the preamble
+ * BEHIND that guard: hoisting it to the top would put the resolver ahead of the
+ * guard and change what the guard-only extraction in the tests runs. A block
+ * whose preamble already sits at the top (after blank lines), or that had none,
+ * takes the ordinary top insertion.
+ *
+ * The position is kept in STRIPPED coordinates: the lines before the preamble
+ * are stripped on their own and their length is the insertion point.
+ */
+function insertPreambleKeepingGuard(original, stripped, preamble) {
+  const k = findPreambleStart(original, preamble);
+  const firstContent = original.findIndex((l) => l.trim() !== '');
+  if (k <= firstContent) return insertPreamble(stripped, preamble);
+  const at = stripAndReplace(original.slice(0, k), preamble).length;
+  return [...stripped.slice(0, at), ...preamble, ...stripped.slice(at)];
+}
+
+/**
  * Transform a single markdown file's content.
  * Returns new content string, or null if no changes needed.
  *
@@ -366,7 +396,9 @@ function transformFile(content, preamble) {
   const delegates = delegatesToResolverReference(content);
   const finalBlocks = strippedBlocks.map((stripped, bi) => {
     if (!delegates && bi === preambleTargetIdx) {
-      return insertPreamble(stripped, preamble);
+      const range = shellBlockRanges[bi];
+      const original = allLines.slice(range.contentStart, range.contentEnd);
+      return insertPreambleKeepingGuard(original, stripped, preamble);
     }
     return stripped;
   });
