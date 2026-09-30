@@ -169,6 +169,10 @@ function describeRawStatus(raw: unknown): string {
     const last = rendered.charCodeAt(cut - 1);
     if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
   }
+  // JSON also emits two-character escapes (`\n`, `\t`, `\"`, `\\`): an odd
+  // trailing run of backslashes is the first half of one, so drop it too.
+  const trailingBackslashes = /\\+$/.exec(rendered.slice(0, cut));
+  if (trailingBackslashes && trailingBackslashes[0].length % 2 === 1) cut -= 1;
   return `${rendered.slice(0, cut)}…(${rendered.length - cut} more)`;
 }
 
