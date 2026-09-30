@@ -1,7 +1,3 @@
-// allow-test-rule: source-text-is-the-product
-// Command .md files are the text the runtime loads; testing their structure
-// tests the deployed contract (ADR-4780).
-
 /**
  * #4780 — every argument-taking command/skill template must carry a standing,
  * delimited `<arguments>$ARGUMENTS</arguments>` block so the model can tell the
