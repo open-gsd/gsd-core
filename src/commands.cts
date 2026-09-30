@@ -89,7 +89,7 @@ import type { PhaseStatus } from './phase-status.cjs';
 // #5118: an aggregate over a refused verification report fails through the owner.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verificationMod = require('./verification.cjs');
-const { failOnVerificationStatusError } = verificationMod;
+const { failOnVerificationStatusError, firstStatusError } = verificationMod;
 
 /** The effort-sync line editors' fence reading: a block behind a preamble is still edited (#3706). */
 const EFFORT_SYNC_FENCE: LocateFrontmatterFenceOptions = Object.freeze({ allowPreamble: true });
@@ -3370,7 +3370,7 @@ function cmdProgressRender(cwd: string, format: string | undefined, raw: boolean
       // (root+nested, superseded-excluded, canonical pairing) from the
       // single owner (Phase Status Module, ADR-5057).
       const ps = phaseStatus(path.join(phasesDir, dir), { convention: phaseIdConvention });
-      if (ps.value.statusError && !statusError) statusError = ps.value.statusError;
+      statusError = firstStatusError(statusError, ps.value.statusError);
       const plans = ps.value.planCount;
       const summaries = ps.value.summaryCount;
 
@@ -3905,7 +3905,7 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
       // (root+nested, superseded-excluded, canonical pairing) from the
       // single owner (Phase Status Module, ADR-5057).
       const ps = phaseStatus(path.join(phasesDir, dir), { convention: phaseIdConvention });
-      if (ps.value.statusError && !statusError) statusError = ps.value.statusError;
+      statusError = firstStatusError(statusError, ps.value.statusError);
       const plans = ps.value.planCount;
       const summaries = ps.value.summaryCount;
 

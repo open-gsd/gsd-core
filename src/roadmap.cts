@@ -49,7 +49,7 @@ import frontmatter = require('./frontmatter.cjs');
 const { extractFrontmatter, frontmatterRegion, parseMustHavesBlock } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verificationMod = require('./verification.cjs');
-const { isPhaseComplete, failOnVerificationStatusError } = verificationMod;
+const { isPhaseComplete, failOnVerificationStatusError, firstStatusError } = verificationMod;
 // #4906 Phase 2 (#4917/ADR-4910): the PlanningDoc parse -> mutate -> serialize
 // seam, mirroring phase.cts's already-migrated `writePlansField` site.
 import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from './planning-document.cjs';
@@ -587,7 +587,7 @@ function collectAnalyzePhases(
       // bracket phase's verification report resolves and scopes like its
       // legacy twin (#612).
       const ps = phaseStatus(path.join(phasesDir, dirMatch), { convention });
-      if (ps.value.statusError && !statusError) statusError = ps.value.statusError;
+      statusError = firstStatusError(statusError, ps.value.statusError);
       diskStatus = toDiskStatus(ps.value.status, { hasResearch, hasContext });
     }
 
@@ -675,7 +675,7 @@ function collectAnalyzePhases(
       // #5060: route through the Phase Status Module's owner rather than the
       // fixed 'ok' sentinel this row used to emit.
       const tps = phaseStatus(path.join(phasesDir, dirMatchA), { convention });
-      if (tps.value.statusError && !statusError) statusError = tps.value.statusError;
+      statusError = firstStatusError(statusError, tps.value.statusError);
       tDiskStatus = toDiskStatus(tps.value.status, { hasResearch: tHasResearch, hasContext: tHasContext });
     }
     phases.push({
@@ -764,7 +764,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
       collected = fallbackCollection;
       phases = collected.phases;
       detailKeys = collected.detailKeys;
-      statusError = statusError ?? collected.statusError;
+      statusError = firstStatusError(statusError, collected.statusError);
       effectiveContent = fallbackContent;
     }
   }
@@ -874,7 +874,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
         contextScope = counts.scope;
         // #5060: same owner call as the heading branch above.
         const ps = phaseStatus(path.join(phasesDir, dirMatch), { convention });
-        if (ps.value.statusError && !statusError) statusError = ps.value.statusError;
+        statusError = firstStatusError(statusError, ps.value.statusError);
         diskStatus = toDiskStatus(ps.value.status, { hasResearch, hasContext });
       }
       phases.push({
