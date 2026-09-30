@@ -648,6 +648,7 @@ VERIFICATION_STATUS=$(gsd_run query verification.status "$PHASE_DIR") || { echo 
 VERIFICATION_STATUS_VALUE=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.status')
 VERIFICATION_ROUTE=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.route')
 NEXT_COMMAND=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.next_command')
+IMPLEMENTATION_COMPLETE=$(printf '%s' "$INIT" | jq -r '.phase_completion.implementation_complete // false')
 PHASE_VERIFICATION_STATUS="$VERIFICATION_STATUS_VALUE"
 if [ "$VERIFICATION_STATUS_VALUE" = "human_needed" ]; then
   UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}" --uat-only) || { echo "phase uat-passed failed — see the error above." >&2; exit 1; }
@@ -662,9 +663,15 @@ if [ "$VERIFICATION_STATUS_VALUE" = "human_needed" ]; then
 fi
 ```
 
-If `PHASE_VERIFICATION_STATUS` is not `passed` and `VERIFICATION_ROUTE` is `execute-phase` (a
-`stale` or `missing` report, #4682/#5118), run the owner's route — the ONE verification action — here;
-this workflow never rewrites VERIFICATION.md itself (its only write is the canonicalization, #4663).
+Run the owner's route — the ONE verification action — here when `VERIFICATION_ROUTE` is
+`execute-phase` AND the report can actually be regenerated: `PHASE_VERIFICATION_STATUS` is `stale`
+(#4682/#5118), or it is `missing` and `IMPLEMENTATION_COMPLETE` is `true` (every plan has a
+SUMMARY.md, so execute-phase would resume straight at the verification gates — the verify step
+never ran on an executed phase). A `missing` report on a phase that is NOT fully executed does NOT
+dispatch the step: the code review, regression gate and verifier have nothing complete to verify
+there, so fall through to the completion predicate below, which blocks with the owner's own
+`NEXT_COMMAND` (execute-phase) exactly as before #5118. This workflow never rewrites VERIFICATION.md
+itself (its only write is the canonicalization, #4663).
 Load the step's inputs through the SAME bundle execute-phase loads, then include the step:
 
 ```bash
