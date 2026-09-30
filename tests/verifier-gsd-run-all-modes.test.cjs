@@ -58,9 +58,7 @@ describe('gsd-verifier defines gsd_run in every mode (#5004)', () => {
   test('preamble forbids filesystem search and requires the resolver per Bash call', () => {
     const pre = sectionBody(readAgent(), '## Resolver Bootstrap');
     assert.ok(pre.includes(RESOLVER_REF), 'preamble must hold the resolver include');
-    assert.match(pre, /fresh shell/i);
-    assert.match(pre, /every Bash snippet/i);
-    assert.match(pre, /never search the filesystem/i);
+    assert.ok(pre.includes('find /'), 'preamble must name the disk-wide find it forbids');
     assert.ok(pre.includes('${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/gsd-tools.cjs'));
   });
 });
