@@ -42,7 +42,7 @@ const { isAuditItemAcknowledged, deriveUatGapSnapshotValue } = auditMod;
 // #5118: the verification-status owner's report reader and closed enum.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verificationMod = require('./verification.cjs');
-const { reportStatusOf, VERIFICATION_STATUS } = verificationMod;
+const { reportStatusOf, isReportContained, VERIFICATION_STATUS } = verificationMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import pristineBaseline = require('./pristine-baseline.cjs');
 const { gitExec } = pristineBaseline;
@@ -278,6 +278,9 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
     // for the same reason as the UAT loop above.
     for (const file of scopeToPhase(files.filter(f => f.includes('-VERIFICATION') && f.endsWith('.md')), dir)) {
       const verificationFilePath = path.join(phaseDir, file);
+      // #5118 security review (S1): containment BEFORE the read — an escaping
+      // report reads `missing` and never reaches `reportStatusOf`'s message.
+      if (!isReportContained(phaseDir, verificationFilePath)) continue;
       const content = readNormalizedDocument(verificationFilePath);
       const verFm = extractFrontmatter(content, verificationFilePath) as Record<string, unknown>;
       // #5118: the owner's report reader judges `status` (exact match, no case

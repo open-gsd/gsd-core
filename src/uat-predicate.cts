@@ -21,7 +21,7 @@ import markdownSectionizer = require('./markdown-sectionizer.cjs');
 const { stripFencedCode } = markdownSectionizer;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verification = require('./verification.cjs');
-const { readVerificationStatus, reportStatusOf, VERIFICATION_STATUS } = verification;
+const { readVerificationStatus, reportStatusOf, isReportContained, VERIFICATION_STATUS } = verification;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const { scopeToPhase } = phaseIdMod;
@@ -672,6 +672,10 @@ function evaluateUatPassed(
   for (const file of uatOnly ? [] : verFileNames) {
     verificationFiles.push(file);
     const verificationFilePath = path.join(phaseFullDir, file);
+    // #5118 security review (S1): containment BEFORE the read — a report whose
+    // real path escapes the planning root reads `missing` (no status counts,
+    // no blocker) and not a byte of it reaches any message.
+    if (!isReportContained(phaseFullDir, verificationFilePath)) continue;
     let raw = '';
     try {
       // #3078-CR MEDIUM: same read-boundary normalization as the UAT loop above.

@@ -187,7 +187,8 @@ class VerificationStatusError extends Error {
     super(
       `Verification report ${io.formatDiagnosticToken(file)} has status ${describeRawStatus(rawStatus)}, ` +
       `which is outside the closed set — accepted values: ${accepted.join(' | ')}. ` +
-      "Fix the report's frontmatter `status` (re-running the verifier regenerates it).",
+      `Recovery: set the report's frontmatter \`status:\` to one of ${accepted.join(' | ')}, ` +
+      "or delete the report and re-run the phase's verification.",
     );
     this.name = 'VerificationStatusError';
     this.rawStatus = rawStatus;
@@ -204,6 +205,18 @@ class VerificationStatusError extends Error {
  */
 function failOnVerificationStatusError(err: VerificationStatusError): never {
   return error(err.message, err.reason);
+}
+
+/**
+ * The carry rule every aggregate shares: the FIRST refused report is the one
+ * an aggregate fails with. Keeps `carried` once set; otherwise takes
+ * `candidate` (a later report never displaces an earlier one).
+ */
+function firstStatusError<E extends VerificationStatusError>(
+  carried: E | null | undefined,
+  candidate: E | null | undefined,
+): E | undefined {
+  return carried ?? candidate ?? undefined;
 }
 
 /**
@@ -1210,12 +1223,27 @@ function phaseDirNotFoundMessage(phaseDir: string): string {
 }
 
 /**
- * True when `filePath` resolves (symlinks followed) inside `phaseDir`'s own
- * resolved directory. Unresolvable → false (the caller reads `missing`).
+ * The PHASES ROOT a phase directory must live under: the parent of `phaseDir`
+ * in its own (unresolved) spelling. It is the fixed anchor of the containment
+ * check — a phase directory symlinked outside the project resolves outside, so
+ * containing a report against that directory's OWN realpath alone would admit
+ * the escape (both resolve outside). A phases root that is itself a symlinked
+ * per-scope store resolves consistently on both sides of the comparison.
+ */
+function planningContainmentRoot(phaseDir: string): string {
+  return path.dirname(path.resolve(phaseDir));
+}
+
+/**
+ * True when the phase directory really lives under its phases root AND
+ * `filePath` really lives inside that phase directory (symlinks followed on
+ * both). Either escape reads `missing`. Unresolvable → false.
  */
 function isReportContained(phaseDir: string, filePath: string): boolean {
   try {
-    return isContainedIn(fs.realpathSync(filePath), fs.realpathSync(phaseDir));
+    const realDir = fs.realpathSync(phaseDir);
+    return isContainedIn(realDir, fs.realpathSync(planningContainmentRoot(phaseDir)))
+      && isContainedIn(fs.realpathSync(filePath), realDir);
   } catch {
     return false;
   }
@@ -2513,7 +2541,9 @@ const verificationModule = {
   VerificationStatusError,
   VERIFICATION_STATUS_ERROR_CODE,
   failOnVerificationStatusError,
+  firstStatusError,
   reportStatusOf,
+  isReportContained,
   routeResult,
   findVerificationStatusError,
   defaultPhaseCleanCommitTimesMs,
