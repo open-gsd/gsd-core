@@ -33,3 +33,9 @@ This is the pathway used by the post-execute codebase-drift gate to refresh
 only the subtrees the phase actually changed. Each produced document carries
 `last_mapped_commit` in its YAML frontmatter so drift can be measured
 against the mapping point, not HEAD.
+
+**Staleness is measured against all seven documents (#5134):** the drift gate
+treats a directory as mapped when its path appears in any of the seven
+documents, flags modified and deleted files inside mapped directories as well
+as new structure outside them, and withholds paths that are unsafe to pass to
+the mapper. See [Post-Execute Codebase Drift Detection](post-execute-codebase-drift-detection.md).

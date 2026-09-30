@@ -1556,7 +1556,7 @@ const capabilities = {
     "role": "feature",
     "version": "1.15.0",
     "title": "Drift detection gates",
-    "description": "Drift detection gates for the planning loop. At execute:wave:post: a blocking schema drift gate (detects schema files changed without a database push) and a non-blocking codebase drift gate (detects structural additions not reflected in STRUCTURE.md). At plan:pre: a non-blocking, warn-only codebase drift gate (gated on workflow.plan_drift_precheck) that flags a stale codebase map before planning, so plans are authored against a fresh STRUCTURE.md instead of discovering drift mid-execution.",
+    "description": "Drift detection gates for the planning loop. At execute:wave:post: a blocking schema drift gate (detects schema files changed without a database push) and a non-blocking codebase drift gate (detects structural additions outside the codebase map and modified or deleted files inside it). At plan:pre: a non-blocking, warn-only codebase drift gate (gated on workflow.plan_drift_precheck) that flags a stale codebase map before planning, so plans are authored against a fresh STRUCTURE.md instead of discovering drift mid-execution.",
     "tier": "full",
     "requires": [],
     "engines": {
@@ -1575,7 +1575,7 @@ const capabilities = {
       "workflow.drift_threshold": {
         "type": "number",
         "default": 3,
-        "description": "Minimum number of new structural elements (directories, barrel exports, migrations, routes) before the codebase drift gate triggers a warn or auto-remap action."
+        "description": "Minimum number of drift elements (new directories, barrel exports, migrations, routes, plus modified and deleted files inside mapped directories) before the codebase drift gate triggers a warn or auto-remap action."
       },
       "workflow.drift_action": {
         "type": "enum",
@@ -1589,12 +1589,12 @@ const capabilities = {
       "workflow.schema_drift_gate": {
         "type": "boolean",
         "default": true,
-        "description": "Enable the drift gates at execute:wave:post. When enabled, the schema drift gate blocks verification if schema-relevant files changed during execution but no database push command was executed; the codebase drift gate (non-blocking) warns when structural additions exceed the drift_threshold."
+        "description": "Enable the drift gates at execute:wave:post. When enabled, the schema drift gate blocks verification if schema-relevant files changed during execution but no database push command was executed; the codebase drift gate (non-blocking) warns when drift elements exceed the drift_threshold."
       },
       "workflow.plan_drift_precheck": {
         "type": "boolean",
         "default": true,
-        "description": "Enable the non-blocking codebase drift pre-check at plan:pre, before /gsd:plan-phase spawns the planner. When enabled, a stale STRUCTURE.md (structural additions exceeding drift_threshold) is surfaced up front as a warn-only advisory pointing to /gsd:map-codebase; it never blocks planning and never spawns the mapper agent. Separate from schema_drift_gate so autonomous/CI runs can silence the plan-time advisory while keeping the execute:wave:post gates enabled."
+        "description": "Enable the non-blocking codebase drift pre-check at plan:pre, before /gsd:plan-phase spawns the planner. When enabled, a stale STRUCTURE.md (drift elements exceeding drift_threshold) is surfaced up front as a warn-only advisory pointing to /gsd:map-codebase; it never blocks planning and never spawns the mapper agent. Separate from schema_drift_gate so autonomous/CI runs can silence the plan-time advisory while keeping the execute:wave:post gates enabled."
       },
       "workflow.context_drift_precheck": {
         "type": "boolean",
@@ -5068,7 +5068,7 @@ const configSchema = {
     "owner": "drift",
     "type": "number",
     "default": 3,
-    "description": "Minimum number of new structural elements (directories, barrel exports, migrations, routes) before the codebase drift gate triggers a warn or auto-remap action."
+    "description": "Minimum number of drift elements (new directories, barrel exports, migrations, routes, plus modified and deleted files inside mapped directories) before the codebase drift gate triggers a warn or auto-remap action."
   },
   "workflow.drift_action": {
     "owner": "drift",
@@ -5084,13 +5084,13 @@ const configSchema = {
     "owner": "drift",
     "type": "boolean",
     "default": true,
-    "description": "Enable the drift gates at execute:wave:post. When enabled, the schema drift gate blocks verification if schema-relevant files changed during execution but no database push command was executed; the codebase drift gate (non-blocking) warns when structural additions exceed the drift_threshold."
+    "description": "Enable the drift gates at execute:wave:post. When enabled, the schema drift gate blocks verification if schema-relevant files changed during execution but no database push command was executed; the codebase drift gate (non-blocking) warns when drift elements exceed the drift_threshold."
   },
   "workflow.plan_drift_precheck": {
     "owner": "drift",
     "type": "boolean",
     "default": true,
-    "description": "Enable the non-blocking codebase drift pre-check at plan:pre, before /gsd:plan-phase spawns the planner. When enabled, a stale STRUCTURE.md (structural additions exceeding drift_threshold) is surfaced up front as a warn-only advisory pointing to /gsd:map-codebase; it never blocks planning and never spawns the mapper agent. Separate from schema_drift_gate so autonomous/CI runs can silence the plan-time advisory while keeping the execute:wave:post gates enabled."
+    "description": "Enable the non-blocking codebase drift pre-check at plan:pre, before /gsd:plan-phase spawns the planner. When enabled, a stale STRUCTURE.md (drift elements exceeding drift_threshold) is surfaced up front as a warn-only advisory pointing to /gsd:map-codebase; it never blocks planning and never spawns the mapper agent. Separate from schema_drift_gate so autonomous/CI runs can silence the plan-time advisory while keeping the execute:wave:post gates enabled."
   },
   "workflow.context_drift_precheck": {
     "owner": "drift",

@@ -795,6 +795,44 @@ node gsd-tools.cjs verify key-links <plan-file>
 
 `verify key-links` confines each link's `from:`/`to:` to the project directory (#3493): a path that resolves outside the project (via `../` traversal, an absolute path, or a symlink) is never read. That link's `links[]` entry reports `path_rejected: "from"` or `path_rejected: "to"` (whichever field was rejected) alongside `verified: false`, without echoing the underlying path-confinement error (which would embed an absolute host path). A rejected link fails independently — it does not abort evaluation of the other links in the same plan, and does not set `path_rejected` on links whose paths resolve inside the project.
 
+### `verify codebase-drift` (structural drift of the codebase map, #2003, #5134)
+
+```bash
+node gsd-tools.cjs verify codebase-drift
+```
+
+Compares the changes since `last_mapped_commit` against the codebase map in `.planning/codebase/` and reports whether the map has drifted past `workflow.drift_threshold`. Warn-only by contract: an internal failure returns a `skipped` payload, never an error.
+
+**Territory.** The command reads all seven generated documents (`STACK.md`, `ARCHITECTURE.md`, `STRUCTURE.md`, `CONVENTIONS.md`, `TESTING.md`, `INTEGRATIONS.md`, `CONCERNS.md`). A directory is *mapped* when its path appears, at a path-component boundary, in any of them. `STRUCTURE.md` is still required; the other six are optional, so a partial map works.
+
+**Categories.** Added files are drift outside mapped territory; modified and deleted files are drift inside it (an edit or deletion changes something the map describes).
+
+| Category | Change | Rule |
+|---|---|---|
+| `new_dir` | added file | its directory is not mapped |
+| `barrel` | added file | a barrel export at `(packages\|apps)/*/src/index.*` |
+| `migration` | added file | a migration file |
+| `route` | added file | a route module under `routes/` or `api/` |
+| `modified` | modified file | its directory is mapped |
+| `deleted` | deleted file | its directory is mapped |
+
+A rename counts its old path as `deleted` and its new path as an addition; a typechange counts as `modified`. For an added file the specific category (`migration`, then `route`, then `barrel`) wins over `new_dir`. Every element counts toward `workflow.drift_threshold`.
+
+**Skip reasons** (`skipped: true`, with `reason`): `no-structure-md` (no `STRUCTURE.md`), `cannot-read-structure-md` (`STRUCTURE.md` is not a regular file or is larger than 1 MiB), plus the existing git and baseline reasons. Any other document that is not a regular file or is larger than 1 MiB is unreadable: it is left out and listed in `documents_unreadable`.
+
+**Payload fields added by #5134:**
+
+| Field | Meaning |
+|---|---|
+| `documents_read` | The map documents that were read |
+| `documents_unreadable` | Map documents (other than `STRUCTURE.md`) that were skipped as unreadable |
+| `withheld_paths` | The first 50 paths withheld from output, display-escaped, each capped at 200 characters |
+| `withheld_count` | Total number of withheld paths, before the cap of 50 |
+
+`elements[].path` values are display-escaped: control, bidirectional and zero-width characters are shown as `\uXXXX`.
+
+**Path allowlist.** `affected_paths`, the `--paths` argument and every path listed in `message` pass only through one allowlist: components of ASCII letters, digits, `_`, `.` and `-`, separated by `/`; no `..` component, no lone `.`, not absolute. A path that fails is never printed in `message`; the message instead states `N path(s) withheld: not passed to the mapper or listed (absolute, traversal, whitespace, non-ASCII or shell-metacharacter characters)`. A directory with a non-ASCII or space-containing name is therefore withheld and counted, not silently dropped. `spawn_mapper` is `false` when no safe path remains, so `auto-remap` does not run (an empty `--paths` would remap the whole repository); `action_required` and `directive` are unchanged.
+
 ### `verification status` (the verification verdict, #5118)
 
 ```bash
