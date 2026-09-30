@@ -1609,6 +1609,57 @@ describe('requirements ready-ids command (#2388 shared-ID gate)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// gsd-executor.md requirements ready-ids gate (#4944)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
+  const executorPath = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
+  const executorContent = fs.readFileSync(executorPath, 'utf-8');
+
+  test('agents/gsd-executor.md calls requirements.ready-ids before requirements.mark-complete', () => {
+    const readyIdsPos = executorContent.indexOf('gsd_run query requirements.ready-ids');
+    const markCompletePos = executorContent.indexOf('gsd_run query requirements.mark-complete');
+
+    assert.ok(readyIdsPos !== -1, 'gsd-executor.md must call requirements.ready-ids');
+    assert.ok(markCompletePos !== -1, 'gsd-executor.md must call requirements.mark-complete');
+    assert.ok(readyIdsPos < markCompletePos, 'requirements.ready-ids must precede requirements.mark-complete');
+  });
+
+  test('agents/gsd-executor.md conditions mark-complete on non-empty ready IDs', () => {
+    // Must NOT contain unconditional call
+    assert.ok(
+      !executorContent.includes('\ngsd_run query requirements.mark-complete ${REQ_IDS}\n'),
+      'gsd-executor.md must not call requirements.mark-complete ${REQ_IDS} unconditionally',
+    );
+
+    // Must gate mark-complete on non-empty ready IDs
+    assert.ok(
+      executorContent.includes('READY=$(gsd_run query requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS})'),
+      'gsd-executor.md must query requirements.ready-ids without --raw to receive parseable JSON (#4956)',
+    );
+    assert.ok(
+      executorContent.includes("READY_IDS=$(printf '%s' \"$READY\" | jq -r '.ready[]' 2>/dev/null | tr '\\n' ' ')"),
+      'gsd-executor.md must extract ready IDs via jq',
+    );
+    assert.ok(
+      executorContent.includes('if [ -n "$(printf \'%s\' "$READY_IDS" | tr -d \'[:space:]\')" ]; then'),
+      'gsd-executor.md must guard requirements.mark-complete with non-empty check',
+    );
+  });
+
+  test('agents/gsd-executor.md documents the gated behavior in Requirement IDs section', () => {
+    assert.ok(
+      executorContent.includes('requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS}'),
+      'Requirement IDs section must document querying requirements.ready-ids',
+    );
+    assert.ok(
+      executorContent.includes('A requirement declared across multiple plans in this phase remains blocked until all declaring sibling plans have completed'),
+      'Requirement IDs section must explain sibling plan blocking behavior',
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // requirements revert-phase command — gaps_found revert (#2388)
 // ─────────────────────────────────────────────────────────────────────────────
 
