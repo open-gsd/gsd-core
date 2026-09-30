@@ -329,7 +329,8 @@ describe('detectDrift — output is sanitized (#4923, #5134)', () => {
       }
       assert.ok(r.message.includes('  - goodpkg/y.js'), 'the safe path is still listed');
       assertWithheldCovers(r.withheldPaths, hostile);
-      const stated = new RegExp(`(\\d+) ${WITHHELD_STATEMENT.replace(/[()]/g, '\\$&')}`).exec(r.message);
+      const statedLine = r.message.split('\n').find((l) => l.endsWith(WITHHELD_STATEMENT));
+      const stated = statedLine === undefined ? null : /^(\d+) /.exec(statedLine);
       assert.ok(stated, `message must state the withheld count: ${JSON.stringify(r.message)}`);
       assert.strictEqual(Number(stated[1]), r.withheldPaths.length, 'the message states the count of withheldPaths only');
     });
