@@ -35,6 +35,8 @@ import commandRoutingHub = require('./command-routing-hub.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import cjsCommandRouterAdapter = require('./cjs-command-router-adapter.cjs');
 import { safeJsonParse } from './security.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import nodeFs = require('node:fs');
 // #5118: the writer set is owned by src/verification.cts.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verificationMod = require('./verification.cjs');
@@ -74,6 +76,13 @@ interface RouteQuickBatchCommandOptions {
   error: (message: string, reason?: string) => void;
   _quickBatch?: QuickBatchModule;
   _quickBatchDispatch?: QuickBatchDispatchModule;
+  /** Test seam: replaces the default read of the process's standard input. */
+  _readStdin?: () => string;
+}
+
+/** Default stdin reader for `parse-args --stdin` (fd 0, UTF-8, whole stream). */
+function readProcessStdin(): string {
+  return nodeFs.readFileSync(0, 'utf8');
 }
 
 // ─── Small arg-parsing helpers (local — no new shared convention needed) ────
@@ -98,7 +107,7 @@ function parseJsonArg<T>(raw: string | undefined, label: string): { ok: true; va
 
 // ─── Implementation ───────────────────────────────────────────────────────────
 
-function routeQuickBatchCommand({ args, cwd, raw, error, _quickBatch, _quickBatchDispatch }: RouteQuickBatchCommandOptions): void {
+function routeQuickBatchCommand({ args, cwd, raw, error, _quickBatch, _quickBatchDispatch, _readStdin }: RouteQuickBatchCommandOptions): void {
   const qb: QuickBatchModule = _quickBatch ?? (quickBatch as unknown as QuickBatchModule);
   const dispatch: QuickBatchDispatchModule = _quickBatchDispatch ?? (quickBatchDispatch as unknown as QuickBatchDispatchModule);
 
@@ -310,17 +319,36 @@ function routeQuickBatchCommand({ args, cwd, raw, error, _quickBatch, _quickBatc
           planContent,
         }), raw);
       },
-      // `quick-batch parse-args --text "<raw $ARGUMENTS string>"` (preferred —
-      // callers pass the ENTIRE, still-quoted $ARGUMENTS as ONE argv element;
-      // this handler does the whitespace split itself, in Node, so shell
-      // pathname expansion (globbing) on attacker-influenced task text never
-      // happens before this parser sees it — quoting `"$ARGUMENTS"` at the
-      // call site is what closes that off; splitting it here is what keeps
-      // the caller from having to word-split it unsafely beforehand).
+      // `quick-batch parse-args --stdin` (preferred, #4780 — the caller feeds
+      // the typed text through a QUOTED heredoc, so the shell never parses it:
+      // quotes, `$(...)`, backticks and newlines in attacker-influenced task
+      // text cannot break out of any shell position, because there is no
+      // shell position for the text to occupy).
+      // `quick-batch parse-args --text "<raw string>"` (still supported for a
+      // caller that already holds the text as ONE real argv element with no
+      // shell quoting involved, e.g. a test harness; it is NOT safe to build
+      // that argument by splicing user text into a shell command line).
+      // In both forms this handler does the whitespace split itself, in Node,
+      // so shell pathname expansion (globbing) never happens.
       // `quick-batch parse-args -- <already-tokenized args>` (legacy/direct
       // form — still supported for a caller that already has a real argv
       // array with no shell splitting involved, e.g. a test harness).
       'parse-args': () => {
+        if (args.includes('--stdin')) {
+          let stdinText: string;
+          try {
+            stdinText = (_readStdin ?? readProcessStdin)();
+          } catch (readError) {
+            return makeInvalidArgs(
+              '--stdin',
+              `could not read standard input: ${readError instanceof Error ? readError.message : String(readError)}`,
+              ERROR_REASON.USAGE,
+            );
+          }
+          const stdinTokens = stdinText.trim().length === 0 ? [] : stdinText.trim().split(/\s+/);
+          emit(dispatch.parseQuickBatchArgs(stdinTokens));
+          return;
+        }
         const textArg = argValue(args, '--text');
         if (textArg !== undefined) {
           const rawArgs = textArg.trim().length === 0 ? [] : textArg.trim().split(/\s+/);

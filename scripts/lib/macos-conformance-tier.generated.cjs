@@ -165,6 +165,7 @@ module.exports = {
   "tests/profile-output.test.cjs",
   "tests/profile-pipeline.test.cjs",
   "tests/project-root.test.cjs",
+  "tests/quick-batch-command-router.stdin.test.cjs",
   "tests/quick-batch.test.cjs",
   "tests/quick-branching.test.cjs",
   "tests/quick-research.test.cjs",

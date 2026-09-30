@@ -212,6 +212,7 @@ module.exports = {
   "tests/profile-pipeline.test.cjs",
   "tests/prohibition-enforcement.test.cjs",
   "tests/project-root.test.cjs",
+  "tests/quick-batch-command-router.stdin.test.cjs",
   "tests/quick-batch.test.cjs",
   "tests/quick-branching.test.cjs",
   "tests/quick-research.test.cjs",

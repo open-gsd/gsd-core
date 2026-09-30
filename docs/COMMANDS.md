@@ -1027,6 +1027,8 @@ Batch several `/gsd-quick`-shaped tasks together — one coordinator plans, disp
 
 **Not supported in v1:** `--discuss` and `--full` are rejected with a usage error before any dispatch — run `/gsd-quick --discuss`/`--full` per item instead.
 
+**How the arguments are validated.** The task text you type is untrusted input. The command feeds it to `gsd-tools quick-batch parse-args --stdin` on standard input through a quoted heredoc, so quotes, `$(...)`, backticks and newlines in it are never parsed by a shell ([ADR-4780](adr/4780-labeled-arguments-block.md)). `parse-args --text "<string>"` and `parse-args -- <tokens>` remain for callers that already hold real argv elements.
+
 ```bash
 /gsd-quick-batch "- fix the login timeout\n- add the retry banner"   # inline list
 /gsd-quick-batch --file .planning/my-tasks.md                          # from a file

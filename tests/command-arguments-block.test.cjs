@@ -82,25 +82,22 @@ describe('#4780 argument-taking templates carry the standing <arguments> block',
     }
   });
 
-  test('no template splices the placeholder anywhere except the block and quick-batch shell use', () => {
+  test('no template splices the placeholder anywhere except the block', () => {
     for (const c of argTaking) {
       const { body } = splitFrontmatter(c.text);
       const stray = body
         .replace(BLOCK_LINE, '')
         .split('\n')
         .filter((l) => l.includes('$ARGUMENTS'));
-      if (c.file === 'quick-batch.md') {
-        assert.equal(stray.length, 1, 'quick-batch keeps exactly one runtime substitution');
-        assert.ok(stray[0].includes('--text "$ARGUMENTS"'), 'the one substitution is the shell --text argument');
-        continue;
-      }
       assert.deepEqual(stray, [], `${c.file} still splices $ARGUMENTS inline`);
     }
   });
 
-  test('quick-batch keeps its shell substitution literal', () => {
+  test('quick-batch feeds the typed text to the parser on stdin through a quoted heredoc, never as a shell argument', () => {
     const qb = commands.find((c) => c.file === 'quick-batch.md');
-    assert.ok(qb.text.includes('parse-args --raw --text "$ARGUMENTS"'));
+    assert.ok(qb.text.includes("parse-args --raw --stdin"));
+    assert.ok(qb.text.includes("<<'GSD_QUICK_BATCH_ARGS_END'"), 'the heredoc delimiter must be quoted so the shell does not expand the text');
+    assert.ok(!/--text\s+"[^"]*\$ARGUMENTS/.test(qb.text), 'no double-quoted shell splice of the typed text');
   });
 
   test('the "Parse the first token" bodies reference the labeled block', () => {
