@@ -121,11 +121,13 @@ file (`decidedBy` once read), with exactly two values:
 
 **Provenance names the writer, not the kind of degrade.** `executor-isolation-dispatch.md` ends by
 forcing the shell's final value (`--force-isolation "$ISOLATION"`), so a base-check `none` that
-reaches that line is recorded as `caller` and held for the rest of the run. That is deliberate. The
+reaches that line is recorded as `caller` and held while it is fresh. That is deliberate. The
 orchestrator has already committed to dispatching that run sequentially; if HEAD catching up
 underneath it flipped the record back to `harness-worktree`, the guard would start refusing the
-very dispatches the degrade mandated, which is #4222 in reverse. The run's next forced re-record,
-which re-runs the base check in shell first, or the sentinel's freshness window ends the hold.
+very dispatches the degrade mandated, which is #4222 in reverse. The next forced re-record, which
+re-runs the base check in shell first, or the sentinel's ten-minute freshness window ends the hold;
+past that window the guard falls back to resolving the host capability, as it does for any stale
+record (#3045).
 Live re-evaluation governs the records the resolver writes itself: the plain-query path #4222 was
 reported against. The hold is consulted on every plain query, including one that derives `none`
 itself; writing that `none` as `resolver` would re-own the caller's record, and on a repository
@@ -160,7 +162,8 @@ is invisible without a pin.
 The same holds outside `hooks/lib/`. The dispatch sites and diagnostics validate the resolver's
 output in shell (`case "$ISOLATION" in harness-worktree|orchestrator-worktree|none) ;;`), and shell
 inside workflow markdown cannot import the owner at all. Each such list is pinned to the owner by a
-parity test that discovers the lists by scanning `gsd-core/**/*.md`, so a new copy is pinned the day
+parity test that discovers the lists by scanning `gsd-core/**/*.md`, so a new copy naming a worktree
+mode is pinned the day
 it lands.
 
 A mirror's justification is part of the contract: **do not "clean up" a pinned mirror
