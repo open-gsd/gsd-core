@@ -202,7 +202,7 @@ function checkW030(snapshot: PlanningSnapshot): Diagnostic[] {
       severity: SEVERITY.WARNING,
       message: `Phase ${phase.dir}: ${invalid.message}`,
       remedy: adviseRemedy(
-        'Set the report frontmatter `status` to one of passed | gaps_found | human_needed, or delete the report and re-run the phase verification (/gsd-execute-phase)',
+        'Set the report frontmatter `status` to one of passed | gaps_found | human_needed, or delete the report and re-run the phase verification',
       ),
     });
   }

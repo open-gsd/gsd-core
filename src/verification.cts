@@ -157,7 +157,19 @@ function describeRawStatus(raw: unknown): string {
   }
   const rendered = io.formatDiagnosticToken(text);
   if (rendered.length <= RAW_STATUS_TOKEN_LIMIT) return rendered;
-  return `${rendered.slice(0, RAW_STATUS_TOKEN_LIMIT)}…(${rendered.length - RAW_STATUS_TOKEN_LIMIT} more)`;
+  // The cut must land on a boundary: never inside a `\uXXXX` escape the
+  // formatter emitted (a fragment such as `\u00` would read as a different
+  // character) and never between the halves of a surrogate pair (a lone
+  // surrogate is not valid text). Back off to the start of either.
+  let cut = RAW_STATUS_TOKEN_LIMIT;
+  const partialEscape = /\\u[0-9a-fA-F]{0,3}$/.exec(rendered.slice(0, cut));
+  if (partialEscape) {
+    cut -= partialEscape[0].length;
+  } else {
+    const last = rendered.charCodeAt(cut - 1);
+    if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
+  }
+  return `${rendered.slice(0, cut)}…(${rendered.length - cut} more)`;
 }
 
 /** `VerificationStatusError.code` — import this constant wherever the code is matched. */

@@ -208,6 +208,12 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
     // the reason scopeToPhase has no unfiltered fallback.
     for (const file of selectPhaseUatFiles(files, dir)) {
       const uatFilePath = path.join(phaseDir, file);
+      // #5118 security review (SEC-1): containment BEFORE the read, exactly as
+      // for the VERIFICATION loop below — a `*-UAT.md` / `*-HUMAN-UAT.md`
+      // symlinked outside the phase directory is treated as absent, so the
+      // `### N. <name>` and `expected:` text it points at never reaches the
+      // audit output.
+      if (!isReportContained(phaseDir, uatFilePath)) continue;
       const content = readNormalizedDocument(uatFilePath);
       const { items, headingsSeen } = parseUatItemsWithStats(content);
       const uatFm = extractFrontmatter(content, uatFilePath) as Record<string, unknown>;

@@ -599,8 +599,14 @@ function evaluateUatPassed(
 
   // ── Process UAT files ──────────────────────────────────────────────────────
   for (const file of uatFileNames) {
-    uatFiles.push(file);
     const uatFilePath = path.join(phaseFullDir, file);
+    // #5118 security review (SEC-1): containment BEFORE the read, exactly as
+    // for the VERIFICATION loop below — a `*-UAT.md` / `*-HUMAN-UAT.md` whose
+    // real path escapes the phase directory is treated as absent (not listed,
+    // no blocker naming it), so the `### N. <name>` text it points at never
+    // reaches a blocker or a check row.
+    if (!isReportContained(phaseFullDir, uatFilePath)) continue;
+    uatFiles.push(file);
     let raw = '';
     try {
       // #3078-CR MEDIUM: normalize line endings at the read boundary — the
