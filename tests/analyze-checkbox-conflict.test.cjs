@@ -129,12 +129,8 @@ describe('roadmap analyze checkbox_conflict (#4757)', () => {
     }
   });
 
-  function writeVerified(dirName, pad) {
-    const dir = path.join(tmpDir, '.planning', 'phases', dirName);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `${pad}-01-PLAN.md`), '---\nplan: 01\n---\n\n# Plan\n');
-    fs.writeFileSync(path.join(dir, `${pad}-01-SUMMARY.md`), '---\nplan: 01\n---\n\n# Summary\n');
-    fs.writeFileSync(path.join(dir, `${pad}-VERIFICATION.md`), '---\nstatus: passed\n---\n\n# Verification\n');
+  function writeVerified() {
+    writePhaseDir(tmpDir, 1, 'alpha', DISK.VERIFIED);
   }
 
   test('a progress-table-only phase has no checkbox and is never a conflict, even when complete on disk', () => {
@@ -142,7 +138,7 @@ describe('roadmap analyze checkbox_conflict (#4757)', () => {
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
       '# Roadmap\n\n## Progress\n\n| Phase | Name | Plans | Status |\n|-------|------|-------|--------|\n| 1 | Alpha | 1/1 | Complete |\n',
     );
-    writeVerified('01-alpha', '01');
+    writeVerified();
     const out = analyze(tmpDir);
     assert.strictEqual(out.phases[0].disk_status, 'complete');
     assert.deepStrictEqual(out.checkbox_conflict, []);
@@ -153,7 +149,7 @@ describe('roadmap analyze checkbox_conflict (#4757)', () => {
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
       '# Roadmap\n\n### Phase 1: Alpha\n\n**Goal**: g\n',
     );
-    writeVerified('01-alpha', '01');
+    writeVerified();
     const out = analyze(tmpDir);
     assert.strictEqual(out.phases[0].disk_status, 'complete');
     assert.deepStrictEqual(out.checkbox_conflict, []);
