@@ -271,6 +271,7 @@ These govern the system as it stands. Cite these.
 | [ADR-4593](4593-macos-conformance-tier-architecture.md) | A macOS-specific conformance-tier classifier, separate from the Windows-oriented one | Accepted | — |
 | [ADR-4630](4630-dispatch-identity-and-isolation-decision-seam.md) | One Canonical Dispatch-Identity Owner and a Recorded Isolation Decision | Accepted | — |
 | [ADR-4641](4641-windows-selector-consolidation.md) | One Windows test selector, and a proportional ceiling on the conformance tier | Accepted | — |
+| [ADR-4780](4780-labeled-arguments-block.md) | Command templates label the user's arguments in a standing `&lt;arguments&gt;` block | Accepted | — |
 | [ADR-4910](4910-planning-document-seam.md) | Planning documents are read and written through one parse → mutate → serialize seam | Accepted | — |
 
 ### Proposed

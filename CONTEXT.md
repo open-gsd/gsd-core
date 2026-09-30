@@ -693,6 +693,7 @@ The prompt-level data/instruction isolation seam for untrusted web/document ingr
 
 `RULESET.ALLOWED-TOOLS-FRONTMATTER=command's allowed-tools must cover every tool the workflow calls (including Write for file creation); thin-wrapper pattern makes this easy to miss`
 `RULESET.ARGUMENTS-SANITIZE=any workflow step constructing .planning/.../{SLUG}.md path from user input ($ARGUMENTS, parsed remainder) must sanitize inline ([a-z0-9-] only, reject ..//\\, max-length) — "(already sanitized)" must trace back to explicit guard; RESUME/fallback modes need own guards`
+`RULESET.ARGUMENTS-LABELED-BLOCK=every commands/gsd/*.md template that references $ARGUMENTS or declares argument-hint opens (right after frontmatter) with exactly one <arguments>$ARGUMENTS</arguments> block plus the data-not-instructions note; bodies reference "the <arguments> block" instead of splicing $ARGUMENTS into prose (quick-batch's shell --text "$ARGUMENTS" stays literal); skills/ inherit via gen:plugin-skills; enforced by tests/command-arguments-block.test.cjs (ADR-4780)`
 `RULESET.SHARED-HELPERS-LINT-VS-TEST=when a lint script and test suite both implement same constant (CANONICAL_TOOLS) or parser (parseFrontmatter, executionContextRefs), extract to scripts/*-helpers.cjs required by both — silent divergence otherwise`
 
 `RULESET.ADR-HEADER=every docs/adr/NNNN-*.md must open with - **Status:** Accepted|Proposed|Superseded (by [ADR-NNNN](file.md))|Legacy + - **Date:** YYYY-MM-DD immediately after title`

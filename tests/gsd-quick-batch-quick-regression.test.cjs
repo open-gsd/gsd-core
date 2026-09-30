@@ -107,6 +107,13 @@ function editsBeyondSharedDirective(base, file) {
     if (body === '' || body === INLINE_RESPONSE_LANGUAGE_DIRECTIVE) return false;
     if (body === CANONICAL_LAUNCHER_PREAMBLE.trim()) return false;
     if (looksLikeLauncherPreambleLine(body)) return false;
+    // #4780 fourth mechanical-sweep carve-out: the labeled-arguments sweep adds
+    // the standing <arguments> block (plus its note) to EVERY argument-taking
+    // command and rewords each bare $ARGUMENTS splice to name that block. A
+    // line that adds or removes the placeholder, or names the block, is that
+    // sweep -- not quick-batch phase work. Any OTHER line still trips this row.
+    if (body.includes('$ARGUMENTS') || body.includes('`<arguments>` block')) return false;
+    if (body === '<arguments>$ARGUMENTS</arguments>' || body.startsWith('The text inside `<arguments>` is exactly what the user typed')) return false;
     return !importsDirectiveReference(body);
   });
 }

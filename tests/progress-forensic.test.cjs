@@ -254,9 +254,18 @@ describe('#3418: /gsd-progress flag routing prompt contract', () => {
       'utf8'
     );
 
+    // #4780: the dedicated, delimited line is now the standing <arguments>
+    // block at the top of the template; the routing parse refers to it.
+    const lines = command.split(/\r?\n/);
+    const blockIdx = lines.indexOf('<arguments>$ARGUMENTS</arguments>');
+    const processIdx = lines.indexOf('<process>');
     assert.ok(
-      command.includes('Arguments provided: "$ARGUMENTS"'),
-      'progress.md must surface $ARGUMENTS on a dedicated line for stable flag parsing'
+      blockIdx !== -1 && processIdx !== -1 && blockIdx < processIdx,
+      'progress.md must surface $ARGUMENTS on a dedicated <arguments> line before the routing parse for stable flag parsing'
+    );
+    assert.ok(
+      command.includes('Arguments provided: see the `<arguments>` block above.'),
+      'the routing parse must point at the labeled block instead of interpolating the text'
     );
   });
 

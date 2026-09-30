@@ -563,13 +563,14 @@ describe('interaction fence (bash, stub driver)', { skip: HAS_BASH ? false : 'ba
   });
 
   test('aHungStartIsKilledAtItsCeilingAndReportedAsAFailedStart', (t) => {
-    const started = Date.now();
     const out = runInteractionFence(t, {
       chrome: true,
       env: { INTERACTION_CAPTURE: 'true', SCREENSHOT_DIR: shotsDir(t), STUB_HANG: 'start', CHROME_DEVTOOLS_START_TIMEOUT: '1' },
     });
-    // 1 s ceiling + 2 s KILL grace, with slack — never the stub's 300 s or the harness's 30 s cap.
-    assert.ok(Date.now() - started < 8000, `the ceiling, not the stub, ended the call (${Date.now() - started} ms)`);
+    // The ceiling, not the stub's 300 s or the harness's own spawn cap, ended the call. Asserted on
+    // the outcome (the harness cap never fired) rather than on elapsed wall-clock time, which a
+    // loaded Windows runner stretches past any fixed budget (#4780 CI: 13.9 s against a 12 s bound).
+    assert.notEqual(out.r.error && out.r.error.code, 'ETIMEDOUT', 'the ceiling, not the harness cap, ended the call');
     assert.deepEqual(out.calls.map((c) => c.split(' ')[6]), ['start'], 'a start that never returned is a failed start: no stop');
     assert.match(out.stdout, /start FAILED/);
     assert.equal(out.status, 'not captured (driver or capture failure)');
@@ -577,13 +578,12 @@ describe('interaction fence (bash, stub driver)', { skip: HAS_BASH ? false : 'ba
 
   test('aHungCaptureIsKilledAtItsCeilingAndStopIsStillReached', (t) => {
     const dir = shotsDir(t);
-    const started = Date.now();
     const out = runInteractionFence(t, {
       chrome: true,
       env: { INTERACTION_CAPTURE: 'true', SCREENSHOT_DIR: dir, STUB_HANG: 'take_screenshot', CHROME_DEVTOOLS_STEP_TIMEOUT: '1' },
     });
-    // two hung captures: 2 x (1 s ceiling + 2 s KILL grace), with slack
-    assert.ok(Date.now() - started < 12000, `two hung captures at a 1 s ceiling (${Date.now() - started} ms)`);
+    // two hung captures, each cut off by its 1 s ceiling: the harness cap never fired
+    assert.notEqual(out.r.error && out.r.error.code, 'ETIMEDOUT', 'the ceilings, not the harness cap, ended both captures');
     const verbs = out.calls.map((c) => c.split(' ')[6]);
     assert.equal(verbs[verbs.length - 1], 'stop', 'a timed-out step still reaches the stop');
     assert.match(out.stdout, /interaction capture FAILED: baseline/);
@@ -595,12 +595,11 @@ describe('interaction fence (bash, stub driver)', { skip: HAS_BASH ? false : 'ba
     // new_page is the one verb whose output the fence captures with $(...): the substitution ends
     // only when every writer closes stdout, so killing the driver's parent alone would block here
     // for the stub's full 300 s (measured on the pre-fix wrapper against a real npx tree).
-    const started = Date.now();
     const out = runInteractionFence(t, {
       chrome: true,
       env: { INTERACTION_CAPTURE: 'true', SCREENSHOT_DIR: shotsDir(t), STUB_HANG: 'new_page', CHROME_DEVTOOLS_STEP_TIMEOUT: '1' },
     });
-    assert.ok(Date.now() - started < 8000, `the process-group kill must release the capture (${Date.now() - started} ms)`);
+    assert.notEqual(out.r.error && out.r.error.code, 'ETIMEDOUT', 'the process-group kill must release the capture before the harness cap');
     assert.deepEqual(out.calls.map((c) => c.split(' ')[6]), ['start', 'new_page', 'stop'], out.calls.join(' | '));
     assert.match(out.stdout, /new_page FAILED/);
     assert.equal(out.status, 'not captured (driver or capture failure)');
@@ -611,12 +610,11 @@ describe('interaction fence (bash, stub driver)', { skip: HAS_BASH ? false : 'ba
     // substitution stays open-ended unless the watchdog keeps watching the process GROUP
     // rather than the leader pid it was handed. Negative-controlled: a leader-pid poll stands
     // down the moment the leader is gone and this blocks for the stub's full 300 s.
-    const started = Date.now();
     const out = runInteractionFence(t, {
       chrome: true,
       env: { INTERACTION_CAPTURE: 'true', SCREENSHOT_DIR: shotsDir(t), STUB_ORPHAN: 'new_page', CHROME_DEVTOOLS_STEP_TIMEOUT: '1' },
     });
-    assert.ok(Date.now() - started < 8000, `the group must be watched, not the leader (${Date.now() - started} ms)`);
+    assert.notEqual(out.r.error && out.r.error.code, 'ETIMEDOUT', 'the group must be watched, not the leader, so the harness cap never fires');
     assert.deepEqual(out.calls.map((c) => c.split(' ')[6]), ['start', 'new_page', 'stop'], out.calls.join(' | '));
     assert.match(out.stdout, /new_page FAILED/);
     assert.equal(out.status, 'not captured (driver or capture failure)');
