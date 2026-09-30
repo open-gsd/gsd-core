@@ -85,6 +85,24 @@ function diagnosticCodes(payload) {
   return payload.diagnostics.map((d) => d.code);
 }
 
+// Every diagnostic as [code, subject, detail], the fixture's absolute cwd
+// replaced by `<cwd>` so the expected rows are machine-independent. Pins the
+// diagnostics' subject and detail text, not just their codes.
+function diagnosticRows(payload, cwd) {
+  const posixCwd = cwd.split('\\').join('/');
+  return payload.diagnostics.map((d) => [d.code, d.subject.split(posixCwd).join('<cwd>'), d.detail]);
+}
+
+const WITHHELD_UNSCOPED = 'Scope is "unscoped"; a percentage derived from an incomplete read would be a confident wrong answer.';
+const WITHHELD_UNREADABLE = 'Scope is "unreadable"; a percentage derived from an incomplete read would be a confident wrong answer.';
+const WITHHELD_TRUNCATED = 'Scope is "truncated"; a percentage derived from an incomplete read would be a confident wrong answer.';
+const REQUIREMENTS_ABSENT_DETAIL = 'REQUIREMENTS.md does not exist; no requirement rows are available.';
+const REQUIREMENTS_UNREADABLE_DETAIL = 'REQUIREMENTS.md exists but could not be read; zero rows is not a reliable answer.';
+const UAT_ABSENT_DETAIL = 'No UAT document for this phase. This does not affect phase acceptance.';
+const UAT_LISTING_DETAIL = 'Phase directory could not be listed; UAT presence is unknown.';
+const ROADMAP_UNREADABLE_DETAIL = 'ROADMAP.md could not be read; phase goal and dependencies are unknown, not empty.';
+const MILESTONE_UNREADABLE_DETAIL = 'Milestone identity scope is "unreadable"; no version is invented to stand in for it.';
+
 // ═══════════════════════════════════════════════════════════════════════════
 // plan-document.cjs — pure, in-memory parser
 // ═══════════════════════════════════════════════════════════════════════════
@@ -444,6 +462,13 @@ describe('planning-inspect — planning root absent', () => {
       INSPECT_DIAGNOSTIC.PERCENT_WITHHELD,
       INSPECT_DIAGNOSTIC.PERCENT_WITHHELD,
     ]);
+    assert.deepStrictEqual(diagnosticRows(result, cwd), [
+      ['planning_root_absent', '<cwd>/.planning', 'No .planning/ directory; every section below is an empty non-answer, not an empty project.'],
+      ['roadmap_unscoped', '<cwd>/.planning/ROADMAP.md', MILESTONE_UNREADABLE_DETAIL],
+      ['requirements_absent', '<cwd>/.planning/REQUIREMENTS.md', REQUIREMENTS_ABSENT_DETAIL],
+      ['percent_withheld', 'progress.accepted_phases', WITHHELD_UNREADABLE],
+      ['percent_withheld', 'progress.completed_plans', WITHHELD_UNREADABLE],
+    ]);
   });
 });
 
@@ -641,6 +666,17 @@ describe('planning-inspect — task provenance/agreement variety, checkpoint, or
     assert.ok(codes.includes(INSPECT_DIAGNOSTIC.REQUIREMENT_UNMAPPED));
     assert.ok(codes.includes(INSPECT_DIAGNOSTIC.REQUIREMENT_PHASE_UNKNOWN));
     assert.strictEqual(codes.includes(INSPECT_DIAGNOSTIC.PERCENT_WITHHELD), false);
+
+    assert.deepStrictEqual(diagnosticRows(result, cwd), [
+      ['orphan_phase_dir', '99-orphan', 'Phase directory exists on disk but is not declared in the current milestone window.'],
+      ['task_changed_files_conflicting', '1-01-PLAN.md#2', 'Planned and changed file sets disagree; both are reported verbatim, unreconciled.'],
+      ['task_shape_checkpoint', '1-01-PLAN.md#3', 'Checkpoint task: the grammar carries no name/files/acceptance elements.'],
+      ['task_changed_files_plan_scoped', '1-01-PLAN.md#3', 'SUMMARY carries only a plan-level file list; task-scoped changed files are unknown.'],
+      ['uat_absent', '01-foo', UAT_ABSENT_DETAIL],
+      ['requirement_duplicate', 'AUTH-01', 'Requirement ID appears more than once; the first occurrence is authoritative.'],
+      ['requirement_unmapped', 'AUTH-02', 'No Traceability row maps this requirement to a phase.'],
+      ['requirement_phase_unknown', 'AUTH-03->9', 'Traceability maps this requirement to a phase that is not present on disk.'],
+    ]);
   });
 });
 
@@ -712,6 +748,18 @@ describe('planning-inspect — percent withheld, unreadable plan/summary, comple
     assert.ok(codes.includes(INSPECT_DIAGNOSTIC.PHASE_SCOPE_DEGRADED));
     assert.ok(codes.includes(INSPECT_DIAGNOSTIC.REQUIREMENT_COMPLETION_UNKNOWN));
     assert.strictEqual(codes.filter((c) => c === INSPECT_DIAGNOSTIC.PERCENT_WITHHELD).length, 2);
+
+    assert.deepStrictEqual(diagnosticRows(result, cwd), [
+      ['summary_unreadable', '1-01-SUMMARY.md', 'Summary file could not be read; file provenance for this plan is unknown.'],
+      ['uat_absent', '01-foo', UAT_ABSENT_DETAIL],
+      ['plan_unreadable', '2-01-PLAN.md', 'Plan file could not be read; its body is unknown. Sibling plans are unaffected.'],
+      ['uat_absent', '02-bar', UAT_ABSENT_DETAIL],
+      ['roadmap_unscoped', '02-bar', 'ROADMAP.md has no section for this phase; goal and dependencies are non-answers, not empty.'],
+      ['phase_scope_degraded', '02-bar', 'Phase evidence is incomplete (scope "unscoped").'],
+      ['requirement_completion_unknown', 'AUTH-05', 'Requirement has no checkbox bullet; completion is unknown, not incomplete.'],
+      ['percent_withheld', 'progress.accepted_phases', WITHHELD_UNSCOPED],
+      ['percent_withheld', 'progress.completed_plans', WITHHELD_UNSCOPED],
+    ]);
   });
 });
 
@@ -733,6 +781,13 @@ describe('planning-inspect — UAT unreadable, UAT items, requirements unreadabl
     const codes = diagnosticCodes(result);
     assert.ok(codes.includes(INSPECT_DIAGNOSTIC.UAT_UNREADABLE));
     assert.ok(codes.includes(INSPECT_DIAGNOSTIC.PHASE_SCOPE_DEGRADED));
+    assert.deepStrictEqual(diagnosticRows(result, cwd), [
+      ['uat_unreadable', '01-foo/1-UAT.md', 'UAT document exists but could not be read.'],
+      ['phase_scope_degraded', '01-foo', 'Phase evidence is incomplete (scope "truncated").'],
+      ['requirements_absent', '<cwd>/.planning/REQUIREMENTS.md', REQUIREMENTS_ABSENT_DETAIL],
+      ['percent_withheld', 'progress.accepted_phases', WITHHELD_TRUNCATED],
+      ['percent_withheld', 'progress.completed_plans', WITHHELD_TRUNCATED],
+    ]);
   });
 
   test('a pending UAT test item is surfaced verbatim in phases[].uat.unresolved', (t) => {
@@ -773,6 +828,7 @@ describe('planning-inspect — UAT unreadable, UAT items, requirements unreadabl
     assert.deepStrictEqual(result.requirements, []);
     assert.ok(diagnosticCodes(result).includes(INSPECT_DIAGNOSTIC.REQUIREMENTS_UNREADABLE));
     assert.strictEqual(diagnosticCodes(result).includes(INSPECT_DIAGNOSTIC.REQUIREMENTS_ABSENT), false);
+    assert.deepStrictEqual(diagnosticRows(result, cwd)[0], ['requirements_unreadable', '<cwd>/.planning/REQUIREMENTS.md', REQUIREMENTS_UNREADABLE_DETAIL]);
   });
 
   test('a plan file symlinked outside the planning root degrades to unreadable, never leaking the escaped content', (t) => {
@@ -798,5 +854,318 @@ describe('planning-inspect — UAT unreadable, UAT items, requirements unreadabl
     const json = JSON.stringify(result);
     assert.strictEqual(json.includes('SECRET CONTENT'), false);
     assert.ok(diagnosticCodes(result).includes(INSPECT_DIAGNOSTIC.PLAN_UNREADABLE));
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// #5118 — closed VerificationStatus: pins for the seams this branch changed
+// and for the published vocabularies. Every expected value was produced by
+// running the built module against the same fixture, never retyped.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const CLOSED_SET_LIST = 'passed | gaps_found | human_needed';
+
+function mkPlanningProject(cwd, phases) {
+  writeFile(cwd, '.planning/STATE.md', frontmatterDoc(["gsd_state_version: '1.0'", 'status: planning', 'milestone: v1.0'], []));
+  const lines = ['## v1.0 Current 🚧', '', '## Phases', ''];
+  for (const [n, name] of phases) lines.push(`- [ ] **Phase ${n}: ${name}** - stub`);
+  lines.push('');
+  for (const [n, name] of phases) lines.push(`### Phase ${n}: ${name}`, '', `Ship ${name}.`, '');
+  writeFile(cwd, '.planning/ROADMAP.md', lines.join('\n'));
+  writeFile(cwd, '.planning/REQUIREMENTS.md', '# Requirements\n');
+}
+
+function writeReport(cwd, dir, status) {
+  const token = String(Number.parseInt(dir, 10));
+  writeAbs(path.join(phaseDirOf(cwd, dir), `${token}-VERIFICATION.md`), ['---', `status: ${status}`, '---', ''].join('\n'));
+}
+
+// Run `run` with fd 1 / fd 2 writes captured (the CLI seam writes with
+// `fs.writeSync`, never `process.stdout`), restoring the real writer before
+// returning. Returns what was written and what `run` threw, if anything.
+function captureCommandIo(t, run) {
+  const original = fs.writeSync;
+  let stdout = '';
+  let stderr = '';
+  const mocked = t.mock.method(fs, 'writeSync', (fd, data, ...rest) => {
+    if (fd === 1 || fd === 2) {
+      const text = String(data);
+      if (fd === 1) stdout += text;
+      else stderr += text;
+      return Buffer.byteLength(text);
+    }
+    return original.call(fs, fd, data, ...rest);
+  });
+  let thrown = null;
+  try {
+    run();
+  } catch (err) {
+    thrown = err;
+  }
+  mocked.mock.restore();
+  return { stdout, stderr, thrown };
+}
+
+describe('planning-inspect — published vocabularies', () => {
+  test('diagnostic codes, task statuses, provenance and agreement are the exact published words', () => {
+    assert.deepStrictEqual(INSPECT_DIAGNOSTIC, {
+      PLANNING_ROOT_ABSENT: 'planning_root_absent',
+      ROADMAP_UNSCOPED: 'roadmap_unscoped',
+      REQUIREMENTS_ABSENT: 'requirements_absent',
+      REQUIREMENTS_UNREADABLE: 'requirements_unreadable',
+      REQUIREMENT_DUPLICATE: 'requirement_duplicate',
+      REQUIREMENT_UNMAPPED: 'requirement_unmapped',
+      REQUIREMENT_PHASE_UNKNOWN: 'requirement_phase_unknown',
+      REQUIREMENT_COMPLETION_UNKNOWN: 'requirement_completion_unknown',
+      ORPHAN_PHASE_DIR: 'orphan_phase_dir',
+      PHASE_SCOPE_DEGRADED: 'phase_scope_degraded',
+      PLAN_UNREADABLE: 'plan_unreadable',
+      SUMMARY_UNREADABLE: 'summary_unreadable',
+      TASK_SHAPE_CHECKPOINT: 'task_shape_checkpoint',
+      TASK_CHANGED_FILES_PLAN_SCOPED: 'task_changed_files_plan_scoped',
+      TASK_CHANGED_FILES_CONFLICTING: 'task_changed_files_conflicting',
+      UAT_ABSENT: 'uat_absent',
+      UAT_UNREADABLE: 'uat_unreadable',
+      PERCENT_WITHHELD: 'percent_withheld',
+    });
+    assert.deepStrictEqual(TASK_STATUS, { DONE: 'done', PENDING: 'pending', UNKNOWN: 'unknown' });
+    assert.deepStrictEqual(PROVENANCE, { TASK_SCOPED: 'task_scoped', PLAN_SCOPED: 'plan_scoped', ABSENT: 'absent' });
+    assert.deepStrictEqual(AGREEMENT, { AGREED: 'agreed', CONFLICTING: 'conflicting', UNKNOWN: 'unknown' });
+  });
+
+  test('generated_from.cwd is projected with forward slashes even when a segment holds a backslash', (t) => {
+    const root = mkCwd();
+    t.after(() => cleanup(root));
+    const cwd = `${root}${path.sep}a\\b`;
+
+    const result = buildPlanningInspect(cwd);
+
+    assert.strictEqual(result.generated_from.cwd, cwd.split('\\').join('/'));
+    assert.strictEqual(result.generated_from.cwd.includes('\\'), false);
+  });
+});
+
+describe('planning-inspect — verification row (#5118)', () => {
+  test('every status the owner returns is reported with its route; a missing report routes to execute-phase', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    mkPlanningProject(cwd, [[1, 'Foo'], [2, 'Bar'], [3, 'Baz'], [4, 'Qux']]);
+    writeReport(cwd, '01-foo', 'passed');
+    writeReport(cwd, '02-bar', 'gaps_found');
+    writeReport(cwd, '03-baz', 'human_needed');
+    fs.mkdirSync(phaseDirOf(cwd, '04-qux'), { recursive: true });
+
+    const result = buildPlanningInspect(cwd);
+
+    assert.deepStrictEqual(
+      result.phases.map((p) => [p.dir, p.verification.status, p.verification.route]),
+      [
+        ['01-foo', 'passed', ''],
+        ['02-bar', 'gaps_found', 'plan-phase'],
+        ['03-baz', 'human_needed', 'verify-work'],
+        ['04-qux', 'missing', 'execute-phase'],
+      ],
+    );
+  });
+
+  test('an out-of-set report status is carried per row (status null, route empty, the owner message) and never leaks a sibling', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    mkPlanningProject(cwd, [[1, 'Foo'], [2, 'Bar'], [3, 'Baz']]);
+    writeReport(cwd, '01-foo', 'bogus-one');
+    writeReport(cwd, '02-bar', 'bogus-two');
+    writeReport(cwd, '03-baz', 'passed');
+
+    const result = buildPlanningInspect(cwd);
+
+    const [one, two, three] = result.phases.map((p) => p.verification);
+    assert.strictEqual(one.status, null);
+    assert.strictEqual(one.route, '');
+    assert.ok(one.next_action.startsWith('Verification report "'));
+    assert.ok(one.next_action.includes('1-VERIFICATION.md'));
+    assert.ok(one.next_action.includes(`has status "bogus-one", which is outside the closed set \u2014 accepted values: ${CLOSED_SET_LIST}. Recovery:`));
+    assert.strictEqual(one.next_action.includes('bogus-two'), false);
+    assert.strictEqual(two.status, null);
+    assert.strictEqual(two.route, '');
+    assert.ok(two.next_action.includes('has status "bogus-two"'));
+    assert.deepStrictEqual([three.status, three.route], ['passed', '']);
+  });
+
+  test('cmdPlanningInspect fails with the FIRST refused report and prints no payload', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    mkPlanningProject(cwd, [[1, 'Foo'], [2, 'Bar']]);
+    writeReport(cwd, '01-foo', 'bogus-one');
+    writeReport(cwd, '02-bar', 'bogus-two');
+    const firstMessage = buildPlanningInspect(cwd).phases[0].verification.next_action;
+
+    const { stdout, stderr, thrown } = captureCommandIo(t, () => planningInspectLib.cmdPlanningInspect(cwd, false));
+
+    assert.ok(thrown, 'the command must fail');
+    assert.strictEqual(thrown.name, 'ExitError');
+    assert.strictEqual(stdout, '');
+    assert.strictEqual(stderr, `Error: ${firstMessage}\n`);
+    assert.strictEqual(stderr.includes('bogus-two'), false);
+  });
+
+  test('cmdPlanningInspect prints the payload and fails nothing when every report is in the closed set', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    mkPlanningProject(cwd, [[1, 'Foo']]);
+    writeReport(cwd, '01-foo', 'passed');
+
+    const { stdout, stderr, thrown } = captureCommandIo(t, () => planningInspectLib.cmdPlanningInspect(cwd, false));
+
+    assert.strictEqual(thrown, null);
+    assert.strictEqual(stderr, '');
+    assert.deepStrictEqual(JSON.parse(stdout), JSON.parse(JSON.stringify(buildPlanningInspect(cwd))));
+  });
+});
+
+describe('planning-inspect — containment (#5118)', () => {
+  test('a phases directory symlinked outside the planning root reads verification missing and lists nothing from it', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    mkPlanningProject(cwd, [[1, 'Foo']]);
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'planning-inspect-unit-phases-'));
+    t.after(() => cleanup(outside));
+    const escaped = path.join(outside, '01-foo');
+    writeAbs(path.join(escaped, '1-VERIFICATION.md'), ['---', 'status: passed', '---', ''].join('\n'));
+    writeAbs(path.join(escaped, '1-01-PLAN.md'), frontmatterDoc(['wave: 1'], ['<objective>', 'SECRET OBJECTIVE', '</objective>']));
+    writeAbs(path.join(escaped, '1-UAT.md'), '# UAT\n\n## Tests\n\n### 1. Secret\nexpected: SECRET EXPECTED\nresult: pending\n');
+    fs.symlinkSync(outside, path.join(cwd, '.planning', 'phases'), 'junction');
+
+    const result = buildPlanningInspect(cwd);
+
+    const [row] = result.phases;
+    assert.strictEqual(row.dir, '01-foo');
+    assert.strictEqual(row.verification.status, 'missing');
+    assert.strictEqual(row.verification.route, 'execute-phase');
+    assert.deepStrictEqual(row.plans, []);
+    assert.deepStrictEqual(row.uat, { unresolved: [], scope: 'unreadable' });
+    assert.strictEqual(row.scope, 'unreadable');
+    assert.strictEqual(result.progress.accepted_phases.percent, null);
+    assert.deepStrictEqual(diagnosticRows(result, cwd), [
+      ['uat_unreadable', '01-foo', UAT_LISTING_DETAIL],
+      ['phase_scope_degraded', '01-foo', 'Phase evidence is incomplete (scope "unreadable").'],
+      ['percent_withheld', 'progress.accepted_phases', WITHHELD_UNREADABLE],
+      ['percent_withheld', 'progress.completed_plans', WITHHELD_UNREADABLE],
+    ]);
+    assert.strictEqual(/SECRET/.test(JSON.stringify(result)), false);
+  });
+
+  test('a verification report symlinked outside the planning root reads missing and never leaks its status', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    mkPlanningProject(cwd, [[1, 'Foo']]);
+    const outside = path.join(os.tmpdir(), `planning-inspect-unit-report-${process.pid}.md`);
+    fs.writeFileSync(outside, ['---', 'status: SECRETSTATUS', '---', ''].join('\n'));
+    t.after(() => cleanup(outside));
+    fs.mkdirSync(phaseDirOf(cwd, '01-foo'), { recursive: true });
+    fs.symlinkSync(outside, path.join(phaseDirOf(cwd, '01-foo'), '1-VERIFICATION.md'));
+
+    const result = buildPlanningInspect(cwd);
+
+    assert.deepStrictEqual(
+      [result.phases[0].verification.status, result.phases[0].verification.route],
+      ['missing', 'execute-phase'],
+    );
+    assert.strictEqual(JSON.stringify(result).includes('SECRETSTATUS'), false);
+  });
+
+  test('a REQUIREMENTS.md symlinked outside the planning root is unreadable (present, not absent) with zero rows', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    mkPlanningProject(cwd, []);
+    cleanup(path.join(cwd, '.planning', 'REQUIREMENTS.md'));
+    const outside = path.join(os.tmpdir(), `planning-inspect-unit-requirements-${process.pid}.md`);
+    fs.writeFileSync(outside, '# R\n\n- [x] **SECRET-01**: leak\n');
+    t.after(() => cleanup(outside));
+    fs.symlinkSync(outside, path.join(cwd, '.planning', 'REQUIREMENTS.md'));
+
+    const result = buildPlanningInspect(cwd);
+
+    assert.deepStrictEqual(result.requirements, []);
+    assert.deepStrictEqual(diagnosticRows(result, cwd).filter((r) => r[0].startsWith('requirements_')), [
+      ['requirements_unreadable', '<cwd>/.planning/REQUIREMENTS.md', REQUIREMENTS_UNREADABLE_DETAIL],
+    ]);
+    assert.strictEqual(JSON.stringify(result).includes('SECRET-01'), false);
+  });
+
+  test('a document that vanishes between the stat and the realpath reads as absent', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    mkPlanningProject(cwd, []);
+    const original = fs.realpathSync;
+    const mocked = t.mock.method(fs, 'realpathSync', (target, ...rest) => {
+      if (String(target).endsWith('REQUIREMENTS.md')) throw new Error('vanished');
+      return original.call(fs, target, ...rest);
+    });
+
+    const result = buildPlanningInspect(cwd);
+    mocked.mock.restore();
+
+    assert.deepStrictEqual(diagnosticRows(result, cwd).filter((r) => r[0].startsWith('requirements_')), [
+      ['requirements_absent', '<cwd>/.planning/REQUIREMENTS.md', REQUIREMENTS_ABSENT_DETAIL],
+    ]);
+  });
+
+  test('a document that stats and resolves but cannot be read is present and unreadable', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    mkPlanningProject(cwd, []);
+    const original = fs.readFileSync;
+    const mocked = t.mock.method(fs, 'readFileSync', (target, ...rest) => {
+      if (String(target).endsWith('REQUIREMENTS.md')) throw new Error('unreadable');
+      return original.call(fs, target, ...rest);
+    });
+
+    const result = buildPlanningInspect(cwd);
+    mocked.mock.restore();
+
+    assert.deepStrictEqual(diagnosticRows(result, cwd).filter((r) => r[0].startsWith('requirements_')), [
+      ['requirements_unreadable', '<cwd>/.planning/REQUIREMENTS.md', REQUIREMENTS_UNREADABLE_DETAIL],
+    ]);
+  });
+});
+
+describe('planning-inspect — degraded-read diagnostics, verbatim', () => {
+  test('a UAT document whose test block has no parseable result truncates the phase and says why', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    mkPlanningProject(cwd, [[1, 'Foo']]);
+    writeAbs(path.join(phaseDirOf(cwd, '01-foo'), '1-UAT.md'), ['# UAT: Phase 1', '', '## Tests', '', '### 1. Sign up flow', 'expected: user can sign up', ''].join('\n'));
+
+    const result = buildPlanningInspect(cwd);
+
+    assert.deepStrictEqual(result.phases[0].uat, { unresolved: [], scope: 'truncated' });
+    assert.deepStrictEqual(diagnosticRows(result, cwd), [
+      ['uat_unreadable', '01-foo/1-UAT.md', 'UAT document has 1 test block(s) with no parseable result; unresolved is not a complete answer.'],
+      ['phase_scope_degraded', '01-foo', 'Phase evidence is incomplete (scope "truncated").'],
+      ['percent_withheld', 'progress.accepted_phases', WITHHELD_TRUNCATED],
+      ['percent_withheld', 'progress.completed_plans', WITHHELD_TRUNCATED],
+    ]);
+  });
+
+  test('a missing ROADMAP.md leaves every phase goal unreadable and names the milestone and phase diagnostics', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    writeFile(cwd, '.planning/STATE.md', frontmatterDoc(["gsd_state_version: '1.0'", 'status: planning', 'milestone: v1.0'], []));
+    fs.mkdirSync(phaseDirOf(cwd, '01-foo'), { recursive: true });
+
+    const result = buildPlanningInspect(cwd);
+
+    assert.deepStrictEqual(result.phases.map((p) => [p.dir, p.goal, p.dependencies]), [
+      ['01-foo', { value: null, scope: 'unreadable' }, { value: [], scope: 'unreadable' }],
+    ]);
+    assert.deepStrictEqual(diagnosticRows(result, cwd), [
+      ['roadmap_unscoped', '<cwd>/.planning/ROADMAP.md', MILESTONE_UNREADABLE_DETAIL],
+      ['uat_absent', '01-foo', UAT_ABSENT_DETAIL],
+      ['roadmap_unscoped', '01-foo', ROADMAP_UNREADABLE_DETAIL],
+      ['phase_scope_degraded', '01-foo', 'Phase evidence is incomplete (scope "unreadable").'],
+      ['requirements_absent', '<cwd>/.planning/REQUIREMENTS.md', REQUIREMENTS_ABSENT_DETAIL],
+      ['percent_withheld', 'progress.accepted_phases', WITHHELD_UNREADABLE],
+      ['percent_withheld', 'progress.completed_plans', WITHHELD_UNREADABLE],
+    ]);
   });
 });
