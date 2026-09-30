@@ -314,6 +314,11 @@ describe('W030 — verification report status outside the closed set', () => {
     assert.match(diagnostics[0].message, /passed \| gaps_found \| human_needed/);
     assert.equal(diagnostics[0].severity, 'warning');
     assert.equal(diagnostics[0].remedy.action, 'advise');
+    // #2617: command surfaces are projected per runtime; the fix text names no
+    // command at all (a hardcoded `/gsd-...` would be wrong on Codex).
+    const remedyText = JSON.stringify(diagnostics[0].remedy);
+    assert.match(remedyText, /delete the report and re-run the phase verification/);
+    assert.doesNotMatch(remedyText, /\/gsd-|\$gsd-|gsd:/);
   });
 
   test('baseline: an in-set status (passed / gaps_found / human_needed) produces no W030', (t) => {

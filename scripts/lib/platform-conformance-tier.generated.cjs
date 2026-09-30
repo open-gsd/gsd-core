@@ -275,6 +275,7 @@ module.exports = {
   "tests/verify-archive-dirs-live-path.test.cjs",
   "tests/verify-command-grounding.test.cjs",
   "tests/verify-lifecycle-writes-e2e.test.cjs",
+  "tests/verify-work-auto-transition.test.cjs",
   "tests/verify.test.cjs",
   "tests/windsurf-hooks-bridge.test.cjs",
   "tests/workflow-guard.test.cjs",

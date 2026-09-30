@@ -5280,6 +5280,124 @@ describe('#5118 round 3: containment before read, no write before the error, and
     assert.equal(res.exitCode, 0, `an unscanned phase must not refuse phase complete: ${res.error}`);
   });
 
+  // F2 (round 4): `phase remove` validates the set its STATE rebuild scans
+  // (milestone-scoped, one directory per phase key), not every subdirectory.
+  test('D3 (F2): phase remove validates the set the STATE rebuild scans — a same-number sibling the rebuild dedupes away does not block it, a scanned one does', (t) => {
+    // `01-zz-shadow` shares phase number 01 with `01-foundation`; the rebuild
+    // keeps one directory per phase key (the lexicographically first), so the
+    // shadow is never scanned and its report is never read afterwards.
+    const unscanned = threePhaseProject(t, 'passed');
+    const zz = path.join(unscanned, '.planning', 'phases', '01-zz-shadow');
+    fs.mkdirSync(zz, { recursive: true });
+    fs.writeFileSync(path.join(zz, '01-VERIFICATION.md'), '---\nstatus: verified\n---\n');
+    const ok = runGsdTools(['phase', 'remove', '2'], unscanned);
+    assert.equal(ok.exitCode, 0, `a survivor the rebuild never scans must not block the removal: ${ok.error}`);
+    assert.equal(fs.existsSync(path.join(unscanned, '.planning', 'phases', '02-api')), false, 'the target was removed');
+
+    // CONTROL: the same shadow sorted FIRST becomes the scanned survivor for
+    // phase key 01 — its bad report is read by the rebuild, so the remove refuses.
+    const scanned = threePhaseProject(t, 'passed');
+    const aa = path.join(scanned, '.planning', 'phases', '01-aa-shadow');
+    fs.mkdirSync(aa, { recursive: true });
+    fs.writeFileSync(path.join(aa, '01-VERIFICATION.md'), '---\nstatus: verified\n---\n');
+    const before = treeBytes(path.join(scanned, '.planning'));
+    const res = runGsdTools(['--json-errors', 'phase', 'remove', '2'], scanned);
+    assert.notEqual(res.exitCode, 0, `a scanned survivor's bad report still refuses: ${res.output}`);
+    assert.equal(errorEnvelope5118(res.error)?.reason, 'verification_status_invalid');
+    assert.deepEqual(treeBytes(path.join(scanned, '.planning')), before, 'nothing was written');
+  });
+
+  // F3 (round 4): one `--repair` run validates before ITS first write, not
+  // only before the REGENERATE_STATE handler's own backup copy.
+  test('D3 (F3): validate health --repair validates before the run\'s first write — a config repair ordered before REGENERATE_STATE does not write when a report is refused', (t) => {
+    const bad = project(t, 'verified');
+    const healthDiagnostic = require('../gsd-core/bin/lib/health-diagnostic.cjs');
+    const { REMEDY_ACTION, REMEDY_RISK } = healthDiagnostic;
+    cleanup(path.join(bad.projectDir, '.planning', 'config.json'));
+    const before = treeBytes(path.join(bad.projectDir, '.planning'));
+    const remedy = (action) => ({ action, risk: REMEDY_RISK.NONE, args: {} });
+    const diagnostics = [
+      { code: 'E005', severity: 'error', message: 'fabricated', remedy: remedy(REMEDY_ACTION.CREATE_CONFIG) },
+      { code: 'X001', severity: 'error', message: 'fabricated', remedy: remedy(REMEDY_ACTION.REGENERATE_STATE) },
+    ];
+    const out = healthDiagnostic.applyRepairs(bad.projectDir, diagnostics, true, false);
+    assert.deepEqual(out.applied, [], 'no repair in the run was applied');
+    assert.equal(out.details.length, 2);
+    assert.ok(out.details.every((d) => d.success === false), JSON.stringify(out.details));
+    assert.match(out.details[0].error, /the run stopped before its first write/);
+    assert.match(out.details[1].error, /outside the closed set/);
+    assert.deepEqual(treeBytes(path.join(bad.projectDir, '.planning')), before, 'config.json was not written; the tree is byte-identical');
+
+    // CONTROL: the same first diagnostic alone, over an in-set report, does write.
+    const good = project(t, 'passed');
+    cleanup(path.join(good.projectDir, '.planning', 'config.json'));
+    const ran = healthDiagnostic.applyRepairs(good.projectDir, diagnostics.slice(0, 1), true, false);
+    assert.deepEqual(ran.applied, ['E005']);
+    assert.equal(fs.existsSync(path.join(good.projectDir, '.planning', 'config.json')), true);
+  });
+
+  // SEC-1 (round 4): a symlinked UAT file is contained before its read, like a
+  // VERIFICATION report — its `### N. <name>` / `expected:` text never leaks.
+  const uatSecret = () => ['---', 'status: testing', '---', '', '## Tests', '', `### 1. ${SECRET}`, `expected: ${SECRET}`, 'result: [pending]', ''].join('\n');
+  for (const [label, uatName, linkTarget] of [
+    ['an absolute symlink', '01-UAT.md', (p1, secretFile) => secretFile],
+    ['a relative ../ symlink', '01-UAT.md', (p1, secretFile) => path.relative(p1, secretFile)],
+    ['an absolute symlink', '01-HUMAN-UAT.md', (p1, secretFile) => secretFile],
+  ]) {
+    test(`SEC-1: ${uatName} as ${label} to a file outside the project reads absent through audit-uat, phase uat-passed, init verify-work and audit-open — nothing leaks`, { skip: symlinkSkip }, (t) => {
+      const { projectDir, phaseDir } = project(t, 'passed');
+      const secretFile = path.join(outsideDir(t), 'secret-uat.md');
+      fs.writeFileSync(secretFile, uatSecret());
+      cleanup(path.join(phaseDir, uatName));
+      fs.symlinkSync(linkTarget(phaseDir, secretFile), path.join(phaseDir, uatName));
+
+      assertNoLeak(['audit-uat'], projectDir);
+      assertNoLeak(['phase', 'uat-passed', '1'], projectDir);
+      assertNoLeak(['phase', 'uat-passed', '1', '--require-verification'], projectDir);
+      assertNoLeak(['init', 'verify-work', '1'], projectDir);
+      assertNoLeak(['audit-open'], projectDir);
+    });
+  }
+
+  test('SEC-1 CONTROL: the same UAT text in a regular file inside the phase dir IS read (the leak the guard closes is real)', (t) => {
+    const { projectDir, phaseDir } = project(t, 'passed');
+    fs.writeFileSync(path.join(phaseDir, '01-UAT.md'), uatSecret());
+    const res = runGsdTools(['audit-uat'], projectDir);
+    assert.equal(res.exitCode, 0, res.error);
+    assert.ok(`${res.output}${res.error}`.includes(SECRET), 'an in-project UAT file surfaces its test name');
+  });
+
+  // SEC-2 (round 4): the 120-character cut of the rendered raw status never
+  // lands inside a `\uXXXX` escape or between the halves of a surrogate pair.
+  test('SEC-2: the truncated raw-status token is cut on a boundary — no partial escape, no lone surrogate, and the count is exact', () => {
+    const { VerificationStatusError } = owner5118();
+    const { formatDiagnosticToken } = require('../gsd-core/bin/lib/io.cjs');
+    const tokenOf = (raw) => {
+      const message = new VerificationStatusError(raw, '/p/01-VERIFICATION.md').message;
+      const start = message.indexOf('has status ') + 'has status '.length;
+      return message.slice(start, message.indexOf(', which is outside the closed set'));
+    };
+    let truncated = 0;
+    // Sweep the unit across the cut position (limit-1, limit, limit+1 and around).
+    for (let pad = 100; pad <= 125; pad += 1) {
+      for (const unit of ['\u0001', '\u{1F600}', '​']) {
+        const raw = `${'a'.repeat(pad)}${unit}${'b'.repeat(40)}`;
+        const token = tokenOf(raw);
+        const at = token.indexOf('…(');
+        if (at === -1) continue;
+        truncated += 1;
+        const kept = token.slice(0, at);
+        const more = Number(/^…\((\d+) more\)$/.exec(token.slice(at))?.[1]);
+        const rendered = formatDiagnosticToken(raw);
+        assert.ok(rendered.startsWith(kept), 'the kept part is a prefix of the rendered token');
+        assert.equal(kept.length + more, rendered.length, `the (N more) count is exact for pad=${pad}`);
+        assert.doesNotMatch(kept, /\\u[0-9a-fA-F]{0,3}$/, `pad=${pad}: the cut split a \\uXXXX escape`);
+        assert.doesNotMatch(kept, /[\ud800-\udbff]$/, `pad=${pad}: the cut split a surrogate pair`);
+      }
+    }
+    assert.ok(truncated >= 40, `non-vacuous: the sweep truncated ${truncated} tokens`);
+  });
+
   // D4: the recovery the error text names must be real.
   test('D4: the out-of-set error names the file, the value, the accepted values and a recovery that works — set `status:` or delete the report', (t) => {
     const bad = project(t, 'verified');

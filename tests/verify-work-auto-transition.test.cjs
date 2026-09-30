@@ -18,6 +18,9 @@ const fs = require('fs');
 const path = require('path');
 
 const VERIFY_WORK = path.join(__dirname, '..', 'gsd-core', 'workflows', 'verify-work.md');
+const SHARED_STEP = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'verify-phase-goal.md');
+// The verify-work regeneration arm (#5118): the sentence that opens it.
+const STALE_ARM_ANCHOR = "Run the owner's route — the ONE verification action — here when `VERIFICATION_ROUTE` is";
 
 describe('verify-work.md — auto-transition after UAT passes with 0 issues', () => {
   test('workflow reads transition.md when issues == 0 and security gate cleared', () => {
@@ -111,7 +114,7 @@ describe('verify-work.md — auto-transition after UAT passes with 0 issues', ()
   // #5118: the stale arm is keyed on the owner's route, not the status word.
   test('stale verification blocks before phase transition', () => {
     const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
-    const staleIdx = content.indexOf('If `PHASE_VERIFICATION_STATUS` is not `passed` and `VERIFICATION_ROUTE` is `execute-phase`');
+    const staleIdx = content.indexOf(STALE_ARM_ANCHOR);
     const predicateIdx = content.indexOf('PHASE_COMPLETE=$(gsd_run phase uat-passed "{phase}" --require-verification)');
     const transitionIdx = content.indexOf('transition.md');
 
@@ -301,9 +304,9 @@ describe('verify-work.md — stale stop routes to the verifier (#4682)', () => {
   // instead of an inline second copy of the verifier spawn.
   test('the stale stop instructs re-running the verifier, not verify-work (#4682)', () => {
     const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
-    const staleIdx = content.indexOf('If `PHASE_VERIFICATION_STATUS` is not `passed` and `VERIFICATION_ROUTE` is `execute-phase`');
+    const staleIdx = content.indexOf(STALE_ARM_ANCHOR);
     assert.ok(staleIdx !== -1, 'the stale stop must exist');
-    const block = content.slice(staleIdx, staleIdx + 1600);
+    const block = content.slice(staleIdx, content.indexOf('PHASE_COMPLETE=$(gsd_run phase uat-passed'));
 
     assert.match(block, /execute-phase\/steps\/verify-phase-goal\.md/, 'the stale stop must run the shared regeneration step');
     const step = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'verify-phase-goal.md'), 'utf-8');
@@ -313,5 +316,108 @@ describe('verify-work.md — stale stop routes to the verifier (#4682)', () => {
       block, /`\/gsd:verify-work \{phase\}` — re-run verification/,
       'the self-referential re-run advice must be gone'
     );
+  });
+});
+
+// ── #5118 review F1 — a `missing` report must not dispatch the regeneration
+// on an unexecuted phase; the shared step loads the ROADMAP goal explicitly ──
+describe('verify-work.md — the regeneration arm is guarded on a phase that can be verified (#5118)', () => {
+  const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
+  const armIdx = content.indexOf(STALE_ARM_ANCHOR);
+  const arm = content.slice(armIdx, content.indexOf('PHASE_COMPLETE=$(gsd_run phase uat-passed'));
+
+  test('IMPLEMENTATION_COMPLETE is read from the verify-work init bundle before the arm', () => {
+    const readIdx = content.indexOf("IMPLEMENTATION_COMPLETE=$(printf '%s' \"$INIT\" | jq -r '.phase_completion.implementation_complete // false')");
+    assert.ok(readIdx !== -1, 'the phase_completion.implementation_complete field must be read from $INIT');
+    assert.ok(readIdx < armIdx, 'it must be read before the arm that uses it');
+  });
+
+  test('the arm fires for stale, or for missing only once every plan has a SUMMARY', () => {
+    const head = arm.slice(0, arm.indexOf('```bash'));
+    assert.match(head, /`PHASE_VERIFICATION_STATUS` is `stale`/, 'stale regenerates');
+    assert.match(head, /it is `missing` and `IMPLEMENTATION_COMPLETE` is `true`/, 'missing regenerates only on an executed phase');
+    assert.match(head, /A `missing` report on a phase that is NOT fully executed does NOT\s+dispatch the step/, 'an unexecuted phase does not dispatch the step');
+    assert.match(head, /falls? through to the completion predicate|fall through to the completion predicate/, 'the unexecuted case falls through to the predicate');
+  });
+});
+
+describe('verify-phase-goal.md — the ROADMAP goal is loaded explicitly (#5118)', () => {
+  const step = fs.readFileSync(SHARED_STEP, 'utf-8');
+
+  test('PHASE_GOAL is resolved by roadmap.get-phase --pick goal', () => {
+    assert.match(step, /PHASE_GOAL=\$\(gsd_run query roadmap\.get-phase "\$\{PHASE_NUMBER\}"[^\n]*--pick goal\)/);
+  });
+
+  test('the verifier prompt names {PHASE_GOAL}, not a goal the model must resolve', () => {
+    assert.match(step, /Phase goal: \{PHASE_GOAL\}/);
+    assert.doesNotMatch(step, /\{goal from ROADMAP\.md\}/);
+  });
+});
+
+// ── #5118 review F1 — CLI-level route table: `missing` on an unexecuted phase
+// vs an executed one vs `stale`, and the init field the arm reads ──────────
+describe('verification route table and the init field the regeneration arm keys on (#5118)', () => {
+  const { runGsdTools, createTempGitProject, cleanup } = require('./helpers.cjs');
+  const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const { execFileSync } = require('child_process');
+
+  function initBundle(projectDir) {
+    const res = runGsdTools(['init', 'verify-work', '1'], projectDir);
+    assert.ok(res.success, `init verify-work must run: ${res.error}`);
+    let out = res.output;
+    if (out.startsWith('@file:')) out = fs.readFileSync(out.slice('@file:'.length).trim(), 'utf-8');
+    return JSON.parse(out);
+  }
+
+  function statusJson(projectDir, phaseDir) {
+    const res = runGsdTools(['verification', 'status', phaseDir], projectDir);
+    assert.ok(res.success, `verification status must run: ${res.error}`);
+    return JSON.parse(res.output);
+  }
+
+  function phaseFixture(t, { summarized }) {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    if (summarized) fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    return { projectDir, phaseDir };
+  }
+
+  test('missing report, phase NOT executed: route execute-phase but implementation_complete is false (no dispatch)', (t) => {
+    const { projectDir, phaseDir } = phaseFixture(t, { summarized: false });
+    const status = statusJson(projectDir, phaseDir);
+    assert.strictEqual(status.status, 'missing');
+    assert.strictEqual(status.route, 'execute-phase');
+    assert.strictEqual(initBundle(projectDir).phase_completion.implementation_complete, false);
+  });
+
+  test('missing report, phase executed: route execute-phase and implementation_complete is true (dispatch)', (t) => {
+    const { projectDir, phaseDir } = phaseFixture(t, { summarized: true });
+    const status = statusJson(projectDir, phaseDir);
+    assert.strictEqual(status.status, 'missing');
+    assert.strictEqual(status.route, 'execute-phase');
+    assert.strictEqual(initBundle(projectDir).phase_completion.implementation_complete, true);
+  });
+
+  test('stale report: route execute-phase and implementation_complete is true (dispatch)', (t) => {
+    const { projectDir, phaseDir } = phaseFixture(t, { summarized: true });
+    const declared = ['.planning/phases/01-foo/01-01-PLAN.md', '.planning/phases/01-foo/01-01-SUMMARY.md'];
+    const fp = runGsdTools(['verification', 'fingerprint', phaseDir, ...declared], projectDir);
+    assert.ok(fp.success, `fingerprint must succeed: ${fp.error}`);
+    const parsed = JSON.parse(fp.output);
+    fs.writeFileSync(
+      path.join(phaseDir, '01-VERIFICATION.md'),
+      `---\nstatus: passed\ncovered_files:\n${parsed.covered_files.map((f) => `  - ${f}`).join('\n')}\ncovered_digest: "${parsed.covered_digest}"\n---\n`,
+    );
+    execFileSync('git', ['add', '-A'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+    execFileSync('git', ['commit', '-q', '-m', 'seed'], { cwd: projectDir, timeout: GIT_TIMEOUT_MS });
+    assert.strictEqual(statusJson(projectDir, phaseDir).status, 'passed', 'sanity: fresh');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary changed\n');
+    const status = statusJson(projectDir, phaseDir);
+    assert.strictEqual(status.status, 'stale');
+    assert.strictEqual(status.route, 'execute-phase');
+    assert.strictEqual(initBundle(projectDir).phase_completion.implementation_complete, true);
   });
 });

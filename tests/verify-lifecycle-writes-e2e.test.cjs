@@ -256,9 +256,9 @@ describe('T16: a genuine change still publishes and stales the report (invariant
 // They run the real CLI verbs the workflow prose names, and they simulate two
 // things in test JS: (1) the workflow's route-following (`verifyWorkCycle`
 // follows the `route` field the way the prose instructs) and (2) the
-// gsd-verifier agent's report write. Live-runtime verification that verify-work
-// actually follows the route is the manual evidence row N3, recorded in the PR
-// body.
+// gsd-verifier agent's report write. That verify-work follows the route at
+// runtime is asserted structurally against the shipped workflow text
+// (tests/verify-work-auto-transition.test.cjs, #5118 / ADR-5057 Phase 4).
 // ═══════════════════════════════════════════════════════════════════════════
 
 const ROOT_5118 = path.resolve(__dirname, '..');
@@ -266,7 +266,7 @@ const WORKFLOWS_5118 = path.join(ROOT_5118, 'gsd-core', 'workflows');
 const EXEC_STEPS_5118 = path.join(WORKFLOWS_5118, 'execute-phase', 'steps');
 const SHARED_STEP_5118 = 'verify-phase-goal.md';
 
-// The shared verification step's deterministic CLI sequence (review F, V46):
+// The shared verification step's deterministic CLI sequence (#5118, V46):
 // the step's own bash fences must run `verification.fingerprint` and then read
 // `verification.status` — asserted from the shipped file, then performed.
 // The verifier AGENT's report write is the one non-deterministic action in the
