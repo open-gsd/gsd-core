@@ -80,6 +80,7 @@ const EXACT_INLINE_DIRECTIVE_WORKFLOWS = new Set([
   'discuss-phase/templates/discussion-log.md',
   'execute-phase/steps/code-review-disposition.md',
   'execute-phase/steps/codebase-drift-gate.md',
+  'execute-phase/steps/gap-closure-artifacts.md',
   'execute-phase/steps/regression-gate.md',
   'execute-phase/steps/regression-gate-run.md',
   'execute-phase/steps/worktree-recovery-policy.md',

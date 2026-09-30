@@ -3,11 +3,14 @@ Apply response_language to all user-facing prose — narration between tool call
 <step name="verify_phase_goal_regeneration">
 **The one verification action for a phase (#5118, ADR-5057 Phase 4).** The verification owner
 routes `stale` (and `missing`) to `execute-phase`; this file is what that route runs, and it is the
-ONLY place the verification sequence is written: the gates execute-phase runs before its verifier,
-the verifier dispatch, the covered-input fingerprint, and the owner's status read. Two workflows
-include it — `execute-phase.md` step `verify_phase_goal` and `verify-work.md` step
-`complete_session` (a report routed to `execute-phase`) — and both run every step below, in order,
-identically. There is no per-caller branch.
+ONLY place the verification sequence is written, whole and in this order: the `verify:post` hook
+dispatch with the SECURITY threats-open gate (`verify_post_security_gate`), the code-review gate,
+the gap-closure parent-artifact close, the manifest-gated regression gate, the verifier dispatch,
+the covered-input fingerprint, and the owner's status read. Two workflows include it —
+`execute-phase.md` step `verify_phase_goal` and `verify-work.md` step `complete_session` (a report
+routed to `execute-phase`) — and both run every step below, in order, identically. There is no
+per-caller branch; what stays in `execute-phase.md` is only its own bookkeeping (the wave summary
+table in `aggregate_results`, the roadmap/state writes after a `passed` verdict).
 
 **Inputs — one bundle for both callers.** The `gsd_run query init.execute-phase "${PHASE_NUMBER}"`
 bundle (execute-phase loaded it in `initialize`; verify-work loads the same query before including
@@ -20,6 +23,35 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 TDD_MODE=${TDD_MODE:-$(gsd_run loop render-hooks execute:post --active-cap tdd)}
 VERIFIER_SKILLS=$(gsd_run query agent-skills gsd-verifier)
 CONTEXT_WINDOW=$(gsd_run query config-get context_window --raw 2>/dev/null || echo "200000")
+```
+</step>
+
+<step name="verify_post_security_gate">
+**`verify:post` hook dispatch and the SECURITY threats-open gate.** This runs BEFORE the verifier
+writes (and fingerprints) the report, so the dispatch takes no `--after-fingerprint` — nothing is
+fingerprinted yet, and gating on it here would be a no-op by construction (the allowlisted exception
+in `scripts/lint-verify-lifecycle-writes.allowlist.json`).
+
+```bash
+VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
+SECURITY_FILE=$(ls "${PHASE_DIR}"/*-SECURITY.md 2>/dev/null | head -1)
+```
+
+Dispatch every `kind == "step"` hook per @gsd-core/references/loop-hook-dispatch.md (skip when none). The secure-phase routing below applies when that specific hook is active.
+
+If no active secure-phase step hook exists: skip.
+
+If an active secure-phase step hook exists AND `SECURITY_FILE` is empty (no SECURITY.md yet):
+Include in the next-steps routing output:
+```
+⚠ Security enforcement enabled — run before advancing:
+  /gsd:secure-phase {PHASE} ${GSD_WS}
+```
+
+If an active secure-phase step hook exists AND SECURITY.md exists: check frontmatter `threats_open`. If > 0:
+```
+⚠ Security gate: {threats_open} threats open
+  /gsd:secure-phase {PHASE} — resolve before advancing
 ```
 </step>
 
@@ -55,6 +87,8 @@ GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw)
 CHECK_EXIT=$?
 ```
 
+`${hook.check.query}` is deliberately left unquoted: it is a multi-word query (verb plus flags) that must word-split, and it is safe only because it is charset-validated first per `loop-hook-dispatch.md` § `gate`.
+
 **Gate evaluation** uses the same two-step contract as the `execute:wave:post` gates (`execute-phase/steps/wave-post-gate-hooks.md`).
 
 **TDD review escalation (overrides the advisory default for the `tdd.review-checkpoint` gate only).** The tdd `execute:post` gate is declared `blocking: false`, so by the generic contract above it displays its `message`/table and continues. There is ONE documented exception (see `~/.claude/gsd-core/references/execute-mvp-tdd.md`): when `TDD_MODE=true` AND `GATE_RESULT.block == true` (one or more TDD plans miss a RED or GREEN gate commit; #4011 — no MVP condition), the end-of-phase TDD review escalates from advisory to **blocking under TDD** — refuse to mark the phase complete and present:
@@ -66,7 +100,14 @@ Resolve and re-run /gsd execute-phase, or override with /gsd execute-phase {phas
 
 (`--force-mvp-gate` is the documented, not-yet-implemented escape hatch.) Outside TDD mode, TDD-review violations remain advisory (table shown, execution continues).
 
-**Proceed rule:** If `TDD_MODE && GATE_RESULT.block == true` for `tdd.review-checkpoint`: STOP — do NOT proceed to `regression_gate`, the verifier, `close_parent_artifacts`, or `phase.complete`. Otherwise proceed normally.
+**Proceed rule:** If `TDD_MODE && GATE_RESULT.block == true` for `tdd.review-checkpoint`: STOP — do NOT proceed to `close_parent_artifacts`, `regression_gate`, the verifier, or `phase.complete`. Otherwise proceed normally.
+</step>
+
+<step name="close_parent_artifacts_dispatch">
+**Gap-closure parent artifacts (its original place: after the code-review gate, before the regression
+gate).** If `section_manifest` is `null` or `"gap-closure-artifacts"` is in its `included` list: read
+and execute `gsd-core/workflows/execute-phase/steps/gap-closure-artifacts.md`. Otherwise skip — do
+not read the file. It applies to decimal (gap-closure) phases only and is a no-op for any other phase.
 </step>
 
 <step name="regression_gate_dispatch">
