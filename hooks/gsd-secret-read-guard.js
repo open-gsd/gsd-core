@@ -795,6 +795,11 @@ function tokenize(str) {
 // ---------------------------------------------------------------------------
 
 // `@file` (curl -d), `--flag=value`, `-Xvalue` → the operand that names the file.
+// A bundled short cluster (`-if.env`) hides the value after more than one
+// flag letter (#5046). Any tail from the third character on can be that
+// operand, so the first tail that names a secret wins. Other tails still go
+// through namesSecret, which keeps `.env.example` and `.envrc` allowed.
+// A cluster that names nothing secret keeps the historical two-character strip.
 function normalizeOperand(text) {
   let v = text;
   if (v.startsWith('@')) v = v.slice(1);
@@ -802,6 +807,10 @@ function normalizeOperand(text) {
     const eq = v.indexOf('=');
     if (eq !== -1) v = v.slice(eq + 1);
   } else if (/^-[A-Za-z]./.test(v)) {
+    for (let k = 2; k < v.length; k++) {
+      const tail = v.slice(k);
+      if (namesSecret(tail)) return tail;
+    }
     v = v.slice(2);
   }
   return v;
