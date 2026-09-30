@@ -289,6 +289,7 @@ function buildClaudeMdWorkflowEnforcement(runtime: unknown): string {
     'Before using Edit, Write, or other file-changing tools, start work through a GSD command so planning artifacts and execution context stay in sync.',
     '',
     'Use these entry points:',
+    `- \`${String(formatGsdSlash('fast', runtime))}\` for a trivial task inline, with no subagents and no PLAN.md`,
     `- \`${String(formatGsdSlash('quick', runtime))}\` for small fixes, doc updates, and ad-hoc tasks`,
     `- \`${String(formatGsdSlash('debug', runtime))}\` for investigation and bug fixing`,
     `- \`${String(formatGsdSlash('execute-phase', runtime))}\` for planned phase work`,

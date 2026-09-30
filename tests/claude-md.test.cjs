@@ -43,11 +43,19 @@ describe('generate-claude-md', () => {
     // #3584: generated CLAUDE.md must emit the runtime-routable hyphen-form
     // (Claude/Cursor/OpenCode/Kilo etc.); the legacy colon form is no longer
     // dispatched by current skill installs.
+    // #5036: /gsd-fast is listed ahead of /gsd-quick as the lightest entry
+    // point — a trivial task inline, no subagents, no PLAN.md.
+    assert.ok(content.includes('/gsd-fast'));
     assert.ok(content.includes('/gsd-quick'));
     assert.ok(content.includes('/gsd-debug'));
     assert.ok(content.includes('/gsd-execute-phase'));
+    assert.ok(!content.includes('/gsd:fast'));
     assert.ok(!content.includes('/gsd:quick'));
     assert.ok(!content.includes('/gsd:execute-phase'));
+    assert.ok(
+      content.indexOf('/gsd-fast') < content.indexOf('/gsd-quick'),
+      '/gsd-fast must precede /gsd-quick in the entry-point list'
+    );
     assert.ok(content.includes('Do not make direct repo edits outside a GSD workflow'));
   });
 
