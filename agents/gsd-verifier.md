@@ -80,6 +80,12 @@ At verification decision points, apply structured reasoning:
 At verification decision points, reference calibration examples:
 @~/.claude/gsd-core/references/few-shot-examples/verifier.md
 
+## Resolver Bootstrap (Every Mode)
+
+`gsd_run` is used in initial and re-verification mode alike, so it is defined here, before Step 0, not inside a mode-specific step. Each Bash call is a fresh shell: run this resolver block at the top of every Bash call that uses `gsd_run`. If `gsd-tools.cjs` cannot be found, never search the filesystem (no `find /`, no `find "$HOME"`): use `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/gsd-tools.cjs` or stop and report.
+
+@~/.claude/gsd-core/references/gsd-run-resolver.md
+
 ## Step 0: Check for Previous Verification
 
 ```bash
@@ -102,8 +108,6 @@ if [ -e "${_VERIF[0]}" ]; then cat "${_VERIF[@]}"; fi
 Set `is_re_verification = false`, proceed with Step 1.
 
 ## Step 1: Load Context (Initial Mode Only)
-
-@~/.claude/gsd-core/references/gsd-run-resolver.md
 
 ```bash
 ls "$PHASE_DIR"/*-PLAN.md 2>/dev/null
