@@ -6,6 +6,7 @@
 - **Absorbs:** [#4222](https://github.com/open-gsd/gsd-core/issues/4222), [#4561](https://github.com/open-gsd/gsd-core/issues/4561), [#4594](https://github.com/open-gsd/gsd-core/issues/4594) — three `confirmed-bug` issues that are the same missing owner reported at two ends of one wire
 - **Framed by:** [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) (host-integration interface — agent dispatch is interface point 2)
 - **Pattern copied from:** [ADR-2121](2121-phase-identifier-parsing-consolidation.md) (phase-identifier consolidation: seam + migration + anti-divergence guard). This ADR reuses its phase-token grammar and its drift-lint shape deliberately.
+- **Amended:** 2026-09-29 by Phase 2 ([#4904](https://github.com/open-gsd/gsd-core/issues/4904)) — Decision 2 defines the `IsolationDecision`'s provenance field, `decided_by` (`resolver` | `caller`, absent reads as `caller`), and states which decisions a re-query holds. Without it, Decision 2's hold and #4232's re-derivation cannot both be true. See *The record states who decided it* under Decision 2.
 - **Scope note:** unlike ADR-2121, this ADR does **not** land as a code-free Phase 0. It ships alongside Phase 1's implementation because the epic's phase sub-issues could not be created in the session that executed it; the decisions below were nonetheless fixed before that implementation was written, and Phases 2 and 3 execute against this file.
 
 ## Context
@@ -102,6 +103,35 @@ computes its degrade from call-site context that does not exist on disk:
 **A decision that cannot be recomputed must be recorded and honoured, not recomputed and
 overwritten.** #4232's base-check re-derivation stays — it is correct for the producers it
 covers, and this decision builds on it rather than replacing it.
+
+**The record states who decided it.** Holding and re-deriving are mutually exclusive on a
+record that carries only the value and its scope. The degrade #4232 re-derives is itself
+written as a fresh, in-scope `none` — so a hold keyed on value and freshness makes the
+resolver hold its *own* previous answer, and #4232's "the evaluation reads live git state"
+silently stops being true. Hold none of them and the three producers above are clobbered
+again. The value cannot tell the two cases apart; only the producer can.
+
+An `IsolationDecision` therefore carries a provenance field, `decided_by` in the sentinel
+file (`decidedBy` once read), with exactly two values:
+
+| `decided_by` | Written when | A later plain re-query |
+|---|---|---|
+| `resolver` | the resolver derived the value itself, from state it re-reads on every call — the #3737 opt-out, #4232's base check | re-evaluates it; the record is not held |
+| `caller` | a producer recorded it with `--force-isolation`, from a call site whose reasoning the resolver cannot reconstruct — the three producers in the table above | holds it, when the record is fresh, well-formed, `none`, and in scope for the query |
+
+**An absent field reads as `caller`**, and so does any value other than `resolver`. The
+case this covers is a record written by a pre-Phase-2 `gsd-tools` still in flight during an
+upgrade, and the default is chosen by the cost of being wrong in each direction: holding a
+degrade that could have been re-derived costs one sequential run; clobbering one the caller
+owns makes the guard refuse the dispatch outright, and the work does not run at all —
+#4222's own worst case.
+
+**What is re-derivable is not recorded.** The same rule settles the non-git project root,
+whose base-check verdict #4734 changed after #4232 closed. A root with no repository has no
+HEAD to compare against a fork base, so the base check has re-derived nothing there, and
+that verdict is recomputed on every call. The resolver does not record it as a degrade; the
+guard's #4734 fallback keeps owning it. The indeterminate `head-unresolvable` degrade is
+still recorded, because failing closed on an indeterminate answer is #3050's rule.
 
 ### Decision 3 — a copy that must exist is pinned by a parity test, never merely tolerated
 
