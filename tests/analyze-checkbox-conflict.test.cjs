@@ -129,6 +129,58 @@ describe('roadmap analyze checkbox_conflict (#4757)', () => {
     }
   });
 
+  function writeVerified(dirName, pad) {
+    const dir = path.join(tmpDir, '.planning', 'phases', dirName);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${pad}-01-PLAN.md`), '---\nplan: 01\n---\n\n# Plan\n');
+    fs.writeFileSync(path.join(dir, `${pad}-01-SUMMARY.md`), '---\nplan: 01\n---\n\n# Summary\n');
+    fs.writeFileSync(path.join(dir, `${pad}-VERIFICATION.md`), '---\nstatus: passed\n---\n\n# Verification\n');
+  }
+
+  test('a progress-table-only phase has no checkbox and is never a conflict, even when complete on disk', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n## Progress\n\n| Phase | Name | Plans | Status |\n|-------|------|-------|--------|\n| 1 | Alpha | 1/1 | Complete |\n',
+    );
+    writeVerified('01-alpha', '01');
+    const out = analyze(tmpDir);
+    assert.strictEqual(out.phases[0].disk_status, 'complete');
+    assert.deepStrictEqual(out.checkbox_conflict, []);
+  });
+
+  test('a heading with no checklist entry has no checkbox and is never a conflict, even when complete on disk', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n### Phase 1: Alpha\n\n**Goal**: g\n',
+    );
+    writeVerified('01-alpha', '01');
+    const out = analyze(tmpDir);
+    assert.strictEqual(out.phases[0].disk_status, 'complete');
+    assert.deepStrictEqual(out.checkbox_conflict, []);
+  });
+
+  test('checklist-only (synthesized) phases are compared: ticked backfilled conflicts, unticked no-directory does not', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n- [x] **Phase 1: Alpha** - a\n- [ ] **Phase 2: Beta** - b\n',
+    );
+    writePhaseDir(tmpDir, 1, 'alpha', DISK.BACKFILLED);
+    const out = analyze(tmpDir);
+    assert.deepStrictEqual(out.checkbox_conflict, [
+      { number: '1', roadmap_complete: true, disk_status: 'empty', plan_count: 0, summary_count: 0 },
+    ]);
+  });
+
+  test('a ticked sentinel phase (999.x) is absent from phases and from checkbox_conflict', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n- [x] **Phase 1: Alpha** - a\n- [x] **Phase 999.1: Icebox** - b\n\n### Phase 1: Alpha\n\n**Goal**: g\n\n### Phase 999.1: Icebox\n\n**Goal**: g\n',
+    );
+    writePhaseDir(tmpDir, 1, 'alpha', DISK.BACKFILLED);
+    const out = analyze(tmpDir);
+    assert.deepStrictEqual(out.checkbox_conflict.map((c) => c.number), ['1']);
+  });
+
   test('a roadmap with no phases reports an empty array, not null/undefined', () => {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
     const out = analyze(tmpDir);
@@ -148,9 +200,10 @@ describe('roadmap analyze checkbox_conflict property (#4757)', () => {
         try {
           writeProject(tmpDir, phases);
           const out = analyze(tmpDir);
-          const expected = out.phases
-            .filter((p) => p.roadmap_complete !== (p.disk_status === 'complete'))
-            .map((p) => p.number);
+          // Derived from the GENERATED inputs, not from the output under test.
+          const expected = phases
+            .map((p, i) => (p.ticked !== (p.shape === DISK.VERIFIED) ? String(i + 1) : null))
+            .filter((n) => n !== null);
           assert.deepStrictEqual(out.checkbox_conflict.map((c) => c.number), expected);
           // The checkbox is reported verbatim from the phase record.
           phases.forEach((p, i) => {

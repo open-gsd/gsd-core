@@ -453,8 +453,12 @@ plans are all summarized but which has no passing `*-VERIFICATION.md`
 
 `checkbox_conflict` lists every such phase so a caller is never handed a
 ticked phase, or withheld an unticked-but-verified one, with no signal. It is
-always an array (empty when every phase agrees). A phase is listed when its
-`roadmap_complete` differs from `disk_status === "complete"`.
+always an array when `ROADMAP.md` exists (empty when every phase agrees). A
+phase is listed when its `roadmap_complete` differs from
+`disk_status === "complete"`. Only phases that have a ROADMAP checkbox are
+compared: a phase declared only by a progress-table row, or by a heading with
+no checklist entry, has no checkbox to disagree with and is never listed
+(its `roadmap_complete` is `false` because there is nothing to read).
 
 | Field | Type | Meaning |
 |-------|------|---------|
