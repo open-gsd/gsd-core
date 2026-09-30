@@ -2783,6 +2783,10 @@ function scanStatePhaseDirs(
   phasesDir: string,
   phaseConvention: string | null,
   storedMilestone?: string | null,
+  // `quiet` suppresses ONLY the duplicate-phase-key stderr warning. A pre-write
+  // validation pass that is followed by the real rebuild scan sets it, so the
+  // one command prints the warning once (the rebuild scan owns the warning).
+  options: { quiet?: boolean } = {},
 ): {
   phaseDirs: string[];
   phaseDirScope: Scope;
@@ -2858,7 +2862,7 @@ function scanStatePhaseDirs(
       const incumbent = seenPhaseNums.get(key) as string;
       const survivor = dir < incumbent ? dir : incumbent;
       seenPhaseNums.set(key, survivor);
-      process.stderr.write(
+      if (options.quiet !== true) process.stderr.write(
         `gsd: warning — phase directories '${incumbent}' and '${dir}' both normalize to phase key '${key}' (duplicate phase number in .planning/phases/); keeping '${survivor}' by deterministic lexicographic order. (#3355)\n`
       );
     }
@@ -6853,7 +6857,10 @@ function assertVerificationReportsReadable(bodyContent: string, cwd: string): vo
 function statePhaseDirsToScan(cwd: string): string[] {
   const phasesDir = planningPaths(cwd).phases;
   if (!fs.existsSync(phasesDir)) return [];
-  return scanStatePhaseDirs(cwd, phasesDir, resolvePhaseIdConvention(cwd)).phaseDirs;
+  // quiet: this is a pre-write validation pass, always followed by the real
+  // rebuild scan (buildStateFrontmatter), which owns the duplicate-phase-key
+  // stderr warning — so the command prints it once, not twice.
+  return scanStatePhaseDirs(cwd, phasesDir, resolvePhaseIdConvention(cwd), undefined, { quiet: true }).phaseDirs;
 }
 
 export = {
