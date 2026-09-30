@@ -552,7 +552,7 @@ const COVERED = {
   'planning-inspect': {
     cjs: 'gsd-core/bin/lib/planning-inspect.cjs',
     excludeTests: ['planning-inspect.test.cjs'],
-    minScore: 56,
+    minScore: 72, // #5118: 73.70% in CI run 36676296090; floor(73.70) - 1
   },
   // plan-document / planning-command-router: their own names never appear in any test
   // filename (the shared dedicated unit file is named after planning-inspect, the module
