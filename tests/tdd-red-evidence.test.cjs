@@ -483,18 +483,20 @@ describe('#4957 — swift-testing RED evidence', () => {
     assert.equal(result.evidence.fail, 1);
   });
 
-  test("the issue's literal aggregate-only repro reports the real test count, not zero_tests_discovered (#4957)", () => {
+  test("the issue's literal aggregate-only repro is an incomplete report, not zero_tests_discovered (#4957)", () => {
     // The issue's exact repro JSON: only the aggregate summary line, no per-test
     // lines at all. We cannot identify which named test failed, so this must NOT
     // reach RED_EVIDENCE_OK — but it must also never lie that zero tests ran.
+    // Like a TAP plan or JUnit count mismatch, the report is incomplete.
     const result = classifyRedEvidence({
       ...INPUT,
       output: '✘ Test run with 3 tests in 1 suite failed after 0.004 seconds with 6 issues.\n',
     });
-    assert.equal(result.evidence.tests, 3, 'the real test count must be reported, never zero');
     assert.notEqual(result.reason, 'zero_tests_discovered');
     assert.equal(result.verdict, 'INVALID_RED');
-    assert.equal(result.reason, 'nonzero_exit_without_test_failure');
+    assert.equal(result.reason, 'invalid_record');
+    assert.equal(result.evidence.format, 'swift-testing');
+    assert.deepEqual(result.evidence.report_errors, ['Incomplete swift-testing report']);
   });
 
   test('an unrelated swift-testing failure is not the target test', () => {
@@ -538,7 +540,7 @@ describe('#4957 — swift-testing RED evidence', () => {
     assert.equal(result.evidence.fail, 1);
   });
 
-  test('a stray swift-testing-looking per-test line with no aggregate marker stays on the TAP path', () => {
+  test('a stray swift-testing-looking per-test line with no aggregate marker is not a swift-testing report', () => {
     // No "Test run with N tests in M suites ..." aggregate line present at all —
     // must not be confidently classified as swift-testing off a per-test line alone.
     const result = classifyRedEvidence({
@@ -546,7 +548,8 @@ describe('#4957 — swift-testing RED evidence', () => {
       output: failLine('X'),
     });
     assert.equal(result.verdict, 'INVALID_RED');
-    assert.equal(result.reason, 'zero_tests_discovered');
+    assert.equal(result.reason, 'invalid_record');
+    assert.equal(result.evidence.format, 'unknown');
   });
 
   test('property: swift-testing target matching is exactly failing-set membership (#4957)', () => {
@@ -599,6 +602,7 @@ describe('#4957 — swift-testing RED evidence', () => {
       '  actual: |-',
       '    Got: "Test run with 2 tests in 1 suite passed after 0.02 seconds."',
       '  ...',
+      '1..1',
       '# tests 1',
       '# pass 0',
       '# fail 1',
@@ -719,13 +723,14 @@ describe('#4970 — Python unittest RED evidence', () => {
     assert.equal(result.reason, 'unexpected_green');
   });
 
-  test('an aggregate-only report with no FAIL/ERROR header is honest, not fabricated (fail:0)', () => {
+  test('an aggregate-only report with no FAIL/ERROR header is incomplete, not fabricated (fail:0)', () => {
     // A truncated/aggregate-only report must never fabricate a target match —
-    // fail:0 correctly falls through to the existing generic reason.
+    // a counted failure without its header makes the report incomplete.
     const output = ['', 'Ran 1 test in 0.001s', '', 'FAILED (failures=1)', ''].join('\n');
     const result = classifyRedEvidence({ ...INPUT, output });
     assert.equal(result.verdict, 'INVALID_RED');
-    assert.equal(result.reason, 'nonzero_exit_without_test_failure');
+    assert.equal(result.reason, 'invalid_record');
+    assert.deepEqual(result.evidence.report_errors, ['Incomplete unittest report']);
     assert.equal(result.evidence.fail, 0);
     assert.deepEqual(result.evidence.failing_tests, []);
   });
@@ -789,7 +794,7 @@ describe('#4970 — Python unittest RED evidence', () => {
     // The issue's explicit carve-out: a module import/collection crash makes
     // unittest synthesize a _FailedTest whose method name can coincidentally
     // equal the plan's target test. This must NOT be fabricated into a real
-    // failure — it must fall through to the existing fail-closed reason.
+    // failure — the load failure invalidates the whole report.
     const output = [
       'ERROR: test_adds_two_numbers (unittest.loader._FailedTest.test_adds_two_numbers)',
       '----------------------------------------------------------------------',
@@ -804,7 +809,8 @@ describe('#4970 — Python unittest RED evidence', () => {
     ].join('\n');
     const result = classifyRedEvidence({ ...INPUT, output });
     assert.equal(result.verdict, 'INVALID_RED');
-    assert.equal(result.reason, 'nonzero_exit_without_test_failure');
+    assert.equal(result.reason, 'invalid_record');
+    assert.deepEqual(result.evidence.report_errors, ['unittest module failed to load']);
     assert.equal(result.evidence.fail, 0, '_FailedTest must not be counted as a real failure');
     assert.deepEqual(result.evidence.failing_tests, []);
   });

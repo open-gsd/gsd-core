@@ -189,3 +189,57 @@ test('#4692 property: malformed XML and mismatched suite counts cannot authorize
     }
   }));
 });
+
+// swift-testing and unittest print their aggregate summary last, so a
+// truncated capture loses it before any usable failure can be proved.
+const plainCases = cases(['passed', 'failed']).map(rows => [{ name: 'target', status: 'failed' }, ...rows]);
+
+function swiftReport(rows) {
+  const lines = rows.map(row => row.status === 'failed'
+    ? `✘ Test "${row.name}" failed after 0.01 seconds with 1 issue.`
+    : `✔ Test "${row.name}" passed after 0.01 seconds.`);
+  const failures = rows.filter(row => row.status === 'failed').length;
+  return [...lines, `✘ Test run with ${rows.length} tests in 1 suite failed after 0.02 seconds with ${failures} issues.`, ''].join('\n');
+}
+
+function unittestReport(rows) {
+  const failed = rows.filter(row => row.status === 'failed');
+  const blocks = failed.flatMap(row => [
+    '======================================================================',
+    `FAIL: ${row.name} (test_demo.AppTest.${row.name})`,
+    '----------------------------------------------------------------------',
+    'AssertionError: boom',
+    '',
+  ]);
+  return [...blocks, `Ran ${rows.length} tests in 0.010s`, '', `FAILED (failures=${failed.length})`, ''].join('\n');
+}
+
+test('#4692 property: swift-testing round-trips result lines and truncation before the summary is blocked', () => {
+  fc.assert(fc.property(plainCases, fc.nat(), (rows, cut) => {
+    const output = swiftReport(rows);
+    const report = parseTestReport(output);
+    assert.equal(report.format, 'swift-testing');
+    assert.equal(report.valid, true);
+    assert.deepEqual(report.tests.map(({ name, status }) => ({ name, status })), rows);
+    assert.equal(classifyRedEvidence(evidence(output)).verdict, 'RED_EVIDENCE_OK');
+    const summary = output.indexOf('✘ Test run with');
+    assertBlocked(output.slice(0, cut % (summary + 1)));
+    assertBlocked(output.replace(/^.*"target".*\n/m, ''));
+  }));
+});
+
+test('#4692 property: unittest failures must all be headed and truncation before the outcome is blocked', () => {
+  fc.assert(fc.property(plainCases, fc.nat(), (rows, cut) => {
+    const output = unittestReport(rows);
+    const report = parseTestReport(output);
+    const failed = rows.filter(row => row.status === 'failed').map(row => row.name);
+    assert.equal(report.format, 'unittest');
+    assert.equal(report.valid, true);
+    assert.equal(report.tests.length, rows.length);
+    assert.deepEqual(report.tests.filter(t => t.status === 'failed').map(t => t.name), failed);
+    assert.equal(classifyRedEvidence(evidence(output)).verdict, 'RED_EVIDENCE_OK');
+    assertBlocked(output.slice(0, cut % output.lastIndexOf(')')));
+    assertBlocked(output.replace('FAIL: target (', 'FAIL: target (unittest.loader._FailedTest.'));
+    assertBlocked(output.replace(`failures=${failed.length}`, `failures=${failed.length + 1}`));
+  }));
+});

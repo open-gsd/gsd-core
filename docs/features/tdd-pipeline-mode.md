@@ -21,7 +21,8 @@ group: v1.36.0 Features
 
 `check tdd-red-evidence` selects a parser by the captured report format. Node's
 built-in runner and Vitest (`tap` and `tap-flat`) share the TAP adapter; Maven
-Surefire and Failsafe share the JUnit XML adapter. The command name does not
+Surefire and Failsafe share the JUnit XML adapter; `swift test` (swift-testing)
+and Python `unittest` text output have their own adapters. The command name does not
 select or bypass validation. Reports from other producers can use these same
 formats. Unsupported or malformed reports return `INVALID_RED` with
 `evidence.report_errors`; configure a supported reporter before proceeding.

@@ -17,7 +17,7 @@ export interface RedEvidenceInput {
   command: unknown;
   /** The command's exit code. */
   exitCode: unknown;
-  /** Unmodified TAP or JUnit XML produced by the actual run. */
+  /** Unmodified TAP, JUnit XML, swift-testing console, or unittest text report produced by the actual run. */
   output: unknown;
   /**
    * Identity of the target the plan named: the `test('...')` name for

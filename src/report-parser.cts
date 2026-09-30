@@ -2,7 +2,9 @@
 import { Parser, type FinalResults, type Result } from './vendor/tap-parser.cjs';
 import { SaxesParser } from './vendor/saxes.cjs';
 
-export const ReportFormat = { Tap: 'tap', Junit: 'junit', Unknown: 'unknown' } as const;
+export const ReportFormat = {
+  Tap: 'tap', Junit: 'junit', SwiftTesting: 'swift-testing', Unittest: 'unittest', Unknown: 'unknown',
+} as const;
 export type ReportFormat = (typeof ReportFormat)[keyof typeof ReportFormat];
 export const TestStatus = { Passed: 'passed', Failed: 'failed', Skipped: 'skipped', Todo: 'todo' } as const;
 export type TestStatus = (typeof TestStatus)[keyof typeof TestStatus];
@@ -147,9 +149,99 @@ function parseJunit(output: string): TestReport {
   return report;
 }
 
+/**
+ * swift-testing console output (#4957). Only the anchored aggregate line marks
+ * the format; every declared test must have its own result line.
+ */
+const SWIFT_AGGREGATE = /^[ \t]*[✘✔][ \t]*Test run with (\d+) tests? in \d+ suites? (passed|failed)\b/gm;
+const SWIFT_RESULT = /^[ \t]*[✘✔][ \t]*Test "([^"]+)" (failed|passed) after [\d.]+ seconds?(?: with \d+ issues?)?\.?$/gm;
+
+function parseSwiftTesting(output: string): TestReport {
+  const report: TestReport = { format: ReportFormat.SwiftTesting, valid: true, tests: [], issues: [] };
+  let declared = 0;
+  let runPassed = true;
+  for (const match of output.matchAll(SWIFT_AGGREGATE)) {
+    declared += Number(match[1]);
+    runPassed &&= match[2] === 'passed';
+  }
+  for (const match of output.matchAll(SWIFT_RESULT)) {
+    report.tests.push({
+      name: match[1],
+      identities: [match[1]],
+      group: null,
+      groupIdentities: [],
+      status: match[2] === 'failed' ? TestStatus.Failed : TestStatus.Passed,
+    });
+  }
+  if (report.tests.length !== declared) report.issues.push('Incomplete swift-testing report');
+  if (runPassed && report.tests.some((test) => test.status === TestStatus.Failed)) {
+    report.issues.push('Contradictory swift-testing status');
+  }
+  report.valid = report.issues.length === 0;
+  return report;
+}
+
+/**
+ * Python stdlib unittest text output (#4970). Passing tests are unnamed unless
+ * verbose, so they are counted from the summary; failures are named by their
+ * FAIL:/ERROR: headers, which must account for every counted failure.
+ */
+const UNITTEST_RAN = /^Ran (\d+) tests? in [\d.]+s$/gm;
+const UNITTEST_HEADER = /^(?:FAIL|ERROR): (\S+)(?: \(([^)]*)\))?/gm;
+
+function parseUnittest(output: string): TestReport {
+  const report: TestReport = { format: ReportFormat.Unittest, valid: true, tests: [], issues: [] };
+  const runs = [...output.matchAll(UNITTEST_RAN)];
+  if (runs.length !== 1) {
+    report.issues.push('Expected exactly one unittest summary');
+    report.valid = false;
+    return report;
+  }
+  const ran = Number(runs[0][1]);
+  const outcome = /^(OK|FAILED)(?: \(([^)]*)\))?$/m.exec(output.slice(runs[0].index + runs[0][0].length));
+  const counts: Record<string, number> = {};
+  for (const part of outcome?.[2]?.split(', ') ?? []) {
+    const [key, value] = part.split('=');
+    counts[key] = Number(value);
+  }
+  if (!outcome || Object.keys(counts).some((key) => !['failures', 'errors', 'skipped', 'expected failures'].includes(key))) {
+    report.issues.push('Unsupported unittest outcome');
+  }
+  let headers = 0;
+  for (const match of output.matchAll(UNITTEST_HEADER)) {
+    headers++;
+    const id = match[2] ?? '';
+    // unittest synthesizes _FailedTest for an import/collection crash; its
+    // method name can equal the target, so it is a load failure, never RED.
+    if (id.includes('_FailedTest')) {
+      report.issues.push('unittest module failed to load');
+      continue;
+    }
+    report.tests.push({
+      name: match[1],
+      identities: [...new Set([match[1], id].filter(Boolean))],
+      group: null,
+      groupIdentities: [],
+      status: TestStatus.Failed,
+    });
+  }
+  const failed = (counts['failures'] ?? 0) + (counts['errors'] ?? 0);
+  const skipped = counts['skipped'] ?? 0;
+  if (headers !== failed || (outcome?.[1] === 'FAILED') !== (failed > 0) || failed + skipped > ran) {
+    report.issues.push('Incomplete unittest report');
+  }
+  const unnamed = (status: TestStatus): TestReportCase => ({ name: '', identities: [], group: null, groupIdentities: [], status });
+  for (let i = 0; i < skipped; i++) report.tests.push(unnamed(TestStatus.Skipped));
+  for (let i = Math.max(ran - failed - skipped, 0); i > 0; i--) report.tests.push(unnamed(TestStatus.Passed));
+  report.valid = report.issues.length === 0;
+  return report;
+}
+
 const adapters: TestReportAdapter[] = [
   { matches: (output) => /^(?:TAP version \d+|(?:not )?ok\b|1\.\.\d+|#)/.test(output.trimStart()), parse: parseTap },
   { matches: (output) => output.trimStart().startsWith('<'), parse: parseJunit },
+  { matches: (output) => new RegExp(SWIFT_AGGREGATE.source, 'm').test(output), parse: parseSwiftTesting },
+  { matches: (output) => new RegExp(UNITTEST_RAN.source, 'm').test(output), parse: parseUnittest },
 ];
 
 /** Parse supported reports into one result contract; unknown/malformed input fails closed. */
