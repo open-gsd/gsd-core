@@ -44,7 +44,7 @@ Three modes:
 </execution_context>
 
 <process>
-Arguments provided: the `<arguments>` block
+Arguments provided: see the `<arguments>` block above.
 Parse the first token from the provided arguments:
 - If it is `--next`: strip the flag, execute the next workflow (passing remaining args e.g. --force, --auto).
 - If it is `--do`: strip the flag, pass remainder as freeform intent to the do workflow.
