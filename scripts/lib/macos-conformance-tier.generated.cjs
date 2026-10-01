@@ -214,6 +214,7 @@ module.exports = {
   "tests/uat-complete-session.test.cjs",
   "tests/uat-predicate.test.cjs",
   "tests/uat.test.cjs",
+  "tests/ui-auditor-screenshot-block.test.cjs",
   "tests/ui-interaction-capture.test.cjs",
   "tests/ui-safety-gate.test.cjs",
   "tests/ui-spec-inventory-provenance.test.cjs",

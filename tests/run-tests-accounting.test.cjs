@@ -7,7 +7,7 @@
  * `--test-force-exit` (the Windows post-test hang backstop, #1051/#869) can end
  * the `node --test` parent while part of a test file's results is unread on the
  * child's pipe (nodejs/node#64833). The count of REGISTERED tests therefore
- * comes from the child (scripts/lib/test-registration-ledger.cjs, `--require`d
+ * comes from the child (scripts/lib/registration-ledger-preload.cjs, `--require`d
  * into each test-file child) and is compared per file with the leaf results the
  * ndjson reporter received (analyzeChunkAccounting).
  *
@@ -37,7 +37,7 @@ const { analyzeChunkAccounting, formatAccountingFailure } = require('../scripts/
 
 const ROOT = path.join(__dirname, '..');
 const HARNESS = path.join(ROOT, 'scripts', 'run-tests.cjs');
-const PRELOAD = path.join(ROOT, 'scripts', 'lib', 'test-registration-ledger.cjs');
+const PRELOAD = path.join(ROOT, 'scripts', 'lib', 'registration-ledger-preload.cjs');
 const REPORTER = path.join(ROOT, 'scripts', 'lib', 'ndjson-reporter.cjs');
 
 function ndjson(lines) {
@@ -201,7 +201,7 @@ describe('analyzeChunkAccounting (#4031)', () => {
   });
 });
 
-describe('test-registration-ledger preload (#4031)', () => {
+describe('registration-ledger-preload preload (#4031)', () => {
   // test + it + skip + todo + describe-body it + test + direct call + .test property = 8;
   // the run-time subtest and the body of a skipped suite are not registrations.
   const FIXTURE = `'use strict';

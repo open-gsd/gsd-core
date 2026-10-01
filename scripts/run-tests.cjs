@@ -1256,7 +1256,7 @@ function analyzeChunkEvents(eventsPath) {
 // unread on the child's pipe, so the reporters (and this runner's own ndjson
 // events file) never see them and the run reports a smaller count with exit 0.
 // The count of REGISTERED tests therefore comes from the child, through a
-// channel that does not share that pipe: scripts/lib/test-registration-ledger.cjs
+// channel that does not share that pipe: scripts/lib/registration-ledger-preload.cjs
 // (loaded with `--require`) appends one `{type:'registered', file, count}`
 // line per test-file child, and the ndjson reporter records every leaf
 // `test:pass`/`test:fail` it received. A file whose registered count exceeds
@@ -2090,7 +2090,7 @@ async function main() {
   // #4031: the registration-ledger preload (see analyzeChunkAccounting). Its
   // per-chunk output path travels via env (GSD_RUN_TESTS_LEDGER_FILE), like the
   // events path, so only this fixed `--require <path>` counts toward argv.
-  const ledgerPreloadPath = join(__dirname, 'lib', 'test-registration-ledger.cjs');
+  const ledgerPreloadPath = join(__dirname, 'lib', 'registration-ledger-preload.cjs');
   const ledgerArgs = ['--require', ledgerPreloadPath];
   const ledgerOverhead = ledgerArgs.reduce((sum, a) => sum + a.length + 1, 0);
   const ledgerPathFor = (i) => join(eventsDir, `chunk-${String(i).padStart(3, '0')}.ledger.ndjson`);
