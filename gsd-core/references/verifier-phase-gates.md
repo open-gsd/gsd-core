@@ -34,12 +34,15 @@ no `<decisions>` block.
 GATE_CFG=$(gsd_run query config-get workflow.context_coverage_gate 2>/dev/null || echo "true")
 if [ "$GATE_CFG" != "false" ]; then
   CONTEXT_PATH=$(ls "${PHASE_DIR}"/*-CONTEXT.md 2>/dev/null | head -1)  # #2962: not a for-glob (zsh aborts)
-  DECISION_RESULT=$(gsd_run query check.decision-coverage-verify "${PHASE_DIR}" "${CONTEXT_PATH}")
+  DECISION_RESULT=$(gsd_run query check.decision-coverage-verify "${PHASE_DIR}" "${CONTEXT_PATH}") && DECISION_EXIT=0 || DECISION_EXIT=$?
 fi
 ```
 
 The handler returns JSON `{ skipped, blocking: false, total, honored,
-not_honored: [...], message }`.
+not_honored: [...], message }`. A non-zero `DECISION_EXIT` (`69` `UNAVAILABLE`: the gate
+could not read CONTEXT.md or the phase artifacts, #5170) is **not** "no decisions": record
+`Decision coverage: not evaluated (the gate could not read its evidence)` in VERIFICATION.md
+and do not report counts.
 
 **Reporting:** Append the handler's `message` (a `### Decision Coverage`
 section) to VERIFICATION.md regardless of outcome — even when all

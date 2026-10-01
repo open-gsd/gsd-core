@@ -435,25 +435,13 @@ describe('verification route table and the init field the regeneration arm keys 
 // (UNAVAILABLE, could not look) and 2.
 // ---------------------------------------------------------------------------
 {
-  const { spawnSync } = require('node:child_process');
-  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
-  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const { skipUnless } = require('./helpers/bash-probe.cjs');
+  const { span: docSpan, runBash } = require('./helpers/doc-bash-span.cjs');
 
-  function have(cmd) {
-    const r = spawnSync('bash', ['-c', `command -v ${cmd}`], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
-    return !r.error && r.status === 0;
-  }
-  const SKIP = (have('bash') && have('jq')) ? false : 'bash and jq are required';
+  const SKIP = skipUnless('bash', 'jq');
 
-  /** The lines from the one starting with `from` through the one starting with `through`. */
-  function span(from, through) {
-    const lines = splitLines(fs.readFileSync(VERIFY_WORK, 'utf8'));
-    const start = lines.findIndex((l) => l.trim().startsWith(from));
-    assert.notEqual(start, -1, `verify-work.md must carry a line starting with ${from}`);
-    const end = lines.findIndex((l, i) => i >= start && l.trim().startsWith(through));
-    assert.notEqual(end, -1, `verify-work.md must carry a line starting with ${through} after ${from}`);
-    return lines.slice(start, end + 1);
-  }
+  /** The lines of verify-work.md from the one starting with `from` through the one starting with `through`. */
+  const span = (from, through) => docSpan('gsd-core/workflows/verify-work.md', from, through);
 
   const CAPTURES = [
     {
@@ -468,21 +456,9 @@ describe('verification route table and the init field the regeneration arm keys 
     },
   ];
 
-  function run(capture, { stdout, rc }) {
-    const script = [
-      'set -e',
-      'gsd_run() { printf %s "$STUB_OUT"; return "$STUB_RC"; }',
-      ...capture.lines(),
-      `printf 'PASSED=%s\\n' "$${capture.passedVar}"`,
-      '',
-    ].join('\n');
-    const r = spawnSync('bash', ['-c', script], {
-      encoding: 'utf8',
-      timeout: PROBE_TIMEOUT_MS,
-      env: { ...process.env, STUB_OUT: stdout, STUB_RC: String(rc) },
-    });
-    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
-  }
+  const run = (capture, { stdout, rc }) => runBash(capture.lines(), { stdout, rc }, {
+    probe: `printf 'PASSED=%s\\n' "$${capture.passedVar}"`,
+  });
 
   for (const capture of CAPTURES) {
     describe(`${capture.name} (bash, set -e, stub gsd_run)`, { skip: SKIP }, () => {

@@ -27,20 +27,7 @@ const {
   evidenceUnreadable,
 } = require('../gsd-core/bin/lib/gate-evidence.cjs');
 const { gateVerdict, gateUnreadable } = require('../gsd-core/bin/lib/gate-verdict.cjs');
-
-/** Run `fn` with `fs[method]` throwing `code` for `target`, restoring in `finally`. */
-function withFsFailure(method, target, code, fn) {
-  const original = fs[method];
-  fs[method] = function patched(p, ...rest) {
-    if (String(p) === target) throw Object.assign(new Error(`${code}: injected`), { code });
-    return original.call(this, p, ...rest);
-  };
-  try {
-    return fn();
-  } finally {
-    fs[method] = original;
-  }
-}
+const { withFsFailure } = require('./helpers/fs-failure.cjs');
 
 describe('gate-evidence — readTextEvidence', () => {
   let tmpDir;

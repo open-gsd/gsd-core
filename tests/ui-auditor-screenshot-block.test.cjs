@@ -21,19 +21,16 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const net = require('node:net');
-const { spawn, spawnSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { skipUnless } = require('./helpers/bash-probe.cjs');
 
 const AUDITOR_FILES = ['gsd-ui-auditor.md', 'gsd-ui-auditor.compact.md'];
 const FENCE = '`'.repeat(3);
 
-function have(cmd) {
-  const r = spawnSync('bash', ['-c', `command -v ${cmd}`], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
-  return !r.error && r.status === 0;
-}
-const SKIP = (have('bash') && have('curl')) ? false : 'bash and curl are required';
+const SKIP = skipUnless('bash', 'curl');
 
 /** First bash fence inside <screenshot_approach> (the static capture block). */
 function staticFence(file) {

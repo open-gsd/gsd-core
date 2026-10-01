@@ -16,17 +16,16 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 
-const { createTempProject, cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
-const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { createTempProject, cleanup } = require('./helpers.cjs');
+const { withFsFailure } = require('./helpers/fs-failure.cjs');
+const { runTools } = require('./helpers/gsd-tools-cli.cjs');
 const { evaluateGapAnalysisPlanPost } = require('../gsd-core/bin/lib/gate-gap-analysis-plan-post.cjs');
 const { runGapAnalysis } = require('../gsd-core/bin/lib/gap-checker.cjs');
 const { evaluateApiCoverageVerifyPre } = require('../gsd-core/bin/lib/gate-api-coverage-verify-pre.cjs');
 const { evaluateDecisionCoveragePlan } = require('../gsd-core/bin/lib/gate-decision-coverage-plan.cjs');
 const { evaluateDecisionCoverageVerify } = require('../gsd-core/bin/lib/gate-decision-coverage-verify.cjs');
 
-const TOOLS_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 const PHASE = '.planning/phases/01-x';
 const DECISIONS = ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n');
 const REQUIREMENTS = ['# Requirements', '', '- [ ] **REQ-01**: Users can log in', ''].join('\n');
@@ -48,35 +47,6 @@ function cleanProject() {
   write(dir, `${PHASE}/01-CONTEXT.md`, DECISIONS);
   write(dir, `${PHASE}/01-01-PLAN.md`, '<objective>REQ-01 and D-01</objective>\n');
   return dir;
-}
-
-/** Run `body` with `fs[method]` throwing a coded error for any path accepted by `match`; always restored. */
-function withFsFailure(method, match, code, body) {
-  const original = fs[method];
-  fs[method] = function patched(target, ...rest) {
-    if (typeof target === 'string' && match(target)) {
-      const err = new Error(`${code}: injected failure on ${target}`);
-      err.code = code;
-      throw err;
-    }
-    return original.call(this, target, ...rest);
-  };
-  try {
-    return body();
-  } finally {
-    fs[method] = original;
-  }
-}
-
-function runTools(args, cwd) {
-  try {
-    const stdout = execFileSync(process.execPath, [TOOLS_PATH, ...args], {
-      cwd, encoding: 'utf-8', env: { ...process.env, ...TEST_ENV_BASE }, timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
-    });
-    return { exitCode: 0, stdout: stdout.trim() };
-  } catch (err) {
-    return { exitCode: err.status ?? 1, stdout: err.stdout?.toString().trim() ?? '' };
-  }
 }
 
 describe('gap-analysis: every read is typed evidence', () => {
@@ -214,15 +184,7 @@ describe('verify schema-drift: a gate that could not look exits UNAVAILABLE, nev
     try {
       const preload = path.join(dir, 'stat-fail-preload.cjs');
       fs.writeFileSync(preload, PRELOAD);
-      let result;
-      try {
-        const stdout = execFileSync(process.execPath, ['--require', preload, TOOLS_PATH, 'verify', 'schema-drift', '1', '--raw'], {
-          cwd: dir, encoding: 'utf-8', env: { ...process.env, ...TEST_ENV_BASE }, timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
-        });
-        result = { exitCode: 0, stdout: stdout.trim() };
-      } catch (err) {
-        result = { exitCode: err.status ?? 1, stdout: err.stdout?.toString().trim() ?? '' };
-      }
+      const result = runTools(['verify', 'schema-drift', '1', '--raw'], dir, { preload });
       assert.equal(result.exitCode, 69);
       const payload = JSON.parse(result.stdout);
       assert.equal(payload.unreadable, true);

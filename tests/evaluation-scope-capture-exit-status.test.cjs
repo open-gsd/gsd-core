@@ -12,47 +12,20 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { spawnSync } = require('node:child_process');
-const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { skipUnless } = require('./helpers/bash-probe.cjs');
+const { span: docSpan, runBash } = require('./helpers/doc-bash-span.cjs');
 
-const WORKFLOWS = path.join(__dirname, '..', 'gsd-core', 'workflows');
 const UNRESOLVABLE = '{"status":"unresolvable","reason":"git-unavailable","files":[]}';
 
-function have(cmd) {
-  const r = spawnSync('bash', ['-c', `command -v ${cmd}`], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
-  return !r.error && r.status === 0;
-}
-const SKIP = (have('bash') && have('node')) ? false : 'bash and node are required';
+const SKIP = skipUnless('bash', 'node');
 
-/** The lines from the one starting with `from` through the one starting with `through`. */
-function span(file, from, through) {
-  const lines = splitLines(fs.readFileSync(path.join(WORKFLOWS, file), 'utf8'));
-  const start = lines.findIndex((l) => l.trim().startsWith(from));
-  assert.notEqual(start, -1, `${file} must carry a line starting with ${from}`);
-  const end = lines.findIndex((l, i) => i >= start && l.trim().startsWith(through));
-  assert.notEqual(end, -1, `${file} must carry a line starting with ${through} after ${from}`);
-  return lines.slice(start, end + 1);
-}
+/** The lines of a workflow file from the one starting with `from` through the one starting with `through`. */
+const span = (file, from, through) => docSpan(`gsd-core/workflows/${file}`, from, through);
 
-function run(lines, probe, { stdout, rc }) {
-  const script = [
-    'set -e',
-    'PADDED_PHASE=03; quick_id=q1; LAST_REVIEW_COMMIT=',
-    'gsd_run() { printf %s "$STUB_OUT"; return "$STUB_RC"; }',
-    ...lines,
-    probe,
-    '',
-  ].join('\n');
-  const r = spawnSync('bash', ['-c', script], {
-    encoding: 'utf8',
-    timeout: PROBE_TIMEOUT_MS,
-    env: { ...process.env, STUB_OUT: stdout, STUB_RC: String(rc) },
-  });
-  return { status: r.status, stdout: r.stdout, stderr: r.stderr };
-}
+const run = (lines, probe, { stdout, rc }) => runBash(lines, { stdout, rc }, {
+  preamble: ['PADDED_PHASE=03; quick_id=q1; LAST_REVIEW_COMMIT='],
+  probe,
+});
 
 const CAPTURES = [
   {

@@ -12,17 +12,15 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 
-const { cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
+const { cleanup } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
-const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runTools } = require('./helpers/gsd-tools-cli.cjs');
 const { computeUiSafetyGate, evaluateUiSafetyGate } = require('../gsd-core/bin/lib/gate-ui-safety.cjs');
 const { evaluateEvaluationScope } = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
 const { evaluateTddReviewCheckpoint } = require('../gsd-core/bin/lib/gate-tdd-review-checkpoint.cjs');
 const { evaluateDecisionCoverageVerify } = require('../gsd-core/bin/lib/gate-decision-coverage-verify.cjs');
 
-const TOOLS_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 const IDENTITY = {
   GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.io',
   GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.io',
@@ -71,17 +69,6 @@ function summarize(repo, shas) {
   write(repo.dir, `${PHASE_DIR}/03-01-SUMMARY.md`, `# Summary\n\n## Task Commits\n\n${rows}\n\n## Next\n`);
   repo.git('add', '.');
   repo.git('commit', '-m', 'docs(03-01): summary');
-}
-
-function runTools(args, cwd) {
-  try {
-    const stdout = execFileSync(process.execPath, [TOOLS_PATH, ...args], {
-      cwd, encoding: 'utf-8', env: { ...process.env, ...TEST_ENV_BASE }, timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
-    });
-    return { exitCode: 0, stdout: stdout.trim(), stderr: '' };
-  } catch (err) {
-    return { exitCode: err.status ?? 1, stdout: err.stdout?.toString().trim() ?? '', stderr: err.stderr?.toString().trim() ?? err.message };
-  }
 }
 
 describe('ui-safety-gate reads the phase\'s evaluation scope, not the last commit', () => {

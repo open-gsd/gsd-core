@@ -310,11 +310,13 @@ check before either the research-reuse decision (§5.1) or the pattern-mapper re
 Otherwise skip to §5.
 
 ```bash
-DRIFT=$(gsd_run verify context-drift "${PHASE}" 2>/dev/null || echo '{"skipped":true}')
+DRIFT=$(gsd_run verify context-drift "${PHASE}" 2>/dev/null) || { echo "Warning: context-drift check could not look (exit $?)" >&2; DRIFT='{"skipped":true}'; }
 ```
 
 If `skipped` is true, continue silently to §5 — nothing to compare (no CONTEXT.md yet, no
-upstream artifacts yet, or the phase directory did not resolve).
+upstream artifacts yet). A non-zero exit (`69` `UNAVAILABLE`, #5170: the phase directory did not
+resolve or an artifact could not be read) is a check that could not look, not "nothing to compare":
+the warning above is its signal, and planning continues (the check is advisory).
 
 If `stale_artifacts` is a non-empty array, print `message` verbatim (it names each stale
 artifact and the command to regenerate it). Then:
@@ -578,7 +580,7 @@ If `activeHooks` (from `PLAN_PRE_HOOKS_JSON`, §5.6) has a `kind == "gate"`, `ca
 execute gate uses; otherwise skip to step 6:
 
 ```bash
-DRIFT=$(gsd_run verify codebase-drift 2>/dev/null || echo '{"skipped":true}')
+DRIFT=$(gsd_run verify codebase-drift 2>/dev/null) || { echo "Warning: codebase-drift check could not look (exit $?)" >&2; DRIFT='{"skipped":true}'; }
 ```
 
 This gate is **non-blocking** and **never blocks, never spawns** the mapper at plan time. If `skipped` or
@@ -1350,7 +1352,12 @@ if [ "$GATE_CFG" != "false" ]; then
   # empty arg, so an unguarded empty glob would halt a context-less phase).
   CONTEXT_PATH=$(ls "${PHASE_DIR}"/*-CONTEXT.md 2>/dev/null | head -1)
   if [ -n "$CONTEXT_PATH" ]; then
-    GATE_RESULT=$(gsd_run query check.decision-coverage-plan "${PHASE_DIR}" "${CONTEXT_PATH}")
+    GATE_RESULT=$(gsd_run query check.decision-coverage-plan "${PHASE_DIR}" "${CONTEXT_PATH}") && GATE_EXIT=0 || GATE_EXIT=$?
+    # A non-zero status (69 UNAVAILABLE, #5170) is a gate that could not look: surface it and stop.
+    if [ "$GATE_EXIT" -ne 0 ]; then
+      echo "Decision coverage gate could not run (exit ${GATE_EXIT}): $GATE_RESULT"
+      exit 1
+    fi
     # BLOCKING: refuse to mark phase planned when a trackable decision is uncovered.
     # `passed: true` covers both real-pass and skipped cases (gate disabled / no CONTEXT.md /
     # no trackable decisions). Verify-phase counterpart deliberately omits this exit-1 — that

@@ -1,6 +1,6 @@
 # UI Design Contract (Frontend Phases) — Autonomous Mode
 
-Step 3a.5 of `/gsd:autonomous`: resolve whether the current phase needs a UI-SPEC.md generated before planning, and generate one via active `plan:pre` step hooks if so. Always non-blocking — proceeds to step 3b (Plan) regardless of outcome.
+Step 3a.5 of `/gsd:autonomous`: resolve whether the current phase needs a UI-SPEC.md generated before planning, and generate one via active `plan:pre` step hooks if so. Non-blocking for every answer it gets — proceeds to step 3b (Plan) — except a gate that could not look (below), which is surfaced and stops.
 
 **Inputs:** `PHASE_NUM`, `PHASE_DIR` from execute_phase.
 
@@ -16,10 +16,10 @@ Read the `activeHooks` array directly from `HOOKS_JSON` (in-context — do NOT i
 (At least one active step hook ⇒ `workflow.ui_phase` is on.) Run the UI-SPEC gate:
 
 ```bash
-GATE=$(gsd_run check ui-plan-gate "${PHASE_NUM}" --raw)
+GATE=$(gsd_run check ui-plan-gate "${PHASE_NUM}" --raw); GATE_EXIT=$?
 ```
 
-Read `frontend` and `hasUiSpec` from `GATE` (in-context).
+A non-zero `GATE_EXIT` is a command failure, including `69` (`UNAVAILABLE`: the gate could not read its evidence, so its `frontend: false` is not an answer): surface it and stop — never skip silently to 3b as if the phase had no frontend. Otherwise read `frontend` and `hasUiSpec` from `GATE` (in-context).
 
 **If `frontend` is false:** Skip silently to 3b.
 

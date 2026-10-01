@@ -30,11 +30,16 @@ SUMMARY_EXISTS=$(test -f "{phase_dir}/{plan_number}-{plan_padded}-SUMMARY.md" &&
 # #5164: the plan's commits come from the evaluation-scope resolver — anchored on the SUBJECT,
 # zero-pad tolerant (#4003, #4619, #4748), reachable from THIS branch only (the former
 # any-branch lookup let a commit on another branch satisfy the probe); the 1-hour window stays.
-COMMITS_FOUND=$(gsd_run check evaluation-scope --plan "{phase_number}-{plan_padded}" --ref "${EXPECTED_BRANCH}" --commits-only --committed-since "1 hour ago" --raw 2>/dev/null | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const c=JSON.parse(s).commits;process.stdout.write(c.length?c[0].sha:'')}catch{}})")
+# Exit 69 (UNAVAILABLE) is the resolver saying "could not look": an empty COMMITS_FOUND is then NOT "no commits".
+COMMITS_SCOPE=$(gsd_run check evaluation-scope --plan "{phase_number}-{plan_padded}" --ref "${EXPECTED_BRANCH}" --commits-only --committed-since "1 hour ago" --raw 2>/dev/null) && COMMITS_SCOPE_RC=0 || COMMITS_SCOPE_RC=$?
+COMMITS_FOUND=""
+if [ "$COMMITS_SCOPE_RC" -eq 0 ]; then COMMITS_FOUND=$(printf '%s' "$COMMITS_SCOPE" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const c=JSON.parse(s).commits;process.stdout.write(c.length?c[0].sha:'')}catch{}})"); fi
 COMMITS_SINCE_DISPATCH=$(git log "${EXPECTED_BRANCH}" --since="${DISPATCH_TS}" --oneline | head -1)
 ```
 
 ## Verdicts
+
+**If `COMMITS_SCOPE_RC` is non-zero** (`69` `UNAVAILABLE`: the commit scope could not be resolved, #5170): the commit probe has no answer. Do not read the empty `COMMITS_FOUND` as "no matching commits", do not route to the failure handler on it, and do not re-dispatch an executor: surface `⚠ Commit probe unavailable for {Plan ID} (evaluation-scope exit {COMMITS_SCOPE_RC})` and stop for the user.
 
 **If SUMMARY.md exists AND matching commits are found:** the agent completed
 successfully — treat the plan as complete WITHOUT requiring another terminal child

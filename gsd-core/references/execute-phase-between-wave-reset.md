@@ -4,6 +4,9 @@
     - `## Cross-Plan Wiring Gap` with plan/link/from/pattern rows
     - Options: investigate+fix before continue, or continue with cascade risk
     Skip key-links that reference files in the CURRENT (upcoming) wave.
+    Exit status (#5170): `0` all verified; `1` a link failed (read the JSON); `66` the plan declares no
+    key_links (nothing to check); `69` the plan is missing/unreadable (could not look — surface it, never
+    treat the plan as wired).
 
 7c. **Between-wave manifest reset and worktree base refresh (waves 2+ only — #1369):**
 

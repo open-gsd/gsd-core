@@ -18,7 +18,7 @@ For each task gated by TDD, the executor MUST verify (before running the impleme
 2. **The test was actually red — INTENTIONALLY (#3770).** Read `gsd-core/references/tdd.md`, "Red-Green-Refactor Cycle", RED step 4, and follow its complete evidence contract before GREEN. That section owns format selection (TAP, including Node/Vitest; JUnit XML, including Surefire/Failsafe; swift-testing console; or Python `unittest` text), reporter reruns, report freshness, the classifier invocation, and semantic inspection. Require `RED_EVIDENCE_OK` for the actual run and verify the planned target assertion failed for the intended reason. An `INVALID_RED` verdict, unsupported format, or failed semantic assessment trips this gate; self-attestation cannot substitute for machine validation. A `RED:` prefix or `(RED)` tag in the commit message is not evidence.
 3. **No implementation commit yet.** No `feat({phase}-{plan})` commit may exist for the same plan ID before the failing-test commit.
 
-If any check fails, the gate trips. For check 2, an `INVALID_RED` classifier verdict or a failed semantic assessment trips the gate (halt reason `invalid_red`) — the executor MUST halt and block the implementation step.
+If any check fails, the gate trips. A non-zero exit from `gsd_run check tdd-red-evidence` (`69` `UNAVAILABLE`: the record could not be read, #5170) is a command failure that has NOT authorized GREEN — the gate trips. For check 2, an `INVALID_RED` classifier verdict or a failed semantic assessment trips the gate (halt reason `invalid_red`) — the executor MUST halt and block the implementation step.
 
 ## What "behavior-adding task" means
 

@@ -411,7 +411,8 @@ describe('#1571 regression: verify schema-drift resolves the phase by token, not
     writePhase('11-expansion');
 
     const result = runGsdTools(['verify', 'schema-drift', '1'], tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    // An unresolvable phase is "could not look" (#5170): UNAVAILABLE, with the same non-blocking JSON.
+    assert.strictEqual(result.exitCode, 69, `an unresolvable phase exits UNAVAILABLE: ${result.error}`);
     const output = JSON.parse(result.output);
     // Must NOT have matched 11-expansion. A wrong match yields an empty message and
     // a drift verdict computed from phase 11's files; the correct behaviour is a
@@ -452,6 +453,7 @@ describe('verify schema-drift reads files_modified through the Frontmatter Modul
   const { spawnSync } = require('node:child_process');
   const { TEST_ENV_BASE } = require('./helpers.cjs');
   const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const { writeReadFailurePreload } = require('./helpers/fs-failure.cjs');
   const TOOLS_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
   const UNAVAILABLE = 69;
   let tmpDir;
@@ -492,6 +494,21 @@ describe('verify schema-drift reads files_modified through the Frontmatter Modul
     assert.deepStrictEqual(out.schema_files, [SCHEMA]);
   });
 
+  test('a blocking drift verdict is exit 0 on both entry points: schema-drift is payload mode (#5170)', () => {
+    // `verify schema-drift` and the capability gate `check verify.schema-drift` are one function, and the
+    // gate dispatch reads `.block` from stdout and routes a NON-ZERO exit by `onError` (the drift gate is
+    // `blocking: true, onError: skip`): a blocking verdict as exit 1 would be dropped as a skippable command
+    // failure (wave-post-gate-hooks.md step 1, loop-hook-dispatch.md).
+    writePlan(['files_modified:', `  - ${SCHEMA}`]);
+    for (const argv of [['verify', 'schema-drift', '01-setup'], ['check', 'verify.schema-drift', '01-setup']]) {
+      const result = runGsdTools(argv, tmpDir);
+      assert.strictEqual(result.exitCode, 0, `${argv.join(' ')}: a delivered blocking verdict exits 0: ${result.error}`);
+      const out = JSON.parse(result.output);
+      assert.strictEqual(out.block, true);
+      assert.strictEqual(out.drift_detected, true);
+    }
+  });
+
   test('a block sequence with N items is read in full: the schema file among them is found (#4562 fail-first)', () => {
     writePlan(['files_modified:', '  - src/index.ts', `  - ${SCHEMA}`, '  - src/utils.ts']);
     const out = drift();
@@ -530,23 +547,7 @@ describe('verify schema-drift reads files_modified through the Frontmatter Modul
   // The CLI child runs with a preload that makes fs.readFileSync throw EACCES for one path suffix:
   // deterministic, and not defeated by running as root (no chmod).
   function runWithReadFailure(suffix, args) {
-    const preload = path.join(tmpDir, 'fail-read-preload.cjs');
-    fs.writeFileSync(
-      preload,
-      [
-        "const fs = require('node:fs');",
-        'const real = fs.readFileSync;',
-        'fs.readFileSync = function (p, ...rest) {',
-        `  if (typeof p === 'string' && p.endsWith(${JSON.stringify(suffix)})) {`,
-        "    const err = new Error('EACCES: simulated read failure');",
-        "    err.code = 'EACCES';",
-        '    throw err;',
-        '  }',
-        '  return real.call(fs, p, ...rest);',
-        '};',
-        '',
-      ].join('\n'),
-    );
+    const preload = writeReadFailurePreload(tmpDir, suffix);
     return spawnSync(process.execPath, ['--require', preload, TOOLS_PATH, ...args], {
       cwd: tmpDir,
       encoding: 'utf-8',
