@@ -421,3 +421,102 @@ describe('verification route table and the init field the regeneration arm keys 
     assert.strictEqual(initBundle(projectDir).phase_completion.implementation_complete, true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #5170 (Phase 8 of epic #5056): exit-status-aware capture of `phase uat-passed`.
+//
+// `phase uat-passed` now exits 1 when its verdict is "not passed" (JSON on stdout
+// unchanged), so the workflow's capture must treat exit 0 and exit 1-with-JSON as
+// VERDICTS and everything else as "could not run". The capture is written to
+// survive an agent shell running under `set -e`: a verdict of exit 1 must not
+// abort the script. Each documented capture is extracted from verify-work.md and
+// run under bash with `set -e`, a stub `gsd_run`, and the statuses the CLI can
+// produce: 0 (passed), 1 (not passed), 1 with nothing on stdout (an error()), 69
+// (UNAVAILABLE, could not look) and 2.
+// ---------------------------------------------------------------------------
+{
+  const { spawnSync } = require('node:child_process');
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+
+  function have(cmd) {
+    const r = spawnSync('bash', ['-c', `command -v ${cmd}`], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
+    return !r.error && r.status === 0;
+  }
+  const SKIP = (have('bash') && have('jq')) ? false : 'bash and jq are required';
+
+  /** The lines from the one starting with `from` through the one starting with `through`. */
+  function span(from, through) {
+    const lines = splitLines(fs.readFileSync(VERIFY_WORK, 'utf8'));
+    const start = lines.findIndex((l) => l.trim().startsWith(from));
+    assert.notEqual(start, -1, `verify-work.md must carry a line starting with ${from}`);
+    const end = lines.findIndex((l, i) => i >= start && l.trim().startsWith(through));
+    assert.notEqual(end, -1, `verify-work.md must carry a line starting with ${through} after ${from}`);
+    return lines.slice(start, end + 1);
+  }
+
+  const CAPTURES = [
+    {
+      name: 'the human_needed UAT precheck',
+      lines: () => span('UAT_PRECHECK=$(gsd_run phase uat-passed', 'UAT_PRECHECK_PASSED='),
+      passedVar: 'UAT_PRECHECK_PASSED',
+    },
+    {
+      name: 'the phase-completion predicate',
+      lines: () => span('PHASE_COMPLETE=$(gsd_run phase uat-passed', 'PHASE_COMPLETE_PASSED='),
+      passedVar: 'PHASE_COMPLETE_PASSED',
+    },
+  ];
+
+  function run(capture, { stdout, rc }) {
+    const script = [
+      'set -e',
+      'gsd_run() { printf %s "$STUB_OUT"; return "$STUB_RC"; }',
+      ...capture.lines(),
+      `printf 'PASSED=%s\\n' "$${capture.passedVar}"`,
+      '',
+    ].join('\n');
+    const r = spawnSync('bash', ['-c', script], {
+      encoding: 'utf8',
+      timeout: PROBE_TIMEOUT_MS,
+      env: { ...process.env, STUB_OUT: stdout, STUB_RC: String(rc) },
+    });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+  }
+
+  for (const capture of CAPTURES) {
+    describe(`${capture.name} (bash, set -e, stub gsd_run)`, { skip: SKIP }, () => {
+      test('exit 0 with passed:true is a verdict and is read', () => {
+        const r = run(capture, { stdout: '{"passed":true,"blockers":[]}', rc: 0 });
+        assert.equal(r.status, 0, r.stderr);
+        assert.match(r.stdout, /^PASSED=true$/m);
+      });
+
+      test('exit 1 with passed:false JSON is a verdict: it is read and the script continues', () => {
+        const r = run(capture, { stdout: '{"passed":false,"blockers":["UAT incomplete"]}', rc: 1 });
+        assert.equal(r.status, 0, `a negative verdict must not abort under set -e: ${r.stderr}`);
+        assert.match(r.stdout, /^PASSED=false$/m);
+      });
+
+      test('exit 1 with nothing on stdout is an error(): the workflow aborts and says it could not run', () => {
+        const r = run(capture, { stdout: '', rc: 1 });
+        assert.equal(r.status, 1);
+        assert.match(r.stderr, /phase uat-passed could not run \(exit 1\)/);
+        assert.ok(!/^PASSED=/m.test(r.stdout), 'nothing may be read after the abort');
+      });
+
+      test('exit 69 (could not look) aborts even though JSON was printed', () => {
+        const r = run(capture, { stdout: '{"passed":true}', rc: 69 });
+        assert.equal(r.status, 1);
+        assert.match(r.stderr, /phase uat-passed could not run \(exit 69\)/);
+        assert.ok(!/^PASSED=/m.test(r.stdout), 'a "passed" in the JSON of an unavailable run must not be read');
+      });
+
+      test('any other non-zero status is a command failure (limit+1 of the verdict range)', () => {
+        const r = run(capture, { stdout: '{"passed":false}', rc: 2 });
+        assert.equal(r.status, 1);
+        assert.match(r.stderr, /could not run \(exit 2\)/);
+      });
+    });
+  }
+}
