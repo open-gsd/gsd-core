@@ -95,13 +95,19 @@ module.exports = async function ndjsonEventReporter(source) {
       event.type === 'test:pass' ||
       event.type === 'test:fail'
     ) {
-      const { file, name, nesting, testNumber } = event.data || {};
+      const { file, name, nesting, testNumber, details } = event.data || {};
+      // #4031: `kind` is node:test's `details.type` ('suite' for a suite,
+      // otherwise a test). run-tests.cjs's per-chunk accounting counts the
+      // pass/fail events that are NOT suites and compares them with the
+      // registration ledger (scripts/lib/test-registration-ledger.cjs).
+      const kind = details && typeof details.type === 'string' ? details.type : undefined;
       const line = `${JSON.stringify({
         type: event.type,
         file,
         name,
         nesting,
         testNumber,
+        kind,
         ts: Date.now(),
       })}\n`;
       try {
