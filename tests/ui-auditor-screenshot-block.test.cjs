@@ -114,6 +114,8 @@ async function runFence(t, file, { ports, mode = 'ok' }) {
       PATH: `${bin}${path.delimiter}${process.env.PATH}`,
       HOME: tmp,
       TMPDIR: tmp,
+      TEMP: tmp,
+      TMP: tmp,
       STUB_LOG: log,
       STUB_MODE: mode,
       DEV_PORTS: ports.join(' '),
