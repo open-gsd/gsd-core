@@ -61,7 +61,7 @@ const CASES = [
     id: 'U7a',
     title: 'no phase and no --dir -> unresolvable degraded payload',
     args() { return []; },
-    outcome: 'skip',
+    outcome: 'unreadable',
     block: false,
     expected() {
       return {
@@ -80,7 +80,7 @@ const CASES = [
     id: 'U7b',
     title: '--dir escaping the project root -> unresolvable degraded payload',
     args() { return ['--dir', '../outside']; },
-    outcome: 'skip',
+    outcome: 'unreadable',
     block: false,
     expected() {
       return {
@@ -99,7 +99,7 @@ const CASES = [
     id: 'U7c',
     title: 'phase that cannot be resolved -> unresolvable degraded payload',
     args() { return ['99']; },
-    outcome: 'skip',
+    outcome: 'unreadable',
     block: false,
     expected() {
       return {

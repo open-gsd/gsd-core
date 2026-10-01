@@ -7,5 +7,5 @@
   "fixture": "vp",
   "stdout": "{\n  \"status\": \"unresolvable\",\n  \"commands\": [],\n  \"counts\": {\n    \"blocker\": 0,\n    \"warning\": 0,\n    \"total\": 0\n  },\n  \"readError\": \"could not resolve phase directory for phase 99\"\n}",
   "stderr": "",
-  "exitCode": 0
+  "exitCode": 69
 }

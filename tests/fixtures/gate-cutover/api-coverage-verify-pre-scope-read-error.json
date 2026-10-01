@@ -8,5 +8,5 @@
   "failRead": "01-01-PLAN.md",
   "stdout": "{\n  \"block\": true,\n  \"passed\": false,\n  \"coverage_present\": false,\n  \"detected\": false,\n  \"message\": \"api-coverage: could not read the phase scope (could not read 01-01-PLAN.md: EACCES: simulated read failure); refusing to certify no external-API integration from incomplete scope. Fix the unreadable plan file, or add a COVERAGE.md declaration.\"\n}",
   "stderr": "",
-  "exitCode": 0
+  "exitCode": 69
 }

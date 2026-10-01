@@ -190,10 +190,15 @@ describe('B. check verify.schema-drift — CLI route', () => {
 
     // Write a PLAN.md with files_modified
     const schemaEntry = hasSchemaFile ? 'prisma/schema.prisma' : 'src/index.ts';
+    // `files_modified` is a FRONTMATTER field (#5170 reads it through the Frontmatter Module, #4562):
+    // a plan carries it in its `---` block, the shape production plans have.
     const planContent = [
-      '# 01 Plan',
-      '',
+      '---',
+      'phase: 01-setup',
+      'plan: 01',
       `files_modified: [${schemaEntry}]`,
+      '---',
+      '# 01 Plan',
       '',
     ].join('\n');
     fs.writeFileSync(path.join(dir, '.planning', 'phases', '01-setup', '01-PLAN.md'), planContent);

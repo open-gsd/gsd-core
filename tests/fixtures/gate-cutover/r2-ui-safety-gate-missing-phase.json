@@ -7,5 +7,5 @@
   "fixture": "ui",
   "stdout": "{\n  \"frontend\": false,\n  \"hasUiFiles\": false,\n  \"hasUiSpec\": false,\n  \"block\": false,\n  \"phaseLookupFailed\": true,\n  \"scopeStatus\": \"unresolvable\",\n  \"scopeReason\": \"phase-dir-not-found\"\n}",
   "stderr": "",
-  "exitCode": 0
+  "exitCode": 69
 }

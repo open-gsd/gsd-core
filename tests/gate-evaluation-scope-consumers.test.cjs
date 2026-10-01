@@ -123,10 +123,10 @@ describe('ui-safety-gate reads the phase\'s evaluation scope, not the last commi
     assert.equal(result.block, false);
   });
 
-  test('[negative] the verdict for an unreadable scope is `skip` — "could not look" is never a `pass`', () => {
+  test('[negative] the verdict for an unreadable scope is `unreadable` — "could not look" is never a `pass`', () => {
     const repo = makeRepo();
     const unreadable = evaluateUiSafetyGate({ projectDir: repo.dir, args: ['9'] });
-    assert.equal(unreadable.outcome, 'skip');
+    assert.equal(unreadable.outcome, 'unreadable');
     assert.equal(unreadable.block, false);
     const read = evaluateUiSafetyGate({ projectDir: repo.dir, args: ['3'] });
     assert.equal(read.outcome, 'pass', 'a readable (here degraded) scope with no UI-SPEC need keeps the pass outcome');

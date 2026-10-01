@@ -55,7 +55,7 @@ const CASES = [
     id: 'U8a',
     title: 'no phase argument -> unresolvable degraded payload',
     args() { return []; },
-    outcome: 'skip',
+    outcome: 'unreadable',
     block: false,
     expected() {
       return {
@@ -74,7 +74,7 @@ const CASES = [
     id: 'U8b',
     title: 'phase that cannot be resolved -> unresolvable degraded payload',
     args() { return ['99']; },
-    outcome: 'skip',
+    outcome: 'unreadable',
     block: false,
     expected() {
       return {

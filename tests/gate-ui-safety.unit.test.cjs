@@ -158,8 +158,9 @@ const CASES = [
       h.w(dir, '.planning/ROADMAP.md', ['# Roadmap', '', '### Phase 1: Dashboard frontend', '**Goal**: Build the React dashboard UI for operators', ''].join('\n'));
     },
     args() { return ['9']; },
-    // #5164: a phase the resolver cannot find is "could not look" — a `skip` verdict, never a `pass`.
-    outcome: 'skip',
+    // #5164/#5170: a phase the resolver cannot find is "could not look" — an `unreadable` verdict
+    // (exit UNAVAILABLE), never a `pass`; `block` stays the gate's own policy (false).
+    outcome: 'unreadable',
     block: false,
     expected() {
       return {
@@ -175,12 +176,12 @@ const CASES = [
   },
   {
     id: 'U4f',
-    title: 'no git repository -> hasUiFiles false, and the unreadable scope is reported (skip), not passed',
+    title: 'no git repository -> hasUiFiles false, and the unreadable scope is reported (unreadable), not passed',
     setup(dir, h) {
       h.w(dir, '.planning/ROADMAP.md', ['# Roadmap', '', '### Phase 1: Dashboard frontend', '**Goal**: Build the React dashboard UI for operators', ''].join('\n'));
     },
     args() { return ['1']; },
-    outcome: 'skip',
+    outcome: 'unreadable',
     block: false,
     expected() {
       return {

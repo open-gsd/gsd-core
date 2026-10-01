@@ -8,5 +8,5 @@
   "failRead": "03-matrix-ok/COVERAGE.md",
   "stdout": "{\n  \"block\": true,\n  \"passed\": false,\n  \"coverage_present\": true,\n  \"message\": \"api-coverage: COVERAGE.md exists but is unreadable — fix file permissions/encoding before sealing\"\n}",
   "stderr": "",
-  "exitCode": 0
+  "exitCode": 69
 }
