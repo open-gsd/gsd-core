@@ -251,8 +251,10 @@ A gate verb declares its outcome from the verdict it built, through one total fu
   still authoritative), a scope that was read and is genuinely empty exits `66` (`NO_INPUT`), and a
   verb that **could not look** exits `69` (`UNAVAILABLE`).
 - **Payload mode** — the verdict is read from stdout and a non-zero exit means the command failed:
-  every `check <verb>` and `verify schema-drift` (the capability gate dispatch routes a non-zero exit
-  by `onError`, so a blocking verdict must stay exit `0`). Only "could not look" exits `69`.
+  every `check <verb>` and the three drift verbs `verify schema-drift`, `verify codebase-drift` and
+  `verify context-drift` (the capability gate dispatch routes a non-zero exit by `onError`, so a
+  blocking verdict must stay exit `0`). Only "could not look" exits `69`. The full exit table and
+  verb list are in [CLI Tools: Gate verb exit statuses](CLI-TOOLS.md#gate-verb-exit-statuses-5170).
 
 `69` is never a pass and never `0`: an unreadable file, an unresolvable phase, a path that cannot be
 examined. A document that exists but is empty was read (`found ''`), so it is not "File not found".

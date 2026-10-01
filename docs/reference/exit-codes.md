@@ -65,3 +65,7 @@ can opt in without breaking every existing consumer. See
 [Adopt the v2 exit contract](../how-to/adopt-the-v2-exit-contract.md) for how to
 turn this on, and [JSON error mode](../json-errors.md) for the full fault vs.
 degraded-result channel taxonomy this registry sits underneath.
+
+## Gate verbs
+
+A gate verb does not choose its exit code; it follows from the verdict (#5170, ADR-5057 §4). In **status mode** a positive verdict exits `0`, a negative one `1`, a genuinely empty scope `66` (`NO_INPUT`), and a gate that could not look `69` (`UNAVAILABLE`). In **payload mode** (every `check <verb>` and the three drift verbs) the verdict is read from the stdout JSON, so a delivered verdict, blocking or not, exits `0` and only `69` or an `error()` is non-zero. `69` is never `0`, under `v1` or `v2`. The verb-by-verb table is in [CLI Tools: Gate verb exit statuses](../CLI-TOOLS.md#gate-verb-exit-statuses-5170); the script pattern is in [Handle gate verb exit statuses](../how-to/handle-gate-verb-exit-statuses.md).

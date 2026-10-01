@@ -174,6 +174,7 @@ node gsd-tools.cjs phase complete <phase>
 
 # Evaluate HUMAN-UAT results for a phase (markdown-aware; ignores false-positive contexts)
 # Returns JSON: { passed, uat_files[], verification_files[], checks[], blockers[], policy }
+# Exit 0 when passed, 1 when not (#5170); a phase it cannot read is error() with empty stdout
 node gsd-tools.cjs phase uat-passed <phase> [--require-verification]
 
 # Index plans with waves and status
@@ -830,13 +831,31 @@ node gsd-tools.cjs verify key-links <plan-file>
 
 `verify key-links` confines each link's `from:`/`to:` to the project directory (#3493): a path that resolves outside the project (via `../` traversal, an absolute path, or a symlink) is never read. That link's `links[]` entry reports `path_rejected: "from"` or `path_rejected: "to"` (whichever field was rejected) alongside `verified: false`, without echoing the underlying path-confinement error (which would embed an absolute host path). A rejected link fails independently — it does not abort evaluation of the other links in the same plan, and does not set `path_rejected` on links whose paths resolve inside the project.
 
+### Gate verb exit statuses (#5170)
+
+The exit status of a gate verb is a function of its verdict (`gateExitOutcome`, [Gate Exit Module](../CONTEXT.md)); no verb picks a code itself. The stdout JSON is authoritative in every row.
+
+| Exit | Outcome | Meaning |
+|---|---|---|
+| `0` | `PASS` | Positive verdict; or, in payload mode, any delivered verdict including a blocking one |
+| `1` | `FAIL` | Negative verdict (status mode only). Also `error()` (a usage or runtime failure), which prints nothing on stdout |
+| `66` | `NO_INPUT` | The evidence was read and the scope it defines is genuinely empty (status mode: `verify artifacts` with no `must_haves.artifacts`, `verify key-links` with no `must_haves.key_links`) |
+| `69` | `UNAVAILABLE` | The gate could not look: the evidence is absent where it must exist, unreadable (`EISDIR`, `EACCES`, `EIO`, an encoding failure), the phase did not resolve, or a plan scan did not see every plan. Never `0` |
+
+| Mode | Verbs | Verdict is carried by | Non-zero exit means |
+|---|---|---|---|
+| Status | `phase uat-passed`, `verify artifacts`, `verify plan-structure`, `verify phase-completeness`, `verify references`, `verify commits`, `verify key-links` | stdout JSON and `$?` (`valid` / `complete` / `all_valid` / `all_passed` / `all_verified` / `passed`) | `1` negative verdict, `66` empty scope, `69` could not look |
+| Payload | every `check <verb>`, `verify schema-drift`, `verify codebase-drift`, `verify context-drift`, `check prohibition-enforcement` | stdout JSON, `.block` | only `69` (or an `error()`): the gate dispatch routes a non-zero status by `onError`, so a blocking verdict stays `0` |
+
+`phase uat-passed` exits `0` when `passed` is `true` and `1` when it is `false` with the JSON on stdout; a phase it cannot read is `error()` (exit `1`, stdout empty), so the two are told apart by whether stdout is empty. `verify commits` outside a git work tree answers `{"error":"Not a git repository"}` with `69`. `verify schema-drift` reads `files_modified` through the Frontmatter Module, so a YAML block sequence and CRLF line endings yield their files (#4562). `verify plan-structure` flags a `! grep -q 'LIT' f` negative gate whose literal also appears in the same task `<action>`, as it does for the positive form (#4541). To handle every status from a script see [Handle gate verb exit statuses](how-to/handle-gate-verb-exit-statuses.md).
+
 ### `verify codebase-drift` (structural drift of the codebase map, #2003, #5134)
 
 ```bash
 node gsd-tools.cjs verify codebase-drift
 ```
 
-Compares the changes since `last_mapped_commit` against the codebase map in `.planning/codebase/` and reports whether the map has drifted past `workflow.drift_threshold`. Warn-only by contract: an internal failure returns a `skipped` payload, never an error.
+Compares the changes since `last_mapped_commit` against the codebase map in `.planning/codebase/` and reports whether the map has drifted past `workflow.drift_threshold`. Warn-only by contract: an internal failure returns a `skipped` payload, never an error. A non-blocking verdict computed from fewer documents than the map has (a map document that could not be read) exits `69` with the payload plus `documents_unreadable`; a blocking verdict stands and exits `0` (payload mode, #5170).
 
 **Territory.** The command reads all seven generated documents (`STACK.md`, `ARCHITECTURE.md`, `STRUCTURE.md`, `CONVENTIONS.md`, `TESTING.md`, `INTEGRATIONS.md`, `CONCERNS.md`). A directory is *mapped* when its path appears, at a path-component boundary, in any of them. `STRUCTURE.md` is still required; the other six are optional, so a partial map works.
 
