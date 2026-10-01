@@ -300,6 +300,127 @@ nt.test('viaprop', () => {});
   });
 });
 
+// #5170 review: can a skipped suite, a skip/todo, or a test filter make registered > reported — a false red
+// on a run that lost nothing? Each case runs a REAL test file twice with the same flags (once under the
+// preload, in a test-file child's context, to get its ledger line; once under the ndjson reporter to get the
+// events the runner would read) and feeds both to analyzeChunkAccounting.
+describe('registered > reported cannot come from a skipped suite, skip/todo, or a test filter (#5170)', () => {
+  const { testFilterActive } = require('../scripts/lib/registration-ledger-preload.cjs');
+  const FIXTURE = `'use strict';
+const { test, describe, it } = require('node:test');
+test('alpha one', () => {});
+test('alpha two', () => {});
+test('beta one', () => {});
+test.skip('gamma skipped', () => {});
+test('delta todo', { todo: true }, () => {});
+describe.skip('skipped suite', () => { it('inner never registered', () => {}); });
+describe('live suite', () => { it('inner one', () => {}); it('inner two', () => {}); });
+`;
+
+  /** Ledger line and events for the fixture run with `flags` (node flags before the file). */
+  function observe(t, flags) {
+    const dir = createTempDir('gsd-5170-filter-');
+    t.after(() => cleanup(dir));
+    const file = path.join(dir, 'fx.test.cjs');
+    fs.writeFileSync(file, FIXTURE);
+    const ledgerPath = path.join(dir, 'ledger.ndjson');
+    const eventsPath = path.join(dir, 'events.ndjson');
+    const clean = { ...process.env };
+    delete clean.NODE_TEST_CONTEXT;
+    delete clean.NODE_OPTIONS;
+    const ledgerRun = spawnSync(process.execPath, [...flags, '--require', PRELOAD, file], {
+      env: { ...clean, NODE_TEST_CONTEXT: 'child-v8', GSD_RUN_TESTS_LEDGER_FILE: ledgerPath },
+      cwd: dir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS,
+    });
+    assert.equal(ledgerRun.status, 0, ledgerRun.stderr);
+    const eventsRun = spawnSync(process.execPath, [...flags, `--test-reporter=${REPORTER}`, '--test-reporter-destination=stdout', file], {
+      env: { ...clean, GSD_RUN_TESTS_EVENTS_FILE: eventsPath },
+      cwd: dir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS,
+    });
+    assert.equal(eventsRun.status, 0, eventsRun.stderr);
+    return { ledgerPath, eventsPath, file };
+  }
+
+  test('no filter: skip, todo and a skipped suite are all accounted (registered == reported, no shortfall)', (t) => {
+    const { ledgerPath, eventsPath, file } = observe(t, []);
+    const line = JSON.parse(splitLines(fs.readFileSync(ledgerPath, 'utf8')).filter(Boolean)[0]);
+    assert.deepEqual(line, { type: 'registered', file: path.resolve(file), count: 7 });
+    const a = analyzeChunkAccounting(eventsPath, ledgerPath);
+    assert.equal(a.available, true);
+    assert.deepEqual(a.shortfalls, []);
+    assert.equal(a.registeredTotal, 7);
+    assert.equal(a.reportedTotal, 7);
+  });
+
+  test('--test-name-pattern: the excluded tests are unreported, the ledger marks the file filtered, no false red', (t) => {
+    const { ledgerPath, eventsPath, file } = observe(t, ['--test-name-pattern=alpha']);
+    const line = JSON.parse(splitLines(fs.readFileSync(ledgerPath, 'utf8')).filter(Boolean)[0]);
+    assert.deepEqual(line, { type: 'registered', file: path.resolve(file), count: 7, filtered: true });
+    const a = analyzeChunkAccounting(eventsPath, ledgerPath);
+    assert.equal(a.available, true);
+    assert.deepEqual(a.shortfalls, []);
+    // Control: without the mark the same run IS a shortfall — the mark is what prevents the false red,
+    // and a genuine drop in an UNfiltered file is still caught.
+    const unmarked = path.join(path.dirname(ledgerPath), 'unmarked.ndjson');
+    fs.writeFileSync(unmarked, `${JSON.stringify({ ...line, filtered: undefined })}\n`);
+    const b = analyzeChunkAccounting(eventsPath, unmarked);
+    assert.equal(b.shortfalls.length, 1);
+    assert.equal(b.shortfalls[0].registered, 7);
+    assert.equal(b.shortfalls[0].reported, 2);
+  });
+
+  test('--test-only is a filter too (tests without `only` are not reported)', (t) => {
+    const { ledgerPath, eventsPath } = observe(t, ['--test-only']);
+    const a = analyzeChunkAccounting(eventsPath, ledgerPath);
+    assert.deepEqual(a.shortfalls, []);
+  });
+
+  test('testFilterActive: flags and NODE_OPTIONS, `=` and separate-value forms, lookalikes are not filters', () => {
+    const cases = [
+      [[], '', false],
+      [['--test-name-pattern=x'], '', true],
+      [['--test-name-pattern', 'x'], '', true],
+      [['--test-skip-pattern=x'], '', true],
+      [['--test-only'], '', true],
+      [[], '--max-old-space-size=4096 --test-only', true],
+      [[], '--test-name-pattern=a', true],
+      [['--test-name-patterns'], '', false],
+      [['--test-timeout=5'], '--no-warnings', false],
+    ];
+    for (const [execArgv, nodeOptions, expected] of cases) {
+      assert.equal(testFilterActive(execArgv, nodeOptions), expected, JSON.stringify([execArgv, nodeOptions]));
+    }
+  });
+});
+
+describe('analyzeChunkAccounting: a filtered file is not accounted by count (#5170)', () => {
+  const FILE = path.join(path.sep, 'repo', 'tests', 'f.test.cjs');
+  for (const [filtered, reported, shortfall] of [[true, 0, false], [true, 4, false], [false, 4, true], [false, 5, false]]) {
+    test(`registered 5, reported ${reported}, filtered ${filtered} -> ${shortfall ? 'shortfall' : 'accounted'}`, (t) => {
+      const { eventsPath, ledgerPath } = chunkFiles(t, {
+        events: results(FILE, reported),
+        ledger: [{ type: 'registered', file: FILE, count: 5, ...(filtered ? { filtered: true } : {}) }],
+      });
+      const a = analyzeChunkAccounting(eventsPath, ledgerPath);
+      assert.equal(a.available, true);
+      assert.equal(a.shortfalls.length, shortfall ? 1 : 0);
+      if (filtered) assert.equal(a.registeredTotal, 0, 'a filtered file is left out of the totals');
+    });
+  }
+
+  test('a filtered file does not hide an unfiltered file\'s loss in the same chunk', (t) => {
+    const OTHER = path.join(path.sep, 'repo', 'tests', 'g.test.cjs');
+    const { eventsPath, ledgerPath } = chunkFiles(t, {
+      events: results(OTHER, 1),
+      ledger: [
+        { type: 'registered', file: FILE, count: 9, filtered: true },
+        { type: 'registered', file: OTHER, count: 3 },
+      ],
+    });
+    assert.deepEqual(analyzeChunkAccounting(eventsPath, ledgerPath).shortfalls, [{ file: OTHER, registered: 3, reported: 1 }]);
+  });
+});
+
 describe('ndjson reporter records the test kind (#4031)', () => {
   test('suite and test pass events are distinguishable on disk', async (t) => {
     const dir = createTempDir('gsd-4031-reporter-');

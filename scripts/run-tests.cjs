@@ -1293,6 +1293,7 @@ function analyzeChunkAccounting(eventsPath, ledgerPath) {
   const reported = new Map(); // normalized file -> leaf pass+fail events received
   const registered = new Map(); // normalized file -> registrations counted in the child
   const display = new Map(); // normalized file -> path as first seen, for messages
+  const filteredFiles = new Set(); // normalized files whose child ran under a test filter
   let eventsRead = true;
   let ledgerRead = true;
   let sawRegisteredLine = false;
@@ -1333,6 +1334,9 @@ function analyzeChunkAccounting(eventsPath, ledgerPath) {
     const key = normalizeAccountedPath(evt.file);
     display.set(key, display.get(key) || evt.file);
     registered.set(key, (registered.get(key) || 0) + evt.count);
+    // A child that ran under a test name/only filter reports fewer results than it registered by
+    // design (excluded tests emit no event): it is not accounted by count (registration-ledger-preload).
+    if (evt.filtered === true) filteredFiles.add(key);
   });
   // A registered file is matched to its reported results by its real path ALONE.
   // Both sides are normalized through realpath (normalizeAccountedPath), so a
@@ -1346,6 +1350,7 @@ function analyzeChunkAccounting(eventsPath, ledgerPath) {
   let registeredTotal = 0;
   let reportedTotal = 0;
   for (const [key, count] of registered) {
+    if (filteredFiles.has(key)) continue;
     const got = reportedFor(key);
     registeredTotal += count;
     reportedTotal += Math.min(got, count);

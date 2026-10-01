@@ -39,6 +39,16 @@ const MODIFIERS = new Set(['skip', 'todo', 'only']);
 // their bodies go through the wrapped exports like any other.
 const REGISTERING = new Set(['test', 'it']);
 
+// The node:test flags that exclude registered tests from the report (a filtered-out test emits no
+// pass/fail event at all, measured on Node 24: `--test-name-pattern=alpha` reports 2 of 7 registrations).
+const FILTER_FLAGS = ['--test-name-pattern', '--test-skip-pattern', '--test-only'];
+
+/** Is a test filter active in this child, from its own exec arguments or NODE_OPTIONS? */
+function testFilterActive(execArgv = process.execArgv, nodeOptions = process.env.NODE_OPTIONS || '') {
+  const flags = execArgv.concat(nodeOptions.split(/\s+/).filter(Boolean));
+  return flags.some((flag) => FILTER_FLAGS.some((name) => flag === name || flag.startsWith(`${name}=`)));
+}
+
 function install(ledgerPath) {
   let registered = 0;
 
@@ -94,7 +104,12 @@ function install(ledgerPath) {
   process.on('exit', () => {
     try {
       const file = process.argv[1] ? path.resolve(process.argv[1]) : null;
-      fs.appendFileSync(ledgerPath, `${JSON.stringify({ type: 'registered', file, count: registered })}\n`);
+      const line = { type: 'registered', file, count: registered };
+      // A name/only filter makes the runner skip the tests it excludes WITHOUT reporting them, so
+      // registered > reported is expected there and is not a loss: the file is marked so the
+      // runner does not read the filtered tests as unaccounted.
+      if (testFilterActive()) line.filtered = true;
+      fs.appendFileSync(ledgerPath, `${JSON.stringify(line)}\n`);
     } catch {
       // Best-effort: the ledger is a diagnostic channel and must never change
       // the exit status of the test file it observes.
@@ -105,4 +120,4 @@ function install(ledgerPath) {
 const ledgerPath = process.env.GSD_RUN_TESTS_LEDGER_FILE;
 if (ledgerPath && process.env.NODE_TEST_CONTEXT) install(ledgerPath);
 
-module.exports = { install };
+module.exports = { install, testFilterActive };
