@@ -92,13 +92,14 @@ runs `gsd_run check predicate --predicate '<hook.check.predicate as JSON>' --pha
 
 ```bash
 GATE_RESULT=$(gsd_run check "${hook_check_query}" "${PHASE_DIR}" --raw)
+CHECK_EXIT=$?
 GATE_BLOCK=$(printf '%s' "$GATE_RESULT" | jq -r '.block // false' 2>/dev/null || echo "false")
 ```
 
 **Two-step gate contract (same as execute:wave:post / execute:post):**
 
 - **Step 1 — command failure:** if the `gsd_run check ...` invocation itself
-  fails (non-zero exit, no JSON), route by the gate's `onError`. An `onError:
+  fails (non-zero `CHECK_EXIT`, empty output, or unparseable JSON — `69` `UNAVAILABLE` included), route by the gate's `onError`. An `onError:
   halt` gate HALTs; an `onError: skip` gate logs a warning and continues.
 - **Step 2 — block evaluation:** parse `GATE_RESULT.block`. For a **blocking
   gate** (`hook.blocking == true`) with `block == true`: HALT — do not begin UAT,

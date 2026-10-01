@@ -513,10 +513,10 @@ Read the `activeHooks` array directly from `PLAN_PRE_HOOKS_JSON` / `HOOKS_JSON` 
 Run the UI deterministic gate whenever **any** `plan:pre` UI hook is active — including the step-only case (`workflow.ui_safety_gate` off). (`check.query` = `"ui.plan-gate"`; router normalizes dots→hyphens.)
 
 ```bash
-GATE=$(gsd_run check ui-plan-gate "${PHASE}" --raw)
+GATE=$(gsd_run check ui-plan-gate "${PHASE}" --raw); GATE_EXIT=$?
 ```
 
-Read `frontend`, `hasUiSpec`, and `block` from `GATE`.
+A non-zero `GATE_EXIT` is a command failure, including `69` (`UNAVAILABLE`: the gate could not read its evidence, so its `frontend: false` is not an answer): surface it and stop; never fall through to Branch 2. Otherwise read `frontend`, `hasUiSpec`, and `block` from `GATE`.
 
 **Branch 2 — no frontend indicators (`frontend` is `false`):** Skip silently to step 6.
 
@@ -1010,9 +1010,14 @@ reports which commands state a failure signal and never authors one. Handing bot
 stops the checker hand-reasoning the filesystem or the plans.
 
 ```bash
-VERIFY_PATHS=$(gsd_run check verify-command-paths "${PHASE}" --raw)
-FAILING_DIRECTIONS=$(gsd_run check verify-failure-directions "${PHASE}" --raw)
+VERIFY_PATHS=$(gsd_run check verify-command-paths "${PHASE}" --raw); VERIFY_PATHS_EXIT=$?
+FAILING_DIRECTIONS=$(gsd_run check verify-failure-directions "${PHASE}" --raw); FAILING_DIRECTIONS_EXIT=$?
 ```
+
+Branch on each `*_EXIT` (#5170): `0` — the probe looked; use the JSON. `69` (`UNAVAILABLE`) — the
+probe **could not look**: the JSON is still printed and carries `status: 'unresolvable'`, so hand it
+to the checker unchanged, and never read it as "every path resolved". Any other non-zero is a command
+failure: stop and surface it, and do not hand the checker an empty value.
 
 Checker prompt:
 
