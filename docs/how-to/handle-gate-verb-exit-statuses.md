@@ -92,6 +92,6 @@ If you write a new gate or wire an existing one into a capability, declare `onEr
 
 - [Gate Evidence and Verdict-Driven Exit Status](../FEATURES.md#5170-gate-evidence-and-verdict-driven-exit-status) — why unreadable evidence is a distinct state and why the exit follows the verdict
 - [Gate verb exit statuses](../CLI-TOOLS.md#gate-verb-exit-statuses-5170) — verb-by-verb table
-- [Exit code reference](../reference/exit-codes.md#gate-verbs) — the registered codes
+- [Exit code reference](../reference/exit-codes.md) — the registered codes
 - [Adopt the v2 exit contract](adopt-the-v2-exit-contract.md) — the separate `DEGRADED` projection
 - [docs index](../README.md)
