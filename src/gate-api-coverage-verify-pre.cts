@@ -27,8 +27,9 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { gateVerdict, gateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
+import { gateVerdict, gateUnreadable, gateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
+import { readDirEntriesEvidence, readTextEvidence } from './gate-evidence.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspaceMod = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspaceMod;
@@ -219,9 +220,26 @@ export function evaluateApiCoverageVerifyPre(input: { projectDir: string; args: 
   // (1) locate COVERAGE.md — prefer the exact name, then a single *-COVERAGE.md.
   let coverageFile = '';
   let suffixed: string[] = [];
-  try {
-    const entries = fs.readdirSync(resolvedDir, { withFileTypes: true });
-    const files = entries.filter((e) => e.isFile()).map((e) => e.name);
+  // #5170 (ADR-5057 §4): a phase directory that EXISTS but cannot be listed is `unreadable` —
+  // a COVERAGE.md may be in it — and never falls through to the detector, whose pass would be
+  // certified from a directory the gate never saw. An ABSENT directory (`none`) has no matrix and
+  // proceeds to detection, as before. The blocking policy is unchanged (fail-closed).
+  const listing = readDirEntriesEvidence(resolvedDir);
+  if (listing.kind === 'unreadable') {
+    return gateUnreadable(true, {
+      block: true,
+      passed: false,
+      coverage_present: false,
+      detected: false,
+      read_error: listing.reason,
+      message:
+        `api-coverage: could not read the phase directory (${listing.reason}) — ` +
+        'refusing to certify the coverage matrix from a directory that could not be listed. ' +
+        'Fix the directory permissions before sealing.',
+    });
+  }
+  if (listing.kind === 'found') {
+    const files = listing.value.filter((e) => e.isFile()).map((e) => e.name);
     const exact = files.find((f) => /^COVERAGE\.md$/i.test(f));
     if (exact) {
       coverageFile = exact;
@@ -229,24 +247,21 @@ export function evaluateApiCoverageVerifyPre(input: { projectDir: string; args: 
       suffixed = files.filter((f) => /-COVERAGE\.md$/i.test(f)).sort();
       if (suffixed.length === 1) coverageFile = suffixed[0];
     }
-  } catch {
-    // readdir failure → treat as no matrix readable; fall through to detection.
   }
 
   if (coverageFile) {
-    let matrixText: string;
-    try {
-      matrixText = fs.readFileSync(path.join(resolvedDir, coverageFile), 'utf8');
-    } catch {
-      // COVERAGE.md exists but is unreadable (EACCES/EIO/encoding). Fail-closed
-      // with a useful message rather than a raw throw.
-      return gateVerdict('block', true, {
+    const matrix = readTextEvidence(path.join(resolvedDir, coverageFile));
+    if (matrix.kind !== 'found') {
+      // COVERAGE.md exists but is unreadable (EACCES/EIO/encoding), or vanished between the
+      // listing and the read. Fail-closed (policy unchanged) and `unreadable` (outcome).
+      return gateUnreadable(true, {
         block: true,
         passed: false,
         coverage_present: true,
         message: `api-coverage: COVERAGE.md exists but is unreadable — fix file permissions/encoding before sealing`,
       });
     }
+    const matrixText = matrix.value;
     const v = validateCoverageMatrix(matrixText);
     if (v.valid) {
       if (v.none_declared) {
@@ -315,8 +330,9 @@ export function evaluateApiCoverageVerifyPre(input: { projectDir: string; args: 
   const scope = readPhaseScope(projectDir, resolvedDir, phaseNumber);
   if (scope.readError) {
     // Fail-closed: an unreadable plan could be the one describing the
-    // integration, so we cannot certify "no integration" — block and surface it.
-    return gateVerdict('block', true, {
+    // integration, so we cannot certify "no integration" — block and surface it. The blocking
+    // policy is unchanged; the outcome is `unreadable` (exit UNAVAILABLE, #5170).
+    return gateUnreadable(true, {
       block: true,
       passed: false,
       coverage_present: false,

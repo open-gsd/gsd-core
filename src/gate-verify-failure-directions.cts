@@ -13,9 +13,9 @@
  * tell "nothing to report" from "could not look".
  */
 
-import { gateVerdict } from './gate-verdict.cjs';
+import { gateVerdict, gateUnreadable } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
-import { resolvePhaseDirOrEmpty, unresolvableProbeVerdict as unresolvable } from './gate-phase-context.cjs';
+import { resolvePhaseDir, unresolvableProbeVerdict as unresolvable } from './gate-phase-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verifyCommandGroundingMod = require('./verify-command-grounding.cjs');
 const { probePhaseFailingDirections } = verifyCommandGroundingMod;
@@ -26,13 +26,17 @@ export function evaluateVerifyFailureDirections(input: { projectDir: string; arg
     return unresolvable('verify-failure-directions requires a phase argument: check verify-failure-directions <phase>');
   }
 
-  const phaseDir = resolvePhaseDirOrEmpty(input.projectDir, phase);
-  if (!phaseDir) {
+  const located = resolvePhaseDir(input.projectDir, phase);
+  if (located.kind === 'unreadable') {
+    return unresolvable(`could not read the phase directory for phase ${phase}: ${located.reason}`);
+  }
+  if (located.kind === 'none') {
     return unresolvable(`could not resolve phase directory for phase ${phase}`);
   }
 
-  const probed = probePhaseFailingDirections({ phaseDir });
+  const probed = probePhaseFailingDirections({ phaseDir: located.value });
   const blocked = probed.counts.blocker > 0;
-  const outcome = blocked ? 'block' : probed.status === 'unresolvable' ? 'skip' : 'pass';
-  return gateVerdict(outcome, blocked, { ...probed });
+  // A probe that could not look (`unresolvable`) is `unreadable`: never a pass, exit UNAVAILABLE (#5170).
+  if (!blocked && probed.status === 'unresolvable') return gateUnreadable(false, { ...probed });
+  return gateVerdict(blocked ? 'block' : 'pass', blocked, { ...probed });
 }

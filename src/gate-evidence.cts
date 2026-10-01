@@ -27,6 +27,13 @@ export type Evidence<T> =
   | { readonly kind: 'none' }
   | { readonly kind: 'unreadable'; readonly reason: string; readonly span?: string };
 
+/**
+ * Evidence whose absence has already been decided by the caller (an absent directory is "no
+ * entries", an absent summary contributes nothing): only `found` and `unreadable` remain, and a
+ * consumer that handles `unreadable` is total.
+ */
+export type Observed<T> = Exclude<Evidence<T>, { readonly kind: 'none' }>;
+
 export function evidenceFound<T>(value: T): Evidence<T> {
   return { kind: 'found', value };
 }
@@ -41,6 +48,15 @@ export function evidenceUnreadable<T = never>(reason: string, span?: string): Ev
 
 /** Errno codes meaning "the path cannot hold evidence": absent, or a parent is not a directory. */
 const ABSENT_CODES: ReadonlySet<string> = new Set(['ENOENT', 'ENOTDIR']);
+
+/**
+ * Classify a thrown read failure as evidence: absent (`ENOENT`/`ENOTDIR`) is `none`, anything else
+ * is `unreadable` carrying the errno code (or the message when there was none). A gate that wraps a
+ * lookup it does not own (a locator, a roadmap reader) in `try` uses this instead of a bare `catch`.
+ */
+export function evidenceFromError<T>(err: unknown, span: string): Evidence<T> {
+  return classifyFailure<T>(err, span);
+}
 
 function classifyFailure<T>(err: unknown, span: string): Evidence<T> {
   const code = (err as NodeJS.ErrnoException | null | undefined)?.code;
@@ -65,6 +81,24 @@ export function readDirEvidence(dirPath: string): Evidence<string[]> {
     return evidenceFound(fs.readdirSync(dirPath));
   } catch (err) {
     return classifyFailure<string[]>(err, dirPath);
+  }
+}
+
+/** Read a directory's entries (with types) as evidence. Never throws. */
+export function readDirEntriesEvidence(dirPath: string): Evidence<fs.Dirent[]> {
+  try {
+    return evidenceFound(fs.readdirSync(dirPath, { withFileTypes: true }));
+  } catch (err) {
+    return classifyFailure<fs.Dirent[]>(err, dirPath);
+  }
+}
+
+/** Stat a path (following symlinks) as evidence. Never throws. */
+export function statEvidence(targetPath: string): Evidence<fs.Stats> {
+  try {
+    return evidenceFound(fs.statSync(targetPath));
+  } catch (err) {
+    return classifyFailure<fs.Stats>(err, targetPath);
   }
 }
 

@@ -19,10 +19,10 @@
  * flags.
  */
 
-import fs from 'node:fs';
 import path from 'node:path';
 import { gateVerdict, gateUsageFailure, isGateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
+import { readDirEvidence, statEvidence } from './gate-evidence.cjs';
 import { resolveContainedPath } from './gate-phase-context.cjs';
 import { parsePredicateFlags } from './gate-args.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -65,7 +65,21 @@ export function buildPredicateDeps() {
       };
     },
     findPhaseArtifact(phaseDir: string, artifactSuffix: string): string | null {
-      if (!fs.existsSync(phaseDir)) return null;
+      // #5170 (ADR-5057 §4): an ABSENT directory or artifact is `none` (the artifact is not there);
+      // one that exists but cannot be examined is `unreadable` and THROWS — `evaluateCheckPredicate`
+      // maps a throw to the usage failure the dispatch contract routes by `onError`. It is never
+      // folded into "artifact not found", which a predicate may read as a clean answer.
+      const unreadable = (target: string, reason: string): never => {
+        throw new Error(`predicate artifact could not be examined: ${target} (${reason})`);
+      };
+      const regularFileOrNull = (candidate: string): string | null => {
+        const st = statEvidence(candidate);
+        if (st.kind === 'unreadable') return unreadable(candidate, st.reason);
+        return st.kind === 'found' && st.value.isFile() ? candidate : null;
+      };
+      const phaseDirStat = statEvidence(phaseDir);
+      if (phaseDirStat.kind === 'unreadable') return unreadable(phaseDir, phaseDirStat.reason);
+      if (phaseDirStat.kind === 'none') return null;
       if (
         artifactSuffix === '.' ||
         artifactSuffix === '..' ||
@@ -76,22 +90,26 @@ export function buildPredicateDeps() {
         return null;
       }
       const directContained = tryWithinRoot(artifactSuffix, phaseDir);
-      if (directContained !== null && fs.existsSync(directContained) && fs.statSync(directContained).isFile()) {
-        return directContained;
+      if (directContained !== null) {
+        const direct = regularFileOrNull(directContained);
+        if (direct !== null) return direct;
       }
       const planningContained = tryWithinRoot(path.join('.planning', artifactSuffix), phaseDir);
-      if (planningContained !== null && fs.existsSync(planningContained) && fs.statSync(planningContained).isFile()) {
-        return planningContained;
+      if (planningContained !== null) {
+        const planning = regularFileOrNull(planningContained);
+        if (planning !== null) return planning;
       }
-      try {
-        const files = fs.readdirSync(phaseDir);
-        for (const f of files) {
-          if (f.endsWith('-' + artifactSuffix) || f === artifactSuffix) {
-            const candidateContained = tryWithinRoot(f, phaseDir);
-            if (candidateContained !== null && fs.statSync(candidateContained).isFile()) return candidateContained;
-          }
+      const listing = readDirEvidence(phaseDir);
+      if (listing.kind === 'unreadable') return unreadable(phaseDir, listing.reason);
+      if (listing.kind === 'none') return null;
+      for (const f of listing.value) {
+        if (f.endsWith('-' + artifactSuffix) || f === artifactSuffix) {
+          const candidateContained = tryWithinRoot(f, phaseDir);
+          if (candidateContained === null) continue;
+          const candidate = regularFileOrNull(candidateContained);
+          if (candidate !== null) return candidate;
         }
-      } catch { /* ignore */ }
+      }
       return null;
     },
     readFrontmatter(filePath: string): Record<string, unknown> {

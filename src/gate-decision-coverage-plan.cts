@@ -18,8 +18,9 @@
  */
 
 import fs from 'node:fs';
-import { gateVerdict, isGateUsageFailure } from './gate-verdict.cjs';
+import { gateVerdict, gateUnreadable, isGateUsageFailure } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
+import { statEvidence } from './gate-evidence.cjs';
 import { partitionPredicateArgs } from './gate-args.cjs';
 import { resolveContainedPath } from './gate-phase-context.cjs';
 import { isDecisionCoverageGateEnabled } from './gate-config.cjs';
@@ -31,6 +32,23 @@ import {
   buildPlanMessage,
 } from './decision-coverage-support.cjs';
 import type { UncoveredItem } from './decision-coverage-support.cjs';
+
+/**
+ * The verdict when CONTEXT.md or a plan could not be read. The blocking policy is unchanged
+ * (`block: true`, fail-closed like the neighbouring arms); the outcome is `unreadable`, so the exit
+ * status is UNAVAILABLE and nothing is certified from content the gate never saw (#5170).
+ */
+function unreadableDecisionGate(readError: string): GateResult {
+  return gateUnreadable(true, {
+    passed: false,
+    skipped: false,
+    reason: 'unreadable evidence',
+    total: null,
+    covered: null,
+    readError,
+    message: `Decision coverage gate could not read its evidence (${readError}). Fix the file permissions or encoding, then re-run the gate.`,
+  });
+}
 
 export function evaluateDecisionCoveragePlan(input: { projectDir: string; args: readonly string[] }): GateResult {
   const { projectDir, args } = input;
@@ -77,21 +95,24 @@ export function evaluateDecisionCoveragePlan(input: { projectDir: string; args: 
   // certify passed:true on a phase full of decisions. Fail closed, naming it.
   // The stat is wrapped: a path that vanishes between existsSync and statSync
   // (or any stat failure) must answer the SAME fail-closed JSON, never a throw.
-  let contextIsFile = false;
-  let contextKind = 'non-file entry';
-  try {
-    const st = fs.statSync(contextPath);
-    contextIsFile = st.isFile();
-    if (st.isDirectory()) contextKind = 'directory';
-  } catch {
-    contextIsFile = false;
-    contextKind = 'unreadable path';
-  }
+  const contextStat = statEvidence(contextPath);
+  const contextIsFile = contextStat.kind === 'found' && contextStat.value.isFile();
   if (!contextIsFile) {
-    return gateVerdict('block', true, { passed: false, skipped: false, reason: 'context path is not a file', total: null, covered: null, message: `Decision coverage gate: the context path "${contextArg}" is not a readable file (${contextKind}). Swap the adjacent positionals or pass --context <path-to-CONTEXT.md>.` });
+    const contextKind = contextStat.kind === 'found'
+      ? (contextStat.value.isDirectory() ? 'directory' : 'non-file entry')
+      : 'unreadable path';
+    const notAFile = { passed: false, skipped: false, reason: 'context path is not a file', total: null, covered: null, message: `Decision coverage gate: the context path "${contextArg}" is not a readable file (${contextKind}). Swap the adjacent positionals or pass --context <path-to-CONTEXT.md>.` };
+    // Fail-closed policy is unchanged (`block: true`); a path that could not even be examined is
+    // "could not look" (#5170), so its outcome is `unreadable` and the exit status follows it.
+    return contextStat.kind === 'unreadable' ? gateUnreadable(true, notAFile) : gateVerdict('block', true, notAFile);
   }
 
-  const { trackable: decisions, outcome, unreadableIds } = loadDecisionExtraction(contextPath);
+  const extracted = loadDecisionExtraction(contextPath);
+  if (extracted.kind === 'unreadable') return unreadableDecisionGate(`${extracted.span ?? contextPath}: ${extracted.reason}`);
+  if (extracted.kind === 'none') {
+    return gateVerdict('skip', false, { passed: true, skipped: true, reason: 'CONTEXT.md missing', total: 0, covered: 0, uncovered: [], message: 'No CONTEXT.md - nothing to check.' });
+  }
+  const { trackable: decisions, outcome, unreadableIds } = extracted.value;
 
   // #1365 fail-loud gate: any could-not-parse outcome must NOT silently pass —
   // even when some decisions were extracted (e.g. D-01 valid but D-02 malformed).
@@ -130,7 +151,9 @@ export function evaluateDecisionCoveragePlan(input: { projectDir: string; args: 
     return gateVerdict('skip', false, { passed: true, skipped: true, reason: 'no trackable decisions', total: 0, covered: 0, uncovered: [], message: 'No trackable decisions in CONTEXT.md.' });
   }
 
-  const sections = loadPlanContents(phaseDir).map(extractPlanDesignatedSections);
+  const planContents = loadPlanContents(phaseDir);
+  if (planContents.kind === 'unreadable') return unreadableDecisionGate(`${planContents.span ?? phaseDir}: ${planContents.reason}`);
+  const sections = planContents.value.map(extractPlanDesignatedSections);
   const uncovered: UncoveredItem[] = [];
   let covered = 0;
   for (const decision of decisions) {

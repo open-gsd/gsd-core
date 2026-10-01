@@ -35,7 +35,7 @@ import { execGit as execGitSeam } from './shell-command-projection.cjs';
 import type { SpawnResultOutput } from './shell-command-projection.cjs';
 import { gateVerdict, gateUsageFailure, isGateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
-import { resolveContainedPath, resolvePhaseDirOrEmpty } from './gate-phase-context.cjs';
+import { resolveContainedPath, resolvePhaseDir } from './gate-phase-context.cjs';
 import { escapeEre } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planScanMod = require('./plan-scan.cjs');
@@ -383,7 +383,12 @@ function resolvePhase(
   projectDir: string, unit: { kind: 'phase'; phase: string; phaseDir?: string }, scope: EvaluationScope,
   git: Git, ref: string, options: ScopeOptions, repoRoot: string,
 ): void {
-  const phaseDir = unit.phaseDir ?? resolvePhaseDirOrEmpty(projectDir, unit.phase);
+  let phaseDir = unit.phaseDir ?? '';
+  if (unit.phaseDir === undefined) {
+    const located = resolvePhaseDir(projectDir, unit.phase);
+    if (located.kind === 'unreadable') throw new ScopeUnreadable(`phase-dir-lookup-failed:${located.reason}`);
+    if (located.kind === 'found') phaseDir = located.value;
+  }
   if (!phaseDir) throw new ScopeUnreadable('phase-dir-not-found');
 
   const refs: string[] = [];

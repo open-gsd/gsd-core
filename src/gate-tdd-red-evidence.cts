@@ -27,9 +27,9 @@
 
 import path from 'node:path';
 import { tryWithinRoot, PathAcceptance } from './security.cjs';
-import { gateVerdict, gateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
+import { gateVerdict, gateUnreadable, gateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
-import { readIfExists } from './gate-phase-context.cjs';
+import { readTextEvidence } from './gate-evidence.cjs';
 import { classifyRedEvidence, buildRedEvidenceRecord } from './tdd-red-evidence.cjs';
 
 export function evaluateTddRedEvidence(input: { projectDir: string; args: readonly string[] }): GateResult {
@@ -46,7 +46,8 @@ export function evaluateTddRedEvidence(input: { projectDir: string; args: readon
   if (tryWithinRoot(resolved, input.projectDir, PathAcceptance.AbsoluteInsideRoot) === null) {
     return gateUsageFailure(GATE_FAILURE_CODE.USAGE, `path escapes its allowed directory: ${recordPath}`);
   }
-  const text = readIfExists(resolved);
+  const read = readTextEvidence(resolved);
+  const text = read.kind === 'found' ? read.value : '';
   const record = ((): Record<string, unknown> | null => {
     if (!text) return null;
     try {
@@ -56,14 +57,17 @@ export function evaluateTddRedEvidence(input: { projectDir: string; args: readon
     }
   })();
   if (!record) {
-    return gateVerdict('block', true, {
+    const payload = {
       passed: false,
       block: true,
       verdict: 'INVALID_RED',
       reason: 'unreadable_record',
       record: resolved,
       readError: text ? `record is not valid JSON: ${resolved}` : `record not found or unreadable: ${resolved}`,
-    });
+    };
+    // Fail-closed policy is unchanged (`block: true`); a record that exists but could not be read
+    // is "could not look" (#5170), so its outcome is `unreadable` and the exit status follows it.
+    return read.kind === 'unreadable' ? gateUnreadable(true, payload) : gateVerdict('block', true, payload);
   }
   const evidenceInput = {
     command: record['command'],

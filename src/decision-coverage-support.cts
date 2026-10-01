@@ -16,14 +16,14 @@
  * performs no direct console/stdout/stderr write (ESLint-enforced).
  */
 
-import fs from 'node:fs';
 import path from 'node:path';
 import { extractDecisions } from './decisions.cjs';
 import type { Decision } from './decisions.cjs';
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { stripFencedCode, collectSections, extractXmlTagBodies } from './markdown-sectionizer.cjs';
 import { tryWithinRoot, PathAcceptance } from './security.cjs';
-import { readIfExists } from './gate-phase-context.cjs';
+import { readDirEvidence, readTextEvidence } from './gate-evidence.cjs';
+import type { Evidence, Observed } from './gate-evidence.cjs';
 import { resolveEvaluationScope } from './gate-evaluation-scope.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatterMod = require('./frontmatter.cjs');
@@ -60,33 +60,61 @@ export function decisionMentioned(haystack: string | null | undefined, decision:
 
 // ─── File reading ─────────────────────────────────────────────────────────────
 
-export function loadPlanContents(phaseDir: string): string[] {
-  if (!fs.existsSync(phaseDir)) return [];
-  // #3183 (lint-plan-count-drift): source live plan files from the single
-  // owner (scanPhasePlans) instead of a local `-PLAN.md` readdirSync filter
-  // — picks up bare PLAN.md and nested plans/, and excludes plans marked
-  // `status: superseded`, which the prior root-only exact-suffix filter did
-  // neither for.
-  return scanPhasePlans(phaseDir).planFiles
-    .map((entry) => readIfExists(path.join(phaseDir, entry)));
+/**
+ * The contents of the phase files `pick` selects (#5170, ADR-5057 §4). An ABSENT phase directory
+ * is "no files" (`found []`); a directory or file that exists but cannot be read is `unreadable` —
+ * a gate must not take "could not read the plan" for "the plan does not cite the decision".
+ */
+function readPhaseFiles(phaseDir: string, pick: (scan: ReturnType<typeof scanPhasePlans>) => string[]): Observed<string[]> {
+  const entries = readDirEvidence(phaseDir);
+  if (entries.kind === 'none') return { kind: 'found', value: [] };
+  if (entries.kind === 'unreadable') return entries;
+  const contents: string[] = [];
+  // #3183 (lint-plan-count-drift): source live plan/summary files from the single
+  // owner (scanPhasePlans) instead of a local readdirSync filter — picks up bare PLAN.md and
+  // nested plans/, and excludes plans marked `status: superseded`.
+  for (const entry of pick(scanPhasePlans(phaseDir))) {
+    const read = readTextEvidence(path.join(phaseDir, entry));
+    if (read.kind === 'unreadable') return read;
+    if (read.kind === 'found') contents.push(read.value);
+  }
+  return { kind: 'found', value: contents };
+}
+
+export function loadPlanContents(phaseDir: string): Observed<string[]> {
+  return readPhaseFiles(phaseDir, (scan) => scan.planFiles);
 }
 
 /**
  * #3183 (lint-plan-count-drift): same single-owner sourcing as `loadPlanContents` —
  * scanPhasePlans's summaryFiles instead of a local `-SUMMARY.md` readdirSync filter.
  */
-export function loadSummaryContents(phaseDir: string): string[] {
-  return fs.existsSync(phaseDir)
-    ? scanPhasePlans(phaseDir).summaryFiles.map((entry) => readIfExists(path.join(phaseDir, entry)))
-    : [];
+export function loadSummaryContents(phaseDir: string): Observed<string[]> {
+  return readPhaseFiles(phaseDir, (scan) => scan.summaryFiles);
 }
 
-export function loadDecisionExtraction(contextPath: string): { trackable: Decision[]; outcome: 'parsed' | 'none-present' | 'could-not-parse'; unreadableIds: string[] } {
-  const extraction = extractDecisions(readIfExists(contextPath));
+export interface DecisionExtraction {
+  trackable: Decision[];
+  outcome: 'parsed' | 'none-present' | 'could-not-parse';
+  unreadableIds: string[];
+}
+
+/**
+ * The decisions of `CONTEXT.md`. `none` is an absent file (the caller's legitimate "nothing to
+ * check"); `unreadable` is a file that exists but could not be read — it must never be extracted as
+ * empty text, which would certify "no trackable decisions".
+ */
+export function loadDecisionExtraction(contextPath: string): Evidence<DecisionExtraction> {
+  const read = readTextEvidence(contextPath);
+  if (read.kind !== 'found') return read;
+  const extraction = extractDecisions(read.value);
   return {
-    trackable: extraction.decisions.filter((d) => d.trackable),
-    outcome: extraction.outcome,
-    unreadableIds: extraction.unreadableIds ?? [],
+    kind: 'found',
+    value: {
+      trackable: extraction.decisions.filter((d) => d.trackable),
+      outcome: extraction.outcome,
+      unreadableIds: extraction.unreadableIds ?? [],
+    },
   };
 }
 
@@ -201,7 +229,7 @@ const MODIFIED_FILES_MAX_BYTES = 256 * 1024;
  * The contents of every file the SUMMARYs list under frontmatter `files_modified`, contained to
  * `projectDir` and capped at `MODIFIED_FILES_MAX_COUNT` files / `MODIFIED_FILES_MAX_BYTES` each.
  */
-export function readModifiedFilesContent(projectDir: string, summaries: string[]): string {
+export function readModifiedFilesContent(projectDir: string, summaries: string[]): Observed<string> {
   const out: string[] = [];
   let total = 0;
   for (const summary of summaries) {
@@ -221,10 +249,14 @@ export function readModifiedFilesContent(projectDir: string, summaries: string[]
       const candidate = path.isAbsolute(file) ? file : path.join(projectDir, file);
       const contained = tryWithinRoot(candidate, projectDir, PathAcceptance.AbsoluteInsideRoot);
       if (contained === null) continue;
-      const content = readIfExists(contained);
+      // An absent listed file contributes nothing readable (`''`); one that exists but cannot be
+      // read is `unreadable` — the decision it may cite was never seen (#5170).
+      const read = readTextEvidence(contained);
+      if (read.kind === 'unreadable') return read;
+      const content = read.kind === 'found' ? read.value : '';
       out.push(content.length > MODIFIED_FILES_MAX_BYTES ? content.slice(0, MODIFIED_FILES_MAX_BYTES) : content);
       total++;
     }
   }
-  return out.join('\n\n');
+  return { kind: 'found', value: out.join('\n\n') };
 }

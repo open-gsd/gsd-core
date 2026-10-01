@@ -29,10 +29,10 @@
  * O_NOFOLLOW/dirfd semantics inside the ADR-4650 predicate — a wider change than this gate.
  */
 
-import { gateVerdict, isGateUsageFailure } from './gate-verdict.cjs';
+import { gateVerdict, gateUnreadable, isGateUsageFailure } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
 import { partitionPredicateArgs } from './gate-args.cjs';
-import { resolveContainedPath, resolvePhaseDirOrEmpty, unresolvableProbeVerdict as unresolvable } from './gate-phase-context.cjs';
+import { resolveContainedPath, resolvePhaseDir, unresolvableProbeVerdict as unresolvable } from './gate-phase-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verifyCommandGroundingMod = require('./verify-command-grounding.cjs');
 const { probePhaseVerifyCommands } = verifyCommandGroundingMod;
@@ -48,7 +48,7 @@ export function evaluateVerifyCommandPaths(input: { projectDir: string; args: re
     return unresolvable('verify-command-paths requires a phase argument or --dir: check verify-command-paths <phase> | --dir <plan-dir>');
   }
 
-  let phaseDir: string;
+  let phaseDir = '';
   if (dirFlag) {
     // `--dir` is CALLER-SUPPLIED: contain it before it reaches the reads in the probe. Read the
     // value the predicate RETURNED; never re-derive the path. An escape degrades to the same
@@ -59,7 +59,11 @@ export function evaluateVerifyCommandPaths(input: { projectDir: string; args: re
     }
     phaseDir = contained;
   } else {
-    phaseDir = resolvePhaseDirOrEmpty(projectDir, phase);
+    const located = resolvePhaseDir(projectDir, phase);
+    if (located.kind === 'unreadable') {
+      return unresolvable(`could not read the phase directory for phase ${phase}: ${located.reason}`);
+    }
+    if (located.kind === 'found') phaseDir = located.value;
   }
 
   if (!phaseDir) {
@@ -68,6 +72,7 @@ export function evaluateVerifyCommandPaths(input: { projectDir: string; args: re
 
   const probed = probePhaseVerifyCommands({ phaseDir, projectRoot: projectDir });
   const blocked = probed.counts.blocker > 0;
-  const outcome = blocked ? 'block' : probed.status === 'unresolvable' ? 'skip' : 'pass';
-  return gateVerdict(outcome, blocked, { ...probed });
+  // A probe that could not look (`unresolvable`) is `unreadable`: never a pass, exit UNAVAILABLE (#5170).
+  if (!blocked && probed.status === 'unresolvable') return gateUnreadable(false, { ...probed });
+  return gateVerdict(blocked ? 'block' : 'pass', blocked, { ...probed });
 }
