@@ -1268,10 +1268,15 @@ function analyzeChunkEvents(eventsPath) {
 // a loss. A count that errs low can hide a loss; it cannot invent one.
 //
 // `available` is false when either file is missing/unreadable or the ledger
-// holds no `registered` line: the chunk could not be accounted, which the
-// caller reports instead of reading it as "nothing was lost". Truncated
-// trailing lines are skipped, as in analyzeChunkEvents. Paths are compared
-// after path.resolve (case-folded on win32).
+// holds no `registered` line: the chunk could not be accounted. That is
+// UNREADABLE EVIDENCE (#5170, ADR-5057 §4), never "nothing was lost": the
+// caller FAILS a chunk that exited 0 without an accounting it can trust
+// (formatAccountingUnavailable), with `eventsRead` / `ledgerRead` /
+// `sawRegisteredLine` naming which input was missing. Truncated trailing
+// lines are skipped, as in analyzeChunkEvents. Paths are compared by their
+// real path (normalizeAccountedPath: realpath, case-folded on win32) on BOTH
+// sides — never by basename, which would attribute one file's results to
+// another of the same name in a different directory.
 function normalizeAccountedPath(p) {
   let resolved = resolve(p);
   try {
@@ -1329,18 +1334,14 @@ function analyzeChunkAccounting(eventsPath, ledgerPath) {
     display.set(key, display.get(key) || evt.file);
     registered.set(key, (registered.get(key) || 0) + evt.count);
   });
-  // A registered file with no reported entry under its own spelling is matched
-  // to the single UNCLAIMED reported file that shares its basename, so a path
-  // spelling the two sides disagree on (case on a case-insensitive filesystem,
-  // a mount alias) never reads as "every test of this file was lost". Zero or
-  // several candidates leave it unmatched, which IS reported as a shortfall.
-  const reportedFor = (key) => {
-    if (reported.has(key)) return reported.get(key);
-    const candidates = [...reported.keys()].filter(
-      (k) => !registered.has(k) && basename(k) === basename(key),
-    );
-    return candidates.length === 1 ? reported.get(candidates[0]) : 0;
-  };
+  // A registered file is matched to its reported results by its real path ALONE.
+  // Both sides are normalized through realpath (normalizeAccountedPath), so a
+  // spelling the two sides disagree on (a symlinked temp root, 8.3 names, case on
+  // a case-insensitive filesystem) is the same key. There is no basename
+  // fallback: tests/a/x.test.cjs and tests/b/x.test.cjs share a basename, and
+  // crediting one file's results to the other would hide a loss. A registered
+  // file with no reported entry IS a shortfall.
+  const reportedFor = (key) => reported.get(key) || 0;
   const shortfalls = [];
   let registeredTotal = 0;
   let reportedTotal = 0;
@@ -1352,6 +1353,9 @@ function analyzeChunkAccounting(eventsPath, ledgerPath) {
   }
   return {
     available: eventsRead && ledgerRead && sawRegisteredLine,
+    eventsRead,
+    ledgerRead,
+    sawRegisteredLine,
     shortfalls,
     registeredTotal,
     reportedTotal,
@@ -1371,6 +1375,22 @@ function formatAccountingFailure(chunkNumber, chunkCount, accounting) {
     `(${lost} unaccounted). The runner exited 0, but results for tests that registered never ` +
     `reached the report (--test-force-exit can end the runner before a test file's results ` +
     `are read, nodejs/node#64833), so a green count here would be a lower bound.\n${lines.join('\n')}`
+  );
+}
+
+// #5170: the loud failure for a chunk that exited 0 whose accounting inputs are missing: the
+// registration ledger and/or the reporter events file could not be read, or the ledger holds no
+// registration at all. The chunk may have lost results and there is no way to know, so it is unreadable
+// evidence — the class this phase closes — and fails like any other failed chunk.
+function formatAccountingUnavailable(chunkNumber, chunkCount, accounting) {
+  const missing = [];
+  if (!accounting.ledgerRead) missing.push('the registration ledger could not be read');
+  else if (!accounting.sawRegisteredLine) missing.push('the registration ledger holds no registration (the preload never recorded a test file)');
+  if (!accounting.eventsRead) missing.push('the reporter events file could not be read');
+  return (
+    `run-tests: chunk ${chunkNumber}/${chunkCount} FAILED test accounting — it exited 0 but could ` +
+    `not be accounted (unreadable evidence): ${missing.join('; ')}. A dropped result would not be ` +
+    `detected for this chunk, so a green count here would be a lower bound.`
   );
 }
 
@@ -2301,11 +2321,10 @@ async function main() {
         accountingFailed = true;
         console.error(formatAccountingFailure(i + 1, chunks.length, accounting));
       } else if (!accounting.available) {
-        console.error(
-          `run-tests: WARNING: chunk ${i + 1}/${chunks.length} could not be accounted — the ` +
-            'registration ledger or the reporter events file is missing or empty, so a ' +
-            'dropped result would not be detected for this chunk.',
-        );
+        // Unreadable evidence is a FAILURE, not a warning (#5170): accounting that cannot be read
+        // cannot show that nothing was lost.
+        accountingFailed = true;
+        console.error(formatAccountingUnavailable(i + 1, chunks.length, accounting));
       }
     }
     if (!accountingFailed && !result.timedOut && result.code === 0 && !result.signal && !result.error) {
@@ -2454,6 +2473,7 @@ module.exports = {
   // shortfall and accounted arms are unit-testable on synthetic ledgers.
   analyzeChunkAccounting,
   formatAccountingFailure,
+  formatAccountingUnavailable,
   // #4936: the chunk watchdog, exported so its arms are unit-testable with
   // injected spawn/platform seams (a real wedged Windows child is not
   // reproducible on demand).

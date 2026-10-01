@@ -33,7 +33,7 @@ const { runNode } = require('./helpers/process-seam.cjs');
 const { toLegacyResult } = require('./helpers/git-fixture.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { PROBE_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { analyzeChunkAccounting, formatAccountingFailure } = require('../scripts/run-tests.cjs');
+const { analyzeChunkAccounting, formatAccountingFailure, formatAccountingUnavailable } = require('../scripts/run-tests.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const HARNESS = path.join(ROOT, 'scripts', 'run-tests.cjs');
@@ -150,33 +150,82 @@ describe('analyzeChunkAccounting (#4031)', () => {
     assert.deepEqual(analyzeChunkAccounting(eventsPath, ledgerPath).shortfalls, []);
   });
 
-  test('a path spelling the two sides disagree on is matched by its single unclaimed basename', (t) => {
-    const registeredAs = path.join(path.sep, 'mnt', 'repo', 'tests', 'x.test.cjs');
-    const reportedAs = path.join(path.sep, 'srv', 'repo', 'tests', 'x.test.cjs');
-    const matched = chunkFiles(t, {
+  test('a path spelling the two sides disagree on is the same file when it resolves to one real path (realpath on both sides)', (t) => {
+    const dir = createTempDir('gsd-5170-realpath-');
+    t.after(() => cleanup(dir));
+    const realDir = path.join(dir, 'real');
+    const aliasDir = path.join(dir, 'alias');
+    fs.mkdirSync(realDir);
+    fs.writeFileSync(path.join(realDir, 'x.test.cjs'), '');
+    try {
+      fs.symlinkSync(realDir, aliasDir, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (err) {
+      t.skip(`cannot create a directory symlink here: ${err.code}`);
+      return;
+    }
+    const { eventsPath, ledgerPath } = chunkFiles(t, {
+      events: results(path.join(realDir, 'x.test.cjs'), 2),
+      ledger: [{ type: 'registered', file: path.join(aliasDir, 'x.test.cjs'), count: 2 }],
+    });
+    assert.deepEqual(analyzeChunkAccounting(eventsPath, ledgerPath).shortfalls, []);
+  });
+
+  test('there is no basename fallback: results are never credited to a same-named file in another directory (#5170)', (t) => {
+    // tests/a/x.test.cjs registered 2 and reported nothing; tests/b/x.test.cjs reported 2. Before, the lone
+    // same-basename reported file was credited to a/x, hiding a/x's loss.
+    const registeredAs = path.join(path.sep, 'repo', 'tests', 'a', 'x.test.cjs');
+    const reportedAs = path.join(path.sep, 'repo', 'tests', 'b', 'x.test.cjs');
+    const { eventsPath, ledgerPath } = chunkFiles(t, {
       events: results(reportedAs, 2),
       ledger: [{ type: 'registered', file: registeredAs, count: 2 }],
     });
-    assert.deepEqual(analyzeChunkAccounting(matched.eventsPath, matched.ledgerPath).shortfalls, []);
-    // Two same-named candidates: ambiguous, so it is NOT guessed — the shortfall stands.
-    const other = path.join(path.sep, 'opt', 'repo', 'tests', 'x.test.cjs');
-    const ambiguous = chunkFiles(t, {
-      events: [...results(reportedAs, 2), ...results(other, 2)],
-      ledger: [{ type: 'registered', file: registeredAs, count: 2 }],
+    assert.deepEqual(analyzeChunkAccounting(eventsPath, ledgerPath).shortfalls, [
+      { file: registeredAs, registered: 2, reported: 0 },
+    ]);
+    // Both registered: each file is judged on its own real path.
+    const both = chunkFiles(t, {
+      events: [...results(registeredAs, 2), ...results(reportedAs, 1)],
+      ledger: [
+        { type: 'registered', file: registeredAs, count: 2 },
+        { type: 'registered', file: reportedAs, count: 2 },
+      ],
     });
-    assert.equal(analyzeChunkAccounting(ambiguous.eventsPath, ambiguous.ledgerPath).shortfalls.length, 1);
+    assert.deepEqual(analyzeChunkAccounting(both.eventsPath, both.ledgerPath).shortfalls, [
+      { file: reportedAs, registered: 2, reported: 1 },
+    ]);
   });
 
   test('a missing ledger or events file is UNAVAILABLE, never read as accounted-for or as a loss', (t) => {
     const noLedger = chunkFiles(t, { events: results(FILE, 1), ledger: null });
     const a1 = analyzeChunkAccounting(noLedger.eventsPath, noLedger.ledgerPath);
     assert.equal(a1.available, false);
+    assert.equal(a1.ledgerRead, false);
+    assert.equal(a1.eventsRead, true);
     assert.deepEqual(a1.shortfalls, []);
     const noEvents = chunkFiles(t, { events: null, ledger: [{ type: 'registered', file: FILE, count: 1 }] });
     const a2 = analyzeChunkAccounting(noEvents.eventsPath, noEvents.ledgerPath);
     assert.equal(a2.available, false);
+    assert.equal(a2.eventsRead, false);
+    assert.equal(a2.ledgerRead, true);
     const noLines = chunkFiles(t, { events: results(FILE, 1), ledger: [{ type: 'other' }] });
-    assert.equal(analyzeChunkAccounting(noLines.eventsPath, noLines.ledgerPath).available, false);
+    const a3 = analyzeChunkAccounting(noLines.eventsPath, noLines.ledgerPath);
+    assert.equal(a3.available, false);
+    assert.equal(a3.sawRegisteredLine, false);
+  });
+
+  test('unreadable accounting evidence is a failure message that names the chunk and which input was missing (#5170)', (t) => {
+    const noLedger = chunkFiles(t, { events: results(FILE, 1), ledger: null });
+    const m1 = formatAccountingUnavailable(3, 9, analyzeChunkAccounting(noLedger.eventsPath, noLedger.ledgerPath));
+    assert.match(m1, /chunk 3\/9 FAILED test accounting/);
+    assert.match(m1, /unreadable evidence/);
+    assert.match(m1, /registration ledger could not be read/);
+    assert.ok(!/events file/.test(m1), 'only the missing input is named');
+    const noEvents = chunkFiles(t, { events: null, ledger: [{ type: 'registered', file: FILE, count: 1 }] });
+    const m2 = formatAccountingUnavailable(1, 1, analyzeChunkAccounting(noEvents.eventsPath, noEvents.ledgerPath));
+    assert.match(m2, /reporter events file could not be read/);
+    const noLines = chunkFiles(t, { events: results(FILE, 1), ledger: [{ type: 'other' }] });
+    const m3 = formatAccountingUnavailable(1, 1, analyzeChunkAccounting(noLines.eventsPath, noLines.ledgerPath));
+    assert.match(m3, /holds no registration/);
   });
 
   test('a truncated trailing line is skipped, as in analyzeChunkEvents', (t) => {
@@ -324,5 +373,32 @@ process.on('exit', () => {
     assert.strictEqual(r.status, 0, `stderr:\n${r.stderr}`);
     assert.ok(!/FAILED test accounting/.test(r.stderr));
     assert.ok(!/could not be accounted/.test(r.stderr), 'the ledger and the events must both have been read');
+  });
+
+  // #5170: a chunk that exited 0 whose registration ledger is gone cannot be accounted. The fixture
+  // removes the ledger the runner handed its chunk after the preload has written it (the preload's exit
+  // handler runs first: `--require` registers it before the test file does). A WARNING here would let a
+  // chunk with dropped results read as green; it must fail, naming the missing input.
+  test('a chunk whose registration ledger could not be read fails loudly (unreadable evidence)', (t) => {
+    const dir = createTempDir('gsd-5170-noledger-');
+    t.after(() => cleanup(dir));
+    fs.writeFileSync(
+      path.join(dir, 'noledger.test.cjs'),
+      `'use strict';
+const { test } = require('node:test');
+test('passes', () => {});
+process.on('exit', () => {
+  const ledger = process.env.GSD_RUN_TESTS_LEDGER_FILE;
+  if (ledger) require('fs').rmSync(ledger, { force: true });
+});
+`,
+      'utf8',
+    );
+    const r = runHarness(dir);
+    assert.notStrictEqual(r.status, 0, `an unaccountable chunk fails; stderr:\n${r.stderr}`);
+    assert.match(r.stderr, /chunk 1\/1 FAILED test accounting/);
+    assert.match(r.stderr, /unreadable evidence/);
+    assert.match(r.stderr, /registration ledger could not be read/);
+    assert.ok(!/WARNING: chunk 1\/1 could not be accounted/.test(r.stderr), 'no longer a warning');
   });
 });
