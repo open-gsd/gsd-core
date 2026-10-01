@@ -1,0 +1,16 @@
+// Positive control (#5170): the unreadable arm builds nothing itself — it calls a same-file helper that
+// returns a passing verdict.
+import { gateVerdict } from './gate-verdict.cjs';
+import { readTextEvidence, verdictFromEvidence } from './gate-evidence.cjs';
+
+function nothingToSee() {
+  return gateVerdict('skip', false, { reason: 'nothing to see' });
+}
+
+export function evaluateFixtureGate(planPath: string) {
+  return verdictFromEvidence(readTextEvidence(planPath), {
+    found: (text) => gateVerdict('pass', false, { text }),
+    none: () => nothingToSee(),
+    unreadable: () => nothingToSee(),
+  });
+}

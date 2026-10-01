@@ -1,0 +1,9 @@
+// Positive control (#5170): `existsSync` destructured out of the fs module (and out of a require).
+import fs from 'node:fs';
+
+const { existsSync } = fs;
+const { existsSync: present } = require('node:fs');
+
+export function contextExists(contextPath: string): boolean {
+  return existsSync(contextPath) || present(contextPath);
+}

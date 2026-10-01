@@ -1,0 +1,10 @@
+// The unrelated file of the helper-collision positive control: an `emit` of the same name that DOES
+// declare the exit. It must not make the entry in verb-helper-collision.cts.txt look settled.
+import { output } from './io.cjs';
+import { declareGateExit } from './gate-exit.cjs';
+import { gateVerdict } from './gate-verdict.cjs';
+
+export function emit(payload: Record<string, unknown>, raw: boolean): void {
+  output(payload, raw);
+  declareGateExit(gateVerdict('pass', false, payload), 'status');
+}

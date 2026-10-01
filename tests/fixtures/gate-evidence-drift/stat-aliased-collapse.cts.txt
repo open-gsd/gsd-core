@@ -1,0 +1,11 @@
+// Positive control (#5170): the stat-in-try collapse with `statSync` imported under another name.
+import { statSync as examine } from 'node:fs';
+
+export function exists(target: string): boolean {
+  try {
+    examine(target);
+    return true;
+  } catch {
+    return false;
+  }
+}

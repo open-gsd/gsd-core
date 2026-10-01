@@ -1,0 +1,15 @@
+// Positive control (#5170): the final `else` of a chain that handled `found` and `none` IS the
+// unreadable arm, and it advises.
+import { gateVerdict } from './gate-verdict.cjs';
+import { readTextEvidence } from './gate-evidence.cjs';
+
+export function evaluateFixtureGate(planPath: string) {
+  const plan = readTextEvidence(planPath);
+  if (plan.kind === 'found') {
+    return gateVerdict('pass', false, { text: plan.value });
+  } else if (plan.kind === 'none') {
+    return gateVerdict('skip', false, {});
+  } else {
+    return gateVerdict('advisory', false, {});
+  }
+}

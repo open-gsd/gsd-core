@@ -1,0 +1,12 @@
+// Positive control (#5170): the early-returning `kind !== 'unreadable'` test leaves the statements after
+// it as the unreadable arm, and they pass.
+import { gateVerdict } from './gate-verdict.cjs';
+import { readTextEvidence } from './gate-evidence.cjs';
+
+export function evaluateFixtureGate(planPath: string) {
+  const plan = readTextEvidence(planPath);
+  if (plan.kind !== 'unreadable') {
+    return gateVerdict('block', true, { checked: plan.kind });
+  }
+  return gateVerdict('pass', false, { reason: plan.reason });
+}

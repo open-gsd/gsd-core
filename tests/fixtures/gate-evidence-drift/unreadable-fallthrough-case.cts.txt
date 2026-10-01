@@ -1,0 +1,14 @@
+// Positive control (#5170): `case 'unreadable':` falls through into the `none` arm, which skips.
+import { gateVerdict } from './gate-verdict.cjs';
+import { readTextEvidence } from './gate-evidence.cjs';
+
+export function evaluateFixtureGate(planPath: string) {
+  const plan = readTextEvidence(planPath);
+  switch (plan.kind) {
+    case 'unreadable':
+    case 'none':
+      return gateVerdict('skip', false, { reason: 'no plan' });
+    default:
+      return gateVerdict('pass', false, {});
+  }
+}

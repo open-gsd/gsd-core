@@ -1,0 +1,13 @@
+// Positive control (#5170): the catch assigns an empty value to the result and then returns it.
+import fs from 'node:fs';
+
+export function readPlanText(planPath: string): string {
+  let text = 'unset';
+  try {
+    text = fs.readFileSync(planPath, 'utf8');
+  } catch (err) {
+    text = '';
+    return text;
+  }
+  return text;
+}

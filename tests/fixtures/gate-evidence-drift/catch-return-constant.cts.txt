@@ -1,0 +1,12 @@
+// Positive control (#5170): the catch returns a named empty constant instead of a literal.
+import fs from 'node:fs';
+
+const EMPTY_PLAN = '';
+
+export function readPlanText(planPath: string): string {
+  try {
+    return fs.readFileSync(planPath, 'utf8');
+  } catch {
+    return EMPTY_PLAN;
+  }
+}

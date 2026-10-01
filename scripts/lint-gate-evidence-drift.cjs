@@ -11,26 +11,37 @@
  * reports nine shapes:
  *
  *   empty-catch              a `catch` with no statement: the read failure is dropped on the floor
- *   pass-shaped-catch        a `catch` whose every statement returns/assigns a literal (`true`,
- *                            `false`, `null`, `''`, `[]`, `{}`, `undefined`, a number) or does nothing
- *                            but `continue`/`break`: "could not look" collapsed into an answer
+ *   pass-shaped-catch        a `catch` that neither rethrows nor produces unreadable evidence/verdict
+ *                            (a call to `evidenceFromError` / `evidenceUnreadable` / `gateUnreadable` /
+ *                            `error`, anything named `*unreadable*`, or `kind: 'unreadable'`): `return
+ *                            ''`, `return EMPTY_CONST`, `void err; return null`, an assignment then a
+ *                            return — "could not look" collapsed into an answer, whatever the spelling
  *   read-if-exists           any reference to the deleted tolerant reader `readIfExists`
- *   exists-collapse          `fs.existsSync(...)`, or `fs.statSync`/`lstatSync` inside a `try` whose
- *                            `catch` answers a literal `false`/`null`: a probe that cannot tell
- *                            "absent" from "could not examine" (EACCES on a parent) and collapses
- *                            both to `false`
+ *   exists-collapse          `fs.existsSync(...)` (written `fs['existsSync']`, destructured
+ *                            `const { existsSync } = fs`, aliased `import { existsSync as e }` or
+ *                            `const e = fs.existsSync` too), or `statSync`/`lstatSync` (same
+ *                            spellings) inside a `try` whose `catch` does not rethrow or produce
+ *                            unreadable evidence: a probe that cannot tell "absent" from "could not
+ *                            examine" (EACCES on a parent) and collapses both to `false`
  *   verb-owns-exit           a gate or a gate verb entry that assigns `process.exitCode`, calls
  *                            `process.exit`, returns a numeric exit, or calls `declareOutcome`
  *                            itself instead of going through `declareGateExit` (src/gate-exit.cts)
- *   unreadable-arm-passes    a verdict builder call returning outcome `pass`/`skip`/`advisory`
- *                            inside the `unreadable` arm of `verdictFromEvidence`, or inside an
- *                            `if`/`case` that tests `kind === 'unreadable'`
+ *   unreadable-arm-passes    the `unreadable` arm of a gate — `verdictFromEvidence`'s `unreadable`
+ *                            arm, the body of `kind === 'unreadable'`, the ELSE of `kind !==
+ *                            'unreadable'` (and the statements after an early-returning one), a
+ *                            `kind !== 'found'` branch, a `case 'unreadable'` (through its
+ *                            fall-through), the `default` of a switch that already handled `found`
+ *                            and `none`, the final `else` of a chain that did — builds a verdict whose
+ *                            outcome is not the literal `'unreadable'` (a `pass`/`skip`/`advisory`, or
+ *                            a variable the guard cannot prove), directly or through a same-file helper
  *   verb-catch-no-exit       a gate verb entry whose `catch` prints a payload (`output(...)`) and
  *                            neither declares a gate exit, nor fails through `error(...)`, nor
  *                            rethrows: a swallowed exception that exits 0
- *   verb-no-gate-exit        a gate verb entry that never reaches `declareGateExit`: the verb owns
- *                            its exit (or leaves it to `output()`'s default) instead of declaring it
- *                            from the verdict it built
+ *   verb-no-gate-exit        a gate verb entry on which SOME return path (or the fall-through end)
+ *                            does not go through `declareGateExit`/`error`/a throw — the original
+ *                            #4686 shape is `output({ error }); return;` beside a branch that emits
+ *                            through the seam. Helper closures are resolved per file and symbol (the
+ *                            same file, then its imports), never by bare name across `src/`
  *   verdict-owns-exit        any function in `src/` that calls `output()` with a verdict-shaped
  *                            payload (`passed`, `valid`, `all_passed`, `block`, `blocking`,
  *                            `drift_detected`) and assigns `process.exitCode`, without reaching
@@ -64,6 +75,7 @@ const { runMain } = require('./lib/cli-exit.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const GATE_EXIT_MODULE = './gate-exit.cjs';
+const FS_MODULES = Object.freeze(['fs', 'node:fs']);
 
 /**
  * The one site this guard tolerates. A new entry is `{ file, rule, symbol, reason }` (`symbol` is the
@@ -99,10 +111,12 @@ const RULES = Object.freeze({
   VERDICT_OWNS_EXIT: 'verdict-owns-exit',
 });
 
-const PASSING_OUTCOMES = Object.freeze(['pass', 'skip', 'advisory']);
 const VERDICT_KEYS = Object.freeze(['passed', 'valid', 'all_passed', 'block', 'blocking', 'drift_detected']);
 const GATE_EXTRA_FILES = Object.freeze(['src/check-auto-mode.cts', 'src/gap-checker.cts', 'src/decision-coverage-support.cts']);
 const EXIT_SEAM_FILES = Object.freeze(['src/gate-exit.cts', 'src/cli-exit.cts']);
+/** Calls that take a read failure and turn it into typed evidence, a typed failure, or a failing exit. */
+const HANDLING_CALLS = Object.freeze(['evidenceFromError', 'evidenceUnreadable', 'gateUnreadable', 'gateUsageFailure', 'classifyFailure', 'declareGateExit', 'error']);
+const UNREADABLE_NAME_RE = /unreadable/i;
 
 function loadParser(root) {
   return require(require.resolve('@typescript-eslint/parser', { paths: [root] }));
@@ -133,10 +147,41 @@ function descendants(node, predicate) {
   return found;
 }
 
+function stringLiteral(node) {
+  return node !== undefined && node !== null && node.type === 'Literal' && typeof node.value === 'string' ? node.value : null;
+}
+
+/** The property a member expression names: `a.b`, `a['b']` and a substitution-free template `a[`b`]`. */
+function memberName(node) {
+  if (node.type !== 'MemberExpression') return null;
+  if (!node.computed) return node.property.type === 'Identifier' ? node.property.name : null;
+  const literal = stringLiteral(node.property);
+  if (literal !== null) return literal;
+  if (node.property.type === 'TemplateLiteral' && node.property.expressions.length === 0) return node.property.quasis[0].value.cooked;
+  return null;
+}
+
+/** The expression a call actually invokes: `(0, f)(x)`, `f.call(t, x)`, `f.apply(t, xs)` and `f!(x)` resolve to `f`. */
+function unwrapCallee(callee) {
+  let current = callee;
+  for (;;) {
+    if (current.type === 'SequenceExpression') {
+      current = current.expressions[current.expressions.length - 1];
+    } else if (current.type === 'TSNonNullExpression' || current.type === 'TSAsExpression') {
+      current = current.expression;
+    } else if (current.type === 'MemberExpression' && ['call', 'apply'].includes(memberName(current)) && isNode(current.object)
+      && (current.object.type === 'MemberExpression' || current.object.type === 'Identifier')) {
+      current = current.object;
+    } else {
+      return current;
+    }
+  }
+}
+
 function calleeName(call) {
-  const callee = call.callee;
+  const callee = unwrapCallee(call.callee);
   if (callee.type === 'Identifier') return callee.name;
-  if (callee.type === 'MemberExpression' && !callee.computed && callee.property.type === 'Identifier') return callee.property.name;
+  if (callee.type === 'MemberExpression') return memberName(callee);
   return null;
 }
 
@@ -205,75 +250,96 @@ function nearestFunctionInScope(ancestors, scopeNames) {
   return false;
 }
 
-function isPassShapedExpression(node) {
-  if (node.type === 'Literal') return true;
-  if (node.type === 'Identifier') return node.name === 'undefined';
-  if (node.type === 'ArrayExpression') return node.elements.length === 0;
-  if (node.type === 'ObjectExpression') return node.properties.length === 0;
-  if (node.type === 'TemplateLiteral') return node.expressions.length === 0;
-  if (node.type === 'UnaryExpression') return isPassShapedExpression(node.argument);
-  return false;
-}
-
-function isPassShapedStatement(statement) {
-  switch (statement.type) {
-    case 'EmptyStatement':
-    case 'ContinueStatement':
-    case 'BreakStatement':
-      return true;
-    case 'ReturnStatement':
-      return statement.argument === null || isPassShapedExpression(statement.argument);
-    case 'ExpressionStatement':
-      return statement.expression.type === 'AssignmentExpression' && isPassShapedExpression(statement.expression.right);
-    default:
-      return false;
-  }
-}
-
-function stringLiteral(node) {
-  return node !== undefined && node !== null && node.type === 'Literal' && typeof node.value === 'string' ? node.value : null;
-}
-
-/** `gateVerdict('pass' | 'skip' | 'advisory', ...)` calls inside `subtree`. */
-function passingVerdictCalls(subtree) {
-  return descendants(subtree, (n) => isCallTo(n, ['gateVerdict']) && PASSING_OUTCOMES.includes(stringLiteral(n.arguments[0])));
-}
-
-/** Does `test` compare something to the string `'unreadable'` (`x.kind === 'unreadable'`)? */
-function testsUnreadable(test) {
-  return descendants(test, (n) => n.type === 'BinaryExpression'
-    && (n.operator === '===' || n.operator === '==')
-    && (stringLiteral(n.left) === 'unreadable' || stringLiteral(n.right) === 'unreadable')).length > 0;
-}
-
 function lineOf(node) {
   return node.loc.start.line;
 }
 
-/** `fs.existsSync(...)` / `x.existsSync(...)` / a bare `existsSync(...)`. */
-function isExistsSyncCall(node) {
-  return node.type === 'CallExpression' && calleeName(node) === 'existsSync';
+// ─── catch handling ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Does a `catch` handler rethrow, or turn the failure into unreadable evidence / an unreadable verdict /
+ * a failing exit? Anything else — `return ''`, `return EMPTY`, `void err`, an assignment then a return,
+ * a call that merely records the error somewhere — answers "could not look" with a value.
+ */
+function catchHandles(handler) {
+  return descendants(handler.body, (n) => n.type === 'ThrowStatement'
+    || (n.type === 'CallExpression' && (HANDLING_CALLS.includes(calleeName(n)) || UNREADABLE_NAME_RE.test(calleeName(n) ?? '')))
+    || (n.type === 'Identifier' && UNREADABLE_NAME_RE.test(n.name))
+    || (n.type === 'Literal' && n.value === 'unreadable')).length > 0;
 }
 
-/** Does a `catch` handler answer a literal `false`/`null`/`undefined` (or nothing at all)? */
-function handlerCollapsesToFalse(handler) {
-  const statements = handler.body.body;
-  if (statements.length === 0) return true;
-  if (statements.every(isPassShapedStatement)) return true;
-  return statements.some((s) => s.type === 'ReturnStatement' && s.argument !== null
-    && ((s.argument.type === 'Literal' && (s.argument.value === false || s.argument.value === null))
-      || (s.argument.type === 'Identifier' && s.argument.name === 'undefined')));
+// ─── fs aliasing (exists-collapse) ───────────────────────────────────────────────────────────────
+
+/**
+ * The local names bound to `fs.existsSync` and `fs.statSync`/`fs.lstatSync` in a file: a named import
+ * (`import { existsSync as e } from 'node:fs'`), a destructuring of the module or of a namespace bound
+ * to it (`const { existsSync } = fs`), or an alias assignment (`const e = fs.existsSync`).
+ */
+function collectFsAliases(ast) {
+  const namespaces = new Set();
+  const exists = new Set();
+  const stat = new Set();
+  const bind = (member, local) => {
+    if (member === 'existsSync') exists.add(local);
+    else if (member === 'statSync' || member === 'lstatSync') stat.add(local);
+  };
+  const isFsRequire = (n) => n !== null && n.type === 'CallExpression' && n.callee.type === 'Identifier' && n.callee.name === 'require'
+    && n.arguments.length === 1 && FS_MODULES.includes(stringLiteral(n.arguments[0]));
+  const isFsNamespace = (n) => n !== null && ((n.type === 'Identifier' && namespaces.has(n.name)) || isFsRequire(n));
+  walk(ast, (n) => {
+    if (n.type === 'ImportDeclaration' && FS_MODULES.includes(n.source.value)) {
+      for (const specifier of n.specifiers) {
+        if (specifier.type === 'ImportSpecifier') bind(specifier.imported.name ?? specifier.imported.value, specifier.local.name);
+        else namespaces.add(specifier.local.name);
+      }
+    }
+    if (n.type === 'TSImportEqualsDeclaration' && n.moduleReference.type === 'TSExternalModuleReference'
+      && FS_MODULES.includes(n.moduleReference.expression.value)) namespaces.add(n.id.name);
+  });
+  // Aliases of aliases settle in a few passes (`const f2 = fs; const { existsSync: e } = f2;`).
+  for (let pass = 0; pass < 3; pass += 1) {
+    walk(ast, (n) => {
+      if (n.type !== 'VariableDeclarator' || n.init === null) return;
+      if (isFsNamespace(n.init)) {
+        if (n.id.type === 'Identifier') namespaces.add(n.id.name);
+        else if (n.id.type === 'ObjectPattern') {
+          for (const p of n.id.properties) {
+            if (p.type !== 'Property' || p.computed) continue;
+            const key = p.key.type === 'Identifier' ? p.key.name : stringLiteral(p.key);
+            const local = p.value.type === 'Identifier' ? p.value.name : (p.value.type === 'AssignmentPattern' && p.value.left.type === 'Identifier' ? p.value.left.name : null);
+            if (key !== null && local !== null) bind(key, local);
+          }
+        }
+      } else if (n.init.type === 'MemberExpression' && isFsNamespace(n.init.object) && n.id.type === 'Identifier') {
+        const member = memberName(n.init);
+        if (member !== null) bind(member, n.id.name);
+      }
+    });
+  }
+  return { exists, stat };
 }
 
-/** `statSync`/`lstatSync` inside the `try` BLOCK of a try whose catch collapses to a literal answer. */
-function isStatInCollapsingTry(node, ancestors) {
-  if (node.type !== 'CallExpression' || !['statSync', 'lstatSync'].includes(calleeName(node))) return false;
+function isExistsSyncCall(node, aliases) {
+  if (node.type !== 'CallExpression') return false;
+  const callee = unwrapCallee(node.callee);
+  return calleeName(node) === 'existsSync' || (callee.type === 'Identifier' && aliases.exists.has(callee.name));
+}
+
+function isStatCall(node, aliases) {
+  if (node.type !== 'CallExpression') return false;
+  const callee = unwrapCallee(node.callee);
+  return ['statSync', 'lstatSync'].includes(calleeName(node)) || (callee.type === 'Identifier' && aliases.stat.has(callee.name));
+}
+
+/** `statSync`/`lstatSync` inside the `try` BLOCK of a try whose catch neither rethrows nor produces unreadable evidence. */
+function isStatInCollapsingTry(node, ancestors, aliases) {
+  if (!isStatCall(node, aliases)) return false;
   for (let i = ancestors.length - 1; i >= 0; i -= 1) {
     const ancestor = ancestors[i];
     if (isFunctionNode(ancestor)) return false;
     if (ancestor.type === 'TryStatement' && ancestor.handler !== null) {
       const child = ancestors[i + 1] ?? node;
-      if (child === ancestor.block) return handlerCollapsesToFalse(ancestor.handler);
+      if (child === ancestor.block) return !catchHandles(ancestor.handler);
     }
   }
   return false;
@@ -293,6 +359,137 @@ function isVerdictOutputCall(node, fn) {
   return false;
 }
 
+// ─── unreadable arms ─────────────────────────────────────────────────────────────────────────────
+
+/** Does `test` compare something with `operators` to the string `value` (`x.kind === 'unreadable'`)? */
+function comparesTo(test, operators, value) {
+  return descendants(test, (n) => n.type === 'BinaryExpression' && operators.includes(n.operator)
+    && (stringLiteral(n.left) === value || stringLiteral(n.right) === value)).length > 0;
+}
+
+const EQUALS = Object.freeze(['===', '==']);
+const NOT_EQUALS = Object.freeze(['!==', '!=']);
+
+/** Does `test` negate an equality with `value` (`!(x.kind === 'found')`)? */
+function negatesEquality(test, value) {
+  return descendants(test, (n) => n.type === 'UnaryExpression' && n.operator === '!' && comparesTo(n.argument, EQUALS, value)).length > 0;
+}
+
+/** Does the statement end every path with a return/throw/break/continue? */
+function terminates(statement) {
+  if (statement === null || statement === undefined) return false;
+  if (['ReturnStatement', 'ThrowStatement', 'BreakStatement', 'ContinueStatement'].includes(statement.type)) return true;
+  if (statement.type === 'BlockStatement') return statement.body.length > 0 && terminates(statement.body[statement.body.length - 1]);
+  if (statement.type === 'IfStatement') return statement.alternate !== null && terminates(statement.consequent) && terminates(statement.alternate);
+  return false;
+}
+
+/** The subtree each `if` / `?:` / `&&` / `||` branch is when the discriminant is `unreadable`. */
+function conditionalArms(node, ancestors) {
+  const arms = [];
+  const isIf = node.type === 'IfStatement';
+  const isTernary = node.type === 'ConditionalExpression';
+  if (isIf || isTernary) {
+    const test = node.test;
+    if (comparesTo(test, EQUALS, 'unreadable')) arms.push(node.consequent);
+    if (comparesTo(test, NOT_EQUALS, 'found') || negatesEquality(test, 'found')) arms.push(node.consequent);
+    if (comparesTo(test, NOT_EQUALS, 'unreadable') && node.alternate !== null) arms.push(node.alternate);
+    if (isIf) {
+      // The final `else` of a chain that already handled `found` and `none` is the `unreadable` arm.
+      const parent = ancestors.length > 0 ? ancestors[ancestors.length - 1] : null;
+      const isChainHead = !(parent !== null && parent.type === 'IfStatement' && parent.alternate === node);
+      if (isChainHead) {
+        const tests = [];
+        let link = node;
+        while (link.type === 'IfStatement') {
+          tests.push(link.test);
+          if (link.alternate === null) break;
+          if (link.alternate.type !== 'IfStatement') {
+            const handled = (value) => tests.some((t) => comparesTo(t, EQUALS, value));
+            if (handled('found') && handled('none')) arms.push(link.alternate);
+            break;
+          }
+          link = link.alternate;
+        }
+      }
+    }
+  } else if (node.type === 'LogicalExpression') {
+    if (node.operator === '&&' && comparesTo(node.left, EQUALS, 'unreadable')) arms.push(node.right);
+    if (node.operator === '||' && comparesTo(node.left, NOT_EQUALS, 'unreadable')) arms.push(node.right);
+  }
+  return arms;
+}
+
+/** The statements after an early-returning `if (x.kind !== 'unreadable') { ...return }` in one statement list. */
+function earlyReturnArms(statements) {
+  const arms = [];
+  statements.forEach((statement, index) => {
+    if (statement.type === 'IfStatement' && statement.alternate === null && terminates(statement.consequent)
+      && (comparesTo(statement.test, NOT_EQUALS, 'unreadable'))) {
+      arms.push({ type: 'BlockStatement', body: statements.slice(index + 1) });
+    }
+  });
+  return arms;
+}
+
+/** The `case 'unreadable'` arms of a switch (through fall-through), and the `default` of one that handled `found` and `none`. */
+function switchArms(node) {
+  const arms = [];
+  const cases = node.cases;
+  const throughFallThrough = (from) => {
+    const body = [];
+    for (let j = from; j < cases.length; j += 1) {
+      body.push(...cases[j].consequent);
+      const last = cases[j].consequent[cases[j].consequent.length - 1];
+      if (cases[j].consequent.length > 0 && terminates(last)) break;
+    }
+    return { type: 'BlockStatement', body };
+  };
+  const labels = cases.map((c) => (c.test === null ? null : stringLiteral(c.test)));
+  cases.forEach((c, index) => {
+    if (labels[index] === 'unreadable') arms.push(throughFallThrough(index));
+    if (c.test === null && labels.includes('found') && labels.includes('none')) arms.push(throughFallThrough(index));
+  });
+  return arms;
+}
+
+/**
+ * Every `gateVerdict(...)` call in `subtree` whose outcome is not the literal `'unreadable'` — a
+ * `pass`/`skip`/`advisory`, or a variable/alias the guard cannot prove — directly or through a
+ * same-file helper the subtree calls (`defs`: the file's named functions).
+ */
+function armVerdictCalls(subtree, defs, seen = new Set()) {
+  const bad = [];
+  walk(subtree, (n) => {
+    if (n.type !== 'CallExpression') return;
+    if (isCallTo(n, ['gateVerdict'])) {
+      if (stringLiteral(n.arguments[0]) !== 'unreadable') bad.push(n);
+      return;
+    }
+    const name = calleeName(n);
+    if (name === null) return;
+    for (const def of defs.get(name) ?? []) {
+      if (seen.has(def)) continue;
+      seen.add(def);
+      if (armVerdictCalls(def, defs, seen).length > 0) bad.push(n);
+    }
+  });
+  return bad;
+}
+
+/** The named functions of one parsed AST, by name: `Map<name, node[]>` (closures included). */
+function localDefinitions(ast) {
+  const defs = new Map();
+  walk(ast, (node, ancestors) => {
+    if (!isFunctionNode(node)) return;
+    const name = functionName(node, ancestors.length > 0 ? ancestors[ancestors.length - 1] : null);
+    if (name === null) return;
+    if (!defs.has(name)) defs.set(name, []);
+    defs.get(name).push(node);
+  });
+  return defs;
+}
+
 /**
  * Scan one source text. `hostKinds` is a subset of `['gate', 'verb', 'any']`:
  *   gate  every rule applies to the whole file
@@ -310,6 +507,12 @@ function scanText(text, { file, hostKinds, parser, scopeNames = new Set() }) {
   const isExitSeam = EXIT_SEAM_FILES.includes(file);
   const violations = [];
   const report = (rule, node, ancestors) => violations.push({ rule, line: lineOf(node), symbol: enclosingSymbol(ancestors) });
+  const aliases = collectFsAliases(ast);
+  const defs = gate ? localDefinitions(ast) : new Map();
+
+  const reportArm = (arm, ancestors) => {
+    for (const call of armVerdictCalls(arm, defs)) report(RULES.UNREADABLE_ARM_PASSES, call, ancestors);
+  };
 
   walk(ast, (node, ancestors) => {
     if (node.type === 'Identifier' && node.name === 'readIfExists') report(RULES.READ_IF_EXISTS, node, ancestors);
@@ -319,7 +522,7 @@ function scanText(text, { file, hostKinds, parser, scopeNames = new Set() }) {
     if (node.type === 'CatchClause' && inScope) {
       const statements = node.body.body;
       if (statements.length === 0) report(RULES.EMPTY_CATCH, node, ancestors);
-      else if (statements.every(isPassShapedStatement)) report(RULES.PASS_SHAPED_CATCH, node, ancestors);
+      else if (!catchHandles(node)) report(RULES.PASS_SHAPED_CATCH, node, ancestors);
       if (verb && !gate) {
         const prints = descendants(node.body, (n) => isCallTo(n, ['output'])).length > 0;
         const settles = descendants(node.body, (n) => isCallTo(n, ['declareGateExit', 'error']) || n.type === 'ThrowStatement').length > 0;
@@ -327,7 +530,7 @@ function scanText(text, { file, hostKinds, parser, scopeNames = new Set() }) {
       }
     }
 
-    if (inScope && (isExistsSyncCall(node) || isStatInCollapsingTry(node, ancestors))) report(RULES.EXISTS_COLLAPSE, node, ancestors);
+    if (inScope && (isExistsSyncCall(node, aliases) || isStatInCollapsingTry(node, ancestors, aliases))) report(RULES.EXISTS_COLLAPSE, node, ancestors);
 
     if (inScope && !isExitSeam) {
       if (node.type === 'AssignmentExpression' && isProcessMember(node.left, 'exitCode')) report(RULES.VERB_OWNS_EXIT, node, ancestors);
@@ -343,15 +546,18 @@ function scanText(text, { file, hostKinds, parser, scopeNames = new Set() }) {
       if (isCallTo(node, ['verdictFromEvidence']) && node.arguments.length >= 2 && node.arguments[1].type === 'ObjectExpression') {
         for (const property of node.arguments[1].properties) {
           const key = property.type === 'Property' && !property.computed && property.key.type === 'Identifier' ? property.key.name : null;
-          if (key === 'unreadable') for (const call of passingVerdictCalls(property.value)) report(RULES.UNREADABLE_ARM_PASSES, call, ancestors);
+          if (key !== 'unreadable') continue;
+          if (property.value.type === 'Identifier') {
+            for (const def of defs.get(property.value.name) ?? []) reportArm(def, ancestors);
+          } else {
+            reportArm(property.value, ancestors);
+          }
         }
       }
-      if ((node.type === 'IfStatement' || node.type === 'ConditionalExpression') && testsUnreadable(node.test)) {
-        for (const call of passingVerdictCalls(node.consequent)) report(RULES.UNREADABLE_ARM_PASSES, call, ancestors);
-      }
-      if (node.type === 'SwitchCase' && node.test !== null && stringLiteral(node.test) === 'unreadable') {
-        for (const statement of node.consequent) for (const call of passingVerdictCalls(statement)) report(RULES.UNREADABLE_ARM_PASSES, call, ancestors);
-      }
+      for (const arm of conditionalArms(node, ancestors)) reportArm(arm, ancestors);
+      if (node.type === 'SwitchStatement') for (const arm of switchArms(node)) reportArm(arm, ancestors);
+      if (node.type === 'BlockStatement' || node.type === 'Program') for (const arm of earlyReturnArms(node.body)) reportArm(arm, ancestors);
+      if (node.type === 'SwitchCase') for (const arm of earlyReturnArms(node.consequent)) reportArm(arm, ancestors);
     }
   });
   return violations;
@@ -435,9 +641,257 @@ function routerTargets(router, parsedFile) {
   return targets;
 }
 
+// ─── Per-file call resolution and the all-paths exit analysis ────────────────────────────────────
+
+/** `./x.cjs` -> `src/x.cts`; null for anything that is not a relative source module. */
+function moduleToFile(specifier) {
+  if (typeof specifier !== 'string' || !specifier.startsWith('./')) return null;
+  return `src/${specifier.slice(2).replace(/\.[cm]?[jt]s$/, '')}.cts`;
+}
+
+/** What a file imports: `names` (local -> { module, name }) and `namespaces` (local -> module). */
+function importInfo(ast) {
+  const names = new Map();
+  const namespaces = new Map();
+  walk(ast, (n) => {
+    if (n.type === 'ImportDeclaration' && typeof n.source.value === 'string') {
+      for (const specifier of n.specifiers) {
+        if (specifier.type === 'ImportSpecifier') names.set(specifier.local.name, { module: n.source.value, name: specifier.imported.name ?? specifier.imported.value });
+        else namespaces.set(specifier.local.name, n.source.value);
+      }
+    }
+    if (n.type === 'TSImportEqualsDeclaration' && n.moduleReference.type === 'TSExternalModuleReference') {
+      namespaces.set(n.id.name, n.moduleReference.expression.value);
+    }
+  });
+  walk(ast, (n) => {
+    if (n.type !== 'VariableDeclarator' || n.init === null) return;
+    if (n.init.type === 'Identifier' && namespaces.has(n.init.name) && n.id.type === 'ObjectPattern') {
+      for (const p of n.id.properties) {
+        if (p.type !== 'Property' || p.computed) continue;
+        const key = p.key.type === 'Identifier' ? p.key.name : stringLiteral(p.key);
+        const local = p.value.type === 'Identifier' ? p.value.name : null;
+        if (key !== null && local !== null) names.set(local, { module: namespaces.get(n.init.name), name: key });
+      }
+    } else if (n.init.type === 'MemberExpression' && n.init.object.type === 'Identifier' && namespaces.has(n.init.object.name) && n.id.type === 'Identifier') {
+      const member = memberName(n.init);
+      if (member !== null) names.set(n.id.name, { module: namespaces.get(n.init.object.name), name: member });
+    }
+  });
+  return { names, namespaces };
+}
+
+/**
+ * The program: `Map<file, { file, defs, imports }>`. A call is resolved against its OWN file first (its
+ * named functions and closures), then through that file's imports to the file they name — never by a
+ * bare name across the whole tree, so an unrelated `emit` elsewhere cannot make a verb look settled.
+ */
+function buildProgram(parsed) {
+  const program = new Map();
+  for (const p of parsed) program.set(p.file, { file: p.file, defs: localDefinitions(p.ast), imports: importInfo(p.ast) });
+  return program;
+}
+
+/** `[{ node, info }]` the call may invoke, or null when the callee is not a function the tree defines. */
+function resolveCall(call, info, program) {
+  const callee = unwrapCallee(call.callee);
+  const inFile = (target, name) => (target?.defs.get(name) ?? []).map((node) => ({ node, info: target }));
+  if (callee.type === 'Identifier') {
+    const local = inFile(info, callee.name);
+    if (local.length > 0) return local;
+    const imported = info.imports.names.get(callee.name);
+    if (imported !== undefined) {
+      const found = inFile(program.get(moduleToFile(imported.module)), imported.name);
+      if (found.length > 0) return found;
+    }
+    return null;
+  }
+  if (callee.type === 'MemberExpression') {
+    const name = memberName(callee);
+    if (name === null) return null;
+    if (callee.object.type === 'Identifier' && info.imports.namespaces.has(callee.object.name)) {
+      const found = inFile(program.get(moduleToFile(info.imports.namespaces.get(callee.object.name))), name);
+      return found.length > 0 ? found : null;
+    }
+    const local = inFile(info, name);
+    return local.length > 0 ? local : null;
+  }
+  return null;
+}
+
+function childNodes(node) {
+  const children = [];
+  for (const key of Object.keys(node)) {
+    if (key === 'parent' || key === 'loc' || key === 'range' || key === 'tokens' || key === 'comments') continue;
+    const value = node[key];
+    if (Array.isArray(value)) {
+      for (const child of value) if (isNode(child)) children.push(child);
+    } else if (isNode(value)) {
+      children.push(value);
+    }
+  }
+  return children;
+}
+
+/**
+ * The exit analysis. A call SETTLES when it is `declareGateExit`, `error` (which fails the command
+ * itself), or resolves — in its own file, then through its imports — to functions that settle on EVERY
+ * path. A function settles when every `return` and its fall-through end is preceded by a settling call
+ * on that path (a `throw` ends a path without needing one: the exception reaches the runner).
+ */
+function createExitAnalysis(program) {
+  const memo = new Map();
+  const inProgress = new Set();
+
+  const callSettles = (call, info) => {
+    const name = calleeName(call);
+    if (name === 'declareGateExit') return true;
+    // `error(...)` is the io module's failing exit unless the file defines an `error` of its own.
+    if (name === 'error' && unwrapCallee(call.callee).type === 'Identifier' && !info.defs.has('error')) return true;
+    const targets = resolveCall(call, info, program);
+    return targets !== null && targets.every((t) => alwaysSettles(t.node, t.info));
+  };
+
+  const exprSettles = (node, info) => {
+    if (!isNode(node)) return false;
+    switch (node.type) {
+      case 'CallExpression':
+        if (callSettles(node, info)) return true;
+        return exprSettles(node.callee, info) || node.arguments.some((a) => exprSettles(a, info));
+      case 'ConditionalExpression':
+        return exprSettles(node.test, info) || (exprSettles(node.consequent, info) && exprSettles(node.alternate, info));
+      case 'LogicalExpression':
+        return exprSettles(node.left, info);
+      case 'ArrowFunctionExpression':
+      case 'FunctionExpression':
+      case 'FunctionDeclaration':
+        return false;
+      default:
+        return childNodes(node).some((child) => exprSettles(child, info));
+    }
+  };
+
+  // flow(statement, settled) -> { settled, ends }: `ends` = no normal completion (return/throw).
+  // `bad` collects the line of every return reached while unsettled.
+  const flowList = (statements, settled, info, bad) => {
+    let state = settled;
+    for (const statement of statements) {
+      const result = flowStatement(statement, state, info, bad);
+      if (result.ends) return { settled: state, ends: true };
+      state = result.settled;
+      if (['BreakStatement', 'ContinueStatement'].includes(statement.type)) break;
+    }
+    return { settled: state, ends: false };
+  };
+
+  const merge = (results, fallback) => {
+    const live = results.filter((r) => !r.ends);
+    if (live.length === 0) return { settled: fallback, ends: results.length > 0 };
+    return { settled: live.every((r) => r.settled), ends: false };
+  };
+
+  const flowStatement = (statement, settled, info, bad) => {
+    switch (statement.type) {
+      case 'ExpressionStatement':
+        return { settled: settled || exprSettles(statement.expression, info), ends: false };
+      case 'VariableDeclaration':
+        return { settled: settled || statement.declarations.some((d) => exprSettles(d.init, info)), ends: false };
+      case 'ReturnStatement': {
+        const now = settled || (statement.argument !== null && exprSettles(statement.argument, info));
+        if (!now) bad.push(lineOf(statement));
+        return { settled: now, ends: true };
+      }
+      case 'ThrowStatement':
+        return { settled, ends: true };
+      case 'BlockStatement':
+        return flowList(statement.body, settled, info, bad);
+      case 'LabeledStatement':
+        return flowStatement(statement.body, settled, info, bad);
+      case 'IfStatement': {
+        const afterTest = settled || exprSettles(statement.test, info);
+        const consequent = flowStatement(statement.consequent, afterTest, info, bad);
+        const alternate = statement.alternate === null ? { settled: afterTest, ends: false } : flowStatement(statement.alternate, afterTest, info, bad);
+        return merge([consequent, alternate], afterTest);
+      }
+      case 'TryStatement': {
+        const tried = flowList(statement.block.body, settled, info, bad);
+        // An exception can leave the try block anywhere, so the handler starts from what was settled before it.
+        const results = [tried];
+        if (statement.handler !== null) results.push(flowList(statement.handler.body.body, settled, info, bad));
+        let merged = merge(results, settled);
+        if (statement.finalizer !== null) {
+          const final = flowList(statement.finalizer.body, settled, info, bad);
+          merged = { settled: merged.settled || final.settled, ends: merged.ends || final.ends };
+        }
+        return merged;
+      }
+      case 'SwitchStatement': {
+        const afterDiscriminant = settled || exprSettles(statement.discriminant, info);
+        const results = [];
+        let pending = [];
+        for (const switchCase of statement.cases) {
+          pending = pending.concat(switchCase.consequent);
+          if (switchCase.consequent.length === 0) continue;
+          results.push(flowList(pending, afterDiscriminant, info, bad));
+          pending = [];
+        }
+        if (!statement.cases.some((c) => c.test === null)) results.push({ settled: afterDiscriminant, ends: false });
+        return merge(results, afterDiscriminant);
+      }
+      case 'ForStatement':
+      case 'WhileStatement':
+      case 'DoWhileStatement':
+      case 'ForInStatement':
+      case 'ForOfStatement':
+        // The body may run zero times: nothing it settles carries past the loop, but its returns are checked.
+        flowStatement(statement.body, settled, info, bad);
+        return { settled, ends: false };
+      default:
+        return { settled, ends: false };
+    }
+  };
+
+  /** The lines of every unsettled path (a return, or the end of the function) of `fn`. */
+  const unsettledPaths = (fn, info) => {
+    if (fn.body.type !== 'BlockStatement') return exprSettles(fn.body, info) ? [] : [lineOf(fn)];
+    const bad = [];
+    const end = flowList(fn.body.body, false, info, bad);
+    if (!end.ends && !end.settled) bad.push(fn.body.body.length > 0 ? lineOf(fn.body.body[fn.body.body.length - 1]) : lineOf(fn));
+    return bad;
+  };
+
+  function alwaysSettles(fn, info) {
+    if (memo.has(fn)) return memo.get(fn);
+    if (inProgress.has(fn)) return false;
+    inProgress.add(fn);
+    const settles = unsettledPaths(fn, info).length === 0;
+    inProgress.delete(fn);
+    memo.set(fn, settles);
+    return settles;
+  }
+
+  /** Does `fn` reach `declareGateExit` along ANY path (resolved per file and symbol)? */
+  const reachesExit = (fn, info) => {
+    const seen = new Set();
+    const queue = [{ node: fn, info }];
+    while (queue.length > 0) {
+      const { node, info: at } = queue.pop();
+      if (seen.has(node)) continue;
+      seen.add(node);
+      if (callsDeclareGateExit(node)) return true;
+      for (const call of descendants(node, (n) => n.type === 'CallExpression')) {
+        for (const target of resolveCall(call, at, program) ?? []) queue.push(target);
+      }
+    }
+    return false;
+  };
+
+  return { unsettledPaths, reachesExit };
+}
+
 /**
  * Scan a set of sources `[{ file, text }]` as one tree: gate hosts, verb hosts and the cross-file
- * rules (entry discovery, the exit closure). `options.routers` is the router table (default `ROUTERS`;
+ * rules (entry discovery, the exit analysis). `options.routers` is the router table (default `ROUTERS`;
  * a scratch tree that models no router passes `[]`). Returns
  * `{ gateHosts, verbHosts, entries, violations, allowlisted, problems }`.
  */
@@ -450,6 +904,8 @@ function scanSources(sources, parser, options = {}) {
     ast: parser.parse(text, { range: true, loc: true, sourceType: 'module', filePath: file }),
   }));
   const byFile = new Map(parsed.map((p) => [p.file, p]));
+  const program = buildProgram(parsed);
+  const analysis = createExitAnalysis(program);
   const definitions = new Map();
   for (const p of parsed) {
     for (const fn of namedFunctions(p)) {
@@ -484,25 +940,11 @@ function scanSources(sources, parser, options = {}) {
     }
   }
 
-  // The exit closure: does a function (by name, across src/) reach `declareGateExit`?
-  const reachesExit = (startNode) => {
-    const seen = new Set();
-    const queue = [startNode];
-    while (queue.length > 0) {
-      const node = queue.pop();
-      if (callsDeclareGateExit(node)) return true;
-      for (const name of calleeNames(node)) {
-        if (seen.has(name)) continue;
-        seen.add(name);
-        for (const def of definitions.get(name) ?? []) queue.push(def.node);
-      }
-    }
-    return false;
-  };
-
+  // verb-no-gate-exit: EVERY return path of an entry (and its fall-through end) must settle the exit.
   for (const entry of entries) {
-    if (!reachesExit(entry.node)) {
-      violations.push({ file: entry.file, rule: RULES.VERB_NO_GATE_EXIT, line: lineOf(entry.node), symbol: entry.name });
+    const bad = analysis.unsettledPaths(entry.node, program.get(entry.file));
+    if (bad.length > 0) {
+      violations.push({ file: entry.file, rule: RULES.VERB_NO_GATE_EXIT, line: bad[0], symbol: entry.name });
     }
   }
 
@@ -512,7 +954,7 @@ function scanSources(sources, parser, options = {}) {
     for (const fn of namedFunctions(p)) {
       const outputsVerdict = descendants(fn.node, (n) => isVerdictOutputCall(n, fn.node)).length > 0;
       const setsExit = descendants(fn.node, (n) => n.type === 'AssignmentExpression' && isProcessMember(n.left, 'exitCode')).length > 0;
-      if (outputsVerdict && setsExit && !reachesExit(fn.node)) {
+      if (outputsVerdict && setsExit && !analysis.reachesExit(fn.node, program.get(p.file))) {
         violations.push({ file: p.file, rule: RULES.VERDICT_OWNS_EXIT, line: lineOf(fn.node), symbol: fn.name });
       }
     }

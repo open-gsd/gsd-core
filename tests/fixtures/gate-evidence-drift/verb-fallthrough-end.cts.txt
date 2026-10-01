@@ -1,0 +1,12 @@
+// Positive control (#5170): the verb declares its exit on the `ok` branch only; with `ok` false control
+// falls off the end of the function with the exit never declared (no return statement to see).
+import { output } from './io.cjs';
+import { declareGateExit } from './gate-exit.cjs';
+import { gateVerdict } from './gate-verdict.cjs';
+
+export function cmdFixtureVerb(ok: boolean, raw: boolean): void {
+  if (ok) {
+    output({ valid: true }, raw);
+    declareGateExit(gateVerdict('pass', false, { valid: true }), 'status');
+  }
+}

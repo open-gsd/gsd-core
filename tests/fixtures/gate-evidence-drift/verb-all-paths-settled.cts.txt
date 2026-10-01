@@ -1,0 +1,30 @@
+// Negative control (#5170): every path out of the verb declares its exit — through a same-file helper
+// closure, through `error(...)`, through a throw, in a try and in its catch, and in a switch.
+import { output, error } from './io.cjs';
+import { declareGateExit } from './gate-exit.cjs';
+import { gateVerdict, gateUnreadable } from './gate-verdict.cjs';
+
+function emitVerbVerdict(verdict: ReturnType<typeof gateVerdict>, raw: boolean): void {
+  output(verdict.payload, raw);
+  declareGateExit(verdict, 'status');
+}
+
+export function cmdFixtureVerb(file: string, mode: string, raw: boolean): void {
+  if (!file) {
+    error('file required');
+    return;
+  }
+  if (file === 'boom') throw new Error('boom');
+  switch (mode) {
+    case 'a':
+      emitVerbVerdict(gateVerdict('pass', false, { valid: true }), raw);
+      return;
+    default:
+      break;
+  }
+  try {
+    emitVerbVerdict(gateVerdict('block', true, { valid: false }), raw);
+  } catch (err) {
+    emitVerbVerdict(gateUnreadable(false, { error: String(err) }), raw);
+  }
+}

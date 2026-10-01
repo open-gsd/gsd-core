@@ -1,0 +1,13 @@
+// Positive control (#5170): the `unreadable` arm is a named function defined beside the gate, and it passes.
+import { gateVerdict } from './gate-verdict.cjs';
+import { readTextEvidence, verdictFromEvidence } from './gate-evidence.cjs';
+
+const passThrough = () => gateVerdict('skip', false, { reason: 'ignored' });
+
+export function evaluateFixtureGate(planPath: string) {
+  return verdictFromEvidence(readTextEvidence(planPath), {
+    found: (text) => gateVerdict('pass', false, { text }),
+    none: () => gateVerdict('skip', false, {}),
+    unreadable: passThrough,
+  });
+}

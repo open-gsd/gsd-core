@@ -1,0 +1,15 @@
+// Positive control (#5170): the catch hands the failure to a logger and falls through with the default —
+// the gate still answers from evidence it never read.
+import fs from 'node:fs';
+
+declare function logProblem(err: unknown): void;
+
+export function readPlanText(planPath: string): string {
+  let text = '';
+  try {
+    text = fs.readFileSync(planPath, 'utf8');
+  } catch (err) {
+    logProblem(err);
+  }
+  return text;
+}

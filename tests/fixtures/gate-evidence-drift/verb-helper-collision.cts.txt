@@ -1,0 +1,12 @@
+// Positive control (#5170): the entry's own `emit` only prints. A DIFFERENT file defines an `emit` that
+// declares the exit (helper-collision-other.cts.txt) — resolving the call by its bare name across the
+// tree would call the verb settled. Helper closures resolve per file and symbol, so it is flagged.
+import { output } from './io.cjs';
+
+function emit(payload: Record<string, unknown>, raw: boolean): void {
+  output(payload, raw);
+}
+
+export function cmdFixtureVerb(raw: boolean): void {
+  emit({ valid: false }, raw);
+}

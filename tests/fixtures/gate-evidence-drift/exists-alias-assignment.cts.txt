@@ -1,0 +1,8 @@
+// Positive control (#5170): `existsSync` aliased by assignment, and called through `.call` / a sequence.
+import fs from 'node:fs';
+
+const probe = fs.existsSync;
+
+export function contextExists(contextPath: string): boolean {
+  return probe(contextPath) || probe.call(fs, contextPath) || (0, fs.existsSync)(contextPath);
+}

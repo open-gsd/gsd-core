@@ -1,0 +1,13 @@
+// Positive control (#5170): inside the unreadable arm the outcome reaches the verdict builder through a
+// variable — the guard cannot prove it is `'unreadable'`, so it is flagged.
+import { gateVerdict } from './gate-verdict.cjs';
+import { readTextEvidence } from './gate-evidence.cjs';
+
+export function evaluateFixtureGate(planPath: string) {
+  const plan = readTextEvidence(planPath);
+  if (plan.kind === 'unreadable') {
+    const outcome = 'pass';
+    return gateVerdict(outcome, false, { reason: plan.reason });
+  }
+  return gateVerdict('pass', false, {});
+}

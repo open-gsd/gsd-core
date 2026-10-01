@@ -1,0 +1,6 @@
+// Positive control (#5170): `fs['existsSync']` is `fs.existsSync` written with a computed member.
+import fs from 'node:fs';
+
+export function contextExists(contextPath: string): boolean {
+  return fs['existsSync'](contextPath);
+}

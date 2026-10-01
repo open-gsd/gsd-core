@@ -1,0 +1,12 @@
+// Positive control (#5170): the unreadable arm is the ELSE of a `kind !== 'unreadable'` test.
+import { gateVerdict } from './gate-verdict.cjs';
+import { readTextEvidence } from './gate-evidence.cjs';
+
+export function evaluateFixtureGate(planPath: string) {
+  const plan = readTextEvidence(planPath);
+  if (plan.kind !== 'unreadable') {
+    return gateVerdict('pass', false, { checked: plan.kind });
+  } else {
+    return gateVerdict('skip', false, { reason: 'unreadable plan' });
+  }
+}

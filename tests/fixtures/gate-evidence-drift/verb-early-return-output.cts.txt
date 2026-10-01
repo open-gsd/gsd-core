@@ -1,0 +1,19 @@
+// Positive control (#5170, the original #4686 shape): a gate verb entry (dispatched by the router fixture
+// verb-no-gate-exit-router.cts.txt) with one branch that emits through the exit seam and an early
+// `output({ error }); return;` branch that does not — that path owns its exit (or leaves it to output()).
+import { output } from './io.cjs';
+import { declareGateExit } from './gate-exit.cjs';
+import { gateVerdict } from './gate-verdict.cjs';
+
+function emitVerbVerdict(verdict: ReturnType<typeof gateVerdict>, raw: boolean): void {
+  output(verdict.payload, raw);
+  declareGateExit(verdict, 'status');
+}
+
+export function cmdFixtureVerb(file: string, raw: boolean): void {
+  if (!file) {
+    output({ error: 'file required' }, raw);
+    return;
+  }
+  emitVerbVerdict(gateVerdict('pass', false, { valid: true }), raw);
+}

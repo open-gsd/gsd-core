@@ -1,0 +1,6 @@
+// Positive control (#5170): `existsSync` imported under another name.
+import { existsSync as present } from 'node:fs';
+
+export function contextExists(contextPath: string): boolean {
+  return present(contextPath);
+}
