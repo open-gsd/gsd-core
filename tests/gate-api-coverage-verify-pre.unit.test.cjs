@@ -80,7 +80,7 @@ const CASES = [
   },
   {
     id: 'U11c',
-    title: 'COVERAGE.md exists but unreadable -> block (read failure injected)',
+    title: 'COVERAGE.md exists but unreadable -> unreadable outcome, block:true (read failure injected)',
     setup(dir, h) {
       h.w(dir, '.planning/phases/01-x/COVERAGE.md', '# c\n');
       const real = fs.readFileSync;
@@ -95,7 +95,7 @@ const CASES = [
       return function restore() { fs.readFileSync = real; };
     },
     args() { return ['01']; },
-    outcome: 'block',
+    outcome: 'unreadable',
     block: true,
     expected() {
       return {
@@ -246,7 +246,7 @@ const CASES = [
   },
   {
     id: 'U11i',
-    title: 'plan file unreadable -> scope read error blocks (read failure injected)',
+    title: 'plan file unreadable -> scope read error, unreadable outcome, block:true (read failure injected)',
     setup(dir, h) {
       h.w(dir, '.planning/phases/01-x/01-01-PLAN.md', '# Plan\n\nRename internal helpers.\n');
       const real = fs.readFileSync;
@@ -261,7 +261,7 @@ const CASES = [
       return function restore() { fs.readFileSync = real; };
     },
     args() { return ['01']; },
-    outcome: 'block',
+    outcome: 'unreadable',
     block: true,
     expected() {
       return {
@@ -354,6 +354,59 @@ const CASES = [
     title: 'missing phase argument is a usage failure',
     args() { return []; },
     usage: { code: 'sdk_missing_arg', message: 'api-coverage.verify-pre requires a phase argument: check api-coverage.verify-pre <phase-dir-or-token>' },
+  },
+  {
+    // #5170 (matrix row 20): the readdir at the COVERAGE.md lookup used to be an empty `catch` that
+    // fell through to the detector, whose pass (here: a plan with no API vocabulary) certified a
+    // directory the gate never listed. It is `unreadable` now, never the detector's pass.
+    id: 'U11n',
+    title: 'phase directory cannot be listed -> unreadable outcome, block:true, never the detector pass (readdir failure injected)',
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-01-PLAN.md', '# Plan\n\nRename internal helpers.\n');
+      const real = fs.readdirSync;
+      fs.readdirSync = function (p, ...rest) {
+        if (String(p).endsWith('01-x')) {
+          const err = new Error('EACCES: simulated readdir failure');
+          err.code = 'EACCES';
+          throw err;
+        }
+        return real.call(fs, p, ...rest);
+      };
+      return function restore() { fs.readdirSync = real; };
+    },
+    args() { return ['01']; },
+    outcome: 'unreadable',
+    block: true,
+    expected() {
+      return {
+        block: true,
+        passed: false,
+        coverage_present: false,
+        detected: false,
+        read_error: 'EACCES',
+        message: 'api-coverage: could not read the phase directory (EACCES) — refusing to certify the coverage matrix from a directory that could not be listed. Fix the directory permissions before sealing.',
+      };
+    },
+  },
+  {
+    // The control for row 20: an unlistable directory is the ONLY thing that makes it `unreadable`.
+    id: 'U11o',
+    title: 'the same plan with a listable phase directory -> detector pass (control)',
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-01-PLAN.md', '# Plan\n\nRename internal helpers.\n');
+    },
+    args() { return ['01']; },
+    outcome: 'pass',
+    block: false,
+    expected() {
+      return {
+        block: false,
+        passed: true,
+        coverage_present: false,
+        detected: false,
+        message: 'api-coverage: no external-API integration detected; coverage matrix not required',
+      };
+    },
   },
 ];
 

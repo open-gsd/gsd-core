@@ -242,6 +242,81 @@ const CASES = [
     args() { return ['../outside', '.planning/phases/01-x/01-CONTEXT.md']; },
     usage: { code: 'usage', message: 'path escapes its allowed directory: ../outside' },
   },
+  {
+    // #5170: CONTEXT.md that exists but cannot be read used to be extracted as '' text and answered
+    // "no trackable decisions" (a skip). The gate stays advisory (block:false); the OUTCOME is
+    // `unreadable`, so the exit status is UNAVAILABLE.
+    id: 'U2k',
+    title: 'CONTEXT.md that cannot be read -> unreadable outcome (advisory, block:false), never "no trackable decisions" (read failure injected)',
+    git: true,
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-CONTEXT.md', ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n'));
+      const real = fs.readFileSync;
+      fs.readFileSync = function (p, ...rest) {
+        if (String(p).endsWith('01-CONTEXT.md')) {
+          const err = new Error('EACCES: simulated read failure');
+          err.code = 'EACCES';
+          throw err;
+        }
+        return real.call(fs, p, ...rest);
+      };
+      return function restore() { fs.readFileSync = real; };
+    },
+    args() { return ['.planning/phases/01-x', '.planning/phases/01-x/01-CONTEXT.md']; },
+    outcome: 'unreadable',
+    block: false,
+    expected(dir, real) {
+      const readError = `${real}/.planning/phases/01-x/01-CONTEXT.md: EACCES`;
+      return {
+        skipped: false,
+        blocking: false,
+        reason: 'unreadable evidence',
+        total: null,
+        honored: null,
+        not_honored: [],
+        readError,
+        message: `Decision coverage verify (warning): could not read its evidence (${readError}); no decision was checked.`,
+      };
+    },
+  },
+  {
+    // A listed `files_modified` file that cannot be read is not a file that fails to honor the decision.
+    id: 'U2l',
+    title: 'a SUMMARY files_modified file that cannot be read -> unreadable outcome, not "not honored" (read failure injected)',
+    git: true,
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-CONTEXT.md', ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n'));
+      h.w(dir, '.planning/phases/01-x/01-01-PLAN.md', '<objective>Unrelated work</objective>\n');
+      h.w(dir, '.planning/phases/01-x/01-01-SUMMARY.md', ['---', 'files_modified:', '  - src/store.js', '---', 'Done.', ''].join('\n'));
+      h.w(dir, 'src/store.js', '// implements D-01\n');
+      const real = fs.readFileSync;
+      fs.readFileSync = function (p, ...rest) {
+        if (String(p).endsWith('store.js')) {
+          const err = new Error('EIO: simulated read failure');
+          err.code = 'EIO';
+          throw err;
+        }
+        return real.call(fs, p, ...rest);
+      };
+      return function restore() { fs.readFileSync = real; };
+    },
+    args() { return ['.planning/phases/01-x', '.planning/phases/01-x/01-CONTEXT.md']; },
+    outcome: 'unreadable',
+    block: false,
+    expected(dir, real) {
+      const readError = `${real}/src/store.js: EIO`;
+      return {
+        skipped: false,
+        blocking: false,
+        reason: 'unreadable evidence',
+        total: null,
+        honored: null,
+        not_honored: [],
+        readError,
+        message: `Decision coverage verify (warning): could not read its evidence (${readError}); no decision was checked.`,
+      };
+    },
+  },
 ];
 
 function run(c) {

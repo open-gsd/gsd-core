@@ -213,3 +213,54 @@ describe('U10 evaluateCheckPredicate', () => {
     });
   }
 });
+
+// #5170 (matrix row 23): `findPhaseArtifact`'s listing used to sit in an empty `catch`, so a phase
+// directory that could not be listed read as "artifact not found" — a clean answer a predicate can
+// act on. An unreadable thing now throws, and the evaluator's throw is the existing usage failure
+// (the dispatch contract routes it by `onError`); an ABSENT thing stays `none` => `artifactNotFound`.
+describe('U10 unreadable predicate artifact lookup (#5170)', () => {
+  const PREDICATE = '{"kind":"artifact-frontmatter-equals","artifact":"VERIFICATION.md","field":"status","equals":"passed"}';
+
+  function withReaddirFailure(code, fn) {
+    const dir = createTempProject('gate-u10-readdir-');
+    const real = fs.readdirSync;
+    try {
+      w(dir, '.planning/phases/01-x/01-PLAN.md', '# p\n');
+      fs.readdirSync = function (p, ...rest) {
+        if (String(p).endsWith('01-x')) {
+          const err = new Error(`${code}: simulated readdir failure`);
+          err.code = code;
+          throw err;
+        }
+        return real.call(fs, p, ...rest);
+      };
+      return fn(dir);
+    } finally {
+      fs.readdirSync = real;
+      cleanup(dir);
+    }
+  }
+
+  const evaluate = (dir) => gate.evaluateCheckPredicate({
+    projectDir: dir,
+    args: ['--predicate', PREDICATE, '--phase-dir', '.planning/phases/01-x'],
+  });
+
+  test('a phase directory that cannot be listed (EACCES) is the usage failure, never artifactNotFound', () => {
+    withReaddirFailure('EACCES', (dir) => {
+      const result = evaluate(dir);
+      assert.equal(isGateUsageFailure(result), true, JSON.stringify(result));
+      assert.equal(result.failure.code, 'usage');
+      assert.match(result.failure.message, /^gate predicate evaluation failed: predicate artifact could not be examined: .*01-x \(EACCES\)$/);
+    });
+  });
+
+  test('a phase directory that is absent when listed (ENOENT) is none: the existing artifactNotFound block', () => {
+    withReaddirFailure('ENOENT', (dir) => {
+      const result = evaluate(dir);
+      assert.equal(isGateUsageFailure(result), false, JSON.stringify(result));
+      assert.equal(result.outcome, 'block');
+      assert.equal(result.payload.details.artifactNotFound, true);
+    });
+  });
+});

@@ -152,6 +152,102 @@ const CASES = [
     args() { return []; },
     usage: { code: 'sdk_missing_arg', message: 'ui-plan-gate requires a phase argument: check ui-plan-gate <phase>' },
   },
+  {
+    // #5170: a phase directory that cannot be listed used to read as "no UI-SPEC" (the tolerant
+    // `findUiSpecInDir` returned ''), so the gate blocked — or passed — over a spec it never looked
+    // for. The gate's own policy is unchanged (block stays what the formula says); the OUTCOME is
+    // `unreadable`, so the exit status is UNAVAILABLE.
+    id: 'U3g',
+    title: 'phase directory that cannot be listed -> unreadable outcome, block per the gate formula, readError carried (readdir failure injected)',
+    setup(dir, h) {
+      h.w(dir, '.planning/ROADMAP.md', ['# Roadmap', '', '### Phase 1: Dashboard frontend', '**Goal**: Build the React dashboard UI for operators', ''].join('\n'));
+      h.w(dir, 'package.json', '{"dependencies":{"react":"^18.0.0"}}');
+      h.w(dir, '.planning/phases/01-dashboard/01-UI-SPEC.md', '# spec\n');
+      const real = fs.readdirSync;
+      fs.readdirSync = function (p, ...rest) {
+        if (String(p).endsWith('01-dashboard')) {
+          const err = new Error('EACCES: simulated readdir failure');
+          err.code = 'EACCES';
+          throw err;
+        }
+        return real.call(fs, p, ...rest);
+      };
+      return function restore() { fs.readdirSync = real; };
+    },
+    args() { return ['1']; },
+    outcome: 'unreadable',
+    block: true,
+    expected() {
+      return {
+        frontend: true,
+        hasFrontendEvidence: true,
+        hasUiSpec: false,
+        block: true,
+        uiSpecPath: null,
+        matchedToken: 'dashboard',
+        matchedLine: '### Phase 1: Dashboard frontend',
+        readError: 'EACCES',
+      };
+    },
+  },
+  {
+    // The control for U3g: the same project, listable, finds its spec and passes.
+    id: 'U3h',
+    title: 'the same project with a listable phase directory -> spec found, pass (control)',
+    setup(dir, h) {
+      h.w(dir, '.planning/ROADMAP.md', ['# Roadmap', '', '### Phase 1: Dashboard frontend', '**Goal**: Build the React dashboard UI for operators', ''].join('\n'));
+      h.w(dir, 'package.json', '{"dependencies":{"react":"^18.0.0"}}');
+      h.w(dir, '.planning/phases/01-dashboard/01-UI-SPEC.md', '# spec\n');
+    },
+    args() { return ['1']; },
+    outcome: 'pass',
+    block: false,
+    expected(dir, real) {
+      return {
+        frontend: true,
+        hasFrontendEvidence: true,
+        hasUiSpec: true,
+        block: false,
+        uiSpecPath: `${real}/.planning/phases/01-dashboard/01-UI-SPEC.md`,
+        matchedToken: 'dashboard',
+        matchedLine: '### Phase 1: Dashboard frontend',
+      };
+    },
+  },
+  {
+    // #5170: ROADMAP.md that exists but cannot be read used to be treated as "no roadmap, cannot be
+    // frontend" (or as a phase that failed to match). It is `unreadable` now, never a clean answer.
+    id: 'U3i',
+    title: 'ROADMAP.md that cannot be read -> unreadable outcome, readError carried, not "not frontend" (read failure injected)',
+    setup(dir, h) {
+      h.w(dir, '.planning/ROADMAP.md', ['# Roadmap', '', '### Phase 1: Dashboard frontend', '**Goal**: Build the React dashboard UI for operators', ''].join('\n'));
+      const real = fs.readFileSync;
+      fs.readFileSync = function (p, ...rest) {
+        if (String(p).endsWith('ROADMAP.md')) {
+          const err = new Error('EACCES: simulated read failure');
+          err.code = 'EACCES';
+          throw err;
+        }
+        return real.call(fs, p, ...rest);
+      };
+      return function restore() { fs.readFileSync = real; };
+    },
+    args() { return ['1']; },
+    outcome: 'unreadable',
+    block: false,
+    expected() {
+      return {
+        frontend: false,
+        hasFrontendEvidence: false,
+        hasUiSpec: false,
+        block: false,
+        uiSpecPath: null,
+        matchedToken: null,
+        matchedLine: null,
+        readError: 'EACCES',
+      };
+    },
+  },
 ];
 
 function run(c) {

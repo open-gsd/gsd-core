@@ -205,6 +205,76 @@ const CASES = [
     args() { return []; },
     usage: { code: 'sdk_missing_arg', message: 'tdd.review-checkpoint requires a phase argument: check tdd.review-checkpoint <phase>' },
   },
+  {
+    // #5170 (matrix row 21): a plan file that exists but cannot be read used to be read as '' and so
+    // as "not a TDD plan" — the review then skipped with a passing outcome over a plan it never saw.
+    id: 'U5g',
+    title: 'a plan file that cannot be read -> unreadable outcome (advisory block:false), never "not a TDD plan" (read failure injected)',
+    git: true,
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-01-PLAN.md', ['---', 'phase: 1', 'plan: 1', 'type: tdd', '---', '# Plan', ''].join('\n'));
+      const real = fs.readFileSync;
+      fs.readFileSync = function (p, ...rest) {
+        if (String(p).endsWith('01-01-PLAN.md')) {
+          const err = new Error('EACCES: simulated read failure');
+          err.code = 'EACCES';
+          throw err;
+        }
+        return real.call(fs, p, ...rest);
+      };
+      return function restore() { fs.readFileSync = real; };
+    },
+    args() { return ['1']; },
+    outcome: 'unreadable',
+    block: false,
+    expected(dir) {
+      const planPath = path.join(dir, '.planning', 'phases', '01-x', '01-01-PLAN.md');
+      return {
+        block: false,
+        passed: false,
+        tddPlans: 0,
+        violations: 0,
+        table: '',
+        rows: [],
+        unreadable: [{ source: planPath, reason: 'EACCES' }],
+        message: `TDD review could not read: ${planPath} (EACCES). Phase 1 was not reviewed.`,
+      };
+    },
+  },
+  {
+    // Matrix row 22: ABSENT is `none`, which stays the existing skip (exit 0) — only an unreadable
+    // thing is `unreadable`. The phase directory disappears between the lookup and the listing.
+    id: 'U5h',
+    title: 'a phase directory that is absent when listed -> none, the existing skipped arm',
+    git: true,
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-01-PLAN.md', ['---', 'phase: 1', 'plan: 1', 'type: tdd', '---', '# Plan', ''].join('\n'));
+      const real = fs.readdirSync;
+      fs.readdirSync = function (p, ...rest) {
+        if (String(p).endsWith('01-x')) {
+          const err = new Error('ENOENT: simulated vanished directory');
+          err.code = 'ENOENT';
+          throw err;
+        }
+        return real.call(fs, p, ...rest);
+      };
+      return function restore() { fs.readdirSync = real; };
+    },
+    args() { return ['1']; },
+    outcome: 'skip',
+    block: false,
+    expected() {
+      return {
+        block: false,
+        passed: true,
+        tddPlans: 0,
+        violations: 0,
+        table: '',
+        rows: [],
+        message: 'No type:tdd plans found in phase 1. TDD review skipped.',
+      };
+    },
+  },
 ];
 
 function run(c) {

@@ -284,6 +284,76 @@ const CASES = [
     args() { return ['../outside', '--context', '.planning/phases/01-x/01-CONTEXT.md']; },
     usage: { code: 'usage', message: 'path escapes its allowed directory: ../outside' },
   },
+  {
+    // #5170: CONTEXT.md that exists (and is a file) but cannot be read used to be extracted as ''
+    // text — "no trackable decisions", a green skip over a CONTEXT.md the gate never saw. The
+    // blocking policy is unchanged (fail-closed); the outcome is `unreadable`.
+    id: 'U1m',
+    title: 'CONTEXT.md that cannot be read -> unreadable outcome, block:true, never "no trackable decisions" (read failure injected)',
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-CONTEXT.md', ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n'));
+      h.w(dir, '.planning/phases/01-x/01-01-PLAN.md', ['---', 'phase: 1', '---', '<objective>Honor D-01</objective>', ''].join('\n'));
+      const real = fs.readFileSync;
+      fs.readFileSync = function (p, ...rest) {
+        if (String(p).endsWith('01-CONTEXT.md')) {
+          const err = new Error('EACCES: simulated read failure');
+          err.code = 'EACCES';
+          throw err;
+        }
+        return real.call(fs, p, ...rest);
+      };
+      return function restore() { fs.readFileSync = real; };
+    },
+    args() { return ['.planning/phases/01-x', '--context', '.planning/phases/01-x/01-CONTEXT.md']; },
+    outcome: 'unreadable',
+    block: true,
+    expected(dir, real) {
+      const readError = `${real}/.planning/phases/01-x/01-CONTEXT.md: EACCES`;
+      return {
+        passed: false,
+        skipped: false,
+        reason: 'unreadable evidence',
+        total: null,
+        covered: null,
+        readError,
+        message: `Decision coverage gate could not read its evidence (${readError}). Fix the file permissions or encoding, then re-run the gate.`,
+      };
+    },
+  },
+  {
+    // A plan that cannot be read is not a plan that fails to cite the decision.
+    id: 'U1n',
+    title: 'a plan that cannot be read -> unreadable outcome, block:true, not "uncovered" (read failure injected)',
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-CONTEXT.md', ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n'));
+      h.w(dir, '.planning/phases/01-x/01-01-PLAN.md', ['---', 'phase: 1', '---', '<objective>Honor D-01</objective>', ''].join('\n'));
+      const real = fs.readFileSync;
+      fs.readFileSync = function (p, ...rest) {
+        if (String(p).endsWith('01-01-PLAN.md')) {
+          const err = new Error('EIO: simulated read failure');
+          err.code = 'EIO';
+          throw err;
+        }
+        return real.call(fs, p, ...rest);
+      };
+      return function restore() { fs.readFileSync = real; };
+    },
+    args() { return ['.planning/phases/01-x', '--context', '.planning/phases/01-x/01-CONTEXT.md']; },
+    outcome: 'unreadable',
+    block: true,
+    expected(dir, real) {
+      const readError = `${real}/.planning/phases/01-x/01-01-PLAN.md: EIO`;
+      return {
+        passed: false,
+        skipped: false,
+        reason: 'unreadable evidence',
+        total: null,
+        covered: null,
+        readError,
+        message: `Decision coverage gate could not read its evidence (${readError}). Fix the file permissions or encoding, then re-run the gate.`,
+      };
+    },
+  },
 ];
 
 function run(c) {

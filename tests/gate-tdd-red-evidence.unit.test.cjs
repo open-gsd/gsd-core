@@ -170,6 +170,39 @@ const CASES = [
     args() { return []; },
     usage: { code: 'sdk_missing_arg', message: 'tdd-red-evidence requires a record path: check tdd-red-evidence <record.json>' },
   },
+  {
+    // #5170: a record that EXISTS but cannot be read is "could not look", not "no record". The
+    // fail-closed policy and the payload are unchanged (U6a); the OUTCOME is `unreadable`, so the
+    // exit status is UNAVAILABLE rather than a delivered block.
+    id: 'U6f',
+    title: 'record exists but cannot be read -> same INVALID_RED payload as an absent record, unreadable outcome (read failure injected)',
+    setup(dir, h) {
+      h.w(dir, 'red.json', JSON.stringify({ command: 'node --test t.test.cjs', exitCode: 1, output: 'x', targetTest: 'target' }));
+      const real = fs.readFileSync;
+      fs.readFileSync = function (p, ...rest) {
+        if (String(p).endsWith('red.json')) {
+          const err = new Error('EACCES: simulated read failure');
+          err.code = 'EACCES';
+          throw err;
+        }
+        return real.call(fs, p, ...rest);
+      };
+      return function restore() { fs.readFileSync = real; };
+    },
+    args(dir) { return [dir + '/red.json']; },
+    outcome: 'unreadable',
+    block: true,
+    expected(dir) {
+      return {
+        passed: false,
+        block: true,
+        verdict: 'INVALID_RED',
+        reason: 'unreadable_record',
+        record: `${dir}/red.json`,
+        readError: `record not found or unreadable: ${dir}/red.json`,
+      };
+    },
+  },
 ];
 
 function run(c) {
