@@ -36,11 +36,24 @@
  *       (imports are case-sensitive in all four ecosystems); extension
  *       matching is case-insensitive, mirroring `UI_COMPONENT_FILE_RE`.
  *
- * All I/O failures degrade to `false` (no evidence) — never throw.
+ * #5170 (ADR-5057 §4): the detector reads typed evidence. An affirmative finding is
+ * `found`; a walk that completed without one is `none`; a `package.json` that exists but cannot be
+ * read or parsed, a directory that cannot be listed or a native source file that cannot be opened
+ * is `unreadable` WHEN no affirmative evidence was found — the gate that consumes this must not
+ * certify "no frontend" over a tree it could not look at. Never throws.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  evidenceFound,
+  evidenceFromError,
+  evidenceNone,
+  evidenceUnreadable,
+  readDirEntriesEvidence,
+  readTextEvidence,
+} from './gate-evidence.cjs';
+import type { Evidence } from './gate-evidence.cjs';
 
 /** Component-framework file extensions — the static-evidence subset of UI_FILE_EXTENSIONS_RE. */
 export const UI_COMPONENT_FILE_RE = /\.(tsx|jsx|vue|svelte)$/i;
@@ -113,96 +126,105 @@ const SKIP_DIRS: ReadonlySet<string> = new Set([
 /** Walk safety cap — beyond this the tree is treated as scanned (evidence decided by then). */
 const MAX_WALK_ENTRIES = 10_000;
 
-function packageJsonHasUiFramework(projectDir: string): boolean {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(path.join(projectDir, 'package.json'), 'utf8');
-  } catch {
-    return false; // no/unreadable package.json → no evidence from this signal
-  }
+/** What a walk found, and the first read failure it met on the way (null when it met none). */
+interface WalkResult {
+  found: boolean;
+  unreadable: string | null;
+}
+
+/** The first read failure of the package.json signal: `unreadable`, or `none` (absent), or `found`. */
+function packageJsonEvidence(projectDir: string): Evidence<true> {
+  const read = readTextEvidence(path.join(projectDir, 'package.json'));
+  if (read.kind === 'none') return evidenceNone<true>();
+  if (read.kind === 'unreadable') return evidenceUnreadable<true>(read.reason, read.span);
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return false; // malformed package.json → no evidence from this signal
+    parsed = JSON.parse(read.value);
+  } catch (err) {
+    // A package.json that exists but is not valid JSON could not be read: unreadable, not "no deps".
+    return evidenceFromError<true>(err, 'package.json');
   }
-  if (parsed === null || typeof parsed !== 'object') return false;
+  if (parsed === null || typeof parsed !== 'object') return evidenceNone<true>();
   const pkg = parsed as Record<string, unknown>;
   for (const field of ['dependencies', 'devDependencies', 'peerDependencies'] as const) {
     const deps = pkg[field];
     if (deps === null || typeof deps !== 'object') continue;
     for (const name of Object.keys(deps)) {
-      if (UI_FRAMEWORK_DEPS.has(name)) return true;
+      if (UI_FRAMEWORK_DEPS.has(name)) return evidenceFound<true>(true);
     }
   }
-  return false;
+  return evidenceNone<true>();
 }
 
 /**
  * Shared bounded BFS over the project tree — the single home of the walk
  * semantics both evidence walks depend on: SKIP_DIRS pruning, the
- * MAX_WALK_ENTRIES entry cap (cap-hit → `false`: the tree is treated as
+ * MAX_WALK_ENTRIES entry cap (cap-hit → not found: the tree is treated as
  * scanned and evidence stays undecided), symlinks never followed
- * (withFileTypes Dirents), unreadable directories skipped. `visit` is called
- * for every regular file with its name and full path; returning `true` stops
- * the walk with `true` (evidence found).
+ * (withFileTypes Dirents). `visit` is called for every regular file with its
+ * name, full path and a `note` for a read failure it met; returning `true`
+ * stops the walk with `found`. A directory that cannot be listed is NOT
+ * silently skipped: it is noted, the walk goes on, and the caller learns that
+ * part of the tree was never seen (an absent directory is just skipped).
  */
 function walkProjectFiles(
   projectDir: string,
-  visit: (name: string, fullPath: string) => boolean,
-): boolean {
+  visit: (name: string, fullPath: string, note: (reason: string) => void) => boolean,
+): WalkResult {
+  let unreadable: string | null = null;
+  const note = (reason: string): void => {
+    unreadable = unreadable ?? reason;
+  };
   const queue: string[] = [projectDir];
   let visited = 0;
   while (queue.length > 0 && visited < MAX_WALK_ENTRIES) {
     const dir = queue.shift() as string;
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      continue; // unreadable directory → skip it
+    const listing = readDirEntriesEvidence(dir);
+    if (listing.kind === 'unreadable') {
+      note(listing.reason);
+      continue;
     }
-    for (const entry of entries) {
+    if (listing.kind === 'none') continue; // vanished since it was queued: nothing to see
+    for (const entry of listing.value) {
       visited++;
-      if (visited >= MAX_WALK_ENTRIES) return false;
+      if (visited >= MAX_WALK_ENTRIES) return { found: false, unreadable };
       if (entry.isDirectory()) {
         if (!SKIP_DIRS.has(entry.name)) queue.push(path.join(dir, entry.name));
-      } else if (entry.isFile() && visit(entry.name, path.join(dir, entry.name))) {
-        return true;
+      } else if (entry.isFile() && visit(entry.name, path.join(dir, entry.name), note)) {
+        return { found: true, unreadable };
       }
     }
   }
-  return false;
+  return { found: false, unreadable };
 }
 
-function treeHasComponentFile(projectDir: string): boolean {
+function treeComponentFileEvidence(projectDir: string): WalkResult {
   return walkProjectFiles(projectDir, (name) => UI_COMPONENT_FILE_RE.test(name));
 }
 
 /**
- * Read at most the first 64 KiB of `file` and report whether any of `markers`
- * occurs in it (#4658). Import sections live at the top of a source file, so a
- * bounded prefix read keeps the gate's plan-time cost profile without reading
- * generated monsters in full. Any I/O failure degrades to false — never throw.
+ * Read at most the first 64 KiB of `file` as evidence (#4658). Import sections live at
+ * the top of a source file, so a bounded prefix read keeps the gate's plan-time cost
+ * profile without reading generated monsters in full.
  */
-function fileHasAnyMarker(file: string, markers: readonly string[]): boolean {
+function readPrefixEvidence(file: string): Evidence<string> {
   let fd: number;
   try {
     fd = fs.openSync(file, 'r');
-  } catch {
-    return false;
+  } catch (err) {
+    return evidenceFromError<string>(err, file);
   }
   try {
     const bytes = Buffer.alloc(64 * 1024);
     const read = fs.readSync(fd, bytes, 0, bytes.length, 0);
-    const prefix = bytes.toString('utf8', 0, read);
-    return markers.some((m) => prefix.includes(m));
-  } catch {
-    return false;
+    return evidenceFound(bytes.toString('utf8', 0, read));
+  } catch (err) {
+    return evidenceFromError<string>(err, file);
   } finally {
     try {
       fs.closeSync(fd);
     } catch {
-      // already closed — nothing to degrade
+      // already closed — the evidence was read (or its failure returned) above
     }
   }
 }
@@ -212,12 +234,18 @@ function fileHasAnyMarker(file: string, markers: readonly string[]): boolean {
  * extension alone; `.swift`/`.kt`/`.dart` are evidence only when the file's
  * content carries its ecosystem's import marker.
  */
-function treeHasNativeUiFile(projectDir: string): boolean {
-  return walkProjectFiles(projectDir, (name, fullPath) => {
+function treeNativeUiEvidence(projectDir: string): WalkResult {
+  return walkProjectFiles(projectDir, (name, fullPath, note) => {
     if (NATIVE_UI_XAML_RE.test(name)) return true;
     if (NATIVE_UI_SOURCE_RE.test(name)) {
       const markers = NATIVE_UI_CONTENT_MARKERS[path.extname(name).toLowerCase()];
-      return markers != null && fileHasAnyMarker(fullPath, markers);
+      if (markers == null) return false;
+      const prefix = readPrefixEvidence(fullPath);
+      if (prefix.kind === 'unreadable') {
+        note(prefix.reason);
+        return false;
+      }
+      return prefix.kind === 'found' && markers.some((m) => prefix.value.includes(m));
     }
     return false;
   });
@@ -227,15 +255,33 @@ function treeHasNativeUiFile(projectDir: string): boolean {
  * Does the project tree carry static evidence of a frontend?
  *
  * @param projectDir - Absolute path to the project root (the gate's cwd).
- * @returns true when package.json declares a UI-framework dependency, the tree
+ * @returns `found` when package.json declares a UI-framework dependency, the tree
  *          contains a component-framework file, or the tree contains native UI
  *          evidence (a `.xaml` file, or a `.swift`/`.kt`/`.dart` file carrying
- *          its ecosystem's UI import marker — #4658); false otherwise
- *          (including on any I/O failure — evidence must be affirmative).
+ *          its ecosystem's UI import marker — #4658); otherwise `unreadable` when
+ *          any part of the tree or manifest could not be read (the absence of
+ *          evidence is then not established), else `none`. Affirmative evidence
+ *          always wins over a read failure elsewhere.
+ */
+export function readStaticFrontendEvidence(projectDir: string): Evidence<true> {
+  if (typeof projectDir !== 'string' || projectDir === '') return evidenceNone<true>();
+  let unreadable: string | null = null;
+  const manifest = packageJsonEvidence(projectDir);
+  if (manifest.kind === 'found') return manifest;
+  if (manifest.kind === 'unreadable') unreadable = manifest.reason;
+  const components = treeComponentFileEvidence(projectDir);
+  if (components.found) return evidenceFound<true>(true);
+  unreadable = unreadable ?? components.unreadable;
+  const native = treeNativeUiEvidence(projectDir);
+  if (native.found) return evidenceFound<true>(true);
+  unreadable = unreadable ?? native.unreadable;
+  return unreadable === null ? evidenceNone<true>() : evidenceUnreadable<true>(unreadable, projectDir);
+}
+
+/**
+ * The boolean projection of {@link readStaticFrontendEvidence}: true only on affirmative evidence. It
+ * reads nothing itself; a gate that must tell "no frontend" from "could not look" uses the evidence.
  */
 export function hasStaticFrontendEvidence(projectDir: string): boolean {
-  if (typeof projectDir !== 'string' || projectDir === '') return false;
-  if (packageJsonHasUiFramework(projectDir)) return true;
-  if (treeHasComponentFile(projectDir)) return true;
-  return treeHasNativeUiFile(projectDir);
+  return readStaticFrontendEvidence(projectDir).kind === 'found';
 }
