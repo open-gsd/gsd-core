@@ -929,7 +929,8 @@ function extractTier3Fence() {
 // invocation (which needs the real binary).
 function extractFallowDerivation() {
   const src = readFileNormalized(PRE_PASS_STEP_PATH);
-  const fence = fenceContaining(src, 'FALLOW_BASE=$(gsd_run check evaluation-scope');
+  // #5170: the resolver's status is captured into FALLOW_SCOPE_RC before its JSON is read.
+  const fence = fenceContaining(src, 'FALLOW_SCOPE_JSON=$(gsd_run check evaluation-scope');
   const scopeStart = fence.indexOf('FALLOW_SCOPE_ARGS=()');
   assert.ok(scopeStart !== -1, 'fallow fence must define FALLOW_SCOPE_ARGS=()');
   const cut = fence.indexOf('gsd_run run-with-timeout');

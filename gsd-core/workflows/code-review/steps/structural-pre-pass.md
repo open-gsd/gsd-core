@@ -45,9 +45,20 @@ if [ \"$FALLOW_SCOPE\" = \"phase\" ]; then
   # one owner instead of a second hand-rolled copy of that derivation. A phase
   # number is unique within a milestone, not a repository, so the anchor is the
   # parent of the first commit that added anything under the phase's directory.
-  FALLOW_BASE=$(gsd_run check evaluation-scope --phase "${PADDED_PHASE}" --raw 2>/dev/null | sed -n 's/^ *"rangeBase": *"\([^"]*\)".*$/\1/p')
-  if [ -n \"$FALLOW_BASE\" ]; then
-    FALLOW_SCOPE_ARGS=(--changed-since \"$FALLOW_BASE\")
+  # #5170: capture the resolver's status first. Exit 69 (UNAVAILABLE) is "could not look": its JSON
+  # carries no base, and a pipe into sed would hide that status and widen the audit silently.
+  FALLOW_SCOPE_JSON=$(gsd_run check evaluation-scope --phase "${PADDED_PHASE}" --raw 2>/dev/null) && FALLOW_SCOPE_RC=0 || FALLOW_SCOPE_RC=$?
+  FALLOW_BASE=""
+  if [ "$FALLOW_SCOPE_RC" -eq 0 ]; then
+    FALLOW_BASE=$(printf '%s' "$FALLOW_SCOPE_JSON" | sed -n 's/^ *"rangeBase": *"\([^"]*\)".*$/\1/p')
+  fi
+  if [ -n "$FALLOW_BASE" ]; then
+    FALLOW_SCOPE_ARGS=(--changed-since "$FALLOW_BASE")
+  elif [ "$FALLOW_SCOPE_RC" -ne 0 ]; then
+    # The widening to repo scope is kept, and stated: the phase base could not be resolved.
+    echo "WARNING: evaluation-scope could not resolve the phase base (exit ${FALLOW_SCOPE_RC}); fallow audits the whole repository, not the phase's changed files." >&2
+  else
+    echo "NOTE: no phase base commit found; fallow audits the whole repository." >&2
   fi
 fi
 

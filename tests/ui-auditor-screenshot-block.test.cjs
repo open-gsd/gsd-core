@@ -21,7 +21,8 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const net = require('node:net');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
+const fc = require('fast-check');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -87,7 +88,7 @@ function closeServer(s) {
 }
 
 /** Run the fence; async so the in-process http server can answer curl. */
-async function runFence(t, file, { ports, mode = 'ok' }) {
+async function runFence(t, file, { ports = [], rawPorts, mode = 'ok' }) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-shot-block-'));
   t.after(() => cleanup(tmp));
   const bin = path.join(tmp, 'bin');
@@ -115,7 +116,7 @@ async function runFence(t, file, { ports, mode = 'ok' }) {
       TMP: tmp,
       STUB_LOG: log,
       STUB_MODE: mode,
-      DEV_PORTS: ports.join(' '),
+      DEV_PORTS: rawPorts === undefined ? ports.join(' ') : rawPorts,
     },
   });
   let stdout = '';
@@ -210,6 +211,23 @@ for (const file of AUDITOR_FILES) {
         'failed captures leave no stray empty files');
     });
 
+    test('aGlobCharacterInDevPortsIsNeverExpandedIntoPorts', async (t) => {
+      // Unquoted, `*` would expand to the files in the working directory and each would be probed as a port.
+      const out = await runFence(t, file, { rawPorts: '*' });
+      assert.equal(out.status, 0, out.stderr);
+      assert.equal(out.devUrl, '');
+      assert.match(out.stdout, /No dev server on localhost:3000, 5173 or 8080/);
+    });
+
+    test('aPathOrUrlFragmentInDevPortsNeverReachesTheProbedUrl', async (t) => {
+      const srv = await serve((req, res) => { res.writeHead(200); res.end('ok'); });
+      t.after(() => closeServer(srv));
+      const port = srv.address().port;
+      const out = await runFence(t, file, { rawPorts: `${port}/admin?x=1  ` });
+      assert.equal(out.devUrl, `http://localhost:${port}`);
+      assert.ok(out.calls.every((c) => c === `http://localhost:${port}`));
+    });
+
     test('aPartialCaptureIsReportedAsPartialWithTheCount', async (t) => {
       const srv = await serve((req, res) => { res.writeHead(200); res.end('ok'); });
       t.after(() => closeServer(srv));
@@ -218,6 +236,48 @@ for (const file of AUDITOR_FILES) {
       assert.match(out.stdout, /Screenshots PARTIAL \(2\/3\)/);
       assert.ok(!/Screenshots captured/.test(out.stdout));
       assert.deepEqual(fs.readdirSync(path.join(out.tmp, out.shotDir)).sort(), ['desktop.png', 'tablet.png']);
+    });
+  });
+}
+
+// DEV_PORTS is an operator-supplied space-separated list. The probe loop must iterate exactly the digit runs
+// of it — never a glob expansion of the working directory, never a path or URL fragment. The property runs
+// the documented `for PORT in ...` line itself, in a directory that holds files a glob would expand to.
+for (const file of AUDITOR_FILES) {
+  describe(`${file} DEV_PORTS expansion (property, seeded)`, { skip: SKIP }, () => {
+    const loopHead = () => staticFence(file).find((line) => line.trim().startsWith('for PORT in'));
+
+    function iterated(t, devPorts) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-shot-ports-'));
+      t.after(() => cleanup(dir));
+      for (const name of ['a', 'b', 'port-x']) fs.writeFileSync(path.join(dir, name), '');
+      const script = `${loopHead()}\n  printf '%s\\n' "$PORT"\ndone\n`;
+      const r = spawnSync('bash', ['-c', script], {
+        cwd: dir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS,
+        env: { PATH: process.env.PATH, HOME: dir, TMPDIR: dir, TEMP: dir, TMP: dir, DEV_PORTS: devPorts },
+      });
+      assert.equal(r.status, 0, r.stderr);
+      return r.stdout.split('\n').filter(Boolean);
+    }
+
+    test('the loop head is found in the fence (the property is not vacuous)', () => {
+      assert.ok(loopHead(), `${file}: the documented fence must carry a "for PORT in" line`);
+    });
+
+    test('iterates exactly the digit runs of DEV_PORTS, in order; unset or empty falls back to the documented list', (t) => {
+      const alphabet = [...'0123456789  *?[]/;$"\'\\ab-.\t'];
+      fc.assert(
+        fc.property(fc.string({ unit: fc.constantFrom(...alphabet), maxLength: 14 }), (devPorts) => {
+          const expected = devPorts === '' ? ['3000', '5173', '8080'] : (devPorts.match(/\d+/g) ?? []);
+          return JSON.stringify(iterated(t, devPorts)) === JSON.stringify(expected);
+        }),
+        { seed: 5170, numRuns: 25 },
+      );
+    });
+
+    test('a glob character is never expanded into the working directory\'s files (control: the literal alphabet of the fixture)', (t) => {
+      assert.deepEqual(iterated(t, '*'), []);
+      assert.deepEqual(iterated(t, '*a* 3000 [ab]'), ['3000']);
     });
   });
 }

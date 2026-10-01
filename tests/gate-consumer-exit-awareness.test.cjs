@@ -156,8 +156,79 @@ describe('plan-phase drift pre-checks: a check that could not look warns instead
   }
 });
 
+describe('execute-phase codebase-drift gate: exit 69 keeps its payload, a verb that printed nothing falls back ONCE (codebase-drift-gate.md)', { skip: SKIP }, () => {
+  const lines = () => span('gsd-core/workflows/execute-phase/steps/codebase-drift-gate.md', 'DRIFT=$(gsd_run verify codebase-drift', 'if [ "$DRIFT_EXIT"');
+  const probe = 'printf "%s|%s" "$DRIFT" "$DRIFT_EXIT"';
+  const FALLBACK = '{"skipped":true,"reason":"sdk-failed"}';
+  const UNAVAILABLE = '{"block":false,"skipped":true,"reason":"unresolvable-mapped-commit","action_required":false}';
+
+  test('exit 0: the verdict JSON is kept and nothing is warned', () => {
+    const r = runBash(lines(), { stdout: '{"block":false,"skipped":false}', rc: 0 }, { probe });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout, '{"block":false,"skipped":false}|0');
+    assert.equal(r.stderr, '');
+  });
+
+  test('exit 69 with its payload on stdout: the payload is the verdict — one JSON document, never concatenated with the fallback', () => {
+    const r = runBash(lines(), { stdout: UNAVAILABLE, rc: 69 }, { probe });
+    assert.equal(r.status, 0, `the capture must survive set -e: ${r.stderr}`);
+    assert.equal(r.stdout, `${UNAVAILABLE}|69`);
+    assert.doesNotThrow(() => JSON.parse(r.stdout.split('|')[0]), 'stdout of the capture is ONE JSON document');
+    assert.match(r.stderr, /Warning: codebase-drift check could not look \(exit 69\)/);
+  });
+
+  test('a verb that printed nothing (exit 1, 2, 127): the skip fallback is the verdict, once', () => {
+    for (const rc of [1, 2, 127]) {
+      const r = runBash(lines(), { stdout: '', rc }, { probe });
+      assert.equal(r.status, 0, `exit ${rc}: ${r.stderr}`);
+      assert.equal(r.stdout, `${FALLBACK}|${rc}`, `exit ${rc}`);
+      assert.match(r.stderr, new RegExp(`could not look \\(exit ${rc}\\)`));
+    }
+  });
+});
+
+describe('code-review structural pre-pass: the fallow base is read from a captured status, and a widening is visible (structural-pre-pass.md)', { skip: SKIP }, () => {
+  const FILE = 'gsd-core/workflows/code-review/steps/structural-pre-pass.md';
+  const lines = () => [...span(FILE, 'FALLOW_SCOPE_JSON=$(gsd_run check evaluation-scope', 'echo "NOTE: no phase base commit found'), 'fi'];
+  const probe = 'printf "ARGS=%s\\n" "${FALLOW_SCOPE_ARGS[*]}"; printf "RC=%s\\n" "$FALLOW_SCOPE_RC"';
+  const preamble = ['PADDED_PHASE=01; FALLOW_SCOPE_ARGS=()'];
+  const WITH_BASE = '{\n  "status": "resolved",\n  "rangeBase": "abc1234",\n  "commits": []\n}';
+
+  test('exit 0 with a rangeBase: fallow is scoped with --changed-since, no warning', () => {
+    const r = runBash(lines(), { stdout: WITH_BASE, rc: 0 }, { preamble, probe });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /^ARGS=--changed-since abc1234$/m);
+    assert.match(r.stdout, /^RC=0$/m);
+    assert.equal(r.stderr, '');
+  });
+
+  test('exit 0 without a rangeBase: the whole-repository audit is stated, not silent', () => {
+    const r = runBash(lines(), { stdout: '{\n  "status": "resolved",\n  "rangeBase": null\n}', rc: 0 }, { preamble, probe });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /^ARGS=$/m);
+    assert.match(r.stderr, /NOTE: no phase base commit found; fallow audits the whole repository/);
+  });
+
+  test('exit 69 (could not look): the widening to repo scope is kept AND named with the status; a base in the payload is never used', () => {
+    const r = runBash(lines(), { stdout: WITH_BASE, rc: 69 }, { preamble, probe });
+    assert.equal(r.status, 0, `the capture must survive set -e: ${r.stderr}`);
+    assert.match(r.stdout, /^ARGS=$/m, 'an unavailable resolver never scopes the audit');
+    assert.match(r.stdout, /^RC=69$/m);
+    assert.match(r.stderr, /WARNING: evaluation-scope could not resolve the phase base \(exit 69\); fallow audits the whole repository/);
+  });
+
+  test('any other non-zero status (limit+1 of the verdict range) is also named, never silent', () => {
+    for (const rc of [1, 2, 70]) {
+      const r = runBash(lines(), { stdout: '', rc }, { preamble, probe });
+      assert.equal(r.status, 0, `exit ${rc}: ${r.stderr}`);
+      assert.match(r.stderr, new RegExp(`could not resolve the phase base \\(exit ${rc}\\)`));
+    }
+  });
+});
+
 describe('plan-phase decision-coverage-plan gate: a gate that could not run stops instead of passing (plan-phase.md)', { skip: SKIP }, () => {
-  const lines = () => span('gsd-core/workflows/plan-phase.md', 'GATE_RESULT=$(gsd_run query check.decision-coverage-plan', 'fi');
+  // Through the end of the block's own verdict guard (the `jq` blocking arm closes with a lone `}`).
+  const lines = () => span('gsd-core/workflows/plan-phase.md', 'GATE_RESULT=$(gsd_run query check.decision-coverage-plan', '}');
   const probe = 'printf "REACHED\\n"';
   const preamble = ['PHASE_DIR=p; CONTEXT_PATH=c'];
 
@@ -165,6 +236,13 @@ describe('plan-phase decision-coverage-plan gate: a gate that could not run stop
     const r = runBash(lines(), { stdout: '{"passed":true}', rc: 0 }, { preamble, probe });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /REACHED/);
+  });
+
+  test('exit 0 with passed:false: the block\'s own blocking arm stops (exit 1, the handler\'s message)', () => {
+    const r = runBash(lines(), { stdout: '{"passed":false,"message":"D-01 is not covered"}', rc: 0 }, { preamble, probe });
+    assert.equal(r.status, 1);
+    assert.match(r.stdout, /D-01 is not covered/);
+    assert.ok(!/REACHED/.test(r.stdout));
   });
 
   test('exit 69 (could not read its evidence) stops with the gate\'s output surfaced', () => {
@@ -186,26 +264,45 @@ describe('capture-and-continue consumers: a verdict is read under set -e, the st
     ['verifier-phase-gates decision-coverage-verify', 'gsd-core/references/verifier-phase-gates.md', 'DECISION_RESULT=$(gsd_run query check.decision-coverage-verify', 'DECISION_RESULT', 'DECISION_EXIT'],
   ];
 
+  // Template placeholders a workflow writes for the agent to fill in are made concrete before the block runs.
+  const concrete = (lines) => lines.map((l) => l.replace('${hook.check.query}', 'x'));
+  const UI_PREAMBLE = ['PHASE_NUM=3; PHASE=3; PHASE_NUMBER=3; QUICK_DIR=q; hook_check_query=x; PHASE_REQ_IDS=r'];
+
+  CAPTURES.push(
+    // The status variable is `GATE_RC`: the §3a.5 step is pinned to carry no exit/halt vocabulary (autonomous-ui-steps).
+    ['autonomous UI gate (ui-plan-gate)', 'gsd-core/references/autonomous-ui-design-contract.md', 'GATE=$(gsd_run check ui-plan-gate', 'GATE', 'GATE_RC'],
+    ['plan-phase UI gate (ui-plan-gate)', 'gsd-core/workflows/plan-phase.md', 'GATE=$(gsd_run check ui-plan-gate', 'GATE', 'GATE_EXIT'],
+    ['plan-phase verify-command-paths', 'gsd-core/workflows/plan-phase.md', 'VERIFY_PATHS=$(gsd_run check verify-command-paths', 'VERIFY_PATHS', 'VERIFY_PATHS_EXIT'],
+    ['plan-phase verify-failure-directions', 'gsd-core/workflows/plan-phase.md', 'FAILING_DIRECTIONS=$(gsd_run check verify-failure-directions', 'FAILING_DIRECTIONS', 'FAILING_DIRECTIONS_EXIT'],
+    ['quick plan-checker-loop verify-command-paths', 'gsd-core/workflows/quick/steps/plan-checker-loop.md', 'VERIFY_PATHS=$(gsd_run check verify-command-paths', 'VERIFY_PATHS', 'VERIFY_PATHS_EXIT'],
+    ['verify-work gate dispatch', 'gsd-core/workflows/verify-work.md', 'GATE_RESULT=$(gsd_run check "${hook_check_query}"', 'GATE_RESULT', 'CHECK_EXIT'],
+    ['execute-phase wave-post gate dispatch', 'gsd-core/workflows/execute-phase/steps/wave-post-gate-hooks.md', 'GATE_RESULT=$(gsd_run check ${hook.check.query}', 'GATE_RESULT', 'CHECK_EXIT'],
+    ['execute-phase verify-phase-goal gate dispatch', 'gsd-core/workflows/execute-phase/steps/verify-phase-goal.md', 'GATE_RESULT=$(gsd_run check ${hook.check.query}', 'GATE_RESULT', 'CHECK_EXIT'],
+    ['ship gate dispatch (named query)', 'gsd-core/workflows/ship.md', 'GATE_RESULT=$(gsd_run check ${hook.check.query}', 'GATE_RESULT', 'CHECK_EXIT'],
+    ['ship gate dispatch (predicate)', 'gsd-core/workflows/ship.md', 'GATE_RESULT=$(gsd_run check predicate', 'GATE_RESULT', 'CHECK_EXIT'],
+    ['plan-phase gate dispatch (named query)', 'gsd-core/workflows/plan-phase.md', 'GATE_RESULT=$(gsd_run check ${hook.check.query}', 'GATE_RESULT', 'CHECK_EXIT'],
+    ['plan-phase gate dispatch (predicate)', 'gsd-core/workflows/plan-phase.md', 'GATE_RESULT=$(gsd_run check predicate', 'GATE_RESULT', 'CHECK_EXIT'],
+  );
+
   for (const [name, file, marker, resultVar, exitVar] of CAPTURES) {
+    // Always under a real `set -e` (no escape hatch): the capture itself must survive every status.
+    const run = (stdout, rc) => runBash(concrete(span(file, marker, marker)), { stdout, rc }, {
+      preamble: ['PLAN_PATH=p; plan=p; PHASE_DIR=d; CONTEXT_PATH=c; COMMIT_HASHES=abc1234', ...UI_PREAMBLE],
+      probe: `printf "%s|%s" "$${resultVar}" "$${exitVar}"`,
+    });
+
     test(`${name}: exit 0, 1, 66 and 69 are all captured and the script continues`, () => {
       for (const rc of [0, 1, 66, 69]) {
-        const r = runBash(span(file, marker, marker), { stdout: '{"v":1}', rc }, {
-          preamble: ['PLAN_PATH=p; plan=p; PHASE_DIR=d; CONTEXT_PATH=c; COMMIT_HASHES=abc1234'],
-          probe: `printf "%s|%s" "$${resultVar}" "$${exitVar}"`,
-        });
+        const r = run('{"v":1}', rc);
         assert.equal(r.status, 0, `exit ${rc} must not abort a capture: ${r.stderr}`);
         assert.equal(r.stdout, `{"v":1}|${rc}`, `exit ${rc}: the JSON and the status are both kept`);
       }
     });
-  }
 
-  test('autonomous UI gate: the status is captured, so exit 69 is not read as "frontend: false"', () => {
-    const marker = 'GATE=$(gsd_run check ui-plan-gate';
-    const r = runBash(span('gsd-core/references/autonomous-ui-design-contract.md', marker, marker), { stdout: '{"frontend":false,"outcome":"unreadable"}', rc: 69 }, {
-      setE: false,
-      preamble: ['PHASE_NUM=3'],
-      probe: 'printf "EXIT=%s" "$GATE_EXIT"',
+    test(`${name}: exit 2 with nothing on stdout is captured as an empty result and a status of 2`, () => {
+      const r = run('', 2);
+      assert.equal(r.status, 0, `the capture must not abort: ${r.stderr}`);
+      assert.equal(r.stdout, '|2');
     });
-    assert.equal(r.stdout, 'EXIT=69');
-  });
+  }
 });

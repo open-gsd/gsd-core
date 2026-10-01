@@ -999,8 +999,8 @@ describe('bug #619 — codebase-drift-gate resolves gsd-tools via the runtime sh
     const content = readGate();
     assert.match(
       content,
-      /DRIFT=\$\(gsd_run verify codebase-drift 2>\/dev\/null \|\| echo '\{"skipped":true,"reason":"sdk-failed"\}'\)/,
-      'drift check must call `gsd_run verify codebase-drift` with the non-blocking skip fallback',
+      /DRIFT=\$\(gsd_run verify codebase-drift 2>\/dev\/null\) && DRIFT_EXIT=0 \|\| DRIFT_EXIT=\$\?/,
+      'drift check must call `gsd_run verify codebase-drift` and capture its status (exit 69 keeps its payload; #5170)',
     );
     assert.doesNotMatch(
       content,
@@ -1013,8 +1013,8 @@ describe('bug #619 — codebase-drift-gate resolves gsd-tools via the runtime sh
     const content = readGate();
     assert.match(
       content,
-      /\|\| echo '\{"skipped":true,"reason":"sdk-failed"\}'/,
-      'an internal drift-command failure must still fall through to the skip JSON',
+      /if \[ -z "\$DRIFT" \]; then DRIFT='\{"skipped":true,"reason":"sdk-failed"\}'; fi/,
+      'an internal drift-command failure that printed nothing must still fall through to the skip JSON (once, never concatenated with a payload)',
     );
   });
 

@@ -17,9 +17,16 @@ function have(cmd) {
   return !r.error && r.status === 0;
 }
 
-/** A `skip` value for `node:test`: false when every named tool is available, else the reason. */
+/**
+ * A `skip` value for `node:test`: false when every named tool is available, else the reason.
+ * Under CI (`process.env.CI`) a missing tool is a failure, never a skip: a skipped suite there would
+ * report green having executed nothing. The throw fails the test file at load.
+ */
 function skipUnless(...tools) {
-  return tools.every(have) ? false : `${tools.join(' and ')} ${tools.length === 1 ? 'is' : 'are'} required`;
+  if (tools.every(have)) return false;
+  const reason = `${tools.join(' and ')} ${tools.length === 1 ? 'is' : 'are'} required`;
+  if (process.env.CI) throw new Error(`${reason} under CI: a bash-block behavior test must run, not skip`);
+  return reason;
 }
 
 module.exports = { have, skipUnless };

@@ -515,7 +515,7 @@ Read the `activeHooks` array directly from `PLAN_PRE_HOOKS_JSON` / `HOOKS_JSON` 
 Run the UI deterministic gate whenever **any** `plan:pre` UI hook is active — including the step-only case (`workflow.ui_safety_gate` off). (`check.query` = `"ui.plan-gate"`; router normalizes dots→hyphens.)
 
 ```bash
-GATE=$(gsd_run check ui-plan-gate "${PHASE}" --raw); GATE_EXIT=$?
+GATE=$(gsd_run check ui-plan-gate "${PHASE}" --raw) && GATE_EXIT=0 || GATE_EXIT=$?
 ```
 
 A non-zero `GATE_EXIT` is a command failure, including `69` (`UNAVAILABLE`: the gate could not read its evidence, so its `frontend: false` is not an answer): surface it and stop; never fall through to Branch 2. Otherwise read `frontend`, `hasUiSpec`, and `block` from `GATE`.
@@ -1012,8 +1012,8 @@ reports which commands state a failure signal and never authors one. Handing bot
 stops the checker hand-reasoning the filesystem or the plans.
 
 ```bash
-VERIFY_PATHS=$(gsd_run check verify-command-paths "${PHASE}" --raw); VERIFY_PATHS_EXIT=$?
-FAILING_DIRECTIONS=$(gsd_run check verify-failure-directions "${PHASE}" --raw); FAILING_DIRECTIONS_EXIT=$?
+VERIFY_PATHS=$(gsd_run check verify-command-paths "${PHASE}" --raw) && VERIFY_PATHS_EXIT=0 || VERIFY_PATHS_EXIT=$?
+FAILING_DIRECTIONS=$(gsd_run check verify-failure-directions "${PHASE}" --raw) && FAILING_DIRECTIONS_EXIT=0 || FAILING_DIRECTIONS_EXIT=$?
 ```
 
 Branch on each `*_EXIT` (#5170): `0` — the probe looked; use the JSON. `69` (`UNAVAILABLE`) — the
@@ -1353,11 +1353,8 @@ if [ "$GATE_CFG" != "false" ]; then
   CONTEXT_PATH=$(ls "${PHASE_DIR}"/*-CONTEXT.md 2>/dev/null | head -1)
   if [ -n "$CONTEXT_PATH" ]; then
     GATE_RESULT=$(gsd_run query check.decision-coverage-plan "${PHASE_DIR}" "${CONTEXT_PATH}") && GATE_EXIT=0 || GATE_EXIT=$?
-    # A non-zero status (69 UNAVAILABLE, #5170) is a gate that could not look: surface it and stop.
-    if [ "$GATE_EXIT" -ne 0 ]; then
-      echo "Decision coverage gate could not run (exit ${GATE_EXIT}): $GATE_RESULT"
-      exit 1
-    fi
+    # 69 UNAVAILABLE (#5170) = the gate could not look: surface it and stop.
+    [ "$GATE_EXIT" -eq 0 ] || { echo "Decision coverage gate could not run (exit ${GATE_EXIT}): $GATE_RESULT"; exit 1; }
     # BLOCKING: refuse to mark phase planned when a trackable decision is uncovered.
     # `passed: true` covers both real-pass and skipped cases (gate disabled / no CONTEXT.md /
     # no trackable decisions). Verify-phase counterpart deliberately omits this exit-1 — that
@@ -1463,13 +1460,11 @@ every other registered hook at this point).
 
 ```bash
 # named-query gate:
-GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_DIR}" "${PHASE_REQ_IDS}" --raw)
-CHECK_EXIT=$?
+GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_DIR}" "${PHASE_REQ_IDS}" --raw) && CHECK_EXIT=0 || CHECK_EXIT=$?
 ```
 OR, for a generic `predicate` gate (ADR-2008 / #2008), inline the predicate as compact JSON (note the `--phase-dir`/`--phase-req-ids` flags feed `${PHASE_DIR}`/`${PHASE_REQ_IDS}` interpolation):
 ```bash
-GATE_RESULT=$(gsd_run check predicate --predicate '<hook.check.predicate as JSON>' --phase-dir "${PHASE_DIR}" --phase-req-ids "${PHASE_REQ_IDS}" --raw)
-CHECK_EXIT=$?
+GATE_RESULT=$(gsd_run check predicate --predicate '<hook.check.predicate as JSON>' --phase-dir "${PHASE_DIR}" --phase-req-ids "${PHASE_REQ_IDS}" --raw) && CHECK_EXIT=0 || CHECK_EXIT=$?
 ```
 (Read the hook's `check` object in-context to pick the branch; a gate with neither is a malformed registry entry — skip with a warning.)
 

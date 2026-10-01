@@ -17,8 +17,12 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 # block below reuses the launcher function from this shared shell scope (the single-preamble
 # pattern established by discuss-phase #614, enforced by tests/runtime-launcher-parity.test.cjs).
 # Non-blocking is preserved: an internal drift-command failure still falls through to the
-# skip JSON via the `|| echo` below.
-DRIFT=$(gsd_run verify codebase-drift 2>/dev/null || echo '{"skipped":true,"reason":"sdk-failed"}')
+# skip JSON below. Exit 69 (UNAVAILABLE, #5170) is the verb saying "could not look": its payload is
+# already on stdout and is kept as the verdict; the fallback is applied only when the verb printed
+# nothing, so the two JSON documents are never concatenated.
+DRIFT=$(gsd_run verify codebase-drift 2>/dev/null) && DRIFT_EXIT=0 || DRIFT_EXIT=$?
+if [ -z "$DRIFT" ]; then DRIFT='{"skipped":true,"reason":"sdk-failed"}'; fi
+if [ "$DRIFT_EXIT" -ne 0 ]; then echo "Warning: codebase-drift check could not look (exit ${DRIFT_EXIT})" >&2; fi
 ```
 
 Parse JSON for: `skipped`, `reason`, `action_required`, `directive`,

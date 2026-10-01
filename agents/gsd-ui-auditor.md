@@ -106,7 +106,9 @@ It keeps capture output out of a commit even after `git add .`: static screensho
 # servers included), and --max-time keeps an accept-but-never-respond port from hanging.
 DEV_URL=""
 SCREENSHOT_DIR=""
-for PORT in ${DEV_PORTS:-3000 5173 8080}; do
+# DEV_PORTS is reduced to its digit runs before it is word-split, so it can only ever name ports: no glob
+# character, path or URL fragment in it survives into the loop or the probed URL.
+for PORT in $(printf '%s' "${DEV_PORTS:-3000 5173 8080}" | tr -cs '0-9' ' '); do
   DEV_STATUS=$(curl -sL --max-time 5 -o /dev/null -w "%{http_code}" "http://localhost:$PORT" 2>/dev/null) || DEV_STATUS="000"
   case "$DEV_STATUS" in
     000|"" | 5*) ;;

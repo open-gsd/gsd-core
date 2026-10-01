@@ -88,8 +88,7 @@ advisory throughout: it never blocks.
 **Execute:post gate hook dispatch.** After code review, dispatch all active gate hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "gate"`. ⚠ **Validate `check` before shell use** (third-party manifest input) — `loop-hook-dispatch.md` § `gate`. For each, run the form below, or — for a `predicate` gate (ADR-2008 / #2008) — `gsd_run check predicate --predicate '<predicate JSON>' --phase-number "${PHASE_NUMBER}" --raw`:
 
 ```bash
-GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw)
-CHECK_EXIT=$?
+GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw) && CHECK_EXIT=0 || CHECK_EXIT=$?
 ```
 
 `${hook.check.query}` is deliberately left unquoted: it is a multi-word query (verb plus flags) that must word-split, and it is safe only because it is charset-validated first per `loop-hook-dispatch.md` § `gate`.

@@ -16,10 +16,10 @@ Read the `activeHooks` array directly from `HOOKS_JSON` (in-context — do NOT i
 (At least one active step hook ⇒ `workflow.ui_phase` is on.) Run the UI-SPEC gate:
 
 ```bash
-GATE=$(gsd_run check ui-plan-gate "${PHASE_NUM}" --raw); GATE_EXIT=$?
+GATE=$(gsd_run check ui-plan-gate "${PHASE_NUM}" --raw) && GATE_RC=0 || GATE_RC=$?
 ```
 
-A non-zero `GATE_EXIT` is a command failure, including `69` (`UNAVAILABLE`: the gate could not read its evidence, so its `frontend: false` is not an answer): surface it and stop — never skip silently to 3b as if the phase had no frontend. Otherwise read `frontend` and `hasUiSpec` from `GATE` (in-context).
+A non-zero `GATE_RC` is a command failure, including `69` (`UNAVAILABLE`: the gate could not read its evidence, so its `frontend: false` is not an answer): surface it and stop — never skip silently to 3b as if the phase had no frontend. Otherwise read `frontend` and `hasUiSpec` from `GATE` (in-context).
 
 **If `frontend` is false:** Skip silently to 3b.
 

@@ -160,16 +160,14 @@ Verify the work is ready to ship:
 
      For a named-query gate (only a value that has passed validation is run):
      ```bash
-     GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_DIR}" --raw)
-     CHECK_EXIT=$?
+     GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_DIR}" --raw) && CHECK_EXIT=0 || CHECK_EXIT=$?
      ```
 
      (The named-query argument convention — a single `"${PHASE_DIR}"` positional — mirrors `verify-work.md`'s `verify:pre` arm verbatim. No capability declares a `check.query` gate at `ship:pre` today; the arm exists so the documented check contract is complete rather than half-implemented.)
 
      For a `predicate` gate (ADR-2008 / #2008), serialize `hook.check.predicate` to compact JSON and pass it as a **single argv element**:
      ```bash
-     GATE_RESULT=$(gsd_run check predicate --predicate '<hook.check.predicate as JSON>' --phase-dir "${PHASE_DIR}" --phase-number "${PHASE_NUMBER}" --raw)
-     CHECK_EXIT=$?
+     GATE_RESULT=$(gsd_run check predicate --predicate '<hook.check.predicate as JSON>' --phase-dir "${PHASE_DIR}" --phase-number "${PHASE_NUMBER}" --raw) && CHECK_EXIT=0 || CHECK_EXIT=$?
      ```
      A gate carrying neither — including an `agentVerdict` check, which has no runner at `ship:pre` — cannot be evaluated here. Record a warning naming the `capId` and treat it as a check-command failure routed per step 1a, **never** as a silent pass.
 
