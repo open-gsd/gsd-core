@@ -1318,6 +1318,10 @@ pass and handed to `gsd-plan-checker`; runnable by hand to see what the checker 
 **Prerequisites:** none — an unresolvable phase degrades to a JSON payload with `readError` set
 rather than failing.
 **Produces:** JSON on stdout. Nothing is written to disk.
+**Exit status:** `0` whenever the probe could look — a blocker finding is still exit `0` (the
+payload's `counts.blocker` carries the verdict). A probe that **could not look** (`status:
+"unresolvable"`, `readError` set) exits `69` (`UNAVAILABLE`) with the same JSON on stdout: "could
+not look" is never a clean exit (#5170).
 
 **It never executes command text.** PLAN.md is LLM-authored, so the probe only resolves paths
 and stats directories; a `package.json` it finds is read for script *names* only.
@@ -1378,6 +1382,9 @@ constitutes failure. A command with no expressible failure mode is not an accept
 **Prerequisites:** none — an unresolvable phase degrades to a JSON payload with `readError` set
 rather than failing.
 **Produces:** JSON on stdout. Nothing is written to disk.
+**Exit status:** `0` whenever the probe could look — a blocker finding is still exit `0` (the
+payload's `counts.blocker` carries the verdict). A probe that **could not look** (`status:
+"unresolvable"`, `readError` set) exits `69` (`UNAVAILABLE`) with the same JSON on stdout (#5170).
 
 **It never executes command text**, and it never authors a statement for the planner — a
 prescribed failure signal would be copied verbatim and carry no information.
