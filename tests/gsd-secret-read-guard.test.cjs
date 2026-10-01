@@ -50,6 +50,14 @@ const read = (file_path) => ({ hook_event_name: 'PreToolUse', tool_name: 'Read',
 const grep = (tool_input) => ({ hook_event_name: 'PreToolUse', tool_name: 'Grep', tool_input: { pattern: 'KEY', ...tool_input } });
 const bash = (command) => ({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command } });
 
+// Every property in this file spawns the hook as a subprocess, so the
+// fast-check runs stay small; the seed is fixed so a failure reproduces.
+// fast-check prints the seed and the counterexample on failure.
+const PROPERTY_RUNS = { seed: 4856, numRuns: 40 };
+// A bare secret name, or one behind a directory, in the shapes the name
+// predicate classifies as secret (`.ENV` covers the case-folded filesystems).
+const SECRET = fc.constantFrom('.env', '.env.local', '.secrets', 'config/.env.production', '.ENV');
+
 function assertAllowed(r, label) {
   assert.equal(r.status, 0, `${label}: expected allow (exit 0), got exit ${r.status}; stdout=${r.stdout}`);
   assert.equal(r.stdout, '', `${label}: an allow must emit nothing on stdout`);
@@ -719,8 +727,6 @@ describe('gsd-secret-read-guard: name-only git pathspecs and copy destinations (
   // tables, so a table edit cannot silently reshape the input space. Every run
   // spawns the hook, which keeps numRuns small; fast-check prints the seed
   // and the counterexample on failure.
-  const PROPERTY_RUNS = { seed: 4856, numRuns: 40 };
-  const SECRET = fc.constantFrom('.env', '.env.local', '.secrets', 'config/.env.production', '.ENV');
   const BENIGN = fc.constantFrom('README.md', 'src/a.js', '.env.example', 'notes.txt', '.envrc');
   const NAME_ONLY = {
     'check-ignore': { short: ['q', 'v', 'z', 'n'], long: ['--quiet', '--verbose', '--non-matching', '--no-index'] },
@@ -899,5 +905,54 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
 
   test('a non-Bash tool with the same text is never inspected', () => {
     assertAllowed(runHook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: 'notes-claude-agent-gsd-debugger.md' } }), 'read');
+  });
+});
+
+describe('gsd-secret-read-guard: bundled short-flag clusters (#5046)', () => {
+  // normalizeOperand is the parser: for a single-dash word it walks tails of the
+  // cluster and returns the first tail that names a secret. The review's gap was
+  // that the walk only ever ran for a letter-first cluster, so a digit-first one
+  // (`grep -2if.env pat f`) skipped the loop entirely and kept its raw form.
+  //
+  // The prefix vocabulary is drawn from real short options, never read back from
+  // the hook's own tables, and covers both first-character classes: letters, a
+  // context-count digit, and mixed clusters.
+  const CLUSTER_PREFIX = fc.oneof(
+    fc.constantFrom('i', 'n', 'v', 'q', 'c', '2', '1', '0', 'i2', '2i', 'n2', 'if', 'nf', 'i1f'),
+    fc.array(fc.constantFrom('i', 'n', 'v', 'f', 'q', 'c', '2', '1'), { minLength: 1, maxLength: 4 })
+      .map((l) => l.join('')),
+  );
+  // Template / look-alike names the guard must keep allowing in the same cluster
+  // shape. A template suffix and `.envrc` never name a secret, so widening the
+  // cluster guard must not start denying them.
+  const CLUSTER_LOOKALIKE = fc.constantFrom('.env.example', '.env.sample', '.env.template', '.env.dist', '.envrc');
+
+  test('a bundled short-flag cluster hides no secret name, at any cluster length', () => {
+    fc.assert(fc.property(CLUSTER_PREFIX, SECRET, (prefix, secret) => {
+      const cluster = `-${prefix}${secret}`;
+      const cmd = `grep ${cluster} pat f`;
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: cluster });
+    }), PROPERTY_RUNS);
+  });
+
+  test('the same cluster with a template or look-alike name stays allowed', () => {
+    fc.assert(fc.property(CLUSTER_PREFIX, CLUSTER_LOOKALIKE, (prefix, lookalike) => {
+      const cmd = `grep -${prefix}${lookalike} pat f`;
+      assertAllowed(runHook(bash(cmd)), cmd);
+    }), PROPERTY_RUNS);
+  });
+
+  // Boundary cases the generated clusters cannot reach: the operand sits at
+  // k=2 (one flag char), k=3 (two) and len-1 (nothing after it), and a cluster
+  // with no secret-bearing tail keeps the historical strip.
+  test('cluster-length boundaries: k=2, k=3 and len-1 all reach the secret name', () => {
+    for (const cluster of ['-2.env', '-1.env', '-i.env', '-if.env', '-2if.env', '-nif.env', '-2nif.env']) {
+      const cmd = `grep ${cluster} pat f`;
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: cluster });
+    }
+    for (const cluster of ['-i', '-2', '-12', '-vvv']) {
+      const cmd = `grep ${cluster} pat f`;
+      assertAllowed(runHook(bash(cmd)), cmd);
+    }
   });
 });
