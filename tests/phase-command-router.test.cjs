@@ -17,7 +17,7 @@
  *   - All assertions on return values and captured call arguments.
  */
 
-const { describe, test, before, after } = require('node:test');
+const { describe, test, before, after, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { routePhaseCommand } = require('../gsd-core/bin/lib/phase-command-router.cjs');
@@ -802,6 +802,85 @@ describe('bug-1437 — phase.list-plans is wired in gsd-tools', () => {
       for (const { label, r } of others) {
         assert.equal(r.error, baseline.r.error, `${label}: stderr must be byte-identical to the no-config run`);
       }
+    });
+  });
+}
+
+// ─── 8. phase uat-passed: the exit status follows the verdict (#5170) ─────────
+//
+// Real CLI, child process, argv exactly as `verify-work.md` passes it. The JSON
+// on stdout is the verdict and is unchanged; only the process exit code now
+// follows it (ADR-5057 §4, status mode): passed:true -> 0, passed:false -> 1.
+{
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+
+  const PASSING_UAT = [
+    '---', 'status: passed', '---', '', '# UAT Results', '',
+    '### 1. Login works', 'expected: User logs in successfully', 'result: passed', '',
+  ].join('\n');
+  const PENDING_UAT = [
+    '---', 'status: partial', '---', '', '# UAT Results', '',
+    '### 1. Login works', 'expected: User logs in successfully', 'result: pending', '',
+  ].join('\n');
+
+  function projectWithUat(content) {
+    const tmpDir = createTempProject();
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      ['# Roadmap', '', '- [ ] Phase 1: Feature', '', '### Phase 1: Feature', '**Goal:** Build feature', '**Plans:** 1 plans', ''].join('\n'),
+    );
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-feature');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, 'feature-UAT.md'), content, 'utf-8');
+    return { tmpDir, phaseDir };
+  }
+
+  describe('phase-command-router — phase uat-passed exit status follows the verdict (#5170)', () => {
+    let fixture;
+    afterEach(() => { if (fixture) cleanup(fixture.tmpDir); fixture = undefined; });
+
+    test('uat-passed exits 1 on failing verdict', () => {
+      fixture = projectWithUat(PENDING_UAT);
+      const failing = ['--require-verification', '--uat-only'].map((flag) => runGsdTools(['phase', 'uat-passed', '1', flag], fixture.tmpDir));
+      for (const result of failing) {
+        assert.equal(result.exitCode, 1, `a failing verdict exits 1: ${result.error}`);
+        const out = JSON.parse(result.output);
+        assert.equal(out.passed, false, 'the verdict JSON is still delivered on stdout, unchanged');
+        assert.equal(out.phase, '1');
+        assert.ok(Array.isArray(out.blockers) && out.blockers.length > 0);
+      }
+    });
+
+    test('uat-passed exits 1 on failing verdict under --exit-contract=v2 as well', () => {
+      fixture = projectWithUat(PENDING_UAT);
+      const result = runGsdTools(['phase', 'uat-passed', '1', '--uat-only', '--exit-contract=v2'], fixture.tmpDir);
+      assert.equal(result.exitCode, 1);
+      assert.equal(JSON.parse(result.output).passed, false);
+    });
+
+    test('uat-passed exits 0 on passing verdict', () => {
+      fixture = projectWithUat(PASSING_UAT);
+      const result = runGsdTools(['phase', 'uat-passed', '1', '--uat-only'], fixture.tmpDir);
+      assert.equal(result.exitCode, 0, `a passing verdict exits 0: ${result.error}`);
+      assert.equal(JSON.parse(result.output).passed, true);
+    });
+
+    test('uat-only exit follows verdict: failing 1, passing 0 on the same phase after the row passes', () => {
+      fixture = projectWithUat(PENDING_UAT);
+      const before = runGsdTools(['phase', 'uat-passed', '1', '--uat-only'], fixture.tmpDir);
+      assert.equal(before.exitCode, 1);
+      fs.writeFileSync(path.join(fixture.phaseDir, 'feature-UAT.md'), PASSING_UAT, 'utf-8');
+      const after = runGsdTools(['phase', 'uat-passed', '1', '--uat-only'], fixture.tmpDir);
+      assert.equal(after.exitCode, 0);
+    });
+
+    test('a phase it cannot read keeps its error() contract: exit 1, nothing on stdout', () => {
+      fixture = projectWithUat(PASSING_UAT);
+      const result = runGsdTools(['phase', 'uat-passed', '99'], fixture.tmpDir);
+      assert.equal(result.exitCode, 1);
+      assert.equal(result.output, '', 'an error() carries no verdict on stdout — callers tell it from a verdict by that');
     });
   });
 }

@@ -5474,3 +5474,82 @@ describe('#4024: verify plan-structure — quantitative criteria gate (e2e)', ()
     assert.deepStrictEqual(out.errors, []);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// verify artifacts: the exit status follows the verdict (#5170, ADR-5057 §4)
+//
+// Real CLI in a child process. The JSON on stdout is the verdict and is
+// unchanged; only the process exit code now follows it: all passed -> 0, a
+// negative verdict -> 1, nothing to evaluate (plan missing / empty block) ->
+// UNAVAILABLE (69), never 0. The #4686 repro is a plan with one artifact
+// missing its `contains:` pattern.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('verify artifacts — exit status follows the verdict (#5170)', () => {
+  const UNAVAILABLE = 69;
+  const PLAN = '.planning/phases/01-test/01-01-PLAN.md';
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-test'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'src', 'app.js'), 'const x = 1;\nexport default x;\n');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function writePlan(artifactLines) {
+    const content = [
+      '---', 'phase: 01-test', 'plan: 01', 'type: execute', 'wave: 1', 'depends_on: []',
+      'files_modified: [src/app.js]', 'autonomous: true', 'must_haves:', '    artifacts:',
+      ...artifactLines.map((line) => `      ${line}`),
+      '---', '', '<tasks></tasks>',
+    ].join('\n');
+    fs.writeFileSync(path.join(tmpDir, PLAN), content);
+  }
+
+  test('artifacts exits 1 when not all passed (v1 and v2)', () => {
+    writePlan(['- path: "src/app.js"', '  contains: "no-such-pattern"']);
+    for (const contract of ['v1', 'v2']) {
+      const result = runGsdTools(['verify', 'artifacts', PLAN, `--exit-contract=${contract}`], tmpDir);
+      assert.strictEqual(result.exitCode, 1, `${contract}: a negative verdict exits 1: ${result.error}`);
+      const out = JSON.parse(result.output);
+      assert.strictEqual(out.all_passed, false, `${contract}: the verdict JSON is unchanged`);
+      assert.strictEqual(out.artifacts[0].issues[0], 'Missing pattern: no-such-pattern');
+    }
+  });
+
+  test('artifacts missing plan is unavailable', () => {
+    const result = runGsdTools(['verify', 'artifacts', '.planning/phases/01-test/nope-PLAN.md'], tmpDir);
+    assert.strictEqual(result.exitCode, UNAVAILABLE, `could not look is never exit 0: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).error, 'File not found');
+  });
+
+  test('artifacts empty block is unavailable', () => {
+    writePlan([]);
+    const result = runGsdTools(['verify', 'artifacts', PLAN], tmpDir);
+    assert.strictEqual(result.exitCode, UNAVAILABLE, `an empty must_haves.artifacts block is not a pass: ${result.error}`);
+    assert.match(JSON.parse(result.output).error, /No must_haves\.artifacts/);
+  });
+
+  test('artifacts missing plan is unavailable through the query dispatch as well', () => {
+    const result = runGsdTools(['query', 'verify.artifacts', '.planning/phases/01-test/nope-PLAN.md'], tmpDir);
+    assert.strictEqual(result.exitCode, UNAVAILABLE);
+  });
+
+  test('artifacts exits 0 when all passed', () => {
+    writePlan(['- path: "src/app.js"', '  min_lines: 2', '  contains: "export"']);
+    const result = runGsdTools(['verify', 'artifacts', PLAN], tmpDir);
+    assert.strictEqual(result.exitCode, 0, `an all-pass verdict exits 0: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).all_passed, true);
+  });
+
+  test('artifacts exits 0 when all passed under v2 (a passing verdict is not degraded)', () => {
+    writePlan(['- path: "src/app.js"', '  contains: "export"']);
+    const result = runGsdTools(['verify', 'artifacts', PLAN, '--exit-contract=v2'], tmpDir);
+    assert.strictEqual(result.exitCode, 0, result.error);
+  });
+});
