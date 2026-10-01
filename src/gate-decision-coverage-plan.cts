@@ -17,7 +17,6 @@
  * check verb deprecates positionals and the plan-phase workflow passes them.
  */
 
-import fs from 'node:fs';
 import { gateVerdict, gateUnreadable, isGateUsageFailure } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
 import { statEvidence } from './gate-evidence.cjs';
@@ -85,17 +84,18 @@ export function evaluateDecisionCoveragePlan(input: { projectDir: string; args: 
   if (!contextArg || contextArg === '') {
     return gateVerdict('block', true, { passed: false, skipped: false, reason: 'missing context path argument', total: 0, covered: 0, uncovered: [], message: 'Decision coverage gate called without a context path argument — the caller (e.g. the plan-phase workflow) must pass the CONTEXT.md path. An empty argument is a caller error, not evidence there is nothing to check (#2770).' });
   }
-  // A REAL path whose file genuinely does not exist is the LEGITIMATE green skip.
-  if (!fs.existsSync(contextPath)) {
+  // One stat answers both questions (#5170): `none` (ENOENT/ENOTDIR) is a REAL path whose file
+  // genuinely does not exist — the LEGITIMATE green skip. `fs.existsSync` answered `false` for an
+  // EACCES on a parent too, certifying "nothing to check" over a CONTEXT.md the gate never saw.
+  const contextStat = statEvidence(contextPath);
+  if (contextStat.kind === 'none') {
     return gateVerdict('skip', false, { passed: true, skipped: true, reason: 'CONTEXT.md missing', total: 0, covered: 0, uncovered: [], message: 'No CONTEXT.md - nothing to check.' });
   }
   // #4794: a NON-FILE path (a directory — the adjacent same-looking positional
   // swapped, the issue's repro 2) is a caller error like #2770's empty argument:
-  // fs.existsSync is true, the read yields nothing, and the gate used to
-  // certify passed:true on a phase full of decisions. Fail closed, naming it.
-  // The stat is wrapped: a path that vanishes between existsSync and statSync
-  // (or any stat failure) must answer the SAME fail-closed JSON, never a throw.
-  const contextStat = statEvidence(contextPath);
+  // the read yields nothing, and the gate used to certify passed:true on a phase
+  // full of decisions. Fail closed, naming it. A stat failure other than "absent"
+  // answers the SAME fail-closed JSON (outcome `unreadable`), never a throw.
   const contextIsFile = contextStat.kind === 'found' && contextStat.value.isFile();
   if (!contextIsFile) {
     const contextKind = contextStat.kind === 'found'

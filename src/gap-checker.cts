@@ -16,12 +16,13 @@
  * from the prior hand-written .cjs; only strict types are added.
  */
 
-import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
 const { output, error, formatDiagnosticToken } = io;
 import { escapeRegex } from './pattern.cjs';
+import { readTextEvidence, evidenceFound, evidenceFromError } from './gate-evidence.cjs';
+import type { Evidence } from './gate-evidence.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningPaths, planningDir, findContextMdIn } = planningWorkspace;
@@ -87,6 +88,19 @@ interface GapResult {
    * SCOPE.UNREADABLE distinguishes a real read failure from a genuinely
    * empty/absent phase dir (SCOPE.COMPLETE). */
   phase_dir_scope: Scope;
+  /**
+   * #5170 (ADR-5057 §4): every file or directory the analysis needed that EXISTS but could not be
+   * read (EACCES/EISDIR/EIO/encoding, a malformed config). Present only when non-empty, so a run
+   * that read everything keeps the pre-existing wire shape. A non-empty list means the table above
+   * was computed over evidence the analysis never saw; the gate reports outcome `unreadable`.
+   */
+  unreadable?: UnreadableRead[];
+}
+
+/** A file or directory the analysis needed and could not read (#5170): never an empty slice of the evidence. */
+interface UnreadableRead {
+  reason: string;
+  span: string;
 }
 
 interface RunGapAnalysisOptions {
@@ -200,19 +214,38 @@ function formatGapTable(rows: CoverageRow[]): string {
   return `## Post-Planning Gap Analysis\n\n${header}\n${body}\n`;
 }
 
-function readGate(cwd: string): boolean {
-  const cfgPath = path.join(planningDir(cwd), 'config.json');
+function parseJsonEvidence(text: string, span: string): Evidence<unknown> {
   try {
-    const raw = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as unknown;
+    return evidenceFound(JSON.parse(text) as unknown);
+  } catch (err) {
+    return evidenceFromError<unknown>(err, span);
+  }
+}
+
+/**
+ * Is the gap analysis enabled? An ABSENT config means the default (enabled). A config that exists
+ * but cannot be read or parsed also runs the analysis (the conservative direction: the check is not
+ * silently switched off), and is reported in `unreadable` so the verdict is never a clean pass
+ * (#5170, ADR-5057 §4).
+ */
+function readGate(cwd: string): { enabled: boolean; unreadable: UnreadableRead[] } {
+  const cfgPath = path.join(planningDir(cwd), 'config.json');
+  const text = readTextEvidence(cfgPath);
+  if (text.kind === 'none') return { enabled: true, unreadable: [] };
+  if (text.kind === 'unreadable') return { enabled: true, unreadable: [{ reason: text.reason, span: cfgPath }] };
+  const parsed = parseJsonEvidence(text.value, cfgPath);
+  if (parsed.kind === 'unreadable') return { enabled: true, unreadable: [{ reason: parsed.reason, span: cfgPath }] };
+  if (parsed.kind === 'found') {
+    const raw = parsed.value;
     if (raw && typeof raw === 'object' && 'workflow' in raw) {
       const wf = (raw as Record<string, unknown>)['workflow'];
       if (wf && typeof wf === 'object' && 'post_planning_gaps' in wf) {
         const val = (wf as Record<string, unknown>)['post_planning_gaps'];
-        if (typeof val === 'boolean') return val;
+        if (typeof val === 'boolean') return { enabled: val, unreadable: [] };
       }
     }
-  } catch { /* fall through */ }
-  return true;
+  }
+  return { enabled: true, unreadable: [] };
 }
 
 /**
@@ -351,7 +384,10 @@ function normalizePhaseReqIds(rawVal: unknown): string[] | null | undefined {
 
 function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOptions = {}): GapResult {
   const phaseReqIds = normalizePhaseReqIds(options.phaseReqIds);
-  if (!readGate(cwd)) {
+  const gate = readGate(cwd);
+  const unreadable: UnreadableRead[] = [...gate.unreadable];
+  const unreadableField = (): { unreadable?: UnreadableRead[] } => (unreadable.length > 0 ? { unreadable } : {});
+  if (!gate.enabled) {
     return {
       enabled: false,
       rows: [],
@@ -366,7 +402,11 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
   const absPhaseDir = path.isAbsolute(phaseDir) ? phaseDir : path.join(cwd, phaseDir);
 
   const reqPath = planningPaths(cwd).requirements;
-  const reqMd = fs.existsSync(reqPath) ? fs.readFileSync(reqPath, 'utf-8') : '';
+  // An absent REQUIREMENTS.md has no requirements; one that exists but cannot be read is `unreadable`
+  // (a thrown read used to crash, and `existsSync` said "absent" for an EACCES on a parent).
+  const reqRead = readTextEvidence(reqPath);
+  if (reqRead.kind === 'unreadable') unreadable.push({ reason: reqRead.reason, span: reqPath });
+  const reqMd = reqRead.kind === 'found' ? reqRead.value : '';
   let reqItems: RequirementItem[] = parseRequirements(reqMd).map(r => ({ ...r, source: 'REQUIREMENTS.md' }));
 
   // Scope the requirements comparison to the phase's mapped REQ-IDs (#447).
@@ -380,7 +420,9 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
     const wanted = new Set(phaseReqIds);
     const foundIds = new Set(reqItems.map(r => r.id));
     reqItems = reqItems.filter(r => wanted.has(r.id));
-    ghostReqIds = phaseReqIds.filter(id => !foundIds.has(id));
+    // An unreadable REQUIREMENTS.md registers nothing, so "missing from REQUIREMENTS.md" would be a
+    // false claim about every ID; the unreadable read is reported instead.
+    ghostReqIds = reqRead.kind === 'unreadable' ? [] : phaseReqIds.filter(id => !foundIds.has(id));
   }
 
   // Read the phase directory once; reuse the listing for both context detection
@@ -399,6 +441,7 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
   const phaseDirReadError = phaseDirScope === SCOPE.UNREADABLE
     ? `Could not read phase directory ${formatDiagnosticToken(absPhaseDir)}`
     : null;
+  if (phaseDirScope === SCOPE.UNREADABLE) unreadable.push({ reason: 'the directory could not be listed', span: absPhaseDir });
 
   // #3511-class: scope the raw listing to this phase dir before the
   // phase-numbered -CONTEXT.md predicate. `phaseDirFiles` itself stays raw —
@@ -408,7 +451,9 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
   const scopedPhaseDirFiles = scopeToPhase(phaseDirFiles, path.basename(absPhaseDir));
   const ctxFile = findContextMdIn(scopedPhaseDirFiles);
   const ctxPath = ctxFile ? path.join(absPhaseDir, ctxFile) : null;
-  const ctxMd = ctxPath ? fs.readFileSync(ctxPath, 'utf-8') : '';
+  const ctxRead = ctxPath ? readTextEvidence(ctxPath) : null;
+  if (ctxPath && ctxRead && ctxRead.kind === 'unreadable') unreadable.push({ reason: ctxRead.reason, span: ctxPath });
+  const ctxMd = ctxRead && ctxRead.kind === 'found' ? ctxRead.value : '';
 
   // Use extractDecisions so gap-checker can distinguish could-not-parse from none-present.
   const ctxExtraction = extractDecisions(ctxMd);
@@ -426,11 +471,18 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
       // root-only exact-suffix filter did.
       const files = scanPhasePlans(absPhaseDir).planFiles;
       planText = files.map(f => {
-        try { return fs.readFileSync(path.join(absPhaseDir, f), 'utf-8'); }
-        catch { return ''; }
+        const planPath = path.join(absPhaseDir, f);
+        const plan = readTextEvidence(planPath);
+        // A plan that exists but cannot be read is `unreadable`, never an empty slice of the text the
+        // coverage is detected in (it would report every ID it holds as "Not covered").
+        if (plan.kind === 'unreadable') unreadable.push({ reason: plan.reason, span: planPath });
+        return plan.kind === 'found' ? plan.value : '';
       }).join('\n');
     }
-  } catch { /* unreadable */ }
+  } catch (err) {
+    const failure = evidenceFromError<string>(err, absPhaseDir);
+    if (failure.kind === 'unreadable') unreadable.push({ reason: failure.reason, span: absPhaseDir });
+  }
 
   // FIX D (#1365): surface decision could-not-parse independently of whether
   // requirements items exist. Without this, a could-not-parse on decisions is
@@ -467,6 +519,7 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
         counts: { total: rows.length, covered, uncovered },
         phase_dir_read_error: phaseDirReadError,
         phase_dir_scope: phaseDirScope,
+        ...unreadableField(),
       };
     }
     return {
@@ -477,6 +530,7 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
       counts: { total: 0, covered: 0, uncovered: 0 },
       phase_dir_read_error: phaseDirReadError,
       phase_dir_scope: phaseDirScope,
+        ...unreadableField(),
     };
   }
 
@@ -496,6 +550,7 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
       counts: { total: 0, covered: 0, uncovered: 0 },
       phase_dir_read_error: phaseDirReadError,
       phase_dir_scope: phaseDirScope,
+        ...unreadableField(),
     };
   }
 
@@ -518,6 +573,7 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
     counts: { total: rows.length, covered, uncovered },
     phase_dir_read_error: phaseDirReadError,
     phase_dir_scope: phaseDirScope,
+        ...unreadableField(),
   };
 }
 

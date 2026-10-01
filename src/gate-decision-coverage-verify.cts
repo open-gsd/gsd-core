@@ -7,7 +7,6 @@
  * Argv after the verb: `<phase-dir> <context-path>` (positional; no `--context` flag here).
  */
 
-import fs from 'node:fs';
 import { gateVerdict, gateUnreadable, isGateUsageFailure } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
 import { resolveContainedPath } from './gate-phase-context.cjs';
@@ -59,7 +58,10 @@ export function evaluateDecisionCoverageVerify(input: { projectDir: string; args
   if (!isDecisionCoverageGateEnabled(projectDir)) {
     return gateVerdict('skip', false, { skipped: true, blocking: false, reason: 'workflow.context_coverage_gate is false', total: 0, honored: 0, not_honored: [], message: 'Decision coverage gate disabled by config.' });
   }
-  if (!contextPath || !fs.existsSync(contextPath)) {
+  // No context argument is the only up-front skip: an absent file is `none` and an unreadable one is
+  // `unreadable` below, from the one read that loads the decisions (`fs.existsSync` answered `false`
+  // for an EACCES on a parent, skipping a CONTEXT.md the gate never saw — #5170).
+  if (!contextPath) {
     return gateVerdict('skip', false, { skipped: true, blocking: false, reason: 'CONTEXT.md missing', total: 0, honored: 0, not_honored: [], message: 'No CONTEXT.md - nothing to check.' });
   }
 

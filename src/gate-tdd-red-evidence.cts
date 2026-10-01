@@ -29,8 +29,18 @@ import path from 'node:path';
 import { tryWithinRoot, PathAcceptance } from './security.cjs';
 import { gateVerdict, gateUnreadable, gateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
-import { readTextEvidence } from './gate-evidence.cjs';
+import { readTextEvidence, evidenceFound, evidenceFromError } from './gate-evidence.cjs';
+import type { Evidence } from './gate-evidence.cjs';
 import { classifyRedEvidence, buildRedEvidenceRecord } from './tdd-red-evidence.cjs';
+
+/** Parse the persisted record. A parse failure is typed evidence (never a swallowed `null`). */
+function parseRecordEvidence(text: string, span: string): Evidence<Record<string, unknown>> {
+  try {
+    return evidenceFound((JSON.parse(text) ?? {}) as Record<string, unknown>);
+  } catch (err) {
+    return evidenceFromError<Record<string, unknown>>(err, span);
+  }
+}
 
 export function evaluateTddRedEvidence(input: { projectDir: string; args: readonly string[] }): GateResult {
   const recordPath = typeof input.args[0] === 'string' ? input.args[0] : '';
@@ -48,14 +58,9 @@ export function evaluateTddRedEvidence(input: { projectDir: string; args: readon
   }
   const read = readTextEvidence(resolved);
   const text = read.kind === 'found' ? read.value : '';
-  const record = ((): Record<string, unknown> | null => {
-    if (!text) return null;
-    try {
-      return (JSON.parse(text) ?? {}) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-  })();
+  const parsed = text ? parseRecordEvidence(text, resolved) : null;
+  // Malformed JSON is content that WAS read: it is a failing record (`block`), not a swallowed error.
+  const record = parsed !== null && parsed.kind === 'found' ? parsed.value : null;
   if (!record) {
     const payload = {
       passed: false,

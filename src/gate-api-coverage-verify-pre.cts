@@ -29,7 +29,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { gateVerdict, gateUnreadable, gateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
-import { readDirEntriesEvidence, readTextEvidence } from './gate-evidence.cjs';
+import { readDirEntriesEvidence, readTextEvidence, statEvidence } from './gate-evidence.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspaceMod = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspaceMod;
@@ -87,7 +87,16 @@ export function readPhaseScope(projectDir: string, phaseDir: string, phaseNumber
   // filter — picks up bare PLAN.md and nested plans/, and excludes
   // superseded plans, none of which the prior root-only exact-suffix filter
   // did.
-  if (fs.existsSync(phaseDir)) {
+  // `fs.existsSync` answered `false` for an EACCES on a parent, skipping plans the gate never saw and
+  // letting detection run over a roadmap fallback; the stat keeps that case an unreadable scope (#5170).
+  const phaseDirStat = statEvidence(phaseDir);
+  if (phaseDirStat.kind === 'unreadable') {
+    return {
+      text: '',
+      readError: `could not read the phase directory: ${phaseDirStat.reason}`,
+    };
+  }
+  if (phaseDirStat.kind === 'found') {
     const scan = scanPhasePlans(phaseDir);
     if (scan.scope === SCOPE.UNREADABLE) {
       // Directory exists but scanPhasePlans's own readdirSync(phaseDir) call
@@ -156,8 +165,24 @@ export function evaluateApiCoverageVerifyPre(input: { projectDir: string; args: 
   // A token like ".." or "." carries no phase identity → unresolvable.
   if (token === '.' || token === '..') token = '';
 
-  // Not a GSD project (no phases tree at all) → fail-open: nothing to gate.
-  if (!fs.existsSync(phasesRoot)) {
+  // Not a GSD project (no phases tree at all) → fail-open: nothing to gate. Only an ABSENT tree
+  // (`none`) is that answer; one that exists but cannot be examined (an EACCES on a parent) is
+  // `unreadable` — `fs.existsSync` said `false` for it and certified "not a GSD project" (#5170).
+  const phasesRootStat = statEvidence(phasesRoot);
+  if (phasesRootStat.kind === 'unreadable') {
+    return gateUnreadable(true, {
+      block: true,
+      passed: false,
+      coverage_present: false,
+      detected: false,
+      read_error: phasesRootStat.reason,
+      message:
+        `api-coverage: could not examine .planning/phases (${phasesRootStat.reason}) — ` +
+        'refusing to treat an unreadable phases tree as "not a GSD project". ' +
+        'Fix the directory permissions before sealing.',
+    });
+  }
+  if (phasesRootStat.kind === 'none') {
     return gateVerdict('pass', false, {
       block: false,
       passed: true,

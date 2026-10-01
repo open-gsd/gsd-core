@@ -41,7 +41,7 @@ import { detectSchemaFiles, checkSchemaDrift } from './schema-detect.cjs';
 import { extractTaggedBlocks } from './markdown-sectionizer.cjs';
 import { compileUserPattern, MAX_USER_PATTERN_LEN } from './pattern.cjs';
 import { declareGateExit } from './gate-exit.cjs';
-import { readTextEvidence } from './gate-evidence.cjs';
+import { readTextEvidence, statEvidence } from './gate-evidence.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- plan-document.cjs is an export= CommonJS module
 import planDocumentMod = require('./plan-document.cjs');
 const { parsePlanDocument } = planDocumentMod;
@@ -2358,6 +2358,10 @@ function cmdVerifySchemaDrift(
       },
       raw,
     );
+    // #5170: a gate that threw did not evaluate drift. The payload stays non-blocking (the contract
+    // above), but the exit status says "could not look" (UNAVAILABLE) instead of a clean exit 0.
+    // Declared after output(), which rewrites the pending-outcome cell.
+    declareGateExit({ outcome: 'unreadable' }, 'status');
   }
 }
 
@@ -2369,7 +2373,26 @@ function runVerifySchemaDrift(
 ): void {
   const pDir = planningDir(cwd);
   const phasesDir = path.join(pDir, 'phases');
-  if (!fs.existsSync(phasesDir)) {
+  // An ABSENT phases directory is the documented "nothing to check" (`none`); one that cannot be
+  // examined (an EACCES on a parent — `fs.existsSync` said `false` for it) is `unreadable`.
+  const phasesRoot = statEvidence(phasesDir);
+  if (phasesRoot.kind === 'unreadable') {
+    output(
+      {
+        block: false,
+        drift_detected: false,
+        blocking: false,
+        unreadable: true,
+        unreadable_file: phasesDir,
+        read_error: phasesRoot.reason,
+        message: `schema-drift could not examine ${phasesDir} (${phasesRoot.reason}); drift was not evaluated`,
+      },
+      raw,
+    );
+    declareGateExit({ outcome: 'unreadable' }, 'status');
+    return;
+  }
+  if (phasesRoot.kind === 'none') {
     output({ block: false, drift_detected: false, blocking: false, message: 'No phases directory' }, raw);
     return;
   }

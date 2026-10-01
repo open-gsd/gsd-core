@@ -12,7 +12,7 @@
  * Argv after the verb: `<phase-dir> [phase-req-ids]`.
  */
 
-import { gateVerdict, gateUsageFailure, isGateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
+import { gateVerdict, gateUnreadable, gateUsageFailure, isGateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
 import { resolveContainedPath } from './gate-phase-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -35,6 +35,22 @@ export function evaluateGapAnalysisPlanPost(input: { projectDir: string; args: r
   // Uniform gate contract: block = false (gap-analysis is always advisory, never blocks).
   // `message` carries the human-readable gap analysis report so the dispatch's advisory branch can
   // surface it.
+  // #5170 (ADR-5057 §4): a REQUIREMENTS.md, CONTEXT.md, plan, config or phase directory that exists but
+  // could not be read means the table was computed over evidence the analysis never saw. The gate
+  // stays advisory (`block: false`) but the outcome is `unreadable`: exit UNAVAILABLE, never a clean pass.
+  if (result.unreadable !== undefined && result.unreadable.length > 0) {
+    const named = result.unreadable.map((u) => `${u.span} (${u.reason})`).join('; ');
+    return gateUnreadable(false, {
+      block: false,
+      passed: false,
+      enabled: result.enabled,
+      table: result.table,
+      summary: result.summary,
+      counts: result.counts,
+      unreadable: result.unreadable,
+      message: `${result.table || result.summary || ''}\nPost-planning gap analysis could not read its evidence: ${named}.`,
+    });
+  }
   return gateVerdict('advisory', false, {
     block: false,
     passed: true,
