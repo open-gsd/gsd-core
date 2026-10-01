@@ -802,8 +802,11 @@ function tokenize(str) {
 // A cluster that names nothing secret keeps the historical two-character strip.
 // The cluster need not start with a letter: `-2if.env` is the same defect with
 // a digit-first cluster (`grep -2f.env` is a context count plus a `-f` pattern
-// file), so the guard takes any single-dash word. A leading digit is itself a
-// value-taking short option, so that tail scan starts one character earlier.
+// file), so the guard takes any single-dash word rather than a letter-first one.
+// Starting the walk at k=2 also covers the digit-first shape: every secret name
+// begins with `.`, so no secret can begin at k=1 whatever the cluster's first
+// character is, and `.env` sits at k=2 for the shortest operand-bearing cluster
+// (`-f.env`) exactly as it does for a letter-first one.
 function normalizeOperand(text) {
   let v = text;
   if (v.startsWith('@')) v = v.slice(1);
@@ -811,8 +814,7 @@ function normalizeOperand(text) {
     const eq = v.indexOf('=');
     if (eq !== -1) v = v.slice(eq + 1);
   } else if (/^-[^-]./.test(v)) {
-    const firstTail = /^[0-9]/.test(v.slice(1)) ? 1 : 2;
-    for (let k = firstTail; k < v.length; k++) {
+    for (let k = 2; k < v.length; k++) {
       const tail = v.slice(k);
       if (namesSecret(tail)) return tail;
     }
