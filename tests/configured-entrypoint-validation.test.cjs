@@ -586,7 +586,7 @@ function gsd5100WslStandIn(candidate) {
 }
 
 function gsd5100HookTree(t) {
-  const root = fs.mkdtempSync(path.join('D:\\contrib-hourly-work\\tmp', 'gsd-5100-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5100-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const configDir = path.join(root, '.claude');
   fs.mkdirSync(path.join(configDir, 'hooks'), { recursive: true });
@@ -674,6 +674,37 @@ test('#5100 Git Bash found by policy still emits a portable JS command and passe
     resolveExecutableBinary: gsd5100WslStandIn,
   });
   assert.equal(gate.ok, true, JSON.stringify(gate));
+});
+
+test('#5100 a GSD_BASH_PATH-only Git Bash satisfies the gate for a bare win32 bash candidate', (t) => {
+  const configDir = gsd5100HookTree(t);
+  const entry = {
+    runtime: 'codex',
+    configPath: configDir,
+    scriptPath: path.join(configDir, 'hooks', 'gsd-bar.sh'),
+    platform: 'win32',
+    interpreterCandidates: ['bash'],
+  };
+
+  // GSD_BASH_PATH is the only candidate resolveBashExecutable consults here:
+  // no ProgramFiles, no ProgramFiles(x86), no SystemDrive.
+  const found = hooksSurface.validateConfiguredEntrypoints([entry], {
+    env: { GSD_BASH_PATH: GSD_5100_GIT_BASH },
+    existsSync: (candidate) => candidate === GSD_5100_GIT_BASH,
+    resolveExecutableBinary: () => null,
+  });
+  assert.equal(found.ok, true, JSON.stringify(found));
+
+  // A GSD_BASH_PATH that does not exist must not satisfy the gate - the
+  // policy finds nothing, so the bare token stays unresolved even though a
+  // PATH scan would happily hand back WSL's System32 launcher.
+  const stale = hooksSurface.validateConfiguredEntrypoints([entry], {
+    env: { GSD_BASH_PATH: 'D:\\tools\\git\\bin\\bash.exe' },
+    existsSync: () => false,
+    resolveExecutableBinary: gsd5100WslStandIn,
+  });
+  assert.equal(stale.ok, false);
+  assert.equal(stale.invalid[0].reason, 'unresolved-interpreter');
 });
 
 test('#5100 non-win32 bare bash still resolves through the executable scan', () => {
