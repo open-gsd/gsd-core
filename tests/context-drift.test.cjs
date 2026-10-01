@@ -412,6 +412,49 @@ describe('verify context-drift CLI', () => {
       assert.strictEqual(JSON.parse(r.output).block, false, 'the payload stays non-blocking');
     }
   });
+
+  // The `none` policy is shared with `verify schema-drift`: an ABSENT `.planning/phases` is the
+  // documented skip (nothing to compare), never "could not look".
+  test('an absent .planning/phases is the documented skip, exit 0 — the same answer schema-drift gives (#5170)', () => {
+    cleanup(path.join(tmp, '.planning', 'phases'));
+    assert.ok(!fs.existsSync(path.join(tmp, '.planning', 'phases')), 'precondition: no phases tree');
+    const ctx = runGsdTools(['verify', 'context-drift', '01'], tmp);
+    assert.strictEqual(ctx.exitCode, 0, ctx.error);
+    const data = JSON.parse(ctx.output);
+    assert.strictEqual(data.skipped, true);
+    assert.strictEqual(data.reason, 'no-phases-directory');
+    assert.strictEqual(data.block, false);
+    const schema = runGsdTools(['verify', 'schema-drift', '01'], tmp);
+    assert.strictEqual(schema.exitCode, ctx.exitCode, 'both drift gates agree on the policy for an absent phases tree');
+    assert.strictEqual(JSON.parse(schema.output).message, 'No phases directory');
+    assert.strictEqual(JSON.parse(schema.output).block, false);
+  });
+
+  test('a phases tree that exists but cannot be examined is unreadable, not a skip (#5170)', () => {
+    const { spawnSync } = require('node:child_process');
+    const { TEST_ENV_BASE } = require('./helpers.cjs');
+    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+    const phasesDir = path.join(tmp, '.planning', 'phases');
+    fs.mkdirSync(phasesDir, { recursive: true });
+    // The failure is injected by monkeypatching fs.statSync in the child (never a chmod: root ignores
+    // mode bits); the patch is local to that process.
+    const script = [
+      "const fs = require('node:fs');",
+      'const real = fs.statSync;',
+      `fs.statSync = function (p, ...rest) { if (String(p) === ${JSON.stringify(phasesDir)}) { throw Object.assign(new Error('EACCES: injected'), { code: 'EACCES' }); } return real.call(fs, p, ...rest); };`,
+      `require(${JSON.stringify(VERIFY_PATH)}).cmdVerifyContextDrift(${JSON.stringify(tmp)}, '01', false);`,
+    ].join('\n');
+    const r = spawnSync(process.execPath, ['-e', script], {
+      cwd: tmp,
+      encoding: 'utf-8',
+      timeout: PROBE_TIMEOUT_MS,
+      env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_WORKSTREAM: '' },
+    });
+    const data = JSON.parse(r.stdout);
+    assert.strictEqual(data.skipped, true);
+    assert.strictEqual(data.reason, 'phases-dir-unreadable', 'the unreadable arm, not the documented skip (no-phases-directory)');
+    assert.strictEqual(data.block, false, 'the payload stays non-blocking');
+  });
 });
 
 // `verify context-drift` reads `workflow.context_drift_action` through the quiet gate-config reader

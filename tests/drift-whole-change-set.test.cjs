@@ -1158,6 +1158,34 @@ describe('verify codebase-drift CLI — display safety and document reads (#5134
     assert.deepStrictEqual(data.elements, [{ category: 'modified', path: 'src/f0.js' }]);
   });
 
+  // #5170: a drift verdict computed from fewer documents than the map has is "could not look" unless
+  // it is blocking (more documents could only add territory the map describes). Threshold 5 keeps the
+  // single modified file below it, so the verdict is not blocking in these cases.
+  test('an unreadable document with a NON-blocking verdict is outcome unreadable, exit 69, payload plus documents_unreadable', () => {
+    mappedRepo(() => padTo(path.join(codebaseDir, 'STACK.md'), LIMIT + 1));
+    configure({ drift_threshold: 5 });
+    const { data } = drift(69);
+    assert.strictEqual(data.block, false);
+    assert.strictEqual(data.action_required, false);
+    assert.deepStrictEqual(data.documents_unreadable, ['STACK.md']);
+    assert.ok(Array.isArray(data.documents_read) && data.documents_read.includes('STRUCTURE.md'), 'the existing payload is kept');
+  });
+
+  test('an unreadable document with a BLOCKING verdict keeps the blocking verdict (exit 0, payload mode)', () => {
+    mappedRepo(() => padTo(path.join(codebaseDir, 'STACK.md'), LIMIT + 1));
+    const { data } = drift(0);
+    assert.strictEqual(data.block, true);
+    assert.deepStrictEqual(data.documents_unreadable, ['STACK.md']);
+  });
+
+  test('control: every document readable and a non-blocking verdict is exit 0 with no documents_unreadable', () => {
+    mappedRepo(() => {});
+    configure({ drift_threshold: 5 });
+    const { data } = drift(0);
+    assert.strictEqual(data.block, false);
+    assert.deepStrictEqual(data.documents_unreadable, []);
+  });
+
   test('another document that is a directory is named unreadable; an absent one is silently omitted', () => {
     mappedRepo(() => {
       fs.unlinkSync(path.join(codebaseDir, 'STACK.md'));

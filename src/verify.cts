@@ -19,16 +19,11 @@ import frontmatterMod = require('./frontmatter.cjs');
 import stateMod = require('./state.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- model-profiles.cjs is an export= CommonJS module
 import modelProfilesMod = require('./model-profiles.cjs');
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- plan-scan.cjs is an export= CommonJS module
-import planScanMod = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- verification.cjs is an export= CommonJS module
 import verificationMod = require('./verification.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module
 import coreUtilsMod = require('./core-utils.cjs');
 const { findOrphanSummaries, findUnsummarizedPlans } = coreUtilsMod;
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-scope.cjs is an export= CommonJS module
-import planningScopeMod = require('./planning-scope.cjs');
-const { SCOPE } = planningScopeMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- worktree-safety.cjs is an export= CommonJS module
 import worktreeSafetyMod = require('./worktree-safety.cjs');
 // Single owner of git C-quoted-path decoding (see #4081 note at the
@@ -42,7 +37,7 @@ import { extractTaggedBlocks } from './markdown-sectionizer.cjs';
 import { compileUserPattern, MAX_USER_PATTERN_LEN } from './pattern.cjs';
 import { declareGateExit } from './gate-exit.cjs';
 import type { GateExitMode } from './gate-exit.cjs';
-import { readTextEvidence, readDirEvidence, statEvidence, evidenceFound, evidenceNone, evidenceFromError } from './gate-evidence.cjs';
+import { readTextEvidence, readDirEvidence, readPlanScanEvidence, readPlanSetEvidence, statEvidence, evidenceFound, evidenceNone, evidenceFromError } from './gate-evidence.cjs';
 import type { Evidence } from './gate-evidence.cjs';
 import { gateVerdict, gateUnreadable } from './gate-verdict.cjs';
 import type { GateVerdict } from './gate-verdict.cjs';
@@ -1298,17 +1293,15 @@ function validityVerdict(valid: boolean, payload: Record<string, unknown>): Gate
 }
 
 /**
- * The text of a verb's target file. When it cannot be had, emits the "could not evaluate" verdict
- * (outcome `unreadable`, exit UNAVAILABLE — an absent file and an unreadable one alike) and returns null.
+ * The "could not evaluate" verdict for a verb's target file that is not `found` (outcome `unreadable`,
+ * exit UNAVAILABLE — an absent file and an unreadable one alike). The caller emits it through
+ * `emitVerbVerdict` on its own return path, so every path out of a verb visibly declares its exit.
  */
-function readVerbFileOrEmit(fullPath: string, displayPath: string, raw: boolean): string | null {
-  const evidence = readVerbFile(fullPath);
-  if (evidence.kind === 'found') return evidence.value;
+function unreadableFileVerdict(evidence: Exclude<Evidence<string>, { kind: 'found' }>, displayPath: string): GateVerdict {
   const payload: Record<string, unknown> = evidence.kind === 'none'
     ? { error: 'File not found', path: displayPath }
     : { error: 'File unreadable', path: displayPath, read_error: evidence.reason };
-  emitVerbVerdict(gateUnreadable(false, payload), 'status', raw);
-  return null;
+  return gateUnreadable(false, payload);
 }
 
 function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): void {
@@ -1317,8 +1310,12 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
   }
   if (filePath.includes('\0')) { error('file path contains null bytes'); }
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
-  const content = readVerbFileOrEmit(fullPath, filePath, raw);
-  if (content === null) return;
+  const read = readVerbFile(fullPath);
+  if (read.kind !== 'found') {
+    emitVerbVerdict(unreadableFileVerdict(read, filePath), 'status', raw);
+    return;
+  }
+  const content = read.value;
 
   // #2701: fail loud on NUL/binary corruption before structure checks. A
   // structurally intact-but-NUL-corrupted plan otherwise passes as valid and is
@@ -1444,12 +1441,14 @@ function cmdVerifyPhaseCompleteness(cwd: string, phase: string, raw: boolean): v
   // recognized naming forms — producing false "Plans without summaries" /
   // "Summaries without plans" for names it could not recognize as paired
   // (the same failure class #1988/#2648 fixed for the owner's own callers).
-  const scan = planScanMod.scanPhasePlans(phaseDir);
-  if (scan.scope === SCOPE.UNREADABLE) {
+  // Only SCOPE.COMPLETE is a real answer: an existing nested plans/ that could not be read (TRUNCATED)
+  // would hand the check a short plan set and report the unseen plans as nothing (#5170).
+  const scan = readPlanScanEvidence(phaseDir);
+  if (scan.kind === 'unreadable') {
     emitVerbVerdict(gateUnreadable(false, { error: 'Cannot read phase directory' }), 'status', raw);
     return;
   }
-  const { planFiles, summaryFiles } = scan;
+  const { planFiles, summaryFiles } = scan.value;
 
   const incompletePlans = findUnsummarizedPlans(planFiles, summaryFiles);
   if (incompletePlans.length > 0) {
@@ -1489,8 +1488,12 @@ function cmdVerifyReferences(cwd: string, filePath: string, raw: boolean): void 
     error('file path required');
   }
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
-  const content = readVerbFileOrEmit(fullPath, filePath, raw);
-  if (content === null) return;
+  const read = readVerbFile(fullPath);
+  if (read.kind !== 'found') {
+    emitVerbVerdict(unreadableFileVerdict(read, filePath), 'status', raw);
+    return;
+  }
+  const content = read.value;
 
   const found: string[] = [];
   const missing: string[] = [];
@@ -1588,8 +1591,12 @@ function cmdVerifyArtifacts(cwd: string, planFilePath: string, raw: boolean): vo
   const fullPath = path.isAbsolute(planFilePath) ? planFilePath : path.join(cwd, planFilePath);
   // #5170: no plan to read is "could not look" (UNAVAILABLE), never a pass. A plan that exists but is
   // empty WAS read: it has no artifacts block, which is a genuinely empty scope (below).
-  const content = readVerbFileOrEmit(fullPath, planFilePath, raw);
-  if (content === null) return;
+  const read = readVerbFile(fullPath);
+  if (read.kind !== 'found') {
+    emitVerbVerdict(unreadableFileVerdict(read, planFilePath), 'status', raw);
+    return;
+  }
+  const content = read.value;
 
   const artifacts = parseMustHavesBlock(content, 'artifacts') as Record<string, unknown>[];
   if (artifacts.length === 0) {
@@ -1623,66 +1630,53 @@ function cmdVerifyArtifacts(cwd: string, planFilePath: string, raw: boolean): vo
     // artifacts either. A check that disappears is worse than a check that fails,
     // because a failure is visible.
     //
-    // Scope of this guard, stated precisely (review nit): the `try` encloses the
-    // whole per-artifact body, but the only statements in it that can throw are the
-    // `statSync` and the read — the `min_lines`/`contains`/`exports` checks below
-    // are pure string operations. So this catches I/O, and nothing here is a
-    // deliberate guard around those criteria checks. A path `fs.existsSync` already
-    // rejected never reaches here either (that is the `File not found` branch), so
-    // this is not a claim to catch every way a path can be unusable.
-    try {
-      if (exists) {
-        // A directory is reported as its own kind of failure, distinct from
-        // `File not found`: the path resolved, it simply is not the thing an
-        // artifact entry can be checked against. Verifying a directory (matching
-        // `contains:`/`min_lines:`/`exports:` across the files inside it) is a
-        // feature decision, deliberately not made here.
-        if (artStat.kind === 'found' && artStat.value.isDirectory()) {
-          (check['issues'] as string[]).push('Not a file: path is a directory');
-        } else {
-          // `safeReadFile` returns null on ENOENT, and `|| ''` would turn that
-          // into an empty file — which an entry carrying only `path`/`provides`
-          // would then PASS, having checked nothing. `statSync` just succeeded, so
-          // a null here means the artifact went away mid-check. Report that rather
-          // than inheriting a pass from it. (Pre-existing above this fix, reachable
-          // through the same race after `existsSync`; found in review.)
-          const rawContent = safeReadFile(artFullPath);
-          if (rawContent === null) {
-            (check['issues'] as string[]).push('Unreadable: disappeared during check');
-            results.push(check);
-            continue;
-          }
-          const fileContent = rawContent;
-          const lineCount = fileContent.split('\n').length;
-
-          if (artifact['min_lines'] && lineCount < (artifact['min_lines'] as number)) {
-            (check['issues'] as string[]).push(`Only ${lineCount} lines, need ${artifact['min_lines'] as number}`);
-          }
-          if (artifact['contains'] && !fileContent.includes(artifact['contains'] as string)) {
-            (check['issues'] as string[]).push(`Missing pattern: ${artifact['contains'] as string}`);
-          }
-          if (artifact['exports']) {
-            const exports = Array.isArray(artifact['exports'])
-              ? artifact['exports']
-              : [artifact['exports']];
-            for (const exp of exports) {
-              if (!fileContent.includes(exp as string)) (check['issues'] as string[]).push(`Missing export: ${exp as string}`);
-            }
-          }
-          check['passed'] = (check['issues'] as string[]).length === 0;
-        }
-      } else if (artStat.kind === 'unreadable') {
-        (check['issues'] as string[]).push(`Unreadable: ${artStat.reason}`);
+    // #5170: the stat and the read are typed evidence (`statEvidence` / `readVerbFile`), so no `try`
+    // is needed: an artifact that could not be examined or read is that artifact's failure, recorded
+    // with its errno (an operator seeing EACCES acts differently from one seeing EIO) and left
+    // `passed: false` — never a pass, so the verdict is negative (exit 1).
+    if (exists) {
+      // A directory is reported as its own kind of failure, distinct from
+      // `File not found`: the path resolved, it simply is not the thing an
+      // artifact entry can be checked against. Verifying a directory (matching
+      // `contains:`/`min_lines:`/`exports:` across the files inside it) is a
+      // feature decision, deliberately not made here.
+      if (artStat.kind === 'found' && artStat.value.isDirectory()) {
+        (check['issues'] as string[]).push('Not a file: path is a directory');
       } else {
-        (check['issues'] as string[]).push('File not found');
+        // `safeReadFile` returns null on ENOENT, and `|| ''` would turn that
+        // into an empty file — which an entry carrying only `path`/`provides`
+        // would then PASS, having checked nothing. `statSync` just succeeded, so
+        // `none` here means the artifact went away mid-check. Report that rather
+        // than inheriting a pass from it.
+        const artRead = readVerbFile(artFullPath);
+        if (artRead.kind !== 'found') {
+          (check['issues'] as string[]).push(artRead.kind === 'none' ? 'Unreadable: disappeared during check' : `Unreadable: ${artRead.reason}`);
+          results.push(check);
+          continue;
+        }
+        const fileContent = artRead.value;
+        const lineCount = fileContent.split('\n').length;
+
+        if (artifact['min_lines'] && lineCount < (artifact['min_lines'] as number)) {
+          (check['issues'] as string[]).push(`Only ${lineCount} lines, need ${artifact['min_lines'] as number}`);
+        }
+        if (artifact['contains'] && !fileContent.includes(artifact['contains'] as string)) {
+          (check['issues'] as string[]).push(`Missing pattern: ${artifact['contains'] as string}`);
+        }
+        if (artifact['exports']) {
+          const exports = Array.isArray(artifact['exports'])
+            ? artifact['exports']
+            : [artifact['exports']];
+          for (const exp of exports) {
+            if (!fileContent.includes(exp as string)) (check['issues'] as string[]).push(`Missing export: ${exp as string}`);
+          }
+        }
+        check['passed'] = (check['issues'] as string[]).length === 0;
       }
-    } catch (err) {
-      // Unreadable for some other reason. Record the errno rather than a generic
-      // message — an operator seeing EACCES acts differently from one seeing EIO —
-      // and leave `passed` false.
-      const e = err as NodeJS.ErrnoException;
-      (check['issues'] as string[]).push(`Unreadable: ${e.code || (e.message ?? String(err))}`);
-      check['passed'] = false;
+    } else if (artStat.kind === 'unreadable') {
+      (check['issues'] as string[]).push(`Unreadable: ${artStat.reason}`);
+    } else {
+      (check['issues'] as string[]).push('File not found');
     }
 
     results.push(check);
@@ -1717,13 +1711,23 @@ function cmdVerifyArtifacts(cwd: string, planFilePath: string, raw: boolean): vo
  * Used by cmdVerifyKeyLinks to avoid hard-failing a missing `from:` file that
  * is a planned future artifact (fix #1202).
  */
-function collectPromisedFilesAtOrAfterWave(phaseDir: string, minWave: number): Set<string> {
+function collectPromisedFilesAtOrAfterWave(phaseDir: string, minWave: number): { files: Set<string>; unreadable: string | null } {
   const promised = new Set<string>();
-  const { planFiles } = planScanMod.scanPhasePlans(phaseDir);
-  for (const planFile of planFiles) {
+  // #5170: a plan set the scan did not fully see (an existing nested plans/ that could not be read), or
+  // a plan that cannot be read, is "could not look" — it may be the plan that promises the file — and
+  // is reported to the caller, never treated as "no plan promises it".
+  let unreadable: string | null = null;
+  const planSet = readPlanSetEvidence(phaseDir);
+  if (planSet.kind === 'unreadable') return { files: promised, unreadable: planSet.reason };
+  for (const planFile of planSet.value) {
     const planFullPath = path.join(phaseDir, planFile);
-    const planContent = safeReadFile(planFullPath);
-    if (!planContent) continue;
+    const planRead = readVerbFile(planFullPath);
+    if (planRead.kind === 'unreadable') {
+      unreadable = unreadable ?? planRead.reason;
+      continue;
+    }
+    if (planRead.kind === 'none' || !planRead.value) continue;
+    const planContent = planRead.value;
     const fm = extractFrontmatter(planContent, planFullPath);
     const waveRaw = fm['wave'];
     const wave = typeof waveRaw === 'string' ? parseInt(waveRaw, 10) : (typeof waveRaw === 'number' ? waveRaw : NaN);
@@ -1737,7 +1741,7 @@ function collectPromisedFilesAtOrAfterWave(phaseDir: string, minWave: number): S
       if (typeof f === 'string' && f.trim()) promised.add(f.trim());
     }
   }
-  return promised;
+  return { files: promised, unreadable };
 }
 
 function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): void {
@@ -1745,8 +1749,12 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
     error('plan file path required');
   }
   const fullPath = path.isAbsolute(planFilePath) ? planFilePath : path.join(cwd, planFilePath);
-  const content = readVerbFileOrEmit(fullPath, planFilePath, raw);
-  if (content === null) return;
+  const read = readVerbFile(fullPath);
+  if (read.kind !== 'found') {
+    emitVerbVerdict(unreadableFileVerdict(read, planFilePath), 'status', raw);
+    return;
+  }
+  const content = read.value;
 
   const keyLinks = parseMustHavesBlock(content, 'key_links') as Record<string, unknown>[];
   if (keyLinks.length === 0) {
@@ -1770,8 +1778,8 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
 
   // Collect files promised by plans at wave >= currentWave (lazy: computed once
   // the first time a missing source is encountered).
-  let promisedFiles: Set<string> | null = null;
-  function getPromisedFiles(): Set<string> {
+  let promisedFiles: { files: Set<string>; unreadable: string | null } | null = null;
+  function getPromisedFiles(): { files: Set<string>; unreadable: string | null } {
     if (promisedFiles === null) {
       promisedFiles = collectPromisedFilesAtOrAfterWave(phaseDir, isNaN(currentWave) ? 1 : currentWave);
     }
@@ -1811,26 +1819,28 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
         results.push(check);
         continue;
       }
-      try {
-        sourceContent = safeReadFile(fromContained);
-      } catch (err) {
-        // Report the errno only — never the message or path (untrusted `from:`
-        // can trigger EISDIR/EACCES, which platformReadSync re-throws for any
-        // non-ENOENT errno). A single bad link must not abort the whole command.
-        const code = (err as NodeJS.ErrnoException)?.code ?? 'unknown';
-        check['detail'] = `Source read failed: ${code}`;
+      // Report the errno only — never the message or path (untrusted `from:` can trigger
+      // EISDIR/EACCES). A single bad link must not abort the whole command.
+      const sourceRead = readVerbFile(fromContained);
+      if (sourceRead.kind === 'unreadable') {
+        check['detail'] = `Source read failed: ${sourceRead.reason}`;
         results.push(check);
         continue;
       }
+      sourceContent = sourceRead.kind === 'found' ? sourceRead.value : null;
     }
     if (!sourceContent) {
       // Check if the missing file is promised by a plan at the same or later wave.
       const promised = getPromisedFiles();
-      const isPromised = fromPath.trim() !== '' && promised.has(fromPath.trim());
+      const isPromised = fromPath.trim() !== '' && promised.files.has(fromPath.trim());
       if (isPromised) {
         check['pending'] = true;
         check['detail'] = 'Source file not yet created — declared in files_modified of a same-or-later-wave plan';
         pendingCount++;
+      } else if (promised.unreadable !== null) {
+        // The plans that could declare this file could not all be read: it is not known to be missing,
+        // and the link is not verified — a failed link, never a pending or passing one.
+        check['detail'] = `Source file not found, and the plans that could declare it could not be read: ${promised.unreadable}`;
       } else {
         check['detail'] = 'Source file not found (from: must be a relative file path; describe components/endpoints in via:)';
       }
@@ -1863,42 +1873,41 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
         }
         check['detail'] = `Pattern not verified (${reason})`;
       } else {
-        try {
-          if (pat.test(sourceContent)) {
-            check['verified'] = true;
-            check['detail'] = 'Pattern found in source';
-          } else {
-            const toRaw = link['to'];
-            const toPath = typeof toRaw === 'string' ? toRaw : '';
-            let targetContent: string | null = null;
-            if (toPath !== '') {
-              // An empty/missing `to:` is a malformed plan, not a
-              // path-confinement violation — only a non-empty path that
-              // actually resolves outside the project is path_rejected.
-              const toContained = tryWithinRoot(toPath, cwd);
-              if (toContained === null) {
-                // Do not read a rejected `to:` — treat as no target content
-                // and do not echo result.error, which embeds absolute host
-                // paths.
-                check['path_rejected'] = 'to';
-                check['detail'] = `Pattern "${link['pattern'] as string}" not found in source; target path rejected — resolves outside the project directory`;
-              } else {
-                targetContent = safeReadFile(toContained);
-              }
-            }
-            if (targetContent && pat.test(targetContent)) {
-              check['verified'] = true;
-              check['detail'] = 'Pattern found in target';
-            } else if (!check['path_rejected']) {
-              check['detail'] = `Pattern "${link['pattern'] as string}" not found in source or target`;
+        if (pat.test(sourceContent)) {
+          check['verified'] = true;
+          check['detail'] = 'Pattern found in source';
+        } else {
+          const toRaw = link['to'];
+          const toPath = typeof toRaw === 'string' ? toRaw : '';
+          let targetContent: string | null = null;
+          let targetUnreadable: string | null = null;
+          if (toPath !== '') {
+            // An empty/missing `to:` is a malformed plan, not a
+            // path-confinement violation — only a non-empty path that
+            // actually resolves outside the project is path_rejected.
+            const toContained = tryWithinRoot(toPath, cwd);
+            if (toContained === null) {
+              // Do not read a rejected `to:` — treat as no target content
+              // and do not echo result.error, which embeds absolute host
+              // paths.
+              check['path_rejected'] = 'to';
+              check['detail'] = `Pattern "${link['pattern'] as string}" not found in source; target path rejected — resolves outside the project directory`;
+            } else {
+              // Report the errno only — never the message, which for an untrusted `to:` like "../.."
+              // (EISDIR) would embed an absolute filesystem path.
+              const targetRead = readVerbFile(toContained);
+              if (targetRead.kind === 'unreadable') targetUnreadable = targetRead.reason;
+              else if (targetRead.kind === 'found') targetContent = targetRead.value;
             }
           }
-        } catch (err) {
-          // Report the errno only — never the full error/message, which for a
-          // re-thrown non-ENOENT platformReadSync failure (e.g. EISDIR from an
-          // untrusted `to:` like "../..") embeds an absolute filesystem path.
-          const code = (err as NodeJS.ErrnoException)?.code ?? 'unknown';
-          check['detail'] = `Pattern check failed: ${code}`;
+          if (targetUnreadable !== null) {
+            check['detail'] = `Pattern check failed: ${targetUnreadable}`;
+          } else if (targetContent && pat.test(targetContent)) {
+            check['verified'] = true;
+            check['detail'] = 'Pattern found in target';
+          } else if (!check['path_rejected']) {
+            check['detail'] = `Pattern "${link['pattern'] as string}" not found in source or target`;
+          }
         }
       }
     } else {
@@ -2362,8 +2371,19 @@ function runVerifyContextDrift(cwd: string, phaseArg: string, raw: boolean): voi
     );
   };
 
-  if (statEvidence(phasesDir).kind !== 'found') {
-    emitUnresolvable();
+  // The same policy as `verify schema-drift`: an ABSENT phases tree is `none` (the documented
+  // "nothing to compare" skip); one that exists but cannot be examined is `unreadable`.
+  const phasesRoot = statEvidence(phasesDir);
+  if (phasesRoot.kind === 'unreadable') {
+    emitVerbVerdict(
+      contextDriftPayload(gateUnreadable, 'phases-dir-unreadable', `Could not examine ${phasesDir} (${phasesRoot.reason})`),
+      DISPATCHED_GATE_EXIT_MODE,
+      raw,
+    );
+    return;
+  }
+  if (phasesRoot.kind === 'none') {
+    emitSkip('no-phases-directory', 'No phases directory');
     return;
   }
 
@@ -2537,7 +2557,21 @@ function runVerifySchemaDrift(
   // files_modified is no longer treated as an expected drift target, and
   // nested (#3139 layout) plans/summaries are no longer invisible to the
   // drift check.
-  const { planFiles, summaryFiles } = planScanMod.scanPhasePlans(phaseDir);
+  // A scan that did not see every plan (an existing nested plans/ that could not be read) is
+  // `unreadable`, never a short plan set: the files_modified of the plans it missed are drift targets.
+  const planScan = readPlanScanEvidence(phaseDir);
+  if (planScan.kind === 'unreadable' && !skipFlag) {
+    emitVerbVerdict(
+      schemaDriftUnreadable(
+        `schema-drift could not scan the plans of ${phaseDir} (${planScan.reason}); drift was not evaluated`,
+        { file: phaseDir, reason: planScan.reason },
+      ),
+      DISPATCHED_GATE_EXIT_MODE,
+      raw,
+    );
+    return;
+  }
+  const { planFiles, summaryFiles } = planScan.kind === 'found' ? planScan.value : { planFiles: [], summaryFiles: [] };
 
   // #5170 (ADR-5057 §4): every read here is typed evidence. A file that cannot be read is
   // `unreadable` and is reported as such — it is never "no files, so no drift". A file that
@@ -2920,29 +2954,34 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
     const withheldAll = (driftResult['withheldPaths'] as string[] | undefined) || [];
     const elementsRaw = (driftResult['elements'] as { category: string; path: string }[] | undefined) || [];
     const isSkipped = !!driftResult['skipped'];
-    emitVerbVerdict(
-      gateVerdict(isSkipped ? 'skip' : (actionRequired ? 'block' : 'pass'), actionRequired, {
-        // Uniform gate contract: block = action_required.
-        block: actionRequired,
-        skipped: isSkipped,
-        reason: driftResult['reason'] || null,
-        action_required: actionRequired,
-        directive: driftResult['directive'],
-        spawn_mapper: !!driftResult['spawnMapper'],
-        affected_paths: driftResult['affectedPaths'] || [],
-        withheld_paths: withheldAll.slice(0, WITHHELD_LIST_CAP).map((p) => display(p)),
-        withheld_count: withheldAll.length,
-        documents_read: documentsRead,
-        documents_unreadable: documentsUnreadable,
-        elements: elementsRaw.map((e) => ({ category: e.category, path: display(e.path) })),
-        threshold,
-        action,
-        last_mapped_commit: lastMapped,
-        message: driftResult['message'] || '',
-      }),
-      DISPATCHED_GATE_EXIT_MODE,
-      raw,
-    );
+    const payload = {
+      // Uniform gate contract: block = action_required.
+      block: actionRequired,
+      skipped: isSkipped,
+      reason: driftResult['reason'] || null,
+      action_required: actionRequired,
+      directive: driftResult['directive'],
+      spawn_mapper: !!driftResult['spawnMapper'],
+      affected_paths: driftResult['affectedPaths'] || [],
+      withheld_paths: withheldAll.slice(0, WITHHELD_LIST_CAP).map((p) => display(p)),
+      withheld_count: withheldAll.length,
+      documents_read: documentsRead,
+      documents_unreadable: documentsUnreadable,
+      elements: elementsRaw.map((e) => ({ category: e.category, path: display(e.path) })),
+      threshold,
+      action,
+      last_mapped_commit: lastMapped,
+      message: driftResult['message'] || '',
+    };
+    // #5170: the drift was detected over fewer documents than the map has. A BLOCKING verdict stands
+    // (more documents could only add territory the map describes); anything else was computed from
+    // evidence the gate never saw and is `unreadable` (exit UNAVAILABLE), never a clean pass or skip.
+    const verdict = actionRequired
+      ? gateVerdict('block', true, payload)
+      : documentsUnreadable.length > 0
+        ? gateUnreadable(false, payload)
+        : gateVerdict(isSkipped ? 'skip' : 'pass', false, payload);
+    emitVerbVerdict(verdict, DISPATCHED_GATE_EXIT_MODE, raw);
   } catch (err) {
     emitUnreadable('exception: ' + (err && err instanceof Error ? err.message : String(err)));
   }
