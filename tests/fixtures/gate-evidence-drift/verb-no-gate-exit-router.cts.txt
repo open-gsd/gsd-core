@@ -1,0 +1,12 @@
+// Router fixture for verb-no-gate-exit.cts.txt: the `verify` router's dispatch table, as the guard
+// discovers it (`verify.<fn>` calls inside `routeVerifyCommand`).
+interface VerifyModule {
+  cmdFixtureVerb(raw: boolean): void;
+}
+
+export function routeVerifyCommand({ verify, raw }: { verify: VerifyModule; raw: boolean }): void {
+  const handlers = {
+    fixture: () => verify.cmdFixtureVerb(raw),
+  };
+  void handlers;
+}

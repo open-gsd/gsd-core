@@ -1,0 +1,7 @@
+// Positive control (#5170): `fs.existsSync` in a gate answers false for "absent" AND for "could not
+// examine" (an EACCES on a parent), so a gate certifies "nothing to check" over evidence it never saw.
+import fs from 'node:fs';
+
+export function contextExists(contextPath: string): boolean {
+  return fs.existsSync(contextPath);
+}

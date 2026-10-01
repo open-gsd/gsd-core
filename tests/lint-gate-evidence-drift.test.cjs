@@ -19,7 +19,7 @@ const fc = require('fast-check');
 
 const { cleanup } = require('./helpers.cjs');
 const {
-  scanText, scanRepo, census, loadParser, RULES, ALLOWLIST,
+  scanText, scanSources, scanRepo, census, loadParser, RULES, ALLOWLIST, ROUTERS,
 } = require('../scripts/lint-gate-evidence-drift.cjs');
 
 const ROOT = path.join(__dirname, '..');
@@ -32,8 +32,12 @@ afterEach(() => { while (dirs.length > 0) cleanup(dirs.pop()); });
 /** Positive controls: fixture, the host kind it is scanned as, and the exact rule set it must trip. */
 const POSITIVE_CONTROLS = [
   { fixture: 'empty-catch.cts.txt', host: 'gate', rules: [RULES.EMPTY_CATCH] },
-  { fixture: 'pass-shaped-catch.cts.txt', host: 'gate', rules: [RULES.PASS_SHAPED_CATCH] },
+  // Its `return false` catch guards a `statSync`, so it is also the exists-collapse shape.
+  { fixture: 'pass-shaped-catch.cts.txt', host: 'gate', rules: [RULES.EXISTS_COLLAPSE, RULES.PASS_SHAPED_CATCH] },
   { fixture: 'read-if-exists.cts.txt', host: 'any', rules: [RULES.READ_IF_EXISTS] },
+  { fixture: 'exists-sync.cts.txt', host: 'gate', rules: [RULES.EXISTS_COLLAPSE] },
+  // The same collapse written by hand: a `statSync` in a `try` whose `catch` answers `false` is also a pass-shaped catch.
+  { fixture: 'stat-in-try-collapse.cts.txt', host: 'gate', rules: [RULES.EXISTS_COLLAPSE, RULES.PASS_SHAPED_CATCH] },
   { fixture: 'verb-process-exit-code.cts.txt', host: 'verb', rules: [RULES.VERB_OWNS_EXIT] },
   { fixture: 'verb-process-exit.cts.txt', host: 'verb', rules: [RULES.VERB_OWNS_EXIT] },
   { fixture: 'verb-numeric-return.cts.txt', host: 'verb', rules: [RULES.VERB_OWNS_EXIT] },
@@ -69,7 +73,7 @@ describe('lint-gate-evidence-drift — detects each shape (matrix row 35)', () =
   });
 
   test('the pass-shaped fixture flags both literal-returning catches (return false, assign null)', () => {
-    assert.equal(scan(readFixture('pass-shaped-catch.cts.txt'), 'gate').length, 2);
+    assert.equal(scan(readFixture('pass-shaped-catch.cts.txt'), 'gate').filter((v) => v.rule === RULES.PASS_SHAPED_CATCH).length, 2);
   });
 
   test('the unreadable-branch fixture flags the `if` arm and ignores the non-unreadable `case`/default arms', () => {
@@ -97,7 +101,7 @@ describe('lint-gate-evidence-drift — positive controls and the clean control (
     assert.deepEqual(scan(passShaped, 'gate'), []);
     const arm = readFixture('unreadable-arm-pass.cts.txt').replace("unreadable: (reason) => gateVerdict('skip', false, { reason })", 'unreadable: (reason) => gateUnreadable(false, { reason })');
     assert.deepEqual(scan(arm, 'gate'), []);
-    const catchNoExit = readFixture('verb-catch-no-exit.cts.txt').replace("output({ block: false, message: 'exception: ' + String(err) }, raw);", "output({ block: false }, raw);\n    declareGateExit({ outcome: 'unreadable' }, 'status');");
+    const catchNoExit = readFixture('verb-catch-no-exit.cts.txt').replace("output({ block: false, message: 'exception: ' + String(err) }, raw);", "output({ block: false }, raw);\n    declareGateExit(gateUnreadable(false, { block: false }), 'status');");
     assert.deepEqual(scan(catchNoExit, 'verb'), []);
   });
 
@@ -112,11 +116,31 @@ describe('lint-gate-evidence-drift — positive controls and the clean control (
     assert.deepEqual(ruleSet(scan('try { a(); } catch {}', 'gate')), [RULES.EMPTY_CATCH]);
   });
 
-  test('verb hosts: only gate verb entry functions are in scope, a helper beside them is not', () => {
+  test('verb hosts: only the discovered entry functions are in scope, a helper beside them is not', () => {
     const helper = 'function helper() { try { a(); } catch {} process.exitCode = 2; }';
-    assert.deepEqual(scan(helper, 'verb', 'src/verb-fixture.cts'), []);
+    const scanVerb = (text, scopeNames) => scanText(text, { file: 'src/verb-fixture.cts', hostKinds: ['verb'], parser, scopeNames });
+    assert.deepEqual(scanVerb(helper, ['cmdPhaseUatPassed']), []);
     const entry = 'function cmdPhaseUatPassed() { try { a(); } catch {} }';
-    assert.deepEqual(ruleSet(scan(entry, 'verb', 'src/verb-fixture.cts')), [RULES.EMPTY_CATCH]);
+    assert.deepEqual(ruleSet(scanVerb(entry, ['cmdPhaseUatPassed'])), [RULES.EMPTY_CATCH]);
+    // Scope is the discovered set, not a hard-coded name: the same function, not named, is out of scope.
+    assert.deepEqual(scanVerb(entry, []), []);
+  });
+
+  test('exists-collapse in a verb host applies inside the verb scope only', () => {
+    const text = 'function cmdFixture() { return fs.existsSync(p); }\nfunction helper() { return fs.existsSync(q); }';
+    const scanVerb = (scopeNames) => scanText(text, { file: 'src/verb-fixture.cts', hostKinds: ['verb'], parser, scopeNames });
+    assert.deepEqual(scanVerb(['cmdFixture']).map((v) => v.symbol), ['cmdFixture']);
+    assert.deepEqual(scanVerb([]), []);
+  });
+
+  test('exists-collapse boundaries: a statSync in try with a rethrowing / evidence-returning catch is not flagged', () => {
+    const flagged = (body) => ruleSet(scan(`function f() { try { return fs.statSync(p); } catch (err) { ${body} } }`, 'gate'));
+    assert.deepEqual(flagged('return false;'), [RULES.EXISTS_COLLAPSE, RULES.PASS_SHAPED_CATCH]);
+    assert.deepEqual(flagged('return null;'), [RULES.EXISTS_COLLAPSE, RULES.PASS_SHAPED_CATCH]);
+    assert.deepEqual(flagged('throw err;'), []);
+    assert.deepEqual(flagged('return evidenceFromError(err, p);'), []);
+    // A statSync OUTSIDE the try block (in the handler or after it) is not the collapsed probe.
+    assert.deepEqual(ruleSet(scan('function f() { try { a(); } catch (err) { record(err); } return fs.statSync(p); }', 'gate')), []);
   });
 
   test('the exit seam itself (src/gate-exit.cts) may declare the outcome; any other gate module may not', () => {
@@ -196,31 +220,53 @@ describe('lint-gate-evidence-drift — fail-closed', () => {
   }
 
   test('a tree with no gate hosts and no verb hosts is a problem, not a clean scan', () => {
-    const result = scanRepo(scratchRoot({ 'other.cts': 'export const x = 1;\n' }), parser);
+    const result = scanRepo(scratchRoot({ 'other.cts': 'export const x = 1;\n' }), parser, { routers: [] });
     assert.deepEqual(result.violations, []);
     assert.equal(result.problems.length, 2);
   });
 
   test('a gate host the parser cannot read fails the scan instead of being skipped', () => {
     const dir = scratchRoot({ 'gate-broken.cts': 'export const = ;\n' });
-    assert.throws(() => scanRepo(dir, parser));
+    assert.throws(() => scanRepo(dir, parser, { routers: [] }));
   });
 
   test('a gate host with an empty catch, in a scratch tree, is reported with its file and line', () => {
     const dir = scratchRoot({
       'gate-fixture.cts': 'export function f() {\n  try { a(); } catch {}\n}\n',
-      'verb-fixture.cts': "import { declareGateExit } from './gate-exit.cjs';\nexport function cmd() { declareGateExit({ outcome: 'pass' }, 'status'); }\n",
+      'verb-fixture.cts': "import { declareGateExit } from './gate-exit.cjs';\nexport function cmd() { declareGateExit(gateVerdict('pass', false, {}), 'status'); }\n",
     });
-    const result = scanRepo(dir, parser);
-    assert.deepEqual(result.violations, [{ file: 'src/gate-fixture.cts', rule: RULES.EMPTY_CATCH, line: 2 }]);
+    const result = scanRepo(dir, parser, { routers: [] });
+    assert.deepEqual(result.violations, [{ file: 'src/gate-fixture.cts', rule: RULES.EMPTY_CATCH, line: 2, symbol: 'f' }]);
     assert.deepEqual(result.verbHosts, ['src/verb-fixture.cts']);
   });
 });
 
 describe('lint-gate-evidence-drift — census over the real tree (matrix row 37)', () => {
-  test('the allowlist is empty: the guard tolerates no site', () => {
+  test('the allowlist holds exactly one justified site: `missingOnDisk` in finalizeFiles (gate-evaluation-scope)', () => {
     assert.ok(Array.isArray(ALLOWLIST) && Object.isFrozen(ALLOWLIST));
-    assert.equal(ALLOWLIST.length, 0);
+    assert.deepEqual(
+      ALLOWLIST.map(({ file, rule, symbol }) => ({ file, rule, symbol })),
+      [{ file: 'src/gate-evaluation-scope.cts', rule: RULES.EXISTS_COLLAPSE, symbol: 'finalizeFiles' }],
+    );
+    assert.match(ALLOWLIST[0].reason, /ADR-5057/);
+    assert.match(ALLOWLIST[0].reason, /missingOnDisk/);
+  });
+
+  test('the allowlisted site is real and tolerated: without the entry it is the one finding, with it the tree is clean', () => {
+    const withoutAllowlist = scanRepo(ROOT, parser, { allowlist: [] });
+    assert.deepEqual(
+      withoutAllowlist.violations.map(({ file, rule, symbol }) => ({ file, rule, symbol })),
+      [{ file: 'src/gate-evaluation-scope.cts', rule: RULES.EXISTS_COLLAPSE, symbol: 'finalizeFiles' }],
+    );
+    const tolerated = scanRepo(ROOT, parser);
+    assert.deepEqual(tolerated.violations, []);
+    assert.equal(tolerated.allowlisted.length, 1);
+  });
+
+  test('a stale allowlist entry (matching nothing) is a problem, not silently kept', () => {
+    const stale = { file: 'src/gate-evaluation-scope.cts', rule: RULES.EXISTS_COLLAPSE, symbol: 'noSuchFunction', reason: 'ADR-5057' };
+    const result = scanRepo(ROOT, parser, { allowlist: [...ALLOWLIST, stale] });
+    assert.ok(result.problems.some((p) => /noSuchFunction/.test(p)), JSON.stringify(result.problems));
   });
 
   test('the census is zero in every class, over a non-trivial set of hosts', () => {
@@ -228,12 +274,17 @@ describe('lint-gate-evidence-drift — census over the real tree (matrix row 37)
     assert.deepEqual(counts.problems, []);
     assert.ok(counts.gateHosts > 15, `expected the gate modules to be scanned, saw ${counts.gateHosts}`);
     assert.ok(counts.verbHosts >= 3, `expected the gate verb hosts (router, phase, verify), saw ${counts.verbHosts}`);
+    assert.ok(counts.entries >= 20, `expected the discovered gate verb entries, saw ${counts.entries}`);
     assert.equal(counts.emptyCatches, 0);
     assert.equal(counts.passShapedCatches, 0);
     assert.equal(counts.readIfExists, 0);
+    assert.equal(counts.existsCollapse, 0);
     assert.equal(counts.verbOwnsExit, 0);
     assert.equal(counts.unreadableArmPasses, 0);
     assert.equal(counts.verbCatchNoExit, 0);
+    assert.equal(counts.verbNoGateExit, 0);
+    assert.equal(counts.verdictOwnsExit, 0);
+    assert.equal(counts.allowlisted, 1, 'the one tolerated, named site');
     assert.equal(counts.total, 0);
   });
 
@@ -241,6 +292,92 @@ describe('lint-gate-evidence-drift — census over the real tree (matrix row 37)
     const { verbHosts } = scanRepo(ROOT, parser);
     for (const file of ['src/check-command-router.cts', 'src/phase.cts', 'src/verify.cts']) {
       assert.ok(verbHosts.includes(file), `${file} imports the exit seam and must be scanned as a verb host`);
+    }
+  });
+});
+
+describe('lint-gate-evidence-drift — gate verb entries are discovered, not listed', () => {
+  const GATE_STUB = { file: 'src/gate-stub.cts', text: 'export const stub = 1;\n' };
+  const ROUTER = 'src/verify-command-router.cts';
+
+  function tree(extra) {
+    return scanSources([GATE_STUB, ...extra], parser, { routers: [ROUTERS[0]], allowlist: [] });
+  }
+
+  test('the real routers discover the verbs the phase wires, by name, from the dispatch tables', () => {
+    const { entries } = scanRepo(ROOT, parser);
+    const names = (router) => entries.filter((e) => e.router === router).map((e) => e.name);
+    for (const name of ['cmdVerifyPlanStructure', 'cmdVerifyPhaseCompleteness', 'cmdVerifyReferences', 'cmdVerifyCommits',
+      'cmdVerifyArtifacts', 'cmdVerifyKeyLinks', 'cmdVerifySchemaDrift', 'cmdVerifyCodebaseDrift', 'cmdVerifyContextDrift']) {
+      assert.ok(names('verify').includes(name), `${name} is dispatched by the verify router`);
+    }
+    assert.deepEqual(names('phase'), ['cmdPhaseUatPassed']);
+    for (const name of ['cmdUiPlanGate', 'cmdTddReviewCheckpoint', 'cmdApiCoverageVerifyPre', 'cmdCheckPredicate', 'routeProhibitionEnforcement']) {
+      assert.ok(names('check').includes(name), `${name} is dispatched by the check router`);
+    }
+  });
+
+  test('a router that yields no entries is a problem, not a clean scan (fail-closed)', () => {
+    const result = tree([{ file: ROUTER, text: 'export function routeVerifyCommand() {}\n' }]);
+    assert.ok(result.problems.some((p) => /yielded no gate verb entries/.test(p)), JSON.stringify(result.problems));
+  });
+
+  test('a router file that was not scanned is a problem', () => {
+    const result = tree([]);
+    assert.ok(result.problems.some((p) => /was not scanned/.test(p)), JSON.stringify(result.problems));
+  });
+
+  test('a dispatched entry with no definition is a problem', () => {
+    const result = tree([{ file: ROUTER, text: readFixture('verb-no-gate-exit-router.cts.txt') }]);
+    assert.ok(result.problems.some((p) => /cmdFixtureVerb .* has no definition/.test(p)), JSON.stringify(result.problems));
+  });
+
+  test('verb-no-gate-exit: a dispatched verb that prints its verdict and never declares its exit is flagged (positive control)', () => {
+    const result = tree([
+      { file: ROUTER, text: readFixture('verb-no-gate-exit-router.cts.txt') },
+      { file: 'src/verb-fixture.cts', text: readFixture('verb-no-gate-exit.cts.txt') },
+    ]);
+    assert.deepEqual(result.problems, []);
+    assert.deepEqual(
+      result.violations.filter((v) => v.rule === RULES.VERB_NO_GATE_EXIT).map(({ file, symbol }) => ({ file, symbol })),
+      [{ file: 'src/verb-fixture.cts', symbol: 'cmdFixtureVerb' }],
+    );
+  });
+
+  test('verb-no-gate-exit: the same verb is clean once it reaches declareGateExit, directly or through a helper', () => {
+    const direct = readFixture('verb-no-gate-exit.cts.txt').replace('output({ valid: false, errors: [\'something is wrong\'] }, raw);', 'output({ valid: false }, raw);\n  declareGateExit(gateVerdict(\'block\', true, {}), \'status\');');
+    assert.ok(direct.includes('declareGateExit'));
+    const viaHelper = [
+      "import { output } from './io.cjs';",
+      "import { declareGateExit } from './gate-exit.cjs';",
+      'function emit(raw: boolean): void { output({ valid: false }, raw); declareGateExit(verdict, "status"); }',
+      'export function cmdFixtureVerb(raw: boolean): void { emit(raw); }',
+    ].join('\n');
+    for (const text of [direct, viaHelper]) {
+      const result = tree([
+        { file: ROUTER, text: readFixture('verb-no-gate-exit-router.cts.txt') },
+        { file: 'src/verb-fixture.cts', text },
+      ]);
+      assert.deepEqual(result.violations.filter((v) => v.rule === RULES.VERB_NO_GATE_EXIT), []);
+    }
+  });
+
+  test('verdict-owns-exit: a function anywhere that prints a verdict-shaped payload and sets the exit itself is flagged (positive control)', () => {
+    const result = tree([{ file: 'src/other.cts', text: readFixture('verdict-owns-exit.cts.txt') }]);
+    assert.deepEqual(
+      result.violations.filter((v) => v.rule === RULES.VERDICT_OWNS_EXIT).map(({ file, symbol }) => ({ file, symbol })),
+      [{ file: 'src/other.cts', symbol: 'cmdFixtureReport' }],
+    );
+  });
+
+  test('verdict-owns-exit boundaries: a non-verdict payload, or declaring the exit through the seam, is not flagged', () => {
+    const flagged = (text) => tree([{ file: 'src/other.cts', text }]).violations.filter((v) => v.rule === RULES.VERDICT_OWNS_EXIT).length;
+    assert.equal(flagged("function f(raw) { output({ items: [] }, raw); process.exitCode = 1; }"), 0);
+    assert.equal(flagged("function f(raw) { output({ valid: true }, raw); }"), 0);
+    assert.equal(flagged("function f(raw) { const r = { block: true }; output(r, raw); process.exitCode = 1; }"), 1);
+    assert.equal(flagged("function f(raw) { output({ block: true }, raw); process.exitCode = 1; declareGateExit(v, 'status'); }"), 0);
+    for (const key of ['passed', 'valid', 'all_passed', 'block', 'blocking', 'drift_detected']) {
+      assert.equal(flagged(`function f(raw) { output({ ${key}: true }, raw); process.exitCode = 1; }`), 1, key);
     }
   });
 });

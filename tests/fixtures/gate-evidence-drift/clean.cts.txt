@@ -25,10 +25,10 @@ export function cmdFixtureVerb(run: () => void, raw: boolean): void {
   try {
     run();
     output({ passed: true }, raw);
-    declareGateExit({ outcome: 'pass' }, 'status');
+    declareGateExit(gateVerdict('pass', false, { passed: true }), 'status');
   } catch (err) {
     output({ block: false, message: 'exception: ' + String(err) }, raw);
-    declareGateExit({ outcome: 'unreadable' }, 'status');
+    declareGateExit(gateUnreadable(false, { block: false }), 'status');
   }
 }
 

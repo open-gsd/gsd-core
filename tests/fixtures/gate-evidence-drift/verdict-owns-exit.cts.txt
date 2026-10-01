@@ -1,0 +1,8 @@
+// Positive control (#5170): a function anywhere in src/ that prints a verdict-shaped payload AND
+// assigns the process exit itself, without declaring it from the verdict through the exit seam.
+import { output } from './io.cjs';
+
+export function cmdFixtureReport(passed: boolean, raw: boolean): void {
+  output({ passed, errors: [] }, raw);
+  if (!passed) process.exitCode = 1;
+}

@@ -1,0 +1,7 @@
+// Positive control (#5170): a gate verb entry (dispatched by the router fixture beside it) that prints
+// its verdict and never declares the exit from it — the verb owns its exit, or leaves it to output().
+import { output } from './io.cjs';
+
+export function cmdFixtureVerb(raw: boolean): void {
+  output({ valid: false, errors: ['something is wrong'] }, raw);
+}

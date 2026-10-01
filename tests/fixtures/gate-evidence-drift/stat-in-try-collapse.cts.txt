@@ -1,0 +1,11 @@
+// Positive control (#5170): a `statSync` inside a `try` whose `catch` answers a literal `false` — the
+// same collapse of "absent" and "could not examine" that `fs.existsSync` has, written by hand.
+import fs from 'node:fs';
+
+export function isDirectory(target: string): boolean {
+  try {
+    return fs.statSync(target).isDirectory();
+  } catch {
+    return false;
+  }
+}
