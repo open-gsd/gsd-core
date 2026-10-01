@@ -669,6 +669,8 @@ Runtime-neutral predicate that evaluates HUMAN-UAT results for a phase and repor
 | `no_uat_artifacts` | `boolean` | `true` when no real UAT test items were parsed (no `*-UAT.md` files, unreadable dir, or files with no test blocks); when `true`, `passed` is always `false` |
 | `policy.require_verification` | `boolean` | Whether `--require-verification` was active |
 
+**Exit status:** `0` when `passed` is `true`, `1` when it is `false` (#5170). The JSON on stdout is the verdict either way, so a caller reads it for `exit 0` and `exit 1` and treats any other status as "could not run".
+
 **Programmatic access:** `node gsd-tools.cjs phase uat-passed <N> [--require-verification] [--raw]` — see [CLI Tools Reference](CLI-TOOLS.md)
 
 ```bash

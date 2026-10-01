@@ -58,6 +58,7 @@ const {
 } = phaseIdMod;
 import { escapeRegex } from './pattern.cjs';
 import { declareGateExit } from './gate-exit.cjs';
+import { gateVerdict } from './gate-verdict.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
 import phaseLocatorMod = require('./phase-locator.cjs');
 const { findPhaseInternal, getArchivedPhaseDirs, listMilestonePhaseDirs, listAllPhaseDirs } = phaseLocatorMod;
@@ -5075,7 +5076,7 @@ function cmdPhaseUatPassed(
   output({ phase: phaseNum, ...report }, raw);
   // #5170: the exit status follows the verdict (status mode: a failing verdict is exit 1). Declared
   // AFTER output(), which rewrites the pending-outcome cell. The JSON above is unchanged.
-  declareGateExit({ outcome: report.passed ? 'pass' : 'block' }, 'status');
+  declareGateExit(gateVerdict(report.passed ? 'pass' : 'block', !report.passed, { phase: phaseNum, ...report }), 'status');
 }
 
 // #1437 — phase.list-plans: list plan files for a given phase number.

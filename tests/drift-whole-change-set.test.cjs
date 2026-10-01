@@ -1078,9 +1078,11 @@ describe('verify codebase-drift CLI — display safety and document reads (#5134
     write('.planning/config.json', JSON.stringify({ workflow }, null, 2));
   }
 
-  function drift() {
+  // `expectedExit`: 0 for a delivered answer (a skip included), 69 (UNAVAILABLE) when the gate could not
+  // read its evidence (#5170) — the payload is the same non-blocking skip either way.
+  function drift(expectedExit = 0) {
     const r = runGsdTools(['verify', 'codebase-drift'], tmp);
-    assert.strictEqual(r.success, true, r.error);
+    assert.strictEqual(r.exitCode, expectedExit, r.error);
     return { data: JSON.parse(r.output), raw: r.output };
   }
 
@@ -1115,7 +1117,7 @@ describe('verify codebase-drift CLI — display safety and document reads (#5134
 
   test('STRUCTURE.md at 1048577 bytes is skipped, naming the size limit', () => {
     mappedRepo(() => padTo(path.join(codebaseDir, 'STRUCTURE.md'), LIMIT + 1));
-    const { data } = drift();
+    const { data } = drift(69);
     assert.strictEqual(data.skipped, true);
     assert.strictEqual(data.reason, 'cannot-read-structure-md: larger than 1048576 bytes');
     assert.strictEqual(data.action_required, false);
@@ -1128,7 +1130,7 @@ describe('verify codebase-drift CLI — display safety and document reads (#5134
       fs.unlinkSync(path.join(codebaseDir, 'STRUCTURE.md'));
       fs.mkdirSync(path.join(codebaseDir, 'STRUCTURE.md'));
     });
-    const { data } = drift();
+    const { data } = drift(69);
     assert.strictEqual(data.skipped, true);
     assert.strictEqual(data.reason, 'cannot-read-structure-md: not a regular file');
   });

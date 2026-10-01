@@ -49,6 +49,8 @@ import io = require('./io.cjs');
 const { output, error, ERROR_REASON } = io;
 import { dispositionForProhibition } from './probe-core.cjs';
 import type { ProhibitionDisposition } from './probe-core.cjs';
+import { gateVerdict } from './gate-verdict.cjs';
+import { declareGateExit } from './gate-exit.cjs';
 
 /** The two accepted wired-check kinds (ADR-550 D2). */
 export type CheckKind = 'node-test' | 'lint-rule';
@@ -868,7 +870,11 @@ export function routeProhibitionEnforcement(args: string[], raw: boolean): void 
     return;
   }
   const result = runProhibitionEnforcement(req.prohibition, req.check, req.mode ? { mode: req.mode } : {});
-  output(result, raw, undefined);
+  // A producer, not a blocking gate: its disposition is a delivered answer (an advisory verdict) and
+  // the exit status follows it through the seam like every other `check <verb>` (#5170, payload mode).
+  const verdict = gateVerdict('advisory', false, { ...result });
+  output(verdict.payload, raw, undefined);
+  declareGateExit(verdict, 'payload');
 }
 
 export {};

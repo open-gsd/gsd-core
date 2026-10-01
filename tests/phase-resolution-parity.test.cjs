@@ -421,8 +421,15 @@ describe('#2528 consumer parity — the eight sites migrated to matchPhaseDirs',
         'next-decimal disagreed on whether the base phase exists',
       );
 
-      // 3. verify schema-drift
-      const drift = json(`verify schema-drift ${query}`, tmpDir);
+      // 3. verify schema-drift — an unresolvable phase is "could not look" (#5170): the same JSON
+      // message, but exit UNAVAILABLE (69) instead of a clean exit 0.
+      const driftRun = runGsdTools(`verify schema-drift ${query}`, tmpDir);
+      assert.strictEqual(
+        driftRun.exitCode,
+        resolves ? 0 : 69,
+        `schema-drift exit status disagreed on whether the phase resolves: ${driftRun.error}`,
+      );
+      const drift = JSON.parse(driftRun.output);
       assert.strictEqual(
         drift.message === `Phase directory not found: ${query}`,
         !resolves,

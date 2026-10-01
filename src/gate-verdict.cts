@@ -15,8 +15,12 @@
  * Pure: no I/O, no imports.
  */
 
-/** How a gate's arm ended. `block` is carried separately: a gate can be advisory yet block, etc. */
-export type GateOutcome = 'pass' | 'block' | 'skip' | 'advisory' | 'unreadable';
+/**
+ * How a gate's arm ended. `block` is carried separately: a gate can be advisory yet block, etc.
+ * `empty` (#5170) is "the gate ran and the scope it evaluates is genuinely empty" (a plan with no
+ * `must_haves.artifacts` block): distinct from `unreadable` (could not look) and from `pass`.
+ */
+export type GateOutcome = 'pass' | 'block' | 'skip' | 'advisory' | 'unreadable' | 'empty';
 
 declare const unreadableBrand: unique symbol;
 

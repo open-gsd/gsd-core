@@ -84,7 +84,7 @@ describe('verify context-drift CLI', () => {
 
   test('treats a whitespace phase arg as not found, not a usage error', () => {
     const r = runGsdTools(['verify', 'context-drift', '   '], tmp);
-    assert.strictEqual(r.success, true, r.error);
+    assert.strictEqual(r.exitCode, 69, `a phase that does not resolve is could-not-look: UNAVAILABLE with the non-blocking JSON (#5170): ${r.error}`);
     const data = JSON.parse(r.output);
     assert.strictEqual(data.skipped, true);
     assert.strictEqual(data.reason, 'phase-not-found');
@@ -92,7 +92,7 @@ describe('verify context-drift CLI', () => {
 
   test('degrades gracefully for an unresolvable phase', () => {
     const r = runGsdTools(['verify', 'context-drift', '99'], tmp);
-    assert.strictEqual(r.success, true, r.error);
+    assert.strictEqual(r.exitCode, 69, `a phase that does not resolve is could-not-look: UNAVAILABLE with the non-blocking JSON (#5170): ${r.error}`);
     const data = JSON.parse(r.output);
     assert.strictEqual(data.skipped, true);
     assert.strictEqual(data.reason, 'phase-not-found');
@@ -101,7 +101,7 @@ describe('verify context-drift CLI', () => {
 
   test('does not interpret shell metacharacters in the phase arg', () => {
     const r = runGsdTools(['verify', 'context-drift', '1; echo pwned'], tmp);
-    assert.strictEqual(r.success, true, r.error);
+    assert.strictEqual(r.exitCode, 69, `a phase that does not resolve is could-not-look: UNAVAILABLE with the non-blocking JSON (#5170): ${r.error}`);
     const data = JSON.parse(r.output);
     assert.strictEqual(data.skipped, true);
     assert.strictEqual(data.reason, 'phase-not-found');
@@ -109,7 +109,7 @@ describe('verify context-drift CLI', () => {
 
   test('does not path-traverse via a hostile phase arg', () => {
     const r = runGsdTools(['verify', 'context-drift', '../../etc'], tmp);
-    assert.strictEqual(r.success, true, r.error);
+    assert.strictEqual(r.exitCode, 69, `a phase that does not resolve is could-not-look: UNAVAILABLE with the non-blocking JSON (#5170): ${r.error}`);
     const data = JSON.parse(r.output);
     assert.strictEqual(data.skipped, true);
     assert.strictEqual(data.reason, 'phase-not-found');
@@ -122,7 +122,7 @@ describe('verify context-drift CLI', () => {
     // reason). validatePath must reject this by real-path containment, not by
     // accidental non-existence.
     const r = runGsdTools(['verify', 'context-drift', '../../../../../../../../../../etc'], tmp);
-    assert.strictEqual(r.success, true, r.error);
+    assert.strictEqual(r.exitCode, 69, `a phase that does not resolve is could-not-look: UNAVAILABLE with the non-blocking JSON (#5170): ${r.error}`);
     const data = JSON.parse(r.output);
     assert.strictEqual(data.skipped, true);
     assert.strictEqual(data.reason, 'phase-not-found');
@@ -397,17 +397,19 @@ describe('verify context-drift CLI', () => {
     assert.strictEqual(data.reason, 'no-upstream-artifacts');
   });
 
-  test('always exits 0 (query command contract)', () => {
-    // Only cases that are legitimately part of the "always exits 0" JSON-output
-    // contract belong here — a missing phase arg is a DIFFERENT, already-covered
-    // contract ('errors with usage message on missing phase arg' above correctly
-    // asserts exitCode !== 0 / r.success === false for exactly that case).
+  test('never exits with a failure code: a phase that does not resolve is UNAVAILABLE, not an error (#5170)', () => {
+    // A missing phase arg is a DIFFERENT, already-covered contract ('errors with usage message on
+    // missing phase arg' above asserts exitCode !== 0 / r.success === false for exactly that case).
+    // A phase that does not resolve is the gate saying "could not look": the non-blocking JSON is
+    // printed and the exit status is UNAVAILABLE (69) — which the plan-phase consumer treats as a
+    // skipped, advisory check (it never halts planning), not as a command error.
     const cases = [
       ['verify', 'context-drift', '99'],
     ];
     for (const args of cases) {
       const r = runGsdTools(args, tmp);
-      assert.strictEqual(r.exitCode, 0, `args=${JSON.stringify(args)} exitCode=${r.exitCode}`);
+      assert.strictEqual(r.exitCode, 69, `args=${JSON.stringify(args)} exitCode=${r.exitCode}`);
+      assert.strictEqual(JSON.parse(r.output).block, false, 'the payload stays non-blocking');
     }
   });
 });

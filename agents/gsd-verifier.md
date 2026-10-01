@@ -255,7 +255,7 @@ ARTIFACT_RESULT=$(gsd_run query verify.artifacts "$PLAN_PATH") && ARTIFACT_EXIT=
 
 Parse JSON result: `{ all_passed, passed, total, artifacts: [{path, exists, issues, passed}] }`
 
-The exit status follows the verdict (#5170): exit `0` = every artifact passed, exit `1` = the verdict is negative (`all_passed: false`) — the JSON on stdout is still authoritative, so read it and map each artifact below. Exit `69` (`UNAVAILABLE`) means there was nothing to evaluate (the plan file is missing or has no `must_haves.artifacts`; the JSON carries `error`): report it as an unevaluated Step 4, never as VERIFIED.
+The exit status follows the verdict (#5170): exit `0` = every artifact passed, exit `1` = the verdict is negative (`all_passed: false`) — the JSON on stdout is still authoritative, so read it and map each artifact below. Exit `66` (`NO_INPUT`) means the plan was read and declares no `must_haves.artifacts`: there is nothing to verify, so report Step 4 as not applicable for that plan, never as VERIFIED. Exit `69` (`UNAVAILABLE`) means the verb could not look (the plan file is missing or unreadable; the JSON carries `error`): report an unevaluated Step 4, never as VERIFIED. Any other status means the verb did not run.
 
 For each artifact in result:
 - `exists=false` → MISSING
@@ -328,10 +328,12 @@ Key links are critical connections. If broken, the goal fails even with all arti
 Use `gsd-tools query` for key link verification against must_haves in PLAN frontmatter:
 
 ```bash
-LINKS_RESULT=$(gsd_run query verify.key-links "$PLAN_PATH")
+LINKS_RESULT=$(gsd_run query verify.key-links "$PLAN_PATH") && LINKS_EXIT=0 || LINKS_EXIT=$?
 ```
 
 Parse JSON result: `{ all_verified, verified, total, links: [{from, to, via, verified, detail}] }`
+
+The exit status follows the verdict (#5170): exit `0` = every link verified, exit `1` = the verdict is negative (`all_verified: false`) — the JSON is still authoritative, so read it. Exit `66` (`NO_INPUT`) = the plan was read and declares no `must_haves.key_links` (nothing to verify). Exit `69` (`UNAVAILABLE`) = the plan file is missing or unreadable (could not look): report Step 5 as unevaluated, never as WIRED.
 
 For each link:
 - `verified=true` → WIRED
@@ -389,7 +391,8 @@ SUMMARY_FILES=$(gsd_run query summary-extract "$PHASE_DIR"/*-SUMMARY.md --fields
 # Option 2: Verify commits exist (if commit hashes documented)
 COMMIT_HASHES=$(grep -oE "[a-f0-9]{7,40}" "$PHASE_DIR"/*-SUMMARY.md | head -10)
 if [ -n "$COMMIT_HASHES" ]; then
-  COMMITS_VALID=$(gsd_run query verify.commits $COMMIT_HASHES)
+  # Exit 0 = every hash is a commit, exit 1 = at least one is not (read the JSON); 69 = not a git repo (could not look).
+  COMMITS_VALID=$(gsd_run query verify.commits $COMMIT_HASHES) && COMMITS_EXIT=0 || COMMITS_EXIT=$?
 fi
 
 # Fallback: grep for files

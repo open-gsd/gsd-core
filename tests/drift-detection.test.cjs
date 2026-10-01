@@ -1374,7 +1374,7 @@ describe('verify codebase-drift: an absent baseline is not total drift (#3418)',
     writeMappedCommit(structure, 'deadbeef'.repeat(5), '2026-04-22');
 
     const r = runGsdTools(['verify', 'codebase-drift'], tmp);
-    assert.strictEqual(r.success, true, r.error);
+    assert.strictEqual(r.exitCode, 69, `a baseline git cannot resolve is could-not-look: UNAVAILABLE (#5170): ${r.error}`);
     const data = JSON.parse(r.output);
 
     assert.strictEqual(data.reason, 'unresolvable-mapped-commit');
@@ -1392,7 +1392,7 @@ describe('verify codebase-drift: an absent baseline is not total drift (#3418)',
     writeMappedCommit(structure, tree, '2026-04-22');
 
     const r = runGsdTools(['verify', 'codebase-drift'], tmp);
-    assert.strictEqual(r.success, true, r.error);
+    assert.strictEqual(r.exitCode, 69, `a baseline git cannot resolve is could-not-look: UNAVAILABLE (#5170): ${r.error}`);
     const data = JSON.parse(r.output);
 
     assert.strictEqual(data.reason, 'unresolvable-mapped-commit');

@@ -22,7 +22,7 @@ import type { Decision } from './decisions.cjs';
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { stripFencedCode, collectSections, extractXmlTagBodies } from './markdown-sectionizer.cjs';
 import { tryWithinRoot, PathAcceptance } from './security.cjs';
-import { readDirEvidence, readTextEvidence } from './gate-evidence.cjs';
+import { readDirEvidence, readTextEvidence, evidenceFound } from './gate-evidence.cjs';
 import type { Evidence, Observed } from './gate-evidence.cjs';
 import { resolveEvaluationScope } from './gate-evaluation-scope.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -67,7 +67,7 @@ export function decisionMentioned(haystack: string | null | undefined, decision:
  */
 function readPhaseFiles(phaseDir: string, pick: (scan: ReturnType<typeof scanPhasePlans>) => string[]): Observed<string[]> {
   const entries = readDirEvidence(phaseDir);
-  if (entries.kind === 'none') return { kind: 'found', value: [] };
+  if (entries.kind === 'none') return evidenceFound<string[]>([]);
   if (entries.kind === 'unreadable') return entries;
   const contents: string[] = [];
   // #3183 (lint-plan-count-drift): source live plan/summary files from the single
@@ -78,7 +78,7 @@ function readPhaseFiles(phaseDir: string, pick: (scan: ReturnType<typeof scanPha
     if (read.kind === 'unreadable') return read;
     if (read.kind === 'found') contents.push(read.value);
   }
-  return { kind: 'found', value: contents };
+  return evidenceFound(contents);
 }
 
 export function loadPlanContents(phaseDir: string): Observed<string[]> {
@@ -108,14 +108,11 @@ export function loadDecisionExtraction(contextPath: string): Evidence<DecisionEx
   const read = readTextEvidence(contextPath);
   if (read.kind !== 'found') return read;
   const extraction = extractDecisions(read.value);
-  return {
-    kind: 'found',
-    value: {
-      trackable: extraction.decisions.filter((d) => d.trackable),
-      outcome: extraction.outcome,
-      unreadableIds: extraction.unreadableIds ?? [],
-    },
-  };
+  return evidenceFound({
+    trackable: extraction.decisions.filter((d) => d.trackable),
+    outcome: extraction.outcome,
+    unreadableIds: extraction.unreadableIds ?? [],
+  });
 }
 
 // ─── Plan surfaces scanned for a decision citation ────────────────────────────
@@ -258,5 +255,5 @@ export function readModifiedFilesContent(projectDir: string, summaries: string[]
       total++;
     }
   }
-  return { kind: 'found', value: out.join('\n\n') };
+  return evidenceFound(out.join('\n\n'));
 }

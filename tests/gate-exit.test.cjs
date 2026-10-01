@@ -14,7 +14,7 @@ const cliExit = require('../gsd-core/bin/lib/cli-exit.cjs');
 const { exitCodeFor } = require('../gsd-core/bin/lib/exit-code-registry.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
-const OUTCOMES = ['pass', 'skip', 'advisory', 'block', 'unreadable'];
+const OUTCOMES = ['pass', 'skip', 'advisory', 'block', 'unreadable', 'empty'];
 const MODES = ['payload', 'status'];
 const SEED = 5170;
 
@@ -26,6 +26,8 @@ function invariantProperty(mapping) {
   return fc.property(fc.constantFrom(...OUTCOMES), fc.constantFrom(...MODES), (outcome, mode) => {
     const result = mapping({ outcome }, mode);
     if (outcome === 'unreadable') return result === 'UNAVAILABLE';
+    // `empty`: ran, and the scope is genuinely empty — NO_INPUT where callers branch on status, PASS in payload mode.
+    if (outcome === 'empty') return result === (mode === 'status' ? 'NO_INPUT' : 'PASS');
     if (outcome === 'block') return result === (mode === 'status' ? 'FAIL' : 'PASS');
     return result === 'PASS';
   });
@@ -42,6 +44,7 @@ describe('gate-exit › exit outcome is total and unreadable is never PASS', () 
     assert.deepEqual([...seen].sort(), [
       'advisory/payload:PASS', 'advisory/status:PASS',
       'block/payload:PASS', 'block/status:FAIL',
+      'empty/payload:PASS', 'empty/status:NO_INPUT',
       'pass/payload:PASS', 'pass/status:PASS',
       'skip/payload:PASS', 'skip/status:PASS',
       'unreadable/payload:UNAVAILABLE', 'unreadable/status:UNAVAILABLE',
@@ -55,15 +58,23 @@ describe('gate-exit › exit outcome is total and unreadable is never PASS', () 
     // And one that lets a negative verdict exit 0 in status mode.
     const lenient = (verdict, mode) => (verdict.outcome === 'block' ? 'PASS' : gateExitOutcome(verdict, mode));
     assert.throws(() => fc.assert(invariantProperty(lenient), { seed: SEED, numRuns: 100 }), /Property failed/);
+    // And the two ways to collapse "genuinely empty" into a neighbour: unavailable (could not look) or a pass.
+    const emptyAsUnavailable = (verdict, mode) => (verdict.outcome === 'empty' ? 'UNAVAILABLE' : gateExitOutcome(verdict, mode));
+    assert.throws(() => fc.assert(invariantProperty(emptyAsUnavailable), { seed: SEED, numRuns: 100 }), /Property failed/);
+    const emptyAsPass = (verdict, mode) => (verdict.outcome === 'empty' ? 'PASS' : gateExitOutcome(verdict, mode));
+    assert.throws(() => fc.assert(invariantProperty(emptyAsPass), { seed: SEED, numRuns: 100 }), /Property failed/);
   });
 
-  test('gate-exit › the projected exit codes are 0 / 1 / 69 under v1 and v2', () => {
+  test('gate-exit › the projected exit codes are 0 / 1 / 66 / 69 under v1 and v2', () => {
     for (const version of ['v1', 'v2']) {
       assert.equal(cliExit.projectOutcome(gateExitOutcome({ outcome: 'pass' }, 'status'), version), 0);
       assert.equal(cliExit.projectOutcome(gateExitOutcome({ outcome: 'block' }, 'status'), version), 1);
       assert.equal(cliExit.projectOutcome(gateExitOutcome({ outcome: 'unreadable' }, 'payload'), version), exitCodeFor('UNAVAILABLE'));
+      assert.equal(cliExit.projectOutcome(gateExitOutcome({ outcome: 'empty' }, 'status'), version), exitCodeFor('NO_INPUT'));
+      assert.equal(cliExit.projectOutcome(gateExitOutcome({ outcome: 'empty' }, 'payload'), version), 0);
     }
     assert.equal(exitCodeFor('UNAVAILABLE'), 69);
+    assert.equal(exitCodeFor('NO_INPUT'), 66, 'NO_INPUT is the registered "ran, zero units in scope" outcome (ADR-3889)');
   });
 });
 
@@ -84,6 +95,14 @@ describe('gate-exit › declareGateExit writes the pending outcome', () => {
     cliExit.setPendingOutcome(undefined);
     assert.equal(declareGateExit({ outcome: 'block' }, 'payload'), 'PASS');
     assert.equal(cliExit.getPendingOutcome(), undefined, 'payload-mode block is a delivered verdict: nothing is declared');
+  });
+
+  test('gate-exit › an empty scope declares NO_INPUT in status mode only', () => {
+    assert.equal(declareGateExit({ outcome: 'empty' }, 'status'), 'NO_INPUT');
+    assert.equal(cliExit.getPendingOutcome(), 'NO_INPUT');
+    cliExit.setPendingOutcome(undefined);
+    assert.equal(declareGateExit({ outcome: 'empty' }, 'payload'), 'PASS');
+    assert.equal(cliExit.getPendingOutcome(), undefined, 'payload mode: an empty scope is a delivered answer, nothing is declared');
   });
 
   test('gate-exit › a passing verdict leaves the cell exactly as output() wrote it', () => {

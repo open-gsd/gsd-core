@@ -22,8 +22,11 @@
 import fs from 'node:fs';
 import type { GateVerdict, UnreadableVerdict } from './gate-verdict.cjs';
 
+/** The evidence is there; `value` is what was read. */
+export type Found<T> = { readonly kind: 'found'; readonly value: T };
+
 export type Evidence<T> =
-  | { readonly kind: 'found'; readonly value: T }
+  | Found<T>
   | { readonly kind: 'none' }
   | { readonly kind: 'unreadable'; readonly reason: string; readonly span?: string };
 
@@ -34,7 +37,7 @@ export type Evidence<T> =
  */
 export type Observed<T> = Exclude<Evidence<T>, { readonly kind: 'none' }>;
 
-export function evidenceFound<T>(value: T): Evidence<T> {
+export function evidenceFound<T>(value: T): Found<T> {
   return { kind: 'found', value };
 }
 

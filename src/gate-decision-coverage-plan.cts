@@ -49,6 +49,11 @@ function unreadableDecisionGate(readError: string): GateResult {
   });
 }
 
+/** The verdict when there is no CONTEXT.md: the legitimate green skip (authoritatively `none`, never `unreadable`). */
+function contextMissingSkip(): GateResult {
+  return gateVerdict('skip', false, { passed: true, skipped: true, reason: 'CONTEXT.md missing', total: 0, covered: 0, uncovered: [], message: 'No CONTEXT.md - nothing to check.' });
+}
+
 export function evaluateDecisionCoveragePlan(input: { projectDir: string; args: readonly string[] }): GateResult {
   const { projectDir, args } = input;
   // Partition the argv AFTER the verb so flag tokens and their values never land in a
@@ -89,7 +94,7 @@ export function evaluateDecisionCoveragePlan(input: { projectDir: string; args: 
   // EACCES on a parent too, certifying "nothing to check" over a CONTEXT.md the gate never saw.
   const contextStat = statEvidence(contextPath);
   if (contextStat.kind === 'none') {
-    return gateVerdict('skip', false, { passed: true, skipped: true, reason: 'CONTEXT.md missing', total: 0, covered: 0, uncovered: [], message: 'No CONTEXT.md - nothing to check.' });
+    return contextMissingSkip();
   }
   // #4794: a NON-FILE path (a directory — the adjacent same-looking positional
   // swapped, the issue's repro 2) is a caller error like #2770's empty argument:
@@ -110,7 +115,7 @@ export function evaluateDecisionCoveragePlan(input: { projectDir: string; args: 
   const extracted = loadDecisionExtraction(contextPath);
   if (extracted.kind === 'unreadable') return unreadableDecisionGate(`${extracted.span ?? contextPath}: ${extracted.reason}`);
   if (extracted.kind === 'none') {
-    return gateVerdict('skip', false, { passed: true, skipped: true, reason: 'CONTEXT.md missing', total: 0, covered: 0, uncovered: [], message: 'No CONTEXT.md - nothing to check.' });
+    return contextMissingSkip();
   }
   const { trackable: decisions, outcome, unreadableIds } = extracted.value;
 

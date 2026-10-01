@@ -530,7 +530,7 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
       counts: { total: 0, covered: 0, uncovered: 0 },
       phase_dir_read_error: phaseDirReadError,
       phase_dir_scope: phaseDirScope,
-        ...unreadableField(),
+      ...unreadableField(),
     };
   }
 
@@ -550,7 +550,7 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
       counts: { total: 0, covered: 0, uncovered: 0 },
       phase_dir_read_error: phaseDirReadError,
       phase_dir_scope: phaseDirScope,
-        ...unreadableField(),
+      ...unreadableField(),
     };
   }
 
@@ -573,7 +573,7 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
     counts: { total: rows.length, covered, uncovered },
     phase_dir_read_error: phaseDirReadError,
     phase_dir_scope: phaseDirScope,
-        ...unreadableField(),
+    ...unreadableField(),
   };
 }
 

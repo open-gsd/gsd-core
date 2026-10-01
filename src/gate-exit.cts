@@ -7,6 +7,8 @@
  *   pass | skip | advisory -> PASS
  *   block                  -> PASS in `payload` mode, FAIL in `status` mode
  *   unreadable             -> UNAVAILABLE in both modes (the gate could not look; never exit 0)
+ *   empty                  -> NO_INPUT in `status` mode (ADR-3889: ran, zero units in scope, and that
+ *                             emptiness is genuine), PASS in `payload` mode
  *
  * `payload` is the `check <verb>` dispatch contract: the verdict is delivered on stdout and read
  * from `.block`, so a blocking verdict is still a delivered answer (exit 0) and a non-zero status
@@ -18,14 +20,14 @@
  * A `PASS` is not declared: it is the default, and leaving the cell as `output()` set it keeps a
  * payload that legitimately carries an `error` key on its existing contract.
  */
-import type { GateOutcome } from './gate-verdict.cjs';
+import type { GateOutcome, GateVerdict } from './gate-verdict.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import cliExit = require('./cli-exit.cjs');
 
 export type GateExitMode = 'payload' | 'status';
 
 /** The registered outcome names a gate verdict can project to. */
-export type GateExitOutcome = 'PASS' | 'FAIL' | 'UNAVAILABLE';
+export type GateExitOutcome = 'PASS' | 'FAIL' | 'UNAVAILABLE' | 'NO_INPUT';
 
 export function gateExitOutcome(
   verdict: { readonly outcome: GateOutcome },
@@ -36,6 +38,8 @@ export function gateExitOutcome(
       return 'UNAVAILABLE';
     case 'block':
       return mode === 'status' ? 'FAIL' : 'PASS';
+    case 'empty':
+      return mode === 'status' ? 'NO_INPUT' : 'PASS';
     case 'pass':
     case 'skip':
     case 'advisory':
@@ -45,7 +49,7 @@ export function gateExitOutcome(
 
 /** Declare the exit outcome for a verdict. Call after `output()`, never before. */
 export function declareGateExit(
-  verdict: { readonly outcome: GateOutcome },
+  verdict: GateVerdict,
   mode: GateExitMode,
 ): GateExitOutcome {
   const outcome = gateExitOutcome(verdict, mode);

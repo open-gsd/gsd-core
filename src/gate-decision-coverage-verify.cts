@@ -40,6 +40,11 @@ function unreadableVerify(readError: string): GateResult {
   });
 }
 
+/** The verdict when there is no CONTEXT.md: the legitimate green skip (authoritatively `none`, never `unreadable`). */
+function contextMissingSkip(): GateResult {
+  return gateVerdict('skip', false, { skipped: true, blocking: false, reason: 'CONTEXT.md missing', total: 0, honored: 0, not_honored: [], message: 'No CONTEXT.md - nothing to check.' });
+}
+
 export function evaluateDecisionCoverageVerify(input: { projectDir: string; args: readonly string[] }): GateResult {
   const { projectDir, args } = input;
   let phaseDir = '';
@@ -62,13 +67,13 @@ export function evaluateDecisionCoverageVerify(input: { projectDir: string; args
   // `unreadable` below, from the one read that loads the decisions (`fs.existsSync` answered `false`
   // for an EACCES on a parent, skipping a CONTEXT.md the gate never saw — #5170).
   if (!contextPath) {
-    return gateVerdict('skip', false, { skipped: true, blocking: false, reason: 'CONTEXT.md missing', total: 0, honored: 0, not_honored: [], message: 'No CONTEXT.md - nothing to check.' });
+    return contextMissingSkip();
   }
 
   const extracted = loadDecisionExtraction(contextPath);
   if (extracted.kind === 'unreadable') return unreadableVerify(`${extracted.span ?? contextPath}: ${extracted.reason}`);
   if (extracted.kind === 'none') {
-    return gateVerdict('skip', false, { skipped: true, blocking: false, reason: 'CONTEXT.md missing', total: 0, honored: 0, not_honored: [], message: 'No CONTEXT.md - nothing to check.' });
+    return contextMissingSkip();
   }
   const { trackable: decisions, outcome: decisionOutcome } = extracted.value;
 

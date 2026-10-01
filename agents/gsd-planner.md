@@ -857,10 +857,10 @@ Returns JSON: `{ valid, missing, present, invalidValue, schema }`
 Also validate plan structure:
 
 ```bash
-STRUCTURE=$(gsd_run query verify.plan-structure "$PLAN_PATH")
+STRUCTURE=$(gsd_run query verify.plan-structure "$PLAN_PATH") && STRUCTURE_EXIT=0 || STRUCTURE_EXIT=$?
 ```
 
-Returns JSON: `{ valid, errors, warnings, task_count, tasks }`
+Returns JSON: `{ valid, errors, warnings, task_count, tasks }`. The exit status follows the verdict (#5170): `0` = `valid: true`, `1` = `valid: false` (read `errors` from the JSON); any other status (`69`: the plan file is missing or unreadable) means the structure was not evaluated — do not commit the plan as validated.
 
 **If errors exist:** Fix before committing:
 - Missing `<name>` in task → add name element

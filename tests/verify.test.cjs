@@ -25,6 +25,16 @@ const TEXT_TOOL_TIMEOUT_MS = 15000;
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
+// #5170: a verify verb that delivers a verdict exits 0 (positive) or 1 (negative); any other status
+// means it could not look. Tests whose subject is the JSON payload assert only that a verdict was
+// delivered; the exit-status mapping itself is pinned by the 'verify verb exit status' suite below.
+function assertVerdictDelivered(result) {
+  assert.ok(
+    result.exitCode === 0 || result.exitCode === 1,
+    `a verdict was delivered (exit 0 or 1), got exit ${result.exitCode}: ${result.error}`,
+  );
+}
+
 // Build a minimal valid PLAN.md content with all required frontmatter fields
 function validPlanContent({ wave = 1, dependsOn = '[]', autonomous = 'true', extraTasks = '' } = {}) {
   return [
@@ -195,7 +205,7 @@ describe('verify plan-structure command', () => {
     fs.writeFileSync(planPath, '# No frontmatter here\n\nJust a plan without YAML.\n');
 
     const result = runGsdTools('verify plan-structure .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.valid, false, 'should be invalid');
@@ -246,7 +256,7 @@ describe('verify plan-structure command', () => {
     fs.writeFileSync(planPath, content);
 
     const result = runGsdTools('verify plan-structure .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     assert.ok(
@@ -283,7 +293,7 @@ describe('verify plan-structure command', () => {
     fs.writeFileSync(planPath, content);
 
     const result = runGsdTools('verify plan-structure .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     assert.ok(
@@ -342,7 +352,7 @@ describe('verify plan-structure command', () => {
     fs.writeFileSync(planPath, content);
 
     const result = runGsdTools('verify plan-structure .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     assert.ok(
@@ -353,7 +363,7 @@ describe('verify plan-structure command', () => {
 
   test('returns error for nonexistent file', () => {
     const result = runGsdTools('verify plan-structure .planning/phases/01-test/nonexistent.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 69, `an absent plan is could-not-look: exit UNAVAILABLE (#5170): ${result.error}`);
 
     const output = JSON.parse(result.output);
     assert.ok(output.error, `Expected error field in output: ${JSON.stringify(output)}`);
@@ -408,7 +418,7 @@ describe('verify plan-structure — checkpoint task types (#2444)', () => {
     const planPath = path.join(tmpDir, '.planning', 'phases', '01-test', '01-01-PLAN.md');
     fs.writeFileSync(planPath, planContent);
     const result = runGsdTools('verify plan-structure .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
     return JSON.parse(result.output);
   }
 
@@ -790,7 +800,7 @@ describe('verify plan-structure — attributed child tags (#3193)', () => {
     const planPath = path.join(tmpDir, '.planning', 'phases', '01-test', '01-01-PLAN.md');
     fs.writeFileSync(planPath, planContent);
     const result = runGsdTools('verify plan-structure .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
     return JSON.parse(result.output);
   }
 
@@ -1057,7 +1067,7 @@ describe('verify phase-completeness command', () => {
     fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
 
     const result = runGsdTools('verify phase-completeness 01', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.complete, false, 'should be incomplete');
@@ -1087,7 +1097,7 @@ describe('verify phase-completeness command', () => {
 
   test('returns error for nonexistent phase', () => {
     const result = runGsdTools('verify phase-completeness 99', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 69, `an unresolvable phase is could-not-look: exit UNAVAILABLE (#5170): ${result.error}`);
 
     const output = JSON.parse(result.output);
     assert.ok(output.error, `Expected error field in output: ${JSON.stringify(output)}`);
@@ -1361,7 +1371,7 @@ describe('verify references command', () => {
     fs.writeFileSync(filePath, '@src/missing.js\n');
 
     const result = runGsdTools('verify references .planning/phases/01-test/doc.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.valid, false, 'should be invalid');
@@ -1413,7 +1423,7 @@ describe('verify references command', () => {
     ].join('\n'));
 
     const result = runGsdTools('verify references .planning/phases/01-test/doc.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     // Every citation must land in exactly one bucket: the three gone.ts citations
@@ -1441,7 +1451,7 @@ describe('verify references command', () => {
     fs.writeFileSync(filePath, ['- `src/gone.ts:99`', '- `src/also-gone.ts:1-20`', ''].join('\n'));
 
     const result = runGsdTools('verify references .planning/phases/01-test/doc.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.total, 2, `Expected total 2: ${JSON.stringify(output)}`);
@@ -1451,7 +1461,7 @@ describe('verify references command', () => {
 
   test('returns error for nonexistent file', () => {
     const result = runGsdTools('verify references .planning/phases/01-test/nonexistent.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 69, `an absent file is could-not-look: exit UNAVAILABLE (#5170): ${result.error}`);
 
     const output = JSON.parse(result.output);
     assert.ok(output.error, `Expected error field: ${JSON.stringify(output)}`);
@@ -1486,7 +1496,7 @@ describe('verify commits command', () => {
 
   test('reports invalid for fake hashes', () => {
     const result = runGsdTools('verify commits abcdef1234567', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.all_valid, false, `Expected all_valid false: ${JSON.stringify(output)}`);
@@ -1500,7 +1510,7 @@ describe('verify commits command', () => {
     const hash = gitOrThrow(['rev-parse', '--short', 'HEAD'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS }).trim();
 
     const result = runGsdTools(`verify commits ${hash} abcdef1234567`, tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.valid.length, 1, `Expected 1 valid: ${JSON.stringify(output)}`);
@@ -1663,7 +1673,7 @@ describe('verify artifacts command', () => {
     fs.writeFileSync(planPath, content);
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.strictEqual(result.exitCode, 69, `an unevaluable plan exits UNAVAILABLE (#5170): ${result.error}`);
+    assert.strictEqual(result.exitCode, 66, `a plan with no artifacts block is a genuinely empty scope: exit NO_INPUT (#5170): ${result.error}`);
 
     const output = JSON.parse(result.output);
     assert.ok(output.error, `Expected error field: ${JSON.stringify(output)}`);
@@ -1979,7 +1989,7 @@ describe('verify key-links command', () => {
     fs.writeFileSync(path.join(tmpDir, 'src', 'b.js'), 'const y = 2;\n');
 
     const result = runGsdTools('verify key-links .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.all_verified, false, `Expected all_verified false: ${JSON.stringify(output)}`);
@@ -2015,7 +2025,7 @@ describe('verify key-links command', () => {
     fs.writeFileSync(path.join(tmpDir, 'src', 'b.js'), 'module.exports = {};\n');
 
     const result = runGsdTools('verify key-links .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     assert.ok(
@@ -2038,7 +2048,7 @@ describe('verify key-links command', () => {
     fs.writeFileSync(path.join(tmpDir, 'src', 'b.js'), 'module.exports = {};\n');
 
     const result = runGsdTools('verify key-links .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.links[0].verified, false, 'link should not be verified — subject does not end in "a"');
@@ -2066,7 +2076,7 @@ describe('verify key-links command', () => {
     fs.writeFileSync(path.join(tmpDir, 'src', 'b.js'), 'module.exports = {};\n');
 
     const result = runGsdTools('verify key-links .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.links[0].verified, false, 'a neutralized pattern must never report verified: true');
@@ -2099,7 +2109,7 @@ describe('verify key-links command', () => {
     fs.writeFileSync(planPath, content);
 
     const result = runGsdTools('verify key-links .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 66, `a plan with no key_links block is a genuinely empty scope: exit NO_INPUT (#5170): ${result.error}`);
 
     const output = JSON.parse(result.output);
     assert.ok(output.error, `Expected error field: ${JSON.stringify(output)}`);
@@ -2121,7 +2131,7 @@ describe('verify key-links command', () => {
     ]);
 
     const result = runGsdTools('verify key-links .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.total, 0, `Expected zero checked links: ${JSON.stringify(output)}`);
@@ -2171,7 +2181,7 @@ describe('verify key-links command', () => {
       fs.writeFileSync(path.join(tmpDir, 'src', 'b.js'), 'module.exports = {};\n');
 
       const result = runGsdTools('verify key-links .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-      assert.ok(result.success, `Command failed: ${result.error}`);
+      assertVerdictDelivered(result);
 
       const output = JSON.parse(result.output);
       assert.strictEqual(output.links[0].verified, false);
@@ -2213,7 +2223,7 @@ describe('verify key-links command', () => {
       fs.writeFileSync(path.join(tmpDir, 'src', 'a.js'), 'const x = 1;\n');
 
       const result = runGsdTools('verify key-links .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-      assert.ok(result.success, `Command failed: ${result.error}`);
+      assertVerdictDelivered(result);
 
       const output = JSON.parse(result.output);
       assert.strictEqual(
@@ -2240,7 +2250,7 @@ describe('verify key-links command', () => {
       fs.writeFileSync(path.join(tmpDir, 'src', 'b.js'), 'module.exports = {};\n');
 
       const result = runGsdTools('verify key-links .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-      assert.ok(result.success, `Command failed: ${result.error}`);
+      assertVerdictDelivered(result);
 
       const output = JSON.parse(result.output);
       assert.strictEqual(output.links[0].verified, false);
@@ -2273,7 +2283,7 @@ describe('verify key-links command', () => {
       fs.writeFileSync(path.join(tmpDir, 'src', 'b.js'), 'module.exports = {};\n');
 
       const result = runGsdTools('verify key-links .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-      assert.ok(result.success, `Command failed: ${result.error}`);
+      assertVerdictDelivered(result);
 
       const output = JSON.parse(result.output);
       assert.strictEqual(output.links[0].verified, false);
@@ -2318,7 +2328,7 @@ describe('verify key-links command', () => {
     fs.writeFileSync(path.join(tmpDir, 'src', 'b.js'), 'exports.x = 1;\n');
 
     const result = runGsdTools('verify key-links .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.links.length, 2, `Expected both links reported: ${JSON.stringify(output.links)}`);
@@ -2339,7 +2349,7 @@ describe('verify key-links command', () => {
     fs.writeFileSync(path.join(tmpDir, 'src', 'b.js'), 'module.exports = {};\n');
 
     const result = runGsdTools('verify key-links .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.links[0].verified, false);
@@ -2359,7 +2369,7 @@ describe('verify key-links command', () => {
     fs.writeFileSync(path.join(tmpDir, 'src', 'a.js'), 'const x = 1;\n');
 
     const result = runGsdTools('verify key-links .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.links[0].verified, false);
@@ -2526,7 +2536,7 @@ describe('bug-967 verify key-links strict file-path contract', () => {
       'verify key-links .planning/phases/01-test/01-01-PLAN.md',
       tmpDir,
     );
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(
@@ -2632,7 +2642,7 @@ describe('bug-967 verify key-links strict file-path contract', () => {
       'verify key-links .planning/phases/01-test/01-01-PLAN.md',
       tmpDir,
     );
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
 
     const out = JSON.parse(result.output);
     assert.strictEqual(
@@ -4037,6 +4047,13 @@ function parseResult(t, argv, tmpDir) {
   return JSON.parse(r.output);
 }
 
+// A verb whose negative verdict is exit 1 (#5170): the JSON is still read, the exit status is asserted.
+function parseNegativeVerdict(t, argv, tmpDir) {
+  const r = runGsdTools(argv, tmpDir);
+  assert.strictEqual(r.exitCode, 1, `a negative verdict exits 1: ${r.error}`);
+  return JSON.parse(r.output);
+}
+
 // ─── frontmatter validate --schema plan|summary|verification ────────────────
 
 describe('#2701: frontmatter validate rejects NUL-corrupted artifacts', () => {
@@ -4092,7 +4109,7 @@ describe('#2701: verify plan-structure rejects NUL-corrupted PLAN.md', () => {
     const rel = '.planning/phases/01-test/01-01-PLAN.md';
     writePlan(tmpDir, '01-01-PLAN.md', validPlanBody(), 200);
 
-    const out = parseResult(t, ['verify', 'plan-structure', rel], tmpDir);
+    const out = parseNegativeVerdict(t, ['verify', 'plan-structure', rel], tmpDir);
     assert.strictEqual(out.valid, false, `expected valid:false; got ${JSON.stringify(out)}`);
     assert.ok(out.errors.some((e) => /NUL/i.test(e)), `error must name NUL: ${JSON.stringify(out.errors)}`);
   });
@@ -5588,7 +5605,7 @@ describe('#4024: verify plan-structure — quantitative criteria gate (e2e)', ()
       '  - All seven tests were observed FAILING before the implementation existed.',
     ].join('\n'), ''));
     const result = runGsdTools(cmd, tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assertVerdictDelivered(result);
     const out = JSON.parse(result.output);
     assert.strictEqual(out.valid, false, `trap criteria must invalidate the plan, errors: ${JSON.stringify(out.errors)}`);
     assert.ok(out.errors.length >= 2, `both shapes must be flagged, got: ${JSON.stringify(out.errors)}`);
@@ -5620,17 +5637,19 @@ describe('#4024: verify plan-structure — quantitative criteria gate (e2e)', ()
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// verify artifacts: the exit status follows the verdict (#5170, ADR-5057 §4)
+// verify verbs: the exit status follows the verdict (#5170, ADR-5057 §4)
 //
 // Real CLI in a child process. The JSON on stdout is the verdict and is
-// unchanged; only the process exit code now follows it: all passed -> 0, a
-// negative verdict -> 1, nothing to evaluate (plan missing / empty block) ->
-// UNAVAILABLE (69), never 0. The #4686 repro is a plan with one artifact
-// missing its `contains:` pattern.
+// unchanged; only the process exit code follows it: a positive verdict -> 0, a
+// negative verdict -> 1, the file or phase could not be looked at -> UNAVAILABLE
+// (69), a plan that was read and declares nothing to verify -> NO_INPUT (66).
+// `verify schema-drift` is the one verb that stays payload mode (its consumer is
+// the gate dispatch); it is pinned in schema-drift.test.cjs.
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('verify artifacts — exit status follows the verdict (#5170)', () => {
+describe('verify verbs — exit status follows the verdict (#5170)', () => {
   const UNAVAILABLE = 69;
+  const NO_INPUT = 66;
   const PLAN = '.planning/phases/01-test/01-01-PLAN.md';
   let tmpDir;
 
@@ -5645,18 +5664,24 @@ describe('verify artifacts — exit status follows the verdict (#5170)', () => {
     cleanup(tmpDir);
   });
 
-  function writePlan(artifactLines) {
+  function writePlan(mustHaveLines) {
     const content = [
       '---', 'phase: 01-test', 'plan: 01', 'type: execute', 'wave: 1', 'depends_on: []',
-      'files_modified: [src/app.js]', 'autonomous: true', 'must_haves:', '    artifacts:',
-      ...artifactLines.map((line) => `      ${line}`),
+      'files_modified: [src/app.js]', 'autonomous: true', 'must_haves:',
+      ...mustHaveLines.map((line) => `    ${line}`),
       '---', '', '<tasks></tasks>',
     ].join('\n');
     fs.writeFileSync(path.join(tmpDir, PLAN), content);
   }
 
+  function writeArtifactsPlan(artifactLines) {
+    writePlan(['artifacts:', ...artifactLines.map((line) => `  ${line}`)]);
+  }
+
+  // ── verify artifacts ──────────────────────────────────────────────────────
+
   test('artifacts exits 1 when not all passed (v1 and v2)', () => {
-    writePlan(['- path: "src/app.js"', '  contains: "no-such-pattern"']);
+    writeArtifactsPlan(['- path: "src/app.js"', '  contains: "no-such-pattern"']);
     for (const contract of ['v1', 'v2']) {
       const result = runGsdTools(['verify', 'artifacts', PLAN, `--exit-contract=${contract}`], tmpDir);
       assert.strictEqual(result.exitCode, 1, `${contract}: a negative verdict exits 1: ${result.error}`);
@@ -5672,11 +5697,29 @@ describe('verify artifacts — exit status follows the verdict (#5170)', () => {
     assert.strictEqual(JSON.parse(result.output).error, 'File not found');
   });
 
-  test('artifacts empty block is unavailable', () => {
-    writePlan([]);
+  test('artifacts plan with no artifacts block is NO_INPUT, not unavailable', () => {
+    writePlan(['truths:', '  - "something"']);
     const result = runGsdTools(['verify', 'artifacts', PLAN], tmpDir);
-    assert.strictEqual(result.exitCode, UNAVAILABLE, `an empty must_haves.artifacts block is not a pass: ${result.error}`);
+    assert.strictEqual(result.exitCode, NO_INPUT, `a plan that was read and declares no artifacts is a genuinely empty scope: ${result.error}`);
     assert.match(JSON.parse(result.output).error, /No must_haves\.artifacts/);
+  });
+
+  test('artifacts plan that exists but is empty was read: NO_INPUT, not "File not found"', () => {
+    fs.writeFileSync(path.join(tmpDir, PLAN), '');
+    const result = runGsdTools(['verify', 'artifacts', PLAN], tmpDir);
+    assert.strictEqual(result.exitCode, NO_INPUT, `an empty plan file is found '', not absent: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.match(out.error, /No must_haves\.artifacts/);
+    assert.notStrictEqual(out.error, 'File not found');
+  });
+
+  test('artifacts plan path that is a directory is unreadable: UNAVAILABLE with the errno', () => {
+    fs.mkdirSync(path.join(tmpDir, PLAN), { recursive: true });
+    const result = runGsdTools(['verify', 'artifacts', PLAN], tmpDir);
+    assert.strictEqual(result.exitCode, UNAVAILABLE, result.error);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.error, 'File unreadable');
+    assert.strictEqual(out.read_error, 'EISDIR');
   });
 
   test('artifacts missing plan is unavailable through the query dispatch as well', () => {
@@ -5685,15 +5728,140 @@ describe('verify artifacts — exit status follows the verdict (#5170)', () => {
   });
 
   test('artifacts exits 0 when all passed', () => {
-    writePlan(['- path: "src/app.js"', '  min_lines: 2', '  contains: "export"']);
+    writeArtifactsPlan(['- path: "src/app.js"', '  min_lines: 2', '  contains: "export"']);
     const result = runGsdTools(['verify', 'artifacts', PLAN], tmpDir);
     assert.strictEqual(result.exitCode, 0, `an all-pass verdict exits 0: ${result.error}`);
     assert.strictEqual(JSON.parse(result.output).all_passed, true);
   });
 
   test('artifacts exits 0 when all passed under v2 (a passing verdict is not degraded)', () => {
-    writePlan(['- path: "src/app.js"', '  contains: "export"']);
+    writeArtifactsPlan(['- path: "src/app.js"', '  contains: "export"']);
     const result = runGsdTools(['verify', 'artifacts', PLAN, '--exit-contract=v2'], tmpDir);
     assert.strictEqual(result.exitCode, 0, result.error);
   });
+
+  // ── verify plan-structure ─────────────────────────────────────────────────
+
+  test('plan-structure exits 0 for a valid plan and 1 for an invalid one', () => {
+    fs.writeFileSync(path.join(tmpDir, PLAN), validPlanContent());
+    const ok = runGsdTools(['verify', 'plan-structure', PLAN], tmpDir);
+    assert.strictEqual(ok.exitCode, 0, `a valid plan exits 0: ${ok.error}`);
+    assert.strictEqual(JSON.parse(ok.output).valid, true);
+
+    fs.writeFileSync(path.join(tmpDir, PLAN), '# no frontmatter\n');
+    const bad = runGsdTools(['verify', 'plan-structure', PLAN], tmpDir);
+    assert.strictEqual(bad.exitCode, 1, `an invalid plan exits 1: ${bad.error}`);
+    assert.strictEqual(JSON.parse(bad.output).valid, false, 'the verdict JSON is unchanged');
+  });
+
+  test('plan-structure absent or unreadable plan is unavailable; an empty plan is a negative verdict', () => {
+    const absent = runGsdTools(['verify', 'plan-structure', '.planning/phases/01-test/nope-PLAN.md'], tmpDir);
+    assert.strictEqual(absent.exitCode, UNAVAILABLE, absent.error);
+    assert.strictEqual(JSON.parse(absent.output).error, 'File not found');
+
+    fs.mkdirSync(path.join(tmpDir, PLAN), { recursive: true });
+    const unreadable = runGsdTools(['verify', 'plan-structure', PLAN], tmpDir);
+    assert.strictEqual(unreadable.exitCode, UNAVAILABLE, unreadable.error);
+    assert.strictEqual(JSON.parse(unreadable.output).read_error, 'EISDIR');
+
+    cleanup(path.join(tmpDir, PLAN));
+    fs.writeFileSync(path.join(tmpDir, PLAN), '');
+    const empty = runGsdTools(['verify', 'plan-structure', PLAN], tmpDir);
+    assert.strictEqual(empty.exitCode, 1, `an empty plan WAS read and is invalid, not "File not found": ${empty.error}`);
+    assert.strictEqual(JSON.parse(empty.output).valid, false);
+  });
+
+  // ── verify phase-completeness ─────────────────────────────────────────────
+
+  test('phase-completeness exits 0 when complete, 1 when a plan has no summary, UNAVAILABLE for an unknown phase', () => {
+    const dir = path.join(tmpDir, '.planning', 'phases', '01-test');
+    fs.writeFileSync(path.join(dir, '01-01-PLAN.md'), '# plan\n');
+    fs.writeFileSync(path.join(dir, '01-01-SUMMARY.md'), '# summary\n');
+    const complete = runGsdTools(['verify', 'phase-completeness', '01'], tmpDir);
+    assert.strictEqual(complete.exitCode, 0, `a complete phase exits 0: ${complete.error}`);
+    assert.strictEqual(JSON.parse(complete.output).complete, true);
+
+    cleanup(path.join(dir, '01-01-SUMMARY.md'));
+    const incomplete = runGsdTools(['verify', 'phase-completeness', '01'], tmpDir);
+    assert.strictEqual(incomplete.exitCode, 1, `an incomplete phase exits 1: ${incomplete.error}`);
+    assert.strictEqual(JSON.parse(incomplete.output).complete, false, 'the verdict JSON is unchanged');
+
+    const unknown = runGsdTools(['verify', 'phase-completeness', '99'], tmpDir);
+    assert.strictEqual(unknown.exitCode, UNAVAILABLE, `an unresolvable phase is could-not-look: ${unknown.error}`);
+    assert.strictEqual(JSON.parse(unknown.output).error, 'Phase not found');
+  });
+
+  // ── verify references ─────────────────────────────────────────────────────
+
+  test('references exits 0 when every reference resolves, 1 when one is missing, UNAVAILABLE for an absent document', () => {
+    const doc = '.planning/phases/01-test/doc.md';
+    fs.writeFileSync(path.join(tmpDir, doc), 'See @src/app.js for details.\n');
+    const ok = runGsdTools(['verify', 'references', doc], tmpDir);
+    assert.strictEqual(ok.exitCode, 0, `all references found exits 0: ${ok.error}`);
+    assert.strictEqual(JSON.parse(ok.output).valid, true);
+
+    fs.writeFileSync(path.join(tmpDir, doc), 'See @src/app.js and @src/gone.js for details.\n');
+    const bad = runGsdTools(['verify', 'references', doc], tmpDir);
+    assert.strictEqual(bad.exitCode, 1, `a missing reference exits 1: ${bad.error}`);
+    assert.deepStrictEqual(JSON.parse(bad.output).missing, ['src/gone.js'], 'the verdict JSON is unchanged');
+
+    const absent = runGsdTools(['verify', 'references', '.planning/phases/01-test/nope.md'], tmpDir);
+    assert.strictEqual(absent.exitCode, UNAVAILABLE, absent.error);
+  });
+
+  // ── verify key-links ──────────────────────────────────────────────────────
+
+  test('key-links exits 0 when verified, 1 when not, NO_INPUT without a block, UNAVAILABLE for an absent plan', () => {
+    writePlan(['key_links:', '  - from: "src/app.js"', '    to: "export"', '    via: "default export"']);
+    const ok = runGsdTools(['verify', 'key-links', PLAN], tmpDir);
+    assert.strictEqual(ok.exitCode, 0, `a verified link exits 0: ${ok.error}`);
+    assert.strictEqual(JSON.parse(ok.output).all_verified, true);
+
+    writePlan(['key_links:', '  - from: "src/app.js"', '    to: "no-such-target"', '    via: "nothing"']);
+    const bad = runGsdTools(['verify', 'key-links', PLAN], tmpDir);
+    assert.strictEqual(bad.exitCode, 1, `an unverified link exits 1: ${bad.error}`);
+    assert.strictEqual(JSON.parse(bad.output).all_verified, false, 'the verdict JSON is unchanged');
+
+    writePlan(['truths:', '  - "something"']);
+    const empty = runGsdTools(['verify', 'key-links', PLAN], tmpDir);
+    assert.strictEqual(empty.exitCode, NO_INPUT, empty.error);
+    assert.match(JSON.parse(empty.output).error, /No must_haves\.key_links/);
+
+    const absent = runGsdTools(['verify', 'key-links', '.planning/phases/01-test/nope-PLAN.md'], tmpDir);
+    assert.strictEqual(absent.exitCode, UNAVAILABLE, absent.error);
+  });
 });
+
+describe('verify commits — exit status follows the verdict (#5170)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempGitProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('commits exits 0 for a real hash, 1 for a fake one', () => {
+    const hash = gitOrThrow(['rev-parse', '--short', 'HEAD'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS }).trim();
+    const ok = runGsdTools(['verify', 'commits', hash], tmpDir);
+    assert.strictEqual(ok.exitCode, 0, `all hashes valid exits 0: ${ok.error}`);
+
+    const bad = runGsdTools(['verify', 'commits', hash, 'abcdef1234567'], tmpDir);
+    assert.strictEqual(bad.exitCode, 1, `an invalid hash exits 1: ${bad.error}`);
+    assert.deepStrictEqual(JSON.parse(bad.output).invalid, ['abcdef1234567'], 'the verdict JSON is unchanged');
+  });
+
+  test('commits in a directory that is not a git repository is unavailable, not "invalid"', () => {
+    const notRepo = createTempProject();
+    try {
+      const result = runGsdTools(['verify', 'commits', 'abcdef1234567'], notRepo);
+      assert.strictEqual(result.exitCode, 69, `a directory that cannot answer is could-not-look: ${result.error}`);
+      assert.strictEqual(JSON.parse(result.output).error, 'Not a git repository');
+    } finally {
+      cleanup(notRepo);
+    }
+  });
+});
+

@@ -240,6 +240,23 @@ last-write-wins: a clean payload clears a prior `DEGRADED` declaration in the sa
 `runMain` clears the cell on every exit regardless of which branch produced the final code, so a
 later `runMain` call in the same process never inherits a stale declaration.
 
+### Gate verbs — the exit status follows the verdict (#5170)
+
+A gate verb declares its outcome from the verdict it built, through one total function
+(`gateExitOutcome`), never by choosing a code itself. Two modes:
+
+- **Status mode** — callers branch on `$?`: `phase uat-passed`, `verify artifacts`,
+  `verify plan-structure`, `verify phase-completeness`, `verify references`, `verify commits`,
+  `verify key-links`. A positive verdict exits `0`, a negative one `1` (the JSON is unchanged and
+  still authoritative), a scope that was read and is genuinely empty exits `66` (`NO_INPUT`), and a
+  verb that **could not look** exits `69` (`UNAVAILABLE`).
+- **Payload mode** — the verdict is read from stdout and a non-zero exit means the command failed:
+  every `check <verb>` and `verify schema-drift` (the capability gate dispatch routes a non-zero exit
+  by `onError`, so a blocking verdict must stay exit `0`). Only "could not look" exits `69`.
+
+`69` is never a pass and never `0`: an unreadable file, an unresolvable phase, a path that cannot be
+examined. A document that exists but is empty was read (`found ''`), so it is not "File not found".
+
 ## Error code taxonomy
 
 Codes are frozen constants in `gsd-core/bin/lib/core.cjs` under

@@ -253,7 +253,11 @@ function verifyPlan(tmpDir, content) {
   fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-test'), { recursive: true });
   fs.writeFileSync(path.join(tmpDir, rel), content);
   const result = runGsdTools(`verify plan-structure ${rel}`, tmpDir);
-  assert.ok(result.success, `verify plan-structure failed to run: ${result.error}`);
+  // #5170: a negative verdict is exit 1 with the JSON on stdout; any other status means it could not run.
+  assert.ok(
+    result.exitCode === 0 || result.exitCode === 1,
+    `verify plan-structure failed to run: ${result.error}`,
+  );
   return JSON.parse(result.output);
 }
 
