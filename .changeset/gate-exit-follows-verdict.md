@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 0
+---
+**A gate verb that failed no longer exits 0, and a gate that could not read its evidence no longer passes** — `phase uat-passed`, `verify artifacts`, `verify plan-structure`, `verify phase-completeness`, `verify references`, `verify commits` and `verify key-links` printed a failing verdict and exited 0, and gates that hit an unreadable plan, directory or COVERAGE.md treated it as empty and passed. Their exit status now follows the verdict: 0 pass, 1 negative verdict, 66 empty scope, 69 could not look (the JSON on stdout is unchanged; `check` verbs and the drift verbs stay payload mode, where a blocking verdict is still exit 0 and only 69 is non-zero). Also: `verify schema-drift` now sees a block-sequence `files_modified`, `verify plan-structure` flags a `! grep` negative gate whose literal appears in the task action, `verify commits` outside a repository exits 69 instead of listing every hash invalid, and the test runner fails a chunk whose registered tests are not all reported. (#5170)
