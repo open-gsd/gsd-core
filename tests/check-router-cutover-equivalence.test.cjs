@@ -35,6 +35,12 @@
  * `tdd-red-evidence-path-escape` is the one golden NOT captured from the pre-move
  * code: the record path used to be read uncontained, and a path escaping the
  * project directory is now the usage failure every sibling gate raises.
+ *
+ * The four other E6 payload goldens (`tdd-red-evidence-ok`, `-invalid-exit-zero`,
+ * `-invalid-zero-tests`, `-empty-object`) were re-captured from the format-adapter
+ * classifier (#4692): `evidence` gains `matched_test`, `format` and
+ * `report_errors`, and `record.failing_test` names only the matched target.
+ * Verdicts, reasons, stderr and exit codes are unchanged.
  */
 
 const { describe, test, after } = require('node:test');

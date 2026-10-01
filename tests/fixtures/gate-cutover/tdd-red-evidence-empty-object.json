@@ -5,7 +5,7 @@
     "records/empty-object.json"
   ],
   "fixture": "red",
-  "stdout": "{\n  \"passed\": false,\n  \"block\": true,\n  \"verdict\": \"INVALID_RED\",\n  \"reason\": \"invalid_record\",\n  \"evidence\": {\n    \"command\": \"\",\n    \"exit_code\": null,\n    \"target_test\": \"\",\n    \"tests\": 0,\n    \"pass\": 0,\n    \"fail\": 0,\n    \"failing_tests\": []\n  },\n  \"record\": {\n    \"command\": \"\",\n    \"exit_code\": null,\n    \"failing_test\": null,\n    \"target_test\": \"\",\n    \"expected\": null,\n    \"actual\": null,\n    \"verdict\": \"INVALID_RED\",\n    \"reason\": \"invalid_record\"\n  },\n  \"message\": \"INVALID_RED (invalid_record): GREEN blocked. Fix the RED phase — only an intentional failure of target test \\\"\\\" authorizes production edits.\"\n}",
+  "stdout": "{\n  \"passed\": false,\n  \"block\": true,\n  \"verdict\": \"INVALID_RED\",\n  \"reason\": \"invalid_record\",\n  \"evidence\": {\n    \"command\": \"\",\n    \"exit_code\": null,\n    \"target_test\": \"\",\n    \"tests\": 0,\n    \"pass\": 0,\n    \"fail\": 0,\n    \"failing_tests\": [],\n    \"matched_test\": null,\n    \"format\": \"unknown\",\n    \"report_errors\": []\n  },\n  \"record\": {\n    \"command\": \"\",\n    \"exit_code\": null,\n    \"failing_test\": null,\n    \"target_test\": \"\",\n    \"expected\": null,\n    \"actual\": null,\n    \"verdict\": \"INVALID_RED\",\n    \"reason\": \"invalid_record\"\n  },\n  \"message\": \"INVALID_RED (invalid_record): GREEN blocked. Fix the RED phase — only an intentional failure of target test \\\"\\\" authorizes production edits.\"\n}",
   "stderr": "",
   "exitCode": 0
 }

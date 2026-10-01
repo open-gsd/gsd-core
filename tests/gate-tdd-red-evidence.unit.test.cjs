@@ -15,6 +15,11 @@
  * `outcome`/`block` are the new GateVerdict fields; their mapping from today's payload is
  * recorded per case (see 50-test-matrix.md, API contract).
  *
+ * U6c and U6d were re-captured after the format-adapter classifier (#4692): their records carry
+ * complete Node TAP (plan and YAML diagnostic block) because the TAP adapter rejects a bare
+ * indented `error:` line as non-TAP data, and `evidence` gains `matched_test`, `format` and
+ * `report_errors`. Verdicts and reasons are unchanged.
+ *
  * Each case also asserts the gate never writes to process.stdout / process.stderr: only the
  * router formats output (design D2).
  */
@@ -79,7 +84,7 @@ const CASES = [
     id: 'U6c',
     title: 'unexpected green (exit 0) -> INVALID_RED blocks GREEN',
     setup(dir, h) {
-      h.w(dir, 'red.json', JSON.stringify({ command: 'node --test t.test.cjs', exitCode: 0, output: 'ok 1 - target\n# pass 1\n', targetTest: 'target', targetFile: 't.test.cjs' }));
+      h.w(dir, 'red.json', JSON.stringify({ command: 'node --test t.test.cjs', exitCode: 0, output: 'TAP version 13\n# Subtest: target\nok 1 - target\n  ---\n  duration_ms: 0.41\n  type: \'test\'\n  ...\n1..1\n# tests 1\n# suites 0\n# pass 1\n# fail 0\n', targetTest: 'target', targetFile: 't.test.cjs' }));
     },
     args(dir) { return [dir + '/red.json']; },
     outcome: 'block',
@@ -94,10 +99,13 @@ const CASES = [
           command: 'node --test t.test.cjs',
           exit_code: 0,
           target_test: 'target',
-          tests: 0,
+          tests: 1,
           pass: 1,
           fail: 0,
           failing_tests: [],
+          matched_test: null,
+          format: 'tap',
+          report_errors: [],
         },
         record: {
           command: 'node --test t.test.cjs',
@@ -117,7 +125,7 @@ const CASES = [
     id: 'U6d',
     title: 'intentional failure of the target test -> RED_EVIDENCE_OK authorizes GREEN',
     setup(dir, h) {
-      h.w(dir, 'red.json', JSON.stringify({ command: 'node --test t.test.cjs', exitCode: 1, output: 'TAP version 13\nnot ok 1 - target\n  error: expected 1 to equal 2\n1..1\n# tests 1\n# pass 0\n# fail 1\n', targetTest: 'target', targetFile: 't.test.cjs', expected: '2', actual: '1' }));
+      h.w(dir, 'red.json', JSON.stringify({ command: 'node --test t.test.cjs', exitCode: 1, output: 'TAP version 13\n# Subtest: target\nnot ok 1 - target\n  ---\n  duration_ms: 0.97\n  type: \'test\'\n  failureType: \'testCodeFailure\'\n  error: \'expected 1 to equal 2\'\n  code: \'ERR_ASSERTION\'\n  ...\n1..1\n# tests 1\n# suites 0\n# pass 0\n# fail 1\n', targetTest: 'target', targetFile: 't.test.cjs', expected: '2', actual: '1' }));
     },
     args(dir) { return [dir + '/red.json']; },
     outcome: 'pass',
@@ -138,6 +146,9 @@ const CASES = [
           failing_tests: [
             'target',
           ],
+          matched_test: 'target',
+          format: 'tap',
+          report_errors: [],
         },
         record: {
           command: 'node --test t.test.cjs',

@@ -18,10 +18,11 @@ const { createTempProject, cleanup } = require('./helpers.cjs');
 const { evaluateTddRedEvidence } = require('../gsd-core/bin/lib/gate-tdd-red-evidence.cjs');
 const { isGateUsageFailure } = require('../gsd-core/bin/lib/gate-verdict.cjs');
 
+// Complete Node TAP (plan and YAML diagnostic block): the #4692 TAP adapter rejects non-TAP lines.
 const RED_OK = {
   command: 'node --test t.test.cjs',
   exitCode: 1,
-  output: 'TAP version 13\nnot ok 1 - target\n  error: expected 1 to equal 2\n1..1\n# tests 1\n# pass 0\n# fail 1\n',
+  output: 'TAP version 13\n# Subtest: target\nnot ok 1 - target\n  ---\n  duration_ms: 0.97\n  type: \'test\'\n  failureType: \'testCodeFailure\'\n  error: \'expected 1 to equal 2\'\n  code: \'ERR_ASSERTION\'\n  ...\n1..1\n# tests 1\n# suites 0\n# pass 0\n# fail 1\n',
   targetTest: 'target',
   targetFile: 't.test.cjs',
   expected: '2',
