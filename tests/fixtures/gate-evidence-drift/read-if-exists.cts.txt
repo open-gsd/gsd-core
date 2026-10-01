@@ -1,0 +1,6 @@
+// Positive control (#5170): a reference to the deleted tolerant reader `readIfExists`.
+import { readIfExists } from './gate-helpers.cjs';
+
+export function fixtureReadsTolerantly(target: string): string {
+  return readIfExists(target);
+}

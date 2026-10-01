@@ -1,0 +1,11 @@
+// Positive control (#5170): the `unreadable` arm of verdictFromEvidence returns a passing verdict.
+import { gateVerdict } from './gate-verdict.cjs';
+import { readTextEvidence, verdictFromEvidence } from './gate-evidence.cjs';
+
+export function evaluateFixtureGate(planPath: string) {
+  return verdictFromEvidence(readTextEvidence(planPath), {
+    found: (text) => gateVerdict('pass', false, { text }),
+    none: () => gateVerdict('skip', false, { reason: 'no plan' }),
+    unreadable: (reason) => gateVerdict('skip', false, { reason }),
+  });
+}

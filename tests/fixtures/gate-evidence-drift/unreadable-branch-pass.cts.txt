@@ -1,0 +1,14 @@
+// Positive control (#5170): a hand-rolled branch on `kind === 'unreadable'` that returns a pass-shaped verdict.
+import { gateVerdict } from './gate-verdict.cjs';
+import { readTextEvidence } from './gate-evidence.cjs';
+
+export function evaluateFixtureGate(planPath: string) {
+  const plan = readTextEvidence(planPath);
+  if (plan.kind === 'unreadable') return gateVerdict('advisory', false, { reason: plan.reason });
+  switch (plan.kind) {
+    case 'none':
+      return gateVerdict('skip', false, {});
+    default:
+      return gateVerdict('pass', false, {});
+  }
+}

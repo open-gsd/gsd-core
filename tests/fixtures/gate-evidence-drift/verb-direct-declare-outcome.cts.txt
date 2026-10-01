@@ -1,0 +1,8 @@
+// Positive control (#5170): a gate verb entry that declares the exit outcome without the gate-exit seam.
+import { declareGateExit } from './gate-exit.cjs';
+import cliExit = require('./cli-exit.cjs');
+
+export function cmdFixtureVerb(passed: boolean): void {
+  declareGateExit({ outcome: 'pass' }, 'status');
+  if (!passed) cliExit.declareOutcome('FAIL');
+}

@@ -1,0 +1,14 @@
+// Positive control (#5170): a gate module whose read swallows the failure with an empty catch.
+// Parsed as TypeScript by tests/lint-gate-evidence-drift.test.cjs; never compiled (`.txt`).
+import fs from 'node:fs';
+import { gateVerdict } from './gate-verdict.cjs';
+
+export function evaluateFixtureGate(planPath: string) {
+  let text = '';
+  try {
+    text = fs.readFileSync(planPath, 'utf8');
+  } catch {
+    // unreadable plan: ignored
+  }
+  return gateVerdict('pass', false, { text });
+}

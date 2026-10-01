@@ -1,0 +1,12 @@
+// Positive control (#5170): a gate verb entry whose catch prints a payload and exits 0.
+import { declareGateExit } from './gate-exit.cjs';
+import { output } from './io.cjs';
+
+export function cmdFixtureVerb(run: () => void, raw: boolean): void {
+  try {
+    run();
+    declareGateExit({ outcome: 'pass' }, 'status');
+  } catch (err) {
+    output({ block: false, message: 'exception: ' + String(err) }, raw);
+  }
+}

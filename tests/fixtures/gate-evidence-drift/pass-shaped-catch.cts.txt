@@ -1,0 +1,21 @@
+// Positive control (#5170): a gate probe whose catch collapses "could not look" into a literal answer.
+import fs from 'node:fs';
+
+export function fixtureProbeExists(target: string): boolean {
+  try {
+    fs.statSync(target);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+export function fixtureProbeText(target: string): string | null {
+  let value: string | null = null;
+  try {
+    value = fs.readFileSync(target, 'utf8');
+  } catch {
+    value = null;
+  }
+  return value;
+}

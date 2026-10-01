@@ -1,0 +1,42 @@
+// Negative control (#5170): every shape the guard forbids, written the sanctioned way. Must scan clean.
+import { gateVerdict, gateUnreadable } from './gate-verdict.cjs';
+import { readTextEvidence, evidenceFound, evidenceFromError, verdictFromEvidence } from './gate-evidence.cjs';
+import type { Evidence } from './gate-evidence.cjs';
+import { declareGateExit } from './gate-exit.cjs';
+import { output, error } from './io.cjs';
+
+function parseJson(text: string, span: string): Evidence<unknown> {
+  try {
+    return evidenceFound(JSON.parse(text) as unknown);
+  } catch (err) {
+    return evidenceFromError<unknown>(err, span);
+  }
+}
+
+export function evaluateFixtureGate(planPath: string) {
+  return verdictFromEvidence(readTextEvidence(planPath), {
+    found: (text) => gateVerdict('pass', false, { text }),
+    none: () => gateVerdict('skip', false, { reason: 'no plan' }),
+    unreadable: (reason) => gateUnreadable(true, { reason }),
+  });
+}
+
+export function cmdFixtureVerb(run: () => void, raw: boolean): void {
+  try {
+    run();
+    output({ passed: true }, raw);
+    declareGateExit({ outcome: 'pass' }, 'status');
+  } catch (err) {
+    output({ block: false, message: 'exception: ' + String(err) }, raw);
+    declareGateExit({ outcome: 'unreadable' }, 'status');
+  }
+}
+
+export function cmdFixtureFailing(raw: boolean): void {
+  try {
+    parseJson('{}', 'x');
+  } catch (err) {
+    error('could not run: ' + String(err));
+  }
+  output({}, raw);
+}

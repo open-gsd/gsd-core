@@ -1,0 +1,8 @@
+// Positive control (#5170): a gate verb entry that returns a numeric exit itself.
+import { declareGateExit } from './gate-exit.cjs';
+
+export function cmdFixtureVerb(passed: boolean): number {
+  declareGateExit({ outcome: passed ? 'pass' : 'block' }, 'status');
+  if (!passed) return 1;
+  return 0;
+}
