@@ -194,6 +194,7 @@ module.exports = {
   "tests/roadmap-phase-fallback.test.cjs",
   "tests/roadmap-upgrade-bracket.test.cjs",
   "tests/roadmap.test.cjs",
+  "tests/run-tests-accounting.test.cjs",
   "tests/run-tests-harness.test.cjs",
   "tests/runtime-artifact-layout.test.cjs",
   "tests/runtime-identity.test.cjs",
