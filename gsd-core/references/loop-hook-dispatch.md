@@ -110,8 +110,9 @@ Evaluate `check` (one of `query`, `predicate`, or `agentVerdict`). Then honor `b
 Honor `onError` if the check itself errors: `skip` means treat as non-blocking and continue;
 `halt` means surface the error and stop. "Errors" means a non-zero exit from `gsd_run check ...`,
 and that includes `69` (`UNAVAILABLE`, #5170): a gate verb exits `69` when it **could not look** at
-its evidence, still printing JSON whose `outcome` is `unreadable`. That JSON is not a verdict — do
-not act on its `block`; route it by `onError` as a step-1 command failure. Exit `0` always means a
+its evidence, still printing the gate's usual JSON (its own fields name what could not be read, such
+as `status: "unresolvable"`, `readError`, or `unreadable`). That JSON is not a verdict — do not act
+on its `block`; route it by `onError` as a step-1 command failure. Exit `0` always means a
 delivered verdict, a blocking one included (`block: true`): a gate verb never exits non-zero to say
 "blocked".
 
