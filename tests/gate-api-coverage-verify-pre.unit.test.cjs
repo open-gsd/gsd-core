@@ -269,7 +269,7 @@ const CASES = [
         passed: false,
         coverage_present: false,
         detected: false,
-        message: 'api-coverage: could not read the phase scope (could not read 01-01-PLAN.md: EIO: simulated read failure); refusing to certify no external-API integration from incomplete scope. Fix the unreadable plan file, or add a COVERAGE.md declaration.',
+        message: 'api-coverage: could not read the phase scope (could not read 01-01-PLAN.md: EIO); refusing to certify no external-API integration from incomplete scope. Fix the unreadable plan file, or add a COVERAGE.md declaration.',
       };
     },
   },

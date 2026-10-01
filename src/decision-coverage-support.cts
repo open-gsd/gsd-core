@@ -31,6 +31,9 @@ const { rawFrontmatterField, frontmatterKeyBlockText } = frontmatterMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planScanMod = require('./plan-scan.cjs');
 const { scanPhasePlans } = planScanMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningScopeMod = require('./planning-scope.cjs');
+const { SCOPE } = planningScopeMod;
 
 // ─── Decision matching ────────────────────────────────────────────────────────
 
@@ -73,7 +76,13 @@ function readPhaseFiles(phaseDir: string, pick: (scan: ReturnType<typeof scanPha
   // #3183 (lint-plan-count-drift): source live plan/summary files from the single
   // owner (scanPhasePlans) instead of a local readdirSync filter — picks up bare PLAN.md and
   // nested plans/, and excludes plans marked `status: superseded`.
-  for (const entry of pick(scanPhasePlans(phaseDir))) {
+  // Only SCOPE.COMPLETE is a real answer: an existing nested plans/ that could not be read (TRUNCATED)
+  // would otherwise hand the gate a short plan set and let it conclude "no plan cites the decision".
+  const scan = scanPhasePlans(phaseDir);
+  if (scan.scope !== SCOPE.COMPLETE) {
+    return { kind: 'unreadable', reason: `plan scan ${scan.scope}`, span: phaseDir };
+  }
+  for (const entry of pick(scan)) {
     const read = readTextEvidence(path.join(phaseDir, entry));
     if (read.kind === 'unreadable') return read;
     if (read.kind === 'found') contents.push(read.value);

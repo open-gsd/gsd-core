@@ -6,7 +6,7 @@
   ],
   "fixture": "api",
   "failRead": "05-01-PLAN.md",
-  "stdout": "{\n  \"block\": false,\n  \"passed\": true,\n  \"coverage_present\": true,\n  \"matrix\": \"COVERAGE.md\",\n  \"counts\": {\n    \"surface\": 0,\n    \"integrate\": 0,\n    \"optout\": 0\n  },\n  \"none_declared\": true,\n  \"detected\": false,\n  \"scope_read_error\": \"could not read 05-01-PLAN.md: EACCES: simulated read failure\",\n  \"message\": \"api-coverage: COVERAGE.md declares no external API integration — matrix not required (note: phase scope was incompletely read — could not read 05-01-PLAN.md: EACCES: simulated read failure)\"\n}",
+  "stdout": "{\n  \"block\": false,\n  \"passed\": true,\n  \"coverage_present\": true,\n  \"matrix\": \"COVERAGE.md\",\n  \"counts\": {\n    \"surface\": 0,\n    \"integrate\": 0,\n    \"optout\": 0\n  },\n  \"none_declared\": true,\n  \"detected\": false,\n  \"scope_read_error\": \"could not read 05-01-PLAN.md: EACCES\",\n  \"message\": \"api-coverage: COVERAGE.md declares no external API integration — matrix not required (note: phase scope was incompletely read — could not read 05-01-PLAN.md: EACCES)\"\n}",
   "stderr": "",
   "exitCode": 0
 }

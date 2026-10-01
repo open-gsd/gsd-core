@@ -25,11 +25,10 @@
  * `{ block, passed, message, ...details }`.
  */
 
-import fs from 'node:fs';
 import path from 'node:path';
 import { gateVerdict, gateUnreadable, gateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
-import { readDirEntriesEvidence, readTextEvidence, statEvidence } from './gate-evidence.cjs';
+import { evidenceFromError, readDirEntriesEvidence, readTextEvidence, statEvidence } from './gate-evidence.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspaceMod = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspaceMod;
@@ -67,14 +66,6 @@ export interface PhaseScopeRead {
   readError: string | null;
 }
 
-/** A filesystem error that is NOT "does not exist" — i.e. a real read failure
- *  (EACCES/EIO/…) the gate must not swallow. `ENOENT` is a legitimate "not
- *  there yet" and is treated as absence, not error. */
-function isRealReadFailure(err: unknown): boolean {
-  const code = (err as NodeJS.ErrnoException | undefined)?.code;
-  return err != null && code !== 'ENOENT';
-}
-
 // NOTE: `fs` is used as a namespace object at call time (never destructured at load) so tests can
 // monkeypatch its methods for failure injection.
 export function readPhaseScope(projectDir: string, phaseDir: string, phaseNumber: string): PhaseScopeRead {
@@ -98,26 +89,25 @@ export function readPhaseScope(projectDir: string, phaseDir: string, phaseNumber
   }
   if (phaseDirStat.kind === 'found') {
     const scan = scanPhasePlans(phaseDir);
-    if (scan.scope === SCOPE.UNREADABLE) {
-      // Directory exists but scanPhasePlans's own readdirSync(phaseDir) call
-      // failed (EACCES/EIO race) — a real read failure the gate must not
-      // silently pass (#2365 review), mirroring the prior isRealReadFailure
-      // branch below for the readdirSync-throws case.
+    if (scan.scope !== SCOPE.COMPLETE) {
+      // Directory exists but scanPhasePlans could not see all of it: its own readdirSync(phaseDir)
+      // failed (UNREADABLE) or the nested plans/ directory exists and could not be read
+      // (TRUNCATED). Only COMPLETE is a real answer; a short plan set is never evidence of "no
+      // plans" (#2365 review, #5170), so the gate must not pass over it.
       return {
         text: '',
-        readError: 'could not read the phase directory: scanPhasePlans reported scope UNREADABLE',
+        readError: `could not read the phase directory: scanPhasePlans reported scope ${scan.scope.toUpperCase()}`,
       };
     }
     const plans = [...scan.planFiles].sort();
     for (const p of plans) {
-      try {
-        chunks.push(fs.readFileSync(path.join(phaseDir, p), 'utf8'));
-      } catch (err) {
-        // A plan file that exists but cannot be read — record it and keep
+      const plan = readTextEvidence(path.join(phaseDir, p));
+      if (plan.kind === 'found') {
+        chunks.push(plan.value);
+      } else if (!readError) {
+        // A plan file the scan listed that cannot be read (or vanished since) — record it and keep
         // reading the rest so the message names the first failure.
-        if (!readError) {
-          readError = `could not read ${p}: ${err instanceof Error ? err.message : String(err)}`;
-        }
+        readError = `could not read ${p}: ${plan.kind === 'unreadable' ? plan.reason : 'it disappeared since the scan'}`;
       }
     }
   }
@@ -132,7 +122,8 @@ export function readPhaseScope(projectDir: string, phaseDir: string, phaseNumber
       const section = getRoadmapPhaseWithFallback(projectDir, phaseNumber);
       if (section) return { text: section, readError: null };
     } catch (err) {
-      if (isRealReadFailure(err)) {
+      // An absent roadmap/section is "not there yet"; any other failure is a real read failure.
+      if (evidenceFromError<string>(err, 'ROADMAP.md').kind === 'unreadable') {
         return {
           text: '',
           readError: `could not read the roadmap fallback: ${err instanceof Error ? err.message : String(err)}`,

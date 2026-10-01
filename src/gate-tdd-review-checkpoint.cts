@@ -23,14 +23,11 @@ import path from 'node:path';
 import { gateVerdict, gateUnreadable, gateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
 import { resolvePhaseDir } from './gate-phase-context.cjs';
-import { readDirEvidence, readTextEvidence } from './gate-evidence.cjs';
+import { readDirEvidence, readPlanSetEvidence, readTextEvidence } from './gate-evidence.cjs';
 import { resolveEvaluationScope } from './gate-evaluation-scope.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatterMod = require('./frontmatter.cjs');
 const { frontmatterKeyHasValue } = frontmatterMod;
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import planScanMod = require('./plan-scan.cjs');
-const { scanPhasePlans } = planScanMod;
 
 interface TddPlanRow {
   planId: string;
@@ -118,12 +115,18 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
     if (entries.kind === 'unreadable') {
       unreadable.push({ source: phaseDir, reason: entries.reason });
     } else if (entries.kind === 'found') {
-      // #3183: canonical plan set (root+nested, superseded-excluded) from the single owner.
-      for (const file of scanPhasePlans(phaseDir).planFiles) {
-        const planPath = path.join(phaseDir, file);
-        const plan = readTextEvidence(planPath);
-        if (plan.kind === 'unreadable') unreadable.push({ source: planPath, reason: plan.reason });
-        else if (plan.kind === 'found' && isTddPlan(plan.value)) tddPlanFiles.push(planPath);
+      // #3183: canonical plan set (root+nested, superseded-excluded) from the single owner. A scan
+      // that did not see every plan (an unreadable nested plans/) is `unreadable`, never a short list.
+      const planSet = readPlanSetEvidence(phaseDir);
+      if (planSet.kind === 'unreadable') {
+        unreadable.push({ source: planSet.span ?? phaseDir, reason: planSet.reason });
+      } else {
+        for (const file of planSet.value) {
+          const planPath = path.join(phaseDir, file);
+          const plan = readTextEvidence(planPath);
+          if (plan.kind === 'unreadable') unreadable.push({ source: planPath, reason: plan.reason });
+          else if (plan.kind === 'found' && isTddPlan(plan.value)) tddPlanFiles.push(planPath);
+        }
       }
     }
   }

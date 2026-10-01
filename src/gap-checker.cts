@@ -21,16 +21,13 @@ import path from 'node:path';
 import io = require('./io.cjs');
 const { output, error, formatDiagnosticToken } = io;
 import { escapeRegex } from './pattern.cjs';
-import { readTextEvidence, evidenceFound, evidenceFromError } from './gate-evidence.cjs';
+import { readTextEvidence, readPlanSetEvidence, evidenceFound, evidenceFromError } from './gate-evidence.cjs';
 import type { Evidence } from './gate-evidence.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningPaths, planningDir, findContextMdIn } = planningWorkspace;
 import { parseDecisions, extractDecisions } from './decisions.cjs';
 import { iterateBullets } from './markdown-sectionizer.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import planScanMod = require('./plan-scan.cjs');
-const { scanPhasePlans } = planScanMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const { scopeToPhase } = phaseIdMod;
@@ -462,15 +459,20 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
   const items: Item[] = [...reqItems, ...dItems];
 
   let planText = '';
-  try {
-    if (phaseDirFiles.length > 0) {
-      // #3183 (lint-plan-count-drift): source the live plan-file list from
-      // the single owner (scanPhasePlans) instead of a local `-PLAN\.md$`
-      // filter on the already-read listing — picks up bare PLAN.md, nested
-      // plans/, and excludes superseded plans, none of which the prior
-      // root-only exact-suffix filter did.
-      const files = scanPhasePlans(absPhaseDir).planFiles;
-      planText = files.map(f => {
+  if (phaseDirFiles.length > 0) {
+    // #3183 (lint-plan-count-drift): source the live plan-file list from
+    // the single owner (scanPhasePlans) instead of a local `-PLAN\.md$`
+    // filter on the already-read listing — picks up bare PLAN.md, nested
+    // plans/, and excludes superseded plans, none of which the prior
+    // root-only exact-suffix filter did.
+    // #5170: a scan that did not see every plan (an existing nested plans/ that could not be read,
+    // SCOPE.TRUNCATED) is `unreadable`, never a short plan set that reports the missing plans' IDs
+    // as "Not covered".
+    const planSet = readPlanSetEvidence(absPhaseDir);
+    if (planSet.kind === 'unreadable') {
+      unreadable.push({ reason: planSet.reason, span: planSet.span ?? absPhaseDir });
+    } else {
+      planText = planSet.value.map(f => {
         const planPath = path.join(absPhaseDir, f);
         const plan = readTextEvidence(planPath);
         // A plan that exists but cannot be read is `unreadable`, never an empty slice of the text the
@@ -479,9 +481,6 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
         return plan.kind === 'found' ? plan.value : '';
       }).join('\n');
     }
-  } catch (err) {
-    const failure = evidenceFromError<string>(err, absPhaseDir);
-    if (failure.kind === 'unreadable') unreadable.push({ reason: failure.reason, span: absPhaseDir });
   }
 
   // FIX D (#1365): surface decision could-not-parse independently of whether

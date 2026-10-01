@@ -21,6 +21,12 @@
  */
 import fs from 'node:fs';
 import type { GateVerdict, UnreadableVerdict } from './gate-verdict.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planScanMod = require('./plan-scan.cjs');
+const { scanPhasePlans } = planScanMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningScopeMod = require('./planning-scope.cjs');
+const { SCOPE } = planningScopeMod;
 
 /** The evidence is there; `value` is what was read. */
 export type Found<T> = { readonly kind: 'found'; readonly value: T };
@@ -103,6 +109,27 @@ export function statEvidence(targetPath: string): Evidence<fs.Stats> {
   } catch (err) {
     return classifyFailure<fs.Stats>(err, targetPath);
   }
+}
+
+/**
+ * The canonical plan set of a phase directory that is known to exist, as evidence (#5170). Only the
+ * scan's `SCOPE.COMPLETE` is a real answer: `TRUNCATED` (an existing nested `plans/` that could not be
+ * read), `UNREADABLE` and `UNSCOPED` mean the scan did not see every plan, so a short or empty list is
+ * `unreadable` and never "no plans". Every gate that gets its plans from `scanPhasePlans` goes through
+ * this one reader.
+ */
+export function readPlanScanEvidence(phaseDir: string): Observed<{ planFiles: string[]; summaryFiles: string[] }> {
+  const scan = scanPhasePlans(phaseDir);
+  if (scan.scope !== SCOPE.COMPLETE) {
+    return { kind: 'unreadable', reason: `plan scan ${scan.scope}`, span: phaseDir };
+  }
+  return evidenceFound({ planFiles: [...scan.planFiles], summaryFiles: [...scan.summaryFiles] });
+}
+
+/** The plan half of {@link readPlanScanEvidence}. */
+export function readPlanSetEvidence(phaseDir: string): Observed<string[]> {
+  const scan = readPlanScanEvidence(phaseDir);
+  return scan.kind === 'unreadable' ? scan : evidenceFound(scan.value.planFiles);
 }
 
 /** The three arms a gate supplies; `unreadable` must produce an `UnreadableVerdict`. */

@@ -37,9 +37,7 @@ import { gateVerdict, gateUnreadable, gateUsageFailure, isGateUsageFailure, GATE
 import type { GateResult } from './gate-verdict.cjs';
 import { resolveContainedPath, resolvePhaseDir } from './gate-phase-context.cjs';
 import { escapeEre } from './pattern.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import planScanMod = require('./plan-scan.cjs');
-const { scanPhasePlans } = planScanMod;
+import { readPlanScanEvidence } from './gate-evidence.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -393,13 +391,12 @@ function resolvePhase(
 
   const refs: string[] = [];
   let summaryCount = 0;
-  let entries: string[];
-  try {
-    // The canonical LIVE summary set (root + nested, superseded excluded) from its single owner.
-    entries = [...scanPhasePlans(phaseDir).summaryFiles].sort();
-  } catch {
-    throw new ScopeUnreadable('phase-dir-unreadable');
-  }
+  // The canonical LIVE summary set (root + nested, superseded excluded) from its single owner. A scan
+  // that did not see every summary (an existing nested plans/ that could not be read) is "could not
+  // look": a short summary set would narrow the phase's commits and report success (#5170).
+  const planScan = readPlanScanEvidence(phaseDir);
+  if (planScan.kind === 'unreadable') throw new ScopeUnreadable('phase-dir-unreadable');
+  const entries = [...planScan.value.summaryFiles].sort();
   for (const name of entries) {
     try {
       refs.push(...extractTaskCommitRefs(fs.readFileSync(path.join(phaseDir, name), 'utf-8')));

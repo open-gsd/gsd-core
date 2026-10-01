@@ -41,15 +41,25 @@ function withFsFailure(method, match, code, body) {
  * preload's path, written under `dir`.
  */
 function writeReadFailurePreload(dir, suffix, code = 'EACCES') {
-  const preload = path.join(dir, 'fail-read-preload.cjs');
+  return writeMethodFailurePreload(dir, 'readFileSync', suffix, code, 'fail-read-preload.cjs');
+}
+
+/**
+ * The general form of {@link writeReadFailurePreload}: a `--require` preload that makes
+ * `fs[method]` throw `code` for any path (string) ending in `suffix`, for a CLI child process.
+ * `readdirSync` on a nested `plans/` directory is the case the plan-scan gates need.
+ */
+function writeMethodFailurePreload(dir, method, suffix, code = 'EACCES', fileName = `fail-${method}-preload.cjs`) {
+  const failure = method === 'readFileSync' ? 'simulated read failure' : 'simulated failure';
+  const preload = path.join(dir, fileName);
   fs.writeFileSync(
     preload,
     [
       "const fs = require('node:fs');",
-      'const real = fs.readFileSync;',
-      'fs.readFileSync = function (p, ...rest) {',
+      `const real = fs[${JSON.stringify(method)}];`,
+      `fs[${JSON.stringify(method)}] = function (p, ...rest) {`,
       `  if (typeof p === 'string' && p.endsWith(${JSON.stringify(suffix)})) {`,
-      `    const err = new Error(${JSON.stringify(`${code}: simulated read failure`)});`,
+      `    const err = new Error(${JSON.stringify(`${code}: ${failure}`)});`,
       `    err.code = ${JSON.stringify(code)};`,
       '    throw err;',
       '  }',
@@ -61,4 +71,4 @@ function writeReadFailurePreload(dir, suffix, code = 'EACCES') {
   return preload;
 }
 
-module.exports = { withFsFailure, writeReadFailurePreload };
+module.exports = { withFsFailure, writeReadFailurePreload, writeMethodFailurePreload };
