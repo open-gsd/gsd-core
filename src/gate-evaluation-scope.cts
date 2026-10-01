@@ -33,7 +33,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execGit as execGitSeam } from './shell-command-projection.cjs';
 import type { SpawnResultOutput } from './shell-command-projection.cjs';
-import { gateVerdict, gateUsageFailure, isGateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
+import { gateVerdict, gateUnreadable, gateUsageFailure, isGateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
 import { resolveContainedPath, resolvePhaseDir } from './gate-phase-context.cjs';
 import { escapeEre } from './pattern.cjs';
@@ -603,7 +603,10 @@ export function evaluateEvaluationScope(input: { projectDir: string; args: reado
     unit = { kind: 'phase', phase: '', phaseDir: contained };
   }
   const scope = resolveEvaluationScope(input.projectDir, unit, options);
+  // An unresolvable scope is "could not look" (a missing git, a timeout): outcome `unreadable`, exit
+  // UNAVAILABLE, never a pass-shaped exit 0 (#5170). The payload is unchanged.
+  if (scope.status === 'unresolvable') return gateUnreadable(false, { ...scope });
   // `pass` only for a scope with nothing to explain; an empty-but-resolved scope (it carries a reason) is advisory.
-  const outcome = scope.status === 'unresolvable' ? 'skip' : scope.status === 'degraded' || scope.reason !== null ? 'advisory' : 'pass';
+  const outcome = scope.status === 'degraded' || scope.reason !== null ? 'advisory' : 'pass';
   return gateVerdict(outcome, false, { ...scope });
 }

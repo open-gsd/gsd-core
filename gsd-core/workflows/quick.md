@@ -581,7 +581,11 @@ If no active code-review step hook exists, skip with message "Code review skippe
 # lockfiles excluded. A `base..tip` range (the #4466 bound) still folds in every unrelated
 # commit interleaved inside the task's window (worktree merge-back, a shared tree, another
 # session); the union cannot. No commits for this task => empty scope => skip review.
-QUICK_SCOPE_JSON=$(gsd_run check evaluation-scope --quick "${quick_id}" --include-files --raw 2>/dev/null)
+# Exit 69 (UNAVAILABLE) is the resolver's "could not look" (`status: unresolvable`); its JSON carries
+# the reason, so the capture must survive it (a bare assignment aborts under `set -e` and drops it).
+QUICK_SCOPE_RC=0
+QUICK_SCOPE_JSON=$(gsd_run check evaluation-scope --quick "${quick_id}" --include-files --raw 2>/dev/null) || QUICK_SCOPE_RC=$?
+if [ "$QUICK_SCOPE_RC" -ne 0 ] && [ "$QUICK_SCOPE_RC" -ne 69 ]; then QUICK_SCOPE_JSON=""; fi
 CHANGED_FILES=$(printf '%s' "$QUICK_SCOPE_JSON" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{process.stdout.write(JSON.parse(s).files.join(' '))}catch{}})")
 if [ -z "$CHANGED_FILES" ]; then
   # Say WHY the scope is empty (no commits for this task, only excluded paths, or git could not be read).

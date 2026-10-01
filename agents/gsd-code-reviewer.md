@@ -129,7 +129,7 @@ This fallback runs ONLY when invoked directly without workflow context. The `/gs
 
 If `files` is absent or empty, ask the evaluation-scope resolver (#5164, ADR-5057 §4) for the phase named by `phase_dir`:
 1. The phase number is the leading digits of the `phase_dir` basename; add `--since "$diff_base"` when `diff_base` is provided in config
-2. If the resolver reports `status: unresolvable`, or returns no `files`, **fail closed** with error: "Cannot determine review scope. Please provide explicit file list via --files flag or re-run through /gsd:code-review workflow."
+2. If the resolver reports `status: unresolvable` (it exits 69 and still prints its JSON), or returns no `files`, **fail closed** with error: "Cannot determine review scope. Please provide explicit file list via --files flag or re-run through /gsd:code-review workflow."
 
 Do NOT invent a heuristic (e.g., HEAD~5) or a `base..HEAD` range — silent mis-scoping is worse than failing loudly.
 

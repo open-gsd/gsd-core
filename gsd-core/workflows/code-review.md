@@ -251,7 +251,11 @@ scope that reports success. Its `rangeBase` (the parent of the commit that first
 directory, or `LAST_REVIEW_COMMIT` when a prior review exists — #3661) is `DIFF_BASE`, kept only for
 the reviewer lanes that need an anchor sha.
 ```bash
-SCOPE_JSON=$(gsd_run check evaluation-scope --phase "${PADDED_PHASE}" ${LAST_REVIEW_COMMIT:+--since "$LAST_REVIEW_COMMIT"} --raw 2>/dev/null) || SCOPE_JSON=""
+# Exit 69 (UNAVAILABLE) is the resolver saying "could not look" (`status: unresolvable`): its JSON
+# carries the reason and is kept. Any other non-zero status means the command did not run: no JSON.
+SCOPE_RC=0
+SCOPE_JSON=$(gsd_run check evaluation-scope --phase "${PADDED_PHASE}" ${LAST_REVIEW_COMMIT:+--since "$LAST_REVIEW_COMMIT"} --raw 2>/dev/null) || SCOPE_RC=$?
+if [ "$SCOPE_RC" -ne 0 ] && [ "$SCOPE_RC" -ne 69 ]; then SCOPE_JSON=""; fi
 # One field of the resolver's JSON; arrays print one element per line, an absent field prints nothing.
 scope_field() {
   printf '%s' "$SCOPE_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=JSON.parse(s)[process.argv[1]];process.stdout.write(Array.isArray(v)?v.join("\n"):v==null?"":String(v))}catch{process.exit(1)}})' "$1" 2>/dev/null
