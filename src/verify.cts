@@ -41,6 +41,10 @@ import { detectSchemaFiles, checkSchemaDrift } from './schema-detect.cjs';
 import { extractTaggedBlocks } from './markdown-sectionizer.cjs';
 import { compileUserPattern, MAX_USER_PATTERN_LEN } from './pattern.cjs';
 import { declareGateExit } from './gate-exit.cjs';
+import { readTextEvidence } from './gate-evidence.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- plan-document.cjs is an export= CommonJS module
+import planDocumentMod = require('./plan-document.cjs');
+const { parsePlanDocument } = planDocumentMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- agent-install-check.cjs is an export= CommonJS module
 import agentInstallCheck = require('./agent-install-check.cjs');
 const { checkAgentsInstalled, checkCodexModelPosture, checkCodexSandboxPosture } = agentInstallCheck;
@@ -303,8 +307,8 @@ function cmdVerifySummary(
 
 /**
  * Issue #429 — negative-grep comment-text echo gate.
- * A literal that an acceptance criterion negative-greps for (grep -c 'LIT' file == 0)
- * must not also appear verbatim inside an <action> body, or the executor's commit-time
+ * A literal that an acceptance criterion negative-greps for (grep -c 'LIT' file == 0, or the
+ * negated spellings `! grep -q 'LIT' file` / `if ! grep ...`, #4541) must not also appear verbatim inside an <action> body, or the executor's commit-time
  * verify gate fails on the comment echo rather than a real regression. Conservative:
  * errors only on a confidently-extracted QUOTED literal; ambiguous (bareword) → warning.
  */
@@ -414,6 +418,20 @@ function scanNegativeGrepCommentEcho(content: string): { errors: string[]; warni
   //    while a prose echo on the same line is still caught.
   const cmdSpanRe =
     /grep(?:\s+-{1,2}[A-Za-z][A-Za-z-]*)+\s+(?:'[^']*'|"[^"]*"|[^\s'"|>&;]+)[^\n]*?(?:==|-eq|=)\s*0\b/g;
+  // #4541: the other spellings of a negative gate — `! grep ...` / `if ! grep ...` (the shell
+  // negates the exit status) and `grep ...; test $? -ne 0`. A pasted command in an <action> is
+  // likewise not an echo, so these spans are removed from the scanned action text too.
+  // The `!` is a command word: it follows a line start, whitespace, `;`, `(` or the `>` closing the
+  // `<automated>` tag, and is itself followed by whitespace (so `!=` and `!==` never match).
+  const negatedGrepRe =
+    /(?:^|[\s;(>])!\s+grep((?:\s+-{1,2}[A-Za-z][A-Za-z-]*)*)\s+(?:'([^']*)'|"([^"]*)"|([^\s'"|>&;]+))/g;
+  const negatedSpanRe =
+    /(?:^|[\s;(>])!\s+grep(?:\s+-{1,2}[A-Za-z][A-Za-z-]*)*\s+(?:'[^']*'|"[^"]*"|[^\s'"|>&;]+)[^\n;&|<]*/g;
+  const statusNegatedTest = /\$\?\s*(?:-ne\s+0|-eq\s+1|!=\s*0|==\s*1)(?![\w.])/;
+  const statusNegatedSpanRe =
+    /grep(?:\s+-{1,2}[A-Za-z][A-Za-z-]*)*\s+(?:'[^']*'|"[^"]*"|[^\s'"|>&;]+)[^\n]*?\$\?\s*(?:-ne\s+0|-eq\s+1|!=\s*0|==\s*1)(?![\w.])/g;
+  const anyGrepRe =
+    /grep((?:\s+-{1,2}[A-Za-z][A-Za-z-]*)*)\s+(?:'([^']*)'|"([^"]*)"|([^\s'"|>&;]+))/g;
   // Security scan: must see the FULL text up to the first </action> — including a
   // malformed inner <action> — so a grep-echo-0 trick cannot hide behind a
   // deliberately-unclosed tag. Use a bounded to-first-close scan (ReDoS-safe via
@@ -423,7 +441,9 @@ function scanNegativeGrepCommentEcho(content: string): { errors: string[]; warni
   const actionRe = /<action>([\s\S]{0,20000}?)<\/action>/g;
   let acm: RegExpExecArray | null;
   while ((acm = actionRe.exec(text)) !== null) actionZones.push(acm[1]);
-  const scannableActionText = actionZones.map((zone) => zone.replace(cmdSpanRe, ' ')).join('\n');
+  const scannableActionText = actionZones
+    .map((zone) => zone.replace(cmdSpanRe, ' ').replace(negatedSpanRe, ' ').replace(statusNegatedSpanRe, ' '))
+    .join('\n');
 
   // 3. Per shell SEGMENT (split lines on && / ||) extract count-grep literals and
   //    check echoes. Per-segment splitting keeps a positive gate (`== 1`) from
@@ -432,23 +452,44 @@ function scanNegativeGrepCommentEcho(content: string): { errors: string[]; warni
   const seenWarn = new Set<string>();
   const segments = text.split('\n').flatMap(splitShellSegments);
   for (const seg of segments) {
-    if (!/grep(?:\s+-{1,2}[A-Za-z])/.test(seg) || !zeroCmp(seg)) continue;
-    countGrepRe.lastIndex = 0;
+    if (!/grep\b/.test(seg)) continue;
+    const countForm = /grep(?:\s+-{1,2}[A-Za-z])/.test(seg) && zeroCmp(seg);
+    const statusForm = statusNegatedTest.test(seg);
     const quotedLits: string[] = [];
     const bareLits: string[] = [];
-    let m: RegExpExecArray | null;
-    while ((m = countGrepRe.exec(seg)) !== null) {
-      if (!optsHaveCount(m[1]) || optsHaveInvert(m[1])) continue; // need count, not invert (-cv is positive)
+    const harvest = (m: RegExpExecArray): void => {
       if (m[2] !== undefined) quotedLits.push(m[2]);
       else if (m[3] !== undefined) quotedLits.push(m[3]);
       else if (m[4] !== undefined && plausibleBare(m[4])) bareLits.push(m[4]);
+    };
+    let m: RegExpExecArray | null;
+    if (countForm) {
+      countGrepRe.lastIndex = 0;
+      while ((m = countGrepRe.exec(seg)) !== null) {
+        if (!optsHaveCount(m[1]) || optsHaveInvert(m[1])) continue; // need count, not invert (-cv is positive)
+        harvest(m);
+      }
     }
+    // `! grep -q 'LIT' f` / `if ! grep ...`: the negation is the shell's own, so any grep it
+    // negates is a negative gate whether or not it counts (an inverted grep is the positive one).
+    negatedGrepRe.lastIndex = 0;
+    while ((m = negatedGrepRe.exec(seg)) !== null) {
+      if (!optsHaveInvert(m[1])) harvest(m);
+    }
+    // `grep -q 'LIT' f; test $? -ne 0`: the same gate with the status tested on the next command.
+    if (statusForm) {
+      anyGrepRe.lastIndex = 0;
+      while ((m = anyGrepRe.exec(seg)) !== null) {
+        if (!optsHaveInvert(m[1])) harvest(m);
+      }
+    }
+    if (quotedLits.length === 0 && bareLits.length === 0) continue;
     for (const quoted of quotedLits) {
       if (!quoted || allow.has(quoted) || seenErr.has(quoted)) continue;
       if (scannableActionText.includes(quoted)) {
         seenErr.add(quoted);
         errors.push(
-          `Plan body contains forbidden literal "${quoted}" in an <action> block, but an acceptance criterion negative-greps for it (grep -c ... == 0). Rephrase the literal by concept, remove it from the plan body, or add <!-- planner-discipline-allow: ${quoted} --> if it must legitimately appear.`,
+          `Plan body contains forbidden literal "${quoted}" in an <action> block, but an acceptance criterion negative-greps for it (grep -c ... == 0, or a negated gate such as ! grep -q ...). Rephrase the literal by concept, remove it from the plan body, or add <!-- planner-discipline-allow: ${quoted} --> if it must legitimately appear.`,
         );
       }
     }
@@ -2358,19 +2399,52 @@ function runVerifySchemaDrift(
   // drift check.
   const { planFiles, summaryFiles } = planScanMod.scanPhasePlans(phaseDir);
 
+  // #5170 (ADR-5057 §4): every read here is typed evidence. A file that cannot be read is
+  // `unreadable` and is reported as such — it is never "no files, so no drift". A file that
+  // vanished since the scan (`none`) contributes nothing.
+  let unreadableRead: { file: string; reason: string } | null = null;
   const allFiles: string[] = [];
   for (const pf of planFiles) {
-    const content = fs.readFileSync(path.join(phaseDir, pf), 'utf-8');
-    const fmMatch = content.match(/files_modified:\s*\[([^\]]{0,8000})\]/);
-    if (fmMatch) {
-      const files = fmMatch[1].split(',').map((f) => f.trim()).filter(Boolean);
-      allFiles.push(...files);
+    const read = readTextEvidence(path.join(phaseDir, pf));
+    if (read.kind === 'unreadable') {
+      unreadableRead = unreadableRead ?? { file: pf, reason: read.reason };
+      continue;
+    }
+    if (read.kind === 'none') continue;
+    // `files_modified` through the Frontmatter Module (the read phase-plan-index uses via
+    // RawPlan.filesModified): block sequences, inline arrays and CRLF all yield their files.
+    for (const file of parsePlanDocument(read.value).filesModified) {
+      const trimmed = file.trim();
+      if (trimmed) allFiles.push(trimmed);
     }
   }
 
   let executionLog = '';
   for (const sf of summaryFiles) {
-    executionLog += fs.readFileSync(path.join(phaseDir, sf), 'utf-8') + '\n';
+    const read = readTextEvidence(path.join(phaseDir, sf));
+    if (read.kind === 'unreadable') {
+      unreadableRead = unreadableRead ?? { file: sf, reason: read.reason };
+      continue;
+    }
+    if (read.kind === 'found') executionLog += read.value + '\n';
+  }
+
+  // `--skip` (GSD_SKIP_SCHEMA_CHECK) bypasses the gate, so what could not be read is moot then.
+  if (unreadableRead !== null && !skipFlag) {
+    output(
+      {
+        block: false,
+        drift_detected: false,
+        blocking: false,
+        unreadable: true,
+        unreadable_file: unreadableRead.file,
+        read_error: unreadableRead.reason,
+        message: `schema-drift could not read ${unreadableRead.file} (${unreadableRead.reason}); drift was not evaluated`,
+      },
+      raw,
+    );
+    declareGateExit({ outcome: 'unreadable' }, 'status');
+    return;
   }
 
   // #5164: the phase's own commits from the evaluation-scope resolver (ADR-5057 §4) — the former

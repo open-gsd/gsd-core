@@ -4754,6 +4754,132 @@ describe('scanNegativeGrepCommentEcho — pure unit tests', () => {
       `errors: ${JSON.stringify(result.errors)}`,
     ].join(' '));
   });
+
+  // ── #4541: the negated spellings of a negative gate ─────────────────────────────
+  //
+  // `! grep -q 'LIT' f` is the same gate as `grep -c 'LIT' f == 0` — it passes only when LIT is
+  // absent — but the scan keyed on the zero comparison alone, so a plan whose <action> echoes LIT
+  // sailed through the plan-structure gate and then failed the executor's own verify command.
+
+  const ECHO = 'Do NOT reintroduce the old echoTok hack.';
+
+  test('case 21 — `! grep -q \'LIT\' f` with the literal echoed in <action> is an error naming both gate forms (#4541)', () => {
+    const verify = require(VERIFY_CJS);
+    const result = verify.scanNegativeGrepCommentEcho(makePlan({
+      negativeGrep: "! grep -q 'echoTok' src/file.ts",
+      actionEcho: ECHO,
+    }));
+    assert.strictEqual(result.errors.length, 1, `expected 1 error, got: ${JSON.stringify(result.errors)}`);
+    assert.ok(result.errors[0].includes('"echoTok"'), `error should name the literal, got: ${result.errors[0]}`);
+    assert.ok(result.errors[0].includes('grep -c ... == 0'), 'the covered count form stays named');
+    assert.ok(result.errors[0].includes('! grep'), 'the negated form is named too');
+    assert.ok(result.errors[0].includes('planner-discipline-allow: echoTok'), 'the allowlist remedy is kept');
+  });
+
+  test('case 22 — `if ! grep ...; then` is the same gate', () => {
+    const verify = require(VERIFY_CJS);
+    const result = verify.scanNegativeGrepCommentEcho(makePlan({
+      negativeGrep: "if ! grep -q 'echoTok' src/file.ts; then echo ok; fi",
+      actionEcho: ECHO,
+    }));
+    assert.strictEqual(result.errors.length, 1, `expected 1 error, got: ${JSON.stringify(result.errors)}`);
+    assert.ok(result.errors[0].includes('"echoTok"'));
+  });
+
+  test('case 23 — `grep ... ; test $? -ne 0` is the same gate (the status is negated on the next command)', () => {
+    const verify = require(VERIFY_CJS);
+    const result = verify.scanNegativeGrepCommentEcho(makePlan({
+      negativeGrep: "grep -q 'echoTok' src/file.ts; test $? -ne 0",
+      actionEcho: ECHO,
+    }));
+    assert.strictEqual(result.errors.length, 1, `expected 1 error, got: ${JSON.stringify(result.errors)}`);
+    assert.ok(result.errors[0].includes('"echoTok"'));
+  });
+
+  test('case 24 — CONTROL: a plain positive `grep -q \'LIT\' f` gate does NOT fire, however the action echoes the literal', () => {
+    const verify = require(VERIFY_CJS);
+    for (const gate of [
+      "grep -q 'echoTok' src/file.ts",
+      "grep -q 'echoTok' src/file.ts && echo present",
+      "if grep -q 'echoTok' src/file.ts; then echo ok; fi",
+      "test $(grep -c 'echoTok' src/file.ts) -ge 1",
+      "grep -q 'echoTok' src/file.ts; test $? -eq 0",
+    ]) {
+      const result = verify.scanNegativeGrepCommentEcho(makePlan({ positiveGrep: gate, actionEcho: ECHO }));
+      assert.deepStrictEqual(result.errors, [], `positive gate must not fire: ${gate}`);
+      assert.deepStrictEqual(result.warnings, [], `positive gate must not warn: ${gate}`);
+    }
+  });
+
+  test('case 25 — a negated gate whose literal is NOT echoed in <action> passes (the rule is the echo, not the gate)', () => {
+    const verify = require(VERIFY_CJS);
+    const result = verify.scanNegativeGrepCommentEcho(makePlan({
+      negativeGrep: "! grep -q 'echoTok' src/file.ts",
+      actionEcho: 'Remove the old hack.',
+    }));
+    assert.deepStrictEqual(result.errors, []);
+    assert.deepStrictEqual(result.warnings, []);
+  });
+
+  test('case 26 — the allowlist marker suppresses the negated-form error', () => {
+    const verify = require(VERIFY_CJS);
+    const result = verify.scanNegativeGrepCommentEcho(makePlan({
+      negativeGrep: "! grep -q 'echoTok' src/file.ts",
+      actionEcho: ECHO,
+      allowlistMarker: '<!-- planner-discipline-allow: echoTok -->',
+    }));
+    assert.deepStrictEqual(result.errors, []);
+  });
+
+  test('case 27 — a negated gate PASTED into an <action> does not self-flag (same as the count form)', () => {
+    const verify = require(VERIFY_CJS);
+    const content = [
+      '---', 'phase: 01-test', 'plan: 01', 'type: execute', 'wave: 1', 'depends_on: []',
+      'files_modified: [file.ts]', 'autonomous: true', 'must_haves:', '  - AC1', '---', '',
+      '<task>', '<name>Add verify command</name>', '<action>',
+      "Add this to the CI script: ! grep -q 'selfTok' file",
+      'and this one too: if ! grep -q "selfTok" file; then echo ok; fi',
+      '</action>', '<verify><automated>npm test</automated></verify>', '<done>Done</done>', '</task>',
+    ].join('\n');
+    const result = verify.scanNegativeGrepCommentEcho(content);
+    assert.deepStrictEqual(result.errors, [], `pasted negated command must not self-flag: ${JSON.stringify(result.errors)}`);
+  });
+
+  test('case 28 — an inverted negated grep (`! grep -qv`) is a positive assertion, not a negative gate', () => {
+    const verify = require(VERIFY_CJS);
+    const result = verify.scanNegativeGrepCommentEcho(makePlan({
+      negativeGrep: "! grep -qv 'echoTok' src/file.ts",
+      actionEcho: ECHO,
+    }));
+    assert.deepStrictEqual(result.errors, []);
+  });
+
+  test('case 29 — an unquoted bareword in the negated form is a warning, not an error (as in the count form)', () => {
+    const verify = require(VERIFY_CJS);
+    const result = verify.scanNegativeGrepCommentEcho(makePlan({
+      negativeGrep: '! grep -q badTok src/file.ts',
+      actionEcho: 'Remove badTok from codebase.',
+    }));
+    assert.deepStrictEqual(result.errors, []);
+    assert.strictEqual(result.warnings.length, 1, `expected 1 warning, got: ${JSON.stringify(result.warnings)}`);
+    assert.ok(result.warnings[0].includes('badTok'));
+  });
+
+  test('case 30 — mixed: a positive `grep -q` and a negated `! grep -q` in one chain flag only the negated literal', () => {
+    const verify = require(VERIFY_CJS);
+    const content = [
+      '---', 'phase: 01-test', 'plan: 01', 'type: execute', 'wave: 1', 'depends_on: []',
+      'files_modified: [file.ts]', 'autonomous: true', 'must_haves:', '  - AC1', '---', '',
+      '<task>', '<name>Mixed</name>', '<action>', 'Use presentTok for the new pattern.',
+      'Do not use absentTok any more.', '</action>',
+      "<verify><automated>grep -q 'presentTok' f && ! grep -q 'absentTok' f</automated></verify>",
+      '<done>Done</done>', '</task>',
+    ].join('\n');
+    const result = verify.scanNegativeGrepCommentEcho(content);
+    assert.strictEqual(result.errors.length, 1, `expected exactly 1 error, got: ${JSON.stringify(result.errors)}`);
+    assert.ok(result.errors[0].includes('"absentTok"'));
+    assert.ok(!result.errors[0].includes('presentTok'));
+  });
 });
 
 // ─── Group 2: end-to-end via runGsdTools ──────────────────────────────────────
@@ -4800,6 +4926,24 @@ describe('scanNegativeGrepCommentEcho — end-to-end via verify plan-structure',
     const result = runGsdTools('verify plan-structure .planning/phases/01-test/01-01-PLAN.md', tmpDir);
     const output = JSON.parse(result.output);
     assert.strictEqual(output.valid, true, `expected valid:true with allowlist, got: ${JSON.stringify(output)}`);
+  });
+
+  test('e2e case 3 — the `! grep -q` negated gate with an echoed literal causes valid:false (#4541)', () => {
+    const planContent = makePlan({
+      negativeGrep: "! grep -q '?from=' src/animal-detail.tsx",
+      actionEcho: 'Do NOT reintroduce the old ?from= referrer hack.',
+    });
+    const planDir = path.join(tmpDir, '.planning', 'phases', '01-test');
+    fs.mkdirSync(planDir, { recursive: true });
+    fs.writeFileSync(path.join(planDir, '01-01-PLAN.md'), planContent);
+
+    const result = runGsdTools('verify plan-structure .planning/phases/01-test/01-01-PLAN.md', tmpDir);
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.valid, false, `expected valid:false, got: ${JSON.stringify(output)}`);
+    assert.ok(
+      output.errors.some(e => e.includes('?from=') && e.includes('! grep')),
+      `expected an error naming ?from= and the negated form, got: ${JSON.stringify(output.errors)}`,
+    );
   });
 });
 

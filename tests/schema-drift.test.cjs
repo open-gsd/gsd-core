@@ -440,3 +440,159 @@ describe('#1571 regression: verify schema-drift resolves the phase by token, not
     assert.notStrictEqual(output.message, 'Phase directory not found: 11-expansion');
   });
 });
+
+// ─── #4562 / #5170: files_modified is read through the Frontmatter Module ─────────────────────
+//
+// The verb used to find a plan's files with `files_modified:\s*\[...\]`, which only knows the inline
+// array: a YAML block sequence (the form most planners write) yielded NO files, so a plan that
+// modified a schema file reported "no drift". It now reads the field the way phase-plan-index does
+// (RawPlan.filesModified), and a plan it cannot read is `unreadable` — never "no files, no drift".
+
+describe('verify schema-drift reads files_modified through the Frontmatter Module (#4562, #5170)', () => {
+  const { spawnSync } = require('node:child_process');
+  const { TEST_ENV_BASE } = require('./helpers.cjs');
+  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const TOOLS_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+  const UNAVAILABLE = 69;
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempGitProject('gsd-schema-drift-4562-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function writePlan(filesModifiedLines, eol = '\n') {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-setup');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(phaseDir, '01-01-PLAN.md'),
+      ['---', 'phase: 01-setup', 'plan: 01', ...filesModifiedLines, 'autonomous: true', '---', '', 'Plan content', ''].join(eol),
+    );
+    // No push evidence anywhere: a schema file in the plan is drift.
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n\n## Commands Run\n- npm run build\n');
+  }
+
+  function drift() {
+    const result = runGsdTools(['verify', 'schema-drift', '01-setup'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    return JSON.parse(result.output);
+  }
+
+  const SCHEMA = 'src/collections/Posts.ts';
+
+  test('a block sequence with ONE item is read: drift detected and blocking (#4562 fail-first)', () => {
+    writePlan(['files_modified:', `  - ${SCHEMA}`]);
+    const out = drift();
+    assert.strictEqual(out.drift_detected, true);
+    assert.strictEqual(out.blocking, true);
+    assert.strictEqual(out.block, true);
+    assert.deepStrictEqual(out.schema_files, [SCHEMA]);
+  });
+
+  test('a block sequence with N items is read in full: the schema file among them is found (#4562 fail-first)', () => {
+    writePlan(['files_modified:', '  - src/index.ts', `  - ${SCHEMA}`, '  - src/utils.ts']);
+    const out = drift();
+    assert.strictEqual(out.drift_detected, true);
+    assert.strictEqual(out.blocking, true);
+    assert.deepStrictEqual(out.schema_files, [SCHEMA]);
+  });
+
+  test('control: a block sequence of non-schema files is no drift', () => {
+    writePlan(['files_modified:', '  - src/index.ts', '  - src/utils.ts']);
+    const out = drift();
+    assert.strictEqual(out.drift_detected, false);
+    assert.strictEqual(out.blocking, false);
+  });
+
+  test('the inline array form still works', () => {
+    writePlan([`files_modified: [src/index.ts, ${SCHEMA}]`]);
+    const out = drift();
+    assert.strictEqual(out.drift_detected, true);
+    assert.strictEqual(out.blocking, true);
+    assert.deepStrictEqual(out.schema_files, [SCHEMA]);
+  });
+
+  test('CRLF line endings: the block sequence and the inline array give the same result', () => {
+    writePlan(['files_modified:', `  - ${SCHEMA}`], '\r\n');
+    const block = drift();
+    assert.strictEqual(block.drift_detected, true);
+    assert.deepStrictEqual(block.schema_files, [SCHEMA]);
+
+    writePlan([`files_modified: [${SCHEMA}]`], '\r\n');
+    const inline = drift();
+    assert.strictEqual(inline.drift_detected, true);
+    assert.deepStrictEqual(inline.schema_files, [SCHEMA]);
+  });
+
+  // The CLI child runs with a preload that makes fs.readFileSync throw EACCES for one path suffix:
+  // deterministic, and not defeated by running as root (no chmod).
+  function runWithReadFailure(suffix, args) {
+    const preload = path.join(tmpDir, 'fail-read-preload.cjs');
+    fs.writeFileSync(
+      preload,
+      [
+        "const fs = require('node:fs');",
+        'const real = fs.readFileSync;',
+        'fs.readFileSync = function (p, ...rest) {',
+        `  if (typeof p === 'string' && p.endsWith(${JSON.stringify(suffix)})) {`,
+        "    const err = new Error('EACCES: simulated read failure');",
+        "    err.code = 'EACCES';",
+        '    throw err;',
+        '  }',
+        '  return real.call(fs, p, ...rest);',
+        '};',
+        '',
+      ].join('\n'),
+    );
+    return spawnSync(process.execPath, ['--require', preload, TOOLS_PATH, ...args], {
+      cwd: tmpDir,
+      encoding: 'utf-8',
+      timeout: PROBE_TIMEOUT_MS,
+      env: { ...process.env, ...TEST_ENV_BASE },
+    });
+  }
+
+  test('an UNREADABLE plan is reported as unreadable (exit UNAVAILABLE), never "no files, no drift"', () => {
+    writePlan(['files_modified:', `  - ${SCHEMA}`]);
+    const r = runWithReadFailure('01-01-PLAN.md', ['verify', 'schema-drift', '01-setup']);
+    assert.strictEqual(r.status, UNAVAILABLE, `stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.strictEqual(out.unreadable, true);
+    assert.strictEqual(out.unreadable_file, '01-01-PLAN.md');
+    assert.strictEqual(out.read_error, 'EACCES');
+    assert.strictEqual(out.drift_detected, false, 'the existing payload shape is kept');
+    assert.strictEqual(out.block, false, 'the verb stays non-blocking in its payload');
+    assert.match(out.message, /could not read 01-01-PLAN\.md \(EACCES\)/);
+  });
+
+  test('an UNREADABLE summary is reported the same way', () => {
+    writePlan(['files_modified:', `  - ${SCHEMA}`]);
+    const r = runWithReadFailure('01-01-SUMMARY.md', ['verify', 'schema-drift', '01-setup']);
+    assert.strictEqual(r.status, UNAVAILABLE, `stderr: ${r.stderr}`);
+    assert.strictEqual(JSON.parse(r.stdout).unreadable_file, '01-01-SUMMARY.md');
+  });
+
+  test('control: the same read failure under --skip is moot — the gate is bypassed, exit 0', () => {
+    writePlan(['files_modified:', `  - ${SCHEMA}`]);
+    const r = runWithReadFailure('01-01-PLAN.md', ['verify', 'schema-drift', '01-setup', '--skip']);
+    assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.strictEqual(out.block, false);
+    assert.strictEqual(out.unreadable, undefined, 'no unreadable marker: the gate was bypassed, nothing was owed');
+  });
+
+  test('control: a readable plan exits 0 whether or not drift is found (the payload carries the verdict)', () => {
+    writePlan(['files_modified:', `  - ${SCHEMA}`]);
+    const r = spawnSync(process.execPath, [TOOLS_PATH, 'verify', 'schema-drift', '01-setup'], {
+      cwd: tmpDir,
+      encoding: 'utf-8',
+      timeout: PROBE_TIMEOUT_MS,
+      env: { ...process.env, ...TEST_ENV_BASE },
+    });
+    assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+    assert.strictEqual(JSON.parse(r.stdout).drift_detected, true);
+  });
+});
