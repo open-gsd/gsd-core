@@ -172,6 +172,65 @@ describe('gap-analysis: every read is typed evidence', () => {
   });
 });
 
+describe('verify schema-drift: a gate that could not look exits UNAVAILABLE, never a clean 0', () => {
+  const PRELOAD = [
+    "const fs = require('node:fs');",
+    'const real = fs.statSync;',
+    'fs.statSync = function patched(target, ...rest) {',
+    "  if (typeof target === 'string' && target.replace(/\\\\/g, '/').endsWith('.planning/phases')) {",
+    "    const err = new Error('EACCES: simulated stat failure'); err.code = 'EACCES'; throw err;",
+    '  }',
+    '  return real.call(this, target, ...rest);',
+    '};',
+    '',
+  ].join('\n');
+
+  test('[control] no phases directory is the documented "nothing to check": exit 0', () => {
+    const dir = createTempProject('gate-tolerant-');
+    try {
+      cleanup(path.join(dir, '.planning', 'phases'));
+      const result = runTools(['verify', 'schema-drift', '1', '--raw'], dir);
+      assert.equal(result.exitCode, 0);
+      assert.equal(JSON.parse(result.stdout).message, 'No phases directory');
+    } finally { cleanup(dir); }
+  });
+
+  test('[hostile] an exception inside the gate keeps the non-blocking payload and exits UNAVAILABLE (69)', () => {
+    const dir = createTempProject('gate-tolerant-');
+    try {
+      cleanup(path.join(dir, '.planning', 'phases'));
+      write(dir, '.planning/phases', 'a file where the phases directory belongs\n'); // readdir -> ENOTDIR inside the gate
+      const result = runTools(['verify', 'schema-drift', '1', '--raw'], dir);
+      assert.equal(result.exitCode, 69);
+      const payload = JSON.parse(result.stdout);
+      assert.equal(payload.block, false);
+      assert.equal(payload.drift_detected, false);
+      assert.match(payload.message, /^exception: /);
+    } finally { cleanup(dir); }
+  });
+
+  test('[hostile] a phases directory that cannot be examined (EACCES) is unreadable and exits 69, not "No phases directory"', () => {
+    const dir = createTempProject('gate-tolerant-');
+    try {
+      const preload = path.join(dir, 'stat-fail-preload.cjs');
+      fs.writeFileSync(preload, PRELOAD);
+      let result;
+      try {
+        const stdout = execFileSync(process.execPath, ['--require', preload, TOOLS_PATH, 'verify', 'schema-drift', '1', '--raw'], {
+          cwd: dir, encoding: 'utf-8', env: { ...process.env, ...TEST_ENV_BASE }, timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
+        });
+        result = { exitCode: 0, stdout: stdout.trim() };
+      } catch (err) {
+        result = { exitCode: err.status ?? 1, stdout: err.stdout?.toString().trim() ?? '' };
+      }
+      assert.equal(result.exitCode, 69);
+      const payload = JSON.parse(result.stdout);
+      assert.equal(payload.unreadable, true);
+      assert.equal(payload.read_error, 'EACCES');
+    } finally { cleanup(dir); }
+  });
+});
+
 describe('api-coverage.verify-pre: the phases-tree probe is evidence', () => {
   test('[control] no .planning/phases directory is `none`: the documented "not a GSD project" pass', () => {
     const dir = createTempProject('gate-tolerant-');
