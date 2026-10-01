@@ -418,7 +418,12 @@ describe('evaluateEvaluationScope — the check verb', () => {
     ]);
     assert.equal(resolved.outcome, 'pass');
     assert.equal(resolved.block, false);
-    assert.equal(evaluateEvaluationScope({ projectDir: repo.dir, args: ['--phase', '9'] }).outcome, 'skip');
+    // "Could not look" (an unresolvable scope) is outcome `unreadable`, never a pass-shaped `skip`; the
+    // resolver never blocks, and the payload still carries the reason (#5170).
+    const unresolvable = evaluateEvaluationScope({ projectDir: repo.dir, args: ['--phase', '9'] });
+    assert.equal(unresolvable.outcome, 'unreadable');
+    assert.equal(unresolvable.block, false);
+    assert.equal(unresolvable.payload.status, 'unresolvable');
     const bare = makeRepo();
     commit(bare, 'src/z.js', 'feat(03-01): z');
     assert.equal(evaluateEvaluationScope({ projectDir: bare.dir, args: ['--phase', '3'] }).outcome, 'advisory');

@@ -18,6 +18,7 @@ const { cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { computeUiSafetyGate, evaluateUiSafetyGate } = require('../gsd-core/bin/lib/gate-ui-safety.cjs');
+const { evaluateEvaluationScope } = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
 const { evaluateTddReviewCheckpoint } = require('../gsd-core/bin/lib/gate-tdd-review-checkpoint.cjs');
 const { evaluateDecisionCoverageVerify } = require('../gsd-core/bin/lib/gate-decision-coverage-verify.cjs');
 
@@ -220,6 +221,24 @@ describe('`check evaluation-scope` through the CLI', () => {
     const scope = JSON.parse(result.stdout);
     assert.equal(scope.commits.length, 1);
     assert.deepEqual(scope.files, []);
+  });
+
+  test('[negative] an unresolvable scope exits UNAVAILABLE (69) and still prints the JSON with the reason (#5170)', () => {
+    const repo = makeRepo();
+    const result = runTools(['check', 'evaluation-scope', '--phase', '9', '--raw'], repo.dir);
+    assert.equal(result.exitCode, 69, result.stderr);
+    const scope = JSON.parse(result.stdout);
+    assert.equal(scope.status, 'unresolvable');
+    assert.equal(typeof scope.reason, 'string');
+    assert.deepEqual(scope, JSON.parse(JSON.stringify(evaluateEvaluationScope({ projectDir: repo.dir, args: ['--phase', '9'] }).payload)));
+  });
+
+  test('[independence] a degraded scope is a delivered answer: exit 0', () => {
+    const repo = makeRepo();
+    commit(repo, 'src/a.js', 'feat(03-01): a');
+    const result = runTools(['check', 'evaluation-scope', '--phase', '3', '--raw'], repo.dir);
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).status, 'degraded');
   });
 
   test('[negative] invalid arguments fail with a usage error naming the problem', () => {
