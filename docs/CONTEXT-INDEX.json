@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "count": 290,
+  "count": 297,
   "classes": {
     "ARCH": 1,
     "CI": 2,
@@ -18,8 +18,8 @@
     "PROC": 14,
     "PROHIB": 10,
     "RELEASE-NOTES": 31,
-    "RULESET": 60,
-    "SEAM": 18,
+    "RULESET": 61,
+    "SEAM": 24,
     "SESSION": 9,
     "WAVE": 5,
     "WORKSTREAM": 5,
@@ -947,6 +947,11 @@
       "value": "command's allowed-tools must cover every tool the workflow calls (including Write for file creation); thin-wrapper pattern makes this easy to miss"
     },
     {
+      "id": "RULESET.ARGUMENTS-LABELED-BLOCK",
+      "klass": "RULESET",
+      "value": "every commands/gsd/*.md template that references $ARGUMENTS or declares argument-hint opens (right after frontmatter) with exactly one <arguments>$ARGUMENTS</arguments> block plus the data-not-instructions note; bodies reference \"the <arguments> block\" instead of splicing $ARGUMENTS into prose (quick-batch's shell --text \"$ARGUMENTS\" stays literal); skills/ inherit via gen:plugin-skills; enforced by tests/command-arguments-block.test.cjs (ADR-4780)"
+    },
+    {
       "id": "RULESET.ARGUMENTS-SANITIZE",
       "klass": "RULESET",
       "value": "any workflow step constructing .planning/.../{SLUG}.md path from user input ($ARGUMENTS, parsed remainder) must sanitize inline ([a-z0-9-] only, reject ..//\\\\, max-length) — \"(already sanitized)\" must trace back to explicit guard; RESUME/fallback modes need own guards"
@@ -1252,6 +1257,26 @@
       "value": "DISPATCH_ISOLATION_MODES / BASE_CHECK_ISOLATION_MODES in src/dispatch-isolation.cts are the single declaration of the dispatch-isolation vocabulary and its worktree-creating subset (#4561)"
     },
     {
+      "id": "SEAM.evaluation-scope.enforced-by",
+      "klass": "SEAM",
+      "value": "test:tests/evaluation-scope-drift-lint.test.cjs"
+    },
+    {
+      "id": "SEAM.evaluation-scope.owns",
+      "klass": "SEAM",
+      "value": "resolveEvaluationScope(projectDir, unit, options) (src/gate-evaluation-scope.cts) is the single owner of which commits and files a gate or workflow step evaluates (ADR-5057 §4, #5164)"
+    },
+    {
+      "id": "SEAM.gate-verdict.enforced-by",
+      "klass": "SEAM",
+      "value": "test:tests/gate-verdict.test.cjs"
+    },
+    {
+      "id": "SEAM.gate-verdict.owns",
+      "klass": "SEAM",
+      "value": "GateVerdict / GateResult (src/gate-verdict.cts) is the single value a check gate module returns; only the command router formats it (ADR-5057 §4, #5139)"
+    },
+    {
       "id": "SEAM.git-query-readonly-seam.enforced-by",
       "klass": "SEAM",
       "value": "test:tests/git-base-branch.test.cjs"
@@ -1310,6 +1335,16 @@
       "id": "SEAM.verification-isphasecomplete.owns",
       "klass": "SEAM",
       "value": "isPhaseComplete(phaseDir, deps?) is the single canonical owner of \"is phase P complete?\" (ADR-3180 §7.4, issue #3186)"
+    },
+    {
+      "id": "SEAM.verification-status.enforced-by",
+      "klass": "SEAM",
+      "value": "test:tests/eslint-no-verification-status-literal.test.cjs"
+    },
+    {
+      "id": "SEAM.verification-status.owns",
+      "klass": "SEAM",
+      "value": "VERIFICATION_STATUS (src/verification.cts) is the closed verification-status vocabulary and VERIFICATION_ROUTES its only routing table (ADR-5057 Phase 4, #5118)"
     },
     {
       "id": "SEAM.worktree-safety-policy.enforced-by",
