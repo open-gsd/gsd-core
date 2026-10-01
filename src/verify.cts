@@ -40,6 +40,7 @@ import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { detectSchemaFiles, checkSchemaDrift } from './schema-detect.cjs';
 import { extractTaggedBlocks } from './markdown-sectionizer.cjs';
 import { compileUserPattern, MAX_USER_PATTERN_LEN } from './pattern.cjs';
+import { declareGateExit } from './gate-exit.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- agent-install-check.cjs is an export= CommonJS module
 import agentInstallCheck = require('./agent-install-check.cjs');
 const { checkAgentsInstalled, checkCodexModelPosture, checkCodexSandboxPosture } = agentInstallCheck;
@@ -1471,12 +1472,15 @@ function cmdVerifyArtifacts(cwd: string, planFilePath: string, raw: boolean): vo
   const content = safeReadFile(fullPath);
   if (!content) {
     output({ error: 'File not found', path: planFilePath }, raw);
+    // #5170: no plan to evaluate is "could not look" (UNAVAILABLE), never a pass. Declared after output().
+    declareGateExit({ outcome: 'unreadable' }, 'status');
     return;
   }
 
   const artifacts = parseMustHavesBlock(content, 'artifacts') as Record<string, unknown>[];
   if (artifacts.length === 0) {
     output({ error: 'No must_haves.artifacts found in frontmatter', path: planFilePath }, raw);
+    declareGateExit({ outcome: 'unreadable' }, 'status');
     return;
   }
 
@@ -1579,6 +1583,8 @@ function cmdVerifyArtifacts(cwd: string, planFilePath: string, raw: boolean): vo
     raw,
     allPassed ? 'valid' : 'invalid',
   );
+  // #5170: the exit status follows the verdict — a negative verdict is exit 1 (JSON above unchanged).
+  declareGateExit({ outcome: allPassed ? 'pass' : 'block' }, 'status');
 }
 
 /**

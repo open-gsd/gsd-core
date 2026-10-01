@@ -16,7 +16,19 @@
  */
 
 /** How a gate's arm ended. `block` is carried separately: a gate can be advisory yet block, etc. */
-export type GateOutcome = 'pass' | 'block' | 'skip' | 'advisory';
+export type GateOutcome = 'pass' | 'block' | 'skip' | 'advisory' | 'unreadable';
+
+declare const unreadableBrand: unique symbol;
+
+/**
+ * A verdict whose evidence could not be read (#5170, ADR-5057 §4). Branded so the `unreadable` arm of
+ * `verdictFromEvidence` (src/gate-evidence.cts) can only return one: a passing `GateVerdict` is not
+ * assignable to this type, so "could not look" cannot be reported as a pass at compile time.
+ */
+export interface UnreadableVerdict extends GateVerdict {
+  readonly outcome: 'unreadable';
+  readonly [unreadableBrand]: true;
+}
 
 /** The gate reached an answer. */
 export interface GateVerdict {
@@ -51,6 +63,14 @@ export const GATE_FAILURE_CODE = Object.freeze({
  */
 export function gateVerdict(outcome: GateOutcome, block: boolean, payload: Record<string, unknown>): GateVerdict {
   return { outcome, block, payload: Object.freeze({ ...payload }) };
+}
+
+/**
+ * Build the verdict for evidence that could not be read. `block` is the gate's own policy for that
+ * arm (unchanged by this outcome); the exit status is derived from the outcome, never from `block`.
+ */
+export function gateUnreadable(block: boolean, payload: Record<string, unknown>): UnreadableVerdict {
+  return gateVerdict('unreadable', block, payload) as UnreadableVerdict;
 }
 
 /** Build a usage failure: exactly `{ failure: { code, message } }`. */

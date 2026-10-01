@@ -250,10 +250,12 @@ overrides:
 Use `gsd-tools query` for artifact verification against must_haves in PLAN frontmatter:
 
 ```bash
-ARTIFACT_RESULT=$(gsd_run query verify.artifacts "$PLAN_PATH")
+ARTIFACT_RESULT=$(gsd_run query verify.artifacts "$PLAN_PATH") && ARTIFACT_EXIT=0 || ARTIFACT_EXIT=$?
 ```
 
 Parse JSON result: `{ all_passed, passed, total, artifacts: [{path, exists, issues, passed}] }`
+
+The exit status follows the verdict (#5170): exit `0` = every artifact passed, exit `1` = the verdict is negative (`all_passed: false`) — the JSON on stdout is still authoritative, so read it and map each artifact below. Exit `69` (`UNAVAILABLE`) means there was nothing to evaluate (the plan file is missing or has no `must_haves.artifacts`; the JSON carries `error`): report it as an unevaluated Step 4, never as VERIFIED.
 
 For each artifact in result:
 - `exists=false` → MISSING

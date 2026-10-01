@@ -427,6 +427,8 @@
       "gate-decision-coverage-plan.cjs",
       "gate-decision-coverage-verify.cjs",
       "gate-evaluation-scope.cjs",
+      "gate-evidence.cjs",
+      "gate-exit.cjs",
       "gate-gap-analysis-plan-post.cjs",
       "gate-phase-context.cjs",
       "gate-predicate-evaluator.cjs",

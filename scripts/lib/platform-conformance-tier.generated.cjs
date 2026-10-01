@@ -104,6 +104,7 @@ module.exports = {
   "tests/gate-api-coverage-verify-pre-escape.test.cjs",
   "tests/gate-decision-coverage-verify-stderr.test.cjs",
   "tests/gate-evaluation-scope-consumers.test.cjs",
+  "tests/gate-exit.test.cjs",
   "tests/gate-tdd-red-evidence-containment.test.cjs",
   "tests/gate-tdd-review-checkpoint-hardening.test.cjs",
   "tests/gate-tdd-review-checkpoint.unit.test.cjs",

@@ -183,6 +183,17 @@ function setPendingOutcome(v) {
 function getPendingOutcome() {
     return globalThis[PENDING_OUTCOME_KEY];
 }
+/**
+ * Declare the outcome a void-returning `main()` ends with (#5170, ADR-5057 §4): writes the
+ * pending-outcome cell that `runMain` projects. Validates `name` is an outcome
+ * `projectOutcome` accepts (PASS, FAIL or a registered name) and THROWS otherwise, so a typo'd
+ * name fails at the declaration rather than at process exit. Call it AFTER `output()`, which
+ * rewrites the cell on every call. `output()` and this are the only writers of the cell.
+ */
+function declareOutcome(name) {
+    projectOutcome(name, 'v1');
+    setPendingOutcome(name);
+}
 const EXIT_CONTRACT_FLAG_PREFIX = '--exit-contract=';
 /** Scan argv for the FIRST `--exit-contract=<value>` token; undefined if absent. */
 function findExitContractFlag(argv) {
@@ -555,4 +566,5 @@ module.exports = {
     terminateNow,
     setPendingOutcome,
     getPendingOutcome,
+    declareOutcome,
 };

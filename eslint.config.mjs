@@ -142,6 +142,9 @@ export default tseslint.config(
       'gsd-core/bin/lib/gate-decision-coverage-verify.cjs',
       // #5164 (epic #5056 Phase 7): the evaluation-scope resolver, a gate support module.
       'gsd-core/bin/lib/gate-evaluation-scope.cjs',
+      // #5170 (epic #5056 Phase 8): typed gate evidence and the verdict-to-exit mapping.
+      'gsd-core/bin/lib/gate-evidence.cjs',
+      'gsd-core/bin/lib/gate-exit.cjs',
       'gsd-core/bin/lib/gate-api-coverage-verify-pre.cjs',
       'gsd-core/bin/lib/gate-gap-analysis-plan-post.cjs',
       'gsd-core/bin/lib/gate-predicate.cjs',

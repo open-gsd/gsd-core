@@ -23,6 +23,7 @@ const { output, ERROR_REASON } = io;
 const error: typeof io.error = io.error;
 import { isGateUsageFailure, gateVerdict } from './gate-verdict.cjs';
 import type { GateResult, GateUsageFailure } from './gate-verdict.cjs';
+import { declareGateExit } from './gate-exit.cjs';
 import { partitionPredicateArgs, parsePredicateFlags } from './gate-args.cjs';
 import { evaluateDecisionCoveragePlan } from './gate-decision-coverage-plan.cjs';
 import { evaluateDecisionCoverageVerify } from './gate-decision-coverage-verify.cjs';
@@ -60,6 +61,9 @@ function emitGateResult(result: GateResult, raw: boolean): void {
     failGate(result);
   }
   output(result.payload, raw, undefined);
+  // After output(): it rewrites the pending-outcome cell on every call. Payload mode — a delivered
+  // blocking verdict is still exit 0 (the dispatch contract); an unreadable one is UNAVAILABLE (#5170).
+  declareGateExit(result, 'payload');
 }
 
 // ─── Thin wrappers: argv[0]='check', argv[1]=verb — a gate takes the argv AFTER the verb ──────────
