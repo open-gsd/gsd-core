@@ -334,7 +334,7 @@ function verifyWorkCycle(projectDir, phaseDir, { followRoute = null } = {}) {
     regenerated = runSharedVerificationStep(projectDir, phaseDir, followRoute);
   }
   const gate = runGsdTools(['phase', 'uat-passed', '01', '--require-verification'], projectDir);
-  assert.ok(gate.success, `uat-passed must run: ${gate.error}`);
+  assert.ok([0, 1].includes(gate.exitCode), `uat-passed must run (exit 0 or 1 is a verdict, #5170): ${gate.error}`);
   const verdict = JSON.parse(gate.output);
   return {
     statusRead: read.status,

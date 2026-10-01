@@ -4968,7 +4968,10 @@ describe('#5118 D: every CLI surface translates the out-of-set error once, centr
     test(`${row}: ${name} exits non-zero with reason verification_status_invalid and writes nothing (control: the same fixture with passed exits 0)`, (t) => {
       const control = project(t, 'passed');
       const ok = runGsdTools(['--json-errors', ...argv(control.phaseDir)], control.projectDir);
-      assert.equal(ok.exitCode, 0, `control: ${name} must succeed on an in-set report: ${ok.error}`);
+      // #5170: `phase uat-passed` answers with its verdict, so exit 1 (not passed) is an answer there;
+      // every other surface still exits 0 on an in-set report.
+      const answered = row === 'V30' ? [0, 1] : [0];
+      assert.ok(answered.includes(ok.exitCode), `control: ${name} must answer on an in-set report: ${ok.error}`);
 
       const bad = project(t, 'verified');
       const before = planningBytes(bad.projectDir);
@@ -5105,9 +5108,13 @@ describe('#5118 round 3: containment before read, no write before the error, and
     return outside;
   }
 
+  // `expectExit0` is true (exit 0), false (any exit) or an array of accepted exits. `phase uat-passed`
+  // answers with its verdict (#5170): exit 0 = passed, exit 1 = not passed — both are answers.
+  const VERDICT_EXITS = [0, 1];
   function assertNoLeak(argv, cwd, expectExit0 = true) {
     const res = runGsdTools(argv, cwd);
-    if (expectExit0) assert.equal(res.exitCode, 0, `${argv.join(' ')}: ${res.error}`);
+    if (Array.isArray(expectExit0)) assert.ok(expectExit0.includes(res.exitCode), `${argv.join(' ')}: ${res.error}`);
+    else if (expectExit0) assert.equal(res.exitCode, 0, `${argv.join(' ')}: ${res.error}`);
     assert.equal((`${res.output}${res.error}`).includes(SECRET), false, `${argv.join(' ')}: content of an escaped report reached the output`);
     return res;
   }
@@ -5126,7 +5133,7 @@ describe('#5118 round 3: containment before read, no write before the error, and
       fs.symlinkSync(linkTarget(phaseDir, secretFile), reportPath);
 
       assertNoLeak(['init', 'verify-work', '1'], projectDir);
-      assertNoLeak(['phase', 'uat-passed', '1', '--require-verification'], projectDir);
+      assertNoLeak(['phase', 'uat-passed', '1', '--require-verification'], projectDir, VERDICT_EXITS);
       assertNoLeak(['audit-uat'], projectDir);
       const status = assertNoLeak(['verification', 'status', phaseDir], projectDir);
       assert.equal(JSON.parse(status.output).status, 'missing', 'the escaped file reads missing');
@@ -5352,8 +5359,8 @@ describe('#5118 round 3: containment before read, no write before the error, and
       fs.symlinkSync(linkTarget(phaseDir, secretFile), path.join(phaseDir, uatName));
 
       assertNoLeak(['audit-uat'], projectDir);
-      assertNoLeak(['phase', 'uat-passed', '1'], projectDir);
-      assertNoLeak(['phase', 'uat-passed', '1', '--require-verification'], projectDir);
+      assertNoLeak(['phase', 'uat-passed', '1'], projectDir, VERDICT_EXITS);
+      assertNoLeak(['phase', 'uat-passed', '1', '--require-verification'], projectDir, VERDICT_EXITS);
       assertNoLeak(['init', 'verify-work', '1'], projectDir);
       assertNoLeak(['audit-open'], projectDir);
     });

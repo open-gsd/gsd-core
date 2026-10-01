@@ -9627,7 +9627,7 @@ describe('phase uat-passed — basic pass/fail', () => {
   test('pending UAT → passed:false', () => {
     writeUatFile(phaseDir, 'feature-UAT.md', makePendingUat());
     const result = runGsdTools('phase uat-passed 1', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `failing uat-passed verdict exits 1 (verdict negative, #5170): ${result.error}`);
 
     const out = JSON.parse(result.output);
     assert.strictEqual(out.passed, false);
@@ -9638,7 +9638,7 @@ describe('phase uat-passed — basic pass/fail', () => {
   test('false-positive only (fenced block) → passed:false', () => {
     writeUatFile(phaseDir, 'feature-UAT.md', makeFencedFalsePositiveUat());
     const result = runGsdTools('phase uat-passed 1', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `failing uat-passed verdict exits 1 (verdict negative, #5170): ${result.error}`);
 
     const out = JSON.parse(result.output);
     assert.strictEqual(out.passed, false,
@@ -9648,7 +9648,7 @@ describe('phase uat-passed — basic pass/fail', () => {
   test('no UAT files → passed:false + no_uat_artifacts:true (fail-closed, no vacuous pass)', () => {
     // Phase directory exists but has no UAT files — fail-closed: absence is NOT a pass
     const result = runGsdTools('phase uat-passed 1', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `failing uat-passed verdict exits 1 (verdict negative, #5170): ${result.error}`);
 
     const out = JSON.parse(result.output);
     assert.strictEqual(out.passed, false,
@@ -9676,7 +9676,7 @@ describe('phase uat-passed — --require-verification flag', () => {
   test('--require-verification with no verification file → passed:false', () => {
     writeUatFile(phaseDir, 'feature-UAT.md', makePassingUat());
     const result = runGsdTools('phase uat-passed 1 --require-verification', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `failing uat-passed verdict exits 1 (verdict negative, #5170): ${result.error}`);
 
     const out = JSON.parse(result.output);
     assert.strictEqual(out.passed, false,
@@ -9708,7 +9708,7 @@ describe('phase uat-passed — --require-verification flag', () => {
     setMtime(summaryPath, now);
 
     const result = runGsdTools('phase uat-passed 1 --require-verification', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `failing uat-passed verdict exits 1 (verdict negative, #5170): ${result.error}`);
 
     const out = JSON.parse(result.output);
     assert.strictEqual(out.passed, false);

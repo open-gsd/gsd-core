@@ -1577,7 +1577,7 @@ describe('verify artifacts command', () => {
     ]);
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `verify artifacts with a failing artifact exits 1 (verdict negative, #5170): ${result.error}`);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.all_passed, false, 'Expected all_passed false');
@@ -1595,7 +1595,7 @@ describe('verify artifacts command', () => {
     fs.writeFileSync(path.join(tmpDir, 'src', 'app.js'), 'const x = 1;\n');
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `verify artifacts with a failing artifact exits 1 (verdict negative, #5170): ${result.error}`);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.all_passed, false, 'Expected all_passed false');
@@ -1613,7 +1613,7 @@ describe('verify artifacts command', () => {
     fs.writeFileSync(path.join(tmpDir, 'src', 'app.js'), 'const x = 1;\n');
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `verify artifacts with a failing artifact exits 1 (verdict negative, #5170): ${result.error}`);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.all_passed, false, 'Expected all_passed false');
@@ -1632,7 +1632,7 @@ describe('verify artifacts command', () => {
     fs.writeFileSync(path.join(tmpDir, 'src', 'app.js'), 'const x = 1;\nexport const POST = () => {};\n');
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `verify artifacts with a failing artifact exits 1 (verdict negative, #5170): ${result.error}`);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.all_passed, false, 'Expected all_passed false');
@@ -1663,7 +1663,7 @@ describe('verify artifacts command', () => {
     fs.writeFileSync(planPath, content);
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 69, `an unevaluable plan exits UNAVAILABLE (#5170): ${result.error}`);
 
     const output = JSON.parse(result.output);
     assert.ok(output.error, `Expected error field: ${JSON.stringify(output)}`);
@@ -1684,7 +1684,7 @@ describe('verify artifacts command', () => {
     ]);
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `verify artifacts over a zero-check block exits 1 (verdict negative, #5170): ${result.error}`);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.total, 0, `Expected zero checked artifacts: ${JSON.stringify(output)}`);
@@ -1714,7 +1714,7 @@ describe('verify artifacts command', () => {
     ]);
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command crashed instead of reporting: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `verify artifacts with a directory entry exits 1 (verdict negative, #5170): ${result.error}`);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.total, 2, `both artifacts must be checked: ${JSON.stringify(output)}`);
@@ -1751,7 +1751,7 @@ describe('verify artifacts command', () => {
     ]);
 
     const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
-    assert.ok(result.success, `Command crashed instead of reporting: ${result.error}`);
+    assert.strictEqual(result.exitCode, 1, `verify artifacts with a directory-only block exits 1 (verdict negative, #5170): ${result.error}`);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.total, 1);
@@ -1819,7 +1819,7 @@ if (${JSON.stringify(mode)} === 'enoent-read') {
         tmpDir,
         withInjection('enoent-read', target),
       );
-      assert.ok(result.success, `Command failed: ${result.error}`);
+      assert.strictEqual(result.exitCode, 1, `verify artifacts with an unreadable artifact exits 1 (verdict negative, #5170): ${result.error}`);
 
       const output = JSON.parse(result.output);
       const check = output.artifacts[0];
@@ -1844,7 +1844,7 @@ if (${JSON.stringify(mode)} === 'enoent-read') {
         tmpDir,
         withInjection('eacces-stat', target),
       );
-      assert.ok(result.success, `Command failed: ${result.error}`);
+      assert.strictEqual(result.exitCode, 1, `verify artifacts with an unreadable artifact exits 1 (verdict negative, #5170): ${result.error}`);
 
       const output = JSON.parse(result.output);
       const check = output.artifacts[0];
