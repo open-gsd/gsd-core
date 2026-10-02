@@ -2209,13 +2209,20 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
   test('a STALE `none` record is not held — a plain query past the reader\'s freshness window records the capability again (nothing is permanently sticky)', (t) => {
     const dir = createTempProject('gsd-4561-hold-');
     t.after(() => cleanup(dir));
-    writeSentinel(dir, { isolation: 'none', writtenAt: Date.now() - (SENTINEL_STALE_MS + 60000) });
+    // A fixed epoch (2001-09-09T01:46:40Z), so the fixture and the assertion
+    // read no clock (RULESET.TESTS.no-timing-assertion). readSentinelAt holds
+    // it fresh only for a now within [epoch - 5 s, epoch + SENTINEL_STALE_MS),
+    // a window in 2001, so it is stale under any clock this suite runs on; and
+    // "rewritten" compares with the fixture's own stamp, not a window around
+    // the host's wall clock.
+    const staleWrittenAt = 1_000_000_000_000;
+    writeSentinel(dir, { isolation: 'none', writtenAt: staleWrittenAt });
 
     const r = runGsdTools(['query', 'dispatch-isolation', '--raw'], dir, env(dir));
     assert.equal(r.success, true, r.error);
     const sentinel = readSentinelRaw(dir);
     assert.equal(sentinel.isolation, 'harness-worktree');
-    assert.ok(sentinel.written_at > Date.now() - 60000, 'freshly rewritten');
+    assert.ok(sentinel.written_at > staleWrittenAt, 'freshly rewritten, not the held stale record');
   });
 
   test('a MALFORMED sentinel is not held — a plain query overwrites it with a well-formed record', (t) => {
