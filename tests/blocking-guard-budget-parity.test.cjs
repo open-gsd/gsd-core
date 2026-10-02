@@ -345,15 +345,19 @@ describe('OpenCode / Kilo plugin bound for the git-probing guards holds their wo
   async function recordedHookTimeouts(pluginPath, { gitProbeLibMissing = false } = {}) {
     const original = childProcess.spawnSync;
     const originalLoad = Module._load;
+    const seen = new Map();
+    // How many times the plugin's require of git-probe.js was intercepted and made
+    // to fail: > 0 proves the adapter's fallback branch (not the real lib) ran.
+    seen.interceptedGitProbeLoads = 0;
     if (gitProbeLibMissing) {
       Module._load = function load(request, ...rest) {
         if (typeof request === 'string' && /git-probe\.js$/.test(request)) {
+          seen.interceptedGitProbeLoads += 1;
           throw Object.assign(new Error(`Cannot find module '${request}'`), { code: 'MODULE_NOT_FOUND' });
         }
         return originalLoad.call(this, request, ...rest);
       };
     }
-    const seen = new Map();
     childProcess.spawnSync = (command, args, options) => {
       const hookFile = path.basename(String(args && args[0]));
       seen.set(hookFile, options && options.timeout);
@@ -376,6 +380,8 @@ describe('OpenCode / Kilo plugin bound for the git-probing guards holds their wo
   for (const pluginPath of PLUGINS) {
     test(`${path.relative(path.join(__dirname, '..'), pluginPath)}: the fallback bound (git-probe lib unresolvable) also holds the worst case plus overhead`, async () => {
       const seen = await recordedHookTimeouts(pluginPath, { gitProbeLibMissing: true });
+      assert.ok(seen.interceptedGitProbeLoads > 0,
+        'the plugin must have tried to load hooks/lib/git-probe.js and hit the injected failure, else the fallback branch was not exercised');
       // node start + fs work + kill/reap observed on a starved Windows runner (~0.46 s).
       const overheadMs = 500;
       const required = BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES * BLOCKING_GUARD_PROBE_TIMEOUT_MS + overheadMs;
