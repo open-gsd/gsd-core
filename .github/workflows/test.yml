@@ -619,45 +619,31 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # #5029: six Windows shards, not three. Every figure below is MEASURED
-          # job wall-clock, not projected — an earlier revision of this PR shipped
-          # four shards on a projection and the first real 4-shard run falsified it.
+          # #5029: the lane outgrew a 3-way split. Measured job wall-clock, long
+          # pole per layout: 3-shard 34m24s (run 36322513056) and 34m14s (run
+          # 36357457440); 4-shard 30m17s (run 36349891343); 6-shard 15m17s (run
+          # 36785097774). The budget gate (tests/ci-test-job-timeout-budget.test.cjs)
+          # rounds the long pole UP and requires ceil(m * 1.5) <= the cap, so a 45m
+          # cap admits m <= 30 EXACTLY — which is why 3 and 4 both fail (53m and 47m
+          # required) and why the cap itself is not the lever.
           #
-          #   layout   run                      per-shard (s)                 long pole  total
-          #   3-shard  36322513056 next         1307 / 2064 / 1786            34m24s     5157s
-          #   3-shard  36357457440 #5035 head   1276 / 2054 / 1982            34m14s     5312s
-          #   4-shard  36349891343 this PR      889 / 1817 / 1416 / 1627      30m17s     5749s
+          # Windows cost is now modelled properly: #5071 -> #5097 added
+          # tests/test-timings.win32.json and the platformTimings arm of
+          # makeFileWeigher, so the packer prices win32 files by win32
+          # measurements instead of Linux ones. Measured effect on this tier —
+          # imbalance 1.18-1.32 -> 1.01-1.02, and observed shard spread 1.73x ->
+          # 1.36x across the two 6-shard runs whose heads bracket #5097. Before
+          # it, selectShard scored these shards as perfectly balanced in its own
+          # weight units while they ran 0.75x / 1.21x / 1.04x of an equal split;
+          # that gap is closed, so **do not re-derive the shard count from the old
+          # Linux-weight imbalance** (and note the packer's own units always report
+          # perfect balance — score a partition against a measured table instead).
           #
-          # The budget gate (tests/ci-test-job-timeout-budget.test.cjs) rounds the
-          # long pole UP and requires ceil(m * 1.5) <= the cap, so a 45m cap admits
-          # m <= 30 EXACTLY. N=3 measures 35m -> 53m required. N=4 measures 31m ->
-          # 47m required: it misses by 17 SECONDS, which is precisely the
-          # "budgeted to finish with seconds to spare" condition HEADROOM_FACTOR
-          # exists to forbid. N=5 projects to 27m -> 41m, but 30m -> 45m under the
-          # +12% bad-runner envelope from #5029's own six-run table: zero slack.
-          # N=6 gives 24m -> 36m, and 27m -> 41m on a bad runner, which is why the
-          # lane sits at six (#5029).
-          #
-          # Sharding is NOT free per shard. Fitting total(N) = N*F + V across the
-          # runs above gives F ~= 515s (8m35s) and V ~= 3691s. Only ~60s of F is
-          # job-level checkout/npm ci; the rest is inside the test step, where
-          # run-tests.cjs rebuilds artifacts per shard and pays harness startup and
-          # per-chunk spawns again. So added shards buy progressively less and cost
-          # a 2x-billed Windows runner each — the long pole cannot go below roughly
-          # 11m at any N. That is why this stops at 6 rather than going higher.
-          #
-          # The reason the long pole is so far above the mean is #5052: selectShard
-          # balances these shards PERFECTLY in its own weight units (206.2 each at
-          # N=3) while they run 0.75x / 1.21x / 1.04x of an equal split. The timings
-          # table that feeds the packer is Linux-measured, and #4434's win32
-          # correction only reprices files ABSENT from it — the ~190 files present
-          # carry Linux-relative weights, and Windows does not scale uniformly. The
-          # packer cannot see this imbalance at all. (Not fixable by retuning
-          # WINDOWS_UNMEASURED_COST_MULTIPLIER: the shards get near-identical
-          # measured/unmeasured splits, so the implied multiplier would have to be
-          # 0.49 on shard 1 and 3.64 on shard 2 at once. A Windows-measured table is
-          # the real cure and is its own change, #5052 — once it lands, this lane
-          # would fit in fewer shards, since N=4's MEAN was already 23m57s.)
+          # Sharding is not free per shard: fitting total(N) = N*F + V gives
+          # F ~= 515s, of which only ~60s is job-level checkout/npm ci — the rest
+          # is the per-shard artifact rebuild, harness startup and per-chunk spawns
+          # inside the test step. So each added shard buys less while costing a
+          # 2x-billed Windows runner permanently.
           #
           # Fewer files per shard (47, from 94) also relaxes the per-chunk 600s cap
           # and maxUnmeasuredPerChunk, both of which have drawn red builds here
@@ -786,8 +772,8 @@ jobs:
         if: always()
         continue-on-error: true
         env:
-          # #5029: the shard suffix matters now that Windows is split four
-          # ways — without it a near-cap warning and its job summary cannot
+          # #5029: the shard suffix matters now that Windows is split across
+          # shards — without it a near-cap warning and its job summary cannot
           # say WHICH shard is drifting, which is the one thing
           # docs/how-to/read-ci-timeout-signals.md sends a maintainer here to
           # find. Same expression as the job `name:` above and the parallel
