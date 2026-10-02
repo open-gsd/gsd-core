@@ -4299,7 +4299,7 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
  *
  * @param {string} skillsDir - Path to the skills/ directory (e.g. ~/.codex/skills)
  */
-function cleanupCodexSkillMetadataSidecars(skillsDir) {
+function cleanupCodexSkillMetadataSidecars(skillsDir, owns) {
   if (!fs.existsSync(skillsDir)) return;
   // Mirror the user-owned list from installOpencodeFamilySkills (#2973).
   // We MUST skip these dirs — their contents are user-generated and must
@@ -4308,6 +4308,9 @@ function cleanupCodexSkillMetadataSidecars(skillsDir) {
   for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
     if (!entry.isDirectory() || !entry.name.startsWith('gsd-')) continue;
     if (_userOwnedSkillDirs.has(entry.name)) continue; // preserve user content
+    // #5161: install keeps gsd-* dirs GSD does not own; their files are not
+    // GSD's sidecars to clean.
+    if (owns && !owns(entry.name)) continue;
     const agentsSubdir = path.join(skillsDir, entry.name, 'agents');
     const sidecarPath = path.join(agentsSubdir, 'openai.yaml');
     try {
@@ -7693,6 +7696,17 @@ function convertClaudeToKiloFrontmatter(content, { isAgent = false, modelOverrid
 // OpenCode/Kilo installs now route through installRuntimeArtifacts's
 // combinedFamilyInstall path (installOpencodeFamilyArtifacts) instead of the
 // bespoke inline block that used to call this function.
+
+/**
+ * Count the gsd-* skill dirs GSD owns in `skillsDir` (#5161). A gsd-* dir the
+ * prune kept because GSD does not own it must neither inflate "Installed N
+ * skills" nor satisfy the non-empty check that detects a failed install.
+ */
+function _countOwnedSkillDirs(runtime, configDir, skillsDir) {
+  const owns = createSkillDirOwnership(runtime, configDir, skillsDir, 'gsd-', { includeManifest: false, ownAllIfSourceUnresolved: true });
+  return fs.readdirSync(skillsDir, { withFileTypes: true })
+    .filter(e => e.isDirectory() && e.name.startsWith('gsd-') && owns(e.name)).length;
+}
 
 function listCodexSkillNames(skillsDir, prefix = 'gsd-') {
   if (!fs.existsSync(skillsDir)) return [];
@@ -11698,7 +11712,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // in autocomplete. Cleaning them up fixes the duplication; SKILL.md alone is
     // sufficient for Codex discovery. User-owned dirs are never touched.
     if (hostBehaviorsFor(runtime).cleanupSkillSidecars) {
-      cleanupCodexSkillMetadataSidecars(_skillsRootDir);
+      cleanupCodexSkillMetadataSidecars(
+        _skillsRootDir,
+        createSkillDirOwnership(runtime, targetDir, _skillsRootDir, 'gsd-', { includeManifest: false }),
+      );
     }
 
     // ADR-1239 split-home migration: when a runtime's skills kind moved to an
@@ -11740,8 +11757,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       const hermesSkillsDir = path.join(targetDir, 'skills', 'gsd');
       if (fs.existsSync(hermesSkillsDir)) {
         // Hermes layout uses prefix: 'gsd-' (#947) — skill dirs have gsd-<stem> names
-        const count = fs.readdirSync(hermesSkillsDir, { withFileTypes: true })
-          .filter(e => e.isDirectory() && e.name.startsWith('gsd-')).length;
+        const count = _countOwnedSkillDirs(runtime, targetDir, hermesSkillsDir);
         if (count > 0) {
           console.log(`  ${green}✓${reset} Installed ${count} skills to skills/gsd/`);
         } else {
@@ -11754,8 +11770,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       const skillsDir = path.join(targetDir, 'skills');
       const rootAgentPath = path.join(targetDir, 'agents', 'gsd.yaml');
       if (fs.existsSync(skillsDir)) {
-        const count = fs.readdirSync(skillsDir, { withFileTypes: true })
-          .filter(e => e.isDirectory() && e.name.startsWith('gsd-')).length;
+        const count = _countOwnedSkillDirs(runtime, targetDir, skillsDir);
         if (count > 0) {
           console.log(`  ${green}✓${reset} Installed ${count} Kimi skills to skills/`);
         } else {
@@ -11794,8 +11809,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     } else {
       const skillsDir = _skillsRootDir;
       if (fs.existsSync(skillsDir)) {
-        const count = fs.readdirSync(skillsDir, { withFileTypes: true })
-          .filter(e => e.isDirectory() && e.name.startsWith('gsd-')).length;
+        const count = _countOwnedSkillDirs(runtime, targetDir, skillsDir);
         if (count > 0) {
           console.log(`  ${green}✓${reset} Installed ${count} skills to skills/`);
         } else {

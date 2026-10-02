@@ -2462,6 +2462,32 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
       'a manifest-recorded gsd-* skill that is no longer shipped is still pruned');
   });
 
+  test('codex: a kept user gsd-* skill keeps its agents/openai.yaml and is not counted as installed', (t) => {
+    const root = createTempDir('gsd-5161-codex-');
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, '.codex');
+    const skillsDir = path.join(root, '.agents', 'skills');   // codex skills kind `home` override
+    const userDir = path.join(skillsDir, 'gsd-user-5161');
+    fs.mkdirSync(path.join(userDir, 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(userDir, 'SKILL.md'), USER_SKILL);
+    fs.writeFileSync(path.join(userDir, 'agents', 'openai.yaml'), 'display_name: mine\n');
+    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+
+    const r = runNode([INSTALL_SCRIPT, '--codex', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r.exitCode, 0, `codex install failed: ${r.stdout}\n${r.stderr}`);
+    assert.strictEqual(fs.readFileSync(path.join(userDir, 'agents', 'openai.yaml'), 'utf8'), 'display_name: mine\n',
+      'the sidecar cleanup must not touch files inside a skill dir GSD does not own');
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(configDir, 'gsd-file-manifest.json'), 'utf8'));
+    const recordedRoots = new Set(Object.keys(manifest.files)
+      .filter((k) => k.startsWith('skills/gsd-')).map((k) => k.split('/')[1]));
+    assert.ok(recordedRoots.size > 0, 'precondition: the install recorded its skills');
+    const reported = (r.stdout + r.stderr).match(/Installed (\d+) skills to skills\//);
+    assert.ok(reported, 'the install reports a skill count');
+    assert.strictEqual(Number(reported[1]), recordedRoots.size,
+      'the reported count is the skills GSD installed, not every gsd-* dir present');
+  });
+
   test('hermes: the pre-#2841 flat skills/ cleanup keeps a user gsd-* skill and still removes first-party ones', (t) => {
     const root = createTempDir('gsd-5161-hermes-');
     t.after(() => cleanup(root));
