@@ -604,6 +604,7 @@
   "scripts/lib/ndjson-reporter.cjs",
   "scripts/lib/npm-version-check-diagnosis.cjs",
   "scripts/lib/platform-conformance-tier.generated.cjs",
+  "scripts/lib/registration-ledger-preload.cjs",
   "scripts/lib/shellcheck-fetch.cjs",
   "scripts/lib/suite-detection.cjs",
   "scripts/lib/vendor-bundle.cjs",
