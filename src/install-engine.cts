@@ -888,23 +888,35 @@ const USER_OWNED_SKILL_DIRS: readonly string[] = ['gsd-dev-preferences'];
  * writeManifest builds this with `includeManifest: false`: a preserved user
  * dir recorded into the manifest would read back as GSD-owned on the next
  * install and be deleted then.
+ *
+ * `ownAllIfSourceUnresolved` is the answer when the install source cannot be
+ * read, and the safe answer differs by caller. A prune passes false: it keeps
+ * every unproven dir, and the dirs it is about to rewrite are owned by the
+ * caller's staged leg anyway. writeManifest passes true: dropping every
+ * first-party skill from the manifest is the worse failure, so it records what
+ * it found exactly as it did before #5161.
  */
 function createSkillDirOwnership(
   runtime: string,
   configDir: string,
   skillsDir: string,
   prefix: string,
-  opts: { includeManifest?: boolean } = {},
+  opts: { includeManifest?: boolean; ownAllIfSourceUnresolved?: boolean } = {},
 ): (name: string) => boolean {
   const firstParty = new Set<string>();
+  let sourceResolved = true;
   try {
     const commandsGsdDir = runtimeArtifactLayout.findInstallSourceRoot(configDir);
     for (const file of installFs().readdirSync(commandsGsdDir)) {
       if (typeof file === 'string' && file.endsWith('.md')) firstParty.add(prefix + file.slice(0, -3));
     }
-  } catch {
-    // No resolvable install source: ownership falls back to the marker and the manifest.
+  } catch (err) {
+    sourceResolved = false;
+    console.warn(
+      `  [gsd] could not read the install source to classify ${skillsDir} (${(err as Error).message}) — ${opts.ownAllIfSourceUnresolved ? 'treating every gsd- skill dir as GSD-owned' : 'keeping every gsd- skill dir GSD cannot otherwise prove it owns'}.`,
+    );
   }
+  if (!sourceResolved && opts.ownAllIfSourceUnresolved) return (): boolean => true;
   const manifestNames = new Set<string>();
   if (opts.includeManifest !== false) {
     const manifestPrefix: string = hostBehaviorsFor(runtime).skillsManifestPrefix || 'skills/';
