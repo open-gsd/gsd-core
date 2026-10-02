@@ -47,6 +47,22 @@ const RUN_TESTS_ISOLATED_PROBE_TIMEOUT_MS = 30000;
  */
 const RUN_TESTS_HARNESS_SPAWN_TIMEOUT_MS = 120000;
 
+/**
+ * The environment for a REAL nested run-tests spawn rooted at `sandbox`. This file runs as a
+ * test-file child, so NODE_TEST_CONTEXT is set; a nested `node --test` that inherits it refuses to
+ * run any file ("run() is being called recursively within a test file. skipping running files"),
+ * executes nothing and exits 0 with no report. The runner now FAILS such a chunk (its accounting
+ * evidence is unreadable, #5170), so the nested spawn clears the context like
+ * tests/run-tests-harness.test.cjs does and the probe file really runs.
+ */
+function nestedRunnerEnv(sandbox) {
+  const env = { ...process.env, TMPDIR: sandbox, TEMP: sandbox, TMP: sandbox };
+  delete env.NODE_TEST_CONTEXT;
+  delete env.GSD_RUN_TESTS_LEDGER_FILE;
+  delete env.GSD_RUN_TESTS_EVENTS_FILE;
+  return env;
+}
+
 describe('#4020 — run-tests temp root', () => {
   // setupRunTempRoot mutates the PROCESS env (TMPDIR/TEMP/TMP), so these rows
   // drive it in an isolated child — an in-process call would poison every other
@@ -160,7 +176,7 @@ describe('#4020 — run-tests temp root', () => {
 
     const r = runNode(
       [RUNNER, '--files', path.basename(target)],
-      { timeoutMs: RUN_TESTS_HARNESS_SPAWN_TIMEOUT_MS, env: { ...process.env, TMPDIR: sandbox, TEMP: sandbox, TMP: sandbox } },
+      { timeoutMs: RUN_TESTS_HARNESS_SPAWN_TIMEOUT_MS, env: nestedRunnerEnv(sandbox) },
     );
     assert.equal(r.exitCode, 0, `runner should pass: ${r.stderr.slice(-400)}`);
     const m = /tmp-root=(\S+)/.exec(r.stderr);
@@ -183,7 +199,7 @@ describe('#4020 — run-tests temp root', () => {
 
     const r = runNode(
       [RUNNER, '--files', path.basename(target)],
-      { timeoutMs: RUN_TESTS_HARNESS_SPAWN_TIMEOUT_MS, env: { ...process.env, TMPDIR: inherited, TEMP: inherited, TMP: inherited } },
+      { timeoutMs: RUN_TESTS_HARNESS_SPAWN_TIMEOUT_MS, env: nestedRunnerEnv(inherited) },
     );
     assert.equal(r.exitCode, 0, `nested runner should pass: ${r.stderr.slice(-400)}`);
     const m = /tmp-root=(\S+)/.exec(r.stderr);
@@ -199,7 +215,7 @@ describe('#4020 — run-tests temp root', () => {
     fs.mkdirSync(sibling);
     const r2 = runNode(
       [RUNNER, '--files', path.basename(target)],
-      { timeoutMs: RUN_TESTS_HARNESS_SPAWN_TIMEOUT_MS, env: { ...process.env, TMPDIR: inherited, TEMP: inherited, TMP: inherited } },
+      { timeoutMs: RUN_TESTS_HARNESS_SPAWN_TIMEOUT_MS, env: nestedRunnerEnv(inherited) },
     );
     assert.equal(r2.exitCode, 0, `second nested runner should pass: ${r2.stderr.slice(-300)}`);
     assert.ok(fs.existsSync(sibling),

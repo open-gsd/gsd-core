@@ -251,8 +251,9 @@ describe('analyzeChunkAccounting (#4031)', () => {
 });
 
 describe('registration-ledger-preload preload (#4031)', () => {
-  // test + it + skip + todo + describe-body it + test + direct call + .test property = 8;
-  // the run-time subtest and the body of a skipped suite are not registrations.
+  // Leaf results the child hands to its reporter: test + it + skip + todo + the describe-body it and
+  // test + the run-time subtest of f + the direct call + the .test property = 9. A suite is not a leaf
+  // and the body of a skipped suite emits nothing.
   const FIXTURE = `'use strict';
 const nt = require('node:test');
 const { test, describe, it } = nt;
@@ -283,11 +284,67 @@ nt.test('viaprop', () => {});
     return { r, file, ledgerPath };
   }
 
-  test('inside a test-file child it counts every registration the file makes', (t) => {
+  test('inside a test-file child it counts every leaf result the child reports, keyed by the file each carries', (t) => {
     const { r, file, ledgerPath } = runWithPreload(t, { context: 'child-v8', ledger: true });
     assert.equal(r.status, 0, r.stderr);
     const lines = splitLines(fs.readFileSync(ledgerPath, 'utf8')).filter(Boolean).map((l) => JSON.parse(l));
-    assert.deepEqual(lines, [{ type: 'registered', file: path.resolve(file), count: 8 }]);
+    assert.deepEqual(lines, [{ type: 'registered', file: path.resolve(file), count: 9 }]);
+  });
+
+  test('a child that reports no result still records itself, so "saw nothing" differs from "never ran"', (t) => {
+    const dir = createTempDir('gsd-5170-empty-');
+    t.after(() => cleanup(dir));
+    const file = path.join(dir, 'empty.test.cjs');
+    fs.writeFileSync(file, "'use strict';\nrequire('node:test');\n");
+    const ledgerPath = path.join(dir, 'ledger.ndjson');
+    const env = { ...process.env, NODE_TEST_CONTEXT: 'child-v8', GSD_RUN_TESTS_LEDGER_FILE: ledgerPath };
+    const r = spawnSync(process.execPath, ['--require', PRELOAD, file], { env, cwd: dir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
+    assert.equal(r.status, 0, r.stderr);
+    const lines = splitLines(fs.readFileSync(ledgerPath, 'utf8')).filter(Boolean).map((l) => JSON.parse(l));
+    assert.deepEqual(lines, [{ type: 'registered', file: path.resolve(file), count: 0 }]);
+  });
+
+  // Root cause of the #5170 red run (every harness chunk "N registered, 0 reported"): an earlier preload
+  // wrapped test()/it() in a Proxy, a JS frame between the test file and node:test. node:test reports the
+  // CALLER's location as each event's `file`, so every result came back located in the preload itself.
+  test('it adds no frame to a test() call: reported events keep the test file as their location', (t) => {
+    const dir = createTempDir('gsd-5170-location-');
+    t.after(() => cleanup(dir));
+    const file = path.join(dir, 'fx.test.cjs');
+    fs.writeFileSync(file, FIXTURE);
+    const shim = path.join(dir, 'install-preload.cjs');
+    fs.writeFileSync(shim, `require(${JSON.stringify(PRELOAD)}).install(${JSON.stringify(path.join(dir, 'ledger.ndjson'))});\n`);
+    const eventsPath = path.join(dir, 'events.ndjson');
+    const clean = { ...process.env };
+    delete clean.NODE_TEST_CONTEXT;
+    delete clean.NODE_OPTIONS;
+    const r = spawnSync(
+      process.execPath,
+      ['--require', shim, `--test-reporter=${REPORTER}`, '--test-reporter-destination=stdout', file],
+      { env: { ...clean, GSD_RUN_TESTS_EVENTS_FILE: eventsPath }, cwd: dir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS },
+    );
+    assert.equal(r.status, 0, r.stderr);
+    const results = splitLines(fs.readFileSync(eventsPath, 'utf8')).filter(Boolean).map((l) => JSON.parse(l))
+      .filter((e) => e.type === 'test:pass' || e.type === 'test:fail');
+    assert.ok(results.length >= 9, `the fixture's results are reported (${results.length})`);
+    for (const e of results) assert.equal(fs.realpathSync(e.file), fs.realpathSync(file), `${e.name} is located in the test file`);
+  });
+
+  test('resultFileOf: only a leaf pass/fail with a string file counts, suites and other events never do', () => {
+    const { resultFileOf } = require('../scripts/lib/registration-ledger-preload.cjs');
+    const f = '/repo/tests/a.test.cjs';
+    const cases = [
+      [{ type: 'test:pass', data: { file: f, details: { type: 'test' } } }, f],
+      [{ type: 'test:fail', data: { file: f } }, f],
+      [{ type: 'test:pass', data: { file: f, details: { type: 'suite' } } }, null],
+      [{ type: 'test:start', data: { file: f } }, null],
+      [{ type: 'test:pass', data: { file: undefined } }, null],
+      [{ type: 'test:pass', data: null }, null],
+      [{ type: 'test:pass' }, null],
+      [null, null],
+      ['test:pass', null],
+    ];
+    for (const [item, expected] of cases) assert.equal(resultFileOf(item), expected, JSON.stringify(item));
   });
 
   test('it is inert outside a test-file child and without a ledger path', (t) => {
@@ -303,9 +360,9 @@ nt.test('viaprop', () => {});
 // #5170 review: can a skipped suite, a skip/todo, or a test filter make registered > reported — a false red
 // on a run that lost nothing? Each case runs a REAL test file twice with the same flags (once under the
 // preload, in a test-file child's context, to get its ledger line; once under the ndjson reporter to get the
-// events the runner would read) and feeds both to analyzeChunkAccounting.
+// events the runner would read) and feeds both to analyzeChunkAccounting. Both sides count the same events,
+// so an excluded test (filter, skipped suite) is absent from both and needs no special case.
 describe('registered > reported cannot come from a skipped suite, skip/todo, or a test filter (#5170)', () => {
-  const { testFilterActive } = require('../scripts/lib/registration-ledger-preload.cjs');
   const FIXTURE = `'use strict';
 const { test, describe, it } = require('node:test');
 test('alpha one', () => {});
@@ -352,72 +409,56 @@ describe('live suite', () => { it('inner one', () => {}); it('inner two', () => 
     assert.equal(a.reportedTotal, 7);
   });
 
-  test('--test-name-pattern: the excluded tests are unreported, the ledger marks the file filtered, no false red', (t) => {
-    const { ledgerPath, eventsPath, file } = observe(t, ['--test-name-pattern=alpha']);
-    const line = JSON.parse(splitLines(fs.readFileSync(ledgerPath, 'utf8')).filter(Boolean)[0]);
-    assert.deepEqual(line, { type: 'registered', file: path.resolve(file), count: 7, filtered: true });
-    const a = analyzeChunkAccounting(eventsPath, ledgerPath);
-    assert.equal(a.available, true);
-    assert.deepEqual(a.shortfalls, []);
-    // Control: without the mark the same run IS a shortfall — the mark is what prevents the false red,
-    // and a genuine drop in an UNfiltered file is still caught.
-    const unmarked = path.join(path.dirname(ledgerPath), 'unmarked.ndjson');
-    fs.writeFileSync(unmarked, `${JSON.stringify({ ...line, filtered: undefined })}\n`);
-    const b = analyzeChunkAccounting(eventsPath, unmarked);
-    assert.equal(b.shortfalls.length, 1);
-    assert.equal(b.shortfalls[0].registered, 7);
-    assert.equal(b.shortfalls[0].reported, 2);
-  });
+  for (const [flag, expected] of [['--test-name-pattern=alpha', 2], ['--test-skip-pattern=alpha', 5], ['--test-only', 0]]) {
+    test(`${flag}: the excluded tests emit no event on either side, so ${expected} are registered and ${expected} reported`, (t) => {
+      const { ledgerPath, eventsPath, file } = observe(t, [flag]);
+      const line = JSON.parse(splitLines(fs.readFileSync(ledgerPath, 'utf8')).filter(Boolean)[0]);
+      assert.deepEqual(line, { type: 'registered', file: path.resolve(file), count: expected });
+      const a = analyzeChunkAccounting(eventsPath, ledgerPath);
+      assert.equal(a.available, true);
+      assert.deepEqual(a.shortfalls, []);
+      assert.equal(a.registeredTotal, expected);
+      assert.equal(a.reportedTotal, expected);
+    });
+  }
 
-  test('--test-only is a filter too (tests without `only` are not reported)', (t) => {
-    const { ledgerPath, eventsPath } = observe(t, ['--test-only']);
-    const a = analyzeChunkAccounting(eventsPath, ledgerPath);
-    assert.deepEqual(a.shortfalls, []);
-  });
-
-  test('testFilterActive: flags and NODE_OPTIONS, `=` and separate-value forms, lookalikes are not filters', () => {
-    const cases = [
-      [[], '', false],
-      [['--test-name-pattern=x'], '', true],
-      [['--test-name-pattern', 'x'], '', true],
-      [['--test-skip-pattern=x'], '', true],
-      [['--test-only'], '', true],
-      [[], '--max-old-space-size=4096 --test-only', true],
-      [[], '--test-name-pattern=a', true],
-      [['--test-name-patterns'], '', false],
-      [['--test-timeout=5'], '--no-warnings', false],
-    ];
-    for (const [execArgv, nodeOptions, expected] of cases) {
-      assert.equal(testFilterActive(execArgv, nodeOptions), expected, JSON.stringify([execArgv, nodeOptions]));
+  test('control: a result genuinely missing from the report is still a shortfall under every flag set', (t) => {
+    for (const flags of [[], ['--test-name-pattern=alpha']]) {
+      const { ledgerPath, eventsPath } = observe(t, flags);
+      const lines = splitLines(fs.readFileSync(eventsPath, 'utf8')).filter(Boolean);
+      const lastResult = lines.map((l, i) => [JSON.parse(l), i]).filter(([e]) => e.type === 'test:pass' && e.kind !== 'suite').pop()[1];
+      fs.writeFileSync(eventsPath, lines.filter((_, i) => i !== lastResult).join('\n') + '\n');
+      const a = analyzeChunkAccounting(eventsPath, ledgerPath);
+      assert.equal(a.shortfalls.length, 1, JSON.stringify(flags));
+      assert.equal(a.shortfalls[0].registered - a.shortfalls[0].reported, 1);
     }
   });
 });
 
-describe('analyzeChunkAccounting: a filtered file is not accounted by count (#5170)', () => {
-  const FILE = path.join(path.sep, 'repo', 'tests', 'f.test.cjs');
-  for (const [filtered, reported, shortfall] of [[true, 0, false], [true, 4, false], [false, 4, true], [false, 5, false]]) {
-    test(`registered 5, reported ${reported}, filtered ${filtered} -> ${shortfall ? 'shortfall' : 'accounted'}`, (t) => {
-      const { eventsPath, ledgerPath } = chunkFiles(t, {
-        events: results(FILE, reported),
-        ledger: [{ type: 'registered', file: FILE, count: 5, ...(filtered ? { filtered: true } : {}) }],
-      });
-      const a = analyzeChunkAccounting(eventsPath, ledgerPath);
-      assert.equal(a.available, true);
-      assert.equal(a.shortfalls.length, shortfall ? 1 : 0);
-      if (filtered) assert.equal(a.registeredTotal, 0, 'a filtered file is left out of the totals');
-    });
-  }
-
-  test('a filtered file does not hide an unfiltered file\'s loss in the same chunk', (t) => {
-    const OTHER = path.join(path.sep, 'repo', 'tests', 'g.test.cjs');
+describe('analyzeChunkAccounting: path spellings (#5170)', () => {
+  // The ledger keys by the `file` node:test stamps on each result and the runner's ndjson reporter reads that
+  // same field back; both sides still go through realpath so a spelling difference is never a mismatch.
+  test('win32 spellings of one file (separators, drive-letter case) are the same file; a different file is not', (t) => {
+    if (process.platform !== 'win32') {
+      t.skip('backslash and drive-letter case are separators/identity only on Windows');
+      return;
+    }
+    const abs = path.resolve('some-dir', 'X.test.cjs');
+    const forward = abs.replace(/\\/g, '/').replace(/^[A-Z]:/, (d) => d.toLowerCase());
     const { eventsPath, ledgerPath } = chunkFiles(t, {
-      events: results(OTHER, 1),
-      ledger: [
-        { type: 'registered', file: FILE, count: 9, filtered: true },
-        { type: 'registered', file: OTHER, count: 3 },
-      ],
+      events: results(forward, 2),
+      ledger: [{ type: 'registered', file: abs, count: 2 }],
     });
-    assert.deepEqual(analyzeChunkAccounting(eventsPath, ledgerPath).shortfalls, [{ file: OTHER, registered: 3, reported: 1 }]);
+    assert.deepEqual(analyzeChunkAccounting(eventsPath, ledgerPath).shortfalls, []);
+  });
+
+  test('a dot-segment spelling resolves to the same file', (t) => {
+    const abs = path.resolve('some-dir', 'x.test.cjs');
+    const { eventsPath, ledgerPath } = chunkFiles(t, {
+      events: results(path.join(path.dirname(abs), '..', 'some-dir', 'x.test.cjs'), 2),
+      ledger: [{ type: 'registered', file: abs, count: 2 }],
+    });
+    assert.deepEqual(analyzeChunkAccounting(eventsPath, ledgerPath).shortfalls, []);
   });
 });
 

@@ -1255,17 +1255,21 @@ function analyzeChunkEvents(eventsPath) {
 // the `node --test` parent while part of a test file's results are still
 // unread on the child's pipe, so the reporters (and this runner's own ndjson
 // events file) never see them and the run reports a smaller count with exit 0.
-// The count of REGISTERED tests therefore comes from the child, through a
-// channel that does not share that pipe: scripts/lib/registration-ledger-preload.cjs
-// (loaded with `--require`) appends one `{type:'registered', file, count}`
-// line per test-file child, and the ndjson reporter records every leaf
-// `test:pass`/`test:fail` it received. A file whose registered count exceeds
-// its reported count lost results.
+// The count of results the child REGISTERED with its reporter therefore comes
+// from the child, through a channel that does not share that pipe:
+// scripts/lib/registration-ledger-preload.cjs (loaded with `--require`) counts the
+// leaf `test:pass`/`test:fail` events the child hands to the serializer that
+// frames them onto the pipe, per `file` each event carries, and appends one
+// `{type:'registered', file, count}` line per file when the child exits. The
+// ndjson reporter records every leaf `test:pass`/`test:fail` the parent received,
+// under the same `file`. A file whose registered count exceeds its reported count
+// lost results.
 //
-// One-sided by construction: the ledger counts module-level `test()`/`it()`
-// calls only, while a subtest created at run time (`t.test()`) is reported but
-// not registered, so reported can exceed registered, never the reverse, absent
-// a loss. A count that errs low can hide a loss; it cannot invent one.
+// Like for like by construction: both sides count the same events (leaf pass/fail,
+// not suites) under the same `file` field, so a skipped test, a skipped suite, a
+// run-time subtest and a name/only filter (an excluded test emits no event on
+// either side) cannot make registered exceed reported without a loss. Reported can
+// exceed registered only when the parent synthesizes an event the child never sent.
 //
 // `available` is false when either file is missing/unreadable or the ledger
 // holds no `registered` line: the chunk could not be accounted. That is
@@ -1293,7 +1297,6 @@ function analyzeChunkAccounting(eventsPath, ledgerPath) {
   const reported = new Map(); // normalized file -> leaf pass+fail events received
   const registered = new Map(); // normalized file -> registrations counted in the child
   const display = new Map(); // normalized file -> path as first seen, for messages
-  const filteredFiles = new Set(); // normalized files whose child ran under a test filter
   let eventsRead = true;
   let ledgerRead = true;
   let sawRegisteredLine = false;
@@ -1334,9 +1337,6 @@ function analyzeChunkAccounting(eventsPath, ledgerPath) {
     const key = normalizeAccountedPath(evt.file);
     display.set(key, display.get(key) || evt.file);
     registered.set(key, (registered.get(key) || 0) + evt.count);
-    // A child that ran under a test name/only filter reports fewer results than it registered by
-    // design (excluded tests emit no event): it is not accounted by count (registration-ledger-preload).
-    if (evt.filtered === true) filteredFiles.add(key);
   });
   // A registered file is matched to its reported results by its real path ALONE.
   // Both sides are normalized through realpath (normalizeAccountedPath), so a
@@ -1350,7 +1350,6 @@ function analyzeChunkAccounting(eventsPath, ledgerPath) {
   let registeredTotal = 0;
   let reportedTotal = 0;
   for (const [key, count] of registered) {
-    if (filteredFiles.has(key)) continue;
     const got = reportedFor(key);
     registeredTotal += count;
     reportedTotal += Math.min(got, count);
