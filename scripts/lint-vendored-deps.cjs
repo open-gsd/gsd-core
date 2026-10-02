@@ -97,6 +97,8 @@ function resolvePath(p) {
  *                                       'hand-authored': no upstream counterpart exists, so the
  *                                       twin is excluded from the byte-compare (checks 2 and 3
  *                                       above are skipped for this row).
+ *                                       'upstream-reference': srcTwin must be exactly
+ *                                       `export * from '<name>';` (bundled rows).
  */
 
 /** @type {VendoredPackage[]} */
@@ -148,7 +150,8 @@ function buildRefreshCommand(row) {
   return parts.join(' && ');
 }
 
-const REFRESH_COMMAND = VENDORED.map(buildRefreshCommand).join(' && ');
+// Bundled rows share one refresh command; list it once.
+const REFRESH_COMMAND = [...new Set(VENDORED.map(buildRefreshCommand))].join(' && ');
 
 /**
  * Compare two files byte-for-byte. Returns null when equal, or a short
@@ -277,7 +280,7 @@ function checkRow(row, pkgRoot = ROOT) {
   const findings = [];
 
   if (row.bundle) {
-    const built = buildVendorBundle(ROOT, row.upstreamCjs);
+    const built = buildVendorBundle(pkgRoot, row.upstreamCjs);
     for (const [file, expected] of [[row.vendoredCjs, built.code], [`${row.vendoredCjs}.LICENSE.txt`, built.notices]]) {
       if (!fs.existsSync(resolvePath(file)) || !fs.readFileSync(resolvePath(file)).equals(expected)) {
         findings.push(`${file} != reproducible upstream bundle (including license notices)`);
@@ -346,7 +349,7 @@ function checkRow(row, pkgRoot = ROOT) {
  */
 function fixRow(row, pkgRoot = ROOT) {
   if (row.bundle) {
-    const built = buildVendorBundle(ROOT, row.upstreamCjs);
+    const built = buildVendorBundle(pkgRoot, row.upstreamCjs);
     fs.writeFileSync(resolvePath(row.vendoredCjs), built.code);
     fs.writeFileSync(resolvePath(`${row.vendoredCjs}.LICENSE.txt`), built.notices);
   } else {

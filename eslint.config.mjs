@@ -161,6 +161,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/prohibition-enforcement.cjs',
       // #3770: tsc-generated runtime artifact — lint the src/tdd-red-evidence.cts source.
       'gsd-core/bin/lib/tdd-red-evidence.cjs',
+      // #4692: tsc-generated — lint the src/report-parser.cts source.
       'gsd-core/bin/lib/report-parser.cjs',
       // #4984: tsc-generated — lint the src/pr-branch-patterns.cts source.
       'gsd-core/bin/lib/pr-branch-patterns.cjs',

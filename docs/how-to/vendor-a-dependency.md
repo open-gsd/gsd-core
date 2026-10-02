@@ -16,17 +16,19 @@ The package that gets vendored stays pinned in `package.json` `devDependencies`,
 
 ## Picking the right upstream artifact
 
-For upstream packages without a standalone build, a `bundle: true` row in
-`scripts/lint-vendored-deps.cjs` builds one reproducibly with the pinned esbuild
-version. `npm run lint:vendored-deps -- --fix` writes the bundle and license
-notices; normal lint rebuilds in memory and checks byte equality. Transitive
-dependencies come from `package-lock.json`, and remaining external imports must
-be Node builtins. Use an `upstream-reference` source type twin to forward the
-package's own declarations during compilation. See `tap-parser` and `saxes`.
-
 Not every file the package ships is vendorable. You need a **self-contained CJS or UMD bundle** — one file, loadable with a single `require()`, containing zero `require()` calls of its own to anything outside Node builtins. Do not reach for the package's `exports.require`/`main` entry point (often `index.js`) without checking it first: that entry is frequently a thin loader that `require()`s several sibling files, which is exactly the shape vendoring cannot tolerate (a vendored `index.js` copied alone would throw at runtime looking for siblings that were never copied). Look instead for a `dist/` bundle purpose-built for standalone consumption.
 
 For js-yaml (ADR-3473 §8.1, #3881) the correct artifact is `dist/js-yaml.js` — the UMD bundle, self-contained, loads under `require()` with zero external `require()` calls, and exposes the symbols this repo needs (`load`, `dump`, `FAILSAFE_SCHEMA`, `YAMLException`). The tempting-looking `index.js` (the `exports.require` entry point) is **not** self-contained and is the wrong choice. Verify your candidate the same way: `require()` it in isolation (outside this repo's `node_modules` resolution, e.g. from a scratch directory with only that one file present) and confirm it loads without reaching for a sibling file.
+
+### Packages without a standalone build
+
+If the package ships no self-contained bundle, a `bundle: true` row in
+`scripts/lint-vendored-deps.cjs` builds one reproducibly with the pinned esbuild
+version (#4692). `npm run lint:vendored-deps -- --fix` writes the bundle and its
+license notices; normal lint rebuilds in memory and checks byte equality.
+Transitive dependencies come from `package-lock.json`, and remaining external
+imports must be Node builtins. Use an `upstream-reference` type twin (below).
+See the `tap-parser` and `saxes` rows.
 
 ## Adding the `VENDORED` manifest row
 
@@ -40,7 +42,7 @@ For js-yaml (ADR-3473 §8.1, #3881) the correct artifact is `dist/js-yaml.js` �
   upstreamDts: null,           // or a path, if the package ships its own .d.ts/.d.cts
   vendoredDts: null,           // or the gsd-core/bin/lib/vendor/ copy of that .d.ts
   srcTwin: 'src/vendor/your-package.d.cts',
-  twinKind: 'hand-authored',   // or 'upstream-verbatim' — see below
+  twinKind: 'hand-authored',   // or 'upstream-verbatim' / 'upstream-reference' — see below
 },
 ```
 
@@ -50,12 +52,13 @@ Then copy the artifact in:
 cp node_modules/your-package/dist/bundle.js gsd-core/bin/lib/vendor/your-package.cjs
 ```
 
-## The two kinds of type twin
+## Type twins
 
-Every vendored package needs a `.d.cts` under `src/vendor/` so TypeScript can resolve types for the relative `./vendor/your-package.cjs` import from `src/**` — module resolution for a `.cts` source is relative to `src/`, not the compiled output directory, so `gsd-core/bin/lib/vendor/your-package.d.cts` alone is not enough. There are two kinds, distinguished by `twinKind`:
+Every vendored package needs a `.d.cts` under `src/vendor/` so TypeScript can resolve types for the relative `./vendor/your-package.cjs` import from `src/**` — module resolution for a `.cts` source is relative to `src/`, not the compiled output directory, so `gsd-core/bin/lib/vendor/your-package.d.cts` alone is not enough. There are three kinds, distinguished by `twinKind`:
 
 - **`upstream-verbatim`** — the package ships its own `.d.ts`/`.d.cts` upstream. Copy it verbatim to both `gsd-core/bin/lib/vendor/your-package.d.cts` and `src/vendor/your-package.d.cts`. `lint-vendored-deps.cjs` byte-compares both copies against the upstream file and against each other, so any manual edit is caught as drift.
 - **`hand-authored`** — the package ships no type declarations upstream (js-yaml's case: no bundled `.d.ts`, and `@types/js-yaml` is not installed). Write `src/vendor/your-package.d.cts` by hand, declaring only the symbols this repo actually imports — narrower is safer, since anything not declared is simply unreachable from typed code. This twin is **excluded** from the byte-compare (there is no upstream file to compare it against) and is instead pinned by a test asserting the declared surface matches what the module actually uses.
+- **`upstream-reference`** — for a bundled package whose upstream declarations TypeScript can read from `node_modules` at build time. `src/vendor/your-package.d.cts` is exactly `export * from 'your-package';`, and `lint-vendored-deps.cjs` rejects any other content. The installed runtime needs only the bundled JavaScript.
 
 Set `upstreamDts`/`vendoredDts` to `null` for a hand-authored twin — `checkRow` in `scripts/lint-vendored-deps.cjs` skips the byte-compare checks entirely when either is `null`.
 

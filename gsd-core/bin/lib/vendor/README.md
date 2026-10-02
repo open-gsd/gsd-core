@@ -54,7 +54,8 @@ declaration. The installed runtime needs only the bundled JavaScript.
 Each vendored package needs a `.d.cts` under `src/vendor/` so TypeScript can
 resolve types for a relative `./vendor/<pkg>.cjs` import from `src/**`
 (module resolution for a `.cts` source is relative to `src/`, not the
-compiled output dir). There are two kinds:
+compiled output dir). Besides the upstream-reference twins above, the prebuilt
+upstream artifacts use one of two kinds:
 
 - **upstream-verbatim** (`re2js.d.cts`) — a byte-for-byte copy of an
   upstream `.d.cts`/`.d.ts` that ships with the package. Both the
@@ -87,8 +88,10 @@ cp node_modules/js-yaml/dist/js-yaml.js gsd-core/bin/lib/vendor/js-yaml.cjs
 ```
 
 `node scripts/lint-vendored-deps.cjs` fails CI if any vendored copy drifts
-byte-for-byte from its `node_modules` upstream, from its own source-side
-type twin (upstream-verbatim twins only), or from the version pinned in
+byte-for-byte from its `node_modules` upstream (for a bundled package: from
+an in-memory rebuild of the bundle and its license notices), from its own
+source-side type twin (upstream-verbatim twins only; an upstream-reference
+twin must be the exact forwarding declaration), or from the version pinned in
 `package.json` `devDependencies`. It is table-driven (`VENDORED` in that
-script) — adding a third vendored package means adding a row, not a second
+script) — adding a vendored package means adding a row, not another
 hardcoded check block (ADR-3473 §8.3, "one implementation per rule").
