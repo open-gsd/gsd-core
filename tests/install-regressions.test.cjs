@@ -2461,6 +2461,27 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
       'a manifest-recorded gsd-* skill that is no longer shipped is still pruned');
   });
 
+  test('hermes: the pre-#2841 flat skills/ cleanup keeps a user gsd-* skill and still removes first-party ones', (t) => {
+    const root = createTempDir('gsd-5161-hermes-');
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, '.hermes');
+    const flatDir = path.join(configDir, 'skills');
+    fs.mkdirSync(path.join(flatDir, 'gsd-mine'), { recursive: true });
+    fs.writeFileSync(path.join(flatDir, 'gsd-mine', 'SKILL.md'), USER_SKILL);
+    fs.mkdirSync(path.join(flatDir, 'gsd-help'), { recursive: true });
+    fs.writeFileSync(path.join(flatDir, 'gsd-help', 'SKILL.md'), 'old flat GSD help\n');
+    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+
+    const r = runNode([INSTALL_SCRIPT, '--hermes', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r.exitCode, 0, `hermes install failed: ${r.stdout}\n${r.stderr}`);
+    assert.ok(fs.existsSync(path.join(flatDir, 'gsd-mine')), 'a user skill in Hermes\' own skills root must survive');
+    assert.strictEqual(fs.readFileSync(path.join(flatDir, 'gsd-mine', 'SKILL.md'), 'utf8'), USER_SKILL);
+    assert.ok((r.stdout + r.stderr).includes(path.join(flatDir, 'gsd-mine')), 'the kept dir is named by path');
+    assert.strictEqual(fs.existsSync(path.join(flatDir, 'gsd-help')), false,
+      'a pre-#2841 flat first-party skill is still removed');
+    assert.ok(fs.existsSync(path.join(flatDir, 'gsd', 'gsd-ns-workflow', 'SKILL.md')), 'the nested layout is still installed');
+  });
+
   test('local: the legacy stale-skills cleanup keeps a user gsd-* project skill and still removes first-party ones', (t) => {
     const root = createTempDir('gsd-5161-local-');
     t.after(() => cleanup(root));

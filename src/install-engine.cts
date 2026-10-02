@@ -915,10 +915,13 @@ function createSkillDirOwnership(
   for (const lookupDir of [configDir, undefined]) {
     try {
       const commandsGsdDir = runtimeArtifactLayout.findInstallSourceRoot(lookupDir);
-      for (const file of installFs().readdirSync(commandsGsdDir)) {
-        if (typeof file === 'string' && file.endsWith('.md')) firstParty.add(prefix + file.slice(0, -3));
+      // A regular `.md` file only — the filter every skills writer stages
+      // with. A source counts as resolved only once it yields a stem.
+      for (const entry of installFs().readdirSync(commandsGsdDir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+        firstParty.add(prefix + entry.name.slice(0, -3));
+        sourceResolved = true;
       }
-      sourceResolved = true;
     } catch (err) {
       lastError = err;
     }
@@ -1067,15 +1070,24 @@ function _runLegacyInstallMigrations(runtime: string, configDir: string, scope: 
   }
 
   // Hermes: remove pre-#2841 flat skills/gsd-*/ entries that lived alongside
-  // the new skills/gsd/ nested layout. (#5169: `hostBehaviors.legacyFlatSkillsCleanup`.)
+  // the new skills/gsd/ nested layout (#5169: `hostBehaviors.legacyFlatSkillsCleanup`).
+  // #5161: skills/ is also Hermes' own skills root, so this runs on every
+  // install against dirs the user may own — remove only what GSD owns, keep
+  // and name the rest.
   if (hostBehaviorsFor(runtime).legacyFlatSkillsCleanup) {
     const flatSkillsDir = path.join(configDir, 'skills');
     if (installFs().existsSync(flatSkillsDir)) {
+      const ownsSkillDir = createSkillDirOwnership(runtime, configDir, flatSkillsDir, 'gsd-');
+      const kept: string[] = [];
       for (const entry of installFs().readdirSync(flatSkillsDir, { withFileTypes: true })) {
-        if (entry.isDirectory() && entry.name.startsWith('gsd-')) {
-          installFs().rmSync(path.join(flatSkillsDir, entry.name), { recursive: true });
+        if (!entry.isDirectory() || !entry.name.startsWith('gsd-')) continue;
+        if (!ownsSkillDir(entry.name)) {
+          kept.push(entry.name);
+          continue;
         }
+        installFs().rmSync(path.join(flatSkillsDir, entry.name), { recursive: true });
       }
+      _warnPreservedSkillDirs(flatSkillsDir, kept);
     }
 
     // Hermes: bare-stem skills/gsd/<stem>/ cleanup is deferred to AFTER the
