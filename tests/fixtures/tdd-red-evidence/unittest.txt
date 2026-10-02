@@ -1,0 +1,31 @@
+test_adds_two_numbers (test_demo.AddTest.test_adds_two_numbers) ... 
+  test_adds_two_numbers (test_demo.AddTest.test_adds_two_numbers) (i=0) ... FAIL
+  test_adds_two_numbers (test_demo.AddTest.test_adds_two_numbers) (i=1) ... FAIL
+test_adds_zero (test_demo.AddTest.test_adds_zero) ... ok
+test_known_bug (test_demo.AddTest.test_known_bug) ... unexpected success
+test_subtracts (test_demo.AddTest.test_subtracts) ... skipped 'not yet'
+
+======================================================================
+FAIL: test_adds_two_numbers (test_demo.AddTest.test_adds_two_numbers) (i=0)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/cap-py/tests/test_demo.py", line 12, in test_adds_two_numbers
+    self.assertEqual(add(i, 2), i + 2)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 2
+
+======================================================================
+FAIL: test_adds_two_numbers (test_demo.AddTest.test_adds_two_numbers) (i=1)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/cap-py/tests/test_demo.py", line 12, in test_adds_two_numbers
+    self.assertEqual(add(i, 2), i + 2)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 3
+
+======================================================================
+UNEXPECTED SUCCESS: test_known_bug (test_demo.AddTest.test_known_bug)
+----------------------------------------------------------------------
+Ran 4 tests in 0.001s
+
+FAILED (failures=2, skipped=1, unexpected successes=1)

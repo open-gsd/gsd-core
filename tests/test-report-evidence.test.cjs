@@ -26,6 +26,43 @@ test('#4692: a real nested Vitest TAP report proves the target failure without N
   assert.deepEqual(result.evidence.failing_tests, ['rejects empty email']);
 });
 
+// Real captures of the other three formats (provenance in the fixture README).
+const realReports = {
+  surefire: { command: 'mvn -B -q test', output: fixture('surefire-TEST-example.AppTest.xml'), tests: 3, pass: 1, fail: 1 },
+  swift: { command: 'swift test --skip-build', output: fixture('swift-testing.txt'), tests: 4, pass: 1, fail: 2 },
+  unittest: { command: 'python3 -m unittest discover -s tests -v', output: fixture('unittest.txt'), tests: 4, pass: 2, fail: 1 },
+};
+for (const [format, targetTest, verdict, reason] of [
+  ['surefire', 'rejectsEmptyEmail', 'RED_EVIDENCE_OK', 'target_test_failed'],
+  ['surefire', 'example.AppTest#rejectsEmptyEmail', 'RED_EVIDENCE_OK', 'target_test_failed'],
+  ['surefire', 'acceptsValidEmail', 'INVALID_RED', 'no_target_test_failure'],
+  ['surefire', 'normalizesCase', 'INVALID_RED', 'no_target_test_failure'],
+  ['swift', 'addsNumbers()', 'RED_EVIDENCE_OK', 'target_test_failed'],
+  ['swift', 'addsToItself', 'RED_EVIDENCE_OK', 'target_test_failed'],
+  ['swift', 'Adds zero', 'INVALID_RED', 'no_target_test_failure'],
+  ['swift', 'subtracts()', 'INVALID_RED', 'no_target_test_failure'],
+  ['unittest', 'test_adds_two_numbers', 'RED_EVIDENCE_OK', 'target_test_failed'],
+  ['unittest', 'test_adds_zero', 'INVALID_RED', 'no_target_test_failure'],
+]) {
+  test(`#4692: a real ${format} report classifies ${targetTest} as ${reason}`, () => {
+    const { command, output, tests, pass, fail } = realReports[format];
+    const result = classifyRedEvidence({ command, exitCode: 1, output, targetTest });
+    assert.equal(result.verdict, verdict);
+    assert.equal(result.reason, reason);
+    assert.deepEqual(result.evidence.report_errors, []);
+    assert.deepEqual([result.evidence.tests, result.evidence.pass, result.evidence.fail], [tests, pass, fail]);
+  });
+}
+
+test('#4692: a real unittest import failure is a load failure, never RED', () => {
+  const result = classifyRedEvidence({
+    command: 'python3 -m unittest discover -s tests -v', exitCode: 1,
+    output: fixture('unittest-load-error.txt'), targetTest: 'test_adds_two_numbers',
+  });
+  assert.equal(result.reason, 'invalid_record');
+  assert.deepEqual(result.evidence.report_errors, ['unittest module failed to load']);
+});
+
 test('#4692: an XML report truncated after the target failure cannot authorize GREEN', () => {
   const result = classifyRedEvidence(input(
     '<testsuite><testcase name="rejects empty email"><failure message="expected 2"/></testcase>',

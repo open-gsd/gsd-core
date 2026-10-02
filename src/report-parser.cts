@@ -155,9 +155,11 @@ function parseJunit(output: string): TestReport {
  * counts skipped tests too, and a parameterized test names its case count.
  * A test is named by its quoted display name (with `(aka 'function()')` under
  * --verbose) or, without one, by its bare function name. Windows consoles
- * print √ × - in place of ✔ ✘ ━.
+ * print √ × - in place of ✔ ✘ ━. swift-testing 6.1 omits the suite count from
+ * the aggregate and marks skipped tests with ✘ (later sources add the count
+ * and use ➜).
  */
-const SWIFT_AGGREGATE = /^[ \t]*[✘✔━×√-][ \t]*Test run with (\d+) tests? in \d+ suites? (passed|failed)\b/gm;
+const SWIFT_AGGREGATE = /^[ \t]*[✘✔━×√-][ \t]*Test run with (\d+) tests?(?: in \d+ suites?)? (passed|failed)\b/gm;
 const SWIFT_RESULT = /^[ \t]*[✘✔━➜×√-][ \t]*Test (?:"([^"]+)"(?: \(aka '([^']+)'\))?|([^\s"]\S*\)))(?: with \d+ test cases?)? (?:(failed|passed|was cancelled) after [\d.]+ seconds?(?: with \d+ [^\n]*?)?(?:\.|: "[^\n]*")|(skipped)(?:\.|: "[^\n]*"))$/gm;
 
 function parseSwiftTesting(output: string): TestReport {

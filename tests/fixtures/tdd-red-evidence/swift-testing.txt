@@ -1,0 +1,23 @@
+[0/1] Planning build
+Test Suite 'All tests' started at 2026-10-02 06:06:49.113
+Test Suite 'debug.xctest' started at 2026-10-02 06:06:49.114
+Test Suite 'debug.xctest' passed at 2026-10-02 06:06:49.114
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+Test Suite 'All tests' passed at 2026-10-02 06:06:49.114
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.1.3 (1d1f7e489c9c606)
+↳ Target Platform: x86_64-unknown-linux-gnu
+◇ Test "Adds zero" started.
+✘ Test subtracts() skipped: "not yet"
+◇ Test addsToItself(n:) started.
+◇ Test addsNumbers() started.
+✔ Test "Adds zero" passed after 0.001 seconds.
+◇ Passing 1 argument n → 2 to addsToItself(n:)
+◇ Passing 1 argument n → 1 to addsToItself(n:)
+✘ Test addsToItself(n:) recorded an issue with 1 argument n → 1 at DemoTests.swift:17:3: Expectation failed: (add(n, 0) → 0) == (n → 1)
+✘ Test addsToItself(n:) recorded an issue with 1 argument n → 2 at DemoTests.swift:17:3: Expectation failed: (add(n, 0) → 0) == (n → 2)
+✘ Test addsNumbers() recorded an issue at DemoTests.swift:5:3: Expectation failed: (add(1, 2) → 0) == 3
+✘ Test addsNumbers() failed after 0.001 seconds with 1 issue.
+✘ Test addsToItself(n:) failed after 0.001 seconds with 2 issues.
+✘ Test run with 4 tests failed after 0.001 seconds with 3 issues.

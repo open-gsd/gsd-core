@@ -22,3 +22,27 @@ describe('email validation', () => {
 These commands were exposed through the capture project's npm scripts and run
 with `npm run --silent` so the stored stdout is the original reporter stream.
 Vitest is not needed to run GSD's regression suite.
+
+## Other formats
+
+Captured unchanged on 2026-10-02; each run exited 1. Paths, timings and JVM
+properties are captured data, not matching criteria.
+
+- `surefire-TEST-example.AppTest.xml`: Maven 3.9 (`maven:3.9-eclipse-temurin-21`
+  image, Temurin 21.0.12), maven-surefire-plugin 3.5.2, JUnit Jupiter 5.11.4,
+  `mvn -B -q test`, the report file Surefire wrote to `target/surefire-reports/`.
+  `example.AppTest` has `rejectsEmptyEmail` (`assertEquals(2, 1)`),
+  `acceptsValidEmail` (`assertEquals(1, 1)`) and `normalizesCase`
+  (`@Disabled("not yet")`).
+- `swift-testing.txt`: Swift 6.1.3 (`swift:6.1` image), swift-testing 6.1.3,
+  stdout and stderr of `swift test --skip-build` after `swift build --build-tests`.
+  `DemoTests.swift` has `@Test func addsNumbers()` (fails), `@Test("Adds zero")
+  func addsZero()` (passes), `@Test(.disabled("not yet")) func subtracts()` and
+  `@Test(arguments: [1, 2]) func addsToItself(n:)` (fails for both arguments);
+  `add` returns 0.
+- `unittest.txt`: Python 3.14.4, `NO_COLOR=1 python3 -m unittest discover -s tests -v`.
+  `test_demo.AddTest` has `test_adds_two_numbers` (fails in two subTests),
+  `test_adds_zero` (passes), `test_subtracts` (`@unittest.skip`) and
+  `test_known_bug` (`@unittest.expectedFailure`, passes); `add` returns 0.
+- `unittest-load-error.txt`: the same command with a test module whose import
+  fails (`import missing_module`).
