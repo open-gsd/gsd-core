@@ -7703,7 +7703,9 @@ function convertClaudeToKiloFrontmatter(content, { isAgent = false, modelOverrid
  * skills" nor satisfy the non-empty check that detects a failed install.
  */
 function _countOwnedSkillDirs(runtime, configDir, skillsDir) {
-  const owns = createSkillDirOwnership(runtime, configDir, skillsDir, 'gsd-', { includeManifest: false, ownAllIfSourceUnresolved: true });
+  // A verification count fails closed: an unreadable install source must not
+  // let a user's gsd-* dir stand in for an install that wrote nothing.
+  const owns = createSkillDirOwnership(runtime, configDir, skillsDir, 'gsd-', { includeManifest: false });
   return fs.readdirSync(skillsDir, { withFileTypes: true })
     .filter(e => e.isDirectory() && e.name.startsWith('gsd-') && owns(e.name)).length;
 }
