@@ -1,6 +1,6 @@
 # Internal git-probe timeout for blocking PreToolUse guards
 
-Date: 2026-10-02. Repo state: `origin/next` 62549bf24 (worktree base 957faa55b6). Not committed. Descriptive research only; no timeout value was changed.
+Date: 2026-10-02. Point-in-time record for issue #5180. Sections 1-6 describe `origin/next` at 62549bf24 BEFORE the change; the final section records what was decided and shipped.
 Trigger: `origin/next` Tests run 37037966537, job 110940840080 (`conformance test (windows-latest, 24, shard 3/3)`).
 
 ## 1. Claude Code hook timeout semantics (primary: https://code.claude.com/docs/en/hooks)
@@ -19,7 +19,7 @@ Trigger: `origin/next` Tests run 37037966537, job 110940840080 (`conformance tes
 - Windows: "`'SIGKILL'`, `'SIGTERM'`, `'SIGINT'` and `'SIGQUIT'` terminate the process forcefully and abruptly". A timed-out probe is hard-killed; wall time = timeout + kill/reap latency (~460 ms extra in the failing run, section 4).
 - Repo evidence that kill is direct-child only on Windows: issue #4601. git is the direct child here, so tree-kill is not an issue for the probe, but the reap cost is real.
 
-## 3. Budgets elsewhere in gsd-core (origin/next)
+## 3. Budgets elsewhere in gsd-core (origin/next, before the change)
 
 | file:line | probe | timeout | on timeout |
 |---|---|---|---|
@@ -51,10 +51,10 @@ Test helper misclassification: `runHook` in tests/worktree-safety.test.cjs says 
 
 ## 5. Repo rules on raising timeouts
 
-- User memory feedback-never-raise-timeout-without-explicit-instruction.md plus the user-level hook `gsd-block-timeout-increase-guard.cjs`: raising a timeout to turn a slow test/CI job green is forbidden; only an explicit in-turn user instruction naming the increase permits it. Hard process constraint on whoever implements the change.
+- Maintainer practice: raising a timeout to turn a slow test or CI job green is not accepted; each increase needs an explicit, named decision by a maintainer. Process constraint on whoever implements the change.
 - TESTING-STANDARDS.md "No ad hoc timeout literals" (ESLint `local/no-adhoc-timeout-literal`) covers test call sites; hooks/*.js are not covered, but the house style is: name the class, show the margin.
 - CONTEXT.md:1078: git bound norm 5-30 s (src/**). The hooks' 2000 ms is below that norm; src/worktree-safety.cts:20 explicitly prefers per-class budgets over bumping a shared default.
-- No rule found that forbids raising a production fail-open guard's internal probe budget. Distinguishing facts: (a) in a test a raised timeout hides a hang; here the probe belongs to a production gate whose timeout silently DISABLES the gate (section 1), so a longer budget closes a bypass rather than masking a slowdown; (b) the "make it cheaper" lever is already used (3 spawns collapsed to 1, hooks/gsd-worktree-path-guard.js:166-175, whose comment says "Do not change any timeout value as part of this change"); the remaining levers are the budget and the wrongly-classed test helper; (c) the instruction gate still applies: an explicit user instruction is needed before any edit.
+- No rule found that forbids raising a production fail-open guard's internal probe budget. Distinguishing facts: (a) in a test a raised timeout hides a hang; here the probe belongs to a production gate whose timeout silently DISABLES the gate (section 1), so a longer budget closes a bypass rather than masking a slowdown; (b) the "make it cheaper" lever is already used (3 spawns collapsed to 1, hooks/gsd-worktree-path-guard.js:166-175, whose comment says "Do not change any timeout value as part of this change"); the remaining levers are the budget and the wrongly-classed test helper; (c) each increase was still taken as an explicit, named decision (see the final section).
 
 ## 6. Constraints and arithmetic
 
@@ -63,18 +63,16 @@ T = per-probe timeout; N = max sequential probes = 3 (path-guard, windsurf-pre-w
 - Test helper bound B currently 10 s (QUICK class). Need N*T + O < B. T=2000: 6.5 s OK. T=3000: 9.5 s (margin 0.5 s, too thin). T=5000: 15.5 s exceeds 10 s.
 - With the helper moved to the STAGED_HOOK_SCRIPT class (20 s): T=5000 gives 15.5 s < 20 s (margin 4.5 s); the realistic cross-root block path has N=2, 10.5 s.
 - Production host budget 120 s (installer path, #4175): 15.5 s is far below. Host stalls up to 84.3 s would still outlast any inner probe; the inner budget covers git slowness inside a live hook only.
-- Plugin surface (hooks/hooks.json:22) still registers worktree-path-guard at 5 s: with T=5000 the host could kill the hook before probes finish (no block) - the bypass #3981 described. Register at 120 in the same change, or keep N*T under 5 s there.
+- Before the change the plugin surface (hooks/hooks.json:22) registered worktree-path-guard at 5 s: with T=5000 the host could kill the hook before probes finish (no block) - the bypass #3981 described. Register at 120 in the same change, or keep N*T under 5 s there.
 - Lower bound: must exceed observed starvation. Evidence only shows ">2000 ms"; 5000 ms is 2.5x the failing boundary and the bottom of the repo's 5-30 s git norm (CONTEXT.md:1078).
 
-## RECOMMENDATION
+## DECISION (what shipped for #5180)
 
-Per-probe `timeout: 5000` ms.
-- Worst case hook = 3 x 5000 + ~500 = ~15.5 s; below 20 s (STAGED_HOOK_SCRIPT class, after reclassifying the test `runHook` from the 10 s QUICK class) and far below 120 s host.
-- If the test helper stays at 10 s, the largest safe T is ~3000 (9.5 s total, 0.5 s margin): not recommended; do not choose a value that silently requires raising the helper.
-- Hooks to change (each needs an explicit user instruction naming the increase, section 5):
-  1. hooks/gsd-worktree-path-guard.js:31 `SPAWNOPT.timeout` 2000 -> 5000; refresh the :175 scoping comment.
-  2. hooks/gsd-windsurf-pre-write.js:41 same literal (Windsurf host-side timeout UNKNOWN; verify first).
-  3. hooks/gsd-workflow-guard.js:94 `git branch --show-current` 2000 -> 5000; fix stale "5s budget" comment (:88-92).
-  4. hooks/hooks.json:22 plugin registration 5 -> 120 (and any sibling blocking guard) to match #4175.
-  5. tests/worktree-safety.test.cjs `runHook` (~6556): QUICK class -> STAGED_HOOK_SCRIPT class; correct its "no subprocess" comment.
-  Leave hooks/gsd-statusline.js (1500 ms, advisory) unchanged.
+Per-probe budget 5000 ms (`BLOCKING_GUARD_PROBE_TIMEOUT_MS`, hooks/lib/git-probe.js) with at most 3 sequential probes (`BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES`): worst case about 3 x 5000 + ~500 = ~15.5 s, below the 20 s staged-hook test class and far below the 120 s host budget.
+- hooks/gsd-worktree-path-guard.js, hooks/gsd-windsurf-pre-write.js and hooks/gsd-workflow-guard.js use the shared constant. The workflow guard's stale "5s budget" comment was corrected.
+- Host registrations: hooks/hooks.json blocking guards and the Kimi config.toml blocking guards moved to 120 s, matching the installer (`BLOCKING_GUARD_TIMEOUT_S`, `BLOCKING_GUARD_NAMES` in src/runtime-hooks-surface.cts). Advisory hooks keep their small budgets.
+- Windsurf: no hook timeout is documented and its registration entry carries none, so its host budget is UNKNOWN. The 15 s worst case is not claimed to fit any host budget; the guard keeps its fail-open posture.
+- OpenCode and Kilo plugins (.opencode/plugins/gsd-core.js, .kilo/plugins/gsd-core.js): their `runHook` reports a killed hook as exit 0 (allow), and its 8 s default was below the 15.5 s worst case. The two git-probing guards now get the shared worst case plus a margin (fallback bound used only when hooks/lib/git-probe.js is unresolvable). The pi adapter only runs the workflow guard on an event with no tool call, so it never reaches a probe and is unchanged.
+- Test harness bounds that ran these guards moved to the staged-hook class (or derive their stub sleep from the shared constant): worktree-safety, windsurf-hooks-bridge, workflow-guard, hooks-crash-policy.
+- Verification: tests/blocking-guard-budget-parity.test.cjs runs each guard as a real subprocess with a `child_process` recorder preloaded (tests/helpers/spawn-timeout-recorder.cjs) and asserts every git probe received the shared budget and no guard exceeded the probe count; it also checks the installer, hooks.json and Kimi registrations and the plugin bounds.
+- Left unchanged: hooks/gsd-statusline.js (1500 ms, advisory).

@@ -158,8 +158,8 @@ const TABLE = [
     file: 'gsd-worktree-path-guard.js',
     stdinTimeoutMs: 3000,
     declaredOnCrash: 'allow',
-    // #3911: this hook's deny path depends on several bounded (2000ms)
-    // spawnSync(git, ...) probes. Under load, a probe can time out before it
+    // #3911: this hook's deny path depends on several bounded
+    // (BLOCKING_GUARD_PROBE_TIMEOUT_MS, hooks/lib/git-probe.js) spawnSync(git, ...) probes. Under load, a probe can time out before it
     // answers — the hook still allows (exit 0, unchanged), but now with a
     // stderr diagnostic instead of the pre-#3911 silent allow. See the C2
     // loop below and the dedicated stub-git regression suite.

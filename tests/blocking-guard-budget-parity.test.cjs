@@ -120,8 +120,9 @@ describe('blocking guard host budgets agree with the installer (#5180)', () => {
     const toml = fs.readFileSync(path.join(root, '.kimi', 'config.toml'), 'utf8');
     const seen = new Map();
     for (const block of toml.split('[[hooks]]').slice(1)) {
-      const name = hookName((/^command = "(.*)"$/m.exec(block) || [])[1]);
-      const timeout = /^timeout = (\d+)$/m.exec(block);
+      // `\r?` keeps the line anchors correct on a CRLF config.toml (Windows autocrlf).
+      const name = hookName((/^command = "(.*)"\r?$/m.exec(block) || [])[1]);
+      const timeout = /^timeout = (\d+)\r?$/m.exec(block);
       if (name) seen.set(name, timeout ? Number(timeout[1]) : undefined);
     }
     // Intentional divergence from the installer's set, stated by the module.
@@ -337,8 +338,21 @@ describe('OpenCode / Kilo plugin bound for the git-probing guards holds their wo
   ];
   const PROBING_GUARDS = ['gsd-worktree-path-guard.js', 'gsd-workflow-guard.js'];
 
-  async function recordedHookTimeouts(pluginPath) {
+  const Module = require('node:module');
+
+  // `gitProbeLibMissing` makes hooks/lib/git-probe.js unresolvable for the plugin
+  // (a partial install), so the adapter's own fallback bound is what is observed.
+  async function recordedHookTimeouts(pluginPath, { gitProbeLibMissing = false } = {}) {
     const original = childProcess.spawnSync;
+    const originalLoad = Module._load;
+    if (gitProbeLibMissing) {
+      Module._load = function load(request, ...rest) {
+        if (typeof request === 'string' && /git-probe\.js$/.test(request)) {
+          throw Object.assign(new Error(`Cannot find module '${request}'`), { code: 'MODULE_NOT_FOUND' });
+        }
+        return originalLoad.call(this, request, ...rest);
+      };
+    }
     const seen = new Map();
     childProcess.spawnSync = (command, args, options) => {
       const hookFile = path.basename(String(args && args[0]));
@@ -353,12 +367,25 @@ describe('OpenCode / Kilo plugin bound for the git-probing guards holds their wo
       await hooks['tool.execute.before']({ tool: 'bash' }, { args: { command: 'git status' } });
     } finally {
       childProcess.spawnSync = original;
+      Module._load = originalLoad;
       delete require.cache[require.resolve(pluginPath)];
     }
     return seen;
   }
 
   for (const pluginPath of PLUGINS) {
+    test(`${path.relative(path.join(__dirname, '..'), pluginPath)}: the fallback bound (git-probe lib unresolvable) also holds the worst case plus overhead`, async () => {
+      const seen = await recordedHookTimeouts(pluginPath, { gitProbeLibMissing: true });
+      // node start + fs work + kill/reap observed on a starved Windows runner (~0.46 s).
+      const overheadMs = 500;
+      const required = BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES * BLOCKING_GUARD_PROBE_TIMEOUT_MS + overheadMs;
+      for (const guard of PROBING_GUARDS) {
+        assert.ok(seen.has(guard), `${guard} must be spawned by the adapter for this scenario`);
+        assert.ok(seen.get(guard) >= required,
+          `${guard} fallback bound ${seen.get(guard)} ms must hold ${required} ms (probes x budget + overhead)`);
+      }
+    });
+
     test(`${path.relative(path.join(__dirname, '..'), pluginPath)}: probing guards get at least probes x probe budget`, async () => {
       const seen = await recordedHookTimeouts(pluginPath);
       const worstCaseMs = BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES * BLOCKING_GUARD_PROBE_TIMEOUT_MS;
