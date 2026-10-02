@@ -1494,13 +1494,13 @@
       "id": "SEAM.dispatch-isolation-vocabulary.enforced-by",
       "klass": "SEAM",
       "value": "test:tests/host-integration-validator-parity.test.cjs",
-      "line": 95
+      "line": 97
     },
     {
       "id": "SEAM.dispatch-isolation-vocabulary.owns",
       "klass": "SEAM",
       "value": "DISPATCH_ISOLATION_MODES / BASE_CHECK_ISOLATION_MODES in src/dispatch-isolation.cts are the single declaration of the dispatch-isolation vocabulary and its worktree-creating subset (#4561)",
-      "line": 94
+      "line": 96
     },
     {
       "id": "SEAM.evaluation-scope.enforced-by",
