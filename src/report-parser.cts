@@ -262,7 +262,9 @@ export function parseTestReport(output: string): TestReport {
   const adapter = adapters.find((candidate) => candidate.matches(output));
   if (!adapter) return { format: ReportFormat.Unknown, valid: false, tests: [], issues: ['Unsupported report format'] };
   try {
-    return adapter.parse(output);
+    const report = adapter.parse(output);
+    // One entry per problem: a long run of bad lines must not amplify the payload.
+    return { ...report, issues: [...new Set(report.issues)] };
   } catch {
     return { format: ReportFormat.Unknown, valid: false, tests: [], issues: ['Malformed report'] };
   }

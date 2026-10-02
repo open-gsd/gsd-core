@@ -136,6 +136,13 @@ for (const [name, output] of [
   });
 }
 
+test('#4692: report_errors names each problem once however often it repeats', () => {
+  const garbage = Array.from({ length: 1000 }, (_, i) => `garbage line ${i}`).join('\n');
+  const result = classifyRedEvidence(input(tap(`not ok 1 - rejects empty email\n1..1\n${garbage}`)));
+  assert.equal(result.reason, 'invalid_record');
+  assert.deepEqual(result.evidence.report_errors, ['Non-TAP data in report', 'Malformed TAP']);
+});
+
 // Each input trips exactly one adapter guard, so removing that guard changes
 // report_errors (and, for most, lets the target failure through).
 for (const [issue, output] of [
