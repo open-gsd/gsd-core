@@ -1008,14 +1008,17 @@ function _restoreDir(dir: string, snapshot: Map<string, Buffer>): void {
  *
  * @param nestedGsdDir  absolute path to skills/gsd/ category dir
  */
-function _removeHermesBareStemDirs(nestedGsdDir: string): void {
+function _removeHermesBareStemDirs(nestedGsdDir: string, owns?: (name: string) => boolean): void {
   if (!installFs().existsSync(nestedGsdDir)) return;
   const entries = installFs().readdirSync(nestedGsdDir, { withFileTypes: true });
 
   // Collect the set of stems that were installed as gsd-<stem>/ this run.
+  // #5161: the prune now keeps gsd-* dirs GSD does not own, so "present" no
+  // longer means "installed". With `owns`, only an owned gsd-<stem>/ counts,
+  // and a user's own <stem>/ beside their own gsd-<stem>/ is left alone.
   const installedStems = new Set<string>();
   for (const entry of entries) {
-    if (entry.isDirectory() && entry.name.startsWith('gsd-')) {
+    if (entry.isDirectory() && entry.name.startsWith('gsd-') && (!owns || owns(entry.name))) {
       installedStems.add(entry.name.slice('gsd-'.length)); // e.g. 'quick', 'dev-preferences'
     }
   }
@@ -1085,7 +1088,13 @@ function _runLegacyInstallMigrations(runtime: string, configDir: string, scope: 
       const ownsSkillDir = createSkillDirOwnership(runtime, configDir, flatSkillsDir, 'gsd-', { manifestPrefix: 'skills/' });
       const kept: string[] = [];
       for (const entry of installFs().readdirSync(flatSkillsDir, { withFileTypes: true })) {
-        if (!entry.isDirectory() || !entry.name.startsWith('gsd-')) continue;
+        if (!entry.name.startsWith('gsd-')) continue;
+        // A symlink is never removed here (as before); name it when unowned.
+        if (entry.isSymbolicLink()) {
+          if (!ownsSkillDir(entry.name)) kept.push(entry.name);
+          continue;
+        }
+        if (!entry.isDirectory()) continue;
         if (!ownsSkillDir(entry.name)) {
           kept.push(entry.name);
           continue;
@@ -1552,7 +1561,10 @@ function installRuntimeArtifacts(
     let hermesBareStemCleanup = false;
     if (hostBehaviorsFor(runtime).bareStemSkillsCleanup) {
       const nestedGsdDirForCleanup = path.join(configDir, 'skills', 'gsd');
-      _removeHermesBareStemDirs(nestedGsdDirForCleanup);
+      // gsd-dev-preferences is restored rather than staged, and its legacy bare
+      // dev-preferences/ twin is one this cleanup exists for (#947).
+      const ownsNested = createSkillDirOwnership(runtime, configDir, nestedGsdDirForCleanup, 'gsd-', { includeManifest: false });
+      _removeHermesBareStemDirs(nestedGsdDirForCleanup, (name) => ownsNested(name) || USER_OWNED_SKILL_DIRS.includes(name));
       hermesBareStemCleanup = true;
     }
 

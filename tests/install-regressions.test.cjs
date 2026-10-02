@@ -2496,8 +2496,25 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
     manifest.files['skills/gsd/gsd-cross-5161/SKILL.md'] = 'deadbeef';
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 
+    // A user's own pair under the nested root: a kept gsd-<x>/ must not make GSD's bare-stem
+    // cleanup treat <x>/ as a legacy twin of something it installed.
+    fs.mkdirSync(path.join(flatDir, 'gsd', 'gsd-pair-5161'), { recursive: true });
+    fs.writeFileSync(path.join(flatDir, 'gsd', 'gsd-pair-5161', 'SKILL.md'), USER_SKILL);
+    fs.mkdirSync(path.join(flatDir, 'gsd', 'pair-5161'), { recursive: true });
+    fs.writeFileSync(path.join(flatDir, 'gsd', 'pair-5161', 'SKILL.md'), USER_SKILL);
+    // A flat user skill provided as a symlink: never removed, and named.
+    const linkTarget = path.join(root, 'my-skills', 'linked');
+    fs.mkdirSync(linkTarget, { recursive: true });
+    fs.writeFileSync(path.join(linkTarget, 'SKILL.md'), USER_SKILL);
+    fs.symlinkSync(linkTarget, path.join(flatDir, 'gsd-linked-5161'), 'dir');
+
     const r2 = runNode([INSTALL_SCRIPT, '--hermes', '--global', '--config-dir', configDir], runOpts);
     assert.strictEqual(r2.exitCode, 0, `hermes update failed: ${r2.stdout}\n${r2.stderr}`);
+    assert.ok(fs.existsSync(path.join(flatDir, 'gsd', 'gsd-pair-5161')), 'a nested user gsd-* skill survives');
+    assert.ok(fs.existsSync(path.join(flatDir, 'gsd', 'pair-5161')),
+      'its bare-stem neighbour is the user\'s too and must survive the bare-stem cleanup');
+    assert.ok(fs.lstatSync(path.join(flatDir, 'gsd-linked-5161')).isSymbolicLink(), 'a flat user symlink survives');
+    assert.ok((r2.stdout + r2.stderr).includes(path.join(flatDir, 'gsd-linked-5161')), 'and is named');
     const out2 = r2.stdout + r2.stderr;
     assert.strictEqual(fs.existsSync(path.join(flatDir, 'gsd-retired-5161')), false,
       'a flat skill the previous manifest recorded flat is still removed');
