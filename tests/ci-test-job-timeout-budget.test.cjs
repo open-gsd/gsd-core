@@ -125,36 +125,36 @@ const LANE_COSTS = [
   },
   {
     job: 'test-conformance',
-    measuredMinutes: 17,
+    measuredMinutes: 27,
     // #5029: the first entry this lane has had. It ran uncovered from #4591
     // until now on the comment "no LANE_COSTS entry exists yet for this
     // brand-new job — generous until a real measurement exists", and that gap
     // is what let it drift to a 34m long pole against its 45m cap and start
     // cancelling shards whose every chunk passed (#4935).
     //
-    // Sharded SIX ways across windows-latest as of #5029, so this is ONE
-    // shard's cost, not the whole tier — GitHub applies a single job-level
-    // budget across every matrix combination. The macos-latest row in the same
-    // job is unsharded and cheaper (17m56s observed), so windows is the
-    // binding case.
+    // GitHub applies ONE job-level budget across every matrix combination, so
+    // this figure is the slowest ROW, and that is macos-latest, not windows.
+    // macOS runs the whole tier unsharded: 26m58s on run 34434252144 (the
+    // figure the job header in test.yml cites) and 26m01s on run 37037251805,
+    // the worst of five green-or-complete runs on this PR (18m13s-26m01s).
+    // Rounded up from the worst observation per this file's convention: 27.
     //
-    // 16m25s is the long pole of the first fully green 6-shard run. The figure
-    // is 17 rather than 16 because the same shard measured 16m38s on run
-    // 36612397009, and this file's convention is the worst real observation
-    // rounded up, not the latest one. Long pole across all three 6-shard runs:
-    // 16m38s / 15m17s / 16m25s — shard 5/6 every time, so it is reproducibly
-    // the long pole rather than noise.
+    // Windows is sharded SIX ways as of #5029 and its long pole is
+    // reproducibly shard 5/6: 16m38s / 15m17s / 16m25s / 16m21s / 17m22s
+    // across the five 6-shard runs. That is well under the macOS row, so
+    // resharding windows (even downward, see below) does not move this entry
+    // unless a windows shard comes to outrun macOS.
     //
-    // Why six shards and not fewer, in budget terms: measured long poles were
-    // 34m24s at 3 shards (run 36322513056) and 30m17s at 4 (run 36349891343),
-    // requiring 53m and 47m against a 45m cap. Raising the cap was ruled out by
-    // #5029 — ADR-4641 records 45m as the cliff #869 and #3057 were filed
-    // about — so the split moved instead. #5071 -> #5097 has since priced Windows
-    // files by Windows measurements, which collapsed shard imbalance to
-    // 1.01-1.02; if this lane is ever resharded downward on the strength of
-    // that, re-measure and lower this entry with the run id, rather than
-    // scaling this one.
-    evidence: 'run 37024435915 — 16m25s long pole (windows shard 5/6), first fully green 6-shard run; 16m38s on run 36612397009 is the worst observation this figure covers',
+    // Why six shards and not fewer, in budget terms: measured windows long
+    // poles were 34m24s at 3 shards (run 36322513056) and 30m17s at 4 (run
+    // 36349891343), requiring 53m and 47m against a 45m cap. Raising the cap
+    // was ruled out by #5029 — ADR-4641 records 45m as the cliff #869 and #3057
+    // were filed about — so the split moved instead. #5071 -> #5097 has since
+    // priced Windows files by Windows measurements, which collapsed shard
+    // imbalance to 1.01-1.02; if this lane is ever resharded downward on the
+    // strength of that, re-measure the windows long pole from that run and
+    // raise this entry if it now exceeds macOS, rather than scaling a figure.
+    evidence: 'run 37037251805 — macos-latest 26m01s (binding row; windows long pole 17m22s, shard 5/6); 26m58s on run 34434252144 is the worst macOS observation this figure covers',
   },
 ];
 
