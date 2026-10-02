@@ -136,6 +136,24 @@ for (const [name, output] of [
   });
 }
 
+// Each input trips exactly one adapter guard, so removing that guard changes
+// report_errors (and, for most, lets the target failure through).
+for (const [issue, output] of [
+  ['TAP bailout', tap('1..1\nnot ok 1 - rejects empty email\nBail out! database down')],
+  ['Malformed TAP', tap('not ok 1 - rejects empty email\nok 3 - other\n1..2')],
+  ['Not a JUnit report', '<testrun><results/></testrun>'],
+  ['Misplaced test suite', '<testsuite tests="1">' + xmlCase('AppTest', 'rejects empty email', failure + '<testsuite/>') + '</testsuite>'],
+  ['Invalid JUnit test count', '<testsuite tests="1.0">' + xmlCase('AppTest', 'rejects empty email', failure) + '</testsuite>'],
+  ['Misplaced test case', '<testsuites tests="1">' + xmlCase('AppTest', 'rejects empty email', failure) + '</testsuites>'],
+  ['Unnamed test case', '<testsuite tests="2">' + xmlCase('AppTest', '', failure) + xmlCase('AppTest', 'rejects empty email', failure) + '</testsuite>'],
+]) {
+  test(`#4692: ${issue} is reported and blocks GREEN`, () => {
+    const result = classifyRedEvidence(input(output));
+    assert.equal(result.reason, 'invalid_record');
+    assert.deepEqual(result.evidence.report_errors, [issue]);
+  });
+}
+
 test('#4692: the CLI accepts Vitest TAP and returns the same blocking verdict with and without --raw', (t) => {
   const root = createTempDir('report-adapter-');
   t.after(() => cleanup(root));

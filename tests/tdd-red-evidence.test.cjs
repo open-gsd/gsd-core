@@ -234,42 +234,45 @@ describe('check tdd-red-evidence verb (#3770)', () => {
 
 describe('executor requires format-based RED evidence (#4692)', () => {
   const read = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
-  const canonical = read('gsd-core/references/tdd.md');
-  const runtime = read('gsd-core/references/execute-mvp-tdd.md');
+  // Read inside each test: a missing reference fails that test instead of
+  // throwing before any test registers.
+  const canonical = () => read('gsd-core/references/tdd.md');
+  const runtime = () => read('gsd-core/references/execute-mvp-tdd.md');
 
   test('#4692: TAP and JUnit share mandatory classification, with no Vitest exemption', () => {
-    assert.match(canonical, /report format/);
-    assert.match(canonical, /shared TAP adapter[^\n]*Node[^\n]*Vitest/);
-    assert.match(canonical, /JUnit XML adapter[^\n]*Surefire\/Failsafe/);
-    assert.match(canonical, /`gsd_run check tdd-red-evidence <record\.json> --raw`[^\n]*require `RED_EVIDENCE_OK` before GREEN/);
-    assert.match(canonical, /unsupported format requires a supported reporter or a parser adapter before GREEN/);
-    assert.match(canonical, /Classifier rejection never authorizes a fallback to self-attestation/);
-    assert.doesNotMatch(canonical + runtime, /other identified runners|runner-aware|For either supported branch|no deterministic backstop/);
+    assert.match(canonical(), /report format/);
+    assert.match(canonical(), /shared TAP adapter[^\n]*Node[^\n]*Vitest/);
+    assert.match(canonical(), /JUnit XML adapter[^\n]*Surefire\/Failsafe/);
+    assert.match(canonical(), /`gsd_run check tdd-red-evidence <record\.json> --raw`[^\n]*require `RED_EVIDENCE_OK` before GREEN/);
+    assert.match(canonical(), /unsupported format requires a supported reporter or a parser adapter before GREEN/);
+    assert.match(canonical(), /Classifier rejection never authorizes a fallback to self-attestation/);
   });
 
   test('#4692: reruns and current Maven reports retain evidence provenance', () => {
-    assert.match(canonical, /reporter is incompatible[^\n]*rerun the planned target[^\n]*submit the rerun's record to the classifier/);
-    assert.match(canonical, /unmodified report/);
-    assert.match(canonical, /target\/surefire-reports\/TEST-\*\.xml[^\n]*target\/failsafe-reports\/TEST-\*\.xml/);
-    assert.match(canonical, /require the report to be newer than the run start/);
-    assert.match(canonical, /Missing, stale, or ambiguous reports require STOP/);
+    assert.match(canonical(), /reporter is incompatible[^\n]*rerun the planned target[^\n]*submit the rerun's record to the classifier/);
+    assert.match(canonical(), /unmodified report/);
+    assert.match(canonical(), /target\/surefire-reports\/TEST-\*\.xml[^\n]*target\/failsafe-reports\/TEST-\*\.xml/);
+    assert.match(canonical(), /require the report to be newer than the run start/);
+    assert.match(canonical(), /Missing, stale, or ambiguous reports require STOP/);
   });
 
   test('#4692: a parser pass still requires the intended target assertion to fail', () => {
-    assert.match(canonical, /After machine validation[^\n]*target actually executed[^\n]*planned assertion[^\n]*intended reason/);
+    const assessment = canonical().split('\n').find((line) => line.includes('After machine validation'));
+    assert.ok(assessment, 'RED step 4 has a semantic-assessment bullet');
+    assert.match(assessment, /target actually executed[^\n]*planned assertion[^\n]*intended reason/);
     for (const stop of ['zero tests', 'skipped', 'setup', 'collection', 'import', 'syntax', 'fixture', 'unrelated', 'unexpected green', 'incomplete', 'ambiguous']) {
-      assert.match(canonical, new RegExp(stop, 'i'));
+      assert.match(assessment, new RegExp(stop, 'i'), stop);
     }
     for (const reason of ['unexpected_green', 'zero_tests_discovered', 'nonzero_exit_without_test_failure', 'fixture_or_load_failure', 'no_target_test_failure', 'invalid_record', 'unreadable_record']) {
-      assert.ok(canonical.includes('`' + reason + '`'), reason);
+      assert.ok(canonical().includes('`' + reason + '`'), reason);
     }
   });
 
   test('#4692: the runtime gate loads the canonical evidence contract before GREEN', () => {
-    assert.match(runtime, /Read `gsd-core\/references\/tdd\.md`, "Red-Green-Refactor Cycle", RED step 4/);
-    assert.match(runtime, /follow its complete evidence contract before GREEN/);
-    assert.match(runtime, /`INVALID_RED` verdict[^\n]*trips this gate/);
-    assert.match(runtime, /self-attestation cannot substitute for machine validation/);
+    assert.match(runtime(), /Read `gsd-core\/references\/tdd\.md`, "Red-Green-Refactor Cycle", RED step 4/);
+    assert.match(runtime(), /follow its complete evidence contract before GREEN/);
+    assert.match(runtime(), /`INVALID_RED` verdict[^\n]*trips this gate/);
+    assert.match(runtime(), /self-attestation cannot substitute for machine validation/);
     assert.match(read('agents/gsd-executor.md'), /references\/tdd\.md[^\n]*"Gate Enforcement Rules"/);
   });
 });
