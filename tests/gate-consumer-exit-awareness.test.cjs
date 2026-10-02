@@ -29,7 +29,7 @@ const RECONCILE = 'gsd-core/workflows/execute-phase/steps/completion-reconciliat
 const EXECUTE_PLAN = 'gsd-core/workflows/execute-plan.md';
 
 describe('safe_resume_gate: an unresolvable plan scope fails closed instead of reading as "no commits" (execute-phase.md)', { skip: SKIP }, () => {
-  const lines = () => span(EXECUTE_PHASE, 'PLAN_SCOPE=$(gsd_run check evaluation-scope', 'PLAN_COMMITS=$(printf');
+  const lines = () => span(EXECUTE_PHASE, 'PLAN_COMMITS=$(gsd_run check evaluation-scope', 'PLAN_COMMITS=$(printf');
   const probe = 'printf "COMMITS=[%s]\\n" "$PLAN_COMMITS"';
   const preamble = ['PHASE_NUMBER=3'];
 
@@ -62,7 +62,7 @@ describe('safe_resume_gate: an unresolvable plan scope fails closed instead of r
 });
 
 describe('TDD gate: an unresolvable plan scope is "unavailable", not "missing RED commit" (execute-phase.md)', { skip: SKIP }, () => {
-  const lines = () => span(EXECUTE_PHASE, 'RED_SCOPE=$(gsd_run check evaluation-scope', 'RED_COMMIT=$(printf');
+  const lines = () => span(EXECUTE_PHASE, 'RED_COMMIT=$(gsd_run check evaluation-scope', 'RED_COMMIT=$(printf');
   const probe = 'printf "RED=[%s]\\n" "$RED_COMMIT"';
   const preamble = ['PHASE_NUMBER=3; PLAN_ID=01; TASK_ID=2'];
 
