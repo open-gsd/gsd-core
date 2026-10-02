@@ -322,7 +322,7 @@ nt.test('viaprop', () => {});
     const { r, file, ledgerPath } = runWithPreload(t, { context: 'child-v8', ledger: true });
     assert.equal(r.status, 0, r.stderr);
     const lines = splitLines(fs.readFileSync(ledgerPath, 'utf8')).filter(Boolean).map((l) => JSON.parse(l));
-    assert.deepEqual(lines, [{ type: 'registered', file: fs.realpathSync(file), count: 9 }]);
+    assert.deepEqual(lines, [{ type: 'registered', file: fs.realpathSync.native(file), count: 9 }]);
   });
 
   test('a child that reports no result still records itself, so "saw nothing" differs from "never ran"', (t) => {
@@ -335,7 +335,7 @@ nt.test('viaprop', () => {});
     const r = spawnSync(process.execPath, ['--require', PRELOAD, file], { env, cwd: dir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
     assert.equal(r.status, 0, r.stderr);
     const lines = splitLines(fs.readFileSync(ledgerPath, 'utf8')).filter(Boolean).map((l) => JSON.parse(l));
-    assert.deepEqual(lines, [{ type: 'registered', file: path.resolve(file), count: 0 }]);
+    assert.deepEqual(lines, [{ type: 'registered', file: fs.realpathSync.native(file), count: 0 }]);
   });
 
   // Root cause of the #5170 red run (every harness chunk "N registered, 0 reported"): an earlier preload
@@ -361,7 +361,7 @@ nt.test('viaprop', () => {});
     const results = splitLines(fs.readFileSync(eventsPath, 'utf8')).filter(Boolean).map((l) => JSON.parse(l))
       .filter((e) => e.type === 'test:pass' || e.type === 'test:fail');
     assert.ok(results.length >= 9, `the fixture's results are reported (${results.length})`);
-    for (const e of results) assert.equal(fs.realpathSync(e.file), fs.realpathSync(file), `${e.name} is located in the test file`);
+    for (const e of results) assert.equal(fs.realpathSync.native(e.file), fs.realpathSync.native(file), `${e.name} is located in the test file`);
   });
 
   test('resultFileOf: only a leaf pass/fail with a string file counts, suites and other events never do', () => {
@@ -475,7 +475,7 @@ describe('live suite', () => { it('inner one', () => {}); it('inner two', () => 
   test('no filter: skip, todo and a skipped suite are all accounted (registered == reported, no shortfall)', (t) => {
     const { ledgerPath, eventsPath, file } = observe(t, []);
     const line = JSON.parse(splitLines(fs.readFileSync(ledgerPath, 'utf8')).filter(Boolean)[0]);
-    assert.deepEqual(line, { type: 'registered', file: fs.realpathSync(file), count: 7 });
+    assert.deepEqual(line, { type: 'registered', file: fs.realpathSync.native(file), count: 7 });
     const a = analyzeChunkAccounting(eventsPath, ledgerPath);
     assert.equal(a.available, true);
     assert.deepEqual(a.shortfalls, []);
@@ -487,7 +487,7 @@ describe('live suite', () => { it('inner one', () => {}); it('inner two', () => 
     test(`${flag}: the excluded tests emit no event on either side, so ${expected} are registered and ${expected} reported`, (t) => {
       const { ledgerPath, eventsPath, file } = observe(t, [flag]);
       const line = JSON.parse(splitLines(fs.readFileSync(ledgerPath, 'utf8')).filter(Boolean)[0]);
-      assert.deepEqual(line, { type: 'registered', file: fs.realpathSync(file), count: expected });
+      assert.deepEqual(line, { type: 'registered', file: fs.realpathSync.native(file), count: expected });
       const a = analyzeChunkAccounting(eventsPath, ledgerPath);
       assert.equal(a.available, true);
       assert.deepEqual(a.shortfalls, []);

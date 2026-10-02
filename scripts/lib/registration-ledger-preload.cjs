@@ -70,7 +70,22 @@ function resultFileOf(item) {
   return data.file;
 }
 
-function install(ledgerPath, serializerPrototype = DefaultSerializer.prototype) {
+/**
+ * One spelling for every ledger line: the real path. node reports a result's `file` already resolved
+ * through symlinks (macOS /var -> /private/var), while a zero-result child's only name is process.argv[1],
+ * as given, so without this the two kinds of line disagree on the same file. Best-effort: a path that cannot
+ * be resolved keeps its absolute spelling (analyzeChunkAccounting normalizes both sides again regardless).
+ */
+function canonicalPath(file) {
+  const absolute = path.resolve(file);
+  try {
+    return fs.realpathSync.native(absolute);
+  } catch {
+    return absolute;
+  }
+}
+
+function install(ledgerPath,serializerPrototype = DefaultSerializer.prototype) {
   const counts = new Map(); // file -> leaf results handed to the serializer
 
   const original = serializerPrototype.writeValue;
@@ -91,7 +106,7 @@ function install(ledgerPath, serializerPrototype = DefaultSerializer.prototype) 
       if (counts.size === 0 && process.argv[1]) counts.set(process.argv[1], 0);
       const lines = [];
       for (const [file, count] of counts) {
-        lines.push(JSON.stringify({ type: 'registered', file: path.resolve(file), count }));
+        lines.push(JSON.stringify({ type: 'registered', file: canonicalPath(file), count }));
       }
       fs.appendFileSync(ledgerPath, `${lines.join('\n')}\n`);
     } catch {
