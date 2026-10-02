@@ -15,6 +15,7 @@ module.exports = {
   "tests/assumption-delta.test.cjs",
   "tests/audit-command-cutover.test.cjs",
   "tests/augment-upgrades.test.cjs",
+  "tests/blocking-guard-budget-parity.test.cjs",
   "tests/broken-windows.test.cjs",
   "tests/capability-cli.test.cjs",
   "tests/capability-command-dispatch.test.cjs",

@@ -319,3 +319,55 @@ describe('guard git probes receive the shared budget at runtime (#5180)', () => 
     assert.ok(priced(worst + 1) < HOST_BUDGET_SECONDS * 1000, 'limit+1 probes still sits inside the host budget');
   });
 });
+
+// ---------------------------------------------------------------------------
+// The OpenCode / Kilo plugin adapters spawn the same guards through their own
+// runHook, and a hook they kill on timeout is reported as exit 0 — an ALLOW. So
+// the bound they spawn the git-probing guards with must hold the guards' worst
+// case, or the gate is silently off. The plugin is driven in-process with
+// child_process.spawnSync replaced by a recorder (no real hook runs), so what is
+// asserted is the `timeout` the adapter actually hands to spawnSync.
+// ---------------------------------------------------------------------------
+
+describe('OpenCode / Kilo plugin bound for the git-probing guards holds their worst case (#5180)', () => {
+  const childProcess = require('node:child_process');
+  const PLUGINS = [
+    path.join(__dirname, '..', '.opencode', 'plugins', 'gsd-core.js'),
+    path.join(__dirname, '..', '.kilo', 'plugins', 'gsd-core.js'),
+  ];
+  const PROBING_GUARDS = ['gsd-worktree-path-guard.js', 'gsd-workflow-guard.js'];
+
+  async function recordedHookTimeouts(pluginPath) {
+    const original = childProcess.spawnSync;
+    const seen = new Map();
+    childProcess.spawnSync = (command, args, options) => {
+      const hookFile = path.basename(String(args && args[0]));
+      seen.set(hookFile, options && options.timeout);
+      return { status: 0, signal: null, stdout: '', stderr: '' };
+    };
+    delete require.cache[require.resolve(pluginPath)];
+    try {
+      const plugin = require(pluginPath);
+      const hooks = await plugin.server({ directory: os.tmpdir() });
+      await hooks['tool.execute.before']({ tool: 'write' }, { args: { filePath: path.join(os.tmpdir(), 'x.txt') } });
+      await hooks['tool.execute.before']({ tool: 'bash' }, { args: { command: 'git status' } });
+    } finally {
+      childProcess.spawnSync = original;
+      delete require.cache[require.resolve(pluginPath)];
+    }
+    return seen;
+  }
+
+  for (const pluginPath of PLUGINS) {
+    test(`${path.relative(path.join(__dirname, '..'), pluginPath)}: probing guards get at least probes x probe budget`, async () => {
+      const seen = await recordedHookTimeouts(pluginPath);
+      const worstCaseMs = BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES * BLOCKING_GUARD_PROBE_TIMEOUT_MS;
+      for (const guard of PROBING_GUARDS) {
+        assert.ok(seen.has(guard), `${guard} must be spawned by the adapter for this scenario`);
+        assert.ok(seen.get(guard) > worstCaseMs,
+          `${guard} spawn bound ${seen.get(guard)} ms must exceed the guard's worst case ${worstCaseMs} ms, ` +
+          'else a kill is reported as an allow');
+      }
+    });
+  }
+});

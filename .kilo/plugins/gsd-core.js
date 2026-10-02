@@ -207,6 +207,38 @@ function mapToolInput(args) {
  */
 const warnedMissingHooks = new Set();
 
+// A hook this adapter kills on timeout has no exit status, so runHook below
+// reports it as exit 0 — an ALLOW. For a guard that blocks, a bound shorter
+// than the guard's own worst case therefore silently disables the gate. The
+// two guards that probe git (worktree path, workflow force-add) run up to
+// BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES sequential probes of
+// BLOCKING_GUARD_PROBE_TIMEOUT_MS each (hooks/lib/git-probe.js, #5180), so
+// their bound is that product plus a margin for node start/kill/reap. Read
+// from the staged hooks/lib so it can never drift from the guards' own budget;
+// the fallback is used only when that lib is missing from a partial install,
+// and is sized for the same worst case.
+const GIT_PROBING_GUARDS = new Set([
+  "gsd-worktree-path-guard.js",
+  "gsd-workflow-guard.js",
+]);
+const GIT_PROBING_GUARD_MARGIN_MS = 5000;
+const GIT_PROBING_GUARD_FALLBACK_TIMEOUT_MS = 20000;
+
+function gitProbingGuardTimeoutMs() {
+  try {
+    const probe = require(path.join(HOOKS_DIR, "lib", "git-probe.js"));
+    const worstCaseMs =
+      probe.BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES *
+      probe.BLOCKING_GUARD_PROBE_TIMEOUT_MS;
+    if (Number.isFinite(worstCaseMs) && worstCaseMs > 0) {
+      return worstCaseMs + GIT_PROBING_GUARD_MARGIN_MS;
+    }
+  } catch {
+    // hooks/lib/git-probe.js unavailable — use the fallback below.
+  }
+  return GIT_PROBING_GUARD_FALLBACK_TIMEOUT_MS;
+}
+
 function runHook(hookFile, payload, opts = {}) {
   const hookPath = path.join(HOOKS_DIR, hookFile);
   if (!fs.existsSync(hookPath)) {
@@ -224,7 +256,9 @@ function runHook(hookFile, payload, opts = {}) {
     }
     return { stdout: "", exitCode: 0, timedOut: false };
   }
-  const timeout = opts.timeout ?? 8000;
+  const timeout =
+    opts.timeout ??
+    (GIT_PROBING_GUARDS.has(hookFile) ? gitProbingGuardTimeoutMs() : 8000);
   let result;
   try {
     result = spawnSync(process.execPath, [hookPath], {
