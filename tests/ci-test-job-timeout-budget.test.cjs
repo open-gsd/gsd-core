@@ -149,8 +149,8 @@ const LANE_COSTS = [
     // 34m24s at 3 shards (run 36322513056) and 30m17s at 4 (run 36349891343),
     // requiring 53m and 47m against a 45m cap. Raising the cap was ruled out by
     // #5029 — ADR-4641 records 45m as the cliff #869 and #3057 were filed
-    // about — so the split moved instead. #5071 -> #5097 has since priced win32
-    // files by win32 measurements, which collapsed shard imbalance to
+    // about — so the split moved instead. #5071 -> #5097 has since priced Windows
+    // files by Windows measurements, which collapsed shard imbalance to
     // 1.01-1.02; if this lane is ever resharded downward on the strength of
     // that, re-measure and lower this entry with the run id, rather than
     // scaling this one.
