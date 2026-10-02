@@ -61,6 +61,16 @@ describe('gate-evidence — readTextEvidence', () => {
     assert.equal(ev.reason, 'EIO');
   });
 
+  test('gate-evidence › withFsFailure refuses a method fs does not have (a typo cannot inject nothing)', () => {
+    let ran = false;
+    assert.throws(
+      () => withFsFailure('readFileSyncc', 'x', 'EACCES', () => { ran = true; }),
+      /fs\.readFileSyncc is not a function/,
+    );
+    assert.equal(ran, false, 'the body never runs under a failure that was not injected');
+    assert.throws(() => withFsFailure('constants', 'x', 'EACCES', () => {}), /is not a function/);
+  });
+
   test('gate-evidence › a failure with no errno code carries its message', () => {
     const target = path.join(tmpDir, 'plain.md');
     fs.writeFileSync(target, 'content');

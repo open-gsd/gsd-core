@@ -20,6 +20,10 @@ const path = require('node:path');
  */
 function withFsFailure(method, match, code, body) {
   const accepts = typeof match === 'function' ? match : (candidate) => candidate === match;
+  if (!Object.prototype.hasOwnProperty.call(fs, method) || typeof fs[method] !== 'function') {
+    // A misspelled method would inject nothing and the test would pass without exercising a failure.
+    throw new TypeError(`withFsFailure: fs.${String(method)} is not a function`);
+  }
   const original = fs[method];
   fs[method] = function patched(target, ...rest) {
     const key = typeof target === 'string' ? target : String(target);
