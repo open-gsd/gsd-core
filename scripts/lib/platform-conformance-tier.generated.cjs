@@ -102,6 +102,7 @@ module.exports = {
   "tests/frontmatter.test.cjs",
   "tests/gap-checker.property.test.cjs",
   "tests/gate-api-coverage-verify-pre-escape.test.cjs",
+  "tests/gate-consumer-exit-awareness.test.cjs",
   "tests/gate-decision-coverage-verify-stderr.test.cjs",
   "tests/gate-exit.test.cjs",
   "tests/gate-tdd-red-evidence-containment.test.cjs",

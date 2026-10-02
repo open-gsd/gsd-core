@@ -28,9 +28,9 @@
       "reductionPct": 37.42
     },
     "agents/gsd-code-reviewer.md": {
-      "offTokens": 4408,
-      "onTokens": 3601,
-      "reductionPct": 18.31
+      "offTokens": 5507,
+      "onTokens": 4638,
+      "reductionPct": 15.78
     },
     "agents/gsd-codebase-mapper.md": {
       "offTokens": 5357,
@@ -133,9 +133,9 @@
       "reductionPct": 10.54
     },
     "agents/gsd-ui-auditor.md": {
-      "offTokens": 6729,
-      "onTokens": 3926,
-      "reductionPct": 41.66
+      "offTokens": 6569,
+      "onTokens": 3766,
+      "reductionPct": 42.67
     },
     "agents/gsd-ui-checker.md": {
       "offTokens": 4499,
@@ -169,8 +169,8 @@
     }
   },
   "aggregate": {
-    "offTokens": 121986,
-    "onTokens": 95053,
-    "reductionPct": 22.08
+    "offTokens": 122925,
+    "onTokens": 95930,
+    "reductionPct": 21.96
   }
 }
