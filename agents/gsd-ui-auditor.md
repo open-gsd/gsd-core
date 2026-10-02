@@ -92,7 +92,7 @@ for p in '*.png' '*.webp' '*.jpg' '*.jpeg' '*.gif' '*.bmp' '*.tiff' 'interaction
 done
 ```
 
-It keeps capture output out of a commit even after `git add .`: static screenshots by extension, and the `interaction/` directory as a whole (its snapshot carries form values; its console output can carry tokens); a directory pattern covers the next artifact type by construction.
+Keeps captures out of a commit even after `git add .`: screenshots by extension, and `interaction/` as a whole (its snapshot carries form values, its console output can carry tokens).
 
 </gitignore_gate>
 
@@ -100,15 +100,46 @@ It keeps capture output out of a commit even after `git add .`: static screensho
 
 ## Screenshot Capture (CLI only — no MCP, no persistent browser)
 
-Run the capture block in @~/.claude/gsd-core/references/ui-screenshot-capture.md (set `PADDED_PHASE` first). It probes ports 3000, 5173 (Vite default), 8080 and its last line is its outcome: `captured`, `PARTIAL` or `NOT captured`. Record `captured` only for the first; for `PARTIAL` and `NOT captured` state which captures failed, and score the visual pillars without that evidence.
+```bash
+# Ports 3000, 5173 (Vite), 8080 (DEV_PORTS keeps only its digit runs). -L follows redirects; only 000 or a 5xx is
+# "no server"; --max-time bounds a silent port. A capture counts only if playwright exits 0 AND the file is non-empty.
+DEV_URL=""
+SCREENSHOT_DIR=""
+for PORT in $(printf '%s' "${DEV_PORTS:-3000 5173 8080}" | tr -cs '0-9' ' '); do
+  DEV_STATUS=$(curl -sL --max-time 5 -o /dev/null -w "%{http_code}" "http://localhost:$PORT" 2>/dev/null) || DEV_STATUS="000"
+  case "$DEV_STATUS" in 000|""|5*) ;; *) DEV_URL="http://localhost:$PORT"; break ;; esac
+done
 
-If dev server not detected: audit runs on code review only (Tailwind class audit, string audit for generic labels, state handling check). Note in output that visual screenshots were not captured.
+if [ -n "$DEV_URL" ]; then
+  SCREENSHOT_DIR=".planning/ui-reviews/${PADDED_PHASE}-$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$SCREENSHOT_DIR"
+  SHOTS_OK=0
+  for SHOT in desktop:1440,900 mobile:375,812 tablet:768,1024; do
+    N="${SHOT%%:*}"; S="${SHOT#*:}"
+    if npx playwright screenshot "$DEV_URL" "$SCREENSHOT_DIR/$N.png" --viewport-size="$S" --timeout=30000 </dev/null >/dev/null 2>&1 \
+        && [ -s "$SCREENSHOT_DIR/$N.png" ]; then
+      SHOTS_OK=$((SHOTS_OK + 1))
+    else
+      rm -f "$SCREENSHOT_DIR/$N.png"; echo "Screenshot FAILED: $N ($S) from $DEV_URL"
+    fi
+  done
+  case "$SHOTS_OK" in
+    3) echo "Screenshots captured (3/3) to $SCREENSHOT_DIR" ;;
+    0) echo "Screenshots NOT captured: $DEV_URL answered but every capture failed — code-only audit" ;;
+    *) echo "Screenshots PARTIAL ($SHOTS_OK/3) in $SCREENSHOT_DIR" ;;
+  esac
+else
+  echo "No dev server on localhost:3000, 5173 or 8080 — code-only audit"
+fi
+```
+
+No dev server: code-review-only audit (Tailwind class audit, string audit for generic labels, state handling check); say screenshots were not captured. The block's last line is its outcome: `captured`, `PARTIAL` or `NOT captured`. Record `captured` only for the first; otherwise name the failed captures and score the visual pillars without them.
 
 <!-- gsd:ui-interaction-capture -->
 
 ### Interaction capture (default-off — `workflow.ui_interaction_capture`)
 
-The static captures show the first paint of `/` and nothing after it: `npx playwright screenshot` has no click, fill, hover, press, snapshot or console verb, yet the Experience Design pillar is scored on exactly that. When the `<config>` block carries `interaction_capture: true` (the `workflow.ui_interaction_capture` key, read by `/gsd:ui-review`) **and** a Chrome binary resolves, the `chrome-devtools` CLI (`chrome-devtools-mcp`) adds post-interaction captures over `Bash` alone: no MCP server, no `tools:` change. Key off, or no Chrome: one status line, then the audit as before.
+The static captures show only the first paint of `/` (`npx playwright screenshot` has no click, fill, hover, press, snapshot or console verb), yet the Experience Design pillar is scored on interaction. When the `<config>` block carries `interaction_capture: true` (`workflow.ui_interaction_capture`, read by `/gsd:ui-review`) **and** a Chrome binary resolves, the `chrome-devtools` CLI (`chrome-devtools-mcp`) adds post-interaction captures over `Bash` alone: no MCP server, no `tools:` change. Key off, or no Chrome: one status line, then the audit as before.
 
 ```bash
 # INTERACTION_CAPTURE: the <config> block's `interaction_capture` (absent = off); SCREENSHOT_DIR/DEV_URL: above.
@@ -133,11 +164,10 @@ fi
 # daemon socket; concurrent audits need their own: BASHPID not $$ (subshells share $$) + $RANDOM.
 CDT_SESSION="$(date +%s)-${BASHPID:-$$}-$RANDOM"
 CDT="npx -y -p chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_VERSION:-^1.9.0} chrome-devtools --sessionId $CDT_SESSION"
-# cdt <ceiling-s> <verb> [args...]: every driver call is bounded (no timeout(1) on macOS, no gsd-tools here) by a
-# watchdog killing the job's process group at the ceiling (TERM, KILL 2 s later; npm forwards SIGTERM only to its
-# direct child). An exec'd bash (a subshell keeps the caller's saved stdio open) polling the job's GROUP (a child
-# can outlive the leader holding stdout), standing down once it is empty — never signalled: bash 3.2 may not
-# interrupt `wait` for a trapped signal; Git Bash hangs on a signal to a process still starting up. No sleep, no fire.
+# cdt <ceiling-s> <verb> [args...]: every driver call is bounded (no timeout(1) on macOS) by a watchdog killing the
+# job's process group at the ceiling (TERM, KILL 2 s later; npm forwards SIGTERM only to its direct child). It is an
+# exec'd bash (a subshell keeps the caller's stdio open) polling the GROUP (a child can outlive the leader holding
+# stdout) and standing down once it is empty; never signalled (bash 3.2 may not interrupt `wait`; Git Bash hangs).
 CDT_T_START="${CHROME_DEVTOOLS_START_TIMEOUT:-180}"
 CDT_T_STEP="${CHROME_DEVTOOLS_STEP_TIMEOUT:-60}"
 cdt() {
@@ -164,11 +194,9 @@ else
   ICAPTURED=0
   IFAILED=0
   PAGE_ID=""
-  # cdt_me: this shell's pid (bash 3.2 has no BASHPID).
   cdt_me() { exec /bin/sh -c 'echo "$PPID"'; }
   CDT_STARTED=0; CDT_SHELL=$(cdt_me)
 
-  # ishot <label>: count a non-empty file, else remove.
   ishot() {
     if cdt "$CDT_T_STEP" take_screenshot "$PAGE_ID" --filePath "$INTERACTION_DIR/$1.png" >/dev/null 2>&1 \
        && [ -s "$INTERACTION_DIR/$1.png" ]; then
@@ -180,29 +208,23 @@ else
     fi
   }
 
-  # cdt_stop: stop is owed once after a successful start (no self-reap): trapped on EXIT (replaces any earlier
-  # trap), in order, flag-deduped, by the installing shell only (never a subshell copy).
+  # cdt_stop: owed once after a successful start; trapped on EXIT, flag-deduped, installing shell only (never a subshell copy).
   cdt_stop() { [ "$CDT_STARTED" = 1 ] && [ "$(cdt_me)" = "$CDT_SHELL" ] || return 0; CDT_STARTED=0; cdt "$CDT_T_STEP" stop >/dev/null 2>&1 || true; }
 
-  # --isolated: throwaway profile. --workspace: writes under the capture dir only — relative like every
-  # --filePath (one cwd, dialect-free on Git Bash); --allowUnrestrictedPaths is deprecated.
+  # --isolated: throwaway profile. --workspace: writes under the capture dir only (--allowUnrestrictedPaths is deprecated).
   if cdt "$CDT_T_START" start -e "$CHROME_BIN" --isolated --workspace "$INTERACTION_DIR" --usageStatistics=false >/dev/null 2>&1; then
     CDT_STARTED=1; trap cdt_stop EXIT
-    # new_page marks the page `[selected]`: the pageId every later verb takes. --timeout (ms) bounds the
-    # navigation inside the ceiling; exit status checked before parsing; tr: CRLF.
+    # new_page marks the page `[selected]`: the pageId every later verb takes. --timeout (ms) bounds the navigation; tr: CRLF.
     PAGE_ID=""
     if NEW_PAGE_OUT=$(cdt "$CDT_T_STEP" new_page "$DEV_URL" --timeout 30000 2>/dev/null); then
       PAGE_ID=$(printf '%s\n' "$NEW_PAGE_OUT" | tr -d '\r' | sed -n 's/^\([0-9][0-9]*\): .*\[selected\]$/\1/p' | head -1)
     fi
     if [ -n "$PAGE_ID" ]; then
-      # A failed resize: a failed step, no abort.
       if ! cdt "$CDT_T_STEP" resize_page "$PAGE_ID" 1440 900 >/dev/null 2>&1; then
         IFAILED=$((IFAILED + 1))
         echo "  interaction step FAILED: resize_page"
       fi
-      # uids are per-snapshot: re-take after each interaction. A failure counts.
       if ! cdt "$CDT_T_STEP" take_snapshot "$PAGE_ID" --filePath "$INTERACTION_DIR/snapshot.txt" >/dev/null 2>&1; then
-        # Remove what it left, or a stale one (reused dir)
         rm -f "$INTERACTION_DIR/snapshot.txt"
         IFAILED=$((IFAILED + 1))
         echo "  interaction step FAILED: take_snapshot"
@@ -215,14 +237,12 @@ else
         IFAILED=$((IFAILED + 1))
         echo "  interaction step FAILED: press_key Tab"
       fi
-      # --- Drive each interactive component UI-SPEC.md declares (or the snapshot shows): real
-      #     calls, a uid from the latest snapshot, one capture each:
-      #   cdt "$CDT_T_STEP" hover "$PAGE_ID" <uid>              && ishot hover-<label>
-      #   cdt "$CDT_T_STEP" click "$PAGE_ID" <uid>              && ishot <label>-open
-      #   cdt "$CDT_T_STEP" fill  "$PAGE_ID" <uid> "<value>"    && ishot <label>-filled
-      #   cdt "$CDT_T_STEP" press_key "$PAGE_ID" Enter          && ishot <label>-submitted
-      #   cdt "$CDT_T_STEP" take_snapshot "$PAGE_ID" --filePath "$INTERACTION_DIR/snapshot.txt"
-      # Console output since navigation.
+      # --- Drive each interactive component UI-SPEC.md declares (or the snapshot shows): a uid from the latest snapshot, one capture each:
+      #   cdt "$CDT_T_STEP" hover "$PAGE_ID" <uid>           && ishot hover-<label>
+      #   cdt "$CDT_T_STEP" click "$PAGE_ID" <uid>           && ishot <label>-open
+      #   cdt "$CDT_T_STEP" fill  "$PAGE_ID" <uid> "<value>" && ishot <label>-filled
+      #   cdt "$CDT_T_STEP" press_key "$PAGE_ID" Enter       && ishot <label>-submitted
+      #   (re-take take_snapshot after each interaction)
       cdt "$CDT_T_STEP" list_console_messages "$PAGE_ID" > "$INTERACTION_DIR/console.txt" 2>/dev/null || true
     else
       echo "  new_page FAILED: $DEV_URL"
@@ -473,7 +493,7 @@ Run the gitignore gate from `<gitignore_gate>`. This MUST happen before step 3.
 
 ## Step 3: Detect Dev Server and Capture Screenshots
 
-Run the screenshot approach from `<screenshot_approach>`; record its outcome line, never the absence of an error. Then run its interaction-capture section with `INTERACTION_CAPTURE` set from the `<config>` block's `interaction_capture` value, and record `$INTERACTION_STATUS` verbatim — it is `off` unless `workflow.ui_interaction_capture` is on and a Chrome binary resolved.
+Run the screenshot approach from `<screenshot_approach>`; record its outcome line. Then run its interaction-capture section with `INTERACTION_CAPTURE` set from the `<config>` block's `interaction_capture` value, and record `$INTERACTION_STATUS` verbatim — it is `off` unless `workflow.ui_interaction_capture` is on and a Chrome binary resolved.
 
 ## Step 4: Scan Implemented Files
 

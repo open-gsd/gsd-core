@@ -102,9 +102,29 @@ Runs unconditionally on every audit. Ensures screenshots never reach a commit ev
 
 ## Screenshot Capture (CLI only — no MCP, no persistent browser)
 
-Run the capture block in @~/.claude/gsd-core/references/ui-screenshot-capture.md (set `PADDED_PHASE` first). It probes ports 3000, 5173 (Vite default), 8080 and its last line is its outcome: `captured`, `PARTIAL` or `NOT captured`. Record `captured` only for the first; for `PARTIAL` and `NOT captured` state which captures failed, and score the visual pillars without that evidence.
+```bash
+# Ports 3000, 5173, 8080 (DEV_PORTS: digit runs only); 000 or 5xx = no server; a shot counts only if the file is non-empty.
+DEV_URL=""; SCREENSHOT_DIR=""
+for PORT in $(printf '%s' "${DEV_PORTS:-3000 5173 8080}" | tr -cs '0-9' ' '); do
+  DEV_STATUS=$(curl -sL --max-time 5 -o /dev/null -w "%{http_code}" "http://localhost:$PORT" 2>/dev/null) || DEV_STATUS="000"
+  case "$DEV_STATUS" in 000|""|5*) ;; *) DEV_URL="http://localhost:$PORT"; break ;; esac
+done
+if [ -n "$DEV_URL" ]; then
+  SCREENSHOT_DIR=".planning/ui-reviews/${PADDED_PHASE}-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$SCREENSHOT_DIR"; SHOTS_OK=0
+  for SHOT in desktop:1440,900 mobile:375,812 tablet:768,1024; do
+    N="${SHOT%%:*}"; S="${SHOT#*:}"; F="$SCREENSHOT_DIR/$N.png"
+    if npx playwright screenshot "$DEV_URL" "$F" --viewport-size="$S" --timeout=30000 </dev/null >/dev/null 2>&1 && [ -s "$F" ]; then SHOTS_OK=$((SHOTS_OK + 1))
+    else rm -f "$F"; echo "Screenshot FAILED: $N ($S) from $DEV_URL"; fi
+  done
+  case "$SHOTS_OK" in
+    3) echo "Screenshots captured (3/3) to $SCREENSHOT_DIR" ;;
+    0) echo "Screenshots NOT captured: $DEV_URL answered but every capture failed — code-only audit" ;;
+    *) echo "Screenshots PARTIAL ($SHOTS_OK/3) in $SCREENSHOT_DIR" ;;
+  esac
+else echo "No dev server on localhost:3000, 5173 or 8080 — code-only audit"; fi
+```
 
-If no dev server: audit runs on code review only (Tailwind class audit, string audit for generic labels, state handling check). Note in output that visual screenshots were not captured.
+No dev server: code-review-only audit; say screenshots were not captured. The block's last line is its outcome (`captured`, `PARTIAL`, `NOT captured`): record `captured` only for the first, else name the failed captures and score visual pillars without them.
 
 </screenshot_approach>
 
@@ -296,7 +316,7 @@ Read all files from `<required_reading>`. Parse SUMMARY.md, PLAN.md, CONTEXT.md,
 Run the gitignore gate from `<gitignore_gate>`. MUST happen before step 3.
 
 ## Step 3: Detect Dev Server and Capture Screenshots
-Run `<screenshot_approach>`; record its outcome line, never the absence of an error.
+Run `<screenshot_approach>`; record its outcome line.
 
 ## Step 4: Scan Implemented Files
 

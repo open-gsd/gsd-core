@@ -133,9 +133,9 @@
       "reductionPct": 10.54
     },
     "agents/gsd-ui-auditor.md": {
-      "offTokens": 6569,
-      "onTokens": 3766,
-      "reductionPct": 42.67
+      "offTokens": 6775,
+      "onTokens": 4137,
+      "reductionPct": 38.94
     },
     "agents/gsd-ui-checker.md": {
       "offTokens": 4499,
@@ -169,8 +169,8 @@
     }
   },
   "aggregate": {
-    "offTokens": 122925,
-    "onTokens": 95930,
-    "reductionPct": 21.96
+    "offTokens": 123131,
+    "onTokens": 96301,
+    "reductionPct": 21.79
   }
 }
