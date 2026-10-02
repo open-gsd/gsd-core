@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "count": 295,
+  "count": 297,
   "classes": {
     "ARCH": 1,
     "CI": 2,
@@ -19,7 +19,7 @@
     "PROHIB": 10,
     "RELEASE-NOTES": 31,
     "RULESET": 61,
-    "SEAM": 22,
+    "SEAM": 24,
     "SESSION": 9,
     "WAVE": 5,
     "WORKSTREAM": 5,
@@ -1315,6 +1315,16 @@
       "id": "SEAM.shellcmdproj-win-binary-resolution.owns",
       "klass": "SEAM",
       "value": "Windows binary resolution (resolveExecutableBinary, projectSpawnInvocation) — which file a declared command name actually names, and cmd.exe mediation"
+    },
+    {
+      "id": "SEAM.test-report-adapter.enforced-by",
+      "klass": "SEAM",
+      "value": "test:tests/report-parser.property.test.cjs"
+    },
+    {
+      "id": "SEAM.test-report-adapter.owns",
+      "klass": "SEAM",
+      "value": "parseTestReport(output) (src/report-parser.cts) is the single owner of turning a test report into individual results; the RED-evidence policy consumes its contract and parses no report text (#4692)"
     },
     {
       "id": "SEAM.verification-isphasecomplete.enforced-by",
