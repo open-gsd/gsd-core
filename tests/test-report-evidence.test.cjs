@@ -4,9 +4,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
 const { setImmediate: yieldToReporter } = require('node:timers/promises');
-const { cleanup, runGsdTools } = require('./helpers.cjs');
+const { cleanup, createTempDir, runGsdTools } = require('./helpers.cjs');
 const { runMinimalInstall } = require('./helpers/install-shared.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
@@ -137,44 +136,42 @@ for (const [name, output] of [
   });
 }
 
-test('#4692: the CLI accepts Vitest TAP and returns the same blocking verdict with and without --raw', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'report-adapter-'));
-  try {
-    const record = path.join(root, 'record.json');
-    for (const [output, expected] of [[fixture('vitest.tap'), true], [tap('not ok 1 - rejects empty email'), false]]) {
-      fs.writeFileSync(record, JSON.stringify(input(output)));
-      for (const flags of [[], ['--raw']]) {
-        const result = runGsdTools(['check', 'tdd-red-evidence', record, ...flags], root);
-        assert.ok(result.success, result.error);
-        const payload = JSON.parse(result.output);
-        assert.equal(payload.passed, expected);
-        assert.equal(payload.block, !expected);
-      }
+test('#4692: the CLI accepts Vitest TAP and returns the same blocking verdict with and without --raw', (t) => {
+  const root = createTempDir('report-adapter-');
+  t.after(() => cleanup(root));
+  const record = path.join(root, 'record.json');
+  for (const [output, expected] of [[fixture('vitest.tap'), true], [tap('not ok 1 - rejects empty email'), false]]) {
+    fs.writeFileSync(record, JSON.stringify(input(output)));
+    for (const flags of [[], ['--raw']]) {
+      const result = runGsdTools(['check', 'tdd-red-evidence', record, ...flags], root);
+      assert.ok(result.success, result.error);
+      const payload = JSON.parse(result.output);
+      assert.equal(payload.passed, expected);
+      assert.equal(payload.block, !expected);
     }
-  } finally { cleanup(root); }
+  }
 });
 
 for (const runtime of ['claude', 'codex', 'antigravity']) {
-  test(`#4692: ${runtime} installed runtime validates TAP and XML without node_modules`, async () => {
+  test(`#4692: ${runtime} installed runtime validates TAP and XML without node_modules`, (t) => {
     const { root, configDir } = runMinimalInstall({ runtime, scope: 'global' });
-    try {
-      assert.equal(fs.existsSync(path.join(configDir, 'node_modules')), false);
-      for (const name of ['tap-parser', 'saxes']) {
-        assert.ok(fs.existsSync(path.join(configDir, `gsd-core/bin/lib/vendor/${name}.cjs.LICENSE.txt`)));
-      }
-      const record = path.join(root, 'record.json');
-      const cli = path.join(configDir, 'gsd-core/bin/gsd-tools.cjs');
-      for (const output of [fixture('vitest.tap'), xml(xmlCase('AppTest', 'rejects empty email', failure))]) {
-        fs.writeFileSync(record, JSON.stringify(input(output)));
-        const result = runNode([cli, 'check', 'tdd-red-evidence', record, '--raw'], { cwd: root, env: { ...process.env, NODE_PATH: '' } });
-        throwIfFailed(result, 'installed RED-evidence classifier');
-        assert.equal(JSON.parse(result.stdout).verdict, 'RED_EVIDENCE_OK');
-      }
-    } finally {
+    t.after(async () => {
       cleanup(root);
       // The test runner uses --test-force-exit. Let its reporter drain between
       // synchronous installer/CLI subprocesses instead of losing trailing results.
       await yieldToReporter();
+    });
+    assert.equal(fs.existsSync(path.join(configDir, 'node_modules')), false);
+    for (const name of ['tap-parser', 'saxes']) {
+      assert.ok(fs.existsSync(path.join(configDir, `gsd-core/bin/lib/vendor/${name}.cjs.LICENSE.txt`)));
+    }
+    const record = path.join(root, 'record.json');
+    const cli = path.join(configDir, 'gsd-core/bin/gsd-tools.cjs');
+    for (const output of [fixture('vitest.tap'), xml(xmlCase('AppTest', 'rejects empty email', failure))]) {
+      fs.writeFileSync(record, JSON.stringify(input(output)));
+      const result = runNode([cli, 'check', 'tdd-red-evidence', record, '--raw'], { cwd: root, env: { ...process.env, NODE_PATH: '' } });
+      throwIfFailed(result, 'installed RED-evidence classifier');
+      assert.equal(JSON.parse(result.stdout).verdict, 'RED_EVIDENCE_OK');
     }
   });
 }
