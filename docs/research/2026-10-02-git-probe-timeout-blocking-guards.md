@@ -7,7 +7,7 @@ Trigger: `origin/next` Tests run 37037966537, job 110940840080 (`conformance tes
 
 - Default: 600 s for `command`, `http`, `mcp_tool` hooks (30 on UserPromptSubmit/PreModelSwitch/PostModelSwitch, 10 on MessageDisplay). Unit of the `timeout` field: seconds.
 - On timeout: Claude Code "cancels a `command`, `http`, or `mcp_tool` hook that reaches its `timeout`, discarding the hook's output, so on most events a timed-out hook renders no decision."
-- PreToolUse: "A timed-out `command`, `http`, or `mcp_tool` hook doesn't block the tool call. The call continues through the normal permission flow, so don't count on a stalled hook to act as a gate."
+- PreToolUse: a timed-out `command`, `http`, or `mcp_tool` hook does not block the tool call; the call continues through the normal permission flow, so a stalled hook cannot be relied on as a gate (paraphrased from the hooks reference above).
 - Exit 2: "Exit 2 means a blocking error... exit 2 blocks whether or not you print JSON". PreToolUse + exit 2 = "Blocks the tool call".
 - "All matching hooks run in parallel."
 - Consequence: a hook killed by the host and a hook that fails open on its own internal probe timeout have the SAME effect (tool call proceeds). The inner probe budget only matters for the window before the host kills the hook.
