@@ -409,8 +409,8 @@ The reference is the single source; do not improvise a variant.
 ## Plan-Level TDD Gate Enforcement (type: tdd plans, #4269: stated ONCE)
 
 When the plan frontmatter has `type: tdd`, the mandatory RED/GREEN/REFACTOR gate sequence,
-its format-based RED evidence rules (machine validation plus semantic inspection),
-and the `## TDD Gate Compliance` SUMMARY.md contract are
+its format-based RED evidence rules (#3770 INVALID_RED: `gsd_run check tdd-red-evidence`
+plus semantic inspection), and the `## TDD Gate Compliance` SUMMARY.md contract are
 specified in the canonical `gsd-core/references/tdd.md` "Gate Enforcement Rules" section
 (embedded when TDD applies). The reference is the single source; do not improvise a variant.
 </tdd_execution>

@@ -276,6 +276,15 @@ describe('executor requires format-based RED evidence (#4692)', () => {
     }
   });
 
+  test('row 11 — the executor and tdd.md name INVALID_RED and the tdd-red-evidence check', () => {
+    for (const content of [read('agents/gsd-executor.md'), canonical()]) {
+      assert.match(content, /INVALID_RED/);
+      assert.match(content, /tdd-red-evidence/);
+    }
+    // execute-mvp-tdd.md delegates the check to tdd.md but must still halt on the verdict.
+    assert.match(runtime(), /INVALID_RED[^\n]{0,120}(block|halt|trip|STOP)/i);
+  });
+
   test('#4692: the runtime gate loads the canonical evidence contract before GREEN', () => {
     assert.match(runtime(), /Read `gsd-core\/references\/tdd\.md`, "Red-Green-Refactor Cycle", RED step 4/);
     assert.match(runtime(), /follow its complete evidence contract before GREEN/);
