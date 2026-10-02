@@ -37,12 +37,15 @@ function span(relFile, from, through) {
  * under `set -e`; `preamble` lines (variable seeds) run first; `probe` runs last (read variables).
  */
 function runBash(lines, { stdout, rc }, { setE = true, preamble = [], probe = '' } = {}) {
-  // `jq` is always the subset stub: the Tester Image has no jq, and a block that calls the real one dies
-  // with exit 127 before the logic under test runs (see tests/helpers/jq-subset-stub.cjs).
+  // A real `jq` on PATH is used as is. Where there is none (the Tester Image has no jq, and a block that
+  // calls it dies with exit 127 before the logic under test runs) `jq` is the subset stub, which knows ONLY
+  // the filters the gate handler's blocks use (tests/helpers/jq-subset-stub.cjs). Shadowing a real jq with
+  // the stub would break every other documented block that uses a different filter (CI's ubuntu runner has
+  // jq; verify-work's `jq -r '.passed // false'` then read PASSED=false).
   const script = [
     ...(setE ? ['set -e'] : []),
     'gsd_run() { printf %s "$STUB_OUT"; return "$STUB_RC"; }',
-    'jq() { "$STUB_NODE" "$STUB_JQ" "$@"; }',
+    'command -v jq >/dev/null 2>&1 || jq() { "$STUB_NODE" "$STUB_JQ" "$@"; }',
     ...preamble,
     ...lines,
     probe,

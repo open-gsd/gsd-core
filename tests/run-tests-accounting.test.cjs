@@ -26,6 +26,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { pathToFileURL } = require('node:url');
 const fc = require('fast-check');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
@@ -321,7 +322,7 @@ nt.test('viaprop', () => {});
     const { r, file, ledgerPath } = runWithPreload(t, { context: 'child-v8', ledger: true });
     assert.equal(r.status, 0, r.stderr);
     const lines = splitLines(fs.readFileSync(ledgerPath, 'utf8')).filter(Boolean).map((l) => JSON.parse(l));
-    assert.deepEqual(lines, [{ type: 'registered', file: path.resolve(file), count: 9 }]);
+    assert.deepEqual(lines, [{ type: 'registered', file: fs.realpathSync(file), count: 9 }]);
   });
 
   test('a child that reports no result still records itself, so "saw nothing" differs from "never ran"', (t) => {
@@ -353,7 +354,7 @@ nt.test('viaprop', () => {});
     delete clean.NODE_OPTIONS;
     const r = spawnSync(
       process.execPath,
-      ['--require', shim, `--test-reporter=${REPORTER}`, '--test-reporter-destination=stdout', file],
+      ['--require', shim, `--test-reporter=${pathToFileURL(REPORTER).href}`, '--test-reporter-destination=stdout', file],
       { env: { ...clean, GSD_RUN_TESTS_EVENTS_FILE: eventsPath }, cwd: dir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS },
     );
     assert.equal(r.status, 0, r.stderr);
@@ -444,7 +445,7 @@ describe('live suite', () => { it('inner one', () => {}); it('inner two', () => 
       cwd: dir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS,
     });
     assert.equal(ledgerRun.status, 0, ledgerRun.stderr);
-    const eventsRun = spawnSync(process.execPath, [...flags, `--test-reporter=${REPORTER}`, '--test-reporter-destination=stdout', file], {
+    const eventsRun = spawnSync(process.execPath, [...flags, `--test-reporter=${pathToFileURL(REPORTER).href}`, '--test-reporter-destination=stdout', file], {
       env: { ...clean, GSD_RUN_TESTS_EVENTS_FILE: eventsPath },
       cwd: dir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS,
     });
@@ -455,7 +456,7 @@ describe('live suite', () => { it('inner one', () => {}); it('inner two', () => 
   test('no filter: skip, todo and a skipped suite are all accounted (registered == reported, no shortfall)', (t) => {
     const { ledgerPath, eventsPath, file } = observe(t, []);
     const line = JSON.parse(splitLines(fs.readFileSync(ledgerPath, 'utf8')).filter(Boolean)[0]);
-    assert.deepEqual(line, { type: 'registered', file: path.resolve(file), count: 7 });
+    assert.deepEqual(line, { type: 'registered', file: fs.realpathSync(file), count: 7 });
     const a = analyzeChunkAccounting(eventsPath, ledgerPath);
     assert.equal(a.available, true);
     assert.deepEqual(a.shortfalls, []);
@@ -467,7 +468,7 @@ describe('live suite', () => { it('inner one', () => {}); it('inner two', () => 
     test(`${flag}: the excluded tests emit no event on either side, so ${expected} are registered and ${expected} reported`, (t) => {
       const { ledgerPath, eventsPath, file } = observe(t, [flag]);
       const line = JSON.parse(splitLines(fs.readFileSync(ledgerPath, 'utf8')).filter(Boolean)[0]);
-      assert.deepEqual(line, { type: 'registered', file: path.resolve(file), count: expected });
+      assert.deepEqual(line, { type: 'registered', file: fs.realpathSync(file), count: expected });
       const a = analyzeChunkAccounting(eventsPath, ledgerPath);
       assert.equal(a.available, true);
       assert.deepEqual(a.shortfalls, []);
