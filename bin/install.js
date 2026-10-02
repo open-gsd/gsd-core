@@ -844,6 +844,9 @@ const {
   migrateLegacyDevPreferencesToSkill,
   USER_OWNED_ARTIFACTS,
   _snapshotDir,
+  createSkillDirOwnership,
+  _warnPreservedSkillDirs,
+  USER_OWNED_SKILL_DIRS,
 } = installEngine;
 
 // #2875 (epic #2866 Phase 6): durable on-disk staging for USER_OWNED_ARTIFACTS
@@ -10159,7 +10162,13 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
   if (!hostBehaviorsFor(runtime).skipCodexSkillsManifest && fs.existsSync(codexSkillsDir)) {
     // All runtimes (including Hermes post-#947) use the canonical 'gsd-' prefix.
     const skillListPrefix = 'gsd-';
+    // #5161: record only skill dirs GSD owns. A user's gsd-* dir the prune
+    // preserved must not enter the manifest, or the next install reads it back
+    // as GSD-owned and deletes it. includeManifest:false keeps the previous
+    // manifest from vouching for itself.
+    const ownsSkillDir = createSkillDirOwnership(runtime, configDir, codexSkillsDir, skillListPrefix, { includeManifest: false });
     for (const skillName of listCodexSkillNames(codexSkillsDir, skillListPrefix)) {
+      if (!ownsSkillDir(skillName) && !USER_OWNED_SKILL_DIRS.includes(skillName)) continue;
       const skillRoot = path.join(codexSkillsDir, skillName);
       const skillHashes = generateManifest(skillRoot);
       for (const [rel, hash] of Object.entries(skillHashes)) {
@@ -11921,17 +11930,22 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       }
     }
 
-    // Clean up any stale skills/ from a previous local install
+    // Clean up any stale skills/ from a previous local install. #5161: only
+    // dirs GSD owns — .claude/skills/ is also where a project keeps its own
+    // skills, so a user's gsd-* dir there is preserved and named instead.
     const staleSkillsDir = path.join(targetDir, 'skills');
     if (fs.existsSync(staleSkillsDir)) {
-      const staleGsd = fs.readdirSync(staleSkillsDir, { withFileTypes: true })
+      const ownsSkillDir = createSkillDirOwnership(runtime, targetDir, staleSkillsDir, 'gsd-');
+      const prefixed = fs.readdirSync(staleSkillsDir, { withFileTypes: true })
         .filter(e => e.isDirectory() && e.name.startsWith('gsd-'));
+      const staleGsd = prefixed.filter(e => ownsSkillDir(e.name));
       for (const e of staleGsd) {
         fs.rmSync(path.join(staleSkillsDir, e.name), { recursive: true });
       }
       if (staleGsd.length > 0) {
         console.log(`  ${green}✓${reset} Removed ${staleGsd.length} stale GSD skill(s) from skills/`);
       }
+      _warnPreservedSkillDirs(staleSkillsDir, prefixed.filter(e => !ownsSkillDir(e.name)).map(e => e.name));
     }
   }
 

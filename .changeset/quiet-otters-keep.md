@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 0
+---
+**Install and update no longer delete a `skills/gsd-*` dir that GSD does not own** — every install or update used to remove any `<configDir>/skills/gsd-<name>/` that was not `gsd-dev-preferences`, with no log line, even after the same run's first-time baseline had resolved that path to `keep`. The skills prune now removes a `gsd-*` dir only when GSD owns it: a skill GSD ships, a capability skill GSD staged, or a dir the previous install manifest records. Any other `gsd-*` dir is left in place and printed as preserved, by path. This covers both skills writers and the stale-`skills/` cleanup of a Claude local install. Preserved dirs are no longer written into `gsd-file-manifest.json`, so the next update cannot read them back as GSD's. Agents, commands and uninstall are unchanged. (#5161)

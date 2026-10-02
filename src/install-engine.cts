@@ -818,9 +818,16 @@ function _copyStaged(stagedDir: string, destDir: string, kind: any, configDir: s
  * For the prefix='' case: the destSubpath IS the namespace — remove the entire
  * destDir. (No current runtime uses prefix='' after #947 reversed Hermes; kept
  * as a defensive guard for future runtimes.)
+ *
+ * `owns` (#5161): when supplied, a prefix match is necessary but NOT
+ * sufficient — an entry is removed only when `owns(name)` is true, and every
+ * prefix-matching entry it rejects is returned so the caller can name it.
+ * Omitted (agents, commands, uninstall), every prefix match is removed as
+ * before and the return value is always empty.
  */
-function _removeGsdEntries(destDir: string, kind: any): void {
-  if (!installFs().existsSync(destDir)) return;
+function _removeGsdEntries(destDir: string, kind: any, owns?: (name: string) => boolean): string[] {
+  const preserved: string[] = [];
+  if (!installFs().existsSync(destDir)) return preserved;
   if (kind.kind === 'kimi-agents') {
     for (const fileName of ['gsd.yaml', 'gsd.md']) {
       installFs().rmSync(path.join(destDir, fileName), { force: true });
@@ -834,17 +841,95 @@ function _removeGsdEntries(destDir: string, kind: any): void {
         installFs().rmSync(path.join(subagentsDir, entry.name), { force: true });
       }
     }
-    return;
+    return preserved;
   }
   if (kind.prefix === '') {
     // Whole-namespace removal (Hermes nested case — destSubpath is skills/gsd)
     // The directory itself is the GSD namespace, so remove it entirely.
     installFs().rmSync(destDir, { recursive: true, force: true });
-    return;
+    return preserved;
   }
   for (const entry of installFs().readdirSync(destDir, { withFileTypes: true })) {
     if (!entry.name.startsWith(kind.prefix)) continue;
+    if (owns && !owns(entry.name)) {
+      preserved.push(entry.name);
+      continue;
+    }
     installFs().rmSync(path.join(destDir, entry.name), { recursive: true, force: true });
+  }
+  return preserved;
+}
+
+// ---------------------------------------------------------------------------
+// Skill-dir ownership (#5161)
+// ---------------------------------------------------------------------------
+
+/**
+ * GSD-prefixed skill dirs the user owns and GSD never reinstalls from source
+ * (#2973). The skills writers snapshot them across the prune and restore them.
+ */
+const USER_OWNED_SKILL_DIRS: readonly string[] = ['gsd-dev-preferences'];
+
+/**
+ * Build the predicate that decides whether a prefix-matching dir in
+ * `skillsDir` is GSD-owned (#5161). A prefix match is necessary but NOT
+ * sufficient — the rule surface.cts pruneSkillDirs already applies. A dir is
+ * GSD-owned when any of these hold:
+ *   - it is a first-party skill: `<prefix><stem>` for a commands/gsd/<stem>.md
+ *     in the install source;
+ *   - it carries the capability-skill marker (a third-party capability skill
+ *     GSD staged, install-profiles.cts CAPABILITY_SKILL_MARKER);
+ *   - `includeManifest` is not false and the previous install's
+ *     gsd-file-manifest.json records a file under it (a skill GSD installed
+ *     before that has since been retired or left the active profile).
+ * Anything else is user-owned or unknown. The first-time baseline migration
+ * may already have resolved it to `keep`, and the prune must honor that.
+ *
+ * writeManifest builds this with `includeManifest: false`: a preserved user
+ * dir recorded into the manifest would read back as GSD-owned on the next
+ * install and be deleted then.
+ */
+function createSkillDirOwnership(
+  runtime: string,
+  configDir: string,
+  skillsDir: string,
+  prefix: string,
+  opts: { includeManifest?: boolean } = {},
+): (name: string) => boolean {
+  const firstParty = new Set<string>();
+  try {
+    const commandsGsdDir = runtimeArtifactLayout.findInstallSourceRoot(configDir);
+    for (const file of installFs().readdirSync(commandsGsdDir)) {
+      if (typeof file === 'string' && file.endsWith('.md')) firstParty.add(prefix + file.slice(0, -3));
+    }
+  } catch {
+    // No resolvable install source: ownership falls back to the marker and the manifest.
+  }
+  const manifestNames = new Set<string>();
+  if (opts.includeManifest !== false) {
+    const manifestPrefix: string = hostBehaviorsFor(runtime).skillsManifestPrefix || 'skills/';
+    for (const key of Object.keys(installerMigrations.readInstallManifest(configDir).files)) {
+      if (!key.startsWith(manifestPrefix)) continue;
+      const rest = key.slice(manifestPrefix.length);
+      const slash = rest.indexOf('/');
+      if (slash > 0) manifestNames.add(rest.slice(0, slash));
+    }
+  }
+  return (name: string): boolean =>
+    firstParty.has(name) ||
+    manifestNames.has(name) ||
+    installFs().existsSync(path.join(skillsDir, name, installProfiles.CAPABILITY_SKILL_MARKER));
+}
+
+/**
+ * Report each prefix-matching skill dir the prune preserved as not GSD-owned,
+ * by path (#5161). The deletion this replaces was silent.
+ */
+function _warnPreservedSkillDirs(skillsDir: string, names: string[]): void {
+  for (const name of names) {
+    console.warn(
+      `  [gsd] Preserved ${path.join(skillsDir, name)} — it matches the gsd- skill prefix but GSD does not own it (not a GSD skill, not in the previous install manifest). Rename it if it should not share GSD's prefix.`,
+    );
   }
 }
 
@@ -1367,19 +1452,22 @@ function installRuntimeArtifacts(
           // survive the prune (#2973).
           const toPreserve = new Map<string, Map<string, Buffer>>(); // dirName -> Map<relPath, Buffer>
 
-          {
-            // Preserve explicitly user-owned GSD-prefixed skill dirs.
-            // gsd-dev-preferences is the sole user-customisable skill in this category.
-            const USER_OWNED_SKILL_DIRS = ['gsd-dev-preferences'];
-            for (const dirName of USER_OWNED_SKILL_DIRS) {
-              const skillDir = path.join(dest, dirName);
-              if (!installFs().existsSync(skillDir)) continue;
-              const snap = _snapshotDir(skillDir);
-              if (snap.size > 0) toPreserve.set(dirName, snap);
-            }
+          for (const dirName of USER_OWNED_SKILL_DIRS) {
+            const skillDir = path.join(dest, dirName);
+            if (!installFs().existsSync(skillDir)) continue;
+            const snap = _snapshotDir(skillDir);
+            if (snap.size > 0) toPreserve.set(dirName, snap);
           }
 
-          _removeGsdEntries(dest, kind);
+          // #5161: prune only what GSD owns — a dir this run is about to write,
+          // or one createSkillDirOwnership proves GSD's. Any other gsd-* dir is
+          // user-owned or unknown: keep it and name it.
+          const stagedNames = new Set<string>(
+            installFs().existsSync(item.sourceDir) ? installFs().readdirSync(item.sourceDir) : [],
+          );
+          const ownsSkillDir = createSkillDirOwnership(runtime, configDir, dest, kind.prefix);
+          const notOwned = _removeGsdEntries(dest, kind, (name) => stagedNames.has(name) || ownsSkillDir(name));
+          _warnPreservedSkillDirs(dest, notOwned);
           _copyStaged(item.sourceDir, dest, kind, configDir, runtime);
 
           // Restore user-owned dirs after the prune+copy
@@ -1545,7 +1633,6 @@ function installOpencodeFamilySkills(
   // and lives at <configDir>/skills/gsd-dev-preferences — _removeGsdEntries
   // would otherwise wipe it. Mirrors the preservation in installRuntimeArtifacts
   // (#2973).
-  const USER_OWNED_SKILL_DIRS = ['gsd-dev-preferences'];
   const toPreserve = new Map<string, Map<string, Buffer>>(); // dirName -> Map<relPath, Buffer>
   for (const dirName of USER_OWNED_SKILL_DIRS) {
     const skillDir = path.join(dest, dirName);
@@ -1554,7 +1641,19 @@ function installOpencodeFamilySkills(
     if (snap.size > 0) toPreserve.set(dirName, snap);
   }
 
-  _removeGsdEntries(dest, skillsKindEntry);
+  // #5161: same ownership gate as installRuntimeArtifacts' skills kind. The
+  // first-party set is rawDir's stems (exactly what this writer is about to
+  // write); third-party capability skills carry the marker.
+  const rawStemNames = new Set<string>(
+    installFs().readdirSync(rawDir)
+      .filter((f: string) => f.endsWith('.md'))
+      .map((f: string) => `${skillsKindEntry.prefix}${f.slice(0, -3)}`),
+  );
+  const ownsSkillDir = createSkillDirOwnership(runtime, targetDir, dest, skillsKindEntry.prefix);
+  _warnPreservedSkillDirs(
+    dest,
+    _removeGsdEntries(dest, skillsKindEntry, (name) => rawStemNames.has(name) || ownsSkillDir(name)),
+  );
 
   let count = 0;
   const firstPartyStems = new Set<string>();
@@ -2220,6 +2319,9 @@ export = {
   _runLegacyInstallMigrations,
   _runLegacyUninstallCleanup,
   _removeGsdEntries,
+  createSkillDirOwnership,
+  _warnPreservedSkillDirs,
+  USER_OWNED_SKILL_DIRS,
   _snapshotDir,
   _restoreDir,
   _removeHermesBareStemDirs,

@@ -796,6 +796,45 @@ describe('installOpencodeFamilySkills — emits skills/<name>/SKILL.md (#784)', 
       // GSD-managed skills should also be present.
       assert.ok(fs.existsSync(path.join(configDir, 'skills', 'gsd-help', 'SKILL.md')));
     });
+
+    test(`${runtime}: prunes only GSD-owned gsd-* skill dirs and names the rest (#5161)`, (t) => {
+      const configDir = createTempDir(`gsd-oc5161-${runtime}-`);
+      t.after(() => cleanup(configDir));
+      writePackageSourceMarkerFixture(configDir);
+      const skillsDir = path.join(configDir, 'skills');
+      const seed = (name, body, extra = {}) => {
+        fs.mkdirSync(path.join(skillsDir, name), { recursive: true });
+        fs.writeFileSync(path.join(skillsDir, name, 'SKILL.md'), body);
+        for (const [file, content] of Object.entries(extra)) fs.writeFileSync(path.join(skillsDir, name, file), content);
+      };
+      seed('gsd-mine', 'USER\n');                                  // user-owned: no ownership signal
+      seed('gsd-help', 'OLD\n', { 'stale.md': 'stale\n' });       // first-party: replaced
+      seed('gsd-retired-5161', 'OLD\n');                          // manifest-recorded, no longer shipped
+      seed('gsd-cap-orphan-5161', 'CAP\n', { '.gsd-capability-skill': 'some-cap\n' }); // capability marker
+      fs.writeFileSync(path.join(configDir, 'gsd-file-manifest.json'), JSON.stringify({
+        version: '0.0.0', files: { 'skills/gsd-retired-5161/SKILL.md': 'deadbeef' },
+      }));
+
+      const warnings = [];
+      const origWarn = console.warn;
+      console.warn = (...args) => { warnings.push(args.join(' ')); };
+      t.after(() => { console.warn = origWarn; });
+      installOpencodeFamilySkills(runtime, configDir, stageRawCommands(runtime, configDir), `${configDir}/`);
+      console.warn = origWarn;
+
+      assert.strictEqual(fs.readFileSync(path.join(skillsDir, 'gsd-mine', 'SKILL.md'), 'utf8'), 'USER\n',
+        'a gsd-* dir GSD does not own must survive the prune');
+      assert.ok(warnings.some((w) => w.includes(path.join(skillsDir, 'gsd-mine'))),
+        'the preserved dir must be named by path');
+      assert.strictEqual(fs.existsSync(path.join(skillsDir, 'gsd-help', 'stale.md')), false,
+        'a first-party skill dir is still wiped and rewritten');
+      assert.strictEqual(fs.existsSync(path.join(skillsDir, 'gsd-retired-5161')), false,
+        'a manifest-recorded skill is still pruned');
+      assert.strictEqual(fs.existsSync(path.join(skillsDir, 'gsd-cap-orphan-5161')), false,
+        'a marker-carrying capability skill is still pruned');
+      assert.ok(!warnings.some((w) => /gsd-(help|retired-5161|cap-orphan-5161)/.test(w)),
+        'GSD-owned dirs are pruned silently, never reported as preserved');
+    });
   }
 });
 
