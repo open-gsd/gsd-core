@@ -119,12 +119,12 @@ describe('#5100 bare win32 bash sentinel - platform', () => {
       caseFlags,
       fc.constantFrom('', '.exe'),
       fc.constantFrom('linux', 'darwin'),
-      (flags, ext) => {
+      (flags, ext, platform) => {
         const token = applyCase(flags) + ext;
         assert.equal(
-          gateAccepts(token, 'linux'),
+          gateAccepts(token, platform),
           true,
-          `${JSON.stringify(token)} must resolve through the PATH scan on linux`,
+          `${JSON.stringify(token)} must resolve through the PATH scan on ${platform}`,
         );
       },
     ));

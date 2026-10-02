@@ -566,7 +566,7 @@ test('a NON-entrypoint finalize failure leaves an already-successful Codex insta
   });
 });
 
-// #5100: a bare win32 `bash` token is the "Git Bash was not found" sentinel.
+// #5100: a bare win32 bash token is the "Git Bash was not found" sentinel.
 // The gate must resolve it through the Git Bash policy, not a PATH scan that
 // accepts WSL's System32 launcher. These cases inject that launcher.
 const GSD_5100_GIT_BASH = 'C:\\Program Files\\Git\\bin\\bash.exe';
@@ -587,7 +587,7 @@ function gsd5100WslStandIn(candidate) {
 
 function gsd5100HookTree(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5100-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => helpers.cleanup(root));
   const configDir = path.join(root, '.claude');
   fs.mkdirSync(path.join(configDir, 'hooks'), { recursive: true });
   for (const name of ['gsd-foo.js', 'gsd-bar.sh', 'gsd-node-runner.sh']) {
