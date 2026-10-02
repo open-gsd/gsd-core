@@ -581,9 +581,10 @@ hand-measured cost for that job — now all three of the jobs above, not just
 parallel legacy full-matrix safety-net job). It
 also declares a `timeout-minutes` cap and runs the same in-job near-cap check
 described below. Since #5029 it **is** covered by the headroom-factor gate: its
-`LANE_COSTS` entry records **17 minutes** — the 16m25s long pole of the first
-fully green 6-shard run (37024435915), rounded up past the 16m38s the same
-shard measured on run 36612397009 — so the cap may not drop below 26m. It had
+`LANE_COSTS` entry records **27 minutes**. One cap covers every matrix row, so
+the figure is the slowest row: unsharded `macos-latest` (26m58s on run
+34434252144, 26m01s on run 37037251805), not the windows long pole (17m22s,
+shard 5/6, on the same run). The cap may therefore not drop below 41m. It had
 been uncovered since #4591, which is how it drifted to a 34m long pole against
 a 45m cap and began cancelling shards whose every chunk passed (#4935).
 
@@ -591,8 +592,9 @@ Measured long poles behind the six-way split: 34m24s at 3 shards (runs
 36322513056, 36357457440) and 30m17s at 4 (run 36349891343), requiring 53m and
 47m against the 45m cap. Note #5071 → #5097 has since priced win32 files by
 win32 measurements, collapsing shard imbalance to 1.01–1.02; if this lane is
-resharded downward on the strength of that, re-measure and lower the entry with
-the new run id rather than scaling the existing figure.
+resharded downward on the strength of that, re-measure the windows long pole
+from the new run and raise the entry only if it now outruns macOS — never scale
+the existing figure.
 
 **`.platform.test.cjs` siblings (#5074).** The tier selects whole files, so a large file whose
 platform signal sits in a few tests can be split: those tests move to
