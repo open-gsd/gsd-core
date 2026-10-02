@@ -2481,3 +2481,62 @@ describe('#4630 — the isolation record states who decided it, so a re-query kn
     assert.equal(rec.decided_by, 'caller');
   });
 });
+
+describe('#4561/#4630 — the hold\'s freshness window at both boundaries (readSentinelAt, injected clock)', () => {
+  // heldDegradeRecord (gsd-tools.cjs) holds a record only when readSentinelAt
+  // reports it fresh — its own gate is `held.stale`, passed straight through —
+  // so the window's boundaries live in the reader. gsd-tools has no clock seam
+  // of its own, so a subprocess fixture near a boundary would race the wall
+  // clock; the reader's clock is injectable (RULESET.TESTS.clock-seam), and
+  // these rows drive it at limit-1 / limit / limit+1 on both bounds
+  // (RULESET.TESTS.boundary-coverage): the staleness bound `age >=
+  // SENTINEL_STALE_MS` and the future-skew bound `age < -5000`.
+  const { readSentinelAt } = require('../hooks/lib/isolation-sentinel.js');
+  const WRITTEN_AT = 1_000_000_000_000;
+  const atAge = (age) => ({ now: () => WRITTEN_AT + age });
+  const ROWS = [
+    { age: SENTINEL_STALE_MS - 1, stale: false },
+    { age: SENTINEL_STALE_MS, stale: true },
+    { age: SENTINEL_STALE_MS + 1, stale: true },
+    { age: -4999, stale: false },
+    { age: -5000, stale: false },
+    { age: -5001, stale: true },
+  ];
+  // The three provenance shapes a hold can meet: a pre-#4630 record with no
+  // field (reads as caller), and each explicit producer.
+  const PROVENANCE = [
+    { decided_by: undefined, decidedBy: 'caller' },
+    { decided_by: 'caller', decidedBy: 'caller' },
+    { decided_by: 'resolver', decidedBy: 'resolver' },
+  ];
+
+  let dir;
+  before(() => { dir = createTempProject('gsd-4630-window-'); });
+  after(() => cleanup(dir));
+
+  function writeRecord(decidedBy) {
+    const rec = { isolation: 'none', harness_flag: null, phase: '7', plan: null, written_at: WRITTEN_AT };
+    if (decidedBy !== undefined) rec.decided_by = decidedBy;
+    fs.mkdirSync(path.dirname(sentinelFile(dir)), { recursive: true });
+    fs.writeFileSync(sentinelFile(dir), JSON.stringify(rec));
+  }
+
+  for (const { decided_by, decidedBy } of PROVENANCE) {
+    for (const { age, stale } of ROWS) {
+      test(`decided_by=${decided_by ?? '(absent)'}, age ${age} ms -> ${stale ? 'STALE (never held)' : 'fresh (holdable)'}`, () => {
+        writeRecord(decided_by);
+        const held = readSentinelAt(dir, { clock: atAge(age) });
+        assert.equal(held.present, true);
+        assert.equal(held.malformed, false);
+        assert.equal(held.stale, stale);
+        // The fields the hold gates on after freshness ride through unchanged
+        // at every boundary, so a fresh row is held exactly when it is the
+        // caller's.
+        assert.equal(held.isolation, 'none');
+        assert.equal(held.decidedBy, decidedBy);
+        assert.equal(held.phase, '7');
+        assert.equal(held.writtenAt, WRITTEN_AT);
+      });
+    }
+  }
+});
