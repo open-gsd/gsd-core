@@ -1,6 +1,6 @@
 'use strict';
-// Reads agents/gsd-ui-auditor.md (prose) and EXECUTES its static screenshot bash
-// fence; no source module is read, so there is no allow-test-rule site.
+// Reads agents/gsd-ui-auditor.md (prose), follows its @-reference to the static screenshot
+// block and EXECUTES that bash fence; no source module is read, so there is no allow-test-rule site.
 
 /**
  * #4176 (Phase 8 of epic #5056): the static <screenshot_approach> fence.
@@ -33,19 +33,26 @@ const FENCE = '`'.repeat(3);
 
 const SKIP = skipUnless('bash', 'curl');
 
-/** First bash fence inside <screenshot_approach> (the static capture block). */
+/**
+ * The static capture block. It lives in gsd-core/references/ui-screenshot-capture.md (the agent file is at its
+ * size cap, so the block is loaded through an @-reference); <screenshot_approach> must point at it, and the
+ * first bash fence of that reference is the block.
+ */
 function staticFence(file) {
-  const lines = splitLines(fs.readFileSync(path.join(__dirname, '..', 'agents', file), 'utf8'));
+  const agent = splitLines(fs.readFileSync(path.join(__dirname, '..', 'agents', file), 'utf8'));
+  const tag = agent.findIndex((line) => line.includes('<screenshot_approach>'));
+  assert.notEqual(tag, -1, `${file}: must carry <screenshot_approach>`);
+  const ref = agent.slice(tag + 1).map((line) => /@~\/\.claude\/gsd-core\/references\/([\w.-]+\.md)/.exec(line)).find(Boolean);
+  assert.ok(ref, `${file}: <screenshot_approach> must reference the capture block`);
+  const lines = splitLines(fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', ref[1]), 'utf8'));
   const out = [];
-  let inSection = false;
   let inFence = false;
   for (const line of lines) {
-    if (!inSection) { if (line.includes('<screenshot_approach>')) inSection = true; continue; }
     if (!inFence) { if (line.trim() === `${FENCE}bash`) inFence = true; continue; }
     if (line.trim() === FENCE) break;
     out.push(line);
   }
-  assert.ok(out.length > 0, `${file}: <screenshot_approach> must open with a bash fence`);
+  assert.ok(out.length > 0, `${file}: ${ref[1]} must open with a bash fence`);
   return out;
 }
 

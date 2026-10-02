@@ -355,6 +355,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `questioning.md` | Dream-extraction philosophy for project initialization. |
 | `tdd.md` | Test-driven development integration patterns. |
 | `ui-brand.md` | Visual output formatting patterns. |
+| `ui-screenshot-capture.md` | The static dev-server probe and Playwright screenshot block `gsd-ui-auditor` runs in its Step 3 (#4176): redirects followed, ports 3000 / 5173 / 8080, a capture counted only from a non-empty file, outcome `captured` / `PARTIAL` / `NOT captured`. |
 | `common-bug-patterns.md` | Common bug patterns for code review and verification. |
 | `debugger-philosophy.md` | Evergreen debugging disciplines loaded by `gsd-debugger`. |
 | `debugger-fix-acceptance.md` | Multi-signal fix-acceptance guardrail (anti-overfitting) loaded by `gsd-debugger`. |
