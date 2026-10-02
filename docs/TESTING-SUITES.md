@@ -580,14 +580,19 @@ hand-measured cost for that job — now all three of the jobs above, not just
 (unsharded) — the sole gating signal for real-OS coverage (#4603 retired the
 parallel legacy full-matrix safety-net job). It
 also declares a `timeout-minutes` cap and runs the same in-job near-cap check
-described below, but it still has no `LANE_COSTS` entry in
-`tests/ci-test-job-timeout-budget.test.cjs`, so the headroom-factor gate does
-not cover it yet. Three completed measurements now exist — two 3-shard (runs
-36322513056, 36357457440) and one 4-shard (run 36349891343) — but #5029 resharded
-the lane six ways in response to them, and the 4-shard measurement is precisely
-what ruled a smaller split out: its 30m17s long pole rounds to 31m, and
-`ceil(31 × 1.5) = 47m` exceeds the 45m cap. The entry waits on a real 6-shard run
-rather than repricing a layout that no longer exists.
+described below. Since #5029 it **is** covered by the headroom-factor gate: its
+`LANE_COSTS` entry records **17 minutes** — the 16m25s long pole of the first
+fully green 6-shard run (37024435915), rounded up past the 16m38s the same
+shard measured on run 36612397009 — so the cap may not drop below 26m. It had
+been uncovered since #4591, which is how it drifted to a 34m long pole against
+a 45m cap and began cancelling shards whose every chunk passed (#4935).
+
+Measured long poles behind the six-way split: 34m24s at 3 shards (runs
+36322513056, 36357457440) and 30m17s at 4 (run 36349891343), requiring 53m and
+47m against the 45m cap. Note #5071 → #5097 has since priced win32 files by
+win32 measurements, collapsing shard imbalance to 1.01–1.02; if this lane is
+resharded downward on the strength of that, re-measure and lower the entry with
+the new run id rather than scaling the existing figure.
 
 **`.platform.test.cjs` siblings (#5074).** The tier selects whole files, so a large file whose
 platform signal sits in a few tests can be split: those tests move to
