@@ -216,7 +216,11 @@ describe('RunResult classification', () => {
   for (const [label, stdout, kind] of [
     ['a boolean `passed:false`', JSON.stringify({ passed: false, blockers: ['x'] }), KIND.VERDICT_REFUSED],
     ['a boolean `block:true`', JSON.stringify({ block: true, message: 'm' }), KIND.VERDICT_REFUSED],
-    ['a boolean `passed:true` at exit 1 is still a verdict payload', JSON.stringify({ passed: true }), KIND.VERDICT_REFUSED],
+    // Positive control: the same shapes with a POSITIVE verdict contradict their own exit status.
+    ['`passed:true` (the exit status contradicts the verdict)', JSON.stringify({ passed: true }), KIND.UNSTRUCTURED_ERROR],
+    ['`block:false` (the exit status contradicts the verdict)', JSON.stringify({ block: false, message: 'm' }), KIND.UNSTRUCTURED_ERROR],
+    ['`passed:true` with `block:true` (a negative `block` still refuses)', JSON.stringify({ passed: true, block: true }), KIND.VERDICT_REFUSED],
+    ['`passed:false` with `block:false` (a negative `passed` still refuses)', JSON.stringify({ passed: false, block: false }), KIND.VERDICT_REFUSED],
     ['a non-boolean `passed`', JSON.stringify({ passed: 'no' }), KIND.UNSTRUCTURED_ERROR],
     ['an array', JSON.stringify([{ passed: false }]), KIND.UNSTRUCTURED_ERROR],
     ['null', 'null', KIND.UNSTRUCTURED_ERROR],

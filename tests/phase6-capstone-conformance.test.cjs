@@ -432,6 +432,15 @@ describe('ADR-857 phase 6 — capabilities must not bake install paths into the 
     // answer (a blocking verdict stays exit 0 in payload mode; the dispatch reads `.block`), 69
     // (UNAVAILABLE) is "could not look" — the payload still carries its boolean `block`, and the
     // dispatch routes the non-zero status by `onError`. Any other status, or no JSON, is a failure.
+    //
+    // WHICH queries may exit 69 in this empty, non-git temp directory is pinned, derived from the real
+    // behavior (measured for every declared query, with a phase number and with a path): only
+    // `ui.safety-gate` does. It resolves its file scope through the evaluation-scope resolver, which cannot
+    // resolve in a directory that is not a git work tree, so its payload says `scopeStatus: 'unresolvable'`
+    // and the verb exits 69. Every other gate answers from the planning files and exits 0 here, so an
+    // unexpected 69 (a gate that stopped being able to look) fails, and so does the pinned one answering 0
+    // with a different status (the pin would then be stale).
+    const MAY_EXIT_69 = new Set(['ui.safety-gate']);
     const GATE_VERB_STATUSES = new Set([0, 69]);
     const probe = (query, arg) => {
       const r = spawnSync(
@@ -459,6 +468,10 @@ describe('ADR-857 phase 6 — capabilities must not bake install paths into the 
           `check ${query}: command failed or returned non-JSON output (exit ${seen.status}). ` +
           `Stdout: ${seen.stdout.slice(0, 200)} Stderr: ${seen.stderr.slice(0, 200)}`,
         );
+      } else if (seen.status === 69 && !MAY_EXIT_69.has(query)) {
+        failures.push(`check ${query}: exited 69 (could not look) in an empty directory, but only ${[...MAY_EXIT_69].join(', ')} may`);
+      } else if (MAY_EXIT_69.has(query) && !(seen.status === 69 && seen.parsed.scopeStatus === 'unresolvable')) {
+        failures.push(`check ${query}: pinned as exit 69 with scopeStatus 'unresolvable' here, got exit ${seen.status} / ${JSON.stringify(seen.parsed.scopeStatus)}; update the pin`);
       } else if (typeof seen.parsed.block !== 'boolean') {
         failures.push(
           `check ${query}: returned JSON without a boolean \`block\` field ` +

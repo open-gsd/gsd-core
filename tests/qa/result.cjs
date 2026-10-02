@@ -43,8 +43,8 @@ const KIND = Object.freeze({
   /** exit 1, stderr present but not parseable as the structured envelope. */
   UNSTRUCTURED_ERROR: 'unstructured-error',
   /**
-   * exit 1, no structured stderr envelope, stdout is a gate verdict payload (a boolean `passed` or
-   * `block` field): the verb looked, answered NO, and its exit status says so (#5170, a failing
+   * exit 1, no structured stderr envelope, stdout is a NEGATIVE gate verdict (`passed:false` or
+   * `block:true`): the verb looked, answered NO, and its exit status says so (#5170, a failing
    * verdict exits 1 instead of 0). `json` carries the verdict, so a scenario can still assert on it.
    * Distinct from UNSTRUCTURED_ERROR, which is raw error text with no typed surface.
    */
@@ -176,13 +176,14 @@ function classify(raw, io = {}) {
     if (envelope) return { ...base, kind: KIND.STRUCTURED_ERROR, err: parsed.value, warnings };
     // A verdict-driven exit (#5170): the verb printed its verdict payload on stdout and exited 1 because
     // the verdict is a refusal. The exit code still outranks the payload for ANY other stdout shape
-    // (an `{ok:true,...}` body at exit 1 is an error), so only a payload that IS a verdict, a boolean
-    // `passed` or `block`, is read as one, and stderr's text is then all warnings.
+    // (an `{ok:true,...}` body at exit 1 is an error), so only a NEGATIVE verdict (`passed:false` or
+    // `block:true`) is read as a refusal. An exit 1 over `passed:true` / `block:false` contradicts its own
+    // verdict, the #5170 defect class (the exit status disagreeing with the verdict), so it stays an error.
     const verdictText = resolveFilePointer(raw.stdout, io);
     const verdict = verdictText.unreadable ? { ok: false } : tryParseJson(verdictText.text);
     const isVerdict = verdict.ok && verdict.value !== null && typeof verdict.value === 'object'
       && !Array.isArray(verdict.value)
-      && (typeof verdict.value.passed === 'boolean' || typeof verdict.value.block === 'boolean');
+      && (verdict.value.passed === false || verdict.value.block === true);
     return isVerdict
       ? { ...base, kind: KIND.VERDICT_REFUSED, json: verdict.value, pointer: verdictText.pointer, warnings: stderrLines }
       : { ...base, kind: KIND.UNSTRUCTURED_ERROR, warnings };
