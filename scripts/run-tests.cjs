@@ -1265,11 +1265,21 @@ function analyzeChunkEvents(eventsPath) {
 // under the same `file`. A file whose registered count exceeds its reported count
 // lost results.
 //
-// Like for like by construction: both sides count the same events (leaf pass/fail,
-// not suites) under the same `file` field, so a skipped test, a skipped suite, a
-// run-time subtest and a name/only filter (an excluded test emits no event on
-// either side) cannot make registered exceed reported without a loss. Reported can
-// exceed registered only when the parent synthesizes an event the child never sent.
+// Both sides count the same events (leaf pass/fail, not suites) under the same `file` field, so a
+// skipped test, a skipped suite, a run-time subtest and a name/only filter (an excluded test emits no
+// event on either side) do not by themselves make registered exceed reported.
+//
+// What this does NOT catch (measured limits, not guarantees):
+//   - a child that emitted nothing (a crash before its first result, a file with no tests): count 0,
+//     nothing to compare;
+//   - a child killed by SIGKILL (a timeout): it writes its ledger line from an `exit` handler, which
+//     does not run, so the file has no line at all (a timed-out chunk is reported by its own path);
+//   - a file that was reported but never registered (a ledger line is missing for it): reported can
+//     exceed registered and is not flagged per file;
+//   - the count is taken at v8.DefaultSerializer.prototype.writeValue, which holds only while node:test's
+//     child reporter frames events through it. If a Node change moves that, every count is 0. The
+//     chunk-level guard below (ledger counted 0 while the reporter received results) fails that loudly,
+//     and tests/run-tests-accounting.test.cjs ('counts every leaf result') pins the hook directly.
 //
 // `available` is false when either file is missing/unreadable or the ledger
 // holds no `registered` line: the chunk could not be accounted. That is
@@ -1355,6 +1365,14 @@ function analyzeChunkAccounting(eventsPath, ledgerPath) {
     reportedTotal += Math.min(got, count);
     if (count > got) shortfalls.push({ file: display.get(key), registered: count, reported: got });
   }
+  // A dead count is positively established, not unavailability: the parent REPORTED results while the
+  // child ledger counted none at all, and a reported result was necessarily handed to the child's
+  // serializer first. The ledger lines exist (the preload ran) so the counting hook is what failed
+  // (the serializer no longer being the reporter's channel is the realistic cause). A chunk whose files
+  // legitimately report nothing has reportedAll === 0 and is not caught by this.
+  let reportedAll = 0;
+  for (const n of reported.values()) reportedAll += n;
+  const ledgerCountedNothing = sawRegisteredLine && registeredTotal === 0 && reportedAll > 0;
   return {
     available: eventsRead && ledgerRead && sawRegisteredLine,
     eventsRead,
@@ -1363,7 +1381,19 @@ function analyzeChunkAccounting(eventsPath, ledgerPath) {
     shortfalls,
     registeredTotal,
     reportedTotal,
+    reportedAll,
+    ledgerCountedNothing,
   };
+}
+
+// #5170: the loud failure for a chunk whose ledger counted no result while the reporter received some.
+function formatAccountingCountDead(chunkNumber, chunkCount, accounting) {
+  return (
+    `run-tests: chunk ${chunkNumber}/${chunkCount} FAILED test accounting — the registration ledger counted 0 ` +
+    `results but the reporter received ${accounting.reportedAll}. The preload's count (the serializer hook in ` +
+    `scripts/lib/registration-ledger-preload.cjs) is not seeing the child's results, so no loss in this chunk ` +
+    `could be detected; a Node change to how the child reports is the likely cause.`
+  );
 }
 
 // #4031: the loud failure for a chunk whose registered tests are not all
@@ -2321,7 +2351,10 @@ async function main() {
     let accountingFailed = false;
     if (!result.timedOut && result.code === 0 && !result.signal && !result.error) {
       const accounting = analyzeChunkAccounting(chunkEventsPath, chunkLedgerPath);
-      if (accounting.shortfalls.length > 0) {
+      if (accounting.ledgerCountedNothing) {
+        accountingFailed = true;
+        console.error(formatAccountingCountDead(i + 1, chunks.length, accounting));
+      } else if (accounting.shortfalls.length > 0) {
         accountingFailed = true;
         console.error(formatAccountingFailure(i + 1, chunks.length, accounting));
       } else if (!accounting.available) {
@@ -2478,6 +2511,7 @@ module.exports = {
   analyzeChunkAccounting,
   formatAccountingFailure,
   formatAccountingUnavailable,
+  formatAccountingCountDead,
   // #4936: the chunk watchdog, exported so its arms are unit-testable with
   // injected spawn/platform seams (a real wedged Windows child is not
   // reproducible on demand).

@@ -248,6 +248,39 @@ describe('analyzeChunkAccounting (#4031)', () => {
     assert.match(msg, /4 tests registered, 1 reported \(3 unaccounted\)/);
     assert.match(msg, /a\.test\.cjs: 4 registered, 1 reported/);
   });
+
+  // A dead hook (a Node change that stops routing the child's events through the serializer the preload
+  // taps) makes every count 0. It is positively established when the reporter RECEIVED results the ledger
+  // never counted, and it must not fire for a chunk whose files legitimately report nothing.
+  for (const [label, ledgerCount, reported, dead] of [
+    ['the ledger counted 0 and the reporter received 1', 0, 1, true],
+    ['the ledger counted 0 and the reporter received 0 (files that report nothing)', 0, 0, false],
+    ['the ledger counted 1 and the reporter received 1', 1, 1, false],
+    ['the ledger counted 1 and the reporter received 0 (a loss, not a dead hook)', 1, 0, false],
+  ]) {
+    test(`dead count: ${label} -> ${dead ? 'fails the chunk' : 'not a dead count'}`, (t) => {
+      const { eventsPath, ledgerPath } = chunkFiles(t, {
+        events: results(FILE, reported),
+        ledger: [{ type: 'registered', file: FILE, count: ledgerCount }],
+      });
+      const a = analyzeChunkAccounting(eventsPath, ledgerPath);
+      assert.equal(a.ledgerCountedNothing, dead);
+      if (dead) {
+        const msg = require('../scripts/run-tests.cjs').formatAccountingCountDead(2, 5, a);
+        assert.match(msg, /chunk 2\/5 FAILED test accounting/);
+        assert.match(msg, /counted 0 results but the reporter received 1/);
+      }
+    });
+  }
+
+  test('dead count: one file counting results keeps the chunk-level guard quiet for another file with none', (t) => {
+    const OTHER = path.join(path.sep, 'repo', 'tests', 'b.test.cjs');
+    const { eventsPath, ledgerPath } = chunkFiles(t, {
+      events: results(FILE, 2),
+      ledger: [{ type: 'registered', file: FILE, count: 2 }, { type: 'registered', file: OTHER, count: 0 }],
+    });
+    assert.equal(analyzeChunkAccounting(eventsPath, ledgerPath).ledgerCountedNothing, false);
+  });
 });
 
 describe('registration-ledger-preload preload (#4031)', () => {

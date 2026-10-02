@@ -31,8 +31,17 @@
 // could be matched back to its test file. Counting at the serializer adds no
 // frame to the call and counts exactly what is put on the pipe, so the count
 // and the parent's report are compared like for like: a skipped or todo test,
-// a skipped suite and a test name/only filter are all handled by construction
+// a skipped suite and a test name/only filter need no special case
 // (an excluded test emits no event on either side).
+//
+// Blind spots, stated plainly: a child that emits nothing counts 0 (no loss is
+// visible); a SIGKILLed child never runs the `exit` handler below, so it leaves no
+// ledger line; a file the parent reported but the ledger never saw is not flagged
+// per file; and the whole count depends on node:test's child reporter framing its
+// events through v8.DefaultSerializer.prototype.writeValue (true on Node 24). If a
+// Node change moves that, every count becomes 0: the runner then fails a chunk whose
+// ledger counted 0 while its reporter received results (analyzeChunkAccounting,
+// `ledgerCountedNothing`), and tests/run-tests-accounting.test.cjs pins the hook.
 //
 // Inert unless it is inside a test-file child (NODE_TEST_CONTEXT is set by
 // `node --test` for those, not for the runner parent) AND a ledger path was
