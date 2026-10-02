@@ -187,7 +187,8 @@ function parseSwiftTesting(output: string): TestReport {
  * verbose, so they are counted from the summary; failures are named by their
  * FAIL:/ERROR: headers, which must account for every counted failure. Each
  * failing subTest repeats its method's header and counts as a failure, while
- * Ran counts methods, so identical headers collapse into one failed test.
+ * Ran counts methods, so identical headers collapse into one failed test. An
+ * unexpected success fails the run but is a test that passed.
  */
 const UNITTEST_RAN = /^Ran (\d+) tests? in [\d.]+s$/gm;
 const UNITTEST_HEADER = /^(?:FAIL|ERROR): (\S+)(?: \(([^)]*)\))?/gm;
@@ -207,7 +208,7 @@ function parseUnittest(output: string): TestReport {
     const [key, value] = part.split('=');
     counts[key] = Number(value);
   }
-  if (!outcome || Object.keys(counts).some((key) => !['failures', 'errors', 'skipped', 'expected failures'].includes(key))) {
+  if (!outcome || Object.keys(counts).some((key) => !['failures', 'errors', 'skipped', 'expected failures', 'unexpected successes'].includes(key))) {
     report.issues.push('Unsupported unittest outcome');
   }
   let headers = 0;
@@ -234,7 +235,8 @@ function parseUnittest(output: string): TestReport {
   }
   const failed = (counts['failures'] ?? 0) + (counts['errors'] ?? 0);
   const skipped = counts['skipped'] ?? 0;
-  if (headers !== failed || (outcome?.[1] === 'FAILED') !== (failed > 0) || failedIds.size + skipped > ran) {
+  const runFailed = failed > 0 || (counts['unexpected successes'] ?? 0) > 0;
+  if (headers !== failed || (outcome?.[1] === 'FAILED') !== runFailed || failedIds.size + skipped > ran) {
     report.issues.push('Incomplete unittest report');
   }
   const unnamed = (status: TestStatus): TestReportCase => ({ name: '', identities: [], group: null, groupIdentities: [], status });

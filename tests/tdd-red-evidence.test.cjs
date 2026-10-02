@@ -914,6 +914,58 @@ describe('#4970 — Python unittest RED evidence', () => {
     assert.deepEqual(result.evidence.failing_tests, ['test_adds_two_numbers']);
   });
 
+  // Real Python 3.14 `-m unittest -v` output: an @expectedFailure test that
+  // passes is listed as UNEXPECTED SUCCESS and counted in the FAILED line, but
+  // it is a test that ran and passed, not a failure.
+  const UNEXPECTED_SUCCESS = [
+    'test_known_bug (test_demo.AddTest.test_known_bug) ... unexpected success',
+    '',
+    '======================================================================',
+    'UNEXPECTED SUCCESS: test_known_bug (test_demo.AddTest.test_known_bug)',
+    '----------------------------------------------------------------------',
+    'Ran 2 tests in 0.000s',
+    '',
+  ];
+
+  test('an unexpected success beside the failing target still classifies RED_EVIDENCE_OK', () => {
+    const output = [
+      'test_adds_two_numbers (test_demo.AddTest.test_adds_two_numbers) ... FAIL',
+      ...UNEXPECTED_SUCCESS.slice(0, 2),
+      '======================================================================',
+      'FAIL: test_adds_two_numbers (test_demo.AddTest.test_adds_two_numbers)',
+      '----------------------------------------------------------------------',
+      'Traceback (most recent call last):',
+      '  File "tests/test_demo.py", line 6, in test_adds_two_numbers',
+      '    self.assertEqual(add(1, 2), 3)',
+      'AssertionError: 0 != 3',
+      '',
+      ...UNEXPECTED_SUCCESS.slice(2),
+      'FAILED (failures=1, unexpected successes=1)',
+      '',
+    ].join('\n');
+    const result = classifyRedEvidence({ ...INPUT, output });
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(result.reason, 'target_test_failed');
+    assert.deepEqual(result.evidence.report_errors, []);
+    assert.equal(result.evidence.tests, 2);
+    assert.equal(result.evidence.pass, 1);
+    assert.equal(result.evidence.fail, 1);
+  });
+
+  test('an unexpected success alone fails the run without a failing test', () => {
+    const output = [
+      'test_adds_two_numbers (test_demo.AddTest.test_adds_two_numbers) ... ok',
+      ...UNEXPECTED_SUCCESS,
+      'FAILED (unexpected successes=1)',
+      '',
+    ].join('\n');
+    const result = classifyRedEvidence({ ...INPUT, output });
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'nonzero_exit_without_test_failure');
+    assert.deepEqual(result.evidence.report_errors, []);
+    assert.equal(result.evidence.pass, 2);
+  });
+
   test('subTest headers must still account exactly for the counted failures', () => {
     const header = 'FAIL: test_adds_two_numbers (test_demo.AddTest.test_adds_two_numbers) (i=0)\nAssertionError: boom\n';
     for (const [headers, failures, ran] of [[2, 1, 1], [1, 2, 1], [2, 2, 0]]) {
