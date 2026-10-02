@@ -254,7 +254,8 @@ describe('plan-phase decision-coverage-plan gate: a gate that could not run stop
 });
 
 // The Tester Image has no `jq`, so the extracted blocks run against tests/helpers/jq-subset-stub.cjs. It must
-// agree with jq on the filters the blocks use and refuse any other, or a block could pass through a lookalike.
+// agree with jq on the two filters the blocks use over the gate handler's JSON (pinned below, 13 documents x 2
+// filters, expected values measured from real jq), refuse any other filter, and keep its known divergences explicit.
 describe('jq-subset-stub: jq semantics for the filters the extracted blocks use', () => {
   const { spawnSync } = require('node:child_process');
   const path = require('node:path');
@@ -264,36 +265,43 @@ describe('jq-subset-stub: jq semantics for the filters the extracted blocks use'
   const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
   const jq = (args, input) => spawnSync(process.execPath, [STUB, ...args], { input, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
 
-  for (const [doc, exit, printed] of [
-    ['{"passed":true}', 0, 'true'],
-    ['{"passed":false}', 1, 'false'],
-    ['{"data":{"passed":true}}', 0, 'true'],
-    ['{"passed":false,"data":{"passed":true}}', 0, 'true'],
-    ['{"passed":"true"}', 1, 'false'],
-    ['{}', 1, 'false'],
-    ['{"data":null}', 1, 'false'],
+  // The pinned matrix: every pair was measured against real jq (1.x) when this was written, so the expected
+  // values below ARE jq's. Columns: document, `-e` exit status of PASSED, its stdout, `-r` stdout of MESSAGE.
+  for (const [doc, exit, printed, message] of [
+    ['{"passed":true}', 0, 'true', 'Decision coverage gate failed.'],
+    ['{"passed":false}', 1, 'false', 'Decision coverage gate failed.'],
+    ['{"data":{"passed":true}}', 0, 'true', 'Decision coverage gate failed.'],
+    ['{"passed":false,"data":{"passed":true}}', 0, 'true', 'Decision coverage gate failed.'],
+    ['{"passed":"true"}', 1, 'false', 'Decision coverage gate failed.'],
+    ['{}', 1, 'false', 'Decision coverage gate failed.'],
+    ['{"data":null}', 1, 'false', 'Decision coverage gate failed.'],
+    ['{"message":"m"}', 1, 'false', 'm'],
+    ['{"data":{"message":"d"}}', 1, 'false', 'd'],
+    ['{"message":null,"data":{"message":"d"}}', 1, 'false', 'd'],
+    ['{"message":""}', 1, 'false', ''],
+    ['{"message":false}', 1, 'false', 'Decision coverage gate failed.'],
+    ['{"message":0}', 1, 'false', '0'],
   ]) {
-    test(`-e ${PASSED} over ${doc}: prints ${printed}, exits ${exit}`, () => {
+    test(`${doc}: -e PASSED prints ${printed} and exits ${exit}; -r MESSAGE prints ${JSON.stringify(message)}`, () => {
       const r = jq(['-e', PASSED], doc);
       assert.equal(r.status, exit);
       assert.equal(r.stdout.trim(), printed);
+      const m = jq(['-r', MESSAGE], doc);
+      assert.equal(m.status, 0);
+      assert.equal(m.stdout, `${message}\n`);
     });
   }
 
-  for (const [doc, expected] of [
-    ['{"message":"D-01 is not covered"}', 'D-01 is not covered'],
-    ['{"data":{"message":"from data"}}', 'from data'],
-    ['{"message":null,"data":{"message":"from data"}}', 'from data'],
-    ['{"message":""}', ''],
-    ['{}', 'Decision coverage gate failed.'],
-    ['{"message":false}', 'Decision coverage gate failed.'],
-  ]) {
-    test(`-r message filter over ${doc}: ${JSON.stringify(expected)}`, () => {
-      const r = jq(['-r', MESSAGE], doc);
-      assert.equal(r.status, 0);
-      assert.equal(r.stdout, `${expected}\n`);
-    });
-  }
+  // KNOWN DIVERGENCES from real jq, pinned so they stay deliberate (see the stub's header): none of them is
+  // reachable from the gate handler's JSON, and a block that starts to depend on one needs the real jq.
+  test('known divergences: empty stdin, a non-object .data and a top-level array', () => {
+    assert.equal(jq(['-e', PASSED], '').status, 2, 'jq exits 4 (-e over no output); the stub treats it as invalid JSON');
+    for (const doc of ['{"data":"x"}', '{"data":[1]}', '[]']) {
+      assert.equal(jq(['-e', PASSED], doc).status, 1, `${doc}: jq errors (exit 5); the stub reads the missing field as null`);
+      assert.equal(jq(['-r', MESSAGE], doc).stdout, 'Decision coverage gate failed.\n', `${doc}: jq errors (exit 5)`);
+    }
+    assert.equal(jq(['-r', MESSAGE], '{"message":{"a":1}}').stdout, '{"a":1}\n', 'jq pretty-prints an object; the stub prints it compact');
+  });
 
   test('invalid JSON exits 2 like jq, and an unsupported filter is refused (exit 3), never passed through', () => {
     assert.equal(jq(['-e', PASSED], 'not json').status, 2);

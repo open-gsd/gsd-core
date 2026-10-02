@@ -15,6 +15,15 @@
  * Semantics kept from jq: `//` yields its right side when the left is `false` or `null` (an empty
  * string is truthy); `.a.b` on a document without `a` is `null`; `-e` exits 1 when the last output is
  * `false` or `null`, 0 otherwise; `-r` prints a string without quotes; invalid JSON exits 2.
+ *
+ * Agreement with jq is PINNED, not asserted in general: the 13 documents x 2 filters in
+ * tests/gate-consumer-exit-awareness.test.cjs carry expected values measured from real jq. KNOWN
+ * DIVERGENCES (each pinned there; none is reachable from the gate handler's JSON, which is always an
+ * object whose `passed` / `message` / `data` are scalars or an object):
+ *   - empty stdin: jq exits 4 under -e (0 and no output without it); the stub exits 2 like invalid JSON;
+ *   - a `.data` that is a string or an array, or a top-level array: jq errors (exit 5, "Cannot index ...");
+ *     the stub reads the missing field as null (PASSED -> false, MESSAGE -> the default);
+ *   - an object printed by -r: jq pretty-prints it over several lines, the stub prints compact JSON.
  */
 
 const fs = require('node:fs');
