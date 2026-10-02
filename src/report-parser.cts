@@ -153,9 +153,12 @@ function parseJunit(output: string): TestReport {
  * swift-testing console output (#4957). Only the anchored aggregate line marks
  * the format; every declared test must have its own result line. The aggregate
  * counts skipped tests too, and a parameterized test names its case count.
+ * A test is named by its quoted display name (with `(aka 'function()')` under
+ * --verbose) or, without one, by its bare function name. Windows consoles
+ * print √ × - in place of ✔ ✘ ━.
  */
-const SWIFT_AGGREGATE = /^[ \t]*[✘✔━][ \t]*Test run with (\d+) tests? in \d+ suites? (passed|failed)\b/gm;
-const SWIFT_RESULT = /^[ \t]*[✘✔━➜][ \t]*Test "([^"]+)"(?: with \d+ test cases?)? (?:(failed|passed|was cancelled) after [\d.]+ seconds?(?: with \d+ [^\n]*?)?(?:\.|: "[^\n]*")|(skipped)(?:\.|: "[^\n]*"))$/gm;
+const SWIFT_AGGREGATE = /^[ \t]*[✘✔━×√-][ \t]*Test run with (\d+) tests? in \d+ suites? (passed|failed)\b/gm;
+const SWIFT_RESULT = /^[ \t]*[✘✔━➜×√-][ \t]*Test (?:"([^"]+)"(?: \(aka '([^']+)'\))?|([^\s"]\S*\)))(?: with \d+ test cases?)? (?:(failed|passed|was cancelled) after [\d.]+ seconds?(?: with \d+ [^\n]*?)?(?:\.|: "[^\n]*")|(skipped)(?:\.|: "[^\n]*"))$/gm;
 
 function parseSwiftTesting(output: string): TestReport {
   const report: TestReport = { format: ReportFormat.SwiftTesting, valid: true, tests: [], issues: [] };
@@ -166,12 +169,13 @@ function parseSwiftTesting(output: string): TestReport {
     runPassed &&= match[2] === 'passed';
   }
   for (const match of output.matchAll(SWIFT_RESULT)) {
+    const fn = match[2] ?? match[3];
     report.tests.push({
-      name: match[1],
-      identities: [match[1]],
+      name: match[1] ?? match[3],
+      identities: [...new Set([match[1], fn, fn?.replace(/\(.*\)$/, '')].filter((id): id is string => Boolean(id)))],
       group: null,
       groupIdentities: [],
-      status: match[2] === 'failed' ? TestStatus.Failed : match[2] === 'passed' ? TestStatus.Passed : TestStatus.Skipped,
+      status: match[4] === 'failed' ? TestStatus.Failed : match[4] === 'passed' ? TestStatus.Passed : TestStatus.Skipped,
     });
   }
   if (report.tests.length !== declared) report.issues.push('Incomplete swift-testing report');

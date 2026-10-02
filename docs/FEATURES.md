@@ -2981,7 +2981,8 @@ No runner-specific TAP summary counters are required.
 
 The gate rejects incomplete plans/documents, bailouts, skipped/TODO/cancelled targets,
 and ambiguous names. Qualify repeated TAP names with their suite path, and
-repeated JUnit class names with their package. Evidence counts are individual
+repeated JUnit class names with their package. A swift-testing target is its
+display name or its function name. Evidence counts are individual
 tests, excluding suite-closing TAP points; a `unittest` method with failing
 subTests or a parameterized swift-testing test counts once. `evidence.matched_test` and the
 persisted `failing_test` identify the target failure rather than an unrelated

@@ -692,6 +692,47 @@ describe('#4957 — swift-testing RED evidence', () => {
     assert.equal(result.evidence.pass + result.evidence.fail, 5, 'pass+fail must never exceed the reported tests');
     assert.equal(result.verdict, 'RED_EVIDENCE_OK');
   });
+
+  // Event.HumanReadableOutputRecorder names a test by its quoted display name
+  // only when it has one; a plain `@Test func` is named by its bare function
+  // name, and --verbose adds `(aka 'function()')` after a display name.
+  const bare = [
+    '✘ Test addsNumbers() failed after 0.001 seconds with 1 issue.',
+    '✔ Test subtracts() passed after 0.001 seconds.',
+  ];
+
+  test('a test without a display name is named by its bare function name', () => {
+    for (const targetTest of ['addsNumbers()', 'addsNumbers']) {
+      const result = classifyRedEvidence({ ...INPUT, targetTest, output: swiftTesting(bare, { tests: 2 }) });
+      assert.equal(result.verdict, 'RED_EVIDENCE_OK', targetTest);
+      assert.deepEqual(result.evidence.report_errors, []);
+      assert.equal(result.evidence.matched_test, 'addsNumbers()');
+    }
+  });
+
+  test('a verbose display name also matches its function name', () => {
+    const output = swiftTesting([
+      `✘ Test "Adds numbers" (aka 'addsNumbers()') failed after 0.001 seconds with 1 issue.`,
+      `✔ Test "Subtracts" (aka 'subtracts()') passed after 0.001 seconds.`,
+    ], { tests: 2 });
+    for (const targetTest of ['Adds numbers', 'addsNumbers()', 'addsNumbers']) {
+      const result = classifyRedEvidence({ ...INPUT, targetTest, output });
+      assert.equal(result.verdict, 'RED_EVIDENCE_OK', targetTest);
+      assert.equal(result.evidence.matched_test, 'Adds numbers');
+    }
+  });
+
+  test('Windows console glyphs mark the same results', () => {
+    // Event.Symbol substitutes √ × - for ✔ ✘ ━ on Windows.
+    const output = [
+      '× Test run with 2 tests in 1 suite failed after 0.002 seconds with 1 issue.',
+      '× Test addsNumbers() failed after 0.001 seconds with 1 issue.',
+      '√ Test subtracts() passed after 0.001 seconds.',
+    ].join('\n');
+    const result = classifyRedEvidence({ ...INPUT, targetTest: 'addsNumbers()', output });
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.deepEqual(result.evidence.report_errors, []);
+  });
 });
 
 // ── #4970 — Python unittest RED evidence ──────────────────────────────────────
