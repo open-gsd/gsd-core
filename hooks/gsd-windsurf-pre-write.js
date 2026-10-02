@@ -31,14 +31,19 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { allow, deny } = require('./lib/hook-exit.js');
-const { reportIfUndetermined } = require('./lib/git-probe.js');
+const { reportIfUndetermined, BLOCKING_GUARD_PROBE_TIMEOUT_MS } = require('./lib/git-probe.js');
 
 // #3911 (ADR-3889 Phase 7): the exit(2) call site (block(), below) is
 // migrated to hook-exit.js's deny(undefined, reason) — see
 // gsd-windsurf-pre-command.js's identical note for the fixed defect
 // (terminateNow's fd 1/fd 2 writes now run in independent try/catch blocks).
 
-const SPAWNOPT = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000, windowsHide: true };
+// Shared blocking-guard probe budget (hooks/lib/git-probe.js, #5180): a timed-out
+// probe fails open, so it is sized for a starved host. Windsurf documents no
+// hook timeout (docs.devin.ai/desktop/cascade/hooks lists only an aspirational
+// "sub-100ms" target), so there is no host budget to fit inside; this guard
+// runs at most 3 sequential probes and keeps its fail-open posture.
+const SPAWNOPT = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: BLOCKING_GUARD_PROBE_TIMEOUT_MS, windowsHide: true };
 
 function git(args, cwd) {
   return spawnSync('git', args, { ...SPAWNOPT, cwd });
