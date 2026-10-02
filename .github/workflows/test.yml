@@ -602,8 +602,9 @@ jobs:
     # the cliff #869 and #3057 were both filed about).
     #
     # This cap is now GUARDED: #5029 gave the lane its first LANE_COSTS entry
-    # in tests/ci-test-job-timeout-budget.test.cjs (17m measured, so this cap
-    # may not drop below 26m). It had been uncovered since #4591, which is how
+    # in tests/ci-test-job-timeout-budget.test.cjs (27m measured on the
+    # macos-latest row, which outruns every windows shard, so this cap may not
+    # drop below 41m). It had been uncovered since #4591, which is how
     # it drifted to a 34m long pole here in the first place.
     timeout-minutes: 45
     env:
