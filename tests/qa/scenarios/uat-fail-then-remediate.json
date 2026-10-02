@@ -1,7 +1,7 @@
 {
   "name": "uat-fail-then-remediate",
   "fixture": "greenfield",
-  "notes": "FIXED: the prior FINDING here (dated before the fixture fix) was itself a fixture defect, not an engine defect — @uat/current-test-failing and @uat/current-test-passing carried NO `### N. Name` / `result:` block that `parseUatResultItems` (src/uat-predicate.cts) recognizes, so both fixtures always produced zero parsed `checks` and the same `no_uat_artifacts:true, passed:false` payload regardless of remediation. Both fixtures now carry a real `### 1. ...` / `result: passed|failed` block, and the `expect` blocks below assert the real before/after divergence: `passed:false, no_uat_artifacts:true` while failing, `passed:true, no_uat_artifacts:false` after remediation.",
+  "notes": "FIXED: the prior FINDING here (dated before the fixture fix) was itself a fixture defect, not an engine defect — @uat/current-test-failing and @uat/current-test-passing carried NO `### N. Name` / `result:` block that `parseUatResultItems` (src/uat-predicate.cts) recognizes, so both fixtures always produced zero parsed `checks` and the same `no_uat_artifacts:true, passed:false` payload regardless of remediation. Both fixtures now carry a real `### 1. ...` / `result: passed|failed` block, and the `expect` blocks below assert the real before/after divergence: `passed:false, no_uat_artifacts:true` while failing, `passed:true, no_uat_artifacts:false` after remediation. EXIT STATUS (#5170): a failing UAT verdict now exits 1 (the verb prints its verdict on stdout and the exit status says no), so the failing step classifies as verdict-refused with the verdict as its json, and the passing step exits 0 as json.",
   "steps": [
     {
       "at": "discuss:post",

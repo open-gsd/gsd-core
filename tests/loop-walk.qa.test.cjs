@@ -211,6 +211,38 @@ describe('RunResult classification', () => {
     assert.strictEqual(result.kind, KIND.UNSTRUCTURED_ERROR);
   });
 
+  // #5170: a failing verdict exits 1 and prints the verdict on stdout. The classifier reads that as the
+  // verb's answer (VERDICT_REFUSED, json = the verdict), but only when the payload IS a verdict.
+  for (const [label, stdout, kind] of [
+    ['a boolean `passed:false`', JSON.stringify({ passed: false, blockers: ['x'] }), KIND.VERDICT_REFUSED],
+    ['a boolean `block:true`', JSON.stringify({ block: true, message: 'm' }), KIND.VERDICT_REFUSED],
+    ['a boolean `passed:true` at exit 1 is still a verdict payload', JSON.stringify({ passed: true }), KIND.VERDICT_REFUSED],
+    ['a non-boolean `passed`', JSON.stringify({ passed: 'no' }), KIND.UNSTRUCTURED_ERROR],
+    ['an array', JSON.stringify([{ passed: false }]), KIND.UNSTRUCTURED_ERROR],
+    ['null', 'null', KIND.UNSTRUCTURED_ERROR],
+    ['no stdout', '', KIND.UNSTRUCTURED_ERROR],
+    ['non-JSON stdout', 'passed: false', KIND.UNSTRUCTURED_ERROR],
+  ]) {
+    test(`exit 1 with stdout ${label} classifies as ${kind}`, () => {
+      const result = classify({ exitCode: 1, stdout, stderr: 'Command failed: gsd-tools phase uat-passed 1', argv: ['phase', 'uat-passed', '1'] });
+      assert.strictEqual(result.kind, kind);
+      if (kind === KIND.VERDICT_REFUSED) assert.deepStrictEqual(result.json, JSON.parse(stdout));
+      else assert.strictEqual(result.json, null);
+    });
+  }
+
+  test('a verdict-refused result passes the exit and json contracts: the exit status is the verb\'s own answer', () => {
+    const result = classify({ exitCode: 1, stdout: JSON.stringify({ passed: false }), stderr: '', argv: ['phase', 'uat-passed', '1'] });
+    assert.strictEqual(getOracle('exit-contract').check({ result }).ok, true);
+    assert.strictEqual(getOracle('json-contract').check({ result }).ok, true);
+  });
+
+  test('a structured stderr envelope still outranks a verdict-shaped stdout', () => {
+    const stderr = JSON.stringify({ ok: false, reason: 'usage', message: 'm' });
+    const result = classify({ exitCode: 1, stdout: JSON.stringify({ passed: false }), stderr, argv: ['x'] });
+    assert.strictEqual(result.kind, KIND.STRUCTURED_ERROR);
+  });
+
   test('warnings array captures all stderr lines except the last', () => {
     const stderr = ['line1', 'line2', JSON.stringify({ ok: false, reason: 'r', message: 'm' })].join('\n');
     const raw = { exitCode: 1, stdout: '', stderr, argv: ['x'] };

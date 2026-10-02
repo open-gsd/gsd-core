@@ -42,6 +42,13 @@ const KIND = Object.freeze({
   STRUCTURED_ERROR: 'structured-error',
   /** exit 1, stderr present but not parseable as the structured envelope. */
   UNSTRUCTURED_ERROR: 'unstructured-error',
+  /**
+   * exit 1, no structured stderr envelope, stdout is a gate verdict payload (a boolean `passed` or
+   * `block` field): the verb looked, answered NO, and its exit status says so (#5170, a failing
+   * verdict exits 1 instead of 0). `json` carries the verdict, so a scenario can still assert on it.
+   * Distinct from UNSTRUCTURED_ERROR, which is raw error text with no typed surface.
+   */
+  VERDICT_REFUSED: 'verdict-refused',
   /** exit code outside {0,1}. */
   UNEXPECTED_EXIT: 'unexpected-exit',
   /** subprocess exceeded its timeout — degraded, never fatal to the walk. */
@@ -166,8 +173,18 @@ function classify(raw, io = {}) {
     const parsed = tryParseJson(lastNonEmptyLine(stderr));
     const envelope = parsed.ok && parsed.value !== null && typeof parsed.value === 'object'
       && parsed.value.ok === false && typeof parsed.value.reason === 'string';
-    return envelope
-      ? { ...base, kind: KIND.STRUCTURED_ERROR, err: parsed.value, warnings }
+    if (envelope) return { ...base, kind: KIND.STRUCTURED_ERROR, err: parsed.value, warnings };
+    // A verdict-driven exit (#5170): the verb printed its verdict payload on stdout and exited 1 because
+    // the verdict is a refusal. The exit code still outranks the payload for ANY other stdout shape
+    // (an `{ok:true,...}` body at exit 1 is an error), so only a payload that IS a verdict, a boolean
+    // `passed` or `block`, is read as one, and stderr's text is then all warnings.
+    const verdictText = resolveFilePointer(raw.stdout, io);
+    const verdict = verdictText.unreadable ? { ok: false } : tryParseJson(verdictText.text);
+    const isVerdict = verdict.ok && verdict.value !== null && typeof verdict.value === 'object'
+      && !Array.isArray(verdict.value)
+      && (typeof verdict.value.passed === 'boolean' || typeof verdict.value.block === 'boolean');
+    return isVerdict
+      ? { ...base, kind: KIND.VERDICT_REFUSED, json: verdict.value, pointer: verdictText.pointer, warnings: stderrLines }
       : { ...base, kind: KIND.UNSTRUCTURED_ERROR, warnings };
   }
 
