@@ -14,48 +14,40 @@
  * budget and the test helper's bound.
  */
 
-const { test, describe } = require('node:test');
+const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+const fc = require('./helpers/fast-check-setup.cjs');
 const { runMinimalInstall } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
-const { STAGED_HOOK_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { STAGED_HOOK_SCRIPT_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
   BLOCKING_GUARD_PROBE_TIMEOUT_MS,
   BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES,
 } = require('../hooks/lib/git-probe.js');
 
-// Blocking guards hooks/hooks.json registers. The installer registers these
-// plus gsd-workflow-guard and gsd-validate-commit.
-const PLUGIN_BLOCKING_GUARDS = [
-  'gsd-prompt-guard',
-  'gsd-worktree-path-guard',
-  'gsd-write-guard',
-  'gsd-secret-read-guard',
-  'gsd-agent-isolation-guard',
-];
+// The blocking-guard name lists and host budget come from the installer's own
+// module (the single source every registration surface shares), not from
+// literals restated here.
+const {
+  BLOCKING_GUARD_TIMEOUT_S: HOST_BUDGET_SECONDS,
+  BLOCKING_GUARD_NAMES,
+  KIMI_BLOCKING_GUARD_NAMES,
+  KIMI_UNREGISTERED_BLOCKING_GUARDS,
+} = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+
 // Advisory hook: negative control (must NOT be raised to the blocking budget).
 const ADVISORY_PRETOOL = ['gsd-read-guard'];
-const KIMI_BLOCKING_GUARDS = [
-  'gsd-prompt-guard',
-  'gsd-worktree-path-guard',
-  'gsd-write-guard',
-  'gsd-secret-read-guard',
-  'gsd-workflow-guard',
-  'gsd-validate-commit',
-];
 
-// node start + fs work + kill/reap observed on a starved Windows runner (~0.46 s).
-const OVERHEAD_MS = 500;
-// The host budget in seconds the installer registers for blocking guards (#4175).
-const HOST_BUDGET_SECONDS = 120;
-
-/** Pure arithmetic under test: do N probes of `budget` ms plus overhead fit under `bound`? */
-function fits(probeCount, budget, overhead, bound) {
-  return probeCount * budget + overhead < bound;
-}
+const HOOKS_DIR = path.join(__dirname, '..', 'hooks');
+// `node --require` preload that records the `timeout` each git spawn receives.
+const RECORDER = path.join(__dirname, 'helpers', 'spawn-timeout-recorder.cjs');
 
 function hookName(command) {
   const m = /gsd-[a-z-]+(?=\.(?:js|sh))/.exec(command || '');
@@ -90,14 +82,23 @@ function installerTimeouts(t) {
 describe('blocking guard host budgets agree with the installer (#5180)', () => {
   test('installer registers the reference blocking guard at the host budget', (t) => {
     const installer = installerTimeouts(t);
-    assert.strictEqual(installer.get('gsd-worktree-path-guard'), HOST_BUDGET_SECONDS);
+    assert.strictEqual(HOST_BUDGET_SECONDS, 120);
+    for (const name of BLOCKING_GUARD_NAMES) {
+      assert.strictEqual(installer.get(name), HOST_BUDGET_SECONDS, `installer registers ${name} at ${installer.get(name)}s`);
+    }
   });
 
   test('plugin hooks.json registers every blocking guard at exactly the installer budget', (t) => {
     const installer = installerTimeouts(t);
     const budget = installer.get('gsd-worktree-path-guard');
     const plugin = pluginTimeouts();
-    for (const name of PLUGIN_BLOCKING_GUARDS) {
+    // hooks/hooks.json registers a subset of the shared list (not the workflow
+    // guard or commit validator, which the installer adds); every one it does
+    // register must carry the host budget.
+    const pluginBlocking = BLOCKING_GUARD_NAMES.filter((name) => plugin.has(name));
+    assert.ok(pluginBlocking.includes('gsd-agent-isolation-guard') && pluginBlocking.length >= 5,
+      `hooks/hooks.json must register the blocking guards; found ${pluginBlocking.join(', ')}`);
+    for (const name of pluginBlocking) {
       assert.strictEqual(plugin.get(name), HOST_BUDGET_SECONDS,
         `hooks/hooks.json registers ${name} at ${plugin.get(name)}s; expected ${HOST_BUDGET_SECONDS}s ` +
         `(installer uses ${budget}s; a timed-out hook does not block, #3981)`);
@@ -123,7 +124,15 @@ describe('blocking guard host budgets agree with the installer (#5180)', () => {
       const timeout = /^timeout = (\d+)$/m.exec(block);
       if (name) seen.set(name, timeout ? Number(timeout[1]) : undefined);
     }
-    for (const name of KIMI_BLOCKING_GUARDS) {
+    // Intentional divergence from the installer's set, stated by the module.
+    assert.deepStrictEqual(
+      BLOCKING_GUARD_NAMES.filter((name) => !KIMI_BLOCKING_GUARD_NAMES.includes(name)),
+      [...KIMI_UNREGISTERED_BLOCKING_GUARDS],
+    );
+    for (const name of KIMI_UNREGISTERED_BLOCKING_GUARDS) {
+      assert.ok(!seen.has(name), `kimi config.toml must not register ${name}`);
+    }
+    for (const name of KIMI_BLOCKING_GUARD_NAMES) {
       assert.strictEqual(seen.get(name), HOST_BUDGET_SECONDS,
         `kimi config.toml registers ${name} at ${seen.get(name)}s; expected ${HOST_BUDGET_SECONDS}s`);
     }
@@ -131,27 +140,180 @@ describe('blocking guard host budgets agree with the installer (#5180)', () => {
   });
 });
 
-describe('guard git-probe budget fits inside the host and test-helper bounds (#5180)', () => {
-  const hostBoundMs = HOST_BUDGET_SECONDS * 1000;
+// ---------------------------------------------------------------------------
+// Behavioral binding of each guard to the shared probe budget. The guards run as
+// REAL subprocesses with tests/helpers/spawn-timeout-recorder.cjs preloaded, which
+// records the `timeout` every `git` spawn actually receives. Nothing here reads
+// a guard's source: a guard that stops using BLOCKING_GUARD_PROBE_TIMEOUT_MS (a
+// revert to a literal 2000, a new probe on a different option object) fails.
+// ---------------------------------------------------------------------------
+
+describe('guard git probes receive the shared budget at runtime (#5180)', () => {
+  let root;
+  let main;
+  let other;
+  let wt;
+  let runCount = 0;
+
+  before(() => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5180-')));
+    main = path.join(root, 'main');
+    other = path.join(root, 'other');
+    wt = path.join(root, 'agent-wt');
+    const git = (args, cwd) => gitOrThrow(args, { cwd, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+    for (const dir of [main, other]) {
+      fs.mkdirSync(dir);
+      git(['init', '-q'], dir);
+      git(['-c', 'user.name=gsd', '-c', 'user.email=gsd@example.com', '-c', 'commit.gpgsign=false',
+        'commit', '-q', '--allow-empty', '-m', 'seed'], dir);
+    }
+    // A linked worktree on an agent-* branch: the only context where the
+    // worktree-path guard enforces and the workflow guard's force-add block fires.
+    git(['worktree', 'add', '-q', '-b', 'agent-5180', wt], main);
+    fs.mkdirSync(path.join(wt, '.planning'));
+    fs.writeFileSync(path.join(wt, '.planning', 'config.json'), JSON.stringify({ hooks: { workflow_guard: true } }));
+  });
+
+  after(() => cleanup(root));
+
+  /** Run a hook as a real subprocess with the recorder preloaded; return its result and recorded git probes. */
+  function runRecorded(hookFile, payload, { cwd, env = {} }) {
+    const recordFile = path.join(root, `probes-${runCount++}.jsonl`);
+    const result = runNode(['--require', RECORDER, path.join(HOOKS_DIR, hookFile)], {
+      cwd,
+      input: JSON.stringify(payload),
+      env: { ...process.env, GSD_SPAWN_RECORD_FILE: recordFile, ...env },
+      timeoutMs: STAGED_HOOK_SCRIPT_TIMEOUT_MS,
+    });
+    const probes = fs.existsSync(recordFile)
+      ? splitLines(fs.readFileSync(recordFile, 'utf8')).filter(Boolean).map((line) => JSON.parse(line))
+      : [];
+    return { result, probes };
+  }
+
+  const pathGuard = (filePath, tool = 'Write') =>
+    runRecorded('gsd-worktree-path-guard.js', { tool_name: tool, cwd: wt, tool_input: { file_path: filePath } }, { cwd: wt });
+  const windsurfGuard = (filePath) =>
+    runRecorded('gsd-windsurf-pre-write.js', { agent_action_name: 'pre_write_code', tool_info: { file_path: filePath } }, { cwd: wt });
+  const workflowGuard = (command, env) =>
+    runRecorded('gsd-workflow-guard.js', { tool_name: 'Bash', cwd: wt, tool_input: { command } }, { cwd: wt, env });
+
+  function assertProbesUseSharedBudget(probes, label) {
+    assert.ok(probes.length > 0, `${label}: the scenario must reach at least one git probe`);
+    assert.ok(probes.length <= BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES,
+      `${label}: ${probes.length} sequential probes exceeds BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES (${BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES})`);
+    for (const probe of probes) {
+      assert.strictEqual(probe.timeout, BLOCKING_GUARD_PROBE_TIMEOUT_MS,
+        `${label}: git ${probe.args.join(' ')} was spawned with timeout=${probe.timeout}, expected ${BLOCKING_GUARD_PROBE_TIMEOUT_MS}`);
+    }
+  }
 
   test('exported probe constants are the agreed values', () => {
     assert.strictEqual(BLOCKING_GUARD_PROBE_TIMEOUT_MS, 5000);
     assert.strictEqual(BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES, 3);
   });
 
-  test('worst case fits under the 20 s staged-hook helper bound and the 120 s host budget', () => {
-    assert.ok(fits(BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES, BLOCKING_GUARD_PROBE_TIMEOUT_MS, OVERHEAD_MS, STAGED_HOOK_SCRIPT_TIMEOUT_MS));
-    assert.ok(fits(BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES, BLOCKING_GUARD_PROBE_TIMEOUT_MS, OVERHEAD_MS, hostBoundMs));
+  test('gsd-worktree-path-guard: deny after 2 probes (file in another repo) uses the shared budget', () => {
+    const { result, probes } = pathGuard(path.join(main, 'file.txt'));
+    assert.strictEqual(result.exitCode, 2, `expected a deny; stderr=${result.stderr}`);
+    assert.strictEqual(probes.length, 2);
+    assertProbesUseSharedBudget(probes, 'path-guard other-repo deny');
   });
 
-  test('boundary: limit-1 / limit / limit+1 of probeCount * budget + overhead < bound', () => {
-    const limit = 3 * 5000 + OVERHEAD_MS;
-    assert.strictEqual(fits(3, 5000, OVERHEAD_MS, limit + 1), true, 'limit+1: fits');
-    assert.strictEqual(fits(3, 5000, OVERHEAD_MS, limit), false, 'limit: strict < does not fit');
-    assert.strictEqual(fits(3, 5000, OVERHEAD_MS, limit - 1), false, 'limit-1: does not fit');
+  test('gsd-worktree-path-guard: deny after 3 probes (file inside .git internals) uses the shared budget', () => {
+    const { result, probes } = pathGuard(path.join(main, '.git', 'config'));
+    assert.strictEqual(result.exitCode, 2, `expected a deny; stderr=${result.stderr}`);
+    assert.strictEqual(probes.length, 3);
+    assertProbesUseSharedBudget(probes, 'path-guard .git deny');
   });
 
-  test('negative control: the pre-fix 10 s QUICK bound could not hold 3 x 5 s probes', () => {
-    assert.strictEqual(fits(3, 5000, OVERHEAD_MS, 10000), false);
+  test('gsd-windsurf-pre-write: deny after 2 probes (file in another repo) uses the shared budget', () => {
+    const { result, probes } = windsurfGuard(path.join(other, 'file.txt'));
+    assert.strictEqual(result.exitCode, 2, `expected a deny; stderr=${result.stderr}`);
+    assert.strictEqual(probes.length, 2);
+    assertProbesUseSharedBudget(probes, 'windsurf other-repo deny');
+  });
+
+  test('gsd-windsurf-pre-write: deny after 3 probes (file inside .git internals) uses the shared budget', () => {
+    const { result, probes } = windsurfGuard(path.join(other, '.git', 'config'));
+    assert.strictEqual(result.exitCode, 2, `expected a deny; stderr=${result.stderr}`);
+    assert.strictEqual(probes.length, 3);
+    assertProbesUseSharedBudget(probes, 'windsurf .git deny');
+  });
+
+  test('gsd-workflow-guard: force-add block on an agent branch probes the branch with the shared budget', () => {
+    const { result, probes } = workflowGuard('git add -f ignored.txt');
+    assert.strictEqual(result.exitCode, 2, `expected a deny; stderr=${result.stderr}`);
+    assert.strictEqual(probes.length, 1);
+    assertProbesUseSharedBudget(probes, 'workflow-guard force-add block');
+  });
+
+  test('gsd-workflow-guard: the fail-closed re-check probes the branch with the shared budget', () => {
+    // GSD_TEST_MODE + the fault flag drive the guard's own test-only fault seam,
+    // which throws after parsing so the outer catch's fail-closed branch (which
+    // calls currentBranch itself) is the code under observation.
+    const { result, probes } = workflowGuard('git status', { GSD_TEST_MODE: '1', GSD_TEST_WORKFLOW_GUARD_FAULT: '1' });
+    assert.strictEqual(result.exitCode, 2, `expected a fail-closed deny; stderr=${result.stderr}`);
+    assert.strictEqual(probes.length, 1);
+    assertProbesUseSharedBudget(probes, 'workflow-guard fail-closed re-check');
+  });
+
+  test('negative control: a non-guarded tool spawns no git probe at all', () => {
+    const { result, probes } = pathGuard(path.join(main, 'file.txt'), 'Read');
+    assert.strictEqual(result.exitCode, 0);
+    assert.strictEqual(probes.length, 0, 'the recorder must not invent probes; otherwise the assertions above are vacuous');
+  });
+
+  test('the recorder reports a deviant budget (the assertion can fail)', () => {
+    const deviant = [{ args: ['rev-parse'], timeout: BLOCKING_GUARD_PROBE_TIMEOUT_MS - 1 }];
+    assert.throws(() => assertProbesUseSharedBudget(deviant, 'deviant'), /expected/);
+  });
+
+  test('property: any generated hook payload keeps every recorded git probe on the shared budget', () => {
+    const totals = { probes: 0 };
+    const targets = {
+      inside: (name) => path.join(wt, name),
+      mainRepo: (name) => path.join(main, name),
+      mainGit: (name) => path.join(main, '.git', name),
+      sibling: (name) => path.join(other, name),
+      missing: (name) => path.join(root, `absent-${name}`, 'nested', name),
+      relative: (name) => name,
+    };
+    const scenario = fc.record({
+      guard: fc.constantFrom('path-guard', 'windsurf'),
+      tool: fc.constantFrom('Write', 'Edit', 'MultiEdit', 'Read', 'Bash', 'Glob'),
+      target: fc.constantFrom(...Object.keys(targets)),
+      name: fc.string({ unit: fc.constantFrom(...'abcdefgh'), minLength: 1, maxLength: 6 }),
+    });
+    fc.assert(
+      fc.property(scenario, ({ guard, tool, target, name }) => {
+        const filePath = targets[target](name);
+        const { probes } = guard === 'path-guard' ? pathGuard(filePath, tool) : windsurfGuard(filePath);
+        totals.probes += probes.length;
+        for (const probe of probes) assert.strictEqual(probe.timeout, BLOCKING_GUARD_PROBE_TIMEOUT_MS);
+        assert.ok(probes.length <= BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES);
+      }),
+      { numRuns: 20 },
+    );
+    assert.ok(totals.probes > 0, 'the generated scenarios must reach real git probes; zero would make the property vacuous');
+  });
+
+  test('boundary: worst recorded probe count x shared budget fits the staged-hook bound at limit-1 / limit and not at limit+1', () => {
+    // The worst case is MEASURED from a real run (the 3-probe .git deny above),
+    // not restated, and priced with the real constants.
+    const { probes } = pathGuard(path.join(main, '.git', 'config'));
+    const worst = probes.length;
+    assert.strictEqual(worst, BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES,
+      'the documented worst case must be the count a real guard actually reaches');
+
+    // node start + fs work + kill/reap observed on a starved Windows runner (~0.46 s).
+    const overheadMs = 500;
+    const priced = (probeCount) => probeCount * BLOCKING_GUARD_PROBE_TIMEOUT_MS + overheadMs;
+    assert.ok(priced(worst - 1) < STAGED_HOOK_SCRIPT_TIMEOUT_MS, 'limit-1 probes fits the staged-hook bound');
+    assert.ok(priced(worst) < STAGED_HOOK_SCRIPT_TIMEOUT_MS, 'limit probes fits the staged-hook bound');
+    assert.ok(priced(worst + 1) >= STAGED_HOOK_SCRIPT_TIMEOUT_MS,
+      'limit+1 probes exceeds the staged-hook bound: a 4th sequential probe needs a bigger helper bound');
+    // And every case above sits far inside the host budget blocking guards register with.
+    assert.ok(priced(worst + 1) < HOST_BUDGET_SECONDS * 1000);
   });
 });

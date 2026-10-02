@@ -39,10 +39,14 @@ const { reportIfUndetermined, BLOCKING_GUARD_PROBE_TIMEOUT_MS } = require('./lib
 // (terminateNow's fd 1/fd 2 writes now run in independent try/catch blocks).
 
 // Shared blocking-guard probe budget (hooks/lib/git-probe.js, #5180): a timed-out
-// probe fails open, so it is sized for a starved host. Windsurf documents no
+// probe fails open, so it is sized for a starved host. Windsurf documents NO
 // hook timeout (docs.devin.ai/desktop/cascade/hooks lists only an aspirational
-// "sub-100ms" target), so there is no host budget to fit inside; this guard
-// runs at most 3 sequential probes and keeps its fail-open posture.
+// "sub-100ms" target) and this surface's registration entry
+// (buildWindsurfHookEntry in src/runtime-hooks-surface.cts) carries none, so the
+// host budget is UNKNOWN. This guard runs at most 3 sequential probes (15 s
+// worst case); that worst case is NOT claimed to fit any host budget — if
+// Windsurf kills the hook sooner, the host kill fails open exactly as a probe
+// timeout does. The guard keeps its fail-open posture either way.
 const SPAWNOPT = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: BLOCKING_GUARD_PROBE_TIMEOUT_MS, windowsHide: true };
 
 function git(args, cwd) {
