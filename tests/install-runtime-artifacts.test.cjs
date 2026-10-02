@@ -838,6 +838,50 @@ describe('installOpencodeFamilySkills — emits skills/<name>/SKILL.md (#784)', 
   }
 });
 
+// ─── #5161: skill-dir ownership must not depend on which source provider one lookup picks ───
+// Staging resolves its source with the commands+agents requirement; a commands-only lookup can
+// accept a different provider — a `.gsd-source` marker naming a commands-only dir. When ownership
+// read only that root, writeManifest recorded zero GSD skills (driven by review, qwen --local).
+describe('#5161: createSkillDirOwnership first-party set survives a commands-only source marker', () => {
+  const { createSkillDirOwnership: ownership } = require('../gsd-core/bin/lib/install-engine.cjs');
+
+  test('a package first-party skill is owned even when .gsd-source names another commands dir', (t) => {
+    const configDir = createTempDir('gsd-5161-marker-');
+    t.after(() => cleanup(configDir));
+    const otherCommands = path.join(configDir, 'other-src', 'commands', 'gsd');
+    fs.mkdirSync(otherCommands, { recursive: true });
+    fs.writeFileSync(path.join(otherCommands, 'only-here.md'), '---\nname: only-here\n---\n');
+    fs.writeFileSync(path.join(configDir, '.gsd-source'), otherCommands + '\n');
+    const skillsDir = path.join(configDir, 'skills');
+    fs.mkdirSync(skillsDir, { recursive: true });
+
+    const owns = ownership('claude', configDir, skillsDir, 'gsd-', { includeManifest: false });
+    assert.strictEqual(owns('gsd-help'), true, 'a skill the executing package ships must be owned');
+    assert.strictEqual(owns('gsd-only-here'), true, 'a skill the marker-named source ships must be owned');
+    assert.strictEqual(owns('gsd-mine-5161'), false, 'a dir neither corpus ships stays unowned');
+  });
+
+  test('installOpencodeFamilySkills does not own a raw-dir DIRECTORY named like a command', (t) => {
+    const configDir = createTempDir('gsd-5161-phantom-');
+    t.after(() => cleanup(configDir));
+    writePackageSourceMarkerFixture(configDir);
+    const rawDir = stageRawCommands('opencode', configDir);
+    fs.mkdirSync(path.join(rawDir, 'phantom-5161.md'), { recursive: true });
+    const userDir = path.join(configDir, 'skills', 'gsd-phantom-5161');
+    fs.mkdirSync(userDir, { recursive: true });
+    fs.writeFileSync(path.join(userDir, 'SKILL.md'), 'USER\n');
+
+    const origWarn = console.warn;
+    console.warn = () => {};
+    t.after(() => { console.warn = origWarn; });
+    installOpencodeFamilySkills('opencode', configDir, rawDir, `${configDir}/`);
+    console.warn = origWarn;
+
+    assert.strictEqual(fs.readFileSync(path.join(userDir, 'SKILL.md'), 'utf8'), 'USER\n',
+      'a dir the writer never rewrites must not be pruned as owned');
+  });
+});
+
 // ─── #2362: OpenCode/Kilo combined-family INSTALL path drops the capability
 // registry — an installed+registered+surfaced+active third-party capability
 // skill never materializes ───────────────────────────────────────────────

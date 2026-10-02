@@ -903,17 +903,29 @@ function createSkillDirOwnership(
   prefix: string,
   opts: { includeManifest?: boolean; ownAllIfSourceUnresolved?: boolean } = {},
 ): (name: string) => boolean {
+  // First-party stems come from BOTH the configDir-resolved source and the
+  // executing package's own source. Staging resolves its provider with the
+  // commands+agents requirement while a commands-only lookup can accept a
+  // different provider (a commands-only `.gsd-source` marker), so either root
+  // alone can miss the corpus this run actually staged. Both are GSD corpora,
+  // so the union only ever widens what GSD owns.
   const firstParty = new Set<string>();
-  let sourceResolved = true;
-  try {
-    const commandsGsdDir = runtimeArtifactLayout.findInstallSourceRoot(configDir);
-    for (const file of installFs().readdirSync(commandsGsdDir)) {
-      if (typeof file === 'string' && file.endsWith('.md')) firstParty.add(prefix + file.slice(0, -3));
+  let sourceResolved = false;
+  let lastError: unknown = null;
+  for (const lookupDir of [configDir, undefined]) {
+    try {
+      const commandsGsdDir = runtimeArtifactLayout.findInstallSourceRoot(lookupDir);
+      for (const file of installFs().readdirSync(commandsGsdDir)) {
+        if (typeof file === 'string' && file.endsWith('.md')) firstParty.add(prefix + file.slice(0, -3));
+      }
+      sourceResolved = true;
+    } catch (err) {
+      lastError = err;
     }
-  } catch (err) {
-    sourceResolved = false;
+  }
+  if (!sourceResolved) {
     console.warn(
-      `  [gsd] could not read the install source to classify ${skillsDir} (${(err as Error).message}) — ${opts.ownAllIfSourceUnresolved ? 'treating every gsd- skill dir as GSD-owned' : 'keeping every gsd- skill dir GSD cannot otherwise prove it owns'}.`,
+      `  [gsd] could not read the install source to classify ${skillsDir} (${(lastError as Error)?.message}) — ${opts.ownAllIfSourceUnresolved ? 'treating every gsd- skill dir as GSD-owned' : 'keeping every gsd- skill dir GSD cannot otherwise prove it owns'}.`,
     );
   }
   if (!sourceResolved && opts.ownAllIfSourceUnresolved) return (): boolean => true;
@@ -1656,10 +1668,12 @@ function installOpencodeFamilySkills(
   // #5161: same ownership gate as installRuntimeArtifacts' skills kind. The
   // first-party set is rawDir's stems (exactly what this writer is about to
   // write); third-party capability skills carry the marker.
+  // Same entry filter as the write loop below (a regular `.md` file), so a
+  // name is owned here only if this writer is about to rewrite it.
   const rawStemNames = new Set<string>(
-    installFs().readdirSync(rawDir)
-      .filter((f: string) => f.endsWith('.md'))
-      .map((f: string) => `${skillsKindEntry.prefix}${f.slice(0, -3)}`),
+    installFs().readdirSync(rawDir, { withFileTypes: true })
+      .filter((e: any) => e.isFile() && e.name.endsWith('.md'))
+      .map((e: any) => `${skillsKindEntry.prefix}${e.name.slice(0, -3)}`),
   );
   const ownsSkillDir = createSkillDirOwnership(runtime, targetDir, dest, skillsKindEntry.prefix);
   _warnPreservedSkillDirs(

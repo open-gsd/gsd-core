@@ -11936,17 +11936,21 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // skills, so a user's gsd-* dir there is preserved and named instead.
     const staleSkillsDir = path.join(targetDir, 'skills');
     if (fs.existsSync(staleSkillsDir)) {
+      // Decide ownership once, BEFORE deleting: the capability-marker leg reads
+      // the dir itself, so asking again afterwards reports a deleted dir as kept.
+      // A symlink is never removed here (as before) but is named when unowned.
       const ownsSkillDir = createSkillDirOwnership(runtime, targetDir, staleSkillsDir, 'gsd-');
       const prefixed = fs.readdirSync(staleSkillsDir, { withFileTypes: true })
-        .filter(e => e.isDirectory() && e.name.startsWith('gsd-'));
-      const staleGsd = prefixed.filter(e => ownsSkillDir(e.name));
+        .filter(e => (e.isDirectory() || e.isSymbolicLink()) && e.name.startsWith('gsd-'))
+        .map(e => ({ name: e.name, isDir: e.isDirectory(), owned: ownsSkillDir(e.name) }));
+      const staleGsd = prefixed.filter(e => e.isDir && e.owned);
       for (const e of staleGsd) {
         fs.rmSync(path.join(staleSkillsDir, e.name), { recursive: true });
       }
       if (staleGsd.length > 0) {
         console.log(`  ${green}✓${reset} Removed ${staleGsd.length} stale GSD skill(s) from skills/`);
       }
-      _warnPreservedSkillDirs(staleSkillsDir, prefixed.filter(e => !ownsSkillDir(e.name)).map(e => e.name));
+      _warnPreservedSkillDirs(staleSkillsDir, prefixed.filter(e => !e.owned).map(e => e.name));
     }
   }
 

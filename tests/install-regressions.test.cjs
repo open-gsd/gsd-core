@@ -2482,5 +2482,29 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
       'the local install output must name the preserved dir by path');
     assert.strictEqual(fs.existsSync(path.join(skillsDir, 'gsd-help')), false,
       'a stale first-party skill from a previous local install is still removed');
+
+    // Update path (no first-time baseline): a marker-carrying capability skill is owned, so it is
+    // removed and must never be reported as preserved; a symlinked user skill is never removed and
+    // is named like any other kept dir.
+    fs.mkdirSync(path.join(skillsDir, 'gsd-cap-5161'), { recursive: true });
+    fs.writeFileSync(path.join(skillsDir, 'gsd-cap-5161', 'SKILL.md'), '---\nname: gsd-cap-5161\n---\n');
+    fs.writeFileSync(path.join(skillsDir, 'gsd-cap-5161', '.gsd-capability-skill'), 'some-cap\n');
+    const linkTarget = path.join(root, 'my-skills', 'linked');
+    fs.mkdirSync(linkTarget, { recursive: true });
+    fs.writeFileSync(path.join(linkTarget, 'SKILL.md'), USER_SKILL);
+    fs.symlinkSync(linkTarget, path.join(skillsDir, 'gsd-linked-5161'), 'dir');
+
+    const r2 = runNode([INSTALL_SCRIPT, '--claude', '--local'], { cwd: root, env, timeoutMs: INSTALL_TIMEOUT_MS });
+    assert.strictEqual(r2.exitCode, 0, `local update failed: ${r2.stdout}\n${r2.stderr}`);
+    const out2 = r2.stdout + r2.stderr;
+    assert.strictEqual(fs.existsSync(path.join(skillsDir, 'gsd-cap-5161')), false,
+      'a marker-carrying capability skill is still removed');
+    assert.ok(!out2.includes(path.join(skillsDir, 'gsd-cap-5161')),
+      'a removed dir must never be reported as preserved');
+    assert.strictEqual(fs.readFileSync(path.join(linkTarget, 'SKILL.md'), 'utf8'), USER_SKILL,
+      'the symlink target is untouched');
+    assert.ok(fs.lstatSync(path.join(skillsDir, 'gsd-linked-5161')).isSymbolicLink(), 'the symlink itself survives');
+    assert.ok(out2.includes(path.join(skillsDir, 'gsd-linked-5161')), 'a kept symlinked user skill is named too');
+    assert.ok(fs.existsSync(path.join(skillsDir, 'gsd-mine')), 'the user skill survives the update too');
   });
 });
