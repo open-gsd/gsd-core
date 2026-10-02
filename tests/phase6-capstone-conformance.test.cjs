@@ -4,7 +4,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { spawnSync } = require('node:child_process');
 const { cleanup } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
@@ -428,47 +428,43 @@ describe('ADR-857 phase 6 — capabilities must not bake install paths into the 
     const gsdTools = path.join(ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
     const failures = [];
 
-    for (const query of [...queries].sort()) {
-      let rawOut = '';
+    // A gate verb answers on stdout and its exit status says whether it could look (#5170): 0 is an
+    // answer (a blocking verdict stays exit 0 in payload mode; the dispatch reads `.block`), 69
+    // (UNAVAILABLE) is "could not look" — the payload still carries its boolean `block`, and the
+    // dispatch routes the non-zero status by `onError`. Any other status, or no JSON, is a failure.
+    const GATE_VERB_STATUSES = new Set([0, 69]);
+    const probe = (query, arg) => {
+      const r = spawnSync(
+        process.execPath,
+        [gsdTools, 'check', query, arg, '--raw'],
+        { cwd: tmpDir, encoding: 'utf-8', timeout: GATE_CHECK_CLI_TIMEOUT_MS },
+      );
+      let parsed = null;
       try {
-        // Invoke with --raw (the real dispatch form used by the host loop).
-        // Most commands accept a phase number and return valid JSON even when
-        // no real project state exists.
-        rawOut = execFileSync(
-          process.execPath,
-          [gsdTools, 'check', query, '1', '--raw'],
-          { cwd: tmpDir, encoding: 'utf-8', timeout: GATE_CHECK_CLI_TIMEOUT_MS },
+        parsed = JSON.parse((r.stdout || '').trim());
+      } catch {
+        // Not JSON: reported below.
+      }
+      return { status: r.status, parsed, stdout: r.stdout || '', stderr: r.stderr || '' };
+    };
+
+    for (const query of [...queries].sort()) {
+      // Invoke with --raw (the real dispatch form used by the host loop). Most commands accept a phase
+      // number and return valid JSON even when no real project state exists; if one answers nothing for
+      // it, retry with a path.
+      let seen = probe(query, '1');
+      if (!GATE_VERB_STATUSES.has(seen.status) || seen.parsed === null) seen = probe(query, tmpDir);
+      if (!GATE_VERB_STATUSES.has(seen.status) || seen.parsed === null) {
+        failures.push(
+          `check ${query}: command failed or returned non-JSON output (exit ${seen.status}). ` +
+          `Stdout: ${seen.stdout.slice(0, 200)} Stderr: ${seen.stderr.slice(0, 200)}`,
         );
-        const parsed = JSON.parse(rawOut.trim());
-        if (typeof parsed.block !== 'boolean') {
-          failures.push(
-            `check ${query}: returned JSON without a boolean \`block\` field ` +
-            `(got: ${JSON.stringify(parsed.block)}, type: ${typeof parsed.block}). ` +
-            `Add \`block\` to the command's output per the uniform gate contract.`,
-          );
-        }
-      } catch (err) {
-        // If it threw because the command required a different arg shape, try with a path
-        try {
-          rawOut = execFileSync(
-            process.execPath,
-            [gsdTools, 'check', query, tmpDir, '--raw'],
-            { cwd: tmpDir, encoding: 'utf-8', timeout: GATE_CHECK_CLI_TIMEOUT_MS },
-          );
-          const parsed = JSON.parse(rawOut.trim());
-          if (typeof parsed.block !== 'boolean') {
-            failures.push(
-              `check ${query}: returned JSON without a boolean \`block\` field ` +
-              `(got: ${JSON.stringify(parsed.block)}, type: ${typeof parsed.block}).`,
-            );
-          }
-        } catch (err2) {
-          failures.push(
-            `check ${query}: command failed or returned non-JSON output. ` +
-            `Error: ${err2 instanceof Error ? err2.message : String(err2)}. ` +
-            `Stdout: ${rawOut.slice(0, 200)}`,
-          );
-        }
+      } else if (typeof seen.parsed.block !== 'boolean') {
+        failures.push(
+          `check ${query}: returned JSON without a boolean \`block\` field ` +
+          `(got: ${JSON.stringify(seen.parsed.block)}, type: ${typeof seen.parsed.block}). ` +
+          `Add \`block\` to the command's output per the uniform gate contract.`,
+        );
       }
     }
 
