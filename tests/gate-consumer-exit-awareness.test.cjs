@@ -253,6 +253,56 @@ describe('plan-phase decision-coverage-plan gate: a gate that could not run stop
   });
 });
 
+// The Tester Image has no `jq`, so the extracted blocks run against tests/helpers/jq-subset-stub.cjs. It must
+// agree with jq on the filters the blocks use and refuse any other, or a block could pass through a lookalike.
+describe('jq-subset-stub: jq semantics for the filters the extracted blocks use', () => {
+  const { spawnSync } = require('node:child_process');
+  const path = require('node:path');
+  const STUB = path.join(__dirname, 'helpers', 'jq-subset-stub.cjs');
+  const PASSED = '(.passed // .data.passed) == true';
+  const MESSAGE = '(.message // .data.message // "Decision coverage gate failed.")';
+  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const jq = (args, input) => spawnSync(process.execPath, [STUB, ...args], { input, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
+
+  for (const [doc, exit, printed] of [
+    ['{"passed":true}', 0, 'true'],
+    ['{"passed":false}', 1, 'false'],
+    ['{"data":{"passed":true}}', 0, 'true'],
+    ['{"passed":false,"data":{"passed":true}}', 0, 'true'],
+    ['{"passed":"true"}', 1, 'false'],
+    ['{}', 1, 'false'],
+    ['{"data":null}', 1, 'false'],
+  ]) {
+    test(`-e ${PASSED} over ${doc}: prints ${printed}, exits ${exit}`, () => {
+      const r = jq(['-e', PASSED], doc);
+      assert.equal(r.status, exit);
+      assert.equal(r.stdout.trim(), printed);
+    });
+  }
+
+  for (const [doc, expected] of [
+    ['{"message":"D-01 is not covered"}', 'D-01 is not covered'],
+    ['{"data":{"message":"from data"}}', 'from data'],
+    ['{"message":null,"data":{"message":"from data"}}', 'from data'],
+    ['{"message":""}', ''],
+    ['{}', 'Decision coverage gate failed.'],
+    ['{"message":false}', 'Decision coverage gate failed.'],
+  ]) {
+    test(`-r message filter over ${doc}: ${JSON.stringify(expected)}`, () => {
+      const r = jq(['-r', MESSAGE], doc);
+      assert.equal(r.status, 0);
+      assert.equal(r.stdout, `${expected}\n`);
+    });
+  }
+
+  test('invalid JSON exits 2 like jq, and an unsupported filter is refused (exit 3), never passed through', () => {
+    assert.equal(jq(['-e', PASSED], 'not json').status, 2);
+    const unsupported = jq(['-e', '.passed'], '{"passed":true}');
+    assert.equal(unsupported.status, 3);
+    assert.match(unsupported.stderr, /unsupported filter/);
+  });
+});
+
 describe('capture-and-continue consumers: a verdict is read under set -e, the status is kept (agents and references)', { skip: SKIP }, () => {
   const CAPTURES = [
     ['gsd-verifier verify.artifacts', 'agents/gsd-verifier.md', 'ARTIFACT_RESULT=$(gsd_run query verify.artifacts', 'ARTIFACT_RESULT', 'ARTIFACT_EXIT'],

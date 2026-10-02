@@ -42,5 +42,17 @@
   {
     "path": "tests/fixtures/brand-typing/ok-correct-composition.cts",
     "reason": "Positive-control counterpart to the bad-* must-not-compile fixtures (#3059); kept in the same exemption so the pair stays together."
+  },
+  {
+    "path": "tests/fixtures/gate-evidence-typing/bad-pass-from-unreadable.cts",
+    "reason": "Deliberate MUST-NOT-COMPILE type-error fixture (#5170): the unreadable-evidence branding makes a passing outcome from unreadable evidence a compile error, and tests/gate-evidence.test.cjs asserts tsc rejects it; type-aware linting would fail by design."
+  },
+  {
+    "path": "tests/fixtures/gate-evidence-typing/bad-unbranded-unreadable.cts",
+    "reason": "Deliberate MUST-NOT-COMPILE type-error fixture (#5170): the unreadable-evidence branding makes a passing outcome from unreadable evidence a compile error, and tests/gate-evidence.test.cjs asserts tsc rejects it; type-aware linting would fail by design."
+  },
+  {
+    "path": "tests/fixtures/gate-evidence-typing/ok-unreadable-arm.cts",
+    "reason": "Positive-control counterpart to the gate-evidence-typing bad-* must-not-compile fixtures (#5170): tsc compiles it clean; kept in the same exemption so the pair stays together."
   }
 ]

@@ -37,9 +37,12 @@ function span(relFile, from, through) {
  * under `set -e`; `preamble` lines (variable seeds) run first; `probe` runs last (read variables).
  */
 function runBash(lines, { stdout, rc }, { setE = true, preamble = [], probe = '' } = {}) {
+  // `jq` is always the subset stub: the Tester Image has no jq, and a block that calls the real one dies
+  // with exit 127 before the logic under test runs (see tests/helpers/jq-subset-stub.cjs).
   const script = [
     ...(setE ? ['set -e'] : []),
     'gsd_run() { printf %s "$STUB_OUT"; return "$STUB_RC"; }',
+    'jq() { "$STUB_NODE" "$STUB_JQ" "$@"; }',
     ...preamble,
     ...lines,
     probe,
@@ -48,7 +51,13 @@ function runBash(lines, { stdout, rc }, { setE = true, preamble = [], probe = ''
   const r = spawnSync('bash', ['-c', script], {
     encoding: 'utf8',
     timeout: PROBE_TIMEOUT_MS,
-    env: { ...process.env, STUB_OUT: stdout, STUB_RC: String(rc) },
+    env: {
+      ...process.env,
+      STUB_OUT: stdout,
+      STUB_RC: String(rc),
+      STUB_NODE: process.execPath,
+      STUB_JQ: path.join(__dirname, 'jq-subset-stub.cjs'),
+    },
   });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
