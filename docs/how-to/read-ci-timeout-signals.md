@@ -63,11 +63,14 @@ cap. That is a maintainer call among three options, each with real tradeoffs:
 - **Raise the `timeout-minutes` cap** for that job.
 - **Rebalance the shard split** so no single shard carries a disproportionate share of the
   suite (see `scripts/run-tests.cjs`'s `selectShard`, which packs shards by measured cost from
-  `tests/test-timings.json`). On the **Windows** lane, do not read a balanced packing as a
-  balanced runtime: that table is Linux-measured, and #4434's win32 correction reprices only the
-  files absent from it. #5029 found shards the packer scored identically (206.2 weight each)
-  running 0.75x / 1.21x / 1.04x of an equal split, so adding a shard is the lever that actually
-  moves the long pole there — retuning weights cannot, until a Windows-measured table exists.
+  `tests/test-timings.json`, and on win32 from `tests/test-timings.win32.json` via
+  `makeFileWeigher`'s `platformTimings` arm — #5071/#5097). **Never read a balanced packing as a
+  balanced runtime:** LPT balances in its own weight units by construction, so it reports a
+  perfect split whatever the real durations are. To see the truth, score each shard by summing
+  its files' durations from a measured table for that platform. Before #5097 the Windows lane
+  was the cautionary case — shards the packer scored identically ran 0.75x / 1.21x / 1.04x of an
+  equal split (#5029) — and with win32 measurements in place that imbalance measures 1.01-1.02,
+  so a long pole on this lane is now a capacity question rather than a mis-pricing one.
 - **Trim what runs on the long-pole shard** — for the `test` job, shard 1 also carries the
   unsharded aux suites (integration/security/install/slow); moving one elsewhere changes what
   shard 1 costs.
