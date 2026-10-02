@@ -901,7 +901,7 @@ function createSkillDirOwnership(
   configDir: string,
   skillsDir: string,
   prefix: string,
-  opts: { includeManifest?: boolean; ownAllIfSourceUnresolved?: boolean } = {},
+  opts: { includeManifest?: boolean; ownAllIfSourceUnresolved?: boolean; manifestPrefix?: string } = {},
 ): (name: string) => boolean {
   // First-party stems come from BOTH the configDir-resolved source and the
   // executing package's own source. Staging resolves its provider with the
@@ -934,7 +934,10 @@ function createSkillDirOwnership(
   if (!sourceResolved && opts.ownAllIfSourceUnresolved) return (): boolean => true;
   const manifestNames = new Set<string>();
   if (opts.includeManifest !== false) {
-    const manifestPrefix: string = hostBehaviorsFor(runtime).skillsManifestPrefix || 'skills/';
+    // The prefix must describe the root being pruned: a manifest name under one
+    // root says nothing about a same-named dir under another (Hermes' flat
+    // pre-#2841 root vs its nested skills/gsd/ root).
+    const manifestPrefix: string = opts.manifestPrefix ?? (hostBehaviorsFor(runtime).skillsManifestPrefix || 'skills/');
     for (const key of Object.keys(installerMigrations.readInstallManifest(configDir).files)) {
       if (!key.startsWith(manifestPrefix)) continue;
       const rest = key.slice(manifestPrefix.length);
@@ -1077,7 +1080,9 @@ function _runLegacyInstallMigrations(runtime: string, configDir: string, scope: 
   if (hostBehaviorsFor(runtime).legacyFlatSkillsCleanup) {
     const flatSkillsDir = path.join(configDir, 'skills');
     if (installFs().existsSync(flatSkillsDir)) {
-      const ownsSkillDir = createSkillDirOwnership(runtime, configDir, flatSkillsDir, 'gsd-');
+      // The flat root's manifest entries were recorded as skills/gsd-<x>/…, not
+      // under Hermes' current nested prefix.
+      const ownsSkillDir = createSkillDirOwnership(runtime, configDir, flatSkillsDir, 'gsd-', { manifestPrefix: 'skills/' });
       const kept: string[] = [];
       for (const entry of installFs().readdirSync(flatSkillsDir, { withFileTypes: true })) {
         if (!entry.isDirectory() || !entry.name.startsWith('gsd-')) continue;

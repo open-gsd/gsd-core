@@ -27,6 +27,7 @@ require('node:test').afterEach(() => {
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { INSTALL_TIMEOUT_MS, FIXTURE_HOOK_TIMEOUT_SECONDS } = require('./helpers/timeouts.cjs');
@@ -2480,6 +2481,30 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
     assert.strictEqual(fs.existsSync(path.join(flatDir, 'gsd-help')), false,
       'a pre-#2841 flat first-party skill is still removed');
     assert.ok(fs.existsSync(path.join(flatDir, 'gsd', 'gsd-ns-workflow', 'SKILL.md')), 'the nested layout is still installed');
+
+    // Update path. The flat root's manifest entries are recorded flat (skills/gsd-<x>/…): a retired
+    // flat skill recorded that way is GSD's and goes silently. A name the manifest records only under
+    // the NESTED root says nothing about a same-named dir in the flat root, which stays the user's.
+    const retiredBody = 'retired flat GSD skill\n';
+    fs.mkdirSync(path.join(flatDir, 'gsd-retired-5161'), { recursive: true });
+    fs.writeFileSync(path.join(flatDir, 'gsd-retired-5161', 'SKILL.md'), retiredBody);
+    fs.mkdirSync(path.join(flatDir, 'gsd-cross-5161'), { recursive: true });
+    fs.writeFileSync(path.join(flatDir, 'gsd-cross-5161', 'SKILL.md'), USER_SKILL);
+    const manifestPath = path.join(configDir, 'gsd-file-manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.files['skills/gsd-retired-5161/SKILL.md'] = crypto.createHash('sha256').update(retiredBody).digest('hex');
+    manifest.files['skills/gsd/gsd-cross-5161/SKILL.md'] = 'deadbeef';
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+    const r2 = runNode([INSTALL_SCRIPT, '--hermes', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r2.exitCode, 0, `hermes update failed: ${r2.stdout}\n${r2.stderr}`);
+    const out2 = r2.stdout + r2.stderr;
+    assert.strictEqual(fs.existsSync(path.join(flatDir, 'gsd-retired-5161')), false,
+      'a flat skill the previous manifest recorded flat is still removed');
+    assert.ok(!out2.includes(path.join(flatDir, 'gsd-retired-5161')), 'and is never reported as preserved');
+    assert.ok(fs.existsSync(path.join(flatDir, 'gsd-cross-5161')),
+      'a nested-root manifest entry must not make a same-named flat user dir GSD-owned');
+    assert.ok(out2.includes(path.join(flatDir, 'gsd-cross-5161')), 'the kept flat dir is named');
   });
 
   test('local: the legacy stale-skills cleanup keeps a user gsd-* project skill and still removes first-party ones', (t) => {

@@ -861,6 +861,19 @@ describe('#5161: createSkillDirOwnership first-party set survives a commands-onl
     assert.strictEqual(owns('gsd-mine-5161'), false, 'a dir neither corpus ships stays unowned');
   });
 
+  test('a source DIRECTORY named like a command is not a first-party stem', (t) => {
+    const configDir = createTempDir('gsd-5161-srcdir-');
+    t.after(() => cleanup(configDir));
+    const otherCommands = path.join(configDir, 'other-src', 'commands', 'gsd');
+    fs.mkdirSync(path.join(otherCommands, 'phantom-union-5161.md'), { recursive: true });
+    fs.writeFileSync(path.join(otherCommands, 'phantom-union-5161.md', 'notes.txt'), 'not a command\n');
+    fs.writeFileSync(path.join(otherCommands, 'real-5161.md'), '---\nname: real-5161\n---\n');
+    fs.writeFileSync(path.join(configDir, '.gsd-source'), otherCommands + '\n');
+    const owns = ownership('claude', configDir, path.join(configDir, 'skills'), 'gsd-', { includeManifest: false });
+    assert.strictEqual(owns('gsd-real-5161'), true, 'precondition: the marker source was read');
+    assert.strictEqual(owns('gsd-phantom-union-5161'), false, 'only a regular .md file names a first-party stem');
+  });
+
   test('installOpencodeFamilySkills does not own a raw-dir DIRECTORY named like a command', (t) => {
     const configDir = createTempDir('gsd-5161-phantom-');
     t.after(() => cleanup(configDir));
