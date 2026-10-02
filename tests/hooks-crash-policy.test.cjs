@@ -47,6 +47,7 @@ const { runHook: runHookSeam, runNode, OUTCOME } = require('./helpers/process-se
 const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { ensureBuiltHooks } = require('../scripts/run-tests.cjs');
+const { BLOCKING_GUARD_PROBE_TIMEOUT_MS } = require('../hooks/lib/git-probe.js');
 
 const HOOKS_DIR = path.join(__dirname, '..', 'hooks');
 
@@ -209,7 +210,7 @@ const TABLE = [
     file: 'gsd-workflow-guard.js',
     stdinTimeoutMs: 3000,
     declaredOnCrash: 'allow',
-    // #3911: the force-add block depends on a bounded (2000ms) spawnSync(git
+    // #3911: the force-add block depends on a bounded (BLOCKING_GUARD_PROBE_TIMEOUT_MS) spawnSync(git
     // branch --show-current) probe — see gitProbeMayRace note on the
     // gsd-worktree-path-guard.js row above.
     gitProbeMayRace: true,
@@ -292,7 +293,7 @@ const TABLE = [
     file: 'gsd-windsurf-pre-write.js',
     stdinTimeoutMs: 10000,
     declaredOnCrash: null, // catch calls allow(undefined) directly — no HOOK_ON_CRASH declared
-    // #3911: this hook's deny path depends on bounded (2000ms) spawnSync(git,
+    // #3911: this hook's deny path depends on bounded (BLOCKING_GUARD_PROBE_TIMEOUT_MS) spawnSync(git,
     // ...) probes, same shape as gsd-worktree-path-guard.js above.
     gitProbeMayRace: true,
     allow: () => ({ payload: { tool_info: { file_path: 'nonexistent.txt' } }, cwd: os.tmpdir() }),
@@ -497,20 +498,24 @@ describe('hooks-crash-policy: C4 stdin never closes -> bounded termination, not 
 // The C2 loop above tolerates a raced timeout but cannot FORCE one: on a
 // quiet machine the git probes in gsd-worktree-path-guard.js,
 // gsd-workflow-guard.js, and gsd-windsurf-pre-write.js always answer well
-// inside their 2000ms budget, so C2 alone would never actually exercise the
+// inside their probe budget (BLOCKING_GUARD_PROBE_TIMEOUT_MS, hooks/lib/git-probe.js),
+// so C2 alone would never actually exercise the
 // undetermined-probe branch. This suite forces the timeout deterministically
 // by putting a stub `git` on PATH that sleeps past every affected hook's own
-// spawnSync timeout (2000ms) before exiting — the hook's own bounded budget,
+// spawnSync timeout (that same constant) before exiting — the hook's own bounded budget,
 // not real system load, is what triggers ETIMEDOUT, so this is reproducible
 // on any machine. Never asserts on elapsed time — only on exit code and the
 // stderr diagnostic's presence/content.
 // ---------------------------------------------------------------------------
 
 describe('hooks-crash-policy: #3911 git-probe timeout forced via a stub git -> allow WITH a diagnostic', () => {
-  // Exceeds every affected hook's own spawnSync(git, ...) timeout (2000ms) —
-  // the hook's timeout fires and kills the stub first, so this value only
-  // needs to outlast 2000ms; it is never itself asserted on.
-  const GIT_STUB_SLEEP_MS = 3000;
+  // Exceeds every affected hook's own spawnSync(git, ...) timeout — the shared
+  // BLOCKING_GUARD_PROBE_TIMEOUT_MS (#5180) — by one second. The hook's timeout
+  // fires and kills the stub first, so this value only needs to outlast that
+  // budget; it is never itself asserted on. Derived, not restated, so a change
+  // to the budget cannot leave the stub finishing inside it (no timeout, no
+  // diagnostic).
+  const GIT_STUB_SLEEP_MS = BLOCKING_GUARD_PROBE_TIMEOUT_MS + 1000;
 
   let stubDir;
 

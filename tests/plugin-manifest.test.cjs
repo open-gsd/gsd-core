@@ -26,6 +26,17 @@ const pkg = require(path.join(ROOT, 'package.json'));
 const { MANAGED_HOOKS } = require(path.join(ROOT, 'hooks', 'managed-hooks-registry.cjs'));
 const { cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { BLOCKING_GUARD_TIMEOUT_S, BLOCKING_GUARD_NAMES } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-hooks-surface.cjs'));
+
+// Host budget (seconds) a BLOCKING guard script is registered with (#3981,
+// #5180): the installer's single source, not a number restated here. Throws for
+// a script the installer does not name as a blocking guard, so an advisory hook
+// cannot be asserted at the blocking budget by mistake.
+function blockingGuardBudget(script) {
+  const name = script.replace(/\.(?:js|sh)$/, '');
+  assert.ok(BLOCKING_GUARD_NAMES.includes(name), `${name} is not a blocking guard in BLOCKING_GUARD_NAMES`);
+  return BLOCKING_GUARD_TIMEOUT_S;
+}
 
 const PLUGIN_JSON_PATH = path.join(ROOT, '.claude-plugin', 'plugin.json');
 const HOOKS_JSON_PATH  = path.join(ROOT, 'hooks', 'hooks.json');
@@ -757,7 +768,7 @@ describe('D: always-on hook contract drift guard', () => {
     assert.equal(noMatcherHooks[1].timeout, undefined, 'gsd-check-update.js must NOT have a timeout field');
   });
 
-  test('PreToolUse Write|Edit group: gsd-prompt-guard.js (timeout 5) + gsd-read-guard.js (timeout 5)', () => {
+  test('PreToolUse Write|Edit group: gsd-prompt-guard.js (blocking budget) + gsd-read-guard.js (timeout 5)', () => {
     const map = buildHookMap();
     const groups = map['PreToolUse'];
     assert.ok(groups, 'PreToolUse must be present in hooks.json');
@@ -767,12 +778,12 @@ describe('D: always-on hook contract drift guard', () => {
       `PreToolUse Write|Edit must have exactly 2 hooks; got: ${JSON.stringify(hooks)}`
     );
     assert.equal(hooks[0].script, 'gsd-prompt-guard.js', 'first hook must be gsd-prompt-guard.js');
-    assert.equal(hooks[0].timeout, 5, 'gsd-prompt-guard.js must have timeout 5');
+    assert.equal(hooks[0].timeout, blockingGuardBudget('gsd-prompt-guard.js'), 'gsd-prompt-guard.js must carry the blocking-guard budget');
     assert.equal(hooks[1].script, 'gsd-read-guard.js', 'second hook must be gsd-read-guard.js');
     assert.equal(hooks[1].timeout, 5, 'gsd-read-guard.js must have timeout 5');
   });
 
-  test('PreToolUse Write|Edit|MultiEdit group: gsd-worktree-path-guard.js (timeout 5)', () => {
+  test('PreToolUse Write|Edit|MultiEdit group: gsd-worktree-path-guard.js (blocking budget)', () => {
     const map = buildHookMap();
     const groups = map['PreToolUse'];
     assert.ok(groups, 'PreToolUse must be present in hooks.json');
@@ -782,10 +793,10 @@ describe('D: always-on hook contract drift guard', () => {
       `PreToolUse Write|Edit|MultiEdit must have exactly 1 hook; got: ${JSON.stringify(hooks)}`
     );
     assert.equal(hooks[0].script, 'gsd-worktree-path-guard.js', 'hook must be gsd-worktree-path-guard.js');
-    assert.equal(hooks[0].timeout, 5, 'gsd-worktree-path-guard.js must have timeout 5');
+    assert.equal(hooks[0].timeout, blockingGuardBudget('gsd-worktree-path-guard.js'), 'gsd-worktree-path-guard.js must carry the blocking-guard budget');
   });
 
-  test('PreToolUse Write group: gsd-write-guard.js (timeout 5)', () => {
+  test('PreToolUse Write group: gsd-write-guard.js (blocking budget)', () => {
     const map = buildHookMap();
     const groups = map['PreToolUse'];
     assert.ok(groups, 'PreToolUse must be present in hooks.json');
@@ -798,10 +809,10 @@ describe('D: always-on hook contract drift guard', () => {
       `PreToolUse Write must have exactly 1 hook; got: ${JSON.stringify(hooks)}`
     );
     assert.equal(hooks[0].script, 'gsd-write-guard.js', 'hook must be gsd-write-guard.js');
-    assert.equal(hooks[0].timeout, 5, 'gsd-write-guard.js must have timeout 5');
+    assert.equal(hooks[0].timeout, blockingGuardBudget('gsd-write-guard.js'), 'gsd-write-guard.js must carry the blocking-guard budget');
   });
 
-  test('PreToolUse Read|Grep|Bash group: gsd-secret-read-guard.js (timeout 5)', () => {
+  test('PreToolUse Read|Grep|Bash group: gsd-secret-read-guard.js (blocking budget)', () => {
     const map = buildHookMap();
     const groups = map['PreToolUse'];
     assert.ok(groups, 'PreToolUse must be present in hooks.json');
@@ -813,7 +824,7 @@ describe('D: always-on hook contract drift guard', () => {
       `PreToolUse Read|Grep|Bash must have exactly 1 hook; got: ${JSON.stringify(hooks)}`
     );
     assert.equal(hooks[0].script, 'gsd-secret-read-guard.js', 'hook must be gsd-secret-read-guard.js');
-    assert.equal(hooks[0].timeout, 5, 'gsd-secret-read-guard.js must have timeout 5');
+    assert.equal(hooks[0].timeout, blockingGuardBudget('gsd-secret-read-guard.js'), 'gsd-secret-read-guard.js must carry the blocking-guard budget');
   });
 
   test('PostToolUse Bash|Edit|Write|MultiEdit|Agent|Task group: gsd-context-monitor.js (timeout 10)', () => {

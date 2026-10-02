@@ -101,11 +101,12 @@ describe('gsd-windsurf-pre-write.js (pre_write_code guard)', () => {
       tool_info: { file_path: path.join(otherRepo, 'target.txt') },
     }, { cwd: cwdRepo });
 
-    // hooks/gsd-windsurf-pre-write.js gives every git probe a 2000 ms budget
-    // (SPAWNOPT.timeout) and, by documented design, fails OPEN (exit 0) via
+    // hooks/gsd-windsurf-pre-write.js gives every git probe the shared
+    // BLOCKING_GUARD_PROBE_TIMEOUT_MS budget (SPAWNOPT.timeout, #5180) and, by
+    // documented design, fails OPEN (exit 0) via
     // hooks/lib/git-probe.js's reportIfUndetermined() (#3911) when the probe
-    // cannot be resolved in time — its own header records a macOS CI run
-    // landing at 2084ms/2112ms/2177ms, just past the budget. This is NOT a
+    // cannot be resolved in time — git-probe.js records macOS CI runs
+    // landing at ~2.1 s, just past the former 2000 ms budget. This is NOT a
     // tolerated flake: both halves of the hook's contract are asserted below,
     // and which half applies is decided by the observed probe outcome, not
     // guessed in advance.
