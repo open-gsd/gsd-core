@@ -601,14 +601,10 @@ jobs:
     # it would only move the same cliff further out (ADR-4641 records 45m as
     # the cliff #869 and #3057 were both filed about).
     #
-    # Still no LANE_COSTS entry in tests/ci-test-job-timeout-budget.test.cjs —
-    # see that file's header: "no unit test can prove a lane fits its budget —
-    # only a real CI run measures that." Three measurements now exist (two
-    # 3-shard, one 4-shard — see the matrix comment below), but every one of
-    # them prices a layout this commit replaces, and the 4-shard one is what
-    # ruled N=4 out. The entry lands in this PR from the first real 6-shard
-    # run, citing that run id — a number scaled from a smaller layout would be
-    # exactly the stale measurement that file exists to reject.
+    # This cap is now GUARDED: #5029 gave the lane its first LANE_COSTS entry
+    # in tests/ci-test-job-timeout-budget.test.cjs (17m measured, so this cap
+    # may not drop below 26m). It had been uncovered since #4591, which is how
+    # it drifted to a 34m long pole here in the first place.
     timeout-minutes: 45
     env:
       GSD_PLUGIN_ROOT: .ci-gsd-plugin-root-disabled
