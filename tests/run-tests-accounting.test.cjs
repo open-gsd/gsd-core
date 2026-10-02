@@ -397,6 +397,25 @@ nt.test('viaprop', () => {});
     assert.equal(blockChildStdout(null), false);
   });
 
+  // The OTHER silent loss, found on CI (ci-next-health 3 of 37, ci-pr-mergeability 38 of 81 reported): a test that
+  // mocks process.stdout.write captures node:test's own report frames (Buffers written through that property)
+  // while the mock is active, so those results never reach the parent. Measured with a real test-file child:
+  // 22 tests incl. two stdout-mocking ones -> 11 frames received; with captureStringWrites -> 22.
+  test('captureStringWrites records strings and forwards report frames (Buffers) to the real write', () => {
+    const { captureStringWrites } = require('./helpers/stdio-capture.cjs');
+    const forwarded = [];
+    const stream = { write(chunk) { forwarded.push(chunk); return true; } };
+    const mockedWith = [];
+    const fakeT = { mock: { method(obj, name, impl) { mockedWith.push([obj, name]); obj[name] = impl; } } };
+    const sink = captureStringWrites(fakeT, stream);
+    stream.write('::error::boom\n');
+    const frame = Buffer.from([0xff, 0x0f, 0, 0, 0, 1, 7]);
+    stream.write(frame);
+    assert.deepEqual(sink, ['::error::boom\n'], 'the code under test is captured');
+    assert.deepEqual(forwarded, [frame], 'the report frame reaches the real write, uncaptured');
+    assert.deepEqual(mockedWith, [[stream, 'write']]);
+  });
+
   test('inside a test-file child without a ledger path the preload still loads cleanly (the blocking is independent of the ledger)', (t) => {
     const noLedger = runWithPreload(t, { context: 'child-v8', ledger: false });
     assert.equal(noLedger.r.status, 0, noLedger.r.stderr);

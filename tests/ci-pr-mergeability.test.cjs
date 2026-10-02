@@ -20,6 +20,7 @@ const fc = require('fast-check');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { captureStringWrites } = require('./helpers/stdio-capture.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const ROOT = path.join(__dirname, '..');
@@ -446,10 +447,9 @@ async function callMain(t, env, { outputPath } = {}) {
     }
   });
 
-  const stdout = [];
-  const stderr = [];
-  t.mock.method(process.stdout, 'write', (chunk) => { stdout.push(String(chunk)); return true; });
-  t.mock.method(process.stderr, 'write', (chunk) => { stderr.push(String(chunk)); return true; });
+  // Not a bare mock of process.stdout.write: that also swallows node:test's own report frames (see helper).
+  const stdout = captureStringWrites(t, process.stdout);
+  const stderr = captureStringWrites(t, process.stderr);
 
   const code = await main([]);
   return { code, stdout: stdout.join(''), stderr: stderr.join('') };
