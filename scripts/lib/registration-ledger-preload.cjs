@@ -44,9 +44,12 @@
 // `ledgerCountedNothing`), and tests/run-tests-accounting.test.cjs pins the hook.
 //
 // Inert unless it is inside a test-file child (NODE_TEST_CONTEXT is set by
-// `node --test` for those, not for the runner parent) AND a ledger path was
-// supplied, so requiring it anywhere else is a no-op. Never throws into the
-// code it observes.
+// `node --test` for those, not for the runner parent), so requiring it anywhere
+// else is a no-op. There it does two things: it makes the child's stdout pipe
+// blocking (blockChildStdout: this is what stops `--test-force-exit` from
+// discarding queued results, the loss this accounting exists to detect), and,
+// when a ledger path was supplied, counts results. Never throws into the code it
+// observes.
 
 const fs = require('fs');
 const path = require('path');
@@ -98,7 +101,40 @@ function install(ledgerPath, serializerPrototype = DefaultSerializer.prototype) 
   });
 }
 
-const ledgerPath = process.env.GSD_RUN_TESTS_LEDGER_FILE;
-if (ledgerPath && process.env.NODE_TEST_CONTEXT) install(ledgerPath);
+/**
+ * Make the test-file child's stdout (the pipe its results travel to the `node --test` parent on)
+ * blocking, so every frame it wrote has reached the OS when the child exits.
+ *
+ * Why: the runner passes `--test-force-exit`, and node forwards it to each file child. A forced
+ * child calls process.exit() as soon as its root test ends; its stdout is a non-blocking pipe on
+ * POSIX, so frames still queued in the Socket are discarded and the parent never receives those
+ * results (nodejs/node#64833; the fix proposed there, nodejs/node#64875, does exactly this with
+ * `_handle.setBlocking(true)` at force-exit). Measured on Node 24.18 / Linux with 20 files x 300
+ * tests, `--test-force-exit --test-concurrency=8`: 5039-5139 of 6000 results reported without
+ * this, 6000 of 6000 with it (and 6000 without force-exit). Doing it at load time rather than at
+ * exit means nothing is ever queued. The Windows hang guard that force-exit exists for (#1051)
+ * is untouched. Best-effort: a stdout with no pipe handle (a file, a TTY) is left alone.
+ */
+function blockChildStdout(stdout) {
+  try {
+    const target = stdout === undefined ? process.stdout : stdout;
+    const handle = target && target._handle;
+    if (handle && typeof handle.setBlocking === 'function') {
+      handle.setBlocking(true);
+      return true;
+    }
+  } catch {
+    // Never throw into the test file this observes.
+  }
+  return false;
+}
 
-module.exports = { install, resultFileOf };
+// Inside a test-file child only (NODE_TEST_CONTEXT is set by `node --test` for those, not for the
+// runner parent): the blocking stdout needs no ledger path; the ledger count needs one.
+if (process.env.NODE_TEST_CONTEXT) {
+  blockChildStdout();
+  const ledgerPath = process.env.GSD_RUN_TESTS_LEDGER_FILE;
+  if (ledgerPath) install(ledgerPath);
+}
+
+module.exports = { install, resultFileOf, blockChildStdout };

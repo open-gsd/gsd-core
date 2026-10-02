@@ -1251,10 +1251,14 @@ function analyzeChunkEvents(eventsPath) {
   };
 }
 
-// #4031: per-file test accounting for one chunk. `--test-force-exit` can end
-// the `node --test` parent while part of a test file's results are still
-// unread on the child's pipe, so the reporters (and this runner's own ndjson
+// #4031: per-file test accounting for one chunk. `--test-force-exit` is forwarded
+// by node to every test-file child, which calls process.exit() the moment its root
+// test ends while results are still queued in its non-blocking stdout pipe
+// (nodejs/node#64833), so the parent's reporters (and this runner's own ndjson
 // events file) never see them and the run reports a smaller count with exit 0.
+// The loss is prevented at its source (registration-ledger-preload.cjs makes the
+// child's stdout blocking; measured 6000/6000 vs ~5070/6000 on Node 24.18, Linux) and
+// this accounting stays as the loud backstop for whatever else drops results.
 // The count of results the child REGISTERED with its reporter therefore comes
 // from the child, through a channel that does not share that pipe:
 // scripts/lib/registration-ledger-preload.cjs (loaded with `--require`) counts the

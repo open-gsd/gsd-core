@@ -380,6 +380,27 @@ nt.test('viaprop', () => {});
     for (const [item, expected] of cases) assert.equal(resultFileOf(item), expected, JSON.stringify(item));
   });
 
+  // The loss itself (#4031): `--test-force-exit` is forwarded to every test-file child, whose
+  // process.exit() discards results still queued in its non-blocking stdout pipe. Measured on Node 24.18 /
+  // Linux, 20 files x 300 tests, concurrency 8: ~5070 of 6000 reported with a count-only preload, 6000 of
+  // 6000 once the child's stdout is blocking. The behavioral proof needs a real parent, so it is the
+  // runner's own accounting on a real shard; these rows pin the unit contract.
+  test('blockChildStdout: a pipe handle is made blocking; anything else is left alone and never throws', () => {
+    const { blockChildStdout } = require('../scripts/lib/registration-ledger-preload.cjs');
+    const calls = [];
+    assert.equal(blockChildStdout({ _handle: { setBlocking: (v) => calls.push(v) } }), true);
+    assert.deepEqual(calls, [true], 'blocking, not toggled');
+    assert.equal(blockChildStdout({}), false, 'a stream with no handle (a file) is left alone');
+    assert.equal(blockChildStdout({ _handle: {} }), false, 'a handle without setBlocking is left alone');
+    assert.equal(blockChildStdout({ _handle: { setBlocking: () => { throw new Error('EBADF'); } } }), false, 'a throwing handle is swallowed');
+    assert.equal(blockChildStdout(null), false);
+  });
+
+  test('inside a test-file child without a ledger path the preload still loads cleanly (the blocking is independent of the ledger)', (t) => {
+    const noLedger = runWithPreload(t, { context: 'child-v8', ledger: false });
+    assert.equal(noLedger.r.status, 0, noLedger.r.stderr);
+  });
+
   test('it is inert outside a test-file child and without a ledger path', (t) => {
     const noContext = runWithPreload(t, { context: null, ledger: true });
     assert.equal(noContext.r.status, 0, noContext.r.stderr);
