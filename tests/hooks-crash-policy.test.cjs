@@ -45,7 +45,7 @@ const os = require('node:os');
 const { createTempDir, cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
 const { runHook: runHookSeam, runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { PROBE_TIMEOUT_MS, STAGED_HOOK_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { ensureBuiltHooks } = require('../scripts/run-tests.cjs');
 const { BLOCKING_GUARD_PROBE_TIMEOUT_MS } = require('../hooks/lib/git-probe.js');
 
@@ -72,9 +72,12 @@ function baseEnv(extra = {}) {
 /**
  * Run a hook with a payload on stdin (or, for C4, no `input` key at all —
  * see below). Thin wrapper over the process-seam so every case in this file
- * shares one spawn path and one required timeout.
+ * shares one spawn path and one required timeout. The default is the
+ * staged-hook class bound: the git-probing guards in this table run up to 3
+ * sequential probes of BLOCKING_GUARD_PROBE_TIMEOUT_MS plus node start/kill
+ * overhead, which the quick/probe classes cannot hold on a starved runner.
  */
-function runHook(name, { payload, cwd, env, timeoutMs = 15000 } = {}) {
+function runHook(name, { payload, cwd, env, timeoutMs = STAGED_HOOK_SCRIPT_TIMEOUT_MS } = {}) {
   const opts = { env: baseEnv(env), timeoutMs };
   if (cwd !== undefined) opts.cwd = cwd;
   if (payload !== undefined) {
