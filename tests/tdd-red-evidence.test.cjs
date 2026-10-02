@@ -162,6 +162,14 @@ describe('classifyRedEvidence (#3770)', () => {
     assert.equal(result.verdict, 'INVALID_RED');
     assert.equal(result.reason, 'invalid_record');
   });
+
+  test('#4692: an exit code that is not a non-negative integer is an invalid record', () => {
+    for (const exitCode of [-1, 1.5, '1', null]) {
+      const result = classifyRedEvidence(validRedInput({ exitCode }));
+      assert.equal(result.reason, 'invalid_record', JSON.stringify(exitCode));
+    }
+    assert.equal(classifyRedEvidence(validRedInput({ exitCode: 137 })).verdict, 'RED_EVIDENCE_OK');
+  });
 });
 
 // ─── Persisted record (acceptance: command, exit code, failing test, expected, actual) ──
