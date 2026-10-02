@@ -54,6 +54,19 @@ for (const [format, targetTest, verdict, reason] of [
   });
 }
 
+for (const [name, exitCode, reason] of [
+  ['vitest-no-tests.tap', 1, 'zero_tests_discovered'],
+  ['vitest-load-error.tap', 1, 'fixture_or_load_failure'],
+  ['vitest-green.tap', 0, 'unexpected_green'],
+]) {
+  test(`#4692: real Vitest ${name} is ${reason}`, () => {
+    const result = classifyRedEvidence(input(fixture(name), { exitCode }));
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, reason);
+    assert.deepEqual(result.evidence.report_errors, []);
+  });
+}
+
 test('#4692: a real unittest import failure is a load failure, never RED', () => {
   const result = classifyRedEvidence({
     command: 'python3 -m unittest discover -s tests -v', exitCode: 1,

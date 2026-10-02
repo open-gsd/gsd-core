@@ -15,6 +15,10 @@ describe('email validation', () => {
 
 - `vitest.tap`: `vitest run evidence.test.js --reporter=tap`
 - `vitest-flat.tap`: `vitest run evidence.test.js --reporter=tap-flat`
+- `vitest-no-tests.tap`, `vitest-load-error.tap`, `vitest-green.tap` (captured
+  2026-10-02, same versions): `vitest run --reporter=tap` on a path with no test
+  file (exit 1), on a file that imports a missing module (exit 1), and on the
+  suite above with both tests passing (exit 0).
 - `node.tap`: `node --test --test-reporter=tap evidence.node.cjs`, with the same
   suite/test names, `node:test`'s `describe`/`it`, and `node:assert/strict`'s
   `assert.equal(1, 2)` / `assert.equal(1, 1)`.

@@ -1,0 +1,9 @@
+TAP version 13
+1..1
+not ok 1 - crash/evidence.test.js
+    ---
+    error:
+        name: "Error"
+        message: "Cannot find module './missing.js' imported from /tmp/cap-vitest/crash/evidence.test.js"
+    at: "/tmp/cap-vitest/crash/evidence.test.js:2:1"
+    ...

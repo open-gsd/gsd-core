@@ -1,0 +1,10 @@
+TAP version 13
+1..1
+ok 1 - green/evidence.test.js # time=1.90ms {
+    1..1
+    ok 1 - email validation # time=1.30ms {
+        1..2
+        ok 1 - rejects empty email # time=0.89ms
+        ok 2 - accepts valid email # time=0.13ms
+    }
+}
