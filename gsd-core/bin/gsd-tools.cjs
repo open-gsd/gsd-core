@@ -1437,8 +1437,13 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // Silent no-op when the section is absent or the table is already canonical
     // — the quick/fast workflows call this before their first append, so the
     // migration runs exactly once, on the first quick run, unprompted otherwise.
-    const statePath = path.join(cwd, '.planning', 'STATE.md');
+    const { planningDir } = require('./lib/planning-workspace.cjs');
+    const planningPath = planningDir(cwd);
+    const statePath = path.join(planningPath, 'STATE.md');
     if (!fs.existsSync(statePath)) {
+      if (planningPath !== path.join(cwd, '.planning')) {
+        throw new ExitError(1, `quick-tasks-migrate: STATE.md not found at ${statePath}`);
+      }
       output({ ok: true, migrated: false, reason: `STATE.md not found at ${statePath}` }, raw);
       return;
     }
@@ -1511,7 +1516,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             || (qtaQuickId && qtaSlug ? `[${qtaQuickId}-${qtaSlug}](./quick/${qtaQuickId}-${qtaSlug}/)` : undefined);
           const qtaStatus = qtaParsed['status'] || undefined;
 
-          const statePath = path.join(cwd, '.planning', 'STATE.md');
+          const { planningDir } = require('./lib/planning-workspace.cjs');
+          const statePath = path.join(planningDir(cwd), 'STATE.md');
           if (!fs.existsSync(statePath)) {
             error(`quick-tasks-append: STATE.md not found at ${statePath}`, ERROR_REASON.USAGE);
           }
