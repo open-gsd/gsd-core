@@ -47,7 +47,7 @@ function buildProbeSource(hookPath) {
     'cp.spawn = function stubSpawn(command, args, opts) {',
     '  spawned = true;',
     '  capturedEnv = (opts && opts.env) || null;',
-    '  return { unref: function () {} };',
+    '  return { on: function () { return this; }, unref: function () {} };',
     '};',
     `require(${JSON.stringify(hookPath)});`,
     'const result = {',

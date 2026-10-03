@@ -38,6 +38,7 @@ module.exports = {
   "tests/check-tdd-review-checkpoint-e2e.test.cjs",
   "tests/check-ui-safety-gate.test.cjs",
   "tests/check-update-config-dir.test.cjs",
+  "tests/check-update-fail-open.test.cjs",
   "tests/chunked-planning-parallel.test.cjs",
   "tests/ci-docs-guard-registry.test.cjs",
   "tests/ci-rebase-check.test.cjs",

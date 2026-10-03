@@ -59,26 +59,32 @@ const cacheFile = path.join(cacheDir, updateCacheFileName);
 const projectVersionFile = path.join(projectConfigDir, 'gsd-core', 'VERSION');
 const globalVersionFile = path.join(globalConfigDir, 'gsd-core', 'VERSION');
 
-// Ensure cache directory exists
-if (!fs.existsSync(cacheDir)) {
+// This background check is advisory. Cache or worker failures must not make
+// the SessionStart hook fail. Recursive mkdir is safe if another session
+// creates the directory concurrently.
+try {
   fs.mkdirSync(cacheDir, { recursive: true });
+
+  // Run check in background via a dedicated worker script.
+  // Spawning a file (rather than node -e '<inline code>') keeps the worker logic
+  // in plain JS with no template-literal regex-escaping concerns, and makes the
+  // worker independently testable.
+  const workerPath = path.join(__dirname, 'gsd-check-update-worker.js');
+  const child = spawn(process.execPath, [workerPath], {
+    stdio: 'ignore',
+    windowsHide: true,
+    detached: true,  // Required on Windows for proper process detachment
+    env: {
+      ...process.env,
+      GSD_CACHE_FILE: cacheFile,
+      GSD_PROJECT_VERSION_FILE: projectVersionFile,
+      GSD_GLOBAL_VERSION_FILE: globalVersionFile,
+    },
+  });
+
+  // A spawn failure can also arrive asynchronously on the child process.
+  child.on('error', () => {});
+  child.unref();
+} catch {
+  // Update hints are best effort; a failed check must not interrupt startup.
 }
-
-// Run check in background via a dedicated worker script.
-// Spawning a file (rather than node -e '<inline code>') keeps the worker logic
-// in plain JS with no template-literal regex-escaping concerns, and makes the
-// worker independently testable.
-const workerPath = path.join(__dirname, 'gsd-check-update-worker.js');
-const child = spawn(process.execPath, [workerPath], {
-  stdio: 'ignore',
-  windowsHide: true,
-  detached: true,  // Required on Windows for proper process detachment
-  env: {
-    ...process.env,
-    GSD_CACHE_FILE: cacheFile,
-    GSD_PROJECT_VERSION_FILE: projectVersionFile,
-    GSD_GLOBAL_VERSION_FILE: globalVersionFile,
-  },
-});
-
-child.unref();
