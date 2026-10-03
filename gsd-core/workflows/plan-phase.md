@@ -729,7 +729,7 @@ prohibition recall in the planner). Pass `$COVERAGE` and `$SPECLESS_FALLBACK_DIS
 ## 7.99. Bounded Stall-Detection Helpers (#2650)
 
 Read+execute `gsd-core/workflows/plan-phase/steps/stall-detection-helpers.md` (defines
-`gsd_stall_watch`/`gsd_receipt_path`/`gsd_return_marker`, and how `{receipt}` below is bound;
+watch helpers; pre-dispatch, `{receipt}` = `gsd_receipt_path "${PHASE_DIR}" <spawn>`;
 independent of the teams-status guard above, AC2).
 
 ## 8. Spawn gsd-planner Agent
@@ -958,7 +958,7 @@ Agent(
 )
 ```
 
-**ORCHESTRATOR RULE — ALL RUNTIMES (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** before dispatch bind `{receipt}` via `gsd_receipt_path "${PHASE_DIR}" planner`, `TS=$(date +%s)`; repeat `PLANNER_STALL_RESULT=$(gsd_stall_watch "$TS" "{receipt}" "${PHASE_DIR}"'/*-PLAN.md' "## PLANNING COMPLETE" "## PHASE SPLIT RECOMMENDED" "## ⚠ Source Audit" "## CHECKPOINT REACHED" "## PLANNING INCONCLUSIVE")` while waiting/active — `marker_received` -> step 9; `stalled` -> 9a.
+**ORCHESTRATOR RULE — ALL RUNTIMES (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** (`planner`) `TS=$(date +%s)`; repeat `PLANNER_STALL_RESULT=$(gsd_stall_watch "$TS" "{receipt}" "${PHASE_DIR}"'/*-PLAN.md' "## PLANNING COMPLETE" "## PHASE SPLIT RECOMMENDED" "## ⚠ Source Audit" "## CHECKPOINT REACHED" "## PLANNING INCONCLUSIVE")` while waiting/active — `marker_received` -> step 9; `stalled` -> 9a.
 
 - **`false`:** issue the same Agent() call but omit `run_in_background`; await its ordinary runtime-native completion and pass the real returned result to step 9. Skip `gsd_stall_watch` entirely. This is not fire-and-forget; empty, truncated, or unrecognized returns still use step 9a.
 
@@ -1098,15 +1098,14 @@ Agent(
 **Dispatch/wait gate — `PLANNER_STALL_DETECTION_ENABLED`:**
 - **`true` (default):** use `run_in_background=true` in the Agent() call above, then use `gsd_stall_watch` below.
 
-**ORCHESTRATOR RULE — ALL RUNTIMES (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** before dispatch bind `{receipt}` via `gsd_receipt_path "${PHASE_DIR}" checker`, `TS=$(date +%s)`; repeat `CHECKER_STALL_RESULT=$(gsd_stall_watch "$TS" "{receipt}" "${PHASE_DIR}"'/*-PLAN.md' "## VERIFICATION PASSED" "## ISSUES FOUND")` while waiting/active.
+**ORCHESTRATOR RULE — ALL RUNTIMES (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** (`checker`) `TS=$(date +%s)`; repeat `CHECKER_STALL_RESULT=$(gsd_stall_watch "$TS" "{receipt}" "${PHASE_DIR}"'/*-PLAN.md' "## VERIFICATION PASSED" "## ISSUES FOUND")` while waiting/active.
 
 - **`false`:** issue the same Agent() call but omit `run_in_background`; await its ordinary runtime-native completion and pass the real returned result to step 11. Skip `gsd_stall_watch` entirely. Treat a recognized returned marker exactly like `marker_received`; empty, truncated, or unrecognized returns still use step 11a.
 
 ## 11. Handle Checker Return
 
-On `marker_received`, route on `gsd_return_marker "{receipt}" "## VERIFICATION PASSED" "## ISSUES FOUND"`:
-- **`## VERIFICATION PASSED`:** Display confirmation, proceed to step 13.
-- **`## ISSUES FOUND`:** Display issues, check iteration count, proceed to step 12 (issue list from the full return; if missing, never 0: 11a).
+- **`marker_received` + `## VERIFICATION PASSED`:** Display confirmation, proceed to step 13.
+- **`marker_received` + `## ISSUES FOUND`:** Display issues, check iteration count, proceed to step 12 (no issue list: 11a).
 - **`stalled`:** Automatically surface 11a's recovery choice (Accept verification / Retry checker / Stop) — no manual interrupt needed.
 - **Empty / truncated / no recognized marker:** → Filesystem fallback (step 11a).
 
@@ -1197,7 +1196,7 @@ Agent(
 **Dispatch/wait gate — `PLANNER_STALL_DETECTION_ENABLED`:**
 - **`true` (default):** use `run_in_background=true` in the Agent() call above, then use `gsd_stall_watch` below.
 
-**ORCHESTRATOR RULE — ALL RUNTIMES (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** before dispatch bind `{receipt}` via `gsd_receipt_path "${PHASE_DIR}" revision`, `TS=$(date +%s)`; repeat `PLANNER_STALL_RESULT=$(gsd_stall_watch "$TS" "{receipt}" "${PHASE_DIR}"'/*-PLAN.md' "## REVISION COMPLETE" "## REVISION_CONFLICT")` while waiting/active — `marker_received` -> the return handling below; `stalled` -> 1) Accept as revised, to step 13, 2) Retry, 3) Stop.
+**ORCHESTRATOR RULE — ALL RUNTIMES (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** (`revision`) `TS=$(date +%s)`; repeat `PLANNER_STALL_RESULT=$(gsd_stall_watch "$TS" "{receipt}" "${PHASE_DIR}"'/*-PLAN.md' "## REVISION COMPLETE" "## REVISION_CONFLICT")` while waiting/active — `marker_received` -> below; `stalled` -> 1) Accept as revised, to step 13, 2) Retry, 3) Stop.
 
 - **`false`:** issue the same Agent() call but omit `run_in_background`; await its ordinary runtime-native completion and pass the real returned result into the existing revision-return handling. Skip `gsd_stall_watch` entirely; an empty, truncated, or unrecognized result keeps the existing filesystem fallback.
 
