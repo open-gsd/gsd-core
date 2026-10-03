@@ -67,6 +67,8 @@
 //   `git check-ignore` / `git ls-files` / `git rm --cached`, and the
 //   destination of a one-source `cp`/`mv` (#4856). The #4856 carve-outs
 //   fail closed: an option they do not list withdraws them from the segment.
+//   A git global option the walker does not know also keeps the #5045 `-c`
+//   scan running over every later word (see walkGitGlobals).
 //   A shell interpreter (bash/sh/zsh/dash/ksh/su) has its script scanned
 //   whether it arrives via `-c '…'`, a `<( )` file operand, a heredoc /
 //   here-string, or a pipe from a knowable `echo`/`printf` source
@@ -178,14 +180,29 @@ const GIT_PATHSPEC_SUBCOMMANDS = new Map([
   }],
 ]);
 
-// git's global options (its own usage line, git 2.49), needed to locate the
-// subcommand. A value option consumes the next word unless written
-// `--opt=value`; an option in neither set fails closed, so a value is never
-// read as the subcommand (`git -C ls-files show HEAD:.env` runs `show`).
-const GIT_GLOBAL_VALUE_OPTIONS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env']);
+// git's global options (git.c handle_options, git 2.49) — the ONE vocabulary
+// both the #4856 pathspec exemption and the #5045 -c scan walk, via
+// walkGitGlobals. A value option consumes the next word; the long options in
+// GIT_GLOBAL_EQUALS_FORM_OPTIONS also take it attached as `--opt=value`.
+// `-C`, `-c` and the hidden `--shallow-file` accept only the separate word
+// (git rejects `--shallow-file=x` and `-c<name>=<value>`), and
+// `--exec-path` runs a subcommand only as `--exec-path=<path>` (bare, it
+// prints the path and exits). Any other option fails closed for both
+// consumers: its arity is unknown, so its value could be read as the
+// subcommand (`git -C ls-files show HEAD:.env` runs `show`). The pathspec
+// exemption is withdrawn, and the -c scan keeps collecting every later
+// `-c <value>` pair instead of stopping.
+const GIT_GLOBAL_VALUE_OPTIONS = new Set([
+  '-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--attr-source',
+  '--shallow-file',
+]);
+const GIT_GLOBAL_EQUALS_FORM_OPTIONS = new Set([
+  '--git-dir', '--work-tree', '--namespace', '--config-env', '--attr-source', '--exec-path',
+]);
 const GIT_GLOBAL_FLAGS = new Set([
   '-p', '--paginate', '-P', '--no-pager', '--no-replace-objects', '--no-lazy-fetch',
   '--no-optional-locks', '--no-advice', '--bare',
+  '--literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs', '--icase-pathspecs',
 ]);
 
 // #4856: `cp`/`mv` write their destination and never print it, so a secret
@@ -775,6 +792,29 @@ function resolveCommand(words) {
   return { base: lastSegment(words[idx].text).toLowerCase(), operands: words.slice(idx + 1) };
 }
 
+/**
+ * Rescan only the command-valued -c keys selected by #5045. This deliberately
+ * does not resolve config files, --config-env/GIT_CONFIG_* values, or other
+ * executing keys (diff drivers, filters, credential helpers, ssh, gpg).
+ * Those are documented gaps, not a promise of complete Git config analysis.
+ * Global option values and subcommand arguments are data, not more -c flags.
+ */
+function scanGitConfig(operands, depth) {
+  for (const config of walkGitGlobals(operands).configs) {
+    const eq = config.indexOf('=');
+    if (eq === -1) continue;
+    const key = config.slice(0, eq).toLowerCase();
+    const value = config.slice(eq + 1);
+    let script;
+    if (key.startsWith('alias.') && value.startsWith('!')) script = value.slice(1);
+    else if (key === 'diff.external') script = value;
+    else continue;
+    const hit = findSecretRead(script, depth + 1);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 // Operand indices the segment's command consumes as a NAME, never as
 // CONTENTS (#4639, #4856). Only these positions skip the operand check;
 // every other operand is still checked, so a carve-out cannot launder a read
@@ -806,26 +846,38 @@ function isListedFlag(text, flags) {
   return /^-[A-Za-z]+$/.test(text) && [...text.slice(1)].every((ch) => flags.has(`-${ch}`));
 }
 
-// Index of git's subcommand past its global options, or -1 when an option
-// outside GIT_GLOBAL_VALUE_OPTIONS / GIT_GLOBAL_FLAGS precedes it.
-function gitSubcommandIndex(operands) {
+// Walks git's global options (see GIT_GLOBAL_VALUE_OPTIONS). `sub` is the
+// subcommand's index, or -1 when an unlisted option (or the end of the words)
+// comes first; `configs` holds every `-c` value seen on the way, in order.
+// Past an unlisted option the subcommand cannot be located, so `configs`
+// conservatively takes the word after every later `-c` as well: a read
+// still needs a command-valued key, so a harmless value stays allowed.
+function walkGitGlobals(operands) {
+  const configs = [];
   for (let k = 0; k < operands.length; k++) {
     const t = operands[k].text;
-    if (!t.startsWith('-')) return k;
-    if (GIT_GLOBAL_VALUE_OPTIONS.has(t)) { k++; continue; }
+    if (!t.startsWith('-')) return { sub: k, configs };
+    if (GIT_GLOBAL_VALUE_OPTIONS.has(t)) {
+      if (t === '-c' && k + 1 < operands.length) configs.push(operands[k + 1].text);
+      k++;
+      continue;
+    }
     if (GIT_GLOBAL_FLAGS.has(t)) continue;
     const eq = t.indexOf('=');
-    const isLongValueForm = t.startsWith('--') && eq !== -1 && GIT_GLOBAL_VALUE_OPTIONS.has(t.slice(0, eq));
-    if (!isLongValueForm) return -1;
+    if (t.startsWith('--') && eq !== -1 && GIT_GLOBAL_EQUALS_FORM_OPTIONS.has(t.slice(0, eq))) continue;
+    for (let j = k + 1; j + 1 < operands.length; j++) {
+      if (operands[j].text === '-c') configs.push(operands[++j].text);
+    }
+    return { sub: -1, configs };
   }
-  return -1;
+  return { sub: -1, configs };
 }
 
 // #4856: the pathspec operands of a GIT_PATHSPEC_SUBCOMMANDS invocation. git
 // permutes options, so one may follow a pathspec; after `--` every word is a
 // pathspec. The subcommand is matched case-sensitively, as git looks it up.
 function gitPathspecIndices(operands) {
-  const sub = gitSubcommandIndex(operands);
+  const { sub } = walkGitGlobals(operands);
   const spec = sub === -1 ? undefined : GIT_PATHSPEC_SUBCOMMANDS.get(operands[sub].text);
   if (!spec) return new Set();
   const pathspecs = new Set();
@@ -991,6 +1043,12 @@ function findSecretRead(command, depth) {
       const hit = scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth);
       if (hit) return hit;
       // `bash .env` (file mode) is caught by the operand check below.
+    }
+
+    // Git -c can carry a shell script instead of a file-name operand (#5045).
+    if ((base === 'git' || base === 'git.exe') && depth < MAX_NESTING_DEPTH) {
+      const hit = scanGitConfig(operands, depth);
+      if (hit) return hit;
     }
 
     if (NON_READING_COMMANDS.has(base)) continue;
