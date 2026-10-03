@@ -136,12 +136,12 @@ const LANE_COSTS = [
     // this figure is the slowest ROW, and that is macos-latest, not windows.
     // macOS runs the whole tier unsharded: 26m58s on run 34434252144 (the
     // figure the job header in test.yml cites) and 26m01s on run 37037251805,
-    // the worst of five green-or-complete runs on this PR (18m13s-26m01s).
+    // the worst of six green-or-complete runs on this PR (18m13s-26m01s).
     // Rounded up from the worst observation per this file's convention: 27.
     //
     // Windows is sharded SIX ways as of #5029 and its long pole is
-    // reproducibly shard 5/6: 16m38s / 15m17s / 16m25s / 16m21s / 17m22s
-    // across the five 6-shard runs. That is well under the macOS row, so
+    // reproducibly shard 5/6: 16m38s / 15m17s / 16m25s / 16m21s / 17m22s /
+    // 18m15s across the six 6-shard runs. That is well under the macOS row, so
     // resharding windows (even downward, see below) does not move this entry
     // unless a windows shard comes to outrun macOS.
     //
