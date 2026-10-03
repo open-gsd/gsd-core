@@ -2255,6 +2255,63 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
         cleanup(dir);
       }
     });
+
+    // #5048: the statusline spawns `git status` on EVERY render. Left at git's
+    // default, that read refreshes the index and takes an optional
+    // .git/index.lock to write the refreshed copy back, so a purely cosmetic
+    // render becomes a contender for the lock a real `git add`/`git commit`
+    // needs. GIT_OPTIONAL_LOCKS=0 turns off exactly that optional write and
+    // nothing else, so the segment still reports the same state.
+    describe('read-only git spawns opt out of the optional index lock (#5048)', () => {
+      // Deterministic env capture, same monkeypatch seam the two injection
+      // tests above use: readGitStatus shares the one cached child_process
+      // module object, so replacing execFileSync here records the options
+      // object without needing a real repo or a real lock race.
+      function captureGitStatusOptions() {
+        const childProcess = require('node:child_process');
+        const original = childProcess.execFileSync;
+        let captured = null;
+        childProcess.execFileSync = (file, args, options) => {
+          captured = { file, args, options };
+          return '';
+        };
+        try {
+          readGitStatus('/tmp');
+        } finally {
+          childProcess.execFileSync = original;
+        }
+        return captured;
+      }
+
+      test('readGitStatus passes GIT_OPTIONAL_LOCKS=0', () => {
+        const captured = captureGitStatusOptions();
+        assert.ok(captured, 'execFileSync was not called');
+        assert.equal(captured.file, 'git');
+        assert.equal(captured.options.env.GIT_OPTIONAL_LOCKS, '0');
+      });
+
+      test('the env inherits the parent environment, not a bare replacement', () => {
+        // A minimal { GIT_OPTIONAL_LOCKS } would drop PATH, HOME and the user's
+        // git config, breaking the spawn for reasons unrelated to the lock.
+        const captured = captureGitStatusOptions();
+        for (const key of Object.keys(process.env)) {
+          assert.deepEqual(
+            captured.options.env[key], process.env[key],
+            `env must inherit ${key} from the parent process`);
+        }
+      });
+
+      test('the command and its bounds are unchanged', () => {
+        // Only the env may change: a different argv or a dropped timeout /
+        // maxBuffer would be a behavior change smuggled in under this fix.
+        const captured = captureGitStatusOptions();
+        assert.deepEqual(captured.args, ['-C', '/tmp', 'status', '--porcelain=v2', '--branch']);
+        assert.equal(captured.options.encoding, 'utf8');
+        assert.equal(captured.options.timeout, 1500);
+        assert.equal(captured.options.maxBuffer, 8 * 1024 * 1024);
+        assert.equal(captured.options.windowsHide, true);
+      });
+    });
   });
 
   describe('composeStatusline gitSuffix placement', () => {

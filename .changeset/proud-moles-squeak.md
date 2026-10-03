@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 5127
+---
+**A read-only `git` call can no longer fail someone else's commit with `Unable to create '.git/index.lock': File exists`** — several read-only commands refresh the index and take an *optional* `.git/index.lock` to write the refreshed copy back, which contends for the lock a real `git add` / `git commit` needs. Every read-only git spawn now passes `GIT_OPTIONAL_LOCKS=0`: the shared `execGit` seam, smart-entry's per-invocation `git status` phase probe, the statusline's per-render `git status`, and the variable-argv git helpers in pristine-baseline and both pre-write guard hooks. `tests/git-optional-locks-parity.test.cjs` drives each of those seams with `node:child_process` intercepted and asserts on the env that reaches the OS, and separately shows against a real repo that the variable changes what git does — a stale-index repo whose `.git/index` stays byte-identical with the variable set and is rewritten without it.

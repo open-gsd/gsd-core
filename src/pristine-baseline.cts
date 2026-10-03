@@ -142,6 +142,14 @@ export function gitExec(gitDir: string, args: string[]): string {
   return execFileSync('git', args, {
     cwd: gitDir,
     encoding: 'utf8',
+    // #5048: GIT_OPTIONAL_LOCKS=0. Every call here is a history/objects walk
+    // (`log --format=%H -- <path>`, `show <commit>:<path>`), which never opens
+    // the index, so the variable is inert for them today. It is set anyway so
+    // the read-only invariant has no holes: a future `status` / `diff` caller
+    // added to this helper inherits the protection instead of silently
+    // reintroducing the optional-index-lock race.
+    // Parity: tests/git-optional-locks-parity.test.cjs.
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
     timeout: GIT_SUBPROCESS_TIMEOUT_MS,
     maxBuffer: GIT_MAX_BUFFER_BYTES,
     // windowsHide (#685): a console-window flash per git call would spam the
