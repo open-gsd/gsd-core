@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "count": 297,
+  "count": 301,
   "classes": {
     "ARCH": 1,
     "CI": 2,
@@ -19,7 +19,7 @@
     "PROHIB": 10,
     "RELEASE-NOTES": 31,
     "RULESET": 61,
-    "SEAM": 24,
+    "SEAM": 28,
     "SESSION": 9,
     "WAVE": 5,
     "WORKSTREAM": 5,
@@ -1255,6 +1255,26 @@
       "id": "SEAM.evaluation-scope.owns",
       "klass": "SEAM",
       "value": "resolveEvaluationScope(projectDir, unit, options) (src/gate-evaluation-scope.cts) is the single owner of which commits and files a gate or workflow step evaluates (ADR-5057 §4, #5164)"
+    },
+    {
+      "id": "SEAM.gate-evidence.enforced-by",
+      "klass": "SEAM",
+      "value": "test:tests/gate-evidence.test.cjs"
+    },
+    {
+      "id": "SEAM.gate-evidence.owns",
+      "klass": "SEAM",
+      "value": "Evidence<T> / readTextEvidence / readDirEvidence / verdictFromEvidence (src/gate-evidence.cts) is the single owner of found-versus-none-versus-unreadable for a gate read (ADR-5057 §4, #5170)"
+    },
+    {
+      "id": "SEAM.gate-exit.enforced-by",
+      "klass": "SEAM",
+      "value": "test:tests/gate-exit.test.cjs"
+    },
+    {
+      "id": "SEAM.gate-exit.owns",
+      "klass": "SEAM",
+      "value": "gateExitOutcome / declareGateExit (src/gate-exit.cts) is the single owner of the exit status a gate verdict projects to; declareOutcome (src/cli-exit.cts) is the only writer of the pending-outcome cell besides output() (ADR-5057 §4, #5170)"
     },
     {
       "id": "SEAM.gate-verdict.enforced-by",
