@@ -4893,4 +4893,45 @@ describe('C1 (ADR-4629 §8.1): StateWriteIntent type surface', () => {
   test('createStateWriteIntent rejects an absent base transaction (construction failure, per §8.6 posture)', () => {
     assert.throws(() => createStateWriteIntent(null, { scope: 'narrow' }), /transaction/i);
   });
+
+  // C2 (#4866, ADR-4629 §8.2): an assertion may name a whole body SECTION and carry
+  // its intended post-value. Both are optional, so a C1-shaped assertion stays
+  // exactly { field, requirement } (no undefined keys leak into the frozen shape).
+  test('createStateWriteIntent carries C2 target/value only when set', () => {
+    const intent = createStateWriteIntent(openStateTransaction({ snapshot: {} }), {
+      assertions: [
+        { field: 'Status', requirement: 'required' },
+        { field: 'Blockers/Concerns', requirement: 'required', target: 'section', value: 'None yet.' },
+      ],
+    });
+    assert.deepStrictEqual(Object.keys(intent.assertions[0]), ['field', 'requirement']);
+    assert.deepStrictEqual({ ...intent.assertions[1] }, {
+      field: 'Blockers/Concerns', requirement: 'required', target: 'section', value: 'None yet.',
+    });
+    assert.ok(Object.isFrozen(intent.assertions[1]));
+  });
+
+  // #4935 review: §8.2 judges only `required` assertions, so a mistyped
+  // requirement (`'Required'`, `'mandatory'`) would be silently skipped (fail-open).
+  // Construction rejects it, like an unknown target; scope gets the same posture.
+  test('createStateWriteIntent rejects an unknown requirement or scope', () => {
+    const base = openStateTransaction({ snapshot: {} });
+    for (const requirement of ['Required', 'mandatory', undefined]) {
+      assert.throws(
+        () => createStateWriteIntent(base, { assertions: [{ field: 'Status', requirement }] }),
+        { code: 'STATE_WRITE_INTENT_REQUIREMENT_INVALID' },
+      );
+    }
+    assert.throws(
+      () => createStateWriteIntent(base, { scope: 'wide' }),
+      { code: 'STATE_WRITE_INTENT_SCOPE_INVALID' },
+    );
+    // Twins: both known values of each still construct.
+    for (const requirement of ['required', 'best-effort']) {
+      assert.strictEqual(createStateWriteIntent(base, { assertions: [{ field: 'Status', requirement }] }).assertions[0].requirement, requirement);
+    }
+    for (const scope of ['narrow', 'broad']) {
+      assert.strictEqual(createStateWriteIntent(base, { scope }).scope, scope);
+    }
+  });
 });
