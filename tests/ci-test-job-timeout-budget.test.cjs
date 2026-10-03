@@ -123,6 +123,39 @@ const LANE_COSTS = [
     // convention.
     evidence: 'run 32260569855 — 65s, macos-latest push (full matrix)',
   },
+  {
+    job: 'test-conformance',
+    measuredMinutes: 27,
+    // #5029: the first entry this lane has had. It ran uncovered from #4591
+    // until now on the comment "no LANE_COSTS entry exists yet for this
+    // brand-new job — generous until a real measurement exists", and that gap
+    // is what let it drift to a 34m long pole against its 45m cap and start
+    // cancelling shards whose every chunk passed (#4935).
+    //
+    // GitHub applies ONE job-level budget across every matrix combination, so
+    // this figure is the slowest ROW, and that is macos-latest, not windows.
+    // macOS runs the whole tier unsharded: 26m58s on run 34434252144 (the
+    // figure the job header in test.yml cites) and 26m01s on run 37037251805,
+    // the worst of six green-or-complete runs on this PR (18m13s-26m01s).
+    // Rounded up from the worst observation per this file's convention: 27.
+    //
+    // Windows is sharded SIX ways as of #5029 and its long pole is
+    // reproducibly shard 5/6: 16m38s / 15m17s / 16m25s / 16m21s / 17m22s /
+    // 18m15s across the six 6-shard runs. That is well under the macOS row, so
+    // resharding windows (even downward, see below) does not move this entry
+    // unless a windows shard comes to outrun macOS.
+    //
+    // Why six shards and not fewer, in budget terms: measured windows long
+    // poles were 34m24s at 3 shards (run 36322513056) and 30m17s at 4 (run
+    // 36349891343), requiring 53m and 47m against a 45m cap. Raising the cap
+    // was ruled out by #5029 — ADR-4641 records 45m as the cliff #869 and #3057
+    // were filed about — so the split moved instead. #5071 -> #5097 has since
+    // priced Windows files by Windows measurements, which collapsed shard
+    // imbalance to 1.01-1.02; if this lane is ever resharded downward on the
+    // strength of that, re-measure the windows long pole from that run and
+    // raise this entry if it now exceeds macOS, rather than scaling a figure.
+    evidence: 'run 37037251805 — macos-latest 26m01s (binding row; windows long pole 17m22s, shard 5/6); 26m58s on run 34434252144 is the worst macOS observation this figure covers',
+  },
 ];
 
 function requiredBudgetMinutes(measuredMinutes, headroomFactor = HEADROOM_FACTOR) {
