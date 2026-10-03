@@ -6,7 +6,7 @@
     ".planning/phases/01-decisions/CONTEXT-partial.md"
   ],
   "fixture": "dc",
-  "stdout": "{\n  \"skipped\": false,\n  \"blocking\": false,\n  \"reason\": \"could-not-parse\",\n  \"total\": 1,\n  \"honored\": 0,\n  \"not_honored\": [],\n  \"message\": \"Decision coverage verify (warning): decisions could not be fully parsed — one or more `- **D-NN ...**` bullets appear malformed (missing `:` or ` — ` separator, or a phase prefix that is not a digit run). Fix the bullet format in the CONTEXT.md decisions block.\"\n}",
+  "stdout": "{\n  \"skipped\": false,\n  \"blocking\": false,\n  \"reason\": \"could-not-parse\",\n  \"total\": null,\n  \"honored\": null,\n  \"not_honored\": [],\n  \"message\": \"Decision coverage verify (warning): decisions could not be fully parsed — one or more `- **D-NN ...**` bullets appear malformed (missing `:` or ` — ` separator, or a phase prefix that is not a digit run). Fix the bullet format in the CONTEXT.md decisions block.\"\n}",
   "stderr": "parseDecisions: ignored unparseable decision bullet: - **D4x-01:** Malformed prefix\n",
   "exitCode": 0
 }

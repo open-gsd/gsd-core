@@ -100,7 +100,7 @@ const CASES = [
   },
   {
     id: 'U2d',
-    title: 'partial parse -> could-not-parse advisory, total counts extracted decisions',
+    title: 'partial parse -> could-not-parse advisory, total null (nothing measured)',
     stderrPrefix: 'parseDecisions:',
     setup(dir, h) {
       h.w(dir, '.planning/phases/01-x/01-CONTEXT.md', ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '- **D4x-01:** malformed id', '</decisions>', ''].join('\n'));
@@ -113,8 +113,8 @@ const CASES = [
         skipped: false,
         blocking: false,
         reason: 'could-not-parse',
-        total: 1,
-        honored: 0,
+        total: null,
+        honored: null,
         not_honored: [],
         message: 'Decision coverage verify (warning): decisions could not be fully parsed — one or more `- **D-NN ...**` bullets appear malformed (missing `:` or ` — ` separator, or a phase prefix that is not a digit run). Fix the bullet format in the CONTEXT.md decisions block.',
       };
@@ -122,7 +122,7 @@ const CASES = [
   },
   {
     id: 'U2e',
-    title: 'full miss parse -> could-not-parse advisory, total 0',
+    title: 'full miss parse -> could-not-parse advisory, total null',
     setup(dir, h) {
       h.w(dir, '.planning/phases/01-x/01-CONTEXT.md', ['<decisions>', '- **DEC-01:** Unsupported id grammar', '</decisions>', ''].join('\n'));
     },
@@ -134,8 +134,8 @@ const CASES = [
         skipped: false,
         blocking: false,
         reason: 'could-not-parse',
-        total: 0,
-        honored: 0,
+        total: null,
+        honored: null,
         not_honored: [],
         message: 'Decision coverage verify (warning): could not parse decisions — possible format mismatch. Check the formatting of the CONTEXT.md decisions block (accepted forms: `- **D-NN:** text`, `- **D4-NN:** text` (phase-prefixed), `- **D-NN — title** body`).',
       };

@@ -39,7 +39,11 @@ fi
 ```
 
 The handler returns JSON `{ skipped, blocking: false, total, honored,
-not_honored: [...], message }`. A non-zero `DECISION_EXIT` (`69` `UNAVAILABLE`: the gate
+not_honored: [...], message }`, plus `reason` on a skip or a caller error. On a
+caller error (`reason` is `'could-not-parse'`, `'phase directory not found'`,
+`'phase path is not a directory'` or `'phase directory unreadable'`), `total`
+and `honored` are `null` and `not_honored` is `[]`:
+nothing was checked, so there is no count to report. A non-zero `DECISION_EXIT` (`69` `UNAVAILABLE`: the gate
 could not read CONTEXT.md or the phase artifacts, #5170) is **not** "no decisions": record
 `Decision coverage: not evaluated (the gate could not read its evidence)` in VERIFICATION.md
 and do not report counts.
@@ -49,6 +53,8 @@ section) to VERIFICATION.md regardless of outcome — even when all
 decisions are honored, recording the count helps reviewers spot drift over
 time. Set `decision_coverage` in the verification result to
 `{honored, total, not_honored: [...]}` so downstream tooling can read it.
+On a caller error that is `{honored: null, total: null, not_honored: []}`;
+pass the nulls through rather than coercing them to `0`.
 
 **Status impact:** none. The decision gate does NOT influence the
 `gaps_found` / `human_needed` / `passed` decision tree in Step 9. Its

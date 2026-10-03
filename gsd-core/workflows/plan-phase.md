@@ -1373,6 +1373,10 @@ The handler returns JSON:
   "uncovered": [{ "id": "D-01", "text": "...", "category": "..." }], "message": "..." }
 ```
 
+On a caller error (non-file context, `could-not-parse`, bad phase dir)
+`total` and `covered` are `null`, `uncovered` is omitted, `passed` stays
+`false`. A missing context argument answers `total: 0`.
+
 **If `passed` is true (or `skipped` is true):** Display
 `✓ Decision coverage: {M}/{N} decisions covered` (or `(skipped)`) and proceed
 to step 13b.
