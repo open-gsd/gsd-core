@@ -144,10 +144,10 @@ gsd_run query commit "docs({phase}-{plan}): complete [plan-name] plan" --files .
 </format>
 
 <format name="handoff">
-## Handoff (WIP)
+## Handoff (Pause)
 
 ```
-wip: [phase-name] paused at task [X]/[Y]
+docs(pause): [phase-name] paused at task [X]/[Y]
 
 Current: [task name]
 [If blocked:] Blocked: [reason]
@@ -156,7 +156,7 @@ Current: [task name]
 What to commit:
 
 ```bash
-gsd_run query commit "wip: [phase-name] paused at task [X]/[Y]" --files .planning/
+gsd_run query commit "docs(pause): [phase-name] paused at task [X]/[Y]" --files .planning/
 ```
 
 </format>

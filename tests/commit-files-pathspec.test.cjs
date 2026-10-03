@@ -2652,7 +2652,7 @@ describe('workflow call sites declare --files (#2269)', () => {
     // A bracketed metavariable as the --files VALUE is a real invocation too
     // (pause-work.md carries `--files [handoff-path]` live) — only a bracketed
     // FLAG marks synopsis notation.
-    const metavarValue = 'gsd_run query commit "wip: [context-name] paused" --files [handoff-path]';
+    const metavarValue = 'gsd_run query commit "docs(pause): [context-name] paused" --files [handoff-path]';
     const mvCands = invocationCandidates(metavarValue);
     assert.strictEqual(mvCands.length, 1, 'a metavariable VALUE must not exempt a real invocation');
     assert.ok(hasScopedFiles(mvCands[0]), 'a bracketed value is still a value');

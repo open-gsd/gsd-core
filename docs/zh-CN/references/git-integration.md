@@ -137,10 +137,10 @@ gsd-tools.cjs query commit "docs({phase}-{plan}): complete [plan-name] plan" --f
 </format>
 
 <format name="handoff">
-## 交接（WIP）
+## 交接（暂停）
 
 ```
-wip: [phase-name] paused at task [X]/[Y]
+docs(pause): [phase-name] paused at task [X]/[Y]
 
 Current: [task name]
 [如果阻塞:] Blocked: [reason]
@@ -149,7 +149,7 @@ Current: [task name]
 提交内容：
 
 ```bash
-gsd-tools.cjs query commit "wip: [phase-name] paused at task [X]/[Y]" --files .planning/
+gsd-tools.cjs query commit "docs(pause): [phase-name] paused at task [X]/[Y]" --files .planning/
 ```
 
 </format>
