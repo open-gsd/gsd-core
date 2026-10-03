@@ -459,7 +459,7 @@ describe('bug #3739 — gap-analysis padded-prefix CONTEXT.md', () => {
   }
 
   function ensureConfig() {
-    const r = runGsdTools('config-ensure-section', tmpDir);
+    const r = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
     assert.ok(r.success, `config-ensure-section failed: ${r.error}`);
   }
 

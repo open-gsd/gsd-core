@@ -310,7 +310,7 @@ describe('gap-analysis --phase-req-ids scoping (#447)', () => {
     tmpDir = createTempProject();
     phaseDir = path.join(tmpDir, '.planning', 'phases', '01-test');
     fs.mkdirSync(phaseDir, { recursive: true });
-    const r = runGsdTools('config-ensure-section', tmpDir);
+    const r = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
     assert.ok(r.success, `config-ensure-section failed: ${r.error}`);
   });
 
@@ -617,7 +617,7 @@ describe('#1269 — gap-analysis --phase-req-ids range (integration)', () => {
     tmpDir = createTempProject();
     phaseDir = path.join(tmpDir, '.planning', 'phases', '01-test');
     fs.mkdirSync(phaseDir, { recursive: true });
-    const r = runGsdTools('config-ensure-section', tmpDir);
+    const r = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
     assert.ok(r.success, `config-ensure-section failed: ${r.error}`);
   });
 

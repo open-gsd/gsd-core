@@ -41,7 +41,7 @@ describe('workflow.compact_content config (#4139)', () => {
 
   beforeEach(() => {
     tmpDir = createTempProject();
-    runGsdTools('config-ensure-section', tmpDir);
+    runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
   });
   afterEach(() => { cleanup(tmpDir); });
 

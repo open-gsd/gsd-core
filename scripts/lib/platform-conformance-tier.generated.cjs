@@ -8,6 +8,7 @@ module.exports = {
   "tests/agent-install-check.test.cjs",
   "tests/agent-install-validation.test.cjs",
   "tests/agent-skills.test.cjs",
+  "tests/ai-evals.test.cjs",
   "tests/antigravity-upgrades.test.cjs",
   "tests/api-coverage-gate-e2e.test.cjs",
   "tests/api-coverage.test.cjs",

@@ -20,7 +20,7 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, homeSandboxEnv, createTempDir, createTempProject, cleanup, withIsolatedProcessState } = require('./helpers.cjs');
 
 const REPO_ROOT      = path.join(__dirname, '..');
 const AGENTS_DIR     = path.join(REPO_ROOT, 'agents');
@@ -33,6 +33,10 @@ const REFERENCES_DIR = path.join(REPO_ROOT, 'gsd-core', 'references');
 
 function readConfig(tmpDir) {
   return JSON.parse(fs.readFileSync(path.join(tmpDir, '.planning', 'config.json'), 'utf-8'));
+}
+
+function seedAiEvalConfig(tmpDir) {
+  return runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
 }
 
 function writeConfig(tmpDir, obj) {
@@ -62,7 +66,7 @@ describe('CONFIG: workflow.ai_integration_phase default', () => {
   afterEach(() => { cleanup(tmpDir); });
 
   test('config-ensure-section includes workflow.ai_integration_phase as boolean', () => {
-    const result = runGsdTools('config-ensure-section', tmpDir);
+    const result = seedAiEvalConfig(tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = readConfig(tmpDir);
@@ -71,9 +75,31 @@ describe('CONFIG: workflow.ai_integration_phase default', () => {
   });
 
   test('workflow.ai_integration_phase defaults to true', () => {
-    runGsdTools('config-ensure-section', tmpDir);
+    seedAiEvalConfig(tmpDir);
     const config = readConfig(tmpDir);
     assert.strictEqual(config.workflow.ai_integration_phase, true, 'workflow.ai_integration_phase should default to true');
+  });
+
+  test('#5039: the seed ignores a conflicting ambient default', (t) => {
+    const ambientHome = createTempDir('gsd-5039-ambient-home-');
+    const controlDir = createTempProject('gsd-5039-control-');
+    const seededDir = createTempProject('gsd-5039-seeded-');
+    t.after(() => { cleanup(ambientHome); cleanup(controlDir); cleanup(seededDir); });
+    fs.mkdirSync(path.join(ambientHome, '.gsd'));
+    fs.writeFileSync(path.join(ambientHome, '.gsd', 'defaults.json'),
+      JSON.stringify({ workflow: { ai_integration_phase: false } }));
+
+    const [control, seeded] = withIsolatedProcessState(() => {
+      Object.assign(process.env, homeSandboxEnv(ambientHome));
+      return [runGsdTools('config-ensure-section', controlDir), seedAiEvalConfig(seededDir)];
+    });
+
+    assert.ok(control.success, `Control seed failed: ${control.error}`);
+    assert.strictEqual(readConfig(controlDir).workflow.ai_integration_phase, false,
+      'the unsandboxed control must read the ambient default');
+    assert.ok(seeded.success, `Sandboxed seed failed: ${seeded.error}`);
+    assert.strictEqual(readConfig(seededDir).workflow.ai_integration_phase, true,
+      'the sandboxed seed must retain the built-in default');
   });
 });
 
@@ -84,7 +110,7 @@ describe('CONFIG: config-set / config-get workflow.ai_integration_phase', () => 
 
   beforeEach(() => {
     tmpDir = createTempProject();
-    runGsdTools('config-ensure-section', tmpDir);
+    seedAiEvalConfig(tmpDir);
   });
 
   afterEach(() => { cleanup(tmpDir); });
