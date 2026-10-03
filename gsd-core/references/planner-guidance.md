@@ -216,6 +216,18 @@ Message list component wiring:
 
 "Where is this most likely to break?" Key links = critical connections where breakage causes cascading failures.
 
+### Key Links Field Contract
+
+| Field | Description |
+|---|---|
+| `key_links` | Critical connections between artifacts. |
+| `key_links[].from` | Source file (relative path from project root). Describe components or symbols in `via:`. |
+| `key_links[].to` | Target file (relative path from project root). Describe endpoints, APIs, or modules in `via:`. |
+| `key_links[].via` | How they connect, including any endpoint or symbol name (e.g. `fetch in useEffect — calls /api/chat`, `Prisma query via prisma.message`). |
+| `key_links[].pattern` | Optional. Regex to verify connection exists. |
+
+> **Important:** `from:` and `to:` MUST be literal, project-relative file paths. Never place functions, symbols (`file.ts::symbol`), HTTP endpoints (`/api/...`), or prose descriptions in `from:` or `to:`. All symbols, methods, and endpoints belong in `via:`. See @docs/reference/plan-md.md for the complete `must_haves` schema.
+
 ### Must-Haves Output Format
 
 ```yaml
