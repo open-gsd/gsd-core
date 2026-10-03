@@ -644,12 +644,93 @@ const DESTRUCTURING_BINDING_RE = /\b(?:const|let|var)\s+([[{].*?[\]}])\s*=/;
  * destructuring pattern. A `{ key: alias }` entry binds `alias`, not `key`.
  */
 function bindsByPattern(line, name) {
-  const nameRe = new RegExp(`(?<![\\w$.])${escapeRegex(name)}(?![\\w$])(?!\\s*:)`);
+  let nameRe = null;
   for (const re of [LOOP_BINDING_RE, DESTRUCTURING_BINDING_RE]) {
     const m = re.exec(line);
-    if (m && nameRe.test(m[1])) return true;
+    if (!m) continue;
+    nameRe ??= new RegExp(`(?<![\\w$.])${escapeRegex(name)}(?![\\w$])(?!\\s*:)`);
+    if (nameRe.test(m[1])) return true;
   }
   return false;
+}
+
+
+/**
+ * `line` split at its top-level `;`, outside strings and brackets, so that
+ * `const dir = …; const p = …;` yields one statement per assignment (a `for`
+ * header's `;` sits inside its parens and does not split).
+ */
+function splitStatements(line) {
+  const out = [];
+  let depth = 0;
+  let inStr = null;
+  let cur = '';
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inStr) {
+      if (ch === '\\') { cur += ch + (line[i + 1] ?? ''); i++; continue; }
+      if (ch === inStr) inStr = null;
+      cur += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') inStr = ch;
+    else if (ch === '(' || ch === '[' || ch === '{') depth++;
+    else if (ch === ')' || ch === ']' || ch === '}') depth--;
+    else if (ch === ';' && depth <= 0) { out.push(cur); cur = ''; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+/**
+ * The bodies of a template literal's `${…}` interpolations, matching braces by
+ * depth so a nested object literal (`${f({ a: 1 }) + name}`) keeps the code
+ * after its inner `}`.
+ */
+function templateInterpolations(tpl) {
+  const bodies = [];
+  for (let i = 0; i < tpl.length; i++) {
+    if (tpl[i] === '\\') { i++; continue; }
+    if (tpl[i] !== '$' || tpl[i + 1] !== '{') continue;
+    let depth = 1;
+    let j = i + 2;
+    for (; j < tpl.length && depth > 0; j++) {
+      if (tpl[j] === '{') depth++;
+      else if (tpl[j] === '}') depth--;
+    }
+    bodies.push(tpl.slice(i + 2, j - 1));
+    i = j - 1;
+  }
+  return bodies;
+}
+
+// A whole-expression `path.join(…)` / `path.resolve(…)` call, including
+// `path.posix.` / `path.win32.` and a bare `join(`/`resolve(` import.
+const PATH_JOIN_CALL_RE = /^(?:path\s*\.\s*(?:(?:posix|win32)\s*\.\s*)?)?(?:join|resolve)\s*\(/;
+
+/**
+ * When `expr` is exactly a `path.join`/`path.resolve` call whose LAST argument
+ * is a plain string literal naming a file (not `''` or `'.'`, which leave the
+ * path unchanged), that literal's text; otherwise null. The last segment names
+ * the file written, so `path.join(path.dirname(statePath), 'ROADMAP.md')`
+ * writes ROADMAP.md however the directory was derived.
+ */
+function literalJoinTail(expr) {
+  const t = expr.trim();
+  const m = PATH_JOIN_CALL_RE.exec(t);
+  if (!m) return null;
+  const args = captureCallArgList(t, m[0].length);
+  if (!args || args.length === 0) return null;
+  const end = m[0].length + args.join(',').length + 1;
+  if (t.slice(end).trim() !== '') return null; // e.g. `path.join(…) + '.tmp'`
+  const segments = args.map((a) => a.trim());
+  while (segments.length > 0 && segments[segments.length - 1] === '') segments.pop(); // trailing comma
+  if (segments.length === 0) return null;
+  const lit = /^(['"`])((?:(?!\1)[^\\]|\\.)*)\1$/.exec(segments[segments.length - 1]);
+  if (!lit || (lit[1] === '`' && lit[2].includes('${'))) return null;
+  if (!/[^./\\]/.test(lit[2])) return null;
+  return lit[2];
 }
 
 /**
@@ -661,47 +742,131 @@ function bindsByPattern(line, name) {
 function identifiersIn(expr) {
   const code = expr
     .replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g, "''")
-    .replace(/`(?:[^`\\]|\\.)*`/g, (tpl) => (tpl.match(/\$\{[^}]*\}/g) || []).join(' '));
+    .replace(/`(?:[^`\\]|\\.)*`/g, (tpl) => templateInterpolations(tpl).join(' '));
   return code.match(/(?<![\w$])(?<!(?:^|[^.])\.)[A-Za-z_$][\w$]*/g) || [];
 }
+
+// A cut line (the text before the write call, or before a followed
+// assignment) that opens or closes a body, or holds a function or a `for`
+// header (whose `let` is loop-scoped), is NOT read:
+// telling a closure's enclosing variable from a shadowing parameter or a
+// block-scoped sibling needs a scope analysis this line-based axis does not
+// do (three review passes found false positives in each approximation). On
+// such a line Axis 2 behaves exactly as it did before #5104's same-line scan.
+const CUT_LINE_BODY_RE = /[{}]|=>|\b(?:function|for)\b/;
 
 /**
  * The nearest binding of `name`, scanning `lines` BACKWARD from `index` and
  * stopping at the nearest preceding named-function declaration (the same
- * boundary as `nearestPrecedingAssignment`). Returns `{ rhs, line }` for an
- * assignment, or `null` when the name is unresolved: no assignment before the
- * boundary (a parameter), or a `for...of` / destructuring binding reached
- * first.
+ * boundary as `nearestPrecedingAssignment`). Line `index` is read as `cut`
+ * instead, and only when it is plain statements (`CUT_LINE_BODY_RE`). Each
+ * line is read by `lastBindingInText`. Returns `{ rhs, line, before }` for an
+ * assignment, where `before` is that line's text up to the match (where the
+ * next hop resumes, so a chain on one line resolves), or `null` when the name
+ * is unresolved: no assignment before the boundary (a parameter), or a
+ * `for...of` / destructuring binding reached first.
+ *
+ * Known limit (line-based, not a scope analysis): an arrow function or method
+ * is not a boundary, so a same-named variable in a sibling arrow or method
+ * body can be picked up. Stopping at those headers instead would hide every
+ * write inside a closure that reads its enclosing function's variable.
  */
-function nearestTargetBinding(lines, index, name) {
-  const assignRe = assignmentLineRe(name);
+function nearestTargetBinding(lines, index, cut, name) {
   for (let i = index; i >= 0; i--) {
-    if (FUNCTION_DECL_LINE_RE.test(lines[i])) return null;
-    if (bindsByPattern(lines[i], name)) return null;
-    const m = assignRe.exec(lines[i]);
-    if (m) return { rhs: m[1].trim(), line: i };
+    const text = i === index ? (CUT_LINE_BODY_RE.test(cut) ? '' : cut) : lines[i];
+    if (i < index && FUNCTION_DECL_LINE_RE.test(text)) return null;
+    if (!text.includes(name)) continue; // a line without the name cannot bind it
+    const found = lastBindingInText(text, name);
+    if (found === 'unresolved') return null;
+    if (found) return { rhs: found.rhs, line: i, before: text.slice(0, found.index + 1) };
   }
   return null;
+}
+
+// Per-name assignment regexes, built once per name rather than once per line.
+const bindingRegexCache = new Map();
+function bindingRegexesFor(name) {
+  let res = bindingRegexCache.get(name);
+  if (!res) {
+    res = [
+      [assignmentLineRe(name), false],
+      [new RegExp(`(?:^|[^.\\w$])${escapeRegex(name)}\\s*\\+=\\s*(.*)$`), true],
+    ];
+    bindingRegexCache.set(name, res);
+  }
+  return res;
+}
+
+/**
+ * The last binding of `name` in one line of text: statements last to first,
+ * and within a statement the last assignment first. Returns `{ rhs, index }`
+ * (`index` is where the match starts in `text`), the string `'unresolved'`
+ * when a `for...of` / destructuring binding is reached first, or null. A
+ * right-hand side ends at its own `;`, and `name += x` reads as `name + x`.
+ */
+function lastBindingInText(text, name) {
+  const spans = statementSpans(text);
+  for (let s = spans.length - 1; s >= 0; s--) {
+    const { start, body } = spans[s];
+    if (bindsByPattern(body, name)) return 'unresolved';
+    const hits = [];
+    for (const [re, compound] of bindingRegexesFor(name)) {
+      for (let from = 0; from < body.length; ) {
+        const m = re.exec(body.slice(from));
+        if (!m) break;
+        hits.push({ at: from + m.index, rhs: m[1], compound });
+        // Resume at the right-hand side: one char further would re-match the
+        // tail of `const p =` as a bare `p =`.
+        from += m.index + m[0].length - m[1].length;
+      }
+    }
+    hits.sort((a, b) => b.at - a.at);
+    for (const h of hits) {
+      const rhs = splitStatements(h.rhs)[0].trim();
+      return { rhs: h.compound ? `${name} + (${rhs})` : rhs, index: start + h.at };
+    }
+  }
+  return null;
+}
+
+/** `statementSpans` is `splitStatements` with each statement's start offset. */
+function statementSpans(line) {
+  const spans = [];
+  let start = 0;
+  for (const body of splitStatements(line)) {
+    spans.push({ start, body });
+    start += body.length + 1;
+  }
+  return spans;
 }
 
 /**
  * True when `expr` names the state path (`targetsStatePath`), or when one of
  * its identifiers resolves to an expression that does, following at most
- * `hopsLeft` same-function assignments (#5104). `index` is the last line an
+ * `hopsLeft` same-function assignments (#5104). A `path.join`/`path.resolve`
+ * whose last segment is a literal is decided by that literal alone
+ * (`literalJoinTail`): a directory derived from `statePath` joined with
+ * `'ROADMAP.md'` writes ROADMAP.md, and with no allowlist (ADR-4629 Decision 5)
+ * a false positive there could never be cleared. `index` is the last line an
  * assignment may sit on. `seen` keys each binding by name AND line, so a
  * reassignment that reads its own earlier value (`p = p + '.tmp'`) still
  * reaches that earlier assignment.
  */
-function resolvesToStatePath(lines, index, expr, hopsLeft = MAX_TARGET_RESOLUTION_HOPS, seen = new Set()) {
+function resolvesToStatePath(lines, index, cut, expr, hopsLeft = MAX_TARGET_RESOLUTION_HOPS, seen = new Set()) {
+  const tail = literalJoinTail(expr);
+  if (tail !== null) return /STATE\.md/.test(tail);
   if (targetsStatePath(expr)) return true;
   if (hopsLeft === 0) return false;
   for (const name of identifiersIn(expr)) {
-    const binding = nearestTargetBinding(lines, index, name);
+    const binding = nearestTargetBinding(lines, index, cut, name);
     if (!binding) continue;
-    const key = `${name}@${binding.line}`;
+    const key = `${name}@${binding.line}:${binding.before.length}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    if (resolvesToStatePath(lines, binding.line - 1, binding.rhs, hopsLeft - 1, seen)) return true;
+    // The next hop resumes on the binding's own line, before its match, so
+    // `let p = …STATE.md…; p = p + '.tmp';` chains on one line and a header
+    // earlier on that line still shadows.
+    if (resolvesToStatePath(lines, binding.line, binding.before, binding.rhs, hopsLeft - 1, seen)) return true;
   }
   return false;
 }
@@ -728,7 +893,11 @@ function resolvesToStatePath(lines, index, expr, hopsLeft = MAX_TARGET_RESOLUTIO
  * resolved within one function, so this axis's zero is still not proof that
  * no raw writer exists (ADR-3408 Decision 5).
  */
-function findRawStateWrites(rel, text) {
+function findRawStateWrites(rel, rawText) {
+  // CRLF: `assignmentLineRe`'s `(.*)$` cannot cross a trailing `\r` (`.` does
+  // not match it), so a CRLF file would resolve no variable target at all.
+  // Dropping each `\r` before `\n` keeps every line number unchanged.
+  const text = rawText.replace(/\r(?=\n)/g, '');
   const rawLines = text.split('\n');
   const stripped = stripComments(text);
   const joined = stripped.join('\n');
@@ -740,7 +909,11 @@ function findRawStateWrites(rel, text) {
   while ((m = RAW_WRITE_CALL_START_RE.exec(joined)) !== null) {
     for (; counted < m.index; counted++) if (joined[counted] === '\n') lineIdx++;
     const targetArg = captureFirstArg(joined, m.index + m[0].length).trim();
-    if (!resolvesToStatePath(stripped, lineIdx - 1, targetArg)) continue;
+    // The call's own line counts up to the call's column, so a one-line
+    // `const p = …; fs.writeFileSync(p, …)` resolves, while an assignment
+    // after the call on that line does not.
+    const cut = joined.slice(joined.lastIndexOf('\n', m.index - 1) + 1, m.index);
+    if (!resolvesToStatePath(stripped, lineIdx, cut, targetArg)) continue;
     // `file`/`source` sanitized for the same fork-PR reason as every other
     // finding in this guard.
     out.push({
