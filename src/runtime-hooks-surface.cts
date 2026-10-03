@@ -1584,9 +1584,15 @@ function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookC
       configDir,
       homeDir: os.homedir(),
     });
-    // Absolute Git-Bash discovery on win32 when available (#580); `bash` on
-    // PATH otherwise — the same assumption .sh hooks already make.
-    const resolverRunner = resolveBashRunner(opts) || 'bash';
+    // #5100: same contract as the .sh early return. A bare `bash` is how
+    // win32 reaches WSL's System32 launcher, and the gate used to accept it.
+    const resolverRunner = resolveBashRunner(opts);
+    if (resolverRunner === null) {
+      if (opts.configuredEntrypoints) {
+        opts.configuredEntrypoints.push(...configuredEntrypointsForHook(configDir, hookName, opts));
+      }
+      return null;
+    }
     return track(shellCmdProjection.projectShellCommandText({
       runnerToken: resolverRunner,
       argTokens: [
@@ -3436,9 +3442,38 @@ type ConfiguredEntrypointValidationResult =
   | { ok: true }
   | { ok: false; invalid: ConfiguredEntrypointInvalid[] };
 
+function isWin32BareBashToken(candidate: string, platform?: string): boolean {
+  if ((platform || process.platform) !== 'win32') return false;
+  if (candidate.includes('/') || candidate.includes('\\')) return false;
+  const lower = candidate.toLowerCase();
+  return lower === 'bash' || lower === 'bash.exe';
+}
+
+// #5100: the literal `bash` sentinel means "Git Bash policy found nothing"
+// (#4249). Resolve that token through resolveBashExecutable, never a PATH
+// scan — WSL's System32\bash.exe is on PATH and cannot see Windows paths.
+function win32BareBashResolves(
+  candidate: string,
+  platform: string | undefined,
+  deps: { env?: NodeJS.ProcessEnv; existsSync?: (p: string) => boolean },
+): boolean | null {
+  if (!isWin32BareBashToken(candidate, platform)) return null;
+  return resolveBashExecutable({
+    platform: 'win32',
+    env: deps.env,
+    existsSync: deps.existsSync,
+  }) !== null;
+}
+
 function validateConfiguredEntrypoints(
   entries: ConfiguredEntrypoint[],
-  deps: { statSync?: typeof fs.statSync; accessSync?: typeof fs.accessSync; resolveExecutableBinary?: typeof resolveExecutableBinary } = {},
+  deps: {
+    statSync?: typeof fs.statSync;
+    accessSync?: typeof fs.accessSync;
+    resolveExecutableBinary?: typeof resolveExecutableBinary;
+    env?: NodeJS.ProcessEnv;
+    existsSync?: (p: string) => boolean;
+  } = {},
 ): ConfiguredEntrypointValidationResult {
   const statSync = deps.statSync ?? fs.statSync;
   const accessSync = deps.accessSync ?? fs.accessSync;
@@ -3491,9 +3526,11 @@ function validateConfiguredEntrypoints(
         invalid.push({ runtime: entry.runtime, configPath: entry.configPath, role: 'script', path: entry.scriptPath, reason: 'not-executable' });
       }
     }
-    if (entry.interpreterCandidates && !entry.interpreterCandidates.some(candidate =>
-      resolve(candidate, { platform: entry.platform, requireExecutable: true }) !== null,
-    )) {
+    if (entry.interpreterCandidates && !entry.interpreterCandidates.some(candidate => {
+      const bareBash = win32BareBashResolves(candidate, entry.platform, deps);
+      if (bareBash !== null) return bareBash;
+      return resolve(candidate, { platform: entry.platform, requireExecutable: true }) !== null;
+    })) {
       invalid.push({ runtime: entry.runtime, configPath: entry.configPath, role: 'interpreter', path: entry.interpreterCandidates.join(' | '), reason: 'unresolved-interpreter' });
     }
   }

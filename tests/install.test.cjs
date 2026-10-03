@@ -3130,11 +3130,17 @@ describe('Bug #3362 / #3413: Windows hook commands are runtime-aware', () => {
 
   test('Antigravity portable install: .js hook command also stays shell-neutral on Windows (seam inert after gemini removal)', () => {
     const home = require('node:os').homedir().replace(/\\/g, '/');
+    // #5100: a win32 portable JS hook emits nothing unless the Git Bash
+    // policy finds bash. This case is about the PowerShell seam, so inject
+    // a discovered Git Bash instead of depending on the host PATH.
     const cmd = buildHookCommand(`${home}/.gemini/antigravity`, 'gsd-check-update.js', {
       portableHooks: true,
       platform: 'win32',
       runtime: 'antigravity',
+      env: { ProgramFiles: 'C:\\Program Files' },
+      existsSync: (candidate) => candidate === 'C:\\Program Files\\Git\\bin\\bash.exe',
     });
+    assert.equal(typeof cmd, 'string');
     assert.ok(!cmd.startsWith('& '), `Antigravity hook command must not use PowerShell call operator: ${cmd}`);
     assert.equal(parseHookCommand(cmd).hookPath, '$HOME/.gemini/antigravity/hooks/gsd-check-update.js');
   });
