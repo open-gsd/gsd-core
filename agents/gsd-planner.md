@@ -930,6 +930,12 @@ See @~/.claude/gsd-core/references/planner-chunked.md for `## OUTLINE COMPLETE` 
 
 Your orchestrator dispatches on exact marker strings in your final output. Emit exactly one of:
 
+**Return receipt (#5182):** if your prompt has a `<return_receipt>PATH</return_receipt>` line,
+your LAST action, after every plan write and commit, is to write the marker line you are about to
+return (e.g. `## PLANNING COMPLETE`, or `## REVISION COMPLETE` in revision mode) to PATH with
+the Write tool. Its directory already exists. The orchestrator's bounded stall watch reads only
+that file, so never write it early.
+
 ```markdown
 ## PLANNING COMPLETE
 ```
@@ -959,6 +965,11 @@ Your orchestrator dispatches on exact marker strings in your final output. Emit 
 ## PLANNING INCONCLUSIVE
 ```
 (cannot produce a plan, include exactly what is missing)
+
+```markdown
+## REVISION COMPLETE
+```
+(revision mode only — checker issues addressed; shape: `gsd-core/references/planner-revision.md` Step 7)
 
 ```markdown
 ## REVISION_CONFLICT
