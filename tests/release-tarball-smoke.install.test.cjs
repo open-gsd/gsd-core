@@ -78,6 +78,100 @@ describe('release-tarball-smoke: install timeout ceiling', () => {
   });
 });
 
+describe('configured entrypoint UNC spellings', () => {
+  const configDir = '\\\\fileserver\\home\\Jane Doe\\.claude';
+  const literalScript = configDir + '\\hooks\\a-literal.js';
+  const basicScript = configDir + '\\hooks\\z-basic.ps1';
+  // Canonical identities come from the fixture paths, independently of the scanner.
+  const literalExpected = path.resolve('//fileserver/home/Jane Doe/.claude/hooks/a-literal.js');
+  const basicExpected = path.resolve('//fileserver/home/Jane Doe/.claude/hooks/z-basic.ps1');
+
+  test('a TOML literal registration preserves both leading UNC separators', () => {
+    const text = "command = 'node " + literalScript + "'";
+    assert.deepEqual(configuredEntrypointsIn(text, configDir), [literalExpected]);
+  });
+
+  test('literal and basic TOML registrations both contribute their distinct scripts', () => {
+    const text = "literal = 'node " + literalScript + "'\n"
+      + 'basic = ' + JSON.stringify('pwsh ' + basicScript);
+    assert.deepEqual(configuredEntrypointsIn(text, configDir).sort(), [literalExpected, basicExpected]);
+  });
+
+  test('literal and escaped registrations of the same script are deduplicated', () => {
+    const text = "literal = 'node " + literalScript + "'\n"
+      + 'basic = ' + JSON.stringify('node ' + literalScript);
+    assert.deepEqual(configuredEntrypointsIn(text, configDir), [literalExpected]);
+  });
+});
+
+// configuredEntrypointsIn scans unparsed config text, so it is parser-class
+// (TESTING-STANDARDS.md "Property-based testing tier"). Property: however a
+// registration spells a script path — forward slashes, JSON-escaped
+// backslashes, or TOML-literal single backslashes, under a drive or a UNC
+// home — every spelling resolves to that script's one canonical entry, distinct
+// scripts stay distinct, and no script is reported twice.
+describe('configured entrypoint spellings (property)', () => {
+  const fc = require('./helpers/fast-check-setup.cjs');
+
+  // Path segments without dots (no `.`/`..`, no early `.js` that would end the
+  // lazy match) and without quotes (the scanner's documented string delimiters).
+  const segment = fc.string({
+    unit: fc.constantFrom(...'abcXYZ019 _-éü'),
+    minLength: 1,
+    maxLength: 8,
+  }).filter((s) => s.trim() === s);
+  // Root segments in both separator forms, built independently of the scanner.
+  const driveRoot = fc.record({
+    letter: fc.constantFrom('C', 'D', 'Z'),
+    dirs: fc.array(segment, { minLength: 1, maxLength: 3 }),
+  }).map(({ letter, dirs }) => ({
+    native: `${letter}:\\${dirs.join('\\')}`,
+    posix: `${letter}:/${dirs.join('/')}`,
+  }));
+  const uncRoot = fc.array(segment, { minLength: 2, maxLength: 4 }).map((dirs) => ({
+    native: `\\\\${dirs.join('\\')}`,
+    posix: `//${dirs.join('/')}`,
+  }));
+  const script = fc.record({
+    dirs: fc.array(segment, { maxLength: 2 }),
+    name: segment,
+    ext: fc.constantFrom('js', 'cjs', 'mjs', 'sh', 'cmd', 'ps1'),
+  }).map(({ dirs, name, ext }) => [...dirs, `${name}.${ext}`]);
+
+  const SPELLINGS = {
+    forwardSlashJson: (s) => JSON.stringify({ command: `node "${s.posix}"` }),
+    escapedJson: (s) => JSON.stringify({ command: `node "${s.native}"` }),
+    tomlLiteral: (s) => `command = 'node ${s.native}'`,
+  };
+
+  test('every spelling of a script resolves to its single canonical entry', () => {
+    fc.assert(
+      fc.property(
+        fc.oneof(driveRoot, uncRoot),
+        fc.uniqueArray(script, { minLength: 1, maxLength: 3, selector: (parts) => parts.join('/') }),
+        fc.array(fc.shuffledSubarray(Object.keys(SPELLINGS), { minLength: 1 }), { minLength: 3, maxLength: 3 }),
+        (root, scripts, spellingsPerScript) => {
+          const configDir = `${root.native}\\.claude`;
+          const lines = [];
+          const expected = [];
+          scripts.forEach((parts, i) => {
+            const s = {
+              native: `${root.native}\\.claude\\${parts.join('\\')}`,
+              posix: `${root.posix}/.claude/${parts.join('/')}`,
+            };
+            for (const spelling of spellingsPerScript[i]) lines.push(SPELLINGS[spelling](s));
+            expected.push(path.resolve(s.posix));
+          });
+
+          const found = configuredEntrypointsIn(lines.join('\n'), configDir);
+
+          assert.deepEqual([...found].sort(), [...expected].sort());
+        },
+      ),
+    );
+  });
+});
+
 describe('release-tarball-smoke', () => {
   // Shared fixture state: pack the tarball once, install it once, reuse for all tests.
   let packDir;
@@ -573,6 +667,44 @@ describe('release-tarball-smoke', () => {
     const text = `"command": "/usr/local/bin/node ${scriptPath} --flag"`;
 
     assert.deepEqual(configuredEntrypointsIn(text, configDir), [path.resolve(scriptPath)]);
+  });
+
+  // ── L: configuredEntrypointsIn reads a backslash-spelled registration ─────
+  //
+  // #5084: the anchor is posix-normalized, so a registration spelled with
+  // Windows-native separators (a hand-edited settings.json, another tool's
+  // writer) must be scanned in that same projection or the dangling-hook
+  // check skips it. The Windows-shaped configDir is a literal rather than a
+  // path.join result so this fails on every host: this suite runs on Linux
+  // in CI, where path.join never emits a backslash and I/J/K cannot see it.
+  test('L: configuredEntrypointsIn resolves a backslash-spelled registration like its forward-slash spelling', () => {
+    // settings.json / hooks.json: JSON doubles every backslash on write.
+    const jsonRegistration = (scriptPath) => JSON.stringify({
+      hooks: {
+        PreToolUse: [
+          { matcher: 'Bash', hooks: [{ type: 'command', command: `node "${scriptPath}"` }] },
+        ],
+      },
+    });
+
+    const configDir = 'C:\\Users\\Jane Doe\\.claude';
+    const nativeScript = `${configDir}\\hooks\\gsd-ghost-hook.js`;
+    const expected = [path.resolve(nativeScript.replace(/\\/g, '/'))];
+    assert.deepEqual(configuredEntrypointsIn(jsonRegistration(nativeScript), configDir), expected, 'JSON-escaped spelling');
+
+    // config.toml literal string: backslashes stay single.
+    const tomlText = `command = 'node ${nativeScript}'`;
+    assert.deepEqual(configuredEntrypointsIn(tomlText, configDir), expected, 'TOML literal spelling');
+
+    // A UNC home pins the order: JSON's `\\\\server` must collapse to
+    // `\\server` before the projection, giving the anchor's `//server`.
+    const uncConfigDir = '\\\\fileserver\\home\\Jane Doe\\.claude';
+    const uncScript = `${uncConfigDir}\\hooks\\gsd-ghost-hook.js`;
+    assert.deepEqual(
+      configuredEntrypointsIn(jsonRegistration(uncScript), uncConfigDir),
+      [path.resolve(uncScript.replace(/\\/g, '/'))],
+      'UNC JSON-escaped spelling',
+    );
   });
 });
 
