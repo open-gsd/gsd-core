@@ -593,7 +593,7 @@ interface ConfigResolution {
  * *unusable*. `platformReadSync` returns null on ENOENT and re-throws every
  * other errno, which is the seam that makes this separable at all.
  */
-function _readConfigFile(filePath: string):
+function _readConfigFile(filePath: string, parse: (raw: string) => unknown = JSON.parse):
   | { kind: 'ok'; data: Record<string, unknown> }
   | { kind: 'absent' }
   | { kind: 'fault'; fault: ConfigFault } {
@@ -607,7 +607,7 @@ function _readConfigFile(filePath: string):
   if (raw === null) return { kind: 'absent' };
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = parse(raw);
   } catch {
     return { kind: 'fault', fault: { reason: CONFIG_REASON.CONFIG_UNPARSEABLE, path: filePath, code: '' } };
   }
@@ -1203,6 +1203,8 @@ export = {
   loadConfig,
   loadConfigResolved,
   CONFIG_REASON,
+  _readConfigFile,
+  _warnUnusableConfig,
   _warnedUnusableConfig,
   isGitIgnored,
   CONFIG_DEFAULTS,

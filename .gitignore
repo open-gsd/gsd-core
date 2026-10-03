@@ -71,6 +71,9 @@ build/
 # by `npm run build:lib`). Source of truth is src/; these are emitted, never edited.
 # Published via prepublishOnly; built before test via pretest. Grows as modules migrate.
 /tsconfig.build.tsbuildinfo
+/gsd-core/bin/lib/config-value-resolver.cjs
+/gsd-core/bin/lib/config-schema-defaults.cjs
+/gsd-core/bin/lib/settings-jsonc.cjs
 /gsd-core/bin/lib/commonjs-marker.cjs
 /gsd-core/bin/lib/broken-windows.cjs
 /gsd-core/bin/lib/complexity-trigger.cjs

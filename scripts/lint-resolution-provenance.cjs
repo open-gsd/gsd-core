@@ -65,6 +65,11 @@ const REGISTRY = [
     sourceFile: 'src/config-loader.cts',
     testFile: 'tests/config-loader.test.cjs',
   },
+  {
+    verb: 'config-value-resolver',
+    sourceFile: 'src/config-value-resolver.cts',
+    testFile: 'tests/config-value-resolver.test.cjs',
+  },
 ];
 
 // Markers that MUST appear in every registered verb's test file.
