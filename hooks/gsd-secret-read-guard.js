@@ -739,13 +739,29 @@ function tokenize(str) {
 // ---------------------------------------------------------------------------
 
 // `@file` (curl -d), `--flag=value`, `-Xvalue` → the operand that names the file.
+// A bundled short cluster (`-if.env`) hides the value after more than one
+// flag letter (#5046). Any tail from the third character on can be that
+// operand, so the first tail that names a secret wins. Other tails still go
+// through namesSecret, which keeps `.env.example` and `.envrc` allowed.
+// A cluster that names nothing secret keeps the historical two-character strip.
+// The cluster need not start with a letter: `-2if.env` is the same defect with
+// a digit-first cluster (`grep -2f.env` is a context count plus a `-f` pattern
+// file), so the guard takes any single-dash word rather than a letter-first one.
+// Starting the walk at k=2 also covers the digit-first shape: every secret name
+// begins with `.`, so no secret can begin at k=1 whatever the cluster's first
+// character is, and `.env` sits at k=2 for the shortest operand-bearing cluster
+// (`-f.env`) exactly as it does for a letter-first one.
 function normalizeOperand(text) {
   let v = text;
   if (v.startsWith('@')) v = v.slice(1);
   if (v.startsWith('--')) {
     const eq = v.indexOf('=');
     if (eq !== -1) v = v.slice(eq + 1);
-  } else if (/^-[A-Za-z]./.test(v)) {
+  } else if (/^-[^-]./.test(v)) {
+    for (let k = 2; k < v.length; k++) {
+      const tail = v.slice(k);
+      if (namesSecret(tail)) return tail;
+    }
     v = v.slice(2);
   }
   return v;
