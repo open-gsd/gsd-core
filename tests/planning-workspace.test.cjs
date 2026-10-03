@@ -775,3 +775,169 @@ describe('#2142: quick task workspace path (planningPaths().quick)', () => {
     assert.strictEqual(path.dirname(paths.quick), path.dirname(paths.phases));
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #4975 review: readScopedConfigValue is the ONE scope-aware ladder that
+// worktreesOptedOut (#3972) and the audit gate (resolveDispatchLogger) read.
+// Both promise "the value config-get reports", so every ladder shape below is
+// resolved twice — in-process through the shared reader, and through the real
+// `config-get` CLI — and the two answers must agree, for both keys it serves.
+// The one documented exception, a scoped config.json that does not parse, is
+// pinned separately: config-get fails there, the reader moves down the ladder.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#4975: readScopedConfigValue agrees with config-get on every ladder shape', () => {
+  const { readScopedConfigValue } = planningWorkspaceDirect;
+  const { runGsdTools } = require('./helpers.cjs');
+  const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
+
+  const KEY_PATHS = [['audit', 'enabled'], ['workflow', 'use_worktrees']];
+  const SCOPE_ENV_KEYS = ['GSD_PROJECT', 'GSD_WORKSTREAM'];
+  const WORKSTREAM = ['workstreams', 'alpha'];
+  const PROJECT = ['second-product'];
+
+  /** `{ a: { b: value } }` for keyPath `['a', 'b']`. */
+  function nest(keyPath, value) {
+    return keyPath.reduceRight((inner, key) => ({ [key]: inner }), value);
+  }
+
+  // `root` / `scoped` are config bodies built from the key path (or `undefined`
+  // for no file); `scopedDir` is where the scoped config lives under .planning/.
+  const CASES = [
+    { name: 'root only: boolean true', root: (k) => nest(k, true) },
+    { name: 'root only: string "true" is reported as the string', root: (k) => nest(k, 'true') },
+    { name: 'root only: key absent', root: () => ({ model_profile: 'balanced' }) },
+    { name: 'root only: section is a scalar', root: (k) => ({ [k[0]]: false }) },
+    {
+      name: 'workstream: own key wins over the root',
+      env: { GSD_WORKSTREAM: 'alpha' },
+      scopedDir: WORKSTREAM,
+      root: (k) => nest(k, true),
+      scoped: (k) => nest(k, false),
+    },
+    {
+      name: 'workstream: key absent in the workstream config inherits the root',
+      env: { GSD_WORKSTREAM: 'alpha' },
+      scopedDir: WORKSTREAM,
+      root: (k) => nest(k, true),
+      scoped: () => ({ model_profile: 'balanced' }),
+    },
+    {
+      name: 'workstream: own key with no root config',
+      env: { GSD_WORKSTREAM: 'alpha' },
+      scopedDir: WORKSTREAM,
+      scoped: (k) => nest(k, 0),
+    },
+    {
+      name: 'project without workstream: the root is NOT inherited (#3963)',
+      env: { GSD_PROJECT: 'second-product' },
+      scopedDir: PROJECT,
+      root: (k) => nest(k, true),
+      scoped: () => ({ model_profile: 'balanced' }),
+    },
+    {
+      name: 'project without workstream: own key',
+      env: { GSD_PROJECT: 'second-product' },
+      scopedDir: PROJECT,
+      root: (k) => nest(k, false),
+      scoped: (k) => nest(k, null),
+    },
+  ];
+
+  let tmpDir;
+  let savedEnv;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4975-ladder-'));
+    savedEnv = Object.fromEntries(SCOPE_ENV_KEYS.map((k) => [k, process.env[k]]));
+    for (const k of SCOPE_ENV_KEYS) delete process.env[k];
+  });
+
+  afterEach(() => {
+    for (const k of SCOPE_ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k]; else process.env[k] = savedEnv[k];
+    }
+    cleanup(tmpDir);
+  });
+
+  function writeConfig(segments, body) {
+    if (body === undefined) return;
+    const dir = path.join(tmpDir, '.planning', ...segments);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(body));
+  }
+
+  function writeUnparseableConfig(segments) {
+    const dir = path.join(tmpDir, '.planning', ...segments);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'config.json'), '{"audit":');
+  }
+
+  function assertConfigGetParseFailure(keyPath, env) {
+    const r = runGsdTools(['config-get', keyPath.join('.')], tmpDir, { ...env, GSD_JSON_ERRORS: '1' });
+    assert.equal(r.success, false, `config-get ${keyPath.join('.')} must fail on an unparseable scoped config`);
+    assert.equal(JSON.parse(r.error).reason, ERROR_REASON.CONFIG_PARSE_FAILED);
+  }
+
+  /** What `config-get` reports for keyPath, in the reader's `{ present, value }` shape. */
+  function configGet(keyPath, env) {
+    const r = runGsdTools(['config-get', keyPath.join('.')], tmpDir, { ...env, GSD_JSON_ERRORS: '1' });
+    if (r.success) return { present: true, value: JSON.parse(r.output) };
+    assert.equal(JSON.parse(r.error).reason, ERROR_REASON.CONFIG_KEY_NOT_FOUND,
+      `config-get ${keyPath.join('.')} failed for a reason other than an absent key: ${r.error}`);
+    return { present: false, value: undefined };
+  }
+
+  for (const c of CASES) {
+    for (const keyPath of KEY_PATHS) {
+      test(`${c.name} (${keyPath.join('.')})`, () => {
+        writeConfig([], c.root?.(keyPath));
+        if (c.scopedDir) writeConfig(c.scopedDir, c.scoped?.(keyPath));
+        const env = c.env ?? {};
+
+        const expected = configGet(keyPath, env);
+        Object.assign(process.env, env);
+        assert.deepStrictEqual(readScopedConfigValue(tmpDir, keyPath), expected);
+      });
+    }
+  }
+
+  for (const keyPath of KEY_PATHS) {
+    test(`unparseable root config, no workstream: config-get fails, the reader reports not present (${keyPath.join('.')})`, () => {
+      writeUnparseableConfig([]);
+      assertConfigGetParseFailure(keyPath, {});
+      assert.deepStrictEqual(readScopedConfigValue(tmpDir, keyPath), { present: false, value: undefined });
+    });
+
+    test(`unparseable workstream config: config-get fails, the reader inherits the root value (${keyPath.join('.')})`, () => {
+      writeConfig([], nest(keyPath, true));
+      writeUnparseableConfig(WORKSTREAM);
+      const env = { GSD_WORKSTREAM: 'alpha' };
+      assertConfigGetParseFailure(keyPath, env);
+      Object.assign(process.env, env);
+      assert.deepStrictEqual(readScopedConfigValue(tmpDir, keyPath), { present: true, value: true });
+    });
+  }
+
+  test('never throws: a traversal-shaped GSD_WORKSTREAM resolves to not present', () => {
+    writeConfig([], nest(['audit', 'enabled'], true));
+    process.env.GSD_WORKSTREAM = '../escape';
+    assert.deepStrictEqual(readScopedConfigValue(tmpDir, ['audit', 'enabled']), { present: false, value: undefined });
+  });
+
+  test('worktreesOptedOut and the audit gate read through it: an inherited root value reaches both', (t) => {
+    const { worktreesOptedOut } = planningWorkspaceDirect;
+    const { resolveDispatchLogger } = require('../gsd-core/bin/lib/observability/logger.cjs');
+    const savedAudit = process.env.GSD_AUDIT;
+    t.after(() => {
+      if (savedAudit === undefined) delete process.env.GSD_AUDIT; else process.env.GSD_AUDIT = savedAudit;
+    });
+    delete process.env.GSD_AUDIT;
+
+    writeConfig([], { audit: { enabled: true }, workflow: { use_worktrees: false } });
+    writeConfig(WORKSTREAM, { model_profile: 'balanced' });
+    process.env.GSD_WORKSTREAM = 'alpha';
+    assert.equal(worktreesOptedOut(tmpDir), true, 'the workstream inherits the root opt-out');
+    assert.notEqual(resolveDispatchLogger(tmpDir), undefined, 'the workstream inherits the root audit opt-in');
+  });
+});

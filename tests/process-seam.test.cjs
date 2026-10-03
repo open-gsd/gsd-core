@@ -43,6 +43,14 @@ const SEAM_TIGHT_TIMEOUT_MS = 200;
 const SEAM_SHORT_TIMEOUT_MS = 300;
 
 /**
+ * For the one test that asserts a child's partial stderr survived a timeout
+ * kill (darwin): the bound must clear Node process startup plus the child's
+ * first synchronous write, which a loaded macOS runner can push past 300ms
+ * (#5189). The sleeper still sleeps far longer, so the run times out either way.
+ */
+const SEAM_STARTUP_CLEARING_TIMEOUT_MS = 2000;
+
+/**
  * Generous headroom for a fixture in this file that exits quickly or
  * synchronously (not exercising the timeout boundary itself).
  */
@@ -198,7 +206,7 @@ describe('process-seam', () => {
   test('a timeout still returns string stdout/stderr (partial content is platform-dependent)', () => {
     const fixture = writeFixture(tmpDir, 'sleeper.cjs', FIXTURE_SLEEPER);
     const marker = JSON.stringify({ partial: true });
-    const result = runNode([fixture, '5000', marker], { timeoutMs: SEAM_SHORT_TIMEOUT_MS });
+    const result = runNode([fixture, '5000', marker], { timeoutMs: SEAM_STARTUP_CLEARING_TIMEOUT_MS });
     assert.equal(result.outcome, OUTCOME.TIMED_OUT);
     assert.equal(result.timedOut, true);
     assert.equal(typeof result.stdout, 'string');
@@ -378,7 +386,7 @@ describe('process-seam', () => {
 
   test('timeout with stderr reports one outcome, keeps both fields', () => {
     const fixture = writeFixture(tmpDir, 'sleeper.cjs', FIXTURE_SLEEPER);
-    const result = runNode([fixture, '5000', '', 'err-marker'], { timeoutMs: SEAM_SHORT_TIMEOUT_MS });
+    const result = runNode([fixture, '5000', '', 'err-marker'], { timeoutMs: SEAM_STARTUP_CLEARING_TIMEOUT_MS });
     assert.equal(result.outcome, OUTCOME.TIMED_OUT);
     assert.equal(typeof result.stdout, 'string');
     assert.equal(typeof result.stderr, 'string');

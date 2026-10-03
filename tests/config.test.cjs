@@ -1363,6 +1363,56 @@ describe('config-set/config-get workflow.use_worktrees', () => {
   });
 });
 
+// ─── config-set/config-get audit.enabled (#4975) ─────────────────────────────
+//
+// `audit.enabled` is the documented config opt-in for the dispatch audit trail
+// (docs/CONFIGURATION.md "Observability"). It was missing from the central
+// schema, so config-set refused it as an unknown key and it could only be set
+// by hand-editing config.json.
+
+describe('config-set/config-get audit.enabled (#4975)', () => {
+  test('config-set accepts audit.enabled and config-get round-trips it as a boolean', (t) => {
+    const tmpDir = createTempProject('gsd-4975-config-');
+    t.after(() => cleanup(tmpDir));
+    const env = homeSandboxEnv(tmpDir);
+
+    for (const value of [true, false]) {
+      const set = runGsdTools(['config-set', 'audit.enabled', String(value)], tmpDir, env);
+      assert.ok(set.success, `config-set audit.enabled ${value} must be accepted: ${set.error}`);
+      const setResult = JSON.parse(set.output);
+      assert.strictEqual(setResult.updated, true);
+      assert.strictEqual(setResult.key, 'audit.enabled');
+      assert.strictEqual(setResult.value, value);
+      assert.strictEqual(readConfig(tmpDir).audit.enabled, value, 'persisted as a real JSON boolean');
+
+      const get = runGsdTools(['config-get', 'audit.enabled'], tmpDir, env);
+      assert.ok(get.success, `config-get audit.enabled must succeed: ${get.error}`);
+      assert.strictEqual(JSON.parse(get.output), value);
+    }
+  });
+
+  test('config-set rejects a non-boolean audit.enabled without modifying config.json', (t) => {
+    const tmpDir = createTempProject('gsd-4975-config-invalid-');
+    t.after(() => cleanup(tmpDir));
+    const env = { ...homeSandboxEnv(tmpDir), GSD_JSON_ERRORS: '1' };
+    writeConfig(tmpDir, { audit: { enabled: false }, sentinel: 'preserve' });
+    const configPath = path.join(tmpDir, '.planning', 'config.json');
+    const before = fs.readFileSync(configPath, 'utf-8');
+
+    // The runtime gate honours only a real `true`, so storing anything else
+    // would be accept-then-ignore.
+    for (const value of ['yes', '1', 'TRUE', 'on', '{"on":true}']) {
+      const result = runGsdTools(['config-set', 'audit.enabled', value], tmpDir, env);
+      assert.strictEqual(result.success, false, `config-set audit.enabled ${value} must be rejected`);
+      const envelope = JSON.parse(result.error);
+      assert.strictEqual(envelope.ok, false);
+      assert.notStrictEqual(envelope.reason, 'config_invalid_key',
+        `audit.enabled ${value}: the key is valid — the VALUE must be what is refused`);
+    }
+    assert.strictEqual(fs.readFileSync(configPath, 'utf-8'), before, 'a rejected config-set must not write anything');
+  });
+});
+
 // ─── config-set/config-get context ─────────────────────────────────────────
 
 describe('config-set/config-get context', () => {

@@ -120,3 +120,13 @@ Integrity against a deceptive agent (signed commits with an out-of-environment k
 - `CONTEXT.md` §"Dispatch Observability Module" — the third surface describing this contract as live.
 - `docs/CONFIGURATION.md:1667-1668,1730` — `GSD_AUDIT` / `GSD_AUDIT_ARGS` documented as working.
 - Issues: [#2619](https://github.com/open-gsd/gsd-core/issues/2619) (this ADR), [#2620](https://github.com/open-gsd/gsd-core/issues/2620) / PR [#2621](https://github.com/open-gsd/gsd-core/pull/2621) (D1), [#2202](https://github.com/open-gsd/gsd-core/issues/2202) (unknown-key loss).
+
+## Amendment (2026-09-26): `config.audit.enabled` is reachable (#4975)
+
+This closes the second residual defect in Context #1. Both live `createHub()` seams now get their logger from one gate, `resolveDispatchLogger(cwd)` in `src/observability/logger.cts`. It resolves `audit.enabled` for the seam's cwd and passes it to both `isAuditEnabled(config)` and `createDefaultLogger({ cwd, config })`. `audit.enabled` is registered in the central config schema, so `config-set` accepts it (booleans only).
+
+- **D1 is unchanged.** The gate is still opt-in. With `GSD_AUDIT` unset and the key absent or not exactly `true`, no logger is injected and the default dispatch output, including the `--json-errors` envelope, stays byte-for-byte identical. D1b is untouched.
+- **Precedence is the documented OR** (`0174:106`). Either source enables the trail; neither disables the other.
+- **The read has no side effects and never throws.** It reads `config.json` directly, using the scoped-then-root ladder `config-get` uses. It deliberately avoids `loadConfig`, which can rewrite the file, spawn git and print warnings on a path that must stay silent. An unreadable or malformed config file sets nothing, and the ladder moves on. Under `GSD_WORKSTREAM` a broken workstream config inherits the root config's value; for that file `config-get` fails with `CONFIG_PARSE_FAILED` instead. Otherwise the env var alone decides.
+
+Still open from Context #1: the `GSD_AUDIT_ARGS` / `includeArgs` plumbing and the `docs/CONFIGURATION.md` stderr-on-error overstatement.

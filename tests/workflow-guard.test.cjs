@@ -25,13 +25,18 @@ const os = require('node:os');
 const path = require('node:path');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
-const { PROBE_TIMEOUT_MS, HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { PROBE_TIMEOUT_MS, HOOK_FANOUT_TIMEOUT_MS, STAGED_HOOK_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const { cleanup } = require('./helpers.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-workflow-guard.js');
 
-function runHook(payload, timeoutMs = 5000) {
+// The guard's git branch probe has its own budget, BLOCKING_GUARD_PROBE_TIMEOUT_MS
+// (hooks/lib/git-probe.js, #5180); a harness bound equal to it would race the
+// probe's own timeout, and the fail-closed path probes again. The staged-hook
+// class bound leaves room for a full probe budget per probe plus node start/kill
+// overhead.
+function runHook(payload, timeoutMs = STAGED_HOOK_SCRIPT_TIMEOUT_MS) {
   const input = JSON.stringify(payload);
   const r = runHookSeam(HOOK_PATH, [], { input, timeoutMs });
   if (r.exitCode === 0) {

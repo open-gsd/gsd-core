@@ -13,10 +13,12 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const fc = require('fast-check');
 
 const {
   createDefaultLogger,
   createNoOpLogger,
+  resolveDispatchLogger,
 } = require('../../gsd-core/bin/lib/observability/logger.cjs');
 const { cleanup } = require('../helpers.cjs');
 
@@ -336,5 +338,210 @@ describe('createDefaultLogger — audit file', () => {
     assert.ok(fs.existsSync(auditPath), 'audit file must be created when config.audit.enabled=true');
     const parsed = JSON.parse(fs.readFileSync(auditPath, 'utf8').trim());
     assert.equal(parsed.traceId, 'config-triggered');
+  });
+});
+
+// ─── resolveDispatchLogger — the live dispatch seam's opt-in gate (#4975) ────
+//
+// Both live createHub() seams used to call isAuditEnabled() with no config, so
+// only GSD_AUDIT could ever turn the opt-in audit trail on and a project's
+// `audit.enabled: true` was inert. resolveDispatchLogger(cwd) is the one gate
+// both seams now share: it resolves `audit.enabled` for the cwd the seam
+// already holds and returns the reference DispatchLogger, or undefined (no
+// logger injected — the Hub keeps its no-op fallback) when observability is off.
+
+describe('resolveDispatchLogger — config audit.enabled opt-in gate (#4975)', () => {
+  // Frozen verdicts: what the seam would inject for a given project + env.
+  const VERDICT = Object.freeze({
+    NO_LOGGER: 'no_logger',
+    AUDIT_TRAIL: 'audit_trail',
+    LOGGER_WITHOUT_TRAIL: 'logger_without_trail',
+  });
+  const GATE_ENV_KEYS = ['GSD_AUDIT', 'GSD_AUDIT_ARGS', 'GSD_WORKSTREAM', 'GSD_PROJECT'];
+
+  let tmpDir;
+  let savedEnv;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    savedEnv = Object.fromEntries(GATE_ENV_KEYS.map((k) => [k, process.env[k]]));
+    for (const k of GATE_ENV_KEYS) delete process.env[k];
+  });
+
+  afterEach(() => {
+    for (const k of GATE_ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k]; else process.env[k] = savedEnv[k];
+    }
+    cleanup(tmpDir);
+  });
+
+  function writeConfig(relDir, text) {
+    const dir = path.join(tmpDir, relDir);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'config.json'), text);
+  }
+
+  /** Resolve the seam's logger and report what it would do with one dispatch. */
+  function gateVerdict() {
+    const logger = resolveDispatchLogger(tmpDir);
+    if (logger === undefined) return VERDICT.NO_LOGGER;
+    logger.onEvent(makeOkEvent({ traceId: 'gate-probe' }));
+    return fs.existsSync(path.join(tmpDir, '.planning', '.gsd-trace.jsonl'))
+      ? VERDICT.AUDIT_TRAIL
+      : VERDICT.LOGGER_WITHOUT_TRAIL;
+  }
+
+  test('happy path: audit.enabled true with no GSD_AUDIT injects the audit-enabled reference logger', () => {
+    writeConfig('.planning', JSON.stringify({ audit: { enabled: true } }));
+    assert.equal(gateVerdict(), VERDICT.AUDIT_TRAIL);
+  });
+
+  test('missing: no .planning/config.json injects no logger', () => {
+    assert.equal(gateVerdict(), VERDICT.NO_LOGGER);
+    assert.equal(fs.existsSync(path.join(tmpDir, '.planning')), false,
+      'resolving the gate must not create .planning/ as a side effect');
+  });
+
+  test('missing key / false / non-boolean / wrong shape all degrade to no logger', () => {
+    const fixtures = [
+      ['empty object', '{}'],
+      ['empty audit section', JSON.stringify({ audit: {} })],
+      ['explicit false', JSON.stringify({ audit: { enabled: false } })],
+      ['string "true"', JSON.stringify({ audit: { enabled: 'true' } })],
+      ['number 1', JSON.stringify({ audit: { enabled: 1 } })],
+      ['null', JSON.stringify({ audit: { enabled: null } })],
+      ['object where boolean expected', JSON.stringify({ audit: { enabled: {} } })],
+      ['scalar where section expected', JSON.stringify({ audit: true })],
+      ['array where section expected', JSON.stringify({ audit: [true] })],
+      ['array config root', JSON.stringify([{ audit: { enabled: true } }])],
+      ['flat dotted key is not the nested key', JSON.stringify({ 'audit.enabled': true })],
+    ];
+    for (const [label, text] of fixtures) {
+      writeConfig('.planning', text);
+      assert.equal(gateVerdict(), VERDICT.NO_LOGGER, `${label}: must inject no logger`);
+    }
+  });
+
+  test('malformed: empty, whitespace-only, and unparseable config.json degrade to no logger without throwing', () => {
+    const fixtures = [
+      ['empty file', ''],
+      ['whitespace-only file', '  \n\t\n'],
+      ['trailing comma', '{"audit":{"enabled":true},}'],
+      ['truncated JSON', '{"audit":{"enabled":tr'],
+      ['BOM-prefixed JSON', '﻿{"audit":{"enabled":true}}'],
+    ];
+    for (const [label, text] of fixtures) {
+      writeConfig('.planning', text);
+      assert.equal(gateVerdict(), VERDICT.NO_LOGGER, `${label}: must degrade to audit off`);
+    }
+  });
+
+  test('filesystem failure: config.json that is a directory degrades to no logger', () => {
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'config.json'), { recursive: true });
+    assert.equal(gateVerdict(), VERDICT.NO_LOGGER);
+  });
+
+  test('duplicate key: JSON last-wins, the same value config-get reports', () => {
+    writeConfig('.planning', '{"audit":{"enabled":false,"enabled":true}}');
+    assert.equal(gateVerdict(), VERDICT.AUDIT_TRAIL);
+  });
+
+  test('conflicting sources: GSD_AUDIT=1 turns the trail on even when audit.enabled is false', () => {
+    writeConfig('.planning', JSON.stringify({ audit: { enabled: false } }));
+    process.env.GSD_AUDIT = '1';
+    assert.equal(gateVerdict(), VERDICT.AUDIT_TRAIL);
+  });
+
+  test('conflicting sources: audit.enabled true turns the trail on even when GSD_AUDIT is set to a non-"1" value', () => {
+    // Either source enables; neither disables the other. Only GSD_AUDIT === "1"
+    // is an env opt-in — "0" was never an off-switch, and #4975 does not make it one.
+    writeConfig('.planning', JSON.stringify({ audit: { enabled: true } }));
+    process.env.GSD_AUDIT = '0';
+    assert.equal(gateVerdict(), VERDICT.AUDIT_TRAIL);
+  });
+
+  test('malformed config with GSD_AUDIT=1 degrades to the env-var-only behaviour, not to a broken gate', () => {
+    writeConfig('.planning', '{"audit":');
+    process.env.GSD_AUDIT = '1';
+    assert.equal(gateVerdict(), VERDICT.AUDIT_TRAIL);
+  });
+
+  test('workstream scope: the workstream config wins, the root config is inherited when the workstream does not set the key', () => {
+    process.env.GSD_WORKSTREAM = 'alpha';
+    writeConfig('.planning', JSON.stringify({ audit: { enabled: true } }));
+    assert.equal(gateVerdict(), VERDICT.AUDIT_TRAIL, 'no workstream config: inherits the root value');
+
+    writeConfig(path.join('.planning', 'workstreams', 'alpha'), '{}');
+    assert.equal(gateVerdict(), VERDICT.AUDIT_TRAIL, 'workstream config without the key: inherits the root value');
+
+    writeConfig(path.join('.planning', 'workstreams', 'alpha'), JSON.stringify({ audit: { enabled: false } }));
+    assert.equal(gateVerdict(), VERDICT.NO_LOGGER, 'the workstream\'s own false wins over the root true');
+  });
+
+  test('workstream scope: a workstream-only true enables the trail even when the root config is absent', () => {
+    process.env.GSD_WORKSTREAM = 'alpha';
+    writeConfig(path.join('.planning', 'workstreams', 'alpha'), JSON.stringify({ audit: { enabled: true } }));
+    assert.equal(gateVerdict(), VERDICT.AUDIT_TRAIL);
+  });
+
+  test('workstream scope: an unparseable workstream config sets nothing, so the root value is inherited', () => {
+    process.env.GSD_WORKSTREAM = 'alpha';
+    writeConfig(path.join('.planning', 'workstreams', 'alpha'), '{"audit":');
+    assert.equal(gateVerdict(), VERDICT.NO_LOGGER, 'broken workstream config and no root config: no logger');
+
+    writeConfig('.planning', JSON.stringify({ audit: { enabled: true } }));
+    assert.equal(gateVerdict(), VERDICT.AUDIT_TRAIL, 'broken workstream config: inherits the root true');
+  });
+
+  test('hostile env: a traversal-shaped GSD_WORKSTREAM degrades to no logger instead of throwing', () => {
+    writeConfig('.planning', JSON.stringify({ audit: { enabled: true } }));
+    process.env.GSD_WORKSTREAM = '../escape';
+    assert.equal(gateVerdict(), VERDICT.NO_LOGGER);
+
+    process.env.GSD_AUDIT = '1';
+    assert.equal(gateVerdict(), VERDICT.AUDIT_TRAIL, 'GSD_AUDIT=1 still works when the config read degrades');
+  });
+
+  // ── Properties (RULESET.TESTS.property-based-testing) ──────────────────────
+  // The gate parses arbitrary JSON config shapes into one strict boolean. The
+  // invariant: with GSD_AUDIT unset, a logger is injected iff the resolved
+  // `audit.enabled` value is exactly `true`; with GSD_AUDIT=1, always. Values
+  // come from fast-check's JSON arbitraries, never from the gate's own writer.
+  // Seed pinned to the issue number and runs bounded, so a failure replays.
+  const PROPERTY_RUNS = { seed: 4975, numRuns: 100 };
+  const NON_OBJECT = fc.oneof(
+    fc.constant(null), fc.boolean(), fc.integer(), fc.double({ noNaN: true, noDefaultInfinity: true }),
+    fc.string(), fc.array(fc.jsonValue(), { maxLength: 3 }),
+  );
+
+  test('property: a logger is injected iff audit.enabled is exactly true (GSD_AUDIT unset)', () => {
+    fc.assert(
+      fc.property(fc.oneof(fc.constant(true), fc.jsonValue()), (value) => {
+        writeConfig('.planning', JSON.stringify({ audit: { enabled: value } }));
+        return (resolveDispatchLogger(tmpDir) !== undefined) === (value === true);
+      }),
+      PROPERTY_RUNS,
+    );
+  });
+
+  test('property: a non-object audit section or config root never injects a logger (GSD_AUDIT unset)', () => {
+    fc.assert(
+      fc.property(NON_OBJECT, fc.boolean(), (shape, atRoot) => {
+        writeConfig('.planning', JSON.stringify(atRoot ? shape : { audit: shape }));
+        return resolveDispatchLogger(tmpDir) === undefined;
+      }),
+      PROPERTY_RUNS,
+    );
+  });
+
+  test('property: GSD_AUDIT=1 injects a logger whatever the config content', () => {
+    process.env.GSD_AUDIT = '1';
+    fc.assert(
+      fc.property(fc.oneof(fc.string(), fc.jsonValue().map((v) => JSON.stringify(v))), (text) => {
+        writeConfig('.planning', text);
+        return resolveDispatchLogger(tmpDir) !== undefined;
+      }),
+      PROPERTY_RUNS,
+    );
   });
 });

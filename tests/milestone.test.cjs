@@ -16,7 +16,9 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup, parseFrontmatter } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, cleanup, parseFrontmatter, TOOLS_PATH, TEST_ENV_BASE } = require('./helpers.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -2728,4 +2730,276 @@ describe('#3726 milestone complete docs pin', () => {
     assert.ok(has(commands.rows, /\*\*Truncated-window guard\.\*\*.*milestone complete <version> --force --confirm/), 'docs/COMMANDS.md truncated-window guard: override instruction missing or not --force --confirm');
     assert.ok(has(commands.rows, /\*\*Unstarted-phase guard\.\*\*.*milestone complete <version> --force --confirm/), 'docs/COMMANDS.md unstarted-phase guard: override instruction missing or not --force --confirm');
   });
+});
+
+// #5038: explicit `milestone: null` is "no milestone asserted" — no unbound warning, and
+// the progress-counter withhold under a sectioned ROADMAP stays intact. Cases drive the
+// real CLI; fixtures are original to this test (#2371).
+
+describe('#5038 explicit `milestone: null` — no false warning, counters withheld under sectioning', () => {
+  // A sectioned ROADMAP — two milestone headings, each owning its own phases.
+  // v0.5 is not asserted by any STATE.md fixture below, so it plays no role
+  // except making the document genuinely sectioned.
+  const SECTIONED_ROADMAP = [
+    '# Widget Factory Roadmap',
+    '',
+    '## v0.4 — Conveyor',
+    '### Phase 1: Belt Alignment',
+    '### Phase 2: Motor Calibration',
+    '',
+    '## v0.5 — Packaging',
+    '### Phase 3: Box Folding',
+    '### Phase 4: Label Printing',
+    '',
+  ].join('\n');
+
+  // A flat ROADMAP — Phase headings only, no milestone sectioning at all.
+  const FLAT_ROADMAP = [
+    '# Widget Factory Roadmap',
+    '',
+    '### Phase 1: Belt Alignment',
+    '### Phase 2: Motor Calibration',
+    '### Phase 3: Box Folding',
+    '',
+  ].join('\n');
+
+  // Sentinel stored counters for the WITHHOLD cases (1 and 3) — deliberately
+  // not equal to any value a whole-document count, a section count, or an
+  // on-disk phase-dir count for the sectioned fixture could produce, so a
+  // substituted value is unambiguous.
+  const STORED_TOTAL_PHASES = 41;
+  const STORED_COMPLETED_PHASES = 9;
+  const STORED_TOTAL_PLANS = 17;
+  const STORED_COMPLETED_PLANS = 5;
+
+  // Stored counters for the NOT-withheld cases (2 and 4) — deliberately at or
+  // below whatever the fresh scan will derive, so the pre-existing "preserve
+  // existing progress" ratchet (state-document.cts shouldPreserveExistingProgress,
+  // #3242 Bug A — ratchets completed_phases/completed_plans upward and is
+  // unrelated to this issue) cannot mask whether the withhold fired.
+  const LOW_STORED_TOTAL_PHASES = 1;
+  const LOW_STORED_COMPLETED_PHASES = 0;
+  const LOW_STORED_TOTAL_PLANS = 0;
+  const LOW_STORED_COMPLETED_PLANS = 0;
+
+  /**
+   * `milestoneLine` is inserted verbatim as the frontmatter's `milestone:`
+   * value line, or omitted entirely when `null` (the baseline-sanity case).
+   * `stored` supplies the four progress counters to seed into frontmatter.
+   */
+  function writeStateMdWithMilestone(tmpDir, { milestoneLine, stored }) {
+    const lines = [
+      '---',
+      'gsd_state_version: 1.0',
+      ...(milestoneLine !== null ? [`milestone: ${milestoneLine}`] : []),
+      'current_phase: "01"',
+      'status: executing',
+      'progress:',
+      `  total_phases: ${stored.totalPhases}`,
+      `  completed_phases: ${stored.completedPhases}`,
+      `  total_plans: ${stored.totalPlans}`,
+      `  completed_plans: ${stored.completedPlans}`,
+      '  percent: 22',
+      '---',
+      '',
+      '# GSD State',
+      '',
+      '## Current Position',
+      '',
+      '**Current Phase:** 01',
+      '**Status:** Executing',
+      '',
+    ];
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), lines.join('\n'));
+  }
+
+  /** Same call, but over the process seam directly so stderr is observable —
+   * `runGsdTools` discards stderr on a successful (exit 0) run. */
+  function stateJsonRawWithStderr(tmpDir) {
+    const rec = runNode(
+      [TOOLS_PATH, 'state', 'json', '--raw'],
+      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: PROBE_TIMEOUT_MS },
+    );
+    assert.equal(rec.exitCode, 0, `state json --raw failed: ${rec.stderr}`);
+    return { parsed: JSON.parse(rec.stdout), stderr: rec.stderr || '' };
+  }
+
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('case 1: sectioned ROADMAP + explicit null — no warning, counters withheld at stored values', () => {
+    writeRoadmap(tmpDir, SECTIONED_ROADMAP);
+    writeStateMdWithMilestone(tmpDir, {
+      milestoneLine: 'null',
+      stored: {
+        totalPhases: STORED_TOTAL_PHASES,
+        completedPhases: STORED_COMPLETED_PHASES,
+        totalPlans: STORED_TOTAL_PLANS,
+        completedPlans: STORED_COMPLETED_PLANS,
+      },
+    });
+    mkPhaseDir(tmpDir, '01-belt-alignment', { plan: true });
+    mkPhaseDir(tmpDir, '02-motor-calibration', { plan: true });
+
+    const { parsed, stderr } = stateJsonRawWithStderr(tmpDir);
+
+    assert.ok(
+      !stderr.includes('matches no ROADMAP heading'),
+      `explicit \`milestone: null\` must never produce the asserted-but-unbound warning; got stderr=${JSON.stringify(stderr)}`,
+    );
+    assert.strictEqual(parsed.progress.total_phases, STORED_TOTAL_PHASES,
+      `total_phases must stay at its stored value (withheld), not be recomputed from the whole document or disk. Got ${parsed.progress.total_phases}`);
+    assert.strictEqual(parsed.progress.completed_phases, STORED_COMPLETED_PHASES,
+      `completed_phases must stay at its stored value (withheld). Got ${parsed.progress.completed_phases}`);
+    assert.strictEqual(parsed.progress.total_plans, STORED_TOTAL_PLANS,
+      `total_plans must stay at its stored value (withheld). Got ${parsed.progress.total_plans}`);
+    assert.strictEqual(parsed.progress.completed_plans, STORED_COMPLETED_PLANS,
+      `completed_plans must stay at its stored value (withheld). Got ${parsed.progress.completed_plans}`);
+  });
+
+  test('case 2: flat ROADMAP + explicit null — whole-document count still used (pre-existing behavior unaffected)', () => {
+    writeRoadmap(tmpDir, FLAT_ROADMAP);
+    writeStateMdWithMilestone(tmpDir, {
+      milestoneLine: 'null',
+      stored: {
+        totalPhases: LOW_STORED_TOTAL_PHASES,
+        completedPhases: LOW_STORED_COMPLETED_PHASES,
+        totalPlans: LOW_STORED_TOTAL_PLANS,
+        completedPlans: LOW_STORED_COMPLETED_PLANS,
+      },
+    });
+    // A finished phase (PLAN + SUMMARY) on disk: a "null"-named version filter would
+    // match no directory and report 0 completed, so 1 proves the filter saw no version.
+    mkPhaseDir(tmpDir, '01-belt-alignment', { plan: true, oneLiner: 'aligned' });
+
+    const { parsed, stderr } = stateJsonRawWithStderr(tmpDir);
+
+    assert.ok(
+      !stderr.includes('matches no ROADMAP heading'),
+      `flat roadmap + explicit null must never warn; got stderr=${JSON.stringify(stderr)}`,
+    );
+    assert.strictEqual(parsed.progress.total_phases, 3,
+      `flat roadmap has nothing to conflate: total_phases is the whole-document count (3). Got ${parsed.progress.total_phases}`);
+    assert.strictEqual(parsed.progress.completed_plans, 1,
+      `completed_plans must come from an unfiltered disk scan (1). Got ${parsed.progress.completed_plans}`);
+  });
+
+  test('case 3 (negative control): a real unbound version still warns AND withholds', () => {
+    writeRoadmap(tmpDir, SECTIONED_ROADMAP);
+    writeStateMdWithMilestone(tmpDir, {
+      milestoneLine: 'v9.9',
+      stored: {
+        totalPhases: STORED_TOTAL_PHASES,
+        completedPhases: STORED_COMPLETED_PHASES,
+        totalPlans: STORED_TOTAL_PLANS,
+        completedPlans: STORED_COMPLETED_PLANS,
+      },
+    });
+    mkPhaseDir(tmpDir, '01-belt-alignment', { plan: true });
+    mkPhaseDir(tmpDir, '02-motor-calibration', { plan: true });
+
+    const { parsed, stderr } = stateJsonRawWithStderr(tmpDir);
+
+    assert.ok(
+      stderr.includes('matches no ROADMAP heading') && stderr.includes('v9.9'),
+      `a genuinely asserted-but-unbound version must still produce the #3354/#3642 warning naming it; got stderr=${JSON.stringify(stderr)}`,
+    );
+    assert.strictEqual(parsed.progress.total_phases, STORED_TOTAL_PHASES,
+      `an unbound real version must still withhold at the stored value, exactly as before this fix. Got ${parsed.progress.total_phases}`);
+    assert.strictEqual(parsed.progress.completed_phases, STORED_COMPLETED_PHASES,
+      `completed_phases must still withhold. Got ${parsed.progress.completed_phases}`);
+  });
+
+  test('case 4 (baseline sanity): no `milestone:` key at all, flat ROADMAP — untouched', () => {
+    writeRoadmap(tmpDir, FLAT_ROADMAP);
+    writeStateMdWithMilestone(tmpDir, {
+      milestoneLine: null,
+      stored: {
+        totalPhases: LOW_STORED_TOTAL_PHASES,
+        completedPhases: LOW_STORED_COMPLETED_PHASES,
+        totalPlans: LOW_STORED_TOTAL_PLANS,
+        completedPlans: LOW_STORED_COMPLETED_PLANS,
+      },
+    });
+    mkPhaseDir(tmpDir, '01-belt-alignment', { plan: true });
+
+    const { parsed, stderr } = stateJsonRawWithStderr(tmpDir);
+
+    assert.ok(
+      !stderr.includes('matches no ROADMAP heading'),
+      `a fresh/pre-milestone project (no \`milestone:\` key) must never warn; got stderr=${JSON.stringify(stderr)}`,
+    );
+    assert.strictEqual(parsed.progress.total_phases, 3,
+      `a fresh project with a flat roadmap must use the whole-document heading count (3), exactly as before this fix. Got ${parsed.progress.total_phases}`);
+  });
+
+  test('case 5 (write path): `state sync` withholds frontmatter counters too, without warning (must not diverge from the read path)', () => {
+    // Real write (not --verify); the read-back goes through `state json`, which
+    // parses the persisted STATE.md, so it asserts what sync wrote to disk.
+    const stored = {
+      totalPhases: STORED_TOTAL_PHASES,
+      completedPhases: STORED_COMPLETED_PHASES,
+      totalPlans: STORED_TOTAL_PLANS,
+      completedPlans: STORED_COMPLETED_PLANS,
+    };
+    const sync = () => runNode(
+      [TOOLS_PATH, 'state', 'sync', '--raw'],
+      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: PROBE_TIMEOUT_MS },
+    );
+    mkPhaseDir(tmpDir, '01-belt-alignment', { plan: true });
+    mkPhaseDir(tmpDir, '02-motor-calibration', { plan: true });
+
+    // Control: with a real bound milestone, sync recomputes the sentinel total away.
+    writeRoadmap(tmpDir, SECTIONED_ROADMAP);
+    // Low stored counters so the #3242 upward ratchet cannot mask the recompute.
+    writeStateMdWithMilestone(tmpDir, {
+      milestoneLine: 'v0.4',
+      stored: { totalPhases: LOW_STORED_TOTAL_PHASES, completedPhases: 0, totalPlans: 0, completedPlans: 0 },
+    });
+    assert.equal(sync().exitCode, 0);
+    assert.strictEqual(stateJsonRawWithStderr(tmpDir).parsed.progress.total_phases, 2,
+      'control: sync must recompute counters when the milestone is bound');
+
+    writeStateMdWithMilestone(tmpDir, { milestoneLine: 'null', stored });
+    const syncRec = sync();
+    assert.equal(syncRec.exitCode, 0, `state sync failed: ${syncRec.stderr}`);
+    assert.ok(
+      !(syncRec.stderr || '').includes('matches no ROADMAP heading'),
+      `state sync must not warn for an explicit null; got stderr=${JSON.stringify(syncRec.stderr)}`,
+    );
+    const { parsed } = stateJsonRawWithStderr(tmpDir);
+    assert.deepStrictEqual(
+      [parsed.progress.total_phases, parsed.progress.completed_phases, parsed.progress.total_plans, parsed.progress.completed_plans],
+      [STORED_TOTAL_PHASES, STORED_COMPLETED_PHASES, STORED_TOTAL_PLANS, STORED_COMPLETED_PLANS],
+      'state sync must persist the withheld stored counters',
+    );
+  });
+
+  // Every YAML null spelling the shared normalizer accepts must behave like `null`.
+  for (const spelling of ['null', 'Null', 'NULL', '~', 'null # no milestone', '"null"']) {
+    test(`null spelling ${JSON.stringify(spelling)}: no warning, counters withheld`, () => {
+      writeRoadmap(tmpDir, SECTIONED_ROADMAP);
+      writeStateMdWithMilestone(tmpDir, {
+        milestoneLine: spelling,
+        stored: {
+          totalPhases: STORED_TOTAL_PHASES,
+          completedPhases: STORED_COMPLETED_PHASES,
+          totalPlans: STORED_TOTAL_PLANS,
+          completedPlans: STORED_COMPLETED_PLANS,
+        },
+      });
+      mkPhaseDir(tmpDir, '01-belt-alignment', { plan: true });
+
+      const { parsed, stderr } = stateJsonRawWithStderr(tmpDir);
+      assert.ok(!stderr.includes('matches no ROADMAP heading'), `got stderr=${JSON.stringify(stderr)}`);
+      assert.strictEqual(parsed.progress.total_phases, STORED_TOTAL_PHASES);
+    });
+  }
 });

@@ -700,3 +700,148 @@ describe('bug #3631 — SDK family routers forward --raw to output()', () => {
     });
   });
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Regression for #4975 — `audit.enabled: true` in the project config must
+// enable the opt-in audit trail on this live seam exactly like GSD_AUDIT=1.
+// Before the fix the adapter called isAuditEnabled() with no config, so the
+// documented key was inert and only the env var could inject the logger.
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe, test } = require('node:test');
+  const assert = require('node:assert/strict');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { routeHubCommandFamily } = require('../gsd-core/bin/lib/cjs-command-router-adapter.cjs');
+  const { createTempDir, cleanup } = require('./helpers.cjs');
+
+  const GATE_ENV_KEYS = ['GSD_AUDIT', 'GSD_AUDIT_ARGS', 'GSD_WORKSTREAM', 'GSD_PROJECT'];
+
+  /** Clear every env var the audit gate reads; restore them after the test. */
+  function pinGateEnv(t, overrides = {}) {
+    const saved = Object.fromEntries(GATE_ENV_KEYS.map((k) => [k, process.env[k]]));
+    t.after(() => {
+      for (const k of GATE_ENV_KEYS) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
+    });
+    for (const k of GATE_ENV_KEYS) delete process.env[k];
+    Object.assign(process.env, overrides);
+  }
+
+  /** Temp project; `configText` undefined means no .planning/config.json at all. */
+  function makeProject(t, configText) {
+    const tmp = createTempDir('gsd-4975-adapter-');
+    t.after(() => cleanup(tmp));
+    if (configText !== undefined) {
+      fs.mkdirSync(path.join(tmp, '.planning'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, '.planning', 'config.json'), configText);
+    }
+    return tmp;
+  }
+
+  /** Collect every stderr write the seam makes during the test (restored automatically). */
+  function captureStderr(t) {
+    const writes = [];
+    t.mock.method(process.stderr, 'write', (chunk) => {
+      writes.push(String(chunk));
+      return true;
+    });
+    return writes;
+  }
+
+  function readTrail(cwd) {
+    const trailPath = path.join(cwd, '.planning', '.gsd-trace.jsonl');
+    if (!fs.existsSync(trailPath)) return null;
+    return fs.readFileSync(trailPath, 'utf8').split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+  }
+
+  /** One ok dispatch, then one UnknownCommand dispatch, through the live adapter. */
+  function dispatchOkThenUnknown(cwd) {
+    const errors = [];
+    const route = (subcommand) => routeHubCommandFamily({
+      family: 'unit',
+      args: ['unit', subcommand],
+      subcommands: ['ok'],
+      handlers: { ok: () => {} },
+      unknownMessage: (sub, available) => `Unknown ${sub}. Available: ${available.join(', ')}`,
+      error: (message, reason) => errors.push({ message, reason }),
+      cwd,
+      raw: false,
+    });
+    route('ok');
+    route('missing');
+    return errors;
+  }
+
+  describe('cjs-command-router-adapter — config audit.enabled opt-in (#4975)', () => {
+    test('audit.enabled true with no GSD_AUDIT writes the audit trail and the structured stderr error line', (t) => {
+      pinGateEnv(t);
+      const tmp = makeProject(t, JSON.stringify({ audit: { enabled: true } }));
+      const stderrWrites = captureStderr(t);
+
+      const errors = dispatchOkThenUnknown(tmp);
+
+      const trail = readTrail(tmp);
+      assert.notEqual(trail, null, 'audit.enabled true must produce .planning/.gsd-trace.jsonl on the adapter seam');
+      assert.deepEqual(trail.map((e) => e.result.kind), ['ok', 'UnknownCommand'],
+        'both the ok and the error dispatch are recorded, in order');
+
+      assert.equal(stderrWrites.length, 1, 'exactly one structured stderr line, for the error dispatch only');
+      const stderrRecord = JSON.parse(stderrWrites[0]);
+      assert.equal(stderrRecord.kind, 'UnknownCommand');
+      assert.equal(stderrRecord.traceId, trail[1].traceId, 'the stderr line and the trail event are the same dispatch');
+
+      assert.deepEqual(errors, [{ message: 'Unknown missing. Available: ok', reason: 'sdk_unknown_command' }],
+        'the adapter\'s own error translation is unchanged');
+    });
+
+    test('the config-enabled trail and stderr line have the same shape as the GSD_AUDIT=1 path', (t) => {
+      pinGateEnv(t);
+      const envProject = makeProject(t, undefined);
+      const configProject = makeProject(t, JSON.stringify({ audit: { enabled: true } }));
+      const stderrWrites = captureStderr(t);
+
+      process.env.GSD_AUDIT = '1';
+      dispatchOkThenUnknown(envProject);
+      delete process.env.GSD_AUDIT;
+      dispatchOkThenUnknown(configProject);
+
+      assert.equal(stderrWrites.length, 2, 'one structured stderr line per path');
+      const [envRecord, configRecord] = stderrWrites.map((w) => JSON.parse(w));
+      assert.deepEqual(Object.keys(configRecord).sort(), Object.keys(envRecord).sort(), 'stderr record keys match');
+      assert.equal(configRecord.kind, envRecord.kind);
+      assert.equal(configRecord.command, envRecord.command);
+
+      const envTrail = readTrail(envProject);
+      const configTrail = readTrail(configProject);
+      assert.equal(configTrail.length, envTrail.length);
+      for (let i = 0; i < envTrail.length; i += 1) {
+        assert.deepEqual(Object.keys(configTrail[i]).sort(), Object.keys(envTrail[i]).sort(), `trail event ${i} keys match`);
+        assert.deepEqual(configTrail[i].result, envTrail[i].result, `trail event ${i} result matches`);
+        assert.equal(configTrail[i].command, envTrail[i].command);
+      }
+    });
+
+    test('negative proof: absent, false, or malformed audit config injects no logger — no trail, no stderr line', (t) => {
+      pinGateEnv(t);
+      const fixtures = [
+        ['no config.json', undefined],
+        ['empty config', '{}'],
+        ['audit.enabled false', JSON.stringify({ audit: { enabled: false } })],
+        ['audit.enabled "true" (string)', JSON.stringify({ audit: { enabled: 'true' } })],
+        ['unparseable config', '{"audit":{"enabled":true},}'],
+      ];
+      const stderrWrites = captureStderr(t);
+      for (const [label, configText] of fixtures) {
+        const tmp = makeProject(t, configText);
+        const errors = dispatchOkThenUnknown(tmp);
+        assert.equal(readTrail(tmp), null, `${label}: no audit trail may be written`);
+        assert.deepEqual(errors, [{ message: 'Unknown missing. Available: ok', reason: 'sdk_unknown_command' }],
+          `${label}: the error translation is unchanged`);
+      }
+      assert.deepEqual(stderrWrites, [], 'with observability off the seam writes nothing to stderr (no logger injected)');
+    });
+  });
+}

@@ -6497,7 +6497,7 @@ const path = require('node:path');
 const { cleanup } = require('./helpers.cjs');
 const { runHook: seamRunHook } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
-const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { STAGED_HOOK_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-worktree-path-guard.js');
 const INSTALL_SRC = path.join(__dirname, '..', 'bin', 'install.js');
@@ -6554,17 +6554,17 @@ function makeWorktree(mainRepo, branchName) {
  * Run the hook with a given payload, returning the spawnSync result.
  */
 function runHook(cwd, payload) {
-  // QUICK_SPAWN_TIMEOUT_MS (10000ms): previously UNBOUNDED (no `timeout`
-  // option passed to spawnSync). gsd-worktree-path-guard.js is a
-  // synchronous, in-process path-guard hook (fs/path checks against a JSON
-  // stdin payload) — no subprocess or network work of its own. 10s leaves
-  // generous headroom over its sub-second worst case even on a heavily
-  // contended CI runner. See tests/helpers/timeouts.cjs for the shared
-  // norm this value was promoted to (#4514).
+  // STAGED_HOOK_SCRIPT_TIMEOUT_MS (20000ms): the hook spawns up to 3 sequential
+  // `git rev-parse` probes (BLOCKING_GUARD_PROBE_TIMEOUT_MS = 5000ms each,
+  // hooks/lib/git-probe.js), so its worst case is ~15.5s. A probe that times
+  // out FAILS OPEN (exit 0), so this bound must sit above N probes x the
+  // per-probe budget or a starved runner turns a deny case into a silent allow
+  // (#3911, #5180). tests/blocking-guard-budget-parity.test.cjs pins the
+  // arithmetic. See tests/helpers/timeouts.cjs for the class (#4514).
   const r = seamRunHook(HOOK_PATH, [], {
     cwd,
     input: JSON.stringify(payload),
-    timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
+    timeoutMs: STAGED_HOOK_SCRIPT_TIMEOUT_MS,
   });
   return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
 }
@@ -6722,7 +6722,7 @@ describe('bug #260: gsd-worktree-path-guard.js', () => {
         tool_input: { file_path: path.join(mainRepo, 'out.txt') },
       };
       const result = runHook(worktreeDir, payload);
-      assert.strictEqual(result.status, 2);
+      assert.strictEqual(result.status, 2, `Expected exit 2 (block), got ${result.status}. stderr: ${result.stderr}`);
       const parsed = JSON.parse(result.stdout);
       assert.strictEqual(parsed.decision, 'block');
     });
@@ -6735,7 +6735,7 @@ describe('bug #260: gsd-worktree-path-guard.js', () => {
         tool_input: { file_path: offendingPath },
       };
       const result = runHook(worktreeDir, payload);
-      assert.strictEqual(result.status, 2);
+      assert.strictEqual(result.status, 2, `Expected exit 2 (block), got ${result.status}. stderr: ${result.stderr}`);
       const parsed = JSON.parse(result.stdout);
       assert.ok(
         parsed.reason && parsed.reason.includes(offendingPath),

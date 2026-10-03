@@ -3997,3 +3997,90 @@ describe('roadmap-parser: extractPhaseFieldMultiline — #4837 structural bounda
     assert.strictEqual(extractPhaseFieldMultiline('no field here\n', 'Goal'), null);
   });
 });
+
+// ─── classifyMilestoneScalar / explicit-null milestone (#5038) ─────────────────
+
+describe('roadmap-parser: classifyMilestoneScalar (#5038)', () => {
+  const { classifyMilestoneScalar } = roadmapParser;
+  const NULL_SPELLINGS = ['null', 'Null', 'NULL', '~'];
+  const pad = fc.string({ unit: fc.constantFrom(' ', '\t'), maxLength: 3 });
+
+  test('every null spelling, with optional quotes and a trailing comment, is an explicit null', () => {
+    fc.assert(fc.property(
+      fc.constantFrom(...NULL_SPELLINGS),
+      fc.constantFrom('', "'", '"'),
+      fc.option(fc.string({ unit: fc.constantFrom('a', 'b', ' ', '#', '1'), maxLength: 8 }), { nil: undefined }),
+      pad,
+      pad,
+      (spelling, quote, comment, lead, trail) => {
+        const raw = `${lead}${quote}${spelling}${quote}${comment === undefined ? '' : ` #${comment}`}${trail}`;
+        assert.deepStrictEqual(classifyMilestoneScalar(raw), { explicitNull: true, version: null });
+      },
+    ));
+  });
+
+  test('any other token is a version equal to the trimmed input', () => {
+    fc.assert(fc.property(
+      fc.string({ unit: fc.constantFrom('v', '1', '2', '.', '-', 'a', 'n', 'u', 'l', '#'), minLength: 1, maxLength: 10 }),
+      pad,
+      pad,
+      (token, lead, trail) => {
+        fc.pre(!NULL_SPELLINGS.includes(token));
+        // A `#` only starts a comment after whitespace, so none of these are null.
+        const result = classifyMilestoneScalar(`${lead}${token}${trail}`);
+        assert.deepStrictEqual(result, { explicitNull: false, version: token });
+      },
+    ));
+  });
+
+  test('`#` boundary: `null#x` is a version, `null #x` is null', () => {
+    assert.deepStrictEqual(classifyMilestoneScalar('null#x'), { explicitNull: false, version: 'null#x' });
+    assert.deepStrictEqual(classifyMilestoneScalar('null #x'), { explicitNull: true, version: null });
+  });
+
+  test('blank or non-string input is absent, not null', () => {
+    for (const raw of ['', '   ', undefined, null]) {
+      assert.deepStrictEqual(classifyMilestoneScalar(raw), { explicitNull: false, version: null });
+    }
+  });
+});
+
+describe('roadmap-parser: sectioned ROADMAP with explicit `milestone: null` (#5038)', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const sectioned = [
+    '# Roadmap',
+    '',
+    '- 🚧 **v1.1 Current** - in progress',
+    '',
+    '## v1.1 Current',
+    '',
+    '### Phase 2: Second',
+    '',
+    '## v1.0 Earlier',
+    '',
+    '### Phase 1: First',
+    '',
+  ].join('\n');
+
+  test('control: a bound milestone resolves a raw range', () => {
+    writeState(tmpDir, { milestone: 'v1.1' });
+    assert.ok(roadmapParser.currentMilestoneRawRanges(sectioned, tmpDir), 'bound milestone yields ranges');
+  });
+
+  test('explicit null does not fall back to the in-progress bullet (currentMilestoneRawRanges)', () => {
+    writeState(tmpDir, { milestone: 'null' });
+    assert.strictEqual(roadmapParser.currentMilestoneRawRanges(sectioned, tmpDir), null);
+  });
+
+  test('explicit null does not narrow extractCurrentMilestone to the bullet milestone', () => {
+    writeState(tmpDir, { milestone: 'v1.1' });
+    const bound = extractCurrentMilestone(sectioned, tmpDir);
+    writeState(tmpDir, { milestone: 'null' });
+    const unbound = extractCurrentMilestone(sectioned, tmpDir);
+    assert.ok(!bound.includes('Phase 1: First'), 'control narrows to v1.1');
+    assert.ok(unbound.includes('Phase 1: First'), 'explicit null leaves the whole document, not the v1.1 slice');
+  });
+});

@@ -114,6 +114,7 @@
     "resolve_model_ids",
     "effort.default",
     "fast_mode.enabled",
+    "audit.enabled",
     "plan_review.source_grounding",
     "plan_review.source_grounding_authority",
     "model_policy.provider",

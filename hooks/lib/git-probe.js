@@ -81,4 +81,20 @@ function reportIfUndetermined(hookName, probeLabel, result) {
   }
 }
 
-module.exports = { classifyGitProbe, reportIfUndetermined };
+// Per-probe budget for the git probes of BLOCKING guards. A probe that times
+// out fails OPEN (see reportIfUndetermined above), which is the same outcome
+// as the host killing the hook — so a budget sized to git's ~0.1s typical run
+// silently disables the gate on a starved host (a 2000ms budget was exceeded
+// on a loaded Windows runner, #5180). Worst case for a guard that runs up to
+// BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES sequential probes:
+//   3 x 5000ms + ~500ms node start/kill/reap = ~15.5s,
+// inside the 120s host budget blocking guards are registered with (#3981).
+const BLOCKING_GUARD_PROBE_TIMEOUT_MS = 5000;
+const BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES = 3;
+
+module.exports = {
+  classifyGitProbe,
+  reportIfUndetermined,
+  BLOCKING_GUARD_PROBE_TIMEOUT_MS,
+  BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES,
+};

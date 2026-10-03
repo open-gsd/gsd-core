@@ -168,56 +168,73 @@ function planningRoot(cwd: string): string {
   return path.join(cwd, '.planning');
 }
 
+type ScopedConfigValue = { present: boolean; value: unknown };
+
+const CONFIG_VALUE_ABSENT: ScopedConfigValue = Object.freeze({ present: false, value: undefined });
+
+/**
+ * The value one config file sets at `keyPath`, if it sets one at all. Every
+ * segment must be an OWN property of a plain (non-null, non-array) object, so
+ * an absent, unreadable, or unparseable file — or a non-object anywhere on the
+ * path — does not set the key.
+ */
+function ownConfigValue(configPath: string, keyPath: readonly string[]): ScopedConfigValue {
+  let node: unknown;
+  try {
+    node = JSON.parse(String(fs.readFileSync(configPath, 'utf8')));
+  } catch {
+    return CONFIG_VALUE_ABSENT;
+  }
+  for (const key of keyPath) {
+    if (node === null || typeof node !== 'object' || Array.isArray(node)) return CONFIG_VALUE_ABSENT;
+    if (!Object.prototype.hasOwnProperty.call(node, key)) return CONFIG_VALUE_ABSENT;
+    node = (node as Record<string, unknown>)[key];
+  }
+  return { present: true, value: node };
+}
+
+/**
+ * #3972/#4975: the ONE scope-aware config read for surfaces that must answer
+ * with the value `config-get <keyPath>` reports but may not call loadConfig
+ * (it normalizes and rewrites config.json, spawns git, and prints warnings).
+ * Ladder: the scoped config's OWN key wins (planningDir is project- and
+ * workstream-aware); otherwise the flat root's key, but only under the
+ * GSD_WORKSTREAM env gate — config-get deliberately does NOT inherit root
+ * under GSD_PROJECT alone, and no reader of this ladder may diverge (#3963).
+ * An unreadable or unparseable file sets nothing, so the ladder moves on:
+ * under GSD_WORKSTREAM a broken workstream config inherits the root's key.
+ * That is the one place this read and config-get part ways — for a scoped
+ * config.json that exists but cannot be read or parsed, config-get fails
+ * with CONFIG_PARSE_FAILED instead of reporting a value.
+ * The value is returned uncoerced; each caller applies its own strict
+ * comparison. Never throws: planningDir/planningRoot reject a
+ * GSD_PROJECT/GSD_WORKSTREAM value containing path separators or `..`, and
+ * that shape resolves to "not present".
+ */
+function readScopedConfigValue(cwd: string, keyPath: readonly [string, ...string[]]): ScopedConfigValue {
+  try {
+    const scoped = ownConfigValue(path.join(planningDir(cwd), 'config.json'), keyPath);
+    if (scoped.present) return scoped;
+    if (resolveEnvWorkstream() !== null) {
+      return ownConfigValue(path.join(planningRoot(cwd), 'config.json'), keyPath);
+    }
+  } catch {
+    // Degrade to "not present" — see the contract above.
+  }
+  return CONFIG_VALUE_ABSENT;
+}
+
 /**
  * #3972: the ONE owner of "is this planning scope opted out of worktrees?" —
  * the effective `workflow.use_worktrees === false` read every
  * isolation-deciding surface must share (config-get's merged view is the
- * contract). Ladder: the scoped config's OWN key wins (planningDir is
- * project- and workstream-aware); otherwise the flat root's key, but only
- * under the GSD_WORKSTREAM env gate — config-get deliberately does NOT
- * inherit root under GSD_PROJECT alone, and this read must not diverge
- * (#3963). Strict `=== false` (never coerced); any read failure degrades to
- * "not opted out" (worktrees on — the fail-safe direction: the guard keeps
- * enforcing). Direct file reads only — never loadConfig, which normalizes
- * and rewrites config on paths that back sentinel writes.
+ * contract), resolved on the readScopedConfigValue ladder. Strict `=== false`
+ * (never coerced); a config that cannot be read never opts out by itself
+ * (worktrees on — the fail-safe direction: the guard keeps enforcing).
  */
 function worktreesOptedOut(cwd: string): boolean {
-  // #3972 review: the WHOLE body is guarded — planningDir/planningRoot
-  // themselves throw on a GSD_PROJECT/GSD_WORKSTREAM value containing path
-  // separators or `..`, and this contract ("any failure degrades to not
-  // opted out — worktrees on, keep enforcing") must hold for that shape too.
-  try {
-    return worktreesOptedOutUnguarded(cwd);
-  } catch {
-    return false;
-  }
-}
-
-function worktreesOptedOutUnguarded(cwd: string): boolean {
-  type MaybeConfig = { workflow?: unknown } | null;
-  const readCfg = (p: string): MaybeConfig => {
-    try {
-      return JSON.parse(String(fs.readFileSync(p, 'utf8'))) as MaybeConfig;
-    } catch {
-      return null;
-    }
-  };
-  const ownKey = (cfg: MaybeConfig): { present: boolean; value: unknown } => {
-    if (cfg === null || typeof cfg !== 'object') return { present: false, value: undefined };
-    const wf = cfg.workflow;
-    if (wf === null || typeof wf !== 'object' || Array.isArray(wf)) return { present: false, value: undefined };
-    const wfRec = wf as Record<string, unknown>;
-    return Object.prototype.hasOwnProperty.call(wfRec, 'use_worktrees')
-      ? { present: true, value: wfRec['use_worktrees'] }
-      : { present: false, value: undefined };
-  };
-  const scoped = ownKey(readCfg(path.join(planningDir(cwd), 'config.json')));
-  if (scoped.present) return scoped.value === false;
-  if (resolveEnvWorkstream() !== null) {
-    const root = ownKey(readCfg(path.join(planningRoot(cwd), 'config.json')));
-    if (root.present) return root.value === false;
-  }
-  return false;
+  const { present, value } = readScopedConfigValue(cwd, ['workflow', 'use_worktrees']);
+  return present && value === false;
 }
 
 /**
@@ -681,6 +698,7 @@ function findContextMdIn(
 
 export = {
   worktreesOptedOut,
+  readScopedConfigValue,
   createPlanningWorkspace,
   createSharedPointerAdapter,
   createSessionScopedPointerAdapter,

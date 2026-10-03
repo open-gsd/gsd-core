@@ -116,6 +116,9 @@ GSD stores project settings in `.planning/config.json`. Created during `/gsd-new
   "security": {
     "injection_blocking": false
   },
+  "audit": {
+    "enabled": false
+  },
   "project_code": null,
   "agent_skills": {},
   "agent_skills_security": {
@@ -2359,6 +2362,14 @@ GSD_AUDIT=1 gsd plan
   }
 }
 ```
+
+Or set it with `gsd config-set audit.enabled true` — the value must be a boolean. The key is read from the project config (a workstream's own setting wins over the root config's). A malformed workstream config sets no value, so the audit reader inherits the root config's value; `config-get audit.enabled` instead fails with `CONFIG_PARSE_FAILED` for that file. Either source turns the trail on and neither turns the other off: `GSD_AUDIT=0` does not override `audit.enabled: true`.
+
+#### Settings
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `audit.enabled` | boolean | `false` | Opt in to the dispatch audit trail. Strict boolean: only `true` enables it; any other value (including the string `"true"`) leaves it off. Resolved like `config-get audit.enabled` — the scoped config wins, the root key is inherited under `GSD_WORKSTREAM`. `GSD_AUDIT=1` enables the trail independently. |
 
 **Audit file location:** `.planning/.gsd-trace.jsonl` (gitignored)
 

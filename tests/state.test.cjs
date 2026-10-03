@@ -3048,6 +3048,40 @@ describe('cmdStateUpdateProgress (state update-progress)', () => {
     assert.strictEqual(output.total, 1, 'total must be v2.0-scoped (phase 02 only) — Phase 03 must not leak in from the auto-derived scan');
     assert.strictEqual(output.completed, 1, 'completed must be v2.0-scoped (phase 02 only)');
   });
+
+  test('#5038: explicit `milestone: null` on a flat ROADMAP resolves a complete phase scope, so update-progress writes', () => {
+    // Before #5038 the raw `milestone:` read in extractCurrentMilestoneScoped saw the text
+    // "null" as a version with no heading and the scope gate withheld the write.
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      ['# Roadmap', '', '### Phase 01: Alpha', '**Goal:** ship it.', ''].join('\n')
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      ['---', 'gsd_state_version: "1.0"', 'milestone: null', 'status: executing', '---', '',
+        '# Project State', '', '**Progress:** [██████████] 100%', ''].join('\n')
+    );
+    const phase01Dir = path.join(tmpDir, '.planning', 'phases', '01');
+    fs.mkdirSync(phase01Dir, { recursive: true });
+    fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary\n');
+
+    const { runNode } = require('./helpers/process-seam.cjs');
+    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+    const { TOOLS_PATH: toolsPath, TEST_ENV_BASE } = require('./helpers.cjs');
+    const rec = runNode(
+      [toolsPath, 'state', 'update-progress'],
+      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: PROBE_TIMEOUT_MS },
+    );
+    assert.equal(rec.exitCode, 0, `Command failed: ${rec.stderr}`);
+    const output = JSON.parse(rec.stdout);
+    assert.strictEqual(output.updated, true, `scope gate must not withhold; got ${rec.stdout}`);
+    assert.strictEqual(output.total, 1);
+    const persisted = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8');
+    assert.match(persisted, /^milestone: null$/m, 'the explicit null is preserved');
+    assert.ok(persisted.includes(`**Progress:** ${output.bar}`), `body bar must equal the reported bar ${output.bar}`);
+    assert.doesNotMatch(persisted, /100%/, 'the seeded stale bar was replaced');
+  });
 });
 
 describe('#4213: resyncing state verbs keep body Progress bar equal to frontmatter progress.percent', () => {
