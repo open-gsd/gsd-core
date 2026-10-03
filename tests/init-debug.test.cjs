@@ -79,8 +79,8 @@ describe('init.debug resolves identically to the three calls it replaces (matrix
     assert.equal(viaInit.debug_dir, viaState.debug_dir);
     assert.match(
       viaInit.debug_dir,
-      /\/workstreams\/ws1\/debug$/,
-      'an active workstream must scope debug_dir into that workstream, not the project root'
+      /\/\.planning\/debug$/,
+      'debug sessions must stay at the project root under an active workstream'
     );
   });
 
@@ -453,10 +453,10 @@ describe('planningPaths exposes the debug directory (matrix §E)', () => {
     assert.equal(planningPaths(tmpDir).debug, path.join(tmpDir, '.planning', 'debug'));
   });
 
-  test('planningPaths.debug is workstream-scoped (row E2)', () => {
+  test('planningPaths.debug stays root-scoped under a workstream (row E2)', () => {
     assert.equal(
       planningPaths(tmpDir, 'feature-x').debug,
-      path.join(tmpDir, '.planning', 'workstreams', 'feature-x', 'debug')
+      path.join(tmpDir, '.planning', 'debug')
     );
   });
 

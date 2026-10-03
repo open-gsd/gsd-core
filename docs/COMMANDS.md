@@ -2125,6 +2125,7 @@ node gsd-tools.cjs effort sync --apply    # write the changes
 | `--config-dir <path>` | Point at a specific runtime config directory |
 
 **On `claude`** it re-syncs the `effort:` frontmatter of installed `gsd-*.md` agents.
+An explicit `--config-dir` takes precedence. Otherwise, a project-local Claude install uses its adjacent `.claude/agents/` directory; other installs use the global Claude agents directory. If the selected directory exists but has no `gsd-*.md` files, the report includes `reason: "no GSD agent files found"`.
 
 **On `codex`** it repairs `.toml` files that drift from the passive model posture ([ADR-2313](adr/2313-codex-passive-model-posture.md)) — the counterpart to the detection that [`validate agents`](#validate-agents) performs:
 

@@ -2329,7 +2329,8 @@ describe('install() global cline — coexistence: skills AND .clinerules', () =>
     cleanup(tmpGlobalDir);
   });
 
-  test('global cline install writes at least one gsd-* SKILL.md under skills/', () => {
+  test('global cline install writes at least one gsd-* SKILL.md under skills/', (t) => {
+    sandboxHome(t, tmpGlobalDir);
     captureConsole(() => install(true, 'cline'));
 
     const skillsDir = path.join(tmpGlobalDir, 'skills');
@@ -2346,7 +2347,17 @@ describe('install() global cline — coexistence: skills AND .clinerules', () =>
     );
   });
 
-  test('global cline install writes .clinerules/gsd.md to the global config dir', () => {
+  test('global cline install merges instructions into sandboxed AGENTS.md', (t) => {
+    sandboxHome(t, tmpGlobalDir);
+    captureConsole(() => install(true, 'cline'));
+
+    const agentsFile = path.join(tmpGlobalDir, '.agents', 'AGENTS.md');
+    assert.ok(fs.existsSync(agentsFile), 'global cline install must merge instructions inside the sandboxed home');
+    assert.match(fs.readFileSync(agentsFile, 'utf8'), /GSD Configuration/);
+  });
+
+  test('global cline install writes .clinerules/gsd.md to the global config dir', (t) => {
+    sandboxHome(t, tmpGlobalDir);
     captureConsole(() => install(true, 'cline'));
 
     // For a global Cline install, targetDir = getGlobalDir('cline') = CLINE_CONFIG_DIR.
@@ -2360,7 +2371,8 @@ describe('install() global cline — coexistence: skills AND .clinerules', () =>
     );
   });
 
-  test('global cline .clinerules/gsd.md contains GSD instructions', () => {
+  test('global cline .clinerules/gsd.md contains GSD instructions', (t) => {
+    sandboxHome(t, tmpGlobalDir);
     captureConsole(() => install(true, 'cline'));
 
     // #787 dir form: rule content lives in .clinerules/gsd.md, not a flat .clinerules file
