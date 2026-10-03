@@ -99,6 +99,22 @@ describe('pause-work improvements', () => {
       'git-integration.md must use conventional "docs(pause):" commit prefix (#4943)'
     );
   });
+
+  test('bug #4943: execute-phase.md recovery commit uses conventional commit prefix chore(recover):', () => {
+    const execPhaseContent = fs.readFileSync(
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md'), 'utf-8'
+    );
+    assert.doesNotMatch(
+      execPhaseContent,
+      /commit -m 'wip:/,
+      'execute-phase.md must not use non-conventional "wip:" commit prefix (#4943)'
+    );
+    assert.match(
+      execPhaseContent,
+      /commit -m 'chore\(recover\):/,
+      'execute-phase.md must use conventional "chore(recover):" commit prefix (#4943)'
+    );
+  });
 });
 
 
