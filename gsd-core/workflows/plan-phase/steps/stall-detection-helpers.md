@@ -31,6 +31,9 @@ every watch call for that spawn. Like `$TS`, it is a literal the orchestrator ca
 across tool calls; nothing persists across fences, so never pass an unexpanded
 `$RECEIPT`/`$TS` expression. The agent's LAST action is to write the marker line it
 returns to that path (`agents/gsd-planner.md`, `agents/gsd-plan-checker.md`).
+On `marker_received`, the marker that routes (step 11's `## VERIFICATION PASSED`
+vs `## ISSUES FOUND`, the revision's COMPLETE vs CONFLICT) is
+`gsd_return_marker "{receipt}" <that call's markers>`; never re-grep anything else.
 
 The watch never reads a host output file (`{outputFile}`). On Claude Code that file is
 the subagent transcript, which already holds the agent's prompt and definition
@@ -156,11 +159,12 @@ gsd_stall_should_recover() {
 # differ from the orchestrator's; `mktemp -u` keeps back-to-back dispatches in one
 # second distinct; EPOCH lets gsd_stall_watch recover the dispatch time if `$TS`
 # was lost between tool calls. SPAWN is reduced to [A-Za-z0-9_-], so a plan ID can
-# never leave the directory. Fails closed (prints nothing, returns 1) on an empty
+# never leave the directory (the character lists are spelled out, not ranges, so
+# no locale can widen them). Fails closed (prints nothing, returns 1) on an empty
 # PHASE_DIR or one holding a quote, `$` or backtick, which the orchestrator could
 # not substitute safely into a prompt or a quoted bash argument.
 gsd_receipt_path() {
-  local dir="$1" spawn="${2//[^A-Za-z0-9_-]/_}"
+  local dir="$1" spawn="${2//[^ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]/_}"
   case "$dir" in
     ''|*[\'\"\$\`]*) return 1 ;;
     /*|[A-Za-z]:[/\\]*) ;;
@@ -174,8 +178,9 @@ gsd_receipt_path() {
 
 # gsd_return_marker FILE MARKER... — print the first MARKER that STARTS a line of
 # FILE, or nothing. Literal prefix match (no regex), ending at a word boundary, so
-# a longer word that merely starts with a marker is not that marker; a trailing
-# CR, a leading BOM and a missing final newline are tolerated. The one owner of "which marker did the
+# a longer word that merely starts with a marker is not that marker. A trailing
+# CR needs no stripping (it is not a word character); a leading BOM and a
+# missing final newline are tolerated. The one owner of "which marker did the
 # agent return": gsd_stall_watch and step 11's routing both use it. Indented,
 # mid-line, or JSON-encoded marker text (prompts, agent definitions, transcripts)
 # never matches.
@@ -183,12 +188,12 @@ gsd_return_marker() {
   local file="$1" line m rest; shift
   [ -f "$file" ] && [ -r "$file" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
-    line="${line%$'\r'}"
     line="${line#$'\xef\xbb\xbf'}"
     for m in "$@"; do
       [[ "$line" == "$m"* ]] || continue
       rest="${line#"$m"}"
-      if [[ "$rest" != [A-Za-z0-9_]* ]]; then printf '%s\n' "$m"; return 0; fi
+      case "$rest" in [ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_]*) continue ;; esac
+      printf '%s\n' "$m"; return 0
     done
   done < "$file"
   return 0
