@@ -959,6 +959,12 @@ Return all issues as a structured `issues:` YAML list (see dimension examples fo
 
 <structured_returns>
 
+**Return receipt (#5182):** if your prompt has a `<return_receipt>PATH</return_receipt>` line,
+your LAST action is to write your marker line to PATH with one Bash call, e.g.
+`printf '%s\n' '## ISSUES FOUND' > 'PATH'` (its directory already exists). This is your only
+write; never touch a plan or any other file. If the write fails or is refused (a read-only
+sandbox), note that in your return and continue: the orchestrator falls back to its bounded wait.
+
 ## VERIFICATION PASSED
 
 ```markdown
