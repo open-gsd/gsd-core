@@ -1613,49 +1613,73 @@ describe('requirements ready-ids command (#2388 shared-ID gate)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
-  const executorPath = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
-  const executorContent = fs.readFileSync(executorPath, 'utf-8');
+  let tmpDir;
 
-  test('agents/gsd-executor.md calls requirements.ready-ids before requirements.mark-complete', () => {
-    const readyIdsPos = executorContent.indexOf('gsd_run query requirements.ready-ids');
-    const markCompletePos = executorContent.indexOf('gsd_run query requirements.mark-complete');
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  test('behavioral: two-plan fixture keeps shared requirement unchecked until all sibling plans finish', () => {
+    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    const dir = makePhaseDir(tmpDir);
+    const plan1 = path.join(dir, '05-05-01-a-PLAN.md');
+    const plan2 = path.join(dir, '05-05-02-b-PLAN.md');
+    fs.writeFileSync(plan1, '---\nphase: 05-05\nplan: 01\nrequirements: [SHARED-01]\n---\nPlan A\n');
+    fs.writeFileSync(plan2, '---\nphase: 05-05\nplan: 02\nrequirements: [SHARED-01, SOLO-01]\n---\nPlan B\n');
+
+    // Step 1: Plan 1 finishes first (writes its summary).
+    // The executor queries ready-ids (without --raw: JSON output) using its PLAN_PATH.
+    fs.writeFileSync(path.join(dir, '05-05-01-a-SUMMARY.md'), 'done\n');
+    const res1 = runGsdTools(['query', 'requirements.ready-ids', plan1, 'SHARED-01'], tmpDir);
+    const parsed1 = JSON.parse(res1.output);
+    assert.deepStrictEqual(parsed1.ready, [], 'SHARED-01 must be blocked — sibling plan 2 has not finished yet');
+
+    // Simulating executor bash gate: if ready is empty, mark-complete is not called.
+    if (parsed1.ready.length > 0) {
+      runGsdTools(['query', 'requirements.mark-complete', ...parsed1.ready], tmpDir);
+    }
+
+    // Assert REQUIREMENTS.md on disk still keeps SHARED-01 unchecked
+    let content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [ ] **SHARED-01**'), 'SHARED-01 checkbox must stay unchecked on disk');
+    assert.ok(content.includes('| SHARED-01 | Phase 5 | Pending |'), 'SHARED-01 traceability must stay Pending');
+
+    // Step 2: Plan 2 finishes (writes its summary).
+    // The executor queries ready-ids using its PLAN_PATH.
+    fs.writeFileSync(path.join(dir, '05-05-02-b-SUMMARY.md'), 'done\n');
+    const res2 = runGsdTools(['query', 'requirements.ready-ids', plan2, 'SHARED-01,SOLO-01'], tmpDir);
+    const parsed2 = JSON.parse(res2.output);
+    assert.deepStrictEqual(parsed2.ready.sort(), ['SHARED-01', 'SOLO-01'], 'Both SHARED-01 and SOLO-01 must now be ready');
+
+    // Simulating executor bash gate: ready IDs are handed to mark-complete
+    if (parsed2.ready.length > 0) {
+      runGsdTools(['query', 'requirements.mark-complete', ...parsed2.ready], tmpDir);
+    }
+
+    // Assert REQUIREMENTS.md on disk now has both checked
+    content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [x] **SHARED-01**'), 'SHARED-01 checkbox should now be checked on disk');
+    assert.ok(content.includes('- [x] **SOLO-01**'), 'SOLO-01 checkbox should now be checked on disk');
+  });
+
+  test('negative control: empty plan path causes ready-ids to fail and nothing is marked', () => {
+    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    const res = runGsdTools(['query', 'requirements.ready-ids', '', 'SHARED-01'], tmpDir);
+    assert.notStrictEqual(res.exitCode, 0, 'ready-ids must fail non-zero when plan path is missing');
+
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [ ] **SHARED-01**'), 'REQUIREMENTS.md must stay unchecked on failure');
+  });
+
+  test('structural contract: gsd-executor.md prompt queries ready-ids before mark-complete with PLAN_PATH', () => {
+    const executorPath = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
+    const content = fs.readFileSync(executorPath, 'utf-8'); // allow-test-rule: source-text-is-the-product agents/gsd-executor.md prompt text IS the runtime contract for executor state updates (#4944)
+    const readyIdsPos = content.indexOf('gsd_run query requirements.ready-ids');
+    const markCompletePos = content.indexOf('gsd_run query requirements.mark-complete');
 
     assert.ok(readyIdsPos !== -1, 'gsd-executor.md must call requirements.ready-ids');
     assert.ok(markCompletePos !== -1, 'gsd-executor.md must call requirements.mark-complete');
     assert.ok(readyIdsPos < markCompletePos, 'requirements.ready-ids must precede requirements.mark-complete');
-  });
-
-  test('agents/gsd-executor.md conditions mark-complete on non-empty ready IDs', () => {
-    // Must NOT contain unconditional call
-    assert.ok(
-      !executorContent.includes('\ngsd_run query requirements.mark-complete ${REQ_IDS}\n'),
-      'gsd-executor.md must not call requirements.mark-complete ${REQ_IDS} unconditionally',
-    );
-
-    // Must gate mark-complete on non-empty ready IDs
-    assert.ok(
-      executorContent.includes('READY=$(gsd_run query requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS})'),
-      'gsd-executor.md must query requirements.ready-ids without --raw to receive parseable JSON (#4956)',
-    );
-    assert.ok(
-      executorContent.includes("READY_IDS=$(printf '%s' \"$READY\" | jq -r '.ready[]' 2>/dev/null | tr '\\n' ' ')"),
-      'gsd-executor.md must extract ready IDs via jq',
-    );
-    assert.ok(
-      executorContent.includes('if [ -n "$(printf \'%s\' "$READY_IDS" | tr -d \'[:space:]\')" ]; then'),
-      'gsd-executor.md must guard requirements.mark-complete with non-empty check',
-    );
-  });
-
-  test('agents/gsd-executor.md documents the gated behavior in Requirement IDs section', () => {
-    assert.ok(
-      executorContent.includes('requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS}'),
-      'Requirement IDs section must document querying requirements.ready-ids',
-    );
-    assert.ok(
-      executorContent.includes('A requirement declared across multiple plans in this phase remains blocked until all declaring sibling plans have completed'),
-      'Requirement IDs section must explain sibling plan blocking behavior',
-    );
+    assert.ok(content.includes('PLAN_PATH='), 'gsd-executor.md must define PLAN_PATH');
   });
 });
 

@@ -792,8 +792,11 @@ gsd_run query state.record-session \
 # Update ROADMAP.md progress for this phase (plan counts, status)
 gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}"
 
+# Derive plan path from assigned plan file in prompt context (#4944)
+PLAN_PATH="${PLAN_PATH:-.planning/phases/${PHASE_DIR:-${PHASE}}/${PHASE}-${PLAN}-PLAN.md}"
+
 # Mark completed requirements from PLAN.md frontmatter gated on sibling plans (#2388, #4944)
-# Query ready-ids first to prevent premature completion of shared requirements
+# Query ready-ids first (without --raw: emits JSON for jq; see #4956) to prevent premature completion of shared requirements
 READY=$(gsd_run query requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS})
 READY_IDS=$(printf '%s' "$READY" | jq -r '.ready[]' 2>/dev/null | tr '\n' ' ')
 if [ -n "$(printf '%s' "$READY_IDS" | tr -d '[:space:]')" ]; then
@@ -801,7 +804,7 @@ if [ -n "$(printf '%s' "$READY_IDS" | tr -d '[:space:]')" ]; then
 fi
 ```
 
-**Requirement IDs:** Extract from the PLAN.md frontmatter `requirements:` field (e.g., `requirements: [AUTH-01, AUTH-02]`). If the plan has no requirements field, skip this step. For plans with requirements, query `requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS}` to compute the ready subset before calling `requirements mark-complete`. A requirement declared across multiple plans in this phase remains blocked until all declaring sibling plans have completed (`*-SUMMARY.md` exists), preventing premature completion in REQUIREMENTS.md (#2388, #4944).
+**Requirement IDs:** Extract from the PLAN.md frontmatter `requirements:` field (e.g., `requirements: [AUTH-01, AUTH-02]`). If the plan has no requirements field, skip this step. For plans with requirements, ensure `PLAN_PATH` is set to the plan file assigned in your prompt context, then query `requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS}` (emits JSON without `--raw` so `jq` can parse the ready list; see #4956) to compute the ready subset before calling `requirements mark-complete`. A requirement declared across multiple plans in this phase remains blocked until all declaring sibling plans have completed (`*-SUMMARY.md` exists), preventing premature completion in REQUIREMENTS.md (#2388, #4944).
 
 **State command behaviors:**
 - `state advance-plan`: Increments Current Plan, detects last-plan edge case, sets status
