@@ -47,11 +47,8 @@ const { checkAgentsInstalled, checkCodexModelPosture, checkCodexSandboxPosture }
 import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import phaseIdMod = require('./phase-id.cjs');
-const { normalizePhaseName, matchPhaseDirs } = phaseIdMod;
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { findPhaseInternal } = phaseLocatorMod;
+const { findPhaseInternal, resolvePhaseDirectoryLookup, matchPhaseDirsForLookup } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { stripShippedMilestones } = roadmapParserMod;
@@ -2139,11 +2136,13 @@ function cmdValidateAgents(cwd: string, raw: boolean): void {
  * requested token (e.g. "1" matching "11-expansion"). Falls back to an exact
  * directory-name match. Returns null if neither resolves. (#1571, #2528)
  */
-function resolvePhaseDirByToken(phasesDir: string, phaseArg: string): string | null {
-  const normalizedPhase = normalizePhaseName(phaseArg);
+function resolvePhaseDirByToken(cwd: string, phasesDir: string, phaseArg: string): string | null {
+  const lookup = resolvePhaseDirectoryLookup(cwd, phaseArg);
   const dirEntries = fs.readdirSync(phasesDir, { withFileTypes: true });
   const dirNames = dirEntries.filter((e) => e.isDirectory()).map((e) => e.name);
-  const matched = matchPhaseDirs(dirNames, normalizedPhase).matches[0];
+  // #4304: both drift commands resolve a directory in the current checkout.
+  // Bracket is the only opt-in grammar; all other conventions remain legacy.
+  const matched = matchPhaseDirsForLookup(dirNames, lookup).matches[0];
   if (matched) return path.join(phasesDir, matched);
   const contained = tryWithinRoot(phaseArg, phasesDir);
   if (contained !== null && fs.existsSync(contained)) return contained;
@@ -2223,7 +2222,7 @@ function runVerifyContextDrift(cwd: string, phaseArg: string, raw: boolean): voi
 
   // Same phase-directory resolution rule cmdVerifySchemaDrift uses (#1571, #2528):
   // matchPhaseDirs, never a naive substring test.
-  const phaseDir = resolvePhaseDirByToken(phasesDir, phaseArg);
+  const phaseDir = resolvePhaseDirByToken(cwd, phasesDir, phaseArg);
   if (!phaseDir) {
     emitSkip('phase-not-found', `Phase directory not found: ${phaseArg}`);
     return;
@@ -2334,7 +2333,7 @@ function runVerifySchemaDrift(
   // matching "11-expansion"), making the drift gate inspect the wrong phase.
   // This shares the one selection rule with find-phase / verify
   // phase-completeness rather than restating it. (#1571, #2528)
-  const phaseDir = resolvePhaseDirByToken(phasesDir, phaseArg);
+  const phaseDir = resolvePhaseDirByToken(cwd, phasesDir, phaseArg);
 
   if (!phaseDir) {
     output(
