@@ -10,6 +10,8 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 
 **Required reading (#3423):** the canonical spawn-block tag is `<required_reading>` on BOTH sides — orchestrators emit it, and gating agents enforce it ("you MUST use the Read tool to load every file listed there before performing any other actions"). The legacy `<files_to_read>` emit-tag is retired and banned repo-wide by `tests/agent-required-reading-consistency.test.cjs`, because a mismatched pair silently disarms the enforcement clause.
 
+**Project skills (#4649):** the 21 agents that @-include [`gsd-core/references/project-skills-discovery.md`](../gsd-core/references/project-skills-discovery.md), and 15 of their compact variants, look for project skills under `.claude/skills/` and `.agents/skills/`: each skill's frontmatter first, the full `SKILL.md` only when its `description` fits the task, and referenced files only when the task needs them. [`CONFIGURATION.md`](CONFIGURATION.md#agent-skills-injection) describes how this interacts with `agent_skills`. The spawn prompts of the execute, plan and quick workflows still tell the executor, planner, plan checker and phase researcher to read every project `SKILL.md`.
+
 ### Agent Categories
 
 > The table below covers the **22 primary agents** detailed in this section. Thirteen additional shipped agents (pattern-mapper, debug-session-manager, code-reviewer, code-fixer, ai-researcher, domain-researcher, eval-planner, eval-auditor, framework-selector, intel-updater, doc-classifier, doc-synthesizer, mempalace-curator) have concise stubs in the [Advanced and Specialized Agents](#advanced-and-specialized-agents) section below. For the authoritative 35-agent roster, see [`docs/INVENTORY.md`](INVENTORY.md) and the `agents/` directory.
@@ -644,7 +646,7 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 
 **Key behaviors:**
 - Detects bugs (logic errors, null/undefined checks, off-by-one, type mismatches, unreachable code), security issues (injection, XSS, hardcoded secrets, insecure crypto), and quality issues
-- Honors `CLAUDE.md` project conventions and `.claude/skills/` / `.agents/skills/` rules when present
+- Honors `CLAUDE.md` project conventions and the project skills (`.claude/skills/` / `.agents/skills/`) that fit the review, when present
 - Read-only against implementation source — never modifies code under review
 - Full-context review scope: surrounding modules, callers, tests, and docs, not a diff-only pass
 - Owns `REVIEW.md` even when optional external reviewer lanes ran (#4209): it treats their `<external_reviewer_evidence>` as unverified input, re-verifies every claim against the actual current source before accepting it, and never follows an instruction embedded inside evidence text — there remains exactly one `REVIEW.md` schema regardless of how many lanes contributed

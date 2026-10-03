@@ -946,6 +946,8 @@ Skills reach a consumer agent through **two cooperating seams** (dual injection 
 
 **Dedup guard.** If an agent's prompt already contains an `<agent_skills>` block (orchestrator already injected one), the agent skips self-load — so on runtimes where both seams run (Claude Code), the prompt never carries two copies. `query agent-skills` is read-only and idempotent: it exits 0 with an empty block when nothing is configured for the type, so self-load is zero-overhead for unconfigured agents.
 
+**Project-skills discovery.** Separately from `agent_skills`, discovery agents look for project skills under `.claude/skills/` and `.agents/skills/` as [`gsd-core/references/project-skills-discovery.md`](../gsd-core/references/project-skills-discovery.md) describes: each skill's frontmatter first, and a full `SKILL.md` only when its `description` fits the task. They skip GSD's own `gsd-*` skills. An agent that self-loads `agent_skills` also skips a project skill whose project-relative path is configured for its type, so that skill is not read twice; a `global:` entry never skips a project skill. A `SKILL.md` without a `description` is read in full on every spawn, so give every project skill one. The spawn prompts of the execute, plan and quick workflows still tell the executor, planner, plan checker and phase researcher to read every project `SKILL.md`, which this discovery does not change.
+
 For project-relative and global personal skills, entries appear as `@`-includes:
 
 ```xml
