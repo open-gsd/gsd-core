@@ -936,6 +936,20 @@ describe('#2650 follow-up: runBashScript bounds and reports a bash fan-out corre
   });
 });
 
+// The #5182 rows need only the shipped FUNCTION definitions, not the whole fence:
+// the fence opens with the runtime-locator preamble and two `gsd_run query
+// config-get` lines, i.e. two Node spawns per bash call (about 1 s each on the
+// Windows runners). Run through every #5182 row, that preamble cost 169.5 s on
+// Windows CI shard 1/3, enough to starve a concurrent file into a spawn timeout.
+// Slicing from the first function keeps the executed code the shipped code;
+// config resolution stays covered by the #2650 rows above, which run the full fence.
+function extractStallFunctionsBash() {
+  const fence = extractStallHelpersBash();
+  const at = fence.indexOf('gsd_stall_should_recover() {');
+  if (at === -1) throw new Error('extractStallFunctionsBash: gsd_stall_should_recover() not found in the helpers fence');
+  return fence.slice(at);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // #5182 — the stall watch must observe the spawned agent's REAL return, not text
 // that merely mentions a marker.
@@ -985,7 +999,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
   // pinned to NOW and the interval/threshold pinned, then run `call`. Returns
   // trimmed stdout.
   function runHelpers(call, { interval = 5, threshold = 10 } = {}) {
-    const helpersBash = extractStallHelpersBash();
+    const helpersBash = extractStallFunctionsBash();
     const clock = `date() { if [ "$1" = "+%s" ]; then echo ${NOW}; else command date "$@"; fi; }`;
     const script = `${helpersBash}\nsleep() { :; }\n${clock}\nPLANNER_STALL_INTERVAL_MINUTES=${interval}\nPLANNER_STALL_THRESHOLD_MINUTES=${threshold}\n${call}\n`;
     const result = runBashScript(script, []);
@@ -1242,7 +1256,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     const f = fixture(t);
     const rel = 'phase dir/01-x';
     fs.mkdirSync(path.join(f.dir, rel), { recursive: true });
-    const script = `${extractStallHelpersBash()}\ncd ${q(f.dir)}\na=$(gsd_receipt_path ${q(rel)} checker)\nb=$(gsd_receipt_path ${q(rel)} checker)\nc=$(gsd_receipt_path ${q(`${f.fwd}/${rel}`)} '../01/x y')\nprintf '%s\\n' "$a" "$b" "$c"\n[ -d "${rel}/.gsd-returns" ] && echo DIR_OK\n[ -e "$a" ] || echo NOT_PRECREATED\n`;
+    const script = `${extractStallFunctionsBash()}\ncd ${q(f.dir)}\na=$(gsd_receipt_path ${q(rel)} checker)\nb=$(gsd_receipt_path ${q(rel)} checker)\nc=$(gsd_receipt_path ${q(`${f.fwd}/${rel}`)} '../01/x y')\nprintf '%s\\n' "$a" "$b" "$c"\n[ -d "${rel}/.gsd-returns" ] && echo DIR_OK\n[ -e "$a" ] || echo NOT_PRECREATED\n`;
     const result = runBashScript(script, []);
     assert.equal(result.status, 0, result.stderr);
     const [a, b, c, dirOk, notPre] = result.stdout.trim().split('\n');
@@ -1258,13 +1272,13 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
 
   test('gsd_receipt_path fails closed on an unsafe phase dir and writes a catch-all .gitignore', (t) => {
     const f = fixture(t);
-    const helpers = extractStallHelpersBash();
+    const helpers = extractStallFunctionsBash();
     for (const bad of ['', 'ph"ase', "ph'ase", 'ph$ase', 'ph`ase']) {
       // Handed over through a file, never interpolated or passed as argv: a `$` or
       // backtick in a double-quoted literal is expanded by bash first, and on Windows
       // Git Bash's MSYS layer re-splits and unescapes argv, so a `'` argument arrives
       // stripped (observed in CI: "ph'ase" reached the helper as "phase"). See
-      // extractStallHelpersBash()'s doc comment for the same transport hazard.
+      // extractStallFunctionsBash()'s doc comment for the same transport hazard.
       const valueFile = path.join(f.dir, 'phase-dir-value.txt');
       fs.writeFileSync(valueFile, bad);
       const r = runBashScript(`${helpers}\ncd ${q(f.dir)}\nIFS= read -r d < ${q(valueFile.replace(/\\/g, '/'))} || true\nif out=$(gsd_receipt_path "$d" checker); then echo "OK:$out"; else echo FAIL; fi\n`, []);
