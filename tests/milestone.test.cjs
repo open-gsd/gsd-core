@@ -1618,6 +1618,35 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   beforeEach(() => { tmpDir = createTempProject(); });
   afterEach(() => { cleanup(tmpDir); });
 
+  function writeRequirements(tmpDir, content) {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), content, 'utf-8');
+  }
+
+  function readRequirements(tmpDir) {
+    return fs.readFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), 'utf-8');
+  }
+
+  function makePhaseDir(tmpDir) {
+    const dir = path.join(tmpDir, '.planning', 'phases', '05-05-feature');
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  const SHARED_REQUIREMENTS = `# Requirements
+
+## Feature
+
+- [ ] **SHARED-01**: shared across two plans
+- [ ] **SOLO-01**: only plan-02 declares this
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| SHARED-01 | Phase 5 | Pending |
+| SOLO-01 | Phase 5 | Pending |
+`;
+
   test('behavioral: two-plan fixture keeps shared requirement unchecked until all sibling plans finish', () => {
     writeRequirements(tmpDir, SHARED_REQUIREMENTS);
     const dir = makePhaseDir(tmpDir);
