@@ -56,6 +56,9 @@ const {
   planWorktreeCreate,
   executeWorktreeCreatePlan,
   cmdWorktreeCreate,
+  resolveWaveManifestPath,
+  findPhaseWaveManifests,
+  cmdWorktreeManifestPath,
 } = require(WORKTREE_SAFETY_PATH);
 
 const isWindows = process.platform === 'win32';
@@ -9409,5 +9412,562 @@ describe('#3003 — declared deletions: authorization is exact set membership', 
       ),
       { seed: 3003, numRuns: 200 },
     );
+  });
+});
+
+describe('durable wave worktree manifests (#4853)', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const fc = require('./helpers/fast-check-setup.cjs');
+  const { runNode } = require('./helpers/process-seam.cjs');
+  const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+  const GSD_TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+
+  describe('resolveWaveManifestPath', () => {
+    test('derives canonical wave manifest path with relative directory', () => {
+      const p = resolveWaveManifestPath('.planning/phases/01-feature', 1);
+      assert.equal(p, '.planning/phases/01-feature/wave-1-manifest.json');
+    });
+
+    test('derives canonical wave manifest path with string wave number and normalization', () => {
+      const p = resolveWaveManifestPath('foo/bar//baz', '2');
+      assert.equal(p, 'foo/bar/baz/wave-2-manifest.json');
+    });
+
+    test('accepts boundary wave numbers 1 and 2', () => {
+      assert.equal(resolveWaveManifestPath('dir', 1), 'dir/wave-1-manifest.json');
+      assert.equal(resolveWaveManifestPath('dir', 2), 'dir/wave-2-manifest.json');
+      assert.equal(resolveWaveManifestPath('dir', '1'), 'dir/wave-1-manifest.json');
+      assert.equal(resolveWaveManifestPath('dir', '2'), 'dir/wave-2-manifest.json');
+    });
+
+    test('rejects boundary wave 0 and negative numbers (RULESET.TESTS.boundary-coverage)', () => {
+      assert.throws(() => resolveWaveManifestPath('dir', 0), /must be a positive integer/);
+      assert.throws(() => resolveWaveManifestPath('dir', '0'), /must be a positive integer/);
+      assert.throws(() => resolveWaveManifestPath('dir', -1), /must be a positive integer/);
+      assert.throws(() => resolveWaveManifestPath('dir', '-1'), /must be a positive integer/);
+    });
+
+    test('rejects non-numeric and traversal input (a, 2/3, ../../x, 1.5)', () => {
+      assert.throws(() => resolveWaveManifestPath('dir', 'a'), /must be a positive integer/);
+      assert.throws(() => resolveWaveManifestPath('dir', '2/3'), /must be a positive integer/);
+      assert.throws(() => resolveWaveManifestPath('dir', '../../x'), /must be a positive integer/);
+      assert.throws(() => resolveWaveManifestPath('dir', 1.5), /must be a positive integer/);
+      assert.throws(() => resolveWaveManifestPath('dir', '1.5'), /must be a positive integer/);
+    });
+
+    test('negative control: resolveWaveManifestPath does not return an arbitrary or non-wave path', () => {
+      const p = resolveWaveManifestPath('phase', 1);
+      assert.notEqual(p, 'phase/wave-manifest.json');
+      assert.notEqual(p, 'phase/wave-2-manifest.json');
+      assert.match(p, /^phase\/wave-1-manifest\.json$/);
+    });
+  });
+
+  describe('findPhaseWaveManifests', () => {
+    test('returns empty array when phase directory does not exist', () => {
+      const nonExistent = path.join(os.tmpdir(), `non-existent-dir-${Date.now()}`);
+      const manifests = findPhaseWaveManifests(nonExistent);
+      assert.deepEqual(manifests, []);
+    });
+
+    test('returns empty array when phase directory has no wave manifests', () => {
+      const dir = createTempDir('find-wave-empty-');
+      try {
+        fs.writeFileSync(path.join(dir, 'plan.md'), 'test');
+        fs.writeFileSync(path.join(dir, 'other-manifest.json'), '{}');
+        const manifests = findPhaseWaveManifests(dir);
+        assert.deepEqual(manifests, []);
+      } finally {
+        cleanup(dir);
+      }
+    });
+
+    test('discovers and sorts wave manifests in numeric ascending order, excluding irrelevant files', () => {
+      const dir = createTempDir('find-wave-sort-');
+      try {
+        fs.writeFileSync(path.join(dir, 'wave-10-manifest.json'), '{}');
+        fs.writeFileSync(path.join(dir, 'wave-2-manifest.json'), '{}');
+        fs.writeFileSync(path.join(dir, 'wave-1-manifest.json'), '{}');
+        fs.writeFileSync(path.join(dir, 'wave-foo-manifest.json'), '{}');
+        fs.writeFileSync(path.join(dir, 'wave-1-manifest.json.bak'), '{}');
+        fs.writeFileSync(path.join(dir, 'random.txt'), '{}');
+
+        const manifests = findPhaseWaveManifests(dir);
+        const basenames = manifests.map((m) => path.basename(m));
+        assert.deepEqual(basenames, [
+          'wave-1-manifest.json',
+          'wave-2-manifest.json',
+          'wave-10-manifest.json',
+        ]);
+
+        // Negative control: wave-2 must come before wave-10 (numeric sort, not lexicographic '10' < '2')
+        assert.equal(basenames[1], 'wave-2-manifest.json');
+        assert.equal(basenames[2], 'wave-10-manifest.json');
+      } finally {
+        cleanup(dir);
+      }
+    });
+
+    test('property: for any set of positive integer waves, findPhaseWaveManifests returns resolveWaveManifestPath in numeric order (m2)', () => {
+      fc.assert(
+        fc.property(
+          fc.uniqueArray(fc.integer({ min: 1, max: 10000 }), { minLength: 1, maxLength: 25 }),
+          fc.array(fc.integer(), { minLength: 35, maxLength: 35 }),
+          (waves, sortKeys) => {
+            const phaseDir = '/mock/phase/dir';
+            const filenames = waves.map((w) => `wave-${w}-manifest.json`);
+            const allFiles = [...filenames, 'other.json', 'wave-abc-manifest.json', 'wave-1-manifest.json.bak'];
+            // Permute deterministically using fast-check supplied sort keys (F7)
+            const keyed = allFiles.map((f, i) => ({ f, k: sortKeys[i] ?? 0 }));
+            keyed.sort((a, b) => a.k - b.k);
+            const shuffledFiles = keyed.map((x) => x.f);
+
+            const discovered = findPhaseWaveManifests(phaseDir, {
+              existsSync: () => true,
+              readdirSync: () => shuffledFiles,
+            });
+
+            const sortedUniqueWaves = [...new Set(waves)].sort((a, b) => a - b);
+            const expectedPaths = sortedUniqueWaves.map((w) => resolveWaveManifestPath(phaseDir, w));
+
+            assert.deepEqual(discovered, expectedPaths);
+          }
+        )
+      );
+    });
+  });
+
+  describe('cmdWorktreeManifestPath (unit)', () => {
+    test('exits code 2 and prints usage when no phase arguments provided', () => {
+      let stderrOutput = '';
+      let stdoutOutput = '';
+      const origExitCode = process.exitCode;
+      try {
+        process.exitCode = 0;
+        cmdWorktreeManifestPath(process.cwd(), [], {
+          write: (s) => { stdoutOutput += s; },
+          writeErr: (s) => { stderrOutput += s; },
+        });
+        assert.equal(process.exitCode, 2);
+        assert.match(stderrOutput, /Usage: worktree manifest-path/);
+        const parsed = JSON.parse(stdoutOutput);
+        assert.equal(parsed.ok, false);
+        assert.equal(parsed.reason, 'missing_phase_arg');
+      } finally {
+        process.exitCode = origExitCode;
+      }
+    });
+
+    test('exits code 2 and leaves stdout empty with --raw when no phase arguments provided (M1)', () => {
+      let stderrOutput = '';
+      let stdoutOutput = '';
+      const origExitCode = process.exitCode;
+      try {
+        process.exitCode = 0;
+        cmdWorktreeManifestPath(process.cwd(), ['--raw'], {
+          write: (s) => { stdoutOutput += s; },
+          writeErr: (s) => { stderrOutput += s; },
+        });
+        assert.equal(process.exitCode, 2);
+        assert.match(stderrOutput, /Usage: worktree manifest-path/);
+        assert.equal(stdoutOutput, '');
+      } finally {
+        process.exitCode = origExitCode;
+      }
+    });
+
+    test('exits code 1 and writes structured JSON when phase lookup fails', () => {
+      let stderrOutput = '';
+      let stdoutOutput = '';
+      const origExitCode = process.exitCode;
+      try {
+        process.exitCode = 0;
+        cmdWorktreeManifestPath(process.cwd(), ['--phase', 'nonexistent-phase-999'], {
+          write: (s) => { stdoutOutput += s; },
+          writeErr: (s) => { stderrOutput += s; },
+        });
+        assert.equal(process.exitCode, 1);
+        assert.match(stderrOutput, /phase_not_found/);
+        const parsed = JSON.parse(stdoutOutput);
+        assert.equal(parsed.ok, false);
+        assert.equal(parsed.reason, 'phase_not_found');
+      } finally {
+        process.exitCode = origExitCode;
+      }
+    });
+
+    test('exits code 1 and leaves stdout empty with --raw when phase lookup fails (M1)', () => {
+      let stderrOutput = '';
+      let stdoutOutput = '';
+      const origExitCode = process.exitCode;
+      try {
+        process.exitCode = 0;
+        cmdWorktreeManifestPath(process.cwd(), ['--phase', 'nonexistent-phase-999', '--raw'], {
+          write: (s) => { stdoutOutput += s; },
+          writeErr: (s) => { stderrOutput += s; },
+        });
+        assert.equal(process.exitCode, 1);
+        assert.match(stderrOutput, /phase_not_found/);
+        assert.equal(stdoutOutput, '');
+      } finally {
+        process.exitCode = origExitCode;
+      }
+    });
+
+    test('rejects wave 0 with code 1 and invalid_wave error (m1)', () => {
+      let stderrOutput = '';
+      let stdoutOutput = '';
+      const origExitCode = process.exitCode;
+      try {
+        process.exitCode = 0;
+        cmdWorktreeManifestPath('/fake/cwd', ['--phase-dir', '/tmp/phases/01', '--wave', '0'], {
+          write: (s) => { stdoutOutput += s; },
+          writeErr: (s) => { stderrOutput += s; },
+        });
+        assert.equal(process.exitCode, 1);
+        assert.match(stderrOutput, /invalid_wave/);
+        const parsed = JSON.parse(stdoutOutput);
+        assert.equal(parsed.ok, false);
+        assert.equal(parsed.reason, 'invalid_wave');
+      } finally {
+        process.exitCode = origExitCode;
+      }
+    });
+
+    test('rejects wave 0 with code 1 and empty stdout under --raw (M1/m1)', () => {
+      let stderrOutput = '';
+      let stdoutOutput = '';
+      const origExitCode = process.exitCode;
+      try {
+        process.exitCode = 0;
+        cmdWorktreeManifestPath('/fake/cwd', ['--phase-dir', '/tmp/phases/01', '--wave', '0', '--raw'], {
+          write: (s) => { stdoutOutput += s; },
+          writeErr: (s) => { stderrOutput += s; },
+        });
+        assert.equal(process.exitCode, 1);
+        assert.match(stderrOutput, /invalid_wave/);
+        assert.equal(stdoutOutput, '');
+      } finally {
+        process.exitCode = origExitCode;
+      }
+    });
+
+    test('rejects non-numeric wave (../../x) with code 1 and empty stdout under --raw (m1)', () => {
+      let stderrOutput = '';
+      let stdoutOutput = '';
+      const origExitCode = process.exitCode;
+      try {
+        process.exitCode = 0;
+        cmdWorktreeManifestPath('/fake/cwd', ['--phase-dir', '/tmp/phases/01', '--wave', '../../x', '--raw'], {
+          write: (s) => { stdoutOutput += s; },
+          writeErr: (s) => { stderrOutput += s; },
+        });
+        assert.equal(process.exitCode, 1);
+        assert.match(stderrOutput, /invalid_wave/);
+        assert.equal(stdoutOutput, '');
+      } finally {
+        process.exitCode = origExitCode;
+      }
+    });
+
+    test('accepts boundary wave numbers 1 and 2 under --raw', () => {
+      let out1 = '';
+      const fakeCwd = '/fake/cwd';
+      const expectedPhaseDir = path.resolve(fakeCwd, 'phases/01').replace(/\\/g, '/');
+      cmdWorktreeManifestPath(fakeCwd, ['--phase-dir', 'phases/01', '--wave', '1', '--raw'], {
+        write: (s) => { out1 += s; },
+        writeErr: () => {},
+      });
+      assert.equal(out1.trim(), `${expectedPhaseDir}/wave-1-manifest.json`);
+
+      let out2 = '';
+      cmdWorktreeManifestPath(fakeCwd, ['--phase-dir', 'phases/01', '--wave', '2', '--raw'], {
+        write: (s) => { out2 += s; },
+        writeErr: () => {},
+      });
+      assert.equal(out2.trim(), `${expectedPhaseDir}/wave-2-manifest.json`);
+    });
+
+    test('resolves relative --phase-dir to absolute manifest path (M4)', () => {
+      let stdoutOutput = '';
+      const baseRoot = '/base/root';
+      const expected = path.resolve(baseRoot, 'relative/phase/01/wave-1-manifest.json').replace(/\\/g, '/');
+      cmdWorktreeManifestPath(baseRoot, ['--phase-dir', 'relative/phase/01', '--wave', '1', '--raw'], {
+        write: (s) => { stdoutOutput += s; },
+        writeErr: () => {},
+      });
+      assert.equal(stdoutOutput.trim(), expected);
+    });
+
+    test('outputs structured JSON for single wave path with --phase-dir and --wave', () => {
+      let stdoutOutput = '';
+      const fakeCwd = '/fake/cwd';
+      const expectedPhaseDir = path.resolve(fakeCwd, 'phases/01').replace(/\\/g, '/');
+      cmdWorktreeManifestPath(fakeCwd, ['--phase-dir', 'phases/01', '--wave', '3'], {
+        write: (s) => { stdoutOutput += s; },
+        writeErr: () => {},
+      });
+      const parsed = JSON.parse(stdoutOutput);
+      assert.equal(parsed.ok, true);
+      assert.equal(parsed.wave, '3');
+      assert.equal(parsed.phase_dir, expectedPhaseDir);
+      assert.match(parsed.path, /wave-3-manifest\.json$/);
+      assert.equal(parsed.path, `${expectedPhaseDir}/wave-3-manifest.json`);
+    });
+
+    test('outputs raw path string with --phase-dir, --wave, and --raw', () => {
+      let stdoutOutput = '';
+      const fakeCwd = '/fake/cwd';
+      const expected = path.resolve(fakeCwd, 'phases/01/wave-3-manifest.json').replace(/\\/g, '/');
+      cmdWorktreeManifestPath(fakeCwd, ['--phase-dir', 'phases/01', '--wave', '3', '--raw'], {
+        write: (s) => { stdoutOutput += s; },
+        writeErr: () => {},
+      });
+      assert.equal(stdoutOutput.trim(), expected);
+    });
+
+    test('outputs discovered manifests JSON when --wave is omitted', () => {
+      const dir = createTempDir('cmd-manifest-list-');
+      try {
+        fs.writeFileSync(path.join(dir, 'wave-1-manifest.json'), '{}');
+        fs.writeFileSync(path.join(dir, 'wave-2-manifest.json'), '{}');
+        let stdoutOutput = '';
+        cmdWorktreeManifestPath('/fake/cwd', ['--phase-dir', dir], {
+          write: (s) => { stdoutOutput += s; },
+          writeErr: () => {},
+        });
+        const parsed = JSON.parse(stdoutOutput);
+        assert.equal(parsed.ok, true);
+        assert.equal(parsed.phase_dir, path.resolve(dir).replace(/\\/g, '/'));
+        assert.equal(parsed.manifests.length, 2);
+      } finally {
+        cleanup(dir);
+      }
+    });
+
+    test('outputs raw newline-separated manifest paths with --raw and omitted --wave', () => {
+      const dir = createTempDir('cmd-manifest-raw-list-');
+      try {
+        fs.writeFileSync(path.join(dir, 'wave-1-manifest.json'), '{}');
+        fs.writeFileSync(path.join(dir, 'wave-2-manifest.json'), '{}');
+        let stdoutOutput = '';
+        cmdWorktreeManifestPath('/fake/cwd', ['--phase-dir', dir, '--raw'], {
+          write: (s) => { stdoutOutput += s; },
+          writeErr: () => {},
+        });
+        const lines = stdoutOutput.trim().split('\n');
+        assert.equal(lines.length, 2);
+        assert.match(lines[0], /wave-1-manifest\.json$/);
+        assert.match(lines[1], /wave-2-manifest\.json$/);
+      } finally {
+        cleanup(dir);
+      }
+    });
+  });
+
+  describe('worktree manifest-path CLI routing via gsd-tools.cjs', () => {
+    test('routes manifest-path --phase-dir <dir> --wave <n> --raw', () => {
+      const r = runNode([
+        GSD_TOOLS, 'worktree', 'manifest-path',
+        '--phase-dir', '.planning/phases/02-foo',
+        '--wave', '1',
+        '--raw',
+      ], { timeoutMs: SUBPROCESS_TIMEOUT_MS });
+      assert.equal(r.exitCode, 0, `stderr: ${r.stderr}`);
+      const expected = path.resolve(process.cwd(), '.planning/phases/02-foo/wave-1-manifest.json').replace(/\\/g, '/');
+      assert.equal(r.stdout.trim(), expected);
+    });
+
+    test('routes query worktree.manifest-path dotted syntax with JSON output', () => {
+      const r = runNode([
+        GSD_TOOLS, 'query', 'worktree.manifest-path',
+        '--phase-dir', '.planning/phases/02-foo',
+        '--wave', '2',
+      ], { timeoutMs: SUBPROCESS_TIMEOUT_MS });
+      assert.equal(r.exitCode, 0, `stderr: ${r.stderr}`);
+      const parsed = JSON.parse(r.stdout);
+      assert.equal(parsed.ok, true);
+      const expected = path.resolve(process.cwd(), '.planning/phases/02-foo/wave-2-manifest.json').replace(/\\/g, '/');
+      assert.equal(parsed.path, expected);
+    });
+
+    test('negative control: unknown subcommand returns sdk_unknown_command and lists manifest-path in hint', () => {
+      const r = runNode([
+        GSD_TOOLS, 'worktree', 'invalid-subcommand-xyz',
+      ], { timeoutMs: SUBPROCESS_TIMEOUT_MS });
+      assert.notEqual(r.exitCode, 0);
+      assert.match(r.stderr, /manifest-path/);
+    });
+  });
+
+  describe('interrupted wave recovery integration (#4853)', () => {
+    test('durable manifest survives simulated wave crash, is discoverable, and is consumed by cleanup-wave', () => {
+      const repoDir = createTempDir('durable-manifest-e2e-');
+      const gitOpts = { cwd: repoDir, timeoutMs: SUBPROCESS_TIMEOUT_MS };
+      try {
+        // 1. Initialize repo with an initial commit
+        gitOrThrow(['init', '-b', 'main', '-q'], gitOpts);
+        gitOrThrow(['config', 'user.email', 'test@example.com'], gitOpts);
+        gitOrThrow(['config', 'user.name', 'Test'], gitOpts);
+        gitOrThrow(['config', 'commit.gpgsign', 'false'], gitOpts);
+        fs.writeFileSync(path.join(repoDir, 'README.md'), '# Main\n');
+        gitOrThrow(['add', 'README.md'], gitOpts);
+        gitOrThrow(['commit', '-q', '-m', 'chore: init'], gitOpts);
+        const baseSha = gitOrThrow(['rev-parse', 'HEAD'], gitOpts).trim();
+
+        // 2. Setup phase dir and durable wave 1 manifest
+        const phaseDir = path.join(repoDir, '.planning', 'phases', '01-feature');
+        fs.mkdirSync(phaseDir, { recursive: true });
+        const manifestPath = resolveWaveManifestPath(phaseDir, 1);
+
+        // 3. Dispatch wave: create agent worktree and record in manifest
+        const agentWtPath = path.join(repoDir, '.claude', 'worktrees', 'agent-e2e');
+        fs.mkdirSync(path.dirname(agentWtPath), { recursive: true });
+        const branch = 'worktree-agent-e2e';
+        gitOrThrow(['worktree', 'add', '-b', branch, agentWtPath, baseSha], gitOpts);
+
+        // In agent worktree, create a new file and commit
+        fs.writeFileSync(path.join(agentWtPath, 'feature.txt'), 'feature content\n');
+        gitOrThrow(['add', 'feature.txt'], { cwd: agentWtPath, timeoutMs: SUBPROCESS_TIMEOUT_MS });
+        gitOrThrow(['commit', '-q', '-m', 'feat: add feature'], { cwd: agentWtPath, timeoutMs: SUBPROCESS_TIMEOUT_MS });
+
+        // Write durable wave manifest
+        const manifestContent = {
+          orchestrator_root: repoDir,
+          worktrees: [
+            {
+              agent_id: 'e2e-agent',
+              worktree_path: agentWtPath,
+              branch,
+              expected_base: baseSha,
+            },
+          ],
+        };
+        fs.writeFileSync(manifestPath, JSON.stringify(manifestContent, null, 2) + '\n');
+
+        // 4. SIMULATE WAVE INTERRUPTION: execution stopped before cleanup!
+        // Durable manifest is left on disk without running cleanup-wave yet.
+
+        // 5. DISCOVERY: Subagent or health check discovers uncleaned wave manifests
+        const discovered = findPhaseWaveManifests(phaseDir);
+        assert.equal(discovered.length, 1);
+        assert.equal(discovered[0], manifestPath);
+
+        // 6. RECOVERY: Run cleanup-wave using the discovered manifest
+        const cleanupRes = runNode([
+          GSD_TOOLS, 'worktree', 'cleanup-wave',
+          '--manifest', manifestPath,
+        ], { cwd: repoDir, timeoutMs: SUBPROCESS_TIMEOUT_MS });
+        assert.equal(cleanupRes.exitCode, 0, `cleanup failed: ${cleanupRes.stderr}`);
+
+        // Worktree should be cleanly merged into main
+        const mainFeaturePath = path.join(repoDir, 'feature.txt');
+        assert.ok(fs.existsSync(mainFeaturePath), 'feature.txt must have merged into main');
+        assert.equal(fs.readFileSync(mainFeaturePath, 'utf8').replace(/\r\n/g, '\n'), 'feature content\n');
+
+        // Agent worktree directory removed
+        assert.ok(!fs.existsSync(agentWtPath), 'agent worktree directory should be removed');
+      } finally {
+        cleanup(repoDir);
+      }
+    });
+
+    function extractExecutePhaseDispatchBash() {
+      const wfPath = path.resolve(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
+      const content = fs.readFileSync(wfPath, 'utf8');
+      const lines = content.split(/\r?\n/);
+      let inBlock = false;
+      const blockLines = [];
+      for (const line of lines) {
+        if (line.includes('```bash') && !inBlock) {
+          inBlock = true;
+          blockLines.length = 0;
+          continue;
+        }
+        if (line.includes('```') && inBlock) {
+          if (blockLines.some((l) => l.includes('WAVE_WORKTREE_MANIFEST'))) {
+            break;
+          }
+          inBlock = false;
+          blockLines.length = 0;
+          continue;
+        }
+        if (inBlock) blockLines.push(line);
+      }
+      if (blockLines.length === 0) {
+        throw new Error('Could not extract dispatch bash block from execute-phase.md');
+      }
+      return blockLines.join('\n');
+    }
+
+    test('execute-phase dispatch block blocks on pre-existing wave manifest and preserves bytes untouched (F5/M2)', () => {
+      const dispatchBash = extractExecutePhaseDispatchBash();
+      const dir = createTempDir('manifest-no-overwrite-');
+      try {
+        const manifestPath = path.join(dir, 'wave-1-manifest.json');
+        const initialContent = JSON.stringify({ orchestrator_root: '/repo', worktrees: [{ agent_id: 'in-flight' }] });
+        fs.writeFileSync(manifestPath, initialContent);
+
+        const script = `
+set -e
+gsd_run() {
+  node "${GSD_TOOLS}" "$@"
+}
+export CURRENT_WAVE=1
+export PHASE_DIR="${dir.replace(/\\/g, '/')}"
+${dispatchBash}
+`;
+
+        const scriptPath = path.join(dir, 'test-dispatch.sh');
+        fs.writeFileSync(scriptPath, script);
+
+        const res = childProcess.spawnSync('bash', [scriptPath], {
+          cwd: process.cwd(),
+          stdio: 'pipe',
+          timeout: SUBPROCESS_TIMEOUT_MS,
+        });
+
+        assert.notEqual(res.status, 0, 'dispatch block must exit non-zero when pre-existing manifest exists');
+        const stderr = (res.stderr || '').toString();
+        assert.match(stderr, /BLOCKED: pre-existing wave manifest found at/, 'stderr must report BLOCKED guard');
+        assert.match(stderr, /cleanup-wave --manifest/, 'stderr must provide cleanup-wave reconciliation guidance');
+
+        // Verify pre-existing content is completely untouched
+        const readBack = fs.readFileSync(manifestPath, 'utf8');
+        assert.equal(readBack, initialContent, 'pre-existing manifest content must remain completely untouched');
+
+        // Negative control: in a fresh phase dir with no pre-existing manifest, the dispatch block succeeds
+        const freshDir = createTempDir('manifest-fresh-');
+        try {
+          const freshManifestPath = path.join(freshDir, 'wave-1-manifest.json');
+          const freshScript = `
+set -e
+gsd_run() {
+  node "${GSD_TOOLS}" "$@"
+}
+export CURRENT_WAVE=1
+export PHASE_DIR="${freshDir.replace(/\\/g, '/')}"
+${dispatchBash}
+`;
+          const freshScriptPath = path.join(freshDir, 'test-fresh-dispatch.sh');
+          fs.writeFileSync(freshScriptPath, freshScript);
+
+          const freshRes = childProcess.spawnSync('bash', [freshScriptPath], {
+            cwd: process.cwd(),
+            stdio: 'pipe',
+            timeout: SUBPROCESS_TIMEOUT_MS,
+          });
+          assert.equal(freshRes.status, 0, `fresh dispatch must exit 0: ${freshRes.stderr}`);
+          assert.ok(fs.existsSync(freshManifestPath), 'fresh dispatch must create wave-1-manifest.json');
+          const parsed = JSON.parse(fs.readFileSync(freshManifestPath, 'utf8'));
+          assert.ok(Array.isArray(parsed.worktrees), 'created manifest must be valid JSON with worktrees array');
+        } finally {
+          cleanup(freshDir);
+        }
+      } finally {
+        cleanup(dir);
+      }
+    });
   });
 });

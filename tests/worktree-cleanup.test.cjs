@@ -1750,3 +1750,110 @@ describe('bug #48: orchestrator cwd-drift guard — executable e2e', () => {
 });
   });
 }
+
+describe('durable wave worktree manifest contract (#4853)', () => {
+  const executePhaseContent = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf8');
+
+  test('execute-phase.md initializes WAVE_WORKTREE_MANIFEST using worktree.manifest-path query with fail-closed || exit 1 (M1)', () => {
+    assert.match(
+      executePhaseContent,
+      /WAVE_WORKTREE_MANIFEST=\$\(gsd_run query worktree\.manifest-path --phase-dir "\$PHASE_DIR" --wave "\$WAVE_NUM" --raw\)\s*\|\|\s*exit 1/,
+      'execute-phase.md must assign WAVE_WORKTREE_MANIFEST using worktree.manifest-path query and fail closed with || exit 1 (#4853/M1)',
+    );
+    assert.match(
+      executePhaseContent,
+      /WAVE_WORKTREE_MANIFEST=\$\(gsd_run query worktree\.manifest-path --phase "\$PHASE_NUMBER" --wave "\$WAVE_NUM" --raw\)\s*\|\|\s*exit 1/,
+      'execute-phase.md must assign WAVE_WORKTREE_MANIFEST using --phase fallback and fail closed with || exit 1 (#4853/M1)',
+    );
+  });
+
+  test('execute-phase.md detects pre-existing wave manifest and blocks overwrite with reconciliation guidance (M2)', () => {
+    assert.match(
+      executePhaseContent,
+      /BLOCKED: pre-existing wave manifest found at \$EXISTING_MANIFEST from an earlier\/interrupted run\./,
+      'execute-phase.md must detect pre-existing manifest and block overwrite (#4853/M2)',
+    );
+    assert.match(
+      executePhaseContent,
+      /gsd_run query worktree\.cleanup-wave --manifest \\"\$EXISTING_MANIFEST\\"/,
+      'execute-phase.md must instruct operator to reconcile pre-existing manifest (#4853/M2)',
+    );
+    assert.match(
+      executePhaseContent,
+      /fs\.writeFileSync\(process\.env\.MANIFEST,[^\n]*\{flag:"wx"\}\)/,
+      'execute-phase.md must use exclusive create flag wx to prevent truncating pre-existing manifest (#4853/M2)',
+    );
+  });
+
+  test('execute-phase.md removes WAVE_WORKTREE_MANIFEST after cleanup-wave in step 5.5', () => {
+    assert.match(
+      executePhaseContent,
+      /gsd_run query worktree\.cleanup-wave[^\n]*\n\s*rm -f "\$WAVE_WORKTREE_MANIFEST"/,
+      'execute-phase.md must remove $WAVE_WORKTREE_MANIFEST after cleanup-wave in step 5.5 (#4853)',
+    );
+  });
+
+  test('execute-phase.md removes WAVE_WORKTREE_MANIFEST in cleanup-tail only when no worktrees failed removal (M3)', () => {
+    assert.match(
+      executePhaseContent,
+      /CLEANUP_FAILED=0/,
+      'execute-phase.md cleanup-tail must initialize CLEANUP_FAILED (#4853/M3)',
+    );
+    assert.match(
+      executePhaseContent,
+      /CLEANUP_FAILED=1/,
+      'execute-phase.md cleanup-tail must set CLEANUP_FAILED on removal error (#4853/M3)',
+    );
+    assert.match(
+      executePhaseContent,
+      /if \[ "\$CLEANUP_FAILED" -eq 0 \]; then\s*\n\s*rm -f "\$WAVE_WORKTREE_MANIFEST" "\$WT_PATHS_FILE"/,
+      'execute-phase.md cleanup-tail must only delete manifest when CLEANUP_FAILED is 0 (#4853/M3)',
+    );
+    assert.match(
+      executePhaseContent,
+      /preserving manifest at \$WAVE_WORKTREE_MANIFEST for reconciliation/,
+      'execute-phase.md cleanup-tail must announce manifest preservation on residual failure (#4853/M3)',
+    );
+  });
+
+  test('execute-phase.md validates CURRENT_WAVE and does not default to wave 1 or phase 1 silently (M4)', () => {
+    assert.match(
+      executePhaseContent,
+      /FATAL: CURRENT_WAVE is unset before worktree dispatch/,
+      'execute-phase.md must fail when CURRENT_WAVE is unset (#4853/M4)',
+    );
+    assert.match(
+      executePhaseContent,
+      /FATAL: neither PHASE_DIR nor PHASE_NUMBER is set before worktree dispatch/,
+      'execute-phase.md must fail when phase variables are unset (#4853/M4)',
+    );
+    assert.doesNotMatch(
+      executePhaseContent,
+      /CURRENT_WAVE:-.*1/,
+      'execute-phase.md must not default wave number to 1 (#4853/M4)',
+    );
+    assert.doesNotMatch(
+      executePhaseContent,
+      /PHASE_NUMBER:-1/,
+      'execute-phase.md must not default phase number to 1 (#4853/M4)',
+    );
+  });
+
+  test('negative control: execute-phase.md does not use literal placeholder text or mktemp for WAVE_WORKTREE_MANIFEST', () => {
+    assert.doesNotMatch(
+      executePhaseContent,
+      /WAVE_WORKTREE_MANIFEST="?\{phase_dir\}/,
+      'execute-phase.md must not assign literal placeholder {phase_dir} to WAVE_WORKTREE_MANIFEST (#4853)',
+    );
+    assert.doesNotMatch(
+      executePhaseContent,
+      /mktemp[^\n]*WAVE_WORKTREE_MANIFEST/,
+      'execute-phase.md must not assign mktemp to WAVE_WORKTREE_MANIFEST (#4853)',
+    );
+    assert.doesNotMatch(
+      executePhaseContent,
+      /WAVE_WORKTREE_MANIFEST=[^\n]*mktemp/,
+      'execute-phase.md must not assign mktemp to WAVE_WORKTREE_MANIFEST (#4853)',
+    );
+  });
+});
