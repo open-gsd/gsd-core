@@ -327,11 +327,7 @@ estimate:                   # Projected execution cost (see Estimate Emission)
 must_haves:
   truths: []                # Observable behaviors
   artifacts: []             # Files that must exist
-  key_links:                # Critical connections (from/to MUST be relative file paths; symbols/endpoints go in via:)
-    - from: "src/path/file.ts"
-      to: "src/path/target.ts"
-      via: "description of connection, symbol, endpoint"
-      pattern: "optional regex"
+  key_links: []             # Critical connections (from/to MUST be project-relative file paths; symbols/endpoints go in via:)
 ---
 
 <objective>

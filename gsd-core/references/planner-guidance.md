@@ -216,24 +216,17 @@ Message list component wiring:
 
 "Where is this most likely to break?" Key links = critical connections where breakage causes cascading failures.
 
-### Must-Haves Schema & Field Contract
+### Key Links Field Contract
 
-| Field | Type | Description |
-|---|---|---|
-| `truths` | string[] | Observable behaviors from user perspective. Each must be testable. |
-| `artifacts` | object[] | Files that must exist with real implementation. |
-| `artifacts[].path` | string | File path relative to project root. |
-| `artifacts[].provides` | string | What this artifact delivers. |
-| `artifacts[].min_lines` | integer (optional) | Minimum lines to be considered substantive. |
-| `artifacts[].exports` | string[] (optional) | Expected exports to verify. |
-| `artifacts[].contains` | string (optional) | Pattern that must exist in file. |
-| `key_links` | object[] | Critical connections between artifacts. |
-| `key_links[].from` | string | Source file (**relative path from project root only**). Describe components or symbols in `via:`. |
-| `key_links[].to` | string | Target file (**relative path from project root only**). Describe endpoints, APIs, or modules in `via:`. |
-| `key_links[].via` | string | How they connect, including any endpoint or symbol name (e.g. `fetch in useEffect — calls /api/chat`, `Prisma query via prisma.message`). |
-| `key_links[].pattern` | string (optional) | Regex to verify connection exists. |
+| Field | Description |
+|---|---|
+| `key_links` | Critical connections between artifacts. |
+| `key_links[].from` | Source file (relative path from project root). Describe components or symbols in `via:`. |
+| `key_links[].to` | Target file (relative path from project root). Describe endpoints, APIs, or modules in `via:`. |
+| `key_links[].via` | How they connect, including any endpoint or symbol name (e.g. `fetch in useEffect — calls /api/chat`, `Prisma query via prisma.message`). |
+| `key_links[].pattern` | Optional. Regex to verify connection exists. |
 
-> **Important:** `from:` and `to:` MUST be literal, project-relative file paths. Never place functions, symbols (`file.ts::symbol`), HTTP endpoints (`/api/...`), or prose descriptions in `from:` or `to:`. All symbols, methods, and endpoints belong in `via:`.
+> **Important:** `from:` and `to:` MUST be literal, project-relative file paths. Never place functions, symbols (`file.ts::symbol`), HTTP endpoints (`/api/...`), or prose descriptions in `from:` or `to:`. All symbols, methods, and endpoints belong in `via:`. See docs/reference/plan-md.md for the complete `must_haves` schema.
 
 ### Must-Haves Output Format
 
