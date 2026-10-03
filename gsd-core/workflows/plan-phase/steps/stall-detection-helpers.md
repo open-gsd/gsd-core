@@ -21,31 +21,47 @@ recovery: if the runtime loses the completion handoff, the user may need to
 interrupt and use the existing filesystem fallback. The completion markers and
 empty/truncated/unrecognized-return fallback remain unchanged.
 
-**Binding `{outputFile}` (load-bearing, not optional):** every `gsd_stall_watch`
-call below takes `{outputFile}` as its second argument — a literal token the
-orchestrator must substitute with the REAL path from the immediately preceding
-`run_in_background=true` Agent() call's returned `async_launched` result,
-exactly as `docs-update.md:471` already does ("Read tool: file_path: `{outputFile
-from README agent result}`"). This is NOT a bash variable the snippet below
-assigns — there is nothing upstream that assigns one, so a bash variable
-reference here would silently stay empty forever. With `{outputFile}` correctly
-substituted, `[ -f "$output_file" ]` can find the real file and the
-`marker_received` path is reachable; left as a literal (or as an unbound bash
-variable), `marker_found` can never become `true` and every spawn silently
-falls back to the mtime-only path — for the plan-checker spawn specifically,
-that fallback is broken (see next paragraph), so binding this correctly there
-is not a nice-to-have.
+**Binding `{receipt}` (load-bearing, not optional; #5182):** every `gsd_stall_watch`
+call takes `{receipt}` as its second argument: a GSD-owned return receipt, one per
+dispatch. Before each watched Agent() call the orchestrator runs
+`gsd_receipt_path "${PHASE_DIR}" <spawn>` (`<spawn>` is `planner`, `checker`, `revision`,
+`outline`, or the plan ID) and substitutes the printed absolute path for `{receipt}`,
+both in the spawn prompt's `<return_receipt>{receipt}</return_receipt>` line and in
+every watch call for that spawn. Like `$TS`, it is a literal the orchestrator carries
+across tool calls; nothing persists across fences, so never pass an unexpanded
+`$RECEIPT`/`$TS` expression. The agent's LAST action is to write the marker line it
+returns to that path (`agents/gsd-planner.md`, `agents/gsd-plan-checker.md`).
 
-**Plan-checker's artifact glob needs the marker, not just mtimes:** the
-plan-checker spawn watches `*-PLAN.md` for freshness, but a checker that
-PASSES touches none of those files — no fresh mtime, ever, on a clean run.
-Without `{outputFile}` correctly bound to the real completion output, a
-healthy plan-checker that returns `## VERIFICATION PASSED` in two minutes
-would still be declared `stalled` once `planner.stall_threshold_minutes`
-elapses — reporting a succeeded agent as hung, which is worse than the
-original unbounded wait. The marker path (via `{outputFile}`) is the ONLY
-working completion signal for that spawn; the artifact glob is secondary
-there.
+The watch never reads a host output file (`{outputFile}`). On Claude Code that file is
+the subagent transcript, which already holds the agent's prompt and definition
+snapshot, and both quote the markers, so a match there proves nothing. Other hosts
+return no such file at all. The receipt is the same on every runtime, and
+`gsd_return_marker` counts a marker only at the START of a receipt line, so quoted or
+JSON-encoded marker text can never match. After routing, the orchestrator runs
+`rm -f "{receipt}"`. With the toggle `false`, the prompt still carries the receipt
+line and the agent still writes it; the orchestrator consumes the real returned
+result and removes the receipt the same way.
+
+**The runtime's completion result ends the wait:** the receipt bounds the wait; it does
+not replace the runtime's own completion. If the spawned agent's real completion
+result reaches the orchestrator between cycles, stop the watch and route that
+result's recognized marker exactly as the `false` path does. Precedence: whichever
+of the two ends the wait routes it. The receipt carries only the marker; the full
+return (the checker's issue list, the planner's plan count or checkpoint) always
+comes from the completion result. If both are present and name different markers,
+treat the return as unrecognized (9a/11a). A route that needs the body when it never
+arrives fails closed: a receipt-routed `## ISSUES FOUND` with no issue list is
+never counted as 0 issues; use 11a and offer Retry checker before Accept.
+
+The helper functions and the config values above do not persist between tool calls
+either: re-run this block in every fence that calls them.
+
+**Plan-checker on a read-only host:** a checker that PASSES touches no `*-PLAN.md`, so
+its receipt is its only completion signal for this watch. The checker has no Write
+tool and writes its receipt with one Bash `printf`. A host that runs it read-only
+(Codex derives a `read-only` sandbox from its `tools:`) refuses that write. The checker
+then continues without it, and its watch ends `stalled` at the threshold, as before
+#5182, unless the runtime's completion result arrives first.
 
 **Single-cycle by design, not one long-lived loop:** `gsd_stall_watch` sleeps
 for exactly one `PLANNER_STALL_INTERVAL_MINUTES` and returns — it does NOT
@@ -133,31 +149,77 @@ gsd_stall_should_recover() {
   echo "waiting"; return 0
 }
 
+# gsd_receipt_path PHASE_DIR SPAWN — print a fresh, absolute return-receipt path
+# PHASE_DIR/.gsd-returns/SPAWN.EPOCH.XXXXXXXX (#5182). The directory is created
+# (with a `*` .gitignore); the file is NOT (a host Write tool may refuse to
+# overwrite a file the agent never read). Absolute because a subagent's cwd may
+# differ from the orchestrator's; `mktemp -u` keeps back-to-back dispatches in one
+# second distinct; EPOCH lets gsd_stall_watch recover the dispatch time if `$TS`
+# was lost between tool calls. SPAWN is reduced to [A-Za-z0-9_-], so a plan ID can
+# never leave the directory. Fails closed (prints nothing, returns 1) on an empty
+# PHASE_DIR or one holding a quote, `$` or backtick, which the orchestrator could
+# not substitute safely into a prompt or a quoted bash argument.
+gsd_receipt_path() {
+  local dir="$1" spawn="${2//[^A-Za-z0-9_-]/_}"
+  case "$dir" in
+    ''|*[\'\"\$\`]*) return 1 ;;
+    /*|[A-Za-z]:[/\\]*) ;;
+    *) dir="$(pwd)/$dir" ;;
+  esac
+  mkdir -p "$dir/.gsd-returns" || return 1
+  [ -f "$dir/.gsd-returns/.gitignore" ] || printf '*\n' > "$dir/.gsd-returns/.gitignore"
+  if command -v cygpath >/dev/null 2>&1; then dir=$(cygpath -m "$dir"); fi
+  mktemp -u "$dir/.gsd-returns/${spawn:-spawn}.$(date +%s).XXXXXXXX"
+}
+
+# gsd_return_marker FILE MARKER... — print the first MARKER that STARTS a line of
+# FILE, or nothing. Literal prefix match (no regex), ending at a word boundary, so
+# a longer word that merely starts with a marker is not that marker; a trailing
+# CR, a leading BOM and a missing final newline are tolerated. The one owner of "which marker did the
+# agent return": gsd_stall_watch and step 11's routing both use it. Indented,
+# mid-line, or JSON-encoded marker text (prompts, agent definitions, transcripts)
+# never matches.
+gsd_return_marker() {
+  local file="$1" line m rest; shift
+  [ -f "$file" ] && [ -r "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    line="${line#$'\xef\xbb\xbf'}"
+    for m in "$@"; do
+      [[ "$line" == "$m"* ]] || continue
+      rest="${line#"$m"}"
+      if [[ "$rest" != [A-Za-z0-9_]* ]]; then printf '%s\n' "$m"; return 0; fi
+    done
+  done < "$file"
+  return 0
+}
+
 # gsd_stall_watch — ONE bounded, real (non-LLM-side) sleep-and-check cycle, not
 # a long-lived loop (see "Single-cycle by design" above — a single Bash tool
 # call spanning the full threshold risks the host tool's own timeout killing
 # it first). Sleeps exactly one PLANNER_STALL_INTERVAL_MINUTES, then checks for
-# a completion marker in $2 (the outputFile returned by the run_in_background
-# Agent() call) or fresh mtime activity under $3 (an artifact glob), against
+# a completion marker in $2 (the spawn's {receipt}, via gsd_return_marker) or
+# fresh mtime activity under $3 (an artifact glob), against
 # elapsed time since $1 (an epoch-seconds dispatch_ts the CALLER records once,
 # before the first call, and passes unchanged on every repeat). Remaining args
 # are completion markers. Prints exactly one of: marker_received | active |
 # waiting | stalled. The caller repeats the call while the result is
 # waiting/active; any other result ends the wait.
 gsd_stall_watch() {
-  local dispatch_ts="$1" output_file="$2" artifact_glob="$3"; shift 3
+  local dispatch_ts="$1" receipt="$2" artifact_glob="$3"; shift 3
   local markers=("$@")
-  [[ "$dispatch_ts" =~ ^[0-9]+$ ]] || dispatch_ts=$(date +%s)
+  # A lost `$TS` (shell state does not survive between tool calls) falls back to
+  # the EPOCH gsd_receipt_path stamped into the receipt name, then to "now".
+  if ! [[ "$dispatch_ts" =~ ^[0-9]+$ ]]; then
+    dispatch_ts="${receipt##*/}"; dispatch_ts="${dispatch_ts#*.}"; dispatch_ts="${dispatch_ts%%.*}"
+    [[ "$dispatch_ts" =~ ^[0-9]+$ ]] || dispatch_ts=$(date +%s)
+  fi
   sleep "$(( PLANNER_STALL_INTERVAL_MINUTES * 60 ))"
   local now elapsed marker_found artifact_fresh
   now=$(date +%s)
   elapsed=$(( now - dispatch_ts ))
   marker_found="false"
-  if [ -f "$output_file" ]; then
-    for m in "${markers[@]}"; do
-      if grep -qF "$m" "$output_file" 2>/dev/null; then marker_found="true"; break; fi
-    done
-  fi
+  if [ -n "$(gsd_return_marker "$receipt" "${markers[@]}")" ]; then marker_found="true"; fi
   # -mmin -N ("modified less than N minutes ago"), not -newermt "@<epoch>":
   # -newermt's "@<epoch>" shorthand is a GNU-date convenience the shipped
   # BSD find(1) on macOS does NOT understand ("Can't parse date/time:
