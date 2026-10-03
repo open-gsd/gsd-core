@@ -785,7 +785,103 @@ describe('installOpencodeFamilySkills — emits skills/<name>/SKILL.md (#784)', 
       // GSD-managed skills should also be present.
       assert.ok(fs.existsSync(path.join(configDir, 'skills', 'gsd-help', 'SKILL.md')));
     });
+
+    test(`${runtime}: prunes only GSD-owned gsd-* skill dirs and names the rest (#5161)`, (t) => {
+      const configDir = createTempDir(`gsd-oc5161-${runtime}-`);
+      t.after(() => cleanup(configDir));
+      writePackageSourceMarkerFixture(configDir);
+      const skillsDir = path.join(configDir, 'skills');
+      const seed = (name, body, extra = {}) => {
+        fs.mkdirSync(path.join(skillsDir, name), { recursive: true });
+        fs.writeFileSync(path.join(skillsDir, name, 'SKILL.md'), body);
+        for (const [file, content] of Object.entries(extra)) fs.writeFileSync(path.join(skillsDir, name, file), content);
+      };
+      seed('gsd-mine', 'USER\n');                                  // user-owned: no ownership signal
+      seed('gsd-help', 'OLD\n', { 'stale.md': 'stale\n' });       // first-party: replaced
+      seed('gsd-retired-5161', 'OLD\n');                          // manifest-recorded, no longer shipped
+      seed('gsd-cap-orphan-5161', 'CAP\n', { '.gsd-capability-skill': 'some-cap\n' }); // capability marker
+      fs.writeFileSync(path.join(configDir, 'gsd-file-manifest.json'), JSON.stringify({
+        version: '0.0.0', files: { 'skills/gsd-retired-5161/SKILL.md': 'deadbeef' },
+      }));
+
+      const warnings = [];
+      const origWarn = console.warn;
+      console.warn = (...args) => { warnings.push(args.join(' ')); };
+      t.after(() => { console.warn = origWarn; });
+      installOpencodeFamilySkills(runtime, configDir, stageRawCommands(runtime, configDir), `${configDir}/`);
+      console.warn = origWarn;
+
+      assert.strictEqual(fs.readFileSync(path.join(skillsDir, 'gsd-mine', 'SKILL.md'), 'utf8'), 'USER\n',
+        'a gsd-* dir GSD does not own must survive the prune');
+      assert.ok(warnings.some((w) => w.includes(path.join(skillsDir, 'gsd-mine'))),
+        'the preserved dir must be named by path');
+      assert.strictEqual(fs.existsSync(path.join(skillsDir, 'gsd-help', 'stale.md')), false,
+        'a first-party skill dir is still wiped and rewritten');
+      assert.strictEqual(fs.existsSync(path.join(skillsDir, 'gsd-retired-5161')), false,
+        'a manifest-recorded skill is still pruned');
+      assert.strictEqual(fs.existsSync(path.join(skillsDir, 'gsd-cap-orphan-5161')), false,
+        'a marker-carrying capability skill is still pruned');
+      assert.ok(!warnings.some((w) => /gsd-(help|retired-5161|cap-orphan-5161)/.test(w)),
+        'GSD-owned dirs are pruned silently, never reported as preserved');
+    });
   }
+});
+
+// ─── #5161: skill-dir ownership must not depend on which source provider one lookup picks ───
+// Staging resolves its source with the commands+agents requirement; a commands-only lookup can
+// accept a different provider — a `.gsd-source` marker naming a commands-only dir. When ownership
+// read only that root, writeManifest recorded zero GSD skills (driven by review, qwen --local).
+describe('#5161: createSkillDirOwnership first-party set survives a commands-only source marker', () => {
+  const { createSkillDirOwnership: ownership } = require('../gsd-core/bin/lib/install-engine.cjs');
+
+  test('a package first-party skill is owned even when .gsd-source names another commands dir', (t) => {
+    const configDir = createTempDir('gsd-5161-marker-');
+    t.after(() => cleanup(configDir));
+    const otherCommands = path.join(configDir, 'other-src', 'commands', 'gsd');
+    fs.mkdirSync(otherCommands, { recursive: true });
+    fs.writeFileSync(path.join(otherCommands, 'only-here.md'), '---\nname: only-here\n---\n');
+    fs.writeFileSync(path.join(configDir, '.gsd-source'), otherCommands + '\n');
+    const skillsDir = path.join(configDir, 'skills');
+    fs.mkdirSync(skillsDir, { recursive: true });
+
+    const owns = ownership('claude', configDir, skillsDir, 'gsd-', { includeManifest: false });
+    assert.strictEqual(owns('gsd-help'), true, 'a skill the executing package ships must be owned');
+    assert.strictEqual(owns('gsd-only-here'), true, 'a skill the marker-named source ships must be owned');
+    assert.strictEqual(owns('gsd-mine-5161'), false, 'a dir neither corpus ships stays unowned');
+  });
+
+  test('a source DIRECTORY named like a command is not a first-party stem', (t) => {
+    const configDir = createTempDir('gsd-5161-srcdir-');
+    t.after(() => cleanup(configDir));
+    const otherCommands = path.join(configDir, 'other-src', 'commands', 'gsd');
+    fs.mkdirSync(path.join(otherCommands, 'phantom-union-5161.md'), { recursive: true });
+    fs.writeFileSync(path.join(otherCommands, 'phantom-union-5161.md', 'notes.txt'), 'not a command\n');
+    fs.writeFileSync(path.join(otherCommands, 'real-5161.md'), '---\nname: real-5161\n---\n');
+    fs.writeFileSync(path.join(configDir, '.gsd-source'), otherCommands + '\n');
+    const owns = ownership('claude', configDir, path.join(configDir, 'skills'), 'gsd-', { includeManifest: false });
+    assert.strictEqual(owns('gsd-real-5161'), true, 'precondition: the marker source was read');
+    assert.strictEqual(owns('gsd-phantom-union-5161'), false, 'only a regular .md file names a first-party stem');
+  });
+
+  test('installOpencodeFamilySkills does not own a raw-dir DIRECTORY named like a command', (t) => {
+    const configDir = createTempDir('gsd-5161-phantom-');
+    t.after(() => cleanup(configDir));
+    writePackageSourceMarkerFixture(configDir);
+    const rawDir = stageRawCommands('opencode', configDir);
+    fs.mkdirSync(path.join(rawDir, 'phantom-5161.md'), { recursive: true });
+    const userDir = path.join(configDir, 'skills', 'gsd-phantom-5161');
+    fs.mkdirSync(userDir, { recursive: true });
+    fs.writeFileSync(path.join(userDir, 'SKILL.md'), 'USER\n');
+
+    const origWarn = console.warn;
+    console.warn = () => {};
+    t.after(() => { console.warn = origWarn; });
+    installOpencodeFamilySkills('opencode', configDir, rawDir, `${configDir}/`);
+    console.warn = origWarn;
+
+    assert.strictEqual(fs.readFileSync(path.join(userDir, 'SKILL.md'), 'utf8'), 'USER\n',
+      'a dir the writer never rewrites must not be pruned as owned');
+  });
 });
 
 // ─── #2362: OpenCode/Kilo combined-family INSTALL path drops the capability

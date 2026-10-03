@@ -249,6 +249,10 @@ describe('Qwen Code: installRuntimeArtifacts', () => {
     const staleSkillDir = path.join(configDir, 'skills', 'gsd-old-skill');
     fs.mkdirSync(staleSkillDir, { recursive: true });
     fs.writeFileSync(path.join(staleSkillDir, 'SKILL.md'), 'old');
+    // #5161: a prefix alone no longer proves GSD owns a skill dir. A stale GSD
+    // skill is one a previous install recorded, so record it the way that install would.
+    fs.writeFileSync(path.join(configDir, 'gsd-file-manifest.json'),
+      JSON.stringify({ version: '0.0.0', files: { 'skills/gsd-old-skill/SKILL.md': 'deadbeef' } }));
 
     installRuntimeArtifacts('qwen', configDir, 'global', resolvedProfileFull);
 
