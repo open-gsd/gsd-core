@@ -939,7 +939,29 @@ const VALID_SUBAGENT_TOOLKITS = new Set(['full', 'read-only', 'built-in-only']);
 const VALID_EFFORT_SURFACES   = new Set(['argv', 'none']);
 // ADR-1239 Codex-binding amendment (#2584): how a host isolates concurrent
 // same-wave executors — a dispatch sub-field, not a top-level axis.
-const VALID_DISPATCH_ISOLATION = new Set(['harness-worktree', 'orchestrator-worktree', 'none']);
+// #4561: consumed from the single owner (src/dispatch-isolation.cts, compiled to
+// the ./dispatch-isolation.cjs sibling) instead of restated. This file is
+// hand-written and tracked while the owner is a build artifact. Every consumer
+// already runs post-build — gsd-tools.cjs after its ensureRuntimeBuild(), CI's
+// lint lane after its explicit `build:lib` step, the tests after `pretest` —
+// and gen-capability-registry.cjs (the one direct script consumer) already
+// requires the compiled text-lines.cjs before this module loads. The remaining
+// exposure is a tree whose lib was built BEFORE this module existed: the build
+// seam keys on a single sentinel file, so it reads that tree as built and a
+// bare `Cannot find module` would surface with no remedy attached. Name it.
+const VALID_DISPATCH_ISOLATION = (() => {
+  try {
+    return require('./dispatch-isolation.cjs').DISPATCH_ISOLATION_VOCABULARY;
+  } catch (err) {
+    if (err && err.code === 'MODULE_NOT_FOUND' && /dispatch-isolation\.cjs/.test(String(err.message))) {
+      throw new Error(
+        'capability-validator: the compiled runtime lib ./dispatch-isolation.cjs is missing — this tree was built '
+        + 'before src/dispatch-isolation.cts existed. Run `npm run build:lib` (#4561).',
+      );
+    }
+    throw err;
+  }
+})();
 
 // ─── Reviewer lane body (ADR-2782 D1/D2/D3/D7/D8) ────────────────────────────
 //
