@@ -1148,9 +1148,14 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     const f = fixture(t);
     const helpers = extractStallHelpersBash();
     for (const bad of ['', 'ph"ase', "ph'ase", 'ph$ase', 'ph`ase']) {
-      // Passed positionally ($1), not interpolated: a `$` or backtick inside a
-      // double-quoted literal would be expanded by bash before the helper saw it.
-      const r = runBashScript(`${helpers}\ncd ${q(f.dir)}\nif out=$(gsd_receipt_path "$1" checker); then echo "OK:$out"; else echo FAIL; fi\n`, [bad]);
+      // Handed over through a file, never interpolated or passed as argv: a `$` or
+      // backtick in a double-quoted literal is expanded by bash first, and on Windows
+      // Git Bash's MSYS layer re-splits and unescapes argv, so a `'` argument arrives
+      // stripped (observed in CI: "ph'ase" reached the helper as "phase"). See
+      // extractStallHelpersBash()'s doc comment for the same transport hazard.
+      const valueFile = path.join(f.dir, 'phase-dir-value.txt');
+      fs.writeFileSync(valueFile, bad);
+      const r = runBashScript(`${helpers}\ncd ${q(f.dir)}\nIFS= read -r d < ${q(valueFile.replace(/\\/g, '/'))} || true\nif out=$(gsd_receipt_path "$d" checker); then echo "OK:$out"; else echo FAIL; fi\n`, []);
       assert.equal(r.stdout.trim(), 'FAIL', `phase dir ${JSON.stringify(bad)} must be refused`);
     }
     const r = runBashScript(`${helpers}\ncd ${q(f.dir)}\ngsd_receipt_path ph checker >/dev/null && cat ph/.gsd-returns/.gitignore\n`, []);
