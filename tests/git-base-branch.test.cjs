@@ -1242,7 +1242,16 @@ function extractExecutorPreCommitBash() {
  * branch reads this from the script's cwd, so the test runs the script with
  * `cwd: scriptDir`.
  */
-function writeExecutorGuardScript(prefix, bash, { branch, headRef, isWorktree, queryResult, queryExit = 0 }) {
+function writeExecutorGuardScript(prefix, bash, {
+  branch,
+  headRef,
+  isWorktree,
+  queryResult,
+  queryExit = 0,
+  isolation,
+  recordedIsolation,
+  readIsolationExit = 0,
+}) {
   const scriptDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   const gitPath = path.join(scriptDir, '.git');
   if (isWorktree) {
@@ -1250,9 +1259,11 @@ function writeExecutorGuardScript(prefix, bash, { branch, headRef, isWorktree, q
   } else {
     fs.mkdirSync(gitPath);
   }
+  const effectiveRecordedIsolation = recordedIsolation !== undefined ? recordedIsolation : isolation;
   const scriptPath = path.join(scriptDir, 'guard.sh');
   fs.writeFileSync(scriptPath, [
     '#!/usr/bin/env bash',
+    isolation !== undefined && isolation !== null ? `export ISOLATION="${isolation}"` : '',
     'git() {',
     '  if [ "$1" = symbolic-ref ]; then',
     headRef === 'DETACHED'
@@ -1267,6 +1278,17 @@ function writeExecutorGuardScript(prefix, bash, { branch, headRef, isWorktree, q
     '  fi',
     '}',
     'gsd_run() {',
+    '  if [ "$1" = query ] && [ "$2" = read-dispatch-isolation ]; then',
+    readIsolationExit
+      ? `    return ${readIsolationExit}`
+      : (effectiveRecordedIsolation !== undefined
+          ? `    printf "%s\\n" "${effectiveRecordedIsolation}"\n    return 0`
+          : '    return 1'),
+    '  fi',
+    '  if [ "$1" = query ] && [ "$2" = dispatch-isolation ]; then',
+    '    printf "SENTINEL_CLOBBERED: executor must not re-query dispatch-isolation\\n" >&2',
+    '    return 98',
+    '  fi',
     `  if [ "$#" -ne 4 ] || [ "$1" != query ] || [ "$2" != git.base-branch ] || ` +
       `[ "$3" != --is-protected ] || [ "$4" != "${branch}" ]; then`,
     '    printf "unexpected gsd_run invocation: %s\\n" "$*" >&2',
@@ -1278,7 +1300,7 @@ function writeExecutorGuardScript(prefix, bash, { branch, headRef, isWorktree, q
     '}',
     bash,
     'printf "GUARD_PASSED\\n"',
-  ].join('\n'), { mode: 0o755 });
+  ].filter(Boolean).join('\n'), { mode: 0o755 });
   return { scriptDir, scriptPath };
 }
 
@@ -1461,6 +1483,321 @@ describe('#3819: gsd-executor.md pre-commit protected-branch guard', () => {
 
     assert.match(excerpt, /re-run the Step 0/);
     assert.match(excerpt, /#3819/);
+  });
+});
+
+// ─── #4799: gsd-executor.md pre-commit isolation allow-list ─────────────────
+
+describe('#4799: gsd-executor.md pre-commit isolation allow-list', () => {
+  const bash = extractExecutorPreCommitBash();
+
+  test('#4799 sequential linked worktree, branch is non-protected phase branch → continues, GUARD_PASSED', (t) => {
+    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-4799-guard-seq-linked-wt-phase-', bash, {
+      branch: 'feature/phase-48',
+      headRef: 'feature/phase-48',
+      isWorktree: true,
+      isolation: 'none',
+      queryResult: 'false',
+    });
+    t.after(() => cleanup(scriptDir));
+
+    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
+
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.match(result.stdout, /GUARD_PASSED/);
+  });
+
+  test('#4799 negative control: sequential linked worktree on protected branch still halts with exit 1', (t) => {
+    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-4799-guard-seq-linked-wt-protected-', bash, {
+      branch: 'main',
+      headRef: 'main',
+      isWorktree: true,
+      isolation: 'none',
+      queryResult: 'true',
+    });
+    t.after(() => cleanup(scriptDir));
+
+    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
+
+    assert.strictEqual(result.exitCode, 1, result.stderr);
+    assert.match(result.stderr, /protected\/default branch/);
+    assert.doesNotMatch(result.stdout, /GUARD_PASSED/);
+  });
+
+  test('#4799 negative control: isolated worktree on non-agent phase branch still halts with exit 1', (t) => {
+    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-4799-guard-isolated-wt-phase-', bash, {
+      branch: 'feature/phase-48',
+      headRef: 'feature/phase-48',
+      isWorktree: true,
+      isolation: 'harness-worktree',
+      queryResult: 'false',
+    });
+    t.after(() => cleanup(scriptDir));
+
+    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
+
+    assert.strictEqual(result.exitCode, 1, result.stderr);
+    assert.match(result.stderr, /not in the agent-\* \/ worktree-agent-\* \/ worktree-wf_\* namespace/);
+    assert.doesNotMatch(result.stdout, /GUARD_PASSED/);
+  });
+
+  test('#4799 orchestrator-worktree isolation on non-agent branch still halts with exit 1', (t) => {
+    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-4799-guard-orch-wt-nonagent-', bash, {
+      branch: 'feature/phase-48',
+      headRef: 'feature/phase-48',
+      isWorktree: true,
+      isolation: 'orchestrator-worktree',
+      queryResult: 'false',
+    });
+    t.after(() => cleanup(scriptDir));
+
+    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
+
+    assert.strictEqual(result.exitCode, 1, result.stderr);
+    assert.match(result.stderr, /not in the agent-\* \/ worktree-agent-\* \/ worktree-wf_\* namespace/);
+    assert.doesNotMatch(result.stdout, /GUARD_PASSED/);
+  });
+
+  test('#4799 isolated worktree on agent-* branch → continues, GUARD_PASSED', (t) => {
+    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-4799-guard-isolated-wt-agent-', bash, {
+      branch: 'agent-42',
+      headRef: 'agent-42',
+      isWorktree: true,
+      isolation: 'harness-worktree',
+      queryResult: 'false',
+    });
+    t.after(() => cleanup(scriptDir));
+
+    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
+
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.match(result.stdout, /GUARD_PASSED/);
+  });
+
+  test('#4799 ISOLATION unset, recorded sentinel is "none" → commits on non-protected phase branch, no sentinel clobbering', (t) => {
+    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-4799-guard-unset-recorded-none-', bash, {
+      branch: 'feature/phase-48',
+      headRef: 'feature/phase-48',
+      isWorktree: true,
+      queryResult: 'false',
+      recordedIsolation: 'none',
+    });
+    t.after(() => cleanup(scriptDir));
+
+    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
+
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.match(result.stdout, /GUARD_PASSED/);
+    assert.doesNotMatch(result.stderr, /SENTINEL_CLOBBERED/);
+  });
+
+  test('#4799 negative control: ISOLATION unset, resolver read fails in linked worktree → fails closed with exit 1', (t) => {
+    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-4799-guard-unset-resolver-fail-', bash, {
+      branch: 'feature/phase-48',
+      headRef: 'feature/phase-48',
+      isWorktree: true,
+      queryResult: 'false',
+      readIsolationExit: 1,
+    });
+    t.after(() => cleanup(scriptDir));
+
+    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
+
+    assert.strictEqual(result.exitCode, 1, result.stderr);
+    assert.match(result.stderr, /not in the agent-\* \/ worktree-agent-\* \/ worktree-wf_\* namespace/);
+    assert.doesNotMatch(result.stdout, /GUARD_PASSED/);
+  });
+
+  test('#4799 allow-list regex boundary: agent- with empty suffix halts with exit 1', (t) => {
+    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-4799-guard-regex-empty-suffix-', bash, {
+      branch: 'agent-',
+      headRef: 'agent-',
+      isWorktree: true,
+      isolation: 'harness-worktree',
+      queryResult: 'false',
+    });
+    t.after(() => cleanup(scriptDir));
+
+    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
+
+    assert.strictEqual(result.exitCode, 1, result.stderr);
+    assert.match(result.stderr, /not in the agent-\* \/ worktree-agent-\* \/ worktree-wf_\* namespace/);
+    assert.doesNotMatch(result.stdout, /GUARD_PASSED/);
+  });
+
+  test('#4799 allow-list regex boundary: agent-x continues, GUARD_PASSED', (t) => {
+    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-4799-guard-regex-agent-x-', bash, {
+      branch: 'agent-x',
+      headRef: 'agent-x',
+      isWorktree: true,
+      isolation: 'harness-worktree',
+      queryResult: 'false',
+    });
+    t.after(() => cleanup(scriptDir));
+
+    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
+
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.match(result.stdout, /GUARD_PASSED/);
+  });
+
+  test('#4799 allow-list regex boundary: xagent-1 halts with exit 1', (t) => {
+    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-4799-guard-regex-xagent-', bash, {
+      branch: 'xagent-1',
+      headRef: 'xagent-1',
+      isWorktree: true,
+      isolation: 'harness-worktree',
+      queryResult: 'false',
+    });
+    t.after(() => cleanup(scriptDir));
+
+    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
+
+    assert.strictEqual(result.exitCode, 1, result.stderr);
+    assert.match(result.stderr, /not in the agent-\* \/ worktree-agent-\* \/ worktree-wf_\* namespace/);
+    assert.doesNotMatch(result.stdout, /GUARD_PASSED/);
+  });
+});
+
+// ─── #4799: execute-plan.md IS_WORKTREE derivation ───────────────────────────
+
+function extractExecutePlanIsWorktreeBash() {
+  const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-plan.md');
+  const content = readFileNormalized(workflowPath);
+  const match = content.match(/if\s+\[\s+-f\s+\.git\s+\];\s*then[\s\S]*?IS_WORKTREE="false"\s*\nfi/);
+  if (!match) {
+    throw new Error('gsd-core/workflows/execute-plan.md: could not find IS_WORKTREE isolation block');
+  }
+  return match[0];
+}
+
+describe('#4799: execute-plan.md IS_WORKTREE derivation', () => {
+  const isWorktreeBash = extractExecutePlanIsWorktreeBash();
+
+  function runExecutePlanScript(prefix, { isWorktree, isolation, recordedIsolation, readIsolationExit = 0 }) {
+    const scriptDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    const gitPath = path.join(scriptDir, '.git');
+    if (isWorktree) {
+      fs.writeFileSync(gitPath, 'gitdir: /nonexistent\n');
+    } else {
+      fs.mkdirSync(gitPath);
+    }
+    const scriptPath = path.join(scriptDir, 'check-is-worktree.sh');
+    fs.writeFileSync(scriptPath, [
+      '#!/usr/bin/env bash',
+      isolation !== undefined && isolation !== null ? `export ISOLATION="${isolation}"` : '',
+      'gsd_run() {',
+      '  if [ "$1" = query ] && [ "$2" = read-dispatch-isolation ]; then',
+      readIsolationExit
+        ? `    return ${readIsolationExit}`
+        : (recordedIsolation !== undefined
+            ? `    printf "%s\\n" "${recordedIsolation}"\n    return 0`
+            : '    return 1'),
+      '  fi',
+      '  if [ "$1" = query ] && [ "$2" = dispatch-isolation ]; then',
+      '    printf "SENTINEL_CLOBBERED: execute-plan must not re-query dispatch-isolation\\n" >&2',
+      '    return 98',
+      '  fi',
+      '  printf "unexpected gsd_run invocation: %s\\n" "$*" >&2',
+      '  return 1',
+      '}',
+      isWorktreeBash,
+      'printf "IS_WORKTREE=%s\\n" "$IS_WORKTREE"',
+    ].filter(Boolean).join('\n'), { mode: 0o755 });
+
+    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
+    return { scriptDir, result };
+  }
+
+  test('#4799 main-checkout run ([ ! -f .git ]) evaluates IS_WORKTREE to false even if host capability is harness-worktree', (t) => {
+    const { scriptDir, result } = runExecutePlanScript('gsd-4799-main-checkout-', {
+      isWorktree: false,
+      isolation: 'harness-worktree',
+    });
+    t.after(() => cleanup(scriptDir));
+
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.match(result.stdout, /IS_WORKTREE=false/);
+    assert.doesNotMatch(result.stderr, /SENTINEL_CLOBBERED/);
+  });
+
+  test('#4799 linked worktree with recorded "none" sentinel evaluates IS_WORKTREE to false', (t) => {
+    const { scriptDir, result } = runExecutePlanScript('gsd-4799-wt-seq-', {
+      isWorktree: true,
+      recordedIsolation: 'none',
+    });
+    t.after(() => cleanup(scriptDir));
+
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.match(result.stdout, /IS_WORKTREE=false/);
+    assert.doesNotMatch(result.stderr, /SENTINEL_CLOBBERED/);
+  });
+
+  test('#4799 linked worktree with recorded "harness-worktree" sentinel evaluates IS_WORKTREE to true', (t) => {
+    const { scriptDir, result } = runExecutePlanScript('gsd-4799-wt-isolated-', {
+      isWorktree: true,
+      recordedIsolation: 'harness-worktree',
+    });
+    t.after(() => cleanup(scriptDir));
+
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.match(result.stdout, /IS_WORKTREE=true/);
+  });
+
+  test('#4799 negative control: linked worktree with sentinel read failure fails closed (IS_WORKTREE=true)', (t) => {
+    const { scriptDir, result } = runExecutePlanScript('gsd-4799-wt-read-fail-', {
+      isWorktree: true,
+      readIsolationExit: 1,
+    });
+    t.after(() => cleanup(scriptDir));
+
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.match(result.stdout, /IS_WORKTREE=true/);
+  });
+
+  test('#4799 behavioral: Pattern C records none and read-dispatch-isolation yields IS_WORKTREE=false for matching plan', (t) => {
+    const scriptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4799-pattern-c-'));
+    t.after(() => cleanup(scriptDir));
+
+    fs.mkdirSync(path.join(scriptDir, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(scriptDir, '.git'), 'gitdir: /nonexistent\n');
+
+    // Step 1: Execute Pattern C record command
+    const recordResult = runGsdTools([
+      'query', 'record-dispatch-isolation',
+      '--isolation', 'none',
+      '--phase', '05-05',
+      '--plan', '01',
+    ], scriptDir);
+    assert.strictEqual(recordResult.exitCode, 0, recordResult.stderr);
+
+    // Step 2: Query read-dispatch-isolation with matching plan identity -> returns "none"
+    const readMatch = runGsdTools([
+      'query', 'read-dispatch-isolation',
+      '--raw',
+      '--phase', '05-05',
+      '--plan', '01',
+    ], scriptDir);
+    assert.strictEqual(readMatch.exitCode, 0, readMatch.stderr);
+    assert.strictEqual(readMatch.output.trim(), 'none');
+
+    // Step 3: Run the extracted execute-plan IS_WORKTREE block with matching plan identity -> evaluates to false!
+    const { scriptDir: runDir, result } = runExecutePlanScript('gsd-4799-pattern-c-exec-', {
+      isWorktree: true,
+      recordedIsolation: 'none',
+    });
+    t.after(() => cleanup(runDir));
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.match(result.stdout, /IS_WORKTREE=false/);
+
+    // Step 4: Negative control: query read-dispatch-isolation with mismatched plan identity -> fails closed (exit 1)!
+    const readMismatch = runGsdTools([
+      'query', 'read-dispatch-isolation',
+      '--raw',
+      '--phase', '05-05',
+      '--plan', '02',
+    ], scriptDir);
+    assert.strictEqual(readMismatch.exitCode, 1, 'Mismatched plan identity must fail closed');
   });
 });
 

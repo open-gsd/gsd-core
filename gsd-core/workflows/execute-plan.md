@@ -117,9 +117,15 @@ Otherwise: Apply checkpoint-based routing below.
 **Resolve isolation now — AFTER the pattern is chosen, and only for a pattern that dispatches
 (#2584/#2652).**
 
-- **Pattern C: skip this entirely.** It executes inline in the main context and spawns no
-  agent, so there is nothing to isolate. Running the gate here would abort an
-  `isolation`-`none` host with a FATAL for a run that was never going to dispatch anything.
+- **Pattern C: inline execution is not isolated.** It executes inline in the main context and
+  spawns no agent (`ISOLATION=none`). Explicitly record `none` so downstream state updates and
+  metadata commit know this is sequential execution even in a linked worktree (#4799):
+
+  ```bash
+  ISOLATION=none
+  gsd_run query dispatch-isolation --raw --force-isolation none --phase "${PHASE}" --plan "${PLAN}" >/dev/null 2>&1 || true
+  ```
+
 - **Pattern A:** read @gsd-core/references/dispatch-isolation-gate.md and run its
   `Resolve ISOLATION`, `Single-agent dispatch sites`, and `Resolve the harness flag` blocks in
   order; they set `ISOLATION`/`HARNESS_FLAG` via `query dispatch-isolation`. `ISOLATION` — not
@@ -134,7 +140,7 @@ Otherwise: Apply checkpoint-based routing below.
 
   ```bash
   ISOLATION=none
-  gsd_run query dispatch-isolation --raw --force-isolation none >/dev/null 2>&1 || true
+  gsd_run query dispatch-isolation --raw --force-isolation none --phase "${PHASE}" --plan "${PLAN}" >/dev/null 2>&1 || true
   ```
 
   Segment dispatches therefore carry no `{harnessFlag}`.
@@ -437,8 +443,17 @@ merge conflicts).
 Update STATE.md using gsd_run query (or legacy gsd-tools) state mutations:
 
 ```bash
-# Auto-detect parallel mode: .git is a file in worktrees, a directory in main repo
-IS_WORKTREE=$([ -f .git ] && echo "true" || echo "false")
+# Check negotiated isolation mode (#4799): worktree isolation vs sequential execution
+if [ -f .git ]; then
+  _ISOLATION=$(gsd_run query read-dispatch-isolation --raw --phase "${PHASE}" --plan "${PLAN}" 2>/dev/null || true)
+  if [ "$_ISOLATION" = "none" ]; then
+    IS_WORKTREE="false"
+  else
+    IS_WORKTREE="true"
+  fi
+else
+  IS_WORKTREE="false"
+fi
 
 # Skip in parallel mode — orchestrator handles STATE.md centrally
 if [ "$IS_WORKTREE" != "true" ]; then
@@ -494,9 +509,17 @@ across siblings; the orchestrator owns the post-merge sync centrally
 (see execute-phase.md §5.7, single-writer contract from #1486 / dcb50396).
 
 ```bash
-# Auto-detect worktree mode: .git is a file in worktrees, a directory in main repo.
-# This mirrors the use_worktrees config flag for the executing handler.
-IS_WORKTREE=$([ -f .git ] && echo "true" || echo "false")
+# Check negotiated isolation mode (#4799): worktree isolation vs sequential execution
+if [ -f .git ]; then
+  _ISOLATION=$(gsd_run query read-dispatch-isolation --raw --phase "${PHASE}" --plan "${PLAN}" 2>/dev/null || true)
+  if [ "$_ISOLATION" = "none" ]; then
+    IS_WORKTREE="false"
+  else
+    IS_WORKTREE="true"
+  fi
+else
+  IS_WORKTREE="false"
+fi
 
 if [ "$IS_WORKTREE" != "true" ]; then
   # use_worktrees: false → this handler is the sole post-plan sync point (#2661)
@@ -533,8 +556,17 @@ execute-phase.md step 5.5).
 Task code already committed per-task. Commit plan metadata:
 
 ```bash
-# Auto-detect parallel mode: .git is a file in worktrees, a directory in main repo
-IS_WORKTREE=$([ -f .git ] && echo "true" || echo "false")
+# Check negotiated isolation mode (#4799): worktree isolation vs sequential execution
+if [ -f .git ]; then
+  _ISOLATION=$(gsd_run query read-dispatch-isolation --raw --phase "${PHASE}" --plan "${PLAN}" 2>/dev/null || true)
+  if [ "$_ISOLATION" = "none" ]; then
+    IS_WORKTREE="false"
+  else
+    IS_WORKTREE="true"
+  fi
+else
+  IS_WORKTREE="false"
+fi
 
 # In parallel mode: exclude STATE.md and ROADMAP.md (orchestrator commits these)
 if [ "$IS_WORKTREE" = "true" ]; then

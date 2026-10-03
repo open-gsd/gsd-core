@@ -2843,6 +2843,42 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     }
   }
 
+  /**
+   * Read and validate the dispatch-isolation sentinel for `cwd`. Never throws.
+   * Companion read primitive for `writeDispatchIsolationSentinel` (#4799).
+   */
+  function readDispatchIsolationSentinel(cwd) {
+    const nodePath = require('path');
+    const nodeFs = require('fs');
+    const root = typeof resolveMainWorktreeCwd === 'function' ? resolveMainWorktreeCwd(cwd) : cwd;
+    const sentinelPath = nodePath.join(root, '.gsd', 'dispatch-isolation-sentinel.json');
+    try {
+      const raw = nodeFs.readFileSync(sentinelPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (
+        parsed && typeof parsed === 'object' &&
+        DISPATCH_ISOLATION_VOCABULARY.has(parsed.isolation) &&
+        typeof parsed.written_at === 'number' && Number.isFinite(parsed.written_at)
+      ) {
+        // #4799 / review: Agent-side read applies NO staleness TTL check.
+        // A sequential executor plan can take well over 10 minutes to run and commit.
+        // Staleness enforcement belongs strictly at dispatch time in guard hooks.
+        return {
+          present: true,
+          stale: false,
+          isolation: parsed.isolation,
+          harnessFlag: parsed.harness_flag || null,
+          phase: parsed.phase || null,
+          plan: parsed.plan || null,
+          writtenAt: parsed.written_at,
+        };
+      }
+    } catch {
+      // absent or unparseable
+    }
+    return { present: false, stale: true };
+  }
+
   function routeRecordDispatchIsolation({ args, cwd, raw, error }) {
     // #3045: `routeDispatchIsolation` (the `dispatch-isolation` query) is now
     // the PRIMARY write path for the sentinel (CORE REDESIGN) — it records
@@ -2860,10 +2896,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // registry+config check, so a missing sentinel is safe, just less precise.
     //
     // Output: { recorded: true|false, path, error? }
-    const VALID_ISOLATION = new Set(['harness-worktree', 'orchestrator-worktree', 'none']);
     const isoIdx = args.indexOf('--isolation');
     const isolation = isoIdx !== -1 ? args[isoIdx + 1] : undefined;
-    if (!isolation || !VALID_ISOLATION.has(isolation)) {
+    if (!isolation || !DISPATCH_ISOLATION_VOCABULARY.has(isolation)) {
       error(
         'Usage: record-dispatch-isolation --isolation <harness-worktree|orchestrator-worktree|none> ' +
         '[--harness-flag <flag>|--harness-flag=<flag>] [--phase <n>] [--plan <id>]',
@@ -2908,6 +2943,70 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
     const result = writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag, phase, plan });
     output(result, raw);
+  }
+
+  function routeReadDispatchIsolation({ args, cwd, raw }) {
+    // #4799: read-only sentinel accessor (counterpart to record-dispatch-isolation).
+    // Reads the recorded decision persisted to `.gsd/dispatch-isolation-sentinel.json`
+    // by the orchestrator. Unlike `dispatch-isolation`, this verb NEVER re-resolves
+    // host capabilities and NEVER writes or clobbers the sentinel.
+    //
+    // Exit code:
+    //   0: sentinel is present, fresh, and valid
+    //   1: sentinel is absent, stale, or malformed
+    //
+    // Output:
+    //   --raw / default → prints exactly recorded isolation (harness-worktree | orchestrator-worktree | none)
+    //   --json          → prints { present, isolation, harnessFlag, phase, plan, writtenAt }
+    const result = readDispatchIsolationSentinel(cwd);
+    if (!result.present || result.stale) {
+      if (args.indexOf('--json') !== -1) {
+        output({ present: false, isolation: null }, raw);
+      }
+      process.exitCode = 1;
+      return;
+    }
+
+    const phaseIdx = args.indexOf('--phase');
+    const expectedPhase = phaseIdx !== -1 && args[phaseIdx + 1] && !args[phaseIdx + 1].startsWith('--')
+      ? args[phaseIdx + 1]
+      : null;
+    const planIdx = args.indexOf('--plan');
+    const expectedPlan = planIdx !== -1 && args[planIdx + 1] && !args[planIdx + 1].startsWith('--')
+      ? args[planIdx + 1]
+      : null;
+
+    // #4799 Major 3: carry decision per executor. If the caller passes plan identity
+    // (--phase and/or --plan) and the sentinel specifies a plan identity that mismatches,
+    // fail closed (exit 1). A leftover or unmatching 'none' must not cause another plan to skip allow-list.
+    let planMismatch = false;
+    if (expectedPhase && result.phase && result.phase !== expectedPhase) {
+      planMismatch = true;
+    }
+    if (expectedPlan && result.plan && result.plan !== expectedPlan) {
+      planMismatch = true;
+    }
+
+    if (planMismatch) {
+      if (args.indexOf('--json') !== -1) {
+        output({ present: false, mismatched: true, isolation: null, recordedPhase: result.phase, recordedPlan: result.plan }, raw);
+      }
+      process.exitCode = 1;
+      return;
+    }
+
+    if (args.indexOf('--json') !== -1) {
+      output({
+        present: true,
+        isolation: result.isolation,
+        harnessFlag: result.harnessFlag,
+        phase: result.phase,
+        plan: result.plan,
+        writtenAt: result.writtenAt,
+      }, raw);
+    } else {
+      process.stdout.write(result.isolation);
+    }
   }
 
   function routeResolveDispatchType({ args, cwd, raw, error }) {
@@ -4783,6 +4882,7 @@ const HOST_COMMAND_ROUTERS = {
     'dispatch-isolation': routeDispatchIsolation,
     'dispatch-capacity': routeDispatchCapacity,
     'inspect-dispatch-isolation': routeInspectDispatchIsolation,
+    'read-dispatch-isolation': routeReadDispatchIsolation,
     'record-dispatch-isolation': routeRecordDispatchIsolation,
     'resolve-dispatch-type': routeResolveDispatchType,
     'resolve-agent': routeResolveAgent,
@@ -5090,7 +5190,7 @@ const TOP_LEVEL_USAGE = 'Usage: gsd-tools <command> [args] [--raw] [--pick <fiel
   'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
   'capability, classify-confidence, git, learnings, list-seeds, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, planning, profile-questionnaire, ' +
   'profile-sample, progress, project-instruction-file, prompt-budget, quick-batch, quick-tasks-append, quick-tasks-migrate, requirements, research-plan, research-store, resolve-granularity, resolve-model, restore-custom-files, roadmap, runtime-identity, scaffold, smart-entry, state, ' +
-  'config-set-model-profile, dispatch-capacity, dispatch-isolation, dispatch-should-flatten, inspect-dispatch-isolation, record-dispatch-isolation, estimate-calibrate, estimate-calibration, estimate-check, resolve-agent, resolve-dispatch-type, ' +
+  'config-set-model-profile, dispatch-capacity, dispatch-isolation, dispatch-should-flatten, inspect-dispatch-isolation, read-dispatch-isolation, record-dispatch-isolation, estimate-calibrate, estimate-calibration, estimate-check, resolve-agent, resolve-dispatch-type, ' +
   'resolve-execution, review-lane, select-revert-commits, skill-manifest, skills-root, stamp-codebase-map, state-snapshot, stats, summary-extract, teams-status, todo, uat, update-context, verification, websearch, windows, ' +
   'task, template, user-story, validate, verify, verify-path-exists, verify-summary, eval, workstream, worktree\n\n' +
   'Global flags:\n' +

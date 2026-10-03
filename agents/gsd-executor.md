@@ -119,9 +119,12 @@ GSD_WORKTREE_PATH=""
 GSD_WORKTREE_BRANCH=""
 GSD_WORKTREE_EXPECTED_BASE=""
 if [ -f .git ]; then
-  GSD_WORKTREE_PATH=$(git rev-parse --show-toplevel)
-  GSD_WORKTREE_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-  GSD_WORKTREE_EXPECTED_BASE=$(git rev-parse HEAD)
+  _ISOLATION=$(gsd_run query read-dispatch-isolation --raw --phase "${PHASE}" --plan "${PLAN}" 2>/dev/null || true)
+  if [ "$_ISOLATION" != "none" ]; then
+    GSD_WORKTREE_PATH=$(git rev-parse --show-toplevel)
+    GSD_WORKTREE_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    GSD_WORKTREE_EXPECTED_BASE=$(git rev-parse HEAD)
+  fi
 fi
 ```
 </worktree_metadata_capture>
@@ -504,13 +507,22 @@ if [ "$IS_PROTECTED" != "false" ]; then
   exit 1
 fi
 if [ -f .git ]; then  # worktree
-  # Positive allow-list: HEAD must be on a per-agent branch (`agent-<id>` or
-  # legacy `worktree-agent-<id>`). This catches feature/* and any other
-  # arbitrary branch that the deny-list would silently allow (#2924, #1995).
-  if ! echo "$ACTUAL_BRANCH" | grep -Eq '^((worktree-)?agent-|worktree-wf_)[A-Za-z0-9._/-]+$'; then
-    echo "FATAL: refusing to commit — worktree HEAD '$ACTUAL_BRANCH' is not in the agent-* / worktree-agent-* / worktree-wf_* namespace." >&2
-    echo "Agent commits must live on per-agent branches; surface as blocker (#2924)." >&2
-    exit 1
+  # Worktree-isolation allow-list (#2924, #4799): applies to agent-isolated
+  # worktree dispatches (harness-worktree or orchestrator-worktree), NOT when running
+  # sequentially (ISOLATION=none) where commits to non-protected phase branches are allowed.
+  # Read recorded isolation decision; never re-resolve capability or clobber sentinel (#4799).
+  _ISOLATION=$(gsd_run query read-dispatch-isolation --raw --phase "${PHASE}" --plan "${PLAN}" 2>/dev/null || true)
+  # Fail closed (#4799 Major 3): if in a worktree and isolation cannot be determined
+  # or is not explicitly 'none', enforce the agent branch allow-list.
+  if [ "$_ISOLATION" != "none" ]; then
+    # Positive allow-list: HEAD must be on a per-agent branch (`agent-<id>` or
+    # legacy `worktree-agent-<id>`). This catches feature/* and any other
+    # arbitrary branch that the deny-list would silently allow (#2924, #1995).
+    if ! echo "$ACTUAL_BRANCH" | grep -Eq '^((worktree-)?agent-|worktree-wf_)[A-Za-z0-9._/-]+$'; then
+      echo "FATAL: refusing to commit — worktree HEAD '$ACTUAL_BRANCH' is not in the agent-* / worktree-agent-* / worktree-wf_* namespace." >&2
+      echo "Agent commits must live on per-agent branches; surface as blocker (#2924)." >&2
+      exit 1
+    fi
   fi
 fi
 ```

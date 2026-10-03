@@ -195,7 +195,7 @@ Do NOT update STATE.md or ROADMAP.md — the orchestrator owns those writes afte
 </objective>
 
 <execution_context>
-You are the gsd-executor agent running in a git worktree GSD created for you.
+You are the gsd-executor agent running in a git worktree GSD created for you (ISOLATION=orchestrator-worktree).
 Your working directory IS that worktree. Do not cd elsewhere, and do not run
 any git command that targets the main checkout. Use normal git commits WITH
 hooks. Do NOT use --no-verify.

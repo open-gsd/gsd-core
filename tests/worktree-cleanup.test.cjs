@@ -420,6 +420,38 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
         'task_commit_protocol step 0 must enforce a positive allow-list matching ^((worktree-)?agent-|worktree-wf_) in addition to the protected-ref deny-list (#2924/#3021 hardening)'
       );
     });
+
+    test('step 0 gates worktree allow-list on recorded isolation mode (#4799)', () => {
+      const codeBlocks = extractFencedCodeBlocks(block);
+      const scripts = codeBlocks.map(({ body }) => body).join('\n');
+      assert.match(
+        scripts,
+        /read-dispatch-isolation/,
+        'task_commit_protocol step 0 must query read-dispatch-isolation to read the recorded sentinel (#4799)'
+      );
+      assert.match(
+        scripts,
+        /if\s+\[\s+"?\$_ISOLATION"?\s+!=\s+"none"\s+\]/,
+        'task_commit_protocol step 0 must permit non-agent branches when isolation is "none" (#4799)'
+      );
+    });
+
+    test('worktree_metadata_capture gates capturing on non-none isolation modes (#4799)', () => {
+      const start = content.indexOf('<worktree_metadata_capture>');
+      const end = content.indexOf('</worktree_metadata_capture>', start);
+      assert.ok(start !== -1 && end !== -1, 'gsd-executor.md must define <worktree_metadata_capture>');
+      const captureBlock = content.slice(start, end);
+      assert.match(
+        captureBlock,
+        /read-dispatch-isolation/,
+        'worktree_metadata_capture must query read-dispatch-isolation (#4799)'
+      );
+      assert.match(
+        captureBlock,
+        /if\s+\[\s+"?\$_ISOLATION"?\s+!=\s+"none"\s+\]/,
+        'worktree_metadata_capture must capture worktree metadata unless isolation is exactly "none" (#4799)'
+      );
+    });
   });
 
   describe('no workflow file performs unconditional update-ref on a protected branch', () => {

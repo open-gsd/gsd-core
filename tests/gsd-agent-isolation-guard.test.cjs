@@ -1957,3 +1957,69 @@ describe('gsd-agent-isolation-guard.js: #4734 — a non-git project root is neve
     assert.equal(JSON.parse(r.stdout).decision, 'block');
   });
 });
+
+describe('#4799: read-dispatch-isolation agent-side query', () => {
+  test('parity: read-dispatch-isolation --json returns fields identical to readSentinel when sentinel is fresh', (t) => {
+    const dir = createTempProject('gsd-4799-parity-');
+    t.after(() => cleanup(dir));
+    runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', '--phase', '3', '--plan', 'p2'],
+      dir,
+      { GSD_RUNTIME: 'claude', HOME: dir },
+    );
+    const sentinelRead = readSentinel(dir);
+    assert.equal(sentinelRead.present, true);
+    assert.equal(sentinelRead.stale, false);
+
+    const queryResult = runGsdTools(
+      ['query', 'read-dispatch-isolation', '--json'],
+      dir,
+      { GSD_RUNTIME: 'claude', HOME: dir },
+    );
+    assert.equal(queryResult.success, true, queryResult.error);
+    const parsed = JSON.parse(queryResult.output);
+    assert.equal(parsed.present, true);
+    assert.equal(parsed.isolation, sentinelRead.isolation);
+    assert.equal(parsed.harnessFlag, sentinelRead.harnessFlag);
+    assert.equal(parsed.phase, sentinelRead.phase);
+    assert.equal(parsed.plan, sentinelRead.plan);
+    assert.equal(parsed.writtenAt, sentinelRead.writtenAt);
+  });
+
+  test('staleness negative control: read-dispatch-isolation has NO 10m staleness TTL (contrast with readSentinel)', (t) => {
+    const dir = createTempProject('gsd-4799-stale-');
+    t.after(() => cleanup(dir));
+    // Write a sentinel older than 10 minutes (15 minutes old)
+    const oldTimestamp = Date.now() - 15 * 60 * 1000;
+    writeSentinel(dir, {
+      isolation: 'none',
+      writtenAt: oldTimestamp,
+    });
+
+    // Guard hook reader considers it stale (enforced only at dispatch time)
+    const guardReader = readSentinel(dir);
+    assert.equal(guardReader.present, true);
+    assert.equal(guardReader.stale, true, 'readSentinel must treat 15m sentinel as stale');
+
+    // Agent-side read-dispatch-isolation must NOT treat it as stale
+    const queryResult = runGsdTools(
+      ['query', 'read-dispatch-isolation', '--raw'],
+      dir,
+      { GSD_RUNTIME: 'claude', HOME: dir },
+    );
+    assert.equal(queryResult.success, true, queryResult.error);
+    assert.equal(queryResult.output.trim(), 'none', 'agent-side read must succeed on >10m sentinel');
+  });
+
+  test('absent sentinel: read-dispatch-isolation exits 1', (t) => {
+    const dir = createTempProject('gsd-4799-absent-');
+    t.after(() => cleanup(dir));
+    const queryResult = runGsdTools(
+      ['query', 'read-dispatch-isolation', '--raw'],
+      dir,
+      { GSD_RUNTIME: 'claude', HOME: dir },
+    );
+    assert.equal(queryResult.success, false);
+    assert.equal(queryResult.exitCode, 1);
+  });
+});

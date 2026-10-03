@@ -6,6 +6,8 @@ updates, progress notes, and findings included; preserve code, paths, and identi
 Read and execute this fragment from `execute-phase.md`'s **Sequential mode** branch before
 composing any sequential dispatch prompt. It owns the sequential root-pin build-time embed,
 the `<required_reading>` root substitution, and the wave serialization rules.
+Sequential mode runs with `ISOLATION=none`, permits commits to configured phase branches
+without agent-namespace restrictions, and omits `<worktree_branch_check>` (#4799).
 
 ## Root pin — ORCHESTRATOR build-time embed (#4254; NOT a sub-agent runtime step)
 

@@ -582,7 +582,13 @@ To see what your current runtime negotiated:
 gsd-tools query inspect-dispatch-isolation --json
 ```
 
-(`inspect-dispatch-isolation` is the read-only form. The `dispatch-isolation` query is the executor-dispatch resolver: it records its decision to the isolation sentinel as a deliberate side effect, so it is not an inspection command.)
+To inspect the actively recorded decision from the dispatch sentinel without re-resolving:
+
+```bash
+gsd-tools query read-dispatch-isolation --raw
+```
+
+(`inspect-dispatch-isolation` is the read-only host capability inspection form; `read-dispatch-isolation` reads the active `.gsd/dispatch-isolation-sentinel.json` recorded by the orchestrator. The `dispatch-isolation` query is the executor-dispatch resolver: it records its decision to the isolation sentinel as a deliberate side effect, so it is not an inspection command.)
 
 ## Code Quality Settings
 
