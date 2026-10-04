@@ -1057,6 +1057,13 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
   test('dispatch sentinel stays ignored in a project without a root ignore rule (#5086)', (t) => {
     const dir = createFixture({ prefix: 'gsd-5086-ignore-', git: true, planning: true, projectDoc: true });
     t.after(() => cleanup(dir));
+    // Give the project a fork base at HEAD. Without one the resolver re-derives
+    // the #683 base-check degrade (`fork-ref-unknown`, #4222) and records `none`;
+    // this test is about the ignore rule, so keep it on the natural capability.
+    const forkBase = runGit(['update-ref', 'refs/remotes/origin/HEAD', 'HEAD'], {
+      cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS,
+    });
+    assert.equal(forkBase.exitCode, 0, forkBase.stderr);
     const result = runGsdTools(
       ['query', 'dispatch-isolation', '--raw'], dir,
       { GSD_RUNTIME: 'claude', HOME: dir, USERPROFILE: dir },
