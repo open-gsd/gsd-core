@@ -856,13 +856,25 @@ const V2_TOOL_ALIASES = new Map([["shell", "bash"], ["patch", "apply_patch"]]);
 async function GsdCoreSetup(ctx) {
   const dir = ctx.location.directory;
   const v1 = await GsdCorePlugin({ directory: dir });
-  await ctx.tool.hook("execute.before", async (ev) => {
-    // currentCwd and currentSessionId are module globals re-pinned on every call.
+  // currentCwd and currentSessionId are module globals re-pinned on every call.
   // This holds only while the V1 tool handlers never await and runHook stays
   // synchronous; otherwise { cwd, sessionId } must be passed through the handlers.
+  const pin = (ev) => {
     currentCwd = dir;
     currentSessionId = ev.sessionID;
+  };
+  await ctx.tool.hook("execute.before", async (ev) => {
+    pin(ev);
     await v1["tool.execute.before"]({ tool: V2_TOOL_ALIASES.get(ev.tool) ?? ev.tool }, { args: ev.input });
+  });
+  await ctx.tool.hook("execute.after", async (ev) => {
+    if (ev.status !== "completed") return;
+    const { content } = ev.result;
+    const isText = typeof content === "string";
+    const out = { output: isText ? content : undefined, metadata: { ...ev.result.metadata } };
+    pin(ev);
+    await v1["tool.execute.after"]({ tool: V2_TOOL_ALIASES.get(ev.tool) ?? ev.tool, args: ev.input }, out);
+    ev.result = { ...ev.result, content: isText ? out.output : content, metadata: out.metadata };
   });
 }
 

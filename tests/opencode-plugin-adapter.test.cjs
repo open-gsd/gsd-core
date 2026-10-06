@@ -920,3 +920,146 @@ test('V2 Read redirect rewrites ev.input.path in place and leaves other paths al
   assert.equal(otherEv.input, other);
   assert.equal(other.path, '/p/notes.md');
 });
+
+test('V2 execute.after rewrites a managed Read result before the injection scanner sees it and skips the context monitor', async (t) => {
+  const { root, mod, spawns } = loadTracedPlugin(t, ALL_GUARD_STUBS);
+  const projectDir = makeProjectDir(t);
+  const { setup } = mod;
+  const { hooks, ctx } = fakeV2Ctx(projectDir);
+  await setup(ctx);
+
+  const managed = path.join(root, 'gsd-core', 'workflows', 'x.md');
+  const expected = path.join(root, 'gsd-core') + '/references/foo.md';
+  const original = '1: see ~/.claude/gsd-core/references/foo.md';
+  const result = { content: original, output: 'raw', metadata: { lines: 1 } };
+  const ev = { id: 'c1', tool: 'read', sessionID: 's1', input: { path: managed }, status: 'completed', result };
+  await hooks['tool.execute.after'](ev);
+
+  assert.notEqual(ev.result, result);
+  assert.ok(ev.result.content.includes(expected), `expected "${expected}" in: ${ev.result.content}`);
+  assert.ok(!ev.result.content.includes('~/.claude/gsd-core/'));
+  assert.equal(ev.result.output, 'raw');
+  assert.equal(ev.result.metadata.lines, 1);
+  assert.equal(result.content, original);
+  assert.deepEqual(spawnedHooks(spawns), ['gsd-read-injection-scanner.js']);
+  assert.equal(JSON.parse(spawns[0][2].input).tool_response, ev.result.content);
+});
+
+test('V2 execute.after does nothing unless the call completed, and passes non-string content through untouched', async (t) => {
+  const { root, mod, spawns } = loadTracedPlugin(t, ALL_GUARD_STUBS);
+  const projectDir = makeProjectDir(t);
+  const { setup } = mod;
+  const { hooks, ctx } = fakeV2Ctx(projectDir);
+  await setup(ctx);
+
+  const errorEv = { id: 'c1', tool: 'shell', sessionID: 's1', input: { command: 'ls' }, status: 'error', error: new Error('x') };
+  await hooks['tool.execute.after'](errorEv);
+  assert.equal(spawns.length, 0);
+  assert.equal(Object.hasOwn(errorEv, 'result'), false);
+
+  const managed = path.join(root, 'gsd-core', 'workflows', 'x.md');
+  const parts = [{ type: 'text', text: 'see ~/.claude/gsd-core/x' }];
+  const ev = { id: 'c2', tool: 'read', sessionID: 's1', input: { path: managed }, status: 'completed', result: { content: parts } };
+  await hooks['tool.execute.after'](ev);
+  assert.equal(ev.result.content, parts);
+  assert.equal(parts[0].text, 'see ~/.claude/gsd-core/x');
+});
+
+test('V2 execute.after attributes the context monitor to ev.sessionID and the location directory, and never reuses a stale session', async (t) => {
+  const { mod, spawns } = loadTracedPlugin(t, ALL_GUARD_STUBS);
+  const dirA = makeProjectDir(t);
+  const dirB = makeProjectDir(t);
+  const a = fakeV2Ctx(dirA);
+  const b = fakeV2Ctx(dirB);
+  const { setup } = mod;
+  await setup(a.ctx);
+  await setup(b.ctx);
+
+  for (const [loc, dir, sessionID] of [[a, dirA, 'sA'], [b, dirB, 'sB']]) {
+    await loc.hooks['tool.execute.after']({
+      id: 'c', tool: 'shell', sessionID, input: { command: 'ls' }, status: 'completed', result: { content: 'ok' },
+    });
+    const calls = spawns.splice(0);
+    assert.deepEqual(spawnedHooks(calls), ['gsd-context-monitor.js']);
+    const payload = JSON.parse(calls[0][2].input);
+    assert.equal(payload.session_id, sessionID);
+    assert.equal(payload.cwd, dir);
+    assert.equal(calls[0][2].cwd, dir);
+  }
+
+  await a.hooks['tool.execute.after']({
+    id: 'c', tool: 'shell', input: { command: 'ls' }, status: 'completed', result: { content: 'ok' },
+  });
+  assert.deepEqual(spawnedHooks(spawns.splice(0)), []);
+});
+
+test('V2 execute.after puts scanner advisories in a new metadata object and propagates a scanner block', async (t) => {
+  const errors = [];
+  const realError = console.error;
+  console.error = (...args) => { errors.push(args.join(' ')); };
+  t.after(() => { console.error = realError; });
+  const projectDir = makeProjectDir(t);
+  const readEv = (result) => ({
+    id: 'c', tool: 'read', sessionID: 's1', input: { path: '/p/notes.md' }, status: 'completed', result,
+  });
+
+  const advisory = buildInstalledLayout(t, {
+    'gsd-read-injection-scanner.js': stubHook(JSON.stringify({ hookSpecificOutput: { additionalContext: 'heads up' } })),
+  });
+  const first = fakeV2Ctx(projectDir);
+  await advisory.mod.setup(first.ctx);
+  const ev = readEv({ content: 'plain text', metadata: Object.freeze({ lines: 1 }) });
+  await assert.doesNotReject(() => first.hooks['tool.execute.after'](ev));
+  assert.deepEqual(ev.result.metadata, { lines: 1, _gsdAdvisory: ['heads up'] });
+  assert.equal(ev.result.content, 'plain text');
+  assert.ok(errors.some((line) => line.includes('heads up')));
+
+  const blocking = buildInstalledLayout(t, {
+    'gsd-read-injection-scanner.js': stubHook(JSON.stringify({ decision: 'block', reason: 'injection found' }), 2),
+  });
+  const second = fakeV2Ctx(projectDir);
+  await blocking.mod.setup(second.ctx);
+  await assert.rejects(
+    () => second.hooks['tool.execute.after'](readEv({ content: 'plain text' })),
+    /injection found/,
+  );
+});
+
+test('V1 server() and V2 setup() spawn the same PostToolUse hooks in the same order for each tool pair', async (t) => {
+  const { mod, spawns } = loadTracedPlugin(t, ALL_GUARD_STUBS);
+  const projectDir = makeProjectDir(t);
+  const F = path.join(projectDir, 'notes.md');
+  const v1 = await mod.server({ directory: projectDir });
+  await v1.event({ event: { type: 'session.created', properties: { info: { id: 's1', directory: projectDir } } } });
+  spawns.splice(0);
+  const { setup } = mod;
+  const { hooks, ctx } = fakeV2Ctx(projectDir);
+  await setup(ctx);
+
+  const cases = [
+    ['read', { filePath: '/p/a.md' }, 'read', { path: '/p/a.md' }],
+    ['webfetch', { url: 'https://example.com' }, 'webfetch', { url: 'https://example.com' }],
+    ['websearch', { query: 'q' }, 'websearch', { query: 'q' }],
+    ['bash', { command: 'ls' }, 'shell', { command: 'ls' }],
+    ['task', { prompt: 'x' }, 'subagent', { agent: 'a', description: 'd', prompt: 'x' }],
+    ['write', { filePath: F, content: 'x' }, 'write', { path: F, content: 'x' }],
+    ['edit', { filePath: F, oldString: 'a', newString: 'b' }, 'edit', { path: F, oldString: 'a', newString: 'b' }],
+    ['apply_patch', { patchText: '*** Begin Patch' }, 'patch', { patchText: '*** Begin Patch' }],
+  ];
+  const v2Lists = {};
+  for (const [v1Tool, v1Args, v2Tool, v2Input] of cases) {
+    await v1['tool.execute.after']({ tool: v1Tool, args: v1Args }, { output: 'text' });
+    const v1List = spawnedHooks(spawns.splice(0));
+    await hooks['tool.execute.after']({
+      id: 'c', tool: v2Tool, sessionID: 's1', input: v2Input, status: 'completed', result: { content: 'text' },
+    });
+    const v2List = spawnedHooks(spawns.splice(0));
+    assert.deepEqual(v2List, v1List, `${v1Tool} -> ${v2Tool}`);
+    assert.ok(v2List.length > 0, `${v2Tool} spawned no hook`);
+    v2Lists[v2Tool] = v2List;
+  }
+
+  assert.deepEqual(v2Lists.shell, ['gsd-context-monitor.js']);
+  assert.deepEqual(v2Lists.subagent, ['gsd-context-monitor.js']);
+  assert.deepEqual(v2Lists.read, ['gsd-read-injection-scanner.js']);
+});
