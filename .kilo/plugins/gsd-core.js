@@ -239,6 +239,15 @@ function gitProbingGuardTimeoutMs() {
   return GIT_PROBING_GUARD_FALLBACK_TIMEOUT_MS;
 }
 
+// Inside OpenCode, process.execPath is the Bun-compiled opencode binary;
+// BUN_BE_BUN=1 makes it run the hook script as JavaScript instead of OpenCode.
+function hookSpawnOptions(options, versions = process.versions) {
+  if (versions && versions.bun) {
+    return { ...options, env: { ...process.env, BUN_BE_BUN: "1" } };
+  }
+  return options;
+}
+
 function runHook(hookFile, payload, opts = {}) {
   const hookPath = path.join(HOOKS_DIR, hookFile);
   if (!fs.existsSync(hookPath)) {
@@ -261,13 +270,13 @@ function runHook(hookFile, payload, opts = {}) {
     (GIT_PROBING_GUARDS.has(hookFile) ? gitProbingGuardTimeoutMs() : 8000);
   let result;
   try {
-    result = spawnSync(process.execPath, [hookPath], {
+    result = spawnSync(process.execPath, [hookPath], hookSpawnOptions({
       input: JSON.stringify(payload),
       encoding: "utf8",
       timeout,
       cwd: opts.cwd || currentCwd,
       windowsHide: true,
-    });
+    }));
   } catch {
     // Spawn failure — never break the tool call
     return { stdout: "", exitCode: 0, timedOut: false };
@@ -854,6 +863,7 @@ GsdCorePlugin._internals = {
   rewriteContent,
   isGsdManagedFile,
   handleHookResult,
+  hookSpawnOptions,
   GsdCorePlugin,
 };
 

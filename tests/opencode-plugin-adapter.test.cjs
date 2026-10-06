@@ -705,3 +705,62 @@ test('V1 readV1Plugin detect path on the Bun namespace selects default.server an
   assert.equal(detected.id, 'gsd-core');
   assert.ok(!seen.includes('setup'), `detect path read setup: ${seen.map(String).join(", ")}`);
 });
+
+// Opaque passthrough value: hookSpawnOptions never spawns, it only copies options.
+const HOOK_SPAWN_BASE_TIMEOUT_MS = 8000;
+const HOOK_SPAWN_BASE = { input: '{}', encoding: 'utf8', timeout: HOOK_SPAWN_BASE_TIMEOUT_MS, cwd: os.tmpdir(), windowsHide: true };
+
+test('hookSpawnOptions leaves Node spawn options untouched (no env key)', () => {
+  const out = _internals.hookSpawnOptions(HOOK_SPAWN_BASE, { node: '24.0.0' });
+  assert.deepEqual(out, HOOK_SPAWN_BASE);
+  assert.equal(Object.hasOwn(out, 'env'), false);
+});
+
+test('hookSpawnOptions adds BUN_BE_BUN=1 to a copy of process.env under Bun', () => {
+  const before = process.env.BUN_BE_BUN;
+  const out = _internals.hookSpawnOptions(HOOK_SPAWN_BASE, { node: '24.3.0', bun: '1.4.2' });
+  assert.notEqual(out, HOOK_SPAWN_BASE);
+  for (const key of Object.keys(HOOK_SPAWN_BASE)) assert.equal(out[key], HOOK_SPAWN_BASE[key]);
+  assert.equal(out.env.BUN_BE_BUN, '1');
+  assert.equal(out.env.PATH, process.env.PATH);
+  assert.equal(Object.hasOwn(HOOK_SPAWN_BASE, 'env'), false);
+  assert.equal(process.env.BUN_BE_BUN, before);
+});
+
+test('runHook under Node spawns process.execPath with no env override', async (t) => {
+  const { handlers, spawns } = await buildLayoutWithSpawnTrace(t, {
+    stubHooks: {
+      'gsd-prompt-guard.js': stubHook(''),
+      'gsd-read-guard.js': stubHook(''),
+      'gsd-worktree-path-guard.js': stubHook(''),
+      'gsd-workflow-guard.js': stubHook(''),
+    },
+    planningConfig: null,
+  });
+  await handlers['tool.execute.before']({ tool: 'write' }, { args: { filePath: '/proj/notes.md', content: 'ok' } });
+  assert.ok(spawns.length > 0);
+  for (const entry of spawns) {
+    assert.equal(entry[0], process.execPath);
+    assert.equal(Object.hasOwn(entry[2], 'env'), false);
+  }
+});
+
+test('V1 server() picked from a Bun namespace by the detect path runs the secret-read guard in a subprocess and blocks', async (t) => {
+  const { mod } = buildInstalledLayout(t, {
+    'gsd-secret-read-guard.js': stubHook(JSON.stringify({ decision: 'block', code: 'secret-read', reason: 'secret read denied' }), 2),
+  });
+  const detected = readV1PluginDetect(bunNamespace(mod));
+  assert.equal(detected.id, 'gsd-core');
+  assert.equal(detected.server, mod.server);
+  const handlers = await detected.server({ directory: process.cwd() });
+  await assert.rejects(
+    () => handlers['tool.execute.before']({ tool: 'read' }, { args: { filePath: '/p/.env' } }),
+    /secret read denied/,
+  );
+
+  const { mod: allowMod } = buildInstalledLayout(t, { 'gsd-secret-read-guard.js': stubHook('') });
+  const allowHandlers = await readV1PluginDetect(bunNamespace(allowMod)).server({ directory: process.cwd() });
+  await assert.doesNotReject(() =>
+    allowHandlers['tool.execute.before']({ tool: 'read' }, { args: { filePath: '/p/notes.md' } }),
+  );
+});
