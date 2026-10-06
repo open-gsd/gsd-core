@@ -829,28 +829,19 @@ const GsdCorePlugin = async ({ directory } = {}) => {
   };
 };
 
-// Export shape — verified against OpenCode's plugin loader source
-// (packages/opencode/src/plugin). The loader imports this module and runs
-// `for (const entry of Object.values(mod)) { getServerPlugin(entry) }`, where
-// `getServerPlugin` accepts a bare function OR an object exposing a `.server`
-// function, and THROWS `TypeError("Plugin export is not a function")` for
-// anything else. So EVERY enumerable value the loader iterates must be a
-// function or an object with `.server`.
-//
-// The subtlety: depending on how OpenCode's runtime (Node or Bun) imports a
-// CommonJS file, `mod` may be the raw `module.exports` OR an ESM namespace of
-// the form `{ default: module.exports, ...syntheticNamedExports }`. A plain
-// `module.exports = { id: "gsd-core", server }` literal risks a string `id`
-// appearing in `Object.values(mod)` (as a raw property, or as a lexer-
-// synthesized named export) — which would trip the throw. Two defenses:
-//   1. `id` is defined NON-ENUMERABLE, so it never appears in Object.values yet
-//      stays readable (via property access) for the loader's identity/dedup.
-//   2. `module.exports` is assigned from a VARIABLE (not an object literal), so
-//      cjs-module-lexer cannot statically synthesize named exports from it —
-//      only `default` is exposed under ESM/Bun interop.
-// Result: raw-CJS `Object.values` = `[server]`; ESM `Object.values` =
-// `[{server, <id non-enum>}]` — both fully extractable. Test-only helpers hang
-// off the `server` FUNCTION (`server._internals`), never as a sibling export.
+// Export shape, checked against both OpenCode plugin loaders:
+//   - OpenCode 1.x (>= 1.4) reads `mod.default` through
+//     `readV1Plugin(..., "detect")` and calls only `default.server`. Older
+//     legacy loaders iterate `Object.values(mod)` and throw on any value that
+//     is not a function or an object with `.server`; `id` and `setup` are
+//     non-enumerable, so raw-CommonJS `Object.values` is `[server]`.
+//   - Bun exposes every own property of `module.exports`, non-enumerable ones
+//     included, as named namespace exports, so under Bun the namespace also
+//     carries `id` and `setup`. Harmless: the detect path never reaches the
+//     `Object.values` loop.
+//   - OpenCode 2.x decodes `default` as `{ id, setup }` and ignores `server`.
+//     Never define `effect`: the 2.x loader prefers it over `setup`.
+// Test-only helpers hang off `server._internals`, never as sibling exports.
 function GsdCoreSetup() {}
 
 GsdCorePlugin._internals = {

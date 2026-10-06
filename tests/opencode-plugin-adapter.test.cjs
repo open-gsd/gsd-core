@@ -667,3 +667,41 @@ test('setup is a non-enumerable no-op: an unbound call returns undefined and rea
   assert.equal(await setup(ctx), undefined);
   assert.deepEqual(reads, []);
 });
+
+// Emulates OpenCode >= 1.4 `readV1Plugin(mod.default, spec, "server", "detect")`;
+// a null result means the host falls back to its legacy Object.values loop.
+function readV1PluginDetect(mod) {
+  const d = mod.default;
+  if (!d || typeof d !== 'object') return null;
+  if (!('server' in d) && !('id' in d)) return null;
+  if ('tui' in d && 'server' in d) throw new Error('Plugin exports both server and tui');
+  if (typeof d.server !== 'function') throw new TypeError('Plugin server export is not a function');
+  if (typeof d.id !== 'string' || d.id === '') throw new Error('Path plugin must export a non-empty id');
+  return { id: d.id, server: d.server };
+}
+
+test('raw require exposes only server as an enumerable key; id and setup stay non-enumerable', () => {
+  const raw = require(ADAPTER_SRC);
+  assert.deepEqual(Object.keys(raw), ['server']);
+  assert.equal(Object.getOwnPropertyDescriptor(raw, 'id').enumerable, false);
+  assert.equal(Object.getOwnPropertyDescriptor(raw, 'setup').enumerable, false);
+  const servers = loaderExtract(raw);
+  assert.equal(servers.length, 1);
+  assert.equal(servers[0], raw.server);
+});
+
+test('V1 readV1Plugin detect path on the Bun namespace selects default.server and never reads setup', () => {
+  const raw = require(ADAPTER_SRC);
+  const ns = bunNamespace(raw);
+  assert.ok(Object.keys(ns).includes('id'));
+  assert.ok(Object.keys(ns).includes('setup'));
+  const seen = [];
+  ns.default = new Proxy(raw, {
+    get(target, key, receiver) { seen.push(key); return Reflect.get(target, key, receiver); },
+    has(target, key) { seen.push(key); return Reflect.has(target, key); },
+  });
+  const detected = readV1PluginDetect(ns);
+  assert.equal(detected.server, raw.server);
+  assert.equal(detected.id, 'gsd-core');
+  assert.ok(!seen.includes('setup'), `detect path read setup: ${seen.map(String).join(", ")}`);
+});
