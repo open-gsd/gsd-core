@@ -8,6 +8,7 @@ const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const { computeMigrationPlan, applyMigration, rewriteRoadmapLines } = require('../gsd-core/bin/lib/roadmap-upgrade.cjs');
+const { normalizeContent } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 
 /**
  * Build a git project whose `.planning/` is GITIGNORED (commit_docs:false) —
@@ -249,6 +250,101 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
       assert.equal(fs.existsSync(path.join(dir, '.planning', 'config.json')), false);
     });
   }
+
+  // #5120: the rollback restored STATE.md with a raw `fs.writeFileSync`, outside
+  // the STATE.md lock, so a concurrent writer could interleave with the restore
+  // (the #500/#905/#1230 lost-update family). Reaching the restore needs a
+  // failure AFTER the STATE.md rewrite: a directory at config.json fails step 4.
+  test('a failure after the STATE.md rewrite restores STATE.md through the seam, under the STATE.md lock', (t) => {
+    const dir = setup('m13-state-restore-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    const original = '---\r\nstatus: executing\r\nlast_updated: "2020-01-01T00:00:00.000Z"\r\n---\r\n\r\n# Project State\r\n\r\n**Current Phase:** Phase 2: Bar\r\n';
+    fs.writeFileSync(state, original);
+    const plan = computeMigrationPlan(dir);
+    assert.ok(plan.crossRefEdits.some((edit) => edit.file === 'STATE.md'), 'precondition: STATE.md has planned edits');
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json'));
+
+    const writesOntoState = [];
+    const record = (destination) => {
+      if (path.resolve(String(destination)) === path.resolve(state)) {
+        writesOntoState.push({ lockHeld: fs.existsSync(`${state}.lock`) });
+      }
+    };
+    const realWrite = fs.writeFileSync;
+    const realRename = fs.renameSync;
+    mock.method(fs, 'writeFileSync', function (file, ...rest) { record(file); return realWrite.call(this, file, ...rest); });
+    mock.method(fs, 'renameSync', function (from, to) { record(to); return realRename.call(this, from, to); });
+    t.after(() => mock.restoreAll());
+
+    // #5759 made the config.json step refuse a non-regular file by name (EISDIR); the directory still fails step 4.
+    assert.throws(() => applyMigration(dir, plan, { dryRun: false }), /Migration failed and rolled back: config\.json cannot be updated/);
+    mock.restoreAll();
+
+    assert.equal(writesOntoState.length, 2, 'the forward rewrite and the restore each land one write on STATE.md');
+    assert.deepEqual(writesOntoState, [{ lockHeld: true }, { lockHeld: true }], 'every write onto STATE.md holds the STATE.md lock');
+    // The seam normalizes every .md write, so a CRLF STATE.md comes back in its
+    // normalized form: the original's content, the seam's line endings.
+    assert.equal(fs.readFileSync(state, 'utf8'), normalizeContent(state, original).content, 'STATE.md restored to the backup, as the seam writes it');
+    assert.notEqual(normalizeContent(state, original).content, original, 'precondition: the CRLF fixture is one the seam normalizes');
+    assert.equal(fs.existsSync(`${state}.lock`), false, 'the lock is released after the restore');
+  });
+
+  test('a STATE.md restore that cannot take the lock is named, never reported as rolled back', (t) => {
+    const dir = setup('m13-state-restore-nolock-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    fs.writeFileSync(state, '# Project State\n\n**Current Phase:** Phase 2: Bar\n');
+    const plan = computeMigrationPlan(dir);
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json'));
+
+    // The forward rewrite takes the lock first; the restore's acquisition fails
+    // with an errno acquireStateLock does not retry.
+    let lockOpens = 0;
+    const realOpen = fs.openSync;
+    mock.method(fs, 'openSync', function (file, ...rest) {
+      if (String(file) === `${state}.lock` && ++lockOpens === 2) {
+        throw Object.assign(new Error('EROFS: read-only file system'), { code: 'EROFS' });
+      }
+      return realOpen.call(this, file, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(
+      () => applyMigration(dir, plan, { dryRun: false }),
+      (err) => err.message.startsWith(`Migration failed and was NOT fully rolled back (not restored: ${state}): config.json cannot be updated`),
+    );
+    mock.restoreAll();
+    assert.equal(lockOpens, 2, 'the restore attempted the lock');
+    assert.ok(fs.readFileSync(state, 'utf8').includes('Phase 1-02: Bar'), 'STATE.md still holds the migrated text the error names');
+  });
+
+  test('a STATE.md the migration never wrote is left alone by the rollback (#5120 review)', (t) => {
+    const dir = setup('m13-state-untouched-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    const original = '# Project State\n\n**Current Phase:** Phase 2: Bar\n';
+    fs.writeFileSync(state, original);
+    const plan = computeMigrationPlan(dir);
+
+    // The forward STATE.md write cannot take the lock, so it changes nothing and
+    // fails the migration; a restore here could only overwrite another writer.
+    let lockOpens = 0;
+    const realOpen = fs.openSync;
+    mock.method(fs, 'openSync', function (file, ...rest) {
+      if (String(file) === `${state}.lock`) {
+        lockOpens++;
+        throw Object.assign(new Error('EROFS: read-only file system'), { code: 'EROFS' });
+      }
+      return realOpen.call(this, file, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(() => applyMigration(dir, plan, { dryRun: false }), /^Error: Migration failed and rolled back: /);
+    mock.restoreAll();
+    assert.equal(lockOpens, 1, 'only the forward write asked for the lock; the rollback did not restore STATE.md');
+    assert.equal(fs.readFileSync(state, 'utf8'), original);
+  });
 
   test('rewriteRoadmapLines: identical headings in two milestones stay distinct by line index; heading, checklist and fenced edits', () => {
     const lines = [

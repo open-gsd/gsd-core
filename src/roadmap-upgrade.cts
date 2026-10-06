@@ -9,7 +9,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execGit, retryRenameSync } from './shell-command-projection.cjs';
+import { execGit, retryRenameSync, platformWriteSync } from './shell-command-projection.cjs';
 import { phaseEntryPrefixSrc, stripInsertedMarker } from './phase-entry-grammar.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
 import configFileReadMod = require('./config-file-read.cjs');
@@ -81,7 +81,7 @@ const { scanFencedBlocks, updateBullet, updateHeading } = markdownSectionizerMod
 // ADR-5057 §6 (Phase 13, #5217): every mutation of a planning artifact goes
 // through its seam — headings/bullets through the sectionizer, PROJECT.md
 // prose through PlanningDoc, STATE.md through its own write seam.
-const { readModifyWriteStateMd } = stateMod;
+const { readModifyWriteStateMd, withStateLock } = stateMod;
 // #4144 round 5 follow-up (lint-plan-count-drift): the plan-scan owner's own
 // root-plan-file predicate (src/plan-scan.cts) — reused in
 // computeDependsOnRewrites instead of a private `/-PLAN\.md$/i` filename
@@ -2333,6 +2333,7 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
   // `.planning/` is git-tracked or ignored.
   const performedRenames: Array<{ oldPath: string; newPath: string }> = [];
   const fileBackups = new Map<string, { existed: boolean; content: string }>();
+  const stateMdPath = path.join(pDir, 'STATE.md');
   const snapshotFile = (filePath: string): void => {
     if (fileBackups.has(filePath)) return;
     try {
@@ -2438,17 +2439,30 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
     }
 
     const stateEdits = crossRefsFor('STATE.md');
-    const stateMdPath = path.join(pDir, 'STATE.md');
     if (stateEdits.length > 0 && fs.existsSync(stateMdPath)) {
       const original = fs.readFileSync(stateMdPath, 'utf8');
       if (substituteCrossRefs(original, 'STATE.md', stateEdits) !== original) {
         snapshotFile(stateMdPath);
-        readModifyWriteStateMd(
-          stateMdPath,
-          (current) => substituteCrossRefs(current, 'STATE.md', stateEdits),
-          cwd,
-          { resync: false },
-        );
+        let stateWritten = false;
+        try {
+          stateWritten = readModifyWriteStateMd(
+            stateMdPath,
+            (current) => substituteCrossRefs(current, 'STATE.md', stateEdits),
+            cwd,
+            { resync: false },
+          );
+        } finally {
+          // #5120: a STATE.md this step did not change (the lock wait timed out,
+          // or the transform was a no-op under the lock) has nothing to roll back,
+          // and restoring the snapshot would overwrite whatever another writer put
+          // there. A write that failed part-way leaves different bytes, so its
+          // snapshot is kept for the restore.
+          if (!stateWritten) {
+            let current: string | null = null;
+            try { current = fs.readFileSync(stateMdPath, 'utf8'); } catch { /* unreadable: keep the snapshot */ }
+            if (current === fileBackups.get(stateMdPath)?.content) fileBackups.delete(stateMdPath);
+          }
+        }
         editedFiles.push('STATE.md');
       }
     }
@@ -2505,11 +2519,29 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
         if (fs.existsSync(newPath)) retryRenameSync(newPath, oldPath);
       } catch { /* best-effort */ }
     }
+    const notRestored: string[] = [];
     for (const [filePath, backup] of fileBackups) {
       try {
-        if (backup.existed) fs.writeFileSync(filePath, backup.content, 'utf8');
+        // #5120: STATE.md is restored under the STATE.md lock, through the
+        // STATE.md write seam (ADR-4629 guard roster: no raw STATE.md write
+        // outside the seam), like cmdStateMilestoneSwitch in src/state.cts.
+        // readModifyWriteStateMd is not used: it re-syncs the frontmatter, so
+        // the restored file would not be the backup. platformWriteSync
+        // normalizes every .md write (LF endings, blank-line runs collapsed, a
+        // blank line inserted after headings, lists and closing fences, one
+        // trailing newline), so a STATE.md the seam never wrote comes back in
+        // that form, which a git-tracked .planning/ shows as a modification.
+        if (backup.existed && filePath === stateMdPath) withStateLock(stateMdPath, () => platformWriteSync(stateMdPath, backup.content));
+        else if (backup.existed) fs.writeFileSync(filePath, backup.content, 'utf8');
         else if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      } catch { /* best-effort */ }
+      } catch {
+        // Best-effort, but named: the STATE.md lock wait can time out, and a
+        // skipped restore must not be reported as "rolled back" (#1542, #5120).
+        if (filePath === stateMdPath) notRestored.push(filePath);
+      }
+    }
+    if (notRestored.length > 0) {
+      throw new Error(`Migration failed and was NOT fully rolled back (not restored: ${notRestored.join(', ')}): ${(err as Error).message}`);
     }
     throw new Error(`Migration failed and rolled back: ${(err as Error).message}`);
   }
