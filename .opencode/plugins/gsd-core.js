@@ -1,5 +1,10 @@
 /**
  * GSD plugin for OpenCode.ai  (CommonJS)
+
+ * Dual-runtime entry (issue #4916 port): the enumerable `server` export below
+ * serves OpenCode V1; the non-enumerable `id`/`setup` pair serves the V2
+ * plugin contract ({ id, setup | effect }). See the export-shape comment at
+ * the bottom of this file and PROBE-FINDINGS.md for the runtime evidence.
  *
  * Architecture: SUBPROCESS REUSE. Instead of re-implementing hook logic inside
  * the plugin, this file is a thin adapter that spawns the existing Claude Code
@@ -136,16 +141,23 @@ let currentCwd = process.cwd();
 const TOOL_NAME_MAP = {
   read: "Read",
   grep: "Grep",
+  glob: "Grep", // V2 built-in (rev 4: same Claude-side target as grep)
   write: "Write",
   edit: "Edit",
+  patch: "MultiEdit", // V2 built-in; input carries patchText (see mapToolInput)
   apply_patch: "MultiEdit",
   multi_edit: "MultiEdit",
   bash: "Bash",
+  shell: "Bash", // V2 built-in
   webfetch: "WebFetch",
   web_search: "WebSearch",
   websearch: "WebSearch",
   task: "Task",
   subagent: "Task",
+  // V2 `execute` (Code Mode) has no Claude-side equivalent and no guard keys
+  // on its name — it passes through unmapped. Nested calls made from inside
+  // execute scripts skip tool hooks entirely (probe OQ-10); the
+  // permission.evaluate backstop in setup() covers out-of-tree writes.
 };
 
 function mapToolName(tool) {
@@ -182,6 +194,39 @@ function mapToolInput(args) {
   if (args.url !== undefined) input.url = args.url;
   if (args.query !== undefined) input.query = args.query;
 
+  // Patch tool (V2): the input carries a patchText body with
+  // *** Add File / *** Update File / *** Delete File / *** Move to headers
+  // and NO file_path — without this extraction every path-based guard
+  // (worktree, workflow, secret) stays dormant for patch writes. The guard
+  // scripts read tool_input.file_path only (their `path` fallback aside), so
+  // point it at the first affected path and keep the full list alongside;
+  // multi-file patches alarm-log once per session because the guards
+  // validate the first path only (hooks/*.js changes are out of scope).
+  const patchText =
+    typeof args.patchText === "string" ? args.patchText :
+    typeof args.patch === "string" ? args.patch :
+    typeof args.text === "string" ? args.text :
+    null;
+  if (patchText) {
+    const affected = [];
+    for (const line of patchText.split("\n")) {
+      const m = /^\*\*\*\s+(?:Add File|Update File|Delete File|Move to):\s*(.+?)\s*$/.exec(line);
+      if (m) affected.push(m[1]);
+    }
+    if (affected.length) {
+      if (!input.file_path) input.file_path = affected[0];
+      input.file_paths = affected;
+      input.patch_text = patchText;
+      if (affected.length > 1 && !warnedMultiPatch) {
+        warnedMultiPatch = true;
+        console.error(
+          "[gsd-core] patch touches " + affected.length + " files; path guards " +
+            "validated the first only (" + affected.join(", ") + ")",
+        );
+      }
+    }
+  }
+
   return input;
 }
 
@@ -206,6 +251,60 @@ function mapToolInput(args) {
  * @returns {{ stdout: string, exitCode: number, timedOut: boolean }}
  */
 const warnedMissingHooks = new Set();
+let warnedMultiPatch = false; // one multi-file-patch alarm per session (see mapToolInput)
+
+// ---------------------------------------------------------------------------
+// Node interpreter resolution for the subprocess hook bridge (V2 port)
+// ---------------------------------------------------------------------------
+//
+// V1's plugin host was Node, so `process.execPath` was a real node binary and
+// spawnSync(process.execPath, [hookPath]) just worked. V2's host can be a
+// Bun-compiled binary — observed live: process.execPath === the `opencode`
+// binary itself (Bun v26.3.0) — and spawning THAT with a hook script path
+// runs the OpenCode CLI instead of the script (exit 1, empty stdout, every
+// guard silently inert). Resolve a real node before spawning; the last-resort
+// bare "node" is PATH-resolved at spawn time.
+
+let _resolvedNodeBin = null;
+
+function resolveNodeBin() {
+  if (_resolvedNodeBin) return _resolvedNodeBin;
+  const candidates = [];
+  if (process.env.GSD_NODE_BIN) candidates.push(process.env.GSD_NODE_BIN);
+  if (path.basename(String(process.execPath || "")) === "node") {
+    candidates.push(process.execPath); // node-based host (V1, or a node V2 host)
+  }
+  // Synchronous PATH scan — covers fnm/nvm multishells inherited from the
+  // host process (dead multishell symlinks fail existsSync and are skipped).
+  for (const dir of String(process.env.PATH || "").split(path.delimiter)) {
+    if (dir) candidates.push(path.join(dir, "node"));
+  }
+  // fnm's stable version store (survives ephemeral multishell cleanup).
+  const fnmDir =
+    process.env.FNM_DIR || path.join(os.homedir(), ".local", "share", "fnm");
+  try {
+    const versions = fs
+      .readdirSync(path.join(fnmDir, "node-versions"))
+      .sort()
+      .reverse();
+    for (const v of versions) {
+      candidates.push(
+        path.join(fnmDir, "node-versions", v, "installation", "bin", "node"),
+      );
+    }
+  } catch {}
+  candidates.push("/opt/homebrew/bin/node", "/usr/local/bin/node");
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c)) {
+        _resolvedNodeBin = c;
+        return c;
+      }
+    } catch {}
+  }
+  return (_resolvedNodeBin = "node");
+}
+
 
 // A hook this adapter kills on timeout has no exit status, so runHook below
 // reports it as exit 0 — an ALLOW. For a guard that blocks, a bound shorter
@@ -261,15 +360,24 @@ function runHook(hookFile, payload, opts = {}) {
     (GIT_PROBING_GUARDS.has(hookFile) ? gitProbingGuardTimeoutMs() : 8000);
   let result;
   try {
-    result = spawnSync(process.execPath, [hookPath], {
+    result = spawnSync(resolveNodeBin(), [hookPath], {
       input: JSON.stringify(payload),
       encoding: "utf8",
       timeout,
       cwd: opts.cwd || currentCwd,
       windowsHide: true,
     });
-  } catch {
-    // Spawn failure — never break the tool call
+  } catch (e) {
+    // Spawn failure — never break the tool call, but never be silent about
+    // a broken interpreter either: a dead spawn means a dead guard.
+    if (!warnedMissingHooks.has("spawn:" + hookFile)) {
+      warnedMissingHooks.add("spawn:" + hookFile);
+      console.error(
+        `[gsd-core] hook spawn failed (${hookFile}):`,
+        e && e.message,
+        "— guard NOT enforced. Set GSD_NODE_BIN to a working node binary.",
+      );
+    }
     return { stdout: "", exitCode: 0, timedOut: false };
   }
 
@@ -526,6 +634,93 @@ function prepareSkillsCache() {
   }
   return SKILLS_CACHE;
 }
+
+// ===========================================================================
+// V2 helpers (OpenCode V2 plugin API — issue #4916 port; probe-verified on
+// OpenCode 2.0.22/2.0.23 — see PROBE-FINDINGS.md)
+// ===========================================================================
+
+/**
+ * $ARGUMENTS / $1…$n substitution for V2 command executors (Phase 4.1).
+ * $ARGUMENTS = the full argument string; $1..$n = whitespace tokens
+ * (missing tokens substitute empty). Documented fallback: template has no
+ * placeholder and args are non-empty → append args after a blank line.
+ */
+function substituteCommandArgs(template, args) {
+  const text = String(template || "");
+  const argStr = String(args || "");
+  const hasPlaceholder =
+    text.includes("$ARGUMENTS") || /\$[1-9]/.test(text);
+  if (!hasPlaceholder) {
+    const trimmed = argStr.trim();
+    return trimmed ? text + "\n\n" + trimmed : text;
+  }
+  const tokens = argStr.split(/\s+/).filter(Boolean);
+  return text
+    .replace(/\$ARGUMENTS/g, argStr)
+    .replace(/\$([1-9][0-9]*)/g, (m, n) => tokens[Number(n) - 1] || "");
+}
+
+/**
+ * Inline skill content for V2 registration: V2 resolves no `@` includes and
+ * loads no supporting files (OQ-6), so content must be self-contained —
+ * rewrite the canonical Claude paths to absolute GSD_CORE paths (same rules
+ * as prepareSkillsCache).
+ */
+function rewriteSkillBody(raw) {
+  return raw
+    .replace(/@~\/\.claude\/gsd-core\//g, `@${GSD_CORE}/`)
+    .replace(/~\/\.claude\/gsd-core\//g, `${GSD_CORE}/`);
+}
+
+/**
+ * V2 Read result content transform (replaces the V1 `output.output` rewrite).
+ * The read tool's content lives in `result.output.content` (string) AND in
+ * the model-visible `result.content[]` text parts (probe OQ-2) — rewrite
+ * both so the transform reaches the model regardless of which field the
+ * client renders. Runs BEFORE injection scanning so the scanner sees final
+ * content (V1 ordering).
+ */
+function rewriteReadResult(event) {
+  const result = event.result;
+  if (!result) return;
+  if (result.output && typeof result.output === "object") {
+    if (typeof result.output.content === "string") {
+      result.output.content = rewriteContent(result.output.content);
+    }
+  } else if (typeof result.output === "string") {
+    result.output = rewriteContent(result.output);
+  }
+  if (Array.isArray(result.content)) {
+    for (const part of result.content) {
+      if (part && part.type === "text" && typeof part.text === "string") {
+        part.text = rewriteContent(part.text);
+      }
+    }
+  }
+}
+
+/**
+ * Extract the model-visible text of a completed tool result (V2 shape) for
+ * the injection scanner's `tool_response` payload (V1 used output.output).
+ */
+function readResultText(event) {
+  const result = event.result;
+  if (!result) return undefined;
+  if (result.output && typeof result.output === "object") {
+    if (typeof result.output.content === "string") return result.output.content;
+  } else if (typeof result.output === "string") {
+    return result.output;
+  }
+  if (Array.isArray(result.content)) {
+    return result.content
+      .filter((p) => p && p.type === "text" && typeof p.text === "string")
+      .map((p) => p.text)
+      .join("\n");
+  }
+  return undefined;
+}
+
 
 // ===========================================================================
 // Plugin entry
@@ -829,6 +1024,499 @@ const GsdCorePlugin = async ({ directory } = {}) => {
   };
 };
 
+// ===========================================================================
+// V2 plugin entry — setup(ctx) (OpenCode V2 plugin API; issue #4916 port)
+// ===========================================================================
+//
+// V2 schema-decodes the default export as { id, setup | effect } and calls
+// setup once PER LOCATION per server process — each instance gets a fresh
+// module realm, so the module-level session state below is per-location
+// (probe-verified on 2.0.22/23). The V1 `server` function above is never
+// invoked by V2 and stays untouched for V1 runtimes. Surface mapping:
+//
+//   V1                              V2
+//   ────────────────────────────────────────────────────────────────────────
+//   arg `directory`                 ctx.location.directory
+//   shell.env                       ctx.shell.hook("create.before", e => e.env)
+//   tool.execute.before             ctx.tool.hook("execute.before") — args on
+//                                   event.input; NO metadata slot on the event
+//                                   → before-hook advisories are console.error
+//                                   only (rev 3 decision)
+//   tool.execute.after              ctx.tool.hook("execute.after") — status +
+//                                   result{output, content[], metadata}; Read
+//                                   text in result.output.content AND
+//                                   result.content[].text (rewriteReadResult)
+//   experimental.session.compacting ctx.session.hook("compaction") — breadcrumb
+//                                   via event.system.push (probe OQ-8)
+//   event: session.created          ctx.event.subscribe() + location filter —
+//                                   payloads under event.data: sessionID +
+//                                   location.directory (probe OQ-3)
+//   event: session.moved (new)      refresh currentCwd (probe OQ-11)
+//   event: file.edited              NO V2 EQUIVALENT (probe: zero file.* on
+//                                   the bus) → config watcher + after-hook
+//                                   bridge below
+//   config hook (package tree)      ctx.command/ctx.skill transforms (Phase 4)
+//
+// Preserved invariants (rev 3/4):
+//   • PreToolUse payloads omit session_id — gsd-read-guard.js:143-155 skips
+//     its advisory when session_id is non-empty, and on OpenCode we want it.
+//   • toolInput is built from args BEFORE the Read-path rewrite — hooks
+//     chain and later registrations see the mutated input (probe OQ-9).
+//   • The after-hook early-returns after the injection scanner: the context
+//     monitor never spawns for Read/WebFetch/WebSearch (V1 :628-631).
+//   • status === "error" → skip rewrite/scanner, still run context-monitor.
+
+async function setup(ctx) {
+  const locationDir =
+    (ctx && ctx.location && typeof ctx.location.directory === "string" &&
+      ctx.location.directory) ||
+    process.cwd();
+  currentCwd = locationDir;
+  const myLocation = path.resolve(locationDir);
+  const cleanups = [];
+
+  // ── shell.env → create.before ────────────────────────────────────────────
+  try {
+    ctx.shell.hook("create.before", (event) => {
+      event.env = event.env || {};
+      event.env.GSD_DIR = GSD_CORE;
+    });
+  } catch (e) {
+    console.error("[gsd-core] shell hook registration failed:", e && e.message);
+  }
+
+  // ── tool.execute.before — PreToolUse guards (V1 :515-591) ────────────────
+  try {
+    ctx.tool.hook("execute.before", (event) => {
+      const claudeTool = mapToolName(event.tool);
+      // Invariant: snapshot the guard-visible input BEFORE the Read-path
+      // rewrite (hooks chain — later hooks see post-mutation input).
+      const toolInput = mapToolInput(event.input || {});
+      const cwd = currentCwd;
+
+      // 0. Read path rewrite — redirect ~/.claude/gsd-core/ to GSD_CORE so
+      //    the model can read workflow/reference/template files referenced
+      //    by the canonical Claude path. Same key dance as V1, on the live
+      //    input object (mutation honored — probe OQ-9).
+      if (claudeTool === "Read" && toolInput.file_path) {
+        const original = toolInput.file_path;
+        const rewritten = original
+          .replace(/^~\/\.claude\/gsd-core\//, GSD_CORE + "/")
+          .replace(/(?:.*)\/\.claude\/gsd-core\//, GSD_CORE + "/");
+        if (rewritten !== original) {
+          const args = event.input || (event.input = {});
+          if (typeof args.filePath === "string") args.filePath = rewritten;
+          else if (typeof args.path === "string") args.path = rewritten;
+          else if (typeof args.file_path === "string") args.file_path = rewritten;
+          else args.filePath = rewritten;
+        }
+      }
+
+      const basePayload = { hook_event_name: "PreToolUse", cwd };
+      // NOTE: session_id intentionally omitted for PreToolUse hooks (V1
+      // :541-543) — gsd-read-guard.js skips its advisory when session_id is
+      // non-empty; on OpenCode we WANT the advisory.
+      const prePayload = (overrides = {}) => ({
+        ...basePayload,
+        tool_name: claudeTool,
+        tool_input: toolInput,
+        ...overrides,
+      });
+
+      const isWriteLike = ["Write", "Edit", "MultiEdit"].includes(claudeTool);
+
+      // 1–6: the identical V1 guard lattice. handleHookResult is called
+      // WITHOUT a mutable output object on purpose — the V2 before-event
+      // has no metadata slot, so advisories surface via console.error only.
+      if (claudeTool === "Write" || claudeTool === "Edit") {
+        handleHookResult(runHook("gsd-prompt-guard.js", prePayload()));
+      }
+      if (claudeTool === "Write" || claudeTool === "Edit") {
+        handleHookResult(runHook("gsd-read-guard.js", prePayload()));
+      }
+      if (isWriteLike) {
+        handleHookResult(runHook("gsd-worktree-path-guard.js", prePayload()));
+      }
+      if (claudeTool === "Write") {
+        handleHookResult(runHook("gsd-write-guard.js", prePayload()));
+      }
+      if (isWriteLike || claudeTool === "Bash") {
+        handleHookResult(runHook("gsd-workflow-guard.js", prePayload()));
+      }
+      if (["Read", "Grep", "Bash"].includes(claudeTool)) {
+        handleHookResult(runHook("gsd-secret-read-guard.js", prePayload()));
+      }
+    });
+  } catch (e) {
+    console.error("[gsd-core] before hook registration failed:", e && e.message);
+  }
+
+  // ── .planning/config.json reload bridge (replaces V1 file.edited) ────────
+  // file.edited does not exist on the V2 bus (probe OQ-3) — neither for tool
+  // edits nor external writes. Two complementary triggers, debounced:
+  //   a) the after-hook below fires on Write/Edit/MultiEdit of the file
+  //      (covers GSD commands/agents, the common path), and
+  //   b) fs.watch on <locationDir>/.planning (covers external editors).
+  const reloadState = { timer: null };
+  const queueConfigReload = (configPath) => {
+    if (reloadState.timer) clearTimeout(reloadState.timer);
+    reloadState.timer = setTimeout(() => {
+      reloadState.timer = null;
+      try {
+        // Advisory-only (additionalContext); surface to logs
+        handleHookResult(
+          runHook("gsd-config-reload.js", {
+            hook_event_name: "FileChanged",
+            file_path: configPath,
+            event: "change",
+            cwd: currentCwd,
+          }),
+        );
+      } catch (e) {
+        console.error("[gsd-core] config reload failed", e);
+      }
+    }, 250);
+  };
+
+  // ── tool.execute.after — PostToolUse hooks (V1 :594-650) ─────────────────
+  try {
+    ctx.tool.hook("execute.after", (event) => {
+      const claudeTool = mapToolName(event.tool);
+      // Args live on the event's input in the after hook (same as V1).
+      const toolInput = mapToolInput(event.input || {});
+      const cwd = currentCwd;
+
+      // Error path (rev 2/3 decision): skip rewrite + scanner (no content),
+      // still run the context monitor — V1's after hook ran for every call.
+      if (event.status === "error") {
+        if (currentSessionId && !contextWarningsDisabled(cwd)) {
+          handleHookResult(
+            runHook("gsd-context-monitor.js", {
+              hook_event_name: "PostToolUse",
+              tool_name: claudeTool,
+              tool_input: toolInput,
+              session_id: currentSessionId,
+              cwd,
+            }),
+            event.result,
+          );
+        }
+        return;
+      }
+
+      // GSD content transform — rewrite paths + namespace in Read results
+      // BEFORE injection scanning so the scanner sees the final content.
+      if (claudeTool === "Read" && isGsdManagedFile(toolInput.file_path)) {
+        rewriteReadResult(event);
+      }
+
+      // gsd-read-injection-scanner.js — Read/WebFetch/WebSearch, with the
+      // V1 early return: the context monitor never spawns for these tools.
+      if (
+        claudeTool === "Read" ||
+        claudeTool === "WebFetch" ||
+        claudeTool === "WebSearch"
+      ) {
+        handleHookResult(
+          runHook("gsd-read-injection-scanner.js", {
+            hook_event_name: "PostToolUse",
+            tool_name: claudeTool,
+            tool_input: toolInput,
+            tool_response: readResultText(event),
+            cwd,
+          }),
+          event.result,
+        );
+        return;
+      }
+
+      // Config-reload bridge (a): tool edits of .planning/config.json.
+      if (
+        (claudeTool === "Write" || claudeTool === "Edit" || claudeTool === "MultiEdit") &&
+        typeof toolInput.file_path === "string"
+      ) {
+        const expected = path.join(cwd, ".planning", "config.json");
+        if (path.resolve(toolInput.file_path) === path.resolve(expected)) {
+          queueConfigReload(expected);
+        }
+      }
+
+      // gsd-context-monitor.js — context usage warnings. #2697: skip the
+      // spawn entirely when explicitly disabled in project config; missing
+      // or unparseable config = enabled (default), so the spawn still runs.
+      if (currentSessionId && !contextWarningsDisabled(cwd)) {
+        handleHookResult(
+          runHook("gsd-context-monitor.js", {
+            hook_event_name: "PostToolUse",
+            tool_name: claudeTool,
+            tool_input: toolInput,
+            session_id: currentSessionId,
+            cwd,
+          }),
+          event.result,
+        );
+      }
+    });
+  } catch (e) {
+    console.error("[gsd-core] after hook registration failed:", e && e.message);
+  }
+
+  // Config-reload bridge (b): fs.watch fallback for external edits.
+  const watchState = { root: null, planning: null };
+  const planningDir = path.join(locationDir, ".planning");
+  const configPath = path.join(planningDir, "config.json");
+  const attachPlanningWatcher = () => {
+    if (watchState.planning) return;
+    try {
+      watchState.planning = fs.watch(planningDir, (_ty, filename) => {
+        if (filename === "config.json") queueConfigReload(configPath);
+      });
+      watchState.planning.on("error", () => {
+        try { watchState.planning && watchState.planning.close(); } catch {}
+        watchState.planning = null;
+      });
+    } catch { /* .planning absent — root watcher attaches it on creation */ }
+  };
+  try {
+    attachPlanningWatcher();
+    watchState.root = fs.watch(locationDir, (_ty, filename) => {
+      if (filename === ".planning") attachPlanningWatcher();
+    });
+    watchState.root.on("error", () => {});
+  } catch (e) {
+    console.error("[gsd-core] config watcher unavailable:", e && e.message);
+  }
+  cleanups.push(() => {
+    for (const w of [watchState.root, watchState.planning]) {
+      try { w && w.close(); } catch {}
+    }
+    if (reloadState.timer) clearTimeout(reloadState.timer);
+  });
+
+  // ── experimental.session.compacting → session compaction (OQ-8) ─────────
+  try {
+    ctx.session.hook("compaction", (event) => {
+      if (!currentSessionId) return;
+      // No metadata slot on the compaction event → advisory → stderr only.
+      handleHookResult(
+        runHook("gsd-context-monitor.js", {
+          hook_event_name: "PreCompact",
+          session_id: currentSessionId,
+          cwd: currentCwd,
+        }),
+      );
+      // Breadcrumb: V1 pushed into output.context; V2 event.system is the
+      // mutable SystemPart[] (probe-verified).
+      event.system = event.system || [];
+      event.system.push({
+        type: "text",
+        text: `[GSD] Active session: ${currentSessionId}. Preserve any in-flight phase/plan state.`,
+      });
+    });
+  } catch (e) {
+    console.error("[gsd-core] compaction hook registration failed:", e && e.message);
+  }
+
+  // ── permission.evaluate — Code-Mode deny-backstop (rev 4; probe OQ-10) ───
+  // Nested tool calls made from inside `execute` scripts skip the tool hooks
+  // above entirely; this is the only surface that still sees out-of-tree
+  // writes made that way. Narrow by design: external_directory actions from
+  // tools, hard-block guards only (advisories already ran on the before-hook
+  // path for ordinary calls), synthesized minimal payload (the evaluate event
+  // carries metadata.filepath but no tool input), deny only on block.
+  try {
+    ctx.permission.hook("evaluate", (event) => {
+      if (!event || event.action !== "external_directory") return;
+      if (!event.source || event.source.type !== "tool") return;
+      const filePath =
+        (event.metadata && typeof event.metadata.filepath === "string" &&
+          event.metadata.filepath) || null;
+      if (!filePath) return;
+      const payload = {
+        hook_event_name: "PreToolUse",
+        cwd: currentCwd,
+        tool_name: "Write",
+        tool_input: { file_path: filePath },
+        // session_id intentionally omitted (same invariant as above)
+      };
+      for (const guard of [
+        "gsd-worktree-path-guard.js",
+        "gsd-secret-read-guard.js",
+      ]) {
+        const r = runHook(guard, payload);
+        let parsed = null;
+        if (r.stdout) {
+          try { parsed = JSON.parse(r.stdout); } catch {}
+        }
+        if (r.exitCode === 2 || (parsed && parsed.decision === "block")) {
+          const reason = (parsed && parsed.reason) ||
+            `Blocked by GSD hook (${guard}).`;
+          console.error("[gsd-core] backstop deny:", reason);
+          try { event.effect = "deny"; } catch {}
+          return;
+        }
+      }
+    });
+  } catch (e) {
+    console.error("[gsd-core] permission hook registration failed:", e && e.message);
+  }
+
+  // ── event subscription (V1 :671-749) with the location filter ────────────
+  // The V2 stream is server-global — every subscribed plugin instance
+  // receives every event — so state mutations are gated on the event's
+  // location matching this instance's ctx.location.directory (issue #4916 +
+  // probe OQ-3). session.idle never appears on the V2 bus and permission.* /
+  // session.error carry no GSD action (rev 4) — those V1 sentinels are gone.
+  const controller = new AbortController();
+  const ownsEvent = (ev) => {
+    const data = (ev && ev.data) || {};
+    const dir = (ev.location && ev.location.directory) ||
+      (data.location && data.location.directory);
+    // State-mutating events always carry location; without it, skip.
+    return typeof dir === "string" && !!dir && path.resolve(dir) === myLocation;
+  };
+  void (async () => {
+    try {
+      for await (const ev of ctx.event.subscribe({
+        signal: controller.signal,
+      })) {
+        try {
+          if (!ev || typeof ev.type !== "string") continue;
+          const data = ev.data || {};
+          switch (ev.type) {
+            case "session.created": {
+              if (!ownsEvent(ev)) break;
+              // Track session for context-monitor payloads. V2 payload:
+              // { sessionID, projectID, location:{directory}, … } — no
+              // `info` object (probe OQ-3).
+              currentSessionId = data.sessionID || null;
+              if (data.location && typeof data.location.directory === "string") {
+                currentCwd = data.location.directory;
+              }
+              // gsd-ensure-canonical-path.js — no stdin dependency; silent
+              runHook("gsd-ensure-canonical-path.js", {
+                hook_event_name: "SessionStart",
+                session_id: currentSessionId,
+                cwd: currentCwd,
+              });
+              // gsd-check-update.js — spawns its own background worker
+              runHook("gsd-check-update.js", {
+                hook_event_name: "SessionStart",
+                session_id: currentSessionId,
+                cwd: currentCwd,
+              });
+              break;
+            }
+            case "session.moved": {
+              // Keep the worktree root fresh — a moved session otherwise
+              // compares guard paths against a stale cwd (probe OQ-11).
+              if (!ownsEvent(ev)) break;
+              if (data.sessionID) currentSessionId = data.sessionID;
+              if (data.location && typeof data.location.directory === "string") {
+                currentCwd = data.location.directory;
+              }
+              break;
+            }
+            default:
+              break;
+          }
+        } catch (e) {
+          console.error("[gsd-core] event error", e);
+        }
+      }
+    } catch {
+      /* abort is a normal exit */
+    }
+  })();
+  cleanups.push(() => controller.abort());
+
+  // ── package-tree registration (Option 2 distribution; Phase 4) ───────────
+  if (IS_PACKAGE_TREE) {
+    // Transforms are replayable state edits: keep callbacks synchronous,
+    // cheap, side-effect-free — all file reads happen here, once, before
+    // registration (challenge #10). The per-instance `registered` flags are
+    // the no-overwrite guard (the command editor exposes only `add`, and
+    // each location instance is a fresh module realm — probe rev 4).
+    const commands = loadDir(
+      COMMANDS,
+      (f) => "gsd-" + f.slice(0, -3),
+      (body, fm, name) => ({
+        template: rewriteRefs(body.trim()),
+        description: fm.description || `GSD ${name.slice(0, -3)} command`,
+      }),
+    );
+    const skills = [];
+    try {
+      if (fs.existsSync(SKILLS)) {
+        for (const dir of fs.readdirSync(SKILLS)) {
+          const srcFile = path.join(SKILLS, dir, "SKILL.md");
+          if (!fs.existsSync(srcFile)) continue;
+          const raw = fs.readFileSync(srcFile, "utf8");
+          const { frontmatter } = parseFrontmatter(raw);
+          skills.push({
+            id: dir,
+            name: frontmatter.name || dir,
+            description: frontmatter.description || "",
+            // `path` per the installed schema (docs say `location` — wrong
+            // on 2.0.22/23, probe OQ-6); content is rewritten inline.
+            path: srcFile,
+            content: rewriteSkillBody(raw),
+          });
+        }
+      }
+    } catch (e) {
+      console.error("[gsd-core] skills scan failed:", e && e.message);
+    }
+
+    let commandsRegistered = false;
+    try {
+      ctx.command.transform((editor) => {
+        if (commandsRegistered || !editor || typeof editor.add !== "function") return;
+        commandsRegistered = true;
+        for (const [name, def] of Object.entries(commands)) {
+          editor.add({
+            name,
+            description: def.description,
+            execute: async ({ sessionID, prompt }) => {
+              const args = (prompt && prompt.text) || "";
+              const text = substituteCommandArgs(def.template, args);
+              try {
+                await ctx.session.prompt({ ...(prompt || {}), sessionID, text });
+              } catch (e) {
+                console.error(`[gsd-core] command ${name} failed:`, e && e.message);
+              }
+            },
+          });
+        }
+      });
+    } catch (e) {
+      console.error("[gsd-core] command transform failed:", e && e.message);
+    }
+
+    let skillsRegistered = false;
+    try {
+      ctx.skill.transform((editor) => {
+        if (skillsRegistered || !editor || typeof editor.add !== "function") return;
+        skillsRegistered = true;
+        for (const s of skills) editor.add(s);
+      });
+    } catch (e) {
+      console.error("[gsd-core] skill transform failed:", e && e.message);
+    }
+
+    // Agents: plugins cannot add agents on V2 — AgentEditor has no `add`
+    // (probe OQ-5, matches @opencode/plugin 2.0.16). Package-mode installs
+    // need GSD's installer to stage agents/*.md into a discovered agents/
+    // dir (required companion change, out of scope here — PLAN Phase 4.2).
+  }
+
+  // ── cleanup (hot reload / unload) ────────────────────────────────────────
+  return () => {
+    for (const fn of cleanups) {
+      try { fn(); } catch {}
+    }
+  };
+}
 // Export shape — verified against OpenCode's plugin loader source
 // (packages/opencode/src/plugin). The loader imports this module and runs
 // `for (const entry of Object.values(mod)) { getServerPlugin(entry) }`, where
@@ -862,11 +1550,29 @@ GsdCorePlugin._internals = {
   isGsdManagedFile,
   handleHookResult,
   GsdCorePlugin,
+  // V2 port test hooks
+  setup,
+  substituteCommandArgs,
+  rewriteSkillBody,
+  rewriteReadResult,
+  readResultText,
 };
 
 const gsdCorePluginExport = { server: GsdCorePlugin };
 Object.defineProperty(gsdCorePluginExport, "id", {
   value: "gsd-core",
+  enumerable: false,
+  writable: false,
+  configurable: false,
+});
+// V2 (issue #4916): the V2 loader schema-decodes the default export as
+// { id, setup | effect } and reads properties BY ACCESS (it read this file's
+// hidden `id` fine while flagging only setup/effect missing). Keeping BOTH
+// `id` and `setup` non-enumerable preserves every V1 iterator (raw-CJS
+// Object.values stays [server]; cjs-module-lexer cannot synthesize named
+// exports from a variable assignment) while satisfying the V2 contract.
+Object.defineProperty(gsdCorePluginExport, "setup", {
+  value: setup,
   enumerable: false,
   writable: false,
   configurable: false,
