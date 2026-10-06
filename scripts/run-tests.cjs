@@ -49,6 +49,13 @@ const {
   diffLiveConfig,
   formatViolations,
 } = require('./live-config-guard.cjs');
+const {
+  LEDGER_ENV: STATE_WRITE_LEDGER_ENV,
+  TEST_FILE_ENV: STATE_WRITE_TEST_FILE_ENV,
+  nodeOptionsWithRequire,
+  readStateWriteLedger,
+  formatStateWriteReport,
+} = require('./raw-state-write-guard.cjs');
 
 const SUITES = ['all', 'unit', 'integration', 'install', 'security', 'slow', 'qa'];
 
@@ -2099,6 +2106,18 @@ async function main() {
   // success path; kept only long enough to read back on a timeout.
   const eventsDir = mkdtempSync(join(tmpdir(), 'gsd-run-tests-events-'));
 
+  // #5120 (ADR-4629 guard roster: no raw STATE.md write outside the seam): every
+  // chunk, and every subprocess its tests spawn, loads the raw STATE.md write
+  // check through NODE_OPTIONS and appends to one ledger for the run, read after
+  // the last chunk. Created empty here so a missing ledger means the check broke,
+  // never that nothing was written (#5170).
+  const stateWriteLedgerPath = join(eventsDir, 'state-writes.ndjson');
+  writeFileSync(stateWriteLedgerPath, '');
+  const stateWriteNodeOptions = nodeOptionsWithRequire(
+    process.env.NODE_OPTIONS,
+    join(__dirname, 'raw-state-write-guard.cjs'),
+  );
+
   // #5071: when set, each chunk's per-file `test:summary` durations are
   // appended here (CI uploads the file per Windows shard; gen-test-timings
   // --platform turns it into the platform table). Removed from this process's
@@ -2319,6 +2338,19 @@ async function main() {
           `figure, so treat every number as a floor):\n${ranked}`,
       );
     };
+    const chunkEnv = {
+      ...process.env,
+      GSD_RUN_TESTS_EVENTS_FILE: chunkEventsPath,
+      GSD_RUN_TESTS_LEDGER_FILE: chunkLedgerPath,
+      // #5473: lets tests/helpers/process-seam.cjs append a record for any
+      // slow or killed spawn to the same jsonl artifact CI already uploads.
+      // Absent when no export file is configured, so local runs write nothing.
+      ...(timingExportPath ? { GSD_SEAM_SPAWN_LOG_FILE: resolve(timingExportPath) } : {}),
+      [STATE_WRITE_LEDGER_ENV]: stateWriteLedgerPath,
+      NODE_OPTIONS: stateWriteNodeOptions,
+    };
+    // A run nested inside another run's test attributes its own writes.
+    delete chunkEnv[STATE_WRITE_TEST_FILE_ENV];
     const result = await runChunk(
       process.execPath,
       [
@@ -2330,15 +2362,7 @@ async function main() {
         ...chunks[i],
       ],
       {
-        env: {
-          ...process.env,
-          GSD_RUN_TESTS_EVENTS_FILE: chunkEventsPath,
-          GSD_RUN_TESTS_LEDGER_FILE: chunkLedgerPath,
-          // #5473: lets tests/helpers/process-seam.cjs append a record for any
-          // slow or killed spawn to the same jsonl artifact CI already uploads.
-          // Absent when no export file is configured, so local runs write nothing.
-          ...(timingExportPath ? { GSD_SEAM_SPAWN_LOG_FILE: resolve(timingExportPath) } : {}),
-        },
+        env: chunkEnv,
         timeoutMs: chunkTimeoutMs,
         graceMs: chunkKillGraceMs,
         onTimeout: reportChunkTimeout,
@@ -2465,6 +2489,12 @@ async function main() {
   // these files have already been printed above, so this is unconditional —
   // best-effort, since a failure to remove a tmp dir must never mask the
   // real chunk-loop exit code.
+  // #5120: read before eventsDir is removed. The count is printed on every run,
+  // beside the seam-write counts (ADR-3408 Decision 5: never the zero alone).
+  const stateWriteReport = formatStateWriteReport(readStateWriteLedger(stateWriteLedgerPath));
+  for (const line of stateWriteReport.lines) console.error(line);
+  if (stateWriteReport.failed && firstFailureExit === 0) firstFailureExit = 1;
+
   try {
     rmSync(eventsDir, { recursive: true, force: true });
   } catch {
