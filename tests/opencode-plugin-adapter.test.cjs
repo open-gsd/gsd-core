@@ -610,3 +610,60 @@ test('#2697: context-monitor skipped for Write when context_warnings disabled (n
     `context-monitor spawn must be skipped for Write when context_warnings:false; spawn argvs: ${JSON.stringify(spawns)}`,
   );
 });
+
+// Bun exposes every own property of module.exports, non-enumerable ones
+// included, as a named namespace export; Node's namespace is `{ default }` only.
+function bunNamespace(raw) {
+  const ns = { default: raw };
+  for (const key of Object.getOwnPropertyNames(raw)) ns[key] = raw[key];
+  return ns;
+}
+
+// Emulates the OpenCode 2.x `Module` decode of the namespace default export.
+function v2Decode(ns) {
+  const d = ns.default;
+  const missing = [];
+  if (typeof d.id !== 'string') missing.push('["default"]["id"]');
+  if (typeof (d.setup ?? d.effect) !== 'function') {
+    missing.push('["default"]["effect"]', '["default"]["setup"]');
+  }
+  if (missing.length) throw new Error('Missing key at ' + missing.join(' / '));
+  return 'effect' in d ? { id: d.id, effect: d.effect } : { id: d.id, setup: d.setup };
+}
+
+test('V2 loader decode accepts the default export under the Node and Bun namespaces', () => {
+  const raw = require(ADAPTER_SRC);
+  assert.equal('effect' in raw, false);
+  for (const ns of [{ default: raw }, bunNamespace(raw)]) {
+    const decoded = v2Decode(ns);
+    assert.equal(decoded.id, 'gsd-core');
+    assert.equal(typeof decoded.setup, 'function');
+    assert.equal('effect' in decoded, false);
+  }
+});
+
+test('V2 decode emulation rejects a server-only default with the missing setup/effect shape', () => {
+  const it = { server() {} };
+  Object.defineProperty(it, 'id', { value: 'gsd-core', enumerable: false });
+  assert.throws(
+    () => v2Decode({ default: it }),
+    /^Error: Missing key at \["default"\]\["effect"\] \/ \["default"\]\["setup"\]$/,
+  );
+});
+
+test('setup is a non-enumerable no-op: an unbound call returns undefined and reads nothing from ctx', async () => {
+  const raw = require(ADAPTER_SRC);
+  const desc = Object.getOwnPropertyDescriptor(raw, 'setup');
+  assert.equal(desc.enumerable, false);
+  assert.equal(desc.writable, false);
+  assert.equal(desc.configurable, false);
+  const { setup } = v2Decode(bunNamespace(raw));
+  const reads = [];
+  const ctx = new Proxy({}, {
+    get(_t, key) { reads.push(key); return undefined; },
+    has(_t, key) { reads.push(key); return false; },
+  });
+  assert.equal(await setup(ctx), undefined);
+  assert.equal(await setup(ctx), undefined);
+  assert.deepEqual(reads, []);
+});

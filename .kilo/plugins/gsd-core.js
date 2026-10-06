@@ -851,6 +851,8 @@ const GsdCorePlugin = async ({ directory } = {}) => {
 // Result: raw-CJS `Object.values` = `[server]`; ESM `Object.values` =
 // `[{server, <id non-enum>}]` — both fully extractable. Test-only helpers hang
 // off the `server` FUNCTION (`server._internals`), never as a sibling export.
+function GsdCoreSetup() {}
+
 GsdCorePlugin._internals = {
   REPO_ROOT,
   IS_PACKAGE_TREE,
@@ -867,6 +869,12 @@ GsdCorePlugin._internals = {
 const gsdCorePluginExport = { server: GsdCorePlugin };
 Object.defineProperty(gsdCorePluginExport, "id", {
   value: "gsd-core",
+  enumerable: false,
+  writable: false,
+  configurable: false,
+});
+Object.defineProperty(gsdCorePluginExport, "setup", {
+  value: GsdCoreSetup,
   enumerable: false,
   writable: false,
   configurable: false,
