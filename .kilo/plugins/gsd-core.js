@@ -838,6 +838,8 @@ const GsdCorePlugin = async ({ directory } = {}) => {
   };
 };
 
+const V2_TOOL_ALIASES = new Map([["shell", "bash"], ["patch", "apply_patch"]]);
+
 // Export shape, checked against both OpenCode plugin loaders:
 //   - OpenCode 1.x (>= 1.4) reads `mod.default` through
 //     `readV1Plugin(..., "detect")` and calls only `default.server`. Older
@@ -851,7 +853,18 @@ const GsdCorePlugin = async ({ directory } = {}) => {
 //   - OpenCode 2.x decodes `default` as `{ id, setup }` and ignores `server`.
 //     Never define `effect`: the 2.x loader prefers it over `setup`.
 // Test-only helpers hang off `server._internals`, never as sibling exports.
-function GsdCoreSetup() {}
+async function GsdCoreSetup(ctx) {
+  const dir = ctx.location.directory;
+  const v1 = await GsdCorePlugin({ directory: dir });
+  await ctx.tool.hook("execute.before", async (ev) => {
+    // currentCwd and currentSessionId are module globals re-pinned on every call.
+  // This holds only while the V1 tool handlers never await and runHook stays
+  // synchronous; otherwise { cwd, sessionId } must be passed through the handlers.
+    currentCwd = dir;
+    currentSessionId = ev.sessionID;
+    await v1["tool.execute.before"]({ tool: V2_TOOL_ALIASES.get(ev.tool) ?? ev.tool }, { args: ev.input });
+  });
+}
 
 GsdCorePlugin._internals = {
   REPO_ROOT,

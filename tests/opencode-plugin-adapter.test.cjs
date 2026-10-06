@@ -651,21 +651,17 @@ test('V2 decode emulation rejects a server-only default with the missing setup/e
   );
 });
 
-test('setup is a non-enumerable no-op: an unbound call returns undefined and reads nothing from ctx', async () => {
+test('setup is non-enumerable, callable unbound, awaits its hook registrations and resolves undefined', async () => {
   const raw = require(ADAPTER_SRC);
   const desc = Object.getOwnPropertyDescriptor(raw, 'setup');
   assert.equal(desc.enumerable, false);
   assert.equal(desc.writable, false);
   assert.equal(desc.configurable, false);
   const { setup } = v2Decode(bunNamespace(raw));
-  const reads = [];
-  const ctx = new Proxy({}, {
-    get(_t, key) { reads.push(key); return undefined; },
-    has(_t, key) { reads.push(key); return false; },
-  });
+  const { hooks, settled, ctx } = fakeV2Ctx(os.tmpdir());
   assert.equal(await setup(ctx), undefined);
-  assert.equal(await setup(ctx), undefined);
-  assert.deepEqual(reads, []);
+  assert.equal(typeof hooks['tool.execute.before'], 'function');
+  assert.deepEqual(settled, Object.keys(hooks));
 });
 
 // Emulates OpenCode >= 1.4 `readV1Plugin(mod.default, spec, "server", "detect")`;
@@ -763,4 +759,164 @@ test('V1 server() picked from a Bun namespace by the detect path runs the secret
   await assert.doesNotReject(() =>
     allowHandlers['tool.execute.before']({ tool: 'read' }, { args: { filePath: '/p/notes.md' } }),
   );
+});
+
+// Records V2 Promise-API hook registrations. Each registration settles on a
+// later turn, so a setup that does not await it leaves `settled` short.
+function fakeV2Ctx(directory) {
+  const hooks = {};
+  const settled = [];
+  const domain = (ns) => ({
+    hook(name, fn) {
+      const key = `${ns}.${name}`;
+      hooks[key] = fn;
+      return new Promise((resolve) => setImmediate(() => {
+        settled.push(key);
+        resolve({ dispose() {} });
+      }));
+    },
+  });
+  return { hooks, settled, ctx: { location: { directory }, tool: domain('tool'), shell: domain('shell') } };
+}
+
+test('V2 setup bridges execute.before: a shell read of .env is blocked with the guard reason, an allowed write resolves', async (t) => {
+  const { mod } = buildInstalledLayout(t, {
+    'gsd-prompt-guard.js': stubHook(''),
+    'gsd-read-guard.js': stubHook(''),
+    'gsd-worktree-path-guard.js': stubHook(''),
+    'gsd-write-guard.js': stubHook(''),
+    'gsd-workflow-guard.js': stubHook(''),
+    'gsd-secret-read-guard.js': stubHook(JSON.stringify({ decision: 'block', code: 'secret-read', reason: 'secret read denied' }), 2),
+  });
+  const { setup } = mod;
+  const { hooks, ctx } = fakeV2Ctx(process.cwd());
+  await setup(ctx);
+  const ev = { id: 'c1', tool: 'shell', sessionID: 's1', input: { command: 'cat .env' } };
+  await assert.rejects(() => hooks['tool.execute.before'](ev), /secret read denied/);
+  assert.equal(ev.tool, 'shell');
+  await assert.doesNotReject(() =>
+    hooks['tool.execute.before']({ id: 'c2', tool: 'write', sessionID: 's1', input: { path: '/proj/notes.md', content: 'ok' } }),
+  );
+});
+
+const ALL_GUARD_STUBS = Object.fromEntries([
+  'gsd-prompt-guard.js',
+  'gsd-read-guard.js',
+  'gsd-worktree-path-guard.js',
+  'gsd-write-guard.js',
+  'gsd-workflow-guard.js',
+  'gsd-secret-read-guard.js',
+  'gsd-read-injection-scanner.js',
+  'gsd-context-monitor.js',
+].map((name) => [name, stubHook('')]));
+
+// The plugin captures spawnSync at require time, so patch it before loading.
+function loadTracedPlugin(t, stubHooks) {
+  const cp = require('node:child_process');
+  const spawns = [];
+  const realSpawnSync = cp.spawnSync;
+  cp.spawnSync = (...args) => {
+    spawns.push(args);
+    return { stdout: '', status: 0, signal: null };
+  };
+  t.after(() => { cp.spawnSync = realSpawnSync; });
+  const { root, mod } = buildInstalledLayout(t, stubHooks);
+  return { root, mod, spawns };
+}
+
+function spawnedHooks(spawns) {
+  return spawns.map((call) => path.basename(call[1][0]));
+}
+
+function makeProjectDir(t) {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-oc-proj-')));
+  t.after(() => cleanup(dir));
+  return dir;
+}
+
+test('V1 server() and V2 setup() spawn the same PreToolUse hooks in the same order for each tool pair', async (t) => {
+  const { mod, spawns } = loadTracedPlugin(t, ALL_GUARD_STUBS);
+  const projectDir = makeProjectDir(t);
+  const F = path.join(projectDir, 'notes.md');
+  const v1 = await mod.server({ directory: projectDir });
+  const { setup } = mod;
+  const { hooks, ctx } = fakeV2Ctx(projectDir);
+  await setup(ctx);
+
+  const cases = [
+    ['write', { filePath: F, content: 'x' }, 'write', { path: F, content: 'x' }],
+    ['edit', { filePath: F, oldString: 'a', newString: 'b' }, 'edit', { path: F, oldString: 'a', newString: 'b' }],
+    ['bash', { command: 'git add -f x' }, 'shell', { command: 'git add -f x' }],
+    ['bash', {}, 'shell', {}],
+    ['apply_patch', { patchText: '*** Begin Patch' }, 'patch', { patchText: '*** Begin Patch' }],
+    ['read', { filePath: '/p/.env' }, 'read', { path: '/p/.env' }],
+    ['grep', { pattern: 'K', path: '/p', include: '.env*' }, 'grep', { pattern: 'K', path: '/p', include: '.env*' }],
+    ['task', { prompt: 'x' }, 'subagent', { agent: 'a', description: 'd', prompt: 'x' }],
+    ['glob', { pattern: '*' }, 'glob', { pattern: '*' }],
+  ];
+  const v2Lists = {};
+  for (const [v1Tool, v1Args, v2Tool, v2Input] of cases) {
+    await v1['tool.execute.before']({ tool: v1Tool }, { args: v1Args });
+    const v1List = spawnedHooks(spawns.splice(0));
+    await hooks['tool.execute.before']({ id: 'c', tool: v2Tool, sessionID: 's1', input: v2Input });
+    const v2List = spawnedHooks(spawns.splice(0));
+    assert.deepEqual(v2List, v1List, `${v1Tool} -> ${v2Tool}`);
+    v2Lists[`${v2Tool} ${JSON.stringify(v2Input)}`] = v2List;
+  }
+
+  assert.deepEqual(v2Lists['shell {"command":"git add -f x"}'], ['gsd-workflow-guard.js', 'gsd-secret-read-guard.js']);
+  assert.deepEqual(v2Lists['shell {}'], ['gsd-workflow-guard.js', 'gsd-secret-read-guard.js']);
+  assert.deepEqual(v2Lists['patch {"patchText":"*** Begin Patch"}'], ['gsd-worktree-path-guard.js', 'gsd-workflow-guard.js']);
+  assert.deepEqual(v2Lists['subagent {"agent":"a","description":"d","prompt":"x"}'], []);
+  assert.deepEqual(v2Lists['glob {"pattern":"*"}'], []);
+  for (const [key, list] of Object.entries(v2Lists)) {
+    if (key.startsWith('subagent ') || key.startsWith('glob ')) continue;
+    assert.ok(list.length > 0, `${key} spawned no hook`);
+  }
+
+  assert.equal(_internals.mapToolName('shell'), 'shell');
+  assert.equal(_internals.mapToolName('patch'), 'patch');
+});
+
+test('each V2 location runs its guards in its own directory when calls interleave', async (t) => {
+  const { mod, spawns } = loadTracedPlugin(t, ALL_GUARD_STUBS);
+  const dirA = makeProjectDir(t);
+  const dirB = makeProjectDir(t);
+  const a = fakeV2Ctx(dirA);
+  const b = fakeV2Ctx(dirB);
+  const { setup } = mod;
+  await setup(a.ctx);
+  await setup(b.ctx);
+
+  for (const [loc, dir] of [[a, dirA], [b, dirB], [a, dirA]]) {
+    await loc.hooks['tool.execute.before']({
+      id: 'c', tool: 'write', sessionID: 's', input: { path: path.join(dir, 'notes.md'), content: 'x' },
+    });
+    const calls = spawns.splice(0);
+    assert.ok(calls.length > 0);
+    for (const entry of calls) {
+      assert.equal(entry[2].cwd, dir);
+      assert.equal(JSON.parse(entry[2].input).cwd, dir);
+    }
+  }
+});
+
+test('V2 Read redirect rewrites ev.input.path in place and leaves other paths alone', async (t) => {
+  const { root, mod } = loadTracedPlugin(t, ALL_GUARD_STUBS);
+  const projectDir = makeProjectDir(t);
+  const { setup } = mod;
+  const { hooks, ctx } = fakeV2Ctx(projectDir);
+  await setup(ctx);
+
+  const input = { path: '~/.claude/gsd-core/workflows/x.md' };
+  const ev = { id: 'c', tool: 'read', sessionID: 's1', input };
+  await hooks['tool.execute.before'](ev);
+  assert.equal(ev.input, input);
+  assert.equal(input.path, path.join(root, 'gsd-core') + '/workflows/x.md');
+
+  const other = { path: '/p/notes.md' };
+  const otherEv = { id: 'c2', tool: 'read', sessionID: 's1', input: other };
+  await hooks['tool.execute.before'](otherEv);
+  assert.equal(otherEv.input, other);
+  assert.equal(other.path, '/p/notes.md');
 });
