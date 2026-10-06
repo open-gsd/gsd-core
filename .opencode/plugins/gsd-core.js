@@ -185,6 +185,20 @@ function mapToolInput(args) {
   return input;
 }
 
+// Each line is trimmed before matching, as the host's patch parser does.
+// `Move to:` is matched on any line, not only after an Update header; an extra
+// path only adds a guard check.
+function patchFilePaths(patchText) {
+  if (typeof patchText !== "string") return [];
+  const paths = [];
+  for (const line of patchText.split("\n")) {
+    const m = /^\*\*\* (?:(?:Add|Update|Delete) File|Move to):(.*)$/s.exec(line.trim());
+    const p = m && m[1].trim();
+    if (p) paths.push(p);
+  }
+  return [...new Set(paths)];
+}
+
 // ---------------------------------------------------------------------------
 // Hook subprocess runner
 // ---------------------------------------------------------------------------
@@ -637,6 +651,10 @@ const GsdCorePlugin = async ({ directory } = {}) => {
       });
 
       const isWriteLike = ["Write", "Edit", "MultiEdit"].includes(claudeTool);
+      const patchPaths = patchFilePaths((output.args || {}).patchText);
+      const pathPayloads = patchPaths.length
+        ? patchPaths.map((p) => prePayload({ tool_input: { ...toolInput, file_path: p } }))
+        : [prePayload()];
 
       // 1. gsd-prompt-guard.js — injection scan on .planning/ writes
       if (claudeTool === "Write" || claudeTool === "Edit") {
@@ -652,8 +670,9 @@ const GsdCorePlugin = async ({ directory } = {}) => {
 
       // 3. gsd-worktree-path-guard.js — hard-block edits outside worktree
       if (isWriteLike) {
-        const r = runHook("gsd-worktree-path-guard.js", prePayload());
-        handleHookResult(r, output);
+        for (const payload of pathPayloads) {
+          handleHookResult(runHook("gsd-worktree-path-guard.js", payload), output);
+        }
       }
 
       // 4. gsd-write-guard.js — hard-block catastrophic shrink of curated
@@ -666,8 +685,9 @@ const GsdCorePlugin = async ({ directory } = {}) => {
       // 5. gsd-workflow-guard.js — workflow advisory + git-force-add block
       //    (covers Write/Edit/MultiEdit AND Bash force-add detection)
       if (isWriteLike || claudeTool === "Bash") {
-        const r = runHook("gsd-workflow-guard.js", prePayload());
-        handleHookResult(r, output);
+        for (const payload of pathPayloads) {
+          handleHookResult(runHook("gsd-workflow-guard.js", payload), output);
+        }
       }
 
       // 6. gsd-secret-read-guard.js — hard-block reads of .env / .env.<suffix> /
@@ -891,6 +911,7 @@ GsdCorePlugin._internals = {
   IS_PACKAGE_TREE,
   mapToolName,
   mapToolInput,
+  patchFilePaths,
   locateFrontmatterFence,
   parseFrontmatter,
   rewriteContent,

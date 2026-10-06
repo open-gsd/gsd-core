@@ -1099,3 +1099,94 @@ test('V2 shell create.before never throws and never creates an env', async (t) =
   await assert.doesNotReject(() => hooks['shell.create.before'](bareEv));
   assert.equal(Object.hasOwn(bareEv, 'env'), false);
 });
+
+// A stub hook that blocks only when tool_input.file_path equals blockedPath.
+function pathBlockingHook(blockedPath, reason) {
+  return `
+let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{
+  const p=JSON.parse(d||'{}');
+  if((p.tool_input||{}).file_path===${JSON.stringify(blockedPath)}){
+    process.stdout.write(JSON.stringify({decision:'block',reason:${JSON.stringify(reason)}}));
+    process.exit(2);
+  }
+  process.exit(0);
+});
+`;
+}
+
+test('V2 patch: the worktree guard sees each patched path, and a blocked path fails the call', async (t) => {
+  const { mod } = buildInstalledLayout(t, {
+    'gsd-worktree-path-guard.js': pathBlockingHook('/outside/main/src/x.js', 'outside worktree'),
+    'gsd-workflow-guard.js': stubHook(''),
+  });
+  const projectDir = makeProjectDir(t);
+  const { setup } = mod;
+  const { hooks, ctx } = fakeV2Ctx(projectDir);
+  await setup(ctx);
+
+  const blocked = [
+    '*** Begin Patch', '*** Update File: src/a.js', '@@', '-x', '+y',
+    '*** Add File: /outside/main/src/x.js', '+z', '*** End Patch',
+  ].join('\n');
+  await assert.rejects(
+    () => hooks['tool.execute.before']({ id: 'c1', tool: 'patch', sessionID: 's1', input: { patchText: blocked } }),
+    /outside worktree/,
+  );
+
+  const allowed = ['*** Begin Patch', '*** Update File: src/a.js', '@@', '-x', '+y', '*** End Patch'].join('\n');
+  await assert.doesNotReject(() =>
+    hooks['tool.execute.before']({ id: 'c2', tool: 'patch', sessionID: 's1', input: { patchText: allowed } }),
+  );
+});
+
+test('patchFilePaths takes a header indented by any whitespace the host trims from a patch line', () => {
+  const f = _internals.patchFilePaths;
+  const leads = [' ', '\t', '  \t', '\v', '\f', '\r', ...[0x00a0, 0xfeff, 0x3000, 0x2028].map((c) => String.fromCharCode(c))];
+  for (const lead of leads) {
+    const patchText = ['*** Begin Patch', `${lead}*** Add File: /outside/main/src/x.js`, '+z', '*** End Patch'].join('\n');
+    assert.deepEqual(f(patchText), ['/outside/main/src/x.js'], JSON.stringify(lead));
+  }
+
+  const mixed = [
+    '*** Begin Patch', '*** Update File: src/a.js', '@@', '-x', '+y',
+    '  *** Add File: /outside/main/src/x.js', '+z', '+ *** Add File: nope',
+    '\t*** Update File: src/u.js', ' \t*** Move to: src/v.js', '\t*** Delete File: src/old.js', '*** End Patch',
+  ];
+  const expected = ['src/a.js', '/outside/main/src/x.js', 'src/u.js', 'src/v.js', 'src/old.js'];
+  assert.deepEqual(f(mixed.join('\n')), expected);
+  assert.deepEqual(f(mixed.join('\r\n')), expected);
+
+  for (const body of ['+ *** Add File: nope', '+\t*** Add File: nope', '  *** Add File:   ']) {
+    assert.deepEqual(f(body), [], JSON.stringify(body));
+  }
+  assert.deepEqual(f('*** Add File: /outside/a\rb.js'), ['/outside/a\rb.js']);
+});
+
+test('a patch header indented by a space or a tab still reaches the worktree guard on both hosts', async (t) => {
+  const { mod } = buildInstalledLayout(t, {
+    'gsd-worktree-path-guard.js': pathBlockingHook('/outside/main/src/x.js', 'outside worktree'),
+    'gsd-workflow-guard.js': stubHook(''),
+  });
+  const directory = makeProjectDir(t);
+  const v1 = await mod.server({ directory });
+  const { setup } = mod;
+  const { hooks, ctx } = fakeV2Ctx(directory);
+  await setup(ctx);
+
+  for (const lead of [' ', '\t']) {
+    const patchText = [
+      '*** Begin Patch', '*** Update File: src/a.js', '@@', '-x', '+y',
+      `${lead}*** Add File: /outside/main/src/x.js`, '+z', '*** End Patch',
+    ].join('\n');
+    await assert.rejects(
+      () => v1['tool.execute.before']({ tool: 'apply_patch' }, { args: { patchText } }),
+      /outside worktree/,
+      JSON.stringify(lead),
+    );
+    await assert.rejects(
+      () => hooks['tool.execute.before']({ id: 'c1', tool: 'patch', sessionID: 's1', input: { patchText } }),
+      /outside worktree/,
+      JSON.stringify(lead),
+    );
+  }
+});
