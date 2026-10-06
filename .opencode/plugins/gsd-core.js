@@ -876,6 +876,14 @@ async function GsdCoreSetup(ctx) {
     await v1["tool.execute.after"]({ tool: V2_TOOL_ALIASES.get(ev.tool) ?? ev.tool, args: ev.input }, out);
     ev.result = { ...ev.result, content: isText ? out.output : content, metadata: out.metadata };
   });
+  await ctx.shell.hook("create.before", async (ev) => {
+    currentCwd = dir;
+    try {
+      await v1["shell.env"]({}, { env: ev.env });
+    } catch (err) {
+      console.error(`[gsd-core] shell env hook failed: ${err.message}`);
+    }
+  });
 }
 
 GsdCorePlugin._internals = {

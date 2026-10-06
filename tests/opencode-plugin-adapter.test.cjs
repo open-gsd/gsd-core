@@ -1063,3 +1063,39 @@ test('V1 server() and V2 setup() spawn the same PostToolUse hooks in the same or
   assert.deepEqual(v2Lists.subagent, ['gsd-context-monitor.js']);
   assert.deepEqual(v2Lists.read, ['gsd-read-injection-scanner.js']);
 });
+
+test('V2 shell create.before sets GSD_DIR on the host env object in place, keeps every other key, and is idempotent', async (t) => {
+  const { root, mod } = buildInstalledLayout(t, {});
+  const { setup } = mod;
+  const { hooks, ctx } = fakeV2Ctx(process.cwd());
+  await setup(ctx);
+
+  const env = { PATH: 'p', HOME: 'h', GSD_DIR: 'old' };
+  const ev = { command: 'ls', cwd: '/', env };
+  await hooks['shell.create.before'](ev);
+  await hooks['shell.create.before'](ev);
+  assert.equal(ev.env, env);
+  assert.deepEqual(env, { PATH: 'p', HOME: 'h', GSD_DIR: path.join(root, 'gsd-core') });
+});
+
+test('V2 shell create.before never throws and never creates an env', async (t) => {
+  const errors = [];
+  const realError = console.error;
+  console.error = (...args) => { errors.push(args.join(' ')); };
+  t.after(() => { console.error = realError; });
+  const { mod } = buildInstalledLayout(t, {});
+  const { setup } = mod;
+  const { hooks, ctx } = fakeV2Ctx(process.cwd());
+  await setup(ctx);
+
+  const frozen = Object.freeze({ PATH: 'p' });
+  const frozenEv = { command: 'ls', env: frozen };
+  await assert.doesNotReject(() => hooks['shell.create.before'](frozenEv));
+  assert.equal(frozenEv.env, frozen);
+  assert.equal(Object.hasOwn(frozen, 'GSD_DIR'), false);
+  assert.ok(errors.some((line) => line.startsWith('[gsd-core]')));
+
+  const bareEv = { command: 'ls' };
+  await assert.doesNotReject(() => hooks['shell.create.before'](bareEv));
+  assert.equal(Object.hasOwn(bareEv, 'env'), false);
+});
