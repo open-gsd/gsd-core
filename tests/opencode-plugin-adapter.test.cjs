@@ -811,13 +811,13 @@ const ALL_GUARD_STUBS = Object.fromEntries([
 ].map((name) => [name, stubHook('')]));
 
 // The plugin captures spawnSync at require time, so patch it before loading.
-function loadTracedPlugin(t, stubHooks) {
+function loadTracedPlugin(t, stubHooks, respond = () => ({ stdout: '', status: 0, signal: null })) {
   const cp = require('node:child_process');
   const spawns = [];
   const realSpawnSync = cp.spawnSync;
   cp.spawnSync = (...args) => {
     spawns.push(args);
-    return { stdout: '', status: 0, signal: null };
+    return respond(args);
   };
   t.after(() => { cp.spawnSync = realSpawnSync; });
   const { root, mod } = buildInstalledLayout(t, stubHooks);
@@ -1137,6 +1137,117 @@ test('V2 patch: the worktree guard sees each patched path, and a blocked path fa
   await assert.doesNotReject(() =>
     hooks['tool.execute.before']({ id: 'c2', tool: 'patch', sessionID: 's1', input: { patchText: allowed } }),
   );
+});
+
+const MULTI_PATH_PATCH_LINES = [
+  '*** Begin Patch',
+  '*** Update File: src/a.js',
+  '*** Move to: src/b.js',
+  '@@',
+  '-x',
+  '+y',
+  '*** Add File: /abs/c.js',
+  '+*** Add File: nope',
+  '*** Delete File: src/a.js',
+  '*** End Patch',
+];
+const MULTI_PATH_PATCH = MULTI_PATH_PATCH_LINES.join('\n');
+
+function hookPathPairs(spawns) {
+  return spawns.map((call) => [path.basename(call[1][0]), JSON.parse(call[2].input).tool_input.file_path]);
+}
+
+async function bothHosts(t, respond) {
+  const { mod, spawns } = loadTracedPlugin(t, ALL_GUARD_STUBS, respond);
+  const directory = makeProjectDir(t);
+  const v1 = await mod.server({ directory });
+  const { hooks, ctx } = fakeV2Ctx(directory);
+  await mod.setup(ctx);
+  return {
+    spawns,
+    v1: (patchText) => v1['tool.execute.before']({ tool: 'apply_patch' }, { args: patchText === undefined ? {} : { patchText } }),
+    v2: (patchText) => hooks['tool.execute.before']({
+      id: 'c', tool: 'patch', sessionID: 's1', input: patchText === undefined ? {} : { patchText },
+    }),
+  };
+}
+
+test('patchFilePaths takes Add, Update, Delete and both Move paths, trimmed, in first-seen order without duplicates', () => {
+  const f = _internals.patchFilePaths;
+  assert.deepEqual(f(MULTI_PATH_PATCH), ['src/a.js', 'src/b.js', '/abs/c.js']);
+  assert.deepEqual(f(MULTI_PATH_PATCH_LINES.join('\r\n')), ['src/a.js', 'src/b.js', '/abs/c.js']);
+  assert.deepEqual(f('*** Add File:   spaced name.txt  '), ['spaced name.txt']);
+  for (const empty of ['*** Begin Patch\n*** End Patch', 'not a patch', '*** Add File:   ', undefined, null, 42, {}]) {
+    assert.deepEqual(f(empty), [], JSON.stringify(empty));
+  }
+});
+
+test('V1 apply_patch and V2 patch send the worktree and workflow guards every patched path in the same order', async (t) => {
+  const host = await bothHosts(t);
+  const expected = [
+    ['gsd-worktree-path-guard.js', 'src/a.js'],
+    ['gsd-worktree-path-guard.js', 'src/b.js'],
+    ['gsd-worktree-path-guard.js', '/abs/c.js'],
+    ['gsd-workflow-guard.js', 'src/a.js'],
+    ['gsd-workflow-guard.js', 'src/b.js'],
+    ['gsd-workflow-guard.js', '/abs/c.js'],
+  ];
+  await host.v1(MULTI_PATH_PATCH);
+  assert.deepEqual(hookPathPairs(host.spawns.splice(0)), expected);
+  await host.v2(MULTI_PATH_PATCH);
+  assert.deepEqual(hookPathPairs(host.spawns.splice(0)), expected);
+});
+
+test('a patch stops at the first blocked path on both hosts', async (t) => {
+  const allow = { stdout: '', status: 0, signal: null };
+  const respond = (args) => {
+    const payload = JSON.parse(args[2].input);
+    return path.basename(args[1][0]) === 'gsd-worktree-path-guard.js' && payload.tool_input.file_path === 'src/b.js'
+      ? { stdout: JSON.stringify({ decision: 'block', reason: 'blocked src/b.js' }), status: 2, signal: null }
+      : allow;
+  };
+  const host = await bothHosts(t, respond);
+  const expected = [['gsd-worktree-path-guard.js', 'src/a.js'], ['gsd-worktree-path-guard.js', 'src/b.js']];
+  for (const run of [host.v1, host.v2]) {
+    await assert.rejects(() => run(MULTI_PATH_PATCH), /blocked src\/b\.js/);
+    assert.deepEqual(hookPathPairs(host.spawns.splice(0)), expected);
+  }
+});
+
+test('a patch with no file header runs the worktree and workflow guards once with no file_path', async (t) => {
+  const host = await bothHosts(t);
+  for (const patchText of ['*** Begin Patch\n*** End Patch', 'not a patch', undefined]) {
+    for (const run of [host.v1, host.v2]) {
+      await run(patchText);
+      const calls = host.spawns.splice(0);
+      assert.deepEqual(spawnedHooks(calls), ['gsd-worktree-path-guard.js', 'gsd-workflow-guard.js'], String(patchText));
+      for (const call of calls) {
+        assert.equal(Object.hasOwn(JSON.parse(call[2].input).tool_input, 'file_path'), false);
+      }
+    }
+  }
+});
+
+test('V1 write, edit and bash send the guards the same payloads as before', async (t) => {
+  const { mod, spawns } = loadTracedPlugin(t, ALL_GUARD_STUBS);
+  const directory = makeProjectDir(t);
+  const F = path.join(directory, 'notes.md');
+  const v1 = await mod.server({ directory });
+  const cases = [
+    ['write', { filePath: F, content: 'x' }, ['gsd-prompt-guard.js', 'gsd-read-guard.js', 'gsd-worktree-path-guard.js', 'gsd-write-guard.js', 'gsd-workflow-guard.js'], F],
+    ['edit', { filePath: F, oldString: 'a', newString: 'b' }, ['gsd-prompt-guard.js', 'gsd-read-guard.js', 'gsd-worktree-path-guard.js', 'gsd-workflow-guard.js'], F],
+    ['bash', { command: 'ls' }, ['gsd-workflow-guard.js', 'gsd-secret-read-guard.js'], undefined],
+  ];
+  for (const [tool, args, hooks, filePath] of cases) {
+    await v1['tool.execute.before']({ tool }, { args });
+    const calls = spawns.splice(0);
+    assert.deepEqual(spawnedHooks(calls), hooks, tool);
+    for (const call of calls) {
+      const toolInput = JSON.parse(call[2].input).tool_input;
+      if (filePath === undefined) assert.equal(Object.hasOwn(toolInput, 'file_path'), false, tool);
+      else assert.equal(toolInput.file_path, filePath, tool);
+    }
+  }
 });
 
 test('patchFilePaths takes a header indented by any whitespace the host trims from a patch line', () => {
