@@ -25,6 +25,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('os');
+const fc = require('fast-check');
 const { cleanup } = require('./helpers.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -116,6 +117,47 @@ test('mapToolInput normalizes camelCase + snake_case arg keys', () => {
   assert.equal(_internals.mapToolInput({ glob: '**/*.ts' }).glob, '**/*.ts');
   assert.equal('glob' in _internals.mapToolInput({ command: 'ls' }), false);
   assert.deepEqual(_internals.mapToolInput(null), {});
+});
+
+const CLAUDE_TOOL_INPUT_KEYS = ['file_path', 'content', 'new_string', 'old_string', 'command', 'glob', 'url', 'query'];
+
+test('mapToolInput property: never throws and only emits Claude tool_input keys for any value', () => {
+  fc.assert(
+    fc.property(fc.anything(), (value) => {
+      const out = _internals.mapToolInput(value);
+      assert.equal(Object.getPrototypeOf(out), Object.prototype);
+      for (const key of Object.keys(out)) assert.ok(CLAUDE_TOOL_INPUT_KEYS.includes(key), key);
+      if (value === null || typeof value !== 'object') assert.deepEqual(out, {});
+    }),
+    { seed: 4918, numRuns: 200, verbose: true },
+  );
+});
+
+test('mapToolInput property: maps OpenCode 1.x and 2.x tool args to Claude tool_input with path/filePath to file_path', () => {
+  const fields = [
+    'filePath', 'path', 'file_path', 'content', 'oldString', 'newString', 'old_string', 'new_string', 'replaceAll',
+    'command', 'workdir', 'timeout', 'glob', 'include', 'pattern', 'url', 'format', 'query', 'patchText', 'offset', 'limit',
+  ];
+  const valueArb = fc.oneof(fc.string(), fc.constantFrom('', 0, false, null, undefined), fc.integer());
+  const argsArb = fc.record(Object.fromEntries(fields.map((f) => [f, valueArb])), { requiredKeys: [] });
+  fc.assert(
+    fc.property(argsArb, (args) => {
+      const expected = {};
+      const filePath = args.filePath || args.path || args.file_path;
+      if (filePath) expected.file_path = filePath;
+      for (const key of ['content', 'command', 'url', 'query']) {
+        if (args[key] !== undefined) expected[key] = args[key];
+      }
+      const newString = args.newString !== undefined ? args.newString : args.new_string;
+      if (newString !== undefined) expected.new_string = newString;
+      const oldString = args.oldString !== undefined ? args.oldString : args.old_string;
+      if (oldString !== undefined) expected.old_string = oldString;
+      const glob = args.glob ?? args.include;
+      if (glob !== undefined) expected.glob = glob;
+      assert.deepEqual(_internals.mapToolInput(args), expected);
+    }),
+    { seed: 4919, numRuns: 200, verbose: true },
+  );
 });
 
 test('parseFrontmatter splits frontmatter and body', () => {
@@ -1364,6 +1406,70 @@ test('patchFilePaths takes a header indented by any whitespace the host trims fr
     assert.deepEqual(f(body), [], JSON.stringify(body));
   }
   assert.deepEqual(f('*** Add File: /outside/a\rb.js'), ['/outside/a\rb.js']);
+});
+
+const patchWhitespaceArb = fc
+  .array(fc.constantFrom(' ', '\t', '\v', '\f', '\r', ' ', '﻿', '　', ' '), { maxLength: 3 })
+  .map((chars) => chars.join(''));
+const singleLineArb = fc.string({ unit: 'binary' }).filter((s) => !s.includes('\n'));
+const patchPathArb = fc.oneof(
+  fc.constantFrom('src/a.js', 'src/b.js', '/abs/c.js', 'dir with space/d.txt', '../up/e.js'),
+  fc.string({ unit: 'binary', minLength: 1, maxLength: 24 }).filter((s) => !s.includes('\n') && s === s.trim()),
+);
+const patchHeaderArb = fc
+  .record({
+    kind: fc.constantFrom('Add File', 'Update File', 'Delete File', 'Move to'),
+    lead: patchWhitespaceArb,
+    gap: patchWhitespaceArb,
+    tail: patchWhitespaceArb,
+    path: patchPathArb,
+  })
+  .map(({ kind, lead, gap, tail, path: p }) => ({ text: `${lead}*** ${kind}: ${gap}${p}${tail}`, path: p }));
+// No context lines (leading space): every line is trimmed, so a context line holding a header is extracted on purpose.
+const patchBodyLineArb = fc.oneof(
+  fc.constantFrom('@@', '*** End of File'),
+  fc
+    .tuple(fc.constantFrom('+', '-', '@@ '), fc.oneof(patchHeaderArb.map((h) => h.text), singleLineArb))
+    .map(([prefix, rest]) => prefix + rest),
+);
+
+test('patchFilePaths property: takes every header path of a generated patch, in first-seen order without duplicates, and never a body line', () => {
+  const itemArb = fc.oneof(patchHeaderArb, patchBodyLineArb.map((text) => ({ text })));
+  fc.assert(
+    fc.property(fc.array(itemArb, { maxLength: 12 }), fc.constantFrom('\n', '\r\n'), (items, eol) => {
+      const text = ['*** Begin Patch', ...items.map((i) => i.text), '*** End Patch'].join(eol);
+      const expected = [...new Set(items.filter((i) => 'path' in i).map((i) => i.path))];
+      assert.deepEqual(_internals.patchFilePaths(text), expected, JSON.stringify(text));
+    }),
+    { seed: 4916, numRuns: 200, verbose: true },
+  );
+});
+
+test('patchFilePaths property: never throws and returns unique, trimmed, non-empty single-line paths for any input', () => {
+  fc.assert(
+    fc.property(fc.anything().filter((v) => typeof v !== 'string'), (value) => {
+      assert.deepEqual(_internals.patchFilePaths(value), []);
+    }),
+    { seed: 4917, numRuns: 200, verbose: true },
+  );
+  const textArb = fc.oneof(
+    fc.string({ unit: 'binary' }),
+    fc.array(fc.oneof(patchHeaderArb.map((h) => h.text), fc.string({ unit: 'binary' }))).map((lines) => lines.join('\n')),
+  );
+  fc.assert(
+    fc.property(textArb, (text) => {
+      const out = _internals.patchFilePaths(text);
+      assert.ok(Array.isArray(out));
+      assert.equal(new Set(out).size, out.length);
+      assert.ok(out.length <= text.split('\n').length);
+      for (const p of out) {
+        assert.ok(p.length > 0);
+        assert.equal(p, p.trim());
+        assert.equal(p.includes('\n'), false);
+      }
+    }),
+    { seed: 4917, numRuns: 200, verbose: true },
+  );
 });
 
 test('a patch header indented by a space or a tab still reaches the worktree guard on both hosts', async (t) => {
