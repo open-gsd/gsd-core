@@ -585,8 +585,9 @@ jobs:
   # timeout and was CANCELLED (started 03:41:19Z, cancelled 04:26:25Z, run
   # 34434252144) while macos-latest finished the identical file set in
   # 26m58s — this conformance tier is dominated by subprocess-spawning tests
-  # (343/565 files). macos-latest stays unsharded; it has real headroom (27m
-  # against the 45m cap).
+  # (343/565 files). macos-latest is sharded 3 ways since #5029: unsharded it
+  # ran 18-27m on a normal runner, but 39m43s on a slow one (run 37086102648),
+  # ~5m from the same cap — see the macOS comment in the matrix below.
   test-conformance:
     name: conformance test (${{ matrix.os }}, ${{ matrix.node-version }}${{ matrix.shard && format(', shard {0}', matrix.shard) || '' }})
     needs: [changes, preflight]
@@ -602,9 +603,9 @@ jobs:
     # the cliff #869 and #3057 were both filed about).
     #
     # This cap is now GUARDED: #5029 gave the lane its first LANE_COSTS entry
-    # in tests/ci-test-job-timeout-budget.test.cjs (27m measured on the
-    # macos-latest row, which outruns every windows shard, so this cap may not
-    # drop below 41m). It had been uncovered since #4591, which is how
+    # in tests/ci-test-job-timeout-budget.test.cjs, measured on whichever row
+    # (windows or macos shard) is slowest; the entry states the figure and the
+    # floor it puts under this cap. It had been uncovered since #4591, which is how
     # it drifted to a 34m long pole here in the first place.
     timeout-minutes: 45
     env:
@@ -669,9 +670,28 @@ jobs:
             node-version: 24
             shell: pwsh
             shard: 6/6
+          # #5029: macos-latest shares this job's single 45m cap. Unsharded it
+          # ran 18-27m on normal runners (p90 26.0m over 43 runs, 09-30..10-04,
+          # tests/ci-timeout-budget-history.jsonl) but 39m43s on a slow one (run
+          # 37086102648, every chunk 1.1-2.1x slower, same 228-file tier) — m=40
+          # requires 60m, so the row could not meet the budget gate unsplit.
+          # Three shards, not two, for margin as the tier grows. No darwin
+          # timing table exists yet, so the packer weighs macOS files with the
+          # Linux table (expect the pre-#5097 Windows imbalance, ~1.2-1.3); a
+          # tests/test-timings.darwin.json built from the uploaded
+          # test-timings-macos-latest-job* artifacts would tighten it.
           - os: macos-latest
             node-version: 24
             shell: 'zsh {0}'
+            shard: 1/3
+          - os: macos-latest
+            node-version: 24
+            shell: 'zsh {0}'
+            shard: 2/3
+          - os: macos-latest
+            node-version: 24
+            shell: 'zsh {0}'
+            shard: 3/3
 
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1 (Windows)
