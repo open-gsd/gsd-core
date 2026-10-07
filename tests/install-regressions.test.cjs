@@ -2466,6 +2466,44 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
       'writeManifest records gsd-dev-preferences once it exists');
   });
 
+  test('gsd-dev-preferences that an old manifest records survives the Hermes flat-root and Claude local stale-skills cleanups', (t) => {
+    const root = createTempDir('gsd-5161-devprefs-cleanup-');
+    t.after(() => cleanup(root));
+    const runOpts = (cwd) => ({ cwd, env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS });
+    const PREFS = '---\nname: gsd-dev-preferences\n---\nPREFS\n';
+    // Seed the dir and record it in the manifest, as an install that wrote the old layout would have.
+    const seedRecorded = (configDir, skillsDir) => {
+      fs.mkdirSync(path.join(skillsDir, 'gsd-dev-preferences'), { recursive: true });
+      fs.writeFileSync(path.join(skillsDir, 'gsd-dev-preferences', 'SKILL.md'), PREFS);
+      const manifestPath = path.join(configDir, 'gsd-file-manifest.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      manifest.files['skills/gsd-dev-preferences/SKILL.md'] = crypto.createHash('sha256').update(PREFS).digest('hex');
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    };
+
+    // Hermes: the pre-#2841 flat skills/ root.
+    const hermesDir = path.join(root, '.hermes');
+    const h1 = runNode([INSTALL_SCRIPT, '--hermes', '--global', '--config-dir', hermesDir], runOpts(root));
+    assert.strictEqual(h1.exitCode, 0, `hermes install failed: ${h1.stdout}\n${h1.stderr}`);
+    seedRecorded(hermesDir, path.join(hermesDir, 'skills'));
+    const h2 = runNode([INSTALL_SCRIPT, '--hermes', '--global', '--config-dir', hermesDir], runOpts(root));
+    assert.strictEqual(h2.exitCode, 0, `hermes update failed: ${h2.stdout}\n${h2.stderr}`);
+    assert.strictEqual(fs.readFileSync(path.join(hermesDir, 'skills', 'gsd-dev-preferences', 'SKILL.md'), 'utf8'), PREFS,
+      'the Hermes flat-root cleanup must not delete gsd-dev-preferences, even manifest-recorded');
+
+    // Claude local: the stale project skills/ cleanup.
+    const projectDir = path.join(root, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const claudeDir = path.join(projectDir, '.claude');
+    const c1 = runNode([INSTALL_SCRIPT, '--claude', '--local'], runOpts(projectDir));
+    assert.strictEqual(c1.exitCode, 0, `claude local install failed: ${c1.stdout}\n${c1.stderr}`);
+    seedRecorded(claudeDir, path.join(claudeDir, 'skills'));
+    const c2 = runNode([INSTALL_SCRIPT, '--claude', '--local'], runOpts(projectDir));
+    assert.strictEqual(c2.exitCode, 0, `claude local update failed: ${c2.stdout}\n${c2.stderr}`);
+    assert.strictEqual(fs.readFileSync(path.join(claudeDir, 'skills', 'gsd-dev-preferences', 'SKILL.md'), 'utf8'), PREFS,
+      'the Claude local stale-skills/ cleanup must not delete gsd-dev-preferences, even manifest-recorded');
+  });
+
   test('global: GSD-owned gsd-* skill dirs are still replaced or pruned (non-vacuity control)', (t) => {
     const root = createTempDir('gsd-5161-owned-');
     t.after(() => cleanup(root));

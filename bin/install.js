@@ -11975,7 +11975,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       const prefixed = fs.readdirSync(staleSkillsDir, { withFileTypes: true })
         .filter(e => (e.isDirectory() || e.isSymbolicLink()) && e.name.startsWith('gsd-'))
         .map(e => ({ name: e.name, isDir: e.isDirectory(), owned: ownsSkillDir(e.name) }));
-      const staleGsd = prefixed.filter(e => e.isDir && e.owned);
+      // gsd-dev-preferences is user content even when an old manifest records
+      // it, and nothing here restores it (#2973), so it is never removed.
+      const staleGsd = prefixed.filter(e => e.isDir && e.owned && !USER_OWNED_SKILL_DIRS.includes(e.name));
       for (const e of staleGsd) {
         fs.rmSync(path.join(staleSkillsDir, e.name), { recursive: true });
       }

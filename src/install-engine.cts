@@ -1104,7 +1104,9 @@ function _runLegacyInstallMigrations(runtime: string, configDir: string, scope: 
           continue;
         }
         if (!entry.isDirectory()) continue;
-        if (!ownsSkillDir(entry.name)) {
+        // gsd-dev-preferences is user content even when an old manifest records
+        // it, and nothing here restores it (#2973), so it is never removed.
+        if (!ownsSkillDir(entry.name) || USER_OWNED_SKILL_DIRS.includes(entry.name)) {
           kept.push(entry.name);
           continue;
         }
