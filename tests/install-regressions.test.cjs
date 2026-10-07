@@ -2525,6 +2525,49 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
       'the reported count is the skills GSD installed, not every gsd-* dir present');
   });
 
+  test('writeManifest ownership: an unreadable install source carries the previous manifest forward and adds no unrecorded user dir', (t) => {
+    const { createSkillDirOwnership } = require('../gsd-core/bin/lib/install-engine.cjs');
+    const { withInstallFs } = require('../gsd-core/bin/lib/install-fs-adapter.cjs');
+    const { CAPABILITY_SKILL_MARKER } = require('../gsd-core/bin/lib/install-profiles.cjs');
+    const root = createTempDir('gsd-5161-unresolved-');
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, '.claude');
+    const skillsDir = path.join(configDir, 'skills');
+    for (const name of ['gsd-recorded-5161', 'gsd-user-5161', 'gsd-cap-5161']) {
+      fs.mkdirSync(path.join(skillsDir, name), { recursive: true });
+      fs.writeFileSync(path.join(skillsDir, name, 'SKILL.md'), USER_SKILL);
+    }
+    fs.writeFileSync(path.join(skillsDir, 'gsd-cap-5161', CAPABILITY_SKILL_MARKER), 'cap\n');
+    fs.writeFileSync(path.join(configDir, 'gsd-file-manifest.json'),
+      JSON.stringify({ version: '0.0.0', files: { 'skills/gsd-recorded-5161/SKILL.md': 'deadbeef' } }));
+    const opts = { includeManifest: false, manifestIfSourceUnresolved: true };
+
+    // Every install-source read fails: no first-party leg can be built. Real fs for the
+    // rest — the guarded adapter refuses a partial one that falls through.
+    const unreadable = {
+      ...fs,
+      readdirSync: (p, ...rest) => {
+        if (String(p).endsWith(path.join('commands', 'gsd'))) {
+          throw Object.assign(new Error(`EACCES: permission denied, scandir '${p}'`), { code: 'EACCES' });
+        }
+        return fs.readdirSync(p, ...rest);
+      },
+    };
+    const warn = t.mock.method(console, 'warn', () => {});
+    const owns = withInstallFs(unreadable, () => createSkillDirOwnership('claude', configDir, skillsDir, 'gsd-', opts));
+    assert.ok(warn.mock.calls.some((c) => /could not read the install source/.test(String(c.arguments[0]))),
+      'precondition: the install source was unresolved');
+    assert.strictEqual(owns('gsd-recorded-5161'), true, 'a dir the previous manifest recorded stays recorded');
+    assert.strictEqual(owns('gsd-cap-5161'), true, 'a capability-marked dir is still GSD-owned');
+    assert.strictEqual(owns('gsd-user-5161'), false,
+      'a user dir the previous manifest does not record must not be added: the next install would read it back as GSD-owned and delete it');
+
+    // Control: with a readable source the manifest leg stays off, as includeManifest:false says.
+    const ownsReadable = createSkillDirOwnership('claude', configDir, skillsDir, 'gsd-', opts);
+    assert.strictEqual(ownsReadable('gsd-help'), true, 'control: the first-party leg resolves');
+    assert.strictEqual(ownsReadable('gsd-recorded-5161'), false, 'control: the previous manifest does not vouch for itself');
+  });
+
   test('hermes: the pre-#2841 flat skills/ cleanup keeps a user gsd-* skill and still removes first-party ones', (t) => {
     const root = createTempDir('gsd-5161-hermes-');
     t.after(() => cleanup(root));

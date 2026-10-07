@@ -889,19 +889,23 @@ const USER_OWNED_SKILL_DIRS: readonly string[] = ['gsd-dev-preferences'];
  * dir recorded into the manifest would read back as GSD-owned on the next
  * install and be deleted then.
  *
- * `ownAllIfSourceUnresolved` is the answer when the install source cannot be
- * read, and the safe answer differs by caller. A prune passes false: it keeps
- * every unproven dir, and the dirs it is about to rewrite are owned by the
- * caller's staged leg anyway. writeManifest passes true: dropping every
- * first-party skill from the manifest is the worse failure, so it records what
- * it found exactly as it did before #5161.
+ * `manifestIfSourceUnresolved` is writeManifest's answer when the install
+ * source cannot be read, which leaves no first-party leg. It turns the manifest
+ * leg back on for that case only, so the dirs the previous install recorded
+ * stay recorded and the fallback adds no dir the previous manifest does not
+ * already record (beyond capability-marked ones). Owning every dir instead
+ * would record a user's kept dir, and the next install would read it back as
+ * GSD-owned and delete it: the #5161 failure, reached through a fallback. The
+ * cost is a skill first shipped by this release going unrecorded until the
+ * next install with a readable source. A prune never needs the flag: it keeps
+ * every dir it cannot otherwise prove, and its manifest leg is already on.
  */
 function createSkillDirOwnership(
   runtime: string,
   configDir: string,
   skillsDir: string,
   prefix: string,
-  opts: { includeManifest?: boolean; ownAllIfSourceUnresolved?: boolean; manifestPrefix?: string } = {},
+  opts: { includeManifest?: boolean; manifestIfSourceUnresolved?: boolean; manifestPrefix?: string } = {},
 ): (name: string) => boolean {
   // First-party stems come from BOTH the configDir-resolved source and the
   // executing package's own source. Staging resolves its provider with the
@@ -928,12 +932,11 @@ function createSkillDirOwnership(
   }
   if (!sourceResolved) {
     console.warn(
-      `  [gsd] could not read the install source to classify ${skillsDir} (${(lastError as Error)?.message}) — ${opts.ownAllIfSourceUnresolved ? 'treating every gsd- skill dir as GSD-owned' : 'keeping every gsd- skill dir GSD cannot otherwise prove it owns'}.`,
+      `  [gsd] could not read the install source to classify ${skillsDir} (${(lastError as Error)?.message}) — ${opts.manifestIfSourceUnresolved ? 'treating as GSD-owned only the gsd- skill dirs the previous install manifest records or that carry the capability-skill marker' : 'keeping every gsd- skill dir GSD cannot otherwise prove it owns'}.`,
     );
   }
-  if (!sourceResolved && opts.ownAllIfSourceUnresolved) return (): boolean => true;
   const manifestNames = new Set<string>();
-  if (opts.includeManifest !== false) {
+  if (opts.includeManifest !== false || (!sourceResolved && opts.manifestIfSourceUnresolved === true)) {
     // The prefix must describe the root being pruned: a manifest name under one
     // root says nothing about a same-named dir under another (Hermes' flat
     // pre-#2841 root vs its nested skills/gsd/ root).

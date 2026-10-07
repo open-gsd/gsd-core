@@ -10195,9 +10195,11 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
     // #5161: record only skill dirs GSD owns. A user's gsd-* dir the prune
     // preserved must not enter the manifest, or the next install reads it back
     // as GSD-owned and deletes it. includeManifest:false keeps the previous
-    // manifest from vouching for itself; ownAllIfSourceUnresolved keeps an
-    // unreadable install source from dropping every GSD skill from the manifest.
-    const ownsSkillDir = createSkillDirOwnership(runtime, configDir, codexSkillsDir, skillListPrefix, { includeManifest: false, ownAllIfSourceUnresolved: true });
+    // manifest from vouching for itself; manifestIfSourceUnresolved keeps an
+    // unreadable install source from dropping every GSD skill from the manifest
+    // by carrying the previous manifest's entries forward instead of recording
+    // every gsd-* dir present.
+    const ownsSkillDir = createSkillDirOwnership(runtime, configDir, codexSkillsDir, skillListPrefix, { includeManifest: false, manifestIfSourceUnresolved: true });
     for (const skillName of listCodexSkillNames(codexSkillsDir, skillListPrefix)) {
       if (!ownsSkillDir(skillName) && !USER_OWNED_SKILL_DIRS.includes(skillName)) continue;
       const skillRoot = path.join(codexSkillsDir, skillName);
