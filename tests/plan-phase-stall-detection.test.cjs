@@ -1110,21 +1110,24 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     }
   });
 
-  test('AC5: identical results on a host with a transcript output file and on a host with none', (t) => {
+  // The call-site half of AC5 (all five sites bind {receipt}, none {outputFile})
+  // is the "AC1 wiring" row above; this row is the behavioral half.
+  test('AC5: a host transcript or a missing host output is never a return; only the receipt ends the wait', (t) => {
     const f = fixture(t);
     const checker = watchCallOf(sectionOf(readPlanPhase(), CHECKER_SECTION));
-    // Bind arg 2 exactly as the shipped call site does: {outputFile} is the host's
-    // output (a transcript on Claude Code, nothing elsewhere); {receipt} is GSD's.
-    const bind = (hostOutput) => (checker.token === '{outputFile}' ? hostOutput : f.receipt);
+    assert.ok(fs.readFileSync(f.transcript, 'utf8').includes('## VERIFICATION PASSED'),
+      'precondition: the transcript contains the checker marker text, so a watch that searched it for that text would find it');
+    // Argument 2 given each host's output in place of a receipt: neither one is
+    // treated as a return, before or past the threshold.
     const missing = path.join(f.dir, 'no-such-output');
-    for (const elapsed of [60, 11 * 60]) {
-      const claudeCode = watch(NOW - elapsed, bind(f.transcript), f.noPlans, checker.markers);
-      const noOutputHost = watch(NOW - elapsed, bind(missing), f.noPlans, checker.markers);
-      assert.equal(claudeCode, noOutputHost, `elapsed ${elapsed}s: host output must not change the result`);
+    for (const hostOutput of [f.transcript, missing]) {
+      const host = path.basename(hostOutput);
+      assert.equal(watch(NOW - 60, hostOutput, f.noPlans, checker.markers), 'waiting', `${host}: before the threshold`);
+      assert.equal(watch(NOW - 11 * 60, hostOutput, f.noPlans, checker.markers), 'stalled', `${host}: past the threshold`);
     }
+    // Only the receipt ends the wait.
     fs.writeFileSync(f.receipt, '## VERIFICATION PASSED\n');
-    assert.equal(watch(NOW - 60, bind(f.transcript), f.noPlans, checker.markers),
-      watch(NOW - 60, bind(missing), f.noPlans, checker.markers));
+    assert.equal(watch(NOW - 60, f.receipt, f.noPlans, checker.markers), 'marker_received');
   });
 
   test('gsd_return_marker: line-start literal match, CR-tolerant, empty on anything else', (t) => {
