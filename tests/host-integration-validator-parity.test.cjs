@@ -9,7 +9,9 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
+const { runGsdTools, createTempDir, cleanup } = require('./helpers.cjs');
 // Seeded fast-check convention: the shared setup helper (seed 42, numRuns 200,
 // GSD_FC_SEED to explore), never 'fast-check' directly.
 const fc = require('./helpers/fast-check-setup.cjs');
@@ -555,7 +557,6 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
     // would otherwise leave every other test green while these lists reject
     // it and fail the dispatch closed. Sites are DISCOVERED, not listed, so a
     // new copy that names a worktree mode is pinned the day it lands.
-    const fs = require('node:fs');
     const root = path.join(__dirname, '../gsd-core');
     const members = new Set(DISPATCH_ISOLATION_MODES);
     const found = [];
@@ -710,6 +711,46 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
         (err) => err instanceof Error && err.message.includes(`--mode must be ${expectedList}`),
         `--mode ${rejected} must be refused with the owner-derived list`,
       );
+    }
+  });
+
+  test('a lib built before the owner existed: unrelated gsd-tools commands still run, and a verb that needs the owner names the build:lib remedy', (t) => {
+    // ensureRuntimeBuild's fast path keys on one sentinel, so a lib compiled
+    // before src/dispatch-isolation.cts existed reads as built. Reproduce that
+    // tree with a preload that refuses the owner to the two HAND-WRITTEN
+    // consumers only; a stale tree's compiled siblings predate the owner and
+    // never ask for it.
+    const tmp = createTempDir('gsd-4561-stale-lib-');
+    t.after(() => cleanup(tmp));
+    const preload = path.join(tmp, 'hide-owner.cjs');
+    fs.writeFileSync(preload, [
+      "const Module = require('module');",
+      'const orig = Module._resolveFilename;',
+      'Module._resolveFilename = function (request, parent, ...rest) {',
+      "  if (/dispatch-isolation\\.cjs$/.test(request) && parent && /(gsd-tools|capability-validator)\\.cjs$/.test(parent.filename || '')) {",
+      "    const e = new Error(`Cannot find module '${request}'`); e.code = 'MODULE_NOT_FOUND'; throw e;",
+      '  }',
+      '  return orig.call(this, request, parent, ...rest);',
+      '};',
+      '',
+    ].join('\n'));
+    const env = { NODE_OPTIONS: `--require ${JSON.stringify(preload)}` };
+
+    const unrelated = runGsdTools(['current-timestamp', '--raw'], tmp, env);
+    assert.equal(unrelated.success, true, `a command that never touches the owner must still run on that tree: ${unrelated.error}`);
+
+    // The query and inspect verbs too: their resolver turns errors into a
+    // successful `none`, and dispatch-isolation-gate.md reads rc 0 + `none` as
+    // "the runtime declares no isolation primitive". A stale lib is a failure
+    // to resolve, so it must exit non-zero instead.
+    for (const verb of [
+      ['record-dispatch-isolation', '--isolation', 'none'],
+      ['query', 'dispatch-isolation', '--raw'],
+      ['query', 'inspect-dispatch-isolation', '--raw'],
+    ]) {
+      const needsOwner = runGsdTools(verb, tmp, env);
+      assert.equal(needsOwner.success, false, `${verb.join(' ')} cannot answer without the owner: ${needsOwner.output}`);
+      assert.match(needsOwner.error, /dispatch-isolation\.cjs is missing[\s\S]*npm run build:lib/, `${verb.join(' ')} names the remedy, not a bare Cannot find module`);
     }
   });
 });

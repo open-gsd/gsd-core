@@ -2262,12 +2262,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   function baseCheckDegrades(cwd, isolationMode) {
     try {
       // #4630 child 1 — the base-check subset is READ FROM THE OWNER, not
-      // re-stated here. Required inside this existing `try`, beside
+      // re-stated here. Loaded inside this existing `try`, beside
       // worktree-base-ref.cjs, so an unbuilt runtime lib takes the same
       // warn-and-`false` fallback the evaluation itself does; there is
       // deliberately no catch-side literal, which would be a fresh copy of
       // the very thing the seam removes.
-      const { isBaseCheckIsolationMode } = require('./lib/dispatch-isolation.cjs');
+      const { isBaseCheckIsolationMode } = dispatchIsolationOwner();
       if (!isBaseCheckIsolationMode(isolationMode)) return false;
       const { evaluateWorktreeBaseDegradeForCwd } = require('./lib/worktree-base-ref.cjs');
       const evaluation = evaluateWorktreeBaseDegradeForCwd(cwd, isolationMode);
@@ -2347,7 +2347,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // neither applies to sequential dispatch.
     const forceIdx = args.indexOf('--force-isolation');
     const forcedIsolation = forceIdx !== -1 ? args[forceIdx + 1] : undefined;
-    if (forcedIsolation && DISPATCH_ISOLATION_VOCABULARY.has(forcedIsolation)) {
+    if (forcedIsolation && dispatchIsolationOwner().DISPATCH_ISOLATION_VOCABULARY.has(forcedIsolation)) {
       isolation = forcedIsolation;
       if (isolation === 'none') {
         harnessFlag = null;
@@ -2458,7 +2458,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // The reader is the guards' own (hooks/lib/isolation-sentinel.js), so
     // "fresh and well-formed" here is byte-for-byte what the guard will
     // honour at dispatch time — a second definition would let the two drift.
-    const forcedApplied = Boolean(forcedIsolation && DISPATCH_ISOLATION_VOCABULARY.has(forcedIsolation));
+    const forcedApplied = Boolean(forcedIsolation && dispatchIsolationOwner().DISPATCH_ISOLATION_VOCABULARY.has(forcedIsolation));
     const heldDegrade = !forcedApplied
       ? heldDegradeRecord(cwd, { phase: phaseArg, plan: planArg })
       : null;
@@ -2756,10 +2756,33 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   // #4561: the closed vocabulary has ONE owner — src/dispatch-isolation.cts,
-  // compiled to ./lib/dispatch-isolation.cjs (reachable here: this file's
-  // bootstrap ran ensureRuntimeBuild before any route handler). Previously a
-  // hand-written Set, one of eight uncross-checked copies.
-  const { DISPATCH_ISOLATION_VOCABULARY } = require('./lib/dispatch-isolation.cjs');
+  // compiled to ./lib/dispatch-isolation.cjs. Previously a hand-written Set,
+  // one of eight uncross-checked copies.
+  //
+  // Loaded on first use, never at module load. This is module scope, so a
+  // top-level require ran on EVERY gsd-tools command, and the bootstrap's
+  // ensureRuntimeBuild cannot cover the gap: its fast path keys on a single
+  // sentinel, so a lib compiled before this module existed reads as built and
+  // every command died on a bare `Cannot find module`. Loaded lazily, only the
+  // dispatch-isolation verbs need the owner, and they get the remedy named —
+  // the same error capability-validator.cjs raises for the same exposure.
+  let _dispatchIsolationOwner;
+  function dispatchIsolationOwner() {
+    if (_dispatchIsolationOwner === undefined) {
+      try {
+        _dispatchIsolationOwner = require('./lib/dispatch-isolation.cjs');
+      } catch (err) {
+        if (err && err.code === 'MODULE_NOT_FOUND' && /dispatch-isolation\.cjs/.test(String(err.message))) {
+          throw new Error(
+            'gsd-tools: the compiled runtime lib ./lib/dispatch-isolation.cjs is missing — this tree was built '
+            + 'before src/dispatch-isolation.cts existed. Run `npm run build:lib` (#4561).',
+          );
+        }
+        throw err;
+      }
+    }
+    return _dispatchIsolationOwner;
+  }
 
   /**
    * Shared, side-effect-free resolution of the negotiated dispatch isolation:
@@ -2773,6 +2796,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * recorded to the sentinel.
    */
   function resolveDispatchIsolationDecision({ args, cwd }) {
+    // Load the owner BEFORE the try below. Its catch turns any failure into a
+    // successful `none`, which dispatch-isolation-gate.md reads as "the runtime
+    // declares no isolation primitive" (#2652 keeps those distinguishable). A
+    // lib built before the owner existed is a failure to resolve, so it must
+    // exit non-zero with the build:lib remedy, never answer `none`.
+    dispatchIsolationOwner();
     let isolation = 'none';
     let runtimeId = null;
     let exec = null;
@@ -2799,7 +2828,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
         ? registry.runtimes[runtimeId]
         : null;
       const declared = runtimeEntry?.runtime?.hostIntegration?.dispatch?.isolation ?? null;
-      if (typeof declared === 'string' && DISPATCH_ISOLATION_VOCABULARY.has(declared)) {
+      if (typeof declared === 'string' && dispatchIsolationOwner().DISPATCH_ISOLATION_VOCABULARY.has(declared)) {
         isolation = declared;
       }
 
@@ -3120,7 +3149,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // Output: { recorded: true|false, path, error? }
     // #4561: the same owner `routeDispatchIsolation` validates against — the
     // two verbs can no longer disagree on what a mode is.
-    const VALID_ISOLATION = DISPATCH_ISOLATION_VOCABULARY;
+    const VALID_ISOLATION = dispatchIsolationOwner().DISPATCH_ISOLATION_VOCABULARY;
     const isoIdx = args.indexOf('--isolation');
     const isolation = isoIdx !== -1 ? args[isoIdx + 1] : undefined;
     if (!isolation || !VALID_ISOLATION.has(isolation)) {
