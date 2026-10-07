@@ -2410,6 +2410,8 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
       'the preserved user skill must be byte-identical');
     assert.ok((r1.stdout + r1.stderr).includes(userSkillPath),
       'the install output must name the preserved dir by path');
+    assert.ok(!(r1.stdout + r1.stderr).includes(`Preserved ${path.join(skillsDir, 'gsd-dev-preferences')}`),
+      'gsd-dev-preferences is GSD-special-cased, never named as a dir GSD does not own');
     const manifest1 = readManifestFiles(configDir);
     assert.ok(!Object.keys(manifest1).some((k) => k.startsWith('skills/gsd-mine/')),
       'a preserved user skill must not be recorded as GSD-owned — the next install would delete it');
@@ -2427,6 +2429,31 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
       '---\nname: gsd-dev-preferences\n---\nPREFS\n');
     assert.strictEqual(fs.readFileSync(path.join(skillsDir, 'xr-mine', 'SKILL.md'), 'utf8'),
       '---\nname: xr-mine\n---\nNOT GSD\n');
+  });
+
+  test('global: gsd-dev-preferences generated after an install is restored on update without a preserved-dir warning', (t) => {
+    const root = createTempDir('gsd-5161-devprefs-');
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, '.claude');
+    const skillsDir = path.join(configDir, 'skills');
+    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+
+    const r1 = runNode([INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r1.exitCode, 0, `install failed: ${r1.stdout}\n${r1.stderr}`);
+    // Generated after the install, so the manifest that install wrote does not record it.
+    const devPrefs = path.join(skillsDir, 'gsd-dev-preferences');
+    const PREFS = '---\nname: gsd-dev-preferences\n---\nPREFS\n';
+    fs.mkdirSync(devPrefs, { recursive: true });
+    fs.writeFileSync(path.join(devPrefs, 'SKILL.md'), PREFS);
+    assert.ok(!Object.keys(readManifestFiles(configDir)).some((k) => k.startsWith('skills/gsd-dev-preferences/')),
+      'precondition: the previous manifest does not record gsd-dev-preferences');
+
+    const r2 = runNode([INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r2.exitCode, 0, `update failed: ${r2.stdout}\n${r2.stderr}`);
+    assert.strictEqual(fs.readFileSync(path.join(devPrefs, 'SKILL.md'), 'utf8'), PREFS,
+      'gsd-dev-preferences survives the update byte-identical');
+    assert.ok(!(r2.stdout + r2.stderr).includes(`Preserved ${devPrefs}`),
+      'gsd-dev-preferences is never named as a dir GSD does not own');
   });
 
   test('global: GSD-owned gsd-* skill dirs are still replaced or pruned (non-vacuity control)', (t) => {
