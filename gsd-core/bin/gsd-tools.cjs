@@ -3153,8 +3153,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const isoIdx = args.indexOf('--isolation');
     const isolation = isoIdx !== -1 ? args[isoIdx + 1] : undefined;
     if (!isolation || !VALID_ISOLATION.has(isolation)) {
+      // The mode list is read from the owner, so the usage text cannot name a
+      // vocabulary the validation one line up does not accept.
       error(
-        'Usage: record-dispatch-isolation --isolation <harness-worktree|orchestrator-worktree|none> ' +
+        `Usage: record-dispatch-isolation --isolation <${dispatchIsolationOwner().DISPATCH_ISOLATION_MODES.join('|')}> ` +
         '[--harness-flag <flag>|--harness-flag=<flag>] [--phase <n>] [--plan <id>]',
         ERROR_REASON.USAGE,
       );

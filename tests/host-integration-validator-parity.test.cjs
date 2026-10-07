@@ -753,4 +753,26 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
       assert.match(needsOwner.error, /dispatch-isolation\.cjs is missing[\s\S]*npm run build:lib/, `${verb.join(' ')} names the remedy, not a bare Cannot find module`);
     }
   });
+
+  test('the record-dispatch-isolation usage text lists the owner\'s modes, so a fourth mode reaches it', (t) => {
+    // Today's literal and the owner agree byte for byte, so only a changed
+    // owner tells a derived list from a copied one. A preload hands gsd-tools
+    // an owner with a fourth mode.
+    const tmp = createTempDir('gsd-4561-usage-');
+    t.after(() => cleanup(tmp));
+    const preload = path.join(tmp, 'fourth-mode.cjs');
+    fs.writeFileSync(preload, [
+      "const Module = require('module');",
+      'const orig = Module._load;',
+      'Module._load = function (request, ...rest) {',
+      '  const mod = orig.call(this, request, ...rest);',
+      "  if (!/dispatch-isolation\\.cjs$/.test(request)) return mod;",
+      "  return { ...mod, DISPATCH_ISOLATION_MODES: Object.freeze([...mod.DISPATCH_ISOLATION_MODES, 'fourth-mode']) };",
+      '};',
+      '',
+    ].join('\n'));
+    const result = runGsdTools(['record-dispatch-isolation'], tmp, { NODE_OPTIONS: `--require ${JSON.stringify(preload)}` });
+    assert.equal(result.success, false, 'a missing --isolation is a usage error');
+    assert.match(result.error, /--isolation <harness-worktree\|orchestrator-worktree\|none\|fourth-mode>/, 'the usage text is read from the owner');
+  });
 });
