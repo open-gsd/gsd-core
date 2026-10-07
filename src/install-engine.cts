@@ -1527,13 +1527,20 @@ function installRuntimeArtifacts(
             installFs().existsSync(item.sourceDir) ? installFs().readdirSync(item.sourceDir) : [],
           );
           const ownsSkillDir = createSkillDirOwnership(runtime, configDir, dest, kind.prefix);
-          const notOwned = _removeGsdEntries(dest, kind, (name) => stagedNames.has(name) || ownsSkillDir(name));
+          // A USER_OWNED_SKILL_DIRS entry is never pruned, even when the manifest
+          // leg owns it: the restore below skips symlinks, so a prune-then-restore
+          // loses a symlinked SKILL.md. The restore remains for prune paths that
+          // do not consult `owns`.
+          const notOwned = _removeGsdEntries(dest, kind,
+            (name) => !USER_OWNED_SKILL_DIRS.includes(name) && (stagedNames.has(name) || ownsSkillDir(name)));
           _warnPreservedSkillDirs(dest, notOwned);
           _copyStaged(item.sourceDir, dest, kind, configDir, runtime);
 
-          // Restore user-owned dirs after the prune+copy
+          // Restore user-owned dirs after the prune+copy — only one a prune
+          // branch that does not consult `owns` actually removed. Writing over
+          // the kept dir would fail on a read-only file the user left there.
           for (const [dirName, snap] of toPreserve) {
-            _restoreDir(path.join(dest, dirName), snap);
+            if (!installFs().existsSync(path.join(dest, dirName))) _restoreDir(path.join(dest, dirName), snap);
             preserved.push(dirName);
           }
         } else {
@@ -1718,7 +1725,9 @@ function installOpencodeFamilySkills(
   const ownsSkillDir = createSkillDirOwnership(runtime, targetDir, dest, skillsKindEntry.prefix);
   _warnPreservedSkillDirs(
     dest,
-    _removeGsdEntries(dest, skillsKindEntry, (name) => rawStemNames.has(name) || ownsSkillDir(name)),
+    // Never pruned, as in installRuntimeArtifacts: the restore skips symlinks.
+    _removeGsdEntries(dest, skillsKindEntry,
+      (name) => !USER_OWNED_SKILL_DIRS.includes(name) && (rawStemNames.has(name) || ownsSkillDir(name))),
   );
 
   let count = 0;
@@ -1789,9 +1798,10 @@ function installOpencodeFamilySkills(
     }
   }
 
-  // Restore user-owned dirs after the prune+copy.
+  // Restore user-owned dirs after the prune+copy, only where a prune removed
+  // one; the kept dir is left untouched (it may hold read-only files).
   for (const [dirName, snap] of toPreserve) {
-    _restoreDir(path.join(dest, dirName), snap);
+    if (!installFs().existsSync(path.join(dest, dirName))) _restoreDir(path.join(dest, dirName), snap);
   }
 
   return count;

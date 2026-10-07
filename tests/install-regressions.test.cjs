@@ -2466,6 +2466,38 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
       'writeManifest records gsd-dev-preferences once it exists');
   });
 
+  test('global: a gsd-dev-preferences whose SKILL.md is a symlink, beside a read-only file, survives updates untouched once the manifest records it', (t) => {
+    const root = createTempDir('gsd-5161-devprefs-link-');
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, '.claude');
+    const devPrefs = path.join(configDir, 'skills', 'gsd-dev-preferences');
+    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+    const install = () => {
+      const r = runNode([INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir], runOpts);
+      assert.strictEqual(r.exitCode, 0, `install failed: ${r.stdout}\n${r.stderr}`);
+    };
+
+    install();
+    const shared = path.join(root, 'shared-prefs.md');
+    fs.writeFileSync(shared, '---\nname: gsd-dev-preferences\n---\nSHARED\n');
+    fs.mkdirSync(devPrefs, { recursive: true });
+    fs.symlinkSync(shared, path.join(devPrefs, 'SKILL.md'));
+    // A read-only file the user left there: keeping the dir must not mean rewriting it.
+    fs.writeFileSync(path.join(devPrefs, 'notes.md'), 'NOTES\n');
+    fs.chmodSync(path.join(devPrefs, 'notes.md'), 0o444);
+    t.after(() => { try { fs.chmodSync(path.join(devPrefs, 'notes.md'), 0o644); } catch { /* already gone */ } });
+
+    install();   // records the dir in the manifest
+    assert.ok(Object.keys(readManifestFiles(configDir)).some((k) => k.startsWith('skills/gsd-dev-preferences/')),
+      'precondition: the manifest now records gsd-dev-preferences, so the manifest leg owns it');
+    install();   // the update that used to prune it and restore everything but the link
+    assert.ok(fs.lstatSync(path.join(devPrefs, 'SKILL.md')).isSymbolicLink(),
+      'gsd-dev-preferences/SKILL.md is still the user\'s symlink');
+    assert.strictEqual(fs.readlinkSync(path.join(devPrefs, 'SKILL.md')), shared);
+    assert.strictEqual(fs.readFileSync(path.join(devPrefs, 'notes.md'), 'utf8'), 'NOTES\n',
+      'the read-only file is untouched (the update exited 0 above)');
+  });
+
   test('gsd-dev-preferences that an old manifest records survives the Hermes flat-root and Claude local stale-skills cleanups', (t) => {
     const root = createTempDir('gsd-5161-devprefs-cleanup-');
     t.after(() => cleanup(root));
