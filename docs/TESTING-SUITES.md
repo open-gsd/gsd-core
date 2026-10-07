@@ -644,13 +644,14 @@ retired the parallel legacy full-matrix safety-net job). It
 also declares a `timeout-minutes` cap and runs the same in-job near-cap check
 described below. Since #5029 it **is** covered by the headroom-factor gate. One
 cap covers every matrix row, so its `LANE_COSTS` entry is the slowest row,
-windows or macOS shard. **The current 27 is a placeholder pending the first
-3-shard macOS runs**, not a measurement of that layout. macOS was split because
-unsharded it ran 18–27m on normal runners but 39m43s on a slow one (run
-37086102648); by the gate's convention that counts, and m=40 requires 60m, over
-the 45m cap. It had been uncovered since #4591, which is how it drifted to a
-34m long pole against a 45m cap and began cancelling shards whose every chunk
-passed (#4935).
+windows or macOS shard: **19 minutes**, from the worst windows long pole across
+nine 6-shard runs (18m15s, shard 5/6, run 37041237415), so the cap may not drop
+below 29m. macOS was split because unsharded it ran 18–27m on normal runners
+but 39m43s on a slow one (run 37086102648); by the gate's convention that
+counts, and m=40 requires 60m, over the 45m cap. Split three ways its shards
+ran 8m42s / 7m48s / 10m09s (run 37694227292). It had been uncovered since
+#4591, which is how it drifted to a 34m long pole against a 45m cap and began
+cancelling shards whose every chunk passed (#4935).
 
 Measured long poles behind the six-way split: 34m24s at 3 shards (runs
 36322513056, 36357457440) and 30m17s at 4 (run 36349891343), requiring 53m and

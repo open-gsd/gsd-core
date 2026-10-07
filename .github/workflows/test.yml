@@ -604,8 +604,8 @@ jobs:
     #
     # This cap is now GUARDED: #5029 gave the lane its first LANE_COSTS entry
     # in tests/ci-test-job-timeout-budget.test.cjs, measured on whichever row
-    # (windows or macos shard) is slowest; the entry states the figure and the
-    # floor it puts under this cap. It had been uncovered since #4591, which is how
+    # (windows or macos shard) is slowest: windows, 19m, so this cap may not
+    # drop below 29m. It had been uncovered since #4591, which is how
     # it drifted to a 34m long pole here in the first place.
     timeout-minutes: 45
     env:
@@ -675,7 +675,8 @@ jobs:
           # tests/ci-timeout-budget-history.jsonl) but 39m43s on a slow one (run
           # 37086102648, every chunk 1.1-2.1x slower, same 228-file tier) — m=40
           # requires 60m, so the row could not meet the budget gate unsplit.
-          # Three shards, not two, for margin as the tier grows. No darwin
+          # Three shards, not two, for margin as the tier grows; first 3-shard
+          # run (37694227292) measured 8m42s / 7m48s / 10m09s. No darwin
           # timing table exists yet, so the packer weighs macOS files with the
           # Linux table (expect the pre-#5097 Windows imbalance, ~1.2-1.3); a
           # tests/test-timings.darwin.json built from the uploaded
