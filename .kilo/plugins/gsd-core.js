@@ -896,6 +896,17 @@ async function GsdCoreSetup(ctx) {
     pin(ev);
     await v1["tool.execute.after"]({ tool: V2_TOOL_ALIASES.get(ev.tool) ?? ev.tool, args: ev.input }, out);
     ev.result = { ...ev.result, content: isText ? out.output : content, metadata: out.metadata };
+    if (!["write", "edit", "patch"].includes(ev.tool)) return;
+    try {
+      const paths = ev.tool === "patch" ? patchFilePaths(ev.input.patchText) : [ev.input.path];
+      for (const p of paths) {
+        if (typeof p !== "string") continue;
+        currentCwd = dir;
+        await v1.event({ event: { type: "file.edited", properties: { file: path.resolve(dir, p), cwd: dir } } });
+      }
+    } catch (err) {
+      console.error(`[gsd-core] config reload failed: ${err.message}`);
+    }
   });
   await ctx.shell.hook("create.before", async (ev) => {
     currentCwd = dir;

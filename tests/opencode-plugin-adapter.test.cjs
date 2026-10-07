@@ -1678,6 +1678,108 @@ test('V2 compaction without a sessionID spawns nothing, pushes nothing and never
   assert.equal(Object.hasOwn(anonymous, 'result'), false);
 });
 
+const configOf = (dir) => path.join(dir, '.planning', 'config.json');
+
+const completed = (tool, input, extra = {}) => ({
+  id: 'c', tool, sessionID: 's1', input, status: 'completed', result: { content: 'ok' }, ...extra,
+});
+
+const reloadSpawns = (spawns) => spawns.filter((call) => path.basename(call[1][0]) === 'gsd-config-reload.js');
+
+test('V2 execute.after runs gsd-config-reload after a completed write, edit or patch of the location config, resolving relative paths against the location', async (t) => {
+  const { mod, spawns } = loadTracedPlugin(t, LIFECYCLE_STUBS);
+  const dir = makeProjectDir(t);
+  const CFG = configOf(dir);
+  const { setup } = mod;
+  const { hooks, ctx } = fakeV2Ctx(dir);
+  t.after(await setup(ctx));
+
+  const patchText = ['*** Begin Patch', '*** Update File: .planning/config.json', '@@', '-a', '+b', '*** Add File: src/x.js', '+z', '*** End Patch'].join('\n');
+  const cases = [
+    completed('write', { path: CFG, content: '{}' }),
+    completed('edit', { path: '.planning/config.json', oldString: 'a', newString: 'b' }),
+    completed('patch', { patchText }),
+  ];
+  for (const ev of cases) {
+    await hooks['tool.execute.after'](ev);
+    const calls = spawns.splice(0);
+    assert.deepEqual(spawnedHooks(calls), ['gsd-context-monitor.js', 'gsd-config-reload.js'], ev.tool);
+    const [reload] = reloadSpawns(calls);
+    assert.deepEqual(JSON.parse(reload[2].input), { hook_event_name: 'FileChanged', file_path: CFG, event: 'change', cwd: dir }, ev.tool);
+    assert.equal(reload[2].cwd, dir, ev.tool);
+  }
+});
+
+test('V2 execute.after runs no config reload for other files, other tools, reads, shell writes, failed calls or filesystem events', async (t) => {
+  const { mod, spawns } = loadTracedPlugin(t, LIFECYCLE_STUBS);
+  const dir = makeProjectDir(t);
+  const CFG = configOf(dir);
+  const { setup } = mod;
+  const { hooks, events, ctx } = fakeV2Ctx(dir);
+  t.after(await setup(ctx));
+
+  const cases = [
+    [completed('write', { path: path.join(dir, 'notes.md'), content: 'x' }), ['gsd-context-monitor.js']],
+    [completed('edit', { path: 'other/config.json', oldString: 'a', newString: 'b' }), ['gsd-context-monitor.js']],
+    [completed('patch', { patchText: '*** Begin Patch\n*** Add File: src/x.js\n+z\n*** End Patch' }), ['gsd-context-monitor.js']],
+    [completed('read', { path: CFG }), ['gsd-read-injection-scanner.js']],
+    [completed('shell', { command: 'echo {} > .planning/config.json' }), ['gsd-context-monitor.js']],
+    [completed('write', { path: CFG, content: '{}' }, { status: 'error' }), []],
+  ];
+  for (const [ev, expected] of cases) {
+    await hooks['tool.execute.after'](ev);
+    assert.deepEqual(spawnedHooks(spawns.splice(0)), expected, JSON.stringify(ev.input));
+  }
+
+  await events.push({ type: 'filesystem.changed', location: { directory: dir }, data: { file: CFG, event: 'change' } });
+  assert.deepEqual(spawns, []);
+});
+
+test('V2 config reload failure is logged and never fails the completed edit', async (t) => {
+  const errors = captureErrors(t);
+  const gate = { block: true };
+  const { mod } = loadTracedPlugin(t, LIFECYCLE_STUBS, blockWhile('gsd-config-reload.js', 'reload exploded', gate));
+  const dir = makeProjectDir(t);
+  const { setup } = mod;
+  const { hooks, ctx } = fakeV2Ctx(dir);
+  t.after(await setup(ctx));
+
+  const result = { content: 'written', metadata: { ok: true } };
+  const ev = completed('write', { path: configOf(dir), content: '{}' }, { result });
+  await assert.doesNotReject(() => hooks['tool.execute.after'](ev));
+  assert.notEqual(ev.result, result);
+  assert.equal(ev.result.content, 'written');
+  assert.ok(errors.some((line) => line.includes('[gsd-core]') && line.includes('reload exploded')));
+});
+
+test('V2 config reload runs in the editing location directory when two locations interleave', async (t) => {
+  const { mod, spawns } = loadTracedPlugin(t, LIFECYCLE_STUBS);
+  const dirA = makeProjectDir(t);
+  const dirB = makeProjectDir(t);
+  const a = fakeV2Ctx(dirA);
+  const b = fakeV2Ctx(dirB);
+  const { setup } = mod;
+  t.after(await setup(a.ctx));
+  t.after(await setup(b.ctx));
+
+  const writeOf = (dir, sessionID) => ({ ...completed('write', { path: configOf(dir), content: '{}' }), sessionID });
+  await Promise.all([
+    a.hooks['tool.execute.after'](writeOf(dirA, 'sA')),
+    b.hooks['tool.execute.after'](writeOf(dirB, 'sB')),
+  ]);
+  const reloads = reloadSpawns(spawns.splice(0));
+  assert.equal(reloads.length, 2);
+  const pairs = reloads.map((call) => {
+    const payload = JSON.parse(call[2].input);
+    assert.equal(call[2].cwd, payload.cwd);
+    return [payload.cwd, payload.file_path];
+  });
+  assert.deepEqual(pairs.sort(), [[dirA, configOf(dirA)], [dirB, configOf(dirB)]].sort());
+
+  await b.hooks['tool.execute.after']({ ...completed('write', { path: configOf(dirA), content: '{}' }), sessionID: 'sB' });
+  assert.deepEqual(reloadSpawns(spawns), []);
+});
+
 test('V2 session event loop logs a non-Error stream rejection once and raises no unhandled rejection', async (t) => {
   const errors = captureErrors(t);
   const rejections = [];
