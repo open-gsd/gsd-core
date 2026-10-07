@@ -530,7 +530,7 @@ only supported runtime.
 |---|---|---|---|
 | `test` | `ubuntu-latest` (1 targeted + 3-shard full) | `product_changed == 'true'` | The default, always-scoped PR signal — the full `unit`/`integration`/`security` suites run once, sharded, on Linux. **Linux only**: its three `scope: windows` shards were deleted in #4641 (ADR-4641), which found them a second, redundant Windows selector alongside `test-conformance` |
 | `test-inert` | `ubuntu-latest` | `code_changed == 'true' && product_changed != 'true'` | A lightweight lane for PRs that touch only administrative/policy workflow files (code changed, but nothing that needs the real matrix) |
-| `test-conformance` | `windows-latest` (6-shard) + `macos-latest` (unsharded) | `code_changed == 'true' && full_matrix == 'true'` | Runs only the **platform-conformance-tier** file list (`scripts/lib/platform-conformance-tier.generated.cjs`, epic #4589 Phase 2/#4591) on real Windows/macOS — since #4641 the **sole** Windows and macOS selector in CI, not merely the sole gating one. Retired the parallel legacy full-suite matrix in #4603; #4641 removed the second Windows selector in `test` and narrowed the tier from 548 to 266 of 932 eligible unit-suite files (58.8% → 28.5%, measured 2026-09-11; the absolute counts track `next`'s test count, the percentages are what the ceiling test binds on). |
+| `test-conformance` | `windows-latest` (6-shard) + `macos-latest` (3-shard) | `code_changed == 'true' && full_matrix == 'true'` | Runs only the **platform-conformance-tier** file list (`scripts/lib/platform-conformance-tier.generated.cjs`, epic #4589 Phase 2/#4591) on real Windows/macOS — since #4641 the **sole** Windows and macOS selector in CI, not merely the sole gating one. Retired the parallel legacy full-suite matrix in #4603; #4641 removed the second Windows selector in `test` and narrowed the tier from 548 to 266 of 932 eligible unit-suite files (58.8% → 28.5%, measured 2026-09-11; the absolute counts track `next`'s test count, the percentages are what the ceiling test binds on). |
 | `coverage-gate` | `ubuntu-latest` | `product_changed == 'true' && test.result == 'success'` | Merges every `test` shard's coverage dumps and evaluates the threshold once (sharding moved this out of the `test` job itself — #2952) |
 | `qa-loop-walk` | `ubuntu-latest` | `product_changed == 'true'` | The QA smell-ratchet scenario walk (see "The QA smell ratchet" below) |
 | `required-tests` | `ubuntu-latest` | `always()` | Aggregates every job above into the one branch-protection-required check |
@@ -638,25 +638,27 @@ hand-measured cost for that job — now all three of the jobs above, not just
 
 `test-conformance` in `test.yml` (#4591, epic #4589 Phase 2) runs the
 `scripts/lib/platform-conformance-tier.generated.cjs` file list on
-`windows-latest` (sharded six ways since #5029) and `macos-latest`
-(unsharded) — the sole gating signal for real-OS coverage (#4603 retired the
-parallel legacy full-matrix safety-net job). It
+`windows-latest` (sharded six ways since #5029) and `macos-latest` (sharded
+three ways since #5029) — the sole gating signal for real-OS coverage (#4603
+retired the parallel legacy full-matrix safety-net job). It
 also declares a `timeout-minutes` cap and runs the same in-job near-cap check
-described below. Since #5029 it **is** covered by the headroom-factor gate: its
-`LANE_COSTS` entry records **27 minutes**. One cap covers every matrix row, so
-the figure is the slowest row: unsharded `macos-latest` (26m58s on run
-34434252144, 26m01s on run 37037251805), not the windows long pole (17m22s,
-shard 5/6, on the same run). The cap may therefore not drop below 41m. It had
-been uncovered since #4591, which is how it drifted to a 34m long pole against
-a 45m cap and began cancelling shards whose every chunk passed (#4935).
+described below. Since #5029 it **is** covered by the headroom-factor gate. One
+cap covers every matrix row, so its `LANE_COSTS` entry is the slowest row,
+windows or macOS shard. **The current 27 is a placeholder pending the first
+3-shard macOS runs**, not a measurement of that layout. macOS was split because
+unsharded it ran 18–27m on normal runners but 39m43s on a slow one (run
+37086102648); by the gate's convention that counts, and m=40 requires 60m, over
+the 45m cap. It had been uncovered since #4591, which is how it drifted to a
+34m long pole against a 45m cap and began cancelling shards whose every chunk
+passed (#4935).
 
 Measured long poles behind the six-way split: 34m24s at 3 shards (runs
 36322513056, 36357457440) and 30m17s at 4 (run 36349891343), requiring 53m and
 47m against the 45m cap. Note #5071 → #5097 has since priced win32 files by
 win32 measurements, collapsing shard imbalance to 1.01–1.02; if this lane is
 resharded downward on the strength of that, re-measure the windows long pole
-from the new run and raise the entry only if it now outruns macOS — never scale
-the existing figure.
+from the new run and set the entry from the slowest row — never scale the
+existing figure.
 
 **`.platform.test.cjs` siblings (#5074).** The tier selects whole files, so a large file whose
 platform signal sits in a few tests can be split: those tests move to
