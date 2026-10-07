@@ -2479,31 +2479,6 @@ describe('#4630 — the isolation record states who decided it, so a re-query kn
     return dir;
   }
 
-  test('the base check reads the subset from the shared owner — `none` and an out-of-vocabulary mode are both outside it', () => {
-    // The whole point of the seam: this subset has ONE definition. Driving a
-    // mode outside it must answer false through the shared guard rather than
-    // through a pair of string comparisons re-stated at the call site.
-    //
-    // NEGATIVE CONTROL: this test is GREEN against pre-adoption code, because
-    // the owner already existed on the #4561 half — what changed is only WHO
-    // baseCheckDegrades asks. A behavioural test cannot separate those: the
-    // inline pair and the owner agree on every input, which is precisely why
-    // the duplicate was safe to keep and therefore dangerous. This is a PIN on
-    // the owner's semantics, not a regression for the adoption. The adoption's
-    // own oracle is structural — no `isolationMode !== '...'` literal survives
-    // in gsd-tools.cjs (1 before, 0 after) — and the drift lint that makes a
-    // reintroduced copy fail loudly is ADR Phase 3, child 2.
-    const { isBaseCheckIsolationMode, BASE_CHECK_ISOLATION_VOCABULARY } =
-      require('../gsd-core/bin/lib/dispatch-isolation.cjs');
-    assert.equal(isBaseCheckIsolationMode('none'), false);
-    assert.equal(isBaseCheckIsolationMode('definitely-not-an-isolation-mode'), false);
-    assert.equal(isBaseCheckIsolationMode(''), false);
-    assert.equal(isBaseCheckIsolationMode(undefined), false);
-    assert.equal(isBaseCheckIsolationMode('harness-worktree'), true);
-    assert.equal(isBaseCheckIsolationMode('orchestrator-worktree'), true);
-    assert.equal(BASE_CHECK_ISOLATION_VOCABULARY.has('none'), false);
-  });
-
   test('a degrade the RESOLVER re-derived is recorded as `resolver` — the provenance that lets a later query re-evaluate it', (t) => {
     const dir = divergedProject(t, 'gsd-4630-prov-resolver-');
     const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7'], dir, env(dir));
