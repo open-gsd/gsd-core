@@ -2454,6 +2454,16 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
       'gsd-dev-preferences survives the update byte-identical');
     assert.ok(!(r2.stdout + r2.stderr).includes(`Preserved ${devPrefs}`),
       'gsd-dev-preferences is never named as a dir GSD does not own');
+
+    // "Installed N skills" counts it, as it did before #5161 and as writeManifest records it.
+    const countOf = (r) => {
+      const m = (r.stdout + r.stderr).match(/Installed (\d+) skills to skills\//);
+      assert.ok(m, `the install reports a skill count: ${r.stdout}`);
+      return Number(m[1]);
+    };
+    assert.strictEqual(countOf(r2), countOf(r1) + 1, 'the reported count includes the restored gsd-dev-preferences');
+    assert.ok(Object.keys(readManifestFiles(configDir)).some((k) => k.startsWith('skills/gsd-dev-preferences/')),
+      'writeManifest records gsd-dev-preferences once it exists');
   });
 
   test('global: GSD-owned gsd-* skill dirs are still replaced or pruned (non-vacuity control)', (t) => {
