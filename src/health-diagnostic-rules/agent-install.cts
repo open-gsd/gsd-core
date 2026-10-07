@@ -15,7 +15,7 @@
  *
  * `snapshot.agentInstall` (`src/planning-snapshot.cts`'s `buildAgentInstallField`)
  * already performs the try/catch this rule used to need: `scope` is
- * `UNREADABLE` only when the scan itself threw, mirroring
+ * `UNREADABLE` only when the scan could not run, mirroring
  * `cmdValidateHealth`'s silent catch — this rule reproduces that silence by
  * returning no diagnostic for `UNREADABLE`, rather than inventing a new,
  * more severe 5th case the original never had.
@@ -51,7 +51,7 @@ function checkAgentInstall(snapshot: PlanningSnapshot): Diagnostic[] {
 
   // Mirrors verify.cts:2025-2027's try/catch around the checkAgentsInstalled
   // call itself — a thrown scan is swallowed, not reported. `scope` here is
-  // UNREADABLE only in that same case (buildAgentInstallField's own catch).
+  // UNREADABLE only when the scan could not run (buildAgentInstallField).
   if (scope === SCOPE.UNREADABLE) return [];
 
   if (status.agents_installed) return [];
