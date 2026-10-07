@@ -785,9 +785,14 @@ describe('context meter respects CLAUDE_CODE_AUTO_COMPACT_WINDOW (#2219)', () =>
     try {
       const env = { CLAUDE_CONFIG_DIR: cfg };
       assert.equal(isAutoCompactDisabled(proj, env), false, 'nothing configured');
-      // The env names and accepted values are Claude Code's own
-      // (`Boolean(truthy(DISABLE_COMPACT) || DISABLE_AUTO_COMPACT)`), not invented:
+      // The env names and accepted values are Claude Code's own, not invented:
       // an invented name reads as 'not disabled' forever (PR #4959 review).
+      // Source: the shipped binary (claude 2.1.292). The resolution is
+      // `Boolean(Le(process.env.DISABLE_COMPACT) || a.DISABLE_AUTO_COMPACT)`; the
+      // second operand looks unwrapped but is the env registry's `D.bool()` field,
+      // i.e. `Le(value)` again, so both keys share one truthy set —
+      // `Le = e => ["1","true","yes","on"].includes(String(e).toLowerCase().trim())`
+      // (and 0/false/no/off/'' are therefore "not disabled" for both keys).
       assert.deepEqual([...AUTO_COMPACT_DISABLE_ENV_KEYS], ['DISABLE_AUTO_COMPACT', 'DISABLE_COMPACT']);
       assert.deepEqual([...AUTO_COMPACT_ENV_TRUTHY], ['1', 'true', 'yes', 'on']);
       for (const key of AUTO_COMPACT_DISABLE_ENV_KEYS) {

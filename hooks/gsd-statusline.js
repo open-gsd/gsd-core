@@ -177,6 +177,10 @@ function readStateFileOrNull(statePath) {
  * only when that is false does `autoCompactEnabled` decide — rather than
  * guessed: an invented name reads as "not disabled" forever, which is exactly
  * the defect this gate exists to close.
+ *
+ * The truthy set applies to both keys: in the binary (claude 2.1.292) the
+ * second operand is the env registry's `D.bool()` field, which runs the same
+ * `["1","true","yes","on"]` helper as `DISABLE_COMPACT`.
  */
 const AUTO_COMPACT_DISABLE_ENV_KEYS = ['DISABLE_AUTO_COMPACT', 'DISABLE_COMPACT'];
 const AUTO_COMPACT_ENV_TRUTHY = ['1', 'true', 'yes', 'on'];

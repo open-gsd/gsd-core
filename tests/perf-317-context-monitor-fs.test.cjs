@@ -724,7 +724,7 @@ function runStatuslineHook(remainingPct, totalTokens = 1_000_000, acwEnv = null)
     session_id: sessionId,
     context_window: {
       remaining_percentage: remainingPct,
-      total_tokens: totalTokens,
+      context_window_size: totalTokens,
     },
   });
 
