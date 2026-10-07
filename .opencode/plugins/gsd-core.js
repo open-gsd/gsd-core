@@ -883,6 +883,7 @@ async function GsdCoreSetup(ctx) {
     currentCwd = dir;
     currentSessionId = ev.sessionID;
   };
+  const errorText = (err) => (err instanceof Error ? err.message : String(err));
   await ctx.tool.hook("execute.before", async (ev) => {
     pin(ev);
     await v1["tool.execute.before"]({ tool: V2_TOOL_ALIASES.get(ev.tool) ?? ev.tool }, { args: ev.input });
@@ -904,6 +905,26 @@ async function GsdCoreSetup(ctx) {
       console.error(`[gsd-core] shell env hook failed: ${err.message}`);
     }
   });
+  const controller = new AbortController();
+  void (async () => {
+    try {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        if (controller.signal.aborted) break;
+        try {
+          if (event.type !== "session.created") continue;
+          if ((event.location?.directory ?? event.data?.location?.directory) !== dir) continue;
+          if (event.data?.parentID) continue;
+          await v1.event({ event: { type: "session.created", properties: { info: { id: event.data.sessionID, directory: dir } } } });
+        } catch (err) {
+          console.error(`[gsd-core] session event failed: ${errorText(err)}`);
+        }
+      }
+      if (!controller.signal.aborted) console.error("[gsd-core] event stream ended");
+    } catch (err) {
+      if (!controller.signal.aborted) console.error(`[gsd-core] event stream failed: ${errorText(err)}`);
+    }
+  })().catch(() => {});
+  return () => controller.abort();
 }
 
 GsdCorePlugin._internals = {

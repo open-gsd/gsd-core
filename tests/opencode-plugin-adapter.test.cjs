@@ -651,7 +651,7 @@ test('V2 decode emulation rejects a server-only default with the missing setup/e
   );
 });
 
-test('setup is non-enumerable, callable unbound, awaits its hook registrations and resolves undefined', async () => {
+test('setup is non-enumerable, callable unbound, awaits its hook registrations and resolves a cleanup function', async () => {
   const raw = require(ADAPTER_SRC);
   const desc = Object.getOwnPropertyDescriptor(raw, 'setup');
   assert.equal(desc.enumerable, false);
@@ -659,9 +659,11 @@ test('setup is non-enumerable, callable unbound, awaits its hook registrations a
   assert.equal(desc.configurable, false);
   const { setup } = v2Decode(bunNamespace(raw));
   const { hooks, settled, ctx } = fakeV2Ctx(os.tmpdir());
-  assert.equal(await setup(ctx), undefined);
+  const cleanup = await setup(ctx);
+  assert.equal(typeof cleanup, 'function');
   assert.equal(typeof hooks['tool.execute.before'], 'function');
   assert.deepEqual(settled, Object.keys(hooks));
+  cleanup();
 });
 
 // Emulates OpenCode >= 1.4 `readV1Plugin(mod.default, spec, "server", "detect")`;
@@ -761,9 +763,99 @@ test('V1 server() picked from a Bun namespace by the detect path runs the secret
   );
 });
 
+// A V2 event stream the test feeds by hand. The promise push() returns settles
+// once the consumer pulls again (it finished that event) or the stream stops.
+function fakeEventStream() {
+  const queue = [];
+  let inFlight = null;
+  let parked = null;
+  let ended = false;
+  let failure = null;
+  const settleAll = () => {
+    if (inFlight) inFlight();
+    inFlight = null;
+    for (const item of queue.splice(0)) item.settle();
+  };
+  const unpark = () => {
+    const pull = parked;
+    parked = null;
+    events.waiting = false;
+    return pull;
+  };
+  const iterator = {
+    [Symbol.asyncIterator]() { return iterator; },
+    next() {
+      if (inFlight) inFlight();
+      inFlight = null;
+      if (events.signal.aborted) return Promise.reject(events.signal.reason);
+      if (ended) return Promise.resolve({ done: true, value: undefined });
+      if (failure) {
+        const err = failure;
+        failure = null;
+        ended = true;
+        return Promise.reject(err);
+      }
+      if (queue.length) {
+        const item = queue.shift();
+        inFlight = item.settle;
+        return Promise.resolve({ done: false, value: item.event });
+      }
+      return new Promise((resolve, reject) => {
+        parked = { resolve, reject };
+        events.waiting = true;
+      });
+    },
+    return() {
+      ended = true;
+      settleAll();
+      return Promise.resolve({ done: true, value: undefined });
+    },
+  };
+  const events = {
+    subscriptions: 0,
+    signal: undefined,
+    waiting: false,
+    subscribe({ signal }) {
+      events.subscriptions += 1;
+      events.signal = signal;
+      signal.addEventListener('abort', () => {
+        settleAll();
+        if (parked) unpark().reject(signal.reason);
+      });
+      return iterator;
+    },
+    push(event) {
+      if (ended || events.signal?.aborted) return Promise.resolve();
+      return new Promise((settle) => {
+        if (parked) {
+          inFlight = settle;
+          unpark().resolve({ done: false, value: event });
+        } else {
+          queue.push({ event, settle });
+        }
+      });
+    },
+    end() {
+      ended = true;
+      settleAll();
+      if (parked) unpark().resolve({ done: true, value: undefined });
+    },
+    fail(err) {
+      if (parked) {
+        ended = true;
+        unpark().reject(err);
+      } else {
+        failure = err;
+      }
+    },
+  };
+  return events;
+}
+
 // Records V2 Promise-API hook registrations. Each registration settles on a
 // later turn, so a setup that does not await it leaves `settled` short.
 function fakeV2Ctx(directory) {
+  const events = fakeEventStream();
   const hooks = {};
   const settled = [];
   const domain = (ns) => ({
@@ -776,7 +868,7 @@ function fakeV2Ctx(directory) {
       }));
     },
   });
-  return { hooks, settled, ctx: { location: { directory }, tool: domain('tool'), shell: domain('shell') } };
+  return { hooks, settled, events, ctx: { location: { directory }, tool: domain('tool'), shell: domain('shell'), event: { subscribe: events.subscribe } } };
 }
 
 test('V2 setup bridges execute.before: a shell read of .env is blocked with the guard reason, an allowed write resolves', async (t) => {
@@ -1300,4 +1392,88 @@ test('a patch header indented by a space or a tab still reaches the worktree gua
       JSON.stringify(lead),
     );
   }
+});
+
+const LIFECYCLE_STUBS = {
+  ...ALL_GUARD_STUBS,
+  'gsd-ensure-canonical-path.js': stubHook(''),
+  'gsd-check-update.js': stubHook(''),
+  'gsd-config-reload.js': stubHook(''),
+};
+
+function v2SessionCreated(directory, sessionID, data = {}) {
+  return {
+    type: 'session.created',
+    location: { directory },
+    data: { sessionID, projectID: 'p', location: { directory }, slug: 'slug', version: 1, ...data },
+  };
+}
+
+const SESSION_START_HOOKS = ['gsd-ensure-canonical-path.js', 'gsd-check-update.js'];
+
+test('V2 setup starts the session event loop without waiting on it and returns a cleanup that aborts it', async (t) => {
+  const { mod, spawns } = loadTracedPlugin(t, LIFECYCLE_STUBS);
+  const dir = makeProjectDir(t);
+  const { setup } = mod;
+  const { events, ctx } = fakeV2Ctx(dir);
+  const cleanup = await setup(ctx);
+  assert.equal(typeof cleanup, 'function');
+  assert.equal(events.subscriptions, 1);
+  assert.equal(events.signal.aborted, false);
+  assert.equal(events.waiting, true);
+
+  cleanup();
+  assert.equal(events.signal.aborted, true);
+  await events.push(v2SessionCreated(dir, 's2'));
+  assert.deepEqual(spawns, []);
+});
+
+test('V2 session.created in this directory runs the SessionStart hooks once with the session id from data', async (t) => {
+  const { mod, spawns } = loadTracedPlugin(t, LIFECYCLE_STUBS);
+  const dir = makeProjectDir(t);
+  const { setup } = mod;
+  const { events, ctx } = fakeV2Ctx(dir);
+  const cleanup = await setup(ctx);
+  t.after(cleanup);
+
+  await events.push(v2SessionCreated(dir, 's1'));
+  assert.deepEqual(spawnedHooks(spawns), SESSION_START_HOOKS);
+  for (const call of spawns) {
+    assert.deepEqual(JSON.parse(call[2].input), { hook_event_name: 'SessionStart', session_id: 's1', cwd: dir });
+    assert.equal(call[2].cwd, dir);
+  }
+
+  spawns.splice(0);
+  const { location, ...dataOnly } = v2SessionCreated(dir, 's3');
+  assert.equal(location.directory, dir);
+  await events.push(dataOnly);
+  assert.deepEqual(spawnedHooks(spawns), SESSION_START_HOOKS);
+  for (const call of spawns) {
+    assert.deepEqual(JSON.parse(call[2].input), { hook_event_name: 'SessionStart', session_id: 's3', cwd: dir });
+    assert.equal(call[2].cwd, dir);
+  }
+});
+
+test('V2 session events from another directory, subagent sessions, other event types and V1-shaped payloads run no SessionStart hook', async (t) => {
+  const { mod, spawns } = loadTracedPlugin(t, LIFECYCLE_STUBS);
+  const dir = makeProjectDir(t);
+  const other = makeProjectDir(t);
+  const { setup } = mod;
+  const { events, ctx } = fakeV2Ctx(dir);
+  const cleanup = await setup(ctx);
+  t.after(cleanup);
+
+  const ignored = [
+    v2SessionCreated(other, 'foreign'),
+    { ...v2SessionCreated(dir, 'foreign-top'), location: { directory: other } },
+    v2SessionCreated(dir, 'child', { parentID: 'parent' }),
+    { type: 'session.execution.succeeded', location: { directory: dir }, data: { sessionID: 's1' } },
+    { type: 'filesystem.changed', location: { directory: dir }, data: { file: path.join(dir, 'a.txt'), event: 'change' } },
+    { type: 'session.created', properties: { info: { id: 'v1', directory: dir } } },
+  ];
+  for (const event of ignored) {
+    await events.push(event);
+    assert.equal(spawns.length, 0, JSON.stringify(event));
+  }
+  assert.equal(events.waiting, true);
 });
