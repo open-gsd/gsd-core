@@ -869,7 +869,7 @@ function fakeV2Ctx(directory) {
       }));
     },
   });
-  return { hooks, settled, events, ctx: { location: { directory }, tool: domain('tool'), shell: domain('shell'), event: { subscribe: events.subscribe } } };
+  return { hooks, settled, events, ctx: { location: { directory }, tool: domain('tool'), shell: domain('shell'), session: domain('session'), event: { subscribe: events.subscribe } } };
 }
 
 test('V2 setup bridges execute.before: a shell read of .env is blocked with the guard reason, an allowed write resolves', async (t) => {
@@ -1597,6 +1597,85 @@ test('V2 setup still registers every guard hook and resolves a cleanup when even
   }
   assert.ok(errors.some((line) => line.includes('[gsd-core]') && line.includes('no stream')));
   assert.doesNotThrow(cleanup);
+});
+
+const blockWhile = (hookFile, reason, gate) => (args) => (
+  gate.block && path.basename(args[1][0]) === hookFile
+    ? { stdout: JSON.stringify({ decision: 'block', reason }), status: 2, signal: null }
+    : { stdout: '', status: 0, signal: null }
+);
+
+test('V2 compaction runs the PreCompact context monitor for ev.sessionID and appends the V1 breadcrumb to ev.system without setting ev.result', async (t) => {
+  const { mod, spawns } = loadTracedPlugin(t, LIFECYCLE_STUBS);
+  const dir = makeProjectDir(t);
+  const v1 = await mod.server({ directory: dir });
+  await v1.event({ event: { type: 'session.created', properties: { info: { id: 's1', directory: dir } } } });
+  const v1Out = {};
+  await v1['experimental.session.compacting']({}, v1Out);
+  spawns.splice(0);
+  const { setup } = mod;
+  const { hooks, ctx } = fakeV2Ctx(dir);
+  t.after(await setup(ctx));
+
+  const existing = { type: 'text', text: 'host identity' };
+  const ev = { sessionID: 's1', system: [existing] };
+  await hooks['session.compaction'](ev);
+  assert.deepEqual(spawnedHooks(spawns), ['gsd-context-monitor.js']);
+  assert.deepEqual(JSON.parse(spawns[0][2].input), { hook_event_name: 'PreCompact', session_id: 's1', cwd: dir });
+  assert.equal(spawns[0][2].cwd, dir);
+  assert.equal(ev.system[0], existing);
+  assert.equal(ev.system.length, 2);
+  assert.deepEqual(ev.system.slice(1), v1Out.context.map((text) => ({ type: 'text', text })));
+  assert.equal(Object.hasOwn(ev, 'result'), false);
+});
+
+test('V2 compaction never throws: a blocking monitor or an unwritable ev.system is logged and nothing is pushed', async (t) => {
+  const errors = captureErrors(t);
+  const gate = { block: true };
+  const { mod } = loadTracedPlugin(t, LIFECYCLE_STUBS, blockWhile('gsd-context-monitor.js', 'monitor exploded', gate));
+  const dir = makeProjectDir(t);
+  const { setup } = mod;
+  const { hooks, ctx } = fakeV2Ctx(dir);
+  t.after(await setup(ctx));
+
+  const existing = { type: 'text', text: 'host identity' };
+  const blocked = { sessionID: 's1', system: [existing] };
+  await assert.doesNotReject(() => hooks['session.compaction'](blocked));
+  assert.deepEqual(blocked.system, [existing]);
+  assert.equal(Object.hasOwn(blocked, 'result'), false);
+  assert.ok(errors.some((line) => line.includes('[gsd-core]') && line.includes('monitor exploded')));
+
+  gate.block = false;
+  const frozen = { sessionID: 's1', system: Object.freeze([]) };
+  const beforeFrozen = errors.length;
+  await assert.doesNotReject(() => hooks['session.compaction'](frozen));
+  assert.equal(frozen.system.length, 0);
+  assert.equal(Object.hasOwn(frozen, 'result'), false);
+  assert.ok(errors.slice(beforeFrozen).some((line) => line.includes('[gsd-core]')));
+
+  const missing = { sessionID: 's1' };
+  await assert.doesNotReject(() => hooks['session.compaction'](missing));
+  assert.equal(Object.hasOwn(missing, 'system'), false);
+  assert.equal(Object.hasOwn(missing, 'result'), false);
+});
+
+test('V2 compaction without a sessionID spawns nothing, pushes nothing and never reuses an earlier session', async (t) => {
+  const { mod, spawns } = loadTracedPlugin(t, LIFECYCLE_STUBS);
+  const dir = makeProjectDir(t);
+  const { setup } = mod;
+  const { hooks, ctx } = fakeV2Ctx(dir);
+  t.after(await setup(ctx));
+
+  const first = { sessionID: 's1', system: [] };
+  await hooks['session.compaction'](first);
+  assert.deepEqual(spawnedHooks(spawns.splice(0)), ['gsd-context-monitor.js']);
+  assert.equal(first.system.length, 1);
+
+  const anonymous = { system: [] };
+  await hooks['session.compaction'](anonymous);
+  assert.deepEqual(spawns, []);
+  assert.deepEqual(anonymous.system, []);
+  assert.equal(Object.hasOwn(anonymous, 'result'), false);
 });
 
 test('V2 session event loop logs a non-Error stream rejection once and raises no unhandled rejection', async (t) => {

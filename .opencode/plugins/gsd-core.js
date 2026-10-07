@@ -905,6 +905,16 @@ async function GsdCoreSetup(ctx) {
       console.error(`[gsd-core] shell env hook failed: ${err.message}`);
     }
   });
+  await ctx.session.hook("compaction", async (ev) => {
+    try {
+      pin(ev);
+      const out = { context: [] };
+      await v1["experimental.session.compacting"]({}, out);
+      for (const text of out.context) ev.system.push({ type: "text", text });
+    } catch (err) {
+      console.error(`[gsd-core] compaction hook failed: ${errorText(err)}`);
+    }
+  });
   const controller = new AbortController();
   void (async () => {
     try {
