@@ -4898,6 +4898,34 @@ describe('getDirName (relocated to runtime-name-policy)', () => {
     );
   });
 
+  test('install and uninstall still refuse an UNKNOWN runtime id and write nothing', (t) => {
+    const { install, uninstall } = require('../bin/install.js');
+    const { resolveInstallPlan } = require('../gsd-core/bin/lib/runtime-config-adapter-registry.cjs');
+    const { sandboxHome, scrubConfigLocationEnv } = require('./helpers.cjs');
+    const unknownId = 'example-host';
+    const tmpDir = createTempDir('gsd-unknown-install-');
+    const previousCwd = process.cwd();
+    process.chdir(tmpDir);
+    sandboxHome(t, tmpDir);
+    const restoreConfigLocationEnv = scrubConfigLocationEnv();
+    t.after(() => {
+      restoreConfigLocationEnv();
+      process.chdir(previousCwd);
+      cleanup(tmpDir);
+    });
+    // Install refuses in resolveInstallPlan, before any descriptor accessor runs.
+    const planRefusal = (() => {
+      try { resolveInstallPlan(unknownId); } catch (err) { return err; }
+      return null;
+    })();
+    assert.ok(planRefusal, 'resolveInstallPlan refuses the runtime');
+    const isRefusal = (err) => err.name === 'UnknownRuntimeError'
+      || (err.name === planRefusal.name && err.message === planRefusal.message);
+    assert.throws(() => install(false, unknownId), isRefusal);
+    assert.throws(() => uninstall(false, unknownId), isRefusal);
+    assert.deepStrictEqual(fs.readdirSync(tmpDir), []);
+  });
+
   test('falls back to .claude for empty input', () => {
     assert.strictEqual(runtimeNamePolicy.getDirName(''), '.claude');
   });

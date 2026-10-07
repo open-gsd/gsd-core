@@ -5948,3 +5948,84 @@ describe('#4683 review repairs — fence blindness and deterministic ordering', 
     ], 'claiming-plan lists must be sorted, never readdir order');
   });
 });
+
+describe('regressions', () => {
+  describe('an UNKNOWN runtime id is reported, not refused', () => {
+    const { INIT_SUBCOMMANDS } = require('../gsd-core/bin/lib/command-aliases.cjs');
+    const { UnknownRuntimeError } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
+    const { AGENTS_INSTALLED_REASON } = require('../gsd-core/bin/lib/agent-install-check.cjs');
+    const UNKNOWN_ID = 'example-host';
+    // The CLI gives this error no typed code, so match the class's own message.
+    const REFUSAL = new UnknownRuntimeError(UNKNOWN_ID).message;
+    const envFor = (dir) => ({ ...homeSandboxEnv(dir), GSD_RUNTIME: UNKNOWN_ID });
+
+    test('no init workflow refuses the runtime, with or without a phase argument', (t) => {
+      assert.ok(INIT_SUBCOMMANDS.length > 0, 'the init router lists its workflows');
+      const tmpDir = createTempProject('gsd-unknown-');
+      t.after(() => cleanup(tmpDir));
+      const refused = [];
+      for (const name of INIT_SUBCOMMANDS) {
+        for (const args of [['init', name], ['init', name, '1']]) {
+          const r = runGsdTools(args, tmpDir, envFor(tmpDir));
+          if (`${r.output || ''}\n${r.error || ''}`.includes(REFUSAL)) refused.push(args.join(' '));
+        }
+      }
+      assert.deepStrictEqual(refused, []);
+    });
+
+    test('new-project, plan-phase, execute-phase, quick and progress exit 0 and report that the check could not run', (t) => {
+      const tmpDir = createTempProject('gsd-unknown-');
+      t.after(() => cleanup(tmpDir));
+      for (const args of [['init', 'new-project'], ['init', 'plan-phase', '1'], ['init', 'execute-phase', '1'], ['init', 'quick'], ['init', 'progress']]) {
+        const r = runGsdTools(args, tmpDir, envFor(tmpDir));
+        assert.ok(r.success, `${args.join(' ')} failed: ${r.error}`);
+        const out = JSON.parse(r.output);
+        assert.strictEqual(out.agents_installed, null, `${args.join(' ')}: agents_installed`);
+        assert.strictEqual(out.agents_installed_reason, AGENTS_INSTALLED_REASON.UNKNOWN_RUNTIME, `${args.join(' ')}: reason`);
+      }
+    });
+
+    test('init new-project exits 0 with agents_installed null and the reason', (t) => {
+      const tmpDir = createTempProject('gsd-unknown-');
+      t.after(() => cleanup(tmpDir));
+      const r = runGsdTools(['init', 'new-project'], tmpDir, envFor(tmpDir));
+      assert.ok(r.success, `init new-project failed: ${r.error}`);
+      const out = JSON.parse(r.output);
+      assert.strictEqual(out.agent_runtime, UNKNOWN_ID);
+      assert.strictEqual(out.agents_installed, null);
+      assert.strictEqual(out.agents_installed_reason, AGENTS_INSTALLED_REASON.UNKNOWN_RUNTIME);
+      assert.deepStrictEqual(out.missing_agents, []);
+      assert.strictEqual(out.agents_dir, '');
+    });
+
+    test('control: a KNOWN runtime keeps a boolean and gets no reason key', (t) => {
+      const tmpDir = createTempProject('gsd-unknown-');
+      t.after(() => cleanup(tmpDir));
+      const r = runGsdTools(['init', 'new-project'], tmpDir, { ...homeSandboxEnv(tmpDir), GSD_RUNTIME: 'codex' });
+      assert.ok(r.success, `init new-project failed: ${r.error}`);
+      const out = JSON.parse(r.output);
+      assert.strictEqual(typeof out.agents_installed, 'boolean');
+      assert.ok(!('agents_installed_reason' in out), 'no reason key for a KNOWN runtime');
+    });
+
+    test('validate agents and docs-init report that the check could not run, with the reason', (t) => {
+      const tmpDir = createTempProject('gsd-unknown-');
+      t.after(() => cleanup(tmpDir));
+
+      const agents = runGsdTools(['validate', 'agents'], tmpDir, envFor(tmpDir));
+      assert.ok(agents.success, `validate agents failed: ${agents.error}`);
+      const report = JSON.parse(agents.output);
+      assert.strictEqual(report.agents_found, null);
+      assert.strictEqual(report.agents_found_reason, AGENTS_INSTALLED_REASON.UNKNOWN_RUNTIME);
+      assert.strictEqual(report.agents_dir, '');
+      assert.deepStrictEqual(report.missing, []);
+
+      const docs = runGsdTools(['docs-init'], tmpDir, envFor(tmpDir));
+      assert.ok(docs.success, `docs-init failed: ${docs.error}`);
+      const docsOut = JSON.parse(docs.output);
+      assert.strictEqual(docsOut.agents_installed, null);
+      assert.strictEqual(docsOut.agents_installed_reason, AGENTS_INSTALLED_REASON.UNKNOWN_RUNTIME);
+      assert.deepStrictEqual(docsOut.missing_agents, []);
+    });
+  });
+});
