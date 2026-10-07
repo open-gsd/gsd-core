@@ -996,7 +996,7 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     assert.deepStrictEqual(lines(W("  const d = path.join(dir, 'STATE.md'); const p = d; fs.writeFileSync(p, c);")), [2]);
   });
 
-  test('control: a trailing comma or path.posix does not defeat the literal tail', () => {
+  test('control: a trailing comma or path.posix does not stop a file-naming join tail from deciding', () => {
     assert.deepStrictEqual(lines(W("  fs.writeFileSync(path.join(path.dirname(statePath), 'ROADMAP.md',), c);")), []);
     assert.deepStrictEqual(
       lines(W('  fs.writeFileSync(', '    path.join(', '      path.dirname(statePath),', "      'ROADMAP.md',", '    ),', '    c);')),
@@ -1009,6 +1009,86 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     assert.deepStrictEqual(lines(W("  fs.writeFileSync(path.resolve(statePath, ''), c);")), [2]);
     assert.deepStrictEqual(lines(W("  fs.writeFileSync(path.join(statePath, '.'), c);")), [2]);
   });
+
+  // Review round 3 (m2): a join's last segment names the file written. When it
+  // is a file-naming literal, inline or bound to a name in the function, it
+  // alone decides, however the directory was derived. Every other tail leaves
+  // the whole expression to decide exactly as before, so the tail rule can
+  // only clear a write whose file is known (no worse than before).
+  const N = (...body) => ['function w(statePath, dir, c, name, x, opts, rest) {', ...body, '}'].join('\n');
+
+  test('control: a join tail bound in the function to another file is NOT reported, however the directory was derived', () => {
+    assert.deepStrictEqual(lines(N("  const d = path.dirname(statePath); const n = 'ROADMAP.md'; fs.writeFileSync(path.join(d, n), c);")), []);
+    assert.deepStrictEqual(lines(N('  const d = path.dirname(statePath);', "  const n = 'ROADMAP.md';", '  fs.writeFileSync(path.join(d, n), c);')), []);
+    assert.deepStrictEqual(lines(N("  const n2 = 'ROADMAP.md';", '  const n = n2;', '  fs.writeFileSync(path.join(path.dirname(statePath), n), c);')), []);
+    assert.deepStrictEqual(lines(N("  const n = 'ROADMAP.md';", '  const p = path.join(path.dirname(statePath), n);', '  fs.writeFileSync(p, c);')), []);
+  });
+
+  test('guard: a join tail that resolves to STATE.md or reads statePath is still reported', () => {
+    assert.deepStrictEqual(lines(N("  const d = path.dirname(statePath); const n = 'STATE.md'; fs.writeFileSync(path.join(d, n), c);")), [2]);
+    assert.deepStrictEqual(lines(N("  const n = 'STATE.md';", '  const p = path.join(dir, n);', '  fs.writeFileSync(p, c);')), [4]);
+    assert.deepStrictEqual(lines(N("  const n = 'STATE.md';", '  fs.writeFileSync(path.join(dir, n), c);')), [3]);
+    assert.deepStrictEqual(lines(N('  fs.writeFileSync(path.join(dir, path.basename(statePath)), c);')), [2]);
+    assert.deepStrictEqual(lines(N('  fs.writeFileSync(path.join(dir, `${name}/STATE.md`), c);')), [2]);
+    assert.deepStrictEqual(lines(N("  const parts = [dir, 'STATE.md'];", '  fs.writeFileSync(path.join(...parts), c);')), [3]);
+    assert.deepStrictEqual(lines(N('  fs.writeFileSync(path.resolve(statePath), c);')), [2]);
+  });
+
+  test('guard: a tail that names no file or does not resolve leaves the whole expression to decide, as before', () => {
+    // A bound '' or '.', or a conditional, names no file: the statePath base decides.
+    assert.deepStrictEqual(lines(N("  const sub = '';", '  fs.writeFileSync(path.join(statePath, sub), c);')), [3]);
+    assert.deepStrictEqual(lines(N("  const sub = '.';", '  fs.writeFileSync(path.resolve(statePath, sub), c);')), [3]);
+    assert.deepStrictEqual(lines(N("  const suffix = opts.backup ? '.bak' : '';", '  fs.writeFileSync(path.join(statePath, suffix), c);')), [3]);
+    assert.deepStrictEqual(lines(N("  let p = statePath; const sub = '';", '  p = path.join(p, sub);', '  fs.writeFileSync(p, c);')), [4]);
+    // A module-level constant sits behind the function boundary, so it is unresolved.
+    assert.deepStrictEqual(
+      lines(["const STATE_FILE = 'STATE.md';", 'function w(statePath, c) {', '  fs.writeFileSync(path.join(path.dirname(statePath), STATE_FILE), c);', '}'].join('\n')),
+      [3],
+    );
+    // Unresolved tails: a parameter, a spread, a member, a call, an interpolated template.
+    assert.deepStrictEqual(lines(N('  fs.writeFileSync(path.join(statePath, x), c);')), [2]);
+    assert.deepStrictEqual(lines(N('  fs.writeFileSync(path.resolve(statePath, x), c);')), [2]);
+    assert.deepStrictEqual(lines(N('  fs.writeFileSync(path.join(path.dirname(statePath), ...rest), c);')), [2]);
+    assert.deepStrictEqual(lines(N('  fs.writeFileSync(path.join(path.dirname(statePath), opts.file), c);')), [2]);
+    assert.deepStrictEqual(lines(N('  fs.writeFileSync(path.join(path.dirname(statePath), fileFor(x)), c);')), [2]);
+    assert.deepStrictEqual(lines(N("  const d = path.dirname(statePath); const base = 'STATE';", '  fs.writeFileSync(path.join(d, `${base}.md`), c);')), [3]);
+    // A destructured `join(` and `path.posix.join(dirname(…))`.
+    assert.deepStrictEqual(lines(N('  fs.writeFileSync(join(path.dirname(statePath), name), c);')), [2]);
+    assert.deepStrictEqual(lines(N('  fs.writeFileSync(path.posix.join(dirname(statePath), name), c);')), [2]);
+  });
+
+  // Known gaps of the tail rule, characterized like KNOWN_SCOPE_GAPS below.
+  const KNOWN_TAIL_GAPS = [
+    {
+      // unresolved tail: HEAD's directory rule decides (no-worse-than-before).
+      shape: 'statePath-derived directory joined with a parameter',
+      text: N('  const d = path.dirname(statePath);', '  fs.writeFileSync(path.join(d, name), c);'),
+      expected: [],
+      currentBuggyOutput: [3],
+    },
+    {
+      // unresolved tail: HEAD's directory rule decides (no-worse-than-before).
+      shape: 'statePath-derived directory joined with an interpolated template',
+      text: N('  const d = path.dirname(statePath);', '  fs.writeFileSync(path.join(d, `${name}.json`), c);'),
+      expected: [],
+      currentBuggyOutput: [3],
+    },
+    {
+      // False positive: text after the join call (`+ '.tmp'`) is not a join,
+      // so the directory still decides.
+      shape: 'join naming another file with a suffix appended',
+      text: N('  const d = path.dirname(statePath);', "  fs.writeFileSync(path.join(d, 'ROADMAP.md') + '.tmp', c);"),
+      expected: [],
+      currentBuggyOutput: [3],
+    },
+  ];
+
+  for (const gap of KNOWN_TAIL_GAPS) {
+    test(`known gap (join tail, currently wrong): ${gap.shape}`, () => {
+      assert.notDeepStrictEqual(gap.currentBuggyOutput, gap.expected);
+      assert.deepStrictEqual(lines(gap.text), gap.currentBuggyOutput);
+    });
+  }
 
   test("control: a one-line nested function's header line is not read, so its parameter cannot leak", () => {
     const outer = (header) => [
@@ -1044,22 +1124,68 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     assert.deepStrictEqual(lines(W(prior, "  p = statePath; fs.writeFileSync(p, c);")), [3]);
   });
 
-  test('limit: shapes the line rule leaves exactly as the pre-round scan had them', () => {
-    // Not read (the line holds a body): a STATE.md assignment in a one-line
-    // block before the write, and a bare reassignment in a closed block.
-    assert.deepStrictEqual(lines(W("  if (c) { const p = path.join(dir, 'STATE.md'); fs.writeFileSync(p, c); }")), []);
-    assert.deepStrictEqual(lines(["function f(p, statePath, c) {", "  if (a) { p = statePath; } fs.writeFileSync(p, c);", "}"].join("\n")), []);
-    // Pre-existing false positive: a one-line nested function's parameter
-    // that shadows an outer STATE.md variable of the same name.
-    assert.deepStrictEqual(lines(W("  const target = statePath;", "  function inner(target) { fs.writeFileSync(target, c); }")), [3]);
-  });
+  // Known gaps of the line-based scope (review round 3, m1). Each row records
+  // the CORRECT verdict (`expected`) and asserts today's observed one
+  // (`currentBuggyOutput`), per CONTRIBUTING.md's characterization rule: not
+  // `{ todo: true }`, which gsd-test counts as a failure. A fix that changes a
+  // verdict fails its row loudly; flip the row to assert `expected` then.
+  const KNOWN_SCOPE_GAPS = [
+    {
+      // Missed write: the cut line holds a body, so it is not read.
+      shape: 'STATE.md assignment and write inside a one-line block',
+      text: W("  if (c) { const p = path.join(dir, 'STATE.md'); fs.writeFileSync(p, c); }"),
+      expected: [2],
+      currentBuggyOutput: [],
+    },
+    {
+      // Missed write: a bare reassignment inside a closed block on the cut line.
+      shape: 'parameter reassigned to statePath in a closed block before the write',
+      text: ['function f(p, statePath, c) {', '  if (a) { p = statePath; } fs.writeFileSync(p, c);', '}'].join('\n'),
+      expected: [2],
+      currentBuggyOutput: [],
+    },
+    {
+      // False positive: a one-line nested function's parameter shadows the outer variable.
+      shape: 'nested function parameter shadowing an outer statePath variable',
+      text: W('  const target = statePath;', '  function inner(target) { fs.writeFileSync(target, c); }'),
+      expected: [],
+      currentBuggyOutput: [3],
+    },
+    {
+      // False positive: `p => statePath` on a prior line reads as `p = …`.
+      shape: 'arrow parameter on a prior line read as an assignment',
+      text: W("  const p = path.join(pick(dirs, p => statePath), 'ROADMAP.md');", '  fs.writeFileSync(p, c);'),
+      expected: [],
+      currentBuggyOutput: [3],
+    },
+    {
+      // False positive: arrows and methods are not boundaries, so `b`'s
+      // parameter resolves to `a`'s variable. Making them boundaries would hide
+      // every closure write that reads its enclosing function's variable.
+      shape: 'sibling arrow body binding the same name',
+      text: [
+        'const a = (dir) => {',
+        "  const p = path.join(dir, 'STATE.md');",
+        '  return p;',
+        '};',
+        'const b = (p, content) => {',
+        '  fs.writeFileSync(p, content);',
+        '};',
+      ].join('\n'),
+      expected: [],
+      currentBuggyOutput: [6],
+    },
+  ];
 
-  test('limit: an arrow parameter on a prior line reads as an assignment, as before', () => {
-    // Kept as the pre-round scan had it: skipping `p =>` would remove the
-    // accidental stop that keeps an arrow's own bare parameter from resolving
-    // to a shadowed outer variable.
-    assert.deepStrictEqual(lines(W("  const p = path.join(pick(dirs, p => statePath), 'ROADMAP.md');", "  fs.writeFileSync(p, c);")), [3]);
-    assert.deepStrictEqual(lines(W("  let x = statePath;", "  const save = x => {", "    fs.writeFileSync(x, c);", "  };")), []);
+  for (const gap of KNOWN_SCOPE_GAPS) {
+    test(`known gap (line-based scope, currently wrong): ${gap.shape}`, () => {
+      assert.notDeepStrictEqual(gap.currentBuggyOutput, gap.expected);
+      assert.deepStrictEqual(lines(gap.text), gap.currentBuggyOutput);
+    });
+  }
+
+  test("control: an arrow's own parameter on a multi-line arrow is not resolved to an outer variable", () => {
+    assert.deepStrictEqual(lines(W('  let x = statePath;', '  const save = x => {', '    fs.writeFileSync(x, c);', '  };')), []);
   });
 
   test('rule: a for header on the cut line is not read (its let is loop-scoped)', () => {
@@ -1071,23 +1197,6 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     assert.deepStrictEqual(lines(W("  let p = dir; p += '/STATE.md';", '  fs.writeFileSync(p, c);')), [3]);
     assert.deepStrictEqual(lines(W('  let p = dir;', "  p += '/STATE.md';", '  fs.writeFileSync(p, c);')), [4]);
     assert.deepStrictEqual(lines(W('  let p = dir;', "  p += '/ROADMAP.md';", '  fs.writeFileSync(p, c);')), []);
-  });
-
-  test('limit: arrow functions and methods are not scope boundaries (line-based scan)', () => {
-    // Pinned so the limit is a decision, not an accident. Treating an arrow or
-    // method header as a boundary would hide every write inside a closure that
-    // reads its enclosing function's variable (the row above); the cost is
-    // this sibling-body shape, which the real tree does not contain.
-    const text = [
-      'const a = (dir) => {',
-      "  const p = path.join(dir, 'STATE.md');",
-      '  return p;',
-      '};',
-      'const b = (p, content) => {',
-      '  fs.writeFileSync(p, content);',
-      '};',
-    ].join('\n');
-    assert.deepStrictEqual(lines(text), [6]);
   });
 
   test('guard: an inline callback still resolves its enclosing function\'s variable', () => {

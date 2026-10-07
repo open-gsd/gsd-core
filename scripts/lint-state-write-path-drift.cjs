@@ -710,13 +710,12 @@ function templateInterpolations(tpl) {
 const PATH_JOIN_CALL_RE = /^(?:path\s*\.\s*(?:(?:posix|win32)\s*\.\s*)?)?(?:join|resolve)\s*\(/;
 
 /**
- * When `expr` is exactly a `path.join`/`path.resolve` call whose LAST argument
- * is a plain string literal naming a file (not `''` or `'.'`, which leave the
- * path unchanged), that literal's text; otherwise null. The last segment names
- * the file written, so `path.join(path.dirname(statePath), 'ROADMAP.md')`
- * writes ROADMAP.md however the directory was derived.
+ * When `expr` is exactly a `path.join`/`path.resolve` call, its LAST
+ * argument's text, trimmed (a literal, identifier, template or any other
+ * expression); otherwise null. Text after the call (`path.join(…) + '.tmp'`)
+ * makes it not a join.
  */
-function literalJoinTail(expr) {
+function joinLastSegment(expr) {
   const t = expr.trim();
   const m = PATH_JOIN_CALL_RE.exec(t);
   if (!m) return null;
@@ -727,10 +726,53 @@ function literalJoinTail(expr) {
   const segments = args.map((a) => a.trim());
   while (segments.length > 0 && segments[segments.length - 1] === '') segments.pop(); // trailing comma
   if (segments.length === 0) return null;
-  const lit = /^(['"`])((?:(?!\1)[^\\]|\\.)*)\1$/.exec(segments[segments.length - 1]);
+  return segments[segments.length - 1];
+}
+
+/**
+ * When `segment` is a plain string literal that names a file, its text;
+ * otherwise null. A literal names a file unless it holds a `${…}`
+ * interpolation or only `.`, `/` and `\` characters (`''`, `'.'`, `'..'`,
+ * `'./'` leave the path unchanged or climb out of it).
+ */
+function fileNameLiteral(segment) {
+  const lit = /^(['"`])((?:(?!\1)[^\\]|\\.)*)\1$/.exec(segment);
   if (!lit || (lit[1] === '`' && lit[2].includes('${'))) return null;
   if (!/[^./\\]/.test(lit[2])) return null;
   return lit[2];
+}
+
+// A bare identifier: the only join tail `resolvedJoinFileTail` follows.
+const BARE_IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/;
+
+/**
+ * When `expr` is exactly a `path.join`/`path.resolve` call whose LAST
+ * argument is a file-naming string literal (`fileNameLiteral`), or a bare
+ * identifier that same-function assignments resolve to one, that literal's
+ * text; otherwise null. Each identifier followed spends one of `hopsLeft`,
+ * through the same `nearestTargetBinding` the target resolution uses, and
+ * every right-hand side on the way must be another bare identifier or the
+ * literal itself. Anything else (a parameter, a member, a call, a spread, a
+ * template with `${…}`, a conditional, a module-level constant behind the
+ * function boundary, a literal `''`/`'.'`) is null, so the caller falls back
+ * to the whole-expression rule.
+ */
+function resolvedJoinFileTail(lines, index, cut, expr, hopsLeft) {
+  let segment = joinLastSegment(expr);
+  if (segment === null) return null;
+  let line = index;
+  let before = cut;
+  for (;;) {
+    const lit = fileNameLiteral(segment);
+    if (lit !== null) return lit;
+    if (hopsLeft === 0 || !BARE_IDENTIFIER_RE.test(segment)) return null;
+    const binding = nearestTargetBinding(lines, line, before, segment);
+    if (!binding) return null;
+    hopsLeft--;
+    segment = binding.rhs.trim();
+    line = binding.line;
+    before = binding.before;
+  }
 }
 
 /**
@@ -843,17 +885,26 @@ function statementSpans(line) {
 /**
  * True when `expr` names the state path (`targetsStatePath`), or when one of
  * its identifiers resolves to an expression that does, following at most
- * `hopsLeft` same-function assignments (#5104). A `path.join`/`path.resolve`
- * whose last segment is a literal is decided by that literal alone
- * (`literalJoinTail`): a directory derived from `statePath` joined with
- * `'ROADMAP.md'` writes ROADMAP.md, and with no allowlist (ADR-4629 Decision 5)
- * a false positive there could never be cleared. `index` is the last line an
- * assignment may sit on. `seen` keys each binding by name AND line, so a
- * reassignment that reads its own earlier value (`p = p + '.tmp'`) still
- * reaches that earlier assignment.
+ * `hopsLeft` same-function assignments (#5104). One pre-check comes first: a
+ * `path.join`/`path.resolve` whose last segment is a file-naming literal,
+ * written inline or bound to a name in the function
+ * (`resolvedJoinFileTail`), is decided by that literal alone, with the same
+ * `/STATE\.md/` test `targetsStatePath` applies. The last segment names the
+ * file written, so a directory derived from `statePath` joined with
+ * `'ROADMAP.md'`, or with `n` after `const n = 'ROADMAP.md'`, writes
+ * ROADMAP.md; with no allowlist (ADR-4629 Decision 5) a false positive there
+ * could never be cleared. Every other tail (a parameter, member, call, spread,
+ * interpolated template, conditional, or a literal `''`/`'.'` that names no
+ * file) leaves the whole expression to decide, exactly as before the
+ * pre-check: `path.join(path.dirname(statePath), name)` is still reported,
+ * because a tail the line scan cannot see must not hide a write the directory
+ * rule caught. The pre-check can therefore only change a verdict where the
+ * written file is known. `index` is the last line an assignment may sit on.
+ * `seen` keys each binding by name AND line, so a reassignment that reads its
+ * own earlier value (`p = p + '.tmp'`) still reaches that earlier assignment.
  */
 function resolvesToStatePath(lines, index, cut, expr, hopsLeft = MAX_TARGET_RESOLUTION_HOPS, seen = new Set()) {
-  const tail = literalJoinTail(expr);
+  const tail = resolvedJoinFileTail(lines, index, cut, expr, hopsLeft);
   if (tail !== null) return /STATE\.md/.test(tail);
   if (targetsStatePath(expr)) return true;
   if (hopsLeft === 0) return false;
