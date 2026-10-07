@@ -820,6 +820,7 @@ function fakeEventStream() {
       events.signal = signal;
       signal.addEventListener('abort', () => {
         settleAll();
+        if (parked && events.bufferedAtAbort) unpark().resolve({ done: false, value: events.bufferedAtAbort });
         if (parked) unpark().reject(signal.reason);
       });
       return iterator;
@@ -1476,4 +1477,183 @@ test('V2 session events from another directory, subagent sessions, other event t
     assert.equal(spawns.length, 0, JSON.stringify(event));
   }
   assert.equal(events.waiting, true);
+});
+
+function captureErrors(t) {
+  const errors = [];
+  const realError = console.error;
+  console.error = (...args) => { errors.push(args.join(' ')); };
+  t.after(() => { console.error = realError; });
+  return errors;
+}
+
+const nextTurn = () => new Promise((resolve) => setImmediate(resolve));
+
+test('V2 session event loop logs a bad event without its contents and keeps running SessionStart for later sessions', async (t) => {
+  const errors = captureErrors(t);
+  const { mod, spawns } = loadTracedPlugin(t, LIFECYCLE_STUBS);
+  const dir = makeProjectDir(t);
+  const { setup } = mod;
+  const { events, ctx } = fakeV2Ctx(dir);
+  const cleanup = await setup(ctx);
+  t.after(cleanup);
+
+  await events.push({
+    type: 'session.created',
+    get location() { throw new Error('bad event'); },
+    data: { sessionID: 'sX', title: 'TOPSECRET-TITLE' },
+  });
+  assert.equal(errors.filter((line) => line.includes('[gsd-core]') && line.includes('bad event')).length, 1);
+  assert.ok(!errors.some((line) => line.includes('TOPSECRET-TITLE')));
+  assert.deepEqual(spawns, []);
+
+  await events.push(v2SessionCreated(dir, 's1'));
+  assert.deepEqual(spawnedHooks(spawns), SESSION_START_HOOKS);
+  for (const call of spawns) assert.equal(JSON.parse(call[2].input).session_id, 's1');
+});
+
+test('V2 session event loop logs and stops when the stream fails or ends, and stays silent after cleanup', async (t) => {
+  const errors = captureErrors(t);
+  const { mod, spawns } = loadTracedPlugin(t, LIFECYCLE_STUBS);
+  const dir = makeProjectDir(t);
+  const { setup } = mod;
+
+  const failing = fakeV2Ctx(dir);
+  t.after(await setup(failing.ctx));
+  failing.events.fail(new Error('stream broke'));
+  await nextTurn();
+  assert.ok(errors.some((line) => line.includes('[gsd-core]') && line.includes('stream broke')));
+
+  const ending = fakeV2Ctx(dir);
+  t.after(await setup(ending.ctx));
+  const beforeEnd = errors.length;
+  ending.events.end();
+  await nextTurn();
+  assert.equal(errors.length, beforeEnd + 1);
+  assert.ok(errors[beforeEnd].startsWith('[gsd-core]'));
+  await ending.events.push(v2SessionCreated(dir, 's1'));
+  assert.deepEqual(spawns, []);
+
+  const cleaned = fakeV2Ctx(dir);
+  const cleanup = await setup(cleaned.ctx);
+  const beforeCleanup = errors.length;
+  cleanup();
+  await nextTurn();
+  assert.equal(errors.length, beforeCleanup);
+});
+
+test('V2 hot reload: after cleanup and a second setup, one session.created runs each SessionStart hook once', async (t) => {
+  const { mod, spawns } = loadTracedPlugin(t, LIFECYCLE_STUBS);
+  const dir = makeProjectDir(t);
+  const { setup } = mod;
+  const first = fakeV2Ctx(dir);
+  const cleanup = await setup(first.ctx);
+  cleanup();
+  const second = fakeV2Ctx(dir);
+  t.after(await setup(second.ctx));
+
+  const event = v2SessionCreated(dir, 's1');
+  await first.events.push(event);
+  await second.events.push(event);
+  assert.deepEqual(spawnedHooks(spawns), SESSION_START_HOOKS);
+});
+
+test('V2 session.created on the server-wide stream runs SessionStart only in the location it belongs to', async (t) => {
+  const { mod, spawns } = loadTracedPlugin(t, LIFECYCLE_STUBS);
+  const dirA = makeProjectDir(t);
+  const dirB = makeProjectDir(t);
+  const { setup } = mod;
+  const a = fakeV2Ctx(dirA);
+  const b = fakeV2Ctx(dirB);
+  t.after(await setup(a.ctx));
+  t.after(await setup(b.ctx));
+
+  for (const [dir, sessionID] of [[dirA, 'sA'], [dirB, 'sB']]) {
+    spawns.splice(0);
+    const event = v2SessionCreated(dir, sessionID);
+    await a.events.push(event);
+    await b.events.push(event);
+    assert.deepEqual(spawnedHooks(spawns), SESSION_START_HOOKS);
+    for (const call of spawns) {
+      const payload = JSON.parse(call[2].input);
+      assert.equal(payload.cwd, dir);
+      assert.equal(payload.session_id, sessionID);
+      assert.equal(call[2].cwd, dir);
+    }
+  }
+});
+
+test('V2 setup still registers every guard hook and resolves a cleanup when event.subscribe throws', async (t) => {
+  const errors = captureErrors(t);
+  const { mod } = loadTracedPlugin(t, LIFECYCLE_STUBS);
+  const dir = makeProjectDir(t);
+  const { setup } = mod;
+  const { hooks, ctx } = fakeV2Ctx(dir);
+  ctx.event.subscribe = () => { throw new Error('no stream'); };
+  const cleanup = await setup(ctx);
+  assert.equal(typeof cleanup, 'function');
+  for (const key of ['tool.execute.before', 'tool.execute.after', 'shell.create.before']) {
+    assert.equal(typeof hooks[key], 'function', key);
+  }
+  assert.ok(errors.some((line) => line.includes('[gsd-core]') && line.includes('no stream')));
+  assert.doesNotThrow(cleanup);
+});
+
+test('V2 session event loop logs a non-Error stream rejection once and raises no unhandled rejection', async (t) => {
+  const errors = captureErrors(t);
+  const rejections = [];
+  const onRejection = (reason) => rejections.push(reason);
+  process.on('unhandledRejection', onRejection);
+  t.after(() => process.off('unhandledRejection', onRejection));
+  const { mod } = loadTracedPlugin(t, LIFECYCLE_STUBS);
+  const dir = makeProjectDir(t);
+  const { setup } = mod;
+  const { events, ctx } = fakeV2Ctx(dir);
+  const cleanup = await setup(ctx);
+  t.after(cleanup);
+  assert.equal(typeof cleanup, 'function');
+  assert.equal(events.waiting, true);
+
+  events.fail(undefined);
+  await nextTurn();
+  assert.deepEqual(rejections, []);
+  assert.equal(errors.filter((line) => line.startsWith('[gsd-core] event stream failed')).length, 1);
+});
+
+test('V2 session event loop logs a non-Error throw from one event and keeps running SessionStart for later sessions', async (t) => {
+  const errors = captureErrors(t);
+  const { mod, spawns } = loadTracedPlugin(t, LIFECYCLE_STUBS);
+  const dir = makeProjectDir(t);
+  const { setup } = mod;
+  const { events, ctx } = fakeV2Ctx(dir);
+  t.after(await setup(ctx));
+
+  await events.push({
+    type: 'session.created',
+    get location() { throw null; },
+    data: { sessionID: 'sX' },
+  });
+  assert.equal(errors.filter((line) => line.startsWith('[gsd-core] session event failed')).length, 1);
+  assert.ok(!errors.some((line) => line.includes('event stream failed')));
+  assert.deepEqual(spawns, []);
+
+  await events.push(v2SessionCreated(dir, 's1'));
+  assert.deepEqual(spawnedHooks(spawns), SESSION_START_HOOKS);
+  for (const call of spawns) assert.equal(JSON.parse(call[2].input).session_id, 's1');
+});
+
+test('V2 session event loop runs no SessionStart hook for an event the host yields after cleanup', async (t) => {
+  const errors = captureErrors(t);
+  const { mod, spawns } = loadTracedPlugin(t, LIFECYCLE_STUBS);
+  const dir = makeProjectDir(t);
+  const { setup } = mod;
+  const { events, ctx } = fakeV2Ctx(dir);
+  const cleanup = await setup(ctx);
+  assert.equal(events.waiting, true);
+
+  events.bufferedAtAbort = v2SessionCreated(dir, 'late');
+  cleanup();
+  await nextTurn();
+  assert.deepEqual(spawns, []);
+  assert.deepEqual(errors, []);
 });
