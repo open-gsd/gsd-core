@@ -322,9 +322,9 @@ test('every installable runtime accepts a configured MCP grant without crashing 
 
 test('Codex grants do not widen the generated TOML sandbox (#4032)', (t) => {
   const install = installRuntime(t, 'codex', {
-    defaults: { agent_tools: { 'gsd-plan-checker': ['Write'] } },
+    defaults: { agent_tools: { 'gsd-integration-checker': ['Write'] } },
   });
-  const toml = fs.readFileSync(path.join(install.configDir, 'agents', 'gsd-plan-checker.toml'), 'utf8');
+  const toml = fs.readFileSync(path.join(install.configDir, 'agents', 'gsd-integration-checker.toml'), 'utf8');
   assert.match(toml, /^sandbox_mode = "read-only"$/m);
   assert.doesNotMatch(toml, /Write/,
     'Codex tool availability is inherited from the parent session, not encoded in agent TOML');

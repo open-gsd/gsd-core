@@ -501,15 +501,15 @@ color: yellow
     assert.ok(result.includes('sandbox_mode = "workspace-write"'), 'has workspace-write');
   });
 
-  test('sets read-only for plan-checker', () => {
+  test('sets read-only for integration-checker', () => {
     const checker = `---
-name: gsd-plan-checker
-description: Checks plans
+name: gsd-integration-checker
+description: Checks integration
 tools: Read, Grep, Glob
 ---
 
-<role>You check plans.</role>`;
-    const result = generateCodexAgentToml('gsd-plan-checker', checker);
+<role>You check integration.</role>`;
+    const result = generateCodexAgentToml('gsd-integration-checker', checker);
     assert.ok(result.includes('sandbox_mode = "read-only"'), 'has read-only');
   });
 
@@ -1131,7 +1131,7 @@ describe('#3897 rung 3: sandbox_mode derivation and the hold list', () => {
     'gsd-nyquist-auditor': 'workspace-write',
     'gsd-pattern-mapper': 'workspace-write',
     'gsd-phase-researcher': 'workspace-write',
-    'gsd-plan-checker': 'read-only',
+    'gsd-plan-checker': 'workspace-write',
     'gsd-planner': 'workspace-write',
     'gsd-project-researcher': 'workspace-write',
     'gsd-research-synthesizer': 'workspace-write',
@@ -1226,7 +1226,13 @@ describe('#3897 rung 3: sandbox_mode derivation and the hold list', () => {
   });
 
   test('T21 mappedRolesDeriveToTheirFormerValue: every former CODEX_AGENT_SANDBOX entry (11) derives to the identical value from its real tool contract', () => {
+    // #5182 is the one deliberate departure (pinned by its own test below); every
+    // other former entry must still derive identically.
+    const DELIBERATE_DEPARTURES = new Set(['gsd-plan-checker']);
+    let compared = 0;
     for (const [role, formerValue] of Object.entries(PRE_3897_CODEX_AGENT_SANDBOX)) {
+      if (DELIBERATE_DEPARTURES.has(role)) continue;
+      compared++;
       const derivesWorkspaceWrite = declaresWriteOrEdit(realAgentToolsRaw(role));
       const derived = derivesWorkspaceWrite ? 'workspace-write' : 'read-only';
       assert.equal(
@@ -1236,6 +1242,7 @@ describe('#3897 rung 3: sandbox_mode derivation and the hold list', () => {
       );
     }
     assert.equal(Object.keys(PRE_3897_CODEX_AGENT_SANDBOX).length, 11);
+    assert.equal(compared, 10, 'every former entry except the #5182 departure is compared');
   });
 
   test('T22 nonWritingFallbackRoleDerivesReadOnly: a fallback role declaring neither Write nor Edit derives read-only (S2)', () => {
@@ -1967,11 +1974,18 @@ describe('CODEX_AGENT_SANDBOX (deleted map, derivation regression baseline)', ()
   });
 
   test('read-only agents still derive read-only', () => {
-    const readOnlyAgents = ['gsd-plan-checker', 'gsd-integration-checker'];
+    const readOnlyAgents = ['gsd-integration-checker'];
     for (const name of readOnlyAgents) {
       assert.strictEqual(PRE_3897_CODEX_AGENT_SANDBOX[name], 'read-only', `${name} baseline is read-only`);
       assert.strictEqual(realDerivedSandboxMode(name), 'read-only', `${name} still derives read-only`);
     }
+  });
+
+  // #5182: the one deliberate departure from the pre-#3897 baseline. The checker
+  // declares Write so it can write its stall-watch return receipt on Codex.
+  test('gsd-plan-checker moved from read-only to workspace-write (#5182)', () => {
+    assert.strictEqual(PRE_3897_CODEX_AGENT_SANDBOX['gsd-plan-checker'], 'read-only', 'baseline was read-only');
+    assert.strictEqual(realDerivedSandboxMode('gsd-plan-checker'), 'workspace-write', 'now derives workspace-write');
   });
 });
 

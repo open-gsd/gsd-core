@@ -1305,21 +1305,31 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.match(step11, /## ISSUES FOUND[^\n]*11a/, 'a missing issue list routes to 11a, never to a zero count');
   });
 
-  test('both agent definitions carry the receipt rule; the checker write is best-effort and non-fatal', () => {
+  test('both agent definitions carry the receipt rule; the checker writes it with Write, its only write', () => {
     const planner = readFileNormalized(path.join(REPO_ROOT, 'agents', 'gsd-planner.md'));
     const checker = readFileNormalized(path.join(REPO_ROOT, 'agents', 'gsd-plan-checker.md'));
     for (const [label, doc] of [['gsd-planner', planner], ['gsd-plan-checker', checker]]) {
       assert.match(doc, /<return_receipt>/, `${label} must define the <return_receipt> rule`);
     }
-    assert.match(checker, /printf '%s\\n'/, 'the checker writes its receipt through Bash (it has no Write tool)');
-    assert.doesNotMatch(checker.match(/^tools:.*$/m)[0], /\bWrite\b/, 'the checker gains no Write tool');
+    // #5182 AC5: a Bash write is refused by a read-only sandbox (Codex), so the checker
+    // declares Write (Group B) and the receipt is its only write.
+    assert.match(checker.match(/^tools:.*$/m)[0], /\bWrite\b/, 'the checker declares Write for its receipt');
+    const rule = checker.slice(checker.indexOf('**Return receipt (#5182):**'));
+    assert.match(rule.slice(0, 600), /the Write tool/, 'the checker receipt rule names the Write tool');
+    assert.match(rule.slice(0, 600), /only write/, 'the receipt is the checker\'s only write');
+    assert.doesNotMatch(rule.slice(0, 600), /printf/, 'no Bash printf write remains in the checker receipt rule');
+    // The limit must hold on spawns that send no receipt (quick, quick-batch, import), so it
+    // also lives in <anti_patterns>, outside the receipt-conditional rule.
+    const anti = checker.slice(checker.indexOf('<anti_patterns>'), checker.indexOf('</anti_patterns>'));
+    assert.match(anti, /DO NOT\*\* use Write on any file except the `<return_receipt>` path/, 'the write limit is unconditional');
   });
 
   // Prose-contract rows are deliberately reduced to command tokens and one keyword,
   // so rewording the explanation around them does not break the suite.
-  test('helpers doc: receipts are removed after routing and the read-only checker case is disclosed', () => {
+  test('helpers doc: receipts are removed after routing and the checker receipt is written on every host', () => {
     const doc = readStallHelpersDoc();
     assert.match(doc, /rm -f "\{receipt\}"/, 'the orchestrator removes the receipt after routing');
-    assert.match(doc, /read-only/, 'the read-only checker degradation must be disclosed');
+    assert.match(doc, /Group B report-writer/, 'the checker posture (#767 Group B) is stated');
+    assert.doesNotMatch(doc, /refuses that write/, 'the retired read-only degradation is no longer described');
   });
 });

@@ -63,12 +63,10 @@ offer Retry planner before Accept.
 The helper functions and the config values above do not persist between tool calls
 either: re-run this block in every fence that calls them.
 
-**Plan-checker on a read-only host:** a checker that PASSES touches no `*-PLAN.md`, so
-its receipt is its only completion signal for this watch. The checker has no Write
-tool and writes its receipt with one Bash `printf`. A host that runs it read-only
-(Codex derives a `read-only` sandbox from its `tools:`) refuses that write. The checker
-then continues without it, and its watch ends `stalled` at the threshold, as before
-#5182, unless the runtime's completion result arrives first.
+**Plan-checker receipt:** a checker that PASSES touches no `*-PLAN.md`, so its receipt
+is its only completion signal for this watch. The checker declares `Write` for that one
+file (a #767 Group B report-writer: Claude denies it only `Edit, MultiEdit`, and Codex
+derives `workspace-write` from its `tools:`), so it can write the receipt on both.
 
 **Single-cycle by design, not one long-lived loop:** `gsd_stall_watch` sleeps
 for exactly one `PLANNER_STALL_INTERVAL_MINUTES` and returns — it does NOT

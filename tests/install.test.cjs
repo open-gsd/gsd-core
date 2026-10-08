@@ -1692,7 +1692,7 @@ describe('cleanupWindsurfLegacyDevinSkills — removes pre-#1615 skill artifacts
 // #767 — must mirror READONLY_AGENT_DISALLOWED_TOOLS in bin/install.js.
 // If you change the map there, update this too (the parity test will catch drift).
 const READONLY_AGENT_DISALLOWED_TOOLS_767 = {
-  'gsd-plan-checker': 'Write, Edit, MultiEdit',
+  'gsd-plan-checker': 'Edit, MultiEdit',
   'gsd-integration-checker': 'Write, Edit, MultiEdit',
   'gsd-ui-checker': 'Write, Edit, MultiEdit',
   'gsd-verifier': 'Edit, MultiEdit',
@@ -1701,8 +1701,9 @@ const READONLY_AGENT_DISALLOWED_TOOLS_767 = {
   'gsd-ui-auditor': 'Edit, MultiEdit',
 };
 
-const GROUP_A_767 = ['gsd-plan-checker', 'gsd-integration-checker', 'gsd-ui-checker'];
-const GROUP_B_767 = ['gsd-verifier', 'gsd-doc-verifier', 'gsd-eval-auditor', 'gsd-ui-auditor'];
+// #5182: gsd-plan-checker writes its stall-watch return receipt, so it is a Group B report-writer.
+const GROUP_A_767 = ['gsd-integration-checker', 'gsd-ui-checker'];
+const GROUP_B_767 = ['gsd-plan-checker', 'gsd-verifier', 'gsd-doc-verifier', 'gsd-eval-auditor', 'gsd-ui-auditor'];
 
 const REPO_ROOT_767 = path.resolve(__dirname, '..');
 const SOURCE_AGENTS_DIR_767 = path.join(REPO_ROOT_767, 'agents');
