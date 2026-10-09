@@ -335,34 +335,38 @@ Check `research_enabled` from init JSON (loaded from config).
 
 **If `research_enabled` is `true`:**
 
-AskUserQuestion: "Research the domain ecosystem for new features before defining requirements?"
-- "Research first (Recommended)" — Discover patterns, features, architecture for NEW capabilities
+AskUserQuestion: "Research the domain ecosystem for new features and how they fit the existing codebase before defining requirements?"
+- "Research first (Recommended)" — Discover patterns, features, architecture for NEW capabilities and their fit with the existing codebase
 - "Skip research for this milestone" — Go straight to requirements (does not change your default)
 
 **If `research_enabled` is `false`:**
 
-AskUserQuestion: "Research the domain ecosystem for new features before defining requirements?"
+AskUserQuestion: "Research the domain ecosystem for new features and how they fit the existing codebase before defining requirements?"
 - "Skip research (current default)" — Go straight to requirements
-- "Research first" — Discover patterns, features, architecture for NEW capabilities
+- "Research first" — Discover patterns, features, architecture for NEW capabilities and their fit with the existing codebase
+
+**`(Recommended)` is bound to `research_enabled`:** it marks "Research first" only when `research_enabled` is `true`, and is never added to or moved between options.
 
 **IMPORTANT:** Do NOT persist this choice to config.json. The `workflow.research` setting is a persistent user preference that controls plan-phase behavior across the project. Changing it here would silently alter future `/gsd:plan-phase` behavior. To change the default, use `/gsd:settings`.
 
 **If user chose "Research first":**
 
+Run all 4 researchers by default. Drop one only when its dimension clearly does not apply to this milestone, and tell the user before spawning: `Skipping: {dimension(s)} — {reason}`. Never drop one silently.
+
 ```
 ### GSD ► RESEARCHING
 
-◆ Spawning 4 researchers in parallel... (each runs in a subagent — no output until they return, ~1–5 min; expected, not a freeze)
-  → Stack, Features, Architecture, Pitfalls
+◆ Spawning {N} researchers in parallel... (each runs in a subagent — no output until they return, ~1–5 min; expected, not a freeze)
+  → {dimensions that will run}
 ```
 
 ```bash
 mkdir -p .planning/research
 ```
 
-Spawn 4 parallel gsd-project-researcher agents. Each uses this template with dimension-specific fields:
+Spawn {N} parallel gsd-project-researcher agents (one per dimension kept). Each uses this template with dimension-specific fields:
 
-**Common structure for all 4 researchers:**
+**Common structure for every researcher:**
 <!-- #2517 model-omit-on-inherit -->
 
 > **Model omission (#2517).** Omit the `model` parameter entirely when the value it would carry (`researcher_model`, `synthesizer_model`, `roadmapper_model`) is `"inherit"` or empty. An empty value 404s on runtimes without native tier aliases — the default on non-Claude runtimes. Omitting it inherits the orchestrator's model. See @gsd-core/references/model-profile-resolution.md.
@@ -410,19 +414,16 @@ Use template: ~/.claude/gsd-core/templates/research-project/{FILE}
 | GATES | Versions current (verify with Context7), rationale explains WHY, integration considered | Categories clear, complexity noted, dependencies identified | Integration points identified, new vs modified explicit, build order considers deps | Pitfalls specific to adding these features, integration pitfalls covered, prevention actionable |
 | FILE | STACK.md | FEATURES.md | ARCHITECTURE.md | PITFALLS.md |
 
-> **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling all 4 researcher Agent() calls above, do NOT read research files or synthesize content independently while the subagents are active. Wait for all 4 researchers to complete before spawning the synthesizer. This prevents duplicate work and wasted context.
+> **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling all researcher Agent() calls above, do NOT read research files or synthesize content independently while the subagents are active. Wait for all researchers to complete before spawning the synthesizer. This prevents duplicate work and wasted context.
 
-After all 4 complete, spawn synthesizer:
+After all complete, spawn synthesizer:
 
 ```text
 Agent(prompt="
 Synthesize research outputs into SUMMARY.md.
 
 <required_reading>
-- {research_dir}/STACK.md
-- {research_dir}/FEATURES.md
-- {research_dir}/ARCHITECTURE.md
-- {research_dir}/PITFALLS.md
+List only the files that exist in {research_dir} (STACK.md, FEATURES.md, ARCHITECTURE.md, PITFALLS.md), one `- {research_dir}/{FILE}` line each — omit any dropped dimension.
 </required_reading>
 
 ${AGENT_SKILLS_SYNTHESIZER}
