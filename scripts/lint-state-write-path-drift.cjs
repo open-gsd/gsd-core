@@ -748,13 +748,14 @@ const BARE_IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/;
 /**
  * When `expr` is exactly a `path.join`/`path.resolve` call whose LAST
  * argument is a file-naming string literal (`fileNameLiteral`), or a bare
- * identifier that same-function assignments resolve to one, that literal's
- * text; otherwise null. Each identifier followed spends one of `hopsLeft`,
+ * identifier that same-function `const` declarations resolve to one, that
+ * literal's text; otherwise null. Each identifier followed spends one of `hopsLeft`,
  * through the same `nearestTargetBinding` the target resolution uses, and
  * every right-hand side on the way must be another bare identifier or the
  * literal itself. Anything else (a parameter, a member, a call, a spread, a
- * template with `${…}`, a conditional, a module-level constant behind the
- * function boundary, a literal `''`/`'.'`) is null, so the caller falls back
+ * template with `${…}`, a conditional, a `let`/`var` or bare assignment, a
+ * module-level constant behind the function boundary, a literal `''`/`'.'`)
+ * is null, so the caller falls back
  * to the whole-expression rule.
  */
 function resolvedJoinFileTail(lines, index, cut, expr, hopsLeft) {
@@ -767,7 +768,11 @@ function resolvedJoinFileTail(lines, index, cut, expr, hopsLeft) {
     if (lit !== null) return lit;
     if (hopsLeft === 0 || !BARE_IDENTIFIER_RE.test(segment)) return null;
     const binding = nearestTargetBinding(lines, line, before, segment);
-    if (!binding) return null;
+    // Only a `const` binding is followed: the nearest assignment to a `let` or
+    // `var` is not the only one a line scan can see (`let n = 'STATE.md';
+    // if (x) n = 'ROADMAP.md';`), and the literal must never clear a write
+    // another assignment could aim at STATE.md.
+    if (!binding || !binding.isConst) return null;
     hopsLeft--;
     segment = binding.rhs.trim();
     line = binding.line;
@@ -802,7 +807,7 @@ const CUT_LINE_BODY_RE = /[{}]|=>|\b(?:function|for)\b/;
  * stopping at the nearest preceding named-function declaration (the same
  * boundary as `nearestPrecedingAssignment`). Line `index` is read as `cut`
  * instead, and only when it is plain statements (`CUT_LINE_BODY_RE`). Each
- * line is read by `lastBindingInText`. Returns `{ rhs, line, before }` for an
+ * line is read by `lastBindingInText`. Returns `{ rhs, line, before, isConst }` for an
  * assignment, where `before` is that line's text up to the match (where the
  * next hop resumes, so a chain on one line resolves), or `null` when the name
  * is unresolved: no assignment before the boundary (a parameter), or a
@@ -820,7 +825,7 @@ function nearestTargetBinding(lines, index, cut, name) {
     if (!text.includes(name)) continue; // a line without the name cannot bind it
     const found = lastBindingInText(text, name);
     if (found === 'unresolved') return null;
-    if (found) return { rhs: found.rhs, line: i, before: text.slice(0, found.index + 1) };
+    if (found) return { rhs: found.rhs, line: i, before: text.slice(0, found.index + 1), isConst: found.isConst };
   }
   return null;
 }
@@ -839,10 +844,14 @@ function bindingRegexesFor(name) {
   return res;
 }
 
+// An assignment match that declares its name with `const`.
+const CONST_DECL_RE = /(?:^|[^.\w$])const\s/;
+
 /**
  * The last binding of `name` in one line of text: statements last to first,
- * and within a statement the last assignment first. Returns `{ rhs, index }`
- * (`index` is where the match starts in `text`), the string `'unresolved'`
+ * and within a statement the last assignment first. Returns
+ * `{ rhs, index, isConst }` (`index` is where the match starts in `text`;
+ * `isConst` is true for a `const` declaration), the string `'unresolved'`
  * when a `for...of` / destructuring binding is reached first, or null. A
  * right-hand side ends at its own `;`, and `name += x` reads as `name + x`.
  */
@@ -856,7 +865,7 @@ function lastBindingInText(text, name) {
       for (let from = 0; from < body.length; ) {
         const m = re.exec(body.slice(from));
         if (!m) break;
-        hits.push({ at: from + m.index, rhs: m[1], compound });
+        hits.push({ at: from + m.index, rhs: m[1], compound, isConst: !compound && CONST_DECL_RE.test(m[0]) });
         // Resume at the right-hand side: one char further would re-match the
         // tail of `const p =` as a bare `p =`.
         from += m.index + m[0].length - m[1].length;
@@ -865,7 +874,7 @@ function lastBindingInText(text, name) {
     hits.sort((a, b) => b.at - a.at);
     for (const h of hits) {
       const rhs = splitStatements(h.rhs)[0].trim();
-      return { rhs: h.compound ? `${name} + (${rhs})` : rhs, index: start + h.at };
+      return { rhs: h.compound ? `${name} + (${rhs})` : rhs, index: start + h.at, isConst: h.isConst };
     }
   }
   return null;
@@ -887,7 +896,7 @@ function statementSpans(line) {
  * its identifiers resolves to an expression that does, following at most
  * `hopsLeft` same-function assignments (#5104). One pre-check comes first: a
  * `path.join`/`path.resolve` whose last segment is a file-naming literal,
- * written inline or bound to a name in the function
+ * written inline or bound by a `const` in the function
  * (`resolvedJoinFileTail`), is decided by that literal alone, with the same
  * `/STATE\.md/` test `targetsStatePath` applies. The last segment names the
  * file written, so a directory derived from `statePath` joined with
@@ -943,6 +952,15 @@ function resolvesToStatePath(lines, index, cut, expr, hopsLeft = MAX_TARGET_RESO
  * arrives as data built in another function (e.g. a `Map` key) cannot be
  * resolved within one function, so this axis's zero is still not proof that
  * no raw writer exists (ADR-3408 Decision 5).
+ *
+ * What the axis matches, and so what its zero covers: only the literal text
+ * `fs.writeFileSync(`. `fs.writeFile`, `fs.promises.writeFile`,
+ * `fs.appendFileSync`, a destructured or aliased `writeFileSync`, and
+ * `fs?.writeFileSync` / `fs['writeFileSync']` are not seen. The scan runs over
+ * `stripComments` output, which does not track strings or regex literals: a
+ * `//` inside one (`'http://x'`, `/\//`) hides the rest of that line,
+ * including a call that starts there, and a string that spells the call is
+ * reported. The tests pin each of these as a known gap.
  */
 function findRawStateWrites(rel, rawText) {
   // CRLF: `assignmentLineRe`'s `(.*)$` cannot cross a trailing `\r` (`.` does

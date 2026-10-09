@@ -1034,6 +1034,28 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     assert.deepStrictEqual(lines(N('  fs.writeFileSync(path.resolve(statePath), c);')), [2]);
   });
 
+  test('guard: a join tail held in a let or var is not decided by its nearest assignment', () => {
+    // Review round 4, M1: the nearest assignment to a `let` is not the only one
+    // a line scan can see, so a conditional reassignment must not clear the write.
+    assert.deepStrictEqual(
+      lines(N('  const d = path.dirname(statePath);', "  let n = 'STATE.md';", "  if (x) n = 'ROADMAP.md';", '  fs.writeFileSync(path.join(d, n), c);')),
+      [5],
+    );
+    assert.deepStrictEqual(
+      lines(N('  const d = path.dirname(statePath);', "  let n = 'STATE.md';", '  if (x) {', "    n = 'ROADMAP.md';", '  }', '  fs.writeFileSync(path.join(d, n), c);')),
+      [7],
+    );
+    assert.deepStrictEqual(
+      lines(N('  const d = path.dirname(statePath);', "  var n = 'STATE.md';", "  if (x) n = 'ROADMAP.md';", '  fs.writeFileSync(path.join(d, n), c);')),
+      [5],
+    );
+    // A `const` alias of a `let` stops at the `let` the same way.
+    assert.deepStrictEqual(
+      lines(N('  const d = path.dirname(statePath);', "  let m = 'STATE.md';", "  if (x) m = 'ROADMAP.md';", '  const n = m;', '  fs.writeFileSync(path.join(d, n), c);')),
+      [6],
+    );
+  });
+
   test('guard: a tail that names no file or does not resolve leaves the whole expression to decide, as before', () => {
     // A bound '' or '.', or a conditional, names no file: the statePath base decides.
     assert.deepStrictEqual(lines(N("  const sub = '';", '  fs.writeFileSync(path.join(statePath, sub), c);')), [3]);
@@ -1072,6 +1094,14 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       text: N('  const d = path.dirname(statePath);', '  fs.writeFileSync(path.join(d, `${name}.json`), c);'),
       expected: [],
       currentBuggyOutput: [3],
+    },
+    {
+      // False positive: only a `const` tail is followed (review round 4, M1),
+      // so a `let` naming another file leaves the directory to decide.
+      shape: 'statePath-derived directory joined with a let that is never reassigned',
+      text: N('  const d = path.dirname(statePath);', "  let n = 'ROADMAP.md';", '  fs.writeFileSync(path.join(d, n), c);'),
+      expected: [],
+      currentBuggyOutput: [4],
     },
     {
       // False positive: text after the join call (`+ '.tmp'`) is not a join,
@@ -1179,6 +1209,54 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
 
   for (const gap of KNOWN_SCOPE_GAPS) {
     test(`known gap (line-based scope, currently wrong): ${gap.shape}`, () => {
+      assert.notDeepStrictEqual(gap.currentBuggyOutput, gap.expected);
+      assert.deepStrictEqual(lines(gap.text), gap.currentBuggyOutput);
+    });
+  }
+
+  // Known gaps outside the target rule (review round 4, m2-m4), characterized
+  // the same way. `stripComments` does not track strings or regex literals (its
+  // header says why), and the axis matches only a literal `fs.writeFileSync(`.
+  const KNOWN_MATCH_GAPS = [
+    {
+      // Missed write: `//` inside a string reads as a line comment.
+      shape: 'wrapped call after a string holding //',
+      text: W("  const u = 'http://x'; fs.writeFileSync(", '    statePath, c);'),
+      expected: [2],
+      currentBuggyOutput: [],
+    },
+    {
+      // Missed write: `//` inside a regex literal reads as a line comment.
+      shape: 'wrapped call after a regex literal holding //',
+      text: W('  const re = /\\//; fs.writeFileSync(', '    statePath, c);'),
+      expected: [2],
+      currentBuggyOutput: [],
+    },
+    {
+      // False positive: a string that only spells the call.
+      shape: 'the call spelled inside a string literal',
+      text: W('  const s = "fs.writeFileSync(statePath, c)";'),
+      expected: [],
+      currentBuggyOutput: [2],
+    },
+    {
+      // Missed write: another write API.
+      shape: 'fs.promises.writeFile onto statePath',
+      text: W('  await fs.promises.writeFile(statePath, c);'),
+      expected: [2],
+      currentBuggyOutput: [],
+    },
+    {
+      // Missed write: a destructured writeFileSync.
+      shape: 'destructured writeFileSync onto statePath',
+      text: W('  writeFileSync(statePath, c);'),
+      expected: [2],
+      currentBuggyOutput: [],
+    },
+  ];
+
+  for (const gap of KNOWN_MATCH_GAPS) {
+    test(`known gap (call match, currently wrong): ${gap.shape}`, () => {
       assert.notDeepStrictEqual(gap.currentBuggyOutput, gap.expected);
       assert.deepStrictEqual(lines(gap.text), gap.currentBuggyOutput);
     });
