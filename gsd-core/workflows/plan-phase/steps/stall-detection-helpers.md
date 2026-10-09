@@ -68,6 +68,11 @@ is its only completion signal for this watch. The checker declares `Write` for t
 file (a #767 Group B report-writer: Claude denies it only `Edit, MultiEdit`, and Codex
 derives `workspace-write` from its `tools:`), so it can write the receipt on both.
 
+**Known limit, kimi-code:** it dispatches `-planner` to its `plan` built-in and
+`-checker` to `explore`, and neither can write files (`runtime-aware-dispatch.md`),
+so no receipt is written there. The wait ends on the completion result, as above,
+or as `stalled` at the threshold.
+
 **Single-cycle by design, not one long-lived loop:** `gsd_stall_watch` sleeps
 for exactly one `PLANNER_STALL_INTERVAL_MINUTES` and returns — it does NOT
 loop internally for the full `PLANNER_STALL_THRESHOLD_MINUTES`. A single Bash
