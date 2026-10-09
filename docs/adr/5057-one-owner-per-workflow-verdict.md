@@ -287,3 +287,12 @@ Phase 0 was [#5058](https://github.com/open-gsd/gsd-core/pull/5058) (with the sc
 - Not subsumed, in progress: [#4629](https://github.com/open-gsd/gsd-core/issues/4629) / [ADR-4629](4629-state-write-intent-beyond-frontmatter.md)
 - Owners this ADR builds on: [ADR-3180](3180-planning-semantic-model-single-owner.md) (§7.4 `isPhaseComplete`, §7.5 `scanPhasePlans`), [ADR-4910](4910-planning-document-seam.md) (`PlanningDoc`), [ADR-3889](3889-process-exit-contract.md) (exit contract), [ADR-1016](1016-runtime-capability-descriptor.md) and [ADR-3660](3660-runtime-artifact-layout-module.md) (runtime descriptor and layout), [ADR-2346](2346-command-dispatch-completion.md) (router shape), [ADR-3626](3626-context-md-seam-claim-gate.md) (seam claims)
 - Prior art for the scope resolver: closed PR #4127, branch `fix/3926-tier3-diff-tip-bound`
+
+## Amendment (2026-10-09): a reporting path may catch the refusal (#5236)
+
+The §5 rule is unchanged: every accessor that would answer with a Claude Code value refuses an UNKNOWN runtime id through `assertKnownRuntime`, and install code keeps that refusal. A reporting path that can state "could not run" may catch the refusal as a caller, instead of crashing the command that reads it. The reasoning is the Phase 10 amendment's for `hostBehaviorsFor`: a throw would crash a session rather than skip a behavior. Two callers do this:
+
+- `checkAgentsInstalled` (Agent Install Check Module) returns `agents_installed: null` with `reason: 'unknown_runtime'` (`AGENTS_INSTALLED_REASON`), so every `init` command, `validate agents` and `docs-init` keep working for an UNKNOWN id.
+- `buildAgentSkillsBlock` treats an UNKNOWN id as having no global skills directory GSD can locate: `global:` entries are skipped with a warning.
+
+The catch is narrow: only `UnknownRuntimeError`. `RetiredRuntimeError` and every other error still propagate.
