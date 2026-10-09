@@ -295,6 +295,7 @@ Decided in principle, not yet ratified. Do not cite as settled architecture.
 | [ADR-3942](3942-emitted-drift-ack-commit-trailer.md) | The emitted-drift acknowledgment is PR-lifetime data — it belongs in a commit trailer, not the working tree | Proposed | — |
 | [ADR-4629](4629-state-write-intent-beyond-frontmatter.md) | STATE.md write intent beyond frontmatter — bounded, verified writes | Proposed | — |
 | [ADR-4650](4650-path-containment-and-filename-classification-seam.md) | One path-containment predicate and one filename-classification helper | Proposed | — |
+| [ADR-5273](5273-swarm-fan-out-capability.md) | Swarm — read-only small-model fan-out with one synthesizer, as a default-off capability | Proposed | — |
 
 ### Superseded, Retired, and Legacy
 
