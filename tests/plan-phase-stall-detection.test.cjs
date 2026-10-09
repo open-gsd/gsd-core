@@ -1156,6 +1156,19 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.equal(runHelpers(`gsd_return_marker ${q(f.receipt)}${m}`), '', 'a directory at the receipt path -> no marker');
   });
 
+  test('gsd_return_marker reads at most the first 64 lines of the receipt', (t) => {
+    const f = fixture(t);
+    const m = ` ${q('## PLANNING COMPLETE')}`;
+    const filler = (n) => 'note\n'.repeat(n);
+    const run = (content) => {
+      fs.writeFileSync(f.receipt, content);
+      return runHelpers(`gsd_return_marker ${q(f.receipt)}${m}`);
+    };
+    assert.equal(run(`## PLANNING COMPLETE\n${filler(500)}`), '## PLANNING COMPLETE', 'a marker on line 1 of a long receipt is found');
+    assert.equal(run(`${filler(63)}## PLANNING COMPLETE\n${filler(10)}`), '## PLANNING COMPLETE', 'a marker on line 64 is found');
+    assert.equal(run(`${filler(64)}## PLANNING COMPLETE\n`), '', 'a marker only on line 65 is past the cap');
+  });
+
   // ── fast-check properties (RULESET.TESTS: a discriminating property per parser /
   // sanitizer). Each property run is ONE bash invocation over a whole batch of
   // generated cases, written to files (never argv: Windows MSYS re-unescapes argv),
@@ -1289,6 +1302,58 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     }
     const r = runBashScript(`${helpers}\ncd ${q(f.dir)}\ngsd_receipt_path ph checker >/dev/null && cat ph/.gsd-returns/.gitignore\n`, []);
     assert.equal(r.stdout.trim(), '*', '.gsd-returns/ must ignore its own receipts');
+  });
+
+  // A hostile checkout can commit <phase>/.gsd-returns (or its .gitignore) as a
+  // symlink; mkdir -p and the .gitignore printf would follow it out of the phase.
+  function symlinkOrSkip(t, target, link, type) {
+    try {
+      fs.symlinkSync(target, link, type === 'dir' && process.platform === 'win32' ? 'junction' : type);
+      return true;
+    } catch (error) {
+      if (error && ['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) {
+        t.skip('symlink creation is not available on this platform');
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  test('gsd_receipt_path refuses a symlinked <phase>/.gsd-returns and writes nothing through it', (t) => {
+    const f = fixture(t);
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5182-outside-'));
+    t.after(() => cleanup(outside));
+    fs.mkdirSync(path.join(f.dir, 'ph'));
+    if (!symlinkOrSkip(t, outside, path.join(f.dir, 'ph', '.gsd-returns'), 'dir')) return;
+    const r = runBashScript(`${extractStallFunctionsBash()}\ncd ${q(f.dir)}\ngsd_receipt_path ph checker\n`, []);
+    assert.notEqual(r.status, 0, 'a symlinked .gsd-returns must be refused');
+    assert.equal(r.stdout, '', 'a refused receipt prints no path');
+    assert.deepEqual(fs.readdirSync(outside), [], 'nothing may be created in the link target');
+  });
+
+  test('gsd_receipt_path refuses a symlinked .gsd-returns/.gitignore and leaves its target untouched', (t) => {
+    const f = fixture(t);
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5182-outside-'));
+    t.after(() => cleanup(outside));
+    const returns = path.join(f.dir, 'ph', '.gsd-returns');
+    fs.mkdirSync(returns, { recursive: true });
+    const victim = path.join(outside, 'victim.txt');
+    fs.writeFileSync(victim, 'ORIGINAL\n');
+    if (!symlinkOrSkip(t, victim, path.join(returns, '.gitignore'), 'file')) return;
+    const script = `${extractStallFunctionsBash()}\ncd ${q(f.dir)}\ngsd_receipt_path ph checker\n`;
+    let r = runBashScript(script, []);
+    assert.notEqual(r.status, 0, 'a symlinked .gitignore must be refused');
+    assert.equal(r.stdout, '', 'a refused receipt prints no path');
+    assert.equal(fs.readFileSync(victim, 'utf8'), 'ORIGINAL\n', 'the link target must be unchanged');
+    // A dangling link is the write-through case: [ -f ] is false, so an unguarded
+    // printf would create the target outside the phase.
+    fs.unlinkSync(path.join(returns, '.gitignore'));
+    const absent = path.join(outside, 'absent.txt');
+    if (!symlinkOrSkip(t, absent, path.join(returns, '.gitignore'), 'file')) return;
+    r = runBashScript(script, []);
+    assert.notEqual(r.status, 0, 'a dangling .gitignore symlink must be refused');
+    assert.equal(r.stdout, '', 'a refused receipt prints no path');
+    assert.equal(fs.existsSync(absent), false, 'the dangling target must not be created');
   });
 
   test('a lost $TS falls back to the dispatch epoch stamped in the receipt name, so the threshold stays reachable', (t) => {

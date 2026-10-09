@@ -164,7 +164,9 @@ gsd_stall_should_recover() {
 # never leave the directory (the character lists are spelled out, not ranges, so
 # no locale can widen them). Fails closed (prints nothing, returns 1) on an empty
 # PHASE_DIR or one holding a quote, `$` or backtick, which the orchestrator could
-# not substitute safely into a prompt or a quoted bash argument.
+# not substitute safely into a prompt or a quoted bash argument, and when
+# .gsd-returns or its .gitignore is a symlink (a checkout can commit one; mkdir -p
+# and the .gitignore write would follow it out of the phase).
 gsd_receipt_path() {
   local dir="$1" spawn="${2//[^ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]/_}"
   case "$dir" in
@@ -172,14 +174,17 @@ gsd_receipt_path() {
     /*|[A-Za-z]:[/\\]*) ;;
     *) dir="$(pwd)/$dir" ;;
   esac
+  [ -L "$dir/.gsd-returns" ] && return 1
   mkdir -p "$dir/.gsd-returns" || return 1
+  [ -L "$dir/.gsd-returns/.gitignore" ] && return 1
   [ -f "$dir/.gsd-returns/.gitignore" ] || printf '*\n' > "$dir/.gsd-returns/.gitignore"
   if command -v cygpath >/dev/null 2>&1; then dir=$(cygpath -m "$dir"); fi
   mktemp -u "$dir/.gsd-returns/${spawn:-spawn}.$(date +%s).XXXXXXXX"
 }
 
 # gsd_return_marker FILE MARKER... — print the first MARKER that STARTS a line of
-# FILE, or nothing. Literal prefix match (no regex), ending at a word boundary, so
+# FILE's first 64 lines (the receipt is agent-written; one marker line is expected),
+# or nothing. Literal prefix match (no regex), ending at a word boundary, so
 # a longer word that merely starts with a marker is not that marker. A trailing
 # CR needs no stripping (it is not a word character); a leading BOM and a
 # missing final newline are tolerated. The one owner of "which marker did the
@@ -187,9 +192,10 @@ gsd_receipt_path() {
 # mid-line, or JSON-encoded marker text (prompts, agent definitions, transcripts)
 # never matches.
 gsd_return_marker() {
-  local file="$1" line m rest; shift
+  local file="$1" line m rest n=0; shift
   [ -f "$file" ] && [ -r "$file" ] || return 0
-  while IFS= read -r line || [ -n "$line" ]; do
+  while [ "$n" -lt 64 ] && { IFS= read -r line || [ -n "$line" ]; }; do
+    n=$((n + 1))
     line="${line#$'\xef\xbb\xbf'}"
     for m in "$@"; do
       [[ "$line" == "$m"* ]] || continue
