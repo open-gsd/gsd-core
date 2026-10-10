@@ -1494,7 +1494,37 @@ function readSettings(settingsPath) {
  * at call time, after module evaluation, so the ordering is safe.
  */
 function writeSettings(settingsPath, settings) {
-  atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+  atomicWriteFileSync(resolveSettingsWritePath(settingsPath), JSON.stringify(settings, null, 2) + '\n', 'utf8');
+}
+
+/**
+ * The file writeSettings should actually write for `settingsPath` (#5037).
+ *
+ * atomicWriteFileSync finishes with a rename onto its target, and a rename
+ * onto a symlink replaces the link with a plain file, so a dotfiles-managed
+ * settings file would silently stop receiving changes. This applies the
+ * policy the Codex hooks.json writer already uses: a symlinked settings file
+ * is refused unless GSD_ALLOW_SYMLINKED_DEST is set, and with it the write
+ * goes to the link's real target so the link stays in place. A plain or
+ * missing file is returned unchanged. A dangling link is refused as well,
+ * the way hasExistingSymlinkBetween treats one everywhere else, rather than
+ * being replaced.
+ */
+function resolveSettingsWritePath(settingsPath) {
+  let stat = null;
+  try {
+    stat = fs.lstatSync(settingsPath);
+  } catch {
+    // Nothing at this path yet, so there is no link to protect.
+  }
+  if (!stat || !stat.isSymbolicLink()) return settingsPath;
+  const installRoot = path.dirname(path.resolve(settingsPath));
+  if (hasExistingSymlinkBetween(installRoot, settingsPath, { allowOptInFollow: isSymlinkedDestOptIn() })) {
+    throw new Error(
+      `writeSettings: settings file "${settingsPath}" is a symlink the install root "${installRoot}" does not trust, so it was not written. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
+    );
+  }
+  return fs.realpathSync(settingsPath);
 }
 
 // #2875 Part 2 (J8): model-override resolution (readGsdGlobalModelOverrides /
@@ -13205,6 +13235,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
             }
           }
         }
+        // Check the shared file before writing the local one, so a refused
+        // symlinked settings.json (#5037) leaves both files as they were.
+        resolveSettingsWritePath(sharedSettingsPath);
         fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
         writeSettings(settingsPath, localRaw);
 
