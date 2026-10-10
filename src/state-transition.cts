@@ -2786,7 +2786,17 @@ function patchCore(
     // `^field:` pattern — e.g. `status` matching both the frontmatter key
     // and a `Status:` body line). Frontmatter is only consulted when the
     // body has no match for this key.
-    const replaced = stateReplaceField(body, field, value);
+    // #4998: a session field is written the way `state update` writes it —
+    // inside the session section, never a fenced example there — so the
+    // patch agrees with the session readers the frontmatter sync uses.
+    const sessionWriteLabels = sessionLabelsForBodyField(field);
+    let replaced: string | null;
+    if (sessionWriteLabels) {
+      const inSession = stateReplaceFieldInSession(body, sessionWriteLabels.primary, sessionWriteLabels.fallback, value);
+      replaced = inSession === body ? null : inSession;
+    } else {
+      replaced = stateReplaceField(body, field, value);
+    }
     if (replaced !== null) {
       body = replaced;
       updated.push(field);

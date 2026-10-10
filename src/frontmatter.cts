@@ -949,6 +949,13 @@ function scalarNeedsDoubleQuoting(s: string): boolean {
   // escapeDoubleQuotedScalar path (which already emits the \uD800 escape) fixes the
   // round-trip.
   if (/[\uD800-\uDFFF]/.test(s)) return true;
+  // #4998: U+2028/U+2029 are not YAML line breaks, so a bare one round-trips
+  // through js-yaml, but every line-anchored reader of a planning document
+  // (`^key:\s*(.+)` with the `m` flag) ends the line there and reads only the
+  // part before it. (A value holding `:` was already quoted by the callers, so
+  // no key could be forged this way.) The quoted path escapes them (`\L`,
+  // `\P`), which no such reader splits on.
+  if (/[\u2028\u2029]/.test(s)) return true;
   return false;
 }
 

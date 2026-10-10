@@ -3519,10 +3519,11 @@ describe('cmdStateRecordSession (state record-session)', () => {
     );
   });
 
-  test('#4763: a wrapped multi-line Stopped At record is surfaced whole', () => {
-    // stateExtractField alone is first-line-only; the displaced record joins
-    // its continuation lines via stateFieldContinuation so a wrapped handoff
-    // is not truncated in the payload.
+  test('#4763/#4998: a wrapped multi-line Stopped At record is left whole and reported, not displaced', () => {
+    // Before #4998 the single-line writer replaced only the first line and
+    // orphaned the second, and #4763 surfaced the whole old record. Now the
+    // record is not displaced at all: the field is left whole, so there is no
+    // replacedRecord, and the payload names it as skipped with its tail.
     const wrapped = [
       '# Project State',
       '',
@@ -3539,10 +3540,16 @@ describe('cmdStateRecordSession (state record-session)', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
-    assert.strictEqual(
-      output.replacedRecord['Stopped At'],
-      'Phase 2, Plan 1 — handoff:\nthe verifier asked for a re-run of the failing probe',
-      'the displaced record includes its continuation lines',
+    assert.strictEqual(output.replacedRecord, undefined, 'nothing was displaced');
+    assert.deepStrictEqual(output.skipped, [{
+      field: 'Stopped At',
+      reason: 'wrapped_value',
+      continuation: 'the verifier asked for a re-run of the failing probe',
+    }]);
+    const after = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(
+      after.includes('**Stopped at:** Phase 2, Plan 1 — handoff:\nthe verifier asked for a re-run of the failing probe\n'),
+      `the wrapped record must survive byte-for-byte:\n${after}`,
     );
   });
 
@@ -6803,6 +6810,23 @@ describe('#3696 state validate — last_activity invariant (S008/S009) and --str
       writeCleanState(['Last activity: 2026-08-19 — done', line]);
       const { output } = validate();
       assert.ok(!findWarning(output, 'S009'), `"${line}" is structure, not a continuation; got: ${JSON.stringify(output.warnings)}`);
+    }
+  });
+
+  // #4998 changed the shared continuation grammar (trek-e review 2026-10-10,
+  // Minor 7): a fence or sibling field indented up to three spaces, and a
+  // sibling label carrying `.`, `(`, `)` or `/`, end the field. Pinned at the
+  // S009 caller: each is structure, and prose — indented or not — still wraps.
+  test('S009 under the #4998 grammar: indented fences and wider sibling labels are structure, prose still wraps', () => {
+    for (const line of ['   ```', '  ~~~', '   **Blockers:** none', '  Blockers: none', 'Phase 3.1 status: ok',
+      'Next (planned): plan 2', '    indented code']) {
+      writeCleanState(['Last activity: 2026-08-19 — done', line]);
+      const { output } = validate();
+      assert.ok(!findWarning(output, 'S009'), `"${line}" is structure; got: ${JSON.stringify(output.warnings)}`);
+    }
+    for (const line of ['and the rest of the sentence', '  and an indented rest', 'see 3.1 for details, then: more']) {
+      writeCleanState(['Last activity: 2026-08-19 — done', line]);
+      assert.ok(findWarning(validate().output, 'S009'), `"${line}" continues the field`);
     }
   });
 
@@ -21877,6 +21901,545 @@ describe('#5105: STATE.md writers replace an adjacent empty frontmatter block', 
         assert.strictEqual(frontmatterLib.extractFrontmatter(after).current_phase, '2');
       });
     }
+  }
+});
+
+// ─── #4998: a quoted milestone keeps its decoded value across writes ─────────
+
+describe('#4998 regression: state writes keep a quoted milestone value unchanged', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  // The decoded milestone value carries literal double quotes, so YAML must
+  // double-quote and escape it — the shape the raw `^milestone:` line read
+  // captured verbatim (quotes and backslashes) and re-serialized.
+  const QUOTED_MILESTONE = '"v1.1 — Example milestone"';
+
+  function seed(sessionLines) {
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '03-example'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), [
+      '# Roadmap', '', '## Phases', '', '- [ ] **Phase 3: Example** - thing', '',
+      '### Phase 3: Example', '**Goal**: do it', '',
+    ].join('\n'));
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, [
+      '---',
+      'gsd_state_version: 1.0',
+      `milestone: ${JSON.stringify(QUOTED_MILESTONE)}`,
+      'milestone_name: Example',
+      'status: executing',
+      '---',
+      '',
+      '# Project State',
+      '',
+      '## Current Position',
+      '',
+      'Phase: 3 of 3 (Example)',
+      'Plan: 1 of 2',
+      'Status: Executing',
+      '',
+      '## Session Continuity',
+      '',
+      ...sessionLines,
+      '',
+    ].join('\n'));
+    return statePath;
+  }
+
+  test('ten consecutive state.* writes leave the decoded milestone unchanged in STATE.md and state.json', () => {
+    const statePath = seed(['Last session: 2026-01-01', 'Stopped at: Phase 2 complete', 'Resume file: None']);
+    const writes = [
+      ['state', 'begin-phase', '--phase', '3', '--name', 'Example', '--plans', '2'],
+      ['state', 'add-decision', '--summary', 'a decision'],
+      ['state', 'record-session', '--stopped-at', 'mid phase 3'],
+      ['state', 'sync'],
+    ];
+    for (let i = 0; i < 10; i++) {
+      const res = runGsdTools(writes[i % writes.length], tmpDir);
+      assert.ok(res.success, `write ${i} failed: ${res.error}`);
+      const fm = frontmatterLib.extractFrontmatter(fs.readFileSync(statePath, 'utf-8'));
+      assert.strictEqual(fm.milestone, QUOTED_MILESTONE, `STATE.md milestone drifted after write ${i}`);
+      const stateJsonPath = path.join(tmpDir, '.planning', 'state.json');
+      if (i === 0) assert.ok(fs.existsSync(stateJsonPath), 'premise: begin-phase publishes state.json');
+      if (fs.existsSync(stateJsonPath)) {
+        const json = JSON.parse(fs.readFileSync(stateJsonPath, 'utf-8'));
+        assert.strictEqual(json.milestone, QUOTED_MILESTONE,
+          `state.json must carry the decoded milestone, not the on-disk YAML text (write ${i})`);
+      }
+    }
+  });
+});
+
+// ─── #4998: record-session never orphans a wrapped value or invents a line ───
+
+describe('#4998 regression: record-session leaves a wrapped field whole and inserts in the template\'s shape', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const statePath = () => path.join(tmpDir, '.planning', 'STATE.md');
+  function seed(frontmatter, sessionLines, heading = '## Session Continuity') {
+    fs.writeFileSync(statePath(), [
+      '---', 'gsd_state_version: 1.0', 'status: executing', ...frontmatter, '---',
+      '', '# Project State', '', heading, '', ...sessionLines, '',
+    ].join('\n'));
+  }
+  function session() {
+    const body = fs.readFileSync(statePath(), 'utf-8');
+    return body.slice(body.search(/^## Session/m));
+  }
+  // runNode, not runGsdTools: the success path's stderr carries the warning.
+  function recordSession(...args) {
+    const { runNode } = require('./helpers/process-seam.cjs');
+    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+    const { TOOLS_PATH: toolsPath, TEST_ENV_BASE } = require('./helpers.cjs');
+    const rec = runNode([toolsPath, 'state', 'record-session', ...args],
+      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(rec.exitCode, 0, `record-session failed: ${rec.stderr}`);
+    return { json: JSON.parse(rec.stdout), stderr: rec.stderr };
+  }
+
+  test('the issue repro: a wrapped Last session is left whole, named, and the rest of the record still written', () => {
+    seed([], [
+      'Last session: archived milestone v1.0 and moved its files',
+      'to .planning/milestones/, all phase directories archived.',
+      'Stopped at: Phase 2 complete',
+      'Resume file: None',
+    ]);
+    const { json, stderr } = recordSession('--stopped-at', 'Phase 3 plan 1 done');
+    assert.deepStrictEqual(json.updated, ['Stopped At']);
+    assert.deepStrictEqual(json.skipped, [{
+      field: 'Last session', reason: 'wrapped_value',
+      continuation: 'to .planning/milestones/, all phase directories archived.',
+    }]);
+    assert.match(stderr, /left Last session unchanged — its value continues onto the next line/);
+    assert.match(stderr, /Fold the value onto one line, or put a blank line before that line/);
+    assert.strictEqual(session(), [
+      '## Session Continuity', '',
+      'Last session: archived milestone v1.0 and moved its files',
+      'to .planning/milestones/, all phase directories archived.',
+      'Stopped at: Phase 3 plan 1 done',
+      'Resume file: None', '',
+    ].join('\n'));
+  });
+
+  // Codex review of the first draft: a separate note directly below a field
+  // looks exactly like a wrapped value, so deleting the "tail" deletes the note.
+  for (const [name, note] of [
+    ['an unseparated prose note', "Deployment requires the operator's approval."],
+    ['a two-space-indented bullet', '  - verify the probe before resuming'],
+  ]) {
+    test(`${name} directly below Stopped at survives byte-for-byte`, () => {
+      seed([], ['Last session: 2026-01-01', 'Stopped at: Phase 2 complete', note, 'Resume file: None']);
+      const { json } = recordSession('--stopped-at', 'Phase 3 plan 1 done');
+      assert.deepStrictEqual(json.skipped, [{ field: 'Stopped At', reason: 'wrapped_value', continuation: note.trim() }]);
+      assert.strictEqual(json.replacedRecord, undefined, 'nothing was displaced');
+      // The note stays directly under the record; the write path's own list
+      // spacing may add a blank line after a bullet, which is not this check.
+      assert.ok(session().includes(`Stopped at: Phase 2 complete\n${note}\n`), session());
+    });
+  }
+
+  test('the check reads the line the writer edits — a wrapped look-alike in a fence does not block the real field', () => {
+    // stateReplaceField's bold rung skips fenced blocks; a label-regex lookup
+    // would land on the fenced example and refuse the real, single-line field.
+    fs.writeFileSync(statePath(), [
+      '---', 'gsd_state_version: 1.0', 'status: executing', '---', '', '# Project State', '',
+      '```', '**Stopped at:** example value', 'that wraps inside a fence', '```', '',
+      '## Session', '', '**Last session:** 2026-01-01', '**Stopped at:** Phase 2 complete', '**Resume file:** None', '',
+    ].join('\n'));
+    const { json } = recordSession('--stopped-at', 'Phase 3 plan 1 done');
+    assert.strictEqual(json.skipped, undefined, JSON.stringify(json));
+    assert.ok(session().includes('**Stopped at:** Phase 3 plan 1 done'), session());
+    assert.ok(fs.readFileSync(statePath(), 'utf-8').includes('**Stopped at:** example value\nthat wraps inside a fence'));
+  });
+
+  test('when every field to write wraps, nothing is written and the payload says why', () => {
+    seed([], ['Last session: started', 'the migration', 'Stopped at: midway', 'through the migration', 'Resume file: None']);
+    const before = fs.readFileSync(statePath(), 'utf-8');
+    const { json } = recordSession('--stopped-at', 'Phase 3 plan 1 done');
+    assert.strictEqual(json.recorded, false);
+    assert.deepStrictEqual(json.skipped.map((s) => s.field), ['Last session', 'Stopped At']);
+    assert.strictEqual(fs.readFileSync(statePath(), 'utf-8'), before, 'STATE.md must be untouched');
+  });
+
+  test('a missing Stopped at goes in plain form between Last session and Resume file, not bold above them', () => {
+    seed([], ['Last session: 2026-01-01', 'Resume file: None']);
+    recordSession('--stopped-at', 'Phase 3 plan 1 done');
+    assert.match(session(), /^## Session Continuity\n\nLast session: \S+\nStopped at: Phase 3 plan 1 done\nResume file: None\n$/);
+    assert.ok(!session().includes('**Stopped at:**'), session());
+  });
+
+  test('a missing field is inserted below a wrapped sibling\'s own lines, never between them', () => {
+    seed([], ['Last session: archived milestone v1.0', '  - a two-space bullet note', 'Resume file: None']);
+    recordSession('--stopped-at', 'Phase 3 plan 1 done');
+    assert.ok(session().includes(
+      'Last session: archived milestone v1.0\n  - a two-space bullet note\n'), session());
+    assert.match(session(), /a two-space bullet note\n\n?Stopped at: Phase 3 plan 1 done\nResume file: None/);
+  });
+
+  test('a canonical ## Session holding a wrapped field gets an insert, not the whole-section rewrite', () => {
+    seed([], ['**Last session:** archived milestone v1.0 and moved', 'its files to milestones.', '**Resume file:** None'], '## Session');
+    const { json } = recordSession('--stopped-at', 'Phase 3 plan 1 done');
+    assert.deepStrictEqual(json.skipped.map((s) => s.field), ['Last session']);
+    assert.strictEqual(session(), [
+      '## Session', '',
+      '**Last session:** archived milestone v1.0 and moved', 'its files to milestones.',
+      '**Stopped at:** Phase 3 plan 1 done', '**Resume file:** None', '',
+    ].join('\n'));
+  });
+
+  // Codex review of this half: every insert path, not only the skip path,
+  // must keep a note below a field and land outside examples.
+  test('a canonical ## Session with a note and a missing field keeps the note (no whole-section rewrite)', () => {
+    seed([], ['**Last session:** 2026-01-01', '**Stopped at:** Phase 2', 'Deployment requires operator approval.'], '## Session');
+    recordSession('--stopped-at', 'Phase 2', '--resume-file', 'plan.md');
+    assert.ok(session().includes(
+      '**Stopped at:** Phase 2\nDeployment requires operator approval.\n**Resume file:** plan.md'), session());
+  });
+
+  test('with no session heading, a skipped field does not reappear with the new value in the appended section', () => {
+    fs.writeFileSync(statePath(), ['---', 'status: executing', '---', '', '# Project State', '',
+      'Last session: 2026-01-01', 'Stopped at: old handoff', 'its continuation', ''].join('\n'));
+    const { json } = recordSession('--stopped-at', 'new handoff', '--resume-file', 'plan.md');
+    assert.deepStrictEqual(json.skipped.map((s) => s.field), ['Stopped At']);
+    assert.ok(!json.updated.includes('Stopped At'), JSON.stringify(json));
+    assert.ok(!fs.readFileSync(statePath(), 'utf-8').includes('new handoff'));
+  });
+
+  test('a fenced example of a sibling label is never the insertion anchor', () => {
+    seed([], ['```', '**Last session:** example', '```', 'Last session: 2026-01-01', 'Resume file: None']);
+    recordSession('--stopped-at', 'Phase 3');
+    assert.ok(session().includes('```\n**Last session:** example\n```\n'), session());
+    assert.match(session(), /\nLast session: \S+\nStopped at: Phase 3\nResume file: None/);
+  });
+
+  test('a nested fence (```` around ```) is one example — its inner label is never the anchor', () => {
+    seed([], ['````md', '```', '**Last session:** example', '```', '````', 'Last session: 2026-01-01', 'Resume file: None']);
+    recordSession('--stopped-at', 'Phase 3');
+    // Non-blank lines: the write path's own spacing may add blanks in a fence.
+    const lines = session().split(/\r?\n/).filter(Boolean);
+    const close = lines.lastIndexOf('````');
+    assert.ok(lines[close + 1].startsWith('Last session: '), session());
+    assert.deepStrictEqual(lines.slice(close + 2, close + 4), ['Stopped at: Phase 3', 'Resume file: None']);
+  });
+
+  test('an insert below a sibling stops before an indented fence, never inside it', () => {
+    seed([], ['Last session: 2026-01-01', '  ```', '**Resume file:** example', '  ```', 'Resume file: None']);
+    recordSession('--stopped-at', 'Phase 3');
+    const lines = session().split(/\r?\n/).filter(Boolean);
+    const at = lines.indexOf('Stopped at: Phase 3');
+    assert.deepStrictEqual(lines.slice(at, at + 4), ['Stopped at: Phase 3', '  ```', '**Resume file:** example', '  ```']);
+  });
+
+  // trek-e review 2026-10-10, Minor 2: the heading gets its line terminator
+  // and the fields go below it — never glued onto the heading, never dropped.
+  for (const heading of ['## Session Continuity', '## Session']) {
+    test(`a ${heading} heading at EOF with no newline gets the fields below it`, () => {
+      fs.writeFileSync(statePath(), ['---', 'status: executing', '---', '', '# Project State', '', heading].join('\n'));
+      const { json } = recordSession('--stopped-at', 'Phase 3');
+      assert.strictEqual(json.recorded, true, JSON.stringify(json));
+      assert.match(readState(), new RegExp(`\\n${heading}\\n(?:\\n)?\\*\\*Last session:\\*\\* \\S+\\n\\*\\*Stopped at:\\*\\* Phase 3\\n`));
+      assert.strictEqual(frontmatterStoppedAt(), 'Phase 3');
+    });
+  }
+
+  test('`**Label**:` siblings anchor the insert, which uses the readable `**Label:**` spelling', () => {
+    seed([], ['**Last session**: 2026-01-01', '**Resume file**: None']);
+    const { json } = recordSession('--stopped-at', 'Phase 3');
+    assert.ok(json.updated.includes('Stopped At'), JSON.stringify(json));
+    assert.match(session(), /\*\*Last session\*\*: \S+\n\*\*Stopped at:\*\* Phase 3\n\*\*Resume file\*\*: None/);
+    assert.strictEqual(frontmatterLib.extractFrontmatter(fs.readFileSync(statePath(), 'utf-8')).stopped_at, 'Phase 3');
+  });
+
+  test('a frontmatter-only stopped_at the write replaces is reported in replacedRecord', () => {
+    seed(['stopped_at: "derive from git log; do not read this field"'], ['Last session: 2026-01-01', 'Resume file: None']);
+    const { json } = recordSession('--stopped-at', 'Phase 3 plan 1 done');
+    assert.deepStrictEqual(json.replacedRecord, { 'Stopped At': 'derive from git log; do not read this field' });
+    assert.strictEqual(frontmatterLib.extractFrontmatter(fs.readFileSync(statePath(), 'utf-8')).stopped_at, 'Phase 3 plan 1 done');
+  });
+  // ─── trek-e review 2026-10-09: the four items the body had deferred ───────
+  function readState() { return fs.readFileSync(statePath(), 'utf-8'); }
+  function frontmatterStoppedAt() {
+    const m = readState().match(/^stopped_at:\s*(.*)$/m);
+    return m ? m[1].replace(/^"(.*)"$/, '$1') : null;
+  }
+
+  test('(a) a line break in --stopped-at is refused before anything is written', () => {
+    seed([], ['Last session: 2026-01-01', 'Stopped at: Phase 2', 'Resume file: None']);
+    const before = readState();
+    const { runNode } = require('./helpers/process-seam.cjs');
+    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+    const { TOOLS_PATH: toolsPath, TEST_ENV_BASE } = require('./helpers.cjs');
+    for (const value of ['line one\nForged: line', 'line one\rForged: line']) {
+      const rec = runNode([toolsPath, 'state', 'record-session', '--stopped-at', value],
+        { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: PROBE_TIMEOUT_MS });
+      assert.notStrictEqual(rec.exitCode, 0, `must refuse ${JSON.stringify(value)}`);
+      assert.match(rec.stderr, /--stopped-at must be a single line/);
+      assert.strictEqual(readState(), before, 'STATE.md must be untouched');
+    }
+  });
+
+  test('(b) a **Stopped at**: (colon-outside) line that is updated reads back into frontmatter', () => {
+    seed(['stopped_at: old handoff'], ['**Last session**: 2026-01-01', '**Stopped at**: old handoff', '**Resume file**: None'], '## Session');
+    const { json } = recordSession('--stopped-at', 'new handoff');
+    assert.ok(json.updated.includes('Stopped At'), JSON.stringify(json));
+    // Respelled to the readable form on the line written; siblings untouched.
+    assert.ok(session().includes('**Stopped at:** new handoff\n**Resume file**: None'), session());
+    assert.strictEqual(frontmatterStoppedAt(), 'new handoff', readState());
+  });
+
+  test('(c) an indented fence directly below Stopped at is not its continuation — the field is written', () => {
+    seed([], ['Last session: 2026-01-01', 'Stopped at: Phase 2', '  ```', '  example', '  ```', 'Resume file: None']);
+    const { json } = recordSession('--stopped-at', 'Phase 3');
+    assert.strictEqual(json.skipped, undefined, JSON.stringify(json));
+    assert.ok(session().includes('Stopped at: Phase 3\n  ```\n  example\n  ```\n'), session());
+  });
+
+  test('(c) an indented sibling field directly below Stopped at is not its continuation', () => {
+    seed([], ['Last session: 2026-01-01', 'Stopped at: Phase 2', '  **Resume file:** plan.md']);
+    const { json } = recordSession('--stopped-at', 'Phase 3');
+    assert.strictEqual(json.skipped, undefined, JSON.stringify(json));
+    assert.ok(session().includes('Stopped at: Phase 3\n  **Resume file:** plan.md'), session());
+  });
+
+  test('(d) no session heading, a wrapped field and a frontmatter stopped_at: the appended section keeps the record', () => {
+    fs.writeFileSync(statePath(), ['---', 'status: executing', 'stopped_at: old handoff', '---', '', '# Project State', '',
+      'Stopped at: old handoff', 'its continuation', ''].join('\n'));
+    const { json } = recordSession('--stopped-at', 'new handoff', '--resume-file', 'plan.md');
+    assert.deepStrictEqual(json.skipped.map((s) => s.field), ['Stopped At']);
+    assert.ok(!json.updated.includes('Stopped At'), JSON.stringify(json));
+    assert.ok(readState().includes('Stopped at: old handoff\nits continuation\n'), 'the wrapped field is whole');
+    assert.match(session(), /\*\*Stopped at:\*\* old handoff\n\*\*Resume file:\*\* plan\.md/);
+    assert.strictEqual(frontmatterStoppedAt(), 'old handoff', 'the frontmatter record survives');
+  });
+
+  test('no session heading: an authored Resume file is carried into the appended section, not reset to None', () => {
+    fs.writeFileSync(statePath(), ['---', 'status: executing', '---', '', '# Project State', '',
+      'Stopped at: Phase 2', 'Resume file: .planning/phases/02/02-01-PLAN.md', ''].join('\n'));
+    recordSession('--stopped-at', 'Phase 3');
+    assert.match(session(), /\*\*Stopped at:\*\* Phase 3\n\*\*Resume file:\*\* \.planning\/phases\/02\/02-01-PLAN\.md/);
+  });
+
+  test('no session heading: a table-only Resume file is carried, not shadowed by None', () => {
+    fs.writeFileSync(statePath(), ['---', 'status: executing', '---', '', '# Project State', '',
+      '| Field | Value |', '| --- | --- |', '| Resume file | .planning/phases/02/02-01-PLAN.md |', ''].join('\n'));
+    recordSession('--stopped-at', 'Phase 3');
+    assert.match(session(), /\*\*Resume file:\*\* \.planning\/phases\/02\/02-01-PLAN\.md/);
+  });
+
+  test('no session heading: nothing is inserted into frontmatter, even a block scalar holding a field-like line', () => {
+    fs.writeFileSync(statePath(), ['---', 'status: executing', 'handoff_notes: |', '  Resume file: old-plan.md', '  keep this', '---', '',
+      '# Project State', ''].join('\n'));
+    recordSession('--stopped-at', 'Phase 3');
+    const fm = frontmatterLib.extractFrontmatter(readState());
+    assert.match(String(fm.handoff_notes), /Resume file: old-plan\.md\s+keep this/, readState());
+    assert.match(session(), /\*\*Stopped at:\*\* Phase 3/);
+  });
+
+  test('no session heading: a field-like line in frontmatter is never the carried value', () => {
+    fs.writeFileSync(statePath(), ['---', 'status: executing', 'notes: |', '  **Stopped at:** example handoff', '---', '',
+      '# Project State', '', 'Stopped at: real handoff', ''].join('\n'));
+    const { json } = recordSession('--stopped-at', 'real handoff');
+    assert.match(session(), /\*\*Stopped at:\*\* real handoff/);
+    assert.strictEqual(frontmatterStoppedAt(), 'real handoff', readState());
+    assert.strictEqual(json.replacedRecord, undefined, JSON.stringify(json));
+  });
+
+  test('no session heading: an archive section is never the insertion target', () => {
+    fs.writeFileSync(statePath(), ['---', 'status: executing', '---', '', '# Project State', '',
+      '## Session Continuity Archive', '', 'Resume file: old-plan.md', ''].join('\n'));
+    recordSession('--stopped-at', 'Phase 3');
+    const archive = collectSection(readState(), (h) => h.text.trim() === 'Session Continuity Archive', { levelBounded: true }).body;
+    assert.ok(!archive.includes('Phase 3'), archive);
+    assert.match(readState(), /\n## Session\n\n\*\*Last session:\*\* \S+\n\*\*Stopped at:\*\* Phase 3\n/);
+  });
+
+  test('no session heading and no session field: the canonical section is still appended', () => {
+    fs.writeFileSync(statePath(), ['---', 'status: executing', '---', '', '# Project State', ''].join('\n'));
+    recordSession('--stopped-at', 'Phase 3');
+    assert.match(readState(), /\n## Session\n\n\*\*Last session:\*\* \S+\n\*\*Stopped at:\*\* Phase 3\n\*\*Resume file:\*\* None\n/);
+  });
+
+  // ─── trek-e review 2026-10-10 ─────────────────────────────────────────────
+  function runTool(...args) {
+    const { runNode } = require('./helpers/process-seam.cjs');
+    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+    const { TOOLS_PATH: toolsPath, TEST_ENV_BASE } = require('./helpers.cjs');
+    return runNode([toolsPath, ...args], { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: PROBE_TIMEOUT_MS });
+  }
+
+  // Major 1: U+2028/U+2029 start a line for every `m`-flag reader, so they
+  // forged a body field (U+2028) and frontmatter keys (U+2029) — the latter
+  // reached state.json as `status: completed`.
+  for (const [name, sep] of [['U+2028', '\u2028'], ['U+2029', '\u2029']]) {
+    for (const flag of ['--stopped-at', '--resume-file']) {
+      test(`(Major 1) ${flag} carrying ${name} is refused before anything is written`, () => {
+        seed(['stopped_at: before'], ['Last session: 2026-01-01', 'Stopped at: before', 'Resume file: None']);
+        const before = readState();
+        const rec = runTool('state', 'record-session', flag, `a${sep}status: completed${sep}**Resume file:** forged`);
+        assert.notStrictEqual(rec.exitCode, 0, rec.stdout);
+        assert.match(rec.stderr, new RegExp(`${flag} must be a single line`));
+        assert.strictEqual(readState(), before, 'STATE.md must be untouched');
+        assert.strictEqual(frontmatterLib.extractFrontmatter(readState()).status, 'executing');
+      });
+    }
+  }
+
+  // Minor 1: update/patch now say why, instead of "field not found" / a bare `failed`.
+  for (const [name, value] of [['LF', 'a\nb'], ['CR', 'a\rb'], ['U+2028', 'a\u2028b'], ['U+2029', 'a\u2029b']]) {
+    test(`(Minor 1) state update and state patch refuse a ${name} value by name, writing nothing`, () => {
+      seed([], ['Last session: 2026-01-01']);
+      fs.writeFileSync(statePath(), readState().replace('# Project State', '# Project State\n\nStatus: ok'));
+      const before = readState();
+      const update = runTool('state', 'update', 'Status', value);
+      assert.notStrictEqual(update.exitCode, 0);
+      assert.match(update.stderr, /state update: the value for "Status" must be a single line/);
+      const patch = runTool('state', 'patch', '--Status', value);
+      assert.notStrictEqual(patch.exitCode, 0);
+      assert.match(patch.stderr, /state patch: the value for "Status" must be a single line/);
+      assert.strictEqual(readState(), before);
+    });
+  }
+
+  // Major 3: a fenced example is never the field written; insertion and
+  // replacement now agree.
+  test('(Major 3) a fenced example in ## Session is left alone; the real field is inserted outside it', () => {
+    seed([], ['```', 'Last session: example', '```'], '## Session');
+    const { json } = recordSession('--stopped-at', 'new');
+    assert.ok(json.updated.includes('Last session'), JSON.stringify(json));
+    assert.ok(session().includes('```\nLast session: example\n```'), `the example is untouched:\n${session()}`);
+    const live = session().split('\n').filter((l) => /^\*\*Last session:\*\* /.test(l));
+    assert.strictEqual(live.length, 1, session());
+    assert.strictEqual(frontmatterStoppedAt(), 'new');
+  });
+
+  test('(Major 3) a fenced example ABOVE the real fields: the real ones are replaced, the example is not', () => {
+    seed([], ['```', 'Last session: example', 'Stopped at: example', '```', 'Last session: 2026-01-01', 'Stopped at: old', 'Resume file: None']);
+    const { json } = recordSession('--stopped-at', 'new');
+    assert.deepStrictEqual(json.skipped, undefined, JSON.stringify(json));
+    assert.ok(session().includes('```\nLast session: example\nStopped at: example\n```'), session());
+    // The write path's own spacing may add a blank line after a fence.
+    assert.match(session(), /```\r?\n(?:\r?\n)?Last session: (?!2026-01-01)\S+\r?\nStopped at: new\r?\nResume file: None/);
+    assert.deepStrictEqual(json.replacedRecord, { 'Stopped At': 'old' }, 'the prior record is the real line, not the example');
+    // The sync reads what the writer wrote — never the fenced example.
+    assert.strictEqual(json.recorded, true);
+    assert.strictEqual(frontmatterStoppedAt(), 'new', readState());
+  });
+
+  // Major 2: with no session heading, a skipped wrapped Last session is
+  // carried, never re-added with the new timestamp.
+  test('(Major 2) no session heading: a wrapped Last session is carried into the appended section, not overwritten', () => {
+    fs.writeFileSync(statePath(), ['---', 'status: executing', '---', '', '# Project State', '',
+      'Last session: started', 'then continued here.', ''].join('\n'));
+    const { json } = recordSession('--stopped-at', 'X');
+    assert.deepStrictEqual(json.skipped.map((s) => s.field), ['Last session']);
+    assert.ok(readState().includes('Last session: started\nthen continued here.\n'), 'the wrapped field is whole');
+    assert.match(session(), /\*\*Last session:\*\* started\n\*\*Stopped at:\*\* X\n/);
+  });
+
+  test('(Major 2) no session heading: a wrapped Last Date is carried too', () => {
+    fs.writeFileSync(statePath(), ['---', 'status: executing', '---', '', '# Project State', '',
+      'Last Date: 2026-01-01 and', 'a wrapped tail', ''].join('\n'));
+    const { json } = recordSession('--stopped-at', 'X');
+    assert.deepStrictEqual(json.skipped.map((s) => s.field), ['Last Date']);
+    assert.match(session(), /\*\*Last session:\*\* 2026-01-01 and\n/);
+  });
+
+  test('(Major 1) no session heading: a carried table cell holding U+2028 is left out and named, never written as a line', () => {
+    fs.writeFileSync(statePath(), ['---', 'status: executing', '---', '', '# Project State', '',
+      '| Field | Value |', '| --- | --- |', '| Resume file | a\u2028**Status:** forged |', ''].join('\n'));
+    const { json } = recordSession('--stopped-at', 'X');
+    assert.deepStrictEqual(json.skipped, [{ field: 'Resume file', reason: 'line_separator' }]);
+    assert.ok(!/\*\*Resume file:\*\*/.test(session()), session());
+    assert.match(session(), /\*\*Stopped at:\*\* X\n/);
+  });
+
+  // Codex review (round 1 of this update): the other session writers and the
+  // snapshot read agree with the fence rule too.
+  test('(Codex 1) `state update "Stopped At"` writes the live line, not a fenced example, and the sync reads it', () => {
+    seed([], ['```md', 'Stopped at: example', '```', 'Stopped at: real', 'Resume file: None'], '## Session');
+    const rec = runTool('state', 'update', 'Stopped At', 'new');
+    assert.strictEqual(rec.exitCode, 0, rec.stderr);
+    assert.ok(session().includes('```md\nStopped at: example\n```'), session());
+    assert.match(session(), /\nStopped at: new\n/);
+    assert.strictEqual(frontmatterStoppedAt(), 'new', readState());
+  });
+
+  test('(Codex 2) a `## Session` heading that is only a fenced example is not a section: the real one is appended', () => {
+    fs.writeFileSync(statePath(), ['---', 'status: executing', '---', '', '# Project State', '',
+      '```md', '## Session', 'Last session: example', 'Stopped at: example', 'Resume file: None', '```', ''].join('\n'));
+    const { json } = recordSession('--stopped-at', 'new');
+    assert.strictEqual(json.recorded, true, JSON.stringify(json));
+    // Non-blank lines: the write path's own spacing may add blanks in a fence.
+    const lines = readState().split(/\r?\n/).filter(Boolean);
+    const open = lines.indexOf('```md');
+    assert.deepStrictEqual(lines.slice(open, open + 6),
+      ['```md', '## Session', 'Last session: example', 'Stopped at: example', 'Resume file: None', '```'], readState());
+    assert.match(readState(), /\n## Session\n\n\*\*Last session:\*\* \S+\n\*\*Stopped at:\*\* new\n/);
+    assert.strictEqual(frontmatterStoppedAt(), 'new');
+  });
+
+  test('(Codex 3) `state snapshot` reads the live session lines, not fenced examples', () => {
+    seed([], ['```md', 'Stopped at: example', 'Resume file: example.md', '```', 'Stopped at: live', 'Resume file: plan.md'], '## Session');
+    const rec = runTool('state-snapshot');
+    assert.strictEqual(rec.exitCode, 0, rec.stderr);
+    const snap = JSON.parse(rec.stdout);
+    assert.deepStrictEqual([snap.session.stopped_at, snap.session.resume_file], ['live', 'plan.md']);
+  });
+
+  test('(Codex 4) an authored `**Resume file**: plan.md` survives a call without --resume-file', () => {
+    seed([], ['**Last session:** 2026-01-01', '**Stopped at:** old', '**Resume file**: plan.md'], '## Session');
+    const { json } = recordSession('--stopped-at', 'new');
+    assert.ok(!json.updated.includes('Resume File'), JSON.stringify(json));
+    assert.ok(session().includes('**Resume file**: plan.md'), session());
+  });
+
+  test('(Codex 4) a `**Resume file**: plan.md` that --resume-file replaces is reported in replacedRecord', () => {
+    seed([], ['**Last session:** 2026-01-01', '**Stopped at:** old', '**Resume file**: plan.md'], '## Session');
+    const { json } = recordSession('--stopped-at', 'new', '--resume-file', 'next.md');
+    assert.strictEqual(json.replacedRecord['Resume File'], 'plan.md', JSON.stringify(json));
+  });
+
+  // Codex review round 2.
+  test('(Codex r2) `state patch --"Stopped At"` writes the live session line, not a fenced example', () => {
+    seed([], ['```md', 'Stopped at: example', '```', 'Stopped at: real', 'Resume file: None'], '## Session');
+    const rec = runTool('state', 'patch', '--Stopped At', 'new');
+    assert.strictEqual(rec.exitCode, 0, rec.stderr);
+    assert.ok(session().includes('```md\nStopped at: example\n```'), session());
+    assert.match(session(), /\nStopped at: new\n/);
+    assert.strictEqual(frontmatterStoppedAt(), 'new', readState());
+  });
+
+  test('(Codex r2) no session heading: `**Label**:` values are carried, a skipped wrapped one included', () => {
+    fs.writeFileSync(statePath(), ['---', 'status: executing', '---', '', '# Project State', '',
+      '**Last session**: started', 'continued here', '**Resume file**: plan.md', ''].join('\n'));
+    const { json } = recordSession('--stopped-at', 'X');
+    assert.deepStrictEqual(json.skipped.map((s) => s.field), ['Last session']);
+    assert.match(session(), /\*\*Last session:\*\* started\n\*\*Stopped at:\*\* X\n\*\*Resume file:\*\* plan\.md\n/);
+  });
+
+  test('(Codex r2) no session heading and an unclosed fence: nothing is appended into it, and the call says why', () => {
+    fs.writeFileSync(statePath(), ['---', 'status: executing', '---', '', '# Project State', '', '```md', 'Stopped at: example', ''].join('\n'));
+    const before = readState();
+    const { json, stderr } = recordSession('--stopped-at', 'new');
+    assert.strictEqual(json.recorded, false, JSON.stringify(json));
+    assert.ok(json.skipped.every((s) => s.reason === 'unclosed_fence'), JSON.stringify(json));
+    assert.match(stderr, /unclosed code fence/);
+    assert.strictEqual(readState(), before);
+  });
+
+  // Minor 4: `None` is the template placeholder, not a displaced record.
+  for (const [where, fm, lines] of [
+    ['frontmatter', ['stopped_at: None'], ['Last session: 2026-01-01']],
+    ['body', [], ['Last session: 2026-01-01', 'Stopped at: None']],
+  ]) {
+    test(`(Minor 4) a ${where} Stopped At of None is not reported in replacedRecord`, () => {
+      seed(fm, lines);
+      const { json } = recordSession('--stopped-at', 'Z');
+      assert.strictEqual(json.replacedRecord, undefined, JSON.stringify(json));
+    });
   }
 });
 

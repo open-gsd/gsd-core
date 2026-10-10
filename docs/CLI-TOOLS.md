@@ -124,6 +124,10 @@ node gsd-tools.cjs state signal-waiting --type TYPE --question "..." --options "
 node gsd-tools.cjs state signal-resume
 ```
 
+`state update`, `state patch` and `state record-session` take single-line values: a value containing a line break — CR, LF, U+2028 LINE SEPARATOR or U+2029 PARAGRAPH SEPARATOR, each of which starts a new line for the STATE.md readers — is refused with an error naming the field or flag, before anything is written.
+
+`state record-session` lists the fields it wrote under `updated`, and under `replacedRecord` any Stopped At / Resume File value the write displaced (the `None` placeholder is not a record). In the session section, a line inside a fenced code block is an example: no session writer (`record-session`, `state update`/`patch` of a session field, `phase complete`) changes it, and neither the frontmatter sync nor `state-snapshot` reads it as a field. A field whose current value continues onto the next line is left unchanged, because a single-line write would orphan the rest: it is listed under `skipped` as `{ "field", "reason": "wrapped_value", "continuation" }` with a warning on stderr, and when every field to update was skipped the call reports `"recorded": false`. With no session heading, the appended `## Session` section carries each field's existing value (a skipped field included); a carried value holding U+2028/U+2029 is left out and listed as `{ "field", "reason": "line_separator" }`, and when the document ends inside an unclosed code fence nothing is appended (it would land inside the fence) and each field is listed with `"reason": "unclosed_fence"`. `state patch` writes a session field (Stopped At, Resume File, …) inside the session section, as `state update` does.
+
 ### State Snapshot
 
 Structured parse of the full STATE.md:
