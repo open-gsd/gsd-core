@@ -13,7 +13,7 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, cleanup, homeSandboxEnv } = require('./helpers.cjs');
 
 describe('pattern-mapper config key', () => {
   let tmpDir;
@@ -34,7 +34,7 @@ describe('pattern-mapper config key', () => {
 
   test('default value is true in CONFIG_DEFAULTS', () => {
     // Create a new project config and verify the default
-    const result = runGsdTools('config-new-project', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('config-new-project', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `config-new-project failed: ${result.error}`);
 
     const configPath = path.join(tmpDir, '.planning', 'config.json');
@@ -44,7 +44,7 @@ describe('pattern-mapper config key', () => {
 
   test('config round-trip set/get', () => {
     // Ensure config exists first
-    runGsdTools('config-new-project', tmpDir, { HOME: tmpDir });
+    runGsdTools('config-new-project', tmpDir, homeSandboxEnv(tmpDir));
 
     // Set to false
     const setResult = runGsdTools('config-set workflow.pattern_mapper false', tmpDir, { HOME: tmpDir });
