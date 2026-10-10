@@ -327,7 +327,7 @@ estimate:                   # Projected execution cost (see Estimate Emission)
 must_haves:
   truths: []                # Observable behaviors
   artifacts: []             # Files that must exist
-  key_links: []             # Critical connections
+  key_links: []             # Critical connections (from/to MUST be project-relative file paths; symbols/endpoints go in via:)
 ---
 
 <objective>
@@ -480,6 +480,8 @@ For each artifact: "What must be CONNECTED for this to function?"
 
 **Step 5: Identify Key Links**
 "Where is this most likely to break?" Key links = critical connections where breakage causes cascading failures.
+- `from` and `to` MUST be project-relative file paths only. Never put symbols, functions, or endpoints in `from:` or `to:`.
+- Symbols, functions, endpoints, and narrative details MUST be placed in `via:` (e.g. `via: "fetch in useEffect — calls /api/feed"`).
 
 See @~/.claude/gsd-core/references/planner-guidance.md for a worked example and the `must_haves` YAML format.
 
