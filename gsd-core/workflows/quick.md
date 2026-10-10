@@ -156,7 +156,7 @@ If `USE_WORKTREES` is not `"false"`, run a startup orphan sweep before spawning 
 
 ```bash
 if [ "$USE_WORKTREES" != "false" ]; then
-  gsd_run query worktree.reap-orphans 2>/dev/null || true
+  gsd_run query worktree.reap-orphans >/dev/null || true
 fi
 ```
 

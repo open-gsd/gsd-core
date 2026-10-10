@@ -114,7 +114,7 @@ when `ISOLATION = "harness-worktree"`, else empty.
 If `USE_WORKTREES` is not `"false"`, sweep orphaned worktrees before dispatching anything (mirrors `/gsd:quick`'s own startup sweep):
 ```bash
 if [ "$USE_WORKTREES" != "false" ]; then
-  gsd_run query worktree.reap-orphans 2>/dev/null || true
+  gsd_run query worktree.reap-orphans >/dev/null || true
 fi
 ```
 

@@ -311,6 +311,7 @@ module.exports = {
   "tests/workstream-scoped-paths.test.cjs",
   "tests/workstream.test.cjs",
   "tests/worktree-cleanup.test.cjs",
+  "tests/worktree-safety-reap.test.cjs",
   "tests/worktree-safety.test.cjs",
   "tests/worktree.test.cjs",
   ],

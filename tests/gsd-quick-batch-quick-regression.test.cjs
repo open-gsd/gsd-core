@@ -72,6 +72,18 @@ function isWorkstreamForwardingSweepLine(sign, body, addedBodies, removedBodies)
   return false;
 }
 
+// #4941: the startup orphan sweep's call line moved from `2>/dev/null` to
+// `>/dev/null`. Only that exact swap is the sweep: an added new-form line whose
+// old form was removed, or a removed old-form line whose new form was added —
+// a brand-new call line in either form is ordinary quick work.
+const REAP_SWEEP_OLD = 'gsd_run query worktree.reap-orphans 2>/dev/null || true';
+const REAP_SWEEP_NEW = 'gsd_run query worktree.reap-orphans >/dev/null || true';
+function isReapStderrSweepLine(sign, body, addedBodies, removedBodies) {
+  if (sign === '+' && body === REAP_SWEEP_NEW) return removedBodies.has(REAP_SWEEP_OLD);
+  if (sign === '-' && body === REAP_SWEEP_OLD) return addedBodies.has(REAP_SWEEP_NEW);
+  return false;
+}
+
 /**
  * Does this path's diff say anything beyond the shared response-language
  * directive (#2529)?
@@ -91,6 +103,10 @@ function isWorkstreamForwardingSweepLine(sign, body, addedBodies, removedBodies)
  * policed by tests/runtime-launcher-parity.test.cjs and the emitted-attribution
  * gate. Any OTHER line — ordinary quick prose, steps, contracts — still trips
  * this row exactly as before.
+ *
+ * #4941 adds the fifth, `isReapStderrSweepLine`: the orphan sweep's call line
+ * swapped `2>/dev/null` for `>/dev/null` in all three callers so its stderr
+ * reaches the operator. Only that paired swap is exempt.
  */
 function editsBeyondSharedDirective(base, file) {
   const diff = git(['diff', '--unified=0', `${base}...HEAD`, '--', file]);
@@ -114,6 +130,8 @@ function editsBeyondSharedDirective(base, file) {
     // sweep -- not quick-batch phase work. Any OTHER line still trips this row.
     if (body.includes('$ARGUMENTS') || body.includes('`<arguments>` block')) return false;
     if (body === '<arguments>$ARGUMENTS</arguments>' || body.startsWith('The text inside `<arguments>` is exactly what the user typed')) return false;
+    // #4941 fifth mechanical-sweep carve-out (isReapStderrSweepLine above).
+    if (isReapStderrSweepLine(line[0], body, addedBodies, removedBodies)) return false;
     return !importsDirectiveReference(body);
   });
 }
@@ -237,3 +255,22 @@ function unexpectedQuickStepChanges(changed, isPhaseWork) {
 function quickWholeFileViolation(changed, isPhaseWork, filePath) {
   return changed.includes(filePath) && isPhaseWork(filePath);
 }
+
+// #4941 review (Minor 3): the carve-out admits the paired swap only — a
+// brand-new call line, in either form, is ordinary quick work and trips row 48.
+describe('row 48 carve-out: isReapStderrSweepLine admits only the 2>/dev/null → >/dev/null swap (#4941)', () => {
+  const OLD = 'gsd_run query worktree.reap-orphans 2>/dev/null || true';
+  const NEW = 'gsd_run query worktree.reap-orphans >/dev/null || true';
+  for (const [label, sign, body, added, removed, exempt] of [
+    ['the added new form, old form removed', '+', NEW, [NEW], [OLD], true],
+    ['the removed old form, new form added', '-', OLD, [NEW], [OLD], true],
+    ['a brand-new new-form line', '+', NEW, [NEW], [], false],
+    ['a brand-new old-form line', '+', OLD, [OLD], [], false],
+    ['a removed old form with no replacement', '-', OLD, [], [OLD], false],
+    ['any other line', '+', 'gsd_run query something-else', ['gsd_run query something-else'], [OLD], false],
+  ]) {
+    test(`${label} is ${exempt ? '' : 'not '}exempt`, () => {
+      assert.strictEqual(isReapStderrSweepLine(sign, body, new Set(added), new Set(removed)), exempt);
+    });
+  }
+});
