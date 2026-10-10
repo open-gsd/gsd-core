@@ -570,7 +570,7 @@ Start next version cycle.
 **Prerequisites:** Previous milestone completed
 **Produces:** Updated `PROJECT.md`, new `REQUIREMENTS.md`, new `ROADMAP.md`
 
-**Research step:** Before requirements, the command asks whether to research the domain ecosystem for the new features *and how they fit the existing codebase*. `(Recommended)` appears on "Research first" only when `workflow.research` is enabled and is never moved to another option; the answer is not saved to `config.json`. By default all four researchers (stack, features, architecture, pitfalls) run; one is dropped only when its dimension clearly does not apply, and the command tells you which were skipped before it starts. The synthesizer reads only the research files that were actually written.
+**Research step:** Before requirements, the command asks whether to research the domain ecosystem for the new features *and how they fit the existing codebase*. `(Recommended)` appears on "Research first" only when `workflow.research` is enabled and is never moved to another option; the answer is not saved to `config.json`. By default all four researchers (stack, features, architecture, pitfalls) run; a dimension is dropped only when it clearly does not apply (at least one always runs), and the command tells you which were skipped before it starts. The synthesizer reads only the research files written by the researchers spawned in that run.
 
 ```bash
 /gsd-new-milestone                  # Interactive

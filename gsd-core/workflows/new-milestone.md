@@ -335,23 +335,23 @@ Check `research_enabled` from init JSON (loaded from config).
 
 **If `research_enabled` is `true`:**
 
-AskUserQuestion: "Research the domain ecosystem for new features and how they fit the existing codebase before defining requirements?"
-- "Research first (Recommended)" — Discover patterns, features, architecture for NEW capabilities and their fit with the existing codebase
+AskUserQuestion: "Research the domain ecosystem for this milestone's work — new features, refactors, and what they couple to or could break in the existing codebase — before defining requirements?"
+- "Research first (Recommended)" — Discover patterns, features, architecture for the milestone's work, including integration points and pitfalls in the existing codebase
 - "Skip research for this milestone" — Go straight to requirements (does not change your default)
 
 **If `research_enabled` is `false`:**
 
-AskUserQuestion: "Research the domain ecosystem for new features and how they fit the existing codebase before defining requirements?"
+AskUserQuestion: "Research the domain ecosystem for this milestone's work — new features, refactors, and what they couple to or could break in the existing codebase — before defining requirements?"
 - "Skip research (current default)" — Go straight to requirements
-- "Research first" — Discover patterns, features, architecture for NEW capabilities and their fit with the existing codebase
+- "Research first" — Discover patterns, features, architecture for the milestone's work, including integration points and pitfalls in the existing codebase
 
-**`(Recommended)` is bound to `research_enabled`:** it marks "Research first" only when `research_enabled` is `true`, and is never added to or moved between options.
+**`(Recommended)` is bound to `research_enabled`:** it marks "Research first" only when `research_enabled` is `true`, and is never added to or moved between options; the choice stays with the user.
 
 **IMPORTANT:** Do NOT persist this choice to config.json. The `workflow.research` setting is a persistent user preference that controls plan-phase behavior across the project. Changing it here would silently alter future `/gsd:plan-phase` behavior. To change the default, use `/gsd:settings`.
 
 **If user chose "Research first":**
 
-Run all 4 researchers by default. Drop one only when its dimension clearly does not apply to this milestone, and tell the user before spawning: `Skipping: {dimension(s)} — {reason}`. Never drop one silently.
+Run one researcher per dimension (stack, features, architecture, pitfalls) by default. Drop a dimension only when it clearly does not apply to this milestone, and tell the user before spawning: `Skipping: {dimension(s)} — {reason}`. Never drop one silently. At least one must run; to run none, the user chooses Skip. `{N}` is the number of dimensions kept.
 
 ```
 ### GSD ► RESEARCHING
@@ -416,14 +416,14 @@ Use template: ~/.claude/gsd-core/templates/research-project/{FILE}
 
 > **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling all researcher Agent() calls above, do NOT read research files or synthesize content independently while the subagents are active. Wait for all researchers to complete before spawning the synthesizer. This prevents duplicate work and wasted context.
 
-After all complete, spawn synthesizer:
+After all complete, spawn synthesizer. Fill `{required_reading_lines}` with one `- {research_dir}/{FILE}` line per file written by the researchers spawned in this run (never files left from earlier runs), and tell the synthesizer any other dimension was intentionally skipped:
 
 ```text
 Agent(prompt="
 Synthesize research outputs into SUMMARY.md.
 
 <required_reading>
-List only the files that exist in {research_dir} (STACK.md, FEATURES.md, ARCHITECTURE.md, PITFALLS.md), one `- {research_dir}/{FILE}` line each — omit any dropped dimension.
+{required_reading_lines}
 </required_reading>
 
 ${AGENT_SKILLS_SYNTHESIZER}
@@ -439,7 +439,7 @@ Commit after writing.
 **Synthesizer output self-heal (#222) — verify SUMMARY.md materialized:** The synthesizer's canonical output is `.planning/research/SUMMARY.md` on disk; its brief structured return (`## SYNTHESIS COMPLETE` plus a few `###` confirmation lines) is NOT the file content. A known LLM false-refusal (issue #222) sometimes makes the agent return the full SUMMARY.md document inline — fabricating a write restriction (e.g. "the runtime is blocking file writes") — instead of writing the file. Prompt hardening alone does not fully eliminate it, so the orchestrator MUST absorb the failure deterministically before spawning `gsd-roadmapper`:
 
 1. Verify `.planning/research/SUMMARY.md` exists AND is substantive — non-empty, and free of any leftover `<!-- gsd:write-continue -->` continuation sentinel (which marks a truncated/incomplete write). You may validate with `gsd_run verify-summary .planning/research/SUMMARY.md` — it exits 0 regardless, so check its JSON `passed` field (`"passed": false` means missing or invalid), not the process exit code. If it passes, continue normally.
-2. If it is MISSING or invalid AND the synthesizer's return message contains the FULL SUMMARY.md document — recognizable by the template's top-level markers `# Project Research Summary`, `## Key Findings`, `## Implications for Roadmap`, and `## Sources`, not merely the brief `## SYNTHESIS COMPLETE` confirmation — the false-refusal fired: write that returned document to `.planning/research/SUMMARY.md` with the Write tool, then commit ALL research artifacts the synthesizer owns (it commits on behalf of the four researchers) with `gsd_run query commit "docs: complete project research" --files .planning/research/` unless they are already committed. Log `⚠ #222 self-heal: synthesizer returned SUMMARY.md inline without writing it; orchestrator persisted the file.`
+2. If it is MISSING or invalid AND the synthesizer's return message contains the FULL SUMMARY.md document — recognizable by the template's top-level markers `# Project Research Summary`, `## Key Findings`, `## Implications for Roadmap`, and `## Sources`, not merely the brief `## SYNTHESIS COMPLETE` confirmation — the false-refusal fired: write that returned document to `.planning/research/SUMMARY.md` with the Write tool, then commit ALL research artifacts the synthesizer owns (it commits on behalf of the researchers that ran) with `gsd_run query commit "docs: complete project research" --files .planning/research/` unless they are already committed. Log `⚠ #222 self-heal: synthesizer returned SUMMARY.md inline without writing it; orchestrator persisted the file.`
 3. If it is MISSING or invalid AND the return is only a brief confirmation (no full SUMMARY document to recover), the synthesizer genuinely failed — surface the error and stop; do NOT spawn `gsd-roadmapper` against a missing or incomplete SUMMARY.md.
 
 This guarantees `gsd-roadmapper` (which lists SUMMARY.md as required reading) never runs against a missing or truncated SUMMARY.md.
@@ -708,7 +708,7 @@ Also: `/gsd:plan-phase [N] ${GSD_WS}` — skip discussion, plan directly
 - [ ] PROJECT.md updated with Current Milestone section (skipped when a workstream is active — shared file, see Step 4)
 - [ ] STATE.md reset for new milestone
 - [ ] MILESTONE-CONTEXT.md consumed and deleted (if existed)
-- [ ] Research completed (if selected) — 4 parallel agents, milestone-aware
+- [ ] Research completed (if selected) — one parallel agent per dimension kept, milestone-aware
 - [ ] Requirements gathered and scoped per category
 - [ ] REQUIREMENTS.md created with REQ-IDs
 - [ ] gsd-roadmapper spawned with phase numbering context
