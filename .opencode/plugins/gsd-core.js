@@ -185,6 +185,20 @@ function mapToolInput(args) {
   return input;
 }
 
+// Each line is trimmed before matching, as the host's patch parser does.
+// `Move to:` is matched on any line, not only after an Update header; an extra
+// path only adds a guard check.
+function patchFilePaths(patchText) {
+  if (typeof patchText !== "string") return [];
+  const paths = [];
+  for (const line of patchText.split("\n")) {
+    const m = /^\*\*\* (?:(?:Add|Update|Delete) File|Move to):(.*)$/s.exec(line.trim());
+    const p = m && m[1].trim();
+    if (p) paths.push(p);
+  }
+  return [...new Set(paths)];
+}
+
 // ---------------------------------------------------------------------------
 // Hook subprocess runner
 // ---------------------------------------------------------------------------
@@ -239,6 +253,15 @@ function gitProbingGuardTimeoutMs() {
   return GIT_PROBING_GUARD_FALLBACK_TIMEOUT_MS;
 }
 
+// Inside OpenCode, process.execPath is the Bun-compiled opencode binary;
+// BUN_BE_BUN=1 makes it run the hook script as JavaScript instead of OpenCode.
+function hookSpawnOptions(options, versions = process.versions) {
+  if (versions && versions.bun) {
+    return { ...options, env: { ...process.env, BUN_BE_BUN: "1" } };
+  }
+  return options;
+}
+
 function runHook(hookFile, payload, opts = {}) {
   const hookPath = path.join(HOOKS_DIR, hookFile);
   if (!fs.existsSync(hookPath)) {
@@ -261,13 +284,13 @@ function runHook(hookFile, payload, opts = {}) {
     (GIT_PROBING_GUARDS.has(hookFile) ? gitProbingGuardTimeoutMs() : 8000);
   let result;
   try {
-    result = spawnSync(process.execPath, [hookPath], {
+    result = spawnSync(process.execPath, [hookPath], hookSpawnOptions({
       input: JSON.stringify(payload),
       encoding: "utf8",
       timeout,
       cwd: opts.cwd || currentCwd,
       windowsHide: true,
-    });
+    }));
   } catch {
     // Spawn failure — never break the tool call
     return { stdout: "", exitCode: 0, timedOut: false };
@@ -628,6 +651,10 @@ const GsdCorePlugin = async ({ directory } = {}) => {
       });
 
       const isWriteLike = ["Write", "Edit", "MultiEdit"].includes(claudeTool);
+      const patchPaths = patchFilePaths((output.args || {}).patchText);
+      const pathPayloads = patchPaths.length
+        ? patchPaths.map((p) => prePayload({ tool_input: { ...toolInput, file_path: p } }))
+        : [prePayload()];
 
       // 1. gsd-prompt-guard.js — injection scan on .planning/ writes
       if (claudeTool === "Write" || claudeTool === "Edit") {
@@ -643,8 +670,9 @@ const GsdCorePlugin = async ({ directory } = {}) => {
 
       // 3. gsd-worktree-path-guard.js — hard-block edits outside worktree
       if (isWriteLike) {
-        const r = runHook("gsd-worktree-path-guard.js", prePayload());
-        handleHookResult(r, output);
+        for (const payload of pathPayloads) {
+          handleHookResult(runHook("gsd-worktree-path-guard.js", payload), output);
+        }
       }
 
       // 4. gsd-write-guard.js — hard-block catastrophic shrink of curated
@@ -657,8 +685,9 @@ const GsdCorePlugin = async ({ directory } = {}) => {
       // 5. gsd-workflow-guard.js — workflow advisory + git-force-add block
       //    (covers Write/Edit/MultiEdit AND Bash force-add detection)
       if (isWriteLike || claudeTool === "Bash") {
-        const r = runHook("gsd-workflow-guard.js", prePayload());
-        handleHookResult(r, output);
+        for (const payload of pathPayloads) {
+          handleHookResult(runHook("gsd-workflow-guard.js", payload), output);
+        }
       }
 
       // 6. gsd-secret-read-guard.js — hard-block reads of .env / .env.<suffix> /
@@ -829,44 +858,120 @@ const GsdCorePlugin = async ({ directory } = {}) => {
   };
 };
 
-// Export shape — verified against OpenCode's plugin loader source
-// (packages/opencode/src/plugin). The loader imports this module and runs
-// `for (const entry of Object.values(mod)) { getServerPlugin(entry) }`, where
-// `getServerPlugin` accepts a bare function OR an object exposing a `.server`
-// function, and THROWS `TypeError("Plugin export is not a function")` for
-// anything else. So EVERY enumerable value the loader iterates must be a
-// function or an object with `.server`.
-//
-// The subtlety: depending on how OpenCode's runtime (Node or Bun) imports a
-// CommonJS file, `mod` may be the raw `module.exports` OR an ESM namespace of
-// the form `{ default: module.exports, ...syntheticNamedExports }`. A plain
-// `module.exports = { id: "gsd-core", server }` literal risks a string `id`
-// appearing in `Object.values(mod)` (as a raw property, or as a lexer-
-// synthesized named export) — which would trip the throw. Two defenses:
-//   1. `id` is defined NON-ENUMERABLE, so it never appears in Object.values yet
-//      stays readable (via property access) for the loader's identity/dedup.
-//   2. `module.exports` is assigned from a VARIABLE (not an object literal), so
-//      cjs-module-lexer cannot statically synthesize named exports from it —
-//      only `default` is exposed under ESM/Bun interop.
-// Result: raw-CJS `Object.values` = `[server]`; ESM `Object.values` =
-// `[{server, <id non-enum>}]` — both fully extractable. Test-only helpers hang
-// off the `server` FUNCTION (`server._internals`), never as a sibling export.
+const V2_TOOL_ALIASES = new Map([["shell", "bash"], ["patch", "apply_patch"]]);
+
+// Export shape, checked against both OpenCode plugin loaders:
+//   - OpenCode 1.x (>= 1.4) reads `mod.default` through
+//     `readV1Plugin(..., "detect")` and calls only `default.server`. Older
+//     legacy loaders iterate `Object.values(mod)` and throw on any value that
+//     is not a function or an object with `.server`; `id` and `setup` are
+//     non-enumerable, so raw-CommonJS `Object.values` is `[server]`.
+//   - Bun exposes every own property of `module.exports`, non-enumerable ones
+//     included, as named namespace exports, so under Bun the namespace also
+//     carries `id` and `setup`. Harmless: the detect path never reaches the
+//     `Object.values` loop.
+//   - OpenCode 2.x decodes `default` as `{ id, setup }` and ignores `server`.
+//     Never define `effect`: the 2.x loader prefers it over `setup`.
+// Test-only helpers hang off `server._internals`, never as sibling exports.
+async function GsdCoreSetup(ctx) {
+  const dir = ctx.location.directory;
+  const v1 = await GsdCorePlugin({ directory: dir });
+  // currentCwd and currentSessionId are module globals re-pinned on every call.
+  // This holds only while the V1 tool handlers never await and runHook stays
+  // synchronous; otherwise { cwd, sessionId } must be passed through the handlers.
+  const pin = (ev) => {
+    currentCwd = dir;
+    currentSessionId = ev.sessionID;
+  };
+  const errorText = (err) => (err instanceof Error ? err.message : String(err));
+  await ctx.tool.hook("execute.before", async (ev) => {
+    pin(ev);
+    await v1["tool.execute.before"]({ tool: V2_TOOL_ALIASES.get(ev.tool) ?? ev.tool }, { args: ev.input });
+  });
+  await ctx.tool.hook("execute.after", async (ev) => {
+    if (ev.status !== "completed") return;
+    const { content } = ev.result;
+    const isText = typeof content === "string";
+    const out = { output: isText ? content : undefined, metadata: { ...ev.result.metadata } };
+    pin(ev);
+    await v1["tool.execute.after"]({ tool: V2_TOOL_ALIASES.get(ev.tool) ?? ev.tool, args: ev.input }, out);
+    ev.result = { ...ev.result, content: isText ? out.output : content, metadata: out.metadata };
+    if (!["write", "edit", "patch"].includes(ev.tool)) return;
+    try {
+      const paths = ev.tool === "patch" ? patchFilePaths(ev.input.patchText) : [ev.input.path];
+      for (const p of paths) {
+        if (typeof p !== "string") continue;
+        currentCwd = dir;
+        await v1.event({ event: { type: "file.edited", properties: { file: path.resolve(dir, p), cwd: dir } } });
+      }
+    } catch (err) {
+      console.error(`[gsd-core] config reload failed: ${err.message}`);
+    }
+  });
+  await ctx.shell.hook("create.before", async (ev) => {
+    currentCwd = dir;
+    try {
+      await v1["shell.env"]({}, { env: ev.env });
+    } catch (err) {
+      console.error(`[gsd-core] shell env hook failed: ${err.message}`);
+    }
+  });
+  await ctx.session.hook("compaction", async (ev) => {
+    try {
+      pin(ev);
+      const out = { context: [] };
+      await v1["experimental.session.compacting"]({}, out);
+      for (const text of out.context) ev.system.push({ type: "text", text });
+    } catch (err) {
+      console.error(`[gsd-core] compaction hook failed: ${errorText(err)}`);
+    }
+  });
+  const controller = new AbortController();
+  void (async () => {
+    try {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        if (controller.signal.aborted) break;
+        try {
+          if (event.type !== "session.created") continue;
+          if ((event.location?.directory ?? event.data?.location?.directory) !== dir) continue;
+          if (event.data?.parentID) continue;
+          await v1.event({ event: { type: "session.created", properties: { info: { id: event.data.sessionID, directory: dir } } } });
+        } catch (err) {
+          console.error(`[gsd-core] session event failed: ${errorText(err)}`);
+        }
+      }
+      if (!controller.signal.aborted) console.error("[gsd-core] event stream ended");
+    } catch (err) {
+      if (!controller.signal.aborted) console.error(`[gsd-core] event stream failed: ${errorText(err)}`);
+    }
+  })().catch(() => {});
+  return () => controller.abort();
+}
+
 GsdCorePlugin._internals = {
   REPO_ROOT,
   IS_PACKAGE_TREE,
   mapToolName,
   mapToolInput,
+  patchFilePaths,
   locateFrontmatterFence,
   parseFrontmatter,
   rewriteContent,
   isGsdManagedFile,
   handleHookResult,
+  hookSpawnOptions,
   GsdCorePlugin,
 };
 
 const gsdCorePluginExport = { server: GsdCorePlugin };
 Object.defineProperty(gsdCorePluginExport, "id", {
   value: "gsd-core",
+  enumerable: false,
+  writable: false,
+  configurable: false,
+});
+Object.defineProperty(gsdCorePluginExport, "setup", {
+  value: GsdCoreSetup,
   enumerable: false,
   writable: false,
   configurable: false,
