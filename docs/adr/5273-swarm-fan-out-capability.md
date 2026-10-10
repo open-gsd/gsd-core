@@ -102,7 +102,7 @@ Every swarm-eligible role run appends one entry to `${PHASE_DIR}/${PADDED_PHASE}
 
 ### 6. Runtime gating: degrade to single-agent, loudly
 
-The ladder runs fail-closed, in the style of `detectWorkflowBackend`, in two phases. **Plan-time** rungs are evaluated by `swarm plan` and core's validator before `loop fan-out-plan` returns. Each miss returns `mode: "single"` with a stable reason code, and the role dispatches its single agent as today. **Run-time** rungs are observed by the executor after a plan has returned. Each miss abandons the swarm run and uses the reserved fallback dispatch (Decision 2) to run the single agent.
+The ladder runs fail-closed, in the style of `detectWorkflowBackend`, in two phases. **Plan-time** rungs are evaluated by `swarm plan` and core's validator before `loop fan-out-plan` returns. Each miss returns `mode: "single"` with a stable reason code, and the role dispatches its single agent as today. Core evaluates its own rungs after the strategy has answered, so a user who never enabled swarm sees nothing, and it validates the plan before computing *C*, because *C*'s third term is the plan's own `maxWorkers`. `gsd-core/references/fan-out-dispatch.md` lists the rungs in the order the verb checks them. **Run-time** rungs are observed by the executor after a plan has returned. Each miss abandons the swarm run and uses the reserved fallback dispatch (Decision 2) to run the single agent.
 
 **Plan-time rungs**
 
@@ -190,7 +190,7 @@ Swarm reads paths written by models and passes model output to an agent that hol
   - an `agentType` is outside the allowlist, which is `gsd-swarm-worker` plus the step's own agent as the one synthesizer;
   - a dispatch's `model` or `tier` differs from `resolve-model`'s output for the agent whose values it claims (the worker's, or for decomposition and cross-file dispatches the synthesizer's);
   - a `prompt` or `schema` exceeds its byte bound;
-  - a unit scope fails containment, or there are more units than `max_workers`;
+  - a unit scope fails containment, or there are more units than `max_workers`. The plan carries `max_workers` itself as `maxWorkers`, so core never reads a swarm-owned key, and core bounds it to `2..6`: the ceiling is the budget of 9 minus the synthesizer, the reserved fallback and the one extra dispatch each role spends;
   - the plan carries an executor-only field (Decision 1).
 - **Reviewer-lane evidence stays where it is.** Both code-review steps already carry `supportsReviewerLanes`. Lane dispatch is unchanged by swarm. Lane evidence goes only to the synthesizer, `gsd-code-reviewer`, in its existing `<external_reviewer_evidence>` block. It never reaches a per-file worker or the cross-file worker, so it is never laundered through a worker answer past the consolidation contract.
 
