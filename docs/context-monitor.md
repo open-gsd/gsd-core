@@ -28,6 +28,14 @@ breadcrumb bookkeeping.
 | WARNING | <= 35% | Wrap up current task, avoid starting new complex work |
 | CRITICAL | <= 25% | Stop immediately, save state (`/gsd-pause-work`) |
 
+"Remaining" is measured to the point where Claude Code auto-compacts, not to the
+end of the model window — the same scale as the statusline's context bar (#4985).
+That point is the auto-compact window (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, else the
+`autoCompactWindow` setting `/autocompact` saves, per model under `modelSettings` or
+top-level, else the model window) minus the 33k auto-compact buffer `/context` shows,
+lowered further when `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` sets an earlier point. With auto-compact off, it is the model
+window.
+
 ### Tuning the fire-points
 
 35 and 25 are defaults, not fixed points. How much runway "35% remaining" buys
@@ -49,7 +57,7 @@ file is in the managed-hooks registry, so the next install re-stages the
 vendored body and the edit is gone without a conflict or a warning. A config key
 survives by construction.
 
-Both keys are optional and both are percentages of context window **remaining**,
+Both keys are optional and both are percentages of context **remaining** before auto-compaction,
 so a *larger* number fires *earlier*. Absent keys resolve to the defaults above,
 which is what every existing project gets.
 
@@ -164,11 +172,21 @@ The bridge file is a simple JSON object:
 ```json
 {
   "session_id": "abc123",
-  "remaining_percentage": 28.5,
+  "remaining_percentage": 29,
   "used_pct": 71,
+  "used_tokens": 438070,
+  "threshold_tokens": 617000,
   "timestamp": 1708200000
 }
 ```
+
+`used_pct` and `remaining_percentage` add to 100 and are percentages of
+`threshold_tokens`: the auto-compact threshold, or the model window when
+auto-compact is off. `used_tokens` is the count `/context` shows, taken from the
+payload's `current_usage`; before the first response, when the payload has no
+`current_usage`, it is estimated from Claude Code's percentage. The two token
+fields are absent when the statusline payload has no `context_window_size`; the
+percentages are then Claude Code's own, against the model window.
 
 ## Integration with GSD
 
