@@ -16,7 +16,7 @@ require('node:test').afterEach(() => {
 const helpers = require('./helpers.cjs');
 
 const hooksSurface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
-const { install, installAllRuntimes, finishInstall } = require('../bin/install.js');
+const { install, installAllRuntimes, finishInstall, selectConfiguredEntrypointsForValidation } = require('../bin/install.js');
 
 /**
  * Run `fn` with HOME/USERPROFILE pointed at a fresh temp dir and every
@@ -620,8 +620,21 @@ test('#5100 win32 portable JS and .sh hooks stay unresolved when only WSL bash i
   assert.equal(shCmd, null, '.sh hooks already return null when Git Bash is missing');
   assert.ok(shEntries.some(entry => (entry.interpreterCandidates || []).includes('bash')));
 
+  // #5100 (review, Nit 12): the Antigravity portable path reaches the same
+  // null branch — previously only claude and codex pinned it here.
+  const agyEntries = [];
+  const agyCmd = hooksSurface.buildHookCommand(configDir, 'gsd-foo.js', {
+    ...missing,
+    runtime: 'antigravity',
+    portableHooks: true,
+    configuredEntrypoints: agyEntries,
+    execPath: 'C:\\Program Files\\nodejs\\node.exe',
+  });
+  assert.equal(agyCmd, null, 'Antigravity portable JS must not fall back to a bare bash command');
+  assert.ok(agyEntries.some(entry => (entry.interpreterCandidates || []).includes('bash')));
+
   const gateDeps = { env: {}, existsSync: () => false, resolveExecutableBinary: gsd5100WslStandIn };
-  for (const entries of [jsEntries, shEntries]) {
+  for (const entries of [jsEntries, shEntries, agyEntries]) {
     const gate = hooksSurface.validateConfiguredEntrypoints(entries, gateDeps);
     assert.equal(gate.ok, false);
     assert.ok(gate.invalid.some(item => item.reason === 'unresolved-interpreter' && String(item.path).includes('bash')));
@@ -738,4 +751,68 @@ test('#5100 non-win32 bare bash still resolves through the executable scan', () 
     resolveExecutableBinary: (candidate) => (candidate === 'bash' ? '/usr/bin/bash' : null),
   });
   assert.equal(gate.ok, true);
+});
+
+test('#5100 installer surfaces command-less unresolved-bash entries on fresh and upgrade installs', (t) => {
+  const configDir = gsd5100HookTree(t);
+  // The entry exactly as the installer sees it: buildHookCommand with no Git
+  // Bash pushes command-less entries (no `command` key at all).
+  const produced = [];
+  const cmd = hooksSurface.buildHookCommand(configDir, 'gsd-foo.js', {
+    platform: 'win32',
+    env: {},
+    existsSync: () => false,
+    runtime: 'claude',
+    portableHooks: true,
+    configuredEntrypoints: produced,
+    execPath: 'C:\\Program Files\\nodejs\\node.exe',
+  });
+  assert.equal(cmd, null);
+  assert.equal(produced.length, 2);
+  assert.ok(produced.every(entry => entry.command === undefined));
+  assert.ok(produced.some(entry => (entry.interpreterCandidates || []).includes('bash')));
+  const sentinel = produced[0];
+
+  const entryFor = (hookFile) => ({
+    runtime: 'claude',
+    configPath: path.join(configDir, 'settings.json'),
+    scriptPath: path.join(configDir, 'hooks', hookFile),
+    platform: 'win32',
+    interpreterCandidates: ['node'],
+    command: `"node" "/cfg/hooks/${hookFile}"`,
+  });
+  const tracked = [sentinel, entryFor('gsd-unreferenced.js'), entryFor('gsd-live.js')];
+
+  // Fresh install: nothing registered yet — the sentinel must still surface,
+  // while entries no hook references stay dropped (the #4154 contract).
+  const fresh = selectConfiguredEntrypointsForValidation(tracked, []);
+  assert.ok(fresh.includes(sentinel), 'fresh installs must surface the unresolved-bash entry');
+  assert.equal(fresh.length, 1, 'fresh installs still drop entries no hook references');
+
+  // Upgrade: commands persisted by the earlier install keep entries alive —
+  // the sentinel must surface there too, so both paths reach the gate instead
+  // of diverging into silent-pass vs hard-fail.
+  const upgraded = selectConfiguredEntrypointsForValidation(tracked, [
+    'bash "C:/old/hooks/gsd-foo.js"',
+    '"node" "/cfg/hooks/gsd-live.js"',
+  ]);
+  assert.ok(upgraded.includes(sentinel), 'upgrades must surface the unresolved-bash entry too');
+  assert.ok(
+    upgraded.some(entry => path.basename(entry.scriptPath) === 'gsd-live.js'),
+    'upgrades keep entries whose hook is still registered',
+  );
+  assert.ok(
+    upgraded.every(entry => path.basename(entry.scriptPath) !== 'gsd-unreferenced.js'),
+    'the registered-command filter still discards entries no hook references',
+  );
+
+  // The surfaced entry fails the gate loudly on a host with no Git Bash —
+  // the fresh-install silent pass Major 1 removed.
+  const gate = hooksSurface.validateConfiguredEntrypoints(fresh, {
+    env: {},
+    existsSync: () => false,
+    resolveExecutableBinary: gsd5100WslStandIn,
+  });
+  assert.equal(gate.ok, false);
+  assert.ok(gate.invalid.some(item => item.reason === 'unresolved-interpreter'));
 });

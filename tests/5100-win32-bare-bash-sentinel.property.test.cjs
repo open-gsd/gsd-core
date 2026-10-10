@@ -8,8 +8,8 @@
  *           -> isWin32BareBashToken(candidate, 'win32') (unexported)
  *
  * The sentinel is a parser-like predicate: `bash` / `bash.exe`, matched
- * case-insensitively, and only when the token carries no path separator.
- * The predicate decides which of two resolvers runs - the Git Bash policy
+ * case-insensitively, trimmed at the edge, and only when the token carries
+ * no path separator. The predicate decides which of two resolvers runs - the Git Bash policy
  * (env GSD_BASH_PATH / ProgramFiles / ProgramFiles(x86) / SystemDrive) or
  * the generic PATH scan. Getting it wrong re-opens #5100 for one spelling.
  *
@@ -97,12 +97,32 @@ describe('#5100 bare win32 bash sentinel - case and extension', () => {
 describe('#5100 bare win32 bash sentinel - separators', () => {
   test('a path separator makes an otherwise sentinel-shaped token an ordinary candidate', () => {
     fc.assert(fc.property(
-      fc.constantFrom('', '/', '\\', 'C:\\', 'D:/', '/usr/bin/', './', 'Git\\'),
+      fc.constantFrom('', '/', '\\', 'C:\\', 'D:/', '/usr/bin/', './', 'Git\\', '\\\\server\\share\\'),
       caseFlags,
       fc.constantFrom('', '.exe', '.bat'),
       (prefix, flags, ext) => {
         const token = prefix + applyCase(flags) + ext;
         const expectedSentinel = prefix === '' && (ext === '' || ext === '.exe');
+        assert.equal(
+          gateAccepts(token),
+          !expectedSentinel,
+          `${JSON.stringify(token)}: expected sentinel=${expectedSentinel}`,
+        );
+      },
+    ));
+  });
+});
+
+describe('#5100 bare win32 bash sentinel - surrounding whitespace', () => {
+  test('leading/trailing whitespace is trimmed at the edge, not smuggled past the gate', () => {
+    fc.assert(fc.property(
+      fc.constantFrom('', ' ', '  ', '\t'),
+      fc.constantFrom('', ' ', '  ', '\t'),
+      caseFlags,
+      fc.constantFrom('', '.exe', '.bat'),
+      (pre, post, flags, ext) => {
+        const token = pre + applyCase(flags) + ext + post;
+        const expectedSentinel = ext === '' || ext.toLowerCase() === '.exe';
         assert.equal(
           gateAccepts(token),
           !expectedSentinel,

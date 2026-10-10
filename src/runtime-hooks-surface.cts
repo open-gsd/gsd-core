@@ -1475,10 +1475,10 @@ function configuredEntrypointsForHook(
   const bash = resolveBashExecutable(opts);
   if (isShellHook) {
     // An unresolved bash must still surface as an interpreterCandidates entry
-    // (the literal token, same as the portableHooks runner below) so
+    // (the sentinel token, same as the portableHooks runner below) so
     // validateConfiguredEntrypoints reports 'unresolved-interpreter' instead
     // of silently skipping the check because the field is absent.
-    return [{ ...target, interpreterCandidates: [bash === null ? 'bash' : bash] }];
+    return [{ ...target, interpreterCandidates: [bash === null ? UNRESOLVED_BASH_SENTINEL : bash] }];
   }
 
   // #4249: check the SAME stable alias buildNodeRunnerChainToken bakes as its
@@ -1501,7 +1501,7 @@ function configuredEntrypointsForHook(
     runtime,
     configPath,
     scriptPath: path.join(configDir, 'hooks', NODE_RUNNER_RESOLVER_HOOK),
-    interpreterCandidates: bash === null ? ['bash'] : [bash],
+    interpreterCandidates: bash === null ? [UNRESOLVED_BASH_SENTINEL] : [bash],
     platform,
   };
   return [runner, { ...target, interpreterCandidates: nodeCandidates }];
@@ -1519,6 +1519,20 @@ function recordConfiguredHookCommand(
     );
   }
   return command;
+}
+
+// #5100: the two null-runner branches of buildHookCommand share this. No
+// command was ever built, so track() (which needs one) cannot record the
+// hook — push the entry directly instead, so the gate sees it rather than
+// the hook going silently unregistered.
+function recordUnresolvedBashEntrypoint(
+  configDir: string,
+  hookName: string,
+  opts: BuildHookCommandOpts,
+): void {
+  if (opts.configuredEntrypoints) {
+    opts.configuredEntrypoints.push(...configuredEntrypointsForHook(configDir, hookName, opts));
+  }
 }
 
 function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookCommandOpts): string | null {
@@ -1548,15 +1562,9 @@ function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookC
     const runner = resolveBashRunner(opts);
     if (runner === null) {
       // #4249 (antigravity review): this early return skips `track()` below,
-      // so an unresolved bash on win32 (no Git Bash found) previously left
-      // this hook silently unregistered with nothing for
-      // validateConfiguredEntrypoints to reject — configuredEntrypointsForHook's
-      // own 'unresolved bash must still surface' comment describes intent this
-      // return never reached. Push the entry directly (no `command`, since
-      // none was ever built) so the gate actually sees it.
-      if (opts.configuredEntrypoints) {
-        opts.configuredEntrypoints.push(...configuredEntrypointsForHook(configDir, hookName, opts));
-      }
+      // which needs a command that was never built — record the entry
+      // directly so the gate can reject it.
+      recordUnresolvedBashEntrypoint(configDir, hookName, opts);
       return null;
     }
 
@@ -1606,9 +1614,7 @@ function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookC
     // win32 reaches WSL's System32 launcher, and the gate used to accept it.
     const resolverRunner = resolveBashRunner(opts);
     if (resolverRunner === null) {
-      if (opts.configuredEntrypoints) {
-        opts.configuredEntrypoints.push(...configuredEntrypointsForHook(configDir, hookName, opts));
-      }
+      recordUnresolvedBashEntrypoint(configDir, hookName, opts);
       return null;
     }
     return track(shellCmdProjection.projectShellCommandText({
@@ -3189,16 +3195,17 @@ type ConfiguredEntrypointValidationResult =
   | { ok: true }
   | { ok: false; invalid: ConfiguredEntrypointInvalid[] };
 
+// #5100: the writer emits the bare `bash` token when the Git Bash policy
+// finds nothing, and the gate resolves that token through the same policy —
+// never a PATH scan. One shared definition so the two sides cannot drift.
+const UNRESOLVED_BASH_SENTINEL = 'bash';
+const WIN32_BARE_BASH_TOKENS = [UNRESOLVED_BASH_SENTINEL, 'bash.exe'];
+
 function isWin32BareBashToken(candidate: string, platform?: string): boolean {
   if ((platform || process.platform) !== 'win32') return false;
-  // The literal comparison below already rejects any path: a string holding a
-  // separator can never equal 'bash' / 'bash.exe'. So `C:\Windows\System32\
-  // bash.exe` and `/bin/bash` fall through on the equality test rather than on
-  // an explicit separator guard — there is no clause here a separator can
-  // reach, and adding one back would be an equivalent mutant that mutation
-  // testing can kill without changing behaviour.
-  const lower = candidate.toLowerCase();
-  return lower === 'bash' || lower === 'bash.exe';
+  // Equality already rejects any path: a string holding a separator can never
+  // equal a bare token, so no explicit separator guard is needed here.
+  return WIN32_BARE_BASH_TOKENS.includes(candidate.trim().toLowerCase());
 }
 
 // #5100: the literal `bash` sentinel means "Git Bash policy found nothing"
