@@ -30,6 +30,16 @@ import { escapeRegex } from './pattern.cjs';
 // project_code values start with an uppercase letter (e.g. PROJ, APP_CODE);
 // leading underscores are not valid project codes per .planning/config.json.
 const PROJECT_CODE_PREFIX_STRIP_RE = /^[A-Z][A-Z0-9_]*-(?=\d)/;
+
+/**
+ * The ONE grammar for a project_code VALUE — anchored, case-SENSITIVE, with no trailing dash.
+ *
+ * It is the value half of `PROJECT_CODE_PREFIX_STRIP_RE` above, published rather than restated: a
+ * second copy in a caller is a second answer to "what may a project_code be", and the two drifting
+ * is how `config-set`'s acceptance and a reader's re-validation come to disagree (#5271 Nit 2).
+ * Anything that must RECOGNISE a configured code matches here rather than writing the class out.
+ */
+const PROJECT_CODE_VALUE_RE = /^[A-Z][A-Z0-9_]*$/;
 const PROJECT_CODE_PREFIX_STRIP_RE_I = /^[A-Z][A-Z0-9_]*-(?=\d)/i;
 const PROJECT_CODE_PREFIX_CAPTURE_RE_I = /^([A-Z][A-Z0-9_]*)-(\d.*)/i;
 const OPTIONAL_PROJECT_CODE_PREFIX_SOURCE = '(?:[A-Z][A-Z0-9_]*-)?';
@@ -1752,6 +1762,7 @@ function roadmapPhaseLookupSources(phaseNum: unknown): string[] {
 }
 
 export = {
+  PROJECT_CODE_VALUE_RE,
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
   OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,

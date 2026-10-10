@@ -37,6 +37,11 @@ import { gateVerdict, gateUnreadable, gateUsageFailure, isGateUsageFailure, GATE
 import type { GateResult } from './gate-verdict.cjs';
 import { resolveContainedPath, resolvePhaseDir } from './gate-phase-context.cjs';
 import { escapeEre } from './pattern.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdMod = require('./phase-id.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningWorkspaceMod = require('./planning-workspace.cjs');
+const { readScopedConfigValue } = planningWorkspaceMod;
 import { readPlanScanEvidence } from './gate-evidence.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -173,23 +178,109 @@ function paddedPattern(value: string): string {
 }
 
 /**
+ * The `<phase>-<plan>` fragment of a plan subject pattern, or null when `id` is not that shape.
+ *
+ * Zero-padding tolerant in both halves: `03-01` yields `0*3-0*1`, so `feat(03-01):`, `test(3-1):`
+ * and `fix(03-01)!:` match while `feat(03-010):` does not (#4003, #4619, #4748).
+ */
+function phasePlanPattern(id: string): string | null {
+  const dash = id.indexOf('-');
+  const phasePart = dash > 0 ? id.slice(0, dash) : '';
+  const planPart = dash > 0 ? id.slice(dash + 1) : '';
+  if (/^[0-9A-Za-z.]+$/.test(phasePart) && /^[0-9A-Za-z.]+$/.test(planPart)) {
+    return `${paddedPattern(phasePart)}-${paddedPattern(planPart)}`;
+  }
+  return null;
+}
+
+/**
+ * The `<CODE>-` prefix of `planId` when it is EXACTLY the project's configured `project_code`
+ * followed by a dash — the separator included — else null.
+ *
+ * The match is CASE-SENSITIVE and anchored to the configured value. The phase-id module's
+ * `stripProjectCodePrefix` grammar (`^[A-Z][A-Z0-9_]*-(?=\d)`, case-insensitive) recognises ANY
+ * letter prefix, which is deliberately wider than the project: `AUTH-01-02` and `setup-1-2` are
+ * ids this project never assigned a code to, and stripping their prefixes made them resolve
+ * another plan's commits (#5271 Major 1). Only the code the project actually configures may be
+ * stripped, so an id that merely LOOKS coded keeps its literal-match guarantee.
+ */
+function configuredCodePrefix(planId: string, projectCode: string | null): string | null {
+  if (projectCode === null || !phaseIdMod.PROJECT_CODE_VALUE_RE.test(projectCode)) return null;
+  const prefix = `${projectCode}-`;
+  return planId.startsWith(prefix) ? prefix : null;
+}
+
+/**
  * The anchored subject pattern for a plan id, or null when `planId` is empty, over-long or carries a
  * control / whitespace character.
  *
  * A `<phase>-<plan>` id (`03-01`) is zero-padding tolerant: `feat(03-01):`, `test(3-1):` and
- * `fix(03-01)!:` match, `feat(03-010):` does not. Any other id (a plan FILE NAME that does not follow
- * the numbering) is matched LITERALLY — every ERE metacharacter escaped — so `x.*` or `a[b]` can only
- * match a commit that names that exact id, and never widens the pattern.
+ * `fix(03-01)!:` match, `feat(03-010):` does not. An id carrying the CONFIGURED project code
+ * (`PRJ-01-01` with `project_code: "PRJ"`, #5271) matches either spelling of the SAME plan —
+ * `feat(PRJ-01-01):` and `feat(01-01):` — because the two init verbs hand out different phase
+ * tokens for one plan. The code is stripped ONLY when it is the configured one: an id like
+ * `AUTH-01-02` or `setup-1-2`, which merely looks coded, is matched LITERALLY — every ERE
+ * metacharacter escaped — so it can only match a commit naming that exact id and never widens the
+ * pattern to another plan's commits. Any other id (a plan FILE NAME that does not follow the
+ * numbering) is matched literally for the same reason.
+ *
+ * `projectCode` is the project's configured `project_code`; with none (no config, no `planningDir`),
+ * every id is matched literally, which is the pre-#5271 behaviour.
  */
-export function planSubjectPattern(planId: string): string | null {
+export function planSubjectPattern(planId: string, projectCode: string | null = null): string | null {
   if (planId.length === 0 || planId.length > 200 || /[\s\x00-\x1f\x7f]/.test(planId)) return null;
-  const dash = planId.indexOf('-');
-  const phasePart = dash > 0 ? planId.slice(0, dash) : '';
-  const planPart = dash > 0 ? planId.slice(dash + 1) : '';
-  if (/^[0-9A-Za-z.]+$/.test(phasePart) && /^[0-9A-Za-z.]+$/.test(planPart)) {
-    return `^[a-z]+\\(${paddedPattern(phasePart)}-${paddedPattern(planPart)}\\)!?:`;
+  const direct = phasePlanPattern(planId);
+  if (direct) return `^[a-z]+\\(${direct}\\)!?:`;
+  // #5271: `init.execute-phase` returns `phase_number: "PRJ-01"` where `init.plan-phase` returns
+  // `padded_phase: "01"`, and every gate builds its `--plan` from the former. Splitting `PRJ-01-01`
+  // at its FIRST dash leaves `01-01` as the plan half, which is not a plan number, so the id fell
+  // through to the literal pattern that no executor commit can ever carry — an empty scope at exit
+  // 0, which is the correct answer for a plan that has NOT started and the wrong one for one that
+  // has. Retry on the CONFIGURED project-code-stripped id, with the code OPTIONAL so the commit the
+  // executor actually wrote still matches.
+  const prefix = configuredCodePrefix(planId, projectCode);
+  if (prefix !== null) {
+    // The code is a REAL optional group `(PRJ-)?`, never `(?:PRJ-)`: the same string is handed to
+    // `git log --extended-regexp`, and POSIX ERE has no non-capturing group, so `(?:…)` is a syntax
+    // error on the git side while the JS-side `RegExp` (which accepts it) stayed green. The `?`
+    // must follow the GROUP — placed on the escaped `\(` of the subject paren it would merely make
+    // that paren optional.
+    const stripped = planId.slice(prefix.length);
+    const coded = phasePlanPattern(stripped);
+    // Major 3: the milestone-prefixed coded shape `PRJ-01-02-03` strips to `01-02-03`, whose plan
+    // half still carries a dash, so `phasePlanPattern` returns null and the id would fall to the
+    // LITERAL `PRJ-01-02-03` — a spelling no executor commit carries, i.e. a started plan reading
+    // as unstarted. Such a remainder still takes the code group, because it starts with the phase
+    // number: it IS the coded plan, one segment longer.
+    // Minor 2: an EMPTY or non-numeric remainder takes NO group. `PRJ-` stripped to '' and emitted
+    // `(PRJ-)?` alone, which matches `feat():`; `PRJ-a.b` matches `feat(a.b):`, another plan's
+    // literal id. Both are strictly WIDER than the pre-#5271 pattern, which is the one property
+    // this fallback must keep — so the group rides on `planShaped` alone.
+    const planShaped = coded !== null || /^\d/.test(stripped);
+    if (!planShaped) return `^[a-z]+\\(${escapeEre(planId)}\\)!?:`;
+    return `^[a-z]+\\((${escapeEre(prefix)})?${coded ?? escapeEre(stripped)}\\)!?:`;
   }
   return `^[a-z]+\\(${escapeEre(planId)}\\)!?:`;
+}
+
+/**
+ * The project's configured `project_code`, or null when it is absent, non-string or outside the
+ * supported grammar.
+ *
+ * SUPPORTED GRAMMAR: `PROJECT_CODE_VALUE_RE` (`^[A-Z][A-Z0-9_]*$`) — the phase-id owner's one
+ * grammar, the same half of the `project_code` value `.planning/config.json` documents. `config-set`
+ * stores `project_code` unvalidated, so a lowercase (`prj`) or hyphenated (`AUTH-X`) value is
+ * possible; such a value is treated as ABSENT rather than matched with a second, wider grammar,
+ * which means the coded id falls back to its LITERAL spelling and #5271's symptom reappears for
+ * that project. That degradation is the safe direction — never WIDER than the pre-#5271 pattern,
+ * since a literal id can only match a subject naming that exact id — but it is a real limit:
+ * a project that configures a code outside the supported grammar does not get coded-id resolution.
+ * The supported grammar is stated in `.changeset/eager-jaguars-tumble.md` and `docs/ARCHITECTURE.md`.
+ */
+function configuredProjectCode(projectDir: string): string | null {
+  const { present, value } = readScopedConfigValue(projectDir, ['project_code']);
+  if (!present || typeof value !== 'string' || value.length === 0) return null;
+  return phaseIdMod.PROJECT_CODE_VALUE_RE.test(value) ? value : null;
 }
 
 // ─── Git plumbing ─────────────────────────────────────────────────────────────
@@ -280,7 +371,7 @@ export function resolveEvaluationScope(projectDir: string, unit: ScopeUnit, opti
     const repoRoot = git(['rev-parse', '--show-toplevel']);
 
     if (unit.kind === 'phase') resolvePhase(projectDir, unit, scope, git, ref, options, repoRoot);
-    else resolveBySubject(unit, scope, git, ref, options, repoRoot);
+    else resolveBySubject(projectDir, unit, scope, git, ref, options, repoRoot);
     return scope;
   } catch (error) {
     const reason = error instanceof ScopeUnreadable ? error.reason : 'resolver-error';
@@ -467,6 +558,7 @@ function resolvePhase(
 }
 
 function resolveBySubject(
+  projectDir: string,
   unit: { kind: 'plan'; planId: string } | { kind: 'quick'; id: string }, scope: EvaluationScope,
   git: Git, ref: string, options: ScopeOptions, repoRoot: string,
 ): void {
@@ -489,7 +581,7 @@ function resolveBySubject(
   const grepArgs: string[] = [];
   let anchored: RegExp | null = null;
   if (unit.kind === 'plan') {
-    const pattern = planSubjectPattern(unit.planId);
+    const pattern = planSubjectPattern(unit.planId, configuredProjectCode(projectDir));
     if (pattern === null) throw new ScopeUnreadable('invalid-plan-id');
     grepArgs.push('--extended-regexp', `--grep=${pattern}`);
     anchored = new RegExp(pattern);
