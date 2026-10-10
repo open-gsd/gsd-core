@@ -1,7 +1,3 @@
-// allow-test-rule: source-text-is-the-product
-// Workflow .md files — their text IS what the runtime loads. Testing text
-// content tests the deployed contract. Per CONTRIBUTING.md exception matrix.
-
 /**
  * GSD Tools Tests - New Milestone Research Decision (#5148)
  *
@@ -9,7 +5,7 @@
  *  1. research scope covers the existing codebase, not only new features,
  *  2. `(Recommended)` is bound to `research_enabled`,
  *  3. a researcher subset requires user-visible disclosure and the
- *     synthesizer's required_reading lists only files that exist.
+ *     synthesizer's required_reading lists only files written in this run.
  */
 
 const { describe, test } = require('node:test');
@@ -46,7 +42,9 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
   });
 
   test('(Recommended) is tied to research_enabled and marks one option only', () => {
-    const [enabled, disabled] = body.split('**If `research_enabled` is `false`:**');
+    const parts = body.split('**If `research_enabled` is `false`:**');
+    assert.equal(parts.length, 2, 'expected exactly one false-branch marker');
+    const [enabled, disabled] = parts;
     const marked = (text) => (text.match(/^- "[^\n]*\(Recommended\)[^\n]*/gm) || []);
     const enabledMarks = marked(enabled);
     assert.equal(enabledMarks.length, 1, 'exactly one option carries (Recommended) when research_enabled is true');
@@ -56,17 +54,23 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
   });
 
   test('a researcher subset must be disclosed to the user before spawning', () => {
-    assert.match(body, /Drop one only when its dimension clearly does not apply/);
+    assert.match(body, /Drop a dimension only when it clearly does not apply/);
+    assert.match(body, /At least one must run/);
     assert.match(body, /tell the user before spawning/);
     assert.match(body, /Skipping: \{dimension\(s\)\}/);
     assert.match(body, /Never drop one silently/);
-    assert.doesNotMatch(body, /Spawning 4 researchers/, 'researcher count must not be hardcoded');
+    assert.doesNotMatch(workflow, /Spawning 4 researchers|four researchers|Run all 4 researchers|4 parallel agents/i, 'researcher count must not be hardcoded');
+    assert.ok(body.indexOf('Skipping:') < body.indexOf('Spawning {N} researchers'), 'disclosure must precede the spawn banner');
   });
 
-  test('synthesizer required_reading lists only files that exist', () => {
-    const synth = body.slice(body.indexOf('Synthesize research outputs into SUMMARY.md.'));
+  test('synthesizer required_reading lists only files written in this run', () => {
+    const synthStart = body.indexOf('After all complete, spawn synthesizer');
+    assert.notEqual(synthStart, -1, 'synthesizer spawn step is missing');
+    const synth = body.slice(synthStart);
+    assert.match(synth.split('Agent(prompt=')[0], /written by the researchers spawned in this run/);
+    assert.match(synth.split('Agent(prompt=')[0], /never files left from earlier runs/);
     const reading = synth.slice(synth.indexOf('<required_reading>'), synth.indexOf('</required_reading>'));
-    assert.match(reading, /only the files that exist/i);
+    assert.match(reading, /\{required_reading_lines\}/);
     assert.doesNotMatch(reading, /^- \{research_dir\}\/PITFALLS\.md$/m, 'PITFALLS.md must not be unconditional');
   });
 });
