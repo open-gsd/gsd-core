@@ -1351,6 +1351,12 @@ function rewriteLegacyManagedNodeHookCommands(settings, absoluteRunner, opts) {
 // bindings were dead code with no reachable body — removed rather than kept
 // as unreachable wrappers.
 
+// #5100: the bare-`bash` sentinel the win32 Git Bash policy writes when it
+// resolves nothing. Bare reference to hooksSurface's own export, same dedup
+// rule as the cursor constants below — exactly one literal definition of
+// this value exists in the package.
+const UNRESOLVED_BASH_SENTINEL = hooksSurface.UNRESOLVED_BASH_SENTINEL;
+
 /**
  * Ensure Codex hooks.json contains exactly one managed SessionStart
  * gsd-check-update hook entry, while preserving user-owned entries.
@@ -13906,7 +13912,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // set GSD_BASH_PATH to its bash.exe); any other null means the node
     // runner did not resolve (fix: #2979/#3002). Name the actual cause.
     const unresolvedBash = settingsEntrypoints.some(entry =>
-      entry.command === undefined && (entry.interpreterCandidates || []).includes('bash'));
+      entry.command === undefined && (entry.interpreterCandidates || []).includes(UNRESOLVED_BASH_SENTINEL));
     console.warn(unresolvedBash
       ? `  ${yellow}⚠${reset}  Skipping managed JS hook registration — no Git Bash found on win32 (the Git Bash policy resolved nothing). Install Git for Windows or set GSD_BASH_PATH to its bash.exe. See #5100.`
       : `  ${yellow}⚠${reset}  Skipping managed JS hook registration — Node executable path unavailable (process.execPath is empty). See #2979 / #3002.`);

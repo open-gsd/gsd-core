@@ -32,6 +32,8 @@
  *       candidate again
  *   (c) platform: the same token is the sentinel on win32 and an ordinary
  *       candidate on every other platform
+ *   (d) whitespace: leading/trailing whitespace around a bare token is
+ *       trimmed at the edge rather than smuggling the token past the gate
  */
 
 const { describe, test } = require('node:test');

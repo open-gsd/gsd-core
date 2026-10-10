@@ -3392,6 +3392,10 @@ export = {
   resolveBashExecutable,
   resolveBashRunner,
   NODE_RUNNER_RESOLVER_HOOK,
+  // #5100: the installer reads the sentinel off the tracked entry it wrote,
+  // so the literal it matches on comes from here rather than being spelled a
+  // second time in bin/install.js.
+  UNRESOLVED_BASH_SENTINEL,
 
   // Atomic write seam (shared with bin/install.js so all writes participate
   // in install.js's _cleanTmpFiles() scoped temp-cleanup).

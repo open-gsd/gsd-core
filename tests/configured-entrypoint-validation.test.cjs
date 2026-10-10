@@ -814,5 +814,13 @@ test('#5100 installer surfaces command-less unresolved-bash entries on fresh and
     resolveExecutableBinary: gsd5100WslStandIn,
   });
   assert.equal(gate.ok, false);
-  assert.ok(gate.invalid.some(item => item.reason === 'unresolved-interpreter'));
+  // Name bash explicitly: any other unresolved interpreter would satisfy a
+  // bare reason check, which is the sibling rows at :605-625 shape.
+  assert.ok(gate.invalid.some(item => item.reason === 'unresolved-interpreter' && String(item.path).includes('bash')));
+  // And nothing else may be flagged — the gate must fail on the bash entry
+  // alone, not on a node entry the filter wrongly let through.
+  assert.deepEqual(
+    gate.invalid.map(item => item.reason),
+    ['unresolved-interpreter'],
+  );
 });
