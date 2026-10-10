@@ -2595,6 +2595,46 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
       'the reported count is the skills GSD installed, not every gsd-* dir present');
   });
 
+  test('codex: the pre-home skills dir migration removes only GSD-owned gsd-* dirs and names the ones it keeps', (t) => {
+    const root = createTempDir('gsd-5161-codex-oldhome-');
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, '.codex');
+    const oldSkillsDir = path.join(configDir, 'skills');   // where codex skills lived before the `home` move
+    fs.mkdirSync(path.join(oldSkillsDir, 'gsd-plan-phase'), { recursive: true });
+    fs.writeFileSync(path.join(oldSkillsDir, 'gsd-plan-phase', 'SKILL.md'), 'old GSD plan-phase\n');
+    seedUserSkills(oldSkillsDir);
+    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+
+    const r = runNode([INSTALL_SCRIPT, '--codex', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r.exitCode, 0, `codex install failed: ${r.stdout}\n${r.stderr}`);
+    const out = r.stdout + r.stderr;
+    assert.strictEqual(fs.existsSync(path.join(oldSkillsDir, 'gsd-plan-phase')), false,
+      'a first-party skill left at the pre-home location is still migrated away');
+    assert.strictEqual(fs.readFileSync(path.join(oldSkillsDir, 'gsd-mine', 'SKILL.md'), 'utf8'), USER_SKILL,
+      'a user gsd-* skill at the pre-home location must survive byte-identical');
+    assert.ok(out.includes(`Preserved ${path.join(oldSkillsDir, 'gsd-mine')}`),
+      'the install output must name the kept dir by path');
+    assert.ok(fs.existsSync(path.join(oldSkillsDir, 'gsd-dev-preferences', 'SKILL.md')), 'gsd-dev-preferences is kept');
+    assert.ok(!out.includes(`Preserved ${path.join(oldSkillsDir, 'gsd-dev-preferences')}`),
+      'gsd-dev-preferences is never named as a dir GSD does not own');
+    assert.ok(fs.existsSync(path.join(oldSkillsDir, 'xr-mine', 'SKILL.md')), 'a non-prefixed dir is untouched');
+
+    // Update path: codex records its skills under `skills/` whichever root they sit in, so a name the
+    // manifest recorded for the new home must not claim a same-named user dir at the old root.
+    const manifestPath = path.join(configDir, 'gsd-file-manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.files['skills/gsd-retired-5161/SKILL.md'] = 'recorded-for-the-new-home';
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    fs.mkdirSync(path.join(oldSkillsDir, 'gsd-retired-5161'), { recursive: true });
+    fs.writeFileSync(path.join(oldSkillsDir, 'gsd-retired-5161', 'SKILL.md'), USER_SKILL);
+    const r2 = runNode([INSTALL_SCRIPT, '--codex', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r2.exitCode, 0, `codex update failed: ${r2.stdout}\n${r2.stderr}`);
+    assert.strictEqual(fs.readFileSync(path.join(oldSkillsDir, 'gsd-retired-5161', 'SKILL.md'), 'utf8'), USER_SKILL,
+      'a manifest name recorded for the new home must not claim a user dir at the pre-home location');
+    assert.ok((r2.stdout + r2.stderr).includes(`Preserved ${path.join(oldSkillsDir, 'gsd-retired-5161')}`),
+      'the kept dir is named by path');
+  });
+
   test('writeManifest ownership: an unreadable install source carries the previous manifest forward and adds no unrecorded user dir', (t) => {
     const { createSkillDirOwnership } = require('../gsd-core/bin/lib/install-engine.cjs');
     const { withInstallFs } = require('../gsd-core/bin/lib/install-fs-adapter.cjs');

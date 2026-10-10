@@ -4399,20 +4399,30 @@ function cleanupWindsurfLegacyDevinSkills(workspaceDir) {
  * relocating skills to ~/.agents/skills) orphans the pre-move dirs at
  * ~/.codex/skills. Only managed `<prefix>*` dirs are touched; user-owned content
  * (non-prefixed dirs, gsd-dev-preferences, symlinks) is preserved. Fail-open.
+ *
+ * #5161: with `owns`, a `<prefix>*` dir is removed only when GSD owns it; any
+ * other is kept and named by path. Install passes it. Uninstall does not: it
+ * removes every `gsd-*` skill dir, at either location.
  * @param {string} oldSkillsDir absolute path to the pre-move skills location
  * @param {string} prefix managed skill-dir prefix (e.g. 'gsd-')
+ * @param {(name: string) => boolean} [owns] ownership predicate (createSkillDirOwnership)
  * @returns {number} count of stale dirs removed
  */
-function cleanupMovedSkillsOldLocation(oldSkillsDir, prefix) {
+function cleanupMovedSkillsOldLocation(oldSkillsDir, prefix, owns) {
   if (!fs.existsSync(oldSkillsDir)) return 0;
 
   // Mirror the user-owned list from cleanupCodexSkillMetadataSidecars (#2973).
   const _userOwnedSkillDirs = new Set(['gsd-dev-preferences']);
   let removed = 0;
 
-  for (const entry of fs.readdirSync(oldSkillsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
-    if (_userOwnedSkillDirs.has(entry.name)) continue;
+  // Decide ownership once, BEFORE deleting: the capability-marker leg reads the
+  // dir itself, so asking after a removal would report the removed dir as kept.
+  const candidates = fs.readdirSync(oldSkillsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix) && !_userOwnedSkillDirs.has(entry.name));
+  const notOwned = owns ? candidates.filter((entry) => !owns(entry.name)).map((entry) => entry.name) : [];
+
+  for (const entry of candidates) {
+    if (notOwned.includes(entry.name)) continue;
 
     const dirToRemove = path.join(oldSkillsDir, entry.name);
     try {
@@ -4427,6 +4437,7 @@ function cleanupMovedSkillsOldLocation(oldSkillsDir, prefix) {
       // Fail open — a single bad dir must not block install/uninstall.
     }
   }
+  _warnPreservedSkillDirs(oldSkillsDir, notOwned);
 
   // Prune the old skills dir if now empty — leaves the configHome clean.
   // Never remove a non-empty container (user may keep other content there).
@@ -11741,10 +11752,16 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // managed gsd-* skill dirs at the old configDir-rooted location
     // (~/.codex/skills). Reinstalling here writes the new location but would
     // otherwise orphan the old one — clean up the stale gsd-* dirs.
+    // #5161: only the ones GSD owns; any other gsd-* dir is kept and named.
+    // The manifest leg stays off: codex records its skills under `skills/`
+    // whichever root they sit in, so a name the manifest recorded for the new
+    // home would otherwise claim a same-named user dir at this old root that
+    // GSD never wrote.
     {
       const _movedOldSkillsDir = _resolveMovedSkillsOldDir(runtime, targetDir, scope);
       if (_movedOldSkillsDir) {
-        const migrated = cleanupMovedSkillsOldLocation(_movedOldSkillsDir, 'gsd-');
+        const migrated = cleanupMovedSkillsOldLocation(_movedOldSkillsDir, 'gsd-',
+          createSkillDirOwnership(runtime, targetDir, _movedOldSkillsDir, 'gsd-', { includeManifest: false }));
         if (migrated > 0) {
           console.log(`  ${green}✓${reset} Migrated ${migrated} skill dir(s) off the legacy ${_movedOldSkillsDir} location`);
         }
