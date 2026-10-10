@@ -3,65 +3,92 @@
 - **Status:** Proposed
 - **Date:** 2026-10-09
 - **Issue:** [#5273](https://github.com/open-gsd/gsd-core/issues/5273) (`approved-feature`, maintainer verdict Go-with-conditions; this ADR is the first deliverable the verdict requires)
-- **Builds on:** [ADR-857](857-capability-system.md) (loop extension points, federated config), [ADR-894](894-capability-declaration-format.md) (manifest format), [ADR-959](959-capability-command-contribution.md) (capability command families), [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) (`dispatch.maxConcurrency` and the `dispatch-capacity` query)
+- **Amends:** [ADR-894](894-capability-declaration-format.md) — adds the `supportsFanOut` step trait and the `fanOutStrategy` feature-body field to the declaration format (in force only once this ADR is accepted)
+- **Builds on:** [ADR-857](857-capability-system.md) (loop extension points, federated config), [ADR-959](959-capability-command-contribution.md) (capability command families), [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) (`dispatch.maxConcurrency` and the `dispatch-capacity` query), [ADR-2782](2782-reviewer-lane-capability-surface.md) (the `supportsReviewerLanes` trait and its untrusted-evidence contract), [ADR-4650](4650-path-containment-and-filename-classification-seam.md) (the path-containment predicate)
 - **Reconciles with:** [ADR-1143](1143-claude-orchestration-capability.md) (Workflow-tool backend; still `Proposed`, no dispatch path since its 2026-09-14 amendment) and the open item E of [#4747](https://github.com/open-gsd/gsd-core/issues/4747)
-- **Precedents:** #3777 (`planning.chunked_parallel`, gated on `dispatch-capacity`), #4209 (`supportsReviewerLanes`, a step trait with one core interpreter), #853 (backgrounded Claude Code agents cannot nest subagents)
+- **Precedents:** #3777 (`planning.chunked_parallel`, gated on `dispatch-capacity`), #4209 (`supportsReviewerLanes`, a step trait with one core interpreter, recorded in [ADR-2782](2782-reviewer-lane-capability-surface.md)), #853 (backgrounded Claude Code agents cannot nest subagents)
+
+Swarm is a default-off capability, `capabilities/swarm/`, that changes how three existing steps are dispatched: research and pattern-mapping in `plan-phase`, and code review. Read-only Haiku-class workers answer file-scoped questions in parallel, and the role's existing agent synthesizes their answers into the unchanged `RESEARCH.md`, `PATTERNS.md` or `REVIEW.md` after re-reading every anchor it keeps. Core gains one policy-free seam (a step trait, one registry field, one verb and one plan schema), and a role run dispatches at most 9 agents, fallback included. Worker output is untrusted data, every path is contained to the project root, and the run records its token split by model. The fan-out plan is the one description of what to dispatch: the inline executor runs it today, and the Workflow backend reaches it only through a single renderer that step 5 builds by refactoring `emitWorkflowScript`.
 
 ## Context
 
 `plan-phase` dispatches one `gsd-phase-researcher` (`gsd-core/workflows/plan-phase.md`, "Spawn gsd-phase-researcher") and one `gsd-pattern-mapper` (§7.8). The `code-review` skill dispatches one `gsd-code-reviewer` (`gsd-core/workflows/code-review.md`, "Spawn the gsd-code-reviewer agent"). Each agent works through its whole brief serially. The reporter measured two research runs on a large repo at **1144 s / 318k tokens** and **1721 s / 425k tokens**, mostly spent on independent look-ups such as "where is X written" or "which tests pin Y". *These figures are reporter-measured and cannot be reproduced from this repository.*
 
-#5273 proposes a fan-out of small, read-only workers whose structured answers one stronger agent synthesizes into the existing artefact. Five facts in the tree shape the design. Each was measured at `ed0f3fd5`.
+#5273 proposes a fan-out of small, read-only workers whose structured answers one stronger agent synthesizes into the existing artefact. Five facts in the tree shape the design. Each was measured at `ed0f3fd5` and re-checked, unchanged, at `5d987ccf6`.
 
 1. **The three roles are already capability steps.** `capabilities/research` and `capabilities/pattern-mapper` declare `plan:pre` steps with `ref.agent`. `capabilities/code-review` declares `execute:post` and `execute:wave:post` steps with `ref.skill`. The reference rule *"No two capability steps may produce the same artefact at the same point"* (`docs/reference/capability-manifest.md`, `steps.produces`) means a second capability **cannot** register its own step that produces `RESEARCH.md`, `PATTERNS.md` or `REVIEW.md`.
-2. **No host mechanism lets a capability change how an existing step is dispatched.** ADR-1143's 2026-09-14 amendment removed the only attempt, an `execute:wave:pre` contribution into `executor`, and says so directly: *"Wiring it properly needs a host-level mechanism for a capability to alter the orchestrator's own dispatch procedure. That does not exist today."* The maintainer's approval of #4747 left that route (item E) undecided.
+2. **No host mechanism lets a capability change how an existing step is dispatched.** The 2026-09-14 amendment of [ADR-1143](1143-claude-orchestration-capability.md) removed the only attempt, an `execute:wave:pre` contribution into `executor`, and says so directly: *"Wiring it properly needs a host-level mechanism for a capability to alter the orchestrator's own dispatch procedure. That does not exist today."* The maintainer's approval of #4747 left that route (item E) undecided.
 3. **`parallelization.max_concurrent_agents` has no reader.** It is documented (`docs/CONFIGURATION.md`, Parallelization Settings, default `3`) and templated (`gsd-core/templates/config.json`). No file in `src/` or `gsd-core/workflows/` reads it. `loadConfig` collapses `parallelization` to a boolean (`src/config-loader.cts`). `config-set parallelization.max_concurrent_agents 4` fails with `Unknown config key`. The live concurrency seam is `gsd_run query dispatch-capacity`, which resolves to 20 on `claude` and to the fail-closed floor `1` on every runtime whose descriptor leaves `maxConcurrency` `undocumented`.
-4. **Model routing has a tier, but most spawn sites ignore it.** `resolve-model` returns `{model, profile, effort, tier}`. Under `resolve_model_ids: "omit"` the model is blank and only `tier` carries the routing (#3703, open). Not every runtime can map a Haiku-class tier: `runtimeTierDefaults` in `gsd-core/bin/shared/model-catalog.json` is `null` for `cline`, `kimi`, `kimi-code`, `cursor`, `windsurf` and `zcode`. On `cursor`, `resolve-model` still prints `"haiku"`, so the string alone proves nothing.
+4. **Model routing has a tier, but most spawn sites ignore it.** `resolve-model` returns `{model, profile, effort, tier}`. Under `resolve_model_ids: "omit"` the model is blank and only `tier` carries the routing (#3703, open). Not every runtime can map a Haiku-class tier: every runtime whose `runtimeTierDefaults` entry in `gsd-core/bin/shared/model-catalog.json` is `null` has no catalog mapping for any tier. At `5d987ccf6` that is ten runtimes: `cline`, `kimi`, `kimi-code`, `cursor`, `windsurf`, `zcode`, `augment`, `trae`, `codebuddy` and `antigravity`. The ladder (Decision 6) tests the rule, not this list. On `cursor`, `resolve-model` still prints `"haiku"`, so the string alone proves nothing.
 5. **`plan-phase.md` is at its cap.** It is 97,857 bytes against the 98,304-byte XL hard cap (`tests/workflow-size-budget.test.cjs`), leaving 447 bytes of headroom. `code-review.md` is 49,961 bytes against the 61,440-byte LARGE cap. Any swarm procedure written into those files does not fit.
 
 ## Decision
 
-### 1. Shape: a sibling capability, `capabilities/swarm/`, that reuses one fan-out plan shape
+### 1. Shape: a sibling capability, `capabilities/swarm/`, with one fan-out plan
 
-Swarm ships as **`capabilities/swarm/`**, `role: feature`, `tier: full`, `runtimeCompat.supported: ["*"]`, **default-off and BETA**. Its activation key is `swarm.enabled`. It declares **no steps**, so it never produces an artefact. It changes only *how* three existing steps are dispatched, never *whether* they run or *what* they write.
+Swarm ships as **`capabilities/swarm/`**, `role: feature`, `tier: full`, `runtimeCompat.supported: ["*"]`, **default-off and BETA**. Its activation key is `swarm.enabled`. It declares **no steps** and **no contributions**, so it never produces an artefact. It changes only *how* three existing steps are dispatched, never *whether* they run or *what* they write.
 
-Core gains one policy-free seam, modelled on #4209's `supportsReviewerLanes`:
+Core gains one policy-free seam, modelled on #4209's `supportsReviewerLanes` ([ADR-2782](2782-reviewer-lane-capability-surface.md)):
 
 - **A step trait `supportsFanOut: true`.** It is strict-boolean and step-scoped. It is declared on the `research` and `pattern-mapper` `plan:pre` steps and on both `code-review` steps.
-- **A feature-body field `fanOutStrategy: { "command": "<family> <subcommand>" }`.** At most one active capability in the merged registry may declare it, and the validator rejects a second one. Swarm declares `{ "command": "swarm plan" }` against its own ADR-959 command family.
-- **A core verb `gsd_run loop fan-out-plan --cap-id <id> --point <point> --phase <n>`.** It resolves the step through `resolveActiveHooksForPoint` (`src/loop-resolver.cts`), checks the trait, and invokes the active strategy's command. It then validates the returned **fan-out plan** against one schema and returns either that plan or `{ "mode": "single", "reason": "<code>" }`. Core holds the schema and the interpreter. Every policy decision lives in the capability: how to decompose a brief, which tier a worker runs on, how many workers to use, and the synthesis rules.
+- **A feature-body field `fanOutStrategy: { "command": "<family> <subcommand>" }`.** At most one active capability in the merged registry may declare it, and the validator rejects a second one. Swarm declares `{ "command": "swarm plan" }` against its own [ADR-959](959-capability-command-contribution.md) command family.
+- **A core verb `gsd_run loop fan-out-plan --cap-id <id> --point <point> --phase <n> [--stage decompose|fan-out] [--units <file>]`.** It resolves the step through `resolveActiveHooksForPoint` (`src/loop-resolver.cts`), checks the trait, and invokes the active strategy's command. It then validates the returned **fan-out plan** (Decision 9) and returns either that plan or `{ "mode": "single", "reason": "<code>" }`. Core holds the schema, the validator and the interpreter. Every policy decision lives in the capability: how to decompose a brief, which tier a worker runs on, how many workers to use, and the synthesis rules.
 
-**The fan-out plan is the single mechanism.** It is an ordered list of stages with a barrier between consecutive stages. Each stage is a set of agent dispatches `{ agentType, model, tier, prompt, schema }`. This is the shape `emitWorkflowScript` (`src/claude-orchestration.cts`) already consumes, with waves becoming stages and plans becoming agents. The plan has exactly two executors:
+**The fan-out plan is the single description of a fan-out.** It is an ordered list of stages with a barrier between consecutive stages. Each stage is a set of agent dispatches `{ agentType, model, tier, prompt, schema }`.
+
+**What the Workflow backend consumes today.** `emitWorkflowScript` (`src/claude-orchestration.cts`) does **not** consume this shape. Its input is `{ phaseDir, waves, runId, executorModel, budgetTokens }`. Each wave holds `{ id, brief, files_modified, use_worktree }` plans, and every plan is dispatched as `gsd-executor` on the one resolved executor model. Stages are derived from file overlap by `partitionStages`, isolation is per-plan worktrees, and results are read back as `<worktree_metadata>`. It has no per-dispatch agent type, model, tier, prompt or result schema. An earlier draft of this ADR said the emitter "already consumes" the plan shape. That was wrong.
+
+**How the two are reconciled into one mechanism.** This is a commitment about implementation step 5, not a claim about today:
+
+- **One schema and one renderer.** Step 5 refactors `emitWorkflowScript` into a pure adapter, `wavesToFanOutPlan`, and a single emitter, `renderFanOutPlan`. The adapter maps each wave's `partitionStages` output to stages and each plan to a `gsd-executor` dispatch. The plan schema gains the two executor-only optional fields that mapping needs: `isolation: "worktree"` and the `<worktree_metadata>` result contract. The existing `emitWorkflowScript` tests pin the refactor byte for byte, so execute-phase's Workflow output does not change.
+- **Planning stays with the owner of the work.** Swarm plans read-only fan-outs, and execute-phase plans waves. The renderer and claude-orchestration decide nothing about what to dispatch, so claude-orchestration never grows a second planner.
+- **Swarm plans never use the executor-only fields.** The validator rejects them on a plan returned by a `fanOutStrategy` command (Decision 9).
+- **Until step 5 lands, the inline executor is the only executor.** Swarm does not wait for the Workflow route, and it never emits Workflow scripts itself.
+
+The plan therefore has exactly two executors:
 
 - **Inline.** The host's existing main-loop `Agent()` calls, issued in batches of at most *C* per message (Decision 2). This is the default path on every runtime.
-- **Workflow tool.** It is reached **only** through claude-orchestration's gate, and only once #4747 item E wires a dispatch route. Swarm never emits Workflow scripts, and claude-orchestration never grows a second planner.
+- **Workflow tool.** It is reached **only** through claude-orchestration's gate, **only** once #4747 item E wires a dispatch route, and **only** through `renderFanOutPlan` from step 5.
 
 **Swarm is a sibling, not a mode of claude-orchestration, for three reasons.**
 
 - **Different gates.** Swarm needs main-loop parallel named dispatch and a cheap tier. The Workflow tool is neither necessary nor sufficient for that. claude-orchestration is `runtimeCompat: claude` and gated on a preview tool whose detection #4747 B is rewriting.
-- **No working path to inherit.** ADR-1143's own audit records that its end-to-end path has never been exercised, and the capability has no dispatch path today. Making swarm one of its modes would block a working inline feature on an unwired one.
-- **The overlap is the plan shape, not the toggle.** #5273 is a fan-out of reads followed by one synthesis, and the Workflow backend could express that. That is exactly why the plan shape is shared and the capability is not.
+- **No working path to inherit.** The audit in [ADR-1143](1143-claude-orchestration-capability.md) records that its end-to-end path has never been exercised, and the capability has no dispatch path today. Making swarm one of its modes would block a working inline feature on an unwired one.
+- **The overlap is the plan and its renderer, not the toggle.** #5273 is a fan-out of reads followed by one synthesis, and the Workflow backend could express that. That is why the plan schema and the renderer are shared and the capability is not.
 
 The `fanOutStrategy` seam is also a candidate answer to #4747 E1 for capability-owned steps. It does **not** decide E1 for `execute-phase` waves, which are the host's own dispatch and not a step.
 
-### 2. Concurrency and size
+### 2. Concurrency, agent budget and size
 
 - **Concurrency.** *C* = min(`dispatch-capacity`, `parallelization.max_concurrent_agents`). Swarm becomes the first reader of `parallelization.max_concurrent_agents`. The implementation registers the key in the central schema manifest, so `config-set` accepts it, and reads it through one accessor in core config. An absent key uses the documented default `3`. A value that is not a positive integer fails closed to single-agent with reason `invalid_max_concurrent_agents`. It is never silently clamped.
-- **Workflow size guideline.** Claude Code's `workflowSizeGuideline` defaults to `medium`, which aims for *"fewer than 10 agents"* (code.claude.com/docs/en/workflows, read 2026-10-09; #4747 item 5 quoted 15, and the page has since changed). The guideline is advisory, but the plan validator treats it as a hard bound so that both executors agree: **one role run dispatches at most 9 agents in total**, counting decomposition, workers, any cross-file worker and the synthesizer. `swarm.max_workers` therefore defaults to `6` and is validated to `2..6`.
-- **File-size budget.** None of the procedure enters `plan-phase.md` or `code-review.md`. Each of the three spawn sites gains a single `fan-out-plan` call plus a pointer to a lazily read `gsd-core/references/fan-out-dispatch.md`, the sibling of `loop-hook-dispatch.md`. The added bytes carry an `Emitted-Drift-Ack-Growth:` trailer (ADR-3942). If the two sites in `plan-phase.md` cannot fit in 447 bytes, the implementation extracts existing text first. The cap is never raised.
+- **Agent budget.** Claude Code's `workflowSizeGuideline` defaults to `medium`, which aims for *"fewer than 10 agents"* (Claude Code workflows documentation, read 2026-10-09). GSD fixes the bound as its own constant: **one role run dispatches at most 9 agents in total, and every dispatch counts**, including the single-agent fallback rerun. The bound does not read the user's setting and does not move if that page changes. No GSD seam reads `workflowSizeGuideline` today, so reading it is out of scope.
+
+  | Role | Decomposition | Workers | Cross-file worker | Synthesizer | Reserved fallback | Maximum |
+  |---|---|---|---|---|---|---|
+  | research, pattern-mapping | 1 | ≤ `max_workers` | 0 | 1 | 1 | 9 |
+  | code-review | 0 | ≤ `max_workers` | 1 | 1 | 1 | 9 |
+
+  `swarm.max_workers` therefore defaults to `6` and is validated to `2..6`. Code-review units never exceed `max_workers`, because Decision 3 groups files. The validator still rejects any plan whose dispatches plus the reserved fallback exceed 9, with reason `over_agent_budget` (Decision 6). With `max_workers` in range this rung guards against a defective strategy and is not a normal path.
+- **File-size budget.** None of the procedure enters `plan-phase.md` or `code-review.md`. Each of the three spawn sites gains a single `fan-out-plan` call plus a pointer to a lazily read `gsd-core/references/fan-out-dispatch.md`, the sibling of `loop-hook-dispatch.md`. The added bytes carry an `Emitted-Drift-Ack-Growth:` trailer ([ADR-3942](3942-emitted-drift-ack-commit-trailer.md)). If the two sites in `plan-phase.md` cannot fit in 447 bytes, the implementation extracts existing text first. The cap is never raised.
 
 ### 3. Workers and synthesizer
 
-- **Workers are a new read-only agent, `gsd-swarm-worker`, owned by the swarm capability.** Its tools are `Read, Grep, Glob`, with no `Write`, `Edit` or `Bash`. For the researcher role only, it also gets the read-only web tools the single-agent researcher already has. Each worker answers one file-scoped question with `file:line` evidence and a verbatim quote, in a fixed JSON schema, under a token cap, and returns the answer. It writes no files. Its model comes from `resolve-model gsd-swarm-worker`, from a new catalog row that is `haiku` in every profile, and the spawn site passes **both** `model` and `tier`, which closes #3703 for this site. A user changes the worker model with the existing `model_overrides.gsd-swarm-worker`.
-- **The synthesizer is the role's existing agent.** That is `gsd-phase-researcher`, `gsd-pattern-mapper` or `gsd-code-reviewer`, on its existing resolved model, with its unchanged step fragment and output path, plus a swarm-owned `fragments/synthesize.md` that carries the worker answers and the rules below. It writes the single `RESEARCH.md`, `PATTERNS.md` or `REVIEW.md` in the schema it already owns. Every downstream consumer therefore reads an artefact from the same author with the same contract, and no agent body grows.
+- **Workers are a new read-only agent, `gsd-swarm-worker`, owned by the swarm capability.** Its tools are `Read, Grep, Glob`, with no `Write`, `Edit` or `Bash`. For the researcher role only, it also gets the read-only web tools the single-agent researcher already has. Each worker answers one file-scoped question with `file:line` evidence and a verbatim quote, in a fixed JSON schema, under a token cap, and returns the answer. It writes no files. Its model comes from `resolve-model gsd-swarm-worker`, from a new catalog row that is `haiku` in every profile, and the worker spawn site passes **both** `model` and `tier`. That makes the new worker sites honour `tier`. It does not close #3703, which is about the existing spawn sites, and the synthesizer spawn keeps today's behaviour there. A user changes the worker model with the existing `model_overrides.gsd-swarm-worker`.
+- **The synthesizer is the role's existing agent.** That is `gsd-phase-researcher`, `gsd-pattern-mapper` or `gsd-code-reviewer`, on its existing resolved model, with its unchanged step prompt and output path. It writes the single `RESEARCH.md`, `PATTERNS.md` or `REVIEW.md` in the schema it already owns. Every downstream consumer therefore reads an artefact from the same author with the same contract, and no agent body grows.
+- **How the synthesis rules reach the synthesizer.** The rules live in a swarm-owned `fragments/synthesize.md`. The fragment is **not** a loop contribution, and swarm declares no `contributions[]`. The strategy appends the fragment's text to the synthesizer dispatch's `prompt` in the fan-out plan, and the executor fills the plan's answer slot with the previous stage's validated worker answers (Decision 9). The rules therefore reach the synthesizer only on a swarm run, and nothing acts as a host-behaviour directive, which the 2026-09-14 amendment of [ADR-1143](1143-claude-orchestration-capability.md) forbids.
 - **Re-verification rule.** The synthesizer must `Read` every `file:line` it keeps during its own session. No worker citation reaches the artefact as `[VERIFIED]`. Only the synthesizer may promote a claim, and only after its own `Read`, which is the existing in-repo provenance rule in `agents/gsd-phase-researcher.md`. A claim it cannot confirm is marked `[ASSUMED]` in `RESEARCH.md`, and its excerpt is dropped from `PATTERNS.md`. In `REVIEW.md` the finding is **dropped**, because REVIEW.md has no assumed tier and its counts drive `code-review-fix`.
-- **Mechanical floor.** After synthesis, `gsd_run swarm verify-anchors <artefact>` checks deterministically that every cited path exists, that every line range is in bounds, and that every quoted excerpt matches the text at the cited lines. If any anchor is unresolved, the swarm run fails. The role then falls back loudly to single-agent dispatch, whose output overwrites the swarm artefact.
-- **Decomposition.** Code-review units come deterministically from the already computed `REVIEW_FILES`, one per file. Research and pattern-mapping units need judgement, so a first stage asks the synthesizer-tier model for a schema-validated question list. Code validates that list: 2 to `max_workers` items, each scoped to files. Fewer than 2 units means single-agent dispatch.
+- **Mechanical floor.** After synthesis, `gsd_run swarm verify-anchors <artefact>` checks deterministically that every cited path exists inside the project root, that every line range is in bounds, and that every quoted excerpt matches the text at the cited lines. Decision 9 sets its containment and read bounds. If any anchor is unresolved, the swarm run fails. The role then falls back loudly to single-agent dispatch, whose output overwrites the swarm artefact.
+- **Decomposition, code-review.** Units come deterministically from the already computed `REVIEW_FILES`. One file never fans out. From 2 to `max_workers` files, each file is one unit. Above `max_workers` files, the files are split in `REVIEW_FILES` order into `max_workers` contiguous groups whose sizes differ by at most one. No file is dropped and none is reviewed twice.
+- **Decomposition, research and pattern-mapping.** These units need judgement, so the role calls `loop fan-out-plan` twice:
+  1. `--stage decompose` returns a one-stage plan with one dispatch, `gsd-swarm-worker` on the role agent's resolved model and tier. Its result schema is `{ "units": [ { "question": string, "scope": [path, ...] } ] }`.
+  2. `--stage fan-out --units <file>` passes that result back. The strategy builds the worker and synthesizer stages from it, and core validates the plan, including every unit's scope (Decision 9). The decomposition dispatch counts against this call's agent budget.
+
+  Fewer than 2 valid units means single-agent dispatch with reason `too_few_units`.
 
 ### 4. Cross-file findings
 
-- **Research and pattern-mapping.** The **final synthesizer pass** covers cross-file findings. Their units are look-ups, and integrating answers across files is what synthesis does. The synthesizer may open any file to do it.
-- **Code-review.** The worker stage adds **one cross-file worker on the synthesizer's model** whenever the review scope has two or more files. Per-file workers cannot see a defect that spans files, and the synthesizer reads distilled answers rather than code. The synthesizer pass then follows as for the other roles. A one-file scope never fans out.
+- **Research and pattern-mapping.** The **final synthesizer pass** covers cross-file findings. Their units are look-ups, and integrating answers across files is what synthesis does. The synthesizer may open any file inside the project root to do it.
+- **Code-review.** The worker stage adds **one cross-file worker** whenever the review scope has two or more files. It is a `gsd-swarm-worker` dispatch on the synthesizer's resolved model and tier, scoped to the whole review scope. Per-file workers cannot see a defect that spans files, and the synthesizer reads distilled answers rather than code. The synthesizer pass then follows as for the other roles. The cross-file worker counts against the agent budget (Decision 2).
 
 ### 5. Token telemetry
 
@@ -71,24 +98,36 @@ Every swarm-eligible role run appends one entry to `${PHASE_DIR}/${PADDED_PHASE}
 - `dispatches[]` as `{ stage, agentType, model, tier, tokens, duration_ms, usage_source }`
 - `tokens_by_model`
 
-`tokens` is the host-reported usage for that dispatch. When the host reports none, `tokens` is `null` with `usage_source: "unreported"`. It is never estimated, and `0` is never written for unknown. When `swarm.enabled` is false, no file is written, so output is byte-identical to today. When ADR-2619 observability is on, the same fields are also emitted as trace events, aligned with that ADR's D2 grain (model tier, durations).
+`tokens` is the host-reported usage for that dispatch. When the host reports none, `tokens` is `null` with `usage_source: "unreported"`. It is never estimated, and `0` is never written for unknown. When `swarm.enabled` is false, no file is written, so output is byte-identical to today. When [ADR-2619](2619-observability-shareable-diagnostics.md) observability is on, the same fields are also emitted as trace events, aligned with that ADR's D2 grain (model tier, durations).
 
 ### 6. Runtime gating: degrade to single-agent, loudly
 
-`swarm plan` runs a fail-closed ladder in the style of `detectWorkflowBackend`. Each miss returns `mode: "single"` with a stable reason code.
+The ladder runs fail-closed, in the style of `detectWorkflowBackend`, in two phases. **Plan-time** rungs are evaluated by `swarm plan` and core's validator before `loop fan-out-plan` returns. Each miss returns `mode: "single"` with a stable reason code, and the role dispatches its single agent as today. **Run-time** rungs are observed by the executor after a plan has returned. Each miss abandons the swarm run and uses the reserved fallback dispatch (Decision 2) to run the single agent.
+
+**Plan-time rungs**
 
 | Rung | Miss → reason | Loud? |
 |---|---|---|
 | `swarm.enabled` | `disabled` | No. Config choice; nothing printed or written |
 | role in `swarm.roles` | `role_not_selected` | No. Config choice |
+| `parallelization` (the boolean `loadConfig` collapses it to, including the documented `parallelization: false` shorthand) is true | `parallelization_disabled` | Yes. Swarm is on but parallel dispatch is off |
+| `parallelization.max_concurrent_agents` is absent or a positive integer | `invalid_max_concurrent_agents` | Yes |
 | descriptor `dispatch.namedDispatch === true` | `no_named_dispatch` | Yes |
 | *C* ≥ 2 (echoes `dispatch-capacity`'s `source`/`reason`) | `no_concurrency` | Yes |
 | worker tier maps to a model on this runtime (catalog row, `model_policy.runtime_tiers`, or `model_overrides.gsd-swarm-worker`) and is not `inherit` | `no_worker_tier` | Yes |
-| decomposition yields ≥ 2 units | `too_few_units` | Yes |
-| first worker `Agent()` returns tool-unavailable (the #853 case, a real error and not self-assessed) | `no_agent_tool` | Yes |
-| `verify-anchors` passes and the artefact exists | `anchor_check_failed` / `synthesis_failed` | Yes |
+| the strategy's plan passes core validation (Decision 9) | `invalid_plan` | Yes |
+| the plan's dispatches plus the reserved fallback are ≤ 9 | `over_agent_budget` | Yes |
+| decomposition yields ≥ 2 valid units (evaluated in the `--stage fan-out` call) | `too_few_units` | Yes |
 
-"Loud" means a banner, `◆ Swarm skipped for <role>: <reason> — running single-agent <agent>`, plus a `mode: "single"` telemetry entry. Today only `claude` passes the concurrency rung. Because the ladder reads descriptor data, a runtime that declares `maxConcurrency` joins without any manifest change.
+**Run-time rungs**
+
+| Rung | Miss → reason | Loud? |
+|---|---|---|
+| first worker `Agent()` does not return tool-unavailable (the #853 case, a real error and not self-assessed) | `no_agent_tool` | Yes |
+| the synthesizer wrote the artefact | `synthesis_failed` | Yes |
+| `verify-anchors` passes | `anchor_check_failed` | Yes |
+
+"Loud" means a banner, `◆ Swarm skipped for <role>: <reason> — running single-agent <agent>`, plus a `mode: "single"` telemetry entry. Today only `claude` passes the concurrency rung. Because the ladder reads descriptor and catalog data, a runtime needs no swarm manifest change to join: it passes once its descriptor declares `maxConcurrency` and a Haiku-class tier maps to a model for it, from the catalog, `model_policy.runtime_tiers` or `model_overrides`.
 
 ### 7. Configuration
 
@@ -110,21 +149,47 @@ The gate has two layers, because the plan-checker and the verifier are LLM agent
 
 **Layer 1: CI, deterministic, written before the implementation.**
 
-The tests are `tests/swarm.test.cjs` for the ladder and the plan, and `tests/swarm-equivalence.test.cjs`. That stays within the two test files per production module that `scripts/lint-test-file-count.cjs` allows. The fixture phase lives at `tests/fixtures/representative/swarm-equivalence/`. Its `CONTEXT.md`, single-agent artefacts and swarm artefacts come from **real runs**, including a real worker answer carrying a fabricated anchor as the negative fixture. That follows the fixture-provenance rule: a gate's fixtures are never written by the gate's author. Every assertion goes through the CLI or exported functions (TESTING-STANDARDS contract 1). The tests assert that:
+The tests are `tests/swarm.test.cjs` for the ladder, the plan validator and `verify-anchors`, and `tests/swarm-equivalence.test.cjs`. That stays within the two test files per production module that `scripts/lint-test-file-count.cjs` allows. The fixture phase lives at `tests/fixtures/representative/swarm-equivalence/`. Its `CONTEXT.md`, single-agent artefacts and swarm artefacts come from **real runs**, including a real worker answer carrying a fabricated anchor as the negative fixture. That follows the fixture-provenance rule: a gate's fixtures are never written by the gate's author. Every assertion goes through the CLI or exported functions (TESTING-STANDARDS contract 1). The tests assert that:
 
-- every ladder rung returns its **exact** degraded verdict (contract 6, standing rule);
+- every ladder rung returns its **exact** degraded verdict (contract 6, standing rule), in its phase (plan-time or run-time);
 - the synthesizer dispatch has the same `agentType` and output path as single-agent dispatch;
 - `verify-anchors` passes the single-agent fixtures and rejects the fabricated anchor by name;
 - the swarm artefacts carry every structure a downstream consumer reads in the single-agent fixture:
   - REVIEW.md frontmatter `status` and `findings.{critical,warning,info,total}`;
   - the RESEARCH.md headings `## Architectural Responsibility Map`, `## Open Questions` and `## Validation Architecture`;
-- telemetry `tokens_by_model` sums to its dispatch entries, and unreported usage is `null`.
+- telemetry `tokens_by_model` sums to its dispatch entries, and unreported usage is `null`;
+- **boundaries**, each at limit−1, limit and limit+1:
+  - `swarm.max_workers` 1, 2, 6 and 7 (1 and 7 rejected by config validation);
+  - the agent total 8, 9 and 10 (10 rejected as `over_agent_budget`);
+  - code-review file counts 1, 2, 6 and 7 (1 runs single, 2 and 6 give one unit per file, 7 is grouped into 6 units with every file kept once);
+  - decomposition unit counts 1, 2, `max_workers` and `max_workers`+1 (1 is `too_few_units`, the last is `invalid_plan`);
+- **properties** (`fast-check`): the `verify-anchors` parser never throws on arbitrary artefact text and every anchor it reports round-trips; the plan validator accepts every plan built from valid parts and rejects every plan carrying one invalid part (Decision 9);
+- **line endings**: an anchor into a CRLF file matches its excerpt, because excerpt comparison normalizes line endings on both sides;
+- **hostile input** (`CONTRIBUTING.md`, "Security and prompt-injection surfaces"): anchors and scopes using `..`, an absolute path, a symlink that escapes the root, or a control character are rejected with no read outside the root; a worker answer carrying a fake instruction tag reaches the synthesizer prompt only JSON-encoded inside the `<swarm_worker_answers>` block.
 
-There are no wall-clock assertions ([ADR-456](456-test-rigor-architecture.md) bans them). Wall-clock time is recorded and not asserted.
+The `plan-phase.md` headroom needs no new row. `tests/workflow-size-budget.test.cjs` already fails at cap+1, and step 4 must pass it unchanged. There are no wall-clock assertions ([ADR-456](456-test-rigor-architecture.md) bans them). Wall-clock time is recorded and not asserted.
 
 **Layer 2: live, a merge condition of the enabling PR.**
 
-The fixture phase is planned on Claude Code twice, with `swarm.enabled` off and then on. Both plans must reach `## VERIFICATION PASSED` from `gsd-plan-checker` and `status: passed` from `gsd-verifier` after execution. The swarm `REVIEW.md` must flow through `code-review-fix` unchanged. The PR attaches both runs' artefacts, verdicts and `SWARM.json`. This is deliberately a merge condition and not a later ratification bar. ADR-1143 set its end-to-end bar as a ratification step, and that bar was never met.
+The fixture phase is planned on Claude Code twice, with `swarm.enabled` off and then on. Both plans must reach `## VERIFICATION PASSED` from `gsd-plan-checker` and `status: passed` from `gsd-verifier` after execution. The swarm `REVIEW.md` must flow through `code-review-fix` unchanged. The PR attaches both runs' artefacts, verdicts and `SWARM.json`.
+
+The PR also records, per role, the wall-clock time of both runs. The swarm-on figure is `wall_clock_ms` from `SWARM.json`, which includes any fallback rerun. The swarm-off figure is the host-reported duration of the single role agent's dispatch, because a swarm-off run writes no `SWARM.json` by design (Decision 5). The issue's acceptance, *"lower wall-clock time"*, is met only if the swarm-on figure is lower for every role that fanned out. This comparison is evidence in the PR, not a CI assertion.
+
+This is deliberately a merge condition and not a later ratification bar. [ADR-1143](1143-claude-orchestration-capability.md) set its end-to-end bar as a ratification step, and that bar was never met.
+
+### 9. Trust boundaries and hostile input
+
+Swarm reads paths written by models and passes model output to an agent that holds `Write`, and for two roles `Bash`. It reuses the repository's existing contracts for both, and adds no new kind of trust.
+
+- **Path containment.** Every path swarm opens or forwards goes through the [ADR-4650](4650-path-containment-and-filename-classification-seam.md) predicate, with the two halves `validatePaths` in `src/reviewer-step-dispatch.cts` already applies. That covers anchors in `verify-anchors`, unit scopes in a plan, and the code-review groups. Absolute paths, any `..` segment and control characters are rejected lexically. The real path must stay inside the real project root, so a symlink that escapes is rejected. Only regular files are read, each read is bounded in bytes, and an artefact may cite a bounded number of anchors. `verify-anchors` reports only `pass` or `fail` with a reason code per anchor. It never echoes file content, so it is not a read oracle.
+- **Worker output is untrusted data.** Each worker answer is validated against its JSON schema and capped in bytes before it is passed on. An answer that fails is dropped and counted in telemetry. The synthesizer receives the answers JSON-encoded inside a `<swarm_worker_answers>` block, under the same contract `agents/gsd-code-reviewer.md` applies to `<external_reviewer_evidence>` ([ADR-2782](2782-reviewer-lane-capability-surface.md)): the block is data, never instructions, a redirect attempt inside it is prompt injection, and every claim is re-verified against the source before it is kept. `fragments/synthesize.md` states the contract for all three role agents.
+- **Plan validation is more than structural.** Core rejects a strategy's plan, with reason `invalid_plan`, when any of these holds:
+  - an `agentType` is outside the allowlist, which is `gsd-swarm-worker` plus the step's own agent as the one synthesizer;
+  - a dispatch's `model` or `tier` differs from `resolve-model`'s output for the agent whose values it claims (the worker's, or for decomposition and cross-file dispatches the synthesizer's);
+  - a `prompt` or `schema` exceeds its byte bound;
+  - a unit scope fails containment, or there are more units than `max_workers`;
+  - the plan carries an executor-only field (Decision 1).
+- **Reviewer-lane evidence stays where it is.** Both code-review steps already carry `supportsReviewerLanes`. Lane dispatch is unchanged by swarm. Lane evidence goes only to the synthesizer, `gsd-code-reviewer`, in its existing `<external_reviewer_evidence>` block. It never reaches a per-file worker or the cross-file worker, so it is never laundered through a worker answer past the consolidation contract.
 
 ## Alternatives considered
 
@@ -133,32 +198,33 @@ The fixture phase is planned on Claude Code twice, with `swarm.enabled` off and 
 - **New worker and synthesizer agents per role.** That means six agents, the roster ripple twice over, and a second writer of each schema. Reusing the role agent as synthesizer is what keeps downstream gates unchanged.
 - **Core orchestration (Lens A).** The maintainer and the triage rejected this. Core receives only the trait, the field, one verb and the plan schema.
 - **A contribution into the role agents that tells them to fan out themselves.** A dispatched agent fanning out is the #853 failure on Claude Code, and it repeats the role-partition error #4740 corrected (an agent cannot orchestrate).
+- **A second Workflow emitter for fan-out plans next to `emitWorkflowScript`.** Rejected: that is the two-mechanism outcome the verdict forbids. Step 5 refactors the one emitter instead (Decision 1).
 - **`worker_tier` / `synthesizer_tier` config keys.** Rejected; see Decision 7.
 
 ## Consequences
 
-- **Positive.** Workers spread across concurrent dispatches, and most tokens move to the cheap tier. Both are claims to be measured by telemetry, not assumed. #3703 closes at the three new sites. `parallelization.max_concurrent_agents` stops being a documented knob that nothing reads. The fan-out seam gives #4747 E1 a candidate shape.
+- **Positive.** Workers spread across concurrent dispatches, and most tokens move to the cheap tier. Both are claims to be measured by telemetry, not assumed, and Layer 2 measures the wall-clock claim on the fixture. The new worker spawn sites pass `tier`. `parallelization.max_concurrent_agents` stops being a documented knob that nothing reads. The fan-out seam gives #4747 E1 a candidate shape.
 - **Negative and forever-cost.**
   - A new core manifest field, step trait, verb and plan schema to maintain, plus validator and registry changes.
+  - Step 5 refactors `emitWorkflowScript` into an adapter and a renderer, and the plan schema carries two executor-only fields.
   - One new agent, with roster, inventory and capability-matrix ripples.
   - A synthesis fragment that must track three role schemas: when a role's output schema changes, `fragments/synthesize.md` and the Layer 1 structural assertions change in the same PR.
   - Haiku-class workers will cite anchors that do not exist. `verify-anchors` and the re-verification rule are the product, not an add-on, and a failed check costs a full single-agent rerun.
   - The orchestrator's context grows by up to `max_workers` capped answers per run.
+  - Layer 2 is a live, human-run check that CI cannot reproduce. Layer 1 is the reproducible floor, and the attached Layer 2 artefacts are what a reviewer re-reads.
 - **Neutral.** With `swarm.enabled: false`, behaviour and artefacts are byte-identical to today, and no file is written.
 
 ## Implementation plan
 
-Each step is one PR.
+Each step is one PR, tracked by its own issue opened after this ADR is accepted. #5273 stays open as their parent, and this ADR authorizes none of them by itself.
 
 1. **Tests-first.** Add the fixture phase and both test files. The cases that need step 3 are `todo`-marked and listed in the PR.
-2. **Core seam.** Add the `supportsFanOut` trait, the `fanOutStrategy` field with its validator, the `loop fan-out-plan` verb, the plan schema and `gsd-core/references/fan-out-dispatch.md`. Register `parallelization.max_concurrent_agents` with its accessor. The ADR-894 back-link (`Amended by`) lands here.
+2. **Core seam.** Add the `supportsFanOut` trait, the `fanOutStrategy` field with its validator, the `loop fan-out-plan` verb, the plan schema and its validator (Decision 9), and `gsd-core/references/fan-out-dispatch.md`. Register `parallelization.max_concurrent_agents` with its accessor.
 3. **Swarm capability.** Add the manifest, the `gsd-swarm-worker` agent and catalog row, `swarm plan|record|verify-anchors`, `fragments/synthesize.md`, the opt-in traits on the three role steps, docs (`docs/CONFIGURATION.md`, a how-to, inventory and capability matrix) and a changeset. Layer 1 turns fully green.
 4. **Wire the spawn sites** in `plan-phase.md` (two sites) and `code-review.md` (one site), with acks for the growth. This PR carries the Layer 2 evidence.
-5. **Optional, gated on #4747 E.** Route the fan-out plan through the Workflow executor.
+5. **Optional, gated on #4747 E.** Refactor `emitWorkflowScript` into `wavesToFanOutPlan` plus `renderFanOutPlan`, byte-identical for waves, then route fan-out plans through the Workflow executor.
 
 ## Open questions for the maintainer
 
 1. Should `fanOutStrategy` be added now as the generic seam (recommended), or should the first cut hard-wire swarm's verb and generalize later?
-2. Should `swarm.max_workers` be bounded at 6, so that a run fits `medium` (fewer than 10 agents)? Or should it read the user's `workflowSizeGuideline` where Claude Code exposes it? No GSD seam reads that setting today.
-3. On a failed anchor check, the run falls back to a single-agent rerun. Is the rerun's cost acceptable, or should swarm instead keep its artefact with the unresolved claims removed?
-4. This PR is ADR-only, but `auto-close-unsolicited-prs.yml` requires a closing keyword, so it says `Closes #5273`. Should #5273 be reopened after merge to track steps 1 to 4, or should those steps get their own sub-issues?
+2. On a failed anchor check, the run falls back to a single-agent rerun. Is the rerun's cost acceptable, or should swarm instead keep its artefact with the unresolved claims removed?
