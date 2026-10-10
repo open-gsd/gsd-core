@@ -18,7 +18,7 @@ const workflow = readFileNormalized(NEW_MILESTONE_PATH);
 
 /** Step 8 body: from its heading up to the next `## ` heading. */
 function step8() {
-  const start = workflow.indexOf('## 8. Research Decision');
+  const start = workflow.search(/^## 8\. Research Decision$/m);
   assert.notEqual(start, -1, 'Step 8 "Research Decision" heading is missing');
   const rest = workflow.slice(start + 1);
   const next = rest.search(/\n## \d+\./);
@@ -31,6 +31,7 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
   test('both prompts include the existing codebase in research scope', () => {
     const prompts = body.match(/AskUserQuestion: "[^"]*"/g) || [];
     assert.equal(prompts.length, 2, 'expected one prompt per research_enabled branch');
+    assert.equal(prompts[0], prompts[1], 'both branches must ask the same question');
     for (const prompt of prompts) {
       assert.match(prompt, /existing codebase/i, `prompt lacks codebase scope: ${prompt}`);
     }
@@ -71,6 +72,7 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
     assert.match(synth.split('Agent(prompt=')[0], /never files left from earlier runs/);
     const reading = synth.slice(synth.indexOf('<required_reading>'), synth.indexOf('</required_reading>'));
     assert.match(reading, /\{required_reading_lines\}/);
+    assert.match(synth, /intentionally skipped; their absence is expected/, 'synthesizer prompt must say skipped dimensions are expected');
     assert.doesNotMatch(reading, /^- \{research_dir\}\/PITFALLS\.md$/m, 'PITFALLS.md must not be unconditional');
   });
 });
