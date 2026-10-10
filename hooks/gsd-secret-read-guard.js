@@ -796,30 +796,20 @@ function tokenize(str) {
 
 // `@file` (curl -d), `--flag=value`, `-Xvalue` → the operand that names the file.
 // A bundled short cluster (`-if.env`) hides the value after more than one
-// flag letter (#5046). Any tail from the third character on can be that
-// operand, so the first tail that names a secret wins. Other tails still go
-// through namesSecret, which keeps `.env.example` and `.envrc` allowed.
-// A cluster that names nothing secret keeps the historical two-character strip.
+// flag letter (#5046). Every accepted secret name starts with `.`, so the walk
+// only calls namesSecret at positions where the character is `.` (linear in
+// word length; a per-position namesSecret would be quadratic). The first
+// matching tail wins; `.env.example` / `.envrc` stay allowed. A cluster that
+// names nothing secret keeps the historical two-character strip.
 // The cluster need not start with a letter: `-2if.env` is the same defect with
-// a digit-first cluster (`grep -2f.env` is a context count plus a `-f` pattern
-// file), so the guard takes any single-dash word rather than a letter-first one.
-// Starting the walk at k=2 also covers the digit-first shape: every secret name
-// begins with `.`, so no secret can begin at k=1 whatever the cluster's first
-// character is, and `.env` sits at k=2 for the shortest operand-bearing cluster
-// (`-f.env`) exactly as it does for a letter-first one.
+// a digit-first cluster, so the guard takes any single-dash word
+// (`/^-[^-]./`) rather than a letter-first one.
 //
-// Two limits worth stating, because both are cases this walk does NOT close:
-//   - Expansion. A tail that still contains a glob or a substitution is not a
-//     secret name, so `-if.env*`, `-if.en?`, `-if.env~`, `-if$(echo .env)` and
-//     `-if{.env,x}` are allowed. That is unchanged by this widening, not
-//     introduced by it: the unbundled `grep .env*` is allowed by the same
-//     predicate, and `tests/gsd-secret-read-guard.test.cjs` asserts the two
-//     forms agree so the pair cannot drift apart silently.
-//   - Non-secret operands. Any single-dash word with a secret name later in
-//     it is denied, including values of options that are not file operands —
-//     `git commit -am.env`, `head -n1.env`, `git log -S.env`. Blocking is the
-//     safe direction here; the test file pins these three so the new denials
-//     are a stated trade rather than a surprise.
+// Limits this walk does NOT close (pinned in tests):
+//   - Expansion: `-if.env*`, `-if.en?`, `-if.env~`, `-if$(echo .env)`,
+//     `-if{.env,x}` stay allowed, matching their unbundled forms.
+//   - Non-file option values: `git commit -am.env` and `head -n1.env` are
+//     new denials (fail-safe). `git log -S.env` was already denied on base.
 function normalizeOperand(text) {
   let v = text;
   if (v.startsWith('@')) v = v.slice(1);
@@ -827,7 +817,10 @@ function normalizeOperand(text) {
     const eq = v.indexOf('=');
     if (eq !== -1) v = v.slice(eq + 1);
   } else if (/^-[^-]./.test(v)) {
+    // Only positions that can start a secret name (every accepted name
+    // begins with '.') — keeps the walk linear in |v|.
     for (let k = 2; k < v.length; k++) {
+      if (v[k] !== '.') continue;
       const tail = v.slice(k);
       if (namesSecret(tail)) return tail;
     }
