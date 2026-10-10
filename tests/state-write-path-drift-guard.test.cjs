@@ -1535,6 +1535,8 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     assert.deepStrictEqual(lines(W(`  let p: string | undefined = ${stateJoin};`, '  fs.writeFileSync(p, c);')), [3]);
     assert.deepStrictEqual(lines(W("  const parts: Array<string> = [dir, 'STATE.md'];", '  fs.writeFileSync(path.join(...parts), c);')), [3]);
     assert.deepStrictEqual(lines(W(`  const p: string = ${stateJoin}; fs.writeFileSync(p, c);`)), [2]);
+    // An object-literal type may hold `;` inside its braces.
+    assert.deepStrictEqual(lines(W(`  const p: { dir: string; file: string } | string = ${stateJoin};`, '  fs.writeFileSync(p, c);')), [3]);
     // A typed join tail decides the write exactly as an untyped one does.
     assert.deepStrictEqual(lines(N("  const n: string = 'STATE.md';", '  fs.writeFileSync(path.join(dir, n), c);')), [3]);
     assert.deepStrictEqual(lines(N('  const d = path.dirname(statePath);', "  const n: string = 'ROADMAP.md';", '  fs.writeFileSync(path.join(d, n), c);')), []);
@@ -1563,6 +1565,7 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       [(rhs) => `  const p: Array<string> = ${rhs};`, true],
       [(rhs) => `  let p: string | undefined = ${rhs};`, true],
       [(rhs) => `  const p: Record<string, string> = ${rhs};`, true],
+      [(rhs) => `  const p: { a: string; b: string } = ${rhs};`, true],
       [(rhs) => `  let p: string; p = ${rhs};`, true],
       [(rhs) => `  const ok: boolean = p == ${rhs};`, false],
       [(rhs) => `  const ok = p === ${rhs};`, false],

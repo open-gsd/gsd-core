@@ -491,12 +491,14 @@ function isQuotedLiteralArg(arg) {
 // `let p: Array<string> | undefined = …`) between its name and `=`, because
 // the scanned sources are TypeScript (#5104). The annotation is read only
 // after a declaration keyword, so an object entry (`{ p: x }`) is not an
-// assignment, and it holds no `=` or `;`, so `p == x`, `p === x` and
-// `let p: T; q = x` are not either. A bare `name =>` still matches, as before.
+// assignment, and it holds no `=` or `;` outside one level of braces, so
+// `p == x`, `p === x` and `let p: T; q = x` are not either, while an object
+// type (`{ a: string; b: string }`) is read whole. A bare `name =>` still
+// matches, as before.
 function assignmentLineRe(varName) {
   const name = escapeRegex(varName);
   return new RegExp(
-    `(?:^|[^.\\w$])(?:(?:const|let|var)\\s+${name}\\s*:\\s*[^=;]+?|(?:const|let|var)?\\s*${name})\\s*=\\s*([^=].*)$`,
+    `(?:^|[^.\\w$])(?:(?:const|let|var)\\s+${name}\\s*:\\s*(?:[^=;{}]|\\{[^{}]*\\})+?|(?:const|let|var)?\\s*${name})\\s*=\\s*([^=].*)$`,
   );
 }
 
