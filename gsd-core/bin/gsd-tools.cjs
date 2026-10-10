@@ -847,7 +847,29 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       error,
       output: output,
     });
-    if (!handled) config.cmdConfigNewProject(cwd, args[1], raw);
+    if (handled) return;
+    // #5268: this verb's flag surface is closed. `--dry-run` is parsed and
+    // plumbed (mirroring routeConfigSet), and any OTHER flag fails loudly
+    // instead of being silently ignored: an accepted-but-ignored `--dry-run`
+    // wrote the config it was meant to preview. (`--raw` is spliced by the
+    // dispatcher before routing; it stays in the set as a guard against that
+    // splice ever moving.) The choices JSON is the one positional argument,
+    // wherever the flag sits, and a second one is refused for the same reason.
+    const CONFIG_NEW_PROJECT_KNOWN_FLAGS = new Set(['--dry-run', '--raw']);
+    const positionals = [];
+    for (const a of args.slice(1)) {
+      if (typeof a === 'string' && a.startsWith('-')) {
+        if (!CONFIG_NEW_PROJECT_KNOWN_FLAGS.has(a)) {
+          error(`Unknown flag for config-new-project: ${a}`, ERROR_REASON.USAGE);
+        }
+        continue;
+      }
+      positionals.push(a);
+    }
+    if (positionals.length > 1) {
+      error(`Unexpected argument for config-new-project: ${positionals[1]}. Usage: config-new-project [choices-json] [--dry-run]`, ERROR_REASON.USAGE);
+    }
+    config.cmdConfigNewProject(cwd, positionals[0], raw, { dryRun: args.includes('--dry-run') });
   }
 
   function routeConfigPath({ cwd, raw, workstreamContext }) {

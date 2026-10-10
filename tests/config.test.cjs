@@ -710,6 +710,330 @@ describe('config-new-project command', () => {
   });
 });
 
+// ─── config-new-project validates choices like config-set (#5268) ────────────
+
+describe('config-new-project — refuses what config-set refuses (#5268)', () => {
+  const repoRoot = path.resolve(__dirname, '..');
+  let dirs;
+
+  beforeEach(() => { dirs = []; });
+  afterEach(() => { dirs.forEach((dir) => cleanup(dir)); });
+
+  // A bare directory: no .planning/, so a refusal that created anything shows.
+  function bareDir() {
+    const dir = createTempDir();
+    dirs.push(dir);
+    return dir;
+  }
+
+  function projectDir() {
+    const dir = createTempProject();
+    dirs.push(dir);
+    return dir;
+  }
+
+  function newProject(args, dir) {
+    return runGsdTools(['config-new-project', ...args], dir, homeSandboxEnv(dir));
+  }
+
+  function assertNothingWritten(dir) {
+    assert.strictEqual(fs.existsSync(path.join(dir, '.planning')), false, '.planning must not be created');
+  }
+
+  function readProjectConfig(dir) {
+    return JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf-8'));
+  }
+
+  function nest(keyPath, value) {
+    return keyPath.split('.').reduceRight((inner, segment) => ({ [segment]: inner }), value);
+  }
+
+  function isSection(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function leafPaths(obj, prefix = '') {
+    return Object.keys(obj).flatMap((key) => {
+      const keyPath = prefix ? `${prefix}.${key}` : key;
+      return isSection(obj[key]) && Object.keys(obj[key]).length > 0 ? leafPaths(obj[key], keyPath) : [keyPath];
+    });
+  }
+
+  function valueAt(obj, keyPath) {
+    return keyPath.split('.').reduce((node, segment) => (node == null ? undefined : node[segment]), obj);
+  }
+
+  // `cli` is the value as typed to config-set, `json` the same value as it
+  // arrives in a choices object. Every row is refused by config-set.
+  const REFUSED_BY_CONFIG_SET = [
+    { key: 'bogus_key', cli: 'x', json: 'x' },
+    { key: 'workflow.reserch', cli: 'true', json: true },
+    { key: 'workflow.nyquist_validation_enabled', cli: 'true', json: true },
+    { key: 'mode', cli: 'nonsense', json: 'nonsense' },
+    { key: 'mode', cli: '[yolo|interactive]', json: '[yolo|interactive]' },
+    { key: 'context', cli: 'prod', json: 'prod' },
+    { key: 'context_window', cli: '0', json: 0 },
+    { key: 'workflow.research', cli: 'maybe', json: 'maybe' },
+    { key: 'workflow.compact_content', cli: 'maybe', json: 'maybe' },
+    { key: 'workflow.code_review_depth', cli: 'weird', json: 'weird' },
+    { key: 'workflow.human_verify_mode', cli: 'never', json: 'never' },
+    { key: 'workflow.security_asvs_level', cli: '9', json: 9 },
+    { key: 'workflow.drift_threshold', cli: '0', json: 0 },
+    { key: 'git.create_tag', cli: 'yes', json: 'yes' },
+    { key: 'hooks.context_warning_threshold', cli: '0', json: 0 },
+    { key: 'plan_review.source_grounding_authority', cli: 'bogus', json: 'bogus' },
+    { key: 'statusline.state_format', cli: 'wide', json: 'wide' },
+    // Passes the key gate (agent_skills.<agent-type>); refused by the setter's guard.
+    { key: 'agent_skills.__proto__', cli: 'true', json: true },
+  ];
+
+  for (const { key, cli, json } of REFUSED_BY_CONFIG_SET) {
+    test(`${key}=${cli} is refused with config-set's own error and nothing is written`, () => {
+      const viaSet = runGsdTools(['config-set', key, cli], projectDir());
+      assert.strictEqual(viaSet.success, false, `positive control: config-set must refuse ${key}=${cli}`);
+
+      const dir = bareDir();
+      const viaNewProject = newProject([JSON.stringify(nest(key, json))], dir);
+
+      assert.strictEqual(viaNewProject.success, false, `config-new-project wrote ${key}=${cli}`);
+      assert.strictEqual(viaNewProject.error, viaSet.error);
+      assertNothingWritten(dir);
+    });
+  }
+
+  test('one bad key among valid choices refuses the whole payload', () => {
+    const dir = bareDir();
+    const result = newProject([JSON.stringify({ mode: 'yolo', workflow: { research: true }, bogus_key: 'x' })], dir);
+
+    assert.strictEqual(result.success, false);
+    assert.match(result.error, /Unknown config key: "bogus_key"/);
+    assertNothingWritten(dir);
+  });
+
+  test('a value config-set normalizes is written normalized', () => {
+    const dir = bareDir();
+    const result = newProject([JSON.stringify({ review: { default_reviewers: ['Codex', 'codex', 'gemini'] } })], dir);
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.deepStrictEqual(readProjectConfig(dir).review.default_reviewers, ['codex', 'gemini']);
+  });
+
+  for (const choices of ['["mode"]', '"yolo"', '42', 'null']) {
+    test(`choices that are not a JSON object are refused: ${choices}`, () => {
+      const dir = bareDir();
+      const result = newProject([choices], dir);
+
+      assert.strictEqual(result.success, false);
+      assert.match(result.error, /expected a JSON object/);
+      assertNothingWritten(dir);
+    });
+  }
+
+  for (const choices of ['{"":{"mode":"yolo"}}', '{"":"x"}', '{"workflow":{"":true}}']) {
+    test(`an empty key is refused instead of being walked as a nameless section: ${choices}`, () => {
+      const dir = bareDir();
+      const result = newProject([choices], dir);
+
+      assert.strictEqual(result.success, false);
+      assert.match(result.error, /^Error: Unknown config key: "(workflow\.)?"/);
+      assertNothingWritten(dir);
+    });
+  }
+
+  // A dot that spells a deeper path: at the top level, under a section, and
+  // under a setting that is also a parent of per-reviewer settings.
+  const STRUCTURAL_DOTTED_KEYS = [
+    { choices: { 'workflow.research': false }, key: 'workflow.research' },
+    { choices: { code_quality: { 'fallow.scope': 'phase' } }, key: 'fallow.scope' },
+    { choices: { review: { 'max_prompt_tokens_per_reviewer.codex': 5000 } }, key: 'max_prompt_tokens_per_reviewer.codex' },
+    { choices: { claude_md_assembly: { 'blocks.workflow': 'link' } }, key: 'blocks.workflow' },
+  ];
+
+  for (const { choices, key } of STRUCTURAL_DOTTED_KEYS) {
+    test(`a dotted key is refused instead of being written as one literal key: ${key}`, () => {
+      const dir = bareDir();
+      const result = newProject([JSON.stringify(choices)], dir);
+
+      assert.strictEqual(result.success, false);
+      assert.ok(result.error.startsWith(`Error: Invalid choice key "${key}"`), result.error);
+      assertNothingWritten(dir);
+    });
+  }
+
+  test('a decimal phase id keeps its dot: phase_commit_docs is keyed by the literal id', () => {
+    const dir = bareDir();
+    const result = newProject([JSON.stringify({ phase_commit_docs: { '2.1': true, '03': false } })], dir);
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.deepStrictEqual(readProjectConfig(dir).phase_commit_docs, { '2.1': true, '03': false });
+  });
+
+  test('a setting that is also a parent is walked, not accepted whole', () => {
+    const accepted = bareDir();
+    const perReviewer = { review: { max_prompt_tokens_per_reviewer: { codex: 5000 } } };
+    assert.ok(newProject([JSON.stringify(perReviewer)], accepted).success);
+    assert.deepStrictEqual(readProjectConfig(accepted).review, perReviewer.review);
+
+    const refused = bareDir();
+    const result = newProject([JSON.stringify({ review: { max_prompt_tokens_per_reviewer: { not_a_reviewer: 5000 } } })], refused);
+    assert.strictEqual(result.success, false);
+    assert.match(result.error, /Unknown config key: "review\.max_prompt_tokens_per_reviewer\.not_a_reviewer"/);
+    assertNothingWritten(refused);
+  });
+
+  test('a section object with no settings in it is not written to the config', () => {
+    const dir = bareDir();
+    const result = newProject([JSON.stringify({ bogus_section: {}, bogus_parent: { inner: { innermost: {} } }, workflow: {} })], dir);
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const config = readProjectConfig(dir);
+    assert.strictEqual(Object.hasOwn(config, 'bogus_section'), false);
+    assert.strictEqual(Object.hasOwn(config, 'bogus_parent'), false);
+    assert.strictEqual(config.workflow.research, true);
+  });
+
+  test('an unsupported flag is refused and nothing is written', () => {
+    const dir = bareDir();
+    const result = newProject([JSON.stringify({ mode: 'yolo' }), '--force'], dir);
+
+    assert.strictEqual(result.success, false);
+    assert.match(result.error, /Unknown flag for config-new-project: --force/);
+    assertNothingWritten(dir);
+  });
+
+  test('a second positional argument is refused and nothing is written', () => {
+    const dir = bareDir();
+    const result = newProject([JSON.stringify({ mode: 'yolo' }), JSON.stringify({ mode: 'interactive' })], dir);
+
+    assert.strictEqual(result.success, false);
+    assert.match(result.error, /Unexpected argument for config-new-project/);
+    assertNothingWritten(dir);
+  });
+
+  for (const flagFirst of [false, true]) {
+    test(`--dry-run ${flagFirst ? 'before' : 'after'} the choices prints the config and writes nothing`, () => {
+      const choices = JSON.stringify({ mode: 'yolo', workflow: { research: false } });
+      const dir = bareDir();
+      const preview = newProject(flagFirst ? ['--dry-run', choices] : [choices, '--dry-run'], dir);
+
+      assert.ok(preview.success, `Command failed: ${preview.error}`);
+      assertNothingWritten(dir);
+      const out = JSON.parse(preview.output);
+      assert.strictEqual(out.dry_run, true);
+      assert.strictEqual(out.would_create, true);
+      assert.strictEqual(out.config.mode, 'yolo');
+      assert.strictEqual(out.config.workflow.research, false);
+
+      // The preview is the config a real run then writes. Secret keys are
+      // masked in CLI output, so they are compared as masked.
+      const created = newProject([choices], dir);
+      assert.ok(created.success, `Command failed: ${created.error}`);
+      const written = readProjectConfig(dir);
+      for (const secretKey of ['brave_search', 'firecrawl', 'exa_search']) {
+        assert.strictEqual(out.config[secretKey], '****');
+        written[secretKey] = '****';
+      }
+      assert.deepStrictEqual(out.config, written);
+    });
+  }
+
+  test('--dry-run still refuses invalid choices', () => {
+    const dir = bareDir();
+    const result = newProject([JSON.stringify({ bogus_key: 'x', mode: 'nonsense' }), '--dry-run'], dir);
+
+    assert.strictEqual(result.success, false);
+    assert.match(result.error, /Unknown config key: "bogus_key"/);
+    assertNothingWritten(dir);
+  });
+
+  test('--dry-run leaves the user defaults file unmigrated', () => {
+    const dir = bareDir();
+    const gsdHome = bareDir();
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    const defaultsBefore = JSON.stringify({ depth: 'quick' });
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, defaultsBefore);
+
+    const result = runGsdTools(['config-new-project', '{}', '--dry-run'], dir, { ...homeSandboxEnv(dir), GSD_HOME: gsdHome });
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).config.granularity, 'coarse');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), defaultsBefore);
+    assertNothingWritten(dir);
+  });
+
+  test('a payload refused while the config is built leaves the user defaults file unmigrated', () => {
+    const dir = bareDir();
+    const gsdHome = bareDir();
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    const defaultsBefore = JSON.stringify({ depth: 'quick' });
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, defaultsBefore);
+
+    // A null skips the per-key value rules, so this one is refused by the builder's array check.
+    const result = runGsdTools(['config-new-project', JSON.stringify({ ship: { pr_body_sections: null } })], dir, { ...homeSandboxEnv(dir), GSD_HOME: gsdHome });
+
+    assert.strictEqual(result.success, false);
+    assert.match(result.error, /Invalid ship\.pr_body_sections value/);
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), defaultsBefore);
+    assertNothingWritten(dir);
+  });
+
+  test('--dry-run on an existing config reports already_exists', () => {
+    const dir = projectDir();
+    assert.ok(newProject(['{}'], dir).success);
+    const before = fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf-8');
+
+    const result = newProject([JSON.stringify({ mode: 'yolo' }), '--dry-run'], dir);
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.deepStrictEqual(JSON.parse(result.output), { created: false, reason: 'already_exists' });
+    assert.strictEqual(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf-8'), before);
+  });
+
+  // The shipped callers: the choices template each workflow hands the model,
+  // with every placeholder filled in. A key added to a template without being
+  // registered in the schema fails here rather than in a user's new project.
+  const TEMPLATE_PLACEHOLDERS = [
+    ['"[yolo|interactive]"', '"yolo"'],
+    ['"[selected]"', '"standard"'],
+    ['"quality|balanced|budget|adaptive|inherit"', '"balanced"'],
+    ['[false if granularity=coarse, true otherwise]', 'true'],
+    ['true|false', 'true'],
+  ];
+
+  for (const workflow of ['gsd-core/workflows/new-project.md', 'gsd-core/workflows/new-project/steps/auto-mode-config.md']) {
+    test(`the filled-in choices template of ${workflow} is accepted and written as given`, () => {
+      const source = fs.readFileSync(path.join(repoRoot, workflow), 'utf-8');
+      const template = source.match(/config-new-project '(\{.*\})'/);
+      assert.ok(template, `${workflow} no longer carries a config-new-project choices template`);
+      const filled = TEMPLATE_PLACEHOLDERS.reduce((text, [placeholder, value]) => text.split(placeholder).join(value), template[1]);
+      const choices = JSON.parse(filled);
+
+      const baselineDir = bareDir();
+      assert.ok(newProject(['{}'], baselineDir).success);
+      const baseline = readProjectConfig(baselineDir);
+
+      const dir = bareDir();
+      const result = newProject([filled], dir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const config = readProjectConfig(dir);
+
+      const chosen = leafPaths(choices);
+      for (const keyPath of chosen) {
+        assert.deepStrictEqual(valueAt(config, keyPath), valueAt(choices, keyPath), `${keyPath} must be written as chosen`);
+      }
+      for (const keyPath of leafPaths(baseline).filter((candidate) => !chosen.includes(candidate))) {
+        assert.deepStrictEqual(valueAt(config, keyPath), valueAt(baseline, keyPath), `${keyPath} must keep its default`);
+      }
+      assert.deepStrictEqual(
+        Object.keys(config).sort(),
+        [...new Set([...Object.keys(baseline), ...Object.keys(choices)])].sort(),
+      );
+    });
+  }
+});
+
 // ─── config-set silent coercion (#1581) ──────────────────────────────────────
 
 describe('config-set — no silent coercion (#1581)', () => {
