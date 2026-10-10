@@ -69,8 +69,6 @@ const { getDirName, hostBehaviorsFor } = runtimeNamePolicy;
 
 type ResolveAttribution = (runtime: string) => any;
 
-type RuntimeSurfaceSourceClass = 'commands' | 'agents';
-
 function withInstallerPackageSource<T>(
   configDir: string,
   fn: () => T,
@@ -143,7 +141,7 @@ function pruneEmptyCorpusParents(start: string, stop: string): void {
 function syncRuntimeSurfaceCorpus(source: string, destination: string, configDir: string, manifestPrefix: string): void {
   if (hasExistingSymlinkBetween(path.resolve(configDir), destination, { allowOptInFollow: isSymlinkedDestOptIn() })) {
     throw new Error(
-      `syncRuntimeSurfaceCorpus: destination "${destination}" contains a symlink the install root "${configDir}" does not trust — refusing to write.`,
+      runtimeArtifactInstallPlan.syncRuntimeSurfaceCorpusSymlinkRefusalMessage(destination, configDir),
     );
   }
   assertCorpusTreeHasNoSymlinks(destination);
@@ -187,13 +185,7 @@ function provisionRuntimeSurfaceCorpus(
   configDir: string,
   scope: string,
 ): void {
-  const required = new Set<RuntimeSurfaceSourceClass>();
-  if (isGlobalScope(scope as InstallScope)) {
-    for (const kind of layout.kinds) {
-      if (kind.kind === 'commands' || kind.kind === 'skills') required.add('commands');
-      if (kind.kind === 'agents' || kind.kind === 'kimi-agents') required.add('agents');
-    }
-  }
+  const required = runtimeArtifactInstallPlan.requiredRuntimeSurfaceSources(layout, scope);
   if (required.size === 0) return;
 
   const corpusRoot = path.join(configDir, 'gsd-core');
@@ -726,7 +718,7 @@ function _copyStaged(stagedDir: string, destDir: string, kind: any, configDir: s
   // that case this defense-in-depth check must confine against the resolved
   // alternate root instead, matching the upstream gate's own root selection in
   // createRuntimeArtifactInstallPlan.
-  const installRoot = (kind && typeof kind.home === 'string' && kind.home !== '') ? kind.home : configDir;
+  const installRoot = runtimeArtifactInstallPlan.resolveRuntimeArtifactInstallRoot(configDir, kind);
   // Strict-subpath + NUL containment via the canonical gate (shared with the
   // layout-driven install plan); throws if destDir escapes the install root.
   // destDir here is an absolute path; path.resolve(installRoot, absoluteDest) returns it unchanged, so the gate's strict-subpath check still correctly confines it to installRoot.
@@ -1215,7 +1207,7 @@ function installRuntimeArtifacts(
     // previously lived inline in bin/install.js.
     const behaviors = hostBehaviorsFor(runtime);
     const projectDir = scope === 'global' ? process.cwd() : configDir;
-    if (behaviors.combinedFamilyInstall) {
+    if (runtimeArtifactInstallPlan.shouldInstallCombinedFamily(behaviors)) {
       // #2329: combined-family runtimes (OpenCode/Kilo) bypass
       // _runLegacyInstallMigrations below entirely (early return), so their
       // legacy-directory cleanup needs its own pre-materialization hook here.
@@ -1306,13 +1298,13 @@ function installRuntimeArtifacts(
         // A fake adapter can change what those probes observe for paths that
         // were never real to begin with; it cannot make this `if` pass for a
         // path the real filesystem would refuse.
-        const installRoot = (kind && typeof kind.home === 'string' && kind.home !== '') ? kind.home : configDir;
+        const installRoot = runtimeArtifactInstallPlan.resolveRuntimeArtifactInstallRoot(configDir, kind);
         // #2393: honor GSD_ALLOW_SYMLINKED_DEST for intentional user-owned symlink layouts.
         // Threat model from #1704 / ADR-1239 Phase B preserved: path-traversal and
         // resolved-target-equals-root still refuse regardless of opt-in.
         if (hasExistingSymlinkBetween(path.resolve(installRoot), dest, { allowOptInFollow: isSymlinkedDestOptIn() })) {
           throw new Error(
-            `installRuntimeArtifacts: destDir "${dest}" contains a symlink the install root "${installRoot}" does not trust — refusing to create. If this is an intentional user-owned symlink layout (e.g. externalized skills/hooks dir, multi-account configHome, or a dotfiles-managed configHome), re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
+            runtimeArtifactInstallPlan.installRuntimeArtifactsSymlinkRefusalMessage(dest, installRoot),
           );
         }
         // #2875 defect fix (--minimal regression closed): a restricted profile
@@ -1535,7 +1527,7 @@ function installOpencodeFamilySkills(
   // #2393: honor GSD_ALLOW_SYMLINKED_DEST for intentional user-owned symlink layouts.
   if (hasExistingSymlinkBetween(path.resolve(installRoot), dest, { allowOptInFollow: isSymlinkedDestOptIn() })) {
     throw new Error(
-      `installOpencodeFamilySkills: destDir "${dest}" contains a symlink the install root "${installRoot}" does not trust — refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
+      runtimeArtifactInstallPlan.installOpencodeFamilySkillsSymlinkRefusalMessage(dest, installRoot),
     );
   }
   installFs().mkdirSync(dest, { recursive: true });
@@ -1729,7 +1721,7 @@ function installAgentsKindStandalone(
   // (`_removeGsdEntries`) still touches `dest` whenever it already exists.
   if (hasExistingSymlinkBetween(path.resolve(installRoot), dest, { allowOptInFollow: isSymlinkedDestOptIn() })) {
     throw new Error(
-      `installAgentsKindStandalone: destDir "${dest}" contains a symlink the install root "${installRoot}" does not trust — refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
+      runtimeArtifactInstallPlan.installAgentsKindStandaloneSymlinkRefusalMessage(dest, installRoot),
     );
   }
 

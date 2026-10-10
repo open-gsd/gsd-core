@@ -13,6 +13,7 @@ const _require: NodeRequire = require;
 const path = _require('node:path') as typeof import('node:path');
 const { tryWithinRootLexical } = _require('./security.cjs') as typeof import('./security.cjs');
 const { hostBehaviorsFor } = _require('./runtime-name-policy.cjs') as typeof import('./runtime-name-policy.cjs');
+const { isMinimalMode } = _require('./install-profiles.cjs') as { isMinimalMode: (mode: string) => boolean };
 
 // #2870: InstallScope is owned by install-scope.cts, not re-declared here.
 // `isGlobalScope` centralizes the `scope === 'global'` boolean projection
@@ -168,6 +169,74 @@ function assertDestWithinConfigHome(configDir: string, destSubpath: string): str
   return contained;
 }
 
+function resolveRuntimeArtifactDestination(configDir: string, kind: ArtifactKind): string {
+  return assertDestWithinConfigHome(resolveRuntimeArtifactInstallRoot(configDir, kind), kind.destSubpath);
+}
+
+function resolveRuntimeArtifactInstallRoot(configDir: string, kind: ArtifactKind): string {
+  return typeof kind.home === 'string' && kind.home !== '' ? kind.home : configDir;
+}
+
+function shouldInstallCombinedFamily(behaviors: { combinedFamilyInstall?: boolean }): boolean {
+  return Boolean(behaviors.combinedFamilyInstall);
+}
+
+function isLegacyFlatLocalInstall(behaviors: { localInstallStyle?: string }, scope: string): boolean {
+  return scope === 'local' && behaviors.localInstallStyle === 'legacy-flat';
+}
+
+function shouldInstallStandaloneAgents(pluginOnlyInstall: boolean, skillsRuntime: boolean): boolean {
+  return !pluginOnlyInstall && !skillsRuntime;
+}
+
+function requiredRuntimeSurfaceSources(
+  layout: { kinds: Iterable<{ kind?: string }> },
+  scope: string,
+): Set<'commands' | 'agents'> {
+  const required = new Set<'commands' | 'agents'>();
+  if (!isGlobalScope(scope as InstallScope)) return required;
+  for (const kind of layout.kinds) {
+    if (kind.kind === 'commands' || kind.kind === 'skills') required.add('commands');
+    if (kind.kind === 'agents' || kind.kind === 'kimi-agents') required.add('agents');
+  }
+  return required;
+}
+
+function shouldInstallCodexAgentConfig(
+  behaviors: { tomlConfigInstall?: boolean },
+  installMode: string,
+): boolean {
+  return behaviors.tomlConfigInstall === true && !isMinimalMode(installMode);
+}
+
+function copyWithPathReplacementSymlinkRefusalMessage(destDir: string, installRoot: string): string {
+  return `copyWithPathReplacement: destDir "${destDir}" contains a symlink the install root "${installRoot}" does not trust \u2014 refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`;
+}
+
+function installRuntimeArtifactsSymlinkRefusalMessage(dest: string, installRoot: string): string {
+  return `installRuntimeArtifacts: destDir "${dest}" contains a symlink the install root "${installRoot}" does not trust \u2014 refusing to create. If this is an intentional user-owned symlink layout (e.g. externalized skills/hooks dir, multi-account configHome, or a dotfiles-managed configHome), re-run with GSD_ALLOW_SYMLINKED_DEST=1.`;
+}
+
+function installOpencodeFamilySkillsSymlinkRefusalMessage(dest: string, installRoot: string): string {
+  return `installOpencodeFamilySkills: destDir "${dest}" contains a symlink the install root "${installRoot}" does not trust \u2014 refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`;
+}
+
+function installAgentsKindStandaloneSymlinkRefusalMessage(dest: string, installRoot: string): string {
+  return `installAgentsKindStandalone: destDir "${dest}" contains a symlink the install root "${installRoot}" does not trust \u2014 refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`;
+}
+
+function syncRuntimeSurfaceCorpusSymlinkRefusalMessage(destination: string, installRoot: string): string {
+  return `syncRuntimeSurfaceCorpus: destination "${destination}" contains a symlink the install root "${installRoot}" does not trust \u2014 refusing to write.`;
+}
+
+function installCodexConfigSymlinkRefusalMessage(targetDir: string): string {
+  return `installCodexConfig: a Codex config path under "${targetDir}" contains a symlink the install root does not trust \u2014 refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`;
+}
+
+function installCodexAgentTomlSymlinkRefusalMessage(agentTomlPath: string): string {
+  return `installCodexConfig: agent toml path "${agentTomlPath}" contains a symlink the install root does not trust \u2014 refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`;
+}
+
 function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
@@ -262,7 +331,7 @@ function createRuntimeArtifactInstallPlan(args: CreateRuntimeArtifactInstallPlan
     items.push({
       kind: kind.kind,
       sourceDir,
-      destDir: assertDestWithinConfigHome(kind.home ?? layout.configDir, kind.destSubpath),
+      destDir: resolveRuntimeArtifactDestination(layout.configDir, kind),
     });
   }
 
@@ -273,9 +342,27 @@ function createRuntimeArtifactUninstallPlan(layout: Layout): UninstallPlan {
   return {
     items: layout.kinds.map((kind) => ({
       kind: kind.kind,
-      destDir: assertDestWithinConfigHome(kind.home ?? layout.configDir, kind.destSubpath),
+      destDir: resolveRuntimeArtifactDestination(layout.configDir, kind),
     })),
   };
 }
 
-export = { assertDestWithinConfigHome, createRuntimeArtifactInstallPlan, createRuntimeArtifactUninstallPlan };
+export = {
+  assertDestWithinConfigHome,
+  resolveRuntimeArtifactDestination,
+  resolveRuntimeArtifactInstallRoot,
+  shouldInstallCombinedFamily,
+  isLegacyFlatLocalInstall,
+  shouldInstallStandaloneAgents,
+  requiredRuntimeSurfaceSources,
+  shouldInstallCodexAgentConfig,
+  copyWithPathReplacementSymlinkRefusalMessage,
+  installRuntimeArtifactsSymlinkRefusalMessage,
+  installOpencodeFamilySkillsSymlinkRefusalMessage,
+  installAgentsKindStandaloneSymlinkRefusalMessage,
+  syncRuntimeSurfaceCorpusSymlinkRefusalMessage,
+  installCodexConfigSymlinkRefusalMessage,
+  installCodexAgentTomlSymlinkRefusalMessage,
+  createRuntimeArtifactInstallPlan,
+  createRuntimeArtifactUninstallPlan,
+};
