@@ -1681,7 +1681,8 @@ describe('migrateQuickTasksTable (#3730 option b)', () => {
 });
 
 describe('quick-tasks-migrate CLI and workflow wiring (#3730)', () => {
-  const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+  const { createTempProject, cleanup, runGsdTools, homeSandboxEnv } = require('./helpers.cjs');
+  const { seedWorkstream } = require('./fixtures/index.cjs');
   const fs = require('node:fs');
   const path = require('node:path');
 
@@ -1707,6 +1708,68 @@ describe('quick-tasks-migrate CLI and workflow wiring (#3730)', () => {
     const second = runGsdTools('quick-tasks-migrate', tmpDir);
     assert.equal(second.success, true, `second migrate failed: ${second.error}`);
     assert.equal(JSON.parse(second.output).migrated, false, 'a canonical table is a no-op');
+  });
+
+  test('quick task migration and append target the selected workstream (#5051)', (t) => {
+    const tmpDir = createTempProject('gsd-5051-cli-');
+    t.after(() => cleanup(tmpDir));
+    const legacyState = [
+      '# State', '', '## Quick Tasks Completed', '',
+      '| Date | Slug | Scope | Artifacts |',
+      '|------|------|-------|-----------|',
+      '| 2026-04-17 | 260417-abc | bootstrap | roles/x |',
+    ].join('\n');
+    const workstreamDir = seedWorkstream(tmpDir, { name: 'alpha', state: legacyState });
+    const envWorkstreamDir = seedWorkstream(tmpDir, { name: 'beta', state: legacyState });
+    const statePath = path.join(workstreamDir, 'STATE.md');
+    const env = homeSandboxEnv(tmpDir);
+
+    const migrated = runGsdTools(['quick-tasks-migrate', '--ws', 'alpha'], tmpDir, env);
+    assert.equal(migrated.success, true, `migrate failed: ${migrated.error}`);
+    assert.equal(JSON.parse(migrated.output).migrated, true);
+    assert.match(fs.readFileSync(statePath, 'utf8'), /\| # \| Description \| Date \| Commit \| Status \| Directory \|/);
+
+    const appended = runGsdTools(
+      ['quick-tasks-append', '--ws', 'alpha', '--task', 'Fix thing'], tmpDir, env,
+    );
+    assert.equal(appended.success, true, `append failed: ${appended.error}`);
+    assert.match(fs.readFileSync(statePath, 'utf8'), /\| Fix thing \|/);
+
+    const viaEnv = runGsdTools(
+      ['quick-tasks-append', '--task', 'Via env'], tmpDir,
+      { ...env, GSD_WORKSTREAM: 'alpha' },
+    );
+    assert.equal(viaEnv.success, true, `env append failed: ${viaEnv.error}`);
+    assert.match(fs.readFileSync(statePath, 'utf8'), /\| Via env \|/);
+
+    const migratedViaEnv = runGsdTools('quick-tasks-migrate', tmpDir,
+      { ...env, GSD_WORKSTREAM: 'beta' });
+    assert.equal(migratedViaEnv.success, true, `env migrate failed: ${migratedViaEnv.error}`);
+    assert.equal(JSON.parse(migratedViaEnv.output).migrated, true);
+    assert.match(fs.readFileSync(path.join(envWorkstreamDir, 'STATE.md'), 'utf8'),
+      /\| # \| Description \| Date \| Commit \| Status \| Directory \|/);
+    assert.equal(fs.existsSync(path.join(tmpDir, '.planning', 'STATE.md')), false);
+  });
+
+  test('migration reports a missing scoped STATE.md as an error (#5051)', (t) => {
+    const tmpDir = createTempProject('gsd-5051-missing-');
+    t.after(() => cleanup(tmpDir));
+    seedWorkstream(tmpDir, { name: 'alpha' });
+    const env = homeSandboxEnv(tmpDir);
+
+    const scoped = runGsdTools(['quick-tasks-migrate', '--ws', 'alpha'], tmpDir, env);
+    assert.equal(scoped.success, false);
+    assert.match(scoped.error, /quick-tasks-migrate: STATE\.md not found/);
+
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'client'));
+    const projectScoped = runGsdTools('quick-tasks-migrate', tmpDir,
+      { ...env, GSD_PROJECT: 'client' });
+    assert.equal(projectScoped.success, false);
+    assert.match(projectScoped.error, /quick-tasks-migrate: STATE\.md not found/);
+
+    const root = runGsdTools('quick-tasks-migrate', tmpDir, env);
+    assert.equal(root.success, true);
+    assert.equal(JSON.parse(root.output).migrated, false);
   });
 
   test('quick and fast run the migration check first', () => {
