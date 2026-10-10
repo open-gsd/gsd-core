@@ -14,6 +14,8 @@ require('node:test').afterEach(() => {
 });
 
 const helpers = require('./helpers.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
+const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const hooksSurface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
 const { install, installAllRuntimes, finishInstall, selectConfiguredEntrypointsForValidation } = require('../bin/install.js');
@@ -824,3 +826,78 @@ test('#5100 installer surfaces command-less unresolved-bash entries on fresh and
     ['unresolved-interpreter'],
   );
 });
+
+// #5100 Minor 1 (review of 611a5eeb): the rows above drive
+// selectConfiguredEntrypointsForValidation directly, so they cannot see the
+// installer's CALL SITE. Reverting bin/install.js's call back to the pre-PR
+// inline filter — or deleting it — leaves every one of them green, while the
+// Major 1 defect (a fresh install silently passing the gate with zero entries)
+// returns. This row therefore runs a REAL install() and asserts on what the
+// caller actually received.
+//
+// `process.platform` is a configurable own property of `process`, so a child
+// process can present itself as win32 before bin/install.js is required. The
+// child's install() writes only under the sandboxed HOME it is handed, and
+// GSD_TEST_MODE keeps it off the interactive main() block.
+const GSD_5100_WIN32_INSTALL_PROBE = `
+Object.defineProperty(process, 'platform', { value: 'win32' });
+const path = require('node:path');
+const { install } = require(path.join(process.env.PROBE_REPO, 'bin', 'install.js'));
+const result = install(true, 'claude');
+const entries = result.configuredEntrypoints || [];
+const unresolvedBash = entries.filter(entry => (
+  entry.command === undefined
+  && (entry.interpreterCandidates || []).some(c => c.trim().toLowerCase().startsWith('bash'))
+));
+process.stdout.write('PROBE_JSON ' + JSON.stringify({
+  total: entries.length,
+  unresolvedBash: unresolvedBash.length,
+}) + '\\n');
+`;
+
+function gsd5100RunWin32InstallProbe(t) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5100-win32-'));
+  t.after(() => helpers.cleanup(home));
+  const result = runNode(['-e', GSD_5100_WIN32_INSTALL_PROBE], {
+    cwd: path.join(__dirname, '..'),
+    env: helpers.installSpawnEnv({
+      HOME: home,
+      USERPROFILE: home,
+      PROBE_REPO: path.join(__dirname, '..'),
+      GSD_TEST_MODE: '1',
+      // #5100: portable hooks are what route a JS hook through the Git Bash
+      // policy at all; without them the win32 branch never runs.
+      GSD_PORTABLE_HOOKS: '1',
+      // Blank every Git Bash discovery input so resolveBashExecutable cannot
+      // find one — the host this PR is about. Empty string, not unset:
+      // resolveBashExecutable reads truthiness, so either works, and an
+      // explicit blank survives an env-inheriting host that exports one.
+      GSD_BASH_PATH: '',
+      ProgramFiles: '',
+      'ProgramFiles(x86)': '',
+      SystemDrive: '',
+    }),
+    timeoutMs: INSTALL_TIMEOUT_MS,
+  });
+  const marker = 'PROBE_JSON ';
+  const line = result.stdout.split('\n').find(entry => entry.startsWith(marker));
+  assert.ok(
+    line,
+    `the win32 install probe must report its summary on stdout; got outcome=${result.outcome} `
+      + `exitCode=${result.exitCode} stderr=${result.stderr.slice(-800)}`,
+  );
+  return JSON.parse(line.slice(marker.length));
+}
+
+test('#5100 the installer CALL SITE surfaces command-less unresolved-bash entries on a fresh install', (t) => {
+  const probe = gsd5100RunWin32InstallProbe(t);
+  // The pre-PR inline filter matched every entry by its registered command
+  // segment; a command-less entry never registered one, so a fresh install
+  // kept ZERO entries and the gate passed silently. The call site must now
+  // hand the unresolved-bash entry through.
+  assert.ok(
+    probe.unresolvedBash > 0,
+    'install() on a win32 host with no Git Bash must return command-less bash '
+      + `entries to the validation gate; got ${JSON.stringify(probe)}`,
+  );
+  });
