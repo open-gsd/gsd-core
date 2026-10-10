@@ -27,18 +27,9 @@ command -v cursor-agent >/dev/null 2>&1 && echo "cursor:available" || echo "curs
 command -v agy >/dev/null 2>&1 && echo "antigravity:available" || echo "antigravity:missing"
 command -v kimi >/dev/null 2>&1 && echo "kimi-code:available" || echo "kimi-code:missing"
 
-# Check local model servers (OpenAI-compatible HTTP API — no CLI binary required)
-OLLAMA_HOST=$(gsd_run query config-get review.ollama_host --raw 2>/dev/null || echo "")
-if [ -z "$OLLAMA_HOST" ] || [ "$OLLAMA_HOST" = "null" ]; then OLLAMA_HOST="http://localhost:11434"; fi
-curl -s --max-time 2 "${OLLAMA_HOST}/v1/models" >/dev/null 2>&1 && echo "ollama:available" || echo "ollama:missing"
-
-LM_STUDIO_HOST=$(gsd_run query config-get review.lm_studio_host --raw 2>/dev/null || echo "")
-if [ -z "$LM_STUDIO_HOST" ] || [ "$LM_STUDIO_HOST" = "null" ]; then LM_STUDIO_HOST="http://localhost:1234"; fi
-curl -s --max-time 2 "${LM_STUDIO_HOST}/v1/models" >/dev/null 2>&1 && echo "lm_studio:available" || echo "lm_studio:missing"
-
-LLAMA_CPP_HOST=$(gsd_run query config-get review.llama_cpp_host --raw 2>/dev/null || echo "")
-if [ -z "$LLAMA_CPP_HOST" ] || [ "$LLAMA_CPP_HOST" = "null" ]; then LLAMA_CPP_HOST="http://localhost:8080"; fi
-curl -s --max-time 2 "${LLAMA_CPP_HOST}/v1/models" >/dev/null 2>&1 && echo "llama_cpp:available" || echo "llama_cpp:missing"
+# Check local model servers (OpenAI-compatible HTTP API — no CLI binary required);
+# hosts and defaults come from each lane's descriptor
+gsd_run review-lane availability || echo "local-lanes:probe-unavailable (update gsd-tools)"
 
 # jq prerequisite (#2589). The config/model/budget lookups in this workflow no
 # longer need jq — they use the native --raw/--pick flags. But the lanes listed

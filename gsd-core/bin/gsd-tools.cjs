@@ -1618,8 +1618,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // `plan`/`invoke` are the only subs that need the expensive plan-building path
     // below; `sections`/`flags` return earlier still. Anything else errors here, before
     // any of that work starts.
-    if (!['plan', 'invoke', 'sections', 'flags', 'dispatch-step', 'explicit-from-argv'].includes(sub)) {
-      error("Usage: review-lane <plan|invoke|sections|flags|dispatch-step|explicit-from-argv> [--selected a,b] [--run-dir D] [--repo-root R]");
+    const REVIEW_LANE_USAGE = 'Usage: review-lane <plan|invoke|sections|flags|availability|dispatch-step|explicit-from-argv> [--selected a,b] [--run-dir D] [--repo-root R]';
+    if (!['plan', 'invoke', 'sections', 'flags', 'availability', 'dispatch-step', 'explicit-from-argv'].includes(sub)) {
+      error(REVIEW_LANE_USAGE);
       return;
     }
     const runDir = flag('--run-dir') || '.';
@@ -1695,8 +1696,15 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             method: opts.method,
             headers: opts.body ? { 'Content-Type': 'application/json' } : undefined,
             body: opts.body,
+            redirect: opts.redirect,
             signal: AbortSignal.timeout(opts.timeoutMs),
           });
+          // redirect:'manual' marks a reachability probe: the status line is the answer, so do not
+          // let a stalled body turn a replying server into `missing`.
+          if (opts.redirect === 'manual') {
+            void res.body?.cancel();
+            return { ok: res.ok, status: res.status, body: '' };
+          }
           return { ok: res.ok, status: res.status, body: await res.text() };
         } catch (e) {
           return { ok: false, status: 0, body: '', error: e && e.message ? e.message : String(e) };
@@ -1723,6 +1731,23 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
     const selected = (flag('--selected') || '')
       .split(',').map((s) => s.trim()).filter(Boolean);
+    // #5266: `<slug>:available|missing` per openai-http lane. Host + default come from the lane
+    // descriptor (resolveLanePlan), probing is runner.probeLane — review.md keeps no host table.
+    // Prerequisite binaries (jq) are reported separately by the workflow, not folded in here.
+    // First-party lanes only: ADR-2782 D7 probes a third-party lane only once selected, with the
+    // egress/consent check that detection does not have.
+    if (sub === 'availability') {
+      const { rows, warnings } = await runner.probeHttpLanes(
+        REVIEWER_LANES,
+        selected,
+        (lane) => resolveLanePlan({ lane, configGet, runDir, repoRoot }),
+        buildLaneRunnerDeps(),
+      );
+      for (const w of warnings) process.stderr.write(`review-lane availability: ${w}\n`);
+      process.stdout.write(rows.join('\n') + (rows.length ? '\n' : ''));
+      return;
+    }
+
     // ADR-2782 D8 (#2927): the lane map is first-party ∪ INSTALLED overlay
     // `reviewer` bodies, first-party winning on slug collision. Before this merge
     // the map was built from the frozen REVIEWER_LANES array alone, so an installed,
@@ -1987,7 +2012,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     }
 
     if (sub !== 'invoke') {
-      error("Usage: review-lane <plan|invoke|sections|flags|dispatch-step|explicit-from-argv> [--selected a,b] [--run-dir D] [--repo-root R]");
+      error(REVIEW_LANE_USAGE);
       return;
     }
 

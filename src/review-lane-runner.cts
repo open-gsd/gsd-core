@@ -55,7 +55,7 @@ export interface RunnerDeps {
    */
   spawn: (binary: string, argv: string[], opts: { input?: string; timeoutMs: number; env?: Readonly<Record<string, string>> }) => SpawnOutcome;
   /** Bounded HTTP POST/GET returning the RAW body — never pre-parsed, so errors stay diagnosable. */
-  httpJson: (url: string, opts: { method: 'GET' | 'POST'; body?: string; timeoutMs: number }) =>
+  httpJson: (url: string, opts: { method: 'GET' | 'POST'; body?: string; timeoutMs: number; redirect?: 'manual' }) =>
     Promise<{ ok: boolean; status: number; body: string; error?: string }>;
   readFile: (p: string) => string;
   writeFile: (p: string, content: string) => void;
@@ -377,16 +377,20 @@ export async function probeLane(
       // Only a STRING config value names a host. `String(unknown)` would turn an object into the
       // literal '[object Object]' and probe that as a URL — a nonsense destination reported as
       // "unreachable" rather than as the misconfiguration it is.
+      // For openai-http, `plan.host` is already resolved by `resolveLanePlan` (config → default,
+      // unset sentinels like "null" handled) — probe the destination the run would use.
       const configured = deps.configGet(probe.hostConfigKey);
       const base = normalizeHost(
-        (typeof configured === 'string' ? configured : '') ||
-          (plan.transport === 'openai-http' ? plan.host : ''),
+        (plan.transport === 'openai-http' ? plan.host : '') || (typeof configured === 'string' ? configured : ''),
       );
       if (!base) {
         return { available: false, reason: LANE_UNAVAILABLE.HOST_UNREACHABLE, detail: 'no host resolved' };
       }
-      const r = await deps.httpJson(`${base}${probe.path}`, { method: 'GET', timeoutMs: probe.timeoutMs });
-      return r.ok
+      // D7: reachable ⇒ available. Any HTTP answer (401 behind an auth proxy, 404, 3xx) proves a
+      // server is there; only a transport failure (status 0) does not. Redirects are not followed:
+      // a probe must not issue a request to a host the descriptor never named.
+      const r = await deps.httpJson(`${base}${probe.path}`, { method: 'GET', timeoutMs: probe.timeoutMs, redirect: 'manual' });
+      return r.status > 0
         ? { available: true }
         : {
             available: false,
@@ -402,6 +406,29 @@ export async function probeLane(
         detail: `unknown probe kind '${String((probe as { kind?: unknown }).kind)}'`,
       };
   }
+}
+
+/**
+ * `<slug>:available|missing` rows for the openai-http lanes in `lanes` (all, or those in `selected`).
+ * Prerequisite binaries are not folded in: the caller reports `jq` separately. An unresolvable lane
+ * reads `missing` and its reason is returned in `warnings` rather than swallowed.
+ */
+export async function probeHttpLanes<L extends { slug: string; transport: string }>(
+  lanes: readonly L[],
+  selected: readonly string[],
+  resolve: (lane: L) => { ok: true; plan: LanePlan } | { ok: false; detail: string },
+  deps: RunnerDeps,
+): Promise<{ rows: string[]; warnings: string[] }> {
+  const rows: string[] = [];
+  const warnings: string[] = [];
+  for (const lane of lanes) {
+    if (lane.transport !== 'openai-http' || (selected.length > 0 && !selected.includes(lane.slug))) continue;
+    const r = resolve(lane);
+    if (!r.ok) warnings.push(`${lane.slug}: ${r.detail}`);
+    const up = r.ok && (await probeLane({ ...r.plan, requiresBinaries: [] }, deps)).available;
+    rows.push(`${lane.slug}:${up ? 'available' : 'missing'}`);
+  }
+  return { rows, warnings };
 }
 
 /* ------------------------------------------------------------------ *
