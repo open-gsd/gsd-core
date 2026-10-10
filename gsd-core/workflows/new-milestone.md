@@ -351,13 +351,13 @@ AskUserQuestion: "Research the domain ecosystem for this milestone's work — ne
 
 **If user chose "Research first":**
 
-Run one researcher per dimension (stack, features, architecture, pitfalls) by default. Drop a dimension only when it clearly does not apply to this milestone, and tell the user before spawning: `Skipping: {dimension(s)} — {reason}`. Never drop one silently. At least one must run; to run none, the user chooses Skip. `{N}` is the number of dimensions kept.
+Run one researcher per dimension (stack, features, architecture, pitfalls) by default. Drop a dimension only when it clearly does not apply to this milestone, and tell the user before spawning: `Skipping: {dimension(s)} — {reason}`. Never drop one silently. At least one must run; to run none, the user chooses Skip. `{dimensions kept}` is the list of dimensions that will run, and `{N}` is its count.
 
 ```
 ### GSD ► RESEARCHING
 
 ◆ Spawning {N} researchers in parallel... (each runs in a subagent — no output until they return, ~1–5 min; expected, not a freeze)
-  → {dimensions that will run}
+  → {dimensions kept}
 ```
 
 ```bash
@@ -416,7 +416,7 @@ Use template: ~/.claude/gsd-core/templates/research-project/{FILE}
 
 > **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling all researcher Agent() calls above, do NOT read research files or synthesize content independently while the subagents are active. Wait for all researchers to complete before spawning the synthesizer. This prevents duplicate work and wasted context.
 
-After all complete, spawn synthesizer. Fill `{required_reading_lines}` with one `- {research_dir}/{FILE}` line per file written by the researchers spawned in this run (never files left from earlier runs), and tell the synthesizer any other dimension was intentionally skipped:
+After all complete, spawn synthesizer. Fill `{required_reading_lines}` with one `- {research_dir}/{FILE}` line per file written by the researchers spawned in this run for `{dimensions kept}` (never files left from earlier runs):
 
 ```text
 Agent(prompt="
@@ -425,6 +425,8 @@ Synthesize research outputs into SUMMARY.md.
 <required_reading>
 {required_reading_lines}
 </required_reading>
+
+Research files for dimensions not listed above were intentionally skipped; their absence is expected, not an error.
 
 ${AGENT_SKILLS_SYNTHESIZER}
 
