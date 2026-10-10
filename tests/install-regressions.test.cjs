@@ -2636,7 +2636,9 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
   });
 
   test('windsurf local: the legacy .devin/skills cleanup removes only GSD-owned gsd-* dirs and names the ones it keeps', (t) => {
-    const root = createTempDir('gsd-5161-devin-');
+    // The installer resolves the workspace from process.cwd(), which is the REAL path; on macOS the temp
+    // dir sits under the /var -> /private/var symlink, so compare against the resolved root.
+    const root = fs.realpathSync(createTempDir('gsd-5161-devin-'));
     t.after(() => cleanup(root));
     const devinSkillsDir = path.join(root, '.devin', 'skills');   // pre-#1615 Windsurf layout
     fs.mkdirSync(path.join(devinSkillsDir, 'gsd-help'), { recursive: true });
@@ -2766,7 +2768,9 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
   });
 
   test('local: the legacy stale-skills cleanup keeps a user gsd-* project skill and still removes first-party ones', (t) => {
-    const root = createTempDir('gsd-5161-local-');
+    // The installer resolves the workspace from process.cwd(), which is the REAL path; on macOS the temp
+    // dir sits under the /var -> /private/var symlink, so compare against the resolved root.
+    const root = fs.realpathSync(createTempDir('gsd-5161-local-'));
     t.after(() => cleanup(root));
     const skillsDir = path.join(root, '.claude', 'skills');
     fs.mkdirSync(path.join(skillsDir, 'gsd-mine'), { recursive: true });
