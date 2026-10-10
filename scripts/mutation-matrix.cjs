@@ -657,6 +657,31 @@ const COVERED = {
     excludeTests: ['state-contract.test.cjs'],
     minScore: 65,
   },
+  // dispatch-isolation: net-new module from #4904 (ADR-4630 Phase 2), the owner of the
+  // dispatch-isolation vocabulary. Without this entry the gate reports has_work: "false"
+  // and skips it, the gap the state-contract note above describes.
+  //
+  // No test file matches the "dispatch-isolation*" naming rule. The guards, the sealed
+  // views and their fast-check properties live in host-integration-validator-parity.test.cjs,
+  // beside the parity pins for every consumer, so it is declared via extraTests. Its five
+  // gsd-tools spawns (the stale-lib remedy and usage-text tests) do not load this module
+  // in-process, so perTest coverage never re-runs them per mutant. Listing it makes it a
+  // global trigger (below); it changed in 2 commits on next since 2026-07-01, the same rate
+  // as state-contract.unit.test.cjs.
+  //
+  // CI run 38048199134, job 114201958561, `Stryker (dispatch-isolation)` (PR #5126):
+  // 85.29% (29 killed / 0 timeout / 5 survived / 4 runtime errors), matching a local run with
+  // the same inputs. All 5 survivors are equivalent for
+  // this tree: the three __esModule interop mutants (only a default or namespace import
+  // reads that flag, and no consumer uses either), and `typeof value === 'string' &&` ->
+  // `true &&` in both guards (the views hold only strings and the module's exports are
+  // frozen, so no non-string can be a member). Floor = floor(85.29) - 1
+  // = 84.
+  'dispatch-isolation': {
+    cjs: 'gsd-core/bin/lib/dispatch-isolation.cjs',
+    extraTests: ['host-integration-validator-parity.test.cjs'],
+    minScore: 84,
+  },
 };
 
 // Compute the final, derived `tests` array for every COVERED entry. Done once, after the

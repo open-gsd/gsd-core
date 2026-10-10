@@ -9,7 +9,12 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
+const { runGsdTools, createTempDir, cleanup } = require('./helpers.cjs');
+// Seeded fast-check convention: the shared setup helper (seed 42, numRuns 200,
+// GSD_FC_SEED to explore), never 'fast-check' directly.
+const fc = require('./helpers/fast-check-setup.cjs');
 
 const {
   HOST_INTEGRATION_AXES,
@@ -23,6 +28,17 @@ const {
 // Sort for deterministic comparison
 function sorted(arr) {
   return [...arr].sort();
+}
+
+// A shell `case` pattern line naming two or more bare-word alternatives —
+// `  harness-worktree|orchestrator-worktree|none) ;;` — with an optional
+// leading `(` and whitespace around `|`, both legal shell. Returns the
+// alternatives in order, or null when the line is not such a pattern. The
+// scan below and its round-trip property share this one parser.
+const CASE_ALTERNATION = /^\s*\(?\s*([a-z][a-z-]*(?:\s*\|\s*[a-z][a-z-]*)+)\s*\)/;
+function parseCaseAlternation(line) {
+  const m = CASE_ALTERNATION.exec(line);
+  return m ? m[1].split(/\s*\|\s*/) : null;
 }
 
 // Minimal valid runtime capability descriptor (all documented values)
@@ -475,5 +491,319 @@ describe('#3673 dispatch.maxConcurrency — all 19 shipped descriptors', () => {
       assert.strictEqual(mcErrors.length, 0,
         `${id}: shipped dispatch.maxConcurrency must validate clean; got: ${JSON.stringify(mcErrors)}`);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4561: the dispatch-isolation vocabulary has ONE owner — src/dispatch-isolation.cts
+// ---------------------------------------------------------------------------
+//
+// Until #4561 the set {harness-worktree, orchestrator-worktree, none} and its
+// worktree-creating subset were hand-written at eight sites with nothing
+// asserting they agreed (half of them outside the TypeScript project). This
+// block is the cross-check. Every runtime site now CONSUMES the owner, so most
+// rows below assert consumption (same object / same set); the one deliberate
+// mirror — hooks/lib/isolation-sentinel.js's VALID_ISOLATION, kept literal so
+// the guard hooks load on a raw install with no compiled lib — is asserted
+// EQUAL, so adding a mode to the owner turns into a red test here until the
+// mirror follows.
+describe('#4561: dispatch-isolation vocabulary — single owner, every site consumes or mirrors it', () => {
+  const owner = require(path.join(__dirname, '../gsd-core/bin/lib/dispatch-isolation.cjs'));
+  const {
+    DISPATCH_ISOLATION_MODES,
+    DISPATCH_ISOLATION_VOCABULARY,
+    BASE_CHECK_ISOLATION_MODES,
+    BASE_CHECK_ISOLATION_VOCABULARY,
+    isDispatchIsolation,
+    isBaseCheckIsolationMode,
+  } = owner;
+  const { VALID_ISOLATION: hookMirror } = require(path.join(__dirname, '../hooks/lib/isolation-sentinel.js'));
+  const { cmdWorktreeBaseCheck } = require(path.join(__dirname, '../gsd-core/bin/lib/worktree-base-ref.cjs'));
+
+  test('the owner tuple is frozen, non-empty, duplicate-free, and contains `none` (the fail-closed member every degrade lands on)', () => {
+    assert.ok(Object.isFrozen(DISPATCH_ISOLATION_MODES));
+    assert.ok(DISPATCH_ISOLATION_MODES.length >= 1);
+    assert.equal(new Set(DISPATCH_ISOLATION_MODES).size, DISPATCH_ISOLATION_MODES.length);
+    assert.ok(DISPATCH_ISOLATION_MODES.includes('none'));
+    assert.deepEqual(sorted(DISPATCH_ISOLATION_VOCABULARY), sorted(DISPATCH_ISOLATION_MODES));
+  });
+
+  test('HOST_INTEGRATION_AXES.isolation IS the owner tuple (consumed by identity, not copied)', () => {
+    assert.strictEqual(HOST_INTEGRATION_AXES.isolation, DISPATCH_ISOLATION_MODES);
+  });
+
+  test('isolation: validator VALID_DISPATCH_ISOLATION === owner (the row the ADR-1239 parity block never had)', () => {
+    assert.deepEqual(
+      sorted(_HOST_INTEGRATION_VOCAB.isolation),
+      sorted(DISPATCH_ISOLATION_MODES),
+      'validator VALID_DISPATCH_ISOLATION must exactly match the owner tuple',
+    );
+  });
+
+  test('hooks/lib/isolation-sentinel.js VALID_ISOLATION mirror === owner (update the mirror when you add a mode)', () => {
+    assert.deepEqual(
+      sorted(hookMirror),
+      sorted(DISPATCH_ISOLATION_MODES),
+      'hooks/lib/isolation-sentinel.js keeps a deliberate literal mirror of the vocabulary; it has drifted from src/dispatch-isolation.cts',
+    );
+  });
+
+  test('every shell `case` validity list for the vocabulary in gsd-core/**/*.md === owner (workflow shell cannot import it, so each list is pinned)', () => {
+    // The dispatch sites and diagnostics validate the resolver's output in
+    // shell — `case "$ISOLATION" in harness-worktree|orchestrator-worktree|none) ;;`
+    // — and shell inside workflow markdown has no way to consume the owner.
+    // These are copies that must exist (ADR-4630 Decision 3), so each is
+    // pinned: a fourth mode added to the owner and the hook mirror alone
+    // would otherwise leave every other test green while these lists reject
+    // it and fail the dispatch closed. Sites are DISCOVERED, not listed, so a
+    // new copy that names a worktree mode is pinned the day it lands.
+    const root = path.join(__dirname, '../gsd-core');
+    const members = new Set(DISPATCH_ISOLATION_MODES);
+    const found = [];
+    const walk = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) { walk(full); continue; }
+        if (!entry.name.endsWith('.md')) continue;
+        fs.readFileSync(full, 'utf8').split(/\r?\n/).forEach((line, i) => {
+          // Whitespace around `|` is legal shell (`a | b)`), so the parser allows it.
+          const alts = parseCaseAlternation(line);
+          if (!alts) return;
+          // A list is a copy of THIS vocabulary when it names a worktree mode.
+          // `none` alone is too common a shell word to key on (`off|none)`),
+          // so a list naming neither worktree mode is out of scope by design.
+          if (!alts.some((a) => members.has(a) && a !== 'none')) return;
+          found.push({ site: `${path.relative(root, full)}:${i + 1}`, alts });
+        });
+      }
+    };
+    walk(root);
+    // Positive control: the scan must reach the four sites known at this
+    // commit (dispatch-isolation-gate.md, executor-isolation-dispatch.md,
+    // health.md, settings.md). Fewer means the scan is broken, not clean.
+    assert.ok(found.length >= 4, `expected >= 4 shell validity lists, found ${found.length}: ${found.map((f) => f.site).join(', ')}`);
+    for (const { site, alts } of found) {
+      assert.deepEqual(sorted(alts), sorted(DISPATCH_ISOLATION_MODES),
+        `${site}: this shell validity list has drifted from src/dispatch-isolation.cts`);
+    }
+  });
+
+  test('the base-check subset is exactly the owner minus `none` — derived, not a second list', () => {
+    assert.ok(Object.isFrozen(BASE_CHECK_ISOLATION_MODES));
+    assert.deepEqual(
+      sorted(BASE_CHECK_ISOLATION_MODES),
+      sorted(DISPATCH_ISOLATION_MODES.filter((m) => m !== 'none')),
+    );
+    assert.deepEqual(sorted(BASE_CHECK_ISOLATION_VOCABULARY), sorted(BASE_CHECK_ISOLATION_MODES));
+    assert.ok(!BASE_CHECK_ISOLATION_VOCABULARY.has('none'));
+  });
+
+  test('type guards accept every member and reject non-members, `none` (for the subset), and non-strings', () => {
+    for (const mode of DISPATCH_ISOLATION_MODES) assert.equal(isDispatchIsolation(mode), true, mode);
+    for (const mode of BASE_CHECK_ISOLATION_MODES) assert.equal(isBaseCheckIsolationMode(mode), true, mode);
+    assert.equal(isBaseCheckIsolationMode('none'), false);
+    for (const bogus of ['bogus-mode', '', 'HARNESS-WORKTREE', null, undefined, 3, {}, ['none']]) {
+      assert.equal(isDispatchIsolation(bogus), false, JSON.stringify(bogus));
+      assert.equal(isBaseCheckIsolationMode(bogus), false, JSON.stringify(bogus));
+    }
+  });
+
+  test('property: the guards are exactly owner membership over arbitrary strings, prototype keys and near-misses included', () => {
+    // A hand-listed `bogus` array tests the inputs someone thought of; this
+    // tests the invariant. The near-miss arm keeps the interesting inputs in
+    // play at every seed: each member, the prototype keys a bare-object lookup
+    // would resolve, and case / whitespace / truncation neighbours of each mode.
+    const nearMisses = fc.constantFrom(
+      ...DISPATCH_ISOLATION_MODES,
+      'constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf',
+      ...DISPATCH_ISOLATION_MODES.flatMap((m) => [m.toUpperCase(), ` ${m}`, `${m} `, `${m}\n`, m.slice(0, -1)]),
+    );
+    fc.assert(fc.property(fc.oneof(fc.string(), nearMisses), (s) => {
+      const member = DISPATCH_ISOLATION_MODES.includes(s);
+      assert.equal(isDispatchIsolation(s), member, JSON.stringify(s));
+      assert.equal(isBaseCheckIsolationMode(s), member && s !== 'none', JSON.stringify(s));
+    }));
+  });
+
+  test('property: no non-string is a mode, including values that stringify to one', () => {
+    const member = fc.constantFrom(...DISPATCH_ISOLATION_MODES);
+    const lookalike = fc.oneof(member.map((m) => [m]), member.map((m) => ({ toString: () => m })));
+    fc.assert(fc.property(fc.oneof(fc.anything(), lookalike), (v) => {
+      fc.pre(typeof v !== 'string');
+      assert.equal(isDispatchIsolation(v), false);
+      assert.equal(isBaseCheckIsolationMode(v), false);
+    }));
+  });
+
+  test('property: the shell-list parser recovers exactly the alternatives of a bare-word `case` alternation line, in order (round-trip)', () => {
+    // The scan below is a parser over workflow markdown; a parser that drops,
+    // merges or splits an alternative would pin a list it misread. Its domain
+    // is bare-word alternations (`[a-z][a-z-]*`, the vocabulary's shape), not
+    // every shell pattern: `foo1|bar)` or `*.js|*.ts)` are valid shell that the
+    // scan deliberately does not read. Render a line in that domain from
+    // arbitrary distinct words with arbitrary legal spacing,
+    // an optional leading `(`, and an optional trailing `;;` or comment, then
+    // parse it back.
+    const word = fc.stringMatching(/^[a-z][a-z-]{0,20}$/);
+    const ws = fc.stringMatching(/^[ \t]{0,3}$/);
+    fc.assert(fc.property(
+      fc.uniqueArray(word, { minLength: 2, maxLength: 6 }),
+      fc.array(fc.tuple(ws, ws), { minLength: 5, maxLength: 5 }),
+      ws, fc.boolean(), ws, fc.constantFrom(' ;;', '', ' # trailing note'),
+      (words, gaps, indent, paren, beforeClose, tail) => {
+        const body = words.reduce((acc, w, i) => (i === 0 ? w : `${acc}${gaps[i - 1][0]}|${gaps[i - 1][1]}${w}`), '');
+        const line = `${indent}${paren ? '(' : ''}${body}${beforeClose})${tail}`;
+        assert.deepEqual(parseCaseAlternation(line), words, JSON.stringify(line));
+      },
+    ));
+  });
+
+  test('property: a line that is not a multi-alternative pattern parses to null', () => {
+    // A single bare word is not a list (`none) ;;` must not be scanned as one),
+    // and a comment or prose line naming the modes is not a pattern.
+    const word = fc.stringMatching(/^[a-z][a-z-]{0,20}$/);
+    fc.assert(fc.property(word, fc.stringMatching(/^[ \t]{0,3}$/), (w, indent) => {
+      assert.equal(parseCaseAlternation(`${indent}${w}) ;;`), null);
+      assert.equal(parseCaseAlternation(`${indent}# ${w}|${w}-x)`), null);
+    }));
+  });
+
+  test('the Set views are SEALED at runtime — `ReadonlySet` erases, so the mutators must refuse (pre-create review MISSED, driven)', (t) => {
+    const { VALID_DISPATCH_ISOLATION } = require(path.join(__dirname, '../gsd-core/bin/lib/capability-validator.cjs'));
+    assert.strictEqual(VALID_DISPATCH_ISOLATION, DISPATCH_ISOLATION_VOCABULARY, 'the validator consumes the owner Set by identity');
+    for (const set of [DISPATCH_ISOLATION_VOCABULARY, BASE_CHECK_ISOLATION_VOCABULARY]) {
+      assert.throws(() => set.add('bogus-mode'), TypeError);
+      assert.throws(() => set.delete('none'), TypeError);
+      assert.throws(() => set.clear(), TypeError);
+      // The review's continuation drove this path past a shadowed-method seal:
+      // a native Set method applied to the view must find no Set internals.
+      assert.throws(() => Set.prototype.add.call(set, 'bogus-mode'), TypeError);
+      assert.throws(() => Set.prototype.delete.call(set, 'none'), TypeError);
+      assert.throws(() => Set.prototype.clear.call(set), TypeError);
+      assert.ok(Object.isFrozen(set));
+      assert.equal(set.has('bogus-mode'), false, 'a refused add must not have taken effect');
+      assert.equal(set.has('none') || set === BASE_CHECK_ISOLATION_VOCABULARY, true, 'a refused delete must not have taken effect');
+      assert.ok(set.size > 0, 'a refused clear must not have taken effect');
+      assert.deepEqual([...set], [...set.values()], 'iteration and values() agree (spread is what the validator uses)');
+    }
+    // The view must not do a dynamic Set.prototype lookup at call time — a
+    // patched `has` would otherwise receive the backing Set as `this` and leak
+    // it (the review's second continuation drove exactly that). Restored via
+    // t.after (the repo's test ruleset bars a try-with-cleanup block in a test body) so a
+    // failure here cannot poison the rest of this process.
+    const originalHas = Set.prototype.has;
+    t.after(() => { Set.prototype.has = originalHas; });
+    let leaked = null;
+    Set.prototype.has = function patchedHas(value) { leaked = this; return originalHas.call(this, value); };
+    DISPATCH_ISOLATION_VOCABULARY.has('none');
+    Set.prototype.has = originalHas;
+    assert.equal(leaked, null, 'a Set.prototype.has patch installed after load must not observe the backing Set');
+    assert.equal(isDispatchIsolation('bogus-mode'), false);
+    assert.deepEqual(sorted(DISPATCH_ISOLATION_VOCABULARY), sorted(DISPATCH_ISOLATION_MODES), 'membership unchanged after the refused mutations');
+    assert.equal(DISPATCH_ISOLATION_VOCABULARY.size, DISPATCH_ISOLATION_MODES.length);
+  });
+
+  test('the owner\'s exports are frozen — a new Set assigned to an export cannot widen what the guards accept', () => {
+    // The guards read their vocabulary export at call time, so a reassigned
+    // export would split them from the tuple and from every consumer that
+    // read the export at load.
+    assert.ok(Object.isFrozen(owner));
+    assert.throws(() => { owner.DISPATCH_ISOLATION_VOCABULARY = new Set([...DISPATCH_ISOLATION_MODES, 'bogus-mode']); }, TypeError);
+    assert.throws(() => { owner.BASE_CHECK_ISOLATION_VOCABULARY = new Set(['none']); }, TypeError);
+    assert.throws(() => { owner.isDispatchIsolation = () => true; }, TypeError);
+    assert.equal(owner.isDispatchIsolation('bogus-mode'), false);
+    assert.equal(owner.isBaseCheckIsolationMode('none'), false);
+    assert.strictEqual(owner.DISPATCH_ISOLATION_VOCABULARY, DISPATCH_ISOLATION_VOCABULARY);
+  });
+
+  test('the sealed views answer the rest of the ReadonlySet read surface as a real Set of the same members would', () => {
+    // The seal replaces the Set with a plain object, so every read method is
+    // hand-delegated; one that is never called can return nothing and stay
+    // green. Compare each against a native Set built from the same tuple.
+    for (const [view, modes] of [
+      [DISPATCH_ISOLATION_VOCABULARY, DISPATCH_ISOLATION_MODES],
+      [BASE_CHECK_ISOLATION_VOCABULARY, BASE_CHECK_ISOLATION_MODES],
+    ]) {
+      const native = new Set(modes);
+      assert.deepEqual([...view.keys()], [...native.keys()], 'keys()');
+      assert.deepEqual([...view.entries()], [...native.entries()], 'entries() yields [value, value] pairs');
+      const calls = [];
+      const thisArg = { marker: true };
+      view.forEach(function (value, key, set) { calls.push([value, key, set === view, this === thisArg]); }, thisArg);
+      assert.deepEqual(calls, modes.map((m) => [m, m, true, true]), 'forEach passes (value, value, the view) with thisArg bound');
+    }
+  });
+
+  test('worktree base-check --mode consumes the subset: `none` and a bogus value are rejected with a message derived from the owner', () => {
+    const expectedList = BASE_CHECK_ISOLATION_MODES.join(' or ');
+    for (const rejected of ['none', 'bogus-mode']) {
+      assert.throws(
+        () => cmdWorktreeBaseCheck('/repo', ['--mode', rejected], { readFile: () => null, execGit: () => { throw new Error('unreachable'); }, write: () => {}, userClaudeDir: '/nonexistent-hermetic-user-dir' }),
+        (err) => err instanceof Error && err.message.includes(`--mode must be ${expectedList}`),
+        `--mode ${rejected} must be refused with the owner-derived list`,
+      );
+    }
+  });
+
+  test('a lib built before the owner existed: unrelated gsd-tools commands still run, and a verb that needs the owner names the build:lib remedy', (t) => {
+    // ensureRuntimeBuild's fast path keys on one sentinel, so a lib compiled
+    // before src/dispatch-isolation.cts existed reads as built. Reproduce that
+    // tree with a preload that refuses the owner to the two HAND-WRITTEN
+    // consumers only; a stale tree's compiled siblings predate the owner and
+    // never ask for it.
+    const tmp = createTempDir('gsd-4561-stale-lib-');
+    t.after(() => cleanup(tmp));
+    const preload = path.join(tmp, 'hide-owner.cjs');
+    fs.writeFileSync(preload, [
+      "const Module = require('module');",
+      'const orig = Module._resolveFilename;',
+      'Module._resolveFilename = function (request, parent, ...rest) {',
+      "  if (/dispatch-isolation\\.cjs$/.test(request) && parent && /(gsd-tools|capability-validator)\\.cjs$/.test(parent.filename || '')) {",
+      "    const e = new Error(`Cannot find module '${request}'`); e.code = 'MODULE_NOT_FOUND'; throw e;",
+      '  }',
+      '  return orig.call(this, request, parent, ...rest);',
+      '};',
+      '',
+    ].join('\n'));
+    const env = { NODE_OPTIONS: `--require ${JSON.stringify(preload)}` };
+
+    const unrelated = runGsdTools(['current-timestamp', '--raw'], tmp, env);
+    assert.equal(unrelated.success, true, `a command that never touches the owner must still run on that tree: ${unrelated.error}`);
+
+    // The query and inspect verbs too: their resolver turns errors into a
+    // successful `none`, and dispatch-isolation-gate.md reads rc 0 + `none` as
+    // "the runtime declares no isolation primitive". A stale lib is a failure
+    // to resolve, so it must exit non-zero instead.
+    for (const verb of [
+      ['record-dispatch-isolation', '--isolation', 'none'],
+      ['query', 'dispatch-isolation', '--raw'],
+      ['query', 'inspect-dispatch-isolation', '--raw'],
+    ]) {
+      const needsOwner = runGsdTools(verb, tmp, env);
+      assert.equal(needsOwner.success, false, `${verb.join(' ')} cannot answer without the owner: ${needsOwner.output}`);
+      assert.match(needsOwner.error, /dispatch-isolation\.cjs is missing[\s\S]*npm run build:lib/, `${verb.join(' ')} names the remedy, not a bare Cannot find module`);
+    }
+  });
+
+  test('the record-dispatch-isolation usage text lists the owner\'s modes, so a fourth mode reaches it', (t) => {
+    // Today's literal and the owner agree byte for byte, so only a changed
+    // owner tells a derived list from a copied one. A preload hands gsd-tools
+    // an owner with a fourth mode.
+    const tmp = createTempDir('gsd-4561-usage-');
+    t.after(() => cleanup(tmp));
+    const preload = path.join(tmp, 'fourth-mode.cjs');
+    fs.writeFileSync(preload, [
+      "const Module = require('module');",
+      'const orig = Module._load;',
+      'Module._load = function (request, ...rest) {',
+      '  const mod = orig.call(this, request, ...rest);',
+      "  if (!/dispatch-isolation\\.cjs$/.test(request)) return mod;",
+      "  return { ...mod, DISPATCH_ISOLATION_MODES: Object.freeze([...mod.DISPATCH_ISOLATION_MODES, 'fourth-mode']) };",
+      '};',
+      '',
+    ].join('\n'));
+    const result = runGsdTools(['record-dispatch-isolation'], tmp, { NODE_OPTIONS: `--require ${JSON.stringify(preload)}` });
+    assert.equal(result.success, false, 'a missing --isolation is a usage error');
+    assert.match(result.error, /--isolation <harness-worktree\|orchestrator-worktree\|none\|fourth-mode>/, 'the usage text is read from the owner');
   });
 });

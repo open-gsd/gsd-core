@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "count": 303,
+  "count": 305,
   "classes": {
     "ARCH": 1,
     "CI": 2,
@@ -19,7 +19,7 @@
     "PROHIB": 10,
     "RELEASE-NOTES": 31,
     "RULESET": 61,
-    "SEAM": 30,
+    "SEAM": 32,
     "SESSION": 9,
     "WAVE": 5,
     "WORKSTREAM": 5,
@@ -1245,6 +1245,16 @@
       "id": "SEAM.capability-activation-precedence-owner.owns",
       "klass": "SEAM",
       "value": "the config-key four-level precedence walk (loadConfig result → workstream config.json → root config.json → registry.configSchema default → absent), owned solely by src/capability-activation.cts"
+    },
+    {
+      "id": "SEAM.dispatch-isolation-vocabulary.enforced-by",
+      "klass": "SEAM",
+      "value": "test:tests/host-integration-validator-parity.test.cjs"
+    },
+    {
+      "id": "SEAM.dispatch-isolation-vocabulary.owns",
+      "klass": "SEAM",
+      "value": "DISPATCH_ISOLATION_MODES / BASE_CHECK_ISOLATION_MODES in src/dispatch-isolation.cts are the single declaration of the dispatch-isolation vocabulary and its worktree-creating subset (#4561)"
     },
     {
       "id": "SEAM.evaluation-scope.enforced-by",

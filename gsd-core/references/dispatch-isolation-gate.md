@@ -51,9 +51,11 @@ if [ "$ISOLATION" = "none" ] && [ "$USE_WORKTREES" != "false" ]; then
   exit 1
 fi
 
-# Re-record: the opt-out above is decided in shell, where the resolver cannot see
-# it, so the sentinel still asserts the naturally-resolved mode. See "Re-record
-# after every degrade" below — this is the first of the mandatory calls.
+# Re-record: the resolver re-derives the opt-out (#3737) and the base-check (#4222)
+# for the decision it records, so the sentinel already carries the opt-out decided
+# above; this call still pushes the shell's FINAL value through the same write path.
+# See "Re-record after every degrade" below — this is the first of the mandatory
+# calls, and the orchestrator-worktree fallback further down has its own.
 gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" >/dev/null 2>&1 || true
 ```
 
@@ -108,8 +110,10 @@ dispatch.** This is not optional bookkeeping — it is what keeps the dispatch l
 (`.gsd/dispatch-isolation-sentinel.json`) as an unconditional side effect, and the shipped
 `PreToolUse` isolation guards read that sentinel at the instant of the dispatch call
 (`hooks/gsd-agent-isolation-guard.js`, `hooks/gsd-cursor-subagent-start.js`, shared reader
-`hooks/lib/isolation-sentinel.js`, #3045). Every degrade in this file is decided **in shell**,
-where the resolver cannot see it. Degrade without re-recording and the sentinel still asserts
+`hooks/lib/isolation-sentinel.js`, #3045). The resolver re-derives two of these degrades itself
+for the decision it records — the project opt-out (#3737) and the `worktree.base-check` divergence
+(#4222) — but every other degrade in this file is decided **in shell**, where the resolver cannot
+see it. Degrade without re-recording and the sentinel still asserts
 `harness-worktree` while the dispatch correctly omits the harness flag — the guard reads that
 as a dropped isolation flag and **denies the dispatch with exit 2**. The task does not run
 unisolated; it does not run at all.
@@ -120,10 +124,21 @@ gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" >/dev/null
 
 `--force-isolation` pushes the final, shell-computed value through the same single write path
 (`none` also clears the stored `harnessFlag`, since none applies to sequential dispatch). It is
-idempotent and last-write-wins, so a site that degrades more than once simply calls it again —
-record immediately before dispatch so the sentinel is always fresh. Best-effort by design: a
-write failure must never fail the dispatch, since the guards' sentinel-absent fallback is safe,
-just less precise.
+idempotent and last-write-wins among forced records, so a site that degrades more than once
+simply calls it again — record immediately before dispatch so the sentinel is always fresh.
+Best-effort by design: a write failure must never fail the dispatch, since the guards'
+sentinel-absent fallback is safe, just less precise.
+
+**A plain re-query does not undo it (#4561).** Once a fresh `none` is recorded, a later plain
+`query dispatch-isolation` — the `--json` harness-flag read above, a subagent's own `gsd_run`
+traffic, a wave transition — *holds* that record instead of re-persisting the host capability
+over it, provided it names no different `--phase`/`--plan` (an identifier it omits is
+unconstrained; one it names must match). Its **stdout is unchanged** — it still answers the
+capability question every gate in this file branches on — only the sentinel write is skipped.
+A forced record always writes, a plain query scoped to a *different* plan writes (the per-plan
+gate's fresh record for the next plan), and a record past the reader's freshness window is
+replaced as before, so nothing is permanently sticky. The re-record is still mandatory: the
+resolver cannot compute these degrades itself, it only stops racing you for the file.
 
 Wave sites re-record per plan rather than per phase — see
 `gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md`.
