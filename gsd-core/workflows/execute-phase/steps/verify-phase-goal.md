@@ -15,7 +15,8 @@ table in `aggregate_results`, the roadmap/state writes after a `passed` verdict)
 **Inputs — one bundle for both callers.** The `gsd_run query init.execute-phase "${PHASE_NUMBER}"`
 bundle (execute-phase loaded it in `initialize`; verify-work loads the same query before including
 this file). From it: `phase_dir` (`PHASE_DIR`), `phase_number` (`PHASE_NUMBER`),
-`verifier_model`, `phase_req_ids`, `requirements_path`, `section_manifest`, `response_language`.
+`verifier_model`, `phase_req_ids` (`PHASE_REQ_IDS`; `TBD` when the phase maps none, as at `plan:post`),
+`requirements_path`, `section_manifest`, `response_language`.
 The phase goal is the `**Goal**` of this phase in ROADMAP.md, loaded explicitly below as `PHASE_GOAL`
 (`roadmap.get-phase --pick goal`, the query `verify-work/steps/mvp-uat-framing.md` uses) — the same
 value for both callers, never left for the model to resolve. Resolve the rest the same way:
@@ -28,6 +29,8 @@ GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*
 VERIFIER_SKILLS=$(gsd_run query agent-skills gsd-verifier ${GSD_WS:+--ws=${GSD_WS##* }})
 CONTEXT_WINDOW=$(gsd_run query config-get context_window --raw 2>/dev/null || echo "200000")
 PHASE_GOAL=$(gsd_run query roadmap.get-phase "${PHASE_NUMBER}" ${GSD_WS:+--ws} ${GSD_WS:+"${GSD_WS##*[[:space:]]}"} --pick goal)
+PHASE_REQ_IDS=$(gsd_run query init.execute-phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }} --pick phase_req_ids 2>/dev/null)
+PHASE_REQ_IDS="${PHASE_REQ_IDS:-TBD}"
 ```
 </step>
 
@@ -85,7 +88,7 @@ advisory throughout: it never blocks.
 
 **Error handling:** If the Skill invocation fails or throws, catch the error, display "Code review encountered an error (non-blocking): {error}" and proceed to gate dispatch. Review failures must never block execution.
 
-**Execute:post gate hook dispatch.** After code review, dispatch all active gate hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "gate"`. ⚠ **Validate `check` before shell use** (third-party manifest input) — `loop-hook-dispatch.md` § `gate`. For each, run the form below, or — for a `predicate` gate (ADR-2008 / #2008) — `gsd_run check predicate --predicate '<predicate JSON>' --phase-number "${PHASE_NUMBER}" --raw`:
+**Execute:post gate hook dispatch.** After code review, dispatch all active gate hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "gate"`. ⚠ **Validate `check` before shell use** (third-party manifest input) — `loop-hook-dispatch.md` § `gate`. For each, run the form below, or — for a `predicate` gate (ADR-2008 / #2008) — `gsd_run check predicate --predicate '<predicate JSON>' --phase-number "${PHASE_NUMBER}" --phase-dir "${PHASE_DIR}" --phase-req-ids "${PHASE_REQ_IDS}" --raw`:
 
 ```bash
 GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw) && CHECK_EXIT=0 || CHECK_EXIT=$?
