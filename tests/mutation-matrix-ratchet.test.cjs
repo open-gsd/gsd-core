@@ -228,9 +228,8 @@ const RATCHET_BASELINE = {
                                    // `Stryker (state-contract)`: measured 66.25%; floor(66.25)-1.
                                    // Below TARGET_MUTATION_SCORE (80) — ratchet candidate like
                                    // planning-inspect / model-catalog above; raise as tests improve.
-  'dispatch-isolation':      84,  // #4904: net-new module; 85.29% with the CI shard's inputs
-                                   // (0 timeouts, 5 equivalent survivors); floor(85.29)-1.
-                                   // Provisional until PR #5126's CI shard confirms it.
+  'dispatch-isolation':      84,  // #4904: net-new module; CI run 38048199134 (PR #5126):
+                                   // measured 85.29%; floor(85.29)-1.
 };
 
 describe('mutation-matrix ratchet: floor equality enforcement', () => {
