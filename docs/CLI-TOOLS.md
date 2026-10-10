@@ -156,6 +156,7 @@ Manage phases — directories, numbering, and roadmap sync.
 node gsd-tools.cjs find-phase <phase>
 
 # Calculate next decimal phase number for insertions
+# (bracket convention: canonical two-digit sub-phase, see below)
 node gsd-tools.cjs phase next-decimal <phase>
 
 # Append new phase to roadmap + create directory
@@ -165,6 +166,8 @@ node gsd-tools.cjs phase add <description>
 node gsd-tools.cjs phase insert <after> <description> [--sibling]
 
 # Remove phase, renumber subsequent
+# (bracket convention: also reports roadmap_lines_rewritten and
+# references_left_untouched, see below)
 node gsd-tools.cjs phase remove <phase> [--force]
 
 # Mark phase complete, update state + roadmap
@@ -187,6 +190,64 @@ node gsd-tools.cjs phases list [--type planned|executed|all] [--phase N] [--incl
 # used by /gsd-new-milestone before roadmapping the next cycle
 node gsd-tools.cjs phases clear [--confirm] [--force] [--archive-version <version>]
 ```
+
+### Bracket phase ids (`phase remove`, `phase next-decimal`)
+
+When `phase_id_convention` is `"bracket"` (see [CONFIGURATION.md](CONFIGURATION.md)),
+these commands work on the active milestone's `[CODE.MM] NN` identities:
+
+- `phase next-decimal <phase>` inventories every spelling the readers accept
+  for that parent, on disk and in `ROADMAP.md` (bracket and legacy directories,
+  headings, checklist rows), and returns the next sub-phase in canonical
+  two-digit form (`02.03`, not `2.3`). The legacy `999` backlog parent keeps
+  its upstream spelling.
+- `phase remove <phase>` accepts a bare number (`2`, `02`), a qualified id
+  (`CK.02-02`, `CK.02-01.01`) or the display form (`[CK.02] 02`). It deletes
+  the phase, renumbers the milestone's later phases and sub-phases on disk and
+  in `ROADMAP.md` from one mapping, and leaves shipped and archived history
+  byte-identical. It refuses, before anything is deleted or renamed, in the
+  cases listed below.
+
+`phase remove` refuses, with nothing changed, when:
+
+- the phase is outside the active milestone, has executed plans (without
+  `--force`) or live sub-phases, or resolves only to legacy-spelled artifacts;
+- a pipe-table row keyed by the removed id would survive outside the
+  milestone's own Progress tables: a shared Progress table the rewrite cannot
+  attribute, or any other phase-keyed table (for example a Requirements
+  Traceability table) under a heading of any level. A Progress-table row is
+  one whose nearest heading is a Progress-titled heading, a phase heading or
+  the milestone heading itself;
+- a phase id in the active milestone, such as `02a`, is one the bracket grammar
+  cannot represent and the removal would renumber it;
+- the `STATE.md` current phase (frontmatter `current_phase`, the
+  `Current Phase` field, or the Current Position `Phase:` line, read in that
+  order) is the removed phase or a phase the removal renumbers, that is, the
+  target is the current phase or any phase before it. Bracket `phase remove` deletes only phases after the current phase, because
+  it does not rewrite the current-phase fields. To remove such a phase, point
+  the current phase at a phase before the target, or, when there is none,
+  clear the current-phase fields, then retry. A current phase qualified with
+  another milestone (`[CK.01] 02`) does not count.
+
+Known limits of bracket `phase remove`, which it neither rewrites nor refuses:
+
+- A checklist row for the removed id outside the active milestone window (a
+  stale copy elsewhere in `ROADMAP.md`) is kept as written and is not
+  reported.
+- The dash form is matched case-sensitively: `CK.02-03` is renumbered and
+  reported, `ck.02-03` is neither.
+- Paths are recognized only with forward slashes. A plan or summary filename
+  after a backslash (`phases\CK.02-03-three\03-01-PLAN.md`) is renumbered as
+  a bare artifact reference, where the forward-slash form is left alone.
+- An on-disk `CK.MM-NNa` directory with no `ROADMAP.md` line is not checked;
+  the unrepresentable-id refusal reads `ROADMAP.md` only.
+
+The bracket `phase remove` JSON output adds two fields:
+
+| Field | Meaning |
+|---|---|
+| `roadmap_lines_rewritten` | Number of `ROADMAP.md` edits: the deleted phase section counts once, plus each deleted owned line (checklist row, Progress row) and each line whose references were renumbered. |
+| `references_left_untouched` | Line numbers, in the written `ROADMAP.md`, of live lines in the active milestone that still mention the removed id or a pre-renumber id in any spelling (for example prose such as `Phase 03`). Review these by hand. Empty when nothing was left. |
 
 ### Milestone-scoped phase listing (`phases list`)
 

@@ -54,6 +54,8 @@ const BASE_SITES = [
     baseline: B.ANY_BRACKET, src: '(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+' },
   { file: 'commands.cts', site: 'cmdStats headingPattern',
     baseline: B.ANY_BRACKET, src: '(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+' },
+  { file: 'phase.cts', site: 'scanExistingBracketDecimalPhaseNumbers entryPattern',
+    baseline: B.ANY_BRACKET, src: '(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+' },
   // #2761 B2: BRACKET_PHASE_TAIL_RE (isBracketMilestoneBoundary's phase-tail
   // discriminator) always passes the literal 'bracket' convention — it is not
   // itself convention-gated (the CALLER, isBracketMilestoneBoundary, is only
@@ -117,6 +119,14 @@ const BASE_SITES = [
     baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
   { file: 'state.cts', site: 'cmdStateSync roadmapPhaseCount', baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
   { file: 'state.cts', site: 'extractRetiredPhaseNumbers phaseRef',
+    baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
+  // #4304 PR-4: phase insert now selects the convention-gated heading intro
+  // before locating its target phase's heading.
+  { file: 'phase.cts', site: 'cmdPhaseInsert headingIntro',
+    baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
+  { file: 'phase.cts', site: 'getRoadmapModeForPhase headingIntro',
+    baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
+  { file: 'phase.cts', site: 'bracket phase-remove owned-line classifier',
     baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
   // #3309/#3310 moved the health reads out of verify.cts and into the parsed
   // planning snapshot consumed by the diagnostic rule table. Pin the same two
@@ -727,6 +737,7 @@ describe('#612 PR-2: every selector call site declares the right baseline (live 
   const EXPECTED = {
     'commands.cts': [1, 0],
     'init.cts': [0, 2],
+    'phase.cts': [1, 9],
     'roadmap.cts': [3, 3],
     'validate.cts': [1, 2],
     'state.cts': [0, 3],
@@ -734,10 +745,9 @@ describe('#612 PR-2: every selector call site declares the right baseline (live 
     'roadmap-parser.cts': [2, 2],
     'roadmap-upgrade.cts': [0, 1],
     // #5007 (Phase 6 / ADR-4910 §8): phase.cts became a real selector consumer
-    // once its 11 grandfathered sites migrated onto phaseHeadingPrefixSrcFor /
-    // buildPhaseHeadingScanRegex / buildPhaseHeadingRegex — 6 of those calls
-    // are direct (census-visible) phaseHeadingPrefixSrcFor invocations.
-    'phase.cts': [0, 6],
+    // once its six Phase 6 sites migrated onto phaseHeadingPrefixSrcFor /
+    // buildPhaseHeadingScanRegex / buildPhaseHeadingRegex. Combined with the
+    // three PR-4 label-only sites above, its live census is 1 + 9.
   };
 
   for (const [file, [anyBracket, labelOnly]] of Object.entries(EXPECTED)) {
