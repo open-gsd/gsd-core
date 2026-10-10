@@ -703,6 +703,24 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
     assert.equal(DISPATCH_ISOLATION_VOCABULARY.size, DISPATCH_ISOLATION_MODES.length);
   });
 
+  test('the sealed views answer the rest of the ReadonlySet read surface as a real Set of the same members would', () => {
+    // The seal replaces the Set with a plain object, so every read method is
+    // hand-delegated; one that is never called can return nothing and stay
+    // green. Compare each against a native Set built from the same tuple.
+    for (const [view, modes] of [
+      [DISPATCH_ISOLATION_VOCABULARY, DISPATCH_ISOLATION_MODES],
+      [BASE_CHECK_ISOLATION_VOCABULARY, BASE_CHECK_ISOLATION_MODES],
+    ]) {
+      const native = new Set(modes);
+      assert.deepEqual([...view.keys()], [...native.keys()], 'keys()');
+      assert.deepEqual([...view.entries()], [...native.entries()], 'entries() yields [value, value] pairs');
+      const calls = [];
+      const thisArg = { marker: true };
+      view.forEach(function (value, key, set) { calls.push([value, key, set === view, this === thisArg]); }, thisArg);
+      assert.deepEqual(calls, modes.map((m) => [m, m, true, true]), 'forEach passes (value, value, the view) with thisArg bound');
+    }
+  });
+
   test('worktree base-check --mode consumes the subset: `none` and a bogus value are rejected with a message derived from the owner', () => {
     const expectedList = BASE_CHECK_ISOLATION_MODES.join(' or ');
     for (const rejected of ['none', 'bogus-mode']) {
