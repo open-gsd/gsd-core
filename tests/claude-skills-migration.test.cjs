@@ -17,7 +17,7 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, sandboxHome } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -342,7 +342,15 @@ describe('installRuntimeArtifacts path replacement in Claude global skills (#165
     cleanup(tmpDir);
   });
 
-  test('replaces ~/.claude/ and $HOME/.claude/ paths with absolute configDir prefix on global install', () => {
+  function useFixtureHome(t) {
+    // Keep the config fixture outside HOME even when the OS temp dir is under it.
+    const fixtureHome = path.join(tmpDir, 'home');
+    fs.mkdirSync(fixtureHome);
+    sandboxHome(t, fixtureHome);
+  }
+
+  test('replaces ~/.claude/ and $HOME/.claude/ paths with absolute configDir prefix on global install', (t) => {
+    useFixtureHome(t);
     // Global install: configDir IS the runtime config directory.
     // computePathPrefix(isGlobal=true) → resolvedTarget + '/'.
     // applyRuntimeContentRewritesInPlace rewrites ~/.claude/ and $HOME/.claude/
@@ -380,7 +388,8 @@ describe('installRuntimeArtifacts path replacement in Claude global skills (#165
     );
   });
 
-  test('replaces $HOME/.claude/ paths with absolute configDir prefix on global install', () => {
+  test('replaces $HOME/.claude/ paths with absolute configDir prefix on global install', (t) => {
+    useFixtureHome(t);
     const { configDir } = setupConfigDir(tmpDir, {
       'debug.md': '---\nname: gsd:debug\ndescription: Debug\n---\n\n@$HOME/.claude/gsd-core/workflows/debug.md',
     });
@@ -398,7 +407,8 @@ describe('installRuntimeArtifacts path replacement in Claude global skills (#165
     );
   });
 
-  test('global install rewrites ~/.claude/ paths to absolute configDir form', () => {
+  test('global install rewrites ~/.claude/ paths to absolute configDir form', (t) => {
+    useFixtureHome(t);
     // For global installs, computePathPrefix returns the absolute configDir path.
     // Both ~/.claude/ and $HOME/.claude/ are normalized to the same absolute prefix.
     const { configDir } = setupConfigDir(tmpDir, {
