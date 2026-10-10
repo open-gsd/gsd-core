@@ -34,6 +34,12 @@
  * - "AC5: --amend remains exempt from the empty-diff guard" — runs a real executable pre-commit hook installed with a POSIX mode bit (chmod-mode-bit)
  * - "a cherry-pick in progress keeps its pre-existing outcome" — runs a real executable pre-commit hook installed with a POSIX mode bit (chmod-mode-bit)
  * - "a revert in progress still reports nothing_to_commit, not the hook rejection" — runs a real executable pre-commit hook installed with a POSIX mode bit (chmod-mode-bit)
+ * - "a --cwd that is a symlink from main into the worktree still commits in the worktree" — creates a real directory symlink/junction from the main checkout into a linked worktree (symlink-keyword)
+ * - "the root comes back in the cwd's own spelling when it names the same directory" — creates a real directory symlink/junction to a linked worktree (symlink-keyword)
+ * - "a symlinked alias into a linked worktree is still a project to the isolation guards" — creates a real directory symlink/junction into a linked worktree (symlink-keyword)
+ * - "an alias to a config-less .planning/ inside a project is blocked like the real path" — creates a real directory symlink/junction inside a project (symlink-keyword)
+ * - "an alias into a non-git project is evaluated like the real path" — creates a real directory symlink/junction into a project (symlink-keyword)
+ * - "a worktree whose path ends in a space still owns its subdirectory" — a trailing space is not a valid Windows path component (process-platform)
  */
 
 const { test, describe, after, beforeEach, afterEach } = require('node:test');
@@ -44,6 +50,7 @@ const os = require('os');
 const {
   runGsdTools,
   createTempProject,
+  createTempGitProject,
   createTempDir,
   cleanup,
   captureFdSync,
@@ -918,5 +925,146 @@ describe('#3776: query commit --files reports an empty diff as nothing_to_commit
     assert.strictEqual(output.committed, false);
     assert.strictEqual(output.reason, 'nothing_to_commit',
       'a revert permits partial commits, so the empty-diff guard must still apply');
+  });
+});
+
+// ─── #4885 — a linked-worktree subdirectory must not commit into main ───────
+
+describe('#4885 regression: linked-worktree subdirectory resolves to its own worktree', () => {
+  const head = (cwd) => gitOrThrow(['rev-parse', 'HEAD'], { cwd }).trim();
+  const dirs = [];
+  after(() => { for (const d of dirs) cleanup(d); });
+
+  function mainWithWorktree() {
+    const main = createTempGitProject('gsd-4885-main-');
+    dirs.push(main);
+    fs.writeFileSync(path.join(main, '.planning', 'STATE.md'), '# State\n');
+    gitOrThrow(['add', '-A'], { cwd: main });
+    gitOrThrow(['commit', '-m', 'seed'], { cwd: main });
+    const parent = createTempDir('gsd-4885-wt-');
+    dirs.push(parent);
+    const wt = path.join(parent, 'wt');
+    gitOrThrow(['worktree', 'add', '-b', 'wt-branch', wt], { cwd: main });
+    const sub = path.join(wt, 'src', 'deeper');
+    fs.mkdirSync(sub, { recursive: true });
+    return { main, wt, sub };
+  }
+
+  test('a --cwd that is a symlink from main into the worktree still commits in the worktree', () => {
+    const { main, wt, sub } = mainWithWorktree();
+    const link = path.join(main, 'wt-link');
+    fs.symlinkSync(sub, link, 'junction');
+    fs.appendFileSync(path.join(wt, '.planning', 'STATE.md'), 'worktree edit\n');
+    fs.appendFileSync(path.join(main, '.planning', 'STATE.md'), 'main edit\n');
+    const mainBefore = head(main);
+    const wtBefore = head(wt);
+    const res = runGsdTools(['commit', 'docs: via link', '--files', '.planning/STATE.md', '--cwd', link], main);
+    assert.ok(res.success, `commit failed: ${res.error}`);
+    assert.equal(head(main), mainBefore, 'main checkout HEAD must not move');
+    assert.notEqual(head(wt), wtBefore, 'the worktree the link points into must receive the commit');
+  });
+
+  // trek-e review 2026-10-10, Minor 3: one spelling per root. A cwd reached
+  // through a link to the worktree resolves to the root in the cwd's own
+  // spelling — what the root resolves to from itself — and the --cwd-link
+  // row above (a link whose lexical parents are NOT the worktree's) still
+  // gets the canonical one.
+  test('the root comes back in the cwd\'s own spelling when it names the same directory', () => {
+    const { ownWorktreePlanningRoot } = require('../gsd-core/bin/lib/worktree-safety.cjs');
+    const { resolveMainWorktreeCwd } = require('../gsd-core/bin/gsd-tools.cjs');
+    const { wt, sub } = mainWithWorktree();
+    const linkParent = createTempDir('gsd-4885-spell-');
+    dirs.push(linkParent);
+    const link = path.join(linkParent, 'wt-link');
+    fs.symlinkSync(wt, link, 'junction');
+    const viaLink = path.join(link, path.relative(wt, sub));
+    assert.equal(ownWorktreePlanningRoot(viaLink).root, link);
+    assert.equal(resolveMainWorktreeCwd(viaLink), link);
+    assert.equal(ownWorktreePlanningRoot(sub).root, path.resolve(wt), 'an unlinked cwd keeps its spelling too');
+  });
+
+  // Codex review: a worktree whose top-level path ends in whitespace is a legal
+  // POSIX path; git's `--show-toplevel` answer lost it to the subprocess seam's
+  // stdout trim, and the subdirectory resolved to main again (#4885 itself).
+  test('a worktree whose path ends in a space still owns its subdirectory', (t) => {
+    if (process.platform === 'win32') {
+      t.skip('a trailing space is not a valid Windows path component');
+      return;
+    }
+    const { ownWorktreePlanningRoot } = require('../gsd-core/bin/lib/worktree-safety.cjs');
+    const { resolveMainWorktreeCwd } = require('../gsd-core/bin/gsd-tools.cjs');
+    const main = createTempGitProject('gsd-4885-space-');
+    dirs.push(main);
+    fs.writeFileSync(path.join(main, '.planning', 'STATE.md'), '# State\n');
+    gitOrThrow(['add', '-A'], { cwd: main });
+    gitOrThrow(['commit', '-m', 'seed'], { cwd: main });
+    const parent = createTempDir('gsd-4885-space-wt-');
+    dirs.push(parent);
+    const wt = path.join(parent, 'wt ');
+    gitOrThrow(['worktree', 'add', '-b', 'space-branch', wt], { cwd: main });
+    const sub = path.join(wt, 'src');
+    fs.mkdirSync(sub);
+    assert.equal(ownWorktreePlanningRoot(sub).root, path.resolve(wt));
+    assert.equal(resolveMainWorktreeCwd(sub), path.resolve(wt));
+  });
+
+  // Codex review round 3: an alias must reach the same verdict as the path it
+  // names. git reports a relative common dir against the physical cwd, so the
+  // alias case resolved it under the alias and read as "another repository".
+  test('an alias to a config-less .planning/ inside a project is blocked like the real path', () => {
+    const { evaluateDispatch } = require('../hooks/gsd-agent-isolation-guard.js');
+    // A MAIN checkout: there git reports the common dir relative (`../.git`).
+    const { main } = mainWithWorktree();
+    fs.writeFileSync(path.join(main, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    const shadow = path.join(main, 'shadow');
+    fs.mkdirSync(path.join(shadow, '.planning'), { recursive: true });
+    fs.mkdirSync(path.join(main, 'aliases'));
+    const link = path.join(main, 'aliases', 'link');
+    fs.symlinkSync(shadow, link, 'junction');
+    const payload = (cwd) => ({ tool_name: 'Agent', cwd, tool_input: { subagent_type: 'gsd-executor' } });
+    const direct = evaluateDispatch(payload(shadow));
+    const viaLink = evaluateDispatch(payload(link));
+    assert.equal(direct.action, 'block', JSON.stringify(direct));
+    assert.deepEqual([viaLink.action, viaLink.reasonCode], [direct.action, direct.reasonCode]);
+  });
+
+  test('an alias into a non-git project is evaluated like the real path', () => {
+    const { evaluateDispatch } = require('../hooks/gsd-agent-isolation-guard.js');
+    const project = createTempDir('gsd-4885-nongit-');
+    dirs.push(project);
+    fs.mkdirSync(path.join(project, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(project, '.planning', 'config.json'), '{ not json');
+    const deep = path.join(project, 'src', 'deep');
+    fs.mkdirSync(deep, { recursive: true });
+    const aliasParent = createTempDir('gsd-4885-nongit-alias-');
+    dirs.push(aliasParent);
+    const alias = path.join(aliasParent, 'alias');
+    fs.symlinkSync(deep, alias, 'junction');
+    const payload = (cwd) => ({ tool_name: 'Agent', cwd, tool_input: { subagent_type: 'gsd-executor' } });
+    const direct = evaluateDispatch(payload(deep));
+    const viaAlias = evaluateDispatch(payload(alias));
+    assert.equal(direct.action, 'block', JSON.stringify(direct));
+    assert.deepEqual([viaAlias.action, viaAlias.reasonCode], [direct.action, direct.reasonCode]);
+  });
+
+  // Codex review: an alias whose lexical ancestors hold no project was
+  // "not a project" to the guards' pure-fs probe; the canonical path is probed
+  // when the lexical one finds nothing.
+  test('a symlinked alias into a linked worktree is still a project to the isolation guards', () => {
+    const { resolveGuardProject } = require('../hooks/lib/isolation-sentinel.js');
+    const { resolveMainWorktreeCwd } = require('../gsd-core/bin/gsd-tools.cjs');
+    const { wt, sub } = mainWithWorktree();
+    fs.writeFileSync(path.join(wt, '.planning', 'config.json'), '{}');
+    const aliasParent = createTempDir('gsd-4885-alias-');
+    dirs.push(aliasParent);
+    const alias = path.join(aliasParent, 'alias');
+    fs.symlinkSync(sub, alias, 'junction');
+    const verdict = resolveGuardProject(alias);
+    assert.equal(verdict.project, true, JSON.stringify(verdict));
+    // `.native` on both sides: plain realpathSync keeps a Windows 8.3 short
+    // name (RUNNER~1) that the resolver's `.native` expands.
+    assert.equal(fs.realpathSync.native(verdict.root), fs.realpathSync.native(wt));
+    assert.equal(fs.realpathSync.native(verdict.sentinelRoot), fs.realpathSync.native(resolveMainWorktreeCwd(alias)),
+      'the sentinel is read where gsd-tools writes it from the same cwd');
   });
 });

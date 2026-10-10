@@ -1074,3 +1074,144 @@ describe('gsd-cursor-subagent-start.js: #3582 cold tree — RuntimeBuildError su
     assert.ok(out.user_message.length > 0);
   });
 });
+
+describe('gsd-cursor-subagent-start.js: #4885 — workspace root is a project subdirectory', () => {
+  // Project existence was checked at the raw workspace root while the
+  // sentinel was read from the resolved project root, so a workspace opened
+  // on a subdirectory was allowed inert. Isolation evidence still uses the
+  // raw workspace root (it asks where the workspace physically is).
+  let harnessProject;
+  let subdir;
+
+  before(() => {
+    harnessProject = makeGitProject('gsd-cs-4885-', JSON.stringify({ runtime: 'cursor' }));
+    subdir = path.join(harnessProject, 'src', 'deep');
+    fs.mkdirSync(subdir, { recursive: true });
+  });
+
+  after(() => {
+    cleanup(harnessProject);
+  });
+
+  test('unisolated main-checkout subdirectory, harness-worktree, executor -> DENY (was an inert allow)', () => {
+    const r = runHook(subagentPayload([subdir]));
+    assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.permission, 'deny');
+    assert.match(out.user_message, /not an isolated Cursor worktree/);
+  });
+
+  test('fresh sentinel at the project root (isolation=none) is consulted from the subdirectory -> allow', (t) => {
+    writeSentinel(harnessProject, { isolation: 'none' });
+    t.after(() => cleanup(path.join(harnessProject, '.gsd')));
+    const r = runHook(subagentPayload([subdir]));
+    assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    assert.equal(JSON.parse(r.stdout).permission, undefined);
+  });
+
+  // trek-e review 2026-10-10, Major 1: a build failure while resolving a
+  // subdirectory's project degraded to the raw root ("not a project", allow).
+  test('cold runtime library, workspace root a project subdirectory -> DENY runtime_build_failed', (t) => {
+    const { buildColdInstallTree } = require('./helpers/cold-runtime-lib-fixture.cjs');
+    const cold = buildColdInstallTree();
+    t.after(cold.cleanup);
+    const env = { ...process.env };
+    delete env.GSD_RUNTIME;
+    delete env.CURSOR_CONFIG_DIR;
+    const r = toLegacyResult(runNode([path.join(cold.hooksDir, 'gsd-cursor-subagent-start.js')], {
+      input: JSON.stringify(subagentPayload([subdir])),
+      cwd: require('node:os').tmpdir(),
+      env,
+      timeoutMs: PROBE_TIMEOUT_MS,
+    }));
+    assert.equal(r.status, 0, `this hook always exits 0; stdout: ${r.stdout} stderr: ${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.permission, 'deny');
+    assert.equal(out.reason_code, REASON_CODE.RUNTIME_BUILD_FAILED);
+  });
+
+  // trek-e review 2026-10-10, Minor 4: isolation EVIDENCE stays on the raw
+  // workspace root while project resolution moves to the project root. Pinned
+  // where the two differ: a Cursor-managed worktree (under CURSOR_CONFIG_DIR,
+  // here inside the main checkout) with no project of its own resolves its
+  // project to the main checkout — which is NOT isolated — while the raw root
+  // is. Evidence taken from the project root would deny; from the raw root, allow.
+  test('workspace root a subdirectory of a managed worktree whose project is the main checkout -> allow (evidence on the raw root)', (t) => {
+    const main = makeGitProject('gsd-cs-4885-ev-', JSON.stringify({ runtime: 'cursor' }));
+    t.after(() => cleanup(main));
+    fs.writeFileSync(path.join(main, '.gitignore'), '.planning/\n.cursor-home/\n');
+    git(['rm', '-r', '-q', '--cached', '.planning'], main);
+    git(['add', '-A'], main);
+    git(['commit', '-q', '-m', 'untrack planning'], main);
+    const cursorConfigDir = path.join(main, '.cursor-home');
+    const managed = path.join(cursorConfigDir, 'worktrees', 'agent-1');
+    git(['worktree', 'add', '-q', '-b', 'agent-ev', managed], main);
+    assert.ok(!fs.existsSync(path.join(managed, '.planning')), 'fixture premise: the managed worktree has no project of its own');
+    const workspace = path.join(managed, 'src');
+    fs.mkdirSync(workspace);
+    const r = runHook(subagentPayload([workspace]), { CURSOR_CONFIG_DIR: cursorConfigDir });
+    assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    assert.equal(JSON.parse(r.stdout).permission, undefined, r.stdout);
+    // Control: the same project, workspace opened on the main checkout's own
+    // subdirectory (not isolated) -> deny. The allow above is the evidence,
+    // not an inert verdict.
+    const mainSub = path.join(main, 'src');
+    fs.mkdirSync(mainSub);
+    const denied = runHook(subagentPayload([mainSub]), { CURSOR_CONFIG_DIR: cursorConfigDir });
+    assert.equal(JSON.parse(denied.stdout).permission, 'deny', denied.stdout);
+  });
+});
+
+describe('#4885: the guards read the sentinel where gsd-tools wrote it, through a .planning symlink', () => {
+  // The supported external-planning convention: `.planning` is a symlink to a
+  // separate store (src/project-root.cts, #4815). gsd-tools' root walk is
+  // lexical, so a decision recorded from `<project>/.planning/phases/01` lands
+  // in `<project>`. A reader that canonicalized the cwd first resolved into the
+  // store instead, missed the sentinel, and allowed a dispatch the recorded
+  // `harness-worktree` decision blocks. Lives beside the symlink spoofing test
+  // above (same Windows skip).
+  let store;
+  let project;
+  let phaseDir;
+  let symlinkError = null;
+
+  before(() => {
+    store = createTempDir('gsd-cs-4885-store-');
+    git(['init'], store);
+    fs.writeFileSync(path.join(store, 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    fs.mkdirSync(path.join(store, 'phases', '01'), { recursive: true });
+    project = createTempDir('gsd-cs-4885-proj-');
+    git(['init'], project);
+    try {
+      fs.symlinkSync(store, path.join(project, '.planning'), 'dir');
+    } catch (err) {
+      symlinkError = err;
+    }
+    phaseDir = path.join(project, '.planning', 'phases', '01');
+  });
+
+  after(() => {
+    cleanup(project);
+    cleanup(store);
+  });
+
+  test('a harness-worktree decision recorded from inside the linked .planning blocks an unflagged dispatch there', (t) => {
+    if (symlinkError) {
+      t.skip('directory symlinks require elevated privileges on this platform');
+      return;
+    }
+    const { TOOLS_PATH: toolsPath, TEST_ENV_BASE } = require('./helpers.cjs');
+    const rec = runNode([toolsPath, 'query', 'record-dispatch-isolation', '--isolation', 'harness-worktree',
+      '--harness-flag', 'isolation="worktree"', '--json', '--cwd', phaseDir],
+    { cwd: phaseDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(rec.exitCode, 0, rec.stderr);
+    assert.equal(JSON.parse(rec.stdout).recorded, true);
+
+    const { evaluateDispatch } = require('../hooks/gsd-agent-isolation-guard.js');
+    const r = evaluateDispatch({ tool_name: 'Agent', cwd: phaseDir, tool_input: { subagent_type: 'gsd-executor' } });
+    assert.equal(r.action, 'block', JSON.stringify(r));
+    // Codex review round 3: the Cursor guard reads the same recorded decision.
+    const cursorVerdict = require('../hooks/gsd-cursor-subagent-start.js').evaluateRootIsolation(phaseDir, 'gsd-executor');
+    assert.equal(cursorVerdict.action, 'deny', JSON.stringify(cursorVerdict));
+  });
+});

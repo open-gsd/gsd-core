@@ -178,10 +178,13 @@ function readWorktreeList(repoRoot: string, deps: WorktreeDeps = {}): WorktreeLi
   };
 }
 
+/** Why a worktree root resolved where it did — the closed set the root resolvers return. */
+type WorktreeRootReason = 'has_local_planning' | 'linked_worktree' | 'main_worktree' | 'not_git_repo' | 'git_timed_out';
+
 interface WorktreeContextResult {
   effectiveRoot: string;
   mode: string;
-  reason: string;
+  reason: WorktreeRootReason;
 }
 
 /**
@@ -241,6 +244,119 @@ function resolveWorktreeLinkage(cwd: string, deps: WorktreeDeps = {}): WorktreeC
     mode: 'current_directory',
     reason: 'main_worktree',
   };
+}
+
+/**
+ * #4885: the directory that owns `.planning/` inside `cwd`'s OWN linked
+ * worktree — the nearest one between `cwd` and that worktree's top level
+ * (inclusive) — or null when the worktree has none of its own. `.planning`
+ * must be a directory, as `findProjectRoot` requires (#4885 review): a
+ * regular file of that name is walked past.
+ *
+ * `resolveWorktreeLinkage` answers "which main checkout does this linked
+ * worktree belong to" — right for the isolation guard (#3045), wrong as a
+ * project root when the worktree has its own checked-out `.planning/`: from a
+ * SUBDIRECTORY of such a worktree, remapping to the main checkout made every
+ * planning write (and `commit`) land in a different checkout than the one
+ * the caller is in. A worktree with no `.planning/` of its own (planning
+ * untracked, so it lives only in the main checkout) still answers null here,
+ * so that remap is unchanged.
+ *
+ * The returned directory IS the project root: handing back `cwd` for a later
+ * lexical, depth-bounded ancestor walk to rediscover would let a symlinked
+ * `--cwd` walk into the main checkout, and a cwd deeper than that walk's
+ * bound miss the worktree's `.planning/`. The walk runs on the canonical
+ * path (realpath); the directory is returned in `cwd`'s own spelling when
+ * that names the same directory (a symlinked `/tmp` prefix), so a
+ * subdirectory resolves to the spelling its project root itself resolves to,
+ * and canonical only when a symlinked component makes the two differ.
+ *
+ * The walk stops at the worktree's own top level, so a worktree nested inside
+ * the main checkout (e.g. `.claude/worktrees/agent-*`) never sees the main
+ * checkout's `.planning/` as its own. Any git failure answers `root: null`;
+ * a git TIMEOUT also sets `timedOut`, so the caller can warn (#3050) instead of
+ * treating "could not look" as "has none".
+ */
+function ownWorktreePlanningRoot(cwd: string, deps: WorktreeDeps = {}): { root: string | null; timedOut: boolean } {
+  const execGit = deps.execGit || execGitDefault;
+  const none = { root: null, timedOut: false };
+
+  // `--show-cdup` (the `../` steps from cwd to the worktree top), not
+  // `--show-toplevel`: a top-level path ending in whitespace is legal, and the
+  // subprocess seam trims stdout; `../` steps survive trimming intact.
+  const cdup = execGit(['rev-parse', '--show-cdup'], { cwd });
+  if (cdup.timedOut) return { root: null, timedOut: true };
+  if (cdup.exitCode !== 0) return none;
+
+  let start: string;
+  let ownTop: string;
+  try {
+    // git counts the steps from cwd's realpath, so the walk runs on it (a
+    // symlinked cwd — macOS /tmp -> /private/tmp — stays inside the walk).
+    // `.native`: only it reliably expands Windows 8.3 short names.
+    start = fs.realpathSync.native(cwd);
+    ownTop = path.resolve(start, String(cdup.stdout).trim());
+  } catch {
+    return none;
+  }
+
+  // `lexical` walks up in step with `d`, in the caller's spelling.
+  let d = start;
+  let lexical = path.resolve(cwd);
+  for (;;) {
+    if (isDirectory(path.join(d, '.planning'))) return { root: spelledAs(lexical, d), timedOut: false };
+    if (d === ownTop) return none;
+    const next = path.dirname(d);
+    if (next === d) return none;
+    d = next;
+    lexical = path.dirname(lexical);
+  }
+}
+
+/** Whether `p` is a directory (through a symlink, as `findProjectRoot`'s check is). */
+function isDirectory(p: string): boolean {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** `lexical` when it is another spelling of the canonical `real`, else `real`. */
+function spelledAs(lexical: string, real: string): string {
+  try {
+    return fs.realpathSync.native(lexical) === real ? lexical : real;
+  } catch {
+    return real;
+  }
+}
+
+/**
+ * #4885: the ONE answer to "which worktree root owns `.planning/` for `cwd`" —
+ * `resolveWorktreeRoot`, except that a linked worktree carrying its own
+ * `.planning/` resolves to that (`ownWorktreePlanningRoot`), not to the main
+ * checkout. gsd-tools' root resolver (where the dispatch-isolation sentinel is
+ * WRITTEN) and the hooks' `resolveSentinelRoot` (where it is READ) both route
+ * through here, so whenever git answers, the two resolve the same checkout. A
+ * timed-out own-worktree probe reports `git_timed_out` (still rooted at the
+ * main checkout) so gsd-tools warns rather than silently writing there.
+ */
+function resolvePlanningWorktreeRoot(
+  cwd: string,
+  deps: {
+    resolveWorktreeRoot?: (cwd: string) => { root: string; reason: WorktreeRootReason };
+    ownWorktreePlanningRoot?: (cwd: string) => { root: string | null; timedOut: boolean };
+  } = {}
+): { root: string; reason: WorktreeRootReason } {
+  const resolveRoot = deps.resolveWorktreeRoot || resolveWorktreeRoot;
+  const ownRoot = deps.ownWorktreePlanningRoot || ownWorktreePlanningRoot;
+  const resolved = resolveRoot(cwd);
+  if (resolved.reason === 'linked_worktree') {
+    const own = ownRoot(cwd);
+    if (own.root) return { root: own.root, reason: resolved.reason };
+    if (own.timedOut) return { root: resolved.root, reason: 'git_timed_out' };
+  }
+  return resolved;
 }
 
 function resolveWorktreeContext(cwd: string, deps: WorktreeDeps = {}): WorktreeContextResult {
@@ -3063,7 +3179,7 @@ void parseWorktreeListPaths;
  * reason must still reach the caller so it can surface the risk instead of
  * silently trusting the wrong root.
  */
-function resolveWorktreeRoot(cwd: string, deps: WorktreeDeps = {}): { root: string; reason: string } {
+function resolveWorktreeRoot(cwd: string, deps: WorktreeDeps = {}): { root: string; reason: WorktreeRootReason } {
   const context = resolveWorktreeContext(cwd, {
     existsSync: deps.existsSync || fs.existsSync,
     execGit: deps.execGit,
@@ -3138,5 +3254,7 @@ export = {
   cmdWorktreeWorkerStatus,
   cmdWorktreeWorkerComplete,
   resolveWorktreeRoot,
+  ownWorktreePlanningRoot,
+  resolvePlanningWorktreeRoot,
   pruneOrphanedWorktrees,
 };

@@ -1384,7 +1384,7 @@
     {
       "id": "SEAM.worktree-safety-policy.owns",
       "klass": "SEAM",
-      "value": "Worktree Safety Policy Module — resolveWorktreeContext, parseWorktreePorcelain, planWorktreePrune, executeWorktreePrunePlan, W017 classification (see WORKTREE.SEAM.* above for full interface/invariant detail)"
+      "value": "Worktree Safety Policy Module — resolveWorktreeContext, resolvePlanningWorktreeRoot, ownWorktreePlanningRoot, parseWorktreePorcelain, planWorktreePrune, executeWorktreePrunePlan, W017 classification (see WORKTREE.SEAM.* above for full interface/invariant detail)"
     },
     {
       "id": "SESSION.2026-05-05",

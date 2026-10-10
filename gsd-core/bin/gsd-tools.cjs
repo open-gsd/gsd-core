@@ -5169,24 +5169,30 @@ function skipsRootResolution(command) {
 }
 
 /**
- * Resolve the worktree root for a given cwd, warning to stderr when git
+ * Resolve the root that owns `.planning/` for a given cwd — the main checkout
+ * for a linked worktree with no `.planning/` of its own, the worktree's own
+ * `.planning/` owner when it has one (#4885; `resolvePlanningWorktreeRoot`,
+ * shared with the isolation-sentinel reader) — warning to stderr when git
  * could not determine it (reason 'git_timed_out') rather than silently
  * trusting a best-effort fallback (#3050). Extracted from main() so it can
  * be driven directly in tests via injected deps.
  *
  * @param {string} cwd
- * @param {{ existsSync?: (p: string) => boolean, resolveWorktreeRoot?: (cwd: string) => { root: string, reason: string }, writeWarning?: (msg: string) => void }} [deps]
+ * @param {{ existsSync?: (p: string) => boolean, resolveWorktreeRoot?: (cwd: string) => { root: string, reason: string }, ownWorktreePlanningRoot?: (cwd: string) => { root: string | null, timedOut: boolean }, writeWarning?: (msg: string) => void }} [deps]
  * @returns {string} resolved cwd
  */
 function resolveMainWorktreeCwd(cwd, deps = {}) {
   const existsSync = deps.existsSync || fs.existsSync;
-  const resolveWorktreeRoot = deps.resolveWorktreeRoot || require('./lib/worktree-safety.cjs').resolveWorktreeRoot;
+  const { resolvePlanningWorktreeRoot } = require('./lib/worktree-safety.cjs');
   const writeWarning = deps.writeWarning || ((msg) => process.stderr.write(msg));
 
   if (existsSync(path.join(cwd, '.planning'))) {
     return cwd;
   }
-  const { root: worktreeRoot, reason: worktreeRootReason } = resolveWorktreeRoot(cwd);
+  const { root: worktreeRoot, reason: worktreeRootReason } = resolvePlanningWorktreeRoot(cwd, {
+    resolveWorktreeRoot: deps.resolveWorktreeRoot,
+    ownWorktreePlanningRoot: deps.ownWorktreePlanningRoot,
+  });
   if (worktreeRootReason === 'git_timed_out') {
     writeWarning(
       'WARNING: could not determine the git worktree root (git timed out). ' +
@@ -5348,9 +5354,11 @@ async function main() {
   // absent — so a prior in-process main() call can never leak an override.
   projectRoot.setExplicitProjectRoot(projectDirExplicit ? cwd : null);
 
-  // Resolve worktree root: in a linked worktree, .planning/ lives in the main worktree.
-  // However, in monorepo worktrees where the subdirectory itself owns .planning/,
-  // skip worktree resolution — the CWD is already the correct project root.
+  // Resolve worktree root: in a linked worktree with no .planning/ of its own,
+  // .planning/ lives in the main worktree; one that carries its own .planning/
+  // resolves to that, even from a subdirectory (#4885). In monorepo worktrees
+  // where the subdirectory itself owns .planning/, skip worktree resolution —
+  // the CWD is already the correct project root.
   //
   // #4906/#4465: this remap is a BLANKET rewrite applied to every command, before
   // `command` is even known — most commands need it (they read `.planning/`, which

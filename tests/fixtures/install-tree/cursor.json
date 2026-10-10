@@ -580,6 +580,7 @@
   "hooks/lib/cursor-workspace.js",
   "hooks/lib/dispatch-identity.js",
   "hooks/lib/exit-code-registry.js",
+  "hooks/lib/git-probe.js",
   "hooks/lib/hook-exit.js",
   "hooks/lib/isolation-deny-reason.js",
   "hooks/lib/isolation-sentinel.js",

@@ -56,6 +56,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
+const { classifyGitProbe, BLOCKING_GUARD_PROBE_TIMEOUT_MS } = require('./git-probe.js');
 const { parseDispatchIdentity } = require('./dispatch-identity.js');
 
 // Isolation modes ADR-1239 declares (mirrors gsd-tools.cjs
@@ -114,7 +116,7 @@ function sentinelPath(cwd) {
  * written where it looked. Deriving both sides through this one function
  * closes that divergence.
  *
- * `findProjectRoot`/`resolveWorktreeRoot` are read from the sibling
+ * `findProjectRoot`/`resolvePlanningWorktreeRoot` are read from the sibling
  * `gsd-core/bin/lib/*.cjs` modules staged alongside these hooks at install
  * time (same pattern the guard hooks already use for
  * capability-registry.cjs/runtime-name-policy.cjs) — two directories up from
@@ -123,29 +125,178 @@ function sentinelPath(cwd) {
  * top-level `hooks/*.js` guard scripts already use successfully.
  *
  * Never throws; any resolution failure (module missing, git unavailable,
- * git timeout) degrades to the raw `cwd` unchanged — the caller's existing
- * "sentinel absent -> conservative fallback" path already covers that safely.
+ * git timeout) degrades to the raw `cwd` unchanged. That is safe for
+ * `readSentinel` alone — a sentinel not found there is "absent", and the
+ * caller's conservative fallback covers it — and ONLY for that: a raw `cwd`
+ * is no answer to "is this dispatch in a GSD project", so the guards decide
+ * that through `resolveGuardProject`, which reports a failure instead
+ * (#4885 review).
  */
 function resolveSentinelRoot(cwd) {
   try {
     if (fs.existsSync(path.join(cwd, '.planning'))) {
       return cwd;
     }
-    // #3582: worktree-safety.cjs / project-root.cjs are tsc build artifacts
-    // (ADR-457), gitignored and absent on a raw plugin-marketplace / git-clone
-    // install that never ran `npm run build:lib`. Self-heal before either
-    // require below; a RuntimeBuildError (or any other failure) falls through
-    // to the existing catch's degrade-to-raw-`cwd` — unchanged behavior, just
-    // now attempted-healed-first rather than silently degrading on the first
-    // cold-tree encounter.
-    const { ensureRuntimeBuild } = require('../../gsd-core/bin/ensure-runtime-build.cjs');
-    ensureRuntimeBuild();
-    const { resolveWorktreeRoot } = require('../../gsd-core/bin/lib/worktree-safety.cjs');
-    const { root } = resolveWorktreeRoot(cwd);
-    const { findProjectRoot } = require('../../gsd-core/bin/lib/project-root.cjs');
-    return findProjectRoot(root);
+    return resolveProjectRootOrThrow(cwd).root;
   } catch {
     return cwd;
+  }
+}
+
+/**
+ * The derivation `resolveSentinelRoot` and `resolveGuardProject` share —
+ * gsd-tools' own `findProjectRoot(resolvePlanningWorktreeRoot(cwd))` — after
+ * self-healing the runtime library it needs. THROWS on any failure (a
+ * RuntimeBuildError, a missing module, git unavailable): `resolveSentinelRoot`
+ * degrades that to the raw `cwd`, while a guard must not (#4885 review).
+ *
+ * #3582: worktree-safety.cjs / project-root.cjs are tsc build artifacts
+ * (ADR-457), gitignored and absent on a raw plugin-marketplace / git-clone
+ * install that never ran `npm run build:lib`, so the build is ensured before
+ * either require.
+ */
+function resolveProjectRootOrThrow(cwd) {
+  const { ensureRuntimeBuild } = require('../../gsd-core/bin/ensure-runtime-build.cjs');
+  ensureRuntimeBuild();
+  const { root, reason } = planningWorktreeRoot(require('../../gsd-core/bin/lib/worktree-safety.cjs'), cwd);
+  const projectRootLib = require('../../gsd-core/bin/lib/project-root.cjs');
+  return { root: projectRootLib.findProjectRoot(root), reason, maxDepth: projectRootLib.FIND_PROJECT_ROOT_MAX_DEPTH };
+}
+
+/**
+ * #4885: the resolver gsd-tools' root resolution uses, so a linked worktree
+ * carrying its own `.planning/` is read where it was written. A lib staged
+ * without that export (hooks newer than the lib) keeps the pre-#4885
+ * main-worktree resolution rather than failing.
+ */
+function planningWorktreeRoot(worktreeSafety, cwd) {
+  return typeof worktreeSafety.resolvePlanningWorktreeRoot === 'function'
+    ? worktreeSafety.resolvePlanningWorktreeRoot(cwd)
+    : worktreeSafety.resolveWorktreeRoot(cwd);
+}
+
+/** The nearest directory at or above `cwd`, at any depth, holding `.planning/config.json`, else null. Pure fs: no git, no build. */
+function nearestProjectConfigDir(cwd) {
+  let dir = path.resolve(cwd);
+  for (;;) {
+    if (fs.existsSync(path.join(dir, '.planning', 'config.json'))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/**
+ * #4885 review (2026-10-10): the project a dispatch guard evaluates for
+ * `cwd`, as a verdict rather than a path — a guard has to tell "no GSD
+ * project here" from "could not tell" (#3050: a guard that cannot verify must
+ * not answer "safe"):
+ *
+ *   { project: false }                          no project applies to `cwd`
+ *   { project: true, root, sentinelRoot: root } evaluate the project at `root`
+ *   { project: true, root: null, error }        `cwd` is inside a GSD project,
+ *                                               but which root governs it
+ *                                               could not be verified — deny
+ *
+ * The root is always the one gsd-tools writes the sentinel under
+ * (`resolveProjectRootOrThrow`): the sentinel and the config are read from the
+ * same place, and no other root's configuration is ever substituted.
+ *
+ * A pure-fs probe runs first — the lexical path, then (only when that finds
+ * nothing, so a `.planning` symlink to an external store keeps its #4815
+ * lexical meaning) the canonical one. With no `.planning/config.json` at or
+ * above either, nothing is built, git never runs, and the dispatch is not a
+ * GSD project's — the pre-#4885 answer. `cwd` itself holding one is its own
+ * root, as before. Otherwise:
+ *   - a resolution failure or git timeout is unresolved (deny);
+ *   - the writer's root holding `.planning/config.json` is the project;
+ *   - `cwd` in a different repository from the project above (an independent
+ *     nested repository, #2843) is not that project's;
+ *   - the writer's root holding a `.planning/` with no config, or `cwd` past
+ *     the ancestor bound `findProjectRoot` walks (so it found nothing), is a
+ *     directory inside a GSD project whose governing configuration cannot be
+ *     read — unresolved (deny), never an inert "not a project";
+ *   - anything else is the resolver's own deliberate "not a project" (`$HOME`).
+ */
+function resolveGuardProject(cwd) {
+  // `from` is the spelling the project was found under: the lexical cwd, or —
+  // when only the canonical path leads to a project (a symlinked alias) — the
+  // canonical one, so resolution walks the same path the probe did.
+  let base = path.resolve(cwd);
+  let from = cwd;
+  let anchor = nearestProjectConfigDir(base);
+  if (anchor === null) {
+    try {
+      base = fs.realpathSync.native(cwd);
+    } catch {
+      return { project: false };
+    }
+    anchor = nearestProjectConfigDir(base);
+    if (anchor === null) return { project: false };
+    from = base;
+  }
+  if (anchor === base) return { project: true, root: from, sentinelRoot: from };
+  const unresolved = (message) => ({ project: true, root: null, error: new Error(message) });
+  // #2843: an independent repository nested in the project is not the
+  // project's. Decided by git directly — before any runtime build, so an
+  // unbuildable runtime never turns that boundary into a denial. The project's
+  // own `.planning` is never such a boundary, even when it is a symlink to an
+  // external store with a repository of its own (#4815, as findProjectRoot).
+  const inPlanning = path.relative(path.join(anchor, '.planning'), base);
+  if (inPlanning.startsWith('..') || path.isAbsolute(inPlanning)) {
+    const ownRepo = gitCommonDirOf(base);
+    const projectRepo = gitCommonDirOf(anchor);
+    if (ownRepo.undetermined || projectRepo.undetermined) {
+      return unresolved(`git could not say which repository '${cwd}' belongs to (${ownRepo.undetermined || projectRepo.undetermined}).`);
+    }
+    if (ownRepo.dir !== projectRepo.dir) return { project: false };
+  }
+  let resolved;
+  try {
+    resolved = resolveProjectRootOrThrow(from);
+  } catch (error) {
+    return { project: true, root: null, error };
+  }
+  if (resolved.reason === 'git_timed_out') return unresolved(`git timed out resolving which checkout '${cwd}' belongs to.`);
+  const root = resolved.root;
+  if (fs.existsSync(path.join(root, '.planning', 'config.json'))) return { project: true, root, sentinelRoot: root };
+  if (isDirectory(path.join(root, '.planning'))) {
+    return unresolved(`'${root}' holds a .planning/ with no config.json, inside the GSD project at '${anchor}'.`);
+  }
+  const levels = path.relative(anchor, base).split(path.sep).length;
+  if (levels > (resolved.maxDepth ?? 10)) {
+    return unresolved(`'${cwd}' is ${levels} directories below the GSD project at '${anchor}', past the ${resolved.maxDepth ?? 10} that project-root resolution walks.`);
+  }
+  return { project: false };
+}
+
+/**
+ * The canonical git common directory `dir` belongs to — the repository itself,
+ * shared by a checkout and every worktree linked to it — or `null` outside any
+ * repository; `undetermined` (a reason) when git did not answer. git reports a
+ * relative common dir against the PHYSICAL cwd, so it is resolved against
+ * `dir`'s realpath, never its lexical spelling (an alias would misplace it).
+ */
+function gitCommonDirOf(dir) {
+  const result = spawnSync('git', ['rev-parse', '--git-common-dir'], {
+    cwd: dir, encoding: 'utf8', timeout: BLOCKING_GUARD_PROBE_TIMEOUT_MS, windowsHide: true,
+  });
+  const probe = classifyGitProbe(result);
+  if (!probe.determined) return { dir: null, undetermined: probe.reason };
+  if (result.status !== 0) return { dir: null, undetermined: null };
+  try {
+    return { dir: fs.realpathSync.native(path.resolve(fs.realpathSync.native(dir), String(result.stdout).trim())), undetermined: null };
+  } catch {
+    return { dir: null, undetermined: null };
+  }
+}
+
+/** Whether `p` is a directory (through a symlink, as findProjectRoot's check is). */
+function isDirectory(p) {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
   }
 }
 
@@ -309,6 +460,7 @@ module.exports = {
   SENTINEL_STALE_MS,
   sentinelPath,
   resolveSentinelRoot,
+  resolveGuardProject,
   readSentinel,
   extractDispatchIdentifiers,
   sentinelAppliesToDispatch,

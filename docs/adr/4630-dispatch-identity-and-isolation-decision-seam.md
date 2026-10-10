@@ -200,6 +200,18 @@ dispatch, not a formatting edit.
 accepted forgery risk is unchanged. This ADR changes how the decision is transported, not
 when a degrade should occur.
 
+**Addendum (#4885) — the project a guard evaluates.** The guards' "is this a GSD project"
+test now resolves the dispatch `cwd` to the root the sentinel is written under
+(`resolveGuardProject`, `hooks/lib/isolation-sentinel.js`) instead of testing the raw `cwd`, so
+a subdirectory dispatch is evaluated rather than allowed inert. Its answer is a verdict, not a
+path. No `.planning/config.json` at or above `cwd` is "not a project" (decided without a build
+or git). Otherwise the sentinel and the configuration are both read at the root gsd-tools
+writes to — no other root's configuration is ever substituted. An independent repository
+nested in a project is not that project's (#2843). A resolution failure, a git timeout, a
+resolved root whose `.planning/` has no config, or a `cwd` past the ancestor bound
+`findProjectRoot` walks is "unresolved", and the guard denies (#3050). The sentinel's
+transport and the degrade rules above are unchanged.
+
 ## Phase mapping
 
 | Phase | Delivers | Decisions |
