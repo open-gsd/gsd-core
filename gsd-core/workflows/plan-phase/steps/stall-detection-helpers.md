@@ -168,19 +168,46 @@ gsd_stall_should_recover() {
 # was lost between tool calls. SPAWN is reduced to [A-Za-z0-9_-], so a plan ID can
 # never leave the directory (the character lists are spelled out, not ranges, so
 # no locale can widen them). Fails closed (prints nothing, returns 1) on an empty
-# PHASE_DIR or one holding a quote, `$` or backtick, which the orchestrator could
-# not substitute safely into a prompt or a quoted bash argument, and when
-# .gsd-returns or its .gitignore is a symlink (a checkout can commit one; mkdir -p
-# and the .gitignore write would follow it out of the phase).
+# PHASE_DIR or one holding a quote, `$`, backtick, `<`, `>` or any control
+# character (newline, tab, CR...), which the orchestrator could not substitute
+# safely into a prompt line or a quoted bash argument. It also fails closed unless
+# the receipt directory sits physically under the project root (the orchestrator's
+# `pwd -P`): a checkout can commit the phase dir, `.planning` or `.gsd-returns` as
+# a symlink, and mkdir -p and the .gitignore write would follow it out of the
+# project. So a symlinked or dangling phase dir (or a missing component on the way
+# to it), a phase dir that resolves outside the root, and a symlinked .gsd-returns
+# or .gitignore all disable the receipt; the watch then ends on the runtime's
+# completion result or as `stalled`. Both sides are compared after `cd -P`/`pwd -P`
+# (macOS temp dirs live under the /var -> /private/var link; Git Bash maps C:/ to
+# /c/ on both sides). Only static, checked-in links are in scope: a link swapped in
+# between these checks and the mkdir/printf (check-then-act) is not.
 gsd_receipt_path() {
   local dir="$1" spawn="${2//[^ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]/_}"
+  local root a up phys rest got
   case "$dir" in
-    ''|*[\'\"\$\`]*) return 1 ;;
+    ''|*[[:cntrl:]]*|*[\'\"\$\`\<\>]*) return 1 ;;
     /*|[A-Za-z]:[/\\]*) ;;
     *) dir="$(pwd)/$dir" ;;
   esac
+  while [ "${#dir}" -gt 1 ] && [ "${dir%/}" != "$dir" ]; do dir="${dir%/}"; done
+  root=$(pwd -P) || return 1
+  # Walk up to the nearest existing ancestor; any walked component that is a link
+  # (tested before -e, so a dangling one counts) is refused.
+  a="$dir"
+  while :; do
+    [ -L "$a" ] && return 1
+    [ -e "$a" ] && break
+    up="${a%/*}"; [ -n "$up" ] || up=/
+    [ "$up" = "$a" ] && return 1
+    a="$up"
+  done
+  phys=$(CDPATH='' cd -P -- "$a" >/dev/null 2>&1 && pwd -P) || return 1
+  case "$phys/" in "$root"/*) ;; *) return 1 ;; esac
+  rest="${dir#"$a"}"
   [ -L "$dir/.gsd-returns" ] && return 1
   mkdir -p "$dir/.gsd-returns" || return 1
+  got=$(CDPATH='' cd -P -- "$dir/.gsd-returns" >/dev/null 2>&1 && pwd -P) || return 1
+  [ "$got" = "${phys%/}$rest/.gsd-returns" ] || return 1
   [ -L "$dir/.gsd-returns/.gitignore" ] && return 1
   [ -f "$dir/.gsd-returns/.gitignore" ] || printf '*\n' > "$dir/.gsd-returns/.gitignore"
   if command -v cygpath >/dev/null 2>&1; then dir=$(cygpath -m "$dir"); fi
@@ -188,16 +215,20 @@ gsd_receipt_path() {
 }
 
 # gsd_return_marker FILE MARKER... — print the first MARKER that STARTS a line of
-# FILE's first 64 lines (the receipt is agent-written; one marker line is expected),
-# or nothing. Literal prefix match (no regex), ending at a word boundary, so
-# a longer word that merely starts with a marker is not that marker. A trailing
-# CR needs no stripping (it is not a word character); a leading BOM and a
-# missing final newline are tolerated. The one owner of "which marker did the
-# agent return": gsd_stall_watch and step 11's routing both use it. Indented,
-# mid-line, or JSON-encoded marker text (prompts, agent definitions, transcripts)
-# never matches.
+# FILE's first 64 lines and first 4096 bytes (the receipt is agent-written; one
+# marker line is expected; the byte cap keeps one huge line from stalling the
+# watch), or nothing. Literal prefix match (no regex), and the marker must be
+# followed by the end of the line, a space, tab, CR, VT, FF or a colon (the
+# planner's Source Audit return puts `: Unplanned Items Found` after its marker),
+# so `## PLAN COMPLETE-x` or a
+# longer word that merely starts with a marker is not that marker. A leading BOM
+# and a missing final newline are tolerated. A receipt that is a symlink is never
+# read. The one owner of "which marker did the agent return": gsd_stall_watch and
+# step 11's routing both use it. Indented, mid-line, or JSON-encoded marker text
+# (prompts, agent definitions, transcripts) never matches.
 gsd_return_marker() {
   local file="$1" line m rest n=0; shift
+  [ -L "$file" ] && return 0
   [ -f "$file" ] && [ -r "$file" ] || return 0
   while [ "$n" -lt 64 ] && { IFS= read -r line || [ -n "$line" ]; }; do
     n=$((n + 1))
@@ -205,10 +236,11 @@ gsd_return_marker() {
     for m in "$@"; do
       [[ "$line" == "$m"* ]] || continue
       rest="${line#"$m"}"
-      case "$rest" in [ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_]*) continue ;; esac
-      printf '%s\n' "$m"; return 0
+      case "${rest:0:1}" in
+        ''|' '|$'\t'|$'\r'|$'\v'|$'\f'|:) printf '%s\n' "$m"; return 0 ;;
+      esac
     done
-  done < "$file"
+  done < <(head -c 4096 -- "$file" 2>/dev/null)
   return 0
 }
 
@@ -245,10 +277,21 @@ gsd_stall_watch() {
   # silently and permanently degraded artifact_fresh to false on every
   # macOS run. -mmin -N needs no epoch/date-string conversion at all and is
   # supported identically by GNU find (Linux, Git-for-Windows' bundled
-  # findutils) and BSD find (macOS). $artifact_glob stays intentionally
-  # unquoted — the shell, not find, expands it into the matching file list.
+  # findutils) and BSD find (macOS). $artifact_glob is one string, a literal
+  # directory plus a basename pattern (`<phase>/*-PLAN.md`) or a literal file.
+  # The directory part stays quoted (a space in PHASE_DIR must not split it) and
+  # only the basename is globbed, under nullglob (restored after) with IFS empty,
+  # so no match gives an empty list and artifact_fresh stays false.
   artifact_fresh="false"
-  if [ -n "$(find $artifact_glob -mmin "-${PLANNER_STALL_INTERVAL_MINUTES}" 2>/dev/null)" ]; then
+  local IFS='' files _had_ng=0 _d="${artifact_glob%/*}" _p="${artifact_glob##*/}"
+  files=()
+  [ "$_d" = "$artifact_glob" ] && _d=.
+  shopt -q nullglob && _had_ng=1
+  shopt -s nullglob
+  # shellcheck disable=SC2206 # the basename is the glob pattern; IFS is empty, so it never splits
+  [ -n "$artifact_glob" ] && files=("$_d"/$_p)
+  [ "$_had_ng" = 1 ] || shopt -u nullglob
+  if [ "${#files[@]}" -gt 0 ] && [ -n "$(find "${files[@]}" -mmin "-${PLANNER_STALL_INTERVAL_MINUTES}" 2>/dev/null)" ]; then
     artifact_fresh="true"
   fi
   gsd_stall_should_recover "$elapsed" "$PLANNER_STALL_THRESHOLD_MINUTES" "$marker_found" "$artifact_fresh"

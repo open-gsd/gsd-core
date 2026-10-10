@@ -798,14 +798,15 @@ describe('bug #2650 plan-phase — all five planner/plan-checker spawns dispatch
     assert.notEqual(idx, -1);
     const nextSectionIdx = workflow.indexOf('## 8. Spawn gsd-planner Agent', idx);
     const section = workflow.slice(idx, nextSectionIdx === -1 ? undefined : nextSectionIdx);
-    assert.match(section, /\{receipt\}/, 'step 7.99 must mention {receipt} so a reader knows it is a binding token, not literal text');
+    assert.match(section, /`\{receipt\}` = `gsd_receipt_path "\$\{PHASE_DIR\}" <spawn>`/, 'step 7.99 must bind {receipt} from gsd_receipt_path, not leave it as literal text');
     // The full binding contract lives in the lazily-loaded reference file to stay
     // under the PRE_PHASE6 cap — verify it is actually there, not just gestured at.
     // #5182 replaced the {outputFile} binding (a host transcript that already holds
     // the prompt and definition text) with the GSD-owned receipt.
     const helpersDoc = readStallHelpersDoc();
-    assert.match(helpersDoc, /\{receipt\}/, 'stall-detection-helpers.md must explain the {receipt} binding contract');
-    assert.match(helpersDoc, /plan-checker/i, 'stall-detection-helpers.md must explain why the receipt is load-bearing for the plan-checker spawn specifically');
+    assert.match(helpersDoc, /substitutes the printed absolute path for `\{receipt\}`/, 'stall-detection-helpers.md must explain the {receipt} binding contract');
+    assert.match(helpersDoc, /\*\*Plan-checker receipt:\*\* a checker that PASSES touches no `\*-PLAN\.md`, so its receipt\s+is its only completion signal for this watch/,
+      'stall-detection-helpers.md must explain why the receipt is load-bearing for the plan-checker spawn specifically');
   });
 
   test('stall surveillance is not gated behind the teams-status guard (AC2)', () => {
@@ -1194,15 +1195,18 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
   }
 
   // The specification, independent of the bash: strip one trailing CR, then one
-  // leading BOM; match iff the line starts with the marker and the next character
-  // is not an ASCII word character.
+  // leading BOM; match iff the line starts with the marker and the marker is
+  // followed by the end of the line, whitespace (space, tab, CR, VT, FF) or a
+  // colon (the planner's Source Audit return puts `: Unplanned Items Found` after its
+  // marker). Any other character, ASCII or not (`-x`, a letter with an accent), is not
+  // a boundary.
   function returnMarkerOracle(marker, line) {
     let l = line.endsWith('\r') ? line.slice(0, -1) : line;
     if (l.startsWith('﻿')) l = l.slice(1);
-    return l.startsWith(marker) && !/^[A-Za-z0-9_]/.test(l.slice(marker.length)) ? marker : '';
+    return l.startsWith(marker) && /^(?:$|[ \t\r\v\f:])/.test(l.slice(marker.length)) ? marker : '';
   }
 
-  test('property: gsd_return_marker matches iff the line starts with the marker and the next char is not [A-Za-z0-9_] (CR- and BOM-tolerant)', (t) => {
+  test('property: gsd_return_marker matches iff the line starts with the marker and the next char is end, whitespace or a colon (CR- and BOM-tolerant)', (t) => {
     const f = fixture(t);
     const markerArb = fc.constantFrom('## PLANNING COMPLETE', '## PLAN COMPLETE', '## ISSUES FOUND', '## ⚠ Source Audit', '## REVISION_CONFLICT', '#');
     // Word and non-word ASCII, non-ASCII letters (must count as a boundary), and
@@ -1250,13 +1254,21 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
         const sameDir = parent === returns || parent.endsWith('/ph/.gsd-returns');
         const ascii = /^[\x20-\x7e]*$/.test(label);
         const expected = label.replace(/[^A-Za-z0-9_-]/g, '_') || 'spawn';
+        // A non-ASCII character becomes one `_` per character (UTF-8 locale) or one per
+        // byte (C locale), so for those labels compare with runs of `_` collapsed; an
+        // ASCII label must match exactly.
+        const collapse = (x) => x.replace(/_+/g, '_');
         return sameDir && W.test(stem) && epoch === String(NOW) && /^[A-Za-z0-9]+$/.test(rand) &&
-          (!ascii || stem === expected);
+          (ascii ? stem === expected : collapse(stem) === collapse(expected));
       });
-    }), { numRuns: 8 });
-    // Unsafe phase dirs: any dir holding a quote, `$` or backtick fails closed (no
-    // output, non-zero); any other dir is accepted. Values travel through files.
-    const dirArb = fc.string({ unit: fc.constantFrom(...'ab -\'"$`'.split('')), minLength: 1, maxLength: 6 }).map((d) => `p${d}`);
+    }), { numRuns: 12 });
+    // Unsafe phase dirs: any dir holding a quote, `$`, backtick, `<`, `>` or a control
+    // character (newline, tab, CR, ESC, DEL...) fails closed (no output, non-zero); any
+    // other dir is accepted. Values travel through files and are read with -d '' so a
+    // newline reaches the helper intact.
+    const dirArb = fc.string({ unit: fc.constantFrom(...'ab -\'"$`<>\n\t\r\x01\x1b\x7f'.split('')), minLength: 1, maxLength: 6 }).map((d) => `p${d}`);
+    const unsafeDir = (d) => /['"$`<>]/.test(d) || [...d].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f);
+    let checked = 0;
     fc.assert(fc.property(fc.array(dirArb, { minLength: 1, maxLength: 15 }), (dirs) => {
       const caseDir = fs.mkdtempSync(path.join(f.dir, 'pd-'));
       dirs.forEach((d, i) => fs.writeFileSync(path.join(caseDir, `${i}.d`), d));
@@ -1264,8 +1276,11 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       const out = runHelpers(`cd ${q(f.dir)}; i=0; while [ -f ${D}/$i.d ]; do IFS= read -r -d '' d < ${D}/$i.d || true; if gsd_receipt_path "$d" x >/dev/null; then echo "$i OK"; else echo "$i FAIL"; fi; i=$((i+1)); done`);
       cleanup(caseDir);
       const verdict = new Map(out.split('\n').map((l) => l.split(' ')));
-      return dirs.every((d, i) => verdict.get(String(i)) === (/['"$`]/.test(d) ? 'FAIL' : 'OK'));
-    }), { numRuns: 6 });
+      checked += verdict.size;
+      return verdict.size === dirs.length &&
+        dirs.every((d, i) => verdict.get(String(i)) === (unsafeDir(d) ? 'FAIL' : 'OK'));
+    }), { numRuns: 8 });
+    assert.ok(checked > 0, 'the unsafe-dir property must execute at least one case');
   });
 
   test('gsd_receipt_path: absolute, unique per call, under <phase>/.gsd-returns/, directory created, label sanitized', (t) => {
@@ -1289,7 +1304,12 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
   test('gsd_receipt_path fails closed on an unsafe phase dir and writes a catch-all .gitignore', (t) => {
     const f = fixture(t);
     const helpers = extractStallFunctionsBash();
-    for (const bad of ['', 'ph"ase', "ph'ase", 'ph$ase', 'ph`ase']) {
+    // A newline, tab, CR or any other control character, `<` and `>` would land in the
+    // `<return_receipt>` prompt line the orchestrator substitutes (review 5477738387 Minor 1).
+    const unsafe = ['', 'ph"ase', "ph'ase", 'ph$ase', 'ph`ase',
+      'ph\nase', 'ph\tase', 'ph\rase', 'ph\x01ase', 'ph\x1base', 'ph\x7fase', 'ph<ase', 'ph>ase', 'ph\n'];
+    let refused = 0;
+    for (const bad of unsafe) {
       // Handed over through a file, never interpolated or passed as argv: a `$` or
       // backtick in a double-quoted literal is expanded by bash first, and on Windows
       // Git Bash's MSYS layer re-splits and unescapes argv, so a `'` argument arrives
@@ -1297,9 +1317,13 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       // extractStallFunctionsBash()'s doc comment for the same transport hazard.
       const valueFile = path.join(f.dir, 'phase-dir-value.txt');
       fs.writeFileSync(valueFile, bad);
-      const r = runBashScript(`${helpers}\ncd ${q(f.dir)}\nIFS= read -r d < ${q(valueFile.replace(/\\/g, '/'))} || true\nif out=$(gsd_receipt_path "$d" checker); then echo "OK:$out"; else echo FAIL; fi\n`, []);
+      // -d '' reads the whole file, so an embedded or trailing newline reaches the helper.
+      const r = runBashScript(`${helpers}\ncd ${q(f.dir)}\nIFS= read -r -d '' d < ${q(valueFile.replace(/\\/g, '/'))} || true\nif out=$(gsd_receipt_path "$d" checker); then echo "OK:$out"; else echo FAIL; fi\n`, []);
       assert.equal(r.stdout.trim(), 'FAIL', `phase dir ${JSON.stringify(bad)} must be refused`);
+      refused += 1;
     }
+    assert.equal(refused, unsafe.length, 'every unsafe phase dir case must run');
+    assert.equal(fs.readdirSync(f.dir).filter((n) => n.startsWith('ph') && n !== 'phase-dir-value.txt').length, 0, 'a refused phase dir is never created');
     const r = runBashScript(`${helpers}\ncd ${q(f.dir)}\ngsd_receipt_path ph checker >/dev/null && cat ph/.gsd-returns/.gitignore\n`, []);
     assert.equal(r.stdout.trim(), '*', '.gsd-returns/ must ignore its own receipts');
   });
@@ -1396,5 +1420,157 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.match(doc, /rm -f "\{receipt\}"/, 'the orchestrator removes the receipt after routing');
     assert.match(doc, /Group B report-writer/, 'the checker posture (#767 Group B) is stated');
     assert.doesNotMatch(doc, /refuses that write/, 'the retired read-only degradation is no longer described');
+  });
+
+  // -- Review 5477738387 (#5182): physical containment of the receipt directory, hostile
+  // phase-dir names, receipt reads that cannot be steered or stalled, a spaced phase dir's
+  // freshness signal, and receipt cleanup at every watch.
+  const fwd = (p) => p.replace(/\\/g, '/');
+
+  function outsideDir(t) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5182-outside-'));
+    t.after(() => cleanup(dir));
+    return dir;
+  }
+
+  // Every entry under `root`, recursively (lstat, so a link is listed, never followed).
+  function treeOf(root) {
+    const out = [];
+    const walk = (d, rel) => {
+      for (const name of fs.readdirSync(d).sort()) {
+        const r = rel ? `${rel}/${name}` : name;
+        out.push(r);
+        const st = fs.lstatSync(path.join(d, name));
+        if (st.isDirectory()) walk(path.join(d, name), r);
+      }
+    };
+    walk(root, '');
+    return out;
+  }
+
+  // gsd_receipt_path run from `cwd`, PHASE_DIR handed over through a file (never argv).
+  function receiptPathFrom(f, cwd, phaseDir) {
+    const valueFile = path.join(f.dir, 'phase-dir-value.bin');
+    fs.writeFileSync(valueFile, phaseDir);
+    return runBashScript(`${extractStallFunctionsBash()}\ncd ${q(cwd)}\nIFS= read -r -d '' d < ${q(fwd(valueFile))} || true\ngsd_receipt_path "$d" checker\n`, []);
+  }
+
+  test('gsd_receipt_path refuses a symlinked phase directory (relative or absolute) and creates nothing in its target', (t) => {
+    const f = fixture(t);
+    const outside = outsideDir(t);
+    if (!symlinkOrSkip(t, outside, path.join(f.dir, 'ph'), 'dir')) return;
+    let ran = 0;
+    for (const phaseDir of ['ph', `${f.fwd}/ph`, 'ph/sub']) {
+      const r = receiptPathFrom(f, f.dir, phaseDir);
+      assert.notEqual(r.status, 0, `${phaseDir}: a symlinked phase dir must be refused`);
+      assert.equal(r.stdout, '', `${phaseDir}: a refused receipt prints no path`);
+      ran += 1;
+    }
+    assert.equal(ran, 3);
+    assert.deepEqual(treeOf(outside), [], 'nothing may be created in the link target');
+  });
+
+  test('gsd_receipt_path refuses a phase dir under a symlinked ancestor (.planning linked outside the project)', (t) => {
+    const f = fixture(t);
+    const outside = outsideDir(t);
+    const proj = path.join(f.dir, 'proj');
+    fs.mkdirSync(proj);
+    fs.mkdirSync(path.join(outside, 'phases', '01-x'), { recursive: true });
+    if (!symlinkOrSkip(t, outside, path.join(proj, '.planning'), 'dir')) return;
+    const before = treeOf(outside);
+    let ran = 0;
+    // An existing phase dir reached through the link, a missing one, and the absolute form.
+    for (const phaseDir of ['.planning/phases/01-x', '.planning/phases/02-new', `${fwd(proj)}/.planning/phases/01-x`]) {
+      const r = receiptPathFrom(f, proj, phaseDir);
+      assert.notEqual(r.status, 0, `${phaseDir}: a phase dir that resolves outside the project must be refused`);
+      assert.equal(r.stdout, '', `${phaseDir}: a refused receipt prints no path`);
+      ran += 1;
+    }
+    assert.equal(ran, 3);
+    assert.deepEqual(treeOf(outside), before, 'nothing may be created outside the project');
+  });
+
+  test('gsd_receipt_path refuses a dangling .gsd-returns link and a dangling phase-dir link without creating either target', (t) => {
+    const f = fixture(t);
+    const outside = outsideDir(t);
+    fs.mkdirSync(path.join(f.dir, 'ph'));
+    if (!symlinkOrSkip(t, path.join(outside, 'absent-returns'), path.join(f.dir, 'ph', '.gsd-returns'), 'dir')) return;
+    if (!symlinkOrSkip(t, path.join(outside, 'absent-phase'), path.join(f.dir, 'ph2'), 'dir')) return;
+    let ran = 0;
+    for (const phaseDir of ['ph', 'ph2']) {
+      const r = receiptPathFrom(f, f.dir, phaseDir);
+      assert.notEqual(r.status, 0, `${phaseDir}: a dangling link must be refused`);
+      assert.equal(r.stdout, '', `${phaseDir}: a refused receipt prints no path`);
+      ran += 1;
+    }
+    assert.equal(ran, 2);
+    assert.deepEqual(treeOf(outside), [], 'no dangling target may be created');
+  });
+
+  test('gsd_return_marker ignores a receipt that is a symlink, even to a file holding a marker', (t) => {
+    const f = fixture(t);
+    const outside = outsideDir(t);
+    const target = path.join(outside, 'forged.md');
+    fs.writeFileSync(target, '## ISSUES FOUND\n');
+    const link = path.join(f.dir, 'receipt-link.md');
+    if (!symlinkOrSkip(t, target, link, 'file')) return;
+    const m = ` ${q('## VERIFICATION PASSED')} ${q('## ISSUES FOUND')}`;
+    assert.equal(runHelpers(`gsd_return_marker ${q(fwd(target))}${m}`), '## ISSUES FOUND', 'control: the target itself carries a marker');
+    assert.equal(runHelpers(`gsd_return_marker ${q(fwd(link))}${m}`), '', 'a symlinked receipt is never read');
+  });
+
+  test('gsd_return_marker reads at most the first 4096 bytes, so one huge line cannot stall the watch', (t) => {
+    const f = fixture(t);
+    const m = ` ${q('## PLANNING COMPLETE')}`;
+    const run = (content) => {
+      fs.writeFileSync(f.receipt, content);
+      const r = runBashScript(`${extractStallFunctionsBash()}\ngsd_return_marker ${q(fwd(f.receipt))}${m}\n`, [], { timeoutMs: PROBE_TIMEOUT_MS });
+      assert.equal(r.outcome, OUTCOME.EXITED, `the read must finish within ${PROBE_TIMEOUT_MS} ms (outcome ${r.outcome})`);
+      assert.equal(r.status, 0, r.stderr);
+      return r.stdout.trim();
+    };
+    assert.equal(run(`${'x'.repeat(4000)}\n## PLANNING COMPLETE\n`), '## PLANNING COMPLETE', 'a marker inside the first 4096 bytes is found');
+    assert.equal(run(`${'x'.repeat(5000)}\n## PLANNING COMPLETE\n`), '', 'a marker past the first 4096 bytes is not read');
+    assert.equal(run(`${'a'.repeat(1000000)}\n`), '', 'a 1,000,000-byte line with no marker returns nothing, fast');
+    assert.equal(run(`## PLANNING COMPLETE ${'a'.repeat(1000000)}\n`), '## PLANNING COMPLETE', 'a marker opening a 1,000,000-byte line is still found, fast');
+  });
+
+  test('gsd_return_marker: a marker ends at end of line, whitespace, CR or a colon; `-x` or a letter is not a boundary', (t) => {
+    const f = fixture(t);
+    const m = ` ${q('## PLAN COMPLETE')} ${q('## ⚠ Source Audit')}`;
+    const run = (content) => {
+      fs.writeFileSync(f.receipt, content);
+      return runHelpers(`gsd_return_marker ${q(fwd(f.receipt))}${m}`);
+    };
+    const cases = [
+      ['## PLAN COMPLETE-x\n', ''],
+      ['## PLAN COMPLETE.x\n', ''],
+      ['## PLAN COMPLETEé\n', ''],
+      ['## PLAN COMPLETE x\n', '## PLAN COMPLETE'],
+      ['## PLAN COMPLETE\tx\n', '## PLAN COMPLETE'],
+      ['## PLAN COMPLETE\r\n', '## PLAN COMPLETE'],
+      ['## PLAN COMPLETE\rx\n', '## PLAN COMPLETE'],
+      ['## PLAN COMPLETE\n', '## PLAN COMPLETE'],
+      ['## ⚠ Source Audit: Unplanned Items Found\n', '## ⚠ Source Audit'],
+    ];
+    let ran = 0;
+    for (const [content, expected] of cases) {
+      assert.equal(run(content), expected, JSON.stringify(content));
+      ran += 1;
+    }
+    assert.equal(ran, cases.length);
+  });
+
+  test('a spaced PHASE_DIR with a fresh *-PLAN.md reads as active, not stalled (the glob is expanded quoted)', (t) => {
+    const f = fixture(t);
+    const markers = watchCallOf(sectionOf(readPlanPhase(), PLANNER_SECTION)).markers;
+    const spaced = path.join(f.dir, 'sp ace', 'ph');
+    fs.mkdirSync(spaced, { recursive: true });
+    const glob = `${fwd(spaced)}/*-PLAN.md`;
+    assert.equal(watch(NOW - 11 * 60, f.receipt, glob, markers, { interval: 5 }), 'stalled', 'control: no plan yet, past the threshold');
+    fs.writeFileSync(path.join(spaced, '01-PLAN.md'), '# plan\n');
+    assert.equal(watch(NOW - 11 * 60, f.receipt, glob, markers, { interval: 5 }), 'active', 'a fresh plan in a spaced phase dir is activity');
+    // A literal (non-glob) artifact path with a space, as the chunked sites pass it.
+    assert.equal(watch(NOW - 11 * 60, f.receipt, `${fwd(spaced)}/01-PLAN.md`, markers, { interval: 5 }), 'active');
   });
 });
