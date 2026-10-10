@@ -703,6 +703,19 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
     assert.equal(DISPATCH_ISOLATION_VOCABULARY.size, DISPATCH_ISOLATION_MODES.length);
   });
 
+  test('the owner\'s exports are frozen — a new Set assigned to an export cannot widen what the guards accept', () => {
+    // The guards read their vocabulary export at call time, so a reassigned
+    // export would split them from the tuple and from every consumer that
+    // read the export at load.
+    assert.ok(Object.isFrozen(owner));
+    assert.throws(() => { owner.DISPATCH_ISOLATION_VOCABULARY = new Set([...DISPATCH_ISOLATION_MODES, 'bogus-mode']); }, TypeError);
+    assert.throws(() => { owner.BASE_CHECK_ISOLATION_VOCABULARY = new Set(['none']); }, TypeError);
+    assert.throws(() => { owner.isDispatchIsolation = () => true; }, TypeError);
+    assert.equal(owner.isDispatchIsolation('bogus-mode'), false);
+    assert.equal(owner.isBaseCheckIsolationMode('none'), false);
+    assert.strictEqual(owner.DISPATCH_ISOLATION_VOCABULARY, DISPATCH_ISOLATION_VOCABULARY);
+  });
+
   test('the sealed views answer the rest of the ReadonlySet read surface as a real Set of the same members would', () => {
     // The seal replaces the Set with a plain object, so every read method is
     // hand-delegated; one that is never called can return nothing and stay

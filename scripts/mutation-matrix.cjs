@@ -694,9 +694,11 @@ const COVERED = {
   // as state-contract.unit.test.cjs.
   //
   // Measured locally with the CI shard's exact inputs (tap runner, perTest, 0 timeouts):
-  // 85.29% (29 killed / 5 survived / 4 runtime errors). All 5 survivors are equivalent:
-  // the three __esModule interop mutants, and `typeof value === 'string' &&` -> `true &&`
-  // in both guards (a Set of strings never .has() a non-string). Floor = floor(85.29) - 1
+  // 85.29% (29 killed / 5 survived / 4 runtime errors). All 5 survivors are equivalent for
+  // this tree: the three __esModule interop mutants (only a default or namespace import
+  // reads that flag, and no consumer uses either), and `typeof value === 'string' &&` ->
+  // `true &&` in both guards (the views hold only strings and the module's exports are
+  // frozen, so no non-string can be a member). Floor = floor(85.29) - 1
   // = 84, provisional until this PR's CI shard confirms it, which the ratchet step does:
   // it fails unless the CI score lands within RATCHET_SLACK of the floor.
   'dispatch-isolation': {

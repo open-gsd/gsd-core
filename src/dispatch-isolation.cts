@@ -134,3 +134,12 @@ export function isDispatchIsolation(value: unknown): value is DispatchIsolation 
 export function isBaseCheckIsolationMode(value: unknown): value is BaseCheckIsolationMode {
   return typeof value === 'string' && BASE_CHECK_ISOLATION_VOCABULARY.has(value);
 }
+
+// The seal covers the views, not the slots that hold them. The emitted guards
+// read `exports.DISPATCH_ISOLATION_VOCABULARY` at call time, so a consumer
+// assigning a new Set to that export would make the guards accept a mode the
+// tuple and every load-time consumer lack: the same split, through the
+// module's own export. Freezing the exports makes that assignment fail: a
+// TypeError when the assigning code is strict mode, a silent no-op otherwise,
+// and the guards answer the same either way.
+Object.freeze(module.exports);
