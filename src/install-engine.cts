@@ -962,12 +962,15 @@ function createSkillDirOwnership(
  * writers restore it and writeManifest records it), so "GSD does not own it,
  * rename it" would be false. It reaches this list whenever no previous
  * manifest records it yet, e.g. the first update after the user generates it.
+ *
+ * The message names no manifest: the legacy-location cleanups decide without
+ * one, so "not in the previous install manifest" would be false there.
  */
 function _warnPreservedSkillDirs(skillsDir: string, names: string[]): void {
   for (const name of names) {
     if (USER_OWNED_SKILL_DIRS.includes(name)) continue;
     console.warn(
-      `  [gsd] Preserved ${path.join(skillsDir, name)} — it matches the gsd- skill prefix but GSD does not own it (not a GSD skill, not in the previous install manifest). Rename it if it should not share GSD's prefix.`,
+      `  [gsd] Preserved ${path.join(skillsDir, name)} — it matches the gsd- skill prefix but nothing shows GSD owns it here. Rename it if it should not share GSD's prefix.`,
     );
   }
 }
