@@ -1379,6 +1379,22 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       expected: [2],
       currentBuggyOutput: [],
     },
+    {
+      // Missed write: a `;` inside a nested template literal ends the
+      // right-hand side early (`splitStatements` tracks one string level).
+      shape: 'nested template literal holding ; in the right-hand side',
+      text: W("  const p = `${dir}/${`a;b`}/STATE.md`;", '  fs.writeFileSync(p, c);'),
+      expected: [3],
+      currentBuggyOutput: [],
+    },
+    {
+      // Missed write: the write's own result assigned to its target reads as
+      // an empty right-hand side, which ends the search.
+      shape: 'the write assigned to its own target (p = fs.writeFileSync(p, c))',
+      text: W("  let p = path.join(dir, 'STATE.md');", '  p = fs.writeFileSync(p, c);'),
+      expected: [3],
+      currentBuggyOutput: [],
+    },
     ...[
       ['fs.appendFileSync onto statePath', '  fs.appendFileSync(statePath, c);'],
       ['fs.renameSync of a temp file onto statePath', '  fs.renameSync(tmp, statePath);'],

@@ -1033,6 +1033,9 @@ function resolvesToStatePath(ctx, index, cut, expr, hopsLeft = MAX_TARGET_RESOLU
  *     fs.writeFileSync(p, c); }`), or a reassignment in a closed block before
  *     the write on that line. Such a cut line is not read (`CUT_LINE_BODY_RE`).
  *   - A chain longer than `MAX_TARGET_RESOLUTION_HOPS` assignments.
+ *   - A `;` inside a template nested in another template's `${…}` in a
+ *     right-hand side (`splitStatements` tracks one string level), and the
+ *     write assigned to its own target (`p = fs.writeFileSync(p, c)`).
  *   - Call shapes the match does not see (below), and a `//` inside a string
  *     or regex literal that hides a call later on its line.
  *
