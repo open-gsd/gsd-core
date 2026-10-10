@@ -809,7 +809,7 @@ function identifiersIn(expr) {
 // header (whose `let` is loop-scoped), is NOT read:
 // telling a closure's enclosing variable from a shadowing parameter or a
 // block-scoped sibling needs a scope analysis this line-based axis does not
-// do (three review passes found false positives in each approximation). On
+// do (every approximation tried produced false positives). On
 // such a line Axis 2 behaves exactly as it did before #5104's same-line scan.
 const CUT_LINE_BODY_RE = /[{}]|=>|\b(?:function|for)\b/;
 
@@ -1011,21 +1011,45 @@ function resolvesToStatePath(ctx, index, cut, expr, hopsLeft = MAX_TARGET_RESOLU
  * comment-stripped text JOINED across lines, so a call wrapped after its `(`
  * is still captured (before, its first argument came back empty). And a target
  * that is neither `statePath` nor a `STATE.md` literal is resolved through
- * same-function assignments (`resolvesToStatePath`). A `for...of` or
- * destructuring binding stops that resolution as unresolved, which is NOT
- * flagged. Known miss, left to a separate #4629 child: a file name that
- * arrives as data built in another function (e.g. a `Map` key) cannot be
- * resolved within one function, so this axis's zero is still not proof that
- * no raw writer exists (ADR-3408 Decision 5).
+ * same-function assignments (`resolvesToStatePath`), typed declarations
+ * included. A `for...of` or destructuring binding stops that resolution as
+ * unresolved, which is NOT flagged.
+ *
+ * Verified false negatives (a STATE.md write that reads 0), each pinned in
+ * the tests as a known gap with its correct verdict. This axis's zero is not
+ * proof that no raw writer exists (ADR-3408 Decision 5); the syntax-tree
+ * follow-up is #5279.
+ *   - Data built in another function: a file name that arrives as a `Map`
+ *     key or a return value cannot be resolved within one function.
+ *   - A module-level constant (`const STATE_FILENAME = 'STATE.md'` outside
+ *     the function): resolution stops at the named-function boundary.
+ *   - A body on the write's own line: a one-line function, arrow or block
+ *     that assigns and writes (`function w(){ const p = …'STATE.md'…;
+ *     fs.writeFileSync(p, c); }`), or a reassignment in a closed block before
+ *     the write on that line. Such a cut line is not read (`CUT_LINE_BODY_RE`).
+ *   - A chain longer than `MAX_TARGET_RESOLUTION_HOPS` assignments.
+ *   - Call shapes the match does not see (below), and a `//` inside a string
+ *     or regex literal that hides a call later on its line.
  *
  * What the axis matches, and so what its zero covers: only the literal text
  * `fs.writeFileSync(`. `fs.writeFile`, `fs.promises.writeFile`,
- * `fs.appendFileSync`, a destructured or aliased `writeFileSync`, and
- * `fs?.writeFileSync` / `fs['writeFileSync']` are not seen. The scan runs over
- * `stripComments` output, which does not track strings or regex literals: a
- * `//` inside one (`'http://x'`, `/\//`) hides the rest of that line,
- * including a call that starts there, and a string that spells the call is
- * reported. The tests pin each of these as a known gap.
+ * `fs.appendFileSync`, `fs.renameSync(tmp, statePath)`, a destructured or
+ * aliased `writeFileSync` (`nfs.writeFileSync`), `require('fs').writeFileSync`,
+ * `fs . writeFileSync`, and `fs?.writeFileSync` / `fs['writeFileSync']` are not
+ * seen. The scan runs over `stripComments` output, which does not track
+ * strings or regex literals: a `//` inside one (`'http://x'`, `/\//`) hides
+ * the rest of that line, including a call that starts there, and a string
+ * that spells the call is reported.
+ *
+ * Verified false positives, pinned the same way: a same-name parameter of an
+ * arrow or nested function shadowing an outer STATE.md variable, a target
+ * computed from the state file (`readTarget(path.join(d, 'STATE.md'))`), a
+ * longer name such as `STATE.md.bak`, a never-reassigned `let` tail, and a
+ * suffix after a join (`path.join(d, 'ROADMAP.md') + '.tmp'`). By design,
+ * not a defect: where the written file is not visible (a parameter or
+ * interpolated join tail, or a `const` tail separated from the write by a
+ * body boundary), the whole-expression rule decides, so an unknown never
+ * resolves to "not a STATE.md write".
  */
 function findRawStateWrites(rel, rawText) {
   // CRLF: `assignmentLineRe`'s `(.*)$` cannot cross a trailing `\r` (`.` does
