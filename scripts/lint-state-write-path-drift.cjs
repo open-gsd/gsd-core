@@ -763,11 +763,11 @@ const BARE_IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/;
  * every right-hand side on the way must be another bare identifier or the
  * literal itself. Anything else (a parameter, a member, a call, a spread, a
  * template with `${…}`, a conditional, a `let`/`var` or bare assignment, a
- * module-level constant behind the function boundary, a literal `''`/`'.'`)
- * is null, so the caller falls back
- * to the whole-expression rule.
+ * module-level constant behind the function boundary, a literal `''`/`'.'`,
+ * or a `const` with a body boundary between it and the write) is null, so the
+ * caller falls back to the whole-expression rule.
  */
-function resolvedJoinFileTail(lines, index, cut, expr, hopsLeft) {
+function resolvedJoinFileTail(ctx, index, cut, expr, hopsLeft) {
   let segment = joinLastSegment(expr);
   if (segment === null) return null;
   let line = index;
@@ -776,12 +776,14 @@ function resolvedJoinFileTail(lines, index, cut, expr, hopsLeft) {
     const lit = fileNameLiteral(segment);
     if (lit !== null) return lit;
     if (hopsLeft === 0 || !BARE_IDENTIFIER_RE.test(segment)) return null;
-    const binding = nearestTargetBinding(lines, line, before, segment);
+    const binding = nearestTargetBinding(ctx, line, before, segment);
     // Only a `const` binding is followed: the nearest assignment to a `let` or
     // `var` is not the only one a line scan can see (`let n = 'STATE.md';
     // if (x) n = 'ROADMAP.md';`), and the literal must never clear a write
-    // another assignment could aim at STATE.md.
-    if (!binding || !binding.isConst) return null;
+    // another assignment could aim at STATE.md. Nor is a `const` that a body
+    // boundary separates from the write (`crossesBodyBoundary`): it may sit in
+    // a closed sibling block or arrow body, out of scope at the write.
+    if (!binding || !binding.isConst || crossesBodyBoundary(ctx, binding)) return null;
     hopsLeft--;
     segment = binding.rhs.trim();
     line = binding.line;
@@ -812,31 +814,57 @@ function identifiersIn(expr) {
 const CUT_LINE_BODY_RE = /[{}]|=>|\b(?:function|for)\b/;
 
 /**
- * The nearest binding of `name`, scanning `lines` BACKWARD from `index` and
+ * The nearest binding of `name`, scanning `ctx.lines` BACKWARD from `index` and
  * stopping at the nearest preceding named-function declaration (the same
  * boundary as `nearestPrecedingAssignment`). Line `index` is read as `cut`
  * instead, and only when it is plain statements (`CUT_LINE_BODY_RE`). Each
- * line is read by `lastBindingInText`. Returns `{ rhs, line, before, isConst }` for an
- * assignment, where `before` is that line's text up to the match (where the
- * next hop resumes, so a chain on one line resolves), or `null` when the name
- * is unresolved: no assignment before the boundary (a parameter), or a
+ * line is read by `lastBindingInText`. Returns `{ rhs, line, before, isConst,
+ * end }` for an assignment, where `before` is that line's text up to the match
+ * (where the next hop resumes, so a chain on one line resolves) and `end` is
+ * the offset in `ctx.joined` where its right-hand side ends, or `null` when the
+ * name is unresolved: no assignment before the boundary (a parameter), or a
  * `for...of` / destructuring binding reached first.
  *
  * Known limit (line-based, not a scope analysis): an arrow function or method
  * is not a boundary, so a same-named variable in a sibling arrow or method
  * body can be picked up. Stopping at those headers instead would hide every
  * write inside a closure that reads its enclosing function's variable.
+ * `crossesBodyBoundary` is how a caller tells that the binding found may not
+ * be the one in scope.
  */
-function nearestTargetBinding(lines, index, cut, name) {
+function nearestTargetBinding(ctx, index, cut, name) {
+  const { lines } = ctx;
   for (let i = index; i >= 0; i--) {
     const text = i === index ? (CUT_LINE_BODY_RE.test(cut) ? '' : cut) : lines[i];
     if (i < index && FUNCTION_DECL_LINE_RE.test(text)) return null;
     if (!text.includes(name)) continue; // a line without the name cannot bind it
     const found = lastBindingInText(text, name);
     if (found === 'unresolved') return null;
-    if (found) return { rhs: found.rhs, line: i, before: text.slice(0, found.index + 1), isConst: found.isConst };
+    if (found) {
+      return {
+        rhs: found.rhs,
+        line: i,
+        before: text.slice(0, found.index + 1),
+        isConst: found.isConst,
+        end: ctx.lineStarts[i] + found.end,
+      };
+    }
   }
   return null;
+}
+
+/**
+ * True when a `{`, `}` or `=>` lies in the comment-stripped text between the
+ * end of `binding`'s right-hand side and the write call. Such a binding may
+ * sit in a closed sibling block or arrow body, so it is not known to be the
+ * binding in scope at the write: it must not clear the write (#5104). With no
+ * such boundary the binding and the write share one body, so the nearest
+ * binding is the one in scope. Braces inside strings count too, which can
+ * only keep a binding from clearing. This is a fail-safe test, not a
+ * brace-depth tracker.
+ */
+function crossesBodyBoundary(ctx, binding) {
+  return /[{}]|=>/.test(ctx.joined.slice(binding.end, ctx.writeAt));
 }
 
 // Per-name assignment regexes, built once per name rather than once per line.
@@ -853,16 +881,19 @@ function bindingRegexesFor(name) {
   return res;
 }
 
-// An assignment match that declares its name with `const`.
-const CONST_DECL_RE = /(?:^|[^.\w$])const\s/;
+// An assignment match that declares its name with `const`. Anchored at the
+// match start, so a later `const` in the same statement span (inside a block
+// on that line) does not mark a `let` or bare assignment as `const`.
+const CONST_DECL_RE = /^[^.\w$]?const\s/;
 
 /**
  * The last binding of `name` in one line of text: statements last to first,
  * and within a statement the last assignment first. Returns
- * `{ rhs, index, isConst }` (`index` is where the match starts in `text`;
- * `isConst` is true for a `const` declaration), the string `'unresolved'`
- * when a `for...of` / destructuring binding is reached first, or null. A
- * right-hand side ends at its own `;`, and `name += x` reads as `name + x`.
+ * `{ rhs, index, isConst, end }` (`index` is where the match starts in `text`,
+ * `end` where its right-hand side ends; `isConst` is true for a `const`
+ * declaration), the string `'unresolved'` when a `for...of` / destructuring
+ * binding is reached first, or null. A right-hand side ends at its own `;`,
+ * and `name += x` reads as `name + x`.
  */
 function lastBindingInText(text, name) {
   const spans = statementSpans(text);
@@ -874,16 +905,23 @@ function lastBindingInText(text, name) {
       for (let from = 0; from < body.length; ) {
         const m = re.exec(body.slice(from));
         if (!m) break;
-        hits.push({ at: from + m.index, rhs: m[1], compound, isConst: !compound && CONST_DECL_RE.test(m[0]) });
+        const rhsAt = from + m.index + m[0].length - m[1].length;
+        hits.push({ at: from + m.index, rhsAt, rhs: m[1], compound, isConst: !compound && CONST_DECL_RE.test(m[0]) });
         // Resume at the right-hand side: one char further would re-match the
         // tail of `const p =` as a bare `p =`.
-        from += m.index + m[0].length - m[1].length;
+        from = rhsAt;
       }
     }
     hits.sort((a, b) => b.at - a.at);
     for (const h of hits) {
-      const rhs = splitStatements(h.rhs)[0].trim();
-      return { rhs: h.compound ? `${name} + (${rhs})` : rhs, index: start + h.at, isConst: h.isConst };
+      const own = splitStatements(h.rhs)[0];
+      const rhs = own.trim();
+      return {
+        rhs: h.compound ? `${name} + (${rhs})` : rhs,
+        index: start + h.at,
+        end: start + h.rhsAt + own.length,
+        isConst: h.isConst,
+      };
     }
   }
   return null;
@@ -920,22 +958,40 @@ function statementSpans(line) {
  * written file is known. `index` is the last line an assignment may sit on.
  * `seen` keys each binding by name AND line, so a reassignment that reads its
  * own earlier value (`p = p + '.tmp'`) still reaches that earlier assignment.
+ *
+ * The nearest binding of an identifier ends its backward search only when no
+ * body boundary separates it from the write (`crossesBodyBoundary`). Past such
+ * a boundary the nearest binding may be a closed sibling block's, out of scope
+ * at the write, so when it does not reach the state path the search goes on
+ * to the next earlier binding of that name (`const n = 'STATE.md'; if (x) {
+ * const n = 'ROADMAP.md'; } write(join(d, n))` is reported). This can only
+ * add reports: a binding that reaches the state path still reports at once.
+ * `ctx` carries the comment-stripped lines and text and the write's offset.
  */
-function resolvesToStatePath(lines, index, cut, expr, hopsLeft = MAX_TARGET_RESOLUTION_HOPS, seen = new Set()) {
-  const tail = resolvedJoinFileTail(lines, index, cut, expr, hopsLeft);
+function resolvesToStatePath(ctx, index, cut, expr, hopsLeft = MAX_TARGET_RESOLUTION_HOPS, seen = new Set()) {
+  const tail = resolvedJoinFileTail(ctx, index, cut, expr, hopsLeft);
   if (tail !== null) return /STATE\.md/.test(tail);
   if (targetsStatePath(expr)) return true;
   if (hopsLeft === 0) return false;
   for (const name of identifiersIn(expr)) {
-    const binding = nearestTargetBinding(lines, index, cut, name);
-    if (!binding) continue;
-    const key = `${name}@${binding.line}:${binding.before.length}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    // The next hop resumes on the binding's own line, before its match, so
-    // `let p = …STATE.md…; p = p + '.tmp';` chains on one line and a header
-    // earlier on that line still shadows.
-    if (resolvesToStatePath(lines, binding.line, binding.before, binding.rhs, hopsLeft - 1, seen)) return true;
+    let line = index;
+    let before = cut;
+    for (;;) {
+      const binding = nearestTargetBinding(ctx, line, before, name);
+      if (!binding) break;
+      const key = `${name}@${binding.line}:${binding.before.length}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        // The next hop resumes on the binding's own line, before its match, so
+        // `let p = …STATE.md…; p = p + '.tmp';` chains on one line and a header
+        // earlier on that line still shadows.
+        if (resolvesToStatePath(ctx, binding.line, binding.before, binding.rhs, hopsLeft - 1, seen)) return true;
+      }
+      if (!crossesBodyBoundary(ctx, binding)) break;
+      // Each step resumes strictly before the binding it read, so this ends.
+      line = binding.line;
+      before = binding.before;
+    }
   }
   return false;
 }
@@ -979,6 +1035,13 @@ function findRawStateWrites(rel, rawText) {
   const rawLines = text.split('\n');
   const stripped = stripComments(text);
   const joined = stripped.join('\n');
+  // Offset of each stripped line in `joined`, so a binding's position can be
+  // compared with the write's (`crossesBodyBoundary`).
+  const lineStarts = new Array(stripped.length);
+  for (let i = 0, at = 0; i < stripped.length; i++) {
+    lineStarts[i] = at;
+    at += stripped[i].length + 1;
+  }
   const out = [];
   let lineIdx = 0;
   let counted = 0;
@@ -991,7 +1054,7 @@ function findRawStateWrites(rel, rawText) {
     // `const p = …; fs.writeFileSync(p, …)` resolves, while an assignment
     // after the call on that line does not.
     const cut = joined.slice(joined.lastIndexOf('\n', m.index - 1) + 1, m.index);
-    if (!resolvesToStatePath(stripped, lineIdx, cut, targetArg)) continue;
+    if (!resolvesToStatePath({ lines: stripped, lineStarts, joined, writeAt: m.index }, lineIdx, cut, targetArg)) continue;
     // `file`/`source` sanitized for the same fork-PR reason as every other
     // finding in this guard.
     out.push({

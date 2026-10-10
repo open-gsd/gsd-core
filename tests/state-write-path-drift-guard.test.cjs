@@ -1056,6 +1056,62 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     );
   });
 
+  // A binding in a closed sibling block or arrow body is not in scope at the
+  // write, so it must not clear it. A binding can clear (or end the backward
+  // search) only when no `{`, `}` or `=>` lies between it and the write.
+  test('guard: a const in a closed sibling block or arrow body does not clear the write', () => {
+    // The parameter `n` may be 'STATE.md'; the block's `n` is out of scope.
+    assert.deepStrictEqual(
+      lines(['function f(statePath, n) {', '  const d = path.dirname(statePath);', '  if (x) {', "    const n = 'ROADMAP.md';", '    use(n);', '  }', '  fs.writeFileSync(path.join(d, n), c);', '}'].join('\n')),
+      [7],
+    );
+    // The block on one line, the write on the next.
+    assert.deepStrictEqual(
+      lines(['function f(statePath, n) {', '  const d = path.dirname(statePath);', "  if (x) { const n = 'ROADMAP.md'; use(n); }", '  fs.writeFileSync(path.join(d, n), c);', '}'].join('\n')),
+      [4],
+    );
+    // An arrow body, on one line and over several.
+    assert.deepStrictEqual(
+      lines(['function f(statePath, n) {', '  const d = path.dirname(statePath);', "  const g = () => { const n = 'ROADMAP.md'; return n; };", '  fs.writeFileSync(path.join(d, n), c);', '}'].join('\n')),
+      [4],
+    );
+    assert.deepStrictEqual(
+      lines(['function f(statePath, n) {', '  const d = path.dirname(statePath);', '  const g = () => {', "    const n = 'ROADMAP.md';", '    return n;', '  };', '  fs.writeFileSync(path.join(d, n), c);', '}'].join('\n')),
+      [7],
+    );
+  });
+
+  test('guard: an outer STATE.md binding shadowed only inside a closed block is still reported', () => {
+    const shadow = (dirExpr) => [
+      'function f(statePath, dir, c) {',
+      `  const d = ${dirExpr};`,
+      "  const n = 'STATE.md';",
+      '  if (x) {',
+      "    const n = 'ROADMAP.md';",
+      '    use(n);',
+      '  }',
+      '  fs.writeFileSync(path.join(d, n), c);',
+      '}',
+    ].join('\n');
+    assert.deepStrictEqual(lines(shadow('path.dirname(statePath)')), [8]);
+    assert.deepStrictEqual(lines(shadow('dir')), [8]);
+    // The same through the write target itself.
+    assert.deepStrictEqual(
+      lines(W("  const p = path.join(dir, 'STATE.md');", '  if (x) {', "    const p = path.join(dir, 'ROADMAP.md');", '    use(p);', '  }', '  fs.writeFileSync(p, c);')),
+      [7],
+    );
+  });
+
+  test('control: a binding with no body boundary before the write still decides it', () => {
+    // A const and its write inside one callback body.
+    assert.deepStrictEqual(
+      lines(W('  withLock(() => {', "    const n = 'ROADMAP.md';", '    fs.writeFileSync(path.join(path.dirname(statePath), n), c);', '  });')),
+      [],
+    );
+    // The write in a nested block after a non-STATE binding, with no other binding: nothing to report.
+    assert.deepStrictEqual(lines(W("  const p = path.join(dir, 'ROADMAP.md');", '  if (x) {', '    fs.writeFileSync(p, c);', '  }')), []);
+  });
+
   test('guard: a tail that names no file or does not resolve leaves the whole expression to decide, as before', () => {
     // A bound '' or '.', or a conditional, names no file: the statePath base decides.
     assert.deepStrictEqual(lines(N("  const sub = '';", '  fs.writeFileSync(path.join(statePath, sub), c);')), [3]);
@@ -1120,6 +1176,25 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     });
   }
 
+  // Deliberate fallback, not a defect: where the line scan cannot tell which
+  // file a write names, the whole-expression rule decides, so an unknown never
+  // resolves to "not a STATE.md write". Each row asserts today's output only.
+  const BY_DESIGN_FALLBACKS = [
+    {
+      // A `{` between the const and the write: the const may not be the
+      // binding in scope, so it does not clear, and the directory decides.
+      shape: 'non-STATE const before a block that holds the write',
+      text: N("  const n = 'ROADMAP.md';", '  if (x) {', '    fs.writeFileSync(path.join(path.dirname(statePath), n), c);', '  }'),
+      output: [4],
+    },
+  ];
+
+  for (const row of BY_DESIGN_FALLBACKS) {
+    test(`by-design fallback (current behavior): ${row.shape}`, () => {
+      assert.deepStrictEqual(lines(row.text), row.output);
+    });
+  }
+
   test("control: a one-line nested function's header line is not read, so its parameter cannot leak", () => {
     const outer = (header) => [
       'function outer(statePath, c) {',
@@ -1165,6 +1240,13 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       shape: 'STATE.md assignment and write inside a one-line block',
       text: W("  if (c) { const p = path.join(dir, 'STATE.md'); fs.writeFileSync(p, c); }"),
       expected: [2],
+      currentBuggyOutput: [],
+    },
+    {
+      // Missed write: the whole function on one line is a cut line with a body.
+      shape: 'one-line function with a sibling-block const shadowing a parameter',
+      text: "function f(statePath, n){ const d = path.dirname(statePath); if (x) { const n = 'ROADMAP.md'; use(n); } fs.writeFileSync(path.join(d, n), c); }",
+      expected: [1],
       currentBuggyOutput: [],
     },
     {
