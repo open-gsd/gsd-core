@@ -955,4 +955,62 @@ describe('gsd-secret-read-guard: bundled short-flag clusters (#5046)', () => {
       assertAllowed(runHook(bash(cmd)), cmd);
     }
   });
+
+  // `=`-valued and quoted clusters. Both reach the walk — `namesSecret` sees the
+  // `=.env` tail (and the quoted form after quote-stripping) — but no row named
+  // either shape, so the block was carried on an unasserted mechanism. The
+  // reported path is the whole cluster, since that is the operand the caller
+  // wrote; assert it, so a future change that reports a different span is
+  // visible rather than silent.
+  test('an `=`-valued or quoted secret operand inside a cluster is blocked', () => {
+    for (const [cluster, path] of [
+      ['-f=.env', '-f=.env'],
+      ['-if=.env', '-if=.env'],
+      ['-nf=.env', '-nf=.env'],
+      ["-if'.env'", '-if.env'],
+      ['-if".env"', '-if.env'],
+    ]) {
+      const cmd = `grep ${cluster} pat f`;
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path });
+    }
+  });
+
+  // The new false-positive class, pinned rather than left implicit. Any
+  // single-dash word whose *tail* names a secret is now blocked, which includes
+  // words where the secret name is an argument to an option taking a count or a
+  // word — `git commit -am.env` and `git log -S.env` are `-a` / `-S` followed
+  // by the value `.env`, and `head -n1.env` is `-n` followed by `1.env`. On
+  // base the cluster was cut at two characters, so `-am.env` was read as the
+  // operand `m.env` and allowed; these three are NEW denials.
+  //
+  // Failing safe toward blocking is the right trade (an allow here would be a
+  // secret-read hole), but it is a behaviour change on commands that are not
+  // secret reads, so it is stated here and in the changeset rather than
+  // discovered by someone whose `git commit -am.env` stops working.
+  test('a secret-named operand for a count/value option is blocked (new denial)', () => {
+    for (const [cmd, path] of [
+      ['git commit -am.env', '-am.env'],
+      ['head -n1.env', '-n1.env'],
+      ['git log -S.env', '-S.env'],
+    ]) {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path });
+    }
+  });
+
+  // Residual expansion forms inside a cluster are the pre-existing glob /
+  // shell-expansion class, NOT something this change widened: the unbundled
+  // equivalent is allowed too, so clustering the flags leaves the balance
+  // exactly where it was. Asserted as a pair per form, so a future change that
+  // made the clustered form stricter (or looser) than the plain one shows up as
+  // a divergence rather than as a silently different policy.
+  test('expansion forms are treated the same clustered as unbundled', () => {
+    for (const [clustered, plain] of [
+      ['grep -if.env* pat f', 'grep .env* f'],
+      ['grep -if.en? pat f', 'grep .en? f'],
+      ['grep -if.env~ pat f', 'grep .env~ f'],
+    ]) {
+      assertAllowed(runHook(bash(clustered)), clustered);
+      assertAllowed(runHook(bash(plain)), plain);
+    }
+  });
 });

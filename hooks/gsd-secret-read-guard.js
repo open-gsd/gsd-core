@@ -765,6 +765,19 @@ function tokenize(str) {
 // begins with `.`, so no secret can begin at k=1 whatever the cluster's first
 // character is, and `.env` sits at k=2 for the shortest operand-bearing cluster
 // (`-f.env`) exactly as it does for a letter-first one.
+//
+// Two limits worth stating, because both are cases this walk does NOT close:
+//   - Expansion. A tail that still contains a glob or a substitution is not a
+//     secret name, so `-if.env*`, `-if.en?`, `-if.env~`, `-if$(echo .env)` and
+//     `-if{.env,x}` are allowed. That is unchanged by this widening, not
+//     introduced by it: the unbundled `grep .env*` is allowed by the same
+//     predicate, and `tests/gsd-secret-read-guard.test.cjs` asserts the two
+//     forms agree so the pair cannot drift apart silently.
+//   - Non-secret operands. Any single-dash word with a secret name later in
+//     it is denied, including values of options that are not file operands —
+//     `git commit -am.env`, `head -n1.env`, `git log -S.env`. Blocking is the
+//     safe direction here; the test file pins these three so the new denials
+//     are a stated trade rather than a surprise.
 function normalizeOperand(text) {
   let v = text;
   if (v.startsWith('@')) v = v.slice(1);
