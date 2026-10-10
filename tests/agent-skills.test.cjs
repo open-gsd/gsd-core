@@ -16,7 +16,7 @@ const { spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup, TOOLS_PATH, TEST_ENV_BASE } = require('./helpers.cjs');
+const { runGsdTools, createTempDir, createTempProject, cleanup, TOOLS_PATH, TEST_ENV_BASE } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -2222,5 +2222,83 @@ describe('regressions: workflows forward the started workstream to agent-skills 
       assert.match(r.stderr, /Workstream name 'none' is reserved/);
       assert.strictEqual(fs.existsSync(path.join(proj, '.planning', 'workstreams', 'none')), false);
     });
+  });
+});
+
+// ─── project-skills discovery step 3 agrees with the self-load (#4649) ──────────
+
+describe('project-skills discovery step 3 skips a skill only where the self-load delivers it (#4649)', () => {
+  // trek-e, #5079 review: the step-3 rule in gsd-core/references/project-skills-discovery.md
+  // is prose an agent applies, so the awareness tests can only pin its wording. This pins its
+  // premise instead: for every entry form, the rule skips the skill exactly when
+  // buildAgentSkillsBlock delivers it. If the self-load starts or stops delivering a form, the
+  // rule would make discovery read the skill twice or leave it unread, and this test fails.
+  //
+  // The rule: skip only when the entry, after dropping a leading `./` and a trailing `/`,
+  // equals the skill's project-relative directory and that directory's real path lies
+  // inside the project.
+  function stepThreeSkips(entry, skillDir, realPathInside) {
+    return entry.replace(/^\.\//, '').replace(/\/$/, '') === skillDir && realPathInside;
+  }
+
+  let tmpDir;
+  let outsideDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    outsideDir = createTempDir('gsd-4649-outside-');
+    const inside = path.join(tmpDir, '.claude', 'skills', 'inside');
+    fs.mkdirSync(inside, { recursive: true });
+    fs.writeFileSync(path.join(inside, 'SKILL.md'), '---\nname: inside\ndescription: d\n---\n');
+    fs.writeFileSync(path.join(outsideDir, 'SKILL.md'), '---\nname: outside\ndescription: d\n---\n');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+    cleanup(outsideDir);
+  });
+
+  function delivered(entry) {
+    writeConfig(tmpDir, { agent_skills: { 'gsd-executor': [entry] } });
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `agent-skills failed for ${entry}: ${r.error}`);
+    // skills_count counts configured entries; the block lists only the delivered ones.
+    return /^- @/m.test(r.ir.block);
+  }
+
+  const insideForms = [
+    '.claude/skills/inside',
+    './.claude/skills/inside',
+    '.claude/skills/inside/',
+    './.claude/skills/inside/',
+    '.claude/skills/inside/SKILL.md',
+  ];
+  for (const entry of insideForms) {
+    test(`entry ${JSON.stringify(entry)}: the rule skips the skill exactly when the self-load delivers it`, () => {
+      assert.strictEqual(stepThreeSkips(entry, '.claude/skills/inside', true), delivered(entry));
+    });
+  }
+
+  test('an absolute entry naming the skill directory is neither skipped nor delivered', () => {
+    const entry = path.join(tmpDir, '.claude', 'skills', 'inside');
+    assert.strictEqual(stepThreeSkips(entry, '.claude/skills/inside', true), false);
+    assert.strictEqual(delivered(entry), false);
+  });
+
+  test('a skill directory that is a symlink out of the project is neither skipped nor delivered', (t) => {
+    const link = path.join(tmpDir, '.claude', 'skills', 'outside');
+    try {
+      fs.symlinkSync(outsideDir, link, 'junction');
+    } catch (err) {
+      if (err.code === 'EPERM' || err.code === 'ENOSYS') {
+        t.skip('directory links are not supported here');
+        return;
+      }
+      throw err;
+    }
+    const realPathInside = fs.realpathSync(link).startsWith(fs.realpathSync(tmpDir) + path.sep);
+    assert.strictEqual(realPathInside, false);
+    assert.strictEqual(stepThreeSkips('.claude/skills/outside', '.claude/skills/outside', realPathInside), false);
+    assert.strictEqual(delivered('.claude/skills/outside'), false);
   });
 });
