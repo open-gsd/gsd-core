@@ -8,7 +8,7 @@
  * Closes: #1461
  */
 
-const { test, describe } = require('node:test');
+const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
@@ -432,5 +432,131 @@ describe('writeSettings durability (#1874 F5)', () => {
         'the settings file must be untouched when every temp path is squatted');
       for (const link of planted) fs.unlinkSync(link);
     });
+  });
+});
+
+// ─── writeSettings on a symlinked settings file (#5037) ──────────────────────
+//
+// Dotfiles setups link settings.json to a file kept elsewhere. The temp+rename
+// write above replaces such a link with a plain file, after which the link's
+// target silently stops receiving changes. The writer now follows the policy
+// of the Codex hooks.json writer: refuse a symlinked settings file unless
+// GSD_ALLOW_SYMLINKED_DEST is set, and with it write through to the target.
+
+describe('writeSettings on a symlinked settings file (#5037)', () => {
+
+  const PRIOR = JSON.stringify({ env: { MY_TOKEN: 'keep-me' } }, null, 2) + '\n';
+  const NEXT = { hooks: { SessionStart: [] }, env: { MY_TOKEN: 'keep-me' } };
+
+  let savedOptIn;
+
+  beforeEach(() => {
+    savedOptIn = process.env.GSD_ALLOW_SYMLINKED_DEST;
+  });
+
+  afterEach(() => {
+    if (savedOptIn === undefined) delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+    else process.env.GSD_ALLOW_SYMLINKED_DEST = savedOptIn;
+  });
+
+  function setOptIn(value) {
+    if (value === undefined) delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+    else process.env.GSD_ALLOW_SYMLINKED_DEST = value;
+  }
+
+  // A config dir whose settings.json links to a file in a separate dotfiles
+  // dir. Returns null when this platform or account cannot create symlinks.
+  function linkedLayout(t, { targetExists = true } = {}) {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-config-'));
+    const dotfilesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-dotfiles-'));
+    t.after(() => {
+      cleanup(configDir);
+      cleanup(dotfilesDir);
+    });
+    const settingsPath = path.join(configDir, 'settings.json');
+    const targetPath = path.join(dotfilesDir, 'settings.json');
+    if (targetExists) fs.writeFileSync(targetPath, PRIOR);
+    try {
+      fs.symlinkSync(targetPath, settingsPath, 'file');
+    } catch {
+      return null;
+    }
+    return { configDir, dotfilesDir, settingsPath, targetPath };
+  }
+
+  test('without the opt-in the write is refused, naming GSD_ALLOW_SYMLINKED_DEST, and nothing changes', (t) => {
+    setOptIn(undefined);
+    const layout = linkedLayout(t);
+    if (!layout) {
+      t.skip('symlink creation unsupported on this platform/privilege');
+      return;
+    }
+    const { configDir, dotfilesDir, settingsPath, targetPath } = layout;
+
+    assert.throws(() => writeSettings(settingsPath, NEXT), /GSD_ALLOW_SYMLINKED_DEST=1/);
+
+    assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+    assert.strictEqual(fs.readlinkSync(settingsPath), targetPath, 'the link must still point at the same target');
+    assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), PRIOR, 'the link target must be byte-for-byte unchanged');
+    assert.deepStrictEqual(fs.readdirSync(configDir), ['settings.json'], 'no temp residue beside the link');
+    assert.deepStrictEqual(fs.readdirSync(dotfilesDir), ['settings.json'], 'no temp residue beside the target');
+  });
+
+  test('with GSD_ALLOW_SYMLINKED_DEST=1 the write lands on the target and the link stays a link', (t) => {
+    setOptIn('1');
+    const layout = linkedLayout(t);
+    if (!layout) {
+      t.skip('symlink creation unsupported on this platform/privilege');
+      return;
+    }
+    const { configDir, dotfilesDir, settingsPath, targetPath } = layout;
+
+    writeSettings(settingsPath, NEXT);
+
+    assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink, not a plain file');
+    assert.strictEqual(fs.readlinkSync(settingsPath), targetPath, 'the link must still point at the same target');
+    assert.ok(fs.lstatSync(targetPath).isFile(), 'the target must still be a regular file');
+    assert.deepStrictEqual(readSettings(targetPath), NEXT, 'the new settings must land in the link target');
+    assert.deepStrictEqual(fs.readdirSync(configDir), ['settings.json'], 'no temp residue beside the link');
+    assert.deepStrictEqual(fs.readdirSync(dotfilesDir), ['settings.json'], 'no temp residue beside the target');
+  });
+
+  test('a dangling settings.json link is refused with or without the opt-in, never replaced', (t) => {
+    for (const optIn of [undefined, '1']) {
+      setOptIn(optIn);
+      const layout = linkedLayout(t, { targetExists: false });
+      if (!layout) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      const { settingsPath, targetPath } = layout;
+
+      assert.throws(() => writeSettings(settingsPath, NEXT), /GSD_ALLOW_SYMLINKED_DEST=1/,
+        `a dangling link must be refused (GSD_ALLOW_SYMLINKED_DEST=${optIn})`);
+
+      assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(),
+        `the dangling link must survive (GSD_ALLOW_SYMLINKED_DEST=${optIn})`);
+      assert.strictEqual(fs.existsSync(targetPath), false,
+        `nothing may be created at the missing target (GSD_ALLOW_SYMLINKED_DEST=${optIn})`);
+    }
+  });
+
+  test('a plain settings.json is written in place whether or not the opt-in is set', (t) => {
+    for (const optIn of [undefined, '1']) {
+      setOptIn(optIn);
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-plain-'));
+      t.after(() => cleanup(dir));
+      const settingsPath = path.join(dir, 'settings.json');
+      fs.writeFileSync(settingsPath, PRIOR);
+
+      writeSettings(settingsPath, NEXT);
+
+      assert.ok(fs.lstatSync(settingsPath).isFile(),
+        `a plain settings.json must stay a regular file (GSD_ALLOW_SYMLINKED_DEST=${optIn})`);
+      assert.deepStrictEqual(readSettings(settingsPath), NEXT,
+        `the plain file must receive the write (GSD_ALLOW_SYMLINKED_DEST=${optIn})`);
+      assert.deepStrictEqual(fs.readdirSync(dir), ['settings.json'],
+        `no temp residue (GSD_ALLOW_SYMLINKED_DEST=${optIn})`);
+    }
   });
 });
