@@ -3191,7 +3191,12 @@ type ConfiguredEntrypointValidationResult =
 
 function isWin32BareBashToken(candidate: string, platform?: string): boolean {
   if ((platform || process.platform) !== 'win32') return false;
-  if (candidate.includes('/') || candidate.includes('\\')) return false;
+  // The literal comparison below already rejects any path: a string holding a
+  // separator can never equal 'bash' / 'bash.exe'. So `C:\Windows\System32\
+  // bash.exe` and `/bin/bash` fall through on the equality test rather than on
+  // an explicit separator guard — there is no clause here a separator can
+  // reach, and adding one back would be an equivalent mutant that mutation
+  // testing can kill without changing behaviour.
   const lower = candidate.toLowerCase();
   return lower === 'bash' || lower === 'bash.exe';
 }

@@ -667,7 +667,12 @@ test('#5100 Git Bash found by policy still emits a portable JS command and passe
   });
   assert.equal(typeof cmd, 'string');
   assert.match(cmd, /Git\/bin\/bash\.exe/);
-  assert.equal(/^bash(\s|$)/.test(cmd), false);
+  // Not `assert.equal(/^bash(\s|$)/.test(cmd), false)`: on win32 the resolved
+  // runner is JSON.stringify'd, so the command opens with a quote and that
+  // pattern is false for any value — it could not fail. Assert the two facts
+  // that matter instead: the command names the Git Bash path, and it never
+  // names the WSL launcher the gate exists to reject.
+  assert.doesNotMatch(cmd, /System32|Sysnative|SysWOW64/i);
   const gate = hooksSurface.validateConfiguredEntrypoints(entries, {
     env: { ProgramFiles: 'C:\\Program Files' },
     existsSync: (candidate) => candidate === GSD_5100_GIT_BASH,
@@ -705,6 +710,19 @@ test('#5100 a GSD_BASH_PATH-only Git Bash satisfies the gate for a bare win32 ba
   });
   assert.equal(stale.ok, false);
   assert.equal(stale.invalid[0].reason, 'unresolved-interpreter');
+
+  // GSD_BASH_PATH is the user's explicit override, so the policy accepts
+  // whatever it names — including System32\bash.exe, the WSL launcher this
+  // issue is about. That is opt-in semantics, unchanged by #5100, but it is
+  // the one path where the WSL launcher can still reach a hook, so it is
+  // pinned here rather than left implicit: if a future change ever tightens
+  // the override, this row goes red and the behaviour change is deliberate.
+  const explicit = hooksSurface.validateConfiguredEntrypoints([entry], {
+    env: { GSD_BASH_PATH: 'C:\\Windows\\System32\\bash.exe' },
+    existsSync: (candidate) => candidate === 'C:\\Windows\\System32\\bash.exe',
+    resolveExecutableBinary: gsd5100WslStandIn,
+  });
+  assert.equal(explicit.ok, true, JSON.stringify(explicit));
 });
 
 test('#5100 non-win32 bare bash still resolves through the executable scan', () => {
